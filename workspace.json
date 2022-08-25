@@ -1,5 +1,13 @@
 {
   "$schema": "./node_modules/nx/schemas/workspace-schema.json",
   "version": 2,
-  "projects": {}
+  "projects": {
+    "change": "apps/change",
+    "change-e2e": "apps/change-e2e",
+    "classes": "apps/classes",
+    "finance": "apps/finance",
+    "finance-e2e": "apps/finance-e2e",
+    "planning": "apps/planning",
+    "planning-e2e": "apps/planning-e2e"
+  }
 }
