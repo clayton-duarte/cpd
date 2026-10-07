@@ -6,10 +6,10 @@ export function WorkflowHeader({ workflow }: { workflow: Workflow }) {
   const title = workflow.ticket ? workflow.ticket.title : workflow.title;
 
   return (
-    <Group gap="md" wrap="nowrap">
-      <Group gap={6} wrap="nowrap">
+    <Group gap="var(--space-4)" wrap="nowrap">
+      <Group gap="var(--space-2)" wrap="nowrap">
         {workflow.ticket && (
-          <Group gap={4} wrap="nowrap">
+          <Group gap="var(--space-1)" wrap="nowrap">
             <IconTicket size={14} color="var(--fg-faint)" />
             <Text
               component="a"
@@ -29,7 +29,7 @@ export function WorkflowHeader({ workflow }: { workflow: Workflow }) {
         </Text>
 
         {workflow.branch && (
-          <Group gap={4} wrap="nowrap">
+          <Group gap="var(--space-1)" wrap="nowrap">
             <IconGitBranch size={14} color="var(--fg-faint)" />
             <Text
               component="a"
@@ -45,7 +45,7 @@ export function WorkflowHeader({ workflow }: { workflow: Workflow }) {
         )}
 
         {workflow.pr && (
-          <Group gap={4} wrap="nowrap">
+          <Group gap="var(--space-1)" wrap="nowrap">
             <IconGitPullRequest size={14} color="var(--fg-faint)" />
             <Text
               component="a"

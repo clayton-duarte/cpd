@@ -79,12 +79,12 @@ export function Gallery() {
         <Title order={3}>Neutrals</Title>
         <Group gap="md">
           {NEUTRAL_SWATCHES.map((s) => (
-            <Stack key={s.label} gap={4} align="center">
+            <Stack key={s.label} gap="var(--space-1)" align="center">
               <div
                 style={{
                   width: 48,
                   height: 48,
-                  borderRadius: 4,
+                  borderRadius: 'var(--space-1)',
                   backgroundColor: s.value,
                   border: '1px solid var(--line-strong)',
                 }}
@@ -111,12 +111,12 @@ export function Gallery() {
                 {row.hue}
               </Text>
               {row.parts.map((p) => (
-                <Stack key={p.label} gap={4} align="center">
+                <Stack key={p.label} gap="var(--space-1)" align="center">
                   <div
                     style={{
                       width: 48,
                       height: 48,
-                      borderRadius: 4,
+                      borderRadius: 'var(--space-1)',
                       backgroundColor: p.value,
                       border: '1px solid var(--line-strong)',
                     }}
@@ -135,7 +135,7 @@ export function Gallery() {
         <Title order={3}>Jobs</Title>
         <SimpleGrid cols={{ base: 1, sm: 2, md: 3, lg: 4 }} spacing="md">
           {sampleData.jobs.map((job) => (
-            <Stack key={job.id} gap={4} align="center">
+            <Stack key={job.id} gap="var(--space-1)" align="center">
               <JobCard job={job} colorDisabled={colorDisabled} />
               <Text size="xs" c="var(--fg-faint)">
                 {job.status}

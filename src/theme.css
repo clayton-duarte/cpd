@@ -30,6 +30,14 @@
   --blue-tint: rgba(111, 168, 234, 0.2);
   --blue-edge: rgba(111, 168, 234, 0.5);
 
+  /* Spacing scale -- the only px values a component may reach for (B4/D78) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
   /* Mantine wiring */
   --mantine-color-body: var(--bg-deep);
   --mantine-color-text: var(--fg);

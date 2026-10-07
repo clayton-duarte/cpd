@@ -16,7 +16,9 @@ export function buildGraph(data: CpdData, jobCardSize: { width: number; height: 
   // Reserved space inside each workflow node for the WorkflowHeader strip
   // rendered on top of it. ELK treats this as ordinary padding, not a
   // child, so job layout never collides with the overlay drawn by Canvas.
-  const WORKFLOW_TOP_PADDING = 56;
+  // Value = --space-2 (above) + header line height (~24px) + --space-2
+  // (below) = 40, tightened from 56 once B1 removed the breadcrumb row.
+  const WORKFLOW_TOP_PADDING = 40;
 
   for (const session of data.sessions) {
     for (const workflowId of session.workflowIds) {
