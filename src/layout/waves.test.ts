@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeWaves, groupByWave } from './waves';
+import { computeWaves, groupByWave, isHardBoundary } from './waves';
 import { sampleData } from '../fixtures/sample';
 import type { Job } from '../model/types';
 
@@ -55,5 +55,21 @@ describe('groupByWave', () => {
     const groups = groupByWave(sampleData.jobs);
     expect(groups[0].map((j) => j.id)).toEqual(['j1', 'j2', 'j10']);
     expect(groups[1].map((j) => j.id)).toEqual(['j3', 'j4', 'j5', 'j6']);
+  });
+});
+
+describe('isHardBoundary', () => {
+  it('is false for the fixture (wave 1 does not need all of wave 0)', () => {
+    expect(isHardBoundary(sampleData.jobs, 0)).toBe(false);
+  });
+
+  it('is true for a fan-in where every job in wave 1 needs every job in wave 0', () => {
+    const jobs: Job[] = [
+      { id: 'a', workflowId: 'w', title: 'a', status: 'done', owner: 'neutral', profile: 'builder', attempt: 1, needs: [], artifactCount: 0, steeringPending: false },
+      { id: 'b', workflowId: 'w', title: 'b', status: 'done', owner: 'neutral', profile: 'builder', attempt: 1, needs: [], artifactCount: 0, steeringPending: false },
+      { id: 'c', workflowId: 'w', title: 'c', status: 'done', owner: 'neutral', profile: 'builder', attempt: 1, needs: ['a', 'b'], artifactCount: 0, steeringPending: false },
+      { id: 'd', workflowId: 'w', title: 'd', status: 'done', owner: 'neutral', profile: 'builder', attempt: 1, needs: ['a', 'b'], artifactCount: 0, steeringPending: false },
+    ];
+    expect(isHardBoundary(jobs, 0)).toBe(true);
   });
 });

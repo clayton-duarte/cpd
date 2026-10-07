@@ -2,7 +2,7 @@
  * Pure derivation functions: data -> visual signals.
  * No React, no Mantine, no DOM.
  */
-import type { ColorToken, FlowLabel, Job, JobStatus, Phase } from './types';
+import type { ColorToken, Job, JobStatus } from './types';
 
 export type { ColorToken };
 
@@ -45,18 +45,3 @@ export function tierLabel(job: Job): string {
 export function showAttempt(job: Job): boolean {
   return job.attempt >= 2;
 }
-
-const PHASE_TO_FLOW: Record<Phase, FlowLabel> = {
-  upkeep: 'Context',
-  draw: 'Context',
-  main1: 'Plan',
-  combat: 'Dispatch',
-  main2: 'Review',
-  end: 'Ship',
-};
-
-export function flowLabel(phase: Phase): FlowLabel {
-  return PHASE_TO_FLOW[phase];
-}
-
-export const FLOW_ORDER: FlowLabel[] = ['Context', 'Plan', 'Dispatch', 'Review', 'Ship'];

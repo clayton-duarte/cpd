@@ -71,20 +71,14 @@ describe('buildGraph', () => {
     const graph = buildGraph(sampleData, JOB_CARD_SIZE);
     const byId = new Map(graph.nodes.map((n) => [n.id, n]));
 
-    const sessionNode = byId.get('session:s1');
-    expect(sessionNode).toBeDefined();
-    expect(sessionNode?.parentId).toBeUndefined();
-
     const workflowNode = byId.get('workflow:w1');
-    expect(workflowNode?.parentId).toBe('session:s1');
+    expect(workflowNode).toBeDefined();
+    expect(workflowNode?.parentId).toBeUndefined();
 
     const j1 = byId.get('j1');
-    expect(j1?.parentId).toBe('wave:w1:0');
+    expect(j1?.parentId).toBe('workflow:w1');
     expect(j1?.width).toBe(220);
     expect(j1?.height).toBe(80);
-
-    const waveNode = byId.get('wave:w1:0');
-    expect(waveNode?.parentId).toBe('workflow:w1');
   });
 
   it('creates one edge per needs relationship', () => {

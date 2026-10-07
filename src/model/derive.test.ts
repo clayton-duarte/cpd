@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Job, JobStatus, Phase } from './types';
+import type { Job, JobStatus } from './types';
 import {
-  FLOW_ORDER,
-  flowLabel,
   isDashed,
   isDimmed,
   jobColor,
@@ -124,26 +122,5 @@ describe('showAttempt', () => {
   it('is true for attempt >= 2', () => {
     expect(showAttempt(job({ attempt: 2 }))).toBe(true);
     expect(showAttempt(job({ attempt: 3 }))).toBe(true);
-  });
-});
-
-describe('flowLabel', () => {
-  const mapping: [Phase, string][] = [
-    ['upkeep', 'Context'],
-    ['draw', 'Context'],
-    ['main1', 'Plan'],
-    ['combat', 'Dispatch'],
-    ['main2', 'Review'],
-    ['end', 'Ship'],
-  ];
-
-  it('never shows the engine term', () => {
-    for (const [phase, label] of mapping) {
-      expect(flowLabel(phase)).toBe(label);
-    }
-  });
-
-  it('FLOW_ORDER lists the five labels in order', () => {
-    expect(FLOW_ORDER).toEqual(['Context', 'Plan', 'Dispatch', 'Review', 'Ship']);
   });
 });

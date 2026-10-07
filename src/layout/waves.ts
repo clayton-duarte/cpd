@@ -58,3 +58,20 @@ export function groupByWave(jobs: Job[]): Job[][] {
   }
   return groups;
 }
+
+/**
+ * True when every job in wave N+1 depends on every job in wave N (D74): the
+ * only case where a wave boundary is a real barrier rather than a layout
+ * artifact. Longest-path layering (computeWaves) places a job one step past
+ * the max of its own deps' waves -- it says nothing about jobs it does not
+ * depend on, so a boundary is only a barrier when the full fan-in holds.
+ */
+export function isHardBoundary(jobs: Job[], wave: number): boolean {
+  const groups = groupByWave(jobs);
+  const current = groups[wave];
+  const next = groups[wave + 1];
+  if (!current || !next || current.length === 0 || next.length === 0) return false;
+
+  const currentIds = current.map((j) => j.id);
+  return next.every((job) => currentIds.every((id) => job.needs.includes(id)));
+}
