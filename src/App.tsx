@@ -3,6 +3,8 @@ import { Button, Group, SimpleGrid, Stack, Text, Title } from '@mantine/core';
 import { ReactFlowProvider } from '@xyflow/react';
 import { JobCard } from './components/JobCard';
 import { LeadCard } from './components/LeadCard';
+import { WorkflowHeader } from './components/WorkflowHeader';
+import { WaveGroup } from './components/WaveGroup';
 import { sampleData } from './fixtures/sample';
 import { TOKENS, w } from './theme';
 import { Canvas } from './canvas/Canvas';
@@ -105,6 +107,20 @@ function App() {
             <Canvas data={sampleData} />
           </ReactFlowProvider>
         </div>
+      </Stack>
+
+      <Stack gap="xs">
+        <Title order={3}>Workflow header</Title>
+        <WorkflowHeader workflow={sampleData.workflows[0]} />
+      </Stack>
+
+      <Stack gap="xs">
+        <Title order={3}>Wave group</Title>
+        <WaveGroup label="Wave 2">
+          {sampleData.jobs.slice(0, 3).map((job) => (
+            <JobCard key={job.id} job={job} colorDisabled={colorDisabled} />
+          ))}
+        </WaveGroup>
       </Stack>
     </Stack>
   );
