@@ -1,7 +1,5 @@
 import type { ReactNode } from 'react';
 import { Box, Group, Stack, Text } from '@mantine/core';
-import { w } from '../theme';
-
 export interface WaveGroupProps {
   label: string;
   children: ReactNode;
@@ -12,15 +10,15 @@ export function WaveGroup({ label, children }: WaveGroupProps) {
   return (
     <Box
       style={{
-        border: `1px solid rgba(230,230,230,.10)`,
+        border: '1px solid var(--line)',
         borderRadius: 'var(--mantine-radius-sm)',
-        backgroundColor: 'rgba(230,230,230,.02)',
+        backgroundColor: 'var(--bg-panel)',
         padding: 'var(--mantine-spacing-md)',
         display: 'inline-block',
       }}
     >
       <Stack gap="xs">
-        <Text size="xs" c={w(0.45)}>
+        <Text size="xs" c="var(--fg-faint)">
           {label}
         </Text>
         <Group gap="md" wrap="nowrap" align="flex-start">

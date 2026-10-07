@@ -2,12 +2,10 @@ import { Badge, Group, Text } from '@mantine/core';
 import { IconGitPullRequest } from '@tabler/icons-react';
 import type { Workflow } from '../model/types';
 import { FLOW_ORDER, flowLabel } from '../model/derive';
-import { TOKENS, w } from '../theme';
-
 const OWNER_COLOR: Record<Workflow['owner'], string> = {
-  you: TOKENS.red,
-  agents: TOKENS.blue,
-  neutral: TOKENS.white,
+  you: 'var(--red)',
+  agents: 'var(--blue)',
+  neutral: 'var(--fg-bright)',
 };
 
 export function WorkflowHeader({ workflow }: { workflow: Workflow }) {
@@ -18,15 +16,15 @@ export function WorkflowHeader({ workflow }: { workflow: Workflow }) {
   return (
     <Group gap="md" wrap="nowrap">
       <Group gap={6} wrap="nowrap">
-        <IconGitPullRequest size={18} color={w(0.6)} />
+        <IconGitPullRequest size={18} color="var(--fg-muted)" />
         <Text fw={600}>{workflow.title}</Text>
         {workflow.pr != null && (
-          <Text size="sm" c={w(0.45)}>
+          <Text size="sm" c="var(--fg-faint)">
             #{workflow.pr}
           </Text>
         )}
         {workflow.attempt >= 2 && (
-          <Badge color="dark" variant="light" c={w(0.45)}>
+          <Badge color="dark" variant="light" c="var(--fg-faint)">
             #{workflow.attempt}
           </Badge>
         )}
@@ -35,11 +33,15 @@ export function WorkflowHeader({ workflow }: { workflow: Workflow }) {
       <Group gap={6} wrap="nowrap">
         {FLOW_ORDER.map((label, i) => {
           const isCurrent = i === currentIndex;
-          const opacity = i < currentIndex ? 0.45 : i > currentIndex ? 0.25 : 1;
+          const textColor = i < currentIndex
+            ? 'var(--fg-faint)'
+            : i > currentIndex
+              ? 'var(--line-strong)'
+              : 'var(--fg-bright)';
           return (
             <Group key={label} gap={6} wrap="nowrap">
               {i > 0 && (
-                <Text size="sm" c={w(0.25)}>
+                <Text size="sm" c="var(--line-strong)">
                   →
                 </Text>
               )}
@@ -57,7 +59,7 @@ export function WorkflowHeader({ workflow }: { workflow: Workflow }) {
                 )}
                 <Text
                   size="sm"
-                  c={w(opacity)}
+                  c={textColor}
                   style={
                     isCurrent
                       ? { borderBottom: `2px solid ${ownerColor}`, paddingBottom: 2 }

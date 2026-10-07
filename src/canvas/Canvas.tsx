@@ -16,7 +16,6 @@ import { WorkflowHeaderNode } from './nodes/WorkflowHeaderNode';
 import { WaveGroupNode } from './nodes/WaveGroupNode';
 import { LeadNode } from './nodes/LeadNode';
 import { edgeStyle } from './edges';
-import { w } from '../theme';
 
 const JOB_CARD_SIZE = { width: 220, height: 96 };
 
@@ -61,7 +60,7 @@ export function Canvas({ data }: { data: CpdData }): JSX.Element {
           alignItems: 'center',
           justifyContent: 'center',
           height: '100%',
-          color: w(0.45),
+          color: 'var(--fg-faint)',
         }}
       >
         Laying out…
@@ -173,9 +172,9 @@ export function Canvas({ data }: { data: CpdData }): JSX.Element {
       id: e.id,
       source: e.source,
       target: e.target,
-      style: { stroke: w(0.25) },
+      style: { stroke: 'var(--line-strong)' },
       type: 'default',
-      ...(dashed ? { style: { stroke: w(0.25), strokeDasharray: '4 4' } } : {}),
+      ...(dashed ? { style: { stroke: 'var(--line-strong)', strokeDasharray: '4 4' } } : {}),
     } satisfies Edge;
   });
 
@@ -191,7 +190,7 @@ export function Canvas({ data }: { data: CpdData }): JSX.Element {
       fitView
       onlyRenderVisibleElements
     >
-      <Background color={w(0.08)} />
+      <Background color="var(--line)" />
       <Controls />
     </ReactFlow>
   );

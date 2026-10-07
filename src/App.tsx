@@ -4,7 +4,6 @@ import { Group, Text } from '@mantine/core';
 import { Canvas } from './canvas/Canvas';
 import { Gallery } from './Gallery';
 import { sampleData } from './fixtures/sample';
-import { w } from './theme';
 import './canvas/xyflow-theme.css';
 
 /** Trivial hash-based routing: no router dependency, per the A2-4 spec. */
@@ -25,17 +24,17 @@ function TopBar() {
       px="md"
       h={40}
       justify="space-between"
-      style={{ borderBottom: `1px solid ${w(0.1)}`, flexShrink: 0 }}
+      style={{ borderBottom: '1px solid var(--line)', flexShrink: 0 }}
     >
       <Group gap="xs">
         <Text size="sm" fw={600}>
           {project.name}
         </Text>
-        <Text size="xs" c={w(0.45)}>
+        <Text size="xs" c="var(--fg-faint)">
           {project.repos.join(' · ')}
         </Text>
       </Group>
-      <Text size="xs" c={w(0.45)}>
+      <Text size="xs" c="var(--fg-faint)">
         <a href="#/gallery" style={{ color: 'inherit' }}>
           gallery
         </a>

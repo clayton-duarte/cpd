@@ -10,9 +10,9 @@ export function WaveGroupNode() {
       style={{
         width: '100%',
         height: '100%',
-        border: `1px solid rgba(230,230,230,.10)`,
+        border: '1px solid var(--line)',
         borderRadius: 'var(--mantine-radius-sm)',
-        backgroundColor: 'rgba(230,230,230,.02)',
+        backgroundColor: 'var(--bg-panel)',
         boxSizing: 'border-box',
         pointerEvents: 'none',
       }}

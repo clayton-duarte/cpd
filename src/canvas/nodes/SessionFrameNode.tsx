@@ -1,5 +1,4 @@
 import type { Session } from '../../model/types';
-import { w } from '../../theme';
 
 export interface SessionFrameNodeData {
   session?: Session;
@@ -18,7 +17,7 @@ export function SessionFrameNode({ data }: { data: SessionFrameNodeData }) {
       style={{
         width: '100%',
         height: '100%',
-        border: `1px solid rgba(230,230,230,.10)`,
+        border: '1px solid var(--line)',
         borderRadius: 'var(--mantine-radius-sm)',
         boxSizing: 'border-box',
         position: 'relative',
@@ -31,7 +30,7 @@ export function SessionFrameNode({ data }: { data: SessionFrameNodeData }) {
           top: 8,
           left: 20,
           fontSize: 12,
-          color: w(0.6),
+          color: 'var(--fg-muted)',
         }}
       >
         {data.session?.name}

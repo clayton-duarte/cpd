@@ -1,11 +1,44 @@
 :root {
-  --mantine-color-body: #16191d;
-  --mantine-color-text: #e6e6e6;
-  --mantine-color-dimmed: rgba(230,230,230,.60);
-  --mantine-color-placeholder: rgba(230,230,230,.45);
-  --mantine-color-default: rgba(230,230,230,.04);
-  --mantine-color-default-hover: rgba(230,230,230,.08);
-  --mantine-color-default-border: rgba(230,230,230,.25);
-  --mantine-color-anchor: #539bf5;
+  /* Surfaces */
+  --bg-deep: #0f0f0f;
+  --bg: #151515;
+  --bg-panel: #1c1c1c;
+  --bg-raise: #252525;
+  --line: #323232;
+  --line-strong: #454545;
+
+  /* Text */
+  --fg-faint: #858585;
+  --fg-muted: #a3a3a3;
+  --fg: #c4c4c4;
+  --fg-bright: #e3e3e3;
+  --on-solid: #f5f5f5;
+
+  /* Accents */
+  --red: #e8766f;
+  --red-solid: #b83a35;
+  --red-tint: rgba(232, 118, 111, 0.14);
+  --red-edge: rgba(232, 118, 111, 0.5);
+
+  --green: #79c27e;
+  --green-solid: #2f7a3b;
+  --green-tint: rgba(121, 194, 126, 0.13);
+  --green-edge: rgba(121, 194, 126, 0.5);
+
+  --blue: #6fa8ea;
+  --blue-solid: #2f6bc4;
+  --blue-tint: rgba(111, 168, 234, 0.2);
+  --blue-edge: rgba(111, 168, 234, 0.5);
+
+  /* Mantine wiring */
+  --mantine-color-body: var(--bg-deep);
+  --mantine-color-text: var(--fg);
+  --mantine-color-dimmed: var(--fg-muted);
+  --mantine-color-placeholder: var(--fg-faint);
+  --mantine-color-default: var(--bg-panel);
+  --mantine-color-default-hover: var(--bg-raise);
+  --mantine-color-default-border: var(--line-strong);
+  --mantine-color-anchor: var(--blue);
 }
-html, body, #root { height: 100%; margin: 0; background: #16191d; }
+
+html, body, #root { height: 100%; margin: 0; background: var(--bg-deep); }
