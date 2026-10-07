@@ -3,23 +3,49 @@ import { Button, Group, SimpleGrid, Stack, Text, Title } from '@mantine/core';
 import { JobCard } from './components/JobCard';
 import { WorkflowHeader } from './components/WorkflowHeader';
 import { sampleData } from './fixtures/sample';
-import { TOKENS, w } from './theme';
 
-const PALETTE_SWATCHES: Array<{ label: string; value: string }> = [
-  { label: 'black', value: TOKENS.black },
-  { label: 'white', value: TOKENS.white },
-  { label: 'red', value: TOKENS.red },
-  { label: 'green', value: TOKENS.green },
-  { label: 'blue', value: TOKENS.blue },
+const NEUTRAL_SWATCHES: Array<{ label: string; value: string; contrast?: string }> = [
+  { label: '--bg-deep', value: 'var(--bg-deep)' },
+  { label: '--bg', value: 'var(--bg)' },
+  { label: '--bg-panel', value: 'var(--bg-panel)' },
+  { label: '--bg-raise', value: 'var(--bg-raise)' },
+  { label: '--line', value: 'var(--line)' },
+  { label: '--line-strong', value: 'var(--line-strong)' },
+  { label: '--fg-faint', value: 'var(--fg-faint)', contrast: '4.95:1' },
+  { label: '--fg-muted', value: 'var(--fg-muted)', contrast: '7.24:1' },
+  { label: '--fg', value: 'var(--fg)', contrast: '10.47:1' },
+  { label: '--fg-bright', value: 'var(--fg-bright)', contrast: '14.23:1' },
+  { label: '--on-solid', value: 'var(--on-solid)', contrast: '16.75:1' },
 ];
 
-const WHITE_OPACITY_LEVELS: Array<{ label: string; opacity: number }> = [
-  { label: 'Primary text', opacity: 1 },
-  { label: 'Secondary text', opacity: 0.6 },
-  { label: 'Muted text / placeholders', opacity: 0.45 },
-  { label: 'Card borders', opacity: 0.25 },
-  { label: 'Dividers', opacity: 0.15 },
-  { label: 'Panel / card surfaces', opacity: 0.05 },
+const ACCENT_ROWS: Array<{ hue: string; parts: Array<{ label: string; value: string }> }> = [
+  {
+    hue: 'Red',
+    parts: [
+      { label: '--red', value: 'var(--red)' },
+      { label: '--red-solid', value: 'var(--red-solid)' },
+      { label: '--red-tint', value: 'var(--red-tint)' },
+      { label: '--red-edge', value: 'var(--red-edge)' },
+    ],
+  },
+  {
+    hue: 'Green',
+    parts: [
+      { label: '--green', value: 'var(--green)' },
+      { label: '--green-solid', value: 'var(--green-solid)' },
+      { label: '--green-tint', value: 'var(--green-tint)' },
+      { label: '--green-edge', value: 'var(--green-edge)' },
+    ],
+  },
+  {
+    hue: 'Blue',
+    parts: [
+      { label: '--blue', value: 'var(--blue)' },
+      { label: '--blue-solid', value: 'var(--blue-solid)' },
+      { label: '--blue-tint', value: 'var(--blue-tint)' },
+      { label: '--blue-edge', value: 'var(--blue-edge)' },
+    ],
+  },
 ];
 
 /**
@@ -41,7 +67,7 @@ export function Gallery() {
           >
             {colorDisabled ? 'Enable color' : 'Disable color'}
           </Button>
-          <Text size="sm" c={w(0.45)}>
+          <Text size="sm" c="var(--fg-faint)">
             <a href="#/" style={{ color: 'inherit' }}>
               ← back to canvas
             </a>
@@ -50,9 +76,9 @@ export function Gallery() {
       </Group>
 
       <Stack gap="xs">
-        <Title order={3}>Palette</Title>
+        <Title order={3}>Neutrals</Title>
         <Group gap="md">
-          {PALETTE_SWATCHES.map((s) => (
+          {NEUTRAL_SWATCHES.map((s) => (
             <Stack key={s.label} gap={4} align="center">
               <div
                 style={{
@@ -60,28 +86,46 @@ export function Gallery() {
                   height: 48,
                   borderRadius: 4,
                   backgroundColor: s.value,
-                  border: `1px solid ${w(0.25)}`,
+                  border: '1px solid var(--line-strong)',
                 }}
               />
-              <Text size="xs" c={w(0.6)}>
+              <Text size="xs" c="var(--fg-muted)">
                 {s.label}
               </Text>
+              {s.contrast && (
+                <Text size="xs" c="var(--fg-faint)">
+                  {s.contrast}
+                </Text>
+              )}
             </Stack>
           ))}
         </Group>
-        <Stack gap={4} mt="sm">
-          {WHITE_OPACITY_LEVELS.map((lvl) => (
-            <Group key={lvl.label} gap="sm">
-              <div
-                style={{
-                  width: 120,
-                  height: 16,
-                  backgroundColor: w(lvl.opacity),
-                }}
-              />
-              <Text size="xs" c={w(0.6)}>
-                {lvl.label} ({Math.round(lvl.opacity * 100)}%)
+      </Stack>
+
+      <Stack gap="xs">
+        <Title order={3}>Accents</Title>
+        <Stack gap="sm">
+          {ACCENT_ROWS.map((row) => (
+            <Group key={row.hue} gap="md">
+              <Text size="sm" w={60}>
+                {row.hue}
               </Text>
+              {row.parts.map((p) => (
+                <Stack key={p.label} gap={4} align="center">
+                  <div
+                    style={{
+                      width: 48,
+                      height: 48,
+                      borderRadius: 4,
+                      backgroundColor: p.value,
+                      border: '1px solid var(--line-strong)',
+                    }}
+                  />
+                  <Text size="xs" c="var(--fg-muted)">
+                    {p.label}
+                  </Text>
+                </Stack>
+              ))}
             </Group>
           ))}
         </Stack>
@@ -93,7 +137,7 @@ export function Gallery() {
           {sampleData.jobs.map((job) => (
             <Stack key={job.id} gap={4} align="center">
               <JobCard job={job} colorDisabled={colorDisabled} />
-              <Text size="xs" c={w(0.45)}>
+              <Text size="xs" c="var(--fg-faint)">
                 {job.status}
               </Text>
             </Stack>
