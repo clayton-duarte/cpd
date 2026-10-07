@@ -15,13 +15,23 @@ const ELK_OPTIONS: Record<string, string> = {
   'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
   'elk.padding': '[top=40,left=20,bottom=20,right=20]',
   // Interactive placement: keeps existing nodes near their current spot
-  // instead of a full repack when the graph grows. This is required for
-  // the append-stability property D26 demands; see elk.test.ts.
+  // instead of a full repack when the graph grows. This helps the
+  // append-stability property (D72: wave membership stability) hold more
+  // often in practice, though ELK's crossing-minimisation and per-wave
+  // repacking are still free to move/reorder nodes -- see elk.test.ts for
+  // what is and is not asserted.
   'elk.interactive': 'true',
   'elk.layered.layering.strategy': 'INTERACTIVE',
   'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES',
+  // crossingMinimization.strategy: 'NONE'/'LAYER_SWEEP' both throw
+  // UnsupportedGraphException ("hierarchy aware processor LAYER_SWEEP ...
+  // only allowed if the root node specifies the same hierarchical
+  // processor") when combined with hierarchyHandling: INCLUDE_CHILDREN —
+  // do not retry either.
   'elk.layered.crossingMinimization.forceNodeModelOrder': 'true',
   'elk.layered.nodePlacement.strategy': 'SIMPLE',
+  'elk.layered.greedySwitch.type': 'OFF',
+  'elk.alignment': 'TOP',
 };
 
 function toElkNode(node: LayoutGraph['nodes'][number]) {
@@ -45,7 +55,7 @@ function toElkGraph(graph: LayoutGraph) {
   // order. Reverse here so an appended node (last in our array) ends up
   // last in the visual stack too, leaving earlier nodes' relative order
   // (and therefore position) unchanged — required for append stability
-  // (D26).
+  // (D26/D72: wave membership stability).
   for (const node of [...graph.nodes].reverse()) {
     const elkNode = elkNodeById.get(node.id)!;
     const list = childrenByParent.get(node.parentId) ?? [];

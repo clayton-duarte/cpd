@@ -33,7 +33,7 @@ export function buildGraph(data: CpdData, jobCardSize: { width: number; height: 
         const waveNodeId = `wave:${workflow.id}:${waveIndex}`;
         nodes.push({ id: waveNodeId, width: 0, height: 0, parentId: workflowNodeId });
 
-        for (const job of jobsInWave) {
+        for (const job of [...jobsInWave].reverse()) {
           nodes.push({
             id: job.id,
             width: jobCardSize.width,
