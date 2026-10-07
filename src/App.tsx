@@ -23,7 +23,7 @@ function TopBar() {
   return (
     <Group
       px="md"
-      h="var(--space-6)"
+      py="var(--space-2)"
       justify="space-between"
       style={{ borderBottom: '1px solid var(--line)', flexShrink: 0 }}
     >
