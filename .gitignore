@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.DS_Store
+*.local
+.env
+.env.*
+
+# Planning, requirements and decision log are private and never committed.
+docs/
