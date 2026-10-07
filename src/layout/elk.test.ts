@@ -32,12 +32,12 @@ describe('elkLayout', () => {
     const appendedData = {
       ...sampleData,
       workflows: sampleData.workflows.map((w) =>
-        w.id === 'w1' ? { ...w, jobIds: [...w.jobIds, 'j15'] } : w,
+        w.id === 'w1' ? { ...w, jobIds: [...w.jobIds, 'j1x'] } : w,
       ),
       jobs: [
         ...sampleData.jobs,
         {
-          id: 'j15',
+          id: 'j1x',
           workflowId: 'w1',
           title: 'New follow-up job',
           status: 'draft' as const,
@@ -54,13 +54,13 @@ describe('elkLayout', () => {
     const appendedGraph = buildGraph(appendedData, JOB_CARD_SIZE);
     const after = await elkLayout(appendedGraph);
 
-    const beforeWaves = computeWaves(sampleData.jobs);
-    const afterWaves = computeWaves(appendedData.jobs);
+    const beforeWaves = computeWaves(sampleData.jobs.filter((j) => j.workflowId === 'w1'));
+    const afterWaves = computeWaves(appendedData.jobs.filter((j) => j.workflowId === 'w1'));
 
     // Wave membership is stable: appending a job does not change any
     // pre-existing job's wave index.
-    for (const job of sampleData.jobs) {
-      expect(after[job.id]).toBeDefined();
+    for (const job of sampleData.jobs.filter((j) => j.workflowId === 'w1')) {
+      expect(after[`w1:${job.id}`]).toBeDefined();
       expect(afterWaves.get(job.id)).toBe(beforeWaves.get(job.id));
     }
   });
@@ -75,7 +75,7 @@ describe('buildGraph', () => {
     expect(workflowNode).toBeDefined();
     expect(workflowNode?.parentId).toBeUndefined();
 
-    const j1 = byId.get('j1');
+    const j1 = byId.get('w1:j1');
     expect(j1?.parentId).toBe('workflow:w1');
     expect(j1?.width).toBe(220);
     expect(j1?.height).toBe(80);

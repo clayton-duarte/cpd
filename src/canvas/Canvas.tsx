@@ -64,7 +64,7 @@ export function Canvas({ data }: { data: CpdData }): JSX.Element {
       const pos = positions[layoutNode.id];
       if (!pos) return null;
 
-      const job = jobById.get(layoutNode.id);
+      const job = layoutNode.jobId ? jobById.get(layoutNode.jobId) : undefined;
       if (job) {
         return {
           id: layoutNode.id,
@@ -110,8 +110,10 @@ export function Canvas({ data }: { data: CpdData }): JSX.Element {
     .filter((n): n is Node => n !== null);
 
   const edges: Edge[] = graph.edges.map((e) => {
-    const sourceJob = jobById.get(e.source);
-    const targetJob = jobById.get(e.target);
+    const sourceJobId = graph.nodes.find((n) => n.id === e.source)?.jobId;
+    const targetJobId = graph.nodes.find((n) => n.id === e.target)?.jobId;
+    const sourceJob = sourceJobId ? jobById.get(sourceJobId) : undefined;
+    const targetJob = targetJobId ? jobById.get(targetJobId) : undefined;
     const dashed = sourceJob && targetJob ? edgeStyle(sourceJob, targetJob) === 'dashed' : false;
     return {
       id: e.id,

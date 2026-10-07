@@ -39,13 +39,19 @@ export function buildGraph(data: CpdData, jobCardSize: { width: number; height: 
 
       const waveGroups = groupByWave(workflowJobs);
 
+      // Namespace node ids per workflow so same-named job ids in different
+      // workflows never collide or connect: workflows are independent
+      // graphs with zero edges crossing between them.
+      const nodeId = (jobId: string) => `${workflow.id}:${jobId}`;
+
       waveGroups.forEach((jobsInWave, waveIndex) => {
         for (const job of [...jobsInWave].reverse()) {
           nodes.push({
-            id: job.id,
+            id: nodeId(job.id),
             width: jobCardSize.width,
             height: jobCardSize.height,
             parentId: workflowNodeId,
+            jobId: job.id,
             // Ordering key only, not a container: keeps jobs reading
             // left-to-right in dependency order without drawing a box
             // around the wave (D74).
@@ -56,7 +62,7 @@ export function buildGraph(data: CpdData, jobCardSize: { width: number; height: 
 
       for (const job of workflowJobs) {
         for (const dep of job.needs) {
-          edges.push({ id: `${dep}->${job.id}`, source: dep, target: job.id });
+          edges.push({ id: `${nodeId(dep)}->${nodeId(job.id)}`, source: nodeId(dep), target: nodeId(job.id) });
         }
       }
     }

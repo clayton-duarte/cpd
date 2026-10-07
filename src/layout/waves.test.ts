@@ -52,7 +52,8 @@ describe('computeWaves', () => {
 
 describe('groupByWave', () => {
   it('groups jobs by wave, preserving stable fixture order within each wave', () => {
-    const groups = groupByWave(sampleData.jobs);
+    const w1Jobs = sampleData.jobs.filter((j) => j.workflowId === 'w1');
+    const groups = groupByWave(w1Jobs);
     expect(groups[0].map((j) => j.id)).toEqual(['j1', 'j2', 'j10']);
     expect(groups[1].map((j) => j.id)).toEqual(['j3', 'j4', 'j5', 'j6']);
   });
