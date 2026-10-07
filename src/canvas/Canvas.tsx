@@ -52,7 +52,7 @@ export function Canvas({ data }: { data: CpdData }): JSX.Element {
   }
 
   const nodes: Node[] = graph.nodes
-    .map((layoutNode) => {
+    .map((layoutNode): Node | null => {
       const pos = positions[layoutNode.id];
       if (!pos) return null;
       const job = jobById.get(layoutNode.id);
@@ -65,7 +65,7 @@ export function Canvas({ data }: { data: CpdData }): JSX.Element {
           data: { job },
           draggable: false,
           connectable: false,
-        } satisfies Node;
+        };
       }
       // Structural (session/workflow/wave) container node: invisible, exists
       // only so parentId-based relative positioning works for its children.
@@ -79,7 +79,7 @@ export function Canvas({ data }: { data: CpdData }): JSX.Element {
         draggable: false,
         connectable: false,
         selectable: false,
-      } satisfies Node;
+      };
     })
     .filter((n): n is Node => n !== null);
 
