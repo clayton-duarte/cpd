@@ -1,0 +1,11 @@
+:root {
+  --mantine-color-body: #16191d;
+  --mantine-color-text: #e6e6e6;
+  --mantine-color-dimmed: rgba(230,230,230,.60);
+  --mantine-color-placeholder: rgba(230,230,230,.45);
+  --mantine-color-default: rgba(230,230,230,.04);
+  --mantine-color-default-hover: rgba(230,230,230,.08);
+  --mantine-color-default-border: rgba(230,230,230,.25);
+  --mantine-color-anchor: #539bf5;
+}
+html, body, #root { height: 100%; margin: 0; background: #16191d; }
