@@ -40,8 +40,14 @@ export interface Job {
 export interface Workflow {
   id: string;
   sessionId: string;
+  /** Lead-inferred title, always present. Replaced by the ticket title once a ticket exists. */
   title: string;
-  pr?: number;
+  /** Present once the work is tied to a tracker ticket. */
+  ticket?: { key: string; title: string; url: string };
+  /** Present once a branch exists. */
+  branch?: { name: string; url: string };
+  /** Present once a PR is opened. */
+  pr?: { number: number; url: string };
   phase: Phase;
   attempt: number;
   owner: Owner;

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
-import { Group, Text } from '@mantine/core';
+import { Group, Stack, Text } from '@mantine/core';
 import { Canvas } from './canvas/Canvas';
 import { Gallery } from './Gallery';
 import { sampleData } from './fixtures/sample';
@@ -19,21 +19,22 @@ function useHashRoute(): string {
 
 function TopBar() {
   const project = sampleData.projects[0];
+  const session = sampleData.sessions[0];
   return (
     <Group
       px="md"
-      h={40}
+      h={48}
       justify="space-between"
       style={{ borderBottom: '1px solid var(--line)', flexShrink: 0 }}
     >
-      <Group gap="xs">
-        <Text size="sm" fw={600}>
-          {project.name}
+      <Stack gap={0} justify="center">
+        <Text size="sm" fw={600} c="var(--fg-bright)">
+          {session.name}
         </Text>
         <Text size="xs" c="var(--fg-faint)">
-          {project.repos.join(' · ')}
+          {project.name} · {project.repos.join(' · ')}
         </Text>
-      </Group>
+      </Stack>
       <Text size="xs" c="var(--fg-faint)">
         <a href="#/gallery" style={{ color: 'inherit' }}>
           gallery
