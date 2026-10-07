@@ -15,9 +15,6 @@ export type TierCode = `${'O' | 'S' | 'H' | 'L'}${0 | 1 | 2 | 3 | 4}`;
 /** Engine-internal lifecycle. NEVER shown in the UI — see flow labels. */
 export type Phase = 'upkeep' | 'draw' | 'main1' | 'combat' | 'main2' | 'end';
 
-/** What the user reads in the workflow header. */
-export type FlowLabel = 'Context' | 'Plan' | 'Dispatch' | 'Review' | 'Ship';
-
 export type JobStatus =
   | 'draft' | 'queued' | 'running' | 'blocked' | 'failed'
   | 'waiting' | 'paused' | 'awaiting_confirm' | 'done' | 'skipped';
