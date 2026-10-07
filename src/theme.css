@@ -30,6 +30,10 @@
   --blue-tint: rgba(111, 168, 234, 0.2);
   --blue-edge: rgba(111, 168, 234, 0.5);
 
+  /* The scale is for SPACING: padding, margin, gap.
+     Dimensions that must fit their content -- bar heights, node sizes handed to
+     the layout engine -- are derived from that content, never snapped to the
+     nearest step. Snapping a content-sized box to a spacing token clips it. */
   /* Spacing scale -- the only px values a component may reach for (B4/D78) */
   --space-1: 4px;
   --space-2: 8px;
