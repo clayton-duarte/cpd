@@ -1,9 +1,12 @@
 import { useState } from 'react';
 import { Button, Group, SimpleGrid, Stack, Text, Title } from '@mantine/core';
+import { ReactFlowProvider } from '@xyflow/react';
 import { JobCard } from './components/JobCard';
 import { LeadCard } from './components/LeadCard';
 import { sampleData } from './fixtures/sample';
 import { TOKENS, w } from './theme';
+import { Canvas } from './canvas/Canvas';
+import './canvas/xyflow-theme.css';
 
 const PALETTE_SWATCHES: Array<{ label: string; value: string }> = [
   { label: 'black', value: TOKENS.black },
@@ -93,6 +96,15 @@ function App() {
             </Stack>
           ))}
         </SimpleGrid>
+      </Stack>
+
+      <Stack gap="xs">
+        <Title order={3}>Canvas</Title>
+        <div style={{ height: 600, border: `1px solid ${w(0.15)}` }}>
+          <ReactFlowProvider>
+            <Canvas data={sampleData} />
+          </ReactFlowProvider>
+        </div>
       </Stack>
     </Stack>
   );
