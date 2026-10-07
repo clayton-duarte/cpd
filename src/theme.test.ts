@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, extname } from 'node:path';
+import { SPACE_CARDS } from './layout/spacing';
 
 const SRC_DIR = __dirname;
 
@@ -23,6 +24,12 @@ const NEUTRAL_TOKENS = [
   '--fg-faint', '--fg-muted', '--fg', '--fg-bright', '--on-solid',
 ];
 
+// Spacing tokens (C1): not accents, not neutrals -- exclude from the D73 hue check.
+const SPACING_TOKEN_NAMES = [
+  'space-1', 'space-2', 'space-3', 'space-4', 'space-5', 'space-6',
+  'gap', 'pad', 'space-cards',
+];
+
 const ACCENT_HUES = ['red', 'green', 'blue'];
 const ACCENT_PARTS = ['', '-solid', '-tint', '-edge'];
 
@@ -39,7 +46,9 @@ describe('D73 palette tripwire', () => {
     const allVarNames = [...css.matchAll(/(--[a-z-]+):/g)]
       .map((m) => m[1])
       .filter((name) => !name.startsWith('--mantine-'));
-    const accentFullNames = allVarNames.filter((name) => !NEUTRAL_TOKENS.includes(name));
+    const accentFullNames = allVarNames.filter(
+      (name) => !NEUTRAL_TOKENS.includes(name) && !SPACING_TOKEN_NAMES.includes(name.replace(/^--/, '')),
+    );
     const hues = new Set(
       accentFullNames.map((name) => name.replace(/^--/, '').replace(/-(solid|tint|edge)$/, '')),
     );
@@ -68,5 +77,29 @@ describe('D73 palette tripwire', () => {
       if (matches) offenders.push(`${file}: ${matches.join(', ')}`);
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+describe('C1 spacing language tripwire', () => {
+  const SPACE_TOKENS = ['--space-1', '--space-2', '--space-3', '--space-4', '--space-5', '--space-6'];
+
+  it('declares every --space-N token in rem, not px', () => {
+    const css = readFileSync(join(SRC_DIR, 'theme.css'), 'utf8');
+    for (const token of SPACE_TOKENS) {
+      const match = css.match(new RegExp(`${token}:\\s*([^;]+);`));
+      expect(match, `${token} should be declared in theme.css`).toBeTruthy();
+      expect(match![1]).toMatch(/rem\b/);
+      expect(match![1]).not.toMatch(/px/);
+    }
+  });
+
+  it('keeps spacing.ts SPACE_CARDS mirrored to --space-6 in theme.css', () => {
+    const css = readFileSync(join(SRC_DIR, 'theme.css'), 'utf8');
+    const match = css.match(/--space-6:\s*([\d.]+)rem/);
+    expect(match).toBeTruthy();
+    const remValue = parseFloat(match![1]);
+    const rootFontSize = 16; // confirmed in the running app
+    const pxValue = remValue * rootFontSize;
+    expect(SPACE_CARDS).toBe(pxValue);
   });
 });

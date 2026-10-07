@@ -1,6 +1,7 @@
 import ELK from 'elkjs/lib/elk-api.js';
 import ELKSync from 'elkjs/lib/main.js';
 import type { LayoutFn, LayoutGraph, LayoutResult } from './types';
+import { PAD, SPACE_CARDS } from './spacing';
 
 /**
  * ELK layout options. 'layered' + 'RIGHT' matches the GitHub-Actions
@@ -10,10 +11,17 @@ import type { LayoutFn, LayoutGraph, LayoutResult } from './types';
 const ELK_OPTIONS: Record<string, string> = {
   'elk.algorithm': 'layered',
   'elk.direction': 'RIGHT',
-  'elk.layered.spacing.nodeNodeBetweenLayers': '80',
-  'elk.spacing.nodeNode': '24',
+  // One standard gap between cards (C1): connected cards and side-by-side
+  // cards both get --space-cards (2rem/32px), set deliberately on both
+  // options rather than two different legacy gaps (80/24).
+  'elk.layered.spacing.nodeNodeBetweenLayers': String(SPACE_CARDS),
+  'elk.spacing.nodeNode': String(SPACE_CARDS),
   'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
-  'elk.padding': '[top=40,left=20,bottom=20,right=20]',
+  // Outer canvas padding uses --pad (0.75rem/12px) on left/bottom/right; the
+  // larger top inset (40) is kept as-is -- it reserves room for the
+  // WorkflowHeader strip (see toGraph.ts WORKFLOW_TOP_PADDING) and is not a
+  // generic padding value.
+  'elk.padding': `[top=40,left=${PAD},bottom=${PAD},right=${PAD}]`,
   // Interactive placement: keeps existing nodes near their current spot
   // instead of a full repack when the graph grows. This helps the
   // append-stability property (D72: wave membership stability) hold more

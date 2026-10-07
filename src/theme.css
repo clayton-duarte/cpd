@@ -34,13 +34,22 @@
      Dimensions that must fit their content -- bar heights, node sizes handed to
      the layout engine -- are derived from that content, never snapped to the
      nearest step. Snapping a content-sized box to a spacing token clips it. */
-  /* Spacing scale -- the only px values a component may reach for (B4/D78) */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 32px;
+  /* Spacing scale -- the only values a component may reach for (B4/D78).
+     1rem is the height of the text and the unit of spacing (C1). Root
+     font-size is 16px, confirmed in the running app, so the mapping below
+     is exact -- the px comments are informational only, the values are rem. */
+  --space-1: 0.25rem;  /* 4px  */
+  --space-2: 0.5rem;   /* 8px  */
+  --space-3: 0.75rem;  /* 12px */
+  --space-4: 1rem;     /* 16px */
+  --space-5: 1.5rem;   /* 24px */
+  --space-6: 2rem;     /* 32px */
+
+  /* Named aliases -- say WHY, not just how much. Defined in terms of the
+     ramp so they cannot drift apart from it (C1). */
+  --gap: var(--space-2);         /* 0.5rem: icon<->title, title<->badge */
+  --pad: var(--space-3);         /* 0.75rem: internal padding of any card/panel */
+  --space-cards: var(--space-6); /* 2rem: between two cards on the canvas */
 
   /* Mantine wiring */
   --mantine-color-body: var(--bg-deep);
