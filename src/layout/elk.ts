@@ -39,6 +39,7 @@ function toElkNode(node: LayoutGraph['nodes'][number]) {
     id: node.id,
     width: node.width,
     height: node.height,
+    ...(node.layoutOptions ? { layoutOptions: node.layoutOptions } : {}),
   };
 }
 
