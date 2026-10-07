@@ -109,23 +109,23 @@ function flatten(elkNode: { id: string; x?: number; y?: number; width?: number; 
   }
 }
 
-function createElk(): ELK {
+function createElk(): InstanceType<typeof ELK> {
   // Run ELK in a real Web Worker so layout never blocks the UI thread. In
   // environments with no Worker global (e.g. the Vitest/Node test runner),
   // fall back to elkjs's built-in bundled worker shim — same algorithm and
   // output, just not off-thread.
   if (typeof Worker !== 'undefined') {
     return new ELK({
-      workerUrl: new URL('elkjs/lib/elk-worker.js', import.meta.url),
+      workerUrl: new URL('elkjs/lib/elk-worker.js', import.meta.url).toString(),
     });
   }
-  return new ELKSync() as unknown as ELK;
+  return new ELKSync() as unknown as InstanceType<typeof ELK>;
 }
 
 export const elkLayout: LayoutFn = async (graph: LayoutGraph): Promise<LayoutResult> => {
   const elk = createElk();
   const elkGraph = toElkGraph(graph);
-  const laidOut = await elk.layout(elkGraph as Parameters<ELK['layout']>[0]);
+  const laidOut = await elk.layout(elkGraph as Parameters<InstanceType<typeof ELK>['layout']>[0]);
   const result: LayoutResult = {};
   flatten(laidOut as Parameters<typeof flatten>[0], result);
   return result;

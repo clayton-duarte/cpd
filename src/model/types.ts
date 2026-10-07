@@ -6,6 +6,9 @@
 /** Who must act next. Drives card border color. */
 export type Owner = 'you' | 'agents' | 'neutral'; // red | blue | white
 
+/** Border/accent color token for a job. Never a hex value. */
+export type ColorToken = 'red' | 'green' | 'blue' | 'white';
+
 /** Model tier letter + effort digit, e.g. 'O3', 'S1', 'H0', 'L0'. */
 export type TierCode = `${'O' | 'S' | 'H' | 'L'}${0 | 1 | 2 | 3 | 4}`;
 

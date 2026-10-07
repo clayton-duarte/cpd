@@ -1,0 +1,94 @@
+import { Badge, Card, Group, Text, Tooltip } from '@mantine/core';
+import {
+  IconBan,
+  IconCheck,
+  IconChecks,
+  IconCircleDashed,
+  IconClock,
+  IconHandStop,
+  IconLoader2,
+  IconPaperclip,
+  IconPlayerPause,
+  IconSteeringWheel,
+  IconX,
+} from '@tabler/icons-react';
+import type { Job } from '../model/types';
+import { isDashed, isDimmed, jobColor, showAttempt, statusIcon, tierLabel } from '../model/derive';
+import { TOKENS, w } from '../theme';
+
+const ICON_COMPONENTS: Record<string, typeof IconCheck> = {
+  'circle-dashed': IconCircleDashed,
+  'loader-2': IconLoader2,
+  'hand-stop': IconHandStop,
+  x: IconX,
+  clock: IconClock,
+  'player-pause': IconPlayerPause,
+  checks: IconChecks,
+  check: IconCheck,
+  ban: IconBan,
+};
+
+const COLOR_VALUES: Record<ReturnType<typeof jobColor>, string> = {
+  red: TOKENS.red,
+  green: TOKENS.green,
+  blue: TOKENS.blue,
+  white: TOKENS.white,
+};
+
+export interface JobCardProps {
+  job: Job;
+  /** When true, all borders and icons render as white — "Disable color" toggle. */
+  colorDisabled?: boolean;
+}
+
+export function JobCard({ job, colorDisabled = false }: JobCardProps) {
+  const color = colorDisabled ? 'white' : jobColor(job);
+  const colorValue = COLOR_VALUES[color];
+  const borderColor = color === 'white' ? w(0.25) : colorValue;
+  const Icon = ICON_COMPONENTS[statusIcon(job.status)];
+
+  return (
+    <Card
+      withBorder
+      padding="sm"
+      w={220}
+      style={{
+        backgroundColor: 'rgba(230,230,230,.03)',
+        borderColor,
+        borderStyle: isDashed(job) ? 'dashed' : 'solid',
+        borderWidth: 1,
+        opacity: isDimmed(job) ? 0.45 : 1,
+      }}
+    >
+      <Group justify="space-between" wrap="nowrap">
+        <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+          <Icon size={16} color={colorValue} />
+          <Tooltip label={job.title}>
+            <Text size="sm" truncate style={{ minWidth: 0 }}>
+              {job.title}
+            </Text>
+          </Tooltip>
+        </Group>
+        <Group gap={4} wrap="nowrap">
+          {job.steeringPending && <IconSteeringWheel size={16} />}
+          {job.artifactCount > 0 && (
+            <Group gap={2} wrap="nowrap">
+              <IconPaperclip size={14} />
+              <Text size="xs" c={w(0.6)}>
+                {job.artifactCount}
+              </Text>
+            </Group>
+          )}
+        </Group>
+      </Group>
+      <Group justify="space-between" mt="xs">
+        <Text size="xs" c={w(0.45)}>
+          {showAttempt(job) ? `#${job.attempt}` : ''}
+        </Text>
+        <Badge color="dark" variant="light" c={tierLabel(job) === '··' ? w(0.45) : TOKENS.white}>
+          {tierLabel(job)}
+        </Badge>
+      </Group>
+    </Card>
+  );
+}

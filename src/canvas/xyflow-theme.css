@@ -1,0 +1,29 @@
+.react-flow {
+  --xy-background-color: #16191d;
+}
+
+.react-flow__edge-path {
+  stroke: rgba(230, 230, 230, 0.25);
+  stroke-width: 1.5;
+}
+
+.react-flow__edge.animated .react-flow__edge-path {
+  stroke: #539bf5;
+}
+
+.react-flow__handle {
+  background: rgba(230, 230, 230, 0.25);
+  border: none;
+  width: 6px;
+  height: 6px;
+}
+
+.react-flow__node {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+.react-flow__attribution {
+  display: none;
+}
