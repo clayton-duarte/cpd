@@ -56,7 +56,7 @@ export function JobCard({ job, colorDisabled = false }: JobCardProps) {
   return (
     <Card
       withBorder
-      padding="sm"
+      padding="var(--space-3)"
       w={220}
       style={{
         backgroundColor: 'var(--bg-panel)',
@@ -66,8 +66,8 @@ export function JobCard({ job, colorDisabled = false }: JobCardProps) {
         opacity: isDimmed(job) ? 0.45 : 1,
       }}
     >
-      <Group justify="space-between" wrap="nowrap">
-        <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+      <Group justify="space-between" wrap="nowrap" gap="var(--space-2)">
+        <Group gap="var(--space-1)" wrap="nowrap" style={{ minWidth: 0 }}>
           <Icon size={16} color={colorValue} />
           <Tooltip label={job.title}>
             <Text size="sm" truncate style={{ minWidth: 0 }}>
@@ -75,10 +75,10 @@ export function JobCard({ job, colorDisabled = false }: JobCardProps) {
             </Text>
           </Tooltip>
         </Group>
-        <Group gap={4} wrap="nowrap">
+        <Group gap="var(--space-1)" wrap="nowrap" style={{ flexShrink: 0 }}>
           {job.steeringPending && <IconSteeringWheel size={16} />}
           {job.artifactCount > 0 && (
-            <Group gap={2} wrap="nowrap">
+            <Group gap="var(--space-1)" wrap="nowrap">
               <IconPaperclip size={14} />
               <Text size="xs" c="var(--fg-muted)">
                 {job.artifactCount}
@@ -87,7 +87,7 @@ export function JobCard({ job, colorDisabled = false }: JobCardProps) {
           )}
         </Group>
       </Group>
-      <Group justify="space-between" mt="xs">
+      <Group justify="space-between" align="center" mt="var(--space-2)">
         <Text size="xs" c="var(--fg-faint)">
           {showAttempt(job) ? `#${job.attempt}` : ''}
         </Text>
