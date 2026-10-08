@@ -80,16 +80,29 @@ function mirrorStatus(tx: Tx, conversationId: ConversationId, jobId: string, sta
  * daemon's `index.ts` installs the sink that turns this into a live SSE `plan`/`attention` push
  * (J6) -- only one listener at a time, same convention as `onJobOutput`. */
 export type JobStatusListener = (conversationId: number, jobId: string, status: JobStatus) => void;
-let statusListener: JobStatusListener | undefined;
+const statusListeners = new Set<JobStatusListener>();
 
-export function onJobStatusChange(listener: JobStatusListener | undefined): void {
-  statusListener = listener;
+/** Register a listener; returns an unsubscribe function. Multiple listeners may be registered
+ * at once (same convention as `onJobOutput`'s sibling pattern elsewhere, but here with a Set so
+ * a second subscriber never silently displaces the first). */
+export function onJobStatusChange(listener: JobStatusListener): () => void {
+  statusListeners.add(listener);
+  return () => {
+    statusListeners.delete(listener);
+  };
 }
 
 /** Call after a commit that used `mirrorStatus` has landed, so listeners only see settled
- * status changes (never a status that was committed then rolled back). */
+ * status changes (never a status that was committed then rolled back). A throwing listener is
+ * caught and does not prevent the others from running or crash the daemon. */
 function notifyStatus(conversationId: ConversationId, jobId: string, status: JobStatus): void {
-  statusListener?.(Number(conversationId), jobId, status);
+  for (const listener of statusListeners) {
+    try {
+      listener(Number(conversationId), jobId, status);
+    } catch (err) {
+      console.error("onJobStatusChange listener threw", err);
+    }
+  }
 }
 
 export const JobTask = defineTask<JobTaskInput, JobTaskCheckpoint, JobTaskResult, object>({

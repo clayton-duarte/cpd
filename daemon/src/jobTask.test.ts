@@ -9,7 +9,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { PlanDoc, addJob, type Job } from "./plans.ts";
-import { JobTask, boundTail, onJobOutput } from "./jobTask.ts";
+import { JobTask, boundTail, onJobOutput, onJobStatusChange } from "./jobTask.ts";
 
 /** Opens a harness with the JobTask registered and a real NodeExecutionEnv over `workdir`,
  * matching the verified D113/D114 recipe. No real credentials, no network. */
@@ -226,6 +226,81 @@ describe("cpd.job task", () => {
     expect(chunks.join("")).toContain("streamed-output");
 
     onJobOutput(undefined);
+    await harness.close(ctx);
+  });
+
+  it("onJobStatusChange delivers to two listeners registered at the same time", async () => {
+    dir = mkdtempSync(join(tmpdir(), "cpd-jobtask-multilisten-"));
+    const dbPath = join(dir, "test.sqlite");
+    const { harness, root } = await openTestHarness(dbPath, dir);
+
+    const seenA: string[] = [];
+    const seenB: string[] = [];
+    const unsubA = onJobStatusChange((_conversationId, jobId, status) => {
+      if (jobId === "j1") seenA.push(status);
+    });
+    const unsubB = onJobStatusChange((_conversationId, jobId, status) => {
+      if (jobId === "j1") seenB.push(status);
+    });
+
+    const job: Job = { id: "j1", title: "Say hi", status: "draft", needs: [], command: "echo hi", taskId: null, blockedReason: null };
+    await seedJob(harness, root.id, job);
+    const taskId = await startJob(harness, root.id, job);
+    await harness.waitForTask(taskId, ctx);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(seenA).toContain("done");
+    expect(seenB).toContain("done");
+
+    unsubA();
+    unsubB();
+    await harness.close(ctx);
+  });
+
+  it("an unsubscribed onJobStatusChange listener stops receiving status changes", async () => {
+    dir = mkdtempSync(join(tmpdir(), "cpd-jobtask-unsub-"));
+    const dbPath = join(dir, "test.sqlite");
+    const { harness, root } = await openTestHarness(dbPath, dir);
+
+    const seen: string[] = [];
+    const unsub = onJobStatusChange((_conversationId, jobId, status) => {
+      if (jobId === "j1") seen.push(status);
+    });
+    unsub();
+
+    const job: Job = { id: "j1", title: "Say hi", status: "draft", needs: [], command: "echo hi", taskId: null, blockedReason: null };
+    await seedJob(harness, root.id, job);
+    const taskId = await startJob(harness, root.id, job);
+    await harness.waitForTask(taskId, ctx);
+
+    expect(seen).toEqual([]);
+
+    await harness.close(ctx);
+  });
+
+  it("a throwing onJobStatusChange listener does not stop other listeners from running", async () => {
+    dir = mkdtempSync(join(tmpdir(), "cpd-jobtask-throw-"));
+    const dbPath = join(dir, "test.sqlite");
+    const { harness, root } = await openTestHarness(dbPath, dir);
+
+    const seen: string[] = [];
+    const unsubThrow = onJobStatusChange((_conversationId, jobId) => {
+      if (jobId === "j1") throw new Error("boom");
+    });
+    const unsubGood = onJobStatusChange((_conversationId, jobId, status) => {
+      if (jobId === "j1") seen.push(status);
+    });
+
+    const job: Job = { id: "j1", title: "Say hi", status: "draft", needs: [], command: "echo hi", taskId: null, blockedReason: null };
+    await seedJob(harness, root.id, job);
+    const taskId = await startJob(harness, root.id, job);
+    await harness.waitForTask(taskId, ctx);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(seen).toContain("done");
+
+    unsubThrow();
+    unsubGood();
     await harness.close(ctx);
   });
 });
