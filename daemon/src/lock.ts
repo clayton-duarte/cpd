@@ -67,7 +67,11 @@ export function acquireLock(dbPath: string, options: AcquireLockOptions = {}): v
 
   const existing = readLock(path);
   if (existing && checkAlive(existing.pid)) {
-    throw new Error(`cpd-daemon: another daemon (pid ${existing.pid}) already owns ${dbPath}. Stop it first.`);
+    throw new Error(
+      `cpd-daemon: another daemon (pid ${existing.pid}) already owns ${dbPath}. ` +
+        `This process (pid ${process.pid}) is exiting without starting -- the port may still be ` +
+        `served by pid ${existing.pid}. Stop it first.`,
+    );
   }
 
   // Stale lock (dead owner, or unreadable/corrupt file): remove and take ownership.

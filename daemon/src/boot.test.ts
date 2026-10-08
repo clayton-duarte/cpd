@@ -50,9 +50,11 @@ describe("daemon boot", () => {
       }
       try {
         const res = await fetch(`http://localhost:${port}/api/health`);
-        const body = (await res.json()) as { ok?: boolean };
+        const body = (await res.json()) as { ok?: boolean; pid?: number; db?: string };
         if (res.ok && body.ok === true) {
           ok = true;
+          expect(body.pid).toBe(child.pid);
+          expect(body.db).toBe(dbPath);
           break;
         }
       } catch (err) {

@@ -141,7 +141,7 @@ async function main(): Promise<void> {
     const url = new URL(req.url ?? "/", "http://localhost");
 
     if (req.method === "GET" && url.pathname === "/api/health") {
-      sendJson(res, 200, { ok: true, conversationId: engine.root.id });
+      sendJson(res, 200, { ok: true, conversationId: engine.root.id, pid: process.pid, db: DB_PATH });
       return;
     }
 
