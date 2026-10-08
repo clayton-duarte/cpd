@@ -669,3 +669,36 @@ missing node. A partial graph beats a blank canvas.
 
 This keeps `buildGraph` — already pure and tested — completely untouched, and makes the seam between
 engine truth and UI presentation a single testable function instead of a rewrite on either side.
+---
+
+## D116 — The daemon runs under Node's strip-only TypeScript; emit-requiring syntax is banned
+
+`pnpm run daemon` executes `node --watch --experimental-strip-types daemon/src/index.ts`. Node does
+not *compile* TypeScript there — it **erases** it. Any TS construct that must *emit JavaScript* is a
+hard `SyntaxError` at startup.
+
+PR #34 (H4) shipped four **parameter properties** (`constructor(public readonly id: number)`), and
+the daemon could not boot at all:
+
+```
+SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]: TypeScript parameter property is not
+supported in strip-only mode   —   daemon/src/engine.ts:258
+```
+
+**Banned in `daemon/`:** parameter properties, `enum`, `namespace`, decorators, and constructor
+parameter modifiers. **Fine:** type annotations, `interface`, `type`, generics, `as`, and
+`import type` — everything that vanishes without a trace.
+
+**Chosen:** keep strip-only mode and adapt the code (an explicit field plus an assignment in the
+constructor). Adding a build step or `tsx` for the daemon would buy nothing but a compile stage and
+a second toolchain; the constraint costs a few lines and keeps `node file.ts` as the whole story —
+the most vanilla option available, per the standing preference.
+
+**Why this got through — the gates do not run the daemon.** `pnpm typecheck` (tsc) and Vitest both
+*compile* TypeScript, so both accept parameter properties happily. 47 daemon tests passed against
+code that could not start. **Our test suite proves the daemon's functions work; it never proved the
+daemon runs.** A boot smoke test — spawn the real entrypoint, poll `/api/health`, kill it — is now
+required, because it is the only check that exercises the same loader production uses.
+
+This is the sixth silent-success of the night, and the first where *green tests themselves* were the
+disguise.
