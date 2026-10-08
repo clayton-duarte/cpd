@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, afterEach } from "vitest";
 import { FileCredentialStore } from "./credentials.ts";
-import { flattenMessages, sseFrame } from "./engine.ts";
+import { flattenMessages, sseFrame, submitPrompt } from "./engine.ts";
+import type { Conversation } from "@earendil-works/pi-durable";
 
 describe("FileCredentialStore", () => {
   let dir: string;
@@ -190,5 +191,48 @@ describe("sseFrame", () => {
   it("serializes a payload to exactly data: {...}\\n\\n", () => {
     const frame = sseFrame({ type: "messages", messages: [] });
     expect(frame).toBe(`data: ${JSON.stringify({ type: "messages", messages: [] })}\n\n`);
+  });
+});
+
+/** Minimal fake `Conversation` for `submitPrompt`: only `.submit()` is exercised, and the
+ * returned handle's `.wait()` resolves to whatever `settled` the test configures. Mocks the
+ * engine per L1's instructions -- no real model call. */
+function fakeConversation(settled: { status: "done" | "unanswered"; reason?: string; detail?: unknown }): Conversation {
+  return {
+    submit: async () => ({
+      wait: async () => settled,
+    }),
+  } as unknown as Conversation;
+}
+
+describe("submitPrompt", () => {
+  it("returns status only, no reason/detail, when the submission is done", async () => {
+    const result = await submitPrompt(fakeConversation({ status: "done" }), "hi");
+    expect(result).toEqual({ status: "done" });
+  });
+
+  it("returns reason and detail when the submission is unanswered", async () => {
+    const result = await submitPrompt(
+      fakeConversation({ status: "unanswered", reason: "model_error", detail: "the real provider text" }),
+      "hi",
+    );
+    expect(result).toEqual({ status: "unanswered", reason: "model_error", detail: "the real provider text" });
+  });
+
+  it("drops a non-string detail rather than passing it through", async () => {
+    const result = await submitPrompt(
+      fakeConversation({ status: "unanswered", reason: "model_error", detail: { not: "a string" } }),
+      "hi",
+    );
+    expect(result).toEqual({ status: "unanswered", reason: "model_error", detail: undefined });
+  });
+
+  // Falsification table (L1), row A: submitPrompt must not drop `detail` from its return value.
+  it("[A] the detail actually reaches the caller, not just the reason code", async () => {
+    const result = await submitPrompt(
+      fakeConversation({ status: "unanswered", reason: "model_error", detail: "unique-marker-detail-42" }),
+      "hi",
+    );
+    expect(result.detail).toBe("unique-marker-detail-42");
   });
 });

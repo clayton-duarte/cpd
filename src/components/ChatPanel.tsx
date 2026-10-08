@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ActionIcon,
+  Alert,
   Badge,
   EmptyState,
   Group,
@@ -36,7 +37,7 @@ export function ChatPanel({ conversationId, onForked }: ChatPanelProps) {
   const [pending, setPending] = useState<Message | null>(null);
   const [draft, setDraft] = useState('');
   const [inFlight, setInFlight] = useState(false);
-  const [reason, setReason] = useState<string | null>(null);
+  const [unanswered, setUnanswered] = useState<{ reason: string; detail?: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // The optimistic message is cleared once the authoritative transcript
@@ -69,9 +70,9 @@ export function ChatPanel({ conversationId, onForked }: ChatPanelProps) {
     try {
       const result = await sendPrompt(text, conversationId);
       if (result.status !== 'done') {
-        setReason(result.reason ?? 'unanswered');
+        setUnanswered({ reason: result.reason ?? 'unanswered', detail: result.detail });
       } else {
-        setReason(null);
+        setUnanswered(null);
       }
     } finally {
       setInFlight(false);
@@ -130,6 +131,13 @@ export function ChatPanel({ conversationId, onForked }: ChatPanelProps) {
                 </Group>
               );
             })}
+            {unanswered && (
+              <Alert color="red" variant="light" title={unanswered.reason} data-testid="unanswered-alert">
+                <Text size="sm" style={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
+                  {unanswered.detail ?? unanswered.reason}
+                </Text>
+              </Alert>
+            )}
             <div ref={bottomRef} />
           </Stack>
         )}
@@ -138,11 +146,6 @@ export function ChatPanel({ conversationId, onForked }: ChatPanelProps) {
         {status !== 'open' && (
           <Badge color="var(--fg-muted)" variant="light">
             reconnecting
-          </Badge>
-        )}
-        {reason && (
-          <Badge color="var(--red)" variant="light">
-            {reason}
           </Badge>
         )}
         <Group gap="var(--space-2)" wrap="nowrap" align="flex-end">

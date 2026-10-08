@@ -174,13 +174,17 @@ export async function getMessages(root: Conversation): Promise<Message[]> {
 export async function submitPrompt(
   root: Conversation,
   text: string,
-): Promise<{ status: "done" | "unanswered"; reason?: string }> {
+): Promise<{ status: "done" | "unanswered"; reason?: string; detail?: string }> {
   const submission = await root.submit({ type: "input", content: text }, ctx);
   const settled = await submission.wait(ctx);
   if (settled.status === "unanswered") {
-    console.error("[cpd-daemon] submission unanswered:", settled.reason);
+    // `detail` carries the real provider/model text (e.g. a content-policy refusal), while
+    // `reason` is only a short code like "model_error" -- see L1.
+    const detail = typeof settled.detail === "string" ? settled.detail : undefined;
+    console.error("[cpd-daemon] submission unanswered:", settled.reason, detail);
+    return { status: settled.status, reason: settled.reason, detail };
   }
-  return { status: settled.status, reason: settled.reason };
+  return { status: settled.status };
 }
 
 /** Look up a conversation handle by id, falling back to the root if not found. */

@@ -4,7 +4,7 @@ export type HealthResponse = { ok: true; conversationId: number };
 
 export type MessagesResponse = { messages: Message[] };
 
-export type PromptResponse = { status: 'done' | 'unanswered'; reason?: string };
+export type PromptResponse = { status: 'done' | 'unanswered'; reason?: string; detail?: string };
 
 /** Branded so a raw number can't be passed where a conversation id is expected by accident. */
 export type ConversationId = number & { readonly __brand: 'ConversationId' };

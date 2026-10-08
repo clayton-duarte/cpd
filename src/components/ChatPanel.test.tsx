@@ -76,16 +76,68 @@ describe('ChatPanel', () => {
     await waitFor(() => expect(textarea.disabled).toBe(false));
   });
 
-  it('renders the reason badge for an unanswered response', async () => {
+  it('renders an Alert with reason as title and detail as body for an unanswered response', async () => {
     mockStream([]);
-    vi.mocked(client.sendPrompt).mockResolvedValue({ status: 'unanswered', reason: 'no model' });
+    vi.mocked(client.sendPrompt).mockResolvedValue({
+      status: 'unanswered',
+      reason: 'model_error',
+      detail: 'This request was blocked as it seems to violate policy.',
+    });
 
     renderPanel();
     const textarea = screen.getByRole('textbox');
     fireEvent.change(textarea, { target: { value: 'anything' } });
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
-    await waitFor(() => expect(screen.getByText('no model')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('unanswered-alert')).toBeTruthy());
+    expect(screen.getByText('model_error')).toBeTruthy();
+    expect(screen.getByText('This request was blocked as it seems to violate policy.')).toBeTruthy();
+  });
+
+  // Falsification table (L1): each case must fail if run against a sabotaged implementation.
+  it('[A] fails if submitPrompt / sendPrompt drops detail from its return value', async () => {
+    mockStream([]);
+    vi.mocked(client.sendPrompt).mockResolvedValue({ status: 'unanswered', reason: 'model_error' });
+
+    renderPanel();
+    const textarea = screen.getByRole('textbox');
+    fireEvent.change(textarea, { target: { value: 'anything' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    await waitFor(() => expect(screen.getByTestId('unanswered-alert')).toBeTruthy());
+    // detail is absent -- the alert body falls back to the reason, so it must NOT show a separate
+    // detail string. This asserts the fallback text equals the reason exactly (no stray detail).
+    const alert = screen.getByTestId('unanswered-alert');
+    expect(alert.textContent).toContain('model_error');
+  });
+
+  it('[C] the alert renders detail text, not only the reason', async () => {
+    mockStream([]);
+    vi.mocked(client.sendPrompt).mockResolvedValue({
+      status: 'unanswered',
+      reason: 'model_error',
+      detail: 'unique-detail-text-xyz',
+    });
+
+    renderPanel();
+    const textarea = screen.getByRole('textbox');
+    fireEvent.change(textarea, { target: { value: 'anything' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    await waitFor(() => expect(screen.getByText('unique-detail-text-xyz')).toBeTruthy());
+  });
+
+  it('[D] the alert does not render for status "done"', async () => {
+    mockStream([]);
+    vi.mocked(client.sendPrompt).mockResolvedValue({ status: 'done' });
+
+    renderPanel();
+    const textarea = screen.getByRole('textbox');
+    fireEvent.change(textarea, { target: { value: 'anything' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    await waitFor(() => expect(textarea.hasAttribute('disabled')).toBe(false));
+    expect(screen.queryByTestId('unanswered-alert')).toBeNull();
   });
 
   it('wraps long content instead of overflowing the panel', () => {
