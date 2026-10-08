@@ -1493,3 +1493,65 @@ project infrastructure — the user cannot tell "Clayton's review helper" from "
 app". When the standard toolchain already covers the need, the bespoke script is pure cost. The
 fact that I'd spent two cards (J4, J5) hardening it made it *look* load-bearing, which is exactly
 how accidental infrastructure happens. Sunk cost is not a reason to keep it.
+---
+
+## D142 — Port 8888 is the default, and `strictPort` makes a wrong port loud
+
+User: *"always use port 8888"*, after *"I still don't see the application up"* — while the server
+was, by `curl`, demonstrably up on 5173.
+
+The likely cause of the invisible app: **card-dashboard's Vite also runs on 5173.** Whichever
+process claimed it first won; the other slid to a different port. So "localhost:5173" could show a
+completely different app, or nothing. I had reported "it's up" from a `curl` 200 **without checking
+which app answered** — the status code was true and the conclusion was wrong.
+
+Fixed at the root in `vite.config.ts`: default port `8888`, plus **`strictPort: true`** so Vite
+**fails loudly** instead of silently drifting to a free port. An address that changes under you is
+worse than a server that refuses to start: you spend the debugging time on the wrong layer.
+
+## D143 — The prototype's three "dead" flows were one real bug, one feedback gap, and one false alarm
+
+User, with the app finally in front of him: *"new session does nothing / typing on the composer
+posts but I get no response / I see threads, but nothing renders when clicking them"*.
+
+Reproduced all three in the browser rather than reasoning about them. They were not three bugs:
+
+**1. Threads don't render — FALSE ALARM (mine).** They do render: hash becomes `#/c/16`, 3 jobs
+draw. My first probe sampled the DOM too early and saw 0 nodes, which nearly had me carding a
+non-existent canvas bug. *Checking too soon and checking wrong look identical in the output.*
+(Layout may still be at fault for the user's perception — the canvas column is partly overlapped by
+the floating right panel; filed separately from correctness.)
+
+**2. "New session does nothing" — REAL, but a feedback bug, not a broken action.** It fires
+`POST /api/conversation -> 200`, creates the conversation, tree grows 4 -> 5. But it does not select
+the new session, reveal it in the tree, show a pending state, or report failure. **A successful
+action with no visible consequence is a bug, and the user is right to call it "does nothing."**
+Filed as **K2** (frontend-only).
+
+**3. "No response in the composer" — REAL, and the worst bug in the product.** The agent replies
+correctly and the reply is in the DB; the UI never hears it:
+
+```
+child conv 80:  DB = 4 messages (incl. "SECOND-TURN-OK")
+                SSE frames = ['messages(2)']        <- frozen forever
+root conv 1:    DB 6 -> 8,  frames [6, 7, 7, 8]     <- works fine
+```
+
+Cause (`daemon/src/index.ts` ~125-150): the `viewState` subscription **and** its polling fallback
+are hardcoded to `engine.root.id`. `pushMessagesFor(id)` is correct and filters by watcher, but
+nothing ever calls it with a child id — so any non-root conversation receives exactly one frame,
+the snapshot written on connect. Filed as **K1** (daemon-only).
+
+**Why this survived every test and all my own verification:** I always demoed on the **root**
+conversation, which is the one code path that works. Every "live updates work" claim I made was
+true and unrepresentative. The user's very first action — "New session" — left the only working
+path and hit the dead one immediately.
+
+**This is the 14th instance of the silent-success pattern, and the rule it adds:** *verifying the
+default path is not verifying the feature.* The root conversation is a privileged special case; the
+thing users actually do is create a new one. Test the path the user takes first, not the one that
+is easiest to set up.
+
+**My own process failure, stated plainly:** I twice declared this prototype "driveable" and listed
+things for the user to try, having never once created a session and talked to it the way he would.
+A probe that reuses the fixture I already built is not a test of the product.
