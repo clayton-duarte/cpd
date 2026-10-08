@@ -472,4 +472,169 @@ describe("plan-job HTTP routes", () => {
     const cleared = (await clearedRes.json()) as { items: { jobId: string }[] };
     expect(cleared.items.some((it) => it.jobId === blockedId)).toBe(false);
   });
+
+  // J6: parse newline-delimited `data: {...}\n\n` SSE frames off a fetch ReadableStream, the
+  // real wire format the browser's EventSource would see -- not a mocked transport.
+  async function collectSseTypes(
+    stream: ReadableStream<Uint8Array>,
+    predicate: (frame: Record<string, unknown>) => boolean,
+    deadlineMs: number,
+  ): Promise<Record<string, unknown>[]> {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const collected: Record<string, unknown>[] = [];
+    const deadline = Date.now() + deadlineMs;
+    try {
+      while (Date.now() < deadline) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        const { value, done } = await Promise.race([
+          reader.read(),
+          new Promise<{ value: undefined; done: false }>((resolve) =>
+            setTimeout(() => resolve({ value: undefined, done: false }), Math.min(remaining, 500)),
+          ),
+        ]);
+        if (done) break;
+        if (value) {
+          buffer += decoder.decode(value, { stream: true });
+          let idx: number;
+          while ((idx = buffer.indexOf("\n\n")) !== -1) {
+            const rawFrame = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 2);
+            const line = rawFrame.split("\n").find((l) => l.startsWith("data: "));
+            if (!line) continue;
+            const parsed = JSON.parse(line.slice("data: ".length)) as Record<string, unknown>;
+            collected.push(parsed);
+            if (predicate(parsed)) return collected;
+          }
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+    }
+    return collected;
+  }
+
+  it("a subscriber to /api/stream sees a job's plan frames reach done, without any HTTP refetch", async () => {
+    const streamRes = await fetch(`${base}/api/stream`);
+    expect(streamRes.status).toBe(200);
+    expect(streamRes.body).toBeTruthy();
+
+    const createRes = await fetch(`${base}/api/plan/job`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "SseDone", command: "echo hi" }),
+    });
+    const id = ((await createRes.json()) as JobResponse).job!.id;
+
+    await fetch(`${base}/api/plan/job/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+
+    const frames = await collectSseTypes(
+      streamRes.body!,
+      (frame) =>
+        frame.type === "plan" &&
+        (frame.jobs as { id: string; status: string }[] | undefined)?.some(
+          (j) => j.id === id && j.status === "done",
+        ) === true,
+      15_000,
+    );
+
+    const statuses = frames
+      .filter((frame) => frame.type === "plan")
+      .map((frame) => (frame.jobs as { id: string; status: string }[]).find((j) => j.id === id)?.status)
+      .filter((status): status is string => status !== undefined);
+
+    expect(statuses[statuses.length - 1]).toBe("done");
+    // The live-update path, not just the HTTP-triggered initial frame: the status must actually
+    // have advanced past the pre-run draft over the stream (this is the regression J6 fixes).
+    expect(statuses).toContain("running");
+  }, 20_000);
+
+  it("a job whose command fails emits a 'failed' plan frame and a matching attention frame", async () => {
+    const streamRes = await fetch(`${base}/api/stream`);
+    expect(streamRes.status).toBe(200);
+
+    const createRes = await fetch(`${base}/api/plan/job`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "SseFail", command: "exit 1" }),
+    });
+    const id = ((await createRes.json()) as JobResponse).job!.id;
+
+    await fetch(`${base}/api/plan/job/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+
+    const frames = await collectSseTypes(
+      streamRes.body!,
+      (frame) => frame.type === "attention" && (frame.items as { jobId: string }[]).some((it) => it.jobId === id),
+      15_000,
+    );
+
+    const planFrames = frames.filter((frame) => frame.type === "plan");
+    const sawFailedPlan = planFrames.some((frame) =>
+      (frame.jobs as { id: string; status: string }[]).some((j) => j.id === id && j.status === "failed"),
+    );
+    expect(sawFailedPlan).toBe(true);
+
+    const attentionFrame = frames.find(
+      (frame) => frame.type === "attention" && (frame.items as { jobId: string }[]).some((it) => it.jobId === id),
+    );
+    expect(attentionFrame).toBeTruthy();
+    const item = (attentionFrame!.items as { jobId: string; status: string }[]).find((it) => it.jobId === id);
+    expect(item?.status).toBe("failed");
+  }, 20_000);
+
+  it("plan frames for conversation A are not delivered to a client watching conversation B", async () => {
+    const createConvB = await fetch(`${base}/api/conversation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "ConvB" }),
+    });
+    const convB = (await createConvB.json()) as { id: number };
+
+    const streamB = await fetch(`${base}/api/stream?conversation=${convB.id}`);
+    expect(streamB.status).toBe(200);
+
+    const createRes = await fetch(`${base}/api/plan/job`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "ConvAJob", command: "echo hi" }),
+    });
+    const id = ((await createRes.json()) as JobResponse).job!.id;
+
+    await fetch(`${base}/api/plan/job/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+
+    // Give conversation A's job time to reach done, then read whatever conversation B's stream
+    // actually received -- it must never carry A's job id in a `plan` frame.
+    const deadline = Date.now() + 15_000;
+    let doneOnA = false;
+    while (Date.now() < deadline) {
+      const planRes = await fetch(`${base}/api/plan`);
+      const plan = (await planRes.json()) as { jobs: { id: string; status: string }[] };
+      if (plan.jobs.find((j) => j.id === id)?.status === "done") {
+        doneOnA = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    expect(doneOnA).toBe(true);
+
+    const framesOnB = await collectSseTypes(streamB.body!, () => false, 2_000);
+    const leaked = framesOnB.some(
+      (frame) => frame.type === "plan" && (frame.jobs as { id: string }[]).some((j) => j.id === id),
+    );
+    expect(leaked).toBe(false);
+  }, 25_000);
 });

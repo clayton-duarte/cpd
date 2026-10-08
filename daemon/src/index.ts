@@ -17,6 +17,7 @@ import {
   runPlanJob,
   abortPlanJob,
   onJobOutput,
+  onJobStatusChange,
   createSession,
   UnknownConversationError,
   GraphError,
@@ -104,6 +105,18 @@ async function main(): Promise<void> {
     for (const [client, watching] of sseClients) {
       if (watching === conversationId) client.write(frame);
     }
+  });
+
+  // J6: the engine advances a job's status (queued -> running -> done|failed|blocked) on its
+  // own, with no HTTP request in the loop (e.g. once a command actually finishes running). The
+  // HTTP route handlers above only push a plan frame immediately after *their own* mutation,
+  // which is always before the engine has had a chance to move the job further -- so without
+  // this, every later transition is invisible to SSE subscribers. This single listener covers
+  // every status transition from every call site in jobTask.ts (including taskless "done" and
+  // abort), so one code path is responsible for all of it.
+  onJobStatusChange((conversationId) => {
+    void pushPlanFor(conversationId);
+    void pushAttention();
   });
 
   // Durable's `viewState().subscribe()` is the primary change-detection path; if that proves

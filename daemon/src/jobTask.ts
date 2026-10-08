@@ -74,6 +74,24 @@ function mirrorStatus(tx: Tx, conversationId: ConversationId, jobId: string, sta
   });
 }
 
+/** Fired once a job's status change has actually committed to the plan document, regardless of
+ * whether that change originated from an HTTP route or purely from the engine advancing a task
+ * on its own (queued -> running -> done|failed, with no HTTP request in the loop at all). The
+ * daemon's `index.ts` installs the sink that turns this into a live SSE `plan`/`attention` push
+ * (J6) -- only one listener at a time, same convention as `onJobOutput`. */
+export type JobStatusListener = (conversationId: number, jobId: string, status: JobStatus) => void;
+let statusListener: JobStatusListener | undefined;
+
+export function onJobStatusChange(listener: JobStatusListener | undefined): void {
+  statusListener = listener;
+}
+
+/** Call after a commit that used `mirrorStatus` has landed, so listeners only see settled
+ * status changes (never a status that was committed then rolled back). */
+function notifyStatus(conversationId: ConversationId, jobId: string, status: JobStatus): void {
+  statusListener?.(Number(conversationId), jobId, status);
+}
+
 export const JobTask = defineTask<JobTaskInput, JobTaskCheckpoint, JobTaskResult, object>({
   name: "cpd.job",
   version: 1,
@@ -94,6 +112,7 @@ export const JobTask = defineTask<JobTaskInput, JobTaskCheckpoint, JobTaskResult
             await mirrorStatus(tx, conversationId, jobId, "done");
             return { status: "terminal", outcome: { status: "completed", result: { exitCode: 0, output: "" } } };
           }, context);
+          notifyStatus(conversationId, jobId, "done");
           return;
         }
         await rt.commit(async (tx) => {
@@ -103,6 +122,7 @@ export const JobTask = defineTask<JobTaskInput, JobTaskCheckpoint, JobTaskResult
             checkpoint: { phase: "run", jobId, conversationId, command },
           };
         }, context);
+        notifyStatus(conversationId, jobId, "running");
         return;
       }
 
@@ -116,6 +136,7 @@ export const JobTask = defineTask<JobTaskInput, JobTaskCheckpoint, JobTaskResult
           policy: "allSettled",
         };
       }, context);
+      notifyStatus(conversationId, jobId, "queued");
     },
     run: async (task, rt, context) => {
       const { jobId, conversationId, command } = task.state.checkpoint;
@@ -125,6 +146,7 @@ export const JobTask = defineTask<JobTaskInput, JobTaskCheckpoint, JobTaskResult
           await mirrorStatus(tx, conversationId, jobId, "done");
           return { status: "terminal", outcome: { status: "completed", result: { exitCode: 0, output: "" } } };
         }, context);
+        notifyStatus(conversationId, jobId, "done");
         return;
       }
 
@@ -137,6 +159,7 @@ export const JobTask = defineTask<JobTaskInput, JobTaskCheckpoint, JobTaskResult
             outcome: { status: "failed", error: { message: "No execution environment configured for this harness" } },
           };
         }, context);
+        notifyStatus(conversationId, jobId, "failed");
         return;
       }
 
@@ -144,6 +167,7 @@ export const JobTask = defineTask<JobTaskInput, JobTaskCheckpoint, JobTaskResult
         await mirrorStatus(tx, conversationId, jobId, "running");
         return undefined;
       }, context);
+      notifyStatus(conversationId, jobId, "running");
 
       const taskKey = String(rt.taskId);
       const chunks: string[] = [];
@@ -172,6 +196,7 @@ export const JobTask = defineTask<JobTaskInput, JobTaskCheckpoint, JobTaskResult
             outcome: { status: "failed", error: { message: result.error.message } },
           };
         }, context);
+        notifyStatus(conversationId, jobId, "failed");
         return;
       }
 
@@ -190,6 +215,7 @@ export const JobTask = defineTask<JobTaskInput, JobTaskCheckpoint, JobTaskResult
           outcome: { status: "failed", error: { message: `Command exited ${exitCode}` }, result: value },
         };
       }, context);
+      notifyStatus(conversationId, jobId, status);
     },
   },
   abort: async (task, rt, context) => {
@@ -201,6 +227,7 @@ export const JobTask = defineTask<JobTaskInput, JobTaskCheckpoint, JobTaskResult
         outcome: { status: "failed", error: { message: "aborted" } },
       };
     }, context);
+    notifyStatus(conversationId, jobId, "failed");
   },
 });
 
