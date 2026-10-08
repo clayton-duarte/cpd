@@ -87,4 +87,65 @@ describe('ChatPanel', () => {
 
     await waitFor(() => expect(screen.getByText('no model')).toBeTruthy());
   });
+
+  it('wraps long content instead of overflowing the panel', () => {
+    const longToken = 'x'.repeat(300);
+    mockStream([{ role: 'user', content: longToken }]);
+
+    renderPanel();
+    const paper = screen.getByText(longToken).closest('div')!;
+    expect(paper.style.overflowWrap).toBe('anywhere');
+  });
+
+  it('keeps the optimistic message visible until the stream confirms it', async () => {
+    mockStream([]);
+    let resolvePrompt: (value: { status: 'done' }) => void = () => {};
+    vi.mocked(client.sendPrompt).mockReturnValue(
+      new Promise((resolve) => {
+        resolvePrompt = resolve;
+      }),
+    );
+
+    renderPanel();
+    const textarea = screen.getByRole('textbox');
+    fireEvent.change(textarea, { target: { value: 'optimistic text' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    expect(screen.getByText('optimistic text')).toBeTruthy();
+
+    resolvePrompt({ status: 'done' });
+    await waitFor(() => expect(screen.getByRole('textbox').hasAttribute('disabled')).toBe(false));
+
+    // Stream hasn't delivered the authoritative transcript yet -- the
+    // optimistic message must still be visible, not vanished.
+    expect(screen.getByText('optimistic text')).toBeTruthy();
+  });
+
+  it('shows the empty state with zero messages and hides it once one exists', () => {
+    mockStream([]);
+    const { rerender } = renderPanel();
+    expect(screen.getByText('No messages yet')).toBeTruthy();
+
+    mockStream([{ role: 'user', content: 'hi' }]);
+    rerender(
+      <MantineProvider>
+        <ChatPanel />
+      </MantineProvider>,
+    );
+    expect(screen.queryByText('No messages yet')).toBeNull();
+  });
+
+  it('shows the status indicator only when status is not open', () => {
+    vi.mocked(engineStream.useEngineStream).mockReturnValue({ messages: [], status: 'connecting' });
+    const { rerender } = renderPanel();
+    expect(screen.getByText('reconnecting')).toBeTruthy();
+
+    vi.mocked(engineStream.useEngineStream).mockReturnValue({ messages: [], status: 'open' });
+    rerender(
+      <MantineProvider>
+        <ChatPanel />
+      </MantineProvider>,
+    );
+    expect(screen.queryByText('reconnecting')).toBeNull();
+  });
 });
