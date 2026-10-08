@@ -4,6 +4,7 @@ import {
   shapeConversationTree,
   openTitleStore,
   resolveConversationId,
+  resolvePromptConversationId,
   type RawConversationRecord,
   type SqliteLike,
 } from "./plans.ts";
@@ -102,5 +103,37 @@ describe("resolveConversationId", () => {
   it("resolves to the parsed conversation id when present", () => {
     const url = new URL("http://localhost/api/messages?conversation=12");
     expect(resolveConversationId(url, 1)).toBe(12);
+  });
+
+  it("does not fall back to root for an explicit non-numeric value", () => {
+    const url = new URL("http://localhost/api/messages?conversation=bogus");
+    expect(Number.isNaN(resolveConversationId(url, 1))).toBe(true);
+  });
+});
+
+describe("resolvePromptConversationId", () => {
+  it("resolves to the root id when neither query nor body supply a conversation", () => {
+    const url = new URL("http://localhost/api/prompt");
+    expect(resolvePromptConversationId(url, undefined, 1)).toEqual({ kind: "ok", id: 1 });
+  });
+
+  it("resolves to the query id when only the query param is present", () => {
+    const url = new URL("http://localhost/api/prompt?conversation=16");
+    expect(resolvePromptConversationId(url, undefined, 1)).toEqual({ kind: "ok", id: 16 });
+  });
+
+  it("resolves to the body id when only the body supplies one", () => {
+    const url = new URL("http://localhost/api/prompt");
+    expect(resolvePromptConversationId(url, 16, 1)).toEqual({ kind: "ok", id: 16 });
+  });
+
+  it("resolves when query and body agree", () => {
+    const url = new URL("http://localhost/api/prompt?conversation=16");
+    expect(resolvePromptConversationId(url, 16, 1)).toEqual({ kind: "ok", id: 16 });
+  });
+
+  it("reports a conflict when query and body disagree", () => {
+    const url = new URL("http://localhost/api/prompt?conversation=16");
+    expect(resolvePromptConversationId(url, 17, 1)).toEqual({ kind: "conflict" });
   });
 });
