@@ -1769,3 +1769,62 @@ five-row sabotage table (A-E) in the PR body.
 
 Merged at `90f5718`. 193 app + 89 daemon green, typecheck clean. K6 delivered its brief exactly; the
 residue is new scope, not a defect in K6, which is why it is a follow-up card and not a rejection.
+
+---
+
+## D150 - K7 merged: the scroll guarantee is finally pinned down. Full A-E sabotage table red.
+
+K7 touched `Sidebar.tsx` only to add `export` to `findScrollableAncestor` (authorised by the card);
+zero behaviour change. Everything else is test.
+
+Verified on the branch, then the merge re-verified on main:
+
+```
+A: delete scrollIntoView                   -> 1 failed  (caught)
+B: always bail (fullyVisible = true)       -> 1 failed  (caught)
+C: panel = row.parentElement               -> 1 failed  (caught)
+D: drop the overflow-y auto|scroll check   -> 1 failed  (caught)   <-- new
+E: scroll first row, not the selected row  -> 1 failed  (caught)   <-- new
+```
+
+Both new failures are for the right reason, not incidental breakage:
+
+- **E**: `AssertionError: expected <div …> to be <div …>` with the diff showing
+  `- data-testid="thread-99"` -- the assertion now compares the spy's **receiver** against the
+  selected row, so scrolling any other element is caught by identity.
+- **D**: `expected <div style="overflow-y: visible"> to be <div style="overflow-y: auto">` -- a
+  direct unit test on the exported walker proves it skips an overflowing-but-unclipped ancestor.
+
+Also checked the stub is restored on failure (ran the file twice, stable 25/25), so a red test can't
+leak a patched `Element.prototype` into the rest of the suite.
+
+**Closing the K3->K4->K6->K7 arc.** Four cards to make one `scrollIntoView` call trustworthy. Each
+round the implementation was closer and the *assertion* was still one step wider than the
+guarantee: "something scrolled" -> "the panel scrolled" -> "the right row scrolled". The cost was
+not the code, it was that every intermediate state looked finished -- green suite, plausible diff,
+honest builder report. The sabotage table is what made each gap visible in minutes instead of at
+the user's next click. **Standing practice for this repo: any card whose value is a guarantee ships
+a falsification table, and the table is the deliverable, not the green checkmark.**
+
+Merged at `ecbdf7a`. 194 app + 89 daemon green.
+
+---
+
+## D151 - K5 merged: builder worktrees no longer restart the lead's daemon.
+
+One line in `package.json`: `node --watch` -> `node --watch-path=daemon/src`. `--watch` had been
+watching the whole CWD tree including `.worktrees/`, so any builder writing files restarted (and
+transiently killed) the daemon the user was testing against -- which is exactly what happened to me
+mid-review during K1, costing a confusing detour into "did K1 crash the daemon?" (it had not; clean
+SIGTERM, exit 0).
+
+Verified empirically, both halves, because scoping a watcher too tightly is as bad as too loosely:
+
+```
+pid before                     : 91978
+touch .worktrees/probe.ts      : 91978   SAME     (no longer restarts)
+touch daemon/src/index.ts      : 93496   CHANGED  (real edits still hot-reload)
+```
+
+`--watch-path` works fine alongside `--experimental-strip-types` on the installed Node. Merged at
+`edac736`. Board queue is now empty; all of K1-K7 are merged.
