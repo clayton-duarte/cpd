@@ -435,3 +435,48 @@ invite a question we cannot yet answer. Easy to widen later; hard to take back.
 
 The title is derived **server-side** by G1's existing `deriveTitle`. The frontend sends no title,
 so there is exactly one implementation of that rule.
+---
+
+## D111 — Forks hold real, independent Copilot turns (verified), and `/api/prompt` has a silent misroute
+
+**The good news, proven live.** A forked conversation is not just a tree node — it runs. Submitting
+into fork `16` produced a real Copilot turn that landed *only* in that thread:
+
+```
+POST /api/prompt {"text":"Reply with exactly: FORK-TURN-OK","conversation":16} -> {"status":"done"}
+GET  /api/messages?conversation=16 ->
+  user "Reply with exactly: PROTOTYPE-LIVE"      # inherited up to `at`
+  user "Reply with exactly: FORK-TURN-OK"
+  assistant "FORK-TURN-OK"
+```
+
+The inherited history, the new turn, and the reply all live in the child; the root is untouched.
+**The core hierarchy CPD is built on — a thread that forks from a message and then carries its own
+independent conversation — works end to end.**
+
+**The defect found on the way there.** The daemon is inconsistent about where the conversation id
+comes from:
+
+| Route | Source |
+|---|---|
+| `GET /api/messages` | query string |
+| `GET /api/stream` | query string |
+| `POST /api/prompt` | **JSON body** |
+
+So `POST /api/prompt?conversation=16` — which matches every sibling route — returns
+`200 {"status":"done"}` and writes to the **root**. No 400, no warning. I hit this myself and
+briefly believed forks could not accept turns at all.
+
+**Chosen:** accept `?conversation=` on `/api/prompt` (same helper as the other routes), keep the
+body form for compatibility, and **400 when the two disagree** rather than silently preferring one.
+An unknown or non-numeric explicit id must **404**, not fall back to root.
+
+**Also required:** `sendPrompt(text, conversationId)` takes the id explicitly instead of defaulting
+to root internally. The silent default is what made the bug invisible.
+
+Filed as H3, serialized behind H1 and H2 (all three touch the daemon routes).
+
+**Pattern worth naming — this is the third silent-success failure tonight.** The Durable `no_model`
+case, the dead `--pad` token, and now this: each returned success while doing nothing or the wrong
+thing. Our defaults are too forgiving. Where a parameter means "which thread does the user's work
+go into", the correct behaviour is to fail loudly, not to guess the root.
