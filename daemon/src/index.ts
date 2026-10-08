@@ -1,8 +1,19 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import { getMessages, openEngine, sseFrame, submitPrompt, ctx, type Engine } from "./engine.ts";
+import {
+  getMessages,
+  openEngine,
+  sseFrame,
+  submitPrompt,
+  getConversation,
+  listConversations,
+  forkPlan,
+  ctx,
+  type Engine,
+} from "./engine.ts";
 import { acquireLock, releaseLock } from "./lock.ts";
+import { resolveConversationId } from "./plans.ts";
 
 const PORT = Number(process.env.CPD_DAEMON_PORT ?? 4317);
 const DB_PATH = process.env.CPD_DB ?? ".cpd/cpd.sqlite";
@@ -32,19 +43,31 @@ async function main(): Promise<void> {
 
   const engine: Engine = await openEngine({ dbPath: DB_PATH });
 
-  // SSE fan-out: every connected client gets pushed the full transcript whenever it changes.
-  const sseClients = new Set<ServerResponse>();
+  // SSE fan-out: each client watches one conversation id and is pushed `messages` on change,
+  // plus every client gets `conversations` pushed when the conversation set changes.
+  const sseClients = new Map<ServerResponse, number>();
 
-  async function pushMessages(): Promise<void> {
-    if (sseClients.size === 0) return;
-    const messages = await getMessages(engine.root);
+  async function pushMessagesFor(conversationId: number): Promise<void> {
+    const conversation = await getConversation(engine, conversationId);
+    if (!conversation) return;
+    const messages = await getMessages(conversation);
     const frame = sseFrame({ type: "messages", messages });
-    for (const client of sseClients) client.write(frame);
+    for (const [client, watching] of sseClients) {
+      if (watching === conversationId) client.write(frame);
+    }
+  }
+
+  async function pushConversations(): Promise<void> {
+    if (sseClients.size === 0) return;
+    const conversations = await listConversations(engine);
+    const frame = sseFrame({ type: "conversations", conversations });
+    for (const client of sseClients.keys()) client.write(frame);
   }
 
   // Durable's `viewState().subscribe()` is the primary change-detection path; if that proves
   // unavailable at runtime we fall back to a 500ms poll (see catch below) that only pushes when
-  // the transcript actually changed, as the card allows.
+  // the root transcript actually changed, as the card allows. The conversation *set* is always
+  // polled, since Durable has no dedicated "new conversation" event.
   let unsubscribe: (() => void) | undefined;
   let viewState: Awaited<ReturnType<Engine["root"]["viewState"]>> | undefined;
   let pollTimer: NodeJS.Timeout | undefined;
@@ -52,7 +75,7 @@ async function main(): Promise<void> {
     const state = await engine.root.viewState(ctx);
     viewState = state;
     unsubscribe = state.subscribe(() => {
-      void pushMessages();
+      void pushMessagesFor(engine.root.id);
     });
   } catch (error) {
     console.error("[cpd-daemon] viewState().subscribe() unavailable, falling back to polling:", error);
@@ -65,11 +88,21 @@ async function main(): Promise<void> {
         if (messages.length !== lastCount || content !== lastContent) {
           lastCount = messages.length;
           lastContent = content;
-          void pushMessages();
+          void pushMessagesFor(engine.root.id);
         }
       });
     }, 500);
   }
+
+  let lastConversationCount = -1;
+  const conversationPollTimer = setInterval(() => {
+    void listConversations(engine).then((conversations) => {
+      if (conversations.length !== lastConversationCount) {
+        lastConversationCount = conversations.length;
+        void pushConversations();
+      }
+    });
+  }, 1000);
 
   const server = createServer((req, res) => {
     void handleRequest(req, res);
@@ -83,8 +116,41 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/conversations") {
+      const conversations = await listConversations(engine);
+      sendJson(res, 200, { conversations });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/fork") {
+      const raw = await readBody(req);
+      let at: number;
+      let title: string | undefined;
+      try {
+        const body = JSON.parse(raw) as { at?: unknown; title?: unknown };
+        if (typeof body.at !== "number") throw new Error("at must be a number");
+        at = body.at;
+        if (body.title !== undefined) {
+          if (typeof body.title !== "string") throw new Error("title must be a string");
+          title = body.title;
+        }
+      } catch {
+        sendJson(res, 400, { error: "Expected JSON body { at: number, title?: string }" });
+        return;
+      }
+      const result = await forkPlan(engine, at, title);
+      sendJson(res, 200, result);
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/messages") {
-      const messages = await getMessages(engine.root);
+      const conversationId = resolveConversationId(url, engine.root.id as unknown as number);
+      const conversation = await getConversation(engine, conversationId);
+      if (!conversation) {
+        sendJson(res, 404, { error: "Unknown conversation" });
+        return;
+      }
+      const messages = await getMessages(conversation);
       sendJson(res, 200, { messages });
       return;
     }
@@ -92,29 +158,48 @@ async function main(): Promise<void> {
     if (req.method === "POST" && url.pathname === "/api/prompt") {
       const raw = await readBody(req);
       let text: string;
+      let conversationId: number = engine.root.id as unknown as number;
       try {
-        const body = JSON.parse(raw) as { text?: unknown };
+        const body = JSON.parse(raw) as { text?: unknown; conversation?: unknown };
         if (typeof body.text !== "string") throw new Error("text must be a string");
         text = body.text;
+        if (body.conversation !== undefined) {
+          if (typeof body.conversation !== "number") throw new Error("conversation must be a number");
+          conversationId = body.conversation;
+        }
       } catch {
-        sendJson(res, 400, { error: "Expected JSON body { text: string }" });
+        sendJson(res, 400, { error: "Expected JSON body { text: string, conversation?: number }" });
         return;
       }
-      const result = await submitPrompt(engine.root, text);
+      const conversation = await getConversation(engine, conversationId);
+      if (!conversation) {
+        sendJson(res, 404, { error: "Unknown conversation" });
+        return;
+      }
+      const result = await submitPrompt(conversation, text);
       sendJson(res, 200, result);
       return;
     }
 
     if (req.method === "GET" && url.pathname === "/api/stream") {
+      const conversationId = resolveConversationId(url, engine.root.id as unknown as number);
+      const conversation = await getConversation(engine, conversationId);
+      if (!conversation) {
+        sendJson(res, 404, { error: "Unknown conversation" });
+        return;
+      }
+
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
       });
-      sseClients.add(res);
+      sseClients.set(res, conversationId);
 
-      const messages = await getMessages(engine.root);
+      const messages = await getMessages(conversation);
       res.write(sseFrame({ type: "messages", messages }));
+      const conversations = await listConversations(engine);
+      res.write(sseFrame({ type: "conversations", conversations }));
 
       const keepalive = setInterval(() => {
         res.write(": keepalive\n\n");
@@ -136,11 +221,12 @@ async function main(): Promise<void> {
 
   async function shutdown(signal: string): Promise<void> {
     console.log(`[cpd-daemon] received ${signal}, shutting down`);
-    for (const client of sseClients) client.end();
+    for (const client of sseClients.keys()) client.end();
     sseClients.clear();
     unsubscribe?.();
     viewState?.dispose();
     if (pollTimer) clearInterval(pollTimer);
+    clearInterval(conversationPollTimer);
     server.close();
     await engine.close();
     releaseLock(DB_PATH);
