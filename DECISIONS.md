@@ -777,8 +777,8 @@ employer, work ticket prefixes, home paths and token shapes. Deliberately *not* 
 plain Vitest test runs in the gate everyone already runs, which is the most vanilla option
 available.
 
-**Left alone deliberately, needs the user's call:** commits on `main` are authored
-`clayton-duarte <cpd@duck.com>`. The email is already a throwaway, but the author *name* is
+**Left alone deliberately, needs the user's call:** commits on `main` carry an author *name*
+derived from the user's real name (the email, `cpd@duck.com`, is already a throwaway). The name is
 identifying and sits in every commit. Changing it means rewriting published history, which is not a
 decision to take unattended — flagged for review.
 
