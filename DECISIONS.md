@@ -946,3 +946,43 @@ created and run through the GUI.
 
 This is D123 one level deeper: the capability existed, the controls existed, and it still could not
 be driven by a human. **Nothing counts until someone can reach it through the product.**
+---
+
+## D125 — `needs` is currently a deadlock, not an ordering primitive
+
+I had been repeating that job dependencies work, on the strength of a green test. Tested it through
+the real HTTP API instead: job A (`sleep 2 && echo A`), job B (`echo B`, `needs: [A]`), B started
+first on purpose.
+
+```
+ORDER FILE: 'A'                      <-- B never wrote
+statuses:   A=done   B=draft (permanently)
+```
+
+B correctly refused to start before A — **and never started after A settled.** The join blocks and
+never releases.
+
+**Root cause:** `jobTask.ts` does `needs.map((id) => id as unknown as TaskId)`. `needs` holds **job
+ids** (plan-document UUIDs); Pi Durable's `on:` expects **task ids**. The task waits on ids that
+never exist. `runPlanJob` passes `job.needs` straight through, so nothing bridges the two id spaces.
+**The `as unknown as` cast is precisely what stopped the compiler from catching it.**
+
+**Why the green test missed it:** `jobTask.test.ts` passes *real task ids* into `needs`
+(`needs: [taskIdA, taskIdB] as unknown as string[]`). It tests Pi Durable's join — which works —
+and bypasses the job-id -> task-id translation the real path needs and lacks. **A test that
+pre-substitutes the value under test cannot catch a bug in producing that value.**
+
+**Decisions for the fix (H15):**
+- `needs` stays **job ids** in the plan document and the API — that is the user-facing contract and
+  H4/H12 depend on it. Translation happens at task creation.
+- An unstarted dependency must **not** be treated as satisfied; waiting on nothing would make the
+  dependent run immediately, which is worse than the deadlock. Chosen: **auto-start unstarted
+  dependencies depth-first**, then wait on their real task ids, so pressing Run on a leaf job runs
+  its prerequisites then itself — the behaviour a user expects from a dependency graph.
+- Both `as unknown as` casts (source and test) must be deleted. Distinct id spaces belong in the
+  types, not papered over with casts.
+
+**Lesson, now third of its kind (D118, D121, D125): a cast is a silenced error.** Every silent
+failure tonight was a place where something could not fail loudly — an ignored field, an
+un-typechecked directory, a test asserting status instead of effect, and now a cast across two id
+spaces.
