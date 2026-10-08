@@ -1349,3 +1349,54 @@ free.
   so I signalled the wrong PID. Signalling the real PID showed clean teardown. The *actual* Vite bug
   was found only after that correction. **Confirm process state with `lsof -nP -iTCP:<port>`, not by
   trusting that a kill landed.**
+---
+
+## D136 — The attention queue is a selector, not a second action path
+
+Open question I decided without the user (flagged for review): does the action bar act on the
+**canvas selection** or on the **attention-queue item**?
+
+**Decision: the action bar always acts on the canvas selection.** Clicking an attention item
+switches conversation if needed (via the existing `#/c/<id>` hash routing, not parallel state) and
+then selects that job on the canvas. The queue *selects*; it never acts.
+
+Rationale: two action paths would mean two sources of truth for "what am I acting on", and the
+wireframe's dashed line from the action bar to the selected node would be a lie half the time. One
+mechanism keeps it honest. Split into **J3a** (stream type, `getAttention`, `useAttention` hook) and
+**J3b** (panel + action bar) so the two could run in parallel without touching the same files.
+
+**Honest-affordance rule, applied:** the daemon exposes only `plan/job`, `plan/job/run`,
+`plan/job/abort`. So **Stop** is wired for real, and **Comment** and **Skip** render *visibly
+disabled* with "Not implemented yet" tooltips. We do not invent endpoints and we do not let a button
+look live while doing nothing — that is the failure mode this project keeps rediscovering.
+
+## D137 — Job status changes were never broadcast; the one action we wired could never fire
+
+Found by driving the real UI, not by reading code. The flow looked perfect: badge showed a true `2`,
+both attention items rendered with their source conversation, clicking the blocked item switched to
+`#/c/16` and highlighted the right node. Then **Stop stayed disabled on a job the daemon reported as
+`running`.**
+
+I read the live React fiber rather than guessing: `selectedJobId` was correct, but the hook's job
+array still held pre-run statuses. Then I subscribed to the SSE stream and ran a real job:
+
+```
+job 85eb2800   frames observed: ['draft', 'draft']
+DB final status: done
+```
+
+**`pushPlanFor` is only called from HTTP route handlers** (`index.ts` lines 298/371/400/427/460).
+When the engine advances a job `queued -> running -> done|failed` internally, nothing emits a frame.
+The canvas merely *looked* live because other triggers refetch. So `canStop={status === 'running'}`
+is permanently false and **Stop has never been clickable** — the single action we actually wired was
+unreachable.
+
+Filed as **J6** (daemon-only): push from the engine's status-transition path so one code path covers
+every status, fire `pushAttention` on the same transitions (a self-failing job may never have
+reached the queue at all), no polling, no duplicate frames. The required test asserts the final
+frame's status **reaches `done`** — asserting merely that "frames arrived" is what let this through.
+
+**Lesson (13th instance of the same pattern):** J3b's own logic was correct and its 188 unit tests
+passed. The defect lived one layer below, in a path no test exercised. Unit tests prove a component
+reacts correctly to the input it is *given*; only driving the real product proves it is ever *given*
+the right input. Merged J3b rather than blocking it — the card was right; the floor under it was not.
