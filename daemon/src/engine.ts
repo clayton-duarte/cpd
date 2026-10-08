@@ -335,7 +335,7 @@ export async function addPlanJob(
 export async function patchPlanJob(
   engine: Engine,
   conversationId: number,
-  patch: { id: string; status?: JobStatus; title?: string; needs?: string[] },
+  patch: { id: string; status?: JobStatus; title?: string; needs?: string[]; command?: string | null },
 ): Promise<Job> {
   const conversation = await getConversation(engine, conversationId);
   if (!conversation) throw new UnknownConversationError(conversationId);
@@ -354,6 +354,9 @@ export async function patchPlanJob(
         ? { ...job, title: patch.title ?? job.title, needs: patch.needs ?? job.needs }
         : job,
     );
+  }
+  if (patch.command !== undefined) {
+    current = current.map((job) => (job.id === patch.id ? { ...job, command: patch.command! } : job));
   }
 
   await commitJobs(engine, conversationId, current);
