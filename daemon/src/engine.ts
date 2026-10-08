@@ -17,6 +17,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { githubCopilotProvider } from "@earendil-works/pi-ai/providers/github-copilot";
 import type { Message as PiMessage } from "@earendil-works/pi-ai";
 import { FileCredentialStore } from "./credentials.ts";
+import { ArchiveDoc } from "./archive.ts";
 import {
   deriveTitle,
   openTitleStore,
@@ -256,10 +257,32 @@ export async function listConversations(engine: Engine): Promise<ConversationNod
   }
 
   const titles = new Map<number, string>();
+  const archived = new Map<number, boolean>();
   for (const item of items) {
     titles.set(item.id, await titleForConversation(engine, item.id));
+    archived.set(item.id, await isArchived(engine, item.id));
   }
-  return shapeConversationTree(items, (id) => titles.get(id) ?? "Untitled");
+  return shapeConversationTree(items, (id) => titles.get(id) ?? "Untitled", (id) => archived.get(id) ?? false);
+}
+
+// --- L4: CPD-owned archived flag, backed by a pi document (cpd.archive, see archive.ts) -------
+
+/** Whether a conversation is archived. Defaults to `false` for any conversation, including one
+ * that has never had the doc committed (pi's `snapshot` returns `undefined` in that case). */
+export async function isArchived(engine: Engine, conversationId: number): Promise<boolean> {
+  const state = await engine.harness.snapshot(ArchiveDoc, conversationId as unknown as ConversationId, ctx);
+  return state?.archived ?? false;
+}
+
+/** Set (or clear) the archived flag for a conversation. Idempotent: setting the same value twice
+ * is a no-op write and never touches pi's own `entries`/`conversations` tables. */
+export async function setArchived(engine: Engine, conversationId: number, archived: boolean): Promise<void> {
+  const conversation = await getConversation(engine, conversationId);
+  if (!conversation) throw new UnknownConversationError(conversationId);
+  await engine.harness.commit(async (tx) => {
+    const draft = await tx.doc(ArchiveDoc, conversation.id);
+    draft.archived = archived;
+  }, ctx);
 }
 
 /**

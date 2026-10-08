@@ -9,6 +9,7 @@ import {
   getConversation,
   listConversations,
   forkPlan,
+  setArchived,
   ctx,
   getPlan,
   addPlanJob,
@@ -277,6 +278,31 @@ async function main(): Promise<void> {
       }
       const result = await forkPlan(engine, at, title);
       sendJson(res, 200, result);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/archive") {
+      const raw = await readBody(req);
+      let conversationId: number;
+      let archived: boolean;
+      try {
+        const body = JSON.parse(raw) as { conversation?: unknown; archived?: unknown };
+        if (typeof body.conversation !== "number") throw new Error("conversation must be a number");
+        if (typeof body.archived !== "boolean") throw new Error("archived must be a boolean");
+        conversationId = body.conversation;
+        archived = body.archived;
+      } catch {
+        sendJson(res, 400, { error: "Expected JSON body { conversation: number, archived: boolean }" });
+        return;
+      }
+      try {
+        await setArchived(engine, conversationId, archived);
+      } catch {
+        sendJson(res, 404, { error: "Unknown conversation" });
+        return;
+      }
+      void pushConversations();
+      sendJson(res, 200, { archived });
       return;
     }
 

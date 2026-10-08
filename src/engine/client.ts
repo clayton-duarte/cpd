@@ -1,4 +1,5 @@
 import type {
+  ArchiveResponse,
   AttentionResponse,
   ConversationId,
   ConversationsResponse,
@@ -118,4 +119,17 @@ export async function deleteJob(conversation: ConversationId, id: string): Promi
     body: JSON.stringify({ id }),
   });
   await parseOrThrow<unknown>(res);
+}
+
+/** L4: archive or unarchive a conversation. CPD-owned flag, idempotent either direction. */
+export async function setConversationArchived(
+  conversation: ConversationId,
+  archived: boolean,
+): Promise<ArchiveResponse> {
+  const res = await fetch(`${BASE}/archive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ conversation, archived }),
+  });
+  return parseOrThrow<ArchiveResponse>(res);
 }

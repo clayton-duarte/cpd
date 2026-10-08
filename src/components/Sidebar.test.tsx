@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ComponentProps } from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { Sidebar, MIN_WIDTH, MAX_WIDTH, findScrollableAncestor } from './Sidebar';
@@ -45,10 +46,14 @@ function widthPx(panel: HTMLElement): number {
   return match ? parseFloat(match[1]) * 16 : NaN;
 }
 
-function renderSidebar(nav = initialNav, onNavigate: (next: NavState) => void = () => {}) {
+function renderSidebar(
+  nav = initialNav,
+  onNavigate: (next: NavState) => void = () => {},
+  extra: Partial<ComponentProps<typeof Sidebar>> = {},
+) {
   return render(
     <MantineProvider>
-      <Sidebar data={sampleData} nav={nav} onNavigate={onNavigate} />
+      <Sidebar data={sampleData} nav={nav} onNavigate={onNavigate} {...extra} />
     </MantineProvider>,
   );
 }
@@ -569,6 +574,64 @@ describe('Sidebar', () => {
       fireEvent.click(screen.getAllByText('Grove automation')[0]);
       expect(conversationSelected).toBe(false);
       unmount();
+    });
+  });
+
+  describe('L4: archive/unarchive', () => {
+    it('B: archived rows are hidden from the tree by default', async () => {
+      mockConversations([
+        { id: 1 as ConversationId, parentId: null, at: null, title: 'Lead', archived: false },
+        { id: 16 as ConversationId, parentId: null, at: null, title: 'Archived thread', archived: true },
+      ]);
+      renderSidebar();
+      await waitFor(() => expect(screen.queryByTestId('thread-1')).toBeTruthy());
+      expect(screen.queryByTestId('thread-16')).toBeNull();
+    });
+
+    it('shows archived rows, dimmed, once "Show archived" is switched on', async () => {
+      mockConversations([
+        { id: 1 as ConversationId, parentId: null, at: null, title: 'Lead', archived: false },
+        { id: 16 as ConversationId, parentId: null, at: null, title: 'Archived thread', archived: true },
+      ]);
+      renderSidebar();
+      await waitFor(() => expect(screen.queryByTestId('thread-1')).toBeTruthy());
+      expect(screen.queryByTestId('thread-16')).toBeNull();
+
+      fireEvent.click(screen.getByTestId('show-archived-toggle'));
+
+      await waitFor(() => expect(screen.queryByTestId('thread-16')).toBeTruthy());
+    });
+
+    it('C: archiving the currently selected conversation moves selection to another visible row', async () => {
+      mockConversations([
+        { id: 1 as ConversationId, parentId: null, at: null, title: 'Lead', archived: false },
+        { id: 16 as ConversationId, parentId: null, at: null, title: 'Other thread', archived: false },
+      ]);
+      vi.mocked(client.setConversationArchived).mockResolvedValue({ archived: true });
+
+      let selected: ConversationId | undefined = 1 as ConversationId;
+      const onSelectConversation = (id: ConversationId) => {
+        selected = id;
+      };
+
+      render(
+        <MantineProvider>
+          <Sidebar
+            data={sampleData}
+            nav={initialNav}
+            onNavigate={() => {}}
+            selectedConversationId={selected}
+            onSelectConversation={onSelectConversation}
+          />
+        </MantineProvider>,
+      );
+      await waitFor(() => expect(screen.queryByTestId('thread-1')).toBeTruthy());
+
+      fireEvent.click(screen.getByTestId('thread-menu-1'));
+      fireEvent.click(await screen.findByText('Archive'));
+
+      await waitFor(() => expect(client.setConversationArchived).toHaveBeenCalledWith(1, true));
+      await waitFor(() => expect(selected).toBe(16));
     });
   });
 });
