@@ -1,14 +1,23 @@
-import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Group, Stack, Text, Tree, UnstyledButton, useTree, type RenderTreeNodePayload, type TreeNodeData } from '@mantine/core';
 import { IconChevronDown, IconChevronRight, IconLayoutSidebarLeftCollapse } from '@tabler/icons-react';
 import { selectLead, selectPlan, type NavState } from '../model/navigation';
 import { leadsLevel, plansLevel, jobsLevel } from '../model/levels';
 import type { CpdData } from '../model/types';
+import { getConversations } from '../engine/client';
+import { onConversationsSignal } from '../engine/useEngineStream';
+import type { ConversationId, ConversationNode } from '../engine/types';
+import { buildConversationTreeData } from './conversationTree';
 
 export interface SidebarProps {
   data: CpdData;
   nav: NavState;
   onNavigate: (next: NavState) => void;
+  /** Currently selected conversation thread, or undefined for none. Additive to `nav` -- the
+   * lead/plan/job fixture tree and the real conversation tree are deliberately NOT reconciled
+   * in this card (see lead clarification on t_6848ce0e). */
+  selectedConversationId?: ConversationId;
+  onSelectConversation?: (id: ConversationId) => void;
 }
 
 export const MIN_WIDTH = 180;
@@ -91,11 +100,34 @@ function buildTreeData(data: CpdData): TreeNodeData[] {
  * from `nav` on every render inside `renderNode`, so navigating by any means
  * (canvas click, Escape, keyboard) keeps the sidebar in sync.
  */
-export function Sidebar({ data, nav, onNavigate }: SidebarProps) {
+export function Sidebar({ data, nav, onNavigate, selectedConversationId, onSelectConversation }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [width, setWidth] = useState<number>(() => readStoredWidth());
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const tree = useTree();
+  const [conversations, setConversations] = useState<ConversationNode[]>([]);
+  const conversationTree = useTree();
+
+  useEffect(() => {
+    let cancelled = false;
+    async function refetch() {
+      try {
+        const { conversations: fetched } = await getConversations();
+        if (!cancelled) setConversations(fetched);
+      } catch {
+        // daemon unreachable -- leave the previous (possibly empty) list, the chat panel already
+        // surfaces a connection-status badge.
+      }
+    }
+    void refetch();
+    const unsubscribe = onConversationsSignal(() => void refetch());
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
+  const conversationTreeData = useMemo(() => buildConversationTreeData(conversations), [conversations]);
 
   const treeData = useMemo(() => buildTreeData(data), [data]);
 
@@ -245,6 +277,58 @@ export function Sidebar({ data, nav, onNavigate }: SidebarProps) {
           selectOnClick={false}
           renderNode={renderNode}
         />
+        {conversationTreeData.length > 0 && (
+          <Stack gap="var(--space-1)" mt="var(--space-4)">
+            <Text size="xs" c="var(--fg-faint)" tt="uppercase" fw={600}>
+              Threads
+            </Text>
+            <Tree
+              data={conversationTreeData}
+              tree={conversationTree}
+              expandOnClick={false}
+              selectOnClick={false}
+              renderNode={({ node, level, expanded, hasChildren, elementProps }) => {
+                const id = Number(node.value) as ConversationId;
+                const selected = selectedConversationId === id;
+                return (
+                  <Group
+                    {...elementProps}
+                    gap="var(--gap)"
+                    wrap="nowrap"
+                    pl={`calc(var(--pad) + ${level - 1} * var(--space-5))`}
+                    pr="var(--pad)"
+                    py="var(--space-1)"
+                    data-testid={`thread-${node.value}`}
+                    data-selected={selected}
+                    style={{
+                      backgroundColor: selected ? 'var(--blue-tint)' : undefined,
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => onSelectConversation?.(id)}
+                  >
+                    {hasChildren ? (
+                      <UnstyledButton
+                        data-testid={`thread-expand-${node.value}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          conversationTree.toggleExpanded(node.value);
+                        }}
+                        style={{ display: 'flex', color: 'var(--fg-faint)' }}
+                      >
+                        {expanded ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
+                      </UnstyledButton>
+                    ) : (
+                      <span style={{ width: 14, display: 'inline-block' }} />
+                    )}
+                    <Text size="sm" c={selected ? 'var(--fg-bright)' : 'var(--fg)'} truncate style={{ minWidth: 0 }}>
+                      {node.label}
+                    </Text>
+                  </Group>
+                );
+              }}
+            />
+          </Stack>
+        )}
       </Stack>
     </Stack>
   );

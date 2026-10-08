@@ -1,9 +1,25 @@
-import { describe, expect, it } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { Sidebar, MIN_WIDTH, MAX_WIDTH } from './Sidebar';
 import { initialNav, selectLead, selectPlan, type NavState } from '../model/navigation';
 import { sampleData } from '../fixtures/sample';
+import * as client from '../engine/client';
+import type { ConversationId, ConversationNode } from '../engine/types';
+
+vi.mock('../engine/client');
+
+function mockConversations(conversations: ConversationNode[]) {
+  vi.mocked(client.getConversations).mockResolvedValue({ conversations });
+}
+
+beforeEach(() => {
+  mockConversations([]);
+});
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
 
 function widthPx(panel: HTMLElement): number {
   const match = panel.style.width.match(/([\d.]+)rem/);
@@ -186,6 +202,93 @@ describe('Sidebar', () => {
 
       const restoredPanel = screen.getByTestId('sidebar-resize-handle').parentElement as HTMLElement;
       expect(widthPx(restoredPanel)).toBe(draggedWidth);
+    });
+  });
+
+  describe('conversation threads (additive, parallel to the fixture tree)', () => {
+    it('does not render a Threads section when there are no conversations', () => {
+      mockConversations([]);
+      renderSidebar();
+      expect(screen.queryByText('Threads')).toBeNull();
+    });
+
+    it('renders fetched conversations as a nested Threads section', async () => {
+      mockConversations([
+        { id: 1 as ConversationId, parentId: null, at: null, title: 'Lead' },
+        { id: 16 as ConversationId, parentId: 1 as ConversationId, at: 7, title: 'Test thread' },
+      ]);
+      renderSidebar();
+
+      await waitFor(() => expect(screen.getByText('Threads')).toBeTruthy());
+      expect(screen.getByText('Lead')).toBeTruthy();
+      expect(screen.queryByText('Test thread')).toBeNull();
+
+      fireEvent.click(screen.getByTestId('thread-expand-1'));
+      expect(screen.getByText('Test thread')).toBeTruthy();
+    });
+
+    it('clicking a thread calls onSelectConversation with the numeric id, not the string value', async () => {
+      mockConversations([{ id: 1 as ConversationId, parentId: null, at: null, title: 'Lead' }]);
+      let selected: ConversationId | null = null;
+      render(
+        <MantineProvider>
+          <Sidebar
+            data={sampleData}
+            nav={initialNav}
+            onNavigate={() => {}}
+            onSelectConversation={(id) => {
+              selected = id;
+            }}
+          />
+        </MantineProvider>,
+      );
+
+      await waitFor(() => expect(screen.getByText('Lead')).toBeTruthy());
+      fireEvent.click(screen.getByTestId('thread-1'));
+
+      expect(selected).toBe(1);
+      expect(typeof selected).toBe('number');
+    });
+
+    it('highlights the selected thread', async () => {
+      mockConversations([{ id: 1 as ConversationId, parentId: null, at: null, title: 'Lead' }]);
+      render(
+        <MantineProvider>
+          <Sidebar
+            data={sampleData}
+            nav={initialNav}
+            onNavigate={() => {}}
+            selectedConversationId={1 as ConversationId}
+          />
+        </MantineProvider>,
+      );
+
+      await waitFor(() =>
+        expect(screen.getByTestId('thread-1').getAttribute('data-selected')).toBe('true'),
+      );
+    });
+
+    it('clicking a fixture lead/plan/job row never calls onSelectConversation', async () => {
+      mockConversations([{ id: 1 as ConversationId, parentId: null, at: null, title: 'Lead' }]);
+      let conversationSelected = false;
+      renderSidebar(initialNav);
+      // Re-render with a tracked onSelectConversation to assert it's untouched by fixture clicks.
+      const onSelectConversation = () => {
+        conversationSelected = true;
+      };
+      const { unmount } = render(
+        <MantineProvider>
+          <Sidebar
+            data={sampleData}
+            nav={initialNav}
+            onNavigate={() => {}}
+            onSelectConversation={onSelectConversation}
+          />
+        </MantineProvider>,
+      );
+      fireEvent.click(screen.getAllByText('Grove automation')[0]);
+      expect(conversationSelected).toBe(false);
+      unmount();
     });
   });
 });
