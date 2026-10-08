@@ -225,20 +225,20 @@ describe('Sidebar', () => {
   });
 
   describe('conversation threads (additive, parallel to the fixture tree)', () => {
-    it('does not render a Threads section when there are no conversations', () => {
+    it('does not render a Plans section when there are no conversations', () => {
       mockConversations([]);
       renderSidebar();
-      expect(screen.queryByText('Threads')).toBeNull();
+      expect(screen.queryByText('Plans')).toBeNull();
     });
 
-    it('renders fetched conversations as a nested Threads section, already expanded', async () => {
+    it('renders fetched conversations as a nested Plans section, already expanded', async () => {
       mockConversations([
         { id: 1 as ConversationId, parentId: null, at: null, title: 'Lead' },
         { id: 16 as ConversationId, parentId: 1 as ConversationId, at: 7, title: 'Test thread' },
       ]);
       renderSidebar();
 
-      await waitFor(() => expect(screen.getByText('Threads')).toBeTruthy());
+      await waitFor(() => expect(screen.getByText('Plans')).toBeTruthy());
       expect(screen.getByText('Lead')).toBeTruthy();
       await waitFor(() => expect(screen.getByText('Test thread')).toBeTruthy());
     });

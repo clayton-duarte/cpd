@@ -105,10 +105,11 @@ export function ChatPanel({ conversationId, onForked }: ChatPanelProps) {
           <Stack gap="var(--space-2)" w="100%" p="var(--pad)">
             {visible.map((message, i) => {
               const isUser = message.role === 'user';
+              const isLeadReply = message.role === 'assistant';
               return (
                 <Group key={`${message.id}:${i}`} justify={isUser ? 'flex-end' : 'flex-start'} w="100%" wrap="nowrap">
-                  {isUser && (
-                    <Tooltip label="Start a plan thread here">
+                  {isLeadReply && (
+                    <Tooltip label="Fork into new plan">
                       <ActionIcon
                         size="sm"
                         variant="subtle"

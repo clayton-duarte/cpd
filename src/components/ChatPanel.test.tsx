@@ -201,25 +201,37 @@ describe('ChatPanel', () => {
     expect(screen.queryByText('reconnecting')).toBeNull();
   });
 
-  it('shows a fork affordance for user messages but not assistant messages', () => {
+  it('shows a fork affordance for assistant (lead) messages but not user messages', () => {
     mockStream([
-      { id: 7, role: 'user', content: 'start a thread here' },
-      { id: 11, role: 'assistant', content: 'no affordance for me' },
+      { id: 7, role: 'user', content: 'no affordance for me' },
+      { id: 11, role: 'assistant', content: 'fork me into a new plan' },
     ]);
 
     renderPanel();
 
-    expect(screen.getByTestId('fork-7')).toBeTruthy();
-    expect(screen.queryByTestId('fork-11')).toBeNull();
+    expect(screen.getByTestId('fork-11')).toBeTruthy();
+    expect(screen.queryByTestId('fork-7')).toBeNull();
   });
 
   it('clicking the fork affordance POSTs at: <entry id>', () => {
-    mockStream([{ id: 7, role: 'user', content: 'start a thread here' }]);
+    mockStream([{ id: 11, role: 'assistant', content: 'fork me into a new plan' }]);
     const forkMock = vi.mocked(client.forkConversation).mockResolvedValue({ id: 99 });
 
     renderPanel();
-    fireEvent.click(screen.getByTestId('fork-7'));
+    fireEvent.click(screen.getByTestId('fork-11'));
 
-    expect(forkMock).toHaveBeenCalledWith(7);
+    expect(forkMock).toHaveBeenCalledWith(11);
+  });
+
+  it('H: never renders a fork affordance beside USER messages (sabotage guard)', () => {
+    mockStream([
+      { id: 1, role: 'user', content: 'a user message' },
+      { id: 2, role: 'assistant', content: 'a lead reply' },
+    ]);
+
+    renderPanel();
+
+    expect(screen.queryByTestId('fork-1')).toBeNull();
+    expect(screen.getByTestId('fork-2')).toBeTruthy();
   });
 });
