@@ -173,8 +173,11 @@ export type { ConversationId };
 export type PlanDraft = Draft<PlanState>;
 
 export class DuplicateJobIdError extends Error {
-  constructor(public readonly id: string) {
+  readonly id: string;
+  constructor(id: string) {
     super(`Job id already exists: ${id}`);
+    this.id = id;
+    this.name = "DuplicateJobIdError";
   }
 }
 
@@ -195,8 +198,11 @@ export function removeJob(jobs: readonly Job[], id: string): Job[] {
 }
 
 export class UnknownJobIdError extends Error {
-  constructor(public readonly id: string) {
+  readonly id: string;
+  constructor(id: string) {
     super(`Unknown job id: ${id}`);
+    this.id = id;
+    this.name = "UnknownJobIdError";
   }
 }
 

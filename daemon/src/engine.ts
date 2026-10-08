@@ -255,8 +255,11 @@ export type { Job, JobStatus };
 export { DuplicateJobIdError, UnknownJobIdError };
 
 export class UnknownConversationError extends Error {
-  constructor(public readonly id: number) {
+  readonly id: number;
+  constructor(id: number) {
     super(`Unknown conversation: ${id}`);
+    this.id = id;
+    this.name = "UnknownConversationError";
   }
 }
 
@@ -270,7 +273,8 @@ export async function getPlan(engine: Engine, conversationId: number): Promise<J
 
 /** A write that would create a cycle or dangling edge; carries the offending ids for the 400 body. */
 export class GraphError extends Error {
-  constructor(public readonly detail: ReturnType<typeof validateGraph>) {
+  readonly detail: ReturnType<typeof validateGraph>;
+  constructor(detail: ReturnType<typeof validateGraph>) {
     super(
       detail?.kind === "cycle"
         ? `Cycle detected: ${detail.ids.join(" -> ")}`
