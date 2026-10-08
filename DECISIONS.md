@@ -1460,3 +1460,36 @@ Two checks mattered more than the green suite:
 time" — the precise opposite of the new behaviour. Fixed directly on `main` rather than spending a
 card. A comment that contradicts its code is a future bug report: the next person trusts the prose
 and designs around a limit that no longer exists.
+---
+
+## D141 — `review.sh` deleted; `pnpm dev:all` is the only way to run CPD
+
+User, for the second time: *"IDK what review.sh is, why are we not using npm scripts?"*
+
+The first time (D135) I **fixed the script instead of answering the question** — env vars, daemon
+startup, teardown. That was the wrong response. The question wasn't "is this script correct", it
+was "why does this exist at all". It shouldn't.
+
+`review.sh` was a tool for **my** workflow: serve an arbitrary branch on a fixed port so a reviewer
+lands on a stable URL. The user is not reviewing branches — he is running his own project. Every
+capability he needs was already in `package.json`:
+
+| `review.sh` did | `pnpm dev:all` does |
+| --- | --- |
+| start daemon + Vite together | same, via `concurrently` |
+| single origin, `/api` proxied | same (Vite proxy config) |
+| tear both down on Ctrl-C | same — **verified: 0 daemons, 0 vite after SIGINT** |
+| serve a given git ref | `git checkout <ref>` first |
+| free a busy port, poll `/api/health` | not needed; Vite reports the port it got |
+
+Verified before deleting: `pnpm dev:all` → Vite 200 on `:5173`, daemon healthy on `:4317`, proxy
+returning real conversations through `localhost:5173/api/conversations`, clean teardown.
+
+Deleted the script, removed `CPD_REVIEW_PORT`/`CPD_DEV_PORT` (knobs that existed only for it), and
+rewrote the README section as "check out the branch, run the same command".
+
+**The rule this encodes:** a personal tool committed to a shared repo is indistinguishable from
+project infrastructure — the user cannot tell "Clayton's review helper" from "how you run this
+app". When the standard toolchain already covers the need, the bespoke script is pure cost. The
+fact that I'd spent two cards (J4, J5) hardening it made it *look* load-bearing, which is exactly
+how accidental infrastructure happens. Sunk cost is not a reason to keep it.
