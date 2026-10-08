@@ -137,7 +137,7 @@ export function resolvePromptConversationId(
 
 // --- D112: a plan IS a conversation; jobs live in a scoped `cpd.plan` document -------------
 
-export type JobStatus = "draft" | "queued" | "running" | "done" | "failed";
+export type JobStatus = "draft" | "queued" | "running" | "done" | "failed" | "blocked";
 
 /** Minimum job shape per the standing "keep contracts at minimum" instruction: no timestamps,
  * no logs, no assignees yet. */
@@ -150,6 +150,10 @@ export interface Job {
   command: string | null;
   /** Durable task id of the running/settled `cpd.job` task backing this job, once started. */
   taskId: string | null;
+  /** Why this job is `blocked` -- it needs a human (J1). Cleared whenever `status` moves off
+   * `blocked`. Distinct from `needs` (an edge/dependency link): blocked-by-another-job is NOT
+   * expressed here. */
+  blockedReason: string | null;
   [key: string]: JsonValue;
 }
 
@@ -210,12 +214,15 @@ export class UnknownJobIdError extends Error {
   }
 }
 
-/** Set the status of the job with `id`. Pure; does not mutate `jobs`. */
+/** Set the status of the job with `id`. Pure; does not mutate `jobs`. Moving off `blocked`
+ * clears `blockedReason` -- a reason only makes sense while the job is actually blocked. */
 export function setStatus(jobs: readonly Job[], id: string, status: JobStatus): Job[] {
   if (!jobs.some((job) => job.id === id)) {
     throw new UnknownJobIdError(id);
   }
-  return jobs.map((job) => (job.id === id ? { ...job, status } : job));
+  return jobs.map((job) =>
+    job.id === id ? { ...job, status, blockedReason: status === "blocked" ? job.blockedReason : null } : job,
+  );
 }
 
 /** A graph validation failure: either a cycle (the offending ids, in cycle order) or a dangling

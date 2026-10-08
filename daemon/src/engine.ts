@@ -323,6 +323,71 @@ export class GraphError extends Error {
   }
 }
 
+// --- J1: "blocked" means a human must act; /api/attention is the queue's data source ---------
+
+/** In-memory "entered attention" timestamps, keyed by `${conversationId}:${jobId}`. Jobs carry
+ * no timestamp fields (standing "keep contracts at minimum" instruction, D115) so this is tracked
+ * out-of-band rather than widening the persisted `Job` shape for one derived view. Not durable
+ * across a restart -- an item that re-enters the queue after a crash gets a fresh `at`, which is
+ * an acceptable loss for an ordering hint on a queue, not a correctness-bearing field. */
+const attentionTimestamps = new Map<string, number>();
+
+/** Record (or refresh) the moment a job entered an attention-worthy status. Called from
+ * `patchPlanJob` and from `JobTask`'s own status mirroring (jobTask.ts), the only two places a
+ * job's status changes. */
+export function touchAttention(conversationId: number, jobId: string): void {
+  attentionTimestamps.set(`${conversationId}:${jobId}`, Date.now());
+}
+
+function clearAttention(conversationId: number, jobId: string): void {
+  attentionTimestamps.delete(`${conversationId}:${jobId}`);
+}
+
+export type AttentionItem = {
+  jobId: string;
+  conversationId: number;
+  conversationTitle: string;
+  jobTitle: string;
+  status: "blocked" | "failed";
+  reason: string;
+  at: number;
+};
+
+/** Every job across every conversation that needs a human: `blocked` (explicitly needs one) and
+ * `failed` (a failure needs one too). Newest first. Empty DB / nothing needing attention ->
+ * `[]`, never a 404 -- this is a dashboard query, not a resource lookup. */
+export async function getAttentionItems(engine: Engine): Promise<AttentionItem[]> {
+  const conversations = await listConversations(engine);
+  const items: AttentionItem[] = [];
+
+  for (const conversation of conversations) {
+    const jobs = await getPlan(engine, conversation.id);
+    for (const job of jobs) {
+      if (job.status !== "blocked" && job.status !== "failed") {
+        clearAttention(conversation.id, job.id);
+        continue;
+      }
+      const key = `${conversation.id}:${job.id}`;
+      let at = attentionTimestamps.get(key);
+      if (at === undefined) {
+        at = Date.now();
+        attentionTimestamps.set(key, at);
+      }
+      items.push({
+        jobId: job.id,
+        conversationId: conversation.id,
+        conversationTitle: conversation.title,
+        jobTitle: job.title,
+        status: job.status,
+        reason: job.status === "blocked" ? (job.blockedReason ?? "") : "Job failed",
+        at,
+      });
+    }
+  }
+
+  return items.sort((a, b) => b.at - a.at);
+}
+
 /** Commit `nextJobs` into the conversation's plan doc after validating the graph; throws
  * `GraphError` and leaves the document untouched when the write would create a cycle or a
  * dangling edge. */
@@ -353,17 +418,29 @@ export async function addPlanJob(
     needs: input.needs ?? [],
     command: input.command ?? null,
     taskId: null,
+    blockedReason: null,
   };
   const nextJobs = addJob(current, job);
   await commitJobs(engine, conversationId, nextJobs);
   return job;
 }
 
-/** Patch an existing job's title/status/needs. Throws `UnknownJobIdError` for an unknown id. */
+/** Patch an existing job's title/status/needs/blockedReason. Throws `UnknownJobIdError` for an
+ * unknown id. `blockedReason` follows the same `undefined`=leave / `null`=clear semantics as
+ * `command` (D122); `setStatus` already clears it when `status` moves off `blocked` (J1), but an
+ * explicit `blockedReason` patch is also honoured so the reason can be set/updated independently
+ * (e.g. setting status and reason in the same PATCH). */
 export async function patchPlanJob(
   engine: Engine,
   conversationId: number,
-  patch: { id: string; status?: JobStatus; title?: string; needs?: string[]; command?: string | null },
+  patch: {
+    id: string;
+    status?: JobStatus;
+    title?: string;
+    needs?: string[];
+    command?: string | null;
+    blockedReason?: string | null;
+  },
 ): Promise<Job> {
   const conversation = await getConversation(engine, conversationId);
   if (!conversation) throw new UnknownConversationError(conversationId);
@@ -385,6 +462,9 @@ export async function patchPlanJob(
   }
   if (patch.command !== undefined) {
     current = current.map((job) => (job.id === patch.id ? { ...job, command: patch.command! } : job));
+  }
+  if (patch.blockedReason !== undefined) {
+    current = current.map((job) => (job.id === patch.id ? { ...job, blockedReason: patch.blockedReason! } : job));
   }
 
   await commitJobs(engine, conversationId, current);
@@ -430,6 +510,19 @@ export class JobDependencyCycleError extends Error {
   }
 }
 
+/** A job (or one of its prerequisites) is `blocked` and therefore cannot run (J1). `blockingId`
+ * is always the actual blocked job -- for a dependent whose prerequisite is blocked, that is the
+ * prerequisite's id, named explicitly so the caller is never left guessing which job needs a
+ * human. Surfaced as 409. */
+export class JobBlockedError extends Error {
+  readonly blockingId: string;
+  constructor(blockingId: string) {
+    super(`Job blocked, cannot run: ${blockingId}`);
+    this.blockingId = blockingId;
+    this.name = "JobBlockedError";
+  }
+}
+
 /** Resolve `jobId`'s dependencies to real Durable task ids, auto-starting any dependency that
  * has not been started yet (depth-first over `needs`), recursively. `needs` holds job ids in the
  * plan document and API (the user-facing contract); Pi Durable's `on:` wants task ids, and those
@@ -459,6 +552,10 @@ async function resolveDependencyTaskIds(
   for (const needId of job.needs) {
     const needJob = currentJobs.find((j) => j.id === needId);
     if (!needJob) throw new UnknownRunJobIdError(needId);
+
+    if (needJob.status === "blocked") {
+      throw new JobBlockedError(needId);
+    }
 
     if (needJob.taskId && needJob.status !== "draft") {
       taskIds.push(needJob.taskId as unknown as TaskId);
@@ -510,6 +607,9 @@ export async function runPlanJob(
   let jobs = await getPlan(engine, conversationId);
   const job = jobs.find((j) => j.id === jobId);
   if (!job) throw new UnknownRunJobIdError(jobId);
+  if (job.status === "blocked") {
+    throw new JobBlockedError(jobId);
+  }
   if (job.status === "queued" || job.status === "running") {
     throw new JobAlreadyRunningError(jobId);
   }

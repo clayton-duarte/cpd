@@ -82,7 +82,7 @@ describe("cpd.job task", () => {
     const dbPath = join(dir, "test.sqlite");
     const { harness, root } = await openTestHarness(dbPath, dir);
 
-    const job: Job = { id: "j1", title: "Say hi", status: "draft", needs: [], command: "echo hi", taskId: null };
+    const job: Job = { id: "j1", title: "Say hi", status: "draft", needs: [], command: "echo hi", taskId: null, blockedReason: null };
     await seedJob(harness, root.id, job);
 
     const taskId = await startJob(harness, root.id, job);
@@ -106,7 +106,7 @@ describe("cpd.job task", () => {
     const dbPath = join(dir, "test.sqlite");
     const { harness, root } = await openTestHarness(dbPath, dir);
 
-    const job: Job = { id: "j1", title: "Exit 3", status: "draft", needs: [], command: "exit 3", taskId: null };
+    const job: Job = { id: "j1", title: "Exit 3", status: "draft", needs: [], command: "exit 3", taskId: null, blockedReason: null };
     await seedJob(harness, root.id, job);
 
     const taskId = await startJob(harness, root.id, job);
@@ -125,7 +125,7 @@ describe("cpd.job task", () => {
     const dbPath = join(dir, "test.sqlite");
     const { harness, root } = await openTestHarness(dbPath, dir);
 
-    const job: Job = { id: "j1", title: "No-op", status: "draft", needs: [], command: null, taskId: null };
+    const job: Job = { id: "j1", title: "No-op", status: "draft", needs: [], command: null, taskId: null, blockedReason: null };
     await seedJob(harness, root.id, job);
 
     const taskId = await startJob(harness, root.id, job);
@@ -152,8 +152,8 @@ describe("cpd.job task", () => {
     const markerB = join(dir, "b.marker");
     const markerC = join(dir, "c.marker");
 
-    const jobA: Job = { id: "a", title: "A", status: "draft", needs: [], command: `sleep 0.2 && echo done > ${markerA}`, taskId: null };
-    const jobB: Job = { id: "b", title: "B", status: "draft", needs: [], command: `exit 1`, taskId: null };
+    const jobA: Job = { id: "a", title: "A", status: "draft", needs: [], command: `sleep 0.2 && echo done > ${markerA}`, taskId: null, blockedReason: null };
+    const jobB: Job = { id: "b", title: "B", status: "draft", needs: [], command: `exit 1`, taskId: null, blockedReason: null };
     const jobC: Job = {
       id: "c",
       title: "C",
@@ -161,6 +161,7 @@ describe("cpd.job task", () => {
       needs: ["a", "b"],
       command: `echo done > ${markerC}`,
       taskId: null,
+      blockedReason: null,
     };
     await seedJob(harness, root.id, jobA);
     await seedJob(harness, root.id, jobB);
@@ -194,7 +195,7 @@ describe("cpd.job task", () => {
     const dbPath = join(dir, "test.sqlite");
     const { harness, root } = await openTestHarness(dbPath, dir);
 
-    const job: Job = { id: "j1", title: "Mirror", status: "draft", needs: [], command: "echo mirrored", taskId: null };
+    const job: Job = { id: "j1", title: "Mirror", status: "draft", needs: [], command: "echo mirrored", taskId: null, blockedReason: null };
     await seedJob(harness, root.id, job);
 
     const taskId = await startJob(harness, root.id, job);
@@ -217,7 +218,7 @@ describe("cpd.job task", () => {
       void conversationId;
     });
 
-    const job: Job = { id: "j1", title: "Stream", status: "draft", needs: [], command: "echo streamed-output", taskId: null };
+    const job: Job = { id: "j1", title: "Stream", status: "draft", needs: [], command: "echo streamed-output", taskId: null, blockedReason: null };
     await seedJob(harness, root.id, job);
     const taskId = await startJob(harness, root.id, job);
     await harness.waitForTask(taskId, ctx);
