@@ -784,3 +784,36 @@ decision to take unattended — flagged for review.
 
 **Lesson, matching D118:** a guard that has only ever been pointed at the safe place has not been
 shown to work. The tripwire passed every run tonight while the leak sat in a file it does not read.
+---
+
+## D120 — Privacy allowlist is by (file, pattern-class) pair, never by file
+
+H11 shipped the repo-wide tripwire promised in D119. It scans **tracked files only** (`git ls-files`
+— exactly the set that becomes public; `docs/`, `node_modules` and build output are never read).
+
+The builder blocked the card first, correctly: my card said "report matches, don't delete" *and*
+"the clean tree must pass", which cannot both hold when the scan finds pre-existing matches. All
+four it found were the guard **describing itself** — the old fixture tripwire's regex vocabulary,
+quoted in `sample.test.ts` and in this file's prose.
+
+**Decision: exemptions are (file, class) pairs, not file skips.**
+
+    sample.test.ts   -> work-context class only
+    DECISIONS.md     -> work-context class only
+    repo-privacy*.ts -> all classes (self-reference)
+
+A blanket file skip on `DECISIONS.md` would have re-opened the exact hole D119 closed, since the
+real leak (the user's first name) lived in that very file. Verified: appending a personal name to
+`DECISIONS.md` still fails the suite, naming file and line.
+
+**`$HOME/` and `~/` never trip the guard.** Only literal `/Users/<name>/` and `/home/<name>/` do.
+Flagging portable paths would teach people to write worse ones.
+
+**The allowlist is itself unit-tested** — there are assertions that `DECISIONS.md` is *not* exempt
+for the name, path, credential and email classes. An exemption nobody tested is just a hole.
+
+Proven by deliberate leak, not by a green run: injecting `/Users/...` + a `ghp_` token into
+`theme.css` fails the suite with file, line and a redacted match. Matches are reported redacted, so
+the guard never reprints a real secret into CI logs.
+
+No hook, no CI file, no new dependency — a plain Vitest test in the gate everyone already runs.
