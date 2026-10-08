@@ -231,8 +231,9 @@ async function main(): Promise<void> {
       const raw = await readBody(req);
       let title: string;
       let needs: string[] | undefined;
+      let command: string | undefined;
       try {
-        const body = JSON.parse(raw) as { title?: unknown; needs?: unknown };
+        const body = JSON.parse(raw) as { title?: unknown; needs?: unknown; command?: unknown };
         if (typeof body.title !== "string") throw new Error("title must be a string");
         title = body.title;
         if (body.needs !== undefined) {
@@ -241,12 +242,20 @@ async function main(): Promise<void> {
           }
           needs = body.needs;
         }
+        if (body.command !== undefined) {
+          if (typeof body.command !== "string" || body.command.trim() === "") {
+            throw new Error("command must be a non-empty string");
+          }
+          command = body.command;
+        }
       } catch {
-        sendJson(res, 400, { error: "Expected JSON body { title: string, needs?: string[] }" });
+        sendJson(res, 400, {
+          error: "Expected JSON body { title: string, needs?: string[], command?: string }",
+        });
         return;
       }
       try {
-        const job = await addPlanJob(engine, conversationId, { title, needs });
+        const job = await addPlanJob(engine, conversationId, { title, needs, command });
         void pushPlanFor(conversationId);
         sendJson(res, 200, { job });
       } catch (error) {
@@ -268,8 +277,15 @@ async function main(): Promise<void> {
       let status: "draft" | "queued" | "running" | "done" | "failed" | undefined;
       let title: string | undefined;
       let needs: string[] | undefined;
+      let command: string | null | undefined;
       try {
-        const body = JSON.parse(raw) as { id?: unknown; status?: unknown; title?: unknown; needs?: unknown };
+        const body = JSON.parse(raw) as {
+          id?: unknown;
+          status?: unknown;
+          title?: unknown;
+          needs?: unknown;
+          command?: unknown;
+        };
         if (typeof body.id !== "string") throw new Error("id must be a string");
         id = body.id;
         if (body.status !== undefined) {
@@ -286,14 +302,24 @@ async function main(): Promise<void> {
           }
           needs = body.needs;
         }
+        if (body.command !== undefined) {
+          if (body.command === null) {
+            command = null;
+          } else if (typeof body.command !== "string" || body.command.trim() === "") {
+            throw new Error("command must be a non-empty string or null");
+          } else {
+            command = body.command;
+          }
+        }
       } catch {
         sendJson(res, 400, {
-          error: "Expected JSON body { id: string, status?: string, title?: string, needs?: string[] }",
+          error:
+            "Expected JSON body { id: string, status?: string, title?: string, needs?: string[], command?: string | null }",
         });
         return;
       }
       try {
-        const job = await patchPlanJob(engine, conversationId, { id, status, title, needs });
+        const job = await patchPlanJob(engine, conversationId, { id, status, title, needs, command });
         void pushPlanFor(conversationId);
         sendJson(res, 200, { job });
       } catch (error) {
