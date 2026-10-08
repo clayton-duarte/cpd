@@ -1724,3 +1724,48 @@ longer. The test debt is real but strictly smaller than the bug, and is filed as
 a sabotage table in the PR body, not a green checkmark. I have now caught two consecutive cards
 where the suite was green and the guarantee absent; the suite is not the evidence, the falsification
 is.
+
+---
+
+## D149 - K6 merged: the guard now guards. Two deeper holes found and filed as K7.
+
+K6 was test-only (`Sidebar.test.tsx`, zero behaviour change) and did exactly what the card asked:
+instead of mocking geometry on one intermediate element, it walks the whole chain from the row up
+to the outer scroller and mocks every node, leaving no undefined gap for jsdom to report as `0`.
+
+Sabotage table re-run on **merged main** (not just the branch), the only form of evidence this
+series accepts:
+
+```
+A: delete scrollIntoView            -> 1 failed  (caught)
+B: always bail (fullyVisible=true)  -> 1 failed  (caught)
+C: panel = row.parentElement        -> 1 failed  (caught)   <-- was 24 PASSED before K6
+```
+
+C now fails for the *right reason*: `Number of calls: 0`. Measuring the inner unclipped box makes
+the row read as fully visible, so no scroll is attempted -- precisely the K3 defect, now visible.
+
+**Two sabotages still pass, and I probed for them rather than stopping at the card's checklist:**
+
+```
+D: findScrollableAncestor ignores overflow-y           -> 24 PASSED (not caught)
+E: scroll the FIRST row instead of the selected row    -> 24 PASSED (not caught)
+```
+
+E is the one that matters. Instrumented, the component prints `E_TARGET thread-1 vs selected
+thread-99` -- it scrolled the wrong thread and the suite stayed green. The spy lives on
+`Element.prototype.scrollIntoView`, so it fires for any element, and
+`toHaveBeenCalledWith({block:'nearest'})` inspects only the *argument*, never the *receiver*.
+
+**The pattern beneath D146 / D148 / this one, stated once properly:** each fix closed the hole the
+previous bug exposed, and each time the assertion still described something adjacent to the
+guarantee. "Something scrolled" is not "the panel scrolled"; "the panel scrolled" is not "the
+selected row was revealed". *An assertion is only as strong as the narrowest thing it would still
+accept.* Writing a test is choosing what you will tolerate being wrong.
+
+Filed as **K7 `t_58b89026`**: capture `this` in the stub and assert the receiver is the selected
+row, plus one case for an `overflow-y: visible` ancestor that overflows. Its definition of done is a
+five-row sabotage table (A-E) in the PR body.
+
+Merged at `90f5718`. 193 app + 89 daemon green, typecheck clean. K6 delivered its brief exactly; the
+residue is new scope, not a defect in K6, which is why it is a follow-up card and not a rejection.
