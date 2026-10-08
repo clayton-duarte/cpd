@@ -39,6 +39,20 @@ export const MAX_WIDTH = 480;
 const DEFAULT_WIDTH = 260;
 const STORAGE_KEY = 'cpd.sidebar.width';
 
+/** Walk up from an element to the nearest ancestor that actually scrolls (scrollHeight >
+ * clientHeight) and is set to clip overflow (overflow-y auto/scroll). Measuring against the
+ * actual scroller -- rather than an inner non-clipped wrapper -- is required: see K4. */
+function findScrollableAncestor(el: HTMLElement): HTMLElement | null {
+  let node: HTMLElement | null = el.parentElement;
+  while (node) {
+    const overflowY = getComputedStyle(node).overflowY;
+    const scrollable = node.scrollHeight > node.clientHeight && (overflowY === 'auto' || overflowY === 'scroll');
+    if (scrollable) return node;
+    node = node.parentElement;
+  }
+  return null;
+}
+
 function clamp(value: number): number {
   return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, value));
 }
@@ -133,6 +147,7 @@ export function Sidebar({
   const conversationTree = useTree();
   const onConversationsChangeRef = useRef(onConversationsChange);
   onConversationsChangeRef.current = onConversationsChange;
+  const threadRowRefs = useRef(new Map<ConversationId, HTMLElement>());
 
   useEffect(() => {
     let cancelled = false;
@@ -157,6 +172,22 @@ export function Sidebar({
   }, []);
 
   const conversationTreeData = useMemo(() => buildConversationTreeData(conversations), [conversations]);
+
+  // K3: once the tree re-renders with the newly selected row present, scroll it into view if the
+  // panel is scrollable and the row isn't already fully visible. Runs after conversationTreeData
+  // updates (not in the same tick as the create response) so the new row actually exists in the DOM.
+  useEffect(() => {
+    if (selectedConversationId === undefined) return;
+    const row = threadRowRefs.current.get(selectedConversationId);
+    if (!row) return;
+    const panel = findScrollableAncestor(row);
+    if (!panel) return;
+    const panelRect = panel.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const fullyVisible = rowRect.top >= panelRect.top && rowRect.bottom <= panelRect.bottom;
+    if (fullyVisible) return;
+    row.scrollIntoView?.({ block: 'nearest' });
+  }, [selectedConversationId, conversationTreeData]);
 
   // Threads exist to be seen: keep every node expanded always, including newly arrived ones from
   // SSE refetches and the node a just-created fork lands under. Per the card, expand-all is the
@@ -361,6 +392,10 @@ export function Sidebar({
               return (
                 <Group
                   {...elementProps}
+                  ref={(el: HTMLDivElement | null) => {
+                    if (el) threadRowRefs.current.set(id, el);
+                    else threadRowRefs.current.delete(id);
+                  }}
                   gap="var(--gap)"
                   wrap="nowrap"
                   pl={`calc(var(--pad) + ${level - 1} * var(--space-5))`}
