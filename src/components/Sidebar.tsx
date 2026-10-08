@@ -133,6 +133,9 @@ export function Sidebar({
   const conversationTree = useTree();
   const onConversationsChangeRef = useRef(onConversationsChange);
   onConversationsChangeRef.current = onConversationsChange;
+  // Threads panel is the scrollable container -- used to reveal a newly selected row (K3).
+  const threadsPanelRef = useRef<HTMLDivElement>(null);
+  const threadRowRefs = useRef(new Map<ConversationId, HTMLElement>());
 
   useEffect(() => {
     let cancelled = false;
@@ -157,6 +160,22 @@ export function Sidebar({
   }, []);
 
   const conversationTreeData = useMemo(() => buildConversationTreeData(conversations), [conversations]);
+
+  // K3: once the tree re-renders with the newly selected row present, scroll it into view if the
+  // panel is scrollable and the row isn't already fully visible. Runs after conversationTreeData
+  // updates (not in the same tick as the create response) so the new row actually exists in the DOM.
+  useEffect(() => {
+    if (selectedConversationId === undefined) return;
+    const panel = threadsPanelRef.current;
+    const row = threadRowRefs.current.get(selectedConversationId);
+    if (!panel || !row) return;
+    if (panel.scrollHeight <= panel.clientHeight) return;
+    const panelRect = panel.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const fullyVisible = rowRect.top >= panelRect.top && rowRect.bottom <= panelRect.bottom;
+    if (fullyVisible) return;
+    row.scrollIntoView?.({ block: 'nearest' });
+  }, [selectedConversationId, conversationTreeData]);
 
   // Threads exist to be seen: keep every node expanded always, including newly arrived ones from
   // SSE refetches and the node a just-created fork lands under. Per the card, expand-all is the
@@ -281,6 +300,7 @@ export function Sidebar({
 
   return (
     <Stack
+      ref={threadsPanelRef}
       gap={0}
       w={width}
       style={{
@@ -361,6 +381,10 @@ export function Sidebar({
               return (
                 <Group
                   {...elementProps}
+                  ref={(el: HTMLDivElement | null) => {
+                    if (el) threadRowRefs.current.set(id, el);
+                    else threadRowRefs.current.delete(id);
+                  }}
                   gap="var(--gap)"
                   wrap="nowrap"
                   pl={`calc(var(--pad) + ${level - 1} * var(--space-5))`}
