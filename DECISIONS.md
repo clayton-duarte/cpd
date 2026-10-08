@@ -262,3 +262,45 @@ daemon tests. No card yet; the rule applies when a test needs a model.
 undefined. It is not — `close(context)` is a **required** member taking a **required** context. In
 practice call `harness.close(context)` instead, which seals admission, settles commits, then closes
 storage.
+---
+
+## D104 — The spacing scale has been dead since PR #18, and the tripwire did not catch it
+
+**The defect:** `src/theme.css` had a stray `}` at line 39 (introduced by commit `037a8a4`, PR #18)
+that closed `:root` early. Every declaration after it — the **entire** `--space-1..6` scale plus
+`--pad` — became an orphaned top-level declaration that no element ever sees.
+
+**Verified in the running app, not inferred:**
+
+```
+--bg-panel  -> "#1c1c1c"                 (declared BEFORE the brace: resolves)
+--blue-tint -> "rgba(111,168,234,0.2)"   (before: resolves)
+--pad       -> ""                        (AFTER line 39: dead)
+--space-2   -> ""                        (dead)
+computed padding on the ScrollArea root -> 0px
+```
+
+Brace balance: 4 open / 5 close; depth reaches 0 at line 39 and −1 at line 71.
+
+**How long it survived:** every single gate stayed green the entire time. `pnpm typecheck`,
+`pnpm test` (135 tests), and `pnpm build` cannot see a CSS brace. `src/theme.test.ts` — the
+tripwire written specifically to guard the token system — asserts each token is *declared
+somewhere in the file*, which a text grep satisfies whether or not the token is inside `:root`.
+**The test passed while the thing it guards was completely broken.**
+
+**Chosen:** bundle the one-line brace fix into G4 rather than filing a separate card. G4's own
+acceptance criterion (measure a real padding gap) is unverifiable — and its fix is a no-op — while
+`--pad` resolves to the empty string. One defect, not two.
+
+**Required alongside it:** a *positional* assertion in `theme.test.ts` — braces balanced, and every
+`--space-*`/`--pad` declared **inside** the `:root` block. A declaration-exists grep is exactly
+what failed here.
+
+**Lesson worth keeping, and the one I'd most want challenged:** three green gates plus a
+purpose-built tripwire did not notice that every spacing token in the application was dead. It
+surfaced only because a builder tried to *measure* a real pixel value and found nothing to measure.
+Assertions about source text are not assertions about behaviour. Our suite is almost entirely the
+former.
+
+**Credit:** the builder on G4 found this, correctly judged it out of scope for a padding-only card,
+and stopped to ask instead of silently widening its diff. That was the right call.
