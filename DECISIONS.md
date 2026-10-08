@@ -1158,3 +1158,49 @@ Gates after cleanup: typecheck clean, 246 tests (180 app + 66 daemon), main unch
 **Decision:** worktree reaping is keyed on **PR merge state**, never on commit ancestry, and never on
 "the card is done" (a card can be done while its PR was closed in favour of another). Destructive
 cleanup is opt-in per branch with positive evidence the work survives elsewhere.
+---
+
+## D131 — I declared a prototype "working" that the user found unusable
+
+The user opened the app and reported: only stubs visible, clicking them loads nothing, no way to
+start a session, no composer, layout not as defined, padding 0 everywhere, no workflow reachable.
+**Every point reproduced.** D127 ("the prototype is drivable end-to-end") was wrong as a statement
+about the product.
+
+**What I actually verified vs. what I claimed.** My proof path was: seed `conversation=1` by hand
+with curl, click a Thread, create a job, run it, check the marker file. That path works. But I had
+*manufactured its starting conditions myself*, then generalised to "a human can drive this". A user
+does not arrive with a hand-seeded conversation.
+
+**The three real defects:**
+
+1. **The app renders fixtures, not real data.** `App.tsx` drives all navigation from `sampleData`.
+   Fixture ids (`w1`,`w2`,`w3`) are not conversations -> `/api/plan?conversation=w3` -> 404 ->
+   permanently empty canvas. Real conversations are relegated to a separate "THREADS" list.
+   **H14 made fixture ids stop requesting instead of making navigation reach real data** — I fixed
+   the symptom (the 404 noise) and reported the disease cured.
+2. **No session can be created.** The daemon has `/api/fork` (needs a parent) and **no route to
+   create a conversation from nothing**. Every conversation in the DB was made by me via scripts.
+   A new user hits a dead end. I never noticed because I never started from empty.
+3. **No `AppShell`.** `grep -rn AppShell src/` -> zero hits; layout is hand-rolled
+   `<div style={{display:'flex'}}>`. That is why padding is 0, and it violates the standing "stock
+   Mantine, zero customization" rule.
+
+**Why the 246 tests missed all of it:** they test fixture-driven units and daemon internals. Not one
+exercises "cold start -> create a session -> reach a workflow". **A suite that never starts from the
+user's starting state cannot tell you the product works.**
+
+**User's decisions (asked, not assumed):**
+- Fixtures are **deleted from the running app**; the tree shows only real daemon conversations;
+  empty DB -> empty tree + "New session". Fixtures stay on disk for `/gallery` and ~12 unit tests.
+- Layout: **full AppShell rebuild** (Header/Navbar/Main/Aside), stock spacing, **composer present at
+  every level**.
+
+Cards: **I1** (daemon: `POST /api/conversation`, empty plan returns 200 not 404) and **I2**
+(frontend: real data + AppShell + New session), dispatched in parallel — disjoint paths
+(`daemon/` vs `src/`).
+
+**Lesson, and it supersedes D123's wording: verifying a path you prepared yourself proves only that
+the path exists, not that a user can find or reach it.** The correct acceptance test for a product
+is always *cold start to outcome*, with no hand-seeded state. I will not call a prototype usable
+again without running that path from an empty database.
