@@ -1129,3 +1129,32 @@ or lock-stealing was added.
 tonight the mutation was the problem, not the code: dead-code sabotage (D126), an orphan shell
 (D128), and now a redundant line (D129). "Make the test fail" is only evidence once you have
 confirmed the thing you disabled was load-bearing.
+---
+
+## D130 — Reaped worktrees for merged PRs only; 15 unmerged branches left for the user
+
+A batch of replayed kanban notifications (H4-H16, all already reviewed and merged) included
+`t_56d7b396 gave up after repeated spawn failures: fatal: 'wt/h4-plan-doc' is already used by
+worktree`. Board and PR list were both empty, so nothing was outstanding — but that error pointed at
+real debris: **23 worktrees from earlier cards were still checked out**, and a branch held by a
+worktree cannot be reused by a new dispatch.
+
+**I did not trust my first classifier.** `git merge-base --is-ancestor <branch> origin/main` said
+**NO for all 23** — which, taken at face value, means "nothing is merged and nothing is safe to
+delete". That is wrong: every PR here is **squash-merged**, so the branch tip is never an ancestor of
+main by construction. An ancestor test is the wrong instrument for a squash-merge workflow and would
+have had me either delete nothing or, with a sloppier reading, delete everything.
+
+Authoritative signal instead: `gh pr list --state all --json headRefName,state`.
+
+- **8 branches with state `MERGED`** -> worktree removed, branch deleted. Their content is provably
+  in main.
+- **15 branches with `CLOSED` or `NO_PR`** -> **left completely alone.** A closed PR or a branch that
+  never had one may hold work that never reached main, and `git branch -D` is unrecoverable once the
+  worktree is gone. Deleting those is the user's call, not an unattended agent's.
+
+Gates after cleanup: typecheck clean, 246 tests (180 app + 66 daemon), main unchanged at `dcce4d9`.
+
+**Decision:** worktree reaping is keyed on **PR merge state**, never on commit ancestry, and never on
+"the card is done" (a card can be done while its PR was closed in favour of another). Destructive
+cleanup is opt-in per branch with positive evidence the work survives elsewhere.
