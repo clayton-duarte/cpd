@@ -110,6 +110,7 @@ describe('ChatPanel', () => {
     fireEvent.change(textarea, { target: { value: 'hello' } });
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
+    expect(textarea.disabled).toBe(false);
     expect(document.activeElement).toBe(textarea);
   });
 
@@ -128,6 +129,8 @@ describe('ChatPanel', () => {
     textarea.focus();
     fireEvent.change(textarea, { target: { value: 'hello' } });
     fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    expect(textarea.disabled).toBe(false);
 
     resolvePrompt({ status: 'done' });
     await waitFor(() => expect(client.sendPrompt).toHaveBeenCalled());
