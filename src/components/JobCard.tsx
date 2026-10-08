@@ -1,4 +1,5 @@
-import { Badge, Card, Group, Text, Tooltip } from '@mantine/core';
+import { Badge, Group, Text, Tooltip } from '@mantine/core';
+import { CardShell } from './CardShell';
 import {
   IconBan,
   IconCheck,
@@ -54,18 +55,7 @@ export function JobCard({ job, colorDisabled = false }: JobCardProps) {
   const Icon = ICON_COMPONENTS[statusIcon(job.status)];
 
   return (
-    <Card
-      withBorder
-      padding="var(--pad)"
-      w={220}
-      style={{
-        backgroundColor: 'var(--bg-panel)',
-        borderColor,
-        borderStyle: isDashed(job) ? 'dashed' : 'solid',
-        borderWidth: 1,
-        opacity: isDimmed(job) ? 0.45 : 1,
-      }}
-    >
+    <CardShell borderColor={borderColor} dashed={isDashed(job)} opacity={isDimmed(job) ? 0.45 : 1}>
       <Group justify="space-between" wrap="nowrap" gap="var(--gap)">
         <Group gap="var(--space-1)" wrap="nowrap" style={{ minWidth: 0 }}>
           <Icon size={16} color={colorValue} />
@@ -95,6 +85,6 @@ export function JobCard({ job, colorDisabled = false }: JobCardProps) {
           {tierLabel(job)}
         </Badge>
       </Group>
-    </Card>
+    </CardShell>
   );
 }
