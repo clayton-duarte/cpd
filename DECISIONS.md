@@ -1245,3 +1245,32 @@ adds `GET /api/attention`, and pushes an `attention` SSE frame.
 
 **Lesson: a type that exists on one side of an API and not the other is a bug the tests actively
 hide — each side tests its own half and both stay green.**
+---
+
+## D133 — Layout proportions fixed at 20/40/40; FABs top-right
+
+Second wireframe from the user, annotated with measured proportions. Refines D132:
+
+- **20% left** — Tree panel (top) + attention queue (bottom).
+- **40% centre** — canvas band + Action bar (`Comment · Stop · Skip`) at the bottom, tethered to the
+  selected node by a dashed line.
+- **40% right** — transcript ("grows up, then scrolls") above the Composer.
+- **FABs moved to top-right** (they were top-left in the first sketch). The second wireframe wins.
+
+The percentages locate the **panels**, not the canvas: the canvas stays full-bleed *behind* them.
+
+**Sequencing that made this dispatchable:** `I3` merged first (it owned `src/App.tsx`), freeing the
+file for the layout rewrite. I3 verified live: selecting a conversation sets `#/c/16`, reload keeps
+the same conversation and its messages, and `#/c/abc`, `#/c/999999`, `#/gallery` all degrade to the
+empty state with **zero** `/api/plan` or `/api/messages` requests and no crash.
+
+**J2 is deliberately the shell only.** The attention queue and action bar render as placeholders
+marked `TODO(J3)` because their data source — `blocked` status and `GET /api/attention` — is still
+being built in J1. Wiring a panel to an API that does not exist yet is how the fixture problem
+(D131) happened: a component that looks right against invented data and dies against real data.
+**Build the container against real components; leave the unbacked panels visibly stubbed rather than
+plausibly fake.**
+
+Noted for J2: `data-testid="canvas-area"` currently sits on `AppShell.Main`, and existing tests
+query `.mantine-AppShell-*` classes that will vanish. Flagged in the card so the builder updates the
+queries instead of keeping AppShell alive just to satisfy a selector.
