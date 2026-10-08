@@ -147,42 +147,42 @@ describe("resolvePromptConversationId", () => {
 
 describe("addJob", () => {
   it("appends a job", () => {
-    const j1: Job = { id: "j1", title: "Build", status: "draft", needs: [] };
+    const j1: Job = { id: "j1", title: "Build", status: "draft", needs: [], command: null, taskId: null };
     expect(addJob([], j1)).toEqual([j1]);
   });
 
   it("rejects a duplicate id", () => {
-    const j1: Job = { id: "j1", title: "Build", status: "draft", needs: [] };
-    const dupe: Job = { id: "j1", title: "Other", status: "draft", needs: [] };
+    const j1: Job = { id: "j1", title: "Build", status: "draft", needs: [], command: null, taskId: null };
+    const dupe: Job = { id: "j1", title: "Other", status: "draft", needs: [], command: null, taskId: null };
     expect(() => addJob([j1], dupe)).toThrow(DuplicateJobIdError);
   });
 });
 
 describe("removeJob", () => {
   it("removes the job and strips it from every other job's needs, leaving no dangling edges", () => {
-    const j1: Job = { id: "j1", title: "Build", status: "draft", needs: [] };
-    const j2: Job = { id: "j2", title: "Test", status: "draft", needs: ["j1"] };
-    const j3: Job = { id: "j3", title: "Deploy", status: "draft", needs: ["j1", "j2"] };
+    const j1: Job = { id: "j1", title: "Build", status: "draft", needs: [], command: null, taskId: null };
+    const j2: Job = { id: "j2", title: "Test", status: "draft", needs: ["j1"], command: null, taskId: null };
+    const j3: Job = { id: "j3", title: "Deploy", status: "draft", needs: ["j1", "j2"], command: null, taskId: null };
 
     const result = removeJob([j1, j2, j3], "j1");
 
     expect(result).toEqual([
-      { id: "j2", title: "Test", status: "draft", needs: [] },
-      { id: "j3", title: "Deploy", status: "draft", needs: ["j2"] },
+      { id: "j2", title: "Test", status: "draft", needs: [], command: null, taskId: null },
+      { id: "j3", title: "Deploy", status: "draft", needs: ["j2"], command: null, taskId: null },
     ]);
   });
 });
 
 describe("setStatus", () => {
   it("updates the status of the matching job only", () => {
-    const j1: Job = { id: "j1", title: "Build", status: "draft", needs: [] };
-    const j2: Job = { id: "j2", title: "Test", status: "draft", needs: [] };
+    const j1: Job = { id: "j1", title: "Build", status: "draft", needs: [], command: null, taskId: null };
+    const j2: Job = { id: "j2", title: "Test", status: "draft", needs: [], command: null, taskId: null };
 
     const result = setStatus([j1, j2], "j1", "queued");
 
     expect(result).toEqual([
-      { id: "j1", title: "Build", status: "queued", needs: [] },
-      { id: "j2", title: "Test", status: "draft", needs: [] },
+      { id: "j1", title: "Build", status: "queued", needs: [], command: null, taskId: null },
+      { id: "j2", title: "Test", status: "draft", needs: [], command: null, taskId: null },
     ]);
   });
 
@@ -193,34 +193,34 @@ describe("setStatus", () => {
 
 describe("validateGraph", () => {
   it("passes a valid DAG", () => {
-    const j1: Job = { id: "j1", title: "Build", status: "draft", needs: [] };
-    const j2: Job = { id: "j2", title: "Test", status: "draft", needs: ["j1"] };
+    const j1: Job = { id: "j1", title: "Build", status: "draft", needs: [], command: null, taskId: null };
+    const j2: Job = { id: "j2", title: "Test", status: "draft", needs: ["j1"], command: null, taskId: null };
     expect(validateGraph([j1, j2])).toBeUndefined();
   });
 
   it("detects an unknown id referenced by needs", () => {
-    const j1: Job = { id: "j1", title: "Build", status: "draft", needs: ["ghost"] };
+    const j1: Job = { id: "j1", title: "Build", status: "draft", needs: ["ghost"], command: null, taskId: null };
     expect(validateGraph([j1])).toEqual({ kind: "dangling", jobId: "j1", missingId: "ghost" });
   });
 
   it("detects a self-edge as a cycle", () => {
-    const j1: Job = { id: "j1", title: "Build", status: "draft", needs: ["j1"] };
+    const j1: Job = { id: "j1", title: "Build", status: "draft", needs: ["j1"], command: null, taskId: null };
     const result = validateGraph([j1]);
     expect(result).toEqual({ kind: "cycle", ids: ["j1"] });
   });
 
   it("detects a 2-cycle", () => {
-    const j1: Job = { id: "j1", title: "Build", status: "draft", needs: ["j2"] };
-    const j2: Job = { id: "j2", title: "Test", status: "draft", needs: ["j1"] };
+    const j1: Job = { id: "j1", title: "Build", status: "draft", needs: ["j2"], command: null, taskId: null };
+    const j2: Job = { id: "j2", title: "Test", status: "draft", needs: ["j1"], command: null, taskId: null };
     const result = validateGraph([j1, j2]);
     expect(result?.kind).toBe("cycle");
     expect((result as { ids: string[] }).ids.sort()).toEqual(["j1", "j2"]);
   });
 
   it("detects a 3-cycle", () => {
-    const j1: Job = { id: "j1", title: "A", status: "draft", needs: ["j2"] };
-    const j2: Job = { id: "j2", title: "B", status: "draft", needs: ["j3"] };
-    const j3: Job = { id: "j3", title: "C", status: "draft", needs: ["j1"] };
+    const j1: Job = { id: "j1", title: "A", status: "draft", needs: ["j2"], command: null, taskId: null };
+    const j2: Job = { id: "j2", title: "B", status: "draft", needs: ["j3"], command: null, taskId: null };
+    const j3: Job = { id: "j3", title: "C", status: "draft", needs: ["j1"], command: null, taskId: null };
     const result = validateGraph([j1, j2, j3]);
     expect(result?.kind).toBe("cycle");
     expect((result as { ids: string[] }).ids.sort()).toEqual(["j1", "j2", "j3"]);

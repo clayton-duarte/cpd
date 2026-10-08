@@ -7,7 +7,9 @@ import {
   type ConversationId,
   type EntryId,
   type Storage,
+  type TaskId,
 } from "@earendil-works/pi-durable";
+import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { createModels } from "@earendil-works/pi-ai/models";
@@ -31,6 +33,7 @@ import {
   type Job,
   type JobStatus,
 } from "./plans.ts";
+import { JobTask, onJobOutput, type JobOutputListener } from "./jobTask.ts";
 
 export type Message = {
   id: number;
@@ -92,6 +95,8 @@ export type Engine = {
 export type OpenEngineOptions = {
   dbPath: string;
   authPath?: string;
+  /** Working directory `NodeExecutionEnv` runs job commands in. Defaults to `process.cwd()`. */
+  jobWorkdir?: string;
 };
 
 /**
@@ -114,12 +119,17 @@ export async function openEngine(options: OpenEngineOptions): Promise<Engine> {
   const models = createModels({ credentials });
   models.setProvider(githubCopilotProvider());
 
+  const registry = createRegistry();
+  registry.install({ name: "cpd", tasks: [JobTask] });
+
   const storage = await openNodeSqliteStorage(options.dbPath);
+  const workdir = options.jobWorkdir ?? process.cwd();
   const harness = await Harness.open(
     storage,
     {
       models,
-      registry: createRegistry(),
+      registry,
+      env: async () => new NodeExecutionEnv({ cwd: workdir }),
       onReport: (error) => console.error("[cpd-daemon] harness report:", error),
     },
     ctx,
@@ -302,13 +312,20 @@ async function commitJobs(engine: Engine, conversationId: number, nextJobs: Job[
 export async function addPlanJob(
   engine: Engine,
   conversationId: number,
-  input: { title: string; needs?: string[] },
+  input: { title: string; needs?: string[]; command?: string },
 ): Promise<Job> {
   const conversation = await getConversation(engine, conversationId);
   if (!conversation) throw new UnknownConversationError(conversationId);
 
   const current = await getPlan(engine, conversationId);
-  const job: Job = { id: crypto.randomUUID(), title: input.title, status: "draft", needs: input.needs ?? [] };
+  const job: Job = {
+    id: crypto.randomUUID(),
+    title: input.title,
+    status: "draft",
+    needs: input.needs ?? [],
+    command: input.command ?? null,
+    taskId: null,
+  };
   const nextJobs = addJob(current, job);
   await commitJobs(engine, conversationId, nextJobs);
   return job;
@@ -352,3 +369,76 @@ export async function deletePlanJob(engine: Engine, conversationId: number, id: 
   const nextJobs = removeJob(current, id);
   await commitJobs(engine, conversationId, nextJobs);
 }
+
+// --- H6: jobs actually run as cpd.job tasks --------------------------------------------------
+
+export class UnknownRunJobIdError extends Error {
+  readonly id: string;
+  constructor(id: string) {
+    super(`Unknown job id: ${id}`);
+    this.id = id;
+    this.name = "UnknownRunJobIdError";
+  }
+}
+
+export class JobAlreadyRunningError extends Error {
+  readonly id: string;
+  constructor(id: string) {
+    super(`Job already running: ${id}`);
+    this.id = id;
+    this.name = "JobAlreadyRunningError";
+  }
+}
+
+/** Start a job's `cpd.job` task. Throws `UnknownConversationError`/`UnknownRunJobIdError` for an
+ * unknown conversation/job, and `JobAlreadyRunningError` if the job already has a live task
+ * (status `queued` or `running`) rather than starting a second one. */
+export async function runPlanJob(
+  engine: Engine,
+  conversationId: number,
+  jobId: string,
+): Promise<{ taskId: string }> {
+  const conversation = await getConversation(engine, conversationId);
+  if (!conversation) throw new UnknownConversationError(conversationId);
+
+  const jobs = await getPlan(engine, conversationId);
+  const job = jobs.find((j) => j.id === jobId);
+  if (!job) throw new UnknownRunJobIdError(jobId);
+  if (job.status === "queued" || job.status === "running") {
+    throw new JobAlreadyRunningError(jobId);
+  }
+
+  const convId = conversationId as unknown as ConversationId;
+  const taskId = await engine.harness.commit(async (tx) => {
+    return tx.createTask(
+      JobTask,
+      { jobId, conversationId: convId, command: job.command ?? undefined, needs: job.needs },
+      { ownership: { kind: "conversation" }, conversationId: convId },
+    );
+  }, ctx);
+
+  const taskIdStr = String(taskId);
+  await commitJobs(
+    engine,
+    conversationId,
+    jobs.map((j) => (j.id === jobId ? { ...j, taskId: taskIdStr } : j)),
+  );
+
+  return { taskId: taskIdStr };
+}
+
+/** Abort a job's running task. Throws `UnknownConversationError`/`UnknownRunJobIdError` for an
+ * unknown conversation/job. A job with no live task is a no-op. */
+export async function abortPlanJob(engine: Engine, conversationId: number, jobId: string): Promise<void> {
+  const conversation = await getConversation(engine, conversationId);
+  if (!conversation) throw new UnknownConversationError(conversationId);
+
+  const jobs = await getPlan(engine, conversationId);
+  const job = jobs.find((j) => j.id === jobId);
+  if (!job) throw new UnknownRunJobIdError(jobId);
+  if (!job.taskId) return;
+
+  await engine.harness.abortTask(job.taskId as unknown as TaskId, ctx);
+}
+
+export { onJobOutput, type JobOutputListener };
