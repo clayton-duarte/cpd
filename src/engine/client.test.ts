@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createJob, deleteJob, getConversations, getMessages, getPlan, runJob, sendPrompt } from './client';
+import { abortPrompt, createJob, deleteJob, getConversations, getMessages, getPlan, runJob, sendPrompt } from './client';
 import type { ConversationId } from './types';
 
 describe('client', () => {
@@ -174,6 +174,38 @@ describe('client', () => {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: 'j1' }),
+    });
+  });
+
+  it('abortPrompt POSTs to /api/abort with no conversation', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await abortPrompt(undefined);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/abort', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversation: undefined }),
+    });
+  });
+
+  it('abortPrompt POSTs the conversation id in the body when given one', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await abortPrompt(16 as ConversationId);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/abort', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversation: 16 }),
     });
   });
 

@@ -51,6 +51,16 @@ export async function sendPrompt(text: string, conversation: ConversationId | un
   return parseOrThrow<PromptResponse>(res);
 }
 
+/** L8: abort the in-flight run. Idempotent -- safe to call when nothing is running. */
+export async function abortPrompt(conversation: ConversationId | undefined): Promise<void> {
+  const res = await fetch(`${BASE}/abort`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ conversation }),
+  });
+  await parseOrThrow<unknown>(res);
+}
+
 /** Fork a plan thread at entry `at`. Title is intentionally omitted -- the daemon derives it
  * (G1's `deriveTitle`), so there is exactly one implementation of that rule. */
 export async function forkConversation(at: number): Promise<ForkResponse> {

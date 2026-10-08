@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
@@ -198,6 +198,71 @@ describe('App shows only real conversations, no fixtures (I2)', () => {
 
     // ...and still present at the jobs level.
     expect(screen.getByRole('textbox')).toBeTruthy();
+  });
+
+  describe('L7: resizable chat panel', () => {
+    function widthPx(panel: HTMLElement): number {
+      return parseFloat(panel.style.width);
+    }
+
+    beforeEach(() => {
+      localStorage.clear();
+    });
+
+    it('dragging the handle left grows the panel (it is anchored to the right edge)', async () => {
+      vi.mocked(client.getConversations).mockResolvedValue({ conversations: [] });
+
+      renderApp();
+      const handle = await screen.findByTestId('chat-panel-resize-handle');
+      const panel = screen.getByTestId('panel-transcript');
+      const before = widthPx(panel);
+
+      fireEvent.pointerDown(handle, { clientX: 500 });
+      fireEvent.pointerMove(handle, { clientX: 400 });
+      fireEvent.pointerUp(handle, { clientX: 400 });
+
+      expect(widthPx(panel)).toBeGreaterThan(before);
+    });
+
+    // D: the persisted size must be restored on reload, not ignored.
+    it('persists the dragged width to localStorage and restores it on remount (D)', async () => {
+      vi.mocked(client.getConversations).mockResolvedValue({ conversations: [] });
+
+      const { unmount } = renderApp();
+      const handle = await screen.findByTestId('chat-panel-resize-handle');
+
+      fireEvent.pointerDown(handle, { clientX: 500 });
+      fireEvent.pointerMove(handle, { clientX: 350 });
+      fireEvent.pointerUp(handle, { clientX: 350 });
+
+      const draggedWidth = widthPx(screen.getByTestId('panel-transcript'));
+      expect(localStorage.getItem('cpd.chatPanel.width')).toBe(String(draggedWidth));
+
+      unmount();
+
+      renderApp();
+      const restoredPanel = await screen.findByTestId('panel-transcript');
+      expect(widthPx(restoredPanel)).toBe(draggedWidth);
+    });
+
+    // E: the panel must not be draggable below the minimum (or above the maximum).
+    it('clamps to the minimum when dragged far past it, and the maximum past that (E)', async () => {
+      vi.mocked(client.getConversations).mockResolvedValue({ conversations: [] });
+
+      renderApp();
+      const handle = await screen.findByTestId('chat-panel-resize-handle');
+      const panel = screen.getByTestId('panel-transcript');
+
+      fireEvent.pointerDown(handle, { clientX: 500 });
+      fireEvent.pointerMove(handle, { clientX: 100000 });
+      fireEvent.pointerUp(handle, { clientX: 100000 });
+      expect(widthPx(panel)).toBe(280);
+
+      fireEvent.pointerDown(handle, { clientX: 500 });
+      fireEvent.pointerMove(handle, { clientX: -100000 });
+      fireEvent.pointerUp(handle, { clientX: -100000 });
+      expect(widthPx(panel)).toBe(720);
+    });
   });
 
   it('clicking an attention item for a different conversation switches to it and opens the action bar', async () => {

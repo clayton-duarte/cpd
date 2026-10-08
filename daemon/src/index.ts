@@ -16,6 +16,7 @@ import {
   deletePlanJob,
   runPlanJob,
   abortPlanJob,
+  abortRun,
   onJobOutput,
   onJobStatusChange,
   createSession,
@@ -319,6 +320,24 @@ async function main(): Promise<void> {
       }
       const result = await submitPrompt(conversation, text);
       sendJson(res, 200, result);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/abort") {
+      const raw = await readBody(req);
+      let bodyConversation: number | undefined;
+      try {
+        const body = raw.trim() === "" ? {} : (JSON.parse(raw) as { conversation?: unknown });
+        if (body.conversation !== undefined && body.conversation !== null) {
+          if (typeof body.conversation !== "number") throw new Error("conversation must be a number");
+          bodyConversation = body.conversation;
+        }
+      } catch {
+        sendJson(res, 400, { error: "Expected JSON body { conversation?: number }" });
+        return;
+      }
+      await abortRun(engine, bodyConversation);
+      sendJson(res, 200, { ok: true });
       return;
     }
 

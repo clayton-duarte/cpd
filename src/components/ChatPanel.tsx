@@ -5,7 +5,6 @@ import {
   Badge,
   EmptyState,
   Group,
-  Loader,
   Paper,
   ScrollArea,
   Stack,
@@ -13,7 +12,7 @@ import {
   Textarea,
   Tooltip,
 } from '@mantine/core';
-import { forkConversation, sendPrompt } from '../engine/client';
+import { abortPrompt, forkConversation, sendPrompt } from '../engine/client';
 import { useEngineStream } from '../engine/useEngineStream';
 import type { ConversationId, Message } from '../engine/types';
 
@@ -39,6 +38,7 @@ export function ChatPanel({ conversationId, onForked }: ChatPanelProps) {
   const [inFlight, setInFlight] = useState(false);
   const [unanswered, setUnanswered] = useState<{ reason: string; detail?: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // The optimistic message is cleared once the authoritative transcript
   // actually contains it -- clearing it in a `finally` instead would make it
@@ -84,10 +84,18 @@ export function ChatPanel({ conversationId, onForked }: ChatPanelProps) {
     onForked?.(result.id as ConversationId);
   }
 
+  function abort() {
+    void abortPrompt(conversationId);
+    setInFlight(false);
+  }
+
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void submit();
+    } else if (e.key === 'Escape' && inFlight) {
+      e.preventDefault();
+      abort();
     }
   }
 
@@ -151,17 +159,23 @@ export function ChatPanel({ conversationId, onForked }: ChatPanelProps) {
         )}
         <Group gap="var(--space-2)" wrap="nowrap" align="flex-end">
           <Textarea
+            ref={textareaRef}
             style={{ flex: 1 }}
             autosize
             minRows={1}
             maxRows={6}
-            disabled={inFlight}
             value={draft}
             onChange={(e) => setDraft(e.currentTarget.value)}
             onKeyDown={onKeyDown}
           />
-          <ActionIcon size="lg" onClick={() => void submit()} disabled={inFlight} c="var(--on-solid)">
-            {inFlight ? <Loader size="xs" /> : '→'}
+          <ActionIcon
+            size="lg"
+            onClick={() => (inFlight ? abort() : void submit())}
+            disabled={!inFlight && !draft.trim()}
+            data-testid={inFlight ? 'stop-button' : 'send-button'}
+            c="var(--on-solid)"
+          >
+            {inFlight ? <Text size="xs">◼</Text> : '→'}
           </ActionIcon>
         </Group>
       </Stack>

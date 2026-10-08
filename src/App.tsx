@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
   ActionBar,
@@ -200,7 +200,42 @@ function ActionBarPanel({
  * J2: right column -- transcript grows up from the bottom (flex column, reverse-anchored content)
  * and scrolls once full; composer sits below it. Wraps the existing ChatPanel, which already
  * owns its own ScrollArea and keeps newest-at-the-bottom behavior (I3/H2).
+ *
+ * L7: user-resizable via a drag handle on its left edge, mirroring Sidebar's own resize pattern
+ * (pointer capture + clamp + persisted size) rather than a new Mantine primitive -- Mantine 9.7
+ * has no resizable-panel component. Width is persisted to `localStorage` (not `sessionStorage`
+ * like the sidebar) per the card, and clamped so the panel can never be dragged to zero or over
+ * the whole viewport.
  */
+export const CHAT_PANEL_MIN_WIDTH = 280;
+export const CHAT_PANEL_MAX_WIDTH = 720;
+const CHAT_PANEL_DEFAULT_WIDTH = 400;
+const CHAT_PANEL_STORAGE_KEY = 'cpd.chatPanel.width';
+
+function clampChatPanelWidth(value: number): number {
+  return Math.min(CHAT_PANEL_MAX_WIDTH, Math.max(CHAT_PANEL_MIN_WIDTH, value));
+}
+
+function readStoredChatPanelWidth(): number {
+  try {
+    const raw = localStorage.getItem(CHAT_PANEL_STORAGE_KEY);
+    if (!raw) return CHAT_PANEL_DEFAULT_WIDTH;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return CHAT_PANEL_DEFAULT_WIDTH;
+    return clampChatPanelWidth(parsed);
+  } catch {
+    return CHAT_PANEL_DEFAULT_WIDTH;
+  }
+}
+
+function writeStoredChatPanelWidth(width: number): void {
+  try {
+    localStorage.setItem(CHAT_PANEL_STORAGE_KEY, String(width));
+  } catch {
+    // storage unavailable -- ignore, rendering must not break
+  }
+}
+
 function TranscriptAndComposerPanel({
   conversationId,
   onForked,
@@ -208,14 +243,67 @@ function TranscriptAndComposerPanel({
   conversationId: ConversationId | undefined;
   onForked: (id: ConversationId) => void;
 }) {
+  const [width, setWidth] = useState(() => readStoredChatPanelWidth());
+  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const handlePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    dragRef.current = { startX: e.clientX, startWidth: width };
+  };
+
+  const handlePointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    // Dragging left (toward the canvas) grows the panel since it's anchored to the right edge
+    // of the viewport -- the handle sits on its LEFT side, so the sign is inverted vs Sidebar's
+    // right-edge handle.
+    setWidth(clampChatPanelWidth(drag.startWidth - (e.clientX - drag.startX)));
+  };
+
+  const endDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    e.currentTarget.releasePointerCapture?.(e.pointerId);
+    setWidth((current) => {
+      writeStoredChatPanelWidth(current);
+      return current;
+    });
+  };
+
   return (
     <Paper
       withBorder
       radius="md"
       shadow="sm"
       data-testid="panel-transcript"
-      style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+      style={{
+        flex: 'none',
+        width,
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        position: 'relative',
+      }}
     >
+      <div
+        data-testid="chat-panel-resize-handle"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: 6,
+          height: '100%',
+          cursor: 'col-resize',
+          // Sits on top of the Paper's own border; a transparent hit target keeps the resize
+          // affordance invisible until hovered, matching Sidebar's handle treatment.
+          backgroundColor: 'transparent',
+        }}
+      />
       <ChatPanel conversationId={conversationId} onForked={onForked} />
     </Paper>
   );

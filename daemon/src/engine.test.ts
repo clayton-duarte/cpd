@@ -1,9 +1,9 @@
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, afterEach } from "vitest";
+import { describe, expect, it, afterEach, vi } from "vitest";
 import { FileCredentialStore } from "./credentials.ts";
-import { flattenMessages, sseFrame, submitPrompt } from "./engine.ts";
+import { flattenMessages, sseFrame, submitPrompt, abortRun, type Engine } from "./engine.ts";
 import type { Conversation } from "@earendil-works/pi-durable";
 
 describe("FileCredentialStore", () => {
@@ -234,5 +234,51 @@ describe("submitPrompt", () => {
       "hi",
     );
     expect(result.detail).toBe("unique-marker-detail-42");
+  });
+});
+
+describe("abortRun", () => {
+  function fakeEngineWithConversation(conversation: { abort: () => Promise<void> } | undefined) {
+    const root = { id: 1, abort: conversation?.abort } as unknown as Engine["root"];
+    return {
+      root,
+      harness: {
+        conversation: async (id: number) => (id === 1 ? root : conversation ? ({ ...conversation, id }) : undefined),
+      },
+    } as unknown as Engine;
+  }
+
+  it("calls conversation.abort() on the root conversation when no id is given", async () => {
+    const abort = vi.fn().mockResolvedValue(undefined);
+    const engine = fakeEngineWithConversation({ abort });
+
+    await abortRun(engine, undefined);
+
+    expect(abort).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls conversation.abort() on the given conversation id, not root", async () => {
+    const rootAbort = vi.fn().mockResolvedValue(undefined);
+    const childAbort = vi.fn().mockResolvedValue(undefined);
+    const engine = {
+      root: { id: 1, abort: rootAbort },
+      harness: {
+        conversation: async (id: number) => (id === 7 ? { id: 7, abort: childAbort } : undefined),
+      },
+    } as unknown as Engine;
+
+    await abortRun(engine, 7);
+
+    expect(childAbort).toHaveBeenCalledTimes(1);
+    expect(rootAbort).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op when the conversation id is unknown -- does not throw", async () => {
+    const engine = {
+      root: { id: 1, abort: vi.fn() },
+      harness: { conversation: async () => undefined },
+    } as unknown as Engine;
+
+    await expect(abortRun(engine, 999)).resolves.toBeUndefined();
   });
 });
