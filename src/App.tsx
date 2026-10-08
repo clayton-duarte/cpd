@@ -1,6 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
-import { AppShell, Button, Group, Stack, Text } from '@mantine/core';
+import {
+  ActionBar,
+  Affix,
+  Alert,
+  Button,
+  Group,
+  Indicator,
+  Paper,
+  Stack,
+  Text,
+} from '@mantine/core';
+import { IconMessagePlus, IconPlayerPlay, IconSquarePlus } from '@tabler/icons-react';
 import { Canvas } from './canvas/Canvas';
 import { Sidebar } from './components/Sidebar';
 import { ChatPanel } from './components/ChatPanel';
@@ -38,6 +49,111 @@ function conversationHashSegment(hash: string): string | undefined {
 /** Sentinel distinct from `undefined` (a valid "no conversation" segment) so the hash-sync
  * effect below can tell "never run yet" apart from "last ran on an empty/no-conversation hash". */
 const UNSET = Symbol('unset');
+
+/**
+ * J2: left column, top -- wraps the existing real conversation tree (Sidebar in
+ * `showFixtureTree={false}` mode) inside a floating panel instead of a reserved navbar column.
+ */
+function TreePanel({
+  selectedConversationId,
+  onSelectConversation,
+  onConversationsChange,
+  onConversationCreated,
+}: {
+  selectedConversationId?: ConversationId;
+  onSelectConversation: (id: ConversationId) => void;
+  onConversationsChange: (conversations: ConversationNode[]) => void;
+  onConversationCreated: (id: ConversationId) => void;
+}) {
+  return (
+    <Paper withBorder radius="md" shadow="sm" data-testid="panel-tree" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+      <Sidebar
+        showFixtureTree={false}
+        nav={{ level: 'leads' }}
+        onNavigate={() => {}}
+        selectedConversationId={selectedConversationId}
+        onSelectConversation={onSelectConversation}
+        onConversationsChange={onConversationsChange}
+        onConversationCreated={onConversationCreated}
+      />
+    </Paper>
+  );
+}
+
+/**
+ * J2: left column, bottom -- static presentational placeholder for the attention queue (blocked
+ * jobs + other items needing the user). TODO(J3): wire to `GET /api/attention` once J1's
+ * `blocked` status/endpoint exist in the daemon; the `12` badge is an unread-count placeholder,
+ * not derived from any local data (per D132 clarification).
+ */
+function AttentionQueuePanel() {
+  return (
+    <Paper withBorder radius="md" shadow="sm" p="var(--pad)" data-testid="panel-attention-queue">
+      <Group justify="space-between" mb="var(--space-2)">
+        <Text size="sm" fw={600} c="var(--fg-bright)">
+          Attention
+        </Text>
+        {/* TODO(J3): replace with the real unread-attention count from GET /api/attention */}
+        <Indicator label={12} size={18} color="var(--red-solid)" position="middle-end" offset={-4} inline>
+          <span />
+        </Indicator>
+      </Group>
+      {/* TODO(J3): render the real attention queue (blocked jobs, failures, questions) once J1 ships */}
+      <Alert color="var(--red-solid)" variant="light" title="Blocked: placeholder">
+        No real data yet -- wired in J3.
+      </Alert>
+    </Paper>
+  );
+}
+
+/**
+ * J2: centre column, bottom -- static presentational placeholder for the action bar
+ * (Comment / Stop / Skip). TODO(J3): wire to the selected job once that interaction exists; for
+ * now `opened` is driven by local state (a job being selected), not real action-availability data.
+ */
+function ActionBarPanel({ opened }: { opened: boolean }) {
+  return (
+    <ActionBar opened={opened} data-testid="panel-action-bar" withinPortal={false} shadow="sm" radius="md">
+      {/* TODO(J3): wire these to the real selected-job action API */}
+      <Button variant="subtle" size="xs">
+        Comment
+      </Button>
+      <ActionBar.Divider />
+      <Button variant="subtle" size="xs" c="var(--red)">
+        Stop
+      </Button>
+      <ActionBar.Divider />
+      <Button variant="subtle" size="xs">
+        Skip
+      </Button>
+    </ActionBar>
+  );
+}
+
+/**
+ * J2: right column -- transcript grows up from the bottom (flex column, reverse-anchored content)
+ * and scrolls once full; composer sits below it. Wraps the existing ChatPanel, which already
+ * owns its own ScrollArea and keeps newest-at-the-bottom behavior (I3/H2).
+ */
+function TranscriptAndComposerPanel({
+  conversationId,
+  onForked,
+}: {
+  conversationId: ConversationId | undefined;
+  onForked: (id: ConversationId) => void;
+}) {
+  return (
+    <Paper
+      withBorder
+      radius="md"
+      shadow="sm"
+      data-testid="panel-transcript"
+      style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+    >
+      <ChatPanel conversationId={conversationId} onForked={onForked} />
+    </Paper>
+  );
+}
 
 function TopBar({ conversationTitle }: { conversationTitle?: string }) {
   return (
@@ -88,11 +204,6 @@ function JobsLevelContent({
 
   return (
     <Stack gap={0} style={{ height: '100%' }}>
-      <Group justify="flex-end" px="md" py="var(--space-1)">
-        <Button size="xs" onClick={() => setModalOpened(true)}>
-          New job
-        </Button>
-      </Group>
       <div style={{ flex: 1, minHeight: 0 }}>
         <Canvas data={data} selectedJobId={selectedJobId} onSelectJob={onSelectJob} onRunJob={handleRun} />
       </div>
@@ -213,27 +324,11 @@ function App() {
   }
 
   return (
-    <AppShell
-      header={{ height: 48 }}
-      navbar={{ width: 280, breakpoint: 'sm' }}
-      aside={{ width: 360, breakpoint: 'sm' }}
-      padding="md"
-    >
-      <AppShell.Header>
-        <TopBar conversationTitle={conversationTitle} />
-      </AppShell.Header>
-      <AppShell.Navbar>
-        <Sidebar
-          showFixtureTree={false}
-          nav={{ level: 'leads' }}
-          onNavigate={() => {}}
-          selectedConversationId={selectedConversationId}
-          onSelectConversation={setSelectedConversationId}
-          onConversationsChange={setConversations}
-          onConversationCreated={setSelectedConversationId}
-        />
-      </AppShell.Navbar>
-      <AppShell.Main data-testid="canvas-area" style={{ height: '100vh' }}>
+    <div style={{ position: 'relative', height: '100vh', width: '100vw', overflow: 'hidden' }}>
+      {/* Full-bleed canvas behind everything (D132/J2): not clipped to the centre column, fills
+       * the whole viewport. The floating panels below sit on top of it, pointer-events untouched
+       * outside their own bounds so panning/zooming still works in the gaps. */}
+      <div data-testid="canvas-area" style={{ position: 'absolute', inset: 0 }}>
         <ReactFlowProvider>
           <LevelTransitionEffect conversationId={selectedConversationId} />
           {selectedConversationId === undefined ? (
@@ -247,11 +342,89 @@ function App() {
             />
           )}
         </ReactFlowProvider>
-      </AppShell.Main>
-      <AppShell.Aside>
-        <ChatPanel conversationId={selectedConversationId} onForked={setSelectedConversationId} />
-      </AppShell.Aside>
-    </AppShell>
+      </div>
+
+      <TopBar conversationTitle={conversationTitle} />
+
+      {/* Left column (20%): Tree panel on top, attention queue placeholder below. */}
+      <Stack
+        gap="var(--space-2)"
+        p="var(--space-2)"
+        style={{
+          position: 'absolute',
+          top: 48,
+          left: 0,
+          bottom: 0,
+          width: '20%',
+          pointerEvents: 'none',
+        }}
+      >
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', pointerEvents: 'auto' }}>
+          <TreePanel
+            selectedConversationId={selectedConversationId}
+            onSelectConversation={setSelectedConversationId}
+            onConversationsChange={setConversations}
+            onConversationCreated={setSelectedConversationId}
+          />
+        </div>
+        <div style={{ flexShrink: 0, pointerEvents: 'auto' }}>
+          <AttentionQueuePanel />
+        </div>
+      </Stack>
+
+      {/* Centre column (40%): canvas shows through; action bar placeholder floats at its bottom. */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 48,
+          left: '20%',
+          width: '40%',
+          bottom: 'var(--space-4)',
+          display: 'flex',
+          alignItems: 'flex-end',
+          justifyContent: 'center',
+          pointerEvents: 'none',
+        }}
+      >
+        <div style={{ pointerEvents: 'auto' }}>
+          <ActionBarPanel opened={selectedJobId !== null} />
+        </div>
+      </div>
+
+      {/* Right column (40%): transcript grows up from the bottom and scrolls; composer lives
+       * inside ChatPanel, below the transcript, per D132/J2. */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 108,
+          right: 0,
+          bottom: 0,
+          width: '40%',
+          padding: 'var(--space-2)',
+          display: 'flex',
+          pointerEvents: 'none',
+        }}
+      >
+        <div style={{ flex: 1, pointerEvents: 'auto', display: 'flex' }}>
+          <TranscriptAndComposerPanel conversationId={selectedConversationId} onForked={setSelectedConversationId} />
+        </div>
+      </div>
+
+      {/* FABs, top-right (D132: New session / New workflow / New job). */}
+      <Affix position={{ top: 56, right: 'var(--space-3)' }}>
+        <Group gap="var(--space-2)">
+          <Button size="sm" leftSection={<IconMessagePlus size={16} />} variant="filled">
+            New session
+          </Button>
+          <Button size="sm" leftSection={<IconSquarePlus size={16} />} variant="filled">
+            New workflow
+          </Button>
+          <Button size="sm" leftSection={<IconPlayerPlay size={16} />} variant="filled">
+            New job
+          </Button>
+        </Group>
+      </Affix>
+    </div>
   );
 }
 
