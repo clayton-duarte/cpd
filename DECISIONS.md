@@ -884,3 +884,29 @@ probe was redone surgically.
 
 **Audit:** checked every other route for the same dropped-field shape. `/api/fork` parses and
 forwards its optional `title` correctly, so the `command` miss was isolated, not systemic.
+---
+
+## D123 — Capability in the daemon is not capability in the product
+
+With D122 the daemon can create, run and execute jobs end to end. **None of it was reachable from
+the GUI.** `src/engine/client.ts` exported only read paths (`getMessages`, `getConversations`,
+`sendPrompt`, `forkConversation`, `getPlan`) — no `createJob`, no `runJob` — and `JobCard`/`JobNode`
+had no interactive elements at all. The canvas could display a plan; a human could not drive one.
+
+This is the same shape as the silent-success pattern, one level up: **a capability nobody can reach
+is a capability that does not exist** for the product. CPD is a GUI, so "works via curl" is not the
+bar. Carded as H13.
+
+**Decision (optional-prop interactivity):** the run control is added as an **optional** `onRun?`
+prop on `JobCard`. Absent the prop, the card renders exactly as today, so the Gallery and existing
+component tests keep passing untouched. Rejected making the card always-interactive: the Gallery
+renders cards as a static design reference, and a permanent button would change every fixture and
+couple presentation to a live daemon. Explicitly required a test asserting **no run button when
+`onRun` is absent**, so the no-regression promise is enforced rather than assumed.
+
+**Decision (errors are UI, not console):** a 400 from an invalid command must render where the user
+can see it. Chosen inline Mantine `Text c="red"` over adding `@mantine/notifications` — no new
+dependency, and the standing rule is to use Mantine components as-is with zero customisation.
+
+Updates continue to arrive over the existing SSE `{type:"plan"}` frame (D117) — subscribe, never
+poll, and never open a second EventSource.
