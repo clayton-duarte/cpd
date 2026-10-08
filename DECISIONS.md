@@ -480,3 +480,59 @@ Filed as H3, serialized behind H1 and H2 (all three touch the daemon routes).
 case, the dead `--pad` token, and now this: each returned success while doing nothing or the wrong
 thing. Our defaults are too forgiving. Where a parameter means "which thread does the user's work
 go into", the correct behaviour is to fail loudly, not to guess the root.
+---
+
+## D112 — A plan **is** a conversation. Jobs live in a Durable document scoped to it.
+
+D108 asked whether a plan *is* a conversation or merely *has* one. I probed Pi Durable directly
+rather than keep guessing, and the engine answers it for us.
+
+**Probe 1 — a conversation can carry structured job data, and it persists.**
+
+```js
+const PlanDoc = defineDoc({
+  kind: "cpd.plan", version: 1, scope: "conversation",
+  history: "rewindable", fork: "asOf",
+  initial: () => ({ jobs: [] }),
+});
+await conv.commit(async (tx) => {
+  const d = await tx.doc(PlanDoc, conv.id);   // ← id required even inside that conversation's commit
+  d.jobs.push({ id:"j1", title:"Build thing", status:"queued", needs:[] });
+}, ctx);
+```
+
+Read back `{jobs:[j1,j2]}` with `needs` edges intact, and **byte-identical after a cold restart** —
+new storage handle, new `Harness`. Jobs with dependency edges are already durable without us
+designing a schema.
+
+**Probe 2 — the document follows a fork, copy-on-write. This is the decisive one.**
+
+```
+child = root.fork(lastEntryId, …)
+child doc at creation        -> {jobs:[j1,j2]}   # inherited
+child.commit(push j3)
+parent after child write     -> [j1, j2]         # untouched
+child  after child write     -> [j1, j2, j3]
+```
+
+A forked plan inherits the parent's jobs and then diverges. **"Branch this plan and try a different
+job graph" is a primitive the engine already provides** — no copying, no diffing, no reconciliation
+code of ours.
+
+**Chosen: a plan IS a conversation.** `Workflow` does not get a `conversationId`; it stops being a
+separate entity. The three canvas levels become a *view* over conversation depth, and
+`navigation.ts`'s fixed three-level string-id hierarchy largely dissolves — exactly the collapse
+D108 anticipated. Jobs live in a `cpd.plan` document scoped to that conversation.
+
+**Rejected — a plan *has* a conversation:** we would hand-roll persistence, forking, and history
+for the job graph in a second store, kept in sync with the conversation tree by our own code. That
+is strictly more machinery to get strictly less than `fork: "asOf"` already gives us. It also
+contradicts the standing instruction to prefer what is native to the stack.
+
+**Caveat for implementers:** `tx.doc(Def)` throws `TypeError: Document cpd.plan requires a
+conversation ID` unless the owner id is passed explicitly — `tx.doc(Def, conv.id)` — even inside
+that conversation's own `commit`. And `documentState()` is refcounted like `viewState()`: always
+`dispose()`.
+
+This unblocks the jobs canvas, which was the last thing waiting on a human decision. Per the
+standing instruction I took the recommended, most-native option; flagging it here for review.
