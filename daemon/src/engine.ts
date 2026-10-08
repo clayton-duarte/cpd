@@ -105,6 +105,19 @@ export type OpenEngineOptions = {
  * `providers` option on `createModels`, explicit `setProvider`, mandatory `resume()`,
  * `modelId` (not `id`), and `{ type: "input", content }` (not `{ text }`) on submit.
  */
+/** Shared lead-agent configuration: the model/instructions every CPD-owned conversation opens
+ * with. Both the boot root (`harness.root`) and a freshly created session
+ * (`harness.createConversation`, I1) apply the same config so they never diverge. */
+function leadAgentConfig(): {
+  model: { provider: string; modelId: string };
+  instructions: string;
+} {
+  return {
+    model: { provider: "github-copilot", modelId: "claude-opus-5" },
+    instructions: "You are the CPD lead agent.",
+  };
+}
+
 export async function openEngine(options: OpenEngineOptions): Promise<Engine> {
   const credentials = new FileCredentialStore(options.authPath);
 
@@ -136,12 +149,7 @@ export async function openEngine(options: OpenEngineOptions): Promise<Engine> {
   );
   harness.resume();
 
-  const root = await harness.root(ctx, {
-    agent: {
-      model: { provider: "github-copilot", modelId: "claude-opus-5" },
-      instructions: "You are the CPD lead agent.",
-    },
-  });
+  const root = await harness.root(ctx, { agent: leadAgentConfig() });
 
   const titleDb = await openNodeSqliteDatabase(options.dbPath);
   const titleStore = await openTitleStore(titleDb);
@@ -258,6 +266,26 @@ export async function forkPlan(
 }
 
 export { ctx, ROOT_CONVERSATION_ID };
+
+/**
+ * Create a brand-new ROOT conversation (I1) -- `parentId: null`, not a fork of anything. Reuses
+ * `leadAgentConfig()`, the same agent config `openEngine`'s boot root applies, per the card's
+ * instruction not to duplicate creation logic. Immediately usable: `getPlan` returns `{jobs:[]}`
+ * (lazy `PlanDoc`, same as any other conversation) and `/api/prompt` can submit into it right away.
+ */
+export async function createSession(engine: Engine, title?: string): Promise<{ id: number }> {
+  const conversation = await engine.harness.createConversation(
+    {
+      ownership: { kind: "ownerless" },
+      agent: leadAgentConfig(),
+    },
+    ctx,
+  );
+  const id = conversation.id as unknown as number;
+  const resolvedTitle = title && title.trim() !== "" ? title : "New session";
+  await engine.titleStore.set(id, resolvedTitle);
+  return { id };
+}
 
 // --- H4: cpd.plan document CRUD, scoped per conversation (D112) -----------------------------
 
