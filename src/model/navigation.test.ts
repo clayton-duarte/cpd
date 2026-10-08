@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ascend, initialNav, selectLead, selectPlan } from './navigation';
+import { ascend, initialNav, parseConversationId, selectLead, selectPlan } from './navigation';
 
 describe('navigation', () => {
   it('starts at the leads level', () => {
@@ -29,5 +29,25 @@ describe('navigation', () => {
 
   it('ascend from leads is a no-op', () => {
     expect(ascend(initialNav)).toEqual(initialNav);
+  });
+
+  describe('parseConversationId (H14)', () => {
+    it('parses a positive integer planId as a numeric conversation id', () => {
+      expect(parseConversationId('42')).toBe(42);
+    });
+
+    it('treats a fixture-style planId as not a conversation id', () => {
+      expect(parseConversationId('w3')).toBeUndefined();
+    });
+
+    it('treats an absent planId as not a conversation id', () => {
+      expect(parseConversationId(undefined)).toBeUndefined();
+    });
+
+    it('rejects zero, negative and leading-zero strings', () => {
+      expect(parseConversationId('0')).toBeUndefined();
+      expect(parseConversationId('-1')).toBeUndefined();
+      expect(parseConversationId('01')).toBeUndefined();
+    });
   });
 });
