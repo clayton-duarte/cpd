@@ -330,7 +330,31 @@ describe('Sidebar', () => {
       await waitFor(() => expect(screen.getByText('Test thread')).toBeTruthy());
     });
 
-    it('scrolls the new row into view when the panel is full and scrollable', async () => {
+    // Per-element geometry mocking: a helper that gives a specific element its own scrollHeight/
+    // clientHeight/getBoundingClientRect, independent of every other element (unlike stubbing
+    // HTMLElement.prototype globally, which made every element -- scrollable Paper or not --
+    // report identical mocked values and let a wrong-element bug pass; see K4 card).
+    function mockElementGeometry(
+      el: HTMLElement,
+      geo: { scrollHeight: number; clientHeight: number; top: number; bottom: number },
+    ) {
+      Object.defineProperty(el, 'scrollHeight', { configurable: true, value: geo.scrollHeight });
+      Object.defineProperty(el, 'clientHeight', { configurable: true, value: geo.clientHeight });
+      el.getBoundingClientRect = () =>
+        ({
+          top: geo.top,
+          bottom: geo.bottom,
+          left: 0,
+          right: 0,
+          width: 0,
+          height: geo.bottom - geo.top,
+          x: 0,
+          y: geo.top,
+          toJSON() {},
+        }) as DOMRect;
+    }
+
+    it('scrolls the new row into view when the real scroller (clipped outer Paper) overflows, even though the inner Stack does not', async () => {
       const manyConversations: ConversationNode[] = Array.from({ length: 30 }, (_, i) => ({
         id: (i + 1) as ConversationId,
         parentId: null,
@@ -343,32 +367,23 @@ describe('Sidebar', () => {
       const scrollIntoViewSpy = vi.fn();
       const originalScrollIntoView = Element.prototype.scrollIntoView;
       Element.prototype.scrollIntoView = scrollIntoViewSpy;
-      const originalScrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
-      const originalClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
-      const originalGetBoundingClientRect = HTMLElement.prototype.getBoundingClientRect;
-      Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, value: 1000 });
-      Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, value: 200 });
-      // Simulate the panel's viewport (0-200) and a row below the fold (281-310), matching the
-      // measured repro in the card.
-      HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
-        const isRow = this.getAttribute('data-testid') === 'thread-99';
-        const top = isRow ? 281 : 0;
-        const bottom = isRow ? 310 : 200;
-        return { top, bottom, left: 0, right: 0, width: 0, height: bottom - top, x: 0, y: top, toJSON() {} };
-      };
 
       let selectedConversationId: ConversationId | undefined;
-      const { rerender } = render(
+      const { container, rerender } = render(
         <MantineProvider>
-          <Sidebar
-            data={sampleData}
-            nav={initialNav}
-            onNavigate={() => {}}
-            selectedConversationId={selectedConversationId}
-            onConversationCreated={(id) => {
-              selectedConversationId = id;
-            }}
-          />
+          {/* Outer clipped scroller mimicking App.tsx's Paper[data-testid=panel-tree]: scrollable,
+              rect [56,265]. */}
+          <div data-testid="outer-scroller" style={{ overflowY: 'auto' }}>
+            <Sidebar
+              data={sampleData}
+              nav={initialNav}
+              onNavigate={() => {}}
+              selectedConversationId={selectedConversationId}
+              onConversationCreated={(id) => {
+                selectedConversationId = id;
+              }}
+            />
+          </div>
         </MantineProvider>,
       );
       await waitFor(() => expect(screen.getByText('Thread 1')).toBeTruthy());
@@ -384,52 +399,68 @@ describe('Sidebar', () => {
 
       rerender(
         <MantineProvider>
-          <Sidebar
-            data={sampleData}
-            nav={initialNav}
-            onNavigate={() => {}}
-            selectedConversationId={selectedConversationId}
-            onConversationCreated={(id) => {
-              selectedConversationId = id;
-            }}
-          />
+          <div data-testid="outer-scroller" style={{ overflowY: 'auto' }}>
+            <Sidebar
+              data={sampleData}
+              nav={initialNav}
+              onNavigate={() => {}}
+              selectedConversationId={selectedConversationId}
+              onConversationCreated={(id) => {
+                selectedConversationId = id;
+              }}
+            />
+          </div>
         </MantineProvider>,
       );
 
       await waitFor(() => expect(screen.getByText('New thread')).toBeTruthy());
+
+      const outer = container.querySelector('[data-testid="outer-scroller"]') as HTMLElement;
+      // Inner Stack (Sidebar's own root): same scrollHeight as clientHeight -- NOT scrollable --
+      // and an unclipped rect extending past the visible area, matching the measured repro.
+      const inner = outer.firstElementChild as HTMLElement;
+      mockElementGeometry(outer, { scrollHeight: 293, clientHeight: 207, top: 0, bottom: 265 });
+      mockElementGeometry(inner, { scrollHeight: 293, clientHeight: 293, top: 1, bottom: 406 });
+      const row = screen.getByTestId('thread-99');
+      mockElementGeometry(row, { scrollHeight: 0, clientHeight: 0, top: 310, bottom: 338 });
+
+      // The scroll effect already ran once (before geometry was mocked, since the real DOM
+      // nodes didn't exist yet). Re-trigger it with the mocks now in place by re-emitting the
+      // conversations signal with a fresh array reference, which recomputes conversationTreeData
+      // (an effect dependency) and re-runs the scroll-into-view effect.
+      mockConversations([
+        ...manyConversations,
+        { id: 99 as ConversationId, parentId: null, at: null, title: 'New thread' },
+      ]);
+      emitConversationsSignal();
+
       await waitFor(() => expect(scrollIntoViewSpy).toHaveBeenCalledWith({ block: 'nearest' }));
 
       Element.prototype.scrollIntoView = originalScrollIntoView;
-      HTMLElement.prototype.getBoundingClientRect = originalGetBoundingClientRect;
-      if (originalScrollHeight) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', originalScrollHeight);
-      if (originalClientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', originalClientHeight);
     });
 
-    it('does not scroll when the newly selected row is already fully visible / not scrollable', async () => {
+    it('does not scroll when the newly selected row is already fully visible against the real scroller', async () => {
       mockConversations([{ id: 1 as ConversationId, parentId: null, at: null, title: 'Lead' }]);
       vi.mocked(client.createConversation).mockResolvedValue({ id: 99 });
 
       const scrollIntoViewSpy = vi.fn();
       const originalScrollIntoView = Element.prototype.scrollIntoView;
       Element.prototype.scrollIntoView = scrollIntoViewSpy;
-      const originalScrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
-      const originalClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
-      // Not scrollable: scrollHeight <= clientHeight.
-      Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, value: 200 });
-      Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, value: 200 });
 
       let selectedConversationId: ConversationId | undefined;
-      const { rerender } = render(
+      const { container, rerender } = render(
         <MantineProvider>
-          <Sidebar
-            data={sampleData}
-            nav={initialNav}
-            onNavigate={() => {}}
-            selectedConversationId={selectedConversationId}
-            onConversationCreated={(id) => {
-              selectedConversationId = id;
-            }}
-          />
+          <div data-testid="outer-scroller" style={{ overflowY: 'auto' }}>
+            <Sidebar
+              data={sampleData}
+              nav={initialNav}
+              onNavigate={() => {}}
+              selectedConversationId={selectedConversationId}
+              onConversationCreated={(id) => {
+                selectedConversationId = id;
+              }}
+            />
+          </div>
         </MantineProvider>,
       );
       await waitFor(() => expect(screen.getByText('Lead')).toBeTruthy());
@@ -445,24 +476,33 @@ describe('Sidebar', () => {
 
       rerender(
         <MantineProvider>
-          <Sidebar
-            data={sampleData}
-            nav={initialNav}
-            onNavigate={() => {}}
-            selectedConversationId={selectedConversationId}
-            onConversationCreated={(id) => {
-              selectedConversationId = id;
-            }}
-          />
+          <div data-testid="outer-scroller" style={{ overflowY: 'auto' }}>
+            <Sidebar
+              data={sampleData}
+              nav={initialNav}
+              onNavigate={() => {}}
+              selectedConversationId={selectedConversationId}
+              onConversationCreated={(id) => {
+                selectedConversationId = id;
+              }}
+            />
+          </div>
         </MantineProvider>,
       );
 
       await waitFor(() => expect(screen.getByText('New thread')).toBeTruthy());
+
+      const outer = container.querySelector('[data-testid="outer-scroller"]') as HTMLElement;
+      const inner = outer.firstElementChild as HTMLElement;
+      // Not scrollable: scrollHeight <= clientHeight on the real scroller.
+      mockElementGeometry(outer, { scrollHeight: 200, clientHeight: 200, top: 0, bottom: 200 });
+      mockElementGeometry(inner, { scrollHeight: 200, clientHeight: 200, top: 0, bottom: 200 });
+      const row = screen.getByTestId('thread-99');
+      mockElementGeometry(row, { scrollHeight: 0, clientHeight: 0, top: 10, bottom: 30 });
+
       expect(scrollIntoViewSpy).not.toHaveBeenCalled();
 
       Element.prototype.scrollIntoView = originalScrollIntoView;
-      if (originalScrollHeight) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', originalScrollHeight);
-      if (originalClientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', originalClientHeight);
     });
 
     it('clicking a fixture lead/plan/job row never calls onSelectConversation', async () => {

@@ -39,6 +39,20 @@ export const MAX_WIDTH = 480;
 const DEFAULT_WIDTH = 260;
 const STORAGE_KEY = 'cpd.sidebar.width';
 
+/** Walk up from an element to the nearest ancestor that actually scrolls (scrollHeight >
+ * clientHeight) and is set to clip overflow (overflow-y auto/scroll). Measuring against the
+ * actual scroller -- rather than an inner non-clipped wrapper -- is required: see K4. */
+function findScrollableAncestor(el: HTMLElement): HTMLElement | null {
+  let node: HTMLElement | null = el.parentElement;
+  while (node) {
+    const overflowY = getComputedStyle(node).overflowY;
+    const scrollable = node.scrollHeight > node.clientHeight && (overflowY === 'auto' || overflowY === 'scroll');
+    if (scrollable) return node;
+    node = node.parentElement;
+  }
+  return null;
+}
+
 function clamp(value: number): number {
   return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, value));
 }
@@ -133,8 +147,6 @@ export function Sidebar({
   const conversationTree = useTree();
   const onConversationsChangeRef = useRef(onConversationsChange);
   onConversationsChangeRef.current = onConversationsChange;
-  // Threads panel is the scrollable container -- used to reveal a newly selected row (K3).
-  const threadsPanelRef = useRef<HTMLDivElement>(null);
   const threadRowRefs = useRef(new Map<ConversationId, HTMLElement>());
 
   useEffect(() => {
@@ -166,10 +178,10 @@ export function Sidebar({
   // updates (not in the same tick as the create response) so the new row actually exists in the DOM.
   useEffect(() => {
     if (selectedConversationId === undefined) return;
-    const panel = threadsPanelRef.current;
     const row = threadRowRefs.current.get(selectedConversationId);
-    if (!panel || !row) return;
-    if (panel.scrollHeight <= panel.clientHeight) return;
+    if (!row) return;
+    const panel = findScrollableAncestor(row);
+    if (!panel) return;
     const panelRect = panel.getBoundingClientRect();
     const rowRect = row.getBoundingClientRect();
     const fullyVisible = rowRect.top >= panelRect.top && rowRect.bottom <= panelRect.bottom;
@@ -300,7 +312,6 @@ export function Sidebar({
 
   return (
     <Stack
-      ref={threadsPanelRef}
       gap={0}
       w={width}
       style={{
