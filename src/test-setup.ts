@@ -54,3 +54,53 @@ if (typeof globalThis.EventSource === 'undefined') {
     close() {}
   } as unknown as typeof EventSource;
 }
+
+// jsdom 30.1.2 does not provide window.localStorage (or the bare global
+// `localStorage` identifier) in our configuration -- confirmed with a
+// standalone probe on a clean checkout (`typeof localStorage === 'undefined'`
+// and `window.localStorage === undefined`). A minimal in-memory Storage
+// stub is sufficient for unit tests (L7b: the resizable chat panel persists
+// its width here).
+if (typeof globalThis.localStorage === 'undefined') {
+  class MemoryStorage implements Storage {
+    private store = new Map<string, string>();
+
+    get length(): number {
+      return this.store.size;
+    }
+
+    clear(): void {
+      this.store.clear();
+    }
+
+    getItem(key: string): string | null {
+      return this.store.has(key) ? this.store.get(key)! : null;
+    }
+
+    key(index: number): string | null {
+      return Array.from(this.store.keys())[index] ?? null;
+    }
+
+    removeItem(key: string): void {
+      this.store.delete(key);
+    }
+
+    setItem(key: string, value: string): void {
+      this.store.set(key, String(value));
+    }
+  }
+
+  const memoryStorage = new MemoryStorage();
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: memoryStorage,
+    configurable: true,
+    writable: true,
+  });
+  if (typeof window !== 'undefined') {
+    Object.defineProperty(window, 'localStorage', {
+      value: memoryStorage,
+      configurable: true,
+      writable: true,
+    });
+  }
+}
