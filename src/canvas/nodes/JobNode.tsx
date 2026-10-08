@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { JobCard } from '../../components/JobCard';
 import type { Job } from '../../model/types';
@@ -18,7 +19,7 @@ export interface JobNodeData {
  * click-to-select — elementsSelectable is off, so this prop is the single
  * source of truth for the selected look.
  */
-export function JobNode({ data, selected }: { data: JobNodeData; selected?: boolean }) {
+function JobNodeImpl({ data, selected }: { data: JobNodeData; selected?: boolean }) {
   return (
     <div
       aria-selected={selected ?? false}
@@ -39,3 +40,28 @@ export function JobNode({ data, selected }: { data: JobNodeData; selected?: bool
     </div>
   );
 }
+
+/** L6: memoized on exactly the fields JobCard renders, plus `selected` -- an `onRun` callback
+ * that changes identity every render (the common case, since callers tend to inline it) must
+ * NOT force a re-render on its own. */
+function jobFieldsEqual(a: Job, b: Job): boolean {
+  return (
+    a.id === b.id &&
+    a.title === b.title &&
+    a.status === b.status &&
+    a.owner === b.owner &&
+    a.profile === b.profile &&
+    a.tier === b.tier &&
+    a.attempt === b.attempt &&
+    a.artifactCount === b.artifactCount &&
+    a.steeringPending === b.steeringPending
+  );
+}
+
+export const JobNode = memo(JobNodeImpl, (prev, next) => {
+  return (
+    prev.selected === next.selected &&
+    prev.data.colorDisabled === next.data.colorDisabled &&
+    jobFieldsEqual(prev.data.job, next.data.job)
+  );
+});
