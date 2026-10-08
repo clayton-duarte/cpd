@@ -986,3 +986,34 @@ pre-substitutes the value under test cannot catch a bug in producing that value.
 failure tonight was a place where something could not fail loudly — an ignored field, an
 un-typechecked directory, a test asserting status instead of effect, and now a cast across two id
 spaces.
+---
+
+## D126 — Dependencies work; "Run" on a job auto-starts its prerequisites
+
+H15 fixed the D125 deadlock. `runPlanJob` now resolves each needed **job id** to a real **task id**
+before creating the waiting task, depth-first, auto-starting any dependency that was never started.
+Proven through the live HTTP API: creating A (`sleep 2 && echo A`) and B (`echo B`, `needs: [A]`)
+and running **only B** produced an order file containing `A` then `B`, both `done`. Previously B sat
+at `draft` forever.
+
+**Decision confirmed in implementation:** pressing Run on a leaf job runs its prerequisites first.
+`needs` stays job ids in the document and API; translation happens at task creation.
+`JobDependencyCycleError` guards cycles so a cyclic graph fails loudly instead of hanging the
+daemon.
+
+**On the remaining `as unknown as TaskId` casts:** two survive, and they are *not* the D125 defect.
+They convert a **stored `taskId` string** back into the branded `TaskId` type — same id space,
+string-to-brand. The bug was casting a **job id** into a `TaskId`, bridging two *different* id
+spaces. The auto-start path uses the real `depTaskId` with no cast at all. Accepted as-is;
+tightening the brand round-trip is cosmetic and not worth churn tonight.
+
+**Sabotage lesson — I nearly cleared this on a false negative.** My first probe reintroduced the bug
+on the `needJob.taskId` branch and all 9 tests still passed. That branch is only reached when a
+dependency is *already started*; every test exercises the auto-start path, so I had sabotaged code
+the tests never run. Re-aimed at the live path (`taskIds.push(depTaskId)`) and **3 of 9 tests
+failed**.
+
+Rule: **when sabotage does not fail a test, first prove the sabotage was reachable.** A passing
+suite under sabotage means one of two very different things — the tests are weak, or the mutated
+line is dead on that path — and they demand opposite responses. Checking which cost one extra run
+and prevented me from either merging blind or wrongly blaming the builder's tests.
