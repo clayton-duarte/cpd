@@ -17,6 +17,7 @@ import {
   runPlanJob,
   abortPlanJob,
   onJobOutput,
+  createSession,
   UnknownConversationError,
   GraphError,
   DuplicateJobIdError,
@@ -148,6 +149,25 @@ async function main(): Promise<void> {
     if (req.method === "GET" && url.pathname === "/api/conversations") {
       const conversations = await listConversations(engine);
       sendJson(res, 200, { conversations });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/conversation") {
+      const raw = await readBody(req);
+      let title: string | undefined;
+      try {
+        const body = raw.trim() === "" ? {} : (JSON.parse(raw) as { title?: unknown });
+        if (body.title !== undefined) {
+          if (typeof body.title !== "string") throw new Error("title must be a string");
+          title = body.title;
+        }
+      } catch {
+        sendJson(res, 400, { error: "Expected JSON body { title?: string }" });
+        return;
+      }
+      const result = await createSession(engine, title);
+      void pushConversations();
+      sendJson(res, 200, result);
       return;
     }
 
