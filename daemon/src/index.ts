@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { getMessages, openEngine, sseFrame, submitPrompt, ctx, type Engine } from "./engine.ts";
+import { acquireLock, releaseLock } from "./lock.ts";
 
 const PORT = Number(process.env.CPD_DAEMON_PORT ?? 4317);
 const DB_PATH = process.env.CPD_DB ?? ".cpd/cpd.sqlite";
@@ -22,6 +23,13 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 async function main(): Promise<void> {
   await mkdir(dirname(DB_PATH), { recursive: true });
 
+  try {
+    acquireLock(DB_PATH);
+  } catch (error) {
+    console.error((error as Error).message);
+    process.exit(1);
+  }
+
   const engine: Engine = await openEngine({ dbPath: DB_PATH });
 
   // SSE fan-out: every connected client gets pushed the full transcript whenever it changes.
@@ -38,9 +46,11 @@ async function main(): Promise<void> {
   // unavailable at runtime we fall back to a 500ms poll (see catch below) that only pushes when
   // the transcript actually changed, as the card allows.
   let unsubscribe: (() => void) | undefined;
+  let viewState: Awaited<ReturnType<Engine["root"]["viewState"]>> | undefined;
   let pollTimer: NodeJS.Timeout | undefined;
   try {
     const state = await engine.root.viewState(ctx);
+    viewState = state;
     unsubscribe = state.subscribe(() => {
       void pushMessages();
     });
@@ -129,14 +139,17 @@ async function main(): Promise<void> {
     for (const client of sseClients) client.end();
     sseClients.clear();
     unsubscribe?.();
+    viewState?.dispose();
     if (pollTimer) clearInterval(pollTimer);
     server.close();
     await engine.close();
+    releaseLock(DB_PATH);
     process.exit(0);
   }
 
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("exit", () => releaseLock(DB_PATH));
 }
 
 main().catch((error) => {
