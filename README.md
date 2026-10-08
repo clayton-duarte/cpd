@@ -42,7 +42,26 @@ configuration anywhere.
   `$HOME/.pi/agent/auth.json`).
 - `VITE_CPD_API` — override the API base used by the frontend.
 - `CPD_DAEMON_URL` — override the daemon URL the Vite dev proxy targets
-  (defaults to `http://localhost:4317`).
+  (defaults to `http://localhost:$CPD_DAEMON_PORT`).
+
+## Reviewing a branch (`review.sh`)
+
+```bash
+./review.sh                      # serve the current branch
+./review.sh integration/phase-b  # serve a specific ref
+```
+
+Starts the daemon, waits for it to answer `/api/health`, then starts Vite.
+Both processes are torn down together on exit or Ctrl-C. If the daemon never
+comes up, the script prints an error and exits non-zero instead of silently
+serving a backend-less app.
+
+| Env var           | Default                              | Meaning                              |
+| ------------------ | ------------------------------------ | ------------------------------------- |
+| `CPD_REVIEW_PORT`  | `4000`                                | Port `review.sh` serves Vite on       |
+| `CPD_DAEMON_PORT`  | `4317`                                | Port the daemon listens on            |
+| `CPD_DEV_PORT`     | `5173`                                | Port plain `pnpm dev` serves on       |
+| `CPD_DAEMON_URL`   | `http://localhost:$CPD_DAEMON_PORT`  | Proxy target for the `/api` dev proxy |
 
 ## License
 

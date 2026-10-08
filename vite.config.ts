@@ -23,9 +23,10 @@ export default defineConfig({
     include: ['elkjs/lib/elk-api.js'],
   },
   server: {
+    port: Number(process.env.CPD_DEV_PORT ?? 5173),
     proxy: {
       '/api': {
-        target: process.env.CPD_DAEMON_URL ?? 'http://localhost:4317',
+        target: process.env.CPD_DAEMON_URL ?? `http://localhost:${process.env.CPD_DAEMON_PORT ?? 4317}`,
         changeOrigin: true,
       },
     },
