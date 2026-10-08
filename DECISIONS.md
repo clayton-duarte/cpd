@@ -910,3 +910,39 @@ dependency, and the standing rule is to use Mantine components as-is with zero c
 
 Updates continue to arrive over the existing SSE `{type:"plan"}` frame (D117) — subscribe, never
 poll, and never open a second EventSource.
+---
+
+## D124 — Fixture navigation and real conversations are two disconnected trees
+
+H13 landed the UI controls: a Mantine `Modal` for New job, a run `ActionIcon` behind an **optional**
+`onRun` prop, and `createJob`/`runJob`/`deleteJob` clients. Verified in the browser — the modal is
+stock Mantine, Create is correctly disabled on a blank title, and a failure renders **visibly** in
+the modal rather than vanishing into the console.
+
+**But pressing Create returned `404 Not Found`.** Instrumenting `window.fetch` in the live GUI showed
+the canvas requesting **`/api/plan?conversation=w3`** — `w3` is a *fixture workflow id* from
+`sampleData`, not a conversation, so the daemon correctly 404s. Clicking a real thread under THREADS
+switches the chat but leaves the canvas on the fixture plan.
+
+Root cause in `App.tsx`: `nav.planId` is resolved against `sampleData.workflows`, then passed to
+`usePlan` via `as unknown as ConversationId` on the strength of "D112: a plan IS a conversation".
+That holds for real conversations and is false for fixture ids. **The error was in my D112
+application, not in H13's code** — H13 is correct and merged; it is simply unreachable.
+
+**Decision:** keep both trees and join them at selection time (H14). Selecting a thread points the
+canvas at that conversation. `sampleData` continues to drive the project/plan levels and the
+Gallery — it is the design reference and deleting it would cost the fixture-only visual tests.
+Rejected converting fixtures into fake conversations: that would manufacture plausible-looking data
+with no daemon behind it, violating D115.
+
+**Decision (id representation):** treat `nav.planId` as a conversation id **only when it parses as a
+positive integer**; otherwise the level is fixture-backed and issues **no request**, rendering an
+empty canvas. This removes the `as unknown as` cast and makes the fixture case explicit rather than
+an accidental 404.
+
+**Evidence rule restated for H14:** a job reaching `done` is not proof it ran — a commandless job
+also reaches `done` (D122). The card requires showing the **marker file contents** from a job
+created and run through the GUI.
+
+This is D123 one level deeper: the capability existed, the controls existed, and it still could not
+be driven by a human. **Nothing counts until someone can reach it through the product.**
