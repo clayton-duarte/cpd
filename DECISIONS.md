@@ -1051,3 +1051,44 @@ the shipping product.
 (D106); `watch()` serves a single consumer; compaction triggers late; no layout-regression tests; no
 ESLint; `docs/engine-plan.md` is stale; commit authorship still carries the user's real name
 (D119) — rewriting published history is the user's call.
+---
+
+## D128 — Crash resumption works; two false results on the way to proving it
+
+Jobs survive losing the daemon. Verified: started `sleep 25 && echo SURVIVED3`, `kill -9`ed the
+daemon 5s in, **also killed the orphaned child shell**, confirmed the marker was empty and no
+process could finish the work. Restart -> task `running` -> `done`, marker `SURVIVED3`. This is
+pi-durable's central promise and it holds. H16 cards the regression test, since **nothing guarded
+it**.
+
+Getting there produced two wrong answers, both worth recording.
+
+**False positive #1 — the orphan finishes the work for you.** My first test killed only the daemon.
+The marker appeared and I nearly recorded "durability proven". But `sleep 18 && echo ...` had been
+spawned as a **child shell**, which outlived the daemon and wrote the marker on its own. The side
+effect would have appeared with no resumption whatsoever. A durability test must kill **the whole
+work-performing tree**, or it proves nothing. Side-effect proof (D122) is necessary, not sufficient:
+you must also establish that nothing *else* could have produced the effect.
+
+**False negative #2 — thirteen stale daemons.** The corrected run reported `failed` with no retry,
+which looked like a real durability defect. It was not. `pkill -f 'cpd/daemon'` never matched the
+actual processes (`node --watch --experimental-strip-types daemon/src/index.ts`), so **13 daemons
+from earlier tonight were still alive**. My "restarted" daemon hit the sqlite lock and exited, while
+`/api/health` answered cheerfully **from a different, older process**. I was reading one daemon's
+health and another daemon's database.
+
+Fixed by matching on `daemon/src/index.ts`, killing with `-9`, and running the test daemon **without
+`--watch`** so the process tree is exactly one process.
+
+**Decisions:**
+- Test and debug daemons run **without `--watch`**. The watch supervisor survives inner-process
+  death and turns a crash into a silent zombie.
+- `GET /api/health` must report the daemon's **pid and sqlite path** (H16). A health endpoint that
+  cannot tell you *which* daemon answered is a liveness check that actively misleads during
+  restarts.
+
+**Lesson, and the strongest one tonight: a green signal is only as trustworthy as your confidence
+about who produced it.** Three times now — the sabotage that hit dead code (D126), the orphan shell,
+the stale daemon — the output was real and my attribution was wrong. The discipline that caught all
+three is the same: before believing a result, prove the thing you think produced it was actually
+the thing that did.
