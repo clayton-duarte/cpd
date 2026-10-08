@@ -22,6 +22,14 @@ export default defineConfig({
     // Rollup's CJS interop and never hits this).
     include: ['elkjs/lib/elk-api.js'],
   },
+  server: {
+    proxy: {
+      '/api': {
+        target: process.env.CPD_DAEMON_URL ?? 'http://localhost:4317',
+        changeOrigin: true,
+      },
+    },
+  },
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test-setup.ts'],

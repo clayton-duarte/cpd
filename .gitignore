@@ -5,5 +5,8 @@ dist/
 .env
 .env.*
 
+# SQLite transcript DB (conversation content) — repo is public, never commit.
+.cpd/
+
 # Planning, requirements and decision log are private and never committed.
 docs/

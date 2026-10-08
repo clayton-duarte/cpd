@@ -18,6 +18,32 @@ pnpm install
 pnpm dev
 ```
 
+## Running locally
+
+Prerequisite: logged into GitHub Copilot via `pi` (the daemon reads
+`~/.pi/agent/auth.json`).
+
+```bash
+pnpm install
+pnpm dev:all
+```
+
+This starts the daemon and the Vite dev server together. The app is served on
+Vite's port; the daemon listens on port 4317. The browser talks to `/api`,
+which Vite proxies to the daemon, so there is a single origin and no CORS
+configuration anywhere.
+
+### Env knobs
+
+- `CPD_DAEMON_PORT` — port the daemon listens on.
+- `CPD_DB` — path to the SQLite transcript DB (defaults under `.cpd/`, which
+  is gitignored — it holds conversation content and must never be committed).
+- `CPD_PI_AUTH` — path to the `pi` auth file (defaults to
+  `$HOME/.pi/agent/auth.json`).
+- `VITE_CPD_API` — override the API base used by the frontend.
+- `CPD_DAEMON_URL` — override the daemon URL the Vite dev proxy targets
+  (defaults to `http://localhost:4317`).
+
 ## License
 
 MIT
