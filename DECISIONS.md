@@ -1309,3 +1309,43 @@ before building any component, list the shipped inventory. We previously hand-bu
 tree expand/collapse logic that `Tree` + `useTree` already shipped, then paid again to delete it. A
 card that describes UI in raw-CSS terms invites exactly that waste — **cards must name the component,
 not the pixels.**
+---
+
+## D135 — review.sh was mine and undocumented; ports are env vars now
+
+User: *"wtf is review.sh? set ports as env vars"*. Both halves were fair.
+
+`review.sh` was added by **me** in `8a733e5` ("Phase B: the canvas stops lying") and **never
+documented or mentioned** — not in the README, not to the user. They discovered it only because I
+pointed them at port 4000. **A tool I invent for my own workflow and leave undocumented in a shared
+repo is indistinguishable from cruft.**
+
+It had two real defects beyond being a surprise:
+1. `PORT=4000` hardcoded — the only baked-in port literal in the repo. Everything else already used
+   env vars (`CPD_DAEMON_PORT`, `CPD_DAEMON_URL`).
+2. **It started Vite only.** No daemon, so it served an app with nothing behind `/api`: empty tree,
+   looks broken. This is what the user actually hit.
+
+**J4 (merged, `c504b5e`):** `CPD_DAEMON_PORT` (4317), `CPD_REVIEW_PORT` (4000), `CPD_DEV_PORT`
+(5173), and `CPD_DAEMON_URL` **derived from** `CPD_DAEMON_PORT` rather than repeating the literal —
+so changing the daemon port cannot desync the proxy. `review.sh` now starts both processes, polls
+`/api/health`, and **exits non-zero rather than serving a backend-less app**. Documented in README.
+Verified live on non-default ports (4100/4400) with data flowing through the proxy.
+
+**J5 (merged, `d4a9dbf`) — the asymmetry defect.** J4's teardown killed the daemon reliably but
+**left Vite running after Ctrl-C**, leaving exactly the dataless app on the review port that J4
+existed to prevent. Cause: `pnpm dev &` captures *pnpm's wrapper*; the real `vite/bin/vite.js` is a
+**grandchild** that escapes the process-group kill. The daemon only survived because J4 added an
+explicit `pkill` fallback — and no equivalent existed for Vite. **The bug was in the half the author
+didn't think about twice: knowing a hazard and fixing it on one side only is worse than not knowing,
+because the surviving case looks deliberate.** Fix is port-scoped (`pkill -f "vite --port $PORT"`,
+never bare `pkill vite`) plus an `lsof` sweep. Verified: after SIGINT, 0 daemons, 0 vite, both ports
+free.
+
+**Two false alarms I raised against myself during this review, both my own environment:**
+- "Conversations are gone" — the daemon was simply dead (I had `pkill`ed it); the DB had *more*
+  conversations than any backup. **I nearly restored a stale backup over good data.**
+- "Teardown is broken, 2 orphans survived" — my `pgrep -f 'review.sh'` matched my own test harness,
+  so I signalled the wrong PID. Signalling the real PID showed clean teardown. The *actual* Vite bug
+  was found only after that correction. **Confirm process state with `lsof -nP -iTCP:<port>`, not by
+  trusting that a kill landed.**
