@@ -354,3 +354,36 @@ cleanly on SIGTERM — no stale-lock refusal on restart.
 
 **The backend for the navigation tree is now real.** `parentId`/`at` are exactly what the sidebar
 needs; no UI consumes it yet.
+---
+
+## D108 — The real conversation tree renders ALONGSIDE the fixture model, not merged into it
+
+**The mismatch.** `src/model/navigation.ts` encodes a fixed three-level hierarchy
+(`leads -> plans -> jobs`) keyed by **string** ids. `/api/conversations` returns a tree of
+**arbitrary depth** keyed by **numeric** ids, where a fork of a fork is just another node. They do
+not line up. `src/model/types.ts` already says so at the top: *"PROVISIONAL … not a contract.
+Expect churn."*
+
+**Chosen:** for H1, render the real tree as its own additive sidebar section. `navigation.ts`,
+`types.ts`, the canvas, and the fixtures stay untouched. Selecting a thread changes **only** the
+chat transcript and must not drive canvas navigation.
+
+**Why I did not reconcile them.** Collapsing the fixture model into the real one answers a question
+I have not decided and did not want decided silently inside a wiring card: **is a "plan" a
+conversation, or does a plan merely *have* one?**
+
+- If a plan **is** a conversation, the three canvas levels become a view over conversation depth,
+  and `navigation.ts` mostly disappears.
+- If a plan **has** a conversation, `Workflow` keeps its own identity and gains a
+  `conversationId`, and the canvas is unaffected.
+
+The second is less disruptive; the first is closer to what the engine actually gives us. **This is
+the most consequential open design question in CPD right now and it is yours to make.** Keeping the
+two trees side by side makes the eventual merge a deliberate, reviewable step rather than a side
+effect of a wiring card.
+
+**Cost of this choice:** the sidebar temporarily shows two trees — a real "Threads" section and the
+fixture hierarchy. That is intentional and ugly on purpose; it should not survive the decision above.
+
+**Also specified:** conversation ids stay numeric end to end, stringified only at Mantine `Tree`'s
+`value` boundary and parsed back on selection, so a stringified id never reaches the API.
