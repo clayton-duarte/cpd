@@ -1092,3 +1092,40 @@ about who produced it.** Three times now — the sabotage that hit dead code (D1
 the stale daemon — the output was real and my attribution was wrong. The discipline that caught all
 three is the same: before believing a result, prove the thing you think produced it was actually
 the thing that did.
+---
+
+## D129 — Resumption is now guarded; `/api/health` identifies which daemon answered
+
+PR #43 (H16) landed `daemon/src/durability.integration.test.ts` plus the stale-daemon fixes.
+Main: 246 tests (180 app + 66 daemon), typecheck clean, build green.
+
+**Verifying the test took three attempts, and the first two verdicts were both wrong.**
+
+My card demanded the test fail when the second harness does not `resume()`. **It passed without
+it.** By my own D126 rule I did not accept that at face value, and I did not blame the builder
+either — a passing suite under sabotage means either weak tests *or* an unreachable mutation.
+
+Discriminator: delete the second harness entirely and just wait 4s after the crash.
+`ORPHAN_CHECK marker_exists=false` — the marker does **not** appear, and the test fails. So no
+orphaned `sleep 1` shell is completing the work (the D128 trap is genuinely absent), and the job
+only finishes once a second harness opens over the same sqlite file. Pointing that second harness at
+a *different* sqlite file also fails the test. **The test does prove resumption.**
+
+Conclusion: `waitForTask()` resumes implicitly, so the explicit `second.harness.resume()` is
+redundant — removing it does not disable resumption. My card's suggested falsification targeted a
+no-op line. The *test* was right and my *instruction for checking it* was wrong. Left as-is:
+`resume()` is harmless, matches the documented recipe, and mirrors the daemon's real boot path.
+
+**Stale-daemon fixes verified live:**
+```
+health: {"ok":true,"conversationId":1,"pid":81974,"db":".cpd/cpd.sqlite"}   (pid matches the live daemon)
+second: cpd-daemon: another daemon (pid 81974) already owns .cpd/cpd.sqlite. This process
+        (pid 82112) is exiting without starting -- the port may still be served by pid 81974.
+```
+That is precisely the trap that produced D128's false negative, now self-announcing. No auto-kill
+or lock-stealing was added.
+
+**Lesson: when a falsification probe comes back clean, the probe is a suspect too.** Three times
+tonight the mutation was the problem, not the code: dead-code sabotage (D126), an orphan shell
+(D128), and now a redundant line (D129). "Make the test fail" is only evidence once you have
+confirmed the thing you disabled was load-bearing.
