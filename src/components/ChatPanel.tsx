@@ -39,6 +39,7 @@ export function ChatPanel({ conversationId, onForked }: ChatPanelProps) {
   const [inFlight, setInFlight] = useState(false);
   const [unanswered, setUnanswered] = useState<{ reason: string; detail?: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // The optimistic message is cleared once the authoritative transcript
   // actually contains it -- clearing it in a `finally` instead would make it
@@ -150,16 +151,21 @@ export function ChatPanel({ conversationId, onForked }: ChatPanelProps) {
         )}
         <Group gap="var(--space-2)" wrap="nowrap" align="flex-end">
           <Textarea
+            ref={textareaRef}
             style={{ flex: 1 }}
             autosize
             minRows={1}
             maxRows={6}
-            disabled={inFlight}
             value={draft}
             onChange={(e) => setDraft(e.currentTarget.value)}
             onKeyDown={onKeyDown}
           />
-          <ActionIcon size="lg" onClick={() => void submit()} disabled={inFlight} c="var(--on-solid)">
+          <ActionIcon
+            size="lg"
+            onClick={() => void submit()}
+            disabled={!draft.trim() || inFlight}
+            c="var(--on-solid)"
+          >
             {inFlight ? <Loader size="xs" /> : '→'}
           </ActionIcon>
         </Group>

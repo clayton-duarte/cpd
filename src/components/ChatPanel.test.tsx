@@ -56,7 +56,7 @@ describe('ChatPanel', () => {
     expect(sendPromptMock).toHaveBeenCalledWith('line one', undefined);
   });
 
-  it('disables the textarea while a prompt is in flight', async () => {
+  it('disables the send button (not the textarea) while a prompt is in flight', async () => {
     mockStream([]);
     let resolvePrompt: (value: { status: 'done' }) => void = () => {};
     vi.mocked(client.sendPrompt).mockReturnValue(
@@ -67,13 +67,84 @@ describe('ChatPanel', () => {
 
     renderPanel();
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    const sendButton = screen.getByRole('button') as HTMLButtonElement;
     fireEvent.change(textarea, { target: { value: 'wait for it' } });
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
-    await waitFor(() => expect(textarea.disabled).toBe(true));
+    await waitFor(() => expect(sendButton.disabled).toBe(true));
+    expect(textarea.disabled).toBe(false);
 
     resolvePrompt({ status: 'done' });
-    await waitFor(() => expect(textarea.disabled).toBe(false));
+    // Draft was cleared on submit, so the button stays disabled for emptiness once the reply
+    // lands -- typing fresh text re-enables it, proving it's no longer gated on `inFlight`.
+    await waitFor(() => expect(client.sendPrompt).toHaveBeenCalled());
+    fireEvent.change(textarea, { target: { value: 'another message' } });
+    expect(sendButton.disabled).toBe(false);
+  });
+
+  it('disables the send button when the draft is empty, enables it once text is typed', () => {
+    mockStream([]);
+    renderPanel();
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    const sendButton = screen.getByRole('button') as HTMLButtonElement;
+
+    expect(sendButton.disabled).toBe(true);
+
+    fireEvent.change(textarea, { target: { value: 'hello' } });
+    expect(sendButton.disabled).toBe(false);
+
+    fireEvent.change(textarea, { target: { value: '   ' } });
+    expect(sendButton.disabled).toBe(true);
+  });
+
+  // A: composer must not be blurred by submitting.
+  it('the composer keeps focus immediately after submit (A)', () => {
+    mockStream([]);
+    vi.mocked(client.sendPrompt).mockReturnValue(new Promise(() => {}));
+
+    renderPanel();
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    textarea.focus();
+    fireEvent.change(textarea, { target: { value: 'hello' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    expect(document.activeElement).toBe(textarea);
+  });
+
+  // B: composer must still hold focus after the async reply lands, not just synchronously.
+  it('the composer keeps focus after the reply arrives (B)', async () => {
+    mockStream([]);
+    let resolvePrompt: (value: { status: 'done' }) => void = () => {};
+    vi.mocked(client.sendPrompt).mockReturnValue(
+      new Promise((resolve) => {
+        resolvePrompt = resolve;
+      }),
+    );
+
+    renderPanel();
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    textarea.focus();
+    fireEvent.change(textarea, { target: { value: 'hello' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    resolvePrompt({ status: 'done' });
+    await waitFor(() => expect(client.sendPrompt).toHaveBeenCalled());
+
+    expect(document.activeElement).toBe(textarea);
+  });
+
+  // C: removing `!e.shiftKey` from onKeyDown must turn this red (regression guard for the
+  // already-correct Enter/Shift+Enter behavior -- see the LEAD CORRECTION on the L7 card).
+  it('Shift+Enter does not submit (C)', () => {
+    mockStream([]);
+    const sendPromptMock = vi.mocked(client.sendPrompt).mockResolvedValue({ status: 'done' });
+
+    renderPanel();
+    const textarea = screen.getByRole('textbox');
+    fireEvent.change(textarea, { target: { value: 'line one' } });
+    fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true });
+
+    expect(sendPromptMock).not.toHaveBeenCalled();
   });
 
   it('renders an Alert with reason as title and detail as body for an unanswered response', async () => {
