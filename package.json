@@ -7,7 +7,7 @@
     "dev": "vite",
     "dev:all": "concurrently -n daemon,web -c cyan,magenta \"pnpm daemon\" \"pnpm dev\"",
     "build": "tsc -b && vite build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc -b",
     "test": "vitest run && pnpm --filter @cpd/daemon test",
     "test:watch": "vitest",
     "daemon": "node --watch --experimental-strip-types daemon/src/index.ts"

@@ -8,9 +8,13 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "noEmit": true,
     "resolveJsonModule": true,
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "composite": true,
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "outDir": "./node_modules/.tmp/daemon-out",
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.daemon.tsbuildinfo"
   },
   "include": ["src/**/*.ts"]
 }
