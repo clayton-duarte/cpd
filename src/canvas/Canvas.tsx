@@ -11,21 +11,14 @@ import type { LayoutResult } from '../layout/types';
 import { buildGraph } from '../layout/toGraph';
 import { elkLayout } from '../layout/elk';
 import { JobNode } from './nodes/JobNode';
-import { SessionFrameNode } from './nodes/SessionFrameNode';
 import { WorkflowHeaderNode } from './nodes/WorkflowHeaderNode';
-import { WaveGroupNode } from './nodes/WaveGroupNode';
-import { LeadNode } from './nodes/LeadNode';
 import { edgeStyle } from './edges';
-import { w } from '../theme';
 
 const JOB_CARD_SIZE = { width: 220, height: 96 };
 
 const nodeTypes = {
   job: JobNode,
-  sessionFrame: SessionFrameNode,
   workflowHeader: WorkflowHeaderNode,
-  waveGroup: WaveGroupNode,
-  lead: LeadNode,
 };
 
 export function Canvas({ data }: { data: CpdData }): JSX.Element {
@@ -33,10 +26,6 @@ export function Canvas({ data }: { data: CpdData }): JSX.Element {
 
   const graph = useMemo(() => buildGraph(data, JOB_CARD_SIZE), [data]);
   const jobById = useMemo(() => new Map(data.jobs.map((j) => [j.id, j] as const)), [data]);
-  const sessionById = useMemo(
-    () => new Map(data.sessions.map((s) => [s.id, s] as const)),
-    [data],
-  );
   const workflowById = useMemo(
     () => new Map(data.workflows.map((wf) => [wf.id, wf] as const)),
     [data],
@@ -61,7 +50,7 @@ export function Canvas({ data }: { data: CpdData }): JSX.Element {
           alignItems: 'center',
           justifyContent: 'center',
           height: '100%',
-          color: w(0.45),
+          color: 'var(--fg-faint)',
         }}
       >
         Laying out…
@@ -74,7 +63,7 @@ export function Canvas({ data }: { data: CpdData }): JSX.Element {
       const pos = positions[layoutNode.id];
       if (!pos) return null;
 
-      const job = jobById.get(layoutNode.id);
+      const job = layoutNode.jobId ? jobById.get(layoutNode.jobId) : undefined;
       if (job) {
         return {
           id: layoutNode.id,
@@ -84,38 +73,6 @@ export function Canvas({ data }: { data: CpdData }): JSX.Element {
           data: { job },
           draggable: false,
           connectable: false,
-        };
-      }
-
-      if (layoutNode.id.startsWith('session:')) {
-        const sessionId = layoutNode.id.slice('session:'.length);
-        const session = sessionById.get(sessionId);
-        return {
-          id: layoutNode.id,
-          type: 'sessionFrame',
-          position: { x: pos.x, y: pos.y },
-          parentId: layoutNode.parentId,
-          style: { width: pos.width, height: pos.height },
-          data: { session },
-          draggable: false,
-          connectable: false,
-          selectable: false,
-        };
-      }
-
-      if (layoutNode.id.startsWith('lead:')) {
-        const sessionId = layoutNode.id.slice('lead:'.length);
-        const session = sessionById.get(sessionId);
-        if (!session) return null;
-        return {
-          id: layoutNode.id,
-          type: 'lead',
-          position: { x: pos.x, y: pos.y },
-          parentId: layoutNode.parentId,
-          data: { session },
-          draggable: false,
-          connectable: false,
-          selectable: false,
         };
       }
 
@@ -129,20 +86,6 @@ export function Canvas({ data }: { data: CpdData }): JSX.Element {
           parentId: layoutNode.parentId,
           style: { width: pos.width, height: pos.height },
           data: { workflow },
-          draggable: false,
-          connectable: false,
-          selectable: false,
-        };
-      }
-
-      if (layoutNode.id.startsWith('wave:')) {
-        return {
-          id: layoutNode.id,
-          type: 'waveGroup',
-          position: { x: pos.x, y: pos.y },
-          parentId: layoutNode.parentId,
-          style: { width: pos.width, height: pos.height },
-          data: {},
           draggable: false,
           connectable: false,
           selectable: false,
@@ -166,16 +109,18 @@ export function Canvas({ data }: { data: CpdData }): JSX.Element {
     .filter((n): n is Node => n !== null);
 
   const edges: Edge[] = graph.edges.map((e) => {
-    const sourceJob = jobById.get(e.source);
-    const targetJob = jobById.get(e.target);
+    const sourceJobId = graph.nodes.find((n) => n.id === e.source)?.jobId;
+    const targetJobId = graph.nodes.find((n) => n.id === e.target)?.jobId;
+    const sourceJob = sourceJobId ? jobById.get(sourceJobId) : undefined;
+    const targetJob = targetJobId ? jobById.get(targetJobId) : undefined;
     const dashed = sourceJob && targetJob ? edgeStyle(sourceJob, targetJob) === 'dashed' : false;
     return {
       id: e.id,
       source: e.source,
       target: e.target,
-      style: { stroke: w(0.25) },
+      style: { stroke: 'var(--line-strong)' },
       type: 'default',
-      ...(dashed ? { style: { stroke: w(0.25), strokeDasharray: '4 4' } } : {}),
+      ...(dashed ? { style: { stroke: 'var(--line-strong)', strokeDasharray: '4 4' } } : {}),
     } satisfies Edge;
   });
 
@@ -191,7 +136,7 @@ export function Canvas({ data }: { data: CpdData }): JSX.Element {
       fitView
       onlyRenderVisibleElements
     >
-      <Background color={w(0.08)} />
+      <Background color="var(--line)" />
       <Controls />
     </ReactFlow>
   );

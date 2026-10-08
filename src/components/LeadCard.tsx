@@ -1,38 +1,29 @@
-import { Badge, Card, Group, Text } from '@mantine/core';
-import { IconMessage } from '@tabler/icons-react';
-import type { Session } from '../model/types';
-import { TOKENS, w } from '../theme';
+import { Badge, Group, Text } from '@mantine/core';
+import { CardShell } from './CardShell';
+import type { LeadCardData } from '../model/levels';
 
 export interface LeadCardProps {
-  session: Session;
+  lead: LeadCardData;
+  onClick?: () => void;
 }
 
-/** A lead is not a job: no status icon, no attempt. */
-export function LeadCard({ session }: LeadCardProps) {
+/** Leads-level card: name, tier code, and a count of its plans (counts only). */
+export function LeadCard({ lead, onClick }: LeadCardProps) {
   return (
-    <Card
-      withBorder
-      padding="sm"
-      w={220}
-      style={{
-        backgroundColor: 'rgba(230,230,230,.03)',
-        borderColor: w(0.25),
-        borderStyle: 'solid',
-        borderWidth: 1,
-      }}
-    >
-      <Group justify="space-between" wrap="nowrap">
-        <Group gap="xs" wrap="nowrap">
-          <IconMessage size={16} color={TOKENS.white} />
-          <Text size="sm">Opus</Text>
+    <div onClick={onClick} style={{ cursor: onClick ? 'pointer' : undefined }}>
+      <CardShell borderColor="var(--line-strong)">
+        <Group justify="space-between" wrap="nowrap" gap="var(--gap)">
+          <Text size="sm" fw={600} c="var(--fg-bright)" truncate style={{ minWidth: 0 }}>
+            {lead.name}
+          </Text>
+          <Badge color="dark" variant="light" c="var(--fg-bright)">
+            {lead.leadTier}
+          </Badge>
         </Group>
-        <Badge color="dark" variant="light" c={TOKENS.white}>
-          {session.leadTier}
-        </Badge>
-      </Group>
-      <Text size="xs" c={w(0.6)} mt="xs">
-        {session.name}
-      </Text>
-    </Card>
+        <Text size="xs" c="var(--fg-faint)" mt="var(--gap)">
+          {lead.planCount} {lead.planCount === 1 ? 'plan' : 'plans'}
+        </Text>
+      </CardShell>
+    </div>
   );
 }

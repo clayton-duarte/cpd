@@ -3,10 +3,9 @@ import { render, screen } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { WorkflowHeader } from './WorkflowHeader';
 import { sampleData } from '../fixtures/sample';
-import { FLOW_ORDER } from '../model/derive';
+import type { Workflow } from '../model/types';
 
-function renderHeader() {
-  const workflow = sampleData.workflows[0];
+function renderWorkflow(workflow: Workflow) {
   render(
     <MantineProvider>
       <WorkflowHeader workflow={workflow} />
@@ -16,37 +15,59 @@ function renderHeader() {
 }
 
 describe('WorkflowHeader', () => {
-  it('renders all five flow labels', () => {
-    renderHeader();
-    for (const label of FLOW_ORDER) {
-      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
-    }
+  it('renders ticket key, title, branch and PR when all are present', () => {
+    const workflow = sampleData.workflows[0];
+    renderWorkflow(workflow);
+
+    expect(screen.getByText(workflow.ticket!.key)).toBeTruthy();
+    expect(screen.getByText(workflow.ticket!.title)).toBeTruthy();
+    expect(screen.getByText(workflow.branch!.name)).toBeTruthy();
+    expect(screen.getByText(`#${workflow.pr!.number}`)).toBeTruthy();
   });
 
-  it('marks exactly one label as current', () => {
-    renderHeader();
-    const current = screen.getAllByTestId('flow-label-current');
-    expect(current).toHaveLength(1);
-    expect(current[0].textContent).toContain('Dispatch');
+  it('uses the ticket title over the lead title when a ticket exists', () => {
+    const workflow = sampleData.workflows[0];
+    renderWorkflow(workflow);
+
+    expect(screen.queryByText(workflow.title)).toBeNull();
+    expect(screen.getByText(workflow.ticket!.title)).toBeTruthy();
   });
 
-  it('contains Dispatch for phase combat and no engine phase string', () => {
-    const { container } = render(
-      <MantineProvider>
-        <WorkflowHeader workflow={sampleData.workflows[0]} />
-      </MantineProvider>,
-    );
-    expect(container.textContent).toContain('Dispatch');
-    expect(container.textContent).not.toMatch(/combat|main1|main2|upkeep|draw(?!er)|\bend\b/);
-  });
-
-  it('shows #128 for pr and #2 for attempt', () => {
-    renderHeader();
+  it('renders attempt badge when attempt >= 2', () => {
+    const workflow = sampleData.workflows[0];
+    renderWorkflow(workflow);
     expect(
-      screen.getByText((_, el) => el?.tagName === 'P' && el.textContent === '#128'),
+      screen.getByText((_, el) => el?.textContent === `#${workflow.attempt}` && el.children.length === 0),
     ).toBeTruthy();
-    expect(
-      screen.getByText((_, el) => el?.textContent === '#2' && el.children.length === 0),
-    ).toBeTruthy();
+  });
+
+  it('links carry correct href and rel', () => {
+    const workflow = sampleData.workflows[0];
+    renderWorkflow(workflow);
+
+    const ticketLink = screen.getByText(workflow.ticket!.key).closest('a');
+    expect(ticketLink?.getAttribute('href')).toBe(workflow.ticket!.url);
+    expect(ticketLink?.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(ticketLink?.getAttribute('target')).toBe('_blank');
+
+    const branchLink = screen.getByText(workflow.branch!.name).closest('a');
+    expect(branchLink?.getAttribute('href')).toBe(workflow.branch!.url);
+    expect(branchLink?.getAttribute('rel')).toBe('noopener noreferrer');
+
+    const prLink = screen.getByText(`#${workflow.pr!.number}`).closest('a');
+    expect(prLink?.getAttribute('href')).toBe(workflow.pr!.url);
+    expect(prLink?.getAttribute('rel')).toBe('noopener noreferrer');
+  });
+
+  it('renders only the title, with no ticket/branch/PR slots, when all are absent', () => {
+    const workflow = sampleData.workflows[1];
+    expect(workflow.ticket).toBeUndefined();
+    expect(workflow.branch).toBeUndefined();
+    expect(workflow.pr).toBeUndefined();
+
+    renderWorkflow(workflow);
+
+    expect(screen.getByText(workflow.title)).toBeTruthy();
+    expect(screen.queryByRole('link')).toBeNull();
   });
 });

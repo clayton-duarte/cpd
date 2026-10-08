@@ -6,6 +6,8 @@ export interface LayoutNode {
   /** Optional per-node ELK layout option overrides (e.g. extra padding to
    *  reserve room for a header/label rendered inside a compound node). */
   layoutOptions?: Record<string, string>;
+  /** Original (non-namespaced) job id this node represents, when it is a job node. */
+  jobId?: string;
 }
 export interface LayoutEdge { id: string; source: string; target: string }
 export interface LayoutGraph { nodes: LayoutNode[]; edges: LayoutEdge[] }

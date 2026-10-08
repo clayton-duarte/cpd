@@ -1,4 +1,5 @@
-import { Badge, Card, Group, Text, Tooltip } from '@mantine/core';
+import { Badge, Group, Text, Tooltip } from '@mantine/core';
+import { CardShell } from './CardShell';
 import {
   IconBan,
   IconCheck,
@@ -14,7 +15,6 @@ import {
 } from '@tabler/icons-react';
 import type { Job } from '../model/types';
 import { isDashed, isDimmed, jobColor, showAttempt, statusIcon, tierLabel } from '../model/derive';
-import { TOKENS, w } from '../theme';
 
 const ICON_COMPONENTS: Record<string, typeof IconCheck> = {
   'circle-dashed': IconCircleDashed,
@@ -29,10 +29,17 @@ const ICON_COMPONENTS: Record<string, typeof IconCheck> = {
 };
 
 const COLOR_VALUES: Record<ReturnType<typeof jobColor>, string> = {
-  red: TOKENS.red,
-  green: TOKENS.green,
-  blue: TOKENS.blue,
-  white: TOKENS.white,
+  red: 'var(--red)',
+  green: 'var(--green)',
+  blue: 'var(--blue)',
+  white: 'var(--fg-bright)',
+};
+
+const EDGE_VALUES: Record<ReturnType<typeof jobColor>, string> = {
+  red: 'var(--red-edge)',
+  green: 'var(--green-edge)',
+  blue: 'var(--blue-edge)',
+  white: 'var(--line-strong)',
 };
 
 export interface JobCardProps {
@@ -44,24 +51,13 @@ export interface JobCardProps {
 export function JobCard({ job, colorDisabled = false }: JobCardProps) {
   const color = colorDisabled ? 'white' : jobColor(job);
   const colorValue = COLOR_VALUES[color];
-  const borderColor = color === 'white' ? w(0.25) : colorValue;
+  const borderColor = EDGE_VALUES[color];
   const Icon = ICON_COMPONENTS[statusIcon(job.status)];
 
   return (
-    <Card
-      withBorder
-      padding="sm"
-      w={220}
-      style={{
-        backgroundColor: 'rgba(230,230,230,.03)',
-        borderColor,
-        borderStyle: isDashed(job) ? 'dashed' : 'solid',
-        borderWidth: 1,
-        opacity: isDimmed(job) ? 0.45 : 1,
-      }}
-    >
-      <Group justify="space-between" wrap="nowrap">
-        <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+    <CardShell borderColor={borderColor} dashed={isDashed(job)} opacity={isDimmed(job) ? 0.45 : 1}>
+      <Group justify="space-between" wrap="nowrap" gap="var(--gap)">
+        <Group gap="var(--space-1)" wrap="nowrap" style={{ minWidth: 0 }}>
           <Icon size={16} color={colorValue} />
           <Tooltip label={job.title}>
             <Text size="sm" truncate style={{ minWidth: 0 }}>
@@ -69,26 +65,26 @@ export function JobCard({ job, colorDisabled = false }: JobCardProps) {
             </Text>
           </Tooltip>
         </Group>
-        <Group gap={4} wrap="nowrap">
+        <Group gap="var(--space-1)" wrap="nowrap" style={{ flexShrink: 0 }}>
           {job.steeringPending && <IconSteeringWheel size={16} />}
           {job.artifactCount > 0 && (
-            <Group gap={2} wrap="nowrap">
+            <Group gap="var(--space-1)" wrap="nowrap">
               <IconPaperclip size={14} />
-              <Text size="xs" c={w(0.6)}>
+              <Text size="xs" c="var(--fg-muted)">
                 {job.artifactCount}
               </Text>
             </Group>
           )}
         </Group>
       </Group>
-      <Group justify="space-between" mt="xs">
-        <Text size="xs" c={w(0.45)}>
+      <Group justify="space-between" align="center" mt="var(--gap)">
+        <Text size="xs" c="var(--fg-faint)">
           {showAttempt(job) ? `#${job.attempt}` : ''}
         </Text>
-        <Badge color="dark" variant="light" c={tierLabel(job) === '··' ? w(0.45) : TOKENS.white}>
+        <Badge color="dark" variant="light" c={tierLabel(job) === '··' ? 'var(--fg-faint)' : 'var(--fg-bright)'}>
           {tierLabel(job)}
         </Badge>
       </Group>
-    </Card>
+    </CardShell>
   );
 }

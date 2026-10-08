@@ -25,5 +25,10 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test-setup.ts'],
+    // Git worktrees live in .worktrees/ and each contains a full copy of
+    // src/, including that branch's own tests. Without this exclude the
+    // runner picks up every sibling branch's suite and reports failures
+    // that belong to other cards' work-in-progress.
+    exclude: ['**/node_modules/**', '**/dist/**', '.worktrees/**'],
   },
 });

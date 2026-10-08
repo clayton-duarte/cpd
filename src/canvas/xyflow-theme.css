@@ -1,18 +1,18 @@
 .react-flow {
-  --xy-background-color: #16191d;
+  --xy-background-color: var(--bg-deep);
 }
 
 .react-flow__edge-path {
-  stroke: rgba(230, 230, 230, 0.25);
+  stroke: var(--line-strong);
   stroke-width: 1.5;
 }
 
 .react-flow__edge.animated .react-flow__edge-path {
-  stroke: #539bf5;
+  stroke: var(--blue);
 }
 
 .react-flow__handle {
-  background: rgba(230, 230, 230, 0.25);
+  background: var(--line-strong);
   border: none;
   width: 6px;
   height: 6px;
@@ -26,4 +26,27 @@
 
 .react-flow__attribution {
   display: none;
+}
+
+.react-flow__controls {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--space-1);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.react-flow__controls-button {
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--line);
+  color: var(--fg-muted);
+}
+
+.react-flow__controls-button svg {
+  fill: currentColor;
+}
+
+.react-flow__controls-button:hover {
+  background: var(--bg-raise);
+  color: var(--fg-bright);
 }

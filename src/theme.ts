@@ -1,28 +1,34 @@
 import { createTheme, colorsTuple } from '@mantine/core';
 
-export const TOKENS = {
-  black: '#16191d',
-  white: '#e6e6e6',
-  red:   '#e5534b',
-  green: '#57ab5a',
-  blue:  '#539bf5',
-} as const;
-
-/** White at reduced opacity — the ONLY source of visual hierarchy. */
-export const w = (opacity: number) => `rgba(230, 230, 230, ${opacity})`;
-
 export const theme = createTheme({
   primaryColor: 'blue',
   primaryShade: 5,
   colors: {
-    blue:  colorsTuple(TOKENS.blue),
-    red:   colorsTuple(TOKENS.red),
-    green: colorsTuple(TOKENS.green),
+    blue: colorsTuple('var(--blue)'),
+    red: colorsTuple('var(--red)'),
+    green: colorsTuple('var(--green)'),
     dark: [
-      TOKENS.white, TOKENS.white, w(0.60), w(0.45),
-      w(0.25), w(0.15), '#1c2026', TOKENS.black, TOKENS.black, TOKENS.black,
+      'var(--fg-bright)', 'var(--fg-bright)', 'var(--fg-muted)', 'var(--fg-faint)',
+      'var(--line-strong)', 'var(--line)', 'var(--bg-panel)', 'var(--bg-deep)', 'var(--bg-deep)', 'var(--bg-deep)',
     ],
   },
   fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
   defaultRadius: 'sm',
+  // Mantine's named spacing/radius scales are wired to the single spacing
+  // scale defined in theme.css (B4/D78) so "xs"/"sm"/etc never diverge from
+  // --space-N -- components reach for Mantine's props, never a raw px.
+  spacing: {
+    xs: 'var(--space-2)',
+    sm: 'var(--space-3)',
+    md: 'var(--space-4)',
+    lg: 'var(--space-5)',
+    xl: 'var(--space-6)',
+  },
+  radius: {
+    xs: 'var(--space-1)',
+    sm: 'var(--space-1)',
+    md: 'var(--space-2)',
+    lg: 'var(--space-3)',
+    xl: 'var(--space-4)',
+  },
 });
