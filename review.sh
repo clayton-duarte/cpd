@@ -58,6 +58,14 @@ cleanup() {
   # Belt-and-suspenders: node --watch's supervisor can re-spawn a child that
   # outlives the group kill above (see package.json's `daemon` script).
   pkill -9 -f 'daemon/src/index.ts' 2>/dev/null || true
+  # Vite's real process is a grandchild of the pnpm wrapper $! captured above,
+  # so it escapes kill_group the same way the daemon used to. Mirror the
+  # daemon fallback, scoped to this run's port only.
+  pkill -9 -f "vite --port $CPD_REVIEW_PORT" 2>/dev/null || true
+  # Final belt-and-suspenders: make sure the review port is actually free.
+  if lsof -ti "tcp:$CPD_REVIEW_PORT" >/dev/null 2>&1; then
+    lsof -ti "tcp:$CPD_REVIEW_PORT" | xargs -r kill -9 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT INT TERM
 
