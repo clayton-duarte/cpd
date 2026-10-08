@@ -5,6 +5,7 @@ import {
   Affix,
   Alert,
   Button,
+  EmptyState,
   Group,
   Indicator,
   Paper,
@@ -221,11 +222,11 @@ function JobsLevelContent({
  * usable app (D-I2), so this is a clear instruction rather than a blank canvas. */
 function EmptyCanvasState() {
   return (
-    <Stack align="center" justify="center" gap="var(--space-2)" style={{ height: '100%' }}>
-      <Text c="var(--fg-faint)">No session selected.</Text>
-      <Text size="sm" c="var(--fg-faint)">
-        Use "New session" in the sidebar to start one.
-      </Text>
+    <Stack align="center" justify="center" style={{ height: '100%' }}>
+      <EmptyState
+        title="No session selected."
+        description='Use "New session" in the sidebar to start one.'
+      />
     </Stack>
   );
 }
