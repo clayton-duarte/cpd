@@ -1,5 +1,5 @@
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { Group, Stack, Text, UnstyledButton } from '@mantine/core';
+import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { Group, Stack, Text, Tree, UnstyledButton, useTree, type RenderTreeNodePayload, type TreeNodeData } from '@mantine/core';
 import { IconChevronDown, IconChevronRight, IconLayoutSidebarLeftCollapse } from '@tabler/icons-react';
 import { selectLead, selectPlan, type NavState } from '../model/navigation';
 import { leadsLevel, plansLevel, jobsLevel } from '../model/levels';
@@ -40,53 +40,42 @@ function writeStoredWidth(width: number): void {
   }
 }
 
-interface RowProps {
-  label: string;
-  depth: number;
-  selected: boolean;
-  testId: string;
-  expandTestId?: string;
-  expanded?: boolean;
-  onToggleExpand?: () => void;
-  onClick: () => void;
+/** Path-style node values (`lead/<id>`, `lead/<id>/plan/<id>`, `lead/<id>/plan/<id>/job/<id>`)
+ * are globally unique across the whole tree, unlike raw fixture ids which repeat across leads. */
+type ParsedValue =
+  | { kind: 'lead'; leadId: string }
+  | { kind: 'plan'; leadId: string; planId: string }
+  | { kind: 'job'; leadId: string; planId: string; jobId: string };
+
+function parseValue(value: string): ParsedValue {
+  const parts = value.split('/');
+  if (parts.length === 2) return { kind: 'lead', leadId: parts[1] };
+  if (parts.length === 4) return { kind: 'plan', leadId: parts[1], planId: parts[3] };
+  return { kind: 'job', leadId: parts[1], planId: parts[3], jobId: parts[5] };
 }
 
-/** One tree row: optional expand caret, label, selection highlight. */
-function Row({ label, depth, selected, testId, expandTestId, expanded, onToggleExpand, onClick }: RowProps) {
-  return (
-    <Group
-      gap="var(--gap)"
-      wrap="nowrap"
-      pl={`calc(var(--pad) + ${depth} * var(--space-5))`}
-      pr="var(--pad)"
-      py="var(--space-1)"
-      data-testid={testId}
-      data-selected={selected}
-      style={{
-        backgroundColor: selected ? 'var(--blue-tint)' : undefined,
-        cursor: 'pointer',
-      }}
-      onClick={onClick}
-    >
-      {expandTestId ? (
-        <UnstyledButton
-          data-testid={expandTestId}
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleExpand?.();
-          }}
-          style={{ display: 'flex', color: 'var(--fg-faint)' }}
-        >
-          {expanded ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
-        </UnstyledButton>
-      ) : (
-        <span style={{ width: 14, display: 'inline-block' }} />
-      )}
-      <Text size="sm" c={selected ? 'var(--fg-bright)' : 'var(--fg)'} truncate style={{ minWidth: 0 }}>
-        {label}
-      </Text>
-    </Group>
-  );
+/** Build the Tree `data` array from the fixture data -- callers must wrap this
+ * in `useMemo` keyed on `data` so the array stays referentially stable. */
+function buildTreeData(data: CpdData): TreeNodeData[] {
+  return leadsLevel(data).map((lead) => {
+    const leadValue = `lead/${lead.id}`;
+    return {
+      value: leadValue,
+      label: lead.name,
+      children: plansLevel(data, lead.id).map((plan) => {
+        const planValue = `${leadValue}/plan/${plan.id}`;
+        const planTitle = plan.ticket ? plan.ticket.title : plan.title;
+        return {
+          value: planValue,
+          label: planTitle,
+          children: jobsLevel(data, plan.id).map((job) => ({
+            value: `${planValue}/job/${job.id}`,
+            label: job.title,
+          })),
+        };
+      }),
+    };
+  });
 }
 
 /**
@@ -94,15 +83,21 @@ function Row({ label, depth, selected, testId, expandTestId, expanded, onToggleE
  * affordance per D82. Drives NavState through the existing navigation.ts
  * helpers only -- no second source of truth for "what is selected".
  *
- * Expansion is local component state, independent of selection: it is keyed
- * by lead/plan id so it survives descending into and returning from a level.
+ * Expansion comes from Mantine's `useTree` and lives in that hook's own state
+ * (uncontrolled), independent of selection -- it stays mounted across nav
+ * prop changes because the Sidebar component itself never unmounts.
+ *
+ * Highlight is never read from the tree hook's selection: it is derived fresh
+ * from `nav` on every render inside `renderNode`, so navigating by any means
+ * (canvas click, Escape, keyboard) keeps the sidebar in sync.
  */
 export function Sidebar({ data, nav, onNavigate }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
-  const [expandedLeads, setExpandedLeads] = useState<Set<string>>(new Set());
-  const [expandedPlans, setExpandedPlans] = useState<Set<string>>(new Set());
   const [width, setWidth] = useState<number>(() => readStoredWidth());
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const tree = useTree();
+
+  const treeData = useMemo(() => buildTreeData(data), [data]);
 
   const handlePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -126,21 +121,62 @@ export function Sidebar({ data, nav, onNavigate }: SidebarProps) {
     });
   };
 
-  const toggleLead = (leadId: string) =>
-    setExpandedLeads((prev) => {
-      const next = new Set(prev);
-      if (next.has(leadId)) next.delete(leadId);
-      else next.add(leadId);
-      return next;
-    });
+  const handleRowClick = (parsed: ParsedValue) => {
+    if (parsed.kind === 'lead') {
+      onNavigate(selectLead(parsed.leadId));
+    } else if (parsed.kind === 'plan') {
+      onNavigate(selectPlan({ level: 'plans', leadId: parsed.leadId }, parsed.planId));
+    } else {
+      onNavigate(selectPlan({ level: 'plans', leadId: parsed.leadId }, parsed.planId));
+    }
+  };
 
-  const togglePlan = (planId: string) =>
-    setExpandedPlans((prev) => {
-      const next = new Set(prev);
-      if (next.has(planId)) next.delete(planId);
-      else next.add(planId);
-      return next;
-    });
+  const renderNode = ({ node, level, expanded, hasChildren, elementProps }: RenderTreeNodePayload) => {
+    const parsed = parseValue(node.value);
+    const selected =
+      parsed.kind === 'lead'
+        ? nav.leadId === parsed.leadId
+        : parsed.kind === 'plan'
+          ? nav.level === 'jobs' && nav.planId === parsed.planId
+          : false;
+    const testId = `row-${parsed.kind === 'lead' ? parsed.leadId : parsed.kind === 'plan' ? parsed.planId : parsed.jobId}`;
+
+    return (
+      <Group
+        {...elementProps}
+        gap="var(--gap)"
+        wrap="nowrap"
+        pl={`calc(var(--pad) + ${level - 1} * var(--space-5))`}
+        pr="var(--pad)"
+        py="var(--space-1)"
+        data-testid={testId}
+        data-selected={selected}
+        style={{
+          backgroundColor: selected ? 'var(--blue-tint)' : undefined,
+          cursor: 'pointer',
+        }}
+        onClick={() => handleRowClick(parsed)}
+      >
+        {hasChildren ? (
+          <UnstyledButton
+            data-testid={`expand-${parsed.kind === 'lead' ? parsed.leadId : parsed.kind === 'plan' ? parsed.planId : ''}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              tree.toggleExpanded(node.value);
+            }}
+            style={{ display: 'flex', color: 'var(--fg-faint)' }}
+          >
+            {expanded ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
+          </UnstyledButton>
+        ) : (
+          <span style={{ width: 14, display: 'inline-block' }} />
+        )}
+        <Text size="sm" c={selected ? 'var(--fg-bright)' : 'var(--fg)'} truncate style={{ minWidth: 0 }}>
+          {node.label}
+        </Text>
+      </Group>
+    );
+  };
 
   if (collapsed) {
     return (
@@ -157,8 +193,6 @@ export function Sidebar({ data, nav, onNavigate }: SidebarProps) {
       </UnstyledButton>
     );
   }
-
-  const leads = leadsLevel(data);
 
   return (
     <Stack
@@ -204,55 +238,13 @@ export function Sidebar({ data, nav, onNavigate }: SidebarProps) {
         </UnstyledButton>
       </Group>
       <Stack gap="var(--gap)" p="var(--pad)" pt="var(--space-2)">
-        {leads.map((lead) => {
-          const leadExpanded = expandedLeads.has(lead.id);
-          const leadSelected = nav.leadId === lead.id;
-          return (
-            <Stack key={lead.id} gap="var(--space-1)">
-              <Row
-                label={lead.name}
-                depth={0}
-                selected={leadSelected}
-                testId={`row-${lead.id}`}
-                expandTestId={`expand-${lead.id}`}
-                expanded={leadExpanded}
-                onToggleExpand={() => toggleLead(lead.id)}
-                onClick={() => onNavigate(selectLead(lead.id))}
-              />
-              {leadExpanded &&
-                plansLevel(data, lead.id).map((plan) => {
-                  const planExpanded = expandedPlans.has(plan.id);
-                  const planSelected = nav.level === 'jobs' && nav.planId === plan.id;
-                  const planTitle = plan.ticket ? plan.ticket.title : plan.title;
-                  return (
-                    <Stack key={plan.id} gap="var(--space-1)">
-                      <Row
-                        label={planTitle}
-                        depth={1}
-                        selected={planSelected}
-                        testId={`row-${plan.id}`}
-                        expandTestId={`expand-${plan.id}`}
-                        expanded={planExpanded}
-                        onToggleExpand={() => togglePlan(plan.id)}
-                        onClick={() => onNavigate(selectPlan({ level: 'plans', leadId: lead.id }, plan.id))}
-                      />
-                      {planExpanded &&
-                        jobsLevel(data, plan.id).map((job) => (
-                          <Row
-                            key={job.id}
-                            label={job.title}
-                            depth={2}
-                            selected={false}
-                            testId={`row-${job.id}`}
-                            onClick={() => onNavigate(selectPlan({ level: 'plans', leadId: lead.id }, plan.id))}
-                          />
-                        ))}
-                    </Stack>
-                  );
-                })}
-            </Stack>
-          );
-        })}
+        <Tree
+          data={treeData}
+          tree={tree}
+          expandOnClick={false}
+          selectOnClick={false}
+          renderNode={renderNode}
+        />
       </Stack>
     </Stack>
   );
