@@ -6,6 +6,7 @@ import { LeadsLevel } from './canvas/LeadsLevel';
 import { PlansLevel } from './canvas/PlansLevel';
 import { nextJob } from './model/selection';
 import { Sidebar } from './components/Sidebar';
+import { ChatPanel } from './components/ChatPanel';
 import { Gallery } from './Gallery';
 import { sampleData } from './fixtures/sample';
 import { ascend, initialNav, selectLead, selectPlan, type Level, type NavState } from './model/navigation';
@@ -243,13 +244,20 @@ function App() {
         <TopBar />
         <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
           <Sidebar data={sampleData} nav={nav} onNavigate={setNav} />
-          <div data-testid="canvas-area" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-            <CanvasLevel
-              nav={nav}
-              onNavigate={setNav}
-              selectedJobId={selectedJobId}
-              onSelectJob={setSelectedJobId}
-            />
+          <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+            <div data-testid="canvas-area" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+              <CanvasLevel
+                nav={nav}
+                onNavigate={setNav}
+                selectedJobId={selectedJobId}
+                onSelectJob={setSelectedJobId}
+              />
+            </div>
+            {nav.level === 'leads' && (
+              <div style={{ width: '24rem', flexShrink: 0, borderLeft: '1px solid var(--line)' }}>
+                <ChatPanel />
+              </div>
+            )}
           </div>
         </div>
       </div>
