@@ -20,6 +20,18 @@ export type ConversationsResponse = { conversations: ConversationNode[] };
 
 export type ForkResponse = { id: number };
 
+/** Daemon's minimal job shape (H4/H7). See src/model/fromPlan.ts's DaemonJob -- same shape. */
+export type PlanJob = {
+  id: string;
+  title: string;
+  status: 'draft' | 'queued' | 'running' | 'done' | 'failed';
+  needs: string[];
+  command?: string;
+};
+
+export type PlanResponse = { jobs: PlanJob[] };
+
 export type StreamEvent =
   | { type: 'messages'; messages: Message[] }
-  | { type: 'conversations' };
+  | { type: 'conversations' }
+  | { type: 'plan'; conversation: number; jobs: PlanJob[] };

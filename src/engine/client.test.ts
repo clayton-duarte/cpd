@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getConversations, getMessages, sendPrompt } from './client';
+import { getConversations, getMessages, getPlan, sendPrompt } from './client';
 import type { ConversationId } from './types';
 
 describe('client', () => {
@@ -98,5 +98,32 @@ describe('client', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(getMessages()).rejects.toThrow(/500/);
+  });
+
+  it('getPlan fetches jobs for a conversation', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ jobs: [{ id: 'j1', title: 'Build', status: 'done', needs: [] }] }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await getPlan(16 as ConversationId);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/plan?conversation=16');
+    expect(result).toEqual({ jobs: [{ id: 'j1', title: 'Build', status: 'done', needs: [] }] });
+  });
+
+  it('getPlan resolves to an empty job list on 404 instead of throwing', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      json: async () => ({ error: 'Unknown conversation' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await getPlan(99 as ConversationId);
+
+    expect(result).toEqual({ jobs: [] });
   });
 });

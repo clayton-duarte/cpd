@@ -10,8 +10,10 @@ import { ChatPanel } from './components/ChatPanel';
 import { Gallery } from './Gallery';
 import { sampleData } from './fixtures/sample';
 import { ascend, initialNav, selectLead, selectPlan, type Level, type NavState } from './model/navigation';
-import { leadsLevel, plansLevel, dataForPlan, jobsLevel } from './model/levels';
+import { leadsLevel, plansLevel, jobsLevel } from './model/levels';
 import { useLevelTransition } from './canvas/useLevelTransition';
+import { usePlan } from './engine/usePlan';
+import { planToCpdData } from './model/fromPlan';
 import type { ConversationId } from './engine/types';
 import './canvas/xyflow-theme.css';
 
@@ -157,10 +159,36 @@ function CanvasLevelContent({
   }
 
   if (nav.level === 'jobs' && nav.planId) {
-    return <Canvas data={dataForPlan(sampleData, nav.planId)} selectedJobId={selectedJobId} onSelectJob={onSelectJob} />;
+    return <JobsLevelContent planId={nav.planId} selectedJobId={selectedJobId} onSelectJob={onSelectJob} />;
   }
 
   return null;
+}
+
+/**
+ * The real plan for the `jobs` level (H9). `nav.planId` is the workflow id, which (per D112) is
+ * the conversation id stringified -- the only place that mapping needs to be made explicit.
+ * A 404 (no such conversation yet, e.g. mid-fork) or an empty plan renders an empty canvas via
+ * `planToCpdData([], ...)`, never a crash or an infinite spinner.
+ */
+function JobsLevelContent({
+  planId,
+  selectedJobId,
+  onSelectJob,
+}: {
+  planId: string;
+  selectedJobId: string | null;
+  onSelectJob: (jobId: string | null) => void;
+}) {
+  // D112: a plan IS a conversation, so `nav.planId` already is the conversation id stringified.
+  // No parsing needed -- it goes straight into the `/api/plan?conversation=` query string the
+  // same way it will once the daemon backs the full lead/plan hierarchy. Today's fixture ids
+  // ('w3', ...) just resolve to no matching conversation (404 -> empty plan), which is exactly
+  // the "empty plan renders an empty canvas" case the card requires, not a crash.
+  const conversationId = planId as unknown as ConversationId;
+  const { jobs } = usePlan(conversationId);
+  const data = planToCpdData(jobs, { id: 0, title: planId });
+  return <Canvas data={data} selectedJobId={selectedJobId} onSelectJob={onSelectJob} />;
 }
 
 /**
