@@ -52,8 +52,16 @@ export type AttentionResponse = { items: AttentionItem[] };
 
 export type ArchiveResponse = { archived: boolean };
 
+/** `{provider, modelId}` -- same flat shape the daemon persists in `pi.agent` and the one exposed
+ * over the API; not the pi-durable `ModelRef` type (private to the daemon). */
+export type ModelRef = { provider: string; modelId: string };
+
+export type ModelsResponse = { models: ModelRef[] };
+
+export type ModelResponse = { model: ModelRef };
+
 export type StreamEvent =
-  | { type: 'messages'; messages: Message[] }
+  | { type: 'messages'; messages: Message[]; model?: ModelRef }
   | { type: 'conversations' }
   | { type: 'plan'; conversation: number; jobs: PlanJob[] }
   | { type: 'attention'; items: AttentionItem[] };

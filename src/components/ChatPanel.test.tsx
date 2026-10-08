@@ -1,27 +1,36 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { ChatPanel } from './ChatPanel';
 import * as client from '../engine/client';
 import * as engineStream from '../engine/useEngineStream';
-import type { Message } from '../engine/types';
+import type { ConversationId, Message, ModelRef } from '../engine/types';
 
 vi.mock('../engine/client');
 vi.mock('../engine/useEngineStream');
 
-function mockStream(messages: Message[]) {
-  vi.mocked(engineStream.useEngineStream).mockReturnValue({ messages, status: 'open' });
+const MODEL_A: ModelRef = { provider: 'github-copilot', modelId: 'claude-opus-5' };
+const MODEL_B: ModelRef = { provider: 'github-copilot', modelId: 'gpt-5' };
+
+function mockStream(messages: Message[], model: ModelRef | null = MODEL_A) {
+  vi.mocked(engineStream.useEngineStream).mockReturnValue({ messages, status: 'open', model });
 }
 
-function renderPanel() {
+function renderPanel(conversationId?: number) {
   return render(
     <MantineProvider>
-      <ChatPanel />
+      <ChatPanel conversationId={conversationId as unknown as ConversationId} />
     </MantineProvider>,
   );
 }
 
 describe('ChatPanel', () => {
+  beforeEach(() => {
+    vi.mocked(client.getModels).mockResolvedValue({ models: [MODEL_A, MODEL_B] });
+    vi.mocked(client.getModel).mockResolvedValue({ model: MODEL_A });
+    vi.mocked(client.setModel).mockResolvedValue({ model: MODEL_B });
+  });
+
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
@@ -264,11 +273,11 @@ describe('ChatPanel', () => {
   });
 
   it('shows the status indicator only when status is not open', () => {
-    vi.mocked(engineStream.useEngineStream).mockReturnValue({ messages: [], status: 'connecting' });
+    vi.mocked(engineStream.useEngineStream).mockReturnValue({ messages: [], status: 'connecting', model: null });
     const { rerender } = renderPanel();
     expect(screen.getByText('reconnecting')).toBeTruthy();
 
-    vi.mocked(engineStream.useEngineStream).mockReturnValue({ messages: [], status: 'open' });
+    vi.mocked(engineStream.useEngineStream).mockReturnValue({ messages: [], status: 'open', model: null });
     rerender(
       <MantineProvider>
         <ChatPanel />
@@ -380,5 +389,37 @@ describe('ChatPanel', () => {
       expect(textarea.disabled).toBe(false);
       expect(document.activeElement).toBe(textarea);
     });
+  });
+
+  // Falsification table (L5): each case must fail if run against a sabotaged implementation.
+  it('[C] shows the conversation\'s real resolved model, not a hardcoded string', async () => {
+    mockStream([], MODEL_B);
+
+    renderPanel();
+
+    const select = screen.getByTestId('model-select') as HTMLInputElement;
+    await waitFor(() => expect(select.value).toBe(MODEL_B.modelId));
+    expect(select.value).not.toBe(MODEL_A.modelId);
+  });
+
+  it('[D] switching the model calls setModel scoped to the current conversation only', async () => {
+    mockStream([], MODEL_A);
+    const setModelMock = vi.mocked(client.setModel).mockResolvedValue({ model: MODEL_B });
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function () {};
+
+    renderPanel(42);
+    const select = screen.getByTestId('model-select') as HTMLInputElement;
+    fireEvent.click(select);
+    fireEvent.focus(select);
+    const option = await screen.findByRole('option', { name: MODEL_B.modelId, hidden: true }, { timeout: 2000 });
+    fireEvent.click(option);
+
+    // Called for the currently-watched conversation (42) and that conversation alone -- never
+    // root/undefined and never a different id.
+    await waitFor(() => expect(setModelMock).toHaveBeenCalledWith(42, { provider: MODEL_B.provider, modelId: MODEL_B.modelId }));
+    expect(setModelMock).toHaveBeenCalledTimes(1);
+
+    Element.prototype.scrollIntoView = originalScrollIntoView;
   });
 });
