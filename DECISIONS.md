@@ -1828,3 +1828,28 @@ touch daemon/src/index.ts      : 93496   CHANGED  (real edits still hot-reload)
 
 `--watch-path` works fine alongside `--experimental-strip-types` on the installed Node. Merged at
 `edac736`. Board queue is now empty; all of K1-K7 are merged.
+
+---
+
+## D152 — retry and compaction are NOT restated in HARNESS_SETTINGS; pi-durable's defaults already match
+
+L2 originally set `retry` and `compaction` explicitly in `HARNESS_SETTINGS` passed to `Harness.open`,
+believing they were previously unconfigured. That premise was wrong: `@earendil-works/pi-durable`'s
+`harness/agent.ts` spreads `DEFAULT_RETRY_POLICY` / `DEFAULT_COMPACTION_POLICY` under any caller
+`settings` (`retry: { ...DEFAULT_RETRY_POLICY, ...settings?.retry }`, same for compaction), and both
+defaults are:
+
+    DEFAULT_RETRY_POLICY      = { enabled: true, maxRetries: 3, baseDelayMs: 2000, maxAgentDelayMs: 60000 }
+    DEFAULT_COMPACTION_POLICY = { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000, backgroundTokens: 32768 }
+
+Our `HARNESS_SETTINGS.retry`/`.compaction` restated these same values byte-for-byte, so the block was
+a runtime no-op from day one. Removed the `retry`/`compaction` keys (and `HARNESS_SETTINGS`/`settings:`
+entirely, since nothing else used them) from `daemon/src/engine.ts`'s `Harness.open` call.
+
+**Decision: do NOT re-add a retry/compaction block to restate pi's defaults.** Retry and compaction
+are already on, with these exact values, by pi-durable's own default. If a future card wants different
+values, it should pass only the differing fields, not copy the whole default object back in.
+
+`whenBusy: "followUp"` on `submitPrompt`'s `root.submit` call and `getQueueDepth` (reading
+`InboxDoc`/`.items.length`, confirmed real fields at `dist/harness/inbox.d.ts:17-20` in
+`@earendil-works/pi-durable`) are real behavior changes and were kept.
