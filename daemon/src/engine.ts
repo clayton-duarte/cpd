@@ -33,7 +33,7 @@ import {
   type Job,
   type JobStatus,
 } from "./plans.ts";
-import { JobTask, onJobOutput, type JobOutputListener } from "./jobTask.ts";
+import { JobTask, onJobOutput, onJobStatusChange, type JobOutputListener, type JobStatusListener } from "./jobTask.ts";
 
 export type Message = {
   id: number;
@@ -652,4 +652,4 @@ export async function abortPlanJob(engine: Engine, conversationId: number, jobId
   await engine.harness.abortTask(job.taskId as unknown as TaskId, ctx);
 }
 
-export { onJobOutput, type JobOutputListener };
+export { onJobOutput, type JobOutputListener, onJobStatusChange, type JobStatusListener };
