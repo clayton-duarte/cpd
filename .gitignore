@@ -10,3 +10,6 @@ dist/
 
 # Planning, requirements and decision log are private and never committed.
 docs/
+
+# CPD daemon runtime data: conversation transcripts and SQLite files. Never commit.
+.cpd/
