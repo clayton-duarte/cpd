@@ -1598,3 +1598,46 @@ the user intends to publish. Rewritten to "the lead's personal review helper"; t
 Worth stating: the tripwire did its job on the author who had most recently promised to keep the
 repo clean. The reason it caught this at all is that it scans **every tracked file**, including
 documentation — had it been scoped to `src/`, this would have shipped.
+---
+
+## D146 — K3 rejected: 193 green tests, zero behaviour change. Mocked geometry is not layout.
+
+K3 reported done. Measured on its own branch in real Chrome:
+
+```
+panel-tree (Paper): [56, 265]
+new row            : [310, 338]
+FULLY_VISIBLE      : false
+panel.scrollTop    : 0          <- never moved
+```
+
+Byte-identical to the broken "before" numbers in the card. **193 tests passed and the feature did
+nothing.** Not merged; superseded by **K4**.
+
+**Two defects, both found by instrumenting the running branch rather than reading the diff:**
+
+1. The ref was on the inner `<Stack>`; the scrollable element is the `<Paper data-testid=
+   "panel-tree">` in `App.tsx` (Paper: `scrollHeight 293 > clientHeight 207`; Stack: `293 === 293`).
+   So the `scrollHeight <= clientHeight` guard returned early every time.
+2. Even with that guard disabled it still failed, because `fullyVisible` was computed against the
+   Stack's rect, which is **not clipped** and extends past the fold: Paper `[56,265]`, Stack
+   `[57,406]`, row `[366,394]` — visible-vs-Paper `false`, visible-vs-Stack `true`. With both guards
+   neutralised, a manual `scrollIntoView({block:'nearest'})` moved `scrollTop` 0 -> 103 and revealed
+   the row, proving the API call was the one correct part.
+
+**Why the tests passed:** both stubbed `HTMLElement.prototype.scrollHeight/clientHeight/
+getBoundingClientRect` **globally**, so every element reported the mocked numbers and the guards
+passed no matter which element the refs pointed at. *The tests asserted the mock, not the layout.*
+
+**Rule added (15th silent-success instance):** when a test must fake geometry to pass, it can no
+longer tell you which element you measured — and "which element" was the entire bug. Scroll,
+clipping, and overflow behaviour must be mocked **per element**, reproducing the real nesting
+(clipped outer scroller + unclipped inner content), or verified in a real browser. K4 requires a
+regression test that fails if the component measures the inner box, plus a pasted browser
+measurement in the done report.
+
+**On my own card:** K3 said "use the DOM element for the newly selected tree row and call
+`scrollIntoView`", and said "only when the panel is actually scrollable" — without ever saying
+**which element is the panel**. I knew the Paper in `App.tsx` was the scroller and did not write it
+down. A builder that "can't guess" was handed an ambiguity and guessed wrong. K4 names the element,
+the ancestor-walk strategy, and the exact browser check that constitutes done.
