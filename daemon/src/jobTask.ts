@@ -78,7 +78,8 @@ function mirrorStatus(tx: Tx, conversationId: ConversationId, jobId: string, sta
  * whether that change originated from an HTTP route or purely from the engine advancing a task
  * on its own (queued -> running -> done|failed, with no HTTP request in the loop at all). The
  * daemon's `index.ts` installs the sink that turns this into a live SSE `plan`/`attention` push
- * (J6) -- only one listener at a time, same convention as `onJobOutput`. */
+ * (J6). Any number of listeners may subscribe (J7): the registry is a Set, so a second
+ * subscriber never silently displaces the first. */
 export type JobStatusListener = (conversationId: number, jobId: string, status: JobStatus) => void;
 const statusListeners = new Set<JobStatusListener>();
 

@@ -1440,3 +1440,23 @@ Filed as **J7** rather than fixed inline or ignored: it is precisely the "notifi
 silently stops delivering" trap that J6 just cost us a card to fix, pre-armed for the next
 subscriber. Scoped tight — convert to a `Set`, per-listener error isolation, keep J6's end-to-end
 guarantee as a test.
+---
+
+## D140 — J7 merged: the listener registry is a Set, and the J6 guarantee was re-proved, not assumed
+
+`onJobStatusChange` now uses `Set<JobStatusListener>` + unsubscribe, with per-listener `try/catch`
+so one throwing subscriber cannot stop the others or crash the daemon. 85 daemon tests (+3).
+
+Two checks mattered more than the green suite:
+
+1. **Sabotage** — made `notifyStatus` deliver to only the first listener. Exactly the two right
+   tests failed ("delivers to two listeners registered at the same time", "a throwing listener does
+   not stop other listeners"). The promise is genuinely guarded, not merely asserted in prose.
+2. **Regression of the thing underneath** — J7 edited the exact path J6 had just fixed, so I re-ran
+   J6's live probe rather than trusting unit tests: `['draft','draft','running','running','done']`.
+   The end-to-end guarantee survives the refactor.
+
+**Doc drift caught in review:** the comment above the registry still read "only one listener at a
+time" — the precise opposite of the new behaviour. Fixed directly on `main` rather than spending a
+card. A comment that contradicts its code is a future bug report: the next person trusts the prose
+and designs around a limit that no longer exists.
