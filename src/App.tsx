@@ -10,10 +10,13 @@ import { usePlan } from './engine/usePlan';
 import { runJob } from './engine/client';
 import { planToCpdData } from './model/fromPlan';
 import { NewJobModal } from './components/NewJobModal';
+import { parseConversationId } from './model/navigation';
 import type { ConversationId, ConversationNode } from './engine/types';
 import './canvas/xyflow-theme.css';
 
-/** Trivial hash-based routing: no router dependency, per the A2-4 spec. */
+/** Trivial hash-based routing: no router dependency, per the A2-4 spec. Also used by I3 to carry
+ * the selected conversation (`#/c/<id>`) -- the single `hashchange` listener here is shared by
+ * both routes, deliberately not duplicated. */
 function useHashRoute(): string {
   const [hash, setHash] = useState(() => window.location.hash);
   useEffect(() => {
@@ -23,6 +26,18 @@ function useHashRoute(): string {
   }, []);
   return hash;
 }
+
+/** I3: pulls the raw segment out of a `#/c/<segment>` hash, or undefined if the hash doesn't
+ * name a conversation at all (e.g. `#/gallery`, or no hash). The segment is handed to
+ * `parseConversationId` (H14) by the caller -- this function does no validation of its own. */
+function conversationHashSegment(hash: string): string | undefined {
+  const match = /^#\/c\/(.*)$/.exec(hash);
+  return match ? match[1] : undefined;
+}
+
+/** Sentinel distinct from `undefined` (a valid "no conversation" segment) so the hash-sync
+ * effect below can tell "never run yet" apart from "last ran on an empty/no-conversation hash". */
+const UNSET = Symbol('unset');
 
 function TopBar({ conversationTitle }: { conversationTitle?: string }) {
   return (
@@ -133,6 +148,48 @@ function App() {
     () => conversations.find((c) => c.id === selectedConversationId)?.title,
     [conversations, selectedConversationId],
   );
+
+  // I3: the hash is the source of truth for "which conversation", selection is derived from it
+  // once the conversation list is known (so an unknown/deleted id can fall back to the empty
+  // state instead of requesting a 404'd plan). `appliedHashRef` guards against the ping-pong of
+  // "hash -> state -> hash" by recording the last hash segment this effect already acted on --
+  // the hash-writing effect below never fires for a change this effect itself caused.
+  const appliedHashRef = useRef<string | undefined | typeof UNSET>(UNSET);
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    const segment = conversationHashSegment(hash);
+    if (segment === appliedHashRef.current) return;
+    const id = parseConversationId(segment);
+    if (id === undefined) {
+      appliedHashRef.current = segment;
+      hydratedRef.current = true;
+      setSelectedConversationId(undefined);
+      return;
+    }
+    if (conversations.length === 0) return; // list not loaded yet -- wait, don't guess, don't mark applied
+    appliedHashRef.current = segment;
+    hydratedRef.current = true;
+    const exists = conversations.some((c) => c.id === id);
+    setSelectedConversationId(exists ? (id as ConversationId) : undefined);
+  }, [hash, conversations]);
+
+  // Mirror selection back into the hash whenever it changes for a reason OTHER than the hash
+  // itself just having been parsed (guarded by appliedHashRef so this never re-triggers the
+  // effect above in a loop). Gated on `hydratedRef` so this never fires before the initial hash
+  // has had a chance to resolve against the loaded conversation list -- otherwise a cold load
+  // with `#/c/7` in the URL would overwrite it with an empty hash before `conversations` arrives.
+  useEffect(() => {
+    if (hash === '#/gallery') return;
+    if (!hydratedRef.current) return;
+    const desiredSegment = selectedConversationId === undefined ? undefined : String(selectedConversationId);
+    if (desiredSegment === conversationHashSegment(hash)) return;
+    appliedHashRef.current = desiredSegment;
+    // Setting `hash` to '' still fires `hashchange` (unlike `history.replaceState`), so this
+    // stays a single code path for both "select" and "clear" -- no special-casing needed, and
+    // `useHashRoute`'s state stays in sync with `window.location.hash` either way.
+    window.location.hash = desiredSegment === undefined ? '' : `/c/${desiredSegment}`;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedConversationId]);
 
   // Selection is deliberately NOT part of navigation state (see D3 card): the selected
   // conversation answers "which session", selection answers "which job within it". Clear it
