@@ -1,16 +1,23 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { Group, Stack, Text, Tree, UnstyledButton, useTree, type RenderTreeNodePayload, type TreeNodeData } from '@mantine/core';
+import { Button, Group, Stack, Text, Tree, UnstyledButton, useTree, type RenderTreeNodePayload, type TreeNodeData } from '@mantine/core';
 import { IconChevronDown, IconChevronRight, IconLayoutSidebarLeftCollapse } from '@tabler/icons-react';
 import { selectLead, selectPlan, selectConversation, type NavState } from '../model/navigation';
 import { leadsLevel, plansLevel, jobsLevel } from '../model/levels';
 import type { CpdData } from '../model/types';
-import { getConversations } from '../engine/client';
+import { createConversation, getConversations } from '../engine/client';
 import { onConversationsSignal } from '../engine/useEngineStream';
 import type { ConversationId, ConversationNode } from '../engine/types';
 import { buildConversationTreeData, allExpandedState } from './conversationTree';
 
 export interface SidebarProps {
-  data: CpdData;
+  /** The fixture Lead/Plan/Job tree, rendered only when `showFixtureTree` is true (default).
+   * Optional because I2's running app never renders that tree -- only Sidebar.test.tsx and
+   * `/gallery`-adjacent callers that opt into it need to pass fixture data. */
+  data?: CpdData;
+  /** Renders the fixture-driven Lead/Plan/Job tree above the real conversation tree. Defaults to
+   * true so existing callers (Sidebar.test.tsx) keep their current behavior unchanged. I2's App
+   * passes `false`: the running app shows only real conversations (D-I2). */
+  showFixtureTree?: boolean;
   nav: NavState;
   onNavigate: (next: NavState) => void;
   /** Currently selected conversation thread, or undefined for none. Additive to `nav` -- the
@@ -21,6 +28,9 @@ export interface SidebarProps {
   /** H14: called whenever the fetched/streamed conversation list changes, so callers that need a
    * conversation's title (e.g. the breadcrumb) don't need a second fetch of the same list. */
   onConversationsChange?: (conversations: ConversationNode[]) => void;
+  /** I2: called once a "New session" click creates a conversation, with its new id, so the
+   * caller can select it and land the user there immediately. */
+  onConversationCreated?: (id: ConversationId) => void;
 }
 
 export const MIN_WIDTH = 180;
@@ -105,17 +115,20 @@ function buildTreeData(data: CpdData): TreeNodeData[] {
  */
 export function Sidebar({
   data,
+  showFixtureTree = true,
   nav,
   onNavigate,
   selectedConversationId,
   onSelectConversation,
   onConversationsChange,
+  onConversationCreated,
 }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [width, setWidth] = useState<number>(() => readStoredWidth());
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const tree = useTree();
   const [conversations, setConversations] = useState<ConversationNode[]>([]);
+  const [creating, setCreating] = useState(false);
   const conversationTree = useTree();
   const onConversationsChangeRef = useRef(onConversationsChange);
   onConversationsChangeRef.current = onConversationsChange;
@@ -152,7 +165,17 @@ export function Sidebar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationTreeData]);
 
-  const treeData = useMemo(() => buildTreeData(data), [data]);
+  const treeData = useMemo(() => (data ? buildTreeData(data) : []), [data]);
+
+  const handleNewSession = async () => {
+    setCreating(true);
+    try {
+      const { id } = await createConversation();
+      onConversationCreated?.(id as ConversationId);
+    } finally {
+      setCreating(false);
+    }
+  };
 
   const handlePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -293,67 +316,85 @@ export function Sidebar({
         </UnstyledButton>
       </Group>
       <Stack gap="var(--gap)" p="var(--pad)" pt="var(--space-2)">
-        <Tree
-          data={treeData}
-          tree={tree}
-          expandOnClick={false}
-          selectOnClick={false}
-          renderNode={renderNode}
-        />
-        {conversationTreeData.length > 0 && (
-          <Stack gap="var(--space-1)" mt="var(--space-4)">
+        {showFixtureTree && (
+          <Tree
+            data={treeData}
+            tree={tree}
+            expandOnClick={false}
+            selectOnClick={false}
+            renderNode={renderNode}
+          />
+        )}
+        <Group justify="space-between" align="center">
+          {conversationTreeData.length > 0 && (
             <Text size="xs" c="var(--fg-faint)" tt="uppercase" fw={600}>
               Threads
             </Text>
-            <Tree
-              data={conversationTreeData}
-              tree={conversationTree}
-              expandOnClick={false}
-              selectOnClick={false}
-              renderNode={({ node, level, expanded, hasChildren, elementProps }) => {
-                const id = Number(node.value) as ConversationId;
-                const selected = selectedConversationId === id;
-                return (
-                  <Group
-                    {...elementProps}
-                    gap="var(--gap)"
-                    wrap="nowrap"
-                    pl={`calc(var(--pad) + ${level - 1} * var(--space-5))`}
-                    pr="var(--pad)"
-                    py="var(--space-1)"
-                    data-testid={`thread-${node.value}`}
-                    data-selected={selected}
-                    style={{
-                      backgroundColor: selected ? 'var(--blue-tint)' : undefined,
-                      cursor: 'pointer',
-                    }}
-                    onClick={() => {
-                      onSelectConversation?.(id);
-                      onNavigate(selectConversation(nav, id));
-                    }}
-                  >
-                    {hasChildren ? (
-                      <UnstyledButton
-                        data-testid={`thread-expand-${node.value}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          conversationTree.toggleExpanded(node.value);
-                        }}
-                        style={{ display: 'flex', color: 'var(--fg-faint)' }}
-                      >
-                        {expanded ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
-                      </UnstyledButton>
-                    ) : (
-                      <span style={{ width: 14, display: 'inline-block' }} />
-                    )}
-                    <Text size="sm" c={selected ? 'var(--fg-bright)' : 'var(--fg)'} truncate style={{ minWidth: 0 }}>
-                      {node.label}
-                    </Text>
-                  </Group>
-                );
-              }}
-            />
-          </Stack>
+          )}
+          <Button
+            size="xs"
+            variant="subtle"
+            data-testid="new-session-button"
+            onClick={() => void handleNewSession()}
+            loading={creating}
+            ml="auto"
+          >
+            New session
+          </Button>
+        </Group>
+        {conversationTreeData.length > 0 ? (
+          <Tree
+            data={conversationTreeData}
+            tree={conversationTree}
+            expandOnClick={false}
+            selectOnClick={false}
+            renderNode={({ node, level, expanded, hasChildren, elementProps }) => {
+              const id = Number(node.value) as ConversationId;
+              const selected = selectedConversationId === id;
+              return (
+                <Group
+                  {...elementProps}
+                  gap="var(--gap)"
+                  wrap="nowrap"
+                  pl={`calc(var(--pad) + ${level - 1} * var(--space-5))`}
+                  pr="var(--pad)"
+                  py="var(--space-1)"
+                  data-testid={`thread-${node.value}`}
+                  data-selected={selected}
+                  style={{
+                    backgroundColor: selected ? 'var(--blue-tint)' : undefined,
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => {
+                    onSelectConversation?.(id);
+                    onNavigate(selectConversation(nav, id));
+                  }}
+                >
+                  {hasChildren ? (
+                    <UnstyledButton
+                      data-testid={`thread-expand-${node.value}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        conversationTree.toggleExpanded(node.value);
+                      }}
+                      style={{ display: 'flex', color: 'var(--fg-faint)' }}
+                    >
+                      {expanded ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
+                    </UnstyledButton>
+                  ) : (
+                    <span style={{ width: 14, display: 'inline-block' }} />
+                  )}
+                  <Text size="sm" c={selected ? 'var(--fg-bright)' : 'var(--fg)'} truncate style={{ minWidth: 0 }}>
+                    {node.label}
+                  </Text>
+                </Group>
+              );
+            }}
+          />
+        ) : (
+          <Text size="sm" c="var(--fg-faint)" data-testid="no-sessions">
+            No sessions yet.
+          </Text>
         )}
       </Stack>
     </Stack>
