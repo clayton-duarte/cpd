@@ -11,13 +11,30 @@ export interface JobNodeData {
 /**
  * React Flow custom node wrapping the existing JobCard unchanged, with
  * target/source handles for dependency edges.
+ *
+ * `selected` comes from our own Canvas-level `selectedJobId` state (React
+ * Flow's internal node.selected flag), not from React Flow's built-in
+ * click-to-select — elementsSelectable is off, so this prop is the single
+ * source of truth for the selected look.
  */
-export function JobNode({ data }: { data: JobNodeData }) {
+export function JobNode({ data, selected }: { data: JobNodeData; selected?: boolean }) {
   return (
-    <>
+    <div
+      aria-selected={selected ?? false}
+      data-selected={selected ?? false}
+      style={
+        selected
+          ? {
+              border: '2px solid var(--blue-edge)',
+              backgroundColor: 'var(--blue-tint)',
+              borderRadius: 'var(--radius, 4px)',
+            }
+          : undefined
+      }
+    >
       <Handle type="target" position={Position.Left} />
       <JobCard job={data.job} colorDisabled={data.colorDisabled} />
       <Handle type="source" position={Position.Right} />
-    </>
+    </div>
   );
 }

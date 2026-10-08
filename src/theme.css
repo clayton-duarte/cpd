@@ -30,6 +30,14 @@
   --blue-tint: rgba(111, 168, 234, 0.2);
   --blue-edge: rgba(111, 168, 234, 0.5);
 
+  /* Level-transition camera motion (D1). JS consumers read the matching
+     constants in canvas/motion.ts directly; these exist so CSS stays the
+     single source of truth for the reduced-motion fade override. */
+  --duration-descend: 400ms;
+  --duration-ascend: 300ms;
+  --duration-reduced-fade: 100ms;
+}
+
   /* The scale is for SPACING: padding, margin, gap.
      Dimensions that must fit their content -- bar heights, node sizes handed to
      the layout engine -- are derived from that content, never snapped to the
@@ -60,6 +68,13 @@
   --mantine-color-default-hover: var(--bg-raise);
   --mantine-color-default-border: var(--line-strong);
   --mantine-color-anchor: var(--blue);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-descend: 0ms;
+    --duration-ascend: 0ms;
+  }
 }
 
 html, body, #root { height: 100%; margin: 0; background: var(--bg-deep); }

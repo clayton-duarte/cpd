@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
-import { Sidebar } from './Sidebar';
+import { Sidebar, MIN_WIDTH, MAX_WIDTH } from './Sidebar';
 import { initialNav, selectLead, selectPlan, type NavState } from '../model/navigation';
 import { sampleData } from '../fixtures/sample';
+
+function widthPx(panel: HTMLElement): number {
+  const match = panel.style.width.match(/([\d.]+)rem/);
+  return match ? parseFloat(match[1]) * 16 : NaN;
+}
 
 function renderSidebar(nav = initialNav, onNavigate: (next: NavState) => void = () => {}) {
   return render(
@@ -123,5 +128,64 @@ describe('Sidebar', () => {
     expect(screen.queryByText('Harvest planner')).toBeNull();
     fireEvent.click(screen.getByTestId('sidebar-toggle'));
     expect(screen.getByText('Harvest planner')).toBeTruthy();
+  });
+
+  // Note: jsdom performs no real layout, so there is no observable "text is no
+  // longer truncated" signal here -- we assert the width *style value* instead
+  // and validate the visual truncation fix manually in the browser.
+  describe('resizable width', () => {
+    it('renders a resize handle with a col-resize cursor', () => {
+      renderSidebar();
+      const handle = screen.getByTestId('sidebar-resize-handle');
+      expect(handle).toBeTruthy();
+      expect(handle.style.cursor).toBe('col-resize');
+    });
+
+    it('dragging the handle changes the rendered width in the expected direction', () => {
+      renderSidebar();
+      const handle = screen.getByTestId('sidebar-resize-handle');
+      const panel = handle.parentElement as HTMLElement;
+      const before = widthPx(panel);
+
+      fireEvent.pointerDown(handle, { clientX: 260 });
+      fireEvent.pointerMove(handle, { clientX: 340 });
+      fireEvent.pointerUp(handle, { clientX: 340 });
+
+      expect(widthPx(panel)).toBeGreaterThan(before);
+    });
+
+    it('clamps to MIN_WIDTH and MAX_WIDTH when dragged far past either end', () => {
+      renderSidebar();
+      const handle = screen.getByTestId('sidebar-resize-handle');
+      const panel = handle.parentElement as HTMLElement;
+
+      fireEvent.pointerDown(handle, { clientX: 260 });
+      fireEvent.pointerMove(handle, { clientX: -10000 });
+      fireEvent.pointerUp(handle, { clientX: -10000 });
+      expect(widthPx(panel)).toBe(MIN_WIDTH);
+
+      fireEvent.pointerDown(handle, { clientX: 260 });
+      fireEvent.pointerMove(handle, { clientX: 10000 });
+      fireEvent.pointerUp(handle, { clientX: 10000 });
+      expect(widthPx(panel)).toBe(MAX_WIDTH);
+    });
+
+    it('width survives a collapse/expand cycle', () => {
+      renderSidebar();
+      const handle = screen.getByTestId('sidebar-resize-handle');
+      const panel = handle.parentElement as HTMLElement;
+
+      fireEvent.pointerDown(handle, { clientX: 260 });
+      fireEvent.pointerMove(handle, { clientX: 360 });
+      fireEvent.pointerUp(handle, { clientX: 360 });
+      const draggedWidth = widthPx(panel);
+
+      fireEvent.click(screen.getByTestId('sidebar-toggle'));
+      expect(screen.queryByText('Harvest planner')).toBeNull();
+      fireEvent.click(screen.getByTestId('sidebar-toggle'));
+
+      const restoredPanel = screen.getByTestId('sidebar-resize-handle').parentElement as HTMLElement;
+      expect(widthPx(restoredPanel)).toBe(draggedWidth);
+    });
   });
 });
