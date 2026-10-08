@@ -5,7 +5,6 @@ import {
   Badge,
   EmptyState,
   Group,
-  Loader,
   Paper,
   ScrollArea,
   Stack,
@@ -13,7 +12,7 @@ import {
   Textarea,
   Tooltip,
 } from '@mantine/core';
-import { forkConversation, sendPrompt } from '../engine/client';
+import { abortPrompt, forkConversation, sendPrompt } from '../engine/client';
 import { useEngineStream } from '../engine/useEngineStream';
 import type { ConversationId, Message } from '../engine/types';
 
@@ -85,10 +84,18 @@ export function ChatPanel({ conversationId, onForked }: ChatPanelProps) {
     onForked?.(result.id as ConversationId);
   }
 
+  function abort() {
+    void abortPrompt(conversationId);
+    setInFlight(false);
+  }
+
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void submit();
+    } else if (e.key === 'Escape' && inFlight) {
+      e.preventDefault();
+      abort();
     }
   }
 
@@ -162,11 +169,12 @@ export function ChatPanel({ conversationId, onForked }: ChatPanelProps) {
           />
           <ActionIcon
             size="lg"
-            onClick={() => void submit()}
-            disabled={!draft.trim() || inFlight}
+            onClick={() => (inFlight ? abort() : void submit())}
+            disabled={!inFlight && !draft.trim()}
+            data-testid={inFlight ? 'stop-button' : 'send-button'}
             c="var(--on-solid)"
           >
-            {inFlight ? <Loader size="xs" /> : '→'}
+            {inFlight ? <Text size="xs">◼</Text> : '→'}
           </ActionIcon>
         </Group>
       </Stack>

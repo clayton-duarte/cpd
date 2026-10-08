@@ -197,6 +197,16 @@ export async function getQueueDepth(engine: Engine, conversationId: Conversation
   return state?.items.length ?? 0;
 }
 
+/** Abort the in-flight run on `conversationId`, or root if undefined. Idempotent -- safe to
+ * call when nothing is running (Conversation.abort() per pi-durable's harness/types.d.ts is
+ * documented to withdraw queued inputs and abort the ordinary ownership scope either way). */
+export async function abortRun(engine: Engine, conversationId: number | undefined): Promise<void> {
+  const id = conversationId ?? (engine.root.id as unknown as number);
+  const conversation = await getConversation(engine, id);
+  if (!conversation) return;
+  await conversation.abort(ctx);
+}
+
 /** Look up a conversation handle by id, falling back to the root if not found. */
 export async function getConversation(
   engine: Engine,
