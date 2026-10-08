@@ -31,6 +31,7 @@ function canvas() {
 
 afterEach(() => {
   vi.clearAllMocks();
+  window.location.hash = '';
 });
 
 /**
@@ -140,5 +141,74 @@ describe('TopBar does not clip its content', () => {
     expect(topBarSource).not.toMatch(/\bh=\{/);
     expect(topBarSource).not.toMatch(/\bh="/);
     expect(topBarSource).toMatch(/py="var\(--space-\d+\)"/);
+  });
+});
+
+/**
+ * I3: reloading the page loses the in-memory selection, so the URL hash is now the durable
+ * record of "which conversation". These tests drive the hash directly (as a reload would) and
+ * through the UI (selecting, creating), and check both directions stay in sync without ever
+ * requesting a plan/messages for a conversation the hash named but the daemon doesn't have.
+ */
+describe('selected conversation persists in the URL hash (I3)', () => {
+  it('a hash naming an existing conversation selects it and requests its plan', async () => {
+    window.location.hash = '#/c/7';
+    vi.mocked(client.getConversations).mockResolvedValue({
+      conversations: [{ id: 7 as ConversationId, parentId: null, at: null, title: 'Lead thread' }],
+    });
+    vi.mocked(client.getPlan).mockResolvedValue({
+      jobs: [{ id: 'real-1', title: 'Fetched from the daemon', status: 'done', needs: [] }],
+    });
+
+    renderApp();
+
+    expect(await canvas().findByText('Fetched from the daemon')).toBeTruthy();
+    expect(client.getPlan).toHaveBeenCalledWith(7);
+  });
+
+  it('a hash naming a non-existent conversation falls back to the empty state, no plan request', async () => {
+    window.location.hash = '#/c/999';
+    vi.mocked(client.getConversations).mockResolvedValue({
+      conversations: [{ id: 7 as ConversationId, parentId: null, at: null, title: 'Lead thread' }],
+    });
+
+    renderApp();
+
+    await waitFor(() => expect(screen.getByText('Lead thread')).toBeTruthy());
+    expect(canvas().getByText('No session selected.')).toBeTruthy();
+    expect(client.getPlan).not.toHaveBeenCalled();
+  });
+
+  it('a hash segment that is not a positive integer is ignored, no request', async () => {
+    window.location.hash = '#/c/abc';
+    vi.mocked(client.getConversations).mockResolvedValue({ conversations: [] });
+
+    renderApp();
+
+    expect(await screen.findByTestId('new-session-button')).toBeTruthy();
+    expect(canvas().getByText('No session selected.')).toBeTruthy();
+    expect(client.getPlan).not.toHaveBeenCalled();
+  });
+
+  it('selecting a conversation updates window.location.hash', async () => {
+    vi.mocked(client.getConversations).mockResolvedValue({
+      conversations: [{ id: 7 as ConversationId, parentId: null, at: null, title: 'Lead thread' }],
+    });
+    vi.mocked(client.getPlan).mockResolvedValue({ jobs: [] });
+
+    renderApp();
+    await waitFor(() => expect(screen.getByText('Lead thread')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('thread-7'));
+
+    await waitFor(() => expect(window.location.hash).toBe('#/c/7'));
+  });
+
+  it('the gallery route still resolves and is not hijacked by the conversation hash logic', async () => {
+    window.location.hash = '#/gallery';
+    vi.mocked(client.getConversations).mockResolvedValue({ conversations: [] });
+
+    renderApp();
+
+    expect(await screen.findByText('CPD state gallery')).toBeTruthy();
   });
 });
