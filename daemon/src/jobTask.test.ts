@@ -49,11 +49,12 @@ async function startJob(
   harness: Harness,
   conversationId: Conversation["id"],
   job: Job,
+  dependsOn: readonly TaskId[] = [],
 ): Promise<TaskId> {
   return harness.commit(async (tx) => {
     return tx.createTask(
       JobTask,
-      { jobId: job.id, conversationId, command: job.command ?? undefined, needs: job.needs },
+      { jobId: job.id, conversationId, command: job.command ?? undefined, dependsOn },
       { ownership: { kind: "conversation" }, conversationId },
     );
   }, ctx);
@@ -167,10 +168,7 @@ describe("cpd.job task", () => {
 
     const taskIdA = await startJob(harness, root.id, jobA);
     const taskIdB = await startJob(harness, root.id, jobB);
-    const taskIdC = await startJob(harness, root.id, {
-      ...jobC,
-      needs: [taskIdA, taskIdB] as unknown as string[],
-    });
+    const taskIdC = await startJob(harness, root.id, jobC, [taskIdA, taskIdB]);
 
     // c must not have run before a settled.
     expect(existsSync(markerC)).toBe(false);

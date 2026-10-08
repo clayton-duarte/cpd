@@ -27,7 +27,10 @@ export type JobTaskInput = {
   readonly jobId: string;
   readonly conversationId: ConversationId;
   readonly command?: string;
-  readonly needs: readonly string[];
+  /** Durable task ids of this job's dependencies, already resolved from job ids by the caller
+   * (see `runPlanJob` in engine.ts). Never job ids -- the two id spaces are kept distinct in the
+   * types so they cannot be silently confused again. */
+  readonly dependsOn: readonly TaskId[];
 };
 
 export type JobTaskCheckpoint =
@@ -36,7 +39,7 @@ export type JobTaskCheckpoint =
       readonly jobId: string;
       readonly conversationId: ConversationId;
       readonly command?: string;
-      readonly needs: readonly string[];
+      readonly dependsOn: readonly TaskId[];
     }
   | {
       readonly phase: "run";
@@ -79,13 +82,13 @@ export const JobTask = defineTask<JobTaskInput, JobTaskCheckpoint, JobTaskResult
     jobId: input.jobId,
     conversationId: input.conversationId,
     command: input.command,
-    needs: input.needs,
+    dependsOn: input.dependsOn,
   }),
   phases: {
     start: async (task, rt, context) => {
-      const { jobId, conversationId, command, needs } = task.state.checkpoint;
+      const { jobId, conversationId, command, dependsOn } = task.state.checkpoint;
 
-      if (needs.length === 0) {
+      if (dependsOn.length === 0) {
         if (!command) {
           await rt.commit(async (tx) => {
             await mirrorStatus(tx, conversationId, jobId, "done");
@@ -103,7 +106,7 @@ export const JobTask = defineTask<JobTaskInput, JobTaskCheckpoint, JobTaskResult
         return;
       }
 
-      const depIds = needs.map((id) => id as unknown as TaskId);
+      const depIds = dependsOn;
       await rt.commit(async (tx) => {
         await mirrorStatus(tx, conversationId, jobId, "queued");
         return {
