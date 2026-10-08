@@ -311,4 +311,165 @@ describe("plan-job HTTP routes", () => {
     expect(statusA).toBe("failed");
     expect(statusB).toBe("done");
   }, 20_000);
+
+  // J1: "blocked" means a human must act; these prove it end to end over the real HTTP routes.
+  it("PATCH sets status blocked with a reason, and blockedReason round-trips through GET /api/plan", async () => {
+    const createRes = await fetch(`${base}/api/plan/job`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "NeedsHuman" }),
+    });
+    const id = ((await createRes.json()) as JobResponse).job!.id;
+
+    const patchRes = await fetch(`${base}/api/plan/job`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, status: "blocked", blockedReason: "waiting on credentials" }),
+    });
+    expect(patchRes.status).toBe(200);
+    const patched = (await patchRes.json()) as JobResponse & { job?: { blockedReason?: string | null } };
+    expect(patched.job?.status).toBe("blocked");
+    expect(patched.job?.blockedReason).toBe("waiting on credentials");
+
+    const planRes = await fetch(`${base}/api/plan`);
+    const plan = (await planRes.json()) as { jobs: { id: string; status: string; blockedReason: string | null }[] };
+    const found = plan.jobs.find((j) => j.id === id);
+    expect(found?.status).toBe("blocked");
+    expect(found?.blockedReason).toBe("waiting on credentials");
+  });
+
+  it("moving a job off blocked clears blockedReason", async () => {
+    const createRes = await fetch(`${base}/api/plan/job`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "UnblockMe" }),
+    });
+    const id = ((await createRes.json()) as JobResponse).job!.id;
+
+    await fetch(`${base}/api/plan/job`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, status: "blocked", blockedReason: "needs a decision" }),
+    });
+
+    const unblockRes = await fetch(`${base}/api/plan/job`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, status: "draft" }),
+    });
+    const unblocked = (await unblockRes.json()) as JobResponse & { job?: { blockedReason?: string | null } };
+    expect(unblocked.job?.status).toBe("draft");
+    expect(unblocked.job?.blockedReason).toBeNull();
+  });
+
+  it("POST /api/plan/job/run on a blocked job returns 409", async () => {
+    const createRes = await fetch(`${base}/api/plan/job`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Blocked", command: "echo should-not-run" }),
+    });
+    const id = ((await createRes.json()) as JobResponse).job!.id;
+
+    await fetch(`${base}/api/plan/job`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, status: "blocked", blockedReason: "needs a human" }),
+    });
+
+    const runRes = await fetch(`${base}/api/plan/job/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    expect(runRes.status).toBe(409);
+    const body = (await runRes.json()) as JobResponse;
+    expect(body.error).toBeTruthy();
+  });
+
+  it("running a job whose prerequisite is blocked returns 409 naming it, and starts no task", async () => {
+    const createA = await fetch(`${base}/api/plan/job`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "BlockedPrereq", command: "echo a" }),
+    });
+    const jobA = ((await createA.json()) as JobResponse).job!;
+
+    await fetch(`${base}/api/plan/job`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: jobA.id, status: "blocked", blockedReason: "stuck" }),
+    });
+
+    const createB = await fetch(`${base}/api/plan/job`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "DependsOnBlocked", command: "echo b", needs: [jobA.id] }),
+    });
+    const jobB = ((await createB.json()) as JobResponse).job!;
+
+    const runB = await fetch(`${base}/api/plan/job/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: jobB.id }),
+    });
+    expect(runB.status).toBe(409);
+    const body = (await runB.json()) as JobResponse;
+    expect(body.error).toContain(jobA.id);
+
+    // No task started: B must not silently enter a waiting state (D125 is the cautionary tale).
+    const planRes = await fetch(`${base}/api/plan`);
+    const plan = (await planRes.json()) as { jobs: { id: string; status: string; taskId: string | null }[] };
+    const foundB = plan.jobs.find((j) => j.id === jobB.id);
+    expect(foundB?.status).toBe("draft");
+    expect(foundB?.taskId).toBeNull();
+  });
+
+  it("GET /api/attention lists blocked and failed jobs, newest first, and empty queue is 200 []", async () => {
+    const createClean = await fetch(`${base}/api/plan/job`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "AttentionEmptyCheck" }),
+    });
+    const cleanId = ((await createClean.json()) as JobResponse).job!.id;
+
+    // Sanity: a draft job alone must not appear in the queue (narrows the "empty" assertion to
+    // mean "nothing needing attention", not "no jobs exist at all").
+    const beforeRes = await fetch(`${base}/api/attention`);
+    expect(beforeRes.status).toBe(200);
+    const before = (await beforeRes.json()) as { items: { jobId: string }[] };
+    expect(before.items.some((item) => item.jobId === cleanId)).toBe(false);
+
+    const createBlocked = await fetch(`${base}/api/plan/job`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "AttentionBlocked" }),
+    });
+    const blockedId = ((await createBlocked.json()) as JobResponse).job!.id;
+    await fetch(`${base}/api/plan/job`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: blockedId, status: "blocked", blockedReason: "needs review" }),
+    });
+
+    const afterRes = await fetch(`${base}/api/attention`);
+    expect(afterRes.status).toBe(200);
+    const after = (await afterRes.json()) as {
+      items: { jobId: string; conversationId: number; status: string; reason: string; jobTitle: string }[];
+    };
+    const item = after.items.find((it) => it.jobId === blockedId);
+    expect(item).toBeTruthy();
+    expect(item?.status).toBe("blocked");
+    expect(item?.reason).toBe("needs review");
+    expect(item?.jobTitle).toBe("AttentionBlocked");
+
+    // Unblock: it must leave the queue.
+    await fetch(`${base}/api/plan/job`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: blockedId, status: "draft" }),
+    });
+    const clearedRes = await fetch(`${base}/api/attention`);
+    const cleared = (await clearedRes.json()) as { items: { jobId: string }[] };
+    expect(cleared.items.some((it) => it.jobId === blockedId)).toBe(false);
+  });
 });

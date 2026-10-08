@@ -24,7 +24,9 @@ import {
   UnknownJobIdError,
   UnknownRunJobIdError,
   JobAlreadyRunningError,
+  JobBlockedError,
   JobDependencyCycleError,
+  getAttentionItems,
   type Engine,
 } from "./engine.ts";
 import { acquireLock, releaseLock } from "./lock.ts";
@@ -85,6 +87,16 @@ async function main(): Promise<void> {
     for (const [client, watching] of sseClients) {
       if (watching === conversationId) client.write(frame);
     }
+  }
+
+  /** Push the attention queue to every connected client (cross-conversation, so unlike
+   * `pushPlanFor` this is not filtered by `watching`). Called whenever a job's status could have
+   * entered or left the `blocked`/`failed` set, so the UI badge updates without polling. */
+  async function pushAttention(): Promise<void> {
+    if (sseClients.size === 0) return;
+    const items = await getAttentionItems(engine);
+    const frame = sseFrame({ type: "attention", items });
+    for (const client of sseClients.keys()) client.write(frame);
   }
 
   onJobOutput((_taskKey, jobId, conversationId, text) => {
@@ -247,6 +259,12 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/attention") {
+      const items = await getAttentionItems(engine);
+      sendJson(res, 200, { items });
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/plan/job") {
       const conversationId = resolveConversationId(url, engine.root.id as unknown as number);
       const raw = await readBody(req);
@@ -278,6 +296,7 @@ async function main(): Promise<void> {
       try {
         const job = await addPlanJob(engine, conversationId, { title, needs, command });
         void pushPlanFor(conversationId);
+        void pushAttention();
         sendJson(res, 200, { job });
       } catch (error) {
         if (error instanceof UnknownConversationError) {
@@ -295,10 +314,11 @@ async function main(): Promise<void> {
       const conversationId = resolveConversationId(url, engine.root.id as unknown as number);
       const raw = await readBody(req);
       let id: string;
-      let status: "draft" | "queued" | "running" | "done" | "failed" | undefined;
+      let status: "draft" | "queued" | "running" | "done" | "failed" | "blocked" | undefined;
       let title: string | undefined;
       let needs: string[] | undefined;
       let command: string | null | undefined;
+      let blockedReason: string | null | undefined;
       try {
         const body = JSON.parse(raw) as {
           id?: unknown;
@@ -306,6 +326,7 @@ async function main(): Promise<void> {
           title?: unknown;
           needs?: unknown;
           command?: unknown;
+          blockedReason?: unknown;
         };
         if (typeof body.id !== "string") throw new Error("id must be a string");
         id = body.id;
@@ -332,16 +353,23 @@ async function main(): Promise<void> {
             command = body.command;
           }
         }
+        if (body.blockedReason !== undefined) {
+          if (body.blockedReason !== null && typeof body.blockedReason !== "string") {
+            throw new Error("blockedReason must be a string or null");
+          }
+          blockedReason = body.blockedReason;
+        }
       } catch {
         sendJson(res, 400, {
           error:
-            "Expected JSON body { id: string, status?: string, title?: string, needs?: string[], command?: string | null }",
+            "Expected JSON body { id: string, status?: string, title?: string, needs?: string[], command?: string | null, blockedReason?: string | null }",
         });
         return;
       }
       try {
-        const job = await patchPlanJob(engine, conversationId, { id, status, title, needs, command });
+        const job = await patchPlanJob(engine, conversationId, { id, status, title, needs, command, blockedReason });
         void pushPlanFor(conversationId);
+        void pushAttention();
         sendJson(res, 200, { job });
       } catch (error) {
         if (error instanceof UnknownConversationError || error instanceof UnknownJobIdError) {
@@ -370,6 +398,7 @@ async function main(): Promise<void> {
       try {
         await deletePlanJob(engine, conversationId, id);
         void pushPlanFor(conversationId);
+        void pushAttention();
         sendJson(res, 200, { ok: true });
       } catch (error) {
         if (error instanceof UnknownConversationError) {
@@ -396,11 +425,14 @@ async function main(): Promise<void> {
       try {
         const result = await runPlanJob(engine, conversationId, id);
         void pushPlanFor(conversationId);
+        void pushAttention();
         sendJson(res, 200, result);
       } catch (error) {
         if (error instanceof UnknownConversationError || error instanceof UnknownRunJobIdError) {
           sendJson(res, 404, { error: error.message });
         } else if (error instanceof JobAlreadyRunningError) {
+          sendJson(res, 409, { error: error.message });
+        } else if (error instanceof JobBlockedError) {
           sendJson(res, 409, { error: error.message });
         } else if (error instanceof JobDependencyCycleError) {
           sendJson(res, 400, { error: error.message });
@@ -426,6 +458,7 @@ async function main(): Promise<void> {
       try {
         await abortPlanJob(engine, conversationId, id);
         void pushPlanFor(conversationId);
+        void pushAttention();
         sendJson(res, 200, { ok: true });
       } catch (error) {
         if (error instanceof UnknownConversationError || error instanceof UnknownRunJobIdError) {

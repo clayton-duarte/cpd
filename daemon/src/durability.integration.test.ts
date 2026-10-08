@@ -81,6 +81,7 @@ describe("crash resumption", () => {
       needs: [],
       command: `sleep 1 && echo SURVIVED >> ${marker}`,
       taskId: null,
+      blockedReason: null,
     };
     await seedJob(first.harness, first.root.id, job);
     const taskId = await startJob(first.harness, first.root.id, job);

@@ -48,15 +48,15 @@ describe("cpd.plan document", () => {
 
     await first.harness.commit(async (tx) => {
       const draft = await tx.doc(PlanDoc, conversationId);
-      const j1: Job = { id: "j1", title: "Build", status: "draft", needs: [], command: null, taskId: null };
-      const j2: Job = { id: "j2", title: "Test", status: "draft", needs: ["j1"], command: null, taskId: null };
+      const j1: Job = { id: "j1", title: "Build", status: "draft", needs: [], command: null, taskId: null, blockedReason: null };
+      const j2: Job = { id: "j2", title: "Test", status: "draft", needs: ["j1"], command: null, taskId: null, blockedReason: null };
       draft.jobs.push(j1, j2);
     }, ctx);
 
     const readBack = await first.harness.snapshot(PlanDoc, conversationId, ctx);
     expect(readBack?.jobs).toEqual([
-      { id: "j1", title: "Build", status: "draft", needs: [], command: null, taskId: null },
-      { id: "j2", title: "Test", status: "draft", needs: ["j1"], command: null, taskId: null },
+      { id: "j1", title: "Build", status: "draft", needs: [], command: null, taskId: null, blockedReason: null },
+      { id: "j2", title: "Test", status: "draft", needs: ["j1"], command: null, taskId: null, blockedReason: null },
     ]);
 
     await first.harness.close(ctx);
@@ -65,8 +65,8 @@ describe("cpd.plan document", () => {
     const second = await openTestHarness(dbPath);
     const reread = await second.harness.snapshot(PlanDoc, conversationId, ctx);
     expect(reread?.jobs).toEqual([
-      { id: "j1", title: "Build", status: "draft", needs: [], command: null, taskId: null },
-      { id: "j2", title: "Test", status: "draft", needs: ["j1"], command: null, taskId: null },
+      { id: "j1", title: "Build", status: "draft", needs: [], command: null, taskId: null, blockedReason: null },
+      { id: "j2", title: "Test", status: "draft", needs: ["j1"], command: null, taskId: null, blockedReason: null },
     ]);
 
     await second.harness.close(ctx);
@@ -80,8 +80,8 @@ describe("cpd.plan document", () => {
 
     await harness.commit(async (tx) => {
       const draft = await tx.doc(PlanDoc, root.id);
-      const j1: Job = { id: "j1", title: "Build", status: "draft", needs: [], command: null, taskId: null };
-      const j2: Job = { id: "j2", title: "Test", status: "draft", needs: ["j1"], command: null, taskId: null };
+      const j1: Job = { id: "j1", title: "Build", status: "draft", needs: [], command: null, taskId: null, blockedReason: null };
+      const j2: Job = { id: "j2", title: "Test", status: "draft", needs: ["j1"], command: null, taskId: null, blockedReason: null };
       draft.jobs.push(j1, j2);
     }, ctx);
 
@@ -94,13 +94,13 @@ describe("cpd.plan document", () => {
 
     const childAtCreation = await harness.snapshot(PlanDoc, child.id, ctx);
     expect(childAtCreation?.jobs).toEqual([
-      { id: "j1", title: "Build", status: "draft", needs: [], command: null, taskId: null },
-      { id: "j2", title: "Test", status: "draft", needs: ["j1"], command: null, taskId: null },
+      { id: "j1", title: "Build", status: "draft", needs: [], command: null, taskId: null, blockedReason: null },
+      { id: "j2", title: "Test", status: "draft", needs: ["j1"], command: null, taskId: null, blockedReason: null },
     ]);
 
     await harness.commit(async (tx) => {
       const draft = await tx.doc(PlanDoc, child.id);
-      const j3: Job = { id: "j3", title: "Deploy", status: "draft", needs: ["j2"], command: null, taskId: null };
+      const j3: Job = { id: "j3", title: "Deploy", status: "draft", needs: ["j2"], command: null, taskId: null, blockedReason: null };
       draft.jobs.push(j3);
     }, ctx);
 
@@ -108,13 +108,13 @@ describe("cpd.plan document", () => {
     const childAfterChildWrite = await harness.snapshot(PlanDoc, child.id, ctx);
 
     expect(parentAfterChildWrite?.jobs).toEqual([
-      { id: "j1", title: "Build", status: "draft", needs: [], command: null, taskId: null },
-      { id: "j2", title: "Test", status: "draft", needs: ["j1"], command: null, taskId: null },
+      { id: "j1", title: "Build", status: "draft", needs: [], command: null, taskId: null, blockedReason: null },
+      { id: "j2", title: "Test", status: "draft", needs: ["j1"], command: null, taskId: null, blockedReason: null },
     ]);
     expect(childAfterChildWrite?.jobs).toEqual([
-      { id: "j1", title: "Build", status: "draft", needs: [], command: null, taskId: null },
-      { id: "j2", title: "Test", status: "draft", needs: ["j1"], command: null, taskId: null },
-      { id: "j3", title: "Deploy", status: "draft", needs: ["j2"], command: null, taskId: null },
+      { id: "j1", title: "Build", status: "draft", needs: [], command: null, taskId: null, blockedReason: null },
+      { id: "j2", title: "Test", status: "draft", needs: ["j1"], command: null, taskId: null, blockedReason: null },
+      { id: "j3", title: "Deploy", status: "draft", needs: ["j2"], command: null, taskId: null, blockedReason: null },
     ]);
 
     await harness.close(ctx);
