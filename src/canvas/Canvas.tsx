@@ -6,7 +6,7 @@ import {
   type Edge,
   type Node,
 } from '@xyflow/react';
-import type { CpdData } from '../model/types';
+import type { CpdData, Job } from '../model/types';
 import type { LayoutResult } from '../layout/types';
 import { buildGraph } from '../layout/toGraph';
 import { elkLayout } from '../layout/elk';
@@ -21,7 +21,15 @@ const nodeTypes = {
   workflowHeader: WorkflowHeaderNode,
 };
 
-export function Canvas({ data }: { data: CpdData }): JSX.Element {
+export function Canvas({
+  data,
+  selectedJobId,
+  onSelectJob,
+}: {
+  data: CpdData;
+  selectedJobId?: string | null;
+  onSelectJob?: (jobId: string | null) => void;
+}): JSX.Element {
   const [positions, setPositions] = useState<LayoutResult | null>(null);
 
   const graph = useMemo(() => buildGraph(data, JOB_CARD_SIZE), [data]);
@@ -73,6 +81,7 @@ export function Canvas({ data }: { data: CpdData }): JSX.Element {
           data: { job },
           draggable: false,
           connectable: false,
+          selected: job.id === selectedJobId,
         };
       }
 
@@ -131,6 +140,11 @@ export function Canvas({ data }: { data: CpdData }): JSX.Element {
       nodeTypes={nodeTypes}
       nodesDraggable={false}
       nodesConnectable={false}
+      elementsSelectable={false}
+      onNodeClick={(_, node) => {
+        if (node.type === 'job') onSelectJob?.((node.data.job as Job).id);
+      }}
+      onPaneClick={() => onSelectJob?.(null)}
       panOnDrag
       zoomOnScroll
       fitView
