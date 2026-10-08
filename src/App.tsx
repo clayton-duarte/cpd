@@ -9,8 +9,10 @@ import {
   Group,
   Indicator,
   Paper,
+  ScrollArea,
   Stack,
   Text,
+  Tooltip,
 } from '@mantine/core';
 import { IconMessagePlus, IconPlayerPlay, IconSquarePlus } from '@tabler/icons-react';
 import { Canvas } from './canvas/Canvas';
@@ -19,11 +21,14 @@ import { ChatPanel } from './components/ChatPanel';
 import { Gallery } from './Gallery';
 import { useLevelTransition } from './canvas/useLevelTransition';
 import { usePlan } from './engine/usePlan';
+import { useAttention } from './engine/useAttention';
 import { runJob } from './engine/client';
+import { abortJob } from './engine/jobActions';
 import { planToCpdData } from './model/fromPlan';
 import { NewJobModal } from './components/NewJobModal';
 import { parseConversationId } from './model/navigation';
 import type { ConversationId, ConversationNode } from './engine/types';
+import type { AttentionItem } from './engine/types';
 import './canvas/xyflow-theme.css';
 
 /** Trivial hash-based routing: no router dependency, per the A2-4 spec. Also used by I3 to carry
@@ -82,51 +87,110 @@ function TreePanel({
 }
 
 /**
- * J2: left column, bottom -- static presentational placeholder for the attention queue (blocked
- * jobs + other items needing the user). TODO(J3): wire to `GET /api/attention` once J1's
- * `blocked` status/endpoint exist in the daemon; the `12` badge is an unread-count placeholder,
- * not derived from any local data (per D132 clarification).
+ * J3b: one real attention item per job needing the user (blocked jobs, failures). Clicking an
+ * item selects its job on the canvas -- if the item belongs to a different conversation than the
+ * one currently selected, the conversation is switched first (via `onSelectItem`, which drives
+ * `selectedConversationId` and therefore the URL hash -- D133/I3's existing mechanism, not a
+ * parallel state container). The action bar is the only thing that acts on a job; this panel is
+ * purely a selector (per lead decision, J3b card).
  */
-function AttentionQueuePanel() {
+function AttentionQueuePanel({
+  items,
+  selectedConversationId,
+  onSelectItem,
+}: {
+  items: AttentionItem[];
+  selectedConversationId?: ConversationId;
+  onSelectItem: (item: AttentionItem) => void;
+}) {
   return (
     <Paper withBorder radius="md" shadow="sm" p="var(--pad)" data-testid="panel-attention-queue">
       <Group justify="space-between" mb="var(--space-2)">
         <Text size="sm" fw={600} c="var(--fg-bright)">
           Attention
         </Text>
-        {/* TODO(J3): replace with the real unread-attention count from GET /api/attention */}
-        <Indicator label={12} size={18} color="var(--red-solid)" position="middle-end" offset={-4} inline>
-          <span />
-        </Indicator>
+        {items.length > 0 ? (
+          <Indicator
+            label={items.length}
+            size={18}
+            color="var(--red-solid)"
+            position="middle-end"
+            offset={-4}
+            inline
+          >
+            <span />
+          </Indicator>
+        ) : null}
       </Group>
-      {/* TODO(J3): render the real attention queue (blocked jobs, failures, questions) once J1 ships */}
-      <Alert color="var(--red-solid)" variant="light" title="Blocked: placeholder">
-        No real data yet -- wired in J3.
-      </Alert>
+      <ScrollArea.Autosize mah="100%">
+        {items.length === 0 ? (
+          <EmptyState title="Nothing needs you" description="You're all caught up." />
+        ) : (
+          <Stack gap="var(--space-2)">
+            {items.map((item) => (
+              <Alert
+                key={item.jobId}
+                color="var(--red-solid)"
+                variant="light"
+                title={`${item.status}: ${item.jobTitle}`}
+                data-testid={`attention-item-${item.jobId}`}
+                style={{ cursor: 'pointer' }}
+                onClick={() => onSelectItem(item)}
+              >
+                {item.reason}
+                {item.conversationId !== selectedConversationId ? (
+                  <Text size="xs" c="var(--fg-faint)" mt="var(--space-1)">
+                    in {item.conversationTitle}
+                  </Text>
+                ) : null}
+              </Alert>
+            ))}
+          </Stack>
+        )}
+      </ScrollArea.Autosize>
     </Paper>
   );
 }
 
 /**
- * J2: centre column, bottom -- static presentational placeholder for the action bar
- * (Comment / Stop / Skip). TODO(J3): wire to the selected job once that interaction exists; for
- * now `opened` is driven by local state (a job being selected), not real action-availability data.
+ * J3b: the action bar acts only on the canvas selection (`selectedJobId`) -- never a separate
+ * target. Stop is wired to the daemon's real abort route; Comment and Skip have no backend route
+ * today (verified: the daemon exposes only `plan/job`, `plan/job/run`, `plan/job/abort`) so they
+ * render visibly disabled with a tooltip rather than silently doing nothing.
  */
-function ActionBarPanel({ opened }: { opened: boolean }) {
+function ActionBarPanel({
+  opened,
+  canStop,
+  onStop,
+}: {
+  opened: boolean;
+  canStop: boolean;
+  onStop: () => void;
+}) {
   return (
     <ActionBar opened={opened} data-testid="panel-action-bar" withinPortal={false} shadow="sm" radius="md">
-      {/* TODO(J3): wire these to the real selected-job action API */}
-      <Button variant="subtle" size="xs">
-        Comment
-      </Button>
+      <Tooltip label="Not implemented yet">
+        <Button variant="subtle" size="xs" disabled data-testid="action-comment">
+          Comment
+        </Button>
+      </Tooltip>
       <ActionBar.Divider />
-      <Button variant="subtle" size="xs" c="var(--red)">
+      <Button
+        variant="subtle"
+        size="xs"
+        c="var(--red)"
+        disabled={!canStop}
+        data-testid="action-stop"
+        onClick={onStop}
+      >
         Stop
       </Button>
       <ActionBar.Divider />
-      <Button variant="subtle" size="xs">
-        Skip
-      </Button>
+      <Tooltip label="Not implemented yet">
+        <Button variant="subtle" size="xs" disabled data-testid="action-skip">
+          Skip
+        </Button>
+      </Tooltip>
     </ActionBar>
   );
 }
@@ -261,6 +325,35 @@ function App() {
     [conversations, selectedConversationId],
   );
 
+  // J3b: the attention queue is a selector, never its own action path (lead decision) -- clicking
+  // an item just drives the same `selectedConversationId`/`selectedJobId` state the sidebar and
+  // canvas already use, so the action bar always acts on the canvas selection.
+  const { items: attentionItems } = useAttention();
+  // Rides the same refcounted stream connection `usePlan` already shares (H1's useEngineStream) --
+  // calling it again here is not a second connection, just a second subscriber to the job list so
+  // the action bar can know the selected job's status without threading it up from ConversationView.
+  const { jobs: selectedConversationJobs } = usePlan(selectedConversationId);
+  const selectedJob = selectedConversationJobs.find((job) => job.id === selectedJobId);
+
+  // When an attention click changes the conversation, the job-selection-clearing effect below
+  // would immediately wipe the job we just asked for (it runs on every `selectedConversationId`
+  // change). This ref carries the job id across that one render so the click's intent survives.
+  const pendingJobIdRef = useRef<string | null>(null);
+
+  const handleSelectAttentionItem = (item: AttentionItem) => {
+    if (item.conversationId !== selectedConversationId) {
+      pendingJobIdRef.current = item.jobId;
+      setSelectedConversationId(item.conversationId as ConversationId);
+    } else {
+      setSelectedJobId(item.jobId);
+    }
+  };
+
+  const handleStop = () => {
+    if (selectedConversationId === undefined || selectedJobId === null) return;
+    void abortJob(selectedConversationId, selectedJobId);
+  };
+
   // I3: the hash is the source of truth for "which conversation", selection is derived from it
   // once the conversation list is known (so an unknown/deleted id can fall back to the empty
   // state instead of requesting a 404'd plan). `appliedHashRef` guards against the ping-pong of
@@ -305,8 +398,15 @@ function App() {
 
   // Selection is deliberately NOT part of navigation state (see D3 card): the selected
   // conversation answers "which session", selection answers "which job within it". Clear it
-  // whenever the conversation changes so it never points at a stale job from a different plan.
+  // whenever the conversation changes so it never points at a stale job from a different plan --
+  // UNLESS an attention-item click just requested a specific job in the conversation it switched
+  // us to (pendingJobIdRef), in which case honour that instead of clobbering it.
   useEffect(() => {
+    if (pendingJobIdRef.current !== null) {
+      setSelectedJobId(pendingJobIdRef.current);
+      pendingJobIdRef.current = null;
+      return;
+    }
     setSelectedJobId(null);
   }, [selectedConversationId]);
 
@@ -369,7 +469,11 @@ function App() {
           />
         </div>
         <div style={{ flexShrink: 0, pointerEvents: 'auto' }}>
-          <AttentionQueuePanel />
+          <AttentionQueuePanel
+            items={attentionItems}
+            selectedConversationId={selectedConversationId}
+            onSelectItem={handleSelectAttentionItem}
+          />
         </div>
       </Stack>
 
@@ -388,7 +492,11 @@ function App() {
         }}
       >
         <div style={{ pointerEvents: 'auto' }}>
-          <ActionBarPanel opened={selectedJobId !== null} />
+          <ActionBarPanel
+            opened={selectedJobId !== null}
+            canStop={selectedJob?.status === 'running'}
+            onStop={handleStop}
+          />
         </div>
       </div>
 
