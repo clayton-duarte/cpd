@@ -702,3 +702,29 @@ required, because it is the only check that exercises the same loader production
 
 This is the sixth silent-success of the night, and the first where *green tests themselves* were the
 disguise.
+---
+
+## D117 — HTTP fetch for initial state, SSE for updates; one EventSource per conversation
+
+The `/api/stream` handshake pushes `{type:"messages"}` and `{type:"conversations"}` on connect, but
+**not** the plan. A client listening only to SSE would see every plan *change* and never the
+*initial* plan.
+
+**Chosen:** the client fetches initial state over HTTP and uses SSE purely for subsequent updates.
+This is already the shape `useEngineStream` uses for messages, so the plan follows an established
+in-house pattern rather than a second one invented beside it.
+
+**Rejected — adding the plan to the SSE handshake.** It would make the stream the source of both
+initial and incremental state, meaning every new consumer must be added to the handshake, and the
+first paint would be gated on the SSE connection. It also would have meant editing
+`daemon/src/index.ts` while H6 owns that file, serialising two cards that are otherwise parallel.
+
+**Hard constraint carried into the card: exactly one `EventSource` per conversation.** H1 built a
+refcounted keyed map with proven teardown; plan frames must be exposed from that same module, the
+way `onConversationsSignal` already is. A second connection per consumer would duplicate every
+frame, double reconnect storms, and leak on unmount — and the daemon's `watch()` serves only one
+consumer, so fan-out is the client's job and must happen in exactly one place.
+
+**Scope note:** only the `jobs` level moves to real data. `leads` and `plans` stay on fixtures
+because they map to the project/session hierarchy the daemon does not expose yet. Converting them
+needs that hierarchy to exist first and is deliberately a separate card.
