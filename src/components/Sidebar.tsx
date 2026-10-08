@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Group, Stack, Text, UnstyledButton } from '@mantine/core';
 import { IconChevronDown, IconChevronRight, IconLayoutSidebarLeftCollapse } from '@tabler/icons-react';
 import { selectLead, selectPlan, type NavState } from '../model/navigation';
@@ -9,6 +9,35 @@ export interface SidebarProps {
   data: CpdData;
   nav: NavState;
   onNavigate: (next: NavState) => void;
+}
+
+export const MIN_WIDTH = 180;
+export const MAX_WIDTH = 480;
+const DEFAULT_WIDTH = 260;
+const STORAGE_KEY = 'cpd.sidebar.width';
+
+function clamp(value: number): number {
+  return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, value));
+}
+
+function readStoredWidth(): number {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) return DEFAULT_WIDTH;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return DEFAULT_WIDTH;
+    return clamp(parsed);
+  } catch {
+    return DEFAULT_WIDTH;
+  }
+}
+
+function writeStoredWidth(width: number): void {
+  try {
+    sessionStorage.setItem(STORAGE_KEY, String(width));
+  } catch {
+    // storage unavailable -- ignore, rendering must not break
+  }
 }
 
 interface RowProps {
@@ -72,6 +101,30 @@ export function Sidebar({ data, nav, onNavigate }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [expandedLeads, setExpandedLeads] = useState<Set<string>>(new Set());
   const [expandedPlans, setExpandedPlans] = useState<Set<string>>(new Set());
+  const [width, setWidth] = useState<number>(() => readStoredWidth());
+  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const handlePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    dragRef.current = { startX: e.clientX, startWidth: width };
+  };
+
+  const handlePointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    setWidth(clamp(drag.startWidth + (e.clientX - drag.startX)));
+  };
+
+  const endDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    e.currentTarget.releasePointerCapture?.(e.pointerId);
+    setWidth((current) => {
+      writeStoredWidth(current);
+      return current;
+    });
+  };
 
   const toggleLead = (leadId: string) =>
     setExpandedLeads((prev) => {
@@ -93,7 +146,10 @@ export function Sidebar({ data, nav, onNavigate }: SidebarProps) {
     return (
       <UnstyledButton
         data-testid="sidebar-toggle"
-        onClick={() => setCollapsed(false)}
+        onClick={() => {
+          setWidth(readStoredWidth());
+          setCollapsed(false);
+        }}
         p="var(--pad)"
         style={{ color: 'var(--fg-faint)', borderRight: '1px solid var(--line)' }}
       >
@@ -107,9 +163,37 @@ export function Sidebar({ data, nav, onNavigate }: SidebarProps) {
   return (
     <Stack
       gap={0}
-      w={260}
-      style={{ backgroundColor: 'var(--bg-panel)', borderRight: '1px solid var(--line)', overflow: 'auto' }}
+      w={width}
+      style={{
+        position: 'relative',
+        backgroundColor: 'var(--bg-panel)',
+        borderRight: '1px solid var(--line)',
+        overflow: 'auto',
+        flexShrink: 0,
+      }}
     >
+      <div
+        data-testid="sidebar-resize-handle"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        style={{
+          position: 'absolute',
+          top: 0,
+          right: 0,
+          width: 6,
+          height: '100%',
+          cursor: 'col-resize',
+          backgroundColor: 'var(--line)',
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.backgroundColor = 'var(--line-strong)';
+        }}
+        onMouseLeave={(e) => {
+          if (!dragRef.current) e.currentTarget.style.backgroundColor = 'var(--line)';
+        }}
+      />
       <Group justify="flex-end" p="var(--pad)" pb={0}>
         <UnstyledButton
           data-testid="sidebar-toggle"
