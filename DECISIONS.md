@@ -1489,8 +1489,8 @@ Deleted the script, removed `CPD_REVIEW_PORT`/`CPD_DEV_PORT` (knobs that existed
 rewrote the README section as "check out the branch, run the same command".
 
 **The rule this encodes:** a personal tool committed to a shared repo is indistinguishable from
-project infrastructure — the user cannot tell "Clayton's review helper" from "how you run this
-app". When the standard toolchain already covers the need, the bespoke script is pure cost. The
+project infrastructure — the user cannot tell "the lead's personal review helper" from "how you run
+this app". When the standard toolchain already covers the need, the bespoke script is pure cost. The
 fact that I'd spent two cards (J4, J5) hardening it made it *look* load-bearing, which is exactly
 how accidental infrastructure happens. Sunk cost is not a reason to keep it.
 ---
