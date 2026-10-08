@@ -1204,3 +1204,44 @@ Cards: **I1** (daemon: `POST /api/conversation`, empty plan returns 200 not 404)
 the path exists, not that a user can find or reach it.** The correct acceptance test for a product
 is always *cold start to outcome*, with no hand-seeded state. I will not call a prototype usable
 again without running that path from an empty database.
+---
+
+## D132 — The layout moves from AppShell columns to a full-bleed canvas with floating panels
+
+The user supplied a wireframe of the intended final layout. It **supersedes the AppShell direction
+agreed earlier the same day** (I2). Confirmed with the user before acting — not assumed.
+
+**The structural difference:** `AppShell` *reserves* space — Navbar/Aside are columns and `Main` is
+what's left over. The wireframe has **"Canvas fills the screen"** with the tree, attention queue,
+transcript, composer and action bar **floating above it** as panels. Those are mutually exclusive
+models, so AppShell is now the wrong primitive. Panels become Mantine `Paper` positioned over a
+full-bleed canvas.
+
+This is not a reversal of the *reason* for I2 — fixtures out, real data, stock components, real
+spacing all stand. Only the container changes. **I2 was not wasted:** it deleted fixture navigation
+and made the tree real, which this layout needs regardless.
+
+**Ruled by the user (`clarify`, 4 questions):**
+1. **Tree click on a Job** -> stay on that job's parent workflow and **select/highlight** the node.
+   The tree navigates; the canvas follows context. *(Not a zoom, not a detail view.)* This also ends
+   the drill-down model: session/workflow/job are **one continuous tree**, not separate screens.
+2. **The red stack with the `12` badge** is an **attention queue** — everything needing the user
+   (blocked jobs, failures, questions); `12` is an **unread count**. Not "count of blocked".
+3. **The three FABs** are **New session / New workflow / New job**.
+4. **Direction confirmed:** full-bleed canvas, floating panels.
+
+**Sequencing (deliberate):** `I3` (selection-survives-reload) is **in flight and owns `src/App.tsx`**
+— the exact file a layout rewrite guts. Dispatching the rewrite now would guarantee a conflict, so
+the frontend rewrite waits for I3 to merge. **J1 was dispatched in parallel instead because it is
+daemon-only** and the layout cannot be built without it.
+
+**J1's finding — a contract split nobody noticed:** the frontend already has a `blocked` status
+(`derive.test.ts` asserts red + `hand-stop`), but `daemon/src/plans.ts` `JobStatus` is
+`draft|queued|running|done|failed` — **there is no `blocked` in the daemon.** The attention queue,
+the headline feature of the wireframe, had **no data source**. Only the frontend half was tested,
+which is why it read as working. J1 adds `blocked` + `blockedReason`, makes blocked jobs refuse to
+run (409), stops a blocked prerequisite from silently deadlocking dependents (the D125 failure mode),
+adds `GET /api/attention`, and pushes an `attention` SSE frame.
+
+**Lesson: a type that exists on one side of an API and not the other is a bug the tests actively
+hide — each side tests its own half and both stay green.**
