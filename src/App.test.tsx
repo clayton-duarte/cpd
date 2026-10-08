@@ -5,6 +5,7 @@ import { render, screen, fireEvent, within, waitFor } from '@testing-library/rea
 import { MantineProvider } from '@mantine/core';
 import App from './App';
 import * as client from './engine/client';
+import * as jobActions from './engine/jobActions';
 import type { ConversationId } from './engine/types';
 
 vi.mock('./engine/client', async (importOriginal) => {
@@ -14,6 +15,15 @@ vi.mock('./engine/client', async (importOriginal) => {
     getConversations: vi.fn(),
     getPlan: vi.fn(),
     createConversation: vi.fn(),
+    getAttention: vi.fn().mockResolvedValue({ items: [] }),
+  };
+});
+
+vi.mock('./engine/jobActions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./engine/jobActions')>();
+  return {
+    ...actual,
+    abortJob: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -121,6 +131,68 @@ describe('App shows only real conversations, no fixtures (I2)', () => {
 
     // ...and still present at the jobs level.
     expect(screen.getByRole('textbox')).toBeTruthy();
+  });
+
+  it('clicking an attention item for a different conversation switches to it and opens the action bar', async () => {
+    vi.mocked(client.getConversations).mockResolvedValue({
+      conversations: [{ id: 1 as ConversationId, parentId: null, at: null, title: 'Harvest thread' }],
+    });
+    vi.mocked(client.getPlan).mockResolvedValue({
+      jobs: [{ id: 'job-1', title: 'Blocked job', status: 'running', needs: [] }],
+    });
+    vi.mocked(client.getAttention).mockResolvedValue({
+      items: [
+        {
+          jobId: 'job-1',
+          conversationId: 1,
+          conversationTitle: 'Harvest thread',
+          jobTitle: 'Blocked job',
+          status: 'blocked',
+          reason: 'waiting on input',
+          at: 0,
+        },
+      ],
+    });
+
+    renderApp();
+    await waitFor(() => expect(screen.getByTestId('attention-item-job-1')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('attention-item-job-1'));
+
+    await waitFor(() => expect(client.getPlan).toHaveBeenCalledWith(1));
+    await waitFor(() => expect((screen.getByTestId('action-stop') as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it('Stop in the action bar calls abortJob for the selected conversation and job', async () => {
+    vi.mocked(client.getConversations).mockResolvedValue({
+      conversations: [{ id: 1 as ConversationId, parentId: null, at: null, title: 'Harvest thread' }],
+    });
+    vi.mocked(client.getPlan).mockResolvedValue({
+      jobs: [{ id: 'job-1', title: 'Running job', status: 'running', needs: [] }],
+    });
+    vi.mocked(client.getAttention).mockResolvedValue({
+      items: [
+        {
+          jobId: 'job-1',
+          conversationId: 1,
+          conversationTitle: 'Harvest thread',
+          jobTitle: 'Running job',
+          status: 'blocked',
+          reason: 'waiting on input',
+          at: 0,
+        },
+      ],
+    });
+    const abortSpy = vi.mocked(jobActions.abortJob);
+
+    renderApp();
+    await waitFor(() => expect(screen.getByTestId('attention-item-job-1')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('attention-item-job-1'));
+    await waitFor(() => expect((screen.getByTestId('action-stop') as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(screen.getByTestId('action-stop'));
+
+    expect(abortSpy).toHaveBeenCalledWith(1, 'job-1');
   });
 });
 
