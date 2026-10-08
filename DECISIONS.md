@@ -806,14 +806,19 @@ A blanket file skip on `DECISIONS.md` would have re-opened the exact hole D119 c
 real leak (the user's first name) lived in that very file. Verified: appending a personal name to
 `DECISIONS.md` still fails the suite, naming file and line.
 
-**`$HOME/` and `~/` never trip the guard.** Only literal `/Users/<name>/` and `/home/<name>/` do.
-Flagging portable paths would teach people to write worse ones.
+**`$HOME/` and `~/` never trip the guard.** Only literal absolute macOS/Linux home-directory
+prefixes do. Flagging portable paths would teach people to write worse ones.
 
 **The allowlist is itself unit-tested** — there are assertions that `DECISIONS.md` is *not* exempt
 for the name, path, credential and email classes. An exemption nobody tested is just a hole.
 
-Proven by deliberate leak, not by a green run: injecting `/Users/...` + a `ghp_` token into
-`theme.css` fails the suite with file, line and a redacted match. Matches are reported redacted, so
+Proven by deliberate leak, not by a green run: injecting an absolute home path plus a GitHub
+token literal into `theme.css` fails the suite with file, line and a redacted match. Matches are reported redacted, so
 the guard never reprints a real secret into CI logs.
 
 No hook, no CI file, no new dependency — a plain Vitest test in the gate everyone already runs.
+**Addendum (first real catch).** This very entry tripped the new guard on PR #38: documenting the
+path patterns meant quoting them. Fixed by **rewording the prose, not by widening the allowlist** —
+exempting `DECISIONS.md` for the path class would have reopened the hole D120 exists to close.
+Rule: when the guard flags the docs, change the docs. The guard caught a real pattern in its first
+PR, which is more than the old fixture tripwire ever did.
