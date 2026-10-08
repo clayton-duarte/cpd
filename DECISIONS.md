@@ -1678,3 +1678,49 @@ where the bug lives before believing it.**
 K1 — `node --watch` on the daemon also watches `.worktrees/`, so a builder working in
 `.worktrees/t_f0859558/` restarts the lead's daemon. Filed as a follow-up; `--watch` should be
 scoped to `daemon/src`.
+
+---
+
+## D148 — K4 merged: the scroll works. Its regression guard does not. Merged anyway, debt filed as K6.
+
+K4 replaced K3's fixed ref with `findScrollableAncestor(row)`, walking up to the first ancestor with
+`scrollHeight > clientHeight` **and** `overflow-y: auto|scroll`. Browser-verified on the branch:
+
+```
+panel scrollable: true (491/207)
+new row #176:  panel [56,265]  row [235,263]
+FULLY_VISIBLE: true     panel.scrollTop: 301
+```
+
+K3's numbers for the identical action were `FULLY_VISIBLE: false`, `scrollTop: 0` -- with the same
+193 green tests. The feature is real this time.
+
+**But the sabotage table says the guard is hollow:**
+
+```
+A: delete scrollIntoView            -> 1 failed  (caught)
+B: always bail (fullyVisible=true)  -> 1 failed  (caught)
+C: panel = row.parentElement        -> 24 PASSED (NOT caught)  <-- K3's exact bug
+```
+
+Instrumenting under C prints `SABOTAGE_PANEL null 0 0 0-0`: `row.parentElement` is an intermediate
+element the test never mocked, so it reports `0/0` with rect `0-0`; the row at `[310,338]` reads as
+not-visible against that, `scrollIntoView` fires, and the assertion passes.
+
+**The lesson is sharper than "mock per element" (D146).** K4 did mock per element -- correctly -- and
+the guard still failed to guard, because it asserts **that** a scroll happened while the bug was
+always about **which element was measured**. Mocking granularity was never the real issue; the
+assertion target was. *A regression test must assert the thing that was wrong, not the symptom that
+was visible.* The builder mocked only the two elements it reasoned about and left the gap between
+them undefined, and undefined geometry in jsdom reads as `0`, which happens to look like "not
+visible" -- the failure mode silently satisfies the assertion.
+
+**Decision: merged (`fe1f903`) rather than bounced.** The user-visible defect is fixed and proven in
+the browser; holding a working fix hostage to its test would leave "New session" broken for the user
+longer. The test debt is real but strictly smaller than the bug, and is filed as **K6 `t_642705b1`**
+(test-only, with the sabotage table as its definition of done). PR #56 (K3) closed as superseded.
+
+**Standing rule, now applied to myself:** every scroll/layout/visibility card from here on must ship
+a sabotage table in the PR body, not a green checkmark. I have now caught two consecutive cards
+where the suite was green and the guarantee absent; the suite is not the evidence, the falsification
+is.
