@@ -149,6 +149,66 @@ async function main(): Promise<void> {
     }, 500);
   }
 
+  // K1: the root subscription above only ever calls `pushMessagesFor(engine.root.id)`, so a
+  // client watching any OTHER (child) conversation never receives a `messages` frame past its
+  // initial snapshot. Mirror the sseClients map with one refcounted subscription per watched
+  // non-root conversation: created when the first client starts watching it, torn down when the
+  // last one stops. Two clients watching the same conversation share a single subscription.
+  type ChildWatch = { refCount: number; unsubscribe?: () => void; viewState?: { dispose(): void }; pollTimer?: NodeJS.Timeout };
+  const childWatches = new Map<number, ChildWatch>();
+
+  async function watchConversation(conversationId: number): Promise<void> {
+    if (conversationId === (engine.root.id as unknown as number)) return;
+    const existing = childWatches.get(conversationId);
+    if (existing) {
+      existing.refCount += 1;
+      return;
+    }
+    const watch: ChildWatch = { refCount: 1 };
+    childWatches.set(conversationId, watch);
+
+    const conversation = await getConversation(engine, conversationId);
+    if (!conversation) return;
+
+    try {
+      const state = await conversation.viewState(ctx);
+      watch.viewState = state;
+      watch.unsubscribe = state.subscribe(() => {
+        void pushMessagesFor(conversationId);
+      });
+    } catch (error) {
+      console.error(
+        `[cpd-daemon] viewState().subscribe() unavailable for conversation ${conversationId}, falling back to polling:`,
+        error,
+      );
+      let lastCount = -1;
+      let lastContent = "";
+      watch.pollTimer = setInterval(() => {
+        void getMessages(conversation).then((messages) => {
+          const last = messages[messages.length - 1];
+          const content = last?.content ?? "";
+          if (messages.length !== lastCount || content !== lastContent) {
+            lastCount = messages.length;
+            lastContent = content;
+            void pushMessagesFor(conversationId);
+          }
+        });
+      }, 500);
+    }
+  }
+
+  function unwatchConversation(conversationId: number): void {
+    if (conversationId === (engine.root.id as unknown as number)) return;
+    const watch = childWatches.get(conversationId);
+    if (!watch) return;
+    watch.refCount -= 1;
+    if (watch.refCount > 0) return;
+    watch.unsubscribe?.();
+    watch.viewState?.dispose();
+    if (watch.pollTimer) clearInterval(watch.pollTimer);
+    childWatches.delete(conversationId);
+  }
+
   let lastConversationCount = -1;
   const conversationPollTimer = setInterval(() => {
     void listConversations(engine).then((conversations) => {
@@ -491,6 +551,8 @@ async function main(): Promise<void> {
         return;
       }
 
+      await watchConversation(conversationId);
+
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
@@ -510,6 +572,7 @@ async function main(): Promise<void> {
       req.on("close", () => {
         clearInterval(keepalive);
         sseClients.delete(res);
+        unwatchConversation(conversationId);
       });
       return;
     }
@@ -528,6 +591,12 @@ async function main(): Promise<void> {
     unsubscribe?.();
     viewState?.dispose();
     if (pollTimer) clearInterval(pollTimer);
+    for (const watch of childWatches.values()) {
+      watch.unsubscribe?.();
+      watch.viewState?.dispose();
+      if (watch.pollTimer) clearInterval(watch.pollTimer);
+    }
+    childWatches.clear();
     clearInterval(conversationPollTimer);
     server.close();
     await engine.close();
