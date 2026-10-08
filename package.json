@@ -15,6 +15,7 @@
   "dependencies": {
     "@mantine/core": "^9.7.1",
     "@mantine/hooks": "^9.7.1",
+    "@mantine/notifications": "^9.7.1",
     "@tabler/icons-react": "^3.31.0",
     "@xyflow/react": "^12.12.0",
     "elkjs": "^0.12.0",

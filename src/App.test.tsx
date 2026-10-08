@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
+import { Notifications } from '@mantine/notifications';
 import App from './App';
 import * as client from './engine/client';
 import * as jobActions from './engine/jobActions';
@@ -30,6 +31,7 @@ vi.mock('./engine/jobActions', async (importOriginal) => {
 function renderApp() {
   return render(
     <MantineProvider>
+      <Notifications />
       <App />
     </MantineProvider>,
   );
@@ -83,6 +85,58 @@ describe('App shows only real conversations, no fixtures (I2)', () => {
 
     await waitFor(() => expect(client.createConversation).toHaveBeenCalled());
     await waitFor(() => expect(client.getPlan).toHaveBeenCalledWith(42));
+  });
+
+  it('K2: clicking "New session" navigates to the new conversation\'s hash route', async () => {
+    vi.mocked(client.getConversations).mockResolvedValue({ conversations: [] });
+    vi.mocked(client.createConversation).mockResolvedValue({ id: 99 });
+    vi.mocked(client.getPlan).mockResolvedValue({ jobs: [] });
+
+    renderApp();
+
+    fireEvent.click(await screen.findByTestId('new-session-button'));
+
+    await waitFor(() => expect(window.location.hash).toBe('#/c/99'));
+  });
+
+  it('K2: the New session button is disabled while the create request is in flight', async () => {
+    vi.mocked(client.getConversations).mockResolvedValue({ conversations: [] });
+    let resolveCreate: (value: { id: number }) => void = () => {};
+    vi.mocked(client.createConversation).mockReturnValue(
+      new Promise((resolve) => {
+        resolveCreate = resolve;
+      }),
+    );
+    vi.mocked(client.getPlan).mockResolvedValue({ jobs: [] });
+
+    renderApp();
+
+    const button = (await screen.findByTestId('new-session-button')) as HTMLButtonElement;
+    fireEvent.click(button);
+
+    await waitFor(() => expect(button.disabled).toBe(true));
+
+    resolveCreate({ id: 7 });
+
+    await waitFor(() => expect(button.disabled).toBe(false));
+  });
+
+  it('K2: a failed create shows an error notification and does not navigate away', async () => {
+    vi.mocked(client.getConversations).mockResolvedValue({
+      conversations: [{ id: 1 as ConversationId, parentId: null, at: null, title: 'Harvest thread' }],
+    });
+    vi.mocked(client.getPlan).mockResolvedValue({ jobs: [] });
+    vi.mocked(client.createConversation).mockRejectedValue(new Error('Request failed: 500 Internal Server Error'));
+
+    renderApp();
+    await waitFor(() => expect(screen.getByText('Harvest thread')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('thread-1'));
+    await waitFor(() => expect(window.location.hash).toBe('#/c/1'));
+
+    fireEvent.click(screen.getByTestId('new-session-button'));
+
+    await waitFor(() => expect(screen.getByText(/could not create session/i)).toBeTruthy());
+    expect(window.location.hash).toBe('#/c/1');
   });
 
   it('selecting a conversation requests /api/plan for that conversation', async () => {

@@ -5,6 +5,7 @@ import { selectLead, selectPlan, selectConversation, type NavState } from '../mo
 import { leadsLevel, plansLevel, jobsLevel } from '../model/levels';
 import type { CpdData } from '../model/types';
 import { createConversation, getConversations } from '../engine/client';
+import { notifications } from '@mantine/notifications';
 import { onConversationsSignal } from '../engine/useEngineStream';
 import type { ConversationId, ConversationNode } from '../engine/types';
 import { buildConversationTreeData, allExpandedState } from './conversationTree';
@@ -172,6 +173,12 @@ export function Sidebar({
     try {
       const { id } = await createConversation();
       onConversationCreated?.(id as ConversationId);
+    } catch {
+      notifications.show({
+        color: 'red',
+        title: 'Could not create session',
+        message: 'Failed to create a new session. Please try again.',
+      });
     } finally {
       setCreating(false);
     }
