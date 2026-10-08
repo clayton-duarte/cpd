@@ -387,3 +387,51 @@ fixture hierarchy. That is intentional and ugly on purpose; it should not surviv
 
 **Also specified:** conversation ids stay numeric end to end, stringified only at Mantine `Tree`'s
 `value` boundary and parsed back on selection, so a stringified id never reaches the API.
+---
+
+## D109 — Messages carry their Durable **entry id**; `at` is never a message index
+
+**The gap:** `/api/fork` needs `at`, a numeric *entry* id, but `/api/messages` returned
+`{role, content}` with no id. The UI could not name a fork point — so the fork API shipped
+unusable from the front end.
+
+**Probed against our own `.cpd/cpd.sqlite`** (not inferred from docs):
+`conversation.context(ctx, {})` returns `{head, entries, contributions, messages}`.
+`view.messages` — what `flattenMessages` consumed — has **no ids**. The ids live on
+**`view.entries`**: `{ id, kind, conversationId, model: [...], byTaskId? }`.
+
+```
+id= 7  kind=pi.user   role=user       "Reply with exactly: PROTOTYPE-LIVE"
+id=10                 role=system     (instructions)
+id=11                 role=assistant  "PROTOTYPE-LIVE"
+id=12  kind=pi.user   role=user       "Reply with exactly: UI-ROUNDTRIP-OK"
+id=15                 role=assistant  "UI-ROUNDTRIP-OK"
+```
+
+**Two traps this makes explicit:**
+
+1. **Entry ids are SPARSE** — 7, 10, 11, 12, 15; the gaps are real. An id is never an array index,
+   and `at` must never be computed by counting messages.
+2. **One entry can expand to several messages** (its `model` array). So message index ≠ entry
+   index, and two messages may legitimately share an id — which means a React `key` must be
+   `` `${id}:${index}` ``, not the bare id.
+
+**Chosen:** rebuild `flattenMessages` over `view.entries` and widen `Message` to
+`{ id, role, content }` in both the daemon and `src/engine/types.ts`. Filtering is unchanged
+(skip `toolResult`, skip empty system, join text parts).
+
+**Rejected:** zipping `view.messages` against `view.entries` by position — it is wrong whenever an
+entry yields more than one message, and it fails silently rather than loudly.
+
+Filed as card H2, serialized behind H1 since both edit `ChatPanel`.
+
+---
+
+## D110 — Forking is offered only on **user** messages
+
+A hover `ActionIcon` on user messages starts a plan thread there. Assistant messages get no
+affordance: forking mid-turn is a semantic we have not thought through, and offering it would
+invite a question we cannot yet answer. Easy to widen later; hard to take back.
+
+The title is derived **server-side** by G1's existing `deriveTitle`. The frontend sends no title,
+so there is exactly one implementation of that rule.
