@@ -10,6 +10,14 @@ import {
   listConversations,
   forkPlan,
   ctx,
+  getPlan,
+  addPlanJob,
+  patchPlanJob,
+  deletePlanJob,
+  UnknownConversationError,
+  GraphError,
+  DuplicateJobIdError,
+  UnknownJobIdError,
   type Engine,
 } from "./engine.ts";
 import { acquireLock, releaseLock } from "./lock.ts";
@@ -62,6 +70,14 @@ async function main(): Promise<void> {
     const conversations = await listConversations(engine);
     const frame = sseFrame({ type: "conversations", conversations });
     for (const client of sseClients.keys()) client.write(frame);
+  }
+
+  async function pushPlanFor(conversationId: number): Promise<void> {
+    const jobs = await getPlan(engine, conversationId);
+    const frame = sseFrame({ type: "plan", conversation: conversationId, jobs });
+    for (const [client, watching] of sseClients) {
+      if (watching === conversationId) client.write(frame);
+    }
   }
 
   // Durable's `viewState().subscribe()` is the primary change-detection path; if that proves
@@ -183,6 +199,126 @@ async function main(): Promise<void> {
       }
       const result = await submitPrompt(conversation, text);
       sendJson(res, 200, result);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/plan") {
+      const conversationId = resolveConversationId(url, engine.root.id as unknown as number);
+      const conversation = await getConversation(engine, conversationId);
+      if (!conversation) {
+        sendJson(res, 404, { error: "Unknown conversation" });
+        return;
+      }
+      const jobs = await getPlan(engine, conversationId);
+      sendJson(res, 200, { jobs });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/plan/job") {
+      const conversationId = resolveConversationId(url, engine.root.id as unknown as number);
+      const raw = await readBody(req);
+      let title: string;
+      let needs: string[] | undefined;
+      try {
+        const body = JSON.parse(raw) as { title?: unknown; needs?: unknown };
+        if (typeof body.title !== "string") throw new Error("title must be a string");
+        title = body.title;
+        if (body.needs !== undefined) {
+          if (!Array.isArray(body.needs) || !body.needs.every((n) => typeof n === "string")) {
+            throw new Error("needs must be a string array");
+          }
+          needs = body.needs;
+        }
+      } catch {
+        sendJson(res, 400, { error: "Expected JSON body { title: string, needs?: string[] }" });
+        return;
+      }
+      try {
+        const job = await addPlanJob(engine, conversationId, { title, needs });
+        void pushPlanFor(conversationId);
+        sendJson(res, 200, { job });
+      } catch (error) {
+        if (error instanceof UnknownConversationError) {
+          sendJson(res, 404, { error: error.message });
+        } else if (error instanceof GraphError || error instanceof DuplicateJobIdError) {
+          sendJson(res, 400, { error: error.message });
+        } else {
+          throw error;
+        }
+      }
+      return;
+    }
+
+    if (req.method === "PATCH" && url.pathname === "/api/plan/job") {
+      const conversationId = resolveConversationId(url, engine.root.id as unknown as number);
+      const raw = await readBody(req);
+      let id: string;
+      let status: "draft" | "queued" | "running" | "done" | "failed" | undefined;
+      let title: string | undefined;
+      let needs: string[] | undefined;
+      try {
+        const body = JSON.parse(raw) as { id?: unknown; status?: unknown; title?: unknown; needs?: unknown };
+        if (typeof body.id !== "string") throw new Error("id must be a string");
+        id = body.id;
+        if (body.status !== undefined) {
+          if (typeof body.status !== "string") throw new Error("status must be a string");
+          status = body.status as typeof status;
+        }
+        if (body.title !== undefined) {
+          if (typeof body.title !== "string") throw new Error("title must be a string");
+          title = body.title;
+        }
+        if (body.needs !== undefined) {
+          if (!Array.isArray(body.needs) || !body.needs.every((n) => typeof n === "string")) {
+            throw new Error("needs must be a string array");
+          }
+          needs = body.needs;
+        }
+      } catch {
+        sendJson(res, 400, {
+          error: "Expected JSON body { id: string, status?: string, title?: string, needs?: string[] }",
+        });
+        return;
+      }
+      try {
+        const job = await patchPlanJob(engine, conversationId, { id, status, title, needs });
+        void pushPlanFor(conversationId);
+        sendJson(res, 200, { job });
+      } catch (error) {
+        if (error instanceof UnknownConversationError || error instanceof UnknownJobIdError) {
+          sendJson(res, 404, { error: error.message });
+        } else if (error instanceof GraphError) {
+          sendJson(res, 400, { error: error.message });
+        } else {
+          throw error;
+        }
+      }
+      return;
+    }
+
+    if (req.method === "DELETE" && url.pathname === "/api/plan/job") {
+      const conversationId = resolveConversationId(url, engine.root.id as unknown as number);
+      const raw = await readBody(req);
+      let id: string;
+      try {
+        const body = JSON.parse(raw) as { id?: unknown };
+        if (typeof body.id !== "string") throw new Error("id must be a string");
+        id = body.id;
+      } catch {
+        sendJson(res, 400, { error: "Expected JSON body { id: string }" });
+        return;
+      }
+      try {
+        await deletePlanJob(engine, conversationId, id);
+        void pushPlanFor(conversationId);
+        sendJson(res, 200, { ok: true });
+      } catch (error) {
+        if (error instanceof UnknownConversationError) {
+          sendJson(res, 404, { error: error.message });
+        } else {
+          throw error;
+        }
+      }
       return;
     }
 
