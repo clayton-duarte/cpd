@@ -23,6 +23,7 @@ import {
   UnknownJobIdError,
   UnknownRunJobIdError,
   JobAlreadyRunningError,
+  JobDependencyCycleError,
   type Engine,
 } from "./engine.ts";
 import { acquireLock, releaseLock } from "./lock.ts";
@@ -381,6 +382,8 @@ async function main(): Promise<void> {
           sendJson(res, 404, { error: error.message });
         } else if (error instanceof JobAlreadyRunningError) {
           sendJson(res, 409, { error: error.message });
+        } else if (error instanceof JobDependencyCycleError) {
+          sendJson(res, 400, { error: error.message });
         } else {
           throw error;
         }

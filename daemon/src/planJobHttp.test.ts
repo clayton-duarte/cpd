@@ -181,4 +181,134 @@ describe("plan-job HTTP routes", () => {
       rmSync(markerDir, { recursive: true, force: true });
     }
   }, 20_000);
+
+  // H15: a job with `needs` must actually run after its dependency settles, proven by the real
+  // HTTP API path (POST /api/plan/job -> POST /api/plan/job/run), not by calling engine
+  // functions directly (which pre-substitutes task ids and cannot catch the job-id/task-id bug).
+  async function pollStatus(id: string, deadlineMs = 15_000): Promise<string> {
+    const deadline = Date.now() + deadlineMs;
+    let status = "";
+    while (Date.now() < deadline) {
+      const planRes = await fetch(`${base}/api/plan`);
+      const plan = (await planRes.json()) as { jobs: { id: string; status: string }[] };
+      const job = plan.jobs.find((j) => j.id === id);
+      status = job?.status ?? "";
+      if (status === "done" || status === "failed") break;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    return status;
+  }
+
+  it("end-to-end: a dependent job runs after its dependency settles, in order", async () => {
+    const orderDir = mkdtempSync(join(tmpdir(), "cpd-plan-job-order-"));
+    const orderPath = join(orderDir, "order.txt");
+    try {
+      const createA = await fetch(`${base}/api/plan/job`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "A", command: `sleep 0.5 && echo A >> ${JSON.stringify(orderPath)}` }),
+      });
+      const jobA = ((await createA.json()) as JobResponse).job!;
+
+      const createB = await fetch(`${base}/api/plan/job`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "B",
+          command: `echo B >> ${JSON.stringify(orderPath)}`,
+          needs: [jobA.id],
+        }),
+      });
+      const jobB = ((await createB.json()) as JobResponse).job!;
+
+      // Start B first on purpose, before A is ever started. B must not deadlock waiting on a
+      // job id cast to a task id (H15 bug) -- it resolves A's dependency and auto-starts it.
+      const runB = await fetch(`${base}/api/plan/job/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: jobB.id }),
+      });
+      expect(runB.status).toBe(200);
+
+      const [statusA, statusB] = await Promise.all([pollStatus(jobA.id), pollStatus(jobB.id)]);
+      expect(statusA).toBe("done");
+      expect(statusB).toBe("done");
+
+      expect(existsSync(orderPath)).toBe(true);
+      const lines = readFileSync(orderPath, "utf8").trim().split("\n");
+      expect(lines).toEqual(["A", "B"]);
+    } finally {
+      rmSync(orderDir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("running a job whose dependency was never started auto-starts it first, in order", async () => {
+    const orderDir = mkdtempSync(join(tmpdir(), "cpd-plan-job-autostart-"));
+    const orderPath = join(orderDir, "order.txt");
+    try {
+      const createA = await fetch(`${base}/api/plan/job`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "A2", command: `sleep 0.3 && echo A >> ${JSON.stringify(orderPath)}` }),
+      });
+      const jobA = ((await createA.json()) as JobResponse).job!;
+
+      const createB = await fetch(`${base}/api/plan/job`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "B2",
+          command: `echo B >> ${JSON.stringify(orderPath)}`,
+          needs: [jobA.id],
+        }),
+      });
+      const jobB = ((await createB.json()) as JobResponse).job!;
+
+      // Only run B -- A has never been started (taskId: null). B must auto-start A first.
+      const runB = await fetch(`${base}/api/plan/job/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: jobB.id }),
+      });
+      expect(runB.status).toBe(200);
+
+      const [statusA, statusB] = await Promise.all([pollStatus(jobA.id), pollStatus(jobB.id)]);
+      expect(statusA).toBe("done");
+      expect(statusB).toBe("done");
+
+      expect(existsSync(orderPath)).toBe(true);
+      const lines = readFileSync(orderPath, "utf8").trim().split("\n");
+      expect(lines).toEqual(["A", "B"]);
+    } finally {
+      rmSync(orderDir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("a failed dependency still lets the dependent run (allSettled), and both settle", async () => {
+    const createA = await fetch(`${base}/api/plan/job`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "FailDep", command: "exit 1" }),
+    });
+    const jobA = ((await createA.json()) as JobResponse).job!;
+
+    const createB = await fetch(`${base}/api/plan/job`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "AfterFail", command: "echo still-ran", needs: [jobA.id] }),
+    });
+    const jobB = ((await createB.json()) as JobResponse).job!;
+
+    const runB = await fetch(`${base}/api/plan/job/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: jobB.id }),
+    });
+    expect(runB.status).toBe(200);
+
+    const [statusA, statusB] = await Promise.all([pollStatus(jobA.id), pollStatus(jobB.id)]);
+    // allSettled (D113): B does not get cancelled by A's failure -- it still runs.
+    expect(statusA).toBe("failed");
+    expect(statusB).toBe("done");
+  }, 20_000);
 });

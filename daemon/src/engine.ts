@@ -393,9 +393,84 @@ export class JobAlreadyRunningError extends Error {
   }
 }
 
+export class JobDependencyCycleError extends Error {
+  readonly ids: string[];
+  constructor(ids: string[]) {
+    super(`Cycle detected while resolving job dependencies: ${ids.join(" -> ")}`);
+    this.ids = ids;
+    this.name = "JobDependencyCycleError";
+  }
+}
+
+/** Resolve `jobId`'s dependencies to real Durable task ids, auto-starting any dependency that
+ * has not been started yet (depth-first over `needs`), recursively. `needs` holds job ids in the
+ * plan document and API (the user-facing contract); Pi Durable's `on:` wants task ids, and those
+ * two id spaces must never be cast between each other (H15). Returns the resolved task ids for
+ * `jobId`'s direct dependencies, alongside the possibly-updated job list (dependencies that were
+ * auto-started now carry a `taskId`). Throws `JobDependencyCycleError` on a cycle rather than
+ * deadlocking the engine. */
+async function resolveDependencyTaskIds(
+  engine: Engine,
+  conversationId: number,
+  convId: ConversationId,
+  jobs: Job[],
+  jobId: string,
+  visiting: string[],
+): Promise<{ taskIds: TaskId[]; jobs: Job[] }> {
+  if (visiting.includes(jobId)) {
+    throw new JobDependencyCycleError([...visiting, jobId]);
+  }
+
+  const job = jobs.find((j) => j.id === jobId);
+  if (!job) throw new UnknownRunJobIdError(jobId);
+
+  const taskIds: TaskId[] = [];
+  let currentJobs = jobs;
+  const nextVisiting = [...visiting, jobId];
+
+  for (const needId of job.needs) {
+    const needJob = currentJobs.find((j) => j.id === needId);
+    if (!needJob) throw new UnknownRunJobIdError(needId);
+
+    if (needJob.taskId && needJob.status !== "draft") {
+      taskIds.push(needJob.taskId as unknown as TaskId);
+      continue;
+    }
+
+    // Unstarted (or never-reached) dependency: auto-start it first, depth-first.
+    const resolved = await resolveDependencyTaskIds(
+      engine,
+      conversationId,
+      convId,
+      currentJobs,
+      needId,
+      nextVisiting,
+    );
+    currentJobs = resolved.jobs;
+
+    const depTaskId = await engine.harness.commit(async (tx) => {
+      return tx.createTask(
+        JobTask,
+        { jobId: needId, conversationId: convId, command: needJob.command ?? undefined, dependsOn: resolved.taskIds },
+        { ownership: { kind: "conversation" }, conversationId: convId },
+      );
+    }, ctx);
+
+    const depTaskIdStr = String(depTaskId);
+    currentJobs = currentJobs.map((j) => (j.id === needId ? { ...j, taskId: depTaskIdStr } : j));
+    await commitJobs(engine, conversationId, currentJobs);
+
+    taskIds.push(depTaskId);
+  }
+
+  return { taskIds, jobs: currentJobs };
+}
+
 /** Start a job's `cpd.job` task. Throws `UnknownConversationError`/`UnknownRunJobIdError` for an
- * unknown conversation/job, and `JobAlreadyRunningError` if the job already has a live task
- * (status `queued` or `running`) rather than starting a second one. */
+ * unknown conversation/job, `JobAlreadyRunningError` if the job already has a live task (status
+ * `queued` or `running`) rather than starting a second one, and `JobDependencyCycleError` if
+ * resolving its dependencies finds a cycle. Unstarted dependencies are auto-started first
+ * (depth-first over `needs`) so "Run" on a leaf job runs its prerequisites then itself. */
 export async function runPlanJob(
   engine: Engine,
   conversationId: number,
@@ -404,7 +479,7 @@ export async function runPlanJob(
   const conversation = await getConversation(engine, conversationId);
   if (!conversation) throw new UnknownConversationError(conversationId);
 
-  const jobs = await getPlan(engine, conversationId);
+  let jobs = await getPlan(engine, conversationId);
   const job = jobs.find((j) => j.id === jobId);
   if (!job) throw new UnknownRunJobIdError(jobId);
   if (job.status === "queued" || job.status === "running") {
@@ -412,10 +487,15 @@ export async function runPlanJob(
   }
 
   const convId = conversationId as unknown as ConversationId;
+
+  const resolved = await resolveDependencyTaskIds(engine, conversationId, convId, jobs, jobId, []);
+  jobs = resolved.jobs;
+  const dependencyTaskIds = resolved.taskIds;
+
   const taskId = await engine.harness.commit(async (tx) => {
     return tx.createTask(
       JobTask,
-      { jobId, conversationId: convId, command: job.command ?? undefined, needs: job.needs },
+      { jobId, conversationId: convId, command: job.command ?? undefined, dependsOn: dependencyTaskIds },
       { ownership: { kind: "conversation" }, conversationId: convId },
     );
   }, ctx);
