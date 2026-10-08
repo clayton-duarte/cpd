@@ -1,4 +1,5 @@
 import type {
+  AttentionResponse,
   ConversationId,
   ConversationsResponse,
   CreateJobResponse,
@@ -91,6 +92,12 @@ export async function runJob(conversation: ConversationId, id: string): Promise<
     body: JSON.stringify({ id }),
   });
   return parseOrThrow<RunJobResponse>(res);
+}
+
+/** J3a: global attention queue (not scoped to a conversation -- unlike `getPlan`). */
+export async function getAttention(): Promise<AttentionResponse> {
+  const res = await fetch(`${BASE}/attention`);
+  return parseOrThrow<AttentionResponse>(res);
 }
 
 /** H13: delete a job. The id goes in the request body, not the URL path. */
