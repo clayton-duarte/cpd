@@ -137,3 +137,56 @@ These are not decisions, they are measurements. All verified by running code.
    plus an `owner` edge. `harness.conversation(id)` reopens any thread;
    `storage.scanConversations()` enumerates them. What it lacks is pi's in-place *leaf cursor*
    and automatic branch summaries.
+---
+
+## D96 — Daemon tests run as a chained second suite, not a Vitest workspace
+
+**Chosen:** root `"test": "vitest run && pnpm --filter @cpd/daemon test"`, with the root Vitest
+config excluding `daemon/**`.
+
+**Why:** the app suite is jsdom, the daemon suite is node. Two environments in one Vitest project
+needs either a workspace file or per-file environment pragmas. Chaining two plain `vitest run`
+calls is the simplest thing that works and keeps each config honest about its environment.
+
+**Caveat for whoever reads CI output:** `pnpm test` now prints **two** summaries
+(19 files/114 tests, then 1 file/11 tests = 125 total). Reading only the last one
+undercounts badly — I made exactly that mistake tonight.
+
+**Revisit if:** a third suite appears. At that point a real Vitest workspace earns its keep.
+
+---
+
+## D97 — `.worktrees/**` is excluded from the root Vitest config
+
+**Chosen:** `exclude: [..., '.worktrees/**', 'daemon/**']`.
+
+**Why:** each card runs in a git worktree *inside* the repo, so every sibling branch's `src/` is
+visible to the runner. Without this exclusion a builder sees other cards' in-progress failures and
+cannot trust its own gate. Introduced by a builder; endorsed.
+
+---
+
+## D98 — Dependent cards block themselves rather than guess
+
+Observed, not decided, but worth keeping: G1 was dispatched while F1 was still open. The builder
+checked `git merge-base --is-ancestor`, found F1's commit absent from `main`, and **blocked itself
+with evidence** instead of inventing the daemon's API surface.
+
+**Lead-side fix:** a worktree is created at dispatch time and does not auto-rebase when its parent
+merges. After merging a parent, `git reset --hard origin/main` in the dependent worktree before
+unblocking, or the builder restarts against a stale base.
+
+---
+
+## Prototype status — the bar is met
+
+Verified by the lead in a browser against the real stack, not by reading a builder's report:
+
+- typed a message into CPD's own chat panel;
+- it reached GitHub Copilot through the embedded Pi Durable harness;
+- the reply streamed back over SSE and rendered;
+- the transcript survived a full daemon restart (SQLite replay);
+- Vite proxies `/api` to the daemon, single origin, no CORS.
+
+Jobs remain fixtures, as scoped. **Known defect:** user message bubbles overflow the panel's right
+edge — filed as card G2, not hand-patched.

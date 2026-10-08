@@ -13,3 +13,6 @@ docs/
 
 # CPD daemon runtime data: conversation transcripts and SQLite files. Never commit.
 .cpd/
+
+# Per-card builder worktrees live inside the repo; never commit them.
+.worktrees/
