@@ -4,6 +4,7 @@ import { Group, Stack, Text } from '@mantine/core';
 import { Canvas } from './canvas/Canvas';
 import { LeadsLevel } from './canvas/LeadsLevel';
 import { PlansLevel } from './canvas/PlansLevel';
+import { Sidebar } from './components/Sidebar';
 import { Gallery } from './Gallery';
 import { sampleData } from './fixtures/sample';
 import { ascend, initialNav, selectLead, selectPlan, type NavState } from './model/navigation';
@@ -148,8 +149,11 @@ function App() {
     <NavContext.Provider value={{ nav, onNavigate: setNav }}>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
         <TopBar />
-        <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-          <CanvasLevel nav={nav} onNavigate={setNav} />
+        <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+          <Sidebar data={sampleData} nav={nav} onNavigate={setNav} />
+          <div data-testid="canvas-area" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+            <CanvasLevel nav={nav} onNavigate={setNav} />
+          </div>
         </div>
       </div>
     </NavContext.Provider>

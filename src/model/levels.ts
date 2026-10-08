@@ -20,6 +20,11 @@ export interface PlanCardData {
   jobCount: number;
 }
 
+export interface JobRowData {
+  id: string;
+  title: string;
+}
+
 export function leadsLevel(data: CpdData): LeadCardData[] {
   return data.sessions.map((session) => ({
     id: session.id,
@@ -43,6 +48,13 @@ export function plansLevel(data: CpdData, leadId: string): PlanCardData[] {
       pr: workflow.pr,
       jobCount: workflow.jobIds.length,
     }));
+}
+
+/** Jobs belonging to a given plan, in fixture order -- id and title only (sidebar rows). */
+export function jobsLevel(data: CpdData, planId: string): JobRowData[] {
+  return data.jobs
+    .filter((j) => j.workflowId === planId)
+    .map((job) => ({ id: job.id, title: job.title }));
 }
 
 /** Data scoped to a single workflow, for the unchanged Jobs-level Canvas. */

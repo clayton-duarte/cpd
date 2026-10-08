@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dataForPlan, leadsLevel, plansLevel } from './levels';
+import { dataForPlan, jobsLevel, leadsLevel, plansLevel } from './levels';
 import { sampleData } from '../fixtures/sample';
 
 describe('leadsLevel', () => {
@@ -40,6 +40,23 @@ describe('plansLevel', () => {
 
   it('an unknown lead id returns an empty list', () => {
     expect(plansLevel(sampleData, 'does-not-exist')).toEqual([]);
+  });
+});
+
+describe('jobsLevel', () => {
+  it('returns exactly the jobs belonging to the given plan, in order', () => {
+    const jobs = jobsLevel(sampleData, 'w3');
+    expect(jobs.map((j) => j.id)).toEqual(['j17', 'j18', 'j19', 'j20', 'j21']);
+  });
+
+  it('carries job id and title only', () => {
+    const jobs = jobsLevel(sampleData, 'w3');
+    const j17 = jobs.find((j) => j.id === 'j17')!;
+    expect(j17.title).toBe('Model soil moisture thresholds');
+  });
+
+  it('an unknown plan id returns an empty list', () => {
+    expect(jobsLevel(sampleData, 'does-not-exist')).toEqual([]);
   });
 });
 
