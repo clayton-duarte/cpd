@@ -3,6 +3,7 @@ import {
   createRegistry,
   Harness,
   ROOT_CONVERSATION_ID,
+  InboxDoc,
   type Conversation,
   type ConversationId,
   type EntryId,
@@ -175,7 +176,9 @@ export async function submitPrompt(
   root: Conversation,
   text: string,
 ): Promise<{ status: "done" | "unanswered"; reason?: string; detail?: string }> {
-  const submission = await root.submit({ type: "input", content: text }, ctx);
+  // L2: queue (don't race or drop) a message sent while the conversation is already busy, and
+  // answer queued submissions in the order they arrived.
+  const submission = await root.submit({ type: "input", content: text, whenBusy: "followUp" }, ctx);
   const settled = await submission.wait(ctx);
   if (settled.status === "unanswered") {
     // `detail` carries the real provider/model text (e.g. a content-policy refusal), while
@@ -185,6 +188,13 @@ export async function submitPrompt(
     return { status: settled.status, reason: settled.reason, detail };
   }
   return { status: settled.status };
+}
+
+/** Count of this conversation's queued-but-not-yet-placed submissions (`pi.inbox`), the "N
+ * queued" figure the `messages` SSE frame carries (L2). No queue -> `0`, never undefined. */
+export async function getQueueDepth(engine: Engine, conversationId: ConversationId): Promise<number> {
+  const state = await engine.harness.snapshot(InboxDoc, conversationId, ctx);
+  return state?.items.length ?? 0;
 }
 
 /** Look up a conversation handle by id, falling back to the root if not found. */

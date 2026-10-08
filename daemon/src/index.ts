@@ -28,6 +28,7 @@ import {
   JobBlockedError,
   JobDependencyCycleError,
   getAttentionItems,
+  getQueueDepth,
   type Engine,
 } from "./engine.ts";
 import { acquireLock, releaseLock } from "./lock.ts";
@@ -69,7 +70,8 @@ async function main(): Promise<void> {
     const conversation = await getConversation(engine, conversationId);
     if (!conversation) return;
     const messages = await getMessages(conversation);
-    const frame = sseFrame({ type: "messages", messages });
+    const queued = await getQueueDepth(engine, conversation.id);
+    const frame = sseFrame({ type: "messages", messages, queued });
     for (const [client, watching] of sseClients) {
       if (watching === conversationId) client.write(frame);
     }
@@ -561,7 +563,7 @@ async function main(): Promise<void> {
       sseClients.set(res, conversationId);
 
       const messages = await getMessages(conversation);
-      res.write(sseFrame({ type: "messages", messages }));
+      res.write(sseFrame({ type: "messages", messages, queued: await getQueueDepth(engine, conversation.id) }));
       const conversations = await listConversations(engine);
       res.write(sseFrame({ type: "conversations", conversations }));
 
