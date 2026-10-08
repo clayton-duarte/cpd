@@ -851,3 +851,36 @@ This is the seventh "silent success" tonight (D114's missing stdout, the dead `-
 `/api/prompt` misroute, `edit --status`, the un-typechecked daemon, the fixture-only tripwire, now
 a dropped request field). The recurring shape: **a layer that is never exercised by a test is a
 layer that is not working.** Gates must exercise the seam, not just the unit behind it.
+---
+
+## D122 — The prototype runs real work end to end. `undefined` = leave, `null` = clear
+
+H12 closed the D121 gap. `command` now survives `POST` and `PATCH /api/plan/job`.
+
+**Proven end to end against the running daemon, by side effect rather than status:** a job created
+over HTTP with `command: "echo CPD-E2E-RAN > /tmp/..."` ran and **the marker file existed with the
+expected contents**. This is the milestone the prototype was missing — create a job over HTTP, run
+it, and real work happens.
+
+**Decision (patch semantics):** for `command` on `PATCH`, **`undefined` means leave unchanged and
+`null` means clear**. The existing merge used the `?? job.x` idiom, which *cannot* express clearing
+— `null ?? job.command` silently yields the old value. The builder blocked the card first, correctly:
+my card forbade touching `engine.ts` while requiring a change only reachable there (`patchPlanJob`'s
+type had no `command`). Ruled to extend it rather than drop the PATCH requirement, because a job
+drafted before its command is known would otherwise be permanently commandless.
+
+Validation: non-string or blank-only `command` -> **400**, matching how `needs` already behaves.
+Verified live: `123` -> 400, `"   "` -> 400, PATCH `null` clears, a later title-only PATCH leaves
+it `null`.
+
+**Decision (testing the seam):** plan-job routes now have **HTTP-level tests** that start the real
+server on an ephemeral port and drive it with `fetch` — the layer D121 showed was never exercised.
+The end-to-end test asserts the **marker file**, not `status === "done"`.
+
+Proven by sabotage, not by a green run: replacing the POST parse with `command = undefined` fails
+*both* the round-trip and the marker-file tests. An earlier sabotage attempt broke the file's syntax
+and the suite reported "6 skipped" — **a skipped test is not a passing test, and not evidence**; the
+probe was redone surgically.
+
+**Audit:** checked every other route for the same dropped-field shape. `/api/fork` parses and
+forwards its optional `title` correctly, so the `command` miss was isolated, not systemic.
