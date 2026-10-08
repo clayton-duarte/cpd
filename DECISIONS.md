@@ -822,3 +822,32 @@ path patterns meant quoting them. Fixed by **rewording the prose, not by widenin
 exempting `DECISIONS.md` for the path class would have reopened the hole D120 exists to close.
 Rule: when the guard flags the docs, change the docs. The guard caught a real pattern in its first
 PR, which is more than the old fixture tripwire ever did.
+---
+
+## D121 — Jobs execute real commands (H6). HTTP parse layer must be tested at the HTTP level
+
+H6 landed job execution: `JobTask` runs a job's command through `NodeExecutionEnv`, honours the
+`needs` join (`allSettled`), streams output via `onOutput` buffered in memory, and settles
+`done`/`failed`. Covered by real daemon tests — `echo hi`, `exit 3`, a commandless no-op, and a
+two-job dependency with marker files. All D114 traps honoured (`timeout` not `timeoutMs`, no commit
+per chunk) and no strip-only-illegal syntax (D116).
+
+**But the prototype still cannot run a job from the API.** Verified by live curl against merged
+main: `POST /api/plan/job` with a `command` returns `command: null`, and running it reports
+`status: "done"` having executed nothing. The route parses `title` and `needs` only — `grep -n
+command daemon/src/index.ts` has zero hits. The engine and task layers are correct; the HTTP parse
+drops the field.
+
+**Why 55 green daemon tests missed it:** every test calls engine functions directly. There was no
+HTTP-level test for any plan-job route, so the parse layer was never exercised. Carded as H12, which
+must fix the parse **and** add server-level tests over real `fetch`.
+
+**Decision: a job's terminal status is not evidence that it did anything.** H12's end-to-end test
+must assert a **marker file written by the command**, not just `status === "done"`. A commandless
+job legitimately settles `done` untouched, so status alone cannot distinguish "ran successfully"
+from "ran nothing" — which is precisely how this shipped.
+
+This is the seventh "silent success" tonight (D114's missing stdout, the dead `--pad` token, the
+`/api/prompt` misroute, `edit --status`, the un-typechecked daemon, the fixture-only tripwire, now
+a dropped request field). The recurring shape: **a layer that is never exercised by a test is a
+layer that is not working.** Gates must exercise the seam, not just the unit behind it.
