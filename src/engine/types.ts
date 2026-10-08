@@ -35,7 +35,20 @@ export type CreateJobResponse = { job: PlanJob };
 
 export type RunJobResponse = { taskId: string };
 
+export type AttentionItem = {
+  jobId: string;
+  conversationId: number;
+  conversationTitle: string;
+  jobTitle: string;
+  status: string;
+  reason: string;
+  at: number;
+};
+
+export type AttentionResponse = { items: AttentionItem[] };
+
 export type StreamEvent =
   | { type: 'messages'; messages: Message[] }
   | { type: 'conversations' }
-  | { type: 'plan'; conversation: number; jobs: PlanJob[] };
+  | { type: 'plan'; conversation: number; jobs: PlanJob[] }
+  | { type: 'attention'; items: AttentionItem[] };

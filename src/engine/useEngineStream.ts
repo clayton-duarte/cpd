@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react';
-import type { ConversationId, Message, PlanJob, StreamEvent } from './types';
+import type { AttentionItem, ConversationId, Message, PlanJob, StreamEvent } from './types';
 
 type Status = 'connecting' | 'open' | 'closed';
 
@@ -35,6 +35,16 @@ const planListeners = new Set<PlanListener>();
 export function onPlanSignal(listener: PlanListener): () => void {
   planListeners.add(listener);
   return () => planListeners.delete(listener);
+}
+
+/** Fired whenever any active stream delivers a `{type:"attention"}` frame -- global, not scoped
+ * to a conversation (unlike `onPlanSignal`), so `useAttention` applies every frame it sees. */
+type AttentionListener = (items: AttentionItem[]) => void;
+const attentionListeners = new Set<AttentionListener>();
+
+export function onAttentionSignal(listener: AttentionListener): () => void {
+  attentionListeners.add(listener);
+  return () => attentionListeners.delete(listener);
 }
 
 function keyFor(conversation: ConversationId | undefined): string {
@@ -81,6 +91,8 @@ function connect(key: string, conversation: ConversationId | undefined) {
       for (const listener of conversationsListeners) listener();
     } else if (parsed.type === 'plan') {
       for (const listener of planListeners) listener(parsed.conversation, parsed.jobs);
+    } else if (parsed.type === 'attention') {
+      for (const listener of attentionListeners) listener(parsed.items);
     }
   };
 }
