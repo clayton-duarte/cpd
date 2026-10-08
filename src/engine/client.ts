@@ -6,6 +6,8 @@ import type {
   CreateJobResponse,
   ForkResponse,
   MessagesResponse,
+  ModelResponse,
+  ModelsResponse,
   PlanResponse,
   PromptResponse,
   RunJobResponse,
@@ -132,4 +134,34 @@ export async function setConversationArchived(
     body: JSON.stringify({ conversation, archived }),
   });
   return parseOrThrow<ArchiveResponse>(res);
+}
+
+/** L5: the full provider/model catalog from the configured registry. Not scoped to a
+ * conversation -- used to populate the model picker's options. */
+export async function getModels(): Promise<ModelsResponse> {
+  const res = await fetch(`${BASE}/models`);
+  return parseOrThrow<ModelsResponse>(res);
+}
+
+/** L5: the resolved current model for one conversation (falls back to the global default if the
+ * conversation has never had one set). Omitting `conversation` resolves to root, matching
+ * `getMessages`. */
+export async function getModel(conversation?: ConversationId): Promise<ModelResponse> {
+  const suffix = conversation === undefined ? '' : `?conversation=${conversation}`;
+  const res = await fetch(`${BASE}/model${suffix}`);
+  return parseOrThrow<ModelResponse>(res);
+}
+
+/** L5: switch one conversation's model. Scoped to exactly `conversation` -- never the global
+ * default, never any other conversation. Omitting `conversation` targets root. */
+export async function setModel(
+  conversation: ConversationId | undefined,
+  model: { provider: string; modelId: string },
+): Promise<ModelResponse> {
+  const res = await fetch(`${BASE}/model`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ conversation: conversation ?? null, ...model }),
+  });
+  return parseOrThrow<ModelResponse>(res);
 }

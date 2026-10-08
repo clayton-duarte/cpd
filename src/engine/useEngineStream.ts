@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react';
-import type { AttentionItem, ConversationId, Message, PlanJob, StreamEvent } from './types';
+import type { AttentionItem, ConversationId, Message, ModelRef, PlanJob, StreamEvent } from './types';
 
 type Status = 'connecting' | 'open' | 'closed';
 
@@ -10,6 +10,7 @@ const BASE = (import.meta.env.VITE_CPD_API as string | undefined) ?? '/api';
  * tears down the previous one rather than leaking it or running two at once. */
 type StreamEntry = {
   messages: Message[];
+  model: ModelRef | null;
   status: Status;
   listeners: Set<() => void>;
   source: EventSource | null;
@@ -54,7 +55,7 @@ function keyFor(conversation: ConversationId | undefined): string {
 function getEntry(key: string): StreamEntry {
   let entry = entries.get(key);
   if (!entry) {
-    entry = { messages: [], status: 'connecting', listeners: new Set(), source: null, refCount: 0 };
+    entry = { messages: [], model: null, status: 'connecting', listeners: new Set(), source: null, refCount: 0 };
     entries.set(key, entry);
   }
   return entry;
@@ -86,6 +87,7 @@ function connect(key: string, conversation: ConversationId | undefined) {
     const parsed = JSON.parse(e.data) as StreamEvent;
     if (parsed.type === 'messages') {
       entry.messages = parsed.messages;
+      if (parsed.model) entry.model = parsed.model;
       emit(entry);
     } else if (parsed.type === 'conversations') {
       for (const listener of conversationsListeners) listener();
@@ -110,7 +112,7 @@ function disconnect(key: string) {
  * useSyncExternalStore forever. Changing `conversation` tears down the previous EventSource and
  * opens exactly one new one; it never leaves two live.
  */
-export function useEngineStream(conversation?: ConversationId): { messages: Message[]; status: Status } {
+export function useEngineStream(conversation?: ConversationId): { messages: Message[]; status: Status; model: ModelRef | null } {
   const key = keyFor(conversation);
   const entry = getEntry(key);
 
@@ -121,6 +123,7 @@ export function useEngineStream(conversation?: ConversationId): { messages: Mess
 
   const streamMessages = useSyncExternalStore(subscribe, () => getEntry(key).messages);
   const streamStatus = useSyncExternalStore(subscribe, () => getEntry(key).status);
+  const streamModel = useSyncExternalStore(subscribe, () => getEntry(key).model);
 
   useEffect(() => {
     const activeEntry = getEntry(key);
@@ -133,5 +136,5 @@ export function useEngineStream(conversation?: ConversationId): { messages: Mess
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
-  return { messages: streamMessages, status: streamStatus };
+  return { messages: streamMessages, status: streamStatus, model: streamModel };
 }

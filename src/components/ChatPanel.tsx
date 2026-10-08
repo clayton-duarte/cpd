@@ -7,14 +7,15 @@ import {
   Group,
   Paper,
   ScrollArea,
+  Select,
   Stack,
   Text,
   Textarea,
   Tooltip,
 } from '@mantine/core';
-import { abortPrompt, forkConversation, sendPrompt } from '../engine/client';
+import { abortPrompt, forkConversation, getModel, getModels, sendPrompt, setModel } from '../engine/client';
 import { useEngineStream } from '../engine/useEngineStream';
-import type { ConversationId, Message } from '../engine/types';
+import type { ConversationId, Message, ModelRef } from '../engine/types';
 
 export interface ChatPanelProps {
   /** Selected thread from the sidebar's additive conversation tree. Scopes the transcript and
@@ -32,13 +33,50 @@ export interface ChatPanelProps {
  * the next stream event replaces the list with the authoritative transcript.
  */
 export function ChatPanel({ conversationId, onForked }: ChatPanelProps) {
-  const { messages, status } = useEngineStream(conversationId);
+  const { messages, status, model: streamModel } = useEngineStream(conversationId);
   const [pending, setPending] = useState<Message | null>(null);
   const [draft, setDraft] = useState('');
   const [inFlight, setInFlight] = useState(false);
   const [unanswered, setUnanswered] = useState<{ reason: string; detail?: string } | null>(null);
+  const [modelOptions, setModelOptions] = useState<ModelRef[]>([]);
+  const [localModel, setLocalModel] = useState<ModelRef | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // The resolved model comes from the SSE stream once it's connected; until then (or for a
+  // conversation outside the stream's scope) fall back to a direct fetch so the picker never
+  // shows stale data from a previous conversation.
+  useEffect(() => {
+    setLocalModel(null);
+    getModel(conversationId).then((res) => setLocalModel(res.model)).catch(() => {});
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (streamModel) setLocalModel(streamModel);
+  }, [streamModel]);
+
+  useEffect(() => {
+    getModels()
+      .then((res) => setModelOptions(res.models))
+      .catch(() => {});
+  }, []);
+
+  const currentModel = streamModel ?? localModel;
+  const modelSelectData = modelOptions.map((m) => ({ value: `${m.provider}::${m.modelId}`, label: m.modelId }));
+  const currentModelValue = currentModel ? `${currentModel.provider}::${currentModel.modelId}` : null;
+
+  async function onModelChange(value: string | null) {
+    if (!value) return;
+    const [provider, modelId] = value.split('::');
+    if (!provider || !modelId) return;
+    const result = await setModel(conversationId, { provider, modelId });
+    setLocalModel(result.model);
+  }
+
+  function onModelDropdownClose() {
+    // Mirror pi-web-ui's composer: focus returns to the textarea once the dropdown closes.
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }
+
 
   // The optimistic message is cleared once the authoritative transcript
   // actually contains it -- clearing it in a `finally` instead would make it
@@ -167,6 +205,17 @@ export function ChatPanel({ conversationId, onForked }: ChatPanelProps) {
             value={draft}
             onChange={(e) => setDraft(e.currentTarget.value)}
             onKeyDown={onKeyDown}
+          />
+          <Select
+            data-testid="model-select"
+            data={modelSelectData}
+            value={currentModelValue}
+            onChange={onModelChange}
+            onDropdownClose={onModelDropdownClose}
+            w={180}
+            placeholder="Model"
+            allowDeselect={false}
+            checkIconPosition="right"
           />
           <ActionIcon
             size="lg"

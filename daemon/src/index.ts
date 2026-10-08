@@ -21,6 +21,9 @@ import {
   onJobOutput,
   onJobStatusChange,
   createSession,
+  getModelCatalog,
+  getConversationModel,
+  setConversationModel,
   UnknownConversationError,
   GraphError,
   DuplicateJobIdError,
@@ -32,6 +35,7 @@ import {
   getAttentionItems,
   getQueueDepth,
   type Engine,
+  type ModelRef,
 } from "./engine.ts";
 import { acquireLock, releaseLock } from "./lock.ts";
 import { resolveConversationId, resolvePromptConversationId } from "./plans.ts";
@@ -73,7 +77,8 @@ async function main(): Promise<void> {
     if (!conversation) return;
     const messages = await getMessages(conversation);
     const queued = await getQueueDepth(engine, conversation.id);
-    const frame = sseFrame({ type: "messages", messages, queued });
+    const model = await getConversationModel(engine, conversationId);
+    const frame = sseFrame({ type: "messages", messages, queued, model });
     for (const [client, watching] of sseClients) {
       if (watching === conversationId) client.write(frame);
     }
@@ -385,6 +390,67 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/models") {
+      const models = getModelCatalog(engine);
+      sendJson(res, 200, { models });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/model") {
+      const conversationId = resolveConversationId(url, engine.root.id as unknown as number);
+      const conversation = await getConversation(engine, conversationId);
+      if (!conversation) {
+        sendJson(res, 404, { error: "Unknown conversation" });
+        return;
+      }
+      const model = await getConversationModel(engine, conversationId);
+      sendJson(res, 200, { model });
+      return;
+    }
+
+    if (req.method === "PATCH" && url.pathname === "/api/model") {
+      const raw = await readBody(req);
+      let conversationId: number;
+      let provider: string;
+      let modelId: string;
+      try {
+        const body = JSON.parse(raw) as { conversation?: unknown; provider?: unknown; modelId?: unknown };
+        if (body.conversation === undefined || body.conversation === null) {
+          conversationId = engine.root.id as unknown as number;
+        } else if (typeof body.conversation === "number") {
+          conversationId = body.conversation;
+        } else {
+          throw new Error("conversation must be a number");
+        }
+        if (typeof body.provider !== "string" || body.provider.trim() === "") {
+          throw new Error("provider must be a non-empty string");
+        }
+        provider = body.provider;
+        if (typeof body.modelId !== "string" || body.modelId.trim() === "") {
+          throw new Error("modelId must be a non-empty string");
+        }
+        modelId = body.modelId;
+      } catch {
+        sendJson(res, 400, {
+          error: "Expected JSON body { conversation: number, provider: string, modelId: string }",
+        });
+        return;
+      }
+      try {
+        const model: ModelRef = { provider, modelId };
+        await setConversationModel(engine, conversationId, model);
+        void pushMessagesFor(conversationId);
+        sendJson(res, 200, { model });
+      } catch (error) {
+        if (error instanceof UnknownConversationError) {
+          sendJson(res, 404, { error: error.message });
+        } else {
+          throw error;
+        }
+      }
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/plan/job") {
       const conversationId = resolveConversationId(url, engine.root.id as unknown as number);
       const raw = await readBody(req);
@@ -608,7 +674,10 @@ async function main(): Promise<void> {
       sseClients.set(res, conversationId);
 
       const messages = await getMessages(conversation);
-      res.write(sseFrame({ type: "messages", messages, queued: await getQueueDepth(engine, conversation.id) }));
+      const model = await getConversationModel(engine, conversationId);
+      res.write(
+        sseFrame({ type: "messages", messages, queued: await getQueueDepth(engine, conversation.id), model }),
+      );
       const conversations = await listConversations(engine);
       res.write(sseFrame({ type: "conversations", conversations }));
 

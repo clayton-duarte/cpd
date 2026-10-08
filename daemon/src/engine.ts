@@ -4,9 +4,12 @@ import {
   Harness,
   ROOT_CONVERSATION_ID,
   InboxDoc,
+  AgentDoc,
+  configure,
   type Conversation,
   type ConversationId,
   type EntryId,
+  type ModelRef,
   type Storage,
   type TaskId,
 } from "@earendil-works/pi-durable";
@@ -16,6 +19,7 @@ import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlit
 import { createModels } from "@earendil-works/pi-ai/models";
 import { githubCopilotProvider } from "@earendil-works/pi-ai/providers/github-copilot";
 import type { Message as PiMessage } from "@earendil-works/pi-ai";
+import type { MutableModels } from "@earendil-works/pi-ai/models";
 import { FileCredentialStore } from "./credentials.ts";
 import { ArchiveDoc } from "./archive.ts";
 import {
@@ -91,6 +95,7 @@ export type Engine = {
   root: Conversation;
   storage: Storage;
   titleStore: TitleStore;
+  models: MutableModels;
   close(): Promise<void>;
 };
 
@@ -107,15 +112,30 @@ export type OpenEngineOptions = {
  * `providers` option on `createModels`, explicit `setProvider`, mandatory `resume()`,
  * `modelId` (not `id`), and `{ type: "input", content }` (not `{ text }`) on submit.
  */
+/** Hardcoded fallback if the env vars are unset -- the value every conversation used before this
+ * card, now also the floor `getDefaultModel()` falls back to. */
+const FALLBACK_MODEL: ModelRef = { provider: "github-copilot", modelId: "claude-opus-5" };
+
+/** L5: the global default model (provider + modelId) applied to newly created conversations.
+ * Read from env on every call (not cached at module load) so tests can set
+ * `CPD_DEFAULT_MODEL_PROVIDER`/`CPD_DEFAULT_MODEL_ID` per case; either var absent falls back to
+ * `FALLBACK_MODEL`, today's hardcoded value. No secrets -- just provider/model names. */
+export function getDefaultModel(): ModelRef {
+  const provider = process.env.CPD_DEFAULT_MODEL_PROVIDER;
+  const modelId = process.env.CPD_DEFAULT_MODEL_ID;
+  if (provider && modelId) return { provider, modelId };
+  return FALLBACK_MODEL;
+}
+
 /** Shared lead-agent configuration: the model/instructions every CPD-owned conversation opens
  * with. Both the boot root (`harness.root`) and a freshly created session
  * (`harness.createConversation`, I1) apply the same config so they never diverge. */
 function leadAgentConfig(): {
-  model: { provider: string; modelId: string };
+  model: ModelRef;
   instructions: string;
 } {
   return {
-    model: { provider: "github-copilot", modelId: "claude-opus-5" },
+    model: getDefaultModel(),
     instructions: "You are the CPD lead agent.",
   };
 }
@@ -161,6 +181,7 @@ export async function openEngine(options: OpenEngineOptions): Promise<Engine> {
     root,
     storage,
     titleStore,
+    models,
     async close() {
       await titleDb.close();
       await harness.close(ctx);
@@ -215,6 +236,41 @@ export async function getConversation(
 ): Promise<Conversation | undefined> {
   if (id === (engine.root.id as unknown as number)) return engine.root;
   return engine.harness.conversation(id as unknown as ConversationId, ctx);
+}
+
+// --- L5: per-conversation model, inherited from a global default on create --------------------
+
+/** The provider/model catalog from the configured registry (today: GitHub Copilot only). Flat
+ * `{provider, modelId}` pairs -- the real listing API (`models.getModels()`), never a hardcoded
+ * list, so a future provider shows up here without a code change. */
+export function getModelCatalog(engine: Engine): ModelRef[] {
+  const out: ModelRef[] = [];
+  for (const provider of engine.models.getProviders()) {
+    for (const model of engine.models.getModels(provider.id)) {
+      out.push({ provider: provider.id, modelId: model.id });
+    }
+  }
+  return out;
+}
+
+/** Read the resolved `{provider, modelId}` of one conversation's `pi.agent`, falling back to the
+ * global default (L5: inherited only at creation time, but unset `pi.agent.model` -- e.g. a
+ * pre-L5 conversation -- still resolves to the current default rather than `undefined`). */
+export async function getConversationModel(engine: Engine, conversationId: number): Promise<ModelRef> {
+  const state = await engine.harness.snapshot(AgentDoc, conversationId as unknown as ConversationId, ctx);
+  return state?.model ?? getDefaultModel();
+}
+
+/** Write `model` into one conversation's `pi.agent`, scoped to exactly that conversation --
+ * never the global default and never any other conversation (D: PATCH must not leak across
+ * conversations or silently rewrite the default). Throws `UnknownConversationError` for an
+ * unknown conversation. */
+export async function setConversationModel(engine: Engine, conversationId: number, model: ModelRef): Promise<void> {
+  const conversation = await getConversation(engine, conversationId);
+  if (!conversation) throw new UnknownConversationError(conversationId);
+  await engine.harness.commit(async (tx) => {
+    await configure(tx, conversationId as unknown as ConversationId, { model });
+  }, ctx);
 }
 
 /** The first user message's text in a conversation, used to derive its title. */
@@ -300,7 +356,7 @@ export async function forkPlan(
     {
       ownership: { kind: "ownerless" },
       agent: {
-        model: { provider: "github-copilot", modelId: "claude-opus-5" },
+        model: getDefaultModel(),
         instructions: "You are a CPD plan thread.",
       },
     },
@@ -313,6 +369,7 @@ export async function forkPlan(
 }
 
 export { ctx, ROOT_CONVERSATION_ID };
+export type { ModelRef };
 
 /**
  * Create a brand-new ROOT conversation (I1) -- `parentId: null`, not a fork of anything. Reuses
