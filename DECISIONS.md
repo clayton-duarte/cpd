@@ -536,3 +536,54 @@ that conversation's own `commit`. And `documentState()` is refcounted like `view
 
 This unblocks the jobs canvas, which was the last thing waiting on a human decision. Per the
 standing instruction I took the recommended, most-native option; flagging it here for review.
+---
+
+## D113 — Jobs execute as Pi Durable **tasks**; `needs` edges are the engine's native join
+
+Before specifying job execution I probed whether Durable can actually *run* a job, or whether CPD
+would have to build a scheduler. It can, and we must not build one.
+
+**Probe 1 — a durable task runs to completion.** A two-phase `cpd.step` task ran, performed a real
+side effect, and settled durably:
+
+```
+state: { status: 'terminal', outcome: { status: 'ok', value: { ran: 'build', n: 1 } } }
+marker: ran:build
+```
+
+**Probe 2 — `needs` edges are free.** A `cpd.gate` task spawned two children, parked itself
+`waiting` on them, and resumed only once both were terminal:
+
+```
+marker:  ran:a / ran:b / gate-resumed
+gate:    { status:'terminal', outcome:{ status:'ok', value:{ joined:['a','b'] } } }
+```
+
+`TaskState` has a first-class `waiting` status carrying `on: TaskId[]` and a `JoinPolicy` of
+`failFast | allSettled`. **That is exactly CPD's `needs` semantics, already implemented, durable
+across restarts.** `failFast` ≈ cancel dependents when a dependency fails; `allSettled` ≈ run
+everything and report. We get both by naming one.
+
+**Chosen:** a CPD job is a Durable task; `needs` is expressed as a `waiting` state with
+`policy: "allSettled"` (report every failure rather than hiding later ones behind the first).
+H4's `cpd.plan` document stays the **declarative** graph the user edits; tasks are the
+**execution** of it. Document = intent, task = run.
+
+**Rejected:** our own queue/worker/dependency resolver in the daemon. It would duplicate a durable,
+crash-safe scheduler we already depend on, and would not survive restarts without us rebuilding
+checkpointing too.
+
+**Four API traps, all hit during the probe — builders must not rediscover these:**
+
+1. `registry.add()` **does not exist**. Tasks register through an extension:
+   `registry.install({ name: "cpd", tasks: [MyTask] })`.
+2. `createRegistry()` is the **tool** registry that also holds tasks; there is no separate task
+   registry.
+3. A phase handler **returns nothing**. It must call `runtime.commit(() => nextState, ctx)`;
+   returning a state object silently makes no durable progress and **faults the task**.
+4. The checkpoint is at **`task.state.checkpoint`**, not `task.checkpoint`. Reading the wrong path
+   faults the task with a `TypeError` that surfaces only in the stored outcome.
+5. `harness.task(id)` does not exist — read a task with `tx.task(id)` inside a commit.
+
+Trap 3 is the dangerous one: it is the same silent-success family as D111, except the task is
+recorded `faulted` with a confusing message rather than visibly refusing.
