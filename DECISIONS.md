@@ -587,3 +587,52 @@ checkpointing too.
 
 Trap 3 is the dangerous one: it is the same silent-success family as D111, except the task is
 recorded `faulted` with a confusing message rather than visibly refusing.
+---
+
+## D114 — Jobs run real commands through `NodeExecutionEnv`; output arrives only by callback
+
+D113 established that a job *is* a durable task. The remaining unknown was whether such a task can
+do real work — run a build, a test suite, an agent — or only shuffle state. It can.
+
+Pi Durable ships `@earendil-works/pi-durable/env/node` exporting **`NodeExecutionEnv`**, a full
+filesystem + shell environment (`exec`, `readTextFile`, `writeTextFile`, `watch`, `absolutePath`,
+…). It is supplied once at harness open and reached inside a task via `rt.env(ctx)`:
+
+```js
+const h = await Harness.open(storage, {
+  models, registry,
+  env: async () => new NodeExecutionEnv({ cwd: someWorkdir }),
+}, ctx);
+```
+
+**Verified** — a `cpd.run` task executed a real command and settled with its output:
+
+```
+RESULT: { status:"terminal",
+          outcome:{ status:"ok", value:{ exitCode:0, output:"CPD-JOB-RAN\nv26.7.0" } } }
+```
+
+**Chosen:** job execution uses `NodeExecutionEnv` rather than our own `child_process` wrapper. It is
+the native path, it already handles cwd/env/timeout/abort/output-spill, and it keeps jobs portable
+to other environments (the same `ExecutionEnv` interface backs non-Node hosts).
+
+**Rejected:** spawning with `node:child_process` in the daemon. We would reimplement streaming,
+timeouts, abort propagation and spill handling, and tie jobs to a Node host forever.
+
+**Two traps, both hit:**
+
+1. **`ShellExecResult` is only `{ exitCode, spillPath? }` — there is no `stdout`/`stderr` field.**
+   Output is delivered *exclusively* through the `onOutput(text, ctx, info)` callback as it
+   arrives. My first probe returned `exitCode: 0` with an empty string and looked like a command
+   that produced nothing; it had produced output I never collected. **A job that does not pass
+   `onOutput` silently discards its own logs.**
+2. The option is **`timeout`**, not `timeoutMs` (contrast `busyTimeoutMs` elsewhere in the package).
+   An unknown option is ignored silently, so the job runs unbounded.
+
+Trap 1 is the fifth silent-success defect of the night, and the most expensive kind: a *green* job
+with no evidence it did anything.
+
+**Design consequence for the daemon:** `onOutput` is explicitly "raw, unbounded, unthrottled", and
+every durable write costs. Job logs must **not** be committed per chunk. Buffer in memory, persist
+a bounded tail (and `spillPath` when present), and stream live output to the UI over the existing
+SSE channel rather than through the document.
