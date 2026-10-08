@@ -1,6 +1,7 @@
 import type { CpdData, Job } from '../model/types';
 import type { LayoutGraph } from './types';
 import { groupByWave } from './waves';
+import { PAD } from './spacing';
 
 /**
  * Build the LayoutGraph from CPD data: workflow > job nodes. Workflows are
@@ -31,7 +32,7 @@ export function buildGraph(data: CpdData, jobCardSize: { width: number; height: 
         width: 0,
         height: 0,
         layoutOptions: {
-          'elk.padding': `[top=${WORKFLOW_TOP_PADDING},left=20,bottom=20,right=20]`,
+          'elk.padding': `[top=${WORKFLOW_TOP_PADDING},left=${PAD},bottom=${PAD},right=${PAD}]`,
         },
       });
 

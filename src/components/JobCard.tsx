@@ -56,7 +56,7 @@ export function JobCard({ job, colorDisabled = false }: JobCardProps) {
   return (
     <Card
       withBorder
-      padding="var(--space-3)"
+      padding="var(--pad)"
       w={220}
       style={{
         backgroundColor: 'var(--bg-panel)',
@@ -66,7 +66,7 @@ export function JobCard({ job, colorDisabled = false }: JobCardProps) {
         opacity: isDimmed(job) ? 0.45 : 1,
       }}
     >
-      <Group justify="space-between" wrap="nowrap" gap="var(--space-2)">
+      <Group justify="space-between" wrap="nowrap" gap="var(--gap)">
         <Group gap="var(--space-1)" wrap="nowrap" style={{ minWidth: 0 }}>
           <Icon size={16} color={colorValue} />
           <Tooltip label={job.title}>
@@ -87,7 +87,7 @@ export function JobCard({ job, colorDisabled = false }: JobCardProps) {
           )}
         </Group>
       </Group>
-      <Group justify="space-between" align="center" mt="var(--space-2)">
+      <Group justify="space-between" align="center" mt="var(--gap)">
         <Text size="xs" c="var(--fg-faint)">
           {showAttempt(job) ? `#${job.attempt}` : ''}
         </Text>
