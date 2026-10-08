@@ -10,8 +10,9 @@ import {
   Stack,
   Text,
   Textarea,
+  Tooltip,
 } from '@mantine/core';
-import { sendPrompt } from '../engine/client';
+import { forkConversation, sendPrompt } from '../engine/client';
 import { useEngineStream } from '../engine/useEngineStream';
 import type { ConversationId, Message } from '../engine/types';
 
@@ -20,6 +21,9 @@ export interface ChatPanelProps {
    * outgoing prompts to that conversation; undefined keeps the default/root stream. Selecting a
    * thread must change ONLY this -- it must never touch canvas nav state. */
   conversationId?: ConversationId;
+  /** Called after a successful fork with the new thread's id, so the caller can select it and
+   * land the user there. Reuses the caller's own selection state -- no second source of truth. */
+  onForked?: (id: ConversationId) => void;
 }
 
 /**
@@ -27,7 +31,7 @@ export interface ChatPanelProps {
  * sending a prompt optimistically appends the user's message locally, then
  * the next stream event replaces the list with the authoritative transcript.
  */
-export function ChatPanel({ conversationId }: ChatPanelProps) {
+export function ChatPanel({ conversationId, onForked }: ChatPanelProps) {
   const { messages, status } = useEngineStream(conversationId);
   const [pending, setPending] = useState<Message | null>(null);
   const [draft, setDraft] = useState('');
@@ -54,7 +58,10 @@ export function ChatPanel({ conversationId }: ChatPanelProps) {
     const text = draft.trim();
     if (!text || inFlight) return;
 
-    const userMessage: Message = { role: 'user', content: text };
+    // Optimistic id is a placeholder -- it never reaches the fork affordance because the
+    // pending message is cleared the instant the authoritative transcript (with its real
+    // entry id) catches up to it; see the effect above.
+    const userMessage: Message = { id: -1, role: 'user', content: text };
     setPending(userMessage);
     setDraft('');
     setInFlight(true);
@@ -69,6 +76,11 @@ export function ChatPanel({ conversationId }: ChatPanelProps) {
     } finally {
       setInFlight(false);
     }
+  }
+
+  async function fork(at: number) {
+    const result = await forkConversation(at);
+    onForked?.(result.id as ConversationId);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -93,7 +105,19 @@ export function ChatPanel({ conversationId }: ChatPanelProps) {
             {visible.map((message, i) => {
               const isUser = message.role === 'user';
               return (
-                <Group key={i} justify={isUser ? 'flex-end' : 'flex-start'} w="100%">
+                <Group key={`${message.id}:${i}`} justify={isUser ? 'flex-end' : 'flex-start'} w="100%" wrap="nowrap">
+                  {isUser && (
+                    <Tooltip label="Start a plan thread here">
+                      <ActionIcon
+                        size="sm"
+                        variant="subtle"
+                        data-testid={`fork-${message.id}`}
+                        onClick={() => void fork(message.id)}
+                      >
+                        <Text size="xs">⑂</Text>
+                      </ActionIcon>
+                    </Tooltip>
+                  )}
                   <Paper
                     p="sm"
                     radius="sm"

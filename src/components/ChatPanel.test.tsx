@@ -29,9 +29,9 @@ describe('ChatPanel', () => {
 
   it('renders user and assistant messages, skips system messages', () => {
     mockStream([
-      { role: 'user', content: 'hello' },
-      { role: 'assistant', content: 'hi there' },
-      { role: 'system', content: 'secret setup' },
+      { id: 1, role: 'user', content: 'hello' },
+      { id: 2, role: 'assistant', content: 'hi there' },
+      { id: 3, role: 'system', content: 'secret setup' },
     ]);
 
     renderPanel();
@@ -90,7 +90,7 @@ describe('ChatPanel', () => {
 
   it('wraps long content instead of overflowing the panel', () => {
     const longToken = 'x'.repeat(300);
-    mockStream([{ role: 'user', content: longToken }]);
+    mockStream([{ id: 1, role: 'user', content: longToken }]);
 
     renderPanel();
     const paper = screen.getByText(longToken).closest('div')!;
@@ -126,7 +126,7 @@ describe('ChatPanel', () => {
     const { rerender } = renderPanel();
     expect(screen.getByText('No messages yet')).toBeTruthy();
 
-    mockStream([{ role: 'user', content: 'hi' }]);
+    mockStream([{ id: 1, role: 'user', content: 'hi' }]);
     rerender(
       <MantineProvider>
         <ChatPanel />
@@ -147,5 +147,27 @@ describe('ChatPanel', () => {
       </MantineProvider>,
     );
     expect(screen.queryByText('reconnecting')).toBeNull();
+  });
+
+  it('shows a fork affordance for user messages but not assistant messages', () => {
+    mockStream([
+      { id: 7, role: 'user', content: 'start a thread here' },
+      { id: 11, role: 'assistant', content: 'no affordance for me' },
+    ]);
+
+    renderPanel();
+
+    expect(screen.getByTestId('fork-7')).toBeTruthy();
+    expect(screen.queryByTestId('fork-11')).toBeNull();
+  });
+
+  it('clicking the fork affordance POSTs at: <entry id>', () => {
+    mockStream([{ id: 7, role: 'user', content: 'start a thread here' }]);
+    const forkMock = vi.mocked(client.forkConversation).mockResolvedValue({ id: 99 });
+
+    renderPanel();
+    fireEvent.click(screen.getByTestId('fork-7'));
+
+    expect(forkMock).toHaveBeenCalledWith(7);
   });
 });

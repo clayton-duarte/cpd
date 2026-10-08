@@ -105,43 +105,84 @@ describe("FileCredentialStore", () => {
   });
 });
 
+function entry(id: number, model: unknown): { id: number; model: unknown } {
+  return { id, model };
+}
+
 describe("flattenMessages", () => {
   it("joins text parts of an assistant/user message into a plain string", () => {
     expect(
       flattenMessages([
-        { role: "user", content: [{ type: "text", text: "a" }, { type: "text", text: "b" }] } as never,
-      ]),
-    ).toEqual([{ role: "user", content: "ab" }]);
+        entry(7, [{ role: "user", content: [{ type: "text", text: "a" }, { type: "text", text: "b" }] }]),
+      ] as never),
+    ).toEqual([{ id: 7, role: "user", content: "ab" }]);
   });
 
   it("ignores non-text parts", () => {
     expect(
       flattenMessages([
-        {
-          role: "assistant",
-          content: [
-            { type: "text", text: "hi" },
-            { type: "toolCall", id: "1", name: "x", arguments: {} },
-          ],
-        } as never,
-      ]),
-    ).toEqual([{ role: "assistant", content: "hi" }]);
+        entry(11, [
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "hi" },
+              { type: "toolCall", id: "1", name: "x", arguments: {} },
+            ],
+          },
+        ]),
+      ] as never),
+    ).toEqual([{ id: 11, role: "assistant", content: "hi" }]);
   });
 
   it("drops empty system messages", () => {
     expect(
       flattenMessages([
-        { role: "system", content: "" } as never,
-        { role: "system", content: [] } as never,
-        { role: "user", content: "hello" } as never,
-      ]),
-    ).toEqual([{ role: "user", content: "hello" }]);
+        entry(10, [{ role: "system", content: "" }]),
+        entry(10, [{ role: "system", content: [] }]),
+        entry(7, [{ role: "user", content: "hello" }]),
+      ] as never),
+    ).toEqual([{ id: 7, role: "user", content: "hello" }]);
   });
 
   it("passes through a plain string system message with content", () => {
-    expect(flattenMessages([{ role: "system", content: "be nice" } as never])).toEqual([
-      { role: "system", content: "be nice" },
+    expect(flattenMessages([entry(10, [{ role: "system", content: "be nice" }])] as never)).toEqual([
+      { id: 10, role: "system", content: "be nice" },
     ]);
+  });
+
+  it("skips toolResult messages", () => {
+    expect(
+      flattenMessages([
+        entry(12, [{ role: "toolResult", content: "ignored" }]),
+        entry(15, [{ role: "assistant", content: "ok" }]),
+      ] as never),
+    ).toEqual([{ id: 15, role: "assistant", content: "ok" }]);
+  });
+
+  it("preserves sparse ids as-is (never computed from position)", () => {
+    const out = flattenMessages([
+      entry(7, [{ role: "user", content: "a" }]),
+      entry(10, [{ role: "system", content: "sys" }]),
+      entry(15, [{ role: "assistant", content: "b" }]),
+    ] as never);
+    expect(out.map((m) => m.id)).toEqual([7, 10, 15]);
+  });
+
+  it("one entry yielding two messages keeps the same id for both", () => {
+    const out = flattenMessages([
+      entry(12, [
+        { role: "user", content: "first" },
+        { role: "assistant", content: "second" },
+      ]),
+    ] as never);
+    expect(out).toEqual([
+      { id: 12, role: "user", content: "first" },
+      { id: 12, role: "assistant", content: "second" },
+    ]);
+  });
+
+  it("skips entries with no model array", () => {
+    expect(flattenMessages([{ id: 20 }] as never)).toEqual([]);
   });
 });
 

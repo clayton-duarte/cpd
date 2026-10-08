@@ -43,9 +43,9 @@ describe('useEngineStream', () => {
     instance.emitOpen();
     await waitFor(() => expect(result.current.status).toBe('open'));
 
-    instance.emitMessage({ type: 'messages', messages: [{ role: 'assistant', content: 'hi' }] });
+    instance.emitMessage({ type: 'messages', messages: [{ id: 7, role: 'assistant', content: 'hi' }] });
     await waitFor(() =>
-      expect(result.current.messages).toEqual([{ role: 'assistant', content: 'hi' }]),
+      expect(result.current.messages).toEqual([{ id: 7, role: 'assistant', content: 'hi' }]),
     );
 
     unmount();

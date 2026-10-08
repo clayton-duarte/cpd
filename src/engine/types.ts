@@ -1,4 +1,4 @@
-export type Message = { role: 'user' | 'assistant' | 'system'; content: string };
+export type Message = { id: number; role: 'user' | 'assistant' | 'system'; content: string };
 
 export type HealthResponse = { ok: true; conversationId: number };
 
@@ -17,6 +17,8 @@ export type ConversationNode = {
 };
 
 export type ConversationsResponse = { conversations: ConversationNode[] };
+
+export type ForkResponse = { id: number };
 
 export type StreamEvent =
   | { type: 'messages'; messages: Message[] }

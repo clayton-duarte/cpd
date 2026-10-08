@@ -1,6 +1,7 @@
 import type {
   ConversationId,
   ConversationsResponse,
+  ForkResponse,
   MessagesResponse,
   PromptResponse,
 } from './types';
@@ -34,4 +35,15 @@ export async function sendPrompt(text: string, conversation?: ConversationId): P
     body: JSON.stringify(body),
   });
   return parseOrThrow<PromptResponse>(res);
+}
+
+/** Fork a plan thread at entry `at`. Title is intentionally omitted -- the daemon derives it
+ * (G1's `deriveTitle`), so there is exactly one implementation of that rule. */
+export async function forkConversation(at: number): Promise<ForkResponse> {
+  const res = await fetch(`${BASE}/fork`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ at }),
+  });
+  return parseOrThrow<ForkResponse>(res);
 }
