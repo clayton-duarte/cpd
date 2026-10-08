@@ -14,10 +14,15 @@ import {
   addPlanJob,
   patchPlanJob,
   deletePlanJob,
+  runPlanJob,
+  abortPlanJob,
+  onJobOutput,
   UnknownConversationError,
   GraphError,
   DuplicateJobIdError,
   UnknownJobIdError,
+  UnknownRunJobIdError,
+  JobAlreadyRunningError,
   type Engine,
 } from "./engine.ts";
 import { acquireLock, releaseLock } from "./lock.ts";
@@ -79,6 +84,13 @@ async function main(): Promise<void> {
       if (watching === conversationId) client.write(frame);
     }
   }
+
+  onJobOutput((_taskKey, jobId, conversationId, text) => {
+    const frame = sseFrame({ type: "job-output", conversation: conversationId, jobId, text });
+    for (const [client, watching] of sseClients) {
+      if (watching === conversationId) client.write(frame);
+    }
+  });
 
   // Durable's `viewState().subscribe()` is the primary change-detection path; if that proves
   // unavailable at runtime we fall back to a 500ms poll (see catch below) that only pushes when
@@ -314,6 +326,60 @@ async function main(): Promise<void> {
         sendJson(res, 200, { ok: true });
       } catch (error) {
         if (error instanceof UnknownConversationError) {
+          sendJson(res, 404, { error: error.message });
+        } else {
+          throw error;
+        }
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/plan/job/run") {
+      const conversationId = resolveConversationId(url, engine.root.id as unknown as number);
+      const raw = await readBody(req);
+      let id: string;
+      try {
+        const body = JSON.parse(raw) as { id?: unknown };
+        if (typeof body.id !== "string") throw new Error("id must be a string");
+        id = body.id;
+      } catch {
+        sendJson(res, 400, { error: "Expected JSON body { id: string }" });
+        return;
+      }
+      try {
+        const result = await runPlanJob(engine, conversationId, id);
+        void pushPlanFor(conversationId);
+        sendJson(res, 200, result);
+      } catch (error) {
+        if (error instanceof UnknownConversationError || error instanceof UnknownRunJobIdError) {
+          sendJson(res, 404, { error: error.message });
+        } else if (error instanceof JobAlreadyRunningError) {
+          sendJson(res, 409, { error: error.message });
+        } else {
+          throw error;
+        }
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/plan/job/abort") {
+      const conversationId = resolveConversationId(url, engine.root.id as unknown as number);
+      const raw = await readBody(req);
+      let id: string;
+      try {
+        const body = JSON.parse(raw) as { id?: unknown };
+        if (typeof body.id !== "string") throw new Error("id must be a string");
+        id = body.id;
+      } catch {
+        sendJson(res, 400, { error: "Expected JSON body { id: string }" });
+        return;
+      }
+      try {
+        await abortPlanJob(engine, conversationId, id);
+        void pushPlanFor(conversationId);
+        sendJson(res, 200, { ok: true });
+      } catch (error) {
+        if (error instanceof UnknownConversationError || error instanceof UnknownRunJobIdError) {
           sendJson(res, 404, { error: error.message });
         } else {
           throw error;

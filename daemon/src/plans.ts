@@ -146,6 +146,10 @@ export interface Job {
   title: string;
   status: JobStatus;
   needs: string[];
+  /** Shell command this job runs when started. Null -> settles `done` immediately, untouched. */
+  command: string | null;
+  /** Durable task id of the running/settled `cpd.job` task backing this job, once started. */
+  taskId: string | null;
   [key: string]: JsonValue;
 }
 
