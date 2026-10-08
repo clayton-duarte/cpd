@@ -30,6 +30,9 @@ const SPACING_TOKEN_NAMES = [
   'gap', 'pad', 'space-cards',
 ];
 
+// Motion tokens (D1): durations, not accents -- exclude from the D73 hue check.
+const MOTION_TOKEN_NAMES = ['duration-descend', 'duration-ascend', 'duration-reduced-fade'];
+
 const ACCENT_HUES = ['red', 'green', 'blue'];
 const ACCENT_PARTS = ['', '-solid', '-tint', '-edge'];
 
@@ -47,7 +50,10 @@ describe('D73 palette tripwire', () => {
       .map((m) => m[1])
       .filter((name) => !name.startsWith('--mantine-'));
     const accentFullNames = allVarNames.filter(
-      (name) => !NEUTRAL_TOKENS.includes(name) && !SPACING_TOKEN_NAMES.includes(name.replace(/^--/, '')),
+      (name) =>
+        !NEUTRAL_TOKENS.includes(name) &&
+        !SPACING_TOKEN_NAMES.includes(name.replace(/^--/, '')) &&
+        !MOTION_TOKEN_NAMES.includes(name.replace(/^--/, '')),
     );
     const hues = new Set(
       accentFullNames.map((name) => name.replace(/^--/, '').replace(/-(solid|tint|edge)$/, '')),

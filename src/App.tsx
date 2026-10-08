@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { Group, Stack, Text } from '@mantine/core';
 import { Canvas } from './canvas/Canvas';
@@ -7,9 +7,34 @@ import { PlansLevel } from './canvas/PlansLevel';
 import { Sidebar } from './components/Sidebar';
 import { Gallery } from './Gallery';
 import { sampleData } from './fixtures/sample';
-import { ascend, initialNav, selectLead, selectPlan, type NavState } from './model/navigation';
+import { ascend, initialNav, selectLead, selectPlan, type Level, type NavState } from './model/navigation';
 import { leadsLevel, plansLevel, dataForPlan } from './model/levels';
+import { useLevelTransition } from './canvas/useLevelTransition';
 import './canvas/xyflow-theme.css';
+
+const LEVEL_DEPTH: Record<Level, number> = { leads: 0, plans: 1, jobs: 2 };
+
+/**
+ * Drives the camera transition whenever `nav.level` changes. Must render
+ * inside <ReactFlowProvider> -- useReactFlow throws outside it (C5 wiring
+ * requirement). Direction is derived by comparing depth against the
+ * previously seen level, tracked in a ref (not state -- a state write here
+ * would re-render on every navigation for no reason beyond bookkeeping).
+ */
+function LevelTransitionEffect({ level }: { level: Level }) {
+  const transition = useLevelTransition();
+  const previousLevel = useRef(level);
+
+  useEffect(() => {
+    if (previousLevel.current !== level) {
+      const direction = LEVEL_DEPTH[level] > LEVEL_DEPTH[previousLevel.current] ? 'descend' : 'ascend';
+      transition(direction);
+      previousLevel.current = level;
+    }
+  }, [level, transition]);
+
+  return null;
+}
 
 /** Trivial hash-based routing: no router dependency, per the A2-4 spec. */
 function useHashRoute(): string {
@@ -104,7 +129,7 @@ function TopBar() {
   );
 }
 
-function CanvasLevel({ nav, onNavigate }: { nav: NavState; onNavigate: (next: NavState) => void }) {
+function CanvasLevelContent({ nav, onNavigate }: { nav: NavState; onNavigate: (next: NavState) => void }) {
   if (nav.level === 'leads') {
     return <LeadsLevel leads={leadsLevel(sampleData)} onSelect={(leadId) => onNavigate(selectLead(leadId))} />;
   }
@@ -119,14 +144,24 @@ function CanvasLevel({ nav, onNavigate }: { nav: NavState; onNavigate: (next: Na
   }
 
   if (nav.level === 'jobs' && nav.planId) {
-    return (
-      <ReactFlowProvider>
-        <Canvas data={dataForPlan(sampleData, nav.planId)} />
-      </ReactFlowProvider>
-    );
+    return <Canvas data={dataForPlan(sampleData, nav.planId)} />;
   }
 
   return null;
+}
+
+/**
+ * The provider is kept mounted across all three levels (not just Jobs) so
+ * `useLevelTransition`'s `useReactFlow()` never throws regardless of which
+ * level is current -- it must be called unconditionally on every nav change.
+ */
+function CanvasLevel({ nav, onNavigate }: { nav: NavState; onNavigate: (next: NavState) => void }) {
+  return (
+    <ReactFlowProvider>
+      <LevelTransitionEffect level={nav.level} />
+      <CanvasLevelContent nav={nav} onNavigate={onNavigate} />
+    </ReactFlowProvider>
+  );
 }
 
 function App() {
