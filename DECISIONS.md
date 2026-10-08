@@ -1555,3 +1555,46 @@ is easiest to set up.
 **My own process failure, stated plainly:** I twice declared this prototype "driveable" and listed
 things for the user to try, having never once created a session and talked to it the way he would.
 A probe that reuses the fixture I already built is not a test of the product.
+---
+
+## D144 — K2 merged; the builder's "already wired" claim was true, and still left the bug visible
+
+K2's report said navigation/highlight/loading "were already wired via `onConversationCreated`" and
+only error handling was missing. I checked the claim against `main` before trusting it, and it was
+accurate: `handleNewSession` already called `onConversationCreated`, the button already had
+`loading={creating}`, and `App.tsx:468` already passed `setSelectedConversationId`.
+
+So the PR is small on purpose: `@mantine/notifications` (official Mantine package, permitted by the
+card), a `<Notifications />` provider, a `catch` showing a red notification, and three tests.
+
+**Sabotaged before merging:** removed the `onConversationCreated?.(id)` call — the K2 navigation
+test failed. The tests are load-bearing, not decorative. 191 app + 85 daemon green.
+
+**But the user's complaint is still only two-thirds fixed**, and the builder's claim is exactly why:
+"already wired" was true of the *code*, while the *user-visible* outcome was still wrong. Measured
+on merged `main` with a full sidebar:
+
+```
+threads panel:  top=56   bottom=265
+new row:        top=281  bottom=310   <- created below the fold
+panel.scrollTop: 0  (never moved)     scrollHeight 265 > clientHeight 207
+```
+
+The session is created, selected and highlighted — **offscreen**. Requirement 2 of the K2 card
+("reveal it in the tree ... scrolled into view if offscreen") had no implementation and no test.
+That is the original "new session does nothing" report: the action worked, the confirmation was
+literally out of sight. Filed as **K3**.
+
+**Rule added:** when a builder reports "this part already worked", that is a claim about code, not
+about what the user sees — re-measure the user-visible outcome before accepting it. And a
+requirement with no test in the PR is a requirement that was not delivered, however green the suite.
+
+## D145 — My own privacy leak, caught by the repo's tripwire
+
+Running K2's branch surfaced a failing test on `main`: `src/repo-privacy.test.ts` flagged
+`DECISIONS.md:1492` for containing the user's real first name — written by **me** in D141, in a repo
+the user intends to publish. Rewritten to "the lead's personal review helper"; tripwire green (15/15).
+
+Worth stating: the tripwire did its job on the author who had most recently promised to keep the
+repo clean. The reason it caught this at all is that it scans **every tracked file**, including
+documentation — had it been scoped to `src/`, this would have shipped.
