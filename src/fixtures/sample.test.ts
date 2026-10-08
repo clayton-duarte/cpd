@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { sampleData } from './sample';
 import type { Job, JobStatus } from '../model/types';
 
+function jobsById(): Map<string, Job> {
+  return new Map(sampleData.jobs.map((j) => [j.id, j]));
+}
+
 const ALL_STATUSES: JobStatus[] = [
   'draft', 'queued', 'running', 'blocked', 'failed',
   'waiting', 'paused', 'awaiting_confirm', 'done', 'skipped',
@@ -94,6 +98,66 @@ describe('sampleData fixture', () => {
   it('all job ids are unique', () => {
     const ids = sampleData.jobs.map((j) => j.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('all ids are unique across the whole fixture', () => {
+    const ids = [
+      ...sampleData.projects.map((p) => p.id),
+      ...sampleData.sessions.map((s) => s.id),
+      ...sampleData.workflows.map((w) => w.id),
+      ...sampleData.jobs.map((j) => j.id),
+    ];
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('project.sessionIds and session membership agree both ways', () => {
+    const sessionIds = new Set(sampleData.sessions.map((s) => s.id));
+    for (const project of sampleData.projects) {
+      for (const id of project.sessionIds) {
+        expect(sessionIds.has(id)).toBe(true);
+      }
+    }
+    const referenced = new Set(sampleData.projects.flatMap((p) => p.sessionIds));
+    for (const session of sampleData.sessions) {
+      expect(referenced.has(session.id)).toBe(true);
+    }
+  });
+
+  it('session.workflowIds and workflow membership agree both ways', () => {
+    const workflowIds = new Set(sampleData.workflows.map((w) => w.id));
+    for (const session of sampleData.sessions) {
+      for (const id of session.workflowIds) {
+        expect(workflowIds.has(id)).toBe(true);
+      }
+    }
+    const referenced = new Set(sampleData.sessions.flatMap((s) => s.workflowIds));
+    for (const workflow of sampleData.workflows) {
+      expect(referenced.has(workflow.id)).toBe(true);
+    }
+  });
+
+  it('workflow.jobIds and job membership agree both ways', () => {
+    const jobIds = new Set(sampleData.jobs.map((j) => j.id));
+    for (const workflow of sampleData.workflows) {
+      for (const id of workflow.jobIds) {
+        expect(jobIds.has(id)).toBe(true);
+      }
+    }
+    const referenced = new Set(sampleData.workflows.flatMap((w) => w.jobIds));
+    for (const job of sampleData.jobs) {
+      expect(referenced.has(job.id)).toBe(true);
+    }
+  });
+
+  it('every session has a leadTier', () => {
+    for (const session of sampleData.sessions) {
+      expect(session.leadTier).toBeTruthy();
+    }
+  });
+
+  it('jobsById resolves every id present in the fixture', () => {
+    const byId = jobsById();
+    expect(byId.size).toBe(sampleData.jobs.length);
   });
 
   it('no string field matches the public-repo tripwire pattern', () => {
