@@ -7,7 +7,7 @@ import type { CpdData } from '../model/types';
 import { getConversations } from '../engine/client';
 import { onConversationsSignal } from '../engine/useEngineStream';
 import type { ConversationId, ConversationNode } from '../engine/types';
-import { buildConversationTreeData } from './conversationTree';
+import { buildConversationTreeData, allExpandedState } from './conversationTree';
 
 export interface SidebarProps {
   data: CpdData;
@@ -128,6 +128,14 @@ export function Sidebar({ data, nav, onNavigate, selectedConversationId, onSelec
   }, []);
 
   const conversationTreeData = useMemo(() => buildConversationTreeData(conversations), [conversations]);
+
+  // Threads exist to be seen: keep every node expanded always, including newly arrived ones from
+  // SSE refetches and the node a just-created fork lands under. Per the card, expand-all is the
+  // simplest correct behavior (collapsing/persisting state is explicitly out of scope).
+  useEffect(() => {
+    conversationTree.setExpandedState(allExpandedState(conversationTreeData));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationTreeData]);
 
   const treeData = useMemo(() => buildTreeData(data), [data]);
 
