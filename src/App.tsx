@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { Button, Group, Stack, Text } from '@mantine/core';
 import { Canvas } from './canvas/Canvas';
@@ -9,14 +9,14 @@ import { Sidebar } from './components/Sidebar';
 import { ChatPanel } from './components/ChatPanel';
 import { Gallery } from './Gallery';
 import { sampleData } from './fixtures/sample';
-import { ascend, initialNav, selectLead, selectPlan, type Level, type NavState } from './model/navigation';
+import { ascend, initialNav, parseConversationId, selectLead, selectPlan, type Level, type NavState } from './model/navigation';
 import { leadsLevel, plansLevel, jobsLevel } from './model/levels';
 import { useLevelTransition } from './canvas/useLevelTransition';
 import { usePlan } from './engine/usePlan';
 import { runJob } from './engine/client';
 import { planToCpdData } from './model/fromPlan';
 import { NewJobModal } from './components/NewJobModal';
-import type { ConversationId } from './engine/types';
+import type { ConversationId, ConversationNode } from './engine/types';
 import './canvas/xyflow-theme.css';
 
 const LEVEL_DEPTH: Record<Level, number> = { leads: 0, plans: 1, jobs: 2 };
@@ -59,7 +59,7 @@ interface BreadcrumbSegment {
   nav: NavState;
 }
 
-function breadcrumbSegments(nav: NavState): BreadcrumbSegment[] {
+function breadcrumbSegments(nav: NavState, conversationTitle?: string): BreadcrumbSegment[] {
   const project = sampleData.projects[0];
   const segments: BreadcrumbSegment[] = [{ label: project.name, nav: initialNav }];
 
@@ -69,9 +69,14 @@ function breadcrumbSegments(nav: NavState): BreadcrumbSegment[] {
   }
 
   if (nav.planId) {
-    const workflow = sampleData.workflows.find((w) => w.id === nav.planId);
-    if (workflow && nav.leadId) {
-      segments.push({ label: workflow.title, nav: selectPlan({ level: 'plans', leadId: nav.leadId }, workflow.id) });
+    const conversationId = parseConversationId(nav.planId);
+    if (conversationId !== undefined) {
+      segments.push({ label: conversationTitle ?? `Thread ${conversationId}`, nav: { level: 'jobs', planId: nav.planId } });
+    } else {
+      const workflow = sampleData.workflows.find((w) => w.id === nav.planId);
+      if (workflow && nav.leadId) {
+        segments.push({ label: workflow.title, nav: selectPlan({ level: 'plans', leadId: nav.leadId }, workflow.id) });
+      }
     }
   }
 
@@ -81,14 +86,15 @@ function breadcrumbSegments(nav: NavState): BreadcrumbSegment[] {
 interface NavContextValue {
   nav: NavState;
   onNavigate: (next: NavState) => void;
+  conversationTitle?: string;
 }
 
 const NavContext = createContext<NavContextValue>({ nav: initialNav, onNavigate: () => {} });
 
 function TopBar() {
-  const { nav, onNavigate } = useContext(NavContext);
+  const { nav, onNavigate, conversationTitle } = useContext(NavContext);
   const project = sampleData.projects[0];
-  const segments = breadcrumbSegments(nav);
+  const segments = breadcrumbSegments(nav, conversationTitle);
 
   return (
     <Group
@@ -168,9 +174,12 @@ function CanvasLevelContent({
 }
 
 /**
- * The real plan for the `jobs` level (H9). `nav.planId` is the workflow id, which (per D112) is
- * the conversation id stringified -- the only place that mapping needs to be made explicit.
- * A 404 (no such conversation yet, e.g. mid-fork) or an empty plan renders an empty canvas via
+ * The real plan for the `jobs` level (H14). `nav.planId` is either a fixture workflow id
+ * (e.g. `'w3'`) or a real conversation id stringified -- `parseConversationId` (D112-adjacent,
+ * decided explicitly in H14) is the one place that distinction is made. A fixture-backed planId
+ * renders an empty canvas and issues NO `/api/plan` request at all (D115: absent data renders as
+ * absent, never a 404 surfaced as an error). A real conversation id fetches/streams its plan;
+ * a 404 there (e.g. mid-fork) or an empty plan also renders an empty canvas via
  * `planToCpdData([], ...)`, never a crash or an infinite spinner.
  */
 function JobsLevelContent({
@@ -182,36 +191,35 @@ function JobsLevelContent({
   selectedJobId: string | null;
   onSelectJob: (jobId: string | null) => void;
 }) {
-  // D112: a plan IS a conversation, so `nav.planId` already is the conversation id stringified.
-  // No parsing needed -- it goes straight into the `/api/plan?conversation=` query string the
-  // same way it will once the daemon backs the full lead/plan hierarchy. Today's fixture ids
-  // ('w3', ...) just resolve to no matching conversation (404 -> empty plan), which is exactly
-  // the "empty plan renders an empty canvas" case the card requires, not a crash.
-  const conversationId = planId as unknown as ConversationId;
+  const numericConversationId = parseConversationId(planId);
+  const conversationId = numericConversationId === undefined ? undefined : (numericConversationId as ConversationId);
   const { jobs } = usePlan(conversationId);
   const data = planToCpdData(jobs, { id: 0, title: planId });
   const [modalOpened, setModalOpened] = useState(false);
 
   const handleRun = (jobId: string) => {
+    if (conversationId === undefined) return;
     void runJob(conversationId, jobId);
   };
 
   return (
     <Stack gap={0} style={{ height: '100%' }}>
       <Group justify="flex-end" px="md" py="var(--space-1)">
-        <Button size="xs" onClick={() => setModalOpened(true)}>
+        <Button size="xs" onClick={() => setModalOpened(true)} disabled={conversationId === undefined}>
           New job
         </Button>
       </Group>
       <div style={{ flex: 1, minHeight: 0 }}>
         <Canvas data={data} selectedJobId={selectedJobId} onSelectJob={onSelectJob} onRunJob={handleRun} />
       </div>
-      <NewJobModal
-        conversation={conversationId}
-        opened={modalOpened}
-        onClose={() => setModalOpened(false)}
-        onCreated={() => setModalOpened(false)}
-      />
+      {conversationId !== undefined && (
+        <NewJobModal
+          conversation={conversationId}
+          opened={modalOpened}
+          onClose={() => setModalOpened(false)}
+          onCreated={() => setModalOpened(false)}
+        />
+      )}
     </Stack>
   );
 }
@@ -252,6 +260,12 @@ function App() {
   const [selectedConversationId, setSelectedConversationId] = useState<ConversationId | undefined>(
     undefined,
   );
+  const [conversations, setConversations] = useState<ConversationNode[]>([]);
+  const conversationTitle = useMemo(() => {
+    const conversationId = parseConversationId(nav.planId);
+    if (conversationId === undefined) return undefined;
+    return conversations.find((c) => c.id === conversationId)?.title;
+  }, [conversations, nav.planId]);
 
   // Selection is deliberately NOT part of NavState (see D3 card): NavState
   // answers "which level", selection answers "which job within this level".
@@ -296,7 +310,7 @@ function App() {
   }
 
   return (
-    <NavContext.Provider value={{ nav, onNavigate: setNav }}>
+    <NavContext.Provider value={{ nav, onNavigate: setNav, conversationTitle }}>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
         <TopBar />
         <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
@@ -306,6 +320,7 @@ function App() {
             onNavigate={setNav}
             selectedConversationId={selectedConversationId}
             onSelectConversation={setSelectedConversationId}
+            onConversationsChange={setConversations}
           />
           <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
             <div data-testid="canvas-area" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Group, Stack, Text, Tree, UnstyledButton, useTree, type RenderTreeNodePayload, type TreeNodeData } from '@mantine/core';
 import { IconChevronDown, IconChevronRight, IconLayoutSidebarLeftCollapse } from '@tabler/icons-react';
-import { selectLead, selectPlan, type NavState } from '../model/navigation';
+import { selectLead, selectPlan, selectConversation, type NavState } from '../model/navigation';
 import { leadsLevel, plansLevel, jobsLevel } from '../model/levels';
 import type { CpdData } from '../model/types';
 import { getConversations } from '../engine/client';
@@ -18,6 +18,9 @@ export interface SidebarProps {
    * in this card (see lead clarification on t_6848ce0e). */
   selectedConversationId?: ConversationId;
   onSelectConversation?: (id: ConversationId) => void;
+  /** H14: called whenever the fetched/streamed conversation list changes, so callers that need a
+   * conversation's title (e.g. the breadcrumb) don't need a second fetch of the same list. */
+  onConversationsChange?: (conversations: ConversationNode[]) => void;
 }
 
 export const MIN_WIDTH = 180;
@@ -100,20 +103,32 @@ function buildTreeData(data: CpdData): TreeNodeData[] {
  * from `nav` on every render inside `renderNode`, so navigating by any means
  * (canvas click, Escape, keyboard) keeps the sidebar in sync.
  */
-export function Sidebar({ data, nav, onNavigate, selectedConversationId, onSelectConversation }: SidebarProps) {
+export function Sidebar({
+  data,
+  nav,
+  onNavigate,
+  selectedConversationId,
+  onSelectConversation,
+  onConversationsChange,
+}: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [width, setWidth] = useState<number>(() => readStoredWidth());
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const tree = useTree();
   const [conversations, setConversations] = useState<ConversationNode[]>([]);
   const conversationTree = useTree();
+  const onConversationsChangeRef = useRef(onConversationsChange);
+  onConversationsChangeRef.current = onConversationsChange;
 
   useEffect(() => {
     let cancelled = false;
     async function refetch() {
       try {
         const { conversations: fetched } = await getConversations();
-        if (!cancelled) setConversations(fetched);
+        if (!cancelled) {
+          setConversations(fetched);
+          onConversationsChangeRef.current?.(fetched);
+        }
       } catch {
         // daemon unreachable -- leave the previous (possibly empty) list, the chat panel already
         // surfaces a connection-status badge.
@@ -312,7 +327,10 @@ export function Sidebar({ data, nav, onNavigate, selectedConversationId, onSelec
                       backgroundColor: selected ? 'var(--blue-tint)' : undefined,
                       cursor: 'pointer',
                     }}
-                    onClick={() => onSelectConversation?.(id)}
+                    onClick={() => {
+                      onSelectConversation?.(id);
+                      onNavigate(selectConversation(nav, id));
+                    }}
                   >
                     {hasChildren ? (
                       <UnstyledButton

@@ -2,16 +2,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import App from './App';
+import type { ConversationId } from './engine/types';
 
-// The `jobs` level now renders the real daemon-backed plan (H9), not fixture jobs. These
-// navigation tests only care about the leads/plans levels (still fixture-backed) and the
-// Escape/selection machinery, so `getPlan` is stubbed with one job matching the old fixture
-// job's title -- the fixture itself (src/fixtures/sample.ts) is unchanged, per the card.
+// H14: the `jobs` level now renders the real daemon-backed plan for a selected conversation, not
+// a fixture job -- a fixture plan id renders an empty canvas with no request (see
+// App.plan.test.tsx). These navigation tests only care about the leads/plans levels (still
+// fixture-backed) and the Escape/selection machinery, so they reach the jobs level via a real
+// thread selection and stub `getPlan` with one job.
 vi.mock('./engine/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./engine/client')>();
   return {
     ...actual,
-    getConversations: vi.fn(),
+    getConversations: vi.fn().mockResolvedValue({
+      conversations: [{ id: 1 as ConversationId, parentId: null, at: null, title: 'Grove thread' }],
+    }),
     getPlan: vi.fn().mockResolvedValue({
       jobs: [{ id: 'j17', title: 'Model soil moisture thresholds', status: 'done', needs: [] }],
     }),
@@ -65,9 +69,10 @@ describe('App navigation', () => {
   it('Escape at Jobs returns to Plans with the same lead still selected', async () => {
     renderApp();
     fireEvent.click(canvas().getByText('Grove automation'));
-    fireEvent.click(canvas().getByText('Automated drip-irrigation scheduling'));
+    await screen.findByText('Grove thread');
+    fireEvent.click(screen.getByTestId('thread-1'));
 
-    // Now at Jobs level for w3 (ELK layout is async).
+    // Now at Jobs level for the selected conversation (ELK layout is async).
     expect(await canvas().findByText('Model soil moisture thresholds')).toBeTruthy();
 
     fireEvent.keyDown(window, { key: 'Escape' });
@@ -98,7 +103,8 @@ describe('App navigation', () => {
   it('Escape with a job selected clears the selection first, then ascends on a second Escape', async () => {
     renderApp();
     fireEvent.click(canvas().getByText('Grove automation'));
-    fireEvent.click(canvas().getByText('Automated drip-irrigation scheduling'));
+    await screen.findByText('Grove thread');
+    fireEvent.click(screen.getByTestId('thread-1'));
 
     expect(await canvas().findByText('Model soil moisture thresholds')).toBeTruthy();
 
