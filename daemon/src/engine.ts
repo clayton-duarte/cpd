@@ -21,6 +21,15 @@ import {
   type ConversationNode,
   type RawConversationRecord,
   type TitleStore,
+  PlanDoc,
+  addJob,
+  removeJob,
+  setStatus,
+  validateGraph,
+  DuplicateJobIdError,
+  UnknownJobIdError,
+  type Job,
+  type JobStatus,
 } from "./plans.ts";
 
 export type Message = {
@@ -239,3 +248,103 @@ export async function forkPlan(
 }
 
 export { ctx, ROOT_CONVERSATION_ID };
+
+// --- H4: cpd.plan document CRUD, scoped per conversation (D112) -----------------------------
+
+export type { Job, JobStatus };
+export { DuplicateJobIdError, UnknownJobIdError };
+
+export class UnknownConversationError extends Error {
+  constructor(public readonly id: number) {
+    super(`Unknown conversation: ${id}`);
+  }
+}
+
+/** Read the job list for one conversation's plan. Undefined conversation -> `UnknownConversationError`. */
+export async function getPlan(engine: Engine, conversationId: number): Promise<Job[]> {
+  const conversation = await getConversation(engine, conversationId);
+  if (!conversation) throw new UnknownConversationError(conversationId);
+  const state = await engine.harness.snapshot(PlanDoc, conversation.id, ctx);
+  return state?.jobs ? [...state.jobs] : [];
+}
+
+/** A write that would create a cycle or dangling edge; carries the offending ids for the 400 body. */
+export class GraphError extends Error {
+  constructor(public readonly detail: ReturnType<typeof validateGraph>) {
+    super(
+      detail?.kind === "cycle"
+        ? `Cycle detected: ${detail.ids.join(" -> ")}`
+        : detail?.kind === "dangling"
+          ? `Job ${detail.jobId} needs unknown job ${detail.missingId}`
+          : "Invalid job graph",
+    );
+  }
+}
+
+/** Commit `nextJobs` into the conversation's plan doc after validating the graph; throws
+ * `GraphError` and leaves the document untouched when the write would create a cycle or a
+ * dangling edge. */
+async function commitJobs(engine: Engine, conversationId: number, nextJobs: Job[]): Promise<void> {
+  const invalid = validateGraph(nextJobs);
+  if (invalid) throw new GraphError(invalid);
+
+  await engine.harness.commit(async (tx) => {
+    const draft = await tx.doc(PlanDoc, conversationId as unknown as ConversationId);
+    draft.jobs = nextJobs;
+  }, ctx);
+}
+
+/** Add a new job (status `draft`) to the conversation's plan, generating its id server-side. */
+export async function addPlanJob(
+  engine: Engine,
+  conversationId: number,
+  input: { title: string; needs?: string[] },
+): Promise<Job> {
+  const conversation = await getConversation(engine, conversationId);
+  if (!conversation) throw new UnknownConversationError(conversationId);
+
+  const current = await getPlan(engine, conversationId);
+  const job: Job = { id: crypto.randomUUID(), title: input.title, status: "draft", needs: input.needs ?? [] };
+  const nextJobs = addJob(current, job);
+  await commitJobs(engine, conversationId, nextJobs);
+  return job;
+}
+
+/** Patch an existing job's title/status/needs. Throws `UnknownJobIdError` for an unknown id. */
+export async function patchPlanJob(
+  engine: Engine,
+  conversationId: number,
+  patch: { id: string; status?: JobStatus; title?: string; needs?: string[] },
+): Promise<Job> {
+  const conversation = await getConversation(engine, conversationId);
+  if (!conversation) throw new UnknownConversationError(conversationId);
+
+  let current = await getPlan(engine, conversationId);
+  if (!current.some((job) => job.id === patch.id)) {
+    throw new UnknownJobIdError(patch.id);
+  }
+
+  if (patch.status !== undefined) {
+    current = setStatus(current, patch.id, patch.status);
+  }
+  if (patch.title !== undefined || patch.needs !== undefined) {
+    current = current.map((job) =>
+      job.id === patch.id
+        ? { ...job, title: patch.title ?? job.title, needs: patch.needs ?? job.needs }
+        : job,
+    );
+  }
+
+  await commitJobs(engine, conversationId, current);
+  return current.find((job) => job.id === patch.id)!;
+}
+
+/** Delete a job from the conversation's plan, stripping it from every other job's `needs`. */
+export async function deletePlanJob(engine: Engine, conversationId: number, id: string): Promise<void> {
+  const conversation = await getConversation(engine, conversationId);
+  if (!conversation) throw new UnknownConversationError(conversationId);
+
+  const current = await getPlan(engine, conversationId);
+  const nextJobs = removeJob(current, id);
+  await commitJobs(engine, conversationId, nextJobs);
+}

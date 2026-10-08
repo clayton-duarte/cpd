@@ -1,3 +1,6 @@
+import { defineDoc, type ConversationId, type RewindableConversationDocToken } from "@earendil-works/pi-durable";
+import type { Draft, JsonValue } from "@earendil-works/chord";
+
 /**
  * Minimal async SQLite surface needed here, matching pi-durable's own `SqliteExecutor` shape
  * (`dist/storage/sqlite/database.d.ts`) so the title store can share a `NodeSqliteDatabase`
@@ -130,4 +133,133 @@ export function resolvePromptConversationId(
   if (queryId !== undefined) return { kind: "ok", id: queryId };
   if (bodyConversation !== undefined) return { kind: "ok", id: bodyConversation };
   return { kind: "ok", id: rootId };
+}
+
+// --- D112: a plan IS a conversation; jobs live in a scoped `cpd.plan` document -------------
+
+export type JobStatus = "draft" | "queued" | "running" | "done" | "failed";
+
+/** Minimum job shape per the standing "keep contracts at minimum" instruction: no timestamps,
+ * no logs, no assignees yet. */
+export interface Job {
+  id: string;
+  title: string;
+  status: JobStatus;
+  needs: string[];
+  [key: string]: JsonValue;
+}
+
+export type PlanState = {
+  jobs: Job[];
+  [key: string]: JsonValue;
+};
+
+/**
+ * Rewindable, fork-copy-on-write document scoped to one conversation (D112). Pass the owning
+ * conversation id explicitly as `tx.doc(PlanDoc, conversationId)` -- even inside that
+ * conversation's own commit -- or it throws `TypeError: Document cpd.plan requires a
+ * conversation ID`.
+ */
+export const PlanDoc: RewindableConversationDocToken<PlanState> = defineDoc({
+  kind: "cpd.plan",
+  version: 1,
+  scope: "conversation",
+  history: "rewindable",
+  fork: "asOf",
+  initial: (): PlanState => ({ jobs: [] }),
+});
+
+export type { ConversationId };
+export type PlanDraft = Draft<PlanState>;
+
+export class DuplicateJobIdError extends Error {
+  constructor(public readonly id: string) {
+    super(`Job id already exists: ${id}`);
+  }
+}
+
+/** Append `job` to `jobs`, rejecting a duplicate id. Pure; does not mutate `jobs`. */
+export function addJob(jobs: readonly Job[], job: Job): Job[] {
+  if (jobs.some((existing) => existing.id === job.id)) {
+    throw new DuplicateJobIdError(job.id);
+  }
+  return [...jobs, job];
+}
+
+/** Remove the job with `id`, and strip that id from every other job's `needs` so no dangling
+ * edge is left behind. Pure; does not mutate `jobs`. */
+export function removeJob(jobs: readonly Job[], id: string): Job[] {
+  return jobs
+    .filter((job) => job.id !== id)
+    .map((job) => (job.needs.includes(id) ? { ...job, needs: job.needs.filter((need) => need !== id) } : job));
+}
+
+export class UnknownJobIdError extends Error {
+  constructor(public readonly id: string) {
+    super(`Unknown job id: ${id}`);
+  }
+}
+
+/** Set the status of the job with `id`. Pure; does not mutate `jobs`. */
+export function setStatus(jobs: readonly Job[], id: string, status: JobStatus): Job[] {
+  if (!jobs.some((job) => job.id === id)) {
+    throw new UnknownJobIdError(id);
+  }
+  return jobs.map((job) => (job.id === id ? { ...job, status } : job));
+}
+
+/** A graph validation failure: either a cycle (the offending ids, in cycle order) or a dangling
+ * edge (a job whose `needs` references an id not present in `jobs`). */
+export type GraphValidationError =
+  | { readonly kind: "cycle"; readonly ids: string[] }
+  | { readonly kind: "dangling"; readonly jobId: string; readonly missingId: string };
+
+/**
+ * Validate that `jobs` form a DAG with no dangling `needs` reference. Returns the first error
+ * found, or `undefined` if the graph is valid. A cycle must be impossible to persist -- the
+ * canvas would hang on layout.
+ */
+export function validateGraph(jobs: readonly Job[]): GraphValidationError | undefined {
+  const byId = new Map(jobs.map((job) => [job.id, job] as const));
+
+  for (const job of jobs) {
+    for (const need of job.needs) {
+      if (!byId.has(need)) {
+        return { kind: "dangling", jobId: job.id, missingId: need };
+      }
+    }
+  }
+
+  const WHITE = 0;
+  const GRAY = 1;
+  const BLACK = 2;
+  const color = new Map<string, 0 | 1 | 2>();
+  const stack: string[] = [];
+
+  function visit(id: string): GraphValidationError | undefined {
+    color.set(id, GRAY);
+    stack.push(id);
+    const job = byId.get(id);
+    for (const need of job?.needs ?? []) {
+      const state = color.get(need) ?? WHITE;
+      if (state === WHITE) {
+        const found = visit(need);
+        if (found) return found;
+      } else if (state === GRAY) {
+        const cycleStart = stack.indexOf(need);
+        return { kind: "cycle", ids: stack.slice(cycleStart) };
+      }
+    }
+    stack.pop();
+    color.set(id, BLACK);
+    return undefined;
+  }
+
+  for (const job of jobs) {
+    if ((color.get(job.id) ?? WHITE) === WHITE) {
+      const found = visit(job.id);
+      if (found) return found;
+    }
+  }
+  return undefined;
 }
