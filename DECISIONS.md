@@ -636,3 +636,36 @@ with no evidence it did anything.
 every durable write costs. Job logs must **not** be committed per chunk. Buffer in memory, persist
 a bounded tail (and `spillPath` when present), and stream live output to the UI over the existing
 SSE channel rather than through the document.
+---
+
+## D115 — The daemon's job shape stays minimal; an adapter fills the UI's richer shape
+
+The UI's `Job` (`src/model/types.ts`) carries `owner`, `profile`, `tier`, `attempt`,
+`artifactCount` and a ten-value `JobStatus`. The daemon's job (H4) carries five fields and five
+statuses. These must meet somewhere.
+
+**Chosen:** the daemon shape stays minimal and a **pure adapter** (`src/model/fromPlan.ts`,
+`planToCpdData`) widens it for the canvas. Checked first: the daemon's five statuses
+(`draft|queued|running|done|failed`) are a **strict subset** of the UI's ten, so status passes
+through unchanged — the mismatch is only in the surrounding fields.
+
+**Rejected — widening the daemon's job to match the UI.** It would persist `tier`, `attempt` and
+`artifactCount` into the durable document before anything computes them, violating "keep the data
+set and contracts at minimum" and freezing speculative fields into storage that is expensive to
+migrate.
+
+**Rejected — shrinking the UI's `Job`.** Those fields encode real design decisions (colour = owner,
+tier badges, attempt counters). Deleting them to match today's daemon would throw away settled
+design work to save an adapter of maybe forty lines.
+
+**Rule the adapter must follow: absent data renders as absent, never as a plausible default.**
+`tier` stays `undefined`, `artifactCount` is `0`, `attempt` is `1`. A tier badge invented by the
+adapter would be indistinguishable on screen from one that was actually computed — the same class
+of defect as tonight's five silent successes, but aimed at the user instead of at me.
+
+The adapter also **drops `needs` edges that reference absent jobs**. H4 prevents dangling edges at
+write time, but the adapter does not own that payload and ELK mislays or throws on an edge to a
+missing node. A partial graph beats a blank canvas.
+
+This keeps `buildGraph` — already pure and tested — completely untouched, and makes the seam between
+engine truth and UI presentation a single testable function instead of a rewrite on either side.
