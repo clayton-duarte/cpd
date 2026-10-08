@@ -728,3 +728,34 @@ consumer, so fan-out is the client's job and must happen in exactly one place.
 **Scope note:** only the `jobs` level moves to real data. `leads` and `plans` stay on fixtures
 because they map to the project/session hierarchy the daemon does not expose yet. Converting them
 needs that hierarchy to exist first and is deliberately a separate card.
+---
+
+## D118 — The daemon was never typechecked by any gate
+
+Root `tsconfig.json` references `./tsconfig.app.json` and `./tsconfig.node.json`; the latter
+includes **only `vite.config.ts`**. `daemon/tsconfig.json` exists and is referenced by **nothing**.
+
+Proven by appending one line to `daemon/src/plans.ts`:
+
+```ts
+const __typecheck_probe: number = "definitely a string";
+```
+
+`pnpm typecheck` → clean. `pnpm build` → built in 4.91s. Only
+`tsc -p daemon/tsconfig.json --noEmit` caught it (`TS2322`).
+
+**The daemon's only real safety net has been Vitest**, which compiles per-file on demand and never
+checks the project as a whole. That is the same blind spot that let D116's boot break through
+review with 47 tests passing, and it means the shared note in every card — *"`pnpm build` is the
+real typecheck gate"* — has been **false for all daemon code**.
+
+**Chosen:** wire `daemon/tsconfig.json` into the root references so `tsc -b` walks it — the vanilla
+TypeScript mechanism, one command, no new tooling. Fixed in card H10.
+
+**Rejected — a separate `typecheck:daemon` script.** Two commands mean the one nobody remembers is
+the one that rots, which is exactly how this gap was born.
+
+**Standing lesson, now twice-proven: a gate that has never failed has not been shown to work.**
+Both times I found a real defect tonight it was by deliberately breaking something and checking the
+alarm sounded — the EventSource teardown, the entry-id test, the dangling-`needs` filter, and now
+the typecheck itself. Cards that add a gate must demonstrate the gate failing, not just passing.
