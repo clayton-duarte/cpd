@@ -1400,3 +1400,43 @@ frame's status **reaches `done`** — asserting merely that "frames arrived" is 
 passed. The defect lived one layer below, in a path no test exercised. Unit tests prove a component
 reacts correctly to the input it is *given*; only driving the real product proves it is ever *given*
 the right input. Merged J3b rather than blocking it — the card was right; the floor under it was not.
+---
+
+## D138 — J6 verified: the prototype is now genuinely driveable
+
+J6 (`29c3f1b`) fixed D137's stale-frame bug by adding an `onJobStatusChange` listener in
+`jobTask.ts`, fired on engine-internal transitions (queued/running/done/failed, taskless-done,
+abort) and wired in `index.ts` to `pushPlanFor` + `pushAttention`. No polling; `pushPlanFor` keeps
+its `watching === conversationId` filter so plan frames never leak across conversations.
+
+**Verified by re-running the exact probe that caught the bug**, not by trusting the green suite:
+
+```
+BEFORE (D137):  frames observed: ['draft', 'draft']                    DB: done
+AFTER  (J6):    frames observed: ['draft','draft','running','running','done']   DB: done
+```
+
+The second bug predicted in D137 is also fixed: a job that **fails on its own** (`exit 7`) now
+pushes an attention frame and appears in the queue live — previously every queue item had arrived
+via an HTTP call, so self-failures may never have surfaced at all.
+
+**End-to-end in the real UI, no reload anywhere:** selected a `running` job, **Stop was enabled for
+the first time** (D137's regression was that it could never enable), clicked it, and watched the
+node go spinner -> ✗, the badge go 3 -> 4, "failed: Stoppable" appear at the top of the attention
+queue, and Stop disable itself. That is the first time a user action in this GUI has driven the
+engine and been reflected back live.
+
+**Standard applied (D131's rule, now paying off):** a card is accepted only when the product does
+the thing from a cold, unseeded path. 188 app + 82 daemon tests passing was *not* the evidence —
+the status probe was.
+
+## D139 — Hardening filed, not silently absorbed: J7
+
+While reviewing J6 I found `onJobStatusChange` stores a **single** listener, so a second subscriber
+would silently replace the first. Not a live bug (there is exactly one subscriber today), and its
+siblings `onJobOutput`, `onPlanSignal`, `onAttentionSignal` all use the `Set` + unsubscribe pattern.
+
+Filed as **J7** rather than fixed inline or ignored: it is precisely the "notification path that
+silently stops delivering" trap that J6 just cost us a card to fix, pre-armed for the next
+subscriber. Scoped tight — convert to a `Set`, per-listener error isolation, keep J6's end-to-end
+guarantee as a test.
