@@ -36,7 +36,6 @@
   --duration-descend: 400ms;
   --duration-ascend: 300ms;
   --duration-reduced-fade: 100ms;
-}
 
   /* The scale is for SPACING: padding, margin, gap.
      Dimensions that must fit their content -- bar heights, node sizes handed to

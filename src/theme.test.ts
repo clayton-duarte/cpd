@@ -36,6 +36,42 @@ const MOTION_TOKEN_NAMES = ['duration-descend', 'duration-ascend', 'duration-red
 const ACCENT_HUES = ['red', 'green', 'blue'];
 const ACCENT_PARTS = ['', '-solid', '-tint', '-edge'];
 
+describe('theme.css structural integrity', () => {
+  it('has balanced braces and keeps spacing tokens inside :root', () => {
+    const css = readFileSync(join(SRC_DIR, 'theme.css'), 'utf8');
+    const opens = (css.match(/{/g) ?? []).length;
+    const closes = (css.match(/}/g) ?? []).length;
+    expect(opens).toBe(closes);
+
+    // Walk the file tracking brace depth so we never go negative (which would
+    // mean a stray closing brace closed an earlier block too soon -- the
+    // exact regression this test guards against).
+    let depth = 0;
+    let rootStart = -1;
+    let rootEnd = -1;
+    for (let i = 0; i < css.length; i += 1) {
+      const ch = css[i];
+      if (ch === '{') {
+        if (depth === 0 && rootStart === -1) rootStart = i;
+        depth += 1;
+      } else if (ch === '}') {
+        depth -= 1;
+        expect(depth).toBeGreaterThanOrEqual(0);
+        if (depth === 0 && rootEnd === -1) rootEnd = i;
+      }
+    }
+    expect(rootStart).toBeGreaterThan(-1);
+    expect(rootEnd).toBeGreaterThan(rootStart);
+
+    const rootBlock = css.slice(rootStart, rootEnd + 1);
+    const spacingAndPadTokens = ['--pad', ...SPACING_TOKEN_NAMES.filter((n) => n !== 'pad').map((n) => `--${n}`)];
+    for (const token of spacingAndPadTokens) {
+      const re = new RegExp(`${token}:`);
+      expect(rootBlock, `${token} must be declared inside the first :root block`).toMatch(re);
+    }
+  });
+});
+
 describe('D73 palette tripwire', () => {
   it('has exactly three accent hues, each with exactly four parts, defined in theme.css', () => {
     const css = readFileSync(join(SRC_DIR, 'theme.css'), 'utf8');

@@ -73,15 +73,16 @@ export function ChatPanel() {
 
   return (
     <Stack h="100%" gap={0}>
-      <ScrollArea style={{ flex: 1, minHeight: 0 }} p="var(--pad)">
+      <ScrollArea style={{ flex: 1, minHeight: 0 }}>
         {visible.length === 0 ? (
           <EmptyState
             title="No messages yet"
             description="The lead conversation is empty."
+            p="var(--pad)"
             styles={{ title: { fontSize: 'var(--mantine-font-size-sm)' } }}
           />
         ) : (
-          <Stack gap="var(--space-2)" w="100%">
+          <Stack gap="var(--space-2)" w="100%" p="var(--pad)">
             {visible.map((message, i) => {
               const isUser = message.role === 'user';
               return (
