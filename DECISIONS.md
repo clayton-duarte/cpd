@@ -190,3 +190,75 @@ Verified by the lead in a browser against the real stack, not by reading a build
 
 Jobs remain fixtures, as scoped. **Known defect:** user message bubbles overflow the panel's right
 edge — filed as card G2, not hand-patched.
+---
+
+## D99 — CPD enforces single-daemon ownership of the SQLite file itself
+
+**Context:** Pi Durable's README says *"One process owns a storage at a time; there is no
+cross-process locking."* That invariant is **unenforced**. Verified empirically: opening the same
+SQLite file twice succeeds both times, and two harnesses over those handles also both open. SQLite's
+`busyTimeoutMs` is a per-statement wait, not an ownership lease.
+
+**Chosen:** a lockfile at `<dbPath>.lock` holding `{pid, startedAt}`, created with `fs.openSync(…,
+"wx")` (atomic create-or-fail), with `process.kill(pid, 0)` liveness detection so a dead owner's
+lock is reclaimed automatically. A live owner causes the second daemon to refuse and exit non-zero.
+
+**Why this and not something cleverer:** most vanilla option that actually works. An advisory
+`flock` needs a native dependency; a control socket is a protocol we'd have to maintain. A pid
+lockfile is stdlib-only and sufficient for a single-machine personal tool.
+
+**Why it matters in practice:** `pnpm dev:all` plus a stray `pnpm daemon` in another terminal is
+two daemons on `.cpd/cpd.sqlite`, diverging silently with no diagnostic.
+
+Filed as card G3. **Flagging for review:** if CPD ever runs its daemon on more than one machine
+against shared storage, a pid lockfile is the wrong abstraction and this needs revisiting.
+
+---
+
+## D100 — Observer state must be disposed; `watch()` is single-consumer
+
+`viewState()`, `documentState()` and `taskGraph()` return refcounted mounts — *"built on the
+Session line by its first observer and dropped with its last."* Without `dispose()` they leak for
+the daemon's lifetime. F1 subscribes per SSE client, so this is a real leak; included in G3.
+
+`WatchHandle.start()` installs *"the sole asynchronous listener"* — one watch serves exactly one
+consumer, and listeners are serialized so a slow client backpressures the whole watch. **If CPD
+ever serves multiple browser tabs, the daemon must fan out itself.** Not needed yet (single local
+user), but it is a load-bearing assumption worth stating.
+
+---
+
+## D101 — Deferred: `watchEvents` for token-level streaming
+
+`watchEvents(harness, conversationId, context)` is a **top-level export**, not a method — which is
+why probing `root.watchEvents` returned `undefined`. It is marked *Experimental*, but it is the
+only observation path with a documented safe overflow policy (undelivered batches collapse to a
+single snapshot); `viewState`/`watch` may silently skip sequences under overflow.
+
+**Chosen: not now.** The current SSE transcript works and is simple. When CPD wants in-flight
+rendering (streaming assistant text, live tool-execution status), `watchEvents` is the intended
+door, carrying 22 event types including `message_update` and `tool_execution_*`.
+
+Note: progress is throttled at ~100ms (`ProgressPolicy`), **not per token**, and every tick is a
+storage write — that knob trades UI smoothness against write amplification.
+
+---
+
+## D102 — Tune compaction explicitly before relying on it
+
+Generation blocks above `contextWindow - reserveTokens`. Copilot's `claude-opus-5` advertises a
+**1,000,000-token** context window; with the default `reserveTokens` of 16384, compaction fires
+extremely late. Not urgent for short lead chats, but it must be set deliberately before any
+long-running thread. Unset defaults are not a decision.
+
+---
+
+## D103 — Offline model tests use pi-ai's `faux` provider
+
+pi-ai ships 44 providers including `faux`, a fake. Prefer it over hand-mocking the model layer in
+daemon tests. No card yet; the rule applies when a test needs a model.
+
+**Correction to an earlier claim of mine:** I previously recorded that `storage.close?.()` might be
+undefined. It is not — `close(context)` is a **required** member taking a **required** context. In
+practice call `harness.close(context)` instead, which seals admission, settles commits, then closes
+storage.
