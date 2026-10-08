@@ -416,12 +416,19 @@ describe('Sidebar', () => {
       await waitFor(() => expect(screen.getByText('New thread')).toBeTruthy());
 
       const outer = container.querySelector('[data-testid="outer-scroller"]') as HTMLElement;
-      // Inner Stack (Sidebar's own root): same scrollHeight as clientHeight -- NOT scrollable --
-      // and an unclipped rect extending past the visible area, matching the measured repro.
-      const inner = outer.firstElementChild as HTMLElement;
-      mockElementGeometry(outer, { scrollHeight: 293, clientHeight: 207, top: 0, bottom: 265 });
-      mockElementGeometry(inner, { scrollHeight: 293, clientHeight: 293, top: 1, bottom: 406 });
       const row = screen.getByTestId('thread-99');
+      // Mock EVERY intermediate element between the row and the outer clipped scroller (not just
+      // the one directly below `outer`) -- there are several nested wrapper divs from Mantine's
+      // Tree between a thread row and Sidebar's own root. Each gets the same non-scrollable,
+      // unclipped geometry [1,406] matching the measured repro, so a wrong-element bug (K3: using
+      // row.parentElement instead of walking to the real scroller) reads the row as "fully
+      // visible" against one of these and never calls scrollIntoView -- making the test fail.
+      mockElementGeometry(outer, { scrollHeight: 293, clientHeight: 207, top: 0, bottom: 265 });
+      let node: HTMLElement | null = row.parentElement;
+      while (node && node !== outer) {
+        mockElementGeometry(node, { scrollHeight: 293, clientHeight: 293, top: 1, bottom: 406 });
+        node = node.parentElement;
+      }
       mockElementGeometry(row, { scrollHeight: 0, clientHeight: 0, top: 310, bottom: 338 });
 
       // The scroll effect already ran once (before geometry was mocked, since the real DOM
