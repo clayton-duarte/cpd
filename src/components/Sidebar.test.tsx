@@ -9,12 +9,31 @@ import type { ConversationId, ConversationNode } from '../engine/types';
 
 vi.mock('../engine/client');
 
+let conversationsSignalHandlers: Array<() => void> = [];
+vi.mock('../engine/useEngineStream', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../engine/useEngineStream')>();
+  return {
+    ...actual,
+    onConversationsSignal: (listener: () => void) => {
+      conversationsSignalHandlers.push(listener);
+      return () => {
+        conversationsSignalHandlers = conversationsSignalHandlers.filter((l) => l !== listener);
+      };
+    },
+  };
+});
+
+function emitConversationsSignal() {
+  for (const listener of conversationsSignalHandlers) listener();
+}
+
 function mockConversations(conversations: ConversationNode[]) {
   vi.mocked(client.getConversations).mockResolvedValue({ conversations });
 }
 
 beforeEach(() => {
   mockConversations([]);
+  conversationsSignalHandlers = [];
 });
 
 afterEach(() => {
@@ -212,7 +231,7 @@ describe('Sidebar', () => {
       expect(screen.queryByText('Threads')).toBeNull();
     });
 
-    it('renders fetched conversations as a nested Threads section', async () => {
+    it('renders fetched conversations as a nested Threads section, already expanded', async () => {
       mockConversations([
         { id: 1 as ConversationId, parentId: null, at: null, title: 'Lead' },
         { id: 16 as ConversationId, parentId: 1 as ConversationId, at: 7, title: 'Test thread' },
@@ -221,10 +240,7 @@ describe('Sidebar', () => {
 
       await waitFor(() => expect(screen.getByText('Threads')).toBeTruthy());
       expect(screen.getByText('Lead')).toBeTruthy();
-      expect(screen.queryByText('Test thread')).toBeNull();
-
-      fireEvent.click(screen.getByTestId('thread-expand-1'));
-      expect(screen.getByText('Test thread')).toBeTruthy();
+      await waitFor(() => expect(screen.getByText('Test thread')).toBeTruthy());
     });
 
     it('clicking a thread calls onSelectConversation with the numeric id, not the string value', async () => {
@@ -266,6 +282,52 @@ describe('Sidebar', () => {
       await waitFor(() =>
         expect(screen.getByTestId('thread-1').getAttribute('data-selected')).toBe('true'),
       );
+    });
+
+    it('renders a parent and child thread both visible with no clicks', async () => {
+      mockConversations([
+        { id: 1 as ConversationId, parentId: null, at: null, title: 'Lead' },
+        { id: 16 as ConversationId, parentId: 1 as ConversationId, at: 7, title: 'Test thread' },
+      ]);
+      renderSidebar();
+
+      await waitFor(() => expect(screen.getByText('Lead')).toBeTruthy());
+      await waitFor(() => expect(screen.getByText('Test thread')).toBeTruthy());
+    });
+
+    it('a conversations update that adds a new child renders it immediately, expanded', async () => {
+      mockConversations([{ id: 1 as ConversationId, parentId: null, at: null, title: 'Lead' }]);
+      renderSidebar();
+
+      await waitFor(() => expect(screen.getByText('Lead')).toBeTruthy());
+      expect(screen.queryByText('New thread')).toBeNull();
+
+      mockConversations([
+        { id: 1 as ConversationId, parentId: null, at: null, title: 'Lead' },
+        { id: 22 as ConversationId, parentId: 1 as ConversationId, at: 7, title: 'New thread' },
+      ]);
+      emitConversationsSignal();
+
+      await waitFor(() => expect(screen.getByText('New thread')).toBeTruthy());
+    });
+
+    it('selecting a nested thread keeps it visible (ancestor expanded)', async () => {
+      mockConversations([
+        { id: 1 as ConversationId, parentId: null, at: null, title: 'Lead' },
+        { id: 16 as ConversationId, parentId: 1 as ConversationId, at: 7, title: 'Test thread' },
+      ]);
+      render(
+        <MantineProvider>
+          <Sidebar
+            data={sampleData}
+            nav={initialNav}
+            onNavigate={() => {}}
+            selectedConversationId={16 as ConversationId}
+          />
+        </MantineProvider>,
+      );
+
+      await waitFor(() => expect(screen.getByText('Test thread')).toBeTruthy());
     });
 
     it('clicking a fixture lead/plan/job row never calls onSelectConversation', async () => {
