@@ -62,7 +62,7 @@ describe('client', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await sendPrompt('hello there');
+    const result = await sendPrompt('hello there', undefined);
 
     expect(fetchMock).toHaveBeenCalledWith('/api/prompt', {
       method: 'POST',
@@ -72,7 +72,7 @@ describe('client', () => {
     expect(result).toEqual({ status: 'done' });
   });
 
-  it('sendPrompt includes the conversation id in the body when given one', async () => {
+  it('sendPrompt appends ?conversation=<id> to the URL when given one', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ status: 'done' }),
@@ -81,10 +81,10 @@ describe('client', () => {
 
     await sendPrompt('hello there', 16 as ConversationId);
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/prompt', {
+    expect(fetchMock).toHaveBeenCalledWith('/api/prompt?conversation=16', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: 'hello there', conversation: 16 }),
+      body: JSON.stringify({ text: 'hello there' }),
     });
   });
 

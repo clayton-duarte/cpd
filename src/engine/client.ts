@@ -26,13 +26,12 @@ export async function getConversations(): Promise<ConversationsResponse> {
   return parseOrThrow<ConversationsResponse>(res);
 }
 
-export async function sendPrompt(text: string, conversation?: ConversationId): Promise<PromptResponse> {
-  const body: { text: string; conversation?: ConversationId } = { text };
-  if (conversation !== undefined) body.conversation = conversation;
-  const res = await fetch(`${BASE}/prompt`, {
+export async function sendPrompt(text: string, conversation: ConversationId | undefined): Promise<PromptResponse> {
+  const suffix = conversation === undefined ? '' : `?conversation=${conversation}`;
+  const res = await fetch(`${BASE}/prompt${suffix}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ text }),
   });
   return parseOrThrow<PromptResponse>(res);
 }

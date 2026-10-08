@@ -13,7 +13,7 @@ import {
   type Engine,
 } from "./engine.ts";
 import { acquireLock, releaseLock } from "./lock.ts";
-import { resolveConversationId } from "./plans.ts";
+import { resolveConversationId, resolvePromptConversationId } from "./plans.ts";
 
 const PORT = Number(process.env.CPD_DAEMON_PORT ?? 4317);
 const DB_PATH = process.env.CPD_DB ?? ".cpd/cpd.sqlite";
@@ -158,20 +158,25 @@ async function main(): Promise<void> {
     if (req.method === "POST" && url.pathname === "/api/prompt") {
       const raw = await readBody(req);
       let text: string;
-      let conversationId: number = engine.root.id as unknown as number;
+      let bodyConversation: number | undefined;
       try {
         const body = JSON.parse(raw) as { text?: unknown; conversation?: unknown };
         if (typeof body.text !== "string") throw new Error("text must be a string");
         text = body.text;
         if (body.conversation !== undefined) {
           if (typeof body.conversation !== "number") throw new Error("conversation must be a number");
-          conversationId = body.conversation;
+          bodyConversation = body.conversation;
         }
       } catch {
         sendJson(res, 400, { error: "Expected JSON body { text: string, conversation?: number }" });
         return;
       }
-      const conversation = await getConversation(engine, conversationId);
+      const resolution = resolvePromptConversationId(url, bodyConversation, engine.root.id as unknown as number);
+      if (resolution.kind === "conflict") {
+        sendJson(res, 400, { error: "conversation query param and body disagree" });
+        return;
+      }
+      const conversation = await getConversation(engine, resolution.id);
       if (!conversation) {
         sendJson(res, 404, { error: "Unknown conversation" });
         return;

@@ -99,10 +99,35 @@ export async function openTitleStore(db: SqliteLike): Promise<TitleStore> {
   };
 }
 
-/** Resolve the `conversation` query param to a conversation id, defaulting to the root. */
+/** Resolve the `conversation` query param to a conversation id, defaulting to the root only
+ * when the param is absent. An explicitly supplied non-numeric value is returned as-is (NaN)
+ * so callers route it through the normal unknown-conversation (404) path rather than silently
+ * falling back to root. */
 export function resolveConversationId(url: URL, rootId: number): number {
   const raw = url.searchParams.get("conversation");
   if (raw === null) return rootId;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) ? parsed : rootId;
+  return Number(raw);
+}
+
+export type PromptConversationResolution =
+  | { kind: "ok"; id: number }
+  | { kind: "conflict" };
+
+/** Resolve the conversation id for POST /api/prompt, which may be supplied via the
+ * `?conversation=` query string (preferred, consistent with /api/messages and /api/stream) or
+ * the legacy JSON body `conversation` field. If both are present and disagree, the ambiguity is
+ * reported rather than silently resolved one way. */
+export function resolvePromptConversationId(
+  url: URL,
+  bodyConversation: number | undefined,
+  rootId: number,
+): PromptConversationResolution {
+  const raw = url.searchParams.get("conversation");
+  const queryId = raw === null ? undefined : Number(raw);
+  if (queryId !== undefined && bodyConversation !== undefined && queryId !== bodyConversation) {
+    return { kind: "conflict" };
+  }
+  if (queryId !== undefined) return { kind: "ok", id: queryId };
+  if (bodyConversation !== undefined) return { kind: "ok", id: bodyConversation };
+  return { kind: "ok", id: rootId };
 }
