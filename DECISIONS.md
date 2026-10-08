@@ -304,3 +304,53 @@ former.
 
 **Credit:** the builder on G4 found this, correctly judged it out of scope for a padding-only card,
 and stopped to ask instead of silently widening its diff. That was the right call.
+---
+
+## D105 — Conversation titles live in our own table, not Durable's schema
+
+Durable has no title field. G1 added a `conversation_titles (id, title)` table in the **same**
+SQLite file, opened as a second connection via `openNodeSqliteDatabase`.
+
+**Why:** writing into Durable's own tables would couple us to its schema across upgrades. A
+sidecar table in the same file keeps one file to back up and one thing to delete.
+
+**Verified safe w.r.t. G3's lock:** the second connection is opened by the *same* process that owns
+the lock, so the single-owner invariant holds. SQLite handles intra-process connections fine.
+
+**Title rule:** stored override wins, else derived from the first user message (60 chars, cut at a
+word boundary, ellipsis); root is always "Lead"; empty is "Untitled".
+
+---
+
+## D106 — New conversations are detected by a 1s poll
+
+Durable emits no dedicated "conversation created" event. G1 polls `scanConversations` every second
+and pushes `{type:"conversations"}` over SSE when the set changes.
+
+**Chosen** as the simplest thing that works. **Flagged for your review:** a 1s poll is a placeholder,
+not a design. If the tree grows large this is the first thing to revisit — `watchEvents` (D101) is
+the likely replacement.
+
+---
+
+## D107 — `/api/messages` and `/api/stream` take an optional `?conversation=<id>`
+
+Defaults to root, so F2's existing chat panel is untouched. Keeps the frozen API contract
+backward-compatible while making every thread addressable.
+
+**Verified live by the lead** (not from the PR body) — fork from entry 7, then restart:
+
+```
+POST /api/fork {"at":7,"title":"Lead review thread"} -> {"id":16}
+GET  /api/conversations ->
+  [{"id":1,"parentId":null,"at":null,"title":"Lead"},
+   {"id":16,"parentId":1,"at":7,"title":"Lead review thread"}]
+GET  /api/messages?conversation=16 ->
+  [{"role":"user","content":"Reply with exactly: PROTOTYPE-LIVE"}]   # history up to `at`, nothing after
+```
+
+After killing and restarting the daemon the tree was byte-identical, and the G3 lock released
+cleanly on SIGTERM — no stale-lock refusal on restart.
+
+**The backend for the navigation tree is now real.** `parentId`/`at` are exactly what the sidebar
+needs; no UI consumes it yet.
