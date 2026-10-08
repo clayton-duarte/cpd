@@ -42,7 +42,7 @@ const STORAGE_KEY = 'cpd.sidebar.width';
 /** Walk up from an element to the nearest ancestor that actually scrolls (scrollHeight >
  * clientHeight) and is set to clip overflow (overflow-y auto/scroll). Measuring against the
  * actual scroller -- rather than an inner non-clipped wrapper -- is required: see K4. */
-function findScrollableAncestor(el: HTMLElement): HTMLElement | null {
+export function findScrollableAncestor(el: HTMLElement): HTMLElement | null {
   let node: HTMLElement | null = el.parentElement;
   while (node) {
     const overflowY = getComputedStyle(node).overflowY;

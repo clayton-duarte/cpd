@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
-import { Sidebar, MIN_WIDTH, MAX_WIDTH } from './Sidebar';
+import { Sidebar, MIN_WIDTH, MAX_WIDTH, findScrollableAncestor } from './Sidebar';
 import { initialNav, selectLead, selectPlan, type NavState } from '../model/navigation';
 import { sampleData } from '../fixtures/sample';
 import * as client from '../engine/client';
@@ -364,11 +364,14 @@ describe('Sidebar', () => {
       mockConversations(manyConversations);
       vi.mocked(client.createConversation).mockResolvedValue({ id: 99 });
 
-      const scrollIntoViewSpy = vi.fn();
+      const scrollCalls: Array<{ el: Element; arg: unknown }> = [];
       const originalScrollIntoView = Element.prototype.scrollIntoView;
-      Element.prototype.scrollIntoView = scrollIntoViewSpy;
+      Element.prototype.scrollIntoView = function (this: Element, arg?: unknown) {
+        scrollCalls.push({ el: this, arg });
+      };
 
       let selectedConversationId: ConversationId | undefined;
+      try {
       const { container, rerender } = render(
         <MantineProvider>
           {/* Outer clipped scroller mimicking App.tsx's Paper[data-testid=panel-tree]: scrollable,
@@ -441,20 +444,26 @@ describe('Sidebar', () => {
       ]);
       emitConversationsSignal();
 
-      await waitFor(() => expect(scrollIntoViewSpy).toHaveBeenCalledWith({ block: 'nearest' }));
-
-      Element.prototype.scrollIntoView = originalScrollIntoView;
+      await waitFor(() => expect(scrollCalls).toHaveLength(1));
+      expect(scrollCalls[0].el).toBe(row);
+      expect(scrollCalls[0].arg).toEqual({ block: 'nearest' });
+      } finally {
+        Element.prototype.scrollIntoView = originalScrollIntoView;
+      }
     });
 
     it('does not scroll when the newly selected row is already fully visible against the real scroller', async () => {
       mockConversations([{ id: 1 as ConversationId, parentId: null, at: null, title: 'Lead' }]);
       vi.mocked(client.createConversation).mockResolvedValue({ id: 99 });
 
-      const scrollIntoViewSpy = vi.fn();
+      const scrollCalls: Array<{ el: Element; arg: unknown }> = [];
       const originalScrollIntoView = Element.prototype.scrollIntoView;
-      Element.prototype.scrollIntoView = scrollIntoViewSpy;
+      Element.prototype.scrollIntoView = function (this: Element, arg?: unknown) {
+        scrollCalls.push({ el: this, arg });
+      };
 
       let selectedConversationId: ConversationId | undefined;
+      try {
       const { container, rerender } = render(
         <MantineProvider>
           <div data-testid="outer-scroller" style={{ overflowY: 'auto' }}>
@@ -507,9 +516,36 @@ describe('Sidebar', () => {
       const row = screen.getByTestId('thread-99');
       mockElementGeometry(row, { scrollHeight: 0, clientHeight: 0, top: 10, bottom: 30 });
 
-      expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+      expect(scrollCalls).toHaveLength(0);
+      } finally {
+        Element.prototype.scrollIntoView = originalScrollIntoView;
+      }
+    });
 
-      Element.prototype.scrollIntoView = originalScrollIntoView;
+    it('findScrollableAncestor skips an overflowing ancestor whose overflow-y is visible (not clipped)', () => {
+      const outer = document.createElement('div');
+      Object.defineProperty(outer, 'scrollHeight', { configurable: true, value: 400 });
+      Object.defineProperty(outer, 'clientHeight', { configurable: true, value: 200 });
+      outer.style.overflowY = 'auto';
+
+      const middle = document.createElement('div');
+      // Overflows (scrollHeight > clientHeight) but NOT clipped (overflow-y: visible) -- must be
+      // skipped; the walk must continue past it to `outer`.
+      Object.defineProperty(middle, 'scrollHeight', { configurable: true, value: 400 });
+      Object.defineProperty(middle, 'clientHeight', { configurable: true, value: 100 });
+      middle.style.overflowY = 'visible';
+
+      const row = document.createElement('div');
+
+      outer.appendChild(middle);
+      middle.appendChild(row);
+      document.body.appendChild(outer);
+
+      try {
+        expect(findScrollableAncestor(row)).toBe(outer);
+      } finally {
+        document.body.removeChild(outer);
+      }
     });
 
     it('clicking a fixture lead/plan/job row never calls onSelectConversation', async () => {
