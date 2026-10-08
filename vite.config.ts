@@ -23,7 +23,10 @@ export default defineConfig({
     include: ['elkjs/lib/elk-api.js'],
   },
   server: {
-    port: Number(process.env.CPD_DEV_PORT ?? 5173),
+    port: Number(process.env.CPD_DEV_PORT ?? 8888),
+    // Never silently fall through to a random port: the app's address must be
+    // the one address, every time. If 8888 is taken, say so and stop.
+    strictPort: true,
     proxy: {
       '/api': {
         target: process.env.CPD_DAEMON_URL ?? `http://localhost:${process.env.CPD_DAEMON_PORT ?? 4317}`,

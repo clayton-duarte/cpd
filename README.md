@@ -35,7 +35,7 @@ configuration anywhere.
 
 ### Env knobs
 
-- `CPD_DEV_PORT` — port the Vite dev server serves the app on (default `5173`).
+- `CPD_DEV_PORT` — port the Vite dev server serves the app on (default `8888`).
 - `CPD_DAEMON_PORT` — port the daemon listens on.
 - `CPD_DB` — path to the SQLite transcript DB (defaults under `.cpd/`, which
   is gitignored — it holds conversation content and must never be committed).
