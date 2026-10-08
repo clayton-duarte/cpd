@@ -1,6 +1,6 @@
 # Decisions made unattended (2026-10-07 night)
 
-Clayton was away. Standing instruction: *"if new decisions are required, opt for the recommended
+The user was away. Standing instruction: *"if new decisions are required, opt for the recommended
 one, the one that would be more native to the chosen stack, the simplest and more vanilla.
 Document every decision made without the user."*
 
@@ -19,7 +19,7 @@ edit; an owner that restarts mid-turn is exactly the failure Pi Durable exists t
 **Alternative rejected:** Vite middleware plugin. Fewer processes, but couples DB ownership to the
 HMR lifecycle.
 
-Clayton already chose "daemon, with pi embedded" in an earlier clarify. D86 only fixes *how* it is
+The user already chose "daemon, with pi embedded" in an earlier clarify. D86 only fixes *how* it is
 started.
 
 ---
@@ -45,7 +45,7 @@ sees one origin and there is no CORS configuration.
 **Chosen:** keep the previously agreed ACP-shaped seam: `session/new`, `session/prompt`,
 `session/update`-style names, even though Durable is now in-process.
 
-**Why:** Clayton's existing decision ("lets use PI, but keep the IPC ACP-shaped for easy swap").
+**Why:** the user's existing decision ("lets use PI, but keep the IPC ACP-shaped for easy swap").
 Nothing about embedding Durable invalidates it; the seam now protects in both directions.
 
 ---
@@ -85,7 +85,7 @@ sibling keeps `scanConversations` results meaningful (the root is the one with n
 
 **Chosen:** read `~/.pi/agent/auth.json`, provider `github-copilot`, `modelId: "claude-opus-5"`.
 
-**Why:** Clayton prefers Copilot as provider; the token already exists, is unexpired, and lists 34
+**Why:** The user prefers Copilot as provider; the token already exists, is unexpired, and lists 34
 models. No login flow needs building.
 
 **Public-repo note:** `auth.json` is read from `$HOME` at runtime and is NEVER copied into the
@@ -106,7 +106,7 @@ intended to stay public.
 
 **Chosen:** unchanged. Only the lead chat becomes real.
 
-**Why:** Clayton's explicit minimum bar: "lead chat working inside CPD, persistent across
+**Why:** the user's explicit minimum bar: "lead chat working inside CPD, persistent across
 restarts". Job execution is the next phase.
 
 ---
@@ -759,3 +759,28 @@ the one that rots, which is exactly how this gap was born.
 Both times I found a real defect tonight it was by deliberately breaking something and checking the
 alarm sounded — the EventSource teardown, the entry-id test, the dangling-`needs` filter, and now
 the typecheck itself. Cards that add a gate must demonstrate the gate failing, not just passing.
+---
+
+## D119 — Scrubbed the user's name from this file; the public-repo tripwire does not cover prose
+
+The repo is intended to be public. An audit of tracked files found **no secrets and no home paths**,
+but `DECISIONS.md` named the user five times ("The user was away", "The user already chose", …).
+Replaced with "the user" — no loss of meaning, since the decisions matter and the name does not.
+
+**The existing tripwire could never have caught this.** `src/fixtures/sample.test.ts` walks the
+`sampleData` object for `/missionlane|jira|slack|EEC-/i`. It only sees fixture strings, so it
+cannot see markdown, source comments, or card text — and its pattern does not include personal
+names at all. It guards the one place we were already careful about.
+
+A repo-wide guard is carded (H11): one test that greps **tracked files** for personal names,
+employer, work ticket prefixes, home paths and token shapes. Deliberately *not* a git hook — a
+plain Vitest test runs in the gate everyone already runs, which is the most vanilla option
+available.
+
+**Left alone deliberately, needs the user's call:** commits on `main` are authored
+`clayton-duarte <cpd@duck.com>`. The email is already a throwaway, but the author *name* is
+identifying and sits in every commit. Changing it means rewriting published history, which is not a
+decision to take unattended — flagged for review.
+
+**Lesson, matching D118:** a guard that has only ever been pointed at the safe place has not been
+shown to work. The tripwire passed every run tonight while the leak sat in a file it does not read.
