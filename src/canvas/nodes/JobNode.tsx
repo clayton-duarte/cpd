@@ -5,6 +5,7 @@ import type { Job } from '../../model/types';
 export interface JobNodeData {
   job: Job;
   colorDisabled?: boolean;
+  onRun?: (jobId: string) => void;
   [key: string]: unknown;
 }
 
@@ -33,7 +34,7 @@ export function JobNode({ data, selected }: { data: JobNodeData; selected?: bool
       }
     >
       <Handle type="target" position={Position.Left} />
-      <JobCard job={data.job} colorDisabled={data.colorDisabled} />
+      <JobCard job={data.job} colorDisabled={data.colorDisabled} onRun={data.onRun} />
       <Handle type="source" position={Position.Right} />
     </div>
   );

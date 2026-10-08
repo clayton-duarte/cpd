@@ -31,6 +31,10 @@ export type PlanJob = {
 
 export type PlanResponse = { jobs: PlanJob[] };
 
+export type CreateJobResponse = { job: PlanJob };
+
+export type RunJobResponse = { taskId: string };
+
 export type StreamEvent =
   | { type: 'messages'; messages: Message[] }
   | { type: 'conversations' }

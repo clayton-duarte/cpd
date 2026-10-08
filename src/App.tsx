@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
-import { Group, Stack, Text } from '@mantine/core';
+import { Button, Group, Stack, Text } from '@mantine/core';
 import { Canvas } from './canvas/Canvas';
 import { LeadsLevel } from './canvas/LeadsLevel';
 import { PlansLevel } from './canvas/PlansLevel';
@@ -13,7 +13,9 @@ import { ascend, initialNav, selectLead, selectPlan, type Level, type NavState }
 import { leadsLevel, plansLevel, jobsLevel } from './model/levels';
 import { useLevelTransition } from './canvas/useLevelTransition';
 import { usePlan } from './engine/usePlan';
+import { runJob } from './engine/client';
 import { planToCpdData } from './model/fromPlan';
+import { NewJobModal } from './components/NewJobModal';
 import type { ConversationId } from './engine/types';
 import './canvas/xyflow-theme.css';
 
@@ -188,7 +190,30 @@ function JobsLevelContent({
   const conversationId = planId as unknown as ConversationId;
   const { jobs } = usePlan(conversationId);
   const data = planToCpdData(jobs, { id: 0, title: planId });
-  return <Canvas data={data} selectedJobId={selectedJobId} onSelectJob={onSelectJob} />;
+  const [modalOpened, setModalOpened] = useState(false);
+
+  const handleRun = (jobId: string) => {
+    void runJob(conversationId, jobId);
+  };
+
+  return (
+    <Stack gap={0} style={{ height: '100%' }}>
+      <Group justify="flex-end" px="md" py="var(--space-1)">
+        <Button size="xs" onClick={() => setModalOpened(true)}>
+          New job
+        </Button>
+      </Group>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <Canvas data={data} selectedJobId={selectedJobId} onSelectJob={onSelectJob} onRunJob={handleRun} />
+      </div>
+      <NewJobModal
+        conversation={conversationId}
+        opened={modalOpened}
+        onClose={() => setModalOpened(false)}
+        onCreated={() => setModalOpened(false)}
+      />
+    </Stack>
+  );
 }
 
 /**

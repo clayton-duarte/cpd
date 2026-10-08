@@ -1,4 +1,4 @@
-import { Badge, Group, Text, Tooltip } from '@mantine/core';
+import { ActionIcon, Badge, Group, Text, Tooltip } from '@mantine/core';
 import { CardShell } from './CardShell';
 import {
   IconBan,
@@ -10,6 +10,7 @@ import {
   IconLoader2,
   IconPaperclip,
   IconPlayerPause,
+  IconPlayerPlay,
   IconSteeringWheel,
   IconX,
 } from '@tabler/icons-react';
@@ -46,9 +47,12 @@ export interface JobCardProps {
   job: Job;
   /** When true, all borders and icons render as white — "Disable color" toggle. */
   colorDisabled?: boolean;
+  /** H13: when provided, renders a run control that calls back with the job id. Absent by
+   * default so every existing render (Gallery, canvas) stays pixel-identical. */
+  onRun?: (jobId: string) => void;
 }
 
-export function JobCard({ job, colorDisabled = false }: JobCardProps) {
+export function JobCard({ job, colorDisabled = false, onRun }: JobCardProps) {
   const color = colorDisabled ? 'white' : jobColor(job);
   const colorValue = COLOR_VALUES[color];
   const borderColor = EDGE_VALUES[color];
@@ -74,6 +78,15 @@ export function JobCard({ job, colorDisabled = false }: JobCardProps) {
                 {job.artifactCount}
               </Text>
             </Group>
+          )}
+          {onRun && (
+            <ActionIcon
+              variant="subtle"
+              aria-label="Run job"
+              onClick={() => onRun(job.id)}
+            >
+              <IconPlayerPlay size={16} />
+            </ActionIcon>
           )}
         </Group>
       </Group>

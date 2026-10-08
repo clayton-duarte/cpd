@@ -25,10 +25,12 @@ export function Canvas({
   data,
   selectedJobId,
   onSelectJob,
+  onRunJob,
 }: {
   data: CpdData;
   selectedJobId?: string | null;
   onSelectJob?: (jobId: string | null) => void;
+  onRunJob?: (jobId: string) => void;
 }): JSX.Element {
   const [positions, setPositions] = useState<LayoutResult | null>(null);
 
@@ -78,7 +80,7 @@ export function Canvas({
           type: 'job',
           position: { x: pos.x, y: pos.y },
           parentId: layoutNode.parentId,
-          data: { job },
+          data: { job, onRun: onRunJob },
           draggable: false,
           connectable: false,
           selected: job.id === selectedJobId,
