@@ -1017,3 +1017,37 @@ Rule: **when sabotage does not fail a test, first prove the sabotage was reachab
 suite under sabotage means one of two very different things — the tests are weak, or the mutated
 line is dead on that path — and they demand opposite responses. Checking which cost one extra run
 and prevented me from either merging blind or wrongly blaming the builder's tests.
+---
+
+## D127 — The prototype is drivable end-to-end from the GUI
+
+H14 (PR #42) connected thread selection to the canvas: `nav.planId` is treated as a conversation id
+only via explicit `parseConversationId` (positive integer), and the `as unknown as ConversationId`
+cast is gone. Fixture plans no longer issue requests that 404.
+
+**Proven by driving the real browser, not by curl.** Clicked a thread -> canvas loaded
+`/api/plan?conversation=16`; clicked **New job**, filled the Mantine modal, clicked **Create** (job
+appeared on the canvas, no 404); clicked **Run job** on the node. Result:
+
+```
+MARKER: 'CPD-GUI-RAN'
+jobs:   [('UI Smoke','done',...), ('GUI proof','done','echo CPD-GUI-RAN > ...')]
+```
+
+A human can now create and execute real work entirely through the UI. This closes the D123 gap
+("capability in the daemon is not capability in the product"). **The prototype milestone is met.**
+
+**Process note — I almost reported a crash that was my own fault.** Mid-verification the page went
+completely blank: empty body, zero buttons. That looked like a severe product regression in the PR I
+was reviewing. It was my own instrumentation: I had monkey-patched `window.fetch` to log request
+URLs, and my wrapper broke the app. A clean reload rendered perfectly.
+
+Rule: **before blaming the product, remove your own instrumentation and retest.** A debugging probe
+is itself untested code running in production context. I verified the GUI flow again with no
+patching, which is also the only honest way to claim "a human can do this" — the patched run was not
+the shipping product.
+
+**Remaining known gaps** (none block using the prototype): new-conversation detection is a 1s poll
+(D106); `watch()` serves a single consumer; compaction triggers late; no layout-regression tests; no
+ESLint; `docs/engine-plan.md` is stale; commit authorship still carries the user's real name
+(D119) — rewriting published history is the user's call.
