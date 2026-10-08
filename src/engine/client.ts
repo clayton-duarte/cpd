@@ -29,6 +29,17 @@ export async function getConversations(): Promise<ConversationsResponse> {
   return parseOrThrow<ConversationsResponse>(res);
 }
 
+/** I2: create a new conversation (optionally titled). Same error-handling style as createJob --
+ * a non-2xx throws so the caller can surface it rather than silently doing nothing. */
+export async function createConversation(title?: string): Promise<{ id: number }> {
+  const res = await fetch(`${BASE}/conversation`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(title === undefined ? {} : { title }),
+  });
+  return parseOrThrow<{ id: number }>(res);
+}
+
 export async function sendPrompt(text: string, conversation: ConversationId | undefined): Promise<PromptResponse> {
   const suffix = conversation === undefined ? '' : `?conversation=${conversation}`;
   const res = await fetch(`${BASE}/prompt${suffix}`, {

@@ -1,16 +1,10 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
-import { Button, Group, Stack, Text } from '@mantine/core';
+import { AppShell, Button, Group, Stack, Text } from '@mantine/core';
 import { Canvas } from './canvas/Canvas';
-import { LeadsLevel } from './canvas/LeadsLevel';
-import { PlansLevel } from './canvas/PlansLevel';
-import { nextJob } from './model/selection';
 import { Sidebar } from './components/Sidebar';
 import { ChatPanel } from './components/ChatPanel';
 import { Gallery } from './Gallery';
-import { sampleData } from './fixtures/sample';
-import { ascend, initialNav, parseConversationId, selectLead, selectPlan, type Level, type NavState } from './model/navigation';
-import { leadsLevel, plansLevel, jobsLevel } from './model/levels';
 import { useLevelTransition } from './canvas/useLevelTransition';
 import { usePlan } from './engine/usePlan';
 import { runJob } from './engine/client';
@@ -18,30 +12,6 @@ import { planToCpdData } from './model/fromPlan';
 import { NewJobModal } from './components/NewJobModal';
 import type { ConversationId, ConversationNode } from './engine/types';
 import './canvas/xyflow-theme.css';
-
-const LEVEL_DEPTH: Record<Level, number> = { leads: 0, plans: 1, jobs: 2 };
-
-/**
- * Drives the camera transition whenever `nav.level` changes. Must render
- * inside <ReactFlowProvider> -- useReactFlow throws outside it (C5 wiring
- * requirement). Direction is derived by comparing depth against the
- * previously seen level, tracked in a ref (not state -- a state write here
- * would re-render on every navigation for no reason beyond bookkeeping).
- */
-function LevelTransitionEffect({ level }: { level: Level }) {
-  const transition = useLevelTransition();
-  const previousLevel = useRef(level);
-
-  useEffect(() => {
-    if (previousLevel.current !== level) {
-      const direction = LEVEL_DEPTH[level] > LEVEL_DEPTH[previousLevel.current] ? 'descend' : 'ascend';
-      transition(direction);
-      previousLevel.current = level;
-    }
-  }, [level, transition]);
-
-  return null;
-}
 
 /** Trivial hash-based routing: no router dependency, per the A2-4 spec. */
 function useHashRoute(): string {
@@ -54,48 +24,7 @@ function useHashRoute(): string {
   return hash;
 }
 
-interface BreadcrumbSegment {
-  label: string;
-  nav: NavState;
-}
-
-function breadcrumbSegments(nav: NavState, conversationTitle?: string): BreadcrumbSegment[] {
-  const project = sampleData.projects[0];
-  const segments: BreadcrumbSegment[] = [{ label: project.name, nav: initialNav }];
-
-  if (nav.leadId) {
-    const session = sampleData.sessions.find((s) => s.id === nav.leadId);
-    if (session) segments.push({ label: session.name, nav: selectLead(session.id) });
-  }
-
-  if (nav.planId) {
-    const conversationId = parseConversationId(nav.planId);
-    if (conversationId !== undefined) {
-      segments.push({ label: conversationTitle ?? `Thread ${conversationId}`, nav: { level: 'jobs', planId: nav.planId } });
-    } else {
-      const workflow = sampleData.workflows.find((w) => w.id === nav.planId);
-      if (workflow && nav.leadId) {
-        segments.push({ label: workflow.title, nav: selectPlan({ level: 'plans', leadId: nav.leadId }, workflow.id) });
-      }
-    }
-  }
-
-  return segments;
-}
-
-interface NavContextValue {
-  nav: NavState;
-  onNavigate: (next: NavState) => void;
-  conversationTitle?: string;
-}
-
-const NavContext = createContext<NavContextValue>({ nav: initialNav, onNavigate: () => {} });
-
-function TopBar() {
-  const { nav, onNavigate, conversationTitle } = useContext(NavContext);
-  const project = sampleData.projects[0];
-  const segments = breadcrumbSegments(nav, conversationTitle);
-
+function TopBar({ conversationTitle }: { conversationTitle?: string }) {
   return (
     <Group
       px="md"
@@ -104,33 +33,8 @@ function TopBar() {
       style={{ borderBottom: '1px solid var(--line)', flexShrink: 0 }}
     >
       <Stack gap={0} justify="center">
-        <Group gap="var(--space-1)" wrap="nowrap">
-          {segments.map((segment, i) => (
-            <Group key={i} gap="var(--space-1)" wrap="nowrap">
-              {i > 0 && (
-                <Text size="sm" c="var(--fg-faint)">
-                  ›
-                </Text>
-              )}
-              <Text
-                component="a"
-                href="#"
-                onClick={(e) => {
-                  e.preventDefault();
-                  onNavigate(segment.nav);
-                }}
-                size="sm"
-                fw={i === segments.length - 1 ? 600 : 400}
-                c={i === segments.length - 1 ? 'var(--fg-bright)' : 'var(--fg-faint)'}
-                style={{ textDecoration: 'none' }}
-              >
-                {segment.label}
-              </Text>
-            </Group>
-          ))}
-        </Group>
-        <Text size="xs" c="var(--fg-faint)">
-          {project.repos.join(' · ')}
+        <Text size="sm" fw={600} c="var(--fg-bright)">
+          {conversationTitle ?? 'CPD'}
         </Text>
       </Stack>
       <Text size="xs" c="var(--fg-faint)">
@@ -142,207 +46,155 @@ function TopBar() {
   );
 }
 
-function CanvasLevelContent({
-  nav,
-  onNavigate,
-  selectedJobId,
-  onSelectJob,
-}: {
-  nav: NavState;
-  onNavigate: (next: NavState) => void;
-  selectedJobId: string | null;
-  onSelectJob: (jobId: string | null) => void;
-}) {
-  if (nav.level === 'leads') {
-    return <LeadsLevel leads={leadsLevel(sampleData)} onSelect={(leadId) => onNavigate(selectLead(leadId))} />;
-  }
-
-  if (nav.level === 'plans' && nav.leadId) {
-    return (
-      <PlansLevel
-        plans={plansLevel(sampleData, nav.leadId)}
-        onSelect={(planId) => onNavigate(selectPlan(nav, planId))}
-      />
-    );
-  }
-
-  if (nav.level === 'jobs' && nav.planId) {
-    return <JobsLevelContent planId={nav.planId} selectedJobId={selectedJobId} onSelectJob={onSelectJob} />;
-  }
-
-  return null;
-}
-
 /**
- * The real plan for the `jobs` level (H14). `nav.planId` is either a fixture workflow id
- * (e.g. `'w3'`) or a real conversation id stringified -- `parseConversationId` (D112-adjacent,
- * decided explicitly in H14) is the one place that distinction is made. A fixture-backed planId
- * renders an empty canvas and issues NO `/api/plan` request at all (D115: absent data renders as
- * absent, never a 404 surfaced as an error). A real conversation id fetches/streams its plan;
- * a 404 there (e.g. mid-fork) or an empty plan also renders an empty canvas via
- * `planToCpdData([], ...)`, never a crash or an infinite spinner.
+ * The real plan for the selected conversation (I2, successor to H14). Every id reaching this
+ * component is now a real conversation id -- there is no fixture-backed branch left. A 404 or an
+ * empty plan both render an empty canvas via `planToCpdData([], ...)`, never a crash or an
+ * infinite spinner (D115).
  */
 function JobsLevelContent({
-  planId,
+  conversationId,
+  conversationTitle,
   selectedJobId,
   onSelectJob,
 }: {
-  planId: string;
+  conversationId: ConversationId;
+  conversationTitle: string;
   selectedJobId: string | null;
   onSelectJob: (jobId: string | null) => void;
 }) {
-  const numericConversationId = parseConversationId(planId);
-  const conversationId = numericConversationId === undefined ? undefined : (numericConversationId as ConversationId);
   const { jobs } = usePlan(conversationId);
-  const data = planToCpdData(jobs, { id: 0, title: planId });
+  const data = planToCpdData(jobs, { id: conversationId, title: conversationTitle });
   const [modalOpened, setModalOpened] = useState(false);
 
   const handleRun = (jobId: string) => {
-    if (conversationId === undefined) return;
     void runJob(conversationId, jobId);
   };
 
   return (
     <Stack gap={0} style={{ height: '100%' }}>
       <Group justify="flex-end" px="md" py="var(--space-1)">
-        <Button size="xs" onClick={() => setModalOpened(true)} disabled={conversationId === undefined}>
+        <Button size="xs" onClick={() => setModalOpened(true)}>
           New job
         </Button>
       </Group>
       <div style={{ flex: 1, minHeight: 0 }}>
         <Canvas data={data} selectedJobId={selectedJobId} onSelectJob={onSelectJob} onRunJob={handleRun} />
       </div>
-      {conversationId !== undefined && (
-        <NewJobModal
-          conversation={conversationId}
-          opened={modalOpened}
-          onClose={() => setModalOpened(false)}
-          onCreated={() => setModalOpened(false)}
-        />
-      )}
+      <NewJobModal
+        conversation={conversationId}
+        opened={modalOpened}
+        onClose={() => setModalOpened(false)}
+        onCreated={() => setModalOpened(false)}
+      />
+    </Stack>
+  );
+}
+
+/** Rendered when no conversation is selected yet -- a cold, empty database must still be a
+ * usable app (D-I2), so this is a clear instruction rather than a blank canvas. */
+function EmptyCanvasState() {
+  return (
+    <Stack align="center" justify="center" gap="var(--space-2)" style={{ height: '100%' }}>
+      <Text c="var(--fg-faint)">No session selected.</Text>
+      <Text size="sm" c="var(--fg-faint)">
+        Use "New session" in the sidebar to start one.
+      </Text>
     </Stack>
   );
 }
 
 /**
- * The provider is kept mounted across all three levels (not just Jobs) so
- * `useLevelTransition`'s `useReactFlow()` never throws regardless of which
- * level is current -- it must be called unconditionally on every nav change.
+ * Drives the camera transition whenever the selected conversation changes. Must render inside
+ * <ReactFlowProvider> -- useReactFlow throws outside it (C5 wiring requirement).
  */
-function CanvasLevel({
-  nav,
-  onNavigate,
-  selectedJobId,
-  onSelectJob,
-}: {
-  nav: NavState;
-  onNavigate: (next: NavState) => void;
-  selectedJobId: string | null;
-  onSelectJob: (jobId: string | null) => void;
-}) {
-  return (
-    <ReactFlowProvider>
-      <LevelTransitionEffect level={nav.level} />
-      <CanvasLevelContent
-        nav={nav}
-        onNavigate={onNavigate}
-        selectedJobId={selectedJobId}
-        onSelectJob={onSelectJob}
-      />
-    </ReactFlowProvider>
-  );
+function LevelTransitionEffect({ conversationId }: { conversationId: ConversationId | undefined }) {
+  const transition = useLevelTransition();
+  const previous = useRef(conversationId);
+
+  useEffect(() => {
+    if (previous.current !== conversationId) {
+      transition('descend');
+      previous.current = conversationId;
+    }
+  }, [conversationId, transition]);
+
+  return null;
 }
 
 function App() {
   const hash = useHashRoute();
-  const [nav, setNav] = useState<NavState>(initialNav);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [selectedConversationId, setSelectedConversationId] = useState<ConversationId | undefined>(
     undefined,
   );
   const [conversations, setConversations] = useState<ConversationNode[]>([]);
-  const conversationTitle = useMemo(() => {
-    const conversationId = parseConversationId(nav.planId);
-    if (conversationId === undefined) return undefined;
-    return conversations.find((c) => c.id === conversationId)?.title;
-  }, [conversations, nav.planId]);
+  const conversationTitle = useMemo(
+    () => conversations.find((c) => c.id === selectedConversationId)?.title,
+    [conversations, selectedConversationId],
+  );
 
-  // Selection is deliberately NOT part of NavState (see D3 card): NavState
-  // answers "which level", selection answers "which job within this level".
-  // Clear it whenever the plan changes so it never points at a stale job
-  // from a different plan.
+  // Selection is deliberately NOT part of navigation state (see D3 card): the selected
+  // conversation answers "which session", selection answers "which job within it". Clear it
+  // whenever the conversation changes so it never points at a stale job from a different plan.
   useEffect(() => {
     setSelectedJobId(null);
-  }, [nav.planId]);
+  }, [selectedConversationId]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (selectedJobId !== null) {
-          setSelectedJobId(null);
-          return;
-        }
-        setNav((current) => ascend(current));
-        return;
-      }
-
-      if (nav.level !== 'jobs' || !nav.planId) return;
-
-      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-        e.preventDefault();
-        const ids = jobsLevel(sampleData, nav.planId).map((j) => j.id);
-        setSelectedJobId((current) => nextJob(ids, current, 1));
-        return;
-      }
-
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-        e.preventDefault();
-        const ids = jobsLevel(sampleData, nav.planId).map((j) => j.id);
-        setSelectedJobId((current) => nextJob(ids, current, -1));
+      if (e.key === 'Escape' && selectedJobId !== null) {
+        setSelectedJobId(null);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [nav, selectedJobId]);
+  }, [selectedJobId]);
 
   if (hash === '#/gallery') {
     return <Gallery />;
   }
 
   return (
-    <NavContext.Provider value={{ nav, onNavigate: setNav, conversationTitle }}>
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
-        <TopBar />
-        <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-          <Sidebar
-            data={sampleData}
-            nav={nav}
-            onNavigate={setNav}
-            selectedConversationId={selectedConversationId}
-            onSelectConversation={setSelectedConversationId}
-            onConversationsChange={setConversations}
-          />
-          <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-            <div data-testid="canvas-area" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-              <CanvasLevel
-                nav={nav}
-                onNavigate={setNav}
-                selectedJobId={selectedJobId}
-                onSelectJob={setSelectedJobId}
-              />
-            </div>
-            {nav.level === 'leads' && (
-              <div style={{ width: '24rem', flexShrink: 0, borderLeft: '1px solid var(--line)' }}>
-                <ChatPanel
-                  conversationId={selectedConversationId}
-                  onForked={setSelectedConversationId}
-                />
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    </NavContext.Provider>
+    <AppShell
+      header={{ height: 48 }}
+      navbar={{ width: 280, breakpoint: 'sm' }}
+      aside={{ width: 360, breakpoint: 'sm' }}
+      padding="md"
+    >
+      <AppShell.Header>
+        <TopBar conversationTitle={conversationTitle} />
+      </AppShell.Header>
+      <AppShell.Navbar>
+        <Sidebar
+          showFixtureTree={false}
+          nav={{ level: 'leads' }}
+          onNavigate={() => {}}
+          selectedConversationId={selectedConversationId}
+          onSelectConversation={setSelectedConversationId}
+          onConversationsChange={setConversations}
+          onConversationCreated={setSelectedConversationId}
+        />
+      </AppShell.Navbar>
+      <AppShell.Main data-testid="canvas-area" style={{ height: '100vh' }}>
+        <ReactFlowProvider>
+          <LevelTransitionEffect conversationId={selectedConversationId} />
+          {selectedConversationId === undefined ? (
+            <EmptyCanvasState />
+          ) : (
+            <JobsLevelContent
+              conversationId={selectedConversationId}
+              conversationTitle={conversationTitle ?? `Session ${selectedConversationId}`}
+              selectedJobId={selectedJobId}
+              onSelectJob={setSelectedJobId}
+            />
+          )}
+        </ReactFlowProvider>
+      </AppShell.Main>
+      <AppShell.Aside>
+        <ChatPanel conversationId={selectedConversationId} onForked={setSelectedConversationId} />
+      </AppShell.Aside>
+    </AppShell>
   );
 }
 
