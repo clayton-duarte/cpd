@@ -1641,3 +1641,40 @@ measurement in the done report.
 **which element is the panel**. I knew the Paper in `App.tsx` was the scroller and did not write it
 down. A builder that "can't guess" was handed an ambiguity and guessed wrong. K4 names the element,
 the ancestor-walk strategy, and the exact browser check that constitutes done.
+---
+
+## D147 — K1 merged: every watched conversation streams, not just root. The composer is alive.
+
+The serious one from the user's three-symptom report ("typing on the composer posts but I get no
+response"). Root cause was in `daemon/src/index.ts`: both the viewState subscription and the polling
+fallback were hardcoded to `engine.root.id`, so every conversation created via "New session" was born
+deaf — it got exactly one snapshot frame and nothing ever again.
+
+**Fix:** a refcounted per-conversation watch map wired into `/api/stream`. Each SSE client watching a
+conversation increments the refcount and creates the subscription on first watcher; disconnect
+decrements and disposes on last. `daemon/` only, no `src/`, no new deps.
+
+**Verified live, not by the suite** (the suite was green while the feature was dead before):
+
+```
+fresh child conversation 123, real SSE:
+  frames: 0 -> 0 -> 1 -> 1 -> 1 -> 2  with last = "K1-CHILD-LIVE"   (was: ['messages(2)'] forever)
+isolation:   conv A frames [0,0,1,1,1,2]   conv B frames [0,0]  <- no cross-talk
+refcount:    2 watchers, first disconnects -> survivor still got [0,1,1,1,2]
+browser:     clicked child thread 123, typed, reply rendered with NO reload
+```
+
+**Falsification:** reverting `watchConversation(conversationId)` to `watchConversation(engine.root.id)`
+failed exactly the two new tests and nothing else. The tests are load-bearing.
+
+**Process note — I almost passed a false positive.** My first browser run reported
+"ASSISTANT REPLY VISIBLE: True" with `hash: ''` — i.e. it ran against the **root** conversation, the
+one path that was never broken. That is precisely the D143 mistake (verifying the default path is not
+verifying the feature) recurring one card later, and I only caught it because the empty hash looked
+wrong. Re-ran by clicking an actual child thread row. **Rule: when a probe passes, check that it ran
+where the bug lives before believing it.**
+
+**Unrelated observation:** mid-review the daemon took a clean SIGTERM (exit 0). Not a crash and not
+K1 — `node --watch` on the daemon also watches `.worktrees/`, so a builder working in
+`.worktrees/t_f0859558/` restarts the lead's daemon. Filed as a follow-up; `--watch` should be
+scoped to `daemon/src`.
