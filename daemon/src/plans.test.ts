@@ -51,8 +51,8 @@ describe("shapeConversationTree", () => {
     const shaped = shapeConversationTree(raw, () => "t");
 
     expect(shaped).toEqual([
-      { id: 1, parentId: null, at: null, title: "t" },
-      { id: 12, parentId: 1, at: 7, title: "t" },
+      { id: 1, parentId: null, at: null, title: "t", archived: false },
+      { id: 12, parentId: 1, at: 7, title: "t", archived: false },
     ]);
   });
 });

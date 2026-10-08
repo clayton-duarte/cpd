@@ -52,22 +52,26 @@ export type ConversationNode = {
   parentId: number | null;
   at: number | null;
   title: string;
+  archived: boolean;
 };
 
 /**
  * Map raw `scanConversations` items into the API's `ConversationNode` shape. Pure function so it
  * is testable without a storage harness. `titleFor` resolves the title for each id (derived or
- * overridden).
+ * overridden). `archivedFor` resolves the L4 archived flag for each id, defaulting to `false`
+ * when omitted so existing callers (title-only tests) keep working unmodified.
  */
 export function shapeConversationTree(
   items: readonly RawConversationRecord[],
   titleFor: (id: number) => string,
+  archivedFor: (id: number) => boolean = () => false,
 ): ConversationNode[] {
   return items.map((item) => ({
     id: item.id,
     parentId: item.parent?.conversationId ?? null,
     at: item.parent?.at ?? null,
     title: titleFor(item.id),
+    archived: archivedFor(item.id),
   }));
 }
 

@@ -14,6 +14,9 @@ export type ConversationNode = {
   parentId: ConversationId | null;
   at: number | null;
   title: string;
+  /** L4: CPD-owned archived flag. Optional so existing fixtures/tests that predate archiving
+   * don't need updating; treat a missing value as `false` (not archived). */
+  archived?: boolean;
 };
 
 export type ConversationsResponse = { conversations: ConversationNode[] };
@@ -46,6 +49,8 @@ export type AttentionItem = {
 };
 
 export type AttentionResponse = { items: AttentionItem[] };
+
+export type ArchiveResponse = { archived: boolean };
 
 export type StreamEvent =
   | { type: 'messages'; messages: Message[] }

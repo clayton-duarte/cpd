@@ -1,10 +1,28 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { Button, Group, Stack, Text, Tree, UnstyledButton, useTree, type RenderTreeNodePayload, type TreeNodeData } from '@mantine/core';
-import { IconChevronDown, IconChevronRight, IconLayoutSidebarLeftCollapse } from '@tabler/icons-react';
+import {
+  ActionIcon,
+  Button,
+  Group,
+  Menu,
+  Stack,
+  Switch,
+  Text,
+  Tree,
+  UnstyledButton,
+  useTree,
+  type RenderTreeNodePayload,
+  type TreeNodeData,
+} from '@mantine/core';
+import {
+  IconChevronDown,
+  IconChevronRight,
+  IconDotsVertical,
+  IconLayoutSidebarLeftCollapse,
+} from '@tabler/icons-react';
 import { selectLead, selectPlan, selectConversation, type NavState } from '../model/navigation';
 import { leadsLevel, plansLevel, jobsLevel } from '../model/levels';
 import type { CpdData } from '../model/types';
-import { getConversations } from '../engine/client';
+import { getConversations, setConversationArchived } from '../engine/client';
 import { useCreateConversation } from '../engine/useCreateConversation';
 import { onConversationsSignal } from '../engine/useEngineStream';
 import type { ConversationId, ConversationNode } from '../engine/types';
@@ -143,6 +161,7 @@ export function Sidebar({
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const tree = useTree();
   const [conversations, setConversations] = useState<ConversationNode[]>([]);
+  const [showArchived, setShowArchived] = useState(false);
   const { creating, create: handleNewContext } = useCreateConversation(onConversationCreated);
   const conversationTree = useTree();
   const onConversationsChangeRef = useRef(onConversationsChange);
@@ -171,7 +190,10 @@ export function Sidebar({
     };
   }, []);
 
-  const conversationTreeData = useMemo(() => buildConversationTreeData(conversations), [conversations]);
+  const conversationTreeData = useMemo(
+    () => buildConversationTreeData(conversations, showArchived),
+    [conversations, showArchived],
+  );
 
   // K3: once the tree re-renders with the newly selected row present, scroll it into view if the
   // panel is scrollable and the row isn't already fully visible. Runs after conversationTreeData
@@ -219,6 +241,24 @@ export function Sidebar({
       writeStoredWidth(current);
       return current;
     });
+  };
+
+  /** L4: archive/unarchive one conversation. If the row being archived is the one currently
+   * selected, move selection to the first still-visible row (another unarchived conversation)
+   * so the transcript never keeps pointing at a hidden conversation -- never leave it on the
+   * archived row, and never clear selection outright when a visible alternative exists. */
+  const handleToggleArchived = async (id: ConversationId, archived: boolean) => {
+    await setConversationArchived(id, archived);
+    const { conversations: fetched } = await getConversations();
+    setConversations(fetched);
+    onConversationsChangeRef.current?.(fetched);
+    if (archived && selectedConversationId === id) {
+      const stillVisible = fetched.find((c) => !c.archived && c.id !== id);
+      if (stillVisible) {
+        onSelectConversation?.(stillVisible.id);
+        onNavigate(selectConversation(nav, stillVisible.id));
+      }
+    }
   };
 
   const handleRowClick = (parsed: ParsedValue) => {
@@ -364,6 +404,13 @@ export function Sidebar({
             New context
           </Button>
         </Group>
+        <Switch
+          size="xs"
+          label="Show archived"
+          data-testid="show-archived-toggle"
+          checked={showArchived}
+          onChange={(e) => setShowArchived(e.currentTarget.checked)}
+        />
         {conversationTreeData.length > 0 ? (
           <Tree
             data={conversationTreeData}
@@ -373,6 +420,8 @@ export function Sidebar({
             renderNode={({ node, level, expanded, hasChildren, elementProps }) => {
               const id = Number(node.value) as ConversationId;
               const selected = selectedConversationId === id;
+              const source = conversations.find((c) => c.id === id);
+              const archived = source?.archived ?? false;
               return (
                 <Group
                   {...elementProps}
@@ -389,6 +438,7 @@ export function Sidebar({
                   data-selected={selected}
                   style={{
                     backgroundColor: selected ? 'var(--blue-tint)' : undefined,
+                    opacity: archived ? 0.5 : 1,
                     cursor: 'pointer',
                   }}
                   onClick={() => {
@@ -410,9 +460,31 @@ export function Sidebar({
                   ) : (
                     <span style={{ width: 14, display: 'inline-block' }} />
                   )}
-                  <Text size="sm" c={selected ? 'var(--fg-bright)' : 'var(--fg)'} truncate style={{ minWidth: 0 }}>
+                  <Text size="sm" c={selected ? 'var(--fg-bright)' : 'var(--fg)'} truncate style={{ minWidth: 0, flex: 1 }}>
                     {node.label}
                   </Text>
+                  <Menu position="bottom-end" withinPortal>
+                    <Menu.Target>
+                      <ActionIcon
+                        size="xs"
+                        variant="subtle"
+                        data-testid={`thread-menu-${node.value}`}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <IconDotsVertical size={14} />
+                      </ActionIcon>
+                    </Menu.Target>
+                    <Menu.Dropdown>
+                      <Menu.Item
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleToggleArchived(id, !archived);
+                        }}
+                      >
+                        {archived ? 'Unarchive' : 'Archive'}
+                      </Menu.Item>
+                    </Menu.Dropdown>
+                  </Menu>
                 </Group>
               );
             }}

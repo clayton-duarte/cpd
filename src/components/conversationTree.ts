@@ -27,9 +27,13 @@ export function allExpandedState(data: readonly TreeNodeData[]): Record<string, 
  * conversations are NOT mapped onto that model (per lead decision: the two hierarchies are not
  * reconciled in this card).
  */
-export function buildConversationTreeData(nodes: readonly ConversationNode[]): TreeNodeData[] {
+export function buildConversationTreeData(
+  nodes: readonly ConversationNode[],
+  showArchived = false,
+): TreeNodeData[] {
+  const visible = showArchived ? nodes : nodes.filter((node) => !node.archived);
   const byParent = new Map<number | null, ConversationNode[]>();
-  for (const node of nodes) {
+  for (const node of visible) {
     const key = node.parentId === null ? null : Number(node.parentId);
     const siblings = byParent.get(key) ?? [];
     siblings.push(node);
