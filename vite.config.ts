@@ -37,6 +37,6 @@ export default defineConfig({
     // src/, including that branch's own tests. Without this exclude the
     // runner picks up every sibling branch's suite and reports failures
     // that belong to other cards' work-in-progress.
-    exclude: ['**/node_modules/**', '**/dist/**', '.worktrees/**'],
+    exclude: ['**/node_modules/**', '**/dist/**', '.worktrees/**', 'daemon/**'],
   },
 });
