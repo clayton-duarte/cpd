@@ -14,7 +14,7 @@ import {
   Text,
   Tooltip,
 } from '@mantine/core';
-import { IconMessagePlus, IconPlayerPlay, IconSquarePlus } from '@tabler/icons-react';
+import { IconMessagePlus } from '@tabler/icons-react';
 import { Canvas } from './canvas/Canvas';
 import { Sidebar } from './components/Sidebar';
 import { ChatPanel } from './components/ChatPanel';
@@ -22,6 +22,7 @@ import { Gallery } from './Gallery';
 import { useLevelTransition } from './canvas/useLevelTransition';
 import { usePlan } from './engine/usePlan';
 import { useAttention } from './engine/useAttention';
+import { useCreateConversation } from './engine/useCreateConversation';
 import { runJob } from './engine/client';
 import { abortJob } from './engine/jobActions';
 import { planToCpdData } from './model/fromPlan';
@@ -288,8 +289,8 @@ function EmptyCanvasState() {
   return (
     <Stack align="center" justify="center" style={{ height: '100%' }}>
       <EmptyState
-        title="No session selected."
-        description='Use "New session" in the sidebar to start one.'
+        title="No context selected."
+        description='Use "New context" in the sidebar to start one.'
       />
     </Stack>
   );
@@ -329,6 +330,11 @@ function App() {
   // an item just drives the same `selectedConversationId`/`selectedJobId` state the sidebar and
   // canvas already use, so the action bar always acts on the canvas selection.
   const { items: attentionItems } = useAttention();
+  // L3: the top-right FAB and Sidebar's own "New context" button must share the exact same
+  // create-and-select code path -- see useCreateConversation's doc comment.
+  const { creating: creatingContext, create: handleNewContext } = useCreateConversation(
+    setSelectedConversationId,
+  );
   // Rides the same refcounted stream connection `usePlan` already shares (H1's useEngineStream) --
   // calling it again here is not a second connection, just a second subscriber to the job list so
   // the action bar can know the selected job's status without threading it up from ConversationView.
@@ -519,19 +525,19 @@ function App() {
         </div>
       </div>
 
-      {/* FABs, top-right (D132: New session / New workflow / New job). */}
+      {/* FAB, top-right (L3: one "New context" action -- Plans and Dispatches are created from
+       * chat by the lead, not by buttons; see DECISIONS.md L3 and the card's authoritative model). */}
       <Affix position={{ top: 56, right: 'var(--space-3)' }}>
-        <Group gap="var(--space-2)">
-          <Button size="sm" leftSection={<IconMessagePlus size={16} />} variant="filled">
-            New session
-          </Button>
-          <Button size="sm" leftSection={<IconSquarePlus size={16} />} variant="filled">
-            New workflow
-          </Button>
-          <Button size="sm" leftSection={<IconPlayerPlay size={16} />} variant="filled">
-            New job
-          </Button>
-        </Group>
+        <Button
+          size="sm"
+          leftSection={<IconMessagePlus size={16} />}
+          variant="filled"
+          data-testid="new-context-fab"
+          loading={creatingContext}
+          onClick={() => void handleNewContext()}
+        >
+          New context
+        </Button>
       </Affix>
     </div>
   );

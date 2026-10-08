@@ -4,8 +4,8 @@ import { IconChevronDown, IconChevronRight, IconLayoutSidebarLeftCollapse } from
 import { selectLead, selectPlan, selectConversation, type NavState } from '../model/navigation';
 import { leadsLevel, plansLevel, jobsLevel } from '../model/levels';
 import type { CpdData } from '../model/types';
-import { createConversation, getConversations } from '../engine/client';
-import { notifications } from '@mantine/notifications';
+import { getConversations } from '../engine/client';
+import { useCreateConversation } from '../engine/useCreateConversation';
 import { onConversationsSignal } from '../engine/useEngineStream';
 import type { ConversationId, ConversationNode } from '../engine/types';
 import { buildConversationTreeData, allExpandedState } from './conversationTree';
@@ -143,7 +143,7 @@ export function Sidebar({
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const tree = useTree();
   const [conversations, setConversations] = useState<ConversationNode[]>([]);
-  const [creating, setCreating] = useState(false);
+  const { creating, create: handleNewContext } = useCreateConversation(onConversationCreated);
   const conversationTree = useTree();
   const onConversationsChangeRef = useRef(onConversationsChange);
   onConversationsChangeRef.current = onConversationsChange;
@@ -198,22 +198,6 @@ export function Sidebar({
   }, [conversationTreeData]);
 
   const treeData = useMemo(() => (data ? buildTreeData(data) : []), [data]);
-
-  const handleNewSession = async () => {
-    setCreating(true);
-    try {
-      const { id } = await createConversation();
-      onConversationCreated?.(id as ConversationId);
-    } catch {
-      notifications.show({
-        color: 'red',
-        title: 'Could not create session',
-        message: 'Failed to create a new session. Please try again.',
-      });
-    } finally {
-      setCreating(false);
-    }
-  };
 
   const handlePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -366,18 +350,18 @@ export function Sidebar({
         <Group justify="space-between" align="center">
           {conversationTreeData.length > 0 && (
             <Text size="xs" c="var(--fg-faint)" tt="uppercase" fw={600}>
-              Threads
+              Plans
             </Text>
           )}
           <Button
             size="xs"
             variant="subtle"
             data-testid="new-session-button"
-            onClick={() => void handleNewSession()}
+            onClick={() => void handleNewContext()}
             loading={creating}
             ml="auto"
           >
-            New session
+            New context
           </Button>
         </Group>
         {conversationTreeData.length > 0 ? (
@@ -435,7 +419,7 @@ export function Sidebar({
           />
         ) : (
           <Text size="sm" c="var(--fg-faint)" data-testid="no-sessions">
-            No sessions yet.
+            No contexts yet.
           </Text>
         )}
       </Stack>

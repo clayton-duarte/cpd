@@ -71,7 +71,20 @@ describe('App shows only real conversations, no fixtures (I2)', () => {
     renderApp();
 
     expect(await screen.findByTestId('new-session-button')).toBeTruthy();
-    expect(canvas().getByText('No session selected.')).toBeTruthy();
+    expect(canvas().getByText('No context selected.')).toBeTruthy();
+  });
+
+  it('F: clicking the "New context" FAB calls createConversation and selects the returned id', async () => {
+    vi.mocked(client.getConversations).mockResolvedValue({ conversations: [] });
+    vi.mocked(client.createConversation).mockResolvedValue({ id: 42 });
+    vi.mocked(client.getPlan).mockResolvedValue({ jobs: [] });
+
+    renderApp();
+
+    fireEvent.click(await screen.findByTestId('new-context-fab'));
+
+    await waitFor(() => expect(client.createConversation).toHaveBeenCalled());
+    await waitFor(() => expect(window.location.hash).toBe('#/c/42'));
   });
 
   it('clicking "New session" calls createConversation and selects the returned id', async () => {
@@ -301,7 +314,7 @@ describe('selected conversation persists in the URL hash (I3)', () => {
     renderApp();
 
     await waitFor(() => expect(screen.getByText('Lead thread')).toBeTruthy());
-    expect(canvas().getByText('No session selected.')).toBeTruthy();
+    expect(canvas().getByText('No context selected.')).toBeTruthy();
     expect(client.getPlan).not.toHaveBeenCalled();
   });
 
@@ -312,7 +325,7 @@ describe('selected conversation persists in the URL hash (I3)', () => {
     renderApp();
 
     expect(await screen.findByTestId('new-session-button')).toBeTruthy();
-    expect(canvas().getByText('No session selected.')).toBeTruthy();
+    expect(canvas().getByText('No context selected.')).toBeTruthy();
     expect(client.getPlan).not.toHaveBeenCalled();
   });
 
