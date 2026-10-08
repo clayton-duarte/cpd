@@ -1274,3 +1274,38 @@ plausibly fake.**
 Noted for J2: `data-testid="canvas-area"` currently sits on `AppShell.Main`, and existing tests
 query `.mantine-AppShell-*` classes that will vanish. Flagged in the card so the builder updates the
 queries instead of keeping AppShell alive just to satisfy a selector.
+---
+
+## D134 — The wireframe was drawn in Mantine; every panel maps to an installed component
+
+User: *"mantine has all native components we will ever need, this wireframe was designed with
+mantine in mind."* I had written J2 describing the layout in terms of CSS positioning — correct in
+outcome, wrong in means. Caught before the builder wrote any code (worktree was still clean) and
+corrected on the card.
+
+**Verified against `ls node_modules/@mantine/core/lib/components/`** — the installed listing is the
+authority, not memory and not the docs site. We are on **Mantine 9**, whose additions cover this
+wireframe almost exactly:
+
+| Wireframe element | Component | Note |
+|---|---|---|
+| Action bar (`Comment · Stop · Skip`) | **`ActionBar`** | `extends BoxProps, AffixBaseProps, PaperBaseProps` — a floating Affix-positioned Paper. `opened` is **required**. Has `ActionBar.Divider` / `ActionBar.CloseButton`. |
+| FABs, top-right | **`Affix`** | `position={{top,right}}`; portals by default, escaping the canvas stacking context. |
+| `12` badge on the stack | **`Indicator`** | `label={12}`, with `position`/`offset`/`size`. |
+| Transcript "grows up, then scrolls" | **`ScrollArea`** | flex-column + `justify-content:flex-end`, pinned to bottom. |
+| Panels | **`Paper`** | plus `Card`, `Stack`, `Group`, `EmptyState`, `Alert`. |
+
+**The trap I avoided by reading the `.d.ts` instead of guessing from the name:** `Scroller` sounds
+like the transcript container and is **not** — `Scroller.d.ts` exposes `scrollAmount`,
+`startControlIcon`, `edgeGradientColor`: it is a *horizontal control-button scroller for toolbars*.
+The transcript must use `ScrollArea`. A plausible name is not an API.
+
+**Deliberately NOT used although installed:** `Splitter` and `FloatingWindow`. The user specified
+**fixed** 20/40/40 proportions; those components offer user-resizable and draggable windows, which
+is a different product behaviour nobody asked for. *Available is not a reason to use it.*
+
+**Standing rule (already rule zero in the `mantine-ui` skill, now binding on every CPD card):**
+before building any component, list the shipped inventory. We previously hand-built ~175 lines of
+tree expand/collapse logic that `Tree` + `useTree` already shipped, then paid again to delete it. A
+card that describes UI in raw-CSS terms invites exactly that waste — **cards must name the component,
+not the pixels.**
