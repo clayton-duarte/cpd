@@ -3,6 +3,7 @@ import type {
   ConversationsResponse,
   ForkResponse,
   MessagesResponse,
+  PlanResponse,
   PromptResponse,
 } from './types';
 
@@ -45,4 +46,13 @@ export async function forkConversation(at: number): Promise<ForkResponse> {
     body: JSON.stringify({ at }),
   });
   return parseOrThrow<ForkResponse>(res);
+}
+
+/** A 404 means "no such conversation" -- a normal race when a fork is being created (or the
+ * conversation hasn't been selected yet). Resolve to an empty job list rather than throwing, so
+ * an unlucky request never blanks the UI. */
+export async function getPlan(conversation: ConversationId): Promise<PlanResponse> {
+  const res = await fetch(`${BASE}/plan?conversation=${conversation}`);
+  if (res.status === 404) return { jobs: [] };
+  return parseOrThrow<PlanResponse>(res);
 }

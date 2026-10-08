@@ -1,7 +1,22 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import App from './App';
+
+// The `jobs` level now renders the real daemon-backed plan (H9), not fixture jobs. These
+// navigation tests only care about the leads/plans levels (still fixture-backed) and the
+// Escape/selection machinery, so `getPlan` is stubbed with one job matching the old fixture
+// job's title -- the fixture itself (src/fixtures/sample.ts) is unchanged, per the card.
+vi.mock('./engine/client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./engine/client')>();
+  return {
+    ...actual,
+    getConversations: vi.fn(),
+    getPlan: vi.fn().mockResolvedValue({
+      jobs: [{ id: 'j17', title: 'Model soil moisture thresholds', status: 'done', needs: [] }],
+    }),
+  };
+});
 
 function renderApp() {
   return render(
@@ -14,6 +29,10 @@ function renderApp() {
 function canvas() {
   return within(screen.getByTestId('canvas-area'));
 }
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
 
 describe('App navigation', () => {
   it('starts at the Leads level and shows every lead', () => {

@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react';
-import type { ConversationId, Message, StreamEvent } from './types';
+import type { ConversationId, Message, PlanJob, StreamEvent } from './types';
 
 type Status = 'connecting' | 'open' | 'closed';
 
@@ -27,6 +27,15 @@ export function onConversationsSignal(listener: () => void): () => void {
   return () => conversationsListeners.delete(listener);
 }
 
+/** Fired whenever any active stream delivers a `{type:"plan"}` frame -- carries the conversation
+ * id and jobs so `usePlan` can ignore frames for a conversation it isn't watching. */
+type PlanListener = (conversation: number, jobs: PlanJob[]) => void;
+const planListeners = new Set<PlanListener>();
+
+export function onPlanSignal(listener: PlanListener): () => void {
+  planListeners.add(listener);
+  return () => planListeners.delete(listener);
+}
 
 function keyFor(conversation: ConversationId | undefined): string {
   return conversation === undefined ? 'root' : String(conversation);
@@ -70,6 +79,8 @@ function connect(key: string, conversation: ConversationId | undefined) {
       emit(entry);
     } else if (parsed.type === 'conversations') {
       for (const listener of conversationsListeners) listener();
+    } else if (parsed.type === 'plan') {
+      for (const listener of planListeners) listener(parsed.conversation, parsed.jobs);
     }
   };
 }
