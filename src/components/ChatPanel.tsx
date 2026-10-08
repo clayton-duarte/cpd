@@ -13,15 +13,22 @@ import {
 } from '@mantine/core';
 import { sendPrompt } from '../engine/client';
 import { useEngineStream } from '../engine/useEngineStream';
-import type { Message } from '../engine/types';
+import type { ConversationId, Message } from '../engine/types';
+
+export interface ChatPanelProps {
+  /** Selected thread from the sidebar's additive conversation tree. Scopes the transcript and
+   * outgoing prompts to that conversation; undefined keeps the default/root stream. Selecting a
+   * thread must change ONLY this -- it must never touch canvas nav state. */
+  conversationId?: ConversationId;
+}
 
 /**
  * Lead chat panel. Messages come from the shared SSE store (useEngineStream);
  * sending a prompt optimistically appends the user's message locally, then
  * the next stream event replaces the list with the authoritative transcript.
  */
-export function ChatPanel() {
-  const { messages, status } = useEngineStream();
+export function ChatPanel({ conversationId }: ChatPanelProps) {
+  const { messages, status } = useEngineStream(conversationId);
   const [pending, setPending] = useState<Message | null>(null);
   const [draft, setDraft] = useState('');
   const [inFlight, setInFlight] = useState(false);
@@ -53,7 +60,7 @@ export function ChatPanel() {
     setInFlight(true);
 
     try {
-      const result = await sendPrompt(text);
+      const result = await sendPrompt(text, conversationId);
       if (result.status !== 'done') {
         setReason(result.reason ?? 'unanswered');
       } else {

@@ -12,6 +12,7 @@ import { sampleData } from './fixtures/sample';
 import { ascend, initialNav, selectLead, selectPlan, type Level, type NavState } from './model/navigation';
 import { leadsLevel, plansLevel, dataForPlan, jobsLevel } from './model/levels';
 import { useLevelTransition } from './canvas/useLevelTransition';
+import type { ConversationId } from './engine/types';
 import './canvas/xyflow-theme.css';
 
 const LEVEL_DEPTH: Record<Level, number> = { leads: 0, plans: 1, jobs: 2 };
@@ -195,6 +196,9 @@ function App() {
   const hash = useHashRoute();
   const [nav, setNav] = useState<NavState>(initialNav);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const [selectedConversationId, setSelectedConversationId] = useState<ConversationId | undefined>(
+    undefined,
+  );
 
   // Selection is deliberately NOT part of NavState (see D3 card): NavState
   // answers "which level", selection answers "which job within this level".
@@ -243,7 +247,13 @@ function App() {
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
         <TopBar />
         <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-          <Sidebar data={sampleData} nav={nav} onNavigate={setNav} />
+          <Sidebar
+            data={sampleData}
+            nav={nav}
+            onNavigate={setNav}
+            selectedConversationId={selectedConversationId}
+            onSelectConversation={setSelectedConversationId}
+          />
           <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
             <div data-testid="canvas-area" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
               <CanvasLevel
@@ -255,7 +265,7 @@ function App() {
             </div>
             {nav.level === 'leads' && (
               <div style={{ width: '24rem', flexShrink: 0, borderLeft: '1px solid var(--line)' }}>
-                <ChatPanel />
+                <ChatPanel conversationId={selectedConversationId} />
               </div>
             )}
           </div>

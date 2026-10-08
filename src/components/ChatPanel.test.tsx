@@ -53,7 +53,7 @@ describe('ChatPanel', () => {
     expect(sendPromptMock).not.toHaveBeenCalled();
 
     fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
-    expect(sendPromptMock).toHaveBeenCalledWith('line one');
+    expect(sendPromptMock).toHaveBeenCalledWith('line one', undefined);
   });
 
   it('disables the textarea while a prompt is in flight', async () => {
