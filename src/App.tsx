@@ -4,11 +4,12 @@ import { Group, Stack, Text } from '@mantine/core';
 import { Canvas } from './canvas/Canvas';
 import { LeadsLevel } from './canvas/LeadsLevel';
 import { PlansLevel } from './canvas/PlansLevel';
+import { nextJob } from './model/selection';
 import { Sidebar } from './components/Sidebar';
 import { Gallery } from './Gallery';
 import { sampleData } from './fixtures/sample';
 import { ascend, initialNav, selectLead, selectPlan, type NavState } from './model/navigation';
-import { leadsLevel, plansLevel, dataForPlan } from './model/levels';
+import { leadsLevel, plansLevel, dataForPlan, jobsLevel } from './model/levels';
 import './canvas/xyflow-theme.css';
 
 /** Trivial hash-based routing: no router dependency, per the A2-4 spec. */
@@ -104,7 +105,17 @@ function TopBar() {
   );
 }
 
-function CanvasLevel({ nav, onNavigate }: { nav: NavState; onNavigate: (next: NavState) => void }) {
+function CanvasLevel({
+  nav,
+  onNavigate,
+  selectedJobId,
+  onSelectJob,
+}: {
+  nav: NavState;
+  onNavigate: (next: NavState) => void;
+  selectedJobId: string | null;
+  onSelectJob: (jobId: string | null) => void;
+}) {
   if (nav.level === 'leads') {
     return <LeadsLevel leads={leadsLevel(sampleData)} onSelect={(leadId) => onNavigate(selectLead(leadId))} />;
   }
@@ -121,7 +132,7 @@ function CanvasLevel({ nav, onNavigate }: { nav: NavState; onNavigate: (next: Na
   if (nav.level === 'jobs' && nav.planId) {
     return (
       <ReactFlowProvider>
-        <Canvas data={dataForPlan(sampleData, nav.planId)} />
+        <Canvas data={dataForPlan(sampleData, nav.planId)} selectedJobId={selectedJobId} onSelectJob={onSelectJob} />
       </ReactFlowProvider>
     );
   }
@@ -132,14 +143,45 @@ function CanvasLevel({ nav, onNavigate }: { nav: NavState; onNavigate: (next: Na
 function App() {
   const hash = useHashRoute();
   const [nav, setNav] = useState<NavState>(initialNav);
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+
+  // Selection is deliberately NOT part of NavState (see D3 card): NavState
+  // answers "which level", selection answers "which job within this level".
+  // Clear it whenever the plan changes so it never points at a stale job
+  // from a different plan.
+  useEffect(() => {
+    setSelectedJobId(null);
+  }, [nav.planId]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setNav((current) => ascend(current));
+      if (e.key === 'Escape') {
+        if (selectedJobId !== null) {
+          setSelectedJobId(null);
+          return;
+        }
+        setNav((current) => ascend(current));
+        return;
+      }
+
+      if (nav.level !== 'jobs' || !nav.planId) return;
+
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        const ids = jobsLevel(sampleData, nav.planId).map((j) => j.id);
+        setSelectedJobId((current) => nextJob(ids, current, 1));
+        return;
+      }
+
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const ids = jobsLevel(sampleData, nav.planId).map((j) => j.id);
+        setSelectedJobId((current) => nextJob(ids, current, -1));
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [nav, selectedJobId]);
 
   if (hash === '#/gallery') {
     return <Gallery />;
@@ -152,7 +194,12 @@ function App() {
         <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
           <Sidebar data={sampleData} nav={nav} onNavigate={setNav} />
           <div data-testid="canvas-area" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-            <CanvasLevel nav={nav} onNavigate={setNav} />
+            <CanvasLevel
+              nav={nav}
+              onNavigate={setNav}
+              selectedJobId={selectedJobId}
+              onSelectJob={setSelectedJobId}
+            />
           </div>
         </div>
       </div>

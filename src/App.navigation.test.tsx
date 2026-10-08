@@ -75,4 +75,29 @@ describe('App navigation', () => {
     fireEvent.click(screen.getByText('Orchard'));
     expect(canvas().getByText('Harvest planner')).toBeTruthy();
   });
+
+  it('Escape with a job selected clears the selection first, then ascends on a second Escape', async () => {
+    renderApp();
+    fireEvent.click(canvas().getByText('Grove automation'));
+    fireEvent.click(canvas().getByText('Automated drip-irrigation scheduling'));
+
+    expect(await canvas().findByText('Model soil moisture thresholds')).toBeTruthy();
+
+    fireEvent.click(await canvas().findByText('Model soil moisture thresholds'));
+    const selectedNode = (await canvas().findByText('Model soil moisture thresholds')).closest('[data-selected]');
+    expect(selectedNode?.getAttribute('data-selected')).toBe('true');
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    // Still at Jobs level -- Escape only cleared the selection.
+    const afterFirstEscape = (await canvas().findByText('Model soil moisture thresholds')).closest(
+      '[data-selected]',
+    );
+    expect(afterFirstEscape?.getAttribute('data-selected')).toBe('false');
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    // Second Escape, with nothing selected, ascends to Plans.
+    expect(canvas().getByText('Automated drip-irrigation scheduling')).toBeTruthy();
+  });
 });
