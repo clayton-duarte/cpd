@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getConversations, getMessages, getPlan, sendPrompt } from './client';
+import { createJob, deleteJob, getConversations, getMessages, getPlan, runJob, sendPrompt } from './client';
 import type { ConversationId } from './types';
 
 describe('client', () => {
@@ -125,5 +125,67 @@ describe('client', () => {
     const result = await getPlan(99 as ConversationId);
 
     expect(result).toEqual({ jobs: [] });
+  });
+
+  it('createJob POSTs to /api/plan/job with the conversation and body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ job: { id: 'j1', title: 'Build', status: 'draft', needs: [] } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await createJob(16 as ConversationId, { title: 'Build', command: 'echo hi' });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/plan/job?conversation=16', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Build', command: 'echo hi' }),
+    });
+    expect(result).toEqual({ job: { id: 'j1', title: 'Build', status: 'draft', needs: [] } });
+  });
+
+  it('runJob POSTs to /api/plan/job/run with the job id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ taskId: 't1' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await runJob(16 as ConversationId, 'j1');
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/plan/job/run?conversation=16', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'j1' }),
+    });
+    expect(result).toEqual({ taskId: 't1' });
+  });
+
+  it('deleteJob DELETEs /api/plan/job with the id in the body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await deleteJob(16 as ConversationId, 'j1');
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/plan/job?conversation=16', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'j1' }),
+    });
+  });
+
+  it('createJob throws on a 400 so the caller can surface the error', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      json: async () => ({ error: 'command must be a non-empty string' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(createJob(16 as ConversationId, { title: 'Build', command: '   ' })).rejects.toThrow(/400/);
   });
 });

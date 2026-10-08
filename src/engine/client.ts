@@ -1,10 +1,12 @@
 import type {
   ConversationId,
   ConversationsResponse,
+  CreateJobResponse,
   ForkResponse,
   MessagesResponse,
   PlanResponse,
   PromptResponse,
+  RunJobResponse,
 } from './types';
 
 const BASE = (import.meta.env.VITE_CPD_API as string | undefined) ?? '/api';
@@ -55,4 +57,37 @@ export async function getPlan(conversation: ConversationId): Promise<PlanRespons
   const res = await fetch(`${BASE}/plan?conversation=${conversation}`);
   if (res.status === 404) return { jobs: [] };
   return parseOrThrow<PlanResponse>(res);
+}
+
+/** H13: create a job in the plan scoped to `conversation` (D112: a plan is a conversation). */
+export async function createJob(
+  conversation: ConversationId,
+  job: { title: string; command?: string; needs?: string[] },
+): Promise<CreateJobResponse> {
+  const res = await fetch(`${BASE}/plan/job?conversation=${conversation}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(job),
+  });
+  return parseOrThrow<CreateJobResponse>(res);
+}
+
+/** H13: run an existing job's command. Returns the durable task id (D113). */
+export async function runJob(conversation: ConversationId, id: string): Promise<RunJobResponse> {
+  const res = await fetch(`${BASE}/plan/job/run?conversation=${conversation}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  });
+  return parseOrThrow<RunJobResponse>(res);
+}
+
+/** H13: delete a job. The id goes in the request body, not the URL path. */
+export async function deleteJob(conversation: ConversationId, id: string): Promise<void> {
+  const res = await fetch(`${BASE}/plan/job?conversation=${conversation}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  });
+  await parseOrThrow<unknown>(res);
 }
