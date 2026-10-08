@@ -265,7 +265,10 @@ function App() {
             </div>
             {nav.level === 'leads' && (
               <div style={{ width: '24rem', flexShrink: 0, borderLeft: '1px solid var(--line)' }}>
-                <ChatPanel conversationId={selectedConversationId} />
+                <ChatPanel
+                  conversationId={selectedConversationId}
+                  onForked={setSelectedConversationId}
+                />
               </div>
             )}
           </div>

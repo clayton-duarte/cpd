@@ -24,31 +24,45 @@ import {
 } from "./plans.ts";
 
 export type Message = {
+  id: number;
   role: "user" | "assistant" | "system";
   content: string;
 };
 
+/** Minimal shape consumed from a Durable `EntryRecord`: its id plus the `model` messages it
+ * contributed, if any. Narrower than the full `EntryRecord` so fixtures in tests don't need to
+ * fabricate every field. */
+type MessageEntry = {
+  readonly id: number;
+  readonly model?: readonly PiMessage[];
+};
+
 /**
- * Flatten Durable/pi-ai's content-array messages into the plain `{role, content}` shape the HTTP
- * API exposes. Text parts are joined; non-text parts (tool calls, images, thinking) are dropped.
- * Empty system messages (no text content at all) are skipped entirely.
+ * Flatten Durable's entries into the plain `{id, role, content}` shape the HTTP API exposes.
+ * Walks `view.entries` (not `view.messages`) so every message carries the entry id it came from --
+ * ids are sparse and never a position/array index. Text parts are joined; non-text parts (tool
+ * calls, images, thinking) are dropped. Empty system messages (no text content at all) are
+ * skipped entirely, as is any `toolResult` message. Several messages from one entry legitimately
+ * share an id; callers must key by `${id}:${index}`, not the bare id.
  */
-export function flattenMessages(messages: readonly PiMessage[]): Message[] {
+export function flattenMessages(entries: readonly MessageEntry[]): Message[] {
   const out: Message[] = [];
-  for (const message of messages) {
-    if (message.role === "toolResult") continue;
-    const role = message.role as "user" | "assistant" | "system";
-    let content: string;
-    if (typeof message.content === "string") {
-      content = message.content;
-    } else {
-      content = message.content
-        .filter((part): part is { type: "text"; text: string } => part.type === "text")
-        .map((part) => part.text)
-        .join("");
+  for (const entry of entries) {
+    for (const message of entry.model ?? []) {
+      if (message.role === "toolResult") continue;
+      const role = message.role as "user" | "assistant" | "system";
+      let content: string;
+      if (typeof message.content === "string") {
+        content = message.content;
+      } else {
+        content = message.content
+          .filter((part): part is { type: "text"; text: string } => part.type === "text")
+          .map((part) => part.text)
+          .join("");
+      }
+      if (role === "system" && content === "") continue;
+      out.push({ id: entry.id, role, content });
     }
-    if (role === "system" && content === "") continue;
-    out.push({ role, content });
   }
   return out;
 }
@@ -127,7 +141,7 @@ export async function openEngine(options: OpenEngineOptions): Promise<Engine> {
 
 export async function getMessages(root: Conversation): Promise<Message[]> {
   const view = await root.context(ctx, {});
-  return flattenMessages(view.messages);
+  return flattenMessages(view.entries);
 }
 
 export async function submitPrompt(
@@ -156,7 +170,7 @@ async function firstUserMessageText(engine: Engine, id: number): Promise<string 
   const conversation = await getConversation(engine, id);
   if (!conversation) return undefined;
   const view = await conversation.context(ctx, {});
-  const messages = flattenMessages(view.messages);
+  const messages = flattenMessages(view.entries);
   return messages.find((message) => message.role === "user")?.content;
 }
 

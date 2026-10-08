@@ -10,14 +10,14 @@ describe('client', () => {
   it('getMessages parses the envelope', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ messages: [{ role: 'user', content: 'hi' }] }),
+      json: async () => ({ messages: [{ id: 7, role: 'user', content: 'hi' }] }),
     });
     vi.stubGlobal('fetch', fetchMock);
 
     const result = await getMessages();
 
     expect(fetchMock).toHaveBeenCalledWith('/api/messages');
-    expect(result).toEqual({ messages: [{ role: 'user', content: 'hi' }] });
+    expect(result).toEqual({ messages: [{ id: 7, role: 'user', content: 'hi' }] });
   });
 
   it('getMessages appends ?conversation=<id> when given an id', async () => {
