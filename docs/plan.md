@@ -1,6 +1,6 @@
 # CPD v0: plan
 
-Status: **Stage 1 complete** (2026-10-12, all six Jobs Merged; t6 needed a second Attempt). Outcomes: [trials/summary.md](trials/summary.md). Next: Stage 2 plan, after the User answers the one open question in the summary. Stage 2 is an outline only; it is planned and approved separately after Stage 1 reports land. Requirements: [requirements.md](requirements.md). Format: `id [Tier] needs → deliverable`.
+Status: **Stage 1 complete** (2026-10-12; outcomes in [trials/summary.md](trials/summary.md)). **Stage 2 drafted, pending approval.** Stage 2 is an outline only; it is planned and approved separately after Stage 1 reports land. Requirements: [requirements.md](requirements.md). Format: `id [Tier] needs → deliverable`.
 
 ## Why two stages
 
@@ -34,18 +34,74 @@ CPD does not exist yet, so the Lead runs Stage 1 by hand.
 
 Stage 1 is done when all six reports are accepted. The findings are then folded into `requirements.md` and ADRs. **Done:** requirements §5, ADR-0004 (amended), ADR-0007, ADR-0008.
 
-## Stage 2: build (outline only, not for approval)
+## Stage 2: Workflow `v0` (build `cpd` v0), draft for approval
 
-Expected components, to be specified as Jobs from Stage 1 evidence:
-1. `cpd` CLI skeleton, config (`~/.cpd`), Tier module (from t6).
-2. Ledger adapter over `bd` (from t2): Workflow init, Job create/lock/append, Attempt lifecycle, history.
-3. Worktree and merge adapter over `wt` (from t3): create, serialised merge queue, Gate, cleanup.
-4. Spawn adapter (from t1): Worker launch, forked read-only Reviewer, completion, crash detection.
-5. Scheduler: ready set, cross-process concurrency cap, timeout, retry ladder (`cpd tick` plus a `cpd watch` loop).
-6. Escalation (from t5).
-7. Metrics collector (pane → `agent_session.path` → usage per Attempt).
-8. PR loop: `gh` poller appending Jobs for CI failures and reviewer-bot comments.
-9. pi adapter extension: draft-safe Lead wake, plannotator glue (from t4), `herdr:blocked`, sidebar tagging that hides Workers.
-10. `cpd-lead` skill, Worker protocol, Reviewer definition, Spec template.
-11. Dotfiles wiring (`~/.cpd` through chezmoi; pi packages through the `~/.pi/agent` repo).
-12. End-to-end dry run on a toy repo; first metrics for tuning defaults.
+Interface: [cli-contract.md](cli-contract.md) (normative for every Job). Specs: [`docs/build/specs/`](build/specs/) (`_common.md` plus one per Job).
+
+| Job | Tier | Needs | Delivers |
+|---|---|---|---|
+| `scaffold` | S2 | — | TypeScript project, CLI router with every command stubbed, output/exec helpers, test harness, this repo's Gate |
+| `config-tiers` | S3 | scaffold | config, state paths, locks, machine slots, Tiers (pi catalog + ladder), `cpd doctor`, `cpd tiers` |
+| `metrics` | S2 | scaffold | pi session JSONL → per-Attempt metrics |
+| `lead-skill` | S4 | scaffold | `skills/cpd-lead/SKILL.md`, the Lead protocol for all phases |
+| `ledger-core` | S3 | config-tiers | beads Ledger, Workflow and Job commands, plan decisions, fingerprints, tamper audit |
+| `git-wt` | S3 | config-tiers | worktrunk/git library: Lead Branch, Attempt worktrees, Gate, merge queue with classification, cleanup, PR rebase |
+| `herdr` | S3 | config-tiers | herdr library (panes, worktree registration, agent launch, session reading), `cpd lead start`, `cpd lead attach` |
+| `queue-ask` | S2 | config-tiers | Lead queue messages, Escalation files, `cpd ask`, `cpd answer` |
+| `dotfiles` | S2 | config-tiers | `cpd` and `~/.cpd/config.json` delivered to both Macs through the dotfiles |
+| `ledger-attempts` | S3 | ledger-core | Attempt lifecycle records, Escalation records, metrics records, `attempt list/show` |
+| `templates-render` | S3 | ledger-core | Worker Spec, review brief, `cpd plan render` |
+| `pr` | S2 | ledger-core, git-wt, queue-ask | `cpd pr open/poll/rebase` |
+| `pi-adapter` | S3 | queue-ask, ledger-core, templates-render | the Lead's pi extension: draft-safe delivery, herdr blocked, `cpd_plan_review` via plannotator |
+| `attempt-run` | S4 | ledger-attempts, git-wt, herdr, queue-ask, metrics, templates-render | the Attempt lifecycle, `attempt submit/read`, `review decide` |
+| `watch` | S4 | ledger-attempts, herdr, queue-ask, pr | `cpd watch` scheduler (cap, timeouts, Escalations, cancel, crash, PR polling), `cpd plan lock` |
+| `e2e` | S4 | all except dotfiles | end-to-end dry run on a toy repo with real herdr/pi; defect list; first metrics |
+
+```mermaid
+graph TD
+  scaffold --> config-tiers
+  scaffold --> metrics
+  scaffold --> lead-skill
+  config-tiers --> ledger-core
+  config-tiers --> git-wt
+  config-tiers --> herdr
+  config-tiers --> queue-ask
+  config-tiers --> dotfiles
+  ledger-core --> ledger-attempts
+  ledger-core --> templates-render
+  ledger-core --> pr
+  git-wt --> pr
+  queue-ask --> pr
+  queue-ask --> pi-adapter
+  ledger-core --> pi-adapter
+  templates-render --> pi-adapter
+  ledger-attempts --> attempt-run
+  git-wt --> attempt-run
+  herdr --> attempt-run
+  queue-ask --> attempt-run
+  metrics --> attempt-run
+  templates-render --> attempt-run
+  ledger-attempts --> watch
+  herdr --> watch
+  queue-ask --> watch
+  pr --> watch
+  attempt-run --> e2e
+  watch --> e2e
+  pi-adapter --> e2e
+  lead-skill --> e2e
+```
+
+File ownership is disjoint: one file per command (contract §1), one module directory per Job, and only `scaffold` touches `package.json`, `tsconfig.json`, `src/cli.ts`, `verify.sh` and `.config/wt.toml`.
+
+### How Stage 2 runs (bootstrap, by hand)
+
+`cpd` cannot run itself yet, so the Lead runs Stage 2 with the recipes the trials proved. The `e2e` Job is the first run of `cpd` running itself.
+- **Lead Branch:** `cpd/v0` in its own worktree (`wt switch --create cpd/v0 --base main`). Attempt branches: `cpd/v0--<job>-a<n>`.
+- **Worker:** headless `pi -p --approve` at the Job's Tier, cwd = Attempt worktree, with the Spec as its prompt.
+- **Gate:** `./verify.sh`, run again by the Lead before each merge.
+- **Reviewer:** a fresh read-only session (`--tools read,grep,find,ls`, S4) with the Spec, the diff and the Gate output. This is a bootstrap deviation from "fork of the Lead": this Lead session is very long, and forking it for each of 16 reviews would cost far more than it is worth. The fork path is exercised by `e2e`.
+- **Merge:** rebase and fast-forward into `cpd/v0` with `wt merge --no-squash`.
+- **Retries:** rejected Attempts retry one Tier higher.
+- **Concurrency:** cap 3 (this machine).
+- **Finish:** when every Job is Merged, `cpd/v0` goes to the User as a PR, or a local fast-forward of `main` if the repo has no remote yet.
+- **Ledger:** this file plus git history, as in Stage 1.
