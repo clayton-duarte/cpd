@@ -1,6 +1,6 @@
 # CPD v0: plan
 
-Status: **Stage 1 approved by the User on 2026-10-12; Jobs Locked; dispatching.** Stage 2 is an outline only; it is planned and approved separately after Stage 1 reports land. Requirements: [requirements.md](requirements.md). Format: `id [Tier] needs → deliverable`.
+Status: **Stage 1 complete** (2026-10-12, all six Jobs Merged; t6 needed a second Attempt). Outcomes: [trials/summary.md](trials/summary.md). Next: Stage 2 plan, after the User answers the one open question in the summary. Stage 2 is an outline only; it is planned and approved separately after Stage 1 reports land. Requirements: [requirements.md](requirements.md). Format: `id [Tier] needs → deliverable`.
 
 ## Why two stages
 
@@ -32,7 +32,7 @@ CPD does not exist yet, so the Lead runs Stage 1 by hand.
 | t5 questions + escalation | S3 | — | How does the User answer structured questions, and how does a Worker ask the Lead? | `rpiv-ask-user-question` driven in a pi TUI pane via `herdr pane send-keys`, answers returned structured. `pi-intercom` `ask`/`reply` between two pi panes: blocking, timeout, Lead busy, Lead idle with a draft, Lead restarted. Compared with a `cpd`-native file-based blocking `ask` stub. A recommendation. |
 | t6 tier catalog | H2 | — | What is a supported way to read each model's valid thinking levels? | Compare a pi-ai export, the pi CLI and `models-store.json` for stability across `pi update`. A generator snippet that reproduces the Tier table in requirements §3. |
 
-Stage 1 is done when all six reports are accepted. The findings are then folded into `requirements.md` and ADRs.
+Stage 1 is done when all six reports are accepted. The findings are then folded into `requirements.md` and ADRs. **Done:** requirements §5, ADR-0004 (amended), ADR-0007, ADR-0008.
 
 ## Stage 2: build (outline only, not for approval)
 
