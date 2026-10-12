@@ -1,6 +1,6 @@
 # CPD v0: requirements
 
-Status: **Context complete for the v0 stack** (decisions 2026-10-12). Next: Plan stage 1 (trials) in [plan.md](plan.md), pending approval. Vocabulary: [CONTEXT.md](../CONTEXT.md). Decisions: [adr/](adr/). Background on herdr: `~/notes/herdr-usage-and-workflow.md`.
+Status: **v0 stack decided and trialled** (Stage 1 done 2026-10-12, [trials/summary.md](trials/summary.md)). Next: Stage 2 (build) plan. Vocabulary: [CONTEXT.md](../CONTEXT.md). Decisions: [adr/](adr/). Background on herdr: `~/notes/herdr-usage-and-workflow.md`.
 
 ## 1. Scope and principles
 
@@ -26,7 +26,7 @@ Status: **Context complete for the v0 stack** (decisions 2026-10-12). Next: Plan
 - The User approves the Plan. Until then everything is a draft.
 
 ### Dispatch
-- On approval: the Lead Branch is created from `origin/<default>`; all Jobs become Locked.
+- On approval: the Lead Branch is created from `origin/<default>` in its own worktree (never the User's main checkout); all Jobs become Locked.
 - A Job is Ready when all its Dependencies are Merged. Ready Jobs start up to the machine's concurrency cap.
 - Each Attempt runs in a **fresh** Worker session on its own worktree, branched from the Lead Branch HEAD at start time (so it contains its Dependencies' commits).
 - Attempt lifecycle: work → commit → Gate passes → Reviewer verdict → approved: rebase onto the Lead Branch and fast-forward it (commits kept, linear history; ADR-0006) → Gate on Lead Branch → **Merged**.
@@ -34,6 +34,7 @@ Status: **Context complete for the v0 stack** (decisions 2026-10-12). Next: Plan
 - **Retry ladder:** each rejection starts a new fresh Attempt with the Spec plus the Reviewer's feedback, **effort +1**. If effort is already at the model's maximum, **model +1** (H → S → O) at the lowest valid effort ≥ the current one. Default cap: **2 retries** (3 Attempts), configurable. Beyond the cap the Job fails and Escalates.
 - **Timeout:** default **30 min** per Attempt, configurable; on timeout the Attempt fails and Escalates to the Lead.
 - Locked means: Jobs can only be re-attempted, cancelled, or have new Jobs appended. Nothing is edited or deleted; history is kept for retrospectives and post-mortems (ADR-0003).
+- Worktree cleanup: a Merged Attempt's worktree and branch are removed; failed or cancelled Attempts keep theirs until the Workflow ends, for debugging.
 - Escalation goes one level at a time: Worker → Lead → User. The Lead resolves what it can first.
 - The Lead stays free for the User: it delegates coding, research and review; it writes Specs and orchestrates.
 
@@ -70,33 +71,38 @@ Record per Attempt: Job, Tier, start/end time, turns, tokens/cost if the runtime
 
 ## 5. Stack
 
-Evidence: [research/2026-10-12-herdr-pi-ecosystem.md](research/2026-10-12-herdr-pi-ecosystem.md). Decided by the User on 2026-10-12:
+Evidence: [research](research/2026-10-12-herdr-pi-ecosystem.md) and [Stage 1 trials](trials/summary.md) (recipes in each trial report).
 
-| Concern | Decision | Status |
+| Concern | Decision | Source |
 |---|---|---|
-| Control plane | `cpd` CLI; thin pi extension as the v0 adapter (ADR-0005) | decided |
-| Ledger | beads (`bd`), written only through `cpd` (ADR-0004) | decided; trial t2 fixes the mapping |
-| Worktrees, setup, merge | worktrunk (`wt`): create from the Lead Branch, blocking setup hooks, rebase + fast-forward merge (ADR-0006) | decided for v0; trial t3 |
-| Worker spawning | chosen by trial t1 | open |
-| Plan approval UI | plannotator pi extension, event API only (plan mode off) | decided; trial t4 |
-| Structured questions to the User, Escalation transport | proposed `rpiv-ask-user-question`, `pi-intercom` | trial t5 |
+| Control plane | `cpd` CLI in TypeScript (Node 22); thin pi extension as the v0 adapter | ADR-0005 |
+| Ledger | beads (`bd` 1.3.1), one workspace per Workflow outside the repo, written only by `cpd` | ADR-0004, t2 |
+| Worktrees, setup, merge | worktrunk (`wt` 0.80.0): create from the Lead Branch with blocking `pre-start` setup; rebase + fast-forward merge keeping commits; Gate as `pre-merge` | ADR-0006, t3 |
+| Worker and Reviewer spawning | `cpd` itself via `herdr agent start --kind pi -- <args>`; no spawner package | ADR-0007, t1 |
+| Lead wake and Escalation | `cpd` writes to a per-Lead queue directory; a Lead-side pi extension surfaces it with `pi.sendMessage`; Workers ask with `cpd ask` (blocking) | ADR-0008, t1, t5 |
+| Plan approval UI | plannotator 0.28.17, event API only (plan mode off) | t4 |
+| Structured questions to the User | `rpiv-ask-user-question` 2.13.8 (short previews; full Plan goes to plannotator) | t5 |
+| Tier validation | `ModelRuntime.create()` from pi's SDK, with pi's thinking-level rule | t6 |
 
-Constraints established by the research:
-- Anything that notifies the Lead goes through a pi extension (`pi.sendMessage`), never through `herdr agent prompt`, which types into the terminal and clobbers the User's draft.
-- If a pi spawner package is used, install exactly one from the `subagent` family (identical tool names; first loaded wins silently).
-- A Worker must not start before its worktree setup has finished.
-- The Ledger lives outside the product repo (`BEADS_DIR`) and must not touch the repo (`AGENTS.md`, git config).
+Constraints (each one demonstrated in the trials):
+- Anything that notifies the Lead goes through a pi extension (`pi.sendMessage`), never through `herdr agent prompt`, which merges with and submits the User's draft.
+- A Worker's completion is proven by an artefact it produces (its `cpd` submit call, the session's final stop reason), never by herdr reporting it idle.
+- A Worker must not start before its worktree setup has finished (worktrunk `pre-start` blocks).
+- Attempts whose diff touches the Gate (`.config/wt.toml`, the Gate script) are rejected.
+- The Ledger lives outside the product repo and never touches it; `cpd` alone writes it and enforces Locked and append-only.
+- Attempt branches use a flat name, `<lead-branch>--<job>-a<n>` (git cannot hold both `<lead>` and `<lead>/<job>`).
+- Pinned versions with contract tests on upgrade for every young dependency (plannotator, rpiv, beads, worktrunk).
 
 ## 6. Configuration
 
 - Lives in `~/.cpd/`, synced with chezmoi and the dotfiles sync script like the rest of the setup.
 - Holds only what no tool owns: Tier map (if not derivable), retry cap, timeout, per-machine concurrency cap. Defaults: MacBook Air (M1, 8 GB) **3** (guess), Mac Pro **8** (tested by the User).
-- Per-repo setup and Gate commands live in worktrunk's project config (`.config/wt.toml`: `pre-start` for setup, `pre-merge` for `verify`), pending trial t3.
+- Per-repo setup and Gate commands live in worktrunk's project config (`.config/wt.toml`: `pre-start` for setup; `pre-merge` runs the Gate as `./verify.sh || exit 64` so a Gate failure is distinguishable).
 
 ## 7. Alternatives recorded
 
-- Lead Branch in its own worktree; merges happen there, never in the User's main checkout (adopt whatever worktrunk supports; trial t3).
-- After a merge, remove the Job's worktree and branch; keep failed/cancelled Attempts' worktrees until the Workflow ends (trial t3).
+- Spawner packages `pi-herdr-agents` and `modem-dev/pi-herdr-subagents` (work, but put the Lead's LLM in the spawn path; t1).
+- `pi-intercom` for Escalation (works, but loses pending questions on Lead restart; t5).
 - Thin SQLite Ledger with append-only triggers, mu/herdr-dagr schema (superseded by beads, ADR-0004).
 - `--no-ff` merge commits instead of rebase + fast-forward (rejected, ADR-0006).
 
