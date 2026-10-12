@@ -1,6 +1,6 @@
 # CPD v0: plan
 
-Status: **Stage 1 draft, pending approval.** Stage 2 is an outline only; it is planned and approved separately after Stage 1 reports land. Requirements: [requirements.md](requirements.md). Format: `id [Tier] needs → deliverable`.
+Status: **Stage 1 approved by the User on 2026-10-12; Jobs Locked; dispatching.** Stage 2 is an outline only; it is planned and approved separately after Stage 1 reports land. Requirements: [requirements.md](requirements.md). Format: `id [Tier] needs → deliverable`.
 
 ## Why two stages
 
@@ -13,10 +13,11 @@ CPD does not exist yet, so the Lead runs Stage 1 by hand.
 - **Review.** The Lead checks every report against its acceptance criteria. A rejected report gets one more Attempt one Tier step higher.
 - **Ledger.** This file plus git history (beads is not adopted yet).
 - **Concurrency.** This machine is the MacBook Air (M1, 8 GB), so the cap is **3**: batch 1 = t1, t2, t3; batch 2 = t4, t5, t6.
+- **Specs:** [`docs/trials/specs/`](trials/specs/) (`_common.md` plus one per Job).
 - **Isolation rules** (in every Spec):
   - **herdr:** only the named session `cpd-trial` (`herdr --session cpd-trial …`, a separate server). Never touch, stop or reconfigure the default session.
   - **pi:** load packages per run with `pi -e <source>`. Never `pi install`, never edit `~/.pi/agent/settings.json`.
-  - **Allowed installs:** `brew install worktrunk` (0.80.0) and `brew install beads` (1.3.1), both homebrew/core. One global herdr plugin link for modem-dev in t1, unlinked at the end (the plugin registry is global to the user).
+  - **Installs:** worktrunk 0.80.0 and beads 1.3.1 are declared in the dotfiles (`home/.chezmoidata/packages.yaml`, dotfiles commit `612c840`) so they travel to every Mac, and are installed here. Trials install nothing else. The only global, non-dotfiles change is t1's temporary herdr plugin link for modem-dev, unlinked at the end.
   - **Scratch only:** repos under `/tmp/cpd-trials/<job>/`. No pushes, no changes to dotfiles or real repos.
   - **Evidence:** every claim is backed by a command transcript excerpt. Untested claims are labelled.
 
