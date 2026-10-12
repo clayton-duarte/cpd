@@ -33,6 +33,6 @@ Reviewer notes on accepted reports (to carry into Stage 2):
 - `~/.dolt` and bd's home files stay (t2 escalation 2; normal tool state).
 - plannotator and `rpiv-ask-user-question` are installed for the Lead as pi packages declared in `~/.pi/agent/settings.json` (the pi-config repo the dotfiles sync), pinned to the trialled versions (t4 escalation).
 
-## Open for the User
+## Decided by the User
 
-- **Should Workers run with `pi --approve`?** That trusts project-local `.pi/` extensions and `AGENTS.md` in the repo under work without a dialog. The alternative is `--no-approve` (ignores them) or dialog detection (t1 escalation).
+- **Workers run with `pi --approve`** (2026-10-12): trust project-local `.pi/` extensions and `AGENTS.md` of the repo under work, no dialog (t1 escalation).

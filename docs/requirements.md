@@ -88,6 +88,7 @@ Constraints (each one demonstrated in the trials):
 - Anything that notifies the Lead goes through a pi extension (`pi.sendMessage`), never through `herdr agent prompt`, which merges with and submits the User's draft.
 - A Worker's completion is proven by an artefact it produces (its `cpd` submit call, the session's final stop reason), never by herdr reporting it idle.
 - A Worker must not start before its worktree setup has finished (worktrunk `pre-start` blocks).
+- Workers start with `pi --approve`: they trust the project-local `.pi/` resources and `AGENTS.md` of the repo they work in, exactly as the User does (decided by the User 2026-10-12).
 - Attempts whose diff touches the Gate (`.config/wt.toml`, the Gate script) are rejected.
 - The Ledger lives outside the product repo and never touches it; `cpd` alone writes it and enforces Locked and append-only.
 - Attempt branches use a flat name, `<lead-branch>--<job>-a<n>` (git cannot hold both `<lead>` and `<lead>/<job>`).
