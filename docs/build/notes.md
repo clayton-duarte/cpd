@@ -19,10 +19,11 @@ Running record of Attempt outcomes, Lead decisions and proposed changes. Reports
 | ledger-core-a1 | S3 | approved, merged | All 7 acceptance items with real bd. Found `bd update --metadata` merges rather than replaces (t2 F5 was wrong). Post-merge Gate on `cpd/v0`: 221 pass, 17 skipped (`CPD_IT`). |
 | ledger-attempts-a1 | S3 | approved, merged | Real-bd tests; the Gate now takes ~8 min alone, ~20 min when several run. Post-merge Gate: 237 pass. |
 | templates-render-a1 | S3 | rejected | `test/render/regen.ts` runs under `node --test` (it runs every `.ts` under `test/`) and rewrote the goldens before the golden tests read them, so those tests could never fail. |
-| templates-render-a2 | S4 | running | Regen made opt-in. |
+| templates-render-a2 | S4 | approved, merged | Regen opt-in (`CPD_REGEN_GOLDENS=1`); malformed Attempt metadata is `attempt_metadata_invalid`. |
 | fix-ask-flake-a1 (appended) | S2 | rejected | A failing `cpd ask` test left a blocked child that hung three Gates (up to 43 min). a1 fixed most spawns; the Reviewer found five still unguarded. |
-| fix-ask-flake-a2 | S3 | running | |
-| escalation-expiry-a1 (appended) | S2 | running | Expired Escalations otherwise block closing their Attempt (`ledger-attempts-a1` review). |
+| fix-ask-flake-a2 | S3 | approved, merged | Every `cpd ask` spawn in tests goes through one bounded, killed helper. |
+| escalation-expiry-a1 (appended) | S2 | approved, merged | Expired Escalations otherwise block closing their Attempt (`ledger-attempts-a1` review). |
+| attempt-run-a1 | S4 | approved, merged | First try. 42 fake-lifecycle tests, 8 real-Ledger lifecycle tests, 41/41 mutations killed, and a `CPD_IT` run in herdr `cpd-test` (haiku Worker and forked Reviewer, Merged in 62 s, $0.035). Found: a forked pi 1.2.0 session keeps the Lead's entries with their original timestamps, so Reviewer metrics count only entries after the fork. |
 
 ## Lead errors and process fixes
 
@@ -44,6 +45,10 @@ Running record of Attempt outcomes, Lead decisions and proposed changes. Reports
   - `~/.local/bin/cpd` → `~/projects/cpd.cpd-v0/bin/cpd.mjs`, so Workers in herdr panes find `cpd` on `PATH` (the `dotfiles` Job later points it at `~/projects/cpd`).
   - A watchdog (`/tmp/cpd-build/bin/ask-watchdog.sh`) kills test-spawned `cpd ask` processes older than 3 minutes until `fix-ask-flake` lands. Its first version never killed anything (macOS `ps` has no `etimes`); fixed and dry-run checked.
 - Not changed, recommended: `verify.sh` runs `node --test` without a glob, so every `.ts` under `test/` runs as a test (`test/helpers/index.ts`, and the `regen.ts` that hid the golden-test defect). A `test/**/*.test.ts` glob would prevent that class of bug. `verify.sh` is a protected Gate file, so this is the User's call.
+
+- **Self-hosting reached 2026-10-13 02:03** (`attempt-run` merged). From here every Job runs through `cpd job dispatch <k> --wf v0`: worktree, Worker in a herdr pane of the default session, Gate at submit, fresh Reviewer split from the Lead pane, rebase merge, Ledger. The first dispatch (`watch-a1`) went from `job dispatch` to a prompted Worker in 11 s; the fourth concurrent dispatch was refused `no_slot` (cap 3), as specified.
+- The Lead (this session) has no pi adapter, so it reads its queue with `docs/build/bootstrap/lead-poll.sh` (polling). The product does not poll: `cpd watch` and `cpd attempt run` write queue files, and the `pi-adapter` extension delivers them with `pi.sendMessage` (`triggerTurn`, `deliverAs: "followUp"`), so a Lead started with `cpd lead start` is woken by messages and never blocks.
+- The bootstrap scripts used for increments 1–4 are kept in `docs/build/bootstrap/`.
 
 ## Appended work (to dispatch through `cpd` later)
 
