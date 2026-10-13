@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { symlinkSync } from "node:fs";
+import { readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { CLI, runCli, tmpDir } from "./helpers/index.ts";
 
@@ -22,8 +22,12 @@ test("--help lists every contract command", async () => {
   assert.deepEqual([...r.json.commands].sort(), [...EXPECTED].sort());
 });
 
+/** A command file that no longer mentions `not_implemented` has been implemented by its Job. */
+const isStub = (cmd: string) =>
+  readFileSync(new URL(`../src/commands/${cmd.replace(" ", "-")}.ts`, import.meta.url), "utf8").includes("not_implemented");
+
 for (const cmd of EXPECTED) {
-  test(`stub: cpd ${cmd} -> not_implemented`, async () => {
+  test(`stub: cpd ${cmd} -> not_implemented`, { skip: !isStub(cmd) && "implemented" }, async () => {
     const r = await runCli(cmd.split(" "));
     assert.equal(r.code, 1);
     assert.equal(r.json.ok, false);
