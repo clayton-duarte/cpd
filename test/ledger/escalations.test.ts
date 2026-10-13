@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CpdError } from "../../src/lib/errors.ts";
 import { failAttempt, getAttempt, markMerged, markSubmitted, recordVerdict, startAttempt } from "../../src/ledger/attempts.ts";
-import { openEscalations, recordAnswer, recordEscalation } from "../../src/ledger/escalations.ts";
+import { expireEscalation, openEscalations, recordAnswer, recordEscalation } from "../../src/ledger/escalations.ts";
 import { getJobByKey } from "../../src/ledger/jobs.ts";
 import { lockPlan } from "../../src/ledger/plan.ts";
 import { addDraft, allIssues, approvePlan, bdJson, newPlan, sandbox } from "./helpers.ts";
@@ -69,4 +69,47 @@ test("Escalation errors: unknown id, wrong Attempt, closed Attempt, bad input", 
   await failAttempt(wf, "b-a1", "crashed", { requeue: true });
   await assert.rejects(recordEscalation(wf, "b-a1", { escId: "b-a1-q1", question: "q", askedAt: "t" }), refusal("illegal_transition"));
   assert.deepEqual(await openEscalations(wf), []);
+});
+
+test("expire: unblocks failAttempt and markMerged, idempotent, refuses an answered Escalation", async () => {
+  const w = "esc2";
+  await newPlan(w, repo);
+  await addDraft(w, "c");
+  await addDraft(w, "d");
+  await approvePlan(w);
+  await lockPlan(w);
+  await startAttempt(w, "c", { tier: "S3" });
+  await startAttempt(w, "d", { tier: "S3" });
+  const at = "2026-01-01T00:00:00.000Z";
+  await recordEscalation(w, "c-a1", { escId: "c-a1-q1", question: "q?", askedAt: at });
+  await recordEscalation(w, "d-a1", { escId: "d-a1-q1", question: "q?", askedAt: at });
+  await assert.rejects(failAttempt(w, "c-a1", "timed_out", { requeue: true }), refusal("escalation_open"));
+
+  const r = await expireEscalation(w, "c-a1-q1", { reason: "timeout", expiredAt: "2026-01-01T01:00:00.000Z" });
+  assert.equal(r.recorded, true);
+  assert.equal(r.escalation.status, "closed");
+  const esc = (await bdJson(w, ["list", "--all", "-n", "0", "-t", "escalation"])).find((e: any) => e.metadata.esc_id === "c-a1-q1");
+  assert.equal(esc.close_reason, "expired");
+  assert.deepEqual([esc.metadata.expired_at, esc.metadata.expired_reason], ["2026-01-01T01:00:00.000Z", "timeout"]);
+  assert.deepEqual((await bdJson(w, ["comments", esc.id])).map((c: any) => c.text), ["expired: timeout"]);
+  assert.deepEqual((await openEscalations(w)).map((e) => e.id), ["d-a1-q1"]);
+
+  const before = await allIssues(w);
+  assert.equal((await expireEscalation(w, "c-a1-q1", { reason: "orphan", expiredAt: "later" })).recorded, false);
+  assert.deepEqual(await allIssues(w), before, "a second expire writes nothing");
+
+  assert.equal((await failAttempt(w, "c-a1", "timed_out", { requeue: true })).status, "closed");
+
+  // merge path
+  await expireEscalation(w, "d-a1-q1", { reason: "orphan", expiredAt: at });
+  await markSubmitted(w, "d-a1", sha("a"));
+  await recordVerdict(w, "d-a1", { verdict: "approve", feedback: "ok" });
+  assert.equal((await markMerged(w, "d-a1", sha("b"))).status, "closed");
+
+  // answered Escalation is refused
+  await startAttempt(w, "c", { tier: "S3" });
+  await recordEscalation(w, "c-a2", { escId: "c-a2-q1", question: "q?", askedAt: at }).catch(() => {});
+  await recordAnswer(w, "c-a2-q1", { answer: "yes", answeredAt: at });
+  await assert.rejects(expireEscalation(w, "c-a2-q1", { reason: "timeout", expiredAt: at }), refusal("escalation_answered"));
+  await assert.rejects(expireEscalation(w, "c-a9-q1", { reason: "timeout", expiredAt: at }), refusal("escalation_not_found", 4));
 });

@@ -121,6 +121,42 @@ export async function recordAnswer(wf: string, escId: string, input: { answer: s
   });
 }
 
+const Expiry = z.strictObject({ reason: z.enum(["timeout", "orphan"]), expiredAt: z.string().min(1) });
+
+/**
+ * Close an Escalation whose question expired: comment `expired: <reason>`, `expired_at` / `expired_reason`
+ * (write-once), close with reason `expired`. Idempotent: an already expired Escalation returns
+ * `recorded: false`; a half-done earlier call is completed. An answered Escalation is refused.
+ */
+export async function expireEscalation(
+  wf: string,
+  escId: string,
+  input: { reason: "timeout" | "orphan"; expiredAt: string },
+): Promise<{ escalation: Escalation; recorded: boolean }> {
+  assertEscalationId(escId);
+  const x = Expiry.safeParse(input);
+  if (!x.success) throw usage("invalid_expiry", "invalid expiry", { issues: x.error.issues });
+  return withLedger(wf, `expire ${escId}`, async (l) => {
+    const found = (await allEscalations(l)).find((e) => str(e.issue.metadata, "esc_id") === escId);
+    if (!found) throw notFound("escalation_not_found", `no Escalation ${escId}`, { escalation: escId });
+    const { issue, attempt } = found;
+    if (str(issue.metadata, "answered_by") !== null) {
+      throw refused("escalation_answered", `Escalation ${escId} was already answered`, { escalation: escId });
+    }
+    if (issue.status === "closed") return { escalation: toEscalation(issue, attempt), recorded: false };
+
+    if (str(issue.metadata, "expired_at") === null) {
+      await l.write(["update", issue.id, ...metadataArgs(issue.metadata, { expired_at: input.expiredAt, expired_reason: input.reason }, true)]);
+    }
+    const comments = await l.read(["comments", issue.id], BdComments);
+    if (comments.length === 0) await l.write(["comments", "add", issue.id, `expired: ${input.reason}`]);
+    await l.write(["close", issue.id, "--reason", "expired"]);
+    logEvent(wf, "info", "escalation_expired", { attempt, escalation: escId, reason: input.reason });
+    const after = (await allEscalations(l)).find((e) => e.issue.id === issue.id)!;
+    return { escalation: toEscalation(after.issue, after.attempt), recorded: true };
+  });
+}
+
 /** Escalations not yet answered, oldest first. */
 export async function openEscalations(wf: string): Promise<Escalation[]> {
   return (await allEscalations(readLedger(wf)))
