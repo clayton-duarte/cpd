@@ -1,0 +1,8 @@
+{"type":"session","version":3,"id":"01a132ad-8b94-7785-9c0b-e72213509328","timestamp":"2026-10-13T00:33:16.692Z","cwd":"/private/tmp/wt1"}
+{"type":"model_change","id":"e0da08d7","parentId":null,"timestamp":"2026-10-13T00:33:16.748Z","provider":"github-copilot","modelId":"claude-haiku-4.5"}
+{"type":"thinking_level_change","id":"ef8e0c4a","parentId":"e0da08d7","timestamp":"2026-10-13T00:33:16.748Z","thinkingLevel":"low"}
+{"type":"future_entry_kind","id":"f1","anything":{"goes":true}}
+{"type":"message","id":"9e2ba9f4","parentId":"ef8e0c4a","timestamp":"2026-10-13T00:33:19.831Z","message":{"role":"system","content":"[redacted]","timestamp":1791851599828}}
+{"type":"message","id":"fbebcc7c","parentId":"9e2ba9f4","timestamp":"2026-10-13T00:33:19.832Z","message":{"role":"user","content":[{"type":"text","text":"Create hello.txt, then stop."}],"timestamp":1791851599827}}
+{"type":"message","id":"9d6e6359","parentId":"fbebcc7c","timestamp":"2026-10-13T00:33:21.455Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"[redacted]","thinkingSignature":"[redacted]"},{"type":"toolCall","id":"toolu_1","name":"write","arguments":{"path":"hello.txt","content":"1"}}],"stopReason":"toolUse","timestamp":1791851601455}}
+{"type":"message","id":"fb771ed2","parentId":"9d6e6359","timestamp":"2026-10-13T00:33:21.467Z","message":{"role":"toolResult","toolCallId":"toolu_1","toolName":"write","content":[{"type":"text","text":"Successfully wrote to hello.txt"}],"isError":false,"timestamp":1791851601467}}
