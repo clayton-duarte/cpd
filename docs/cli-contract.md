@@ -192,7 +192,7 @@ Slots are `slots/slot-0.json` … `slot-<concurrency-1>.json`, each created excl
 - `cpd job add --key <k> --title <t> --tier <T> --spec <file.json> [--needs k1,k2] [--review-tier <T>]`.
   - Spec file schema (all required): `{"goal": string, "context": string, "touches": string[≥1], "acceptance": string[≥1], "outOfScope": string[]}`.
   - In phase `plan`: status `draft`.
-  - In phase `dispatch`: an **appended** Job, status `queued` at once, fingerprint recorded, message logged.
+  - In phase `dispatch` or `pr`: an **appended** Job, status `queued` at once, fingerprint recorded, message logged. (Phase `pr` is where PR feedback becomes appended Jobs; `cpd watch` keeps scheduling until phase `done`. Amended 2026-10-13 after a Worker escalation.)
   - Other phases: `illegal_phase` (exit 3).
   - Validates the Tiers, that `needs` exist and are not `cancelled`/`failed`, no cycle, and a unique key.
 - `cpd job edit <k> [--title] [--tier] [--spec] [--needs] [--review-tier]`: `draft` only, else `job_locked` (exit 3).
@@ -273,6 +273,7 @@ Slots are `slots/slot-0.json` … `slot-<concurrency-1>.json`, each created excl
   - Merged: phase `done`, `touch <ledger>/MIGRATION-FREEZE`, message `workflow-done`.
   - Returns `{ok, changes: [...]}`.
 - `cpd pr rebase`: the trial t3 "pr rebase" recipe for the clean case (`git merge-tree` check, then `wt step rebase <base>`, then `git push --force-with-lease`). On a conflict it changes nothing and returns `rebase_conflict` (exit 3) with the file list; the Lead decides.
+  - It is also how Jobs merged in phase `pr` reach the PR: run it after their `job-merged` messages. If the base has not moved, the rebase is a no-op and only the push happens.
 
 ## 12. Attempt lifecycle (`cpd attempt run`)
 
