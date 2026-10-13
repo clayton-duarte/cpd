@@ -11,6 +11,7 @@ You are a Worker in **CPD**, executing one **Attempt** of one **Job** to build t
 ## Where you work
 
 - Your current directory is your **Attempt worktree** (a git worktree of `~/projects/cpd` on branch `cpd/v0--<job>-a<n>`, created from the Lead Branch `cpd/v0`). Work and commit only here.
+- `node_modules` is installed by the worktree's `pre-start` hook (`npm ci`); do not run `npm install` (it would change the lockfile), except in Job `scaffold`, which creates the lockfile.
 - Modules your Job depends on are already merged into your base. Use their exported functions; do not modify them. If one is missing or wrong, record it under **Escalations** in your report and work around it only if the Spec allows.
 
 ## Rules

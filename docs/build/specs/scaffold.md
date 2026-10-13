@@ -19,7 +19,7 @@ Create the TypeScript project skeleton so every later Job only adds its own file
   - dependencies: `zod` (current 4.x); devDependencies: `typescript` (current), `@types/node` (22.x). Commit the lockfile.
 - `tsconfig.json`: strict, `noEmit`, `erasableSyntaxOnly`, `module`/`moduleResolution` `nodenext`, `allowImportingTsExtensions` (imports use `.ts` extensions), `target` ES2023, include `src`, `test`, `bin`.
 - `verify.sh` (executable): `set -euo pipefail; npx tsc --noEmit -p . && node --test`.
-- `.config/wt.toml`: `[pre-merge]` with `verify = "./verify.sh || exit 64"`. No `pre-start` (`npm ci` comes later if needed; note it in the report).
+- `.config/wt.toml`: `[pre-start]` with `deps = "npm ci --no-audit --no-fund"` (every new worktree gets `node_modules` before a Worker starts; trial t3 F1), and `[pre-merge]` with `verify = "./verify.sh || exit 64"`.
 - `bin/cpd.mjs`: `#!/usr/bin/env node`, imports `../src/cli.ts` and calls `main(process.argv.slice(2))`. Executable. Must work when invoked through a symlink.
 - `src/cli.ts`:
   - Parses `<group> <command>` or a single-word command.
