@@ -18,9 +18,13 @@ function setupWithQueue() {
   return s;
 }
 
-/** Spawn a blocking `cpd ask` (short timeout), killed in t.after whatever happens. */
-function startAsk(t: TestContext, env: NodeJS.ProcessEnv, attempt: string, question: string) {
-  const child = spawn(process.execPath, [CLI, "ask", attempt, question, "--timeout-minutes", "0.5", "--wf", WF], {
+/**
+ * The only way this file spawns `cpd ask`: always a short --timeout-minutes (<= 0.5), always
+ * SIGKILLed in t.after, so a regression can never leave a blocked asker behind or hang the Gate.
+ */
+function ask(t: TestContext, env: NodeJS.ProcessEnv, args: string[], minutes = 0.5) {
+  assert.ok(minutes <= 0.5);
+  const child = spawn(process.execPath, [CLI, "ask", ...args, "--timeout-minutes", String(minutes)], {
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -55,7 +59,7 @@ async function until<T>(f: () => T | undefined | false, ms = 10000): Promise<T> 
 
 test("ask blocks; answer from another process unblocks it; files and messages are ordered", async (t) => {
   const { env, queueDir, escDir } = setupWithQueue();
-  const asking = startAsk(t, env, "job-a1", "which db?");
+  const asking = ask(t, env, ["job-a1", "which db?", "--wf", WF]);
   await until(() => existsSync(join(escDir, "job-a1-q1.q.json")) && msgs(queueDir).length === 1);
   const esc = msgs(queueDir)[0];
   assert.equal(esc.kind, "escalation");
@@ -79,7 +83,7 @@ test("ask blocks; answer from another process unblocks it; files and messages ar
 
 test("Lead-restart durability: a question with no reader is listed; answering later unblocks the asker", async (t) => {
   const { env, escDir, queueDir } = setupWithQueue();
-  const asking = startAsk(t, env, "job-a1", "q?");
+  const asking = ask(t, env, ["job-a1", "q?", "--wf", WF]);
   await until(() => existsSync(join(escDir, "job-a1-q1.q.json")));
   // "Lead restarts": nobody consumed the queue; the question is still discoverable from files alone.
   await sleep(1000);
@@ -93,7 +97,7 @@ test("Lead-restart durability: a question with no reader is listed; answering la
 test("timeout exits 5, renames to .expired.json (id never reused); later answer is escalation_missing; double answer is escalation_answered", async (t) => {
   const { env, escDir } = setupWithQueue();
   const t0 = Date.now();
-  const r = await runCli(["ask", "job-a1", "q?", "--timeout-minutes", "0.05", "--wf", WF], { env });
+  const r = await ask(t, env, ["job-a1", "q?", "--wf", WF], 0.05);
   assert.equal(r.code, 5);
   assert.equal(r.json.error.code, "ask_timeout");
   assert.ok(Date.now() - t0 >= 2900);
@@ -104,7 +108,7 @@ test("timeout exits 5, renames to .expired.json (id never reused); later answer 
   assert.equal(late.code, 3);
   assert.equal(late.json.error.code, "escalation_missing");
 
-  const asking = startAsk(t, env, "job-a1", "again?");
+  const asking = ask(t, env, ["job-a1", "again?", "--wf", WF]);
   await until(() => existsSync(join(escDir, "job-a1-q2.q.json")));
   assert.equal(existsSync(join(escDir, "job-a1-q1.expired.json")), true);
   assert.equal((await runCli(["answer", "job-a1-q2", "one", "--wf", WF], { env })).code, 0);
@@ -115,17 +119,17 @@ test("timeout exits 5, renames to .expired.json (id never reused); later answer 
   assert.equal((await runCli(["answer", "job-a1-q1", "x", "--wf", WF], { env })).json.error.code, "escalation_missing");
 });
 
-test("ask without an attached Lead fails lead_not_attached and leaves no question", async () => {
+test("ask without an attached Lead fails lead_not_attached and leaves no question", async (t) => {
   const { env, escDir } = setup(false);
-  const r = await runCli(["ask", "job-a1", "q?", "--wf", WF], { env });
+  const r = await ask(t, env, ["job-a1", "q?", "--wf", WF]);
   assert.equal(r.code, 3);
   assert.equal(r.json.error.code, "lead_not_attached");
   assert.equal(existsSync(escDir) ? readdirSync(escDir).length : 0, 0);
 });
 
-test("ask usage errors", async () => {
+test("ask usage errors", async (t) => {
   const { env } = setup();
-  assert.equal((await runCli(["ask", "job-a1", "q"], { env })).json.error.code, "workflow_required");
-  assert.equal((await runCli(["ask", "job-a1", "q", "--bogus", "--wf", WF], { env })).code, 2);
-  assert.equal((await runCli(["ask", "nope", "q", "--wf", WF], { env })).code, 2);
+  assert.equal((await ask(t, env, ["job-a1", "q"])).json.error.code, "workflow_required");
+  assert.equal((await ask(t, env, ["job-a1", "q", "--bogus", "--wf", WF])).code, 2);
+  assert.equal((await ask(t, env, ["nope", "q", "--wf", WF])).code, 2);
 });
