@@ -5,7 +5,7 @@ import { MESSAGE_KINDS } from "../../src/queue/messages.ts";
 import { runCli } from "../helpers/index.ts";
 
 const root = new URL("../../", import.meta.url);
-const skillDir = new URL("skills/cpd-lead/", root);
+const skillDir = new URL("pi/skills/cpd-lead/", root);
 const read = (url: URL) => readFileSync(url, "utf8");
 
 /** SKILL.md plus every file under references/: the whole text the Lead can load. */

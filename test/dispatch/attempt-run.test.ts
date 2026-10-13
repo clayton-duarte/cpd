@@ -82,7 +82,7 @@ test("happy path: events happen in the §12 order", async () => {
 test("the Worker starts with --approve at the Attempt Tier (Job S3 → sonnet:high)", async () => {
   const { w } = await go({ jobTier: "S3" });
   const start = w.agentStarts.find((a) => a.name === workerName())!;
-  assert.deepEqual(start.args, ["--approve", "--model", "p/sonnet:high"]);
+  assert.deepEqual(start.args, ["--approve", "--no-skills", "--exclude-tools", "ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox", "--model", "p/sonnet:high"]);
 });
 
 test("reviewer reject → ladder → attempt-retry with the next Tier", async () => {
@@ -347,11 +347,11 @@ test("an error other than lock_timeout from mergeAttempt is not retried: error m
 test("reviewMode fork: the Reviewer is forked from the Lead session; fresh: no --fork (acceptance 2)", async () => {
   const fork = await go({ reviewMode: "fork" });
   const forkArgs = fork.w.agentStarts.find((a) => a.name === reviewerName())!.args;
-  assert.deepEqual(forkArgs, ["--approve", "--fork", LEAD_SESSION, "--tools", "read,grep,find,ls", "--model", "p/sonnet:xhigh"]);
+  assert.deepEqual(forkArgs, ["--approve", "--no-skills", "--exclude-tools", "ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox", "--fork", LEAD_SESSION, "--tools", "read,grep,find,ls", "--model", "p/sonnet:xhigh"]);
 
   const fresh = await go({ reviewMode: "fresh" });
   const freshArgs = fresh.w.agentStarts.find((a) => a.name === reviewerName())!.args;
-  assert.deepEqual(freshArgs, ["--approve", "--tools", "read,grep,find,ls", "--model", "p/sonnet:xhigh"]);
+  assert.deepEqual(freshArgs, ["--approve", "--no-skills", "--exclude-tools", "ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox", "--tools", "read,grep,find,ls", "--model", "p/sonnet:xhigh"]);
   assert.equal(freshArgs.includes("--fork"), false);
 });
 

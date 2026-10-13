@@ -31,8 +31,27 @@ export function assertAgentName(name: string): void {
   }
 }
 
+/**
+ * Lead-only tools, denied to every session cpd starts (Workers, Reviewers). The Lead set is installed globally, so
+ * these would otherwise load there too. Sources (inspected 2026-10-13):
+ * - `ask_user_question`: @juicesharp/rpiv-ask-user-question@2.13.8;
+ * - `cpd_plan_review`: cpd's pi adapter (`pi/extension.ts`);
+ * - `plannotator`, `plannotator_mark_done`, `plannotator_submit_plan`, `plannotator_inbox`: @plannotator/pi-extension@0.28.17.
+ */
+export const LEAD_ONLY_TOOLS = [
+  "ask_user_question",
+  "cpd_plan_review",
+  "plannotator",
+  "plannotator_mark_done",
+  "plannotator_submit_plan",
+  "plannotator_inbox",
+] as const;
+
+/** Flags that strip Lead powers: no skills (the `cpd-lead` skill) and no Lead-only tools. */
+const notLeadArgs = (): string[] => ["--no-skills", "--exclude-tools", LEAD_ONLY_TOOLS.join(",")];
+
 /** Pure: pi arguments for a Worker. `modelArg` is `<provider/id>:<level>`. `--approve` trusts project-local `.pi/` (t1 F10). */
-export const workerArgs = (modelArg: string): string[] => ["--approve", "--model", modelArg];
+export const workerArgs = (modelArg: string): string[] => ["--approve", ...notLeadArgs(), "--model", modelArg];
 
 /**
  * Pure: pi arguments for a Reviewer: read-only tools, forked from the Lead session.
@@ -40,6 +59,7 @@ export const workerArgs = (modelArg: string): string[] => ["--approve", "--model
  */
 export const reviewerArgs = (leadSessionPath: string | null, modelArg: string): string[] => [
   "--approve",
+  ...notLeadArgs(),
   ...(leadSessionPath === null ? [] : ["--fork", leadSessionPath]),
   "--tools",
   "read,grep,find,ls",

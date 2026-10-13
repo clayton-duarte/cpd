@@ -358,4 +358,4 @@ Recorded once per Attempt (write-once keys). Reviewer metrics are recorded on th
   - Inputs: the Spec, the diff path, the Gate output, and the worktree path for reading files.
   - Rubric: approve only if every acceptance item is met, nothing out of scope changed, and touched files fit the Spec.
   - The final verdict block format.
-- `skills/cpd-lead/SKILL.md`: the Lead protocol for Context, Plan, Dispatch and PR using only `cpd` commands, `ask_user_question` (trial t5 rules) and `cpd_plan_review`. It covers how to react to each queue message kind, and the append-only rules (append, cancel or retry; never edit after lock).
+- `pi/skills/cpd-lead/SKILL.md` (shipped in the `pi/` package, so `-e <repo>/pi` or the package in settings loads it with the extension): the Lead protocol for Context, Plan, Dispatch and PR using only `cpd` commands, `ask_user_question` (trial t5 rules) and `cpd_plan_review`. It covers how to react to each queue message kind, and the append-only rules (append, cancel or retry; never edit after lock).

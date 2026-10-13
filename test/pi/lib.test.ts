@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { MESSAGE_KINDS, type LeadMessage } from "../../src/queue/messages.ts";
 import { createBlockedCounter } from "../../pi/lib/blocked.ts";
@@ -239,4 +240,24 @@ test("callCpd: returns the parsed {ok:true} output and throws cpd's own error ot
   await assert.rejects(callCpd(exec('{"ok":false,"error":{"code":"illegal_phase","message":"nope"}}', 3), ["plan", "decision"]), /illegal_phase.*nope/);
   await assert.rejects(callCpd(exec("garbage", 1), ["x"]), /exited 1 without JSON/);
   await assert.rejects(callCpd(exec('{"ok":true}', 2), ["x"]), /exit_2/);
+});
+
+test("adapter: with no CPD_HOME set the queue dir is under ~/.cpd", async () => {
+  const { leadQueueDir } = await import("../../src/lib/paths.ts");
+  const saved = process.env.CPD_HOME;
+  delete process.env.CPD_HOME;
+  try {
+    assert.equal(leadQueueDir("s1"), join(homedir(), ".cpd", "leads", "s1", "queue"));
+  } finally {
+    if (saved !== undefined) process.env.CPD_HOME = saved;
+  }
+});
+
+test("pi package: the manifest exposes pi/skills/cpd-lead/SKILL.md next to the extension", () => {
+  const root = new URL("../../pi/", import.meta.url);
+  const pkg = JSON.parse(readFileSync(new URL("package.json", root), "utf8")) as { pi: { extensions: string[]; skills: string[] } };
+  assert.deepEqual(pkg.pi.extensions, ["./extension.ts"]);
+  assert.deepEqual(pkg.pi.skills, ["./skills"]);
+  assert.ok(existsSync(new URL("skills/cpd-lead/SKILL.md", root)));
+  assert.equal(existsSync(new URL("../skills/cpd-lead/SKILL.md", root)), false, "the old location is gone");
 });

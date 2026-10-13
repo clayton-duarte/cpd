@@ -74,18 +74,18 @@ test("workspaceForWorktree matches on canonical checkout path and repo; null whe
 });
 
 test("startAgent (Worker): exact argv; returns herdr's argv and session path", async () => {
-  const h = useFakeHerdr(ok({ type: "agent_started", agent: agent(), argv: ["pi", "--approve", "--model", "m/x:low"] }));
+  const h = useFakeHerdr(ok({ type: "agent_started", agent: agent(), argv: ["pi", "--approve", "--no-skills", "--exclude-tools", "ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox", "--model", "m/x:low"] }));
   const r = await startAgent({ name: "c3f9a0b1c2d4e", kind: "pi", pane: "w3:p2", timeoutMs: 60000, args: workerArgs("m/x:low") });
-  assert.deepEqual(r, { argv: ["pi", "--approve", "--model", "m/x:low"], sessionPath: "/s/session.jsonl" });
-  assert.deepEqual(h.calls(), [["agent", "start", "c3f9a0b1c2d4e", "--kind", "pi", "--pane", "w3:p2", "--timeout", "60000", "--", "--approve", "--model", "m/x:low"]]);
+  assert.deepEqual(r, { argv: ["pi", "--approve", "--no-skills", "--exclude-tools", "ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox", "--model", "m/x:low"], sessionPath: "/s/session.jsonl" });
+  assert.deepEqual(h.calls(), [["agent", "start", "c3f9a0b1c2d4e", "--kind", "pi", "--pane", "w3:p2", "--timeout", "60000", "--", "--approve", "--no-skills", "--exclude-tools", "ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox", "--model", "m/x:low"]]);
 });
 
 test("startAgent (Reviewer): fork, read-only tools; fresh mode drops --fork", async () => {
   const h = useFakeHerdr(ok({ type: "agent_started", agent: agent(), argv: ["pi"] }));
   await startAgent({ name: "cr1", kind: "pi", pane: "w1:p3", timeoutMs: 60000, args: reviewerArgs("/lead.jsonl", "m/x:high") });
-  assert.deepEqual(h.calls()[0]!.slice(10), ["--approve", "--fork", "/lead.jsonl", "--tools", "read,grep,find,ls", "--model", "m/x:high"]);
-  assert.deepEqual(reviewerArgs(null, "m/x:high"), ["--approve", "--tools", "read,grep,find,ls", "--model", "m/x:high"]);
-  assert.deepEqual(workerArgs("m/x:low"), ["--approve", "--model", "m/x:low"]);
+  assert.deepEqual(h.calls()[0]!.slice(10), ["--approve", "--no-skills", "--exclude-tools", "ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox", "--fork", "/lead.jsonl", "--tools", "read,grep,find,ls", "--model", "m/x:high"]);
+  assert.deepEqual(reviewerArgs(null, "m/x:high"), ["--approve", "--no-skills", "--exclude-tools", "ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox", "--tools", "read,grep,find,ls", "--model", "m/x:high"]);
+  assert.deepEqual(workerArgs("m/x:low"), ["--approve", "--no-skills", "--exclude-tools", "ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox", "--model", "m/x:low"]);
 });
 
 test("startAgent refuses bad names, control characters and bad timeouts before calling herdr", async () => {
