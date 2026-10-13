@@ -41,25 +41,28 @@ async function plan(wf: string, repo: string, opts: { lead: boolean }): Promise<
 
 const code = (c: string, exit: number) => (e: unknown) => e instanceof CpdError && e.code === c && e.exitCode === exit;
 
-test("plan lock: refuses without a Lead pane to split, without approval; with approval it locks, creates the Lead Branch worktree and starts `cpd watch` in a new pane", { timeout: 600_000 }, async () => {
+test("plan lock: refuses without approval and without a Lead pane to split from; with both it locks, creates the Lead Branch worktree and starts `cpd watch` in a new pane", { timeout: 600_000 }, async () => {
   const wf = "lock-a";
   const repo = await createRepo({ preStart: "true" });
   await plan(wf, repo, { lead: false });
 
-  // No Lead attached: refused before anything is locked.
-  await assert.rejects(planLock(wf, { watch: true }), code("lead_not_attached", 3));
-  assert.deepEqual([await getPhase(wf), (await listJobs(wf)).map((j) => j.status)], ["plan", ["draft"]]);
-
+  // Not approved: refused first, whether or not a Lead is attached; nothing changes, nothing is created, herdr is not called.
+  await assert.rejects(planLock(wf, { watch: true }), code("plan_not_approved", 3));
   await writeWorkflow(wf, { ...readWorkflow(wf), lead: LEAD });
-
-  // Not approved: nothing changes, nothing is created, herdr is not called.
   await assert.rejects(planLock(wf, { watch: true }), code("plan_not_approved", 3));
   assert.deepEqual([await getPhase(wf), (await listJobs(wf)).map((j) => j.status)], ["plan", ["draft"]]);
   assert.equal(await gitOut(repo, ["branch", "--list", `cpd/${wf}`]), "", "no Lead Branch");
   assert.equal(readWorkflow(wf).leadWorktree, null);
   assert.deepEqual(herdr.calls(), []);
 
+  // Approved but no Lead pane to split from: refused before anything is locked.
   await approvePlan(wf);
+  await writeWorkflow(wf, { ...readWorkflow(wf), lead: null });
+  await assert.rejects(planLock(wf, { watch: true }), code("lead_not_attached", 3));
+  assert.deepEqual([await getPhase(wf), (await listJobs(wf)).map((j) => j.status)], ["plan", ["draft"]]);
+  assert.deepEqual(herdr.calls(), []);
+
+  await writeWorkflow(wf, { ...readWorkflow(wf), lead: LEAD });
   const r = await planLock(wf, { watch: true });
 
   assert.deepEqual(Object.keys(r).sort(), ["leadBranch", "leadWorktree", "watchPane"]);

@@ -33,16 +33,22 @@ test("setup: a Workflow in phase plan with one draft Job and no Lead attached", 
   await addDraft(wf, "api");
 });
 
-test("without --no-watch the Lead pane is needed: lead_not_attached (exit 3); with --no-watch the same plan is refused for lack of approval instead", { timeout: 300_000 }, async () => {
-  const a = await cli(["plan", "lock", "--wf", wf]);
-  assert.deepEqual([a.code, a.json.error.code], [3, "lead_not_attached"]);
-  const b = await cli(["plan", "lock", "--wf", wf, "--no-watch"]);
-  assert.deepEqual([b.code, b.json.error.code], [3, "plan_not_approved"]);
+test("an unapproved plan is refused (exit 3) with or without --no-watch, and stays a draft", { timeout: 300_000 }, async () => {
+  for (const flags of [[], ["--no-watch"]]) {
+    const r = await cli(["plan", "lock", "--wf", wf, ...flags]);
+    assert.deepEqual([r.code, r.json.error.code], [3, "plan_not_approved"], flags.join(" "));
+  }
+  assert.deepEqual([await getPhase(wf), (await listJobs(wf)).map((j) => j.status)], ["plan", ["draft"]]);
+});
+
+test("approved, but without --no-watch the Lead pane is needed: lead_not_attached (exit 3), and nothing is locked", { timeout: 300_000 }, async () => {
+  await approvePlan(wf);
+  const r = await cli(["plan", "lock", "--wf", wf]);
+  assert.deepEqual([r.code, r.json.error.code], [3, "lead_not_attached"]);
   assert.deepEqual([await getPhase(wf), (await listJobs(wf)).map((j) => j.status)], ["plan", ["draft"]]);
 });
 
 test("--no-watch with an approved plan: {ok, leadBranch, leadWorktree, watchPane: null}, Jobs queued, herdr never called", { timeout: 300_000 }, async () => {
-  await approvePlan(wf);
   const r = await cli(["plan", "lock", "--wf", wf, "--no-watch"]);
   assert.equal(r.code, 0, r.stdout + r.stderr);
   assert.deepEqual(Object.keys(r.json).sort(), ["leadBranch", "leadWorktree", "ok", "watchPane"]);

@@ -301,6 +301,14 @@ export async function runLoop(d: WatchDeps, s: WatchState = newState()): Promise
 
 // --- real ports ---
 
+/** Events go to `logs/cpd.jsonl` (§2) and, for whoever is looking at the watch pane, to stderr. */
+function makeLog(wf: string): Log {
+  return (level, event, data) => {
+    logEvent(wf, level, event, data);
+    process.stderr.write(`${new Date().toISOString()} ${level} ${event}${data === undefined ? "" : ` ${JSON.stringify(data)}`}\n`);
+  };
+}
+
 const Slot = z.looseObject({ attempt: z.string(), pid: z.number().int().positive() });
 
 /** Whether the process that holds a slot for `attempt` is alive: the slot's pid is the `attempt run` that took it over (§9). */
@@ -410,7 +418,7 @@ async function pollInSubprocess(wf: string): Promise<{ ok: true } | { ok: false;
 /** The real ports for Workflow `wf`. Needs the pi catalog (for the Tier ladder), so it can fail at startup. */
 export async function realWatchDeps(wf: string, config: Config, identity: WatchIdentity): Promise<WatchDeps> {
   const dispatchDeps = await realDispatchDeps(wf);
-  const log: Log = (level, event, data) => logEvent(wf, level, event, data);
+  const log = makeLog(wf);
   const clock: Clock = { now: () => Date.now(), sleep: (ms) => sleep(ms) };
   const queue = { notify: (input: NotifyInput) => notifyLead(wf, input) };
   const ports: Omit<WatchDeps, "report"> = {
@@ -471,7 +479,7 @@ export async function runWatch(wf: string): Promise<Result> {
   const base: ReporterPorts = {
     wf,
     clock: { now: () => Date.now(), sleep: (ms) => sleep(ms) },
-    log: (level, event, data) => logEvent(wf, level, event, data),
+    log: makeLog(wf),
     queue: { notify: (input) => notifyLead(wf, input) },
   };
   let config: Config;

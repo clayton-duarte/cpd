@@ -2,7 +2,7 @@ import { createLeadBranch } from "../git/lead-branch.ts";
 import { assertNoControlChars } from "../herdr/herdr.ts";
 import { splitPane } from "../herdr/panes.ts";
 import { logEvent } from "../ledger/audit.ts";
-import { lockPlan } from "../ledger/plan.ts";
+import { latestApprovedFingerprint, lockPlan, planFingerprint } from "../ledger/plan.ts";
 import { getPhase, readWorkflow, writeWorkflow } from "../ledger/workflow.ts";
 import { loadConfig } from "../lib/config.ts";
 import { CpdError, failure, refused } from "../lib/errors.ts";
@@ -35,6 +35,12 @@ export async function runInPane(pane: string, command: string): Promise<void> {
   throw failure(code, message, { args: argv, code: r.code, stderr: r.stderr.slice(-2000) });
 }
 
+/** The approval check of `lockPlan` (same code and details), for when it has to be known before the Ledger is touched. */
+async function assertApproved(wf: string): Promise<void> {
+  const [current, approved] = [await planFingerprint(wf), await latestApprovedFingerprint(wf)];
+  if (approved !== current) throw refused("plan_not_approved", "the latest plan review is not an approval of the current plan", { current, approved });
+}
+
 /**
  * Lock the plan, create the Lead Branch worktree, record it as `leadWorktree`, and (unless `watch` is false) start
  * `cpd watch --wf <wf>` in a pane split from the Lead pane. Refusals (`plan_not_approved`, …) happen before anything is written.
@@ -44,10 +50,13 @@ export async function runInPane(pane: string, command: string): Promise<void> {
  */
 export async function planLock(wf: string, opts: { watch: boolean }): Promise<PlanLocked> {
   const before = readWorkflow(wf);
+  const phase = await getPhase(wf);
+  const resuming = before.leadWorktree === null && phase === "dispatch";
   if (opts.watch && before.lead === null) {
+    // Refuse before locking anything, but a plan that is not approved is the more basic refusal, so it is reported first.
+    if (phase === "plan") await assertApproved(wf);
     throw refused("lead_not_attached", `Workflow ${wf} has no attached Lead to split the watch pane from; run cpd lead attach, or pass --no-watch`, { wf });
   }
-  const resuming = before.leadWorktree === null && (await getPhase(wf)) === "dispatch";
   if (!resuming) await lockPlan(wf);
 
   const { path } = await createLeadBranch(before.repo, before.leadBranch, before.base);
@@ -57,9 +66,10 @@ export async function planLock(wf: string, opts: { watch: boolean }): Promise<Pl
 
   let watchPane: string | null = null;
   if (opts.watch) {
-    if (w.lead === null) throw failure("lead_detached", `Workflow ${wf} lost its Lead while locking`, { wf });
+    const lead = w.lead ?? before.lead;
+    if (lead === null) throw refused("lead_not_attached", `Workflow ${wf} has no attached Lead to split the watch pane from`, { wf });
     try {
-      watchPane = await splitPane(w.lead.paneId, { direction: "right", cwd: path, noFocus: true });
+      watchPane = await splitPane(lead.paneId, { direction: "right", cwd: path, noFocus: true });
       await runInPane(watchPane, `cpd watch --wf ${wf}`);
     } catch (e) {
       if (!(e instanceof CpdError)) throw e;
