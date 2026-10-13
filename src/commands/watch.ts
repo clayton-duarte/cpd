@@ -1,6 +1,8 @@
-import { failure } from "../lib/errors.ts";
+import { runWatch } from "../dispatch/watch.ts";
+import { parseCommand, resolveWorkflowId } from "../ledger/workflow.ts";
 import type { Result } from "../lib/output.ts";
 
-export async function run(_argv: string[]): Promise<Result> {
-  throw failure("not_implemented", "cpd watch is not implemented");
+export async function run(argv: string[]): Promise<Result> {
+  const { values } = parseCommand("watch", argv, { wf: { type: "string" } });
+  return runWatch(resolveWorkflowId(values.wf));
 }
