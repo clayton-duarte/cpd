@@ -16,6 +16,7 @@ Implement one Attempt end to end by composing the already-merged modules, so tha
   - The slot is acquired by `cpd watch` and passed in as `--slot <i>`. Release it on every exit path (`finally`).
 - `dispatch-one.ts`: `dispatchOne(wf, jobKey)` implements `cpd job dispatch`.
   - Order: slot (`slots.ts`), then `startAttempt` (CAS) at the Attempt Tier (`attemptTier`, or `retry_<n>_tier`), then a detached spawn of `cpd attempt run <attempt-id> --wf <wf> --slot <i>` (`detached: true`, stdio to `logs/attempt-<id>.log`, `unref`).
+  - Right after spawning, call `setSlotPid(i, attemptId, child.pid)` (`slots.ts`) so the slot's staleness follows the detached `attempt run` process, not the short-lived dispatcher.
   - Release the slot on any failure after acquiring it.
   - Export it: Job `watch` reuses it. Command `cpd job dispatch <k> --wf <wf>` per §11.
 - **Reviewer mode:** step 9 honours `config.reviewMode`: `fork` uses `reviewerArgs` from `herdr`; `fresh` uses the same args without `--fork <session>`.

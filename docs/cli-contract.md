@@ -169,7 +169,7 @@ Slots are `slots/slot-0.json` … `slot-<concurrency-1>.json`, each created excl
 ### Setup and diagnostics
 - `cpd doctor`: `{ok, checks: [{name, ok, found?, expected?, message?}]}`; exit 1 if any check fails. Checks:
   - node ≥ 22.18 with type stripping;
-  - `bd` 1.3.1, `wt` 0.80.0, `herdr` 0.9.3, pi 1.1.0, `gh` present;
+  - `bd` 1.3.1, `wt` 0.80.0, `herdr` 0.9.3 (exact), pi `>=1.1.0 <2.0.0` (pi updates itself; 1.2.0 was installed during Stage 2), `gh` present;
   - config valid;
   - every Tier letter resolvable.
 - `cpd tiers`: `{ok, tiers: {O: {model, efforts: [..]}, S: …, H: …}}`.

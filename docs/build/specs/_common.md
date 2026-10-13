@@ -30,7 +30,11 @@ You are a Worker in **CPD**, executing one **Attempt** of one **Job** to build t
   - Never run commands against the User's default herdr session. If your Spec needs herdr, use only `herdr --session cpd-test …`; the session server may need starting with `herdr --session cpd-test server &`, and you must not stop it.
   - Never `pi install`, `brew install` or `npm install -g`.
   - Never touch `~/.cpd`, `~/.pi/agent` (other than pi's own session files), `~/.config` or the dotfiles, unless your Spec says so.
-- **Tools available:** node 22.22, npm, git 2.50, `wt` 0.80.0, `bd` 1.3.1, `herdr` 0.9.3, `gh` (read-only use), `jq`, `sqlite3`, `python3` 3.9, pi 1.1.0.
+- **Tools available:** node 22.22, npm, git 2.50, `wt` 0.80.0, `bd` 1.3.1, `herdr` 0.9.3, `gh` (read-only use), `jq`, `sqlite3`, `python3` 3.9, pi 1.2.0 (the trials ran on 1.1.0; if pi behaviour differs from a trial report, trust what you observe and report the difference).
+- **Already merged helpers to reuse:**
+  - `test/cli.test.ts` skips the `not_implemented` check for any command whose file no longer contains `not_implemented`, so do not edit it.
+  - Tiers: `nextTier`/`attemptTier` return a parsed Tier or `null`; call `formatTier()` before storing or printing one.
+  - Slots: `slots.ts` has `setSlotPid(index, attempt, pid)` to hand a slot to the process that will release it.
 
 ## Report
 
