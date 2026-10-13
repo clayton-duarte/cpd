@@ -81,11 +81,12 @@ Strict schema: unknown keys are rejected, and a missing file is error `config_mi
   "tiers": { "O": "github-copilot/claude-opus-5.5", "S": "github-copilot/claude-sonnet-5.5", "H": "github-copilot/claude-haiku-4.5" },
   "leadTier": "O3",
   "defaultReviewTier": "S4",
+  "reviewMode": "fork",
   "leadPiPackages": ["npm:@plannotator/pi-extension@0.28.17", "npm:@juicesharp/rpiv-ask-user-question@2.13.8"]
 }
 ```
 
-`herdrSession: null` means herdr's default session (no `--session` flag); a string adds `--session <name>` to every herdr call.
+`herdrSession: null` means herdr's default session (no `--session` flag); a string adds `--session <name>` to every herdr call. `reviewMode` is `fork` (Reviewer forks the Lead session; the default, per ADR-0002) or `fresh` (a new read-only session with no Lead conversation; for very long Lead sessions where forking costs too much).
 
 ## 6. `workflow.json`
 
@@ -202,6 +203,12 @@ Slots are `slots/slot-0.json` … `slot-<concurrency-1>.json`, each created excl
   - With a running Attempt, `job cancel` writes write-once metadata `cancel_requested`. `cpd watch` then, within one tick, closes the Attempt's herdr panes, keeps its worktree, closes the Attempt with outcome `cancelled` and sets the Job `cancelled`.
   - Dependents stay blocked.
 - `cpd job retry <k> --tier <T>`: only a `failed` Job. Records metadata `retry_<n>_tier` (write-once) and sets status `queued`.
+- `cpd job dispatch <k>`: start one ready Job now, the same step `cpd watch` runs for each ready Job.
+  - Acquire a slot, else `no_slot` (exit 3).
+  - Start the Attempt with compare-and-swap at its Tier (§7, or `retry_<n>_tier`), else `cas_lost` or `job_not_ready` (exit 3).
+  - Spawn `cpd attempt run <attempt-id> --wf <wf> --slot <i>` detached, logging to `logs/attempt-<id>.log`.
+  - Returns `{ok, attempt, slot, pid}`.
+  - Lets a Lead (or a bootstrap operator) dispatch by hand before or without `cpd watch`.
 
 ### Plan
 - `cpd plan render [--out <file>]`: Markdown for review.
@@ -227,9 +234,9 @@ Slots are `slots/slot-0.json` … `slot-<concurrency-1>.json`, each created excl
      - if its Worker agent is gone (`herdr agent get` not found) while `attempt run` is not alive, mark it crashed;
      - if active time exceeds `attemptTimeoutMinutes`, close its Worker pane and set `metadata.timed_out=true`. Active time = elapsed minus time with an open Escalation;
      - if its Job has `cancel_requested`, stop it as described under `cpd job cancel`.
-  3. **Scheduling:** for each ready Job, in creation order and while a slot is free: acquire a slot, start the Attempt in the Ledger (compare-and-swap `queued → running`, create the Attempt issue at the ladder Tier), and spawn detached `cpd attempt run <attempt-id> --wf <wf>`, logging to `logs/attempt-<id>.log`.
+  3. **Scheduling:** for each ready Job, in creation order and while a slot is free, run the `job dispatch` step (same function).
   4. **Completion:** when no Job is `queued`, `running` or `in_review` and at least one is Merged, send `all-merged` once.
-  5. **PR:** in phase `pr`, run `cpd pr poll` every `prPollSeconds`.
+  5. **PR:** in phase `pr`, run `cpd pr poll --wf <wf>` as a subprocess every `prPollSeconds` (a process boundary, so `watch` does not depend on the PR module).
   6. **Exit:** when the phase becomes `done`.
 - `cpd attempt run <attempt-id>`: the lifecycle in §12. Exit 0 when the Attempt reaches a terminal state.
 - `cpd attempt submit <attempt-id>`: called by the Worker. Preconditions, each refusing with exit 3 and a code the Worker can act on:
@@ -291,6 +298,7 @@ Recipes: trial t3 (worktrunk), t1 (herdr and pi), t4/t5 (queue delivery). Every 
 9. **Review:**
    - Write `reviews/<attempt-id>.diff` (`git diff cpd/<wf>...<branch>`), `.gate.txt` (gate output from submit) and the brief (template `templates/reviewer.md`) to `reviews/<attempt-id>.md`.
    - Split a pane from the Lead pane (`--no-focus`, cwd = Lead's cwd) and run `herdr agent start <rname> --kind pi --pane <p> --timeout 60000 -- --approve --fork <lead sessionPath> --tools read,grep,find,ls --model <reviewTier model:level>`.
+   - With `reviewMode: "fresh"`, drop `--fork <lead sessionPath>`. The brief then also points to the rendered plan (`<wf>/plan.md`) for the Workflow's context.
    - Prompt it to read the brief (`--wait`).
    - Parse the verdict from the **last assistant message** of the Reviewer's session: one fenced `json` block `{"verdict":"approve"|"reject","feedback":string}`.
    - If it is missing or invalid, re-prompt once. Still invalid: `review-needed`, and the Attempt waits for `cpd review decide`.
