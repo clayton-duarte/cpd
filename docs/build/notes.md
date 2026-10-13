@@ -8,8 +8,12 @@ Running record of Attempt outcomes, Lead decisions and proposed changes. Reports
 |---|---|---|---|
 | scaffold-a1 | S2 | rejected | Command lookup fell through to `Object.prototype` keys (`cpd constructor` gave exit 1 instead of 2); a single argv word `"job add"` matched. Correctly flagged the Spec's command count as wrong (29, not 30). |
 | scaffold-a2 | S3 | approved, merged (`95f0ada`) | Started from a1's commit (cherry-pick) per feedback; fixed all points. Post-merge Gate on `cpd/v0` passed (50 tests). |
+| config-tiers-a1 | S3 | approved, merged | All acceptance items met. Found pi had updated itself to **1.2.0** mid-session; `doctor` accepts `>=1.1.0 <2.0.0` (contract amended). Added `setSlotPid` (adopted into the `attempt-run` Spec). Had to edit `test/cli.test.ts` (scaffold-owned) so implemented commands skip the stub test; fixed for all later Jobs. |
+| metrics-a1 | S2 | approved, merged | Totals checked against jq. Post-merge Gate on `cpd/v0`: 108 tests pass. |
 
-## Lead errors
+## Lead errors and process fixes
+
+- Specs live on `main`, while Attempt worktrees branch from `cpd/v0`. After Spec updates on `main`, the Lead Branch had stale docs. Fix: rebase `cpd/v0` onto `main` between batches (`wt step rebase main`, clean because `main` only changes `docs/`). In `cpd` proper this does not arise, because Specs are rendered from the Ledger into the Workflow state dir.
 
 - `scaffold` Spec said "30 commands"; the contract lists 29. The Worker followed the contract and reported it under Deviations, which is the intended behaviour.
 
