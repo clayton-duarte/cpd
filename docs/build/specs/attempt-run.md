@@ -13,6 +13,7 @@ Implement one Attempt end to end by composing the already-merged modules, so tha
   - Decision table for step 7. "Not submitted" must be decided from the Ledger (`submitted_at`) plus the session's last `stopReason` plus `agentGet`, never from herdr idle alone.
   - Step 8 uses `attemptTier`/`nextTier` (`config-tiers`) and `retryCap`.
   - Step 11 maps every `mergeAttempt` result to the §12 handling.
+  - **Merge lock waits (found in Stage 2):** `mergeAttempt` holds the per-repo merge lock across two Gate runs (the rebase pre-merge Gate and the post-merge Gate), and a Gate on this repo takes 8–20 minutes. `withLock` gives up after 60 s with `lock_timeout` (exit 5). Treat `lock_timeout` from `mergeAttempt` as "another merge is running": log it and retry until 90 minutes have passed in total, then fail as `job-failed` with cause `merge_lock_timeout`. Never treat it as a merge result.
   - The slot is acquired by `cpd watch` and passed in as `--slot <i>`. Release it on every exit path (`finally`).
 - `dispatch-one.ts`: `dispatchOne(wf, jobKey)` implements `cpd job dispatch`.
   - Order: slot (`slots.ts`), then `startAttempt` (CAS) at the Attempt Tier (`attemptTier`, or `retry_<n>_tier`), then a detached spawn of `cpd attempt run <attempt-id> --wf <wf> --slot <i>` (`detached: true`, stdio to `logs/attempt-<id>.log`, `unref`).
@@ -46,6 +47,11 @@ Implement one Attempt end to end by composing the already-merged modules, so tha
 3. `parseVerdict` table tests: valid approve, valid reject, missing block, malformed JSON, extra text after the block.
 4. `attempt submit` integration with real git + wt fixture repos (from `git-wt` test fixtures): each refusal code reproduced, then success. The Ledger part may be faked.
 5. `CPD_IT=1` integration (`herdr --session cpd-test`, toy repo, real `bd`, Worker and Reviewer `github-copilot/claude-haiku-4.5:low`, Lead session = any small pi session file you create for the fork): one Attempt runs to Merged. Report the transcript and metrics.
+
+## Lead notes from Stage 2 (facts, not new scope)
+- `templates-render` reads the Attempt's `tier` and `worktree` from the Ledger when rendering the Worker Spec, so record the worktree (step 2) before rendering (step 3); `renderWorkerSpec` fails with `template_missing_value` otherwise.
+- The Worker template tells the Worker to run `cpd attempt submit <id> --wf <wf>` and `cpd ask … --wf <wf>` from `PATH`.
+- Tests that spawn a blocking `cpd ask`, or any child that can block, must give it a short timeout and kill it in `t.after` (a leaked `cpd ask` child hung three Gates for up to 43 minutes; see Job `fix-ask-flake`).
 
 ## Out of scope
 Scheduling and timeouts (Job `watch`); the Lead skill.
