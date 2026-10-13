@@ -1,0 +1,7 @@
+# Job `herdr`, Attempt 2: Reviewer feedback on Attempt 1 (rejected)
+
+Attempt 1 (branch `cpd/v0--herdr-a1`, commits `ba9efa3 50bb777`, report `/tmp/cpd-build/reports/herdr-a1.md`) is correct except for the finding below. **Start from it:** `git cherry-pick ba9efa3 50bb777` (oldest first) in your new worktree. Fix only what the Reviewer asks, keep everything else as is, and keep the Gate green.
+
+## Reviewer feedback (verbatim)
+
+Everything else meets the Spec (Gate exit=0, only Spec-owned files, acceptance items 1-5 covered, contract followed). One defect to fix. src/commands/lead-attach.ts calls withLock(ledgerLockPath(wf), ...) before checking the workflow exists, and withLock (src/lib/lock.ts) does mkdirSync(dirname(path), {recursive:true}). So `cpd lead attach --wf <well-formed-but-unknown id>` returns workflow_not_found (exit 4) but leaves $CPD_HOME/workflows/<wf>/locks/ behind, a half-created workflow dir that can confuse a later `workflow init` or `workflow show`. Fix: in lead-attach.ts, before taking the lock, check that workflowJsonPath(wf) exists (existsSync) and throw notFound('workflow_not_found', ...) (exit 4) if it does not; keep the read and validation inside the lock for the read-modify-write. Add to test/commands/lead-attach.test.ts, in the unknown-workflow refusal case, an assertion that join(home, 'workflows', 'nope-1') does not exist after the run. Change nothing else; keep the Gate green.
