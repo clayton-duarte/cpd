@@ -135,7 +135,7 @@ test("CPD_IT: one Attempt runs to Merged (real herdr cpd-test, real pi haiku:low
   const merged = (await getJobByKey(WF, "hello")).metadata.merged_sha;
   assert.equal(merged, await gitOut(leadWorktree, ["rev-parse", `cpd/${WF}`]));
   assert.equal(readFileSync(join(leadWorktree, "hello.txt"), "utf8"), "hello\n");
-  assert.deepEqual(a.metadata.argv, ["pi", "--approve", "--model", "github-copilot/claude-haiku-4.5:low"]);
+  assert.deepEqual(a.metadata.argv, ["pi", "--approve", "--no-skills", "--exclude-tools", "ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox", "--model", "github-copilot/claude-haiku-4.5:low"]);
   for (const k of ["metrics_turns", "metrics_tokens_in", "metrics_tokens_out", "metrics_cost_usd", "metrics_duration_s", "review_metrics_turns", "review_metrics_cost_usd"]) {
     assert.equal(typeof a.metadata[k], "number", k);
   }

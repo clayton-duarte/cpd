@@ -42,7 +42,7 @@ test("real herdr: split, start a Worker at haiku:low, prompt it to create a file
     assert.equal(await agentGet(name), null);
 
     const started = await startAgent({ name, kind: "pi", pane, timeoutMs: 60_000, args: workerArgs("github-copilot/claude-haiku-4.5:low") });
-    assert.deepEqual(started.argv, ["pi", "--approve", "--model", "github-copilot/claude-haiku-4.5:low"]);
+    assert.deepEqual(started.argv, ["pi", "--approve", "--no-skills", "--exclude-tools", "ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox", "--model", "github-copilot/claude-haiku-4.5:low"]);
     assert.equal(existsSync(started.sessionPath), false, "the session file appears only with the first message (t1 F10)");
     assert.equal((await agentGet(name))?.pane_id, pane);
     assert.equal((await paneGet(pane)).agent_session?.value, started.sessionPath);

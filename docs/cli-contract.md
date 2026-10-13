@@ -285,7 +285,7 @@ Recipes: trial t3 (worktrunk), t1 (herdr and pi), t4/t5 (queue delivery). Every 
    - Then outcome `failed`, cause `setup_failed`: the Job becomes `failed` with message `job-failed`, and the ladder is not used.
 3. **Spec:** render the Worker Spec (template `templates/worker.md`) to `specs/<attempt-id>.md`. For n > 1 it includes the previous Attempts' outcomes and feedback.
 4. **Placement:** `herdr worktree open --cwd <repo> --path <worktree> --label "<wf> <job> a<n>" --no-focus`; the root pane comes from `herdr pane list --workspace <id>`.
-5. **Start the Worker:** `herdr agent start <name> --kind pi --pane <pane> --timeout 60000 -- --approve --model <model:level>`. Record `.result.argv`, `agent_session.value` and the agent name in Attempt metadata, plus provenance `cut`.
+5. **Start the Worker:** `herdr agent start <name> --kind pi --pane <pane> --timeout 60000 -- --approve --no-skills --exclude-tools ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox --model <model:level>`. Record `.result.argv`, `agent_session.value` and the agent name in Attempt metadata, plus provenance `cut`.
 6. **Prompt:** `herdr agent prompt <name> "Read <spec path> and follow it exactly. Your attempt id is <attempt-id>." --wait`, with no herdr timeout (`cpd watch` enforces the Attempt timeout).
 7. **Decide what happened.** Never trust herdr idle alone (t1 F7).
    - **Submitted:** go to 9.
@@ -298,7 +298,7 @@ Recipes: trial t3 (worktrunk), t1 (herdr and pi), t4/t5 (queue delivery). Every 
    - Collect metrics (§14) in both cases, then release the slot.
 9. **Review:**
    - Write `reviews/<attempt-id>.diff` (`git diff cpd/<wf>...<branch>`), `.gate.txt` (gate output from submit) and the brief (template `templates/reviewer.md`) to `reviews/<attempt-id>.md`.
-   - Split a pane from the Lead pane (`--no-focus`, cwd = Lead's cwd) and run `herdr agent start <rname> --kind pi --pane <p> --timeout 60000 -- --approve --fork <lead sessionPath> --tools read,grep,find,ls --model <reviewTier model:level>`.
+   - Split a pane from the Lead pane (`--no-focus`, cwd = Lead's cwd) and run `herdr agent start <rname> --kind pi --pane <p> --timeout 60000 -- --approve --no-skills --exclude-tools ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox --fork <lead sessionPath> --tools read,grep,find,ls --model <reviewTier model:level>`.
    - With `reviewMode: "fresh"`, drop `--fork <lead sessionPath>`. The brief then also points to the rendered plan (`<wf>/plan.md`) for the Workflow's context.
    - Prompt it to read the brief (`--wait`).
    - Parse the verdict from the **last assistant message** of the Reviewer's session: one fenced `json` block `{"verdict":"approve"|"reject","feedback":string}`.
@@ -332,7 +332,7 @@ Recorded once per Attempt (write-once keys). Reviewer metrics are recorded on th
 
 ## 15. pi adapter (`pi/` package, the v0 Lead adapter)
 
-- **Package:** `pi/package.json` with `"keywords": ["pi-package"]` and `"pi": {"extensions": ["./extension.ts"]}`. Host packages are `peerDependencies: "*"`.
+- **Package:** `pi/package.json` with `"keywords": ["pi-package"]` and `"pi": {"extensions": ["./extension.ts"], "skills": ["./skills"]}`. Host packages are `peerDependencies: "*"`.
 - **Activation:** only in TUI mode with `HERDR_ENV=1`.
 - **Queue:**
   - At `session_start`, the queue dir is `$CPD_HOME/leads/<sessionId>/queue` (sessionId = pi's session id). Create it, drain it, then `fs.watch` it. Close the watcher on `session_shutdown`.
