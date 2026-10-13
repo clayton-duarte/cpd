@@ -1,6 +1,8 @@
-import { failure } from "../lib/errors.ts";
+import { parseCommand, resolveWorkflowId } from "../ledger/workflow.ts";
 import type { Result } from "../lib/output.ts";
+import { openPr } from "../pr/open.ts";
 
-export async function run(_argv: string[]): Promise<Result> {
-  throw failure("not_implemented", "cpd pr open is not implemented");
+export async function run(argv: string[]): Promise<Result> {
+  const { values } = parseCommand("pr open", argv, { wf: { type: "string" } });
+  return { ok: true, pr: await openPr(resolveWorkflowId(values.wf)) };
 }
