@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   CPD_ENTRY,
@@ -19,9 +19,8 @@ import { attemptLogPath, slotPath } from "../../src/lib/paths.ts";
 import { acquireSlot } from "../../src/lib/slots.ts";
 import { locatePi } from "../../src/lib/pi-install.ts";
 import { formatTier } from "../../src/lib/tiers.ts";
-import { sandboxEnv, tmpDir } from "../helpers/index.ts";
+import { sandboxEnv } from "../helpers/index.ts";
 import { CATALOG } from "./fakes.ts";
-import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 const env = sandboxEnv();

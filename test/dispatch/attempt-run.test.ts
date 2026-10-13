@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { decideReview, runAttempt, observeWorker, type RunResult } from "../../src/dispatch/attempt-run.ts";
+import { CRASH_SETTLE_MS, decideReview, runAttempt, observeWorker, type RunResult } from "../../src/dispatch/attempt-run.ts";
 import type { MergeOutcome } from "../../src/git/merge.ts";
 import { CpdError, failure } from "../../src/lib/errors.ts";
 import { reviewDiffPath } from "../../src/lib/paths.ts";
@@ -156,6 +156,34 @@ test("crash with the agent still listed but the last stopReason not `stop` → c
   assert.equal(r.state, "retry_queued");
   assert.equal(w.ledger.at(-1), "fail crashed requeue=true");
   assert.equal(w.prompts.length, 1, "a crashed Worker is not nudged");
+});
+
+test("a vanished Worker is looked at twice: watch closes the pane first and records timed_out a moment later → timed_out, not crashed", async () => {
+  const { w, r } = await go({ worker: ["crash"], onSleep: (w) => void (w.state.metadata.timed_out = true) });
+  assert.deepEqual(r, { state: "job_failed", cause: "timed_out" });
+  assert.ok(w.events.includes(`clock.sleep ${CRASH_SETTLE_MS}`));
+  assert.equal(w.ledger.at(-1), "fail timed_out requeue=false");
+});
+
+test("the same for a cancel: the Attempt closed by watch during the settle is left alone", async () => {
+  const { w, r } = await go({
+    worker: ["crash"],
+    onSleep: (w) => {
+      w.state.status = "closed";
+      w.state.jobStatus = "cancelled";
+      w.state.outcome = "cancelled";
+    },
+  });
+  assert.deepEqual(r, { state: "closed_externally", outcome: "cancelled" });
+  assert.equal(w.ledger.some((l) => l.startsWith("fail")), false);
+  assert.deepEqual(w.messages, []);
+});
+
+test("a Worker that is still gone after the settle is crashed (the wait happens once)", async () => {
+  const { w, r } = await go({ worker: ["crash"] });
+  assert.equal(r.state, "retry_queued");
+  assert.equal(w.events.filter((e) => e.startsWith("clock.sleep")).length, 1);
+  assert.deepEqual(w.events.filter((e) => e.startsWith("clock.sleep")), [`clock.sleep ${CRASH_SETTLE_MS}`]);
 });
 
 test("no submit after the nudge → ladder (one nudge, naming the submit command)", async () => {

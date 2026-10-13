@@ -49,8 +49,10 @@ export type Script = {
   mergeLockWaitMs?: number;
   /** Make a port throw an unexpected (non-Cpd) error. */
   renderThrows?: boolean;
-  /** Close (not delete) the Worker pane on `closePane` failing. */
+  /** `closePane` fails with herdr_pane_not_found. */
   closePaneFails?: boolean;
+  /** Run when the lifecycle sleeps (what `cpd watch` does a moment after closing a pane). */
+  onSleep?: (w: World) => void;
 };
 
 export const verdictText = (verdict: "approve" | "reject", feedback = "looks fine"): string =>
@@ -338,7 +340,14 @@ export function makeWorld(script: Script = {}): World {
         return `/reviews/${id}.md`;
       },
     },
-    clock: { now: () => clock.t },
+    clock: {
+      now: () => clock.t,
+      async sleep(ms) {
+        clock.advance(ms);
+        ev(`clock.sleep ${ms}`);
+        script.onSleep?.(w);
+      },
+    },
     slot: {
       async release() {
         w.slotReleases++;

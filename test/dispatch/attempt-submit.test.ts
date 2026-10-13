@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { SUBMIT_NEXT, submitAttempt, type SubmitDeps } from "../../src/dispatch/attempt-submit.ts";
 import { CpdError } from "../../src/lib/errors.ts";
 import { reviewGatePath } from "../../src/lib/paths.ts";
-import { commitFile, createFixture, git, head, makeAttempt, sandbox, write, type Fixture } from "../git/fixtures.ts";
+import { commitFile, createFixture, git, head, makeAttempt, sandbox, type Fixture } from "../git/fixtures.ts";
 
 // Real git and wt in temp repos; only the Ledger is faked.
 sandbox();

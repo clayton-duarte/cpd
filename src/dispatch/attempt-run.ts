@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, appendFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { setTimeout as sleep } from "node:timers/promises";
 import { join } from "node:path";
 import { createAttemptWorktree, removeAttemptWorktree } from "../git/attempt-worktree.ts";
 import { git } from "../git/git.ts";
@@ -82,7 +83,7 @@ export type RenderPort = {
   workerSpec(): Promise<string>;
   reviewBrief(inputs: ReviewInputs): Promise<string>;
 };
-export type Clock = { now(): number };
+export type Clock = { now(): number; sleep(ms: number): Promise<void> };
 
 export type Deps = {
   wf: string;
@@ -113,6 +114,11 @@ export type RunResult =
 
 /** §12 step 11 (Stage 2 note): `lock_timeout` from `mergeAttempt` means another merge is running; give up after this long in total. */
 export const MERGE_LOCK_WAIT_MS = 90 * 60_000;
+/**
+ * `cpd watch` closes a Worker's pane for a timeout or a cancel and records why a moment later, so a vanished Worker is
+ * looked at twice, this far apart, before it is called crashed.
+ */
+export const CRASH_SETTLE_MS = 5_000;
 /** `herdr agent start` readiness timeout (§12 steps 5 and 9). */
 const START_TIMEOUT_MS = 60_000;
 const FEEDBACK_IN_MESSAGE = 600;
@@ -306,6 +312,11 @@ async function decide(d: Deps, name: string): Promise<RunResult | "submitted"> {
   d.log("7 decide", "observing the Worker");
   let o = await observeWorker(d, name);
   d.log("7 decide", `first observation: ${o.kind}`, o);
+  if (o.kind === "crashed") {
+    await d.clock.sleep(CRASH_SETTLE_MS);
+    o = await observeWorker(d, name);
+    d.log("7 decide", `observation after ${CRASH_SETTLE_MS} ms: ${o.kind}`, o);
+  }
   if (o.kind === "idle") {
     await prompt(
       d,
@@ -719,7 +730,7 @@ export async function realDeps(wf: string, attemptId: string, slot: number | nul
       workerSpec: () => renderWorkerSpec(wf, attemptId),
       reviewBrief: (inputs) => renderReviewBrief(wf, attemptId, inputs),
     },
-    clock: { now: () => Date.now() },
+    clock: { now: () => Date.now(), sleep: (ms) => sleep(ms) },
     slot: slot === null ? null : { release: () => releaseSlot(slot, attemptId) },
     log: attemptLogger(wf, attemptId),
   };
