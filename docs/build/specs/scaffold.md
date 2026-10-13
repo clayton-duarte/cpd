@@ -23,7 +23,7 @@ Create the TypeScript project skeleton so every later Job only adds its own file
 - `bin/cpd.mjs`: `#!/usr/bin/env node`, imports `../src/cli.ts` and calls `main(process.argv.slice(2))`. Executable. Must work when invoked through a symlink.
 - `src/cli.ts`:
   - Parses `<group> <command>` or a single-word command.
-  - Dispatches with an explicit static table (no auto-discovery) to `src/commands/<group>-<command>.ts` or `src/commands/<command>.ts`, exactly as named in contract §1, for **every** command in §11: `doctor`, `tiers`, `lead start|attach`, `workflow init|show|phase`, `job add|edit|list|show|cancel|retry`, `plan render|decision|lock`, `watch`, `attempt run|submit|read|list|show`, `review decide`, `ask`, `answer`, `pr open|poll|rebase`.
+  - Dispatches with an explicit static table (no auto-discovery) to `src/commands/<group>-<command>.ts` or `src/commands/<command>.ts`, exactly as named in contract §1, for **every** command in §11: `doctor`, `tiers`, `lead start|attach`, `workflow init|show|phase`, `job add|edit|list|show|cancel|retry|dispatch`, `plan render|decision|lock`, `watch`, `attempt run|submit|read|list|show`, `review decide`, `ask`, `answer`, `pr open|poll|rebase`.
   - `cpd --help` prints the command list as JSON `{ok:true, commands:[...]}`.
   - Unknown command → exit 2 `unknown_command`. `cpd --version` → `{ok:true, version}`.
 - `src/commands/*.ts` stubs: each exports `run(argv)`, which returns an error `not_implemented` (exit 1) naming the command.
@@ -39,7 +39,7 @@ Create the TypeScript project skeleton so every later Job only adds its own file
 ## Acceptance
 1. `./verify.sh` passes on a fresh clone after `npm ci`.
 2. `test/cli.test.ts`:
-   - `--help` lists all 29 commands;
+   - `--help` lists all 30 commands;
    - each stub returns exit 1 with `error.code === "not_implemented"`;
    - an unknown command exits 2;
    - `--version` works;

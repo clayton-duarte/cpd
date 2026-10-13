@@ -6,7 +6,7 @@ Tier S2 · Needs: `config-tiers` · Read `_common.md` first, but this Job works 
 Make `cpd` and its machine config travel to both Macs the way the rest of the setup does.
 
 ## Facts
-- cpd repo remote: **`{{CPD_REMOTE}}`** (decided by the User before lock).
+- cpd repo remote: **`https://github.com/clayton-duarte/cpd.git`** (private).
 - Local clone path: `~/projects/cpd`.
 - Entry point: `bin/cpd.mjs` (Node 22, `npm ci` installs deps).
 - Config schema: `docs/cli-contract.md` §5 in the cpd repo.
@@ -17,7 +17,7 @@ Make `cpd` and its machine config travel to both Macs the way the rest of the se
 - `home/.chezmoidata/machines.yaml`: add `cpd` to `modules` and `cpd: {concurrency: N}` for the two Macs.
 - `home/dot_cpd/config.json.tmpl` → `~/.cpd/config.json`, rendered with the machine's concurrency, gated on the `cpd` module.
 - `home/.chezmoiscripts/run_onchange_after_75-cpd.sh.tmpl`:
-  - if `~/projects/cpd` is absent, `git clone {{CPD_REMOTE}} ~/projects/cpd`; otherwise leave it alone (never pull, reset or checkout, per the dotfiles rule for tool repos);
+  - if `~/projects/cpd` is absent, `git clone https://github.com/clayton-duarte/cpd.git ~/projects/cpd`; otherwise leave it alone (never pull, reset or checkout, per the dotfiles rule for tool repos);
   - then `npm ci` in it when `node_modules` is missing or `package-lock.json` changed (record a checksum marker);
   - then link `~/.local/bin/cpd` → `~/projects/cpd/bin/cpd.mjs`.
   - Gated on the `cpd` module. Check `~/.local/bin` is on `PATH` in the managed shell config, and say where.

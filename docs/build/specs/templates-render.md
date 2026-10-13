@@ -29,6 +29,7 @@ Turn Ledger data into the three documents agents and the User read:
   - you are a read-only Reviewer and cannot change files;
   - the inputs: the Spec as given to the Worker, the diff file path, the Gate output file path, and the worktree path to read full files;
   - the rubric: approve only if every acceptance item is met; no changes outside the Spec; touched files fit "files you may touch"; no obvious defects or missing tests the acceptance implies;
+  - when `reviewMode` is `fresh` (contract §5, §12 step 9), an extra section pointing to the rendered plan `<wf>/plan.md` for Workflow context (the Reviewer has no Lead conversation);
   - end with exactly one fenced `json` block `{"verdict": "approve" | "reject", "feedback": "<specific, actionable>"}` as the last thing in the message.
 - `spec.ts`: `renderWorkerSpec(wf, attemptId)` reads the Job, Attempts and feedback from the Ledger (via `ledger-core` and, if present in your base, `ledger-attempts`) and writes the file, returning its path.
 - `review.ts`: `renderReviewBrief(wf, attemptId, {diffPath, gatePath, worktree})`.

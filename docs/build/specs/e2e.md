@@ -11,7 +11,7 @@ Prove `cpd` v0 works as a whole on a real herdr session with real pi agents, fin
 ## Setup
 - herdr session `cpd-test` only. `CPD_HOME=/tmp/cpd-build/e2e/home`, with a config per contract §5 except:
   - `concurrency: 2`, `attemptTimeoutMinutes: 2`, `herdrSession: "cpd-test"`;
-  - `leadTier: "H2"`, `defaultReviewTier: "H2"`;
+  - `leadTier: "H2"`, `defaultReviewTier: "H2"`, `reviewMode: "fork"` (this run exercises the fork path);
   - `tiers` unchanged.
 
   All Jobs in the toy plan use Tier `H1`.
