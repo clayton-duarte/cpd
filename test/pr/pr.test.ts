@@ -88,6 +88,10 @@ test("pr poll sequence: nothing, one pr-feedback, nothing again, then merged", a
   assert.equal(rest.length, 0);
   assert.equal(m.kind, "pr-feedback");
   assert.deepEqual(m.data.checks, [{ type: "check", name: "build", conclusion: "FAILURE" }]);
+  for (const part of ["build", "FAILURE", "src/a.ts", "3", "rev", "rename this", "src/b.ts"]) assert.ok(m.text.includes(part), `text lacks ${part}: ${m.text}`);
+  assert.ok(!m.text.includes("x".repeat(400)), "text excerpts are short");
+  assert.match(m.text, /cpd job add --wf poll-seq .*$/);
+  assert.ok(m.text.split("\n").at(-1).startsWith("Turn what needs work into Jobs: cpd job add --wf poll-seq "), "text ends with the command");
   assert.deepEqual(m.data.reviews, []);
   assert.deepEqual(m.data.comments, [
     { type: "comment", id: "11", author: "rev", path: "src/a.ts", line: 3, body: "rename this" },

@@ -60,9 +60,35 @@ export function diffPr(prev: PrState | null, number: number, view: PrView, inlin
   };
 }
 
-function feedbackText(number: number, changes: Change[]): string {
-  const n = (t: Change["type"]) => changes.filter((c) => c.type === t).length;
-  return `PR #${number} has new feedback: ${n("check")} failing check(s), ${n("review")} review(s), ${n("comment")} comment(s).`;
+const EXCERPT_MAX = 300;
+const LISTED_MAX = 20;
+
+const excerpt = (s: string): string => {
+  const one = s.replace(/\s+/g, " ").trim();
+  return one.length > EXCERPT_MAX ? `${one.slice(0, EXCERPT_MAX)}…` : one;
+};
+
+function describe(c: Change): string {
+  switch (c.type) {
+    case "check":
+      return `check ${c.name}: ${c.conclusion}`;
+    case "review":
+      return `review ${c.id} by ${c.author ?? "unknown"} (${c.state}): ${excerpt(c.body)}`;
+    case "comment":
+      return `comment ${c.id} by ${c.author ?? "unknown"} at ${c.path ?? "(conversation)"}${c.line === null ? "" : `:${c.line}`}: ${excerpt(c.body)}`;
+  }
+}
+
+/** Every change as one line (the Lead sees only `text`), capped at LISTED_MAX lines; `data` always carries all of them in full. */
+export function feedbackText(wf: string, number: number, changes: Change[]): string {
+  const shown = changes.slice(0, LISTED_MAX).map((c) => `- ${describe(c)}`);
+  const more = changes.length > LISTED_MAX ? [`- …and ${changes.length - LISTED_MAX} more (see data)`] : [];
+  return [
+    `PR #${number} has new feedback:`,
+    ...shown,
+    ...more,
+    `Turn what needs work into Jobs: cpd job add --wf ${wf} --key <key> --title <title> --tier <T> --spec <file.json>`,
+  ].join("\n");
 }
 
 export type PollResult = { changes: Change[]; merged: boolean };
@@ -89,7 +115,7 @@ export async function pollPr(wf: string): Promise<PollResult> {
   if (changes.length > 0) {
     notifyLead(wf, {
       kind: "pr-feedback",
-      text: feedbackText(number, changes),
+      text: feedbackText(wf, number, changes),
       data: {
         number,
         checks: changes.filter((c) => c.type === "check"),
