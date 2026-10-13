@@ -12,6 +12,9 @@ Make `cpd` and its machine config travel to both Macs the way the rest of the se
 - Config schema: `docs/cli-contract.md` §5 in the cpd repo.
 - Machine values: macbook-air concurrency **3**, work Mac (`ml-k977qw1q2t-duarte`) concurrency **8**. Every other value uses the §5 example values.
 - Machines that get cpd: the two Macs only (they run pi and herdr).
+- **Verified on the work Mac on 2026-10-13 over `ssh mac-pro`:** node 22.23.3, pi 1.1.0, bd 1.3.1, wt 0.80.0, herdr 0.9.3, gh, chezmoi 2.73.1; 14 cores, 48 GB. Its pi catalog has `github-copilot/claude-opus-5.5`, `claude-sonnet-5.5` and `claude-haiku-4.5`, so the §5 `tiers` values are valid there unchanged (its `provider: litellm` in `machines.yaml` is for Hermes, not pi).
+- **The cpd code is not on `main` yet** (it is on branch `cpd/v0` until the v0 PR is merged). The script must not fail when `~/projects/cpd/package.json` is missing: print one notice and skip `npm ci` and the link. Once `main` has the code (or the User checks out another branch by hand), the next apply installs it.
+- On this MacBook Air, `~/.local/bin/cpd` is currently a bootstrap symlink to `~/projects/cpd.cpd-v0/bin/cpd.mjs` that the running build depends on. Do not touch it; the Lead applies your change only after the build.
 
 ## Files you own (in `~/dotfiles`, via a worktree)
 - `home/.chezmoidata/machines.yaml`: add `cpd` to `modules` and `cpd: {concurrency: N}` for the two Macs.
