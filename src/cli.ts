@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { z } from "zod";
 import { CpdError, usage, failure } from "./lib/errors.ts";
 import { emit, errorResult, type Result } from "./lib/output.ts";
 import * as doctor from "./commands/doctor.ts";
@@ -79,10 +80,19 @@ function commandNames(): string[] {
   ];
 }
 
-function version(): string {
-  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-  if (typeof pkg.version !== "string") throw failure("bad_package", "package.json has no version");
-  return pkg.version;
+const PackageJson = z.looseObject({ version: z.string() });
+
+/** `file` is injectable for tests; defaults to this package's `package.json`. */
+export function version(file: URL = new URL("../package.json", import.meta.url)): string {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(file, "utf8"));
+  } catch (e) {
+    throw failure("bad_package", `cannot read package.json: ${(e as Error).message}`, { file: file.pathname });
+  }
+  const parsed = PackageJson.safeParse(raw);
+  if (!parsed.success) throw failure("bad_package", "package.json is malformed: expected {version: string}", { issues: parsed.error.issues });
+  return parsed.data.version;
 }
 
 async function dispatch(argv: string[]): Promise<Result> {

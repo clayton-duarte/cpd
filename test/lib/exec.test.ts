@@ -1,4 +1,5 @@
-import { test } from "node:test";
+import { mock, test } from "node:test";
+import { Socket } from "node:net";
 import assert from "node:assert/strict";
 import { z } from "zod";
 import { run, runJson } from "../../src/lib/exec.ts";
@@ -49,4 +50,25 @@ test("runJson fails with bad_tool_output on invalid JSON, with tails", async () 
 test("runJson fails with bad_tool_output on schema mismatch and non-zero exit", async () => {
   await assert.rejects(runJson("sh", ["-c", "echo '{}'"], opts(), z.object({ a: z.number() })), (e: any) => e.code === "bad_tool_output");
   await assert.rejects(runJson("sh", ["-c", "echo '{}'; exit 3"], opts(), z.any()), (e: any) => e.code === "bad_tool_output");
+});
+
+test("run ignores EPIPE on stdin (the child exits without reading its input)", async () => {
+  const r = await run("sh", ["-c", "exit 3"], { ...opts(), input: "x".repeat(4 * 1024 * 1024) });
+  assert.equal(r.code, 3);
+});
+
+test("run fails loudly on any other stdin error", async () => {
+  const end = Socket.prototype.end;
+  const m = mock.method(Socket.prototype, "end", function (this: Socket, ...a: unknown[]) {
+    this.emit("error", Object.assign(new Error("boom"), { code: "EIO" }));
+    return (end as (...x: unknown[]) => Socket).apply(this, a);
+  });
+  try {
+    await assert.rejects(
+      run("cat", [], { ...opts(), input: "hi" }),
+      (e: any) => e.code === "stdin_failed" && e.message.includes("boom"),
+    );
+  } finally {
+    m.mock.restore();
+  }
 });

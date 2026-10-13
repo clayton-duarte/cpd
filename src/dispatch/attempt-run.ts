@@ -537,6 +537,8 @@ async function merge(d: Deps): Promise<RunResult> {
       return fail(d, "gate_tampered", { ladder: false, detail: out.detail });
     case "post_gate_failed":
       return fail(d, "post_gate_failed", { ladder: false, detail: out.detail });
+    case "merge_unverified":
+      return fail(d, "merge_unverified", { ladder: false, detail: out.detail });
     case "unknown":
       return fail(d, "merge_failed", { ladder: false, detail: out.detail });
   }

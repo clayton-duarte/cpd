@@ -13,6 +13,7 @@ export type MergeResult =
   | "dirty_target"
   | "tampered"
   | "post_gate_failed"
+  | "merge_unverified"
   | "unknown";
 
 export type MergeOutcome = {
@@ -50,8 +51,26 @@ type Attempt = Omit<MergeOutcome, "preSha">;
 async function tryMerge(p: MergeParams, pre: string): Promise<Attempt> {
   const r = await runWt(p.attemptWorktree, mergeArgs(p.leadBranch));
   if (r.code === 0) {
-    parseWtJson(MergeJson, r, "merge");
-    return { result: "merged", detail: "merged" };
+    // Success is decided from git facts; wt's JSON is informational only.
+    try {
+      parseWtJson(MergeJson, r, "merge");
+    } catch (e) {
+      process.stderr.write(`cpd: warning: ${(e as Error).message}; deciding the merge from git facts\n`);
+    }
+    const lead = await leadRef(p);
+    const attempt = await revParse(p.attemptWorktree, `refs/heads/${p.branch}`);
+    if (lead !== pre && lead === attempt) return { result: "merged", detail: "merged" };
+    const reset = await git(p.leadWorktree, ["reset", "--keep", pre]);
+    if (reset.code !== 0) {
+      throw failure("rollback_failed", `git reset --keep ${pre} failed in the Lead worktree`, {
+        leadWorktree: p.leadWorktree,
+        stderr: tail(reset.stderr),
+      });
+    }
+    return {
+      result: "merge_unverified",
+      detail: `wt merge exited 0 but the Lead Branch is ${lead === pre ? "unchanged" : `${lead}, not the Attempt HEAD ${attempt}`}; Lead reset to ${pre}`,
+    };
   }
   if (r.code === GATE_FAILED_EXIT) {
     return { result: "gate_failed", detail: `Gate failed in the Attempt worktree:\n${tail(r.stderr + r.stdout)}` };

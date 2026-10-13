@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
+import { writeFileSync } from "node:fs";
+import { version } from "../src/cli.ts";
 import { CLI, runCli, tmpDir } from "./helpers/index.ts";
 
 // Commands listed in contract §11.
@@ -57,4 +59,17 @@ test("works through a symlink", async () => {
   const r = await runCli(["--version"], { bin: link });
   assert.equal(r.code, 0);
   assert.equal(r.json.ok, true);
+});
+
+test("version() returns the version of the real package.json", () => {
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(version(), pkg.version);
+});
+
+test("version() fails clearly on a malformed package.json", () => {
+  const dir = tmpDir();
+  for (const [name, body] of [["noversion.json", '{"name":"x"}'], ["number.json", '{"version":1}'], ["junk.json", "{"]] as const) {
+    writeFileSync(join(dir, name), body);
+    assert.throws(() => version(new URL(`file://${join(dir, name)}`)), (e: any) => e.code === "bad_package" && e.exitCode === 1, name);
+  }
 });

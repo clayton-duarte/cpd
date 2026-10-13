@@ -21,6 +21,7 @@ export function run(cmd: string, args: string[], opts: RunOptions): Promise<RunR
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let settled = false;
     child.stdout!.setEncoding("utf8").on("data", (d: string) => (stdout += d));
     child.stderr!.setEncoding("utf8").on("data", (d: string) => (stderr += d));
     const timer =
@@ -32,10 +33,12 @@ export function run(cmd: string, args: string[], opts: RunOptions): Promise<RunR
           }, opts.timeoutMs);
     child.on("error", (e) => {
       clearTimeout(timer);
+      settled = true;
       reject(failure("spawn_failed", `cannot run ${cmd}: ${e.message}`, { cmd, args }));
     });
     child.on("close", (code, signal) => {
       clearTimeout(timer);
+      if (settled) return;
       if (timedOut) {
         reject(timeout("exec_timeout", `${cmd} timed out after ${opts.timeoutMs} ms`, { cmd, args }));
         return;
@@ -43,7 +46,13 @@ export function run(cmd: string, args: string[], opts: RunOptions): Promise<RunR
       resolve({ code, signal, stdout, stderr });
     });
     if (opts.input !== undefined) {
-      child.stdin!.on("error", () => {});
+      child.stdin!.on("error", (e: NodeJS.ErrnoException) => {
+        if (e.code === "EPIPE") return; // the child exited without reading its input
+        child.kill("SIGKILL");
+        clearTimeout(timer);
+        settled = true;
+        reject(failure("stdin_failed", `cannot write stdin of ${cmd}: ${e.message}`, { cmd, args }));
+      });
       child.stdin!.end(opts.input);
     }
   });

@@ -65,8 +65,8 @@ export async function rebaseInProgress(cwd: string): Promise<boolean> {
     try {
       realpathSync.native(p);
       return true;
-    } catch {
-      // absent
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
     }
   }
   return false;

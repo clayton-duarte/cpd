@@ -5,7 +5,8 @@ import { AgentSession } from "./panes.ts";
 
 /** herdr's own rule for agent names (the contract's `c<12 hex>` names meet it). */
 const AGENT_NAME = /^[a-z][a-z0-9_-]{0,31}$/;
-/** herdr caps `agent start --timeout` at 300000 ms. */
+/** herdr 0.9.3 accepts `agent start --timeout` only above 3000 ms and up to 300000 ms (probed; see the Attempt report). */
+const MIN_START_TIMEOUT_MS = 3001;
 const MAX_START_TIMEOUT_MS = 300_000;
 /** Backstop beyond herdr's own `--timeout`, so a caller timeout is reported by herdr rather than killed. */
 const BACKSTOP_MS = 15_000;
@@ -55,8 +56,8 @@ export type StartAgent = { name: string; kind: "pi"; pane: string; timeoutMs: nu
  */
 export async function startAgent(o: StartAgent): Promise<{ argv: string[]; sessionPath: string }> {
   assertAgentName(o.name);
-  if (!Number.isInteger(o.timeoutMs) || o.timeoutMs < 1 || o.timeoutMs > MAX_START_TIMEOUT_MS) {
-    throw usage("invalid_timeout", `agent start timeout must be an integer 1-${MAX_START_TIMEOUT_MS} ms, got ${String(o.timeoutMs)}`, { timeoutMs: o.timeoutMs });
+  if (!Number.isInteger(o.timeoutMs) || o.timeoutMs < MIN_START_TIMEOUT_MS || o.timeoutMs > MAX_START_TIMEOUT_MS) {
+    throw usage("invalid_timeout", `agent start timeout must be an integer ${MIN_START_TIMEOUT_MS}-${MAX_START_TIMEOUT_MS} ms, got ${String(o.timeoutMs)}`, { timeoutMs: o.timeoutMs });
   }
   assertNoControlChars("pane id", o.pane);
   o.args.forEach((a, i) => assertNoControlChars(`agent argument ${i}`, a));

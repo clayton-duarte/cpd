@@ -296,6 +296,7 @@ test("mergeAttempt results without a listed ladder: dirty_target, tampered, cas_
     ["dirty_target", "dirty_target", "job_failed"],
     ["tampered", "gate_tampered", "job_failed"],
     ["cas_lost", "merge_cas_lost", "job_failed"],
+    ["merge_unverified", "merge_unverified", "job_failed"],
     ["unknown", "merge_failed", "job_failed"],
     ["gate_failed", "merge_gate_failed", "retry_queued"],
   ];

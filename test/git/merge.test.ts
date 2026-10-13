@@ -5,7 +5,8 @@ import { test } from "node:test";
 import { removeAttemptWorktree } from "../../src/git/attempt-worktree.ts";
 import { gitOut, rebaseInProgress, statusPorcelain } from "../../src/git/git.ts";
 import { mergeAttempt, type MergeOutcome } from "../../src/git/merge.ts";
-import { tmpDir } from "../helpers/index.ts";
+import { execFileSync } from "node:child_process";
+import { fakeBin, tmpDir } from "../helpers/index.ts";
 import {
   W1, W2, commitFile, createFixture, head, isLinear, log, makeAttempt, sandbox, write, type Fixture,
 } from "./fixtures.ts";
@@ -214,4 +215,53 @@ test("concurrent merges are serialised by the merge lock: both land, linear", as
   assert.equal(await isLinear(f.leadWorktree, f.leadBranch), true);
   assert.deepEqual(await statusPorcelain(f.leadWorktree), []);
   for (const x of [a, b]) await removeAttemptWorktree(f.repo, f.leadWorktree, x.branch);
+});
+
+const withFakeWt = async <T>(script: string, fn: () => Promise<T>): Promise<T> => {
+  const real = execFileSync("which", ["wt"], { encoding: "utf8" }).trim();
+  const bin = fakeBin("wt", script.replaceAll("$REAL_WT", real));
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${bin.dir}:${oldPath}`;
+  try {
+    return await fn();
+  } finally {
+    process.env.PATH = oldPath;
+  }
+};
+
+test("wt merge exits 0 but prints invalid JSON: merged from git facts, with a logged warning", async () => {
+  const f = await createFixture();
+  const a = await makeAttempt(f, "j6-a1", [{ file: "j6.txt", content: "j6\n", message: "j6: add" }]);
+  const warnings: string[] = [];
+  const realWrite = process.stderr.write;
+  process.stderr.write = ((c: string | Uint8Array) => (warnings.push(String(c)), true)) as typeof process.stderr.write;
+  let m: MergeOutcome;
+  try {
+    m = await withFakeWt(`if [ "$4" = merge ]; then "$REAL_WT" "$@" >/dev/null; echo not-json; else exec "$REAL_WT" "$@"; fi`, () => merge(f, a));
+  } finally {
+    process.stderr.write = realWrite;
+  }
+  assert.equal(m.result, "merged");
+  assert.equal(m.postSha, await head(a.path));
+  assert.equal(await head(f.leadWorktree), m.postSha);
+  assert.ok(warnings.some((w) => /warning.*invalid JSON/.test(w)), warnings.join());
+});
+
+test("merge_unverified: wt exits 0 without moving the Lead; the Lead is unchanged", async () => {
+  const f = await createFixture();
+  const a = await makeAttempt(f, "j7-a1", [{ file: "j7.txt", content: "j7\n", message: "j7: add" }]);
+  const pre = await head(f.leadWorktree);
+  const m = await withFakeWt(`echo '{"branch":"x","target":"y","rebased":false}'`, () => merge(f, a));
+  assert.equal(m.result, "merge_unverified");
+  assert.equal(m.preSha, pre);
+  await assertLeadUntouched(f, pre);
+});
+
+test("merge_unverified: wt exits 0 but the Lead moved somewhere else; the Lead is reset to pre", async () => {
+  const f = await createFixture();
+  const a = await makeAttempt(f, "j8-a1", [{ file: "j8.txt", content: "j8\n", message: "j8: add" }]);
+  const pre = await head(f.leadWorktree);
+  const m = await withFakeWt(`git -C '${f.leadWorktree}' commit -q --allow-empty -m stray; echo '{"branch":"x","target":"y","rebased":false}'`, () => merge(f, a));
+  assert.equal(m.result, "merge_unverified");
+  await assertLeadUntouched(f, pre);
 });
