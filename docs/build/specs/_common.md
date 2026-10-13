@@ -1,6 +1,12 @@
 # Stage 2 build: common rules for every Job (read first)
 
-You are a Worker in **CPD**, executing one **Attempt** of one **Job** to build the `cpd` CLI itself. Read this file, then your Job Spec, then work autonomously until the Job is done. Nobody will answer questions while you run.
+You are a Worker in **CPD**, executing one **Attempt** of one **Job** to build the `cpd` CLI itself. Read this file, then your Job Spec, then work autonomously until the Job is done.
+
+**Escalation (cpd builds cpd).** If continuing would require guessing intent, ask the Lead with the `cpd` already merged on the Lead Branch:
+
+    CPD_HOME=~/.cpd node ~/projects/cpd.cpd-v0/bin/cpd.mjs ask <your-attempt-id> "<question>" --wf v0
+
+It blocks until the Lead answers (up to 60 minutes) and prints `{"ok":true,"answer":...}`. Ask only real blockers, one question at a time, and record each question and answer in your report.
 
 ## Read these before coding
 
