@@ -33,40 +33,51 @@ import * as prRebase from "./commands/pr-rebase.ts";
 
 type Command = { run: (argv: string[]) => Promise<Result> };
 
-/** Explicit dispatch table: key is "<group> <command>" or "<command>". */
-const COMMANDS: Record<string, Command> = {
-  doctor,
-  tiers,
-  "lead start": leadStart,
-  "lead attach": leadAttach,
-  "workflow init": workflowInit,
-  "workflow show": workflowShow,
-  "workflow phase": workflowPhase,
-  "job add": jobAdd,
-  "job edit": jobEdit,
-  "job list": jobList,
-  "job show": jobShow,
-  "job cancel": jobCancel,
-  "job retry": jobRetry,
-  "job dispatch": jobDispatch,
-  "plan render": planRender,
-  "plan decision": planDecision,
-  "plan lock": planLock,
-  watch,
-  "attempt run": attemptRun,
-  "attempt submit": attemptSubmit,
-  "attempt read": attemptRead,
-  "attempt list": attemptList,
-  "attempt show": attemptShow,
-  "review decide": reviewDecide,
-  ask,
-  answer,
-  "pr open": prOpen,
-  "pr poll": prPoll,
-  "pr rebase": prRebase,
-};
+/** Explicit dispatch tables. Maps, so user input never resolves to Object.prototype members. */
+const SINGLE = new Map<string, Command>([
+  ["doctor", doctor],
+  ["tiers", tiers],
+  ["watch", watch],
+  ["ask", ask],
+  ["answer", answer],
+]);
 
-const GROUPS = new Set(Object.keys(COMMANDS).filter((k) => k.includes(" ")).map((k) => k.split(" ")[0]));
+const GROUPED = new Map<string, Map<string, Command>>([
+  ["lead", new Map([["start", leadStart], ["attach", leadAttach]])],
+  ["workflow", new Map([["init", workflowInit], ["show", workflowShow], ["phase", workflowPhase]])],
+  [
+    "job",
+    new Map([
+      ["add", jobAdd],
+      ["edit", jobEdit],
+      ["list", jobList],
+      ["show", jobShow],
+      ["cancel", jobCancel],
+      ["retry", jobRetry],
+      ["dispatch", jobDispatch],
+    ]),
+  ],
+  ["plan", new Map([["render", planRender], ["decision", planDecision], ["lock", planLock]])],
+  [
+    "attempt",
+    new Map([
+      ["run", attemptRun],
+      ["submit", attemptSubmit],
+      ["read", attemptRead],
+      ["list", attemptList],
+      ["show", attemptShow],
+    ]),
+  ],
+  ["review", new Map([["decide", reviewDecide]])],
+  ["pr", new Map([["open", prOpen], ["poll", prPoll], ["rebase", prRebase]])],
+]);
+
+function commandNames(): string[] {
+  return [
+    ...SINGLE.keys(),
+    ...[...GROUPED].flatMap(([group, cmds]) => [...cmds.keys()].map((c) => `${group} ${c}`)),
+  ];
+}
 
 function version(): string {
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -76,16 +87,16 @@ function version(): string {
 
 async function dispatch(argv: string[]): Promise<Result> {
   const [first, second, ...rest] = argv;
-  if (first === "--help") return { ok: true, commands: Object.keys(COMMANDS) };
+  if (first === "--help") return { ok: true, commands: commandNames() };
   if (first === "--version") return { ok: true, version: version() };
   if (first === undefined) throw usage("usage", "no command given; try `cpd --help`");
-  if (GROUPS.has(first)) {
-    const key = `${first} ${second}`;
-    const cmd = second === undefined ? undefined : COMMANDS[key];
+  const group = GROUPED.get(first);
+  if (group) {
+    const cmd = second === undefined ? undefined : group.get(second);
     if (!cmd) throw usage("unknown_command", `unknown command: ${[first, second].filter(Boolean).join(" ")}`);
     return cmd.run(rest);
   }
-  const cmd = COMMANDS[first];
+  const cmd = SINGLE.get(first);
   if (!cmd) throw usage("unknown_command", `unknown command: ${first}`);
   return cmd.run(argv.slice(1));
 }

@@ -7,8 +7,7 @@
     "moduleResolution": "nodenext",
     "allowImportingTsExtensions": true,
     "target": "ES2023",
-    "types": ["node"],
-    "skipLibCheck": true
+    "types": ["node"]
   },
   "include": ["src", "test", "bin"]
 }

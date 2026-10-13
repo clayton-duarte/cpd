@@ -18,6 +18,7 @@ test("--help lists every contract command", async () => {
   const r = await runCli(["--help"]);
   assert.equal(r.code, 0);
   assert.equal(r.json.ok, true);
+  assert.equal(r.json.commands.length, 29);
   assert.deepEqual([...r.json.commands].sort(), [...EXPECTED].sort());
 });
 
@@ -32,7 +33,7 @@ for (const cmd of EXPECTED) {
 }
 
 test("unknown command exits 2", async () => {
-  for (const args of [["nope"], ["job", "nope"], ["job"]]) {
+  for (const args of [["nope"], ["job", "nope"], ["job"], ["constructor"], ["toString"], ["hasOwnProperty"], ["__proto__"], ["job", "__proto__"], ["job", "constructor"], ["job add"], ["job nope"]]) {
     const r = await runCli(args);
     assert.equal(r.code, 2);
     assert.equal(r.json.error.code, "unknown_command");

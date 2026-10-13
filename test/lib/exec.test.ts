@@ -8,7 +8,20 @@ const opts = () => ({ cwd: tmpDir(), env: { PATH: process.env.PATH } });
 
 test("run captures stdout, stderr and exit code", async () => {
   const r = await run("sh", ["-c", "echo out; echo err >&2; exit 7"], opts());
-  assert.deepEqual(r, { code: 7, stdout: "out\n", stderr: "err\n" });
+  assert.deepEqual(r, { code: 7, signal: null, stdout: "out\n", stderr: "err\n" });
+});
+
+test("run reports the signal when the process is killed by one", async () => {
+  const r = await run("sh", ["-c", "kill -TERM $$"], opts());
+  assert.equal(r.code, null);
+  assert.equal(r.signal, "SIGTERM");
+});
+
+test("runJson names the signal when the process is killed", async () => {
+  await assert.rejects(
+    runJson("sh", ["-c", "kill -TERM $$"], opts(), z.any()),
+    (e: any) => e.code === "bad_tool_output" && e.details.signal === "SIGTERM" && e.message.includes("SIGTERM"),
+  );
 });
 
 test("run passes input on stdin, and /dev/null otherwise", async () => {

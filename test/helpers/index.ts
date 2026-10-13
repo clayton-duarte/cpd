@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const cleanups: string[] = [];
 let hooked = false;
@@ -51,7 +52,7 @@ ${script}
   };
 }
 
-export const CLI = new URL("../../bin/cpd.mjs", import.meta.url).pathname;
+export const CLI = fileURLToPath(new URL("../../bin/cpd.mjs", import.meta.url));
 
 /** Run bin/cpd.mjs as a subprocess. `json` is the parsed stdout (undefined if not JSON). */
 export function runCli(

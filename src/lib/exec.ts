@@ -8,7 +8,8 @@ export type RunOptions = {
   timeoutMs?: number;
   input?: string;
 };
-export type RunResult = { code: number; stdout: string; stderr: string };
+/** `code` is null and `signal` set when the process was killed by a signal. */
+export type RunResult = { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string };
 
 export function run(cmd: string, args: string[], opts: RunOptions): Promise<RunResult> {
   return new Promise((resolve, reject) => {
@@ -39,7 +40,7 @@ export function run(cmd: string, args: string[], opts: RunOptions): Promise<RunR
         reject(timeout("exec_timeout", `${cmd} timed out after ${opts.timeoutMs} ms`, { cmd, args }));
         return;
       }
-      resolve({ code: code ?? (signal ? 128 : 1), stdout, stderr });
+      resolve({ code, signal, stdout, stderr });
     });
     if (opts.input !== undefined) {
       child.stdin!.on("error", () => {});
@@ -58,8 +59,11 @@ export async function runJson<S extends z.ZodType>(
   schema: S,
 ): Promise<z.infer<S>> {
   const r = await run(cmd, args, opts);
-  const details = { cmd, args, code: r.code, stdout: tail(r.stdout), stderr: tail(r.stderr) };
-  if (r.code !== 0) throw failure("bad_tool_output", `${cmd} exited ${r.code}`, details);
+  const details = { cmd, args, code: r.code, signal: r.signal, stdout: tail(r.stdout), stderr: tail(r.stderr) };
+  if (r.code !== 0) {
+    const how = r.signal ? `was killed by ${r.signal}` : `exited ${r.code}`;
+    throw failure("bad_tool_output", `${cmd} ${how}`, details);
+  }
   let raw: unknown;
   try {
     raw = JSON.parse(r.stdout);
