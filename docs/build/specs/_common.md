@@ -35,6 +35,8 @@ It blocks until the Lead answers (up to 60 minutes) and prints `{"ok":true,"answ
   - No changes outside your worktree except temp dirs under `/tmp/cpd-build/<job>/` and your report.
   - Never run commands against the User's default herdr session. If your Spec needs herdr, use only `herdr --session cpd-test …`; the session server may need starting with `herdr --session cpd-test server &`, and you must not stop it.
   - Never `pi install`, `brew install` or `npm install -g`.
+  - **Never kill a process you did not start.** Other Attempts' Workers and Gates run on this machine at the same time. Never use `pkill -f` or `killall` with a pattern (for example `pkill -f "node --test"` kills other Attempts' Gates); kill only the PIDs you started yourself.
+  - The machine is shared and slow under load: a full `./verify.sh` can take 20 minutes, and `cpd attempt submit` runs it again. Run your own test files directly while iterating, and the full Gate once before submitting.
   - Never touch `~/.cpd`, `~/.pi/agent` (other than pi's own session files), `~/.config` or the dotfiles, unless your Spec says so.
 - **Tools available:** node 22.22, npm, git 2.50, `wt` 0.80.0, `bd` 1.3.1, `herdr` 0.9.3, `gh` (read-only use), `jq`, `sqlite3`, `python3` 3.9, pi 1.2.0 (the trials ran on 1.1.0; if pi behaviour differs from a trial report, trust what you observe and report the difference).
 - **Already merged helpers to reuse:**
