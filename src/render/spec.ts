@@ -2,7 +2,7 @@ import { z } from "zod";
 import { listIssues, readLedger } from "../ledger/bd.ts";
 import { getJobByKey } from "../ledger/jobs.ts";
 import { BdComments } from "../ledger/schema.ts";
-import { notFound } from "../lib/errors.ts";
+import { failure, notFound } from "../lib/errors.ts";
 import { assertAttemptId, specPath } from "../lib/paths.ts";
 import { loadTemplate, renderTemplate, writeTextAtomic } from "./template.ts";
 
@@ -23,6 +23,13 @@ const AttemptMeta = z.looseObject({
   cause: z.string().optional(),
 });
 
+/** An Attempt issue's metadata, parsed once at the edge: malformed metadata is a named `attempt_metadata_invalid`, not a raw ZodError. */
+function parseAttemptMeta(issueId: string, metadata: unknown): z.infer<typeof AttemptMeta> {
+  const parsed = AttemptMeta.safeParse(metadata);
+  if (!parsed.success) throw failure("attempt_metadata_invalid", `Attempt issue ${issueId} has malformed metadata`, { id: issueId, issues: parsed.error.issues });
+  return parsed.data;
+}
+
 const quote = (text: string) => text.split("\n").map((l) => (l === "" ? ">" : `> ${l}`)).join("\n");
 
 /**
@@ -35,7 +42,7 @@ export async function renderWorkerSpec(wf: string, attemptId: string): Promise<s
   const job = await getJobByKey(wf, jobKey);
   const l = readLedger(wf);
   const attempts = (await listIssues(l, "attempt", ["--parent", job.id]))
-    .map((issue) => ({ issue, meta: AttemptMeta.parse(issue.metadata) }))
+    .map((issue) => ({ issue, meta: parseAttemptMeta(issue.id, issue.metadata) }))
     .sort((a, b) => a.meta.number - b.meta.number);
   const current = attempts.find((a) => a.meta.number === number);
   if (!current) throw notFound("attempt_not_found", `Job ${jobKey} has no Attempt ${number}`, { attempt: attemptId });

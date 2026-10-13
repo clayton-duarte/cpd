@@ -21,7 +21,7 @@ test("setup: a Ledger fixture with 3 Jobs, one on Attempt 2 with feedback", asyn
   rendered = await renderAll();
 });
 
-// Goldens are updated deliberately: `node test/render/regen.ts`, then review the diff. Tests never write them.
+// Goldens are updated deliberately: `CPD_REGEN_GOLDENS=1 node test/render/regen.ts`, then review the diff. Tests never write them.
 for (const name of ["worker-schema-a1.md", "worker-docs-a1.md", "worker-api-a2.md", "review-api-a2.md", "review-api-a2-fresh.md", "plan.md"]) {
   test(`golden: ${name}`, () => {
     assert.equal(rendered[name], golden(name));
