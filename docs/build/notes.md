@@ -57,6 +57,16 @@ Running record of Attempt outcomes, Lead decisions and proposed changes. Reports
   - appended Job `gate-failure-report`: `gate_failed` showed the last 60 TAP lines (always passing tests), so Workers re-ran the whole 20-minute suite to find the failure.
 - **Product gap seen:** an automatic retry starts from the Lead HEAD, not from the previous Attempt's commits. During the bootstrap the Lead cherry-picked a1 into a2 when the Reviewer asked for a small fix; `cpd` has no equivalent yet (candidate for post-v0).
 
+### Attempts dispatched by `cpd` (Ledger `~/.cpd/workflows/v0`; `cpd workflow show --wf v0`)
+
+| Attempt | Tier | Result | Notes |
+|---|---|---|---|
+| watch-a1 | S4 | rejected (fresh Reviewer) | `runAlive` matched slots by Attempt id only, but ids repeat across Workflows sharing `CPD_HOME`. cpd queued `watch-a2` at S5 and sent `attempt-retry`. |
+| ledger-hardening-a1 | S2 | **merged by cpd** (`c5276ee`) | First Job to go through cpd end to end: dispatch, Worker in herdr pane, `attempt submit` (third try; the first two lost to the load problem), fresh Reviewer (2 min), rebase merge, post-merge Gate, `job-merged` in the Lead queue. |
+| pi-adapter-a1 | S3 | **merged by cpd** (`41bd2f8`) | Same path; two `gate_failed` at submit from the load problem first. |
+| watch-a2 | S5 | running | Bootstrap workaround: the Lead steered the Worker with `herdr agent prompt` to cherry-pick a1's three commits instead of rebuilding (it did so within seconds). Product fix appended as Job `retry-carry-over`. |
+| gate-speed-a1 | S3 | running | |
+
 ## Appended work (to dispatch through `cpd` later)
 
 - Now in the Ledger as `ledger-hardening`, `adapters-hardening` (absorbs `scaffold-polish` and `git-wt-hardening`; the merge-lock wait moved into `attempt-run` as a `lock_timeout` retry) and `gate-speed`. Original notes:
