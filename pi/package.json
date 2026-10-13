@@ -1,0 +1,15 @@
+{
+  "name": "cpd-pi",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "cpd's pi adapter for the Lead: queue delivery, herdr blocked state, plan review",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./extension.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}
