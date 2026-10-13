@@ -69,6 +69,8 @@ Running record of Attempt outcomes, Lead decisions and proposed changes. Reports
 
 - **2026-10-13 07:05: `cpd watch --wf v0` runs in herdr pane `w1:pJ`** (split from the Lead pane). It dispatched `lead-skill-a1` on its first tick and from then on schedules every ready Job within the cap; the Lead only reacts to queue messages. Small defect seen: `watch` logs `no_slot` on every tick (log spam).
 
+- **First real Escalation (07:13):** `lead-skill-a1` ran `cpd ask` and found a contract gap: after `cpd pr open` (phase `pr`), `job add` was `illegal_phase`, so PR feedback could not become appended Jobs as the requirements say, and nothing pushed later merges to the PR. Lead decision, contract amended (§11): `job add` is allowed in phase `pr` with the `dispatch` semantics, and `cpd pr rebase` is also how phase-`pr` merges reach the PR. The code change is appended as Job `job-add-in-pr` (S1). Answered with `cpd answer lead-skill-a1-q1 …` within minutes.
+
 ## Appended work (to dispatch through `cpd` later)
 
 - Now in the Ledger as `ledger-hardening`, `adapters-hardening` (absorbs `scaffold-polish` and `git-wt-hardening`; the merge-lock wait moved into `attempt-run` as a `lock_timeout` retry) and `gate-speed`. Original notes:
