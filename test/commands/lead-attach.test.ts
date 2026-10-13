@@ -82,6 +82,7 @@ test("refusals: unknown workflow is exit 4; a pane without an agent session and 
   const a = setup();
   const r1 = await runCli(["lead", "attach", "--wf", "nope-1"], { env: a.env });
   assert.deepEqual([r1.code, r1.json.error.code], [4, "workflow_not_found"]);
+  assert.equal(existsSync(join(a.home, "workflows", "nope-1")), false);
   const b = setup(null);
   const r2 = await runCli(["lead", "attach", "--wf", "pay-1"], { env: b.env });
   assert.deepEqual([r2.code, r2.json.error.code], [1, "lead_session_unknown"]);

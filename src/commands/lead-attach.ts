@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { parseArgs } from "node:util";
 import { z } from "zod";
@@ -87,6 +87,10 @@ export async function run(argv: string[]): Promise<Result> {
   const sessionId = readSessionHeader(sessionPath).id;
   const lead: Lead = { paneId, sessionPath, sessionId, queueDir: leadQueueDir(sessionId), attachedAt: new Date().toISOString() };
 
+  // withLock creates the lock's parent dirs: refuse an unknown workflow first so none are left behind.
+  if (!existsSync(workflowJsonPath(wf))) {
+    throw notFound("workflow_not_found", `no such workflow: ${wf}`, { wf, path: workflowJsonPath(wf) });
+  }
   await withLock(ledgerLockPath(wf), "lead attach", () => {
     const workflow = readWorkflow(wf);
     mkdirSync(lead.queueDir, { recursive: true });
