@@ -1,6 +1,11 @@
-import { failure } from "../lib/errors.ts";
+import { dispatchOne } from "../dispatch/dispatch-one.ts";
+import { parseCommand, resolveWorkflowId } from "../ledger/workflow.ts";
+import { usage } from "../lib/errors.ts";
 import type { Result } from "../lib/output.ts";
 
-export async function run(_argv: string[]): Promise<Result> {
-  throw failure("not_implemented", "cpd job dispatch is not implemented");
+export async function run(argv: string[]): Promise<Result> {
+  const { values, positionals } = parseCommand("job dispatch", argv, { wf: { type: "string" } }, 1);
+  if (positionals[0] === undefined) throw usage("usage", "cpd job dispatch: pass the Job key");
+  const r = await dispatchOne(resolveWorkflowId(values.wf), positionals[0]);
+  return { ok: true, attempt: r.attempt, slot: r.slot, pid: r.pid, tier: r.tier };
 }
