@@ -24,37 +24,62 @@ test("notifyLead writes a schema-valid <epoch-ms>-<id>.json", () => {
   LeadMessageSchema.parse(JSON.parse(readFileSync(join(queueDir, names[0]!), "utf8")));
 });
 
-test("a reader racing 200 writes never sees a partial .json; every file validates", async () => {
+/** Runs in its own Node process, so it really races the writer. Protocol: prints "running", then a JSON report after "stop" on stdin. */
+const READER = `
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+const { LeadMessageSchema } = await import(process.env.MESSAGES_URL);
+const dir = process.env.QUEUE_DIR;
+const problems = [];
+let reads = 0;
+let stop = false;
+process.stdin.on("data", () => { stop = true; });
+console.log("running");
+while (!stop) {
+  for (const n of readdirSync(dir)) {
+    if (!n.endsWith(".json")) continue;
+    try {
+      LeadMessageSchema.parse(JSON.parse(readFileSync(join(dir, n), "utf8")));
+      reads++;
+    } catch (e) {
+      if (e.code !== "ENOENT") problems.push(n + ": " + e.message.slice(0, 200));
+    }
+  }
+  await new Promise((r) => setImmediate(r));
+}
+console.log(JSON.stringify({ problems, reads }));
+process.exit(0);
+`;
+
+test("a reader process racing 200 writes never sees a partial .json; every file validates", async () => {
   const { queueDir } = setup();
   notifyLead(WF, { kind: "error", text: "seed" });
-  let stop = false;
-  const seen = new Set<string>();
-  const problems: string[] = [];
-  const reader = (async () => {
-    while (!stop) {
-      for (const n of readdirSync(queueDir)) {
-        if (!n.endsWith(".json")) continue;
-        try {
-          const text = readFileSync(join(queueDir, n), "utf8");
-          LeadMessageSchema.parse(JSON.parse(text));
-          seen.add(n);
-        } catch (e) {
-          if ((e as NodeJS.ErrnoException).code !== "ENOENT") problems.push(`${n}: ${(e as Error).message}`);
-        }
-      }
-      await new Promise((r) => setImmediate(r));
-    }
-  })();
-  for (let i = 0; i < 200; i++) {
-    notifyLead(WF, { kind: "pr-feedback", text: "x".repeat(2000), data: { i } });
-    if (i % 10 === 0) await new Promise((r) => setImmediate(r));
+  const reader = spawn(process.execPath, ["--input-type=module", "-e", READER], {
+    env: { ...process.env, QUEUE_DIR: queueDir, MESSAGES_URL: new URL("../../src/queue/messages.ts", import.meta.url).href },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let out = "";
+  let err = "";
+  reader.stdout.on("data", (d) => (out += d));
+  reader.stderr.on("data", (d) => (err += d));
+  const exited = new Promise<void>((res) => reader.on("close", () => res()));
+  const t0 = Date.now();
+  while (!out.includes("running")) {
+    if (Date.now() - t0 > 15000) throw new Error(`reader did not start: ${err}`);
+    await new Promise((r) => setTimeout(r, 10));
   }
-  stop = true;
-  await reader;
-  assert.deepEqual(problems, []);
-  const all = readdirSync(queueDir).filter((n) => n.endsWith(".json"));
+  for (let i = 0; i < 200; i++) notifyLead(WF, { kind: "pr-feedback", text: "x".repeat(200_000), data: { i } });
+  reader.stdin.end("stop\n");
+  await exited;
+  assert.equal(err, "");
+  const report = JSON.parse(out.trim().split("\n").pop()!) as { problems: string[]; reads: number };
+  assert.deepEqual(report.problems, []);
+  assert.ok(report.reads > 50, `reader only completed ${report.reads} reads`);
+  const names = readdirSync(queueDir);
+  const all = names.filter((n) => n.endsWith(".json"));
   assert.equal(all.length, 201);
-  assert.equal(readdirSync(queueDir).filter((n) => n.endsWith(".tmp")).length, 0);
+  for (const n of all) LeadMessageSchema.parse(JSON.parse(readFileSync(join(queueDir, n), "utf8")));
+  assert.equal(names.filter((n) => n.endsWith(".tmp")).length, 0);
 });
 
 const q = (id: string, attempt: string, pid = process.pid) => ({
@@ -103,6 +128,9 @@ test("expireOrphans removes an unanswered question whose asker is dead, keeps li
   writeAnswer(WF, { v: 1, id: "c-a1-q1", answer: "x", answeredAt: "t" });
   assert.deepEqual(expireOrphans(WF), ["a-a1-q1"]);
   assert.equal(existsSync(join(escDir, "a-a1-q1.q.json")), false);
+  assert.equal(existsSync(join(escDir, "a-a1-q1.expired.json")), true);
+  assert.equal(nextEscalationId(WF, "a-a1"), "a-a1-q2");
+  assert.deepEqual(listOpenQuestions(WF).map((x) => x.id), ["b-a1-q1"]);
   assert.equal(existsSync(join(escDir, "b-a1-q1.q.json")), true);
   assert.equal(existsSync(join(escDir, "c-a1-q1.q.json")), true);
 });

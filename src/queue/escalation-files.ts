@@ -1,4 +1,5 @@
-import { linkSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
 import { failure } from "../lib/errors.ts";
 import { pidAlive } from "../lib/lock.ts";
@@ -79,9 +80,10 @@ export function readAnswer(wf: string, escId: string): Answer | null {
   return readJson(escalationAnswerPath(wf, escId), AnswerSchema);
 }
 
-export function removeQuestion(wf: string, escId: string): void {
+/** Question files are never deleted: an expired one is renamed so its id is never reused. */
+export function expireQuestion(wf: string, escId: string): void {
   try {
-    unlinkSync(escalationQuestionPath(wf, escId));
+    renameSync(escalationQuestionPath(wf, escId), join(escalationsDir(wf), `${escId}.expired.json`));
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
@@ -110,25 +112,25 @@ export function listOpenQuestions(wf: string): Question[] {
   return out;
 }
 
-/** `<attempt-id>-q<k>`, k one past the highest existing for this Attempt. */
+/** `<attempt-id>-q<k>`, k one past the highest of every file (open, answered, expired) for this Attempt. */
 export function nextEscalationId(wf: string, attemptId: string): string {
   assertAttemptId(attemptId);
   const prefix = `${attemptId}-q`;
   let max = 0;
   for (const n of files(wf)) {
-    const m = n.startsWith(prefix) ? /^(\d+)\.[qa]\.json$/.exec(n.slice(prefix.length)) : null;
+    const m = n.startsWith(prefix) ? /^(\d+)\.(?:q|a|expired)\.json$/.exec(n.slice(prefix.length)) : null;
     if (m) max = Math.max(max, Number(m[1]));
   }
   return escalationId(attemptId, max + 1);
 }
 
-/** Remove open questions whose asker is dead. Returns the removed ids. */
+/** Expire (rename, never delete) open questions whose asker is dead. Returns the expired ids. */
 export function expireOrphans(wf: string): string[] {
-  const removed: string[] = [];
+  const expired: string[] = [];
   for (const q of listOpenQuestions(wf)) {
     if (pidAlive(q.askerPid)) continue;
-    removeQuestion(wf, q.id);
-    removed.push(q.id);
+    expireQuestion(wf, q.id);
+    expired.push(q.id);
   }
-  return removed;
+  return expired;
 }

@@ -5,7 +5,7 @@ import { timeout, usage } from "../lib/errors.ts";
 import type { Result } from "../lib/output.ts";
 import { assertAttemptId, assertWorkflowId } from "../lib/paths.ts";
 import { leadQueueDirOf, notifyLead } from "../queue/lead-queue.ts";
-import { nextEscalationId, readAnswer, removeQuestion, writeQuestion } from "../queue/escalation-files.ts";
+import { nextEscalationId, readAnswer, expireQuestion, writeQuestion } from "../queue/escalation-files.ts";
 
 const POLL_MS = 500;
 
@@ -56,7 +56,7 @@ export async function run(argv: string[]): Promise<Result> {
       text: `Worker ${attempt} is blocked and asks: ${question} Answer with: cpd answer ${id} "<answer>" --wf ${wf}`,
     });
   } catch (e) {
-    removeQuestion(wf, id);
+    expireQuestion(wf, id);
     throw e;
   }
 
@@ -65,7 +65,7 @@ export async function run(argv: string[]): Promise<Result> {
     const a = readAnswer(wf, id);
     if (a) return { ok: true, id, answer: a.answer };
     if (Date.now() >= deadline) {
-      removeQuestion(wf, id);
+      expireQuestion(wf, id);
       throw timeout("ask_timeout", `no answer to ${id} within ${minutes} minutes`, { id, wf, minutes });
     }
     await sleep(POLL_MS);

@@ -57,7 +57,7 @@ test("Lead-restart durability: a question with no reader is listed; answering la
   assert.equal((await asking).json.answer, "late");
 });
 
-test("timeout exits 5, leaves no .q.json; later answer is escalation_missing; double answer is escalation_answered", async () => {
+test("timeout exits 5, renames to .expired.json (id never reused); later answer is escalation_missing; double answer is escalation_answered", async () => {
   const { env, escDir } = setup();
   const t0 = Date.now();
   const r = await runCli(["ask", "job-a1", "q?", "--timeout-minutes", "0.05", "--wf", WF], { env });
@@ -65,17 +65,21 @@ test("timeout exits 5, leaves no .q.json; later answer is escalation_missing; do
   assert.equal(r.json.error.code, "ask_timeout");
   assert.ok(Date.now() - t0 >= 2900);
   assert.deepEqual(readdirSync(escDir).filter((n) => n.endsWith(".q.json")), []);
+  assert.deepEqual(readdirSync(escDir).filter((n) => n.endsWith(".expired.json")), ["job-a1-q1.expired.json"]);
+  assert.deepEqual(listOpenQuestions(WF), []);
   const late = await runCli(["answer", "job-a1-q1", "x", "--wf", WF], { env });
   assert.equal(late.code, 3);
   assert.equal(late.json.error.code, "escalation_missing");
 
   const asking = runCli(["ask", "job-a1", "again?", "--wf", WF], { env });
-  await until(() => existsSync(join(escDir, "job-a1-q1.q.json")));
-  assert.equal((await runCli(["answer", "job-a1-q1", "one", "--wf", WF], { env })).code, 0);
+  await until(() => existsSync(join(escDir, "job-a1-q2.q.json")));
+  assert.equal(existsSync(join(escDir, "job-a1-q1.expired.json")), true);
+  assert.equal((await runCli(["answer", "job-a1-q2", "one", "--wf", WF], { env })).code, 0);
   await asking;
-  const twice = await runCli(["answer", "job-a1-q1", "two", "--wf", WF], { env });
+  const twice = await runCli(["answer", "job-a1-q2", "two", "--wf", WF], { env });
   assert.equal(twice.code, 3);
   assert.equal(twice.json.error.code, "escalation_answered");
+  assert.equal((await runCli(["answer", "job-a1-q1", "x", "--wf", WF], { env })).json.error.code, "escalation_missing");
 });
 
 test("ask without an attached Lead fails lead_not_attached and leaves no question", async () => {
