@@ -8,7 +8,7 @@ export async function run(argv: string[]): Promise<Result> {
   const wf = resolveWorkflowId(values.wf);
   const workflow = readWorkflow(wf);
   const phase = await getPhase(wf);
-  const jobs = await listJobsWithAttempts(wf);
+  const { jobs, invalid } = await listJobsWithAttempts(wf);
   const counts = Object.fromEntries(JOB_STATUSES.map((s) => [s, jobs.filter((j) => j.status === s).length]));
   return {
     ok: true,
@@ -16,6 +16,8 @@ export async function run(argv: string[]): Promise<Result> {
     phase,
     jobs: jobs.map((j) => ({ key: j.key, title: j.title, status: j.status, tier: j.tier, needs: j.needs, attempts: j.attempts })),
     counts,
+    // Only present when a Job is broken, so the happy-path output is unchanged.
+    ...(invalid.length > 0 ? { invalid } : {}),
     tamper: await listTamper(wf),
   };
 }

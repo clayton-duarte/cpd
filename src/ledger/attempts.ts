@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { failure, notFound, refused, usage } from "../lib/errors.ts";
+import { CpdError, failure, notFound, refused, usage } from "../lib/errors.ts";
 import { assertAttemptId, assertJobKey, attemptId } from "../lib/paths.ts";
 import { formatTier, parseTier } from "../lib/tiers.ts";
 import { logEvent } from "./audit.ts";
@@ -247,7 +247,14 @@ export async function startAttempt(wf: string, jobKey: string, opts: StartOption
       issueId = await createIssue(l, [`--title=${jobKey} attempt ${number}`, "-t", "attempt", "--parent", job.id, "-s", "in_progress", "--metadata", JSON.stringify(meta)]);
     } catch (e) {
       // Do not leave a `running` Job without an Attempt.
-      await l.write(["update", job.id, "--if-status", "running", "-s", "queued"]).catch(() => undefined);
+      try {
+        await l.write(["update", job.id, "--if-status", "running", "-s", "queued"]);
+      } catch (rollback) {
+        const rollbackError = rollback instanceof Error ? rollback.message : String(rollback);
+        logEvent(wf, "error", "attempt_start_rollback_failed", { job: jobKey, error: (e as Error).message, rollbackError });
+        if (e instanceof CpdError) throw new CpdError(e.code, e.message, e.exitCode, { ...e.details, rollbackError });
+        throw failure("attempt_start_failed", (e as Error).message, { rollbackError });
+      }
       throw e;
     }
     const attempt = (await attemptsOf(l, job)).find((a) => a.issue === issueId)!;

@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
-import { failure, notFound, refused, usage } from "../lib/errors.ts";
+import { CpdError, failure, notFound, refused, usage } from "../lib/errors.ts";
 import { assertJobKey } from "../lib/paths.ts";
 import { loadConfig } from "../lib/config.ts";
 import { formatTier, loadCatalog, parseTier, validTier, type Catalog } from "../lib/tiers.ts";
 import { logEvent } from "./audit.ts";
 import { createIssue, listIssues, metadataArgs, readLedger, withLedger, workflowIssue, type ReadLedger } from "./bd.ts";
-import { fingerprintOfIssue, keyMap, needsOf, writeFingerprints } from "./fingerprint.ts";
+import { fingerprint, fingerprintOfIssue, keyMap, needsOf, readFingerprints, writeFingerprints } from "./fingerprint.ts";
 import { BdComments, BdIssues, type BdIssue } from "./schema.ts";
 import { getPhaseIn } from "./workflow.ts";
 
@@ -114,11 +114,31 @@ function creationOrder(a: BdIssue, b: BdIssue): number {
 
 export type Loaded = { jobs: Job[]; issues: BdIssue[]; keys: Map<string, string> };
 
+/** A Job issue whose status or metadata no longer parses (hand-broken). */
+export type InvalidJob = { id: string; key?: string; issues: unknown[] };
+
 /** Every Job of the Workflow in creation order, plus the raw issues. */
 export async function loadJobs(l: ReadLedger): Promise<Loaded> {
   const issues = (await listIssues(l, "job")).sort(creationOrder);
   const keys = keyMap(issues);
   return { jobs: issues.map((i) => toJob(i, keys)), issues, keys };
+}
+
+/** Like `loadJobs`, but a Job that does not parse is reported in `invalid` instead of failing. Only `workflow show` uses it. */
+async function loadJobsLenient(l: ReadLedger): Promise<Loaded & { invalid: InvalidJob[] }> {
+  const issues = (await listIssues(l, "job")).sort(creationOrder);
+  const keys = keyMap(issues);
+  const jobs: Job[] = [];
+  const invalid: InvalidJob[] = [];
+  for (const i of issues) {
+    try {
+      jobs.push(toJob(i, keys));
+    } catch (e) {
+      if (!(e instanceof CpdError) || e.code !== "ledger_invalid") throw e;
+      invalid.push({ id: i.id, ...(typeof i.metadata?.key === "string" ? { key: i.metadata.key } : {}), issues: (e.details.issues as unknown[]) ?? [] });
+    }
+  }
+  return { jobs, issues, keys, invalid };
 }
 
 export const rawOf = (loaded: Loaded, job: Job): BdIssue => loaded.issues.find((i) => i.id === job.id)!;
@@ -166,9 +186,10 @@ const AttemptMeta = z.looseObject({
 export type AttemptSummary = { id: string; issue: string; number: number; tier: string | null; outcome: string | null; cause: string | null; status: string };
 
 /** Attempts of every Job, by Job issue id, in Attempt-number order. */
-async function loadAttempts(l: ReadLedger, loaded: Loaded): Promise<Map<string, AttemptSummary[]>> {
+async function loadAttempts(l: ReadLedger, loaded: Loaded, skipParents: ReadonlySet<string> = new Set()): Promise<Map<string, AttemptSummary[]>> {
   const out = new Map<string, AttemptSummary[]>();
   for (const a of await listIssues(l, "attempt")) {
+    if (a.parent !== undefined && skipParents.has(a.parent)) continue;
     const meta = AttemptMeta.safeParse(a.metadata ?? {});
     const job = a.parent === undefined ? undefined : loaded.jobs.find((j) => j.id === a.parent);
     if (!meta.success || !job || meta.data.number === undefined) {
@@ -203,15 +224,18 @@ export const jobView = (j: Job) => ({
 
 export type JobWithAttempts = Job & { attempts: { id: string; tier: string | null; outcome: string | null }[] };
 
-/** Every Job with its Attempts (`id`, `tier`, `outcome`), for `workflow show`. */
-export async function listJobsWithAttempts(wf: string): Promise<JobWithAttempts[]> {
+/** Every parseable Job with its Attempts (`id`, `tier`, `outcome`), plus the Jobs that do not parse, for `workflow show`. */
+export async function listJobsWithAttempts(wf: string): Promise<{ jobs: JobWithAttempts[]; invalid: InvalidJob[] }> {
   const l = readLedger(wf);
-  const loaded = await loadJobs(l);
-  const attempts = await loadAttempts(l, loaded);
-  return loaded.jobs.map((j) => ({
-    ...j,
-    attempts: (attempts.get(j.id) ?? []).map((a) => ({ id: a.id, tier: a.tier, outcome: a.outcome })),
-  }));
+  const loaded = await loadJobsLenient(l);
+  const attempts = await loadAttempts(l, loaded, new Set(loaded.invalid.map((i) => i.id)));
+  return {
+    jobs: loaded.jobs.map((j) => ({
+      ...j,
+      attempts: (attempts.get(j.id) ?? []).map((a) => ({ id: a.id, tier: a.tier, outcome: a.outcome })),
+    })),
+    invalid: loaded.invalid,
+  };
 }
 
 const comments = async (l: ReadLedger, id: string) =>
@@ -262,8 +286,9 @@ export async function loadTierContext(): Promise<{ catalog: Catalog; defaultRevi
   return { catalog: await loadCatalog(config), defaultReviewTier: config.defaultReviewTier };
 }
 
-export function assertTier(catalog: Catalog, s: string): string {
+export function assertTier(catalog: Catalog | undefined, s: string): string {
   const t = parseTier(s);
+  if (!catalog) throw failure("catalog_missing", "a Tier was given but the Tier catalog was not loaded");
   if (!validTier(catalog, t)) {
     throw usage("tier_invalid", `Tier ${formatTier(t)} is not valid: ${catalog[t.letter].model} supports efforts ${catalog[t.letter].efforts.join(",")}`, {
       tier: formatTier(t),
@@ -340,7 +365,13 @@ function assertTitle(title: string): void {
  * The Job is created as a draft and only flipped to `queued` after its Dependencies and fingerprint exist,
  * so a concurrent scheduler never sees it half-built.
  */
-export async function addJob(wf: string, input: AddJobInput, catalog: Catalog): Promise<{ job: Job; fingerprint: string | null }> {
+export async function addJob(
+  wf: string,
+  input: AddJobInput,
+  catalog: Catalog,
+  /** Test seam: called after each dispatch-phase write (`fingerprint`), so a test can simulate a crash there. */
+  afterWrite?: (step: "fingerprint") => void,
+): Promise<{ job: Job; fingerprint: string | null }> {
   assertJobKey(input.key);
   assertTitle(input.title);
   const tier = assertTier(catalog, input.tier);
@@ -352,7 +383,27 @@ export async function addJob(wf: string, input: AddJobInput, catalog: Catalog): 
       throw refused("illegal_phase", `jobs can only be added in phase plan or dispatch, not ${phase}`, { phase });
     }
     const loaded = await loadJobs(l);
-    if (loaded.jobs.some((j) => j.key === input.key)) throw refused("job_key_exists", `a Job with key ${input.key} already exists`, { key: input.key });
+    const existing = loaded.jobs.find((j) => j.key === input.key);
+    if (existing) {
+      // A crash after the fingerprint was stored leaves a draft; the same input finishes it.
+      const stored = readFingerprints(wf)[input.key];
+      const wanted = fingerprint({
+        goal: spec.goal,
+        tier,
+        review_tier: reviewTier,
+        context: spec.context,
+        touches: spec.touches,
+        acceptance: spec.acceptance,
+        out_of_scope: spec.outOfScope,
+        needs: input.needs,
+      });
+      if (phase === "dispatch" && existing.status === "draft" && stored !== undefined && stored === wanted && stored === fingerprintOfIssue(rawOf(loaded, existing), loaded.keys)) {
+        await l.write(["update", existing.id, "--if-status", "draft", "-s", "queued"]);
+        logEvent(wf, "info", "job_appended", { key: input.key, id: existing.id, needs: input.needs, fingerprint: stored, resumed: true });
+        return { job: find((await loadJobs(l)).jobs, input.key), fingerprint: stored };
+      }
+      throw refused("job_key_exists", `a Job with key ${input.key} already exists`, { key: input.key });
+    }
     assertNeeds(input.key, input.needs, loaded.jobs);
     assertAcyclic(loaded.jobs, input.key, input.needs);
 
@@ -376,6 +427,7 @@ export async function addJob(wf: string, input: AddJobInput, catalog: Catalog): 
       const after = await loadJobs(l);
       fp = fingerprintOfIssue(rawOf(after, find(after.jobs, input.key)), after.keys);
       writeFingerprints(wf, { [input.key]: fp });
+      afterWrite?.("fingerprint");
       await l.write(["update", id, "--if-status", "draft", "-s", "queued"]);
       logEvent(wf, "info", "job_appended", { key: input.key, id, needs: input.needs, fingerprint: fp });
     }
@@ -387,7 +439,8 @@ export async function addJob(wf: string, input: AddJobInput, catalog: Catalog): 
 export type EditJobPatch = { title?: string; tier?: string; reviewTier?: string; spec?: JobSpec; needs?: string[] };
 
 /** `job edit`: draft only, else `job_locked` (exit 3). */
-export async function editJob(wf: string, key: string, patch: EditJobPatch, catalog: Catalog): Promise<Job> {
+/** `catalog` is only needed (and only loaded by the command) when the patch sets a Tier. */
+export async function editJob(wf: string, key: string, patch: EditJobPatch, catalog?: Catalog): Promise<Job> {
   assertJobKey(key);
   if (Object.values(patch).every((v) => v === undefined)) throw usage("nothing_to_edit", "nothing to edit: pass at least one field");
   return withLedger(wf, `job edit ${key}`, async (l) => {

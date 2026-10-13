@@ -20,7 +20,7 @@ export async function run(argv: string[]): Promise<Result> {
   const key = positionals[0];
   if (key === undefined) throw usage("usage", "cpd job edit: pass the Job key");
   const wf = resolveWorkflowId(values.wf);
-  const { catalog } = await loadTierContext();
+  const catalog = values.tier === undefined && values["review-tier"] === undefined ? undefined : (await loadTierContext()).catalog;
   const job = await editJob(
     wf,
     key,

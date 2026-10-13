@@ -3,7 +3,7 @@ import { failure, refused, usage } from "../lib/errors.ts";
 import { parseTier } from "../lib/tiers.ts";
 import { logEvent } from "./audit.ts";
 import { metadataArgs, readLedger, withLedger, workflowIssue, type ReadLedger } from "./bd.ts";
-import { canonicalJson, fingerprintOfIssue, sha256, writeFingerprints } from "./fingerprint.ts";
+import { canonicalJson, fingerprintOfIssue, readFingerprints, sha256, writeFingerprints } from "./fingerprint.ts";
 import { findCycle, loadJobs, rawOf, type Job } from "./jobs.ts";
 import { getPhaseIn, setPhaseIn } from "./workflow.ts";
 
@@ -105,12 +105,29 @@ export async function latestApprovedFingerprint(wf: string, l: ReadLedger = read
  * The Ledger part of `plan lock`: approval for the current fingerprint, valid DAG, fingerprints written,
  * every draft `queued` in one `bd batch`, phase `dispatch`. All checks run before the first write.
  */
-export function lockPlan(wf: string): Promise<{ fingerprint: string; jobs: string[] }> {
+export function lockPlan(
+  wf: string,
+  /** Test seam: called after each write (`fingerprints`, `queue`), so a test can simulate a crash there. */
+  afterWrite?: (step: "fingerprints" | "queue") => void,
+): Promise<{ fingerprint: string; jobs: string[] }> {
   return withLedger(wf, "plan lock", async (l) => {
     const phase = await getPhaseIn(l);
     if (phase !== "plan") throw refused("illegal_phase", `plan lock needs phase plan, not ${phase}`, { phase });
     const loaded = await loadJobs(l);
     const drafts = loaded.jobs.filter((j) => j.status === "draft");
+
+    // Resume: an earlier run queued every Job and stored its fingerprint, but died before the phase moved.
+    const live = loaded.jobs.filter((j) => j.status !== "cancelled");
+    if (drafts.length === 0 && live.length > 0) {
+      const stored = readFingerprints(wf);
+      const done = live.every((j) => j.status === "queued" && stored[j.key] === fingerprintOfIssue(rawOf(loaded, j), loaded.keys));
+      const approved = await latestApprovedFingerprint(wf, l);
+      if (done && approved !== null) {
+        await setPhaseIn(l, "dispatch", { dispatch_started_at: new Date().toISOString() });
+        logEvent(wf, "info", "plan_locked", { jobs: live.map((j) => j.key), fingerprint: approved, resumed: true });
+        return { fingerprint: approved, jobs: live.map((j) => j.key) };
+      }
+    }
     if (drafts.length === 0) throw refused("no_jobs", "the plan has no draft Jobs to lock");
 
     const fingerprint = planFingerprintOf(loaded.jobs);
@@ -136,7 +153,9 @@ export function lockPlan(wf: string): Promise<{ fingerprint: string; jobs: strin
       wf,
       Object.fromEntries(drafts.map((j) => [j.key, fingerprintOfIssue(rawOf(loaded, j), loaded.keys)])),
     );
+    afterWrite?.("fingerprints");
     await l.write(["batch"], undefined, drafts.map((j) => `update ${j.id} status=queued\n`).join(""));
+    afterWrite?.("queue");
     await setPhaseIn(l, "dispatch", { dispatch_started_at: new Date().toISOString() });
     logEvent(wf, "info", "plan_locked", { jobs: drafts.map((j) => j.key), fingerprint });
     return { fingerprint, jobs: drafts.map((j) => j.key) };
