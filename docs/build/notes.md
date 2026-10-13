@@ -89,3 +89,26 @@ Running record of Attempt outcomes, Lead decisions and proposed changes. Reports
   - malformed JSON from a successful `wt merge` throws after the Lead moved, without rollback;
   - `rebaseInProgress` swallows all realpath errors.
 - `queue-ask` follow-ups: `watch` must ignore `*.expired.json`; the first test in `test/commands/ask.test.ts` can flake on ENOENT (create the queue dir in setup).
+
+## Wrap-up, 2026-10-13 (afternoon)
+
+- **v0 is merged into `main` at `71ca32d`** (PR #1).
+  - `cpd pr open`, then `cpd pr rebase`, then a fast-forward push of `cpd/v0` to `main`.
+  - `cpd watch` saw the merge, moved Workflow `v0` to `done`, froze the Ledger and exited after 246 ticks.
+- **Merged by cpd:** `watch`, `pi-adapter`, `lead-skill`, `ledger-hardening`, `adapters-hardening`, `pr` and `lead-everywhere-2`.
+- **Cancelled, with their content in the v1 plan:** `gate-speed`, `retry-carry-over`, `e2e`, `gate-failure-report`(-2), `job-add-in-pr`(-2) and `lead-everywhere` (replaced by `lead-everywhere-2`). The approved commits of the two load-rolled-back Jobs are on origin branches `wip/gate-failure-report` and `wip/job-add-in-pr`.
+- **The Lead moved to a fork** of the build session that loads the cpd adapter (pane `w1:pQ`). From then on it received messages instead of polling.
+- **The Gate is now `npm run verify`.** The User decided it; `verify.sh` and its one-at-a-time lock are gone.
+- **Incidents in the wrap-up, all recorded as v1 defects in `~/.cpd/plans/cpd-v1/lead-context.md`:**
+  - post-merge Gate failures under load rolled back approved work twice;
+  - `wt merge` ran the old hook after the Gate switch;
+  - a Reviewer split from the old Lead pane failed;
+  - Reviewers cannot see Escalation answers;
+  - a cancel raced `attempt run`;
+  - a frozen Ledger blocks `cpd workflow show`.
+- **dotfiles (merged, `0204b5c`):** cpd on all three machines, the per-machine config (Air 3, mac-pro 8, homeserver 6), Linux installs of pinned herdr/worktrunk/beads with checksums, pi 1.2.0 or newer, a clone over ssh, and plannotator remote mode on port 19432 with an ssh `LocalForward` from the Macs.
+  - Homeserver: applied; `cpd doctor` ok.
+  - MacBook Air: applied.
+  - mac-pro: blocked. Its `~/projects/cpd` is the old cpd-gui app, and its origin still points at `clayton-duarte/cpd`. A pre-existing `.claude/settings.json` drift also needs a decision.
+- **Next:** Workflow `v1` on the homeserver, from the plan bundle `~/.cpd/plans/cpd-v1` (9 Jobs).
+
