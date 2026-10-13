@@ -1,0 +1,39 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { z } from "zod";
+import { run, runJson } from "../../src/lib/exec.ts";
+import { fakeBin, tmpDir } from "../helpers/index.ts";
+
+const opts = () => ({ cwd: tmpDir(), env: { PATH: process.env.PATH } });
+
+test("run captures stdout, stderr and exit code", async () => {
+  const r = await run("sh", ["-c", "echo out; echo err >&2; exit 7"], opts());
+  assert.deepEqual(r, { code: 7, stdout: "out\n", stderr: "err\n" });
+});
+
+test("run passes input on stdin, and /dev/null otherwise", async () => {
+  assert.equal((await run("cat", [], { ...opts(), input: "hi" })).stdout, "hi");
+  assert.equal((await run("cat", [], opts())).stdout, "");
+});
+
+test("run times out with code exec_timeout", async () => {
+  await assert.rejects(run("sleep", ["5"], { ...opts(), timeoutMs: 100 }), (e: any) => e.code === "exec_timeout" && e.exitCode === 5);
+});
+
+test("runJson parses and validates", async () => {
+  const b = fakeBin("tool", `echo '{"a":1}'`);
+  const v = await runJson(b.path, [], opts(), z.object({ a: z.number() }));
+  assert.deepEqual(v, { a: 1 });
+});
+
+test("runJson fails with bad_tool_output on invalid JSON, with tails", async () => {
+  await assert.rejects(
+    runJson("sh", ["-c", "echo notjson; echo oops >&2"], opts(), z.any()),
+    (e: any) => e.code === "bad_tool_output" && e.details.stdout.includes("notjson") && e.details.stderr.includes("oops"),
+  );
+});
+
+test("runJson fails with bad_tool_output on schema mismatch and non-zero exit", async () => {
+  await assert.rejects(runJson("sh", ["-c", "echo '{}'"], opts(), z.object({ a: z.number() })), (e: any) => e.code === "bad_tool_output");
+  await assert.rejects(runJson("sh", ["-c", "echo '{}'; exit 3"], opts(), z.any()), (e: any) => e.code === "bad_tool_output");
+});

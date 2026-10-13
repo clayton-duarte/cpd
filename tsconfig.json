@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "erasableSyntaxOnly": true,
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "allowImportingTsExtensions": true,
+    "target": "ES2023",
+    "types": ["node"],
+    "skipLibCheck": true
+  },
+  "include": ["src", "test", "bin"]
+}

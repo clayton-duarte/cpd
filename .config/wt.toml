@@ -1,0 +1,5 @@
+[pre-start]
+deps = "npm ci --no-audit --no-fund"
+
+[pre-merge]
+verify = "./verify.sh || exit 64"
