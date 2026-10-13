@@ -256,7 +256,7 @@ Slots are `slots/slot-0.json` … `slot-<concurrency-1>.json`, each created excl
   - Writes `escalations/<esc-id>.q.json` = `{v:1, id, wf, attempt, question, askedAt, askerPid}` and a Lead queue message `escalation`.
   - Polls for `.a.json` every 0.5 s.
   - Returns `{ok, answer}`.
-  - On timeout (default `askTimeoutMinutes`) it removes the `.q.json`, exits 5 `ask_timeout`, and records it.
+  - On timeout (default `askTimeoutMinutes`) it renames the question to `<esc-id>.expired.json` (never deleted, so ids are never reused and history is kept), exits 5 `ask_timeout`, and records it. Orphan expiry (dead asker) does the same rename.
 - `cpd answer <esc-id> <answer>`: run by the Lead.
   - Refuses `escalation_missing` or `escalation_answered` (exit 3).
   - Writes `.a.json` = `{v:1, id, answer, answeredAt}` and queue message `escalation-answered`.
