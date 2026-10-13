@@ -2,4 +2,4 @@
 deps = "npm ci --no-audit --no-fund"
 
 [pre-merge]
-verify = "./verify.sh || exit 64"
+verify = "npm run verify || exit 64"
