@@ -1,6 +1,10 @@
-import { failure } from "../lib/errors.ts";
+import { resolve } from "node:path";
+import { parseCommand, resolveWorkflowId } from "../ledger/workflow.ts";
 import type { Result } from "../lib/output.ts";
+import { renderPlan } from "../render/plan.ts";
 
-export async function run(_argv: string[]): Promise<Result> {
-  throw failure("not_implemented", "cpd plan render is not implemented");
+export async function run(argv: string[]): Promise<Result> {
+  const { values } = parseCommand("plan render", argv, { wf: { type: "string" }, out: { type: "string" } });
+  const { path, fingerprint } = await renderPlan(resolveWorkflowId(values.wf), values.out === undefined ? undefined : resolve(values.out));
+  return { ok: true, path, fingerprint };
 }
