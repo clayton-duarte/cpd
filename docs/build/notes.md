@@ -71,6 +71,8 @@ Running record of Attempt outcomes, Lead decisions and proposed changes. Reports
 
 - **First real Escalation (07:13):** `lead-skill-a1` ran `cpd ask` and found a contract gap: after `cpd pr open` (phase `pr`), `job add` was `illegal_phase`, so PR feedback could not become appended Jobs as the requirements say, and nothing pushed later merges to the PR. Lead decision, contract amended (§11): `job add` is allowed in phase `pr` with the `dispatch` semantics, and `cpd pr rebase` is also how phase-`pr` merges reach the PR. The code change is appended as Job `job-add-in-pr` (S1). Answered with `cpd answer lead-skill-a1-q1 …` within minutes.
 
+- **Ledger lock contention (07:40):** `cpd workflow show` took 62 s (3.9 s CPU). Every `bd` call holds `locks/ledger.lock` (contract §8), and a `watch` tick spends ~17 s in `bd` calls under load (~1.3 s each), so with `tickSeconds: 5` the lock was almost never free. `tickSeconds` 5 → 20 in `~/.cpd/config.json` (build-only, reason recorded) and `watch` restarted; it took over the stale `watch.json` as specified. Post-v0 candidates: fewer `bd` calls per tick, and reads that do not need the writer lock.
+
 ## Appended work (to dispatch through `cpd` later)
 
 - Now in the Ledger as `ledger-hardening`, `adapters-hardening` (absorbs `scaffold-polish` and `git-wt-hardening`; the merge-lock wait moved into `attempt-run` as a `lock_timeout` retry) and `gate-speed`. Original notes:
