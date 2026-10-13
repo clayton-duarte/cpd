@@ -1,6 +1,6 @@
 # Job `watch`: `cpd watch` scheduler and `cpd plan lock`
 
-Tier S4 · Needs: `attempt-run` (for `dispatchOne`), `ledger-attempts`, `herdr`, `queue-ask` · Read `_common.md` first. Contract sections: §9, §11 (`plan lock`, `watch`, `job cancel` running case), §12 (the parts `watch` owns: spawning `attempt run`, timeouts, cancellation, crash detection), §10.
+Tier S4 · Needs: `attempt-run` (for `dispatchOne`), `ledger-attempts`, `herdr`, `queue-ask`, `escalation-expiry` · Read `_common.md` first. Contract sections: §9, §11 (`plan lock`, `watch`, `job cancel` running case), §12 (the parts `watch` owns: spawning `attempt run`, timeouts, cancellation, crash detection), §10.
 
 ## Goal
 The long-running loop that turns a locked plan into running Attempts within the machine's concurrency cap. It enforces timeouts (excluding Escalation waits), mirrors Escalations into the Ledger, handles cancellation and crashes, polls the PR, and stops when the Workflow is done. Also the `plan lock` command that starts Dispatch.
@@ -25,7 +25,7 @@ The long-running loop that turns a locked plan into running Attempts within the 
   - **Timeout:** close the Worker pane and set write-once `timed_out`.
   - **Crash:** the Worker agent is gone and the `attempt run` pid is not alive, so fail the Attempt as `crashed` (ladder) and send its message.
   - **Cancellation:** `cancel_requested` → stop the Attempt as §11 describes.
-  - **Escalations:** mirror new questions and answers into the Ledger (`escalations.ts` of `ledger-attempts`); expire orphaned questions (`expireOrphans`).
+  - **Escalations:** mirror new questions and answers into the Ledger (`escalations.ts` of `ledger-attempts`). Expire orphaned questions (`expireOrphans`). For every `<esc-id>.expired.json` (timeout or orphan), call `expireEscalation` so the Attempt is not blocked by an open Escalation. Never treat `*.expired.json` as an open question.
 - Completion: send `all-merged` exactly once (write-once Workflow metadata).
 - PR phase: run `cpd pr poll --wf <wf>` as a subprocess every `prPollSeconds` (§11 step 5). A `not_implemented` or failing result is logged and reported with the error rate limit, never fatal.
 
