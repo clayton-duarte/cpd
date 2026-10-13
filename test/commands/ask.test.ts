@@ -1,14 +1,47 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
+import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { runCli } from "../helpers/index.ts";
+import { CLI, runCli } from "../helpers/index.ts";
 import { listOpenQuestions } from "../../src/queue/escalation-files.ts";
 import { setup, WF } from "../queue/helpers.ts";
 
 const msgs = (dir: string) =>
   readdirSync(dir).filter((n) => n.endsWith(".json")).sort().map((n) => JSON.parse(readFileSync(join(dir, n), "utf8")));
+
+/** Test setup with the Lead queue dir already created (no ENOENT race with the asker's first write). */
+function setupWithQueue() {
+  const s = setup();
+  mkdirSync(s.queueDir, { recursive: true });
+  return s;
+}
+
+/** Spawn a blocking `cpd ask` (short timeout), killed in t.after whatever happens. */
+function startAsk(t: TestContext, env: NodeJS.ProcessEnv, attempt: string, question: string) {
+  const child = spawn(process.execPath, [CLI, "ask", attempt, question, "--timeout-minutes", "0.5", "--wf", WF], {
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  t.after(() => {
+    child.kill("SIGKILL");
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8").on("data", (d: string) => (stdout += d));
+  child.stderr.setEncoding("utf8").on("data", (d: string) => (stderr += d));
+  return new Promise<{ code: number; json: any; stderr: string }>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code) => {
+      let json: any;
+      try {
+        json = JSON.parse(stdout);
+      } catch {}
+      resolve({ code: code ?? -1, json, stderr });
+    });
+  });
+}
 
 async function until<T>(f: () => T | undefined | false, ms = 10000): Promise<T> {
   const end = Date.now() + ms;
@@ -20,9 +53,9 @@ async function until<T>(f: () => T | undefined | false, ms = 10000): Promise<T> 
   }
 }
 
-test("ask blocks; answer from another process unblocks it; files and messages are ordered", async () => {
-  const { env, queueDir, escDir } = setup();
-  const asking = runCli(["ask", "job-a1", "which db?", "--wf", WF], { env });
+test("ask blocks; answer from another process unblocks it; files and messages are ordered", async (t) => {
+  const { env, queueDir, escDir } = setupWithQueue();
+  const asking = startAsk(t, env, "job-a1", "which db?");
   await until(() => existsSync(join(escDir, "job-a1-q1.q.json")) && msgs(queueDir).length === 1);
   const esc = msgs(queueDir)[0];
   assert.equal(esc.kind, "escalation");
@@ -44,9 +77,9 @@ test("ask blocks; answer from another process unblocks it; files and messages ar
   assert.deepEqual(Object.keys(a).sort(), ["answer", "answeredAt", "id", "v"]);
 });
 
-test("Lead-restart durability: a question with no reader is listed; answering later unblocks the asker", async () => {
-  const { env, escDir, queueDir } = setup();
-  const asking = runCli(["ask", "job-a1", "q?", "--wf", WF], { env });
+test("Lead-restart durability: a question with no reader is listed; answering later unblocks the asker", async (t) => {
+  const { env, escDir, queueDir } = setupWithQueue();
+  const asking = startAsk(t, env, "job-a1", "q?");
   await until(() => existsSync(join(escDir, "job-a1-q1.q.json")));
   // "Lead restarts": nobody consumed the queue; the question is still discoverable from files alone.
   await sleep(1000);
@@ -57,8 +90,8 @@ test("Lead-restart durability: a question with no reader is listed; answering la
   assert.equal((await asking).json.answer, "late");
 });
 
-test("timeout exits 5, renames to .expired.json (id never reused); later answer is escalation_missing; double answer is escalation_answered", async () => {
-  const { env, escDir } = setup();
+test("timeout exits 5, renames to .expired.json (id never reused); later answer is escalation_missing; double answer is escalation_answered", async (t) => {
+  const { env, escDir } = setupWithQueue();
   const t0 = Date.now();
   const r = await runCli(["ask", "job-a1", "q?", "--timeout-minutes", "0.05", "--wf", WF], { env });
   assert.equal(r.code, 5);
@@ -71,7 +104,7 @@ test("timeout exits 5, renames to .expired.json (id never reused); later answer 
   assert.equal(late.code, 3);
   assert.equal(late.json.error.code, "escalation_missing");
 
-  const asking = runCli(["ask", "job-a1", "again?", "--wf", WF], { env });
+  const asking = startAsk(t, env, "job-a1", "again?");
   await until(() => existsSync(join(escDir, "job-a1-q2.q.json")));
   assert.equal(existsSync(join(escDir, "job-a1-q1.expired.json")), true);
   assert.equal((await runCli(["answer", "job-a1-q2", "one", "--wf", WF], { env })).code, 0);
