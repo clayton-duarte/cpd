@@ -15,7 +15,7 @@ Status: **draft for Stage 2 approval**. This document is normative for every Sta
   - Unit tests use fake binaries: executable scripts on a temp `PATH` that record argv and print canned JSON.
   - Integration tests against real `bd`, `wt` and `git` run in temp dirs with a sandboxed `HOME` and run by default.
   - Integration tests that need a herdr server or a real pi model run only when `CPD_IT=1`, against herdr session `cpd-test`.
-- **Gate for this repo:** `./verify.sh` = `npx tsc --noEmit -p . && node --test`. `.config/wt.toml` sets `[pre-merge] verify = "./verify.sh || exit 64"`.
+- **Gate for this repo:** `npm run verify` = `npm run typecheck && npm test` (`tsc --noEmit -p .`, then `node --test`). `.config/wt.toml` sets `[pre-merge] verify = "npm run verify || exit 64"`. (Until 2026-10-13 this was `./verify.sh`; the User chose npm scripts. The tamper list in §11 still names `verify.sh` until v1 protects `package.json` instead.)
 
 ## 2. Output, errors and exit codes
 
