@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { commitsAhead, runGate, tamperCheck, treeClean } from "../../src/git/gate.ts";
+import { gitOut } from "../../src/git/git.ts";
 import { commitFile, createFixture, makeAttempt, sandbox, write } from "./fixtures.ts";
 
 sandbox();
@@ -14,6 +15,31 @@ test("tamperCheck returns exactly the forbidden paths touched", async () => {
     { file: ".config/wt.toml", content: "[pre-merge]\n", message: "weaken config" },
   ]);
   assert.deepEqual((await tamperCheck(a.path, f.leadBranch, a.branch)).sort(), [".config/wt.toml", ".cpd/notes.md", "verify.sh"]);
+});
+
+// git diff detects renames by default and --name-only prints only the new name, so a rename must not hide the old path.
+test.describe("tamperCheck sees a forbidden file renamed away (Gate bypass, t3 F11)", () => {
+  for (const [from, to] of [
+    [".config/wt.toml", ".config/wt.toml.bak"],
+    ["verify.sh", "verify.old"],
+  ] as const) {
+    test(`git mv ${from} ${to}`, async () => {
+      const f = await createFixture();
+      const a = await makeAttempt(f, "j1-a1");
+      await gitOut(a.path, ["mv", from, to]);
+      await gitOut(a.path, ["commit", "-q", "-m", `rename ${from}`]);
+      assert.deepEqual(await tamperCheck(a.path, f.leadBranch, a.branch), [from]);
+    });
+  }
+
+  test("git mv of a file under .cpd/", async () => {
+    const f = await createFixture();
+    await commitFile(f.leadWorktree, ".cpd/notes.md", "x\n", "lead: add cpd notes");
+    const a = await makeAttempt(f, "j1-a1");
+    await gitOut(a.path, ["mv", ".cpd/notes.md", "notes.md"]);
+    await gitOut(a.path, ["commit", "-q", "-m", "move cpd notes out"]);
+    assert.deepEqual(await tamperCheck(a.path, f.leadBranch, a.branch), [".cpd/notes.md"]);
+  });
 });
 
 test("tamperCheck is empty for an honest Attempt", async () => {

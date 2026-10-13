@@ -7,9 +7,12 @@ export const FORBIDDEN_PATHS: readonly string[] = [".config/wt.toml", "verify.sh
 
 const isForbidden = (p: string): boolean => FORBIDDEN_PATHS.some((f) => (f.endsWith("/") ? p.startsWith(f) : p === f));
 
-/** Forbidden paths touched by `branch` relative to `base` (three-dot diff). */
+/**
+ * Forbidden paths touched by `branch` relative to `base` (three-dot diff). `--no-renames` makes a
+ * rename show as delete + add, so renaming a forbidden file away still reports its old path.
+ */
 export async function tamperCheck(worktree: string, base: string, branch: string): Promise<string[]> {
-  return (await diffNames(worktree, `${base}...${branch}`)).filter(isForbidden);
+  return (await diffNames(worktree, `${base}...${branch}`, ["--no-renames"])).filter(isForbidden);
 }
 
 export type GateResult = { passed: boolean; exitCode: number; outputTail: string };

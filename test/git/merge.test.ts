@@ -3,7 +3,7 @@ import { chmodSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { removeAttemptWorktree } from "../../src/git/attempt-worktree.ts";
-import { rebaseInProgress, statusPorcelain } from "../../src/git/git.ts";
+import { gitOut, rebaseInProgress, statusPorcelain } from "../../src/git/git.ts";
 import { mergeAttempt, type MergeOutcome } from "../../src/git/merge.ts";
 import { tmpDir } from "../helpers/index.ts";
 import {
@@ -166,6 +166,20 @@ test("tampered: an Attempt that edits .config/wt.toml is refused, Lead untouched
   assert.equal(m.result, "tampered");
   assert.deepEqual(m.files, [".config/wt.toml"]);
   await assertLeadUntouched(f, pre);
+});
+
+test("tampered: an Attempt that only renames .config/wt.toml is refused, Lead untouched", async () => {
+  const f = await createFixture();
+  const a = await makeAttempt(f, "j9-a1");
+  await gitOut(a.path, ["mv", ".config/wt.toml", ".config/wt.toml.bak"]);
+  await gitOut(a.path, ["commit", "-q", "-m", "j9: rename gate config away"]);
+  const pre = await head(f.leadWorktree);
+  const m = await merge(f, a);
+  assert.equal(m.result, "tampered");
+  assert.ok(m.files?.includes(".config/wt.toml"), `files: ${m.files}`);
+  assert.equal(m.preSha, pre);
+  await assertLeadUntouched(f, pre);
+  assert.equal(existsSync(join(f.leadWorktree, ".config/wt.toml.bak")), false);
 });
 
 test("an Attempt with uncommitted changes is refused with attempt_dirty", async () => {
