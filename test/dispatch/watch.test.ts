@@ -107,17 +107,39 @@ test("a watch.json that does not parse is watch_state_invalid, never silently ta
 });
 
 test("runAlive: a slot holds the pid of an Attempt's run; a dead pid, a free slot and no slot directory all mean not alive", async () => {
-  assert.equal(runAlive("api-a1"), false, "no slot directory");
+  assert.equal(runAlive("x", "api-a1"), false, "no slot directory");
   const slot = await acquireSlot(2, { wf: "x", attempt: "api-a1" });
   await setSlotPid(slot!, "api-a1", process.pid);
-  assert.equal(runAlive("api-a1"), true);
-  assert.equal(runAlive("api-a2"), false, "another Attempt");
+  assert.equal(runAlive("x", "api-a1"), true);
+  assert.equal(runAlive("x", "api-a2"), false, "another Attempt");
   await setSlotPid(slot!, "api-a1", 2 ** 22 + 12345);
-  assert.equal(runAlive("api-a1"), false, "its process is gone");
+  assert.equal(runAlive("x", "api-a1"), false, "its process is gone");
   await releaseSlot(slot!, "api-a1");
-  assert.equal(runAlive("api-a1"), false);
+  assert.equal(runAlive("x", "api-a1"), false);
   writeFileSync(slotPath(0), "{broken");
-  assert.throws(() => runAlive("api-a1"), (e: unknown) => e instanceof CpdError && e.code === "slot_corrupt");
+  assert.throws(() => runAlive("x", "api-a1"), (e: unknown) => e instanceof CpdError && e.code === "slot_corrupt");
+});
+
+/** Slots 0, 1, … held by `api-a1` of the given Workflows (in this order), whose `attempt run` is alive or dead. */
+async function holdSlots(...holders: [wf: string, alive: boolean][]): Promise<void> {
+  rmSync(slotsDir(), { recursive: true, force: true });
+  const taken: (number | null)[] = [];
+  for (const [wf] of holders) taken.push(await acquireSlot(holders.length, { wf, attempt: "api-a1" })); // every holder is this live process for now, so no slot is reclaimed as stale
+  for (const [n, [, alive]] of holders.entries()) await setSlotPid(taken[n]!, "api-a1", alive ? process.pid : 2 ** 22 + 12345);
+}
+
+test("runAlive: Attempt ids repeat across Workflows sharing CPD_HOME, so only a slot of this Workflow counts, in either slot order", async () => {
+  for (const flip of [false, true]) {
+    const order = (...slots: [string, boolean][]) => (flip ? slots.reverse() : slots);
+    await holdSlots(...order(["other", true]));
+    assert.equal(runAlive("x", "api-a1"), false, `only the api-a1 of another Workflow is running (flip ${flip})`);
+    await holdSlots(...order(["other", true], ["x", true]));
+    assert.equal(runAlive("x", "api-a1"), true, `ours is running (flip ${flip})`);
+    await holdSlots(...order(["other", true], ["x", false]));
+    assert.equal(runAlive("x", "api-a1"), false, `ours died: the live api-a1 of the other Workflow must not hide the crash (flip ${flip})`);
+    await holdSlots(...order(["other", false], ["x", true]));
+    assert.equal(runAlive("x", "api-a1"), true, `ours is alive: the dead api-a1 of the other Workflow must not make it look crashed (flip ${flip})`);
+  }
 });
 
 // ---------- the tick, against a fake world ----------

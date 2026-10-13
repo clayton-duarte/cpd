@@ -309,10 +309,13 @@ function makeLog(wf: string): Log {
   };
 }
 
-const Slot = z.looseObject({ attempt: z.string(), pid: z.number().int().positive() });
+const Slot = z.looseObject({ wf: z.string(), attempt: z.string(), pid: z.number().int().positive() });
 
-/** Whether the process that holds a slot for `attempt` is alive: the slot's pid is the `attempt run` that took it over (§9). */
-export function runAlive(attempt: string): boolean {
+/**
+ * Whether the process that holds the slot of Attempt `attempt` of Workflow `wf` is alive: the slot's pid is the `attempt run`
+ * that took it over (§9). Slots are machine-wide and Attempt ids (`<job-key>-a<n>`) are only unique per Workflow, so the slot's `wf` must match too.
+ */
+export function runAlive(wf: string, attempt: string): boolean {
   let names: string[];
   try {
     names = readdirSync(slotsDir());
@@ -337,7 +340,7 @@ export function runAlive(attempt: string): boolean {
     }
     const slot = Slot.safeParse(raw);
     if (!slot.success) throw failure("slot_corrupt", `slot file does not match the schema: ${path}`, { path, issues: slot.error.issues });
-    if (slot.data.attempt === attempt) return pidAlive(slot.data.pid);
+    if (slot.data.wf === wf && slot.data.attempt === attempt) return pidAlive(slot.data.pid);
   }
   return false;
 }
@@ -454,7 +457,7 @@ export async function realWatchDeps(wf: string, config: Config, identity: WatchI
         }
       },
     },
-    runAlive,
+    runAlive: (id) => runAlive(wf, id),
     expireQuestion: (id) => expireQuestion(wf, id),
     files: {
       list: () => listEscalationFiles(wf),
