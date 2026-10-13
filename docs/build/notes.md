@@ -17,6 +17,12 @@ Running record of Attempt outcomes, Lead decisions and proposed changes. Reports
 | queue-ask-a1 | S2 | rejected | The "atomic write" race test ran reader and writer in one thread, so it proved nothing. |
 | queue-ask-a2 | S3 | approved, merged | Reader in a separate process, failing-first shown. Lead added: expired questions are renamed `<id>.expired.json`, never deleted (ids never reused; contract amended). |
 | ledger-core-a1 | S3 | approved, merged | All 7 acceptance items with real bd. Found `bd update --metadata` merges rather than replaces (t2 F5 was wrong). Post-merge Gate on `cpd/v0`: 221 pass, 17 skipped (`CPD_IT`). |
+| ledger-attempts-a1 | S3 | approved, merged | Real-bd tests; the Gate now takes ~8 min alone, ~20 min when several run. Post-merge Gate: 237 pass. |
+| templates-render-a1 | S3 | rejected | `test/render/regen.ts` runs under `node --test` (it runs every `.ts` under `test/`) and rewrote the goldens before the golden tests read them, so those tests could never fail. |
+| templates-render-a2 | S4 | running | Regen made opt-in. |
+| fix-ask-flake-a1 (appended) | S2 | rejected | A failing `cpd ask` test left a blocked child that hung three Gates (up to 43 min). a1 fixed most spawns; the Reviewer found five still unguarded. |
+| fix-ask-flake-a2 | S3 | running | |
+| escalation-expiry-a1 (appended) | S2 | running | Expired Escalations otherwise block closing their Attempt (`ledger-attempts-a1` review). |
 
 ## Lead errors and process fixes
 
@@ -32,8 +38,16 @@ Running record of Attempt outcomes, Lead decisions and proposed changes. Reports
 
 - After increment 2: `cpd doctor` passes on this Mac, `cpd workflow init --wf v0` created the build's own Ledger in `~/.cpd`, and `cpd lead attach --wf v0` attached this Lead session (pane `w1:p5`). From increment 3 on, Workers escalate with `cpd ask`. `~/.cpd/config.json` was written by hand with exactly the content the `dotfiles` Job will render for this Mac.
 
+- Before increment 4: the remaining Jobs were moved into the build's own Ledger (`~/.cpd/workflows/v0`): `cpd workflow phase plan`, `cpd job add` ×8 (Spec JSON generated from `docs/build/specs/*.md` by `/tmp/cpd-build/bin/spec2json.py`), the User's chat approval recorded with `cpd plan decision --review-id chat-2026-10-12`, then `lockPlan` plus the existing Lead worktree recorded (`/tmp/cpd-build/bin/selfhost-lock.ts`). Phase `dispatch`, 8 Jobs queued: `watch`, `pi-adapter`, `lead-skill`, `pr` (needs `watch`, so `cpd watch` dispatches it), `ledger-hardening`, `adapters-hardening`, `gate-speed`, `e2e`.
+- Build-only deviations, all reversible:
+  - `~/.cpd/config.json`: `reviewMode: "fresh"` (as planned: this Lead session is too long to fork) and `attemptTimeoutMinutes: 120` (the build's Jobs are larger than the ~13-minute sizing rule, and one Gate takes 8–20 minutes on this Mac). The `dotfiles` Job renders the §5 defaults.
+  - `~/.local/bin/cpd` → `~/projects/cpd.cpd-v0/bin/cpd.mjs`, so Workers in herdr panes find `cpd` on `PATH` (the `dotfiles` Job later points it at `~/projects/cpd`).
+  - A watchdog (`/tmp/cpd-build/bin/ask-watchdog.sh`) kills test-spawned `cpd ask` processes older than 3 minutes until `fix-ask-flake` lands. Its first version never killed anything (macOS `ps` has no `etimes`); fixed and dry-run checked.
+- Not changed, recommended: `verify.sh` runs `node --test` without a glob, so every `.ts` under `test/` runs as a test (`test/helpers/index.ts`, and the `regen.ts` that hid the golden-test defect). A `test/**/*.test.ts` glob would prevent that class of bug. `verify.sh` is a protected Gate file, so this is the User's call.
+
 ## Appended work (to dispatch through `cpd` later)
 
+- Now in the Ledger as `ledger-hardening`, `adapters-hardening` (absorbs `scaffold-polish` and `git-wt-hardening`; the merge-lock wait moved into `attempt-run` as a `lock_timeout` retry) and `gate-speed`. Original notes:
 - `scaffold-polish` (S1): from the `scaffold-a2` review's non-blocking notes:
   - `exec.run` swallows stdin EPIPE with an empty handler;
   - `version()` parses `package.json` without zod;
