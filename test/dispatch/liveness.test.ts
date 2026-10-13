@@ -246,7 +246,7 @@ test("a crash (Worker agent gone, attempt run not alive) fails the Attempt as cr
 });
 
 test("a crash with no Worker ever started (no agent recorded) and no attempt run is a crash too, without asking herdr", async () => {
-  const w = world({ attempts: [attempt({ agent: null, metadata: { agent: undefined, worker_pane: undefined } as never })] });
+  const w = world({ attempts: [attempt({ agent: null })] });
   delete w.attempts[0]!.metadata.agent;
   delete w.attempts[0]!.metadata.worker_pane;
   const r = await checkLiveness(ports(w));
@@ -461,6 +461,24 @@ test("an expired question that was never recorded cannot block an Attempt and is
   const { p, log } = escalationWorld(files({ expired: ["api-a1-q7"] }));
   await mirrorEscalations(p);
   assert.deepEqual(log, ["expireOrphans"]);
+});
+
+test("with no escalation file at all, nothing is read from the Ledger (a bd call takes about a second)", async () => {
+  const { p, log } = escalationWorld(files());
+  p.ledger.escalations = async () => {
+    throw new Error("the Ledger must not be read");
+  };
+  await mirrorEscalations(p);
+  assert.deepEqual(log, []);
+});
+
+test("with no open Attempt, liveness does not read the Escalations either", async () => {
+  const w = world({ attempts: [attempt({ status: "closed", outcome: "failed" })], jobs: [job({ status: "queued" })] });
+  const p = ports(w);
+  p.ledger.escalations = async () => {
+    throw new Error("the Ledger must not be read");
+  };
+  assert.deepEqual((await checkLiveness(p)).crashed, []);
 });
 
 test("a question that cannot be recorded is reported once and its answer is not tried either", async () => {

@@ -15,10 +15,13 @@ import { createRepo, sandbox } from "../git/fixtures.ts";
 import { addDraft, approvePlan } from "../ledger/helpers.ts";
 
 // `plan lock` against the real Ledger (bd), git and wt; only herdr is a script that records its argv.
+const ORIGINAL_HOME = process.env.HOME;
+const ORIGINAL_XDG = process.env.XDG_CONFIG_HOME;
 sandbox();
 mkdirSync(cpdHome(), { recursive: true });
 writeFileSync(join(cpdHome(), "config.json"), JSON.stringify({ ...baseConfig, herdrSession: "fake-session" }));
 
+const ORIGINAL_PATH = process.env.PATH ?? "";
 const FAIL = join(tmpDir("cpd-fake-herdr-"), "fail-split");
 const herdr = fakeBin(
   "herdr",
@@ -111,4 +114,38 @@ test("plan lock interrupted after the lock continues from the Lead Branch; a wat
   assert.equal(await gitOut(w.leadWorktree!, ["rev-parse", "--abbrev-ref", "HEAD"]), `cpd/${wf}`);
   assert.deepEqual([await getPhase(wf), (await listJobs(wf)).map((j) => j.status)], ["dispatch", ["queued"]]);
   assert.equal(herdr.calls().length, before + 1, "the split failed, so nothing was typed");
+});
+
+test("real herdr: `pane run` types the command into a split pane's shell (CPD_IT=1, session cpd-test)", { skip: process.env.CPD_IT !== "1", timeout: 120_000 }, async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { realpathSync, readFileSync } = await import("node:fs");
+  const { setTimeout: sleep } = await import("node:timers/promises");
+  const { runInPane } = await import("../../src/dispatch/plan-lock.ts");
+  const { splitPane, closePane } = await import("../../src/herdr/panes.ts");
+  const fakePath = process.env.PATH;
+  const sandboxEnv = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+  process.env.PATH = ORIGINAL_PATH; // the real herdr, not the script above
+  process.env.HOME = ORIGINAL_HOME; // and it finds its sockets under the real HOME
+  if (ORIGINAL_XDG === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = ORIGINAL_XDG;
+  writeFileSync(join(cpdHome(), "config.json"), JSON.stringify({ ...baseConfig, herdrSession: "cpd-test" }));
+  const dir = realpathSync(tmpDir("cpd-it-run-"));
+  const herdrCli = (...a: string[]) => JSON.parse(spawnSync("herdr", ["--session", "cpd-test", ...a], { encoding: "utf8" }).stdout).result;
+  const ws = herdrCli("workspace", "create", "--cwd", dir, "--label", "cpd it plan-lock", "--no-focus");
+  try {
+    const pane = await splitPane(ws.root_pane.pane_id, { direction: "right", cwd: dir, noFocus: true });
+    await sleep(1500); // the shell of a fresh pane needs a moment before it reads input
+    await runInPane(pane, `pwd > ${dir}/ran.txt`);
+    const deadline = Date.now() + 20_000;
+    while (!existsSync(join(dir, "ran.txt")) && Date.now() < deadline) await sleep(250);
+    assert.equal(readFileSync(join(dir, "ran.txt"), "utf8").trim(), dir, "the command ran in the pane, in its cwd");
+    await assert.rejects(runInPane("w99:p99", "echo nope"), (e: unknown) => e instanceof CpdError && e.code === "herdr_pane_not_found");
+    await closePane(pane);
+  } finally {
+    herdrCli("workspace", "close", ws.workspace.workspace_id);
+    process.env.PATH = fakePath;
+    process.env.HOME = sandboxEnv.HOME;
+    process.env.XDG_CONFIG_HOME = sandboxEnv.XDG_CONFIG_HOME;
+    writeFileSync(join(cpdHome(), "config.json"), JSON.stringify({ ...baseConfig, herdrSession: "fake-session" }));
+  }
 });
