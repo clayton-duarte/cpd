@@ -1,0 +1,11 @@
+# Job `templates-render`, Attempt 2: Reviewer feedback on Attempt 1 (rejected)
+
+Attempt 1 (branch `cpd/v0--templates-render-a1`, commit `7d8a600`, report `/tmp/cpd-build/reports/templates-render-a1.md`) is correct except for the finding below. **Start from it:** `git cherry-pick 7d8a600` in your new worktree. Fix only what is listed (the optional hardening is welcome), keep everything else, and keep the Gate green.
+
+## Reviewer feedback (verbatim)
+
+Blocker: test/render/regen.ts is executed by `node --test` (node runs every .ts file under test/). The Gate output shows `# goldens written to .../test/render/golden/` and `ok 41 - test/render/regen.ts` (110 s). regen.ts rewrites the committed goldens from the current renderer before render.test.ts's golden tests read them, so under ./verify.sh the golden tests are tautological: a template or renderer change passes the Gate while silently rewriting the goldens. This violates Acceptance 1 ('never auto-update in tests'), and the header comment 'Never run by the tests' is false. The Worker's mutation check must have run render.test.ts alone, not the full Gate. Fix: make test/render/regen.ts a no-op unless an explicit opt-in is set (e.g. `CPD_REGEN_GOLDENS=1`); without it, print a one-line usage note and exit 0 without building the fixture or writing anything. Update its comment. Keep the golden tests compare-only. Then verify through the FULL `./verify.sh`: (a) the output has no 'goldens written' line and `git status` is clean afterwards; (b) changing one line of templates/worker.md makes the golden tests fail in `./verify.sh`; revert it. Record that in the report. Optional hardening: in src/render/spec.ts, `AttemptMeta.parse(issue.metadata)` throws a raw ZodError on malformed Attempt metadata. Convert it to a CpdError with a named code (e.g. attempt_metadata_invalid). Everything else (template engine, templates, spec/review/plan renderers, plan-render command, the other tests) matched the Spec and contract.
+
+## Lead notes
+- `ledger-attempts` has been merged since Attempt 1 (it is in your base now). Keep `spec.ts` working against it; do not modify `src/ledger/*`.
+- Under load the full `./verify.sh` takes 10–20 minutes; that is expected.
