@@ -50,6 +50,13 @@ Running record of Attempt outcomes, Lead decisions and proposed changes. Reports
 - The Lead (this session) has no pi adapter, so it reads its queue with `docs/build/bootstrap/lead-poll.sh` (polling). The product does not poll: `cpd watch` and `cpd attempt run` write queue files, and the `pi-adapter` extension delivers them with `pi.sendMessage` (`triggerTurn`, `deliverAs: "followUp"`), so a Lead started with `cpd lead start` is woken by messages and never blocks.
 - The bootstrap scripts used for increments 1–4 are kept in `docs/build/bootstrap/`.
 
+- **Load problem (2026-10-13 ~03:30–04:30):** with three cpd-dispatched Attempts, three Gates ran at once. The real-bd tests start many short `bd` processes (~110 MB RSS each; 17 at once seen), swap reached 2.8 GB, single `bd` calls hit the 120 s timeout, and correct Attempts (`pi-adapter-a1`, `ledger-hardening-a1`) failed `gate_failed` at submit twice each. A Worker also ran `pkill -f "node --test$"`, which can kill other Attempts' Gates. Actions:
+  - `concurrency` 3 → 2 in `~/.cpd/config.json` (measured, not guessed; the `dotfiles` Job still renders 3 for this Mac per its Spec; the User decides the default);
+  - `verify.sh` (Lead commit `c14b9ab` on `cpd/v0`, not an Attempt: Attempts may not touch the Gate): one Gate at a time per machine, via an atomic `mkdir` lock in `/tmp` with stale-owner takeover; waiting and takeover tested by hand. Same tests, same order; only concurrency changes. Revert if unwanted;
+  - common rules (`_common.md`, Lead commit `92002e9` on `cpd/v0`, also on `main`): never kill processes you did not start;
+  - appended Job `gate-failure-report`: `gate_failed` showed the last 60 TAP lines (always passing tests), so Workers re-ran the whole 20-minute suite to find the failure.
+- **Product gap seen:** an automatic retry starts from the Lead HEAD, not from the previous Attempt's commits. During the bootstrap the Lead cherry-picked a1 into a2 when the Reviewer asked for a small fix; `cpd` has no equivalent yet (candidate for post-v0).
+
 ## Appended work (to dispatch through `cpd` later)
 
 - Now in the Ledger as `ledger-hardening`, `adapters-hardening` (absorbs `scaffold-polish` and `git-wt-hardening`; the merge-lock wait moved into `attempt-run` as a `lock_timeout` retry) and `gate-speed`. Original notes:
