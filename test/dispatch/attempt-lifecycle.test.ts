@@ -121,7 +121,7 @@ test("Merged: dispatch → Worker commits and submits → Reviewer approves → 
   assert.equal(a.branch, `cpd/${WF}--api-a1`);
   assert.equal(typeof a.worktree, "string");
   assert.equal(typeof a.metadata.worker_pane, "string");
-  assert.deepEqual(a.metadata.argv, ["pi", "--approve", "--model", "github-copilot/claude-haiku-4.5:low"]);
+  assert.deepEqual(a.metadata.argv, ["pi", "--approve", "--no-skills", "--exclude-tools", "ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox", "--model", "github-copilot/claude-haiku-4.5:low"]);
   assert.equal(a.metadata.metrics_turns, 1);
   assert.equal(a.metadata.metrics_tokens_in, 10);
   assert.equal(a.metadata.review_metrics_turns, 1);
@@ -132,7 +132,8 @@ test("Merged: dispatch → Worker commits and submits → Reviewer approves → 
   assert.match(readFileSync(reviewDiffPath(WF, "api-a1"), "utf8"), /feature-api-a1\.txt/);
   const starts = fakeHerdrCalls(STATE).filter((c) => c[0] === "agent" && c[1] === "start");
   const reviewer = starts.find((c) => c.includes("--tools"))!;
-  assert.deepEqual(reviewer.slice(reviewer.indexOf("--") + 1).slice(0, 2), ["--approve", "--fork"]);
+  assert.deepEqual(reviewer.slice(reviewer.indexOf("--") + 1).slice(0, 2), ["--approve", "--no-skills"]);
+  assert.ok(reviewer.includes("--fork") && reviewer.includes("--exclude-tools"));
   assert.ok(reviewer.includes("read,grep,find,ls"));
   assert.equal(existsSync(a.worktree!), false, "the Attempt worktree was removed");
   assert.equal(await gitOut(leadWorktree, ["branch", "--list", `cpd/${WF}--api-a1`]), "");
