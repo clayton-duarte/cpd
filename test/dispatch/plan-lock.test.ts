@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gitOut } from "../../src/git/git.ts";
 import { planLock } from "../../src/dispatch/plan-lock.ts";
@@ -31,7 +31,9 @@ const herdr = fakeBin(
     echo '{"id":"fake","result":{"pane":{"pane_id":"w1:p9","workspace_id":"w1"},"type":"pane_info"}}' ;;
 esac`,
 );
-process.env.PATH = `${herdr.dir}:${process.env.PATH}`;
+const FAIL_TMUX = join(tmpDir("cpd-fake-tmux-"), "fail-new-window");
+const tmux = fakeBin("tmux", `if [ -e '${FAIL_TMUX}' ]; then echo 'no server running' >&2; exit 1; fi\necho '%5'`);
+process.env.PATH = `${herdr.dir}:${tmux.dir}:${process.env.PATH}`;
 
 const LEAD = { paneId: "w1:p1", sessionPath: "/sessions/lead.jsonl", sessionId: "lead1", queueDir: join(tmpDir("cpd-queue-"), "queue"), attachedAt: "2026-01-01T00:00:00.000Z" };
 
@@ -41,6 +43,8 @@ async function plan(wf: string, repo: string, opts: { lead: boolean }): Promise<
   await addDraft(wf, "api");
   if (opts.lead) await writeWorkflow(wf, { ...readWorkflow(wf), lead: LEAD });
 }
+
+const TMUX_LEAD = { ...LEAD, host: "tmux" as const, paneId: "%3", tmuxSocket: "/tmp/tmux-1000/cpd" };
 
 const code = (c: string, exit: number) => (e: unknown) => e instanceof CpdError && e.code === c && e.exitCode === exit;
 
@@ -86,6 +90,8 @@ test("plan lock: refuses without approval and without a Lead pane to split from;
     ["--session", "fake-session", "pane", "run", "w1:p9", `cpd watch --wf ${wf}`],
   ]);
 
+  assert.deepEqual(tmux.calls(), [], "a herdr Lead never touches tmux");
+
   // A locked plan cannot be locked again, and nothing more is started.
   await assert.rejects(planLock(wf, { watch: true }), code("illegal_phase", 3));
   assert.equal(herdr.calls().length, 2);
@@ -114,6 +120,43 @@ test("plan lock interrupted after the lock continues from the Lead Branch; a wat
   assert.equal(await gitOut(w.leadWorktree!, ["rev-parse", "--abbrev-ref", "HEAD"]), `cpd/${wf}`);
   assert.deepEqual([await getPhase(wf), (await listJobs(wf)).map((j) => j.status)], ["dispatch", ["queued"]]);
   assert.equal(herdr.calls().length, before + 1, "the split failed, so nothing was typed");
+});
+
+test("plan lock with a tmux Lead: `cpd watch` runs in a new detached window of the Lead's tmux server, and herdr is not called", { timeout: 600_000 }, async () => {
+  const wf = "lock-t";
+  const repo = await createRepo({ preStart: "true" });
+  await plan(wf, repo, { lead: false });
+  await writeWorkflow(wf, { ...readWorkflow(wf), lead: TMUX_LEAD });
+  await approvePlan(wf);
+  const herdrBefore = herdr.calls().length;
+
+  const r = await planLock(wf, { watch: true });
+  assert.equal(r.watchPane, "%5");
+  assert.deepEqual(tmux.calls().at(-1), ["-S", "/tmp/tmux-1000/cpd", "new-window", "-d", "-P", "-F", "#{pane_id}", "-n", `watch ${wf}`, "-c", r.leadWorktree, `cpd watch --wf ${wf}`]);
+  assert.equal(herdr.calls().length, herdrBefore, "herdr was not called");
+});
+
+test("plan lock with a tmux Lead whose tmux fails: watch_pane_failed, with the plan locked", { timeout: 600_000 }, async () => {
+  const wf = "lock-u";
+  const repo = await createRepo({ preStart: "true" });
+  await plan(wf, repo, { lead: false });
+  await writeWorkflow(wf, { ...readWorkflow(wf), lead: TMUX_LEAD });
+  await approvePlan(wf);
+
+  writeFileSync(FAIL_TMUX, "");
+  try {
+    await assert.rejects(planLock(wf, { watch: true }), (e: unknown) => {
+      assert.ok(e instanceof CpdError);
+      assert.equal(e.code, "watch_pane_failed");
+      assert.equal(e.details.cause, "tmux_failed");
+      assert.match(e.message, new RegExp(`cpd watch --wf ${wf}`));
+      return true;
+    });
+  } finally {
+    rmSync(FAIL_TMUX);
+  }
+  assert.equal(await getPhase(wf), "dispatch");
+  assert.ok(readWorkflow(wf).leadWorktree !== null);
 });
 
 test("real herdr: `pane run` types the command into a split pane's shell (CPD_IT=1, session cpd-test)", { skip: process.env.CPD_IT !== "1", timeout: 120_000 }, async () => {

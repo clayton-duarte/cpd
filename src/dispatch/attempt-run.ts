@@ -90,7 +90,7 @@ export type Deps = {
   attemptId: string;
   config: Pick<Config, "retryCap" | "reviewMode" | "attemptTimeoutMinutes">;
   catalog: Catalog;
-  workflow: { repo: string; leadWorktree: string; leadBranch: string; lead: { paneId: string; sessionPath: string } };
+  workflow: { repo: string; leadWorktree: string; leadBranch: string; lead: { sessionPath: string } };
   ledger: LedgerPort;
   git: GitPort;
   herdr: HerdrPort;
@@ -411,7 +411,7 @@ async function readVerdict(d: Deps, sessionPath: string): Promise<ParsedVerdict>
 }
 
 /**
- * Run the Reviewer: a pane split from the Lead pane, a read-only pi (forked from the Lead session unless `reviewMode` is
+ * Run the Reviewer: a pane split from the Attempt's Worker pane (so, in the Attempt's herdr workspace, whatever the Lead's host), a read-only pi (forked from the Lead session unless `reviewMode` is
  * `fresh`), one re-prompt when the verdict is missing or invalid. A Reviewer that cannot run at all counts as no verdict.
  */
 async function runReviewer(d: Deps, l: LoadedAttempt, brief: string): Promise<ParsedVerdict> {
@@ -422,7 +422,9 @@ async function runReviewer(d: Deps, l: LoadedAttempt, brief: string): Promise<Pa
   let sessionPath: string | null = null;
   try {
     const { lead } = d.workflow;
-    pane = await d.herdr.split(lead.paneId, d.session.cwdOf(lead.sessionPath));
+    const workerPane = asString(l.attempt.metadata.worker_pane);
+    if (workerPane === null) throw failure("worker_pane_missing", `Attempt ${d.attemptId} has no worker_pane recorded, so the Reviewer pane cannot be split from it`);
+    pane = await d.herdr.split(workerPane, d.session.cwdOf(lead.sessionPath));
     const started = await d.herdr.startAgent({
       name,
       kind: "pi",
@@ -696,7 +698,7 @@ export async function realDeps(wf: string, attemptId: string, slot: number | nul
     attemptId,
     config,
     catalog,
-    workflow: { repo, leadWorktree, leadBranch, lead: { paneId: w.lead.paneId, sessionPath: w.lead.sessionPath } },
+    workflow: { repo, leadWorktree, leadBranch, lead: { sessionPath: w.lead.sessionPath } },
     ledger: {
       load: () => findAttempt(readLedger(wf), attemptId),
       verifyJob: async () => verifyJob(wf, (await findAttempt(readLedger(wf), attemptId)).job.key),

@@ -7,6 +7,7 @@ import { getPhase, readWorkflow, writeWorkflow } from "../ledger/workflow.ts";
 import { loadConfig } from "../lib/config.ts";
 import { CpdError, failure, refused } from "../lib/errors.ts";
 import { run } from "../lib/exec.ts";
+import { newWindow } from "../tmux/tmux.ts";
 
 // Contract §11 `plan lock`: the Ledger part (`lockPlan`), the Lead Branch worktree, and the `cpd watch` pane.
 
@@ -43,7 +44,7 @@ async function assertApproved(wf: string): Promise<void> {
 
 /**
  * Lock the plan, create the Lead Branch worktree, record it as `leadWorktree`, and (unless `watch` is false) start
- * `cpd watch --wf <wf>` in a pane split from the Lead pane. Refusals (`plan_not_approved`, …) happen before anything is written.
+ * `cpd watch --wf <wf>`: in a pane split from the Lead pane (host herdr), or in a new detached window of the Lead's tmux server (host tmux). Refusals (`plan_not_approved`, …) happen before anything is written.
  *
  * Re-runnable after a failure past the lock: a Workflow already in phase `dispatch` without a `leadWorktree` continues
  * from the Lead Branch (`createLeadBranch` is idempotent), since a locked plan cannot be locked again.
@@ -69,8 +70,12 @@ export async function planLock(wf: string, opts: { watch: boolean }): Promise<Pl
     const lead = w.lead ?? before.lead;
     if (lead === null) throw refused("lead_not_attached", `Workflow ${wf} has no attached Lead to split the watch pane from`, { wf });
     try {
-      watchPane = await splitPane(lead.paneId, { direction: "right", cwd: path, noFocus: true });
-      await runInPane(watchPane, `cpd watch --wf ${wf}`);
+      if (lead.host === "tmux") {
+        watchPane = await newWindow(lead.tmuxSocket!, { name: `watch ${wf}`, cwd: path, command: `cpd watch --wf ${wf}` });
+      } else {
+        watchPane = await splitPane(lead.paneId, { direction: "right", cwd: path, noFocus: true });
+        await runInPane(watchPane, `cpd watch --wf ${wf}`);
+      }
     } catch (e) {
       if (!(e instanceof CpdError)) throw e;
       throw failure(
