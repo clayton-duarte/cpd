@@ -1,15 +1,19 @@
 //! cpd-tui: the cockpit's views.
 //!
 //! One binary, four views, each meant to run in its own tmux pane of the cockpit (see `scripts/cockpit.sh`):
-//! - `tree`:    left bar. Context → Plans; Enter/click switches the centre (tmux swap-pane of the chat panes).
-//! - `plan`:    top centre. Jobs of the active plan; Enter/click opens the Worker's chat read-only in a tmux popup.
+//! - `tree`:    left bar. Context → the Lead sessions running in the cockpit (discovered from tmux, named by their pi
+//!              names); Enter/click switches the centre (tmux swap-pane of the session's chat pane).
+//! - `plan`:    top centre. The Jobs of the Workflow of the session in the centre; tabs are the Context's sessions.
+//!              Enter/click on a Job opens the Worker's chat read-only beside the chat.
 //! - `widgets`: right bar placeholder.
 //! - `log <session.jsonl> <job>`: read-only chat view of a pi session file (follows it live).
 //!
 //! Data comes only from the cpd CLI (`cpd … --wf`), fetched by the tree into a cache the other views read.
 
 use std::{
+    collections::HashSet,
     env, fs,
+    path::PathBuf,
     process::Command,
     thread,
     time::{Duration, Instant},
@@ -28,7 +32,10 @@ use ratatui::{
 };
 use serde_json::Value;
 
+mod sessions;
 mod tree;
+
+use sessions::Session;
 
 /// The cockpit's tmux server (`tmux -L <socket>`), its session, and the views' state dir; env overrides for the spike.
 fn socket() -> String {
@@ -40,17 +47,14 @@ fn session() -> String {
 fn state_dir() -> String {
     env::var("CPD_TUI_STATE").unwrap_or_else(|_| "/tmp/cpd-tui".into())
 }
-/// The Context's name and its Plans (workflow ids), from `CPD_TUI_CONTEXT` and `CPD_TUI_PLANS` (space-separated).
-struct Config {
-    context: String,
-    plans: Vec<String>,
+/// cpd's home (`CPD_HOME`, default `~/.cpd`): where cpd records a session's attached Workflow.
+fn cpd_home() -> PathBuf {
+    env::var_os("CPD_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(env::var_os("HOME").unwrap_or_default()).join(".cpd"))
 }
 
-fn config() -> Result<Config, String> {
-    let var = |name: &str| env::var(name).ok().filter(|v| !v.trim().is_empty()).ok_or(format!("{name} is not set"));
-    let context = var("CPD_TUI_CONTEXT")?.trim().to_string();
-    let plans = var("CPD_TUI_PLANS")?.split_whitespace().map(String::from).collect();
-    Ok(Config { context, plans })
+/// The chat panes running in the cockpit, straight from tmux.
+fn discover() -> Vec<Session> {
+    sessions::parse_panes(&tmux(&["list-panes", "-a", "-F", sessions::PANE_FORMAT]))
 }
 
 fn main() {
@@ -77,7 +81,8 @@ fn main() {
 
 fn cpd(args: &[&str]) -> Option<Value> {
     let out = Command::new("cpd").args(args).output().ok()?;
-    serde_json::from_slice(&out.stdout).ok()
+    let v: Value = serde_json::from_slice(&out.stdout).ok()?;
+    (v["ok"] != false).then_some(v) // an error envelope is not data: never cache it
 }
 
 fn tmux(args: &[&str]) -> String {
@@ -91,39 +96,22 @@ fn tmux(args: &[&str]) -> String {
     stdout
 }
 
-fn active_plan(cfg: &Config) -> String {
-    fs::read_to_string(format!("{}/active", state_dir())).map(|s| s.trim().to_string()).unwrap_or_else(|_| cfg.plans[0].clone())
-}
-
-/// Bring `plan`'s chat pane into the centre slot. Chat panes carry the tmux user option `@plan`; the one in window
-/// `main` is the centre slot. swap-pane keeps both processes running and the slot keeps its size (verified).
-fn switch_to(plan: &str) {
+/// Bring the chat pane of session `id` into the centre slot (the chat pane in window `main`). swap-pane keeps both
+/// processes running and the slot keeps its size (verified).
+fn switch_to(id: &str) {
     for line in tmux(&["list-panes", "-t", &format!("{}:main", session()), "-F", "#{pane_id} #{@view}"]).lines() {
         if line.ends_with(" worker") {
             tmux(&["kill-pane", "-t", line.split(' ').next().unwrap_or("")]);
         }
     }
-    let panes = tmux(&["list-panes", "-a", "-F", "#{pane_id} #{window_name} #{@plan}"]);
-    let (mut current, mut target) = (None, None);
-    for line in panes.lines() {
-        let f: Vec<&str> = line.split(' ').collect();
-        if f.len() < 3 || f[2].is_empty() {
-            continue;
-        }
-        if f[1] == "main" {
-            current = Some(f[0].to_string());
-        }
-        if f[2] == plan {
-            target = Some(f[0].to_string());
-        }
-    }
+    let all = discover();
+    let current = all.iter().find(|s| s.is_active());
+    let target = all.iter().find(|s| s.id == id);
     if let (Some(c), Some(t)) = (current, target) {
-        if c != t {
-            tmux(&["swap-pane", "-d", "-s", &t, "-t", &c]);
+        if c.pane_id != t.pane_id {
+            tmux(&["swap-pane", "-d", "-s", &t.pane_id, "-t", &c.pane_id]);
         }
     }
-    let _ = fs::create_dir_all(state_dir());
-    let _ = fs::write(format!("{}/active", state_dir()), plan);
 }
 
 // ---------- cache (one fetcher writes, every view reads) ----------
@@ -145,10 +133,14 @@ fn read_json(path: &str) -> Option<Value> {
 
 /// The only place that calls the slow CLI (13–60 s per call under load). Views read the cache files instead,
 /// so navigating never waits on cpd. Session paths never change once set, so each is fetched once.
-fn fetch_loop(plans: Vec<String>) {
+fn fetch_loop() {
     let _ = fs::create_dir_all(format!("{}/cache", state_dir()));
     let mut sessions: serde_json::Map<String, Value> = read_json(&cache_file("sessions")).and_then(|v| v.as_object().cloned()).unwrap_or_default();
     loop {
+        // the Workflows of the running sessions: discovered each round, so a new fork's Workflow is picked up
+        let mut plans: Vec<String> = discover().iter().filter_map(|s| sessions::workflow_of(&cpd_home(), &s.id)).collect();
+        plans.sort();
+        plans.dedup();
         for plan in &plans {
             let Some(v) = cpd(&["workflow", "show", "--wf", plan]) else { continue };
             write_atomic(&cache_file(plan), &v.to_string());
@@ -168,17 +160,6 @@ fn fetch_loop(plans: Vec<String>) {
         }
         thread::sleep(Duration::from_secs(5));
     }
-}
-
-/// plan -> agent state, published into each chat pane by tmux-agent-state.ts (or the resume script).
-fn agent_states() -> std::collections::HashMap<String, String> {
-    tmux(&["list-panes", "-a", "-F", "#{@plan}\t#{@agent_state}"])
-        .lines()
-        .filter_map(|l| {
-            let f: Vec<&str> = l.split('\t').collect();
-            (f.len() >= 2 && !f[0].is_empty()).then(|| (f[0].to_string(), f[1].to_string()))
-        })
-        .collect()
 }
 
 fn cache_age(name: &str) -> Option<u64> {
@@ -203,9 +184,35 @@ fn clicked_row(area: Rect, row: u16, offset: usize) -> Option<usize> {
 
 // ---------- tree (left bar) ----------
 
+/// A running session as the views show it.
+#[derive(Clone)]
+struct Entry {
+    session: Session,
+    label: String,
+    workflow: Option<String>,
+}
+
+/// The running sessions, grouped by Context, each labelled by its pi name, else its Workflow id, else its short id.
+fn snapshot() -> Vec<(String, Vec<Entry>)> {
+    let home = cpd_home();
+    sessions::group(discover())
+        .into_iter()
+        .map(|(ctx, list)| {
+            let entries = list
+                .into_iter()
+                .map(|session| {
+                    let workflow = sessions::workflow_of(&home, &session.id);
+                    let label = sessions::label(&sessions::display_name(&session), workflow.as_deref(), &session.id);
+                    Entry { session, label, workflow }
+                })
+                .collect();
+            (ctx, entries)
+        })
+        .collect()
+}
+
 #[derive(Clone, Default)]
 struct PlanSummary {
-    key: String,
     phase: String,
     merged: usize,
     total: usize,
@@ -216,7 +223,6 @@ fn summarize(plan: &str) -> PlanSummary {
     let v = read_json(&cache_file(plan)).unwrap_or(Value::Null);
     let jobs: Vec<&Value> = v["jobs"].as_array().map(|a| a.iter().filter(|j| j["status"] != "cancelled").collect()).unwrap_or_default();
     PlanSummary {
-        key: plan.to_string(),
         phase: v["phase"].as_str().unwrap_or("?").to_string(),
         merged: jobs.iter().filter(|j| j["status"] == "closed").count(),
         total: jobs.len(),
@@ -224,13 +230,18 @@ fn summarize(plan: &str) -> PlanSummary {
     }
 }
 
-/// One Plan's line: branch, state icon, name, phase, merged/total, failed. No label text.
-fn plan_line(p: &PlanSummary, last: bool, state: &str, active: bool, selected: bool) -> Line<'static> {
-    let (icon, color) = tree::state_icon(state);
-    let name = if active { p.key.clone().cyan().bold() } else { Span::from(p.key.clone()) };
-    let mut spans = vec![format!(" {} ", if last { "└" } else { "├" }).into(), icon.fg(color), " ".into(), name, format!("  {}", p.phase).dim(), format!("  {}/{}", p.merged, p.total).fg(Color::Green)];
-    if p.failed > 0 {
-        spans.push(format!(" ✗{}", p.failed).fg(Color::Red));
+/// One session's line: branch, state icon, label, then its Workflow's phase, merged/total and failed (none when unattached).
+fn session_line(e: &Entry, last: bool, selected: bool) -> Line<'static> {
+    let (icon, color) = tree::state_icon(&e.session.state);
+    let label = if e.session.is_active() { e.label.clone().cyan().bold() } else { Span::from(e.label.clone()) };
+    let mut spans = vec![format!(" {} ", if last { "└" } else { "├" }).into(), icon.fg(color), " ".into(), label];
+    if let Some(wf) = &e.workflow {
+        let p = summarize(wf);
+        spans.push(format!("  {}", p.phase).dim());
+        spans.push(format!("  {}/{}", p.merged, p.total).fg(Color::Green));
+        if p.failed > 0 {
+            spans.push(format!(" ✗{}", p.failed).fg(Color::Red));
+        }
     }
     let line = Line::from(spans);
     if selected { line.reversed() } else { line }
@@ -242,21 +253,21 @@ fn context_line(name: &str, collapsed: bool, selected: bool) -> Line<'static> {
 }
 
 fn run_tree(terminal: &mut DefaultTerminal) -> Result<(), String> {
-    let cfg = match config() {
-        Ok(c) => c,
-        Err(e) => return run_error(terminal, &e),
-    };
-    let fetch_plans = cfg.plans.clone();
-    thread::spawn(move || fetch_loop(fetch_plans));
-    let mut collapsed = false;
+    thread::spawn(fetch_loop);
+    let mut collapsed: HashSet<String> = HashSet::new();
     let mut selected = 0usize; // index into the visible rows
     let mut area = Rect::default();
+    let mut groups = snapshot();
+    let mut last_refresh = Instant::now();
     loop {
-        let plans: Vec<PlanSummary> = cfg.plans.iter().map(|p| summarize(p)).collect();
-        let states = agent_states();
-        let active = active_plan(&cfg);
-        let rows = tree::visible_rows(plans.len(), collapsed);
-        selected = selected.min(rows.len() - 1);
+        if last_refresh.elapsed() > Duration::from_secs(1) {
+            groups = snapshot();
+            last_refresh = Instant::now();
+        }
+        let shapes: Vec<tree::Shape> = groups.iter().map(|(c, l)| tree::Shape { sessions: l.len(), collapsed: collapsed.contains(c) }).collect();
+        let flat: Vec<&Entry> = groups.iter().flat_map(|(_, l)| l).collect();
+        let rows = tree::visible_rows(&shapes);
+        selected = selected.min(rows.len().saturating_sub(1));
         terminal
             .draw(|f| {
                 area = f.area();
@@ -264,14 +275,18 @@ fn run_tree(terminal: &mut DefaultTerminal) -> Result<(), String> {
                     .iter()
                     .enumerate()
                     .map(|(i, row)| match *row {
-                        tree::Row::Context => context_line(&cfg.context, collapsed, i == selected),
-                        tree::Row::Plan(n) => {
-                            let p = &plans[n];
-                            plan_line(p, n + 1 == plans.len(), states.get(&p.key).map(String::as_str).unwrap_or(""), p.key == active, i == selected)
+                        tree::Row::Context(g) => context_line(&groups[g].0, shapes[g].collapsed, i == selected),
+                        tree::Row::Session(n) => {
+                            let last = flat.get(n + 1).is_none_or(|next| next.session.context() != flat[n].session.context());
+                            session_line(flat[n], last, i == selected)
                         }
                     })
                     .collect();
-                f.render_widget(Paragraph::new(lines), area);
+                if lines.is_empty() {
+                    f.render_widget(Paragraph::new(Line::from(" no Lead sessions in the cockpit".dim())), area);
+                } else {
+                    f.render_widget(Paragraph::new(lines), area);
+                }
             })
             .map_err(|e| e.to_string())?;
         if !event::poll(Duration::from_millis(250)).map_err(|e| e.to_string())? {
@@ -281,14 +296,14 @@ fn run_tree(terminal: &mut DefaultTerminal) -> Result<(), String> {
         match event::read().map_err(|e| e.to_string())? {
             Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
                 KeyCode::Char('q') => return Ok(()),
-                KeyCode::Down | KeyCode::Char('j') => selected = (selected + 1).min(rows.len() - 1),
+                KeyCode::Down | KeyCode::Char('j') => selected = (selected + 1).min(rows.len().saturating_sub(1)),
                 KeyCode::Up | KeyCode::Char('k') => selected = selected.saturating_sub(1),
-                KeyCode::Enter => activate = Some(rows[selected]),
-                KeyCode::Char(' ') if rows[selected] == tree::Row::Context => activate = Some(tree::Row::Context),
+                KeyCode::Enter => activate = rows.get(selected).copied(),
+                KeyCode::Char(' ') if matches!(rows.get(selected), Some(tree::Row::Context(_))) => activate = rows.get(selected).copied(),
                 _ => {}
             },
             Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
-                if let Some(i) = tree::row_at(plans.len(), collapsed, area.y, m.row) {
+                if let Some(i) = tree::row_at(&shapes, area.y, m.row) {
                     selected = i;
                     activate = Some(rows[i]);
                 }
@@ -296,26 +311,18 @@ fn run_tree(terminal: &mut DefaultTerminal) -> Result<(), String> {
             _ => {}
         }
         match activate {
-            Some(tree::Row::Context) => {
-                collapsed = !collapsed;
-                selected = 0;
-            }
-            Some(tree::Row::Plan(n)) => switch_to(&plans[n].key),
-            None => {}
-        }
-    }
-}
-
-/// A view that cannot start shows why on one line (no silent default); `q` quits.
-fn run_error(terminal: &mut DefaultTerminal, message: &str) -> Result<(), String> {
-    loop {
-        terminal.draw(|f| f.render_widget(Paragraph::new(Line::from(format!("error: {message}").red())).wrap(Wrap { trim: false }), f.area())).map_err(|e| e.to_string())?;
-        if event::poll(Duration::from_millis(500)).map_err(|e| e.to_string())? {
-            if let Event::Key(k) = event::read().map_err(|e| e.to_string())? {
-                if k.code == KeyCode::Char('q') {
-                    return Ok(());
+            Some(tree::Row::Context(g)) => {
+                let name = groups[g].0.clone();
+                if !collapsed.remove(&name) {
+                    collapsed.insert(name);
                 }
             }
+            Some(tree::Row::Session(n)) => {
+                switch_to(&flat[n].session.id);
+                groups = snapshot();
+                last_refresh = Instant::now();
+            }
+            None => {}
         }
     }
 }
@@ -367,7 +374,7 @@ fn session_of(attempt: &str) -> Option<String> {
 
 /// Open (or retarget, or close when it already shows this Job) the read-only Worker pane beside the Lead chat.
 fn toggle_worker_view(exe: &str, job: &str, path: &str) {
-    let panes = tmux(&["list-panes", "-t", &format!("{}:main", session()), "-F", "#{pane_id} #{@plan} #{@view} #{@job}"]);
+    let panes = tmux(&["list-panes", "-t", &format!("{}:main", session()), "-F", "#{pane_id} #{@session_id} #{@view} #{@job}"]);
     let mut chat = None;
     let mut worker: Option<(String, String)> = None;
     for line in panes.lines() {
@@ -398,47 +405,68 @@ fn toggle_worker_view(exe: &str, job: &str, path: &str) {
     }
 }
 
+/// What the plan view shows for the session in the centre: its Context, the Context's sessions (the tabs) and the active one.
+struct Centre {
+    context: String,
+    tabs: Vec<Entry>,
+    active: Entry,
+}
+
+fn centre() -> Option<Centre> {
+    snapshot().into_iter().find_map(|(context, tabs)| {
+        let active = tabs.iter().find(|e| e.session.is_active())?.clone();
+        Some(Centre { context, tabs, active })
+    })
+}
+
 fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
-    let cfg = match config() {
-        Ok(c) => c,
-        Err(e) => return run_error(terminal, &e),
-    };
     let exe = env::current_exe().map_err(|e| e.to_string())?.display().to_string();
-    let (mut plan, mut title, mut jobs) = (active_plan(&cfg), String::from("loading…"), Vec::<JobRow>::new());
+    let (mut centre_now, mut title, mut jobs) = (None::<Centre>, String::from("loading…"), Vec::<JobRow>::new());
     let mut state = ListState::default().with_selected(Some(0));
     let mut list_area = Rect::default();
     let mut head_area = Rect::default();
     let mut tab_ranges: Vec<(u16, u16, String)> = Vec::new();
     let mut note = String::new();
-    let mut last_active_check = Instant::now();
+    let mut last_check = Instant::now() - Duration::from_secs(1);
     loop {
-        if last_active_check.elapsed() > Duration::from_millis(300) {
-            let active = active_plan(&cfg);
-            if active != plan {
+        if last_check.elapsed() > Duration::from_millis(300) {
+            let before = centre_now.as_ref().map(|c| c.active.session.id.clone());
+            centre_now = centre();
+            if before != centre_now.as_ref().map(|c| c.active.session.id.clone()) {
                 note.clear();
+                state.select(Some(0));
             }
-            plan = active;
-            (title, jobs) = jobs_of(&plan); // a cache read: instant
-            last_active_check = Instant::now();
+            (title, jobs) = match centre_now.as_ref().and_then(|c| c.active.workflow.as_deref()) {
+                Some(wf) => jobs_of(wf), // a cache read: instant
+                None => ("no Workflow yet".into(), Vec::new()),
+            };
+            last_check = Instant::now();
         }
         terminal
             .draw(|f| {
                 let [head, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(f.area());
                 head_area = head;
                 tab_ranges.clear();
-                let mut spans: Vec<Span> = vec![format!(" {} ▸ ", cfg.context).dim()];
-                let mut x = head.x + (cfg.context.chars().count() as u16) + 4;
-                for p in &cfg.plans {
-                    let label = format!(" {p} ");
-                    let w = label.chars().count() as u16;
-                    tab_ranges.push((x, x + w, p.to_string()));
-                    spans.push(if *p == plan { label.reversed().bold() } else { label.into() });
-                    spans.push(" ".into());
-                    x += w + 1;
+                let mut spans: Vec<Span> = Vec::new();
+                if let Some(c) = &centre_now {
+                    spans.push(format!(" {} ▸ ", c.context).dim());
+                    let mut x = head.x + (c.context.chars().count() as u16) + 4;
+                    for e in &c.tabs {
+                        let label = format!(" {} ", e.label);
+                        let w = label.chars().count() as u16;
+                        tab_ranges.push((x, x + w, e.session.id.clone()));
+                        spans.push(if e.session.is_active() { label.reversed().bold() } else { label.into() });
+                        spans.push(" ".into());
+                        x += w + 1;
+                    }
+                    spans.push(format!("  {title}").into());
+                    if let Some(wf) = &c.active.workflow {
+                        let age = cache_age(wf).map(|a| format!("  updated {a}s ago")).unwrap_or_else(|| "  loading…".into());
+                        spans.push(age.dim());
+                    }
+                } else {
+                    spans.push(" no Lead session in the centre".dim());
                 }
-                let age = cache_age(&plan).map(|a| format!("  updated {a}s ago")).unwrap_or_else(|| "  loading…".into());
-                spans.push(format!("  {title}").into());
-                spans.push(age.dim());
                 if !note.is_empty() {
                     spans.push(format!("  {note}").yellow());
                 }
@@ -466,11 +494,9 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
             },
             Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
                 if m.row == head_area.y {
-                    if let Some((_, _, p)) = tab_ranges.iter().find(|(a, b, _)| m.column >= *a && m.column < *b) {
-                        let p = p.clone();
-                        if p != plan {
-                            switch_to(&p); // the same switch as the tree: swaps the chat, closes a Worker view
-                        }
+                    if let Some((_, _, id)) = tab_ranges.iter().find(|(a, b, _)| m.column >= *a && m.column < *b) {
+                        switch_to(id); // the same switch as the tree: swaps the chat, closes a Worker view
+                        last_check = Instant::now() - Duration::from_secs(1);
                     }
                 } else if let Some(row) = clicked_row(list_area, m.row, state.offset()) {
                     if row < jobs.len() {
@@ -483,12 +509,6 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
         }
         if let Some(i) = open {
             if let Some(job) = jobs.get(i).cloned() {
-                // feedback first, then act (all reads are cache reads now)
-                note = format!("opening {}…", job.key);
-                terminal.draw(|f| {
-                    let [head, _] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(f.area());
-                    f.render_widget(Paragraph::new(Line::from(vec![format!(" {plan} ").reversed().bold(), format!("  {note}").yellow()])), head);
-                }).map_err(|e| e.to_string())?;
                 note = match job.attempt.as_deref().map(|a| (a, session_of(a))) {
                     None => format!("{} has not started yet", job.key),
                     Some((a, None)) => format!("{a}: session path not cached yet, try again in a few seconds"),
