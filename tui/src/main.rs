@@ -1,14 +1,14 @@
 //! cpd-tui: the cockpit's views.
 //!
 //! One binary, four views, each meant to run in its own tmux pane of the cockpit (see `scripts/cockpit.sh`):
-//! - `tree`:    left bar. Context → the Lead sessions running in the cockpit (discovered from tmux, named by their pi
+//! - `context`:   left bar. Context → the Lead sessions running in the cockpit (discovered from tmux, named by their pi
 //!              names); Enter/click switches the centre (tmux swap-pane of the session's chat pane).
 //! - `plan`:    top centre. The Jobs of the Workflow of the session in the centre; tabs are the Context's sessions.
 //!              Enter/click on a Job opens the Worker's chat read-only beside the chat.
-//! - `widgets`: right bar placeholder.
-//! - `log <session.jsonl> <job>`: read-only chat view of a pi session file (follows it live).
+//! - `dispatch`: right bar placeholder.
+//! - `worker <session.jsonl> <job>`: read-only chat view of a pi session file (follows it live).
 //!
-//! Data comes only from the cpd CLI (`cpd … --wf`), fetched by the tree into a cache the other views read.
+//! Data comes only from the cpd CLI (`cpd … --wf`), fetched by the context view into a cache the other views read.
 
 use std::{
     collections::HashSet,
@@ -33,7 +33,7 @@ use ratatui::{
 use serde_json::Value;
 
 mod sessions;
-mod tree;
+mod context;
 
 use sessions::Session;
 
@@ -63,11 +63,11 @@ fn main() {
     let mut terminal = ratatui::init();
     let _ = execute!(std::io::stdout(), EnableMouseCapture);
     let result = match view {
-        "tree" => run_tree(&mut terminal),
+        "context" => run_context(&mut terminal),
         "plan" => run_plan(&mut terminal),
-        "widgets" => run_widgets(&mut terminal),
-        "log" => run_log(&mut terminal, args.get(2).cloned().unwrap_or_default()),
-        _ => Err(format!("usage: {} tree|plan|widgets|log <session.jsonl>", args[0])),
+        "dispatch" => run_dispatch(&mut terminal),
+        "worker" => run_worker(&mut terminal, args.get(2).cloned().unwrap_or_default()),
+        _ => Err(format!("usage: {} context|plan|dispatch|worker <session.jsonl> <job>", args[0])),
     };
     let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
@@ -182,7 +182,7 @@ fn clicked_row(area: Rect, row: u16, offset: usize) -> Option<usize> {
     (row >= area.y && row < area.y + area.height).then(|| (row - area.y) as usize + offset)
 }
 
-// ---------- tree (left bar) ----------
+// ---------- context (left bar) ----------
 
 /// A running session as the views show it.
 #[derive(Clone)]
@@ -232,7 +232,7 @@ fn summarize(plan: &str) -> PlanSummary {
 
 /// One session's line: branch, state icon, label, then its Workflow's phase, merged/total and failed (none when unattached).
 fn session_line(e: &Entry, last: bool, selected: bool) -> Line<'static> {
-    let (icon, color) = tree::state_icon(&e.session.state);
+    let (icon, color) = context::state_icon(&e.session.state);
     let label = if e.session.is_active() { e.label.clone().cyan().bold() } else { Span::from(e.label.clone()) };
     let mut spans = vec![format!(" {} ", if last { "└" } else { "├" }).into(), icon.fg(color), " ".into(), label];
     if let Some(wf) = &e.workflow {
@@ -252,7 +252,7 @@ fn context_line(name: &str, collapsed: bool, selected: bool) -> Line<'static> {
     if selected { line.reversed() } else { line }
 }
 
-fn run_tree(terminal: &mut DefaultTerminal) -> Result<(), String> {
+fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
     thread::spawn(fetch_loop);
     let mut collapsed: HashSet<String> = HashSet::new();
     let mut selected = 0usize; // index into the visible rows
@@ -264,9 +264,9 @@ fn run_tree(terminal: &mut DefaultTerminal) -> Result<(), String> {
             groups = snapshot();
             last_refresh = Instant::now();
         }
-        let shapes: Vec<tree::Shape> = groups.iter().map(|(c, l)| tree::Shape { sessions: l.len(), collapsed: collapsed.contains(c) }).collect();
+        let shapes: Vec<context::Shape> = groups.iter().map(|(c, l)| context::Shape { sessions: l.len(), collapsed: collapsed.contains(c) }).collect();
         let flat: Vec<&Entry> = groups.iter().flat_map(|(_, l)| l).collect();
-        let rows = tree::visible_rows(&shapes);
+        let rows = context::visible_rows(&shapes);
         selected = selected.min(rows.len().saturating_sub(1));
         terminal
             .draw(|f| {
@@ -275,8 +275,8 @@ fn run_tree(terminal: &mut DefaultTerminal) -> Result<(), String> {
                     .iter()
                     .enumerate()
                     .map(|(i, row)| match *row {
-                        tree::Row::Context(g) => context_line(&groups[g].0, shapes[g].collapsed, i == selected),
-                        tree::Row::Session(n) => {
+                        context::Row::Context(g) => context_line(&groups[g].0, shapes[g].collapsed, i == selected),
+                        context::Row::Session(n) => {
                             let last = flat.get(n + 1).is_none_or(|next| next.session.context() != flat[n].session.context());
                             session_line(flat[n], last, i == selected)
                         }
@@ -299,11 +299,11 @@ fn run_tree(terminal: &mut DefaultTerminal) -> Result<(), String> {
                 KeyCode::Down | KeyCode::Char('j') => selected = (selected + 1).min(rows.len().saturating_sub(1)),
                 KeyCode::Up | KeyCode::Char('k') => selected = selected.saturating_sub(1),
                 KeyCode::Enter => activate = rows.get(selected).copied(),
-                KeyCode::Char(' ') if matches!(rows.get(selected), Some(tree::Row::Context(_))) => activate = rows.get(selected).copied(),
+                KeyCode::Char(' ') if matches!(rows.get(selected), Some(context::Row::Context(_))) => activate = rows.get(selected).copied(),
                 _ => {}
             },
             Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
-                if let Some(i) = tree::row_at(&shapes, area.y, m.row) {
+                if let Some(i) = context::row_at(&shapes, area.y, m.row) {
                     selected = i;
                     activate = Some(rows[i]);
                 }
@@ -311,13 +311,13 @@ fn run_tree(terminal: &mut DefaultTerminal) -> Result<(), String> {
             _ => {}
         }
         match activate {
-            Some(tree::Row::Context(g)) => {
+            Some(context::Row::Context(g)) => {
                 let name = groups[g].0.clone();
                 if !collapsed.remove(&name) {
                     collapsed.insert(name);
                 }
             }
-            Some(tree::Row::Session(n)) => {
+            Some(context::Row::Session(n)) => {
                 switch_to(&flat[n].session.id);
                 groups = snapshot();
                 last_refresh = Instant::now();
@@ -386,7 +386,7 @@ fn toggle_worker_view(exe: &str, job: &str, path: &str) {
             worker = Some((f[0].to_string(), f.get(3).unwrap_or(&"").to_string()));
         }
     }
-    let cmd = format!("{exe} log '{path}' '{job}'");
+    let cmd = format!("{exe} worker '{path}' '{job}'");
     match (worker, chat) {
         (Some((pane, shown)), _) if shown == job => {
             tmux(&["kill-pane", "-t", &pane]);
@@ -495,7 +495,7 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
             Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
                 if m.row == head_area.y {
                     if let Some((_, _, id)) = tab_ranges.iter().find(|(a, b, _)| m.column >= *a && m.column < *b) {
-                        switch_to(id); // the same switch as the tree: swaps the chat, closes a Worker view
+                        switch_to(id); // the same switch as the context view: swaps the chat, closes a Worker view
                         last_check = Instant::now() - Duration::from_secs(1);
                     }
                 } else if let Some(row) = clicked_row(list_area, m.row, state.offset()) {
@@ -522,9 +522,9 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
     }
 }
 
-// ---------- widgets (right bar) ----------
+// ---------- dispatch (right bar) ----------
 
-fn run_widgets(terminal: &mut DefaultTerminal) -> Result<(), String> {
+fn run_dispatch(terminal: &mut DefaultTerminal) -> Result<(), String> {
     loop {
         let load = fs::read_to_string("/proc/loadavg").unwrap_or_default();
         let load: Vec<&str> = load.split_whitespace().take(3).collect();
@@ -556,7 +556,7 @@ fn run_widgets(terminal: &mut DefaultTerminal) -> Result<(), String> {
     }
 }
 
-// ---------- log (read-only chat) ----------
+// ---------- worker (read-only chat) ----------
 
 fn render_session(path: &str) -> Vec<Line<'static>> {
     let text = fs::read_to_string(path).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"));
@@ -602,7 +602,7 @@ fn render_session(path: &str) -> Vec<Line<'static>> {
     lines
 }
 
-fn run_log(terminal: &mut DefaultTerminal, path: String) -> Result<(), String> {
+fn run_worker(terminal: &mut DefaultTerminal, path: String) -> Result<(), String> {
     let mut lines = render_session(&path);
     let mut scroll: usize = usize::MAX; // follow the end until the user scrolls
     let mut last_load = Instant::now();
