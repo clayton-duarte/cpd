@@ -1,4 +1,4 @@
-//! Pure parts of the session tree: which rows are visible, which row a click lands on, and the state icons.
+//! Pure parts of the Context view: which rows are visible, which row a click lands on, and the state icons.
 
 use ratatui::style::Color;
 
@@ -10,7 +10,7 @@ pub enum Row {
     Session(usize),
 }
 
-/// One Context group as the tree sees it: how many sessions it holds and whether it is collapsed.
+/// One Context group as the Context view sees it: how many sessions it holds and whether it is collapsed.
 #[derive(Clone, Copy, Debug)]
 pub struct Shape {
     pub sessions: usize,
@@ -31,7 +31,7 @@ pub fn visible_rows(groups: &[Shape]) -> Vec<Row> {
     rows
 }
 
-/// The index into `visible_rows` of a click on screen row `y`, when the tree's first row is at `top`.
+/// The index into `visible_rows` of a click on screen row `y`, when the view's first row is at `top`.
 pub fn row_at(groups: &[Shape], top: u16, y: u16) -> Option<usize> {
     let i = y.checked_sub(top)? as usize;
     (i < visible_rows(groups).len()).then_some(i)
