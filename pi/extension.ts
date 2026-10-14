@@ -9,7 +9,7 @@ import { listOpenQuestions } from "../src/queue/escalation-files.ts";
 import { adapterActive } from "./lib/activation.ts";
 import { createBlockedCounter } from "./lib/blocked.ts";
 import { callCpd } from "./lib/cpd.ts";
-import { errorDelivery } from "./lib/delivery.ts";
+import { actionOf, errorDelivery } from "./lib/delivery.ts";
 import { createReviews, decisionText, lostText, parseRequested, parseStatus, ResultEvent, REVIEW_ENTRY_TYPE, reviewsFromEntries, type Review } from "./lib/plan-review.ts";
 import { drain, type Sink } from "./lib/queue.ts";
 
@@ -31,6 +31,7 @@ export default function (pi: ExtensionAPI) {
   let sessionId = "";
   let reviews = createReviews();
   let toolRegistered = false;
+  let notify: (message: string) => void = () => {};
 
   const exec = async (command: string, args: string[]) => {
     const r = await pi.exec(command, args);
@@ -145,6 +146,11 @@ export default function (pi: ExtensionAPI) {
     const sink: Sink = {
       message(msg, delivery) {
         emit(blocked.onMessage(msg));
+        const action = actionOf(msg);
+        if (action) {
+          pi.setSessionName(action.name);
+          notify(action.notice);
+        }
         if (delivery) pi.sendMessage(delivery.message, delivery.options);
       },
       rejected: (d) => pi.sendMessage(d.message, d.options),
@@ -169,6 +175,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return;
     sessionId = ctx.sessionManager.getSessionId();
+    notify = (m) => ctx.ui.notify(m, "info");
     const a: Active = { timers: [], unsubscribe: [] };
     active = a;
     registerTool();

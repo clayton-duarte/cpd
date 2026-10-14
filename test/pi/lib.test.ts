@@ -7,7 +7,7 @@ import { MESSAGE_KINDS, type LeadMessage } from "../../src/queue/messages.ts";
 import { adapterActive } from "../../pi/lib/activation.ts";
 import { createBlockedCounter } from "../../pi/lib/blocked.ts";
 import { callCpd } from "../../pi/lib/cpd.ts";
-import { DELIVERY, deliveryOf } from "../../pi/lib/delivery.ts";
+import { actionOf, DELIVERY, deliveryOf } from "../../pi/lib/delivery.ts";
 import { createReviews, decisionText, parseRequested, parseStatus, REVIEW_ENTRY_TYPE, reviewsFromEntries } from "../../pi/lib/plan-review.ts";
 import { claim, drain, processFile, type Sink } from "../../pi/lib/queue.ts";
 import { tmpDir } from "../helpers/index.ts";
@@ -98,6 +98,7 @@ test("delivery mapping equals the §10 table", () => {
     "pr-feedback": [true, true],
     "workflow-done": [true, true],
     error: [true, true],
+    rename: [false, false],
   };
   assert.deepEqual([...MESSAGE_KINDS].sort(), Object.keys(table).sort());
   for (const kind of MESSAGE_KINDS) {
@@ -270,4 +271,21 @@ test("adapterActive: HERDR_ENV=1 or TMUX_PANE turns it on, neither leaves it off
   assert.equal(adapterActive({ TMUX_PANE: "%1" }), true);
   assert.equal(adapterActive({}), false);
   assert.equal(adapterActive({ HERDR_ENV: "0", TMUX_PANE: "" }), false);
+});
+
+test("rename: maps to a set-name action and no delivery, so no turn is triggered", () => {
+  const m = msg({ kind: "rename", wf: undefined, data: { name: "my session" } });
+  assert.deepEqual(actionOf(m), { type: "set-name", name: "my session", notice: 'cpd: session renamed to "my session"' });
+  assert.equal(deliveryOf(m), null);
+  assert.equal(DELIVERY.rename.triggerTurn, false);
+  assert.equal(actionOf(msg()), null);
+});
+
+test("rename: a message without data.name is rejected at the queue", () => {
+  const dir = tmpDir("cpd-pi-q-");
+  put(dir, "1-r.json", { v: 1, id: "r", kind: "rename", text: "x", data: {}, createdAt: "2026-01-01T00:00:00Z" });
+  const r = recorder();
+  drain(dir, r.sink);
+  assert.equal(r.messages.length, 0);
+  assert.equal(r.rejected.length, 1);
 });
