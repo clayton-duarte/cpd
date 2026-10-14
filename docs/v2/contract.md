@@ -74,7 +74,7 @@ $CPD_HOME/
   locks/
     watch.lock                    held by the one `cpd2 watch` (§6.6)
     repo-<sha1>.lock              per-repo merge lock (§7.4); sha1 of the repo's git common dir realpath
-    attempt-<plan>--<attempt>.lock  held by that Attempt's driver (§3.4)
+    attempt-<plan>--<attempt>.lock  the driver lock: taken by the Attempt's starter, inherited by its driver (§3.4)
     context-<context>.lock        held while writing or syncing a Context store (§4.6)
   run/
     watch.log                     the engine's stderr
@@ -306,7 +306,7 @@ erDiagram
 - A new Plan's Lead is a **fork** of its Context's grounded Lead when there is one (D2), else a fresh Lead that starts by grounding (§3.1).
 - A Job belongs to one Plan; Dependencies link Jobs of the same Plan; a Job has zero or more Attempts, at most one of them not `ended`.
 - An Attempt has one Worker Session and at most one Reviewer Session (a re-prompt reuses the same Reviewer Session, cpd 1 §12 step 9). An Escalation belongs to one Attempt.
-- Every Event names the Context, and the Plan, Job, Attempt or Session it is about, when there is one.
+- Every Event about a Context or a Plan names the Context, and the Plan, Job, Attempt or Session it is about, when there is one. Events about neither, such as `watch-started` and `watch-stopped`, name no Context (§5.2).
 
 ## 3. State machines
 
@@ -327,7 +327,7 @@ stateDiagram-v2
 | From | To | Moved by | Preconditions | Event |
 |---|---|---|---|---|
 | (none) | `grounding` | `plan new --context X` | Context exists; Plan id free; Lead Branch absent from the repo | `plan-created`, `session-registered` |
-| `grounding` | `plan` | `plan phase plan` (the Lead) | none | `plan-phase`. If the Context has no grounded Lead on this machine, the same transaction forks this Plan's Lead into one (below): `session-registered` and `context-grounded` |
+| `grounding` | `plan` | `plan phase plan` (the Lead) | none | `plan-phase`. If the Context has no grounded Lead on this machine, the same transaction also registers one (below): `session-registered` and `context-grounded`. The pi fork itself runs after the commit |
 | `plan` | `dispatch` | `plan lock` | latest Plan review `approved` for the current plan fingerprint (`plan_not_approved`); at least one `draft` Job; acyclic graph | `plan-phase`. All `draft` Jobs become `queued` with their fingerprints; the Lead worktree is created (§7.2); `watch` is started if it is not running (§6.6) |
 | `dispatch` | `pr` | `pr open` | every Job `merged` or `cancelled`, at least one `merged` | `plan-phase` |
 | `pr` | `done` | engine E5 (`pr poll`) | `gh` reports the PR merged | `plan-done` |
@@ -337,7 +337,15 @@ stateDiagram-v2
 **The Context's grounded Lead** (the Lead's answer to Escalation `contract-core-a1-q1`, consistent with D2 and ADR-0011):
 - `plan new` when the Context **has** a grounded Lead on this machine: forks it (`session fork`, §6.7). The fork's first message is the Plan's brief plus every Context record whose index position is after `grounded_seq`, so later Plans inherit what was recorded after the snapshot.
 - `plan new` when the Context **has no** grounded Lead: starts a fresh Lead whose first message is the brief plus all of the Context's records.
-- At that Plan's `grounding → plan`, if the Context still has no grounded Lead, cpd forks the Plan's Lead (fork-when-idle, §6.7) into a parked Session with `role = lead`, `plan = null`, and sets `contexts.lead_session` and `grounded_seq` with a compare-and-swap (`WHERE lead_session IS NULL`), so two Plans grounding at once produce one grounded Lead.
+- At that Plan's `grounding → plan`, if the Context still has no grounded Lead on this machine, this Plan's Lead becomes the source of one. The write transaction of `plan phase plan` (§4.2) holds exactly these writes and no external work:
+  1. `plans.phase = 'plan'`;
+  2. the compare-and-swap `UPDATE contexts SET lead_session = :new, grounded_seq = (SELECT coalesce(max(seq), 0) FROM context_records WHERE context = :context) WHERE id = :context AND lead_session IS NULL`, so two Plans grounding at once produce one grounded Lead;
+  3. only if step 2 changed a row: the new Session row (`role = lead`, `plan = null`, `forked_from` = this Plan's Lead, `state = stopped`, `file` and `tmux_pane` null);
+  4. the Events `plan-phase`, and, only with step 3, `session-registered` and `context-grounded`.
+
+  If step 2 changed nothing (another Plan grounded the Context first), the transaction writes only the phase and `plan-phase`.
+- **After the commit**, `plan phase plan` creates the window `ctx-<context>` running `cpd2 session run <new id>` and appends `session-moved` in a second transaction, as `session fork` does (§6.7). So the tmux window exists only after the commit, and the pi fork happens only inside `session run`, which waits until this Plan's Lead is idle (fork-when-idle, §6.7; the Lead that ran `plan phase plan` is still in its turn), then runs `pi --fork` with no first message, so the grounded Lead never takes a turn. pi writes the fork's session file at once, before any message (read in pi 1.2.0's `SessionManager.forkFrom`). Records the source Lead writes between the commit and the fork are in the fork and also after `grounded_seq`; later Plans then receive them twice, which is harmless, and none is missed.
+- **A second `plan new` before that fork exists** forks the grounded Lead as usual (`session fork`, §6.7): the Session is registered, so the command succeeds at once. Its own `session run` waits in step 1 until the grounded Lead's session file exists and the grounded Lead is idle, then forks it.
 - The grounded Lead is never typed into again. Replacing it (re-grounding a Context) is later work, not in this contract.
 
 ### 3.2 Job statuses
@@ -372,7 +380,7 @@ stateDiagram-v2
 | `draft` | `queued` | `plan lock` | `plan-phase` (one Event for the whole lock) |
 | `queued` | `running` | engine E3, or `job dispatch` by hand: creates the Attempt (§3.4) | `attempt-started` |
 | `running` | `in_review` | `attempt submit` (the Worker) | `attempt-status` |
-| `in_review` | `merged` | driver A8: the merge succeeded | `job-merged` |
+| `in_review` | `merged` | driver A8: the merge succeeded; or R (§7.4) when the driver died after A8's compare-and-swap | `job-merged` |
 | `running`, `in_review` | `queued` | driver or engine: the Attempt ended `failed` or `rejected` with a ladder cause (§3.4), the ladder has a next Tier and the automatic Attempts are fewer than `1 + retry_cap` (§9) | `attempt-retry` |
 | `running`, `in_review` | `failed` | driver or engine: no next Tier, the cap is reached, or the cause is outside the ladder | `job-failed` |
 | `failed` | `queued` | `job retry <job> --tier <T>` (the Lead's decision; sets `retry_tier`) | `job-retried` |
@@ -384,7 +392,7 @@ stateDiagram-v2
 
 **Locked.** Every Job that is not `draft` is Locked: its Locked fields and Dependencies can never change. It can only be re-attempted (the ladder, `job retry`) or cancelled, and new Jobs can be appended (ADR-0003, cpd 1 requirements §2, kept). `job edit` on a Locked Job is refused with `job_locked` (exit 3); a database trigger refuses the same write (§4.4).
 
-**Cancel.** Kept from cpd 1 §11 `job cancel`, with one change: a cancel request is honoured even after the Reviewer approved, up to the compare-and-swap of the merge; after it, the Job is Merged and the request is reported as too late in `job-merged`'s data (`cancel_too_late: true`). (cpd 1 could not cancel an approved Attempt; that defect left two Jobs stuck in lead-fork.) Dependents of a `cancelled` or `failed` Job stay blocked.
+**Cancel.** Kept from cpd 1 §11 `job cancel`, with one change: a cancel request is honoured even after the Reviewer approved, up to the compare-and-swap of the merge; after it, the Job is Merged and the request is reported as too late in `job-merged`'s data (`cancel_too_late: true`). (cpd 1 could not cancel an approved Attempt: Workflow lead-fork's `session-rename-2` and `review-off-lead` stayed `in_review` and were merged by hand with the Gate bypassed; `~/.cpd/plans/cpd-ui/fork-note.md`.) Dependents of a `cancelled` or `failed` Job stay blocked.
 
 `merged` and `cancelled` are terminal.
 
@@ -408,13 +416,13 @@ stateDiagram-v2
   reviewing --> ended: review_rejected, cancelled
   awaiting_lead --> merging: review decide --approve
   awaiting_lead --> ended: review decide --reject, cancelled
-  merging --> ended: merged, merge_conflict, gate_failed, gate_error, cas_lost, dirty_target, tampered, cancelled
+  merging --> ended: merged, merge_conflict, gate_failed, gate_error, cas_lost, dirty_target, tampered, cancelled, crashed
   ended --> [*]
 ```
 
 | From | To | Outcome / cause | Moved by | Event |
 |---|---|---|---|---|
-| (none) | `starting` | | E3 or `job dispatch`: inserts the Attempt with its Tier (§9) and starts the driver `cpd2 attempt run` detached | `attempt-started` |
+| (none) | `starting` | | E3 or `job dispatch`: takes the driver lock, inserts the Attempt with its Tier (§9), and starts the driver `cpd2 attempt run` detached, handing it the lock (below) | `attempt-started` |
 | `starting` | `running` | | A3: Worker pane started | `attempt-status` |
 | `starting` | `ended` | `failed` / `setup_failed` | A1–A2: worktree creation or `pre-start` failed (cpd 1 §12 step 2, kept: no ladder) | `job-failed` |
 | `running` | `reviewing` | | `attempt submit` passes its preconditions (§7.3) | `attempt-status` |
@@ -430,16 +438,18 @@ stateDiagram-v2
 | `merging` | `ended` | `failed` / `merge_conflict` | A8: rebase conflict | `attempt-retry` or `job-failed` |
 | `merging` | `ended` | `failed` / `gate_failed` | A8: the Gate failed on the rebased tree | `attempt-retry` or `job-failed` |
 | `merging` | `ended` | `failed` / `gate_error`, `cas_lost`, `dirty_target`, `tampered` | A8 (§7.4) | `job-failed` |
-| any but `ended` | `ended` | `cancelled` / `cancel_requested` | the driver at its next safe point (before A3, before A6, before A8's rebase, before A8's compare-and-swap), or E2 when the driver is dead | `job-cancelled` |
-| any but `ended` | `ended` | `failed` / `crashed` | E2: the driver's lock is free (the driver died) | `attempt-retry` or `job-failed` |
+| any but `ended` | `ended` | `cancelled` / `cancel_requested` | the driver at its next safe point (before A3, before A6, before A8's rebase, before A8's compare-and-swap); or, when the driver is dead, E2 (any status but `merging`) or the merge recovery R (`merging`, commits not on the Lead Branch, §7.4) | `job-cancelled` |
+| any but `ended` and `merging` | `ended` | `failed` / `crashed` | E2: the driver's lock is free (the driver died) | `attempt-retry` or `job-failed` |
+| `merging` | `ended` | `approved` / `merged` | R (§7.4): the driver's lock is free and the Attempt branch's tip is already on the Lead Branch (the driver died after A8's compare-and-swap); `merged_sha` = that tip | `job-merged` |
+| `merging` | `ended` | `failed` / `crashed` | R (§7.4): the driver's lock is free and the tip is not on the Lead Branch | `attempt-retry` or `job-failed` |
 
 **Ladder causes** are `crashed`, `no_submit`, `review_rejected`, `merge_conflict` and `gate_failed`: the next Attempt starts from the newer Lead Branch HEAD and its Spec carries the previous outcome, feedback, conflict list or Gate output. Every other cause fails the Job, and the Lead decides (`job retry`, `job cancel`). Change from cpd 1: a Gate failure at merge now goes to the ladder, because the Gate runs once, on the rebased tree, and a failure there usually means the change does not fit the newer Lead Branch.
 
-**The driver, `cpd2 attempt run`** (internal; started detached by E3 with `setsid`, stderr to `run/<plan>/logs/attempt-<attempt>.log`; holds `locks/attempt-<plan>--<attempt>.lock` for its whole life). Steps, adapted from cpd 1 §12:
+**The driver, `cpd2 attempt run`** (internal; started detached by E3 or `job dispatch` with `setsid`, stderr to `run/<plan>/logs/attempt-<attempt>.log`; holds the driver lock, below, for its whole life). Steps, adapted from cpd 1 §12:
 
 | Step | What it does |
 |---|---|
-| A1 | Load the Attempt and Job; recompute the Locked-Job fingerprint (§2.3) |
+| A1 | Check that fd 3 is the driver lock (below); load the Attempt and Job; recompute the Locked-Job fingerprint (§2.3) |
 | A2 | Create the worktree from the Lead Branch HEAD and run `pre-start` (§7.2, §7.3); record `base_sha` |
 | A3 | Render the Worker Spec to `run/<plan>/specs/<attempt>.md` (content: `commands.md`); start the Worker in the hidden session (§6.5); register its Session |
 | A4 | Wait. Active time is wall time minus time with an `open` Escalation. |
@@ -448,6 +458,15 @@ stateDiagram-v2
 | A7 | Close the Reviewer pane; record the verdict and `review_metrics` |
 | A8 | Merge (§7.4) |
 | A9 | End: record `metrics` (parsed from the Worker's session file, cpd 1 §14) in the transaction that ends the Attempt; kill the Attempt's tmux window; on `merged`, remove the worktree and branch; otherwise keep them for debugging until the Plan is `done` (cpd 1 requirements §2, kept) |
+
+**The driver lock** `locks/attempt-<plan>--<attempt>.lock` is held without a gap from before the Attempt row exists until its driver exits, so a free lock always means a dead driver, and E2 never ends a healthy Attempt whose driver has not started running yet. Chosen fix: the starter takes the lock and hands it to the driver at the spawn. Rejected alternative: an E2 grace period for young `starting` Attempts, which rests on a timing guess and needs a new key.
+
+1. The starter (E3 or `job dispatch`) opens the lock file and takes `flock(LOCK_EX | LOCK_NB)` **before** the transaction that inserts the `starting` Attempt. If the lock is held, another starter is creating the same Attempt: `cas_lost`.
+2. It commits the insert, then spawns the driver with that descriptor inherited as fd 3 (not close-on-exec).
+3. It closes its own copy, without `LOCK_UN`. A `flock` lock belongs to the open file description, which the driver now shares, so the lock stays held by the driver with no gap; an explicit unlock on any copy would release it for both (docs: flock(2)).
+4. At A1 the driver checks that fd 3 is that file (same device and inode as the path), else it exits at once without writing, and E2 ends the Attempt `crashed`.
+
+If the insert fails (`no_slot`, `cas_lost`), the starter closes the descriptor and no Attempt exists. If the spawn fails, the starter ends the Attempt `failed` / `crashed` itself, as E2 would, and then closes the descriptor. E2 probes a lock by opening the file afresh and trying `flock(LOCK_EX | LOCK_NB)`.
 
 The concurrency slot is implicit: an Attempt holds one from `starting` until `ended`. E3 and `job dispatch` insert an Attempt only inside a write transaction that counts the Attempts not `ended` on the machine and refuses at `concurrency` (`no_slot`, exit 3). This replaces cpd 1's slot files (§9).
 
@@ -483,8 +502,8 @@ One per machine (D5). Every `tick_seconds`:
 | Step | What it does |
 |---|---|
 | E1 | **Escalations:** expire `open` Escalations whose `asker_pid` is dead |
-| E2 | **Liveness:** for every Attempt not `ended`: driver lock free → end it `crashed` (or `cancelled` if a cancel was requested); active time over `attempt_minutes` → set `stop_request = timed_out`; Job `cancel_requested_at` set → set `stop_request = cancelled`. For every Session not `stopped`: pane dead or missing (`tmux list-panes -a`) → `stopped` |
-| E3 | **Scheduling:** for each Ready Job, by `jobs.seq` across all Plans, while a slot is free: verify the fingerprint, create the Attempt, start its driver |
+| E2 | **Liveness:** for every Attempt not `ended` whose driver lock is free (the driver died; §3.4): in `merging`, run the merge recovery R (§7.4), which ends it `merged` when its commits are already on the Lead Branch, and otherwise `cancelled` if a cancel was requested, else `crashed`; in any other status, end it `cancelled` if a cancel was requested, else `crashed`. For every Attempt with a live driver: active time over `attempt_minutes` → set `stop_request = timed_out`; Job `cancel_requested_at` set → set `stop_request = cancelled`. For every Session not `stopped`: pane dead or missing (`tmux list-panes -a`) → `stopped` |
+| E3 | **Scheduling:** for each Ready Job, by `jobs.seq` across all Plans, while a slot is free: verify the fingerprint, take the driver lock, create the Attempt, start its driver with the lock inherited (§3.4) |
 | E4 | **Completion:** for each Plan in `dispatch` with no Job `queued`, `running` or `in_review`, at least one `merged`, and `all_merged_at` null: append `all-merged` and set `all_merged_at` |
 | E5 | **PR:** for each Plan in `pr`, every `pr_poll_seconds`: run `cpd2 pr poll --plan <id>` as a subprocess (a process boundary, cpd 1 §11 step 5) |
 | E6 | **Contexts:** every `context_sync_seconds`, `context sync` each Context that has a remote (§4.6) |
@@ -495,7 +514,7 @@ One per machine (D5). Every `tick_seconds`:
 
 ### 4.1 The database
 
-- One file per machine: `$CPD_HOME/cpd.db` (R1), created on first use with `PRAGMA journal_mode = WAL` (persistent) and `PRAGMA application_id = 1668244530` (`0x63706432`, "cpd2").
+- One file per machine: `$CPD_HOME/cpd.db` (R1), created on first use with `PRAGMA journal_mode = WAL` (persistent) and `PRAGMA application_id = 1668310066` (`0x63706432`, "cpd2").
 - Every connection sets `PRAGMA foreign_keys = ON`, `PRAGMA synchronous = FULL`, `PRAGMA busy_timeout = <store_busy_ms>`, and registers the SQL function `cpd_txn()` (§4.3) before it runs any statement. The function must not be flagged `SQLITE_DIRECTONLY`, because triggers call it.
 - SQLite is bundled into the binary (rusqlite's `bundled` feature), at least 3.45, so `STRICT` tables and the JSON functions are always present.
 - Nothing is ever deleted (§4.4). The database grows; there is no pruning in this contract.
@@ -1096,14 +1115,21 @@ The pane border format and column titles belong to the TUI (`tui/`), not to this
 
 | Role | argv (after `pi`) | Environment added |
 |---|---|---|
-| Lead (fresh) | `--model <tiers[L]>:<level of lead_tier> -e <adapter> -e <each lead_pi_packages> --session-id <id> -n <name> -- <first message>` | `CPD_HOME`, `CPD_SESSION=<id>`, `CPD_PLAN=<plan>`, `PLANNOTATOR_DATA_DIR=$CPD_HOME/run/<plan>/plannotator`, `PLANNOTATOR_UPDATE_CHECK=0` |
+| Lead (fresh) | `--model <tiers[L]>:<level of lead_tier> [-e …] --session-id <id> -n <name> -- <first message>` | `CPD_HOME`, `CPD_SESSION=<id>`, `CPD_PLAN=<plan>`, `PLANNOTATOR_DATA_DIR=$CPD_HOME/run/<plan>/plannotator`, `PLANNOTATOR_UPDATE_CHECK=0` |
 | Lead (fork) | `--fork <source file>` added to the above (§6.7) | same |
-| Lead (resume) | `--session <file>` and the `-e` arguments, no first message | same |
-| Worker | `--approve --no-skills --exclude-tools ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox -e <adapter> --model <model:level> --session-id <id> -n "<plan> <job> a<n>" -- "Read <spec path> and follow it exactly. Your attempt id is <attempt>."` | `CPD_HOME`, `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT` |
+| Lead (resume) | `--session <file>` and the `[-e …]` arguments, no first message | same |
+| Worker | `--approve --no-skills --exclude-tools ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox [-e …] --model <model:level> --session-id <id> -n "<plan> <job> a<n>" -- "Read <spec path> and follow it exactly. Your attempt id is <attempt>."` | `CPD_HOME`, `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT` |
 | Reviewer | as the Worker, plus `--tools read,grep,find,ls` and, when `review_mode = "fork"`, `--fork <Lead session file>`; first message `Read <brief path> …` | same |
 
 - The excluded tools and `--approve` are kept from cpd 1 §12 steps 5 and 9 and requirements §5.
 - `<adapter>` is the `pi/` package installed beside the binary (§8 `pi_adapter`).
+- **`[-e …]`, the extension arguments.** The candidates are `<adapter>` for every role, plus each `lead_pi_packages` entry for a Lead. cpd passes `-e <candidate>` only for a candidate that the pi settings do not already declare. It reads the `packages` of the global settings `<agent dir>/settings.json` (`PI_CODING_AGENT_DIR`, default `~/.pi/agent`) and of the project settings `<cwd>/.pi/settings.json`; an entry is a source string or an object with `source`. Candidates and entries are compared by package identity, the way pi identifies packages (docs: pi `packages.md`, "Understand scope and identity"):
+  - an npm spec by its package name without the version (`npm:@plannotator/pi-extension@0.28.17` is `@plannotator/pi-extension`);
+  - a git source by its repository URL without the ref;
+  - a local path by its resolved absolute path, a relative path resolving from the directory of the settings file that declares it.
+
+  Each skipped candidate is logged on stderr (for a driver, in its log), with the settings file that declares it. Why: passing an installed package again with `-e` loads a second copy, and pi refuses to start (`Tool "plannotator_mark_done" conflicts …`, the same for `plannotator_submit_plan`, `ask_user_question` and the flag `--plan`; verified 2026-10-13, `~/.cpd/plans/cpd-v1/jobs/lead-start.json`). The User's machines install the cpd Lead packages globally, so there both default `lead_pi_packages` are skipped. For `-e <adapter>`, the same conflict is inferred, not verified, when the globally declared adapter is a different path: `-e` of the identical path was seen not to conflict.
+- **Tests and Gates** that start pi with explicit `-e` flags also pass `--no-extensions`, which disables discovered and configured extensions while explicit `-e` paths still load (docs: pi `cli.md`), so a machine's global install cannot break them. cpd's own launches of Leads, Workers and Reviewers do not pass it.
 - The Session's `file` is found after start as `~/.pi/agent/sessions/*/*_<id>.jsonl` (the pattern `fork-lead.sh` uses, verified), honouring `PI_CODING_AGENT_SESSION_DIR` when set.
 - The Reviewer forks the Lead without waiting for it to be idle, as in cpd 1 §12 step 9 (kept): reviews must not wait on a busy Lead. Whether `pi --fork` of a session with an unfinished turn is clean is unverified; the review Job must test it.
 
@@ -1115,8 +1141,8 @@ One `cpd2 watch` per machine, in `cpd-work:watch`. It is not tied to any Lead's 
 
 `cpd2 session fork <source> [--plan <id>] [--name <n>] [--message-file <f>]` registers a new Session (`stopped`, `forked_from = source`), creates its parked window running `cpd2 session run <new id>`, appends `session-registered` and `session-moved`, and returns at once with the new id. The waiting happens in the new pane, not in the command. `cpd2 session run <id>` (internal) then:
 
-1. **Waits until the source is idle:** its Session state is `idle` or `stopped`, **and** the last `message` entry of its session file is an assistant message with `stopReason` `stop`, **and** the file has not been modified for `fork_quiet_seconds` (default 5). It checks every 2 seconds and shows `Waiting for the source Lead to finish its turn, then forking it as "<name>"…`. Rule from `fork-lead.sh` (verified 2026-10-14); the Session-state condition is new and only makes the check earlier.
-2. Runs `pi … --fork <source file> --session-id <id> -n <name> -- <first message>` (§6.5).
+1. **Waits until the source is idle:** its session file exists, **and** its Session state is `idle` or `stopped`, **and** the last `message` entry of its session file is an assistant message with `stopReason` `stop`, **and** the file has not been modified for `fork_quiet_seconds` (default 5). A source that is registered but has no session file yet (a grounded Lead whose own `session run` has not forked yet, §3.1) is waited for, not refused. It checks every 2 seconds and shows `Waiting for the source Lead to finish its turn, then forking it as "<name>"…`. Rule from `fork-lead.sh` (verified 2026-10-14); the Session-state and file-exists conditions are new: the first only makes the check earlier, the second covers a source that has not started.
+2. Runs `pi … --fork <source file> --session-id <id> -n <name> -- <first message>` (§6.5); without `--message-file` there is no first message and no `--` (the grounded Lead, §3.1).
 3. When pi exits: reports `stopped`, prints `pi exited. Press Enter to resume <name> here.`, and on Enter runs `pi --session <file>` again. If the session file already exists when `session run` starts, it resumes instead of forking (idempotent restart, as `fork-lead.sh`).
 
 The fork never copies a half-done turn, and the source is never interrupted.
@@ -1192,7 +1218,7 @@ On success the Attempt becomes `reviewing` with `submitted_sha` and `check_tail`
 
 ### 7.4 The merge (driver step A8)
 
-All of it runs under the **per-repo lock** `locks/repo-<sha1>.lock` (sha1 of the realpath of `git rev-parse --git-common-dir`), held from step 1 to step 8. The driver waits for the lock without a limit; `pr rebase` (§7.6) waits at most `lock_wait_seconds`, then `lock_timeout` (exit 5).
+All of it runs under the **per-repo lock** `locks/repo-<sha1>.lock` (sha1 of the realpath of `git rev-parse --git-common-dir`), held from step 1 until the step-10 Ledger transaction has committed. The driver waits for the lock without a limit; `pr rebase` (§7.6) waits at most `lock_wait_seconds`, then `lock_timeout` (exit 5). Every process, right after taking the lock, first runs R (below) for orphaned merges.
 
 1. **Cancel check.** If the Job has a cancel request: end `cancelled`.
 2. **Snapshot** `old = git rev-parse refs/heads/cpd/<plan>`.
@@ -1203,7 +1229,21 @@ All of it runs under the **per-repo lock** `locks/repo-<sha1>.lock` (sha1 of the
 7. **Cancel check** again (the last safe point).
 8. **Fast-forward with a compare-and-swap:** `new = git -C <attempt worktree> rev-parse HEAD`; verify `git merge-base --is-ancestor old new`; then `git update-ref -m "cpd2: merge <plan>/<attempt>" refs/heads/cpd/<plan> new old`. git applies it only if the ref still equals `old` (t3 F7). If it fails because the ref moved (someone outside cpd moved it, since cpd holds the lock): back to step 2, at most 3 times, then `cas_lost`.
 9. **Sync the Lead worktree** to the new commit: `git -C <lead worktree> read-tree -m -u old new` (the tree was clean at step 3, so this cannot conflict with local edits). If it fails (for example an untracked file in the way), the merge stands, because the ref has moved, and cpd appends `error` with code `lead_worktree_stale` and the command that fixes it.
-10. Release the lock. End the Attempt `approved` / `merged` with `merged_sha = new`, and the Job `merged`, in one transaction (`job-merged`).
+10. End the Attempt `approved` / `merged` with `merged_sha = new`, and the Job `merged`, in one transaction (`job-merged`). Once it has committed, release the lock.
+
+**R: recovering an interrupted merge.** The ref moves at step 8, but the Ledger records the merge only at step 10. A driver that dies in between leaves an Attempt in `merging` whose commits are already on the Lead Branch; ending it `crashed` would make the ladder re-run a Merged Job. So an Attempt in `merging` whose driver lock is free is ended only by R, which runs under the per-repo lock:
+
+- **R1.** `tip = git -C <repo> rev-parse refs/heads/cpd/<plan>--<attempt>`, then `git -C <repo> merge-base --is-ancestor <tip> refs/heads/cpd/<plan>`.
+- **R2. Exit 0: the merge happened.** If the Lead worktree is stale (below), finish step 9. Then run the step-10 transaction with `merged_sha = tip` and A9's `metrics` (`job-merged`, with `cancel_too_late: true` if the Job has a cancel request), then the rest of A9.
+- **R3. Exit 1: no merge.** End the Attempt `cancelled` / `cancel_requested` if the Job has a cancel request, else `failed` / `crashed` (a ladder cause, §3.4).
+- **R4. Any other result** (git failed) proves nothing either way: R changes nothing and appends `error` with code `merge_check_failed` the first time it fails for that Attempt; it is run again at the next occasion below.
+
+The Lead worktree is **stale** when its index and working tree agree with each other but not with `HEAD`: `git -C <lead worktree> diff --quiet` exits 0 and `git -C <lead worktree> diff --cached --quiet HEAD` exits 1. It then still holds the tree of `old`, which R does not know, so R finishes step 9 with that tree in place of `old`: `T = git -C <lead worktree> write-tree`, then `git -C <lead worktree> read-tree -m -u T HEAD` (unverified; the merge Job tests it). A Lead worktree with other changes is left alone, and R appends `error` `lead_worktree_stale` as step 9 does.
+
+Who runs R:
+- **E2**, for every Attempt in `merging` whose driver lock is free (§3.7). It tries the per-repo lock without waiting; if the lock is held, E2 tries again at its next tick, and the next process to take the lock runs R anyway (next point).
+- **Every holder of the per-repo lock**, right after taking it (A8 before step 1, `pr rebase` before its step 1): R for each Attempt in `merging` of a Plan on the same repo whose driver lock is free. A driver waiting for the lock is the likeliest to get it when another driver dies; this way it never meets the dead driver's stale Lead worktree (which step 3 would report as `dirty_target`), and `pr rebase` never rewrites the Lead Branch over a merge the Ledger has not recorded.
+- **Nothing restarts a driver at A8.** A dead driver's Attempt is ended by R or E2, never resumed; an implementation that adds a restart at A8 must run R first, so a merge is never done twice.
 
 **No Gate after the merge.** The tree on the Lead Branch is exactly the tree the Gate just passed, and the compare-and-swap proves nothing came in between. cpd 1 ran the Gate a second time on the Lead (cpd 1 §12 step 11); that step is dropped (t3 F11: the second run guarded only against a weakened Gate, which the tamper check and step 6 now cover). The Gate thus runs at most twice per Attempt: the quick check at submit (the full Gate when the repo has no `pre-commit`) and once at merge.
 
@@ -1220,7 +1260,7 @@ The list lives in its own file, not in `.config/wt.toml`, because worktrunk warn
 
 - **`pr open`:** `git -C <lead worktree> push -u origin cpd/<plan>`, then `gh pr create --base <base> --head cpd/<plan> --title <title> --body <summary>` (cpd 1 §11, kept).
 - **`pr poll`:** `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments` and `gh api repos/{owner}/{repo}/pulls/<n>/comments`, compared with `pr_seen` (cpd 1 §11 and §13, kept). New failing checks, reviews or comments, or `state = CLOSED` without a merge: one `pr-feedback`. Merged: phase `done` (`plan-done`).
-- **`pr rebase`** onto the base, under the per-repo lock (§7.4), so no merge interleaves:
+- **`pr rebase`** onto the base, under the per-repo lock (§7.4) and after running R there, so no merge interleaves and none is left unrecorded:
   1. `git -C <lead worktree> fetch origin <base>`; the Lead worktree must be clean (`dirty_target`, exit 3);
   2. `git merge-tree --write-tree --name-only origin/<base> cpd/<plan>`: exit 1 means a conflict; return `rebase_conflict` (exit 3) with the file list and change nothing (t3 F10; the Lead decides, for example by appending a Job);
   3. `old = rev-parse cpd/<plan>`; `git -C <lead worktree> rebase origin/<base>`; on an unexpected conflict, `git rebase --abort` and `rebase_conflict`;
@@ -1339,6 +1379,7 @@ Kept from cpd 1 §7, with one change in how pi's catalog is read.
 | R12 the binary is installed as `cpd2` during development | §1.1; every command in this document is written `cpd2` |
 | R13 the full contract at Tier O3, review S4 | §9 (defaults); the Job that wrote this |
 | R14 the Plan starts from `main` after lead-fork's PR | §3.1 (`plan lock` creates the Lead Branch from `origin/<base>`), §7.2 |
+| R15 Contexts follow ADR-0011 and ADR-0012: the grounded Lead is a fork taken at the first Plan's `grounding → plan`, parked and never typed into; later forks get the newer records; the Context store is typed JSONL records in git, indexed by SQLite | §2.2 Context and Context record, §3.1, §4.6, §6.7 |
 | D1 every command prints one JSON value; exit codes | §1.2 |
 | D2 `plan new --context X` forks the Context's grounded Lead | §2.2 Context, §3.1 (grounded Lead), §6.7 |
 | D3 `workflow` becomes `plan` | §1.3 (`--plan`, `CPD_PLAN`), §2.2 Plan, CONTEXT.md |
