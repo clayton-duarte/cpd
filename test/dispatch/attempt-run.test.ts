@@ -355,12 +355,25 @@ test("reviewMode fork: the Reviewer is forked from the Lead session; fresh: no -
   assert.equal(freshArgs.includes("--fork"), false);
 });
 
-test("the Reviewer runs in a pane split from the Lead pane, in the Lead's cwd; its metrics skip the forked history", async () => {
+test("the Reviewer runs in a pane split from the Attempt's Worker pane, in the Lead's cwd; its metrics skip the forked history", async () => {
   const { w } = await go();
-  assert.ok(w.events.includes("herdr.split w1:p1 /lead/cwd"));
+  assert.ok(w.events.includes("herdr.split pane-w /lead/cwd"));
+  assert.equal(w.events.filter((e) => e.startsWith("herdr.split")).length, 1);
   const reviewerMetrics = w.metricsCalls.find((c) => c.path.endsWith("reviewer.jsonl"))!;
   assert.equal(typeof reviewerMetrics.since, "number");
   assert.equal(w.metricsCalls.find((c) => c.path.endsWith("worker.jsonl"))!.since, undefined);
+});
+
+test("an Attempt without a recorded worker_pane has no Reviewer pane to split: no verdict, review-needed, and nothing is split", async () => {
+  const w = makeWorld();
+  const load = w.deps.ledger.load;
+  w.deps.ledger.load = async () => {
+    const l = await load();
+    return { ...l, attempt: { ...l.attempt, metadata: { ...l.attempt.metadata, worker_pane: undefined } } };
+  };
+  assert.deepEqual(await runAttempt(w.deps), { state: "review_needed" });
+  assert.match(w.messages[0]!.text, /worker_pane_missing/);
+  assert.equal(w.events.some((e) => e.startsWith("herdr.split")), false);
 });
 
 test("a Reviewer that cannot start counts as no verdict: review-needed, with the reason", async () => {

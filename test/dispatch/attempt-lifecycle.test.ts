@@ -27,6 +27,8 @@ const WF = "life";
 const STATE = tmpDir("cpd-fake-herdr-");
 const BIN = tmpDir("cpd-fake-bin-");
 const LEAD_ID = "lead1";
+const HERDR_PANE = "w1:p1";
+const TMUX_PANE = "%3";
 const SCENARIO: Scenario = {
   "api-a1": { worker: ["submit"], reviewer: ["approve"] },
   "rej-a1": { worker: ["submit"], reviewer: ["reject"] },
@@ -95,7 +97,7 @@ test("setup: a Workflow with a Lead Branch worktree, an attached (fake) Lead and
   const sessionPath = join(tmpDir("cpd-lead-session-"), "lead.jsonl");
   writeFileSync(sessionPath, JSON.stringify({ type: "session", version: 3, id: "lead-session-1", timestamp: new Date().toISOString(), cwd: repo }) + "\n");
   const w = readWorkflow(WF);
-  await writeWorkflow(WF, { ...w, leadWorktree, lead: { paneId: "w1:p1", sessionPath, sessionId: LEAD_ID, queueDir: queueDir(), attachedAt: new Date().toISOString() } });
+  await writeWorkflow(WF, { ...w, leadWorktree, lead: { paneId: HERDR_PANE, sessionPath, sessionId: LEAD_ID, queueDir: queueDir(), attachedAt: new Date().toISOString() } });
   assert.equal((await getJobByKey(WF, "api")).status, "queued");
 });
 
@@ -157,6 +159,9 @@ test("Reviewer rejects → Attempt closed rejected, Job requeued, attempt-retry;
   assert.match(retry.text, /fake reviewer: please fix the thing/);
   assert.ok(existsSync(a1.worktree!), "a rejected Attempt keeps its worktree");
 
+  // From here the Lead is a tmux Lead: Attempt 2's Reviewer must still open in the Attempt's herdr workspace.
+  const w = readWorkflow(WF);
+  await writeWorkflow(WF, { ...w, lead: { ...w.lead!, host: "tmux", paneId: TMUX_PANE, tmuxSocket: "/tmp/tmux-1000/cpd" } });
   const d2 = await cli(["job", "dispatch", "rej", "--wf", WF]);
   assert.equal(d2.code, 0, d2.stdout + d2.stderr);
   assert.deepEqual([d2.json.attempt, d2.json.tier], ["rej-a2", "H2"]);
@@ -169,6 +174,14 @@ test("Reviewer rejects → Attempt closed rejected, Job requeued, attempt-retry;
   assert.match(specText, /Outcome: rejected/);
   assert.match(specText, /fake reviewer: please fix the thing/);
   assert.deepEqual(kindsFor("rej"), ["attempt-retry", "job-merged"]);
+});
+
+test("every Reviewer pane is split from the Attempt's own worker_pane, never from the Lead's pane, for a herdr Lead (api-a1, rej-a1) and a tmux Lead (rej-a2)", async () => {
+  const splits = fakeHerdrCalls(STATE).filter((c) => c[0] === "pane" && c[1] === "split").map((c) => c[2]);
+  const workerPanes = (await listAttempts(WF)).filter((a) => ["api", "rej"].includes(a.job)).map((a) => a.metadata.worker_pane);
+  assert.equal(workerPanes.length, 3);
+  assert.deepEqual([...splits].sort(), [...workerPanes].sort() as string[]);
+  for (const p of [HERDR_PANE, TMUX_PANE]) assert.equal(splits.includes(p), false, `no split from ${p}`);
 });
 
 test("verdict invalid twice → review-needed (slot freed, Attempt waits) → `cpd review decide --approve` merges", { timeout: 600_000 }, async () => {

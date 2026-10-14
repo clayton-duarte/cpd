@@ -232,7 +232,10 @@ Slots are `slots/slot-0.json` … `slot-<concurrency-1>.json`, each created excl
   - Validates the DAG and computes fingerprints.
   - Sets all Jobs `queued` with one `bd batch` and the phase to `dispatch`.
   - Creates the Lead Branch in its own worktree: `wt --yes -C <repo> switch --create cpd/<wf> --base <base> --no-cd --format json`, recorded as `leadWorktree`.
-  - Unless `--no-watch`, opens `cpd watch --wf <wf>` in a new herdr pane split from the Lead pane (`--no-focus`).
+  - Unless `--no-watch`, opens `cpd watch --wf <wf>` according to the Lead's `host` (§6), with the Lead worktree as its cwd:
+    - `herdr`: in a new pane split from the Lead pane (`--no-focus`), then `herdr pane run` types the command into it.
+    - `tmux`: in a new detached window of the Lead's tmux server: `tmux -S <lead.tmuxSocket> new-window -d -P -F '#{pane_id}' -n "watch <wf>" -c <lead worktree> "cpd watch --wf <wf>"`. tmux puts the window in the server's current session. `watchPane` is the printed pane id (`%<n>`).
+  - A failure to open the pane is `watch_pane_failed` (exit 1) with the plan locked; the message gives the command to start `cpd watch` by hand.
   - Returns `{ok, leadBranch, leadWorktree, watchPane}`.
 
 ### Dispatch
@@ -306,7 +309,7 @@ Recipes: trial t3 (worktrunk), t1 (herdr and pi), t4/t5 (queue delivery). Every 
    - Collect metrics (§14) in both cases, then release the slot.
 9. **Review:**
    - Write `reviews/<attempt-id>.diff` (`git diff cpd/<wf>...<branch>`), `.gate.txt` (gate output from submit) and the brief (template `templates/reviewer.md`) to `reviews/<attempt-id>.md`.
-   - Split a pane from the Lead pane (`--no-focus`, cwd = Lead's cwd) and run `herdr agent start <rname> --kind pi --pane <p> --timeout 60000 -- --approve --no-skills --exclude-tools ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox --fork <lead sessionPath> --tools read,grep,find,ls --model <reviewTier model:level>`.
+   - Split a pane from the Attempt's own Worker pane (`worker_pane` of step 4, so inside the Attempt's herdr workspace, which still exists until step 12; `--no-focus`, cwd = Lead's cwd), never from the Lead pane, whatever the Lead's `host`. An Attempt without `worker_pane` cannot open the Reviewer: no verdict (`review-needed`). Then run `herdr agent start <rname> --kind pi --pane <p> --timeout 60000 -- --approve --no-skills --exclude-tools ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox --fork <lead sessionPath> --tools read,grep,find,ls --model <reviewTier model:level>`.
    - With `reviewMode: "fresh"`, drop `--fork <lead sessionPath>`. The brief then also points to the rendered plan (`<wf>/plan.md`) for the Workflow's context.
    - Prompt it to read the brief (`--wait`).
    - Parse the verdict from the **last assistant message** of the Reviewer's session: one fenced `json` block `{"verdict":"approve"|"reject","feedback":string}`.

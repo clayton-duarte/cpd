@@ -176,7 +176,7 @@ export function makeWorld(script: Script = {}): World {
     attemptId: id,
     config: { retryCap: script.retryCap ?? 2, reviewMode: script.reviewMode ?? "fork", attemptTimeoutMinutes: 30 },
     catalog: CATALOG,
-    workflow: { repo: "/repo", leadWorktree: "/repo.lead", leadBranch: `cpd/${WF}`, lead: { paneId: "w1:p1", sessionPath: LEAD_SESSION } },
+    workflow: { repo: "/repo", leadWorktree: "/repo.lead", leadBranch: `cpd/${WF}`, lead: { sessionPath: LEAD_SESSION } },
     ledger: {
       async load() {
         const siblings = Array.from({ length: number }, (_, i) => attemptView(i + 1, i + 1 === number));
