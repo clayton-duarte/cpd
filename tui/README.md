@@ -27,7 +27,8 @@ It builds the tmux server `tmux -L cpd` (session `cpd`) unless it runs, resuming
 A chat pane publishes its session in tmux options: `@session_id`, `@session_file`, `@session_name`
 (`tmux-agent-state.ts` at `session_start` and on `session_info_changed`; `resume-lead.sh` and `fork-lead.sh` before pi
 starts, the name then coming from the file's last `session_info`). The Context view lists every pane with a `@session_id`,
-grouped under its Context (the repo directory name of the pane's cwd), labelled by the pi name, else the Workflow id,
+grouped under its Context (the repo directory name of the session's own project directory: the `cwd` of its session
+file's header line, read once per `@session_file`, else the pane's cwd when the file is missing or has no `cwd`), labelled by the pi name, else the Workflow id,
 else the first 8 characters of the session id. The plan view shows the Workflow of the session in the centre slot
 (`no Workflow yet` when unattached); its tabs are that Context's sessions. Switching swaps the session's pane into the
 centre slot.
