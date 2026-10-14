@@ -5,7 +5,7 @@
 //!              names); Enter/click switches the centre (tmux swap-pane of the session's chat pane).
 //! - `plan`:    top centre. The Jobs of the Workflow of the session in the centre; tabs are the Context's sessions.
 //!              Enter/click on a Job opens the Worker's chat read-only beside the chat.
-//! - `dispatch`: right bar placeholder.
+//! - `dispatch`: right bar. The PR status of each Plan (read from `gh`, interim), the homeserver load, placeholders.
 //! - `worker <session.jsonl> <job>`: read-only chat view of a pi session file (follows it live).
 //!
 //! Data comes only from the cpd CLI (`cpd … --wf`), fetched by the context view into a cache the other views read.
@@ -16,7 +16,7 @@ use std::{
     path::PathBuf,
     process::Command,
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use ratatui::{
@@ -35,6 +35,7 @@ use serde_json::Value;
 mod sessions;
 mod context;
 mod flow;
+mod pr;
 
 use sessions::Session;
 
@@ -532,25 +533,83 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
 
 // ---------- dispatch (right bar) ----------
 
+fn now_secs() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+fn pr_cache_name(plan: &str) -> String {
+    format!("pr-{plan}")
+}
+
+/// The Plans in the cockpit, once each, labelled as in the Context column.
+fn plans() -> Vec<(String, String)> {
+    let mut seen = HashSet::new();
+    snapshot().into_iter().flat_map(|(_, l)| l).filter_map(|e| Some((e.label, e.workflow?))).filter(|(_, wf)| seen.insert(wf.clone())).collect()
+}
+
+/// `(pr number, repo)` of a Plan from its cached `cpd workflow show`; the number is `None` while `pr` is null.
+fn pr_of(plan: &str) -> Option<(Option<u64>, String)> {
+    let w = &read_json(&cache_file(plan))?["workflow"];
+    Some((w["pr"]["number"].as_u64(), w["repo"].as_str()?.to_string()))
+}
+
+/// Read-only `gh pr view` in the Workflow's repo (never changes a PR); `None` when gh fails, times out or answers badly.
+fn gh_pr_view(repo: &str, number: u64) -> Option<Value> {
+    let out = Command::new("timeout").args(["30", "gh", "pr", "view", &number.to_string(), "--json", pr::GH_FIELDS]).current_dir(repo).output().ok()?;
+    let v: Value = serde_json::from_slice(&out.stdout).ok().filter(|_| out.status.success())?;
+    pr::parse_live(&v).ok().map(|_| v)
+}
+
+/// Off the draw loop: every Plan's PR is read by gh at most once a minute (`pr::due`) into `cache/pr-<plan>.json`.
+fn pr_loop() {
+    let _ = fs::create_dir_all(format!("{}/cache", state_dir()));
+    loop {
+        for (_, plan) in plans() {
+            let Some((Some(number), repo)) = pr_of(&plan) else { continue };
+            let name = pr_cache_name(&plan);
+            let prev = read_json(&cache_file(&name)).and_then(|v| pr::Record::from_json(&v));
+            let now = now_secs();
+            if pr::due(prev.as_ref(), number, now) {
+                let rec = pr::Record::after(prev.as_ref(), number, now, gh_pr_view(&repo, number));
+                write_atomic(&cache_file(&name), &rec.to_json().to_string());
+            }
+        }
+        thread::sleep(Duration::from_secs(5));
+    }
+}
+
 fn run_dispatch(terminal: &mut DefaultTerminal) -> Result<(), String> {
+    thread::spawn(pr_loop);
     loop {
         let load = fs::read_to_string("/proc/loadavg").unwrap_or_default();
         let load: Vec<&str> = load.split_whitespace().take(3).collect();
+        let now = now_secs();
+        let rows: Vec<(String, Option<u64>, Option<pr::Record>)> = plans()
+            .into_iter()
+            .map(|(label, plan)| {
+                let number = pr_of(&plan).and_then(|p| p.0);
+                (label, number, read_json(&cache_file(&pr_cache_name(&plan))).and_then(|v| pr::Record::from_json(&v)))
+            })
+            .collect();
         terminal
             .draw(|f| {
-                let text = vec![
-                    Line::from(" homeserver".bold()),
-                    Line::from(format!(" load {}", load.join(" "))),
-                    Line::from(""),
-                    Line::from(" PRs".bold()),
-                    Line::from(" (future)".dim()),
-                    Line::from(""),
-                    Line::from(" git".bold()),
-                    Line::from(" (future)".dim()),
-                    Line::from(""),
-                    Line::from(" Jira".bold()),
-                    Line::from(" (future)".dim()),
-                ];
+                let width = f.area().width as usize;
+                let mut text = vec![Line::from(" homeserver".bold()), Line::from(format!(" load {}", load.join(" "))), Line::from(""), Line::from(" PRs".bold())];
+                // plans with a PR first; those without only while the pane has room for the rest
+                let room = (f.area().height as usize).saturating_sub(text.len() + 6);
+                let mut used = 0;
+                for (label, number, rec) in rows.iter().filter(|r| r.1.is_some()).chain(rows.iter().filter(|r| r.1.is_none())) {
+                    let lines = pr::render(label, *number, rec.as_ref(), now, width);
+                    if number.is_none() && used + lines.len() > room {
+                        continue;
+                    }
+                    used += lines.len();
+                    text.extend(lines);
+                }
+                if rows.is_empty() {
+                    text.push(Line::from(" no Plans in the cockpit".dim()));
+                }
+                text.extend([Line::from(""), Line::from(" git".bold()), Line::from(" (future)".dim()), Line::from(""), Line::from(" Jira".bold()), Line::from(" (future)".dim())]);
                 f.render_widget(Paragraph::new(text), f.area());
             })
             .map_err(|e| e.to_string())?;

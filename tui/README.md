@@ -54,6 +54,20 @@ header line).
 The selected pill is bold, between `▸ ◂`. The view scrolls to keep the selection visible when it moves by key; the
 refresh keeps the scroll offset and holds the selection by Job key.
 
+## Dispatch: PR status
+
+The `dispatch` view lists the PR of each Plan in the cockpit (the Workflows of the chat sessions, as the Context view
+finds them), under the homeserver load: the Plan's label, `#<number>`, the state (open, merged, closed), the checks
+(✓ all passed, ✗ any failed, … pending, – none), the review (approved, changes requested, no review) and the PR title,
+cut first when the column is narrow. A Plan with `pr: null` shows `no PR` (dropped when the pane has no room).
+
+**Interim source.** cpd records only `workflow.pr = {number, url, openedAt}` (from the cached `cpd workflow show`), so
+the live state comes from the read-only `gh pr view <number> --json state,statusCheckRollup,reviewDecision,mergeable,url,title`,
+run in `workflow.repo`. This stays until cpd reports PR state, which is the cpd-rust Lead's data contract.
+
+`gh` runs in a thread of the view, never in the draw loop, at most once per 60 s per PR, and its answer is cached in
+`$CPD_TUI_STATE/cache/pr-<workflow>.json`. When a call fails, the last known state shows dimmed with its age.
+
 ## Checking views without the live cockpit
 
 Start a scratch server (`tmux -L cpd-tui-check -f scripts/tmux.conf`) with `CPD_TUI_SOCKET=cpd-tui-check`,
