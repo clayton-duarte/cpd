@@ -14,13 +14,14 @@ const EXPECTED = [
   "plan render", "plan decision", "plan lock", "watch",
   "attempt run", "attempt submit", "attempt read", "attempt list", "attempt show",
   "review decide", "ask", "answer", "pr open", "pr poll", "pr rebase",
+  "session rename",
 ];
 
 test("--help lists every contract command", async () => {
   const r = await runCli(["--help"]);
   assert.equal(r.code, 0);
   assert.equal(r.json.ok, true);
-  assert.equal(r.json.commands.length, 29);
+  assert.equal(r.json.commands.length, 30);
   assert.deepEqual([...r.json.commands].sort(), [...EXPECTED].sort());
 });
 

@@ -15,6 +15,7 @@ export const DELIVERY: Record<MessageKind, DeliveryRule> = {
   "pr-feedback": { deliver: true, triggerTurn: true },
   "workflow-done": { deliver: true, triggerTurn: true },
   error: { deliver: true, triggerTurn: true },
+  rename: { deliver: false, triggerTurn: false },
 };
 
 /** Arguments of `pi.sendMessage(message, options)` (contract §15). */
@@ -31,6 +32,17 @@ export function deliveryOf(msg: LeadMessage): Delivery | null {
     message: { customType: "cpd", content: msg.text, display: true, details: msg },
     options: { triggerTurn: rule.triggerTurn, deliverAs: "followUp" },
   };
+}
+
+/** An effect on the session itself, not a message to the Lead (contract §10, `rename`). Never triggers a turn. */
+export type Action = { type: "set-name"; name: string; notice: string };
+
+/** The action a valid queue message asks for, or null when its kind has none. */
+export function actionOf(msg: LeadMessage): Action | null {
+  if (msg.kind !== "rename") return null;
+  const name = msg.data.name;
+  if (typeof name !== "string") throw new Error("rename message without data.name (validated at the queue boundary)");
+  return { type: "set-name", name, notice: `cpd: session renamed to "${name}"` };
 }
 
 /** An `error` delivery for something the adapter itself found wrong (fail loud). */

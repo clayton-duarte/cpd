@@ -147,7 +147,7 @@ Slots are `slots/slot-0.json` … `slot-<concurrency-1>.json`, each created excl
 ## 10. Lead queue messages (cpd → Lead)
 
 - **Location and write:** file `leads/<session-id>/queue/<epoch-ms>-<id>.json`, written as `.tmp` then renamed.
-- **Schema:** `{ "v": 1, "id", "kind", "wf", "job"?, "attempt"?, "text", "data": {}, "createdAt" }`. `text` is one short paragraph addressed to the Lead, ending with the exact `cpd` command(s) it may want to run.
+- **Schema:** `{ "v": 1, "id", "kind", "wf"?, "job"?, "attempt"?, "text", "data": {}, "createdAt" }`. `wf` is required for every kind except `rename`, which belongs to a session, not a Workflow. `text` is one short paragraph addressed to the Lead, ending with the exact `cpd` command(s) it may want to run.
 
 | kind | When | Adapter delivery |
 |---|---|---|
@@ -161,6 +161,7 @@ Slots are `slots/slot-0.json` … `slot-<concurrency-1>.json`, each created excl
 | `pr-feedback` | new failing checks, reviews or comments on the PR | turn |
 | `workflow-done` | PR merged | turn |
 | `error` | `cpd watch` or `attempt run` hit an unexpected failure | turn |
+| `rename` | `cpd session rename`; `data: {name}` (1–80 characters, no control characters) | no message, no turn; call `pi.setSessionName(name)` and show a one-line notice |
 
 ## 11. Commands
 
@@ -180,6 +181,12 @@ Slots are `slots/slot-0.json` … `slot-<concurrency-1>.json`, each created excl
   - `sessionId` = the pi session id from the session file header.
   - Writes `workflow.json.lead`, creates the queue dir, and writes `leads/<sessionId>/workflow`.
   - Re-attaching a new Lead session replaces the previous one (logged).
+
+### Session
+- `cpd session rename <name> [--session <id|path>]`: rename a pi session; needs no herdr or tmux.
+  - Name: 1–80 characters, no control characters; else `invalid_name` (exit 2), nothing written.
+  - Session: `--session` (a path when it contains `/` or ends in `.jsonl`, read with the session header; otherwise a session id whose `leads/<id>` dir must exist), else `PI_SESSION_FILE`. Neither, or an unknown id → `session_unknown` (exit 3).
+  - Writes one `rename` message (§10) to `leads/<sessionId>/queue/`; the pi adapter (§15) applies it. Returns `{ok, sessionId, name}`.
 
 ### Workflow
 - `cpd workflow init --wf <id> --repo <path> --title <text> [--base <branch>]`:
@@ -346,6 +353,7 @@ Recorded once per Attempt (write-once keys). Reviewer metrics are recorded on th
   - On `pending`, run `cpd plan decision --review-id <id> --pending`.
   - On `plannotator:review-result`, run `cpd plan decision … --approved | --rejected --feedback-file <f>` and deliver the decision and feedback to the Lead (`triggerTurn: true`).
   - At `session_start`, poll `review-status` for pending reviews (t4 F5).
+- **Rename:** a `rename` message calls `pi.setSessionName(data.name)` and shows a one-line notice (`ctx.ui.notify`); it sends no message and triggers no turn.
 - **Never** call `herdr agent prompt`, `pane run` or `send-text` toward the Lead.
 
 ## 16. Templates and the Lead skill

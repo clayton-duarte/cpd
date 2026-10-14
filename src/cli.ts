@@ -30,6 +30,7 @@ import * as ask from "./commands/ask.ts";
 import * as answer from "./commands/answer.ts";
 import * as prOpen from "./commands/pr-open.ts";
 import * as prPoll from "./commands/pr-poll.ts";
+import * as sessionRename from "./commands/session-rename.ts";
 import * as prRebase from "./commands/pr-rebase.ts";
 
 type Command = { run: (argv: string[]) => Promise<Result> };
@@ -70,6 +71,7 @@ const GROUPED = new Map<string, Map<string, Command>>([
     ]),
   ],
   ["review", new Map([["decide", reviewDecide]])],
+  ["session", new Map([["rename", sessionRename]])],
   ["pr", new Map([["open", prOpen], ["poll", prPoll], ["rebase", prRebase]])],
 ]);
 
