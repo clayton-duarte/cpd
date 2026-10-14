@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeF
 import { dirname } from "node:path";
 import { parseArgs } from "node:util";
 import { z } from "zod";
+import { Lead } from "../ledger/workflow.ts";
 import { paneGet } from "../herdr/panes.ts";
 import { readSessionHeader } from "../herdr/session.ts";
 import { failure, notFound, refused, usage } from "../lib/errors.ts";
@@ -16,15 +17,6 @@ import {
   workflowJsonPath,
 } from "../lib/paths.ts";
 
-/** Contract §6: `lead` = `{paneId, sessionPath, sessionId, queueDir, attachedAt}`. */
-const Lead = z.strictObject({
-  paneId: z.string(),
-  sessionPath: z.string(),
-  sessionId: z.string(),
-  queueDir: z.string(),
-  attachedAt: z.string(),
-});
-type Lead = z.infer<typeof Lead>;
 /** Only what this command reads; every other workflow.json key is preserved as is. */
 const WorkflowFile = z.looseObject({ v: z.literal(1), id: z.string(), lead: Lead.nullable() });
 
@@ -62,6 +54,17 @@ function logEvent(wf: string, event: string, fields: Record<string, unknown>): v
   appendFileSync(path, JSON.stringify({ at: new Date().toISOString(), level: "info", event, ...fields }) + "\n");
 }
 
+/** `TMUX` is `<socket path>,<server pid>,<session index>`; the path may itself hold commas. */
+function tmuxSocketOf(tmux: string): string {
+  const end = tmux.lastIndexOf(",", tmux.lastIndexOf(",") - 1);
+  if (end <= 0) throw refused("no_lead_pane", `TMUX is not "<socket>,<pid>,<session>": ${tmux}`);
+  return tmux.slice(0, end);
+}
+
+function refuseNoPane(): never {
+  throw refused("no_lead_pane", "cpd lead attach must run inside a herdr pane (HERDR_ENV=1 and HERDR_PANE_ID) or a tmux pane (TMUX_PANE and TMUX)");
+}
+
 /** Contract §11: bind the calling Lead session (pane, session file, queue) to a Workflow. */
 export async function run(argv: string[]): Promise<Result> {
   let values: { wf?: string };
@@ -70,22 +73,25 @@ export async function run(argv: string[]): Promise<Result> {
   } catch (e) {
     throw usage("usage", `cpd lead attach: ${(e as Error).message}`);
   }
-  if (process.env.HERDR_ENV !== "1") {
-    throw refused("not_in_herdr", "cpd lead attach must run inside a herdr pane (HERDR_ENV=1)");
-  }
+  const env = process.env;
+  const host: { host: "herdr"; paneId: string } | { host: "tmux"; paneId: string; tmuxSocket: string } =
+    env.HERDR_ENV === "1" && env.HERDR_PANE_ID
+      ? { host: "herdr", paneId: env.HERDR_PANE_ID }
+      : env.TMUX_PANE && env.TMUX
+        ? { host: "tmux", paneId: env.TMUX_PANE, tmuxSocket: tmuxSocketOf(env.TMUX) }
+        : refuseNoPane();
   const wf = values.wf ?? process.env.CPD_WF;
   if (!wf) throw usage("workflow_required", "pass --wf <id> (or set CPD_WF)");
   assertWorkflowId(wf);
-  const paneId = process.env.HERDR_PANE_ID;
-  if (!paneId) throw refused("not_in_herdr", "HERDR_PANE_ID is not set; cpd lead attach must run inside a herdr pane");
+  const { paneId } = host;
 
-  const pane = await paneGet(paneId);
-  const sessionPath = pane.agent_session?.value;
+  let sessionPath = env.PI_SESSION_FILE || undefined;
+  if (!sessionPath && host.host === "herdr") sessionPath = (await paneGet(paneId)).agent_session?.value;
   if (!sessionPath) {
-    throw failure("lead_session_unknown", `herdr reports no agent session for pane ${paneId}; run this from the Lead's pi session`, { paneId });
+    throw failure("lead_session_unknown", `no pi session found for pane ${paneId}; run this from the Lead's pi session (PI_SESSION_FILE)`, { paneId });
   }
   const sessionId = readSessionHeader(sessionPath).id;
-  const lead: Lead = { paneId, sessionPath, sessionId, queueDir: leadQueueDir(sessionId), attachedAt: new Date().toISOString() };
+  const lead: Lead = Lead.parse({ ...host, sessionPath, sessionId, queueDir: leadQueueDir(sessionId), attachedAt: new Date().toISOString() });
 
   // withLock creates the lock's parent dirs: refuse an unknown workflow first so none are left behind.
   if (!existsSync(workflowJsonPath(wf))) {

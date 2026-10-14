@@ -6,6 +6,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { leadQueueDir, leadWorkflowPath } from "../src/lib/paths.ts";
 import { listOpenQuestions } from "../src/queue/escalation-files.ts";
+import { adapterActive } from "./lib/activation.ts";
 import { createBlockedCounter } from "./lib/blocked.ts";
 import { callCpd } from "./lib/cpd.ts";
 import { errorDelivery } from "./lib/delivery.ts";
@@ -24,7 +25,7 @@ type Active = {
 };
 
 export default function (pi: ExtensionAPI) {
-  if (process.env.HERDR_ENV !== "1") return;
+  if (!adapterActive(process.env)) return;
 
   let active: Active | undefined;
   let sessionId = "";

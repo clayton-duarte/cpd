@@ -96,7 +96,7 @@ Strict schema: unknown keys are rejected, and a missing file is error `config_mi
   "lead": null, "pr": null }
 ```
 
-- `lead` = `{paneId, sessionPath, sessionId, queueDir, attachedAt}`, set by `cpd lead attach`.
+- `lead` = `{host, paneId, tmuxSocket?, sessionPath, sessionId, queueDir, attachedAt}`, set by `cpd lead attach`. `host` is `"herdr"` or `"tmux"`; `paneId` is that host's pane id; `tmuxSocket` (the socket path from `$TMUX`) is present exactly when `host` is `tmux`. A file without `host` (written before tmux support) reads as `herdr`.
 - `leadWorktree` is set by `cpd plan lock`.
 - `pr` = `{number, url, openedAt}`, set by `cpd pr open`.
 - Writes are atomic (temp file plus rename) under `locks/ledger.lock`.
@@ -174,8 +174,9 @@ Slots are `slots/slot-0.json` … `slot-<concurrency-1>.json`, each created excl
   - every Tier letter resolvable.
 - `cpd tiers`: `{ok, tiers: {O: {model, efforts: [..]}, S: …, H: …}}`.
 - `cpd lead start`: must run inside herdr (`HERDR_ENV=1`, else `not_in_herdr`, exit 3). It `exec`s `pi --model <leadTier> -e <repo>/pi -e <each leadPiPackages>` with env `CPD_HOME`, `PLANNOTATOR_DATA_DIR=$CPD_HOME/plannotator`, `PLANNOTATOR_UPDATE_CHECK=0`. It never returns.
-- `cpd lead attach --wf <id>`: run by the Lead inside herdr.
-  - Resolves `HERDR_PANE_ID`, then `herdr pane get` to get `agent_session.value` (sessionPath).
+- `cpd lead attach --wf <id>`: run by the Lead inside herdr or tmux.
+  - Host: herdr when `HERDR_ENV=1` and `HERDR_PANE_ID` are set; else tmux when `TMUX_PANE` and `TMUX` are set; else `no_lead_pane` (exit 3), naming both hosts.
+  - Session: `PI_SESSION_FILE` when set (pi sets it in its bash tool), read with the session header; otherwise, in herdr, the pane's `agent_session` from `herdr pane get`. Neither → `lead_session_unknown`.
   - `sessionId` = the pi session id from the session file header.
   - Writes `workflow.json.lead`, creates the queue dir, and writes `leads/<sessionId>/workflow`.
   - Re-attaching a new Lead session replaces the previous one (logged).
@@ -333,7 +334,7 @@ Recorded once per Attempt (write-once keys). Reviewer metrics are recorded on th
 ## 15. pi adapter (`pi/` package, the v0 Lead adapter)
 
 - **Package:** `pi/package.json` with `"keywords": ["pi-package"]` and `"pi": {"extensions": ["./extension.ts"], "skills": ["./skills"]}`. Host packages are `peerDependencies: "*"`.
-- **Activation:** only in TUI mode with `HERDR_ENV=1`.
+- **Activation:** only in TUI mode, and only when `HERDR_ENV=1` or `TMUX_PANE` is set (`pi/lib/activation.ts`).
 - **Queue:**
   - At `session_start`, the queue dir is `$CPD_HOME/leads/<sessionId>/queue` (sessionId = pi's session id). Create it, drain it, then `fs.watch` it. Close the watcher on `session_shutdown`.
   - For each file: claim it by renaming, validate it (schema §10), then deliver with `pi.sendMessage({customType: "cpd", content: text, display: true, details: msg}, {triggerTurn, deliverAs: "followUp"})` per the table in §10, and delete it.

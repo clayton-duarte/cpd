@@ -24,12 +24,45 @@ function setup(sessionPath: string | null = FIXTURE, wfJson: object | null = { v
   return { herdr, env, wfDir, home: env.CPD_HOME! };
 }
 
-test("outside herdr: not_in_herdr, exit 3", async () => {
-  const { env } = setup();
+test("in neither herdr nor tmux: no_lead_pane, exit 3, nothing written", async () => {
+  const { env, wfDir, home } = setup();
   delete env.HERDR_ENV;
   const r = await runCli(["lead", "attach", "--wf", "pay-1"], { env });
   assert.equal(r.code, 3);
-  assert.equal(r.json.error.code, "not_in_herdr");
+  assert.equal(r.json.error.code, "no_lead_pane");
+  assert.match(r.json.error.message, /herdr.*tmux/);
+  assert.equal(JSON.parse(readFileSync(join(wfDir, "workflow.json"), "utf8")).lead, null);
+  assert.equal(existsSync(join(home, "leads")), false);
+});
+
+test("from tmux: records host, pane, socket and the session from PI_SESSION_FILE", async () => {
+  const { env, wfDir, home } = setup();
+  delete env.HERDR_ENV;
+  delete env.HERDR_PANE_ID;
+  const r = await runCli(["lead", "attach", "--wf", "pay-1"], {
+    env: { ...env, TMUX_PANE: "%3", TMUX: "/tmp/tmux-1000/cpd,12345,0", PI_SESSION_FILE: FIXTURE },
+  });
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  const lead = JSON.parse(readFileSync(join(wfDir, "workflow.json"), "utf8")).lead;
+  assert.deepEqual(Object.keys(lead).sort(), ["attachedAt", "host", "paneId", "queueDir", "sessionId", "sessionPath", "tmuxSocket"]);
+  assert.deepEqual([lead.host, lead.paneId, lead.tmuxSocket, lead.sessionPath, lead.sessionId], ["tmux", "%3", "/tmp/tmux-1000/cpd", FIXTURE, SESSION_ID]);
+  assert.equal(readFileSync(join(home, "leads", SESSION_ID, "workflow"), "utf8"), "pay-1");
+});
+
+test("from tmux without a session file: lead_session_unknown", async () => {
+  const { env } = setup();
+  delete env.HERDR_ENV;
+  const r = await runCli(["lead", "attach", "--wf", "pay-1"], { env: { ...env, TMUX_PANE: "%3", TMUX: "/tmp/s,1,0" } });
+  assert.deepEqual([r.code, r.json.error.code], [1, "lead_session_unknown"]);
+});
+
+test("from herdr with PI_SESSION_FILE: host herdr, herdr is not asked", async () => {
+  const { herdr, env, wfDir } = setup(null);
+  const r = await runCli(["lead", "attach", "--wf", "pay-1"], { env: { ...env, PI_SESSION_FILE: FIXTURE } });
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  const lead = JSON.parse(readFileSync(join(wfDir, "workflow.json"), "utf8")).lead;
+  assert.deepEqual([lead.host, lead.paneId, lead.sessionId, "tmuxSocket" in lead], ["herdr", "w1:p1", SESSION_ID, false]);
+  assert.deepEqual(herdr.calls(), []);
 });
 
 test("--wf (or CPD_WF) is required: workflow_required, exit 2; CPD_WF works", async () => {
@@ -47,7 +80,8 @@ test("attach writes workflow.json.lead, the queue dir and leads/<id>/workflow; o
   const r = await runCli(["lead", "attach", "--wf", "pay-1"], { env });
   assert.equal(r.code, 0, r.stdout + r.stderr);
   const lead = JSON.parse(readFileSync(join(wfDir, "workflow.json"), "utf8")).lead;
-  assert.deepEqual(Object.keys(lead).sort(), ["attachedAt", "paneId", "queueDir", "sessionId", "sessionPath"]);
+  assert.deepEqual(Object.keys(lead).sort(), ["attachedAt", "host", "paneId", "queueDir", "sessionId", "sessionPath"]);
+  assert.equal(lead.host, "herdr");
   assert.equal(lead.paneId, "w1:p1");
   assert.equal(lead.sessionPath, FIXTURE);
   assert.equal(lead.sessionId, SESSION_ID);
