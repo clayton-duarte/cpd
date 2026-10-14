@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { MESSAGE_KINDS, type LeadMessage } from "../../src/queue/messages.ts";
+import { adapterActive } from "../../pi/lib/activation.ts";
 import { createBlockedCounter } from "../../pi/lib/blocked.ts";
 import { callCpd } from "../../pi/lib/cpd.ts";
 import { DELIVERY, deliveryOf } from "../../pi/lib/delivery.ts";
@@ -260,4 +261,13 @@ test("pi package: the manifest exposes pi/skills/cpd-lead/SKILL.md next to the e
   assert.deepEqual(pkg.pi.skills, ["./skills"]);
   assert.ok(existsSync(new URL("skills/cpd-lead/SKILL.md", root)));
   assert.equal(existsSync(new URL("../skills/cpd-lead/SKILL.md", root)), false, "the old location is gone");
+});
+
+// --- activation ---
+
+test("adapterActive: HERDR_ENV=1 or TMUX_PANE turns it on, neither leaves it off", () => {
+  assert.equal(adapterActive({ HERDR_ENV: "1" }), true);
+  assert.equal(adapterActive({ TMUX_PANE: "%1" }), true);
+  assert.equal(adapterActive({}), false);
+  assert.equal(adapterActive({ HERDR_ENV: "0", TMUX_PANE: "" }), false);
 });

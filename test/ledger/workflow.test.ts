@@ -79,3 +79,12 @@ test("phase transitions follow the table and nothing else", async () => {
   assert.equal(await getPhase("wf-one"), "done");
   await assert.rejects(setPhase("wf-one", "plan"), refusal("illegal_transition", 3));
 });
+
+test("a workflow.json lead without host (written before tmux) parses as herdr", () => {
+  const v0 = {
+    v: 1, id: "wf-old", title: "T", repo: "/r", base: "main", leadBranch: "cpd/wf-old", leadWorktree: null, createdAt: "2026-01-01T00:00:00Z", pr: null,
+    lead: { paneId: "w1:p1", sessionPath: "/s.jsonl", sessionId: "sid", queueDir: "/q", attachedAt: "2026-01-01T00:00:00Z" },
+  };
+  assert.equal(WorkflowJson.parse(v0).lead?.host, "herdr");
+  assert.equal(WorkflowJson.safeParse({ ...v0, lead: { ...v0.lead, host: "tmux" } }).success, false); // tmux needs tmuxSocket
+});

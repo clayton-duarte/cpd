@@ -22,13 +22,19 @@ import { logEvent } from "./audit.ts";
 
 // --- workflow.json (contract §6) ---
 
-const Lead = z.strictObject({
-  paneId: z.string(),
-  sessionPath: z.string(),
-  sessionId: z.string(),
-  queueDir: z.string(),
-  attachedAt: z.string(),
-});
+/** `paneId` is the herdr pane id or the tmux pane id, per `host`. A `workflow.json` without `host` predates tmux: herdr. */
+export const Lead = z
+  .strictObject({
+    host: z.enum(["herdr", "tmux"]).default("herdr"),
+    paneId: z.string(),
+    tmuxSocket: z.string().optional(),
+    sessionPath: z.string(),
+    sessionId: z.string(),
+    queueDir: z.string(),
+    attachedAt: z.string(),
+  })
+  .refine((l) => (l.host === "tmux") === (l.tmuxSocket !== undefined), { message: "tmuxSocket is set exactly when host is tmux" });
+export type Lead = z.infer<typeof Lead>;
 const Pr = z.strictObject({ number: z.number().int().positive(), url: z.string(), openedAt: z.string() });
 
 export const WorkflowJson = z.strictObject({
@@ -100,7 +106,7 @@ export function readWorkflow(wf: string): WorkflowJson {
 }
 
 /** Validate and write `workflow.json` atomically under `locks/ledger.lock`. Do not call while holding the lock. */
-export function writeWorkflow(wf: string, value: WorkflowJson): Promise<void> {
+export function writeWorkflow(wf: string, value: z.input<typeof WorkflowJson>): Promise<void> {
   const parsed = WorkflowJson.parse(value);
   return withLock(ledgerLockPath(wf), "write workflow.json", () => writeJsonAtomic(workflowJsonPath(wf), parsed));
 }
