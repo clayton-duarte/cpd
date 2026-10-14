@@ -71,19 +71,20 @@ const FLAGS: Record<string, string[]> = {
   "attempt list": ["wf"],
   "attempt show": ["wf"],
   "review decide": ["wf", "approve", "reject", "feedback"],
+  "session rename": ["session"],
   ask: ["wf", "timeout-minutes"],
   answer: ["wf"],
   "pr open": ["wf"],
   "pr poll": ["wf"],
   "pr rebase": ["wf"],
 };
-const COMMANDS_WITHOUT_WF = new Set(["doctor", "tiers", "lead start"]);
+const COMMANDS_WITHOUT_WF = new Set(["doctor", "tiers", "lead start", "session rename"]);
 const SWITCHES = new Set(["approve", "reject", "pending", "approved", "rejected", "no-watch"]);
 /** Positional arguments per command (contract §11); absent means none. */
 const POSITIONALS: Record<string, number> = {
   "job edit": 1, "job show": 1, "job cancel": 1, "job retry": 1, "job dispatch": 1,
   "attempt run": 1, "attempt submit": 1, "attempt read": 1, "attempt show": 1,
-  "review decide": 1, "workflow phase": 1, ask: 2, answer: 2,
+  "review decide": 1, "workflow phase": 1, "session rename": 1, ask: 2, answer: 2,
 };
 /** Flags the contract marks as required. */
 const REQUIRED: Record<string, string[]> = {
