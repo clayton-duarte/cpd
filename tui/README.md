@@ -35,6 +35,25 @@ centre slot.
 
 Do not run `cockpit.sh` while a Lead's pi runs elsewhere on the same session file.
 
+## Plan view
+
+The Plan view draws the Workflow as a vertical flowchart (`src/flow.rs`, a pure layout the view blits into the frame):
+one-row pills ` <icon> <key> <tier>[ aN] ` in black on the status colour, two rows per level (pills, then edges in dim
+box-drawing). A Job sits one level below the deepest Job it needs; a level is ordered by its parents' positions. An edge
+that skips levels runs in a lane to the right of every pill. Keys are truncated with `…` (down to 6 characters) when a
+level is too wide; beyond that the chart scrolls horizontally. Cancelled Jobs are hidden (`N cancelled hidden` in the
+header line).
+
+| Input | Does |
+| --- | --- |
+| ↑ ↓ / k j | select the nearest Job on the level above / below |
+| ← → / h l | select the previous / next Job on the level |
+| mouse wheel | scroll vertically (wheel left/right: horizontally) |
+| Enter, click on a pill | open the Worker's read-only chat for that Job |
+
+The selected pill is bold, between `▸ ◂`. The view scrolls to keep the selection visible when it moves by key; the
+refresh keeps the scroll offset and holds the selection by Job key.
+
 ## Checking views without the live cockpit
 
 Start a scratch server (`tmux -L cpd-tui-check -f scripts/tmux.conf`) with `CPD_TUI_SOCKET=cpd-tui-check`,

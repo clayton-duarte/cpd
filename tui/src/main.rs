@@ -25,15 +25,16 @@ use ratatui::{
         execute,
     },
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Color, Stylize},
     text::{Line, Span},
-    widgets::{List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
     DefaultTerminal,
 };
 use serde_json::Value;
 
 mod sessions;
 mod context;
+mod flow;
 
 use sessions::Session;
 
@@ -165,21 +166,6 @@ fn fetch_loop() {
 fn cache_age(name: &str) -> Option<u64> {
     let m = fs::metadata(cache_file(name)).ok()?.modified().ok()?;
     m.elapsed().ok().map(|d| d.as_secs())
-}
-
-fn status_style(status: &str) -> Style {
-    match status {
-        "closed" => Style::new().fg(Color::Green),
-        "running" | "in_review" => Style::new().fg(Color::Yellow),
-        "failed" => Style::new().fg(Color::Red),
-        "cancelled" => Style::new().fg(Color::DarkGray),
-        _ => Style::new().fg(Color::Gray),
-    }
-}
-
-/// Row under a mouse click inside a borderless list, given its scroll offset.
-fn clicked_row(area: Rect, row: u16, offset: usize) -> Option<usize> {
-    (row >= area.y && row < area.y + area.height).then(|| (row - area.y) as usize + offset)
 }
 
 // ---------- context (left bar) ----------
@@ -329,36 +315,28 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
 
 // ---------- plan view (top centre) ----------
 
-#[derive(Clone)]
+/// A Job as the plan view keeps it: what the flowchart draws, and the latest Attempt (what Enter/click opens).
 struct JobRow {
-    key: String,
-    status: String,
-    title: String,
+    flow: flow::FlowJob,
     attempt: Option<String>,
-    attempt_label: String,
 }
 
+/// The Workflow's title and all its Jobs (the flowchart hides the cancelled ones and counts them).
 fn jobs_of(plan: &str) -> (String, Vec<JobRow>) {
     let v = read_json(&cache_file(plan)).unwrap_or(Value::Null);
     let rows = v["jobs"]
         .as_array()
         .map(|a| {
             a.iter()
-                .filter(|j| j["status"] != "cancelled")
                 .map(|j| JobRow {
-                    key: j["key"].as_str().unwrap_or("?").into(),
-                    status: j["status"].as_str().unwrap_or("?").into(),
-                    title: j["title"].as_str().unwrap_or("").into(),
+                    flow: flow::FlowJob {
+                        key: j["key"].as_str().unwrap_or("?").into(),
+                        status: j["status"].as_str().unwrap_or("?").into(),
+                        tier: j["tier"].as_str().unwrap_or("").into(),
+                        needs: j["needs"].as_array().map(|n| n.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
+                        attempt: j["attempts"].as_array().map_or(0, |a| a.len()),
+                    },
                     attempt: j["attempts"].as_array().and_then(|a| a.last()).and_then(|a| a["id"].as_str()).map(String::from),
-                    attempt_label: j["attempts"]
-                        .as_array()
-                        .and_then(|a| a.last())
-                        .map(|a| {
-                            let id = a["id"].as_str().unwrap_or("");
-                            let n = id.rsplit("-a").next().unwrap_or("?");
-                            format!("a{n} {}", a["tier"].as_str().unwrap_or(""))
-                        })
-                        .unwrap_or_default(),
                 })
                 .collect()
         })
@@ -422,8 +400,10 @@ fn centre() -> Option<Centre> {
 fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
     let exe = env::current_exe().map_err(|e| e.to_string())?.display().to_string();
     let (mut centre_now, mut title, mut jobs) = (None::<Centre>, String::from("loading…"), Vec::<JobRow>::new());
-    let mut state = ListState::default().with_selected(Some(0));
-    let mut list_area = Rect::default();
+    // The selection is held by Job key, so a refresh keeps it; the scroll offset is the window's top-left in the chart.
+    let (mut selected, mut scroll, mut follow) = (None::<String>, (0u16, 0u16), true);
+    let mut chart = None::<flow::Chart>;
+    let mut body_area = Rect::default();
     let mut head_area = Rect::default();
     let mut tab_ranges: Vec<(u16, u16, String)> = Vec::new();
     let mut note = String::new();
@@ -434,7 +414,7 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
             centre_now = centre();
             if before != centre_now.as_ref().map(|c| c.active.session.id.clone()) {
                 note.clear();
-                state.select(Some(0));
+                (selected, scroll, follow) = (None, (0, 0), true);
             }
             (title, jobs) = match centre_now.as_ref().and_then(|c| c.active.workflow.as_deref()) {
                 Some(wf) => jobs_of(wf), // a cache read: instant
@@ -446,6 +426,8 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
             .draw(|f| {
                 let [head, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(f.area());
                 head_area = head;
+                let flows: Vec<flow::FlowJob> = jobs.iter().map(|j| j.flow.clone()).collect();
+                let fc = flow::layout(&flows, body.width);
                 tab_ranges.clear();
                 let mut spans: Vec<Span> = Vec::new();
                 if let Some(c) = &centre_now {
@@ -459,6 +441,9 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
                         spans.push(" ".into());
                         x += w + 1;
                     }
+                    if fc.hidden > 0 {
+                        spans.push(format!("  {} cancelled hidden", fc.hidden).dim());
+                    }
                     spans.push(format!("  {title}").into());
                     if let Some(wf) = &c.active.workflow {
                         let age = cache_age(wf).map(|a| format!("  updated {a}s ago")).unwrap_or_else(|| "  loading…".into());
@@ -470,50 +455,73 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
                 if !note.is_empty() {
                     spans.push(format!("  {note}").yellow());
                 }
+                body_area = body;
                 f.render_widget(Paragraph::new(Line::from(spans)), head);
-                list_area = body;
-                let items: Vec<ListItem> = jobs
-                    .iter()
-                    .map(|j| ListItem::new(Line::from(vec![Span::styled(format!("{:<12}", j.status), status_style(&j.status)), format!("{:<18}", j.key).bold(), format!("{:<8}", j.attempt_label).fg(Color::Cyan), j.title.clone().dim()])))
-                    .collect();
-                let list = List::new(items).highlight_style(Style::new().add_modifier(Modifier::REVERSED));
-                f.render_stateful_widget(list, body, &mut state);
+                let sel = selected.as_ref().and_then(|k| fc.pills.iter().position(|p| &p.key == k)).or_else(|| fc.levels.first().map(|l| l[0]));
+                selected = sel.map(|i| fc.pills[i].key.clone());
+                if let (true, Some(i)) = (follow, sel) {
+                    scroll = fc.scroll_to(i, scroll, (body.width, body.height));
+                    follow = false;
+                }
+                scroll = fc.blit(f.buffer_mut(), body, scroll, sel);
+                chart = Some(fc);
             })
             .map_err(|e| e.to_string())?;
         if !event::poll(Duration::from_millis(250)).map_err(|e| e.to_string())? {
             continue;
         }
-        let mut open = None;
+        let mut open = None::<String>;
+        let here = chart.as_ref().and_then(|c| Some((c, c.pills.iter().position(|p| Some(&p.key) == selected.as_ref())?)));
         match event::read().map_err(|e| e.to_string())? {
-            Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
-                KeyCode::Char('q') => return Ok(()),
-                KeyCode::Down | KeyCode::Char('j') => state.select(Some((state.selected().unwrap_or(0) + 1).min(jobs.len().saturating_sub(1)))),
-                KeyCode::Up | KeyCode::Char('k') => state.select(Some(state.selected().unwrap_or(0).saturating_sub(1))),
-                KeyCode::Enter => open = state.selected(),
-                _ => {}
-            },
-            Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
-                if m.row == head_area.y {
+            Event::Key(k) if k.kind == KeyEventKind::Press => {
+                let dir = match k.code {
+                    KeyCode::Down | KeyCode::Char('j') => Some(flow::Dir::Down),
+                    KeyCode::Up | KeyCode::Char('k') => Some(flow::Dir::Up),
+                    KeyCode::Left | KeyCode::Char('h') => Some(flow::Dir::Left),
+                    KeyCode::Right | KeyCode::Char('l') => Some(flow::Dir::Right),
+                    _ => None,
+                };
+                match (k.code, dir, here) {
+                    (KeyCode::Char('q'), ..) => return Ok(()),
+                    (_, Some(d), Some((c, i))) => {
+                        selected = Some(c.pills[c.step(i, d)].key.clone());
+                        follow = true;
+                    }
+                    (KeyCode::Enter, ..) => open = selected.clone(),
+                    _ => {}
+                }
+            }
+            Event::Mouse(m) => match m.kind {
+                MouseEventKind::Down(MouseButton::Left) if m.row == head_area.y => {
                     if let Some((_, _, id)) = tab_ranges.iter().find(|(a, b, _)| m.column >= *a && m.column < *b) {
                         switch_to(id); // the same switch as the context view: swaps the chat, closes a Worker view
                         last_check = Instant::now() - Duration::from_secs(1);
                     }
-                } else if let Some(row) = clicked_row(list_area, m.row, state.offset()) {
-                    if row < jobs.len() {
-                        state.select(Some(row));
-                        open = Some(row);
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let hit = chart.as_ref().filter(|_| m.row >= body_area.y && m.column >= body_area.x).and_then(|c| {
+                        c.pill_at(m.column - body_area.x + scroll.0, m.row - body_area.y + scroll.1).map(|i| c.pills[i].key.clone())
+                    });
+                    if let Some(key) = hit {
+                        selected = Some(key.clone());
+                        open = Some(key);
                     }
                 }
-            }
+                MouseEventKind::ScrollUp => scroll.1 = scroll.1.saturating_sub(3),
+                MouseEventKind::ScrollDown => scroll.1 = scroll.1.saturating_add(3), // clamped when drawn
+                MouseEventKind::ScrollLeft => scroll.0 = scroll.0.saturating_sub(4),
+                MouseEventKind::ScrollRight => scroll.0 = scroll.0.saturating_add(4),
+                _ => {}
+            },
             _ => {}
         }
-        if let Some(i) = open {
-            if let Some(job) = jobs.get(i).cloned() {
+        if let Some(key) = open {
+            if let Some(job) = jobs.iter().find(|j| j.flow.key == key) {
                 note = match job.attempt.as_deref().map(|a| (a, session_of(a))) {
-                    None => format!("{} has not started yet", job.key),
+                    None => format!("{key} has not started yet"),
                     Some((a, None)) => format!("{a}: session path not cached yet, try again in a few seconds"),
                     Some((_, Some(path))) => {
-                        toggle_worker_view(&exe, &job.key, &path);
+                        toggle_worker_view(&exe, &key, &path);
                         String::new()
                     }
                 };
