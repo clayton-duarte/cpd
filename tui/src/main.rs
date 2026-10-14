@@ -2,7 +2,8 @@
 //!
 //! One binary, four views, each meant to run in its own tmux pane of the cockpit (see `scripts/cockpit.sh`):
 //! - `context`:   left bar. Context → the Lead sessions running in the cockpit (discovered from tmux, named by their pi
-//!              names); Enter/click switches the centre (tmux swap-pane of the session's chat pane).
+//!              names); Enter/click switches the centre (tmux swap-pane of the session's chat pane); `n` forks the
+//!              session into a new Plan, `x` closes it (one inline prompt each, see `prompt.rs`).
 //! - `plan`:    top centre. The Jobs of the Workflow of the session in the centre; tabs are the Context's sessions.
 //!              Enter/click on a Job opens the Worker's chat read-only beside the chat.
 //! - `dispatch`: right bar. The PR status of each Plan (read from `gh`, interim), the homeserver load, placeholders.
@@ -25,18 +26,21 @@ use ratatui::{
         execute,
     },
     layout::{Constraint, Layout, Rect},
-    style::{Color, Stylize},
+    style::{Color, Style, Stylize},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
     DefaultTerminal,
 };
 use serde_json::Value;
 
-mod sessions;
+mod actions;
 mod context;
 mod flow;
 mod pr;
+mod prompt;
+mod sessions;
 
+use prompt::{Outcome, Prompt};
 use sessions::Session;
 
 /// The cockpit's tmux server (`tmux -L <socket>`), its session, and the views' state dir; env overrides for the spike.
@@ -96,6 +100,46 @@ fn tmux(args: &[&str]) -> String {
     let log = format!("tmux {:?} -> code={:?} out={:?} err={:?}\n", args, code, stdout.trim(), stderr.trim());
     let _ = fs::OpenOptions::new().create(true).append(true).open(format!("{}/debug.log", state_dir())).and_then(|mut f| std::io::Write::write_all(&mut f, log.as_bytes()));
     stdout
+}
+
+/// Run a tmux command on the cockpit's server; its stdout, or the error when tmux fails.
+fn tmux_checked(args: &[&str]) -> Result<String, String> {
+    let out = Command::new("tmux").arg("-L").arg(socket()).args(args).output().map_err(|e| format!("tmux: {e}"))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        Err(format!("tmux {}: {}", args.first().unwrap_or(&""), String::from_utf8_lossy(&out.stderr).trim()))
+    }
+}
+
+/// `n`: fork `source` into a new Plan called `name`, in a new hidden window `park-<name>` that runs `fork-lead.sh`
+/// (it waits for the source's turn to finish, then forks; the new session shows in the tree at once). The centre stays.
+fn fork_session(source: &Session, name: &str) -> Result<String, String> {
+    if source.file.is_empty() {
+        return Err("the session has no session file yet".into());
+    }
+    let exe = env::current_exe().map_err(|e| e.to_string())?;
+    let scripts = actions::scripts_dir(&exe).ok_or("cannot find the scripts directory from the binary")?;
+    if !scripts.join("fork-lead.sh").is_file() {
+        return Err(format!("{} not found", scripts.join("fork-lead.sh").display()));
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let window = actions::window_name(name);
+    let command = actions::fork_command(&scripts, &socket(), &source.file, &id, name);
+    tmux_checked(&["new-window", "-d", "-t", &format!("{}:", session()), "-n", &window, "-c", &source.cwd, &command])?;
+    Ok(format!("forking {name} in window {window}"))
+}
+
+/// `x` confirmed: kill the chat pane of session `id` (pi stops, the session file stays; a window that held only that
+/// pane closes with it). Judged on a fresh listing, so a session swapped into the centre meanwhile is still refused.
+fn close_session(id: &str) -> Result<String, String> {
+    let all = discover();
+    if let Some(why) = actions::close_refusal(&all, id) {
+        return Err(why.into());
+    }
+    let pane = all.iter().find(|s| s.id == id).map(|s| s.pane_id.clone()).unwrap_or_default();
+    tmux_checked(&["kill-pane", "-t", &pane])?;
+    Ok("closed".into())
 }
 
 /// Bring the chat pane of session `id` into the centre slot (the chat pane in window `main`). swap-pane keeps both
@@ -239,6 +283,10 @@ fn context_line(name: &str, collapsed: bool, selected: bool) -> Line<'static> {
     if selected { line.reversed() } else { line }
 }
 
+fn target_of(e: &Entry) -> prompt::Target {
+    prompt::Target { id: e.session.id.clone(), label: e.label.clone(), working: e.session.state == "working" }
+}
+
 fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
     thread::spawn(fetch_loop);
     let mut collapsed: HashSet<String> = HashSet::new();
@@ -246,6 +294,8 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
     let mut area = Rect::default();
     let mut groups = snapshot();
     let mut last_refresh = Instant::now();
+    let mut prompt: Option<Prompt> = None;
+    let mut note = String::new(); // the one-line result or refusal of the last action, until the next key
     loop {
         if last_refresh.elapsed() > Duration::from_secs(1) {
             groups = snapshot();
@@ -258,6 +308,15 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
         terminal
             .draw(|f| {
                 area = f.area();
+                let footer = prompt.as_ref().map(Prompt::text).unwrap_or_else(|| note.clone());
+                let width = area.width.max(1) as usize;
+                let wrapped = footer.chars().count().div_ceil(width);
+                let footer_height = if footer.is_empty() { 0 } else { (wrapped + usize::from(wrapped > 1)).max(1).min(area.height as usize) as u16 };
+                let [list_area, footer_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height)]).areas(area);
+                if footer_height > 0 {
+                    let style = if prompt.is_some() { Style::new().fg(Color::Yellow).bold() } else { Style::new().fg(Color::Yellow) };
+                    f.render_widget(Paragraph::new(footer).style(style).wrap(Wrap { trim: false }), footer_area);
+                }
                 let lines: Vec<Line> = rows
                     .iter()
                     .enumerate()
@@ -270,9 +329,9 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
                     })
                     .collect();
                 if lines.is_empty() {
-                    f.render_widget(Paragraph::new(Line::from(" no Lead sessions in the cockpit".dim())), area);
+                    f.render_widget(Paragraph::new(Line::from(" no Lead sessions in the cockpit".dim())), list_area);
                 } else {
-                    f.render_widget(Paragraph::new(lines), area);
+                    f.render_widget(Paragraph::new(lines), list_area);
                 }
             })
             .map_err(|e| e.to_string())?;
@@ -280,22 +339,65 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
             continue;
         }
         let mut activate = None;
+        let mut outcome = Outcome::Open;
         match event::read().map_err(|e| e.to_string())? {
+            // an open prompt takes every key; mouse clicks are ignored meanwhile, so the target cannot be swapped into the centre
+            Event::Key(k) if k.kind == KeyEventKind::Press && prompt.is_some() => {
+                if let Some(p) = prompt.as_mut() {
+                    outcome = p.key(k);
+                }
+            }
             Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
                 KeyCode::Char('q') => return Ok(()),
+                KeyCode::Char('n') => {
+                    note.clear();
+                    match rows.get(selected) {
+                        Some(context::Row::Session(n)) => prompt = Some(Prompt::fork(target_of(flat[*n]))),
+                        Some(context::Row::Context(_)) => note = "pick the session to fork".into(),
+                        None => {}
+                    }
+                }
+                KeyCode::Char('x') => {
+                    note.clear();
+                    if let Some(context::Row::Session(n)) = rows.get(selected) {
+                        match actions::close_refusal(&discover(), &flat[*n].session.id) {
+                            Some(why) => note = why.into(),
+                            None => prompt = Some(Prompt::close(target_of(flat[*n]))),
+                        }
+                    }
+                }
                 KeyCode::Down | KeyCode::Char('j') => selected = (selected + 1).min(rows.len().saturating_sub(1)),
                 KeyCode::Up | KeyCode::Char('k') => selected = selected.saturating_sub(1),
                 KeyCode::Enter => activate = rows.get(selected).copied(),
                 KeyCode::Char(' ') if matches!(rows.get(selected), Some(context::Row::Context(_))) => activate = rows.get(selected).copied(),
                 _ => {}
             },
-            Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
+            Event::Mouse(m) if prompt.is_none() && m.kind == MouseEventKind::Down(MouseButton::Left) => {
+                note.clear();
                 if let Some(i) = context::row_at(&shapes, area.y, m.row) {
                     selected = i;
                     activate = Some(rows[i]);
                 }
             }
             _ => {}
+        }
+        match outcome {
+            Outcome::Open => {}
+            Outcome::Cancel => prompt = None,
+            Outcome::Fork { id, name } => {
+                prompt = None;
+                let source = discover().into_iter().find(|s| s.id == id);
+                note = match source.ok_or_else(|| "session is already gone".to_string()).and_then(|s| fork_session(&s, &name)) {
+                    Ok(done) | Err(done) => done,
+                };
+            }
+            Outcome::Close { id } => {
+                prompt = None;
+                note = match close_session(&id) {
+                    Ok(done) | Err(done) => done,
+                };
+                last_refresh = Instant::now() - Duration::from_secs(2); // the tree drops the session on this loop's refresh
+            }
         }
         match activate {
             Some(context::Row::Context(g)) => {

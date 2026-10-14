@@ -33,6 +33,19 @@ else the first 8 characters of the session id. The plan view shows the Workflow 
 (`no Workflow yet` when unattached); its tabs are that Context's sessions. Switching swaps the session's pane into the
 centre slot.
 
+## Session actions
+
+Keys on a session row of the Context view; each opens one inline prompt at the bottom of the pane (`src/prompt.rs`), and
+clicks are ignored while it is open.
+
+| Key | Action |
+| --- | --- |
+| `n` | Fork the session into a new Plan. Asks for the name (Enter starts, Esc cancels, an empty name is refused), then opens the hidden window `park-<name>` (name made safe for tmux, in the source's cwd) running `scripts/fork-lead.sh <source @session_file> <new uuid> <name>` with no note file, so pi starts the fork with no first message. The fork waits for the source's turn to end; it shows in the tree at once, labelled by its name; the centre does not switch. On a Context row: "pick the session to fork". |
+| `x` | Close the session's chat pane after `Close <label>? pi stops; the session file stays (y/N)` (`<label> is working.` first when its `@agent_state` is `working`). Only `y` closes: `tmux kill-pane` ends pi, the session file stays so it can be resumed, and a parked window that held only that pane closes with it. The session in the centre slot is refused ("switch to another session first"), also when it was swapped there while the prompt was open. On a Context row: nothing. |
+
+The scripts directory is found from the binary's own location, as `cockpit.sh` finds the binary: `<binary>/../../../scripts`
+(the binary is `tui/target/<profile>/cpd-tui`, the scripts are `tui/scripts`).
+
 Do not run `cockpit.sh` while a Lead's pi runs elsewhere on the same session file.
 
 ## Plan view
@@ -72,4 +85,5 @@ run in `workflow.repo`. This stays until cpd reports PR state, which is the cpd-
 
 Start a scratch server (`tmux -L cpd-tui-check -f scripts/tmux.conf`) with `CPD_TUI_SOCKET=cpd-tui-check`,
 `CPD_TUI_SESSION=check` and `CPD_TUI_STATE=/tmp/cpd-tui-check`; use `sleep 3600` panes with `@session_id`, `@session_name` and
-`@agent_state` set by hand (and `CPD_HOME` pointing at a scratch dir with `leads/<id>/workflow`) as stand-in chats.
+`@agent_state` set by hand (and `CPD_HOME` pointing at a scratch dir with `leads/<id>/workflow`) as stand-in chats. To check `n`, put a fake `pi` (a script that records its arguments and sleeps) first on the scratch
+server's `PATH` and give the source a scratch session file; to check `x`, use `sleep 3600` stand-in panes.
