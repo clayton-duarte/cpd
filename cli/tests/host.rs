@@ -121,9 +121,13 @@ fn assert_server_options(s: &Server) {
     );
 }
 
-/// Kills a pane's program, as a crash would.
+/// Kills a pane's program, as a crash would. Not while a tmux client is
+/// still disconnecting: tmux 3.4 was seen to lose the `SIGCHLD` of a child
+/// killed then (the pane is dead, its status never read, so `pane-died` never
+/// fires), about one time in two right after `display`, never 20 ms later.
 fn kill_program(t: &Tmux, id: &PaneId) {
     let pid = pane(&t.list_panes().unwrap(), id).pid;
+    sleep(Duration::from_millis(100));
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), nix::sys::signal::Signal::SIGKILL).unwrap();
 }
 

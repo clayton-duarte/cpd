@@ -184,7 +184,12 @@ fn tui_builds_main_in_a_cockpit_that_has_only_a_park_window() {
     assert_eq!(env.cpd2(&["tui"]).ok()["built"], false);
 }
 
+/// Kills a pane's program, as a crash would. Not while a tmux client is
+/// still disconnecting: tmux 3.4 was seen to lose the `SIGCHLD` of a child
+/// killed then (the pane is dead, its status never read, so `pane-died` never
+/// fires), about one time in two right after `display`, never 20 ms later.
 fn kill(pid: u32) {
+    std::thread::sleep(Duration::from_millis(100));
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), nix::sys::signal::Signal::SIGKILL).unwrap();
 }
 
@@ -245,10 +250,10 @@ fn a_killed_view_respawns_at_once_and_the_engine_stays_dead() {
     let before = main_panes(&env);
     let tree = view(&before, "tree").clone();
     let (_, engine_pid) = pane_state(&env, engine);
-    kill(tree.pid);
+    // The engine first: once dead, it makes no tmux calls of its own.
     kill(engine_pid);
-
     wait_until("the engine pane to die", || pane_state(&env, engine).0);
+    kill(tree.pid);
     wait_until("the tree to respawn", || {
         let p = view(&main_panes(&env), "tree").clone();
         !p.dead && p.pid != tree.pid
