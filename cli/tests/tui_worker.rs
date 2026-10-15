@@ -243,7 +243,7 @@ fn an_unknown_attempt_or_plan_is_refused_before_drawing() {
     let env = env();
     populate(&env, None);
     let run = env.cpd2(&["tui", "view", "worker", "nope-a1", "--plan", "ship"]);
-    assert_eq!(X, "{run:?}");
+    assert_eq!((run.exit, run.error()["code"].clone()), (4, json!("attempt_not_found")), "{run:?}");
     let run = env.cpd2(&["tui", "view", "worker", "api-a1", "--plan", "nope"]);
     assert_eq!(run.error()["code"], "plan_not_found", "{run:?}");
     let run = env.cpd2(&["tui", "view", "worker", "api-a1"]);
