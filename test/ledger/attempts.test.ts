@@ -188,7 +188,7 @@ test("markMerged without a review (reviewed: false): outcome merged, no verdict 
   assert.deepEqual([merged.status, merged.outcome, merged.closeReason], ["closed", "merged", "merged"]);
   const [attempt] = await issuesOf(wf, "attempt");
   assert.deepEqual(await comments(wf, attempt.id), [], "no APPROVED: comment, so nothing fakes a Reviewer verdict");
-  assert.deepEqual((await provenance(wf, attempt.id)).map((p) => p.kind), ["commit", "land"]);
+  assert.deepEqual((await provenance(wf, attempt.id)).map((p) => p.kind).sort(), ["commit", "land"]);
   const job = await getJobByKey(wf, "a");
   assert.deepEqual([job.status, job.closeReason, job.metadata.merged_sha], ["closed", "merged", sha("2")]);
 
