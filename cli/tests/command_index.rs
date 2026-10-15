@@ -85,7 +85,6 @@ const PENDING: &[(&[&str], &str)] = &[
     // watch
     // tui
     (&["tui", "view", "tree"], "tui view tree"),
-    (&["tui", "view", "widgets"], "tui view widgets"),
     (&["tui", "view", "worker", "a-a1", "--plan", "p"], "tui view worker"),
 ];
 

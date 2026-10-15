@@ -1125,11 +1125,11 @@ With `--attach` it then replaces itself with `tmux -L cpd attach -t cpd` and pri
 ### 13.2 `tui view` (internal)
 
 ```
-cpd2 tui view <tree|plan|widgets|chat> 
+cpd2 tui view <tree|plan|widgets|chat|legend>
 cpd2 tui view worker <attempt> --plan <id>
 ```
 
-The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§1.2), make no writes of their own, and change state only by running `cpd2` commands (`session open`, `plan new`, `session park`, …) as subprocesses. What they read is §17. The `worker` view renders the Attempt's Worker session file read-only (vision decision 5); `chat` is the chat slot's placeholder (§10). Refusal before drawing: an unknown view or Attempt is `usage` or `attempt_not_found`. Idempotent: they only read.
+The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§1.2), make no writes of their own, and change state only by running `cpd2` commands (`session open`, `plan new`, `session park`, …) as subprocesses. What they read is §17. The `worker` view renders the Attempt's Worker session file read-only (vision decision 5); `chat` is the chat slot's placeholder (§10); `legend` is the key legend, what every colour and icon of the cockpit means, which the `widgets` view's `?` key opens in a tmux popup (`display-popup`, sized to the legend and at most the client's size) because the right column is narrower than the legend, and which closes on any key (it has no `@cpd_view` pane of its own). Refusal before drawing: an unknown view or Attempt is `usage` or `attempt_not_found`. Idempotent: they only read.
 
 ## 14. `doctor`, `config`, `tiers`
 

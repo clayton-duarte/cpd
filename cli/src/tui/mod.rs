@@ -4,15 +4,17 @@
 //!
 //! - [`cockpit`]: `cpd2 tui [--attach]` (§13.1);
 //! - [`chat`]: the chat slot's placeholder (amendment 2);
-//! - [`tree`], [`plan`], [`widgets`], [`worker`]: the other views of §13.2,
+//! - [`widgets`]: the Dispatch column and the key legend (`tui view legend`), with the shared [`palette`];
+//! - [`tree`], [`plan`], [`worker`]: the other views of §13.2,
 //!   `not_implemented` until their Jobs land.
 
 mod chat;
 mod cockpit;
+pub mod palette;
 mod plan;
 pub mod read;
 mod tree;
-mod widgets;
+pub mod widgets;
 mod worker;
 
 use crate::cli::Pending;
@@ -48,6 +50,8 @@ pub enum View {
     Widgets(Pending),
     /// An Attempt's Worker, read-only (beside the chat)
     Worker(Pending),
+    /// The key legend (opened by `?` in the Dispatch column, in a tmux popup)
+    Legend,
     /// The chat slot's placeholder
     Chat,
 }
@@ -60,6 +64,7 @@ pub fn run(args: Args) -> Result<Output, CpdError> {
             View::Plan(_) => plan::run(),
             View::Widgets(_) => widgets::run(),
             View::Worker(_) => worker::run(),
+            View::Legend => widgets::legend::run(),
             View::Chat => chat::run(),
         },
     }
