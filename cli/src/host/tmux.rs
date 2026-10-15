@@ -243,7 +243,8 @@ impl Tmux {
 
     /// Makes sure session `name` exists (contract §6.1, §6.3): when it is
     /// missing, `new-session -d -s <name> -n <window> -x 215 -y 62 -c <dir>
-    /// [-- argv]`; when that started the server, sets [`SERVER_OPTIONS`].
+    /// [-- argv]`; when that starts the server, sets [`SERVER_OPTIONS`] first
+    /// (see [`new_session_args`]).
     /// Returns whether it created the session. Idempotent; a concurrent creator
     /// winning the race is not an error.
     pub fn ensure_session(&self, name: &str, window: &str, spawn: &Spawn) -> Result<bool, CpdError> {
@@ -263,11 +264,7 @@ impl Tmux {
         if !fresh && self.has_session(name)? {
             return Ok(None);
         }
-        let mut args = strings(&["new-session", "-d", "-s", name, "-n", window]);
-        args.extend(strings(&["-x", &SESSION_WIDTH.to_string(), "-y", &SESSION_HEIGHT.to_string()]));
-        spawn.push_args(&mut args);
-        args.extend(strings(&["-P", "-F", "#{window_id} #{pane_id}"]));
-        spawn.push_argv(&mut args);
+        let args = new_session_args(name, window, spawn, fresh);
         let out = self.output(&args)?;
         if !out.status.success() {
             if self.has_session(name)? {
@@ -282,18 +279,7 @@ impl Tmux {
         for key in spawn.env.keys() {
             self.run(&strings(&["set-environment", "-t", &format!("={name}"), "-u", key]))?;
         }
-        if fresh {
-            self.set_server_options()?;
-        }
         Ok(Some(parsed))
-    }
-
-    /// Sets the global options of contract §6.1.
-    pub fn set_server_options(&self) -> Result<(), CpdError> {
-        for option in SERVER_OPTIONS {
-            self.run(&strings(option))?;
-        }
-        Ok(())
     }
 
     /// `show -gv <option>`: a global option's value, without the newline.
@@ -399,6 +385,29 @@ impl Tmux {
     }
 }
 
+/// The arguments of [`Tmux::create_session`]'s call: `new-session -d -s <name>
+/// -n <window> -x 215 -y 62 [-c <cwd>] [-e K=V …] -P -F '#{window_id}
+/// #{pane_id}' [-- argv…]`. On a `fresh` server it is preceded, in the same
+/// invocation (`;` separates tmux commands), by [`SERVER_OPTIONS`]: tmux runs
+/// them before it spawns the first pane, so a program that exits at once
+/// leaves a dead pane (`remain-on-exit`) instead of taking the session and
+/// the server with it.
+fn new_session_args(name: &str, window: &str, spawn: &Spawn, fresh: bool) -> Vec<String> {
+    let mut args = Vec::new();
+    if fresh {
+        for option in SERVER_OPTIONS {
+            args.extend(strings(option));
+            args.push(";".into());
+        }
+    }
+    args.extend(strings(&["new-session", "-d", "-s", name, "-n", window]));
+    args.extend(strings(&["-x", &SESSION_WIDTH.to_string(), "-y", &SESSION_HEIGHT.to_string()]));
+    spawn.push_args(&mut args);
+    args.extend(strings(&["-P", "-F", "#{window_id} #{pane_id}"]));
+    spawn.push_argv(&mut args);
+    args
+}
+
 fn parse_pane(line: &str) -> Option<Pane> {
     let fields: Vec<&str> = line.split('\t').collect();
     let [pane, window, session_name, window_name, dead, dead_status, pid, cpd_session, cpd_view] = fields[..] else {
@@ -463,6 +472,24 @@ mod tests {
         assert!(parse_pane("%4 @2 cpd main 0  4242  ").is_none());
         assert!(parse_pane("%4\t@2\tcpd\tmain\t2\t\t4242\t\t").is_none());
         assert!(parse_pane("%4\t@2\tcpd\tmain\t0\t\t4242\t\tnope").is_none());
+    }
+
+    #[test]
+    fn a_fresh_server_gets_its_options_before_the_first_pane_spawns() {
+        let spawn = Spawn { cwd: None, env: BTreeMap::new(), argv: strings(&["cpd2", "watch"]) };
+        let new_session = strings(&[
+            "new-session", "-d", "-s", "cpd-work", "-n", "watch", "-x", "215", "-y", "62", "-P", "-F", "#{window_id} #{pane_id}", "--",
+            "cpd2", "watch",
+        ]);
+        assert_eq!(new_session_args("cpd-work", "watch", &spawn, false), new_session);
+
+        let fresh = new_session_args("cpd-work", "watch", &spawn, true);
+        let commands: Vec<&[String]> = fresh.split(|a| a == ";").collect();
+        let (last, options) = commands.split_last().unwrap();
+        assert_eq!(*last, new_session.as_slice());
+        let options: Vec<Vec<String>> = options.iter().map(|c| c.to_vec()).collect();
+        let expected: Vec<Vec<String>> = SERVER_OPTIONS.iter().map(|o| strings(o)).collect();
+        assert_eq!(options, expected);
     }
 
     #[test]

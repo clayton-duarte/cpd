@@ -39,16 +39,16 @@ pub(super) fn ensure() -> Result<Output, CpdError> {
         env: BTreeMap::from([("CPD_HOME".to_owned(), home.root().display().to_string())]),
         argv: vec![PROGRAM.to_owned(), "watch".to_owned()],
     };
+    // A dead engine's window goes first: when it was the session's last, the
+    // session and the server go with it, and are created again below.
+    for dead in tmux.list_panes()?.into_iter().filter(|p| p.session_name == work && p.window_name == WATCH_WINDOW && p.dead) {
+        tmux.kill_window(&dead.window)?;
+    }
     // The server and the work session when missing (§6.1): the session's first
     // window is then the engine's.
     let pane = match tmux.create_session(work, WATCH_WINDOW, &spawn)? {
         Some((_, pane)) => pane,
-        None => {
-            for dead in tmux.list_panes()?.into_iter().filter(|p| p.session_name == work && p.window_name == WATCH_WINDOW && p.dead) {
-                tmux.kill_window(&dead.window)?;
-            }
-            tmux.new_window(work, WATCH_WINDOW, &spawn)?.1
-        }
+        None => tmux.new_window(work, WATCH_WINDOW, &spawn)?.1,
     };
     wait_started(&tmux, &mut store, &pane, since)?;
     Ok(Output::success(json!({"started": true, "pane": pane.as_str()})))
