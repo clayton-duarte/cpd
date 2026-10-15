@@ -497,6 +497,8 @@ fn run_statusbar(terminal: &mut DefaultTerminal) -> Result<(), String> {
     let mut last_workers = Instant::now();
     let mut clickable = Vec::new();
     let mut note = String::new(); // why the legend did not open, shown in the middle until the next click
+    keep_one_row(); // a respawned pane keeps its old size
+    let mut last_check = Instant::now();
     loop {
         if last_workers.elapsed() > Duration::from_secs(2) {
             workers = workers::read(&home);
@@ -508,10 +510,14 @@ fn run_statusbar(terminal: &mut DefaultTerminal) -> Result<(), String> {
                 clickable = statusbar::draw(f, f.area(), &left, &right);
             })
             .map_err(|e| e.to_string())?;
-        if !event::poll(Duration::from_millis(250)).map_err(|e| e.to_string())? {
-            continue;
+        let ready = event::poll(Duration::from_millis(250)).map_err(|e| e.to_string())?;
+        let ev = if ready { Some(event::read().map_err(|e| e.to_string())?) } else { None };
+        if matches!(ev, Some(Event::Resize(..))) || last_check.elapsed() > Duration::from_millis(500) {
+            keep_one_row();
+            last_check = Instant::now();
         }
-        if let Event::Mouse(m) = event::read().map_err(|e| e.to_string())? {
+        let Some(ev) = ev else { continue };
+        if let Event::Mouse(m) = ev {
             if m.kind == MouseEventKind::Down(MouseButton::Left) {
                 note.clear();
                 let at = Position::new(m.column, m.row);
@@ -522,6 +528,20 @@ fn run_statusbar(terminal: &mut DefaultTerminal) -> Result<(), String> {
                 }
             }
         }
+    }
+}
+
+/// Resize this pane back to one row when its height is not 1 (tmux has no fixed-height panes), unless the window is
+/// zoomed. The height is tmux's own (`#{pane_height}`), not the terminal's: on unzoom tmux restores the pane's size
+/// without telling the program, so a resize that happened while zoomed is only seen by asking tmux. A failure is
+/// ignored: the next check tries again.
+fn keep_one_row() {
+    let Ok(pane) = env::var("TMUX_PANE") else { return };
+    let Ok(out) = tmux_checked(&["display-message", "-p", "-t", &pane, "#{window_zoomed_flag} #{pane_height}"]) else { return };
+    let mut parts = out.split_whitespace();
+    let (Some(zoomed), Some(Ok(height))) = (parts.next(), parts.next().map(str::parse::<u16>)) else { return };
+    if statusbar::needs_resize(height, zoomed == "1") {
+        let _ = tmux_checked(&["resize-pane", "-t", &pane, "-y", "1"]);
     }
 }
 

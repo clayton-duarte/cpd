@@ -50,6 +50,12 @@ either side. `statusbar::draw` returns the `Rect` of each clickable item.
 `N` is the live slots (`<cpd home>/slots/slot-<i>.json` whose `pid` is alive), `M` is `concurrency` in
 `<cpd home>/config.json`. Interim source, read directly from cpd's home until cpd2 provides the data (`src/workers.rs`).
 
+The bar keeps itself one row high: tmux has no fixed-height panes and shares every window resize (a client switch under
+`window-size latest`) and border drag with the bar. So the view runs `resize-pane -t $TMUX_PANE -y 1` at start and on every
+size change (`Event::Resize`) and every 0.5 s when tmux's `#{pane_height}` is not 1, except while the window is zoomed
+(`resize-pane` would unzoom it). The timer is needed because unzooming restores the pane's size without telling the view. tmux hooks were rejected: `window-resized` misses border drags and
+`window-layout-changed` would fire again on the bar's own resize.
+
 A click on the bar does not take keyboard focus: `tmux.conf` binds root `MouseDown1Pane` to pass the click on with
 `send-keys -M` without `select-pane` when the pane's `@view` is `statusbar`; every other pane keeps tmux's default.
 
