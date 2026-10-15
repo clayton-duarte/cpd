@@ -1,5 +1,9 @@
 [pre-start]
 deps = "npm ci --no-audit --no-fund"
 
+# R19/R20 (User, 2026-10-14): no Job-level Gate, only a fast build check per Job; the full Gate runs at pr open.
+# cpd 1 runs pre-merge at submit and after each merge. So until it runs the pre-commit quick check itself
+# (Job gate-at-pr), pre-merge holds the fast build check.
+# When gate-at-pr is live: move this to [pre-commit], and restore here: verify = "npm run verify || exit 64".
 [pre-merge]
-verify = "npm run verify || exit 64"
+typecheck = "npm run typecheck || exit 64"
