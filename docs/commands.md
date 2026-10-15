@@ -1,6 +1,6 @@
 # cpd 2: command reference
 
-Status: **normative for every cpd 2 implementation Job**, under [contract.md](contract.md): where the two disagree, contract.md wins and this file is fixed. Vocabulary: [CONTEXT.md](CONTEXT.md). This file uses the contract's names, states, tables and Event kinds exactly; "§n" without a prefix means contract.md §n, and "cpd 1 §n" means `docs/cli-contract.md` §n.
+Status: **normative for every cpd 2 implementation Job**, under [contract.md](contract.md): where the two disagree, contract.md wins and this file is fixed. Vocabulary: [CONTEXT.md](../CONTEXT.md). This file uses the contract's names, states, tables and Event kinds exactly; "§n" without a prefix means contract.md §n, and "cpd 1 §n" means `docs/archive/cpd1/cli-contract.md` §n.
 
 It specifies every command of outline §3 (synopsis, flags, preconditions with their error and exit codes, effects, JSON output, idempotence), the pi adapter's protocol, the Worker contract, what the TUI reads, and `doctor`.
 
@@ -351,7 +351,7 @@ Output: every field of the Plan (§2.2); `jobs` with each Job's fields (Spec inc
 {"ok": true,
  "plan": {"id": "cpd2", "context": "building-cpd", "title": "cpd in Rust", "jira": null, "repo": "/home/clayton/projects/cpd", "base": "main", "lead_branch": "cpd/cpd2", "lead_worktree": "/home/clayton/projects/cpd.cpd2", "phase": "dispatch", "lead_session": "596d007f-…", "pr": null, "all_merged_at": null, "created_at": "…", "locked_at": "…", "done_at": null},
  "jobs": [{"key": "contract-commands", "title": "cpd 2 contract: every command", "status": "running", "tier": "O3", "appended": false, "needs": ["contract-core"],
-           "goal": "…", "context": "…", "touches": ["docs/v2/commands.md"], "acceptance": ["…"], "out_of_scope": ["…"],
+           "goal": "…", "context": "…", "touches": ["docs/commands.md"], "acceptance": ["…"], "out_of_scope": ["…"],
            "attempts": [{"id": "contract-commands-a1", "number": 1, "tier": "O3", "origin": "ladder", "status": "running", "outcome": null, "cause": null, "worker_session": "c1a2…", "started_at": "…", "ended_at": null}]}],
  "escalations": [{"id": "contract-commands-a1-q1", "attempt": "contract-commands-a1", "question": "…", "asked_at": "…"}],
  "review": {"id": "r2", "status": "approved", "fingerprint": "9f…", "current": true},
@@ -476,7 +476,7 @@ Jobs, Specs and Dependencies (§2.2, §3.2). Kept from cpd 1 §11 "Jobs" except 
 **Spec file** (`--spec`), JSON, every field required, unknown fields refused (`spec_invalid`, exit 2, with the JSON path in `details`):
 
 ```json
-{"goal": "…", "context": "…", "touches": ["docs/v2/commands.md"], "acceptance": ["…"], "out_of_scope": ["…"]}
+{"goal": "…", "context": "…", "touches": ["docs/commands.md"], "acceptance": ["…"], "out_of_scope": ["…"]}
 ```
 
 `touches` and `acceptance` have at least one non-empty string; `out_of_scope` may be empty. Change: cpd 1's `outOfScope` is now `out_of_scope`, the column's name.

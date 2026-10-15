@@ -36,7 +36,7 @@ impl Exit {
 macro_rules! error_codes {
     ($($variant:ident = $name:literal => $exit:ident,)*) => {
         /// Every error code of contract.md and commands.md, with its exit code.
-        /// To add one, add a line here (see docs/v2/implementing.md).
+        /// To add one, add a line here (see docs/implementing.md).
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         pub enum ErrorCode {
             $($variant,)*

@@ -2,7 +2,7 @@
 
 **Inputs.** I compared these against each other:
 - the reference (`main`: `tui/src/*.rs`, `tui/scripts/*`, `tui/README.md`);
-- the target (`cpd.cpd-cpd2`: `cli/src/tui/**`, `cli/src/host/{tmux,layout}.rs`, `docs/v2/`);
+- the target (`cpd.cpd-cpd2`: `cli/src/tui/**`, `cli/src/host/{tmux,layout}.rs`, `docs/`);
 - the captures in `~/.cpd/plans/cpd-rust/parity/`.
 
 **Caveats.**
@@ -199,7 +199,7 @@ Each Job fits 90 minutes. Each verifies with `scripts/cargo.sh test --workspace`
 
 | Key | Title | Tier | Needs | Files | Acceptance |
 |---|---|---|---|---|---|
-| `parity-contract` | Amend the contract for cockpit parity | S3 | — | `docs/v2/contract.md`, `docs/v2/commands.md` | Every change of §2 is stated; section numbers unchanged |
+| `parity-contract` | Amend the contract for cockpit parity | S3 | — | `docs/contract.md`, `docs/commands.md` | Every change of §2 is stated; section numbers unchanged |
 | `parity-tmux` | Server options at every start, conditional respawn hook, Worker title, `tui --respawn` | O3 | contract | `cli/src/host/tmux.rs`, `cli/src/tui/cockpit.rs`, `cli/src/tui/mod.rs`, `scripts/install-cpd2.sh`, `cli/tests/host.rs`, `cli/tests/tui.rs` | On a private socket: a server started by `plan new` has every option of `tmux.conf:2–17` (renamed); a killed view pane respawns, a killed Lead or engine pane doesn't; `tui --respawn` restarts views only; a bar added to an old `main` is followed by the reset |
 | `session-close` | `cpd2 session close` | S3 | contract | `cli/src/session/`, `cli/tests/session.rs`, `cli/tests/command_index.rs` | §10 command with its refusals; integration test |
 | `parity-pr-data` | `pr poll` stores PR title, review decision and checks; read model for Dispatch | S3 | contract | `cli/src/pr/`, `cli/src/store/` (migration 2), `cli/src/tui/read/widgets.rs`, `cli/tests/pr.rs` | Fake `gh`; the migration from version 1 is tested; Dispatch rows carry label, number, state, checks, decision, title |

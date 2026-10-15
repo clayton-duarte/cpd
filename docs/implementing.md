@@ -1,6 +1,6 @@
 # cpd 2: implementing
 
-Read this first, then [contract.md](contract.md), [commands.md](commands.md) and [CONTEXT.md](CONTEXT.md), which are normative. This file only says where things go in the code.
+Read this first, then [contract.md](contract.md), [commands.md](commands.md) and [CONTEXT.md](../CONTEXT.md), which are normative. This file only says where things go in the code.
 
 ## The one-area rule
 

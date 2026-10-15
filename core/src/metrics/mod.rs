@@ -1,4 +1,4 @@
-//! Session metrics (contract §2.2 Attempt `metrics`, A9; cpd 1 `docs/cli-contract.md` §14):
+//! Session metrics (contract §2.2 Attempt `metrics`, A9; cpd 1 `docs/archive/cpd1/cli-contract.md` §14):
 //! parsed from the Worker's pi session file, whose path comes from the Session's
 //! `file`, never from the cwd.
 //!

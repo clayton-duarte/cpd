@@ -146,7 +146,7 @@ fn a_foreign_application_id_is_refused_and_never_written() {
 // ---------- §4.4 the DDL ----------
 
 fn contract() -> String {
-    fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/v2/contract.md")).unwrap()
+    fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/contract.md")).unwrap()
 }
 
 /// The ```sql blocks of contract §4.4, in order.

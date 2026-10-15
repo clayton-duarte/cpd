@@ -6,8 +6,8 @@ use cpd::cli::Cli;
 /// The commands of commands.md §2's table, read from the document itself,
 /// each as its words (`["context", "decide"]`, `["plan", "phase", "plan"]`).
 fn documented_commands() -> Vec<Vec<String>> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/v2/commands.md");
-    let doc = std::fs::read_to_string(path).expect("read docs/v2/commands.md");
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/commands.md");
+    let doc = std::fs::read_to_string(path).expect("read docs/commands.md");
     let section = doc.split("\n## 2. Command index\n").nth(1).expect("§2 exists");
     let section = section.split("\n## ").next().unwrap();
     let mut commands = Vec::new();

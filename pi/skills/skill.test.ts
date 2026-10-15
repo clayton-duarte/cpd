@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from "node:fs";
 
 const here = new URL("./", import.meta.url);
 const skillDir = new URL("cpd-lead/", here);
-const commandsDoc = readFileSync(new URL("../../docs/v2/commands.md", here), "utf8");
+const commandsDoc = readFileSync(new URL("../../docs/commands.md", here), "utf8");
 
 /** SKILL.md plus every file under references/: the whole text the Lead can load. */
 function skillFiles(): { name: string; text: string }[] {

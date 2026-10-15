@@ -1,7 +1,7 @@
 //! cpd-core: the shared core of cpd (everything except the root command tree and the cockpit).
 //!
-//! The normative documents are `docs/v2/contract.md`, `docs/v2/commands.md`
-//! and `docs/v2/CONTEXT.md`; `docs/v2/implementing.md` explains this crate's
+//! The normative documents are `docs/contract.md`, `docs/commands.md`
+//! and `CONTEXT.md`; `docs/implementing.md` explains this crate's
 //! layout. Every module is declared here once: a Job fills in its own area
 //! module and never edits this file.
 
