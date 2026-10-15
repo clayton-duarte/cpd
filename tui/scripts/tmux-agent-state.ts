@@ -5,8 +5,9 @@
 // pi renames the session (session_info_changed). The cockpit's views read these options and #{@agent_state},
 // #{@agent_label}. Inactive outside the cockpit.
 // It also publishes when the session needs the User, for the Context view's ●: @asking is 1 while a tool whose name
-// starts with `ask_` runs, and after a `cpd_plan_review` or `plannotator` call until the next input; @settled_at is
-// the epoch second of the last agent_settled (the view compares it with the @seen_at it stamps itself).
+// starts with `ask_` runs, and after a `cpd_plan_review` or `plannotator` call until the next run starts (agent_start:
+// the User's answer arrives as a custom message cpd sends with triggerTurn, which fires no `input`) or the User types.
+// @settled_at is the epoch second of the last agent_settled (the view compares it with the @seen_at it stamps itself).
 import { execFile } from "node:child_process";
 
 export default function (pi: any) {
@@ -18,7 +19,7 @@ export default function (pi: any) {
   let label = "";
   let last = "";
   const askTools = new Set<string>(); // toolCallIds of `ask_*` tools that are executing
-  let reviewOpen = false; // a plan review was handed to the User and no input has come since
+  let reviewOpen = false; // a plan review was handed to the User and no run has started since
   let asking = "";
   const set = (state: string, text: string) =>
     execFile("tmux", ["-L", socket, "set", "-p", "-t", pane, "@agent_state", state, ";", "set", "-p", "-t", pane, "@agent_label", text], () => {});
@@ -65,6 +66,8 @@ export default function (pi: any) {
   pi.on("session_info_changed", (_e: any, ctx: any) => publishIdentity(ctx));
   pi.on("agent_start", () => {
     active = true;
+    reviewOpen = false; // a new run means the answer arrived: the decision message (triggerTurn) or the User's input
+    publishAsking();
     publish();
   });
   pi.on("agent_settled", (_e: any, ctx: any) => {
