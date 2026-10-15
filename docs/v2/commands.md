@@ -26,6 +26,7 @@ Evidence labels as in contract.md: **verified** (run on the homeserver on 2026-1
 16. [The Worker and Reviewer contract](#16-the-worker-and-reviewer-contract)
 17. [What the TUI reads](#17-what-the-tui-reads)
 18. [Changes from cpd 1](#18-changes-from-cpd-1)
+19. [Amendments to contract.md](#19-amendments-to-contractmd)
 
 ## 1. Conventions
 
@@ -43,7 +44,7 @@ Commands marked **internal** are started by cpd itself (in a tmux pane or detach
 
 ### 1.2 Output and exit codes
 
-Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Three kinds of command own a terminal instead, and are the only exceptions:
+Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Three kinds of command own a terminal instead, and are the only exceptions (amendment 10, §19):
 
 | Command | What it prints | Why |
 |---|---|---|
@@ -77,7 +78,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 
 ### 1.4 Files written by commands
 
-The `$CPD_HOME` layout is §1.4. Commands in this file write three files the contract's layout does not list; each is beside its peers and named so it cannot collide:
+The `$CPD_HOME` layout is §1.4. Commands in this file write three files the contract's layout does not list (amendment 4, §19); each is beside its peers and named so it cannot collide:
 
 | File | Written by | Read by |
 |---|---|---|
@@ -857,7 +858,7 @@ Idempotent: yes; a base that has not moved gives `"rebased": false` and only the
 
 Sessions (§2.2, §3.6) and their tmux panes (§6). Every tmux call is `tmux -L <tmux.socket> …` with `TMUX` and `TMUX_PANE` removed (§6.1); a failing call is `tmux_failed` (exit 1). A Session's **place** is the `place` of its latest `session-moved` Event (`chat`, `parked`, `work` or `none`), or `none` when it has none.
 
-**The chat slot.** The pane of `cpd:main` that has `@cpd_session`, or, when no Lead is there, the placeholder pane `@cpd_view = chat` that `cpd2 tui` and `session park` put there (a `cpd2 tui view chat` pane that says no Lead is shown and how to pick one). The placeholder exists because the slot must hold a pane before any Lead exists (the first `cpd2 tui` on a machine) and after its Lead is parked (`swap-pane` needs a pane to swap in). This extends §6.2's rule and its list of `@cpd_view` values; see §18.
+**The chat slot.** **Amends contract.md §6.2** (the Lead's answer to Escalation `contract-commands-a1-q1`): the chat slot is the pane of `cpd:main` that has `@cpd_session` **or** `@cpd_view = chat`. A pane with `@cpd_view = chat` is the **placeholder**: it runs `cpd2 tui view chat`, which reads `No Lead here: pick a Plan in the session tree`, and it holds the slot while no Lead is there. **Amends §6.2's list of `@cpd_view` values** with `chat`. Why: the slot must hold a pane before any Lead exists (the first `cpd2 tui` on a machine) and after its Lead is parked (`swap-pane` needs a pane to swap in). At most one placeholder exists, and only ever in the slot: `session park` creates it there (§10.5), and `session open` kills it with its window when a Lead takes the slot (§10.4).
 
 ### 10.1 `session list`
 
@@ -939,7 +940,7 @@ Brings a Lead into the chat slot (§6.4).
 
 Effects:
 - In the chat slot already: nothing; `"already": true`.
-- **tmux:** when the Session has no live pane (`stopped`, or its pane is gone): `new-window -d -t =cpd: -n park-<label> … -- cpd2 session run <id>` first, which resumes it (`pi --session <file>`, §6.5), and `tmux_pane` is recorded. Then `swap-pane -d -s <its pane> -t <chat slot pane>`, and `rename-window -t <window> park-<displaced label>` for the window that now holds the displaced Lead; when the displaced pane is the placeholder, `kill-window` on the window that now holds it instead.
+- **tmux:** when the Session has no live pane (`stopped`, or its pane is gone): `new-window -d -t =cpd: -n park-<label> … -- cpd2 session run <id>` first, which resumes it (`pi --session <file>`, §6.5), and `tmux_pane` is recorded. Then `swap-pane -d -s <its pane> -t <chat slot pane>`, and `rename-window -t <window> park-<displaced label>` for the window that now holds the displaced Lead. When the displaced pane is the placeholder, `kill-pane` on it instead, which closes the now-empty park window with it, so placeholders never pile up in park windows.
 - **Rows**, one transaction: **Events** `session-moved` `{place: "chat"}` for this Session and `{place: "parked"}` for the displaced one.
 
 ```json
@@ -963,7 +964,7 @@ Moves the Lead in the chat slot back into a parked window (§6.4). `<id>` defaul
 
 Effects:
 - Not in the chat slot: nothing; `"already": true`.
-- **tmux:** `new-window -d -t =cpd: -n park-<label> -P -F '#{window_id} #{pane_id}' -- cpd2 tui view chat`, `set -p @cpd_view chat` on it, then `swap-pane -d -s <placeholder> -t <chat slot pane>`. The Lead keeps its pid and is now alone in `park-<label>`; the placeholder fills the slot.
+- **tmux** (**amends contract.md §6.4**, which says only that park moves the Lead into a parked window): `new-window -d -t =cpd: -n park-<label> -P -F '#{window_id} #{pane_id}' -- cpd2 tui view chat` (a new park window holding a placeholder), `set -p -t <placeholder> @cpd_view chat`, then `swap-pane -d -s <placeholder> -t <chat slot pane>`. The Lead keeps its pid and is now alone in `park-<label>`; the placeholder fills the slot.
 - **Rows**, one transaction: **Event** `session-moved` `{place: "parked"}`.
 
 ```json
@@ -1032,7 +1033,7 @@ Idempotent: yes; a restart resumes (§6.7 step 3).
 
 §5. Selection: `--plan <id>`, `--context <id>` or `--session <id>`, at most one (`usage`), or none for every Event; `--kind <kind>` may repeat (a kind not in §5.2 is `usage`). These flags are filters: they do not fall back to `CPD_PLAN` or `CPD_SESSION`.
 
-`--session <id>` applies §5.3's rule:
+`--session <id>` applies §5.3's rule, with "a Lead of Plan P" made precise (amendment 7, §19):
 - for the Session that is its Plan's `lead_session`: Events with `plan` = its Plan; Events with `plan IS NULL AND context` = its Context; Events with `session` = itself;
 - for any other Session (Workers, Reviewers, side forks, a grounded Lead): Events with `session` = itself.
 
@@ -1125,7 +1126,7 @@ Effects, each only when missing:
 {"ok": true, "built": true, "socket": "cpd", "session": "cpd", "attach": ["tmux", "-L", "cpd", "attach", "-t", "cpd"], "watch": {"started": true, "pane": "%3"}}
 ```
 
-With `--attach` it then replaces itself with `tmux -L cpd attach -t cpd` and prints nothing (§1.2). Idempotent: yes; an existing cockpit gives `"built": false`. A pane of the layout that has died is respawned (`respawn-pane`), never duplicated.
+With `--attach` it then replaces itself with `tmux -L cpd attach -t cpd` and prints nothing (§1.2). Idempotent: yes; an existing cockpit gives `"built": false`. A pane of the layout that has died is respawned (`respawn-pane`, amendment 9, §19), never duplicated.
 
 ### 13.2 `tui view` (internal)
 
@@ -1240,7 +1241,7 @@ At `session_start`, in this order:
 1. `cpd2 session show <id>`: role, Plan, Context, `plan_lead`, `registered_event`, name.
 2. `cpd2 session state idle --session <id>` (`stopped → idle`, §3.6); then `working` if `ctx.isIdle()` is false.
 3. **Name:** if pi's session name differs from the Session's `name`, `pi.setSessionName(name)`: a `session-renamed` missed while pi was down still applies.
-4. **Cursor** (§5.3 "No loss, no duplicates"): the greater of `registered_event` and the `details.id` of the last `cpd` custom message in the session's entries whose `details.delivered_to` is this Session's id. The adapter puts `delivered_to` into every message it delivers. Why: a fork's file starts with its source's messages, whose Event ids belong to the source's stream; counting them could skip Events addressed to the fork.
+4. **Cursor** (§5.3 "No loss, no duplicates"): the greater of `registered_event` and the `details.id` of the last `cpd` custom message in the session's entries whose `details.delivered_to` is this Session's id. The adapter puts `delivered_to` into every message it delivers (amendment 5, §19). Why: a fork's file starts with its source's messages, whose Event ids belong to the source's stream; counting them could skip Events addressed to the fork.
 5. **Blocking reasons** (Plan Lead only): one per `open` Escalation of its Plan (`cpd2 plan show`), and one per pending Plan review this session opened (its `cpd-plan-review` entries, §15.5).
 6. **Follow:** spawn `cpd2 events follow --session <id> --since <cursor>`.
 
@@ -1263,7 +1264,7 @@ Events arrive in id order; the follower already applied §11's `--session` rule,
 | `attempt-nudge` (`session` = itself) | | message with `data.prompt` as content, **turn** |
 | every other kind | ignored | ignored |
 
-This is §5.3's table; the `plan-review` row is the Plan review protocol §5.3 leaves to this file. A blocking reason opened twice or closed when not open changes nothing (cpd 1 `blocked.ts`, kept), which makes replays harmless.
+This is §5.3's table; the `plan-review` row is the Plan review protocol §5.3 leaves to this file (amendment 6, §19). A blocking reason opened twice or closed when not open changes nothing (cpd 1 `blocked.ts`, kept), which makes replays harmless.
 
 ### 15.4 Agent states: `session state`
 
@@ -1304,7 +1305,7 @@ If plannotator does not answer, answers `unavailable` or `error` (for example `P
 
 **Several Leads at once** (follow-up "Plan reviews collide across Leads"). plannotator in remote mode listens on one port, `PLANNOTATOR_PORT` or 19432, and a second Lead's review fails with `Port 19432 in use after 5 retries` while the first is open (docs: plannotator 0.28.17 `server/network.ts`; seen on 2026-10-14). The same variable also accepts an inclusive range `<a>-<b>`, and each review server then takes the first free port in it (docs: same file, `parsePortSelection` and `listenOnPort`). So:
 - the User's environment sets a range, for example `PLANNOTATOR_PORT=19432-19439`, and the Macs forward the range over ssh: up to 8 reviews open at once; plannotator prints each review's URL in its Lead's chat;
-- cpd passes `PLANNOTATOR_PORT` and `PLANNOTATOR_REMOTE` from its own environment into every Lead pane with `-e`, when set, so a pane gets them whatever environment the tmux server was started with;
+- cpd passes `PLANNOTATOR_PORT` and `PLANNOTATOR_REMOTE` from its own environment into every Lead pane with `-e`, when set (amendment 8, §19), so a pane gets them whatever environment the tmux server was started with;
 - `doctor` warns about a single port (§14.1).
 
 Rejected alternatives: one shared review server (cpd would have to run plannotator's server outside pi, which plannotator does not offer to extensions), and a queue (a review waiting for another Plan's User decision could wait for hours). Unverified: that two plannotator servers in one range do not disturb each other's sessions; the adapter Job tests it.
@@ -1372,7 +1373,7 @@ Outline §8 and D4: the views take one **snapshot** with a read command, then **
 | `plan` (centre top) | `cpd2 plan show --plan <p>` for the Plan of the Lead in the chat slot | every Event with `plan = p`; `session-moved` with `place: "chat"` (the slot changed: switch Plan and take a new snapshot) | the flowchart of Jobs, Attempts and Tiers, open Escalations, the latest Plan review |
 | `widgets` (Dispatch column) | `cpd2 plan list` | `plan-phase`, `pr-feedback`, `plan-done`, `watch-started`, `watch-stopped`, `error` | PRs and their feedback, the engine's state |
 | `worker` (beside the chat) | `cpd2 attempt show <attempt>` for the session file | `session-state` for its Session; `attempt-status` for its Attempt | the session file itself, read-only (vision decision 5), and the state |
-| `chat` (placeholder) | none | none | static text |
+| `chat` (placeholder) | none | none | the static text `No Lead here: pick a Plan in the session tree` |
 
 **Rates.**
 - Each view runs one `cpd2 events follow` with no selection and filters by kind itself: one `PRAGMA data_version` read per `events.poll_ms` (200 ms), which costs no I/O while nothing changes (§5.4).
@@ -1387,7 +1388,6 @@ Change from the spike and cpd 1's cockpit: the tree no longer discovers Sessions
 
 ## 18. Changes from cpd 1
 
-### 18.1 Commands
 
 | cpd 1 | cpd 2 | Why |
 |---|---|---|
@@ -1405,14 +1405,20 @@ Change from the spike and cpd 1's cockpit: the tree no longer discovers Sessions
 | — | new: `context …`, `session list/show/fork/open/park/state/run`, `events list/follow`, `tui`, `config` | the model and the tmux host |
 | `doctor` checks node, `bd`, `wt`, `herdr` | checks git, tmux, pi, gh with minimum versions | §1.1 |
 
-### 18.2 What this file adds to contract.md
+## 19. Amendments to contract.md
 
-Each point below is something this file specifies that contract.md does not state, for the Lead to fold into contract.md or reject:
+This file specifies the following, which contract.md does not state or states otherwise. contract.md is not edited by this Job; the Lead appends a follow-up Job that applies this list. Each item names the contract.md section it changes.
 
-1. **The chat slot placeholder** (§10, §10.5, §13): `@cpd_view` value `chat`, the view `cpd2 tui view chat`, and the chat slot rule "the pane of `cpd:main` with `@cpd_session`, or the one with `@cpd_view = chat`". Asked of the Lead as Escalation `contract-commands-a1-q1`.
-2. **Three files under `run/<plan>/`** (§1.4).
-3. **`details.delivered_to`** in the adapter's messages, used for the cursor (§15.2).
-4. **`PLANNOTATOR_PORT` and `PLANNOTATOR_REMOTE` passed to Lead panes** (§15.5).
-5. **`events follow --session` for a Session that is not its Plan's Lead** follows only its own Events (§11): §5.3 names "a Lead of Plan P" without saying which Lead when a Plan has side forks.
-6. **The `plan-review` Event opens plannotator** (§15.3), which §5.3's table lists under "every other kind: ignored" for messages.
-7. **Error codes** introduced here: `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `context_exists`, `context_store_invalid`, `question_answered`, `not_a_git_repo`, `base_not_found`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `watch_start_failed`, `spec_invalid`, `tier_invalid`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `nothing_to_edit`, `job_merged`, `job_not_failed`, `job_not_ready`, `spawn_failed`, `attempt_not_running`, `session_malformed`, `not_awaiting_review`, `driver_lock_missing`, `jobs_not_done`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `cursor_ahead`, `not_a_terminal`, `doctor_failed`, `pi_not_found`, `catalog_failed`, `file_unreadable`, `invalid_name`. Most are cpd 1's (cpd 1 §11 and its `src/`).
+| # | contract.md section | Amendment | Where here |
+|---|---|---|---|
+| 1 | §6.2, chat slot rule | the chat slot is the pane of `cpd:main` that has `@cpd_session` **or** `@cpd_view = chat` (Escalation `contract-commands-a1-q1`, answered by the Lead) | §10 |
+| 2 | §6.2, `@cpd_view` values | new value `chat`: the placeholder pane running `cpd2 tui view chat`, text `No Lead here: pick a Plan in the session tree`; at most one, only ever in the slot | §10, §13.2, §17 |
+| 3 | §6.4, `session park` | park creates a new park window holding a placeholder, then `swap-pane`s the Lead and the placeholder; `session open` kills the placeholder pane with its window when a Lead takes the slot | §10.4, §10.5 |
+| 4 | §1.4, `$CPD_HOME` layout | three more files: `run/<plan>/lead-message.md`, `run/<plan>/plan-<review>.md`, `run/<plan>/messages/<session>.md` | §1.4 |
+| 5 | §5.3, the cursor | the adapter adds `delivered_to` to every message's `details`, and the cursor counts only messages delivered to this Session, never at or below its `session-registered` Event | §15.2 |
+| 6 | §5.3, delivery table | `plan-review` with `status: pending` opens plannotator in the Plan Lead's adapter (no message); listed today under "every other kind: ignored" | §15.3, §15.5 |
+| 7 | §5.3 and §5.4, `--session` selection | "a Lead of Plan P" is the Session that is `plans.lead_session`; any other Session, side forks included, follows only Events addressed to itself | §10.3, §11 |
+| 8 | §6.5, environment | Lead panes also get `PLANNOTATOR_PORT` and `PLANNOTATOR_REMOTE` from cpd's environment, when set (several Plan reviews at once) | §15.5 |
+| 9 | §6.3, tmux commands | `respawn-pane`, for a dead pane of the cockpit's layout | §13.1 |
+| 10 | §1.2, output | `session run`, `tui view` and `tui --attach` own their terminal instead of printing one JSON value (the outline's "builds and attaches the cockpit") | §1.2 |
+| 11 | §1.2 table of codes | the error codes this file introduces: `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `context_exists`, `context_store_invalid`, `question_answered`, `not_a_git_repo`, `base_not_found`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `watch_start_failed`, `spec_invalid`, `tier_invalid`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `nothing_to_edit`, `job_merged`, `job_not_failed`, `job_not_ready`, `spawn_failed`, `attempt_not_running`, `session_malformed`, `not_awaiting_review`, `driver_lock_missing`, `jobs_not_done`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `cursor_ahead`, `not_a_terminal`, `doctor_failed`, `pi_not_found`, `catalog_failed`, `file_unreadable`, `invalid_name`; most are cpd 1's (cpd 1 §11 and its `src/`) | §1.3 and each command |
