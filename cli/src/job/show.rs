@@ -1,0 +1,113 @@
+//! `job list` and `job show` (commands.md §5.6, §5.7): read-only.
+
+use rusqlite::Connection;
+use serde_json::{Value, json};
+
+use super::{ListArgs, ShowArgs, Env, bad_row, find, plan_phase};
+use crate::error::CpdError;
+use crate::ids::PlanId;
+use crate::output::Output;
+use crate::plan::jobs;
+
+/// `job list` (§5.6).
+pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
+    let plan = args.plan.require()?.clone();
+    let mut env = Env::open()?;
+    let listed = env.store.read(|conn| {
+        plan_phase(conn, &plan)?;
+        let all = jobs::load(conn, &plan)?;
+        let counts = attempt_counts(conn, &plan)?;
+        Ok(all
+            .into_iter()
+            .filter(|j| args.statuses.is_empty() || args.statuses.contains(&j.status))
+            .map(|j| {
+                let attempts = counts.iter().find(|(job, _)| *job == j.key).map_or(0, |(_, n)| *n);
+                json!({"key": j.key, "title": j.title, "status": j.status, "tier": j.tier, "appended": j.appended,
+                       "needs": j.needs, "attempts": attempts, "merged_sha": j.merged_sha})
+            })
+            .collect::<Vec<_>>())
+    })?;
+    Ok(Output::success(json!({"jobs": listed})))
+}
+
+fn attempt_counts(conn: &Connection, plan: &PlanId) -> Result<Vec<(String, i64)>, CpdError> {
+    let mut stmt = conn.prepare("SELECT job, count(*) FROM attempts WHERE plan = ?1 GROUP BY job")?;
+    let rows = stmt.query_map([plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// `job show` (§5.7).
+pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
+    let plan = args.plan.require()?.clone();
+    let mut env = Env::open()?;
+    let (job, needed_by, attempts) = env.store.read(|conn| {
+        plan_phase(conn, &plan)?;
+        let all = jobs::load(conn, &plan)?;
+        let job = find(&all, &plan, &args.key)?.clone();
+        let needed_by: Vec<&str> = all.iter().filter(|j| j.needs.contains(&job.key)).map(|j| j.key.as_str()).collect();
+        let needed_by = needed_by.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        let attempts = attempts(conn, &plan, &job.key)?;
+        Ok((job, needed_by, attempts))
+    })?;
+    let tamper = jobs::tampered(&plan, std::slice::from_ref(&job));
+    Ok(Output::success(json!({
+        "job": job.to_json(), "needs": job.needs, "needed_by": needed_by, "attempts": attempts, "tamper": tamper,
+    })))
+}
+
+/// Every Attempt of the Job with all its fields, oldest first, each with its Escalations.
+fn attempts(conn: &Connection, plan: &PlanId, job: &str) -> Result<Vec<Value>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, number, tier, origin, status, outcome, cause, branch, worktree, base_sha, driver_pid, worker_session,
+                spec_path, submitted_sha, submitted_at, check_tail, merged_sha, nudged, stop_request, metrics, started_at, ended_at
+           FROM attempts WHERE plan = ?1 AND job = ?2 ORDER BY number",
+    )?;
+    let rows = stmt
+        .query_map([plan.as_str(), job], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(19)?,
+                json!({
+                    "id": r.get::<_, String>(0)?, "number": r.get::<_, i64>(1)?, "tier": r.get::<_, String>(2)?,
+                    "origin": r.get::<_, String>(3)?, "status": r.get::<_, String>(4)?,
+                    "outcome": r.get::<_, Option<String>>(5)?, "cause": r.get::<_, Option<String>>(6)?,
+                    "branch": r.get::<_, String>(7)?, "worktree": r.get::<_, String>(8)?,
+                    "base_sha": r.get::<_, Option<String>>(9)?, "driver_pid": r.get::<_, Option<i64>>(10)?,
+                    "worker_session": r.get::<_, Option<String>>(11)?, "spec_path": r.get::<_, Option<String>>(12)?,
+                    "submitted_sha": r.get::<_, Option<String>>(13)?, "submitted_at": r.get::<_, Option<String>>(14)?,
+                    "check_tail": r.get::<_, Option<String>>(15)?, "merged_sha": r.get::<_, Option<String>>(16)?,
+                    "nudged": r.get::<_, bool>(17)?, "stop_request": r.get::<_, Option<String>>(18)?,
+                    "started_at": r.get::<_, String>(20)?, "ended_at": r.get::<_, Option<String>>(21)?,
+                }),
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut out = Vec::new();
+    for (id, metrics, mut attempt) in rows {
+        attempt["metrics"] = match metrics {
+            None => Value::Null,
+            Some(text) => serde_json::from_str(&text).map_err(|_| bad_row(format!("Attempt {plan}/{id} has metrics {text:?}")))?,
+        };
+        attempt["escalations"] = json!(escalations(conn, plan, &id)?);
+        out.push(attempt);
+    }
+    Ok(out)
+}
+
+fn escalations(conn: &Connection, plan: &PlanId, attempt: &str) -> Result<Vec<Value>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, number, question, status, answer, asker_pid, asked_at, answered_at, expired_at
+           FROM escalations WHERE plan = ?1 AND attempt = ?2 ORDER BY number",
+    )?;
+    let rows = stmt
+        .query_map([plan.as_str(), attempt], |r| {
+            Ok(json!({
+                "id": r.get::<_, String>(0)?, "number": r.get::<_, i64>(1)?, "question": r.get::<_, String>(2)?,
+                "status": r.get::<_, String>(3)?, "answer": r.get::<_, Option<String>>(4)?,
+                "asker_pid": r.get::<_, i64>(5)?, "asked_at": r.get::<_, String>(6)?,
+                "answered_at": r.get::<_, Option<String>>(7)?, "expired_at": r.get::<_, Option<String>>(8)?,
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}

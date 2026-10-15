@@ -76,12 +76,6 @@ const PENDING: &[(&[&str], &str)] = &[
     // context
     // plan
     // job
-    (&["job", "add", "api-schema", "--tier", "S2"], "job add"),
-    (&["job", "edit", "api-schema", "--no-needs"], "job edit"),
-    (&["job", "cancel", "api-schema", "--reason", "Not needed."], "job cancel"),
-    (&["job", "retry", "api-schema", "--tier", "O4"], "job retry"),
-    (&["job", "list"], "job list"),
-    (&["job", "show", "api-schema"], "job show"),
     // attempt
     (&["attempt", "submit", "api-schema-a1"], "attempt submit"),
     (&["attempt", "read", "api-schema-a1", "--lines", "10"], "attempt read"),
