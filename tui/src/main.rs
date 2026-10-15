@@ -26,7 +26,7 @@ use ratatui::{
         event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind},
         execute,
     },
-    layout::{Constraint, Layout, Position, Rect},
+    layout::{Constraint, Layout, Margin, Position, Rect},
     style::{Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
@@ -587,7 +587,7 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
                 let [head, _gap, body] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1)]).areas(f.area());
                 head_area = head;
                 let flows: Vec<flow::FlowJob> = jobs.iter().map(|j| j.flow.clone()).collect();
-                let fc = flow::layout(&flows, body.width);
+                let fc = flow::layout(&flows);
                 tab_ranges.clear();
                 let mut spans: Vec<Span> = Vec::new();
                 if let Some(c) = &centre_now {
@@ -615,15 +615,17 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
                 if !note.is_empty() {
                     spans.push(format!("  {note}").fg(palette::ui(Ui::Note)));
                 }
-                body_area = body;
+                // two columns and one row of padding: nothing of the chart touches the pane's edges
+                let window = body.inner(Margin { horizontal: 2, vertical: 1 });
+                body_area = window;
                 f.render_widget(Paragraph::new(Line::from(spans)), head);
-                let sel = selected.as_ref().and_then(|k| fc.pills.iter().position(|p| &p.key == k)).or_else(|| fc.levels.first().map(|l| l[0]));
+                let sel = selected.as_ref().and_then(|k| fc.pills.iter().position(|p| &p.key == k)).or_else(|| fc.columns.first().and_then(|c| c.first().copied()));
                 selected = sel.map(|i| fc.pills[i].key.clone());
                 if let (true, Some(i)) = (follow, sel) {
-                    scroll = fc.scroll_to(i, scroll, (body.width, body.height));
+                    scroll = fc.scroll_to(i, scroll, (window.width, window.height));
                     follow = false;
                 }
-                scroll = fc.blit(f.buffer_mut(), body, scroll, sel);
+                scroll = fc.blit(f.buffer_mut(), window, scroll, sel);
                 chart = Some(fc);
             })
             .map_err(|e| e.to_string())?;
@@ -659,7 +661,7 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
                     }
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
-                    let hit = chart.as_ref().filter(|_| m.row >= body_area.y && m.column >= body_area.x).and_then(|c| {
+                    let hit = chart.as_ref().filter(|_| body_area.contains(Position::new(m.column, m.row))).and_then(|c| {
                         c.pill_at(m.column - body_area.x + scroll.0, m.row - body_area.y + scroll.1).map(|i| c.pills[i].key.clone())
                     });
                     if let Some(key) = hit {
