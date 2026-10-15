@@ -510,6 +510,8 @@ fn e2_recovers_a_merge_whose_driver_died_after_the_compare_and_swap() {
     assert!(!made.path.exists());
 }
 
+/// A Session whose pane is dead or gone becomes `stopped` with no pane, and
+/// its place `none` (Escalation e2e-a1-q1); a `stopped` Session keeps a live pane.
 #[test]
 fn e2_stops_sessions_whose_pane_is_dead_or_gone() {
     let fx = fx("");
@@ -520,27 +522,50 @@ fn e2_stops_sessions_whose_pane_is_dead_or_gone() {
     };
     let live = new(&["new-session", "-d", "-s", "x", "-P", "-F", "#{pane_id}", "sleep", "600"]);
     new(&["set", "-g", "remain-on-exit", "on"]);
+    let waiting = new(&["new-window", "-d", "-t", "=x:", "-P", "-F", "#{pane_id}", "sleep", "600"]);
     let dead = new(&["new-window", "-d", "-t", "=x:", "-P", "-F", "#{pane_id}", "sh", "-c", "exit 3"]);
     wait_until("the dead pane", || new(&["list-panes", "-t", &dead, "-F", "#{pane_dead}"]) == "1");
     fx.fixture(&format!(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
            VALUES ('s-live', 'lead', 'ctx', 'pay', 'Live', '/', 'O3', '{live}', 'idle', NULL, 't', 't'),
                   ('s-dead', 'lead', 'ctx', 'pay', 'Dead', '/', 'O3', '{dead}', 'blocked', 'cpd: dialog', 't', 't'),
-                  ('s-gone', 'lead', 'ctx', NULL, 'Gone', '/', 'O3', '%999', 'working', NULL, 't', 't');"
+                  ('s-gone', 'lead', 'ctx', NULL, 'Gone', '/', 'O3', '%999', 'working', NULL, 't', 't'),
+                  ('s-waiting', 'lead', 'ctx', 'pay', 'Waiting', '/', 'O3', '{waiting}', 'stopped', NULL, 't', 't'),
+                  ('s-shut', 'lead', 'ctx', 'pay', 'Shut', '/', 'O3', '%998', 'stopped', NULL, 't', 't');"
     ));
 
     let engine = fx.start();
-    wait_until("two stopped", || fx.count("session-state") == 2);
+    wait_until("three without a pane", || fx.count("session-moved") == 3);
     std::thread::sleep(Duration::from_millis(1500));
     engine.stop();
 
-    let state = |id: &str| fx.query::<String>(&format!("SELECT state FROM sessions WHERE id = '{id}'"));
-    assert_eq!((state("s-live"), state("s-dead"), state("s-gone")), ("idle".into(), "stopped".into(), "stopped".into()));
+    let row = |id: &str| {
+        fx.store()
+            .read(|c| Ok(c.query_row("SELECT state, tmux_pane, state_at FROM sessions WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
+            .unwrap()
+    };
+    let rows: Vec<(String, Option<String>, String)> = ["s-live", "s-dead", "s-gone", "s-waiting", "s-shut"].iter().map(|id| row(id)).collect();
+    let (states, panes): (Vec<&str>, Vec<Option<&str>>) = rows.iter().map(|r| (r.0.as_str(), r.1.as_deref())).unzip();
+    assert_eq!(states, ["idle", "stopped", "stopped", "stopped", "stopped"]);
+    assert_eq!(panes, [Some(live.as_str()), None, None, Some(waiting.as_str()), None]);
+    // Already stopped: its state did not change, so neither did state_at.
+    assert_eq!(rows[4].2, "t");
     assert_eq!(fx.query::<Option<String>>("SELECT state_label FROM sessions WHERE id = 's-dead'"), None);
     let events = fx.events("session-state");
     assert_eq!(events.len(), 2);
     assert!(events.contains(&(Some("pay".into()), None, None, json!({"from": "blocked", "to": "stopped", "label": null}))), "{events:?}");
     assert!(events.contains(&(None, None, None, json!({"from": "working", "to": "stopped", "label": null}))), "{events:?}");
+    let moved = fx.events("session-moved");
+    let none = json!({"pane": null, "window": null, "place": "none"});
+    assert_eq!(moved, [(Some("pay".into()), None, None, none.clone()), (None, None, None, none.clone()), (Some("pay".into()), None, None, none)]);
+    let places: Vec<String> = fx.env.cpd2(&["session", "list"]).ok()["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| ["s-dead", "s-gone", "s-shut"].contains(&s["id"].as_str().unwrap()))
+        .map(|s| s["place"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(places, ["none", "none", "none"]);
 }
 
 // ---------- E3 ----------

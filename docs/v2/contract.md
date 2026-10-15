@@ -492,6 +492,8 @@ The concurrency slot is implicit: an Attempt holds one from `starting` until `en
 
 The adapter counts blocking reasons and reports `blocked` while the count is above zero, the model of `tmux-agent-state.ts` (spike, verified), now written to the database instead of tmux options. `session state` writes nothing and appends nothing when the state and label are unchanged.
 
+**A pane that is gone.** Engine E2 is the one writer that records a Session's pane as gone (Escalation `e2e-a1-q1`): when the pane in `tmux_pane` is dead or missing, one transaction sets `state = stopped` (with `session-state` if it was not `stopped`), `tmux_pane = NULL`, and appends `session-moved` `{pane: null, window: null, place: "none"}`. `stopped` alone does not mean the pane is gone: a Session gets its pane while still `stopped` (registered before pi starts), and `session run` keeps its pane after pi exits, so `session state stopped` leaves `tmux_pane` alone.
+
 ### 3.7 The engine, `cpd2 watch`
 
 One per machine (D5). Every `tick_seconds`:
@@ -499,7 +501,7 @@ One per machine (D5). Every `tick_seconds`:
 | Step | What it does |
 |---|---|
 | E1 | **Escalations:** expire `open` Escalations whose `asker_pid` is dead |
-| E2 | **Liveness:** for every Attempt not `ended` whose driver lock is free (the driver died; §3.4): in `merging`, run the merge recovery R (§7.4), which ends it `merged` when its commits are already on the Lead Branch, and otherwise `cancelled` if a cancel was requested, else `crashed`; in any other status, end it `cancelled` if a cancel was requested, else `crashed`. For every Attempt with a live driver: active time over `attempt_minutes` → set `stop_request = timed_out`; Job `cancel_requested_at` set → set `stop_request = cancelled`. For every Session not `stopped`: pane dead or missing (`tmux list-panes -a`) → `stopped` |
+| E2 | **Liveness:** for every Attempt not `ended` whose driver lock is free (the driver died; §3.4): in `merging`, run the merge recovery R (§7.4), which ends it `merged` when its commits are already on the Lead Branch, and otherwise `cancelled` if a cancel was requested, else `crashed`; in any other status, end it `cancelled` if a cancel was requested, else `crashed`. For every Attempt with a live driver: active time over `attempt_minutes` → set `stop_request = timed_out`; Job `cancel_requested_at` set → set `stop_request = cancelled`. For every Session not `stopped` or with a pane: pane dead or missing (`tmux list-panes -a`) → `stopped` with no pane (§3.6) |
 | E3 | **Scheduling:** for each Ready Job, by `jobs.seq` across all Plans, while a slot is free: verify the fingerprint, take the driver lock, create the Attempt, start its driver with the lock inherited (§3.4) |
 | E4 | **Completion:** for each Plan in `dispatch` with no Job `queued` or `running`, at least one `merged`, and `all_merged_at` null: append `all-merged` and set `all_merged_at` |
 | E5 | **PR:** for each Plan in `pr`, every `pr_poll_seconds`: run `cpd2 pr poll --plan <id>` as a subprocess (a process boundary, cpd 1 §11 step 5) |
@@ -993,7 +995,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `escalation-expired` | timeout or dead asker | plan, job, attempt | `{escalation, reason}` |
 | `session-registered` | a Session row is created | context, plan?, session | `{role, name, forked_from, tier}` |
 | `session-state` | a Session's state or label changes | context, plan?, session | `{from, to, label}` |
-| `session-moved` | the Session's pane is created, moved into the chat slot, parked or gone (§6.4) | context, plan?, session | `{pane, window, place}`, `place` is `chat`, `parked`, `work` or `none` |
+| `session-moved` | the Session's pane is created, moved into the chat slot, parked or gone (§6.4); gone is appended only by E2, with `pane` and `window` null (§3.6) | context, plan?, session | `{pane, window, place}`, `place` is `chat`, `parked`, `work` or `none` |
 | `session-renamed` | `session rename` (cpd 1's `rename`, User decision 7 in the vision) | context, plan?, session | `{name}` |
 | `watch-started`, `watch-stopped` | the engine starts or stops | (none) | `{pid}` |
 | `error` | `watch`, a driver or a sync hit an unexpected failure | context?, plan?, … | `{source, code, message, details}` |

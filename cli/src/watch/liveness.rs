@@ -5,14 +5,14 @@
 //! - an Attempt with a live driver: `stop_request = cancelled` when its Job
 //!   has a cancel request, `timed_out` when its active time is over
 //!   `attempt_minutes`; the driver acts on it (A5);
-//! - a Session not `stopped` whose pane is dead or missing: `stopped`.
+//! - a Session whose pane is dead or missing: `stopped`, with no pane
+//!   (`session::pane_gone`); a Session not `stopped` with no pane: `stopped`.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use rusqlite::params;
-use serde_json::json;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -21,7 +21,6 @@ use super::engine::{Engine, metrics};
 use super::report::{About, Step};
 use crate::driver::ledger::{self, Cause, End, Ladder};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{self, Kind, NewEvent};
 use crate::host::layout::attempt_window;
 use crate::ids::{AttemptId, PlanId, SessionId};
 use crate::merge::{self, DriverLock, RepoLock, take_free_driver_lock};
@@ -249,37 +248,31 @@ fn parse_time(text: &str) -> Result<OffsetDateTime, CpdError> {
     })
 }
 
-/// A Session not `stopped`, as read before the panes are listed.
+/// A Session not `stopped`, or with a pane, as read before the panes are listed.
 struct Live {
     id: SessionId,
     state: String,
     pane: Option<String>,
     name: String,
-    plan: Option<PlanId>,
 }
 
-/// Every Session not `stopped` whose pane is dead or missing becomes
-/// `stopped` (§3.6). The Sessions are read before the panes are listed, and
-/// each write is a compare-and-swap on the state and pane read, so a Session
-/// that got a new pane meanwhile is left alone.
+/// Every Session whose pane is dead or missing becomes `stopped` with no pane,
+/// and every Session not `stopped` with no pane becomes `stopped` (§3.6, §5.2;
+/// Escalation `e2e-a1-q1`): `session::pane_gone` does both. A `stopped`
+/// Session keeps a live pane (it was registered before pi starts, or its
+/// `session run` waits to resume pi). The Sessions are read before the panes
+/// are listed, and each write is a compare-and-swap on the state and pane
+/// read, so a Session that got a new pane meanwhile is left alone.
 fn sessions(engine: &mut Engine) {
     let live = engine.store.read(|conn| {
-        let mut stmt = conn.prepare("SELECT id, state, tmux_pane, name, plan FROM sessions WHERE state <> 'stopped' ORDER BY id")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, state, tmux_pane, name FROM sessions WHERE state <> 'stopped' OR tmux_pane IS NOT NULL ORDER BY id",
+        )?;
         let rows = stmt
-            .query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, Option<String>>(2)?,
-                    r.get::<_, String>(3)?,
-                    r.get::<_, Option<String>>(4)?,
-                ))
-            })?
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
-            .map(|(id, state, pane, name, plan)| {
-                Ok(Live { id: SessionId::parse(&id)?, state, pane, name, plan: plan.map(|p| PlanId::parse(&p)).transpose()? })
-            })
+            .map(|(id, state, pane, name)| Ok(Live { id: SessionId::parse(&id)?, state, pane, name }))
             .collect::<Result<Vec<_>, CpdError>>()
     });
     let panes = live.and_then(|live| Ok((live, engine.tmux.list_panes()?)));
@@ -307,26 +300,11 @@ fn sessions(engine: &mut Engine) {
 }
 
 fn stop(engine: &mut Engine, session: &Live, why: &str) -> Result<(), CpdError> {
-    let changed = engine.store.write(SOURCE, |tx| {
-        let changed = tx.execute(
-            "UPDATE sessions SET state = 'stopped', state_label = NULL, state_at = (SELECT at FROM txns WHERE id = cpd_txn())
-              WHERE id = ?1 AND state = ?2 AND tmux_pane IS ?3",
-            params![session.id.as_str(), session.state, session.pane],
-        )?;
-        if changed == 0 {
-            return Ok(false);
-        }
-        let text = format!("Session {} is stopped: {why}.", session.name);
-        let event = NewEvent::new(Kind::SessionState, text, json!({"from": session.state, "to": "stopped", "label": null}))
-            .session(session.id.clone());
-        events::append(tx, match &session.plan {
-            Some(plan) => event.plan(plan.clone()),
-            None => event,
-        })?;
-        Ok(true)
-    })?;
+    let changed = engine
+        .store
+        .write(SOURCE, |tx| crate::session::pane_gone(tx, &session.id, &session.state, session.pane.as_deref(), why))?;
     if changed {
-        engine.log.line(&format!("E2: Session {} ({}) is stopped: {why}", session.id, session.name));
+        engine.log.line(&format!("E2: Session {} ({}) is stopped with no pane: {why}", session.id, session.name));
     }
     Ok(())
 }

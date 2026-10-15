@@ -24,6 +24,7 @@ use crate::store::Store;
 
 pub use row::{Role, State};
 pub use state::Label;
+pub(crate) use state::pane_gone;
 
 /// The program in every pane cpd starts, resolved on the tmux server's `PATH`
 /// (Escalation `rs-session-a1-q2`): a pane must outlive any one build.

@@ -404,7 +404,20 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(shown["counts"], json!({"draft": 0, "queued": 0, "running": 0, "merged": 2, "failed": 0, "cancelled": 0}));
     assert_eq!(shown["tamper"], json!([]));
 
-    // The engine stops on SIGTERM, so `pr poll` below is the only poll.
+    // The engine stops on SIGTERM, so `pr poll` below is the only poll. First,
+    // E2 records that each Worker's pane is gone after A9 killed its window
+    // (Escalation e2e-a1-q1): `stopped`, no pane, place `none`.
+    for attempt in ["api-a1", "ui-a1"] {
+        let worker = fx.ok(&["attempt", "show", attempt, "--plan", PLAN])["attempt"]["worker_session"].as_str().unwrap().to_owned();
+        let moved = fx.wait_event(cursor, "session-moved", 30, |e| e["session"] == worker.as_str() && e["data"]["place"] == "none");
+        assert_eq!(moved["data"], json!({"pane": null, "window": null, "place": "none"}));
+        let session = fx.session(&worker);
+        assert_eq!((&session["state"], &session["tmux_pane"], &session["place"]), (&json!("stopped"), &Value::Null, &json!("none")));
+    }
+    for lead in [&lead_session, &grounded] {
+        let session = fx.session(lead);
+        assert_eq!((&session["state"], &session["place"]), (&json!("idle"), &json!("parked")), "{session}");
+    }
     kill(Pid::from_raw(engine), Signal::SIGTERM).unwrap();
     fx.wait_event(cursor, "watch-stopped", 30, |e| e["data"]["pid"] == engine);
     let events = fx.events_since(cursor);

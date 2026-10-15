@@ -11,7 +11,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
 use crate::ids::SessionId;
 use crate::output::Output;
-use crate::store::Store;
+use crate::store::{Store, WriteTxn};
 
 /// Why a Session is `blocked`: 1–80 characters, no control characters; else
 /// `usage` (commands.md §10.6).
@@ -96,6 +96,41 @@ pub(super) fn set(store: &mut Store, command: &str, id: &SessionId, to: State, l
         Ok(())
     })?;
     Ok(Change { from: read.state, already: false })
+}
+
+/// Session `id`'s pane is known gone, dead or missing (contract §3.6, §5.2;
+/// Escalation `e2e-a1-q1`): the one writer that leaves a Session with no pane.
+/// In `tx`, with a compare-and-swap on the `state` and `pane` its caller read,
+/// the Session becomes `stopped` with `tmux_pane` null; it appends
+/// `session-state` when it was not `stopped`, and `session-moved`
+/// `{pane: null, window: null, place: "none"}` when it had a pane. Returns
+/// false, writing nothing, when the row is no longer as read (it got a new
+/// pane, or changed state, meanwhile). `why` ends each Event's text.
+pub(crate) fn pane_gone(tx: &WriteTxn<'_>, id: &SessionId, state: &str, pane: Option<&str>, why: &str) -> Result<bool, CpdError> {
+    let read = row::load(tx, id)?;
+    if read.state.as_str() != state || read.tmux_pane.as_deref() != pane {
+        return Ok(false);
+    }
+    let changed = tx.execute(
+        "UPDATE sessions SET state = 'stopped', state_label = NULL, tmux_pane = NULL,
+                state_at = iif(state = 'stopped', state_at, (SELECT at FROM txns WHERE id = cpd_txn()))
+          WHERE id = ?1 AND state = ?2 AND tmux_pane IS ?3",
+        rusqlite::params![id.as_str(), state, pane],
+    )?;
+    if changed == 0 {
+        return Ok(false);
+    }
+    if read.state != State::Stopped {
+        let text = format!("Session {} is stopped: {why}.", read.name);
+        let data = json!({"from": read.state.as_str(), "to": "stopped", "label": null});
+        append(tx, scoped(NewEvent::new(Kind::SessionState, text, data), &read))?;
+    }
+    if pane.is_some() {
+        let text = format!("Session {} has no pane: {why}.", read.name);
+        let data = json!({"pane": null, "window": null, "place": "none"});
+        append(tx, scoped(NewEvent::new(Kind::SessionMoved, text, data), &read))?;
+    }
+    Ok(true)
 }
 
 fn illegal(id: &SessionId, from: State, to: State) -> CpdError {
@@ -185,6 +220,61 @@ mod tests {
                 (Stopped, Stopped),
             ]
         );
+    }
+
+    /// A Store in a temporary `$CPD_HOME` with Session `s1` (`idle`, pane `%5`).
+    fn store_with_session() -> (tempfile::TempDir, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = crate::home::CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        store
+            .write("fixture", |tx| {
+                tx.execute_batch(
+                    "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
+                     INSERT INTO sessions (id, role, context, name, cwd, tier, tmux_pane, state, state_at, created_at)
+                       VALUES ('s1', 'lead', 'ctx', 'One', '/', 'O3', '%5', 'idle', 't', 't');",
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        (dir, store)
+    }
+
+    fn events(store: &mut Store) -> Vec<(String, String)> {
+        store
+            .read(|c| {
+                let mut stmt = c.prepare("SELECT kind, data FROM events ORDER BY id")?;
+                Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn pane_gone_stops_the_session_with_no_pane_and_place_none() {
+        let (_dir, mut store) = store_with_session();
+        let id = SessionId::parse("s1").unwrap();
+        assert!(store.write("test", |tx| pane_gone(tx, &id, "idle", Some("%5"), "its pane %5 is gone")).unwrap());
+        let row = store.read(|c| row::load(c, &id)).unwrap();
+        assert_eq!((row.state, row.tmux_pane, row.place.as_str()), (State::Stopped, None, "none"));
+        assert_eq!(
+            events(&mut store),
+            [
+                ("session-state".to_owned(), r#"{"from":"idle","label":null,"to":"stopped"}"#.to_owned()),
+                ("session-moved".to_owned(), r#"{"pane":null,"place":"none","window":null}"#.to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn pane_gone_writes_nothing_when_the_row_changed_since_it_was_read() {
+        let (_dir, mut store) = store_with_session();
+        let id = SessionId::parse("s1").unwrap();
+        // A new pane meanwhile, or another state.
+        assert!(!store.write("test", |tx| pane_gone(tx, &id, "idle", Some("%4"), "gone")).unwrap());
+        assert!(!store.write("test", |tx| pane_gone(tx, &id, "working", Some("%5"), "gone")).unwrap());
+        let row = store.read(|c| row::load(c, &id)).unwrap();
+        assert_eq!((row.state, row.tmux_pane.as_deref()), (State::Idle, Some("%5")));
+        assert!(events(&mut store).is_empty());
     }
 
     #[test]
