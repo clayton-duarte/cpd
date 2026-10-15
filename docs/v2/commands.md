@@ -2,7 +2,7 @@
 
 Status: **normative for every cpd 2 implementation Job**, under [contract.md](contract.md): where the two disagree, contract.md wins and this file is fixed. Vocabulary: [CONTEXT.md](CONTEXT.md). This file uses the contract's names, states, tables and Event kinds exactly; "§n" without a prefix means contract.md §n, and "cpd 1 §n" means `docs/cli-contract.md` §n.
 
-It specifies every command of outline §3 (synopsis, flags, preconditions with their error and exit codes, effects, JSON output, idempotence), the pi adapter's protocol, the Worker and Reviewer contract, what the TUI reads, and `doctor`.
+It specifies every command of outline §3 (synopsis, flags, preconditions with their error and exit codes, effects, JSON output, idempotence), the pi adapter's protocol, the Worker contract, what the TUI reads, and `doctor`.
 
 Evidence labels as in contract.md: **verified** (run on the homeserver on 2026-10-14), **docs** (read in the named tool's documentation or source), **unverified** (a design assumption the implementation Job must check).
 
@@ -23,10 +23,11 @@ Evidence labels as in contract.md: **verified** (run on the homeserver on 2026-1
 13. [`tui`](#13-tui)
 14. [`doctor`, `config`, `tiers`](#14-doctor-config-tiers)
 15. [The pi adapter's protocol](#15-the-pi-adapters-protocol)
-16. [The Worker and Reviewer contract](#16-the-worker-and-reviewer-contract)
+16. [The Worker contract](#16-the-worker-contract)
 17. [What the TUI reads](#17-what-the-tui-reads)
 18. [Changes from cpd 1](#18-changes-from-cpd-1)
 19. [Amendments to contract.md](#19-amendments-to-contractmd)
+20. [Sections changed by R19 and R20](#20-sections-changed-by-r19-and-r20)
 
 ## 1. Conventions
 
@@ -88,7 +89,7 @@ The `$CPD_HOME` layout is §1.4. Commands in this file write three files the con
 
 ### 1.5 Text arguments
 
-Free text (`--title`, `--reason`, `--feedback`, Context record text, questions and answers) is one argument, 1 to 20 000 characters, with no NUL; else `usage`. Names (`--name`, `session rename`) are 1–80 characters with no control characters, else `invalid_name` (exit 2) (cpd 1 §11 `session rename`, kept). Files given by path (`--spec`, `--brief-file`, `--feedback-file`, `--message-file`) must be readable UTF-8, else `file_unreadable` (exit 2).
+Free text (`--title`, `--reason`, Context record text, questions and answers) is one argument, 1 to 20 000 characters, with no NUL; else `usage`. Names (`--name`, `session rename`) are 1–80 characters with no control characters, else `invalid_name` (exit 2) (cpd 1 §11 `session rename`, kept). Files given by path (`--spec`, `--brief-file`, `--feedback-file`, `--message-file`) must be readable UTF-8, else `file_unreadable` (exit 2).
 
 ## 2. Command index
 
@@ -113,10 +114,9 @@ Free text (`--title`, `--reason`, `--feedback`, Context record text, questions a
 | `attempt submit` | Worker | yes | §7.3 |
 | `attempt read`, `show`, `list` | Lead, TUI | no | |
 | `attempt run` (internal) | E3, `job dispatch` | yes | §3.4 |
-| `review decide` | Lead | yes | §3.4 |
 | `ask` | Worker | yes | §3.5 |
 | `answer` | Lead | yes | §3.5 |
-| `pr open`, `pr rebase` | Lead | yes | §7.6 |
+| `pr open`, `pr rebase` | Lead | yes | §7.3, §7.6 |
 | `pr poll` | engine E5 | yes | §7.6 |
 | `session list`, `session show` | TUI, Lead | no | |
 | `session fork`, `open`, `park`, `rename` | User (TUI), Lead | yes | §6.4, §6.7 |
@@ -329,7 +329,7 @@ cpd2 plan list [--context <id>] [--phase <phase>]
 
 ```json
 {"ok": true, "plans": [{"id": "cpd2", "context": "building-cpd", "title": "cpd in Rust", "phase": "dispatch", "repo": "/home/clayton/projects/cpd", "lead_session": "596d007f-…",
-  "counts": {"draft": 0, "queued": 2, "running": 1, "in_review": 0, "merged": 2, "failed": 0, "cancelled": 0}, "pr": null}],
+  "counts": {"draft": 0, "queued": 2, "running": 1, "merged": 2, "failed": 0, "cancelled": 0}, "pr": null}],
  "events_cursor": 48213}
 ```
 
@@ -343,17 +343,17 @@ cpd2 plan show [--plan <id>]
 
 Effects: none; one read transaction, so the result is one consistent snapshot. It is the TUI's snapshot of a Plan (§17).
 
-Output: every field of the Plan (§2.2); `jobs` with each Job's fields (Spec included), `needs`, and its Attempts (`id`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `worker_session`, `reviewer_session`, `verdict`, `started_at`, `ended_at`); `escalations` that are `open`; the latest Plan review; `counts`; `tamper` (the tamper report of §4.3: `{kind: "schema" | "fingerprint" | "history", …}`); `events_cursor`.
+Output: every field of the Plan (§2.2); `jobs` with each Job's fields (Spec included), `needs`, and its Attempts (`id`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `worker_session`, `started_at`, `ended_at`); `escalations` that are `open`; the latest Plan review; `counts`; `tamper` (the tamper report of §4.3: `{kind: "schema" | "fingerprint" | "history", …}`); `events_cursor`.
 
 ```json
 {"ok": true,
  "plan": {"id": "cpd2", "context": "building-cpd", "title": "cpd in Rust", "jira": null, "repo": "/home/clayton/projects/cpd", "base": "main", "lead_branch": "cpd/cpd2", "lead_worktree": "/home/clayton/projects/cpd.cpd2", "phase": "dispatch", "lead_session": "596d007f-…", "pr": null, "all_merged_at": null, "created_at": "…", "locked_at": "…", "done_at": null},
- "jobs": [{"key": "contract-commands", "title": "cpd 2 contract: every command", "status": "running", "tier": "O3", "review_tier": "S4", "appended": false, "needs": ["contract-core"],
+ "jobs": [{"key": "contract-commands", "title": "cpd 2 contract: every command", "status": "running", "tier": "O3", "appended": false, "needs": ["contract-core"],
            "goal": "…", "context": "…", "touches": ["docs/v2/commands.md"], "acceptance": ["…"], "out_of_scope": ["…"],
-           "attempts": [{"id": "contract-commands-a1", "number": 1, "tier": "O3", "origin": "ladder", "status": "running", "outcome": null, "cause": null, "worker_session": "c1a2…", "reviewer_session": null, "verdict": null, "started_at": "…", "ended_at": null}]}],
+           "attempts": [{"id": "contract-commands-a1", "number": 1, "tier": "O3", "origin": "ladder", "status": "running", "outcome": null, "cause": null, "worker_session": "c1a2…", "started_at": "…", "ended_at": null}]}],
  "escalations": [{"id": "contract-commands-a1-q1", "attempt": "contract-commands-a1", "question": "…", "asked_at": "…"}],
  "review": {"id": "r2", "status": "approved", "fingerprint": "9f…", "current": true},
- "counts": {"draft": 0, "queued": 0, "running": 1, "in_review": 0, "merged": 1, "failed": 0, "cancelled": 0},
+ "counts": {"draft": 0, "queued": 0, "running": 1, "merged": 1, "failed": 0, "cancelled": 0},
  "tamper": [], "events_cursor": 48213}
 ```
 
@@ -387,7 +387,7 @@ Effects: exactly §3.1 "The Context's grounded Lead":
 cpd2 plan render [--plan <id>]
 ```
 
-Effects: writes `run/<plan>/plan.md` (§1.4), nothing else. Content, kept from cpd 1 §11 `plan render`: title, Context and phase; a table of every Job not `cancelled` with key, title, Tier, review Tier, status, needs and touches; a Mermaid `graph TD` of the Dependencies; one section per Job with its Spec (goal, context, touches, acceptance, out of scope). GitHub-flavoured Markdown only: tables, code and Mermaid, no footnotes, no raw HTML (t4). Output: the path, the plan fingerprint (§2.3) and the number of `draft` Jobs.
+Effects: writes `run/<plan>/plan.md` (§1.4), nothing else. Content, kept from cpd 1 §11 `plan render`: title, Context and phase; a table of every Job not `cancelled` with key, title, Tier, status, needs and touches; a Mermaid `graph TD` of the Dependencies; one section per Job with its Spec (goal, context, touches, acceptance, out of scope). GitHub-flavoured Markdown only: tables, code and Mermaid, no footnotes, no raw HTML (t4). Output: the path, the plan fingerprint (§2.3) and the number of `draft` Jobs.
 
 ```json
 {"ok": true, "path": "/home/clayton/.cpd/run/pay-4521/plan.md", "fingerprint": "9f86d081…", "draft_jobs": 6}
@@ -479,19 +479,18 @@ Jobs, Specs and Dependencies (§2.2, §3.2). Kept from cpd 1 §11 "Jobs" except 
 
 `touches` and `acceptance` have at least one non-empty string; `out_of_scope` may be empty. Change: cpd 1's `outOfScope` is now `out_of_scope`, the column's name.
 
-**Tier flags** (`--tier`, `--review-tier`): `^(O|S|H)([0-5])$` with an effort the letter's model supports (§9), else `tier_invalid` (exit 2), with `details.efforts` listing the valid ones.
+**Tier flag** (`--tier`): `^(O|S|H)([0-5])$` with an effort the letter's model supports (§9), else `tier_invalid` (exit 2), with `details.efforts` listing the valid ones.
 
 ### 5.1 `job add`
 
 ```
-cpd2 job add <key> --title <text> --tier <T> --spec <file> [--needs <k1,k2>] [--review-tier <T>] [--plan <id>]
+cpd2 job add <key> --title <text> --tier <T> --spec <file> [--needs <k1,k2>] [--plan <id>]
 ```
 
 | Flag | Meaning |
 |---|---|
 | `<key>` | Job key (§2.1). Change: positional, like every other `job` command (cpd 1 had `--key`) |
 | `--needs <k1,k2>` | Dependencies, comma-separated, no duplicates (`usage`) |
-| `--review-tier <T>` | default `default_review_tier` |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -500,10 +499,10 @@ cpd2 job add <key> --title <text> --tier <T> --spec <file> [--needs <k1,k2>] [--
 | every `needs` key is a Job of the Plan | `needs_unknown` | 3 |
 | no `needs` Job is `cancelled` or `failed` | `needs_unavailable` | 3 |
 
-Effects: **rows**, one transaction: `jobs` (`status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = queued`, `appended = 1`, fingerprint stored, in `dispatch` or `pr`); one `dependencies` row per need. **Event** `job-added` `{status, appended, tier, review_tier, needs}`. No cycle is possible: nothing needs a new Job yet.
+Effects: **rows**, one transaction: `jobs` (`status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = queued`, `appended = 1`, fingerprint stored, in `dispatch` or `pr`); one `dependencies` row per need. **Event** `job-added` `{status, appended, tier, needs}`. No cycle is possible: nothing needs a new Job yet.
 
 ```json
-{"ok": true, "job": {"key": "api-schema", "status": "draft", "appended": false, "tier": "S2", "review_tier": "S4", "needs": []}}
+{"ok": true, "job": {"key": "api-schema", "status": "draft", "appended": false, "tier": "S2", "needs": []}}
 ```
 
 Idempotent: yes, as stated.
@@ -511,7 +510,7 @@ Idempotent: yes, as stated.
 ### 5.2 `job edit`
 
 ```
-cpd2 job edit <key> [--title <text>] [--tier <T>] [--review-tier <T>] [--spec <file>] [--needs <k1,k2> | --no-needs] [--plan <id>]
+cpd2 job edit <key> [--title <text>] [--tier <T>] [--spec <file>] [--needs <k1,k2> | --no-needs] [--plan <id>]
 ```
 
 `--no-needs` removes every Dependency (cpd 1 had no way to).
@@ -543,7 +542,7 @@ cpd2 job cancel <key> --reason <text> [--plan <id>]
 
 Effects (§3.2 "Cancel"):
 - `draft`, `queued` or `failed`: one transaction, `status = cancelled`, `cancel_reason`, `cancel_requested_at`; **Event** `job-cancelled` `{reason}`.
-- `running` or `in_review`: one transaction, `cancel_reason` and `cancel_requested_at` only; **Event** `job-cancel-requested` `{reason}`. Engine E2 sets the Attempt's `stop_request = cancelled`, and the driver or E2 ends it `cancelled` at its next safe point (§3.4), which appends `job-cancelled`. No tmux action by this command.
+- `running`: one transaction, `cancel_reason` and `cancel_requested_at` only; **Event** `job-cancel-requested` `{reason}`. Engine E2 sets the Attempt's `stop_request = cancelled`, and the driver or E2 ends it `cancelled` at its next safe point (§3.4), which appends `job-cancelled`. No tmux action by this command.
 
 ```json
 {"ok": true, "job": "worker", "status": "running", "cancel_requested": true}
@@ -601,7 +600,7 @@ cpd2 job list [--status <status>] [--plan <id>]
 `--status` is one of §3.2's statuses and may repeat. Effects: none.
 
 ```json
-{"ok": true, "jobs": [{"key": "api-schema", "title": "…", "status": "merged", "tier": "S2", "review_tier": "S4", "appended": false, "needs": [], "attempts": 1, "merged_sha": "c0ffee…"}]}
+{"ok": true, "jobs": [{"key": "api-schema", "title": "…", "status": "merged", "tier": "S2", "appended": false, "needs": [], "attempts": 1, "merged_sha": "c0ffee…"}]}
 ```
 
 ### 5.7 `job show`
@@ -610,11 +609,11 @@ cpd2 job list [--status <status>] [--plan <id>]
 cpd2 job show <key> [--plan <id>]
 ```
 
-Effects: none. Output: every field of the Job (§2.2), `needs`, `needed_by`, and every Attempt with all its fields (verdict feedback, `check_tail`, `merge_tail`, `metrics`) and its Escalations (cpd 1 §11, kept).
+Effects: none. Output: every field of the Job (§2.2), `needs`, `needed_by`, and every Attempt with all its fields (`check_tail`, `metrics`) and its Escalations (cpd 1 §11, kept).
 
 ```json
-{"ok": true, "job": {"key": "worker", "status": "failed", "failed_cause": "gate_error", "tier": "S2", "…": "…"}, "needs": ["api-schema"], "needed_by": ["ui"],
- "attempts": [{"id": "worker-a1", "status": "ended", "outcome": "failed", "cause": "gate_error", "merge_tail": "…", "escalations": []}]}
+{"ok": true, "job": {"key": "worker", "status": "failed", "failed_cause": "timed_out", "tier": "S2", "…": "…"}, "needs": ["api-schema"], "needed_by": ["ui"],
+ "attempts": [{"id": "worker-a1", "status": "ended", "outcome": "failed", "cause": "timed_out", "check_tail": null, "escalations": []}]}
 ```
 
 Both are read-only.
@@ -631,18 +630,18 @@ Run by the Worker, from its worktree. Preconditions are §7.3's list, in that or
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the Attempt is `running` (already `reviewing` or later with `submitted_sha` = the worktree's HEAD: `already`) | `attempt_not_running` | 3 |
+| the Attempt is `running` (already `merging` or later with `submitted_sha` = the worktree's HEAD: `already`) | `attempt_not_running` | 3 |
 | the caller's cwd is inside the Attempt worktree, on the Attempt branch | `wrong_worktree` | 3 |
 | clean tree, untracked files included | `dirty_tree` | 3 |
 | at least one commit ahead of `base_sha` | `no_commits` | 3 |
 | the tamper check passes (§7.5); `details.paths` lists the protected paths touched | `gate_tampered` | 3 |
-| the quick check passes; `details.tail` is its last 60 lines, `details.log` the full log | `check_failed` | 3 |
+| the quick check passes (no `pre-commit` table: it passes without running, R20); `details.tail` is its last 60 lines, `details.log` the full log | `check_failed` | 3 |
 | the quick check ran (not killed, not `hook_invalid`) | `check_error` | 1 |
 
 Effects:
-- **Hooks:** `pre-commit`, else `pre-merge`, in the worktree (§7.3); output to `run/<plan>/logs/<attempt>.pre-commit.log` (or `.pre-merge.log`).
-- **Rows**, one transaction with a compare-and-swap on `status = 'running'` and on the HEAD checked: Attempt `reviewing`, `submitted_sha`, `submitted_at`, `check_tail`; Job `in_review`. **Event** `attempt-status` `{from: "running", to: "reviewing"}`.
-- The driver sees `reviewing` at A5 and starts the review (A6).
+- **Hooks:** `pre-commit` only, in the worktree (§7.3); output to `run/<plan>/logs/<attempt>.pre-commit.log`. With no `pre-commit` table nothing runs, no log is written and `check_tail` stays null; `pre-merge` never runs at submit (R20).
+- **Rows**, one transaction with a compare-and-swap on `status = 'running'` and on the HEAD checked: Attempt `merging`, `submitted_sha`, `submitted_at`, `check_tail`; the Job stays `running`. **Event** `attempt-status` `{from: "running", to: "merging"}`.
+- The driver sees `merging` at A5 and starts the merge (A8, §7.4).
 
 ```json
 {"ok": true, "attempt": "api-schema-a1", "submitted": true, "sha": "a1b2c3d…", "next": "Stop now. Do not make more changes."}
@@ -653,10 +652,10 @@ Idempotent: yes, as stated; a HEAD that moved after a successful submit is refus
 ### 6.2 `attempt read`
 
 ```
-cpd2 attempt read <attempt> [--lines <n>] [--reviewer] [--plan <id>]
+cpd2 attempt read <attempt> [--lines <n>] [--plan <id>]
 ```
 
-A readable transcript (cpd 1 §11, kept): one line per assistant text line (`assistant: …`) and one per tool call (`tool: <name>`), in session order, from the Worker's session file, or the Reviewer's with `--reviewer`. `--lines` (default 40) keeps the last n. A partial last line of a file being written is skipped.
+A readable transcript (cpd 1 §11, kept): one line per assistant text line (`assistant: …`) and one per tool call (`tool: <name>`), in session order, from the Worker's session file. `--lines` (default 40) keeps the last n. A partial last line of a file being written is skipped.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -677,17 +676,17 @@ cpd2 attempt show <attempt> [--plan <id>]
 cpd2 attempt list [--job <key>] [--active] [--plan <id>]
 ```
 
-`show` returns every field of the Attempt (§2.2), its Escalations, and the paths it uses: `spec_path`, `brief` (`run/<plan>/reviews/<attempt>.md`), `diff`, `check` (`.check.txt`), `gate` (`.gate.txt`), `log` (`run/<plan>/logs/attempt-<attempt>.log`), and the Worker's and Reviewer's session files. `list` returns `id`, `job`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `started_at`, `ended_at`; `--active` keeps those not `ended`.
+`show` returns every field of the Attempt (§2.2), its Escalations, and the paths it uses: `spec_path`, `check` (`run/<plan>/logs/<attempt>.pre-commit.log`, null when no quick check ran), `log` (`run/<plan>/logs/attempt-<attempt>.log`), and the Worker's session file. `list` returns `id`, `job`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `started_at`, `ended_at`; `--active` keeps those not `ended`.
 
 ```json
-{"ok": true, "attempts": [{"id": "api-schema-a1", "job": "api-schema", "number": 1, "tier": "S2", "origin": "ladder", "status": "ended", "outcome": "approved", "cause": "merged", "started_at": "…", "ended_at": "…"}]}
+{"ok": true, "attempts": [{"id": "api-schema-a1", "job": "api-schema", "number": 1, "tier": "S2", "origin": "ladder", "status": "ended", "outcome": "merged", "cause": "merged", "started_at": "…", "ended_at": "…"}]}
 ```
 
 `attempt show`:
 
 ```json
-{"ok": true, "attempt": {"id": "api-schema-a1", "job": "api-schema", "status": "reviewing", "tier": "S2", "…": "…"},
- "escalations": [], "paths": {"spec": "…/specs/api-schema-a1.md", "brief": "…/reviews/api-schema-a1.md", "diff": "…/reviews/api-schema-a1.diff", "check": "…/reviews/api-schema-a1.check.txt", "gate": null, "log": "…/logs/attempt-api-schema-a1.log", "worker_file": "…", "reviewer_file": null}}
+{"ok": true, "attempt": {"id": "api-schema-a1", "job": "api-schema", "status": "merging", "tier": "S2", "…": "…"},
+ "escalations": [], "paths": {"spec": "…/specs/api-schema-a1.md", "check": "…/logs/api-schema-a1.pre-commit.log", "log": "…/logs/attempt-api-schema-a1.log", "worker_file": "…"}}
 ```
 
 Both are read-only.
@@ -705,33 +704,17 @@ The Attempt driver, steps A1–A9 of §3.4, started detached by E3 or `job dispa
 | fd 3 is the driver lock file (same device and inode) | `driver_lock_missing`, printed to its log; nothing is written (§3.4 step 4) | 1 |
 | the Attempt is `starting` | `illegal_transition` | 3 |
 
-Effects: everything of §3.4 A1–A9, §7.2, §7.3, §7.4: the worktree and `pre-start`; the rendered Worker Spec (§16.1); the Worker's window `cpd-work:<plan>--<attempt>` (`new-window` with the Worker's argv of §6.5, `@cpd_session`); the Session rows (`session-registered`, `session-moved` `{place: "work"}`); the nudge (`attempt-nudge`); the review files, the Reviewer pane (`split-window`) and its Session; the verdict; the merge under the per-repo lock; the end (`metrics`, `kill-window`, worktree removal on `merged`). Each status change is one transaction with the Event of §3.4. While the Attempt is `awaiting_lead`, the driver re-reads the row every `tick_seconds` and continues when `review decide` has moved it.
+Effects: everything of §3.4 A1–A9, §7.2, §7.3, §7.4: the worktree and `pre-start`; the rendered Worker Spec (§16.1); the Worker's window `cpd-work:<plan>--<attempt>` (`new-window` with the Worker's argv of §6.5, `@cpd_session`); the Session rows (`session-registered`, `session-moved` `{place: "work"}`); the nudge (`attempt-nudge`); the merge under the per-repo lock; the end (`metrics`, `kill-window`, worktree removal on `merged`). Each status change is one transaction with the Event of §3.4.
 
-Output, printed when it exits (stdout goes to its log): `{"ok": true, "attempt": "api-schema-a1", "outcome": "approved", "cause": "merged"}`. Unexpected failures append `error` `{source: "attempt run", code, message, details}` and end the Attempt `failed` / `crashed` when it is not already ended. Idempotent: no; a second driver cannot get fd 3.
+Output, printed when it exits (stdout goes to its log): `{"ok": true, "attempt": "api-schema-a1", "outcome": "merged", "cause": "merged"}`. Unexpected failures append `error` `{source: "attempt run", code, message, details}` and end the Attempt `failed` / `crashed` when it is not already ended. Idempotent: no; a second driver cannot get fd 3.
 
 ## 7. `review`
 
+Removed by R19 (no Job-level Reviewer).
+
 ### 7.1 `review decide`
 
-```
-cpd2 review decide <attempt> (--approve | --reject) --feedback <text> [--plan <id>]
-```
-
-The Lead's override after `review-needed` (cpd 1 §11, kept).
-
-| Precondition | Code | Exit |
-|---|---|---|
-| the Attempt is `awaiting_lead` (already decided by the Lead the same way: `already`) | `not_awaiting_review` | 3 |
-
-Effects, one transaction with a compare-and-swap on `status = 'awaiting_lead'`:
-- `--approve`: `verdict = approve`, `verdict_feedback`, `verdict_by = lead`, Attempt `merging`. **Event** `attempt-status` `{from: "awaiting_lead", to: "merging"}`. The driver continues at A8.
-- `--reject`: the same verdict fields with `reject`; the Attempt `ended` `rejected` / `review_rejected` with `metrics` and `review_metrics` parsed from the session files first (the end's transaction carries them, §3.4 A9); the Job `queued` with **Event** `attempt-retry` `{outcome, cause, next_tier, feedback}`, or `failed` with **Event** `job-failed`, by the ladder (§9). The driver sees `ended` and runs the rest of A9 (closes the window, keeps the worktree).
-
-```json
-{"ok": true, "attempt": "worker-a2", "verdict": "reject", "status": "ended", "job": {"key": "worker", "status": "queued", "next_tier": "S3"}}
-```
-
-Idempotent: yes, as stated.
+Removed by R19 (no Job-level Reviewer).
 
 ## 8. `ask` and `answer`
 
@@ -795,9 +778,14 @@ cpd2 pr open [--plan <id>]
 |---|---|---|
 | the phase is `dispatch` (`pr` or `done`: `already`) | `illegal_phase` | 3 |
 | every Job `merged` or `cancelled`, at least one `merged` | `jobs_not_done` | 3 |
+| the per-repo lock within `lock_wait_seconds` | `lock_timeout` | 5 |
 | the Lead worktree is clean | `dirty_target` | 3 |
+| the Gate passes (§7.3, §7.6 `pr open` step 2); `details.tail` is its last 60 lines, `details.log` the full log | `gate_failed` | 3 |
+| the Gate ran (not killed, not `hook_invalid`); `details.tail`, `details.log` as above | `gate_error` | 1 |
 
 Effects:
+- **Lock:** the per-repo lock (§7.4), then R for orphaned merges; held until the push has finished.
+- **Hooks:** the Gate, `pre-merge` from `<lead worktree>/.config/wt.toml`, in the Lead worktree on the Lead Branch, before anything is pushed (R19); output to `run/<plan>/logs/pr.pre-merge.log`. On `gate_failed` or `gate_error` nothing is pushed, no row is written and the phase stays `dispatch`: the Lead appends fix Jobs (`job add`) and runs `pr open` again once they are Merged.
 - **git:** `git -C <lead worktree> push -u origin cpd/<plan>`.
 - **gh:** `gh pr list --head cpd/<plan> --state open --json number,url`; when a PR exists (an earlier run died before its transaction) it is adopted; else `gh pr create --base <base> --head cpd/<plan> --title <title> --body <summary>`, the summary being the Jobs table and the Merged commits (cpd 1 §11, kept).
 - **Rows**, one transaction: `pr_number`, `pr_url`, `pr_opened_at`, `phase = pr`. **Event** `plan-phase` `{from: "dispatch", to: "pr", pr: {number, url}}`.
@@ -845,14 +833,16 @@ Rebases the Lead Branch onto the base and pushes (§7.6); also how Jobs Merged i
 | the per-repo lock within `lock_wait_seconds` | `lock_timeout` | 5 |
 | the Lead worktree is clean | `dirty_target` | 3 |
 | `git merge-tree` reports no conflict; `details.files` lists them | `rebase_conflict` | 3 |
+| the Gate passes on the rebased Lead Branch (§7.3, §7.6 `pr rebase` step 4); `details.tail` is its last 60 lines, `details.log` the full log | `gate_failed` | 3 |
+| the Gate ran (not killed, not `hook_invalid`); `details.tail`, `details.log` as above | `gate_error` | 1 |
 
-Effects: under the per-repo lock, after R (§7.4): §7.6 steps 1–4 (`fetch`, `merge-tree`, `rebase`, `push --force-with-lease`). **Rows**: none; the Ledger does not record the Lead Branch's SHA, so there is no Event. On an unexpected rebase conflict: `git rebase --abort` and `rebase_conflict`.
+Effects: under the per-repo lock, after R (§7.4): §7.6 steps 1–5 (`fetch`, `merge-tree`, `rebase`, the Gate, `push --force-with-lease`). The Gate is `pre-merge` from `<lead worktree>/.config/wt.toml`, run in the Lead worktree after the rebase and before the push (R19), output to `run/<plan>/logs/pr.pre-merge.log`. On `gate_failed` or `gate_error` nothing is pushed; the rebased Lead Branch stays in the Lead worktree, and the Lead appends fix Jobs, then runs `pr rebase` again once they are Merged. **Rows**: none; the Ledger does not record the Lead Branch's SHA, so there is no Event. On an unexpected rebase conflict: `git rebase --abort` and `rebase_conflict`.
 
 ```json
 {"ok": true, "plan": "pay-4521", "rebased": true, "old": "4b825dc…", "new": "77aa01e…", "pushed": true}
 ```
 
-Idempotent: yes; a base that has not moved gives `"rebased": false` and only the push.
+Idempotent: yes; a base that has not moved gives `"rebased": false`, and only the Gate and the push run.
 
 ## 10. `session`
 
@@ -1035,7 +1025,7 @@ Idempotent: yes; a restart resumes (§6.7 step 3).
 
 `--session <id>` applies §5.3's rule, with "a Lead of Plan P" made precise (amendment 7, §19):
 - for the Session that is its Plan's `lead_session`: Events with `plan` = its Plan; Events with `plan IS NULL AND context` = its Context; Events with `session` = itself;
-- for any other Session (Workers, Reviewers, side forks, a grounded Lead): Events with `session` = itself.
+- for any other Session (Workers, side forks, a grounded Lead): Events with `session` = itself.
 
 ### 11.1 `events list`
 
@@ -1132,10 +1122,10 @@ With `--attach` it then replaces itself with `tmux -L cpd attach -t cpd` and pri
 
 ```
 cpd2 tui view <tree|plan|widgets|chat> 
-cpd2 tui view worker <attempt> --plan <id> [--reviewer]
+cpd2 tui view worker <attempt> --plan <id>
 ```
 
-The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§1.2), make no writes of their own, and change state only by running `cpd2` commands (`session open`, `plan new`, `session park`, …) as subprocesses. What they read is §17. The `worker` view renders the Attempt's Worker (or Reviewer) session file read-only (vision decision 5); `chat` is the chat slot's placeholder (§10). Refusal before drawing: an unknown view or Attempt is `usage` or `attempt_not_found`. Idempotent: they only read.
+The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§1.2), make no writes of their own, and change state only by running `cpd2` commands (`session open`, `plan new`, `session park`, …) as subprocesses. What they read is §17. The `worker` view renders the Attempt's Worker session file read-only (vision decision 5); `chat` is the chat slot's placeholder (§10). Refusal before drawing: an unknown view or Attempt is `usage` or `attempt_not_found`. Idempotent: they only read.
 
 ## 14. `doctor`, `config`, `tiers`
 
@@ -1167,7 +1157,7 @@ Checks, in order:
 | `git`, `tmux`, `pi`, `gh` | error | found on `PATH` at or above the minimum above |
 | `gh_auth` | warn | `gh auth status` exits 0 (needed only by `pr` commands; verified on 2026-10-14: logged in through `GH_TOKEN`) |
 | `pi_node` | error | pi's Node runs |
-| `tiers` | error | each `tiers.*` model is in pi's catalog, and `lead_tier` and `default_review_tier` are valid Tiers (§9) |
+| `tiers` | error | each `tiers.*` model is in pi's catalog, and `lead_tier` is a valid Tier (§9) |
 | `pi_adapter` | error | the `pi_adapter` directory has a `package.json` |
 | `lead_packages` | warn | reports, for each `lead_pi_packages` entry and the adapter, whether a Lead gets it by `-e` or from which settings file (§6.5); warns when an entry is neither declared nor resolvable |
 | `plannotator_port` | warn | when `PLANNOTATOR_REMOTE` is set, `PLANNOTATOR_PORT` is a range of at least two ports (§15.5); a single port lets only one Plan review be open on the machine |
@@ -1195,7 +1185,7 @@ Prints the effective configuration: defaults merged with `config.toml` (§8), ea
 
 ```json
 {"ok": true, "path": "/home/clayton/.cpd/config.toml",
- "config": {"version": 1, "machine": "hs", "concurrency": 3, "retry_cap": 2, "lead_tier": "O3", "default_review_tier": "S4", "review_mode": "fork", "tiers": {"O": "github-copilot/claude-opus-5.5", "S": "…", "H": "…"}, "timeouts": {"attempt_minutes": 30, "…": "…"}, "watch": {"tick_seconds": 5, "…": "…"}, "events": {"poll_ms": 200}, "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}},
+ "config": {"version": 1, "machine": "hs", "concurrency": 3, "retry_cap": 2, "lead_tier": "O3", "tiers": {"O": "github-copilot/claude-opus-5.5", "S": "…", "H": "…"}, "timeouts": {"attempt_minutes": 30, "…": "…"}, "watch": {"tick_seconds": 5, "…": "…"}, "events": {"poll_ms": 200}, "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}},
  "sources": {"version": "file", "machine": "file", "concurrency": "default", "tiers.O": "default"}}
 ```
 
@@ -1251,11 +1241,11 @@ The cursor in memory advances after each line is handled, delivered or not. Only
 
 ### 15.3 What each Event does
 
-Events arrive in id order; the follower already applied §11's `--session` rule, so a Lead receives its Plan's Events and a Worker, Reviewer or side fork only those addressed to it. Delivery is `pi.sendMessage({customType: "cpd", content: event.text, display: true, details: {...event, delivered_to: <id>}}, {triggerTurn, deliverAs: "followUp"})` (§5.3).
+Events arrive in id order; the follower already applied §11's `--session` rule, so a Lead receives its Plan's Events and a Worker or side fork only those addressed to it. Delivery is `pi.sendMessage({customType: "cpd", content: event.text, display: true, details: {...event, delivered_to: <id>}}, {triggerTurn, deliverAs: "followUp"})` (§5.3).
 
-| Kind | Plan Lead | Worker, Reviewer, side fork, grounded Lead |
+| Kind | Plan Lead | Worker, side fork, grounded Lead |
 |---|---|---|
-| `job-merged`, `job-failed`, `review-needed`, `all-merged`, `pr-feedback`, `plan-done`, `error` | message, **turn** | |
+| `job-merged`, `job-failed`, `all-merged`, `pr-feedback`, `plan-done`, `error` | message, **turn** | |
 | `attempt-retry`, `job-cancelled` | message, no turn | |
 | `escalation` | message, **turn**; opens the blocking reason `escalation:<id>` labelled `cpd: Worker question` | |
 | `escalation-answered`, `escalation-expired` | closes `escalation:<id>`; no message | |
@@ -1310,7 +1300,7 @@ If plannotator does not answer, answers `unavailable` or `error` (for example `P
 
 Rejected alternatives: one shared review server (cpd would have to run plannotator's server outside pi, which plannotator does not offer to extensions), and a queue (a review waiting for another Plan's User decision could wait for hours). Unverified: that two plannotator servers in one range do not disturb each other's sessions; the adapter Job tests it.
 
-## 16. The Worker and Reviewer contract
+## 16. The Worker contract
 
 ### 16.1 The Worker Spec
 
@@ -1320,9 +1310,9 @@ Rendered by the driver at A3 to `run/<plan>/specs/<attempt>.md` from a template 
 |---|---|
 | Title | `# Worker Spec: <job>, Attempt <n>` |
 | Who you are | Attempt `<n>` of Job `<job>` (`<title>`) in Plan `<plan>` (was "Workflow"); attempt id, Tier, worktree path |
-| Rules | work only in this worktree and touch only the listed files; commit your work; before submitting, run the quick check yourself: the commands of `pre-commit` (else `pre-merge`) from the worktree's `.config/wt.toml`, listed verbatim (change: cpd 1 said `./verify.sh`); never edit the protected paths, listed: `.config/wt.toml`, `.config/cpd.toml`, `.cpd/`, and each entry of the repo's protected list (§7.5; change: cpd 1 hard-coded `verify.sh`); never ask the User anything; if continuing would require guessing, `cpd2 ask <attempt> "<question>"`, which blocks until the Lead answers (change: no `--wf`, the pane has `CPD_PLAN`); one blocker at a time; do not stop until you have submitted |
+| Rules | work only in this worktree and touch only the listed files; commit your work; before submitting, run the quick check yourself: the commands of `pre-commit` from the worktree's `.config/wt.toml`, listed verbatim, or, when the file has no `pre-commit` table, the line `This repo defines no quick check.` (change: cpd 1 said `./verify.sh`; R20: no fallback to `pre-merge`); never edit the protected paths, listed: `.config/wt.toml`, `.config/cpd.toml`, `.cpd/`, and each entry of the repo's protected list (§7.5; change: cpd 1 hard-coded `verify.sh`); never ask the User anything; if continuing would require guessing, `cpd2 ask <attempt> "<question>"`, which blocks until the Lead answers (change: no `--wf`, the pane has `CPD_PLAN`); one blocker at a time; do not stop until you have submitted |
 | Job | Goal, Context, Files you may touch (`touches`), Acceptance, Out of scope (or "Nothing is listed. Still do only what the Goal and Acceptance require.") |
-| Previous Attempts | only when the Job has ended Attempts: for each, number, Tier, outcome and cause, and what explains it: the verdict feedback (`review_rejected`), the conflicting files (`merge_conflict`), the last 60 lines of the Gate (`gate_failed`), or one sentence for `crashed` and `no_submit` (change: cpd 1 showed only feedback) |
+| Previous Attempts | only when the Job has ended Attempts: for each, number, Tier, outcome and cause, and what explains it: the conflicting files (`merge_conflict`), or one sentence for every other cause (change: cpd 1 showed only feedback) |
 | Answers already given | new: every `answered` Escalation of earlier Attempts, question and answer, so a Worker does not ask again |
 | Finish | `cpd2 attempt submit <attempt>`; on success stop at once; on a refusal, what each code means: `wrong_worktree` (run it from the worktree), `dirty_tree`, `no_commits`, `gate_tampered` (revert the protected paths), `check_failed` (fix, commit, submit again; the tail is in `details`), `check_error` (the check could not run: ask the Lead), `attempt_not_running` (the Attempt was stopped: stop) |
 
@@ -1334,32 +1324,11 @@ The Worker is started as §6.5 says, with the first message `Read <spec path> an
 
 ### 16.2 The review files and the brief
 
-At A6 the driver writes, in `run/<plan>/reviews/`:
-- `<attempt>.diff`: `git -C <worktree> diff --no-renames cpd/<plan>...<submitted_sha>` (cpd 1 §12 step 9, kept);
-- `<attempt>.check.txt`: the quick check's full output at submit (replaces cpd 1's `.gate.txt`, which now holds the Gate at merge);
-- `<attempt>.md`: the brief, from a template compiled into the binary, kept from cpd 1 `templates/reviewer.md`:
-
-| Section | Content |
-|---|---|
-| Who you are | the Reviewer of Attempt `<n>` of Job `<job>` (`<title>`) in Plan `<plan>`; read-only; judges one thing: does this Attempt meet its Spec |
-| Inputs | read all four: the Worker Spec (`spec_path`), the diff, the quick check output, the worktree (to read whole files) |
-| Plan context | only when `review_mode = "fresh"`: read `run/<plan>/plan.md` (rendered at A6) for the surroundings, but judge against the Spec |
-| Rubric | approve only if every acceptance item is met, nothing outside the Spec changed, every touched file fits `touches`, and there are no obvious defects or missing tests the acceptance implies; otherwise reject, saying exactly what to fix |
-| Verdict | the block below, last in the final message |
-
-The Reviewer is started as §6.5 says (split from the Worker's pane, `--tools read,grep,find,ls`, `--fork <Lead session file>` when `review_mode = "fork"`), with the first message `Read <brief path> and follow it exactly. Your attempt id is <attempt>.`.
+Removed by R19 (no Job-level Reviewer).
 
 ### 16.3 The verdict
 
-The Reviewer's final assistant message ends with exactly one fenced `json` block, with nothing but whitespace after it:
-
-```json
-{"verdict": "approve", "feedback": "Every acceptance item holds: …"}
-```
-
-- `verdict` is `"approve"` or `"reject"`; `feedback` is a non-empty string (what was verified, or what must change); no other keys.
-- Read from the **last assistant message** of the Reviewer's session file, once the Reviewer is idle as A5 defines idle (state plus the file's last `stopReason`, §3.4).
-- Missing or invalid: one `attempt-nudge` to the Reviewer's Session with `data.prompt` = `Your last message has no valid verdict. End your final message with exactly one fenced json block {"verdict": "approve" or "reject", "feedback": "<what you verified, or what must change>"} and nothing after it.` (cpd 1 §12 step 9, kept). Still invalid, or the Reviewer's pane died: `awaiting_lead` with `review-needed` `{reason: "no_valid_verdict" | "reviewer_crashed"}`, and the Lead decides with `review decide` (§7.1).
+Removed by R19 (no Job-level Reviewer).
 
 ## 17. What the TUI reads
 
@@ -1372,7 +1341,7 @@ Outline §8 and D4: the views take one **snapshot** with a read command, then **
 | `tree` (Context column) | `cpd2 context list`, `cpd2 session list` | `context-created`, `context-grounded`, `plan-created`, `plan-phase`, `plan-done`, `session-registered`, `session-state`, `session-moved`, `session-renamed` | Contexts, their Plans and Lead Sessions, each with its state, label and name |
 | `plan` (centre top) | `cpd2 plan show --plan <p>` for the Plan of the Lead in the chat slot | every Event with `plan = p`; `session-moved` with `place: "chat"` (the slot changed: switch Plan and take a new snapshot) | the flowchart of Jobs, Attempts and Tiers, open Escalations, the latest Plan review |
 | `widgets` (Dispatch column) | `cpd2 plan list` | `plan-phase`, `pr-feedback`, `plan-done`, `watch-started`, `watch-stopped`, `error` | PRs and their feedback, the engine's state |
-| `worker` (beside the chat) | `cpd2 attempt show <attempt>` for the session file | `session-state` for its Session; `attempt-status` for its Attempt | the session file itself, read-only (vision decision 5), and the state |
+| `worker` (beside the chat) | `cpd2 attempt show <attempt>` for the Worker's session file | `session-state` for its Session; `attempt-status` for its Attempt | the session file itself, read-only (vision decision 5), and the state |
 | `chat` (placeholder) | none | none | the static text `No Lead here: pick a Plan in the session tree` |
 
 **Rates.**
@@ -1399,7 +1368,9 @@ Change from the spike and cpd 1's cockpit: the tree no longer discovers Sessions
 | `plan render --out` | `plan render` (one path) | one source of truth |
 | `job add --key <k>` | `job add <k>` | like every other `job` command |
 | Spec field `outOfScope` | `out_of_scope` | the column's name |
-| `attempt submit` runs the Gate (`wt hook pre-merge`, exit 64) | runs the quick check; refusals `check_failed`, `check_error` | §7.3 |
+| `attempt submit` runs the Gate (`wt hook pre-merge`, exit 64) | runs the quick check, `pre-commit` only (none when the repo has no `pre-commit`); refusals `check_failed`, `check_error` | §7.3, R20 |
+| the Gate runs at every merge, on the rebased Attempt and again on the Lead | the Gate runs only at `pr open` and `pr rebase`, before the push; refusals `gate_failed`, `gate_error` | §7.4, §7.6, R19 |
+| a Reviewer per Attempt; `review decide`; Job status `in_review`; Attempt statuses `reviewing`, `awaiting_lead`; outcome `approved` | removed: a submitted Attempt goes straight to `merging`; the Job stays `running`; outcome `merged`; the review is the PR's own, on GitHub | §3.2, §3.4, R19 |
 | `watch --wf` per Workflow | `watch`, `watch --ensure`, one per machine | D5 |
 | Lead queue files, `herdr:blocked` emitted to herdr | Events; `session state` | D4 |
 | — | new: `context …`, `session list/show/fork/open/park/state/run`, `events list/follow`, `tui`, `config` | the model and the tmux host |
@@ -1423,4 +1394,33 @@ This file specifies the following, which contract.md does not state or states ot
 | 8 | §6.5, environment | Lead panes also get `PLANNOTATOR_PORT` and `PLANNOTATOR_REMOTE` from cpd's environment, when set (several Plan reviews at once) | §15.5 |
 | 9 | §6.3, tmux commands | `respawn-pane`, for a dead pane of the cockpit's layout | §13.1 |
 | 10 | §1.2, output | `session run`, `tui view` and `tui --attach` own their terminal instead of printing one JSON value (the outline's "builds and attaches the cockpit") | §1.2 |
-| 11 | §1.2 table of codes | the error codes this file introduces: `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `context_exists`, `context_store_invalid`, `question_answered`, `not_a_git_repo`, `base_not_found`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `watch_start_failed`, `spec_invalid`, `tier_invalid`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `nothing_to_edit`, `job_merged`, `job_not_failed`, `job_not_ready`, `spawn_failed`, `attempt_not_running`, `session_malformed`, `not_awaiting_review`, `driver_lock_missing`, `jobs_not_done`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `cursor_ahead`, `not_a_terminal`, `doctor_failed`, `pi_not_found`, `catalog_failed`, `file_unreadable`, `invalid_name`; most are cpd 1's (cpd 1 §11 and its `src/`) | §1.3 and each command |
+| 11 | §1.2 table of codes | the error codes this file introduces: `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `context_exists`, `context_store_invalid`, `question_answered`, `not_a_git_repo`, `base_not_found`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `watch_start_failed`, `spec_invalid`, `tier_invalid`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `nothing_to_edit`, `job_merged`, `job_not_failed`, `job_not_ready`, `spawn_failed`, `attempt_not_running`, `session_malformed`, `driver_lock_missing`, `jobs_not_done`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `cursor_ahead`, `not_a_terminal`, `doctor_failed`, `pi_not_found`, `catalog_failed`, `file_unreadable`, `invalid_name`; most are cpd 1's (cpd 1 §11 and its `src/`) | §1.3 and each command |
+
+## 20. Sections changed by R19 and R20
+
+Job `contract-gate-pr` applied the User's decisions R19 (no Job-level Gate or Reviewer: the Gate runs only at `pr open` and `pr rebase`; the review is the PR's own, on GitHub) and R20 (at submit, preconditions 1–4 of §7.3 plus the quick check, `pre-commit` only, with no fallback to `pre-merge`). No section number changed; sections that emptied keep their heading. The Jobs that implement these sections read this list.
+
+**Renames and removals**, everywhere they appeared:
+
+| Was | Now |
+|---|---|
+| Job status `in_review` | removed: a Job stays `running` until `merged`, `queued` again, `failed` or `cancelled` |
+| Attempt statuses `reviewing`, `awaiting_lead` | removed: `attempt submit` moves an Attempt from `running` to `merging` |
+| Attempt outcome `approved` | renamed `merged` (outcome `merged`, cause `merged`) |
+| Attempt outcome `rejected`, cause `review_rejected` | removed |
+| Attempt causes `gate_failed`, `gate_error` | removed from the merge; `gate_failed` (exit 3) and `gate_error` (exit 1) are now refusals of `pr open` and `pr rebase` |
+| driver steps A6, A7 | removed; A8 and A9 keep their numbers |
+| §7.4 step 6 (the Gate at merge) | removed; steps 7–10 keep their numbers |
+| §7.6 `pr rebase` steps 1–4 | steps 1–5: the Gate is the new step 4, the push is step 5 |
+| columns `jobs.review_tier`, `attempts.reviewer_session`, `verdict`, `verdict_feedback`, `verdict_by`, `merge_tail`, `review_metrics`; Session role `reviewer` | removed |
+| Event kind `review-needed`; `attempt-nudge` for a Reviewer | removed |
+| config keys `default_review_tier`, `review_mode` | removed |
+| flags `--review-tier` (`job add`, `job edit`), `--reviewer` (`attempt read`, `tui view worker`); command `review decide`; error code `not_awaiting_review` | removed |
+| files `run/<plan>/reviews/` (brief, `.diff`, `.check.txt`, `.gate.txt`) | removed; new `run/<plan>/logs/pr.pre-merge.log` |
+| quick check falls back to `pre-merge` | no fallback: no `pre-commit` table means no quick check, and it passes |
+
+**contract.md:** the status and sources lines; §1.1, §1.2, §1.4, §2.2 (Job, Attempt, Session), §2.3, §2.4, §3.2, §3.4, §3.6, §3.7 (E4), §4.4, §5.1, §5.2, §5.3, §6.2, §6.3, §6.4, §6.5, §7.3, §7.4, §7.6, §8.2, §9, §10 (R13, R17 superseded for cpd 2, R19, R20).
+
+**commands.md:** the introduction and contents; §1.5, §2, §4.2, §4.3, §4.5, §5 (the Tier flag), §5.1, §5.2, §5.3, §5.6, §5.7, §6.1, §6.2, §6.3, §6.4, §7 and §7.1 (emptied), §9.1, §9.3, §11, §13.2, §14.1, §14.2, §15.3, §16 (now "The Worker contract"), §16.1, §16.2 and §16.3 (emptied), §17, §18, §19 (amendment 11), §20 (new).
+
+**CONTEXT.md:** Dispatch, Ledger, Session, Reviewer (removed), Gate, Quick check, Merged.

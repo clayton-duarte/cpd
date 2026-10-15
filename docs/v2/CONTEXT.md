@@ -15,7 +15,7 @@ The phase where the Lead turns Requirements into a draft graph of Jobs and the U
 _Avoid_: breakdown, decomposition
 
 **Dispatch**:
-The phase that starts when the Plan is locked, in which Jobs are executed, reviewed and merged, ending when the Pull Request is opened.
+The phase that starts when the Plan is locked, in which Jobs are executed and merged, ending when the Pull Request is opened, after the Gate passes.
 _Avoid_: execution, run phase
 
 **PR** (phase):
@@ -61,7 +61,7 @@ One execution of a Job by one fresh Worker session; a Job has one or more Attemp
 _Avoid_: retry, run
 
 **Ledger** (changed):
-The durable, append-only record of every Plan's Jobs, Dependencies, Attempts, reviews, Escalations, Sessions and Events, with the before and after of every write. In cpd 2 it is one SQLite database per machine, written only by `cpd2`.
+The durable, append-only record of every Plan's Jobs, Dependencies, Attempts, Plan reviews, Escalations, Sessions and Events, with the before and after of every write. In cpd 2 it is one SQLite database per machine, written only by `cpd2`.
 _Avoid_: database, board, tracker
 
 **Locked**:
@@ -71,7 +71,7 @@ _Avoid_: frozen, final
 ## Runtime
 
 **Session** (new):
-A pi session cpd knows about, with a role (Lead, Worker or Reviewer), a Context, usually a Plan, a tmux pane, and an agent state: working, blocked, idle or stopped.
+A pi session cpd knows about, with a role (Lead or Worker), a Context, usually a Plan, a tmux pane, and an agent state: working, blocked, idle or stopped.
 _Avoid_: agent, pane, chat
 
 **Event** (new: replaces the Lead queue):
@@ -100,9 +100,7 @@ _Avoid_: coordinator, orchestrator, manager
 An agent session that executes one Attempt of one Job in its own worktree.
 _Avoid_: subagent, executor, thread
 
-**Reviewer**:
-A read-only agent session, forked from the Lead, that judges one submitted Attempt against its Spec.
-_Avoid_: checker, verifier
+**Reviewer** (removed): Removed by R19 (no Job-level Reviewer). The review is the Pull Request's own, on GitHub.
 
 **Escalation**:
 A question raised by an agent to its parent in the delegation tree (Worker → Lead → User) when continuing would require guessing.
@@ -110,20 +108,20 @@ _Avoid_: blocker, ask
 
 ## Outcomes
 
-**Gate**:
-The repository's mechanical checks (tests, typecheck, lint), defined by the repo as its `pre-merge` hook in `.config/wt.toml` and run by cpd once per merge, on the rebased tree.
+**Gate** (changed):
+The repository's mechanical checks (tests, typecheck, lint), defined by the repo as its `pre-merge` hook in `.config/wt.toml` and run by cpd only at the Plan level: on the Lead Branch, in the Lead worktree, before `pr open` and `pr rebase` push. Never per Job or per merge (R19).
 _Avoid_: CI, checks
 
 **Quick check** (new):
-The repository's `pre-commit` hook, run by cpd when a Worker submits; when the repo defines none, the Gate runs instead.
+The repository's `pre-commit` hook, run by cpd when a Worker submits; when the repo defines none, there is no quick check and nothing runs instead (R20).
 _Avoid_: pre-flight, lint step
 
 **Lead Branch**:
 The branch that accumulates Merged Jobs and becomes the Pull Request.
 _Avoid_: feature branch, integration branch
 
-**Merged**:
-The terminal success state of a Job: an Attempt passed the quick check, was approved by a Reviewer, passed the Gate on the rebased tree, and the Lead Branch was fast-forwarded to it.
+**Merged** (changed):
+The terminal success state of a Job, and the outcome of its successful Attempt: the Attempt passed the quick check and the tamper check, rebased cleanly onto the Lead Branch, and the Lead Branch was fast-forwarded to it.
 _Avoid_: done, completed
 
 **Tier**:
