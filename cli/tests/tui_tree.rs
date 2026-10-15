@@ -16,10 +16,14 @@ use cpd2::store::Store;
 
 // ---------- the prepared store ----------
 
-/// An env with the config `cpd2` needs.
+/// An env with the config `cpd2` needs; its tmux server is the env's private one.
 fn env() -> TestEnv {
     let env = TestEnv::new();
-    std::fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n").unwrap();
+    let config = format!(
+        "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[tmux]\nsocket = \"{}\"\n",
+        env.tmux_socket()
+    );
+    std::fs::write(env.cpd_home().join("config.toml"), config).unwrap();
     env
 }
 
@@ -255,16 +259,16 @@ fn the_tree_of_a_prepared_store() {
         screen,
         [
             "● alpha".to_owned(),
-            row("⏵ ├ ● ship lead working", "1⋅1⋅0⋅1⋅2"),
+            row("⏵ ├ ○ ship lead", "1⋅1⋅0⋅1⋅2"),
             "  │ ├ ○ ship fork".to_owned(),
-            "  │ └ ● ship review cpd: Worker question".to_owned(),
+            "  │ └ ● ship review".to_owned(),
             row("  └ ○ sketch", "2⋅0⋅0⋅0⋅0"),
             "● beta".to_owned(),
-            row("  ├ ● rel lead cpd: PR feedback", "0⋅0⋅0⋅0⋅1"),
-            row("  └ ○ old lead stopped", "0⋅0⋅0⋅0⋅0"),
+            row("  ├ ● rel lead", "0⋅0⋅0⋅0⋅1"),
+            row("  └ ○ old lead", "0⋅0⋅0⋅0⋅0"),
             "○ gamma".to_owned(),
         ],
-        "the grounded Lead g-alpha is no row; the Jobs: queued, running, merging, failed, merged"
+        "the grounded Lead g-alpha is no row; the Jobs: queued, running, merging, failed, merged; no state text"
     );
 }
 
@@ -293,149 +297,137 @@ fn enter_opens_the_lead_of_a_plan_and_a_fork_with_session_open() {
     fake_cpd2(&env, r#"{"ok":true,"session":"x","pane":"%1","displaced":null}"#);
     let pane = Pane::start(&env, 46, 14);
     pane.ready();
-    pane.down(3); // the cursor appears on alpha, then ship, then f-idle
+    pane.down(2); // the cursor appears on ship (Context rows are not selectable), then f-idle
     pane.keys(&["Enter"]);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "f-idle"])]);
-    pane.wait("the note", |_| pane.footer_has("opened"));
     pane.keys(&["k", "Enter"]);
     assert_eq!(wait_for_calls(&env, 2)[1], words(&["session", "open", "l-ship"]));
 }
 
 #[test]
-fn enter_before_any_arrow_key_does_nothing() {
+fn enter_n_and_x_before_any_arrow_key_do_nothing() {
     let env = env();
     populate(&env);
     fake_cpd2(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 46, 14);
     pane.ready();
-    pane.keys(&["Enter", "p", "n"]);
+    pane.keys(&["Enter", "x", "n"]);
     std::thread::sleep(Duration::from_millis(500));
     assert!(calls(&env).is_empty());
-    assert!(!pane.footer_has("New Plan"));
+    assert!(!pane.footer_has("Fork") && !pane.footer_has("Close"));
 }
 
 #[test]
-fn p_parks_the_session_with_session_park() {
+fn no_key_but_the_references_does_anything() {
     let env = env();
     populate(&env);
-    fake_cpd2(&env, r#"{"ok":true,"session":"l-ship","pane":"%1","window":"@3"}"#);
+    fake_cpd2(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 46, 14);
-    pane.ready();
-    pane.down(2);
-    pane.keys(&["p"]);
-    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "park", "l-ship"])]);
-    pane.wait("the note", |_| pane.footer_has("parked"));
+    let before = pane.ready();
+    pane.down(4); // on sketch
+    pane.keys(&["q", "f", "r", "p", "Space", "G", "Escape"]);
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!pane.dead(), "q does not end the view");
+    assert!(calls(&env).is_empty());
+    assert_eq!(pane.screen(), before, "no prompt, no note, nothing folded");
 }
 
 #[test]
-fn f_forks_the_lead_with_session_fork() {
-    let env = env();
-    populate(&env);
-    fake_cpd2(&env, r#"{"ok":true,"session":{"id":"a41b","name":"my fork","plan":"ship"}}"#);
-    let pane = Pane::start(&env, 46, 14);
-    pane.ready();
-    pane.down(2);
-    pane.keys(&["f"]);
-    pane.wait("the prompt", |_| pane.footer_has("Fork ship lead, name:"));
-    pane.type_text("my fork");
-    pane.keys(&["Enter"]);
-    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "fork", "l-ship", "--name=my fork"])]);
-    pane.wait("the note", |_| pane.footer_has("forked as my fork"));
-    // an empty name keeps the command's default
-    pane.keys(&["f", "Enter"]);
-    assert_eq!(wait_for_calls(&env, 2)[1], words(&["session", "fork", "l-ship"]));
-}
-
-#[test]
-fn r_renames_the_session_with_session_rename() {
-    let env = env();
-    populate(&env);
-    fake_cpd2(&env, r#"{"ok":true,"session":"l-sketch","name":"x"}"#);
-    let pane = Pane::start(&env, 46, 14);
-    pane.ready();
-    pane.down(5); // alpha, ship, f-idle, f-blocked, sketch
-    pane.keys(&["r"]);
-    pane.wait("the prompt", |_| pane.footer_has("Rename sketch to: sketch"));
-    pane.keys(&["BSpace", "BSpace", "BSpace", "BSpace", "BSpace", "BSpace"]);
-    pane.type_text("draft");
-    pane.keys(&["Enter"]);
-    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "rename", "--session", "l-sketch", "--", "draft"])]);
-}
-
-#[test]
-fn n_starts_a_plan_with_plan_new() {
+fn n_starts_a_plan_named_in_the_prompt_with_plan_new() {
     let env = env();
     populate(&env);
     fake_cpd2(&env, r#"{"ok":true,"plan":{"id":"pay-4521"}}"#);
-    let pane = Pane::start(&env, 60, 14);
+    let pane = Pane::start(&env, 80, 14);
     pane.ready();
-    pane.down(5); // alpha, ship, f-idle, f-blocked, sketch
+    pane.down(4); // ship, f-idle, f-blocked, sketch
     pane.keys(&["n"]);
-    pane.wait("the id prompt", |_| pane.footer_has("New Plan in alpha, id:"));
+    pane.wait("the prompt", |_| pane.footer_has("Fork sketch into a new Plan, name: █ (Enter starts, Esc cancels)"));
+    pane.keys(&["Enter"]);
+    pane.wait("the refusal", |_| pane.footer_has("A name is required. Fork sketch into a new Plan, name:"));
     pane.type_text("pay-4521");
     pane.keys(&["Enter"]);
-    pane.wait("the title prompt", |_| pane.footer_has("title:"));
-    pane.type_text("Retry failed payouts");
-    pane.keys(&["Enter"]);
-    // the repo of the Context's newest Plan
+    // the Context and the repo of the cursor's Session's Plan; the name is the id and the title
     assert_eq!(
         wait_for_calls(&env, 1),
-        [words(&["plan", "new", "pay-4521", "--context=alpha", "--repo=/repo/sketch", "--title=Retry failed payouts"])]
+        [words(&["plan", "new", "pay-4521", "--context=alpha", "--repo=/repo/sketch", "--title=pay-4521"])]
     );
-    pane.wait("the note", |_| pane.footer_has("Plan pay-4521 started"));
+    pane.wait("the note", |_| pane.footer_has("forking pay-4521 in window park-pay-4521"));
 }
 
 #[test]
-fn n_in_a_context_without_plans_asks_for_the_repo() {
+fn x_closes_a_session_after_y_with_session_close() {
+    let env = env();
+    populate(&env);
+    fake_cpd2(&env, r#"{"ok":true,"session":"l-sketch","pane":"%4"}"#);
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    pane.down(4); // sketch
+    pane.keys(&["x"]);
+    pane.wait("the prompt", |_| pane.footer_has("Close sketch? pi stops; the session file stays (y/N)"));
+    pane.keys(&["n"]);
+    pane.wait("the prompt gone", |_| !pane.footer_has("Close sketch?"));
+    pane.keys(&["x"]);
+    pane.wait("the prompt again", |_| pane.footer_has("Close sketch?"));
+    pane.keys(&["y"]);
+    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "close", "l-sketch"])]);
+    pane.wait("the note", |_| pane.footer_has("closed"));
+}
+
+#[test]
+fn x_refuses_the_session_in_the_chat_slot() {
     let env = env();
     populate(&env);
     fake_cpd2(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
-    pane.keys(&["G"]); // no such key: nothing
-    pane.down(9); // down to gamma, the last row
-    pane.keys(&["n"]);
-    pane.type_text("first");
-    pane.keys(&["Enter"]);
-    pane.type_text("The first");
-    pane.keys(&["Enter"]);
-    pane.wait("the repo prompt", |_| pane.footer_has("New Plan in gamma, repo:"));
-    pane.type_text("/work/repo");
-    pane.keys(&["Enter"]);
-    assert_eq!(
-        wait_for_calls(&env, 1),
-        [words(&["plan", "new", "first", "--context=gamma", "--repo=/work/repo", "--title=The first"])]
-    );
+    pane.down(1); // ship, whose Lead is in the chat slot
+    pane.keys(&["x"]);
+    pane.wait("the refusal", |_| pane.footer_has("switch to another session first"));
+    assert!(calls(&env).is_empty());
 }
 
 #[test]
-fn a_refused_command_shows_its_error() {
+fn x_refuses_a_session_that_moved_to_the_chat_slot_while_the_prompt_was_open() {
+    let env = env();
+    populate(&env);
+    env.fake("cpd2", r#"echo '{"ok":false,"error":{"code":"in_chat_slot","message":"In the chat slot.","details":{}}}'; exit 3"#);
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    pane.down(4); // sketch
+    pane.keys(&["x"]);
+    pane.wait("the prompt", |_| pane.footer_has("Close sketch?"));
+    pane.keys(&["y"]);
+    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "close", "l-sketch"])]);
+    pane.wait("the refusal", |_| pane.footer_has("switch to another session first"));
+}
+
+#[test]
+fn question_mark_opens_the_legend_popup() {
+    let env = env();
+    populate(&env);
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    // `?` needs no cursor; with no client attached to the private server, the popup has nowhere to open
+    pane.keys(&["?"]);
+    pane.wait("the failure", |_| pane.footer_has("No tmux client is attached to the cockpit."));
+}
+
+#[test]
+fn a_refused_command_shows_its_error_until_the_next_n_x_or_click() {
     let env = env();
     populate(&env);
     env.fake("cpd2", r#"echo '{"ok":false,"error":{"code":"no_cockpit","message":"No cockpit.","details":{}}}'; exit 3"#);
     let pane = Pane::start(&env, 46, 14);
     pane.ready();
-    pane.down(2);
+    pane.down(1);
     pane.keys(&["Enter"]);
     pane.wait("the error", |_| pane.footer_has("no_cockpit: No cockpit."));
     assert_eq!(calls(&env), [words(&["session", "open", "l-ship"])]);
-    pane.keys(&["j"]); // any key clears it
+    pane.keys(&["j"]);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(pane.footer_has("no_cockpit"), "an arrow keeps it");
+    pane.keys(&["n", "Escape"]);
     pane.wait("the note gone", |_| !pane.footer_has("no_cockpit"));
-}
-
-#[test]
-fn q_ends_the_view() {
-    let env = env();
-    populate(&env);
-    let pane = Pane::start(&env, 46, 14);
-    pane.ready();
-    assert!(!pane.dead());
-    pane.keys(&["q"]);
-    let start = Instant::now();
-    while !pane.dead() {
-        assert!(start.elapsed() < Duration::from_secs(10), "the view did not end");
-        std::thread::sleep(Duration::from_millis(50));
-    }
 }
 
 #[test]
@@ -450,6 +442,6 @@ fn the_tree_follows_the_events_of_the_store() {
     pane.wait("the new name", |s| s.iter().any(|r| r.contains("└ ○ sketch renamed")));
     // session-state
     env.cpd2(&["session", "state", "blocked", "--label", "cpd: Ask", "--session", "l-sketch"]).ok();
-    let screen = pane.wait("the new state", |s| s.iter().any(|r| r.contains("└ ● sketch renamed cpd: Ask")));
+    let screen = pane.wait("the new state", |s| s.iter().any(|r| r.contains("└ ● sketch renamed")));
     assert!(screen.iter().any(|r| r.starts_with("● alpha")));
 }
