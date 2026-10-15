@@ -6,7 +6,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders};
 
-use super::palette::{self, Meaning};
+use crate::tui::palette::{self, Meaning};
 
 /// The rows a separator takes.
 pub const HEIGHT: u16 = 1;

@@ -26,10 +26,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use tui_tree_widget::{Tree as TreeWidget, TreeItem, TreeState};
 
-use super::palette::{self, Meaning};
+use crate::tui::palette::{self, Meaning};
 use crate::plan::Phase;
 use crate::session::State;
-use crate::tui::read::{ContextNode, PlanNode, SessionNode, Tree};
+use crate::tui::read::{ContextNode, JobStatus, PlanNode, SessionNode, Tree};
 
 /// Tree identifiers: a Context's id, a Plan's id, a Session's id.
 pub type Id = String;
@@ -111,9 +111,23 @@ pub fn counters(plan: &PlanNode) -> Line<'static> {
         if i > 0 {
             spans.push(palette::separator());
         }
-        spans.push(Span::styled(n.to_string(), palette::count_style(i, phase, n)));
+        spans.push(Span::styled(n.to_string(), counter_style(i, phase, n)));
     }
     Line::from(spans)
+}
+
+/// Style of the `index`th counter of `JobCounts::counters`: its status colour, or nothing when the count is zero. The
+/// first counter is the queued Jobs, in phase `plan` the drafts.
+fn counter_style(index: usize, phase: Phase, n: usize) -> Style {
+    let (status, merging) = match index {
+        0 if phase == Phase::Plan => (JobStatus::Draft, false),
+        0 => (JobStatus::Queued, false),
+        1 => (JobStatus::Running, false),
+        2 => (JobStatus::Running, true),
+        3 => (JobStatus::Failed, false),
+        _ => (JobStatus::Merged, false),
+    };
+    palette::count_style(status, merging, n)
 }
 
 /// `text` cut to `width` columns with a final `…`. Counted in chars (names are plain text).
@@ -361,7 +375,7 @@ mod tests {
     use ratatui::style::Color;
 
     use super::super::fixture::{context, plan, sample, session, tree};
-    use super::super::palette::color;
+    use crate::tui::palette::color;
     use super::*;
     use crate::tui::read::Place;
 

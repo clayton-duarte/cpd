@@ -12,7 +12,6 @@
 
 mod actions;
 mod flow;
-mod palette;
 mod pr;
 mod tabs;
 mod workers;
@@ -29,6 +28,7 @@ use ratatui::widgets::Paragraph;
 
 use self::actions::Actions;
 use self::flow::{Chart, Dir, Selection};
+use crate::tui::palette;
 use self::workers::Workers;
 use super::read::{self, ChatSlot, Flow, ReviewStatus};
 use super::{not_a_terminal, on_a_terminal};

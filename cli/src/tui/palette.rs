@@ -1,8 +1,8 @@
 //! The palette: the one place with colours and status icons, ported from the
 //! spike's `palette.rs` (branch `cpd/cpd-ui`) on cpd 2's typed statuses. Every
 //! view takes them from here, so changing one meaning (or one icon) changes it
-//! in the Dispatch column and the legend alike. `no_colour_outside_the_palette`
-//! fails when another file of the widgets view names a colour.
+//! in the tree, the Plan chart, the Dispatch column and the legend alike.
+//! `no_colour_outside_the_palette` fails when another file under `tui/` names a colour.
 //!
 //! Changes from the spike: statuses are the read model's enums, not strings, so
 //! there is no "unknown" icon; cpd 2 has no `in_review` Job status, and `merging`
@@ -83,6 +83,11 @@ pub fn color(m: Meaning) -> Color {
 /// Foreground in the colour of a meaning.
 pub fn fg(m: Meaning) -> Style {
     Style::new().fg(color(m))
+}
+
+/// Notes and prompts at the foot of a view.
+pub fn note() -> Style {
+    Style::new().fg(Color::Yellow)
 }
 
 /// A Plan pill: black on the colour of a meaning.
@@ -289,28 +294,35 @@ mod tests {
         assert_eq!(pill(Meaning::Review), Style::new().fg(Color::Black).bg(Color::Yellow));
     }
 
-    /// The widgets view names no colour but through this file.
+    /// No other file of the cockpit's views names a colour.
     #[test]
     fn no_colour_outside_the_palette() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tui/widgets");
-        let shorthand = [
-            ".black()", ".red()", ".green()", ".yellow()", ".blue()", ".magenta()", ".cyan()", ".gray()", ".dark_gray()",
-            ".white()", ".on_",
-        ];
-        let mut offenders = Vec::new();
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().is_none_or(|e| e != "rs") {
-                continue;
-            }
-            let text = std::fs::read_to_string(&path).unwrap();
-            // The test modules assert on colours through the palette's `color`, never name one.
-            for (n, line) in text.lines().enumerate() {
-                if line.contains("Color::") || shorthand.iter().any(|s| line.contains(s)) {
-                    offenders.push(format!("{}:{}: {}", path.file_name().unwrap().to_string_lossy(), n + 1, line.trim()));
+        fn walk(dir: &std::path::Path, offenders: &mut Vec<String>) {
+            let shorthand = [
+                ".black()", ".red()", ".green()", ".yellow()", ".blue()", ".magenta()", ".cyan()", ".gray()", ".dark_gray()",
+                ".white()", ".on_",
+            ];
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, offenders);
+                } else if path.extension().is_some_and(|e| e == "rs") && path.file_name().is_some_and(|n| n != "palette.rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    for (n, line) in text.lines().enumerate() {
+                        if line.contains("Color::") || shorthand.iter().any(|s| line.contains(s)) {
+                            offenders.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+                        }
+                    }
                 }
             }
         }
-        assert!(offenders.is_empty(), "colours belong in palette.rs:\n{}", offenders.join("\n"));
+        let mut offenders = Vec::new();
+        walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tui"), &mut offenders);
+        assert!(offenders.is_empty(), "colours belong in tui/palette.rs:\n{}", offenders.join("\n"));
+    }
+
+    #[test]
+    fn a_note_is_yellow() {
+        assert_eq!(note(), Style::new().fg(Color::Yellow));
     }
 }

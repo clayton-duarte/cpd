@@ -7,7 +7,7 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use super::palette::{self, Meaning};
+use crate::tui::palette::{self, Meaning};
 use crate::tui::read::Slots;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -4,7 +4,7 @@
 //! `separator.rs`) onto the read model.
 //!
 //! - [`rows`]: Contexts, their Plans (each Plan's row is its Lead's) and a Plan's side forks;
-//! - [`view`]: the state, keys and drawing; [`cursor`], [`prompt`], [`separator`], [`palette`]: its parts;
+//! - [`view`]: the state, keys and drawing; [`cursor`], [`prompt`], [`separator`]: its parts;
 //! - [`actions`]: what it does, as `cpd2` commands (`session open`, `session park`, `session fork`,
 //!   `session rename`, `plan new`);
 //! - [`follow`]: `cpd2 events follow`, which tells it when to take a new snapshot.
@@ -18,7 +18,6 @@
 mod actions;
 mod cursor;
 mod follow;
-mod palette;
 mod prompt;
 mod rows;
 mod separator;

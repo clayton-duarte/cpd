@@ -14,7 +14,7 @@ use tui_tree_widget::TreeState;
 
 use super::actions::Action;
 use super::cursor::{self, Input};
-use super::palette;
+use crate::tui::palette;
 use super::prompt::{Outcome, Prompt, Target};
 use super::rows::{self, Id, Row};
 use super::separator;

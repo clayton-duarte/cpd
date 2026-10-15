@@ -19,7 +19,7 @@ use ratatui::{
     widgets::Widget,
 };
 
-use super::palette::{self, Meaning};
+use crate::tui::palette::{self, Meaning};
 use crate::config::Tier;
 use crate::tui::read::{AttemptStatus, Flow, JobNode, JobStatus};
 
@@ -36,6 +36,18 @@ pub enum Live {
 }
 
 impl Live {
+    /// The icon and meaning the palette gives this status.
+    pub fn icon(self) -> (&'static str, Meaning) {
+        match self {
+            Live::Draft => palette::job_status(JobStatus::Draft, false),
+            Live::Queued => palette::job_status(JobStatus::Queued, false),
+            Live::Running => palette::job_status(JobStatus::Running, false),
+            Live::Merging => palette::job_status(JobStatus::Running, true),
+            Live::Merged => palette::job_status(JobStatus::Merged, false),
+            Live::Failed => palette::job_status(JobStatus::Failed, false),
+        }
+    }
+
     /// `None` for a cancelled Job.
     pub fn of(job: &JobNode) -> Option<Live> {
         Some(match job.status {
@@ -111,7 +123,7 @@ fn truncate(s: &str, w: usize) -> String {
 /// The left half of a pill (` <icon> <key> `, the key cut to `key_w` characters) and the right half (`<tier>[ aN] `).
 fn pill_parts(j: &FlowJob, key_w: usize) -> (String, String) {
     let a = if j.attempt > 1 { format!(" a{}", j.attempt) } else { String::new() };
-    (format!(" {} {} ", palette::job(j.status).0, truncate(&j.key, key_w)), format!("{}{} ", j.tier, a))
+    (format!(" {} {} ", j.status.icon().0, truncate(&j.key, key_w)), format!("{}{} ", j.tier, a))
 }
 
 /// The needs of each Job (as indices) that no other need already implies: a need reachable through another need is dropped.
@@ -375,7 +387,7 @@ pub fn layout(all: &[FlowJob]) -> Chart {
         for &c in cs {
             for (k, &i) in cards[c].jobs.iter().enumerate() {
                 let rect = Rect::new(xs[l], top[c] + k as u16, col_w[l], 1);
-                let style = palette::pill(palette::job(jobs[i].status).1);
+                let style = palette::pill(jobs[i].status.icon().1);
                 // the icon and key to the left, the tier (and `aN`) to the right, whatever the column's width
                 Line::from(parts[i].0.as_str()).style(style).left_aligned().render(rect, &mut buf);
                 Line::from(parts[i].1.as_str()).style(style).right_aligned().render(rect, &mut buf);
@@ -527,7 +539,7 @@ mod tests {
         let jobs: Vec<FlowJob> = statuses.iter().map(|s| FlowJob { status: *s, ..job(&format!("{s:?}"), &[]) }).collect();
         let c = layout(&jobs);
         for (p, status) in c.pills.iter().zip(statuses) {
-            let (icon, meaning) = palette::job(status);
+            let (icon, meaning) = status.icon();
             assert_eq!(c.buf[(p.rect.x + 1, p.rect.y)].symbol(), icon, "{status:?}");
             let cell = &c.buf[(p.rect.x, p.rect.y)];
             assert_eq!((Some(cell.fg), Some(cell.bg)), (palette::pill(meaning).fg, palette::pill(meaning).bg), "{status:?}");

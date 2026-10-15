@@ -10,7 +10,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use super::palette::{self, Meaning};
+use crate::tui::palette::{self, Meaning};
 use crate::ids::SessionId;
 
 pub struct Tab {

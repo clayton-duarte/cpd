@@ -7,7 +7,7 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use super::palette;
+use crate::tui::palette;
 use crate::tui::read::{Pr, PrState};
 
 fn count(n: usize, noun: &str) -> String {
@@ -51,7 +51,7 @@ mod tests {
     use ratatui::style::Modifier;
 
     use super::*;
-    use crate::tui::plan::palette::Meaning;
+    use crate::tui::palette::Meaning;
 
     fn text(l: &Line) -> String {
         l.spans.iter().map(|s| s.content.as_ref()).collect()
