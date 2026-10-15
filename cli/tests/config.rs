@@ -136,6 +136,7 @@ fork_quiet_seconds = 1
 tick_seconds = 1
 pr_poll_seconds = 1
 context_sync_seconds = 1
+error_repeat_seconds = 1
 [events]
 poll_ms = 20
 [tmux]
