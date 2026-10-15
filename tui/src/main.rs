@@ -571,6 +571,17 @@ fn toggle_worker_view(exe: &str, job: &str, path: &str) {
     }
 }
 
+/// Close the Worker pane when it shows `job`; any other Worker view stays.
+fn close_worker_view(job: &str) {
+    let panes = tmux(&["list-panes", "-t", &format!("{}:main", session()), "-F", "#{pane_id} #{@view} #{@job}"]);
+    for line in panes.lines() {
+        let f: Vec<&str> = line.split(' ').collect();
+        if f.len() >= 3 && f[1] == "worker" && f[2] == job {
+            tmux(&["kill-pane", "-t", f[0]]);
+        }
+    }
+}
+
 /// What the plan view shows for the session in the centre: its Context, the Context's sessions (the tabs) and the active one.
 struct Centre {
     context: String,
@@ -655,6 +666,7 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
             continue;
         }
         let mut open = None::<String>;
+        let mut unselect = None::<String>; // the Job whose Worker view closes
         match event::read().map_err(|e| e.to_string())? {
             Event::Key(k) if k.kind == KeyEventKind::Press => {
                 let dir = match k.code {
@@ -668,6 +680,7 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
                     (KeyCode::Char('q'), ..) => return Ok(()),
                     (_, Some(d), Some(c)) => selected.arrow(c, d),
                     (KeyCode::Enter, ..) => open = selected.enter(),
+                    (KeyCode::Esc, ..) => unselect = selected.clear(),
                     _ => {}
                 }
             }
@@ -679,12 +692,21 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
                     }
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
-                    let hit = chart.as_ref().filter(|_| body_area.contains(Position::new(m.column, m.row))).and_then(|c| {
-                        c.pill_at(m.column - body_area.x + scroll.0, m.row - body_area.y + scroll.1).map(|i| c.pills[i].key.clone())
-                    });
-                    if let Some(key) = hit {
-                        selected.click(key.clone());
-                        open = Some(key);
+                    if body_area.contains(Position::new(m.column, m.row)) {
+                        let hit = chart.as_ref().and_then(|c| {
+                            c.pill_at(m.column - body_area.x + scroll.0, m.row - body_area.y + scroll.1).map(|i| c.pills[i].key.clone())
+                        });
+                        match hit {
+                            Some(key) if selected.key.as_ref() == Some(&key) => {
+                                selected.click(key.clone());
+                                unselect = Some(key);
+                            }
+                            Some(key) => {
+                                selected.click(key.clone());
+                                open = Some(key);
+                            }
+                            None => unselect = selected.clear(),
+                        }
                     }
                 }
                 MouseEventKind::ScrollUp => scroll.1 = scroll.1.saturating_sub(3),
@@ -694,6 +716,9 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
                 _ => {}
             },
             _ => {}
+        }
+        if let Some(key) = unselect {
+            close_worker_view(&key);
         }
         if let Some(key) = open {
             if let Some(job) = jobs.iter().find(|j| j.flow.key == key) {

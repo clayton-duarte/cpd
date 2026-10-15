@@ -395,10 +395,21 @@ impl Selection {
         }
     }
 
-    /// A click on the pill `key`: it is already in view, so no scrolling follows.
+    /// A click on the pill `key`: it is already in view, so no scrolling follows. Clicking the selected pill clears it.
     pub fn click(&mut self, key: String) {
-        self.key = Some(key);
-        self.follow = false;
+        if self.key.as_ref() == Some(&key) {
+            self.reset();
+        } else {
+            self.key = Some(key);
+            self.follow = false;
+        }
+    }
+
+    /// A click on empty chart space, or Esc: nothing is selected. Returns the Job that was selected, whose Worker view closes.
+    pub fn clear(&mut self) -> Option<String> {
+        let was = self.key.take();
+        self.reset();
+        was
     }
 
     /// Enter: the key to open, none when nothing is selected.
@@ -672,6 +683,42 @@ mod tests {
         s.click("b".into());
         let at = s.resolve(&c);
         assert_eq!((s.key.as_deref(), s.follow, at), (Some("b"), false, Some(1)));
+    }
+
+    #[test]
+    fn a_click_on_another_pill_selects_it() {
+        let mut s = Selection::default();
+        s.click("a".into());
+        s.click("b".into());
+        assert_eq!(s.key.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn a_click_on_the_selected_pill_clears_it() {
+        let mut s = Selection::default();
+        s.click("a".into());
+        s.click("a".into());
+        assert_eq!(s, Selection::default());
+        assert_eq!(s.enter(), None);
+    }
+
+    #[test]
+    fn empty_space_and_esc_clear_and_name_the_job_to_close() {
+        let mut s = Selection::default();
+        s.click("a".into());
+        assert_eq!(s.clear().as_deref(), Some("a"));
+        assert_eq!((s.clear(), &s), (None, &Selection::default()));
+    }
+
+    #[test]
+    fn an_arrow_after_a_clear_selects_the_first_pill() {
+        let c = two();
+        let mut s = Selection::default();
+        s.arrow(&c, Dir::Right);
+        s.arrow(&c, Dir::Right);
+        s.clear();
+        s.arrow(&c, Dir::Down);
+        assert_eq!((s.key.as_deref(), s.follow), (Some("a"), true));
     }
 
     #[test]
