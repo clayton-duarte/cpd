@@ -4,6 +4,13 @@ The cpd cockpit: ratatui views (`context`, `plan`, `dispatch`, `worker <session.
 tmux session. tmux draws the border and the one header of each pane (`scripts/tmux.conf`, `pane-border-format`); the
 views draw only content.
 
+## Conventions
+
+Views use ratatui's widgets and layout as much as possible: `Layout`/`Constraint`, `Table`/`List` with their state for
+selection and scrolling, `Paragraph`, `Block`, `Scrollbar`, `Line`/`Span` alignment, and `tui-tree-widget` for trees. Hand-written
+drawing is only for what has no widget, with a comment saying why: the flowchart's edges, and the Context column's counters
+layer (a right-aligned `Line` per tree row, since the tree widget draws one text per row).
+
 ## Build
 
     cd tui && ~/.cargo/bin/cargo build --release   # binary: target/release/cpd-tui
@@ -32,6 +39,39 @@ file's header line, read once per `@session_file`, else the pane's cwd when the 
 else the first 8 characters of the session id. The plan view shows the Workflow of the session in the centre slot
 (`no Workflow yet` when unattached); its tabs are that Context's sessions. Switching swaps the session's pane into the
 centre slot.
+
+## Context column
+
+The `context` view is a `tui-tree-widget` tree (`src/context.rs`; `TreeState` keeps the open Contexts, the selection, the
+scrolling and the clicks):
+
+    ● cpd                         a Context: dot, name (and the number of Plans inside when collapsed)
+      ├ ○ v1             36⋅0⋅0⋅5⋅1
+      ├ ● cpd rust lead   0⋅1⋅0⋅1⋅0
+      └ ○ cpd-ui          1⋅0⋅2⋅3⋅0
+
+A session row is guide, dot, name (cut with `…` before the counters), and its Workflow's five Job counters at the right:
+queued (drafts in phase `plan`), running, in review, merged, failed. Cancelled Jobs are not counted; a session with no
+Workflow shows no counters. Zeros are dark grey, the `⋅` separators grey.
+
+| Dot colour (Workflow phase) | none | context | plan | dispatch | pr | done |
+| --- | --- | --- | --- | --- | --- | --- |
+| | dark grey | blue | magenta | yellow | cyan | green |
+
+| Counter colour (Job status) | queued | running | in review | merged | failed |
+| --- | --- | --- | --- | --- | --- |
+| | white | yellow | cyan | green | red |
+
+A Context's dot has the colour of the busiest phase inside (dispatch > plan > context > pr > done > none). The selected row
+is drawn reversed across the full width. Keys: ↑↓/jk move; Space or Enter on a Context collapses or expands it; Enter or a
+click on a session switches the centre to it (a click on a Context toggles it); `n` and `x` below.
+
+**● needs you, ○ does not.** A session needs you when its Lead waits on the User, or finished a turn the User has not seen.
+`tmux-agent-state.ts` publishes the pane options for it: `@asking` (1 while a tool named `ask_*` runs, and after a
+`cpd_plan_review` or `plannotator` call until the next input) and `@settled_at` (epoch seconds of the last `agent_settled`).
+The Context view stamps `@seen_at` on the chat pane in the centre at every refresh and when switching. A session needs you
+when `@asking` is 1, or when it is idle and `@settled_at` is after `@seen_at` (never seen counts as 0). A pi that started
+before the extension had these options keeps publishing neither, so it shows ○ until it restarts.
 
 ## Session actions
 
@@ -85,5 +125,5 @@ run in `workflow.repo`. This stays until cpd reports PR state, which is the cpd-
 
 Start a scratch server (`tmux -L cpd-tui-check -f scripts/tmux.conf`) with `CPD_TUI_SOCKET=cpd-tui-check`,
 `CPD_TUI_SESSION=check` and `CPD_TUI_STATE=/tmp/cpd-tui-check`; use `sleep 3600` panes with `@session_id`, `@session_name` and
-`@agent_state` set by hand (and `CPD_HOME` pointing at a scratch dir with `leads/<id>/workflow`) as stand-in chats. To check `n`, put a fake `pi` (a script that records its arguments and sleeps) first on the scratch
-server's `PATH` and give the source a scratch session file; to check `x`, use `sleep 3600` stand-in panes.
+`@agent_state` set by hand (`@asking`, `@settled_at`, `@seen_at` for the ● dot; and `CPD_HOME` pointing at a scratch dir with `leads/<id>/workflow`) as stand-in chats. To check `n`, put a fake `pi` (a script that records its arguments and sleeps) first on the scratch
+server's `PATH` (verify with a probe window running `command -v pi`: windows do not take `PATH` from the server's environment, so point `default-shell` at a wrapper that exports it) and give the source a scratch session file; to check `x`, use `sleep 3600` stand-in panes.
