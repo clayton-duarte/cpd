@@ -1,11 +1,12 @@
 //! What the TUI reads (commands.md §17): a typed, read-only model over the
-//! store, which the three views and the worker view render.
+//! store, which the views render.
 //!
 //! - [`tree()`]: the tree view, Contexts → Plans → Lead Sessions (`context list`, `session list`);
 //! - [`flow()`] and [`chat_slot()`]: the plan view, one Plan's Jobs, Attempts, Dependencies,
 //!   Escalations, review and PR (`plan show`), and the Plan of the Lead in the chat slot;
 //! - [`widgets()`]: the Dispatch column, slots, the engine, PRs and their feedback,
 //!   open Escalations and the latest Events (`plan list`);
+//! - [`logs()`] and [`logs_after()`]: the Event log, the latest Events and those after a cursor (`events list`);
 //! - [`worker()`]: the worker view, an Attempt and its Worker Session (`attempt show`).
 //!
 //! Each read is one [`Store::read`] transaction (contract §4.2): it takes no
@@ -22,6 +23,7 @@
 //! [`Store::read`]: crate::store::Store::read
 
 mod flow;
+mod logs;
 mod shared;
 mod tree;
 mod widgets;
@@ -32,6 +34,7 @@ pub use shared::{
     AttemptStatus, Cause, Checks, EscalationStatus, JobCounts, JobStatus, Origin, Outcome, Place, PlanHead, Pr,
     PrState, ReviewStatus, SessionNode,
 };
+pub use logs::{Logs, logs, logs_after};
 pub use tree::{ContextNode, PlanNode, Tree, tree};
 pub use widgets::{
     Engine, HeldSlot, MachineEscalation, PlanCard, PolledPr, PrFeedback, PrRow, ReviewDecision, Slots, Widgets, widgets,

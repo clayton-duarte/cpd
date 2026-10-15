@@ -134,7 +134,7 @@ pub(crate) fn open_legend(tmux: &Tmux) -> Result<(), CpdError> {
 
 /// The size `(columns, rows)` of the most recently active client in `list-clients`'
 /// `#{client_activity} #{client_width} #{client_height}` lines.
-fn newest_client(listing: &str) -> Option<(u16, u16)> {
+pub(crate) fn newest_client(listing: &str) -> Option<(u16, u16)> {
     listing
         .lines()
         .filter_map(|line| {
