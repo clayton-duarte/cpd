@@ -1,7 +1,7 @@
 //! The `widgets` view (commands.md §13.2, §17): snapshot tests of the Dispatch
 //! column and the key legend with ratatui's `TestBackend`, on a store prepared
-//! through the store API (as `tui_read.rs` does, since Plans, Jobs and Attempts
-//! belong to their areas), and the palette the two share.
+//! through the store API (as `tui_read.rs` does, since Plans and Sessions belong to
+//! their areas), and the palette the two share.
 
 mod common;
 
@@ -10,14 +10,12 @@ use cpd2::error::CpdError;
 use cpd2::home::CpdHome;
 use cpd2::store::Store;
 use cpd2::tui::palette::{self, Meaning};
-use cpd2::tui::read::{self, Widgets};
-use cpd2::tui::widgets::{self, legend};
+use cpd2::tui::read::{self, Place, Widgets};
+use cpd2::tui::widgets::{self, Machine, legend};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
-use ratatui::style::{Color, Modifier};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
+use ratatui::style::Modifier;
 
 // ---------- fixtures (the store API, as tui_read.rs prepares it) ----------
 
@@ -34,178 +32,93 @@ fn sql(store: &mut Store, text: &str) {
         .unwrap();
 }
 
-const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
-
-fn context(id: &str, grounded: Option<&str>) -> String {
-    let (lead, seq) = grounded.map_or(("NULL".to_owned(), "NULL"), |g| (format!("'{g}'"), "0"));
+fn context(id: &str) -> String {
     format!(
         "INSERT INTO contexts (id, title, jira, created_at, created_on, lead_session, grounded_seq)
-         VALUES ('{id}', 'Title of {id}', NULL, '2026-01-01T00:00:00.000Z', 'm1', {lead}, {seq});"
+         VALUES ('{id}', 'Title of {id}', NULL, '2026-01-01T00:00:00.000Z', 'm1', NULL, NULL);"
     )
 }
 
-/// `phase` decides the columns the schema ties to it; `pr` is `(number, pr_seen)`.
-fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr: Option<(i64, &str)>) -> String {
+/// A Plan; `pr` is `(number, polled)`, where `polled` is `pr poll`'s `(title, review decision, checks)`, `None` before the
+/// first poll.
+fn plan_row(id: &str, phase: &str, created: &str, pr: Option<(i64, Option<(&str, &str, &str)>)>) -> String {
     let late = !matches!(phase, "grounding" | "plan");
     let worktree = if late { "'/wt'" } else { "NULL" };
     let locked = if late { "'2026-01-02T00:00:00.000Z'" } else { "NULL" };
     let done = if phase == "done" { "'2026-01-09T00:00:00.000Z'" } else { "NULL" };
-    let (number, url, opened, seen, polled) = match pr {
-        Some((n, seen)) => (
+    let (number, url, opened, seen, polled_at) = match pr {
+        Some((n, polled)) => (
             n.to_string(),
             format!("'https://example.test/pull/{n}'"),
             "'2026-01-05T00:00:00.000Z'".to_owned(),
-            seen.to_owned(),
-            "'2026-01-06T00:00:00.000Z'".to_owned(),
+            r#"'{"checks":{},"reviewIds":[],"commentIds":[]}'"#.to_owned(),
+            if polled.is_some() { "'2026-01-06T00:00:00.000Z'" } else { "NULL" }.to_owned(),
         ),
-        None => (
-            "NULL".into(),
-            "NULL".into(),
-            "NULL".into(),
-            r#"{"checks":{},"reviewIds":[],"commentIds":[]}"#.to_owned(),
-            "NULL".into(),
-        ),
+        None => ("NULL".into(), "NULL".into(), "NULL".into(), r#"'{"checks":{},"reviewIds":[],"commentIds":[]}'"#.to_owned(), "NULL".into()),
+    };
+    let (title, decision, checks) = match pr.and_then(|p| p.1) {
+        Some((t, d, c)) => (format!("'{t}'"), format!("'{d}'"), format!("'{c}'")),
+        None => ("NULL".into(), "NULL".into(), "NULL".into()),
     };
     format!(
         "INSERT INTO plans (id, context, title, repo, base, lead_branch, lead_worktree, phase, lead_session, pr_number,
-                            pr_url, pr_opened_at, pr_seen, pr_polled_at, created_at, locked_at, done_at)
-         VALUES ('{id}', '{context}', 'Plan {id}', '/repo', 'main', 'cpd/{id}', {worktree}, '{phase}', '{lead}',
-                 {number}, {url}, {opened}, '{seen}', {polled}, '{created}', {locked}, {done});"
+                            pr_url, pr_opened_at, pr_seen, pr_polled_at, pr_title, pr_review_decision, pr_checks,
+                            created_at, locked_at, done_at)
+         VALUES ('{id}', 'alpha', 'Plan {id}', '/repo', 'main', 'cpd/{id}', {worktree}, '{phase}', 'l-{id}',
+                 {number}, {url}, {opened}, {seen}, {polled_at}, {title}, {decision}, {checks}, '{created}', {locked}, {done});"
     )
 }
 
-fn session_row(id: &str, role: &str, context: &str, plan: &str, attempt: Option<&str>, state: &str, label: Option<&str>, created: &str) -> String {
-    let plan = if plan.is_empty() { "NULL".to_owned() } else { format!("'{plan}'") };
-    let attempt = attempt.map_or("NULL".to_owned(), |a| format!("'{a}'"));
-    let label = label.map_or("NULL".to_owned(), |l| format!("'{l}'"));
-    let tier = if role == "lead" { "O3" } else { "S3" };
+fn lead_row(plan: &str, name: &str) -> String {
     format!(
         "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
-         VALUES ('{id}', '{role}', '{context}', {plan}, {attempt}, 'name of {id}', '/sessions/{id}.jsonl', '/repo', '{tier}',
-                 NULL, '{state}', {label}, '2026-01-03T00:00:00.000Z', '{created}');"
+         VALUES ('l-{plan}', 'lead', 'alpha', '{plan}', NULL, '{name}', '/sessions/l-{plan}.jsonl', '/repo', 'O3',
+                 NULL, 'idle', NULL, '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:00.000Z');"
     )
 }
 
-fn job_row(plan: &str, key: &str, status: &str, tier: &str, needs: &[&str]) -> String {
-    let fingerprint = if status == "draft" { "NULL".to_owned() } else { format!("'{FP}'") };
-    let merged = if status == "merged" { "'abc123'" } else { "NULL" };
-    let failed = if status == "failed" { "'crashed'" } else { "NULL" };
-    let (reason, requested) =
-        if status == "cancelled" { ("'not needed'", "'2026-01-04T00:00:00.000Z'") } else { ("NULL", "NULL") };
-    let mut out = format!(
-        "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
-                           created_txn, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at)
-         VALUES ('{plan}', '{key}', 'Job {key}', '{tier}', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, {fingerprint},
-                 cpd_txn(), {reason}, {requested}, {failed}, {merged}, '2026-01-02T00:00:00.000Z');"
-    );
-    for n in needs {
-        out += &format!("INSERT INTO dependencies (plan, job, needs) VALUES ('{plan}', '{key}', '{n}');");
-    }
-    out
-}
-
-/// An Attempt `<job>-a<number>`; `status` `ended` takes `outcome`.
-fn attempt_row(plan: &str, job: &str, number: u32, tier: &str, status: &str, ended: Option<(&str, &str)>, worker: Option<&str>) -> String {
-    let id = format!("{job}-a{number}");
-    let (outcome, cause, merged, ended_at) = match ended {
-        Some((outcome, cause)) => (
-            format!("'{outcome}'"),
-            format!("'{cause}'"),
-            if outcome == "merged" { "'abc123'" } else { "NULL" }.to_owned(),
-            "'2026-01-03T01:00:00.000Z'".to_owned(),
-        ),
-        None => ("NULL".into(), "NULL".into(), "NULL".into(), "NULL".into()),
-    };
-    let (sha, at) = if status == "merging" { ("'def456'", "'2026-01-03T00:30:00.000Z'") } else { ("NULL", "NULL") };
-    let worker = worker.map_or("NULL".to_owned(), |w| format!("'{w}'"));
-    let origin = if number == 1 { "ladder" } else { "retry" };
-    format!(
-        "INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, worker_session,
-                               submitted_sha, submitted_at, merged_sha, started_at, ended_at)
-         VALUES ('{plan}', '{id}', '{job}', {number}, '{tier}', '{origin}', '{status}', {outcome}, {cause}, 'cpd/{plan}--{id}',
-                 '/w/{id}', {worker}, {sha}, {at}, {merged}, '2026-01-03T00:{number:02}:00.000Z', {ended_at});"
-    )
-}
-
-fn escalation_row(plan: &str, attempt: &str, number: u32, status: &str, asked: &str) -> String {
-    let (answer, answered, expired) = match status {
-        "answered" => ("'Use v2.'", "'2026-01-03T02:00:00.000Z'", "NULL"),
-        "expired" => ("NULL", "NULL", "'2026-01-03T02:00:00.000Z'"),
-        _ => ("NULL", "NULL", "NULL"),
-    };
-    format!(
-        "INSERT INTO escalations (plan, id, attempt, number, question, status, answer, asker_pid, asked_at, answered_at, expired_at)
-         VALUES ('{plan}', '{attempt}-q{number}', '{attempt}', {number}, 'Question {attempt}-q{number}?', '{status}', {answer}, 1,
-                 '{asked}', {answered}, {expired});"
-    )
-}
-
-
-/// An Event of `plan`, whose Context is `alpha` for `ship` and `beta` for the others.
-fn event(at: &str, kind: &str, plan: Option<&str>, text: &str, data: &str) -> String {
-    let context = plan.map_or("NULL", |p| if p == "ship" { "'alpha'" } else { "'beta'" });
-    let plan = plan.map_or("NULL".to_owned(), |p| format!("'{p}'"));
+/// The Lead of `plan` moved to `place` (`session-moved`, contract §5.2).
+fn moved(at: &str, plan: &str, place: &str) -> String {
     format!(
         "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
-         VALUES (cpd_txn(), '{at}', '{kind}', {context}, {plan}, NULL, '{text}', '{data}');"
+         VALUES (cpd_txn(), '{at}', 'session-moved', 'alpha', '{plan}', 'l-{plan}', 'Session moved.',
+                 '{{\"pane\":\"%1\",\"window\":\"@1\",\"place\":\"{place}\"}}');"
     )
 }
 
-/// Two Contexts and these Plans:
-/// - `ship` (dispatch, no PR): Jobs `b` (its Attempt is merging) and `c` (a retry running, asking);
-/// - `rel` (pr): PR 7 with a failing check, a review and two comments; Job `r1` running, asking;
-/// - `old` (done): its merged PR 3, every check passed;
-/// - `sketch` (plan): drafts, not in the column.
-///
-/// Three Attempts hold a slot. The engine runs (this test's pid), and the last Events include an `error`.
+/// One Context and these Plans, each named by its Lead Session (the label), oldest first:
+/// - `old` ("cpd-ui"): done, its merged PR 3, every check passed, no review; the Lead in the chat slot;
+/// - `rel` ("cpd visual lead"): PR 7, open, failing checks, changes requested; the Lead parked;
+/// - `fresh` ("fresh lead"): PR 11, not polled yet; the Lead parked;
+/// - `ship` ("v1"): in dispatch, no PR; the Lead in the chat slot;
+/// - `sketch` ("sketch lead"): no PR; the Lead has no pane (`none`);
+/// - `away` ("away lead"): PR 9, merged; the Lead's pane is in the `work` window, so the Plan is not in the cockpit;
+/// - `never` ("never lead"): no PR; the Lead was never moved.
 fn populate(store: &mut Store) {
-    let mut s = String::new();
-    s += &context("alpha", Some("g-alpha"));
-    s += &context("beta", None);
-    s += &plan_row("ship", "alpha", "dispatch", "l-ship", "2026-01-02T00:00:00.000Z", None);
-    s += &plan_row("sketch", "alpha", "plan", "l-sketch", "2026-01-02T00:00:01.000Z", None);
-    s += &plan_row(
-        "rel",
-        "beta",
-        "pr",
-        "l-rel",
-        "2026-01-02T00:00:02.000Z",
-        Some((7, r#"{"checks":{"ci":"FAILURE","lint":"FAILURE","fmt":"SUCCESS"},"reviewIds":["r1"],"commentIds":["c1","c2"]}"#)),
-    );
-    s += &plan_row(
-        "old",
-        "beta",
-        "done",
-        "l-old",
-        "2026-01-01T12:00:00.000Z",
-        Some((3, r#"{"checks":{"ci":"SUCCESS"},"reviewIds":[],"commentIds":[]}"#)),
-    );
-    s += &session_row("g-alpha", "lead", "alpha", "", None, "idle", None, "2026-01-02T00:00:00.000Z");
-    for (id, context, plan) in [("l-ship", "alpha", "ship"), ("l-sketch", "alpha", "sketch"), ("l-rel", "beta", "rel"), ("l-old", "beta", "old")] {
-        s += &session_row(id, "lead", context, plan, None, "idle", None, "2026-01-02T00:00:00.000Z");
+    let mut s = context("alpha");
+    let plans: [(&str, &str, &str, Option<(i64, Option<(&str, &str, &str)>)>, &str, Option<&str>); 7] = [
+        ("old", "cpd-ui", "done", Some((3, Some(("cpd-ui: cockpit rows", "none", "passed")))), "2026-01-01T12:00:00.000Z", Some("chat")),
+        (
+            "rel",
+            "cpd visual lead",
+            "pr",
+            Some((7, Some(("cpd-tui cockpit column and its long title", "changes_requested", "failed")))),
+            "2026-01-02T00:00:00.000Z",
+            Some("parked"),
+        ),
+        ("fresh", "fresh lead", "pr", Some((11, None)), "2026-01-02T00:00:01.000Z", Some("parked")),
+        ("ship", "v1", "dispatch", None, "2026-01-02T00:00:02.000Z", Some("chat")),
+        ("sketch", "sketch lead", "plan", None, "2026-01-02T00:00:03.000Z", Some("none")),
+        ("away", "away lead", "done", Some((9, Some(("away", "approved", "pending")))), "2026-01-02T00:00:04.000Z", Some("work")),
+        ("never", "never lead", "dispatch", None, "2026-01-02T00:00:05.000Z", None),
+    ];
+    for (n, (id, name, phase, pr, created, place)) in plans.into_iter().enumerate() {
+        s += &lead_row(id, name);
+        s += &plan_row(id, phase, created, pr);
+        if let Some(place) = place {
+            s += &moved(&format!("2026-01-03T00:00:0{n}.000Z"), id, place);
+        }
     }
-    s += &job_row("ship", "b", "running", "S3", &[]);
-    s += &job_row("ship", "c", "running", "S2", &[]);
-    s += &session_row("w-b1", "worker", "alpha", "ship", Some("b-a1"), "idle", None, "2026-01-03T00:01:00.000Z");
-    s += &session_row("w-c2", "worker", "alpha", "ship", Some("c-a2"), "working", None, "2026-01-03T00:02:00.000Z");
-    s += &attempt_row("ship", "b", 1, "S3", "merging", None, Some("w-b1"));
-    s += &attempt_row("ship", "c", 1, "S2", "ended", Some(("failed", "timed_out")), None);
-    s += &attempt_row("ship", "c", 2, "S3", "running", None, Some("w-c2"));
-    s += &escalation_row("ship", "c-a2", 1, "open", "2026-01-03T00:20:00.000Z");
-    s += &job_row("rel", "r1", "running", "S3", &[]);
-    s += &session_row("w-r1", "worker", "beta", "rel", Some("r1-a1"), "blocked", Some("cpd: question to the Lead"), "2026-01-03T00:03:00.000Z");
-    s += &attempt_row("rel", "r1", 1, "S3", "starting", None, Some("w-r1"));
-    s += &escalation_row("rel", "r1-a1", 1, "open", "2026-01-03T00:05:00.000Z");
-    s += &escalation_row("rel", "r1-a1", 2, "answered", "2026-01-03T00:04:00.000Z");
-    s += &event("2026-01-03T00:00:00.000Z", "watch-started", None, "The engine started.", &format!(r#"{{"pid":{}}}"#, std::process::id()));
-    s += &event(
-        "2026-01-03T00:10:00.000Z",
-        "pr-feedback",
-        Some("rel"),
-        "PR 7 has failing checks.",
-        r#"{"checks":[{"name":"ci","conclusion":"FAILURE"},{"name":"lint","conclusion":"FAILURE"}],"reviews":[{"id":"r1"}],"comments":[],"state":"OPEN"}"#,
-    );
-    s += &event("2026-01-03T00:25:00.000Z", "error", Some("ship"), "Attempt c-a2 could not push.", r#"{"code":"push_failed"}"#);
     sql(store, &s);
 }
 
@@ -216,13 +129,13 @@ fn fixture() -> (TestEnv, Store) {
     (env, store)
 }
 
-fn now() -> OffsetDateTime {
-    OffsetDateTime::parse("2026-01-03T00:30:00.000Z", &Rfc3339).unwrap()
+fn machine() -> Machine {
+    Machine { name: "homeserver".to_owned(), load: ["3.70", "3.05", "4.84"].map(str::to_owned).to_vec() }
 }
 
-fn render(width: u16, height: u16, w: &Widgets, note: Option<&str>) -> Buffer {
+fn render(width: u16, height: u16, w: &Widgets) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal.draw(|f| widgets::draw(f, f.area(), w, now(), note)).unwrap();
+    terminal.draw(|f| widgets::draw(f, f.area(), w, &machine())).unwrap();
     terminal.backend().buffer().clone()
 }
 
@@ -249,189 +162,151 @@ fn find(buf: &Buffer, needle: &str) -> (u16, u16) {
 
 const RULE: &str = "──────────────────────────────────────────────";
 
-/// The column on the prepared store, as the User sees it: every Plan with a PR (oldest first), then the Plan in
-/// Dispatch without one; the Events fill what is left.
-fn column() -> (Vec<String>, Buffer) {
+/// The column on the prepared store as the User sees it: the Plans with a PR (oldest first), then the Plans without
+/// one, of the Plans whose Lead has a pane in the cockpit.
+fn column(height: u16) -> (Vec<String>, Buffer) {
     let (_env, mut store) = fixture();
-    let w = read::widgets(&mut store, 3, 50).unwrap();
-    let buf = render(46, 25, &w, None);
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    let buf = render(46, height, &w);
     (rows(&buf), buf)
 }
 
+/// The reference's own test, `the_dispatch_sections_are_titled_with_a_separator_between_each_pair` (`tui/src/main.rs:1053–1062`):
+/// the same lines on the same 30×14 pane, for a machine with no Plan in the cockpit.
 #[test]
-fn the_column_shows_the_engine_slots_prs_escalations_and_events() {
-    let (got, _) = column();
-    let pid = std::process::id();
+fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
+    let env = TestEnv::new();
+    let w = read::widgets(&mut open(&env), 3, 0).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(30, 14)).unwrap();
+    let machine = Machine { name: "homeserver".to_owned(), load: ["0.1", "0.2", "0.3"].map(str::to_owned).to_vec() };
+    terminal.draw(|f| widgets::draw(f, f.area(), &w, &machine)).unwrap();
+    let lines = rows(terminal.backend().buffer());
+    let rule = "─".repeat(30);
+    assert_eq!(lines[..3], [" homeserver", " load 0.1 0.2 0.3", rule.as_str()]);
+    assert_eq!(lines[3], " PRs");
+    assert_eq!(lines[4], " no Plans in the cockpit");
+    assert_eq!(lines[5..], ["", "", "", rule.as_str(), " git", " (future)", rule.as_str(), " Jira", " (future)"]);
+}
+
+#[test]
+fn the_column_shows_the_machine_the_cockpits_prs_git_and_jira() {
+    let (got, _) = column(25);
     let expected = [
-        " Engine".to_owned(),
-        format!(" ● running  pid {pid}  since 00:00:00"),
-        " Slots 3/3".to_owned(),
-        " rel/r1-a1 S3 starting 29m".to_owned(),
-        " ship/b-a1 S3 merging 29m".to_owned(),
-        " ship/c-a2 S3 running 28m".to_owned(),
-        RULE.to_owned(),
-        " PRs".to_owned(),
-        " Plan old".to_owned(),
-        "  #3 merged ✓ 0 reviews  0 comments".to_owned(),
-        " Plan rel".to_owned(),
-        "  #7 open ✗ 1 review  2 comments".to_owned(),
-        "  ✗ ci, lint".to_owned(),
-        " Plan ship  no PR".to_owned(),
-        RULE.to_owned(),
-        " Escalations 2".to_owned(),
-        " ● rel/r1  Question r1-a1-q1?".to_owned(),
-        " ● ship/c  Question c-a2-q1?".to_owned(),
-        RULE.to_owned(),
-        " Events".to_owned(),
-        " 00:00:00 The engine started.".to_owned(),
-        " 00:10:00 PR 7 has failing checks.".to_owned(),
-        " 00:25:00 Attempt c-a2 could not push.".to_owned(),
-        String::new(),
-        widgets::HINT.trim_end().to_owned(),
+        " homeserver",
+        " load 3.70 3.05 4.84",
+        RULE,
+        " PRs",
+        " cpd-ui",
+        "  #3 merged ✓ no review  cpd-ui: cockpit rows",
+        " cpd visual lead",
+        "  #7 open ✗ changes requested  cpd-tui cockpi…",
+        " fresh lead",
+        "  #11 loading…",
+        " v1  no PR",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        RULE,
+        " git",
+        " (future)",
+        RULE,
+        " Jira",
+        " (future)",
     ];
     assert_eq!(got, expected, "\n{}", got.join("\n"));
+}
+
+#[test]
+fn only_plans_whose_lead_is_in_the_chat_slot_or_parked_are_listed() {
+    let (_env, mut store) = fixture();
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    let place = |plan: &str| w.plans.iter().find(|c| c.head.id.as_str() == plan).unwrap().lead_place;
+    assert_eq!(
+        ["old", "rel", "fresh", "ship", "sketch", "away", "never"].map(place),
+        [Place::Chat, Place::Parked, Place::Parked, Place::Chat, Place::None, Place::Work, Place::None]
+    );
+    let got = rows(&render(46, 25, &w)).join("\n");
+    for listed in ["cpd-ui", "cpd visual lead", "fresh lead", "v1"] {
+        assert!(got.contains(listed), "{listed}");
+    }
+    for hidden in ["sketch lead", "away lead", "never lead", "#9"] {
+        assert!(!got.contains(hidden), "{hidden}:\n{got}");
+    }
+    // The latest move wins: `ship` leaves the cockpit.
+    sql(&mut store, &moved("2026-01-04T00:00:00.000Z", "ship", "work"));
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    assert!(!rows(&render(46, 25, &w)).join("\n").contains("v1"));
+}
+
+#[test]
+fn the_column_has_no_engine_slots_escalations_events_or_hint() {
+    let (got, _) = column(25);
+    let all = got.join("\n");
+    for gone in ["Engine", "Slots", "Escalations", "Events", "legend", "quit"] {
+        assert!(!all.contains(gone), "{gone}:\n{all}");
+    }
 }
 
 #[test]
 fn the_column_takes_every_colour_from_the_palette() {
-    let (_, buf) = column();
+    let (_, buf) = column(25);
     let fg = |at: (u16, u16)| buf[at].fg;
     let c = palette::color;
-    assert_eq!(fg(find(&buf, "●")), c(Meaning::InProgress), "the running engine");
-    assert_eq!(fg(find(&buf, "3/3")), c(Meaning::Review), "every slot is used");
-    // Each Attempt's status, in the colour of its meaning.
-    assert_eq!(fg(find(&buf, "starting")), c(Meaning::NotStarted));
-    assert_eq!(fg(find(&buf, "merging")), c(Meaning::Review));
-    assert_eq!(fg(find(&buf, "running 28m")), c(Meaning::InProgress));
     // The PRs: state and checks.
     assert_eq!(fg(find(&buf, "merged")), c(Meaning::Done));
     assert_eq!(fg(find(&buf, "✓")), c(Meaning::Done));
     assert_eq!(fg(find(&buf, "open")), c(Meaning::Review));
-    assert_eq!(fg(find_after(&buf, find(&buf, "#7 open").1, "✗")), c(Meaning::Failed));
-    assert_eq!(fg(find(&buf, "ci, lint")), c(Meaning::Failed), "the failing checks");
-    // The Escalations, the failed Event and the separators.
-    assert_eq!(fg(find(&buf, "● rel")), c(Meaning::Review));
-    assert_eq!(fg(find(&buf, "Attempt c-a2 could")), c(Meaning::Failed), "an error Event");
-    assert_eq!(fg(find(&buf, "The engine started")), Color::Reset, "a plain Event names no colour");
+    assert_eq!(fg(find(&buf, "✗")), c(Meaning::Failed));
     assert_eq!(fg(find(&buf, RULE)), c(Meaning::Nothing));
-    // Dim: the clocks, the questions, the hint.
     let dim = |at: (u16, u16)| buf[at].modifier.contains(Modifier::DIM);
-    assert!(dim(find(&buf, "00:10:00")) && dim(find(&buf, "Question r1")) && dim(find(&buf, "? legend")));
-    assert!(!dim(find(&buf, "PR 7 has failing")));
-    assert!(buf[find(&buf, "Engine")].modifier.contains(Modifier::BOLD));
+    let bold = |at: (u16, u16)| buf[at].modifier.contains(Modifier::BOLD);
+    // Bold: the machine, the section titles and the labels; dim: the title of the PR, `no PR`, `loading…`, `(future)`.
+    for title in ["homeserver", "PRs", "cpd-ui", "cpd visual lead", "v1", "git", "Jira"] {
+        assert!(bold(find(&buf, title)), "{title}");
+        assert!(!dim(find(&buf, title)), "{title}");
+    }
+    for faint in ["cpd-ui: cockpit", "no PR", "loading…", "(future)"] {
+        assert!(dim(find(&buf, faint)), "{faint}");
+        assert!(!bold(find(&buf, faint)), "{faint}");
+    }
+    // Plain: the number, the review decision and the load.
+    for plain in ["#3", "no review", "changes requested", "load 3.70"] {
+        let at = find(&buf, plain);
+        assert!(!dim(at) && !bold(at), "{plain}");
+    }
 }
 
 #[test]
-fn an_empty_store_says_so_in_every_section() {
-    let env = TestEnv::new();
-    let mut store = open(&env);
-    let w = read::widgets(&mut store, 2, 50).unwrap();
-    let got = rows(&render(30, 16, &w, None));
-    let rule = "─".repeat(30);
-    let expected = [
-        " Engine",
-        " ○ not started yet",
-        " Slots 0/2",
-        " none in use",
-        &rule,
-        " PRs",
-        " none",
-        &rule,
-        " Escalations 0",
-        " none open",
-        &rule,
-        " Events",
-        " none yet",
-        "",
-        "",
-        widgets::HINT.trim_end(),
-    ];
-    assert_eq!(got, expected, "\n{}", got.join("\n"));
-}
-
-fn dead_pid() -> u32 {
-    let mut child = std::process::Command::new("true").spawn().unwrap();
-    let pid = child.id();
-    child.wait().unwrap();
-    pid
-}
-
-#[test]
-fn the_engine_is_never_running_stopped_or_crashed_each_in_its_colour() {
-    let env = TestEnv::new();
-    let mut store = open(&env);
-    let engine = |store: &mut Store| {
-        let w = read::widgets(store, 3, 0).unwrap();
-        let buf = render(60, 20, &w, None);
-        let at = find(&buf, "Engine");
-        (row(&buf, at.1 + 1).trim_end().to_owned(), buf[(1, at.1 + 1)].fg)
-    };
-    let c = palette::color;
-    assert_eq!(engine(&mut store), (" ○ not started yet".to_owned(), c(Meaning::Nothing)));
-
-    let started = |pid: u32| event("2026-01-03T00:00:00.000Z", "watch-started", None, "The engine started.", &format!(r#"{{"pid":{pid}}}"#));
-    sql(&mut store, &started(std::process::id()));
-    assert_eq!(engine(&mut store), (format!(" ● running  pid {}  since 00:00:00", std::process::id()), c(Meaning::InProgress)));
-
-    sql(&mut store, &event("2026-01-03T01:02:03.000Z", "watch-stopped", None, "The engine stopped.", "{}"));
-    assert_eq!(engine(&mut store), (" ○ stopped  01:02:03".to_owned(), c(Meaning::Nothing)));
-
-    let dead = dead_pid();
-    sql(&mut store, &started(dead));
-    assert_eq!(engine(&mut store), (format!(" ✗ crashed  pid {dead} is gone  since 00:00:00"), c(Meaning::Failed)));
-}
-
-#[test]
-fn a_narrow_column_cuts_text_with_an_ellipsis_and_never_wraps() {
+fn a_narrow_column_cuts_the_title_first_then_the_label_and_never_wraps() {
     let (_env, mut store) = fixture();
-    let w = read::widgets(&mut store, 3, 50).unwrap();
-    let got = rows(&render(24, 25, &w, None));
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    let wide = rows(&render(33, 25, &w));
+    assert!(wide.contains(&"  #7 open ✗ changes requested".to_owned()), "no room for a title of 4 characters:\n{wide:#?}");
+    let got = rows(&render(24, 25, &w));
     assert!(got.iter().all(|r| r.chars().count() <= 24), "{got:#?}");
-    for cut in [
-        " rel/r1… S3 starting 29m",
-        "  #7 open ✗ 1 review  2…",
-        " ● rel/r1  Question r1-…",
-        " 00:25:00 Attempt c-a2 …",
-    ] {
-        assert!(got.contains(&cut.to_owned()), "{cut:?} in {got:#?}");
+    for cut in [" cpd visual lead", "  #7 open ✗ changes requested", " fresh lead", " v1  no PR"] {
+        assert!(got.iter().any(|r| r.starts_with(cut.chars().take(24).collect::<String>().as_str())), "{cut:?} in {got:#?}");
     }
+    let narrow = rows(&render(10, 25, &w));
+    assert!(narrow.contains(&" cpd visu…".to_owned()), "{narrow:#?}");
+    assert!(narrow.contains(&" v1  no PR".to_owned()), "{narrow:#?}");
 }
 
 #[test]
-fn a_short_pane_keeps_the_latest_events_and_drops_the_plans_without_a_pr() {
+fn a_short_pane_drops_the_plans_without_a_pr_before_the_rest() {
     let (_env, mut store) = fixture();
-    let w = read::widgets(&mut store, 3, 50).unwrap();
-    // 21 rows: the sections above the Events take 18 and the hint 1, so the Events keep their title and the latest one.
-    let got = rows(&render(46, 21, &w, None));
-    assert!(!got.iter().any(|r| r.contains("no PR")), "{got:#?}");
-    let events = got.iter().position(|r| r == " Events").unwrap();
-    assert_eq!(got[events + 1], " 00:25:00 Attempt c-a2 could not push.", "the latest Event, not the oldest");
-    assert_eq!(got.last().unwrap(), widgets::HINT.trim_end());
-}
-
-#[test]
-fn a_note_takes_the_hints_row_in_the_failed_colour() {
-    let (_env, mut store) = fixture();
-    let w = read::widgets(&mut store, 3, 50).unwrap();
-    let buf = render(46, 25, &w, Some("No tmux client is attached to the cockpit."));
-    let at = find(&buf, "No tmux client");
-    assert_eq!(at.1, 24, "the last row");
-    assert_eq!(buf[at].fg, palette::color(Meaning::Failed));
-    assert!(!rows(&buf).iter().any(|r| r.contains("? legend")));
-}
-
-#[test]
-fn a_full_slot_set_is_yellow_a_partial_one_green_and_an_empty_one_dim() {
-    let (_env, mut store) = fixture();
-    for (limit, meaning) in [(3, Meaning::Review), (4, Meaning::InProgress)] {
-        let w = read::widgets(&mut store, limit, 0).unwrap();
-        let buf = render(46, 20, &w, None);
-        assert_eq!(buf[find(&buf, &format!("3/{limit}"))].fg, palette::color(meaning), "{limit}");
-    }
-    let empty = TestEnv::new();
-    let w = read::widgets(&mut open(&empty), 3, 0).unwrap();
-    let buf = render(46, 20, &w, None);
-    assert_eq!(buf[find(&buf, "0/3")].fg, palette::color(Meaning::Nothing));
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    // Beside the 9 rows of the other sections and the PRs title, the three Plans with a PR take 6; `v1` needs a 7th.
+    let full = rows(&render(46, 9 + 8, &w));
+    assert!(full.iter().any(|r| r.contains("v1  no PR")), "{full:#?}");
+    let short = rows(&render(46, 9 + 7, &w));
+    assert!(!short.iter().any(|r| r.contains("no PR")), "{short:#?}");
+    assert!(short.iter().any(|r| r.contains("#11 loading…")), "the Plans with a PR stay:\n{short:#?}");
 }
 
 // ---------- the legend ----------

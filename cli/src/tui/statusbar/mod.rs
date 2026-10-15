@@ -1,5 +1,5 @@
 //! The `statusbar` view (commands.md §13.2, §17): one row across the full width at the bottom of the cockpit.
-//! Left, the ⧉ reset-layout button and the legend button, then the note of a failed click; right, the workers
+//! Left, the ⧉ reset-layout, legend and logs buttons, then the note of a failed click; right, the workers
 //! indicator `workers N/M`. It has no keys and never takes keyboard focus (the root mouse binding passes a click on
 //! with `send-keys -M`, §6.3).
 //!
@@ -25,6 +25,7 @@ use ratatui::text::Line;
 
 use self::bar::{Action, Item};
 use self::workers::Workers;
+use super::logs;
 use super::read;
 use super::widgets::open_legend;
 use super::{not_a_terminal, on_a_terminal};
@@ -46,15 +47,20 @@ const REFRESH: Duration = Duration::from_secs(2);
 /// The reset button: `⧉` is one cell wide, and the space is part of the button.
 const RESET_BUTTON: &str = "⧉ ";
 const LEGEND_BUTTON: &str = " ? legend ";
+const LOGS_BUTTON: &str = " ≡ logs ";
 
-/// The bar's items: the two buttons, then the failure note if any (left), and the workers indicator (right), which
+/// The bar's items: the three buttons, then the failure note if any (left), and the workers indicator (right), which
 /// gets the full `width` as in the reference (`main.rs` `statusbar_items`).
 fn items(workers: &Workers, note: &str, width: u16) -> (Vec<Item>, Vec<Item>) {
     let button = |text: &'static str, action| Item {
         line: Line::from(text).style(Style::new().add_modifier(Modifier::REVERSED)),
         action: Some(action),
     };
-    let mut left = vec![button(RESET_BUTTON, Action::ResetLayout), button(LEGEND_BUTTON, Action::Legend)];
+    let mut left = vec![
+        button(RESET_BUTTON, Action::ResetLayout),
+        button(LEGEND_BUTTON, Action::Legend),
+        button(LOGS_BUTTON, Action::Logs),
+    ];
     if !note.is_empty() {
         left.push(Item { line: Line::from(note.to_owned()), action: None });
     }
@@ -113,6 +119,7 @@ fn show(
                     let at = Position::new(m.column, m.row);
                     let result = match clickable.iter().find(|(r, _)| r.contains(at)) {
                         Some((_, Action::Legend)) => open_legend(tmux),
+                        Some((_, Action::Logs)) => logs::open(tmux),
                         Some((_, Action::ResetLayout)) => layout::reset(tmux, &config.tmux.cockpit_session),
                         None => Ok(()),
                     };
@@ -157,17 +164,22 @@ mod tests {
             })
             .unwrap();
         let buf = terminal.backend().buffer();
-        let left = format!("{RESET_BUTTON} {LEGEND_BUTTON}");
+        let left = format!("{RESET_BUTTON} {LEGEND_BUTTON} {LOGS_BUTTON}");
         assert_eq!(text(buf, 0), format!("{left}{}workers 1/4", " ".repeat(40 - left.chars().count() - "workers 1/4".len())));
         assert_eq!(Line::from("⧉").width(), 1);
         assert_eq!(
             hits,
-            [(Rect::new(0, 0, 2, 1), Action::ResetLayout), (Rect::new(3, 0, LEGEND_BUTTON.len() as u16, 1), Action::Legend)]
+            [
+                (Rect::new(0, 0, 2, 1), Action::ResetLayout),
+                (Rect::new(3, 0, LEGEND_BUTTON.len() as u16, 1), Action::Legend),
+                (Rect::new(14, 0, LOGS_BUTTON.chars().count() as u16, 1), Action::Logs),
+            ]
         );
         assert_eq!(buf[(0, 0)].symbol(), "⧉");
         assert!((0..2).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
         assert!(!buf[(2, 0)].modifier.contains(Modifier::REVERSED));
         assert!((3..3 + LEGEND_BUTTON.len() as u16).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
+        assert!((14..22).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
     }
 
     /// The workers get the whole width, not what the buttons leave: the long form is chosen whenever it fits the row.

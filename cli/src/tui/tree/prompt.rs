@@ -1,11 +1,14 @@
-//! The one inline prompt of the tree (the spike's `prompt.rs`), shared by its
-//! text-entry actions: the id, title and repo of a new Plan (`n`), the name of
-//! a fork (`f`), a Session's new name (`r`). Pure: the view feeds it keys and
+//! The one inline prompt of the tree (the reference's `prompt.rs`), shared by
+//! both session actions: a text input for `n` (the name of the new Plan) and a
+//! y/N confirmation for `x` (close a Session). Pure: the view feeds it keys and
 //! acts on its [`Outcome`].
+//!
+//! The texts are the reference's, verbatim (commands.md §13.2). The one
+//! difference: the name is the new Plan's id (§2.1), so a name that is no Plan
+//! id is refused in the prompt, as an empty one is.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::args::Name;
 use crate::ids::{ContextId, PlanId, SessionId};
 
 /// The Session an action is about, as the prompt words it.
@@ -13,24 +16,17 @@ use crate::ids::{ContextId, PlanId, SessionId};
 pub struct Target {
     pub id: SessionId,
     pub label: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Step {
-    Id,
-    Title,
-    Repo,
+    /// The Session's state is `working`.
+    pub working: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Prompt {
-    /// `n`: asks for the id, the title and (when the Context has no Plan to take it from) the repo of a new
-    /// Plan in `context`. `refused` is why the last Enter was not taken.
-    NewPlan { context: ContextId, repo: Option<String>, step: Step, id: Option<PlanId>, title: String, input: String, refused: Option<String> },
-    /// `f`: asks for the name of the fork of `source`; empty keeps the command's default.
-    Fork { source: Target, input: String, refused: Option<String> },
-    /// `r`: asks for the new name of `target`, starting from the current one.
-    Rename { target: Target, input: String, refused: Option<String> },
+    /// `n`: asks for the name of a new Plan in `context`, on `repo` (those of `target`'s Plan). `refused` is why the
+    /// last Enter was not taken.
+    Name { target: Target, context: ContextId, repo: String, input: String, refused: Option<String> },
+    /// `x`: asks whether to close `target`'s pane.
+    Close { target: Target },
 }
 
 /// What the view does after a key.
@@ -40,135 +36,182 @@ pub enum Outcome {
     Open,
     /// The prompt is dismissed; nothing happens.
     Cancel,
-    /// `plan new <id> --context <context> --repo <repo> --title <title>`.
-    NewPlan { context: ContextId, id: PlanId, title: String, repo: String },
-    /// `session fork <source> [--name <name>]`.
-    Fork { source: SessionId, name: Option<Name> },
-    /// `session rename <name> --session <session>`.
-    Rename { session: SessionId, name: Name },
+    /// `plan new <id> --context <context> --repo <repo> --title <id>`.
+    NewPlan { context: ContextId, id: PlanId, repo: String },
+    /// `session close <id>`.
+    Close { id: SessionId },
 }
 
-/// A key typed into `input`: true when it was text or Backspace.
-fn edit(input: &mut String, key: KeyEvent) -> bool {
-    match key.code {
-        KeyCode::Backspace => {
-            input.pop();
-            true
-        }
-        KeyCode::Char(c) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-            input.push(c);
-            true
-        }
-        _ => false,
-    }
-}
+/// The refusal of an empty name (the reference's).
+const NAME_REQUIRED: &str = "A name is required.";
 
 impl Prompt {
-    /// `repo`: the repo of the Context's Plans (the newest), when it has one.
-    pub fn new_plan(context: ContextId, repo: Option<String>) -> Self {
-        Prompt::NewPlan { context, repo, step: Step::Id, id: None, title: String::new(), input: String::new(), refused: None }
+    pub fn name(target: Target, context: ContextId, repo: String) -> Self {
+        Prompt::Name { target, context, repo, input: String::new(), refused: None }
     }
 
-    pub fn fork(source: Target) -> Self {
-        Prompt::Fork { source, input: String::new(), refused: None }
-    }
-
-    pub fn rename(target: Target, current: &str) -> Self {
-        Prompt::Rename { target, input: current.to_owned(), refused: None }
+    pub fn close(target: Target) -> Self {
+        Prompt::Close { target }
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Outcome {
-        if key.code == KeyCode::Esc {
-            return Outcome::Cancel;
-        }
         match self {
-            Prompt::NewPlan { context, repo, step, id, title, input, refused } => {
-                if edit(input, key) || key.code != KeyCode::Enter {
-                    return Outcome::Open;
-                }
-                let text = input.trim().to_owned();
-                if text.is_empty() {
-                    *refused = Some("A value is required.".into());
-                    return Outcome::Open;
-                }
-                *refused = None;
-                match step {
-                    Step::Id => match PlanId::parse(&text) {
-                        Ok(plan) => {
-                            *id = Some(plan);
-                            *step = Step::Title;
-                            input.clear();
-                        }
-                        Err(e) => *refused = Some(e.message().to_owned()),
-                    },
-                    Step::Title => {
-                        *title = text;
-                        input.clear();
-                        if let Some(repo) = repo.clone() {
-                            return Outcome::NewPlan { context: context.clone(), id: id.clone().expect("the id step ran"), title: title.clone(), repo };
-                        }
-                        *step = Step::Repo;
+            Prompt::Name { context, repo, input, refused, .. } => match key.code {
+                KeyCode::Esc => Outcome::Cancel,
+                KeyCode::Enter => {
+                    let name = input.trim();
+                    if name.is_empty() {
+                        *refused = Some(NAME_REQUIRED.into());
+                        return Outcome::Open;
                     }
-                    Step::Repo => {
-                        return Outcome::NewPlan { context: context.clone(), id: id.clone().expect("the id step ran"), title: title.clone(), repo: text };
-                    }
-                }
-                Outcome::Open
-            }
-            Prompt::Fork { source, input, refused } => {
-                if edit(input, key) || key.code != KeyCode::Enter {
-                    return Outcome::Open;
-                }
-                match input.trim() {
-                    "" => Outcome::Fork { source: source.id.clone(), name: None },
-                    name => match name.parse::<Name>() {
-                        Ok(name) => Outcome::Fork { source: source.id.clone(), name: Some(name) },
+                    match PlanId::parse(name) {
+                        Ok(id) => Outcome::NewPlan { context: context.clone(), id, repo: repo.clone() },
                         Err(e) => {
                             *refused = Some(e.message().to_owned());
                             Outcome::Open
                         }
-                    },
-                }
-            }
-            Prompt::Rename { target, input, refused } => {
-                if edit(input, key) || key.code != KeyCode::Enter {
-                    return Outcome::Open;
-                }
-                match input.trim().parse::<Name>() {
-                    Ok(name) => Outcome::Rename { session: target.id.clone(), name },
-                    Err(e) => {
-                        *refused = Some(e.message().to_owned());
-                        Outcome::Open
                     }
                 }
-            }
+                KeyCode::Backspace => {
+                    input.pop();
+                    Outcome::Open
+                }
+                KeyCode::Char(c) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                    input.push(c);
+                    Outcome::Open
+                }
+                _ => Outcome::Open,
+            },
+            Prompt::Close { target } => match key.code {
+                KeyCode::Char('y' | 'Y') => Outcome::Close { id: target.id.clone() },
+                _ => Outcome::Cancel,
+            },
         }
     }
 
     /// The prompt's one line of text.
     pub fn text(&self) -> String {
-        let refusal = |r: &Option<String>| r.as_ref().map(|r| format!("{r} ")).unwrap_or_default();
         match self {
-            Prompt::NewPlan { context, step, input, refused, .. } => {
-                let (what, enter) = match step {
-                    Step::Id => ("id", "Enter: next"),
-                    Step::Title => ("title", "Enter: next"),
-                    Step::Repo => ("repo", "Enter starts"),
-                };
-                let enter = if *step == Step::Title && !self.asks_repo() { "Enter starts" } else { enter };
-                format!("{}New Plan in {context}, {what}: {input}█ ({enter}, Esc cancels)", refusal(refused))
+            Prompt::Name { target, input, refused, .. } => {
+                let refusal = refused.as_ref().map(|r| format!("{r} ")).unwrap_or_default();
+                format!("{refusal}Fork {} into a new Plan, name: {input}█ (Enter starts, Esc cancels)", target.label)
             }
-            Prompt::Fork { source, input, refused } => {
-                format!("{}Fork {}, name: {input}█ (empty: default; Enter forks, Esc cancels)", refusal(refused), source.label)
-            }
-            Prompt::Rename { target, input, refused } => {
-                format!("{}Rename {} to: {input}█ (Enter renames, Esc cancels)", refusal(refused), target.label)
+            Prompt::Close { target } => {
+                let working = if target.working { format!("{} is working. ", target.label) } else { String::new() };
+                format!("{working}Close {}? pi stops; the session file stays (y/N)", target.label)
             }
         }
     }
+}
 
-    /// Whether a new Plan's last step is the repo.
-    fn asks_repo(&self) -> bool {
-        matches!(self, Prompt::NewPlan { repo: None, .. })
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target(working: bool) -> Target {
+        Target { id: SessionId::parse("aaaa1111").unwrap(), label: "cpd-ui".into(), working }
+    }
+
+    fn name() -> Prompt {
+        Prompt::name(target(false), ContextId::parse("cpd").unwrap(), "/repo".into())
+    }
+
+    fn press(p: &mut Prompt, code: KeyCode) -> Outcome {
+        p.key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    fn type_str(p: &mut Prompt, s: &str) {
+        for c in s.chars() {
+            assert_eq!(press(p, KeyCode::Char(c)), Outcome::Open);
+        }
+    }
+
+    fn new_plan(id: &str) -> Outcome {
+        Outcome::NewPlan { context: ContextId::parse("cpd").unwrap(), id: PlanId::parse(id).unwrap(), repo: "/repo".into() }
+    }
+
+    // The reference's tests (`main:tui/src/prompt.rs`), on Plan ids for names.
+
+    #[test]
+    fn enter_confirms_the_typed_name() {
+        let mut p = name();
+        type_str(&mut p, "  my-plan ");
+        assert_eq!(press(&mut p, KeyCode::Enter), new_plan("my-plan"));
+    }
+
+    #[test]
+    fn backspace_edits_the_name() {
+        let mut p = name();
+        type_str(&mut p, "abc");
+        press(&mut p, KeyCode::Backspace);
+        assert_eq!(press(&mut p, KeyCode::Enter), new_plan("ab"));
+    }
+
+    #[test]
+    fn q_and_n_are_text_in_the_name() {
+        let mut p = name();
+        type_str(&mut p, "nq");
+        assert_eq!(press(&mut p, KeyCode::Enter), new_plan("nq"));
+    }
+
+    #[test]
+    fn esc_cancels_the_name() {
+        let mut p = name();
+        type_str(&mut p, "abc");
+        assert_eq!(press(&mut p, KeyCode::Esc), Outcome::Cancel);
+    }
+
+    #[test]
+    fn an_empty_name_is_refused_and_the_prompt_stays() {
+        let mut p = name();
+        assert_eq!(press(&mut p, KeyCode::Enter), Outcome::Open);
+        assert!(p.text().starts_with("A name is required. "));
+        type_str(&mut p, "   ");
+        assert_eq!(press(&mut p, KeyCode::Enter), Outcome::Open, "blanks are no name");
+        type_str(&mut p, "xy");
+        assert_eq!(press(&mut p, KeyCode::Enter), new_plan("xy"));
+    }
+
+    #[test]
+    fn a_name_that_is_no_plan_id_is_refused_and_the_prompt_keeps_it() {
+        let mut p = name();
+        type_str(&mut p, "my plan");
+        assert_eq!(press(&mut p, KeyCode::Enter), Outcome::Open);
+        let refusal = PlanId::parse("my plan").unwrap_err().message().to_owned();
+        assert_eq!(p.text(), format!("{refusal} Fork cpd-ui into a new Plan, name: my plan█ (Enter starts, Esc cancels)"));
+    }
+
+    #[test]
+    fn control_keys_are_not_typed() {
+        let mut p = name();
+        p.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(press(&mut p, KeyCode::Enter), Outcome::Open);
+    }
+
+    #[test]
+    fn the_name_prompt_names_the_session_and_shows_the_input() {
+        let mut p = name();
+        type_str(&mut p, "new");
+        assert_eq!(p.text(), "Fork cpd-ui into a new Plan, name: new█ (Enter starts, Esc cancels)");
+    }
+
+    #[test]
+    fn the_close_prompt_text() {
+        assert_eq!(Prompt::close(target(false)).text(), "Close cpd-ui? pi stops; the session file stays (y/N)");
+    }
+
+    #[test]
+    fn the_close_prompt_warns_first_when_the_session_is_working() {
+        assert_eq!(Prompt::close(target(true)).text(), "cpd-ui is working. Close cpd-ui? pi stops; the session file stays (y/N)");
+    }
+
+    #[test]
+    fn only_y_closes() {
+        for c in ['y', 'Y'] {
+            assert_eq!(press(&mut Prompt::close(target(false)), KeyCode::Char(c)), Outcome::Close { id: target(false).id });
+        }
+        for code in [KeyCode::Char('n'), KeyCode::Enter, KeyCode::Esc, KeyCode::Char(' '), KeyCode::Down] {
+            assert_eq!(press(&mut Prompt::close(target(false)), code), Outcome::Cancel);
+        }
     }
 }

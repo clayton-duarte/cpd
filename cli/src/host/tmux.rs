@@ -8,10 +8,11 @@
 //! A call that exits non-zero where cpd did not expect it is `tmux_failed`
 //! (exit 1) with `argv`, `exit` and the last 60 lines of stderr (commands.md §1.3).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
+use std::sync::Mutex;
 
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::SessionId;
@@ -433,7 +434,14 @@ impl Tmux {
             return Err(self.failed(&args, &out));
         }
         let stdout = String::from_utf8_lossy(&out.stdout);
-        stdout.lines().map(|line| parse_pane(line).ok_or_else(|| self.unexpected(&args, line))).collect()
+        let mut panes = Vec::new();
+        for line in stdout.lines() {
+            match parse_pane(line).ok_or_else(|| self.unexpected(&args, line))? {
+                Line::Pane(pane) => panes.push(pane),
+                Line::UnknownView(view) => warn_unknown_view(&view),
+            }
+        }
+        Ok(panes)
     }
 
     /// `tmux_failed` for output cpd cannot parse.
@@ -468,12 +476,29 @@ fn new_session_args(name: &str, window: &str, spawn: &Spawn, fresh: bool) -> Vec
     args
 }
 
-fn parse_pane(line: &str) -> Option<Pane> {
+/// A parsed `list-panes` line.
+#[derive(Debug, PartialEq, Eq)]
+enum Line {
+    Pane(Pane),
+    /// A well-formed pane whose `@cpd_view` this binary does not know (§6.3): a
+    /// newer cpd2 made it, so it is skipped, not an error.
+    UnknownView(String),
+}
+
+/// Logs an unknown `@cpd_view` value to stderr, once per value and process.
+fn warn_unknown_view(view: &str) {
+    static SEEN: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+    if SEEN.lock().unwrap_or_else(|e| e.into_inner()).insert(view.to_owned()) {
+        eprintln!("cpd2: skipping tmux panes with the unknown @cpd_view {view:?}: a newer cpd2 made them");
+    }
+}
+
+fn parse_pane(line: &str) -> Option<Line> {
     let fields: Vec<&str> = line.split('\t').collect();
     let [pane, window, session_name, window_name, dead, dead_status, pid, cpd_session, cpd_view] = fields[..] else {
         return None;
     };
-    Some(Pane {
+    let pane = Pane {
         pane: PaneId::parse(pane)?,
         window: WindowId::parse(window)?,
         session_name: session_name.to_owned(),
@@ -486,8 +511,15 @@ fn parse_pane(line: &str) -> Option<Pane> {
         dead_status: if dead_status.is_empty() { None } else { Some(dead_status.parse().ok()?) },
         pid: pid.parse().ok()?,
         cpd_session: if cpd_session.is_empty() { None } else { Some(SessionId::parse(cpd_session).ok()?) },
-        cpd_view: if cpd_view.is_empty() { None } else { Some(View::parse(cpd_view)?) },
-    })
+        cpd_view: None,
+    };
+    if cpd_view.is_empty() {
+        return Some(Line::Pane(pane));
+    }
+    match View::parse(cpd_view) {
+        Some(view) => Some(Line::Pane(Pane { cpd_view: Some(view), ..pane })),
+        None => Some(Line::UnknownView(cpd_view.to_owned())),
+    }
 }
 
 fn strings(args: &[&str]) -> Vec<String> {
@@ -515,9 +547,16 @@ mod tests {
         assert!(WindowId::parse("%1").is_none());
     }
 
+    fn pane_of(line: &str) -> Pane {
+        match parse_pane(line) {
+            Some(Line::Pane(pane)) => pane,
+            other => panic!("{line:?}: {other:?}"),
+        }
+    }
+
     #[test]
     fn parses_a_list_panes_line() {
-        let live = parse_pane("%4\t@2\tcpd\tmain\t0\t\t4242\t596d007f-aaaa\t").unwrap();
+        let live = pane_of("%4\t@2\tcpd\tmain\t0\t\t4242\t596d007f-aaaa\t");
         assert_eq!(live.pane.as_str(), "%4");
         assert_eq!(live.window.as_str(), "@2");
         assert_eq!(live.session_name, "cpd");
@@ -528,7 +567,7 @@ mod tests {
         assert_eq!(live.cpd_session.unwrap().as_str(), "596d007f-aaaa");
         assert_eq!(live.cpd_view, None);
 
-        let dead = parse_pane("%5\t@2\tcpd\tmain\t1\t3\t4243\t\tchat").unwrap();
+        let dead = pane_of("%5\t@2\tcpd\tmain\t1\t3\t4243\t\tchat");
         assert!(dead.dead);
         assert_eq!(dead.dead_status, Some(3));
         assert_eq!(dead.cpd_view, Some(View::Chat));
@@ -538,7 +577,13 @@ mod tests {
     fn refuses_a_malformed_line() {
         assert!(parse_pane("%4 @2 cpd main 0  4242  ").is_none());
         assert!(parse_pane("%4\t@2\tcpd\tmain\t2\t\t4242\t\t").is_none());
-        assert!(parse_pane("%4\t@2\tcpd\tmain\t0\t\t4242\t\tnope").is_none());
+    }
+
+    #[test]
+    fn a_pane_with_an_unknown_view_is_a_line_to_skip_not_a_malformed_one() {
+        assert_eq!(parse_pane("%4\t@2\tcpd\tmain\t0\t\t4242\t\tnope"), Some(Line::UnknownView("nope".into())));
+        // Any other defect still fails.
+        assert_eq!(parse_pane("%4\t@2\tcpd\tmain\t2\t\t4242\t\tnope"), None);
     }
 
     #[test]

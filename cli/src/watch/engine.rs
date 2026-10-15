@@ -125,13 +125,14 @@ pub(super) fn run() -> Result<Output, CpdError> {
     log.line(&format!("started (pid {pid}), a tick every {}s", config.watch.tick_seconds));
 
     let tmux = Tmux::new(config.tmux.socket.as_str());
+    let report = Report::new(Duration::from_secs(u64::from(config.watch.error_repeat_seconds)));
     let mut engine = Engine {
         home,
         config,
         store,
         tmux,
         log,
-        report: Report::default(),
+        report,
         catalog: None,
         polled: HashMap::new(),
         synced: None,

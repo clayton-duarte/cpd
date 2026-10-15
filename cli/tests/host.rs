@@ -366,3 +366,24 @@ fn the_statusbar_is_a_view_and_a_pane_marked_so_parses() {
     assert!(View::ALL.contains(&View::Statusbar));
     assert_eq!(View::parse("nope"), None);
 }
+
+/// Finding 4: a pane made by a newer cpd2 (a view this binary does not know)
+/// is skipped, and the rest of the listing is intact.
+#[test]
+fn a_pane_with_an_unknown_view_is_skipped_not_a_failed_listing() {
+    let s = server();
+    let t = &s.tmux;
+    t.ensure_session("cpd", layout::MAIN_WINDOW, &sleeper(s.env.root())).unwrap();
+    let first = t.list_panes().unwrap().remove(0).pane;
+    let (_, other) = t.new_window("cpd", "x", &sleeper(s.env.root())).unwrap();
+    let set = |pane: &PaneId, view: &str| {
+        let out = s.env.tmux(&["set", "-p", "-t", pane.as_str(), "@cpd_view", view]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    };
+    set(&first, "statusbar");
+    set(&other, "hologram");
+
+    let panes = t.list_panes().unwrap();
+    assert_eq!(pane(&panes, &first).cpd_view, Some(View::Statusbar));
+    assert!(panes.iter().all(|p| p.pane != other), "{panes:?}");
+}
