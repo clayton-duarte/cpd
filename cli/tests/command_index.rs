@@ -116,8 +116,6 @@ const PENDING: &[(&[&str], &str)] = &[
     (&["tui"], "tui"),
     (&["tui", "--attach"], "tui"),
     (&["tui", "view", "tree"], "tui view"),
-    // doctor
-    (&["doctor"], "doctor"),
 ];
 
 #[test]

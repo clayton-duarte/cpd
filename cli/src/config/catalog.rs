@@ -85,7 +85,7 @@ pub fn locate_pi() -> Result<PiInstall, CpdError> {
 
 /// pi's Node, the one pi's launcher uses: `${XDG_DATA_HOME:-~/.local/share}/pi-node/current/bin/node`
 /// when it exists, else `node` on `PATH`.
-fn node() -> PathBuf {
+pub(crate) fn node() -> PathBuf {
     let data_home = std::env::var_os("XDG_DATA_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
@@ -130,7 +130,7 @@ pub fn load(config: &Config) -> Result<Catalog, CpdError> {
 }
 
 /// Runs the embedded module with pi's Node and builds the [`Catalog`] from what it prints.
-fn read(pi: &PiInstall, config: &Config) -> Result<Catalog, CpdError> {
+pub(crate) fn read(pi: &PiInstall, config: &Config) -> Result<Catalog, CpdError> {
     let tiers = [(Letter::O, &config.tiers.o), (Letter::S, &config.tiers.s), (Letter::H, &config.tiers.h)];
     let node = node();
     let mut cmd = Command::new(&node);

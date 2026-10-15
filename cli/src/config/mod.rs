@@ -5,7 +5,7 @@
 //! and use Tiers through [`Tier`] and [`Catalog`] (from [`load_catalog`]).
 
 mod cache;
-mod catalog;
+pub(crate) mod catalog;
 mod file;
 mod tier;
 
