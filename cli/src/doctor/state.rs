@@ -11,7 +11,8 @@ use serde_json::{Value, json};
 use super::check::{Check, Severity};
 use crate::error::CpdError;
 use crate::home::CpdHome;
-use crate::ids::ContextId;
+use crate::ids::{ContextId, PlanId};
+use crate::plan::jobs;
 use crate::store::Store;
 
 const NO_STORE: &str = "the store did not open.";
@@ -38,11 +39,30 @@ pub fn store(opened: Result<Store, CpdError>) -> (Check, Option<Store>) {
 pub fn tamper(store: Option<&mut Store>) -> Check {
     let name = "tamper";
     let Some(store) = store else { return Check::not_checked(name, Severity::Error, NO_STORE) };
-    match store.tamper() {
+    match tamper_report(store) {
         Err(e) => Check::from_error(name, Severity::Error, &e),
         Ok(report) if report.is_empty() => Check::pass(name, Severity::Error),
         Ok(report) => Check::fail(name, Severity::Error, "The Ledger was changed outside cpd.").found(Value::Array(report)),
     }
+}
+
+/// The tamper report of contract §4.3: the store's part (the schema check and
+/// the orphaned `history` rows), then, Plan by Plan, every Locked Job whose
+/// recomputed fingerprint (§2.3) differs from the stored one.
+fn tamper_report(store: &mut Store) -> Result<Vec<Value>, CpdError> {
+    let mut report = store.tamper()?;
+    let fingerprints = store.read(|conn| {
+        let mut stmt = conn.prepare("SELECT id FROM plans ORDER BY id")?;
+        let ids = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut found = Vec::new();
+        for id in ids {
+            let id = PlanId::parse(&id)?;
+            found.extend(jobs::tampered(&id, &jobs::load(conn, &id)?));
+        }
+        Ok(found)
+    })?;
+    report.extend(fingerprints);
+    Ok(report)
 }
 
 /// Every directory under `contexts/` is a valid store and none is `sync_failing`.

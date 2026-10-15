@@ -473,6 +473,93 @@ fn a_history_row_without_a_txn_fails_tamper_only() {
     assert_eq!(c["found"], json!([{"kind": "history", "id": 1, "txn": 999}]));
 }
 
+/// Plan `pl` in `plan` with Locked Jobs `a` and `b` (queued, fingerprints stored
+/// the way `plan lock` does), and the Draft `c`, which has no fingerprint.
+fn locked_jobs(env: &TestEnv) {
+    let mut store = open_store(env);
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(
+                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Context', 't', 'hs');
+                 INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                   VALUES ('lead-pl', 'lead', 'ctx', 'pl', 'pl', '/repo', 'O3', 'stopped', 't', 't');
+                 INSERT INTO plans (id, context, title, repo, base, lead_branch, phase, lead_session, created_at)
+                   VALUES ('pl', 'ctx', 'Plan', '/repo', 'main', 'cpd/pl', 'plan', 'lead-pl', 't');",
+            )?;
+            for key in ["a", "b", "c"] {
+                tx.execute(
+                    "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+                                       created_txn, created_at)
+                     VALUES ('pl', ?1, 'T', 'S2', 'Do it.', 'Because.', '[\"x\"]', '[\"y\"]', '[]', 'draft', 0, cpd_txn(), 't')",
+                    [key],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    let id = cpd2::ids::PlanId::parse("pl").unwrap();
+    let jobs = store.read(|conn| cpd2::plan::jobs::load(conn, &id)).unwrap();
+    store
+        .write("fixture", |tx| {
+            for job in jobs.iter().filter(|j| j.key != "c") {
+                tx.execute(
+                    "UPDATE jobs SET status = 'queued', fingerprint = ?1 WHERE plan = 'pl' AND key = ?2",
+                    [cpd2::plan::locked_fingerprint(job).as_str(), job.key.as_str()],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+}
+
+fn row_counts(env: &TestEnv) -> Vec<i64> {
+    let conn = Connection::open(env.cpd_home().join("cpd.db")).unwrap();
+    ["txns", "events", "history", "jobs", "plans"]
+        .iter()
+        .map(|t| conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0)).unwrap())
+        .collect()
+}
+
+/// Edits Locked Job `a` outside cpd, the way a local user could: the `jobs_locked`
+/// trigger is dropped, the row changed, the trigger recreated exactly, so the
+/// schema check stays quiet and only the fingerprint tells.
+fn edit_locked_job_outside_cpd(env: &TestEnv) {
+    let conn = Connection::open(env.cpd_home().join("cpd.db")).unwrap();
+    let txn: i64 = conn.query_row("SELECT max(id) FROM txns", [], |r| r.get(0)).unwrap();
+    conn.create_scalar_function("cpd_txn", 0, rusqlite::functions::FunctionFlags::SQLITE_UTF8, move |_| Ok(txn)).unwrap();
+    let sql: String = conn.query_row("SELECT sql FROM sqlite_schema WHERE name = 'jobs_locked'", [], |r| r.get(0)).unwrap();
+    conn.execute_batch("DROP TRIGGER jobs_locked").unwrap();
+    conn.execute("UPDATE jobs SET goal = 'Something else.' WHERE plan = 'pl' AND key = 'a'", []).unwrap();
+    conn.execute_batch(&sql).unwrap();
+}
+
+#[test]
+fn untouched_locked_jobs_pass_tamper() {
+    let env = healthy();
+    locked_jobs(&env);
+    let run = doctor(&env);
+    run.ok();
+    assert_passes(&run, "tamper");
+}
+
+#[test]
+fn a_locked_job_edited_outside_cpd_fails_tamper_and_nothing_is_written() {
+    let env = healthy();
+    locked_jobs(&env);
+    edit_locked_job_outside_cpd(&env);
+    let before = row_counts(&env);
+    let run = doctor(&env);
+    assert_doctor_failed(&run);
+    assert_passes(&run, "store");
+    let c = assert_fails(&run, "tamper", "error", "outside cpd");
+    let found = c["found"].as_array().unwrap();
+    assert_eq!(found.len(), 1, "only the edited Job is reported: {c}");
+    assert_eq!((&found[0]["kind"], &found[0]["plan"], &found[0]["job"]), (&json!("fingerprint"), &json!("pl"), &json!("a")));
+    let (expected, got) = (found[0]["expected"].as_str().unwrap(), found[0]["found"].as_str().unwrap());
+    assert!(expected.len() == 64 && got.len() == 64 && expected != got, "{c}");
+    assert_eq!(row_counts(&env), before, "doctor writes nothing");
+}
+
 #[test]
 fn a_database_that_is_not_cpds_fails_store() {
     let env = healthy();
