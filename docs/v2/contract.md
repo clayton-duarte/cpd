@@ -176,7 +176,7 @@ One deliverable: one repo, one Lead Branch, one PR, optionally a Jira task. This
 | `phase` | text | `grounding`, `plan`, `dispatch`, `pr`, `done` (§3.1) |
 | `lead_session` | text | the Plan's Lead Session |
 | `pr` | json? | `{number, url, opened_at}`, set by `pr open` |
-| `pr_seen` | json | `{checks: {<name>: <conclusion>}, reviewIds: [int], commentIds: [int]}`: what `pr poll` has already reported (replaces cpd 1's `pr-state.json`, §13) |
+| `pr_seen` | json | `{checks: {<name>: <conclusion>}, reviewIds: [string], commentIds: [string], closed?: true}`: what `pr poll` has already reported (ids are gh's node ids as printed, or the decimal string of a number; `closed` is set when a closure without a merge was reported, and removed when the PR is open again) (replaces cpd 1's `pr-state.json`, §13) |
 | `all_merged_at` | time? | when `all-merged` was appended (it is appended once) |
 | `created_at`, `locked_at`, `done_at` | time, time?, time? | |
 

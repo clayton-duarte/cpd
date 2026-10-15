@@ -96,9 +96,6 @@ const PENDING: &[(&[&str], &str)] = &[
     (&["ask", "api-schema-a1", "Which field names?"], "ask"),
     (&["answer", "api-schema-a1-q1", "The v2 ones."], "answer"),
     // pr
-    (&["pr", "open"], "pr open"),
-    (&["pr", "rebase"], "pr rebase"),
-    (&["pr", "poll"], "pr poll"),
     // session
     // events
     // watch
