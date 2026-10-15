@@ -62,11 +62,27 @@ fn plural(n: usize, noun: &str) -> String {
     format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
 }
 
-/// A line of `prefix` spans, then `text` cut to the width that is left.
-fn fitted(mut spans: Vec<Span<'static>>, text: &str, style: Style, width: u16) -> Line<'static> {
-    let used: usize = spans.iter().map(Span::width).sum();
-    spans.push(Span::styled(truncate(text, usize::from(width).saturating_sub(used)), style));
-    Line::from(spans)
+/// `line` cut to `width` columns, ending in `…` in the style of the span it cuts.
+fn clip(line: Line<'static>, width: u16) -> Line<'static> {
+    let width = usize::from(width);
+    if line.width() <= width {
+        return line;
+    }
+    let mut room = width.saturating_sub(1);
+    let mut spans = Vec::new();
+    for span in line.spans {
+        if span.width() <= room {
+            room -= span.width();
+            spans.push(span);
+            continue;
+        }
+        if width > 0 {
+            let kept: String = span.content.chars().take(room).collect();
+            spans.push(Span::styled(format!("{kept}…"), span.style));
+        }
+        break;
+    }
+    Line::from(spans).style(line.style)
 }
 
 fn engine_lines(engine: &Engine) -> Vec<Line<'static>> {
@@ -113,7 +129,7 @@ fn pr_lines(plans: &[PlanCard], with_idle: bool, width: u16) -> Vec<Line<'static
     let label = |card: &PlanCard| format!(" {}", card.head.title);
     for card in plans.iter().filter(|c| c.head.pr.is_some()) {
         let pr = card.head.pr.as_ref().expect("filtered on a PR");
-        lines.push(fitted(vec![], &label(card), Style::new().add_modifier(Modifier::BOLD), width));
+        lines.push(Line::from(bold(&label(card))));
         let (icon, checks) = palette::checks(pr.checks_summary());
         lines.push(Line::from(vec![
             format!("  #{} ", pr.number).into(),
@@ -130,17 +146,15 @@ fn pr_lines(plans: &[PlanCard], with_idle: bool, width: u16) -> Vec<Line<'static
             format!(" {}  {}", plural(pr.reviews, "review"), plural(pr.comments, "comment")).into(),
         ]));
         if let Some(feedback) = card.feedback.as_ref().filter(|f| !f.failing_checks.is_empty()) {
-            lines.push(fitted(
-                vec!["  ".into(), Span::styled("✗ ", palette::fg(Meaning::Failed))],
-                &feedback.failing_checks.join(", "),
-                palette::fg(Meaning::Failed),
-                width,
-            ));
+            lines.push(Line::from(vec![
+                "  ".into(),
+                Span::styled(format!("✗ {}", feedback.failing_checks.join(", ")), palette::fg(Meaning::Failed)),
+            ]));
         }
     }
     if with_idle {
         for card in plans.iter().filter(|c| c.head.pr.is_none() && c.head.phase == Phase::Dispatch) {
-            let room = usize::from(width).saturating_sub(" no PR".len() + 2);
+            let room = usize::from(width).saturating_sub("  no PR".len());
             lines.push(Line::from(vec![bold(&truncate(&label(card), room)), dim("  no PR")]));
         }
     }
@@ -150,13 +164,18 @@ fn pr_lines(plans: &[PlanCard], with_idle: bool, width: u16) -> Vec<Line<'static
     lines
 }
 
-fn escalation_lines(open: &[MachineEscalation], width: u16) -> Vec<Line<'static>> {
+fn escalation_lines(open: &[MachineEscalation]) -> Vec<Line<'static>> {
     let count = if open.is_empty() { Span::styled("0", palette::fg(Meaning::Nothing)) } else { Span::styled(open.len().to_string(), palette::fg(Meaning::Review)) };
     let mut lines = vec![Line::from(vec![bold(" Escalations "), count])];
     for e in open {
         let who = format!("{}/{}", e.plan, e.job);
-        let prefix = vec![" ".into(), Span::styled("● ", palette::fg(Meaning::Review)), who.into(), "  ".into()];
-        lines.push(fitted(prefix, &e.escalation.question, Style::new().add_modifier(Modifier::DIM), width));
+        lines.push(Line::from(vec![
+            " ".into(),
+            Span::styled("● ", palette::fg(Meaning::Review)),
+            who.into(),
+            "  ".into(),
+            dim(e.escalation.question.as_str()),
+        ]));
     }
     if open.is_empty() {
         lines.push(Line::from(dim(" none open")));
@@ -165,7 +184,7 @@ fn escalation_lines(open: &[MachineEscalation], width: u16) -> Vec<Line<'static>
 }
 
 /// The latest Events that fit `height` rows under the title, newest last.
-fn event_lines(w: &Widgets, height: u16, width: u16) -> Vec<Line<'static>> {
+fn event_lines(w: &Widgets, height: u16) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(bold(" Events"))];
     let rows = usize::from(height).saturating_sub(1);
     if w.events.is_empty() {
@@ -174,7 +193,7 @@ fn event_lines(w: &Widgets, height: u16, width: u16) -> Vec<Line<'static>> {
     for e in &w.events[w.events.len().saturating_sub(rows)..] {
         let text = if e.text.is_empty() { &e.kind } else { &e.text };
         let style = if e.kind == "error" { palette::fg(Meaning::Failed) } else { Style::new() };
-        lines.push(fitted(vec![" ".into(), dim(clock(&e.at)), " ".into()], text, style, width));
+        lines.push(Line::from(vec![" ".into(), dim(clock(&e.at)), " ".into(), Span::styled(text.clone(), style)]));
     }
     lines
 }
@@ -185,40 +204,42 @@ fn separator(f: &mut Frame, area: Rect) {
 }
 
 /// Draws the column in `area`; `now` is the clock of the ages. `note` (a failure the view reports) takes the
-/// hint's row.
+/// hint's row. A pane too short for everything keeps the sections in this order: the engine and slots, the PRs, the
+/// Escalations, then the Events (their latest ones).
 pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, now: OffsetDateTime, note: Option<&str>) {
     let width = area.width;
     let mut machine = engine_lines(&w.engine);
     machine.extend(slot_lines(&w.slots, now, width));
-    let escalations = escalation_lines(&w.escalations, width);
+    let escalations = escalation_lines(&w.escalations);
     // The Plans in Dispatch without a PR are listed only while there is room.
-    let fixed = machine.len() + escalations.len() + 4 * usize::from(SEPARATOR) + 1;
+    let fixed = machine.len() + escalations.len() + 3 * usize::from(SEPARATOR) + 1;
     let with_pr = pr_lines(&w.plans, false, width);
     let with_idle = pr_lines(&w.plans, true, width);
     let room = usize::from(area.height).saturating_sub(fixed + usize::from(EVENTS_MIN));
     let prs = if with_idle.len() <= room.max(with_pr.len()) { with_idle } else { with_pr };
 
-    let [machine_area, sep1, prs_area, sep2, esc_area, sep3, events_area, hint] = Layout::vertical([
-        Constraint::Length(machine.len() as u16),
-        Constraint::Length(SEPARATOR),
-        Constraint::Length(prs.len() as u16),
-        Constraint::Length(SEPARATOR),
-        Constraint::Length(escalations.len() as u16),
-        Constraint::Length(SEPARATOR),
-        Constraint::Min(0),
-        Constraint::Length(1),
-    ])
-    .areas(area);
+    // Each part gets what it wants, in priority order, from what is left above the hint.
+    let mut left = area.height.saturating_sub(1);
+    let mut take = |want: usize| {
+        let rows = u16::try_from(want).unwrap_or(u16::MAX).min(left);
+        left -= rows;
+        rows
+    };
+    let heights = [take(machine.len()), take(1), take(prs.len()), take(1), take(escalations.len()), take(1)];
+    let constraints = heights.map(Constraint::Length).into_iter().chain([Constraint::Min(0), Constraint::Length(1)]);
+    let [machine_area, sep1, prs_area, sep2, esc_area, sep3, events_area, hint] =
+        Layout::vertical(constraints).areas(area);
     for sep in [sep1, sep2, sep3] {
         separator(f, sep);
     }
-    f.render_widget(Paragraph::new(machine), machine_area);
-    f.render_widget(Paragraph::new(prs), prs_area);
-    f.render_widget(Paragraph::new(escalations), esc_area);
-    f.render_widget(Paragraph::new(event_lines(w, events_area.height, width)), events_area);
+    let paragraph = |lines: Vec<Line<'static>>| Paragraph::new(lines.into_iter().map(|l| clip(l, width)).collect::<Vec<_>>());
+    f.render_widget(paragraph(machine), machine_area);
+    f.render_widget(paragraph(prs), prs_area);
+    f.render_widget(paragraph(escalations), esc_area);
+    f.render_widget(paragraph(event_lines(w, events_area.height)), events_area);
     let foot = match note {
-        Some(note) => Line::from(Span::styled(format!(" {}", truncate(note, usize::from(width).saturating_sub(1))), palette::fg(Meaning::Failed))),
+        Some(note) => Line::from(Span::styled(format!(" {note}"), palette::fg(Meaning::Failed))),
         None => Line::from(dim(HINT)),
     };
-    f.render_widget(Paragraph::new(foot), hint);
+    f.render_widget(paragraph(vec![foot]), hint);
 }
