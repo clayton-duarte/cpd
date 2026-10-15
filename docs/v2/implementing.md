@@ -82,7 +82,7 @@ Parsing:
 
 ## Dependencies
 
-Every dependency is declared once, in the root `Cargo.toml` `[workspace.dependencies]`, and used with `x.workspace = true` in `cli/Cargo.toml`. **Later Jobs may not add, remove or change dependencies or features**, so parallel Jobs never conflict on `Cargo.lock`. The only planned addition is the TUI Job's ratatui and crossterm. If you need something not listed, ask the Lead.
+Every dependency is declared once, in the root `Cargo.toml` `[workspace.dependencies]`, and used with `x.workspace = true` in `cli/Cargo.toml`. **Later Jobs may not add, remove or change dependencies or features**, so parallel Jobs never conflict on `Cargo.lock`. The TUI Job (`tui-cockpit`) added the last planned ones, ratatui and tui-tree-widget. If you need something not listed, ask the Lead.
 
 | Crate | Features | Why |
 |---|---|---|
@@ -97,9 +97,11 @@ Every dependency is declared once, in the root `Cargo.toml` `[workspace.dependen
 | `time` 0.3 | `formatting`, `parsing`, `macros` | RFC 3339 UTC times with milliseconds (§1.3) |
 | `sha2` 0.10 | | the Locked-Job and plan fingerprints (§2.3) and the schema hash (§4.3); `format!("{:x}", Sha256::digest(…))` gives hex (0.10, not 0.11, for that) |
 | `sha1` 0.10 | | the per-repo lock's name `repo-<sha1>.lock` (§1.4, §7.4); use `CpdHome::repo_lock` |
+| `ratatui` 0.30 | default (its `crossterm` backend) | the cockpit's views (`tui view`, commands.md §13.2), as on the spike's branch `cpd/cpd-ui`; crossterm is used through its re-export `ratatui::crossterm`, so it is not a dependency of its own |
+| `tui-tree-widget` 0.24 | | the `tree` view's collapsible Context → Plan → Session tree, as on `cpd/cpd-ui` |
 | `tempfile` 3 | dev only | temporary `$CPD_HOME`, repos and files in tests |
 
-Deliberately absent: a regex crate (the id patterns of §2.1 are checked by hand in `ids`), an error-derive crate (`CpdError` is one struct), a hex crate (see `sha2`), `libc` (`nix` covers it), ratatui and crossterm (the TUI Job).
+Deliberately absent: a regex crate (the id patterns of §2.1 are checked by hand in `ids`), an error-derive crate (`CpdError` is one struct), a hex crate (see `sha2`), `libc` (`nix` covers it), crossterm as a direct dependency (see `ratatui`).
 
 ## Running cargo, the Gate, installing
 
