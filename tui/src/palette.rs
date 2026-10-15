@@ -56,14 +56,14 @@ impl Meaning {
     }
 }
 
-/// One colour per meaning, with one deliberate exception: grounding (phase `context`) and not started share white,
-/// since a Workflow that is still grounding has nothing running yet.
+/// One colour per meaning, with two deliberate exceptions: grounding (phase `context`) and not started share white,
+/// since a Workflow that is still grounding has nothing running yet; done shares dark grey with nothing, the User's choice.
 pub fn color(m: Meaning) -> Color {
     match m {
         Meaning::NotStarted => Color::White,
         Meaning::InProgress => Color::Green,
         Meaning::Review => Color::Yellow,
-        Meaning::Done => Color::Gray,
+        Meaning::Done => Color::DarkGray,
         Meaning::Failed => Color::Red,
         Meaning::Planning => Color::Magenta,
         Meaning::Grounding => Color::White,
@@ -186,7 +186,7 @@ mod tests {
             (Meaning::NotStarted, Color::White),
             (Meaning::InProgress, Color::Green),
             (Meaning::Review, Color::Yellow),
-            (Meaning::Done, Color::Gray),
+            (Meaning::Done, Color::DarkGray),
             (Meaning::Failed, Color::Red),
             (Meaning::Planning, Color::Magenta),
             (Meaning::Grounding, Color::White),
