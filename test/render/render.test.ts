@@ -32,9 +32,12 @@ test("Worker Spec for Attempt 1 has the exact submit and ask commands, ids and -
   const s = rendered["worker-schema-a1.md"]!;
   assert.ok(s.includes("\n    cpd attempt submit schema-a1 --wf render\n"), "submit");
   assert.ok(s.includes('\n      cpd ask schema-a1 "<your question>" --wf render\n'), "ask");
-  for (const code of ["dirty_tree", "no_commits", "gate_tampered", "gate_failed"]) assert.ok(s.includes(`\`${code}\``), code);
+  for (const code of ["dirty_tree", "no_commits", "gate_tampered", "check_failed"]) assert.ok(s.includes(`\`${code}\``), code);
   assert.ok(!s.includes("## Previous Attempts"), "no previous Attempts for Attempt 1");
   assert.ok(s.includes("Your Tier is `S3`"));
+  assert.ok(!s.includes("`gate_failed`") && !/Run `\.\/verify\.sh`/.test(s), "the Worker no longer runs or hears about the Gate");
+  assert.match(s, /`pre-commit` hook/);
+  assert.match(s, /full Gate runs later, when the Lead opens the PR/);
 });
 
 test("Worker Spec for Attempt 2 shows the previous Attempt's outcome, cause and Reviewer feedback", () => {

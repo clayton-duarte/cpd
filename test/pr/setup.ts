@@ -6,6 +6,7 @@ import { initWorkflow, readWorkflow, setPhase, writeWorkflow } from "../../src/l
 import { cpdHome } from "../../src/lib/paths.ts";
 import { baseConfig } from "../herdr/setup.ts";
 import { fakeBin, tmpDir, type FakeBin } from "../helpers/index.ts";
+export { withFakeWt } from "../helpers/index.ts";
 import { createRepo, sandbox } from "../git/fixtures.ts";
 import { addDraft, approvePlan, mergeJob } from "../ledger/helpers.ts";
 

@@ -50,7 +50,7 @@ Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku); effort 0
 | Work | Tier | Why |
 |---|---|---|
 | Coding, tests, refactors | `S1` | The User's default. Start low: each rejection raises effort by one on the next Attempt, up to 2 retries (3 Attempts). |
-| Review (`--review-tier`) | `S4` | The default review Tier. Raise it for risky changes. |
+| Review (`--review-tier`) | `S4` | The default review Tier. Raise it for risky changes. Unused when `reviewMode` is `none` (no Reviewer). |
 | Docs, config, mechanical edits | `H2` | Cheap and enough. |
 | Judgement-heavy work (ambiguous design, security-sensitive, subtle algorithms) | `O3` | `O` only when judgement decides the outcome. |
 

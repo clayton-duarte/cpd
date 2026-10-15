@@ -36,7 +36,7 @@ export type Script = {
   jobTier?: string;
   jobMetadata?: Record<string, unknown>;
   retryCap?: number;
-  reviewMode?: "fork" | "fresh";
+  reviewMode?: "fork" | "fresh" | "none";
   /** Where the Lead runs. A tmux Lead's Reviewer opens in a tmux window (default herdr). */
   leadHost?: "herdr" | "tmux";
   /** tmux Lead: the Reviewer window opens but pi never finishes a turn. */
@@ -227,8 +227,10 @@ export function makeWorld(script: Script = {}): World {
         s.jobStatus = opts.requeue ? "queued" : "failed";
         led(`fail ${cause} requeue=${opts.requeue}`);
       },
-      async markMerged(sha) {
-        if (s.status !== "in_review" || s.jobStatus !== "in_review" || s.outcome !== "approved") throw illegal("mark merged");
+      async markMerged(sha, opts) {
+        if (s.status !== "in_review" || s.jobStatus !== "in_review") throw illegal("mark merged");
+        if (opts.reviewed ? s.outcome !== "approved" : s.outcome !== null) throw illegal("mark merged");
+        if (!opts.reviewed) s.outcome = "merged";
         s.status = "closed";
         s.jobStatus = "closed";
         led(`markMerged ${sha}`);

@@ -2,6 +2,7 @@ import { submitAttempt } from "../dispatch/attempt-submit.ts";
 import { markSubmitted, findAttempt } from "../ledger/attempts.ts";
 import { readLedger } from "../ledger/bd.ts";
 import { parseCommand, readWorkflow, resolveWorkflowId } from "../ledger/workflow.ts";
+import { loadConfig } from "../lib/config.ts";
 import { usage } from "../lib/errors.ts";
 import type { Result } from "../lib/output.ts";
 import { assertAttemptId } from "../lib/paths.ts";
@@ -17,6 +18,7 @@ export async function run(argv: string[]): Promise<Result> {
     wf,
     attempt,
     leadBranch: readWorkflow(wf).leadBranch,
+    reviewMode: loadConfig().reviewMode,
     markSubmitted: (sha) => markSubmitted(wf, id, sha),
   });
   return { ok: true, submitted: true, next: r.next, attempt: id, commit: r.commit };

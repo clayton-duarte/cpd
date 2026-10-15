@@ -10,8 +10,10 @@ export const switchCreateArgs = (branch: string, base: string): string[] => [
   "switch", "--create", branch, "--base", base, "--no-cd", "--format", "json",
 ];
 export const switchExistingArgs = (branch: string): string[] => ["switch", branch, "--no-cd", "--format", "json"];
-export const mergeArgs = (target: string): string[] => ["merge", target, "--no-squash", "--no-remove", "--format", "json"];
-export const hookPreMergeArgs = (): string[] => ["hook", "pre-merge"];
+/** `--no-hooks`: the merge is the rebase and the fast-forward; the Gate runs at `pr open` and `pr rebase`, not here. */
+export const mergeArgs = (target: string): string[] => ["merge", target, "--no-squash", "--no-remove", "--no-hooks", "--format", "json"];
+export type Hook = "pre-merge" | "pre-commit";
+export const hookArgs = (hook: Hook): string[] => ["hook", hook];
 export const removeArgs = (branch: string, opts: { forceDelete?: boolean; force?: boolean } = {}): string[] => [
   "remove", branch, ...(opts.forceDelete ? ["-D"] : []), ...(opts.force ? ["-f"] : []), "--foreground", "--format", "json",
 ];

@@ -16,7 +16,8 @@ export const ATTEMPT_STATUSES = ["in_progress", "in_review", "closed"] as const;
 export type AttemptStatus = (typeof ATTEMPT_STATUSES)[number];
 const AttemptStatus = z.enum(ATTEMPT_STATUSES);
 
-export const OUTCOMES = ["approved", "rejected", "failed", "timed_out", "cancelled"] as const;
+/** `merged`: the Attempt reached the Lead Branch with no Reviewer (`reviewMode: "none"`); `approved` is only ever a Reviewer's (or the Lead's) verdict. */
+export const OUTCOMES = ["approved", "merged", "rejected", "failed", "timed_out", "cancelled"] as const;
 export type Outcome = (typeof OUTCOMES)[number];
 
 const AttemptMeta = z.looseObject({ number: z.number().int().positive(), tier: z.string() });
@@ -340,7 +341,7 @@ export function outcomeForCause(cause: string): Outcome {
  * Close an open Attempt as not merged. `outcome` follows from `cause` (`review_rejected → rejected`,
  * `timed_out`, `cancelled`, anything else `failed`). The Job becomes `queued` with `requeue`, `cancelled`
  * for cause `cancelled`, else `failed`. A verdict already recorded as the same outcome stays as it is;
- * the one rewrite allowed is `approved → failed` (approved, but the merge or post-merge Gate failed).
+ * the one rewrite allowed is `approved → failed` (approved, but the merge failed).
  * Refused with `escalation_open` while the Attempt has an unanswered Escalation.
  */
 export async function failAttempt(wf: string, id: string, cause: string, opts: { requeue: boolean }): Promise<Attempt> {
@@ -378,24 +379,31 @@ export async function failAttempt(wf: string, id: string, cause: string, opts: {
 }
 
 /**
- * The Attempt's commit landed on the Lead Branch. Only from an `in_review` Job and Attempt whose verdict
- * is `approved`, else `illegal_transition` / `attempt_not_approved` and nothing is written. Closes the Attempt
- * `approved`, records `merged_sha` on the Job, closes the Job with reason `merged`, records provenance `land`.
+ * The Attempt's commit landed on the Lead Branch. Only from an `in_review` Job and Attempt, else `illegal_transition`,
+ * and nothing is written.
+ * - Reviewed (default): the verdict must be `approved`, else `attempt_not_approved`. Closes the Attempt `approved`.
+ * - `{ reviewed: false }` (`reviewMode: "none"`): no verdict may exist, else `attempt_has_verdict`. Closes the Attempt
+ *   with outcome `merged` and writes no verdict comment.
+ * Either way: records `merged_sha` on the Job, closes the Job with reason `merged`, records provenance `land`.
  */
-export async function markMerged(wf: string, id: string, mergedSha: string): Promise<Attempt> {
+export async function markMerged(wf: string, id: string, mergedSha: string, opts: { reviewed: boolean } = { reviewed: true }): Promise<Attempt> {
   assertSha(mergedSha);
   return withLedger(wf, `attempt merged ${id}`, async (l) => {
     const { attempt, job, siblings } = await findAttempt(l, id);
     if (attempt.status !== "in_review" || job.status !== "in_review" || attempt.number !== siblings.length) illegal("mark merged", attempt, job);
-    if (attempt.outcome !== "approved") {
+    if (opts.reviewed && attempt.outcome !== "approved") {
       throw refused("attempt_not_approved", `Attempt ${id} has no approved verdict (outcome ${attempt.outcome ?? "unset"})`, { attempt: id, outcome: attempt.outcome });
+    }
+    if (!opts.reviewed && attempt.outcome !== null) {
+      throw refused("attempt_has_verdict", `Attempt ${id} has a verdict (outcome ${attempt.outcome}), so it was reviewed`, { attempt: id, outcome: attempt.outcome });
     }
     await assertNoOpenEscalation(l, attempt);
     const jobArgs = metadataArgs(job.metadata, { merged_sha: mergedSha }, true); // refuses a second merge before any write
+    const outcome = opts.reviewed ? "approved" : "merged";
 
     await l.write(["update", job.id, "--if-status", "in_review", ...jobArgs]);
-    await l.write(["update", attempt.issue, "--if-status", "in_review", ...attemptSet(attempt, { ended_at: now() })]);
-    await closeIssue(l, attempt.issue, "approved", id);
+    await l.write(["update", attempt.issue, "--if-status", "in_review", ...attemptSet(attempt, opts.reviewed ? { ended_at: now() } : { outcome, ended_at: now() })]);
+    await closeIssue(l, attempt.issue, outcome, id);
     await l.write(["close", job.id, "--reason", "merged"]);
     const after = (await findAttempt(l, id)).attempt;
     await provenance(l, after, "land", mergedSha, "git-sha", { at: now() });

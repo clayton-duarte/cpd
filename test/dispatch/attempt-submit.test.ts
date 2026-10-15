@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { SUBMIT_NEXT, submitAttempt, type SubmitDeps } from "../../src/dispatch/attempt-submit.ts";
 import { CpdError } from "../../src/lib/errors.ts";
 import { reviewGatePath } from "../../src/lib/paths.ts";
+import { withFakeWt } from "../helpers/index.ts";
 import { commitFile, createFixture, git, head, makeAttempt, sandbox, type Fixture } from "../git/fixtures.ts";
 
 // Real git and wt in temp repos; only the Ledger is faked.
@@ -33,6 +34,7 @@ async function attempt(commits: { file: string; content: string; message: string
       wf: WF,
       attempt: { id, status, worktree: path },
       leadBranch: f.leadBranch,
+      reviewMode: "fork",
       markSubmitted: async (sha) => void submitted.push(sha),
     },
   };
@@ -118,39 +120,55 @@ test("gate_tampered: the diff touches .config/wt.toml, verify.sh or .cpd/ (also 
   }
 });
 
-test("gate_failed: exit 64 from the Gate, with the output tail in details", async () => {
+test("check_failed: exit 64 from the quick check (hook pre-commit), with the output tail in details", async () => {
   const a = await attempt(work);
-  writeFileSync(join(a.path, "FAIL_GATE"), ""); // ignored by .gitignore, so the tree stays clean
-  const e = await refusal(submitAttempt(a.path, a.deps), "gate_failed");
-  assert.equal(e.details.exitCode, 64);
-  assert.match(String(e.details.outputTail), /FAIL_GATE present/);
+  const { result, calls } = await withFakeWt(64, "lint: bad", () => submitAttempt(a.path, a.deps));
+  const e = (result as PromiseRejectedResult).reason as CpdError;
+  assert.equal(result.status, "rejected");
+  assert.deepEqual([e.code, e.exitCode, e.details.exitCode, e.details.outputTail], ["check_failed", 3, 64, "lint: bad"]);
+  assert.deepEqual(calls, [["--yes", "-C", a.path, "hook", "pre-commit"]]);
   assert.deepEqual(a.submitted, []);
-  assert.equal(existsSync(reviewGatePath(WF, a.id)), false, "no Gate output file for a failed Gate");
+  assert.equal(existsSync(reviewGatePath(WF, a.id)), false, "no output file for a failed check");
 });
 
-test("preconditions run in order: dirty_tree, no_commits, gate_tampered, gate_failed", async () => {
+test("check_error: any other failure of the quick check", async () => {
+  const a = await attempt(work);
+  const { result } = await withFakeWt(42, "wt broke", () => submitAttempt(a.path, a.deps));
+  const e = (result as PromiseRejectedResult).reason as CpdError;
+  assert.deepEqual([e.code, e.details.code], ["check_error", 42]);
+  assert.deepEqual(a.submitted, []);
+});
+
+test("no pre-commit table means no commands: it passes, and does not fall back to the failing pre-merge Gate", async () => {
+  const a = await attempt(work);
+  writeFileSync(join(a.path, "FAIL_GATE"), ""); // the fixture has a pre-merge table and no pre-commit table; FAIL_GATE fails pre-merge only; ignored, so the tree stays clean
+  assert.equal((await submitAttempt(a.path, a.deps)).next, SUBMIT_NEXT);
+});
+
+test("preconditions run in order: dirty_tree, no_commits, gate_tampered", async () => {
   const a = await attempt([]);
   writeFileSync(join(a.path, "FAIL_GATE"), "");
   writeFileSync(join(a.path, "dirty.txt"), "x");
   await refusal(submitAttempt(a.path, a.deps), "dirty_tree"); // before no_commits
   writeFileSync(join(a.path, "dirty.txt"), "");
   await git(a.path, ["clean", "-fdq"]);
-  await refusal(submitAttempt(a.path, a.deps), "no_commits"); // before gate_failed
+  await refusal(submitAttempt(a.path, a.deps), "no_commits"); // before the quick check
   await commitFile(a.path, "verify.sh", "#!/bin/sh\nexit 1\n", "tamper and fail");
-  await refusal(submitAttempt(a.path, a.deps), "gate_tampered"); // before gate_failed
+  await refusal(submitAttempt(a.path, a.deps), "gate_tampered"); // before the quick check
 });
 
-test("success: the Gate output is written for the Reviewer, then the HEAD commit is recorded; a subdirectory is fine", async () => {
+test("success: the quick-check output is written for the Reviewer, then the HEAD commit is recorded; a subdirectory is fine", async () => {
   const a = await attempt(work);
   mkdirSync(join(a.path, "src"), { recursive: true });
   const r = await submitAttempt(join(a.path, "src"), a.deps);
   assert.equal(r.next, "Stop now. Do not make more changes.");
   assert.equal(r.commit, await head(a.path));
   assert.deepEqual(a.submitted, [await head(a.path)]);
-  assert.match(readFileSync(reviewGatePath(WF, a.id), "utf8"), /verify: ok/);
+  assert.ok(existsSync(reviewGatePath(WF, a.id)));
+  assert.match(readFileSync(reviewGatePath(WF, a.id), "utf8"), /pre-commit/i);
 });
 
-test("the Gate output file is written before the Ledger records the submission", async () => {
+test("the quick-check output file is written before the Ledger records the submission", async () => {
   const a = await attempt(work);
   let existedAtRecord = false;
   await submitAttempt(a.path, {
@@ -175,14 +193,20 @@ test("a Ledger refusal on markSubmitted propagates (nothing is swallowed)", asyn
   );
 });
 
-test("gate_failed details carry only the last 60 lines of a long Gate output", async () => {
-  // A new Lead commit changes the Gate script for Attempts created after it (the Attempt itself may not touch it).
-  const verify = `#!/bin/sh\ni=1\nwhile [ $i -le 200 ]; do echo "gate line $i"; i=$((i+1)); done\nexit 1\n`;
-  await commitFile(f.leadWorktree, "verify.sh", verify, "lead: noisy failing Gate");
+test("check_failed details carry only the last 60 lines of a long output", async () => {
   const a = await attempt(work);
-  const e = await refusal(submitAttempt(a.path, a.deps), "gate_failed");
+  const { result } = await withFakeWt(64, Array.from({ length: 200 }, (_, i) => `check line ${i + 1}`).join("\n"), () => submitAttempt(a.path, a.deps));
+  const e = (result as PromiseRejectedResult).reason as CpdError;
+  assert.equal(e.code, "check_failed");
   const lines = String(e.details.outputTail).split("\n");
   assert.ok(lines.length <= 60, `${lines.length} lines`);
-  assert.ok(lines.includes("gate line 200"), "the end of the output is kept");
-  assert.ok(!lines.includes("gate line 1"));
+  assert.ok(lines.includes("check line 200"), "the end of the output is kept");
+  assert.ok(!lines.includes("check line 1"));
+});
+
+test("reviewMode none: no review file is written, the submission is still recorded", async () => {
+  const a = await attempt(work);
+  await submitAttempt(a.path, { ...a.deps, reviewMode: "none" });
+  assert.equal(existsSync(reviewGatePath(WF, a.id)), false);
+  assert.deepEqual(a.submitted, [await head(a.path)]);
 });

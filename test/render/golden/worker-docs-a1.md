@@ -10,7 +10,7 @@ Your worktree is `/work/trees/render--docs-a1`. Your current directory is that w
 
 - Work only in this worktree, and touch only the files listed under "Files you may touch".
 - Commit your work. Uncommitted changes are refused at submit.
-- Run `./verify.sh` (or the repository's Gate) before you submit, and fix what it reports.
+- Run the checks relevant to your change (its tests, the type check, the linter) and fix what they report. Submit runs a quick check, the repository's `pre-commit` hook. The full Gate runs later, when the Lead opens the PR.
 - Never edit `.config/wt.toml`, `verify.sh` or anything under `.cpd/`. A diff that touches them is refused.
 - Never ask the User anything. You have no conversation with them.
 - If continuing would require guessing, ask the Lead and wait for the answer. The command blocks until the Lead answers:
@@ -61,6 +61,6 @@ If it succeeds, stop at once and make no more changes. If it refuses, the error 
 - `dirty_tree`: you have uncommitted changes. Commit them (or delete files that do not belong), then submit again.
 - `no_commits`: you have not committed anything on top of the base. Commit your work, then submit again.
 - `gate_tampered`: your diff touches `.config/wt.toml`, `verify.sh` or `.cpd/`. Revert those files to the base version and commit, then submit again.
-- `gate_failed`: the Gate failed; the output tail is in the error details. Fix the cause, commit, run `./verify.sh`, then submit again.
+- `check_failed`: the quick check (the `pre-commit` hook) failed; the output tail is in the error details. Fix the cause, commit, then submit again.
 
 Do not stop until `cpd attempt submit` has succeeded.

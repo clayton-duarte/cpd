@@ -55,7 +55,8 @@ export type LedgerPort = {
   recordFacts(facts: AttemptFacts): Promise<unknown>;
   recordVerdict(v: VerdictInput): Promise<unknown>;
   fail(cause: string, opts: { requeue: boolean }): Promise<unknown>;
-  markMerged(sha: string): Promise<unknown>;
+  /** `reviewed: false` (`reviewMode: "none"`): the Ledger records the merge with outcome `merged`, not a Reviewer verdict. */
+  markMerged(sha: string, opts: { reviewed: boolean }): Promise<unknown>;
   recordMetrics(m: SessionMetrics, prefix: MetricsPrefix): Promise<void>;
 };
 export type GitPort = {
@@ -619,19 +620,15 @@ async function merge(d: Deps): Promise<RunResult> {
   switch (out.result) {
     case "merged":
       if (out.postSha === undefined) throw failure("merge_result_invalid", "mergeAttempt reported merged without a post-merge SHA", { out });
-      return merged(d, out.postSha);
+      return merged(d, out.postSha, { reviewed: l.attempt.outcome === "approved" }); // no verdict recorded: reviewMode none
     case "conflict":
       return fail(d, "merge_conflict", { ladder: true, detail: out.detail });
-    case "gate_failed":
-      return fail(d, "merge_gate_failed", { ladder: true, detail: out.detail });
     case "cas_lost":
       return fail(d, "merge_cas_lost", { ladder: false, detail: `the Lead Branch kept moving: ${out.detail}` });
     case "dirty_target":
       return fail(d, "dirty_target", { ladder: false, detail: `${out.detail} The Lead worktree must stay clean: commit or stash there, then retry the Job.` });
     case "tampered":
       return fail(d, "gate_tampered", { ladder: false, detail: out.detail });
-    case "post_gate_failed":
-      return fail(d, "post_gate_failed", { ladder: false, detail: out.detail });
     case "merge_unverified":
       return fail(d, "merge_unverified", { ladder: false, detail: out.detail });
     case "unknown":
@@ -640,8 +637,8 @@ async function merge(d: Deps): Promise<RunResult> {
 }
 
 /** Step 12. The Ledger is the truth, so it is written first; cleanup problems are logged and reported to the Lead, not fatal. */
-async function merged(d: Deps, sha: string): Promise<RunResult> {
-  await d.ledger.markMerged(sha);
+async function merged(d: Deps, sha: string, o: { reviewed: boolean }): Promise<RunResult> {
+  await d.ledger.markMerged(sha, o);
   const l = await d.ledger.load();
   d.log("12 merged", `Job ${l.job.key} merged at ${sha}`);
   const problems: string[] = [];
@@ -712,6 +709,10 @@ export async function runAttempt(d: Deps): Promise<RunResult> {
       await prompt(t, "6 prompt", worker.name, `Read ${specPath} and follow it exactly. Your attempt id is ${t.attemptId}.`);
       const decided = await decide(t, worker.name);
       if (decided !== "submitted") return decided;
+      if (t.config.reviewMode === "none") {
+        t.log("9 review", "reviewMode is none: no Reviewer, straight to the merge");
+        return merge(t);
+      }
       return review(t, await t.ledger.load());
     });
   } finally {
@@ -842,7 +843,7 @@ export async function realDeps(wf: string, attemptId: string, slot: number | nul
       recordFacts: (facts) => recordAttemptFacts(wf, attemptId, facts),
       recordVerdict: (v) => recordVerdict(wf, attemptId, v),
       fail: (cause, opts) => failAttempt(wf, attemptId, cause, opts),
-      markMerged: (sha) => markMerged(wf, attemptId, sha),
+      markMerged: (sha, opts) => markMerged(wf, attemptId, sha, opts),
       recordMetrics: (m, prefix) => recordMetrics(wf, attemptId, m, { prefix }),
     },
     git: {

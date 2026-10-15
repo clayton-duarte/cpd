@@ -35,6 +35,11 @@ test("a valid config loads", () => {
   assert.deepEqual(loadConfig(), validConfig);
 });
 
+test("reviewMode none is accepted (no Reviewer); other values are not", () => {
+  useConfig({ ...validConfig, reviewMode: "none" });
+  assert.equal(loadConfig().reviewMode, "none");
+});
+
 test("a string herdrSession is accepted", () => {
   useConfig({ ...validConfig, herdrSession: "cpd-test" });
   assert.equal(loadConfig().herdrSession, "cpd-test");

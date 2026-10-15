@@ -54,18 +54,25 @@ test("two Attempts, the second needs a rebase: linear, original messages and aut
   assert.deepEqual(await statusPorcelain(f.leadWorktree), []);
 });
 
-test("gate_failed: Lead untouched, Attempt keeps its commit", async () => {
+test("the merge runs no Gate and no hook: a failing pre-merge Gate (in the Attempt or the Lead) does not stop it; wt gets --no-hooks", async () => {
   const f = await createFixture();
   const a = await makeAttempt(f, "j3-a1", [{ file: "j3.txt", content: "j3\n", message: "j3: add" }]);
-  await write(a.path, "FAIL_GATE", "");
-  const pre = await head(f.leadWorktree);
-  const own = await head(a.path);
-  const m = await merge(f, a);
-  assert.equal(m.result, "gate_failed");
-  assert.match(m.detail, /FAIL_GATE present/);
-  assert.equal(m.preSha, pre);
-  await assertLeadUntouched(f, pre);
-  assert.equal(await head(a.path), own);
+  await write(a.path, "FAIL_GATE", ""); // ignored: the trees stay clean, only the Gate (verify.sh) would fail
+  await write(f.leadWorktree, "FAIL_GATE", "");
+  const wt = fakeBin("wt", `exec '${execFileSync("sh", ["-c", "command -v wt"], { encoding: "utf8" }).trim()}' "$@"`);
+  const saved = process.env.PATH;
+  process.env.PATH = `${wt.dir}:${saved}`;
+  try {
+    const m = await merge(f, a);
+    assert.equal(m.result, "merged");
+    assert.equal(m.postSha, await head(f.leadWorktree));
+    assert.ok(existsSync(join(f.leadWorktree, "j3.txt")));
+    const calls = wt.calls();
+    assert.deepEqual(calls.map((c) => c[3]), ["merge"], "no `wt hook` call");
+    assert.ok(calls[0]!.includes("--no-hooks"));
+  } finally {
+    process.env.PATH = saved;
+  }
 });
 
 test("conflict: rebase aborted in the Attempt, Lead untouched, files reported", async () => {
@@ -96,6 +103,32 @@ test("dirty_target: a dirty Lead worktree is refused before anything runs", asyn
   assert.equal(existsSync(join(f.leadWorktree, "j8.txt")), false);
 });
 
+/**
+ * Run `body` (sh, at most once) when `wt merge` starts, to act on the Lead during the merge: a fake `wt` first on PATH
+ * runs it, then the real `wt`; with `lose` the first call ends there with exit 1, as a merge that lost the race on the Lead
+ * ref does (the next call is the real `wt`). Returns the function that restores PATH.
+ */
+function beforeMerge(body: string, lose = false): () => void {
+  const dir = tmpDir("cpd-hook-");
+  const real = execFileSync("sh", ["-c", "command -v wt"], { encoding: "utf8" }).trim();
+  const wt = fakeBin("wt", `if [ "$4" = merge ] && [ ! -e '${dir}/ran' ]; then touch '${dir}/ran'\n${body}\n${lose ? "exit 1\n" : ""}fi\nexec '${real}' "$@"`, dir);
+  const saved = process.env.PATH;
+  process.env.PATH = `${wt.dir}:${saved}`;
+  return () => void (process.env.PATH = saved);
+}
+
+test("dirty_target: a dirty Lead worktree is refused before anything runs", async () => {
+  const f = await createFixture();
+  const a = await makeAttempt(f, "j8-a1", [{ file: "j8.txt", content: "j8\n", message: "j8: add" }]);
+  await write(f.leadWorktree, "README.md", "dirty\n");
+  const pre = await head(f.leadWorktree);
+  const m = await merge(f, a);
+  assert.equal(m.result, "dirty_target");
+  assert.equal(await head(f.leadWorktree), pre);
+  assert.deepEqual(await statusPorcelain(f.leadWorktree), [" M README.md"]);
+  assert.equal(existsSync(join(f.leadWorktree, "j8.txt")), false);
+});
+
 /** A script run by the fixture's verify.sh (env CAS_HOOK) at most once, to act on the Lead mid-Gate. */
 function gateHook(body: string): void {
   const dir = tmpDir("cpd-hook-");
@@ -105,10 +138,10 @@ function gateHook(body: string): void {
   process.env.CAS_HOOK = script;
 }
 
-test("dirty_target: the Lead becomes dirty during the Gate, wt refuses, Lead ref unchanged", async () => {
+test("dirty_target: the Lead becomes dirty during the merge, wt refuses, Lead ref unchanged", async () => {
   const f = await createFixture();
   const a = await makeAttempt(f, "j8-a1", [{ file: "app.txt", content: "line1\nj8\nline3\nline4\nline5\n", message: "j8: edit" }]);
-  gateHook(`echo dirt >> '${f.leadWorktree}/app.txt'`);
+  const restore = beforeMerge(`echo dirt >> '${f.leadWorktree}/app.txt'`);
   try {
     const pre = await head(f.leadWorktree);
     const m = await merge(f, a);
@@ -116,14 +149,14 @@ test("dirty_target: the Lead becomes dirty during the Gate, wt refuses, Lead ref
     assert.equal(await head(f.leadWorktree), pre);
     assert.deepEqual(await statusPorcelain(f.leadWorktree), [" M app.txt"]);
   } finally {
-    delete process.env.CAS_HOOK;
+    restore();
   }
 });
 
-test("cas_lost: the Lead moves during the Gate; with no retries it is reported, and a rerun succeeds", async () => {
+test("cas_lost: the Lead moves during the merge; with no retries it is reported, and a rerun succeeds", async () => {
   const f = await createFixture();
   const a = await makeAttempt(f, "j6-a1", [{ file: "j6.txt", content: "j6\n", message: "j6: add" }]);
-  gateHook(`cd '${f.leadWorktree}' && echo moved > moved.txt && git add moved.txt && git commit -q -m 'lead: moved'`);
+  const restore = beforeMerge(`cd '${f.leadWorktree}' && echo moved > moved.txt && git add moved.txt && git commit -q -m 'lead: moved'`, true);
   try {
     const pre = await head(f.leadWorktree);
     const m = await merge(f, a, { casRetries: 0 });
@@ -139,21 +172,21 @@ test("cas_lost: the Lead moves during the Gate; with no retries it is reported, 
     assert.equal(again.result, "merged");
     assert.equal(again.preSha, moved);
   } finally {
-    delete process.env.CAS_HOOK;
+    restore();
   }
 });
 
 test("cas_lost is retried automatically and the retry succeeds", async () => {
   const f = await createFixture();
   const a = await makeAttempt(f, "j6-a1", [{ file: "j6.txt", content: "j6\n", message: "j6: add" }]);
-  gateHook(`cd '${f.leadWorktree}' && echo moved > moved.txt && git add moved.txt && git commit -q -m 'lead: moved'`);
+  const restore = beforeMerge(`cd '${f.leadWorktree}' && echo moved > moved.txt && git add moved.txt && git commit -q -m 'lead: moved'`, true);
   try {
     const m = await merge(f, a);
     assert.equal(m.result, "merged");
     assert.equal(await log(f.leadWorktree, "HEAD", "%s"), "j6: add\nlead: moved\ninitial");
     assert.equal(m.postSha, await head(f.leadWorktree));
   } finally {
-    delete process.env.CAS_HOOK;
+    restore();
   }
 });
 
@@ -190,19 +223,6 @@ test("an Attempt with uncommitted changes is refused with attempt_dirty", async 
   const pre = await head(f.leadWorktree);
   await assert.rejects(merge(f, a), (e: any) => e.code === "attempt_dirty" && e.exitCode === 3);
   await assertLeadUntouched(f, pre);
-});
-
-test("post_gate_failed: the Lead Gate fails after the merge, the Lead is rolled back", async () => {
-  const f = await createFixture();
-  const a = await makeAttempt(f, "j9-a1", [{ file: "j9.txt", content: "j9\n", message: "j9: add" }]);
-  await write(f.leadWorktree, "FAIL_GATE", ""); // ignored: the Lead stays clean, only its Gate fails
-  const pre = await head(f.leadWorktree);
-  const m = await merge(f, a);
-  assert.equal(m.result, "post_gate_failed");
-  assert.equal(m.preSha, pre);
-  assert.equal(m.postSha, undefined);
-  await assertLeadUntouched(f, pre);
-  assert.equal(existsSync(join(f.leadWorktree, "j9.txt")), false);
 });
 
 test("concurrent merges are serialised by the merge lock: both land, linear", async () => {

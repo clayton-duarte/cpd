@@ -9,7 +9,7 @@ import { getPhase, readWorkflow } from "../../src/ledger/workflow.ts";
 import { CpdError } from "../../src/lib/errors.ts";
 import { ledgerDir, prStatePath } from "../../src/lib/paths.ts";
 import { commitFile } from "../git/fixtures.ts";
-import { PR_URL, dispatchedWorkflow, fakeGh, sandboxCpd, viewJson } from "./setup.ts";
+import { PR_URL, dispatchedWorkflow, fakeGh, sandboxCpd, viewJson, withFakeWt } from "./setup.ts";
 
 sandboxCpd();
 const gh = fakeGh();
@@ -64,6 +64,39 @@ test("pr open pushes the Lead Branch, calls gh pr create with the exact argv, re
   const pr = readWorkflow(f.wf).pr!;
   assert.deepEqual([pr.number, pr.url], [7, PR_URL]);
   assert.ok(!Number.isNaN(Date.parse(pr.openedAt)));
+});
+
+test("pr open runs the Gate on the Lead Branch first: failure refuses gate_failed (exit 3) with the tail, and nothing is pushed or created", async () => {
+  const f = await dispatchedWorkflow("open-gate-fail");
+  const before = gh.calls().length;
+  const out = "gate line\n".repeat(100) + "the end";
+  const { result, calls } = await withFakeWt(64, out, () => prOpen(["--wf", f.wf]));
+  assert.equal(result.status, "rejected");
+  const e = (result as PromiseRejectedResult).reason as CpdError;
+  assert.deepEqual([e.code, e.exitCode, e.details.exitCode], ["gate_failed", 3, 64]);
+  const tail = String(e.details.outputTail).split("\n");
+  assert.ok(tail.length <= 60 && tail.at(-1) === "the end", "the last 60 lines");
+  assert.deepEqual(calls, [["--yes", "-C", f.leadWorktree, "hook", "pre-merge"]]);
+  assert.equal(gh.calls().length, before, "no gh call");
+  assert.equal(await gitOut(f.repo, ["ls-remote", f.origin, "refs/heads/cpd/open-gate-fail"]), "");
+  assert.equal(await getPhase(f.wf), "dispatch");
+  assert.equal(readWorkflow(f.wf).pr, null);
+});
+
+test("pr open: a Gate that fails any other way is gate_error, and nothing is pushed", async () => {
+  const f = await dispatchedWorkflow("open-gate-error");
+  const { result } = await withFakeWt(42, "boom", () => prOpen(["--wf", f.wf]));
+  assert.equal(result.status, "rejected");
+  assert.equal(((result as PromiseRejectedResult).reason as CpdError).code, "gate_error");
+  assert.equal(await gitOut(f.repo, ["ls-remote", f.origin, "refs/heads/cpd/open-gate-error"]), "");
+  assert.equal(await getPhase(f.wf), "dispatch");
+});
+
+test("pr open: the Gate runs after the other refusals (an unfinished Job is refused before any wt call)", async () => {
+  const f = await dispatchedWorkflow("open-order", { jobs: ["a"], extra: ["b"] });
+  const { result, calls } = await withFakeWt(64, "no", () => prOpen(["--wf", f.wf]));
+  assert.equal(((result as PromiseRejectedResult).reason as CpdError).code, "jobs_not_finished");
+  assert.deepEqual(calls, []);
 });
 
 test("pr poll sequence: nothing, one pr-feedback, nothing again, then merged", async () => {

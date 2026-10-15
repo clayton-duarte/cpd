@@ -69,18 +69,18 @@ You are the **Lead** of one Workflow: one ticket, one repo, one Pull Request. Tu
 
 ## 3. Dispatch
 
-After the lock the watcher starts Ready Jobs, reviews them and merges them. You react to its messages. Each message's text ends with the commands it suggests; run them only as the row below allows. When the User asks for status, run `cpd workflow show --wf <wf>`.
+After the lock the watcher starts Ready Jobs and merges them. There is no Gate per Job: a Worker's submit runs only the repo's quick check (the `pre-commit` hook), and the full Gate runs once, on the Lead Branch, when you open the PR ([4. Pull request](#4-pull-request)). With `reviewMode: "none"` (the User's setting in `~/.cpd/config.json`) there is no Reviewer either: a submitted Job goes straight to the merge and the review is the PR's own, on GitHub. With `fork` or `fresh` a Reviewer reads each Attempt first. You react to its messages. Each message's text ends with the commands it suggests; run them only as the row below allows. When the User asks for status, run `cpd workflow show --wf <wf>`.
 
 | Kind | Meaning | Action |
 |---|---|---|
-| `job-merged` | A Job is Merged. | Note it. Tell the User in one line only if they are waiting. A research Job: read its findings, then append the Jobs that depend on them (`cpd job add --key <k> --title "<title>" --tier <T> --spec <file.json> --needs <k1,k2> --wf <wf>`) and tell the User what you appended. In phase `pr`, when every feedback Job is Merged: `cpd pr rebase --wf <wf>`. |
+| `job-merged` | A Job is Merged. | Note it. Tell the User in one line only if they are waiting. A research Job: read its findings, then append the Jobs that depend on them (`cpd job add --key <k> --title "<title>" --tier <T> --spec <file.json> --needs <k1,k2> --wf <wf>`) and tell the User what you appended. In phase `pr`, when every feedback Job is Merged: `cpd pr rebase --wf <wf>`. In phase `dispatch` after `cpd pr open --wf <wf>` was refused with `gate_failed`, when every fix Job is Merged (`all-merged` is sent only once): `cpd pr open --wf <wf>` again. |
 | `rename` | The session was renamed through `cpd session rename <name>`. | Applied by cpd's pi adapter, which shows a notice; no turn and no action. |
 | `attempt-retry` | An Attempt failed or was rejected; the next one is queued at a higher Tier. | No action. Do not interrupt the User. |
 | `job-failed` | The ladder is exhausted, or a timeout, setup failure, crash or merge needs a decision. | Diagnose ([Failed Jobs](#failed-jobs)), then do one of: retry higher with `cpd job retry <k> --tier <T> --wf <wf>`; cancel with `cpd job cancel <k> --reason "<why>" --wf <wf>` and append the replacement with `cpd job add --key <k2> --title "<title>" --tier <T> --spec <file.json> --needs <k1,k2> --wf <wf>`; or escalate to the User with `ask_user_question` when the choice is theirs. |
 | `escalation` | A Worker asked a question. | Resolve first: if the Spec, Requirements, assumptions or repo settle it, answer now with `cpd answer <esc-id> "<answer>" --wf <wf>`. Otherwise ask the User (`ask_user_question` when you can offer 2–4 options, chat otherwise) and answer with the same command. See [Escalations](#escalations). |
 | `escalation-answered` | Your answer was recorded. | Never reaches you; `cpd` clears the blocked state itself. No action. |
-| `review-needed` | The Reviewer gave no valid verdict twice. | Judge it yourself: `cpd attempt show <attempt-id> --wf <wf>`, then read `reviews/<attempt-id>.md`, `.diff` and `.gate.txt` under `<CPD_HOME>/workflows/<wf>/` (default `~/.cpd`). Approve only if every acceptance item is met, nothing out of scope changed and the touched files fit the Spec. Then `cpd review decide <attempt-id> --approve --feedback "<why>" --wf <wf>` or `cpd review decide <attempt-id> --reject --feedback "<fix list>" --wf <wf>`. |
-| `all-merged` | Every Job is Merged or cancelled. | `cpd pr open --wf <wf>`, once. Give the User the PR URL. See [4. Pull request](#4-pull-request). |
+| `review-needed` | The Reviewer gave no valid verdict twice (only with `reviewMode` `fork` or `fresh`; never with `none`). | Judge it yourself: `cpd attempt show <attempt-id> --wf <wf>`, then read `reviews/<attempt-id>.md`, `.diff` and `.gate.txt` (the quick-check output) under `<CPD_HOME>/workflows/<wf>/` (default `~/.cpd`). Approve only if every acceptance item is met, nothing out of scope changed and the touched files fit the Spec. Then `cpd review decide <attempt-id> --approve --feedback "<why>" --wf <wf>` or `cpd review decide <attempt-id> --reject --feedback "<fix list>" --wf <wf>`. |
+| `all-merged` | Every Job is Merged or cancelled. | `cpd pr open --wf <wf>`. It runs the Gate first; if it is refused with `gate_failed`, see [4. Pull request](#4-pull-request). Give the User the PR URL. See [4. Pull request](#4-pull-request). |
 | `pr-feedback` | New failing checks, reviews or comments on the PR. | Triage `data`. Append one Job per actionable item with `cpd job add --key <k> --title "<title>" --tier <T> --spec <file.json> --wf <wf>`. Reply-only comments need no Job. After the Jobs' `job-merged` messages, push with `cpd pr rebase --wf <wf>`. |
 | `workflow-done` | The PR is merged. | Tell the User in one short paragraph: Jobs merged, appended and cancelled, and anything left open. Run no more commands. |
 | `error` | The watcher or an Attempt hit an unexpected failure. | Read the text, then `cpd workflow show --wf <wf>` and, if an Attempt is named, `cpd attempt read <attempt-id> --wf <wf>`. Tell the User what broke and what you propose. If the watcher stopped, ask the User to run `cpd watch --wf <wf>` in a new pane. |
@@ -95,7 +95,7 @@ Find the cause in the message text or `cpd job show <k> --wf <wf>` (it lists Att
 | `timed_out` | The Job is too big or the Worker is stuck: `cpd attempt read <attempt-id> --wf <wf>`. Cancel and append smaller Jobs. |
 | `crashed`, `no_submit` | `cpd job retry <k> --tier <T> --wf <wf>`, same or higher Tier. |
 | `setup_failed` | Worktree setup failed (the repo's `pre-start`). Tell the User; retry after they fix it. |
-| `merge_conflict`, post-merge Gate failure | Read the text. Retry if the cause is gone; otherwise cancel and append a Job that accounts for the new Lead Branch HEAD. |
+| `merge_conflict` | Read the text. Retry if the cause is gone; otherwise cancel and append a Job that accounts for the new Lead Branch HEAD. |
 | Lead worktree dirty | Tell the User. Never touch the Lead worktree. |
 
 - The retry ladder already raised the Tier on every automatic Attempt. If the Job failed at `O5`, no higher Tier exists: change the Spec (cancel and append) or ask the User.
@@ -118,8 +118,10 @@ cpd answer <esc-id> "<answer>" --wf <wf>
 
 ## 4. Pull request
 
-1. On `all-merged` run `cpd pr open --wf <wf>`. It pushes the Lead Branch and opens the PR, and the phase becomes `pr`. Never run it twice.
+1. On `all-merged` run `cpd pr open --wf <wf>`. It first runs the Gate (the repo's `pre-merge` hook) on the Lead Branch, then pushes it and opens the PR, and the phase becomes `pr`. Never run it again once the phase is `pr`.
+   - `gate_failed` (exit 3): the Gate failed on the merged Lead Branch, and nothing was pushed. The last 60 lines of output are in `error.details.outputTail`. Append one fix Job per cause, as for `pr-feedback`, with the failing output in the Spec. When they are Merged, run `cpd pr open --wf <wf>` again. Do not retry before that.
+   - `gate_error` (exit 1): the Gate itself broke (it exited with something other than pass or 64). Tell the User; do not append Jobs for it.
 2. The User's reviewer bot reviews the PR. The watcher polls it and sends `pr-feedback`. Never poll yourself.
 3. Turn each actionable failing check or bot comment into an appended Job: the Spec carries the comment text, file, line or check log, and the exact fix. Decide; do not append noise.
-4. After those Jobs are Merged, `cpd pr rebase --wf <wf>` pushes them to the existing PR. Use `cpd pr rebase --wf <wf>` only for that, or when the PR conflicts with the base branch. On `rebase_conflict` nothing changed; the files are in `error.details`. You cannot resolve code conflicts: tell the User which files conflict and let them decide.
+4. After those Jobs are Merged, `cpd pr rebase --wf <wf>` rebases onto the base, runs the Gate again and pushes to the existing PR. A `gate_failed` there pushes nothing: append fix Jobs and run it again when they are Merged. Use `cpd pr rebase --wf <wf>` only for that, or when the PR conflicts with the base branch. On `rebase_conflict` nothing changed; the files are in `error.details`. You cannot resolve code conflicts: tell the User which files conflict and let them decide.
 5. The Workflow is done when the PR is merged (`workflow-done`).

@@ -179,6 +179,28 @@ test("verdict, submit and merge preconditions are checked before anything is wri
   await assert.rejects(failAttempt(wf, "a-a1", "crashed", { requeue: true }), refusal("illegal_transition"));
 });
 
+test("markMerged without a review (reviewed: false): outcome merged, no verdict comment, a verdict refuses it; the Job still closes as merged", async () => {
+  const wf = "noreview";
+  await locked(wf, [["a"], ["b"]]);
+  await startAttempt(wf, "a", { tier: "S3" });
+  await markSubmitted(wf, "a-a1", sha("1"));
+  const merged = await markMerged(wf, "a-a1", sha("2"), { reviewed: false });
+  assert.deepEqual([merged.status, merged.outcome, merged.closeReason], ["closed", "merged", "merged"]);
+  const [attempt] = await issuesOf(wf, "attempt");
+  assert.deepEqual(await comments(wf, attempt.id), [], "no APPROVED: comment, so nothing fakes a Reviewer verdict");
+  assert.deepEqual((await provenance(wf, attempt.id)).map((p) => p.kind), ["commit", "land"]);
+  const job = await getJobByKey(wf, "a");
+  assert.deepEqual([job.status, job.closeReason, job.metadata.merged_sha], ["closed", "merged", sha("2")]);
+
+  // an Attempt that has a verdict was reviewed: merging it as unreviewed is refused and nothing is written
+  await startAttempt(wf, "b", { tier: "S3" });
+  await markSubmitted(wf, "b-a1", sha("3"));
+  await recordVerdict(wf, "b-a1", { verdict: "approve", feedback: "ok" });
+  const before = await allIssues(wf);
+  await assert.rejects(markMerged(wf, "b-a1", sha("4"), { reviewed: false }), refusal("attempt_has_verdict"));
+  assert.deepEqual(await allIssues(wf), before);
+});
+
 test("4. markMerged when the Job is not in_review: illegal_transition and nothing is written", async () => {
   const wf = "notrev";
   await locked(wf, [["a"]]);

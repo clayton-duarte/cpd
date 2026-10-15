@@ -1,6 +1,6 @@
 import { failure } from "../lib/errors.ts";
 import { diffNames, gitOut, statusPorcelain } from "./git.ts";
-import { hookPreMergeArgs, runWt } from "./wt.ts";
+import { hookArgs, runWt, type Hook } from "./wt.ts";
 
 /** Paths a Worker must never change: they define or run the Gate (t3 F11). */
 export const FORBIDDEN_PATHS: readonly string[] = [".config/wt.toml", "verify.sh", ".cpd/"];
@@ -21,13 +21,19 @@ export type GateResult = { passed: boolean; exitCode: number; outputTail: string
 export const GATE_FAILED_EXIT = 64;
 const TAIL_LINES = 60;
 
-/** `wt hook pre-merge` in `worktree`. 0 passed, 64 gate failed, anything else is `gate_error`. */
-export async function runGate(worktree: string): Promise<GateResult> {
-  const r = await runWt(worktree, hookPreMergeArgs());
+/** The code of the `failure` when the hook exits with anything but 0 or 64. */
+const ERROR_CODE: Record<Hook, string> = { "pre-merge": "gate_error", "pre-commit": "check_error" };
+
+/**
+ * `wt hook <hook>` in `worktree`: `pre-merge` is the Gate (Workflow level), `pre-commit` the quick check (at submit).
+ * 0 passed (also when the repo has no such hook table), 64 failed, anything else is `gate_error` / `check_error`.
+ */
+export async function runGate(worktree: string, hook: Hook = "pre-merge"): Promise<GateResult> {
+  const r = await runWt(worktree, hookArgs(hook));
   const outputTail = (r.stdout + r.stderr).split("\n").slice(-TAIL_LINES).join("\n").trimEnd();
   if (r.code === 0) return { passed: true, exitCode: 0, outputTail };
   if (r.code === GATE_FAILED_EXIT) return { passed: false, exitCode: GATE_FAILED_EXIT, outputTail };
-  throw failure("gate_error", `Gate exited ${r.code ?? r.signal}, which is neither pass (0) nor gate failure (${GATE_FAILED_EXIT})`, {
+  throw failure(ERROR_CODE[hook], `wt hook ${hook} exited ${r.code ?? r.signal}, which is neither pass (0) nor failure (${GATE_FAILED_EXIT})`, {
     worktree,
     code: r.code,
     signal: r.signal,

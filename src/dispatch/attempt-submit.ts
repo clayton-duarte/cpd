@@ -3,11 +3,13 @@ import { sep } from "node:path";
 import { commitsAhead, runGate, tamperCheck, treeClean } from "../git/gate.ts";
 import { gitOut, revParse, statusPorcelain } from "../git/git.ts";
 import { refused } from "../lib/errors.ts";
+import type { Config } from "../lib/config.ts";
 import { attemptBranch, reviewGatePath } from "../lib/paths.ts";
 import { writeTextAtomic } from "../render/template.ts";
 
 // Contract §11 `cpd attempt submit`: the Worker's only way to finish. Every precondition refuses with exit 3 and a
 // code the Worker can act on (the Worker Spec lists them); the first failing one wins, in the order below.
+// The last one is the quick check (`wt hook pre-commit`), not the Gate: the Gate runs at the Workflow level (`pr open`).
 
 export const SUBMIT_NEXT = "Stop now. Do not make more changes.";
 
@@ -16,6 +18,8 @@ export type SubmitDeps = {
   /** The Attempt as the Ledger has it. */
   attempt: { id: string; status: string; worktree: string | null };
   leadBranch: string;
+  /** With `none` there is no Reviewer, so no review file is written. */
+  reviewMode: Config["reviewMode"];
   /** Records `submitted_at` and provenance `commit`, and moves the Attempt to `in_review`. */
   markSubmitted(commitSha: string): Promise<unknown>;
 };
@@ -34,7 +38,7 @@ function insideWorktree(cwd: string, worktree: string): boolean {
   return here === root || here.startsWith(root.endsWith(sep) ? root : root + sep);
 }
 
-/** Run the §11 preconditions in `cwd`, write the Gate output for the Reviewer, then record the submission. */
+/** Run the §11 preconditions in `cwd`, write the quick-check output for the Reviewer (unless there is none), then record the submission. */
 export async function submitAttempt(cwd: string, d: SubmitDeps): Promise<{ commit: string; next: string }> {
   const { attempt } = d;
   if (attempt.status !== "in_progress") {
@@ -70,15 +74,15 @@ export async function submitAttempt(cwd: string, d: SubmitDeps): Promise<{ commi
   if (tampered.length > 0) {
     throw refused("gate_tampered", `the diff touches files that define the Gate: ${tampered.join(", ")}; revert them to the base version`, { files: tampered });
   }
-  const gate = await runGate(worktree);
-  if (!gate.passed) {
-    throw refused("gate_failed", `the Gate failed (exit ${gate.exitCode}); fix the cause, commit and submit again`, {
-      exitCode: gate.exitCode,
-      outputTail: gate.outputTail,
+  const check = await runGate(worktree, "pre-commit");
+  if (!check.passed) {
+    throw refused("check_failed", `the quick check (hook pre-commit) failed (exit ${check.exitCode}); fix the cause, commit and submit again`, {
+      exitCode: check.exitCode,
+      outputTail: check.outputTail,
     });
   }
 
-  writeTextAtomic(reviewGatePath(d.wf, attempt.id), `${gate.outputTail}\n`);
+  if (d.reviewMode !== "none") writeTextAtomic(reviewGatePath(d.wf, attempt.id), `${check.outputTail}\n`);
   const commit = await revParse(worktree, "HEAD");
   await d.markSubmitted(commit);
   return { commit, next: SUBMIT_NEXT };
