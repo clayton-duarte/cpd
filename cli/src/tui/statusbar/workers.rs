@@ -1,4 +1,4 @@
-//! The Workers indicator, ported from the cockpit's `workers.rs`: `workers N/M`. `N` is the Attempts holding a
+//! The Workers indicator at the right of the StatusBar, ported from the cockpit's `workers.rs`: `workers N/M`. `N` is the Attempts holding a
 //! concurrency slot (not `ended`, machine-wide) and `M` the config's `concurrency`, both from the read model
 //! (`Slots`), where the cockpit read `slots/*.json` and probed pids.
 
@@ -21,6 +21,11 @@ pub struct Workers {
 impl Workers {
     pub fn of(slots: &Slots) -> Workers {
         Workers { running: slots.used(), limit: slots.limit }
+    }
+
+    /// `workers N/M`, or `N/M` when `width` columns cannot hold the long form; `None` when not even that fits.
+    pub fn line(&self, width: u16) -> Option<Line<'static>> {
+        self.forms().into_iter().find(|l| l.width() <= usize::from(width))
     }
 
     /// `workers N/M` and `N/M`, widest first. `N` is in the "in progress" colour above 0, else "nothing"; `workers`
@@ -53,5 +58,15 @@ mod tests {
         assert!(long.spans[2].style.add_modifier.contains(Modifier::DIM));
         let [idle, _] = Workers { running: 0, limit: 10 }.forms();
         assert_eq!(idle.spans[1].style.fg, Some(palette::color(Meaning::Nothing)), "N is nothing at 0");
+    }
+
+    #[test]
+    fn the_row_shows_the_long_form_then_the_short_one_then_nothing() {
+        let w = Workers { running: 3, limit: 10 };
+        assert_eq!(text(&w.line(40).unwrap()), "workers 3/10");
+        assert_eq!(text(&w.line(12).unwrap()), "workers 3/10");
+        assert_eq!(text(&w.line(11).unwrap()), "3/10");
+        assert_eq!(text(&w.line(4).unwrap()), "3/10");
+        assert!(w.line(3).is_none());
     }
 }

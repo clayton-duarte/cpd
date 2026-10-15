@@ -11,7 +11,12 @@
 //! | 20 %  +-------------------+  20 %   |
 //! |       | chat slot (80 %)  |         |
 //! +-------+-------------------+---------+
+//! | StatusBar: one row across the width  |
+//! +--------------------------------------+
 //! ```
+//!
+//! A new `main` is reset to these sizes once it is built (A3); an existing one
+//! is not, but gets a StatusBar when it has none.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -20,12 +25,12 @@ use std::os::unix::process::CommandExt;
 use rusqlite::OptionalExtension;
 use serde_json::{Map, Value, json};
 
-use super::{not_a_terminal, on_a_terminal};
+use super::{not_a_terminal, on_a_terminal, statusbar};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode, Exit};
 use crate::home::CpdHome;
 use crate::host::layout::MAIN_WINDOW;
-use crate::host::{Pane, Spawn, Split, Tmux, View};
+use crate::host::{Pane, PaneId, Spawn, Split, Tmux, View};
 use crate::ids::SessionId;
 use crate::output::Output;
 use crate::session::PROGRAM;
@@ -33,26 +38,40 @@ use crate::store::Store;
 
 /// The views of `main`'s layout: a dead one is respawned (amendment 9). The
 /// `worker` view is not part of it: it is opened and closed by the plan view.
-const LAYOUT: [View; 4] = [View::Tree, View::Plan, View::Widgets, View::Chat];
+const LAYOUT: [View; 5] = [View::Tree, View::Plan, View::Widgets, View::Chat, View::Statusbar];
 
 /// The pane border titles: the spike's column titles, keyed by `@cpd_view`.
-/// A Lead's pane (`@cpd_session`) and the placeholder have none, since pi and
+/// A Lead's pane (`@cpd_session`), the placeholder and the StatusBar have none, since pi and
 /// the placeholder say what they are; any other pane shows its command.
-const BORDER_FORMAT: &str = "#{?#{@cpd_session},,#{?#{==:#{@cpd_view},chat},,\
+const BORDER_FORMAT: &str = "#{?#{@cpd_session},,#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},statusbar},,\
 #{?#{==:#{@cpd_view},tree}, Context ,#{?#{==:#{@cpd_view},plan}, Plan ,\
 #{?#{==:#{@cpd_view},widgets}, Dispatch ,#{?#{==:#{@cpd_view},worker}, Worker (read-only) ,\
-#{pane_current_command}}}}}}}";
+#{pane_current_command}}}}}}}}";
 
 /// The TUI's own global options, from the spike's `tmux.conf`, set on every
-/// run (each is a plain `set -g`, so rerunning is safe). The server's own
-/// options are contract §6.1's, set by `host` when it starts the server. Not
-/// ported: the spike's `pane-died` respawn hook (it would also restart Lead
-/// and engine panes, whose death the engine must see, E2) and its status-bar
-/// mouse binding (cpd 2's cockpit has no status-bar pane).
-const TUI_OPTIONS: &[[&str; 4]] = &[
-    ["set", "-g", "focus-events", "on"],
-    ["set", "-g", "pane-active-border-style", "fg=blue"],
-    ["set", "-g", "pane-border-format", BORDER_FORMAT],
+/// run (each is a plain `set -g` or `bind`, so rerunning is safe). The
+/// server's own options are contract §6.1's, set by `host` when it starts the
+/// server. Not ported: the spike's `pane-died` respawn hook (it would also
+/// restart Lead and engine panes, whose death the engine must see, E2).
+///
+/// The StatusBar never takes keyboard focus (A5): a click on a pane whose
+/// `@cpd_view` is `statusbar` is passed on without `select-pane`; every other
+/// pane keeps tmux's default.
+const TUI_OPTIONS: &[&[&str]] = &[
+    &["set", "-g", "focus-events", "on"],
+    &["set", "-g", "pane-active-border-style", "fg=blue"],
+    &["set", "-g", "pane-border-format", BORDER_FORMAT],
+    &[
+        "bind",
+        "-T",
+        "root",
+        "MouseDown1Pane",
+        "if",
+        "-F",
+        "#{==:#{@cpd_view},statusbar}",
+        "send-keys -M",
+        "select-pane -t = ; send-keys -M",
+    ],
 ];
 
 pub(super) fn run(attach: bool) -> Result<Output, CpdError> {
@@ -72,9 +91,11 @@ pub(super) fn run(attach: bool) -> Result<Output, CpdError> {
         build(&tmux, &home, cockpit)?;
     } else {
         respawn_dead(&tmux, &home, &main)?;
+        add_missing_statusbar(&tmux, &home, &main)?;
     }
     for option in TUI_OPTIONS {
-        tmux.run(&option.map(str::to_owned))?;
+        let argv: Vec<String> = option.iter().map(|a| (*a).to_owned()).collect();
+        tmux.run(&argv)?;
     }
     if built {
         if let Some(lead) = store.read(last_chat_lead)? {
@@ -103,7 +124,7 @@ fn view_spawn(home: &CpdHome, view: View) -> Spawn {
     }
 }
 
-/// Builds `<cockpit>:main` with its four panes, each marked with `@cpd_view`,
+/// Builds `<cockpit>:main` with its five panes, each marked with `@cpd_view`,
 /// starting the server and the cockpit session when they are missing. A
 /// cockpit session that exists without `main` (`plan new` creates it with
 /// the first Lead's park window, commands.md §4.1) gets `main` as a new window.
@@ -121,9 +142,29 @@ fn build(tmux: &Tmux, home: &CpdHome, cockpit: &str) -> Result<(), CpdError> {
     tmux.set_pane_view(&widgets, View::Widgets)?;
     let chat = tmux.split_window(&plan, Split::Below, Some("80%"), &spawn(View::Chat))?;
     tmux.set_pane_view(&chat, View::Chat)?;
+    add_statusbar(tmux, home, &tree)?;
+    statusbar::layout::reset(tmux, cockpit)?;
     // The keyboard goes to the chat slot, as in the spike.
     tmux.run(&["select-pane".to_owned(), "-t".to_owned(), chat.as_str().to_owned()])?;
     Ok(())
+}
+
+/// Adds the StatusBar: a one-row pane across the full width at the bottom of
+/// the window of `target`.
+fn add_statusbar(tmux: &Tmux, home: &CpdHome, target: &PaneId) -> Result<(), CpdError> {
+    let bar = tmux.split_window(target, Split::Bottom, Some("1"), &view_spawn(home, View::Statusbar))?;
+    tmux.set_pane_view(&bar, View::Statusbar)
+}
+
+/// An existing `main` without a StatusBar gets one (A7), without a reset.
+fn add_missing_statusbar(tmux: &Tmux, home: &CpdHome, main: &[Pane]) -> Result<(), CpdError> {
+    if main.iter().any(|p| p.cpd_view == Some(View::Statusbar)) {
+        return Ok(());
+    }
+    match main.first() {
+        Some(any) => add_statusbar(tmux, home, &any.pane),
+        None => Ok(()),
+    }
 }
 
 /// Respawns each dead pane of `main`'s layout in place (`respawn-pane`,

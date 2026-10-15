@@ -5,6 +5,7 @@
 //! - [`cockpit`]: `cpd2 tui [--attach]` (§13.1);
 //! - [`chat`]: the chat slot's placeholder (amendment 2);
 //! - [`widgets`]: the Dispatch column and the key legend (`tui view legend`), with the shared [`palette`];
+//! - [`statusbar`]: the StatusBar, the bottom row, with reset-layout;
 //! - [`tree`], [`plan`], [`worker`]: the other views of §13.2.
 
 mod chat;
@@ -12,6 +13,7 @@ mod cockpit;
 pub mod palette;
 mod plan;
 pub mod read;
+mod statusbar;
 mod tree;
 pub mod widgets;
 mod worker;
@@ -46,6 +48,8 @@ pub enum View {
     Plan,
     /// The Dispatch column (right)
     Widgets,
+    /// The StatusBar (bottom row)
+    Statusbar,
     /// An Attempt's Worker, read-only (beside the chat)
     Worker(worker::Args),
     /// The key legend (opened by `?` in the Dispatch column, in a tmux popup)
@@ -61,6 +65,7 @@ pub fn run(args: Args) -> Result<Output, CpdError> {
             View::Tree => tree::run(),
             View::Plan => plan::run(),
             View::Widgets => widgets::run(),
+            View::Statusbar => statusbar::run(),
             View::Worker(args) => worker::run(args),
             View::Legend => widgets::legend::run(),
             View::Chat => chat::run(),

@@ -1065,14 +1065,14 @@ The pane border format and column titles belong to the TUI (`tui/`), not to this
 
 | tmux session | Window | Panes | What runs |
 |---|---|---|---|
-| `cpd` (the cockpit; `tmux.cockpit_session`) | `main` | the tree (left), the plan view (centre top), the **chat slot** (centre bottom), the widgets (right); optionally the read-only Worker view beside the chat | `cpd2 tui` views; the chat slot holds one Lead Session's pane |
+| `cpd` (the cockpit; `tmux.cockpit_session`) | `main` | the tree (left), the plan view (centre top), the **chat slot** (centre bottom), the widgets (right); the **StatusBar**, one row across the full width at the bottom; optionally the read-only Worker view beside the chat | `cpd2 tui` views (the StatusBar runs `cpd2 tui view statusbar`); the chat slot holds one Lead Session's pane |
 | `cpd` | `park-<label>` (one per Lead Session not in the chat slot) | one pane | a Lead (`cpd2 session run <id>`) |
 | `cpd` | `ctx-<context>` | one pane | a Context's grounded Lead (`cpd2 session run <id>`) |
 | `cpd-work` (hidden; `tmux.work_session`) | `watch` | one pane | `cpd2 watch` (D5) |
 | `cpd-work` | `<plan>--<attempt>` (one per Attempt) | one pane, the Worker | `pi` |
 
 - `<label>` is the Session's Plan id, or the first 8 characters of its id when it has no Plan. tmux targets are always pane ids (`%<n>`) or window ids (`@<n>`), never names; names are labels for people.
-- **Pane options** identify panes, never state: `@cpd_session` (Session id) on every pane that runs a Session, and `@cpd_view` (`tree`, `plan`, `widgets`, `worker`, `chat`) on the TUI's panes. The chat slot is the pane of `cpd:main` that has `@cpd_session` **or** `@cpd_view = chat`. The value `chat` marks the **placeholder**: the pane running `cpd2 tui view chat`, text `No Lead here: pick a Plan in the session tree`, which holds the slot while no Lead is there. At most one placeholder exists, and only ever in the slot. Pane options move with the pane on `swap-pane`, which is why the chat slot is found by that rule and not by a fixed option.
+- **Pane options** identify panes, never state: `@cpd_session` (Session id) on every pane that runs a Session, and `@cpd_view` (`tree`, `plan`, `widgets`, `statusbar`, `worker`, `chat`) on the TUI's panes. The chat slot is the pane of `cpd:main` that has `@cpd_session` **or** `@cpd_view = chat`. The value `chat` marks the **placeholder**: the pane running `cpd2 tui view chat`, text `No Lead here: pick a Plan in the session tree`, which holds the slot while no Lead is there. At most one placeholder exists, and only ever in the slot. Pane options move with the pane on `swap-pane`, which is why the chat slot is found by that rule and not by a fixed option.
 - The User attaches with `tmux -L cpd attach -t cpd` (locally or `ssh -t <host> …`). Several clients may attach at once. The User never needs to look at `cpd-work`.
 
 ### 6.3 tmux commands cpd uses
@@ -1080,6 +1080,9 @@ The pane border format and column titles belong to the TUI (`tui/`), not to this
 | Purpose | Command (all with `-L <socket>`) |
 |---|---|
 | server and sessions | `has-session -t =<name>`; `new-session -d -s <name> -n <window> -x 215 -y 62 -c <dir> [command]` |
+| the full-width StatusBar | `split-window -v -f -l 1` |
+| reset-layout (§13.2) | `resize-pane -t <pane> -x\|-y <size>` |
+| the StatusBar never takes focus | `bind -T root MouseDown1Pane if -F '#{==:#{@cpd_view},statusbar}' 'send-keys -M' 'select-pane -t = ; send-keys -M'` |
 | options | `set -g <option> <value>`; `set -p -t <pane> @cpd_session <id>` |
 | a new parked window or Attempt window | `new-window -d -t =<session>: -n <name> -c <cwd> -e K=V … -P -F '#{window_id} #{pane_id}' -- <argv…>` (several arguments run without a shell, docs: tmux(1)) |
 | bring a Lead into the chat slot | `swap-pane -d -s <parked pane> -t <chat slot pane>` (verified: both processes keep their pids, the slot keeps its size), then `rename-window -t <window id> park-<label>` for the window that now holds the displaced Lead |

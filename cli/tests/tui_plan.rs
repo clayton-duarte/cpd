@@ -1,5 +1,5 @@
 //! The `plan` view (commands.md §13.2, §17), the centre-top pane of the cockpit, on a private tmux server: the flow
-//! chart of the Plan of the Lead in the chat slot, its tabs, PR and Workers, and the view's refresh from Events.
+//! chart of the Plan of the Lead in the chat slot, its tabs and PR, and the view's refresh from Events.
 //!
 //! The store is prepared through the store API (`Store::write`), as the other areas' tests do, because Plans, Jobs
 //! and Attempts belong to their areas; the view runs as `cpd2 tui view plan` in a pane, and its screen is read with
@@ -293,7 +293,7 @@ fn each_job_status_has_its_icon_and_a_cancelled_job_is_not_drawn() {
 }
 
 #[test]
-fn the_top_row_has_the_context_the_tabs_the_pr_and_the_workers() {
+fn the_top_row_has_the_context_the_tabs_and_the_pr_and_no_workers() {
     let env = env();
     let jobs: &[(&str, &str, &str, &[&str], u32)] =
         &[("a", "merged", "O3", &[], 1), ("b", "running", "S3", &["a"], 1), ("c", "running", "S3", &["a"], 2)];
@@ -303,10 +303,11 @@ fn the_top_row_has_the_context_the_tabs_the_pr_and_the_workers() {
     s += &lead_row("fork-ship", "ctx", "ship", "2026-01-02T00:00:09.000Z");
     sql(&env, &s);
     let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the top row", |s| s.first().is_some_and(|l| l.contains("workers")));
+    let screen = screen_when(&env, &pane, "the top row", |s| s.first().is_some_and(|l| l.contains("#7")));
     let (top, line) = (&screen[0], &screen[1]);
     assert!(top.starts_with(" Title of ctx ▸  ship   ship/name of fork-ship "), "{top:?}");
-    assert!(top.ends_with("#7 open ✗ 1 review, 2 comments  workers 2/4 "[..].trim_end()), "{top:?}");
+    assert!(top.ends_with("#7 open ✗ 1 review, 2 comments"), "{top:?}");
+    assert!(!top.contains("workers"), "the Workers are the StatusBar's: {top:?}");
     assert!(line.starts_with('─') && line.chars().all(|c| c == '─'), "{line:?}");
     // the active tab is reversed: the Lead in the chat slot
     let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
@@ -320,8 +321,8 @@ fn a_plan_without_a_pr_says_so() {
     let env = env();
     sql(&env, &plan_with("dispatch", None, &[("a", "queued", "S3", &[], 0)]));
     let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the top row", |s| s.first().is_some_and(|l| l.contains("workers")));
-    assert!(screen[0].ends_with("no PR  workers 0/4"), "{:?}", screen[0]);
+    let screen = screen_when(&env, &pane, "the top row", |s| s.first().is_some_and(|l| l.contains("no PR")));
+    assert!(screen[0].ends_with("no PR"), "{:?}", screen[0]);
 }
 
 #[test]
@@ -330,7 +331,7 @@ fn a_closed_pr_is_shown_closed() {
     let seen = r#"{"checks":{"ci":"SUCCESS"},"reviewIds":[],"commentIds":[],"closed":true}"#;
     sql(&env, &plan_with("pr", Some((8, seen)), &[("a", "merged", "S3", &[], 1)]));
     let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the top row", |s| s.first().is_some_and(|l| l.contains("workers")));
+    let screen = screen_when(&env, &pane, "the top row", |s| s.first().is_some_and(|l| l.contains("#8")));
     assert!(screen[0].contains("#8 closed ✓ no review"), "{:?}", screen[0]);
 }
 
