@@ -96,8 +96,6 @@ fn row(indent: usize, cells: &[(char, Style)]) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::style::Color;
-
     use super::*;
 
     fn text(line: &Line) -> String {
@@ -158,10 +156,10 @@ mod tests {
         .join("\n");
         let lines = render(&file);
         let colour = |line: usize, span: usize| lines[line].spans[span].style.fg;
-        assert_eq!(colour(0, 1), Some(Color::White), "you");
-        assert_eq!(colour(2, 1), Some(Color::Green), "agent");
-        assert_eq!(colour(4, 1), Some(Color::Yellow), "a tool call");
-        assert_eq!(lines[1].style.fg, Some(Color::White), "the User's words");
+        assert_eq!(colour(0, 1), Some(palette::color(Meaning::NotStarted)), "you");
+        assert_eq!(colour(2, 1), Some(palette::color(Meaning::InProgress)), "agent");
+        assert_eq!(colour(4, 1), Some(palette::color(Meaning::Review)), "a tool call");
+        assert_eq!(lines[1].style.fg, Some(palette::color(Meaning::NotStarted)), "the User's words");
     }
 
     #[test]
