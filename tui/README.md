@@ -11,6 +11,11 @@ selection and scrolling, `Paragraph`, `Block`, `Scrollbar`, `Line`/`Span` alignm
 drawing is only for what has no widget, with a comment saying why: the chart's line glyphs and its window copy, and the Context column's counters
 layer (a right-aligned `Line` per tree row, since the tree widget draws one text per row).
 
+**One separator.** `src/separator.rs` is the only line that separates areas: a one-row `Block` with `Borders::TOP`, in the
+palette's dim "nothing" colour. The Plan view's tabs, the Context's bottom row (the separator sits directly above the
+` ? legend ` button and `workers N/M`, apart from the tree) and the Dispatch sections (one between each pair of
+homeserver, PRs, git and Jira, laid out with `Layout`) all use it.
+
 ## Palette and legend
 
 `src/palette.rs` is the only place with colours and status icons: a `Meaning` (not started white, in progress green, waiting

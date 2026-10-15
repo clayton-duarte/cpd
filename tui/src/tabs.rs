@@ -3,13 +3,13 @@
 
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Constraint, Layout, Rect},
     style::Stylize,
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 
-use crate::palette::{self, Meaning};
+use crate::separator;
 
 pub struct Tab {
     pub id: String,
@@ -22,10 +22,8 @@ pub const HEIGHT: u16 = 2;
 
 /// Draw the top row into `area` (`HEIGHT` rows). Returns the row of the tabs and each tab's `[from, to)` columns, for clicks.
 pub fn draw(f: &mut Frame, area: Rect, context: Option<&str>, tabs: &[Tab]) -> (Rect, Vec<(u16, u16, String)>) {
-    // `Borders::BOTTOM` is the separator line, in the dim "nothing" colour
-    let block = Block::new().borders(Borders::BOTTOM).border_style(palette::fg(Meaning::Nothing));
-    let row = block.inner(area);
-    f.render_widget(block, area);
+    let [row, line] = Layout::vertical([Constraint::Length(HEIGHT - separator::HEIGHT), Constraint::Length(separator::HEIGHT)]).areas(area);
+    separator::draw(f, line);
     let mut spans: Vec<Span> = Vec::new();
     let mut ranges = Vec::new();
     match context {
@@ -50,6 +48,7 @@ pub fn draw(f: &mut Frame, area: Rect, context: Option<&str>, tabs: &[Tab]) -> (
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palette::{self, Meaning};
     use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, style::Modifier};
 
     fn render(context: Option<&str>, tabs: &[Tab], width: u16) -> (Buffer, Rect, Vec<(u16, u16, String)>) {
