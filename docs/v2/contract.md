@@ -96,6 +96,7 @@ $CPD_HOME/
     <plan>/logs/attempt-<attempt>.log      the Attempt driver's stderr
     <plan>/logs/<attempt>.<hook>.log       full output of a hook run (§7.3)
     <plan>/logs/pr.pre-merge.log           full output of the last Gate run by `pr open` or `pr rebase` (§7.6)
+    <plan>/logs/lead.<hook>.log            full output of a hook run in the Lead worktree: `pre-start` at `plan lock` (§7.2)
 ```
 
 Locks are `flock(2)` locks on these files: the kernel releases them when the holder dies, so there are no stale-lock takeovers (a change from cpd 1 §4, whose pid files needed them).

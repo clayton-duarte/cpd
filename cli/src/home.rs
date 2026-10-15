@@ -201,6 +201,12 @@ impl CpdHome {
     pub fn hook_log(&self, plan: &PlanId, attempt: &AttemptId, hook: Hook) -> PathBuf {
         self.plan_dir(plan).join("logs").join(format!("{attempt}.{}.log", hook.as_str()))
     }
+
+    /// `run/<plan>/logs/lead.<hook>.log`: the full output of a hook run in the
+    /// Lead worktree (`pre-start` at `plan lock`; Escalation `rs-plan-a1-q4`).
+    pub fn lead_hook_log(&self, plan: &PlanId, hook: Hook) -> PathBuf {
+        self.plan_dir(plan).join("logs").join(format!("lead.{}.log", hook.as_str()))
+    }
 }
 
 #[cfg(test)]
@@ -288,6 +294,7 @@ mod tests {
                 h.hook_log(&plan(), &attempt(), hook),
                 p(&format!("/h/.cpd/run/pay-4521/logs/api-schema-a2.{name}.log"))
             );
+            assert_eq!(h.lead_hook_log(&plan(), hook), p(&format!("/h/.cpd/run/pay-4521/logs/lead.{name}.log")));
         }
     }
 
