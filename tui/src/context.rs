@@ -3,7 +3,9 @@
 //! The widget draws one text per row (guide, dot, name; for a Context: dot, name, and the number of Plans when
 //! collapsed). It has no right-aligned column, so each session's five Job counters are drawn as a right-aligned `Line`
 //! into the row's `Rect` after the tree (ratatui has no widget for a second aligned column in a tree row).
-//! The selected row is inverted over its whole width after both layers are drawn.
+//! The `⏵` of the active session is drawn over the indent of its row, for the same reason (the widget owns the indent).
+//! Context rows are not selectable (a click only collapses or expands them): the cursor moves between sessions only,
+//! and is inverted over its row's whole width, only while the pane has keyboard focus.
 //! Everything here is pure except `draw`, which only writes to the frame's buffer.
 
 use std::collections::HashSet;
@@ -135,8 +137,12 @@ pub fn items(rows: &[ContextRow], opened: &HashSet<Vec<Id>>, width: u16) -> Vec<
         .collect()
 }
 
-/// Draw the column into `area`: the tree, then the counters of each visible session row, then the selected row inverted.
-pub fn draw(f: &mut Frame, area: Rect, rows: &[ContextRow], state: &mut TreeState<Id>) {
+/// The mark of the active session in column 0 of its row (the column of a Context's dot).
+pub const ACTIVE_MARK: &str = "⏵";
+
+/// Draw the column into `area`: the tree, then the counters and the active mark of each visible session row, then the
+/// cursor row inverted when the pane has `focused` keyboard focus.
+pub fn draw(f: &mut Frame, area: Rect, rows: &[ContextRow], state: &mut TreeState<Id>, focused: bool) {
     if rows.is_empty() {
         f.render_widget(Paragraph::new(Line::from(Span::styled(" no Lead sessions in the cockpit", Style::new().add_modifier(Modifier::DIM)))), area);
         return;
@@ -149,13 +155,16 @@ pub fn draw(f: &mut Frame, area: Rect, rows: &[ContextRow], state: &mut TreeStat
     for (y, row) in (area.y..area.bottom()).zip(flat.iter().skip(state.get_offset())) {
         let rect = Rect::new(area.x, y, area.width, 1);
         if let [_, id] = row.identifier.as_slice() {
-            let workflow = rows.iter().flat_map(|c| &c.sessions).find(|s| &s.id == id).and_then(|s| s.workflow.as_ref());
-            if let Some(w) = workflow {
+            let session = rows.iter().flat_map(|c| &c.sessions).find(|s| &s.id == id);
+            if let Some(w) = session.and_then(|s| s.workflow.as_ref()) {
                 counters(w).right_aligned().render(rect, buf);
             }
-        }
-        if row.identifier == state.selected() {
-            buf.set_style(rect, Modifier::REVERSED);
+            if session.is_some_and(|s| s.active) {
+                Span::styled(ACTIVE_MARK, Style::new().add_modifier(Modifier::BOLD)).render(rect, buf);
+            }
+            if focused && row.identifier == state.selected() {
+                buf.set_style(rect, Modifier::REVERSED);
+            }
         }
     }
 }
@@ -169,21 +178,46 @@ pub fn open_new(state: &mut TreeState<Id>, known: &mut HashSet<Id>, rows: &[Cont
     }
 }
 
-/// After a refresh, keep the selection on its row; when its row is gone (closed session, vanished Context) select the
-/// row now at the same position, else the last row. `before` is the selection's index in the rows before the refresh.
+/// The visible session rows (the only selectable ones), in order.
+fn visible_sessions(state: &TreeState<Id>, rows: &[ContextRow]) -> Vec<Vec<Id>> {
+    state.flatten(&items(rows, state.opened(), 0)).into_iter().map(|f| f.identifier).filter(|id| id.len() == 2).collect()
+}
+
+/// After a refresh, keep the cursor on its session; when it is gone (closed session, collapsed or vanished Context)
+/// move it to the session now at the same position, else the last one; with no session visible, clear it.
+/// `before` is the cursor's index among the visible sessions before the refresh.
 pub fn reselect(state: &mut TreeState<Id>, rows: &[ContextRow], before: Option<usize>) {
-    let visible: Vec<Vec<Id>> = state.flatten(&items(rows, state.opened(), 0)).into_iter().map(|f| f.identifier).collect();
+    let visible = visible_sessions(state, rows);
     if visible.iter().any(|id| id.as_slice() == state.selected()) {
         return;
     }
-    if let Some(id) = visible.get(before.unwrap_or(0).min(visible.len().saturating_sub(1))) {
-        state.select(id.clone());
-    }
+    state.select(visible.get(before.unwrap_or(0).min(visible.len().saturating_sub(1))).cloned().unwrap_or_default());
 }
 
-/// The index of the selection among the visible rows.
+/// The index of the cursor among the visible sessions.
 pub fn selected_index(state: &TreeState<Id>, rows: &[ContextRow]) -> Option<usize> {
-    state.flatten(&items(rows, state.opened(), 0)).iter().position(|f| f.identifier == state.selected())
+    visible_sessions(state, rows).iter().position(|id| id.as_slice() == state.selected())
+}
+
+/// Move the cursor `delta` sessions (clamped), skipping Context rows; with no cursor, down goes to the first, up to the last.
+pub fn move_cursor(state: &mut TreeState<Id>, rows: &[ContextRow], delta: isize) {
+    let visible = visible_sessions(state, rows);
+    let Some(last) = visible.len().checked_sub(1) else { return };
+    let next = match selected_index(state, rows) {
+        Some(i) => i.saturating_add_signed(delta).min(last),
+        None if delta < 0 => last,
+        None => 0,
+    };
+    state.select(visible[next].clone());
+}
+
+/// A click on a Context row only collapses or expands it; it selects nothing. Returns whether `path` was a Context.
+pub fn click_context(state: &mut TreeState<Id>, path: &[Id]) -> bool {
+    let is_context = path.len() == 1;
+    if is_context {
+        state.toggle(path.to_vec());
+    }
+    is_context
 }
 
 #[cfg(test)]
@@ -220,8 +254,12 @@ mod tests {
     }
 
     fn render(rows: &[ContextRow], state: &mut TreeState<Id>, width: u16, height: u16) -> Buffer {
+        render_focus(rows, state, width, height, true)
+    }
+
+    fn render_focus(rows: &[ContextRow], state: &mut TreeState<Id>, width: u16, height: u16, focused: bool) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|f| draw(f, f.area(), rows, state)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), rows, state, focused)).unwrap();
         terminal.backend().buffer().clone()
     }
 
@@ -355,12 +393,73 @@ mod tests {
     }
 
     #[test]
-    fn the_selected_context_row_is_reversed_across_the_full_width_and_no_other_row() {
+    fn the_cursor_is_drawn_only_while_the_pane_is_focused() {
+        let rows = sample();
+        let mut state = state_for(&rows, &[], &["cpd", "b"]);
+        let buf = render_focus(&rows, &mut state, 38, 6, false);
+        assert!((0..6).all(|y| reversed(&buf, y) == vec![false; 38]), "no inverted row without focus");
+        let buf = render_focus(&rows, &mut state, 38, 6, true);
+        assert_eq!(reversed(&buf, 2), vec![true; 38]);
+    }
+
+    #[test]
+    fn a_context_row_is_never_inverted() {
         let rows = sample();
         let buf = render(&rows, &mut state_for(&rows, &["cpd"], &["cpd"]), 38, 3);
-        assert_eq!(reversed(&buf, 0), vec![true; 38]);
-        assert_eq!(reversed(&buf, 1), vec![false; 38]);
-        assert_eq!(reversed(&buf, 2), vec![false; 38]);
+        assert!((0..3).all(|y| reversed(&buf, y) == vec![false; 38]));
+    }
+
+    #[test]
+    fn the_keyboard_cursor_skips_context_rows() {
+        let rows = sample();
+        let mut state = state_for(&rows, &[], &[]);
+        let mut path = |state: &mut TreeState<Id>, d| {
+            move_cursor(state, &rows, d);
+            state.selected().to_vec()
+        };
+        assert_eq!(path(&mut state, 1), ["cpd", "a"], "down from nothing: the first session");
+        assert_eq!(path(&mut state, 1), ["cpd", "b"]);
+        assert_eq!(path(&mut state, 1), ["cpd", "c"]);
+        assert_eq!(path(&mut state, 1), ["other", "d"], "over the Context row `other`");
+        assert_eq!(path(&mut state, 1), ["other", "d"], "clamped at the end");
+        assert_eq!(path(&mut state, -1), ["cpd", "c"], "back over the Context row");
+        let mut none = state_for(&rows, &[], &[]);
+        move_cursor(&mut none, &rows, -1);
+        assert_eq!(none.selected(), ["other", "d"], "up from nothing: the last session");
+    }
+
+    #[test]
+    fn the_cursor_skips_the_sessions_of_a_collapsed_context() {
+        let rows = sample();
+        let mut state = state_for(&rows, &["cpd"], &[]);
+        move_cursor(&mut state, &rows, 1);
+        assert_eq!(state.selected(), ["other", "d"]);
+    }
+
+    #[test]
+    fn a_click_on_a_context_toggles_it_and_selects_nothing() {
+        let rows = sample();
+        let mut state = state_for(&rows, &[], &["cpd", "b"]);
+        assert!(click_context(&mut state, &["cpd".to_string()]));
+        assert!(!state.opened().contains(&vec!["cpd".to_string()]));
+        assert_eq!(state.selected(), ["cpd", "b"], "the cursor stays where it was");
+        assert!(click_context(&mut state, &["cpd".to_string()]));
+        assert!(state.opened().contains(&vec!["cpd".to_string()]));
+        let mut fresh = state_for(&rows, &[], &[]);
+        click_context(&mut fresh, &["other".to_string()]);
+        assert!(fresh.selected().is_empty());
+        assert!(!click_context(&mut fresh, &["cpd".to_string(), "a".to_string()]), "a session is not a Context");
+    }
+
+    #[test]
+    fn the_active_session_has_the_mark_in_column_0_and_no_other_row() {
+        let mut rows = sample();
+        rows[0].sessions[2].active = true;
+        let buf = render(&rows, &mut state_for(&rows, &[], &[]), 38, 6);
+        assert_eq!(text(&buf, 3), row("⏵ └ ○ cpd-ui", "1⋅0⋅2⋅3⋅0", 38));
+        for y in [0, 1, 2, 4, 5] {
+            assert!(!text(&buf, y).contains(ACTIVE_MARK), "row {y}");
+        }
     }
 
     #[test]
@@ -407,7 +506,7 @@ mod tests {
         let mut rows = sample();
         let mut state = state_for(&rows, &[], &["cpd", "b"]);
         let before = selected_index(&state, &rows);
-        assert_eq!(before, Some(2));
+        assert_eq!(before, Some(1));
         rows[0].sessions.remove(1);
         reselect(&mut state, &rows, before);
         assert_eq!(state.selected(), ["cpd", "c"]);
