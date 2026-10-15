@@ -5,10 +5,12 @@
 //! refresh rule, and the row rendering. The `gh` call itself lives in `main.rs`.
 
 use ratatui::{
-    style::{Color, Stylize},
+    style::Stylize,
     text::{Line, Span},
 };
 use serde_json::{Value, json};
+
+use crate::palette;
 
 /// A PR is re-read at most this often (seconds), whether the last read worked or not.
 pub const REFRESH_SECS: u64 = 60;
@@ -22,17 +24,6 @@ pub enum Checks {
     Failed,
     Pending,
     None,
-}
-
-impl Checks {
-    fn symbol(self) -> (&'static str, Color) {
-        match self {
-            Checks::Passed => ("✓", Color::Green),
-            Checks::Failed => ("✗", Color::Red),
-            Checks::Pending => ("…", Color::Yellow),
-            Checks::None => ("–", Color::DarkGray),
-        }
-    }
 }
 
 /// What the row shows of a PR, parsed from gh's JSON.
@@ -134,15 +125,6 @@ pub fn truncate(s: &str, max: usize) -> String {
     t
 }
 
-fn state_color(state: &str) -> Color {
-    match state {
-        "merged" => Color::Magenta,
-        "open" => Color::Green,
-        "closed" => Color::Red,
-        _ => Color::Gray,
-    }
-}
-
 /// The lines of one Plan: its label, then `#n state checks review title` (title cut first to fit `width`).
 /// `pr` is the Plan's recorded PR number (`None`: no PR); `rec` its cache record. A record whose last gh attempt failed
 /// is stale: dimmed, with the age of its data.
@@ -159,8 +141,8 @@ pub fn render(label: &str, pr: Option<u64>, rec: Option<&Record>, now: u64, widt
         return vec![head, Line::from(vec![num.dim(), note.dim()])];
     };
     let stale = rec.is_some_and(|r| r.fetched_at != Some(r.checked_at));
-    let (sym, sym_color) = live.checks.symbol();
-    let mut spans: Vec<Span> = vec![num.clone().into(), " ".into(), live.state.clone().fg(state_color(&live.state)), " ".into(), sym.fg(sym_color), " ".into(), live.review.clone().into()];
+    let (sym, checks_meaning) = palette::checks(live.checks);
+    let mut spans: Vec<Span> = vec![num.clone().into(), " ".into(), live.state.clone().fg(palette::color(palette::pr_state(&live.state))), " ".into(), sym.fg(palette::color(checks_meaning)), " ".into(), live.review.clone().into()];
     let mut used = num.chars().count() + 1 + live.state.chars().count() + 3 + live.review.chars().count();
     if stale {
         let ago = rec.and_then(|r| r.fetched_at).map(|t| format!(" {} ago", age(now.saturating_sub(t)))).unwrap_or_default();
@@ -178,6 +160,7 @@ pub fn render(label: &str, pr: Option<u64>, rec: Option<&Record>, now: u64, widt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palette::Meaning;
 
     fn text(l: &Line) -> String {
         l.spans.iter().map(|s| s.content.as_ref()).collect()
@@ -256,6 +239,21 @@ mod tests {
         let lines = render("lead-fork", Some(2), Some(&r), 110, 60);
         assert_eq!(text(&lines[0]), " lead-fork");
         assert_eq!(text(&lines[1]), "  #2 merged ✓ approved  A long pull request title here");
+    }
+
+    #[test]
+    fn a_row_takes_its_colours_from_the_palette() {
+        let colours = |state: &str, rollup: Value| {
+            let r = rec(Some(gh(state, rollup, "")), 100, Some(100));
+            let spans = render("p", Some(2), Some(&r), 100, 60)[1].spans.clone();
+            let fg = |t: &str| spans.iter().find(|s| s.content == t).and_then(|s| s.style.fg).unwrap();
+            (fg(state.to_lowercase().as_str()), fg(palette::checks(parse_live(&r.data.unwrap()).unwrap().checks).0))
+        };
+        let c = |m| palette::color(m);
+        assert_eq!(colours("OPEN", json!([done("SUCCESS")])), (c(Meaning::Review), c(Meaning::Done)));
+        assert_eq!(colours("MERGED", json!([done("FAILURE")])), (c(Meaning::Done), c(Meaning::Failed)));
+        assert_eq!(colours("CLOSED", json!([])), (c(Meaning::Failed), c(Meaning::Nothing)));
+        assert_eq!(colours("OPEN", json!([json!({"__typename": "CheckRun", "status": "IN_PROGRESS", "conclusion": ""})])), (c(Meaning::Review), c(Meaning::InProgress)));
     }
 
     #[test]
