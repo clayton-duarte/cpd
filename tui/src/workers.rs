@@ -1,4 +1,4 @@
-//! The Worker indicator at the bottom right of the Context pane: `workers N/M`.
+//! The Worker indicator at the right of the StatusBar: `workers N/M`.
 //!
 //! Interim source, like `leads/<id>/workflow`: the files cpd keeps in its home, read directly until cpd2 provides the
 //! data. `M` is `concurrency` in `<cpd home>/config.json`; `N` counts the slots `<cpd home>/slots/slot-<i>.json`

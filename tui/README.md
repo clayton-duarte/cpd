@@ -1,6 +1,6 @@
 # cpd-tui
 
-The cpd cockpit: ratatui views (`context`, `plan`, `dispatch`, `worker <session.jsonl> <job>`) that each run in a pane of a
+The cpd cockpit: ratatui views (`context`, `plan`, `dispatch`, `statusbar`, `worker <session.jsonl> <job>`) that each run in a pane of a
 tmux session (`legend` runs in a popup). tmux draws the border and the one header of each pane (`scripts/tmux.conf`, `pane-border-format`); the
 views draw only content.
 
@@ -12,8 +12,7 @@ drawing is only for what has no widget, with a comment saying why: the chart's l
 layer (a right-aligned `Line` per tree row, since the tree widget draws one text per row).
 
 **One separator.** `src/separator.rs` is the only line that separates areas: a one-row `Block` with `Borders::TOP`, in the
-palette's dim "nothing" colour. The Plan view's tabs, the Context's bottom row (the separator sits directly above the
-` ? legend ` button and `workers N/M`, apart from the tree) and the Dispatch sections (one between each pair of
+palette's dim "nothing" colour. The Plan view's tabs and the Dispatch sections (one between each pair of
 homeserver, PRs, git and Jira, laid out with `Layout`) all use it.
 
 ## Palette and legend
@@ -31,9 +30,28 @@ started", and done shares dark grey with "nothing" (the User's choice): the two 
 `●` means only "needs you" (the Context dot); PR checks are `✓ ✗ … –`.
 
 `cpd-tui legend` (`src/legend.rs`) draws the meanings, each Job status as a Plan pill and a Context counter, the Context dots
-by phase, the PR states and the checks, built from the palette only. Any key or click closes it. The Context pane's bottom
-row is the ` ? legend ` button (also the key `?`): it runs `tmux -L <socket> display-popup -E -T ' legend ' -w <w> -h <h>
+by phase, the PR states and the checks, built from the palette only. Any key or click closes it. The StatusBar's left item
+is the ` ? legend ` button (a click; the key `?` in Context does the same): it runs `tmux -L <socket> display-popup -E -T ' legend ' -w <w> -h <h>
 '<binary> legend'`, sized to the legend and capped at the client's size, so it floats over the whole cockpit.
+
+## StatusBar
+
+`cpd-tui statusbar` (`src/statusbar.rs`) is a one-row pane across the full width at the bottom of window `main`
+(`cockpit.sh`: `split-window -v -f -l 1`, `@view statusbar`; tmux draws its border line above it, with no title). It has two
+areas, `left` items from the left edge in order and `right` items ending at the right edge in order, with the middle
+expanding (a `Layout` of `Length` items around a `Fill`, spaced by `Layout::spacing`); an item is added with one entry on
+either side. `statusbar::draw` returns the `Rect` of each clickable item.
+
+| Side | Item | Does |
+| --- | --- | --- |
+| left | ` ? legend ` (reversed) | a click opens the legend popup |
+| right | `workers N/M`, shortened to `N/M` when narrow | none; re-read every 2 s |
+
+`N` is the live slots (`<cpd home>/slots/slot-<i>.json` whose `pid` is alive), `M` is `concurrency` in
+`<cpd home>/config.json`. Interim source, read directly from cpd's home until cpd2 provides the data (`src/workers.rs`).
+
+A click on the bar does not take keyboard focus: `tmux.conf` binds root `MouseDown1Pane` to pass the click on with
+`send-keys -M` without `select-pane` when the pane's `@view` is `statusbar`; every other pane keeps tmux's default.
 
 ## Build
 
@@ -89,15 +107,11 @@ A Context's dot has the colour of the busiest phase inside (dispatch > plan > co
 sessions only (↑↓/jk) and is keyboard-only: a click never moves or shows it. It is drawn inverted across the full row only
 while the pane has keyboard focus (`focus-events on` in `tmux.conf`, and the focus events the view receives), and shows
 after an arrow key. Enter, `n` and `x` act on it only while it shows. Keys: Enter on the cursor's session switches the
-centre to it; a click on a session switches and focuses it; `?` or a click on the bottom row opens the legend; `n` and `x`
-below. The tree scrolls above the button.
+centre to it; a click on a session switches and focuses it; `?` opens the legend; `n` and `x`
+below. 
 
 **⏵ marks the centre.** The `⏵` in the dot column marks the session in the centre slot; the tabs and the tree read it
 from the same place, so they agree within the 250 ms loop.
-
-**Worker indicator.** The bottom row's right end shows `workers N/M`, shortened to `N/M` when narrow. `N` is the live
-slots (`<cpd home>/slots/slot-<i>.json` whose `pid` is alive), `M` is `concurrency` in `<cpd home>/config.json`. Interim
-source, read directly from cpd's home until cpd2 provides the data (`src/workers.rs`).
 
 **● needs you, ○ does not.** A session needs you when its Lead waits on the User, or finished a turn the User has not seen.
 `tmux-agent-state.ts` publishes the pane options for it: `@asking` (1 while a tool named `ask_*` runs, and after a

@@ -18,6 +18,8 @@ LEFT=$($T display -p -t "$SESS:main.0" '#{pane_id}')
 CHAT=$($T split-window -h -t "$LEFT" -l 80% -P -F '#{pane_id}' "$(chat $FIRST)")
 RIGHT=$($T split-window -h -t "$CHAT" -l 25% -P -F '#{pane_id}' "$EXE dispatch")
 PLAN=$($T split-window -v -b -t "$CHAT" -l 20% -P -F '#{pane_id}' "$EXE plan")
+BAR=$($T split-window -v -f -l 1 -P -F '#{pane_id}' "$EXE statusbar")
+$T set -p -t "$BAR" @view statusbar
 $T set -p -t "$LEFT" @view context; $T set -p -t "$PLAN" @view plan; $T set -p -t "$RIGHT" @view dispatch
 for p in $PLANS; do
   [ "$p" = "$FIRST" ] && continue

@@ -45,6 +45,7 @@ mod pr;
 mod prompt;
 mod separator;
 mod sessions;
+mod statusbar;
 mod tabs;
 mod workers;
 
@@ -83,7 +84,8 @@ fn main() {
         "dispatch" => run_dispatch(&mut terminal),
         "worker" => run_worker(&mut terminal, args.get(2).cloned().unwrap_or_default()),
         "legend" => run_legend(&mut terminal),
-        _ => Err(format!("usage: {} context|plan|dispatch|worker <session.jsonl> <job>|legend", args[0])),
+        "statusbar" => run_statusbar(&mut terminal),
+        _ => Err(format!("usage: {} context|plan|dispatch|worker <session.jsonl> <job>|legend|statusbar", args[0])),
     };
     let _ = execute!(std::io::stdout(), DisableFocusChange, DisableMouseCapture);
     ratatui::restore();
@@ -360,7 +362,7 @@ impl ContextData {
     }
 }
 
-/// The button at the bottom row of the Context pane (also the key `?`).
+/// The legend button of the StatusBar (the key `?` in Context opens the same legend).
 const LEGEND_BUTTON: &str = " ? legend ";
 
 fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
@@ -368,24 +370,16 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
     let mut data = ContextData { groups: Vec::new(), rows: Vec::new(), state: TreeState::default(), known: HashSet::new(), active: None };
     data.refresh();
     let mut last_refresh = Instant::now();
-    let home = cpd_home();
-    let mut workers = workers::read(&home);
-    let mut last_workers = Instant::now();
     // Keyboard focus of this pane, from the terminal's focus events (`focus-events on`); the cursor shows only while focused.
     let mut focused = env::var("TMUX_PANE").ok().and_then(|p| tmux_checked(&["display", "-p", "-t", &p, "#{pane_active}"]).ok()).is_some_and(|a| a.trim() == "1");
     let mut last_input = cursor::Input::Click; // the cursor stays hidden until the first arrow key
     let mut prompt: Option<Prompt> = None;
     let mut note = String::new(); // the one-line result or refusal of the last action, until the next key
-    let mut button = Rect::default(); // the legend button, set by each draw
     loop {
         // the centre is re-checked on every loop, so a switch from the tabs or from tmux shows here within a loop
         if last_refresh.elapsed() > Duration::from_secs(1) || centre_id() != data.active {
             data.refresh();
             last_refresh = Instant::now();
-        }
-        if last_workers.elapsed() > Duration::from_secs(2) {
-            workers = workers::read(&home);
-            last_workers = Instant::now();
         }
         let cursor_shown = cursor::shown(focused, last_input, !data.state.selected().is_empty());
         terminal
@@ -395,8 +389,7 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
                 let width = area.width.max(1) as usize;
                 let wrapped = footer.chars().count().div_ceil(width);
                 let footer_height = if footer.is_empty() { 0 } else { (wrapped + usize::from(wrapped > 1)).max(1).min(area.height as usize) as u16 };
-                let [list_area, footer_area, bottom_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height), Constraint::Length(separator::HEIGHT + 1)]).areas(area);
-                button = draw_bottom(f, bottom_area, &workers);
+                let [list_area, footer_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height)]).areas(area);
                 if footer_height > 0 {
                     let style = if prompt.is_some() { Style::new().fg(palette::ui(Ui::Note)).bold() } else { Style::new().fg(palette::ui(Ui::Note)) };
                     f.render_widget(Paragraph::new(footer).style(style).wrap(Wrap { trim: false }), footer_area);
@@ -459,11 +452,7 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
             Event::Mouse(m) if prompt.is_none() && m.kind == MouseEventKind::Down(MouseButton::Left) => {
                 note.clear();
                 last_input = cursor::Input::Click;
-                if button.contains(Position::new(m.column, m.row)) {
-                    if let Err(why) = open_legend() {
-                        note = why;
-                    }
-                } else if let Some(row) = data.state.rendered_at(Position::new(m.column, m.row)).map(<[String]>::to_vec) {
+                if let Some(row) = data.state.rendered_at(Position::new(m.column, m.row)).map(<[String]>::to_vec) {
                     // a Context row only collapses or expands; a session row switches to it
                     if !context::click_context(&mut data.state, &row) {
                         if let [_, id] = row.as_slice() {
@@ -500,18 +489,51 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
     }
 }
 
-/// The Context pane's bottom (2 rows): the separator, then the legend button and the workers indicator.
-/// Returns the button's area, for clicks.
-fn draw_bottom(f: &mut ratatui::Frame, area: Rect, workers: &workers::Workers) -> Rect {
-    let [line_area, row_area] = Layout::vertical([Constraint::Length(separator::HEIGHT), Constraint::Length(1)]).areas(area);
-    separator::draw(f, line_area);
-    let label = Line::from(LEGEND_BUTTON);
-    let [button, workers_area] = Layout::horizontal([Constraint::Length((label.width() as u16).min(row_area.width)), Constraint::Min(0)]).areas(row_area);
-    f.render_widget(Paragraph::new(label).style(Style::new().add_modifier(Modifier::REVERSED)), button);
-    if let Some(line) = workers.line(workers_area.width) {
-        f.render_widget(Paragraph::new(line).right_aligned(), workers_area);
+/// The StatusBar view (one row, the bottom of the cockpit): the legend button on the left, the workers indicator on the
+/// right (re-read every 2 s). A click on the button opens the legend; the bar never takes keyboard focus (`tmux.conf`).
+fn run_statusbar(terminal: &mut DefaultTerminal) -> Result<(), String> {
+    let home = cpd_home();
+    let mut workers = workers::read(&home);
+    let mut last_workers = Instant::now();
+    let mut clickable = Vec::new();
+    let mut note = String::new(); // why the legend did not open, shown in the middle until the next click
+    loop {
+        if last_workers.elapsed() > Duration::from_secs(2) {
+            workers = workers::read(&home);
+            last_workers = Instant::now();
+        }
+        terminal
+            .draw(|f| {
+                let (left, right) = statusbar_items(&workers, &note, f.area().width);
+                clickable = statusbar::draw(f, f.area(), &left, &right);
+            })
+            .map_err(|e| e.to_string())?;
+        if !event::poll(Duration::from_millis(250)).map_err(|e| e.to_string())? {
+            continue;
+        }
+        if let Event::Mouse(m) = event::read().map_err(|e| e.to_string())? {
+            if m.kind == MouseEventKind::Down(MouseButton::Left) {
+                note.clear();
+                let at = Position::new(m.column, m.row);
+                if let Some((_, statusbar::Action::Legend)) = clickable.iter().find(|(r, _)| r.contains(at)) {
+                    if let Err(why) = open_legend() {
+                        note = why;
+                    }
+                }
+            }
+        }
     }
-    button
+}
+
+/// The StatusBar's items: the legend button (left), then the workers indicator (right). A failure note, when there is
+/// one, goes left after the button.
+fn statusbar_items(workers: &workers::Workers, note: &str, width: u16) -> (Vec<statusbar::Item>, Vec<statusbar::Item>) {
+    let mut left = vec![statusbar::Item { line: Line::from(LEGEND_BUTTON).style(Style::new().add_modifier(Modifier::REVERSED)), action: Some(statusbar::Action::Legend) }];
+    if !note.is_empty() {
+        left.push(statusbar::Item { line: Line::from(note.to_string()), action: None });
+    }
+    let right = workers.line(width).map(|line| statusbar::Item { line, action: None }).into_iter().collect();
+    (left, right)
 }
 
 // ---------- plan view (top centre) ----------
@@ -962,16 +984,32 @@ mod tests {
     }
 
     #[test]
-    fn the_context_bottom_is_a_separator_then_the_legend_and_workers_row() {
-        let mut terminal = Terminal::new(TestBackend::new(24, 4)).unwrap();
-        let mut button = Rect::default();
-        terminal.draw(|f| button = draw_bottom(f, Rect::new(0, 2, 24, 2), &workers::Workers { running: 1, limit: Some(4) })).unwrap();
+    fn the_statusbar_has_the_legend_button_left_and_the_workers_right() {
+        let mut terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|f| {
+                let (left, right) = statusbar_items(&workers::Workers { running: 1, limit: Some(4) }, "", f.area().width);
+                hits = statusbar::draw(f, f.area(), &left, &right);
+            })
+            .unwrap();
         let buf = terminal.backend().buffer();
-        assert_eq!(text(buf, 1), "");
-        assert_eq!(text(buf, 2), "─".repeat(24));
-        assert_eq!(text(buf, 3), format!("{LEGEND_BUTTON}   workers 1/4"));
-        assert_eq!(buf[(5, 2)].fg, palette::color(palette::Meaning::Nothing));
-        assert_eq!(button, Rect::new(0, 3, LEGEND_BUTTON.len() as u16, 1));
+        assert_eq!(text(buf, 0), format!("{LEGEND_BUTTON}{}workers 1/4", " ".repeat(40 - LEGEND_BUTTON.len() - "workers 1/4".len())));
+        // the reported Rect is where the reversed button is drawn
+        assert_eq!(hits, [(Rect::new(0, 0, LEGEND_BUTTON.len() as u16, 1), statusbar::Action::Legend)]);
+        assert!((0..LEGEND_BUTTON.len() as u16).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
+        assert!(!buf[(LEGEND_BUTTON.len() as u16, 0)].modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn the_context_view_draws_neither_the_legend_button_nor_the_workers() {
+        let mut terminal = Terminal::new(TestBackend::new(30, 6)).unwrap();
+        let mut state = TreeState::default();
+        terminal.draw(|f| context::draw(f, f.area(), &[], &mut state, false)).unwrap();
+        let buf = terminal.backend().buffer();
+        for y in 0..6 {
+            assert!(!text(buf, y).contains("legend") && !text(buf, y).contains("workers"));
+        }
     }
 
     #[test]
