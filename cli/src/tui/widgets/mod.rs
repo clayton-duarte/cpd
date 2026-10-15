@@ -96,7 +96,7 @@ fn show(
 }
 
 /// `?`: the legend in a tmux popup over the cockpit, sized to it and at most the client's size.
-fn open_legend(tmux: &Tmux) -> Result<(), CpdError> {
+pub(crate) fn open_legend(tmux: &Tmux) -> Result<(), CpdError> {
     let clients = tmux.run(&["list-clients", "-F", "#{client_activity} #{client_width} #{client_height}"].map(str::to_owned))?;
     let client = newest_client(&clients).ok_or_else(|| {
         CpdError::new(ErrorCode::TmuxFailed, "No tmux client is attached to the cockpit.").with("socket", tmux.socket())

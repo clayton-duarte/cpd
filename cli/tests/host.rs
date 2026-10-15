@@ -268,3 +268,11 @@ fn a_failing_call_is_tmux_failed_with_argv_exit_and_stderr() {
     assert_eq!(d["exit"], 1);
     assert!(d["stderr"].as_str().unwrap().contains("%999"), "{d:?}");
 }
+
+#[test]
+fn the_statusbar_is_a_view_and_a_pane_marked_so_parses() {
+    assert_eq!(View::parse("statusbar"), Some(View::Statusbar));
+    assert_eq!(View::Statusbar.as_str(), "statusbar");
+    assert!(View::ALL.contains(&View::Statusbar));
+    assert_eq!(View::parse("nope"), None);
+}

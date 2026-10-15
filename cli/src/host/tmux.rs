@@ -156,6 +156,19 @@ pub enum Split {
     Right,
     /// Stacked (`-v`).
     Below,
+    /// Full width at the bottom of the window (`-v -f`).
+    Bottom,
+}
+
+impl Split {
+    /// The `split-window` flags that place the pane.
+    fn flags(self) -> &'static [&'static str] {
+        match self {
+            Split::Right => &["-h"],
+            Split::Below => &["-v"],
+            Split::Bottom => &["-v", "-f"],
+        }
+    }
 }
 
 /// The tmux server cpd uses: `tmux -L <socket>` (contract §6.1).
@@ -314,11 +327,8 @@ impl Tmux {
     /// '#{pane_id}' -- <argv…>`: a new pane beside `target` (the cockpit's
     /// layout, commands.md §13.1). `size` is tmux's `-l`: cells, or `NN%`.
     pub fn split_window(&self, target: &PaneId, split: Split, size: Option<&str>, spawn: &Spawn) -> Result<PaneId, CpdError> {
-        let flag = match split {
-            Split::Right => "-h",
-            Split::Below => "-v",
-        };
-        let mut args = strings(&["split-window", "-d", "-t", target.as_str(), flag]);
+        let mut args = strings(&["split-window", "-d", "-t", target.as_str()]);
+        args.extend(strings(split.flags()));
         if let Some(size) = size {
             args.extend(strings(&["-l", size]));
         }
@@ -437,6 +447,13 @@ fn strings(args: &[&str]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_split_is_placed_by_its_flags() {
+        assert_eq!(Split::Right.flags(), ["-h"]);
+        assert_eq!(Split::Below.flags(), ["-v"]);
+        assert_eq!(Split::Bottom.flags(), ["-v", "-f"]);
+    }
 
     #[test]
     fn ids_have_their_sigil() {

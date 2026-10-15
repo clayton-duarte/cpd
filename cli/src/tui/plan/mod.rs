@@ -14,7 +14,6 @@ mod actions;
 mod flow;
 mod pr;
 mod tabs;
-mod workers;
 
 use std::time::{Duration, Instant};
 
@@ -29,7 +28,6 @@ use ratatui::widgets::Paragraph;
 use self::actions::Actions;
 use self::flow::{Chart, Dir, Selection};
 use crate::tui::palette;
-use self::workers::Workers;
 use super::read::{self, ChatSlot, Flow, ReviewStatus};
 use super::{not_a_terminal, on_a_terminal};
 use crate::config::Config;
@@ -50,7 +48,6 @@ struct Centre {
     flow: Flow,
     context: String,
     tabs: Vec<(SessionId, String)>,
-    workers: Workers,
     chart: Chart,
 }
 
@@ -65,7 +62,7 @@ fn tab_label(plan: &str, name: &str, plan_lead: bool) -> String {
     if plan_lead { plan.to_owned() } else { format!("{plan}/{name}") }
 }
 
-fn snapshot(store: &mut Store, concurrency: u32) -> Result<Snapshot, CpdError> {
+fn snapshot(store: &mut Store) -> Result<Snapshot, CpdError> {
     // Read first: whatever the later reads see is at least this new, so following from here loses nothing.
     let cursor = store.read(highest_id)?;
     let Some(slot) = read::chat_slot(store)? else { return Ok(Snapshot { cursor, centre: None }) };
@@ -78,17 +75,15 @@ fn snapshot(store: &mut Store, concurrency: u32) -> Result<Snapshot, CpdError> {
         .flat_map(|p| p.sessions.iter().map(move |s| (s.id.clone(), tab_label(p.head.id.as_str(), &s.name, s.plan_lead))))
         .collect();
     let context = context.map_or_else(|| flow.head.context.to_string(), |c| c.title);
-    let workers = Workers::of(&read::widgets(store, concurrency, 0)?.slots);
     let chart = flow::layout(&flow::flow_jobs(&flow));
-    Ok(Snapshot { cursor, centre: Some(Centre { slot, flow, context, tabs, workers, chart }) })
+    Ok(Snapshot { cursor, centre: Some(Centre { slot, flow, context, tabs, chart }) })
 }
 
-/// Whether an Event changes what the pane shows: the Plan's or the Context's, a move of a Lead (the chat slot or the
-/// tabs may change), or an Attempt of any Plan (the Workers hold slots machine-wide).
+/// Whether an Event changes what the pane shows: the Plan's or the Context's, or a move of a Lead (the chat slot or the
+/// tabs may change).
 fn concerns(event: &Event, centre: Option<&Centre>) -> bool {
     let mine = |column: &Option<String>, id: &str| column.as_deref() == Some(id);
     event.kind == "session-moved"
-        || event.kind.starts_with("attempt-")
         || centre.is_some_and(|c| mine(&event.plan, c.flow.head.id.as_str()) || mine(&event.context, c.flow.head.context.as_str()))
 }
 
@@ -171,21 +166,9 @@ impl Ui {
     }
 }
 
-/// What may go at the right of the tabs, most wanted first: the PR with the Workers (long, then short), the Workers,
-/// the PR. The tabs row draws the first that fits.
+/// What may go at the right of the tabs: the PR. The tabs row draws the first that fits.
 fn right_parts(c: &Centre) -> Vec<Line<'static>> {
-    let pr = pr::line(c.flow.head.pr.as_ref());
-    let workers = c.workers.forms();
-    let beside = |w: &Line<'static>| {
-        let mut spans = pr.spans.clone();
-        spans.push("  ".into());
-        spans.extend(w.spans.clone());
-        Line::from(spans)
-    };
-    let mut parts: Vec<Line<'static>> = workers.iter().map(beside).collect();
-    parts.extend(workers);
-    parts.push(pr);
-    parts
+    vec![pr::line(c.flow.head.pr.as_ref())]
 }
 
 /// The Attempt a pill opens: the Job's current one.
@@ -201,7 +184,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-    let mut snap = snapshot(&mut store, config.concurrency)?;
+    let mut snap = snapshot(&mut store)?;
     let actions = Actions::new(home, &config);
     let poll = Duration::from_millis(u64::from(config.events.poll_ms));
 
@@ -209,7 +192,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
     let mut terminal = ratatui::init();
     let mouse = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture);
     let result = mouse.map_err(|e| e.to_string()).and_then(|()| {
-        show(&mut terminal, &mut store, &mut snap, config.concurrency, poll, &actions).map_err(|e| e.to_string())
+        show(&mut terminal, &mut store, &mut snap, poll, &actions).map_err(|e| e.to_string())
     });
     let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
@@ -225,7 +208,6 @@ fn show(
     terminal: &mut ratatui::DefaultTerminal,
     store: &mut Store,
     snap: &mut Snapshot,
-    concurrency: u32,
     poll: Duration,
     actions: &Actions,
 ) -> std::io::Result<()> {
@@ -252,7 +234,7 @@ fn show(
             }
             if stale && taken.elapsed() >= COALESCE {
                 let before = snap.centre.as_ref().map(|c| c.slot.session.clone());
-                match snapshot(store, concurrency) {
+                match snapshot(store) {
                     Ok(next) => {
                         *snap = next;
                         ui.error = None;

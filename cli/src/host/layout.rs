@@ -22,19 +22,23 @@ pub enum View {
     Tree,
     Plan,
     Widgets,
+    /// The StatusBar: one row across the bottom of `main`.
+    Statusbar,
     Worker,
     /// The chat slot's placeholder.
     Chat,
 }
 
 impl View {
-    pub const ALL: [View; 5] = [View::Tree, View::Plan, View::Widgets, View::Worker, View::Chat];
+    pub const ALL: [View; 6] =
+        [View::Tree, View::Plan, View::Widgets, View::Statusbar, View::Worker, View::Chat];
 
     pub fn as_str(self) -> &'static str {
         match self {
             View::Tree => "tree",
             View::Plan => "plan",
             View::Widgets => "widgets",
+            View::Statusbar => "statusbar",
             View::Worker => "worker",
             View::Chat => "chat",
         }
