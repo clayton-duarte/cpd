@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use crate::tui::palette::{self, Meaning};
-use crate::ids::SessionId;
+use cpd_core::ids::SessionId;
 
 pub struct Tab {
     pub id: SessionId,

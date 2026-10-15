@@ -14,7 +14,7 @@ use ratatui::{
 };
 
 use super::read::{AttemptStatus, Checks, JobStatus, PrState};
-use crate::plan::Phase;
+use cpd_core::plan::Phase;
 
 /// What a colour stands for. One colour per meaning, whatever view shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

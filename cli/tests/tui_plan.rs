@@ -11,9 +11,9 @@ use std::fs;
 use std::time::{Duration, Instant};
 
 use common::{CPD, TestEnv};
-use cpd::error::CpdError;
-use cpd::home::CpdHome;
-use cpd::store::Store;
+use cpd_core::error::CpdError;
+use cpd_core::home::CpdHome;
+use cpd_core::store::Store;
 use serde_json::json;
 
 /// The expected chart of the store `cpd_jobs()` makes: the fixture of the cockpit of branch `cpd/cpd-ui`

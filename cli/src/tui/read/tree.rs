@@ -3,10 +3,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::error::CpdError;
-use crate::events::highest_id;
-use crate::ids::{ContextId, SessionId};
-use crate::store::Store;
+use cpd_core::error::CpdError;
+use cpd_core::events::highest_id;
+use cpd_core::ids::{ContextId, SessionId};
+use cpd_core::store::Store;
 
 use super::shared::{PlanHead, SessionNode, bad_row, id, plan_heads, sessions};
 

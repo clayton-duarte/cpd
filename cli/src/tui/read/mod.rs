@@ -19,8 +19,8 @@
 //! The functions take the opened [`Store`] and no `CpdHome`: the one thing
 //! outside the store a view needs, the config's `concurrency`, is passed in.
 //!
-//! [`Store`]: crate::store::Store
-//! [`Store::read`]: crate::store::Store::read
+//! [`Store`]: cpd_core::store::Store
+//! [`Store::read`]: cpd_core::store::Store::read
 
 mod flow;
 mod logs;

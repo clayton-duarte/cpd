@@ -13,10 +13,10 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table};
 
-use crate::error::{CpdError, ErrorCode};
-use crate::output::Output;
-use crate::plan::Phase;
-use crate::session::PROGRAM;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::output::Output;
+use cpd_core::plan::Phase;
+use cpd_core::session::PROGRAM;
 use crate::tui::palette::{self, Meaning};
 use crate::tui::read::JobCounts;
 use crate::tui::{not_a_terminal, on_a_terminal};

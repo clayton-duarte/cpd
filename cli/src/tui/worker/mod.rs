@@ -28,13 +28,13 @@ use ratatui::text::Line;
 
 use super::read::{self, Worker};
 use super::{not_a_terminal, on_a_terminal};
-use crate::args::PlanArg;
-use crate::config::Config;
-use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
-use crate::ids::{AttemptId, PlanId};
-use crate::output::Output;
-use crate::store::Store;
+use cpd_core::args::PlanArg;
+use cpd_core::config::Config;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::{AttemptId, PlanId};
+use cpd_core::output::Output;
+use cpd_core::store::Store;
 use view::View;
 
 /// How often the view looks at the session file and the store (§17).

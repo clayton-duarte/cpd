@@ -9,10 +9,10 @@ use std::fs;
 use std::time::{Duration, Instant};
 
 use common::{CPD, TestEnv};
-use cpd::error::CpdError;
-use cpd::home::CpdHome;
-use cpd::host::tmux::SERVER_OPTIONS;
-use cpd::store::Store;
+use cpd_core::error::CpdError;
+use cpd_core::home::CpdHome;
+use cpd_core::host::tmux::SERVER_OPTIONS;
+use cpd_core::store::Store;
 use serde_json::{Value, json};
 
 const PLACEHOLDER: &str = "No Lead here: pick a Plan in the session tree";

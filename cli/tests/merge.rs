@@ -12,13 +12,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use common::TestEnv;
-use cpd::config::{Catalog, Config, TierModel};
-use cpd::error::{CpdError, ErrorCode};
-use cpd::git::{Setup, create_attempt_worktree, create_lead_worktree};
-use cpd::home::CpdHome;
-use cpd::ids::{AttemptId, PlanId};
-use cpd::merge::{self, Attempt, Ctx, End, Failure, Merge, RepoLock, take_free_driver_lock};
-use cpd::store::{Store, WriteTxn};
+use cpd_core::config::{Catalog, Config, TierModel};
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::{AttemptId, PlanId};
+use cpd_core::merge::{self, Attempt, Ctx, End, Failure, Merge, RepoLock, take_free_driver_lock};
+use cpd_core::store::{Store, WriteTxn};
 use rusqlite::params;
 use serde_json::{Value, json};
 

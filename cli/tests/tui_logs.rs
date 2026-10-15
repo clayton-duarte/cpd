@@ -9,9 +9,9 @@ use std::fs;
 use std::time::{Duration, Instant};
 
 use common::{CPD, TestEnv};
-use cpd::error::CpdError;
-use cpd::home::CpdHome;
-use cpd::store::Store;
+use cpd_core::error::CpdError;
+use cpd_core::home::CpdHome;
+use cpd_core::store::Store;
 use cpd::tui::logs::{self, Log};
 use cpd::tui::palette::{self, Meaning};
 use cpd::tui::read;

@@ -9,11 +9,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use common::{Run, TestEnv};
-use cpd::git::{Setup, create_attempt_worktree, create_lead_worktree};
-use cpd::home::CpdHome;
-use cpd::ids::{AttemptId, PlanId};
-use cpd::merge::RepoLock;
-use cpd::store::Store;
+use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::{AttemptId, PlanId};
+use cpd_core::merge::RepoLock;
+use cpd_core::store::Store;
 use cpd::tui::read::{self, Checks, PrState, ReviewDecision};
 use rusqlite::params;
 use serde_json::{Value, json};
@@ -563,9 +563,9 @@ fn open_does_not_need_pi_when_no_driver_is_dead() {
     assert_eq!(status, "merging");
 }
 
-fn hold_driver_lock(fx: &Fx, attempt: &AttemptId) -> cpd::merge::DriverLock {
+fn hold_driver_lock(fx: &Fx, attempt: &AttemptId) -> cpd_core::merge::DriverLock {
     let oth = PlanId::parse("oth").unwrap();
-    cpd::merge::take_free_driver_lock(&fx.home, &oth, attempt).unwrap().expect("the driver lock is free")
+    cpd_core::merge::take_free_driver_lock(&fx.home, &oth, attempt).unwrap().expect("the driver lock is free")
 }
 
 // ------------------------------------------------------------------ pr poll

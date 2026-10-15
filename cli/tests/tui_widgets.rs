@@ -6,9 +6,9 @@
 mod common;
 
 use common::TestEnv;
-use cpd::error::CpdError;
-use cpd::home::CpdHome;
-use cpd::store::Store;
+use cpd_core::error::CpdError;
+use cpd_core::home::CpdHome;
+use cpd_core::store::Store;
 use cpd::tui::palette::{self, Meaning};
 use cpd::tui::read::{self, Place, Widgets};
 use cpd::tui::widgets::{self, Machine, legend};

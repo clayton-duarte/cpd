@@ -10,12 +10,12 @@ use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 use common::{CPD, Run, TestEnv};
-use cpd::error::CpdError;
-use cpd::git::{Setup, create_attempt_worktree, create_lead_worktree};
-use cpd::home::CpdHome;
-use cpd::ids::{AttemptId, PlanId};
-use cpd::plan::{jobs, locked_fingerprint};
-use cpd::store::{Store, WriteTxn};
+use cpd_core::error::CpdError;
+use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::{AttemptId, PlanId};
+use cpd_core::plan::{jobs, locked_fingerprint};
+use cpd_core::store::{Store, WriteTxn};
 use nix::fcntl::{Flock, FlockArg};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;

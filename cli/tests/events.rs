@@ -10,11 +10,11 @@ use std::str::FromStr;
 use std::time::{Duration, Instant};
 
 use common::{CPD, Run, TestEnv};
-use cpd::error::{CpdError, ErrorCode};
-use cpd::events::{Kind, NewEvent, append};
-use cpd::home::CpdHome;
-use cpd::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId};
-use cpd::store::{Store, WriteTxn};
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::events::{Kind, NewEvent, append};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId};
+use cpd_core::store::{Store, WriteTxn};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 

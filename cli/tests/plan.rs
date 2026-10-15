@@ -10,10 +10,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use common::{CPD, Run, TestEnv};
-use cpd::error::CpdError;
-use cpd::home::CpdHome;
-use cpd::ids::{PlanId, ReviewId};
-use cpd::store::{Store, WriteTxn};
+use cpd_core::error::CpdError;
+use cpd_core::home::CpdHome;
+use cpd_core::ids::{PlanId, ReviewId};
+use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 

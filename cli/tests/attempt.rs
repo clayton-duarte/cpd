@@ -11,11 +11,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use common::{Run, TestEnv};
-use cpd::error::CpdError;
-use cpd::git::{Setup, create_attempt_worktree, create_lead_worktree};
-use cpd::home::CpdHome;
-use cpd::ids::{AttemptId, PlanId};
-use cpd::store::{Store, WriteTxn};
+use cpd_core::error::CpdError;
+use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::{AttemptId, PlanId};
+use cpd_core::store::{Store, WriteTxn};
 use rusqlite::params;
 use serde_json::{Value, json};
 
@@ -208,7 +208,7 @@ fn submit_moves_the_attempt_to_merging_and_tells_the_worker_to_stop() {
     assert!(submitted_at.ends_with('Z') && submitted_at.contains('T'), "{submitted_at}");
     assert_eq!(tail, None, "no pre-commit table: nothing ran, check_tail stays null");
     assert_eq!(fx.query::<String>("SELECT status FROM jobs WHERE key = 'api'"), "running", "the Job stays running");
-    assert!(!fx.home.hook_log(&plan(), &AttemptId::parse("api-a1").unwrap(), cpd::home::Hook::PreCommit).exists());
+    assert!(!fx.home.hook_log(&plan(), &AttemptId::parse("api-a1").unwrap(), cpd_core::home::Hook::PreCommit).exists());
 
     let events = fx.events("attempt-status");
     assert_eq!(events.len(), 1, "{events:?}");
@@ -327,7 +327,7 @@ fn submit_runs_the_quick_check_and_keeps_its_tail() {
     let tail: String = fx.query("SELECT check_tail FROM attempts WHERE id = 'api-a1'");
     assert!(tail.contains("checking"), "{tail}");
     assert!(tail.contains(fx.work.to_str().unwrap()), "the hook ran in the worktree: {tail}");
-    let log = fx.home.hook_log(&plan(), &AttemptId::parse("api-a1").unwrap(), cpd::home::Hook::PreCommit);
+    let log = fx.home.hook_log(&plan(), &AttemptId::parse("api-a1").unwrap(), cpd_core::home::Hook::PreCommit);
     assert!(fs::read_to_string(log).unwrap().contains("checking"));
 }
 

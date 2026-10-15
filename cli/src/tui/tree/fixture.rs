@@ -1,10 +1,10 @@
 //! Hand-built trees for the unit tests: no store, so a test names only what it looks at.
 //! (The prepared store of `tests/tui_tree.rs` goes through the real read model.)
 
-use crate::config::Tier;
-use crate::ids::{ContextId, PlanId, SessionId};
-use crate::plan::Phase;
-use crate::session::{Role, State};
+use cpd_core::config::Tier;
+use cpd_core::ids::{ContextId, PlanId, SessionId};
+use cpd_core::plan::Phase;
+use cpd_core::session::{Role, State};
 use crate::tui::read::{ContextNode, Place, PlanHead, PlanNode, SessionNode, Tree};
 use crate::tui::read::JobCounts;
 

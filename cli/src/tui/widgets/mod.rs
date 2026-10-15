@@ -20,13 +20,13 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 
 use super::read::{self, Widgets};
 use super::{not_a_terminal, on_a_terminal};
-use crate::config::Config;
-use crate::error::{CpdError, ErrorCode};
-use crate::events::highest_id;
-use crate::home::CpdHome;
-use crate::host::Tmux;
-use crate::output::Output;
-use crate::store::Store;
+use cpd_core::config::Config;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::events::highest_id;
+use cpd_core::home::CpdHome;
+use cpd_core::host::Tmux;
+use cpd_core::output::Output;
+use cpd_core::store::Store;
 
 pub use column::{Machine, draw};
 

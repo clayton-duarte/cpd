@@ -9,11 +9,11 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use common::{CPD, Run, TestEnv};
-use cpd::error::CpdError;
-use cpd::events::{Kind, NewEvent, append};
-use cpd::home::CpdHome;
-use cpd::ids::{PlanId, SessionId};
-use cpd::store::{Store, WriteTxn};
+use cpd_core::error::CpdError;
+use cpd_core::events::{Kind, NewEvent, append};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::{PlanId, SessionId};
+use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
 
 const LEAD1: &str = "lead1";

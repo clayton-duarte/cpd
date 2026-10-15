@@ -9,11 +9,11 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use common::{Run, TestEnv};
-use cpd::config::Config;
-use cpd::context::{Contexts, Trigger};
-use cpd::home::CpdHome;
-use cpd::ids::ContextId;
-use cpd::store::Store;
+use cpd_core::config::Config;
+use cpd_core::context::{Contexts, Trigger};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::ContextId;
+use cpd_core::store::Store;
 use serde_json::{Value, json};
 
 const CTX: &str = "building-cpd";

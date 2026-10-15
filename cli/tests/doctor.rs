@@ -8,8 +8,8 @@ use std::os::unix::fs::symlink;
 use std::path::Path;
 
 use common::{CPD, Run, TestEnv};
-use cpd::home::CpdHome;
-use cpd::store::Store;
+use cpd_core::home::CpdHome;
+use cpd_core::store::Store;
 use nix::fcntl::{Flock, FlockArg};
 use rusqlite::Connection;
 use serde_json::{Value, json};
@@ -497,14 +497,14 @@ fn locked_jobs(env: &TestEnv) {
             Ok(())
         })
         .unwrap();
-    let id = cpd::ids::PlanId::parse("pl").unwrap();
-    let jobs = store.read(|conn| cpd::plan::jobs::load(conn, &id)).unwrap();
+    let id = cpd_core::ids::PlanId::parse("pl").unwrap();
+    let jobs = store.read(|conn| cpd_core::plan::jobs::load(conn, &id)).unwrap();
     store
         .write("fixture", |tx| {
             for job in jobs.iter().filter(|j| j.key != "c") {
                 tx.execute(
                     "UPDATE jobs SET status = 'queued', fingerprint = ?1 WHERE plan = 'pl' AND key = ?2",
-                    [cpd::plan::locked_fingerprint(job).as_str(), job.key.as_str()],
+                    [cpd_core::plan::locked_fingerprint(job).as_str(), job.key.as_str()],
                 )?;
             }
             Ok(())

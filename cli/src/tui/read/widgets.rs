@@ -11,10 +11,10 @@ use nix::unistd::Pid;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
-use crate::error::CpdError;
-use crate::events::{Event, highest_id};
-use crate::ids::{AttemptId, ContextId, JobKey, PlanId};
-use crate::store::Store;
+use cpd_core::error::CpdError;
+use cpd_core::events::{Event, highest_id};
+use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId};
+use cpd_core::store::Store;
 
 use super::flow::{OpenEscalation, open_escalation};
 use super::shared::{AttemptStatus, Checks, Place, PlanHead, PrState, bad_row, id, plan_heads, tier};
@@ -53,7 +53,7 @@ impl Slots {
 pub struct HeldSlot {
     pub plan: PlanId,
     pub attempt: AttemptId,
-    pub tier: crate::config::Tier,
+    pub tier: cpd_core::config::Tier,
     pub status: AttemptStatus,
     pub started_at: String,
 }

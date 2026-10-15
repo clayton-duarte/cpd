@@ -6,8 +6,8 @@
 
 use std::path::Path;
 
-use cpd::error::ErrorCode;
-use cpd::metrics::{self, Metrics};
+use cpd_core::error::ErrorCode;
+use cpd_core::metrics::{self, Metrics};
 use serde_json::json;
 
 /// A Worker's session: a model, a thinking level, an entry of a kind metrics skip, a model
@@ -36,7 +36,7 @@ const USER: &str = r#"{"type":"message","id":"a1","parentId":"8","timestamp":"20
 const LENGTH: &str = r#"{"type":"message","id":"a2","parentId":"a1","timestamp":"2026-01-01T01:00:12.500Z","message":{"role":"assistant","content":[],"usage":{"input":3,"output":4,"cacheRead":5,"cacheWrite":6,"cost":{"total":0.5}},"stopReason":"length"}}"#;
 const STOP: &str = r#"{"type":"message","id":"a3","parentId":"a2","timestamp":"2026-01-01T01:00:30.000Z","message":{"role":"assistant","content":[],"usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.25}},"stopReason":"stop"}}"#;
 
-fn parse(text: &str) -> Result<Metrics, cpd::error::CpdError> {
+fn parse(text: &str) -> Result<Metrics, cpd_core::error::CpdError> {
     metrics::parse(text, Path::new("/s/session.jsonl"))
 }
 

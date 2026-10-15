@@ -20,8 +20,8 @@ mod tree;
 pub mod widgets;
 mod worker;
 
-use crate::error::{CpdError, ErrorCode};
-use crate::output::Output;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::output::Output;
 
 /// `cpd tui [--attach] [--respawn]`, or `cpd tui view …`.
 #[derive(clap::Args, Debug)]

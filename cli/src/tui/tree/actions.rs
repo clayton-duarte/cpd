@@ -11,11 +11,11 @@ use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
-use crate::config::Config;
-use crate::host::layout::MAIN_WINDOW;
-use crate::host::{Tmux, chat_slot};
-use crate::ids::{ContextId, PlanId, SessionId};
-use crate::session::PROGRAM;
+use cpd_core::config::Config;
+use cpd_core::host::layout::MAIN_WINDOW;
+use cpd_core::host::{Tmux, chat_slot};
+use cpd_core::ids::{ContextId, PlanId, SessionId};
+use cpd_core::session::PROGRAM;
 use crate::tui::widgets::open_legend;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,7 +88,7 @@ impl Runner {
     }
 
     /// `select-pane` on the chat slot, so typing goes to the chat (the reference's `switch_to`).
-    fn focus_chat(&self) -> Result<(), crate::error::CpdError> {
+    fn focus_chat(&self) -> Result<(), cpd_core::error::CpdError> {
         let panes: Vec<_> =
             self.tmux.list_panes()?.into_iter().filter(|p| p.session_name == self.cockpit && p.window_name == MAIN_WINDOW).collect();
         if let Some(chat) = chat_slot(&panes, &self.cockpit) {

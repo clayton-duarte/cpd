@@ -10,12 +10,12 @@ use std::fs;
 use std::path::PathBuf;
 
 use common::{Run, TestEnv};
-use cpd::error::CpdError;
-use cpd::home::CpdHome;
-use cpd::ids::PlanId;
-use cpd::plan::jobs;
-use cpd::plan::locked_fingerprint;
-use cpd::store::{Store, WriteTxn};
+use cpd_core::error::CpdError;
+use cpd_core::home::CpdHome;
+use cpd_core::ids::PlanId;
+use cpd_core::plan::jobs;
+use cpd_core::plan::locked_fingerprint;
+use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
 
 // ---------- fixtures ----------
@@ -470,9 +470,9 @@ fn a_locked_job_cannot_be_edited_by_the_command_or_by_the_database() {
     assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs));
     // The trigger of §4.4 refuses the same writes.
     let result = store(&env).write("fixture", |tx| exec(tx, "UPDATE jobs SET goal = 'Else.' WHERE key = 'a';"));
-    assert_eq!(result.unwrap_err().code(), cpd::error::ErrorCode::JobLocked);
+    assert_eq!(result.unwrap_err().code(), cpd_core::error::ErrorCode::JobLocked);
     let result = store(&env).write("fixture", |tx| exec(tx, "DELETE FROM dependencies WHERE job = 'b';"));
-    assert_eq!(result.unwrap_err().code(), cpd::error::ErrorCode::JobLocked);
+    assert_eq!(result.unwrap_err().code(), cpd_core::error::ErrorCode::JobLocked);
     // Other statuses are Locked too.
     engine(&env, "pl", "a", "running");
     refused(&job(&env, &["edit", "a", "--title", "New"], "pl"), "job_locked", 3);

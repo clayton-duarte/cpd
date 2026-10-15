@@ -12,9 +12,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use common::{CPD, TestEnv};
-use cpd::error::CpdError;
-use cpd::home::CpdHome;
-use cpd::store::Store;
+use cpd_core::error::CpdError;
+use cpd_core::home::CpdHome;
+use cpd_core::store::Store;
 use serde_json::json;
 
 // ---------- the prepared store ----------

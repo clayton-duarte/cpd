@@ -6,13 +6,13 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 
-use crate::config::Config;
-use crate::error::CpdError;
-use crate::home::CpdHome;
-use crate::host::layout::MAIN_WINDOW;
-use crate::host::{Pane, PaneId, Spawn, Split, Tmux, View, chat_slot, view_pane};
-use crate::ids::{AttemptId, PlanId, SessionId};
-use crate::session::PROGRAM;
+use cpd_core::config::Config;
+use cpd_core::error::CpdError;
+use cpd_core::home::CpdHome;
+use cpd_core::host::layout::MAIN_WINDOW;
+use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux, View, chat_slot, view_pane};
+use cpd_core::ids::{AttemptId, PlanId, SessionId};
+use cpd_core::session::PROGRAM;
 
 /// The pane option holding the Job a Worker pane shows (its border title shows it), so a second click on the same Job
 /// closes it.
@@ -98,7 +98,7 @@ impl Actions {
             return Ok(true);
         }
         let Some(chat) = chat_slot(&panes, &self.cockpit) else {
-            return Err(CpdError::new(crate::error::ErrorCode::TmuxFailed, "There is no chat slot to open the Worker beside."));
+            return Err(CpdError::new(cpd_core::error::ErrorCode::TmuxFailed, "There is no chat slot to open the Worker beside."));
         };
         let pane = self.tmux.split_window(&chat.pane, Split::Right, Some("50%"), &self.spawn(plan, &attempt))?;
         self.tmux.set_pane_view(&pane, View::Worker)?;

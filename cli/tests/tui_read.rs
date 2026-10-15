@@ -7,13 +7,13 @@ mod common;
 use std::time::{Duration, Instant};
 
 use common::TestEnv;
-use cpd::config::Tier;
-use cpd::error::{CpdError, ErrorCode};
-use cpd::home::CpdHome;
-use cpd::ids::{AttemptId, EscalationId, JobKey, PlanId, SessionId};
-use cpd::plan::{Phase, jobs, plan_fingerprint};
-use cpd::session::State;
-use cpd::store::Store;
+use cpd_core::config::Tier;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::{AttemptId, EscalationId, JobKey, PlanId, SessionId};
+use cpd_core::plan::{Phase, jobs, plan_fingerprint};
+use cpd_core::session::State;
+use cpd_core::store::Store;
 use cpd::tui::read::{
     self, AttemptStatus, Cause, Checks, Engine, EscalationStatus, JobStatus, Origin, Outcome, Place, PrState, ReviewStatus,
 };

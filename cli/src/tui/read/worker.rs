@@ -5,11 +5,11 @@
 use rusqlite::Connection;
 use serde_json::Value;
 
-use crate::config::Tier;
-use crate::error::{CpdError, ErrorCode};
-use crate::events::highest_id;
-use crate::ids::{AttemptId, EscalationId, PlanId, SessionId};
-use crate::store::Store;
+use cpd_core::config::Tier;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::events::highest_id;
+use cpd_core::ids::{AttemptId, EscalationId, PlanId, SessionId};
+use cpd_core::store::Store;
 
 use super::flow::WorkerRef;
 use super::shared::{

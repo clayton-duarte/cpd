@@ -262,9 +262,26 @@ name = "cpd"
 version = "0.0.0"
 dependencies = [
  "clap",
- "minijinja",
+ "cpd-core",
  "nix 0.31.3",
  "ratatui",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "time",
+ "toml",
+ "tui-tree-widget",
+]
+
+[[package]]
+name = "cpd-core"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "minijinja",
+ "nix 0.31.3",
  "rusqlite",
  "serde",
  "serde_json",
@@ -273,7 +290,6 @@ dependencies = [
  "tempfile",
  "time",
  "toml",
- "tui-tree-widget",
  "uuid",
 ]
 

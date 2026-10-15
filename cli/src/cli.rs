@@ -7,9 +7,11 @@ use std::ffi::OsString;
 use clap::error::ErrorKind;
 use clap::{Parser, Subcommand};
 
-use crate::error::{CpdError, ErrorCode};
-use crate::output::Output;
-use crate::{ask, attempt, config, context, doctor, events, job, plan, pr, session, tui, watch};
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::output::Output;
+use cpd_core::{ask, attempt, config, context, doctor, events, job, plan, pr, session, watch};
+
+use crate::tui;
 
 /// cpd 2: every command prints exactly one JSON value on stdout.
 #[derive(Parser, Debug)]
@@ -119,8 +121,8 @@ fn usage_error(err: &clap::Error, text: &str) -> CpdError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::args::{Name, PlanArg, Text};
-    use crate::output::Output;
+    use cpd_core::args::{Name, PlanArg, Text};
+    use cpd_core::output::Output;
 
     fn argv(words: &[&str]) -> Vec<OsString> {
         std::iter::once("cpd").chain(words.iter().copied()).map(OsString::from).collect()

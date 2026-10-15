@@ -8,11 +8,11 @@ use clap::ValueEnum;
 use rusqlite::{Connection, ToSql};
 use serde::Deserialize;
 
-use crate::config::Tier;
-use crate::error::{CpdError, ErrorCode};
-use crate::ids::{AttemptId, ContextId, PlanId, SessionId};
-use crate::plan::Phase;
-use crate::session::{Role, State};
+use cpd_core::config::Tier;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::ids::{AttemptId, ContextId, PlanId, SessionId};
+use cpd_core::plan::Phase;
+use cpd_core::session::{Role, State};
 
 /// A row the database holds in a shape the binary does not accept: it was
 /// changed outside cpd, or by a bug.

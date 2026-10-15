@@ -18,7 +18,7 @@ use super::actions::{Action, IN_CHAT_SLOT};
 use super::cursor::{self, Input};
 use super::prompt::{Outcome, Prompt, Target};
 use super::rows::{self, Id, Row};
-use crate::session::State;
+use cpd_core::session::State;
 use crate::tui::palette;
 use crate::tui::read::Tree;
 
@@ -201,7 +201,7 @@ mod tests {
 
     use super::super::fixture::sample;
     use super::*;
-    use crate::ids::{ContextId, PlanId, SessionId};
+    use cpd_core::ids::{ContextId, PlanId, SessionId};
 
     fn press(view: &mut View, code: KeyCode) -> Effect {
         view.key(KeyEvent::new(code, KeyModifiers::NONE))

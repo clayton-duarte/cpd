@@ -28,15 +28,15 @@ use rusqlite::OptionalExtension;
 use serde_json::{Map, Value, json};
 
 use super::{not_a_terminal, on_a_terminal, statusbar};
-use crate::config::Config;
-use crate::error::{CpdError, ErrorCode, Exit};
-use crate::home::CpdHome;
-use crate::host::layout::MAIN_WINDOW;
-use crate::host::{Pane, PaneId, Spawn, Split, Tmux, View};
-use crate::ids::SessionId;
-use crate::output::Output;
-use crate::session::PROGRAM;
-use crate::store::Store;
+use cpd_core::config::Config;
+use cpd_core::error::{CpdError, ErrorCode, Exit};
+use cpd_core::home::CpdHome;
+use cpd_core::host::layout::MAIN_WINDOW;
+use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux, View};
+use cpd_core::ids::SessionId;
+use cpd_core::output::Output;
+use cpd_core::session::PROGRAM;
+use cpd_core::store::Store;
 
 /// The views of `main`'s layout: a dead one is respawned (amendment 9). The
 /// `worker` view is not part of it: it is opened and closed by the plan view.

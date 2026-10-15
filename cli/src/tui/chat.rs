@@ -11,9 +11,9 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Padding, Paragraph, Wrap};
 
 use super::{not_a_terminal, on_a_terminal};
-use crate::error::{CpdError, ErrorCode};
-use crate::host::layout::PLACEHOLDER_TEXT;
-use crate::output::Output;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::host::layout::PLACEHOLDER_TEXT;
+use cpd_core::output::Output;
 
 pub(super) fn run() -> Result<Output, CpdError> {
     if !on_a_terminal() {

@@ -4,11 +4,11 @@
 use std::fs;
 use std::path::Path;
 
-use cpd::config::Tier;
-use cpd::error::ErrorCode;
-use cpd::home::CpdHome;
-use cpd::ids::{AttemptId, EscalationId, PlanId};
-use cpd::spec::{self, Answer, Cause, Input, Previous};
+use cpd_core::config::Tier;
+use cpd_core::error::ErrorCode;
+use cpd_core::home::CpdHome;
+use cpd_core::ids::{AttemptId, EscalationId, PlanId};
+use cpd_core::spec::{self, Answer, Cause, Input, Previous};
 
 fn plan() -> PlanId {
     PlanId::parse("pay").unwrap()

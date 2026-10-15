@@ -2,9 +2,9 @@
 //! after a cursor, which the view appends while it follows. The rows are the `events list` selection
 //! ([`Selection::fetch`]), so there is one query for Events.
 
-use crate::error::CpdError;
-use crate::events::{Event, Selection, highest_id};
-use crate::store::Store;
+use cpd_core::error::CpdError;
+use cpd_core::events::{Event, Selection, highest_id};
+use cpd_core::store::Store;
 
 /// What the Event log shows.
 #[derive(Clone, Debug, PartialEq)]

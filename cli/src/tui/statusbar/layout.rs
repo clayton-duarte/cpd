@@ -5,9 +5,9 @@
 //! tmux takes `resize-pane -x/-y` with a percentage as a share of the window. The chat slot is never resized: it
 //! takes what is left.
 
-use crate::error::CpdError;
-use crate::host::layout::MAIN_WINDOW;
-use crate::host::{PaneId, Tmux, View};
+use cpd_core::error::CpdError;
+use cpd_core::host::layout::MAIN_WINDOW;
+use cpd_core::host::{PaneId, Tmux, View};
 
 /// The views resized, in order, with the `resize-pane` flag and size of each.
 const ORDER: [(View, &str, &str); 5] = [

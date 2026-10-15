@@ -30,13 +30,13 @@ use self::flow::{Chart, Dir, Selection};
 use crate::tui::palette;
 use super::read::{self, ChatSlot, Flow, Place, SessionNode};
 use super::{not_a_terminal, on_a_terminal};
-use crate::config::Config;
-use crate::error::{CpdError, ErrorCode};
-use crate::events::{self, Event, highest_id};
-use crate::home::CpdHome;
-use crate::ids::{AttemptId, SessionId};
-use crate::output::Output;
-use crate::store::Store;
+use cpd_core::config::Config;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::events::{self, Event, highest_id};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::{AttemptId, SessionId};
+use cpd_core::output::Output;
+use cpd_core::store::Store;
 
 /// A snapshot is retaken at most this often, whatever the Event rate (§17).
 const COALESCE: Duration = Duration::from_millis(500);

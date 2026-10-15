@@ -10,10 +10,10 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use common::TestEnv;
-use cpd::error::ErrorCode;
-use cpd::host::layout::{self, View};
-use cpd::host::{Pane, PaneId, Spawn, Split, Tmux};
-use cpd::ids::{AttemptId, PlanId, SessionId};
+use cpd_core::error::ErrorCode;
+use cpd_core::host::layout::{self, View};
+use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux};
+use cpd_core::ids::{AttemptId, PlanId, SessionId};
 
 /// The wrapper runs `tmux` with this process's environment, so each test
 /// points `TMUX_TMPDIR` at its own `TestEnv` while holding this lock. Rust's

@@ -9,7 +9,7 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::ids::{ContextId, PlanId, SessionId};
+use cpd_core::ids::{ContextId, PlanId, SessionId};
 
 /// The Session an action is about, as the prompt words it.
 #[derive(Clone, Debug, PartialEq, Eq)]

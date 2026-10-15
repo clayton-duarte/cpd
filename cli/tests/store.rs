@@ -10,9 +10,9 @@ use std::process::Child;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use common::TestEnv;
-use cpd::error::{CpdError, ErrorCode};
-use cpd::home::CpdHome;
-use cpd::store::{APPLICATION_ID, HISTORY_TABLES, Store, VERSION, WriteTxn};
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::home::CpdHome;
+use cpd_core::store::{APPLICATION_ID, HISTORY_TABLES, Store, VERSION, WriteTxn};
 use rusqlite::Connection;
 use rusqlite::functions::FunctionFlags;
 use serde_json::{Value, json};
@@ -163,7 +163,7 @@ fn normalized(sql: &str) -> String {
 }
 
 fn migration_1_sql() -> String {
-    let text = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/store/migrations/0001.sql")).unwrap();
+    let text = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/src/store/migrations/0001.sql")).unwrap();
     // Drop the file's leading comment header (up to the first blank line).
     text.split_once("\n\n").unwrap().1.to_owned()
 }

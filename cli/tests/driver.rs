@@ -13,12 +13,12 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use common::{CPD, Run, TestEnv};
-use cpd::error::CpdError;
-use cpd::git::{Setup, create_lead_worktree};
-use cpd::home::CpdHome;
-use cpd::ids::PlanId;
-use cpd::plan::{jobs, locked_fingerprint};
-use cpd::store::{Store, WriteTxn};
+use cpd_core::error::CpdError;
+use cpd_core::git::{Setup, create_lead_worktree};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::PlanId;
+use cpd_core::plan::{jobs, locked_fingerprint};
+use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
 
 const PLAN: &str = "pay";
@@ -302,7 +302,7 @@ fn a_dispatched_attempt_runs_its_worker_merges_and_ends_merged() {
     let calls = fx.env.calls("pi");
     assert_eq!(calls.len(), 1, "{calls:?}");
     let argv = &calls[0];
-    assert_eq!(&argv[..4], ["--approve", "--no-skills", "--exclude-tools", cpd::host::pi::WORKER_EXCLUDED_TOOLS]);
+    assert_eq!(&argv[..4], ["--approve", "--no-skills", "--exclude-tools", cpd_core::host::pi::WORKER_EXCLUDED_TOOLS]);
     let at = |flag: &str| argv[argv.iter().position(|a| a == flag).unwrap() + 1].clone();
     assert_eq!(at("--model"), "p/sonnet:medium");
     assert_eq!(at("--session-id"), session);
@@ -505,7 +505,7 @@ fn a_cancel_before_the_compare_and_swap_ends_it_without_merging() {
 
 /// Attempt `api-a1` in `starting` and its lock file, as a starter would leave them.
 fn starting(fx: &Fx) -> PathBuf {
-    let lock = fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &cpd::ids::AttemptId::parse(ATTEMPT).unwrap());
+    let lock = fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &cpd_core::ids::AttemptId::parse(ATTEMPT).unwrap());
     fs::create_dir_all(lock.parent().unwrap()).unwrap();
     File::create(&lock).unwrap();
     let worktree = fx.worktree(ATTEMPT);
@@ -606,7 +606,7 @@ fn dispatch_refuses_a_job_whose_fingerprint_does_not_match() {
 #[test]
 fn dispatch_refuses_when_the_driver_lock_is_held() {
     let fx = fx();
-    let lock = fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &cpd::ids::AttemptId::parse(ATTEMPT).unwrap());
+    let lock = fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &cpd_core::ids::AttemptId::parse(ATTEMPT).unwrap());
     fs::create_dir_all(lock.parent().unwrap()).unwrap();
     let held = OpenOptions::new().create(true).truncate(false).write(true).open(&lock).unwrap();
     held.try_lock().unwrap();

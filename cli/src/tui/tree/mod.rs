@@ -32,11 +32,11 @@ use ratatui::crossterm::execute;
 
 use super::read;
 use super::{not_a_terminal, on_a_terminal};
-use crate::config::Config;
-use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
-use crate::output::Output;
-use crate::store::Store;
+use cpd_core::config::Config;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::home::CpdHome;
+use cpd_core::output::Output;
+use cpd_core::store::Store;
 use actions::Runner;
 use follow::{Follower, Message};
 use view::{Effect, View};

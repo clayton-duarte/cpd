@@ -82,7 +82,7 @@ impl Drop for Follower {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::Kind;
+    use cpd_core::events::Kind;
 
     #[test]
     fn every_kind_followed_exists_and_the_tree_lists_of_17_are_among_them() {
