@@ -20,7 +20,7 @@ export const ConfigSchema = z.strictObject({
   tiers: z.strictObject({ O: modelRef, S: modelRef, H: modelRef }),
   leadTier: tierSyntax,
   defaultReviewTier: tierSyntax,
-  reviewMode: z.enum(["fork", "fresh"]),
+  reviewMode: z.enum(["fork", "fresh", "none"]),
   leadPiPackages: z.array(z.string().min(1)),
 });
 

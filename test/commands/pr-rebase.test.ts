@@ -4,7 +4,7 @@ import { run as prRebase } from "../../src/commands/pr-rebase.ts";
 import { gitOut, rebaseInProgress, statusPorcelain } from "../../src/git/git.ts";
 import { CpdError } from "../../src/lib/errors.ts";
 import { commitFile } from "../git/fixtures.ts";
-import { dispatchedWorkflow, sandboxCpd } from "../pr/setup.ts";
+import { dispatchedWorkflow, sandboxCpd, withFakeWt } from "../pr/setup.ts";
 
 sandboxCpd();
 
@@ -50,4 +50,31 @@ test("conflict: rebase_conflict (exit 3) with the files; the Lead worktree and o
   assert.equal(await rebaseInProgress(f.leadWorktree), false);
   assert.deepEqual(await statusPorcelain(f.leadWorktree), []);
   assert.equal(await remoteHead(f, "rb-conflict"), pushed);
+});
+
+test("Gate failure after the rebase: gate_failed (exit 3), the Gate ran after the rebase, nothing is pushed", async () => {
+  const f = await dispatchedWorkflow("rb-gate", { jobs: ["a"] });
+  await commitFile(f.leadWorktree, "lead.txt", "l\n", "lead: add lead.txt");
+  await gitOut(f.leadWorktree, ["push", "-u", "origin", "cpd/rb-gate"]);
+  const pushed = await remoteHead(f, "rb-gate");
+  const mainTip = await commitFile(f.repo, "main1.txt", "m\n", "main: add main1");
+
+  const { result, calls } = await withFakeWt(64, "gate says no", () => prRebase(["--wf", f.wf]));
+  assert.equal(result.status, "rejected");
+  const e = (result as PromiseRejectedResult).reason as CpdError;
+  assert.deepEqual([e.code, e.exitCode, e.details.outputTail], ["gate_failed", 3, "gate says no"]);
+  assert.deepEqual(calls, [["--yes", "-C", f.leadWorktree, "hook", "pre-merge"]]);
+  assert.equal(await remoteHead(f, "rb-gate"), pushed, "origin is unchanged");
+  await gitOut(f.repo, ["merge-base", "--is-ancestor", mainTip, "cpd/rb-gate"]); // the rebase itself happened before the Gate
+});
+
+test("Gate error (any other exit) after the rebase: gate_error, nothing is pushed", async () => {
+  const f = await dispatchedWorkflow("rb-gate-err", { jobs: ["a"] });
+  await commitFile(f.leadWorktree, "lead.txt", "l\n", "lead: add lead.txt");
+  await gitOut(f.leadWorktree, ["push", "-u", "origin", "cpd/rb-gate-err"]);
+  const pushed = await remoteHead(f, "rb-gate-err");
+  await commitFile(f.repo, "main1.txt", "m\n", "main: add main1");
+  const { result } = await withFakeWt(42, "boom", () => prRebase(["--wf", f.wf]));
+  assert.equal(((result as PromiseRejectedResult).reason as CpdError).code, "gate_error");
+  assert.equal(await remoteHead(f, "rb-gate-err"), pushed);
 });

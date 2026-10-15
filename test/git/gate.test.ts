@@ -65,6 +65,22 @@ test("runGate: pass, gate failure (64) with output, and gate_error for any other
   await assert.rejects(runGate(a.path), (e: any) => e.code === "gate_error" && e.details.code === 42);
 });
 
+test("runGate with hook pre-commit (the quick check): no pre-commit table passes and never falls back to pre-merge; 64 fails; any other exit is check_error", async () => {
+  const f = await createFixture();
+  const a = await makeAttempt(f, "j1-a1");
+  await write(a.path, "FAIL_GATE", ""); // fails the fixture's pre-merge Gate, which has no say here
+  const none = await runGate(a.path, "pre-commit");
+  assert.deepEqual({ passed: none.passed, exitCode: none.exitCode }, { passed: true, exitCode: 0 });
+
+  await write(a.path, ".config/wt.toml", `[pre-commit]\ncheck = "echo lint broke; exit 64"\n`);
+  const bad = await runGate(a.path, "pre-commit");
+  assert.deepEqual({ passed: bad.passed, exitCode: bad.exitCode }, { passed: false, exitCode: 64 });
+  assert.match(bad.outputTail, /lint broke/);
+
+  await write(a.path, ".config/wt.toml", `[pre-commit]\ncheck = "exit 42"\n`);
+  await assert.rejects(runGate(a.path, "pre-commit"), (e: any) => e.code === "check_error" && e.details.code === 42);
+});
+
 test("treeClean ignores ignored files and sees untracked ones; commitsAhead counts commits past base", async () => {
   const f = await createFixture();
   const a = await makeAttempt(f, "j1-a1");

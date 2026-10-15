@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CRASH_SETTLE_MS, decideReview, findSessionById, sessionTail, runAttempt, observeWorker, type RunResult } from "../../src/dispatch/attempt-run.ts";
 import type { MergeOutcome } from "../../src/git/merge.ts";
 import { CpdError, failure } from "../../src/lib/errors.ts";
-import { reviewDiffPath } from "../../src/lib/paths.ts";
+import { reviewBriefPath, reviewDiffPath, reviewGatePath } from "../../src/lib/paths.ts";
 import { tmpDir } from "../helpers/index.ts";
 import { LEAD_SESSION, SHA_POST, SHA_PRE, TMUX_REVIEWER_PANE, TMUX_SOCKET, makeWorld, reviewerName, verdictText, workerName, type Script, type World } from "./fakes.ts";
 
@@ -280,31 +280,49 @@ test("merge_conflict → ladder", async () => {
   assert.equal(w.slotReleases, 1);
 });
 
-test("post_gate_failed → job-failed (the Lead was rolled back by mergeAttempt)", async () => {
-  const { w, r } = await go({ merge: [outcome("post_gate_failed", { detail: "post-merge Gate failed; Lead rolled back" })] });
-  assert.deepEqual(r, { state: "job_failed", cause: "post_gate_failed" });
-  assert.equal(w.ledger.at(-1), "fail post_gate_failed requeue=false");
-  assert.deepEqual(kinds(w), ["job-failed"]);
-  assert.match(w.messages[0]!.text, /rolled back/);
-  assert.deepEqual([w.state.outcome, w.state.jobStatus], ["failed", "failed"]);
-  assert.equal(w.slotReleases, 1);
+// --- reviewMode none: no Reviewer, submit goes straight to the merge ---
+
+test("reviewMode none: no Reviewer, no review files, the Attempt ends with outcome merged and no verdict", async () => {
+  for (const p of [reviewDiffPath("demo", "api-a1"), reviewBriefPath("demo", "api-a1"), reviewGatePath("demo", "api-a1")]) rmSync(p, { force: true }); // left by the tests above, same CPD_HOME
+  const w = makeWorld({ reviewMode: "none" });
+  const r = await runAttempt(w.deps);
+  assert.deepEqual(r, { state: "merged", sha: SHA_POST });
+  assert.deepEqual(w.ledger, [
+    "verifyJob",
+    "recordFacts worktree",
+    "recordFacts branch,agent,session_path,argv,worker_pane,workspace",
+    "recordMetrics metrics",
+    `markMerged ${SHA_POST}`,
+  ]);
+  assert.ok(!w.events.some((e) => /herdr\.split|reviewBrief|git\.diff|recordVerdict/.test(e)), w.events.join("\n"));
+  assert.ok(!w.agentStarts.some((a) => a.name === reviewerName()));
+  for (const p of [reviewDiffPath("demo", "api-a1"), reviewBriefPath("demo", "api-a1")]) assert.ok(!existsSync(p), `no review file ${p}`);
+  assert.deepEqual(kinds(w), ["job-merged"]);
+  assert.deepEqual([w.state.status, w.state.outcome, w.state.jobStatus], ["closed", "merged", "closed"]);
+});
+
+test("reviewMode none: a failed merge still goes down the ladder", async () => {
+  const w = makeWorld({ reviewMode: "none", merge: [outcome("conflict", { detail: "rebase conflict in: app.txt" })] });
+  const r = await runAttempt(w.deps);
+  assert.equal(r.state, "retry_queued");
+  assert.equal(w.ledger.at(-1), "fail merge_conflict requeue=true");
+  assert.ok(!w.events.some((e) => e.includes("herdr.split")));
 });
 
 // --- every other mergeAttempt result and the merge lock ---
 
-test("mergeAttempt results without a listed ladder: dirty_target, tampered, cas_lost, unknown → job-failed; gate_failed → ladder", async () => {
-  const table: [MergeOutcome["result"], string, "job_failed" | "retry_queued"][] = [
+test("mergeAttempt results without a listed ladder: dirty_target, tampered, cas_lost, unknown → job-failed", async () => {
+  const table: [MergeOutcome["result"], string, "job_failed"][] = [
     ["dirty_target", "dirty_target", "job_failed"],
     ["tampered", "gate_tampered", "job_failed"],
     ["cas_lost", "merge_cas_lost", "job_failed"],
     ["merge_unverified", "merge_unverified", "job_failed"],
     ["unknown", "merge_failed", "job_failed"],
-    ["gate_failed", "merge_gate_failed", "retry_queued"],
   ];
   for (const [result, cause, state] of table) {
     const { w, r } = await go({ merge: [outcome(result)] });
     assert.deepEqual([r.state, (r as { cause: string }).cause], [state, cause], result);
-    assert.equal(w.ledger.at(-1), `fail ${cause} requeue=${state === "retry_queued"}`);
+    assert.equal(w.ledger.at(-1), `fail ${cause} requeue=false`);
     assert.equal(w.slotReleases, 1);
   }
 });

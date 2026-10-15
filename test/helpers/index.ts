@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -80,4 +80,22 @@ export function runCli(
       resolve({ code: code ?? -1, json, stderr, stdout });
     });
   });
+}
+
+/**
+ * A fake `wt` first on PATH while `fn` runs. `wt ... hook <name>` is logged, prints `output` and exits `code`; any other
+ * `wt` call (the rebase) goes to the real `wt`. Set the fixture up before calling this. Returns what `fn` settled with and the logged hook calls.
+ */
+export async function withFakeWt<T>(code: number, output: string, fn: () => Promise<T>): Promise<{ result: PromiseSettledResult<T>; calls: string[][] }> {
+  const real = execFileSync("sh", ["-c", "command -v wt"], { encoding: "utf8" }).trim();
+  // wt's argv is `--yes -C <dir> <subcommand> ...`, so $4 is the subcommand. Only `hook` calls are logged.
+  const wt = fakeBin("wt", `if [ "$4" != hook ]; then exec '${real}' "$@"; fi\nprintf '%s\\n' '${output}'\nexit ${code}`);
+  const saved = process.env.PATH;
+  process.env.PATH = `${wt.dir}:${saved}`;
+  try {
+    const [result] = await Promise.allSettled([fn()]);
+    return { result, calls: wt.calls().filter((c) => c[3] === "hook") };
+  } finally {
+    process.env.PATH = saved;
+  }
 }

@@ -14,7 +14,6 @@ export function sandbox(): void {
   process.env.CPD_HOME = join(root, "cpd");
   process.env.GIT_CONFIG_GLOBAL = "/dev/null";
   process.env.GIT_CONFIG_NOSYSTEM = "1";
-  delete process.env.CAS_HOOK;
 }
 
 export type Author = { name: string; email: string };
@@ -31,9 +30,8 @@ setup = '''${preStart}'''
 verify = "./verify.sh || exit 64"
 `;
 
-/** Fails when FAIL_GATE exists; CAS_HOOK (an env var naming a script) lets a test move the Lead mid-Gate. */
+/** Fails when FAIL_GATE exists. */
 const VERIFY = `#!/bin/sh
-if [ -n "\${CAS_HOOK:-}" ]; then "$CAS_HOOK"; fi
 if [ -e FAIL_GATE ]; then echo "verify: FAIL_GATE present" >&2; exit 1; fi
 echo "verify: ok"
 `;

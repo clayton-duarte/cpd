@@ -2,17 +2,15 @@ import { mergeLockPath } from "../lib/paths.ts";
 import { withLock } from "../lib/lock.ts";
 import { failure, refused } from "../lib/errors.ts";
 import { conflictedFiles, git, realpath, rebaseInProgress, revParse, tail } from "./git.ts";
-import { GATE_FAILED_EXIT, runGate, tamperCheck, treeClean } from "./gate.ts";
+import { tamperCheck, treeClean } from "./gate.ts";
 import { MergeJson, mergeArgs, parseWtJson, runWt } from "./wt.ts";
 
 export type MergeResult =
   | "merged"
-  | "gate_failed"
   | "conflict"
   | "cas_lost"
   | "dirty_target"
   | "tampered"
-  | "post_gate_failed"
   | "merge_unverified"
   | "unknown";
 
@@ -20,7 +18,7 @@ export type MergeOutcome = {
   result: MergeResult;
   /** Lead Branch SHA before the (last) merge try. After any non-`merged` result the Lead is back at it. */
   preSha: string;
-  /** Lead Branch SHA after a successful, post-Gate-verified merge. */
+  /** Lead Branch SHA after a successful merge. */
   postSha?: string;
   detail: string;
   /** Conflicting or tampered paths, when the result has any. */
@@ -72,9 +70,6 @@ async function tryMerge(p: MergeParams, pre: string): Promise<Attempt> {
       detail: `wt merge exited 0 but the Lead Branch is ${lead === pre ? "unchanged" : `${lead}, not the Attempt HEAD ${attempt}`}; Lead reset to ${pre}`,
     };
   }
-  if (r.code === GATE_FAILED_EXIT) {
-    return { result: "gate_failed", detail: `Gate failed in the Attempt worktree:\n${tail(r.stderr + r.stdout)}` };
-  }
   if (await rebaseInProgress(p.attemptWorktree)) {
     const files = await conflictedFiles(p.attemptWorktree);
     const abort = await git(p.attemptWorktree, ["rebase", "--abort"]);
@@ -98,31 +93,6 @@ async function tryMerge(p: MergeParams, pre: string): Promise<Attempt> {
   };
 }
 
-/** Post-merge Gate in the Lead worktree; roll the Lead back with `reset --keep` unless it passes. */
-async function postGate(p: MergeParams, pre: string): Promise<Attempt> {
-  const rollback = async () => {
-    const r = await git(p.leadWorktree, ["reset", "--keep", pre]);
-    if (r.code !== 0) {
-      throw failure("rollback_failed", `git reset --keep ${pre} failed in the Lead worktree`, {
-        leadWorktree: p.leadWorktree,
-        stderr: tail(r.stderr),
-      });
-    }
-  };
-  let gate;
-  try {
-    gate = await runGate(p.leadWorktree);
-  } catch (e) {
-    await rollback();
-    throw e;
-  }
-  if (!gate.passed) {
-    await rollback();
-    return { result: "post_gate_failed", detail: `post-merge Gate failed; Lead rolled back to ${pre}:\n${gate.outputTail}` };
-  }
-  return { result: "merged", detail: "merged" };
-}
-
 /**
  * t3 "attempt merge", serialised per repo by the merge lock. The Lead Branch is never left
  * moved or half-merged unless the result is `merged`.
@@ -144,8 +114,7 @@ export async function mergeAttempt(p: MergeParams): Promise<MergeOutcome> {
 
     for (let retries = 0; ; retries++) {
       pre = await leadRef(p);
-      let out = await tryMerge(p, pre);
-      if (out.result === "merged") out = await postGate(p, pre);
+      const out = await tryMerge(p, pre);
       if (out.result === "cas_lost" && retries < (p.casRetries ?? MAX_CAS_RETRIES)) continue;
       if (out.result === "merged") return { ...out, preSha: pre, postSha: await leadRef(p) };
       return { ...out, preSha: pre };

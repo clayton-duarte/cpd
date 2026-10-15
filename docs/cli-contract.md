@@ -15,7 +15,7 @@ Status: **draft for Stage 2 approval**. This document is normative for every Sta
   - Unit tests use fake binaries: executable scripts on a temp `PATH` that record argv and print canned JSON.
   - Integration tests against real `bd`, `wt` and `git` run in temp dirs with a sandboxed `HOME` and run by default.
   - Integration tests that need a herdr server or a real pi model run only when `CPD_IT=1`, against herdr session `cpd-test`.
-- **Gate for this repo:** `npm run verify` = `npm run typecheck && npm test` (`tsc --noEmit -p .`, then `node --test`). `.config/wt.toml` sets `[pre-merge] verify = "npm run verify || exit 64"`. (Until 2026-10-13 this was `./verify.sh`; the User chose npm scripts. The tamper list in §11 still names `verify.sh` until v1 protects `package.json` instead.)
+- **Gate for this repo:** `npm run verify` = `npm run typecheck && npm test` (`tsc --noEmit -p .`, then `node --test`). `.config/wt.toml` sets `[pre-merge] verify = "npm run verify || exit 64"`. The Gate runs only at the Workflow level (`cpd pr open`, `cpd pr rebase`), not per Attempt: an Attempt is checked at submit by the quick check (`wt hook pre-commit`, §11), if the repo has a `pre-commit` table. (Until 2026-10-13 this was `./verify.sh`; the User chose npm scripts. The tamper list in §11 still names `verify.sh` until v1 protects `package.json` instead.)
 
 ## 2. Output, errors and exit codes
 
@@ -86,7 +86,7 @@ Strict schema: unknown keys are rejected, and a missing file is error `config_mi
 }
 ```
 
-`herdrSession: null` means herdr's default session (no `--session` flag); a string adds `--session <name>` to every herdr call. `reviewMode` is `fork` (Reviewer forks the Lead session; the default, per ADR-0002) or `fresh` (a new read-only session with no Lead conversation; for very long Lead sessions where forking costs too much).
+`herdrSession: null` means herdr's default session (no `--session` flag); a string adds `--session <name>` to every herdr call. `reviewMode` is `fork` (Reviewer forks the Lead session; the default, per ADR-0002), `fresh` (a new read-only session with no Lead conversation; for very long Lead sessions where forking costs too much) or `none` (no Reviewer: an Attempt goes from submit straight to the merge, and the review is the PR's own, on GitHub).
 
 ## 6. `workflow.json`
 
@@ -127,12 +127,12 @@ Strict schema: unknown keys are rejected, and a missing file is error `config_mi
   - **Issue types:** Workflow = `workflow`; Job = `job` (child of the Workflow, `metadata.key` = Job key); Attempt = `attempt` (child of the Job); Escalation = `escalation` (child of the Attempt).
   - **Job statuses:** `draft` → `queued` → `running` → `in_review` → `closed` (Merged) | `failed` | `cancelled`.
   - **Job metadata:** `key, tier, review_tier, context, touches, acceptance, out_of_scope`. The goal is the description.
-  - **Attempt metadata:** `number, tier, worktree, branch, agent, session_path, started_at, submitted_at, ended_at, outcome, cause, metrics_*`.
+  - **Attempt metadata:** `number, tier, worktree, branch, agent, session_path, started_at, submitted_at, ended_at, outcome, cause, metrics_*`. `outcome` is one of `approved` (a Reviewer's or the Lead's verdict, then Merged), `merged` (Merged with no Reviewer, `reviewMode: "none"`: no verdict exists, and no `APPROVED:` comment is written), `rejected`, `failed`, `timed_out`, `cancelled`.
   - **Dependencies:** `bd dep add <job> <dependency>` (type `blocks`).
 - **Invariants `cpd` enforces before writing** (t2 F5):
   - Only `draft` Jobs may be edited.
   - Never `delete`, `prune`, `flatten`, `gc`, `compact` or `reopen`.
-  - `close` a Job only from `in_review` with an approved last Attempt.
+  - `close` a Job only from `in_review` with an approved last Attempt, or, with `reviewMode: "none"`, a last Attempt with no verdict at all (it is closed with outcome `merged`; one that has a verdict is refused `attempt_has_verdict`).
   - State transitions use `--if-status` compare-and-swap.
   - Each metadata key is written once (check before write).
 - **Fingerprints:**
@@ -255,9 +255,12 @@ Slots are `slots/slot-0.json` … `slot-<concurrency-1>.json`, each created excl
   - clean tree (`dirty_tree`);
   - at least one commit ahead of the Attempt's base (`no_commits`);
   - diff does not touch `.config/wt.toml`, `verify.sh` or `.cpd/` (`gate_tampered`);
-  - Gate passes: `wt --yes -C <worktree> hook pre-merge`; exit 64 → `gate_failed`, with the last 60 lines of output in `details`.
+  - quick check passes: `wt --yes -C <worktree> hook pre-commit` (the repo's `pre-commit` hook, a fast build check; not the Gate).
+    - No `pre-commit` table means no commands and it passes. There is no fallback to `pre-merge`.
+    - Exit 64 → `check_failed`, with the last 60 lines of output in `details`: the Worker fixes its work and submits again.
+    - Any other failure → `check_error` (exit 1).
 
-  On success: Attempt `submitted_at`, provenance `commit`, returns `{ok, submitted: true, next: "Stop now. Do not make more changes."}`.
+  On success (with a Reviewer, i.e. `reviewMode` not `none`, the quick-check output is written to `reviews/<attempt-id>.gate.txt` first): Attempt `submitted_at`, provenance `commit`, returns `{ok, submitted: true, next: "Stop now. Do not make more changes."}`.
 - `cpd attempt read <attempt-id> [--lines N]`: debug view, the last N lines of the Worker's session transcript (assistant text and tool names).
 - `cpd attempt list`, `cpd attempt show <attempt-id>`.
 - `cpd review decide <attempt-id> (--approve | --reject) --feedback <text>`: the Lead's override when the Reviewer failed (`review-needed`). It continues §12 step 9 or 10.
@@ -275,6 +278,7 @@ Slots are `slots/slot-0.json` … `slot-<concurrency-1>.json`, each created excl
 ### Pull Request
 - `cpd pr open`:
   - Requires every Job `closed` or `cancelled`, and at least one `closed`.
+  - Runs the Gate on the Lead Branch: `wt --yes -C <leadWorktree> hook pre-merge`, after the checks above and before anything is pushed. Exit 64 → `gate_failed` (exit 3, last 60 lines in `details`), and nothing is pushed or created; the Lead adds fix Jobs. Any other failure → `gate_error` (exit 1).
   - Runs `git -C <leadWorktree> push -u origin cpd/<wf>`.
   - Runs `gh pr create --base <base> --head cpd/<wf> --title <workflow title> --body <summary>`. The summary is the Jobs table plus the Merged commits.
   - Sets the phase to `pr`, records `workflow.json.pr` and returns `{ok, pr}`.
@@ -283,7 +287,7 @@ Slots are `slots/slot-0.json` … `slot-<concurrency-1>.json`, each created excl
   - New failing checks, reviews or comments: one `pr-feedback` message with them in `data`.
   - Merged: phase `done`, `touch <ledger>/MIGRATION-FREEZE`, message `workflow-done`.
   - Returns `{ok, changes: [...]}`.
-- `cpd pr rebase`: the trial t3 "pr rebase" recipe for the clean case (`git merge-tree` check, then `wt step rebase <base>`, then `git push --force-with-lease`). On a conflict it changes nothing and returns `rebase_conflict` (exit 3) with the file list; the Lead decides.
+- `cpd pr rebase`: the trial t3 "pr rebase" recipe for the clean case (`git merge-tree` check, then `wt step rebase <base>`, then the Gate `wt --yes -C <leadWorktree> hook pre-merge`, then `git push --force-with-lease`). On a conflict it changes nothing and returns `rebase_conflict` (exit 3) with the file list; the Lead decides. A Gate failure after the rebase is `gate_failed` (exit 3, last 60 lines) or `gate_error`, and nothing is pushed.
   - It is also how Jobs merged in phase `pr` reach the PR: run it after their `job-merged` messages. If the base has not moved, the rebase is a no-op and only the push happens.
 
 ## 12. Attempt lifecycle (`cpd attempt run`)
@@ -308,7 +312,8 @@ Recipes: trial t3 (worktrunk), t1 (herdr and pi), t4/t5 (queue delivery). Every 
    - Otherwise the Job becomes `failed` with `job-failed`.
    - Collect metrics (§14) in both cases, then release the slot.
 9. **Review:**
-   - Write `reviews/<attempt-id>.diff` (`git diff cpd/<wf>...<branch>`), `.gate.txt` (gate output from submit) and the brief (template `templates/reviewer.md`) to `reviews/<attempt-id>.md`.
+   - With `reviewMode: "none"` there is no Reviewer: skip steps 9 and 10, write no `reviews/` file, and go from the submit straight to step 11.
+   - Write `reviews/<attempt-id>.diff` (`git diff cpd/<wf>...<branch>`), `.gate.txt` (quick-check output from submit) and the brief (template `templates/reviewer.md`) to `reviews/<attempt-id>.md`.
    - **Lead in herdr** (`host: "herdr"`): split a pane from the Attempt's own Worker pane (`worker_pane` of step 4, so inside the Attempt's herdr workspace, which still exists until step 12; `--no-focus`, cwd = Lead's cwd), never from the Lead pane, whatever the Lead's `host`. An Attempt without `worker_pane` cannot open the Reviewer: no verdict (`review-needed`). Then run `herdr agent start <rname> --kind pi --pane <p> --timeout 60000 -- --approve --no-skills --exclude-tools ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox --fork <lead sessionPath> --tools read,grep,find,ls --model <reviewTier model:level>`.
    - **Lead in tmux** (`host: "tmux"`): no herdr pane (herdr refuses with `herdr_agent_pane_busy` on a pane split from a Worker pane). Open a hidden window in the Lead's tmux server: `tmux -S <tmuxSocket> new-window -d -n "review <attempt-id>" -c <Attempt worktree> <command>`, where the command is `pi --approve --no-skills --exclude-tools … --fork <lead sessionPath> --tools read,grep,find,ls --model <reviewTier model:level> --session-id <new uuid> -n "review <attempt-id>" -- "Read <brief> and follow it exactly."` (every word shell-quoted). Then `tmux set-option -w -t <pane> remain-on-exit off`: the cockpit's `tmux.conf` sets `remain-on-exit on` and a global `pane-died` hook that respawns dead panes, which would start a finished Reviewer again.
      - The Reviewer's session file is `<pi agent dir>/sessions/<dir>/<time>_<uuid>.jsonl`. A turn is finished when the newest `message` entry is an assistant message with `stopReason: "stop"`, written after the turn was asked for, and the file has been quiet for 5 s. The verdict is parsed as below.
@@ -321,13 +326,13 @@ Recipes: trial t3 (worktrunk), t1 (herdr and pi), t4/t5 (queue delivery). Every 
    - If it is missing or invalid, re-prompt once (herdr: `herdr agent prompt`). Still invalid: `review-needed`, and the Attempt waits for `cpd review decide`.
    - Close the Reviewer pane (herdr) or window (tmux). Record the verdict as a comment and the Attempt's `outcome`.
 10. **Rejected:** close the Attempt as `rejected` (cause `review_rejected`), then the ladder as in step 8.
-11. **Approved: merge** under the per-repo merge lock, with the t3 "attempt merge" recipe and its classification.
-    - **Success:** post-merge Gate `wt --yes -C <leadWorktree> hook pre-merge`. If it fails, `git reset --keep <pre>`, the Job becomes `failed` with `job-failed`.
+11. **Approved (or, with `reviewMode: "none"`, submitted): merge** under the per-repo merge lock, with the t3 "attempt merge" recipe and its classification. The merge is the tamper check, the rebase and the fast-forward (`wt merge --no-hooks`); it runs no Gate, before or after.
+    - **Success:** the Lead Branch is the Attempt HEAD; go to step 12.
     - **cas-lost:** retry up to 3 times.
     - **Conflict:** abort the rebase, outcome `failed`, cause `merge_conflict`, then step 8 (the next Attempt starts from the new Lead HEAD and its Spec shows the conflict).
     - **dirty-target:** `job-failed` with an explanation (the Lead worktree must stay clean).
 12. **Merged:**
-    - In the Ledger: close the Attempt as `approved`, close the Job with reason `merged` and `metadata.merged_sha`, record provenance `land`.
+    - In the Ledger: close the Attempt as `approved` (a Reviewer's or the Lead's verdict), or as `merged` when there was no Reviewer (`reviewMode: "none"`; no verdict is recorded), close the Job with reason `merged` and `metadata.merged_sha`, record provenance `land`.
     - Record metrics.
     - Remove the Attempt worktree and branch (t3 "attempt remove" recipe, including `herdr workspace close`).
     - Release the slot and send `job-merged`.
@@ -367,12 +372,12 @@ Recorded once per Attempt (write-once keys). Reviewer metrics are recorded on th
 ## 16. Templates and the Lead skill
 
 - `templates/worker.md`: Worker Spec, rendered per Attempt. It contains:
-  - rules: work only in this worktree, commit your work, run the Gate before submitting, never edit `.config/wt.toml`, `verify.sh` or `.cpd/`, and do not ask the User anything;
+  - rules: work only in this worktree, commit your work, run the checks relevant to the change (submit runs the quick check, the `pre-commit` hook; the full Gate runs when the PR opens), never edit `.config/wt.toml`, `verify.sh` or `.cpd/`, and do not ask the User anything;
   - the Job's goal, context, files to touch, acceptance commands and out-of-scope items;
   - previous Attempts' feedback;
   - how to finish (`cpd attempt submit <id>`) and how to escalate (`cpd ask <id> "<question>"`).
 - `templates/reviewer.md`: the review brief.
-  - Inputs: the Spec, the diff path, the Gate output, and the worktree path for reading files.
+  - Inputs: the Spec, the diff path, the quick-check output, and the worktree path for reading files.
   - Rubric: approve only if every acceptance item is met, nothing out of scope changed, and touched files fit the Spec.
   - The final verdict block format.
 - `pi/skills/cpd-lead/SKILL.md` (shipped in the `pi/` package, so `-e <repo>/pi` or the package in settings loads it with the extension): the Lead protocol for Context, Plan, Dispatch and PR using only `cpd` commands, `ask_user_question` (trial t5 rules) and `cpd_plan_review`. It covers how to react to each queue message kind, and the append-only rules (append, cancel or retry; never edit after lock).
