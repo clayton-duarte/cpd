@@ -74,14 +74,6 @@ fn every_documented_command_exists() {
 /// comment line so that parallel Jobs never edit adjacent lines.
 const PENDING: &[(&[&str], &str)] = &[
     // context
-    (&["context", "new", "building-cpd", "--title", "Building cpd"], "context new"),
-    (&["context", "list"], "context list"),
-    (&["context", "show"], "context show"),
-    (&["context", "decide", "One engine per machine."], "context decide"),
-    (&["context", "note", "A note."], "context note"),
-    (&["context", "ask", "Why?"], "context ask"),
-    (&["context", "answer", "hs-q1", "Because."], "context answer"),
-    (&["context", "sync"], "context sync"),
     // plan
     (&["plan", "new", "pay-4521", "--context", "payments"], "plan new"),
     (&["plan", "list"], "plan list"),
