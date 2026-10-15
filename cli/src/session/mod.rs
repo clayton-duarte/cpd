@@ -3,7 +3,7 @@
 //!
 //! - [`row`]: the `sessions` row as read, and `session list` / `show`;
 //! - [`state`]: the agent states of §3.6, `session state` and `rename`;
-//! - [`moves`]: the panes: `session fork`, `open` and `park`;
+//! - [`moves`]: the panes: `session fork`, `open`, `park` and `close`;
 //! - [`run`]: `session run`, the program in every Lead pane (§6.7).
 
 mod moves;
@@ -42,6 +42,8 @@ pub enum Command {
     Open(OpenArgs),
     /// Move the Lead in the chat slot to a parked window (§10.5)
     Park(ParkArgs),
+    /// End a Lead's pane; its session file stays (§10.9)
+    Close(CloseArgs),
     /// Rename a Session (§10.7)
     Rename(RenameArgs),
     /// Report a Session's agent state (pi adapter) (§10.6)
@@ -106,6 +108,13 @@ pub struct ParkArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct CloseArgs {
+    /// The Lead Session whose pane to close
+    #[arg(value_name = "id")]
+    id: SessionId,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct RenameArgs {
     /// The new name
     #[arg(value_name = "name")]
@@ -140,6 +149,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Fork(args) => moves::fork(args),
         Command::Open(args) => moves::open(args),
         Command::Park(args) => moves::park(args),
+        Command::Close(args) => moves::close(args),
         Command::Rename(args) => state::rename(args),
         Command::State(args) => state::state(args),
         Command::Run(args) => run::run(args),

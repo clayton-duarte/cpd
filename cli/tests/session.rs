@@ -121,6 +121,10 @@ fn refused(run: &Run, code: &str, exit: i32) -> Value {
     error
 }
 
+fn exec_sql(env: &TestEnv, sql: &str) {
+    store(env).write("test", |tx| exec(tx, sql)).unwrap();
+}
+
 fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
     store(env).read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
 }
@@ -570,6 +574,101 @@ fn open_and_park_refusals() {
     refused(&env.cpd2(&["session", "park", "nobody"]), "session_not_found", 4);
     assert_placeholders(&env, 1);
     assert_eq!(window_names(&env), ["main"]);
+}
+
+// ---------- close ----------
+
+#[test]
+fn close_refusals_and_nothing_to_close() {
+    let env = TestEnv::new();
+    setup(&env);
+    refused(&env.cpd2(&["session", "close", WORKER]), "not_a_lead", 3);
+    refused(&env.cpd2(&["session", "close", "nobody"]), "session_not_found", 4);
+    // A Lead with no pane: nothing to do.
+    fake_cpd2(&env);
+    cockpit(&env);
+    assert_eq!(env.cpd2(&["session", "close", LEAD2]).ok(), json!({"ok": true, "session": LEAD2, "pane": null, "already": true}));
+    // A pane that is gone, with E2 not having recorded it: nothing is written.
+    exec_sql(&env, "UPDATE sessions SET tmux_pane = '%99' WHERE id = 'lead2'");
+    assert_eq!(env.cpd2(&["session", "close", LEAD2]).ok()["already"], true);
+    assert_eq!(query::<String>(&env, "SELECT tmux_pane FROM sessions WHERE id = 'lead2'"), "%99");
+    assert_eq!(events(&env, "session-moved").len(), 0);
+    assert_eq!(events(&env, "session-state").len(), 0);
+}
+
+#[test]
+fn close_refuses_the_lead_in_the_chat_slot_and_leaves_everything() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd2(&env);
+    fake_pi(&env, "exec sleep 600");
+    cockpit(&env);
+    let pane = env.cpd2(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
+    let error = refused(&env.cpd2(&["session", "close", LEAD1]), "in_chat_slot", 3);
+    assert_eq!(error["details"]["next"], "cpd2 session park");
+    assert_eq!(slot(&env).pane, pane);
+    assert_eq!(show(&env, LEAD1)["tmux_pane"], json!(pane));
+    assert_eq!(events(&env, "session-moved").len(), 1);
+}
+
+#[test]
+fn close_kills_a_parked_pane_and_writes_what_e2_writes() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd2(&env);
+    fake_pi(&env, "exec sleep 600");
+    cockpit(&env);
+    // lead2 displaces lead1 into a park window; lead1 is made `idle`, as pi would report.
+    let lead1_pane = env.cpd2(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
+    env.cpd2(&["session", "open", LEAD2]).ok();
+    assert_eq!(show(&env, LEAD1)["place"], "parked");
+    assert_eq!(window_names(&env), ["main", "park-pay"]);
+    exec_sql(&env, "UPDATE sessions SET state = 'idle' WHERE id = 'lead1'");
+
+    let out = env.cpd2(&["session", "close", LEAD1]).ok();
+    assert_eq!(out, json!({"ok": true, "session": LEAD1, "pane": lead1_pane}));
+    // The pane is gone with its window; the file of pi stays (not touched); the slot is unchanged.
+    assert!(panes(&env).iter().all(|p| p.session != LEAD1));
+    assert_eq!(window_names(&env), ["main"]);
+    assert_eq!(slot(&env).session, LEAD2);
+    let lead1 = show(&env, LEAD1);
+    assert_eq!((&lead1["state"], &lead1["tmux_pane"], &lead1["place"]), (&json!("stopped"), &Value::Null, &json!("none")));
+    let state: Vec<Value> = events(&env, "session-state").into_iter().filter(|e| e["session"] == LEAD1).collect();
+    assert_eq!(state.len(), 1);
+    assert_eq!(state[0]["data"], json!({"from": "idle", "to": "stopped", "label": null}));
+    let moved = events(&env, "session-moved");
+    let last = moved.last().unwrap();
+    assert_eq!((&last["session"], &last["data"]), (&json!(LEAD1), &json!({"pane": null, "window": null, "place": "none"})));
+    let after = moved.len();
+
+    // Idempotent: nothing more is written.
+    assert_eq!(env.cpd2(&["session", "close", LEAD1]).ok()["already"], true);
+    assert_eq!(events(&env, "session-moved").len(), after);
+
+    // Open resumes it: a new pane, in the slot.
+    let out = env.cpd2(&["session", "open", LEAD1]).ok();
+    assert_ne!(out["pane"], json!(lead1_pane));
+    assert_eq!(out["displaced"], LEAD2);
+}
+
+#[test]
+fn close_of_a_stopped_lead_with_a_pane_appends_only_session_moved() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd2(&env);
+    fake_pi(&env, "exec sleep 600");
+    cockpit(&env);
+    // lead2 is `stopped` (the fake pi reports nothing) and parked by lead1.
+    env.cpd2(&["session", "open", LEAD2]).ok();
+    env.cpd2(&["session", "open", LEAD1]).ok();
+    assert_eq!((show(&env, LEAD2)["state"].clone(), show(&env, LEAD2)["place"].clone()), (json!("stopped"), json!("parked")));
+    let states = events(&env, "session-state").len();
+
+    env.cpd2(&["session", "close", LEAD2]).ok();
+    assert_eq!(events(&env, "session-state").len(), states);
+    let lead2 = show(&env, LEAD2);
+    assert_eq!((&lead2["tmux_pane"], &lead2["place"]), (&Value::Null, &json!("none")));
+    assert!(panes(&env).iter().all(|p| p.session != LEAD2));
 }
 
 // ---------- run ----------

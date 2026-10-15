@@ -119,7 +119,7 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `pr open`, `pr rebase` | Lead | yes | §7.3, §7.6 |
 | `pr poll` | engine E5 | yes | §7.6 |
 | `session list`, `session show` | TUI, Lead | no | |
-| `session fork`, `open`, `park`, `rename` | User (TUI), Lead | yes | §6.4, §6.7 |
+| `session fork`, `open`, `park`, `close`, `rename` | User (TUI), Lead | yes | §6.4, §6.7 |
 | `session state` | pi adapter | yes | §3.6 |
 | `session run` (internal) | cockpit panes | yes | §6.7 |
 | `events list`, `events follow` | pi adapter, TUI, scripts | no | §5.4 |

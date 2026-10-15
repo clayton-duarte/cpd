@@ -152,6 +152,7 @@ error_codes! {
     GroundedLead = "grounded_lead" => Refused,
     NoCockpit = "no_cockpit" => Refused,
     WrongPane = "wrong_pane" => Refused,
+    InChatSlot = "in_chat_slot" => Refused,
     CursorAhead = "cursor_ahead" => Refused,
     WatchRunning = "watch_running" => Refused,
     NotATerminal = "not_a_terminal" => Refused,

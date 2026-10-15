@@ -63,3 +63,10 @@ fn every_documented_command_exists() {
         );
     }
 }
+
+/// `session close` is documented in §2 (added with the command, parity amendment 14) and exists.
+#[test]
+fn session_close_is_indexed_and_exists() {
+    assert!(documented_commands().contains(&vec!["session".to_owned(), "close".to_owned()]));
+    assert!(Cli::command().find_subcommand("session").unwrap().find_subcommand("close").is_some());
+}

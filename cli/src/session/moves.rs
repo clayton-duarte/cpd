@@ -1,5 +1,6 @@
 //! Lead panes in the cockpit (contract §6.2–§6.4, §6.7; commands.md §10.3–
-//! §10.5, with §19 amendments 1–3): `session fork`, `open` and `park`.
+//! §10.5, with §19 amendments 1–3): `session fork`, `open` and `park`; and
+//! `session close` (§10.9, amendment 14).
 //!
 //! The chat slot always holds a pane: a Lead's, or the placeholder running
 //! `cpd2 tui view chat`. `park` creates the placeholder in a new park window
@@ -13,7 +14,7 @@ use serde_json::{Value, json};
 
 use super::row::{self, Role, Row};
 use super::state::scoped;
-use super::{Env, ForkArgs, OpenArgs, PROGRAM, ParkArgs, no_cockpit, not_a_lead};
+use super::{CloseArgs, Env, ForkArgs, OpenArgs, PROGRAM, ParkArgs, no_cockpit, not_a_lead, pane_gone};
 use crate::args::Name;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
@@ -222,6 +223,52 @@ pub(super) fn park(args: ParkArgs) -> Result<Output, CpdError> {
     tmux.swap_pane(&placeholder, &slot.pane)?;
     env.store.write("session park", |tx| moved(tx, &lead, &slot.pane, &window, "parked"))?;
     Ok(Output::success(json!({"session": lead.id, "pane": slot.pane.as_str(), "window": window.as_str()})))
+}
+
+/// `session close` (commands.md §10.9, contract §6.4): kills the Lead's pane
+/// and writes the rows engine E2 writes for a pane that is gone.
+pub(super) fn close(args: CloseArgs) -> Result<Output, CpdError> {
+    let mut env = Env::open()?;
+    let tmux = env.tmux();
+    let cockpit = env.config.tmux.cockpit_session.clone();
+    // The rows are read first, then the panes, so a Lead that reached the slot
+    // meanwhile shows in at least one of them.
+    let mut lead = env.store.read(|conn| row::load(conn, &args.id))?;
+    require_lead(&lead)?;
+    let panes = tmux.list_panes()?;
+    let in_slot = chat_slot(&panes, &cockpit).is_some_and(|p| p.cpd_session.as_ref() == Some(&lead.id));
+    if lead.place == "chat" || in_slot {
+        return Err(CpdError::new(
+            ErrorCode::InChatSlot,
+            format!("Lead {} is in the chat slot: park it or open another Lead first.", lead.name),
+        )
+        .with("session", lead.id.as_str())
+        .with("next", "cpd2 session park"));
+    }
+    let Some(pane) = lead.tmux_pane.clone() else {
+        return Ok(Output::success(json!({"session": lead.id, "pane": null, "already": true})));
+    };
+    let live = |panes: &[Pane]| panes.iter().any(|p| p.pane.as_str() == pane);
+    if !live(&panes) {
+        return Ok(Output::success(json!({"session": lead.id, "pane": pane, "already": true})));
+    }
+    let id = PaneId::parse(&pane).ok_or_else(|| super::bad_row(format!("tmux_pane {pane:?}")))?;
+    tmux.kill_pane(&id)?;
+
+    // pi's adapter may report `stopped` as the pane dies, which changes the
+    // state the write is checked against: read again while the pane is still ours.
+    let why = format!("its pane {pane} was closed");
+    for _ in 0..3 {
+        let changed = env.store.write("session close", |tx| pane_gone(tx, &lead.id, lead.state.as_str(), Some(&pane), &why))?;
+        if changed {
+            return Ok(Output::success(json!({"session": lead.id, "pane": pane})));
+        }
+        lead = env.store.read(|conn| row::load(conn, &args.id))?;
+        if lead.tmux_pane.as_deref() != Some(pane.as_str()) {
+            break;
+        }
+    }
+    Ok(Output::success(json!({"session": lead.id, "pane": pane, "already": true})))
 }
 
 /// The message files a Lead's `session run` reads (commands.md §1.4).
