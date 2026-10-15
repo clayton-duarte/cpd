@@ -3,12 +3,18 @@
 //! A chat pane is a pane that publishes `@session_id` (tmux-agent-state.ts, or the launch scripts for sessions that
 //! started before it). Nothing is configured.
 
-use std::{fs, path::Path};
+use std::{
+    collections::HashMap,
+    fs,
+    io::{BufRead, BufReader},
+    path::Path,
+    sync::Mutex,
+};
 
 use serde_json::Value;
 
 /// The `tmux list-panes -a -F` format that `parse_panes` reads.
-pub const PANE_FORMAT: &str = "#{pane_id}\t#{window_name}\t#{@session_id}\t#{@session_file}\t#{@session_name}\t#{@agent_state}\t#{pane_current_path}";
+pub const PANE_FORMAT: &str = "#{pane_id}\t#{window_name}\t#{@session_id}\t#{@session_file}\t#{@session_name}\t#{@agent_state}\t#{pane_current_path}\t#{@asking}\t#{@settled_at}\t#{@seen_at}";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Session {
@@ -19,7 +25,14 @@ pub struct Session {
     /// The published `@session_name` (may be empty: see `label`).
     pub name: String,
     pub state: String,
+    /// The session's project directory: its file's header `cwd`, else the pane's `pane_current_path`.
     pub cwd: String,
+    /// `@asking`: the Lead waits on the User (an `ask_` tool runs, or a plan review is open).
+    pub asking: bool,
+    /// `@settled_at`: epoch seconds of the Lead's last `agent_settled`; `None` when never published.
+    pub settled_at: Option<u64>,
+    /// `@seen_at`: epoch seconds the Context view last saw this session in the centre; `None` when never.
+    pub seen_at: Option<u64>,
 }
 
 impl Session {
@@ -28,10 +41,35 @@ impl Session {
         self.window == "main"
     }
 
-    /// The Context: until the entity exists, the repo directory name of the session's cwd.
+    /// The Context: until the entity exists, the repo directory name of the session's cwd
+    /// (the session file's own, else the pane's).
     pub fn context(&self) -> String {
         Path::new(&self.cwd).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "(no cwd)".into())
     }
+}
+
+/// The `cwd` of a session file's header line (its first line only: files can be tens of MB).
+/// `Err` when the file cannot be read; `Ok(None)` when the header has no `cwd`.
+pub fn header_cwd(path: &str) -> std::io::Result<Option<String>> {
+    let mut line = String::new();
+    BufReader::new(fs::File::open(path)?).read_line(&mut line)?;
+    let v: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
+    Ok(v["cwd"].as_str().filter(|c| !c.is_empty()).map(String::from))
+}
+
+/// Header cwds by `@session_file`: a file is read once, and again only when a session publishes another path.
+/// An unreadable file is not remembered, so a file that appears later is picked up.
+static HEADER_CWDS: Mutex<Option<HashMap<String, Option<String>>>> = Mutex::new(None);
+
+fn cached_header_cwd(path: &str) -> Option<String> {
+    let mut guard = HEADER_CWDS.lock().unwrap_or_else(|e| e.into_inner());
+    let cache = guard.get_or_insert_with(HashMap::new);
+    if let Some(c) = cache.get(path) {
+        return c.clone();
+    }
+    let cwd = header_cwd(path).ok()?;
+    cache.insert(path.into(), cwd.clone());
+    cwd
 }
 
 /// The chat panes of a pane listing in `PANE_FORMAT`; panes with no `@session_id` are not chats. Malformed lines are skipped.
@@ -40,14 +78,17 @@ pub fn parse_panes(listing: &str) -> Vec<Session> {
         .lines()
         .filter_map(|line| {
             let f: Vec<&str> = line.split('\t').collect();
-            (f.len() == 7 && !f[2].is_empty()).then(|| Session {
+            (f.len() == 10 && !f[2].is_empty()).then(|| Session {
                 pane_id: f[0].into(),
                 window: f[1].into(),
                 id: f[2].into(),
                 file: f[3].into(),
                 name: f[4].into(),
                 state: f[5].into(),
-                cwd: f[6].into(),
+                cwd: if f[3].is_empty() { None } else { cached_header_cwd(f[3]) }.unwrap_or_else(|| f[6].into()),
+                asking: f[7] == "1",
+                settled_at: f[8].parse().ok(),
+                seen_at: f[9].parse().ok(),
             })
         })
         .collect()
@@ -103,18 +144,20 @@ mod tests {
     use super::*;
 
     const LISTING: &str = "\
-%0\tmain\t\t\t\t\t/home/u/projects/cpd
-%1\tmain\tbbbb2222-x\t/s/b.jsonl\tReviewer\tidle\t/home/u/projects/cpd
-%2\tpark-cpd-rust\taaaa1111-x\t/s/a.jsonl\t\tworking\t/home/u/projects/cpd
-%3\tpark-other\tcccc3333-x\t\t\t\t/home/u/projects/other
+%0\tmain\t\t\t\t\t/home/u/projects/cpd\t\t\t
+%1\tmain\tbbbb2222-x\t/s/b.jsonl\tReviewer\tidle\t/home/u/projects/cpd\t\t200\t100
+%2\tpark-cpd-rust\taaaa1111-x\t/s/a.jsonl\t\tworking\t/home/u/projects/cpd\t1\t\t
+%3\tpark-other\tcccc3333-x\t\t\t\t/home/u/projects/other\t\t\t
 garbage line
-%4\tmain\t\t\t\t\t/tmp";
+%4\tmain\t\t\t\t\t/tmp\t\t\t";
 
     #[test]
     fn only_panes_with_a_session_id_are_chats() {
         let s = parse_panes(LISTING);
         assert_eq!(s.iter().map(|s| s.pane_id.as_str()).collect::<Vec<_>>(), ["%1", "%2", "%3"]);
-        assert_eq!(s[0], Session { pane_id: "%1".into(), window: "main".into(), id: "bbbb2222-x".into(), file: "/s/b.jsonl".into(), name: "Reviewer".into(), state: "idle".into(), cwd: "/home/u/projects/cpd".into() });
+        assert_eq!(s[0], Session { pane_id: "%1".into(), window: "main".into(), id: "bbbb2222-x".into(), file: "/s/b.jsonl".into(), name: "Reviewer".into(), state: "idle".into(), cwd: "/home/u/projects/cpd".into(), asking: false, settled_at: Some(200), seen_at: Some(100) });
+        assert_eq!((s[1].asking, s[1].settled_at, s[1].seen_at), (true, None, None));
+        assert_eq!((s[2].asking, s[2].settled_at, s[2].seen_at), (false, None, None));
         assert!(s[0].is_active() && !s[1].is_active());
     }
 
@@ -170,6 +213,65 @@ not json
         assert_eq!(display_name(&s), "from file");
         s.name = "published".into();
         assert_eq!(display_name(&s), "published");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("cpd-tui-test-{}-{tag}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn listing_for(file: &Path) -> String {
+        format!("%1\tmain\tid1\t{}\t\tidle\t/tmp\t\t\t", file.display())
+    }
+
+    #[test]
+    fn the_header_cwd_wins_over_the_pane_cwd() {
+        let dir = scratch("hdr");
+        let f = dir.join("s.jsonl");
+        fs::write(&f, "{\"type\":\"session\",\"id\":\"x\",\"cwd\":\"/home/u/projects/cpd\"}\n").unwrap();
+        let s = parse_panes(&listing_for(&f)).remove(0);
+        assert_eq!((s.cwd.as_str(), s.context().as_str()), ("/home/u/projects/cpd", "cpd"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_missing_file_or_a_header_without_cwd_falls_back_to_the_pane_cwd() {
+        let dir = scratch("fallback");
+        let f = dir.join("none.jsonl");
+        assert_eq!(parse_panes(&listing_for(&f)).remove(0).cwd, "/tmp");
+        fs::write(&f, "{\"type\":\"session\",\"id\":\"x\"}\n").unwrap();
+        assert_eq!(parse_panes(&listing_for(&f)).remove(0).cwd, "/tmp");
+        let g = dir.join("empty.jsonl");
+        fs::write(&g, "").unwrap();
+        assert_eq!(parse_panes(&listing_for(&g)).remove(0).cwd, "/tmp");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn only_the_first_line_is_read() {
+        let dir = scratch("first");
+        let f = dir.join("s.jsonl");
+        // A later line with a cwd, and a huge unterminated-JSON tail, must not matter.
+        fs::write(&f, "{\"type\":\"session\",\"id\":\"x\"}\n{\"type\":\"x\",\"cwd\":\"/elsewhere\"}\n").unwrap();
+        assert_eq!(header_cwd(f.to_str().unwrap()).unwrap(), None);
+        fs::write(&f, format!("{{\"cwd\":\"/a/b\"}}\n{}", "x".repeat(1 << 20))).unwrap();
+        assert_eq!(header_cwd(f.to_str().unwrap()).unwrap(), Some("/a/b".into()));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_is_read_again_only_when_the_path_changes() {
+        let dir = scratch("cache");
+        let f = dir.join("s.jsonl");
+        fs::write(&f, "{\"cwd\":\"/a/one\"}\n").unwrap();
+        assert_eq!(parse_panes(&listing_for(&f)).remove(0).cwd, "/a/one");
+        fs::write(&f, "{\"cwd\":\"/a/two\"}\n").unwrap();
+        assert_eq!(parse_panes(&listing_for(&f)).remove(0).cwd, "/a/one");
+        let g = dir.join("t.jsonl");
+        fs::write(&g, "{\"cwd\":\"/a/three\"}\n").unwrap();
+        assert_eq!(parse_panes(&listing_for(&g)).remove(0).cwd, "/a/three");
         fs::remove_dir_all(&dir).unwrap();
     }
 

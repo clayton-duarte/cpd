@@ -13,12 +13,15 @@ if $T has-session -t "$SESS" 2>/dev/null; then echo "cockpit already running: tm
 mkdir -p "$CPD_TUI_STATE"
 lead() { jq -r ".lead.$2" "$HOME/.cpd/workflows/$1/workflow.json"; }
 chat() { echo "$DIR/resume-lead.sh $1 '$(lead "$1" sessionPath)' $(lead "$1" paneId)"; }
-$T new-session -d -s "$SESS" -n main -x 215 -y 62 "$EXE tree"
+$T new-session -d -s "$SESS" -n main -x 215 -y 62 "$EXE context"
 LEFT=$($T display -p -t "$SESS:main.0" '#{pane_id}')
 CHAT=$($T split-window -h -t "$LEFT" -l 80% -P -F '#{pane_id}' "$(chat $FIRST)")
-RIGHT=$($T split-window -h -t "$CHAT" -l 25% -P -F '#{pane_id}' "$EXE widgets")
+RIGHT=$($T split-window -h -t "$CHAT" -l 25% -P -F '#{pane_id}' "$EXE dispatch")
 PLAN=$($T split-window -v -b -t "$CHAT" -l 20% -P -F '#{pane_id}' "$EXE plan")
-$T set -p -t "$LEFT" @view sessions; $T set -p -t "$PLAN" @view plan; $T set -p -t "$RIGHT" @view widgets
+BAR=$($T split-window -v -f -l 1 -P -F '#{pane_id}' "$EXE statusbar")
+$T set -p -t "$BAR" @view statusbar
+$T set -p -t "$LEFT" @view context; $T set -p -t "$PLAN" @view plan; $T set -p -t "$RIGHT" @view dispatch
+"$EXE" reset-layout   # the User's sizes, the same function as the StatusBar's ⧉ button
 for p in $PLANS; do
   [ "$p" = "$FIRST" ] && continue
   $T new-window -d -t "$SESS" -n "park-$p" "$(chat "$p")"

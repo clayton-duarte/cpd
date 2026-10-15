@@ -3,7 +3,7 @@
 # Two pi processes on one session file would corrupt it, so this waits while pi still runs there.
 # HERDR_ENV=1 switches on cpd's pi adapter, so the Lead keeps receiving cpd messages (job-merged,
 # escalations, plan reviews); herdr-agent-state stays off without a herdr socket and pane.
-# tmux-agent-state.ts publishes working/blocked/idle and the session's identity into this pane for the session tree;
+# tmux-agent-state.ts publishes working/blocked/idle and the session's identity into this pane for the Context view;
 # until pi starts (and for a pi that predates it) this script publishes the identity from the session file.
 set -u
 plan=$1 session=$2 herdr_pane=$3
