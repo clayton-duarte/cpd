@@ -68,20 +68,11 @@ fn starts_the_server_once_with_the_contract_options() {
     assert!(s.tmux.server_running().unwrap());
     assert!(s.tmux.has_session("cpd").unwrap());
     assert!(!s.tmux.has_session("cp").unwrap(), "has-session matches the exact name");
-    for (option, value) in [
-        ("mouse", "on"),
-        ("default-terminal", "tmux-256color"),
-        ("extended-keys", "on"),
-        ("escape-time", "10"),
-        ("status", "off"),
-        ("pane-border-status", "top"),
-        ("pane-border-lines", "heavy"),
-        ("remain-on-exit", "on"),
-    ] {
-        assert_eq!(s.tmux.global_option(option).unwrap(), value, "{option}");
-    }
-    let features = s.tmux.global_option("terminal-features").unwrap();
-    assert_eq!(features.matches("xterm-ghostty:extkeys").count(), 1, "{features}");
+    assert_server_options(&s);
+
+    // Applying them again on the running server appends nothing.
+    s.tmux.apply_server_options().unwrap();
+    assert_server_options(&s);
 
     // Idempotent: the session exists, nothing is created or appended again.
     assert!(!s.tmux.ensure_session("cpd", "main", &sleeper(s.env.root())).unwrap());
@@ -91,6 +82,101 @@ fn starts_the_server_once_with_the_contract_options() {
 
     let size = s.env.tmux(&["display", "-p", "-t", "=cpd:", "#{window_width}x#{window_height}"]);
     assert_eq!(String::from_utf8_lossy(&size.stdout).trim(), "215x62");
+}
+
+/// Every option, binding and hook of contract §6.1: the reference's
+/// `tui/scripts/tmux.conf` lines 2–17, renamed, with the conditional hook.
+fn assert_server_options(s: &Server) {
+    for (option, value) in [
+        ("mouse", "on"),
+        ("focus-events", "on"),
+        ("default-terminal", "tmux-256color"),
+        ("extended-keys", "on"),
+        ("escape-time", "10"),
+        ("status", "off"),
+        ("pane-border-status", "top"),
+        ("pane-border-lines", "heavy"),
+        (
+            "pane-border-format",
+            "#{?#{@cpd_session},,#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},statusbar},,\
+             #{?#{==:#{@cpd_view},worker}, Worker · #{@cpd_job} (read-only) ,#{?#{==:#{@cpd_view},tree}, Context ,\
+             #{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Dispatch ,#{pane_current_command}}}}}}}}",
+        ),
+        ("pane-active-border-style", "fg=blue"),
+        ("remain-on-exit", "on"),
+    ] {
+        assert_eq!(s.tmux.global_option(option).unwrap(), value, "{option}");
+    }
+    let features = s.tmux.global_option("terminal-features").unwrap();
+    for feature in ["xterm*:extkeys", "xterm-ghostty:extkeys", "xterm-ghostty:hyperlinks"] {
+        assert_eq!(features.matches(feature).count(), 1, "{feature} in {features}");
+    }
+    let hook = s.env.tmux(&["show-hooks", "-g", "pane-died"]);
+    assert_eq!(String::from_utf8_lossy(&hook.stdout), "pane-died[0] if-shell -F \"#{@cpd_view}\" respawn-pane\n", "{hook:?}");
+    let binding = s.env.tmux(&["list-keys", "-T", "root", "MouseDown1Pane"]);
+    assert_eq!(
+        String::from_utf8_lossy(&binding.stdout).split_whitespace().collect::<Vec<_>>().join(" "),
+        "bind-key -T root MouseDown1Pane if-shell -F \"#{==:#{@cpd_view},statusbar}\" \"send-keys -M\" \"select-pane -t = ; send-keys -M\"",
+        "{binding:?}"
+    );
+}
+
+/// Kills a pane's program, as a crash would.
+fn kill_program(t: &Tmux, id: &PaneId) {
+    let pid = pane(&t.list_panes().unwrap(), id).pid;
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), nix::sys::signal::Signal::SIGKILL).unwrap();
+}
+
+#[test]
+fn a_killed_view_pane_respawns_and_a_killed_lead_or_engine_pane_stays_dead() {
+    let s = server();
+    let t = &s.tmux;
+    let root = s.env.root();
+    let (_, engine) = t.create_session("cpd-work", layout::WATCH_WINDOW, &sleeper(root)).unwrap().unwrap();
+    let (_, view) = t.create_session("cpd", layout::MAIN_WINDOW, &sleeper(root)).unwrap().unwrap();
+    t.set_pane_view(&view, View::Tree).unwrap();
+    let (_, lead) = t.new_window("cpd", "park-pay", &sleeper(root)).unwrap();
+    t.set_pane_session(&lead, &SessionId::new_v4()).unwrap();
+    let view_pid = pane(&t.list_panes().unwrap(), &view).pid;
+
+    for id in [&engine, &view, &lead] {
+        kill_program(t, id);
+    }
+    wait_for("the Lead and the engine to die", || {
+        let panes = t.list_panes().unwrap();
+        pane(&panes, &lead).dead && pane(&panes, &engine).dead
+    });
+    wait_for("the view to respawn", || {
+        let panes = t.list_panes().unwrap();
+        let p = pane(&panes, &view);
+        !p.dead && p.pid != view_pid
+    });
+    sleep(Duration::from_millis(300));
+    let panes = t.list_panes().unwrap();
+    assert!(pane(&panes, &lead).dead && pane(&panes, &engine).dead, "{panes:?}");
+    assert_eq!(pane(&panes, &view).cpd_view, Some(View::Tree), "the view keeps its option");
+}
+
+#[test]
+fn respawn_killing_restarts_a_live_pane_in_place() {
+    let s = server();
+    let t = &s.tmux;
+    let (_, id) = t.create_session("cpd", layout::MAIN_WINDOW, &sleeper(s.env.root())).unwrap().unwrap();
+    t.set_pane_view(&id, View::Plan).unwrap();
+    let before = pane(&t.list_panes().unwrap(), &id).clone();
+    let out = s.env.root().join("respawned.txt");
+    t.respawn_pane_killing(&id, &sh(&format!("echo \"$CPD2_HOST_TEST_VAR\" > '{}'; sleep 600", out.display()))).unwrap();
+    let after = pane(&t.list_panes().unwrap(), &id).clone();
+    assert!(!after.dead);
+    assert_ne!(after.pid, before.pid);
+    assert_eq!(after.cpd_view, Some(View::Plan));
+
+    // An empty argv reruns the pane's own command, with the environment given again.
+    let mut rerun = Spawn::default();
+    rerun.env.insert("CPD2_HOST_TEST_VAR".into(), "again".into());
+    t.respawn_pane_killing(&id, &rerun).unwrap();
+    wait_for("the rerun to write", || std::fs::read_to_string(&out).is_ok_and(|s| s == "again\n"));
+    assert_ne!(pane(&t.list_panes().unwrap(), &id).pid, after.pid);
 }
 
 #[test]

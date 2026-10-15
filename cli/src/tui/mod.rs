@@ -2,7 +2,7 @@
 //! amendments 1, 2, 9 and 10): `cpd2 tui`, which builds and attaches it, and
 //! the ratatui views of `cpd2 tui view`, one module per view.
 //!
-//! - [`cockpit`]: `cpd2 tui [--attach]` (§13.1);
+//! - [`cockpit`]: `cpd2 tui [--attach] [--respawn]` (§13.1);
 //! - [`chat`]: the chat slot's placeholder (amendment 2);
 //! - [`widgets`]: the Dispatch column and the key legend (`tui view legend`), with the shared [`palette`];
 //! - [`statusbar`]: the StatusBar, the bottom row, with reset-layout;
@@ -21,7 +21,7 @@ mod worker;
 use crate::error::{CpdError, ErrorCode};
 use crate::output::Output;
 
-/// `cpd2 tui [--attach]`, or `cpd2 tui view …`.
+/// `cpd2 tui [--attach] [--respawn]`, or `cpd2 tui view …`.
 #[derive(clap::Args, Debug)]
 #[command(args_conflicts_with_subcommands = true)]
 pub struct Args {
@@ -30,6 +30,9 @@ pub struct Args {
     /// Then attach this terminal to the cockpit (`tmux -L <socket> attach -t <cockpit>`)
     #[arg(long)]
     pub attach: bool,
+    /// Restart every live view of the cockpit, so each runs the installed binary again
+    #[arg(long)]
+    pub respawn: bool,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -60,7 +63,7 @@ pub enum View {
 
 pub fn run(args: Args) -> Result<Output, CpdError> {
     match args.command {
-        None => cockpit::run(args.attach),
+        None => cockpit::run(args.attach, args.respawn),
         Some(Command::View(view)) => match view {
             View::Tree => tree::run(),
             View::Plan => plan::run(),

@@ -1,7 +1,8 @@
-//! `cpd2 tui [--attach]` (commands.md §13.1; contract §6.1, §6.2, §6.4 with
-//! amendment 9): builds the cockpit's `main` window when it is missing,
-//! respawns a dead pane of its layout, sets the TUI's own server options,
-//! starts the engine, and with `--attach` replaces itself with `tmux attach`.
+//! `cpd2 tui [--attach] [--respawn]` (commands.md §13.1; contract §6.1, §6.2,
+//! §6.4 with amendment 9): builds the cockpit's `main` window when it is
+//! missing, respawns a dead pane of its layout, sets §6.1's server options
+//! again, with `--respawn` restarts every live view, starts the engine, and
+//! with `--attach` replaces itself with `tmux attach`.
 //!
 //! The layout, from the spike's `cockpit.sh` (branch `cpd/cpd-ui`):
 //!
@@ -16,7 +17,8 @@
 //! ```
 //!
 //! A new `main` is reset to these sizes once it is built (A3); an existing one
-//! is not, but gets a StatusBar when it has none.
+//! is not, unless it had no StatusBar: the one added is followed by the reset
+//! (amendment 15).
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -40,41 +42,7 @@ use crate::store::Store;
 /// `worker` view is not part of it: it is opened and closed by the plan view.
 const LAYOUT: [View; 5] = [View::Tree, View::Plan, View::Widgets, View::Chat, View::Statusbar];
 
-/// The pane border titles: the spike's column titles, keyed by `@cpd_view`.
-/// A Lead's pane (`@cpd_session`), the placeholder and the StatusBar have none, since pi and
-/// the placeholder say what they are; any other pane shows its command.
-const BORDER_FORMAT: &str = "#{?#{@cpd_session},,#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},statusbar},,\
-#{?#{==:#{@cpd_view},tree}, Context ,#{?#{==:#{@cpd_view},plan}, Plan ,\
-#{?#{==:#{@cpd_view},widgets}, Dispatch ,#{?#{==:#{@cpd_view},worker}, Worker (read-only) ,\
-#{pane_current_command}}}}}}}}";
-
-/// The TUI's own global options, from the spike's `tmux.conf`, set on every
-/// run (each is a plain `set -g` or `bind`, so rerunning is safe). The
-/// server's own options are contract §6.1's, set by `host` when it starts the
-/// server. Not ported: the spike's `pane-died` respawn hook (it would also
-/// restart Lead and engine panes, whose death the engine must see, E2).
-///
-/// The StatusBar never takes keyboard focus (A5): a click on a pane whose
-/// `@cpd_view` is `statusbar` is passed on without `select-pane`; every other
-/// pane keeps tmux's default.
-const TUI_OPTIONS: &[&[&str]] = &[
-    &["set", "-g", "focus-events", "on"],
-    &["set", "-g", "pane-active-border-style", "fg=blue"],
-    &["set", "-g", "pane-border-format", BORDER_FORMAT],
-    &[
-        "bind",
-        "-T",
-        "root",
-        "MouseDown1Pane",
-        "if",
-        "-F",
-        "#{==:#{@cpd_view},statusbar}",
-        "send-keys -M",
-        "select-pane -t = ; send-keys -M",
-    ],
-];
-
-pub(super) fn run(attach: bool) -> Result<Output, CpdError> {
+pub(super) fn run(attach: bool, respawn: bool) -> Result<Output, CpdError> {
     if attach && !on_a_terminal() {
         return Err(not_a_terminal("tui --attach"));
     }
@@ -87,16 +55,17 @@ pub(super) fn run(attach: bool) -> Result<Output, CpdError> {
     let main: Vec<Pane> =
         tmux.list_panes()?.into_iter().filter(|p| p.session_name == cockpit && p.window_name == MAIN_WINDOW).collect();
     let built = main.is_empty();
+    let mut respawned = Vec::new();
     if built {
         build(&tmux, &home, cockpit)?;
     } else {
         respawn_dead(&tmux, &home, &main)?;
-        add_missing_statusbar(&tmux, &home, &main)?;
+        if respawn {
+            respawned = respawn_live_views(&tmux, &home, &main)?;
+        }
+        add_missing_statusbar(&tmux, &home, cockpit, &main)?;
     }
-    for option in TUI_OPTIONS {
-        let argv: Vec<String> = option.iter().map(|a| (*a).to_owned()).collect();
-        tmux.run(&argv)?;
-    }
+    tmux.apply_server_options()?;
     if built {
         if let Some(lead) = store.read(last_chat_lead)? {
             open_lead(&lead)?;
@@ -108,19 +77,27 @@ pub(super) fn run(attach: bool) -> Result<Output, CpdError> {
     if attach {
         return Err(exec_attach(&tmux, cockpit));
     }
-    Ok(Output::success(json!({
+    let mut fields = json!({
         "built": built, "socket": tmux.socket(), "session": cockpit, "attach": attach_argv, "watch": watch,
-    })))
+    });
+    if respawn {
+        fields["respawned"] = json!(respawned.iter().map(PaneId::as_str).collect::<Vec<_>>());
+    }
+    Ok(Output::success(fields))
 }
 
-/// What a view's pane runs: `cpd2 tui view <view>` in `$CPD_HOME`, with
-/// `CPD_HOME` passed with `-e`, since a server started by another process does
-/// not have this process's environment.
+/// What a view's pane runs: `cpd2 tui view <view>` (see [`home_spawn`]).
 fn view_spawn(home: &CpdHome, view: View) -> Spawn {
+    home_spawn(home, [PROGRAM, "tui", "view", view.as_str()].map(str::to_owned).into())
+}
+
+/// `argv` in `$CPD_HOME`, with `CPD_HOME` passed with `-e`, since a server
+/// started by another process does not have this process's environment.
+fn home_spawn(home: &CpdHome, argv: Vec<String>) -> Spawn {
     Spawn {
         cwd: Some(home.root().to_owned()),
         env: BTreeMap::from([("CPD_HOME".to_owned(), home.root().display().to_string())]),
-        argv: [PROGRAM, "tui", "view", view.as_str()].map(str::to_owned).into(),
+        argv,
     }
 }
 
@@ -156,15 +133,35 @@ fn add_statusbar(tmux: &Tmux, home: &CpdHome, target: &PaneId) -> Result<(), Cpd
     tmux.set_pane_view(&bar, View::Statusbar)
 }
 
-/// An existing `main` without a StatusBar gets one (A7), without a reset.
-fn add_missing_statusbar(tmux: &Tmux, home: &CpdHome, main: &[Pane]) -> Result<(), CpdError> {
+/// An existing `main` without a StatusBar gets one (A7), then reset-layout,
+/// so the added row is taken from the layout and the other panes get their
+/// sizes back (amendment 15).
+fn add_missing_statusbar(tmux: &Tmux, home: &CpdHome, cockpit: &str, main: &[Pane]) -> Result<(), CpdError> {
     if main.iter().any(|p| p.cpd_view == Some(View::Statusbar)) {
         return Ok(());
     }
     match main.first() {
-        Some(any) => add_statusbar(tmux, home, &any.pane),
+        Some(any) => {
+            add_statusbar(tmux, home, &any.pane)?;
+            statusbar::layout::reset(tmux, cockpit)
+        }
         None => Ok(()),
     }
+}
+
+/// `--respawn`: restarts every live pane of `main` that has `@cpd_view` (the
+/// views, the chat placeholder and a Worker view) in place with `respawn-pane
+/// -k`, so each runs the installed binary again; a Lead's or the engine's pane
+/// is never touched. Each reruns its own command (a Worker view keeps its
+/// Attempt), with `CPD_HOME` passed again since `-e` does not outlive a
+/// respawn. Returns the panes restarted.
+fn respawn_live_views(tmux: &Tmux, home: &CpdHome, main: &[Pane]) -> Result<Vec<PaneId>, CpdError> {
+    let rerun = home_spawn(home, Vec::new());
+    let views: Vec<PaneId> = main.iter().filter(|p| !p.dead && p.cpd_view.is_some()).map(|p| p.pane.clone()).collect();
+    for pane in &views {
+        tmux.respawn_pane_killing(pane, &rerun)?;
+    }
+    Ok(views)
 }
 
 /// Respawns each dead pane of `main`'s layout in place (`respawn-pane`,

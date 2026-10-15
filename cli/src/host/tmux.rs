@@ -27,20 +27,50 @@ pub const OPT_SESSION: &str = "@cpd_session";
 /// The pane option naming the TUI view a pane runs (contract §6.2, amendment 2).
 pub const OPT_VIEW: &str = "@cpd_view";
 
-/// The global options cpd sets when it starts the server (contract §6.1), each
-/// as the arguments after `tmux -L <socket>`. `terminal-features` is appended
-/// (`-as`), as in the spike's `tmux.conf`, so these run once per server.
+/// The pane border titles (contract §6.1), keyed by the pane options, first
+/// match: a Lead's pane (`@cpd_session`), the chat placeholder and the
+/// StatusBar have none, since pi and the placeholder say what they are; the
+/// views have their column titles; any other pane shows its command.
+pub const BORDER_FORMAT: &str = "#{?#{@cpd_session},,#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},statusbar},,\
+#{?#{==:#{@cpd_view},worker}, Worker · #{@cpd_job} (read-only) ,#{?#{==:#{@cpd_view},tree}, Context ,\
+#{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Dispatch ,#{pane_current_command}}}}}}}}";
+
+/// The `pane-died` hook (contract §6.1): only a pane that carries `@cpd_view`
+/// (a view of the cockpit) is respawned when its program dies; a Lead or
+/// engine pane stays dead, as `remain-on-exit` leaves it, so engine E2 sees
+/// its death. tmux runs it with the dead pane as the current target.
+pub const PANE_DIED_HOOK: &str = r##"if -F "#{@cpd_view}" "respawn-pane""##;
+
+/// Every global option, key binding and hook of contract §6.1, each as the
+/// arguments after `tmux -L <socket>`, in the order of the reference's
+/// `tui/scripts/tmux.conf` (lines 2–17), renamed (`@cpd_view`, `@cpd_job`).
+/// Set at every server start, whichever command starts it (see
+/// [`new_session_args`]), and again by [`Tmux::apply_server_options`].
+///
+/// The click binding: a click on the StatusBar is passed to it and never
+/// selects it, so the chat keeps the keyboard focus; every other pane is
+/// selected, then gets the click.
 pub const SERVER_OPTIONS: &[&[&str]] = &[
     &["set", "-g", "mouse", "on"],
+    &["set", "-g", "focus-events", "on"],
     &["set", "-g", "default-terminal", "tmux-256color"],
     &["set", "-g", "extended-keys", "on"],
-    &["set", "-as", "terminal-features", ",xterm*:extkeys,xterm-ghostty:extkeys,xterm-ghostty:hyperlinks"],
+    &["set", "-as", "terminal-features", TERMINAL_FEATURES],
     &["set", "-g", "escape-time", "10"],
     &["set", "-g", "status", "off"],
     &["set", "-g", "pane-border-status", "top"],
     &["set", "-g", "pane-border-lines", "heavy"],
+    &["set", "-g", "pane-border-format", BORDER_FORMAT],
+    &["set", "-g", "pane-active-border-style", "fg=blue"],
     &["set", "-g", "remain-on-exit", "on"],
+    &["set-hook", "-g", "pane-died", PANE_DIED_HOOK],
+    &["bind", "-T", "root", "MouseDown1Pane", "if", "-F", "#{==:#{@cpd_view},statusbar}", "send-keys -M", "select-pane -t = ; send-keys -M"],
 ];
+
+/// The value `terminal-features` is appended with (`set -as`), the one entry of
+/// [`SERVER_OPTIONS`] that is not idempotent: it runs once, when cpd starts
+/// the server, and [`Tmux::apply_server_options`] skips it.
+const TERMINAL_FEATURES: &str = ",xterm*:extkeys,xterm-ghostty:extkeys,xterm-ghostty:hyperlinks";
 
 /// How many stderr lines a `tmux_failed` error carries (commands.md §1.3).
 const STDERR_TAIL_LINES: usize = 60;
@@ -295,6 +325,16 @@ impl Tmux {
         Ok(Some(parsed))
     }
 
+    /// Sets [`SERVER_OPTIONS`] on a running server (contract §6.1: `cpd2 tui`
+    /// applies them again), all but the `terminal-features` append, which the
+    /// server's start already made. Rerunning is safe.
+    pub fn apply_server_options(&self) -> Result<(), CpdError> {
+        for option in SERVER_OPTIONS.iter().filter(|o| o[1] != "-as") {
+            self.run(&strings(option))?;
+        }
+        Ok(())
+    }
+
     /// `show -gv <option>`: a global option's value, without the newline.
     pub fn global_option(&self, option: &str) -> Result<String, CpdError> {
         Ok(self.run(&strings(&["show", "-gv", option]))?.trim_end_matches('\n').to_owned())
@@ -357,6 +397,16 @@ impl Tmux {
     /// pane's original command.
     pub fn respawn_pane(&self, pane: &PaneId, spawn: &Spawn) -> Result<(), CpdError> {
         let mut args = strings(&["respawn-pane", "-t", pane.as_str()]);
+        spawn.push_args(&mut args);
+        spawn.push_argv(&mut args);
+        self.run(&args).map(drop)
+    }
+
+    /// `respawn-pane -k -t <pane> [-c <cwd>] [-e K=V …] [-- <argv…>]`: kills
+    /// the pane's program, live or dead, and starts it again in place (contract
+    /// §6.3: `cpd2 tui --respawn`). An empty argv reruns the pane's own command.
+    pub fn respawn_pane_killing(&self, pane: &PaneId, spawn: &Spawn) -> Result<(), CpdError> {
+        let mut args = strings(&["respawn-pane", "-k", "-t", pane.as_str()]);
         spawn.push_args(&mut args);
         spawn.push_argv(&mut args);
         self.run(&args).map(drop)
