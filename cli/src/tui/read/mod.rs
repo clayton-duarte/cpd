@@ -33,5 +33,7 @@ pub use shared::{
     PrState, ReviewStatus, SessionNode,
 };
 pub use tree::{ContextNode, PlanNode, Tree, tree};
-pub use widgets::{Engine, HeldSlot, MachineEscalation, PlanCard, PrFeedback, Slots, Widgets, widgets};
+pub use widgets::{
+    Engine, HeldSlot, MachineEscalation, PlanCard, PolledPr, PrFeedback, PrRow, ReviewDecision, Slots, Widgets, widgets,
+};
 pub use worker::{AttemptDetail, AttemptEscalation, Worker, worker};

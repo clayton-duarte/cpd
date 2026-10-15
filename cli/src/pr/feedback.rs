@@ -284,6 +284,8 @@ mod tests {
         View {
             state: "OPEN".into(),
             merged_at: None,
+            title: "T".into(),
+            review_decision: None,
             checks: Some(
                 checks
                     .into_iter()
@@ -326,6 +328,24 @@ mod tests {
         let (changes, seen) = diff(&seen, &view(vec![], vec!["R1", "R2"], vec!["C1"]), &[]);
         assert_eq!((changes.reviews.len(), changes.comments.len()), (1, 0));
         assert_eq!(seen.review_ids, ["R1", "R2"]);
+    }
+
+    #[test]
+    fn checks_are_summarised_failed_over_pending_over_passed() {
+        let summary = |checks: Vec<(&str, &str)>| ChecksSummary::of(&current_checks(&view(checks, vec![], vec![])));
+        assert_eq!(summary(vec![]), ChecksSummary::None);
+        assert_eq!(summary(vec![("a", "success")]), ChecksSummary::Passed);
+        assert_eq!(summary(vec![("a", "SUCCESS"), ("b", "")]), ChecksSummary::Pending);
+        assert_eq!(summary(vec![("a", "SKIPPED"), ("b", "queued"), ("c", "startup_failure")]), ChecksSummary::Failed);
+    }
+
+    #[test]
+    fn only_approved_and_changes_requested_are_decisions() {
+        assert_eq!(ReviewDecision::of(Some("APPROVED")), ReviewDecision::Approved);
+        assert_eq!(ReviewDecision::of(Some("CHANGES_REQUESTED")), ReviewDecision::ChangesRequested);
+        for other in [Some("REVIEW_REQUIRED"), Some(""), None] {
+            assert_eq!(ReviewDecision::of(other), ReviewDecision::None, "{other:?}");
+        }
     }
 
     #[test]

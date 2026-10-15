@@ -3,6 +3,8 @@
 //! every open Escalation and the latest Events (`plan list`, with the rows the
 //! column draws from).
 
+use std::collections::BTreeMap;
+
 use nix::errno::Errno;
 use nix::sys::signal::kill;
 use nix::unistd::Pid;
@@ -15,7 +17,7 @@ use crate::ids::{AttemptId, ContextId, JobKey, PlanId};
 use crate::store::Store;
 
 use super::flow::{OpenEscalation, open_escalation};
-use super::shared::{AttemptStatus, PlanHead, bad_row, id, plan_heads, tier};
+use super::shared::{AttemptStatus, Checks, PlanHead, PrState, bad_row, id, plan_heads, tier};
 
 /// What the Dispatch column shows.
 #[derive(Clone, Debug, PartialEq)]
@@ -68,11 +70,40 @@ pub enum Engine {
     Crashed { pid: u32, since: String },
 }
 
-/// A Plan, for the Dispatch column: its head (counts, PR) and its latest PR feedback.
+/// A Plan, for the Dispatch column: its head (counts, PR), its label, its PR's row and its latest PR feedback.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlanCard {
     pub head: PlanHead,
+    /// The Lead Session's name: the Plan's label, as its tab's (commands.md §13.2).
+    pub label: String,
+    /// The PR as the column draws it; `None` when the Plan has no PR.
+    pub pr: Option<PrRow>,
     pub feedback: Option<PrFeedback>,
+}
+
+/// A Plan's PR: number, state, and what `pr poll` last stored (contract §4.5, §7.6).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrRow {
+    pub number: i64,
+    pub state: PrState,
+    /// `None` until the PR's first poll: the three columns are stored together.
+    pub polled: Option<PolledPr>,
+}
+
+/// What a poll read from the PR.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PolledPr {
+    pub title: String,
+    pub decision: ReviewDecision,
+    pub checks: Checks,
+}
+
+/// The PR's review decision, from `plans.pr_review_decision`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReviewDecision {
+    None,
+    Approved,
+    ChangesRequested,
 }
 
 /// The Plan's latest `pr-feedback` Event (§5.2).
@@ -102,19 +133,73 @@ pub fn widgets(store: &mut Store, concurrency: u32, recent: u32) -> Result<Widge
         Ok(Widgets {
             slots: slots(conn, concurrency)?,
             engine: engine(conn)?,
-            plans: plan_heads(conn, None)?
-                .into_iter()
-                .map(|head| {
-                    // Only a Plan with a PR has feedback: one query per PR, not per Plan.
-                    let feedback = if head.pr.is_some() { feedback(conn, &head.id)? } else { None };
-                    Ok(PlanCard { feedback, head })
-                })
-                .collect::<Result<_, CpdError>>()?,
+            plans: plan_cards(conn)?,
             escalations: escalations(conn)?,
             events: recent_events(conn, recent)?,
             events_cursor: highest_id(conn)?,
         })
     })
+}
+
+fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
+    let labels = labels(conn)?;
+    let mut polled = polled(conn)?;
+    plan_heads(conn, None)?
+        .into_iter()
+        .map(|head| {
+            let label = labels
+                .get(head.id.as_str())
+                .cloned()
+                .ok_or_else(|| bad_row(format!("Plan {} has no Lead Session {}", head.id, head.lead_session)))?;
+            let pr = head.pr.as_ref().map(|pr| PrRow {
+                number: pr.number,
+                state: pr.state,
+                polled: polled.remove(head.id.as_str()),
+            });
+            // Only a Plan with a PR has feedback: one query per PR, not per Plan.
+            let feedback = if head.pr.is_some() { feedback(conn, &head.id)? } else { None };
+            Ok(PlanCard { label, pr, feedback, head })
+        })
+        .collect()
+}
+
+/// Plan id → its Lead Session's name.
+fn labels(conn: &Connection) -> Result<BTreeMap<String, String>, CpdError> {
+    let mut stmt = conn.prepare("SELECT p.id, s.name FROM plans p JOIN sessions s ON s.id = p.lead_session")?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+/// Plan id → what `pr poll` stored, for the Plans it has polled.
+fn polled(conn: &Connection) -> Result<BTreeMap<String, PolledPr>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, pr_title, pr_review_decision, pr_checks FROM plans
+          WHERE pr_title IS NOT NULL OR pr_review_decision IS NOT NULL OR pr_checks IS NOT NULL",
+    )?;
+    let mut rows = stmt.query([])?;
+    let mut out = BTreeMap::new();
+    while let Some(r) = rows.next()? {
+        let plan: String = r.get(0)?;
+        let (title, decision, checks): (Option<String>, Option<String>, Option<String>) = (r.get(1)?, r.get(2)?, r.get(3)?);
+        let (Some(title), Some(decision), Some(checks)) = (title, decision, checks) else {
+            return Err(bad_row(format!("Plan {plan} has only some of pr_title, pr_review_decision and pr_checks")));
+        };
+        let decision = match decision.as_str() {
+            "none" => ReviewDecision::None,
+            "approved" => ReviewDecision::Approved,
+            "changes_requested" => ReviewDecision::ChangesRequested,
+            _ => return Err(bad_row(format!("Plan {plan} has pr_review_decision {decision:?}"))),
+        };
+        let checks = match checks.as_str() {
+            "none" => Checks::None,
+            "passed" => Checks::Passed,
+            "pending" => Checks::Pending,
+            "failed" => Checks::Failed,
+            _ => return Err(bad_row(format!("Plan {plan} has pr_checks {checks:?}"))),
+        };
+        out.insert(plan, PolledPr { title, decision, checks });
+    }
+    Ok(out)
 }
 
 fn slots(conn: &Connection, limit: u32) -> Result<Slots, CpdError> {

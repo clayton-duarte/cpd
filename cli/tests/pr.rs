@@ -14,6 +14,7 @@ use cpd2::home::CpdHome;
 use cpd2::ids::{AttemptId, PlanId};
 use cpd2::merge::RepoLock;
 use cpd2::store::Store;
+use cpd2::tui::read::{self, Checks, PrState, ReviewDecision};
 use rusqlite::params;
 use serde_json::{Value, json};
 
@@ -695,6 +696,50 @@ fn poll_maps_gh_review_decisions_and_check_conclusions() {
         assert_eq!((out["review_decision"].as_str(), out["checks"].as_str()), (Some(want_decision), Some(want_checks)), "{decision} {checks}");
         assert_eq!(fx.pr_data(), Some(("T".into(), want_decision.into(), want_checks.into())), "{decision} {checks}");
     }
+}
+
+/// The Dispatch column's read of the Plan: label, number, state, checks, decision, title.
+fn dispatch_card(fx: &Fx) -> (String, Option<(i64, PrState, Option<(String, ReviewDecision, Checks)>)>) {
+    let widgets = read::widgets(&mut fx.store(), 4, 10).unwrap();
+    assert_eq!(widgets.plans.len(), 1);
+    let card = widgets.plans.into_iter().next().unwrap();
+    let pr = card.pr.map(|pr| (pr.number, pr.state, pr.polled.map(|p| (p.title, p.decision, p.checks))));
+    (card.label, pr)
+}
+
+#[test]
+fn dispatch_rows_carry_label_number_state_checks_decision_and_title() {
+    let fx = fx("pr");
+    // Before the first poll the PR's number and state are known, what a poll reads is not.
+    assert_eq!(dispatch_card(&fx), ("Lead".into(), Some((812, PrState::Open, None))));
+
+    fx.gh(
+        "view.json",
+        r#"{"state":"OPEN","mergedAt":null,"title":"Add the payment webhook","reviewDecision":"CHANGES_REQUESTED",
+            "statusCheckRollup":[{"name":"ci","conclusion":"FAILURE"}],"reviews":[],"comments":[]}"#,
+    );
+    fx.pr("poll").ok();
+    assert_eq!(
+        dispatch_card(&fx),
+        ("Lead".into(), Some((812, PrState::Open, Some((TITLE.into(), ReviewDecision::ChangesRequested, Checks::Failed)))))
+    );
+
+    fx.gh(
+        "view.json",
+        r#"{"state":"MERGED","mergedAt":"2026-10-14T10:00:00Z","title":"Add the payment webhook","reviewDecision":"APPROVED",
+            "statusCheckRollup":[{"name":"ci","conclusion":"SUCCESS"}],"reviews":[],"comments":[]}"#,
+    );
+    fx.pr("poll").ok();
+    assert_eq!(
+        dispatch_card(&fx),
+        ("Lead".into(), Some((812, PrState::Merged, Some((TITLE.into(), ReviewDecision::Approved, Checks::Passed)))))
+    );
+}
+
+#[test]
+fn a_plan_without_a_pr_has_a_label_and_no_pr_row() {
+    let fx = fx("dispatch");
+    assert_eq!(dispatch_card(&fx), ("Lead".into(), None));
 }
 
 #[test]

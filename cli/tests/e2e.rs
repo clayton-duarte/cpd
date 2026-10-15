@@ -59,7 +59,7 @@ const GH: &str = r#"
 case "$1 $2" in
   "pr list") echo '[]' ;;
   "pr create") echo 'https://github.com/acme/pay/pull/7' ;;
-  "pr view") echo '{"state":"OPEN","mergedAt":null,"statusCheckRollup":[{"name":"ci","conclusion":"SUCCESS"}],"reviews":[{"id":"PRR_1","author":{"login":"ann"},"state":"CHANGES_REQUESTED","body":"Rename it."}],"comments":[]}' ;;
+  "pr view") echo '{"state":"OPEN","mergedAt":null,"title":"Pay","reviewDecision":"","statusCheckRollup":[{"name":"ci","conclusion":"SUCCESS"}],"reviews":[{"id":"PRR_1","author":{"login":"ann"},"state":"CHANGES_REQUESTED","body":"Rename it."}],"comments":[]}' ;;
   "api repos/{owner}/{repo}/pulls/7/comments") echo '[]' ;;
   *) echo "unexpected gh call: $*" >&2; exit 9 ;;
 esac
