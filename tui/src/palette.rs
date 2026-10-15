@@ -61,7 +61,7 @@ impl Meaning {
 pub fn color(m: Meaning) -> Color {
     match m {
         Meaning::NotStarted => Color::White,
-        Meaning::InProgress => Color::Cyan,
+        Meaning::InProgress => Color::Green,
         Meaning::Review => Color::Yellow,
         Meaning::Done => Color::Blue,
         Meaning::Failed => Color::Red,
@@ -184,7 +184,7 @@ mod tests {
     fn every_meaning_has_its_colour() {
         let table = [
             (Meaning::NotStarted, Color::White),
-            (Meaning::InProgress, Color::Cyan),
+            (Meaning::InProgress, Color::Green),
             (Meaning::Review, Color::Yellow),
             (Meaning::Done, Color::Blue),
             (Meaning::Failed, Color::Red),
@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn the_dot_is_filled_when_the_session_needs_you_and_coloured_by_phase() {
-        assert_eq!(dot(true, Some("dispatch")), Span::styled("●", Style::new().fg(Color::Cyan)));
+        assert_eq!(dot(true, Some("dispatch")), Span::styled("●", Style::new().fg(Color::Green)));
         assert_eq!(dot(false, Some("pr")), Span::styled("○", Style::new().fg(Color::Yellow)));
         assert_eq!(dot(false, None), Span::styled("○", Style::new().fg(Color::DarkGray)));
     }
