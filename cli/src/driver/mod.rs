@@ -7,7 +7,7 @@
 //! - `ledger`: the Attempt as the driver reads it, and the ends before a merge;
 //! - `worker`: the Worker Spec, the Worker's pane, its session file.
 
-mod ledger;
+pub(crate) mod ledger;
 mod lock;
 mod run;
 mod start;

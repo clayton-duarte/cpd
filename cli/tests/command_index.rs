@@ -83,8 +83,6 @@ const PENDING: &[(&[&str], &str)] = &[
     // session
     // events
     // watch
-    (&["watch"], "watch"),
-    (&["watch", "--ensure"], "watch"),
     // tui
     (&["tui"], "tui"),
     (&["tui", "--attach"], "tui"),
