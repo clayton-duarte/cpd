@@ -1,7 +1,7 @@
 # cpd-tui
 
 The cpd cockpit: ratatui views (`context`, `plan`, `dispatch`, `worker <session.jsonl> <job>`) that each run in a pane of a
-tmux session. tmux draws the border and the one header of each pane (`scripts/tmux.conf`, `pane-border-format`); the
+tmux session (`legend` runs in a popup). tmux draws the border and the one header of each pane (`scripts/tmux.conf`, `pane-border-format`); the
 views draw only content.
 
 ## Conventions
@@ -10,6 +10,24 @@ Views use ratatui's widgets and layout as much as possible: `Layout`/`Constraint
 selection and scrolling, `Paragraph`, `Block`, `Scrollbar`, `Line`/`Span` alignment, and `tui-tree-widget` for trees. Hand-written
 drawing is only for what has no widget, with a comment saying why: the flowchart's edges, and the Context column's counters
 layer (a right-aligned `Line` per tree row, since the tree widget draws one text per row).
+
+## Palette and legend
+
+`src/palette.rs` is the only place with colours and status icons: a `Meaning` (not started white, in progress yellow, waiting
+on review cyan, done green, failed red, planning magenta, grounding blue, nothing dark grey) and the mappings from Job status,
+phase, PR state and PR checks to `(icon, Meaning)`. Every view takes both from it, so changing one changes it everywhere;
+the test `no_colour_outside_the_palette` fails when another `src/*.rs` names a colour.
+
+| Job status | queued | running | in review | merged | failed | draft | unknown |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Icon | `○` | `◐` | `◉` | `✓` | `✗` | `◌` | `?` |
+
+`●` means only "needs you" (the Context dot); PR checks are `✓ ✗ … –`.
+
+`cpd-tui legend` (`src/legend.rs`) draws the meanings, each Job status as a Plan pill and a Context counter, the Context dots
+by phase, the PR states and the checks, built from the palette only. Any key or click closes it. The Context pane's bottom
+row is the ` ? legend ` button (also the key `?`): it runs `tmux -L <socket> display-popup -E -T ' legend ' -w <w> -h <h>
+'<binary> legend'`, sized to the legend and capped at the client's size, so it floats over the whole cockpit.
 
 ## Build
 
@@ -54,21 +72,19 @@ A session row is guide, dot, name (cut with `…` before the counters), and its 
 queued (drafts in phase `plan`), running, in review, merged, failed. Cancelled Jobs are not counted; a session with no
 Workflow shows no counters. Zeros are dark grey, the `⋅` separators grey.
 
-| Dot colour (Workflow phase) | none | context | plan | dispatch | pr | done |
-| --- | --- | --- | --- | --- | --- | --- |
-| | dark grey | blue | magenta | yellow | cyan | green |
-
-| Counter colour (Job status) | queued | running | in review | merged | failed |
-| --- | --- | --- | --- | --- | --- |
-| | white | yellow | cyan | green | red |
+Colours are the palette's: the dot's is the Workflow's phase (none dark grey, context blue, plan magenta, dispatch yellow,
+pr cyan, done green); a counter's is its Job status (queued white, running yellow, in review cyan, merged green, failed red;
+zeros and the drafts of phase `plan` dark grey).
 
 A Context's dot has the colour of the busiest phase inside (dispatch > plan > context > pr > done > none). The selected row
 is drawn reversed across the full width. Keys: ↑↓/jk move; Space or Enter on a Context collapses or expands it; Enter or a
-click on a session switches the centre to it (a click on a Context toggles it); `n` and `x` below.
+click on a session switches the centre to it (a click on a Context toggles it); `?` or a click on the bottom row opens the
+legend; `n` and `x` below. The tree scrolls above the button.
 
 **● needs you, ○ does not.** A session needs you when its Lead waits on the User, or finished a turn the User has not seen.
 `tmux-agent-state.ts` publishes the pane options for it: `@asking` (1 while a tool named `ask_*` runs, and after a
-`cpd_plan_review` or `plannotator` call until the next input) and `@settled_at` (epoch seconds of the last `agent_settled`).
+`cpd_plan_review` or `plannotator` call until the next run starts: `agent_start` fires for the decision message cpd sends with
+`triggerTurn`, which fires no `input`; the User typing clears it too) and `@settled_at` (epoch seconds of the last `agent_settled`).
 The Context view stamps `@seen_at` on the chat pane in the centre at every refresh and when switching. A session needs you
 when `@asking` is 1, or when it is idle and `@settled_at` is after `@seen_at` (never seen counts as 0). A pi that started
 before the extension had these options keeps publishing neither, so it shows ○ until it restarts.
@@ -91,7 +107,7 @@ Do not run `cockpit.sh` while a Lead's pi runs elsewhere on the same session fil
 ## Plan view
 
 The Plan view draws the Workflow as a vertical flowchart (`src/flow.rs`, a pure layout the view blits into the frame):
-one-row pills ` <icon> <key> <tier>[ aN] ` in black on the status colour, two rows per level (pills, then edges in dim
+one-row pills ` <icon> <key> <tier>[ aN] ` in black on the status colour (the palette's), two rows per level (pills, then edges in dim
 box-drawing). A Job sits one level below the deepest Job it needs; a level is ordered by its parents' positions. An edge
 that skips levels runs in a lane to the right of every pill. Keys are truncated with `…` (down to 6 characters) when a
 level is too wide; beyond that the chart scrolls horizontally. Cancelled Jobs are hidden (`N cancelled hidden` in the
