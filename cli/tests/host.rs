@@ -94,6 +94,31 @@ fn starts_the_server_once_with_the_contract_options() {
 }
 
 #[test]
+fn create_session_returns_the_first_window_and_pane_once() {
+    let s = server();
+    let mut spawn = sleeper(s.env.root());
+    spawn.env.insert("CPD2_HOST_TEST_VAR".into(), "pay".into());
+    let (window, pane) = s.tmux.create_session("cpd", "park-x", &spawn).unwrap().expect("created");
+    // -e reaches the first pane only, not the session's later windows.
+    let session_env = s.env.tmux(&["show-environment", "-t", "=cpd"]);
+    assert!(!String::from_utf8_lossy(&session_env.stdout).contains("CPD2_HOST_TEST_VAR"), "{session_env:?}");
+    let later = s.tmux.new_window("cpd", "later", &sh("echo \"plan=$CPD2_HOST_TEST_VAR\"; sleep 600")).unwrap().1;
+    wait_for("the later window's output", || {
+        let out = s.env.tmux(&["capture-pane", "-p", "-t", later.as_str()]);
+        String::from_utf8_lossy(&out.stdout).contains("plan=")
+    });
+    let out = s.env.tmux(&["capture-pane", "-p", "-t", later.as_str()]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("plan=\n"), "{out:?}");
+    assert_eq!(s.tmux.global_option("remain-on-exit").unwrap(), "on", "a fresh server gets the contract options");
+    let panes = s.tmux.list_panes().unwrap();
+    let first = self::pane(&panes, &pane);
+    assert_eq!((&first.window, first.window_name.as_str()), (&window, "park-x"));
+    // Idempotent: the session exists, nothing is created.
+    assert_eq!(s.tmux.create_session("cpd", "park-y", &sleeper(s.env.root())).unwrap(), None);
+    assert_eq!(s.tmux.list_panes().unwrap().len(), 2);
+}
+
+#[test]
 fn builds_the_cockpit_and_finds_its_panes_by_option() {
     let s = server();
     let t = &s.tmux;

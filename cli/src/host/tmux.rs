@@ -247,25 +247,45 @@ impl Tmux {
     /// Returns whether it created the session. Idempotent; a concurrent creator
     /// winning the race is not an error.
     pub fn ensure_session(&self, name: &str, window: &str, spawn: &Spawn) -> Result<bool, CpdError> {
+        Ok(self.create_session(name, window, spawn)?.is_some())
+    }
+
+    /// [`Tmux::ensure_session`], returning the ids of the first window and its
+    /// pane when it created the session (`-P -F '#{window_id} #{pane_id}'`),
+    /// `None` when the session already existed.
+    ///
+    /// `new-session -e` sets the variables in the new session's environment,
+    /// which every later window of the session would inherit (tmux(1)); they
+    /// are unset from it at once (`set-environment -u`), so like
+    /// [`Tmux::new_window`]'s `-e` they reach only this first pane.
+    pub fn create_session(&self, name: &str, window: &str, spawn: &Spawn) -> Result<Option<(WindowId, PaneId)>, CpdError> {
         let fresh = !self.server_running()?;
         if !fresh && self.has_session(name)? {
-            return Ok(false);
+            return Ok(None);
         }
         let mut args = strings(&["new-session", "-d", "-s", name, "-n", window]);
         args.extend(strings(&["-x", &SESSION_WIDTH.to_string(), "-y", &SESSION_HEIGHT.to_string()]));
         spawn.push_args(&mut args);
+        args.extend(strings(&["-P", "-F", "#{window_id} #{pane_id}"]));
         spawn.push_argv(&mut args);
         let out = self.output(&args)?;
         if !out.status.success() {
             if self.has_session(name)? {
-                return Ok(false);
+                return Ok(None);
             }
             return Err(self.failed(&args, &out));
+        }
+        let printed = String::from_utf8_lossy(&out.stdout);
+        let ids = printed.trim_end_matches('\n');
+        let parsed = ids.split_once(' ').and_then(|(w, p)| Some((WindowId::parse(w)?, PaneId::parse(p)?)));
+        let parsed = parsed.ok_or_else(|| self.unexpected(&args, ids))?;
+        for key in spawn.env.keys() {
+            self.run(&strings(&["set-environment", "-t", &format!("={name}"), "-u", key]))?;
         }
         if fresh {
             self.set_server_options()?;
         }
-        Ok(true)
+        Ok(Some(parsed))
     }
 
     /// Sets the global options of contract §6.1.
