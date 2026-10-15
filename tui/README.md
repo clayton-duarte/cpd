@@ -13,8 +13,8 @@ layer (a right-aligned `Line` per tree row, since the tree widget draws one text
 
 ## Palette and legend
 
-`src/palette.rs` is the only place with colours and status icons: a `Meaning` (not started white, in progress yellow, waiting
-on review cyan, done green, failed red, planning magenta, grounding blue, nothing dark grey) and the mappings from Job status,
+`src/palette.rs` is the only place with colours and status icons: a `Meaning` (not started white, in progress cyan, waiting
+on review yellow, done green, failed red, planning magenta, grounding blue, nothing dark grey) and the mappings from Job status,
 phase, PR state and PR checks to `(icon, Meaning)`. Every view takes both from it, so changing one changes it everywhere;
 the test `no_colour_outside_the_palette` fails when another `src/*.rs` names a colour.
 
@@ -72,8 +72,8 @@ A session row is guide, dot, name (cut with `…` before the counters), and its 
 queued (drafts in phase `plan`), running, in review, merged, failed. Cancelled Jobs are not counted; a session with no
 Workflow shows no counters. Zeros are dark grey, the `⋅` separators grey.
 
-Colours are the palette's: the dot's is the Workflow's phase (none dark grey, context blue, plan magenta, dispatch yellow,
-pr cyan, done green); a counter's is its Job status (queued white, running yellow, in review cyan, merged green, failed red;
+Colours are the palette's: the dot's is the Workflow's phase (none dark grey, context blue, plan magenta, dispatch cyan,
+pr yellow, done green); a counter's is its Job status (queued white, running cyan, in review yellow, merged green, failed red;
 zeros and the drafts of phase `plan` dark grey).
 
 A Context's dot has the colour of the busiest phase inside (dispatch > plan > context > pr > done > none). The selected row

@@ -59,8 +59,8 @@ impl Meaning {
 pub fn color(m: Meaning) -> Color {
     match m {
         Meaning::NotStarted => Color::White,
-        Meaning::InProgress => Color::Yellow,
-        Meaning::Review => Color::Cyan,
+        Meaning::InProgress => Color::Cyan,
+        Meaning::Review => Color::Yellow,
         Meaning::Done => Color::Green,
         Meaning::Failed => Color::Red,
         Meaning::Planning => Color::Magenta,
@@ -185,8 +185,8 @@ mod tests {
     fn every_meaning_has_its_colour() {
         let table = [
             (Meaning::NotStarted, Color::White),
-            (Meaning::InProgress, Color::Yellow),
-            (Meaning::Review, Color::Cyan),
+            (Meaning::InProgress, Color::Cyan),
+            (Meaning::Review, Color::Yellow),
             (Meaning::Done, Color::Green),
             (Meaning::Failed, Color::Red),
             (Meaning::Planning, Color::Magenta),
@@ -236,8 +236,8 @@ mod tests {
 
     #[test]
     fn the_dot_is_filled_when_the_session_needs_you_and_coloured_by_phase() {
-        assert_eq!(dot(true, Some("dispatch")), Span::styled("●", Style::new().fg(Color::Yellow)));
-        assert_eq!(dot(false, Some("pr")), Span::styled("○", Style::new().fg(Color::Cyan)));
+        assert_eq!(dot(true, Some("dispatch")), Span::styled("●", Style::new().fg(Color::Cyan)));
+        assert_eq!(dot(false, Some("pr")), Span::styled("○", Style::new().fg(Color::Yellow)));
         assert_eq!(dot(false, None), Span::styled("○", Style::new().fg(Color::DarkGray)));
     }
 
@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn a_pill_is_black_on_the_colour() {
-        assert_eq!(pill(Meaning::Review), Style::new().fg(Color::Black).bg(Color::Cyan));
+        assert_eq!(pill(Meaning::Review), Style::new().fg(Color::Black).bg(Color::Yellow));
     }
 
     #[test]
