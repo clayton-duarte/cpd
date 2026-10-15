@@ -14,7 +14,7 @@ use std::{
 use serde_json::Value;
 
 /// The `tmux list-panes -a -F` format that `parse_panes` reads.
-pub const PANE_FORMAT: &str = "#{pane_id}\t#{window_name}\t#{@session_id}\t#{@session_file}\t#{@session_name}\t#{@agent_state}\t#{pane_current_path}";
+pub const PANE_FORMAT: &str = "#{pane_id}\t#{window_name}\t#{@session_id}\t#{@session_file}\t#{@session_name}\t#{@agent_state}\t#{pane_current_path}\t#{@asking}\t#{@settled_at}\t#{@seen_at}";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Session {
@@ -27,6 +27,12 @@ pub struct Session {
     pub state: String,
     /// The session's project directory: its file's header `cwd`, else the pane's `pane_current_path`.
     pub cwd: String,
+    /// `@asking`: the Lead waits on the User (an `ask_` tool runs, or a plan review is open).
+    pub asking: bool,
+    /// `@settled_at`: epoch seconds of the Lead's last `agent_settled`; `None` when never published.
+    pub settled_at: Option<u64>,
+    /// `@seen_at`: epoch seconds the Context view last saw this session in the centre; `None` when never.
+    pub seen_at: Option<u64>,
 }
 
 impl Session {
@@ -72,7 +78,7 @@ pub fn parse_panes(listing: &str) -> Vec<Session> {
         .lines()
         .filter_map(|line| {
             let f: Vec<&str> = line.split('\t').collect();
-            (f.len() == 7 && !f[2].is_empty()).then(|| Session {
+            (f.len() == 10 && !f[2].is_empty()).then(|| Session {
                 pane_id: f[0].into(),
                 window: f[1].into(),
                 id: f[2].into(),
@@ -80,6 +86,9 @@ pub fn parse_panes(listing: &str) -> Vec<Session> {
                 name: f[4].into(),
                 state: f[5].into(),
                 cwd: if f[3].is_empty() { None } else { cached_header_cwd(f[3]) }.unwrap_or_else(|| f[6].into()),
+                asking: f[7] == "1",
+                settled_at: f[8].parse().ok(),
+                seen_at: f[9].parse().ok(),
             })
         })
         .collect()
@@ -135,18 +144,20 @@ mod tests {
     use super::*;
 
     const LISTING: &str = "\
-%0\tmain\t\t\t\t\t/home/u/projects/cpd
-%1\tmain\tbbbb2222-x\t/s/b.jsonl\tReviewer\tidle\t/home/u/projects/cpd
-%2\tpark-cpd-rust\taaaa1111-x\t/s/a.jsonl\t\tworking\t/home/u/projects/cpd
-%3\tpark-other\tcccc3333-x\t\t\t\t/home/u/projects/other
+%0\tmain\t\t\t\t\t/home/u/projects/cpd\t\t\t
+%1\tmain\tbbbb2222-x\t/s/b.jsonl\tReviewer\tidle\t/home/u/projects/cpd\t\t200\t100
+%2\tpark-cpd-rust\taaaa1111-x\t/s/a.jsonl\t\tworking\t/home/u/projects/cpd\t1\t\t
+%3\tpark-other\tcccc3333-x\t\t\t\t/home/u/projects/other\t\t\t
 garbage line
-%4\tmain\t\t\t\t\t/tmp";
+%4\tmain\t\t\t\t\t/tmp\t\t\t";
 
     #[test]
     fn only_panes_with_a_session_id_are_chats() {
         let s = parse_panes(LISTING);
         assert_eq!(s.iter().map(|s| s.pane_id.as_str()).collect::<Vec<_>>(), ["%1", "%2", "%3"]);
-        assert_eq!(s[0], Session { pane_id: "%1".into(), window: "main".into(), id: "bbbb2222-x".into(), file: "/s/b.jsonl".into(), name: "Reviewer".into(), state: "idle".into(), cwd: "/home/u/projects/cpd".into() });
+        assert_eq!(s[0], Session { pane_id: "%1".into(), window: "main".into(), id: "bbbb2222-x".into(), file: "/s/b.jsonl".into(), name: "Reviewer".into(), state: "idle".into(), cwd: "/home/u/projects/cpd".into(), asking: false, settled_at: Some(200), seen_at: Some(100) });
+        assert_eq!((s[1].asking, s[1].settled_at, s[1].seen_at), (true, None, None));
+        assert_eq!((s[2].asking, s[2].settled_at, s[2].seen_at), (false, None, None));
         assert!(s[0].is_active() && !s[1].is_active());
     }
 
@@ -212,7 +223,7 @@ not json
     }
 
     fn listing_for(file: &Path) -> String {
-        format!("%1\tmain\tid1\t{}\t\tidle\t/tmp", file.display())
+        format!("%1\tmain\tid1\t{}\t\tidle\t/tmp\t\t\t", file.display())
     }
 
     #[test]

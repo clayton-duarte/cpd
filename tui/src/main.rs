@@ -25,13 +25,14 @@ use ratatui::{
         event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind},
         execute,
     },
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Position, Rect},
     style::{Color, Style, Stylize},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
     DefaultTerminal,
 };
 use serde_json::Value;
+use tui_tree_widget::TreeState;
 
 mod actions;
 mod context;
@@ -158,6 +159,20 @@ fn switch_to(id: &str) {
             tmux(&["swap-pane", "-d", "-s", &t.pane_id, "-t", &c.pane_id]);
         }
     }
+    mark_seen();
+}
+
+/// Stamp `@seen_at` (epoch seconds) on the chat pane in the centre slot: the User sees that session now, so a turn it
+/// settled before this moment is no longer unseen (`context::needs_you`).
+fn mark_seen() {
+    let now = now_secs().to_string();
+    for line in tmux(&["list-panes", "-t", &format!("{}:main", session()), "-F", "#{pane_id} #{@session_id}"]).lines() {
+        if let Some((pane, id)) = line.split_once(' ') {
+            if !id.is_empty() {
+                tmux(&["set", "-p", "-t", pane, "@seen_at", &now]);
+            }
+        }
+    }
 }
 
 // ---------- cache (one fetcher writes, every view reads) ----------
@@ -242,72 +257,79 @@ fn snapshot() -> Vec<(String, Vec<Entry>)> {
         .collect()
 }
 
-#[derive(Clone, Default)]
-struct PlanSummary {
-    phase: String,
-    merged: usize,
-    total: usize,
-    failed: usize,
+/// A session's Workflow as the Context column shows it, from the cached `cpd workflow show`; `None` until it is fetched.
+fn workflow_summary(plan: &str) -> Option<context::Workflow> {
+    let v = read_json(&cache_file(plan))?;
+    let phase = v["phase"].as_str()?.to_string();
+    let counts = context::count_jobs(&phase, v["jobs"].as_array()?.iter().filter_map(|j| j["status"].as_str()));
+    Some(context::Workflow { phase, counts })
 }
 
-fn summarize(plan: &str) -> PlanSummary {
-    let v = read_json(&cache_file(plan)).unwrap_or(Value::Null);
-    let jobs: Vec<&Value> = v["jobs"].as_array().map(|a| a.iter().filter(|j| j["status"] != "cancelled").collect()).unwrap_or_default();
-    PlanSummary {
-        phase: v["phase"].as_str().unwrap_or("?").to_string(),
-        merged: jobs.iter().filter(|j| j["status"] == "closed").count(),
-        total: jobs.len(),
-        failed: jobs.iter().filter(|j| j["status"] == "failed").count(),
-    }
-}
-
-/// One session's line: branch, state icon, label, then its Workflow's phase, merged/total and failed (none when unattached).
-fn session_line(e: &Entry, last: bool, selected: bool) -> Line<'static> {
-    let (icon, color) = context::state_icon(&e.session.state);
-    let label = if e.session.is_active() { e.label.clone().cyan().bold() } else { Span::from(e.label.clone()) };
-    let mut spans = vec![format!(" {} ", if last { "└" } else { "├" }).into(), icon.fg(color), " ".into(), label];
-    if let Some(wf) = &e.workflow {
-        let p = summarize(wf);
-        spans.push(format!("  {}", p.phase).dim());
-        spans.push(format!("  {}/{}", p.merged, p.total).fg(Color::Green));
-        if p.failed > 0 {
-            spans.push(format!(" ✗{}", p.failed).fg(Color::Red));
-        }
-    }
-    let line = Line::from(spans);
-    if selected { line.reversed() } else { line }
-}
-
-fn context_line(name: &str, collapsed: bool, selected: bool) -> Line<'static> {
-    let line = Line::from(vec![format!("{} ", if collapsed { "▸" } else { "▾" }).into(), name.to_string().bold(), "  (Context)".dim()]);
-    if selected { line.reversed() } else { line }
+/// The Context column's rows from the sessions grouped by Context.
+fn context_rows(groups: &[(String, Vec<Entry>)]) -> Vec<context::ContextRow> {
+    groups
+        .iter()
+        .map(|(name, list)| context::ContextRow {
+            name: name.clone(),
+            sessions: list
+                .iter()
+                .map(|e| context::SessionRow {
+                    id: e.session.id.clone(),
+                    label: e.label.clone(),
+                    active: e.session.is_active(),
+                    needs_you: context::needs_you(e.session.asking, &e.session.state, e.session.settled_at, e.session.seen_at),
+                    workflow: e.workflow.as_deref().and_then(workflow_summary),
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 fn target_of(e: &Entry) -> prompt::Target {
     prompt::Target { id: e.session.id.clone(), label: e.label.clone(), working: e.session.state == "working" }
 }
 
+/// The Context view's data: the sessions, the tree's rows, and the tree's state.
+struct ContextData {
+    groups: Vec<(String, Vec<Entry>)>,
+    rows: Vec<context::ContextRow>,
+    state: TreeState<String>,
+    known: HashSet<String>,
+}
+
+impl ContextData {
+    /// Stamp the centre chat as seen, re-read the sessions, and keep the selection on its row.
+    fn refresh(&mut self) {
+        mark_seen(); // before reading: the session in the centre never shows as unseen
+        let before = context::selected_index(&self.state, &self.rows);
+        self.groups = snapshot();
+        self.rows = context_rows(&self.groups);
+        context::open_new(&mut self.state, &mut self.known, &self.rows);
+        context::reselect(&mut self.state, &self.rows, before);
+    }
+
+    /// The selected row's session; `None` on a Context row.
+    fn selected_session(&self) -> Option<&Entry> {
+        let id = self.state.selected().get(1)?;
+        self.groups.iter().flat_map(|(_, l)| l).find(|e| &e.session.id == id)
+    }
+}
+
 fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
     thread::spawn(fetch_loop);
-    let mut collapsed: HashSet<String> = HashSet::new();
-    let mut selected = 0usize; // index into the visible rows
-    let mut area = Rect::default();
-    let mut groups = snapshot();
+    let mut data = ContextData { groups: Vec::new(), rows: Vec::new(), state: TreeState::default(), known: HashSet::new() };
+    data.refresh();
     let mut last_refresh = Instant::now();
     let mut prompt: Option<Prompt> = None;
     let mut note = String::new(); // the one-line result or refusal of the last action, until the next key
     loop {
         if last_refresh.elapsed() > Duration::from_secs(1) {
-            groups = snapshot();
+            data.refresh();
             last_refresh = Instant::now();
         }
-        let shapes: Vec<context::Shape> = groups.iter().map(|(c, l)| context::Shape { sessions: l.len(), collapsed: collapsed.contains(c) }).collect();
-        let flat: Vec<&Entry> = groups.iter().flat_map(|(_, l)| l).collect();
-        let rows = context::visible_rows(&shapes);
-        selected = selected.min(rows.len().saturating_sub(1));
         terminal
             .draw(|f| {
-                area = f.area();
+                let area = f.area();
                 let footer = prompt.as_ref().map(Prompt::text).unwrap_or_else(|| note.clone());
                 let width = area.width.max(1) as usize;
                 let wrapped = footer.chars().count().div_ceil(width);
@@ -317,28 +339,13 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
                     let style = if prompt.is_some() { Style::new().fg(Color::Yellow).bold() } else { Style::new().fg(Color::Yellow) };
                     f.render_widget(Paragraph::new(footer).style(style).wrap(Wrap { trim: false }), footer_area);
                 }
-                let lines: Vec<Line> = rows
-                    .iter()
-                    .enumerate()
-                    .map(|(i, row)| match *row {
-                        context::Row::Context(g) => context_line(&groups[g].0, shapes[g].collapsed, i == selected),
-                        context::Row::Session(n) => {
-                            let last = flat.get(n + 1).is_none_or(|next| next.session.context() != flat[n].session.context());
-                            session_line(flat[n], last, i == selected)
-                        }
-                    })
-                    .collect();
-                if lines.is_empty() {
-                    f.render_widget(Paragraph::new(Line::from(" no Lead sessions in the cockpit".dim())), list_area);
-                } else {
-                    f.render_widget(Paragraph::new(lines), list_area);
-                }
+                context::draw(f, list_area, &data.rows, &mut data.state);
             })
             .map_err(|e| e.to_string())?;
         if !event::poll(Duration::from_millis(250)).map_err(|e| e.to_string())? {
             continue;
         }
-        let mut activate = None;
+        let mut activate: Option<Vec<String>> = None; // a row to act on: toggle a Context, switch to a session
         let mut outcome = Outcome::Open;
         match event::read().map_err(|e| e.to_string())? {
             // an open prompt takes every key; mouse clicks are ignored meanwhile, so the target cannot be swapped into the centre
@@ -351,32 +358,36 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
                 KeyCode::Char('q') => return Ok(()),
                 KeyCode::Char('n') => {
                     note.clear();
-                    match rows.get(selected) {
-                        Some(context::Row::Session(n)) => prompt = Some(Prompt::fork(target_of(flat[*n]))),
-                        Some(context::Row::Context(_)) => note = "pick the session to fork".into(),
-                        None => {}
+                    match (data.selected_session(), data.state.selected().len()) {
+                        (Some(e), _) => prompt = Some(Prompt::fork(target_of(e))),
+                        (None, 1) => note = "pick the session to fork".into(),
+                        (None, _) => {}
                     }
                 }
                 KeyCode::Char('x') => {
                     note.clear();
-                    if let Some(context::Row::Session(n)) = rows.get(selected) {
-                        match actions::close_refusal(&discover(), &flat[*n].session.id) {
+                    if let Some(e) = data.selected_session() {
+                        match actions::close_refusal(&discover(), &e.session.id) {
                             Some(why) => note = why.into(),
-                            None => prompt = Some(Prompt::close(target_of(flat[*n]))),
+                            None => prompt = Some(Prompt::close(target_of(e))),
                         }
                     }
                 }
-                KeyCode::Down | KeyCode::Char('j') => selected = (selected + 1).min(rows.len().saturating_sub(1)),
-                KeyCode::Up | KeyCode::Char('k') => selected = selected.saturating_sub(1),
-                KeyCode::Enter => activate = rows.get(selected).copied(),
-                KeyCode::Char(' ') if matches!(rows.get(selected), Some(context::Row::Context(_))) => activate = rows.get(selected).copied(),
+                KeyCode::Down | KeyCode::Char('j') => {
+                    data.state.key_down();
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    data.state.key_up();
+                }
+                KeyCode::Enter => activate = Some(data.state.selected().to_vec()),
+                KeyCode::Char(' ') if data.state.selected().len() == 1 => activate = Some(data.state.selected().to_vec()),
                 _ => {}
             },
             Event::Mouse(m) if prompt.is_none() && m.kind == MouseEventKind::Down(MouseButton::Left) => {
                 note.clear();
-                if let Some(i) = context::row_at(&shapes, area.y, m.row) {
-                    selected = i;
-                    activate = Some(rows[i]);
+                if let Some(row) = data.state.rendered_at(Position::new(m.column, m.row)).map(<[String]>::to_vec) {
+                    data.state.select(row.clone());
+                    activate = Some(row);
                 }
             }
             _ => {}
@@ -399,19 +410,16 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
                 last_refresh = Instant::now() - Duration::from_secs(2); // the tree drops the session on this loop's refresh
             }
         }
-        match activate {
-            Some(context::Row::Context(g)) => {
-                let name = groups[g].0.clone();
-                if !collapsed.remove(&name) {
-                    collapsed.insert(name);
-                }
+        match activate.as_deref() {
+            Some([_]) => {
+                data.state.toggle_selected();
             }
-            Some(context::Row::Session(n)) => {
-                switch_to(&flat[n].session.id);
-                groups = snapshot();
+            Some([_, id]) => {
+                switch_to(id);
+                data.refresh();
                 last_refresh = Instant::now();
             }
-            None => {}
+            _ => {}
         }
     }
 }

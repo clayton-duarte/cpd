@@ -67,7 +67,7 @@ mod tests {
         assert_eq!(c, r"env CPD_TUI_SOCKET='cpd' '/r/tui/scripts/fork-lead.sh' '/s/a b.jsonl' 'u-1' 'it'\''s'");
     }
 
-    const LISTING: &str = "%1\tmain\tbbbb\t/s/b.jsonl\tB\tidle\t/p/cpd\n%2\tpark-a\taaaa\t/s/a.jsonl\tA\tworking\t/p/cpd";
+    const LISTING: &str = "%1\tmain\tbbbb\t/s/b.jsonl\tB\tidle\t/p/cpd\t\t\t\n%2\tpark-a\taaaa\t/s/a.jsonl\tA\tworking\t/p/cpd\t\t\t";
 
     #[test]
     fn the_centre_session_cannot_be_closed() {
@@ -81,7 +81,7 @@ mod tests {
 
     #[test]
     fn a_session_swapped_into_the_centre_since_the_prompt_opened_is_refused() {
-        let swapped = "%1\tpark-b\tbbbb\t/s/b.jsonl\tB\tidle\t/p/cpd\n%2\tmain\taaaa\t/s/a.jsonl\tA\tworking\t/p/cpd";
+        let swapped = "%1\tpark-b\tbbbb\t/s/b.jsonl\tB\tidle\t/p/cpd\t\t\t\n%2\tmain\taaaa\t/s/a.jsonl\tA\tworking\t/p/cpd\t\t\t";
         assert_eq!(close_refusal(&parse_panes(swapped), "aaaa"), Some("switch to another session first"));
         assert_eq!(close_refusal(&parse_panes(swapped), "bbbb"), None);
     }
