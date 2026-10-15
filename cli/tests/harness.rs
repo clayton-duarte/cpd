@@ -36,11 +36,11 @@ fn commands_get_an_isolated_environment() {
 }
 
 #[test]
-fn cpd2_runs_and_prints_one_json_value() {
+fn cpd_runs_and_prints_one_json_value() {
     let env = TestEnv::new();
-    let run = env.cpd2(&["--version"]);
+    let run = env.cpd(&["--version"]);
     assert_eq!(run.ok()["version"], env!("CARGO_PKG_VERSION"));
-    let run = env.cpd2(&["no-such-command"]);
+    let run = env.cpd(&["no-such-command"]);
     assert_eq!(run.error()["code"], "usage");
     assert_eq!(run.exit, 2);
 }
@@ -52,7 +52,7 @@ fn git_repo_has_one_commit_on_main() {
     assert!(repo.starts_with(env.root()));
     assert_eq!(env.git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
     assert_eq!(env.git(&repo, &["rev-list", "--count", "HEAD"]), "1");
-    assert_eq!(env.git(&repo, &["log", "-1", "--format=%ae"]), "test@cpd2.invalid");
+    assert_eq!(env.git(&repo, &["log", "-1", "--format=%ae"]), "test@cpd.invalid");
 }
 
 #[test]

@@ -1,13 +1,13 @@
 //! The command index of commands.md §2: every documented command exists.
 
 use clap::CommandFactory;
-use cpd2::cli::Cli;
+use cpd::cli::Cli;
 
 /// The commands of commands.md §2's table, read from the document itself,
 /// each as its words (`["context", "decide"]`, `["plan", "phase", "plan"]`).
 fn documented_commands() -> Vec<Vec<String>> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/v2/commands.md");
-    let doc = std::fs::read_to_string(path).expect("read docs/v2/commands.md");
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/commands.md");
+    let doc = std::fs::read_to_string(path).expect("read docs/commands.md");
     let section = doc.split("\n## 2. Command index\n").nth(1).expect("§2 exists");
     let section = section.split("\n## ").next().unwrap();
     let mut commands = Vec::new();
@@ -58,7 +58,7 @@ fn every_documented_command_exists() {
         // What is left must be positional arguments of a leaf command (`plan phase plan`).
         assert!(
             rest.len() < words.len() && (rest.is_empty() || !cmd.has_subcommands()),
-            "cpd2 {} is not a command",
+            "cpd {} is not a command",
             words.join(" ")
         );
     }
