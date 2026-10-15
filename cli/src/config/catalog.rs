@@ -11,9 +11,12 @@ use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
+use super::cache;
 use super::file::Config;
 use super::tier::{Catalog, Letter, TierModel, effort_of_level};
 use crate::error::{CpdError, ErrorCode};
+use crate::home::CpdHome;
+use crate::store::Store;
 
 /// The embedded module; its header says how it is run.
 const MODULE: &str = include_str!("catalog.mjs");
@@ -110,11 +113,20 @@ fn tail(bytes: &[u8]) -> String {
 /// print valid JSON), `tier_model_unknown` (a configured model is not in pi's
 /// catalog).
 ///
-/// This is the one place the catalog is obtained: it is computed on every call.
+/// This is the one place the catalog is obtained. It is cached in `tier_catalog`
+/// per pi version (commands.md §14.3): read when the cache holds the configured
+/// models under the installed pi's version; otherwise computed from pi and
+/// written in one transaction, replacing what was cached.
 pub fn load(config: &Config) -> Result<Catalog, CpdError> {
     let pi = locate_pi()?;
-    // Job rs-tiers-cache wires the tier_catalog cache here (commands.md §14.3).
-    read(&pi, config)
+    let mut store = Store::open(&CpdHome::from_env()?, config.timeouts.store_busy_ms.into())?;
+    let models = [config.tiers.o.as_str(), config.tiers.s.as_str(), config.tiers.h.as_str()];
+    if let Some(cached) = cache::read(&mut store, &pi.version, models)? {
+        return Ok(cached);
+    }
+    let catalog = read(&pi, config)?;
+    cache::write(&mut store, &catalog)?;
+    Ok(catalog)
 }
 
 /// Runs the embedded module with pi's Node and builds the [`Catalog`] from what it prints.

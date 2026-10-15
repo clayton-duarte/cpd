@@ -422,6 +422,10 @@ fn tiers_prefers_pis_own_node_over_node_on_path() {
     fs::set_permissions(pi_node.join("node"), fs::Permissions::from_mode(0o755)).unwrap();
     cpd2_isolated(&env, &["tiers"]).ok();
     assert!(env.calls("node").is_empty());
+    // The catalog is cached now; forget it so the next call reads pi again.
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = fs::remove_file(env.cpd_home().join(format!("cpd.db{suffix}")));
+    }
 
     // XDG_DATA_HOME moves it.
     let xdg = env.root().join("xdg");
@@ -573,8 +577,126 @@ fn tiers_checks_pi_before_the_catalog_and_config_before_both() {
     assert_eq!(cpd2_isolated(&env, &["tiers"]).error()["code"], "config_invalid");
 }
 
+/// The `tier_catalog` rows in `$CPD_HOME/cpd.db`: `(pi_version, letter, model, efforts)`.
+fn cached_rows(env: &TestEnv) -> Vec<(String, String, String, String)> {
+    let db = rusqlite::Connection::open_with_flags(env.cpd_home().join("cpd.db"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .expect("cpd.db exists");
+    let mut stmt = db.prepare("SELECT pi_version, letter, model, efforts FROM tier_catalog ORDER BY pi_version, letter").unwrap();
+    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().collect::<Result<_, _>>().unwrap()
+}
+
+/// The commands of the `txns` rows, oldest first.
+fn txn_commands(env: &TestEnv) -> Vec<String> {
+    let db = rusqlite::Connection::open_with_flags(env.cpd_home().join("cpd.db"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .expect("cpd.db exists");
+    let mut stmt = db.prepare("SELECT command FROM txns ORDER BY id").unwrap();
+    stmt.query_map([], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap()
+}
+
+fn row(version: &str, letter: &str, model: &str, efforts: &str) -> (String, String, String, String) {
+    (version.to_owned(), letter.to_owned(), model.to_owned(), efforts.to_owned())
+}
+
 #[test]
-fn tiers_is_idempotent_and_writes_nothing() {
+fn tiers_with_a_cold_cache_asks_pi_and_fills_the_cache() {
+    let env = TestEnv::new();
+    write_config(&env, TIERS_CONFIG);
+    install_pi(&env, "1.2.0", "", "");
+    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
+    assert!(!env.cpd_home().join("cpd.db").exists());
+    cpd2_isolated(&env, &["tiers"]).ok();
+    assert_eq!(env.calls("node").len(), 1);
+    assert_eq!(
+        cached_rows(&env),
+        [
+            row("1.2.0", "H", "p/m-low", "[0,1,2,3]"),
+            row("1.2.0", "O", "p/m-opus", "[0,1,2,3,4,5]"),
+            row("1.2.0", "S", "p/m-sonnet", "[0,1]"),
+        ]
+    );
+    // One transaction, made through the store's write API, which records it.
+    assert_eq!(txn_commands(&env), ["migrate", "tiers"]);
+}
+
+#[test]
+fn tiers_with_a_warm_cache_answers_from_it_without_node_or_a_write() {
+    let env = TestEnv::new();
+    write_config(&env, TIERS_CONFIG);
+    install_pi(&env, "1.2.0", "", "");
+    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
+    let cold = cpd2_isolated(&env, &["tiers"]);
+    cold.ok();
+    // Nothing runs node now: the cache alone answers, identically.
+    env.fake("node", "echo 'node must not run' >&2; exit 1");
+    let warm = cpd2_isolated(&env, &["tiers"]);
+    assert_eq!(warm.stdout, cold.stdout);
+    assert_eq!(env.calls("node").len(), 1, "only the cold call ran node");
+    assert_eq!(txn_commands(&env), ["migrate", "tiers"], "the warm call wrote nothing");
+}
+
+#[test]
+fn tiers_refreshes_the_cache_when_pis_current_version_changes() {
+    let env = TestEnv::new();
+    write_config(&env, TIERS_CONFIG);
+    install_pi(&env, "1.2.0", "", "");
+    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
+    cpd2_isolated(&env, &["tiers"]).ok();
+
+    install_pi(&env, "1.3.0", "", "");
+    env.fake("node", r#"echo '{"O":["off","low"],"S":["off","low"],"H":["off"]}'"#);
+    let out = cpd2_isolated(&env, &["tiers"]).ok();
+    assert_eq!(out["pi_version"], "1.3.0");
+    assert_eq!(out["tiers"]["O"]["efforts"], json!([0, 1]));
+    assert_eq!(out["tiers"]["H"]["efforts"], json!([0]));
+    // The table is append-only (§4.4): the new version's rows join the old ones.
+    assert_eq!(
+        cached_rows(&env),
+        [
+            row("1.2.0", "H", "p/m-low", "[0,1,2,3]"),
+            row("1.2.0", "O", "p/m-opus", "[0,1,2,3,4,5]"),
+            row("1.2.0", "S", "p/m-sonnet", "[0,1]"),
+            row("1.3.0", "H", "p/m-low", "[0]"),
+            row("1.3.0", "O", "p/m-opus", "[0,1]"),
+            row("1.3.0", "S", "p/m-sonnet", "[0,1]"),
+        ]
+    );
+    assert_eq!(txn_commands(&env), ["migrate", "tiers", "tiers"]);
+
+    // And the new version is warm.
+    env.fake("node", "exit 1");
+    assert_eq!(cpd2_isolated(&env, &["tiers"]).ok()["pi_version"], "1.3.0");
+}
+
+#[test]
+fn tiers_refreshes_the_cache_when_a_configured_model_changes() {
+    let env = TestEnv::new();
+    write_config(&env, TIERS_CONFIG);
+    install_pi(&env, "1.2.0", "", "");
+    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
+    cpd2_isolated(&env, &["tiers"]).ok();
+
+    write_config(&env, &TIERS_CONFIG.replace("p/m-sonnet", "p/m-other"));
+    let out = cpd2_isolated(&env, &["tiers"]).ok();
+    assert_eq!(out["tiers"]["S"]["model"], "p/m-other");
+    assert_eq!(env.calls("node").len(), 2);
+    assert!(cached_rows(&env).contains(&row("1.2.0", "S", "p/m-other", "[0,1]")));
+    // The unchanged models' rows are kept, not duplicated or rewritten.
+    assert_eq!(cached_rows(&env).len(), 4);
+}
+
+#[test]
+fn tiers_does_not_cache_a_failed_catalog() {
+    let env = TestEnv::new();
+    write_config(&env, TIERS_CONFIG);
+    install_pi(&env, "1.2.0", "", "");
+    env.fake("node", r#"echo '{"O":["off"],"S":null,"H":["off"]}'"#);
+    assert_eq!(cpd2_isolated(&env, &["tiers"]).error()["code"], "tier_model_unknown");
+    assert_eq!(cached_rows(&env), []);
+    assert_eq!(txn_commands(&env), ["migrate"]);
+}
+
+#[test]
+fn tiers_is_idempotent() {
     let env = TestEnv::new();
     write_config(&env, TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
@@ -583,9 +705,5 @@ fn tiers_is_idempotent_and_writes_nothing() {
     let second = cpd2_isolated(&env, &["tiers"]);
     first.ok();
     assert_eq!(first.stdout, second.stdout);
-    // Uncached for now: no database, nothing under $CPD_HOME but the config
-    // (Job rs-tiers-cache wires the tier_catalog cache), and it runs node each time.
-    let names: Vec<_> = fs::read_dir(env.cpd_home()).unwrap().map(|e| e.unwrap().file_name()).collect();
-    assert_eq!(names, ["config.toml"]);
-    assert_eq!(env.calls("node").len(), 2);
+    assert_eq!(env.calls("node").len(), 1);
 }

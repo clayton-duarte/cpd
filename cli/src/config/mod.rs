@@ -4,6 +4,7 @@
 //! Other areas read their keys through [`Config::load`] and the typed fields,
 //! and use Tiers through [`Tier`] and [`Catalog`] (from [`load_catalog`]).
 
+mod cache;
 mod catalog;
 mod file;
 mod tier;
