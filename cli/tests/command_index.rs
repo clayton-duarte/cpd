@@ -83,8 +83,6 @@ const PENDING: &[(&[&str], &str)] = &[
     // review
     (&["review", "decide", "api-schema-a1", "--approve", "--feedback", "Fine."], "review decide"),
     // ask
-    (&["ask", "api-schema-a1", "Which field names?"], "ask"),
-    (&["answer", "api-schema-a1-q1", "The v2 ones."], "answer"),
     // pr
     // session
     // events
