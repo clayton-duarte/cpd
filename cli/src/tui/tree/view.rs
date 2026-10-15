@@ -108,6 +108,7 @@ impl View {
                 }
             };
         }
+        self.note.clear();
         match key.code {
             KeyCode::Char('q') => return Effect::Quit,
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Up | KeyCode::Char('k') => {
@@ -123,7 +124,6 @@ impl View {
             }
             _ => {}
         }
-        self.note.clear();
         // the row under the cursor, when it is shown: the action keys act on it
         let shown = self.cursor_shown();
         let Some(row) = rows::row(&self.tree, self.state.selected()).filter(|_| shown) else { return Effect::None };

@@ -622,7 +622,7 @@ mod tests {
     fn the_keyboard_cursor_visits_every_visible_row() {
         let tree = sample();
         let mut state = state_for(&tree, &[], &[]);
-        let mut at = |state: &mut TreeState<Id>, d| {
+        let at = |state: &mut TreeState<Id>, d| {
             move_cursor(state, &tree, d);
             state.selected().to_vec()
         };
