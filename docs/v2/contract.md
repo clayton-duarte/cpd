@@ -511,6 +511,8 @@ One per machine (D5). Every `tick_seconds`:
 
 `watch` holds `locks/watch.lock` (a second one exits with `watch_running`, exit 3), appends `watch-started` and `watch-stopped`, and never exits on its own: unlike cpd 1, it serves every Plan.
 
+A step's failure appends an `error` Event once until it clears, and the same `error` (step, scope and code) at most once per `watch.error_repeat_seconds` even if it clears in between (R31, finding 4). `scripts/install-cpd2.sh` restarts a running engine after installing (kills the `watch` window, then `cpd2 watch --ensure`), because an engine keeps running the binary it started with (finding 5).
+
 ## 4. Storage
 
 ### 4.1 The database
@@ -1114,7 +1116,7 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 | options | `set -g <option> <value>`; `set -p -t <pane> @cpd_session <id>` |
 | a new parked window or Attempt window | `new-window -d -t =<session>: -n <name> -c <cwd> -e K=V … -P -F '#{window_id} #{pane_id}' -- <argv…>` (several arguments run without a shell, docs: tmux(1)) |
 | bring a Lead into the chat slot | `swap-pane -d -s <parked pane> -t <chat slot pane>` (verified: both processes keep their pids, the slot keeps its size), then `rename-window -t <window id> park-<label>` for the window that now holds the displaced Lead |
-| liveness | `list-panes -a -F '#{pane_id} #{window_id} #{session_name} #{pane_dead} #{pane_dead_status} #{pane_pid} #{@cpd_session}'` |
+| liveness | `list-panes -a -F '#{pane_id} #{window_id} #{session_name} #{pane_dead} #{pane_dead_status} #{pane_pid} #{@cpd_session}'` (plus `#{window_name}` and `#{@cpd_view}`); a pane whose `@cpd_view` this binary does not know is skipped and logged once, never an error (R31, finding 4) |
 | a dead pane of the cockpit's layout | `respawn-pane` |
 | retarget the Worker view to another Attempt; restart every live view (`cpd2 tui --respawn`, commands.md §13.1) | `respawn-pane -k -t <pane> -- <argv…>` |
 | the Worker view beside the chat | `split-window -h -d -t <chat slot pane> -l 50% -P -F '#{pane_id}' -- <argv…>` |
@@ -1347,6 +1349,7 @@ fork_quiet_seconds = 5       # fork-when-idle (§6.7)
 tick_seconds = 5
 pr_poll_seconds = 120
 context_sync_seconds = 300
+error_repeat_seconds = 600   # the same `error` Event at most once per this (§3.7)
 
 [events]
 poll_ms = 200                # events follow (§5.4)

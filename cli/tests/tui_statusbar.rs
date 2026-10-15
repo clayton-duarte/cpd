@@ -115,27 +115,26 @@ fn row_ending(env: &TestEnv, pane: &str, tail: &str) -> String {
 }
 
 #[test]
-fn the_row_has_the_two_buttons_left_and_the_workers_at_the_right_edge() {
+fn the_row_has_the_three_buttons_left_and_the_workers_at_the_right_edge() {
     let env = env();
     sql(&env, &plan_with_attempts(&["ended", "running", "starting"]));
     let pane = start_view(&env, 80);
     let row = row_ending(&env, &pane, "workers 2/4");
-    assert!(row.starts_with("⧉   ? legend "), "{row:?}");
+    assert!(row.starts_with("⧉   ? legend   ≡ logs "), "{row:?}");
     assert_eq!(row.chars().count(), 80, "the workers end at the last column: {row:?}");
 }
 
 #[test]
-fn the_workers_shorten_on_a_narrow_row_and_follow_the_slots() {
+fn the_workers_follow_the_slots() {
     let env = env();
     sql(&env, &plan_with_attempts(&[]));
-    // the indicator gets the whole row, as in the reference: 10 columns hold `0/4` (3) but not `workers 0/4` (11)
-    let pane = start_view(&env, 10);
-    let row = row_ending(&env, &pane, "0/4");
-    assert!(row.starts_with('⧉'), "{row:?}");
-    assert!(!row.contains("workers"), "{row:?}");
+    // the shortening to `0/4` on a row under 11 columns is `the_workers_indicator_is_given_the_full_width` (unit
+    // test): the three buttons take 22 columns, so no row that narrow shows them and the indicator together
+    let pane = start_view(&env, 40);
+    row_ending(&env, &pane, "workers 0/4");
     // an Attempt takes a slot: the view re-reads when the store's Events move, or within 2 s
     sql(&env, &attempt_row(1, "running"));
-    row_ending(&env, &pane, "1/4");
+    row_ending(&env, &pane, "workers 1/4");
 }
 
 #[test]

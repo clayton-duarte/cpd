@@ -17,7 +17,7 @@ use crate::ids::{AttemptId, ContextId, JobKey, PlanId};
 use crate::store::Store;
 
 use super::flow::{OpenEscalation, open_escalation};
-use super::shared::{AttemptStatus, Checks, PlanHead, PrState, bad_row, id, plan_heads, tier};
+use super::shared::{AttemptStatus, Checks, Place, PlanHead, PrState, bad_row, id, plan_heads, tier};
 
 /// What the Dispatch column shows.
 #[derive(Clone, Debug, PartialEq)]
@@ -76,6 +76,9 @@ pub struct PlanCard {
     pub head: PlanHead,
     /// The Lead Session's name: the Plan's label, as its tab's (commands.md §13.2).
     pub label: String,
+    /// Where the Lead Session's pane is (its latest `session-moved`; `None` before any): the Dispatch column lists
+    /// the Plans whose Lead is in the cockpit, in the chat slot or parked (commands.md §17).
+    pub lead_place: Place,
     /// The PR as the column draws it; `None` when the Plan has no PR.
     pub pr: Option<PrRow>,
     pub feedback: Option<PrFeedback>,
@@ -147,7 +150,7 @@ fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
     plan_heads(conn, None)?
         .into_iter()
         .map(|head| {
-            let label = labels
+            let (label, lead_place) = labels
                 .get(head.id.as_str())
                 .cloned()
                 .ok_or_else(|| bad_row(format!("Plan {} has no Lead Session {}", head.id, head.lead_session)))?;
@@ -158,16 +161,27 @@ fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
             });
             // Only a Plan with a PR has feedback: one query per PR, not per Plan.
             let feedback = if head.pr.is_some() { feedback(conn, &head.id)? } else { None };
-            Ok(PlanCard { label, pr, feedback, head })
+            Ok(PlanCard { label, lead_place, pr, feedback, head })
         })
         .collect()
 }
 
-/// Plan id → its Lead Session's name.
-fn labels(conn: &Connection) -> Result<BTreeMap<String, String>, CpdError> {
-    let mut stmt = conn.prepare("SELECT p.id, s.name FROM plans p JOIN sessions s ON s.id = p.lead_session")?;
-    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-    Ok(rows)
+/// Plan id → its Lead Session's name and place.
+fn labels(conn: &Connection) -> Result<BTreeMap<String, (String, Place)>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT p.id, s.name,
+                (SELECT json_extract(e.data, '$.place') FROM events e
+                  WHERE e.session = s.id AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1)
+           FROM plans p JOIN sessions s ON s.id = p.lead_session",
+    )?;
+    let mut rows = stmt.query([])?;
+    let mut out = BTreeMap::new();
+    while let Some(r) = rows.next()? {
+        let (plan, name, place): (String, String, Option<String>) = (r.get(0)?, r.get(1)?, r.get(2)?);
+        let place = place.map_or(Ok(Place::None), |p| Place::parse("Session place", &p))?;
+        out.insert(plan, (name, place));
+    }
+    Ok(out)
 }
 
 /// Plan id → what `pr poll` stored, for the Plans it has polled.

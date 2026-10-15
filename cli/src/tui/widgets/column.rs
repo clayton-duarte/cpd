@@ -1,29 +1,30 @@
-//! The Dispatch column's drawing (commands.md §13.2, §17): the machine-wide
-//! state of the read model's [`Widgets`] in one pane, top to bottom: the engine
-//! and the slots in use, the PRs and their feedback, the open Escalations, the
-//! latest Events, and a one-row hint. Sections are separated by one dim rule,
-//! as in the spike's Dispatch pane. Pure: [`draw`] only writes to the frame.
+//! The Dispatch column's drawing (commands.md §13.2), a port of the reference's `draw_dispatch` and `pr::render`
+//! (`tui/src/main.rs`, `tui/src/pr.rs`): the machine, the PRs of the Plans in the cockpit, git and Jira (the last two
+//! still future), with one dim rule between sections. Pure: [`draw`] only writes to the frame.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
-use crate::plan::Phase;
 use crate::tui::palette::{self, Meaning};
-use crate::tui::read::{Engine, MachineEscalation, PlanCard, PrState, Slots, Widgets};
+use crate::tui::read::{Place, PlanCard, PrState, PrRow, ReviewDecision, Widgets};
 
 /// The rows a separator takes.
 const SEPARATOR: u16 = 1;
-/// The rows the Events section keeps at least (its title and two Events) before a Plan without a PR is listed.
-const EVENTS_MIN: u16 = 3;
-pub const HINT: &str = " ? legend   q quit";
+/// Rows of the sections other than the PRs: the machine, git and Jira take two each; three separators lie between the four.
+const FIXED_ROWS: u16 = 2 + 2 + 2 + 3 * SEPARATOR;
 
-fn bold(text: &str) -> Span<'static> {
-    Span::styled(text.to_owned(), Style::new().add_modifier(Modifier::BOLD))
+/// The machine the column names: its hostname and the first three fields of its load average.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Machine {
+    pub name: String,
+    pub load: Vec<String>,
+}
+
+fn bold(text: impl Into<String>) -> Span<'static> {
+    Span::styled(text.into(), Style::new().add_modifier(Modifier::BOLD))
 }
 
 fn dim(text: impl Into<String>) -> Span<'static> {
@@ -42,160 +43,46 @@ fn truncate(text: &str, max: usize) -> String {
     cut
 }
 
-/// `3s`, `4m`, `2h`: how long ago `at` (RFC 3339) was. `?` when it does not parse (the store writes
-/// RFC 3339 only, so this does not happen on a Ledger cpd wrote).
-fn age(at: &str, now: OffsetDateTime) -> String {
-    let Ok(then) = OffsetDateTime::parse(at, &Rfc3339) else { return "?".into() };
-    match (now - then).whole_seconds().max(0) {
-        s @ 0..=59 => format!("{s}s"),
-        s @ 60..=3599 => format!("{}m", s / 60),
-        s => format!("{}h", s / 3600),
-    }
-}
-
-/// `HH:MM:SS` (UTC) of an RFC 3339 time, as the Events carry it.
-fn clock(at: &str) -> &str {
-    at.get(11..19).unwrap_or(at)
-}
-
-fn plural(n: usize, noun: &str) -> String {
-    format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
-}
-
-/// `line` cut to `width` columns, ending in `…` in the style of the span it cuts.
-fn clip(line: Line<'static>, width: u16) -> Line<'static> {
-    let width = usize::from(width);
-    if line.width() <= width {
-        return line;
-    }
-    let mut room = width.saturating_sub(1);
-    let mut spans = Vec::new();
-    for span in line.spans {
-        if span.width() <= room {
-            room -= span.width();
-            spans.push(span);
-            continue;
-        }
-        if width > 0 {
-            let kept: String = span.content.chars().take(room).collect();
-            spans.push(Span::styled(format!("{kept}…"), span.style));
-        }
-        break;
-    }
-    Line::from(spans).style(line.style)
-}
-
-fn engine_lines(engine: &Engine) -> Vec<Line<'static>> {
-    let (icon, meaning, text) = match engine {
-        Engine::Never => ("○", Meaning::Nothing, "not started yet".to_owned()),
-        Engine::Running { pid, since } => ("●", Meaning::InProgress, format!("running  pid {pid}  since {}", clock(since))),
-        Engine::Stopped { at } => ("○", Meaning::Nothing, format!("stopped  {}", clock(at))),
-        Engine::Crashed { pid, since } => ("✗", Meaning::Failed, format!("crashed  pid {pid} is gone  since {}", clock(since))),
+/// The lines of one Plan: its label, then `#n state checks review title` (the title cut first to fit `width`); a Plan
+/// without a PR takes one line.
+fn plan_lines(card: &PlanCard, width: usize) -> Vec<Line<'static>> {
+    let Some(PrRow { number, state, polled }) = &card.pr else {
+        return vec![Line::from(vec![
+            " ".into(),
+            bold(truncate(&card.label, width.saturating_sub(8))),
+            dim("  no PR"),
+        ])];
     };
-    vec![
-        Line::from(bold(" Engine")),
-        Line::from(vec![" ".into(), Span::styled(icon, palette::fg(meaning)), " ".into(), Span::styled(text, palette::fg(meaning))]),
-    ]
-}
-
-fn slot_lines(slots: &Slots, now: OffsetDateTime, width: u16) -> Vec<Line<'static>> {
-    let load = match (slots.used(), slots.limit as usize) {
-        (0, _) => Meaning::Nothing,
-        (used, limit) if used >= limit => Meaning::Review,
-        _ => Meaning::InProgress,
+    let head = Line::from(vec![" ".into(), bold(truncate(&card.label, width.saturating_sub(1)))]);
+    let num = format!("  #{number}");
+    // Not polled yet: the number only.
+    let Some(polled) = polled else { return vec![head, Line::from(vec![dim(num), dim(" loading…")])] };
+    let state_text = match state {
+        PrState::Open => "open",
+        PrState::Closed => "closed",
+        PrState::Merged => "merged",
     };
-    let mut lines = vec![Line::from(vec![bold(" Slots "), Span::styled(format!("{}/{}", slots.used(), slots.limit), palette::fg(load))])];
-    if slots.held.is_empty() {
-        lines.push(Line::from(dim(" none in use")));
+    let review = match polled.decision {
+        ReviewDecision::Approved => "approved",
+        ReviewDecision::ChangesRequested => "changes requested",
+        ReviewDecision::None => "no review",
+    };
+    let (icon, checks) = palette::checks(polled.checks);
+    let used = num.chars().count() + 1 + state_text.chars().count() + 3 + review.chars().count();
+    let mut spans = vec![
+        num.into(),
+        " ".into(),
+        Span::styled(state_text, palette::fg(palette::pr_state(*state))),
+        " ".into(),
+        Span::styled(icon, palette::fg(checks)),
+        " ".into(),
+        review.into(),
+    ];
+    let room = width.saturating_sub(used + 2);
+    if room >= 4 {
+        spans.push(dim(format!("  {}", truncate(&polled.title, room))));
     }
-    for held in &slots.held {
-        let status = held.status.as_str();
-        let tail = format!(" {} {status} {}", held.tier, age(&held.started_at, now));
-        let room = usize::from(width).saturating_sub(tail.chars().count() + 1);
-        lines.push(Line::from(vec![
-            " ".into(),
-            truncate(&format!("{}/{}", held.plan, held.attempt), room).into(),
-            format!(" {} ", held.tier).into(),
-            Span::styled(status.to_owned(), palette::fg(palette::attempt_status(held.status))),
-            dim(format!(" {}", age(&held.started_at, now))),
-        ]));
-    }
-    lines
-}
-
-/// What the PRs section lists: Plans with a PR, then (when `with_idle`) the Plans in Dispatch without one.
-fn pr_lines(plans: &[PlanCard], with_idle: bool, width: u16) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from(bold(" PRs"))];
-    let label = |card: &PlanCard| format!(" {}", card.head.title);
-    for card in plans.iter().filter(|c| c.head.pr.is_some()) {
-        let pr = card.head.pr.as_ref().expect("filtered on a PR");
-        lines.push(Line::from(bold(&label(card))));
-        let (icon, checks) = palette::checks(pr.checks_summary());
-        lines.push(Line::from(vec![
-            format!("  #{} ", pr.number).into(),
-            Span::styled(
-                match pr.state {
-                    PrState::Open => "open",
-                    PrState::Closed => "closed",
-                    PrState::Merged => "merged",
-                },
-                palette::fg(palette::pr_state(pr.state)),
-            ),
-            " ".into(),
-            Span::styled(icon, palette::fg(checks)),
-            format!(" {}  {}", plural(pr.reviews, "review"), plural(pr.comments, "comment")).into(),
-        ]));
-        if let Some(feedback) = card.feedback.as_ref().filter(|f| !f.failing_checks.is_empty()) {
-            lines.push(Line::from(vec![
-                "  ".into(),
-                Span::styled(format!("✗ {}", feedback.failing_checks.join(", ")), palette::fg(Meaning::Failed)),
-            ]));
-        }
-    }
-    if with_idle {
-        for card in plans.iter().filter(|c| c.head.pr.is_none() && c.head.phase == Phase::Dispatch) {
-            let room = usize::from(width).saturating_sub("  no PR".len());
-            lines.push(Line::from(vec![bold(&truncate(&label(card), room)), dim("  no PR")]));
-        }
-    }
-    if lines.len() == 1 {
-        lines.push(Line::from(dim(" none")));
-    }
-    lines
-}
-
-fn escalation_lines(open: &[MachineEscalation]) -> Vec<Line<'static>> {
-    let count = if open.is_empty() { Span::styled("0", palette::fg(Meaning::Nothing)) } else { Span::styled(open.len().to_string(), palette::fg(Meaning::Review)) };
-    let mut lines = vec![Line::from(vec![bold(" Escalations "), count])];
-    for e in open {
-        let who = format!("{}/{}", e.plan, e.job);
-        lines.push(Line::from(vec![
-            " ".into(),
-            Span::styled("● ", palette::fg(Meaning::Review)),
-            who.into(),
-            "  ".into(),
-            dim(e.escalation.question.as_str()),
-        ]));
-    }
-    if open.is_empty() {
-        lines.push(Line::from(dim(" none open")));
-    }
-    lines
-}
-
-/// The latest Events that fit `height` rows under the title, newest last.
-fn event_lines(w: &Widgets, height: u16) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from(bold(" Events"))];
-    let rows = usize::from(height).saturating_sub(1);
-    if w.events.is_empty() {
-        lines.push(Line::from(dim(" none yet")));
-    }
-    for e in &w.events[w.events.len().saturating_sub(rows)..] {
-        let text = if e.text.is_empty() { &e.kind } else { &e.text };
-        let style = if e.kind == "error" { palette::fg(Meaning::Failed) } else { Style::new() };
-        lines.push(Line::from(vec![" ".into(), dim(clock(&e.at)), " ".into(), Span::styled(text.clone(), style)]));
-    }
-    lines
+    vec![head, Line::from(spans)]
 }
 
 fn separator(f: &mut Frame, area: Rect) {
@@ -203,43 +90,42 @@ fn separator(f: &mut Frame, area: Rect) {
     f.render_widget(Block::new().borders(Borders::TOP).border_style(palette::fg(Meaning::Nothing)), area);
 }
 
-/// Draws the column in `area`; `now` is the clock of the ages. `note` (a failure the view reports) takes the
-/// hint's row. A pane too short for everything keeps the sections in this order: the engine and slots, the PRs, the
-/// Escalations, then the Events (their latest ones).
-pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, now: OffsetDateTime, note: Option<&str>) {
-    let width = area.width;
-    let mut machine = engine_lines(&w.engine);
-    machine.extend(slot_lines(&w.slots, now, width));
-    let escalations = escalation_lines(&w.escalations);
-    // The Plans in Dispatch without a PR are listed only while there is room.
-    let fixed = machine.len() + escalations.len() + 3 * usize::from(SEPARATOR) + 1;
-    let with_pr = pr_lines(&w.plans, false, width);
-    let with_idle = pr_lines(&w.plans, true, width);
-    let room = usize::from(area.height).saturating_sub(fixed + usize::from(EVENTS_MIN));
-    let prs = if with_idle.len() <= room.max(with_pr.len()) { with_idle } else { with_pr };
-
-    // Each part gets what it wants, in priority order, from what is left above the hint.
-    let mut left = area.height.saturating_sub(1);
-    let mut take = |want: usize| {
-        let rows = u16::try_from(want).unwrap_or(u16::MAX).min(left);
-        left -= rows;
-        rows
-    };
-    let heights = [take(machine.len()), take(1), take(prs.len()), take(1), take(escalations.len()), take(1)];
-    let constraints = heights.map(Constraint::Length).into_iter().chain([Constraint::Min(0), Constraint::Length(1)]);
-    let [machine_area, sep1, prs_area, sep2, esc_area, sep3, events_area, hint] =
-        Layout::vertical(constraints).areas(area);
+/// Draws the column in `area`: the machine, the PRs, git and Jira, with the shared separator between each pair.
+pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine) {
+    let [home, sep1, prs, sep2, git, sep3, jira] = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Length(SEPARATOR),
+        Constraint::Min(1),
+        Constraint::Length(SEPARATOR),
+        Constraint::Length(2),
+        Constraint::Length(SEPARATOR),
+        Constraint::Length(2),
+    ])
+    .areas(area);
     for sep in [sep1, sep2, sep3] {
         separator(f, sep);
     }
-    let paragraph = |lines: Vec<Line<'static>>| Paragraph::new(lines.into_iter().map(|l| clip(l, width)).collect::<Vec<_>>());
-    f.render_widget(paragraph(machine), machine_area);
-    f.render_widget(paragraph(prs), prs_area);
-    f.render_widget(paragraph(escalations), esc_area);
-    f.render_widget(paragraph(event_lines(w, events_area.height)), events_area);
-    let foot = match note {
-        Some(note) => Line::from(Span::styled(format!(" {note}"), palette::fg(Meaning::Failed))),
-        None => Line::from(dim(HINT)),
-    };
-    f.render_widget(paragraph(vec![foot]), hint);
+    f.render_widget(
+        Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::from(format!(" load {}", machine.load.join(" ")))]),
+        home,
+    );
+    let mut text = vec![Line::from(bold(" PRs"))];
+    // The Plans in the cockpit: Plans with a PR first, then those without only while the pane has room for the rest.
+    let cockpit: Vec<&PlanCard> = w.plans.iter().filter(|c| matches!(c.lead_place, Place::Chat | Place::Parked)).collect();
+    let room = usize::from(area.height).saturating_sub(usize::from(FIXED_ROWS) + text.len());
+    let mut used = 0;
+    for card in cockpit.iter().filter(|c| c.pr.is_some()).chain(cockpit.iter().filter(|c| c.pr.is_none())) {
+        let lines = plan_lines(card, usize::from(area.width));
+        if card.pr.is_none() && used + lines.len() > room {
+            continue;
+        }
+        used += lines.len();
+        text.extend(lines);
+    }
+    if cockpit.is_empty() {
+        text.push(Line::from(dim(" no Plans in the cockpit")));
+    }
+    f.render_widget(Paragraph::new(text), prs);
+    f.render_widget(Paragraph::new(vec![Line::from(bold(" git")), Line::from(dim(" (future)"))]), git);
+    f.render_widget(Paragraph::new(vec![Line::from(bold(" Jira")), Line::from(dim(" (future)"))]), jira);
 }

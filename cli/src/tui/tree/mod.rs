@@ -4,23 +4,21 @@
 //! `separator.rs`) onto the read model.
 //!
 //! - [`rows`]: Contexts, their Plans (each Plan's row is its Lead's) and a Plan's side forks;
-//! - [`view`]: the state, keys and drawing; [`cursor`], [`prompt`], [`separator`]: its parts;
-//! - [`actions`]: what it does, as `cpd2` commands (`session open`, `session park`, `session fork`,
-//!   `session rename`, `plan new`);
+//! - [`view`]: the state, keys and drawing; [`cursor`], [`prompt`]: its parts;
+//! - [`actions`]: what it does, as `cpd2` commands (`session open`, `plan new`, `session close`), and the
+//!   legend popup;
 //! - [`follow`]: `cpd2 events follow`, which tells it when to take a new snapshot.
 //!
-//! Keys: arrows or `j`/`k` move the cursor (shown after the first arrow key, while the pane has focus);
-//! Enter opens the Lead of the row in the chat slot (on a Context it collapses or expands it); Space
-//! collapses or expands a Context or a Plan with forks; `p` parks the row's Session; `f` forks it
-//! (a side session of its Plan); `r` renames it; `n` starts a new Plan in the row's Context; `q` ends the
-//! view (the cockpit respawns the pane). A click on a Context collapses or expands it, on a Plan or fork opens it.
+//! Keys and clicks are the reference's (commands.md §13.2, `tui/README.md` "Context column" on `main`): arrows
+//! or `j`/`k` move the cursor between Sessions (shown after the first arrow key, while the pane has focus);
+//! Enter opens the cursor's Session in the chat slot and focuses it; `n` starts a new Plan; `x` closes a
+//! Session's pane; `?` opens the legend. A click on a Context collapses or expands it, on a Session opens it.
 
 mod actions;
 mod cursor;
 mod follow;
 mod prompt;
 mod rows;
-mod separator;
 mod view;
 
 #[cfg(test)]
@@ -39,6 +37,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::output::Output;
 use crate::store::Store;
+use actions::Runner;
 use follow::{Follower, Message};
 use view::{Effect, View};
 
@@ -55,10 +54,11 @@ pub(super) fn run() -> Result<Output, CpdError> {
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
     let view = View::new(read::tree(&mut store)?, false);
+    let runner = Runner::new(&config);
     // From here on this process owns the terminal (commands.md §1.2).
     let mut terminal = ratatui::init();
     let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableFocusChange);
-    let result = event_loop(&mut terminal, &mut store, view);
+    let result = event_loop(&mut terminal, &mut store, view, &runner);
     let _ = execute!(std::io::stdout(), DisableFocusChange, DisableMouseCapture);
     ratatui::restore();
     result.map(|()| Output::Owned).map_err(|e| {
@@ -67,7 +67,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
     })
 }
 
-fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View) -> std::io::Result<()> {
+fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View, runner: &Runner) -> std::io::Result<()> {
     let mut follower = Follower::start(view.tree.events_cursor).ok();
     let mut dirty = false;
     let mut last_snapshot = Instant::now();
@@ -118,11 +118,14 @@ fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View)
         };
         match effect {
             Effect::None => {}
-            Effect::Quit => return Ok(()),
+            Effect::Legend => {
+                // `display-popup` returns when the popup closes; only a failure is said
+                if let Err(why) = runner.legend() {
+                    view.done(Err(why));
+                }
+            }
             Effect::Run(action) => {
-                view.note = format!("running cpd2 {}…", action.argv().join(" "));
-                terminal.draw(|f| view.draw(f))?;
-                view.done(actions::run(&action));
+                view.done(runner.run(&action));
                 // the tree shows the result on this loop's snapshot
                 dirty = true;
                 last_snapshot = Instant::now() - SNAPSHOT_EVERY;

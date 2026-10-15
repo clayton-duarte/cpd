@@ -1,10 +1,14 @@
 //! Unexpected failures of a step (commands.md §12): each appends `error`
 //! `{source: "watch", code, message, details}` for what it concerns, and the
 //! loop continues. The same failure for the same object is appended once
-//! until it clears: a step that succeeds for that object clears it.
+//! until it clears: a step that succeeds for that object clears it. Whatever
+//! clears, the same code at the same step for the same object is appended at
+//! most once per `error_repeat_seconds` (contract §3.7), so a step that
+//! succeeds in one part and fails in another does not append at every tick.
 
 use std::collections::HashMap;
 use std::fmt;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -105,6 +109,16 @@ impl From<&CpdError> for Failure {
 #[derive(Default)]
 pub(super) struct Report {
     open: HashMap<(Step, About), String>,
+    /// When each `(step, about, code)` was last appended.
+    appended: HashMap<(Step, About, String), Instant>,
+    /// `watch.error_repeat_seconds`.
+    repeat: Duration,
+}
+
+impl Report {
+    pub(super) fn new(repeat: Duration) -> Report {
+        Report { open: HashMap::new(), appended: HashMap::new(), repeat }
+    }
 }
 
 impl Report {
@@ -114,6 +128,12 @@ impl Report {
         let failure = failure.into();
         let key = (step, about);
         if self.open.get(&key) == Some(&failure.code) {
+            return;
+        }
+        let repeated = (key.0, key.1.clone(), failure.code.clone());
+        if self.appended.get(&repeated).is_some_and(|at| at.elapsed() < self.repeat) {
+            // Appended recently: only remember it is still failing.
+            self.open.insert(key, failure.code);
             return;
         }
         let (step, about) = &key;
@@ -127,6 +147,7 @@ impl Report {
         let data = json!({"source": SOURCE, "code": failure.code, "message": failure.message, "details": failure.details});
         match store.write(SOURCE, |tx| events::append(tx, about.event(text, data))) {
             Ok(_) => {
+                self.appended.insert(repeated, Instant::now());
                 self.open.insert(key, failure.code);
             }
             // Not marked as reported: the next tick tries again.
@@ -137,5 +158,48 @@ impl Report {
     /// `step` succeeded for `about`: a later failure is reported again.
     pub(super) fn clear(&mut self, step: Step, about: &About) {
         self.open.remove(&(step, about.clone()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::home::CpdHome;
+
+    fn failure(code: &str) -> Failure {
+        Failure { code: code.to_owned(), message: "It failed.".to_owned(), details: json!({}) }
+    }
+
+    fn errors(store: &mut Store) -> i64 {
+        store.read(|conn| Ok(conn.query_row("SELECT count(*) FROM events WHERE kind = 'error'", [], |r| r.get(0))?)).unwrap()
+    }
+
+    /// A step that fails, clears and fails again at every tick (E2 does: its
+    /// sub-steps clear the Machine's failure) is appended once per repeat
+    /// period; another code or another step is its own Event.
+    #[test]
+    fn the_same_error_is_appended_once_per_repeat_period_even_when_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let mut log = Log::open(&home).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+
+        let mut report = Report::new(Duration::from_secs(600));
+        for _ in 0..3 {
+            report.fail(&mut store, &mut log, Step::E2, About::Machine, failure("tmux_failed"));
+            report.clear(Step::E2, &About::Machine);
+        }
+        assert_eq!(errors(&mut store), 1);
+        report.fail(&mut store, &mut log, Step::E2, About::Machine, failure("store_failed"));
+        report.fail(&mut store, &mut log, Step::E3, About::Machine, failure("tmux_failed"));
+        assert_eq!(errors(&mut store), 3);
+
+        // Past the period it is appended again.
+        let mut report = Report::new(Duration::ZERO);
+        for _ in 0..2 {
+            report.fail(&mut store, &mut log, Step::E2, About::Machine, failure("tmux_failed"));
+            report.clear(Step::E2, &About::Machine);
+        }
+        assert_eq!(errors(&mut store), 5);
     }
 }

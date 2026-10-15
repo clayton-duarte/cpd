@@ -12,6 +12,7 @@ use ratatui::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     Legend,
+    Logs,
     ResetLayout,
 }
 
@@ -85,14 +86,19 @@ mod tests {
             .unwrap();
         let buf = terminal.backend().buffer();
         let text: String = (0..40).map(|x| buf[(x, 0)].symbol()).collect();
-        assert_eq!(text, format!("⧉   ? legend {}workers 1/4", " ".repeat(16)));
+        assert_eq!(text, format!("⧉   ? legend   ≡ logs {}workers 1/4", " ".repeat(7)));
         // ⧉ is one cell wide, and its button is `⧉ `: two columns, then the spacing column
         assert_eq!(
             hits,
-            [(Rect::new(0, 0, 2, 1), Action::ResetLayout), (Rect::new(3, 0, 10, 1), Action::Legend)]
+            [
+                (Rect::new(0, 0, 2, 1), Action::ResetLayout),
+                (Rect::new(3, 0, 10, 1), Action::Legend),
+                (Rect::new(14, 0, 8, 1), Action::Logs)
+            ]
         );
         assert!((0..2).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
         assert!(!buf[(2, 0)].modifier.contains(Modifier::REVERSED));
         assert!((3..13).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
+        assert!((14..22).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
     }
 }
