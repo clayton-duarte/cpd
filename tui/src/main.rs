@@ -39,6 +39,7 @@ mod actions;
 mod context;
 mod cursor;
 mod flow;
+mod layout;
 mod legend;
 mod palette;
 mod pr;
@@ -76,6 +77,13 @@ fn discover() -> Vec<Session> {
 fn main() {
     let args: Vec<String> = env::args().collect();
     let view = args.get(1).map(String::as_str).unwrap_or("");
+    if view == "reset-layout" {
+        if let Err(e) = reset_layout() {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let mut terminal = ratatui::init();
     let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableFocusChange);
     let result = match view {
@@ -85,7 +93,7 @@ fn main() {
         "worker" => run_worker(&mut terminal, args.get(2).cloned().unwrap_or_default()),
         "legend" => run_legend(&mut terminal),
         "statusbar" => run_statusbar(&mut terminal),
-        _ => Err(format!("usage: {} context|plan|dispatch|worker <session.jsonl> <job>|legend|statusbar", args[0])),
+        _ => Err(format!("usage: {} context|plan|dispatch|worker <session.jsonl> <job>|legend|statusbar|reset-layout", args[0])),
     };
     let _ = execute!(std::io::stdout(), DisableFocusChange, DisableMouseCapture);
     ratatui::restore();
@@ -168,6 +176,23 @@ fn open_legend() -> Result<(), String> {
         .max()
         .ok_or("no tmux client attached")?;
     tmux_checked(&legend::popup_args(&exe, (client.1, client.2)).iter().map(String::as_str).collect::<Vec<_>>()).map(|_| ())
+}
+
+/// Reset the cockpit to the User's sizes (`layout::steps`): the StatusBar's ⧉ button and `cpd-tui reset-layout`.
+/// Nothing else re-adjusts the layout.
+fn reset_layout() -> Result<(), String> {
+    let listed = tmux_checked(&["list-panes", "-t", &format!("{}:main", session()), "-F", "#{pane_id} #{@view}"])?;
+    let panes: Vec<(String, String)> = listed
+        .lines()
+        .map(|l| {
+            let (id, view) = l.split_once(' ').unwrap_or((l, ""));
+            (id.to_string(), view.to_string())
+        })
+        .collect();
+    for step in layout::steps(&panes) {
+        tmux_checked(&step.iter().map(String::as_str).collect::<Vec<_>>())?;
+    }
+    Ok(())
 }
 
 /// The legend view: draws until any key or click.
@@ -364,6 +389,7 @@ impl ContextData {
 
 /// The legend button of the StatusBar (the key `?` in Context opens the same legend).
 const LEGEND_BUTTON: &str = " ? legend ";
+const RESET_BUTTON: &str = " ⧉ ";
 
 fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
     thread::spawn(fetch_loop);
@@ -489,7 +515,7 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
     }
 }
 
-/// The StatusBar view (one row, the bottom of the cockpit): the legend button on the left, the workers indicator on the
+/// The StatusBar view (one row, the bottom of the cockpit): the ⧉ reset and legend buttons on the left, the workers indicator on the
 /// right (re-read every 2 s). A click on the button opens the legend; the bar never takes keyboard focus (`tmux.conf`).
 fn run_statusbar(terminal: &mut DefaultTerminal) -> Result<(), String> {
     let home = cpd_home();
@@ -497,8 +523,6 @@ fn run_statusbar(terminal: &mut DefaultTerminal) -> Result<(), String> {
     let mut last_workers = Instant::now();
     let mut clickable = Vec::new();
     let mut note = String::new(); // why the legend did not open, shown in the middle until the next click
-    keep_one_row(); // a respawned pane keeps its old size
-    let mut last_check = Instant::now();
     loop {
         if last_workers.elapsed() > Duration::from_secs(2) {
             workers = workers::read(&home);
@@ -512,43 +536,29 @@ fn run_statusbar(terminal: &mut DefaultTerminal) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
         let ready = event::poll(Duration::from_millis(250)).map_err(|e| e.to_string())?;
         let ev = if ready { Some(event::read().map_err(|e| e.to_string())?) } else { None };
-        if matches!(ev, Some(Event::Resize(..))) || last_check.elapsed() > Duration::from_millis(500) {
-            keep_one_row();
-            last_check = Instant::now();
-        }
         let Some(ev) = ev else { continue };
         if let Event::Mouse(m) = ev {
             if m.kind == MouseEventKind::Down(MouseButton::Left) {
                 note.clear();
                 let at = Position::new(m.column, m.row);
-                if let Some((_, statusbar::Action::Legend)) = clickable.iter().find(|(r, _)| r.contains(at)) {
-                    if let Err(why) = open_legend() {
-                        note = why;
-                    }
+                let result = match clickable.iter().find(|(r, _)| r.contains(at)) {
+                    Some((_, statusbar::Action::Legend)) => open_legend(),
+                    Some((_, statusbar::Action::ResetLayout)) => reset_layout(),
+                    None => Ok(()),
+                };
+                if let Err(why) = result {
+                    note = why;
                 }
             }
         }
     }
 }
 
-/// Resize this pane back to one row when its height is not 1 (tmux has no fixed-height panes), unless the window is
-/// zoomed. The height is tmux's own (`#{pane_height}`), not the terminal's: on unzoom tmux restores the pane's size
-/// without telling the program, so a resize that happened while zoomed is only seen by asking tmux. A failure is
-/// ignored: the next check tries again.
-fn keep_one_row() {
-    let Ok(pane) = env::var("TMUX_PANE") else { return };
-    let Ok(out) = tmux_checked(&["display-message", "-p", "-t", &pane, "#{window_zoomed_flag} #{pane_height}"]) else { return };
-    let mut parts = out.split_whitespace();
-    let (Some(zoomed), Some(Ok(height))) = (parts.next(), parts.next().map(str::parse::<u16>)) else { return };
-    if statusbar::needs_resize(height, zoomed == "1") {
-        let _ = tmux_checked(&["resize-pane", "-t", &pane, "-y", "1"]);
-    }
-}
-
-/// The StatusBar's items: the legend button (left), then the workers indicator (right). A failure note, when there is
+/// The StatusBar's items: the ⧉ reset button and the legend button (left), then the workers indicator (right). A failure note, when there is
 /// one, goes left after the button.
 fn statusbar_items(workers: &workers::Workers, note: &str, width: u16) -> (Vec<statusbar::Item>, Vec<statusbar::Item>) {
-    let mut left = vec![statusbar::Item { line: Line::from(LEGEND_BUTTON).style(Style::new().add_modifier(Modifier::REVERSED)), action: Some(statusbar::Action::Legend) }];
+    let button = |text: &'static str, action| statusbar::Item { line: Line::from(text).style(Style::new().add_modifier(Modifier::REVERSED)), action: Some(action) };
+    let mut left = vec![button(RESET_BUTTON, statusbar::Action::ResetLayout), button(LEGEND_BUTTON, statusbar::Action::Legend)];
     if !note.is_empty() {
         left.push(statusbar::Item { line: Line::from(note.to_string()), action: None });
     }
@@ -1014,11 +1024,18 @@ mod tests {
             })
             .unwrap();
         let buf = terminal.backend().buffer();
-        assert_eq!(text(buf, 0), format!("{LEGEND_BUTTON}{}workers 1/4", " ".repeat(40 - LEGEND_BUTTON.len() - "workers 1/4".len())));
-        // the reported Rect is where the reversed button is drawn
-        assert_eq!(hits, [(Rect::new(0, 0, LEGEND_BUTTON.len() as u16, 1), statusbar::Action::Legend)]);
-        assert!((0..LEGEND_BUTTON.len() as u16).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
-        assert!(!buf[(LEGEND_BUTTON.len() as u16, 0)].modifier.contains(Modifier::REVERSED));
+        let left = format!("{RESET_BUTTON} {LEGEND_BUTTON}");
+        assert_eq!(text(buf, 0), format!("{left}{}workers 1/4", " ".repeat(40 - left.chars().count() - "workers 1/4".len())));
+        // the reported Rects are where the reversed buttons are drawn; ⧉ is one cell wide
+        assert_eq!(Line::from("⧉").width(), 1);
+        assert_eq!(
+            hits,
+            [(Rect::new(0, 0, 3, 1), statusbar::Action::ResetLayout), (Rect::new(4, 0, LEGEND_BUTTON.len() as u16, 1), statusbar::Action::Legend)]
+        );
+        assert_eq!(buf[(1, 0)].symbol(), "⧉");
+        assert!((0..3).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
+        assert!(!buf[(3, 0)].modifier.contains(Modifier::REVERSED));
+        assert!((4..4 + LEGEND_BUTTON.len() as u16).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
     }
 
     #[test]

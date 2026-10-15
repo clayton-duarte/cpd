@@ -12,6 +12,7 @@ use ratatui::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     Legend,
+    ResetLayout,
 }
 
 /// One entry of the bar: its text, and what a click on it does (`None`: not clickable).
@@ -37,24 +38,10 @@ pub fn draw(f: &mut Frame, area: Rect, left: &[Item], right: &[Item]) -> Vec<(Re
     clickable
 }
 
-/// Whether the bar must resize its pane back to one row: its height is not 1, and the window is not zoomed
-/// (`resize-pane` would unzoom it; on unzoom tmux resizes the pane, and the bar checks again).
-pub fn needs_resize(height: u16, zoomed: bool) -> bool {
-    height != 1 && !zoomed
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn only_a_height_other_than_1_in_an_unzoomed_window_resizes() {
-        assert!(needs_resize(11, false));
-        assert!(needs_resize(6, false));
-        assert!(!needs_resize(1, false));
-        assert!(!needs_resize(11, true));
-        assert!(!needs_resize(1, true));
-    }
     use ratatui::{Terminal, backend::TestBackend};
 
     fn item(text: &'static str, action: Option<Action>) -> Item {
