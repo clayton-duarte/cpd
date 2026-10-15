@@ -5,8 +5,7 @@
 //! - [`cockpit`]: `cpd2 tui [--attach]` (§13.1);
 //! - [`chat`]: the chat slot's placeholder (amendment 2);
 //! - [`widgets`]: the Dispatch column and the key legend (`tui view legend`), with the shared [`palette`];
-//! - [`tree`], [`plan`], [`worker`]: the other views of §13.2,
-//!   `not_implemented` until their Jobs land.
+//! - [`tree`], [`plan`], [`worker`]: the other views of §13.2.
 
 mod chat;
 mod cockpit;
@@ -17,7 +16,6 @@ mod tree;
 pub mod widgets;
 mod worker;
 
-use crate::cli::Pending;
 use crate::error::{CpdError, ErrorCode};
 use crate::output::Output;
 
@@ -43,13 +41,13 @@ pub enum Command {
 #[derive(clap::Subcommand, Debug)]
 pub enum View {
     /// The session tree (left)
-    Tree(Pending),
+    Tree,
     /// The Plan of the Lead in the chat slot (centre top)
-    Plan(Pending),
+    Plan,
     /// The Dispatch column (right)
-    Widgets(Pending),
+    Widgets,
     /// An Attempt's Worker, read-only (beside the chat)
-    Worker(Pending),
+    Worker(worker::Args),
     /// The key legend (opened by `?` in the Dispatch column, in a tmux popup)
     Legend,
     /// The chat slot's placeholder
@@ -60,10 +58,10 @@ pub fn run(args: Args) -> Result<Output, CpdError> {
     match args.command {
         None => cockpit::run(args.attach),
         Some(Command::View(view)) => match view {
-            View::Tree(_) => tree::run(),
-            View::Plan(_) => plan::run(),
-            View::Widgets(_) => widgets::run(),
-            View::Worker(_) => worker::run(),
+            View::Tree => tree::run(),
+            View::Plan => plan::run(),
+            View::Widgets => widgets::run(),
+            View::Worker(args) => worker::run(args),
             View::Legend => widgets::legend::run(),
             View::Chat => chat::run(),
         },
