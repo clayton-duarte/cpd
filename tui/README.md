@@ -14,7 +14,7 @@ layer (a right-aligned `Line` per tree row, since the tree widget draws one text
 ## Palette and legend
 
 `src/palette.rs` is the only place with colours and status icons: a `Meaning` (not started white, in progress green, waiting
-on review yellow, done blue, failed red, planning magenta, grounding white, nothing dark grey) and the mappings from Job status,
+on review yellow, done grey, failed red, planning magenta, grounding white, nothing dark grey) and the mappings from Job status,
 phase, PR state and PR checks to `(icon, Meaning)`. Every view takes both from it, so changing one changes it everywhere;
 the test `no_colour_outside_the_palette` fails when another `src/*.rs` names a colour. Grounding shares white with "not
 started": the one deliberate exception to one colour per meaning.
@@ -75,7 +75,7 @@ queued, running, in review, failed, merged (in phase `plan` the drafts come firs
 Workflow shows no counters. Zeros are dark grey, the `⋅` separators grey.
 
 Colours are the palette's: the dot's is the Workflow's phase (none dark grey, context white, plan magenta, dispatch green,
-pr yellow, done blue); a counter's is its Job status (queued white, running green, in review yellow, failed red, merged blue;
+pr yellow, done grey); a counter's is its Job status (queued white, running green, in review yellow, failed red, merged grey;
 zeros and the drafts of phase `plan` dark grey).
 
 A Context's dot has the colour of the busiest phase inside (dispatch > plan > context > pr > done > none). 
