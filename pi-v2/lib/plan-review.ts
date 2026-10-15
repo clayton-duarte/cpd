@@ -30,13 +30,17 @@ export function reviewsFromEntries(entries: readonly unknown[], plan: string): {
   return { reviews, invalid };
 }
 
+/** plannotator's event API has no request that closes a review (`plannotator-events.ts` handles plan-mode, plan-review, review-status, code-review, annotate, annotate-last, archive), so the page stays open. */
+export const ELSEWHERE_NOTE = "This review was decided outside plannotator. plannotator offers no way to close its review page from here, so the page stays open: ignore it or close the tab.";
+
 /** cpd 1's `decisionText`, kept (commands.md §15.5, "Deciding" step 3). */
-export function decisionText(review: string, approved: boolean, feedback: string | undefined, current: boolean): string {
+export function decisionText(review: string, approved: boolean, feedback: string | undefined, current: boolean, elsewhere = false): string {
   const lines = [`Plan review ${review} was ${approved ? "APPROVED" : "REJECTED"}.`];
   if (feedback !== undefined && feedback !== "") lines.push("Feedback from the reviewer:", feedback);
   if (!current) lines.push("The Jobs changed since that review. Call cpd_plan_review again for a new review.");
   else if (approved) lines.push("Next: cpd2 plan lock");
   else lines.push("Revise the plan (job edit, job add, job cancel), then call cpd_plan_review again.");
+  if (elsewhere) lines.push(ELSEWHERE_NOTE);
   return lines.join("\n");
 }
 

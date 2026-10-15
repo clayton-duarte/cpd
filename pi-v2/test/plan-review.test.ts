@@ -218,6 +218,58 @@ test("results for reviews this session did not open are ignored", async (t) => {
   assert.equal(f.argvs().some((a) => a[1] === "decide"), false);
 });
 
+// ---- decided outside plannotator (§15.5 "Deciding elsewhere") ----
+
+const NOTE = "This review was decided outside plannotator. plannotator offers no way to close its review page from here, so the page stays open: ignore it or close the tab.";
+const decidedEvent = (id: number, status: string, feedback: string | null, review = "r1") => ev(id, "plan-review", { data: { review, fingerprint: "ff", status, feedback } });
+
+for (const [status, feedback, text] of [
+  ["approved", "Ship it.", `Plan review r1 was APPROVED.\nFeedback from the reviewer:\nShip it.\nNext: cpd2 plan lock\n${NOTE}`],
+  ["rejected", null, `Plan review r1 was REJECTED.\nRevise the plan (job edit, job add, job cancel), then call cpd_plan_review again.\n${NOTE}`],
+] as const) {
+  test(`an Event-only ${status} unblocks the Lead and tells it once, without plan decide; a late plannotator result is ignored`, async (t) => {
+    const f = new Fixture();
+    t.after(() => f.close());
+    await opens(f);
+    f.respond("plan-show", pending("r1", { status }));
+    f.emit(decidedEvent(102, status, feedback));
+    await waitFor("the decision message", () => decisions(f).length === 1);
+
+    assert.equal(decisions(f)[0]!.message.content, text);
+    assert.deepEqual(decisions(f)[0]!.options, { triggerTurn: true, deliverAs: "followUp" });
+    assert.deepEqual(entries(f).at(-1), { plan: "p1", review: "r1", plannotator_id: "pn-1", status });
+    await waitFor("unblocked", () => stateCalls(f).at(-1) === "idle");
+
+    f.emit(decidedEvent(102, status, feedback)); // replayed
+    result(f, { reviewId: "pn-1", approved: status === "approved", feedback: "late" }); // plannotator's own result, later
+    await settle();
+    assert.equal(decisions(f).length, 1);
+    assert.equal(f.argvs().some((a) => a[1] === "decide"), false, "never a second plan decide");
+    assert.equal(entries(f).filter((e: any) => e.status === status).length, 1);
+    assert.equal(f.pi.errors().length, 0);
+  });
+}
+
+test("an Event-only decision of a review the Plan has superseded says the Jobs changed", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await opens(f);
+  f.respond("plan-show", pending("r1", { status: "approved", current: false }));
+  f.emit(decidedEvent(102, "approved", null));
+  await waitFor("the decision message", () => decisions(f).length === 1);
+  assert.match(decisions(f)[0]!.message.content, /^Plan review r1 was APPROVED\.\nThe Jobs changed since that review\. Call cpd_plan_review again for a new review\./);
+});
+
+test("an Event-only decision for a review this session has no pending entry for changes nothing", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await opens(f);
+  f.emit(decidedEvent(102, "approved", null, "r9"));
+  await settle();
+  assert.deepEqual(decisions(f), []);
+  assert.equal(entries(f).at(-1).status, "pending");
+});
+
 // ---- recovery ----
 
 const seeded = (f: Fixture, over: Record<string, unknown> = {}) =>

@@ -279,6 +279,10 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     if (ev.kind === "plan-review" && ev.data.status === "pending") {
       void openReview(r, ev.data.review as string, "event").catch((e) => deliver(`plan review ${ev.data.review as string}`, e));
     }
+    if (ev.kind === "plan-review" && (ev.data.status === "approved" || ev.data.status === "rejected")) {
+      const entry = r.reviews.get(ev.data.review as string);
+      if (entry?.status === "pending") void decidedElsewhere(r, entry, ev).catch((e) => deliver(`plan review ${entry.review}`, e));
+    }
   }
 
   // ---- the Plan review through plannotator (§15.5) ----
@@ -319,6 +323,44 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   const tell = (r: Run, content: string, details: Record<string, unknown>) =>
     pi.sendMessage({ customType: DECISION_TYPE, content, display: true, details }, FOLLOW_UP(true));
 
+  /** Appends the settled entry, closes the blocking reason and tells the Lead (§15.5 "Deciding" steps 2 and 3). */
+  function settle(r: Run, entry: ReviewEntry, verdict: boolean, text: string | undefined, current: boolean, elsewhere: boolean): void {
+    const done: ReviewEntry = { ...entry, status: verdict ? "approved" : "rejected" };
+    r.reviews.set(entry.review, done);
+    pi.appendEntry(ENTRY_TYPE, done);
+    if (r.facts.close(`plan-review:${entry.review}`)) refresh(r);
+    tell(r, decisionText(entry.review, verdict, text, current, elsewhere), {
+      plan: entry.plan,
+      review: entry.review,
+      plannotator_id: entry.plannotator_id,
+      approved: verdict,
+      current,
+      ...(text !== undefined ? { feedback: text } : {}),
+      ...(elsewhere ? { decided_elsewhere: true } : {}),
+    });
+  }
+
+  /**
+   * §15.5 "Deciding elsewhere": a `plan-review` Event with status `approved` or `rejected` for a pending entry means a caller other than
+   * plannotator decided it. cpd2 already has the decision, so there is no `plan decide`. A failure leaves the entry pending.
+   */
+  async function decidedElsewhere(r: Run, entry: ReviewEntry, ev: CpdEvent): Promise<void> {
+    if (entry.status !== "pending" || r.deciding.has(entry.review)) return;
+    r.deciding.add(entry.review);
+    try {
+      const verdict = ev.data.status === "approved";
+      const plan = r.info.plan as string;
+      const review = (await call(["plan", "show", "--plan", plan])).review;
+      const shown = isObject(review) && review.id === entry.review ? review : undefined;
+      const current = shown !== undefined && shown.current !== false;
+      const feedback = typeof ev.data.feedback === "string" ? ev.data.feedback : shown !== undefined && typeof shown.feedback === "string" ? shown.feedback : undefined;
+      if (run !== r || r.reviews.get(entry.review)?.status !== "pending") return;
+      settle(r, entry, verdict, feedback, current, true);
+    } finally {
+      r.deciding.delete(entry.review);
+    }
+  }
+
   /** Records the User's decision with cpd2, then tells the Lead. A failure other than `review_decided` leaves the entry pending. */
   async function decide(r: Run, entry: ReviewEntry, approved: boolean, feedback: string | undefined): Promise<void> {
     if (entry.status !== "pending" || r.deciding.has(entry.review)) return;
@@ -353,11 +395,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
         }
       }
       if (run !== r) return;
-      const done: ReviewEntry = { ...entry, status: verdict ? "approved" : "rejected" };
-      r.reviews.set(entry.review, done);
-      pi.appendEntry(ENTRY_TYPE, done);
-      if (r.facts.close(`plan-review:${entry.review}`)) refresh(r);
-      tell(r, decisionText(entry.review, verdict, text, current), { plan, review: entry.review, plannotator_id: entry.plannotator_id, approved: verdict, current, ...(text !== undefined ? { feedback: text } : {}) });
+      settle(r, entry, verdict, text, current, false);
     } catch (e) {
       deliver(`plan decide ${entry.review}`, e);
     } finally {

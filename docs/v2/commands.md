@@ -1255,6 +1255,7 @@ Events arrive in id order; the follower already applied §11's `--session` rule,
 | `escalation` | message, **turn**; opens the blocking reason `escalation:<id>` labelled `cpd: Worker question` | |
 | `escalation-answered`, `escalation-expired` | closes `escalation:<id>`; no message | |
 | `plan-review` with `status: pending` | opens it in plannotator (§15.5); no message | |
+| `plan-review` with `status: approved` or `rejected`, for a pending entry of this session | a decision made outside plannotator (§15.5 "Deciding elsewhere"): closes `plan-review:<review>`; message `cpd-plan-decision`, **turn** (own custom type, not `cpd`). For any other review: ignored | |
 | `session-renamed` (`session` = itself) | `pi.setSessionName(name)` and `ctx.ui.notify("cpd: session renamed to \"<name>\"")`; no message, no turn | same |
 | `attempt-nudge` (`session` = itself) | | message with `data.prompt` as content, **turn** |
 | every other kind | ignored | ignored |
@@ -1295,6 +1296,14 @@ If plannotator does not answer, answers `unavailable` or `error` (for example `P
 1. Write the feedback, if any, to a temporary file; run `cpd2 plan decide <review> --approve | --reject [--feedback-file <f>] --plan <plan>`. `review_decided` means another caller decided it: the adapter reads the decision with `cpd2 plan show` and continues with it.
 2. Append the entry with `status` `approved` or `rejected`; close `plan-review:<review>`.
 3. Tell the Lead with `pi.sendMessage({customType: "cpd-plan-decision", …}, {triggerTurn: true, deliverAs: "followUp"})` (cpd 1 `decisionText`, kept): `Plan review r3 was APPROVED.` plus the feedback, then `Next: cpd2 plan lock`, or for a rejection `Revise the plan (job edit, job add, job cancel), then call cpd_plan_review again.`; when `current` is false, it says the Jobs changed since that review and asks for a new one. The custom type differs from `cpd`, so this message never moves the cursor.
+
+**Deciding elsewhere**, on a `plan-review` Event with `status` `approved` or `rejected` for a pending entry of this session: any caller other than plannotator decided the review (`cpd2 plan decide` from the CLI, the User or a script), and the database already holds the decision, so the adapter does **not** run `plan decide`. Otherwise the Lead would stay `blocked` and never be told. It does what "Deciding" does after its own `plan decide`:
+1. Read `cpd2 plan show` for `current` (and for the feedback when the Event's `data.feedback` is not a string).
+2. Append the entry with the status; close `plan-review:<review>`.
+3. Tell the Lead with the same `cpd-plan-decision` message (`triggerTurn`, followUp), with the Event's `data.feedback`, plus a last line saying the review was decided outside plannotator and that its page stays open.
+4. plannotator's page cannot be closed: its event API (`plannotator-events.ts`, 0.28.17) has no request for it (`plan-mode`, `plan-review`, `review-status`, `code-review`, `annotate`, `annotate-last`, `archive`); `closeKeepingDraft` in `server/serverPlan.ts` is only on the in-process server object, which the adapter cannot reach. The message says so.
+
+A failure of `plan show` is an error message and leaves the entry pending. An Event for a review with no pending entry (replayed, another Plan's, already decided) changes nothing. A later `plannotator:review-result` (or recovery's `completed`) for an entry decided this way is ignored, because the entry is no longer pending; one that arrives while this path runs is ignored too, so the Lead is told once.
 
 **Recovery** at `session_start` (t4 F5, kept): for each pending entry, `plannotator:request` `review-status` every second until it is not pending: `completed` is handled as a result; `missing` (plannotator restarted) appends the entry as `lost`, closes the reason, and tells the Lead to call `cpd_plan_review` again, which reopens it (above).
 
