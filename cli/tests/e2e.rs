@@ -262,21 +262,32 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(out["plan"]["lead_branch"], "cpd/pay");
     assert_eq!(out["lead"]["session"], lead_session.as_str());
     assert!(out["lead"]["forked_from"].is_null(), "{out}");
-    let events = fx.events_since(cursor);
-    assert_eq!(kinds(&events), ["plan-created", "session-registered", "context-record", "session-moved"]);
-    assert_eq!(events[0]["data"]["lead_session"], lead_session.as_str());
-    assert_eq!(events[1]["session"], lead_session.as_str());
-    assert_eq!(events[2]["data"]["record"], out["record"]);
-    assert_eq!(events[3]["data"]["place"], "parked");
-    assert_eq!(events[3]["data"]["pane"], out["lead"]["pane"]);
-    let message = fs::read_to_string(fx.env.cpd_home().join("run/pay/lead-message.md")).unwrap();
-    assert!(message.starts_with("You are the Lead of Plan pay \"Retry failed payouts\" in Context ctx."), "{message}");
-    // The Lead's `session run` started pi fresh with that message (§6.5), and
-    // recorded the session file pi wrote.
+    // The Lead's pi reports `idle` (stopped -> idle, a `session-state` Event) as soon as
+    // it starts, concurrently with this command's return. Wait for that, so the Events
+    // after `plan new` are a settled set; its order against `session-moved` is not fixed.
     let lead = fx.wait("the Lead's session file and idle state", 30, || {
         let s = fx.session(&lead_session);
         (s["state"] == "idle" && s["file"].is_string()).then_some(s)
     });
+    let events = fx.events_since(cursor);
+    let mut ks = kinds(&events);
+    assert_eq!(ks[..3], ["plan-created", "session-registered", "context-record"]);
+    ks[3..].sort_unstable();
+    assert_eq!(ks[3..], ["session-moved", "session-state"]);
+    assert_eq!(events[0]["data"]["lead_session"], lead_session.as_str());
+    assert_eq!(events[1]["session"], lead_session.as_str());
+    assert_eq!(events[2]["data"]["record"], out["record"]);
+    let moved = of_kind(&events, "session-moved");
+    assert_eq!(moved[0]["data"]["place"], "parked");
+    assert_eq!(moved[0]["data"]["pane"], out["lead"]["pane"]);
+    let state = of_kind(&events, "session-state");
+    assert_eq!(state[0]["session"], lead_session.as_str());
+    assert_eq!(state[0]["data"]["from"], "stopped");
+    assert_eq!(state[0]["data"]["to"], "idle");
+    let message = fs::read_to_string(fx.env.cpd_home().join("run/pay/lead-message.md")).unwrap();
+    assert!(message.starts_with("You are the Lead of Plan pay \"Retry failed payouts\" in Context ctx."), "{message}");
+    // The Lead's `session run` started pi fresh with that message (§6.5), and
+    // recorded the session file pi wrote.
     assert_eq!(lead["place"], "parked");
     assert_eq!(lead["plan_lead"], true);
     let calls = fx.pi_calls();
