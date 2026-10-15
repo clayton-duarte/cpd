@@ -1,21 +1,177 @@
-//! Events (contract §5; commands.md §11): appending them, `events list` and
-//! `events follow`. Filled in by Job `rs-events`.
+//! Events (contract §5; commands.md §11): appending them ([`append`]),
+//! `events list` and `events follow`.
+//!
+//! Delivery to a Lead's pi session (§5.3) is the pi adapter's, in TypeScript.
 
-use crate::cli::Pending;
-use crate::error::CpdError;
-use crate::output::Output;
+mod append;
+mod kind;
+mod select;
+
+use std::io::Write;
+use std::time::Duration;
+
+use serde_json::json;
+
+use crate::config::Config;
+use crate::error::{CpdError, ErrorCode};
+use crate::home::CpdHome;
+use crate::ids::{ContextId, PlanId, SessionId};
+use crate::output::{Output, to_line};
+use crate::store::{Store, VERSION};
+
+pub use append::{NewEvent, append};
+pub use kind::{Kind, Set, Spec};
+pub use select::{Event, Selection, highest_id};
+
+/// How many Events one query reads, and `follow`'s batch (§5.4).
+const BATCH: i64 = 500;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// List Events (§11.1)
-    List(Pending),
+    List(ListArgs),
     /// Follow Events, one per line (the one streaming command) (§11.2)
-    Follow(Pending),
+    Follow(FollowArgs),
+}
+
+/// At most one of the three (`usage`); they are filters, so none falls back to
+/// `CPD_PLAN` or `CPD_SESSION` (commands.md §11).
+#[derive(clap::Args, Debug)]
+#[group(multiple = false)]
+pub struct Scope {
+    /// Events of this Plan
+    #[arg(long, value_name = "id")]
+    plan: Option<PlanId>,
+    /// Events of this Context
+    #[arg(long, value_name = "id")]
+    context: Option<ContextId>,
+    /// Events for this Session (§5.3's rule)
+    #[arg(long, value_name = "id")]
+    session: Option<SessionId>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ListArgs {
+    #[command(flatten)]
+    scope: Scope,
+    /// Only this kind (repeatable)
+    #[arg(long = "kind", value_name = "kind")]
+    kinds: Vec<Kind>,
+    /// Only Events with a greater id [default: 0]
+    #[arg(long, value_name = "id", value_parser = clap::value_parser!(i64).range(0..))]
+    since: Option<i64>,
+    /// At most this many Events
+    #[arg(long, value_name = "n", default_value_t = BATCH, value_parser = clap::value_parser!(i64).range(1..=5000))]
+    limit: i64,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct FollowArgs {
+    #[command(flatten)]
+    scope: Scope,
+    /// Only this kind (repeatable)
+    #[arg(long = "kind", value_name = "kind")]
+    kinds: Vec<Kind>,
+    /// Start after this id [default: the highest id now]; 0 replays everything
+    #[arg(long, value_name = "id", value_parser = clap::value_parser!(i64).range(0..))]
+    since: Option<i64>,
+    /// Exit once everything committed at the start has been printed
+    #[arg(long)]
+    until_idle: bool,
 }
 
 pub fn run(command: Command) -> Result<Output, CpdError> {
-    Err(CpdError::not_implemented(match command {
-        Command::List(_) => "events list",
-        Command::Follow(_) => "events follow",
-    }))
+    match command {
+        Command::List(args) => list(args),
+        Command::Follow(args) => follow(args),
+    }
+}
+
+fn open() -> Result<(Store, Config), CpdError> {
+    let home = CpdHome::from_env()?;
+    let config = Config::load(&home)?;
+    let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+    Ok((store, config))
+}
+
+/// `events list` (§11.1).
+fn list(args: ListArgs) -> Result<Output, CpdError> {
+    let (mut store, _) = open()?;
+    let since = args.since.unwrap_or(0);
+    let Scope { plan, context, session } = args.scope;
+    let events = store.read(|conn| {
+        Selection::resolve(conn, plan, context, session, args.kinds)?.fetch(conn, since, None, args.limit)
+    })?;
+    let next = events.last().map_or(since, |e| e.id);
+    Ok(Output::success(json!({"events": events, "next": next})))
+}
+
+/// `events follow` (§11.2, §5.4): prints each Event as a line, in id order,
+/// until killed, until stdout closes, or (`--until-idle`) until it has printed
+/// what was committed when it started.
+fn follow(args: FollowArgs) -> Result<Output, CpdError> {
+    let (mut store, config) = open()?;
+    let Scope { plan, context, session } = args.scope;
+    let (selection, mut cursor, until) = store.read(|conn| {
+        let selection = Selection::resolve(conn, plan, context, session, args.kinds)?;
+        let highest = highest_id(conn)?;
+        let cursor = match args.since {
+            Some(since) if since > highest => {
+                return Err(CpdError::new(
+                    ErrorCode::CursorAhead,
+                    format!("--since {since} is above the highest Event id, {highest}: the cursor is from another database."),
+                )
+                .with("since", since)
+                .with("highest", highest));
+            }
+            Some(since) => since,
+            None => highest,
+        };
+        Ok((selection, cursor, highest))
+    })?;
+    let until = args.until_idle.then_some(until);
+
+    let poll = Duration::from_millis(u64::from(config.events.poll_ms));
+    let mut stdout = std::io::stdout().lock();
+    // `PRAGMA data_version` when the last query ran; none before the first.
+    let mut seen: Option<i64> = None;
+    loop {
+        let (version, user_version) = store.read(|conn| {
+            Ok((
+                conn.pragma_query_value(None, "data_version", |r| r.get::<_, i64>(0))?,
+                conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))?,
+            ))
+        })?;
+        if user_version > VERSION {
+            return Err(CpdError::new(
+                ErrorCode::StoreTooNew,
+                format!("The database has schema version {user_version}, newer than this cpd2's {VERSION}: upgrade cpd2."),
+            )
+            .with("version", user_version)
+            .with("supported", VERSION));
+        }
+        if seen != Some(version) {
+            seen = Some(version);
+            loop {
+                let batch = store.read(|conn| selection.fetch(conn, cursor, until, BATCH))?;
+                let Some(last) = batch.last() else { break };
+                let next = last.id;
+                let lines: String = batch.iter().map(to_line).collect();
+                if let Err(e) = stdout.write_all(lines.as_bytes()).and_then(|()| stdout.flush()) {
+                    return match e.kind() {
+                        std::io::ErrorKind::BrokenPipe => Ok(Output::Owned),
+                        _ => Err(CpdError::new(ErrorCode::StoreFailed, format!("Cannot write to stdout: {e}."))),
+                    };
+                }
+                cursor = next;
+                if (batch.len() as i64) < BATCH {
+                    break;
+                }
+            }
+        }
+        if until.is_some() {
+            return Ok(Output::Owned);
+        }
+        std::thread::sleep(poll);
+    }
 }

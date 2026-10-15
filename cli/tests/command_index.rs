@@ -125,8 +125,6 @@ const PENDING: &[(&[&str], &str)] = &[
     (&["session", "state", "blocked", "--label", "cpd: plan review"], "session state"),
     (&["session", "run", "596d007f"], "session run"),
     // events
-    (&["events", "list", "--since", "0"], "events list"),
-    (&["events", "follow", "--until-idle"], "events follow"),
     // watch
     (&["watch"], "watch"),
     (&["watch", "--ensure"], "watch"),
