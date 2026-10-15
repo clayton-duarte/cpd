@@ -139,13 +139,26 @@ mod tests {
         run(argv(words)).expect_err("expected a failure")
     }
 
+    /// A stand-in for a command whose area has not landed: its arguments are
+    /// [`Pending`], and it fails with `not_implemented`. No real command is
+    /// named, since real commands keep landing.
+    #[derive(Parser, Debug)]
+    #[command(name = "t")]
+    struct PendingProbe {
+        #[command(flatten)]
+        pending: Pending,
+    }
+
     #[test]
-    fn a_pending_command_is_not_implemented_whatever_its_arguments() {
-        for words in [&["tui"][..], &["tui", "--plan", "cpd2"], &["tui", "--bogus", "-x"]] {
-            assert_eq!(fails(words).code(), ErrorCode::NotImplemented, "{words:?}");
+    fn a_pending_command_accepts_any_arguments_and_is_not_implemented() {
+        for words in [&[][..], &["--plan", "cpd2"], &["--bogus", "-x"], &["view", "tree"]] {
+            let argv = std::iter::once("t").chain(words.iter().copied());
+            let probe = PendingProbe::try_parse_from(argv).unwrap_or_else(|e| panic!("{words:?}: {e}"));
+            assert_eq!(probe.pending.args, words.iter().map(OsString::from).collect::<Vec<_>>());
         }
-        let err = fails(&["tui", "--attach"]);
-        assert_eq!(err.details()["command"], "tui");
+        let err = CpdError::not_implemented("probe");
+        assert_eq!(err.code(), ErrorCode::NotImplemented);
+        assert_eq!(err.details()["command"], "probe");
     }
 
     #[test]
