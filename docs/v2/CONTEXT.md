@@ -29,7 +29,7 @@ The parent shared by two or more Plans: the shared knowledge between Plans that 
 _Avoid_: project, folder, epic
 
 **Context record**:
-One typed, append-only entry of a Context's knowledge: a decision (which may supersede another), a note, a question, an answer, or a Plan. Written only through `cpd2 context …`.
+One typed, append-only entry of a Context's knowledge: a decision (which may supersede another), a note, a question, an answer, or a Plan. Written only through `cpd context …`.
 _Avoid_: wiki page, memory
 
 **Context store**:
@@ -61,7 +61,7 @@ One execution of a Job by one fresh Worker session; a Job has one or more Attemp
 _Avoid_: retry, run
 
 **Ledger** (changed):
-The durable, append-only record of every Plan's Jobs, Dependencies, Attempts, Plan reviews, Escalations, Sessions and Events, with the before and after of every write. In cpd 2 it is one SQLite database per machine, written only by `cpd2`.
+The durable, append-only record of every Plan's Jobs, Dependencies, Attempts, Plan reviews, Escalations, Sessions and Events, with the before and after of every write. In cpd 2 it is one SQLite database per machine, written only by `cpd`.
 _Avoid_: database, board, tracker
 
 **Locked**:
@@ -83,7 +83,7 @@ The User's interface: one tmux window with global side bars and a centre bound t
 _Avoid_: dashboard, TUI session
 
 **Engine** (new):
-The one `cpd2 watch` per machine that schedules every Plan's Jobs under one concurrency limit, watches liveness and timeouts, and polls Pull Requests.
+The one `cpd watch` per machine that schedules every Plan's Jobs under one concurrency limit, watches liveness and timeouts, and polls Pull Requests.
 _Avoid_: daemon, scheduler, watcher per workflow
 
 ## Roles

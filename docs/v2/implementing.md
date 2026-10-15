@@ -4,19 +4,25 @@ Read this first, then [contract.md](contract.md), [commands.md](commands.md) and
 
 ## The one-area rule
 
-Each Job edits **only its own area** (`cli/src/<area>/`) **plus its tests** (`cli/tests/<area>*.rs`). It does not edit `cli/src/lib.rs`, `cli/src/cli.rs`, the shared modules (`error.rs`, `output.rs`, `ids.rs`, `args.rs`, `home.rs`), `cli/tests/common/`, another area, `Cargo.toml` or `Cargo.lock`. This is how parallel Jobs merge without conflicts. Need a change outside your area: ask the Lead (`cpd ask`), don't make it.
+Each Job edits **only its own area** (`core/src/<area>/`, or `tui/src/` for the cockpit) **plus its tests** (`cli/tests/<area>*.rs`). It does not edit `core/src/lib.rs`, `cli/src/cli.rs`, the shared modules (`core/src/error.rs`, `output.rs`, `ids.rs`, `args.rs`, `home.rs`), `cli/tests/common/`, another area, any `Cargo.toml` or `Cargo.lock`. This is how parallel Jobs merge without conflicts. Need a change outside your area: ask the Lead (`cpd ask`), don't make it.
 
-Within your area you may add files (`cli/src/<area>/foo.rs`, declared in your `mod.rs`) and use any other area's public items once that area has landed.
+Within your area you may add files (`core/src/<area>/foo.rs`, declared in your `mod.rs`) and use any other area's public items once that area has landed.
 
 ## Layout
 
-- `Cargo.toml`: the workspace. One member, `cli/` (crate `cpd2`, edition 2024). `tui/` is the cockpit spike, excluded from the workspace so it still builds on its own.
-- `cli/src/main.rs`: the binary `cpd2`; it only calls `cpd2::main_with`.
-- `cli/src/lib.rs`: the crate root. It declares every module below, once.
+- `Cargo.toml`: the workspace, with three members (edition 2024). Dependencies point one way: `cli` depends on `core` and `tui`; `tui` depends on `core`; `core` depends on neither.
+
+| Directory | Package (library / binary) | Holds |
+|---|---|---|
+| `core/` | `cpd-core` (library `cpd_core`) | every area of the module map below except `tui`, and the shared modules (`args`, `error`, `home`, `ids`, `output`). `core/src/lib.rs` is the crate root: it declares every module, once. |
+| `tui/` | `cpd-tui` (library `cpd_tui`) | the whole cockpit (`tui`, `tui view`, commands.md §13): `tui/src/lib.rs`, the views and the read model (`tui/src/read/`). It uses `cpd_core` for the store, events, host and the shared modules. |
+| `cli/` | `cpd` (binary `cpd`) | `cli/src/main.rs`, which only calls `main_with`, and `cli/src/cli.rs`: the root `Command` enum, `run` and `main_with`. Also `cli/tests/`, the binary-driven integration tests. |
+
+**The command runner.** The cockpit runs commands in-process (a click runs `session open`, the new-Plan key runs `plan new`) through the root command tree, which `cli` owns and `tui` cannot name (`tui` does not depend on `cli`). So `cli` passes the runner to the cockpit explicitly: `cpd_tui::run` takes a function `fn(Vec<OsString>) -> Result<Output, CpdError>` (`cli::run`), and the cockpit calls it wherever it runs a command. `Output` and `CpdError` are `cpd_core`'s.
 
 ### Module map
 
-| Module | Owner (Job) | Commands (commands.md) | Contract |
+| Module (`core/src/<module>/`; `tui` is `tui/src/`) | Owner (Job) | Commands (commands.md) | Contract |
 |---|---|---|---|
 | `store` | rs-store | none | §4.1–§4.5 |
 | `events` | rs-events | `events list`, `events follow` (§11) | §5 |
@@ -42,7 +48,7 @@ Within your area you may add files (`cli/src/<area>/foo.rs`, declared in your `m
 
 ## The command tree
 
-`cli/src/cli.rs` holds the root `Command` enum; each variant delegates to its area (`context::run(cmd)`, `watch::run(args)`, …). Each area owns its subcommand enum and its argument types. Every command of commands.md §2 is implemented, and `every_documented_command_exists` (`cli/tests/command_index.rs`) fails when one is documented but absent from the tree.
+`cli/src/cli.rs` holds the root `Command` enum; each variant delegates to its area (`cpd_core::context::run(cmd)`, `cpd_core::watch::run(args)`, …, and `cpd_tui` for the cockpit). Each area owns its subcommand enum and its argument types. Every command of commands.md §2 is implemented, and `every_documented_command_exists` (`cli/tests/command_index.rs`) fails when one is documented but absent from the tree.
 
 To add a command:
 1. In your module, define its arguments as a `#[derive(clap::Args)]` struct, and name it from the root or the area's subcommand enum (`watch::Args`, `config::ConfigArgs`, `driver::RunArgs`, …).
@@ -55,10 +61,10 @@ Parsing:
 
 ## Output and errors
 
-- **`output::Output`** (`cli/src/output.rs`): `Output::success(json!({…}))` prints `{"ok": true, …fields}`, with `"ok"` first. `Output::Owned` prints nothing and exits 0: only for the commands that write their own stdout or own their terminal (commands.md §1.2, amendment 10): `events follow`, `session run`, `tui view`, `tui --attach`. Their failures before taking the terminal are still returned as `Err`. `output::to_line` is one JSON value plus a newline, for `events follow`'s lines.
-- **`error::CpdError`** (`cli/src/error.rs`): `CpdError::new(ErrorCode::CasLost, "One sentence.").with("attempt", id.to_string())`. Printed as `{"ok": false, "error": {"code", "message", "details"}}`; `details` is always an object. `to_json()` gives the `error` object alone, the shape of an `error` Event's data (add `source` there).
+- **`output::Output`** (`core/src/output.rs`): `Output::success(json!({…}))` prints `{"ok": true, …fields}`, with `"ok"` first. `Output::Owned` prints nothing and exits 0: only for the commands that write their own stdout or own their terminal (commands.md §1.2, amendment 10): `events follow`, `session run`, `tui view`, `tui --attach`. Their failures before taking the terminal are still returned as `Err`. `output::to_line` is one JSON value plus a newline, for `events follow`'s lines.
+- **`error::CpdError`** (`core/src/error.rs`): `CpdError::new(ErrorCode::CasLost, "One sentence.").with("attempt", id.to_string())`. Printed as `{"ok": false, "error": {"code", "message", "details"}}`; `details` is always an object. `to_json()` gives the `error` object alone, the shape of an `error` Event's data (add `source` there).
 - **`error::ErrorCode`**: every code of contract.md and commands.md, each with its exit code (`Exit`: 1 failure, 2 usage, 3 refused, 4 not found, 5 timeout). A code cannot be printed with the wrong exit.
-- **Adding an error code:** the documents name every code; use those. If you truly need a new one, ask the Lead first: it is an amendment to the contract, and `error.rs` is shared. The change is one line in the `error_codes!` list, under its exit code.
+- **Adding an error code:** the documents name every code; use those. If you truly need a new one, ask the Lead first: it is an amendment to the contract, and `core/src/error.rs` is shared. The change is one line in the `error_codes!` list, under its exit code.
 
 ## Shared helpers
 
@@ -68,10 +74,10 @@ Parsing:
 
 ## Tests
 
-- **Unit tests** go in the module they test (`#[cfg(test)] mod tests`), in your area.
-- **Integration tests** go in `cli/tests/<area>.rs` (or `<area>_<topic>.rs`); they start with `mod common;` and use the harness `cli/tests/common/mod.rs`:
+- **Unit tests** go in the module they test (`#[cfg(test)] mod tests`), in your area, in `core/` or `tui/`.
+- **Integration tests** go in `cli/tests/<area>.rs` (or `<area>_<topic>.rs`), whichever crate the area is in: they run the built `cpd` binary. They start with `mod common;` and use the harness `cli/tests/common/mod.rs`:
   - `TestEnv::new()`: a temporary directory with its own `$CPD_HOME` (`cpd_home()`, empty), `$HOME` (`home()`, with a git identity), and `bin/` first on `PATH`; `CPD_*`, `PI_*`, `GIT_*`, `XDG_*`, `TMUX` and `TMUX_PANE` are removed from the environment.
-  - `env.cpd2(&[…])` / `env.cpd2_in(cwd, &[…])` run the built binary and return a `Run` (`exit`, `stdout`, `stderr`); `run.json()` asserts exactly one JSON value, `run.ok()` the success envelope, `run.error()` the failure's `error` object.
+  - `env.cpd(&[…])` / `env.cpd_in(cwd, &[…])` run the built binary and return a `Run` (`exit`, `stdout`, `stderr`); `run.json()` asserts exactly one JSON value, `run.ok()` the success envelope, `run.error()` the failure's `error` object.
   - `env.git_repo("name")`: a repo on `main` with one commit; `env.git(dir, &[…])`.
   - `env.tmux(&[…])` and `env.tmux_socket()`: a private tmux server (own `TMUX_TMPDIR` and socket name, killed when the `TestEnv` drops). Put the socket name in the test's `config.toml` as `tmux.socket`.
   - `env.fake_pi(body)`, `env.fake_gh(body)`, `env.fake(name, body)`: shell scripts on `PATH` that record their argv (`env.calls("pi")`) and then run `body`.
@@ -81,7 +87,7 @@ Parsing:
 
 ## Dependencies
 
-Every dependency is declared once, in the root `Cargo.toml` `[workspace.dependencies]`, and used with `x.workspace = true` in `cli/Cargo.toml`. **Later Jobs may not add, remove or change dependencies or features**, so parallel Jobs never conflict on `Cargo.lock`. The TUI Job (`tui-cockpit`) added the last planned ones, ratatui and tui-tree-widget. If you need something not listed, ask the Lead.
+Every dependency is declared once, in the root `Cargo.toml` `[workspace.dependencies]`, and used with `x.workspace = true` in the `Cargo.toml` of each crate that uses it (`core/`, `cli/`, `tui/`); a crate declares only what its own code imports. `ratatui` and `tui-tree-widget` are declared only in `cpd-tui`; `tempfile` is a dev-dependency of the crates whose tests use it. **Later Jobs may not add, remove or change dependencies or features**, so parallel Jobs never conflict on `Cargo.lock`. The TUI Job (`tui-cockpit`) added the last planned ones, ratatui and tui-tree-widget. If you need something not listed, ask the Lead.
 
 | Crate | Features | Why |
 |---|---|---|
@@ -96,7 +102,7 @@ Every dependency is declared once, in the root `Cargo.toml` `[workspace.dependen
 | `time` 0.3 | `formatting`, `parsing`, `macros` | RFC 3339 UTC times with milliseconds (§1.3) |
 | `sha2` 0.10 | | the Locked-Job and plan fingerprints (§2.3) and the schema hash (§4.3); `format!("{:x}", Sha256::digest(…))` gives hex (0.10, not 0.11, for that) |
 | `sha1` 0.10 | | the per-repo lock's name `repo-<sha1>.lock` (§1.4, §7.4); use `CpdHome::repo_lock` |
-| `ratatui` 0.30 | default (its `crossterm` backend) | the cockpit's views (`tui view`, commands.md §13.2), as on the spike's branch `cpd/cpd-ui`; crossterm is used through its re-export `ratatui::crossterm`, so it is not a dependency of its own |
+| `ratatui` 0.30 | default (its `crossterm` backend) | the cockpit's views (`tui view`, commands.md §13.2), as on the spike's branch `cpd/cpd-ui` (history); crossterm is used through its re-export `ratatui::crossterm`, so it is not a dependency of its own |
 | `tui-tree-widget` 0.24 | | the `tree` view's collapsible Context → Plan → Session tree, as on `cpd/cpd-ui` |
 | `tempfile` 3 | dev only | temporary `$CPD_HOME`, repos and files in tests |
 
@@ -105,5 +111,5 @@ Deliberately absent: a regex crate (the id patterns of §2.1 are checked by hand
 ## Running cargo, the Gate, installing
 
 - cargo is not on `PATH` for Workers and the Gate. Run it as `scripts/cargo.sh <args>` (`$CARGO`, else `cargo` on `PATH`, else `${CARGO_HOME:-$HOME/.cargo}/bin/cargo`; exit 127 with a message when none exists). rustfmt and clippy are not installed.
-- The Gate is `npm run verify`: the TypeScript typecheck and tests, then `scripts/cargo.sh build --workspace` and `scripts/cargo.sh test --workspace`. Run it before you submit.
-- `scripts/install-cpd2.sh` builds `--release` and installs `~/.local/bin/cpd2`, replacing it atomically; safe to rerun.
+- The Gate is `npm run verify`: the typecheck and tests of the pi adapter `pi/`, then `scripts/cargo.sh build --workspace` and `scripts/cargo.sh test --workspace`. Run it before you submit.
+- `scripts/install-cpd.sh` builds `--release` and installs `~/.local/bin/cpd` and the adapter `pi/` at `~/.local/share/cpd/pi`, replacing the binary atomically; safe to rerun.

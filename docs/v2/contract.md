@@ -23,15 +23,15 @@ Evidence labels, as in the research notes: **verified** means run on the homeser
 
 ### 1.1 What cpd 2 is
 
-- **CLI first.** Every capability is a command. Agents, the pi adapter, scripts and the TUI all use the same commands; the TUI (`cpd2 tui`) is the human view onto them, never a second way to change state.
-- **One binary, written in Rust.** The Cargo workspace at the root of the repo has `cli/` (the binary) next to `tui/` (R6). During development the binary is installed as **`cpd2`** and `cpd` keeps meaning the TypeScript cpd (R12). This contract writes every command as `cpd2 …`; at the switch-over, `cpd2` becomes `cpd` everywhere, including in rendered Specs and the pi adapter.
+- **CLI first.** Every capability is a command. Agents, the pi adapter, scripts and the TUI all use the same commands; the TUI (`cpd tui`) is the human view onto them, never a second way to change state.
+- **One binary, written in Rust.** The Cargo workspace at the root of the repo has three crates: `core/` (`cpd-core`, the library), `cli/` (`cpd`, the binary) and `tui/` (`cpd-tui`, the cockpit) (R6, switch-over; `implementing.md`). The binary is `cpd`, and this contract writes every command as `cpd …`. Until the switch-over the binary was installed as `cpd2` beside the TypeScript cpd (R12); the switch-over replaced cpd 1 and renamed the binary everywhere, including in rendered Specs and the pi adapter.
 - **System dependencies:** `git`, `tmux`, `pi` and, for pull requests only, `gh`. No `bd`, no `wt` (worktrunk), no `herdr`, and no Node.js of cpd's own. pi brings its own Node runtime; cpd uses it only to read pi's model catalog (§9).
 - **State in SQLite inside the binary** (R1): one database per machine, `$CPD_HOME/cpd.db`, in WAL mode, with SQLite bundled into the binary (no system SQLite). Reads never wait for writers. Every write is recorded in the append-only `history` table (§4).
 - **Context knowledge in git.** A Context's records (decisions, notes, questions and answers, Plans) live in an append-only JSONL store in a git repository per Context, shared across the User's machines; SQLite holds a rebuildable index of them (ADR-0012, §4.6).
 - **tmux is the only host.** Leads run in the cockpit; Workers and the engine run in a hidden session of the same tmux server (§6).
 - **The repo owns its setup and its Gate,** in `.config/wt.toml`, read by cpd itself so that repos set up for worktrunk work unchanged (R4, R5, §7).
 - **Events are the single channel** to Leads, the TUI and agent states (D4, §5). There are no queue directories, no cache directories and no tmux user options carrying state.
-- **One engine per machine** (D5): one `cpd2 watch` schedules every Plan under one concurrency limit.
+- **One engine per machine** (D5): one `cpd watch` schedules every Plan under one concurrency limit.
 - **Kept from cpd 1:** the vocabulary (Job, Spec, Dependency, Attempt, Escalation, Tier, Gate, Lead Branch, Merged, Locked); the roles User, Lead and Worker (cpd 1's Reviewer is removed by R19, §10); Workers write all the code; the Lead never writes code.
 
 ### 1.2 Output: one JSON value (D1)
@@ -41,8 +41,8 @@ Every command prints exactly one JSON value on stdout, always, except the three 
 - Success: `{"ok": true, …}`, with the command's fields at the top level.
 - Failure: `{"ok": false, "error": {"code": "<snake_case>", "message": "<one sentence>", "details": {…}}}`.
 - Progress and debug text goes to stderr only.
-- **The one streaming command** is `cpd2 events follow`: it prints one complete JSON value per line, each line an Event (§5.4), as the approved outline specifies. If it fails, its last line is a failure value as above.
-- **Commands that own their terminal** print no JSON value on success: `cpd2 session run` and `cpd2 tui view` (internal) run pi or draw a ratatui view in their pane, and `cpd2 tui --attach` replaces itself with `tmux attach` (the outline's "builds and attaches the cockpit"). If one fails before taking the terminal, it prints the failure value and exits with its code. `cpd2 tui` without `--attach` prints one JSON value like every command.
+- **The one streaming command** is `cpd events follow`: it prints one complete JSON value per line, each line an Event (§5.4), as the approved outline specifies. If it fails, its last line is a failure value as above.
+- **Commands that own their terminal** print no JSON value on success: `cpd session run` and `cpd tui view` (internal) run pi or draw a ratatui view in their pane, and `cpd tui --attach` replaces itself with `tmux attach` (the outline's "builds and attaches the cockpit"). If one fails before taking the terminal, it prints the failure value and exits with its code. `cpd tui` without `--attach` prints one JSON value like every command.
 
 Exit codes (kept from cpd 1 §2):
 
@@ -82,7 +82,7 @@ $CPD_HOME/
   cpd.db, cpd.db-wal, cpd.db-shm  the database (§4)
   contexts/<context>/             one git repository per Context (§4.6)
   locks/
-    watch.lock                    held by the one `cpd2 watch` (§6.6)
+    watch.lock                    held by the one `cpd watch` (§6.6)
     repo-<sha1>.lock              per-repo lock: merges, `pr open`, `pr rebase` (§7.4, §7.6); sha1 of the repo's git common dir realpath
     attempt-<plan>--<attempt>.lock  the driver lock: taken by the Attempt's starter, inherited by its driver (§3.4)
     context-<context>.lock        held while writing or syncing a Context store (§4.6)
@@ -146,7 +146,7 @@ The knowledge several Plans share, optionally a Jira Epic. Not a session (ADR-00
 
 #### Context record
 
-One typed, append-only entry of a Context's store (ADR-0012). Written only by `cpd2 context …` commands and by `plan new` (the `plan` kind).
+One typed, append-only entry of a Context's store (ADR-0012). Written only by `cpd context …` commands and by `plan new` (the `plan` kind).
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -234,7 +234,7 @@ One execution of a Job by one fresh Worker session, in its own worktree.
 | `outcome`, `cause` | text?, text? | set together, exactly when `status = ended` (§3.4) |
 | `branch`, `worktree` | text | §2.1 |
 | `base_sha` | text? | Lead Branch HEAD the worktree was cut from |
-| `driver_pid` | int? | pid of `cpd2 attempt run` |
+| `driver_pid` | int? | pid of `cpd attempt run` |
 | `worker_session` | text? | the Worker's Session |
 | `spec_path` | text? | rendered Worker Spec |
 | `submitted_sha`, `submitted_at` | text?, time? | set by `attempt submit` |
@@ -247,7 +247,7 @@ One execution of a Job by one fresh Worker session, in its own worktree.
 
 #### Escalation
 
-A question from a Worker to its Lead (`cpd2 ask`).
+A question from a Worker to its Lead (`cpd ask`).
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -255,7 +255,7 @@ A question from a Worker to its Lead (`cpd2 ask`).
 | `question` | text | |
 | `status` | text | `open`, `answered`, `expired` (§3.5) |
 | `answer` | text? | set exactly when `answered` |
-| `asker_pid` | int | pid of the blocking `cpd2 ask` |
+| `asker_pid` | int | pid of the blocking `cpd ask` |
 | `asked_at`, `answered_at`, `expired_at` | time, time?, time? | |
 
 #### Session
@@ -288,7 +288,7 @@ An append-only record of something that happened (D4, §5).
 | `at` | time | |
 | `kind` | text | §5.2 |
 | `context`, `plan`, `job`, `attempt`, `session` | text? | what it is about; which are set depends on the kind |
-| `text` | text | one short paragraph for the Lead, ending with the exact `cpd2` command(s) it may want to run (cpd 1 §10, kept) |
+| `text` | text | one short paragraph for the Lead, ending with the exact `cpd` command(s) it may want to run (cpd 1 §10, kept) |
 | `data` | json object | kind-specific fields (§5.2) |
 
 ### 2.3 Fingerprints
@@ -323,7 +323,7 @@ erDiagram
 
 ## 3. State machines
 
-Every transition below is the only way its state changes. Anything else is refused with `illegal_transition` (exit 3) by the command, and also by a trigger in the database (§4.4), so a bug cannot write it either. "Engine" steps are those of `cpd2 watch` (§3.7, E1–E6) and of the Attempt driver `cpd2 attempt run` (§3.4, A1–A9). Each row names the Event its transaction appends (§5.2).
+Every transition below is the only way its state changes. Anything else is refused with `illegal_transition` (exit 3) by the command, and also by a trigger in the database (§4.4), so a bug cannot write it either. "Engine" steps are those of `cpd watch` (§3.7, E1–E6) and of the Attempt driver `cpd attempt run` (§3.4, A1–A9). Each row names the Event its transaction appends (§5.2).
 
 ### 3.1 Plan phases
 
@@ -357,7 +357,7 @@ stateDiagram-v2
   4. the Events `plan-phase`, and, only with step 3, `session-registered` and `context-grounded`.
 
   If step 2 changed nothing (another Plan grounded the Context first), the transaction writes only the phase and `plan-phase`.
-- **After the commit**, `plan phase plan` creates the window `ctx-<context>` running `cpd2 session run <new id>` and appends `session-moved` in a second transaction, as `session fork` does (§6.7). So the tmux window exists only after the commit, and the pi fork happens only inside `session run`, which waits until this Plan's Lead is idle (fork-when-idle, §6.7; the Lead that ran `plan phase plan` is still in its turn), then runs `pi --fork` with no first message, so the grounded Lead never takes a turn. pi writes the fork's session file at once, before any message (read in pi 1.2.0's `SessionManager.forkFrom`). Records the source Lead writes between the commit and the fork are in the fork and also after `grounded_seq`; later Plans then receive them twice, which is harmless, and none is missed.
+- **After the commit**, `plan phase plan` creates the window `ctx-<context>` running `cpd session run <new id>` and appends `session-moved` in a second transaction, as `session fork` does (§6.7). So the tmux window exists only after the commit, and the pi fork happens only inside `session run`, which waits until this Plan's Lead is idle (fork-when-idle, §6.7; the Lead that ran `plan phase plan` is still in its turn), then runs `pi --fork` with no first message, so the grounded Lead never takes a turn. pi writes the fork's session file at once, before any message (read in pi 1.2.0's `SessionManager.forkFrom`). Records the source Lead writes between the commit and the fork are in the fork and also after `grounded_seq`; later Plans then receive them twice, which is harmless, and none is missed.
 - **A second `plan new` before that fork exists** forks the grounded Lead as usual (`session fork`, §6.7): the Session is registered, so the command succeeds at once. Its own `session run` waits in step 1 until the grounded Lead's session file exists and the grounded Lead is idle, then forks it.
 - The grounded Lead is never typed into again. Replacing it (re-grounding a Context) is later work, not in this contract.
 
@@ -427,7 +427,7 @@ stateDiagram-v2
 
 | From | To | Outcome / cause | Moved by | Event |
 |---|---|---|---|---|
-| (none) | `starting` | | E3 or `job dispatch`: takes the driver lock, inserts the Attempt with its Tier (§9), and starts the driver `cpd2 attempt run` detached, handing it the lock (below) | `attempt-started` |
+| (none) | `starting` | | E3 or `job dispatch`: takes the driver lock, inserts the Attempt with its Tier (§9), and starts the driver `cpd attempt run` detached, handing it the lock (below) | `attempt-started` |
 | `starting` | `running` | | A3: Worker pane started | `attempt-status` |
 | `starting` | `ended` | `failed` / `setup_failed` | A1–A2: worktree creation or `pre-start` failed (cpd 1 §12 step 2, kept: no ladder) | `job-failed` |
 | `running` | `merging` | | `attempt submit` passes its preconditions (§7.3) | `attempt-status` |
@@ -444,7 +444,7 @@ stateDiagram-v2
 
 **Ladder causes** are `crashed`, `no_submit` and `merge_conflict`: the next Attempt starts from the newer Lead Branch HEAD and its Spec carries the previous outcome and the conflict list. Every other cause fails the Job, and the Lead decides (`job retry`, `job cancel`). Change (R19): the merge runs no Gate, so `gate_failed` and `gate_error` are no longer Attempt causes; the Gate runs at `pr open` and `pr rebase` (§7.6), and a failure there is fixed by Jobs the Lead appends.
 
-**The driver, `cpd2 attempt run`** (internal; started detached by E3 or `job dispatch` with `setsid`, stderr to `run/<plan>/logs/attempt-<attempt>.log`; holds the driver lock, below, for its whole life). Steps, adapted from cpd 1 §12:
+**The driver, `cpd attempt run`** (internal; started detached by E3 or `job dispatch` with `setsid`, stderr to `run/<plan>/logs/attempt-<attempt>.log`; holds the driver lock, below, for its whole life). Steps, adapted from cpd 1 §12:
 
 | Step | What it does |
 |---|---|
@@ -473,9 +473,9 @@ The concurrency slot is implicit: an Attempt holds one from `starting` until `en
 
 | From | To | Moved by | Event |
 |---|---|---|---|
-| (none) | `open` | `cpd2 ask <attempt> <question>` (the Worker; blocks, polling the row) | `escalation` |
-| `open` | `answered` | `cpd2 answer <escalation> <answer>` (the Lead) | `escalation-answered` |
-| `open` | `expired` | `cpd2 ask` itself at `ask_minutes` (exit 5 `ask_timeout`), or engine E1 when `asker_pid` is no longer alive | `escalation-expired` |
+| (none) | `open` | `cpd ask <attempt> <question>` (the Worker; blocks, polling the row) | `escalation` |
+| `open` | `answered` | `cpd answer <escalation> <answer>` (the Lead) | `escalation-answered` |
+| `open` | `expired` | `cpd ask` itself at `ask_minutes` (exit 5 `ask_timeout`), or engine E1 when `asker_pid` is no longer alive | `escalation-expired` |
 
 `answered` and `expired` are terminal; ids are never reused (cpd 1 §11 "Escalation", kept). `answer` on a non-`open` Escalation is refused: `escalation_answered` or `escalation_expired` (exit 3).
 
@@ -489,14 +489,14 @@ The concurrency slot is implicit: an Attempt holds one from `starting` until `en
 | `stopped` | `idle` | `session state idle`, called by the pi adapter at pi's `session_start` | `session-state` |
 | `idle`, `blocked` | `working` | `session state working`, at pi's `agent_start` (and from `blocked` when the last blocking reason closes while a turn runs) | `session-state` |
 | `working`, `blocked` | `idle` | `session state idle`, at pi's `agent_settled` with pi idle (and from `blocked` when the last blocking reason closes while idle) | `session-state` |
-| `working`, `idle` | `blocked` | `session state blocked --label <text>` by the adapter while any blocking reason is open (a dialog to the User, a pending Plan review, an open Escalation to this Lead); `cpd2 ask` for the asking Worker's own Session, which `cpd2 ask` sets back to `working` when it returns | `session-state` |
+| `working`, `idle` | `blocked` | `session state blocked --label <text>` by the adapter while any blocking reason is open (a dialog to the User, a pending Plan review, an open Escalation to this Lead); `cpd ask` for the asking Worker's own Session, which `cpd ask` sets back to `working` when it returns | `session-state` |
 | any | `stopped` | `session state stopped` at pi's `session_shutdown`; engine E2 when the Session's pane is dead or gone; or `session close` | `session-state` |
 
 The adapter counts blocking reasons and reports `blocked` while the count is above zero, the model of `tmux-agent-state.ts` (spike, verified), now written to the database instead of tmux options. `session state` writes nothing and appends nothing when the state and label are unchanged.
 
 **A pane that is gone.** Engine E2 records a Session's pane as gone (Escalation `e2e-a1-q1`), and so does `session close` (commands.md §10.9), which kills the pane itself and writes the same rows. E2: when the pane in `tmux_pane` is dead or missing, one transaction sets `state = stopped` (with `session-state` if it was not `stopped`), `tmux_pane = NULL`, and appends `session-moved` `{pane: null, window: null, place: "none"}`. `stopped` alone does not mean the pane is gone: a Session gets its pane while still `stopped` (registered before pi starts), and `session run` keeps its pane after pi exits, so `session state stopped` leaves `tmux_pane` alone.
 
-### 3.7 The engine, `cpd2 watch`
+### 3.7 The engine, `cpd watch`
 
 One per machine (D5). Every `tick_seconds`:
 
@@ -506,12 +506,12 @@ One per machine (D5). Every `tick_seconds`:
 | E2 | **Liveness:** for every Attempt not `ended` whose driver lock is free (the driver died; §3.4): in `merging`, run the merge recovery R (§7.4), which ends it `merged` when its commits are already on the Lead Branch, and otherwise `cancelled` if a cancel was requested, else `crashed`; in any other status, end it `cancelled` if a cancel was requested, else `crashed`. For every Attempt with a live driver: active time over `attempt_minutes` → set `stop_request = timed_out`; Job `cancel_requested_at` set → set `stop_request = cancelled`. For every Session not `stopped` or with a pane: pane dead or missing (`tmux list-panes -a`) → `stopped` with no pane (§3.6) |
 | E3 | **Scheduling:** for each Ready Job, by `jobs.seq` across all Plans, while a slot is free: verify the fingerprint, take the driver lock, create the Attempt, start its driver with the lock inherited (§3.4) |
 | E4 | **Completion:** for each Plan in `dispatch` with no Job `queued` or `running`, at least one `merged`, and `all_merged_at` null: append `all-merged` and set `all_merged_at` |
-| E5 | **PR:** for each Plan in `pr`, every `pr_poll_seconds`: run `cpd2 pr poll --plan <id>` as a subprocess (a process boundary, cpd 1 §11 step 5) |
+| E5 | **PR:** for each Plan in `pr`, every `pr_poll_seconds`: run `cpd pr poll --plan <id>` as a subprocess (a process boundary, cpd 1 §11 step 5) |
 | E6 | **Contexts:** every `context_sync_seconds`, `context sync` each Context that has a remote (§4.6) |
 
 `watch` holds `locks/watch.lock` (a second one exits with `watch_running`, exit 3), appends `watch-started` and `watch-stopped`, and never exits on its own: unlike cpd 1, it serves every Plan.
 
-A step's failure appends an `error` Event once until it clears, and the same `error` (step, scope and code) at most once per `watch.error_repeat_seconds` even if it clears in between (R31, finding 4). `scripts/install-cpd2.sh` restarts a running engine after installing (kills the `watch` window, then `cpd2 watch --ensure`), because an engine keeps running the binary it started with (finding 5).
+A step's failure appends an `error` Event once until it clears, and the same `error` (step, scope and code) at most once per `watch.error_repeat_seconds` even if it clears in between (R31, finding 4). `scripts/install-cpd.sh` restarts a running engine after installing (kills the `watch` window, then `cpd watch --ensure`), because an engine keeps running the binary it started with (finding 5).
 
 ## 4. Storage
 
@@ -524,7 +524,7 @@ A step's failure appends an `error` Event once until it clears, and the same `er
 
 ### 4.2 Transactions and concurrency
 
-- **Who writes:** any `cpd2` process: commands, `watch`, Attempt drivers, `ask`. Nothing else can (§4.3).
+- **Who writes:** any `cpd` process: commands, `watch`, Attempt drivers, `ask`. Nothing else can (§4.3).
 - **Readers never block.** Reads run in deferred read transactions on the WAL snapshot and never wait for a writer. A reader keeps its transaction short (one query or one command's reads), so checkpoints are not starved; `events follow` opens a new read transaction for every poll (§5.4).
 - **Writers** begin with `BEGIN IMMEDIATE`, so at most one write transaction is open on the machine at any moment. A writer that cannot get the write lock within `store_busy_ms` fails with `store_busy` (exit 5).
 - **One command, one write transaction** for its state change, its `history` rows and its Events: all three commit together or not at all.
@@ -534,7 +534,7 @@ A step's failure appends an `error` Event once until it clears, and the same `er
 ### 4.3 Writes only through cpd: `txns` and `cpd_txn()`
 
 Every write transaction starts by inserting its row into `txns` with an explicit id, `(SELECT coalesce(max(id), 0) + 1 FROM txns)`, after setting the connection's `cpd_txn()` to return that id. Triggers on every table call `cpd_txn()`:
-- a connection that is not a `cpd2` process (for example the `sqlite3` shell) has no such function, so any write it attempts fails with "no such function: cpd_txn" (SQLite resolves trigger functions when the outer statement is prepared; verified by `cli/tests/store.rs`; a delete from an append-only table fails with its `append_only` error instead);
+- a connection that is not a `cpd` process (for example the `sqlite3` shell) has no such function, so any write it attempts fails with "no such function: cpd_txn" (SQLite resolves trigger functions when the outer statement is prepared; verified by `cli/tests/store.rs`; a delete from an append-only table fails with its `append_only` error instead);
 - a write whose `cpd_txn()` does not match its transaction's `txns` row is refused by the triggers on `txns`, `events` and `history`.
 
 The **schema check**: at open, cpd hashes `SELECT type, name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name` and compares it with the hash the binary embeds for the current `user_version`. A mismatch means someone dropped or changed a trigger or table: write commands refuse with `store_tampered` (exit 1); read commands still work and report it in their `tamper` field. This plus the history replaces cpd 1's `bd history` actor check (§8).
@@ -929,7 +929,7 @@ CREATE TRIGGER events_no_delete  BEFORE DELETE ON events  BEGIN SELECT RAISE(ABO
 ### 4.5 Schema versions and migrations
 
 - The schema version is `PRAGMA user_version`. The binary embeds an ordered list of migrations `1..N` (SQL scripts) and, for each version, the schema hash of §4.3.
-- At start-up every `cpd2` process opens the database and reads `user_version`:
+- At start-up every `cpd` process opens the database and reads `user_version`:
   - equal to N: check the schema hash and continue;
   - below N: `BEGIN IMMEDIATE`, re-read `user_version` inside the transaction (another process may have migrated meanwhile), apply each missing migration in order, set `user_version`, insert one `txns` row with `command = 'migrate'`, commit. A migration that fails rolls back entirely and the command fails with `migration_failed` (exit 1);
   - above N: refuse with `store_too_new` (exit 1): an older binary never writes a newer schema.
@@ -975,7 +975,7 @@ $CPD_HOME/contexts/<context>/        a git repository, branch main; remote origi
 
 - **Every state change appends at least one Event, in the same transaction** (§4.2). The tables of §3 name the kind for each transition. Rows written only to record data (metrics, `pr_seen`) append no Event of their own; they belong to the transition that wrote them.
 - Events are the single channel (D4): to Leads (through the pi adapter), to the TUI, and for agent states. Nothing else carries messages: no queue directories (cpd 1 §10), no tmux user options for state (spike), no cache directories (TUI spike).
-- `text` is written for the Lead and ends with the `cpd2` command(s) it may run, for every kind delivered as a message; for silent kinds it is a one-line description.
+- `text` is written for the Lead and ends with the `cpd` command(s) it may run, for every kind delivered as a message; for silent kinds it is a one-line description.
 
 ### 5.2 Kinds
 
@@ -1040,9 +1040,9 @@ It delivers a message with `pi.sendMessage({customType: "cpd", content: text, di
 
 The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-done` → `plan-done` and `rename` → `session-renamed`.
 
-**No loss, no duplicates.** The adapter's cursor is the highest Event id it has delivered, which it reads back at `session_start` from its own session file (the `details.id` of the last `cpd` custom message whose `details.delivered_to` is this Session), else the `id` of the Session's `session-registered` Event, whichever is greater. The adapter adds `delivered_to` (the Session's id) to the `details` of every message it delivers, so the cursor counts only messages delivered to this Session and never one at or below its `session-registered` Event: a fork's session file starts with its source's messages, whose Event ids belong to the source's stream. It runs `cpd2 events follow --session <id> --since <cursor>` and restarts it with the latest cursor if it exits. The exact protocol (activation, errors, the Plan review through plannotator) is in `commands.md`.
+**No loss, no duplicates.** The adapter's cursor is the highest Event id it has delivered, which it reads back at `session_start` from its own session file (the `details.id` of the last `cpd` custom message whose `details.delivered_to` is this Session), else the `id` of the Session's `session-registered` Event, whichever is greater. The adapter adds `delivered_to` (the Session's id) to the `details` of every message it delivers, so the cursor counts only messages delivered to this Session and never one at or below its `session-registered` Event: a fork's session file starts with its source's messages, whose Event ids belong to the source's stream. It runs `cpd events follow --session <id> --since <cursor>` and restarts it with the latest cursor if it exits. The exact protocol (activation, errors, the Plan review through plannotator) is in `commands.md`.
 
-### 5.4 `cpd2 events follow`
+### 5.4 `cpd events follow`
 
 - **Selection:** `--plan <id>`, `--context <id>`, `--session <id>` (the rule of §5.3: the Plan's `lead_session` follows its Plan, its Context and itself; any other Session only Events addressed to itself) or none (every Event); `--kind <k>` may repeat.
 - **Since:** `--since <id>` is exclusive: the first line printed is the first matching Event with an id greater than it. Without `--since`, it starts after the current highest id (only new Events). `--since 0` replays everything.
@@ -1050,7 +1050,7 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 - **Mechanism: polling, no notification channel.** Every `events_poll_ms` the follower reads `PRAGMA data_version`; when it has changed since the last read, it runs `SELECT … FROM events WHERE id > :cursor AND <filter> ORDER BY id LIMIT 500` in a fresh read transaction, prints each row, flushes, and advances the cursor. It repeats the query at once while it returns a full batch. `data_version` costs no I/O when nothing has changed, so an idle follower is cheap (docs: SQLite `PRAGMA data_version`).
 - **Back-pressure:** writes to stdout are blocking. A slow reader slows the follower, which reads the next batch only after the previous one is written; nothing is buffered beyond one batch and nothing is dropped, because the database is the buffer. A reader that falls behind or restarts resumes with `--since <last id it processed>`.
 - **End:** it runs until killed or until stdout closes (EPIPE), and then exits 0. With `--until-idle` it exits 0 once it has printed everything committed when it started (for scripts and tests).
-- `cpd2 events list` takes the same selection and prints one JSON value `{ok, events: [...], next: <id>}`, at most `--limit` (default 500) Events.
+- `cpd events list` takes the same selection and prints one JSON value `{ok, events: [...], next: <id>}`, at most `--limit` (default 500) Events.
 
 ## 6. The tmux host
 
@@ -1074,7 +1074,7 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 | `pane-active-border-style` | `fg=blue` | the focused pane's border |
 | `pane-border-format` | the format below | the column titles |
 
-**Every server start sets every option, key binding and hook of this section**, whichever command starts the server (`plan new`, `watch --ensure`, `tui`), so the cockpit looks and behaves the same whatever started it. Rerunning is safe (each is a plain `set -g`, `bind` or `set-hook -g`), so `cpd2 tui` also applies them to a server that is already running. Cockpit parity (User, 2026-10-15): the cockpit matches the running cpd 1 cockpit, whose `tui/scripts/tmux.conf` these are, renamed (`@cpd_view`, `@cpd_job`).
+**Every server start sets every option, key binding and hook of this section**, whichever command starts the server (`plan new`, `watch --ensure`, `tui`), so the cockpit looks and behaves the same whatever started it. Rerunning is safe (each is a plain `set -g`, `bind` or `set-hook -g`), so `cpd tui` also applies them to a server that is already running. Cockpit parity (User, 2026-10-15): the cockpit matches the running cpd 1 cockpit, whose `tui/scripts/tmux.conf` these are, renamed (`@cpd_view`, `@cpd_job`).
 
 **The pane border format** (`pane-border-format`) titles a pane by its pane options, first match:
 
@@ -1095,14 +1095,14 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 
 | tmux session | Window | Panes | What runs |
 |---|---|---|---|
-| `cpd` (the cockpit; `tmux.cockpit_session`) | `main` | the tree (left), the plan view (centre top), the **chat slot** (centre bottom), the widgets (right); the **StatusBar**, one row across the full width at the bottom; optionally the read-only Worker view beside the chat | `cpd2 tui` views (the StatusBar runs `cpd2 tui view statusbar`); the chat slot holds one Lead Session's pane |
-| `cpd` | `park-<label>` (one per Lead Session not in the chat slot) | one pane | a Lead (`cpd2 session run <id>`) |
-| `cpd` | `ctx-<context>` | one pane | a Context's grounded Lead (`cpd2 session run <id>`) |
-| `cpd-work` (hidden; `tmux.work_session`) | `watch` | one pane | `cpd2 watch` (D5) |
+| `cpd` (the cockpit; `tmux.cockpit_session`) | `main` | the tree (left), the plan view (centre top), the **chat slot** (centre bottom), the widgets (right); the **StatusBar**, one row across the full width at the bottom; optionally the read-only Worker view beside the chat | `cpd tui` views (the StatusBar runs `cpd tui view statusbar`); the chat slot holds one Lead Session's pane |
+| `cpd` | `park-<label>` (one per Lead Session not in the chat slot) | one pane | a Lead (`cpd session run <id>`) |
+| `cpd` | `ctx-<context>` | one pane | a Context's grounded Lead (`cpd session run <id>`) |
+| `cpd-work` (hidden; `tmux.work_session`) | `watch` | one pane | `cpd watch` (D5) |
 | `cpd-work` | `<plan>--<attempt>` (one per Attempt) | one pane, the Worker | `pi` |
 
 - `<label>` is the Session's Plan id, or the first 8 characters of its id when it has no Plan. tmux targets are always pane ids (`%<n>`) or window ids (`@<n>`), never names; names are labels for people.
-- **Pane options** identify panes, never state: `@cpd_session` (Session id) on every pane that runs a Session, and `@cpd_view` (`tree`, `plan`, `widgets`, `statusbar`, `worker`, `chat`) on the TUI's panes. A Worker view pane (`@cpd_view worker`) also carries `@cpd_job` (the Job's key, shown in its border title) and `@cpd_attempt` (the Attempt id it shows). The Worker pane opens beside the chat slot with `split-window -h -d -l 50%` (no focus); a click on another Job retargets it with `respawn-pane -k` and new `@cpd_job` and `@cpd_attempt`; a click on the Job it shows closes it. Its size in reset-layout stays the reference's (`-x 30%`, commands.md §13.2). The chat slot is the pane of `cpd:main` that has `@cpd_session` **or** `@cpd_view = chat`. The value `chat` marks the **placeholder**: the pane running `cpd2 tui view chat`, text `No Lead here: pick a Plan in the session tree`, which holds the slot while no Lead is there. At most one placeholder exists, and only ever in the slot. Pane options move with the pane on `swap-pane`, which is why the chat slot is found by that rule and not by a fixed option.
+- **Pane options** identify panes, never state: `@cpd_session` (Session id) on every pane that runs a Session, and `@cpd_view` (`tree`, `plan`, `widgets`, `statusbar`, `worker`, `chat`) on the TUI's panes. A Worker view pane (`@cpd_view worker`) also carries `@cpd_job` (the Job's key, shown in its border title) and `@cpd_attempt` (the Attempt id it shows). The Worker pane opens beside the chat slot with `split-window -h -d -l 50%` (no focus); a click on another Job retargets it with `respawn-pane -k` and new `@cpd_job` and `@cpd_attempt`; a click on the Job it shows closes it. Its size in reset-layout stays the reference's (`-x 30%`, commands.md §13.2). The chat slot is the pane of `cpd:main` that has `@cpd_session` **or** `@cpd_view = chat`. The value `chat` marks the **placeholder**: the pane running `cpd tui view chat`, text `No Lead here: pick a Plan in the session tree`, which holds the slot while no Lead is there. At most one placeholder exists, and only ever in the slot. Pane options move with the pane on `swap-pane`, which is why the chat slot is found by that rule and not by a fixed option.
 - The User attaches with `tmux -L cpd attach -t cpd` (locally or `ssh -t <host> …`). Several clients may attach at once. The User never needs to look at `cpd-work`.
 
 ### 6.3 tmux commands cpd uses
@@ -1118,7 +1118,7 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 | bring a Lead into the chat slot | `swap-pane -d -s <parked pane> -t <chat slot pane>` (verified: both processes keep their pids, the slot keeps its size), then `rename-window -t <window id> park-<label>` for the window that now holds the displaced Lead |
 | liveness | `list-panes -a -F '#{pane_id} #{window_id} #{session_name} #{pane_dead} #{pane_dead_status} #{pane_pid} #{@cpd_session}'` (plus `#{window_name}` and `#{@cpd_view}`); a pane whose `@cpd_view` this binary does not know is skipped and logged once, never an error (R31, finding 4) |
 | a dead pane of the cockpit's layout | `respawn-pane` |
-| retarget the Worker view to another Attempt; restart every live view (`cpd2 tui --respawn`, commands.md §13.1) | `respawn-pane -k -t <pane> -- <argv…>` |
+| retarget the Worker view to another Attempt; restart every live view (`cpd tui --respawn`, commands.md §13.1) | `respawn-pane -k -t <pane> -- <argv…>` |
 | the Worker view beside the chat | `split-window -h -d -t <chat slot pane> -l 50% -P -F '#{pane_id}' -- <argv…>` |
 | the conditional respawn of a dead view (§6.1) | `set-hook -g pane-died '<command>'` |
 | the legend and `logs` popups (commands.md §13.2) | `display-popup -E -T <title> -w <width> -h <height> -- <argv…>`, at most the client's size |
@@ -1131,7 +1131,7 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 | A Plan's Lead | the cockpit: a `park-<label>` window, or the chat slot of `cpd:main` | `plan new` (§3.1); `session open` resumes a `stopped` one |
 | A Context's grounded Lead | the cockpit, window `ctx-<context>`; never moved into the chat slot (it is never typed into) | `plan phase plan` (§3.1) |
 | A Worker | `cpd-work`, window `<plan>--<attempt>`, its only pane, cwd = Attempt worktree | driver A3 |
-| `cpd2 watch` | `cpd-work`, window `watch` | `plan lock`, `cpd2 tui` and `cpd2 watch --ensure`: each starts it when `locks/watch.lock` is free |
+| `cpd watch` | `cpd-work`, window `watch` | `plan lock`, `cpd tui` and `cpd watch --ensure`: each starts it when `locks/watch.lock` is free |
 | Attempt drivers | detached processes (`setsid`), not in tmux; logs in `run/<plan>/logs/` | E3 |
 
 `session open <id>` brings a Lead into the chat slot; `session park <id>` moves the Lead in the chat slot back into a parked window: it creates a new `park-<label>` window holding a placeholder, then `swap-pane`s the Lead and the placeholder. When a Lead takes the slot, `session open` kills the placeholder pane it displaced, with its window. Each appends `session-moved` for every Session whose place changed.
@@ -1161,11 +1161,11 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 
 ### 6.6 The engine's place (D5)
 
-One `cpd2 watch` per machine, in `cpd-work:watch`. It is not tied to any Lead's pane (vision decision 6). Change from cpd 1: one engine instead of one per Workflow, so one concurrency limit covers every Plan and nothing has to be started per Plan.
+One `cpd watch` per machine, in `cpd-work:watch`. It is not tied to any Lead's pane (vision decision 6). Change from cpd 1: one engine instead of one per Workflow, so one concurrency limit covers every Plan and nothing has to be started per Plan.
 
 ### 6.7 `session fork`: fork when idle
 
-`cpd2 session fork <source> [--plan <id>] [--name <n>] [--message-file <f>]` registers a new Session (`stopped`, `forked_from = source`), creates its parked window running `cpd2 session run <new id>`, appends `session-registered` and `session-moved`, and returns at once with the new id. The waiting happens in the new pane, not in the command. `cpd2 session run <id>` (internal) then:
+`cpd session fork <source> [--plan <id>] [--name <n>] [--message-file <f>]` registers a new Session (`stopped`, `forked_from = source`), creates its parked window running `cpd session run <new id>`, appends `session-registered` and `session-moved`, and returns at once with the new id. The waiting happens in the new pane, not in the command. `cpd session run <id>` (internal) then:
 
 1. **Waits until the source is idle:** its session file exists, **and** its Session state is `idle` or `stopped`, **and** the last `message` entry of its session file is an assistant message with `stopReason` `stop`, **and** the file has not been modified for `fork_quiet_seconds` (default 5). A source that is registered but has no session file yet (a grounded Lead whose own `session run` has not forked yet, §3.1) is waited for, not refused. It checks every 2 seconds and shows `Waiting for the source Lead to finish its turn, then forking it as "<name>"…`. Rule from `fork-lead.sh` (verified 2026-10-14); the Session-state and file-exists conditions are new: the first only makes the check earlier, the second covers a source that has not started.
 2. Runs `pi … --fork <source file> --session-id <id> -n <name> -- <first message>` (§6.5); without `--message-file` there is no first message and no `--` (the grounded Lead, §3.1).
@@ -1253,7 +1253,7 @@ All of it runs under the **per-repo lock** `locks/repo-<sha1>.lock` (sha1 of the
 5. **Rebase** in the Attempt worktree: `git -C <attempt worktree> rebase old`. On a conflict: record `git diff --name-only --diff-filter=U`, run `git rebase --abort`, and end `merge_conflict` with the file list in the feedback. The rebase never happens in the Lead worktree (t3 F6).
 6. Removed by R19 (no Job-level Gate): the merge runs no Gate; the Gate runs at `pr open` and `pr rebase` (§7.6). The step keeps its number so that steps 7–10 keep theirs.
 7. **Cancel check** again (the last safe point).
-8. **Fast-forward with a compare-and-swap:** `new = git -C <attempt worktree> rev-parse HEAD`; verify `git merge-base --is-ancestor old new`; then `git update-ref -m "cpd2: merge <plan>/<attempt>" refs/heads/cpd/<plan> new old`. git applies it only if the ref still equals `old` (t3 F7). If it fails because the ref moved (someone outside cpd moved it, since cpd holds the lock): back to step 2, at most 3 times, then `cas_lost`.
+8. **Fast-forward with a compare-and-swap:** `new = git -C <attempt worktree> rev-parse HEAD`; verify `git merge-base --is-ancestor old new`; then `git update-ref -m "cpd: merge <plan>/<attempt>" refs/heads/cpd/<plan> new old`. git applies it only if the ref still equals `old` (t3 F7). If it fails because the ref moved (someone outside cpd moved it, since cpd holds the lock): back to step 2, at most 3 times, then `cas_lost`.
 9. **Sync the Lead worktree** to the new commit: `git -C <lead worktree> read-tree -m -u old new` (the tree was clean at step 3, so this cannot conflict with local edits). If it fails (for example an untracked file in the way), the merge stands, because the ref has moved, and cpd appends `error` with code `lead_worktree_stale` and the command that fixes it.
 10. End the Attempt `merged` / `merged` with `merged_sha = new`, and the Job `merged`, in one transaction (`job-merged`). Once it has committed, release the lock.
 
@@ -1311,13 +1311,13 @@ TOML, because:
 - repos already describe their setup and Gate in TOML (`.config/wt.toml`), so the User reads one format;
 - Rust parses it into typed structs with unknown keys rejected (serde `deny_unknown_fields`).
 
-cpd 1 used JSON (`config.json`), which has no comments; the two files coexist in `$CPD_HOME` until the switch-over.
+cpd 1 used JSON (`config.json`), which has no comments; the two files coexisted in `$CPD_HOME` until the switch-over, which removed cpd 1 and its `config.json`.
 
 Rules:
 - The file is required, because `machine` has no default; a missing file is `config_missing` (exit 1).
 - Every other key has the default below, built into the binary. The file holds only `version`, `machine` and real deviations.
 - Unknown keys, wrong types or out-of-range values are `config_invalid` (exit 1), with the key path in `details`.
-- `cpd2 config` prints the effective configuration (defaults merged with the file), with each value's source.
+- `cpd config` prints the effective configuration (defaults merged with the file), with each value's source.
 
 ### 8.2 Keys
 
@@ -1329,7 +1329,7 @@ concurrency = 3              # Attempts not ended, machine-wide (§3.4)
 retry_cap = 2                # automatic Attempts are capped at 1 + retry_cap (§9)
 lead_tier = "O3"
 lead_pi_packages = ["npm:@plannotator/pi-extension@0.28.17", "npm:@juicesharp/rpiv-ask-user-question@2.13.8"]
-pi_adapter = ""              # "" = <dir of the cpd2 binary>/../share/cpd2/pi
+pi_adapter = ""              # "" = <dir of the cpd binary>/../share/cpd/pi
 
 [tiers]                      # pi model per Tier letter, "<provider>/<model-id>"
 O = "github-copilot/claude-opus-5.5"
@@ -1389,7 +1389,7 @@ Kept from cpd 1 §7, with one change in how pi's catalog is read.
 - **Ladder** `next(t)`: the same model at effort + 1 if valid; otherwise the next model in `H → S → O` at the lowest valid effort ≥ the current one; otherwise none. Examples: `H1→H2`, `H3→S3`, `S4→S5`, `S5→O5`, `O4→O5`, `O5→none`.
 - **Attempt Tier:** Attempt 1 uses the Job's Tier; each automatic Attempt n uses `next` applied n − 1 times from the Job's Tier. Automatic Attempts are capped at `1 + retry_cap` and stop early when `next` is none. `job retry --tier <T>` sets an explicit Tier for the next Attempt (`origin = retry`), and the ladder continues from it, with a fresh cap.
 - **Defaults:** Lead `O3` (`lead_tier`); the contract Jobs ran at `O3` (R13). There is no review Tier (R19).
-- `cpd2 tiers` prints `{ok, pi_version, tiers: {O: {model, efforts: [..]}, S: …, H: …}}`.
+- `cpd tiers` prints `{ok, pi_version, tiers: {O: {model, efforts: [..]}, S: …, H: …}}`.
 
 ## 10. Traceability
 
@@ -1400,13 +1400,13 @@ Kept from cpd 1 §7, with one change in how pi's catalog is read.
 | R3 v1 stopped for good; its work is reference only | §1.4 (cpd 1's files untouched); nothing here depends on `cpd/v1` |
 | R4 drop worktrunk; cpd uses git directly | §7.1, §7.2, §7.4, §7.6 |
 | R5 the repo defines setup and Gate in `.config/wt.toml` | §7.3, §7.5 |
-| R6 Cargo workspace: `cli/` next to `tui/` | §1.1 |
+| R6 Cargo workspace: `cli/` next to `tui/` (since the switch-over, three crates: `core/`, `cli/`, `tui/`) | §1.1 |
 | R7 running Workflows finish on TypeScript cpd; no Ledger migration | §1.4, §4.5 |
 | R8 outline agreed, then the full contract written by a Worker | this document and `commands.md` (Job `contract-commands`) |
 | R9 the Gate extends `npm run verify` with cargo | §7.3 (the Gate is whatever `pre-merge` runs; the repo's `pre-merge` stays `npm run verify`, which follow-up 1 extends) |
 | R10 outline approved with D1–D5 | §1–§9; D1–D5 below |
 | R11 one big Plan, one PR | §2.2 Plan (one repo, one PR), §3.1 |
-| R12 the binary is installed as `cpd2` during development | §1.1; every command in this document is written `cpd2` |
+| R12 the binary was installed as `cpd2` during development (history: since the switch-over it is `cpd`) | §1.1; every command in this document is written `cpd` |
 | R13 the full contract at Tier O3, review S4 | §9 (defaults); the Job that wrote this. Its review Tier no longer exists in cpd 2 (R19) |
 | R14 the Plan starts from `main` after lead-fork's PR | §3.1 (`plan lock` creates the Lead Branch from `origin/<base>`), §7.2 |
 | R15 Contexts follow ADR-0011 and ADR-0012: the grounded Lead is a fork taken at the first Plan's `grounding → plan`, parked and never typed into; later forks get the newer records; the Context store is typed JSONL records in git, indexed by SQLite | §2.2 Context and Context record, §3.1, §4.6, §6.7 |
