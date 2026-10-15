@@ -13,10 +13,11 @@ layer (a right-aligned `Line` per tree row, since the tree widget draws one text
 
 ## Palette and legend
 
-`src/palette.rs` is the only place with colours and status icons: a `Meaning` (not started white, in progress cyan, waiting
-on review yellow, done green, failed red, planning magenta, grounding blue, nothing dark grey) and the mappings from Job status,
+`src/palette.rs` is the only place with colours and status icons: a `Meaning` (not started white, in progress green, waiting
+on review yellow, done blue, failed red, planning magenta, grounding white, nothing dark grey) and the mappings from Job status,
 phase, PR state and PR checks to `(icon, Meaning)`. Every view takes both from it, so changing one changes it everywhere;
-the test `no_colour_outside_the_palette` fails when another `src/*.rs` names a colour.
+the test `no_colour_outside_the_palette` fails when another `src/*.rs` names a colour. Grounding shares white with "not
+started": the one deliberate exception to one colour per meaning.
 
 | Job status | queued | running | in review | merged | failed | draft | unknown |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -55,9 +56,9 @@ starts, the name then coming from the file's last `session_info`). The Context v
 grouped under its Context (the repo directory name of the session's own project directory: the `cwd` of its session
 file's header line, read once per `@session_file`, else the pane's cwd when the file is missing or has no `cwd`), labelled by the pi name, else the Workflow id,
 else the first 8 characters of the session id. The plan view shows the Workflow of the session in the centre slot
-(`no Workflow yet` when unattached); its tabs are that Context's sessions. Switching swaps the session's pane into the
-centre slot (`swap-pane -d`) and focuses it (`select-pane`), so typing goes to the chat; a tab click and a tree click do the
-same (`switch_to`).
+(`no Workflow yet` when unattached, shown in the chart area); its tabs are that Context's sessions. Switching swaps the
+session's pane into the centre slot (`swap-pane -d`) and focuses it (`select-pane`), so typing goes to the chat; a tab click
+and a tree click do the same (`switch_to`).
 
 ## Context column
 
@@ -65,22 +66,33 @@ The `context` view is a `tui-tree-widget` tree (`src/context.rs`; `TreeState` ke
 scrolling and the clicks):
 
     ● cpd                         a Context: dot, name (and the number of Plans inside when collapsed)
-      ├ ○ v1             36⋅0⋅0⋅5⋅1
-      ├ ● cpd rust lead   0⋅1⋅0⋅1⋅0
-      └ ○ cpd-ui          1⋅0⋅2⋅3⋅0
+      ├ ○ v1             36⋅0⋅0⋅1⋅5
+    ⏵ ├ ● cpd rust lead   0⋅1⋅0⋅0⋅1
+      └ ○ cpd-ui          1⋅0⋅2⋅0⋅3
 
 A session row is guide, dot, name (cut with `…` before the counters), and its Workflow's five Job counters at the right:
-queued (drafts in phase `plan`), running, in review, merged, failed. Cancelled Jobs are not counted; a session with no
+queued, running, in review, failed, merged (in phase `plan` the drafts come first). Cancelled Jobs are not counted; a session with no
 Workflow shows no counters. Zeros are dark grey, the `⋅` separators grey.
 
-Colours are the palette's: the dot's is the Workflow's phase (none dark grey, context blue, plan magenta, dispatch cyan,
-pr yellow, done green); a counter's is its Job status (queued white, running cyan, in review yellow, merged green, failed red;
+Colours are the palette's: the dot's is the Workflow's phase (none dark grey, context white, plan magenta, dispatch green,
+pr yellow, done blue); a counter's is its Job status (queued white, running green, in review yellow, failed red, merged blue;
 zeros and the drafts of phase `plan` dark grey).
 
-A Context's dot has the colour of the busiest phase inside (dispatch > plan > context > pr > done > none). The selected row
-is drawn reversed across the full width. Keys: ↑↓/jk move; Space or Enter on a Context collapses or expands it; Enter or a
-click on a session switches the centre to it (a click on a Context toggles it); `?` or a click on the bottom row opens the
-legend; `n` and `x` below. The tree scrolls above the button.
+A Context's dot has the colour of the busiest phase inside (dispatch > plan > context > pr > done > none). 
+
+**Cursor.** Context rows are not selectable; a click on one only collapses or expands it. The keyboard cursor moves between
+sessions only (↑↓/jk) and is keyboard-only: a click never moves or shows it. It is drawn inverted across the full row only
+while the pane has keyboard focus (`focus-events on` in `tmux.conf`, and the focus events the view receives), and shows
+after an arrow key. Enter, `n` and `x` act on it only while it shows. Keys: Enter on the cursor's session switches the
+centre to it; a click on a session switches and focuses it; `?` or a click on the bottom row opens the legend; `n` and `x`
+below. The tree scrolls above the button.
+
+**⏵ marks the centre.** The `⏵` in the dot column marks the session in the centre slot; the tabs and the tree read it
+from the same place, so they agree within the 250 ms loop.
+
+**Worker indicator.** The bottom row's right end shows `workers N/M`, shortened to `N/M` when narrow. `N` is the live
+slots (`<cpd home>/slots/slot-<i>.json` whose `pid` is alive), `M` is `concurrency` in `<cpd home>/config.json`. Interim
+source, read directly from cpd's home until cpd2 provides the data (`src/workers.rs`).
 
 **● needs you, ○ does not.** A session needs you when its Lead waits on the User, or finished a turn the User has not seen.
 `tmux-agent-state.ts` publishes the pane options for it: `@asking` (1 while a tool named `ask_*` runs, and after a
@@ -134,7 +146,12 @@ a card; `d` needs the card.
   line that skips columns rides a row free of cards, the one nearest its exit row, from its own bus to the bus before its
   target (rows may be shared). Lines are dim, in the palette's "nothing" colour.
 - **Padding:** two columns and one row (`Rect::inner(Margin)`) around the chart, so nothing touches the pane's edges; the
-  chart scrolls inside it. Cancelled Jobs are hidden (`N cancelled hidden` in the header line).
+  chart scrolls inside it. Cancelled Jobs are hidden.
+
+The top row holds only the Context's name and its tabs (`src/tabs.rs`, one per Lead session), over a separator line (a
+`Block` with `Borders::BOTTOM`). The active tab is reversed and is its only marker (no `⏵`); a click on a tab switches to
+it and focuses the chat. The Workflow title, the count of hidden Jobs and the refresh age are not drawn; `no Workflow yet`,
+`loading…` and the notes show in the chart area.
 
 Selection is per Job. Nothing is selected when the view opens, when a tab switches to another Workflow, or when the selected
 Job disappears (cancelled or hidden); the view starts scrolled to the top left. A click on a pill selects it; the first
@@ -146,6 +163,7 @@ arrow or `hjkl` key selects the first pill of the first column and moves from th
 | ↑ ↓ / k j | select the previous / next Job in the same column |
 | mouse wheel | scroll vertically (wheel left/right: horizontally) |
 | Enter, click on a pill | open the Worker's read-only chat for that Job |
+| Esc, click on the selected pill, click on empty chart space | clear the selection and close that Job's Worker view |
 
 The selected pill is drawn bold and reversed. The view scrolls on both axes to keep the selection visible when it moves by
 key; the refresh keeps the scroll offset and holds the User's selection by Job key (it never creates one).
