@@ -213,3 +213,284 @@ impl View {
         rows::draw(f, list, &self.tree, &mut self.state, cursor);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::{KeyModifiers, MouseEvent};
+
+    use super::super::fixture::sample;
+    use super::*;
+    use crate::args::Name;
+    use crate::ids::{ContextId, PlanId, SessionId};
+
+    fn press(view: &mut View, code: KeyCode) -> Effect {
+        view.key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    fn typed(view: &mut View, text: &str) {
+        for c in text.chars() {
+            assert_eq!(press(view, KeyCode::Char(c)), Effect::None);
+        }
+    }
+
+    /// A focused view whose cursor is shown and on `path`.
+    fn on(path: &[&str]) -> View {
+        let mut view = View::new(sample(), true);
+        press(&mut view, KeyCode::Down); // shows the cursor where it was
+        view.state.select(path.iter().map(|p| (*p).to_owned()).collect());
+        view
+    }
+
+    fn sid(s: &str) -> SessionId {
+        SessionId::parse(s).unwrap()
+    }
+
+    fn drawn(view: &mut View, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| view.draw(f)).unwrap();
+        let buf = terminal.backend().buffer();
+        (0..height).map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned()).collect()
+    }
+
+    #[test]
+    fn nothing_acts_until_an_arrow_key_shows_the_cursor() {
+        let mut view = View::new(sample(), true);
+        assert_eq!(view.state.selected(), ["alpha"], "the first row is selected from the start");
+        for key in [KeyCode::Enter, KeyCode::Char('p'), KeyCode::Char('f'), KeyCode::Char('r'), KeyCode::Char('n')] {
+            assert_eq!(press(&mut view, key), Effect::None);
+        }
+        assert!(view.prompt.is_none());
+        press(&mut view, KeyCode::Down);
+        assert_eq!(view.state.selected(), ["alpha"], "the first arrow only shows the cursor");
+        press(&mut view, KeyCode::Char('j'));
+        assert_eq!(view.state.selected(), ["alpha", "ship"]);
+        press(&mut view, KeyCode::Char('k'));
+        assert_eq!(view.state.selected(), ["alpha"]);
+    }
+
+    #[test]
+    fn a_click_or_losing_focus_hides_the_cursor_until_the_next_arrow() {
+        let mut view = on(&["alpha", "ship"]);
+        view.focus(false);
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
+        view.focus(true);
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None, "focus back is not a key");
+        press(&mut view, KeyCode::Down);
+        assert_eq!(view.state.selected(), ["alpha", "ship"], "only shows it again");
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Open(sid("l-ship"))));
+    }
+
+    #[test]
+    fn q_ends_the_view_whatever_the_cursor() {
+        assert_eq!(press(&mut View::new(sample(), false), KeyCode::Char('q')), Effect::Quit);
+    }
+
+    #[test]
+    fn enter_opens_the_lead_of_a_plan_row_and_a_fork() {
+        assert_eq!(press(&mut on(&["alpha", "ship"]), KeyCode::Enter), Effect::Run(Action::Open(sid("l-ship"))));
+        assert_eq!(press(&mut on(&["alpha", "ship", "f-blocked"]), KeyCode::Enter), Effect::Run(Action::Open(sid("f-blocked"))));
+    }
+
+    #[test]
+    fn enter_on_a_context_folds_it_and_space_folds_a_plan_with_forks() {
+        let mut view = on(&["alpha"]);
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
+        assert!(!view.state.opened().contains(&vec!["alpha".to_owned()]));
+        press(&mut view, KeyCode::Enter);
+        assert!(view.state.opened().contains(&vec!["alpha".to_owned()]));
+        let mut view = on(&["alpha", "ship"]);
+        assert_eq!(press(&mut view, KeyCode::Char(' ')), Effect::None);
+        assert!(!view.state.opened().contains(&vec!["alpha".to_owned(), "ship".to_owned()]));
+    }
+
+    #[test]
+    fn p_parks_the_session_of_the_row() {
+        assert_eq!(press(&mut on(&["alpha", "ship"]), KeyCode::Char('p')), Effect::Run(Action::Park(sid("l-ship"))));
+        assert_eq!(press(&mut on(&["alpha", "ship", "f-idle"]), KeyCode::Char('p')), Effect::Run(Action::Park(sid("f-idle"))));
+        let mut view = on(&["gamma"]);
+        assert_eq!(press(&mut view, KeyCode::Char('p')), Effect::None);
+        assert_eq!(view.note, "Pick a Plan or a fork to park.");
+    }
+
+    #[test]
+    fn f_forks_with_a_name_or_the_default() {
+        let mut view = on(&["alpha", "ship"]);
+        assert_eq!(press(&mut view, KeyCode::Char('f')), Effect::None);
+        assert_eq!(view.footer(), "Fork ship lead, name: █ (empty: default; Enter forks, Esc cancels)");
+        typed(&mut view, "  my fork ");
+        assert_eq!(
+            press(&mut view, KeyCode::Enter),
+            Effect::Run(Action::Fork { source: sid("l-ship"), name: Some("my fork".parse::<Name>().unwrap()) })
+        );
+        assert!(view.prompt.is_none());
+        let mut view = on(&["alpha", "ship", "f-idle"]);
+        press(&mut view, KeyCode::Char('f'));
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Fork { source: sid("f-idle"), name: None }));
+    }
+
+    #[test]
+    fn a_fork_name_longer_than_80_characters_is_refused_in_the_prompt() {
+        let mut view = on(&["alpha", "ship"]);
+        press(&mut view, KeyCode::Char('f'));
+        typed(&mut view, &"x".repeat(81));
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
+        assert!(view.footer().starts_with("A name must be 1 to 80 characters"), "{}", view.footer());
+    }
+
+    #[test]
+    fn r_renames_starting_from_the_current_name() {
+        let mut view = on(&["alpha", "ship"]);
+        press(&mut view, KeyCode::Char('r'));
+        assert_eq!(view.footer(), "Rename ship lead to: ship lead█ (Enter renames, Esc cancels)");
+        for _ in 0..4 {
+            press(&mut view, KeyCode::Backspace);
+        }
+        typed(&mut view, "boss");
+        assert_eq!(
+            press(&mut view, KeyCode::Enter),
+            Effect::Run(Action::Rename { session: sid("l-ship"), name: "ship boss".parse().unwrap() })
+        );
+    }
+
+    #[test]
+    fn an_empty_name_is_refused_and_the_prompt_stays() {
+        let mut view = on(&["alpha", "ship"]);
+        press(&mut view, KeyCode::Char('r'));
+        for _ in 0..20 {
+            press(&mut view, KeyCode::Backspace);
+        }
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
+        assert!(view.footer().starts_with("A name must be 1 to 80 characters"), "{}", view.footer());
+        typed(&mut view, "x");
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Rename { session: sid("l-ship"), name: "x".parse().unwrap() }));
+    }
+
+    #[test]
+    fn n_starts_a_plan_in_the_context_of_the_row_taking_the_repo_of_its_newest_plan() {
+        let mut view = on(&["alpha", "sketch"]);
+        press(&mut view, KeyCode::Char('n'));
+        assert_eq!(view.footer(), "New Plan in alpha, id: █ (Enter: next, Esc cancels)");
+        typed(&mut view, "pay-4521");
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
+        assert_eq!(view.footer(), "New Plan in alpha, title: █ (Enter starts, Esc cancels)");
+        typed(&mut view, "Retry failed payouts");
+        assert_eq!(
+            press(&mut view, KeyCode::Enter),
+            Effect::Run(Action::NewPlan {
+                context: ContextId::parse("alpha").unwrap(),
+                id: PlanId::parse("pay-4521").unwrap(),
+                title: "Retry failed payouts".into(),
+                repo: "/repo/old".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn n_in_a_context_without_plans_asks_for_the_repo() {
+        let mut view = on(&["gamma"]);
+        press(&mut view, KeyCode::Char('n'));
+        typed(&mut view, "first");
+        press(&mut view, KeyCode::Enter);
+        typed(&mut view, "The first");
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
+        assert_eq!(view.footer(), "New Plan in gamma, repo: █ (Enter starts, Esc cancels)");
+        typed(&mut view, "/work/repo");
+        assert_eq!(
+            press(&mut view, KeyCode::Enter),
+            Effect::Run(Action::NewPlan {
+                context: ContextId::parse("gamma").unwrap(),
+                id: PlanId::parse("first").unwrap(),
+                title: "The first".into(),
+                repo: "/work/repo".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_bad_plan_id_or_an_empty_value_is_refused_in_the_prompt() {
+        let mut view = on(&["alpha"]);
+        press(&mut view, KeyCode::Char('n'));
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
+        assert!(view.footer().starts_with("A value is required. New Plan in alpha, id:"), "{}", view.footer());
+        typed(&mut view, "Bad Id");
+        press(&mut view, KeyCode::Enter);
+        assert!(view.footer().starts_with("Invalid Plan id \"Bad Id\""), "{}", view.footer());
+        assert!(view.footer().contains("id: Bad Id█"), "the prompt stays on the id");
+    }
+
+    #[test]
+    fn a_prompt_takes_every_key_and_esc_cancels_it() {
+        let mut view = on(&["alpha", "ship"]);
+        press(&mut view, KeyCode::Char('f'));
+        typed(&mut view, "qnpjf");
+        assert_eq!(view.footer(), "Fork ship lead, name: qnpjf█ (empty: default; Enter forks, Esc cancels)");
+        assert_eq!(view.state.selected(), ["alpha", "ship"]);
+        assert_eq!(press(&mut view, KeyCode::Esc), Effect::None);
+        assert!(view.prompt.is_none());
+        assert_eq!(view.footer(), "");
+    }
+
+    #[test]
+    fn the_note_of_an_action_stays_until_the_next_key() {
+        let mut view = on(&["alpha", "ship"]);
+        view.done(Err("no_cockpit: No cockpit.".into()));
+        assert_eq!(view.note, "no_cockpit: No cockpit.");
+        press(&mut view, KeyCode::Char('x'));
+        assert_eq!(view.note, "");
+    }
+
+    #[test]
+    fn the_footer_is_drawn_under_a_separator_and_the_tree_keeps_the_rest() {
+        let mut view = on(&["alpha", "ship"]);
+        press(&mut view, KeyCode::Char('f'));
+        let rows = drawn(&mut view, 44, 14);
+        assert_eq!(rows[8], "○ gamma");
+        assert_eq!(rows[10], "─".repeat(44));
+        assert_eq!(rows[11], "Fork ship lead, name: █ (empty: default;");
+        assert_eq!(rows[12], "Enter forks, Esc cancels)");
+        press(&mut view, KeyCode::Esc);
+        let rows = drawn(&mut view, 44, 14);
+        assert!(rows[9..].iter().all(|r| r.is_empty()), "{rows:?}");
+    }
+
+    fn click(view: &mut View, column: u16, row: u16) -> Effect {
+        view.mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column, row, modifiers: KeyModifiers::NONE })
+    }
+
+    #[test]
+    fn a_click_folds_a_context_and_opens_a_plan_or_a_fork_and_hides_the_cursor() {
+        let mut view = on(&["alpha", "ship"]);
+        drawn(&mut view, 44, 10);
+        assert_eq!(click(&mut view, 5, 0), Effect::None, "the Context row `alpha`");
+        assert!(!view.state.opened().contains(&vec!["alpha".to_owned()]));
+        drawn(&mut view, 44, 10);
+        assert_eq!(view.state.selected(), ["alpha", "ship"], "a click selects nothing");
+        assert!(!view.cursor_shown());
+        click(&mut view, 5, 0);
+        drawn(&mut view, 44, 10);
+        assert_eq!(click(&mut view, 8, 1), Effect::Run(Action::Open(sid("l-ship"))), "the Plan row");
+        assert_eq!(click(&mut view, 8, 3), Effect::Run(Action::Open(sid("f-blocked"))), "a fork row");
+        assert_eq!(click(&mut view, 8, 9), Effect::None, "below the tree");
+    }
+
+    #[test]
+    fn clicks_are_ignored_while_a_prompt_is_open() {
+        let mut view = on(&["alpha", "ship"]);
+        drawn(&mut view, 44, 10);
+        press(&mut view, KeyCode::Char('f'));
+        assert_eq!(click(&mut view, 8, 1), Effect::None);
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_cursor_on_its_row_and_the_folds() {
+        let mut view = on(&["alpha", "sketch"]);
+        view.state.close(&["alpha".to_owned(), "ship".to_owned()]);
+        let mut tree = sample();
+        tree.contexts[0].plans[1].sessions[0].state = crate::session::State::Working;
+        view.refresh(tree);
+        assert_eq!(view.state.selected(), ["alpha", "sketch"]);
+        assert!(!view.state.opened().contains(&vec!["alpha".to_owned(), "ship".to_owned()]));
+    }
+}

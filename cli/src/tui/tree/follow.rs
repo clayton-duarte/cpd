@@ -78,3 +78,29 @@ impl Drop for Follower {
         let _ = self.child.wait();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::Kind;
+
+    #[test]
+    fn every_kind_followed_exists_and_the_tree_lists_of_17_are_among_them() {
+        for kind in KINDS {
+            assert!(Kind::ALL.iter().any(|k| k.as_str() == *kind), "{kind} is no Event kind");
+        }
+        for kind in [
+            "context-created",
+            "context-grounded",
+            "plan-created",
+            "plan-phase",
+            "plan-done",
+            "session-registered",
+            "session-state",
+            "session-moved",
+            "session-renamed",
+        ] {
+            assert!(KINDS.contains(&kind), "{kind}");
+        }
+    }
+}

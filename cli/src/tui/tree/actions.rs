@@ -81,3 +81,51 @@ pub fn run(action: &Action) -> Result<String, String> {
         Err(format!("{}: {}", error["code"].as_str().unwrap_or("error"), error["message"].as_str().unwrap_or("failed")))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn sid(s: &str) -> SessionId {
+        SessionId::parse(s).unwrap()
+    }
+
+    #[test]
+    fn each_action_is_one_command_of_the_contract() {
+        let name = |n: &str| n.parse::<Name>().unwrap();
+        let cases = [
+            (Action::Open(sid("l-ship")), vec!["session", "open", "l-ship"]),
+            (Action::Park(sid("l-ship")), vec!["session", "park", "l-ship"]),
+            (Action::Fork { source: sid("l-ship"), name: None }, vec!["session", "fork", "l-ship"]),
+            (Action::Fork { source: sid("l-ship"), name: Some(name("my fork")) }, vec!["session", "fork", "l-ship", "--name=my fork"]),
+            (
+                Action::Rename { session: sid("l-ship"), name: name("-odd") },
+                vec!["session", "rename", "--session", "l-ship", "--", "-odd"],
+            ),
+            (
+                Action::NewPlan {
+                    context: ContextId::parse("alpha").unwrap(),
+                    id: PlanId::parse("pay-4521").unwrap(),
+                    title: "Retry failed payouts".into(),
+                    repo: "/work/pay".into(),
+                },
+                vec!["plan", "new", "pay-4521", "--context=alpha", "--repo=/work/pay", "--title=Retry failed payouts"],
+            ),
+        ];
+        for (action, argv) in cases {
+            assert_eq!(action.argv(), argv, "{action:?}");
+        }
+    }
+
+    #[test]
+    fn the_note_says_what_the_reply_says() {
+        let open = Action::Open(sid("l-ship"));
+        assert_eq!(open.done(&json!({"ok": true, "session": "l-ship", "pane": "%1", "displaced": null})), "opened");
+        assert_eq!(open.done(&json!({"ok": true, "already": true})), "already in the chat slot");
+        assert_eq!(Action::Park(sid("l-ship")).done(&json!({"ok": true, "already": true})), "not in the chat slot");
+        let fork = Action::Fork { source: sid("l-ship"), name: None };
+        assert_eq!(fork.done(&json!({"ok": true, "session": {"name": "ship (fork)"}})), "forked as ship (fork)");
+    }
+}
