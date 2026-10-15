@@ -812,11 +812,11 @@ Run by engine E5 every `pr_poll_seconds` as a subprocess; also by hand.
 
 Effects:
 - **gh:** `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision` and `gh api repos/{owner}/{repo}/pulls/<n>/comments`, compared with `pr_seen` (cpd 1 §13, kept).
-- **Rows**, one transaction: `pr_seen`, `pr_polled_at`. New failing checks, reviews or comments, or `state = CLOSED` without a merge: **Event** `pr-feedback` (data of §5.2). Merged: `phase = done`, `done_at`, **Event** `plan-done` `{pr, merged_at}`.
+- **Rows**, one transaction: `pr_seen`, `pr_polled_at`, and the three columns of migration 2 (contract §4.5, §7.6), set together on every poll: `pr_title`, `pr_review_decision` (`none`, `approved`, `changes_requested`) and `pr_checks` (`none`, `passed`, `pending`, `failed`). They are what the Dispatch column shows (§13.2, §17) and append no Event of their own. New failing checks, reviews or comments, or `state = CLOSED` without a merge: **Event** `pr-feedback` (data of §5.2). Merged: `phase = done`, `done_at`, **Event** `plan-done` `{pr, merged_at}`.
 - **After `done`:** the Plan's remaining Attempt worktrees and branches, kept for debugging (§3.4 A9), are removed (`git worktree remove --force`, `git branch -D`), and any of its Attempt windows killed. The Lead worktree and the Lead Branch stay.
 
 ```json
-{"ok": true, "plan": "pay-4521", "state": "OPEN", "merged": false, "changes": {"checks": [{"name": "ci/test", "conclusion": "FAILURE"}], "reviews": [], "comments": []}}
+{"ok": true, "plan": "pay-4521", "state": "OPEN", "merged": false, "title": "Add the payment webhook", "review_decision": "none", "checks": "failed", "changes": {"checks": [{"name": "ci/test", "conclusion": "FAILURE"}], "reviews": [], "comments": []}}
 ```
 
 Idempotent: yes; what was reported is in `pr_seen`, so a rerun reports nothing new.
@@ -1023,6 +1023,30 @@ The first message is the file `plan new` or `session fork` wrote (§1.4); none f
 
 Idempotent: yes; a restart resumes (§6.7 step 3).
 
+### 10.9 `session close`
+
+```
+cpd2 session close <id>
+```
+
+Ends a Lead's pane: pi stops and the Session's file stays, so `session open` resumes it later (§10.4). It is the tree's `x` key (§13.2). Added by cockpit parity (amendment 14, §19). The §2 index row is added by the Job that implements the command, in the same commit.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Session is a `lead` | `not_a_lead` | 3 |
+| its place is not `chat`: the Lead in the chat slot is never closed; `details.next` = `cpd2 session park` | `in_chat_slot` | 3 |
+
+Effects:
+- No live pane (`tmux_pane` null, or the pane is gone): nothing; `"already": true`.
+- **tmux:** `kill-pane -t <pane>`. A parked window that held only that pane closes with it.
+- **Rows**, one transaction, compare-and-swap on `tmux_pane` (when engine E2 recorded the pane as gone first, nothing is left to write: `"already": true`): `state = stopped` with **Event** `session-state` `{from, to: "stopped", label: null}` unless it already was `stopped`; `tmux_pane = NULL`; **Event** `session-moved` `{pane: null, window: null, place: "none"}`, the rows E2 writes for a pane that is gone (contract §3.6).
+
+```json
+{"ok": true, "session": "8d0e…", "pane": "%41"}
+```
+
+Idempotent: yes.
+
 ## 11. `events`
 
 §5. Selection: `--plan <id>`, `--context <id>` or `--session <id>`, at most one (`usage`), or none for every Event; `--kind <kind>` may repeat (a kind not in §5.2 is `usage`). These flags are filters: they do not fall back to `CPD_PLAN` or `CPD_SESSION`.
@@ -1102,15 +1126,16 @@ Idempotent: yes; a running engine gives `"started": false` with `"already": true
 ### 13.1 `tui`
 
 ```
-cpd2 tui [--attach]
+cpd2 tui [--attach] [--respawn]
 ```
 
 Builds the cockpit (§6.1, §6.2) unless it exists, and starts the engine.
 
 Effects, each only when missing:
 - **tmux:** the server with §6.1's options; the session `cpd` with window `main` (`new-session -d -s cpd -n main -x 215 -y 62`), split into the tree (left, 20 %), the plan view (centre top) above the chat slot (centre bottom), and the widgets (right, 20 %), each running `cpd2 tui view <tree|plan|widgets>` with `@cpd_view` set, and the StatusBar, one row across the full width at the bottom (`split-window -v -f -l 1`), running `cpd2 tui view statusbar` with `@cpd_view statusbar`; the chat slot holds the placeholder (§10) or, when one exists, the Plan Lead whose latest `session-moved` Event with `place: "chat"` is the newest, moved in as `session open` does. "Plan Lead" here means any Lead with a Plan, as for `session open` (side forks included, a Context's grounded Lead never), and one that `session open` refuses stays where it is while the placeholder keeps the slot (Escalation `tui-cockpit-a1-q3`). The session `cpd-work`.
-- **Layout:** right after building a new `main`, `tui` runs reset-layout once (§13.2). On an existing `main` with no `statusbar` pane it adds one (same split) without resetting the layout.
-- **tmux options of the TUI:** the border format (no title for the `statusbar` pane) and the root mouse binding that keeps the StatusBar from taking focus (`bind -T root MouseDown1Pane …`, §6.3).
+- **Layout:** right after building a new `main`, `tui` runs reset-layout once (§13.2). On an existing `main` with no `statusbar` pane it adds one (same split) and then runs reset-layout, so the added row is taken from the layout and the other panes get their sizes back (amendment 15, §19).
+- **tmux options:** every option, the border format, the root mouse binding and the conditional `pane-died` hook of §6.1. `host` sets them at every server start, so a server started by `plan new` or `watch --ensure` has them too; `cpd2 tui` sets them again on a running server (rerunning is safe).
+- **`--respawn`:** `respawn-pane -k` on every live pane of `main` that has `@cpd_view` (the views, the chat placeholder and a Worker view), so each runs the installed binary again; a Lead or engine pane is never touched. `scripts/install-cpd2.sh` runs `cpd2 tui --respawn` when a cockpit exists. (Why: `cpd2 tui` respawns only dead panes, so a reinstall would never reach a running view.)
 - `watch --ensure` (§12).
 - No rows of its own; moving a Lead appends `session-moved`.
 
@@ -1122,16 +1147,58 @@ Effects, each only when missing:
 {"ok": true, "built": true, "socket": "cpd", "session": "cpd", "attach": ["tmux", "-L", "cpd", "attach", "-t", "cpd"], "watch": {"started": true, "pane": "%3"}}
 ```
 
-With `--attach` it then replaces itself with `tmux -L cpd attach -t cpd` and prints nothing (§1.2). Idempotent: yes; an existing cockpit gives `"built": false`. A pane of the layout that has died, the StatusBar included, is respawned (`respawn-pane`, amendment 9, §19), never duplicated.
+With `--respawn` the value also has `"respawned": ["%1", "%2", …]`, the panes restarted. With `--attach` it then replaces itself with `tmux -L cpd attach -t cpd` and prints nothing (§1.2). Idempotent: yes; an existing cockpit gives `"built": false`. A pane of the layout that has died, the StatusBar included, is respawned (`respawn-pane`, amendment 9, §19), never duplicated; a view pane that dies while the cockpit runs is respawned at once by the `pane-died` hook (§6.1).
 
 ### 13.2 `tui view` (internal)
 
 ```
-cpd2 tui view <tree|plan|widgets|statusbar|chat|legend>
+cpd2 tui view <tree|plan|widgets|statusbar|chat|legend|logs>
 cpd2 tui view worker <attempt> --plan <id>
 ```
 
-The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§1.2), make no writes of their own, and change state only by running `cpd2` commands (`session open`, `plan new`, `session park`, …) as subprocesses. What they read is §17. The `worker` view renders the Attempt's Worker session file read-only (vision decision 5); `chat` is the chat slot's placeholder (§10); `legend` is the key legend, what every colour and icon of the cockpit means, which the `widgets` view's `?` key **or** the StatusBar's legend button opens in a tmux popup (`display-popup`, sized to the legend and at most the client's size) because the right column is narrower than the legend, and which closes on any key (it has no `@cpd_view` pane of its own). **`statusbar`** is one row across the full width at the bottom of `cpd:main`; it has no keys, takes no keyboard focus (a click on it is passed on with `send-keys -M`, no `select-pane`, §6.3) and draws no border title. Left, in order: the reset button `⧉ ` (reversed, no leading space), the legend button ` ? legend ` (reversed), then a failure note when the last click failed, cleared on the next click. Right: the workers indicator `workers N/M`, where `N` is the number of Attempts holding a slot and `M` is config `concurrency`; it shortens to `N/M` when the row is too narrow and is dropped when not even that fits. The middle expands. The workers indicator is not in the plan view; the `widgets` view keeps its slots section and its `?` key and hint, and the tree view has no `?` key. The legend button opens the same popup as the `widgets` view's `?` key.
+The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§1.2), make no writes of their own, and change state only by running `cpd2` commands (`session open`, `plan new`, `session close`, `session park`, …) as subprocesses. What they read is §17.
+
+**Cockpit parity** (User, 2026-10-15). The cockpit matches the running cpd 1 cockpit exactly: layout, elements, text, colours, keys, mouse and behaviour. The reference is `tui/` on branch `main` (`tui/src/*.rs`, `tui/README.md`); the checklist of every difference is [cockpit-parity.md](cockpit-parity.md). Where this section states a deviation, it is deliberate and has its reason.
+
+| View | What it is | Keys and mouse |
+|---|---|---|
+| `tree` | the **Context column**: Contexts, their Plans' Lead Sessions, and counters | ↑↓ and j/k move the cursor, Enter opens the Lead in the chat slot, `n` a new Plan, `x` closes a Lead's pane, `?` the legend; clicks as below |
+| `plan` | the **Plan view**: the flowchart of the chat slot's Plan, under a row of tabs | ←→↑↓ and h/j/k/l select, Enter opens a Job's Worker, Esc clears the selection; the wheel scrolls (3 rows, 4 columns); clicks as below; no `q` |
+| `widgets` | the **Dispatch column**: the machine, the cockpit's PRs, git and Jira (future) | `q` quits; nothing else |
+| `worker` | the read-only Worker view: the Attempt's Worker session file (vision decision 5), `you` and its text in cyan, `agent` in green, `→ tool` in yellow, `← last` dim | `q` or Esc quits; the wheel scrolls; no other keys |
+| `statusbar` | one row across the bottom | no keys, no focus; clicks on its buttons |
+| `chat` | the chat slot's placeholder (§10) | none |
+| `legend` | the key legend, in a popup | any key closes it |
+| `logs` | the Event log, in a popup | ↑↓, j/k, PgUp/PgDn scroll; `q` or Esc closes it |
+
+**`tree`.**
+- **Rows.** A Context row (a dot of the busiest phase inside, its name bold, the Plan count when collapsed) and under it one row per Lead Session: guide, dot, name (cut with `…` before the counters), and the five Job counters `queued⋅running⋅merging⋅failed⋅merged` right-aligned (cancelled Jobs are not counted; no counters without a Plan). `⏵` marks the Session in the chat slot, in column 0, and its name is bold. The dot is `●` when the Session **needs you**, else `○`; the rule is §17's.
+- **Cursor.** Keyboard only: a click never moves or shows it. It moves between Sessions only (Context rows are not selectable), is drawn inverted across the full row only while the pane has keyboard focus (`focus-events`, §6.1) and after an arrow key; Enter, `n` and `x` act on it only while it shows.
+- **Clicks.** A click on a Session opens it in the chat slot and focuses the chat (`session open`, then `select-pane`); a click on a Context row collapses or expands it. Clicks are ignored while a prompt is open.
+- **`n`** asks for a name in one inline row at the bottom (Enter starts, Esc cancels, an empty name is refused) and runs `plan new` (§4.1) in the selected Session's Context: the Plan forks the Context's grounded Lead (R15), the one deviation from cpd 1's `n`, which forked the selected session. On a Context row it says `pick the session to fork`.
+- **`x`** closes the selected Session's pane after the inline prompt `Close <label>? pi stops; the session file stays (y/N)`, preceded by `<label> is working.` when its state is `working`; only `y` closes. It runs `cpd2 session close <id>` (§10.9). The Session in the chat slot is refused with `switch to another session first`, also when it moved there while the prompt was open. On a Context row it does nothing. `<label>` is the Session's name.
+- **`?`** opens the legend popup. The view has no other key; what a key used to do is still a command.
+
+**`plan`.**
+- **Top row:** only ` <context id> ▸ ` (dim) and the tabs, over a separator line (`Borders::TOP`, colour 8). Nothing at the right: no PR, no workers count, no Plan title.
+- **Tabs:** one per Lead Session of the Context that has a pane in the cockpit (a Plan's Lead and its side forks; a grounded Lead never), labelled by the Session's name, else its Plan id, else the first 8 characters of its id, as ` <label> ` with one space between tabs and separators in colour 8. The active tab (the chat slot's) is reversed and bold; that is its only marker. With none: ` no Lead session in the centre` (dim). A click on a tab runs `session open <id>` and then `select-pane` on the chat slot.
+- **Chart:** the Plan's Jobs as cards (reference `flow.rs`, ported), inside `Margin{2, 1}`; cancelled Jobs hidden. Messages are one row at the bottom of the window: `no Plan yet`, `loading… (first fetch)`, or the note.
+
+**`widgets`** (reference `dispatch`), top to bottom, with the shared separator (`Borders::TOP`, colour 8) between sections, as `Layout::vertical([Length(2), sep, Min(1), sep, Length(2), sep, Length(2)])`:
+1. the machine: its hostname in bold (` <hostname>`) and ` load a b c`, the first three fields of `/proc/loadavg` (on macOS `sysctl -n vm.loadavg`), re-read every 2 seconds;
+2. ` PRs` (bold), then one entry per Plan whose Lead Session has a pane in the cockpit (in the chat slot or parked). A Plan with a PR takes two lines: ` <label>` (bold; the label is the Lead Session's name, as the tab's) and `  #<number> <state> <checks> <review decision>  <title>`, the state and checks in the palette's colours (reference `pr_state`, `checks`), the decision `approved`, `changes requested` or `no review`, the title dim and cut first when the column is narrow. A Plan with no PR takes one line, ` <label>` and `  no PR` (dim), listed after the Plans with PRs and only while the section has the room, as the reference. With no Plan at all: ` no Plans in the cockpit` (dim);
+3. ` git` (bold) and ` (future)` (dim);
+4. ` Jira` (bold) and ` (future)` (dim).
+
+The column has no engine line, no slots, no Escalations, no Events and no footer hint. The Event log is the `logs` view (R36, below).
+
+**`statusbar`** (R36, User decision) is one row across the full width at the bottom of `cpd:main`; it has no keys, takes no keyboard focus (a click on it is passed on with `send-keys -M`, no `select-pane`, §6.3) and draws no border title. **Its left side holds action buttons only; its right side holds read-only information.** The middle expands.
+- **Left, in order:** the reset button `⧉ ` (reversed, no leading space), the legend button ` ? legend ` (reversed), and the logs button ` ≡ logs ` (reversed). A click on `⧉ ` runs reset-layout (below); on ` ? legend ` opens the legend popup; on ` ≡ logs ` opens the logs popup.
+- **Right, in order:** a failure note when the last click failed (cleared on the next click), then the workers indicator `workers N/M`, where `N` is the number of Attempts holding a slot and `M` is config `concurrency`. The indicator gets the full width, as cpd 1's; it shortens to `N/M` when the row is too narrow and is dropped when not even that fits.
+
+**`legend`** is what every colour and icon of the cockpit means, from the palette. It opens in a tmux popup (`display-popup -E -T ' legend ' -w <w> -h <h>`, sized to the legend and at most the client's size) from the tree's `?` key or the StatusBar's legend button, because the columns are narrower than the legend; any key closes it. It has no `@cpd_view` pane of its own. Its section titles are `Jobs: Plan pills and Context counters` and `Context dots: … the Plan's phase`; the Job statuses it lists are those the chart draws, so `cancelled` is not among them.
+
+**`logs`** (R36) is the **Event log**: every Event (§5), one line each: its time of day (`HH:MM:SS`, dim), then its `text`, or its kind when the `text` is empty, an `error` Event in the failed colour. It opens in a tmux popup (`display-popup -E -T ' logs '`, at most 80 % of the client's width and height) from the StatusBar's ` ≡ logs ` button, and has no `@cpd_view` pane of its own. The newest Event is last; the view follows live while it shows the bottom, and stops following when the User scrolls up (it follows again at the bottom). ↑↓, j/k and PgUp/PgDn scroll; `q` or Esc closes it.
 
 **Reset-layout** is not a CLI command. It runs `resize-pane` on the panes of `<cockpit>:main` found by `@cpd_view`, in this order:
 
@@ -1143,7 +1210,7 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
 | 4 | `plan` | `-y 20%` |
 | 5 | `worker` | `-x 30%`, only when a Worker pane is open |
 
-The chat slot is never resized; it takes what is left. The StatusBar's ⧉ click runs it in-process; `cpd2 tui` runs it once, right after building a new `main` (§13.1).
+The chat slot is never resized; it takes what is left. The StatusBar's ⧉ click runs it in-process; `cpd2 tui` runs it once, right after building a new `main` and after adding a missing StatusBar to an existing one (§13.1).
 
 Refusal before drawing: an unknown view or Attempt is `usage` or `attempt_not_found`. Idempotent: they only read.
 
@@ -1362,27 +1429,30 @@ Removed by R19 (no Job-level Reviewer).
 
 ## 17. What the TUI reads
 
-Outline §8 and D4: the views take one **snapshot** with a read command, then **follow Events**; there is no timer polling of the CLI, no cache directory and no tmux option carrying state. Each view runs `cpd2` as a subprocess, like any agent (§1.1). Reads take no lock and never wait for writers (§4.2); cpd 1's `workflow show` took 58 s under load (research.md), which is why the spike needed a cache.
+Outline §8 and D4: the views take one **snapshot** with a read command, then **follow Events**; there is no timer polling of the CLI, no cache directory and no tmux option carrying state. A view reads the database **in process**, through the read model (`cli/src/tui/read/`): the same queries as the snapshot commands named below, one read transaction per snapshot, no subprocess and no `gh`. (An earlier draft had each view run `cpd2` as a subprocess; the implementation does not, and one source of truth is the store.) Reads take no lock and never wait for writers (§4.2); cpd 1's `workflow show` took 58 s under load (research.md), which is why the spike needed a cache.
 
 **Gap-free start.** Every snapshot command returns `events_cursor`, the highest Event id in the same read transaction. The view then runs `cpd2 events follow --since <events_cursor>`, so no Event between the snapshot and the follow is lost or seen twice.
 
-| View (`@cpd_view`) | Snapshot | Events it acts on | What it updates |
+| View (`@cpd_view`) | Snapshot (the read of the command named) | Events it acts on | What it updates |
 |---|---|---|---|
-| `tree` (Context column) | `cpd2 context list`, `cpd2 session list` | `context-created`, `context-grounded`, `plan-created`, `plan-phase`, `plan-done`, `session-registered`, `session-state`, `session-moved`, `session-renamed` | Contexts, their Plans and Lead Sessions, each with its state, label and name |
-| `plan` (centre top) | `cpd2 plan show --plan <p>` for the Plan of the Lead in the chat slot | every Event with `plan = p`; `session-moved` with `place: "chat"` (the slot changed: switch Plan and take a new snapshot) | the flowchart of Jobs, Attempts and Tiers, open Escalations, the latest Plan review |
-| `widgets` (Dispatch column) | `cpd2 plan list` | `plan-phase`, `pr-feedback`, `plan-done`, `watch-started`, `watch-stopped`, `error` | PRs and their feedback, the engine's state |
-| `statusbar` (bottom row) | the slots and config `concurrency`, the same read as the `widgets` view's slots | any (re-read when the store's highest Event id moved, coalesced to 500 ms, at least every 2 s); no subprocess, no `gh` | `workers N/M` |
+| `tree` (Context column) | `cpd2 context list`, `cpd2 session list` | `context-created`, `context-grounded`, `plan-created`, `plan-phase`, `plan-done`, `session-registered`, `session-state`, `session-moved`, `session-renamed` | Contexts, their Plans and Lead Sessions, each with its state, name, Job counters and **needs-you** dot (rule below) |
+| `plan` (centre top) | `cpd2 plan show --plan <p>` for the Plan of the Lead in the chat slot, and the Context's Lead Sessions that have a pane (the tabs) | every Event with `plan = p`; `session-moved` with `place: "chat"` (the slot changed: switch Plan and take a new snapshot) | the flowchart of Jobs, Attempts and Tiers, and the tabs. Not drawn, so not read: open Escalations, the latest Plan review, the PR |
+| `widgets` (Dispatch column) | `cpd2 plan list` for the Plans whose Lead Session has a pane in the cockpit (`session-moved` places `chat` or `parked`), with each one's PR: number, state, checks, review decision and title (`pr_title`, `pr_review_decision`, `pr_checks` of §7.6, contract §4.5); and the host's load average (`/proc/loadavg`; on macOS `sysctl -n vm.loadavg`), re-read every 2 s with no Event | `plan-created`, `plan-phase`, `pr-feedback`, `plan-done` (and `session-moved`, for which Plans have a pane) | the machine's name and load, and the PR of each Plan. No engine, slots, Escalations or Events |
+| `statusbar` (bottom row) | the slots and config `concurrency`: the Attempts not ended, and `concurrency` | any (re-read when the store's highest Event id moved, coalesced to 500 ms, at least every 2 s); no subprocess, no `gh` | `workers N/M` |
+| `logs` (popup of the StatusBar's ` ≡ logs ` button) | the latest 500 Events (the `events list` default), oldest first | every Event: it follows live while the view shows the bottom (R36) | the Event log |
 | `worker` (beside the chat) | `cpd2 attempt show <attempt>` for the Worker's session file | `session-state` for its Session; `attempt-status` for its Attempt | the session file itself, read-only (vision decision 5), and the state |
 | `chat` (placeholder) | none | none | the static text `No Lead here: pick a Plan in the session tree` |
 
 **Rates.**
-- Each view runs one `cpd2 events follow` with no selection and filters by kind itself: one `PRAGMA data_version` read per `events.poll_ms` (200 ms), which costs no I/O while nothing changes (§5.4).
+- Each view follows Events with no selection and filters by kind itself, through `cpd2 events follow` or the same poll in process (§5.4): one `PRAGMA data_version` read per `events.poll_ms` (200 ms), which costs no I/O while nothing changes (§5.4).
 - A view applies an Event's `data` directly when it carries what is shown (`session-state`, `session-renamed`, `session-moved`); otherwise it re-runs its snapshot, coalesced to at most one snapshot per view every 500 ms, whatever the Event rate.
 - The `worker` view re-reads its session file when its size or modification time changes, checked every 500 ms; the file is not in the database.
 - Clocks such as "running 4 m" are redrawn every second from timestamps already read, without a read.
 - If a follower ends, the view takes a new snapshot and follows again from its `events_cursor`.
 
-**Actions.** The views change state only through commands: selecting a Lead runs `cpd2 session open <id>`; the new-Plan key runs `cpd2 plan new …`; parking runs `cpd2 session park`; opening a Job's Worker opens a `cpd2 tui view worker` pane beside the chat (`split-window`, `@cpd_view worker`), which is the view's own layout, not Ledger state. The StatusBar's ⧉ click resets the layout (`resize-pane`, the view's own layout, not Ledger state) and its legend button opens the legend popup (§13.2).
+**The tree's ● rule (needs you).** A Lead Session's dot is `●` when its state is `blocked`, or when it is `idle`, not in the chat slot, and its latest `session-state` Event with `to: "idle"` is newer than its latest `session-moved` Event with `place: "chat"` (never in the slot counts as older than everything). It is derived from Events, with no write: it replaces cpd 1's `@asking`, `@settled_at` and `@seen_at` pane options, and shows the same thing, a Lead that waits on the User or finished a turn the User has not seen.
+
+**Actions.** The views change state only through commands: selecting a Lead runs `cpd2 session open <id>`; the new-Plan key runs `cpd2 plan new …`; the close key runs `cpd2 session close <id>`; parking runs `cpd2 session park`; opening a Job's Worker opens a `cpd2 tui view worker` pane beside the chat (`split-window`, `@cpd_view worker`), which is the view's own layout, not Ledger state. The StatusBar's ⧉ click resets the layout (`resize-pane`, the view's own layout, not Ledger state), its legend button opens the legend popup and its ` ≡ logs ` button the logs popup (§13.2).
 
 Change from the spike and cpd 1's cockpit: the tree no longer discovers Sessions from tmux pane options (`@session_id`, `@agent_state`) or `leads/<id>/workflow`, and the plan view no longer reads `/tmp/cpd-tui/cache/`; both read the database through commands.
 
@@ -1413,6 +1483,8 @@ Applied to contract.md by Job contract-amend.
 
 This file specifies the following, which contract.md does not state or states otherwise. contract.md is not edited by this Job; the Lead appends a follow-up Job that applies this list. Each item names the contract.md section it changes.
 
+Rows 12–21 were added by Job `parity-contract` (cockpit parity, User, 2026-10-15, and R36); the checklist behind them is [cockpit-parity.md](cockpit-parity.md). Rows 12–14 and 16 are also applied to contract.md itself; rows 15 and 17–21 state what contract.md leaves to this file.
+
 | # | contract.md section | Amendment | Where here |
 |---|---|---|---|
 | 1 | §6.2, chat slot rule | the chat slot is the pane of `cpd:main` that has `@cpd_session` **or** `@cpd_view = chat` (Escalation `contract-commands-a1-q1`, answered by the Lead) | §10 |
@@ -1426,6 +1498,16 @@ This file specifies the following, which contract.md does not state or states ot
 | 9 | §6.3, tmux commands | `respawn-pane`, for a dead pane of the cockpit's layout | §13.1 |
 | 10 | §1.2, output | `session run`, `tui view` and `tui --attach` own their terminal instead of printing one JSON value (the outline's "builds and attaches the cockpit") | §1.2 |
 | 11 | §1.2 table of codes | the error codes this file introduces: `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `context_exists`, `context_store_invalid`, `question_answered`, `not_a_git_repo`, `base_not_found`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `watch_start_failed`, `spec_invalid`, `tier_invalid`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `nothing_to_edit`, `job_merged`, `job_not_failed`, `job_not_ready`, `spawn_failed`, `attempt_not_running`, `session_malformed`, `driver_lock_missing`, `jobs_not_done`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `cursor_ahead`, `not_a_terminal`, `doctor_failed`, `pi_not_found`, `catalog_failed`, `file_unreadable`, `invalid_name`; most are cpd 1's (cpd 1 §11 and its `src/`) | §1.3 and each command |
+| 12 | §6.1, global options | the options `focus-events on`, `pane-active-border-style fg=blue` and `pane-border-format` (titles: ` Context `, ` Plan `, ` Dispatch `, ` Worker · <job> (read-only) `; none for Leads, the chat placeholder and the StatusBar), the root `MouseDown1Pane` binding and the `pane-died` hook that respawns only a pane with `@cpd_view`: all set at every server start, not only by `cpd2 tui` | §13.1 |
+| 13 | §6.2, §6.3 | a Worker view pane carries `@cpd_view worker`, `@cpd_job` and `@cpd_attempt`, opens with `split-window -h -d -l 50%` and retargets with `respawn-pane -k`; tmux commands `respawn-pane -k`, `set-hook` and `display-popup` | §13.2 |
+| 14 | §6.4, §3.6, §5.2, §1.2 | `session close <id>`: kills a Lead's pane, the Session is `stopped` with `session-moved {place: "none"}`, the Lead in the chat slot refused (`in_chat_slot`, exit 3) | §10.9 |
+| 15 | §6.3, reset-layout | `cpd2 tui --respawn` restarts every live view; a StatusBar added to an existing `main` is followed by reset-layout; `cpd2 tui` applies §6.1's options to a running server | §13.1 |
+| 16 | §2.2 Plan, §4.5, §7.6 | `pr poll` stores the PR's title, review decision and checks summary in `plans.pr_title`, `pr_review_decision` and `pr_checks`, added by migration 2 | §9.2 |
+| 17 | §6.2 (the views) | the Dispatch column is the machine's hostname and load, the PRs of the Plans in the cockpit, git (future) and Jira (future); no engine, slots, Escalations or Events | §13.2, §17 |
+| 18 | §6.2 (the views) | the plan view's top row is ` <context id> ▸ ` and the tabs only; one tab per Lead Session of the Context with a pane; the tree's keys are ↑↓/jk, Enter, `n`, `x`, `?` and its cursor, clicks and prompts are the reference's | §13.2 |
+| 19 | §6.2 (the views) | what each view reads, in process; the tree's ● (needs you) rule from Events; the plan row no longer reads Escalations, the Plan review or the PR | §17 |
+| 20 | §6.2 (the views) | the legend opens from the tree's `?` and the StatusBar button, not from the Dispatch column; its section titles say Context, and it lists no `cancelled` | §13.2 |
+| 21 | §6.2 (the views), R36 | the StatusBar's left side holds action buttons only (`⧉ `, ` ? legend `, ` ≡ logs `) and its right side read-only information; the Event log is the `logs` view, a popup the ` ≡ logs ` button opens, not part of the Dispatch column | §13.2, §17 |
 
 ## 20. Sections changed by R19 and R20
 
