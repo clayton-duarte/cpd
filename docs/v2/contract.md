@@ -86,6 +86,7 @@ $CPD_HOME/
     repo-<sha1>.lock              per-repo lock: merges, `pr open`, `pr rebase` (§7.4, §7.6); sha1 of the repo's git common dir realpath
     attempt-<plan>--<attempt>.lock  the driver lock: taken by the Attempt's starter, inherited by its driver (§3.4)
     context-<context>.lock        held while writing or syncing a Context store (§4.6)
+    store.lock                    held by every open of `cpd.db` during its one-time setup only: the WAL switch and the migration check (§4.1, §4.5)
   run/
     watch.log                     the engine's stderr
     <plan>/plan.md                the last `plan render`

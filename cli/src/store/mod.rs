@@ -7,13 +7,15 @@
 
 mod schema;
 
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
+use nix::errno::Errno;
+use nix::fcntl::{Flock, FlockArg};
 use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, ErrorCode as SqliteCode, Transaction, TransactionBehavior};
 use serde_json::{Value, json};
@@ -86,14 +88,16 @@ impl Store {
     ///
     /// A failed schema check does not fail the open: [`Store::write`] refuses
     /// with `store_tampered` and [`Store::tamper`] reports it.
+    ///
+    /// The one-time setup (the WAL switch and the migration) runs under
+    /// `locks/store.lock` (§1.4): SQLite answers concurrent switches to WAL of
+    /// a new database with `SQLITE_BUSY` at once, without its busy handler.
     pub fn open(home: &CpdHome, busy_ms: u64) -> Result<Store, CpdError> {
         let path = home.db();
-        fs::create_dir_all(home.root()).map_err(|e| {
-            CpdError::new(ErrorCode::StoreFailed, format!("Cannot create {}: {e}.", home.root().display()))
-                .with("path", home.root().display().to_string())
-        })?;
+        let setup = setup_lock(home)?;
         let mut store = Store::connect(&path, busy_ms).map_err(|e| enrich(e, &path, busy_ms))?;
         store.migrate().map_err(|e| enrich(e, &path, busy_ms))?;
+        drop(setup);
         store.schema = store.check_schema().map_err(|e| enrich(e, &path, busy_ms))?;
         Ok(store)
     }
@@ -257,6 +261,29 @@ impl Store {
         })?;
         report.extend(orphans);
         Ok(report)
+    }
+}
+
+/// Takes `locks/store.lock` (§1.4), creating `$CPD_HOME` and `locks/` on first
+/// use, and waits for it without a limit: a holder is another cpd2 process
+/// doing the open's bounded setup. Dropping the result releases it.
+fn setup_lock(home: &CpdHome) -> Result<Flock<File>, CpdError> {
+    let failed = |what: &str, path: &Path, e: std::io::Error| {
+        CpdError::new(ErrorCode::StoreFailed, format!("Cannot {what} {}: {e}.", path.display()))
+            .with("path", path.display().to_string())
+    };
+    let dir = home.locks_dir();
+    fs::create_dir_all(&dir).map_err(|e| failed("create", &dir, e))?;
+    // `home.rs` has no method for this lock; it is the store's alone.
+    let path = dir.join("store.lock");
+    let mut file =
+        OpenOptions::new().create(true).append(true).open(&path).map_err(|e| failed("open", &path, e))?;
+    loop {
+        match Flock::lock(file, FlockArg::LockExclusive) {
+            Ok(lock) => return Ok(lock),
+            Err((f, Errno::EINTR)) => file = f,
+            Err((_, errno)) => return Err(failed("lock", &path, errno.into())),
+        }
     }
 }
 
