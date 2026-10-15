@@ -527,7 +527,7 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
         }
         terminal
             .draw(|f| {
-                let [head, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(f.area());
+                let [head, _gap, body] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1)]).areas(f.area());
                 head_area = head;
                 let flows: Vec<flow::FlowJob> = jobs.iter().map(|j| j.flow.clone()).collect();
                 let fc = flow::layout(&flows, body.width);
