@@ -10,12 +10,12 @@ use std::fs;
 use std::path::PathBuf;
 
 use common::{Run, TestEnv};
-use cpd2::error::CpdError;
-use cpd2::home::CpdHome;
-use cpd2::ids::PlanId;
-use cpd2::plan::jobs;
-use cpd2::plan::locked_fingerprint;
-use cpd2::store::{Store, WriteTxn};
+use cpd_core::error::CpdError;
+use cpd_core::home::CpdHome;
+use cpd_core::ids::PlanId;
+use cpd_core::plan::jobs;
+use cpd_core::plan::locked_fingerprint;
+use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
 
 // ---------- fixtures ----------
@@ -111,14 +111,14 @@ fn job_add(env: &TestEnv, plan: &str, key: &str, tier: &str, needs: &[&str]) -> 
     if !needs.is_empty() {
         args.extend(["--needs", &needs]);
     }
-    env.cpd2(&args)
+    env.cpd(&args)
 }
 
 fn job(env: &TestEnv, args: &[&str], plan: &str) -> Run {
     let mut all = vec!["job"];
     all.extend(args);
     all.extend(["--plan", plan]);
-    env.cpd2(&all)
+    env.cpd(&all)
 }
 
 fn refused(run: &Run, code: &str, exit: i32) -> Value {
@@ -129,7 +129,7 @@ fn refused(run: &Run, code: &str, exit: i32) -> Value {
 }
 
 fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
-    env.cpd2(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
+    env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
 }
 
 fn count(env: &TestEnv, table: &str) -> i64 {
@@ -278,7 +278,7 @@ fn add_again_with_the_same_fields_is_already_and_writes_nothing() {
     let run = job_add(&env, "pl", "b", "S2", &[]);
     refused(&run, "job_key_exists", 3);
     let other_spec = write_spec(&env, "other.json", &json!({"goal": "Else.", "context": "c", "touches": ["x"], "acceptance": ["y"], "out_of_scope": []}).to_string());
-    let run = env.cpd2(&["job", "add", "b", "--title", "Title of b", "--tier", "S2", "--spec", &other_spec, "--needs", "a", "--plan", "pl"]);
+    let run = env.cpd(&["job", "add", "b", "--title", "Title of b", "--tier", "S2", "--spec", &other_spec, "--needs", "a", "--plan", "pl"]);
     refused(&run, "job_key_exists", 3);
     assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs));
 }
@@ -311,16 +311,16 @@ fn add_refusals_write_nothing() {
     assert_eq!(e["details"]["needs"], json!([{"key": "x", "status": "failed"}, {"key": "y", "status": "cancelled"}]));
     // The flags.
     let spec = spec_file(&env);
-    let e = refused(&env.cpd2(&["job", "add", "k", "--title", "T", "--tier", "S0", "--spec", &spec, "--plan", "pl"]), "tier_invalid", 2);
+    let e = refused(&env.cpd(&["job", "add", "k", "--title", "T", "--tier", "S0", "--spec", &spec, "--plan", "pl"]), "tier_invalid", 2);
     assert_eq!(e["details"]["efforts"], json!([1, 2, 3, 4, 5]));
-    refused(&env.cpd2(&["job", "add", "k", "--title", "T", "--tier", "H4", "--spec", &spec, "--plan", "pl"]), "tier_invalid", 2);
-    refused(&env.cpd2(&["job", "add", "k", "--title", "T", "--tier", "S9", "--spec", &spec, "--plan", "pl"]), "tier_invalid", 2);
-    refused(&env.cpd2(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", "/no/such/file", "--plan", "pl"]), "file_unreadable", 2);
-    refused(&env.cpd2(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec, "--needs", "a,a", "--plan", "pl"]), "usage", 2);
-    refused(&env.cpd2(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec, "--needs", "A", "--plan", "pl"]), "invalid_job_id", 2);
-    refused(&env.cpd2(&["job", "add", "K", "--title", "T", "--tier", "S2", "--spec", &spec, "--plan", "pl"]), "invalid_job_id", 2);
-    refused(&env.cpd2(&["job", "add", "k", "--tier", "S2", "--spec", &spec, "--plan", "pl"]), "usage", 2);
-    refused(&env.cpd2(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec]), "plan_required", 2);
+    refused(&env.cpd(&["job", "add", "k", "--title", "T", "--tier", "H4", "--spec", &spec, "--plan", "pl"]), "tier_invalid", 2);
+    refused(&env.cpd(&["job", "add", "k", "--title", "T", "--tier", "S9", "--spec", &spec, "--plan", "pl"]), "tier_invalid", 2);
+    refused(&env.cpd(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", "/no/such/file", "--plan", "pl"]), "file_unreadable", 2);
+    refused(&env.cpd(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec, "--needs", "a,a", "--plan", "pl"]), "usage", 2);
+    refused(&env.cpd(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec, "--needs", "A", "--plan", "pl"]), "invalid_job_id", 2);
+    refused(&env.cpd(&["job", "add", "K", "--title", "T", "--tier", "S2", "--spec", &spec, "--plan", "pl"]), "invalid_job_id", 2);
+    refused(&env.cpd(&["job", "add", "k", "--tier", "S2", "--spec", &spec, "--plan", "pl"]), "usage", 2);
+    refused(&env.cpd(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec]), "plan_required", 2);
     assert_eq!((count(&env, "txns"), count(&env, "events"), count(&env, "jobs")), (txns, evs, rows));
 }
 
@@ -360,14 +360,14 @@ fn add_refuses_a_spec_that_is_not_complete_naming_the_json_path() {
     ];
     for (text, path) in cases {
         let file = write_spec(&env, "bad.json", &text);
-        let run = env.cpd2(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &file, "--plan", "pl"]);
+        let run = env.cpd(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &file, "--plan", "pl"]);
         let e = refused(&run, "spec_invalid", 2);
         assert_eq!(e["details"]["path"], path, "{text}");
     }
     assert_eq!(count(&env, "jobs"), 0);
     // An empty out_of_scope is fine.
     let file = write_spec(&env, "ok.json", &with("out_of_scope", json!([])));
-    env.cpd2(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &file, "--plan", "pl"]).ok();
+    env.cpd(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &file, "--plan", "pl"]).ok();
 }
 
 #[test]
@@ -376,7 +376,7 @@ fn the_plan_comes_from_cpd_plan_when_no_flag_names_it() {
     setup(&env);
     plan(&env, "pl", "plan");
     let spec = spec_file(&env);
-    let out = env.command(common::CPD2).env("CPD_PLAN", "pl").args(["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec]).output().unwrap();
+    let out = env.command(common::CPD).env("CPD_PLAN", "pl").args(["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec]).output().unwrap();
     assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stdout));
     assert_eq!(count(&env, "jobs"), 1);
 }
@@ -470,9 +470,9 @@ fn a_locked_job_cannot_be_edited_by_the_command_or_by_the_database() {
     assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs));
     // The trigger of §4.4 refuses the same writes.
     let result = store(&env).write("fixture", |tx| exec(tx, "UPDATE jobs SET goal = 'Else.' WHERE key = 'a';"));
-    assert_eq!(result.unwrap_err().code(), cpd2::error::ErrorCode::JobLocked);
+    assert_eq!(result.unwrap_err().code(), cpd_core::error::ErrorCode::JobLocked);
     let result = store(&env).write("fixture", |tx| exec(tx, "DELETE FROM dependencies WHERE job = 'b';"));
-    assert_eq!(result.unwrap_err().code(), cpd2::error::ErrorCode::JobLocked);
+    assert_eq!(result.unwrap_err().code(), cpd_core::error::ErrorCode::JobLocked);
     // Other statuses are Locked too.
     engine(&env, "pl", "a", "running");
     refused(&job(&env, &["edit", "a", "--title", "New"], "pl"), "job_locked", 3);
@@ -673,7 +673,7 @@ fn list_shows_every_job_in_creation_order_and_filters_by_status() {
     assert_eq!(job(&env, &["list", "--status", "draft"], "pl").ok()["jobs"], json!([]));
     refused(&job(&env, &["list", "--status", "done"], "pl"), "usage", 2);
     refused(&job(&env, &["list"], "nope"), "plan_not_found", 4);
-    refused(&env.cpd2(&["job", "list"]), "plan_required", 2);
+    refused(&env.cpd(&["job", "list"]), "plan_required", 2);
 }
 
 #[test]
@@ -742,6 +742,6 @@ fn show_has_every_field_the_needs_and_the_attempts_with_their_escalations() {
     assert_eq!(out["attempts"], json!([]));
     refused(&job(&env, &["show", "ghost"], "pl"), "job_not_found", 4);
     refused(&job(&env, &["show", "b"], "nope"), "plan_not_found", 4);
-    refused(&env.cpd2(&["job", "show", "b"]), "plan_required", 2);
-    refused(&env.cpd2(&["job", "show", "B", "--plan", "pl"]), "invalid_job_id", 2);
+    refused(&env.cpd(&["job", "show", "b"]), "plan_required", 2);
+    refused(&env.cpd(&["job", "show", "B", "--plan", "pl"]), "invalid_job_id", 2);
 }

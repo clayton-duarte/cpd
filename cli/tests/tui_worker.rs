@@ -1,9 +1,9 @@
-//! `cpd2 tui view worker` (commands.md §13.2, §17), end to end: the built binary
+//! `cpd tui view worker` (commands.md §13.2, §17), end to end: the built binary
 //! runs in a pane of a private tmux server (its terminal), over a prepared
 //! store and a fixture pi session file; a test reads the screen
 //! (`capture-pane`), appends to the file and presses keys (`send-keys`). The
 //! rendering of messages, wrapping and scrolling is unit-tested in
-//! `cli/src/tui/worker/`.
+//! `tui/src/worker/`.
 
 mod common;
 
@@ -11,10 +11,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{CPD2, TestEnv};
-use cpd2::error::CpdError;
-use cpd2::home::CpdHome;
-use cpd2::store::Store;
+use common::{CPD, TestEnv};
+use cpd_core::error::CpdError;
+use cpd_core::home::CpdHome;
+use cpd_core::store::Store;
 use serde_json::json;
 
 // ---------- the prepared store ----------
@@ -92,7 +92,7 @@ struct Pane<'a> {
 }
 
 impl<'a> Pane<'a> {
-    /// Runs `cpd2 tui view worker api-a1 --plan ship` in a `width` × `height` pane of the env's private tmux server.
+    /// Runs `cpd tui view worker api-a1 --plan ship` in a `width` × `height` pane of the env's private tmux server.
     fn start(env: &'a TestEnv, width: u16, height: u16) -> Pane<'a> {
         let out = env.tmux(&[
             "-u",
@@ -109,7 +109,7 @@ impl<'a> Pane<'a> {
             &width.to_string(),
             "-y",
             &height.to_string(),
-            &format!("{CPD2} tui view worker api-a1 --plan ship"),
+            &format!("{CPD} tui view worker api-a1 --plan ship"),
         ]);
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         Pane { env }
@@ -260,13 +260,13 @@ fn a_session_with_no_file_registered_says_so() {
 fn an_unknown_attempt_or_plan_is_refused_before_drawing() {
     let env = env();
     populate(&env, None);
-    let run = env.cpd2(&["tui", "view", "worker", "nope-a1", "--plan", "ship"]);
+    let run = env.cpd(&["tui", "view", "worker", "nope-a1", "--plan", "ship"]);
     assert_eq!((run.exit, run.error()["code"].clone()), (4, json!("attempt_not_found")), "{run:?}");
-    let run = env.cpd2(&["tui", "view", "worker", "api-a1", "--plan", "nope"]);
+    let run = env.cpd(&["tui", "view", "worker", "api-a1", "--plan", "nope"]);
     assert_eq!(run.error()["code"], "plan_not_found", "{run:?}");
-    let run = env.cpd2(&["tui", "view", "worker", "api-a1"]);
+    let run = env.cpd(&["tui", "view", "worker", "api-a1"]);
     assert_eq!((run.exit, run.error()["code"].clone()), (2, json!("plan_required")), "{run:?}");
-    let run = env.cpd2(&["tui", "view", "worker"]);
+    let run = env.cpd(&["tui", "view", "worker"]);
     assert_eq!((run.exit, run.error()["code"].clone()), (2, json!("usage")), "{run:?}");
 }
 
@@ -274,7 +274,7 @@ fn an_unknown_attempt_or_plan_is_refused_before_drawing() {
 fn the_view_needs_a_terminal() {
     let env = env();
     populate(&env, None);
-    let run = env.cpd2(&["tui", "view", "worker", "api-a1", "--plan", "ship"]);
+    let run = env.cpd(&["tui", "view", "worker", "api-a1", "--plan", "ship"]);
     assert_eq!(run.exit, 3, "{run:?}");
     let error = run.error();
     assert_eq!(error["code"], "not_a_terminal");

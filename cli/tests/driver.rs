@@ -12,13 +12,13 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::{CPD2, Run, TestEnv};
-use cpd2::error::CpdError;
-use cpd2::git::{Setup, create_lead_worktree};
-use cpd2::home::CpdHome;
-use cpd2::ids::PlanId;
-use cpd2::plan::{jobs, locked_fingerprint};
-use cpd2::store::{Store, WriteTxn};
+use common::{CPD, Run, TestEnv};
+use cpd_core::error::CpdError;
+use cpd_core::git::{Setup, create_lead_worktree};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::PlanId;
+use cpd_core::plan::{jobs, locked_fingerprint};
+use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
 
 const PLAN: &str = "pay";
@@ -51,7 +51,7 @@ fn fx_with(config_extra: &str) -> Fx {
     let env = TestEnv::new();
     let repo = env.git_repo("pay").canonicalize().unwrap();
     // git runs in this process too, whose environment is not the TestEnv's.
-    for (key, value) in [("user.name", "cpd2 test"), ("user.email", "test@cpd2.invalid"), ("commit.gpgsign", "false")] {
+    for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
         env.git(&repo, &["config", key, value]);
     }
     let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("lead.log") };
@@ -135,13 +135,13 @@ impl Fx {
     }
 
     /// The fake `pi`: `body` runs in the Worker's pane, cwd the worktree, with
-    /// `$CPD2` the binary and `$LEAD` the Lead worktree, once the Attempt is
+    /// `$CPD` the binary and `$LEAD` the Lead worktree, once the Attempt is
     /// `running` (the driver records that right after the pane starts; a real
     /// pi takes far longer to boot than this fake).
     fn pi(&self, body: &str) {
         self.env.fake_pi(&format!(
-            "CPD2='{CPD2}'\nLEAD='{}'\n\
-             until \"$CPD2\" attempt show \"$CPD_ATTEMPT\" | grep -q '\"status\":\"running\"'; do sleep 0.1; done\n{body}",
+            "CPD='{CPD}'\nLEAD='{}'\n\
+             until \"$CPD\" attempt show \"$CPD_ATTEMPT\" | grep -q '\"status\":\"running\"'; do sleep 0.1; done\n{body}",
             self.lead.display()
         ));
     }
@@ -155,17 +155,17 @@ impl Fx {
         self.env.git(&self.lead, &["commit", "-q", "-m", "wt.toml"]);
     }
 
-    /// `cpd2 <args>` with this env's CPD_HOME, as a hook or the Worker calls it.
-    fn cpd2_line(&self, args: &str) -> String {
-        format!("CPD_HOME='{}' '{CPD2}' {args}", self.env.cpd_home().display())
+    /// `cpd <args>` with this env's CPD_HOME, as a hook or the Worker calls it.
+    fn cpd_line(&self, args: &str) -> String {
+        format!("CPD_HOME='{}' '{CPD}' {args}", self.env.cpd_home().display())
     }
 
     fn dispatch(&self, key: &str) -> Run {
-        self.env.cpd2(&["job", "dispatch", key, "--plan", PLAN])
+        self.env.cpd(&["job", "dispatch", key, "--plan", PLAN])
     }
 
     fn attempt(&self, id: &str) -> Value {
-        self.env.cpd2(&["attempt", "show", id, "--plan", PLAN]).ok()["attempt"].clone()
+        self.env.cpd(&["attempt", "show", id, "--plan", PLAN]).ok()["attempt"].clone()
     }
 
     fn job_status(&self, key: &str) -> String {
@@ -213,7 +213,7 @@ impl Fx {
     fn events(&self, id: &str) -> Vec<Value> {
         let session: Option<String> =
             self.query(&format!("SELECT worker_session FROM attempts WHERE plan = 'pay' AND id = '{id}'"));
-        let all = self.env.cpd2(&["events", "list", "--plan", PLAN]).ok()["events"].as_array().unwrap().clone();
+        let all = self.env.cpd(&["events", "list", "--plan", PLAN]).ok()["events"].as_array().unwrap().clone();
         all.into_iter()
             .filter(|e| e["attempt"] == id || (session.is_some() && e["session"].as_str() == session.as_deref()))
             .collect()
@@ -250,7 +250,7 @@ printf '%s\n' '{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}' > "$f"
 printf '%s\n' '{"type":"message","timestamp":"2026-10-14T21:00:05.000Z","message":{"role":"assistant","usage":{"input":10,"output":20,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.5}},"stopReason":"stop"}}' >> "$f"
 echo api > api.txt
 git add -A && git commit -qm "api"
-"$CPD2" attempt submit "$CPD_ATTEMPT" > ../submit-$CPD_ATTEMPT.json 2>&1
+"$CPD" attempt submit "$CPD_ATTEMPT" > ../submit-$CPD_ATTEMPT.json 2>&1
 sleep 120"#;
 
 // ---------- the end-to-end run ----------
@@ -302,7 +302,7 @@ fn a_dispatched_attempt_runs_its_worker_merges_and_ends_merged() {
     let calls = fx.env.calls("pi");
     assert_eq!(calls.len(), 1, "{calls:?}");
     let argv = &calls[0];
-    assert_eq!(&argv[..4], ["--approve", "--no-skills", "--exclude-tools", cpd2::host::pi::WORKER_EXCLUDED_TOOLS]);
+    assert_eq!(&argv[..4], ["--approve", "--no-skills", "--exclude-tools", cpd_core::host::pi::WORKER_EXCLUDED_TOOLS]);
     let at = |flag: &str| argv[argv.iter().position(|a| a == flag).unwrap() + 1].clone();
     assert_eq!(at("--model"), "p/sonnet:medium");
     assert_eq!(at("--session-id"), session);
@@ -326,7 +326,7 @@ fn a_merge_conflict_ends_failed_and_the_ladder_queues_the_next_attempt_with_the_
         "if [ \"$CPD_ATTEMPT\" = api-a1 ]; then\n\
            echo theirs > \"$LEAD/README.md\"; git -C \"$LEAD\" commit -qam other\n\
            echo ours > README.md; git commit -qam ours\n\
-           \"$CPD2\" attempt submit \"$CPD_ATTEMPT\"\n\
+           \"$CPD\" attempt submit \"$CPD_ATTEMPT\"\n\
            sleep 120\n\
          fi\n\
          exit 4"
@@ -412,14 +412,14 @@ mkdir -p "$HOME/.pi/agent/sessions/w"
 f="$HOME/.pi/agent/sessions/w/2026_$sid.jsonl"
 msg='{{"type":"message","timestamp":"2026-10-14T21:00:05.000Z","message":{{"role":"assistant","usage":{{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"cost":{{"total":0}}}},"stopReason":"stop"}}}}'
 printf '%s\n' '{{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}}' "$msg" > "$f"
-"$CPD2" session state idle > /dev/null
+"$CPD" session state idle > /dev/null
 i=0
-until "$CPD2" events list --kind attempt-nudge | grep -q nudge; do
+until "$CPD" events list --kind attempt-nudge | grep -q nudge; do
   i=$((i+1)); [ $i -gt 300 ] && exit 9; sleep 0.2
 done
-"$CPD2" session state working > /dev/null
+"$CPD" session state working > /dev/null
 printf '%s\n' "$msg" >> "$f"
-"$CPD2" session state idle > /dev/null
+"$CPD" session state idle > /dev/null
 sleep 120"#
     ));
 
@@ -430,7 +430,7 @@ sleep 120"#
     assert_eq!(attempt["nudged"], true);
     let nudge = fx.event(ATTEMPT, "attempt-nudge");
     assert_eq!(nudge["session"], attempt["worker_session"]);
-    assert!(nudge["data"]["prompt"].as_str().unwrap().starts_with("You ended your turn without running cpd2 attempt submit api-a1."));
+    assert!(nudge["data"]["prompt"].as_str().unwrap().starts_with("You ended your turn without running cpd attempt submit api-a1."));
     assert_eq!(fx.kinds(ATTEMPT).iter().filter(|k| *k == "attempt-nudge").count(), 1);
     assert_eq!(fx.event(ATTEMPT, "attempt-retry")["data"]["cause"], "no_submit");
 }
@@ -447,7 +447,7 @@ fn assert_cancelled(fx: &Fx, attempt: &Value, reason: &str) {
 fn a_cancel_before_a3_ends_it_before_the_worker_starts() {
     let fx = fx();
     // pre-start runs in A2: the request is there at the safe point before A3.
-    fx.wt_toml(&format!("pre-start = \"{}\"\n", fx.cpd2_line("job cancel api --reason early --plan pay > /dev/null")));
+    fx.wt_toml(&format!("pre-start = \"{}\"\n", fx.cpd_line("job cancel api --reason early --plan pay > /dev/null")));
 
     let out = fx.dispatch(JOB).ok();
     let (attempt, driver) = fx.wait_end(ATTEMPT, &out["pid"]);
@@ -465,8 +465,8 @@ fn a_cancel_before_the_rebase_ends_it_without_merging() {
     let old = fx.lead_sha();
     fx.pi(
         "echo api > api.txt; git add -A; git commit -qm api\n\
-         \"$CPD2\" job cancel api --reason mid > /dev/null\n\
-         \"$CPD2\" attempt submit \"$CPD_ATTEMPT\" > /dev/null\n\
+         \"$CPD\" job cancel api --reason mid > /dev/null\n\
+         \"$CPD\" attempt submit \"$CPD_ATTEMPT\" > /dev/null\n\
          sleep 120",
     );
 
@@ -483,13 +483,13 @@ fn a_cancel_before_the_compare_and_swap_ends_it_without_merging() {
     let fx = fx();
     // The request arrives during the rebase, after the first safe point.
     let hook = fx.repo.join(".git/hooks/post-rewrite");
-    fs::write(&hook, format!("#!/bin/sh\n{} > /dev/null\n", fx.cpd2_line("job cancel api --reason late --plan pay"))).unwrap();
+    fs::write(&hook, format!("#!/bin/sh\n{} > /dev/null\n", fx.cpd_line("job cancel api --reason late --plan pay"))).unwrap();
     fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
     // Another Job merges first, so the rebase rewrites the Worker's commit.
     fx.pi(
         "git -C \"$LEAD\" commit -q --allow-empty -m other\n\
          echo api > api.txt; git add -A; git commit -qm api\n\
-         \"$CPD2\" attempt submit \"$CPD_ATTEMPT\" > /dev/null\n\
+         \"$CPD\" attempt submit \"$CPD_ATTEMPT\" > /dev/null\n\
          sleep 120",
     );
 
@@ -505,7 +505,7 @@ fn a_cancel_before_the_compare_and_swap_ends_it_without_merging() {
 
 /// Attempt `api-a1` in `starting` and its lock file, as a starter would leave them.
 fn starting(fx: &Fx) -> PathBuf {
-    let lock = fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &cpd2::ids::AttemptId::parse(ATTEMPT).unwrap());
+    let lock = fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &cpd_core::ids::AttemptId::parse(ATTEMPT).unwrap());
     fs::create_dir_all(lock.parent().unwrap()).unwrap();
     File::create(&lock).unwrap();
     let worktree = fx.worktree(ATTEMPT);
@@ -525,7 +525,7 @@ fn a_driver_without_the_lock_as_fd_3_exits_without_writing() {
     let before = fx.txns();
 
     // fd 3 not open.
-    let run = fx.env.cpd2(&["attempt", "run", ATTEMPT, "--plan", PLAN]);
+    let run = fx.env.cpd(&["attempt", "run", ATTEMPT, "--plan", PLAN]);
     assert_eq!(run.exit, 1, "{run:?}");
     assert_eq!(run.error()["code"], "driver_lock_missing");
 
@@ -537,7 +537,7 @@ fn a_driver_without_the_lock_as_fd_3_exits_without_writing() {
         .command("sh")
         .args(["-c", "exec 3<\"$1\"; shift; exec \"$@\"", "sh"])
         .arg(&other)
-        .args([CPD2, "attempt", "run", ATTEMPT, "--plan", PLAN])
+        .args([CPD, "attempt", "run", ATTEMPT, "--plan", PLAN])
         .output()
         .unwrap();
     let run = Run {
@@ -567,7 +567,7 @@ fn a_driver_refuses_an_attempt_that_is_not_starting() {
         .command("sh")
         .args(["-c", "exec 3<\"$1\"; shift; exec \"$@\"", "sh"])
         .arg(&lock)
-        .args([CPD2, "attempt", "run", ATTEMPT, "--plan", PLAN])
+        .args([CPD, "attempt", "run", ATTEMPT, "--plan", PLAN])
         .output()
         .unwrap();
 
@@ -606,7 +606,7 @@ fn dispatch_refuses_a_job_whose_fingerprint_does_not_match() {
 #[test]
 fn dispatch_refuses_when_the_driver_lock_is_held() {
     let fx = fx();
-    let lock = fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &cpd2::ids::AttemptId::parse(ATTEMPT).unwrap());
+    let lock = fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &cpd_core::ids::AttemptId::parse(ATTEMPT).unwrap());
     fs::create_dir_all(lock.parent().unwrap()).unwrap();
     let held = OpenOptions::new().create(true).truncate(false).write(true).open(&lock).unwrap();
     held.try_lock().unwrap();
@@ -643,7 +643,7 @@ fn dispatch_after_job_retry_starts_a_retry_attempt_at_the_chosen_tier() {
          UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = 'api-a1';
          UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE plan = 'pay' AND key = 'api';",
     );
-    fx.env.cpd2(&["job", "retry", JOB, "--tier", "O4", "--plan", PLAN]).ok();
+    fx.env.cpd(&["job", "retry", JOB, "--tier", "O4", "--plan", PLAN]).ok();
 
     let out = fx.dispatch(JOB).ok();
 

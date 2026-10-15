@@ -2,17 +2,17 @@
 //! buttons at the left and `workers N/M` at the right edge, from the Attempts holding a slot and config `concurrency`.
 //!
 //! The store is prepared through the store API (`Store::write`), as `tui_plan.rs` does; the view runs as
-//! `cpd2 tui view statusbar` in a pane, and its screen is read with `tmux capture-pane`.
+//! `cpd tui view statusbar` in a pane, and its screen is read with `tmux capture-pane`.
 
 mod common;
 
 use std::fs;
 use std::time::{Duration, Instant};
 
-use common::{CPD2, TestEnv};
-use cpd2::error::CpdError;
-use cpd2::home::CpdHome;
-use cpd2::store::Store;
+use common::{CPD, TestEnv};
+use cpd_core::error::CpdError;
+use cpd_core::home::CpdHome;
+use cpd_core::store::Store;
 
 const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -94,11 +94,11 @@ fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
     }
 }
 
-/// Starts `cpd2 tui view statusbar` alone in a one-row window `width` columns wide; returns its pane.
+/// Starts `cpd tui view statusbar` alone in a one-row window `width` columns wide; returns its pane.
 fn start_view(env: &TestEnv, width: u16) -> String {
     tmux_out(
         env,
-        &["new-session", "-d", "-s", "view", "-x", &width.to_string(), "-y", "1", "-P", "-F", "#{pane_id}", CPD2, "tui", "view", "statusbar"],
+        &["new-session", "-d", "-s", "view", "-x", &width.to_string(), "-y", "1", "-P", "-F", "#{pane_id}", CPD, "tui", "view", "statusbar"],
     )
     .trim()
     .to_owned()
@@ -140,8 +140,8 @@ fn the_workers_follow_the_slots() {
 #[test]
 fn an_unknown_view_is_usage_and_the_statusbar_needs_a_terminal() {
     let env = env();
-    let run = env.cpd2(&["tui", "view", "nope"]);
+    let run = env.cpd(&["tui", "view", "nope"]);
     assert_eq!((run.exit, run.error()["code"].as_str()), (2, Some("usage")), "{run:?}");
-    let run = env.cpd2(&["tui", "view", "statusbar"]);
+    let run = env.cpd(&["tui", "view", "statusbar"]);
     assert_eq!((run.exit, run.error()["code"].as_str()), (3, Some("not_a_terminal")), "{run:?}");
 }

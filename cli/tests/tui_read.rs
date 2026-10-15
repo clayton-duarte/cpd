@@ -1,20 +1,20 @@
 //! The TUI's read model (commands.md §17), against a store prepared through the
 //! store API (`Store::write`, as the other areas' tests do, because Plans, Jobs
-//! and Attempts belong to their areas) and through the built `cpd2` commands.
+//! and Attempts belong to their areas) and through the built `cpd` commands.
 
 mod common;
 
 use std::time::{Duration, Instant};
 
 use common::TestEnv;
-use cpd2::config::Tier;
-use cpd2::error::{CpdError, ErrorCode};
-use cpd2::home::CpdHome;
-use cpd2::ids::{AttemptId, EscalationId, JobKey, PlanId, SessionId};
-use cpd2::plan::{Phase, jobs, plan_fingerprint};
-use cpd2::session::State;
-use cpd2::store::Store;
-use cpd2::tui::read::{
+use cpd_core::config::Tier;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::{AttemptId, EscalationId, JobKey, PlanId, SessionId};
+use cpd_core::plan::{Phase, jobs, plan_fingerprint};
+use cpd_core::session::State;
+use cpd_core::store::Store;
+use cpd_tui::read::{
     self, AttemptStatus, Cause, Checks, Engine, EscalationStatus, JobStatus, Origin, Outcome, Place, PrState, ReviewStatus,
 };
 use rusqlite::Connection;
@@ -404,8 +404,8 @@ fn a_command_that_changes_a_session_shows_in_the_next_snapshot() {
     let (env, mut store) = fixture();
     std::fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
     let before = read::tree(&mut store).unwrap();
-    env.cpd2(&["session", "state", "blocked", "--label", "cpd: asking", "--session", "f-ship"]).ok();
-    env.cpd2(&["session", "rename", "renamed fork", "--session", "f-ship"]).ok();
+    env.cpd(&["session", "state", "blocked", "--label", "cpd: asking", "--session", "f-ship"]).ok();
+    env.cpd(&["session", "rename", "renamed fork", "--session", "f-ship"]).ok();
     let after = read::tree(&mut store).unwrap();
     let fork = &after.contexts[0].plans[0].sessions[1];
     assert_eq!((fork.state, fork.state_label.as_deref(), fork.name.as_str()), (State::Blocked, Some("cpd: asking"), "renamed fork"));
@@ -697,7 +697,7 @@ fn no_read_writes() {
 
 #[test]
 fn the_read_model_spawns_nothing_and_has_no_write_statement() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tui/read");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tui/src/read");
     let mut seen = 0;
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();

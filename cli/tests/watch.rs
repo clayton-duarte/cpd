@@ -1,6 +1,6 @@
-//! The engine, `cpd2 watch` (contract §3.7, §6.6; commands.md §12): the lock
+//! The engine, `cpd watch` (contract §3.7, §6.6; commands.md §12): the lock
 //! and its refusal, the signals, `--ensure`, and each step E1–E6 on a
-//! prepared database, with a private tmux server and fake `pi` and `cpd2`.
+//! prepared database, with a private tmux server and fake `pi` and `cpd`.
 
 mod common;
 
@@ -9,13 +9,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{CPD2, Run, TestEnv};
-use cpd2::error::CpdError;
-use cpd2::git::{Setup, create_attempt_worktree, create_lead_worktree};
-use cpd2::home::CpdHome;
-use cpd2::ids::{AttemptId, PlanId};
-use cpd2::plan::{jobs, locked_fingerprint};
-use cpd2::store::{Store, WriteTxn};
+use common::{CPD, Run, TestEnv};
+use cpd_core::error::CpdError;
+use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::{AttemptId, PlanId};
+use cpd_core::plan::{jobs, locked_fingerprint};
+use cpd_core::store::{Store, WriteTxn};
 use nix::fcntl::{Flock, FlockArg};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
@@ -50,7 +50,7 @@ fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
     }
 }
 
-/// A running `cpd2 watch`; SIGKILLed if a test panics before it stops it.
+/// A running `cpd watch`; SIGKILLed if a test panics before it stops it.
 struct Engine {
     child: Option<Child>,
 }
@@ -102,7 +102,7 @@ struct Fx {
 fn fx(config_extra: &str) -> Fx {
     let env = TestEnv::new();
     let repo = env.git_repo("pay").canonicalize().unwrap();
-    for (key, value) in [("user.name", "cpd2 test"), ("user.email", "test@cpd2.invalid"), ("commit.gpgsign", "false")] {
+    for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
         env.git(&repo, &["config", key, value]);
     }
     let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("lead.log") };
@@ -212,9 +212,9 @@ impl Fx {
         Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap()
     }
 
-    /// Starts `cpd2 watch` and waits for its `watch-started`.
+    /// Starts `cpd watch` and waits for its `watch-started`.
     fn start(&self) -> Engine {
-        let child = self.env.command(CPD2).arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let child = self.env.command(CPD).arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         let engine = Engine { child: Some(child) };
         let pid = engine.pid();
         wait_until("watch-started", || {
@@ -267,10 +267,10 @@ impl Fx {
         self.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
     }
 
-    /// A fake `cpd2` on `PATH` that runs `pr` with `pr` (sh code) and
+    /// A fake `cpd` on `PATH` that runs `pr` with `pr` (sh code) and
     /// everything else with the built binary.
-    fn fake_cpd2(&self, pr: &str) {
-        self.env.fake("cpd2", &format!("if [ \"$1\" = pr ]; then {pr}; fi\nexec '{CPD2}' \"$@\""));
+    fn fake_cpd(&self, pr: &str) {
+        self.env.fake("cpd", &format!("if [ \"$1\" = pr ]; then {pr}; fi\nexec '{CPD}' \"$@\""));
     }
 }
 
@@ -282,7 +282,7 @@ fn watch_holds_the_lock_refuses_a_second_and_stops_on_sigterm() {
     let engine = fx.start();
     let pid = engine.pid();
 
-    let second = fx.env.cpd2(&["watch"]);
+    let second = fx.env.cpd(&["watch"]);
     assert_eq!(second.exit, 3, "{second:?}");
     assert_eq!(second.error()["code"], "watch_running");
 
@@ -305,10 +305,10 @@ fn watch_holds_the_lock_refuses_a_second_and_stops_on_sigterm() {
 #[test]
 fn watch_refuses_unknown_flags_and_needs_its_config() {
     let fx = fx("");
-    let run = fx.env.cpd2(&["watch", "--bogus"]);
+    let run = fx.env.cpd(&["watch", "--bogus"]);
     assert_eq!((run.exit, run.error()["code"].clone()), (2, json!("usage")));
     fs::remove_file(fx.env.cpd_home().join("config.toml")).unwrap();
-    let run = fx.env.cpd2(&["watch"]);
+    let run = fx.env.cpd(&["watch"]);
     assert_eq!((run.exit, run.error()["code"].clone()), (1, json!("config_missing")));
 }
 
@@ -317,9 +317,9 @@ fn watch_refuses_unknown_flags_and_needs_its_config() {
 #[test]
 fn ensure_starts_the_engine_in_the_work_session_once() {
     let fx = fx("");
-    fx.env.fake("cpd2", &format!("exec '{CPD2}' \"$@\""));
+    fx.env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
 
-    let out = fx.env.cpd2(&["watch", "--ensure"]).ok();
+    let out = fx.env.cpd(&["watch", "--ensure"]).ok();
     assert_eq!(out["started"], true, "{out}");
     let pane = out["pane"].as_str().unwrap().to_owned();
     assert!(pane.starts_with('%'), "{out}");
@@ -331,10 +331,10 @@ fn ensure_starts_the_engine_in_the_work_session_once() {
     // Its process took the lock and said so.
     let pid: u32 = fields[3].parse().unwrap();
     assert_eq!(fx.events("watch-started"), [(None, None, None, json!({"pid": pid}))]);
-    assert_eq!(fx.env.cpd2(&["watch"]).error()["code"], "watch_running");
-    assert_eq!(fx.env.calls("cpd2"), [vec!["watch".to_owned()]]);
+    assert_eq!(fx.env.cpd(&["watch"]).error()["code"], "watch_running");
+    assert_eq!(fx.env.calls("cpd"), [vec!["watch".to_owned()]]);
 
-    let again = fx.env.cpd2(&["watch", "--ensure"]).ok();
+    let again = fx.env.cpd(&["watch", "--ensure"]).ok();
     assert_eq!(again, json!({"ok": true, "started": false, "already": true}));
     assert_eq!(fx.count("watch-started"), 1);
 
@@ -345,7 +345,7 @@ fn ensure_starts_the_engine_in_the_work_session_once() {
         let out = fx.env.tmux(&["list-panes", "-t", &pane, "-F", "#{pane_dead}"]);
         String::from_utf8_lossy(&out.stdout).trim() == "1"
     });
-    let third = fx.env.cpd2(&["watch", "--ensure"]).ok();
+    let third = fx.env.cpd(&["watch", "--ensure"]).ok();
     assert_eq!(third["started"], true);
     let windows = fx.env.tmux(&["list-windows", "-t", "=cpd-work", "-F", "#{window_name}"]);
     assert_eq!(String::from_utf8_lossy(&windows.stdout), "watch\n");
@@ -354,13 +354,13 @@ fn ensure_starts_the_engine_in_the_work_session_once() {
 #[test]
 fn ensure_fails_when_the_engine_does_not_start() {
     let fx = fx("");
-    fx.env.fake("cpd2", "echo 'cannot start' >&2; exit 7");
-    let run = fx.env.cpd2(&["watch", "--ensure"]);
+    fx.env.fake("cpd", "echo 'cannot start' >&2; exit 7");
+    let run = fx.env.cpd(&["watch", "--ensure"]);
     assert_eq!(run.exit, 1, "{run:?}");
     let error = run.error();
     assert_eq!(error["code"], "watch_start_failed");
     assert_eq!(error["details"]["exit"], 7);
-    assert_eq!(error["details"]["next"], "cpd2 watch --ensure");
+    assert_eq!(error["details"]["next"], "cpd watch --ensure");
     assert!(error["details"]["pane"].as_str().unwrap().starts_with('%'));
 }
 
@@ -558,7 +558,7 @@ fn e2_stops_sessions_whose_pane_is_dead_or_gone() {
     let moved = fx.events("session-moved");
     let none = json!({"pane": null, "window": null, "place": "none"});
     assert_eq!(moved, [(Some("pay".into()), None, None, none.clone()), (None, None, None, none.clone()), (Some("pay".into()), None, None, none)]);
-    let places: Vec<String> = fx.env.cpd2(&["session", "list"]).ok()["sessions"]
+    let places: Vec<String> = fx.env.cpd(&["session", "list"]).ok()["sessions"]
         .as_array()
         .unwrap()
         .iter()
@@ -569,7 +569,7 @@ fn e2_stops_sessions_whose_pane_is_dead_or_gone() {
 }
 
 /// Finding 4: a pane with a `@cpd_view` this binary does not know (made by a
-/// newer cpd2) is skipped, so E2 still runs and appends no `error`.
+/// newer cpd) is skipped, so E2 still runs and appends no `error`.
 #[test]
 fn e2_skips_a_pane_with_an_unknown_view_and_reports_no_error() {
     let fx = fx("");
@@ -640,7 +640,7 @@ fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
     let (plan, job, attempt, data) = &errors[0];
     assert_eq!((plan.as_deref(), job.as_deref(), attempt.as_deref()), (Some("pay"), Some("api"), None));
     assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("locked_job_tampered")));
-    assert!(fx.texts("error")[0].ends_with("See: cpd2 job show api --plan pay"), "{:?}", fx.texts("error"));
+    assert!(fx.texts("error")[0].ends_with("See: cpd job show api --plan pay"), "{:?}", fx.texts("error"));
     assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts"), 0);
     assert_eq!(fx.job_status("api"), "queued");
 }
@@ -659,7 +659,7 @@ fn e4_appends_all_merged_once_when_no_job_is_left_to_run() {
     engine.stop();
 
     assert_eq!(fx.events("all-merged"), [(Some("pay".into()), None, None, json!({"merged": ["api"], "cancelled": ["web"]}))]);
-    assert!(fx.texts("all-merged")[0].ends_with("Next: cpd2 pr open --plan pay"));
+    assert!(fx.texts("all-merged")[0].ends_with("Next: cpd pr open --plan pay"));
     assert!(fx.query::<Option<String>>("SELECT all_merged_at FROM plans WHERE id = 'pay'").is_some());
 }
 
@@ -693,14 +693,14 @@ fn e5_runs_pr_poll_for_each_plan_in_pr_every_pr_poll_seconds() {
         fs::read_to_string(fx.env.cpd_home().join("config.toml")).unwrap().replace("tick_seconds = 1\n", "tick_seconds = 1\npr_poll_seconds = 2\n"),
     )
     .unwrap();
-    fx.fake_cpd2(r#"echo '{"ok": true, "plan": "pay", "state": "OPEN", "merged": false, "changes": {"checks": [], "reviews": [], "comments": []}}'; exit 0"#);
+    fx.fake_cpd(r#"echo '{"ok": true, "plan": "pay", "state": "OPEN", "merged": false, "changes": {"checks": [], "reviews": [], "comments": []}}'; exit 0"#);
 
     let engine = fx.start();
-    wait_until("two polls", || fx.env.calls("cpd2").len() >= 2);
+    wait_until("two polls", || fx.env.calls("cpd").len() >= 2);
     let started = Instant::now();
     engine.stop();
 
-    let calls = fx.env.calls("cpd2");
+    let calls = fx.env.calls("cpd");
     assert!(calls.iter().all(|c| c == &["pr", "poll", "--plan", "pay"]), "{calls:?}");
     assert!(started.elapsed() < Duration::from_secs(5));
     assert_eq!(fx.count("error"), 0);
@@ -710,7 +710,7 @@ fn e5_runs_pr_poll_for_each_plan_in_pr_every_pr_poll_seconds() {
 fn e5_reports_a_failing_poll_once() {
     let fx = fx("");
     in_pr(&fx);
-    fx.fake_cpd2(r#"echo '{"ok": false, "error": {"code": "gh_failed", "message": "gh failed.", "details": {"exit": 1}}}'; exit 1"#);
+    fx.fake_cpd(r#"echo '{"ok": false, "error": {"code": "gh_failed", "message": "gh failed.", "details": {"exit": 1}}}'; exit 1"#);
     fs::write(
         fx.env.cpd_home().join("config.toml"),
         fs::read_to_string(fx.env.cpd_home().join("config.toml")).unwrap().replace("tick_seconds = 1\n", "tick_seconds = 1\npr_poll_seconds = 1\n"),
@@ -718,7 +718,7 @@ fn e5_reports_a_failing_poll_once() {
     .unwrap();
 
     let engine = fx.start();
-    wait_until("three polls", || fx.env.calls("cpd2").len() >= 3);
+    wait_until("three polls", || fx.env.calls("cpd").len() >= 3);
     engine.stop();
 
     assert_eq!(
@@ -737,7 +737,7 @@ fn e6_imports_the_context_stores_at_start_and_syncs_those_with_a_remote() {
     fs::create_dir_all(&other).unwrap();
     fs::copy(fx.env.cpd_home().join("config.toml"), other.join("config.toml")).unwrap();
     let on_other = |args: &[&str]| {
-        let out = fx.env.command(CPD2).args(args).env("CPD_HOME", &other).output().unwrap();
+        let out = fx.env.command(CPD).args(args).env("CPD_HOME", &other).output().unwrap();
         assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stdout));
     };
     on_other(&["context", "new", "demo", "--title", "Demo"]);
@@ -772,16 +772,16 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
-// ---------- scripts/install-cpd2.sh (Finding 5) ----------
+// ---------- scripts/install-cpd.sh (Finding 5) ----------
 
-/// Runs `scripts/install-cpd2.sh` with a fake `cargo` that "builds" a fake
-/// `cpd2`, in `env`: the fake `cpd2` answers `config` with the private tmux
+/// Runs `scripts/install-cpd.sh` with a fake `cargo` that "builds" a fake
+/// `cpd`, in `env`: the fake `cpd` answers `config` with the private tmux
 /// socket, and records `watch --ensure` with the windows of the work session
 /// at that moment. Returns the script's stderr and the fake's calls.
 fn install(env: &TestEnv) -> (String, Vec<Vec<String>>) {
     let socket = env.tmux_socket();
     let built = env.fake(
-        "cpd2-built",
+        "cpd-built",
         &format!(
             r#"case "$1" in
 config) echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}' ;;
@@ -791,17 +791,17 @@ esac"#,
         ),
     );
     let target = env.root().join("target");
-    let cargo = env.fake("fake-cargo", &format!("mkdir -p '{t}/release' && cp '{}' '{t}/release/cpd2'", built.display(), t = target.display()));
+    let cargo = env.fake("fake-cargo", &format!("mkdir -p '{t}/release' && cp '{}' '{t}/release/cpd'", built.display(), t = target.display()));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let out = env
-        .command(root.join("scripts/install-cpd2.sh"))
+        .command(root.join("scripts/install-cpd.sh"))
         .env("CARGO", cargo)
         .env("CARGO_TARGET_DIR", &target)
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(out.status.success(), "{stderr}");
-    (stderr, env.calls("cpd2-built"))
+    (stderr, env.calls("cpd-built"))
 }
 
 #[test]

@@ -10,9 +10,9 @@ use std::process::Child;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use common::TestEnv;
-use cpd2::error::{CpdError, ErrorCode};
-use cpd2::home::CpdHome;
-use cpd2::store::{APPLICATION_ID, HISTORY_TABLES, Store, VERSION, WriteTxn};
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::home::CpdHome;
+use cpd_core::store::{APPLICATION_ID, HISTORY_TABLES, Store, VERSION, WriteTxn};
 use rusqlite::Connection;
 use rusqlite::functions::FunctionFlags;
 use serde_json::{Value, json};
@@ -27,7 +27,7 @@ fn open(env: &TestEnv) -> Store {
     Store::open(&home(env), 5000).unwrap()
 }
 
-/// A connection that is not cpd2's, like the `sqlite3` shell: no `cpd_txn()`.
+/// A connection that is not cpd's, like the `sqlite3` shell: no `cpd_txn()`.
 fn raw(env: &TestEnv) -> Connection {
     let conn = Connection::open(home(env).db()).unwrap();
     conn.pragma_update(None, "foreign_keys", "ON").unwrap();
@@ -146,7 +146,7 @@ fn a_foreign_application_id_is_refused_and_never_written() {
 // ---------- §4.4 the DDL ----------
 
 fn contract() -> String {
-    fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/v2/contract.md")).unwrap()
+    fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/contract.md")).unwrap()
 }
 
 /// The ```sql blocks of contract §4.4, in order.
@@ -163,7 +163,7 @@ fn normalized(sql: &str) -> String {
 }
 
 fn migration_1_sql() -> String {
-    let text = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/store/migrations/0001.sql")).unwrap();
+    let text = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/src/store/migrations/0001.sql")).unwrap();
     // Drop the file's leading comment header (up to the first blank line).
     text.split_once("\n\n").unwrap().1.to_owned()
 }

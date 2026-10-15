@@ -6,12 +6,12 @@
 mod common;
 
 use common::TestEnv;
-use cpd2::error::CpdError;
-use cpd2::home::CpdHome;
-use cpd2::store::Store;
-use cpd2::tui::palette::{self, Meaning};
-use cpd2::tui::read::{self, Place, Widgets};
-use cpd2::tui::widgets::{self, Machine, legend};
+use cpd_core::error::CpdError;
+use cpd_core::home::CpdHome;
+use cpd_core::store::Store;
+use cpd_tui::palette::{self, Meaning};
+use cpd_tui::read::{self, Place, Widgets};
+use cpd_tui::widgets::{self, Machine, legend};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -390,7 +390,7 @@ fn the_legend_popup_is_sized_to_the_legend_and_capped_at_the_client() {
     let (w, h) = legend::size();
     assert_eq!(
         legend::popup_args((215, 62)),
-        ["display-popup", "-E", "-T", " legend ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd2 tui view legend"]
+        ["display-popup", "-E", "-T", " legend ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd tui view legend"]
     );
     let small = legend::popup_args((40, 20));
     assert_eq!((small[5].as_str(), small[7].as_str()), ("40", "20"));
@@ -402,7 +402,7 @@ fn the_legend_popup_is_sized_to_the_legend_and_capped_at_the_client() {
 fn the_views_need_a_terminal() {
     let env = TestEnv::new();
     for view in ["widgets", "legend"] {
-        let run = env.cpd2(&["tui", "view", view]);
+        let run = env.cpd(&["tui", "view", view]);
         assert_eq!(run.exit, 3, "{view}: {run:?}");
         let error = run.error();
         assert_eq!(error["code"], "not_a_terminal", "{view}");

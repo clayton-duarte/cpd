@@ -1,22 +1,22 @@
-//! `cpd2 tui view tree` (commands.md §13.2, §17), end to end: the built binary
+//! `cpd tui view tree` (commands.md §13.2, §17), end to end: the built binary
 //! runs in a pane of a private tmux server (its terminal), over a prepared
 //! store; a test reads the screen (`capture-pane`), presses keys (`send-keys`)
-//! and, for the actions, finds a fake `cpd2` first on `PATH` that records its
+//! and, for the actions, finds a fake `cpd` first on `PATH` that records its
 //! command line. The rendering of single rows, colours and keys is unit-tested
-//! in `cli/src/tui/tree/`.
+//! in `tui/src/tree/`.
 
 mod common;
 
 use std::time::{Duration, Instant};
 
-use common::{CPD2, TestEnv};
-use cpd2::error::CpdError;
-use cpd2::home::CpdHome;
-use cpd2::store::Store;
+use common::{CPD, TestEnv};
+use cpd_core::error::CpdError;
+use cpd_core::home::CpdHome;
+use cpd_core::store::Store;
 
 // ---------- the prepared store ----------
 
-/// An env with the config `cpd2` needs; its tmux server is the env's private one.
+/// An env with the config `cpd` needs; its tmux server is the env's private one.
 fn env() -> TestEnv {
     let env = TestEnv::new();
     let config = format!(
@@ -141,7 +141,7 @@ struct Pane<'a> {
 }
 
 impl<'a> Pane<'a> {
-    /// Runs `cpd2 tui view tree` in a `width` × `height` pane of the env's private tmux server.
+    /// Runs `cpd tui view tree` in a `width` × `height` pane of the env's private tmux server.
     fn start(env: &'a TestEnv, width: u16, height: u16) -> Pane<'a> {
         let out = env.tmux(&[
             "-u",
@@ -158,7 +158,7 @@ impl<'a> Pane<'a> {
             &width.to_string(),
             "-y",
             &height.to_string(),
-            &format!("{CPD2} tui view tree"),
+            &format!("{CPD} tui view tree"),
         ]);
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         Pane { env }
@@ -221,13 +221,13 @@ impl<'a> Pane<'a> {
     }
 }
 
-/// A fake `cpd2` that succeeds with `reply`.
-fn fake_cpd2(env: &TestEnv, reply: &str) {
-    env.fake("cpd2", &format!("echo '{reply}'"));
+/// A fake `cpd` that succeeds with `reply`.
+fn fake_cpd(env: &TestEnv, reply: &str) {
+    env.fake("cpd", &format!("echo '{reply}'"));
 }
 
 fn calls(env: &TestEnv) -> Vec<Vec<String>> {
-    env.calls("cpd2")
+    env.calls("cpd")
 }
 
 fn wait_for_calls(env: &TestEnv, n: usize) -> Vec<Vec<String>> {
@@ -237,7 +237,7 @@ fn wait_for_calls(env: &TestEnv, n: usize) -> Vec<Vec<String>> {
         if calls.len() >= n {
             return calls;
         }
-        assert!(start.elapsed() < Duration::from_secs(10), "waiting for {n} calls of cpd2; got {calls:?}");
+        assert!(start.elapsed() < Duration::from_secs(10), "waiting for {n} calls of cpd; got {calls:?}");
         std::thread::sleep(Duration::from_millis(50));
     }
 }
@@ -283,7 +283,7 @@ fn an_empty_store_says_so() {
 #[test]
 fn the_view_needs_a_terminal() {
     let env = env();
-    let run = env.cpd2(&["tui", "view", "tree"]);
+    let run = env.cpd(&["tui", "view", "tree"]);
     assert_eq!(run.exit, 3, "{run:?}");
     let error = run.error();
     assert_eq!(error["code"], "not_a_terminal");
@@ -294,7 +294,7 @@ fn the_view_needs_a_terminal() {
 fn enter_opens_the_lead_of_a_plan_and_a_fork_with_session_open() {
     let env = env();
     populate(&env);
-    fake_cpd2(&env, r#"{"ok":true,"session":"x","pane":"%1","displaced":null}"#);
+    fake_cpd(&env, r#"{"ok":true,"session":"x","pane":"%1","displaced":null}"#);
     let pane = Pane::start(&env, 46, 14);
     pane.ready();
     pane.down(2); // the cursor appears on ship (Context rows are not selectable), then f-idle
@@ -308,7 +308,7 @@ fn enter_opens_the_lead_of_a_plan_and_a_fork_with_session_open() {
 fn enter_n_and_x_before_any_arrow_key_do_nothing() {
     let env = env();
     populate(&env);
-    fake_cpd2(&env, r#"{"ok":true}"#);
+    fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 46, 14);
     pane.ready();
     pane.keys(&["Enter", "x", "n"]);
@@ -321,7 +321,7 @@ fn enter_n_and_x_before_any_arrow_key_do_nothing() {
 fn no_key_but_the_references_does_anything() {
     let env = env();
     populate(&env);
-    fake_cpd2(&env, r#"{"ok":true}"#);
+    fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 46, 14);
     let before = pane.ready();
     pane.down(4); // on sketch
@@ -336,7 +336,7 @@ fn no_key_but_the_references_does_anything() {
 fn n_starts_a_plan_named_in_the_prompt_with_plan_new() {
     let env = env();
     populate(&env);
-    fake_cpd2(&env, r#"{"ok":true,"plan":{"id":"pay-4521"}}"#);
+    fake_cpd(&env, r#"{"ok":true,"plan":{"id":"pay-4521"}}"#);
     let pane = Pane::start(&env, 80, 14);
     pane.ready();
     pane.down(4); // ship, f-idle, f-blocked, sketch
@@ -358,7 +358,7 @@ fn n_starts_a_plan_named_in_the_prompt_with_plan_new() {
 fn x_closes_a_session_after_y_with_session_close() {
     let env = env();
     populate(&env);
-    fake_cpd2(&env, r#"{"ok":true,"session":"l-sketch","pane":"%4"}"#);
+    fake_cpd(&env, r#"{"ok":true,"session":"l-sketch","pane":"%4"}"#);
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
     pane.down(4); // sketch
@@ -377,7 +377,7 @@ fn x_closes_a_session_after_y_with_session_close() {
 fn x_refuses_the_session_in_the_chat_slot() {
     let env = env();
     populate(&env);
-    fake_cpd2(&env, r#"{"ok":true}"#);
+    fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
     pane.down(1); // ship, whose Lead is in the chat slot
@@ -390,7 +390,7 @@ fn x_refuses_the_session_in_the_chat_slot() {
 fn x_refuses_a_session_that_moved_to_the_chat_slot_while_the_prompt_was_open() {
     let env = env();
     populate(&env);
-    env.fake("cpd2", r#"echo '{"ok":false,"error":{"code":"in_chat_slot","message":"In the chat slot.","details":{}}}'; exit 3"#);
+    env.fake("cpd", r#"echo '{"ok":false,"error":{"code":"in_chat_slot","message":"In the chat slot.","details":{}}}'; exit 3"#);
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
     pane.down(4); // sketch
@@ -416,7 +416,7 @@ fn question_mark_opens_the_legend_popup() {
 fn a_refused_command_shows_its_error_until_the_next_n_x_or_click() {
     let env = env();
     populate(&env);
-    env.fake("cpd2", r#"echo '{"ok":false,"error":{"code":"no_cockpit","message":"No cockpit.","details":{}}}'; exit 3"#);
+    env.fake("cpd", r#"echo '{"ok":false,"error":{"code":"no_cockpit","message":"No cockpit.","details":{}}}'; exit 3"#);
     let pane = Pane::start(&env, 46, 14);
     pane.ready();
     pane.down(1);
@@ -437,11 +437,11 @@ fn the_tree_follows_the_events_of_the_store() {
     let pane = Pane::start(&env, 46, 14);
     pane.ready();
     // session-renamed
-    let run = env.cpd2(&["session", "rename", "--session", "l-sketch", "--", "sketch renamed"]);
+    let run = env.cpd(&["session", "rename", "--session", "l-sketch", "--", "sketch renamed"]);
     run.ok();
     pane.wait("the new name", |s| s.iter().any(|r| r.contains("└ ○ sketch renamed")));
     // session-state
-    env.cpd2(&["session", "state", "blocked", "--label", "cpd: Ask", "--session", "l-sketch"]).ok();
+    env.cpd(&["session", "state", "blocked", "--label", "cpd: Ask", "--session", "l-sketch"]).ok();
     let screen = pane.wait("the new state", |s| s.iter().any(|r| r.contains("└ ● sketch renamed")));
     assert!(screen.iter().any(|r| r.starts_with("● alpha")));
 }

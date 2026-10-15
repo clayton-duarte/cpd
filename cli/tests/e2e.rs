@@ -1,4 +1,4 @@
-//! One whole Plan through the built `cpd2`, end to end: `context new`,
+//! One whole Plan through the built `cpd`, end to end: `context new`,
 //! `plan new`, `plan phase plan`, two Jobs (one needing the other), the Plan
 //! review, `plan lock`, the engine in the background dispatching both
 //! Attempts, fake Workers that commit and submit, both merges in dependency
@@ -6,7 +6,7 @@
 //!
 //! Everything external is faked: `pi` (Leads and Workers), `gh`, pi's Node for
 //! the Tier catalog, a bare `origin`, and a private tmux server. Nothing is
-//! written into the database by hand: every row comes from a `cpd2` command,
+//! written into the database by hand: every row comes from a `cpd` command,
 //! the engine or a driver, so the bugs between areas show up here.
 
 mod common;
@@ -16,7 +16,7 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{CPD2, TestEnv};
+use common::{CPD, TestEnv};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde_json::{Value, json};
@@ -38,16 +38,16 @@ dir="$HOME/.pi/agent/sessions/--e2e--"
 mkdir -p "$dir"
 f="$dir/2026-10-14T21-00-00-000Z_$sid.jsonl"
 msg='{"type":"message","timestamp":"2026-10-14T21:00:05.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Done."}],"usage":{"input":10,"output":20,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.5}},"stopReason":"stop"}}'
-cpd2 session state idle > /dev/null || exit 11
+cpd session state idle > /dev/null || exit 11
 if [ -n "$CPD_ATTEMPT" ]; then
-  cpd2 session state working > /dev/null || exit 12
+  cpd session state working > /dev/null || exit 12
   printf '%s\n' '{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}' "$msg" > "$f"
-  until cpd2 attempt show "$CPD_ATTEMPT" | grep -q '"status":"running"'; do sleep 0.1; done
+  until cpd attempt show "$CPD_ATTEMPT" | grep -q '"status":"running"'; do sleep 0.1; done
   job="${CPD_ATTEMPT%-a*}"
   if [ "$job" = ui ] && [ ! -f api.txt ]; then exit 13; fi
   echo "$job" > "$job.txt"
   git add -A && git commit -qm "$CPD_ATTEMPT" || exit 14
-  cpd2 attempt submit "$CPD_ATTEMPT" > "../submit-$CPD_ATTEMPT.json" 2>&1
+  cpd attempt submit "$CPD_ATTEMPT" > "../submit-$CPD_ATTEMPT.json" 2>&1
 else
   printf '%s\n' '{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}' "$msg" > "$f"
 fi
@@ -79,8 +79,8 @@ struct Fx {
 impl Fx {
     fn new() -> Fx {
         let env = TestEnv::new();
-        // `cpd2` on PATH is the built binary: panes and the engine run it so (§6.5, E5).
-        symlink(CPD2, env.bin().join("cpd2")).unwrap();
+        // `cpd` on PATH is the built binary: panes and the engine run it so (§6.5, E5).
+        symlink(CPD, env.bin().join("cpd")).unwrap();
         env.fake_pi(PI);
         env.fake_gh(GH);
         // A pi install whose agent directory is the test root, and pi's own Node
@@ -135,7 +135,7 @@ impl Fx {
     }
 
     fn ok(&self, args: &[&str]) -> Value {
-        self.env.cpd2(args).ok()
+        self.env.cpd(args).ok()
     }
 
     /// Every Event after `cursor`, in id order.

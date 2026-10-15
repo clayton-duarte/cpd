@@ -9,11 +9,11 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use common::{Run, TestEnv};
-use cpd2::config::Config;
-use cpd2::context::{Contexts, Trigger};
-use cpd2::home::CpdHome;
-use cpd2::ids::ContextId;
-use cpd2::store::Store;
+use cpd_core::config::Config;
+use cpd_core::context::{Contexts, Trigger};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::ContextId;
+use cpd_core::store::Store;
 use serde_json::{Value, json};
 
 const CTX: &str = "building-cpd";
@@ -43,7 +43,7 @@ fn lines(path: &Path) -> Vec<Value> {
 }
 
 fn new_context(env: &TestEnv) {
-    env.cpd2(&["context", "new", CTX, "--title", "Building cpd"]).ok();
+    env.cpd(&["context", "new", CTX, "--title", "Building cpd"]).ok();
 }
 
 fn code(run: &Run) -> String {
@@ -59,7 +59,7 @@ fn refused(run: Run, exit: i32, expected: &str) -> Value {
 }
 
 fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
-    let run = env.cpd2(&["events", "list", "--kind", kind]);
+    let run = env.cpd(&["events", "list", "--kind", kind]);
     run.ok()["events"].as_array().unwrap().clone()
 }
 
@@ -105,7 +105,7 @@ fn fixture_plan(env: &TestEnv, plan: &str, context: &str) {
 #[test]
 fn new_creates_the_store_the_row_and_the_event() {
     let env = hs();
-    let out = env.cpd2(&["context", "new", CTX, "--title", "Building cpd", "--jira", "CPD-12"]).ok();
+    let out = env.cpd(&["context", "new", CTX, "--title", "Building cpd", "--jira", "CPD-12"]).ok();
     let context = &out["context"];
     assert_eq!(context["id"], CTX);
     assert_eq!(context["title"], "Building cpd");
@@ -126,8 +126,8 @@ fn new_creates_the_store_the_row_and_the_event() {
     assert_eq!(fs::read_to_string(records_file(&env, CTX, "hs")).unwrap(), "");
     assert_eq!(env.git(&d, &["branch", "--show-current"]), "main");
     assert_eq!(env.git(&d, &["status", "--porcelain"]), "");
-    // Committed as cpd2 <machine>, whatever the machine's git identity is.
-    assert_eq!(git_log(&env, CTX), ["cpd2 hs <cpd2@hs.invalid>|context building-cpd: Building cpd"]);
+    // Committed as cpd <machine>, whatever the machine's git identity is.
+    assert_eq!(git_log(&env, CTX), ["cpd hs <cpd@hs.invalid>|context building-cpd: Building cpd"]);
     assert!(env.git(&d, &["remote"]).is_empty());
 
     let created = events(&env, "context-created");
@@ -139,8 +139,8 @@ fn new_creates_the_store_the_row_and_the_event() {
 #[test]
 fn new_is_idempotent_for_the_same_title_and_jira() {
     let env = hs();
-    env.cpd2(&["context", "new", CTX, "--title", "Building cpd"]).ok();
-    let again = env.cpd2(&["context", "new", CTX, "--title", "Building cpd"]).ok();
+    env.cpd(&["context", "new", CTX, "--title", "Building cpd"]).ok();
+    let again = env.cpd(&["context", "new", CTX, "--title", "Building cpd"]).ok();
     assert_eq!(again["already"], true);
     assert_eq!(again["context"]["id"], CTX);
     assert_eq!(git_log(&env, CTX).len(), 1);
@@ -155,7 +155,7 @@ fn new_refuses_an_existing_context_with_another_title_or_jira() {
         vec!["context", "new", CTX, "--title", "Another"],
         vec!["context", "new", CTX, "--title", "Building cpd", "--jira", "CPD-1"],
     ] {
-        refused(env.cpd2(&args), 3, "context_exists");
+        refused(env.cpd(&args), 3, "context_exists");
     }
 }
 
@@ -164,21 +164,21 @@ fn new_refuses_a_directory_the_index_does_not_know() {
     let env = hs();
     new_context(&env);
     fs::remove_file(env.cpd_home().join("cpd.db")).unwrap();
-    let error = refused(env.cpd2(&["context", "new", CTX, "--title", "Building cpd"]), 3, "context_exists");
-    assert_eq!(error["details"]["next"], format!("cpd2 context sync --context {CTX}"));
+    let error = refused(env.cpd(&["context", "new", CTX, "--title", "Building cpd"]), 3, "context_exists");
+    assert_eq!(error["details"]["next"], format!("cpd context sync --context {CTX}"));
 }
 
 #[test]
 fn new_checks_its_arguments() {
     let env = hs();
-    refused(env.cpd2(&["context", "new", "Bad_Id", "--title", "T"]), 2, "invalid_context_id");
-    refused(env.cpd2(&["context", "new", CTX, "--title", "T", "--jira", "cpd-1"]), 2, "usage");
-    refused(env.cpd2(&["context", "new", CTX, "--title", "T", "--jira", "C-1"]), 2, "usage");
-    refused(env.cpd2(&["context", "new", CTX, "--title", ""]), 2, "usage");
-    refused(env.cpd2(&["context", "new", CTX]), 2, "usage");
+    refused(env.cpd(&["context", "new", "Bad_Id", "--title", "T"]), 2, "invalid_context_id");
+    refused(env.cpd(&["context", "new", CTX, "--title", "T", "--jira", "cpd-1"]), 2, "usage");
+    refused(env.cpd(&["context", "new", CTX, "--title", "T", "--jira", "C-1"]), 2, "usage");
+    refused(env.cpd(&["context", "new", CTX, "--title", ""]), 2, "usage");
+    refused(env.cpd(&["context", "new", CTX]), 2, "usage");
     assert!(!dir(&env, CTX).exists());
     let no_config = TestEnv::new();
-    refused(no_config.cpd2(&["context", "new", CTX, "--title", "T"]), 1, "config_missing");
+    refused(no_config.cpd(&["context", "new", CTX, "--title", "T"]), 1, "config_missing");
 }
 
 // ---- context decide, note, ask --------------------------------------------
@@ -188,7 +188,7 @@ fn decide_note_and_ask_append_records() {
     let env = hs();
     new_context(&env);
 
-    let d1 = env.cpd2(&["context", "decide", "One engine per machine.", "--context", CTX]).ok();
+    let d1 = env.cpd(&["context", "decide", "One engine per machine.", "--context", CTX]).ok();
     assert_eq!(d1["record"]["id"], "hs-d1");
     assert_eq!(d1["record"]["kind"], "decision");
     assert_eq!(d1["record"]["machine"], "hs");
@@ -198,13 +198,13 @@ fn decide_note_and_ask_append_records() {
     assert_eq!(d1["seq"], 1);
     assert!(d1.get("already").is_none());
 
-    let n1 = env.cpd2(&["context", "note", "A note.", "--context", CTX]).ok();
+    let n1 = env.cpd(&["context", "note", "A note.", "--context", CTX]).ok();
     assert_eq!(n1["record"]["id"], "hs-n1");
     assert_eq!(n1["seq"], 2);
-    let q1 = env.cpd2(&["context", "ask", "Why?", "--context", CTX]).ok();
+    let q1 = env.cpd(&["context", "ask", "Why?", "--context", CTX]).ok();
     assert_eq!(q1["record"]["id"], "hs-q1");
     assert_eq!(q1["record"]["kind"], "question");
-    let d2 = env.cpd2(&["context", "decide", "Two engines.", "--supersedes", "hs-d1", "--context", CTX]).ok();
+    let d2 = env.cpd(&["context", "decide", "Two engines.", "--supersedes", "hs-d1", "--context", CTX]).ok();
     assert_eq!(d2["record"]["id"], "hs-d2");
     assert_eq!(d2["record"]["supersedes"], "hs-d1");
     assert_eq!(d2["seq"], 4);
@@ -215,14 +215,14 @@ fn decide_note_and_ask_append_records() {
     assert!(file.iter().all(|l| l["v"] == 1));
     assert_eq!(file[3]["supersedes"], "hs-d1");
     assert_eq!(file[0]["by"], json!({"session": null, "plan": null}));
-    let shown = env.cpd2(&["context", "show", "--context", CTX]);
+    let shown = env.cpd(&["context", "show", "--context", CTX]);
     let ids: Vec<_> = shown.ok()["records"].as_array().unwrap().iter().map(|r| r["id"].clone()).collect();
     assert_eq!(ids, ["hs-d1", "hs-n1", "hs-q1", "hs-d2"]);
 
     // One git commit per record, named "<kind> <id>: <text>".
     let log = git_log(&env, CTX);
-    assert_eq!(log[0], "cpd2 hs <cpd2@hs.invalid>|decision hs-d2: Two engines.");
-    assert_eq!(log[1], "cpd2 hs <cpd2@hs.invalid>|question hs-q1: Why?");
+    assert_eq!(log[0], "cpd hs <cpd@hs.invalid>|decision hs-d2: Two engines.");
+    assert_eq!(log[1], "cpd hs <cpd@hs.invalid>|question hs-q1: Why?");
     assert_eq!(env.git(&dir(&env, CTX), &["status", "--porcelain"]), "");
 
     // One context-record Event each.
@@ -238,7 +238,7 @@ fn a_record_names_its_session_and_plan() {
     new_context(&env);
     fixture_plan(&env, "cpd2", CTX);
     let run = |env: &TestEnv, session_var: &str, session: &str, args: &[&str]| {
-        let out = env.command(common::CPD2).args(args).env(session_var, session).output().unwrap();
+        let out = env.command(common::CPD).args(args).env(session_var, session).output().unwrap();
         serde_json::from_slice::<Value>(&out.stdout).unwrap()
     };
     // The Context comes from the selected Plan.
@@ -254,28 +254,28 @@ fn a_record_names_its_session_and_plan() {
 fn a_record_write_needs_a_context() {
     let env = hs();
     new_context(&env);
-    refused(env.cpd2(&["context", "note", "x"]), 2, "context_required");
-    refused(env.cpd2(&["context", "decide", "x"]), 2, "context_required");
-    refused(env.cpd2(&["context", "ask", "x"]), 2, "context_required");
-    refused(env.cpd2(&["context", "answer", "hs-q1", "x"]), 2, "context_required");
-    refused(env.cpd2(&["context", "show"]), 2, "context_required");
-    refused(env.cpd2(&["context", "note", "x", "--context", "nope-ctx"]), 4, "context_not_found");
-    refused(env.cpd2(&["context", "note", "x", "--plan", "nope-plan"]), 4, "plan_not_found");
-    refused(env.cpd2(&["context", "note", "x", "--context", "Bad_Id"]), 2, "invalid_context_id");
-    refused(env.cpd2(&["context", "note", "x", "--plan", "Bad_Id"]), 2, "invalid_plan_id");
-    refused(env.cpd2(&["context", "note", ""]), 2, "usage");
+    refused(env.cpd(&["context", "note", "x"]), 2, "context_required");
+    refused(env.cpd(&["context", "decide", "x"]), 2, "context_required");
+    refused(env.cpd(&["context", "ask", "x"]), 2, "context_required");
+    refused(env.cpd(&["context", "answer", "hs-q1", "x"]), 2, "context_required");
+    refused(env.cpd(&["context", "show"]), 2, "context_required");
+    refused(env.cpd(&["context", "note", "x", "--context", "nope-ctx"]), 4, "context_not_found");
+    refused(env.cpd(&["context", "note", "x", "--plan", "nope-plan"]), 4, "plan_not_found");
+    refused(env.cpd(&["context", "note", "x", "--context", "Bad_Id"]), 2, "invalid_context_id");
+    refused(env.cpd(&["context", "note", "x", "--plan", "Bad_Id"]), 2, "invalid_plan_id");
+    refused(env.cpd(&["context", "note", ""]), 2, "usage");
 }
 
 #[test]
 fn decide_refuses_a_missing_or_wrong_kind_of_supersedes() {
     let env = hs();
     new_context(&env);
-    env.cpd2(&["context", "note", "A note.", "--context", CTX]).ok();
+    env.cpd(&["context", "note", "A note.", "--context", CTX]).ok();
     for target in ["hs-d9", "hs-n1"] {
-        let run = env.cpd2(&["context", "decide", "New.", "--supersedes", target, "--context", CTX]);
+        let run = env.cpd(&["context", "decide", "New.", "--supersedes", target, "--context", CTX]);
         refused(run, 3, "record_not_found");
     }
-    refused(env.cpd2(&["context", "decide", "New.", "--supersedes", "nonsense", "--context", CTX]), 2, "invalid_record_id");
+    refused(env.cpd(&["context", "decide", "New.", "--supersedes", "nonsense", "--context", CTX]), 2, "invalid_record_id");
     // Nothing was written by the refusals.
     assert_eq!(lines(&records_file(&env, CTX, "hs")).len(), 1);
     assert_eq!(git_log(&env, CTX).len(), 2);
@@ -285,8 +285,8 @@ fn decide_refuses_a_missing_or_wrong_kind_of_supersedes() {
 fn a_retry_returns_the_existing_record() {
     let env = hs();
     new_context(&env);
-    let first = env.cpd2(&["context", "note", "Same.", "--context", CTX]).ok();
-    let again = env.cpd2(&["context", "note", "Same.", "--context", CTX]).ok();
+    let first = env.cpd(&["context", "note", "Same.", "--context", CTX]).ok();
+    let again = env.cpd(&["context", "note", "Same.", "--context", CTX]).ok();
     assert_eq!(again["already"], true);
     assert_eq!(again["record"], first["record"]);
     assert_eq!(again["seq"], first["seq"]);
@@ -294,14 +294,14 @@ fn a_retry_returns_the_existing_record() {
     assert_eq!(events(&env, "context-record").len(), 1);
 
     // Only the latest record counts: after another write, the same text is new.
-    env.cpd2(&["context", "note", "Other.", "--context", CTX]).ok();
-    let third = env.cpd2(&["context", "note", "Same.", "--context", CTX]).ok();
+    env.cpd(&["context", "note", "Other.", "--context", CTX]).ok();
+    let third = env.cpd(&["context", "note", "Same.", "--context", CTX]).ok();
     assert!(third.get("already").is_none());
     assert_eq!(third["record"]["id"], "hs-n3");
 
     // A different session is a different write.
     let out = env
-        .command(common::CPD2)
+        .command(common::CPD)
         .args(["context", "note", "Same.", "--context", CTX])
         .env("CPD_SESSION", "other-session")
         .output()
@@ -317,14 +317,14 @@ fn a_failed_commit_leaves_no_record() {
     let hook = dir(&env, CTX).join(".git/hooks/pre-commit");
     fs::write(&hook, "#!/bin/sh\necho no >&2\nexit 1\n").unwrap();
     fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
-    let error = refused(env.cpd2(&["context", "note", "x", "--context", CTX]), 1, "git_failed");
+    let error = refused(env.cpd(&["context", "note", "x", "--context", CTX]), 1, "git_failed");
     assert!(error["details"]["argv"].as_array().unwrap().iter().any(|a| a == "commit"));
     assert_eq!(error["details"]["exit"], 1);
     assert!(error["details"]["stderr"].as_str().unwrap().contains("no"));
     assert_eq!(fs::read_to_string(records_file(&env, CTX, "hs")).unwrap(), "");
-    assert!(env.cpd2(&["context", "show", "--context", CTX]).ok()["records"].as_array().unwrap().is_empty());
+    assert!(env.cpd(&["context", "show", "--context", CTX]).ok()["records"].as_array().unwrap().is_empty());
     fs::remove_file(hook).unwrap();
-    assert_eq!(env.cpd2(&["context", "note", "x", "--context", CTX]).ok()["record"]["id"], "hs-n1");
+    assert_eq!(env.cpd(&["context", "note", "x", "--context", CTX]).ok()["record"]["id"], "hs-n1");
 }
 
 // ---- context answer -------------------------------------------------------
@@ -333,20 +333,20 @@ fn a_failed_commit_leaves_no_record() {
 fn answer_records_the_answer() {
     let env = hs();
     new_context(&env);
-    env.cpd2(&["context", "ask", "Per machine?", "--context", CTX]).ok();
-    let out = env.cpd2(&["context", "answer", "hs-q1", "Yes, per machine.", "--context", CTX]).ok();
+    env.cpd(&["context", "ask", "Per machine?", "--context", CTX]).ok();
+    let out = env.cpd(&["context", "answer", "hs-q1", "Yes, per machine.", "--context", CTX]).ok();
     assert_eq!(out["record"]["id"], "hs-a1");
     assert_eq!(out["record"]["kind"], "answer");
     assert_eq!(out["record"]["question"], "hs-q1");
     assert_eq!(out["seq"], 2);
     assert_eq!(lines(&records_file(&env, CTX, "hs"))[1]["question"], "hs-q1");
-    assert_eq!(git_log(&env, CTX)[0], "cpd2 hs <cpd2@hs.invalid>|answer hs-a1: Yes, per machine.");
+    assert_eq!(git_log(&env, CTX)[0], "cpd hs <cpd@hs.invalid>|answer hs-a1: Yes, per machine.");
 
     // The same answer again is a retry; another answer is refused.
-    let again = env.cpd2(&["context", "answer", "hs-q1", "Yes, per machine.", "--context", CTX]).ok();
+    let again = env.cpd(&["context", "answer", "hs-q1", "Yes, per machine.", "--context", CTX]).ok();
     assert_eq!(again["already"], true);
     assert_eq!(again["record"]["id"], "hs-a1");
-    let error = refused(env.cpd2(&["context", "answer", "hs-q1", "No.", "--context", CTX]), 3, "question_answered");
+    let error = refused(env.cpd(&["context", "answer", "hs-q1", "No.", "--context", CTX]), 3, "question_answered");
     assert_eq!(error["details"]["answer"], "hs-a1");
     assert_eq!(lines(&records_file(&env, CTX, "hs")).len(), 2);
 }
@@ -355,11 +355,11 @@ fn answer_records_the_answer() {
 fn answer_refuses_what_is_not_a_question() {
     let env = hs();
     new_context(&env);
-    env.cpd2(&["context", "note", "A note.", "--context", CTX]).ok();
+    env.cpd(&["context", "note", "A note.", "--context", CTX]).ok();
     for question in ["hs-q7", "hs-n1"] {
-        refused(env.cpd2(&["context", "answer", question, "x", "--context", CTX]), 3, "record_not_found");
+        refused(env.cpd(&["context", "answer", question, "x", "--context", CTX]), 3, "record_not_found");
     }
-    refused(env.cpd2(&["context", "answer", "q1", "x", "--context", CTX]), 2, "invalid_record_id");
+    refused(env.cpd(&["context", "answer", "q1", "x", "--context", CTX]), 2, "invalid_record_id");
     assert_eq!(lines(&records_file(&env, CTX, "hs")).len(), 1);
 }
 
@@ -368,16 +368,16 @@ fn answer_refuses_what_is_not_a_question() {
 #[test]
 fn list_summarises_every_context() {
     let env = hs();
-    assert_eq!(env.cpd2(&["context", "list"]).ok()["contexts"], json!([]));
+    assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"], json!([]));
     new_context(&env);
-    env.cpd2(&["context", "new", "home-lab", "--title", "Home lab", "--jira", "LAB-3"]).ok();
-    env.cpd2(&["context", "ask", "One?", "--context", CTX]).ok();
-    env.cpd2(&["context", "ask", "Two?", "--context", CTX]).ok();
-    env.cpd2(&["context", "answer", "hs-q1", "Yes.", "--context", CTX]).ok();
-    env.cpd2(&["context", "note", "n", "--context", CTX]).ok();
+    env.cpd(&["context", "new", "home-lab", "--title", "Home lab", "--jira", "LAB-3"]).ok();
+    env.cpd(&["context", "ask", "One?", "--context", CTX]).ok();
+    env.cpd(&["context", "ask", "Two?", "--context", CTX]).ok();
+    env.cpd(&["context", "answer", "hs-q1", "Yes.", "--context", CTX]).ok();
+    env.cpd(&["context", "note", "n", "--context", CTX]).ok();
     fixture_plan(&env, "cpd2", CTX);
 
-    let out = env.cpd2(&["context", "list"]).ok();
+    let out = env.cpd(&["context", "list"]).ok();
     let contexts = out["contexts"].as_array().unwrap();
     assert_eq!(contexts.len(), 2);
     assert_eq!(
@@ -391,7 +391,7 @@ fn list_summarises_every_context() {
     assert_eq!(contexts[1]["records"], 0);
     assert_eq!(contexts[1]["plans"], json!([]));
     let cursor = out["events_cursor"].as_i64().unwrap();
-    let highest = env.cpd2(&["events", "list"]).ok()["events"].as_array().unwrap().last().unwrap()["id"].as_i64().unwrap();
+    let highest = env.cpd(&["events", "list"]).ok()["events"].as_array().unwrap().last().unwrap()["id"].as_i64().unwrap();
     assert_eq!(cursor, highest);
 }
 
@@ -399,14 +399,14 @@ fn list_summarises_every_context() {
 fn show_renders_the_records() {
     let env = hs();
     new_context(&env);
-    env.cpd2(&["context", "decide", "Old.", "--context", CTX]).ok();
-    env.cpd2(&["context", "ask", "Why?", "--context", CTX]).ok();
-    env.cpd2(&["context", "decide", "New.", "--supersedes", "hs-d1", "--context", CTX]).ok();
-    env.cpd2(&["context", "answer", "hs-q1", "Because.", "--context", CTX]).ok();
-    env.cpd2(&["context", "ask", "When?", "--context", CTX]).ok();
-    env.cpd2(&["context", "note", "A note.", "--context", CTX]).ok();
+    env.cpd(&["context", "decide", "Old.", "--context", CTX]).ok();
+    env.cpd(&["context", "ask", "Why?", "--context", CTX]).ok();
+    env.cpd(&["context", "decide", "New.", "--supersedes", "hs-d1", "--context", CTX]).ok();
+    env.cpd(&["context", "answer", "hs-q1", "Because.", "--context", CTX]).ok();
+    env.cpd(&["context", "ask", "When?", "--context", CTX]).ok();
+    env.cpd(&["context", "note", "A note.", "--context", CTX]).ok();
 
-    let out = env.cpd2(&["context", "show", "--context", CTX]).ok();
+    let out = env.cpd(&["context", "show", "--context", CTX]).ok();
     assert_eq!(out["context"], json!({"id": CTX, "title": "Building cpd", "jira": null, "grounded": false, "grounded_seq": null}));
     let records = out["records"].as_array().unwrap();
     assert_eq!(records.len(), 6);
@@ -431,17 +431,17 @@ fn show_since_lists_only_the_later_records() {
     let env = hs();
     new_context(&env);
     for text in ["one", "two", "three"] {
-        env.cpd2(&["context", "note", text, "--context", CTX]).ok();
+        env.cpd(&["context", "note", text, "--context", CTX]).ok();
     }
-    let out = env.cpd2(&["context", "show", "--context", CTX, "--since", "1"]).ok();
+    let out = env.cpd(&["context", "show", "--context", CTX, "--since", "1"]).ok();
     let seqs: Vec<_> = out["records"].as_array().unwrap().iter().map(|r| r["seq"].as_i64().unwrap()).collect();
     assert_eq!(seqs, [2, 3]);
     let md = out["markdown"].as_str().unwrap();
     assert!(md.contains("two") && md.contains("three") && !md.contains("one"), "{md}");
-    let none = env.cpd2(&["context", "show", "--context", CTX, "--since", "3"]).ok();
+    let none = env.cpd(&["context", "show", "--context", CTX, "--since", "3"]).ok();
     assert_eq!(none["records"], json!([]));
-    refused(env.cpd2(&["context", "show", "--context", CTX, "--since", "x"]), 2, "usage");
-    refused(env.cpd2(&["context", "show", "--context", "nope-ctx"]), 4, "context_not_found");
+    refused(env.cpd(&["context", "show", "--context", CTX, "--since", "x"]), 2, "usage");
+    refused(env.cpd(&["context", "show", "--context", "nope-ctx"]), 4, "context_not_found");
 }
 
 #[test]
@@ -449,7 +449,7 @@ fn show_takes_the_context_of_the_selected_plan() {
     let env = hs();
     new_context(&env);
     fixture_plan(&env, "cpd2", CTX);
-    let out = env.command(common::CPD2).args(["context", "show"]).env("CPD_PLAN", "cpd2").output().unwrap();
+    let out = env.command(common::CPD).args(["context", "show"]).env("CPD_PLAN", "cpd2").output().unwrap();
     let out: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(out["context"]["id"], CTX, "{out}");
 }
@@ -460,22 +460,22 @@ fn show_takes_the_context_of_the_selected_plan() {
 fn the_index_is_rebuilt_from_the_files_alone() {
     let env = hs();
     new_context(&env);
-    env.cpd2(&["context", "decide", "D.", "--context", CTX]).ok();
-    env.cpd2(&["context", "ask", "Q?", "--context", CTX]).ok();
-    env.cpd2(&["context", "answer", "hs-q1", "A.", "--context", CTX]).ok();
-    env.cpd2(&["context", "note", "N.", "--context", CTX]).ok();
-    let before = env.cpd2(&["context", "show", "--context", CTX]).ok();
+    env.cpd(&["context", "decide", "D.", "--context", CTX]).ok();
+    env.cpd(&["context", "ask", "Q?", "--context", CTX]).ok();
+    env.cpd(&["context", "answer", "hs-q1", "A.", "--context", CTX]).ok();
+    env.cpd(&["context", "note", "N.", "--context", CTX]).ok();
+    let before = env.cpd(&["context", "show", "--context", CTX]).ok();
 
     for suffix in ["", "-wal", "-shm"] {
         let _ = fs::remove_file(env.cpd_home().join(format!("cpd.db{suffix}")));
     }
-    assert_eq!(env.cpd2(&["context", "list"]).ok()["contexts"], json!([]));
-    let synced = env.cpd2(&["context", "sync"]).ok();
+    assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"], json!([]));
+    let synced = env.cpd(&["context", "sync"]).ok();
     assert_eq!(
         synced["contexts"],
         json!([{"id": CTX, "synced": false, "reason": "no_remote", "imported": 4, "pushed": false}])
     );
-    let after = env.cpd2(&["context", "show", "--context", CTX]).ok();
+    let after = env.cpd(&["context", "show", "--context", CTX]).ok();
     assert_eq!(after["records"], before["records"]);
     assert_eq!(after["markdown"], before["markdown"]);
     // The Context and its records are Events again, in file order.
@@ -483,17 +483,17 @@ fn the_index_is_rebuilt_from_the_files_alone() {
     assert_eq!(events(&env, "context-record").len(), 4);
 
     // Import is idempotent.
-    assert_eq!(env.cpd2(&["context", "sync"]).ok()["contexts"][0]["imported"], 0);
+    assert_eq!(env.cpd(&["context", "sync"]).ok()["contexts"][0]["imported"], 0);
     assert_eq!(events(&env, "context-record").len(), 4);
     // Numbering goes on from the files.
-    assert_eq!(env.cpd2(&["context", "note", "M.", "--context", CTX]).ok()["record"]["id"], "hs-n2");
+    assert_eq!(env.cpd(&["context", "note", "M.", "--context", CTX]).ok()["record"]["id"], "hs-n2");
 }
 
 #[test]
 fn a_record_committed_but_not_indexed_is_repaired_by_the_next_write() {
     let env = hs();
     new_context(&env);
-    env.cpd2(&["context", "note", "One.", "--context", CTX]).ok();
+    env.cpd(&["context", "note", "One.", "--context", CTX]).ok();
     // A crash after the commit and before the index insert: the line is in the
     // file and committed, the index never heard of it.
     let file = records_file(&env, CTX, "hs");
@@ -505,9 +505,9 @@ fn a_record_committed_but_not_indexed_is_repaired_by_the_next_write() {
     fs::write(&file, text).unwrap();
     env.git(&dir(&env, CTX), &["commit", "-q", "-a", "-m", "crash"]);
 
-    let next = env.cpd2(&["context", "note", "Three.", "--context", CTX]).ok();
+    let next = env.cpd(&["context", "note", "Three.", "--context", CTX]).ok();
     assert_eq!(next["record"]["id"], "hs-n3");
-    let ids: Vec<_> = env.cpd2(&["context", "show", "--context", CTX]).ok()["records"]
+    let ids: Vec<_> = env.cpd(&["context", "show", "--context", CTX]).ok()["records"]
         .as_array()
         .unwrap()
         .iter()
@@ -520,7 +520,7 @@ fn a_record_committed_but_not_indexed_is_repaired_by_the_next_write() {
 fn a_malformed_record_file_is_context_store_invalid() {
     let env = hs();
     new_context(&env);
-    env.cpd2(&["context", "note", "One.", "--context", CTX]).ok();
+    env.cpd(&["context", "note", "One.", "--context", CTX]).ok();
     let file = records_file(&env, CTX, "hs");
     let good = fs::read_to_string(&file).unwrap();
     let cases = [
@@ -533,24 +533,24 @@ fn a_malformed_record_file_is_context_store_invalid() {
     ];
     for (content, why) in cases {
         fs::write(&file, content).unwrap();
-        let sync = env.cpd2(&["context", "sync", "--context", CTX]);
+        let sync = env.cpd(&["context", "sync", "--context", CTX]);
         let error = refused(sync, 1, "context_store_invalid");
         assert!(error["details"]["path"].as_str().unwrap().ends_with("hs.jsonl"), "{why}: {error}");
-        refused(env.cpd2(&["context", "note", "x", "--context", CTX]), 1, "context_store_invalid");
+        refused(env.cpd(&["context", "note", "x", "--context", CTX]), 1, "context_store_invalid");
     }
     fs::write(&file, &good).unwrap();
-    env.cpd2(&["context", "sync", "--context", CTX]).ok();
+    env.cpd(&["context", "sync", "--context", CTX]).ok();
 
     // A broken manifest, a store that is not a repository, a manifest of another Context.
     let manifest = dir(&env, CTX).join("context.json");
     let good = fs::read_to_string(&manifest).unwrap();
     for broken in ["{", &good.replace(CTX, "other-ctx"), &good.replace("\"v\":1", "\"v\":2")] {
         fs::write(&manifest, broken).unwrap();
-        refused(env.cpd2(&["context", "sync", "--context", CTX]), 1, "context_store_invalid");
+        refused(env.cpd(&["context", "sync", "--context", CTX]), 1, "context_store_invalid");
     }
     fs::write(&manifest, good).unwrap();
     fs::rename(dir(&env, CTX).join(".git"), env.root().join("moved-git")).unwrap();
-    refused(env.cpd2(&["context", "sync", "--context", CTX]), 1, "context_store_invalid");
+    refused(env.cpd(&["context", "sync", "--context", CTX]), 1, "context_store_invalid");
 }
 
 // ---- context sync ---------------------------------------------------------
@@ -559,13 +559,13 @@ fn a_malformed_record_file_is_context_store_invalid() {
 fn sync_without_a_remote_does_nothing() {
     let env = hs();
     new_context(&env);
-    let out = env.cpd2(&["context", "sync", "--context", CTX]).ok();
+    let out = env.cpd(&["context", "sync", "--context", CTX]).ok();
     assert_eq!(out["contexts"], json!([{"id": CTX, "synced": false, "reason": "no_remote", "imported": 0, "pushed": false}]));
-    refused(env.cpd2(&["context", "sync", "--context", "nope-ctx"]), 4, "context_not_found");
-    refused(env.cpd2(&["context", "sync", "--context", "Bad_Id"]), 2, "invalid_context_id");
+    refused(env.cpd(&["context", "sync", "--context", "nope-ctx"]), 4, "context_not_found");
+    refused(env.cpd(&["context", "sync", "--context", "Bad_Id"]), 2, "invalid_context_id");
     // With no Context at all, there is nothing to sync.
     let empty = hs();
-    assert_eq!(empty.cpd2(&["context", "sync"]).ok()["contexts"], json!([]));
+    assert_eq!(empty.cpd(&["context", "sync"]).ok()["contexts"], json!([]));
 }
 
 #[test]
@@ -574,36 +574,36 @@ fn sync_pushes_and_a_second_machine_imports() {
     let b = machine("lap");
     let remote = bare(&a, "remote.git");
     new_context(&a);
-    a.cpd2(&["context", "decide", "From hs.", "--context", CTX]).ok();
+    a.cpd(&["context", "decide", "From hs.", "--context", CTX]).ok();
     add_origin(&a, CTX, &remote);
-    let out = a.cpd2(&["context", "sync", "--context", CTX]).ok();
+    let out = a.cpd(&["context", "sync", "--context", CTX]).ok();
     assert_eq!(out["contexts"], json!([{"id": CTX, "synced": true, "imported": 0, "pushed": true}]));
     assert_eq!(a.git(&remote, &["log", "--format=%s", "main"]).lines().count(), 2);
     // A second run pushes and imports nothing.
-    let again = a.cpd2(&["context", "sync", "--context", CTX]).ok();
+    let again = a.cpd(&["context", "sync", "--context", CTX]).ok();
     assert_eq!(again["contexts"], json!([{"id": CTX, "synced": true, "imported": 0, "pushed": false}]));
 
     // Machine b clones the store and syncs: the Context is first seen.
     fs::create_dir_all(b.cpd_home().join("contexts")).unwrap();
     b.git(b.root(), &["clone", "-q", remote.to_str().unwrap(), dir(&b, CTX).to_str().unwrap()]);
-    let out = b.cpd2(&["context", "sync"]).ok();
+    let out = b.cpd(&["context", "sync"]).ok();
     assert_eq!(out["contexts"], json!([{"id": CTX, "synced": true, "imported": 1, "pushed": false}]));
     assert_eq!(events(&b, "context-created").len(), 1);
-    let show = b.cpd2(&["context", "show", "--context", CTX]).ok();
+    let show = b.cpd(&["context", "show", "--context", CTX]).ok();
     assert_eq!(show["context"]["title"], "Building cpd");
     assert_eq!(show["records"][0]["id"], "hs-d1");
 
     // b writes to its own file with its own numbering; a imports it.
-    let note = b.cpd2(&["context", "note", "From lap.", "--context", CTX]).ok();
+    let note = b.cpd(&["context", "note", "From lap.", "--context", CTX]).ok();
     assert_eq!(note["record"]["id"], "lap-n1");
     assert_eq!(note["record"]["machine"], "lap");
-    b.cpd2(&["context", "decide", "Also lap.", "--supersedes", "hs-d1", "--context", CTX]).ok();
+    b.cpd(&["context", "decide", "Also lap.", "--supersedes", "hs-d1", "--context", CTX]).ok();
     assert!(records_file(&b, CTX, "lap").exists());
-    let out = b.cpd2(&["context", "sync"]).ok();
+    let out = b.cpd(&["context", "sync"]).ok();
     assert_eq!(out["contexts"][0]["pushed"], true);
-    let out = a.cpd2(&["context", "sync"]).ok();
+    let out = a.cpd(&["context", "sync"]).ok();
     assert_eq!(out["contexts"], json!([{"id": CTX, "synced": true, "imported": 2, "pushed": false}]));
-    let ids: Vec<_> = a.cpd2(&["context", "show", "--context", CTX]).ok()["records"]
+    let ids: Vec<_> = a.cpd(&["context", "show", "--context", CTX]).ok()["records"]
         .as_array()
         .unwrap()
         .iter()
@@ -612,7 +612,7 @@ fn sync_pushes_and_a_second_machine_imports() {
     assert_eq!(ids, ["hs-d1", "lap-n1", "lap-d1"]);
     assert_eq!(events(&a, "context-record").len(), 3);
     // hs-d1 is superseded by the other machine's decision.
-    assert!(a.cpd2(&["context", "show", "--context", CTX]).ok()["markdown"].as_str().unwrap().contains("superseded by lap-d1"));
+    assert!(a.cpd(&["context", "show", "--context", CTX]).ok()["markdown"].as_str().unwrap().contains("superseded by lap-d1"));
     // Both machines have written, and each file is only its own machine's.
     assert!(lines(&records_file(&a, CTX, "lap")).iter().all(|l| l["machine"] == "lap"));
 }
@@ -624,15 +624,15 @@ fn sync_of_two_machines_writing_at_once_merges_cleanly() {
     let remote = bare(&a, "remote.git");
     new_context(&a);
     add_origin(&a, CTX, &remote);
-    a.cpd2(&["context", "sync"]).ok();
+    a.cpd(&["context", "sync"]).ok();
     fs::create_dir_all(b.cpd_home().join("contexts")).unwrap();
     b.git(b.root(), &["clone", "-q", remote.to_str().unwrap(), dir(&b, CTX).to_str().unwrap()]);
-    b.cpd2(&["context", "sync"]).ok();
+    b.cpd(&["context", "sync"]).ok();
 
-    a.cpd2(&["context", "note", "A writes.", "--context", CTX]).ok();
-    b.cpd2(&["context", "note", "B writes.", "--context", CTX]).ok();
-    b.cpd2(&["context", "sync"]).ok();
-    let out = a.cpd2(&["context", "sync"]).ok();
+    a.cpd(&["context", "note", "A writes.", "--context", CTX]).ok();
+    b.cpd(&["context", "note", "B writes.", "--context", CTX]).ok();
+    b.cpd(&["context", "sync"]).ok();
+    let out = a.cpd(&["context", "sync"]).ok();
     // a had to merge b's push into its own commit, then push the merge.
     assert_eq!(out["contexts"], json!([{"id": CTX, "synced": true, "imported": 1, "pushed": true}]));
     assert_eq!(a.git(&dir(&a, CTX), &["status", "--porcelain"]), "");
@@ -645,18 +645,18 @@ fn sync_refuses_a_conflict_and_changes_nothing() {
     let remote = bare(&a, "remote.git");
     new_context(&a);
     add_origin(&a, CTX, &remote);
-    a.cpd2(&["context", "sync"]).ok();
+    a.cpd(&["context", "sync"]).ok();
     // The same Context id created independently on another machine.
-    b.cpd2(&["context", "new", CTX, "--title", "Building cpd, again"]).ok();
+    b.cpd(&["context", "new", CTX, "--title", "Building cpd, again"]).ok();
     add_origin(&b, CTX, &remote);
     let head = b.git(&dir(&b, CTX), &["rev-parse", "HEAD"]);
-    let run = b.cpd2(&["context", "sync", "--context", CTX]);
+    let run = b.cpd(&["context", "sync", "--context", CTX]);
     let error = refused(run, 3, "context_sync_conflict");
     assert_eq!(error["details"]["files"], json!(["context.json"]));
     assert_eq!(b.git(&dir(&b, CTX), &["rev-parse", "HEAD"]), head);
     assert_eq!(b.git(&dir(&b, CTX), &["status", "--porcelain"]), "");
     assert!(!dir(&b, CTX).join(".git/MERGE_HEAD").exists());
-    assert_eq!(b.cpd2(&["context", "show", "--context", CTX]).ok()["context"]["title"], "Building cpd, again");
+    assert_eq!(b.cpd(&["context", "show", "--context", CTX]).ok()["context"]["title"], "Building cpd, again");
 }
 
 #[test]
@@ -664,7 +664,7 @@ fn sync_fails_when_the_remote_cannot_be_reached() {
     let env = hs();
     new_context(&env);
     add_origin(&env, CTX, &env.root().join("no-such-remote.git"));
-    let run = env.cpd2(&["context", "sync", "--context", CTX]);
+    let run = env.cpd(&["context", "sync", "--context", CTX]);
     let error = refused(run, 1, "context_sync_failed");
     assert!(error["details"]["argv"].as_array().unwrap().iter().any(|a| a == "fetch"));
     assert!(!error["details"]["stderr"].as_str().unwrap().is_empty());
@@ -701,21 +701,21 @@ fn sync_repeats_when_the_remote_moved_and_gives_up_after_three_rounds() {
     let remote = bare(&env, "remote.git");
     new_context(&env);
     add_origin(&env, CTX, &remote);
-    env.cpd2(&["context", "sync"]).ok();
-    env.cpd2(&["context", "note", "Local.", "--context", CTX]).ok();
+    env.cpd(&["context", "sync"]).ok();
+    env.cpd(&["context", "note", "Local.", "--context", CTX]).ok();
 
     // Moved once: the second round succeeds.
     move_remote_on_push(&env, &remote, 1);
-    let out = env.cpd2(&["context", "sync", "--context", CTX]).ok();
+    let out = env.cpd(&["context", "sync", "--context", CTX]).ok();
     assert_eq!(out["contexts"][0]["pushed"], true, "{out}");
     assert_eq!(env.git(&remote, &["rev-parse", "main"]), env.git(&dir(&env, CTX), &["rev-parse", "HEAD"]));
     assert_eq!(fs::read_to_string(env.root().join("moves")).unwrap().trim(), "1");
 
     // Moved every time: three rounds, then context_sync_failed.
-    env.cpd2(&["context", "note", "Local 2.", "--context", CTX]).ok();
+    env.cpd(&["context", "note", "Local 2.", "--context", CTX]).ok();
     fs::remove_file(env.root().join("moves")).unwrap();
     move_remote_on_push(&env, &remote, 99);
-    let error = refused(env.cpd2(&["context", "sync", "--context", CTX]), 1, "context_sync_failed");
+    let error = refused(env.cpd(&["context", "sync", "--context", CTX]), 1, "context_sync_failed");
     assert!(error["details"]["argv"].as_array().unwrap().iter().any(|a| a == "push"), "{error}");
     assert_eq!(fs::read_to_string(env.root().join("moves")).unwrap().trim(), "3");
 }
@@ -724,13 +724,13 @@ fn sync_repeats_when_the_remote_moved_and_gives_up_after_three_rounds() {
 fn sync_of_every_context_reports_each_and_fails_with_the_first_failure() {
     let env = hs();
     new_context(&env);
-    env.cpd2(&["context", "new", "home-lab", "--title", "Home lab"]).ok();
+    env.cpd(&["context", "new", "home-lab", "--title", "Home lab"]).ok();
     add_origin(&env, "home-lab", &env.root().join("no-such-remote.git"));
     let remote = bare(&env, "remote.git");
-    env.cpd2(&["context", "new", "zeta", "--title", "Zeta"]).ok();
+    env.cpd(&["context", "new", "zeta", "--title", "Zeta"]).ok();
     add_origin(&env, "zeta", &remote);
 
-    let run = env.cpd2(&["context", "sync"]);
+    let run = env.cpd(&["context", "sync"]);
     let error = refused(run, 1, "context_sync_failed");
     let entries = error["details"]["contexts"].as_array().unwrap();
     assert_eq!(entries.len(), 3);
@@ -762,18 +762,18 @@ fn a_sync_failure_from_the_engine_is_recorded_once() {
     assert_eq!(errors[0]["data"]["source"], "context sync");
     assert_eq!(errors[0]["data"]["code"], "context_sync_failed");
     assert!(errors[0]["data"]["message"].is_string() && errors[0]["data"]["details"].is_object());
-    let listed = env.cpd2(&["context", "list"]).ok();
+    let listed = env.cpd(&["context", "list"]).ok();
     assert_eq!(listed["contexts"][0]["sync_failing"], true);
 
     // Run by hand, a failure only reports; and nothing is recorded again.
-    assert_eq!(code(&env.cpd2(&["context", "sync"])), "context_sync_failed");
+    assert_eq!(code(&env.cpd(&["context", "sync"])), "context_sync_failed");
     assert_eq!(events(&env, "error").len(), 1);
 
     // A success clears it; the next failure is reported again.
     bare_at(&env, &remote);
     let out = Contexts::new(&home, &config, &mut store).sync(&id, Trigger::Engine).unwrap();
     assert!(out.synced && out.pushed);
-    assert_eq!(env.cpd2(&["context", "list"]).ok()["contexts"][0]["sync_failing"], false);
+    assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"][0]["sync_failing"], false);
     fs::remove_dir_all(&remote).unwrap();
     Contexts::new(&home, &config, &mut store).sync(&id, Trigger::Engine).unwrap_err();
     assert_eq!(events(&env, "error").len(), 2);

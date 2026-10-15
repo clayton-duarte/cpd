@@ -12,8 +12,8 @@ fn review_decide_is_an_unknown_command() {
         &["review", "decide", "api-schema-a1", "--approve"][..],
         &["review"],
     ] {
-        let run = env.cpd2(argv);
-        assert_eq!(run.exit, 2, "cpd2 {argv:?}: {run:?}");
-        assert_eq!(run.error()["code"], "usage", "cpd2 {argv:?}");
+        let run = env.cpd(argv);
+        assert_eq!(run.exit, 2, "cpd {argv:?}: {run:?}");
+        assert_eq!(run.error()["code"], "usage", "cpd {argv:?}");
     }
 }

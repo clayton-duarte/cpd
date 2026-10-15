@@ -11,11 +11,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use common::{Run, TestEnv};
-use cpd2::error::CpdError;
-use cpd2::git::{Setup, create_attempt_worktree, create_lead_worktree};
-use cpd2::home::CpdHome;
-use cpd2::ids::{AttemptId, PlanId};
-use cpd2::store::{Store, WriteTxn};
+use cpd_core::error::CpdError;
+use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::{AttemptId, PlanId};
+use cpd_core::store::{Store, WriteTxn};
 use rusqlite::params;
 use serde_json::{Value, json};
 
@@ -40,7 +40,7 @@ fn fixture(files: &[(&str, &str)]) -> Fx {
     let env = TestEnv::new();
     let repo = env.git_repo("pay").canonicalize().unwrap();
     // The worktrees are created in this process, whose environment is not the TestEnv's.
-    for (key, value) in [("user.name", "cpd2 test"), ("user.email", "test@cpd2.invalid"), ("commit.gpgsign", "false")] {
+    for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
         env.git(&repo, &["config", key, value]);
     }
     if !files.is_empty() {
@@ -137,14 +137,14 @@ impl Fx {
     }
 
     fn submit_in(&self, cwd: &Path) -> Run {
-        self.env.cpd2_in(cwd, &["attempt", "submit", "api-a1", "--plan", PLAN])
+        self.env.cpd_in(cwd, &["attempt", "submit", "api-a1", "--plan", PLAN])
     }
 
-    fn cpd2(&self, args: &[&str]) -> Run {
+    fn cpd(&self, args: &[&str]) -> Run {
         let mut all = vec!["attempt"];
         all.extend(args);
         all.extend(["--plan", PLAN]);
-        self.env.cpd2(&all)
+        self.env.cpd(&all)
     }
 
     fn status(&self) -> String {
@@ -156,7 +156,7 @@ impl Fx {
     }
 
     fn events(&self, kind: &str) -> Vec<Value> {
-        self.env.cpd2(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
+        self.env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
     }
 
     /// Registers a Worker Session for `api-a1` whose file is `file` (`None`: not known yet).
@@ -208,7 +208,7 @@ fn submit_moves_the_attempt_to_merging_and_tells_the_worker_to_stop() {
     assert!(submitted_at.ends_with('Z') && submitted_at.contains('T'), "{submitted_at}");
     assert_eq!(tail, None, "no pre-commit table: nothing ran, check_tail stays null");
     assert_eq!(fx.query::<String>("SELECT status FROM jobs WHERE key = 'api'"), "running", "the Job stays running");
-    assert!(!fx.home.hook_log(&plan(), &AttemptId::parse("api-a1").unwrap(), cpd2::home::Hook::PreCommit).exists());
+    assert!(!fx.home.hook_log(&plan(), &AttemptId::parse("api-a1").unwrap(), cpd_core::home::Hook::PreCommit).exists());
 
     let events = fx.events("attempt-status");
     assert_eq!(events.len(), 1, "{events:?}");
@@ -221,7 +221,7 @@ fn submit_moves_the_attempt_to_merging_and_tells_the_worker_to_stop() {
 fn submit_works_from_a_subdirectory_and_takes_the_plan_from_the_environment() {
     let fx = fixture(&[]);
     let sha = fx.commit("src/a.rs", "x\n");
-    let run = fx.env.command(common::CPD2).args(["attempt", "submit", "api-a1"]).env("CPD_PLAN", PLAN).current_dir(fx.work.join("src")).output().unwrap();
+    let run = fx.env.command(common::CPD).args(["attempt", "submit", "api-a1"]).env("CPD_PLAN", PLAN).current_dir(fx.work.join("src")).output().unwrap();
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stdout));
     assert_eq!(fx.query::<String>("SELECT submitted_sha FROM attempts WHERE id = 'api-a1'"), sha);
 }
@@ -264,7 +264,7 @@ fn submit_refuses_an_attempt_that_is_not_running() {
     fs::write(web.join("a.txt"), "a\n").unwrap();
     fx.env.git(&web, &["add", "-A"]);
     fx.env.git(&web, &["commit", "-q", "-m", "a"]);
-    let run = fx.env.cpd2_in(&web, &["attempt", "submit", "web-a1", "--plan", PLAN]);
+    let run = fx.env.cpd_in(&web, &["attempt", "submit", "web-a1", "--plan", PLAN]);
     assert_eq!(refused(&run, "attempt_not_running", 3)["details"]["status"], "starting");
 }
 
@@ -327,7 +327,7 @@ fn submit_runs_the_quick_check_and_keeps_its_tail() {
     let tail: String = fx.query("SELECT check_tail FROM attempts WHERE id = 'api-a1'");
     assert!(tail.contains("checking"), "{tail}");
     assert!(tail.contains(fx.work.to_str().unwrap()), "the hook ran in the worktree: {tail}");
-    let log = fx.home.hook_log(&plan(), &AttemptId::parse("api-a1").unwrap(), cpd2::home::Hook::PreCommit);
+    let log = fx.home.hook_log(&plan(), &AttemptId::parse("api-a1").unwrap(), cpd_core::home::Hook::PreCommit);
     assert!(fs::read_to_string(log).unwrap().contains("checking"));
 }
 
@@ -364,11 +364,11 @@ fn submit_refuses_a_quick_check_that_could_not_run() {
 fn submit_checks_its_arguments_and_selection() {
     let fx = fixture(&[]);
     fx.commit("a.txt", "a\n");
-    refused(&fx.env.cpd2_in(&fx.work, &["attempt", "submit", "api-a1"]), "plan_required", 2);
-    refused(&fx.env.cpd2_in(&fx.work, &["attempt", "submit", "Bad_Id", "--plan", PLAN]), "invalid_attempt_id", 2);
-    refused(&fx.env.cpd2_in(&fx.work, &["attempt", "submit", "api-a9", "--plan", PLAN]), "attempt_not_found", 4);
-    refused(&fx.env.cpd2_in(&fx.work, &["attempt", "submit", "api-a1", "--plan", "nope"]), "plan_not_found", 4);
-    refused(&fx.env.cpd2_in(&fx.work, &["attempt", "submit"]), "usage", 2);
+    refused(&fx.env.cpd_in(&fx.work, &["attempt", "submit", "api-a1"]), "plan_required", 2);
+    refused(&fx.env.cpd_in(&fx.work, &["attempt", "submit", "Bad_Id", "--plan", PLAN]), "invalid_attempt_id", 2);
+    refused(&fx.env.cpd_in(&fx.work, &["attempt", "submit", "api-a9", "--plan", PLAN]), "attempt_not_found", 4);
+    refused(&fx.env.cpd_in(&fx.work, &["attempt", "submit", "api-a1", "--plan", "nope"]), "plan_not_found", 4);
+    refused(&fx.env.cpd_in(&fx.work, &["attempt", "submit"]), "usage", 2);
     assert_eq!(fx.status(), "running");
 }
 
@@ -387,16 +387,16 @@ fn read_prints_assistant_text_and_tool_calls_in_session_order() {
     let fx = fixture(&[]);
     let file = fx.session_file(SESSION);
     fx.session(Some(&file));
-    let out = fx.cpd2(&["read", "api-a1"]).ok();
+    let out = fx.cpd(&["read", "api-a1"]).ok();
     assert_eq!(
         out,
         json!({"ok": true, "attempt": "api-a1", "session": "w1", "file": file.to_str().unwrap(), "total": 4,
                "lines": ["tool: read", "assistant: The schema compiles;", "assistant: committing.", "tool: bash"]})
     );
-    let out = fx.cpd2(&["read", "api-a1", "--lines", "2"]).ok();
+    let out = fx.cpd(&["read", "api-a1", "--lines", "2"]).ok();
     assert_eq!(out["lines"], json!(["assistant: committing.", "tool: bash"]));
     assert_eq!(out["total"], 4, "total counts every line, not the kept ones");
-    let out = fx.cpd2(&["read", "api-a1", "--lines", "100"]).ok();
+    let out = fx.cpd(&["read", "api-a1", "--lines", "100"]).ok();
     assert_eq!(out["lines"].as_array().unwrap().len(), 4);
 }
 
@@ -405,31 +405,31 @@ fn read_skips_a_partial_last_line_but_not_a_malformed_complete_one() {
     let fx = fixture(&[]);
     let file = fx.session_file(&format!("{SESSION}{{\"type\":\"message\",\"mess"));
     fx.session(Some(&file));
-    assert_eq!(fx.cpd2(&["read", "api-a1"]).ok()["total"], 4);
+    assert_eq!(fx.cpd(&["read", "api-a1"]).ok()["total"], 4);
 
     fs::write(&file, format!("{SESSION}not json\n")).unwrap();
-    let error = refused(&fx.cpd2(&["read", "api-a1"]), "session_malformed", 1);
+    let error = refused(&fx.cpd(&["read", "api-a1"]), "session_malformed", 1);
     assert_eq!(error["details"]["line"], 6);
     fs::write(&file, format!("{SESSION}{{\"no\":\"type\"}}\n")).unwrap();
-    refused(&fx.cpd2(&["read", "api-a1"]), "session_malformed", 1);
+    refused(&fx.cpd(&["read", "api-a1"]), "session_malformed", 1);
 }
 
 #[test]
 fn read_needs_a_registered_session_with_an_existing_file() {
     let fx = fixture(&[]);
-    refused(&fx.cpd2(&["read", "api-a1"]), "session_not_found", 4);
+    refused(&fx.cpd(&["read", "api-a1"]), "session_not_found", 4);
 
     fx.session(None);
-    refused(&fx.cpd2(&["read", "api-a1"]), "session_not_found", 4);
+    refused(&fx.cpd(&["read", "api-a1"]), "session_not_found", 4);
 
     let gone = fx.env.root().join("gone.jsonl");
     fx.sql(&format!("UPDATE sessions SET file = '{}' WHERE id = 'w1'", gone.display()));
-    let error = refused(&fx.cpd2(&["read", "api-a1"]), "session_not_found", 4);
+    let error = refused(&fx.cpd(&["read", "api-a1"]), "session_not_found", 4);
     assert_eq!(error["details"]["session"], "w1");
 
-    refused(&fx.cpd2(&["read", "api-a9"]), "attempt_not_found", 4);
-    refused(&fx.cpd2(&["read", "api-a1", "--lines", "0"]), "usage", 2);
-    refused(&fx.cpd2(&["read", "api-a1", "--lines", "x"]), "usage", 2);
+    refused(&fx.cpd(&["read", "api-a9"]), "attempt_not_found", 4);
+    refused(&fx.cpd(&["read", "api-a1", "--lines", "0"]), "usage", 2);
+    refused(&fx.cpd(&["read", "api-a1", "--lines", "x"]), "usage", 2);
 }
 
 // ---------- attempt show ----------
@@ -444,7 +444,7 @@ fn show_returns_every_field_its_escalations_and_its_paths() {
          INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
            VALUES ('pay', 'api-a1-q1', 'api-a1', 1, 'Which?', 'open', 99, 't');",
     );
-    let out = fx.cpd2(&["show", "api-a1"]).ok();
+    let out = fx.cpd(&["show", "api-a1"]).ok();
     let attempt = &out["attempt"];
     let base = fx.env.git(&fx.work, &["rev-parse", "HEAD"]);
     assert_eq!(
@@ -476,7 +476,7 @@ fn show_names_the_check_log_once_a_quick_check_has_run() {
     let fx = fixture(&[(".config/wt.toml", "[pre-commit]\ncheck = \"echo hi\"\n")]);
     fx.commit("a.txt", "a\n");
     fx.submit().ok();
-    let out = fx.cpd2(&["show", "api-a1"]).ok();
+    let out = fx.cpd(&["show", "api-a1"]).ok();
     assert_eq!(out["attempt"]["status"], "merging");
     assert_eq!(out["attempt"]["check_tail"], "hi");
     let check = out["paths"]["check"].as_str().unwrap();
@@ -488,10 +488,10 @@ fn show_names_the_check_log_once_a_quick_check_has_run() {
 #[test]
 fn show_refuses_what_does_not_exist() {
     let fx = fixture(&[]);
-    refused(&fx.cpd2(&["show", "api-a2"]), "attempt_not_found", 4);
-    refused(&fx.env.cpd2(&["attempt", "show", "api-a1", "--plan", "nope"]), "plan_not_found", 4);
-    refused(&fx.env.cpd2(&["attempt", "show", "api-a1"]), "plan_required", 2);
-    refused(&fx.cpd2(&["show", "nonsense"]), "invalid_attempt_id", 2);
+    refused(&fx.cpd(&["show", "api-a2"]), "attempt_not_found", 4);
+    refused(&fx.env.cpd(&["attempt", "show", "api-a1", "--plan", "nope"]), "plan_not_found", 4);
+    refused(&fx.env.cpd(&["attempt", "show", "api-a1"]), "plan_required", 2);
+    refused(&fx.cpd(&["show", "nonsense"]), "invalid_attempt_id", 2);
 }
 
 // ---------- attempt list ----------
@@ -515,7 +515,7 @@ fn ids(out: &Value) -> Vec<&str> {
 #[test]
 fn list_returns_the_summary_of_every_attempt_oldest_first() {
     let fx = listed();
-    let out = fx.cpd2(&["list"]).ok();
+    let out = fx.cpd(&["list"]).ok();
     assert_eq!(ids(&out), ["api-a1", "api-a2", "web-a1"]);
     assert_eq!(
         out["attempts"][0],
@@ -532,22 +532,22 @@ fn list_returns_the_summary_of_every_attempt_oldest_first() {
 #[test]
 fn list_filters_by_job_and_by_active() {
     let fx = listed();
-    assert_eq!(ids(&fx.cpd2(&["list", "--job", "api"]).ok()), ["api-a1", "api-a2"]);
-    assert_eq!(ids(&fx.cpd2(&["list", "--active"]).ok()), ["api-a2", "web-a1"]);
-    assert_eq!(ids(&fx.cpd2(&["list", "--active", "--job", "api"]).ok()), ["api-a2"]);
-    assert_eq!(ids(&fx.cpd2(&["list", "--job", "web"]).ok()), ["web-a1"]);
+    assert_eq!(ids(&fx.cpd(&["list", "--job", "api"]).ok()), ["api-a1", "api-a2"]);
+    assert_eq!(ids(&fx.cpd(&["list", "--active"]).ok()), ["api-a2", "web-a1"]);
+    assert_eq!(ids(&fx.cpd(&["list", "--active", "--job", "api"]).ok()), ["api-a2"]);
+    assert_eq!(ids(&fx.cpd(&["list", "--job", "web"]).ok()), ["web-a1"]);
 }
 
 #[test]
 fn list_refuses_what_does_not_exist() {
     let fx = listed();
-    refused(&fx.cpd2(&["list", "--job", "ghost"]), "job_not_found", 4);
-    refused(&fx.cpd2(&["list", "--job", "Bad_Key"]), "invalid_job_id", 2);
-    refused(&fx.env.cpd2(&["attempt", "list", "--plan", "nope"]), "plan_not_found", 4);
-    refused(&fx.env.cpd2(&["attempt", "list"]), "plan_required", 2);
+    refused(&fx.cpd(&["list", "--job", "ghost"]), "job_not_found", 4);
+    refused(&fx.cpd(&["list", "--job", "Bad_Key"]), "invalid_job_id", 2);
+    refused(&fx.env.cpd(&["attempt", "list", "--plan", "nope"]), "plan_not_found", 4);
+    refused(&fx.env.cpd(&["attempt", "list"]), "plan_required", 2);
     fx.sql(
         "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
          VALUES ('pay', 'idle', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, 1, 't')",
     );
-    assert_eq!(ids(&fx.cpd2(&["list", "--job", "idle"]).ok()), Vec::<&str>::new());
+    assert_eq!(ids(&fx.cpd(&["list", "--job", "idle"]).ok()), Vec::<&str>::new());
 }

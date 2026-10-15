@@ -1,4 +1,4 @@
-//! The integration-test harness: runs the built `cpd2` in an isolated
+//! The integration-test harness: runs the built `cpd` in an isolated
 //! environment and parses its JSON.
 //!
 //! Every `TestEnv` lives in its own temporary directory and holds:
@@ -23,8 +23,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use serde_json::Value;
 use tempfile::TempDir;
 
-/// The cpd2 binary Cargo built for this test run.
-pub const CPD2: &str = env!("CARGO_BIN_EXE_cpd2");
+/// The cpd binary Cargo built for this test run.
+pub const CPD: &str = env!("CARGO_BIN_EXE_cpd");
 
 static NEXT_SOCKET: AtomicUsize = AtomicUsize::new(0);
 
@@ -33,7 +33,7 @@ pub struct TestEnv {
     tmux_socket: String,
 }
 
-/// The result of one `cpd2` run.
+/// The result of one `cpd` run.
 #[derive(Debug)]
 pub struct Run {
     pub exit: i32,
@@ -71,7 +71,7 @@ impl Run {
 
 impl TestEnv {
     pub fn new() -> TestEnv {
-        let dir = tempfile::Builder::new().prefix("cpd2-test-").tempdir().expect("temp dir");
+        let dir = tempfile::Builder::new().prefix("cpd-test-").tempdir().expect("temp dir");
         let n = NEXT_SOCKET.fetch_add(1, Ordering::Relaxed);
         let env = TestEnv { dir, tmux_socket: format!("cpdt-{}-{n}", std::process::id()) };
         for sub in ["cpd-home", "home", "bin", "tmux", "repos"] {
@@ -79,7 +79,7 @@ impl TestEnv {
         }
         fs::write(
             env.home().join(".gitconfig"),
-            "[user]\n\tname = cpd2 test\n\temail = test@cpd2.invalid\n[init]\n\tdefaultBranch = main\n",
+            "[user]\n\tname = cpd test\n\temail = test@cpd.invalid\n[init]\n\tdefaultBranch = main\n",
         )
         .expect("write .gitconfig");
         env
@@ -141,16 +141,16 @@ impl TestEnv {
         cmd
     }
 
-    /// Runs `cpd2 <args>` from this env's root.
-    pub fn cpd2(&self, args: &[&str]) -> Run {
-        self.cpd2_in(self.root(), args)
+    /// Runs `cpd <args>` from this env's root.
+    pub fn cpd(&self, args: &[&str]) -> Run {
+        self.cpd_in(self.root(), args)
     }
 
-    /// Runs `cpd2 <args>` from `cwd`.
-    pub fn cpd2_in(&self, cwd: &Path, args: &[&str]) -> Run {
-        let out = self.command(CPD2).args(args).current_dir(cwd).output().expect("run cpd2");
+    /// Runs `cpd <args>` from `cwd`.
+    pub fn cpd_in(&self, cwd: &Path, args: &[&str]) -> Run {
+        let out = self.command(CPD).args(args).current_dir(cwd).output().expect("run cpd");
         Run {
-            exit: out.status.code().expect("cpd2 was killed by a signal"),
+            exit: out.status.code().expect("cpd was killed by a signal"),
             stdout: String::from_utf8(out.stdout).expect("stdout is UTF-8"),
             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
         }

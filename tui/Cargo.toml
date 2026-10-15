@@ -1,11 +1,23 @@
 [package]
 name = "cpd-tui"
-version = "0.0.0"
-edition = "2024"
-publish = false
+description = "cpd: the cockpit (the tmux layout and the ratatui views)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "cpd_tui"
+path = "src/lib.rs"
 
 [dependencies]
-ratatui = "0.30"
-serde_json = "1"
-uuid = { version = "1.28.0", features = ["v4"] }
-tui-tree-widget = "0.24"
+cpd-core = { path = "../core" }
+clap.workspace = true
+nix.workspace = true
+ratatui.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tui-tree-widget.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
