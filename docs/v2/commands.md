@@ -1108,7 +1108,7 @@ cpd2 tui [--attach]
 Builds the cockpit (§6.1, §6.2) unless it exists, and starts the engine.
 
 Effects, each only when missing:
-- **tmux:** the server with §6.1's options; the session `cpd` with window `main` (`new-session -d -s cpd -n main -x 215 -y 62`), split into the tree (left, 20 %), the plan view (centre top) above the chat slot (centre bottom), and the widgets (right, 20 %), each running `cpd2 tui view <tree|plan|widgets>` with `@cpd_view` set; the chat slot holds the placeholder (§10) or, when one exists, the Plan Lead whose latest `session-moved` Event with `place: "chat"` is the newest, moved in as `session open` does. The session `cpd-work`.
+- **tmux:** the server with §6.1's options; the session `cpd` with window `main` (`new-session -d -s cpd -n main -x 215 -y 62`), split into the tree (left, 20 %), the plan view (centre top) above the chat slot (centre bottom), and the widgets (right, 20 %), each running `cpd2 tui view <tree|plan|widgets>` with `@cpd_view` set; the chat slot holds the placeholder (§10) or, when one exists, the Plan Lead whose latest `session-moved` Event with `place: "chat"` is the newest, moved in as `session open` does. "Plan Lead" here means any Lead with a Plan, as for `session open` (side forks included, a Context's grounded Lead never), and one that `session open` refuses stays where it is while the placeholder keeps the slot (Escalation `tui-cockpit-a1-q3`). The session `cpd-work`.
 - `watch --ensure` (§12).
 - No rows of its own; moving a Lead appends `session-moved`.
 
