@@ -32,3 +32,16 @@ mv "$adapter_tmp" "$adapter_dir"
 trap - EXIT
 
 echo "installed $dest_dir/cpd2 and $adapter_dir" >&2
+
+# A running cockpit's views keep the old binary until restarted (commands.md
+# §13.1): when the configured server has a cockpit with its main window, restart
+# its views. No config, no server or no main: nothing to restart.
+if config=$("$dest_dir/cpd2" config 2>/dev/null); then
+  tmux_conf=$(printf '%s' "$config" | sed -n 's/.*"tmux":{\([^}]*\)}.*/\1/p')
+  socket=$(printf '%s' "$tmux_conf" | sed -n 's/.*"socket":"\([^"]*\)".*/\1/p')
+  cockpit=$(printf '%s' "$tmux_conf" | sed -n 's/.*"cockpit_session":"\([^"]*\)".*/\1/p')
+  if [ -n "$socket" ] && [ -n "$cockpit" ] &&
+    env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null list-windows -t "=$cockpit" -F '#{window_name}' 2>/dev/null | grep -qx main; then
+    "$dest_dir/cpd2" tui --respawn >&2
+  fi
+fi
