@@ -10,8 +10,10 @@ use std::collections::{HashMap, HashSet};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
 };
+
+use crate::palette::{self, Ui};
 
 /// What the layout needs to know of a Job.
 #[derive(Clone, Debug)]
@@ -52,27 +54,6 @@ const GAP: u16 = 2; // between pills of a level
 const MARGIN: u16 = 1; // either side of the pills: room for the selection markers
 const MIN_KEY: usize = 6; // shortest a key is truncated to, `…` included
 
-pub fn icon(status: &str) -> &'static str {
-    match status {
-        "closed" | "merged" => "✓",
-        "running" => "●",
-        "in_review" => "◉",
-        "queued" => "○",
-        "draft" => "◌",
-        "failed" | "blocked" | "escalated" => "✗",
-        _ => "?",
-    }
-}
-
-pub fn status_color(status: &str) -> Color {
-    match status {
-        "closed" => Color::Green,
-        "running" | "in_review" => Color::Yellow,
-        "failed" => Color::Red,
-        _ => Color::Gray,
-    }
-}
-
 fn truncate(s: &str, w: usize) -> String {
     if s.chars().count() <= w {
         s.to_string()
@@ -82,9 +63,9 @@ fn truncate(s: &str, w: usize) -> String {
 }
 
 /// ` <icon> <key> <tier>[ aN] `, the key cut to `key_w` characters.
-fn pill_text(j: &FlowJob, key_w: usize) -> String {
+pub fn pill_text(j: &FlowJob, key_w: usize) -> String {
     let a = if j.attempt > 1 { format!(" a{}", j.attempt) } else { String::new() };
-    format!(" {} {} {}{} ", icon(&j.status), truncate(&j.key, key_w), j.tier, a)
+    format!(" {} {} {}{} ", palette::job_status(&j.status).0, truncate(&j.key, key_w), j.tier, a)
 }
 
 fn text_w(s: &str) -> u16 {
@@ -297,8 +278,8 @@ pub fn layout(all: &[FlowJob], width: u16) -> Chart {
         }
     }
     for (p, text) in pills.iter().zip(&texts) {
-        let col = jobs.iter().find(|j| j.key == p.key).map_or(Color::Gray, |j| status_color(&j.status));
-        buf.set_string(p.rect.x, p.rect.y, text, Style::new().fg(Color::Black).bg(col));
+        let (_, meaning) = palette::job_status(jobs.iter().find(|j| j.key == p.key).map_or("?", |j| &j.status));
+        buf.set_string(p.rect.x, p.rect.y, text, palette::pill(meaning));
     }
     Chart { buf, pills, levels, hidden }
 }
@@ -348,7 +329,7 @@ impl Chart {
                     let c = &mut dst[(area.x + x - ox, area.y + r.y - oy)];
                     match symbol {
                         Some(s) => {
-                            c.set_symbol(s).set_style(Style::new().fg(Color::White).add_modifier(Modifier::BOLD));
+                            c.set_symbol(s).set_style(Style::new().fg(palette::ui(Ui::Marker)).add_modifier(Modifier::BOLD));
                         }
                         None => {
                             c.modifier.insert(Modifier::BOLD);
@@ -382,6 +363,20 @@ mod tests {
     /// The chart's text against `want`, written below an opening newline that is not part of it.
     fn snap(c: &Chart, want: &str) {
         assert_eq!(text(c), want.strip_prefix('\n').unwrap());
+    }
+
+    #[test]
+    fn a_pill_has_the_icon_and_colour_of_its_status() {
+        let statuses = ["queued", "running", "in_review", "closed", "failed", "draft", "?"];
+        let jobs: Vec<FlowJob> = statuses.iter().map(|s| FlowJob { status: s.to_string(), ..job(s, &[]) }).collect();
+        let c = layout(&jobs, 80);
+        for (p, status) in c.pills.iter().zip(statuses) {
+            let (icon, meaning) = palette::job_status(status);
+            assert_eq!(c.buf[(p.rect.x + 1, p.rect.y)].symbol(), icon, "{status}");
+            let cell = &c.buf[(p.rect.x, p.rect.y)];
+            assert_eq!((Some(cell.fg), Some(cell.bg)), (palette::pill(meaning).fg, palette::pill(meaning).bg), "{status}");
+        }
+        assert_eq!(c.buf[(c.pills[1].rect.x + 1, c.pills[1].rect.y)].symbol(), "◐", "running");
     }
 
     #[test]

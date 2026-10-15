@@ -11,11 +11,13 @@ use std::collections::HashSet;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, Widget},
 };
 use tui_tree_widget::{Tree, TreeItem, TreeState};
+
+use crate::palette::{self, Meaning};
 
 /// Tree identifiers: a Context's name, a session's id. A session's path is `[context, id]`.
 pub type Id = String;
@@ -54,50 +56,36 @@ pub fn needs_you(asking: bool, state: &str, settled_at: Option<u64>, seen_at: Op
     asking || (state == "idle" && settled_at.is_some_and(|settled| settled > seen_at.unwrap_or(0)))
 }
 
-/// Dot colour of a Workflow phase; no Workflow (or an unknown phase) is dark grey.
-pub fn phase_color(phase: Option<&str>) -> Color {
-    match phase {
-        Some("context") => Color::Blue,
-        Some("plan") => Color::Magenta,
-        Some("dispatch") => Color::Yellow,
-        Some("pr") => Color::Cyan,
-        Some("done") => Color::Green,
-        _ => Color::DarkGray,
-    }
-}
-
 /// The busiest phase among sessions: dispatch > plan > context > pr > done > none.
 pub fn busiest(sessions: &[SessionRow]) -> Option<&'static str> {
     ["dispatch", "plan", "context", "pr", "done"].into_iter().find(|p| sessions.iter().any(|s| s.workflow.as_ref().is_some_and(|w| w.phase == *p)))
 }
 
+/// The Job status each counter counts, in order; the first is the queued Jobs, in phase `plan` the drafts.
+fn counter_statuses(phase: &str) -> [&'static str; 5] {
+    [if phase == "plan" { "draft" } else { "queued" }, "running", "in_review", "closed", "failed"]
+}
+
 /// The five counters from a Workflow's phase and its Jobs' statuses. Cancelled Jobs are not counted;
 /// the first counter is the queued Jobs, in phase `plan` the drafts.
 pub fn count_jobs<'a>(phase: &str, statuses: impl IntoIterator<Item = &'a str>) -> [usize; 5] {
-    let first = if phase == "plan" { "draft" } else { "queued" };
     let mut counts = [0; 5];
     for status in statuses {
-        if let Some(i) = [first, "running", "in_review", "closed", "failed"].iter().position(|s| *s == status) {
+        if let Some(i) = counter_statuses(phase).iter().position(|s| *s == status) {
             counts[i] += 1;
         }
     }
     counts
 }
 
-fn dot(needs_you: bool, phase: Option<&str>) -> Span<'static> {
-    Span::styled(if needs_you { "●" } else { "○" }, Style::new().fg(phase_color(phase)))
-}
-
-/// `36⋅0⋅0⋅5⋅1`: each count in its status colour (dark grey when zero; the drafts of phase `plan` always), `⋅` grey.
+/// `36⋅0⋅0⋅5⋅1`: each count in its status colour (nothing when zero; the drafts of phase `plan` always), `⋅` between.
 pub fn counters(w: &Workflow) -> Line<'static> {
-    let colors = [if w.phase == "plan" { Color::DarkGray } else { Color::White }, Color::Yellow, Color::Cyan, Color::Green, Color::Red];
     let mut spans = Vec::new();
-    for (i, n) in w.counts.iter().enumerate() {
+    for (i, (n, status)) in w.counts.iter().zip(counter_statuses(&w.phase)).enumerate() {
         if i > 0 {
-            spans.push(Span::styled("⋅", Style::new().fg(Color::DarkGray)));
+            spans.push(palette::separator());
         }
-        let color = if *n == 0 { Color::DarkGray } else { colors[i] };
-        spans.push(Span::styled(n.to_string(), Style::new().fg(color)));
+        spans.push(Span::styled(n.to_string(), palette::count_style(status, *n)));
     }
     Line::from(spans)
 }
@@ -116,7 +104,7 @@ pub fn truncate(text: &str, width: usize) -> String {
 /// A session's row text: guide (`├ `, `└ ` for the last), dot, name. The name is cut so that, in a column `width`
 /// wide, it never reaches the counters drawn at the right.
 fn session_text(s: &SessionRow, last: bool, width: u16) -> Line<'static> {
-    let mut prefix = vec![Span::styled(if last { "└ " } else { "├ " }, Style::new().fg(Color::DarkGray)), dot(s.needs_you, s.workflow.as_ref().map(|w| w.phase.as_str())), " ".into()];
+    let mut prefix = vec![Span::styled(if last { "└ " } else { "├ " }, palette::fg(Meaning::Nothing)), palette::dot(s.needs_you, s.workflow.as_ref().map(|w| w.phase.as_str())), " ".into()];
     let used = INDENT + Line::from(prefix.clone()).width() + s.workflow.as_ref().map_or(0, |w| counters(w).width() + 1);
     let name = truncate(&s.label, (width as usize).saturating_sub(used));
     prefix.push(if s.active { Span::styled(name, Style::new().add_modifier(Modifier::BOLD)) } else { name.into() });
@@ -126,9 +114,9 @@ fn session_text(s: &SessionRow, last: bool, width: u16) -> Line<'static> {
 /// A Context's row text: dot (● when a session inside needs you, coloured by the busiest phase), name, and the number
 /// of Plans inside when collapsed.
 fn context_text(c: &ContextRow, collapsed: bool) -> Line<'static> {
-    let mut spans = vec![dot(c.sessions.iter().any(|s| s.needs_you), busiest(&c.sessions)), " ".into(), Span::styled(c.name.clone(), Style::new().add_modifier(Modifier::BOLD))];
+    let mut spans = vec![palette::dot(c.sessions.iter().any(|s| s.needs_you), busiest(&c.sessions)), " ".into(), Span::styled(c.name.clone(), Style::new().add_modifier(Modifier::BOLD))];
     if collapsed {
-        spans.push(Span::styled(format!(" {}", c.sessions.len()), Style::new().fg(Color::DarkGray)));
+        spans.push(Span::styled(format!(" {}", c.sessions.len()), palette::fg(Meaning::Nothing)));
     }
     Line::from(spans)
 }
@@ -201,7 +189,8 @@ pub fn selected_index(state: &TreeState<Id>, rows: &[ContextRow]) -> Option<usiz
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
+    use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, style::Color};
+    use crate::palette::color;
 
     fn session(id: &str, label: &str, phase: Option<&str>, counts: [usize; 5]) -> SessionRow {
         SessionRow { id: id.into(), label: label.into(), active: false, needs_you: false, workflow: phase.map(|p| Workflow { phase: p.into(), counts }) }
@@ -287,7 +276,7 @@ mod tests {
         let rows = sample();
         let buf = render(&rows, &mut state_for(&rows, &[], &[]), 38, 6);
         assert_eq!(text(&buf, 5), "  └ ○ scratch");
-        assert_eq!(fg(&buf, 4, 5), Color::DarkGray);
+        assert_eq!(fg(&buf, 4, 5), color(Meaning::Nothing));
     }
 
     #[test]
@@ -295,7 +284,7 @@ mod tests {
         let rows = vec![ContextRow { name: "c".into(), sessions: vec![session("a", "p", Some("plan"), [4, 0, 0, 0, 0])] }];
         let buf = render(&rows, &mut state_for(&rows, &[], &[]), 20, 2);
         assert_eq!(text(&buf, 1), row("  └ ○ p", "4⋅0⋅0⋅0⋅0", 20));
-        assert_eq!(fg(&buf, 14, 1), Color::DarkGray);
+        assert_eq!(fg(&buf, 14, 1), color(Meaning::Nothing));
         assert_eq!(count_jobs("plan", ["draft", "draft", "queued", "cancelled", "running"]), [2, 1, 0, 0, 0]);
         assert_eq!(count_jobs("dispatch", ["draft", "queued", "queued", "cancelled", "in_review", "closed", "failed"]), [2, 0, 1, 1, 1]);
     }
@@ -312,12 +301,11 @@ mod tests {
 
     #[test]
     fn every_phase_has_its_dot_colour() {
-        for (phase, color) in [("context", Color::Blue), ("plan", Color::Magenta), ("dispatch", Color::Yellow), ("pr", Color::Cyan), ("done", Color::Green)] {
+        for (phase, meaning) in [("context", Meaning::Grounding), ("plan", Meaning::Planning), ("dispatch", Meaning::InProgress), ("pr", Meaning::Review), ("done", Meaning::Done)] {
             let rows = vec![ContextRow { name: "c".into(), sessions: vec![session("a", "x", Some(phase), [0; 5])] }];
             let buf = render(&rows, &mut state_for(&rows, &[], &[]), 20, 2);
-            assert_eq!((fg(&buf, 0, 0), fg(&buf, 4, 1)), (color, color), "{phase}");
+            assert_eq!((fg(&buf, 0, 0), fg(&buf, 4, 1)), (color(meaning), color(meaning)), "{phase}");
         }
-        assert_eq!(phase_color(None), Color::DarkGray);
     }
 
     #[test]
@@ -330,7 +318,7 @@ mod tests {
         assert_eq!(busiest(&phases(&["done"])), Some("done"));
         assert_eq!(busiest(&[session("a", "a", None, [0; 5])]), None);
         let rows = vec![ContextRow { name: "c".into(), sessions: phases(&["done", "plan"]) }];
-        assert_eq!(fg(&render(&rows, &mut state_for(&rows, &[], &[]), 20, 1), 0, 0), Color::Magenta);
+        assert_eq!(fg(&render(&rows, &mut state_for(&rows, &[], &[]), 20, 1), 0, 0), color(Meaning::Planning));
     }
 
     #[test]
@@ -340,17 +328,17 @@ mod tests {
         // counters "1⋅2⋅3⋅4⋅5" occupy the last 9 columns
         let at = |i: u16| 11 + 2 * i;
         let colours: Vec<Color> = (0..5).map(|i| fg(&buf, at(i), 1)).collect();
-        assert_eq!(colours, [Color::White, Color::Yellow, Color::Cyan, Color::Green, Color::Red]);
-        assert!((0..4).all(|i| fg(&buf, at(i) + 1, 1) == Color::DarkGray));
-        assert!((0..5).all(|i| fg(&buf, at(i), 2) == Color::DarkGray));
+        assert_eq!(colours, [color(Meaning::NotStarted), color(Meaning::InProgress), color(Meaning::Review), color(Meaning::Done), color(Meaning::Failed)]);
+        assert!((0..4).all(|i| fg(&buf, at(i) + 1, 1) == color(Meaning::Nothing)));
+        assert!((0..5).all(|i| fg(&buf, at(i), 2) == color(Meaning::Nothing)));
     }
 
     #[test]
     fn the_guides_are_dark_grey() {
         let rows = sample();
         let buf = render(&rows, &mut state_for(&rows, &[], &[]), 38, 4);
-        assert_eq!((text(&buf, 1).chars().nth(2), fg(&buf, 2, 1)), (Some('├'), Color::DarkGray));
-        assert_eq!((text(&buf, 3).chars().nth(2), fg(&buf, 2, 3)), (Some('└'), Color::DarkGray));
+        assert_eq!((text(&buf, 1).chars().nth(2), fg(&buf, 2, 1)), (Some('├'), color(Meaning::Nothing)));
+        assert_eq!((text(&buf, 3).chars().nth(2), fg(&buf, 2, 3)), (Some('└'), color(Meaning::Nothing)));
     }
 
     #[test]
@@ -362,8 +350,8 @@ mod tests {
             assert_eq!(reversed(&buf, y), vec![y == 2; 38], "row {y}");
         }
         // every element keeps its colour: the counters' zero and the separator are still dark grey (now as backgrounds)
-        assert_eq!(fg(&buf, 29, 2), Color::DarkGray);
-        assert_eq!(fg(&buf, 4, 2), Color::Yellow);
+        assert_eq!(fg(&buf, 29, 2), color(Meaning::Nothing));
+        assert_eq!(fg(&buf, 4, 2), color(Meaning::InProgress));
     }
 
     #[test]

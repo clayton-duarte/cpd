@@ -8,6 +8,7 @@
 //!              Enter/click on a Job opens the Worker's chat read-only beside the chat.
 //! - `dispatch`: right bar. The PR status of each Plan (read from `gh`, interim), the homeserver load, placeholders.
 //! - `worker <session.jsonl> <job>`: read-only chat view of a pi session file (follows it live).
+//! - `legend`:  what the colours and icons mean (`legend.rs`); the Context pane's button and `?` open it in a popup.
 //!
 //! Data comes only from the cpd CLI (`cpd … --wf`), fetched by the context view into a cache the other views read.
 
@@ -26,7 +27,7 @@ use ratatui::{
         execute,
     },
     layout::{Constraint, Layout, Position, Rect},
-    style::{Color, Style, Stylize},
+    style::{Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
     DefaultTerminal,
@@ -37,10 +38,13 @@ use tui_tree_widget::TreeState;
 mod actions;
 mod context;
 mod flow;
+mod legend;
+mod palette;
 mod pr;
 mod prompt;
 mod sessions;
 
+use palette::Ui;
 use prompt::{Outcome, Prompt};
 use sessions::Session;
 
@@ -74,7 +78,8 @@ fn main() {
         "plan" => run_plan(&mut terminal),
         "dispatch" => run_dispatch(&mut terminal),
         "worker" => run_worker(&mut terminal, args.get(2).cloned().unwrap_or_default()),
-        _ => Err(format!("usage: {} context|plan|dispatch|worker <session.jsonl> <job>", args[0])),
+        "legend" => run_legend(&mut terminal),
+        _ => Err(format!("usage: {} context|plan|dispatch|worker <session.jsonl> <job>|legend", args[0])),
     };
     let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
@@ -141,6 +146,34 @@ fn close_session(id: &str) -> Result<String, String> {
     let pane = all.iter().find(|s| s.id == id).map(|s| s.pane_id.clone()).unwrap_or_default();
     tmux_checked(&["kill-pane", "-t", &pane])?;
     Ok("closed".into())
+}
+
+/// `?` or a click on the button: open the legend in a tmux popup over the whole cockpit (the Context pane is too
+/// narrow for it), sized to the legend and at most the client's size. `display-popup` returns when the popup closes.
+fn open_legend() -> Result<(), String> {
+    let exe = env::current_exe().map_err(|e| e.to_string())?;
+    let clients = tmux_checked(&["list-clients", "-F", "#{client_activity} #{client_width} #{client_height}"])?;
+    let client = clients
+        .lines()
+        .filter_map(|l| {
+            let n: Vec<u64> = l.split(' ').filter_map(|x| x.parse().ok()).collect();
+            Some((*n.first()?, u16::try_from(*n.get(1)?).ok()?, u16::try_from(*n.get(2)?).ok()?))
+        })
+        .max()
+        .ok_or("no tmux client attached")?;
+    tmux_checked(&legend::popup_args(&exe, (client.1, client.2)).iter().map(String::as_str).collect::<Vec<_>>()).map(|_| ())
+}
+
+/// The legend view: draws until any key or click.
+fn run_legend(terminal: &mut DefaultTerminal) -> Result<(), String> {
+    loop {
+        terminal.draw(|f| legend::draw(f, f.area())).map_err(|e| e.to_string())?;
+        match event::read().map_err(|e| e.to_string())? {
+            Event::Key(k) if k.kind == KeyEventKind::Press => return Ok(()),
+            Event::Mouse(m) if matches!(m.kind, MouseEventKind::Down(_)) => return Ok(()),
+            _ => {}
+        }
+    }
 }
 
 /// Bring the chat pane of session `id` into the centre slot (the chat pane in window `main`). swap-pane keeps both
@@ -315,6 +348,9 @@ impl ContextData {
     }
 }
 
+/// The button at the bottom row of the Context pane (also the key `?`).
+const LEGEND_BUTTON: &str = " ? legend ";
+
 fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
     thread::spawn(fetch_loop);
     let mut data = ContextData { groups: Vec::new(), rows: Vec::new(), state: TreeState::default(), known: HashSet::new() };
@@ -322,6 +358,7 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
     let mut last_refresh = Instant::now();
     let mut prompt: Option<Prompt> = None;
     let mut note = String::new(); // the one-line result or refusal of the last action, until the next key
+    let mut button = Rect::default(); // the legend button, set by each draw
     loop {
         if last_refresh.elapsed() > Duration::from_secs(1) {
             data.refresh();
@@ -334,9 +371,12 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
                 let width = area.width.max(1) as usize;
                 let wrapped = footer.chars().count().div_ceil(width);
                 let footer_height = if footer.is_empty() { 0 } else { (wrapped + usize::from(wrapped > 1)).max(1).min(area.height as usize) as u16 };
-                let [list_area, footer_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height)]).areas(area);
+                let [list_area, footer_area, button_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height), Constraint::Length(1)]).areas(area);
+                let label = Line::from(LEGEND_BUTTON);
+                button = Rect { width: (label.width() as u16).min(button_area.width), ..button_area };
+                f.render_widget(Paragraph::new(label).style(Style::new().add_modifier(Modifier::REVERSED)), button);
                 if footer_height > 0 {
-                    let style = if prompt.is_some() { Style::new().fg(Color::Yellow).bold() } else { Style::new().fg(Color::Yellow) };
+                    let style = if prompt.is_some() { Style::new().fg(palette::ui(Ui::Note)).bold() } else { Style::new().fg(palette::ui(Ui::Note)) };
                     f.render_widget(Paragraph::new(footer).style(style).wrap(Wrap { trim: false }), footer_area);
                 }
                 context::draw(f, list_area, &data.rows, &mut data.state);
@@ -364,6 +404,11 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
                         (None, _) => {}
                     }
                 }
+                KeyCode::Char('?') => {
+                    if let Err(why) = open_legend() {
+                        note = why;
+                    }
+                }
                 KeyCode::Char('x') => {
                     note.clear();
                     if let Some(e) = data.selected_session() {
@@ -385,7 +430,11 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
             },
             Event::Mouse(m) if prompt.is_none() && m.kind == MouseEventKind::Down(MouseButton::Left) => {
                 note.clear();
-                if let Some(row) = data.state.rendered_at(Position::new(m.column, m.row)).map(<[String]>::to_vec) {
+                if button.contains(Position::new(m.column, m.row)) {
+                    if let Err(why) = open_legend() {
+                        note = why;
+                    }
+                } else if let Some(row) = data.state.rendered_at(Position::new(m.column, m.row)).map(<[String]>::to_vec) {
                     data.state.select(row.clone());
                     activate = Some(row);
                 }
@@ -564,7 +613,7 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
                     spans.push(" no Lead session in the centre".dim());
                 }
                 if !note.is_empty() {
-                    spans.push(format!("  {note}").yellow());
+                    spans.push(format!("  {note}").fg(palette::ui(Ui::Note)));
                 }
                 body_area = body;
                 f.render_widget(Paragraph::new(Line::from(spans)), head);
@@ -750,13 +799,13 @@ fn render_session(path: &str) -> Vec<Line<'static>> {
         for part in content {
             match (role, part["type"].as_str().unwrap_or("")) {
                 ("user", "text") => {
-                    lines.push(Line::from(vec![format!("{ts} ").dim(), "you  ".fg(Color::Cyan).bold()]));
+                    lines.push(Line::from(vec![format!("{ts} ").dim(), "you  ".fg(palette::ui(Ui::You)).bold()]));
                     for l in part["text"].as_str().unwrap_or("").lines().take(12) {
-                        lines.push(Line::from(format!("      {l}")).fg(Color::Cyan));
+                        lines.push(Line::from(format!("      {l}")).fg(palette::ui(Ui::You)));
                     }
                 }
                 ("assistant", "text") => {
-                    lines.push(Line::from(vec![format!("{ts} ").dim(), "agent".fg(Color::Green).bold()]));
+                    lines.push(Line::from(vec![format!("{ts} ").dim(), "agent".fg(palette::ui(Ui::Agent)).bold()]));
                     for l in part["text"].as_str().unwrap_or("").lines() {
                         lines.push(Line::from(format!("      {l}")));
                     }
@@ -765,7 +814,7 @@ fn render_session(path: &str) -> Vec<Line<'static>> {
                     let name = part["name"].as_str().unwrap_or("tool");
                     let arg = part["arguments"]["command"].as_str().or(part["arguments"]["path"].as_str()).unwrap_or("");
                     let arg: String = arg.lines().next().unwrap_or("").chars().take(160).collect();
-                    lines.push(Line::from(vec![format!("{ts} ").dim(), format!("→ {name} ").fg(Color::Yellow), arg.into()]));
+                    lines.push(Line::from(vec![format!("{ts} ").dim(), format!("→ {name} ").fg(palette::ui(Ui::Tool)), arg.into()]));
                 }
                 ("toolResult", "text") => {
                     let t = part["text"].as_str().unwrap_or("");

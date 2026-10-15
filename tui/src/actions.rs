@@ -18,7 +18,7 @@ pub fn window_name(name: &str) -> String {
 }
 
 /// `s` as one word of a `sh` command line.
-fn quote(s: &str) -> String {
+pub fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
