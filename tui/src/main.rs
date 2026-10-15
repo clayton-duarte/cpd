@@ -590,7 +590,7 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
     let exe = env::current_exe().map_err(|e| e.to_string())?.display().to_string();
     let (mut centre_now, mut loaded, mut jobs) = (None::<Centre>, false, Vec::<JobRow>::new());
     // The selection is held by Job key, so a refresh keeps it; the scroll offset is the window's top-left in the chart.
-    let (mut selected, mut scroll, mut follow) = (None::<String>, (0u16, 0u16), true);
+    let (mut selected, mut scroll) = (flow::Selection::default(), (0u16, 0u16));
     let mut chart = None::<flow::Chart>;
     let mut body_area = Rect::default();
     let mut head_area = Rect::default();
@@ -605,7 +605,8 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
             centre_now = centre();
             if before != centre_now.as_ref().map(|c| c.active.session.id.clone()) {
                 note.clear();
-                (selected, scroll, follow) = (None, (0, 0), true);
+                selected.reset();
+                scroll = (0, 0);
             }
             let rows = centre_now.as_ref().and_then(|c| c.active.workflow.as_deref()).and_then(jobs_of); // a cache read: instant
             loaded = rows.is_some();
@@ -627,11 +628,10 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
                     window = chart_area;
                 }
                 body_area = window;
-                let sel = selected.as_ref().and_then(|k| fc.pills.iter().position(|p| &p.key == k)).or_else(|| fc.columns.first().and_then(|c| c.first().copied()));
-                selected = sel.map(|i| fc.pills[i].key.clone());
-                if let (true, Some(i)) = (follow, sel) {
+                let sel = selected.resolve(&fc); // keeps the User's selection, never creates one
+                if let (true, Some(i)) = (selected.follow, sel) {
                     scroll = fc.scroll_to(i, scroll, (window.width, window.height));
-                    follow = false;
+                    selected.follow = false;
                 }
                 scroll = fc.blit(f.buffer_mut(), window, scroll, sel);
                 chart = Some(fc);
@@ -641,7 +641,6 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
             continue;
         }
         let mut open = None::<String>;
-        let here = chart.as_ref().and_then(|c| Some((c, c.pills.iter().position(|p| Some(&p.key) == selected.as_ref())?)));
         match event::read().map_err(|e| e.to_string())? {
             Event::Key(k) if k.kind == KeyEventKind::Press => {
                 let dir = match k.code {
@@ -651,13 +650,10 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
                     KeyCode::Right | KeyCode::Char('l') => Some(flow::Dir::Right),
                     _ => None,
                 };
-                match (k.code, dir, here) {
+                match (k.code, dir, chart.as_ref()) {
                     (KeyCode::Char('q'), ..) => return Ok(()),
-                    (_, Some(d), Some((c, i))) => {
-                        selected = Some(c.pills[c.step(i, d)].key.clone());
-                        follow = true;
-                    }
-                    (KeyCode::Enter, ..) => open = selected.clone(),
+                    (_, Some(d), Some(c)) => selected.arrow(c, d),
+                    (KeyCode::Enter, ..) => open = selected.enter(),
                     _ => {}
                 }
             }
@@ -673,7 +669,7 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
                         c.pill_at(m.column - body_area.x + scroll.0, m.row - body_area.y + scroll.1).map(|i| c.pills[i].key.clone())
                     });
                     if let Some(key) = hit {
-                        selected = Some(key.clone());
+                        selected.click(key.clone());
                         open = Some(key);
                     }
                 }

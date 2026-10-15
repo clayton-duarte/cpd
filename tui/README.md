@@ -136,7 +136,9 @@ a card; `d` needs the card.
 - **Padding:** two columns and one row (`Rect::inner(Margin)`) around the chart, so nothing touches the pane's edges; the
   chart scrolls inside it. Cancelled Jobs are hidden (`N cancelled hidden` in the header line).
 
-Selection is per Job.
+Selection is per Job. Nothing is selected when the view opens, when a tab switches to another Workflow, or when the selected
+Job disappears (cancelled or hidden); the view starts scrolled to the top left. A click on a pill selects it; the first
+arrow or `hjkl` key selects the first pill of the first column and moves from there. Enter with nothing selected does nothing.
 
 | Input | Does |
 | --- | --- |
@@ -146,7 +148,7 @@ Selection is per Job.
 | Enter, click on a pill | open the Worker's read-only chat for that Job |
 
 The selected pill is drawn bold and reversed. The view scrolls on both axes to keep the selection visible when it moves by
-key; the refresh keeps the scroll offset and holds the selection by Job key.
+key; the refresh keeps the scroll offset and holds the User's selection by Job key (it never creates one).
 
 ## Dispatch: PR status
 
