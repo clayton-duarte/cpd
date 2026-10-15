@@ -389,7 +389,7 @@ impl ContextData {
 
 /// The legend button of the StatusBar (the key `?` in Context opens the same legend).
 const LEGEND_BUTTON: &str = " ? legend ";
-const RESET_BUTTON: &str = " ⧉ ";
+const RESET_BUTTON: &str = "⧉ ";
 
 fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
     thread::spawn(fetch_loop);
@@ -1030,12 +1030,12 @@ mod tests {
         assert_eq!(Line::from("⧉").width(), 1);
         assert_eq!(
             hits,
-            [(Rect::new(0, 0, 3, 1), statusbar::Action::ResetLayout), (Rect::new(4, 0, LEGEND_BUTTON.len() as u16, 1), statusbar::Action::Legend)]
+            [(Rect::new(0, 0, 2, 1), statusbar::Action::ResetLayout), (Rect::new(3, 0, LEGEND_BUTTON.len() as u16, 1), statusbar::Action::Legend)]
         );
-        assert_eq!(buf[(1, 0)].symbol(), "⧉");
-        assert!((0..3).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
-        assert!(!buf[(3, 0)].modifier.contains(Modifier::REVERSED));
-        assert!((4..4 + LEGEND_BUTTON.len() as u16).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
+        assert_eq!(buf[(0, 0)].symbol(), "⧉");
+        assert!((0..2).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
+        assert!(!buf[(2, 0)].modifier.contains(Modifier::REVERSED));
+        assert!((3..3 + LEGEND_BUTTON.len() as u16).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
     }
 
     #[test]
