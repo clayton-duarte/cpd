@@ -25,6 +25,8 @@ type Active = {
 };
 
 export default function (pi: ExtensionAPI) {
+  // The session belongs to cpd 2, whose own adapter serves it.
+  if (process.env.CPD_SESSION) return;
   if (!adapterActive(process.env)) return;
 
   let active: Active | undefined;
