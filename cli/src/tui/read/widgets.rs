@@ -104,7 +104,11 @@ pub fn widgets(store: &mut Store, concurrency: u32, recent: u32) -> Result<Widge
             engine: engine(conn)?,
             plans: plan_heads(conn, None)?
                 .into_iter()
-                .map(|head| Ok(PlanCard { feedback: feedback(conn, &head.id)?, head }))
+                .map(|head| {
+                    // Only a Plan with a PR has feedback: one query per PR, not per Plan.
+                    let feedback = if head.pr.is_some() { feedback(conn, &head.id)? } else { None };
+                    Ok(PlanCard { feedback, head })
+                })
                 .collect::<Result<_, CpdError>>()?,
             escalations: escalations(conn)?,
             events: recent_events(conn, recent)?,
