@@ -1102,6 +1102,7 @@ The pane border format and column titles belong to the TUI (`tui/`), not to this
 | Lead (fresh) | `--model <tiers[L]>:<level of lead_tier> [-e …] --session-id <id> -n <name> -- <first message>` | `CPD_HOME`, `CPD_SESSION=<id>`, `CPD_PLAN=<plan>`, `PLANNOTATOR_DATA_DIR=$CPD_HOME/run/<plan>/plannotator`, `PLANNOTATOR_UPDATE_CHECK=0`, and `PLANNOTATOR_PORT` and `PLANNOTATOR_REMOTE` from cpd's own environment when set (passed with `-e`, so several Plan reviews can be open at once) |
 | Lead (fork) | `--fork <source file>` added to the above (§6.7) | same |
 | Lead (resume) | `--session <file>` and the `[-e …]` arguments, no first message | same |
+| Lead (grounded, no Plan) | as a fresh, forked or resumed Lead (a Context's grounded Lead is a fork with no first message, §3.1) | `CPD_HOME`, `CPD_SESSION=<id>`, `PLANNOTATOR_UPDATE_CHECK=0`; no `CPD_PLAN` and no other `PLANNOTATOR_*` (it has no Plan and is never typed into) |
 | Worker | `--approve --no-skills --exclude-tools ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox [-e …] --model <model:level> --session-id <id> -n "<plan> <job> a<n>" -- "Read <spec path> and follow it exactly. Your attempt id is <attempt>."` | `CPD_HOME`, `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT` |
 
 - The excluded tools and `--approve` are kept from cpd 1 §12 step 5 and requirements §5.

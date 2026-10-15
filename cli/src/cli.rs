@@ -148,8 +148,8 @@ mod tests {
         for words in [&["plan", "show"][..], &["plan", "show", "--plan", "cpd2"], &["job", "add", "k", "--bogus", "-x"]] {
             assert_eq!(fails(words).code(), ErrorCode::NotImplemented, "{words:?}");
         }
-        let err = fails(&["session", "state", "idle", "--session", "x"]);
-        assert_eq!(err.details()["command"], "session state");
+        let err = fails(&["tui", "--attach"]);
+        assert_eq!(err.details()["command"], "tui");
     }
 
     #[test]

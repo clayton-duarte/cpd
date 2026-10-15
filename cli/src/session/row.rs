@@ -1,0 +1,283 @@
+//! The `sessions` row as read (contract §2.2 Session), with what commands.md
+//! §10.1 derives from other tables, and `session list` and `session show`.
+
+use rusqlite::types::Value as Sql;
+use rusqlite::{Connection, OptionalExtension};
+use serde_json::{Value, json};
+
+use super::{Env, ListArgs, ShowArgs, bad_row, session_not_found};
+use crate::args::SessionArg;
+use crate::error::CpdError;
+use crate::events::highest_id;
+use crate::ids::{ContextId, PlanId, SessionId};
+use crate::output::Output;
+
+/// A Session's role (§2.2).
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Lead,
+    Worker,
+}
+
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::Lead => "lead",
+            Role::Worker => "worker",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Role> {
+        [Role::Lead, Role::Worker].into_iter().find(|r| r.as_str() == s)
+    }
+}
+
+/// A Session's agent state (§3.6).
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum State {
+    Working,
+    Blocked,
+    Idle,
+    Stopped,
+}
+
+impl State {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            State::Working => "working",
+            State::Blocked => "blocked",
+            State::Idle => "idle",
+            State::Stopped => "stopped",
+        }
+    }
+
+    fn parse(s: &str) -> Option<State> {
+        [State::Working, State::Blocked, State::Idle, State::Stopped].into_iter().find(|v| v.as_str() == s)
+    }
+}
+
+/// One Session, parsed at the boundary.
+#[derive(Clone, Debug)]
+pub(super) struct Row {
+    pub id: SessionId,
+    pub role: Role,
+    pub context: ContextId,
+    pub plan: Option<PlanId>,
+    pub attempt: Option<String>,
+    pub name: String,
+    pub file: Option<String>,
+    pub forked_from: Option<SessionId>,
+    pub cwd: String,
+    pub tier: String,
+    pub tmux_pane: Option<String>,
+    pub state: State,
+    pub state_label: Option<String>,
+    pub state_at: String,
+    pub created_at: String,
+    /// The `place` of its latest `session-moved` Event, else `none`.
+    pub place: String,
+    /// It is its Plan's `lead_session`.
+    pub plan_lead: bool,
+    /// It is a Context's `lead_session`.
+    pub grounded_lead: bool,
+    /// The id of its `session-registered` Event.
+    pub registered_event: Option<i64>,
+}
+
+const SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt, s.name, s.file, s.forked_from, s.cwd, s.tier,
+       s.tmux_pane, s.state, s.state_label, s.state_at, s.created_at,
+       (SELECT json_extract(e.data, '$.place') FROM events e
+         WHERE e.session = s.id AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1),
+       EXISTS (SELECT 1 FROM plans p WHERE p.lead_session = s.id),
+       EXISTS (SELECT 1 FROM contexts c WHERE c.lead_session = s.id),
+       (SELECT min(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-registered')
+  FROM sessions s";
+
+/// A row as SQLite returns it, before parsing.
+struct Raw {
+    id: String,
+    role: String,
+    context: String,
+    plan: Option<String>,
+    attempt: Option<String>,
+    name: String,
+    file: Option<String>,
+    forked_from: Option<String>,
+    cwd: String,
+    tier: String,
+    tmux_pane: Option<String>,
+    state: String,
+    state_label: Option<String>,
+    state_at: String,
+    created_at: String,
+    place: Option<String>,
+    plan_lead: bool,
+    grounded_lead: bool,
+    registered_event: Option<i64>,
+}
+
+fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
+    Ok(Raw {
+        id: r.get(0)?,
+        role: r.get(1)?,
+        context: r.get(2)?,
+        plan: r.get(3)?,
+        attempt: r.get(4)?,
+        name: r.get(5)?,
+        file: r.get(6)?,
+        forked_from: r.get(7)?,
+        cwd: r.get(8)?,
+        tier: r.get(9)?,
+        tmux_pane: r.get(10)?,
+        state: r.get(11)?,
+        state_label: r.get(12)?,
+        state_at: r.get(13)?,
+        created_at: r.get(14)?,
+        place: r.get(15)?,
+        plan_lead: r.get(16)?,
+        grounded_lead: r.get(17)?,
+        registered_event: r.get(18)?,
+    })
+}
+
+impl Row {
+    fn parse(raw: Raw) -> Result<Row, CpdError> {
+        let id = SessionId::parse(&raw.id).map_err(|_| bad_row(format!("id {:?}", raw.id)))?;
+        let field = |name: &str, value: &str| bad_row(format!("{id} has {name} {value:?}"));
+        Ok(Row {
+            role: Role::parse(&raw.role).ok_or_else(|| field("role", &raw.role))?,
+            context: ContextId::parse(&raw.context).map_err(|_| field("context", &raw.context))?,
+            plan: raw.plan.map(|p| PlanId::parse(&p).map_err(|_| field("plan", &p))).transpose()?,
+            forked_from: raw
+                .forked_from
+                .map(|f| SessionId::parse(&f).map_err(|_| field("forked_from", &f)))
+                .transpose()?,
+            state: State::parse(&raw.state).ok_or_else(|| field("state", &raw.state))?,
+            attempt: raw.attempt,
+            name: raw.name,
+            file: raw.file,
+            cwd: raw.cwd,
+            tier: raw.tier,
+            tmux_pane: raw.tmux_pane,
+            state_label: raw.state_label,
+            state_at: raw.state_at,
+            created_at: raw.created_at,
+            place: raw.place.unwrap_or_else(|| "none".to_owned()),
+            plan_lead: raw.plan_lead,
+            grounded_lead: raw.grounded_lead,
+            registered_event: raw.registered_event,
+            id,
+        })
+    }
+
+    /// The fields of `session list` (commands.md §10.1).
+    pub fn list_json(&self) -> Value {
+        json!({
+            "id": self.id,
+            "role": self.role.as_str(),
+            "context": self.context,
+            "plan": self.plan,
+            "attempt": self.attempt,
+            "name": self.name,
+            "state": self.state.as_str(),
+            "state_label": self.state_label,
+            "state_at": self.state_at,
+            "place": self.place,
+            "tmux_pane": self.tmux_pane,
+            "file": self.file,
+            "forked_from": self.forked_from,
+            "plan_lead": self.plan_lead,
+            "grounded_lead": self.grounded_lead,
+            "tier": self.tier,
+            "cwd": self.cwd,
+        })
+    }
+}
+
+/// Every Session matching `filter` (SQL after `WHERE`, with `params`), oldest first.
+fn query(conn: &Connection, filter: &str, params: Vec<Sql>) -> Result<Vec<Row>, CpdError> {
+    let sql = format!("{SELECT} WHERE {filter} ORDER BY s.created_at, s.id");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(params), raw)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter().map(Row::parse).collect()
+}
+
+/// The Session `id`, if it exists.
+pub(super) fn find(conn: &Connection, id: &SessionId) -> Result<Option<Row>, CpdError> {
+    Ok(query(conn, "s.id = ?", vec![Sql::Text(id.to_string())])?.pop())
+}
+
+/// The Session `id`, else `session_not_found`.
+pub(super) fn load(conn: &Connection, id: &SessionId) -> Result<Row, CpdError> {
+    find(conn, id)?.ok_or_else(|| session_not_found(id))
+}
+
+/// `session list` (commands.md §10.1).
+pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
+    let mut env = Env::open()?;
+    let mut filter = vec!["1".to_owned()];
+    let mut params = Vec::new();
+    if let Some(context) = &args.context {
+        filter.push("s.context = ?".into());
+        params.push(Sql::Text(context.to_string()));
+    }
+    if let Some(plan) = &args.plan {
+        filter.push("s.plan = ?".into());
+        params.push(Sql::Text(plan.to_string()));
+    }
+    let mut any_of = |column: &str, values: Vec<&'static str>| {
+        if !values.is_empty() {
+            filter.push(format!("s.{column} IN ({})", vec!["?"; values.len()].join(", ")));
+            params.extend(values.into_iter().map(|v| Sql::Text(v.to_owned())));
+        }
+    };
+    any_of("role", args.roles.iter().map(|r| r.as_str()).collect());
+    any_of("state", args.states.iter().map(|s| s.as_str()).collect());
+    let (sessions, cursor) = env.store.read(|conn| Ok((query(conn, &filter.join(" AND "), params)?, highest_id(conn)?)))?;
+    let sessions: Vec<Value> = sessions.iter().map(Row::list_json).collect();
+    Ok(Output::success(json!({"sessions": sessions, "events_cursor": cursor})))
+}
+
+/// `session show` (commands.md §10.2).
+pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
+    let id = SessionArg { session: args.id }.require()?.clone();
+    let mut env = Env::open()?;
+    let (row, escalations) = env.store.read(|conn| {
+        let row = load(conn, &id)?;
+        let escalations = match (&row.plan, row.plan_lead) {
+            (Some(plan), true) => Some(open_escalations(conn, plan)?),
+            _ => None,
+        };
+        Ok((row, escalations))
+    })?;
+    let mut session = row.list_json();
+    session["created_at"] = json!(row.created_at);
+    session["registered_event"] = json!(row.registered_event);
+    let mut out = json!({"session": session});
+    if let Some(escalations) = escalations {
+        out["open_escalations"] = json!(escalations);
+    }
+    Ok(Output::success(out))
+}
+
+/// The ids of the Plan's `open` Escalations, oldest first.
+fn open_escalations(conn: &Connection, plan: &PlanId) -> Result<Vec<String>, CpdError> {
+    let mut stmt = conn.prepare("SELECT id FROM escalations WHERE plan = ?1 AND status = 'open' ORDER BY asked_at, id")?;
+    let ids = stmt.query_map([plan.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+    Ok(ids)
+}
+
+/// The Plan's `lead_session`, if the Plan exists.
+pub(super) fn plan_lead(conn: &Connection, plan: &PlanId) -> Result<Option<(ContextId, String)>, CpdError> {
+    let found: Option<(String, String)> = conn
+        .query_row("SELECT context, lead_session FROM plans WHERE id = ?1", [plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    found
+        .map(|(context, lead)| {
+            let context = ContextId::parse(&context).map_err(|_| bad_row(format!("Plan {plan} has context {context:?}")))?;
+            Ok((context, lead))
+        })
+        .transpose()
+}

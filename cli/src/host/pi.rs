@@ -109,7 +109,9 @@ impl Plannotator {
 pub struct LeadLaunch<'a> {
     pub home: &'a CpdHome,
     pub session: &'a SessionId,
-    pub plan: &'a PlanId,
+    /// The Lead's Plan; `None` for a Context's grounded Lead, which gets no
+    /// `CPD_PLAN` and no `PLANNOTATOR_*` but `PLANNOTATOR_UPDATE_CHECK`.
+    pub plan: Option<&'a PlanId>,
     /// The `-e` sources to pass, from [`extensions_to_pass`].
     pub extensions: &'a [String],
     pub plannotator: &'a Plannotator,
@@ -169,11 +171,16 @@ pub fn lead(launch: &LeadLaunch) -> Launch {
 }
 
 fn lead_env(launch: &LeadLaunch) -> BTreeMap<String, String> {
-    let mut env = base_env(launch.home, launch.session, launch.plan);
-    env.insert(
-        "PLANNOTATOR_DATA_DIR".into(),
-        launch.home.plan_dir(launch.plan).join("plannotator").display().to_string(),
-    );
+    let Some(plan) = launch.plan else {
+        // A grounded Lead (contract §6.5, "Lead (grounded, no Plan)").
+        return BTreeMap::from([
+            ("CPD_HOME".to_owned(), launch.home.root().display().to_string()),
+            ("CPD_SESSION".to_owned(), launch.session.to_string()),
+            ("PLANNOTATOR_UPDATE_CHECK".to_owned(), "0".to_owned()),
+        ]);
+    };
+    let mut env = base_env(launch.home, launch.session, plan);
+    env.insert("PLANNOTATOR_DATA_DIR".into(), launch.home.plan_dir(plan).join("plannotator").display().to_string());
     env.insert("PLANNOTATOR_UPDATE_CHECK".into(), "0".into());
     if let Some(port) = &launch.plannotator.port {
         env.insert("PLANNOTATOR_PORT".into(), port.clone());
@@ -460,7 +467,30 @@ mod tests {
         let session = SessionId::parse(ID).unwrap();
         let plan = PlanId::parse("cpd2").unwrap();
         let extensions = strs(&["/opt/cpd2/pi", "npm:@juicesharp/rpiv-ask-user-question@2.13.8"]);
-        lead(&LeadLaunch { home: &home, session: &session, plan: &plan, extensions: &extensions, plannotator, start })
+        lead(&LeadLaunch { home: &home, session: &session, plan: Some(&plan), extensions: &extensions, plannotator, start })
+    }
+
+    #[test]
+    fn grounded_lead_has_no_plan_in_its_environment() {
+        let home = home();
+        let session = SessionId::parse(ID).unwrap();
+        let extensions = strs(&["/opt/cpd2/pi"]);
+        let plannotator = Plannotator { port: Some("19432".into()), remote: Some("1".into()) };
+        let start = LeadStart::Fork {
+            model: "m/x:high".into(),
+            name: "ctx".into(),
+            source_file: "/s/src.jsonl".into(),
+            first_message: None,
+        };
+        let launch = lead(&LeadLaunch { home: &home, session: &session, plan: None, extensions: &extensions, plannotator: &plannotator, start });
+        assert_eq!(
+            launch.argv,
+            strs(&["pi", "--model", "m/x:high", "-e", "/opt/cpd2/pi", "--fork", "/s/src.jsonl", "--session-id", ID, "-n", "ctx"])
+        );
+        assert_eq!(
+            launch.env,
+            env(&[("CPD_HOME", "/cpd-home"), ("CPD_SESSION", ID), ("PLANNOTATOR_UPDATE_CHECK", "0")])
+        );
     }
 
     fn lead_env(extra: &[(&str, &str)]) -> BTreeMap<String, String> {

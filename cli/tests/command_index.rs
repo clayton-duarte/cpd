@@ -108,14 +108,6 @@ const PENDING: &[(&[&str], &str)] = &[
     (&["pr", "rebase"], "pr rebase"),
     (&["pr", "poll"], "pr poll"),
     // session
-    (&["session", "list"], "session list"),
-    (&["session", "show"], "session show"),
-    (&["session", "fork", "596d007f"], "session fork"),
-    (&["session", "open", "596d007f"], "session open"),
-    (&["session", "park"], "session park"),
-    (&["session", "rename", "cpd rust lead"], "session rename"),
-    (&["session", "state", "blocked", "--label", "cpd: plan review"], "session state"),
-    (&["session", "run", "596d007f"], "session run"),
     // events
     // watch
     (&["watch"], "watch"),
