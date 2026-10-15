@@ -1224,6 +1224,7 @@ The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays
 ### 15.1 Package and activation
 
 - **Package:** `pi/package.json` with `"keywords": ["pi-package"]` and `"pi": {"extensions": ["./extension.ts"], "skills": ["./skills"]}`; host packages are `peerDependencies: "*"` (cpd 1 §15, kept). The skill `cpd-lead` is rewritten for cpd 2 (follow-up Job 17).
+- **Location:** Until the switch-over the package lives at pi-v2/ beside cpd 1's pi/; the switch-over Job moves it to pi/.
 - **Activation:** at pi's `session_start`, only when `ctx.mode` is `tui` and `CPD_SESSION` is set. Change from cpd 1: cpd 1 activated in any herdr or tmux pane (`HERDR_ENV`, `TMUX_PANE`); now cpd marks its own panes with `CPD_SESSION` (§6.5), so a pi the User starts by hand is left alone.
 - **Identity:** `CPD_SESSION` must equal `ctx.sessionManager.getSessionId()`. If not, the adapter delivers one error message (below) and stays inactive: it would otherwise report another Session's state.
 - **Calls:** one-shot commands through `pi.exec("cpd2", args)`, whose stdout is parsed as the JSON envelope at the boundary (a non-JSON stdout, or `ok: false`, is an error with the code). The follower is a child process (`node:child_process` `spawn`, argv, stdin `/dev/null`) read line by line.
