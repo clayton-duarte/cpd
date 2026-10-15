@@ -23,12 +23,12 @@ use std::{
 
 use ratatui::{
     crossterm::{
-        event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind},
+        event::{self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind},
         execute,
     },
     layout::{Constraint, Layout, Margin, Position, Rect},
     style::{Modifier, Style, Stylize},
-    text::{Line, Span},
+    text::Line,
     widgets::{Paragraph, Wrap},
     DefaultTerminal,
 };
@@ -43,6 +43,8 @@ mod palette;
 mod pr;
 mod prompt;
 mod sessions;
+mod tabs;
+mod workers;
 
 use palette::Ui;
 use prompt::{Outcome, Prompt};
@@ -72,7 +74,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let view = args.get(1).map(String::as_str).unwrap_or("");
     let mut terminal = ratatui::init();
-    let _ = execute!(std::io::stdout(), EnableMouseCapture);
+    let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableFocusChange);
     let result = match view {
         "context" => run_context(&mut terminal),
         "plan" => run_plan(&mut terminal),
@@ -81,7 +83,7 @@ fn main() {
         "legend" => run_legend(&mut terminal),
         _ => Err(format!("usage: {} context|plan|dispatch|worker <session.jsonl> <job>|legend", args[0])),
     };
-    let _ = execute!(std::io::stdout(), DisableMouseCapture);
+    let _ = execute!(std::io::stdout(), DisableFocusChange, DisableMouseCapture);
     ratatui::restore();
     if let Err(e) = result {
         eprintln!("{e}");
@@ -176,8 +178,15 @@ fn run_legend(terminal: &mut DefaultTerminal) -> Result<(), String> {
     }
 }
 
-/// Bring the chat pane of session `id` into the centre slot (the chat pane in window `main`). swap-pane keeps both
-/// processes running and the slot keeps its size (verified).
+/// The session in the centre slot: the one chat pane in window `main`. One cheap tmux call (not logged: the views ask
+/// on every 250 ms loop); both views take the active session from here, so the tree's `⏵` and the tab highlight agree.
+fn centre_id() -> Option<String> {
+    let panes = tmux_checked(&["list-panes", "-t", &format!("{}:main", session()), "-F", "#{@session_id}"]).ok()?;
+    panes.lines().find(|l| !l.is_empty()).map(String::from)
+}
+
+/// Bring the chat pane of session `id` into the centre slot (the chat pane in window `main`), and focus it so typing
+/// goes to the chat. swap-pane keeps both processes running and the slot keeps its size (verified).
 fn switch_to(id: &str) {
     for line in tmux(&["list-panes", "-t", &format!("{}:main", session()), "-F", "#{pane_id} #{@view}"]).lines() {
         if line.ends_with(" worker") {
@@ -191,6 +200,9 @@ fn switch_to(id: &str) {
         if c.pane_id != t.pane_id {
             tmux(&["swap-pane", "-d", "-s", &t.pane_id, "-t", &c.pane_id]);
         }
+    }
+    if let Some(t) = target {
+        tmux(&["select-pane", "-t", &t.pane_id]); // after the swap this pane is the centre chat
     }
     mark_seen();
 }
@@ -254,11 +266,6 @@ fn fetch_loop() {
         }
         thread::sleep(Duration::from_secs(5));
     }
-}
-
-fn cache_age(name: &str) -> Option<u64> {
-    let m = fs::metadata(cache_file(name)).ok()?.modified().ok()?;
-    m.elapsed().ok().map(|d| d.as_secs())
 }
 
 // ---------- context (left bar) ----------
@@ -328,6 +335,8 @@ struct ContextData {
     rows: Vec<context::ContextRow>,
     state: TreeState<String>,
     known: HashSet<String>,
+    /// The session in the centre, as of the last refresh.
+    active: Option<String>,
 }
 
 impl ContextData {
@@ -336,12 +345,13 @@ impl ContextData {
         mark_seen(); // before reading: the session in the centre never shows as unseen
         let before = context::selected_index(&self.state, &self.rows);
         self.groups = snapshot();
+        self.active = self.groups.iter().flat_map(|(_, l)| l).find(|e| e.session.is_active()).map(|e| e.session.id.clone());
         self.rows = context_rows(&self.groups);
         context::open_new(&mut self.state, &mut self.known, &self.rows);
         context::reselect(&mut self.state, &self.rows, before);
     }
 
-    /// The selected row's session; `None` on a Context row.
+    /// The cursor's session; `None` when there is none.
     fn selected_session(&self) -> Option<&Entry> {
         let id = self.state.selected().get(1)?;
         self.groups.iter().flat_map(|(_, l)| l).find(|e| &e.session.id == id)
@@ -353,16 +363,26 @@ const LEGEND_BUTTON: &str = " ? legend ";
 
 fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
     thread::spawn(fetch_loop);
-    let mut data = ContextData { groups: Vec::new(), rows: Vec::new(), state: TreeState::default(), known: HashSet::new() };
+    let mut data = ContextData { groups: Vec::new(), rows: Vec::new(), state: TreeState::default(), known: HashSet::new(), active: None };
     data.refresh();
     let mut last_refresh = Instant::now();
+    let home = cpd_home();
+    let mut workers = workers::read(&home);
+    let mut last_workers = Instant::now();
+    // Keyboard focus of this pane, from the terminal's focus events (`focus-events on`); the cursor shows only while focused.
+    let mut focused = env::var("TMUX_PANE").ok().and_then(|p| tmux_checked(&["display", "-p", "-t", &p, "#{pane_active}"]).ok()).is_some_and(|a| a.trim() == "1");
     let mut prompt: Option<Prompt> = None;
     let mut note = String::new(); // the one-line result or refusal of the last action, until the next key
     let mut button = Rect::default(); // the legend button, set by each draw
     loop {
-        if last_refresh.elapsed() > Duration::from_secs(1) {
+        // the centre is re-checked on every loop, so a switch from the tabs or from tmux shows here within a loop
+        if last_refresh.elapsed() > Duration::from_secs(1) || centre_id() != data.active {
             data.refresh();
             last_refresh = Instant::now();
+        }
+        if last_workers.elapsed() > Duration::from_secs(2) {
+            workers = workers::read(&home);
+            last_workers = Instant::now();
         }
         terminal
             .draw(|f| {
@@ -371,23 +391,29 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
                 let width = area.width.max(1) as usize;
                 let wrapped = footer.chars().count().div_ceil(width);
                 let footer_height = if footer.is_empty() { 0 } else { (wrapped + usize::from(wrapped > 1)).max(1).min(area.height as usize) as u16 };
-                let [list_area, footer_area, button_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height), Constraint::Length(1)]).areas(area);
+                let [list_area, footer_area, bottom_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height), Constraint::Length(1)]).areas(area);
                 let label = Line::from(LEGEND_BUTTON);
-                button = Rect { width: (label.width() as u16).min(button_area.width), ..button_area };
+                let [button_area, workers_area] = Layout::horizontal([Constraint::Length((label.width() as u16).min(bottom_area.width)), Constraint::Min(0)]).areas(bottom_area);
+                button = button_area;
                 f.render_widget(Paragraph::new(label).style(Style::new().add_modifier(Modifier::REVERSED)), button);
+                if let Some(line) = workers.line(workers_area.width) {
+                    f.render_widget(Paragraph::new(line).right_aligned(), workers_area);
+                }
                 if footer_height > 0 {
                     let style = if prompt.is_some() { Style::new().fg(palette::ui(Ui::Note)).bold() } else { Style::new().fg(palette::ui(Ui::Note)) };
                     f.render_widget(Paragraph::new(footer).style(style).wrap(Wrap { trim: false }), footer_area);
                 }
-                context::draw(f, list_area, &data.rows, &mut data.state);
+                context::draw(f, list_area, &data.rows, &mut data.state, focused);
             })
             .map_err(|e| e.to_string())?;
         if !event::poll(Duration::from_millis(250)).map_err(|e| e.to_string())? {
             continue;
         }
-        let mut activate: Option<Vec<String>> = None; // a row to act on: toggle a Context, switch to a session
+        let mut activate: Option<String> = None; // a session to switch to
         let mut outcome = Outcome::Open;
         match event::read().map_err(|e| e.to_string())? {
+            Event::FocusGained => focused = true,
+            Event::FocusLost => focused = false,
             // an open prompt takes every key; mouse clicks are ignored meanwhile, so the target cannot be swapped into the centre
             Event::Key(k) if k.kind == KeyEventKind::Press && prompt.is_some() => {
                 if let Some(p) = prompt.as_mut() {
@@ -398,10 +424,8 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
                 KeyCode::Char('q') => return Ok(()),
                 KeyCode::Char('n') => {
                     note.clear();
-                    match (data.selected_session(), data.state.selected().len()) {
-                        (Some(e), _) => prompt = Some(Prompt::fork(target_of(e))),
-                        (None, 1) => note = "pick the session to fork".into(),
-                        (None, _) => {}
+                    if let Some(e) = data.selected_session() {
+                        prompt = Some(Prompt::fork(target_of(e)));
                     }
                 }
                 KeyCode::Char('?') => {
@@ -418,14 +442,9 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
                         }
                     }
                 }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    data.state.key_down();
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    data.state.key_up();
-                }
-                KeyCode::Enter => activate = Some(data.state.selected().to_vec()),
-                KeyCode::Char(' ') if data.state.selected().len() == 1 => activate = Some(data.state.selected().to_vec()),
+                KeyCode::Down | KeyCode::Char('j') => context::move_cursor(&mut data.state, &data.rows, 1),
+                KeyCode::Up | KeyCode::Char('k') => context::move_cursor(&mut data.state, &data.rows, -1),
+                KeyCode::Enter => activate = data.selected_session().map(|e| e.session.id.clone()),
                 _ => {}
             },
             Event::Mouse(m) if prompt.is_none() && m.kind == MouseEventKind::Down(MouseButton::Left) => {
@@ -435,8 +454,13 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
                         note = why;
                     }
                 } else if let Some(row) = data.state.rendered_at(Position::new(m.column, m.row)).map(<[String]>::to_vec) {
-                    data.state.select(row.clone());
-                    activate = Some(row);
+                    // a Context row only collapses or expands; a session row switches to it
+                    if !context::click_context(&mut data.state, &row) {
+                        if let [_, id] = row.as_slice() {
+                            data.state.select(row.clone());
+                            activate = Some(id.clone());
+                        }
+                    }
                 }
             }
             _ => {}
@@ -459,16 +483,10 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
                 last_refresh = Instant::now() - Duration::from_secs(2); // the tree drops the session on this loop's refresh
             }
         }
-        match activate.as_deref() {
-            Some([_]) => {
-                data.state.toggle_selected();
-            }
-            Some([_, id]) => {
-                switch_to(id);
-                data.refresh();
-                last_refresh = Instant::now();
-            }
-            _ => {}
+        if let Some(id) = activate {
+            switch_to(&id);
+            data.refresh();
+            last_refresh = Instant::now();
         }
     }
 }
@@ -481,28 +499,24 @@ struct JobRow {
     attempt: Option<String>,
 }
 
-/// The Workflow's title and all its Jobs (the flowchart hides the cancelled ones and counts them).
-fn jobs_of(plan: &str) -> (String, Vec<JobRow>) {
-    let v = read_json(&cache_file(plan)).unwrap_or(Value::Null);
+/// All the Jobs of a Workflow (the flowchart hides the cancelled ones); `None` until its first fetch is cached.
+fn jobs_of(plan: &str) -> Option<Vec<JobRow>> {
+    let v = read_json(&cache_file(plan))?;
     let rows = v["jobs"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .map(|j| JobRow {
-                    flow: flow::FlowJob {
-                        key: j["key"].as_str().unwrap_or("?").into(),
-                        status: j["status"].as_str().unwrap_or("?").into(),
-                        tier: j["tier"].as_str().unwrap_or("").into(),
-                        needs: j["needs"].as_array().map(|n| n.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
-                        attempt: j["attempts"].as_array().map_or(0, |a| a.len()),
-                    },
-                    attempt: j["attempts"].as_array().and_then(|a| a.last()).and_then(|a| a["id"].as_str()).map(String::from),
-                })
-                .collect()
+        .as_array()?
+        .iter()
+        .map(|j| JobRow {
+            flow: flow::FlowJob {
+                key: j["key"].as_str().unwrap_or("?").into(),
+                status: j["status"].as_str().unwrap_or("?").into(),
+                tier: j["tier"].as_str().unwrap_or("").into(),
+                needs: j["needs"].as_array().map(|n| n.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
+                attempt: j["attempts"].as_array().map_or(0, |a| a.len()),
+            },
+            attempt: j["attempts"].as_array().and_then(|a| a.last()).and_then(|a| a["id"].as_str()).map(String::from),
         })
-        .unwrap_or_default();
-    let title = v["workflow"]["title"].as_str().map(String::from).unwrap_or_else(|| "loading… (first fetch)".into());
-    (title, rows)
+        .collect();
+    Some(rows)
 }
 
 /// The pi session file of an Attempt, from the fetcher's cache (no CLI call on click).
@@ -557,9 +571,24 @@ fn centre() -> Option<Centre> {
     })
 }
 
+/// What the chart area says instead of a chart: no Workflow yet, loading, or the note of the last action.
+fn plan_message(centre: Option<&Centre>, loaded: bool, note: &str) -> Option<String> {
+    let status = match centre.map(|c| c.active.workflow.is_some()) {
+        None => None,
+        Some(false) => Some("no Workflow yet".to_string()),
+        Some(true) => (!loaded).then(|| "loading… (first fetch)".to_string()),
+    };
+    match (status, note.is_empty()) {
+        (Some(s), true) => Some(s),
+        (Some(s), false) => Some(format!("{s}  {note}")),
+        (None, false) => Some(note.to_string()),
+        (None, true) => None,
+    }
+}
+
 fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
     let exe = env::current_exe().map_err(|e| e.to_string())?.display().to_string();
-    let (mut centre_now, mut title, mut jobs) = (None::<Centre>, String::from("loading…"), Vec::<JobRow>::new());
+    let (mut centre_now, mut loaded, mut jobs) = (None::<Centre>, false, Vec::<JobRow>::new());
     // The selection is held by Job key, so a refresh keeps it; the scroll offset is the window's top-left in the chart.
     let (mut selected, mut scroll, mut follow) = (None::<String>, (0u16, 0u16), true);
     let mut chart = None::<flow::Chart>;
@@ -569,56 +598,35 @@ fn run_plan(terminal: &mut DefaultTerminal) -> Result<(), String> {
     let mut note = String::new();
     let mut last_check = Instant::now() - Duration::from_secs(1);
     loop {
-        if last_check.elapsed() > Duration::from_millis(300) {
+        // the centre is re-checked on every loop (one tmux call), so a switch from the tree or from tmux shows at once
+        let centre_changed = centre_id() != centre_now.as_ref().map(|c| c.active.session.id.clone());
+        if centre_changed || last_check.elapsed() > Duration::from_secs(1) {
             let before = centre_now.as_ref().map(|c| c.active.session.id.clone());
             centre_now = centre();
             if before != centre_now.as_ref().map(|c| c.active.session.id.clone()) {
                 note.clear();
                 (selected, scroll, follow) = (None, (0, 0), true);
             }
-            (title, jobs) = match centre_now.as_ref().and_then(|c| c.active.workflow.as_deref()) {
-                Some(wf) => jobs_of(wf), // a cache read: instant
-                None => ("no Workflow yet".into(), Vec::new()),
-            };
+            let rows = centre_now.as_ref().and_then(|c| c.active.workflow.as_deref()).and_then(jobs_of); // a cache read: instant
+            loaded = rows.is_some();
+            jobs = rows.unwrap_or_default();
             last_check = Instant::now();
         }
         terminal
             .draw(|f| {
-                let [head, _gap, body] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1)]).areas(f.area());
-                head_area = head;
+                let [head, body] = Layout::vertical([Constraint::Length(tabs::HEIGHT), Constraint::Min(1)]).areas(f.area());
                 let flows: Vec<flow::FlowJob> = jobs.iter().map(|j| j.flow.clone()).collect();
                 let fc = flow::layout(&flows);
-                tab_ranges.clear();
-                let mut spans: Vec<Span> = Vec::new();
-                if let Some(c) = &centre_now {
-                    spans.push(format!(" {} ▸ ", c.context).dim());
-                    let mut x = head.x + (c.context.chars().count() as u16) + 4;
-                    for e in &c.tabs {
-                        let label = format!(" {} ", e.label);
-                        let w = label.chars().count() as u16;
-                        tab_ranges.push((x, x + w, e.session.id.clone()));
-                        spans.push(if e.session.is_active() { label.reversed().bold() } else { label.into() });
-                        spans.push(" ".into());
-                        x += w + 1;
-                    }
-                    if fc.hidden > 0 {
-                        spans.push(format!("  {} cancelled hidden", fc.hidden).dim());
-                    }
-                    spans.push(format!("  {title}").into());
-                    if let Some(wf) = &c.active.workflow {
-                        let age = cache_age(wf).map(|a| format!("  updated {a}s ago")).unwrap_or_else(|| "  loading…".into());
-                        spans.push(age.dim());
-                    }
-                } else {
-                    spans.push(" no Lead session in the centre".dim());
-                }
-                if !note.is_empty() {
-                    spans.push(format!("  {note}").fg(palette::ui(Ui::Note)));
-                }
+                let tab_list: Vec<tabs::Tab> = centre_now.iter().flat_map(|c| &c.tabs).map(|e| tabs::Tab { id: e.session.id.clone(), label: e.label.clone(), active: e.session.is_active() }).collect();
+                (head_area, tab_ranges) = tabs::draw(f, head, centre_now.as_ref().map(|c| c.context.as_str()), &tab_list);
                 // two columns and one row of padding: nothing of the chart touches the pane's edges
-                let window = body.inner(Margin { horizontal: 2, vertical: 1 });
+                let mut window = body.inner(Margin { horizontal: 2, vertical: 1 });
+                if let Some(message) = plan_message(centre_now.as_ref(), loaded, &note) {
+                    let [chart_area, message_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(window);
+                    f.render_widget(Paragraph::new(message).style(Style::new().fg(palette::ui(Ui::Note))), message_area);
+                    window = chart_area;
+                }
                 body_area = window;
-                f.render_widget(Paragraph::new(Line::from(spans)), head);
                 let sel = selected.as_ref().and_then(|k| fc.pills.iter().position(|p| &p.key == k)).or_else(|| fc.columns.first().and_then(|c| c.first().copied()));
                 selected = sel.map(|i| fc.pills[i].key.clone());
                 if let (true, Some(i)) = (follow, sel) {

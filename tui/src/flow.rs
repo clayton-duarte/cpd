@@ -45,6 +45,7 @@ pub struct Chart {
     /// Pill indices of each column, top to bottom.
     pub columns: Vec<Vec<usize>>,
     /// Cancelled Jobs left out.
+    #[allow(dead_code)] // the top row no longer says "N cancelled hidden"; the layout test still pins the count
     pub hidden: usize,
 }
 
