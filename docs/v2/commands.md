@@ -811,7 +811,7 @@ Run by engine E5 every `pr_poll_seconds` as a subprocess; also by hand.
 | the phase is `pr` (`done`: `already`) | `illegal_phase` | 3 |
 
 Effects:
-- **gh:** `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments` and `gh api repos/{owner}/{repo}/pulls/<n>/comments`, compared with `pr_seen` (cpd 1 §13, kept).
+- **gh:** `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision` and `gh api repos/{owner}/{repo}/pulls/<n>/comments`, compared with `pr_seen` (cpd 1 §13, kept).
 - **Rows**, one transaction: `pr_seen`, `pr_polled_at`. New failing checks, reviews or comments, or `state = CLOSED` without a merge: **Event** `pr-feedback` (data of §5.2). Merged: `phase = done`, `done_at`, **Event** `plan-done` `{pr, merged_at}`.
 - **After `done`:** the Plan's remaining Attempt worktrees and branches, kept for debugging (§3.4 A9), are removed (`git worktree remove --force`, `git branch -D`), and any of its Attempt windows killed. The Lead worktree and the Lead Branch stay.
 

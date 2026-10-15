@@ -61,7 +61,7 @@ Exit codes (kept from cpd 1 §2):
 |---|---|
 | `1` | `gate_error`, `context_store_invalid`, `watch_start_failed`, `spawn_failed`, `session_malformed`, `driver_lock_missing`, `doctor_failed`, `pi_not_found`, `catalog_failed` |
 | `2` | `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `spec_invalid`, `tier_invalid`, `nothing_to_edit`, `file_unreadable`, `invalid_name` |
-| `3` | `context_exists`, `question_answered`, `not_a_git_repo`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `job_merged`, `job_not_failed`, `job_not_ready`, `attempt_not_running`, `jobs_not_done`, `gate_failed`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `cursor_ahead`, `not_a_terminal` |
+| `3` | `context_exists`, `question_answered`, `not_a_git_repo`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `job_merged`, `job_not_failed`, `job_not_ready`, `attempt_not_running`, `jobs_not_done`, `gate_failed`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `in_chat_slot`, `cursor_ahead`, `not_a_terminal` |
 | `4` | `base_not_found` |
 
 ### 1.3 Conventions every command follows
@@ -178,6 +178,7 @@ One deliverable: one repo, one Lead Branch, one PR, optionally a Jira task. This
 | `lead_session` | text | the Plan's Lead Session |
 | `pr` | json? | `{number, url, opened_at}`, set by `pr open` |
 | `pr_seen` | json | `{checks: {<name>: <conclusion>}, reviewIds: [string], commentIds: [string], closed?: true}`: what `pr poll` has already reported (ids are gh's node ids as printed, or the decimal string of a number; `closed` is set when a closure without a merge was reported, and removed when the PR is open again) (replaces cpd 1's `pr-state.json`, §13) |
+| `pr_title`, `pr_review_decision`, `pr_checks` | text?, text?, text? | what `pr poll` last read from the PR, for the cockpit's Dispatch column (migration 2, §4.5): the PR's title; the review decision `none`, `approved` or `changes_requested`; the checks' summary `none`, `passed`, `pending` or `failed`. All null until the first poll, then all set |
 | `all_merged_at` | time? | when `all-merged` was appended (it is appended once) |
 | `created_at`, `locked_at`, `done_at` | time, time?, time? | |
 
@@ -489,11 +490,11 @@ The concurrency slot is implicit: an Attempt holds one from `starting` until `en
 | `idle`, `blocked` | `working` | `session state working`, at pi's `agent_start` (and from `blocked` when the last blocking reason closes while a turn runs) | `session-state` |
 | `working`, `blocked` | `idle` | `session state idle`, at pi's `agent_settled` with pi idle (and from `blocked` when the last blocking reason closes while idle) | `session-state` |
 | `working`, `idle` | `blocked` | `session state blocked --label <text>` by the adapter while any blocking reason is open (a dialog to the User, a pending Plan review, an open Escalation to this Lead); `cpd2 ask` for the asking Worker's own Session, which `cpd2 ask` sets back to `working` when it returns | `session-state` |
-| any | `stopped` | `session state stopped` at pi's `session_shutdown`; or engine E2 when the Session's pane is dead or gone | `session-state` |
+| any | `stopped` | `session state stopped` at pi's `session_shutdown`; engine E2 when the Session's pane is dead or gone; or `session close` | `session-state` |
 
 The adapter counts blocking reasons and reports `blocked` while the count is above zero, the model of `tmux-agent-state.ts` (spike, verified), now written to the database instead of tmux options. `session state` writes nothing and appends nothing when the state and label are unchanged.
 
-**A pane that is gone.** Engine E2 is the one writer that records a Session's pane as gone (Escalation `e2e-a1-q1`): when the pane in `tmux_pane` is dead or missing, one transaction sets `state = stopped` (with `session-state` if it was not `stopped`), `tmux_pane = NULL`, and appends `session-moved` `{pane: null, window: null, place: "none"}`. `stopped` alone does not mean the pane is gone: a Session gets its pane while still `stopped` (registered before pi starts), and `session run` keeps its pane after pi exits, so `session state stopped` leaves `tmux_pane` alone.
+**A pane that is gone.** Engine E2 records a Session's pane as gone (Escalation `e2e-a1-q1`), and so does `session close` (commands.md §10.9), which kills the pane itself and writes the same rows. E2: when the pane in `tmux_pane` is dead or missing, one transaction sets `state = stopped` (with `session-state` if it was not `stopped`), `tmux_pane = NULL`, and appends `session-moved` `{pane: null, window: null, place: "none"}`. `stopped` alone does not mean the pane is gone: a Session gets its pane while still `stopped` (registered before pi starts), and `session run` keeps its pane after pi exits, so `session state stopped` leaves `tmux_pane` alone.
 
 ### 3.7 The engine, `cpd2 watch`
 
@@ -931,6 +932,15 @@ CREATE TRIGGER events_no_delete  BEFORE DELETE ON events  BEGIN SELECT RAISE(ABO
   - below N: `BEGIN IMMEDIATE`, re-read `user_version` inside the transaction (another process may have migrated meanwhile), apply each missing migration in order, set `user_version`, insert one `txns` row with `command = 'migrate'`, commit. A migration that fails rolls back entirely and the command fails with `migration_failed` (exit 1);
   - above N: refuse with `store_too_new` (exit 1): an older binary never writes a newer schema.
 - A migration that adds or renames columns drops and recreates the history triggers of that table, so the triggers always list every column.
+- **Migration 2** (cockpit parity; a real `cpd.db` exists since migration 1 shipped, so the change is a migration and not an edit of §4.4): adds three nullable columns to `plans`, each with its own check, then drops and recreates `plans`' history triggers (the rule above):
+
+  ```sql
+  ALTER TABLE plans ADD COLUMN pr_title TEXT CHECK (pr_title IS NULL OR length(pr_title) >= 1);
+  ALTER TABLE plans ADD COLUMN pr_review_decision TEXT CHECK (pr_review_decision IN ('none', 'approved', 'changes_requested'));
+  ALTER TABLE plans ADD COLUMN pr_checks TEXT CHECK (pr_checks IN ('none', 'passed', 'pending', 'failed'));
+  ```
+
+  A Plan that has a PR when the migration runs keeps the three columns null until its next `pr poll`. `pr poll` writes the three together (§7.6); `ALTER TABLE` cannot add a check across columns, so the binary keeps them all null or all set.
 - No migration from cpd 1's beads Ledgers (R7): running Workflows finish on cpd 1.
 
 ### 4.6 The Context store
@@ -996,7 +1006,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `escalation-expired` | timeout or dead asker | plan, job, attempt | `{escalation, reason}` |
 | `session-registered` | a Session row is created | context, plan?, session | `{role, name, forked_from, tier}` |
 | `session-state` | a Session's state or label changes | context, plan?, session | `{from, to, label}` |
-| `session-moved` | the Session's pane is created, moved into the chat slot, parked or gone (§6.4); gone is appended only by E2, with `pane` and `window` null (§3.6) | context, plan?, session | `{pane, window, place}`, `place` is `chat`, `parked`, `work` or `none` |
+| `session-moved` | the Session's pane is created, moved into the chat slot, parked or gone (§6.4); gone is appended by E2 or by `session close`, with `pane` and `window` null (§3.6, §6.4) | context, plan?, session | `{pane, window, place}`, `place` is `chat`, `parked`, `work` or `none` |
 | `session-renamed` | `session rename` (cpd 1's `rename`, User decision 7 in the vision) | context, plan?, session | `{name}` |
 | `watch-started`, `watch-stopped` | the engine starts or stops | (none) | `{pid}` |
 | `error` | `watch`, a driver or a sync hit an unexpected failure | context?, plan?, … | `{source, code, message, details}` |
@@ -1058,8 +1068,26 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 | `pane-border-status` | `top` | |
 | `pane-border-lines` | `heavy` | |
 | `remain-on-exit` | `on` | a dead pane stays, so cpd can read `#{pane_dead_status}` |
+| `focus-events` | `on` | the views are told when their pane gains or loses focus |
+| `pane-active-border-style` | `fg=blue` | the focused pane's border |
+| `pane-border-format` | the format below | the column titles |
 
-The pane border format and column titles belong to the TUI (`tui/`), not to this contract.
+**Every server start sets every option, key binding and hook of this section**, whichever command starts the server (`plan new`, `watch --ensure`, `tui`), so the cockpit looks and behaves the same whatever started it. Rerunning is safe (each is a plain `set -g`, `bind` or `set-hook -g`), so `cpd2 tui` also applies them to a server that is already running. Cockpit parity (User, 2026-10-15): the cockpit matches the running cpd 1 cockpit, whose `tui/scripts/tmux.conf` these are, renamed (`@cpd_view`, `@cpd_job`).
+
+**The pane border format** (`pane-border-format`) titles a pane by its pane options, first match:
+
+| Pane | Title |
+|---|---|
+| has `@cpd_session` (a Lead), `@cpd_view = chat` (the placeholder), or `@cpd_view = statusbar` | none: pi and the placeholder say what they are |
+| `@cpd_view = tree` | ` Context ` |
+| `@cpd_view = plan` | ` Plan ` |
+| `@cpd_view = widgets` | ` Dispatch ` |
+| `@cpd_view = worker` | ` Worker · #{@cpd_job} (read-only) ` |
+| any other | `#{pane_current_command}` |
+
+**The click binding.** `bind -T root MouseDown1Pane if -F '#{==:#{@cpd_view},statusbar}' 'send-keys -M' 'select-pane -t = ; send-keys -M'`: a click on the StatusBar is passed to it and never selects it, so the chat keeps the keyboard focus; every other pane is selected, then gets the click.
+
+**The `pane-died` hook.** `set-hook -g pane-died 'if -F "#{@cpd_view}" "respawn-pane"'`: only a pane that carries `@cpd_view` (a view of the cockpit) is respawned when its program dies. A Lead or engine pane stays dead, as `remain-on-exit` leaves it, because engine E2 must see its death (§3.6, §3.7). This differs from cpd 1's unconditional `set-hook -g pane-died "respawn-pane"`.
 
 ### 6.2 Sessions, windows and panes
 
@@ -1072,7 +1100,7 @@ The pane border format and column titles belong to the TUI (`tui/`), not to this
 | `cpd-work` | `<plan>--<attempt>` (one per Attempt) | one pane, the Worker | `pi` |
 
 - `<label>` is the Session's Plan id, or the first 8 characters of its id when it has no Plan. tmux targets are always pane ids (`%<n>`) or window ids (`@<n>`), never names; names are labels for people.
-- **Pane options** identify panes, never state: `@cpd_session` (Session id) on every pane that runs a Session, and `@cpd_view` (`tree`, `plan`, `widgets`, `statusbar`, `worker`, `chat`) on the TUI's panes. The chat slot is the pane of `cpd:main` that has `@cpd_session` **or** `@cpd_view = chat`. The value `chat` marks the **placeholder**: the pane running `cpd2 tui view chat`, text `No Lead here: pick a Plan in the session tree`, which holds the slot while no Lead is there. At most one placeholder exists, and only ever in the slot. Pane options move with the pane on `swap-pane`, which is why the chat slot is found by that rule and not by a fixed option.
+- **Pane options** identify panes, never state: `@cpd_session` (Session id) on every pane that runs a Session, and `@cpd_view` (`tree`, `plan`, `widgets`, `statusbar`, `worker`, `chat`) on the TUI's panes. A Worker view pane (`@cpd_view worker`) also carries `@cpd_job` (the Job's key, shown in its border title) and `@cpd_attempt` (the Attempt id it shows). The Worker pane opens beside the chat slot with `split-window -h -d -l 50%` (no focus); a click on another Job retargets it with `respawn-pane -k` and new `@cpd_job` and `@cpd_attempt`; a click on the Job it shows closes it. Its size in reset-layout stays the reference's (`-x 30%`, commands.md §13.2). The chat slot is the pane of `cpd:main` that has `@cpd_session` **or** `@cpd_view = chat`. The value `chat` marks the **placeholder**: the pane running `cpd2 tui view chat`, text `No Lead here: pick a Plan in the session tree`, which holds the slot while no Lead is there. At most one placeholder exists, and only ever in the slot. Pane options move with the pane on `swap-pane`, which is why the chat slot is found by that rule and not by a fixed option.
 - The User attaches with `tmux -L cpd attach -t cpd` (locally or `ssh -t <host> …`). Several clients may attach at once. The User never needs to look at `cpd-work`.
 
 ### 6.3 tmux commands cpd uses
@@ -1082,12 +1110,16 @@ The pane border format and column titles belong to the TUI (`tui/`), not to this
 | server and sessions | `has-session -t =<name>`; `new-session -d -s <name> -n <window> -x 215 -y 62 -c <dir> [command]` |
 | the full-width StatusBar | `split-window -v -f -l 1` |
 | reset-layout (§13.2) | `resize-pane -t <pane> -x\|-y <size>` |
-| the StatusBar never takes focus | `bind -T root MouseDown1Pane if -F '#{==:#{@cpd_view},statusbar}' 'send-keys -M' 'select-pane -t = ; send-keys -M'` |
+| the StatusBar never takes focus (§6.1) | `bind -T root MouseDown1Pane if -F '#{==:#{@cpd_view},statusbar}' 'send-keys -M' 'select-pane -t = ; send-keys -M'` |
 | options | `set -g <option> <value>`; `set -p -t <pane> @cpd_session <id>` |
 | a new parked window or Attempt window | `new-window -d -t =<session>: -n <name> -c <cwd> -e K=V … -P -F '#{window_id} #{pane_id}' -- <argv…>` (several arguments run without a shell, docs: tmux(1)) |
 | bring a Lead into the chat slot | `swap-pane -d -s <parked pane> -t <chat slot pane>` (verified: both processes keep their pids, the slot keeps its size), then `rename-window -t <window id> park-<label>` for the window that now holds the displaced Lead |
 | liveness | `list-panes -a -F '#{pane_id} #{window_id} #{session_name} #{pane_dead} #{pane_dead_status} #{pane_pid} #{@cpd_session}'` |
 | a dead pane of the cockpit's layout | `respawn-pane` |
+| retarget the Worker view to another Attempt; restart every live view (`cpd2 tui --respawn`, commands.md §13.1) | `respawn-pane -k -t <pane> -- <argv…>` |
+| the Worker view beside the chat | `split-window -h -d -t <chat slot pane> -l 50% -P -F '#{pane_id}' -- <argv…>` |
+| the conditional respawn of a dead view (§6.1) | `set-hook -g pane-died '<command>'` |
+| the legend and `logs` popups (commands.md §13.2) | `display-popup -E -T <title> -w <width> -h <height> -- <argv…>`, at most the client's size |
 | closing | `kill-pane -t <pane>`; `kill-window -t <window id>` |
 
 ### 6.4 Where everything runs
@@ -1101,6 +1133,8 @@ The pane border format and column titles belong to the TUI (`tui/`), not to this
 | Attempt drivers | detached processes (`setsid`), not in tmux; logs in `run/<plan>/logs/` | E3 |
 
 `session open <id>` brings a Lead into the chat slot; `session park <id>` moves the Lead in the chat slot back into a parked window: it creates a new `park-<label>` window holding a placeholder, then `swap-pane`s the Lead and the placeholder. When a Lead takes the slot, `session open` kills the placeholder pane it displaced, with its window. Each appends `session-moved` for every Session whose place changed.
+
+`session close <id>` ends a Lead's pane: `kill-pane` (pi stops, and the Session's file stays, so `session open` resumes it later), then the Session is `stopped` with no pane, and `session-moved` `{pane: null, window: null, place: "none"}` is appended, the rows E2 writes for a pane that is gone (§3.6). It refuses the Session in the chat slot (commands.md §10.9).
 
 ### 6.5 How cpd starts pi
 
@@ -1254,7 +1288,7 @@ The list lives in its own file, not in `.config/wt.toml`, because worktrunk warn
   3. `git -C <lead worktree> push -u origin cpd/<plan>`, then `gh pr create --base <base> --head cpd/<plan> --title <title> --body <summary>` (cpd 1 §11, kept).
 
   The hooks come from the tree under test, the Lead Branch's own `.config/wt.toml`, which the tamper check keeps every Attempt from changing (§7.5); this is what fixes v0's stale-hook incident.
-- **`pr poll`:** `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments` and `gh api repos/{owner}/{repo}/pulls/<n>/comments`, compared with `pr_seen` (cpd 1 §11 and §13, kept). New failing checks, reviews or comments, or `state = CLOSED` without a merge: one `pr-feedback`. Merged: phase `done` (`plan-done`).
+- **`pr poll`:** `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision` and `gh api repos/{owner}/{repo}/pulls/<n>/comments`, compared with `pr_seen` (cpd 1 §11 and §13, kept). New failing checks, reviews or comments, or `state = CLOSED` without a merge: one `pr-feedback`. Merged: phase `done` (`plan-done`). **Also stored on every poll** (the `--json` fields include `title,reviewDecision`): `pr_title` (the PR's title), `pr_review_decision` (gh's `reviewDecision` `APPROVED` is `approved`, `CHANGES_REQUESTED` is `changes_requested`, anything else, including `REVIEW_REQUIRED` and an empty value, is `none`) and `pr_checks`, the summary of the PR's current check conclusions (upper-cased): `failed` when any is `FAILURE`, `TIMED_OUT`, `CANCELLED`, `ACTION_REQUIRED`, `STARTUP_FAILURE` or `ERROR`; else `pending` when any is empty, `PENDING`, `IN_PROGRESS`, `QUEUED` or `EXPECTED`; else `passed`; `none` when the PR has no checks (cpd 1's `pr.rs`). They belong to the poll and append no Event of their own (§5.1).
 - **`pr rebase`** onto the base, under the per-repo lock (§7.4) and after running R there, so no merge interleaves and none is left unrecorded:
   1. `git -C <lead worktree> fetch origin <base>`; the Lead worktree must be clean (`dirty_target`, exit 3);
   2. `git merge-tree --write-tree --name-only origin/<base> cpd/<plan>`: exit 1 means a conflict; return `rebase_conflict` (exit 3) with the file list and change nothing (t3 F10; the Lead decides, for example by appending a Job);
@@ -1376,6 +1410,8 @@ Kept from cpd 1 §7, with one change in how pi's catalog is read.
 | R17 a Reviewer is a fork of the Lead | **superseded for cpd 2 by R19**: cpd 2 has no Reviewer, so nothing implements it |
 | R19 no Job-level Gate or Reviewer: the Gate runs only at the Plan level, before the PR opens (`pr open`) and before `pr rebase` pushes; the review is the PR's own, on GitHub | §1.1, §1.2, §1.4, §2.2–§2.4, §3.2 (no `in_review`), §3.4 (no review statuses, outcomes or causes; A6–A7 removed; outcome `merged`), §3.6, §3.7, §4.4, §5.1–§5.3, §6.2–§6.5, §7.3, §7.4 (step 6 removed), §7.6, §8.2, §9; `commands.md` §20 lists every changed section |
 | R20 at submit: the mechanical checks plus the quick check, the `pre-commit` hook; no `pre-commit` table means no quick check, with no fallback to `pre-merge` | §7.3 (hook table, `attempt submit` preconditions) |
+| Cockpit parity (User, 2026-10-15): cpd 2's cockpit matches the running cpd 1 cockpit exactly: layout, elements, text, colours, keys, mouse and behaviour | §6.1 (options, border titles, click binding, conditional `pane-died` hook), §6.2 (Worker pane options), §6.3, §6.4 (`session close`); `commands.md` §10.9, §13, §17, §19 amendments 12–21; checklist `cockpit-parity.md` |
+| R36 the StatusBar's left holds action buttons only, its right read-only information; the Event log is the `logs` view, opened by the `≡ logs` button, not part of the Dispatch column | `commands.md` §13.2 (StatusBar, `logs`), §17, §19 amendment 21 |
 | D1 every command prints one JSON value; exit codes | §1.2 |
 | D2 `plan new --context X` forks the Context's grounded Lead | §2.2 Context, §3.1 (grounded Lead), §6.7 |
 | D3 `workflow` becomes `plan` | §1.3 (`--plan`, `CPD_PLAN`), §2.2 Plan, CONTEXT.md |
