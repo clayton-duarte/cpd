@@ -338,6 +338,53 @@ fn the_tree_is_contexts_then_plans_then_lead_sessions_with_their_states() {
     assert_eq!(tree.events_cursor, last_event(&mut store));
 }
 
+fn settled(session: &str) -> String {
+    event("session-state", Some("alpha"), Some("sketch"), Some(session), r#"{"from":"working","to":"idle","label":null}"#)
+}
+
+/// The ● of a Session, from its state and its Events (cockpit parity, the tree's needs-you rule).
+#[test]
+fn a_session_needs_you_when_blocked_or_idle_with_a_turn_the_user_has_not_seen() {
+    let (_env, mut store) = fixture();
+    let mut s = String::new();
+    let mut fork = |id: &str, state: &str, events: &[String]| {
+        let label = (state == "blocked").then_some("cpd: asking");
+        s += &session_row(id, "lead", "alpha", "sketch", None, state, label, "2026-01-02T00:01:00.000Z");
+        for e in events {
+            s += e;
+        }
+    };
+    let chat = |id: &str| moved("alpha", Some("sketch"), id, "chat");
+    let parked = |id: &str| moved("alpha", Some("sketch"), id, "parked");
+    fork("x-blocked", "blocked", &[]);
+    fork("x-working", "working", &[settled("x-working")]);
+    fork("x-quiet", "idle", &[]);
+    fork("x-unseen", "idle", &[settled("x-unseen")]);
+    fork("x-seen", "idle", &[settled("x-seen"), chat("x-seen"), parked("x-seen")]);
+    fork("x-slot", "idle", &[chat("x-slot"), settled("x-slot")]);
+    fork("x-again", "idle", &[settled("x-again"), chat("x-again"), settled("x-again"), parked("x-again")]);
+    sql(&mut store, &s);
+
+    let tree = read::tree(&mut store).unwrap();
+    let sketch = &tree.contexts[0].plans[1];
+    let got: Vec<(&str, bool)> =
+        sketch.sessions.iter().filter(|n| n.id.as_str().starts_with("x-")).map(|n| (n.id.as_str(), n.needs_you)).collect();
+    assert_eq!(
+        got,
+        [
+            ("x-again", true),
+            ("x-blocked", true),
+            ("x-quiet", false),
+            ("x-seen", false),
+            ("x-slot", false),
+            ("x-unseen", true),
+            ("x-working", false),
+        ],
+        "by id: idle again after being seen; blocked; idle with no turn; idle and seen; in the slot; idle and unseen; working"
+    );
+    assert!(sketch.needs_you() && tree.contexts[0].needs_you());
+}
+
 #[test]
 fn the_tree_counts_jobs_by_status_with_merging_apart_from_running() {
     let (_env, mut store) = fixture();

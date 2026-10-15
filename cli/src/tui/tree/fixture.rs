@@ -27,6 +27,7 @@ pub fn session(id: &str, name: &str, state: State, label: Option<&str>, place: P
         place,
         plan_lead: false,
         grounded_lead: false,
+        needs_you: state == State::Blocked,
     }
 }
 

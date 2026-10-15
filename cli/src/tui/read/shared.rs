@@ -215,6 +215,17 @@ pub struct SessionNode {
     pub plan_lead: bool,
     /// It is its Context's grounded Lead.
     pub grounded_lead: bool,
+    /// The ● of the tree: [`needs_you`], derived from the Session's Events.
+    pub needs_you: bool,
+}
+
+/// The ● rule (cockpit parity, §1.3): a Session needs the User when it is
+/// `blocked`, or when it is `idle`, not in the chat slot, and its latest
+/// `session-state → idle` Event is newer than its latest `session-moved
+/// {place: chat}` (Event ids order commits; no such Event counts as 0).
+fn needs_you(state: State, place: Place, settled: Option<i64>, seen: Option<i64>) -> bool {
+    state == State::Blocked
+        || (state == State::Idle && place != Place::Chat && settled.unwrap_or(0) > seen.unwrap_or(0))
 }
 
 impl SessionNode {
@@ -229,7 +240,11 @@ const SESSION_SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt,
        (SELECT json_extract(e.data, '$.place') FROM events e
          WHERE e.session = s.id AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1),
        EXISTS (SELECT 1 FROM plans p WHERE p.lead_session = s.id),
-       EXISTS (SELECT 1 FROM contexts c WHERE c.lead_session = s.id)
+       EXISTS (SELECT 1 FROM contexts c WHERE c.lead_session = s.id),
+       (SELECT e.id FROM events e WHERE e.session = s.id AND e.kind = 'session-state'
+           AND json_extract(e.data, '$.to') = 'idle' ORDER BY e.id DESC LIMIT 1),
+       (SELECT e.id FROM events e WHERE e.session = s.id AND e.kind = 'session-moved'
+           AND json_extract(e.data, '$.place') = 'chat' ORDER BY e.id DESC LIMIT 1)
   FROM sessions s";
 
 /// The Sessions matching `filter` (SQL after `WHERE`, over `s`), oldest first.
@@ -244,7 +259,10 @@ pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -
         let (role, context, plan, attempt, forked_from): (String, String, Option<String>, Option<String>, Option<String>) =
             (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(7)?);
         let (state, tier_text, place): (String, String, Option<String>) = (r.get(10)?, r.get(8)?, r.get(14)?);
+        let state: State = value_enum("Session state", &state)?;
+        let place = place.map_or(Ok(Place::None), |p| Place::parse("Session place", &p))?;
         out.push(SessionNode {
+            needs_you: needs_you(state, place, r.get(17)?, r.get(18)?),
             role: value_enum("Session role", &role)?,
             context: ContextId::parse(&context).map_err(|_| field("context", &context))?,
             plan: plan.map(|p| PlanId::parse(&p).map_err(|_| field("plan", &p))).transpose()?,
@@ -254,11 +272,11 @@ pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -
             forked_from: forked_from.map(|f| SessionId::parse(&f).map_err(|_| field("forked_from", &f))).transpose()?,
             tier: tier(&format!("Session {session}"), &tier_text)?,
             tmux_pane: r.get(9)?,
-            state: value_enum("Session state", &state)?,
+            state,
             state_label: r.get(11)?,
             state_at: r.get(12)?,
             created_at: r.get(13)?,
-            place: place.map_or(Ok(Place::None), |p| Place::parse("Session place", &p))?,
+            place,
             plan_lead: r.get(15)?,
             grounded_lead: r.get(16)?,
             id: session,
@@ -292,9 +310,9 @@ pub struct PlanHead {
 }
 
 impl PlanHead {
-    /// The Plan waits on the User: an open Escalation, a pending Plan review, or a blocked Session.
+    /// The Plan waits on the User: an open Escalation, a pending Plan review, or a Session with the ● (`SessionNode::needs_you`).
     pub fn needs_you(&self, sessions: &[SessionNode]) -> bool {
-        self.open_escalations > 0 || self.review_pending || sessions.iter().any(|s| s.state == State::Blocked)
+        self.open_escalations > 0 || self.review_pending || sessions.iter().any(|s| s.needs_you)
     }
 }
 
