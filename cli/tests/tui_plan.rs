@@ -1,5 +1,5 @@
 //! The `plan` view (commands.md §13.2, §17), the centre-top pane of the cockpit, on a private tmux server: the flow
-//! chart of the Plan of the Lead in the chat slot, its tabs and PR, and the view's refresh from Events.
+//! chart of the Plan of the Lead in the chat slot, its tabs, and the view's refresh from Events.
 //!
 //! The store is prepared through the store API (`Store::write`), as the other areas' tests do, because Plans, Jobs
 //! and Attempts belong to their areas; the view runs as `cpd2 tui view plan` in a pane, and its screen is read with
@@ -292,51 +292,50 @@ fn each_job_status_has_its_icon_and_a_cancelled_job_is_not_drawn() {
     assert!(screen.iter().all(|l| !l.contains("gone")), "a cancelled Job is not drawn:\n{}", screen.join("\n"));
 }
 
+/// `session-moved` to a parked pane: the Lead has a pane in the cockpit, but not in the chat slot.
+fn parked(context: &str, plan: &str, session: &str) -> String {
+    event("session-moved", context, Some(plan), Some(session), r#"{"pane":"%2","window":"@2","place":"parked"}"#)
+}
+
 #[test]
-fn the_top_row_has_the_context_the_tabs_and_the_pr_and_no_workers() {
+fn the_top_row_is_the_context_id_and_one_tab_per_lead_with_a_pane_and_nothing_at_the_right() {
     let env = env();
     let jobs: &[(&str, &str, &str, &[&str], u32)] =
         &[("a", "merged", "O3", &[], 1), ("b", "running", "S3", &["a"], 1), ("c", "running", "S3", &["a"], 2)];
     let seen = r#"{"checks":{"ci":"FAILURE","lint":"SUCCESS"},"reviewIds":["r1"],"commentIds":["c1","c2"]}"#;
     let mut s = plan_with("pr", Some((7, seen)), jobs);
-    // a side fork of the Lead, so the Context has two tabs
+    // a side fork with a pane, one without a pane (no tab), and one whose name is blank (the Plan id labels it)
     s += &lead_row("fork-ship", "ctx", "ship", "2026-01-02T00:00:09.000Z");
+    s += &parked("ctx", "ship", "fork-ship");
+    s += &lead_row("no-pane", "ctx", "ship", "2026-01-02T00:00:10.000Z");
+    s += &lead_row("bare", "ctx", "ship", "2026-01-02T00:00:11.000Z");
+    s += "UPDATE sessions SET name = '  ' WHERE id = 'bare';";
+    s += &parked("ctx", "ship", "bare");
     sql(&env, &s);
     let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the top row", |s| s.first().is_some_and(|l| l.contains("#7")));
+    let screen = screen_when(&env, &pane, "the top row", |s| s.first().is_some_and(|l| l.contains('▸')));
     let (top, line) = (&screen[0], &screen[1]);
-    assert!(top.starts_with(" Title of ctx ▸  ship   ship/name of fork-ship "), "{top:?}");
-    assert!(top.ends_with("#7 open ✗ 1 review, 2 comments"), "{top:?}");
-    assert!(!top.contains("workers"), "the Workers are the StatusBar's: {top:?}");
+    assert_eq!(top, " ctx ▸  name of lead-ship   name of fork-ship   ship", "{top:?}");
     assert!(line.starts_with('─') && line.chars().all(|c| c == '─'), "{line:?}");
-    // the active tab is reversed: the Lead in the chat slot
+    // the active tab is reversed and bold: the Lead in the chat slot
     let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
     let first = styled.lines().next().unwrap();
-    assert!(first.contains("7m ship "), "the active tab is not reversed: {first:?}");
-    assert!(!first.contains("7m ship/name"), "the other tab is reversed: {first:?}");
+    assert!(first.contains("1;7m name of lead-ship "), "the active tab is not reversed and bold: {first:?}");
+    let after_active = first.split("name of lead-ship ").nth(1).unwrap();
+    assert!(!after_active.contains("7m"), "another tab is reversed: {first:?}");
 }
 
 #[test]
-fn a_plan_without_a_pr_says_so() {
+fn a_plan_without_jobs_says_no_plan_yet() {
     let env = env();
-    sql(&env, &plan_with("dispatch", None, &[("a", "queued", "S3", &[], 0)]));
+    sql(&env, &plan_with("dispatch", None, &[]));
     let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the top row", |s| s.first().is_some_and(|l| l.contains("no PR")));
-    assert!(screen[0].ends_with("no PR"), "{:?}", screen[0]);
+    let screen = screen_when(&env, &pane, "the message", |s| s.iter().any(|l| l.contains("no Plan yet")));
+    assert!(screen.iter().any(|l| l.trim() == "no Plan yet"), "{}", screen.join("\n"));
 }
 
 #[test]
-fn a_closed_pr_is_shown_closed() {
-    let env = env();
-    let seen = r#"{"checks":{"ci":"SUCCESS"},"reviewIds":[],"commentIds":[],"closed":true}"#;
-    sql(&env, &plan_with("pr", Some((8, seen)), &[("a", "merged", "S3", &[], 1)]));
-    let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the top row", |s| s.first().is_some_and(|l| l.contains("#8")));
-    assert!(screen[0].contains("#8 closed ✓ no review"), "{:?}", screen[0]);
-}
-
-#[test]
-fn open_escalations_and_a_pending_plan_review_are_noted_at_the_foot() {
+fn escalations_and_the_plan_review_are_not_drawn() {
     let env = env();
     let mut s = plan_with("dispatch", None, &[("a", "running", "S3", &[], 1)]);
     s += &format!("INSERT INTO escalations (plan, id, attempt, number, question, status, answer, asker_pid, asked_at, answered_at, expired_at)
@@ -345,8 +344,8 @@ fn open_escalations_and_a_pending_plan_review_are_noted_at_the_foot() {
           VALUES ('ship', 'r1', 1, '{FP}', 'pending', '2026-01-02T01:00:00.000Z');");
     sql(&env, &s);
     let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the note", |s| s.iter().any(|l| l.contains("open Escalation")));
-    assert!(screen.iter().any(|l| l.trim() == "1 open Escalation  Plan review r1 pending"), "{}", screen.join("\n"));
+    let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 3 && s[3].contains(" a "));
+    assert!(screen.iter().all(|l| !l.contains("Escalation") && !l.contains("review")), "{}", screen.join("\n"));
 }
 
 #[test]
@@ -394,7 +393,7 @@ fn the_view_starts_no_subprocess_and_asks_gh_nothing() {
     let pane = start_view(&env);
     let pid = tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_pid}"]).trim().to_owned();
     // let it draw, follow an Event and take a new snapshot
-    screen_when(&env, &pane, "the PR", |s| s.first().is_some_and(|l| l.contains("#7")));
+    screen_when(&env, &pane, "the chart", |s| s.len() > 3 && s[3].contains(" a "));
     sql(&env, &event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":[]}"#));
     std::thread::sleep(Duration::from_millis(1500));
     // the pane's program is the view itself, and it has no child process
@@ -405,35 +404,79 @@ fn the_view_starts_no_subprocess_and_asks_gh_nothing() {
     }
 }
 
-#[test]
-fn a_selected_pill_opens_its_worker_beside_the_chat_and_a_second_enter_closes_it() {
-    let env = env();
+/// The cockpit's centre on the private server: the plan view above the chat slot; returns `(plan pane, chat pane)`.
+fn centre(env: &TestEnv) -> (String, String) {
     env.fake(
         "cpd2",
         &format!("if [ \"$1\" = tui ] && [ \"$3\" = worker ]; then exec sleep 3600; fi\nexec '{CPD2}' \"$@\""),
     );
-    sql(&env, &plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1), ("b", "queued", "S3", &["a"], 0)]));
-    // the cockpit's centre: the plan view above the chat slot
     let plan = tmux_out(
-        &env,
+        env,
         &["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "200", "-y", "40", "-P", "-F", "#{pane_id}", CPD2, "tui", "view", "plan"],
     )
     .trim()
     .to_owned();
-    tmux_out(&env, &["set", "-p", "-t", &plan, "@cpd_view", "plan"]);
-    let chat = tmux_out(&env, &["split-window", "-d", "-v", "-t", &plan, "-P", "-F", "#{pane_id}", "sleep", "3600"]).trim().to_owned();
-    tmux_out(&env, &["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
+    tmux_out(env, &["set", "-p", "-t", &plan, "@cpd_view", "plan"]);
+    let chat = tmux_out(env, &["split-window", "-d", "-v", "-t", &plan, "-P", "-F", "#{pane_id}", "sleep", "3600"]).trim().to_owned();
+    tmux_out(env, &["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
+    (plan, chat)
+}
+
+#[test]
+fn a_selected_pill_opens_its_worker_beside_the_chat_and_a_second_enter_closes_it() {
+    let env = env();
+    sql(&env, &plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1), ("b", "queued", "S3", &["a"], 0)]));
+    let (plan, chat) = centre(&env);
     screen_when(&env, &plan, "the chart", |s| s.len() > 3 && s[3].contains(" a "));
 
-    let workers = || tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_view} #{@cpd_attempt}"]);
+    let workers = || tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_view} #{@cpd_job} #{@cpd_attempt}"]);
     // nothing is selected until the User asks: an arrow selects the first pill, Enter opens its Worker
     tmux_out(&env, &["send-keys", "-t", &plan, "Right"]);
     tmux_out(&env, &["send-keys", "-t", &plan, "Enter"]);
-    wait_until("the Worker pane", || workers().contains("worker a-a1"));
+    wait_until("the Worker pane", || workers().contains("worker a a-a1"));
     let calls = env.calls("cpd2");
     assert!(calls.contains(&["tui", "view", "worker", "a-a1", "--plan", "ship"].map(str::to_owned).to_vec()), "{calls:?}");
+    // beside the chat, without taking the focus: the plan view keeps it
+    let layout = tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{pane_id} #{@cpd_view} #{pane_active} #{pane_top} #{pane_width}"]);
+    let row = |view: &str| layout.lines().find(|l| l.split(' ').nth(1) == Some(view)).unwrap().split(' ').map(str::to_owned).collect::<Vec<_>>();
+    let (worker, chat_row) = (row("worker"), row("chat"));
+    assert_eq!((worker[2].as_str(), worker[3].as_str()), ("0", chat_row[3].as_str()), "{layout}");
+    assert_eq!(row("plan")[2], "1", "{layout}");
+    assert!(chat.starts_with('%') && layout.contains(&chat), "{layout}");
     tmux_out(&env, &["send-keys", "-t", &plan, "Enter"]);
     wait_until("the Worker pane to close", || !workers().contains("worker"));
+}
+
+#[test]
+fn another_job_retargets_the_worker_pane_in_place() {
+    let env = env();
+    sql(&env, &plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1), ("b", "running", "S3", &["a"], 1)]));
+    let (plan, _) = centre(&env);
+    screen_when(&env, &plan, "the chart", |s| s.len() > 3 && s[3].contains(" a "));
+    let workers = || tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{pane_id} #{@cpd_view} #{@cpd_job} #{@cpd_attempt}"]);
+    tmux_out(&env, &["send-keys", "-t", &plan, "Right", "Enter"]);
+    wait_until("the Worker pane of a", || workers().contains("worker a a-a1"));
+    let pane = workers().lines().find(|l| l.contains(" worker ")).unwrap().split(' ').next().unwrap().to_owned();
+    // the next Job's pill: the same pane shows it
+    tmux_out(&env, &["send-keys", "-t", &plan, "Right", "Enter"]);
+    wait_until("the Worker pane of b", || workers().contains("worker b b-a1"));
+    let after = workers();
+    assert_eq!(after.lines().filter(|l| l.contains(" worker ")).count(), 1, "{after}");
+    assert!(after.contains(&format!("{pane} worker b b-a1")), "retargeted in place: {after}");
+    let calls = env.calls("cpd2");
+    assert!(calls.contains(&["tui", "view", "worker", "b-a1", "--plan", "ship"].map(str::to_owned).to_vec()), "{calls:?}");
+}
+
+#[test]
+fn q_does_not_quit_the_view() {
+    let env = env();
+    sql(&env, &plan_with("dispatch", None, &[("a", "queued", "S3", &[], 0)]));
+    let pane = start_view(&env);
+    screen_when(&env, &pane, "the chart", |s| s.len() > 3 && s[3].contains(" a "));
+    tmux_out(&env, &["send-keys", "-t", &pane, "q"]);
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_dead}"]).trim(), "0");
+    assert!(screen(&env, &pane)[3].contains(" a "));
 }
 
 #[test]

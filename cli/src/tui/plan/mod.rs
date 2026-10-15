@@ -2,17 +2,18 @@
 //! `cpd/cpd-ui` (`tui/src/flow.rs`, `tabs.rs`, `pr.rs`, `workers.rs`) onto the read model of [`crate::tui::read`].
 //!
 //! It shows the Plan of the Lead in the chat slot as a left-to-right flow chart of its Jobs ([`flow`]), under the tabs
-//! of the Context's Leads ([`tabs`]), with the Plan's PR ([`pr`]) and the Workers ([`workers`]) at the right of the
-//! tabs, and, at the foot, the open Escalations and the Plan review.
+//! of the Context's Leads ([`tabs`]): the top row is only the Context's id and the tabs, with nothing at the right.
 //!
 //! Data: one snapshot of the store ([`snapshot`]), then the Events, followed in this process from the snapshot's
 //! cursor (one `events` query every `events.poll_ms`, no subprocess); a snapshot is retaken at most every
-//! [`COALESCE`] after an Event that concerns the view. The PR is what `pr poll` stored: nothing here runs `gh`.
+//! [`COALESCE`] after an Event that concerns the view.
 //! The User's keys and clicks run commands ([`actions`]); nothing else starts a process.
+//!
+//! Keys: ←→↑↓/hjkl select, Enter opens or closes the Worker, Esc clears; the wheel scrolls; clicks select a pill or a
+//! tab. There is no `q`: a layout pane that dies stays dead (contract §6.1).
 
 mod actions;
 mod flow;
-mod pr;
 mod tabs;
 
 use std::time::{Duration, Instant};
@@ -22,13 +23,12 @@ use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event as Input, KeyCode, KeyEventKind, MouseButton, MouseEventKind,
 };
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
-use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
 use self::actions::Actions;
 use self::flow::{Chart, Dir, Selection};
 use crate::tui::palette;
-use super::read::{self, ChatSlot, Flow, ReviewStatus};
+use super::read::{self, ChatSlot, Flow, Place, SessionNode};
 use super::{not_a_terminal, on_a_terminal};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
@@ -36,7 +36,6 @@ use crate::events::{self, Event, highest_id};
 use crate::home::CpdHome;
 use crate::ids::{AttemptId, SessionId};
 use crate::output::Output;
-use crate::plan::Phase;
 use crate::store::Store;
 
 /// A snapshot is retaken at most this often, whatever the Event rate (§17).
@@ -46,6 +45,7 @@ const COALESCE: Duration = Duration::from_millis(500);
 struct Centre {
     slot: ChatSlot,
     flow: Flow,
+    /// The Context's id.
     context: String,
     tabs: Vec<(SessionId, String)>,
     chart: Chart,
@@ -57,9 +57,16 @@ struct Snapshot {
     centre: Option<Centre>,
 }
 
-/// The tab label of a Lead: its Plan, and for a side fork also its name.
-fn tab_label(plan: &str, name: &str, plan_lead: bool) -> String {
-    if plan_lead { plan.to_owned() } else { format!("{plan}/{name}") }
+/// The tab label of a Lead Session: its name, else its Plan's id, else the first 8 characters of its id.
+fn tab_label(s: &SessionNode) -> String {
+    let name = s.name.trim();
+    if !name.is_empty() {
+        name.to_owned()
+    } else if let Some(plan) = &s.plan {
+        plan.to_string()
+    } else {
+        s.id.as_str().chars().take(8).collect()
+    }
 }
 
 fn snapshot(store: &mut Store) -> Result<Snapshot, CpdError> {
@@ -72,9 +79,11 @@ fn snapshot(store: &mut Store) -> Result<Snapshot, CpdError> {
     let tabs = context
         .iter()
         .flat_map(|c| &c.plans)
-        .flat_map(|p| p.sessions.iter().map(move |s| (s.id.clone(), tab_label(p.head.id.as_str(), &s.name, s.plan_lead))))
+        .flat_map(|p| &p.sessions)
+        .filter(|s| s.place != Place::None) // a tab is a Lead with a pane in the cockpit
+        .map(|s| (s.id.clone(), tab_label(s)))
         .collect();
-    let context = context.map_or_else(|| flow.head.context.to_string(), |c| c.title);
+    let context = flow.head.context.to_string();
     let chart = flow::layout(&flow::flow_jobs(&flow));
     Ok(Snapshot { cursor, centre: Some(Centre { slot, flow, context, tabs, chart }) })
 }
@@ -87,29 +96,14 @@ fn concerns(event: &Event, centre: Option<&Centre>) -> bool {
         || centre.is_some_and(|c| mine(&event.plan, c.flow.head.id.as_str()) || mine(&event.context, c.flow.head.context.as_str()))
 }
 
-/// The line at the foot of the chart: an error, the note of the last action, then what needs the User.
+/// The line at the foot of the chart: an error, `no Plan yet`, then the note of the last action.
 fn message(error: Option<&str>, note: &str, centre: Option<&Centre>) -> Option<String> {
-    let mut parts: Vec<String> = error.map(str::to_owned).into_iter().collect();
-    if !note.is_empty() {
-        parts.push(note.to_owned());
+    let mut parts: Vec<&str> = error.into_iter().collect();
+    if centre.is_some_and(|c| c.flow.jobs.is_empty()) {
+        parts.push("no Plan yet");
     }
-    if let Some(c) = centre {
-        let open = c.flow.escalations.len();
-        if open > 0 {
-            parts.push(format!("{open} open Escalation{}", if open == 1 { "" } else { "s" }));
-        }
-        if let Some(r) = c.flow.review.as_ref().filter(|r| r.status == ReviewStatus::Pending || c.flow.head.phase == Phase::Plan) {
-            let status = match (r.status, r.current) {
-                (ReviewStatus::Pending, _) => "pending",
-                (ReviewStatus::Approved, true) => "approved",
-                (ReviewStatus::Approved, false) => "approved, but the Jobs changed since",
-                (ReviewStatus::Rejected, _) => "rejected",
-            };
-            parts.push(format!("Plan review r{} {status}", r.number));
-        }
-        if c.flow.jobs.is_empty() {
-            parts.push("no Jobs yet".to_owned());
-        }
+    if !note.is_empty() {
+        parts.push(note);
     }
     (!parts.is_empty()).then(|| parts.join("  "))
 }
@@ -146,8 +140,7 @@ impl Ui {
                 active: centre.is_some_and(|c| &c.slot.session == id),
             })
             .collect();
-        let right = centre.map(right_parts).unwrap_or_default();
-        (self.head, self.tabs) = tabs::draw(f, head, centre.map(|c| c.context.as_str()), &tab_list, &right);
+        (self.head, self.tabs) = tabs::draw(f, head, centre.map(|c| c.context.as_str()), &tab_list);
         // two columns and one row of padding: nothing of the chart touches the pane's edges
         let mut window = body.inner(Margin { horizontal: 2, vertical: 1 });
         if let Some(text) = message(self.error.as_deref(), &self.note, centre) {
@@ -164,11 +157,6 @@ impl Ui {
         }
         self.scroll = c.chart.blit(f.buffer_mut(), window, self.scroll, sel);
     }
-}
-
-/// What may go at the right of the tabs: the PR. The tabs row draws the first that fits.
-fn right_parts(c: &Centre) -> Vec<Line<'static>> {
-    vec![pr::line(c.flow.head.pr.as_ref())]
 }
 
 /// The Attempt a pill opens: the Job's current one.
@@ -203,7 +191,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
     }
 }
 
-/// Draws, follows Events and takes input until `q` or the terminal fails.
+/// Draws, follows Events and takes input until the terminal fails.
 fn show(
     terminal: &mut ratatui::DefaultTerminal,
     store: &mut Store,
@@ -261,7 +249,6 @@ fn show(
                 };
                 let chart = snap.centre.as_ref().map(|c| &c.chart);
                 match (k.code, dir, chart) {
-                    (KeyCode::Char('q'), ..) => return Ok(()),
                     (_, Some(d), Some(c)) => ui.selected.arrow(c, d),
                     (KeyCode::Enter, ..) => open = ui.selected.enter(),
                     (KeyCode::Esc, ..) => unselect = ui.selected.clear(),
@@ -304,15 +291,15 @@ fn show(
             _ => {}
         }
         let Some(centre) = snap.centre.as_ref() else { continue };
-        if let Some(attempt) = unselect.and_then(|key| attempt_of(centre, &key)) {
-            if let Err(e) = actions.close_worker(&attempt) {
+        if let Some(key) = unselect {
+            if let Err(e) = actions.close_worker(&key) {
                 ui.note = e.message().to_owned();
             }
         }
         if let Some(key) = open {
             ui.note = match attempt_of(centre, &key) {
                 None => format!("{key} has not started yet"),
-                Some(attempt) => match actions.toggle_worker(&centre.flow.head.id, &attempt) {
+                Some(attempt) => match actions.toggle_worker(&centre.flow.head.id, &key, &attempt) {
                     Ok(_) => String::new(),
                     Err(e) => e.message().to_owned(),
                 },
