@@ -527,8 +527,8 @@ One per machine (D5). Every `tick_seconds`:
 ### 4.3 Writes only through cpd: `txns` and `cpd_txn()`
 
 Every write transaction starts by inserting its row into `txns` with an explicit id, `(SELECT coalesce(max(id), 0) + 1 FROM txns)`, after setting the connection's `cpd_txn()` to return that id. Triggers on every table call `cpd_txn()`:
-- a connection that is not a `cpd2` process (for example the `sqlite3` shell) has no such function, so any write it attempts fails with "no such function: cpd_txn" (unverified: SQLite resolves trigger functions when the outer statement is prepared; the store Job verifies it with a test);
-- a write whose `cpd_txn()` does not match its transaction's `txns` row is refused by the triggers on `txns` and `events`.
+- a connection that is not a `cpd2` process (for example the `sqlite3` shell) has no such function, so any write it attempts fails with "no such function: cpd_txn" (SQLite resolves trigger functions when the outer statement is prepared; verified by `cli/tests/store.rs`; a delete from an append-only table fails with its `append_only` error instead);
+- a write whose `cpd_txn()` does not match its transaction's `txns` row is refused by the triggers on `txns`, `events` and `history`.
 
 The **schema check**: at open, cpd hashes `SELECT type, name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name` and compares it with the hash the binary embeds for the current `user_version`. A mismatch means someone dropped or changed a trigger or table: write commands refuse with `store_tampered` (exit 1); read commands still work and report it in their `tamper` field. This plus the history replaces cpd 1's `bd history` actor check (§8).
 
@@ -907,6 +907,8 @@ CREATE TRIGGER txns_own BEFORE INSERT ON txns WHEN NEW.id IS NOT cpd_txn()
 BEGIN SELECT RAISE(ABORT, 'txns.id must be cpd_txn()'); END;
 CREATE TRIGGER events_own BEFORE INSERT ON events WHEN NEW.txn IS NOT cpd_txn()
 BEGIN SELECT RAISE(ABORT, 'events.txn must be cpd_txn()'); END;
+CREATE TRIGGER history_own BEFORE INSERT ON history WHEN NEW.txn IS NOT cpd_txn()
+BEGIN SELECT RAISE(ABORT, 'history.txn must be cpd_txn()'); END;
 CREATE TRIGGER txns_no_update    BEFORE UPDATE ON txns    BEGIN SELECT RAISE(ABORT, 'append_only: txns'); END;
 CREATE TRIGGER txns_no_delete    BEFORE DELETE ON txns    BEGIN SELECT RAISE(ABORT, 'append_only: txns'); END;
 CREATE TRIGGER history_no_update BEFORE UPDATE ON history BEGIN SELECT RAISE(ABORT, 'append_only: history'); END;
