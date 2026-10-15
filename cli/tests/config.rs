@@ -64,7 +64,7 @@ fn config_with_only_the_required_keys_has_every_default() {
                 "store_busy_ms": 5000,
                 "fork_quiet_seconds": 5
             },
-            "watch": {"tick_seconds": 5, "pr_poll_seconds": 120, "context_sync_seconds": 300},
+            "watch": {"tick_seconds": 5, "pr_poll_seconds": 120, "context_sync_seconds": 300, "error_repeat_seconds": 600},
             "events": {"poll_ms": 200},
             "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}
         })

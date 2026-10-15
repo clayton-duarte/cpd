@@ -568,6 +568,33 @@ fn e2_stops_sessions_whose_pane_is_dead_or_gone() {
     assert_eq!(places, ["none", "none", "none"]);
 }
 
+/// Finding 4: a pane with a `@cpd_view` this binary does not know (made by a
+/// newer cpd2) is skipped, so E2 still runs and appends no `error`.
+#[test]
+fn e2_skips_a_pane_with_an_unknown_view_and_reports_no_error() {
+    let fx = fx("");
+    let new = |args: &[&str]| {
+        let out = fx.env.tmux(args);
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    let pane = new(&["new-session", "-d", "-s", "x", "-P", "-F", "#{pane_id}", "sleep", "600"]);
+    new(&["set", "-p", "-t", &pane, "@cpd_view", "hologram"]);
+    fx.fixture(
+        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, tmux_pane, state, state_at, created_at)
+           VALUES ('s-gone', 'lead', 'ctx', NULL, 'Gone', '/', 'O3', '%999', 'working', 't', 't');",
+    );
+
+    let engine = fx.start();
+    wait_until("the missing pane's Session stopped", || fx.count("session-moved") == 1);
+    std::thread::sleep(Duration::from_millis(2500));
+    let out = engine.stop();
+
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.events("error"));
+    assert_eq!(fx.query::<String>("SELECT state FROM sessions WHERE id = 's-gone'"), "stopped");
+    assert_eq!(out.stderr.matches("hologram").count(), 1, "logged once: {out:?}");
+}
+
 // ---------- E3 ----------
 
 #[test]
