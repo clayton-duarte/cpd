@@ -44,7 +44,7 @@ either side. `statusbar::draw` returns the `Rect` of each clickable item.
 
 | Side | Item | Does |
 | --- | --- | --- |
-| left | ` ⧉ ` (reversed; one cell wide, first) | a click resets the layout |
+| left | `⧉ ` (reversed; one cell wide, first) | a click resets the layout |
 | left | ` ? legend ` (reversed) | a click opens the legend popup |
 | right | `workers N/M`, shortened to `N/M` when narrow | none; re-read every 2 s |
 
