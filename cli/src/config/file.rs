@@ -1,0 +1,349 @@
+//! `$CPD_HOME/config.toml` (contract §8.1, §8.2): parsed once into a typed
+//! [`Config`], defaults built in, every leaf key's source recorded.
+//!
+//! The file is read key by key instead of through serde's
+//! `deny_unknown_fields`: serde's errors carry no key path, and contract §8.1
+//! wants the key path in `details`. Every key is named once, in [`Config::parse`].
+//! Whatever the walk does not consume is an unknown key.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use serde::Serialize;
+use toml::{Table, Value};
+
+use super::tier::Tier;
+use crate::error::{CpdError, ErrorCode};
+use crate::home::CpdHome;
+use crate::ids::MachineName;
+
+/// Where a leaf key's value came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Source {
+    File,
+    Default,
+}
+
+/// Every leaf key's source, by dotted key path (`tiers.O`, `timeouts.attempt_minutes`).
+pub type Sources = BTreeMap<String, Source>;
+
+/// The effective configuration: the file merged over the built-in defaults.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Config {
+    pub version: u32,
+    pub machine: MachineName,
+    /// Attempts not ended, machine-wide (§3.4).
+    pub concurrency: u32,
+    /// Automatic Attempts are capped at `1 + retry_cap` (§9).
+    pub retry_cap: u32,
+    pub lead_tier: Tier,
+    pub lead_pi_packages: Vec<String>,
+    /// `""` is beside the binary: see [`Config::pi_adapter_dir`].
+    pub pi_adapter: String,
+    pub tiers: Tiers,
+    pub timeouts: Timeouts,
+    pub watch: Watch,
+    pub events: Events,
+    pub tmux: Tmux,
+}
+
+/// pi model per Tier letter, `<provider>/<model-id>`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Tiers {
+    #[serde(rename = "O")]
+    pub o: String,
+    #[serde(rename = "S")]
+    pub s: String,
+    #[serde(rename = "H")]
+    pub h: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Timeouts {
+    /// Active time per Attempt (§3.4).
+    pub attempt_minutes: u32,
+    /// An Escalation expires after this.
+    pub ask_minutes: u32,
+    /// Pre-start.
+    pub setup_minutes: u32,
+    /// Pre-commit and pre-merge.
+    pub gate_minutes: u32,
+    /// `pr rebase` waiting for the per-repo lock.
+    pub lock_wait_seconds: u32,
+    /// SQLite busy timeout (§4.2).
+    pub store_busy_ms: u32,
+    /// Fork-when-idle (§6.7).
+    pub fork_quiet_seconds: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Watch {
+    pub tick_seconds: u32,
+    pub pr_poll_seconds: u32,
+    pub context_sync_seconds: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Events {
+    /// `events follow` (§5.4).
+    pub poll_ms: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Tmux {
+    /// `tmux -L <socket>`: the cockpit's server.
+    pub socket: String,
+    pub cockpit_session: String,
+    /// The hidden session for Workers and watch.
+    pub work_session: String,
+}
+
+const DEFAULT_LEAD_PI_PACKAGES: [&str; 2] = [
+    "npm:@plannotator/pi-extension@0.28.17",
+    "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
+];
+
+impl Config {
+    /// Reads `$CPD_HOME/config.toml`. `config_missing` when there is no file,
+    /// `config_invalid` (with `details.key`) for anything wrong inside it.
+    pub fn load(home: &CpdHome) -> Result<Config, CpdError> {
+        Ok(Config::load_with_sources(home)?.0)
+    }
+
+    /// [`Config::load`], and where each leaf key's value came from.
+    pub fn load_with_sources(home: &CpdHome) -> Result<(Config, Sources), CpdError> {
+        let path = home.config();
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(CpdError::new(
+                    ErrorCode::ConfigMissing,
+                    "config.toml is missing: it is required, because `machine` has no default.",
+                )
+                .with("path", path.display().to_string()));
+            }
+            Err(e) => {
+                return Err(CpdError::new(ErrorCode::ConfigInvalid, format!("cannot read config.toml: {e}."))
+                    .with("path", path.display().to_string()));
+            }
+        };
+        Config::parse(&text, &path)
+    }
+
+    /// Parses the text of a `config.toml`; `path` only names the file in errors.
+    pub fn parse(text: &str, path: &Path) -> Result<(Config, Sources), CpdError> {
+        let table: Table = text.parse().map_err(|e: toml::de::Error| {
+            CpdError::new(ErrorCode::ConfigInvalid, format!("config.toml is not valid TOML: {}", e.message().trim_end()))
+                .with("path", path.display().to_string())
+        })?;
+        let mut r = Reader { table, path, sources: Sources::new() };
+        r.sections_are_tables(&["tiers", "timeouts", "watch", "events", "tmux"])?;
+
+        let version = r.require("version", |v| int(v, 1, 1))?;
+        let machine = r.require("machine", |v| MachineName::parse(text_of(&v)?).map_err(|e| e.message().to_owned()))?;
+        let concurrency = r.get("concurrency", 3, |v| int(v, 1, u32::MAX))?;
+        let retry_cap = r.get("retry_cap", 2, |v| int(v, 0, u32::MAX))?;
+        let lead_tier = r.get("lead_tier", Tier::parse("O3").expect("a valid Tier"), |v| {
+            Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
+        })?;
+        let lead_pi_packages = r.get(
+            "lead_pi_packages",
+            DEFAULT_LEAD_PI_PACKAGES.map(str::to_owned).to_vec(),
+            |v| match v {
+                Value::Array(items) => items.iter().map(|i| non_empty(text_of(i)?)).collect(),
+                other => Err(format!("must be an array of text, not {}", other.type_str())),
+            },
+        )?;
+        let pi_adapter = r.get("pi_adapter", String::new(), |v| {
+            let dir = text_of(&v)?;
+            if !dir.is_empty() && !Path::new(dir).join("package.json").is_file() {
+                return Err(format!("{dir:?} does not contain package.json"));
+            }
+            Ok(dir.to_owned())
+        })?;
+
+        let tiers = Tiers {
+            o: r.get("tiers.O", "github-copilot/claude-opus-5.5".into(), |v| model_ref(text_of(&v)?))?,
+            s: r.get("tiers.S", "github-copilot/claude-sonnet-5.5".into(), |v| model_ref(text_of(&v)?))?,
+            h: r.get("tiers.H", "github-copilot/claude-haiku-4.5".into(), |v| model_ref(text_of(&v)?))?,
+        };
+        let positive = |r: &mut Reader, key: &str, default: u32| r.get(key, default, |v| int(v, 1, u32::MAX));
+        let timeouts = Timeouts {
+            attempt_minutes: positive(&mut r, "timeouts.attempt_minutes", 30)?,
+            ask_minutes: positive(&mut r, "timeouts.ask_minutes", 60)?,
+            setup_minutes: positive(&mut r, "timeouts.setup_minutes", 15)?,
+            gate_minutes: positive(&mut r, "timeouts.gate_minutes", 30)?,
+            lock_wait_seconds: positive(&mut r, "timeouts.lock_wait_seconds", 900)?,
+            store_busy_ms: positive(&mut r, "timeouts.store_busy_ms", 5000)?,
+            fork_quiet_seconds: positive(&mut r, "timeouts.fork_quiet_seconds", 5)?,
+        };
+        let watch = Watch {
+            tick_seconds: positive(&mut r, "watch.tick_seconds", 5)?,
+            pr_poll_seconds: positive(&mut r, "watch.pr_poll_seconds", 120)?,
+            context_sync_seconds: positive(&mut r, "watch.context_sync_seconds", 300)?,
+        };
+        let events = Events { poll_ms: r.get("events.poll_ms", 200, |v| int(v, 20, 10_000))? };
+        let tmux = Tmux {
+            socket: r.get("tmux.socket", "cpd".into(), |v| tmux_name(text_of(&v)?))?,
+            cockpit_session: r.get("tmux.cockpit_session", "cpd".into(), |v| tmux_name(text_of(&v)?))?,
+            work_session: r.get("tmux.work_session", "cpd-work".into(), |v| tmux_name(text_of(&v)?))?,
+        };
+        if tmux.cockpit_session == tmux.work_session {
+            // The error names the later key, `work_session`, as the one to change.
+            let key = "tmux.work_session";
+            return Err(r.invalid(key, "must differ from tmux.cockpit_session"));
+        }
+
+        r.finish()?;
+        let sources = r.sources;
+        let config = Config {
+            version,
+            machine,
+            concurrency,
+            retry_cap,
+            lead_tier,
+            lead_pi_packages,
+            pi_adapter,
+            tiers,
+            timeouts,
+            watch,
+            events,
+            tmux,
+        };
+        Ok((config, sources))
+    }
+
+    /// The pi adapter package's directory: `pi_adapter`, else
+    /// `<dir of the cpd2 binary>/../share/cpd2/pi` (contract §8.2). Whether the
+    /// default exists is for `doctor` to say.
+    pub fn pi_adapter_dir(&self) -> Result<PathBuf, CpdError> {
+        if !self.pi_adapter.is_empty() {
+            return Ok(PathBuf::from(&self.pi_adapter));
+        }
+        let exe = std::env::current_exe().map_err(|e| {
+            CpdError::new(ErrorCode::ConfigInvalid, format!("cannot find the cpd2 binary to locate the pi adapter: {e}."))
+                .with("key", "pi_adapter")
+        })?;
+        let bin_dir = exe.parent().expect("an executable path has a parent");
+        Ok(bin_dir.join("..").join("share").join("cpd2").join("pi"))
+    }
+}
+
+/// Reads keys out of the parsed table, recording each one's source.
+struct Reader<'a> {
+    table: Table,
+    path: &'a Path,
+    sources: Sources,
+}
+
+impl Reader<'_> {
+    fn invalid(&self, key: &str, why: impl std::fmt::Display) -> CpdError {
+        CpdError::new(ErrorCode::ConfigInvalid, format!("config.toml: `{key}` {why}."))
+            .with("key", key)
+            .with("path", self.path.display().to_string())
+    }
+
+    fn sections_are_tables(&self, sections: &[&str]) -> Result<(), CpdError> {
+        for section in sections {
+            match self.table.get(*section) {
+                Some(Value::Table(_)) | None => {}
+                Some(other) => return Err(self.invalid(section, format!("must be a table, not {}", other.type_str()))),
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes and returns the value at `key` (`name` or `section.name`).
+    fn take(&mut self, key: &str) -> Option<Value> {
+        match key.split_once('.') {
+            None => self.table.remove(key),
+            Some((section, name)) => match self.table.get_mut(section) {
+                Some(Value::Table(t)) => t.remove(name),
+                _ => None,
+            },
+        }
+    }
+
+    /// The value at `key`, converted; the default when the file has no such key.
+    fn get<T>(&mut self, key: &str, default: T, convert: impl FnOnce(Value) -> Result<T, String>) -> Result<T, CpdError> {
+        match self.take(key) {
+            Some(value) => {
+                let converted = convert(value).map_err(|why| self.invalid(key, format!("is invalid: {why}")))?;
+                self.sources.insert(key.to_owned(), Source::File);
+                Ok(converted)
+            }
+            None => {
+                self.sources.insert(key.to_owned(), Source::Default);
+                Ok(default)
+            }
+        }
+    }
+
+    /// Like [`Reader::get`] for a key without a default.
+    fn require<T>(&mut self, key: &str, convert: impl FnOnce(Value) -> Result<T, String>) -> Result<T, CpdError> {
+        let Some(value) = self.take(key) else {
+            return Err(self.invalid(key, "is required but missing"));
+        };
+        let converted = convert(value).map_err(|why| self.invalid(key, format!("is invalid: {why}")))?;
+        self.sources.insert(key.to_owned(), Source::File);
+        Ok(converted)
+    }
+
+    /// Whatever is left in the table is a key cpd does not have.
+    fn finish(&self) -> Result<(), CpdError> {
+        for (name, value) in &self.table {
+            match value {
+                Value::Table(t) if KNOWN_SECTIONS.contains(&name.as_str()) => {
+                    if let Some(inner) = t.keys().next() {
+                        return Err(self.invalid(&format!("{name}.{inner}"), "is not a known key"));
+                    }
+                }
+                _ => return Err(self.invalid(name, "is not a known key")),
+            }
+        }
+        Ok(())
+    }
+}
+
+const KNOWN_SECTIONS: [&str; 5] = ["tiers", "timeouts", "watch", "events", "tmux"];
+
+fn text_of(value: &Value) -> Result<&str, String> {
+    match value {
+        Value::String(s) => Ok(s),
+        other => Err(format!("must be text, not {}", other.type_str())),
+    }
+}
+
+fn int(value: Value, min: u32, max: u32) -> Result<u32, String> {
+    match value {
+        Value::Integer(i) => match u32::try_from(i) {
+            Ok(n) if (min..=max).contains(&n) => Ok(n),
+            _ if max == u32::MAX => Err(format!("must be at least {min}, got {i}")),
+            _ if min == max => Err(format!("must be {min}, got {i}")),
+            _ => Err(format!("must be between {min} and {max}, got {i}")),
+        },
+        other => Err(format!("must be an integer, not {}", other.type_str())),
+    }
+}
+
+fn non_empty(s: &str) -> Result<String, String> {
+    if s.is_empty() { Err("must not contain an empty string".into()) } else { Ok(s.to_owned()) }
+}
+
+/// `^[^/\s]+/\S+$`: `<provider>/<model-id>`.
+fn model_ref(s: &str) -> Result<String, String> {
+    let ok = s.split_once('/').is_some_and(|(provider, id)| {
+        !provider.is_empty()
+            && !provider.chars().any(char::is_whitespace)
+            && !id.is_empty()
+            && !id.chars().any(char::is_whitespace)
+    });
+    if ok { Ok(s.to_owned()) } else { Err(format!("{s:?} is not <provider>/<model-id>")) }
+}
+
+/// `^[A-Za-z0-9_-]{1,32}$`.
+fn tmux_name(s: &str) -> Result<String, String> {
+    let ok = (1..=32).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if ok { Ok(s.to_owned()) } else { Err(format!("{s:?} is not 1-32 characters of A-Z a-z 0-9 _ -")) }
+}
