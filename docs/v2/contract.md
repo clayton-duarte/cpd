@@ -36,12 +36,13 @@ Evidence labels, as in the research notes: **verified** means run on the homeser
 
 ### 1.2 Output: one JSON value (D1)
 
-Every command prints exactly one JSON value on stdout, always; there is no `--json` flag and no human format.
+Every command prints exactly one JSON value on stdout, always, except the three that own their terminal (below); there is no `--json` flag and no human format.
 
 - Success: `{"ok": true, …}`, with the command's fields at the top level.
 - Failure: `{"ok": false, "error": {"code": "<snake_case>", "message": "<one sentence>", "details": {…}}}`.
 - Progress and debug text goes to stderr only.
 - **The one streaming command** is `cpd2 events follow`: it prints one complete JSON value per line, each line an Event (§5.4), as the approved outline specifies. If it fails, its last line is a failure value as above.
+- **Commands that own their terminal** print no JSON value on success: `cpd2 session run` and `cpd2 tui view` (internal) run pi or draw a ratatui view in their pane, and `cpd2 tui --attach` replaces itself with `tmux attach` (the outline's "builds and attaches the cockpit"). If one fails before taking the terminal, it prints the failure value and exits with its code. `cpd2 tui` without `--attach` prints one JSON value like every command.
 
 Exit codes (kept from cpd 1 §2):
 
@@ -53,6 +54,15 @@ Exit codes (kept from cpd 1 §2):
 | `3` | refused by an invariant: Locked, an illegal transition, a precondition | `job_locked`, `illegal_transition`, `dirty_tree`, `cas_lost` |
 | `4` | not found | `plan_not_found`, `job_not_found`, `session_not_found` |
 | `5` | timeout | `store_busy`, `lock_timeout`, `ask_timeout` |
+
+`commands.md` introduces more codes, most of them cpd 1's (cpd 1 §11 and its `src/`); each is specified at the command that returns it, under the same exit meanings:
+
+| Exit | Codes |
+|---|---|
+| `1` | `context_store_invalid`, `watch_start_failed`, `spawn_failed`, `session_malformed`, `driver_lock_missing`, `doctor_failed`, `pi_not_found`, `catalog_failed` |
+| `2` | `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `spec_invalid`, `tier_invalid`, `nothing_to_edit`, `file_unreadable`, `invalid_name` |
+| `3` | `context_exists`, `question_answered`, `not_a_git_repo`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `job_merged`, `job_not_failed`, `job_not_ready`, `attempt_not_running`, `not_awaiting_review`, `jobs_not_done`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `cursor_ahead`, `not_a_terminal` |
+| `4` | `base_not_found` |
 
 ### 1.3 Conventions every command follows
 
@@ -79,6 +89,9 @@ $CPD_HOME/
   run/
     watch.log                     the engine's stderr
     <plan>/plan.md                the last `plan render`
+    <plan>/lead-message.md        the Lead's first message, written by `plan new`
+    <plan>/plan-<review>.md       the Plan review's content, written by `plan review`, opened in plannotator by the pi adapter
+    <plan>/messages/<session>.md  a forked Session's first message, copied by `session fork --message-file`
     <plan>/specs/<attempt>.md     rendered Worker Spec
     <plan>/reviews/<attempt>.md   review brief; .diff, .check.txt, .gate.txt beside it
     <plan>/logs/attempt-<attempt>.log      the Attempt driver's stderr
@@ -1015,8 +1028,8 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 ### 5.3 Delivery by the pi adapter
 
 The pi adapter (TypeScript in `pi/`, loaded in every pi session cpd starts, §6.5) follows the Events **for its Session**:
-- for a Lead of Plan P in Context C: Events with `plan = P`; Events with `plan IS NULL AND context = C`; Events with `session` = itself;
-- for a Worker or Reviewer: Events with `session` = itself (only `attempt-nudge` and `session-renamed` are ever addressed so).
+- for the Session that is Plan P's `lead_session` (Context C): Events with `plan = P`; Events with `plan IS NULL AND context = C`; Events with `session` = itself;
+- for any other Session (a Worker, a Reviewer, a side fork of a Lead, a grounded Lead): Events with `session` = itself (for a Worker or Reviewer only `attempt-nudge` and `session-renamed` are ever addressed so).
 
 It delivers a message with `pi.sendMessage({customType: "cpd", content: text, display: true, details: event}, {triggerTurn, deliverAs: "followUp"})` (cpd 1 §15, kept). It never types into a pane.
 
@@ -1031,6 +1044,7 @@ It delivers a message with `pi.sendMessage({customType: "cpd", content: text, di
 | `all-merged` | message, **turn** | |
 | `pr-feedback` | message, **turn** | |
 | `plan-done` | message, **turn** | |
+| `plan-review` with `status: pending` | opens plannotator in the Plan Lead's adapter; no message | |
 | `error` | message, **turn** | |
 | `job-cancelled` | message, no turn (it may come from the engine, after a request) | |
 | `session-renamed` (own session) | no message, no turn: `pi.setSessionName(name)` and a one-line notice (cpd 1 §10, kept) | same |
@@ -1039,11 +1053,11 @@ It delivers a message with `pi.sendMessage({customType: "cpd", content: text, di
 
 The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-done` → `plan-done` and `rename` → `session-renamed`.
 
-**No loss, no duplicates.** The adapter's cursor is the highest Event id it has delivered, which it reads back at `session_start` from its own session file (the `details.id` of the last `cpd` custom message), else the `id` of the Session's `session-registered` Event. It runs `cpd2 events follow --session <id> --since <cursor>` and restarts it with the latest cursor if it exits. The exact protocol (activation, errors, the Plan review through plannotator) is in `commands.md`.
+**No loss, no duplicates.** The adapter's cursor is the highest Event id it has delivered, which it reads back at `session_start` from its own session file (the `details.id` of the last `cpd` custom message whose `details.delivered_to` is this Session), else the `id` of the Session's `session-registered` Event, whichever is greater. The adapter adds `delivered_to` (the Session's id) to the `details` of every message it delivers, so the cursor counts only messages delivered to this Session and never one at or below its `session-registered` Event: a fork's session file starts with its source's messages, whose Event ids belong to the source's stream. It runs `cpd2 events follow --session <id> --since <cursor>` and restarts it with the latest cursor if it exits. The exact protocol (activation, errors, the Plan review through plannotator) is in `commands.md`.
 
 ### 5.4 `cpd2 events follow`
 
-- **Selection:** `--plan <id>`, `--context <id>`, `--session <id>` (the rule of §5.3) or none (every Event); `--kind <k>` may repeat.
+- **Selection:** `--plan <id>`, `--context <id>`, `--session <id>` (the rule of §5.3: the Plan's `lead_session` follows its Plan, its Context and itself; any other Session only Events addressed to itself) or none (every Event); `--kind <k>` may repeat.
 - **Since:** `--since <id>` is exclusive: the first line printed is the first matching Event with an id greater than it. Without `--since`, it starts after the current highest id (only new Events). `--since 0` replays everything.
 - **Order:** strictly increasing `id`, which is commit order (§4.2). Each line is one Event as JSON (the fields of §5.2, `data` as an object).
 - **Mechanism: polling, no notification channel.** Every `events_poll_ms` the follower reads `PRAGMA data_version`; when it has changed since the last read, it runs `SELECT … FROM events WHERE id > :cursor AND <filter> ORDER BY id LIMIT 500` in a fresh read transaction, prints each row, flushes, and advances the cursor. It repeats the query at once while it returns a full batch. `data_version` costs no I/O when nothing has changed, so an idle follower is cheap (docs: SQLite `PRAGMA data_version`).
@@ -1083,7 +1097,7 @@ The pane border format and column titles belong to the TUI (`tui/`), not to this
 | `cpd-work` | `<plan>--<attempt>` (one per Attempt) | pane 0 Worker; pane 1 Reviewer, split from the Worker's pane | `pi` for each |
 
 - `<label>` is the Session's Plan id, or the first 8 characters of its id when it has no Plan. tmux targets are always pane ids (`%<n>`) or window ids (`@<n>`), never names; names are labels for people.
-- **Pane options** identify panes, never state: `@cpd_session` (Session id) on every pane that runs a Session, and `@cpd_view` (`tree`, `plan`, `widgets`, `worker`) on the TUI's panes. The chat slot is the pane of `cpd:main` that has `@cpd_session`. Pane options move with the pane on `swap-pane`, which is why the chat slot is found by that rule and not by a fixed option.
+- **Pane options** identify panes, never state: `@cpd_session` (Session id) on every pane that runs a Session, and `@cpd_view` (`tree`, `plan`, `widgets`, `worker`, `chat`) on the TUI's panes. The chat slot is the pane of `cpd:main` that has `@cpd_session` **or** `@cpd_view = chat`. The value `chat` marks the **placeholder**: the pane running `cpd2 tui view chat`, text `No Lead here: pick a Plan in the session tree`, which holds the slot while no Lead is there. At most one placeholder exists, and only ever in the slot. Pane options move with the pane on `swap-pane`, which is why the chat slot is found by that rule and not by a fixed option.
 - The User attaches with `tmux -L cpd attach -t cpd` (locally or `ssh -t <host> …`). Several clients may attach at once. The User never needs to look at `cpd-work`.
 
 ### 6.3 tmux commands cpd uses
@@ -1096,6 +1110,7 @@ The pane border format and column titles belong to the TUI (`tui/`), not to this
 | the Reviewer pane | `split-window -d -h -t <worker pane> -c <cwd> -e K=V … -P -F '#{pane_id}' -- <argv…>` |
 | bring a Lead into the chat slot | `swap-pane -d -s <parked pane> -t <chat slot pane>` (verified: both processes keep their pids, the slot keeps its size), then `rename-window -t <window id> park-<label>` for the window that now holds the displaced Lead |
 | liveness | `list-panes -a -F '#{pane_id} #{window_id} #{session_name} #{pane_dead} #{pane_dead_status} #{pane_pid} #{@cpd_session}'` |
+| a dead pane of the cockpit's layout | `respawn-pane` |
 | closing | `kill-pane -t <pane>`; `kill-window -t <window id>` |
 
 ### 6.4 Where everything runs
@@ -1109,13 +1124,13 @@ The pane border format and column titles belong to the TUI (`tui/`), not to this
 | `cpd2 watch` | `cpd-work`, window `watch` | `plan lock`, `cpd2 tui` and `cpd2 watch --ensure`: each starts it when `locks/watch.lock` is free |
 | Attempt drivers | detached processes (`setsid`), not in tmux; logs in `run/<plan>/logs/` | E3 |
 
-`session open <id>` brings a Lead into the chat slot; `session park <id>` moves the Lead in the chat slot back into a parked window. Each appends `session-moved` for every Session whose place changed.
+`session open <id>` brings a Lead into the chat slot; `session park <id>` moves the Lead in the chat slot back into a parked window: it creates a new `park-<label>` window holding a placeholder, then `swap-pane`s the Lead and the placeholder. When a Lead takes the slot, `session open` kills the placeholder pane it displaced, with its window. Each appends `session-moved` for every Session whose place changed.
 
 ### 6.5 How cpd starts pi
 
 | Role | argv (after `pi`) | Environment added |
 |---|---|---|
-| Lead (fresh) | `--model <tiers[L]>:<level of lead_tier> [-e …] --session-id <id> -n <name> -- <first message>` | `CPD_HOME`, `CPD_SESSION=<id>`, `CPD_PLAN=<plan>`, `PLANNOTATOR_DATA_DIR=$CPD_HOME/run/<plan>/plannotator`, `PLANNOTATOR_UPDATE_CHECK=0` |
+| Lead (fresh) | `--model <tiers[L]>:<level of lead_tier> [-e …] --session-id <id> -n <name> -- <first message>` | `CPD_HOME`, `CPD_SESSION=<id>`, `CPD_PLAN=<plan>`, `PLANNOTATOR_DATA_DIR=$CPD_HOME/run/<plan>/plannotator`, `PLANNOTATOR_UPDATE_CHECK=0`, and `PLANNOTATOR_PORT` and `PLANNOTATOR_REMOTE` from cpd's own environment when set (passed with `-e`, so several Plan reviews can be open at once) |
 | Lead (fork) | `--fork <source file>` added to the above (§6.7) | same |
 | Lead (resume) | `--session <file>` and the `[-e …]` arguments, no first message | same |
 | Worker | `--approve --no-skills --exclude-tools ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox [-e …] --model <model:level> --session-id <id> -n "<plan> <job> a<n>" -- "Read <spec path> and follow it exactly. Your attempt id is <attempt>."` | `CPD_HOME`, `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT` |

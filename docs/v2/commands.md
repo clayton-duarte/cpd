@@ -1407,6 +1407,8 @@ Change from the spike and cpd 1's cockpit: the tree no longer discovers Sessions
 
 ## 19. Amendments to contract.md
 
+Applied to contract.md by Job contract-amend.
+
 This file specifies the following, which contract.md does not state or states otherwise. contract.md is not edited by this Job; the Lead appends a follow-up Job that applies this list. Each item names the contract.md section it changes.
 
 | # | contract.md section | Amendment | Where here |
