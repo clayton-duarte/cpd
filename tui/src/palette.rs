@@ -56,15 +56,17 @@ impl Meaning {
     }
 }
 
+/// One colour per meaning, with one deliberate exception: grounding (phase `context`) and not started share white,
+/// since a Workflow that is still grounding has nothing running yet.
 pub fn color(m: Meaning) -> Color {
     match m {
         Meaning::NotStarted => Color::White,
         Meaning::InProgress => Color::Cyan,
         Meaning::Review => Color::Yellow,
-        Meaning::Done => Color::Green,
+        Meaning::Done => Color::Blue,
         Meaning::Failed => Color::Red,
         Meaning::Planning => Color::Magenta,
-        Meaning::Grounding => Color::Blue,
+        Meaning::Grounding => Color::White,
         Meaning::Nothing => Color::DarkGray,
     }
 }
@@ -184,10 +186,10 @@ mod tests {
             (Meaning::NotStarted, Color::White),
             (Meaning::InProgress, Color::Cyan),
             (Meaning::Review, Color::Yellow),
-            (Meaning::Done, Color::Green),
+            (Meaning::Done, Color::Blue),
             (Meaning::Failed, Color::Red),
             (Meaning::Planning, Color::Magenta),
-            (Meaning::Grounding, Color::Blue),
+            (Meaning::Grounding, Color::White),
             (Meaning::Nothing, Color::DarkGray),
         ];
         assert_eq!(table.map(|(m, _)| m), Meaning::ALL);

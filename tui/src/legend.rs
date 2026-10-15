@@ -88,8 +88,9 @@ fn sections() -> Vec<Section> {
             ]
         })
         .collect();
-    let sample = Workflow { phase: "dispatch".into(), counts: [1, 1, 2, 3, 0] };
-    jobs.push(vec![plain("counters row"), context::counters(&sample), Line::from("queued⋅running⋅in review⋅merged⋅failed").style(Style::new().add_modifier(Modifier::DIM))]);
+    let sample = Workflow { phase: "dispatch".into(), counts: [1, 1, 2, 0, 3] };
+    let order = context::counter_statuses("dispatch").map(|status| palette::JOB_LEGEND.iter().find(|(_, s)| *s == status).expect("a legend name for every counter status").0).join("⋅");
+    jobs.push(vec![plain("counters row"), context::counters(&sample), Line::from(order).style(Style::new().add_modifier(Modifier::DIM))]);
     let jobs = Section { title: "Jobs: Plan pills and Context counters", header: Some(["status", "Plan pill", "counter"]), rows: jobs };
     let dots = Section {
         title: "Context dots: ● needs you, ○ does not; the colour is the Workflow's phase",
@@ -203,7 +204,8 @@ mod tests {
             let counter = row.chars().collect::<Vec<_>>().iter().rposition(|c| *c == '3').expect(name) as u16;
             assert_eq!(fg(&buf, (counter, y)), palette::color(palette::job_status(status).1), "{name}: counter");
         }
-        assert!(row_text(&buf, find(&buf, "counters row").1).contains("1⋅1⋅2⋅3⋅0"));
+        assert!(row_text(&buf, find(&buf, "counters row").1).contains("1⋅1⋅2⋅0⋅3"));
+        assert!(row_text(&buf, find(&buf, "counters row").1).contains("queued⋅running⋅in review⋅failed⋅merged"));
     }
 
     #[test]

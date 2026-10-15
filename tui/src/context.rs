@@ -31,7 +31,7 @@ const INDENT: usize = 2;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Workflow {
     pub phase: String,
-    /// Jobs per status, in the fixed order: queued (drafts in phase `plan`), running, in review, merged, failed.
+    /// Jobs per status, in the fixed order: queued (drafts in phase `plan`), running, in review, failed, merged.
     pub counts: [usize; 5],
 }
 
@@ -64,8 +64,9 @@ pub fn busiest(sessions: &[SessionRow]) -> Option<&'static str> {
 }
 
 /// The Job status each counter counts, in order; the first is the queued Jobs, in phase `plan` the drafts.
-fn counter_statuses(phase: &str) -> [&'static str; 5] {
-    [if phase == "plan" { "draft" } else { "queued" }, "running", "in_review", "closed", "failed"]
+/// The one source of the counters' order: `counters`, `count_jobs` and the legend's label all follow it.
+pub fn counter_statuses(phase: &str) -> [&'static str; 5] {
+    [if phase == "plan" { "draft" } else { "queued" }, "running", "in_review", "failed", "closed"]
 }
 
 /// The five counters from a Workflow's phase and its Jobs' statuses. Cancelled Jobs are not counted;
@@ -80,7 +81,7 @@ pub fn count_jobs<'a>(phase: &str, statuses: impl IntoIterator<Item = &'a str>) 
     counts
 }
 
-/// `36⋅0⋅0⋅5⋅1`: each count in its status colour (nothing when zero; the drafts of phase `plan` always), `⋅` between.
+/// `36⋅0⋅0⋅1⋅5`: each count in its status colour (nothing when zero; the drafts of phase `plan` always), `⋅` between.
 pub fn counters(w: &Workflow) -> Line<'static> {
     let mut spans = Vec::new();
     for (i, (n, status)) in w.counts.iter().zip(counter_statuses(&w.phase)).enumerate() {
@@ -235,9 +236,9 @@ mod tests {
             ContextRow {
                 name: "cpd".into(),
                 sessions: vec![
-                    session("a", "v1", Some("done"), [36, 0, 0, 5, 1]),
-                    SessionRow { needs_you: true, ..session("b", "cpd rust lead", Some("dispatch"), [0, 1, 0, 1, 0]) },
-                    session("c", "cpd-ui", Some("pr"), [1, 0, 2, 3, 0]),
+                    session("a", "v1", Some("done"), [36, 0, 0, 1, 5]),
+                    SessionRow { needs_you: true, ..session("b", "cpd rust lead", Some("dispatch"), [0, 1, 0, 0, 1]) },
+                    session("c", "cpd-ui", Some("pr"), [1, 0, 2, 0, 3]),
                 ],
             },
             ContextRow { name: "other".into(), sessions: vec![session("d", "scratch", None, [0; 5])] },
@@ -285,9 +286,9 @@ mod tests {
         let rows = sample();
         let buf = render(&rows, &mut state_for(&rows, &[], &[]), 38, 6);
         assert_eq!(text(&buf, 0), "● cpd");
-        assert_eq!(text(&buf, 1), row("  ├ ○ v1", "36⋅0⋅0⋅5⋅1", 38));
-        assert_eq!(text(&buf, 2), row("  ├ ● cpd rust lead", "0⋅1⋅0⋅1⋅0", 38));
-        assert_eq!(text(&buf, 3), row("  └ ○ cpd-ui", "1⋅0⋅2⋅3⋅0", 38));
+        assert_eq!(text(&buf, 1), row("  ├ ○ v1", "36⋅0⋅0⋅1⋅5", 38));
+        assert_eq!(text(&buf, 2), row("  ├ ● cpd rust lead", "0⋅1⋅0⋅0⋅1", 38));
+        assert_eq!(text(&buf, 3), row("  └ ○ cpd-ui", "1⋅0⋅2⋅0⋅3", 38));
         assert_eq!(text(&buf, 4), "○ other");
         assert_eq!(text(&buf, 5), "  └ ○ scratch");
     }
@@ -323,15 +324,17 @@ mod tests {
         let buf = render(&rows, &mut state_for(&rows, &[], &[]), 20, 2);
         assert_eq!(text(&buf, 1), row("  └ ○ p", "4⋅0⋅0⋅0⋅0", 20));
         assert_eq!(fg(&buf, 14, 1), color(Meaning::Nothing));
+        assert_eq!(counter_statuses("dispatch"), ["queued", "running", "in_review", "failed", "closed"]);
+        assert_eq!(counter_statuses("plan")[0], "draft");
         assert_eq!(count_jobs("plan", ["draft", "draft", "queued", "cancelled", "running"]), [2, 1, 0, 0, 0]);
-        assert_eq!(count_jobs("dispatch", ["draft", "queued", "queued", "cancelled", "in_review", "closed", "failed"]), [2, 0, 1, 1, 1]);
+        assert_eq!(count_jobs("dispatch", ["draft", "queued", "queued", "cancelled", "in_review", "closed", "closed", "failed"]), [2, 0, 1, 1, 2]);
     }
 
     #[test]
     fn a_long_name_is_cut_with_an_ellipsis_and_the_counters_stay_right_aligned() {
-        let rows = vec![ContextRow { name: "c".into(), sessions: vec![session("a", "a very long session name indeed", Some("dispatch"), [36, 0, 0, 5, 1])] }];
+        let rows = vec![ContextRow { name: "c".into(), sessions: vec![session("a", "a very long session name indeed", Some("dispatch"), [36, 0, 0, 1, 5])] }];
         let buf = render(&rows, &mut state_for(&rows, &[], &[]), 30, 2);
-        assert_eq!(text(&buf, 1), row("  └ ○ a very long …", "36⋅0⋅0⋅5⋅1", 30));
+        assert_eq!(text(&buf, 1), row("  └ ○ a very long …", "36⋅0⋅0⋅1⋅5", 30));
         assert_eq!(truncate("abc", 3), "abc");
         assert_eq!(truncate("abcd", 3), "ab…");
         assert_eq!(truncate("abcd", 0), "");
@@ -366,7 +369,7 @@ mod tests {
         // counters "1⋅2⋅3⋅4⋅5" occupy the last 9 columns
         let at = |i: u16| 11 + 2 * i;
         let colours: Vec<Color> = (0..5).map(|i| fg(&buf, at(i), 1)).collect();
-        assert_eq!(colours, [color(Meaning::NotStarted), color(Meaning::InProgress), color(Meaning::Review), color(Meaning::Done), color(Meaning::Failed)]);
+        assert_eq!(colours, [color(Meaning::NotStarted), color(Meaning::InProgress), color(Meaning::Review), color(Meaning::Failed), color(Meaning::Done)]);
         assert!((0..4).all(|i| fg(&buf, at(i) + 1, 1) == color(Meaning::Nothing)));
         assert!((0..5).all(|i| fg(&buf, at(i), 2) == color(Meaning::Nothing)));
     }
@@ -456,7 +459,7 @@ mod tests {
         let mut rows = sample();
         rows[0].sessions[2].active = true;
         let buf = render(&rows, &mut state_for(&rows, &[], &[]), 38, 6);
-        assert_eq!(text(&buf, 3), row("⏵ └ ○ cpd-ui", "1⋅0⋅2⋅3⋅0", 38));
+        assert_eq!(text(&buf, 3), row("⏵ └ ○ cpd-ui", "1⋅0⋅2⋅0⋅3", 38));
         for y in [0, 1, 2, 4, 5] {
             assert!(!text(&buf, y).contains(ACTIVE_MARK), "row {y}");
         }
