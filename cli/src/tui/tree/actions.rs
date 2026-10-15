@@ -1,31 +1,37 @@
-//! The tree's actions (commands.md §13.2, §17): the views change state only by
+//! The tree's actions (commands.md §13.2, §17): the view changes state only by
 //! running `cpd2` commands as subprocesses. `cpd2` is resolved on `PATH`, as in
-//! every pane cpd starts ([`PROGRAM`]).
+//! every pane cpd starts ([`PROGRAM`]). Besides those, it lays out the cockpit
+//! as the reference does: a Session opened in the chat slot gets the focus
+//! (`select-pane`), and `?` opens the legend popup.
 //!
 //! Text the User typed is passed as `--flag=value`, so a value that starts with
-//! `-` is still a value; a name given to `session rename` follows `--`.
+//! `-` is still a value.
 
 use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
-use crate::args::Name;
+use crate::config::Config;
+use crate::host::layout::MAIN_WINDOW;
+use crate::host::{Tmux, chat_slot};
 use crate::ids::{ContextId, PlanId, SessionId};
 use crate::session::PROGRAM;
+use crate::tui::widgets::open_legend;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
-    /// `session open <id>`: bring a Lead into the chat slot (§10.4).
+    /// `session open <id>` (§10.4), then the focus on the chat slot: Enter, or a click on a Session.
     Open(SessionId),
-    /// `session park <id>`: move a Lead out of the chat slot (§10.5).
-    Park(SessionId),
-    /// `session fork <source> [--name=<name>]`: a side fork of a Plan's Lead (§10.3).
-    Fork { source: SessionId, name: Option<Name> },
-    /// `session rename --session <id> -- <name>` (§10.7).
-    Rename { session: SessionId, name: Name },
-    /// `plan new <id> --context=<c> --repo=<path> --title=<text>` (§4.1): the Lead forks the Context's grounded Lead.
-    NewPlan { context: ContextId, id: PlanId, title: String, repo: String },
+    /// `plan new <id> --context=<c> --repo=<path> --title=<id>` (§4.1): `n`. The Lead forks the Context's grounded
+    /// Lead (R15).
+    NewPlan { context: ContextId, id: PlanId, repo: String },
+    /// `session close <id>` (§10.9): `x`.
+    Close(SessionId),
 }
+
+/// The refusal of `x` on the Session in the chat slot (the reference's), also when `session close` refuses it
+/// because it moved there while the prompt was open.
+pub const IN_CHAT_SLOT: &str = "switch to another session first";
 
 impl Action {
     /// The arguments of `cpd2`.
@@ -33,38 +39,72 @@ impl Action {
         let words = |w: &[&str]| w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         match self {
             Action::Open(id) => words(&["session", "open", id.as_str()]),
-            Action::Park(id) => words(&["session", "park", id.as_str()]),
-            Action::Fork { source, name } => {
-                let mut argv = words(&["session", "fork", source.as_str()]);
-                argv.extend(name.iter().map(|n| format!("--name={n}")));
-                argv
-            }
-            Action::Rename { session, name } => words(&["session", "rename", "--session", session.as_str(), "--", name.as_str()]),
-            Action::NewPlan { context, id, title, repo } => {
+            Action::NewPlan { context, id, repo } => {
                 let mut argv = words(&["plan", "new", id.as_str()]);
-                argv.extend([format!("--context={context}"), format!("--repo={repo}"), format!("--title={title}")]);
+                argv.extend([format!("--context={context}"), format!("--repo={repo}"), format!("--title={id}")]);
                 argv
             }
+            Action::Close(id) => words(&["session", "close", id.as_str()]),
         }
     }
 
-    /// The note after the command succeeded, from its reply.
+    /// The note after the command succeeded, from its reply: the reference's words.
     pub fn done(&self, reply: &Value) -> String {
-        let already = reply["already"] == true;
         match self {
-            Action::Open(_) if already => "already in the chat slot".into(),
-            Action::Open(_) => "opened".into(),
-            Action::Park(_) if already => "not in the chat slot".into(),
-            Action::Park(_) => "parked".into(),
-            Action::Fork { .. } => format!("forked as {}", reply["session"]["name"].as_str().unwrap_or("?")),
-            Action::Rename { name, .. } => format!("renamed to {name}"),
-            Action::NewPlan { id, .. } => format!("Plan {id} started"),
+            Action::Open(_) => String::new(),
+            Action::NewPlan { id, .. } => format!("forking {id} in window park-{id}"),
+            Action::Close(_) if reply["already"] == true => "session is already gone".into(),
+            Action::Close(_) => "closed".into(),
+        }
+    }
+
+    /// The note after the command failed with `code` and `message`.
+    pub fn failed(&self, code: &str, message: &str) -> String {
+        match (self, code) {
+            (Action::Close(_), "in_chat_slot") => IN_CHAT_SLOT.into(),
+            _ => format!("{code}: {message}"),
         }
     }
 }
 
-/// Runs the action: its note, or the message of the error it printed (or why it could not run).
-pub fn run(action: &Action) -> Result<String, String> {
+/// Runs actions against the cockpit of `config`.
+pub struct Runner {
+    tmux: Tmux,
+    cockpit: String,
+}
+
+impl Runner {
+    pub fn new(config: &Config) -> Runner {
+        Runner { tmux: Tmux::new(config.tmux.socket.clone()), cockpit: config.tmux.cockpit_session.clone() }
+    }
+
+    /// Runs the action: its note, or why it failed.
+    pub fn run(&self, action: &Action) -> Result<String, String> {
+        let note = command(action)?;
+        if matches!(action, Action::Open(_)) {
+            self.focus_chat().map_err(|e| e.message().to_owned())?;
+        }
+        Ok(note)
+    }
+
+    /// `select-pane` on the chat slot, so typing goes to the chat (the reference's `switch_to`).
+    fn focus_chat(&self) -> Result<(), crate::error::CpdError> {
+        let panes: Vec<_> =
+            self.tmux.list_panes()?.into_iter().filter(|p| p.session_name == self.cockpit && p.window_name == MAIN_WINDOW).collect();
+        if let Some(chat) = chat_slot(&panes, &self.cockpit) {
+            self.tmux.run(&["select-pane", "-t", chat.pane.as_str()].map(str::to_owned))?;
+        }
+        Ok(())
+    }
+
+    /// `?`: the legend popup; returns when it closes.
+    pub fn legend(&self) -> Result<(), String> {
+        open_legend(&self.tmux).map_err(|e| e.message().to_owned())
+    }
+}
+
+/// Runs the command of `action`: its note, or the message of the error it printed (or why it could not run).
+fn command(action: &Action) -> Result<String, String> {
     let output = Command::new(PROGRAM)
         .args(action.argv())
         .stdin(Stdio::null())
@@ -78,7 +118,7 @@ pub fn run(action: &Action) -> Result<String, String> {
         Ok(action.done(&reply))
     } else {
         let error = &reply["error"];
-        Err(format!("{}: {}", error["code"].as_str().unwrap_or("error"), error["message"].as_str().unwrap_or("failed")))
+        Err(action.failed(error["code"].as_str().unwrap_or("error"), error["message"].as_str().unwrap_or("failed")))
     }
 }
 
@@ -94,24 +134,12 @@ mod tests {
 
     #[test]
     fn each_action_is_one_command_of_the_contract() {
-        let name = |n: &str| n.parse::<Name>().unwrap();
         let cases = [
             (Action::Open(sid("l-ship")), vec!["session", "open", "l-ship"]),
-            (Action::Park(sid("l-ship")), vec!["session", "park", "l-ship"]),
-            (Action::Fork { source: sid("l-ship"), name: None }, vec!["session", "fork", "l-ship"]),
-            (Action::Fork { source: sid("l-ship"), name: Some(name("my fork")) }, vec!["session", "fork", "l-ship", "--name=my fork"]),
+            (Action::Close(sid("l-ship")), vec!["session", "close", "l-ship"]),
             (
-                Action::Rename { session: sid("l-ship"), name: name("-odd") },
-                vec!["session", "rename", "--session", "l-ship", "--", "-odd"],
-            ),
-            (
-                Action::NewPlan {
-                    context: ContextId::parse("alpha").unwrap(),
-                    id: PlanId::parse("pay-4521").unwrap(),
-                    title: "Retry failed payouts".into(),
-                    repo: "/work/pay".into(),
-                },
-                vec!["plan", "new", "pay-4521", "--context=alpha", "--repo=/work/pay", "--title=Retry failed payouts"],
+                Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay-4521").unwrap(), repo: "/work/pay".into() },
+                vec!["plan", "new", "pay-4521", "--context=alpha", "--repo=/work/pay", "--title=pay-4521"],
             ),
         ];
         for (action, argv) in cases {
@@ -120,12 +148,21 @@ mod tests {
     }
 
     #[test]
-    fn the_note_says_what_the_reply_says() {
+    fn the_note_says_what_the_reference_says() {
         let open = Action::Open(sid("l-ship"));
-        assert_eq!(open.done(&json!({"ok": true, "session": "l-ship", "pane": "%1", "displaced": null})), "opened");
-        assert_eq!(open.done(&json!({"ok": true, "already": true})), "already in the chat slot");
-        assert_eq!(Action::Park(sid("l-ship")).done(&json!({"ok": true, "already": true})), "not in the chat slot");
-        let fork = Action::Fork { source: sid("l-ship"), name: None };
-        assert_eq!(fork.done(&json!({"ok": true, "session": {"name": "ship (fork)"}})), "forked as ship (fork)");
+        assert_eq!(open.done(&json!({"ok": true, "session": "l-ship", "pane": "%1", "displaced": null})), "");
+        let close = Action::Close(sid("l-ship"));
+        assert_eq!(close.done(&json!({"ok": true, "session": "l-ship", "pane": "%4"})), "closed");
+        assert_eq!(close.done(&json!({"ok": true, "already": true})), "session is already gone");
+        let new = Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay").unwrap(), repo: "/r".into() };
+        assert_eq!(new.done(&json!({"ok": true})), "forking pay in window park-pay");
+    }
+
+    #[test]
+    fn closing_the_session_in_the_chat_slot_is_refused_in_the_references_words() {
+        let close = Action::Close(sid("l-ship"));
+        assert_eq!(close.failed("in_chat_slot", "It is in the chat slot."), IN_CHAT_SLOT);
+        assert_eq!(close.failed("not_a_lead", "Not a Lead."), "not_a_lead: Not a Lead.");
+        assert_eq!(Action::Open(sid("l-ship")).failed("in_chat_slot", "x"), "in_chat_slot: x");
     }
 }
