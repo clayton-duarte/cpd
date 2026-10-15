@@ -4,7 +4,7 @@ Read this first, then [contract.md](contract.md), [commands.md](commands.md) and
 
 ## The one-area rule
 
-Each Job edits **only its own area** (`cli/src/<area>/`) **plus its tests** (`cli/tests/<area>*.rs`, and deleting its own lines from `PENDING` in `cli/tests/command_index.rs`). It does not edit `cli/src/lib.rs`, `cli/src/cli.rs`, the shared modules (`error.rs`, `output.rs`, `ids.rs`, `args.rs`, `home.rs`), `cli/tests/common/`, another area, `Cargo.toml` or `Cargo.lock`. This is how parallel Jobs merge without conflicts. Need a change outside your area: ask the Lead (`cpd ask`), don't make it.
+Each Job edits **only its own area** (`cli/src/<area>/`) **plus its tests** (`cli/tests/<area>*.rs`). It does not edit `cli/src/lib.rs`, `cli/src/cli.rs`, the shared modules (`error.rs`, `output.rs`, `ids.rs`, `args.rs`, `home.rs`), `cli/tests/common/`, another area, `Cargo.toml` or `Cargo.lock`. This is how parallel Jobs merge without conflicts. Need a change outside your area: ask the Lead (`cpd ask`), don't make it.
 
 Within your area you may add files (`cli/src/<area>/foo.rs`, declared in your `mod.rs`) and use any other area's public items once that area has landed.
 
@@ -42,12 +42,12 @@ Within your area you may add files (`cli/src/<area>/foo.rs`, declared in your `m
 
 ## The command tree
 
-`cli/src/cli.rs` holds the root `Command` enum; each variant delegates to its area (`context::run(cmd)`, `watch::run(args)`, …). Each area owns its subcommand enum and its argument types. Until a command lands, its arguments are `cli::Pending`, which accepts anything, so the command fails with `not_implemented` whatever it is given.
+`cli/src/cli.rs` holds the root `Command` enum; each variant delegates to its area (`context::run(cmd)`, `watch::run(args)`, …). Each area owns its subcommand enum and its argument types. Every command of commands.md §2 is implemented, and `every_documented_command_exists` (`cli/tests/command_index.rs`) fails when one is documented but absent from the tree.
 
-To implement a command:
-1. In your module, replace `Pending` (or the `pub type … = Pending` alias) with your own `#[derive(clap::Args)]` struct. Keep the type's name when the root or another area names it (`watch::Args`, `config::ConfigArgs`, `driver::RunArgs`, …).
+To add a command:
+1. In your module, define its arguments as a `#[derive(clap::Args)]` struct, and name it from the root or the area's subcommand enum (`watch::Args`, `config::ConfigArgs`, `driver::RunArgs`, …).
 2. Make `run` return `Ok(Output::success(json!({…})))` or `Err(CpdError::…)`.
-3. Delete the command's line(s) from `PENDING` in `cli/tests/command_index.rs` and test it in your own test file. `every_documented_command_exists` keeps checking that it exists.
+3. Test it in your own test file.
 
 Parsing:
 - `--help` and `--version` print one JSON value too: `{"ok": true, "help": "<text>"}` and `{"ok": true, "version": "…"}`.
@@ -59,7 +59,6 @@ Parsing:
 - **`error::CpdError`** (`cli/src/error.rs`): `CpdError::new(ErrorCode::CasLost, "One sentence.").with("attempt", id.to_string())`. Printed as `{"ok": false, "error": {"code", "message", "details"}}`; `details` is always an object. `to_json()` gives the `error` object alone, the shape of an `error` Event's data (add `source` there).
 - **`error::ErrorCode`**: every code of contract.md and commands.md, each with its exit code (`Exit`: 1 failure, 2 usage, 3 refused, 4 not found, 5 timeout). A code cannot be printed with the wrong exit.
 - **Adding an error code:** the documents name every code; use those. If you truly need a new one, ask the Lead first: it is an amendment to the contract, and `error.rs` is shared. The change is one line in the `error_codes!` list, under its exit code.
-- `not_implemented` (exit 1) is this skeleton's only code the documents do not name: a command whose area has not landed. Exit 1 because contract §1.2's exit 1 is "something unexpected".
 
 ## Shared helpers
 

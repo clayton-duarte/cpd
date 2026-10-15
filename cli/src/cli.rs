@@ -58,15 +58,6 @@ pub enum Command {
     Tiers(config::TiersArgs),
 }
 
-/// The arguments of a command whose area has not landed yet: everything after
-/// the command words is accepted, so the command fails with `not_implemented`
-/// whatever it is given. The area's Job replaces it with its own arguments.
-#[derive(clap::Args, Clone, Debug, PartialEq)]
-pub struct Pending {
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0.., hide = true)]
-    pub args: Vec<OsString>,
-}
-
 /// Parses `argv` and runs the command.
 pub fn run(argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
     match Cli::try_parse_from(argv) {
@@ -137,28 +128,6 @@ mod tests {
 
     fn fails(words: &[&str]) -> CpdError {
         run(argv(words)).expect_err("expected a failure")
-    }
-
-    /// A stand-in for a command whose area has not landed: its arguments are
-    /// [`Pending`], and it fails with `not_implemented`. No real command is
-    /// named, since real commands keep landing.
-    #[derive(Parser, Debug)]
-    #[command(name = "t")]
-    struct PendingProbe {
-        #[command(flatten)]
-        pending: Pending,
-    }
-
-    #[test]
-    fn a_pending_command_accepts_any_arguments_and_is_not_implemented() {
-        for words in [&[][..], &["--plan", "cpd2"], &["--bogus", "-x"], &["view", "tree"]] {
-            let argv = std::iter::once("t").chain(words.iter().copied());
-            let probe = PendingProbe::try_parse_from(argv).unwrap_or_else(|e| panic!("{words:?}: {e}"));
-            assert_eq!(probe.pending.args, words.iter().map(OsString::from).collect::<Vec<_>>());
-        }
-        let err = CpdError::not_implemented("probe");
-        assert_eq!(err.code(), ErrorCode::NotImplemented);
-        assert_eq!(err.details()["command"], "probe");
     }
 
     #[test]

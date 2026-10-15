@@ -1,10 +1,6 @@
-//! The command index of commands.md §2: every command exists, and every
-//! command whose area has not landed fails with `not_implemented`.
-
-mod common;
+//! The command index of commands.md §2: every documented command exists.
 
 use clap::CommandFactory;
-use common::TestEnv;
 use cpd2::cli::Cli;
 
 /// The commands of commands.md §2's table, read from the document itself,
@@ -65,38 +61,5 @@ fn every_documented_command_exists() {
             "cpd2 {} is not a command",
             words.join(" ")
         );
-    }
-}
-
-/// Commands not implemented yet, by area: `(argv, details.command)`.
-/// When an area's Job lands a command, it deletes that command's line here
-/// (and tests the command in its own test file). Areas are separated by a
-/// comment line so that parallel Jobs never edit adjacent lines.
-const PENDING: &[(&[&str], &str)] = &[
-    // context
-    // plan
-    // job
-    // attempt
-    // driver
-    // ask
-    // pr
-    // session
-    // events
-    // watch
-    // tui
-    (&["tui", "view", "worker", "a-a1", "--plan", "p"], "tui view worker"),
-];
-
-#[test]
-fn pending_commands_fail_with_not_implemented() {
-    let env = TestEnv::new();
-    for (argv, command) in PENDING {
-        let run = env.cpd2(argv);
-        assert_eq!(run.exit, 1, "cpd2 {argv:?}: {run:?}");
-        let error = run.error();
-        assert_eq!(error["code"], "not_implemented", "cpd2 {argv:?}");
-        assert_eq!(error["details"]["command"], *command, "cpd2 {argv:?}");
-        assert!(error["message"].as_str().is_some_and(|m| !m.is_empty()));
-        assert_eq!(run.stderr, "", "cpd2 {argv:?}");
     }
 }

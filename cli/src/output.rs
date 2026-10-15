@@ -108,7 +108,7 @@ mod tests {
     #[test]
     fn failure_prints_the_envelope_and_exits_with_the_codes_exit() {
         for (code, exit) in [
-            (ErrorCode::NotImplemented, 1),
+            (ErrorCode::GitFailed, 1),
             (ErrorCode::Usage, 2),
             (ErrorCode::IllegalTransition, 3),
             (ErrorCode::PlanNotFound, 4),

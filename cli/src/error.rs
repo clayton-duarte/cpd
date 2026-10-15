@@ -65,7 +65,6 @@ macro_rules! error_codes {
 
 error_codes! {
     // Exit 1: an external tool failed, or something unexpected.
-    NotImplemented = "not_implemented" => Failure,
     ConfigMissing = "config_missing" => Failure,
     ConfigInvalid = "config_invalid" => Failure,
     StoreTooNew = "store_too_new" => Failure,
@@ -205,16 +204,6 @@ impl CpdError {
         self
     }
 
-    /// `not_implemented`: the command exists but its area's Job has not landed.
-    /// `command` is the command's words, for example `"plan show"`.
-    pub fn not_implemented(command: &str) -> Self {
-        CpdError::new(
-            ErrorCode::NotImplemented,
-            format!("cpd2 {command} is not implemented yet"),
-        )
-        .with("command", command)
-    }
-
     pub fn code(&self) -> ErrorCode {
         self.code
     }
@@ -304,7 +293,6 @@ mod tests {
             (ErrorCode::ConfigMissing, 1),
             (ErrorCode::StoreTooNew, 1),
             (ErrorCode::MigrationFailed, 1),
-            (ErrorCode::NotImplemented, 1),
             (ErrorCode::Usage, 2),
             (ErrorCode::PlanRequired, 2),
             (ErrorCode::ContextRequired, 2),
@@ -353,14 +341,5 @@ mod tests {
     fn details_default_to_an_empty_object() {
         let value = serde_json::to_value(CpdError::new(ErrorCode::Usage, "Bad flag.")).unwrap();
         assert_eq!(value["error"]["details"], serde_json::json!({}));
-    }
-
-    #[test]
-    fn not_implemented_names_the_command() {
-        let err = CpdError::not_implemented("plan show");
-        assert_eq!(err.code(), ErrorCode::NotImplemented);
-        assert_eq!(err.exit(), Exit::Failure);
-        assert_eq!(err.details()["command"], "plan show");
-        assert_eq!(err.message(), "cpd2 plan show is not implemented yet");
     }
 }
