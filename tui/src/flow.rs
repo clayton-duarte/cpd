@@ -359,6 +359,54 @@ pub fn layout(all: &[FlowJob]) -> Chart {
     Chart { buf, pills: pills.into_iter().flatten().collect(), columns, hidden }
 }
 
+/// The User's selection in the Plan view: a Job key, held by key so a refresh keeps it. Nothing is selected until the User
+/// clicks a pill or presses an arrow key. `follow` asks the next draw to scroll the selection into view (set by keys only:
+/// a clicked pill is already visible).
+#[derive(Default, Debug, PartialEq)]
+pub struct Selection {
+    pub key: Option<String>,
+    pub follow: bool,
+}
+
+impl Selection {
+    /// Nothing selected (opening a view, switching Workflow).
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    /// A refresh: the pill index of the held key in `chart`. A Job that is gone drops the selection; none is ever created.
+    pub fn resolve(&mut self, chart: &Chart) -> Option<usize> {
+        let i = self.key.as_ref().and_then(|k| chart.pills.iter().position(|p| &p.key == k));
+        if i.is_none() {
+            self.reset();
+        }
+        i
+    }
+
+    /// An arrow key: with nothing selected the first pill of the first column, else one step from the selection.
+    pub fn arrow(&mut self, chart: &Chart, dir: Dir) {
+        let to = match self.resolve(chart) {
+            Some(i) => Some(chart.step(i, dir)),
+            None => chart.columns.first().and_then(|c| c.first().copied()),
+        };
+        if let Some(i) = to {
+            self.key = Some(chart.pills[i].key.clone());
+            self.follow = true;
+        }
+    }
+
+    /// A click on the pill `key`: it is already in view, so no scrolling follows.
+    pub fn click(&mut self, key: String) {
+        self.key = Some(key);
+        self.follow = false;
+    }
+
+    /// Enter: the key to open, none when nothing is selected.
+    pub fn enter(&self) -> Option<String> {
+        self.key.clone()
+    }
+}
+
 impl Chart {
     pub fn pill_at(&self, x: u16, y: u16) -> Option<usize> {
         self.pills.iter().position(|p| x >= p.rect.x && x < p.rect.right() && y == p.rect.y)
@@ -589,6 +637,75 @@ mod tests {
         assert_eq!((c.step(cc, Dir::Up), c.step(b, Dir::Up)), (b, b));
         assert_eq!((c.step(cc, Dir::Down), c.step(d, Dir::Down)), (d, d));
         assert_eq!(c.step(a, Dir::Down), a);
+    }
+
+    fn two() -> Chart {
+        layout(&[job("a", &[]), job("b", &["a"])])
+    }
+
+    #[test]
+    fn nothing_is_selected_on_open_and_a_refresh_creates_no_selection() {
+        let mut s = Selection::default();
+        assert_eq!((s.resolve(&two()), s.key.clone()), (None, None));
+    }
+
+    #[test]
+    fn the_first_arrow_selects_the_first_pill_of_the_first_column_then_moves() {
+        let c = two();
+        for d in [Dir::Up, Dir::Down, Dir::Left, Dir::Right] {
+            let mut s = Selection::default();
+            s.arrow(&c, d);
+            assert_eq!((s.key.as_deref(), s.follow), (Some("a"), true));
+        }
+        let mut s = Selection::default();
+        s.arrow(&c, Dir::Right);
+        s.arrow(&c, Dir::Right);
+        assert_eq!(s.key.as_deref(), Some("b"));
+        s.arrow(&layout(&[]), Dir::Right); // an empty chart selects nothing
+        assert_eq!(s, Selection::default());
+    }
+
+    #[test]
+    fn a_click_selects_that_pill_without_following() {
+        let c = two();
+        let mut s = Selection { key: None, follow: true };
+        s.click("b".into());
+        let at = s.resolve(&c);
+        assert_eq!((s.key.as_deref(), s.follow, at), (Some("b"), false, Some(1)));
+    }
+
+    #[test]
+    fn enter_without_a_selection_opens_nothing() {
+        let mut s = Selection::default();
+        assert_eq!(s.enter(), None);
+        s.click("a".into());
+        assert_eq!(s.enter().as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_selection_by_key() {
+        let mut s = Selection::default();
+        s.click("b".into());
+        let moved = layout(&[job("x", &[]), job("a", &[]), job("b", &["a", "x"])]);
+        assert_eq!(s.resolve(&moved), Some(2));
+        assert_eq!(s.key.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn a_switch_clears_the_selection_even_if_the_new_workflow_has_the_same_key() {
+        let mut s = Selection::default();
+        s.arrow(&two(), Dir::Right);
+        s.reset();
+        assert_eq!((s.resolve(&two()), s.key), (None, None));
+    }
+
+    #[test]
+    fn a_selected_job_that_disappears_is_unselected() {
+        let mut s = Selection::default();
+        s.click("b".into());
+        assert_eq!(s.resolve(&layout(&[job("a", &[])])), None);
+        assert_eq!(s, Selection::default());
+        assert_eq!(s.resolve(&two()), None); // and it does not come back
     }
 
     #[test]
