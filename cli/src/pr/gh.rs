@@ -79,7 +79,7 @@ pub struct InlineComment {
     pub body: Option<String>,
 }
 
-/// `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments`.
+/// `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision`.
 #[derive(Debug, Deserialize)]
 pub struct View {
     pub state: String,
@@ -89,6 +89,10 @@ pub struct View {
     pub checks: Option<Vec<Check>>,
     pub reviews: Vec<Review>,
     pub comments: Vec<Comment>,
+    pub title: String,
+    /// `APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED` or empty.
+    #[serde(rename = "reviewDecision")]
+    pub review_decision: Option<String>,
 }
 
 /// A PR as `gh` names it.
@@ -192,7 +196,7 @@ pub fn create_pr(cwd: &Path, base: &str, head: &str, title: &str, body: &str) ->
 
 pub fn view(cwd: &Path, number: i64) -> Result<View, CpdError> {
     let n = number.to_string();
-    let args = ["pr", "view", &n, "--json", "state,mergedAt,statusCheckRollup,reviews,comments"];
+    let args = ["pr", "view", &n, "--json", "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision"];
     parse(&args, &run(cwd, &args)?)
 }
 

@@ -33,7 +33,9 @@ case "$1 $2" in
 esac
 "#;
 
-const OPEN_VIEW: &str = r#"{"state":"OPEN","mergedAt":null,"statusCheckRollup":[],"reviews":[],"comments":[]}"#;
+const TITLE: &str = "Add the payment webhook";
+
+const OPEN_VIEW: &str = r#"{"state":"OPEN","mergedAt":null,"title":"Add the payment webhook","reviewDecision":"","statusCheckRollup":[],"reviews":[],"comments":[]}"#;
 
 fn plan() -> PlanId {
     PlanId::parse("pay").unwrap()
@@ -180,6 +182,23 @@ impl Fx {
                 )?)
             })
             .unwrap()
+    }
+
+    /// `(pr_title, pr_review_decision, pr_checks)` of the Plan; `None` while all three are null.
+    fn pr_data(&self) -> Option<(String, String, String)> {
+        let (title, decision, checks): (Option<String>, Option<String>, Option<String>) = self
+            .store()
+            .read(|c| {
+                Ok(c.query_row("SELECT pr_title, pr_review_decision, pr_checks FROM plans WHERE id = 'pay'", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?)
+            })
+            .unwrap();
+        match (title, decision, checks) {
+            (None, None, None) => None,
+            (Some(t), Some(d), Some(c)) => Some((t, d, c)),
+            partial => panic!("the three columns are set together, or not at all: {partial:?}"),
+        }
     }
 
     /// `(kind, data)` of the Plan's Events of `kind`, in order.
@@ -552,6 +571,7 @@ fn hold_driver_lock(fx: &Fx, attempt: &AttemptId) -> cpd2::merge::DriverLock {
 
 fn feedback_view() -> &'static str {
     r#"{"state":"OPEN","mergedAt":null,
+        "title":"Add the payment webhook","reviewDecision":"",
         "statusCheckRollup":[
           {"name":"ci/test","conclusion":"FAILURE"},
           {"name":"lint","conclusion":"SUCCESS"},
@@ -573,10 +593,13 @@ fn poll_reports_new_feedback_once() {
         "reviews": [{"id": "PRR_1", "author": "ann", "state": "CHANGES_REQUESTED", "body": "Please fix"}],
         "comments": [{"id": "IC_1", "author": "bob", "body": "nit"}, {"id": "77", "author": "cy", "path": "src/a.rs", "body": "why?"}],
     });
-    assert_eq!(out, json!({"ok": true, "plan": "pay", "state": "OPEN", "merged": false, "changes": changes}));
+    assert_eq!(
+        out,
+        json!({"ok": true, "plan": "pay", "state": "OPEN", "merged": false, "title": TITLE, "review_decision": "none", "checks": "failed", "changes": changes})
+    );
     // gh: the view, then the inline comments of the same PR.
     let calls = fx.gh_calls();
-    assert_eq!(calls[0], ["pr", "view", "812", "--json", "state,mergedAt,statusCheckRollup,reviews,comments"]);
+    assert_eq!(calls[0], ["pr", "view", "812", "--json", "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision"]);
     assert_eq!(calls[1], ["api", "repos/{owner}/{repo}/pulls/812/comments"]);
     // pr_seen, pr_polled_at, and one pr-feedback Event.
     let row = fx.plan_row();
@@ -612,12 +635,88 @@ fn poll_reports_new_feedback_once() {
 }
 
 #[test]
+fn poll_stores_the_title_the_review_decision_and_the_checks_on_every_poll() {
+    let fx = fx("pr");
+    assert_eq!(fx.pr_data(), None, "all null until the first poll");
+    fx.gh("view.json", feedback_view());
+    fx.pr("poll").ok();
+    assert_eq!(fx.pr_data(), Some((TITLE.into(), "none".into(), "failed".into())));
+
+    // The PR is renamed, approved and its checks pass: the next poll replaces all three, and reports nothing new.
+    fx.gh(
+        "view.json",
+        r#"{"state":"OPEN","mergedAt":null,"title":"Add the payment webhook v2","reviewDecision":"APPROVED",
+            "statusCheckRollup":[{"name":"ci/test","conclusion":"SUCCESS"}],"reviews":[],"comments":[]}"#,
+    );
+    let out = fx.pr("poll").ok();
+    assert_eq!((out["title"].as_str(), out["review_decision"].as_str(), out["checks"].as_str()), (Some("Add the payment webhook v2"), Some("approved"), Some("passed")));
+    assert_eq!(fx.pr_data(), Some(("Add the payment webhook v2".into(), "approved".into(), "passed".into())));
+    // They belong to the poll: no Event of their own.
+    assert_eq!(fx.events("pr-feedback").len(), 1);
+}
+
+#[test]
+fn poll_maps_gh_review_decisions_and_check_conclusions() {
+    let fx = fx("pr");
+    let view = |decision: &str, checks: &str| {
+        format!(
+            r#"{{"state":"OPEN","mergedAt":null,"title":"T","reviewDecision":{decision},"statusCheckRollup":{checks},"reviews":[],"comments":[]}}"#
+        )
+    };
+    let ci = |conclusion: &str| format!(r#"{{"name":"ci","conclusion":"{conclusion}"}}"#);
+    let cases = [
+        // (reviewDecision, checks, stored decision, stored checks)
+        (r#""APPROVED""#, "[]".to_owned(), "approved", "none"),
+        (r#""CHANGES_REQUESTED""#, "null".to_owned(), "changes_requested", "none"),
+        (r#""REVIEW_REQUIRED""#, format!("[{}]", ci("SUCCESS")), "none", "passed"),
+        (r#""""#, format!("[{}]", ci("")), "none", "pending"),
+        ("null", format!("[{}]", ci("IN_PROGRESS")), "none", "pending"),
+        (r#""APPROVED""#, format!("[{}]", ci("timed_out")), "approved", "failed"),
+        // A StatusContext has `state`, not `conclusion`.
+        ("null", r#"[{"context":"legacy","state":"PENDING"}]"#.to_owned(), "none", "pending"),
+        // Failure wins over pending, pending over passed.
+        (
+            "null",
+            format!(r#"[{},{{"name":"b","conclusion":"QUEUED"}},{{"name":"c","conclusion":"FAILURE"}}]"#, ci("SUCCESS")),
+            "none",
+            "failed",
+        ),
+        (
+            "null",
+            format!(r#"[{},{{"name":"b","conclusion":"QUEUED"}}]"#, ci("SUCCESS")),
+            "none",
+            "pending",
+        ),
+        ("null", format!(r#"[{},{{"name":"b","conclusion":"NEUTRAL"}}]"#, ci("SUCCESS")), "none", "passed"),
+    ];
+    for (decision, checks, want_decision, want_checks) in cases {
+        fx.gh("view.json", &view(decision, &checks));
+        let out = fx.pr("poll").ok();
+        assert_eq!((out["review_decision"].as_str(), out["checks"].as_str()), (Some(want_decision), Some(want_checks)), "{decision} {checks}");
+        assert_eq!(fx.pr_data(), Some(("T".into(), want_decision.into(), want_checks.into())), "{decision} {checks}");
+    }
+}
+
+#[test]
+fn poll_refuses_a_view_without_a_title_and_stores_nothing() {
+    let fx = fx("pr");
+    fx.gh("view.json", r#"{"state":"OPEN","mergedAt":null,"statusCheckRollup":[],"reviews":[],"comments":[]}"#);
+    let run = fx.pr("poll");
+    assert_eq!(code(&run), ("gh_failed".into(), 1));
+    assert_eq!((fx.pr_data(), fx.plan_row().5), (None, None));
+}
+
+#[test]
 fn poll_with_nothing_new_still_records_the_poll() {
     let fx = fx("pr");
 
     let out = fx.pr("poll").ok();
 
-    assert_eq!(out, json!({"ok": true, "plan": "pay", "state": "OPEN", "merged": false, "changes": {"checks": [], "reviews": [], "comments": []}}));
+    assert_eq!(
+        out,
+        json!({"ok": true, "plan": "pay", "state": "OPEN", "merged": false, "title": TITLE, "review_decision": "none", "checks": "none",
+               "changes": {"checks": [], "reviews": [], "comments": []}})
+    );
     assert!(fx.plan_row().5.is_some());
     assert!(fx.events("pr-feedback").is_empty());
 }
@@ -625,7 +724,7 @@ fn poll_with_nothing_new_still_records_the_poll() {
 #[test]
 fn poll_reports_a_closure_without_a_merge_once_until_the_pr_is_reopened() {
     let fx = fx("pr");
-    fx.gh("view.json", r#"{"state":"CLOSED","mergedAt":null,"statusCheckRollup":null,"reviews":[],"comments":[]}"#);
+    fx.gh("view.json", r#"{"state":"CLOSED","mergedAt":null,"title":"Add the payment webhook","reviewDecision":"","statusCheckRollup":null,"reviews":[],"comments":[]}"#);
 
     let out = fx.pr("poll").ok();
 
@@ -647,7 +746,7 @@ fn poll_reports_a_closure_without_a_merge_once_until_the_pr_is_reopened() {
     assert_eq!(fx.events("pr-feedback").len(), 1);
 
     // Closed again: reported again.
-    fx.gh("view.json", r#"{"state":"CLOSED","mergedAt":null,"statusCheckRollup":[],"reviews":[],"comments":[]}"#);
+    fx.gh("view.json", r#"{"state":"CLOSED","mergedAt":null,"title":"Add the payment webhook","reviewDecision":"","statusCheckRollup":[],"reviews":[],"comments":[]}"#);
     fx.pr("poll").ok();
     assert_eq!(fx.events("pr-feedback").len(), 2);
 }
@@ -690,11 +789,16 @@ fn poll_of_a_merged_pr_ends_the_plan_and_removes_its_attempt_leftovers() {
     let started = fx.env.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "pay--b-a1", "sleep 300"]);
     assert!(started.status.success(), "{started:?}");
     assert!(fx.env.tmux(&["new-window", "-d", "-t", "cpd-work", "-n", "other-plan", "sleep 300"]).status.success());
-    fx.gh("view.json", r#"{"state":"MERGED","mergedAt":"2026-10-14T10:00:00Z","statusCheckRollup":[],"reviews":[],"comments":[]}"#);
+    fx.gh("view.json", r#"{"state":"MERGED","mergedAt":"2026-10-14T10:00:00Z","title":"Add the payment webhook","reviewDecision":"","statusCheckRollup":[],"reviews":[],"comments":[]}"#);
 
     let out = fx.pr("poll").ok();
 
-    assert_eq!(out, json!({"ok": true, "plan": "pay", "state": "MERGED", "merged": true, "changes": {"checks": [], "reviews": [], "comments": []}}));
+    assert_eq!(
+        out,
+        json!({"ok": true, "plan": "pay", "state": "MERGED", "merged": true, "title": TITLE, "review_decision": "none", "checks": "none",
+               "changes": {"checks": [], "reviews": [], "comments": []}})
+    );
+    assert_eq!(fx.pr_data(), Some((TITLE.into(), "none".into(), "none".into())));
     let row = fx.plan_row();
     assert_eq!(row.0, "done");
     assert!(row.6.is_some() && row.5.is_some());

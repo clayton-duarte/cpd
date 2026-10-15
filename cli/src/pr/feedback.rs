@@ -23,6 +23,72 @@ fn failing(conclusion: &str) -> bool {
     FAILING.contains(&conclusion.to_ascii_uppercase().as_str())
 }
 
+/// Check conclusions that are not final yet (upper-cased; an empty one is pending too).
+const PENDING: [&str; 5] = ["", "PENDING", "IN_PROGRESS", "QUEUED", "EXPECTED"];
+
+/// `plans.pr_checks` (contract §7.6): the summary of the PR's current checks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ChecksSummary {
+    None,
+    Passed,
+    Pending,
+    Failed,
+}
+
+impl ChecksSummary {
+    /// Any failure wins over pending, pending over passed; no checks is `none`.
+    pub fn of(checks: &BTreeMap<String, String>) -> ChecksSummary {
+        let upper: Vec<String> = checks.values().map(|c| c.to_ascii_uppercase()).collect();
+        if upper.is_empty() {
+            ChecksSummary::None
+        } else if upper.iter().any(|c| failing(c)) {
+            ChecksSummary::Failed
+        } else if upper.iter().any(|c| PENDING.contains(&c.as_str())) {
+            ChecksSummary::Pending
+        } else {
+            ChecksSummary::Passed
+        }
+    }
+
+    /// As stored and printed.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ChecksSummary::None => "none",
+            ChecksSummary::Passed => "passed",
+            ChecksSummary::Pending => "pending",
+            ChecksSummary::Failed => "failed",
+        }
+    }
+}
+
+/// `plans.pr_review_decision` (contract §7.6), from gh's `reviewDecision`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReviewDecision {
+    None,
+    Approved,
+    ChangesRequested,
+}
+
+impl ReviewDecision {
+    /// `APPROVED` and `CHANGES_REQUESTED` are themselves; anything else (`REVIEW_REQUIRED`, empty, absent) is `none`.
+    pub fn of(gh: Option<&str>) -> ReviewDecision {
+        match gh {
+            Some("APPROVED") => ReviewDecision::Approved,
+            Some("CHANGES_REQUESTED") => ReviewDecision::ChangesRequested,
+            _ => ReviewDecision::None,
+        }
+    }
+
+    /// As stored and printed.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReviewDecision::None => "none",
+            ReviewDecision::Approved => "approved",
+            ReviewDecision::ChangesRequested => "changes_requested",
+        }
+    }
+}
+
 /// `plans.pr_seen`: what `pr poll` has already reported.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -105,16 +171,22 @@ fn union(old: &[String], new: impl Iterator<Item = String>) -> Vec<String> {
     all
 }
 
-/// What is new in `view` and `inline` relative to `seen`, and the `pr_seen` to
-/// store: a check is new when it fails now and did not before; a review or
-/// comment is new when its id was not seen. `closed` is carried over as it was.
-pub(super) fn diff(seen: &Seen, view: &View, inline: &[InlineComment]) -> (Changes, Seen) {
+/// The PR's current checks: name (a CheckRun's `name`, a StatusContext's `context`) → conclusion (else state).
+pub(super) fn current_checks(view: &View) -> BTreeMap<String, String> {
     let mut checks = BTreeMap::new();
     for c in view.checks.iter().flatten() {
         let Some(name) = c.name.clone().or_else(|| c.context.clone()) else { continue };
         let conclusion = c.conclusion.clone().filter(|s| !s.is_empty()).or_else(|| c.state.clone()).unwrap_or_default();
         checks.insert(name, conclusion);
     }
+    checks
+}
+
+/// What is new in `view` and `inline` relative to `seen`, and the `pr_seen` to
+/// store: a check is new when it fails now and did not before; a review or
+/// comment is new when its id was not seen. `closed` is carried over as it was.
+pub(super) fn diff(seen: &Seen, view: &View, inline: &[InlineComment]) -> (Changes, Seen) {
+    let checks = current_checks(view);
     let mut changes = Changes::default();
     for (name, conclusion) in &checks {
         let was_failing = seen.checks.get(name).is_some_and(|was| failing(was));

@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde_json::json;
 
-use super::feedback::{self, Changes, Seen};
+use super::feedback::{self, Changes, ChecksSummary, ReviewDecision, Seen};
 use super::row::PlanRow;
 use super::{Args, Env, gh, illegal_phase};
 use crate::error::{CpdError, ErrorCode};
@@ -16,6 +16,7 @@ use crate::host::tmux::Tmux;
 use crate::ids::{AttemptId, PlanId};
 use crate::output::Output;
 use crate::plan::Phase;
+use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr poll";
 
@@ -37,6 +38,22 @@ pub(super) fn poll(args: Args) -> Result<Output, CpdError> {
     let seen = Seen::parse(&plan.pr_seen)?;
 
     let view = gh::view(&lead, pr.number)?;
+    // Stored on every poll, together, with `pr_polled_at`, and printed (contract §7.6).
+    let decision = ReviewDecision::of(view.review_decision.as_deref());
+    let checks = ChecksSummary::of(&feedback::current_checks(&view));
+    let stored = |tx: &WriteTxn<'_>| -> rusqlite::Result<()> {
+        tx.execute(
+            "UPDATE plans SET pr_title = ?1, pr_review_decision = ?2, pr_checks = ?3 WHERE id = ?4",
+            rusqlite::params![view.title, decision.as_str(), checks.as_str(), id.as_str()],
+        )?;
+        Ok(())
+    };
+    let printed = |mut out: serde_json::Value| {
+        out["title"] = json!(view.title);
+        out["review_decision"] = json!(decision.as_str());
+        out["checks"] = json!(checks.as_str());
+        out
+    };
     if view.state == "MERGED" {
         env.store.write(COMMAND, |tx| {
             let moved = tx.execute(
@@ -48,15 +65,16 @@ pub(super) fn poll(args: Args) -> Result<Output, CpdError> {
             if moved == 0 {
                 return Err(cas_lost(&id));
             }
+            stored(tx)?;
             let text = format!("PR #{} of Plan {id} is merged: the Plan is done. See cpd2 plan show --plan {id}", pr.number);
             let data = json!({"pr": pr.short(), "merged_at": view.merged_at});
             append(tx, NewEvent::new(Kind::PlanDone, text, data).plan(id.clone()))?;
             Ok(())
         })?;
         clean_up(&mut env, &plan)?;
-        return Ok(Output::success(json!({
+        return Ok(Output::success(printed(json!({
             "plan": id, "state": view.state, "merged": true, "changes": Changes::default().to_json(),
-        })));
+        }))));
     }
 
     let inline = gh::inline_comments(&lead, pr.number)?;
@@ -75,6 +93,7 @@ pub(super) fn poll(args: Args) -> Result<Output, CpdError> {
         if moved == 0 {
             return Err(cas_lost(&id));
         }
+        stored(tx)?;
         if !changes.is_empty() || closure {
             let text = feedback::text(id.as_str(), pr.number, &changes, closure);
             let data = feedback::data(&changes, &view.state);
@@ -82,7 +101,7 @@ pub(super) fn poll(args: Args) -> Result<Output, CpdError> {
         }
         Ok(())
     })?;
-    Ok(Output::success(json!({"plan": id, "state": view.state, "merged": false, "changes": changes.to_json()})))
+    Ok(Output::success(printed(json!({"plan": id, "state": view.state, "merged": false, "changes": changes.to_json()}))))
 }
 
 fn cas_lost(id: &PlanId) -> CpdError {
