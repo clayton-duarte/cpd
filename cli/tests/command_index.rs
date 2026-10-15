@@ -26,14 +26,22 @@ fn documented_commands() -> Vec<Vec<String>> {
             .map(|item| item.split_whitespace().map(str::to_owned).collect())
             .collect();
         let group = if items[0].len() > 1 { Some(items[0][0].clone()) } else { None };
+        let before = commands.len();
         for item in items {
             match &group {
                 Some(group) if item.len() == 1 => commands.push(vec![group.clone(), item[0].clone()]),
                 _ => commands.push(item),
             }
         }
+        assert!(commands.len() > before, "row yields no command: {row}");
     }
-    assert!(commands.len() >= 50, "parsed too few commands: {commands:?}");
+    // Anchors prove the parser found the table; the contract may add or drop other commands.
+    for anchor in [&["context", "new"][..], &["plan", "new"], &["job", "add"], &["watch"]] {
+        assert!(
+            commands.iter().any(|c| c.iter().map(String::as_str).eq(anchor.iter().copied())),
+            "anchor command {anchor:?} not parsed: {commands:?}"
+        );
+    }
     commands
 }
 
