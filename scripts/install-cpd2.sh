@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds cpd2 in release mode and installs it as ~/.local/bin/cpd2 (R12), and
-# the pi adapter pi-v2/ as ~/.local/share/cpd2/pi, where cpd2 finds it by
+# the pi adapter pi/ as ~/.local/share/cpd2/pi, where cpd2 finds it by
 # default: <dir of the binary>/../share/cpd2/pi (contract §6.5, §8 pi_adapter).
 # Safe to rerun: the binary is replaced atomically, even while it runs.
 set -eu
@@ -25,7 +25,7 @@ mkdir -p "$(dirname "$adapter_dir")"
 adapter_tmp="$adapter_dir.tmp.$$"
 trap 'rm -rf "$adapter_tmp"' EXIT
 mkdir -p "$adapter_tmp"
-cp -R "$root/pi-v2/." "$adapter_tmp/"
+cp -R "$root/pi/." "$adapter_tmp/"
 rm -rf "$adapter_tmp/test"
 rm -rf "$adapter_dir"
 mv "$adapter_tmp" "$adapter_dir"

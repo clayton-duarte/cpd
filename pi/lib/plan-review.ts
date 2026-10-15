@@ -1,105 +1,48 @@
-import { z } from "zod";
+import { isObject } from "./cpd2.ts";
 
-/** The adapter's own session entry (`pi.appendEntry`): it survives `/reload` and resume, so pending reviews can be recovered. */
-export const REVIEW_ENTRY_TYPE = "cpd-plan-review";
+/** The adapter's own session entry (`pi.appendEntry`): it survives `/reload` and resume (commands.md §15.5, "Opening" step 4). */
+export const ENTRY_TYPE = "cpd-plan-review";
+export const DECISION_TYPE = "cpd-plan-decision";
+export const REVIEW_LABEL = "cpd: plan review";
 
-export const REVIEW_STATUSES = ["pending", "approved", "rejected", "lost"] as const;
-export type ReviewStatus = (typeof REVIEW_STATUSES)[number];
+export type EntryStatus = "pending" | "approved" | "rejected" | "lost";
+export type ReviewEntry = { plan: string; review: string; plannotator_id: string; status: EntryStatus };
 
-export const ReviewSchema = z.strictObject({
-  reviewId: z.string().min(1),
-  wf: z.string().min(1),
-  status: z.enum(REVIEW_STATUSES),
-});
-export type Review = z.infer<typeof ReviewSchema>;
+const STATUSES: readonly string[] = ["pending", "approved", "rejected", "lost"];
 
-/** Bookkeeping of the plan reviews this Lead session asked for. Every transition leaves `pending` exactly once. */
-export function createReviews(initial: readonly Review[] = []) {
-  const byId = new Map<string, Review>(initial.map((r) => [r.reviewId, r]));
-  const settleTo = (reviewId: string, status: ReviewStatus): Review | null => {
-    const r = byId.get(reviewId);
-    if (!r || r.status !== "pending") return null;
-    const next = { ...r, status };
-    byId.set(reviewId, next);
-    return next;
-  };
-  return {
-    markPending(reviewId: string, wf: string): Review {
-      const r = ReviewSchema.parse({ reviewId, wf, status: "pending" });
-      byId.set(reviewId, r);
-      return r;
-    },
-    /** The settled review, or null when the id is unknown or already settled (a duplicate result or poll). */
-    settle: (reviewId: string, approved: boolean) => settleTo(reviewId, approved ? "approved" : "rejected"),
-    lose: (reviewId: string) => settleTo(reviewId, "lost"),
-    get: (reviewId: string) => byId.get(reviewId),
-    pending: () => [...byId.values()].filter((r) => r.status === "pending"),
-  };
-}
-export type Reviews = ReturnType<typeof createReviews>;
-
-/** Fold the session's entries (oldest first, later wins) into the reviews they record. Our own entries must be valid. */
-export function reviewsFromEntries(entries: readonly unknown[]): Review[] {
-  const byId = new Map<string, Review>();
+/**
+ * The reviews this session opened for `plan`, folded from its entries (oldest first, the later entry of a review wins).
+ * Entries of another Plan are skipped: a fork's file starts with its source's entries. `invalid` counts our own entries that do not parse.
+ */
+export function reviewsFromEntries(entries: readonly unknown[], plan: string): { reviews: Map<string, ReviewEntry>; invalid: number } {
+  const reviews = new Map<string, ReviewEntry>();
+  let invalid = 0;
   for (const e of entries) {
-    const entry = z.looseObject({ type: z.string(), customType: z.string().optional(), data: z.unknown().optional() }).safeParse(e);
-    if (!entry.success || entry.data.type !== "custom" || entry.data.customType !== REVIEW_ENTRY_TYPE) continue;
-    const r = ReviewSchema.parse(entry.data.data);
-    byId.set(r.reviewId, r);
+    if (!isObject(e) || e.type !== "custom" || e.customType !== ENTRY_TYPE) continue;
+    const d = e.data;
+    if (!isObject(d) || typeof d.plan !== "string" || typeof d.review !== "string" || typeof d.plannotator_id !== "string" || typeof d.status !== "string" || !STATUSES.includes(d.status)) {
+      invalid += 1;
+      continue;
+    }
+    if (d.plan !== plan) continue;
+    reviews.set(d.review, { plan: d.plan, review: d.review, plannotator_id: d.plannotator_id, status: d.status as EntryStatus });
   }
-  return [...byId.values()];
+  return { reviews, invalid };
 }
 
-// --- plannotator's event API (t4; not a stable contract, so parsed at the boundary) ---
+/** plannotator's event API has no request that closes a review (`plannotator-events.ts` handles plan-mode, plan-review, review-status, code-review, annotate, annotate-last, archive), so the page stays open. */
+export const ELSEWHERE_NOTE = "This review was decided outside plannotator. plannotator offers no way to close its review page from here, so the page stays open: ignore it or close the tab.";
 
-const Pending = z.looseObject({ status: z.literal("pending"), reviewId: z.string().min(1) });
-const Respond = z.discriminatedUnion("status", [
-  z.looseObject({ status: z.literal("handled"), result: z.unknown() }),
-  z.looseObject({ status: z.literal("unavailable"), error: z.unknown().optional() }),
-  z.looseObject({ status: z.literal("error"), error: z.unknown().optional() }),
-]);
-
-/** The `respond` payload of a `plan-review` request: the new review's id. Anything else throws. */
-export function parseRequested(response: unknown): string {
-  const r = Respond.parse(response);
-  if (r.status !== "handled") throw new Error(`plannotator ${r.status}: ${JSON.stringify(r.error ?? null)}`);
-  return Pending.parse(r.result).reviewId;
-}
-
-export const ResultEvent = z.looseObject({ reviewId: z.string().min(1), approved: z.boolean(), feedback: z.string().optional() });
-export type ResultEvent = z.infer<typeof ResultEvent>;
-
-const StatusResult = z.discriminatedUnion("status", [
-  z.looseObject({ status: z.literal("pending") }),
-  z.looseObject({ status: z.literal("completed"), approved: z.boolean(), feedback: z.string().optional() }),
-  z.looseObject({ status: z.literal("missing") }),
-]);
-export type ReviewStatusResult = z.infer<typeof StatusResult>;
-
-/** The `respond` payload of a `review-status` request. */
-export function parseStatus(response: unknown): ReviewStatusResult {
-  const r = Respond.parse(response);
-  if (r.status !== "handled") throw new Error(`plannotator ${r.status}: ${JSON.stringify(r.error ?? null)}`);
-  return StatusResult.parse(r.result);
-}
-
-// --- what the Lead is told ---
-
-/** The decision message for the Lead. `failure` is set when recording it with `cpd plan decision` failed. */
-export function decisionText(review: Review, feedback: string | undefined, failure?: string): string {
-  const verdict = review.status === "approved" ? "APPROVED" : "REJECTED";
-  const lines = [`Plan review ${review.reviewId} was ${verdict}.`];
+/** cpd 1's `decisionText`, kept (commands.md §15.5, "Deciding" step 3). */
+export function decisionText(review: string, approved: boolean, feedback: string | undefined, current: boolean, elsewhere = false): string {
+  const lines = [`Plan review ${review} was ${approved ? "APPROVED" : "REJECTED"}.`];
   if (feedback !== undefined && feedback !== "") lines.push("Feedback from the reviewer:", feedback);
-  if (failure !== undefined) {
-    lines.push(`cpd could not record this decision: ${failure}`);
-  } else if (review.status === "approved") {
-    lines.push(`Next: cpd plan lock --wf ${review.wf}`);
-  } else {
-    lines.push("Revise the plan (append, cancel or retry Jobs), then call cpd_plan_review again.");
-  }
+  if (!current) lines.push("The Jobs changed since that review. Call cpd_plan_review again for a new review.");
+  else if (approved) lines.push("Next: cpd2 plan lock");
+  else lines.push("Revise the plan (job edit, job add, job cancel), then call cpd_plan_review again.");
+  if (elsewhere) lines.push(ELSEWHERE_NOTE);
   return lines.join("\n");
 }
 
-export function lostText(review: Review): string {
-  return `Plan review ${review.reviewId} is gone (plannotator no longer knows it, for example after a restart), so no decision was recorded. Call cpd_plan_review again.`;
-}
+export const lostText = (review: string): string =>
+  `Plan review ${review} is gone (plannotator no longer knows it, for example after a restart), so no decision was recorded. Call cpd_plan_review again.`;

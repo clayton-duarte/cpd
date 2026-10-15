@@ -1,9 +1,6 @@
 [workspace]
 resolver = "3"
 members = ["cli"]
-# tui/ is the cockpit spike, a standalone package with its own Cargo.lock.
-# Excluded so it still builds on its own and no Job compiles it by accident.
-exclude = ["tui"]
 
 [workspace.package]
 version = "0.0.0"
