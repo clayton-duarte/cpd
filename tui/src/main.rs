@@ -43,6 +43,7 @@ mod legend;
 mod palette;
 mod pr;
 mod prompt;
+mod separator;
 mod sessions;
 mod tabs;
 mod workers;
@@ -394,14 +395,8 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
                 let width = area.width.max(1) as usize;
                 let wrapped = footer.chars().count().div_ceil(width);
                 let footer_height = if footer.is_empty() { 0 } else { (wrapped + usize::from(wrapped > 1)).max(1).min(area.height as usize) as u16 };
-                let [list_area, footer_area, bottom_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height), Constraint::Length(1)]).areas(area);
-                let label = Line::from(LEGEND_BUTTON);
-                let [button_area, workers_area] = Layout::horizontal([Constraint::Length((label.width() as u16).min(bottom_area.width)), Constraint::Min(0)]).areas(bottom_area);
-                button = button_area;
-                f.render_widget(Paragraph::new(label).style(Style::new().add_modifier(Modifier::REVERSED)), button);
-                if let Some(line) = workers.line(workers_area.width) {
-                    f.render_widget(Paragraph::new(line).right_aligned(), workers_area);
-                }
+                let [list_area, footer_area, bottom_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height), Constraint::Length(separator::HEIGHT + 1)]).areas(area);
+                button = draw_bottom(f, bottom_area, &workers);
                 if footer_height > 0 {
                     let style = if prompt.is_some() { Style::new().fg(palette::ui(Ui::Note)).bold() } else { Style::new().fg(palette::ui(Ui::Note)) };
                     f.render_widget(Paragraph::new(footer).style(style).wrap(Wrap { trim: false }), footer_area);
@@ -503,6 +498,20 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
             last_refresh = Instant::now();
         }
     }
+}
+
+/// The Context pane's bottom (2 rows): the separator, then the legend button and the workers indicator.
+/// Returns the button's area, for clicks.
+fn draw_bottom(f: &mut ratatui::Frame, area: Rect, workers: &workers::Workers) -> Rect {
+    let [line_area, row_area] = Layout::vertical([Constraint::Length(separator::HEIGHT), Constraint::Length(1)]).areas(area);
+    separator::draw(f, line_area);
+    let label = Line::from(LEGEND_BUTTON);
+    let [button, workers_area] = Layout::horizontal([Constraint::Length((label.width() as u16).min(row_area.width)), Constraint::Min(0)]).areas(row_area);
+    f.render_widget(Paragraph::new(label).style(Style::new().add_modifier(Modifier::REVERSED)), button);
+    if let Some(line) = workers.line(workers_area.width) {
+        f.render_widget(Paragraph::new(line).right_aligned(), workers_area);
+    }
+    button
 }
 
 // ---------- plan view (top centre) ----------
@@ -782,13 +791,54 @@ fn pr_loop() {
     }
 }
 
+type PlanRow = (String, Option<u64>, Option<pr::Record>);
+
+/// Rows of the Dispatch sections other than the PRs: homeserver, git and Jira take two each; three separators lie between the four.
+const DISPATCH_FIXED_ROWS: u16 = 2 + 2 + 2 + 3 * separator::HEIGHT;
+
+/// The Dispatch pane: homeserver, PRs, git and Jira, each section titled, with the shared separator between each pair.
+fn draw_dispatch(f: &mut ratatui::Frame, area: Rect, load: &[&str], rows: &[PlanRow], now: u64) {
+    let [home, sep1, prs, sep2, git, sep3, jira] = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Length(separator::HEIGHT),
+        Constraint::Min(1),
+        Constraint::Length(separator::HEIGHT),
+        Constraint::Length(2),
+        Constraint::Length(separator::HEIGHT),
+        Constraint::Length(2),
+    ])
+    .areas(area);
+    for sep in [sep1, sep2, sep3] {
+        separator::draw(f, sep);
+    }
+    f.render_widget(Paragraph::new(vec![Line::from(" homeserver".bold()), Line::from(format!(" load {}", load.join(" ")))]), home);
+    let mut text = vec![Line::from(" PRs".bold())];
+    // plans with a PR first; those without only while the pane has room for the rest
+    let room = (area.height as usize).saturating_sub(DISPATCH_FIXED_ROWS as usize + text.len());
+    let mut used = 0;
+    for (label, number, rec) in rows.iter().filter(|r| r.1.is_some()).chain(rows.iter().filter(|r| r.1.is_none())) {
+        let lines = pr::render(label, *number, rec.as_ref(), now, area.width as usize);
+        if number.is_none() && used + lines.len() > room {
+            continue;
+        }
+        used += lines.len();
+        text.extend(lines);
+    }
+    if rows.is_empty() {
+        text.push(Line::from(" no Plans in the cockpit".dim()));
+    }
+    f.render_widget(Paragraph::new(text), prs);
+    f.render_widget(Paragraph::new(vec![Line::from(" git".bold()), Line::from(" (future)".dim())]), git);
+    f.render_widget(Paragraph::new(vec![Line::from(" Jira".bold()), Line::from(" (future)".dim())]), jira);
+}
+
 fn run_dispatch(terminal: &mut DefaultTerminal) -> Result<(), String> {
     thread::spawn(pr_loop);
     loop {
         let load = fs::read_to_string("/proc/loadavg").unwrap_or_default();
         let load: Vec<&str> = load.split_whitespace().take(3).collect();
         let now = now_secs();
-        let rows: Vec<(String, Option<u64>, Option<pr::Record>)> = plans()
+        let rows: Vec<PlanRow> = plans()
             .into_iter()
             .map(|(label, plan)| {
                 let number = pr_of(&plan).and_then(|p| p.0);
@@ -797,24 +847,7 @@ fn run_dispatch(terminal: &mut DefaultTerminal) -> Result<(), String> {
             .collect();
         terminal
             .draw(|f| {
-                let width = f.area().width as usize;
-                let mut text = vec![Line::from(" homeserver".bold()), Line::from(format!(" load {}", load.join(" "))), Line::from(""), Line::from(" PRs".bold())];
-                // plans with a PR first; those without only while the pane has room for the rest
-                let room = (f.area().height as usize).saturating_sub(text.len() + 6);
-                let mut used = 0;
-                for (label, number, rec) in rows.iter().filter(|r| r.1.is_some()).chain(rows.iter().filter(|r| r.1.is_none())) {
-                    let lines = pr::render(label, *number, rec.as_ref(), now, width);
-                    if number.is_none() && used + lines.len() > room {
-                        continue;
-                    }
-                    used += lines.len();
-                    text.extend(lines);
-                }
-                if rows.is_empty() {
-                    text.push(Line::from(" no Plans in the cockpit".dim()));
-                }
-                text.extend([Line::from(""), Line::from(" git".bold()), Line::from(" (future)".dim()), Line::from(""), Line::from(" Jira".bold()), Line::from(" (future)".dim())]);
-                f.render_widget(Paragraph::new(text), f.area());
+                draw_dispatch(f, f.area(), &load, &rows, now);
             })
             .map_err(|e| e.to_string())?;
         if event::poll(Duration::from_secs(2)).map_err(|e| e.to_string())? {
@@ -916,5 +949,41 @@ fn run_worker(terminal: &mut DefaultTerminal, path: String) -> Result<(), String
             },
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
+
+    fn text(buf: &Buffer, y: u16) -> String {
+        (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_string()
+    }
+
+    #[test]
+    fn the_context_bottom_is_a_separator_then_the_legend_and_workers_row() {
+        let mut terminal = Terminal::new(TestBackend::new(24, 4)).unwrap();
+        let mut button = Rect::default();
+        terminal.draw(|f| button = draw_bottom(f, Rect::new(0, 2, 24, 2), &workers::Workers { running: 1, limit: Some(4) })).unwrap();
+        let buf = terminal.backend().buffer();
+        assert_eq!(text(buf, 1), "");
+        assert_eq!(text(buf, 2), "─".repeat(24));
+        assert_eq!(text(buf, 3), format!("{LEGEND_BUTTON}   workers 1/4"));
+        assert_eq!(buf[(5, 2)].fg, palette::color(palette::Meaning::Nothing));
+        assert_eq!(button, Rect::new(0, 3, LEGEND_BUTTON.len() as u16, 1));
+    }
+
+    #[test]
+    fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
+        let mut terminal = Terminal::new(TestBackend::new(30, 14)).unwrap();
+        terminal.draw(|f| draw_dispatch(f, f.area(), &["0.1", "0.2", "0.3"], &[], 0)).unwrap();
+        let buf = terminal.backend().buffer();
+        let rule = "─".repeat(30);
+        let lines: Vec<String> = (0..14).map(|y| text(buf, y)).collect();
+        assert_eq!(lines[..3], [" homeserver", " load 0.1 0.2 0.3", rule.as_str()]);
+        assert_eq!(lines[3], " PRs");
+        assert_eq!(lines[4], " no Plans in the cockpit");
+        assert_eq!(lines[5..], ["", "", "", rule.as_str(), " git", " (future)", rule.as_str(), " Jira", " (future)"]);
     }
 }
