@@ -63,10 +63,11 @@ struct Pane {
     left: u32,
     top: u32,
     width: u32,
+    height: u32,
 }
 
 fn main_panes(env: &TestEnv) -> Vec<Pane> {
-    let format = "#{pane_id}\t#{@cpd_view}\t#{@cpd_session}\t#{pane_dead}\t#{pane_pid}\t#{pane_left}\t#{pane_top}\t#{pane_width}";
+    let format = "#{pane_id}\t#{@cpd_view}\t#{@cpd_session}\t#{pane_dead}\t#{pane_pid}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}";
     tmux_out(env, &["list-panes", "-t", "=cpd:main", "-F", format])
         .lines()
         .map(|line| {
@@ -80,6 +81,7 @@ fn main_panes(env: &TestEnv) -> Vec<Pane> {
                 left: f[5].parse().unwrap(),
                 top: f[6].parse().unwrap(),
                 width: f[7].parse().unwrap(),
+                height: f[8].parse().unwrap(),
             }
         })
         .collect()
@@ -98,10 +100,14 @@ fn views_started(env: &TestEnv) -> Vec<Vec<String>> {
 }
 
 /// Asserts `main` holds the layout of §13.1: the tree left, the plan view
-/// above the chat slot in the centre, the widgets right, each marked.
+/// above the chat slot in the centre, the widgets right, the one-row StatusBar
+/// across the bottom, each marked.
 fn assert_layout(panes: &[Pane]) {
-    assert_eq!(panes.len(), 4, "{panes:?}");
+    assert_eq!(panes.len(), 5, "{panes:?}");
     let (tree, plan, widgets) = (view(panes, "tree"), view(panes, "plan"), view(panes, "widgets"));
+    let bar = view(panes, "statusbar");
+    assert_eq!((bar.left, bar.width, bar.height), (0, 215, 1), "{panes:?}");
+    assert!(panes.iter().filter(|p| p.id != bar.id).all(|p| p.top < bar.top), "{panes:?}");
     let slot = panes.iter().find(|p| p.view == "chat" || !p.session.is_empty()).expect("a chat slot");
     assert_eq!(tree.left, 0, "{panes:?}");
     assert_eq!(plan.left, slot.left, "{panes:?}");
@@ -131,7 +137,7 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     let chat = view(&panes, "chat");
     assert_eq!(windows(&env, "cpd"), ["main"]);
     assert_eq!(windows(&env, "cpd-work"), ["watch"]);
-    let views: Vec<Vec<String>> = ["tree", "plan", "widgets", "chat"].iter().map(|v| vec!["tui".into(), "view".into(), (*v).into()]).collect();
+    let views: Vec<Vec<String>> = ["tree", "plan", "widgets", "chat", "statusbar"].iter().map(|v| vec!["tui".into(), "view".into(), (*v).into()]).collect();
     assert_eq!(views_started(&env), views);
     // The keyboard goes to the chat slot.
     assert_eq!(tmux_out(&env, &["display", "-p", "-t", "=cpd:main", "#{pane_id}"]).trim(), chat.id);
@@ -149,13 +155,18 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     assert_eq!(tmux_out(&env, &["show", "-gv", "remain-on-exit"]).trim(), "on");
     let border = tmux_out(&env, &["show", "-gv", "pane-border-format"]);
     assert!(border.contains("#{==:#{@cpd_view},tree}, Context "), "{border}");
+    // The StatusBar has no title, and a click on it never selects it.
+    assert!(border.contains("#{?#{==:#{@cpd_view},statusbar},,"), "{border}");
+    let binding = tmux_out(&env, &["list-keys", "-T", "root", "MouseDown1Pane"]);
+    assert!(binding.contains("#{==:#{@cpd_view},statusbar}"), "{binding}");
+    assert!(binding.contains("send-keys -M"), "{binding}");
 
     // A second run builds nothing and starts nothing.
     let again = env.cpd2(&["tui"]).ok();
     assert_eq!(again["built"], false, "{again}");
     assert_eq!(again["watch"], json!({"started": false, "already": true}));
     assert_eq!(main_panes(&env).iter().map(|p| &p.id).collect::<Vec<_>>(), panes.iter().map(|p| &p.id).collect::<Vec<_>>());
-    assert_eq!(views_started(&env).len(), 4);
+    assert_eq!(views_started(&env).len(), 5);
     assert_eq!(windows(&env, "cpd-work"), ["watch"]);
     assert!(tmux_out(&env, &["list-panes", "-t", engine, "-F", "#{pane_dead}"]).trim() == "0");
 }
@@ -188,6 +199,49 @@ fn tui_respawns_a_dead_pane_of_the_layout_in_place() {
     assert_eq!(after.iter().map(|p| &p.id).collect::<Vec<_>>(), before.iter().map(|p| &p.id).collect::<Vec<_>>());
     assert_ne!(view(&after, "tree").pid, tree.pid);
     assert_eq!(views_started(&env).iter().filter(|c| c[2] == "tree").count(), 2);
+}
+
+#[test]
+fn tui_respawns_a_dead_statusbar_in_place() {
+    let env = env();
+    env.cpd2(&["tui"]).ok();
+    let before = main_panes(&env);
+    let bar = view(&before, "statusbar").clone();
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(bar.pid as i32), nix::sys::signal::Signal::SIGKILL).unwrap();
+    wait_until("the dead statusbar pane", || view(&main_panes(&env), "statusbar").dead);
+
+    env.cpd2(&["tui"]).ok();
+    let after = main_panes(&env);
+    assert_layout(&after);
+    assert_eq!(view(&after, "statusbar").id, bar.id);
+    assert_ne!(view(&after, "statusbar").pid, bar.pid);
+    assert_eq!(after.len(), before.len());
+}
+
+#[test]
+fn tui_adds_a_missing_statusbar_to_an_existing_main_once() {
+    let env = env();
+    env.cpd2(&["tui"]).ok();
+    let full = main_panes(&env);
+    tmux_out(&env, &["kill-pane", "-t", &view(&full, "statusbar").id]);
+    let before = main_panes(&env);
+    assert_eq!(before.len(), 4, "{before:?}");
+
+    let out = env.cpd2(&["tui"]).ok();
+    assert_eq!(out["built"], false, "{out}");
+    let after = main_panes(&env);
+    assert_eq!(after.len(), 5, "{after:?}");
+    let bar = view(&after, "statusbar");
+    assert_eq!((bar.left, bar.width, bar.height), (0, 215, 1), "{after:?}");
+    // The other panes are the same panes, still alive; the layout was not reset.
+    for old in &before {
+        let new = after.iter().find(|p| p.id == old.id).unwrap_or_else(|| panic!("{} is gone: {after:?}", old.id));
+        assert_eq!((new.view.as_str(), new.pid, new.dead, new.left, new.width), (old.view.as_str(), old.pid, false, old.left, old.width));
+    }
+
+    // Rerunning adds none.
+    env.cpd2(&["tui"]).ok();
+    assert_eq!(main_panes(&env).len(), 5);
 }
 
 #[test]
