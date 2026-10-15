@@ -75,14 +75,6 @@ fn every_documented_command_exists() {
 const PENDING: &[(&[&str], &str)] = &[
     // context
     // plan
-    (&["plan", "new", "pay-4521", "--context", "payments"], "plan new"),
-    (&["plan", "list"], "plan list"),
-    (&["plan", "show", "--plan", "cpd2"], "plan show"),
-    (&["plan", "phase", "plan"], "plan phase"),
-    (&["plan", "render"], "plan render"),
-    (&["plan", "review"], "plan review"),
-    (&["plan", "decide", "r1", "--approve"], "plan decide"),
-    (&["plan", "lock"], "plan lock"),
     // job
     (&["job", "add", "api-schema", "--tier", "S2"], "job add"),
     (&["job", "edit", "api-schema", "--no-needs"], "job edit"),

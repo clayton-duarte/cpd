@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn a_pending_command_is_not_implemented_whatever_its_arguments() {
-        for words in [&["plan", "show"][..], &["plan", "show", "--plan", "cpd2"], &["job", "add", "k", "--bogus", "-x"]] {
+        for words in [&["job", "list"][..], &["job", "list", "--plan", "cpd2"], &["job", "add", "k", "--bogus", "-x"]] {
             assert_eq!(fails(words).code(), ErrorCode::NotImplemented, "{words:?}");
         }
         let err = fails(&["tui", "--attach"]);

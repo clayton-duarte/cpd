@@ -13,7 +13,7 @@ mod contexts;
 mod git;
 mod lock;
 mod record;
-mod render;
+pub(crate) mod render;
 mod repo;
 mod sync;
 

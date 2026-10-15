@@ -27,7 +27,7 @@ pub use state::Label;
 
 /// The program in every pane cpd starts, resolved on the tmux server's `PATH`
 /// (Escalation `rs-session-a1-q2`): a pane must outlive any one build.
-const PROGRAM: &str = "cpd2";
+pub(crate) const PROGRAM: &str = "cpd2";
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {

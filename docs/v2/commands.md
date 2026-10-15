@@ -311,6 +311,8 @@ Effects, in this order:
 4. **tmux:** start the server if it is not running (§6.1) and the cockpit session `cpd` if it is missing; then `new-window -d -t =cpd: -n park-<id> -c <repo> -e CPD_HOME=… -e CPD_SESSION=<session> -e CPD_PLAN=<id> -P -F '#{window_id} #{pane_id}' -- cpd2 session run <session>`, and `set -p -t <pane> @cpd_session <session>`. One transaction: `sessions.tmux_pane`; **Event** `session-moved` `{pane, window, place: "parked"}`.
 5. In the pane, `session run` (§10.8) forks the grounded Lead when it is idle (§6.7), or starts a fresh Lead, with the first message.
 
+When the cockpit session is missing, plan new creates it with the new Lead's park window as its first window; cpd2 tui builds main later.
+
 ```json
 {"ok": true, "plan": {"id": "pay-4521", "context": "payments", "title": "Retry failed payouts", "jira": null, "repo": "/home/clayton/projects/pay", "base": "main", "lead_branch": "cpd/pay-4521", "phase": "grounding", "lead_session": "8d0e…"},
  "lead": {"session": "8d0e…", "name": "pay-4521", "forked_from": "6f1c…", "pane": "%41", "window": "@17"},
