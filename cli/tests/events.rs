@@ -1,0 +1,761 @@
+//! Events (contract §5.1, §5.2, §5.4; commands.md §11): the append API, and
+//! `events list` and `events follow` run as the built binary.
+
+mod common;
+
+use std::fs;
+use std::io::{BufRead, BufReader};
+use std::process::{Child, Stdio};
+use std::str::FromStr;
+use std::time::{Duration, Instant};
+
+use common::{CPD, Run, TestEnv};
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::events::{Kind, NewEvent, append};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId};
+use cpd_core::store::{Store, WriteTxn};
+use rusqlite::Connection;
+use serde_json::{Value, json};
+
+fn home(env: &TestEnv) -> CpdHome {
+    CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap()
+}
+
+fn open(env: &TestEnv) -> Store {
+    Store::open(&home(env), 5000).unwrap()
+}
+
+fn write_config(env: &TestEnv) {
+    fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n[events]\npoll_ms = 20\n").unwrap();
+}
+
+fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
+    tx.execute_batch(sql)?;
+    Ok(())
+}
+
+fn ctx() -> ContextId {
+    ContextId::parse("ctx").unwrap()
+}
+fn plan(id: &str) -> PlanId {
+    PlanId::parse(id).unwrap()
+}
+fn job() -> JobKey {
+    JobKey::parse("api").unwrap()
+}
+fn attempt() -> AttemptId {
+    AttemptId::parse("api-a1").unwrap()
+}
+fn session(id: &str) -> SessionId {
+    SessionId::parse(id).unwrap()
+}
+
+/// Contexts `ctx` and `ctx2`; Plans `pay` (Lead `lead1`, Job `api` with Attempt
+/// `api-a1`, Worker `worker1`) and `other` (Lead `lead2`) in `ctx`; and a
+/// grounded Lead `side` in `ctx` with no Plan.
+fn fixture(store: &mut Store) {
+    store
+        .write("fixture", |tx| {
+            exec(
+                tx,
+                &format!(
+                    "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm'), ('ctx2', 'Ctx2', 't', 'm');
+                     INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
+                       ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead', '/', 'O3', 'idle', 't', 't'),
+                       ('lead2', 'lead', 'ctx', 'other', NULL, 'Lead', '/', 'O3', 'idle', 't', 't'),
+                       ('side', 'lead', 'ctx', NULL, NULL, 'Side', '/', 'O3', 'idle', 't', 't'),
+                       ('worker1', 'worker', 'ctx', 'pay', 'api-a1', 'Worker', '/', 'S2', 'working', 't', 't');
+                     INSERT INTO plans (id, context, title, repo, base, lead_branch, phase, lead_session, created_at) VALUES
+                       ('pay', 'ctx', 'Pay', '/r', 'main', 'cpd/pay', 'grounding', 'lead1', 't'),
+                       ('other', 'ctx', 'Other', '/r', 'main', 'cpd/other', 'grounding', 'lead2', 't');
+                     INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                       status, appended, fingerprint, created_txn, created_at)
+                       VALUES ('pay', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, '{fp}', {id}, 't');
+                     INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+                       VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pay--api-a1', '/w', 't');",
+                    fp = "a".repeat(64),
+                    id = tx.id()
+                ),
+            )
+        })
+        .unwrap();
+}
+
+/// Eleven Events, ids 1 to 11.
+fn seed(store: &mut Store) {
+    use Kind::*;
+    let events = [
+        NewEvent::new(ContextCreated, "Context ctx created.", json!({"title": "Ctx", "jira": null, "created_on": "m"}))
+            .context(ctx()),
+        NewEvent::new(
+            PlanCreated,
+            "Plan pay created.",
+            json!({"title": "Pay", "repo": "/r", "base": "main", "jira": null, "lead_session": "lead1", "forked_from": null}),
+        )
+        .plan(plan("pay")),
+        NewEvent::new(
+            SessionRegistered,
+            "Session lead1 registered.",
+            json!({"role": "lead", "name": "Lead", "forked_from": null, "tier": "O3"}),
+        )
+        .plan(plan("pay"))
+        .session(session("lead1")),
+        NewEvent::new(JobMerged, "Job api merged. Next: cpd plan show", json!({"sha": "c0ffee1", "tier": "S2"}))
+            .plan(plan("pay"))
+            .job(job())
+            .attempt(attempt()),
+        NewEvent::new(AttemptNudge, "Submit your work.", json!({"prompt": "Run cpd attempt submit"}))
+            .plan(plan("pay"))
+            .job(job())
+            .attempt(attempt())
+            .session(session("worker1")),
+        NewEvent::new(
+            ContextRecord,
+            "A decision was recorded.",
+            json!({"record": "m1-d1", "kind": "decision", "machine": "m1", "seq": 1}),
+        )
+        .context(ctx()),
+        NewEvent::new(SessionRenamed, "Session side renamed.", json!({"name": "Side"})).session(session("side")),
+        NewEvent::new(
+            PlanCreated,
+            "Plan other created.",
+            json!({"title": "Other", "repo": "/r", "base": "main", "jira": null, "lead_session": "lead2", "forked_from": null}),
+        )
+        .plan(plan("other")),
+        NewEvent::new(ContextCreated, "Context ctx2 created.", json!({"title": "Ctx2", "jira": null, "created_on": "m"}))
+            .context(ContextId::parse("ctx2").unwrap()),
+        NewEvent::new(WatchStarted, "The engine started.", json!({"pid": 1})),
+        NewEvent::new(
+            Error,
+            "watch failed.",
+            json!({"source": "watch", "code": "store_failed", "message": "x", "details": {}}),
+        ),
+    ];
+    store
+        .write("seed", |tx| {
+            for event in events {
+                append(tx, event)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// A configured home with the fixture and the eleven Events.
+fn seeded() -> TestEnv {
+    let env = TestEnv::new();
+    write_config(&env);
+    let mut store = open(&env);
+    fixture(&mut store);
+    seed(&mut store);
+    env
+}
+
+fn ids(events: &Value) -> Vec<i64> {
+    events.as_array().unwrap().iter().map(|e| e["id"].as_i64().unwrap()).collect()
+}
+
+fn list(env: &TestEnv, args: &[&str]) -> Value {
+    let mut argv = vec!["events", "list"];
+    argv.extend_from_slice(args);
+    env.cpd(&argv).ok()
+}
+
+/// What `events follow --until-idle` printed: one JSON value per line.
+fn follow_lines(run: &Run) -> Vec<Value> {
+    assert_eq!(run.exit, 0, "{run:?}");
+    run.stdout.lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+}
+
+fn follow_until_idle(env: &TestEnv, args: &[&str]) -> Vec<Value> {
+    let mut argv = vec!["events", "follow", "--until-idle"];
+    argv.extend_from_slice(args);
+    follow_lines(&env.cpd(&argv))
+}
+
+fn refused(env: &TestEnv, args: &[&str], code: &str, exit: i32) -> Value {
+    let run = env.cpd(args);
+    let err = run.error();
+    assert_eq!((err["code"].as_str().unwrap(), run.exit), (code, exit), "{args:?}: {run:?}");
+    err
+}
+
+// ------------------------------------------------------------------ append
+
+/// §5.2, written out independently of `Kind::spec`:
+/// `(kind, columns always set, columns that may be set, data fields, optional data fields)`;
+/// columns are `c`ontext, `p`lan, `j`ob, `a`ttempt, `s`ession.
+const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
+    ("context-created", "c", "", &["title", "jira", "created_on"], &[]),
+    ("context-record", "c", "", &["record", "kind", "machine", "seq"], &[]),
+    ("context-grounded", "cs", "", &["seq", "forked_from"], &[]),
+    ("plan-created", "cp", "", &["title", "repo", "base", "jira", "lead_session", "forked_from"], &[]),
+    ("plan-phase", "cp", "", &["from", "to"], &["jobs", "pr"]),
+    ("plan-review", "cp", "", &["review", "fingerprint", "status"], &["feedback"]),
+    ("plan-done", "cp", "", &["pr", "merged_at"], &[]),
+    ("job-added", "cpj", "", &["status", "appended", "tier", "needs"], &[]),
+    ("job-edited", "cpj", "", &["fields"], &[]),
+    ("job-merged", "cpja", "", &["sha", "tier"], &["cancel_too_late"]),
+    ("job-failed", "cpj", "a", &["cause", "detail", "tier", "attempts"], &[]),
+    ("job-retried", "cpj", "", &["tier"], &[]),
+    ("job-cancel-requested", "cpja", "", &["reason"], &[]),
+    ("job-cancelled", "cpj", "a", &["reason"], &[]),
+    ("attempt-started", "cpja", "", &["number", "tier", "origin"], &[]),
+    ("attempt-status", "cpja", "", &["from", "to"], &[]),
+    ("attempt-retry", "cpja", "", &["outcome", "cause", "next_tier"], &["feedback"]),
+    ("attempt-nudge", "cpjas", "", &["prompt"], &[]),
+    ("all-merged", "cp", "", &["merged", "cancelled"], &[]),
+    ("pr-feedback", "cp", "", &["checks", "reviews", "comments", "state"], &[]),
+    ("escalation", "cpja", "", &["escalation", "question"], &[]),
+    ("escalation-answered", "cpja", "", &["escalation"], &[]),
+    ("escalation-expired", "cpja", "", &["escalation", "reason"], &[]),
+    ("session-registered", "cs", "p", &["role", "name", "forked_from", "tier"], &[]),
+    ("session-state", "cs", "p", &["from", "to", "label"], &[]),
+    ("session-moved", "cs", "p", &["pane", "window", "place"], &[]),
+    ("session-renamed", "cs", "p", &["name"], &[]),
+    ("watch-started", "", "", &["pid"], &[]),
+    ("watch-stopped", "", "", &["pid"], &[]),
+    ("error", "", "cpjas", &["source", "code", "message", "details"], &[]),
+];
+
+fn event(kind: Kind, columns: &str, data: &[&str]) -> NewEvent {
+    let data: serde_json::Map<String, Value> = data.iter().map(|k| (k.to_string(), json!(1))).collect();
+    let mut e = NewEvent::new(kind, "text", Value::Object(data));
+    for c in columns.chars() {
+        e = match c {
+            'c' => e.context(ctx()),
+            'p' => e.plan(plan("pay")),
+            'j' => e.job(job()),
+            'a' => e.attempt(attempt()),
+            's' => e.session(session("worker1")),
+            _ => unreachable!(),
+        };
+    }
+    e
+}
+
+fn append_one(store: &mut Store, e: NewEvent) -> Result<i64, CpdError> {
+    store.write("test", |tx| append(tx, e))
+}
+
+fn refused_append(store: &mut Store, e: NewEvent, why: &str) {
+    let err = append_one(store, e).expect_err(why);
+    assert_eq!(err.code(), ErrorCode::StoreFailed, "{why}: {err:?}");
+}
+
+#[test]
+fn the_kinds_are_exactly_those_of_5_2_and_of_the_table_check() {
+    let names: Vec<&str> = Kind::ALL.iter().map(|k| k.as_str()).collect();
+    assert_eq!(names, SPEC.iter().map(|s| s.0).collect::<Vec<_>>());
+
+    // The `events.kind` CHECK of the DDL lists the same kinds.
+    let env = TestEnv::new();
+    write_config(&env);
+    drop(open(&env));
+    let conn = Connection::open(home(&env).db()).unwrap();
+    let ddl: String =
+        conn.query_row("SELECT sql FROM sqlite_schema WHERE name = 'events'", [], |r| r.get(0)).unwrap();
+    let check = ddl.split("kind    TEXT").nth(1).unwrap().split("\n  context ").next().unwrap();
+    let mut in_ddl: Vec<&str> = check.split('\'').skip(1).step_by(2).collect();
+    in_ddl.sort();
+    let mut expected = names.clone();
+    expected.sort();
+    assert_eq!(in_ddl, expected);
+}
+
+#[test]
+fn every_kind_is_appended_with_its_fields() {
+    let env = TestEnv::new();
+    write_config(&env);
+    let mut store = open(&env);
+    fixture(&mut store);
+    for (name, always, maybe, data, optional) in SPEC {
+        let kind = Kind::from_str(name).unwrap();
+        let id = append_one(&mut store, event(kind, always, data)).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        assert!(id > 0);
+        // With everything that may be set, and every optional field.
+        let all_columns = format!("{always}{maybe}");
+        let all_data: Vec<&str> = data.iter().chain(optional.iter()).copied().collect();
+        append_one(&mut store, event(kind, &all_columns, &all_data)).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    }
+    let events = list(&env, &["--limit", "5000"])["events"].clone();
+    assert_eq!(events.as_array().unwrap().len(), SPEC.len() * 2);
+}
+
+#[test]
+fn a_missing_field_is_refused() {
+    let env = TestEnv::new();
+    write_config(&env);
+    let mut store = open(&env);
+    fixture(&mut store);
+    for (name, always, _, data, _) in SPEC {
+        let kind = Kind::from_str(name).unwrap();
+        for missing in *data {
+            let rest: Vec<&str> = data.iter().filter(|k| *k != missing).copied().collect();
+            let err = append_one(&mut store, event(kind, always, &rest)).expect_err(&format!("{name} without {missing}"));
+            assert_eq!(err.code(), ErrorCode::StoreFailed);
+            assert_eq!(err.details()["field"], *missing, "{name}");
+        }
+    }
+}
+
+#[test]
+fn an_unknown_field_or_a_data_that_is_not_an_object_is_refused() {
+    let env = TestEnv::new();
+    write_config(&env);
+    let mut store = open(&env);
+    fixture(&mut store);
+    for (name, always, _, data, _) in SPEC {
+        let kind = Kind::from_str(name).unwrap();
+        let more: Vec<&str> = data.iter().copied().chain(["bogus"]).collect();
+        refused_append(&mut store, event(kind, always, &more), &format!("{name} with an unknown field"));
+        let mut array = NewEvent::new(kind, "text", json!([1]));
+        for c in always.chars() {
+            array = match c {
+                'c' => array.context(ctx()),
+                'p' => array.plan(plan("pay")),
+                'j' => array.job(job()),
+                'a' => array.attempt(attempt()),
+                's' => array.session(session("worker1")),
+                _ => unreachable!(),
+            };
+        }
+        refused_append(&mut store, array, &format!("{name} with array data"));
+    }
+}
+
+#[test]
+fn a_column_the_kind_does_not_set_is_refused_and_one_it_must_set_is_required() {
+    let env = TestEnv::new();
+    write_config(&env);
+    let mut store = open(&env);
+    fixture(&mut store);
+    for (name, always, maybe, data, _) in SPEC {
+        let kind = Kind::from_str(name).unwrap();
+        for c in "cpjas".chars() {
+            if always.contains(c) || maybe.contains(c) {
+                continue;
+            }
+            refused_append(
+                &mut store,
+                event(kind, &format!("{always}{c}"), data),
+                &format!("{name} must not set {c}"),
+            );
+        }
+        for c in always.chars().filter(|c| *c != 'c') {
+            let without: String = always.chars().filter(|x| *x != c).collect();
+            refused_append(&mut store, event(kind, &without, data), &format!("{name} without {c}"));
+        }
+        if always.contains('c') && !always.contains('p') && !always.contains('s') {
+            refused_append(&mut store, event(kind, "", data), &format!("{name} without a Context"));
+        }
+    }
+    // A Job needs its Plan; an Attempt needs its Job (of the kinds that allow them).
+    refused_append(
+        &mut store,
+        NewEvent::new(Kind::Error, "x", json!({"source": 1, "code": 1, "message": 1, "details": 1})).job(job()),
+        "a Job without a Plan",
+    );
+    refused_append(
+        &mut store,
+        NewEvent::new(Kind::Error, "x", json!({"source": 1, "code": 1, "message": 1, "details": 1}))
+            .plan(plan("pay"))
+            .attempt(attempt()),
+        "an Attempt without a Job",
+    );
+    refused_append(&mut store, NewEvent::new(Kind::WatchStarted, "", json!({"pid": 1})), "empty text");
+}
+
+#[test]
+fn an_unknown_kind_is_refused() {
+    let err = Kind::from_str("job-exploded").unwrap_err();
+    assert_eq!(err.code(), ErrorCode::Usage);
+    let env = seeded();
+    refused(&env, &["events", "list", "--kind", "job-exploded"], "usage", 2);
+    refused(&env, &["events", "follow", "--kind", "job-exploded"], "usage", 2);
+}
+
+#[test]
+fn append_takes_the_context_of_the_plan_else_of_the_session() {
+    let env = seeded();
+    let events = list(&env, &["--since", "0"])["events"].clone();
+    let by_id = |id: i64| events.as_array().unwrap().iter().find(|e| e["id"] == id).unwrap().clone();
+    assert_eq!(by_id(2)["context"], "ctx"); // plan-created: from the Plan
+    assert_eq!(by_id(7)["context"], "ctx"); // session-renamed: from the Session
+    assert_eq!(by_id(7)["plan"], Value::Null);
+    assert_eq!(by_id(10)["context"], Value::Null); // watch-started: none
+}
+
+#[test]
+fn append_names_a_missing_plan_or_session() {
+    let env = TestEnv::new();
+    write_config(&env);
+    let mut store = open(&env);
+    fixture(&mut store);
+    let e = NewEvent::new(Kind::JobRetried, "x", json!({"tier": 1})).plan(plan("nope")).job(job());
+    assert_eq!(append_one(&mut store, e).unwrap_err().code(), ErrorCode::PlanNotFound);
+    let e = NewEvent::new(Kind::SessionRenamed, "x", json!({"name": 1})).session(session("nope"));
+    assert_eq!(append_one(&mut store, e).unwrap_err().code(), ErrorCode::SessionNotFound);
+}
+
+#[test]
+fn an_event_belongs_to_its_transaction_and_rolls_back_with_it() {
+    let env = TestEnv::new();
+    write_config(&env);
+    let mut store = open(&env);
+    fixture(&mut store);
+    let (txn, id) = store
+        .write("append-test", |tx| {
+            let id = append(tx, NewEvent::new(Kind::WatchStarted, "x", json!({"pid": 1})))?;
+            Ok((tx.id(), id))
+        })
+        .unwrap();
+    let conn = Connection::open(home(&env).db()).unwrap();
+    let (e_txn, e_at, t_at): (i64, String, String) = conn
+        .query_row(
+            "SELECT e.txn, e.at, t.at FROM events e JOIN txns t ON t.id = e.txn WHERE e.id = ?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!((e_txn, e_at.as_str()), (txn, t_at.as_str()));
+    assert!(e_at.ends_with('Z') && e_at.len() == 24, "{e_at}");
+
+    let before: i64 = conn.query_row("SELECT count(*) FROM events", [], |r| r.get(0)).unwrap();
+    let failed: Result<(), CpdError> = store.write("rollback-test", |tx| {
+        append(tx, NewEvent::new(Kind::WatchStopped, "x", json!({"pid": 1})))?;
+        Err(CpdError::new(ErrorCode::CasLost, "No."))
+    });
+    assert_eq!(failed.unwrap_err().code(), ErrorCode::CasLost);
+    let after: i64 = conn.query_row("SELECT count(*) FROM events", [], |r| r.get(0)).unwrap();
+    assert_eq!(before, after);
+}
+
+// ------------------------------------------------------------- events list
+
+#[test]
+fn list_prints_events_in_the_shape_of_11_1() {
+    let env = seeded();
+    let out = list(&env, &[]);
+    assert_eq!(ids(&out["events"]), (1..=11).collect::<Vec<_>>());
+    assert_eq!(out["next"], 11);
+    let merged = &out["events"][3];
+    let keys: Vec<&str> = merged.as_object().unwrap().keys().map(String::as_str).collect();
+    let mut want = ["id", "at", "kind", "context", "plan", "job", "attempt", "session", "text", "data"];
+    want.sort();
+    assert_eq!(keys, want); // serde_json sorts keys
+    assert_eq!(merged["kind"], "job-merged");
+    assert_eq!(merged["context"], "ctx");
+    assert_eq!(merged["plan"], "pay");
+    assert_eq!(merged["job"], "api");
+    assert_eq!(merged["attempt"], "api-a1");
+    assert_eq!(merged["session"], Value::Null);
+    assert_eq!(merged["text"], "Job api merged. Next: cpd plan show");
+    assert_eq!(merged["data"], json!({"sha": "c0ffee1", "tier": "S2"}));
+    assert!(merged["at"].as_str().unwrap().ends_with('Z'));
+}
+
+#[test]
+fn list_since_is_exclusive_limit_caps_and_next_resumes() {
+    let env = seeded();
+    let first = list(&env, &["--limit", "4"]);
+    assert_eq!((ids(&first["events"]), &first["next"]), (vec![1, 2, 3, 4], &json!(4)));
+    let second = list(&env, &["--since", "4", "--limit", "4"]);
+    assert_eq!((ids(&second["events"]), &second["next"]), (vec![5, 6, 7, 8], &json!(8)));
+    let rest = list(&env, &["--since", "8"]);
+    assert_eq!(ids(&rest["events"]), vec![9, 10, 11]);
+    // Nothing more: next is --since; a cursor beyond the end is not an error here.
+    let none = list(&env, &["--since", "11"]);
+    assert_eq!((ids(&none["events"]), &none["next"]), (vec![], &json!(11)));
+    let beyond = list(&env, &["--since", "999"]);
+    assert_eq!((ids(&beyond["events"]), &beyond["next"]), (vec![], &json!(999)));
+}
+
+#[test]
+fn list_selects_by_plan_context_session_and_kind() {
+    let env = seeded();
+    let sel = |args: &[&str]| ids(&list(&env, args)["events"]);
+    assert_eq!(sel(&["--plan", "pay"]), vec![2, 3, 4, 5]);
+    assert_eq!(sel(&["--context", "ctx"]), vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    // The Lead of `pay`: its Plan, its Context's Events about no Plan, itself.
+    assert_eq!(sel(&["--session", "lead1"]), vec![1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!(sel(&["--session", "lead2"]), vec![1, 6, 7, 8]);
+    // Any other Session: only Events addressed to itself.
+    assert_eq!(sel(&["--session", "worker1"]), vec![5]);
+    assert_eq!(sel(&["--session", "side"]), vec![7]);
+    assert_eq!(sel(&["--kind", "plan-created"]), vec![2, 8]);
+    assert_eq!(sel(&["--kind", "plan-created", "--kind", "error"]), vec![2, 8, 11]);
+    assert_eq!(sel(&["--plan", "pay", "--kind", "job-merged", "--since", "3"]), vec![4]);
+}
+
+#[test]
+fn list_selection_flags_do_not_fall_back_to_the_environment() {
+    let env = seeded();
+    let out = env
+        .command(CPD)
+        .args(["events", "list"])
+        .env("CPD_PLAN", "pay")
+        .env("CPD_SESSION", "worker1")
+        .output()
+        .unwrap();
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(ids(&json["events"]), (1..=11).collect::<Vec<_>>());
+}
+
+#[test]
+fn list_is_read_only_and_repeatable() {
+    let env = seeded();
+    let a = env.cpd(&["events", "list", "--plan", "pay"]);
+    let b = env.cpd(&["events", "list", "--plan", "pay"]);
+    assert_eq!(a.stdout, b.stdout);
+    let conn = Connection::open(home(&env).db()).unwrap();
+    let txns: i64 = conn.query_row("SELECT count(*) FROM txns", [], |r| r.get(0)).unwrap();
+    env.cpd(&["events", "list"]).ok();
+    assert_eq!(txns, conn.query_row("SELECT count(*) FROM txns", [], |r| r.get::<_, i64>(0)).unwrap());
+}
+
+#[test]
+fn list_refusals() {
+    let env = seeded();
+    refused(&env, &["events", "list", "--plan", "pay", "--context", "ctx"], "usage", 2);
+    refused(&env, &["events", "list", "--plan", "pay", "--session", "lead1"], "usage", 2);
+    refused(&env, &["events", "list", "--context", "ctx", "--session", "lead1"], "usage", 2);
+    refused(&env, &["events", "list", "--limit", "0"], "usage", 2);
+    refused(&env, &["events", "list", "--limit", "5001"], "usage", 2);
+    refused(&env, &["events", "list", "--since", "-1"], "usage", 2);
+    refused(&env, &["events", "list", "--since", "x"], "usage", 2);
+    refused(&env, &["events", "list", "--bogus"], "usage", 2);
+    refused(&env, &["events", "list", "--plan", "Bad_Id"], "invalid_plan_id", 2);
+    refused(&env, &["events", "list", "--context", "Bad_Id"], "invalid_context_id", 2);
+    refused(&env, &["events", "list", "--session", "a b"], "invalid_session_id", 2);
+    refused(&env, &["events", "list", "--plan", "nope"], "plan_not_found", 4);
+    refused(&env, &["events", "list", "--context", "nope"], "context_not_found", 4);
+    refused(&env, &["events", "list", "--session", "nope"], "session_not_found", 4);
+    let bare = TestEnv::new();
+    refused(&bare, &["events", "list"], "config_missing", 1);
+}
+
+#[test]
+fn list_limit_5000_is_accepted() {
+    let env = seeded();
+    assert_eq!(ids(&list(&env, &["--limit", "5000"])["events"]).len(), 11);
+}
+
+// ----------------------------------------------------------- events follow
+
+#[test]
+fn follow_until_idle_replays_since_zero_one_event_per_line() {
+    let env = seeded();
+    let lines = follow_until_idle(&env, &["--since", "0"]);
+    assert_eq!(lines, list(&env, &["--since", "0"])["events"].as_array().unwrap().clone());
+    let run = env.cpd(&["events", "follow", "--until-idle", "--since", "0"]);
+    assert_eq!(run.stdout.lines().count(), 11);
+    assert!(run.stdout.ends_with('\n'));
+    assert_eq!(run.stderr, "");
+}
+
+#[test]
+fn follow_without_since_starts_after_the_highest_id() {
+    let env = seeded();
+    assert!(follow_until_idle(&env, &[]).is_empty());
+}
+
+#[test]
+fn follow_since_is_exclusive_and_the_same_since_replays_the_same_lines() {
+    let env = seeded();
+    let a = follow_until_idle(&env, &["--since", "8"]);
+    assert_eq!(ids(&Value::Array(a.clone())), vec![9, 10, 11]);
+    assert_eq!(a, follow_until_idle(&env, &["--since", "8"]));
+    assert!(follow_until_idle(&env, &["--since", "11"]).is_empty());
+}
+
+#[test]
+fn follow_selects_like_list() {
+    let env = seeded();
+    let sel = |args: &[&str]| ids(&Value::Array(follow_until_idle(&env, &[&["--since", "0"], args].concat())));
+    assert_eq!(sel(&["--plan", "pay"]), vec![2, 3, 4, 5]);
+    assert_eq!(sel(&["--context", "ctx"]), vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(sel(&["--session", "lead1"]), vec![1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!(sel(&["--session", "worker1"]), vec![5]);
+    assert_eq!(sel(&["--kind", "plan-created", "--kind", "error"]), vec![2, 8, 11]);
+}
+
+#[test]
+fn follow_refusals() {
+    let env = seeded();
+    refused(&env, &["events", "follow", "--plan", "pay", "--context", "ctx"], "usage", 2);
+    refused(&env, &["events", "follow", "--session", "lead1", "--plan", "pay"], "usage", 2);
+    refused(&env, &["events", "follow", "--plan", "nope"], "plan_not_found", 4);
+    refused(&env, &["events", "follow", "--context", "nope"], "context_not_found", 4);
+    refused(&env, &["events", "follow", "--session", "nope"], "session_not_found", 4);
+    refused(&env, &["events", "follow", "--plan", "Bad_Id"], "invalid_plan_id", 2);
+    let err = refused(&env, &["events", "follow", "--since", "12", "--until-idle"], "cursor_ahead", 3);
+    assert_eq!(err["details"]["highest"], 11);
+    refused(&env, &["events", "follow", "--since", "-3"], "usage", 2);
+    let bare = TestEnv::new();
+    refused(&bare, &["events", "follow"], "config_missing", 1);
+}
+
+#[test]
+fn follow_since_zero_on_an_empty_store_is_fine_and_since_one_is_ahead() {
+    let env = TestEnv::new();
+    write_config(&env);
+    assert!(follow_until_idle(&env, &["--since", "0"]).is_empty());
+    refused(&env, &["events", "follow", "--since", "1", "--until-idle"], "cursor_ahead", 3);
+}
+
+#[test]
+fn follow_reads_full_batches_until_it_has_everything() {
+    let env = TestEnv::new();
+    write_config(&env);
+    let mut store = open(&env);
+    store
+        .write("bulk", |tx| {
+            for n in 0..1203 {
+                append(tx, NewEvent::new(Kind::WatchStarted, format!("start {n}"), json!({"pid": n})))?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    let lines = follow_until_idle(&env, &["--since", "0"]);
+    assert_eq!(ids(&Value::Array(lines)), (1..=1203).collect::<Vec<_>>());
+    let listed = list(&env, &["--limit", "5000"]);
+    assert_eq!(ids(&listed["events"]).len(), 1203);
+    assert_eq!(list(&env, &[])["events"].as_array().unwrap().len(), 500);
+}
+
+struct Follower {
+    child: Child,
+    lines: Option<BufReader<std::process::ChildStdout>>,
+}
+
+impl Follower {
+    fn start(env: &TestEnv, args: &[&str]) -> Follower {
+        let mut child = env
+            .command(CPD)
+            .args(["events", "follow"])
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let lines = Some(BufReader::new(child.stdout.take().unwrap()));
+        Follower { child, lines }
+    }
+
+    /// The next line, or `None` at end of output.
+    fn next(&mut self) -> Option<Value> {
+        let mut line = String::new();
+        let n = self.lines.as_mut().unwrap().read_line(&mut line).unwrap();
+        (n > 0).then(|| serde_json::from_str(&line).unwrap())
+    }
+
+    fn close_stdout(&mut self) {
+        self.lines = None;
+    }
+
+    fn exit(&mut self) -> i32 {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                return status.code().expect("not killed");
+            }
+            assert!(Instant::now() < deadline, "the follower did not exit");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+impl Drop for Follower {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn append_watch(store: &mut Store, n: i64) -> i64 {
+    append_one(store, NewEvent::new(Kind::WatchStarted, format!("start {n}"), json!({"pid": n}))).unwrap()
+}
+
+fn append_edit(store: &mut Store, field: &str) -> i64 {
+    let e = NewEvent::new(Kind::JobEdited, "edit", json!({"fields": [field]})).plan(plan("pay")).job(job());
+    append_one(store, e).unwrap()
+}
+
+#[test]
+fn follow_streams_new_events_in_commit_order_and_exits_zero_when_stdout_closes() {
+    let env = seeded();
+    let mut store = open(&env);
+    let mut follower = Follower::start(&env, &["--plan", "pay", "--since", "11"]);
+    let a = append_edit(&mut store, "goal");
+    append_watch(&mut store, 1); // not selected
+    let b = append_edit(&mut store, "tier");
+    let first = follower.next().unwrap();
+    assert_eq!((first["id"].as_i64().unwrap(), &first["kind"]), (a, &json!("job-edited")));
+    assert_eq!(first["data"], json!({"fields": ["goal"]}));
+    let second = follower.next().unwrap();
+    assert_eq!(second["id"].as_i64().unwrap(), b);
+    // It keeps running; a later Event still arrives.
+    let c = append_edit(&mut store, "touches");
+    assert_eq!(follower.next().unwrap()["id"].as_i64().unwrap(), c);
+    // Close stdout: the next Event it prints finds the pipe closed (EPIPE), and it exits 0.
+    follower.close_stdout();
+    append_edit(&mut store, "acceptance");
+    append_edit(&mut store, "context");
+    assert_eq!(follower.exit(), 0);
+}
+
+#[test]
+fn follow_without_since_prints_only_events_committed_after_it_started() {
+    let env = seeded();
+    let mut store = open(&env);
+    let mut follower = Follower::start(&env, &[]);
+    let stdout = follower.lines.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let mut stdout = stdout;
+        stdout.read_line(&mut line).unwrap();
+        let _ = tx.send(line);
+    });
+    // The follower's start is asynchronous: write probes until its first line arrives.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let line = loop {
+        let probe = append_watch(&mut store, 7);
+        if let Ok(line) = rx.recv_timeout(Duration::from_millis(100)) {
+            break (probe, line);
+        }
+        assert!(Instant::now() < deadline, "the follower printed nothing");
+    };
+    let first: Value = serde_json::from_str(&line.1).unwrap();
+    // Nothing of the eleven seeded Events, which were committed before it started.
+    assert!(first["id"].as_i64().unwrap() > 11, "{first}");
+    assert_eq!(first["kind"], "watch-started");
+}
+
+#[test]
+fn follow_since_prints_the_backlog_then_the_new_events() {
+    let env = seeded();
+    let mut store = open(&env);
+    let mut follower = Follower::start(&env, &["--since", "9"]);
+    assert_eq!(follower.next().unwrap()["id"], 10);
+    assert_eq!(follower.next().unwrap()["id"], 11);
+    let n = append_watch(&mut store, 2);
+    assert_eq!(follower.next().unwrap()["id"].as_i64().unwrap(), n);
+}
+
+#[test]
+fn follow_a_failure_after_the_first_line_is_the_last_line() {
+    let env = seeded();
+    let mut follower = Follower::start(&env, &["--since", "10"]);
+    assert_eq!(follower.next().unwrap()["id"], 11);
+    // An upgrade by a newer cpd while the follower runs.
+    let conn = Connection::open(home(&env).db()).unwrap();
+    conn.pragma_update(None, "user_version", 99).unwrap();
+    let last = follower.next().unwrap();
+    assert_eq!(last["ok"], false);
+    assert_eq!(last["error"]["code"], "store_too_new");
+    assert_eq!(follower.next(), None);
+    assert_eq!(follower.exit(), 1);
+}

@@ -4,6 +4,7 @@ deps = "npm ci --no-audit --no-fund"
 # R19/R20: per Job, only the quick check at submit (pre-commit); the full Gate (pre-merge) runs at pr open and pr rebase.
 [pre-commit]
 typecheck = "npm run typecheck || exit 64"
+cargo = "scripts/cargo.sh build --workspace || exit 64"
 
 [pre-merge]
 verify = "npm run verify || exit 64"

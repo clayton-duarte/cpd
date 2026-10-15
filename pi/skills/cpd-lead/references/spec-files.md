@@ -4,7 +4,7 @@ A Worker is a fresh session that sees only its Spec. Whatever it needs must be i
 
 ## The spec file
 
-The file passed as `--spec` when you add a Job is JSON with exactly these fields, all required:
+The file passed as `--spec` when you add a Job is JSON with exactly these fields, all required, and no others (an unknown field is refused with `spec_invalid`):
 
 ```json
 {
@@ -14,43 +14,44 @@ The file passed as `--spec` when you add a Job is JSON with exactly these fields
   "acceptance": [
     "GET /health returns 200 with body {\"status\":\"ok\"}",
     "`npm test -- test/routes/health.test.ts` passes",
-    "`./verify.sh` passes"
+    "The repo's quick check passes"
   ],
-  "outOfScope": ["Do not change the existing routes", "Do not add a dependency"]
+  "out_of_scope": ["Do not change the existing routes", "Do not add a dependency"]
 }
 ```
 
 | Field | What it holds |
 |---|---|
 | `goal` | One outcome, in the imperative. |
-| `context` | Everything the Worker needs and cannot ask the User for: facts, paths, names, signatures, how to run things, decisions from the interview, the accepted assumptions that apply. |
+| `context` | Everything the Worker needs and cannot ask the User for: facts, paths, names, signatures, how to run things, decisions from the interview and the Context's records, the accepted assumptions that apply. |
 | `touches` | Exact paths the Worker may change, at least one. New files included. The Worker may touch nothing else. |
 | `acceptance` | At least one item, each checkable by a command or an observable result. |
-| `outOfScope` | The adjacent temptations to refuse. May be empty, rarely should be. |
+| `out_of_scope` | The adjacent temptations to refuse. May be empty, rarely should be. |
 
 Write the text in GFM only: tables, lists, code and Mermaid. Footnotes render as literal text and raw HTML is not rendered, so the User would see them broken in the Plan.
 
+The Worker's submit runs only the repo's quick check (its `pre-commit` hook). The Gate (its `pre-merge` hook) runs later, on the whole Lead Branch, so an acceptance item that needs the Gate must name the command itself.
+
 ## Size
 
-- Target **about 13 min and about 150 turns** per Job, including worktree setup and dependency install. The timeout is **30 min** per Attempt. A Job that needs more fails and costs a retry.
+- Target **about 13 min and about 150 turns** per Job, including worktree setup and dependency install. The timeout is **30 min** of active time per Attempt. A Job that needs more fails and costs a retry.
 - A Job is one outcome that one Worker can finish and verify. Two independent outcomes are two Jobs.
 - Prefer many small Jobs that run in parallel. Do not split below a unit that has its own acceptance check.
-- A Job keyed `^[a-z][a-z0-9-]{0,31}$` and unique in the Workflow.
+- A Job key matches `^[a-z][a-z0-9-]{0,31}$` and is unique in the Plan.
 
 ## Dependencies
 
 - Add `--needs <k1,k2>` when a Job changes files another Job changes, imports what another Job produces, or tests another Job's behaviour. A Job starts only after its Dependencies are Merged and branches from the Lead Branch that contains them.
 - Jobs with disjoint `touches` and no data flow between them need no Dependency. Shared files such as lockfiles, `package.json`, config and index or route registries count as shared.
-- Dependencies cannot form a cycle, and cannot name a cancelled or failed Job.
+- Dependencies cannot form a cycle (`dependency_cycle`), cannot name an unknown Job (`needs_unknown`) and cannot name a cancelled or failed Job (`needs_unavailable`).
 
 ## Tiers
 
-Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku); effort 0–5. Valid: `O1`–`O5`, `S0`–`S5`, `H0`–`H3`. An invalid Tier is refused when you add the Job. `cpd tiers` prints the efforts each model accepts.
+Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku); effort 0–5. An invalid Tier is refused when you add the Job (`tier_invalid`, with the valid efforts in `error.details.efforts`). `cpd tiers` prints the efforts each model accepts.
 
 | Work | Tier | Why |
 |---|---|---|
-| Coding, tests, refactors | `S1` | The User's default. Start low: each rejection raises effort by one on the next Attempt, up to 2 retries (3 Attempts). |
-| Review (`--review-tier`) | `S4` | The default review Tier. Raise it for risky changes. Unused when `reviewMode` is `none` (no Reviewer). |
+| Coding, tests, refactors | `S1` | The User's default. Start low: each failed Attempt that the ladder retries (`crashed`, `no_submit`, `merge_conflict`) raises effort by one on the next Attempt, up to `retry_cap` retries (default 2, so 3 Attempts). |
 | Docs, config, mechanical edits | `H2` | Cheap and enough. |
 | Judgement-heavy work (ambiguous design, security-sensitive, subtle algorithms) | `O3` | `O` only when judgement decides the outcome. |
 

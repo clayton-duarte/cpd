@@ -6,16 +6,10 @@
   "engines": {
     "node": ">=22.18"
   },
-  "bin": {
-    "cpd": "bin/cpd.mjs"
-  },
   "scripts": {
-    "test": "node --test",
+    "test": "node --test pi/test/*.test.ts pi/skills/skill.test.ts",
     "typecheck": "tsc --noEmit -p .",
-    "verify": "npm run typecheck && npm test"
-  },
-  "dependencies": {
-    "zod": "^4.6.7"
+    "verify": "npm run typecheck && npm test && scripts/cargo.sh build --workspace && scripts/cargo.sh test --workspace"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
