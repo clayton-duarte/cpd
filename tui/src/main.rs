@@ -37,6 +37,7 @@ use tui_tree_widget::TreeState;
 
 mod actions;
 mod context;
+mod cursor;
 mod flow;
 mod legend;
 mod palette;
@@ -371,6 +372,7 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
     let mut last_workers = Instant::now();
     // Keyboard focus of this pane, from the terminal's focus events (`focus-events on`); the cursor shows only while focused.
     let mut focused = env::var("TMUX_PANE").ok().and_then(|p| tmux_checked(&["display", "-p", "-t", &p, "#{pane_active}"]).ok()).is_some_and(|a| a.trim() == "1");
+    let mut last_input = cursor::Input::Click; // the cursor stays hidden until the first arrow key
     let mut prompt: Option<Prompt> = None;
     let mut note = String::new(); // the one-line result or refusal of the last action, until the next key
     let mut button = Rect::default(); // the legend button, set by each draw
@@ -384,6 +386,7 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
             workers = workers::read(&home);
             last_workers = Instant::now();
         }
+        let cursor_shown = cursor::shown(focused, last_input, !data.state.selected().is_empty());
         terminal
             .draw(|f| {
                 let area = f.area();
@@ -403,7 +406,7 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
                     let style = if prompt.is_some() { Style::new().fg(palette::ui(Ui::Note)).bold() } else { Style::new().fg(palette::ui(Ui::Note)) };
                     f.render_widget(Paragraph::new(footer).style(style).wrap(Wrap { trim: false }), footer_area);
                 }
-                context::draw(f, list_area, &data.rows, &mut data.state, focused);
+                context::draw(f, list_area, &data.rows, &mut data.state, cursor_shown);
             })
             .map_err(|e| e.to_string())?;
         if !event::poll(Duration::from_millis(250)).map_err(|e| e.to_string())? {
@@ -413,7 +416,10 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
         let mut outcome = Outcome::Open;
         match event::read().map_err(|e| e.to_string())? {
             Event::FocusGained => focused = true,
-            Event::FocusLost => focused = false,
+            Event::FocusLost => {
+                focused = false;
+                last_input = cursor::Input::Click;
+            }
             // an open prompt takes every key; mouse clicks are ignored meanwhile, so the target cannot be swapped into the centre
             Event::Key(k) if k.kind == KeyEventKind::Press && prompt.is_some() => {
                 if let Some(p) = prompt.as_mut() {
@@ -424,7 +430,7 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
                 KeyCode::Char('q') => return Ok(()),
                 KeyCode::Char('n') => {
                     note.clear();
-                    if let Some(e) = data.selected_session() {
+                    if let Some(e) = data.selected_session().filter(|_| cursor_shown) {
                         prompt = Some(Prompt::fork(target_of(e)));
                     }
                 }
@@ -435,20 +441,29 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
                 }
                 KeyCode::Char('x') => {
                     note.clear();
-                    if let Some(e) = data.selected_session() {
+                    if let Some(e) = data.selected_session().filter(|_| cursor_shown) {
                         match actions::close_refusal(&discover(), &e.session.id) {
                             Some(why) => note = why.into(),
                             None => prompt = Some(Prompt::close(target_of(e))),
                         }
                     }
                 }
-                KeyCode::Down | KeyCode::Char('j') => context::move_cursor(&mut data.state, &data.rows, 1),
-                KeyCode::Up | KeyCode::Char('k') => context::move_cursor(&mut data.state, &data.rows, -1),
-                KeyCode::Enter => activate = data.selected_session().map(|e| e.session.id.clone()),
+                // the first arrow after a click only shows the cursor again where it was (the first session when there is none)
+                KeyCode::Down | KeyCode::Char('j') | KeyCode::Up | KeyCode::Char('k') => {
+                    let delta = if matches!(k.code, KeyCode::Down | KeyCode::Char('j')) { 1 } else { -1 };
+                    if cursor_shown {
+                        context::move_cursor(&mut data.state, &data.rows, delta);
+                    } else if data.state.selected().is_empty() {
+                        context::move_cursor(&mut data.state, &data.rows, 1);
+                    }
+                    last_input = cursor::Input::Arrow;
+                }
+                KeyCode::Enter => activate = data.selected_session().filter(|_| cursor_shown).map(|e| e.session.id.clone()),
                 _ => {}
             },
             Event::Mouse(m) if prompt.is_none() && m.kind == MouseEventKind::Down(MouseButton::Left) => {
                 note.clear();
+                last_input = cursor::Input::Click;
                 if button.contains(Position::new(m.column, m.row)) {
                     if let Err(why) = open_legend() {
                         note = why;
@@ -457,7 +472,6 @@ fn run_context(terminal: &mut DefaultTerminal) -> Result<(), String> {
                     // a Context row only collapses or expands; a session row switches to it
                     if !context::click_context(&mut data.state, &row) {
                         if let [_, id] = row.as_slice() {
-                            data.state.select(row.clone());
                             activate = Some(id.clone());
                         }
                     }
