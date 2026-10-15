@@ -14,7 +14,7 @@ use cpd_core::ids::{AttemptId, EscalationId, JobKey, PlanId, SessionId};
 use cpd_core::plan::{Phase, jobs, plan_fingerprint};
 use cpd_core::session::State;
 use cpd_core::store::Store;
-use cpd::tui::read::{
+use cpd_tui::read::{
     self, AttemptStatus, Cause, Checks, Engine, EscalationStatus, JobStatus, Origin, Outcome, Place, PrState, ReviewStatus,
 };
 use rusqlite::Connection;
@@ -697,7 +697,7 @@ fn no_read_writes() {
 
 #[test]
 fn the_read_model_spawns_nothing_and_has_no_write_statement() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tui/read");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tui/src/read");
     let mut seen = 0;
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();

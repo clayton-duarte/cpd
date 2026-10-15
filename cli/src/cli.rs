@@ -11,7 +11,6 @@ use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::output::Output;
 use cpd_core::{ask, attempt, config, context, doctor, events, job, plan, pr, session, watch};
 
-use crate::tui;
 
 /// cpd 2: every command prints exactly one JSON value on stdout.
 #[derive(Parser, Debug)]
@@ -51,7 +50,7 @@ pub enum Command {
     /// The engine, one per machine (commands.md §12)
     Watch(watch::Args),
     /// Build the cockpit and start the engine (commands.md §13)
-    Tui(tui::Args),
+    Tui(cpd_tui::Args),
     /// Check the machine (commands.md §14.1)
     Doctor(doctor::Args),
     /// Print the effective configuration (commands.md §14.2)
@@ -80,11 +79,16 @@ fn dispatch(command: Command) -> Result<Output, CpdError> {
         Command::Session(c) => session::run(c),
         Command::Events(c) => events::run(c),
         Command::Watch(a) => watch::run(a),
-        Command::Tui(a) => tui::run(a),
+        Command::Tui(a) => cpd_tui::run(a, run_command),
         Command::Doctor(a) => doctor::run(a),
         Command::Config(a) => config::config(a),
         Command::Tiers(a) => config::tiers(a),
     }
+}
+
+/// The runner `cpd tui` hands the cockpit, which runs commands in this process.
+fn run_command(argv: Vec<OsString>) -> Result<Output, CpdError> {
+    run(argv)
 }
 
 /// What a clap parse failure prints. `--help` and `--version` are successes

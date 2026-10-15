@@ -3,7 +3,7 @@
 //! store; a test reads the screen (`capture-pane`), presses keys (`send-keys`)
 //! and, for the actions, finds a fake `cpd` first on `PATH` that records its
 //! command line. The rendering of single rows, colours and keys is unit-tested
-//! in `cli/src/tui/tree/`.
+//! in `tui/src/tree/`.
 
 mod common;
 

@@ -8,8 +8,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::tui::palette::{self, Meaning};
-use crate::tui::read::{Place, PlanCard, PrState, PrRow, ReviewDecision, Widgets};
+use crate::palette::{self, Meaning};
+use crate::read::{Place, PlanCard, PrState, PrRow, ReviewDecision, Widgets};
 
 /// The rows a separator takes.
 const SEPARATOR: u16 = 1;

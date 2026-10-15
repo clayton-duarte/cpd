@@ -27,7 +27,7 @@ use std::os::unix::process::CommandExt;
 use rusqlite::OptionalExtension;
 use serde_json::{Map, Value, json};
 
-use super::{not_a_terminal, on_a_terminal, statusbar};
+use super::{RunCommand, not_a_terminal, on_a_terminal, statusbar};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode, Exit};
 use cpd_core::home::CpdHome;
@@ -42,7 +42,7 @@ use cpd_core::store::Store;
 /// `worker` view is not part of it: it is opened and closed by the plan view.
 const LAYOUT: [View; 5] = [View::Tree, View::Plan, View::Widgets, View::Chat, View::Statusbar];
 
-pub(super) fn run(attach: bool, respawn: bool) -> Result<Output, CpdError> {
+pub(super) fn run(attach: bool, respawn: bool, run_command: RunCommand) -> Result<Output, CpdError> {
     if attach && !on_a_terminal() {
         return Err(not_a_terminal("tui --attach"));
     }
@@ -68,10 +68,10 @@ pub(super) fn run(attach: bool, respawn: bool) -> Result<Output, CpdError> {
     tmux.apply_server_options()?;
     if built {
         if let Some(lead) = store.read(last_chat_lead)? {
-            open_lead(&lead)?;
+            open_lead(run_command, &lead)?;
         }
     }
-    let watch = command(&["watch", "--ensure"])?;
+    let watch = command(run_command, &["watch", "--ensure"])?;
 
     let attach_argv = ["tmux", "-L", tmux.socket(), "attach", "-t", cockpit];
     if attach {
@@ -199,8 +199,8 @@ fn last_chat_lead(conn: &rusqlite::Connection) -> Result<Option<SessionId>, CpdE
 /// Moves `lead` into the chat slot as `session open` does, by running it. A
 /// Lead `session open` refuses stays where it is and the placeholder keeps
 /// the slot: the cockpit is built either way (Escalation `tui-cockpit-a1-q3`).
-fn open_lead(lead: &SessionId) -> Result<(), CpdError> {
-    match command(&["session", "open", lead.as_str()]) {
+fn open_lead(run_command: RunCommand, lead: &SessionId) -> Result<(), CpdError> {
+    match command(run_command, &["session", "open", lead.as_str()]) {
         Ok(_) => Ok(()),
         Err(e) if e.exit() == Exit::Refused => {
             eprintln!("cpd tui: Lead {lead} stays out of the chat slot: {}", e.message());
@@ -213,9 +213,9 @@ fn open_lead(lead: &SessionId) -> Result<(), CpdError> {
 /// Runs another area's command (`cpd <words>`) in this process, through the
 /// command tree, and returns its success fields: its arguments and its effects
 /// stay that area's own, as with a subprocess.
-fn command(words: &[&str]) -> Result<Map<String, Value>, CpdError> {
-    let argv = std::iter::once(PROGRAM).chain(words.iter().copied()).map(OsString::from);
-    match crate::cli::run(argv)? {
+fn command(run_command: RunCommand, words: &[&str]) -> Result<Map<String, Value>, CpdError> {
+    let argv = std::iter::once(PROGRAM).chain(words.iter().copied()).map(OsString::from).collect();
+    match run_command(argv)? {
         Output::Success(fields) => Ok(fields),
         Output::Owned => unreachable!("cpd {words:?} prints one JSON value"),
     }

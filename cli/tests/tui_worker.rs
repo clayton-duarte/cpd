@@ -3,7 +3,7 @@
 //! store and a fixture pi session file; a test reads the screen
 //! (`capture-pane`), appends to the file and presses keys (`send-keys`). The
 //! rendering of messages, wrapping and scrolling is unit-tested in
-//! `cli/src/tui/worker/`.
+//! `tui/src/worker/`.
 
 mod common;
 

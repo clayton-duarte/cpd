@@ -14,6 +14,8 @@ use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux, View, chat_slot, view_pan
 use cpd_core::ids::{AttemptId, PlanId, SessionId};
 use cpd_core::session::PROGRAM;
 
+use crate::RunCommand;
+
 /// The pane option holding the Job a Worker pane shows (its border title shows it), so a second click on the same Job
 /// closes it.
 const OPT_JOB: &str = "@cpd_job";
@@ -25,17 +27,23 @@ pub struct Actions {
     home: CpdHome,
     tmux: Tmux,
     cockpit: String,
+    run_command: RunCommand,
 }
 
 impl Actions {
-    pub fn new(home: CpdHome, config: &Config) -> Actions {
-        Actions { home, tmux: Tmux::new(config.tmux.socket.clone()), cockpit: config.tmux.cockpit_session.clone() }
+    pub fn new(home: CpdHome, config: &Config, run_command: RunCommand) -> Actions {
+        Actions {
+            home,
+            tmux: Tmux::new(config.tmux.socket.clone()),
+            cockpit: config.tmux.cockpit_session.clone(),
+            run_command,
+        }
     }
 
     /// A click on a tab: `session open <id>`, which moves that Lead into the chat slot, then `select-pane` on the chat.
     pub fn open_lead(&self, session: &SessionId) -> Result<(), CpdError> {
-        let argv = [PROGRAM, "session", "open", session.as_str()].map(OsString::from);
-        crate::cli::run(argv)?;
+        let argv = [PROGRAM, "session", "open", session.as_str()].map(OsString::from).into();
+        (self.run_command)(argv)?;
         let panes = self.main_panes()?;
         if let Some(chat) = chat_slot(&panes, &self.cockpit) {
             self.tmux.run(&["select-pane", "-t", chat.pane.as_str()].map(str::to_owned))?;

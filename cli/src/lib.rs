@@ -1,8 +1,7 @@
-//! cpd (binary `cpd`): the root command tree and, for now, the cockpit.
-//! The shared core is the `cpd-core` crate (`core/`).
+//! cpd (binary `cpd`): the root command tree.
+//! The shared core is the `cpd-core` crate (`core/`), the cockpit the `cpd-tui` crate (`tui/`).
 
 pub mod cli;
-pub mod tui;
 
 use std::ffi::OsString;
 use std::io::Write;

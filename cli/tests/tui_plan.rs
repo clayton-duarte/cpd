@@ -18,7 +18,7 @@ use serde_json::json;
 
 /// The expected chart of the store `cpd_jobs()` makes: the fixture of the cockpit of branch `cpd/cpd-ui`
 /// (`tui/tests/fixtures/cpd-chart.txt`), kept beside the view.
-const CPD_CHART: &str = include_str!("../src/tui/plan/fixtures/cpd-chart.txt");
+const CPD_CHART: &str = include_str!("../../tui/src/plan/fixtures/cpd-chart.txt");
 
 /// The 27 Jobs of the cockpit's `cpd-jobs.json` fixture (cpd 1's `workflow show` of cpd-rust's `cpd` Workflow), as
 /// cpd 2 stores them: `(key, status, tier, needs, Attempts)`. cpd 1's `closed` is `merged`, and its `in_review` is a

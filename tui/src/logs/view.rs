@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use cpd_core::events::Event;
-use crate::tui::palette::{self, Meaning};
+use crate::palette::{self, Meaning};
 
 /// The Events and where the view is: `up` lines above the bottom (0: it shows the bottom, so it follows).
 #[derive(Clone, Debug, Default)]

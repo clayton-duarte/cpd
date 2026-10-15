@@ -19,9 +19,9 @@ use ratatui::{
     widgets::Widget,
 };
 
-use crate::tui::palette::{self, Meaning};
+use crate::palette::{self, Meaning};
 use cpd_core::config::Tier;
-use crate::tui::read::{AttemptStatus, Flow, JobNode, JobStatus};
+use crate::read::{AttemptStatus, Flow, JobNode, JobStatus};
 
 /// A Job's status as the chart draws it. A cancelled Job is not drawn, so it has none; a `running` Job whose Attempt is
 /// `merging` is `Merging` (the cockpit's `in_review`).

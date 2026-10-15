@@ -12,9 +12,9 @@ use common::{CPD, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
-use cpd::tui::logs::{self, Log};
-use cpd::tui::palette::{self, Meaning};
-use cpd::tui::read;
+use cpd_tui::logs::{self, Log};
+use cpd_tui::palette::{self, Meaning};
+use cpd_tui::read;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -269,7 +269,7 @@ fn the_logs_view_needs_a_terminal() {
 
 #[test]
 fn the_popup_is_sized_like_the_legends_and_at_most_80_percent_of_the_client() {
-    let (w, h) = cpd::tui::widgets::legend::size();
+    let (w, h) = cpd_tui::widgets::legend::size();
     let big = logs::popup_args((1000, 1000));
     assert_eq!(
         big,
@@ -317,7 +317,7 @@ fn a_click_on_the_logs_button_opens_the_popup_and_the_others_do_not() {
     let popup = popups(&env).remove(0);
     let at = popup.iter().position(|a| a == "display-popup").unwrap();
     // `tmux -L <socket> -f /dev/null display-popup -E -T ' logs ' -w <w> -h <h> cpd tui view logs`
-    let (w, h) = cpd::tui::widgets::legend::size();
+    let (w, h) = cpd_tui::widgets::legend::size();
     assert_eq!(
         popup[at..],
         ["display-popup", "-E", "-T", " logs ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd tui view logs"]

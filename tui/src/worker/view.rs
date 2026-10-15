@@ -9,7 +9,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
 use super::render::wrap;
-use crate::tui::palette::{self, Meaning};
+use crate::palette::{self, Meaning};
 
 /// The rows one turn of the mouse wheel scrolls.
 const WHEEL: usize = 3;

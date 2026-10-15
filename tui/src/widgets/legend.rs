@@ -17,9 +17,9 @@ use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::output::Output;
 use cpd_core::plan::Phase;
 use cpd_core::session::PROGRAM;
-use crate::tui::palette::{self, Meaning};
-use crate::tui::read::JobCounts;
-use crate::tui::{not_a_terminal, on_a_terminal};
+use crate::palette::{self, Meaning};
+use crate::read::JobCounts;
+use crate::{not_a_terminal, on_a_terminal};
 
 const COLUMN_SPACING: u16 = 2;
 /// A tmux popup draws a border of one cell on each side.
@@ -205,7 +205,7 @@ pub fn popup_args(client: (u16, u16)) -> Vec<String> {
 }
 
 /// `cpd tui view legend`: draws the legend until any key or click.
-pub(in crate::tui) fn run() -> Result<Output, CpdError> {
+pub(crate) fn run() -> Result<Output, CpdError> {
     if !on_a_terminal() {
         return Err(not_a_terminal("tui view legend"));
     }

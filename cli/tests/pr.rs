@@ -14,7 +14,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::merge::RepoLock;
 use cpd_core::store::Store;
-use cpd::tui::read::{self, Checks, PrState, ReviewDecision};
+use cpd_tui::read::{self, Checks, PrState, ReviewDecision};
 use rusqlite::params;
 use serde_json::{Value, json};
 

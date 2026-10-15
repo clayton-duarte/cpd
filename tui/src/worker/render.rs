@@ -10,7 +10,7 @@ use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
 
-use crate::tui::palette::{self, Ui};
+use crate::palette::{self, Ui};
 
 /// The columns the body of a message is indented by.
 const INDENT: usize = 6;

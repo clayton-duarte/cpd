@@ -19,8 +19,8 @@ use super::cursor::{self, Input};
 use super::prompt::{Outcome, Prompt, Target};
 use super::rows::{self, Id, Row};
 use cpd_core::session::State;
-use crate::tui::palette;
-use crate::tui::read::Tree;
+use crate::palette;
+use crate::read::Tree;
 
 /// What the caller does after an input.
 #[derive(Debug, PartialEq, Eq)]

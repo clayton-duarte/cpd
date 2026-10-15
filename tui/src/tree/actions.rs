@@ -16,7 +16,7 @@ use cpd_core::host::layout::MAIN_WINDOW;
 use cpd_core::host::{Tmux, chat_slot};
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::session::PROGRAM;
-use crate::tui::widgets::open_legend;
+use crate::widgets::open_legend;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {

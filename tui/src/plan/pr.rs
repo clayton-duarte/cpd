@@ -7,8 +7,8 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use crate::tui::palette;
-use crate::tui::read::{Pr, PrState};
+use crate::palette;
+use crate::read::{Pr, PrState};
 
 fn count(n: usize, noun: &str) -> String {
     format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
@@ -51,7 +51,7 @@ mod tests {
     use ratatui::style::Modifier;
 
     use super::*;
-    use crate::tui::palette::Meaning;
+    use crate::palette::Meaning;
 
     fn text(l: &Line) -> String {
         l.spans.iter().map(|s| s.content.as_ref()).collect()

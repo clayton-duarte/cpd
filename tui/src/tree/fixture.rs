@@ -5,8 +5,8 @@ use cpd_core::config::Tier;
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::plan::Phase;
 use cpd_core::session::{Role, State};
-use crate::tui::read::{ContextNode, Place, PlanHead, PlanNode, SessionNode, Tree};
-use crate::tui::read::JobCounts;
+use crate::read::{ContextNode, Place, PlanHead, PlanNode, SessionNode, Tree};
+use crate::read::JobCounts;
 
 pub fn session(id: &str, name: &str, state: State, label: Option<&str>, place: Place) -> SessionNode {
     SessionNode {

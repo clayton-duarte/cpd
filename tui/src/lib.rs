@@ -20,8 +20,13 @@ mod tree;
 pub mod widgets;
 mod worker;
 
+use std::ffi::OsString;
+
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::output::Output;
+
+/// Runs `cpd <argv>` in this process, through the root command tree. `cli` owns that tree, so it passes the runner in.
+pub type RunCommand = fn(Vec<OsString>) -> Result<Output, CpdError>;
 
 /// `cpd tui [--attach] [--respawn]`, or `cpd tui view …`.
 #[derive(clap::Args, Debug)]
@@ -65,12 +70,12 @@ pub enum View {
     Chat,
 }
 
-pub fn run(args: Args) -> Result<Output, CpdError> {
+pub fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdError> {
     match args.command {
-        None => cockpit::run(args.attach, args.respawn),
+        None => cockpit::run(args.attach, args.respawn, run_command),
         Some(Command::View(view)) => match view {
             View::Tree => tree::run(),
-            View::Plan => plan::run(),
+            View::Plan => plan::run(run_command),
             View::Widgets => widgets::run(),
             View::Statusbar => statusbar::run(),
             View::Worker(args) => worker::run(args),

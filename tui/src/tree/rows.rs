@@ -25,9 +25,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use tui_tree_widget::{Tree as TreeWidget, TreeItem, TreeState};
 
-use crate::tui::palette::{self, Meaning};
+use crate::palette::{self, Meaning};
 use cpd_core::plan::Phase;
-use crate::tui::read::{ContextNode, JobStatus, PlanNode, SessionNode, Tree};
+use crate::read::{ContextNode, JobStatus, PlanNode, SessionNode, Tree};
 
 /// Tree identifiers: a Context's id, a Plan's id, a Session's id.
 pub type Id = String;
@@ -351,8 +351,8 @@ mod tests {
     use super::super::fixture::{context, plan, sample, session, tree};
     use super::*;
     use cpd_core::session::State;
-    use crate::tui::palette::color;
-    use crate::tui::read::Place;
+    use crate::palette::color;
+    use crate::read::Place;
 
     fn path(parts: &[&str]) -> Vec<Id> {
         parts.iter().map(|p| (*p).to_owned()).collect()

@@ -1,5 +1,5 @@
 //! The `plan` view (commands.md §13.2, §17): the centre-top pane of the cockpit, ported from the cockpit of branch
-//! `cpd/cpd-ui` (`tui/src/flow.rs`, `tabs.rs`, `pr.rs`, `workers.rs`) onto the read model of [`crate::tui::read`].
+//! `cpd/cpd-ui` (`tui/src/flow.rs`, `tabs.rs`, `pr.rs`, `workers.rs`) onto the read model of [`crate::read`].
 //!
 //! It shows the Plan of the Lead in the chat slot as a left-to-right flow chart of its Jobs ([`flow`]), under the tabs
 //! of the Context's Leads ([`tabs`]): the top row is only the Context's id and the tabs, with nothing at the right.
@@ -27,9 +27,9 @@ use ratatui::widgets::Paragraph;
 
 use self::actions::Actions;
 use self::flow::{Chart, Dir, Selection};
-use crate::tui::palette;
+use crate::palette;
 use super::read::{self, ChatSlot, Flow, Place, SessionNode};
-use super::{not_a_terminal, on_a_terminal};
+use super::{RunCommand, not_a_terminal, on_a_terminal};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{self, Event, highest_id};
@@ -165,7 +165,7 @@ fn attempt_of(centre: &Centre, key: &str) -> Option<AttemptId> {
     job.current_attempt().map(|a| a.id.clone())
 }
 
-pub(super) fn run() -> Result<Output, CpdError> {
+pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
     if !on_a_terminal() {
         return Err(not_a_terminal("tui view plan"));
     }
@@ -173,7 +173,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
     let mut snap = snapshot(&mut store)?;
-    let actions = Actions::new(home, &config);
+    let actions = Actions::new(home, &config, run_command);
     let poll = Duration::from_millis(u64::from(config.events.poll_ms));
 
     // From here on this process owns the terminal (commands.md §1.2).

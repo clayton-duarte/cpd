@@ -7,8 +7,8 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use crate::tui::palette::{self, Meaning};
-use crate::tui::read::Slots;
+use crate::palette::{self, Meaning};
+use crate::read::Slots;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Workers {
