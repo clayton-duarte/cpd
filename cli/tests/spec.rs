@@ -1,0 +1,361 @@
+//! The Worker Spec (commands.md §16.1): snapshots of a first Attempt and of a later one
+//! with Previous Attempts, and the pieces around them.
+
+use std::fs;
+use std::path::Path;
+
+use cpd2::config::Tier;
+use cpd2::error::ErrorCode;
+use cpd2::home::CpdHome;
+use cpd2::ids::{AttemptId, EscalationId, PlanId};
+use cpd2::spec::{self, Answer, Cause, Input, Previous};
+
+fn plan() -> PlanId {
+    PlanId::parse("pay").unwrap()
+}
+
+fn attempt(id: &str) -> AttemptId {
+    AttemptId::parse(id).unwrap()
+}
+
+fn strings(items: &[&str]) -> Vec<String> {
+    items.iter().map(|s| (*s).to_owned()).collect()
+}
+
+/// A first Attempt: a quick check, nothing out of scope, nothing earlier.
+fn first_input<'a>(plan: &'a PlanId, attempt: &'a AttemptId, lists: &'a Lists) -> Input<'a> {
+    Input {
+        plan,
+        attempt,
+        title: "API schema",
+        tier: Tier::parse("S3").unwrap(),
+        worktree: Path::new("/w/pay--api-schema-a1"),
+        goal: "Define the schema.",
+        context: "The API has none yet.",
+        touches: &lists.touches,
+        acceptance: &lists.acceptance,
+        out_of_scope: &[],
+        quick_check: &lists.quick_check,
+        protected: &[],
+        previous: &[],
+        answers: &[],
+    }
+}
+
+struct Lists {
+    touches: Vec<String>,
+    acceptance: Vec<String>,
+    quick_check: Vec<String>,
+}
+
+fn lists() -> Lists {
+    Lists {
+        touches: strings(&["src/schema.rs", "tests/schema.rs"]),
+        acceptance: strings(&["`cargo test` passes"]),
+        quick_check: strings(&["cargo check --all-targets"]),
+    }
+}
+
+#[test]
+fn the_first_attempt_s_spec() {
+    let (plan, attempt, lists) = (plan(), attempt("api-schema-a1"), lists());
+    assert_eq!(spec::render(&first_input(&plan, &attempt, &lists)).unwrap(), FIRST);
+}
+
+/// Attempt 3, after one that conflicted and one that crashed, with a question already answered,
+/// no quick check, things out of scope, a protected list of the repo's own (one entry repeating
+/// an always-protected path) and Spec text that looks like template syntax.
+fn later() -> String {
+    let (plan, attempt) = (plan(), attempt("api-schema-a3"));
+    let touches = strings(&["src/**"]);
+    let acceptance = strings(&["`cargo test` passes", "no new warnings"]);
+    let out_of_scope = strings(&["Changing the CLI", "Renaming {{ things }}"]);
+    let protected = strings(&["verify.sh", "scripts/ci/", ".cpd/"]);
+    let previous = [
+        Previous {
+            number: 1,
+            tier: Tier::parse("S2").unwrap(),
+            cause: Cause::MergeConflict { files: strings(&["src/schema.rs", "Cargo.lock"]) },
+        },
+        Previous { number: 2, tier: Tier::parse("S3").unwrap(), cause: Cause::Crashed },
+    ];
+    let answers = [Answer {
+        id: EscalationId::parse("api-schema-a1-q1").unwrap(),
+        question: "Which crate?\nserde or miniserde?".to_owned(),
+        answer: "serde.".to_owned(),
+    }];
+    spec::render(&Input {
+        plan: &plan,
+        attempt: &attempt,
+        title: "API schema",
+        tier: Tier::parse("S3").unwrap(),
+        worktree: Path::new("/w/pay--api-schema-a3"),
+        goal: "Define the schema: {% raw %}.",
+        context: "",
+        touches: &touches,
+        acceptance: &acceptance,
+        out_of_scope: &out_of_scope,
+        quick_check: &[],
+        protected: &protected,
+        previous: &previous,
+        answers: &answers,
+    })
+    .unwrap()
+}
+
+#[test]
+fn a_later_attempt_s_spec_carries_what_the_earlier_ones_teach() {
+    assert_eq!(later(), LATER);
+}
+
+#[test]
+fn every_cause_has_its_outcome_and_a_sentence() {
+    let cases = [
+        ("merged", "merged", "It was merged."),
+        ("cancel_requested", "cancelled", "The Lead cancelled the Job while the Attempt ran."),
+        ("setup_failed", "failed", "The worktree or its `pre-start` hook failed, so the Worker never started."),
+        ("timed_out", "failed", "The Worker ran out of time before it submitted."),
+        ("crashed", "failed", "The Worker or its driver died before the work was merged."),
+        ("no_submit", "failed", "The Worker went idle twice without running `cpd2 attempt submit`, even after a nudge."),
+        ("merge_conflict", "failed", "Rebasing it onto the newer Lead Branch conflicted."),
+        ("cas_lost", "failed", "The Lead Branch kept moving, so the merge could not be completed."),
+        ("dirty_target", "failed", "The Lead worktree was not clean when the merge ran."),
+        ("tampered", "failed", "Its diff touched a protected path."),
+    ];
+    let (plan, attempt, lists) = (plan(), attempt("api-schema-a2"), lists());
+    for (cause, outcome, sentence) in cases {
+        let cause = Cause::parse(cause, vec![]).unwrap();
+        assert_eq!(cause.outcome(), outcome);
+        let previous = [Previous { number: 1, tier: Tier::parse("S2").unwrap(), cause: cause.clone() }];
+        let text = spec::render(&Input { previous: &previous, ..first_input(&plan, &attempt, &lists) }).unwrap();
+        let expected = format!("- Outcome: {outcome}\n- Cause: {}\n- {sentence}\n", cause.as_str());
+        assert!(text.contains(&expected), "{text}");
+    }
+    assert_eq!(Cause::parse("review_rejected", vec![]).unwrap_err().code(), ErrorCode::StoreFailed);
+}
+
+#[test]
+fn write_puts_the_spec_where_the_home_says_and_rewrites_it() {
+    let home_dir = tempfile::tempdir().unwrap();
+    let home = CpdHome::resolve(Some(home_dir.path().into()), None).unwrap();
+    let (plan, attempt, lists) = (plan(), attempt("api-schema-a1"), lists());
+    let input = first_input(&plan, &attempt, &lists);
+    let path = spec::write(&home, &input).unwrap();
+    assert_eq!(path, home_dir.path().join("run/pay/specs/api-schema-a1.md"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), FIRST);
+    fs::write(&path, "stale").unwrap();
+    assert_eq!(spec::write(&home, &input).unwrap(), path);
+    assert_eq!(fs::read_to_string(&path).unwrap(), FIRST);
+}
+
+fn worktree_with(wt_toml: Option<&str>) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    if let Some(text) = wt_toml {
+        fs::create_dir_all(dir.path().join(".config")).unwrap();
+        fs::write(dir.path().join(".config/wt.toml"), text).unwrap();
+    }
+    dir
+}
+
+#[test]
+fn the_quick_check_is_the_pre_commit_commands_verbatim_in_file_order() {
+    let dir = worktree_with(Some("pre-merge = \"make gate\"\n[pre-commit]\nlint = \"cargo clippy -- {{ branch }}\"\nbuild = \"cargo build\"\n"));
+    assert_eq!(spec::quick_check(dir.path()).unwrap(), ["cargo clippy -- {{ branch }}", "cargo build"]);
+}
+
+#[test]
+fn no_pre_commit_table_means_no_quick_check_and_no_fallback_to_pre_merge() {
+    assert!(spec::quick_check(worktree_with(Some("pre-merge = \"make gate\"\n")).path()).unwrap().is_empty());
+    assert!(spec::quick_check(worktree_with(None).path()).unwrap().is_empty());
+}
+
+#[test]
+fn a_malformed_wt_toml_is_hook_invalid() {
+    let err = spec::quick_check(worktree_with(Some("pre-commit = [1]\n")).path()).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::HookInvalid);
+}
+
+#[test]
+fn a_multi_line_quick_check_command_stays_one_indented_block() {
+    let (plan, attempt) = (plan(), attempt("api-schema-a1"));
+    let lists = Lists { quick_check: strings(&["set -e\ncargo check\n\ncargo test"]), ..lists() };
+    let text = spec::render(&first_input(&plan, &attempt, &lists)).unwrap();
+    assert!(text.contains("verbatim:\n\n      set -e\n      cargo check\n\n      cargo test\n\n- Never edit"), "{text}");
+}
+
+const FIRST: &str = r####"# Worker Spec: api-schema, Attempt 1
+
+## Who you are
+
+You are a CPD Worker on Attempt 1 of Job `api-schema` (API schema) in Plan `pay`.
+Your attempt id is `api-schema-a1`. Your Tier is `S3`.
+Your worktree is `/w/pay--api-schema-a1`. Your current directory is that worktree.
+
+## Rules
+
+- Work only in this worktree, and touch only the files listed under "Files you may touch".
+- Commit your work. Uncommitted changes are refused at submit.
+- Before submitting, run the quick check yourself, from this worktree. It is the `pre-commit` hook of `.config/wt.toml`; its commands, verbatim:
+
+      cargo check --all-targets
+
+- Never edit the protected paths. A diff that touches one is refused. They are:
+  - `.config/wt.toml`
+  - `.config/cpd.toml`
+  - `.cpd/`
+- Never ask the User anything. You have no conversation with them.
+- If continuing would require guessing, ask the Lead and wait for the answer. The command blocks until the Lead answers:
+
+      cpd2 ask api-schema-a1 "<your question>"
+
+  Ask one real blocker at a time. Do not ask what this Spec or the code already answers.
+- Do not stop until you have submitted.
+
+## Job
+
+### Goal
+
+Define the schema.
+
+### Context
+
+The API has none yet.
+
+### Files you may touch
+
+- `src/schema.rs`
+- `tests/schema.rs`
+
+### Acceptance
+
+Every item must hold when you submit.
+
+- `cargo test` passes
+
+### Out of scope
+
+Nothing is listed. Still do only what the Goal and Acceptance require.
+
+## Finish
+
+When the Acceptance items hold and your work is committed, run exactly:
+
+    cpd2 attempt submit api-schema-a1
+
+If it succeeds, stop at once and make no more changes. If it refuses, the error code says what to do:
+
+- `wrong_worktree`: you ran it outside your worktree. Run it from the worktree.
+- `dirty_tree`: you have uncommitted changes. Commit them (or delete files that do not belong), then submit again.
+- `no_commits`: you have not committed anything on top of the base. Commit your work, then submit again.
+- `gate_tampered`: your diff touches a protected path. Revert those files to the base version and commit, then submit again.
+- `check_failed`: the quick check failed; the output tail is in the error details. Fix the cause, commit, then submit again.
+- `check_error`: the quick check could not run. Ask the Lead.
+- `attempt_not_running`: the Attempt was stopped. Stop.
+
+Do not stop until `cpd2 attempt submit` has succeeded.
+"####;
+
+const LATER: &str = r####"# Worker Spec: api-schema, Attempt 3
+
+## Who you are
+
+You are a CPD Worker on Attempt 3 of Job `api-schema` (API schema) in Plan `pay`.
+Your attempt id is `api-schema-a3`. Your Tier is `S3`.
+Your worktree is `/w/pay--api-schema-a3`. Your current directory is that worktree.
+
+## Rules
+
+- Work only in this worktree, and touch only the files listed under "Files you may touch".
+- Commit your work. Uncommitted changes are refused at submit.
+- Before submitting, run the quick check yourself. This repo defines no quick check.
+- Never edit the protected paths. A diff that touches one is refused. They are:
+  - `.config/wt.toml`
+  - `.config/cpd.toml`
+  - `.cpd/`
+  - `verify.sh`
+  - `scripts/ci/`
+- Never ask the User anything. You have no conversation with them.
+- If continuing would require guessing, ask the Lead and wait for the answer. The command blocks until the Lead answers:
+
+      cpd2 ask api-schema-a3 "<your question>"
+
+  Ask one real blocker at a time. Do not ask what this Spec or the code already answers.
+- Do not stop until you have submitted.
+
+## Job
+
+### Goal
+
+Define the schema: {% raw %}.
+
+### Context
+
+### Files you may touch
+
+- `src/**`
+
+### Acceptance
+
+Every item must hold when you submit.
+
+- `cargo test` passes
+- no new warnings
+
+### Out of scope
+
+Do not do any of these:
+
+- Changing the CLI
+- Renaming {{ things }}
+
+## Previous Attempts
+
+Earlier Attempts of this Job did not end Merged. Do not repeat their mistakes.
+
+### Attempt 1 (Tier `S2`)
+
+- Outcome: failed
+- Cause: merge_conflict
+- Rebasing it onto the newer Lead Branch conflicted in these files:
+  - `src/schema.rs`
+  - `Cargo.lock`
+
+### Attempt 2 (Tier `S3`)
+
+- Outcome: failed
+- Cause: crashed
+- The Worker or its driver died before the work was merged.
+
+## Answers already given
+
+Earlier Attempts of this Job asked these questions and the Lead answered them. Do not ask them again.
+
+### `api-schema-a1-q1`
+
+Question:
+
+Which crate?
+serde or miniserde?
+
+Answer:
+
+serde.
+
+## Finish
+
+When the Acceptance items hold and your work is committed, run exactly:
+
+    cpd2 attempt submit api-schema-a3
+
+If it succeeds, stop at once and make no more changes. If it refuses, the error code says what to do:
+
+- `wrong_worktree`: you ran it outside your worktree. Run it from the worktree.
+- `dirty_tree`: you have uncommitted changes. Commit them (or delete files that do not belong), then submit again.
+- `no_commits`: you have not committed anything on top of the base. Commit your work, then submit again.
+- `gate_tampered`: your diff touches a protected path. Revert those files to the base version and commit, then submit again.
+- `check_failed`: the quick check failed; the output tail is in the error details. Fix the cause, commit, then submit again.
+- `check_error`: the quick check could not run. Ask the Lead.
+- `attempt_not_running`: the Attempt was stopped. Stop.
+
+Do not stop until `cpd2 attempt submit` has succeeded.
+"####;
