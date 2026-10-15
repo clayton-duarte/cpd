@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use common::{CPD2, TestEnv};
 use cpd2::error::CpdError;
 use cpd2::home::CpdHome;
+use cpd2::host::tmux::SERVER_OPTIONS;
 use cpd2::store::Store;
 use serde_json::{Value, json};
 
@@ -183,65 +184,185 @@ fn tui_builds_main_in_a_cockpit_that_has_only_a_park_window() {
     assert_eq!(env.cpd2(&["tui"]).ok()["built"], false);
 }
 
+fn kill(pid: u32) {
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), nix::sys::signal::Signal::SIGKILL).unwrap();
+}
+
+/// `(dead, pid)` of a pane.
+fn pane_state(env: &TestEnv, pane: &str) -> (bool, u32) {
+    let out = tmux_out(env, &["display", "-p", "-t", pane, "#{pane_dead} #{pane_pid}"]);
+    let (dead, pid) = out.trim().split_once(' ').unwrap();
+    (dead == "1", pid.parse().unwrap())
+}
+
+/// Asserts the server has every option, binding and hook `host` sets at a
+/// server start (contract §6.1; their values are pinned in `tests/host.rs`).
+fn assert_server_options(env: &TestEnv) {
+    for option in SERVER_OPTIONS {
+        match option {
+            ["set", "-g", name, value] => assert_eq!(tmux_out(env, &["show", "-gv", name]).trim_end_matches('\n'), *value, "{name}"),
+            ["set", "-as", name, value] => {
+                let shown = tmux_out(env, &["show", "-sv", name]);
+                for feature in value.split(',').filter(|f| !f.is_empty()) {
+                    assert_eq!(shown.lines().filter(|l| *l == feature).count(), 1, "{feature} in {shown}");
+                }
+            }
+            ["set-hook", "-g", hook, _] => {
+                let shown = tmux_out(env, &["show-hooks", "-g", hook]);
+                assert_eq!(shown, format!("{hook}[0] if-shell -F \"#{{@cpd_view}}\" respawn-pane\n"));
+            }
+            ["bind", "-T", table, key, "if", "-F", condition, ..] => {
+                let shown = tmux_out(env, &["list-keys", "-T", table, key]);
+                assert!(shown.contains(condition), "{shown}");
+            }
+            other => panic!("an option this test cannot check: {other:?}"),
+        }
+    }
+}
+
 #[test]
-fn tui_respawns_a_dead_pane_of_the_layout_in_place() {
+fn a_server_started_by_plan_new_has_every_server_option() {
     let env = env();
-    env.cpd2(&["tui"]).ok();
+    env.fake("cpd2", &format!("if [ \"$1 $2\" = 'session run' ]; then exec sleep 3600; fi\nexec '{CPD2}' \"$@\""));
+    fs::write(
+        env.cpd_home().join("config.toml"),
+        format!("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket()),
+    )
+    .unwrap();
+    env.cpd2(&["context", "new", "ctx", "--title", "Payments"]).ok();
+    let repo = env.git_repo("pay");
+    env.cpd2(&["plan", "new", "pay", "--context", "ctx", "--repo", repo.to_str().unwrap(), "--title", "Pay"]).ok();
+    assert_eq!(windows(&env, "cpd"), ["park-pay"], "plan new started the server, not tui");
+    assert_server_options(&env);
+}
+
+#[test]
+fn a_killed_view_respawns_at_once_and_the_engine_stays_dead() {
+    let env = env();
+    let out = env.cpd2(&["tui"]).ok();
+    let engine = out["watch"]["pane"].as_str().unwrap();
+    assert_server_options(&env);
     let before = main_panes(&env);
     let tree = view(&before, "tree").clone();
-    nix::sys::signal::kill(nix::unistd::Pid::from_raw(tree.pid as i32), nix::sys::signal::Signal::SIGKILL).unwrap();
-    wait_until("the dead tree pane", || view(&main_panes(&env), "tree").dead);
+    let (_, engine_pid) = pane_state(&env, engine);
+    kill(tree.pid);
+    kill(engine_pid);
 
-    let out = env.cpd2(&["tui"]).ok();
-    assert_eq!(out["built"], false, "{out}");
+    wait_until("the engine pane to die", || pane_state(&env, engine).0);
+    wait_until("the tree to respawn", || {
+        let p = view(&main_panes(&env), "tree").clone();
+        !p.dead && p.pid != tree.pid
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(pane_state(&env, engine).0, "the engine pane stays dead for E2");
     let after = main_panes(&env);
     assert_layout(&after);
-    assert_eq!(after.iter().map(|p| &p.id).collect::<Vec<_>>(), before.iter().map(|p| &p.id).collect::<Vec<_>>());
-    assert_ne!(view(&after, "tree").pid, tree.pid);
+    assert_eq!(view(&after, "tree").id, tree.id);
     assert_eq!(views_started(&env).iter().filter(|c| c[2] == "tree").count(), 2);
 }
 
 #[test]
-fn tui_respawns_a_dead_statusbar_in_place() {
+fn tui_respawns_a_dead_pane_of_the_layout_in_place_and_sets_the_hook_again() {
     let env = env();
     env.cpd2(&["tui"]).ok();
+    // A server from before the hook: a dead view stays dead until tui runs.
+    tmux_out(&env, &["set-hook", "-gu", "pane-died"]);
     let before = main_panes(&env);
-    let bar = view(&before, "statusbar").clone();
-    nix::sys::signal::kill(nix::unistd::Pid::from_raw(bar.pid as i32), nix::sys::signal::Signal::SIGKILL).unwrap();
-    wait_until("the dead statusbar pane", || view(&main_panes(&env), "statusbar").dead);
+    let (tree, bar) = (view(&before, "tree").clone(), view(&before, "statusbar").clone());
+    kill(tree.pid);
+    kill(bar.pid);
+    wait_until("the dead tree and statusbar panes", || {
+        let panes = main_panes(&env);
+        view(&panes, "tree").dead && view(&panes, "statusbar").dead
+    });
 
-    env.cpd2(&["tui"]).ok();
+    let out = env.cpd2(&["tui"]).ok();
+    assert_eq!(out["built"], false, "{out}");
+    assert!(out.get("respawned").is_none(), "{out}");
     let after = main_panes(&env);
     assert_layout(&after);
-    assert_eq!(view(&after, "statusbar").id, bar.id);
+    assert_eq!(after.iter().map(|p| &p.id).collect::<Vec<_>>(), before.iter().map(|p| &p.id).collect::<Vec<_>>());
+    assert_ne!(view(&after, "tree").pid, tree.pid);
     assert_ne!(view(&after, "statusbar").pid, bar.pid);
-    assert_eq!(after.len(), before.len());
+    assert_eq!(views_started(&env).iter().filter(|c| c[2] == "tree").count(), 2);
+    assert_server_options(&env);
 }
 
 #[test]
-fn tui_adds_a_missing_statusbar_to_an_existing_main_once() {
+fn tui_adds_a_missing_statusbar_to_an_existing_main_then_resets_the_layout() {
     let env = env();
     env.cpd2(&["tui"]).ok();
     let full = main_panes(&env);
     tmux_out(&env, &["kill-pane", "-t", &view(&full, "statusbar").id]);
+    // An old main, its sizes changed by the User.
+    tmux_out(&env, &["resize-pane", "-t", &view(&full, "tree").id, "-x", "80"]);
     let before = main_panes(&env);
     assert_eq!(before.len(), 4, "{before:?}");
+    assert_eq!(view(&before, "tree").width, 80, "{before:?}");
 
     let out = env.cpd2(&["tui"]).ok();
     assert_eq!(out["built"], false, "{out}");
     let after = main_panes(&env);
-    assert_eq!(after.len(), 5, "{after:?}");
-    let bar = view(&after, "statusbar");
-    assert_eq!((bar.left, bar.width, bar.height), (0, 215, 1), "{after:?}");
-    // The other panes are the same panes, still alive; the layout was not reset.
+    // The bar spans the window and the other panes have their sizes back.
+    assert_layout(&after);
+    // They are the same panes, still alive.
     for old in &before {
         let new = after.iter().find(|p| p.id == old.id).unwrap_or_else(|| panic!("{} is gone: {after:?}", old.id));
-        assert_eq!((new.view.as_str(), new.pid, new.dead, new.left, new.width), (old.view.as_str(), old.pid, false, old.left, old.width));
+        assert_eq!((new.view.as_str(), new.pid, new.dead), (old.view.as_str(), old.pid, false));
     }
 
     // Rerunning adds none.
     env.cpd2(&["tui"]).ok();
     assert_eq!(main_panes(&env).len(), 5);
+}
+
+#[test]
+fn tui_respawn_restarts_every_live_view_and_no_lead_or_engine() {
+    let env = env();
+    let out = env.cpd2(&["tui", "--respawn"]).ok();
+    assert_eq!((&out["built"], &out["respawned"]), (&json!(true), &json!([])), "a new cockpit restarts nothing: {out}");
+    let engine = out["watch"]["pane"].as_str().unwrap();
+    let (_, engine_pid) = pane_state(&env, engine);
+
+    // A Lead takes the chat slot and its placeholder is parked; a Worker view opens beside it.
+    let placeholder = view(&main_panes(&env), "chat").clone();
+    let lead = tmux_out(&env, &["new-window", "-d", "-t", "=cpd:", "-n", "park-pay", "-P", "-F", "#{pane_id}", "sleep", "3600"]);
+    let lead = lead.trim();
+    tmux_out(&env, &["set", "-p", "-t", lead, "@cpd_session", "lead-a"]);
+    tmux_out(&env, &["swap-pane", "-d", "-s", lead, "-t", &placeholder.id]);
+    let worker = tmux_out(&env, &["split-window", "-h", "-d", "-t", lead, "-l", "50%", "-P", "-F", "#{pane_id}", "sleep", "3601"]);
+    let worker = worker.trim();
+    tmux_out(&env, &["set", "-p", "-t", worker, "@cpd_view", "worker"]);
+    let before = main_panes(&env);
+    let lead_pid = before.iter().find(|p| p.id == lead).unwrap().pid;
+
+    let out = env.cpd2(&["tui", "--respawn"]).ok();
+    assert_eq!(out["built"], false, "{out}");
+    let mut respawned: Vec<String> = serde_json::from_value(out["respawned"].clone()).unwrap();
+    respawned.sort();
+    let mut views: Vec<String> = before.iter().filter(|p| !p.view.is_empty()).map(|p| p.id.clone()).collect();
+    views.sort();
+    assert_eq!(views.len(), 5, "tree, plan, widgets, statusbar and the Worker view: {before:?}");
+    assert_eq!(respawned, views, "{before:?}");
+
+    let after = main_panes(&env);
+    assert_eq!(after.iter().map(|p| &p.id).collect::<Vec<_>>(), before.iter().map(|p| &p.id).collect::<Vec<_>>());
+    for (old, new) in before.iter().zip(&after) {
+        assert!(!new.dead, "{after:?}");
+        assert_eq!(new.view, old.view);
+        if old.view.is_empty() {
+            assert_eq!(new.pid, lead_pid, "the Lead is never touched");
+        } else {
+            assert_ne!(new.pid, old.pid, "{} runs again", old.view);
+        }
+    }
+    // Each view reruns its own command: the Worker view keeps its argv.
+    let worker_command = tmux_out(&env, &["display", "-p", "-t", worker, "#{pane_start_command}"]);
+    assert!(worker_command.contains("3601"), "{worker_command}");
+    assert_eq!(views_started(&env).iter().filter(|c| c[2] == "tree").count(), 2);
+    // The parked placeholder (not in main) and the engine are not touched.
+    assert_eq!(pane_state(&env, &placeholder.id).1, placeholder.pid);
+    assert_eq!(pane_state(&env, engine), (false, engine_pid));
 }
 
 #[test]
