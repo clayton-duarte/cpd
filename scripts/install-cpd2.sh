@@ -35,13 +35,32 @@ echo "installed $dest_dir/cpd2 and $adapter_dir" >&2
 
 # A running cockpit's views keep the old binary until restarted (commands.md
 # §13.1): when the configured server has a cockpit with its main window, restart
-# its views. No config, no server or no main: nothing to restart.
+# its views. No config, no server or no main: nothing to restart. Likewise a
+# running engine keeps running the old code (contract §3.7): when the work
+# session has its `watch` window, kill it and start the engine again.
 if config=$("$dest_dir/cpd2" config 2>/dev/null); then
   tmux_conf=$(printf '%s' "$config" | sed -n 's/.*"tmux":{\([^}]*\)}.*/\1/p')
   socket=$(printf '%s' "$tmux_conf" | sed -n 's/.*"socket":"\([^"]*\)".*/\1/p')
   cockpit=$(printf '%s' "$tmux_conf" | sed -n 's/.*"cockpit_session":"\([^"]*\)".*/\1/p')
+  work=$(printf '%s' "$tmux_conf" | sed -n 's/.*"work_session":"\([^"]*\)".*/\1/p')
   if [ -n "$socket" ] && [ -n "$cockpit" ] &&
     env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null list-windows -t "=$cockpit" -F '#{window_name}' 2>/dev/null | grep -qx main; then
     "$dest_dir/cpd2" tui --respawn >&2
+  fi
+  if [ -n "$socket" ] && [ -n "$work" ] &&
+    env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null list-windows -t "=$work" -F '#{window_name}' 2>/dev/null | grep -qx watch; then
+    echo "restarting the running engine (cpd2 watch) to run the new binary" >&2
+    env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null kill-window -t "=$work:watch" >&2
+    # The killed engine releases its lock a moment later; --ensure answers
+    # "already" until then.
+    tries=0
+    while :; do
+      out=$("$dest_dir/cpd2" watch --ensure) || break
+      case $out in *'"already":true'*) ;; *) break ;; esac
+      tries=$((tries + 1))
+      [ "$tries" -lt 40 ] || break
+      sleep 0.25
+    done
+    echo "$out" >&2
   fi
 fi

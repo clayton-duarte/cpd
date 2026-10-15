@@ -771,3 +771,65 @@ fn copy_dir(from: &Path, to: &Path) {
         }
     }
 }
+
+// ---------- scripts/install-cpd2.sh (Finding 5) ----------
+
+/// Runs `scripts/install-cpd2.sh` with a fake `cargo` that "builds" a fake
+/// `cpd2`, in `env`: the fake `cpd2` answers `config` with the private tmux
+/// socket, and records `watch --ensure` with the windows of the work session
+/// at that moment. Returns the script's stderr and the fake's calls.
+fn install(env: &TestEnv) -> (String, Vec<Vec<String>>) {
+    let socket = env.tmux_socket();
+    let built = env.fake(
+        "cpd2-built",
+        &format!(
+            r#"case "$1" in
+config) echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}' ;;
+watch) tmux -L '{socket}' list-windows -t =cpd-work -F '#{{window_name}}' > '{windows}' 2>&1; echo '{{"ok":true,"started":true,"pane":"%9"}}' ;;
+esac"#,
+            windows = env.root().join("windows-at-ensure").display()
+        ),
+    );
+    let target = env.root().join("target");
+    let cargo = env.fake("fake-cargo", &format!("mkdir -p '{t}/release' && cp '{}' '{t}/release/cpd2'", built.display(), t = target.display()));
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let out = env
+        .command(root.join("scripts/install-cpd2.sh"))
+        .env("CARGO", cargo)
+        .env("CARGO_TARGET_DIR", &target)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "{stderr}");
+    (stderr, env.calls("cpd2-built"))
+}
+
+#[test]
+fn install_restarts_a_running_engine_with_ensure_and_says_so() {
+    let env = TestEnv::new();
+    let new = |args: &[&str]| {
+        let out = env.tmux(args);
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    new(&["new-session", "-d", "-s", "cpd-work", "-n", "watch", "sleep", "600"]);
+    new(&["new-window", "-d", "-t", "=cpd-work:", "-n", "other", "sleep", "600"]);
+
+    let (stderr, calls) = install(&env);
+
+    assert!(stderr.contains("restarting the running engine"), "{stderr}");
+    assert_eq!(calls, [vec!["config"], vec!["watch", "--ensure"]]);
+    // The window was killed before --ensure ran; the other window is untouched.
+    assert_eq!(fs::read_to_string(env.root().join("windows-at-ensure")).unwrap().trim(), "other");
+}
+
+#[test]
+fn install_leaves_a_server_without_an_engine_alone() {
+    let env = TestEnv::new();
+    let out = env.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "other", "sleep", "600"]);
+    assert!(out.status.success());
+
+    let (stderr, calls) = install(&env);
+
+    assert!(!stderr.contains("restarting the running engine"), "{stderr}");
+    assert_eq!(calls, [vec!["config"]]);
+}
