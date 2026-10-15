@@ -10,6 +10,7 @@
 mod chat;
 mod cockpit;
 mod plan;
+pub mod read;
 mod tree;
 mod widgets;
 mod worker;
