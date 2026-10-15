@@ -1,2 +1,25 @@
 //! git (contract §7.1–§7.3, §7.5): the git wrapper, worktrees and branches,
-//! the hooks of `.config/wt.toml`, and the tamper check. Filled in by Job `rs-git`.
+//! the hooks of `.config/wt.toml`, and the tamper check. No commands of its
+//! own: `plan lock`, `attempt submit`, the driver and the merge call it.
+
+pub mod hooks;
+pub mod run;
+pub mod tamper;
+pub mod worktree;
+
+pub use hooks::{HookError, HookOutcome, HookResult, Operation, Pipeline, run_hook};
+pub use tamper::{check as tamper_check, protected_list, touched_protected};
+pub use worktree::{
+    Created, Setup, attempt_branch, attempt_worktree_path, create_attempt_worktree,
+    create_lead_worktree, discard_worktree, lead_branch, lead_worktree_path, remove_merged_attempt,
+};
+
+/// The last `lines` lines of `text`, joined with `\n` (contract §7.3: results
+/// carry the last 60 lines of a log).
+pub fn tail(text: &str, lines: usize) -> String {
+    let all: Vec<&str> = text.lines().collect();
+    all[all.len().saturating_sub(lines)..].join("\n")
+}
+
+/// How many lines of output results carry (contract §7.3, commands.md §1.2).
+pub const TAIL_LINES: usize = 60;

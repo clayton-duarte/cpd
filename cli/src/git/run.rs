@@ -1,0 +1,100 @@
+//! Running git (contract §7): every call is `git -C <dir> <argv…>` with
+//! `GIT_TERMINAL_PROMPT=0` and stdin from `/dev/null`.
+
+use std::path::Path;
+use std::process::{Command, Stdio};
+
+use serde_json::json;
+
+use super::{TAIL_LINES, tail};
+use crate::error::{CpdError, ErrorCode};
+
+/// What a finished git call printed.
+#[derive(Clone, Debug)]
+pub struct Out {
+    pub code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+fn argv(dir: &Path, args: &[&str]) -> Vec<String> {
+    let mut all = vec!["git".to_owned(), "-C".to_owned(), dir.to_string_lossy().into_owned()];
+    all.extend(args.iter().map(|a| (*a).to_owned()));
+    all
+}
+
+fn failed(dir: &Path, args: &[&str], message: String, exit: Option<i32>, stderr: &str) -> CpdError {
+    CpdError::new(ErrorCode::GitFailed, message)
+        .with("argv", json!(argv(dir, args)))
+        .with("exit", json!(exit))
+        .with("stderr", tail(stderr, TAIL_LINES))
+}
+
+/// Runs `git -C <dir> <args>` and returns what it printed, whatever its exit
+/// code. Only a git that cannot start, or dies from a signal, is an error.
+pub fn run(dir: &Path, args: &[&str]) -> Result<Out, CpdError> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| failed(dir, args, format!("Cannot run git: {e}."), None, ""))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    match output.status.code() {
+        Some(code) => Ok(Out { code, stdout, stderr }),
+        None => Err(failed(dir, args, "git was killed by a signal.".to_owned(), None, &stderr)),
+    }
+}
+
+/// Like [`run`], but any non-zero exit is `git_failed` (with `argv`, `exit` and
+/// the last 60 lines of `stderr` in `details`). Returns stdout unchanged.
+pub fn ok(dir: &Path, args: &[&str]) -> Result<String, CpdError> {
+    let out = run(dir, args)?;
+    if out.code == 0 {
+        Ok(out.stdout)
+    } else {
+        let message = format!("git {} exited {}.", args.first().copied().unwrap_or(""), out.code);
+        Err(failed(dir, args, message, Some(out.code), &out.stderr))
+    }
+}
+
+/// `git rev-parse <rev>`, trimmed.
+pub fn rev_parse(dir: &Path, rev: &str) -> Result<String, CpdError> {
+    Ok(ok(dir, &["rev-parse", "--verify", "--end-of-options", rev])?.trim().to_owned())
+}
+
+/// Whether `refs/heads/<branch>` exists.
+pub fn branch_exists(dir: &Path, branch: &str) -> Result<bool, CpdError> {
+    let reference = format!("refs/heads/{branch}");
+    let out = run(dir, &["rev-parse", "--verify", "--quiet", &reference])?;
+    match out.code {
+        0 => Ok(true),
+        1 => Ok(false),
+        code => Err(failed(
+            dir,
+            &["rev-parse", "--verify", "--quiet", &reference],
+            format!("git rev-parse exited {code}."),
+            Some(code),
+            &out.stderr,
+        )),
+    }
+}
+
+/// The checked-out branch of the worktree at `dir`; `None` when detached.
+pub fn current_branch(dir: &Path) -> Result<Option<String>, CpdError> {
+    let out = run(dir, &["symbolic-ref", "--short", "-q", "HEAD"])?;
+    match out.code {
+        0 => Ok(Some(out.stdout.trim().to_owned())),
+        1 => Ok(None),
+        code => Err(failed(
+            dir,
+            &["symbolic-ref", "--short", "-q", "HEAD"],
+            format!("git symbolic-ref exited {code}."),
+            Some(code),
+            &out.stderr,
+        )),
+    }
+}

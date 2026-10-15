@@ -1,0 +1,127 @@
+//! Reading a hook from `.config/wt.toml` (contract §7.3): the three forms of
+//! worktrunk, with commands in file order.
+
+use std::fs;
+use std::io::ErrorKind;
+use std::path::Path;
+
+use toml::de::{DeTable, DeValue};
+
+use super::HookError;
+use crate::home::Hook;
+
+/// One command of a hook, as written (not yet rendered).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HookCommand {
+    /// The key it has in a table or block; `None` for `hook = "cmd"`.
+    pub name: Option<String>,
+    pub template: String,
+}
+
+/// A hook's commands: blocks run in order, the commands of a block together.
+/// `hook = "cmd"` and `[hook]` are one block; `[[hook]]` is one block each.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct Pipeline {
+    pub blocks: Vec<Vec<HookCommand>>,
+}
+
+impl Pipeline {
+    /// Every command, in file order.
+    pub fn commands(&self) -> impl Iterator<Item = &HookCommand> {
+        self.blocks.iter().flatten()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.commands().next().is_none()
+    }
+}
+
+/// `<worktree>/.config/wt.toml`, read now. A missing file or table is an empty
+/// pipeline; anything malformed is `HookError::Invalid`.
+pub fn load(worktree: &Path, hook: Hook) -> Result<Pipeline, HookError> {
+    let path = worktree.join(".config").join("wt.toml");
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Pipeline::default()),
+        Err(e) => return Err(HookError::Io(format!("Cannot read {}: {e}.", path.display()))),
+    };
+    parse(&text, hook).map_err(HookError::Invalid)
+}
+
+/// The `hook` table of a `wt.toml` text. The error is a sentence.
+pub fn parse(text: &str, hook: Hook) -> Result<Pipeline, String> {
+    let name = hook.as_str();
+    let doc = DeTable::parse(text).map_err(|e| format!(".config/wt.toml is not valid TOML: {e}"))?;
+    let Some((_, value)) = doc.get_ref().iter().find(|(k, _)| k.get_ref().as_ref() == name) else {
+        return Ok(Pipeline::default());
+    };
+    let bad = |what: &str| format!("`{name}` in .config/wt.toml must be a string, a table of strings or an array of tables of strings, {what}.");
+    let blocks = match value.get_ref() {
+        DeValue::String(s) => vec![vec![HookCommand { name: None, template: s.to_string() }]],
+        DeValue::Table(t) => vec![block(t).map_err(|w| bad(&w))?],
+        DeValue::Array(items) => items
+            .iter()
+            .map(|item| match item.get_ref() {
+                DeValue::Table(t) => block(t).map_err(|w| bad(&w)),
+                other => Err(bad(&format!("not a {} in the array", other.type_str()))),
+            })
+            .collect::<Result<_, _>>()?,
+        other => return Err(bad(&format!("not a {}", other.type_str()))),
+    };
+    Ok(Pipeline { blocks })
+}
+
+/// The commands of one table, in the order their keys appear in the file
+/// (`toml` keeps tables sorted by key; the keys' spans restore file order).
+fn block(table: &DeTable<'_>) -> Result<Vec<HookCommand>, String> {
+    let mut entries: Vec<_> = table.iter().collect();
+    entries.sort_by_key(|(k, _)| k.span().start);
+    entries
+        .into_iter()
+        .map(|(k, v)| match v.get_ref() {
+            DeValue::String(s) => Ok(HookCommand { name: Some(k.get_ref().to_string()), template: s.to_string() }),
+            other => Err(format!("`{}` is a {}", k.get_ref(), other.type_str())),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cmd(name: Option<&str>, template: &str) -> HookCommand {
+        HookCommand { name: name.map(str::to_owned), template: template.to_owned() }
+    }
+
+    #[test]
+    fn a_string_is_one_unnamed_command() {
+        let p = parse("pre-merge = \"make\"\n", Hook::PreMerge).unwrap();
+        assert_eq!(p.blocks, vec![vec![cmd(None, "make")]]);
+    }
+
+    #[test]
+    fn a_table_is_one_block_in_file_order() {
+        let p = parse("[pre-merge]\nz = \"1\"\na = \"2\"\nm = \"3\"\n", Hook::PreMerge).unwrap();
+        assert_eq!(p.blocks, vec![vec![cmd(Some("z"), "1"), cmd(Some("a"), "2"), cmd(Some("m"), "3")]]);
+    }
+
+    #[test]
+    fn an_array_of_tables_is_a_pipeline() {
+        let text = "[[pre-merge]]\ninstall = \"i\"\n\n[[pre-merge]]\nz = \"b\"\na = \"c\"\n";
+        let p = parse(text, Hook::PreMerge).unwrap();
+        assert_eq!(p.blocks, vec![vec![cmd(Some("install"), "i")], vec![cmd(Some("z"), "b"), cmd(Some("a"), "c")]]);
+    }
+
+    #[test]
+    fn other_tables_are_ignored_and_a_missing_one_is_empty() {
+        let text = "post-start = 3\n[list]\nfull = true\n";
+        assert!(parse(text, Hook::PreMerge).unwrap().is_empty());
+    }
+
+    #[test]
+    fn wrong_shapes_and_bad_toml_are_errors() {
+        for text in ["pre-merge = 3", "pre-merge = [\"a\"]", "[pre-merge]\na = 1", "pre-merge = ", "[[pre-merge]]\na = [1]"] {
+            assert!(parse(text, Hook::PreMerge).is_err(), "{text}");
+        }
+    }
+}
