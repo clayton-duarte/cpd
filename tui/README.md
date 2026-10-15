@@ -56,7 +56,8 @@ grouped under its Context (the repo directory name of the session's own project 
 file's header line, read once per `@session_file`, else the pane's cwd when the file is missing or has no `cwd`), labelled by the pi name, else the Workflow id,
 else the first 8 characters of the session id. The plan view shows the Workflow of the session in the centre slot
 (`no Workflow yet` when unattached); its tabs are that Context's sessions. Switching swaps the session's pane into the
-centre slot.
+centre slot (`swap-pane -d`) and focuses it (`select-pane`), so typing goes to the chat; a tab click and a tree click do the
+same (`switch_to`).
 
 ## Context column
 
