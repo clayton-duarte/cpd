@@ -1,19 +1,25 @@
-//! The Plan view's flowchart: a pure layout of a Workflow's Jobs as one-row pills joined by box-drawing edges.
+//! The Plan view's chart: a pure layout of a Workflow's Jobs as GitHub-Actions-style cards, left to right.
 //!
-//! In: Jobs and a width. Out: a `Buffer` of the whole chart plus each pill's rectangle. Levels run top to bottom, two
-//! rows per level (the pill row, then one row of edges). The view copies a window of the buffer into the frame (`blit`).
-//! The chart is as wide as the pane unless a level cannot fit even with the shortest keys: then it is wider and the
-//! view scrolls horizontally.
+//! In: Jobs. Out: a `Buffer` of the whole chart (no padding: the view insets the window it blits into) plus each pill's
+//! rectangle. Implied needs are dropped (transitive reduction); Jobs with the same needs share one card, stacked; a card's
+//! column is one past the deepest column it needs; each card has one entry and one exit at its middle row, joined by one
+//! vertical bus per gap between columns, lines that skip columns riding a row free of cards.
+//!
+//! Hand-written drawing is only the line glyphs (`Mask`) and the window copy (`Chart::blit`): ratatui has no widget for
+//! box-drawing edges that merge into junctions, nor for copying a window of a `Buffer`. Positions come from ratatui's
+//! `Layout`; pills are `Line`s aligned left and right.
 
 use std::collections::{HashMap, HashSet};
 
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
+    layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
+    text::Line,
+    widgets::Widget,
 };
 
-use crate::palette::{self, Ui};
+use crate::palette::{self, Meaning};
 
 /// What the layout needs to know of a Job.
 #[derive(Clone, Debug)]
@@ -29,15 +35,15 @@ pub struct FlowJob {
 pub struct Pill {
     pub key: String,
     pub rect: Rect,
-    pub level: usize,
+    pub column: usize,
 }
 
 pub struct Chart {
     pub buf: Buffer,
     /// In the order of the (visible) Jobs.
     pub pills: Vec<Pill>,
-    /// Pill indices of each level, left to right.
-    pub levels: Vec<Vec<usize>>,
+    /// Pill indices of each column, top to bottom.
+    pub columns: Vec<Vec<usize>>,
     /// Cancelled Jobs left out.
     pub hidden: usize,
 }
@@ -50,9 +56,8 @@ pub enum Dir {
     Right,
 }
 
-const GAP: u16 = 2; // between pills of a level
-const MARGIN: u16 = 1; // either side of the pills: room for the selection markers
-const MIN_KEY: usize = 6; // shortest a key is truncated to, `…` included
+/// Columns between a column's right bracket and the next column's left bracket: line, bus, line.
+const GAP: u16 = 3;
 
 fn truncate(s: &str, w: usize) -> String {
     if s.chars().count() <= w {
@@ -62,60 +67,89 @@ fn truncate(s: &str, w: usize) -> String {
     }
 }
 
-/// ` <icon> <key> <tier>[ aN] `, the key cut to `key_w` characters.
-pub fn pill_text(j: &FlowJob, key_w: usize) -> String {
+/// The left half of a pill (` <icon> <key> `, the key cut to `key_w` characters) and the right half (`<tier>[ aN] `).
+fn pill_parts(j: &FlowJob, key_w: usize) -> (String, String) {
     let a = if j.attempt > 1 { format!(" a{}", j.attempt) } else { String::new() };
-    format!(" {} {} {}{} ", palette::job_status(&j.status).0, truncate(&j.key, key_w), j.tier, a)
+    (format!(" {} {} ", palette::job_status(&j.status).0, truncate(&j.key, key_w)), format!("{}{} ", j.tier, a))
 }
 
-fn text_w(s: &str) -> u16 {
-    s.chars().count() as u16
+/// ` <icon> <key> <tier>[ aN] `: a pill as narrow as it goes (the legend shows these).
+pub fn pill_text(j: &FlowJob, key_w: usize) -> String {
+    let (l, r) = pill_parts(j, key_w);
+    l + &r
 }
 
-/// Levels top to bottom: a Job sits one level below the deepest Job it needs (none: level 0). Each level is ordered by
-/// the mean relative position of its parents (barycentre), ties by the Workflow's order.
-fn levels(jobs: &[FlowJob]) -> Vec<Vec<usize>> {
+/// The needs of each Job (as indices) that no other need already implies: a need reachable through another need is dropped.
+fn reduced_needs(jobs: &[FlowJob]) -> Vec<Vec<usize>> {
     let idx: HashMap<&str, usize> = jobs.iter().enumerate().map(|(i, j)| (j.key.as_str(), i)).collect();
-    fn depth(i: usize, jobs: &[FlowJob], idx: &HashMap<&str, usize>, lvl: &mut [Option<usize>], open: &mut HashSet<usize>) -> usize {
-        if let Some(d) = lvl[i] {
-            return d;
-        }
-        if !open.insert(i) {
-            return 0; // a cycle: cut it here
-        }
-        let d = jobs[i].needs.iter().filter_map(|n| idx.get(n.as_str())).map(|&p| depth(p, jobs, idx, lvl, open) + 1).max().unwrap_or(0);
-        open.remove(&i);
-        lvl[i] = Some(d);
-        d
-    }
-    let mut lvl = vec![None; jobs.len()];
-    let lvl: Vec<usize> = (0..jobs.len()).map(|i| depth(i, jobs, &idx, &mut lvl, &mut HashSet::new())).collect();
-    let mut rows = vec![Vec::new(); lvl.iter().max().map_or(0, |m| m + 1)];
-    for (i, &l) in lvl.iter().enumerate() {
-        rows[l].push(i);
-    }
-    let mut pos: HashMap<usize, f64> = HashMap::new();
-    for row in rows.iter_mut() {
-        let mut keyed: Vec<(f64, usize, usize)> = row
-            .iter()
-            .enumerate()
-            .map(|(k, &i)| {
-                let ps: Vec<f64> = jobs[i].needs.iter().filter_map(|n| idx.get(n.as_str())).filter_map(|p| pos.get(p)).copied().collect();
-                let b = if ps.is_empty() { 0.0 } else { ps.iter().sum::<f64>() / ps.len() as f64 };
-                (b, i, k)
-            })
-            .collect();
-        keyed.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.2.cmp(&b.2)));
-        *row = keyed.iter().map(|k| k.1).collect();
-        let len = row.len() as f64;
-        for (p, &i) in row.iter().enumerate() {
-            pos.insert(i, (p as f64 + 0.5) / len);
-        }
-    }
-    rows
+    let needs: Vec<Vec<usize>> = jobs.iter().map(|j| j.needs.iter().filter_map(|n| idx.get(n.as_str()).copied()).collect()).collect();
+    // everything a Job reaches through its needs (a visited set, so a cycle ends)
+    let reach: Vec<HashSet<usize>> = (0..jobs.len())
+        .map(|i| {
+            let (mut seen, mut todo) = (HashSet::new(), needs[i].clone());
+            while let Some(p) = todo.pop() {
+                if seen.insert(p) {
+                    todo.extend(&needs[p]);
+                }
+            }
+            seen
+        })
+        .collect();
+    needs.iter().map(|ns| ns.iter().copied().filter(|p| !ns.iter().any(|q| q != p && reach[*q].contains(p))).collect()).collect()
 }
 
-// ---------- edge masks ----------
+/// Jobs that need the same Jobs, stacked; `needs` are the cards they need.
+struct Card {
+    jobs: Vec<usize>,
+    needs: Vec<usize>,
+}
+
+/// Cards in the Workflow's order (a card sits where its first Job does). Jobs with no needs are a card each.
+fn cards_of(reduced: &[Vec<usize>]) -> Vec<Card> {
+    let mut cards: Vec<Card> = Vec::new();
+    let mut by_needs: HashMap<Vec<usize>, usize> = HashMap::new();
+    let mut card_of = vec![0; reduced.len()];
+    for (i, ns) in reduced.iter().enumerate() {
+        let mut key = ns.clone();
+        key.sort();
+        let c = match by_needs.get(&key) {
+            Some(&c) if !key.is_empty() => c,
+            _ => {
+                cards.push(Card { jobs: Vec::new(), needs: Vec::new() });
+                by_needs.insert(key, cards.len() - 1);
+                cards.len() - 1
+            }
+        };
+        cards[c].jobs.push(i);
+        card_of[i] = c;
+    }
+    for c in &mut cards {
+        let mut needs: Vec<usize> = reduced[c.jobs[0]].iter().map(|&p| card_of[p]).collect();
+        needs.sort();
+        needs.dedup();
+        c.needs = needs;
+    }
+    cards
+}
+
+/// A card's column: one past the deepest card it needs, 0 with no needs. A need that closes a cycle is ignored.
+fn column_of(c: usize, cards: &[Card], memo: &mut [Option<usize>], open: &mut HashSet<usize>) -> usize {
+    if let Some(l) = memo[c] {
+        return l;
+    }
+    open.insert(c);
+    let mut l = 0;
+    for &p in &cards[c].needs {
+        if !open.contains(&p) {
+            l = l.max(column_of(p, cards, memo, open) + 1);
+        }
+    }
+    open.remove(&c);
+    memo[c] = Some(l);
+    l
+}
+
+// ---------- line masks ----------
 const U: u8 = 1;
 const D: u8 = 2;
 const L: u8 = 4;
@@ -138,6 +172,7 @@ fn glyph(m: u8) -> &'static str {
     }
 }
 
+/// Which of the four directions a line leaves each cell in; lines that meet in a cell merge into one junction glyph.
 struct Mask {
     w: u16,
     cells: Vec<u8>,
@@ -149,9 +184,7 @@ impl Mask {
     }
     fn add(&mut self, x: u16, y: u16, d: u8) {
         let w = self.w as usize;
-        if let Some(c) = self.cells.get_mut(y as usize * w + x as usize) {
-            *c |= d;
-        }
+        self.cells[y as usize * w + x as usize] |= d;
     }
     fn at(&self, x: u16, y: u16) -> u8 {
         self.cells[y as usize * self.w as usize + x as usize]
@@ -180,108 +213,149 @@ impl Mask {
     }
 }
 
-/// Everything `layout` decides before drawing.
-struct Plan {
-    pills: Vec<Pill>,
-    texts: Vec<String>,
-    levels: Vec<Vec<usize>>,
-    mask: Mask,
+/// A straight line of the chart: horizontal on row `y` or vertical in column `x`, ends included.
+enum Seg {
+    H { y: u16, x1: u16, x2: u16 },
+    V { x: u16, y1: u16, y2: u16 },
 }
 
-fn plan(jobs: &[FlowJob], width: u16) -> Plan {
-    let idx: HashMap<&str, usize> = jobs.iter().enumerate().map(|(i, j)| (j.key.as_str(), i)).collect();
-    let rows = levels(jobs);
-    let mut lvl = vec![0; jobs.len()];
-    for (l, r) in rows.iter().enumerate() {
-        for &i in r {
-            lvl[i] = l;
-        }
-    }
-    let parents = |c: usize| jobs[c].needs.iter().filter_map(|n| idx.get(n.as_str()).copied()).collect::<HashSet<_>>();
-    // a parent with an edge that skips levels gets a lane right of every pill, one column each
-    let mut lane_of: HashMap<usize, u16> = HashMap::new();
-    for p in 0..jobs.len() {
-        if (0..jobs.len()).any(|c| parents(c).contains(&p) && lvl[c] > lvl[p] + 1) {
-            lane_of.insert(p, lane_of.len() as u16);
-        }
-    }
-    let lanes = lane_of.len() as u16;
-    // each level's pills, keys cut as little as fits
-    let avail = width.saturating_sub(lanes + 2 * MARGIN);
-    let longest = jobs.iter().map(|j| j.key.chars().count()).max().unwrap_or(0);
-    let level_texts: Vec<Vec<String>> = rows
-        .iter()
-        .map(|r| {
-            let total = |k: usize| r.iter().map(|&i| text_w(&pill_text(&jobs[i], k))).sum::<u16>() + GAP * (r.len() as u16 - 1);
-            let k = (MIN_KEY.min(longest)..=longest).rev().find(|&k| total(k) <= avail).unwrap_or(MIN_KEY.min(longest));
-            r.iter().map(|&i| pill_text(&jobs[i], k)).collect()
-        })
-        .collect();
-    let level_w = |l: usize| level_texts[l].iter().map(|t| text_w(t)).sum::<u16>() + GAP * (level_texts[l].len() as u16 - 1);
-    let widest = (0..rows.len()).map(level_w).max().unwrap_or(0);
-    let base_w = width.saturating_sub(lanes).max(widest + 2 * MARGIN);
-    let total_w = base_w + lanes;
-    let h = (rows.len() as u16 * 2).saturating_sub(1).max(1);
-    let mut pills: Vec<Option<Pill>> = (0..jobs.len()).map(|_| None).collect();
-    let mut texts = vec![String::new(); jobs.len()];
-    for (l, r) in rows.iter().enumerate() {
-        let mut x = MARGIN + (base_w - 2 * MARGIN - level_w(l)) / 2;
-        for (k, &i) in r.iter().enumerate() {
-            let w = text_w(&level_texts[l][k]);
-            pills[i] = Some(Pill { key: jobs[i].key.clone(), rect: Rect::new(x, l as u16 * 2, w, 1), level: l });
-            texts[i] = level_texts[l][k].clone();
-            x += w + GAP;
-        }
-    }
-    let pills: Vec<Pill> = pills.into_iter().flatten().collect();
-    let mut mask = Mask::new(total_w, h);
-    let centre = |i: usize| pills[i].rect.x + pills[i].rect.width / 2;
-    for c in 0..jobs.len() {
-        for p in parents(c) {
-            let (s, e) = (pills[p].level as u16 * 2 + 1, pills[c].level as u16 * 2 - 1); // band row under the parent, above the child
-            let (px, cx) = (centre(p), centre(c));
-            mask.add(px, s, U);
-            if lvl[c] == lvl[p] + 1 {
-                mask.h(s, px, cx);
-                mask.v(cx, s, e);
-            } else {
-                let lane = base_w + lane_of[&p];
-                mask.h(s, px, lane);
-                mask.v(lane, s, e);
-                mask.h(e, lane, cx);
-            }
-            mask.add(cx, e, D);
-        }
-    }
-    // the levels of the pill vector (same order as `jobs`)
-    let levels = rows;
-    Plan { pills, texts, levels, mask }
+/// The nearest row to `near` that no card takes in columns `cols` (rows below every card are always free).
+fn free_row(near: u16, cols: std::ops::Range<usize>, busy: &[HashSet<u16>]) -> u16 {
+    (0..).flat_map(|d| [near.checked_sub(d), Some(near + d)]).flatten().find(|r| cols.clone().all(|l| !busy[l].contains(r))).unwrap()
 }
 
-pub fn layout(all: &[FlowJob], width: u16) -> Chart {
-    let jobs: Vec<FlowJob> = all.iter().filter(|j| j.status != "cancelled").cloned().collect();
-    let keys: HashSet<&str> = jobs.iter().map(|j| j.key.as_str()).collect();
-    let jobs: Vec<FlowJob> = jobs
+pub fn layout(all: &[FlowJob]) -> Chart {
+    let live: HashSet<&str> = all.iter().filter(|j| j.status != "cancelled").map(|j| j.key.as_str()).collect();
+    let jobs: Vec<FlowJob> = all
         .iter()
-        .map(|j| FlowJob { needs: j.needs.iter().filter(|n| keys.contains(n.as_str())).cloned().collect(), ..j.clone() })
+        .filter(|j| j.status != "cancelled")
+        .map(|j| FlowJob { needs: j.needs.iter().filter(|n| live.contains(n.as_str())).cloned().collect(), ..j.clone() })
         .collect();
     let hidden = all.len() - jobs.len();
-    let Plan { pills, texts, levels, mask } = plan(&jobs, width);
-    let mut buf = Buffer::empty(Rect::new(0, 0, mask.w.max(width), (mask.cells.len() / mask.w.max(1) as usize).max(1) as u16));
-    let dim = Style::new().add_modifier(Modifier::DIM);
-    for y in 0..buf.area.height.min((mask.cells.len() / mask.w.max(1) as usize) as u16) {
-        for x in 0..mask.w {
-            let m = mask.at(x, y);
-            if m != 0 {
-                buf[(x, y)].set_symbol(glyph(m)).set_style(dim);
+    let cards = cards_of(&reduced_needs(&jobs));
+    let col_of: Vec<usize> = {
+        let mut memo = vec![None; cards.len()];
+        (0..cards.len()).map(|c| column_of(c, &cards, &mut memo, &mut HashSet::new())).collect()
+    };
+    let ncols = col_of.iter().max().map_or(0, |m| m + 1);
+    let mut cols: Vec<Vec<usize>> = vec![Vec::new(); ncols];
+    for c in 0..cards.len() {
+        cols[col_of[c]].push(c);
+    }
+
+    // x: the left bracket column, then each column's pills, `GAP` + both bracket columns between columns
+    let parts: Vec<(String, String)> = jobs.iter().map(|j| pill_parts(j, usize::MAX)).collect();
+    let pill_w = |i: usize| (Line::from(parts[i].0.as_str()).width() + Line::from(parts[i].1.as_str()).width()) as u16;
+    let col_w: Vec<u16> = cols.iter().map(|cs| cs.iter().flat_map(|&c| &cards[c].jobs).map(|&i| pill_w(i)).max().unwrap_or(0)).collect();
+    let spacing = GAP + 2;
+    let inner_w = col_w.iter().sum::<u16>() + spacing * ncols.saturating_sub(1) as u16;
+    let xs: Vec<u16> = Layout::horizontal(col_w.iter().map(|&w| Constraint::Length(w))).spacing(spacing).split(Rect::new(1, 0, inner_w, 1)).iter().map(|r| r.x).collect();
+    let width = if ncols == 0 { 0 } else { inner_w + 2 };
+
+    // y: each column's cards stacked (one empty row between cards), centred in the tallest column, ordered by the mean
+    // row of the cards they need (ties: the Workflow's order)
+    let height_of = |c: usize| cards[c].jobs.len() as u16;
+    let hmax = cols.iter().map(|cs| cs.iter().map(|&c| height_of(c)).sum::<u16>() + cs.len().saturating_sub(1) as u16).max().unwrap_or(0);
+    let (mut top, mut mid) = (vec![0u16; cards.len()], vec![0u16; cards.len()]);
+    for l in 0..ncols {
+        let barycentre = |c: &usize| match &cards[*c].needs[..] {
+            [] => 0.0,
+            ns => ns.iter().map(|&p| mid[p] as f64).sum::<f64>() / ns.len() as f64,
+        };
+        let mut ordered = cols[l].clone();
+        ordered.sort_by(|a, b| barycentre(a).total_cmp(&barycentre(b)));
+        cols[l] = ordered;
+        let stack = cols[l].iter().map(|&c| height_of(c)).sum::<u16>() + cols[l].len() as u16 - 1;
+        // centred; the spare row of an odd difference goes below (ratatui's own centring would put it above, and the
+        // accepted render has it below)
+        let column = Rect::new(0, (hmax - stack) / 2, 1, stack);
+        let rows = Layout::vertical(cols[l].iter().map(|&c| Constraint::Length(height_of(c)))).spacing(1).split(column);
+        for (&c, r) in cols[l].iter().zip(rows.iter()) {
+            (top[c], mid[c]) = (r.y, r.y + (r.height - 1) / 2);
+        }
+    }
+
+    // lines: one bus per gap; a line that skips columns rides a free row from its own bus to the bus before its target.
+    // Needs that do not point left (a cycle) are not drawn.
+    let edges: Vec<(usize, usize)> = (0..cards.len()).flat_map(|c| cards[c].needs.iter().map(move |&p| (p, c))).filter(|&(p, c)| col_of[p] < col_of[c]).collect();
+    let busy: Vec<HashSet<u16>> = cols.iter().map(|cs| cs.iter().flat_map(|&c| top[c]..top[c] + height_of(c)).collect()).collect();
+    let right = |c: usize| xs[col_of[c]] + col_w[col_of[c]]; // the right bracket's column
+    let bus = |l: usize| xs[l] + col_w[l] + 2;
+    let mut segs: Vec<Seg> = Vec::new();
+    let mut bus_rows: Vec<Vec<u16>> = vec![Vec::new(); ncols];
+    for &(p, c) in &edges {
+        let (lp, lc) = (col_of[p], col_of[c]);
+        segs.push(Seg::H { y: mid[p], x1: right(p), x2: bus(lp) });
+        bus_rows[lp].push(mid[p]);
+        if lc > lp + 1 {
+            let y = free_row(mid[p], lp + 1..lc, &busy);
+            segs.push(Seg::H { y, x1: bus(lp), x2: bus(lc - 1) });
+            bus_rows[lp].push(y);
+            bus_rows[lc - 1].push(y);
+        }
+        bus_rows[lc - 1].push(mid[c]);
+        segs.push(Seg::H { y: mid[c], x1: bus(lc - 1), x2: xs[lc] - 1 });
+    }
+    for (l, rows) in bus_rows.iter().enumerate() {
+        if let (Some(&a), Some(&b)) = (rows.iter().min(), rows.iter().max()) {
+            segs.push(Seg::V { x: bus(l), y1: a, y2: b });
+        }
+    }
+    let height = segs.iter().map(|s| match s { Seg::H { y, .. } => *y + 1, Seg::V { y2, .. } => *y2 + 1 }).fold(hmax, u16::max);
+    let mut mask = Mask::new(width, height);
+    for s in &segs {
+        match *s {
+            Seg::H { y, x1, x2 } => mask.h(y, x1, x2),
+            Seg::V { x, y1, y2 } => mask.v(x, y1, y2),
+        }
+    }
+    // entry and exit: a card of several Jobs is held by a bracket on each side, joined at the middle row; a single
+    // Job's are plain line ends
+    for c in 0..cards.len() {
+        let (first, last) = (top[c], top[c] + height_of(c) - 1);
+        let (lx, rx) = (xs[col_of[c]] - 1, right(c));
+        if first == last {
+            if edges.iter().any(|e| e.1 == c) {
+                mask.add(lx, first, R);
+            }
+            if edges.iter().any(|e| e.0 == c) {
+                mask.add(rx, first, L);
+            }
+            continue;
+        }
+        for y in first..=last {
+            let vertical = (if y > first { U } else { 0 }) | (if y < last { D } else { 0 });
+            let (open_l, open_r) = if y == first || y == last { (R, L) } else { (0, 0) };
+            mask.add(lx, y, vertical | open_l);
+            mask.add(rx, y, vertical | open_r);
+        }
+    }
+
+    let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+    let lines = palette::fg(Meaning::Nothing);
+    for y in 0..height {
+        for x in 0..width {
+            if mask.at(x, y) != 0 {
+                buf[(x, y)].set_symbol(glyph(mask.at(x, y))).set_style(lines);
             }
         }
     }
-    for (p, text) in pills.iter().zip(&texts) {
-        let (_, meaning) = palette::job_status(jobs.iter().find(|j| j.key == p.key).map_or("?", |j| &j.status));
-        buf.set_string(p.rect.x, p.rect.y, text, palette::pill(meaning));
+    let mut pills: Vec<Option<Pill>> = (0..jobs.len()).map(|_| None).collect();
+    let mut columns: Vec<Vec<usize>> = vec![Vec::new(); ncols];
+    for (l, cs) in cols.iter().enumerate() {
+        for &c in cs {
+            for (k, &i) in cards[c].jobs.iter().enumerate() {
+                let rect = Rect::new(xs[l], top[c] + k as u16, col_w[l], 1);
+                let style = palette::pill(palette::job_status(&jobs[i].status).1);
+                // the icon and key to the left, the tier (and `aN`) to the right, whatever the column's width
+                Line::from(parts[i].0.as_str()).style(style).left_aligned().render(rect, &mut buf);
+                Line::from(parts[i].1.as_str()).style(style).right_aligned().render(rect, &mut buf);
+                pills[i] = Some(Pill { key: jobs[i].key.clone(), rect, column: l });
+                columns[l].push(i);
+            }
+        }
     }
-    Chart { buf, pills, levels, hidden }
+    Chart { buf, pills: pills.into_iter().flatten().collect(), columns, hidden }
 }
 
 impl Chart {
@@ -289,32 +363,31 @@ impl Chart {
         self.pills.iter().position(|p| x >= p.rect.x && x < p.rect.right() && y == p.rect.y)
     }
 
-    /// The spatial neighbour of pill `from`: up/down the nearest (by centre) on the level above/below, left/right the
-    /// next on the same level. Stays put at an edge.
+    /// The neighbour of pill `from`: up/down the previous/next Job of its column, left/right the nearest Job (by row) of the
+    /// previous/next column. Stays put at an edge.
     pub fn step(&self, from: usize, dir: Dir) -> usize {
-        let level = self.pills[from].level;
-        let row = &self.levels[level];
-        let at = row.iter().position(|&i| i == from).unwrap_or(0);
-        let centre = |i: usize| self.pills[i].rect.x as i32 * 2 + self.pills[i].rect.width as i32;
-        let nearest = |l: usize| self.levels[l].iter().copied().min_by_key(|&i| (centre(i) - centre(from)).abs());
+        let column = self.pills[from].column;
+        let col = &self.columns[column];
+        let at = col.iter().position(|&i| i == from).unwrap_or(0);
+        let nearest = |l: usize| self.columns[l].iter().copied().min_by_key(|&i| self.pills[i].rect.y.abs_diff(self.pills[from].rect.y)).unwrap_or(from);
         match dir {
-            Dir::Left => row[at.saturating_sub(1)],
-            Dir::Right => row[(at + 1).min(row.len() - 1)],
-            Dir::Up if level > 0 => nearest(level - 1).unwrap_or(from),
-            Dir::Down if level + 1 < self.levels.len() => nearest(level + 1).unwrap_or(from),
+            Dir::Up => col[at.saturating_sub(1)],
+            Dir::Down => col[(at + 1).min(col.len() - 1)],
+            Dir::Left if column > 0 => nearest(column - 1),
+            Dir::Right if column + 1 < self.columns.len() => nearest(column + 1),
             _ => from,
         }
     }
 
-    /// The smallest scroll offset change that shows pill `i` and its markers in a `w`×`h` window.
+    /// The smallest scroll offset change that shows pill `i` and its entry and exit in a `w`×`h` window.
     pub fn scroll_to(&self, i: usize, (ox, oy): (u16, u16), (w, h): (u16, u16)) -> (u16, u16) {
         let r = self.pills[i].rect;
         let fit = |o: u16, lo: u16, hi: u16, size: u16| if lo < o { lo } else if hi > o + size { hi.saturating_sub(size) } else { o };
         (fit(ox, r.x.saturating_sub(1), r.right() + 1, w), fit(oy, r.y, r.bottom(), h))
     }
 
-    /// Copy the window at (`ox`, `oy`) into `dst` at `area`, the selected pill bold between `▸ ◂`. Offsets are clamped
-    /// to the chart; the clamped offsets are returned.
+    /// Copy the window at (`ox`, `oy`) into `dst` at `area`, the selected pill bold and reversed. Offsets are clamped to
+    /// the chart; the clamped offsets are returned. (Hand-written: ratatui has no widget that copies a window of a `Buffer`.)
     pub fn blit(&self, dst: &mut Buffer, area: Rect, (ox, oy): (u16, u16), selected: Option<usize>) -> (u16, u16) {
         let ox = ox.min(self.buf.area.width.saturating_sub(area.width));
         let oy = oy.min(self.buf.area.height.saturating_sub(area.height));
@@ -324,22 +397,11 @@ impl Chart {
             }
         }
         if let Some(r) = selected.map(|i| self.pills[i].rect) {
-            let mut put = |x: u16, symbol: Option<&str>| {
-                if x >= ox && x < ox + area.width && r.y >= oy && r.y < oy + area.height {
-                    let c = &mut dst[(area.x + x - ox, area.y + r.y - oy)];
-                    match symbol {
-                        Some(s) => {
-                            c.set_symbol(s).set_style(Style::new().fg(palette::ui(Ui::Marker)).add_modifier(Modifier::BOLD));
-                        }
-                        None => {
-                            c.modifier.insert(Modifier::BOLD);
-                        }
-                    }
-                }
-            };
-            put(r.x - 1, Some("▸"));
-            (r.x..r.right()).for_each(|x| put(x, None));
-            put(r.right(), Some("◂"));
+            let seen = Rect::new(ox, oy, area.width, area.height).intersection(r);
+            if !seen.is_empty() {
+                let on_dst = Rect::new(area.x + seen.x - ox, area.y + seen.y - oy, seen.width, seen.height);
+                dst.set_style(on_dst, Style::new().add_modifier(Modifier::BOLD | Modifier::REVERSED));
+            }
         }
         (ox, oy)
     }
@@ -369,100 +431,203 @@ mod tests {
     fn a_pill_has_the_icon_and_colour_of_its_status() {
         let statuses = ["queued", "running", "in_review", "closed", "failed", "draft", "?"];
         let jobs: Vec<FlowJob> = statuses.iter().map(|s| FlowJob { status: s.to_string(), ..job(s, &[]) }).collect();
-        let c = layout(&jobs, 80);
+        let c = layout(&jobs);
         for (p, status) in c.pills.iter().zip(statuses) {
             let (icon, meaning) = palette::job_status(status);
             assert_eq!(c.buf[(p.rect.x + 1, p.rect.y)].symbol(), icon, "{status}");
             let cell = &c.buf[(p.rect.x, p.rect.y)];
             assert_eq!((Some(cell.fg), Some(cell.bg)), (palette::pill(meaning).fg, palette::pill(meaning).bg), "{status}");
         }
-        assert_eq!(c.buf[(c.pills[1].rect.x + 1, c.pills[1].rect.y)].symbol(), "◐", "running");
     }
 
     #[test]
-    fn chain_of_three() {
-        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b"])], 20);
+    fn lines_are_dim_in_the_nothing_colour() {
+        let c = layout(&[job("a", &[]), job("b", &["a"])]);
+        let line = &c.buf[(c.pills[0].rect.right() + 1, 0)];
+        assert_eq!((line.symbol(), Some(line.fg)), ("─", palette::fg(Meaning::Nothing).fg));
+    }
+
+    #[test]
+    fn columns_run_left_to_right() {
+        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b"])]);
         snap(&c, "
-       ○ a S1
-          │
-       ○ b S1
-          │
-       ○ c S1");
+  ○ a S1 ───── ○ b S1 ───── ○ c S1");
+        assert_eq!(c.columns, vec![vec![0], vec![1], vec![2]]);
     }
 
     #[test]
-    fn fan_out() {
-        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("d", &["a"])], 30);
+    fn an_implied_need_is_not_drawn() {
+        // c needs a through b, so its own need of a is dropped: a has one line out, to b
+        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b", "a"])]);
         snap(&c, "
-            ○ a S1
-     ╭─────────┼─────────╮
-  ○ b S1    ○ c S1    ○ d S1");
+  ○ a S1 ───── ○ b S1 ───── ○ c S1");
+        // the same with the implied need listed first
+        assert_eq!(text(&layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a", "b"])])), text(&c));
     }
 
     #[test]
-    fn fan_in() {
-        let c = layout(&[job("a", &[]), job("b", &[]), job("c", &[]), job("d", &["a", "b", "c"])], 30);
+    fn jobs_with_the_same_needs_share_a_card_stacked_with_no_space() {
+        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("d", &["a"])]);
         snap(&c, "
-  ○ a S1    ○ b S1    ○ c S1
-     ╰─────────┼─────────╯
-            ○ d S1");
+             ╭ ○ b S1 ╮
+  ○ a S1 ────┤ ○ c S1 │
+             ╰ ○ d S1 ╯");
+        assert_eq!(c.pills.iter().map(|p| p.rect.y).collect::<Vec<_>>(), [1, 0, 1, 2]);
     }
 
     #[test]
-    fn skip_level_edge_runs_right_of_every_pill() {
-        let p = plan(&[job("a", &[]), job("b", &["a"]), job("c", &["b", "a"])], 20);
-        for pill in &p.pills {
-            for x in pill.rect.x..pill.rect.right() {
-                assert_eq!(p.mask.at(x, pill.rect.y), 0, "an edge crosses {}", pill.key);
-            }
-        }
-        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b", "a"])], 20);
+    fn a_card_has_one_entry_and_one_exit_at_its_middle_row() {
+        // three Jobs: both brackets are joined at the middle row, where the line in and the line out meet them
+        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("e", &["a"]), job("d", &["b", "c", "e"])]);
         snap(&c, "
-      ○ a S1
-         ├─────────╮
-      ○ b S1       │
-         ├─────────╯
-      ○ c S1");
+             ╭ ○ b S1 ╮
+  ○ a S1 ────┤ ○ c S1 ├──── ○ d S1
+             ╰ ○ e S1 ╯");
+        // two Jobs: the middle row is the upper one
+        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"])]);
+        snap(&c, "
+  ○ a S1 ────┬ ○ b S1 ╮
+             ╰ ○ c S1 ╯");
     }
 
     #[test]
-    fn wide_level_truncates_keys_then_scrolls() {
-        let jobs: Vec<FlowJob> = ["api-server", "web-client", "docs-generator"].iter().map(|k| job(k, &[])).collect();
-        assert_eq!(text(&layout(&jobs, 80)), "           ○ api-server S1    ○ web-client S1    ○ docs-generator S1");
-        let c = layout(&jobs, 56);
-        assert_eq!(text(&c), "   ○ api-serv… S1    ○ web-clie… S1    ○ docs-gen… S1");
-        assert_eq!(c.buf.area.width, 56);
-        // at the shortest keys the level is 45 wide: a 40-wide pane scrolls
-        let c = layout(&jobs, 40);
-        assert_eq!(text(&c), "  ○ api-s… S1    ○ web-c… S1    ○ docs-… S1");
-        assert_eq!(c.buf.area.width, 45);
-        let (ox, _) = c.scroll_to(2, (0, 0), (40, 1));
-        assert_eq!(ox, 5);
-        let mut dst = Buffer::empty(Rect::new(0, 0, 40, 1));
-        assert_eq!(c.blit(&mut dst, Rect::new(0, 0, 40, 1), (ox, 0), None), (5, 0)); // clamped to the chart
+    fn single_cards_are_one_row_apart_and_have_plain_line_ends() {
+        let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a"]), job("d", &["b"])]);
+        snap(&c, "
+  ○ a S1 ──┬── ○ c S1
+           │
+  ○ b S1 ──┴── ○ d S1");
+    }
+
+    #[test]
+    fn the_tier_is_aligned_right_and_so_is_the_attempt() {
+        let mut long = job("a-longer-key", &[]);
+        long.attempt = 2;
+        let c = layout(&[job("a", &[]), long, job("b", &[])]);
+        snap(&c, "
+  ○ a               S1
+
+  ○ a-longer-key S1 a2
+
+  ○ b               S1");
+    }
+
+    #[test]
+    fn one_bus_per_gap_joins_every_exit_and_every_entry() {
+        let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a"]), job("d", &["b"])]);
+        let bus_x = c.pills[0].rect.right() + 2;
+        // the bus is one column, with a junction for each line in and out
+        let glyphs: Vec<&str> = (0..c.buf.area.height).map(|y| c.buf[(bus_x, y)].symbol()).collect();
+        assert_eq!(glyphs, ["┬", "│", "┴"]);
+        let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a", "b"])]);
+        snap(&c, "
+  ○ a S1 ──╮
+           ├── ○ c S1
+  ○ b S1 ──╯");
+    }
+
+    #[test]
+    fn a_line_that_skips_columns_rides_a_free_row() {
+        let c = layout(&[job("a", &[]), job("x", &[]), job("b", &["a"]), job("c", &["b", "x"])]);
+        snap(&c, "
+  ○ a S1 ──╮
+           ├── ○ b S1 ──┬── ○ c S1
+  ○ x S1 ──┴────────────╯");
+    }
+
+    #[test]
+    fn a_column_is_centred_vertically() {
+        let c = layout(&[job("a", &[]), job("b", &[]), job("c", &[]), job("d", &["a", "b", "c"])]);
+        assert_eq!(c.pills[3].rect.y, 2);
+        // an odd difference leaves the spare row below
+        let c = layout(&[job("a", &[]), job("b", &[]), job("d", &["a", "b"]), job("e", &["a", "b"]), job("f", &["d"])]);
+        assert_eq!(c.pills.iter().map(|p| p.rect.y).collect::<Vec<_>>(), [0, 2, 0, 1, 1]);
+    }
+
+    #[test]
+    fn a_column_is_ordered_by_the_mean_row_of_the_cards_it_needs() {
+        // d needs the lower root, c the upper one: the order of the Workflow (d first) would cross them
+        let c = layout(&[job("a", &[]), job("b", &[]), job("d", &["b"]), job("c", &["a"])]);
+        assert_eq!(c.columns[1], vec![3, 2]);
     }
 
     #[test]
     fn cancelled_jobs_are_hidden() {
         let mut gone = job("gone", &[]);
         gone.status = "cancelled".into();
-        let c = layout(&[job("a", &[]), gone, job("b", &["gone", "a"])], 20);
+        let c = layout(&[job("a", &[]), gone, job("b", &["gone", "a"])]);
         assert_eq!(c.hidden, 1);
         assert_eq!(c.pills.len(), 2);
         snap(&c, "
-       ○ a S1
-          │
-       ○ b S1");
+  ○ a S1 ───── ○ b S1");
     }
 
     #[test]
-    fn selection_moves_spatially() {
-        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"])], 40);
-        let (a, b, cc) = (0, 1, 2);
-        assert_eq!(c.step(a, Dir::Down), b);
-        assert_eq!(c.step(b, Dir::Right), cc);
-        assert_eq!(c.step(cc, Dir::Right), cc);
-        assert_eq!(c.step(cc, Dir::Up), a);
-        assert_eq!(c.step(a, Dir::Up), a);
+    fn a_cycle_is_laid_out_without_panicking() {
+        let c = layout(&[job("a", &["b"]), job("b", &["a"]), job("c", &["c"])]);
+        assert_eq!(c.pills.len(), 3);
+        assert!(c.columns.iter().all(|col| !col.is_empty()));
+    }
+
+    #[test]
+    fn an_empty_workflow_is_an_empty_chart() {
+        let c = layout(&[]);
+        assert_eq!((c.pills.len(), c.columns.len(), c.buf.area.area()), (0, 0, 0));
+    }
+
+    #[test]
+    fn selection_moves_between_columns_and_within_one() {
+        // a | b c d | e : b, c, d share a card
+        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("d", &["a"]), job("e", &["b", "c", "d"])]);
+        let (a, b, cc, d, e) = (0, 1, 2, 3, 4);
+        assert_eq!(c.step(a, Dir::Right), cc); // the nearest to a's row
+        assert_eq!(c.step(cc, Dir::Right), e);
+        assert_eq!(c.step(cc, Dir::Left), a);
+        assert_eq!(c.step(a, Dir::Left), a);
+        assert_eq!(c.step(e, Dir::Right), e);
+        assert_eq!((c.step(cc, Dir::Up), c.step(b, Dir::Up)), (b, b));
+        assert_eq!((c.step(cc, Dir::Down), c.step(d, Dir::Down)), (d, d));
+        assert_eq!(c.step(a, Dir::Down), a);
+    }
+
+    #[test]
+    fn the_window_scrolls_to_the_selection_on_both_axes_and_marks_it() {
+        let jobs: Vec<FlowJob> = ["a", "b", "c", "d"].iter().map(|k| job(k, &[])).collect();
+        let c = layout(&jobs);
+        // the window shows 3 rows: pill d (row 6) pulls the view down
+        assert_eq!(c.scroll_to(3, (0, 0), (20, 3)), (0, 4));
+        assert_eq!(c.scroll_to(0, (0, 4), (20, 3)), (0, 0));
+        let wide = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b"])]);
+        assert_eq!(wide.scroll_to(2, (0, 0), (12, 1)), (wide.pills[2].rect.right() + 1 - 12, 0));
+        let mut dst = Buffer::empty(Rect::new(0, 0, 30, 3));
+        let (ox, oy) = c.blit(&mut dst, Rect::new(2, 1, 20, 1), (0, 100), Some(3)); // clamped to the chart
+        assert_eq!((ox, oy), (0, 6));
+        let cell = &dst[(3, 1)];
+        assert!(cell.modifier.contains(Modifier::REVERSED | Modifier::BOLD));
+        assert_eq!(dst[(3, 0)].symbol(), " "); // the padding is untouched
+    }
+
+    /// The 27 Jobs of cpd-rust's `cpd2` Workflow, as `cpd workflow show` lists them.
+    fn cpd2() -> Vec<FlowJob> {
+        let v: serde_json::Value = serde_json::from_str(include_str!("../tests/fixtures/cpd2-jobs.json")).unwrap();
+        v["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|j| FlowJob {
+                key: j["key"].as_str().unwrap().into(),
+                status: j["status"].as_str().unwrap().into(),
+                tier: j["tier"].as_str().unwrap().into(),
+                needs: j["needs"].as_array().unwrap().iter().map(|n| n.as_str().unwrap().into()).collect(),
+                attempt: j["attempts"].as_array().unwrap().len(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_whole_cpd2_chart() {
+        let c = layout(&cpd2());
+        assert_eq!(c.pills.len(), 27);
+        assert_eq!(text(&c) + "\n", include_str!("../tests/fixtures/cpd2-chart.txt"));
     }
 }

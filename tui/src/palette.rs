@@ -79,7 +79,7 @@ pub fn pill(m: Meaning) -> Style {
     Style::new().fg(Color::Black).bg(color(m))
 }
 
-/// Colours that are not a status: the prompt and notes, the Worker view's roles, the selection markers.
+/// Colours that are not a status: the prompt and notes, the Worker view's roles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ui {
     /// Notes and prompts at the foot of a view.
@@ -90,8 +90,6 @@ pub enum Ui {
     Agent,
     /// Tool calls in the Worker view.
     Tool,
-    /// The `▸ ◂` around the selected pill.
-    Marker,
 }
 
 pub fn ui(u: Ui) -> Color {
@@ -99,7 +97,6 @@ pub fn ui(u: Ui) -> Color {
         Ui::Note | Ui::Tool => Color::Yellow,
         Ui::You => Color::Cyan,
         Ui::Agent => Color::Green,
-        Ui::Marker => Color::White,
     }
 }
 
@@ -273,7 +270,7 @@ mod tests {
 
     #[test]
     fn ui_colours() {
-        assert_eq!([Ui::Note, Ui::You, Ui::Agent, Ui::Tool, Ui::Marker].map(ui), [Color::Yellow, Color::Cyan, Color::Green, Color::Yellow, Color::White]);
+        assert_eq!([Ui::Note, Ui::You, Ui::Agent, Ui::Tool].map(ui), [Color::Yellow, Color::Cyan, Color::Green, Color::Yellow]);
     }
 
     #[test]

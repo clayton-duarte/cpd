@@ -8,7 +8,7 @@ views draw only content.
 
 Views use ratatui's widgets and layout as much as possible: `Layout`/`Constraint`, `Table`/`List` with their state for
 selection and scrolling, `Paragraph`, `Block`, `Scrollbar`, `Line`/`Span` alignment, and `tui-tree-widget` for trees. Hand-written
-drawing is only for what has no widget, with a comment saying why: the flowchart's edges, and the Context column's counters
+drawing is only for what has no widget, with a comment saying why: the chart's line glyphs and its window copy, and the Context column's counters
 layer (a right-aligned `Line` per tree row, since the tree widget draws one text per row).
 
 ## Palette and legend
@@ -106,22 +106,46 @@ Do not run `cockpit.sh` while a Lead's pi runs elsewhere on the same session fil
 
 ## Plan view
 
-The Plan view draws the Workflow as a vertical flowchart (`src/flow.rs`, a pure layout the view blits into the frame):
-one-row pills ` <icon> <key> <tier>[ aN] ` in black on the status colour (the palette's), two rows per level (pills, then edges in dim
-box-drawing). A Job sits one level below the deepest Job it needs; a level is ordered by its parents' positions. An edge
-that skips levels runs in a lane to the right of every pill. Keys are truncated with `…` (down to 6 characters) when a
-level is too wide; beyond that the chart scrolls horizontally. Cancelled Jobs are hidden (`N cancelled hidden` in the
-header line).
+The Plan view draws the Workflow as GitHub-Actions-style cards, left to right (`src/flow.rs`, a pure layout the view blits
+into the frame; the snapshot tests there pin it, the whole `cpd2` chart included, from `tests/fixtures/`):
+
+      ○ a S1 ──╮
+               ├── ○ b S1 ──┬── ○ c S1
+      ○ x S1 ──┴────────────╯
+
+                 ╭ ○ b S1 ╮
+      ○ a S1 ────┤ ○ c S1 ├──── ○ d S1
+                 ╰ ○ e S1 ╯
+
+Above, `c` needs `b` and `x`, and the line from `x` skips a column on a free row. Below, `b`, `c` and `e` need `a` and share
+a card; `d` needs the card.
+
+- **Implied needs are not drawn:** a need that is also reachable through another need is dropped (transitive reduction).
+- **Cards:** Jobs that need exactly the same Jobs share one card, stacked with no space between them; Jobs with no needs are a
+  card each; cards in a column have one empty row between them. A card of several Jobs is held by a bracket on each side
+  (`╭ ╮ │ ╰ ╯`); a single Job's entry and exit are plain line ends.
+- **Columns:** a card's column is one past the deepest column of the cards it needs (cards with no needs are the first
+  column). A column is ordered by the mean row of the cards it needs (ties: the Workflow's order) and centred vertically.
+- **Pills:** every pill in a column has the column's width. The icon and key are to the left, the tier (and ` aN` from the
+  second Attempt on) to the right, black on the status colour; colours and icons are the palette's.
+- **Lines:** one entry and one exit per card, at its middle row. There is one vertical bus per gap between columns; every
+  exit of a column and every entry of the next join it, and where lines meet they merge into one junction (`┤ ├ ┼ ┬ ┴`). A
+  line that skips columns rides a row free of cards, the one nearest its exit row, from its own bus to the bus before its
+  target (rows may be shared). Lines are dim, in the palette's "nothing" colour.
+- **Padding:** two columns and one row (`Rect::inner(Margin)`) around the chart, so nothing touches the pane's edges; the
+  chart scrolls inside it. Cancelled Jobs are hidden (`N cancelled hidden` in the header line).
+
+Selection is per Job.
 
 | Input | Does |
 | --- | --- |
-| ↑ ↓ / k j | select the nearest Job on the level above / below |
-| ← → / h l | select the previous / next Job on the level |
+| ← → / h l | select the nearest Job (by row) in the previous / next column |
+| ↑ ↓ / k j | select the previous / next Job in the same column |
 | mouse wheel | scroll vertically (wheel left/right: horizontally) |
 | Enter, click on a pill | open the Worker's read-only chat for that Job |
 
-The selected pill is bold, between `▸ ◂`. The view scrolls to keep the selection visible when it moves by key; the
-refresh keeps the scroll offset and holds the selection by Job key.
+The selected pill is drawn bold and reversed. The view scrolls on both axes to keep the selection visible when it moves by
+key; the refresh keeps the scroll offset and holds the selection by Job key.
 
 ## Dispatch: PR status
 

@@ -1,0 +1,288 @@
+{
+  "jobs": [
+    {
+      "key": "contract-core",
+      "status": "closed",
+      "tier": "O3",
+      "needs": [],
+      "attempts": [
+        {
+          "id": "contract-core-a1"
+        },
+        {
+          "id": "contract-core-a2"
+        }
+      ]
+    },
+    {
+      "key": "contract-commands",
+      "status": "closed",
+      "tier": "O3",
+      "needs": [
+        "contract-core"
+      ],
+      "attempts": [
+        {
+          "id": "contract-commands-a1"
+        }
+      ]
+    },
+    {
+      "key": "review-in-tmux",
+      "status": "closed",
+      "tier": "S3",
+      "needs": [],
+      "attempts": [
+        {
+          "id": "review-in-tmux-a1"
+        }
+      ]
+    },
+    {
+      "key": "contract-amend",
+      "status": "closed",
+      "tier": "S3",
+      "needs": [],
+      "attempts": [
+        {
+          "id": "contract-amend-a1"
+        }
+      ]
+    },
+    {
+      "key": "rs-workspace",
+      "status": "in_review",
+      "tier": "O3",
+      "needs": [],
+      "attempts": [
+        {
+          "id": "rs-workspace-a1"
+        }
+      ]
+    },
+    {
+      "key": "rs-store",
+      "status": "queued",
+      "tier": "O3",
+      "needs": [
+        "rs-workspace"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "rs-events",
+      "status": "queued",
+      "tier": "S3",
+      "needs": [
+        "rs-store"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "rs-config",
+      "status": "queued",
+      "tier": "S3",
+      "needs": [
+        "rs-workspace"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "rs-git",
+      "status": "queued",
+      "tier": "S3",
+      "needs": [
+        "rs-config"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "rs-host",
+      "status": "queued",
+      "tier": "O3",
+      "needs": [
+        "rs-config"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "rs-context",
+      "status": "queued",
+      "tier": "S3",
+      "needs": [
+        "rs-events"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "rs-session",
+      "status": "queued",
+      "tier": "O3",
+      "needs": [
+        "rs-events",
+        "rs-host"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "rs-plan",
+      "status": "queued",
+      "tier": "O3",
+      "needs": [
+        "rs-context",
+        "rs-git",
+        "rs-session"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "rs-job",
+      "status": "queued",
+      "tier": "S3",
+      "needs": [
+        "rs-plan"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "rs-merge",
+      "status": "queued",
+      "tier": "O3",
+      "needs": [
+        "rs-events",
+        "rs-git"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "rs-attempt-cmds",
+      "status": "queued",
+      "tier": "S3",
+      "needs": [
+        "rs-git",
+        "rs-job"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "rs-ask",
+      "status": "queued",
+      "tier": "S3",
+      "needs": [
+        "rs-job"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "rs-review",
+      "status": "queued",
+      "tier": "S3",
+      "needs": [
+        "rs-host",
+        "rs-job"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "rs-spec-metrics",
+      "status": "queued",
+      "tier": "S3",
+      "needs": [
+        "rs-job"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "rs-driver",
+      "status": "queued",
+      "tier": "O3",
+      "needs": [
+        "rs-attempt-cmds",
+        "rs-merge",
+        "rs-review",
+        "rs-session",
+        "rs-spec-metrics"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "rs-pr",
+      "status": "queued",
+      "tier": "S3",
+      "needs": [
+        "rs-merge",
+        "rs-plan"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "rs-watch",
+      "status": "queued",
+      "tier": "O3",
+      "needs": [
+        "rs-ask",
+        "rs-context",
+        "rs-driver",
+        "rs-pr"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "rs-doctor",
+      "status": "queued",
+      "tier": "S3",
+      "needs": [
+        "rs-config",
+        "rs-git",
+        "rs-host",
+        "rs-store"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "pi-adapter-v2",
+      "status": "queued",
+      "tier": "S3",
+      "needs": [
+        "rs-events",
+        "rs-plan",
+        "rs-session"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "skill-v2",
+      "status": "queued",
+      "tier": "S3",
+      "needs": [
+        "pi-adapter-v2",
+        "rs-watch"
+      ],
+      "attempts": []
+    },
+    {
+      "key": "gate-at-pr",
+      "status": "running",
+      "tier": "S3",
+      "needs": [],
+      "attempts": [
+        {
+          "id": "gate-at-pr-a1"
+        }
+      ]
+    },
+    {
+      "key": "contract-gate-pr",
+      "status": "running",
+      "tier": "O3",
+      "needs": [
+        "contract-amend"
+      ],
+      "attempts": [
+        {
+          "id": "contract-gate-pr-a1"
+        }
+      ]
+    }
+  ]
+}
