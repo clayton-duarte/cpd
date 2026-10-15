@@ -18,6 +18,8 @@ mod retry;
 mod show;
 mod spec;
 
+pub(crate) use retry::retried_since_last_start;
+
 use std::path::PathBuf;
 
 use clap::builder::PossibleValuesParser;

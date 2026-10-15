@@ -79,7 +79,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, tier: &str) -> Result<
 
 /// The Job's latest `job-retried` Event is newer than its latest
 /// `attempt-started`: no Attempt has begun since the retry.
-fn retried_since_last_start(conn: &Connection, plan: &PlanId, key: &JobKey) -> Result<bool, CpdError> {
+pub(crate) fn retried_since_last_start(conn: &Connection, plan: &PlanId, key: &JobKey) -> Result<bool, CpdError> {
     let latest = |kind: &str| -> Result<Option<i64>, CpdError> {
         Ok(conn.query_row(
             "SELECT max(id) FROM events WHERE plan = ?1 AND job = ?2 AND kind = ?3",
