@@ -34,7 +34,7 @@ pub const SERVER_OPTIONS: &[&[&str]] = &[
     &["set", "-g", "mouse", "on"],
     &["set", "-g", "default-terminal", "tmux-256color"],
     &["set", "-g", "extended-keys", "on"],
-    &["set", "-as", "terminal-features", ",xterm*:extkeys,xterm-ghostty:extkeys"],
+    &["set", "-as", "terminal-features", ",xterm*:extkeys,xterm-ghostty:extkeys,xterm-ghostty:hyperlinks"],
     &["set", "-g", "escape-time", "10"],
     &["set", "-g", "status", "off"],
     &["set", "-g", "pane-border-status", "top"],

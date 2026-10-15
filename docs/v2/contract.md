@@ -1049,7 +1049,7 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 | `mouse` | `on` | clicks in the ratatui panes |
 | `default-terminal` | `tmux-256color` | |
 | `extended-keys` | `on` | pi's keys (verified by the User) |
-| `terminal-features` | append `xterm*:extkeys,xterm-ghostty:extkeys` | |
+| `terminal-features` | append `xterm*:extkeys,xterm-ghostty:extkeys,xterm-ghostty:hyperlinks` | `hyperlinks`: inside tmux, pi emits clickable OSC 8 links only when the client lists it (pi-tui `terminal-image.js`), and tmux forwards them only then |
 | `escape-time` | `10` | |
 | `status` | `off` | the cockpit draws its own bars |
 | `pane-border-status` | `top` | |
