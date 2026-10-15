@@ -1165,7 +1165,7 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
 | `tree` | the **Context column**: Contexts, their Plans' Lead Sessions, and counters | ↑↓ and j/k move the cursor, Enter opens the Lead in the chat slot, `n` a new Plan, `x` closes a Lead's pane, `?` the legend; clicks as below |
 | `plan` | the **Plan view**: the flowchart of the chat slot's Plan, under a row of tabs | ←→↑↓ and h/j/k/l select, Enter opens a Job's Worker, Esc clears the selection; the wheel scrolls (3 rows, 4 columns); clicks as below; no `q` |
 | `widgets` | the **Dispatch column**: the machine, the cockpit's PRs, git and Jira (future) | `q` quits; nothing else |
-| `worker` | the read-only Worker view: the Attempt's Worker session file (vision decision 5), `you` and its text in cyan, `agent` in green, `→ tool` in yellow, `← last` dim | `q` or Esc quits; the wheel scrolls; no other keys |
+| `worker` | the read-only Worker view: the Attempt's Worker session file (vision decision 5), `you` and its text in cyan, `agent` in green, `→ tool` in yellow, `← last` dim | `q` or Esc quits; ↑/k, ↓/j, PageUp, PageDown and the wheel (3 rows) scroll; End or `G` follows the end again; no other keys |
 | `statusbar` | one row across the bottom | no keys, no focus; clicks on its buttons |
 | `chat` | the chat slot's placeholder (§10) | none |
 | `legend` | the key legend, in a popup | any key closes it |

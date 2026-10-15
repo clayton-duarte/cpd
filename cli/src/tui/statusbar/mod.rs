@@ -47,8 +47,8 @@ const REFRESH: Duration = Duration::from_secs(2);
 const RESET_BUTTON: &str = "⧉ ";
 const LEGEND_BUTTON: &str = " ? legend ";
 
-/// The bar's items: the two buttons, then the failure note if any (left), and the workers indicator if it fits
-/// (right).
+/// The bar's items: the two buttons, then the failure note if any (left), and the workers indicator (right), which
+/// gets the full `width` as in the reference (`main.rs` `statusbar_items`).
 fn items(workers: &Workers, note: &str, width: u16) -> (Vec<Item>, Vec<Item>) {
     let button = |text: &'static str, action| Item {
         line: Line::from(text).style(Style::new().add_modifier(Modifier::REVERSED)),
@@ -58,10 +58,7 @@ fn items(workers: &Workers, note: &str, width: u16) -> (Vec<Item>, Vec<Item>) {
     if !note.is_empty() {
         left.push(Item { line: Line::from(note.to_owned()), action: None });
     }
-    // what is left of the row for the right item: the left items, and a column of spacing after each and before it
-    let taken = left.iter().map(|i| i.line.width()).sum::<usize>() + left.len() + 1;
-    let room = u16::try_from(usize::from(width).saturating_sub(taken)).unwrap_or(u16::MAX);
-    let right = workers.line(room).map(|line| Item { line, action: None }).into_iter().collect();
+    let right = workers.line(width).map(|line| Item { line, action: None }).into_iter().collect();
     (left, right)
 }
 
@@ -133,5 +130,54 @@ fn show(
                 read_at = Instant::now();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+
+    use super::*;
+
+    fn text(buf: &Buffer, y: u16) -> String {
+        (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_string()
+    }
+
+    /// The reference's `the_statusbar_has_the_legend_button_left_and_the_workers_right` (`tui/src/main.rs:1028`).
+    #[test]
+    fn the_statusbar_has_the_legend_button_left_and_the_workers_right() {
+        let mut terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|f| {
+                let (left, right) = items(&Workers { running: 1, limit: 4 }, "", f.area().width);
+                hits = bar::draw(f, f.area(), &left, &right);
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let left = format!("{RESET_BUTTON} {LEGEND_BUTTON}");
+        assert_eq!(text(buf, 0), format!("{left}{}workers 1/4", " ".repeat(40 - left.chars().count() - "workers 1/4".len())));
+        assert_eq!(Line::from("⧉").width(), 1);
+        assert_eq!(
+            hits,
+            [(Rect::new(0, 0, 2, 1), Action::ResetLayout), (Rect::new(3, 0, LEGEND_BUTTON.len() as u16, 1), Action::Legend)]
+        );
+        assert_eq!(buf[(0, 0)].symbol(), "⧉");
+        assert!((0..2).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
+        assert!(!buf[(2, 0)].modifier.contains(Modifier::REVERSED));
+        assert!((3..3 + LEGEND_BUTTON.len() as u16).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
+    }
+
+    /// The workers get the whole width, not what the buttons leave: the long form is chosen whenever it fits the row.
+    #[test]
+    fn the_workers_indicator_is_given_the_full_width() {
+        let workers = Workers { running: 0, limit: 4 };
+        let right = |width| items(&workers, "", width).1.first().map(|i| i.line.width());
+        assert_eq!(right(20), Some("workers 0/4".len()));
+        assert_eq!(right(11), Some("workers 0/4".len()));
+        assert_eq!(right(10), Some("0/4".len()));
+        assert_eq!(right(2), None);
     }
 }

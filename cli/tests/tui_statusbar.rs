@@ -128,10 +128,10 @@ fn the_row_has_the_two_buttons_left_and_the_workers_at_the_right_edge() {
 fn the_workers_shorten_on_a_narrow_row_and_follow_the_slots() {
     let env = env();
     sql(&env, &plan_with_attempts(&[]));
-    // 20 columns: after the buttons there is room for `0/4` (3) but not for `workers 0/4` (11)
-    let pane = start_view(&env, 20);
+    // the indicator gets the whole row, as in the reference: 10 columns hold `0/4` (3) but not `workers 0/4` (11)
+    let pane = start_view(&env, 10);
     let row = row_ending(&env, &pane, "0/4");
-    assert!(row.starts_with("⧉   ? legend "), "{row:?}");
+    assert!(row.starts_with('⧉'), "{row:?}");
     assert!(!row.contains("workers"), "{row:?}");
     // an Attempt takes a slot: the view re-reads when the store's Events move, or within 2 s
     sql(&env, &attempt_row(1, "running"));

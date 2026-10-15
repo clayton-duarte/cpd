@@ -6,8 +6,7 @@
 //!
 //! Changes from the spike: statuses are the read model's enums, not strings, so
 //! there is no "unknown" icon; cpd 2 has no `in_review` Job status, and `merging`
-//! (a running Job whose Attempt is merging) takes its place and its icon; the
-//! worker view's `Ui` colours are not ported (that view's Job adds them).
+//! (a running Job whose Attempt is merging) takes its place and its icon.
 
 use ratatui::{
     style::{Color, Style},
@@ -85,9 +84,30 @@ pub fn fg(m: Meaning) -> Style {
     Style::new().fg(color(m))
 }
 
+/// Colours that are not a status: notes and prompts, the Worker view's roles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ui {
+    /// Notes and prompts at the foot of a view.
+    Note,
+    /// The User's lines in the Worker view.
+    You,
+    /// The agent's lines in the Worker view.
+    Agent,
+    /// Tool calls in the Worker view.
+    Tool,
+}
+
+pub fn ui(u: Ui) -> Color {
+    match u {
+        Ui::Note | Ui::Tool => Color::Yellow,
+        Ui::You => Color::Cyan,
+        Ui::Agent => Color::Green,
+    }
+}
+
 /// Notes and prompts at the foot of a view.
 pub fn note() -> Style {
-    Style::new().fg(Color::Yellow)
+    Style::new().fg(ui(Ui::Note))
 }
 
 /// A Plan pill: black on the colour of a meaning.
@@ -319,6 +339,14 @@ mod tests {
         let mut offenders = Vec::new();
         walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tui"), &mut offenders);
         assert!(offenders.is_empty(), "colours belong in tui/palette.rs:\n{}", offenders.join("\n"));
+    }
+
+    #[test]
+    fn every_ui_role_has_its_colour() {
+        let table = [(Ui::Note, Color::Yellow), (Ui::You, Color::Cyan), (Ui::Agent, Color::Green), (Ui::Tool, Color::Yellow)];
+        for (u, c) in table {
+            assert_eq!(ui(u), c, "{u:?}");
+        }
     }
 
     #[test]

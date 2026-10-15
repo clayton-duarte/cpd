@@ -119,9 +119,9 @@ fn sections() -> Vec<Section> {
         Line::from(counters),
         Line::from(order).style(Style::new().add_modifier(Modifier::DIM)),
     ]);
-    let jobs = Section { title: "Jobs: Plan pills and tree counters", header: Some(["status", "Plan pill", "counter"]), rows: jobs };
+    let jobs = Section { title: "Jobs: Plan pills and Context counters", header: Some(["status", "Plan pill", "counter"]), rows: jobs };
     let dots = Section {
-        title: "Tree dots: ● needs you, ○ does not; the colour is the Plan's phase",
+        title: "Context dots: ● needs you, ○ does not; the colour is the Plan's phase",
         header: None,
         rows: vec![
             palette::PHASE_LEGEND
@@ -234,6 +234,35 @@ fn show(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn text(line: &Line) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn the_section_titles_are_exact() {
+        let titles: Vec<&str> = sections().iter().map(|s| s.title).collect();
+        assert_eq!(
+            titles,
+            [
+                "Meanings → colour (one source for every view)",
+                "Jobs: Plan pills and Context counters",
+                "Context dots: ● needs you, ○ does not; the colour is the Plan's phase",
+                "PRs (Dispatch)",
+                "PR checks",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_job_statuses_listed_are_those_the_chart_draws_and_not_cancelled() {
+        let jobs = &sections()[1];
+        let names: Vec<String> = jobs.rows.iter().map(|r| text(&r[0])).collect();
+        assert_eq!(names, ["queued", "running", "merging", "merged", "failed", "draft", "counters row"]);
+        let shown: String =
+            sections().iter().flat_map(|s| s.rows.iter().flatten().map(text)).chain(sections().iter().map(|s| s.title.to_owned())).collect();
+        assert!(!shown.contains("cancelled") && !shown.contains('⊘'), "{shown}");
+    }
 
     #[test]
     fn the_popup_is_sized_to_the_legend_and_capped_at_the_client() {

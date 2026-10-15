@@ -477,7 +477,7 @@ fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
 #[test]
 fn the_tree_dots_are_listed_for_every_phase() {
     let buf = legend_buffer();
-    let dots = find(&buf, "Tree dots").1;
+    let dots = find(&buf, "Context dots").1;
     for (name, phase) in palette::PHASE_LEGEND {
         let (x, y) = find_after(&buf, dots, &format!(" {name}"));
         assert_eq!((buf[(x - 3, y)].symbol(), buf[(x - 1, y)].symbol()), ("●", "○"), "{name}");

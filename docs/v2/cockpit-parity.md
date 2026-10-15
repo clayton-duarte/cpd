@@ -123,7 +123,7 @@ Status values: **same**, **differs**, **missing**, **extra**.
 | Opening | `split-window -h -d -l 50%` beside the chat; `@view worker`, `@job`; retarget with `respawn-pane -k`; the same Job closes it (`main.rs:603–640`) | `Split::Right 50%` (`plan/actions.rs:71`), `@cpd_attempt` (`:18`) | differs | Also set `@cpd_job <job>`; check `-d` (no focus) and the toggle/retarget behaviour |
 | Border title | ` Worker · <job> (read-only) ` (`tmux.conf:11`) | ` Worker (read-only) ` | differs | `BORDER_FORMAT`: ` Worker · #{@cpd_job} (read-only) ` |
 | Rendering | `you` and its text cyan, 12 lines; `agent` green; `→ tool` yellow; `← last` dim; 160 characters (`main.rs:~915–957`) | `worker/render.rs:37–56`, `you` white | differs | `you` cyan: add the `Ui` palette (§1.7) |
-| Keys | `q`/Esc, wheel (`main.rs:989`, `:998–999`) | adds ↑↓/jk/G/End (`worker/view.rs:49–54`) | extra | remove the extra keys |
+| Keys | `q`/Esc, ↑/k, ↓/j, PageUp, PageDown, End/G, wheel 3 rows (`run_worker`, `main.rs`) | the same (`worker/view.rs`) | same | — |
 | Follow | stays at the end until the User scrolls; re-reads every 2 s | every 500 ms on size or mtime | same / differs (source) | keep |
 
 ### 1.6 Legend popup
@@ -170,7 +170,7 @@ Status values: **same**, **differs**, **missing**, **extra**.
   - tree: ↑↓/jk, Enter, `n`, `x`, `?`;
   - plan: ←→↑↓/hjkl, Enter, Esc, wheel, clicks;
   - widgets: `q`;
-  - worker: `q`/Esc, wheel;
+  - worker: `q`/Esc, ↑↓/jk, PageUp/PageDown, End/G, wheel;
   - statusbar: clicks;
   - legend: any key.
 - **§13.2, drawing:** the plan view's top row is only `<context id> ▸` and the tabs. The Dispatch sections are hostname with load, PRs, git (future), Jira (future).

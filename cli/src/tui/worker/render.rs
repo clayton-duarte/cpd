@@ -3,17 +3,14 @@
 //! told, one block per message part, in the file's order.
 //!
 //! Only `message` entries show. A line that is not JSON is skipped: the Worker
-//! may be writing it. Colours come from the palette (the spike's `Ui` colours
-//! are not in it): the agent is [`Meaning::InProgress`] (green, as in the
-//! spike), a tool call [`Meaning::Review`] (yellow, as in the spike), and the
-//! User's lines [`Meaning::NotStarted`] (white: the spike's cyan has no meaning
-//! of its own).
+//! may be writing it. Colours come from the palette's [`Ui`] roles, as in the
+//! reference: `you` and its text cyan, `agent` green, `→ tool` yellow.
 
 use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
 
-use crate::tui::palette::{self, Meaning};
+use crate::tui::palette::{self, Ui};
 
 /// The columns the body of a message is indented by.
 const INDENT: usize = 6;
@@ -34,12 +31,12 @@ pub(super) fn render(text: &str) -> Vec<Line<'static>> {
             let text = part["text"].as_str().unwrap_or("");
             match (role, part["type"].as_str().unwrap_or("")) {
                 ("user", "text") => {
-                    let you = palette::fg(Meaning::NotStarted);
+                    let you = Style::new().fg(palette::ui(Ui::You));
                     lines.push(Line::from(vec![time(), Span::styled("you  ", you).bold()]));
                     lines.extend(text.lines().take(12).map(|l| Line::styled(format!("      {l}"), you)));
                 }
                 ("assistant", "text") => {
-                    let agent = palette::fg(Meaning::InProgress);
+                    let agent = Style::new().fg(palette::ui(Ui::Agent));
                     lines.push(Line::from(vec![time(), Span::styled("agent", agent).bold()]));
                     lines.extend(text.lines().map(|l| Line::from(format!("      {l}"))));
                 }
@@ -48,7 +45,7 @@ pub(super) fn render(text: &str) -> Vec<Line<'static>> {
                     let arguments = &part["arguments"];
                     let arg = arguments["command"].as_str().or(arguments["path"].as_str()).unwrap_or("");
                     let arg: String = arg.lines().next().unwrap_or("").chars().take(160).collect();
-                    let tool = palette::fg(Meaning::Review);
+                    let tool = Style::new().fg(palette::ui(Ui::Tool));
                     lines.push(Line::from(vec![time(), Span::styled(format!("→ {name} "), tool), arg.into()]));
                 }
                 ("toolResult", "text") => {
@@ -156,10 +153,67 @@ mod tests {
         .join("\n");
         let lines = render(&file);
         let colour = |line: usize, span: usize| lines[line].spans[span].style.fg;
-        assert_eq!(colour(0, 1), Some(palette::color(Meaning::NotStarted)), "you");
-        assert_eq!(colour(2, 1), Some(palette::color(Meaning::InProgress)), "agent");
-        assert_eq!(colour(4, 1), Some(palette::color(Meaning::Review)), "a tool call");
-        assert_eq!(lines[1].style.fg, Some(palette::color(Meaning::NotStarted)), "the User's words");
+        assert_eq!(colour(0, 1), Some(palette::ui(Ui::You)), "you");
+        assert_eq!(colour(2, 1), Some(palette::ui(Ui::Agent)), "agent");
+        assert_eq!(colour(4, 1), Some(palette::ui(Ui::Tool)), "a tool call");
+        assert_eq!(lines[1].style.fg, Some(palette::ui(Ui::You)), "the User's words");
+    }
+
+    /// The reference's `render_session` (`tui/src/main.rs` on `main`), verbatim but for reading `text` instead of a path.
+    fn reference_render_session(text: &str) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        for raw in text.lines() {
+            let Ok(v) = serde_json::from_str::<Value>(raw) else { continue };
+            if v["type"] != "message" {
+                continue;
+            }
+            let role = v["message"]["role"].as_str().unwrap_or("");
+            let ts = v["timestamp"].as_str().unwrap_or("").get(11..19).unwrap_or("").to_string();
+            let empty = Vec::new();
+            let content = v["message"]["content"].as_array().unwrap_or(&empty);
+            for part in content {
+                match (role, part["type"].as_str().unwrap_or("")) {
+                    ("user", "text") => {
+                        lines.push(Line::from(vec![format!("{ts} ").dim(), "you  ".fg(palette::ui(Ui::You)).bold()]));
+                        for l in part["text"].as_str().unwrap_or("").lines().take(12) {
+                            lines.push(Line::from(format!("      {l}")).fg(palette::ui(Ui::You)));
+                        }
+                    }
+                    ("assistant", "text") => {
+                        lines.push(Line::from(vec![format!("{ts} ").dim(), "agent".fg(palette::ui(Ui::Agent)).bold()]));
+                        for l in part["text"].as_str().unwrap_or("").lines() {
+                            lines.push(Line::from(format!("      {l}")));
+                        }
+                    }
+                    ("assistant", "toolCall") => {
+                        let name = part["name"].as_str().unwrap_or("tool");
+                        let arg = part["arguments"]["command"].as_str().or(part["arguments"]["path"].as_str()).unwrap_or("");
+                        let arg: String = arg.lines().next().unwrap_or("").chars().take(160).collect();
+                        lines.push(Line::from(vec![
+                            format!("{ts} ").dim(),
+                            format!("→ {name} ").fg(palette::ui(Ui::Tool)),
+                            arg.into(),
+                        ]));
+                    }
+                    ("toolResult", "text") => {
+                        let t = part["text"].as_str().unwrap_or("");
+                        let last: String =
+                            t.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").chars().take(160).collect();
+                        lines.push(Line::from(format!("        ← {last}")).dim());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        lines
+    }
+
+    #[test]
+    fn a_fixture_session_file_renders_as_the_reference_does() {
+        let file = include_str!("fixtures/session.jsonl");
+        let ours = render(file);
+        assert_eq!(ours.len(), 23, "the fixture reaches every branch: {ours:#?}");
+        assert_eq!(ours, reference_render_session(file));
     }
 
     #[test]
