@@ -80,8 +80,6 @@ const PENDING: &[(&[&str], &str)] = &[
     // driver
     (&["attempt", "run", "api-schema-a1", "--plan", "cpd2"], "attempt run"),
     (&["job", "dispatch", "api-schema"], "job dispatch"),
-    // review
-    (&["review", "decide", "api-schema-a1", "--approve", "--feedback", "Fine."], "review decide"),
     // ask
     // pr
     // session

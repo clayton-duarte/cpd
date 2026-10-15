@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 
 use crate::error::{CpdError, ErrorCode};
 use crate::output::Output;
-use crate::{ask, attempt, config, context, doctor, events, job, plan, pr, review, session, tui, watch};
+use crate::{ask, attempt, config, context, doctor, events, job, plan, pr, session, tui, watch};
 
 /// cpd 2: every command prints exactly one JSON value on stdout.
 #[derive(Parser, Debug)]
@@ -33,9 +33,6 @@ pub enum Command {
     /// Attempts (commands.md §6)
     #[command(subcommand)]
     Attempt(attempt::Command),
-    /// The Lead's review override (commands.md §7)
-    #[command(subcommand)]
-    Review(review::Command),
     /// Ask the Lead a question and wait for the answer (Worker) (commands.md §8.1)
     Ask(ask::AskArgs),
     /// Answer a Worker's Escalation (Lead) (commands.md §8.2)
@@ -84,7 +81,6 @@ fn dispatch(command: Command) -> Result<Output, CpdError> {
         Command::Plan(c) => plan::run(c),
         Command::Job(c) => job::run(c),
         Command::Attempt(c) => attempt::run(c),
-        Command::Review(c) => review::run(c),
         Command::Ask(a) => ask::ask(a),
         Command::Answer(a) => ask::answer(a),
         Command::Pr(c) => pr::run(c),

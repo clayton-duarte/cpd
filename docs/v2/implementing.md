@@ -30,7 +30,6 @@ Within your area you may add files (`cli/src/<area>/foo.rs`, declared in your `m
 | `merge` | rs-merge | none | §7.4 |
 | `attempt` | rs-attempt-cmds | `attempt submit/read/show/list` (§6.1–§6.3) | §3.4, §7.3 |
 | `ask` | rs-ask | `ask`, `answer` (§8) | §3.5 |
-| `review` | rs-review | `review decide` (§7), review files and verdict (§16.2, §16.3) | §3.4 A6–A7 |
 | `spec` | rs-spec-metrics | none: the Worker Spec (§16.1) | §3.4 A3 |
 | `metrics` | rs-spec-metrics | none: session metrics | §2.2 Attempt |
 | `driver` | rs-driver | `attempt run` (§6.4), `job dispatch` (§5.5) | §3.4 |
