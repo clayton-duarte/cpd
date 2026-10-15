@@ -1,6 +1,6 @@
 //! Sessions (contract §3.6, §6.4, §6.7; commands.md §10 with §19 amendments
 //! 1–3), run as the built binary against a private tmux server, with fake
-//! `pi` and `cpd2` scripts on `PATH`.
+//! `pi` and `cpd` scripts on `PATH`.
 
 mod common;
 
@@ -8,12 +8,12 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::{CPD2, Run, TestEnv};
-use cpd2::error::CpdError;
-use cpd2::events::{Kind, NewEvent, append};
-use cpd2::home::CpdHome;
-use cpd2::ids::{PlanId, SessionId};
-use cpd2::store::{Store, WriteTxn};
+use common::{CPD, Run, TestEnv};
+use cpd::error::CpdError;
+use cpd::events::{Kind, NewEvent, append};
+use cpd::home::CpdHome;
+use cpd::ids::{PlanId, SessionId};
+use cpd::store::{Store, WriteTxn};
 use serde_json::{Value, json};
 
 const LEAD1: &str = "lead1";
@@ -100,9 +100,9 @@ fn setup(env: &TestEnv) {
     }
 }
 
-/// Runs `cpd2 <args>` with extra environment variables.
-fn cpd2_with(env: &TestEnv, vars: &[(&str, &str)], args: &[&str]) -> Run {
-    let mut cmd = env.command(CPD2);
+/// Runs `cpd <args>` with extra environment variables.
+fn cpd_with(env: &TestEnv, vars: &[(&str, &str)], args: &[&str]) -> Run {
+    let mut cmd = env.command(CPD);
     for (k, v) in vars {
         cmd.env(k, v);
     }
@@ -130,11 +130,11 @@ fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
 }
 
 fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
-    env.cpd2(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
+    env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
 }
 
 fn show(env: &TestEnv, id: &str) -> Value {
-    env.cpd2(&["session", "show", id]).ok()["session"].clone()
+    env.cpd(&["session", "show", id]).ok()["session"].clone()
 }
 
 fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
@@ -147,10 +147,10 @@ fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
 
 // ---------- tmux ----------
 
-/// A fake `cpd2` on `PATH` for the panes: `cpd2 tui view chat` (the TUI Job's
+/// A fake `cpd` on `PATH` for the panes: `cpd tui view chat` (the TUI Job's
 /// placeholder view) just sleeps; everything else is the built binary.
-fn fake_cpd2(env: &TestEnv) {
-    env.fake("cpd2", &format!("case \"$1 $2 $3\" in \"tui view chat\") exec sleep 600;; esac\nexec '{CPD2}' \"$@\""));
+fn fake_cpd(env: &TestEnv) {
+    env.fake("cpd", &format!("case \"$1 $2 $3\" in \"tui view chat\") exec sleep 600;; esac\nexec '{CPD}' \"$@\""));
 }
 
 /// A fake `pi` that creates its session file (when given `--session-id`) and
@@ -236,7 +236,7 @@ fn list_filters_and_derives_place_and_leads() {
         run.ok()["sessions"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap().to_owned()).collect()
     };
 
-    let all = env.cpd2(&["session", "list"]).ok();
+    let all = env.cpd(&["session", "list"]).ok();
     assert_eq!(all["events_cursor"], 1);
     let sessions = all["sessions"].as_array().unwrap();
     assert_eq!(sessions.len(), 4);
@@ -251,39 +251,39 @@ fn list_filters_and_derives_place_and_leads() {
     let grounded = sessions.iter().find(|s| s["id"] == GROUNDED).unwrap();
     assert_eq!((&grounded["plan_lead"], &grounded["grounded_lead"]), (&json!(false), &json!(true)));
 
-    assert_eq!(ids(env.cpd2(&["session", "list", "--plan", "pay"])), [LEAD1, WORKER]);
-    assert_eq!(ids(env.cpd2(&["session", "list", "--context", "ctx", "--role", "worker"])), [WORKER]);
-    assert_eq!(ids(env.cpd2(&["session", "list", "--state", "idle", "--state", "working"])), [LEAD1, WORKER]);
-    assert_eq!(ids(env.cpd2(&["session", "list", "--role", "lead", "--state", "stopped"])), [GROUNDED, LEAD2]);
-    assert!(ids(env.cpd2(&["session", "list", "--context", "elsewhere"])).is_empty());
+    assert_eq!(ids(env.cpd(&["session", "list", "--plan", "pay"])), [LEAD1, WORKER]);
+    assert_eq!(ids(env.cpd(&["session", "list", "--context", "ctx", "--role", "worker"])), [WORKER]);
+    assert_eq!(ids(env.cpd(&["session", "list", "--state", "idle", "--state", "working"])), [LEAD1, WORKER]);
+    assert_eq!(ids(env.cpd(&["session", "list", "--role", "lead", "--state", "stopped"])), [GROUNDED, LEAD2]);
+    assert!(ids(env.cpd(&["session", "list", "--context", "elsewhere"])).is_empty());
     // Filters only: CPD_PLAN does not select anything.
-    assert_eq!(cpd2_with(&env, &[("CPD_PLAN", "pay")], &["session", "list"]).ok()["sessions"].as_array().unwrap().len(), 4);
+    assert_eq!(cpd_with(&env, &[("CPD_PLAN", "pay")], &["session", "list"]).ok()["sessions"].as_array().unwrap().len(), 4);
 
-    refused(&env.cpd2(&["session", "list", "--role", "reviewer"]), "usage", 2);
-    refused(&env.cpd2(&["session", "list", "--state", "busy"]), "usage", 2);
-    refused(&env.cpd2(&["session", "list", "--plan", "Bad"]), "invalid_plan_id", 2);
+    refused(&env.cpd(&["session", "list", "--role", "reviewer"]), "usage", 2);
+    refused(&env.cpd(&["session", "list", "--state", "busy"]), "usage", 2);
+    refused(&env.cpd(&["session", "list", "--plan", "Bad"]), "invalid_plan_id", 2);
 }
 
 #[test]
 fn show_adds_created_at_registered_event_and_open_escalations() {
     let env = TestEnv::new();
     setup(&env);
-    let out = env.cpd2(&["session", "show", LEAD1]).ok();
+    let out = env.cpd(&["session", "show", LEAD1]).ok();
     assert_eq!(out["session"]["created_at"], "t1");
     assert_eq!(out["session"]["registered_event"], 1);
     assert_eq!(out["session"]["plan_lead"], true);
     assert_eq!(out["open_escalations"], json!(["api-a1-q1"]));
 
-    let worker = cpd2_with(&env, &[("CPD_SESSION", WORKER)], &["session", "show"]).ok();
+    let worker = cpd_with(&env, &[("CPD_SESSION", WORKER)], &["session", "show"]).ok();
     assert_eq!(worker["session"]["id"], WORKER);
     assert_eq!(worker["session"]["attempt"], "api-a1");
     assert_eq!(worker["session"]["registered_event"], Value::Null);
     assert!(worker.get("open_escalations").is_none(), "only a Plan's Lead has them");
 
-    refused(&env.cpd2(&["session", "show"]), "session_required", 2);
-    let error = refused(&env.cpd2(&["session", "show", "nobody"]), "session_not_found", 4);
+    refused(&env.cpd(&["session", "show"]), "session_required", 2);
+    let error = refused(&env.cpd(&["session", "show", "nobody"]), "session_not_found", 4);
     assert_eq!(error["details"]["session"], "nobody");
-    refused(&env.cpd2(&["session", "show", "bad id"]), "invalid_session_id", 2);
+    refused(&env.cpd(&["session", "show", "bad id"]), "invalid_session_id", 2);
 }
 
 // ---------- state, rename ----------
@@ -296,7 +296,7 @@ fn state_follows_section_3_6() {
         let mut argv = vec!["session", "state"];
         argv.extend(args);
         argv.extend(["--session", LEAD1]);
-        env.cpd2(&argv)
+        env.cpd(&argv)
     };
 
     let out = state(&["working"]).ok();
@@ -330,34 +330,34 @@ fn state_follows_section_3_6() {
     assert_eq!(show(&env, LEAD1)["state_label"], Value::Null);
 
     // The grounded Lead has no Plan: its Event has none either.
-    cpd2_with(&env, &[("CPD_SESSION", GROUNDED)], &["session", "state", "idle"]).ok();
+    cpd_with(&env, &[("CPD_SESSION", GROUNDED)], &["session", "state", "idle"]).ok();
     assert_eq!(events(&env, "session-state").last().unwrap()["plan"], Value::Null);
 
     refused(&state(&["blocked"]), "usage", 2);
     refused(&state(&["idle", "--label", "x"]), "usage", 2);
     refused(&state(&["blocked", "--label", &"x".repeat(81)]), "usage", 2);
     refused(&state(&["asleep"]), "usage", 2);
-    refused(&env.cpd2(&["session", "state", "idle"]), "session_required", 2);
-    refused(&env.cpd2(&["session", "state", "idle", "--session", "nobody"]), "session_not_found", 4);
+    refused(&env.cpd(&["session", "state", "idle"]), "session_required", 2);
+    refused(&env.cpd(&["session", "state", "idle", "--session", "nobody"]), "session_not_found", 4);
 }
 
 #[test]
 fn rename_appends_session_renamed_once() {
     let env = TestEnv::new();
     setup(&env);
-    let out = env.cpd2(&["session", "rename", "cpd rust lead", "--session", LEAD1]).ok();
+    let out = env.cpd(&["session", "rename", "cpd rust lead", "--session", LEAD1]).ok();
     assert_eq!(out, json!({"ok": true, "session": "lead1", "name": "cpd rust lead"}));
     assert_eq!(show(&env, LEAD1)["name"], "cpd rust lead");
-    let again = cpd2_with(&env, &[("CPD_SESSION", LEAD1)], &["session", "rename", "cpd rust lead"]).ok();
+    let again = cpd_with(&env, &[("CPD_SESSION", LEAD1)], &["session", "rename", "cpd rust lead"]).ok();
     assert_eq!(again["already"], true);
     let renamed = events(&env, "session-renamed");
     assert_eq!(renamed.len(), 1);
     assert_eq!((&renamed[0]["session"], &renamed[0]["data"]), (&json!("lead1"), &json!({"name": "cpd rust lead"})));
 
-    refused(&env.cpd2(&["session", "rename", "", "--session", LEAD1]), "invalid_name", 2);
-    refused(&env.cpd2(&["session", "rename", "a\tb", "--session", LEAD1]), "invalid_name", 2);
-    refused(&env.cpd2(&["session", "rename", "x"]), "session_required", 2);
-    refused(&env.cpd2(&["session", "rename", "x", "--session", "nobody"]), "session_not_found", 4);
+    refused(&env.cpd(&["session", "rename", "", "--session", LEAD1]), "invalid_name", 2);
+    refused(&env.cpd(&["session", "rename", "a\tb", "--session", LEAD1]), "invalid_name", 2);
+    refused(&env.cpd(&["session", "rename", "x"]), "session_required", 2);
+    refused(&env.cpd(&["session", "rename", "x", "--session", "nobody"]), "session_not_found", 4);
 }
 
 // ---------- fork ----------
@@ -370,16 +370,16 @@ fn fork_refusals_register_nothing() {
     fs::write(&message, "Hello.").unwrap();
     let message = message.to_str().unwrap();
 
-    let error = refused(&env.cpd2(&["session", "fork", WORKER]), "not_a_lead", 3);
+    let error = refused(&env.cpd(&["session", "fork", WORKER]), "not_a_lead", 3);
     assert_eq!(error["details"]["role"], "worker");
-    refused(&env.cpd2(&["session", "fork", GROUNDED]), "plan_required", 2);
-    refused(&env.cpd2(&["session", "fork", "nobody"]), "session_not_found", 4);
-    refused(&env.cpd2(&["session", "fork", LEAD1, "--plan", "nope"]), "plan_not_found", 4);
-    refused(&env.cpd2(&["session", "fork", LEAD1, "--message-file", "/nonexistent/m.md"]), "file_unreadable", 2);
-    refused(&env.cpd2(&["session", "fork", LEAD1, "--name", ""]), "invalid_name", 2);
+    refused(&env.cpd(&["session", "fork", GROUNDED]), "plan_required", 2);
+    refused(&env.cpd(&["session", "fork", "nobody"]), "session_not_found", 4);
+    refused(&env.cpd(&["session", "fork", LEAD1, "--plan", "nope"]), "plan_not_found", 4);
+    refused(&env.cpd(&["session", "fork", LEAD1, "--message-file", "/nonexistent/m.md"]), "file_unreadable", 2);
+    refused(&env.cpd(&["session", "fork", LEAD1, "--name", ""]), "invalid_name", 2);
     // No tmux server, so no cockpit.
-    let error = refused(&env.cpd2(&["session", "fork", LEAD1, "--message-file", message]), "no_cockpit", 3);
-    assert_eq!(error["details"]["next"], "cpd2 tui");
+    let error = refused(&env.cpd(&["session", "fork", LEAD1, "--message-file", message]), "no_cockpit", 3);
+    assert_eq!(error["details"]["next"], "cpd tui");
     assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions"), 4);
 }
 
@@ -387,13 +387,13 @@ fn fork_refusals_register_nothing() {
 fn fork_registers_a_stopped_lead_in_a_parked_window() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd2(&env);
+    fake_cpd(&env);
     fake_pi(&env, "exec sleep 600");
     cockpit(&env);
     let message = env.root().join("message.md");
     fs::write(&message, "Look at the tests.").unwrap();
 
-    let out = env.cpd2(&["session", "fork", GROUNDED, "--plan", "pay", "--message-file", message.to_str().unwrap()]).ok();
+    let out = env.cpd(&["session", "fork", GROUNDED, "--plan", "pay", "--message-file", message.to_str().unwrap()]).ok();
     let new = out["session"]["id"].as_str().unwrap().to_owned();
     assert!(SessionId::parse(&new).is_ok() && new.len() == 36, "a UUID: {new}");
     assert_eq!(out["session"]["name"], "Grounded (fork)");
@@ -412,7 +412,7 @@ fn fork_registers_a_stopped_lead_in_a_parked_window() {
 
     let pane = panes(&env).into_iter().find(|p| p.pane == out["session"]["pane"]).unwrap();
     assert_eq!((pane.window.as_str(), pane.window_name.as_str(), pane.session.as_str()), (out["session"]["window"].as_str().unwrap(), "park-pay", new.as_str()));
-    assert!(env.calls("cpd2").contains(&vec!["session".to_owned(), "run".to_owned(), new.clone()]));
+    assert!(env.calls("cpd").contains(&vec!["session".to_owned(), "run".to_owned(), new.clone()]));
 
     let registered = events(&env, "session-registered");
     let registered = registered.last().unwrap();
@@ -423,7 +423,7 @@ fn fork_registers_a_stopped_lead_in_a_parked_window() {
     assert_eq!(moved[0]["data"], json!({"pane": out["session"]["pane"], "window": out["session"]["window"], "place": "parked"}));
 
     // The default Plan is the source's; each call registers a new Session.
-    let again = env.cpd2(&["session", "fork", LEAD1]).ok();
+    let again = env.cpd(&["session", "fork", LEAD1]).ok();
     assert_eq!((&again["session"]["plan"], &again["session"]["name"]), (&json!("pay"), &json!("Lead one (fork)")));
     assert_ne!(again["session"]["id"], json!(new));
 }
@@ -434,14 +434,14 @@ fn fork_registers_a_stopped_lead_in_a_parked_window() {
 fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd2(&env);
+    fake_cpd(&env);
     fake_pi(&env, "exit 0");
     cockpit(&env);
-    env.cpd2(&["session", "state", "working", "--session", LEAD1]).ok();
+    env.cpd(&["session", "state", "working", "--session", LEAD1]).ok();
     let message = env.root().join("message.md");
     fs::write(&message, "Review the tests.").unwrap();
 
-    let out = env.cpd2(&["session", "fork", LEAD1, "--name", "side", "--message-file", message.to_str().unwrap()]).ok();
+    let out = env.cpd(&["session", "fork", LEAD1, "--name", "side", "--message-file", message.to_str().unwrap()]).ok();
     let new = out["session"]["id"].as_str().unwrap().to_owned();
     let pane = out["session"]["pane"].as_str().unwrap().to_owned();
     let capture = || String::from_utf8(env.tmux(&["capture-pane", "-p", "-t", &pane]).stdout).unwrap();
@@ -462,7 +462,7 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
     std::thread::sleep(Duration::from_secs(3));
     assert!(env.calls("pi").is_empty(), "the source is still working");
 
-    env.cpd2(&["session", "state", "idle", "--session", LEAD1]).ok();
+    env.cpd(&["session", "state", "idle", "--session", LEAD1]).ok();
     wait_until("the fork", || !pi_calls_with(&env, "--fork").is_empty());
     let fork = &pi_calls_with(&env, "--fork")[0];
     let after = |flag: &str| fork[fork.iter().position(|a| a == flag).unwrap() + 1].clone();
@@ -490,14 +490,14 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
 fn open_and_park_keep_at_most_one_placeholder_only_in_the_slot() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd2(&env);
+    fake_cpd(&env);
     fake_pi(&env, "exec sleep 600");
     cockpit(&env);
     let placeholder = slot(&env);
     assert_placeholders(&env, 1);
 
     // A stopped Lead with no pane: started in a park window, swapped in; the placeholder dies with that window.
-    let out = env.cpd2(&["session", "open", LEAD1]).ok();
+    let out = env.cpd(&["session", "open", LEAD1]).ok();
     assert_eq!(out["displaced"], Value::Null);
     let lead1_pane = out["pane"].as_str().unwrap().to_owned();
     let s = slot(&env);
@@ -509,10 +509,10 @@ fn open_and_park_keep_at_most_one_placeholder_only_in_the_slot() {
     wait_until("lead1's pi", || env.calls("pi").iter().any(|c| c.contains(&LEAD1.to_owned())));
     assert!(env.calls("pi")[0].ends_with(&["--".to_owned(), "Plan pay.".to_owned()]), "a fresh Plan Lead gets lead-message.md");
 
-    assert_eq!(env.cpd2(&["session", "open", LEAD1]).ok()["already"], true);
+    assert_eq!(env.cpd(&["session", "open", LEAD1]).ok()["already"], true);
 
     // Another Lead displaces it into a park window named for it.
-    let out = env.cpd2(&["session", "open", LEAD2]).ok();
+    let out = env.cpd(&["session", "open", LEAD2]).ok();
     assert_eq!(out["displaced"], LEAD1);
     assert_eq!(slot(&env).session, LEAD2);
     let lead1 = panes(&env).into_iter().find(|p| p.session == LEAD1).unwrap();
@@ -522,29 +522,29 @@ fn open_and_park_keep_at_most_one_placeholder_only_in_the_slot() {
     assert_placeholders(&env, 0);
 
     // Park: a placeholder takes the slot; the Lead is alone in a new park window.
-    let out = env.cpd2(&["session", "park"]).ok();
+    let out = env.cpd(&["session", "park"]).ok();
     assert_eq!(out["session"], LEAD2);
     let s = slot(&env);
     assert_eq!((s.view.as_str(), s.session.as_str()), ("chat", ""));
     assert_placeholders(&env, 1);
-    assert!(env.calls("cpd2").contains(&vec!["tui".to_owned(), "view".to_owned(), "chat".to_owned()]));
+    assert!(env.calls("cpd").contains(&vec!["tui".to_owned(), "view".to_owned(), "chat".to_owned()]));
     let lead2 = panes(&env).into_iter().find(|p| p.session == LEAD2).unwrap();
     assert_eq!((lead2.window.as_str(), lead2.window_name.as_str()), (out["window"].as_str().unwrap(), "park-other"));
     assert_eq!(window_names(&env), ["main", "park-other", "park-pay"]);
     assert_eq!(show(&env, LEAD2)["place"], "parked");
 
     // Nothing in the slot to park, or not in the slot: nothing changes.
-    assert_eq!(env.cpd2(&["session", "park"]).ok(), json!({"ok": true, "session": null, "already": true}));
-    assert_eq!(env.cpd2(&["session", "park", LEAD1]).ok()["already"], true);
+    assert_eq!(env.cpd(&["session", "park"]).ok(), json!({"ok": true, "session": null, "already": true}));
+    assert_eq!(env.cpd(&["session", "park", LEAD1]).ok()["already"], true);
     assert_placeholders(&env, 1);
 
     // Opening a parked Lead uses its live pane, and kills the placeholder.
-    let out = env.cpd2(&["session", "open", LEAD1]).ok();
+    let out = env.cpd(&["session", "open", LEAD1]).ok();
     assert_eq!((&out["pane"], &out["displaced"]), (&json!(lead1_pane), &Value::Null));
     assert_eq!(slot(&env).pane, lead1_pane);
     assert_placeholders(&env, 0);
     assert_eq!(window_names(&env), ["main", "park-other"]);
-    let lead1_runs = env.calls("cpd2").iter().filter(|c| c[..2] == ["session", "run"] && c[2] == LEAD1).count();
+    let lead1_runs = env.calls("cpd").iter().filter(|c| c[..2] == ["session", "run"] && c[2] == LEAD1).count();
     assert_eq!(lead1_runs, 1, "lead1 was started once");
 
     let moved: Vec<(String, String)> = events(&env, "session-moved")
@@ -560,18 +560,18 @@ fn open_and_park_refusals() {
     let env = TestEnv::new();
     setup(&env);
     // No cockpit yet.
-    let error = refused(&env.cpd2(&["session", "open", LEAD1]), "no_cockpit", 3);
-    assert_eq!(error["details"]["next"], "cpd2 tui");
-    refused(&env.cpd2(&["session", "park"]), "no_cockpit", 3);
-    refused(&env.cpd2(&["session", "park", LEAD1]), "no_cockpit", 3);
+    let error = refused(&env.cpd(&["session", "open", LEAD1]), "no_cockpit", 3);
+    assert_eq!(error["details"]["next"], "cpd tui");
+    refused(&env.cpd(&["session", "park"]), "no_cockpit", 3);
+    refused(&env.cpd(&["session", "park", LEAD1]), "no_cockpit", 3);
 
-    fake_cpd2(&env);
+    fake_cpd(&env);
     cockpit(&env);
-    refused(&env.cpd2(&["session", "open", WORKER]), "not_a_lead", 3);
-    refused(&env.cpd2(&["session", "open", GROUNDED]), "grounded_lead", 3);
-    refused(&env.cpd2(&["session", "open", "nobody"]), "session_not_found", 4);
-    refused(&env.cpd2(&["session", "park", WORKER]), "not_a_lead", 3);
-    refused(&env.cpd2(&["session", "park", "nobody"]), "session_not_found", 4);
+    refused(&env.cpd(&["session", "open", WORKER]), "not_a_lead", 3);
+    refused(&env.cpd(&["session", "open", GROUNDED]), "grounded_lead", 3);
+    refused(&env.cpd(&["session", "open", "nobody"]), "session_not_found", 4);
+    refused(&env.cpd(&["session", "park", WORKER]), "not_a_lead", 3);
+    refused(&env.cpd(&["session", "park", "nobody"]), "session_not_found", 4);
     assert_placeholders(&env, 1);
     assert_eq!(window_names(&env), ["main"]);
 }
@@ -582,15 +582,15 @@ fn open_and_park_refusals() {
 fn close_refusals_and_nothing_to_close() {
     let env = TestEnv::new();
     setup(&env);
-    refused(&env.cpd2(&["session", "close", WORKER]), "not_a_lead", 3);
-    refused(&env.cpd2(&["session", "close", "nobody"]), "session_not_found", 4);
+    refused(&env.cpd(&["session", "close", WORKER]), "not_a_lead", 3);
+    refused(&env.cpd(&["session", "close", "nobody"]), "session_not_found", 4);
     // A Lead with no pane: nothing to do.
-    fake_cpd2(&env);
+    fake_cpd(&env);
     cockpit(&env);
-    assert_eq!(env.cpd2(&["session", "close", LEAD2]).ok(), json!({"ok": true, "session": LEAD2, "pane": null, "already": true}));
+    assert_eq!(env.cpd(&["session", "close", LEAD2]).ok(), json!({"ok": true, "session": LEAD2, "pane": null, "already": true}));
     // A pane that is gone, with E2 not having recorded it: nothing is written.
     exec_sql(&env, "UPDATE sessions SET tmux_pane = '%99' WHERE id = 'lead2'");
-    assert_eq!(env.cpd2(&["session", "close", LEAD2]).ok()["already"], true);
+    assert_eq!(env.cpd(&["session", "close", LEAD2]).ok()["already"], true);
     assert_eq!(query::<String>(&env, "SELECT tmux_pane FROM sessions WHERE id = 'lead2'"), "%99");
     assert_eq!(events(&env, "session-moved").len(), 0);
     assert_eq!(events(&env, "session-state").len(), 0);
@@ -600,12 +600,12 @@ fn close_refusals_and_nothing_to_close() {
 fn close_refuses_the_lead_in_the_chat_slot_and_leaves_everything() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd2(&env);
+    fake_cpd(&env);
     fake_pi(&env, "exec sleep 600");
     cockpit(&env);
-    let pane = env.cpd2(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
-    let error = refused(&env.cpd2(&["session", "close", LEAD1]), "in_chat_slot", 3);
-    assert_eq!(error["details"]["next"], "cpd2 session park");
+    let pane = env.cpd(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
+    let error = refused(&env.cpd(&["session", "close", LEAD1]), "in_chat_slot", 3);
+    assert_eq!(error["details"]["next"], "cpd session park");
     assert_eq!(slot(&env).pane, pane);
     assert_eq!(show(&env, LEAD1)["tmux_pane"], json!(pane));
     assert_eq!(events(&env, "session-moved").len(), 1);
@@ -615,17 +615,17 @@ fn close_refuses_the_lead_in_the_chat_slot_and_leaves_everything() {
 fn close_kills_a_parked_pane_and_writes_what_e2_writes() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd2(&env);
+    fake_cpd(&env);
     fake_pi(&env, "exec sleep 600");
     cockpit(&env);
     // lead2 displaces lead1 into a park window; lead1 is made `idle`, as pi would report.
-    let lead1_pane = env.cpd2(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
-    env.cpd2(&["session", "open", LEAD2]).ok();
+    let lead1_pane = env.cpd(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
+    env.cpd(&["session", "open", LEAD2]).ok();
     assert_eq!(show(&env, LEAD1)["place"], "parked");
     assert_eq!(window_names(&env), ["main", "park-pay"]);
     exec_sql(&env, "UPDATE sessions SET state = 'idle' WHERE id = 'lead1'");
 
-    let out = env.cpd2(&["session", "close", LEAD1]).ok();
+    let out = env.cpd(&["session", "close", LEAD1]).ok();
     assert_eq!(out, json!({"ok": true, "session": LEAD1, "pane": lead1_pane}));
     // The pane is gone with its window; the file of pi stays (not touched); the slot is unchanged.
     assert!(panes(&env).iter().all(|p| p.session != LEAD1));
@@ -642,11 +642,11 @@ fn close_kills_a_parked_pane_and_writes_what_e2_writes() {
     let after = moved.len();
 
     // Idempotent: nothing more is written.
-    assert_eq!(env.cpd2(&["session", "close", LEAD1]).ok()["already"], true);
+    assert_eq!(env.cpd(&["session", "close", LEAD1]).ok()["already"], true);
     assert_eq!(events(&env, "session-moved").len(), after);
 
     // Open resumes it: a new pane, in the slot.
-    let out = env.cpd2(&["session", "open", LEAD1]).ok();
+    let out = env.cpd(&["session", "open", LEAD1]).ok();
     assert_ne!(out["pane"], json!(lead1_pane));
     assert_eq!(out["displaced"], LEAD2);
 }
@@ -655,16 +655,16 @@ fn close_kills_a_parked_pane_and_writes_what_e2_writes() {
 fn close_of_a_stopped_lead_with_a_pane_appends_only_session_moved() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd2(&env);
+    fake_cpd(&env);
     fake_pi(&env, "exec sleep 600");
     cockpit(&env);
     // lead2 is `stopped` (the fake pi reports nothing) and parked by lead1.
-    env.cpd2(&["session", "open", LEAD2]).ok();
-    env.cpd2(&["session", "open", LEAD1]).ok();
+    env.cpd(&["session", "open", LEAD2]).ok();
+    env.cpd(&["session", "open", LEAD1]).ok();
     assert_eq!((show(&env, LEAD2)["state"].clone(), show(&env, LEAD2)["place"].clone()), (json!("stopped"), json!("parked")));
     let states = events(&env, "session-state").len();
 
-    env.cpd2(&["session", "close", LEAD2]).ok();
+    env.cpd(&["session", "close", LEAD2]).ok();
     assert_eq!(events(&env, "session-state").len(), states);
     let lead2 = show(&env, LEAD2);
     assert_eq!((&lead2["tmux_pane"], &lead2["place"]), (&Value::Null, &json!("none")));
@@ -677,10 +677,10 @@ fn close_of_a_stopped_lead_with_a_pane_appends_only_session_moved() {
 fn run_refusals() {
     let env = TestEnv::new();
     setup(&env);
-    refused(&env.cpd2(&["session", "run", WORKER]), "not_a_lead", 3);
-    refused(&env.cpd2(&["session", "run", "nobody"]), "session_not_found", 4);
+    refused(&env.cpd(&["session", "run", WORKER]), "not_a_lead", 3);
+    refused(&env.cpd(&["session", "run", "nobody"]), "session_not_found", 4);
     // Outside any pane of cpd's server.
-    let error = refused(&env.cpd2(&["session", "run", LEAD1]), "wrong_pane", 3);
+    let error = refused(&env.cpd(&["session", "run", LEAD1]), "wrong_pane", 3);
     assert_eq!(error["details"]["session"], LEAD1);
     assert!(env.calls("pi").is_empty());
 
@@ -690,7 +690,7 @@ fn run_refusals() {
     let pane = String::from_utf8(out.stdout).unwrap().trim().to_owned();
     env.tmux(&["set", "-p", "-t", &pane, "@cpd_session", LEAD2]);
     let server = String::from_utf8(env.tmux(&["display", "-p", "-t", &pane, "#{socket_path},1,0"]).stdout).unwrap();
-    let run = cpd2_with(&env, &[("TMUX", server.trim()), ("TMUX_PANE", &pane)], &["session", "run", LEAD1]);
+    let run = cpd_with(&env, &[("TMUX", server.trim()), ("TMUX_PANE", &pane)], &["session", "run", LEAD1]);
     let error = refused(&run, "wrong_pane", 3);
     assert_eq!((&error["details"]["pane"], &error["details"]["found"]), (&json!(pane), &json!(LEAD2)));
     assert!(env.calls("pi").is_empty());

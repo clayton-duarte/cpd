@@ -1,4 +1,4 @@
-//! The driver `cpd2 attempt run` (contract §3.4 A1–A9; commands.md §6.4).
+//! The driver `cpd attempt run` (contract §3.4 A1–A9; commands.md §6.4).
 //!
 //! Each status change is one transaction with the Event of §3.4's table. Its
 //! cancel safe points are before A3 (here) and before A8's rebase and its
@@ -48,7 +48,7 @@ struct Driver {
     catalog: Option<Catalog>,
 }
 
-/// `cpd2 attempt run <attempt> --plan <id>` (internal).
+/// `cpd attempt run <attempt> --plan <id>` (internal).
 pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let id = args.attempt;
@@ -80,7 +80,7 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
 }
 
 fn log(line: &str) {
-    eprintln!("cpd2 attempt run: {line}");
+    eprintln!("cpd attempt run: {line}");
 }
 
 impl Driver {
@@ -210,7 +210,7 @@ impl Driver {
             }
             tx.execute("UPDATE sessions SET tmux_pane = ?2 WHERE id = ?1", params![session.as_str(), pane.pane.as_str()])?;
             let text = format!(
-                "Attempt {} is running: its Worker started. See: cpd2 attempt show {} --plan {}",
+                "Attempt {} is running: its Worker started. See: cpd attempt show {} --plan {}",
                 target.id, target.id, target.plan
             );
             events::append(
@@ -328,7 +328,7 @@ impl Driver {
         log("A5: the Worker is idle without a submit; nudging it");
         let id = &target.id;
         let prompt = format!(
-            "You ended your turn without running cpd2 attempt submit {id}. Finish the Spec and submit, or run cpd2 ask {id} \"<question>\" if you are blocked."
+            "You ended your turn without running cpd attempt submit {id}. Finish the Spec and submit, or run cpd ask {id} \"<question>\" if you are blocked."
         );
         self.store.write(SOURCE, |tx| {
             let changed = tx.execute(

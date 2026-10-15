@@ -1,4 +1,4 @@
-import { isObject } from "./cpd2.ts";
+import { isObject } from "./cpd.ts";
 
 /**
  * commands.md §15.2 step 4: the greater of `registered_event` and the `details.id` of the last `cpd` custom message

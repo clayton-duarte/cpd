@@ -71,11 +71,11 @@ impl About {
     /// The command the Lead may run to look at it (§5.1: a text ends with one).
     fn see(&self) -> String {
         match self {
-            About::Machine => "cpd2 doctor".to_owned(),
-            About::Plan(p) => format!("cpd2 plan show --plan {p}"),
-            About::Session(s) => format!("cpd2 session show {s}"),
-            About::Job(p, j) => format!("cpd2 job show {j} --plan {p}"),
-            About::Attempt(p, a) => format!("cpd2 attempt show {a} --plan {p}"),
+            About::Machine => "cpd doctor".to_owned(),
+            About::Plan(p) => format!("cpd plan show --plan {p}"),
+            About::Session(s) => format!("cpd session show {s}"),
+            About::Job(p, j) => format!("cpd job show {j} --plan {p}"),
+            About::Attempt(p, a) => format!("cpd attempt show {a} --plan {p}"),
         }
     }
 

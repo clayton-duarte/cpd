@@ -126,7 +126,7 @@ impl Contexts<'_> {
                     tx,
                     NewEvent::new(
                         Kind::Error,
-                        format!("Context {id} failed to sync: {} Next: cpd2 context sync --context {id}", error.message()),
+                        format!("Context {id} failed to sync: {} Next: cpd context sync --context {id}", error.message()),
                         data,
                     )
                     .context(id.clone()),

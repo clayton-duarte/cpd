@@ -105,7 +105,7 @@ fn open(tx: &WriteTxn<'_>, plan: &PlanId, attempt: &AttemptId, question: &str) -
         rusqlite::params![plan.as_str(), id.to_string(), attempt.to_string(), number.get(), question, std::process::id()],
     )?;
     let text = format!(
-        "Worker of Job {job} (Attempt {attempt}) asks: {question} Next: cpd2 answer {id} \"<answer>\" --plan {plan}",
+        "Worker of Job {job} (Attempt {attempt}) asks: {question} Next: cpd answer {id} \"<answer>\" --plan {plan}",
         job = asker.job
     );
     append(

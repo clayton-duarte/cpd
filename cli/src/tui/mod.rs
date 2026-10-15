@@ -1,8 +1,8 @@
 //! The cockpit (contract §6.1, §6.2; commands.md §13, §17, with §19
-//! amendments 1, 2, 9 and 10): `cpd2 tui`, which builds and attaches it, and
-//! the ratatui views of `cpd2 tui view`, one module per view.
+//! amendments 1, 2, 9 and 10): `cpd tui`, which builds and attaches it, and
+//! the ratatui views of `cpd tui view`, one module per view.
 //!
-//! - [`cockpit`]: `cpd2 tui [--attach] [--respawn]` (§13.1);
+//! - [`cockpit`]: `cpd tui [--attach] [--respawn]` (§13.1);
 //! - [`chat`]: the chat slot's placeholder (amendment 2);
 //! - [`widgets`]: the Dispatch column and the key legend (`tui view legend`), with the shared [`palette`];
 //! - [`logs`]: the Event log, a popup of the StatusBar (R36);
@@ -23,7 +23,7 @@ mod worker;
 use crate::error::{CpdError, ErrorCode};
 use crate::output::Output;
 
-/// `cpd2 tui [--attach] [--respawn]`, or `cpd2 tui view …`.
+/// `cpd tui [--attach] [--respawn]`, or `cpd tui view …`.
 #[derive(clap::Args, Debug)]
 #[command(args_conflicts_with_subcommands = true)]
 pub struct Args {
@@ -83,7 +83,7 @@ pub fn run(args: Args) -> Result<Output, CpdError> {
 
 /// `not_a_terminal`: a command that owns its terminal was not given one.
 fn not_a_terminal(command: &str) -> CpdError {
-    CpdError::new(ErrorCode::NotATerminal, format!("cpd2 {command} needs a terminal on stdin and stdout."))
+    CpdError::new(ErrorCode::NotATerminal, format!("cpd {command} needs a terminal on stdin and stdout."))
         .with("command", command)
 }
 

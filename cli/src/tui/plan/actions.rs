@@ -1,6 +1,6 @@
-//! What the plan view does when the User acts (commands.md §13.2, §17): it changes state only through cpd2 commands,
+//! What the plan view does when the User acts (commands.md §13.2, §17): it changes state only through cpd commands,
 //! and lays out its own panes. Nothing here runs unless a key or a click asks for it: the view's reads, its Event
-//! follower and its drawing run nothing. `session open` runs in this process through the command tree, as `cpd2 tui`
+//! follower and its drawing run nothing. `session open` runs in this process through the command tree, as `cpd tui`
 //! does; the Worker pane is the view's own layout (`split-window`, `@cpd_view worker`, `@cpd_job`), not Ledger state.
 
 use std::collections::BTreeMap;

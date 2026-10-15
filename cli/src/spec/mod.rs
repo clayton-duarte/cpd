@@ -98,7 +98,7 @@ impl Cause {
             Cause::SetupFailed => "The worktree or its `pre-start` hook failed, so the Worker never started.",
             Cause::TimedOut => "The Worker ran out of time before it submitted.",
             Cause::Crashed => "The Worker or its driver died before the work was merged.",
-            Cause::NoSubmit => "The Worker went idle twice without running `cpd2 attempt submit`, even after a nudge.",
+            Cause::NoSubmit => "The Worker went idle twice without running `cpd attempt submit`, even after a nudge.",
             Cause::MergeConflict { files } if files.is_empty() => {
                 "Rebasing it onto the newer Lead Branch conflicted."
             }

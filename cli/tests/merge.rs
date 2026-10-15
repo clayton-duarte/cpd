@@ -12,13 +12,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use common::TestEnv;
-use cpd2::config::{Catalog, Config, TierModel};
-use cpd2::error::{CpdError, ErrorCode};
-use cpd2::git::{Setup, create_attempt_worktree, create_lead_worktree};
-use cpd2::home::CpdHome;
-use cpd2::ids::{AttemptId, PlanId};
-use cpd2::merge::{self, Attempt, Ctx, End, Failure, Merge, RepoLock, take_free_driver_lock};
-use cpd2::store::{Store, WriteTxn};
+use cpd::config::{Catalog, Config, TierModel};
+use cpd::error::{CpdError, ErrorCode};
+use cpd::git::{Setup, create_attempt_worktree, create_lead_worktree};
+use cpd::home::CpdHome;
+use cpd::ids::{AttemptId, PlanId};
+use cpd::merge::{self, Attempt, Ctx, End, Failure, Merge, RepoLock, take_free_driver_lock};
+use cpd::store::{Store, WriteTxn};
 use rusqlite::params;
 use serde_json::{Value, json};
 
@@ -57,7 +57,7 @@ fn fx_with(config_extra: &str) -> Fx {
     let repo = env.git_repo("pay").canonicalize().unwrap();
     // The merge runs git in this process, whose environment is not the
     // TestEnv's: the repo's own config gives rebase an identity.
-    for (key, value) in [("user.name", "cpd2 test"), ("user.email", "test@cpd2.invalid"), ("commit.gpgsign", "false")] {
+    for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
         env.git(&repo, &["config", key, value]);
     }
     let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("lead.log") };
@@ -280,7 +280,7 @@ fn merged_rebases_fast_forwards_syncs_the_lead_worktree_and_records_it() {
     assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD~1"]), other);
     assert_eq!(fx.lead_sha(), new);
     let reflog = fx.git(&fx.repo, &["reflog", "-1", "--format=%gs", "refs/heads/cpd/pay"]);
-    assert_eq!(reflog, "cpd2: merge pay/api-a1");
+    assert_eq!(reflog, "cpd: merge pay/api-a1");
     // Step 9: the Lead worktree holds the new commit, clean.
     assert_eq!(fs::read_to_string(fx.lead.join("api.txt")).unwrap(), "api\n");
     assert_eq!(fx.status(&fx.lead), "");

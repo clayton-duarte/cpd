@@ -13,7 +13,7 @@
 //! lock, waits for no writer, writes nothing, spawns nothing, and runs a fixed
 //! number of queries whatever the size of the Ledger (§17 refreshes a view about
 //! every second). Each snapshot returns `events_cursor`, the highest Event id of
-//! its own transaction, from which the view follows (`cpd2 events follow --since`).
+//! its own transaction, from which the view follows (`cpd events follow --since`).
 //! Rows are parsed once here: a value the schema forbids is `store_failed`.
 //!
 //! The functions take the opened [`Store`] and no `CpdHome`: the one thing

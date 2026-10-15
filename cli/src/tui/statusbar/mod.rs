@@ -8,7 +8,7 @@
 //!
 //! - [`bar`]: the row's drawing and its clickable items;
 //! - [`workers`]: the indicator;
-//! - [`layout`]: reset-layout, which the ⧉ button runs and `cpd2 tui` runs after building a new `main`.
+//! - [`layout`]: reset-layout, which the ⧉ button runs and `cpd tui` runs after building a new `main`.
 
 mod bar;
 pub(crate) mod layout;
@@ -89,7 +89,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
 }
 
 fn terminal_failed(e: std::io::Error) -> CpdError {
-    CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd2 tui view statusbar failed: {e}."))
+    CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view statusbar failed: {e}."))
         .with("command", "tui view statusbar")
 }
 

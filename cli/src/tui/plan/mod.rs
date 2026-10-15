@@ -186,7 +186,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
     ratatui::restore();
     match result {
         Ok(()) => Ok(Output::Owned),
-        Err(error) => Err(CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd2 tui view plan failed: {error}."))
+        Err(error) => Err(CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view plan failed: {error}."))
             .with("command", "tui view plan")),
     }
 }

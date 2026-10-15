@@ -79,7 +79,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
              SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'grounding', ?8, at FROM txns WHERE id = cpd_txn()",
             rusqlite::params![id.as_str(), args.context.as_str(), args.title.as_str(), jira, repo_str, base, branch, session.as_str()],
         )?;
-        let text = format!("Plan {id} \"{}\" created in Context {}, phase grounding. Next: cpd2 plan show --plan {id}", args.title, args.context);
+        let text = format!("Plan {id} \"{}\" created in Context {}, phase grounding. Next: cpd plan show --plan {id}", args.title, args.context);
         let data = json!({"title": args.title.as_str(), "repo": repo_str, "base": base, "jira": jira,
                           "lead_session": session, "forked_from": forked_from});
         append(tx, NewEvent::new(Kind::PlanCreated, text, data).plan(id.clone()))?;

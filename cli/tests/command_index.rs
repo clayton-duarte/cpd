@@ -1,7 +1,7 @@
 //! The command index of commands.md §2: every documented command exists.
 
 use clap::CommandFactory;
-use cpd2::cli::Cli;
+use cpd::cli::Cli;
 
 /// The commands of commands.md §2's table, read from the document itself,
 /// each as its words (`["context", "decide"]`, `["plan", "phase", "plan"]`).
@@ -58,7 +58,7 @@ fn every_documented_command_exists() {
         // What is left must be positional arguments of a leaf command (`plan phase plan`).
         assert!(
             rest.len() < words.len() && (rest.is_empty() || !cmd.has_subcommands()),
-            "cpd2 {} is not a command",
+            "cpd {} is not a command",
             words.join(" ")
         );
     }

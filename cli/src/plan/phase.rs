@@ -63,7 +63,7 @@ pub(super) fn phase(args: PhaseArgs) -> Result<Output, CpdError> {
               WHERE id = ?2 AND lead_session IS NULL",
             [new.as_str(), plan.context.as_str()],
         )?;
-        let text = format!("Plan {id} moved from grounding to plan. Next: cpd2 job add <key> --title <text> --tier <T> --spec <file>, then cpd2 plan review");
+        let text = format!("Plan {id} moved from grounding to plan. Next: cpd job add <key> --title <text> --tier <T> --spec <file>, then cpd plan review");
         append(tx, NewEvent::new(Kind::PlanPhase, text, json!({"from": "grounding", "to": "plan"})).plan(id.clone()))?;
         if grounded == 0 {
             return Ok(None);

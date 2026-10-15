@@ -11,7 +11,7 @@ use super::tmux::Pane;
 
 /// The cockpit's window holding the TUI views and the chat slot.
 pub const MAIN_WINDOW: &str = "main";
-/// The window of `cpd2 watch`, in the work session (D5).
+/// The window of `cpd watch`, in the work session (D5).
 pub const WATCH_WINDOW: &str = "watch";
 /// The placeholder's text (amendment 2).
 pub const PLACEHOLDER_TEXT: &str = "No Lead here: pick a Plan in the session tree";

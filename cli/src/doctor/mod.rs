@@ -1,4 +1,4 @@
-//! `cpd2 doctor` (commands.md §14.1): checks the machine. Every check yields a
+//! `cpd doctor` (commands.md §14.1): checks the machine. Every check yields a
 //! [`Check`]; any failing `error` check makes the result `doctor_failed`.
 //! Read-only, except the migration of a database's first open.
 
@@ -16,7 +16,7 @@ use crate::output::Output;
 use crate::store::Store;
 use check::{Check, Severity};
 
-/// `cpd2 doctor` takes no arguments.
+/// `cpd doctor` takes no arguments.
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
 pub struct Args {}
 

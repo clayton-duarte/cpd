@@ -1,4 +1,4 @@
-//! Following Events (commands.md §17): one `cpd2 events follow --since <cursor>`
+//! Following Events (commands.md §17): one `cpd events follow --since <cursor>`
 //! subprocess, which the view watches for the kinds that change what it shows.
 //! The view then takes a new snapshot (coalesced by the caller): the tree
 //! shows counts and states that the Events' `data` does not carry.
@@ -49,7 +49,7 @@ pub struct Follower {
 }
 
 impl Follower {
-    /// Starts `<this binary> events follow --since <cursor>`. The same binary, not `cpd2` on `PATH`: the view and its follower must agree on the schema.
+    /// Starts `<this binary> events follow --since <cursor>`. The same binary, not `cpd` on `PATH`: the view and its follower must agree on the schema.
     pub fn start(cursor: i64) -> std::io::Result<Follower> {
         let mut command = Command::new(std::env::current_exe()?);
         command.args(["events", "follow", "--since", &cursor.to_string()]);

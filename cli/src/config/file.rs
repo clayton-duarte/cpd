@@ -218,18 +218,18 @@ impl Config {
     }
 
     /// The pi adapter package's directory: `pi_adapter`, else
-    /// `<dir of the cpd2 binary>/../share/cpd2/pi` (contract §8.2). Whether the
+    /// `<dir of the cpd binary>/../share/cpd/pi` (contract §8.2). Whether the
     /// default exists is for `doctor` to say.
     pub fn pi_adapter_dir(&self) -> Result<PathBuf, CpdError> {
         if !self.pi_adapter.is_empty() {
             return Ok(PathBuf::from(&self.pi_adapter));
         }
         let exe = std::env::current_exe().map_err(|e| {
-            CpdError::new(ErrorCode::ConfigInvalid, format!("cannot find the cpd2 binary to locate the pi adapter: {e}."))
+            CpdError::new(ErrorCode::ConfigInvalid, format!("cannot find the cpd binary to locate the pi adapter: {e}."))
                 .with("key", "pi_adapter")
         })?;
         let bin_dir = exe.parent().expect("an executable path has a parent");
-        Ok(bin_dir.join("..").join("share").join("cpd2").join("pi"))
+        Ok(bin_dir.join("..").join("share").join("cpd").join("pi"))
     }
 }
 

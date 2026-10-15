@@ -72,7 +72,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
         }
         // The adapter reports `stopped` at shutdown; report it here when it did not.
         if let Err(e) = state::set(&mut env.store, "session run", &row.id, State::Stopped, None) {
-            eprintln!("cpd2: cannot report Session {} stopped: {}: {}", row.id, e.code(), e.message());
+            eprintln!("cpd: cannot report Session {} stopped: {}: {}", row.id, e.code(), e.message());
         }
         let name = env.store.read(|conn| row::load(conn, &args.id))?.name;
         print!("\n  pi exited. Press Enter to resume {name} here.\n");
@@ -90,7 +90,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
 /// just after `new-window`, so an unset option is waited for, briefly.
 fn check_pane(tmux: &Tmux, id: &SessionId) -> Result<(), CpdError> {
     let wrong = |why: String| {
-        CpdError::new(ErrorCode::WrongPane, format!("cpd2 session run {id} must run in the pane cpd started for it: {why}."))
+        CpdError::new(ErrorCode::WrongPane, format!("cpd session run {id} must run in the pane cpd started for it: {why}."))
             .with("session", id.as_str())
     };
     // `TMUX` is `<socket path>,<pid>,<session>`: the pane must be on cpd's server.

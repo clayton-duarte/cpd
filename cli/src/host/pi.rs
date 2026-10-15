@@ -380,7 +380,7 @@ pub(crate) fn declared(settings: &Path, home: &Path, log: &mut dyn Write) -> Vec
 /// Writes one line to the log. A log that cannot be written is not worth
 /// failing a launch for, so a write error is ignored here.
 fn note(log: &mut dyn Write, line: &str) {
-    let _ = writeln!(log, "cpd2: {line}");
+    let _ = writeln!(log, "cpd: {line}");
 }
 
 /// The `[-e …]` rule (contract §6.5): of `candidates`, the ones pi's global
@@ -466,7 +466,7 @@ mod tests {
         let home = home();
         let session = SessionId::parse(ID).unwrap();
         let plan = PlanId::parse("cpd2").unwrap();
-        let extensions = strs(&["/opt/cpd2/pi", "npm:@juicesharp/rpiv-ask-user-question@2.13.8"]);
+        let extensions = strs(&["/opt/cpd/pi", "npm:@juicesharp/rpiv-ask-user-question@2.13.8"]);
         lead(&LeadLaunch { home: &home, session: &session, plan: Some(&plan), extensions: &extensions, plannotator, start })
     }
 
@@ -474,7 +474,7 @@ mod tests {
     fn grounded_lead_has_no_plan_in_its_environment() {
         let home = home();
         let session = SessionId::parse(ID).unwrap();
-        let extensions = strs(&["/opt/cpd2/pi"]);
+        let extensions = strs(&["/opt/cpd/pi"]);
         let plannotator = Plannotator { port: Some("19432".into()), remote: Some("1".into()) };
         let start = LeadStart::Fork {
             model: "m/x:high".into(),
@@ -485,7 +485,7 @@ mod tests {
         let launch = lead(&LeadLaunch { home: &home, session: &session, plan: None, extensions: &extensions, plannotator: &plannotator, start });
         assert_eq!(
             launch.argv,
-            strs(&["pi", "--model", "m/x:high", "-e", "/opt/cpd2/pi", "--fork", "/s/src.jsonl", "--session-id", ID, "-n", "ctx"])
+            strs(&["pi", "--model", "m/x:high", "-e", "/opt/cpd/pi", "--fork", "/s/src.jsonl", "--session-id", ID, "-n", "ctx"])
         );
         assert_eq!(
             launch.env,
@@ -517,7 +517,7 @@ mod tests {
             launch.argv,
             strs(&[
                 "pi", "--model", "github-copilot/claude-opus-5.5:high",
-                "-e", "/opt/cpd2/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
+                "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
                 "--session-id", ID, "-n", "cpd rust lead", "--", "Plan the rewrite.",
             ])
         );
@@ -549,7 +549,7 @@ mod tests {
             launch.argv,
             strs(&[
                 "pi", "--model", "m/x:high",
-                "-e", "/opt/cpd2/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
+                "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
                 "--fork", "/s/2026_6f1c.jsonl", "--session-id", ID, "-n", "pay-4521", "--", "Hello.",
             ])
         );
@@ -566,7 +566,7 @@ mod tests {
             launch.argv,
             strs(&[
                 "pi", "--session", "/s/x.jsonl",
-                "-e", "/opt/cpd2/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
+                "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
             ])
         );
         assert_eq!(launch.env, lead_env(&[]));
@@ -578,7 +578,7 @@ mod tests {
         let session = SessionId::parse(ID).unwrap();
         let plan = PlanId::parse("cpd2").unwrap();
         let attempt = AttemptId::new(JobKey::parse("rs-host").unwrap(), NonZeroU32::new(2).unwrap());
-        let extensions = strs(&["/opt/cpd2/pi"]);
+        let extensions = strs(&["/opt/cpd/pi"]);
         let launch = super::worker(&WorkerLaunch {
             home: &home,
             session: &session,
@@ -592,7 +592,7 @@ mod tests {
             strs(&[
                 "pi", "--approve", "--no-skills", "--exclude-tools",
                 "ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox",
-                "-e", "/opt/cpd2/pi",
+                "-e", "/opt/cpd/pi",
                 "--model", "github-copilot/claude-sonnet-5.5:xhigh",
                 "--session-id", ID, "-n", "cpd2 rs-host a2", "--",
                 "Read /cpd-home/run/cpd2/specs/rs-host-a2.md and follow it exactly. Your attempt id is rs-host-a2.",
@@ -609,9 +609,9 @@ mod tests {
 
     #[test]
     fn candidates_per_role() {
-        let adapter = Path::new("/opt/share/cpd2/pi");
-        assert_eq!(lead_candidates(adapter, &strs(&["npm:a@1", "npm:b@2"])), strs(&["/opt/share/cpd2/pi", "npm:a@1", "npm:b@2"]));
-        assert_eq!(worker_candidates(adapter), strs(&["/opt/share/cpd2/pi"]));
+        let adapter = Path::new("/opt/share/cpd/pi");
+        assert_eq!(lead_candidates(adapter, &strs(&["npm:a@1", "npm:b@2"])), strs(&["/opt/share/cpd/pi", "npm:a@1", "npm:b@2"]));
+        assert_eq!(worker_candidates(adapter), strs(&["/opt/share/cpd/pi"]));
     }
 
     #[test]
@@ -722,14 +722,14 @@ mod tests {
         let f = Fixture::new();
         // The global file's relative path resolves from the agent dir, the
         // project's from `<cwd>/.pi`; candidates resolve from cwd.
-        f.global(r#"{"packages": ["../../share/cpd2/pi"]}"#);
-        let adapter = f.dirs.home.join("share/cpd2/pi");
+        f.global(r#"{"packages": ["../../share/cpd/pi"]}"#);
+        let adapter = f.dirs.home.join("share/cpd/pi");
         f.project(r#"{"packages": [{"source": "../tools/x"}]}"#);
         let candidates = vec![
             adapter.display().to_string(),
             "./tools/x".to_owned(),
             "./tools/y".to_owned(),
-            f.dirs.agent_dir.join("../../share/cpd2/other").display().to_string(),
+            f.dirs.agent_dir.join("../../share/cpd/other").display().to_string(),
         ];
         let (kept, log) = f.pass(&candidates);
         assert_eq!(kept, vec!["./tools/y".to_owned(), candidates[3].clone()]);

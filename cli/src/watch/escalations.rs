@@ -1,5 +1,5 @@
 //! E1, Escalations (contract §3.5, §3.7): expire every `open` Escalation
-//! whose asker, the blocking `cpd2 ask`, is no longer alive
+//! whose asker, the blocking `cpd ask`, is no longer alive
 //! (`escalation-expired` `{escalation, reason: "asker_dead"}`, commands.md §8.1).
 
 use nix::errno::Errno;
@@ -75,7 +75,7 @@ fn expire(engine: &mut Engine, escalation: &Open) -> Result<bool, CpdError> {
             return Ok(false);
         }
         let text = format!(
-            "Escalation {id} of Attempt {attempt} expired: its asker (pid {}) is gone. See: cpd2 attempt show {attempt} --plan {plan}",
+            "Escalation {id} of Attempt {attempt} expired: its asker (pid {}) is gone. See: cpd attempt show {attempt} --plan {plan}",
             escalation.asker_pid
         );
         let data = json!({"escalation": id.to_string(), "reason": "asker_dead"});

@@ -35,7 +35,7 @@ pub fn popup_args(client: (u16, u16)) -> Vec<String> {
     let cap = |n: u16| (u32::from(n) * u32::from(SHARE) / 100) as u16;
     let mut args = legend::popup_args((cap(client.0), cap(client.1)));
     args[3] = " logs ".to_owned();
-    *args.last_mut().expect("popup_args ends with the command") = "cpd2 tui view logs".to_owned();
+    *args.last_mut().expect("popup_args ends with the command") = "cpd tui view logs".to_owned();
     args
 }
 
@@ -72,7 +72,7 @@ fn show(
     first: read::Logs,
 ) -> Result<(), CpdError> {
     let terminal_failed = |e: std::io::Error| {
-        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd2 tui view logs failed: {e}."))
+        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view logs failed: {e}."))
             .with("command", "tui view logs")
     };
     let mut cursor = first.events_cursor;

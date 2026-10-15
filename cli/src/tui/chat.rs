@@ -23,7 +23,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
     let mut terminal = ratatui::init();
     let error = show(&mut terminal);
     ratatui::restore();
-    Err(CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd2 tui view chat failed: {error}."))
+    Err(CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view chat failed: {error}."))
         .with("command", "tui view chat"))
 }
 

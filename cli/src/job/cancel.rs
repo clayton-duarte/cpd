@@ -40,7 +40,7 @@ pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
                       WHERE plan = ?1 AND key = ?2",
                     [plan.as_str(), job.key.as_str(), reason.as_str()],
                 )?;
-                let text = format!("Job {key} of Plan {plan} was cancelled: {reason} Next: cpd2 plan show --plan {plan}");
+                let text = format!("Job {key} of Plan {plan} was cancelled: {reason} Next: cpd plan show --plan {plan}");
                 append(tx, NewEvent::new(Kind::JobCancelled, text, json!({"reason": reason})).plan(plan.clone()).job(key.clone()))?;
                 Ok(("cancelled".to_owned(), false, false))
             }
@@ -51,7 +51,7 @@ pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
                     [plan.as_str(), job.key.as_str(), reason.as_str()],
                 )?;
                 let text = format!(
-                    "Cancel requested for Job {key} of Plan {plan}: {reason} The engine stops Attempt {attempt}. Next: cpd2 job show {key} --plan {plan}"
+                    "Cancel requested for Job {key} of Plan {plan}: {reason} The engine stops Attempt {attempt}. Next: cpd job show {key} --plan {plan}"
                 );
                 append(
                     tx,

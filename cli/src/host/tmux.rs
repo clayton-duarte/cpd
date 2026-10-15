@@ -326,7 +326,7 @@ impl Tmux {
         Ok(Some(parsed))
     }
 
-    /// Sets [`SERVER_OPTIONS`] on a running server (contract §6.1: `cpd2 tui`
+    /// Sets [`SERVER_OPTIONS`] on a running server (contract §6.1: `cpd tui`
     /// applies them again), all but the `terminal-features` append, which the
     /// server's start already made. Rerunning is safe.
     pub fn apply_server_options(&self) -> Result<(), CpdError> {
@@ -405,7 +405,7 @@ impl Tmux {
 
     /// `respawn-pane -k -t <pane> [-c <cwd>] [-e K=V …] [-- <argv…>]`: kills
     /// the pane's program, live or dead, and starts it again in place (contract
-    /// §6.3: `cpd2 tui --respawn`). An empty argv reruns the pane's own command.
+    /// §6.3: `cpd tui --respawn`). An empty argv reruns the pane's own command.
     pub fn respawn_pane_killing(&self, pane: &PaneId, spawn: &Spawn) -> Result<(), CpdError> {
         let mut args = strings(&["respawn-pane", "-k", "-t", pane.as_str()]);
         spawn.push_args(&mut args);
@@ -481,7 +481,7 @@ fn new_session_args(name: &str, window: &str, spawn: &Spawn, fresh: bool) -> Vec
 enum Line {
     Pane(Pane),
     /// A well-formed pane whose `@cpd_view` this binary does not know (§6.3): a
-    /// newer cpd2 made it, so it is skipped, not an error.
+    /// newer cpd made it, so it is skipped, not an error.
     UnknownView(String),
 }
 
@@ -489,7 +489,7 @@ enum Line {
 fn warn_unknown_view(view: &str) {
     static SEEN: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
     if SEEN.lock().unwrap_or_else(|e| e.into_inner()).insert(view.to_owned()) {
-        eprintln!("cpd2: skipping tmux panes with the unknown @cpd_view {view:?}: a newer cpd2 made them");
+        eprintln!("cpd: skipping tmux panes with the unknown @cpd_view {view:?}: a newer cpd made them");
     }
 }
 
@@ -588,10 +588,10 @@ mod tests {
 
     #[test]
     fn a_fresh_server_gets_its_options_before_the_first_pane_spawns() {
-        let spawn = Spawn { cwd: None, env: BTreeMap::new(), argv: strings(&["cpd2", "watch"]) };
+        let spawn = Spawn { cwd: None, env: BTreeMap::new(), argv: strings(&["cpd", "watch"]) };
         let new_session = strings(&[
             "new-session", "-d", "-s", "cpd-work", "-n", "watch", "-x", "215", "-y", "62", "-P", "-F", "#{window_id} #{pane_id}", "--",
-            "cpd2", "watch",
+            "cpd", "watch",
         ]);
         assert_eq!(new_session_args("cpd-work", "watch", &spawn, false), new_session);
 

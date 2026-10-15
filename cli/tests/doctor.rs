@@ -1,4 +1,4 @@
-//! `cpd2 doctor` (commands.md §14.1): the machine's checks, each against fake
+//! `cpd doctor` (commands.md §14.1): the machine's checks, each against fake
 //! tools on a `PATH` that holds only the test's `bin/`.
 
 mod common;
@@ -7,9 +7,9 @@ use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::Path;
 
-use common::{CPD2, Run, TestEnv};
-use cpd2::home::CpdHome;
-use cpd2::store::Store;
+use common::{CPD, Run, TestEnv};
+use cpd::home::CpdHome;
+use cpd::store::Store;
 use nix::fcntl::{Flock, FlockArg};
 use rusqlite::Connection;
 use serde_json::{Value, json};
@@ -93,12 +93,12 @@ fn healthy() -> TestEnv {
     env
 }
 
-/// `cpd2 doctor` with `PATH` = the test's `bin/` only, and `vars` added.
+/// `cpd doctor` with `PATH` = the test's `bin/` only, and `vars` added.
 fn doctor_with(env: &TestEnv, vars: &[(&str, &str)]) -> Run {
-    let mut cmd = env.command(CPD2);
+    let mut cmd = env.command(CPD);
     cmd.arg("doctor").env("PATH", env.bin()).env_remove("PLANNOTATOR_PORT").env_remove("PLANNOTATOR_REMOTE");
     cmd.envs(vars.iter().copied());
-    let out = cmd.output().expect("run cpd2");
+    let out = cmd.output().expect("run cpd");
     Run {
         exit: out.status.code().expect("exit code"),
         stdout: String::from_utf8(out.stdout).expect("UTF-8"),
@@ -201,7 +201,7 @@ fn doctor_is_idempotent_and_writes_nothing_but_the_migration() {
 #[test]
 fn an_argument_is_usage() {
     let env = healthy();
-    let out = env.command(CPD2).args(["doctor", "--bogus"]).output().unwrap();
+    let out = env.command(CPD).args(["doctor", "--bogus"]).output().unwrap();
     assert_eq!(out.status.code(), Some(2));
 }
 
@@ -368,7 +368,7 @@ fn the_adapter_directory_needs_a_package_json() {
     let run = doctor(&env);
     assert_doctor_failed(&run);
     let c = assert_fails(&run, "pi_adapter", "error", "package.json");
-    assert!(c["found"].as_str().unwrap().ends_with("share/cpd2/pi"), "{c}");
+    assert!(c["found"].as_str().unwrap().ends_with("share/cpd/pi"), "{c}");
 
     // A directory removed after the config was written.
     let env = healthy();
@@ -497,14 +497,14 @@ fn locked_jobs(env: &TestEnv) {
             Ok(())
         })
         .unwrap();
-    let id = cpd2::ids::PlanId::parse("pl").unwrap();
-    let jobs = store.read(|conn| cpd2::plan::jobs::load(conn, &id)).unwrap();
+    let id = cpd::ids::PlanId::parse("pl").unwrap();
+    let jobs = store.read(|conn| cpd::plan::jobs::load(conn, &id)).unwrap();
     store
         .write("fixture", |tx| {
             for job in jobs.iter().filter(|j| j.key != "c") {
                 tx.execute(
                     "UPDATE jobs SET status = 'queued', fingerprint = ?1 WHERE plan = 'pl' AND key = ?2",
-                    [cpd2::plan::locked_fingerprint(job).as_str(), job.key.as_str()],
+                    [cpd::plan::locked_fingerprint(job).as_str(), job.key.as_str()],
                 )?;
             }
             Ok(())

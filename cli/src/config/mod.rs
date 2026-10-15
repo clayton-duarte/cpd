@@ -1,5 +1,5 @@
 //! Configuration and Tiers (contract §8, §9; commands.md §14.2, §14.3):
-//! `config.toml`, `cpd2 config` and `cpd2 tiers`.
+//! `config.toml`, `cpd config` and `cpd tiers`.
 //!
 //! Other areas read their keys through [`Config::load`] and the typed fields,
 //! and use Tiers through [`Tier`] and [`Catalog`] (from [`load_catalog`]).
@@ -19,15 +19,15 @@ pub use catalog::{PiInstall, load as load_catalog, locate_pi};
 pub use file::{Config, Events, Source, Sources, Tiers, Timeouts, Tmux, Watch};
 pub use tier::{Catalog, Letter, Tier, TierModel};
 
-/// `cpd2 config` takes no arguments.
+/// `cpd config` takes no arguments.
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
 pub struct ConfigArgs {}
 
-/// `cpd2 tiers` takes no arguments.
+/// `cpd tiers` takes no arguments.
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
 pub struct TiersArgs {}
 
-/// `cpd2 config` (§14.2): the effective configuration, each leaf with its source.
+/// `cpd config` (§14.2): the effective configuration, each leaf with its source.
 pub fn config(_args: ConfigArgs) -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
     let (config, sources) = Config::load_with_sources(&home)?;
@@ -38,7 +38,7 @@ pub fn config(_args: ConfigArgs) -> Result<Output, CpdError> {
     })))
 }
 
-/// `cpd2 tiers` (§14.3): the configured models and the efforts pi supports for each.
+/// `cpd tiers` (§14.3): the configured models and the efforts pi supports for each.
 pub fn tiers(_args: TiersArgs) -> Result<Output, CpdError> {
     let config = Config::load(&CpdHome::from_env()?)?;
     let catalog = load_catalog(&config)?;

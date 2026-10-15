@@ -1,4 +1,4 @@
-//! `locks/watch.lock` (contract §1.4, §3.7): held by the one `cpd2 watch`
+//! `locks/watch.lock` (contract §1.4, §3.7): held by the one `cpd watch`
 //! for its whole life. A `flock(2)` lock, so the kernel releases it when the
 //! engine dies and a free lock always means no engine.
 

@@ -3,7 +3,7 @@
 //! `session close` (§10.9, amendment 14).
 //!
 //! The chat slot always holds a pane: a Lead's, or the placeholder running
-//! `cpd2 tui view chat`. `park` creates the placeholder in a new park window
+//! `cpd tui view chat`. `park` creates the placeholder in a new park window
 //! and swaps it into the slot; `open` kills it, with its window, when a Lead
 //! takes the slot. So at most one placeholder exists, and only in the slot.
 
@@ -25,7 +25,7 @@ use crate::ids::{PlanId, SessionId};
 use crate::output::Output;
 use crate::store::WriteTxn;
 
-/// What `tmux new-window` runs for Lead `id`: `cpd2 session run <id>` in its
+/// What `tmux new-window` runs for Lead `id`: `cpd session run <id>` in its
 /// cwd, with `CPD_HOME`, `CPD_SESSION` and `CPD_PLAN` (commands.md §10.3).
 fn lead_spawn(home: &CpdHome, id: &SessionId, plan: &PlanId, cwd: &Path) -> Spawn {
     Spawn {
@@ -39,7 +39,7 @@ fn lead_spawn(home: &CpdHome, id: &SessionId, plan: &PlanId, cwd: &Path) -> Spaw
     }
 }
 
-/// The placeholder's program: `cpd2 tui view chat` (amendment 2).
+/// The placeholder's program: `cpd tui view chat` (amendment 2).
 fn placeholder_spawn() -> Spawn {
     Spawn { cwd: None, env: BTreeMap::new(), argv: [PROGRAM, "tui", "view", "chat"].map(str::to_owned).into() }
 }
@@ -126,7 +126,7 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
             rusqlite::params![id.as_str(), context.as_str(), plan.as_str(), name, source.id.as_str(), source.cwd, tier],
         )?;
         let row = row::load(tx, &id)?;
-        let text = format!("Lead {name} registered, forked from {}. Next: cpd2 session open {id}", source.name);
+        let text = format!("Lead {name} registered, forked from {}. Next: cpd session open {id}", source.name);
         let data = json!({"role": "lead", "name": name, "forked_from": source.id, "tier": tier});
         append(tx, scoped(NewEvent::new(Kind::SessionRegistered, text, data), &row))?;
         Ok(row)
@@ -243,7 +243,7 @@ pub(super) fn close(args: CloseArgs) -> Result<Output, CpdError> {
             format!("Lead {} is in the chat slot: park it or open another Lead first.", lead.name),
         )
         .with("session", lead.id.as_str())
-        .with("next", "cpd2 session park"));
+        .with("next", "cpd session park"));
     }
     let Some(pane) = lead.tmux_pane.clone() else {
         return Ok(Output::success(json!({"session": lead.id, "pane": null, "already": true})));

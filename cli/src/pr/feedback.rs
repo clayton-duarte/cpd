@@ -263,7 +263,7 @@ pub(super) fn text(plan: &str, number: i64, changes: &Changes, closed: bool) -> 
         lines.push(format!("- …and {more} more (see data)"));
     }
     lines.push(format!(
-        "Turn what needs work into Jobs: cpd2 job add <key> --title <text> --tier <T> --spec <file> --plan {plan}; then cpd2 pr rebase --plan {plan} once they are Merged."
+        "Turn what needs work into Jobs: cpd job add <key> --title <text> --tier <T> --spec <file> --plan {plan}; then cpd pr rebase --plan {plan} once they are Merged."
     ));
     lines.join("\n")
 }
@@ -363,6 +363,6 @@ mod tests {
         let (changes, _) = diff(&Seen::default(), &view(vec![], vec![], many.iter().map(String::as_str).collect()), &[]);
         let text = text("pay", 7, &changes, false);
         assert!(text.contains("…and 5 more"), "{text}");
-        assert!(text.lines().last().unwrap().contains("cpd2 job add"));
+        assert!(text.lines().last().unwrap().contains("cpd job add"));
     }
 }

@@ -66,7 +66,7 @@ pub(super) fn poll(args: Args) -> Result<Output, CpdError> {
                 return Err(cas_lost(&id));
             }
             stored(tx)?;
-            let text = format!("PR #{} of Plan {id} is merged: the Plan is done. See cpd2 plan show --plan {id}", pr.number);
+            let text = format!("PR #{} of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}", pr.number);
             let data = json!({"pr": pr.short(), "merged_at": view.merged_at});
             append(tx, NewEvent::new(Kind::PlanDone, text, data).plan(id.clone()))?;
             Ok(())

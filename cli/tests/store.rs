@@ -10,9 +10,9 @@ use std::process::Child;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use common::TestEnv;
-use cpd2::error::{CpdError, ErrorCode};
-use cpd2::home::CpdHome;
-use cpd2::store::{APPLICATION_ID, HISTORY_TABLES, Store, VERSION, WriteTxn};
+use cpd::error::{CpdError, ErrorCode};
+use cpd::home::CpdHome;
+use cpd::store::{APPLICATION_ID, HISTORY_TABLES, Store, VERSION, WriteTxn};
 use rusqlite::Connection;
 use rusqlite::functions::FunctionFlags;
 use serde_json::{Value, json};
@@ -27,7 +27,7 @@ fn open(env: &TestEnv) -> Store {
     Store::open(&home(env), 5000).unwrap()
 }
 
-/// A connection that is not cpd2's, like the `sqlite3` shell: no `cpd_txn()`.
+/// A connection that is not cpd's, like the `sqlite3` shell: no `cpd_txn()`.
 fn raw(env: &TestEnv) -> Connection {
     let conn = Connection::open(home(env).db()).unwrap();
     conn.pragma_update(None, "foreign_keys", "ON").unwrap();

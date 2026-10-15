@@ -45,7 +45,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
             Decision::Already(job) => Ok((job, true)),
             Decision::Insert(job) => {
                 insert(tx, &plan, &job)?;
-                let text = format!("Job {} added to Plan {plan} as {}. Next: cpd2 job show {} --plan {plan}", job.key, job.status, job.key);
+                let text = format!("Job {} added to Plan {plan} as {}. Next: cpd job show {} --plan {plan}", job.key, job.status, job.key);
                 append(
                     tx,
                     NewEvent::new(

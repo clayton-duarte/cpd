@@ -1,4 +1,4 @@
-//! The engine, `cpd2 watch` (contract §3.7, §6.6; commands.md §12): one per
+//! The engine, `cpd watch` (contract §3.7, §6.6; commands.md §12): one per
 //! machine, running E1–E6 every `tick_seconds` under `locks/watch.lock`.
 //!
 //! - [`engine`]: the loop, its signals, `watch-started` and `watch-stopped`;
@@ -27,7 +27,7 @@ use crate::output::Output;
 /// `error` Events (commands.md §12).
 const SOURCE: &str = "watch";
 
-/// The arguments of `cpd2 watch` (commands.md §12).
+/// The arguments of `cpd watch` (commands.md §12).
 #[derive(clap::Args, Debug)]
 pub struct Args {
     /// Start the engine in cpd-work:watch when it is not running, and return at once
@@ -35,7 +35,7 @@ pub struct Args {
     ensure: bool,
 }
 
-/// `cpd2 watch [--ensure]`.
+/// `cpd watch [--ensure]`.
 pub fn run(args: Args) -> Result<Output, CpdError> {
     if args.ensure { ensure::ensure() } else { engine::run() }
 }

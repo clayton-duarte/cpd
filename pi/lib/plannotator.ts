@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { CpdError, isObject } from "./cpd2.ts";
+import { CpdError, isObject } from "./cpd.ts";
 import type { PiApi } from "./pi.ts";
 
 /** commands.md §15.5: plannotator's event API (cpd 1 trial t4), parsed at the boundary because it is not a stable contract. */

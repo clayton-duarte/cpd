@@ -2,7 +2,7 @@
 //! beside the chat; ported from the spike's `run_worker` (branch `cpd/cpd-ui`,
 //! `tui/src/main.rs`) onto the read model.
 //!
-//! `cpd2 tui view worker <attempt> --plan <id>` finds the Worker's pi session
+//! `cpd tui view worker <attempt> --plan <id>` finds the Worker's pi session
 //! file through the Attempt's Session (`read::worker`, what `attempt show`
 //! returns) and renders it ([`render`]): what the Worker was told, said and
 //! did. The file is not in the database. Every [`CHECK`] the view looks at
@@ -42,7 +42,7 @@ const CHECK: Duration = Duration::from_millis(500);
 /// How long the loop waits for a key before it looks at the clock again.
 const TICK: Duration = Duration::from_millis(100);
 
-/// `cpd2 tui view worker <attempt> --plan <id>`.
+/// `cpd tui view worker <attempt> --plan <id>`.
 #[derive(clap::Args, Debug)]
 pub struct Args {
     /// The Attempt whose Worker to show
@@ -69,7 +69,7 @@ pub(super) fn run(args: Args) -> Result<Output, CpdError> {
     let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result.map(|()| Output::Owned).map_err(|e| {
-        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd2 tui view worker failed: {e}."))
+        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view worker failed: {e}."))
             .with("command", "tui view worker")
     })
 }

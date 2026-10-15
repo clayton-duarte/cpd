@@ -1,4 +1,4 @@
-//! `cpd2 watch --ensure` (commands.md §12, contract §6.4, §6.6): starts the
+//! `cpd watch --ensure` (commands.md §12, contract §6.4, §6.6): starts the
 //! engine in `cpd-work:watch` when `locks/watch.lock` is free, and returns
 //! once its process has taken the lock.
 
@@ -62,7 +62,7 @@ fn wait_started(tmux: &Tmux, store: &mut Store, pane: &PaneId, since: i64) -> Re
     let failed = |why: String| {
         CpdError::new(ErrorCode::WatchStartFailed, format!("The engine did not start in pane {pane}: {why}"))
             .with("pane", pane.as_str())
-            .with("next", "cpd2 watch --ensure")
+            .with("next", "cpd watch --ensure")
     };
     loop {
         let found = tmux.list_panes()?.into_iter().find(|p| p.pane == *pane);

@@ -145,7 +145,7 @@ fn follow(args: FollowArgs) -> Result<Output, CpdError> {
         if user_version > VERSION {
             return Err(CpdError::new(
                 ErrorCode::StoreTooNew,
-                format!("The database has schema version {user_version}, newer than this cpd2's {VERSION}: upgrade cpd2."),
+                format!("The database has schema version {user_version}, newer than this cpd's {VERSION}: upgrade cpd."),
             )
             .with("version", user_version)
             .with("supported", VERSION));

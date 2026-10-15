@@ -1,4 +1,4 @@
-//! `cpd2 tui [--attach] [--respawn]` (commands.md §13.1; contract §6.1, §6.2,
+//! `cpd tui [--attach] [--respawn]` (commands.md §13.1; contract §6.1, §6.2,
 //! §6.4 with amendment 9): builds the cockpit's `main` window when it is
 //! missing, respawns a dead pane of its layout, sets §6.1's server options
 //! again, with `--respawn` restarts every live view, starts the engine, and
@@ -86,7 +86,7 @@ pub(super) fn run(attach: bool, respawn: bool) -> Result<Output, CpdError> {
     Ok(Output::success(fields))
 }
 
-/// What a view's pane runs: `cpd2 tui view <view>` (see [`home_spawn`]).
+/// What a view's pane runs: `cpd tui view <view>` (see [`home_spawn`]).
 fn view_spawn(home: &CpdHome, view: View) -> Spawn {
     home_spawn(home, [PROGRAM, "tui", "view", view.as_str()].map(str::to_owned).into())
 }
@@ -203,21 +203,21 @@ fn open_lead(lead: &SessionId) -> Result<(), CpdError> {
     match command(&["session", "open", lead.as_str()]) {
         Ok(_) => Ok(()),
         Err(e) if e.exit() == Exit::Refused => {
-            eprintln!("cpd2 tui: Lead {lead} stays out of the chat slot: {}", e.message());
+            eprintln!("cpd tui: Lead {lead} stays out of the chat slot: {}", e.message());
             Ok(())
         }
         Err(e) => Err(e),
     }
 }
 
-/// Runs another area's command (`cpd2 <words>`) in this process, through the
+/// Runs another area's command (`cpd <words>`) in this process, through the
 /// command tree, and returns its success fields: its arguments and its effects
 /// stay that area's own, as with a subprocess.
 fn command(words: &[&str]) -> Result<Map<String, Value>, CpdError> {
     let argv = std::iter::once(PROGRAM).chain(words.iter().copied()).map(OsString::from);
     match crate::cli::run(argv)? {
         Output::Success(fields) => Ok(fields),
-        Output::Owned => unreachable!("cpd2 {words:?} prints one JSON value"),
+        Output::Owned => unreachable!("cpd {words:?} prints one JSON value"),
     }
 }
 

@@ -24,7 +24,7 @@ const REPOSITORY_VARIABLES: [&str; 8] = [
     "GIT_PREFIX",
 ];
 
-/// A Context store's git repository, driven as `cpd2 <machine>`.
+/// A Context store's git repository, driven as `cpd <machine>`.
 pub struct Git<'a> {
     dir: &'a Path,
     machine: &'a MachineName,
@@ -88,9 +88,9 @@ impl<'a> Git<'a> {
             .arg("-C")
             .arg(self.dir)
             .arg("-c")
-            .arg(format!("user.name=cpd2 {machine}"))
+            .arg(format!("user.name=cpd {machine}"))
             .arg("-c")
-            .arg(format!("user.email=cpd2@{machine}.invalid"))
+            .arg(format!("user.email=cpd@{machine}.invalid"))
             .arg("-c")
             .arg("commit.gpgsign=false")
             .args(args)

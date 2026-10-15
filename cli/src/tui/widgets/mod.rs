@@ -6,7 +6,7 @@
 //! it is no Event. It makes no write of its own. Its one key is `q`.
 //!
 //! - [`column`]: the drawing of the machine, the PRs, git and Jira;
-//! - [`legend`]: the key legend, `cpd2 tui view legend`, which the tree's `?` and
+//! - [`legend`]: the key legend, `cpd tui view legend`, which the tree's `?` and
 //!   the StatusBar's button open in a tmux popup (the columns are narrower than the legend);
 //! - the colours and icons are [`crate::tui::palette`]'s.
 
@@ -63,7 +63,7 @@ fn show(
     mut machine: Machine,
 ) -> Result<(), CpdError> {
     let terminal_failed = |e: std::io::Error| {
-        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd2 tui view widgets failed: {e}."))
+        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view widgets failed: {e}."))
             .with("command", "tui view widgets")
     };
     let mut read_at = Instant::now();

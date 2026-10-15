@@ -258,7 +258,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cpd2"
+name = "cpd"
 version = "0.0.0"
 dependencies = [
  "clap",

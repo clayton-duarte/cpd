@@ -52,7 +52,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
                 .with("plan", id.as_str()));
         }
         let text = format!(
-            "Plan {id} opened PR #{}: {}. The engine polls it; to follow it by hand: cpd2 pr poll --plan {id}",
+            "Plan {id} opened PR #{}: {}. The engine polls it; to follow it by hand: cpd pr poll --plan {id}",
             found.number, found.url
         );
         let data = json!({"from": "dispatch", "to": "pr", "pr": {"number": found.number, "url": found.url}});
@@ -93,7 +93,7 @@ fn require_jobs_done(env: &mut Env, plan: &PlanRow) -> Result<Vec<jobs::Job>, Cp
     if !open.is_empty() {
         return Err(CpdError::new(
             ErrorCode::JobsNotDone,
-            format!("{} Jobs of Plan {} are not Merged or cancelled yet: see cpd2 job list.", open.len(), plan.id),
+            format!("{} Jobs of Plan {} are not Merged or cancelled yet: see cpd job list.", open.len(), plan.id),
         )
         .with("plan", plan.id.as_str())
         .with("jobs", open));

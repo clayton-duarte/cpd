@@ -112,7 +112,7 @@ fn watch_event(store: &mut Store, kind: Kind, text: String) -> Result<i64, CpdEr
     store.write(SOURCE, |tx| events::append(tx, NewEvent::new(kind, text, json!({"pid": std::process::id()}))))
 }
 
-/// `cpd2 watch`: the engine in the foreground.
+/// `cpd watch`: the engine in the foreground.
 pub(super) fn run() -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
@@ -121,7 +121,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
     catch_signals()?;
     let pid = std::process::id();
-    watch_event(&mut store, Kind::WatchStarted, format!("The engine started (pid {pid}). See: cpd2 doctor"))?;
+    watch_event(&mut store, Kind::WatchStarted, format!("The engine started (pid {pid}). See: cpd doctor"))?;
     log.line(&format!("started (pid {pid}), a tick every {}s", config.watch.tick_seconds));
 
     let tmux = Tmux::new(config.tmux.socket.as_str());
@@ -149,7 +149,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
     }
 
     engine.log.line("stopping on a signal");
-    if let Err(e) = watch_event(&mut engine.store, Kind::WatchStopped, format!("The engine stopped (pid {pid}). Start it: cpd2 watch --ensure")) {
+    if let Err(e) = watch_event(&mut engine.store, Kind::WatchStopped, format!("The engine stopped (pid {pid}). Start it: cpd watch --ensure")) {
         engine.log.line(&format!("cannot append watch-stopped: {} ({})", e.message(), e.code().as_str()));
     }
     Ok(Output::success(json!({"stopped": true})))

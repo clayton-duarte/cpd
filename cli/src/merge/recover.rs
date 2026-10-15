@@ -111,7 +111,7 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
             .with("git", e.to_json());
             if !store.read(|conn| ledger::has_error(conn, attempt, ErrorCode::MergeCheckFailed))? {
                 let text = format!(
-                    "The driver of Attempt {} died during its merge, and cpd cannot tell whether the merge happened: {} It checks again later; nothing changed. See: cpd2 attempt show {} --plan {}",
+                    "The driver of Attempt {} died during its merge, and cpd cannot tell whether the merge happened: {} It checks again later; nothing changed. See: cpd attempt show {} --plan {}",
                     attempt.id,
                     e.message(),
                     attempt.id,
@@ -184,7 +184,7 @@ pub(super) fn stale_error(lead: &Path, stderr: &str, fix: String) -> CpdError {
 pub(super) fn stale_text(attempt: &Attempt, error: &CpdError) -> String {
     let fix = error.details().get("fix").and_then(|v| v.as_str()).unwrap_or_default();
     format!(
-        "Attempt {} is merged, but the Lead worktree {} still holds the previous tree. {fix}. Then: cpd2 plan show --plan {}",
+        "Attempt {} is merged, but the Lead worktree {} still holds the previous tree. {fix}. Then: cpd plan show --plan {}",
         attempt.id,
         attempt.lead_worktree.display(),
         attempt.plan

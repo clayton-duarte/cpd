@@ -115,7 +115,7 @@ impl<'a> Contexts<'a> {
             )
             .with("context", id.as_str())
             .with("path", dir.display().to_string())
-            .with("next", format!("cpd2 context sync --context {id}")));
+            .with("next", format!("cpd context sync --context {id}")));
         }
         repo::create(self.home, &self.machine, id, title, jira, &now())?;
         let manifest = repo::read_manifest(self.home, id)?;
@@ -246,7 +246,7 @@ impl<'a> Contexts<'a> {
                     tx,
                     NewEvent::new(
                         Kind::ContextCreated,
-                        format!("Context {id} \"{}\" exists. Next: cpd2 context show --context {id}", manifest.title),
+                        format!("Context {id} \"{}\" exists. Next: cpd context show --context {id}", manifest.title),
                         json!({"title": manifest.title, "jira": manifest.jira, "created_on": manifest.created_on}),
                     )
                     .context(id.clone()),
@@ -324,7 +324,7 @@ fn record_event(context: &ContextId, record: &Record, seq: i64, verb: &str) -> N
     NewEvent::new(
         Kind::ContextRecord,
         format!(
-            "{} {} {verb} in Context {context}: {snippet}. Next: cpd2 context show --context {context} --since {}",
+            "{} {} {verb} in Context {context}: {snippet}. Next: cpd context show --context {context} --since {}",
             record.kind().as_str(),
             record.id,
             seq - 1

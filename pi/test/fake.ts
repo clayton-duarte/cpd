@@ -6,12 +6,12 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { adapter, type Options } from "../lib/adapter.ts";
 import type { Ctx, Message, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
 
-/** A fake `cpd2` on PATH and a fake pi, so the adapter is tested through its real boundaries (child processes, pi's API). */
+/** A fake `cpd` on PATH and a fake pi, so the adapter is tested through its real boundaries (child processes, pi's API). */
 
-const FAKE_CPD2 = `#!/usr/bin/env node
+const FAKE_CPD = `#!/usr/bin/env node
 const fs = require("fs");
 const path = require("path");
-const dir = process.env.FAKE_CPD2_DIR;
+const dir = process.env.FAKE_CPD_DIR;
 const argv = process.argv.slice(2);
 const log = (o) => fs.appendFileSync(path.join(dir, "calls.jsonl"), JSON.stringify({ ...o, t: Date.now() }) + "\\n");
 const read = (f) => { try { return fs.readFileSync(path.join(dir, f), "utf8"); } catch { return undefined; } };
@@ -73,11 +73,11 @@ export class Fixture {
     mkdirSync(join(this.dir, "bin"));
     mkdirSync(join(this.dir, "resp"));
     mkdirSync(this.cpdHome);
-    writeFileSync(join(this.dir, "bin", "cpd2"), FAKE_CPD2);
-    chmodSync(join(this.dir, "bin", "cpd2"), 0o755);
-    for (const k of ["PATH", "FAKE_CPD2_DIR", "CPD_SESSION", "CPD_PLAN", "CPD_HOME"]) this.saved[k] = process.env[k];
+    writeFileSync(join(this.dir, "bin", "cpd"), FAKE_CPD);
+    chmodSync(join(this.dir, "bin", "cpd"), 0o755);
+    for (const k of ["PATH", "FAKE_CPD_DIR", "CPD_SESSION", "CPD_PLAN", "CPD_HOME"]) this.saved[k] = process.env[k];
     process.env.PATH = `${join(this.dir, "bin")}:${process.env.PATH}`;
-    process.env.FAKE_CPD2_DIR = this.dir;
+    process.env.FAKE_CPD_DIR = this.dir;
     process.env.CPD_SESSION = ID;
     process.env.CPD_HOME = this.cpdHome;
     delete process.env.CPD_PLAN;
@@ -85,7 +85,7 @@ export class Fixture {
     this.respond("session-show", sessionShow());
   }
 
-  /** What `cpd2 <a> <b>` prints (an object, or a raw string) and exits with. */
+  /** What `cpd <a> <b>` prints (an object, or a raw string) and exits with. */
   respond(key: string, stdout: unknown, extra: { exit?: number; delay?: number } = {}): void {
     writeFileSync(join(this.dir, "resp", `${key}.json`), JSON.stringify({ stdout, ...extra }));
   }

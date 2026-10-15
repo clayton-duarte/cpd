@@ -105,7 +105,7 @@ impl CpdHome {
         self.root.join("locks")
     }
 
-    /// `locks/watch.lock`: held by the one `cpd2 watch`.
+    /// `locks/watch.lock`: held by the one `cpd watch`.
     pub fn watch_lock(&self) -> PathBuf {
         self.locks_dir().join("watch.lock")
     }

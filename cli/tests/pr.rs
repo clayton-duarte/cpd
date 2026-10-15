@@ -9,12 +9,12 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use common::{Run, TestEnv};
-use cpd2::git::{Setup, create_attempt_worktree, create_lead_worktree};
-use cpd2::home::CpdHome;
-use cpd2::ids::{AttemptId, PlanId};
-use cpd2::merge::RepoLock;
-use cpd2::store::Store;
-use cpd2::tui::read::{self, Checks, PrState, ReviewDecision};
+use cpd::git::{Setup, create_attempt_worktree, create_lead_worktree};
+use cpd::home::CpdHome;
+use cpd::ids::{AttemptId, PlanId};
+use cpd::merge::RepoLock;
+use cpd::store::Store;
+use cpd::tui::read::{self, Checks, PrState, ReviewDecision};
 use rusqlite::params;
 use serde_json::{Value, json};
 
@@ -71,8 +71,8 @@ fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
     env.git(&repo, &["push", "-q", "origin", "main"]);
     let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("lead.log") };
     let lead = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap().path;
-    env.git(&lead, &["config", "user.name", "cpd2 test"]);
-    env.git(&lead, &["config", "user.email", "test@cpd2.invalid"]);
+    env.git(&lead, &["config", "user.name", "cpd test"]);
+    env.git(&lead, &["config", "user.email", "test@cpd.invalid"]);
     fs::write(lead.join("api.txt"), "api\n").unwrap();
     env.git(&lead, &["add", "-A"]);
     env.git(&lead, &["commit", "-q", "-m", "api"]);
@@ -144,7 +144,7 @@ impl Fx {
     }
 
     fn pr(&self, command: &str) -> Run {
-        self.env.cpd2(&["pr", command, "--plan", "pay"])
+        self.env.cpd(&["pr", command, "--plan", "pay"])
     }
 
     /// Sets what the fake `gh` answers: `list.json`, `create.out`, `view.json`, `inline.json`, `fail`.
@@ -267,7 +267,7 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
     let events = fx.events("plan-phase");
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].1, json!({"from": "dispatch", "to": "pr", "pr": {"number": 812, "url": URL}}));
-    assert!(events[0].0.contains("cpd2 pr poll --plan pay"), "{}", events[0].0);
+    assert!(events[0].0.contains("cpd pr poll --plan pay"), "{}", events[0].0);
 }
 
 #[test]
@@ -445,14 +445,14 @@ fn open_rerun_after_gh_failed_finishes() {
 #[test]
 fn open_without_a_selected_plan_is_plan_required() {
     let fx = fx("dispatch");
-    let run = fx.env.cpd2(&["pr", "open"]);
+    let run = fx.env.cpd(&["pr", "open"]);
     assert_eq!(code(&run), ("plan_required".into(), 2));
 }
 
 #[test]
 fn open_an_unknown_plan_is_plan_not_found() {
     let fx = fx("dispatch");
-    let run = fx.env.cpd2(&["pr", "open", "--plan", "nope"]);
+    let run = fx.env.cpd(&["pr", "open", "--plan", "nope"]);
     assert_eq!(code(&run), ("plan_not_found".into(), 4));
 }
 
@@ -563,9 +563,9 @@ fn open_does_not_need_pi_when_no_driver_is_dead() {
     assert_eq!(status, "merging");
 }
 
-fn hold_driver_lock(fx: &Fx, attempt: &AttemptId) -> cpd2::merge::DriverLock {
+fn hold_driver_lock(fx: &Fx, attempt: &AttemptId) -> cpd::merge::DriverLock {
     let oth = PlanId::parse("oth").unwrap();
-    cpd2::merge::take_free_driver_lock(&fx.home, &oth, attempt).unwrap().expect("the driver lock is free")
+    cpd::merge::take_free_driver_lock(&fx.home, &oth, attempt).unwrap().expect("the driver lock is free")
 }
 
 // ------------------------------------------------------------------ pr poll
@@ -619,7 +619,7 @@ fn poll_reports_new_feedback_once() {
     let mut data = changes;
     data["state"] = json!("OPEN");
     assert_eq!(events[0].1, data);
-    assert!(events[0].0.contains("cpd2 job add"), "{}", events[0].0);
+    assert!(events[0].0.contains("cpd job add"), "{}", events[0].0);
 
     // A rerun reports nothing new, and appends nothing.
     let again = fx.pr("poll").ok();

@@ -8,13 +8,13 @@ mod common;
 use std::fs;
 use std::time::{Duration, Instant};
 
-use common::{CPD2, TestEnv};
-use cpd2::error::CpdError;
-use cpd2::home::CpdHome;
-use cpd2::store::Store;
-use cpd2::tui::logs::{self, Log};
-use cpd2::tui::palette::{self, Meaning};
-use cpd2::tui::read;
+use common::{CPD, TestEnv};
+use cpd::error::CpdError;
+use cpd::home::CpdHome;
+use cpd::store::Store;
+use cpd::tui::logs::{self, Log};
+use cpd::tui::palette::{self, Meaning};
+use cpd::tui::read;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -202,7 +202,7 @@ fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
 }
 
 fn start(env: &TestEnv, view: &[&str], width: u16, height: u16) -> String {
-    let mut args = vec!["new-session", "-d", "-s", "view", "-x", "", "-y", "", "-P", "-F", "#{pane_id}", CPD2, "tui", "view"];
+    let mut args = vec!["new-session", "-d", "-s", "view", "-x", "", "-y", "", "-P", "-F", "#{pane_id}", CPD, "tui", "view"];
     let (w, h) = (width.to_string(), height.to_string());
     args[5] = &w;
     args[7] = &h;
@@ -261,7 +261,7 @@ fn the_view_follows_live_scrolls_and_closes_with_q_or_esc() {
 #[test]
 fn the_logs_view_needs_a_terminal() {
     let env = env();
-    let run = env.cpd2(&["tui", "view", "logs"]);
+    let run = env.cpd(&["tui", "view", "logs"]);
     assert_eq!((run.exit, run.error()["code"].as_str()), (3, Some("not_a_terminal")), "{run:?}");
 }
 
@@ -269,11 +269,11 @@ fn the_logs_view_needs_a_terminal() {
 
 #[test]
 fn the_popup_is_sized_like_the_legends_and_at_most_80_percent_of_the_client() {
-    let (w, h) = cpd2::tui::widgets::legend::size();
+    let (w, h) = cpd::tui::widgets::legend::size();
     let big = logs::popup_args((1000, 1000));
     assert_eq!(
         big,
-        ["display-popup", "-E", "-T", " logs ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd2 tui view logs"]
+        ["display-popup", "-E", "-T", " logs ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd tui view logs"]
     );
     let small = logs::popup_args((80, 40));
     assert_eq!((small[5].as_str(), small[7].as_str()), ("64", "32"));
@@ -316,11 +316,11 @@ fn a_click_on_the_logs_button_opens_the_popup_and_the_others_do_not() {
     wait_until("the popup", || !popups(&env).is_empty());
     let popup = popups(&env).remove(0);
     let at = popup.iter().position(|a| a == "display-popup").unwrap();
-    // `tmux -L <socket> -f /dev/null display-popup -E -T ' logs ' -w <w> -h <h> cpd2 tui view logs`
-    let (w, h) = cpd2::tui::widgets::legend::size();
+    // `tmux -L <socket> -f /dev/null display-popup -E -T ' logs ' -w <w> -h <h> cpd tui view logs`
+    let (w, h) = cpd::tui::widgets::legend::size();
     assert_eq!(
         popup[at..],
-        ["display-popup", "-E", "-T", " logs ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd2 tui view logs"]
+        ["display-popup", "-E", "-T", " logs ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd tui view logs"]
     );
     assert!(popup[..at].starts_with(&["-L".to_owned(), env.tmux_socket().to_owned()]), "{popup:?}");
 

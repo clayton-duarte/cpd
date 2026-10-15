@@ -1,6 +1,6 @@
 //! E5, PR (contract §3.7, §7.6): for each Plan in `pr`, every
-//! `pr_poll_seconds`, `cpd2 pr poll --plan <id>` as a subprocess (a process
-//! boundary, cpd 1 §11 step 5). `cpd2` is resolved on `PATH`, as in every
+//! `pr_poll_seconds`, `cpd pr poll --plan <id>` as a subprocess (a process
+//! boundary, cpd 1 §11 step 5). `cpd` is resolved on `PATH`, as in every
 //! pane cpd starts (`session::PROGRAM`).
 
 use std::process::{Command, Stdio};
@@ -49,7 +49,7 @@ pub(super) fn run(engine: &mut Engine) {
     }
 }
 
-/// Runs `cpd2 pr poll --plan <plan>` and returns its success value, or the
+/// Runs `cpd pr poll --plan <plan>` and returns its success value, or the
 /// failure it printed.
 fn poll(engine: &Engine, plan: &PlanId) -> Result<Value, Failure> {
     let argv = [PROGRAM, "pr", "poll", "--plan", plan.as_str()];

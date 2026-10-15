@@ -128,7 +128,7 @@ test("session_shutdown waits at most shutdownWaitMs for `stopped`", async (t) =>
   assert.equal(stateCalls(f).at(-1), "stopped");
 });
 
-test("a /name typed in pi reaches cpd2; a name cpd2 set does not echo back", async (t) => {
+test("a /name typed in pi reaches cpd; a name cpd set does not echo back", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   await started(f);

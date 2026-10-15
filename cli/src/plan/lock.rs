@@ -1,6 +1,6 @@
 //! `plan lock` (commands.md §4.8, contract §3.1, §7.2): `plan → dispatch`.
 //! Creates the Lead worktree, queues every draft Job with its Locked-Job
-//! fingerprint, and starts the engine with `cpd2 watch --ensure`.
+//! fingerprint, and starts the engine with `cpd watch --ensure`.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -54,12 +54,12 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     let Some(review) = review else {
         return Err(CpdError::new(
             ErrorCode::PlanNotApproved,
-            format!("The latest Plan review of {id} is not approved for the current draft Jobs: run cpd2 plan review."),
+            format!("The latest Plan review of {id} is not approved for the current draft Jobs: run cpd plan review."),
         )
         .with("plan", id.as_str())
         .with("fingerprint", fingerprint)
         .with("review", latest)
-        .with("next", format!("cpd2 plan review --plan {id}")));
+        .with("next", format!("cpd plan review --plan {id}")));
     };
     if let Some(cycle) = jobs::cycle(&jobs) {
         return Err(CpdError::new(ErrorCode::DependencyCycle, format!("The draft Jobs of {id} depend on each other in a cycle: {}.", cycle.join(" → ")))
@@ -98,7 +98,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
                 [jobs::locked_fingerprint(job).as_str(), id.as_str(), job.key.as_str()],
             )?;
         }
-        let text = format!("Plan {id} is locked: {} Jobs queued for the engine. Next: cpd2 plan show --plan {id}", keys.len());
+        let text = format!("Plan {id} is locked: {} Jobs queued for the engine. Next: cpd plan show --plan {id}", keys.len());
         append(tx, NewEvent::new(Kind::PlanPhase, text, json!({"from": "plan", "to": "dispatch", "jobs": keys})).plan(id.clone()))?;
         Ok(())
     });
@@ -121,7 +121,7 @@ fn cas_lost(id: &PlanId) -> CpdError {
         .with("plan", id.as_str())
 }
 
-/// `cpd2 watch --ensure` (commands.md §12), run as a subprocess with `cpd2`
+/// `cpd watch --ensure` (commands.md §12), run as a subprocess with `cpd`
 /// resolved on `PATH` as the panes do (Escalation `rs-plan-a1-q2`): the
 /// engine's start belongs to the watch area. Returns its fields without `ok`.
 /// If it fails, the Plan stays locked and the result is `watch_start_failed`
@@ -137,7 +137,7 @@ fn ensure_watch(env: &Env, plan: &PlanRow) -> Result<Value, CpdError> {
         .with("lead_worktree", plan.lead_worktree.clone())
         .with("argv", json!(argv))
         .with("error", error)
-        .with("next", "cpd2 watch --ensure")
+        .with("next", "cpd watch --ensure")
     };
     let out = Command::new(argv[0])
         .args(&argv[1..])

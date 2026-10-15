@@ -13,7 +13,7 @@ use crate::{ask, attempt, config, context, doctor, events, job, plan, pr, sessio
 
 /// cpd 2: every command prints exactly one JSON value on stdout.
 #[derive(Parser, Debug)]
-#[command(name = "cpd2", version, color = clap::ColorChoice::Never)]
+#[command(name = "cpd", version, color = clap::ColorChoice::Never)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -123,7 +123,7 @@ mod tests {
     use crate::output::Output;
 
     fn argv(words: &[&str]) -> Vec<OsString> {
-        std::iter::once("cpd2").chain(words.iter().copied()).map(OsString::from).collect()
+        std::iter::once("cpd").chain(words.iter().copied()).map(OsString::from).collect()
     }
 
     fn fails(words: &[&str]) -> CpdError {

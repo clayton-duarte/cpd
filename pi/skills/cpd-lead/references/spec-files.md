@@ -47,7 +47,7 @@ The Worker's submit runs only the repo's quick check (its `pre-commit` hook). Th
 
 ## Tiers
 
-Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku); effort 0–5. An invalid Tier is refused when you add the Job (`tier_invalid`, with the valid efforts in `error.details.efforts`). `cpd2 tiers` prints the efforts each model accepts.
+Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku); effort 0–5. An invalid Tier is refused when you add the Job (`tier_invalid`, with the valid efforts in `error.details.efforts`). `cpd tiers` prints the efforts each model accepts.
 
 | Work | Tier | Why |
 |---|---|---|

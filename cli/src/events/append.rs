@@ -12,7 +12,7 @@ use crate::store::WriteTxn;
 /// An Event to append: its kind, what it is about, its `text` and its `data`.
 ///
 /// ```text
-/// events::append(tx, NewEvent::new(Kind::JobRetried, "Job api queued again. Next: cpd2 job show api", json!({"tier": "S2"}))
+/// events::append(tx, NewEvent::new(Kind::JobRetried, "Job api queued again. Next: cpd job show api", json!({"tier": "S2"}))
 ///     .plan(plan).job(job))?;
 /// ```
 #[derive(Clone, Debug)]
@@ -28,7 +28,7 @@ pub struct NewEvent {
 }
 
 impl NewEvent {
-    /// `text` is written for the Lead and ends with the `cpd2` command(s) it
+    /// `text` is written for the Lead and ends with the `cpd` command(s) it
     /// may run (§5.1); for a silent kind it is a one-line description.
     /// `data` is the JSON object of §5.2's `data` column for `kind`.
     pub fn new(kind: Kind, text: impl Into<String>, data: Value) -> NewEvent {

@@ -27,7 +27,7 @@ Your worktree is `{{ worktree }}`. Your current directory is that worktree.
 - Never ask the User anything. You have no conversation with them.
 - If continuing would require guessing, ask the Lead and wait for the answer. The command blocks until the Lead answers:
 
-      cpd2 ask {{ attempt }} "<your question>"
+      cpd ask {{ attempt }} "<your question>"
 
   Ask one real blocker at a time. Do not ask what this Spec or the code already answers.
 - Do not stop until you have submitted.
@@ -109,7 +109,7 @@ Answer:
 
 When the Acceptance items hold and your work is committed, run exactly:
 
-    cpd2 attempt submit {{ attempt }}
+    cpd attempt submit {{ attempt }}
 
 If it succeeds, stop at once and make no more changes. If it refuses, the error code says what to do:
 
@@ -121,4 +121,4 @@ If it succeeds, stop at once and make no more changes. If it refuses, the error 
 - `check_error`: the quick check could not run. Ask the Lead.
 - `attempt_not_running`: the Attempt was stopped. Stop.
 
-Do not stop until `cpd2 attempt submit` has succeeded.
+Do not stop until `cpd attempt submit` has succeeded.

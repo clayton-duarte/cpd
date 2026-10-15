@@ -88,7 +88,7 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
                 .with("attempt", id.to_string()));
         }
         let text = format!(
-            "Attempt {id} of Job {} was submitted and passed the quick check; the driver merges it. Next: cpd2 attempt show {id} --plan {plan}",
+            "Attempt {id} of Job {} was submitted and passed the quick check; the driver merges it. Next: cpd attempt show {id} --plan {plan}",
             now.job
         );
         let job = crate::ids::JobKey::parse(&now.job).map_err(|_| bad_row(format!("job key {:?}", now.job)))?;
@@ -142,7 +142,7 @@ fn require_inside(attempt: &Attempt, worktree: &Path) -> Result<PathBuf, CpdErro
     let wrong = |why: String| {
         CpdError::new(
             ErrorCode::WrongWorktree,
-            format!("{why}: run cpd2 attempt submit from the Attempt's worktree {}.", worktree.display()),
+            format!("{why}: run cpd attempt submit from the Attempt's worktree {}.", worktree.display()),
         )
         .with("attempt", attempt.id.as_str())
         .with("worktree", attempt.worktree.as_str())
@@ -184,7 +184,7 @@ fn quick_check(env: &Env, plan: &PlanId, id: &AttemptId, root: &Path) -> Result<
         .with("exit", *exit)),
         HookOutcome::Error(why) => Err(refuse(
             ErrorCode::CheckError,
-            format!("The quick check could not be judged: {why}. Ask the Lead: cpd2 ask {id} \"<question>\"."),
+            format!("The quick check could not be judged: {why}. Ask the Lead: cpd ask {id} \"<question>\"."),
         )
         .with("reason", why.to_string())),
     }

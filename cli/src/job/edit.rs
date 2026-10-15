@@ -58,7 +58,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
             Decision::Already(job) => Ok((job, Vec::new(), true)),
             Decision::Update { before, after, fields } => {
                 update(tx, &plan, &before, &after)?;
-                let text = format!("Job {key} of Plan {plan} edited ({}). Next: cpd2 plan render --plan {plan}", fields.join(", "));
+                let text = format!("Job {key} of Plan {plan} edited ({}). Next: cpd plan render --plan {plan}", fields.join(", "));
                 append(tx, NewEvent::new(Kind::JobEdited, text, json!({"fields": fields})).plan(plan.clone()).job(key.clone()))?;
                 Ok((after, fields, false))
             }

@@ -28,7 +28,7 @@ pub(crate) use state::pane_gone;
 
 /// The program in every pane cpd starts, resolved on the tmux server's `PATH`
 /// (Escalation `rs-session-a1-q2`): a pane must outlive any one build.
-pub(crate) const PROGRAM: &str = "cpd2";
+pub(crate) const PROGRAM: &str = "cpd";
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -189,10 +189,10 @@ fn not_a_lead(id: &SessionId, role: Role) -> CpdError {
 fn no_cockpit(cockpit: &str) -> CpdError {
     CpdError::new(
         ErrorCode::NoCockpit,
-        format!("The cockpit (tmux session {cockpit:?} with its main window and chat slot) does not exist: run cpd2 tui."),
+        format!("The cockpit (tmux session {cockpit:?} with its main window and chat slot) does not exist: run cpd tui."),
     )
     .with("cockpit_session", cockpit)
-    .with("next", "cpd2 tui")
+    .with("next", "cpd tui")
 }
 
 /// A row the database holds in a shape the binary does not accept: the

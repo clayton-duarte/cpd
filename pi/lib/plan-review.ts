@@ -1,4 +1,4 @@
-import { isObject } from "./cpd2.ts";
+import { isObject } from "./cpd.ts";
 
 /** The adapter's own session entry (`pi.appendEntry`): it survives `/reload` and resume (commands.md §15.5, "Opening" step 4). */
 export const ENTRY_TYPE = "cpd-plan-review";
@@ -38,7 +38,7 @@ export function decisionText(review: string, approved: boolean, feedback: string
   const lines = [`Plan review ${review} was ${approved ? "APPROVED" : "REJECTED"}.`];
   if (feedback !== undefined && feedback !== "") lines.push("Feedback from the reviewer:", feedback);
   if (!current) lines.push("The Jobs changed since that review. Call cpd_plan_review again for a new review.");
-  else if (approved) lines.push("Next: cpd2 plan lock");
+  else if (approved) lines.push("Next: cpd plan lock");
   else lines.push("Revise the plan (job edit, job add, job cancel), then call cpd_plan_review again.");
   if (elsewhere) lines.push(ELSEWHERE_NOTE);
   return lines.join("\n");

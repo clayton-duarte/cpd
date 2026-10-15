@@ -1,4 +1,4 @@
-//! cpd 2: the Rust rewrite of cpd (binary `cpd2`).
+//! cpd 2: the Rust rewrite of cpd (binary `cpd`).
 //!
 //! The normative documents are `docs/v2/contract.md`, `docs/v2/commands.md`
 //! and `docs/v2/CONTEXT.md`; `docs/v2/implementing.md` explains this crate's

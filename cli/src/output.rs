@@ -66,7 +66,7 @@ pub fn emit(result: Result<Output, CpdError>, stdout: &mut impl Write) -> ExitCo
     };
     if let Some(line) = line {
         if let Err(io) = stdout.write_all(line.as_bytes()).and_then(|()| stdout.flush()) {
-            eprintln!("cpd2: cannot write the result to stdout: {io}");
+            eprintln!("cpd: cannot write the result to stdout: {io}");
             return ExitCode::from(exit.code().max(Exit::Failure.code()));
         }
     }

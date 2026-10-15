@@ -35,7 +35,7 @@ pub(super) fn retry(args: RetryArgs) -> Result<Output, CpdError> {
                     "UPDATE jobs SET status = 'queued', retry_tier = ?3, failed_cause = NULL WHERE plan = ?1 AND key = ?2",
                     [plan.as_str(), job.key.as_str(), tier.as_str()],
                 )?;
-                let text = format!("Job {key} of Plan {plan} is queued again at Tier {tier}. Next: cpd2 job show {key} --plan {plan}");
+                let text = format!("Job {key} of Plan {plan} is queued again at Tier {tier}. Next: cpd job show {key} --plan {plan}");
                 append(tx, NewEvent::new(Kind::JobRetried, text, json!({"tier": tier})).plan(plan.clone()).job(key.clone()))?;
                 Ok(false)
             }

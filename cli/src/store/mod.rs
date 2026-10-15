@@ -221,7 +221,7 @@ impl Store {
         if let Some(mismatch) = &self.schema {
             return Err(CpdError::new(
                 ErrorCode::StoreTampered,
-                "The database schema does not match this cpd2's: a table or trigger was changed outside cpd.",
+                "The database schema does not match this cpd's: a table or trigger was changed outside cpd.",
             )
             .with("path", self.path.display().to_string())
             .with("expected", mismatch.expected.clone())
@@ -265,7 +265,7 @@ impl Store {
 }
 
 /// Takes `locks/store.lock` (§1.4), creating `$CPD_HOME` and `locks/` on first
-/// use, and waits for it without a limit: a holder is another cpd2 process
+/// use, and waits for it without a limit: a holder is another cpd process
 /// doing the open's bounded setup. Dropping the result releases it.
 fn setup_lock(home: &CpdHome) -> Result<Flock<File>, CpdError> {
     let failed = |what: &str, path: &Path, e: std::io::Error| {
@@ -295,7 +295,7 @@ fn refuse_too_new(version: i64) -> Result<(), CpdError> {
     if version > VERSION {
         return Err(CpdError::new(
             ErrorCode::StoreTooNew,
-            format!("The database has schema version {version}, newer than this cpd2's {VERSION}: upgrade cpd2."),
+            format!("The database has schema version {version}, newer than this cpd's {VERSION}: upgrade cpd."),
         )
         .with("version", version)
         .with("supported", VERSION));
@@ -368,7 +368,7 @@ impl From<rusqlite::Error> for CpdError {
         match sqlite {
             Some(f) if f.code == SqliteCode::DatabaseBusy => CpdError::new(
                 ErrorCode::StoreBusy,
-                "Another cpd2 process held the database's write lock for longer than store_busy_ms.",
+                "Another cpd process held the database's write lock for longer than store_busy_ms.",
             )
             .with("sqlite_message", message),
             Some(f) if f.code == SqliteCode::ConstraintViolation && message == "job_locked" => {

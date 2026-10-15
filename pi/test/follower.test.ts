@@ -110,7 +110,7 @@ test("a follower that cannot be started is an error, once, and is retried", asyn
   f.load({
     spawn: ((_cmd: string, _args: string[], o: object) => {
       starts++;
-      return spawn("cpd2-does-not-exist", [], o);
+      return spawn("cpd-does-not-exist", [], o);
     }) as typeof spawn,
   });
   await f.pi.fire("session_start");

@@ -2,7 +2,7 @@
 //! chart of the Plan of the Lead in the chat slot, its tabs, and the view's refresh from Events.
 //!
 //! The store is prepared through the store API (`Store::write`), as the other areas' tests do, because Plans, Jobs
-//! and Attempts belong to their areas; the view runs as `cpd2 tui view plan` in a pane, and its screen is read with
+//! and Attempts belong to their areas; the view runs as `cpd tui view plan` in a pane, and its screen is read with
 //! `tmux capture-pane`.
 
 mod common;
@@ -10,20 +10,20 @@ mod common;
 use std::fs;
 use std::time::{Duration, Instant};
 
-use common::{CPD2, TestEnv};
-use cpd2::error::CpdError;
-use cpd2::home::CpdHome;
-use cpd2::store::Store;
+use common::{CPD, TestEnv};
+use cpd::error::CpdError;
+use cpd::home::CpdHome;
+use cpd::store::Store;
 use serde_json::json;
 
-/// The expected chart of the store `cpd2_jobs()` makes: the fixture of the cockpit of branch `cpd/cpd-ui`
-/// (`tui/tests/fixtures/cpd2-chart.txt`), kept beside the view.
-const CPD2_CHART: &str = include_str!("../src/tui/plan/fixtures/cpd2-chart.txt");
+/// The expected chart of the store `cpd_jobs()` makes: the fixture of the cockpit of branch `cpd/cpd-ui`
+/// (`tui/tests/fixtures/cpd-chart.txt`), kept beside the view.
+const CPD_CHART: &str = include_str!("../src/tui/plan/fixtures/cpd-chart.txt");
 
-/// The 27 Jobs of the cockpit's `cpd2-jobs.json` fixture (cpd 1's `workflow show` of cpd-rust's `cpd2` Workflow), as
+/// The 27 Jobs of the cockpit's `cpd-jobs.json` fixture (cpd 1's `workflow show` of cpd-rust's `cpd` Workflow), as
 /// cpd 2 stores them: `(key, status, tier, needs, Attempts)`. cpd 1's `closed` is `merged`, and its `in_review` is a
 /// `running` Job whose Attempt is `merging` (here `merging`).
-const CPD2_JOBS: &[(&str, &str, &str, &[&str], u32)] = &[
+const CPD_JOBS: &[(&str, &str, &str, &[&str], u32)] = &[
     ("contract-core", "merged", "O3", &[], 2),
     ("contract-commands", "merged", "O3", &["contract-core"], 1),
     ("review-in-tmux", "merged", "S3", &[], 1),
@@ -102,9 +102,9 @@ fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
     }
 }
 
-/// Starts `cpd2 tui view plan` alone in a 260 × 40 window of the private server; returns its pane.
+/// Starts `cpd tui view plan` alone in a 260 × 40 window of the private server; returns its pane.
 fn start_view(env: &TestEnv) -> String {
-    tmux_out(env, &["new-session", "-d", "-s", "view", "-x", "260", "-y", "40", "-P", "-F", "#{pane_id}", CPD2, "tui", "view", "plan"])
+    tmux_out(env, &["new-session", "-d", "-s", "view", "-x", "260", "-y", "40", "-P", "-F", "#{pane_id}", CPD, "tui", "view", "plan"])
         .trim()
         .to_owned()
 }
@@ -253,11 +253,11 @@ fn plan_with(phase: &str, pr: Option<(i64, &str)>, jobs: &[(&str, &str, &str, &[
 #[test]
 fn the_chart_of_a_store_equivalent_to_the_cockpits_fixture_matches_it() {
     let env = env();
-    sql(&env, &plan_with("dispatch", None, CPD2_JOBS));
+    sql(&env, &plan_with("dispatch", None, CPD_JOBS));
     let pane = start_view(&env);
-    let rows = CPD2_CHART.lines().count();
+    let rows = CPD_CHART.lines().count();
     let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 3 + rows && s[3].contains("contract-core"));
-    assert_eq!(chart_rows(&screen, rows), CPD2_CHART.trim_end(), "{}", screen.join("\n"));
+    assert_eq!(chart_rows(&screen, rows), CPD_CHART.trim_end(), "{}", screen.join("\n"));
 }
 
 #[test]
@@ -407,12 +407,12 @@ fn the_view_starts_no_subprocess_and_asks_gh_nothing() {
 /// The cockpit's centre on the private server: the plan view above the chat slot; returns `(plan pane, chat pane)`.
 fn centre(env: &TestEnv) -> (String, String) {
     env.fake(
-        "cpd2",
-        &format!("if [ \"$1\" = tui ] && [ \"$3\" = worker ]; then exec sleep 3600; fi\nexec '{CPD2}' \"$@\""),
+        "cpd",
+        &format!("if [ \"$1\" = tui ] && [ \"$3\" = worker ]; then exec sleep 3600; fi\nexec '{CPD}' \"$@\""),
     );
     let plan = tmux_out(
         env,
-        &["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "200", "-y", "40", "-P", "-F", "#{pane_id}", CPD2, "tui", "view", "plan"],
+        &["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "200", "-y", "40", "-P", "-F", "#{pane_id}", CPD, "tui", "view", "plan"],
     )
     .trim()
     .to_owned();
@@ -434,7 +434,7 @@ fn a_selected_pill_opens_its_worker_beside_the_chat_and_a_second_enter_closes_it
     tmux_out(&env, &["send-keys", "-t", &plan, "Right"]);
     tmux_out(&env, &["send-keys", "-t", &plan, "Enter"]);
     wait_until("the Worker pane", || workers().contains("worker a a-a1"));
-    let calls = env.calls("cpd2");
+    let calls = env.calls("cpd");
     assert!(calls.contains(&["tui", "view", "worker", "a-a1", "--plan", "ship"].map(str::to_owned).to_vec()), "{calls:?}");
     // beside the chat, without taking the focus: the plan view keeps it
     let layout = tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{pane_id} #{@cpd_view} #{pane_active} #{pane_top} #{pane_width}"]);
@@ -463,7 +463,7 @@ fn another_job_retargets_the_worker_pane_in_place() {
     let after = workers();
     assert_eq!(after.lines().filter(|l| l.contains(" worker ")).count(), 1, "{after}");
     assert!(after.contains(&format!("{pane} worker b b-a1")), "retargeted in place: {after}");
-    let calls = env.calls("cpd2");
+    let calls = env.calls("cpd");
     assert!(calls.contains(&["tui", "view", "worker", "b-a1", "--plan", "ship"].map(str::to_owned).to_vec()), "{calls:?}");
 }
 
@@ -482,6 +482,6 @@ fn q_does_not_quit_the_view() {
 #[test]
 fn without_a_terminal_it_is_refused_before_anything_is_read() {
     let env = env();
-    let run = env.cpd2(&["tui", "view", "plan"]);
+    let run = env.cpd(&["tui", "view", "plan"]);
     assert_eq!((run.exit, run.error()["code"].clone()), (3, json!("not_a_terminal")), "{run:?}");
 }

@@ -38,7 +38,7 @@ impl Log {
     /// One line, prefixed with the time. A line that cannot be written is
     /// dropped: the log must never stop the engine.
     pub(super) fn line(&mut self, message: &str) {
-        let line = format!("{} cpd2 watch: {message}\n", timestamp(OffsetDateTime::now_utc()));
+        let line = format!("{} cpd watch: {message}\n", timestamp(OffsetDateTime::now_utc()));
         let _ = std::io::stderr().write_all(line.as_bytes());
         let _ = self.file.write_all(line.as_bytes());
     }

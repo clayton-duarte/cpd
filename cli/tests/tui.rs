@@ -1,6 +1,6 @@
-//! The cockpit, `cpd2 tui` (commands.md §13.1; contract §6.1, §6.2 with
-//! commands.md §19 amendments 1, 2 and 9) and the routing of `cpd2 tui view`
-//! (§13.2), on a private tmux server with a fake `cpd2` on `PATH` whose
+//! The cockpit, `cpd tui` (commands.md §13.1; contract §6.1, §6.2 with
+//! commands.md §19 amendments 1, 2 and 9) and the routing of `cpd tui view`
+//! (§13.2), on a private tmux server with a fake `cpd` on `PATH` whose
 //! not-yet-implemented views just sleep.
 
 mod common;
@@ -8,16 +8,16 @@ mod common;
 use std::fs;
 use std::time::{Duration, Instant};
 
-use common::{CPD2, TestEnv};
-use cpd2::error::CpdError;
-use cpd2::home::CpdHome;
-use cpd2::host::tmux::SERVER_OPTIONS;
-use cpd2::store::Store;
+use common::{CPD, TestEnv};
+use cpd::error::CpdError;
+use cpd::home::CpdHome;
+use cpd::host::tmux::SERVER_OPTIONS;
+use cpd::store::Store;
 use serde_json::{Value, json};
 
 const PLACEHOLDER: &str = "No Lead here: pick a Plan in the session tree";
 
-/// An env with a config on its private tmux server, and a fake `cpd2` that
+/// An env with a config on its private tmux server, and a fake `cpd` that
 /// runs the real one except for the views whose Jobs have not landed, which
 /// sleep so that their panes stay alive.
 fn env() -> TestEnv {
@@ -32,8 +32,8 @@ fn env() -> TestEnv {
     )
     .unwrap();
     env.fake(
-        "cpd2",
-        &format!("if [ \"$1\" = tui ] && [ \"$2\" = view ] && [ \"$3\" != chat ]; then exec sleep 3600; fi\nexec '{CPD2}' \"$@\""),
+        "cpd",
+        &format!("if [ \"$1\" = tui ] && [ \"$2\" = view ] && [ \"$3\" != chat ]; then exec sleep 3600; fi\nexec '{CPD}' \"$@\""),
     );
     env
 }
@@ -97,7 +97,7 @@ fn windows(env: &TestEnv, session: &str) -> Vec<String> {
 }
 
 fn views_started(env: &TestEnv) -> Vec<Vec<String>> {
-    env.calls("cpd2").into_iter().filter(|c| c.first().map(String::as_str) == Some("tui")).collect()
+    env.calls("cpd").into_iter().filter(|c| c.first().map(String::as_str) == Some("tui")).collect()
 }
 
 /// Asserts `main` holds the layout of §13.1: the tree left, the plan view
@@ -124,7 +124,7 @@ fn assert_layout(panes: &[Pane]) {
 #[test]
 fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     let env = env();
-    let out = env.cpd2(&["tui"]).ok();
+    let out = env.cpd(&["tui"]).ok();
     let socket = env.tmux_socket();
     assert_eq!(out["built"], true, "{out}");
     assert_eq!(out["socket"], socket);
@@ -163,7 +163,7 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     assert!(binding.contains("send-keys -M"), "{binding}");
 
     // A second run builds nothing and starts nothing.
-    let again = env.cpd2(&["tui"]).ok();
+    let again = env.cpd(&["tui"]).ok();
     assert_eq!(again["built"], false, "{again}");
     assert_eq!(again["watch"], json!({"started": false, "already": true}));
     assert_eq!(main_panes(&env).iter().map(|p| &p.id).collect::<Vec<_>>(), panes.iter().map(|p| &p.id).collect::<Vec<_>>());
@@ -177,11 +177,11 @@ fn tui_builds_main_in_a_cockpit_that_has_only_a_park_window() {
     let env = env();
     // As plan new leaves it: the cockpit session with the first Lead's park window.
     tmux_out(&env, &["new-session", "-d", "-s", "cpd", "-n", "park-pay", "-x", "215", "-y", "62", "sleep", "3600"]);
-    let out = env.cpd2(&["tui"]).ok();
+    let out = env.cpd(&["tui"]).ok();
     assert_eq!(out["built"], true, "{out}");
     assert_layout(&main_panes(&env));
     assert_eq!(windows(&env, "cpd"), ["park-pay", "main"]);
-    assert_eq!(env.cpd2(&["tui"]).ok()["built"], false);
+    assert_eq!(env.cpd(&["tui"]).ok()["built"], false);
 }
 
 /// Kills a pane's program, as a crash would. Not while a tmux client is
@@ -228,15 +228,15 @@ fn assert_server_options(env: &TestEnv) {
 #[test]
 fn a_server_started_by_plan_new_has_every_server_option() {
     let env = env();
-    env.fake("cpd2", &format!("if [ \"$1 $2\" = 'session run' ]; then exec sleep 3600; fi\nexec '{CPD2}' \"$@\""));
+    env.fake("cpd", &format!("if [ \"$1 $2\" = 'session run' ]; then exec sleep 3600; fi\nexec '{CPD}' \"$@\""));
     fs::write(
         env.cpd_home().join("config.toml"),
         format!("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket()),
     )
     .unwrap();
-    env.cpd2(&["context", "new", "ctx", "--title", "Payments"]).ok();
+    env.cpd(&["context", "new", "ctx", "--title", "Payments"]).ok();
     let repo = env.git_repo("pay");
-    env.cpd2(&["plan", "new", "pay", "--context", "ctx", "--repo", repo.to_str().unwrap(), "--title", "Pay"]).ok();
+    env.cpd(&["plan", "new", "pay", "--context", "ctx", "--repo", repo.to_str().unwrap(), "--title", "Pay"]).ok();
     assert_eq!(windows(&env, "cpd"), ["park-pay"], "plan new started the server, not tui");
     assert_server_options(&env);
 }
@@ -244,7 +244,7 @@ fn a_server_started_by_plan_new_has_every_server_option() {
 #[test]
 fn a_killed_view_respawns_at_once_and_the_engine_stays_dead() {
     let env = env();
-    let out = env.cpd2(&["tui"]).ok();
+    let out = env.cpd(&["tui"]).ok();
     let engine = out["watch"]["pane"].as_str().unwrap();
     assert_server_options(&env);
     let before = main_panes(&env);
@@ -269,7 +269,7 @@ fn a_killed_view_respawns_at_once_and_the_engine_stays_dead() {
 #[test]
 fn tui_respawns_a_dead_pane_of_the_layout_in_place_and_sets_the_hook_again() {
     let env = env();
-    env.cpd2(&["tui"]).ok();
+    env.cpd(&["tui"]).ok();
     // A server from before the hook: a dead view stays dead until tui runs.
     tmux_out(&env, &["set-hook", "-gu", "pane-died"]);
     let before = main_panes(&env);
@@ -281,7 +281,7 @@ fn tui_respawns_a_dead_pane_of_the_layout_in_place_and_sets_the_hook_again() {
         view(&panes, "tree").dead && view(&panes, "statusbar").dead
     });
 
-    let out = env.cpd2(&["tui"]).ok();
+    let out = env.cpd(&["tui"]).ok();
     assert_eq!(out["built"], false, "{out}");
     assert!(out.get("respawned").is_none(), "{out}");
     let after = main_panes(&env);
@@ -296,7 +296,7 @@ fn tui_respawns_a_dead_pane_of_the_layout_in_place_and_sets_the_hook_again() {
 #[test]
 fn tui_adds_a_missing_statusbar_to_an_existing_main_then_resets_the_layout() {
     let env = env();
-    env.cpd2(&["tui"]).ok();
+    env.cpd(&["tui"]).ok();
     let full = main_panes(&env);
     tmux_out(&env, &["kill-pane", "-t", &view(&full, "statusbar").id]);
     // An old main, its sizes changed by the User.
@@ -305,7 +305,7 @@ fn tui_adds_a_missing_statusbar_to_an_existing_main_then_resets_the_layout() {
     assert_eq!(before.len(), 4, "{before:?}");
     assert_eq!(view(&before, "tree").width, 80, "{before:?}");
 
-    let out = env.cpd2(&["tui"]).ok();
+    let out = env.cpd(&["tui"]).ok();
     assert_eq!(out["built"], false, "{out}");
     let after = main_panes(&env);
     // The bar spans the window and the other panes have their sizes back.
@@ -317,14 +317,14 @@ fn tui_adds_a_missing_statusbar_to_an_existing_main_then_resets_the_layout() {
     }
 
     // Rerunning adds none.
-    env.cpd2(&["tui"]).ok();
+    env.cpd(&["tui"]).ok();
     assert_eq!(main_panes(&env).len(), 5);
 }
 
 #[test]
 fn tui_respawn_restarts_every_live_view_and_no_lead_or_engine() {
     let env = env();
-    let out = env.cpd2(&["tui", "--respawn"]).ok();
+    let out = env.cpd(&["tui", "--respawn"]).ok();
     assert_eq!((&out["built"], &out["respawned"]), (&json!(true), &json!([])), "a new cockpit restarts nothing: {out}");
     let engine = out["watch"]["pane"].as_str().unwrap();
     let (_, engine_pid) = pane_state(&env, engine);
@@ -341,7 +341,7 @@ fn tui_respawn_restarts_every_live_view_and_no_lead_or_engine() {
     let before = main_panes(&env);
     let lead_pid = before.iter().find(|p| p.id == lead).unwrap().pid;
 
-    let out = env.cpd2(&["tui", "--respawn"]).ok();
+    let out = env.cpd(&["tui", "--respawn"]).ok();
     assert_eq!(out["built"], false, "{out}");
     let mut respawned: Vec<String> = serde_json::from_value(out["respawned"].clone()).unwrap();
     respawned.sort();
@@ -399,7 +399,7 @@ fn tui_brings_the_last_chat_lead_into_a_new_slot() {
     let lead_pane = tmux_out(&env, &["display", "-p", "-t", "=cpd:park-pay", "#{pane_id}"]).trim().to_owned();
     tmux_out(&env, &["set", "-p", "-t", &lead_pane, "@cpd_session", "lead-b"]);
 
-    let out = env.cpd2(&["tui"]).ok();
+    let out = env.cpd(&["tui"]).ok();
     assert_eq!(out["built"], true, "{out}");
     let panes = main_panes(&env);
     assert_layout(&panes);
@@ -427,20 +427,20 @@ fn tui_brings_the_last_chat_lead_into_a_new_slot() {
 #[test]
 fn tui_attach_without_a_terminal_is_refused_before_anything_is_built() {
     let env = env();
-    let run = env.cpd2(&["tui", "--attach"]);
+    let run = env.cpd(&["tui", "--attach"]);
     assert_eq!(run.exit, 3, "{run:?}");
     assert_eq!(run.error()["code"], "not_a_terminal");
     assert!(!env.tmux(&["list-sessions"]).status.success(), "a tmux server was started");
-    assert!(env.calls("cpd2").is_empty());
+    assert!(env.calls("cpd").is_empty());
 }
 
 #[test]
 fn tui_view_routes_by_name() {
     let env = env();
-    let run = env.cpd2(&["tui", "view", "chat"]);
+    let run = env.cpd(&["tui", "view", "chat"]);
     assert_eq!((run.exit, run.error()["code"].clone()), (3, json!("not_a_terminal")), "{run:?}");
     for words in [&["tui", "view", "nope"][..], &["tui", "view"], &["tui", "--bogus"]] {
-        let run = env.cpd2(words);
+        let run = env.cpd(words);
         assert_eq!((run.exit, run.error()["code"].clone()), (2, json!("usage")), "{words:?}: {run:?}");
     }
 }

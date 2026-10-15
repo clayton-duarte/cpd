@@ -1,5 +1,5 @@
 //! The tree's actions (commands.md §13.2, §17): the view changes state only by
-//! running `cpd2` commands as subprocesses. `cpd2` is resolved on `PATH`, as in
+//! running `cpd` commands as subprocesses. `cpd` is resolved on `PATH`, as in
 //! every pane cpd starts ([`PROGRAM`]). Besides those, it lays out the cockpit
 //! as the reference does: a Session opened in the chat slot gets the focus
 //! (`select-pane`), and `?` opens the legend popup.
@@ -34,7 +34,7 @@ pub enum Action {
 pub const IN_CHAT_SLOT: &str = "switch to another session first";
 
 impl Action {
-    /// The arguments of `cpd2`.
+    /// The arguments of `cpd`.
     pub fn argv(&self) -> Vec<String> {
         let words = |w: &[&str]| w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         match self {

@@ -64,7 +64,7 @@ impl RepoLock {
             if Instant::now() >= deadline {
                 return Err(CpdError::new(
                     ErrorCode::LockTimeout,
-                    format!("Another cpd2 process held the per-repo lock for longer than {}s.", limit.as_secs()),
+                    format!("Another cpd process held the per-repo lock for longer than {}s.", limit.as_secs()),
                 )
                 .with("lock", path.display().to_string())
                 .with("repo", repo.display().to_string())

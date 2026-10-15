@@ -43,7 +43,7 @@ function words(line: string): string[] {
   return out;
 }
 
-/** commands.md's synopses (the `cpd2 …` lines of its code blocks): words → every flag any synopsis of those words has. */
+/** commands.md's synopses (the `cpd …` lines of its code blocks): words → every flag any synopsis of those words has. */
 function synopses(): Map<string, Set<string>> {
   const map = new Map<string, Set<string>>();
   let fence: string | null = null; // the info string of the open fenced block
@@ -52,8 +52,8 @@ function synopses(): Map<string, Set<string>> {
       fence = fence === null ? line.slice(3) : null;
       continue;
     }
-    if (fence !== "" || !line.startsWith("cpd2 ")) continue;
-    const key = words(line.slice("cpd2 ".length)).join(" ");
+    if (fence !== "" || !line.startsWith("cpd ")) continue;
+    const key = words(line.slice("cpd ".length)).join(" ");
     const flags = map.get(key) ?? new Set<string>();
     for (const f of line.matchAll(/--[a-z][a-z-]*/g)) flags.add(f[0]);
     map.set(key, flags);
@@ -61,15 +61,15 @@ function synopses(): Map<string, Set<string>> {
   return map;
 }
 
-/** Every `cpd2 …` command the text names: inline code spans and lines of fenced blocks. */
+/** Every `cpd …` command the text names: inline code spans and lines of fenced blocks (not the `cpd adapter:` message prefix). */
 function commandsNamed(text: string): string[] {
   const found: string[] = [];
   const fenced = text.replace(/```[^\n]*\n([\s\S]*?)```/g, (_all, body: string) => {
-    for (const line of body.split("\n")) if (line.startsWith("cpd2 ")) found.push(line.trim());
+    for (const line of body.split("\n")) if (line.startsWith("cpd ")) found.push(line.trim());
     return "";
   });
   for (const span of fenced.matchAll(/`([^`\n]+)`/g)) {
-    if (span[1]!.startsWith("cpd2 ")) found.push(span[1]!);
+    if (span[1]!.startsWith("cpd ") && span[1] !== "cpd adapter:") found.push(span[1]!);
   }
   return found;
 }
@@ -82,16 +82,16 @@ test("commands.md synopses are parsed (anchors)", () => {
   assert.ok(known.get("job add")!.has("--needs"));
 });
 
-test("every cpd2 command the skill names exists in commands.md, with the flags used", () => {
+test("every cpd command the skill names exists in commands.md, with the flags used", () => {
   const known = synopses();
   const named = skillFiles().flatMap((f) => commandsNamed(f.text).map((c) => ({ file: f.name, command: c })));
   assert.ok(named.length > 40, `expected many commands, found ${named.length}`);
   for (const { file, command } of named) {
-    const key = words(command.slice("cpd2 ".length)).join(" ");
+    const key = words(command.slice("cpd ".length)).join(" ");
     const flags = known.get(key);
-    assert.ok(flags, `${file}: "${command}": "cpd2 ${key}" is not a command of commands.md`);
+    assert.ok(flags, `${file}: "${command}": "cpd ${key}" is not a command of commands.md`);
     for (const f of command.matchAll(/--[a-z][a-z-]*/g)) {
-      assert.ok(flags.has(f[0]), `${file}: "${command}": ${f[0]} is not a flag of "cpd2 ${key}"`);
+      assert.ok(flags.has(f[0]), `${file}: "${command}": ${f[0]} is not a flag of "cpd ${key}"`);
     }
   }
 });
@@ -101,7 +101,6 @@ test("nothing of cpd 1 or of the removed Reviewer is left", () => {
     assert.doesNotMatch(text, /--wf\b|\bCPD_WF\b/, `${name}: --wf is cpd 1`);
     assert.doesNotMatch(text, /\bworkflows?\b/i, `${name}: the term Workflow is retired`);
     assert.doesNotMatch(text, /herdr|\bbd\b|queue message|reviewMode|review-tier|review-needed|review decide|outOfScope/i, `${name}: cpd 1 or removed Reviewer text`);
-    assert.doesNotMatch(text, /`cpd (workflow|lead|job|plan|attempt|review|pr|watch|session|answer|ask|doctor|tiers)\b/, `${name}: the binary is cpd2`);
   }
 });
 

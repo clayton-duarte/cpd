@@ -146,7 +146,7 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
 }
 
 pub(super) fn no_draft_jobs(id: &PlanId) -> CpdError {
-    CpdError::new(ErrorCode::NoDraftJobs, format!("Plan {id} has no draft Job: add Jobs with cpd2 job add first."))
+    CpdError::new(ErrorCode::NoDraftJobs, format!("Plan {id} has no draft Job: add Jobs with cpd job add first."))
         .with("plan", id.as_str())
 }
 
@@ -185,8 +185,8 @@ pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
         }
         let verdict = status.to_uppercase();
         let text = match status {
-            "approved" => format!("Plan review {} of Plan {id} was {verdict}. Next: cpd2 plan lock", review.id),
-            _ => format!("Plan review {} of Plan {id} was {verdict}. Revise the plan (job edit, job add, job cancel), then cpd2 plan review", review.id),
+            "approved" => format!("Plan review {} of Plan {id} was {verdict}. Next: cpd plan lock", review.id),
+            _ => format!("Plan review {} of Plan {id} was {verdict}. Revise the plan (job edit, job add, job cancel), then cpd plan review", review.id),
         };
         let data = json!({"review": review.id, "fingerprint": review.fingerprint, "status": status, "feedback": feedback});
         append(tx, NewEvent::new(Kind::PlanReview, text, data).plan(id.clone()))?;
@@ -202,10 +202,10 @@ fn review_decided(id: &PlanId, review: &Review) -> CpdError {
         .with("status", review.status.clone())
 }
 
-/// `plan decide`'s output: `next` is `cpd2 plan lock` only when the review is
+/// `plan decide`'s output: `next` is `cpd plan lock` only when the review is
 /// approved and current.
 fn decided(review: &Review, current: bool, already: bool) -> Output {
-    let next = if review.status == "approved" && current { json!("cpd2 plan lock") } else { Value::Null };
+    let next = if review.status == "approved" && current { json!("cpd plan lock") } else { Value::Null };
     let mut out = json!({
         "review": {"id": review.id, "status": review.status, "fingerprint": review.fingerprint,
                    "feedback": review.feedback, "decided_at": review.decided_at},

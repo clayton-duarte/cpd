@@ -1,5 +1,5 @@
 //! The legend: what every colour and icon of the cockpit means, ported from the
-//! spike's `legend.rs`. `cpd2 tui view legend` draws it; the widgets view's `?`
+//! spike's `legend.rs`. `cpd tui view legend` draws it; the widgets view's `?`
 //! opens it in a tmux popup, since the right column is narrower than the
 //! legend (commands.md §13.2). Everything it shows, icons and colours, comes
 //! from the palette and from the read model's own ordering of the counters, so
@@ -204,7 +204,7 @@ pub fn popup_args(client: (u16, u16)) -> Vec<String> {
     .to_vec()
 }
 
-/// `cpd2 tui view legend`: draws the legend until any key or click.
+/// `cpd tui view legend`: draws the legend until any key or click.
 pub(in crate::tui) fn run() -> Result<Output, CpdError> {
     if !on_a_terminal() {
         return Err(not_a_terminal("tui view legend"));
@@ -215,7 +215,7 @@ pub(in crate::tui) fn run() -> Result<Output, CpdError> {
     ratatui::restore();
     match result {
         Ok(()) => Ok(Output::Owned),
-        Err(e) => Err(CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd2 tui view legend failed: {e}."))
+        Err(e) => Err(CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view legend failed: {e}."))
             .with("command", "tui view legend")),
     }
 }
@@ -270,7 +270,7 @@ mod tests {
         let args = popup_args((215, 62));
         assert_eq!(
             args,
-            ["display-popup", "-E", "-T", " legend ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd2 tui view legend"]
+            ["display-popup", "-E", "-T", " legend ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd tui view legend"]
         );
         let small = popup_args((40, 20));
         assert_eq!((small[5].as_str(), small[7].as_str()), ("40", "20"));

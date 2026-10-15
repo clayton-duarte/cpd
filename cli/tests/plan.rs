@@ -1,6 +1,6 @@
 //! Plans (contract §2.3, §3.1; commands.md §4, §15.5 and §19 amendments 6
 //! and 8), run as the built binary against a temporary `$CPD_HOME`, temporary
-//! git repos and a private tmux server, with a fake `cpd2` on `PATH` for the
+//! git repos and a private tmux server, with a fake `cpd` on `PATH` for the
 //! panes (`session run`) and for `watch --ensure`.
 
 mod common;
@@ -9,11 +9,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{CPD2, Run, TestEnv};
-use cpd2::error::CpdError;
-use cpd2::home::CpdHome;
-use cpd2::ids::{PlanId, ReviewId};
-use cpd2::store::{Store, WriteTxn};
+use common::{CPD, Run, TestEnv};
+use cpd::error::CpdError;
+use cpd::home::CpdHome;
+use cpd::ids::{PlanId, ReviewId};
+use cpd::store::{Store, WriteTxn};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -37,22 +37,22 @@ fn write_config(env: &TestEnv) {
     fs::write(env.cpd_home().join("config.toml"), config).unwrap();
 }
 
-/// Where the fake `cpd2 session run <id>` writes its environment.
+/// Where the fake `cpd session run <id>` writes its environment.
 fn pane_env_file(env: &TestEnv, session: &str) -> PathBuf {
     env.root().join(format!("pane-{session}.env"))
 }
 
-/// A fake `cpd2` on `PATH`: `session run <id>` records its environment and
+/// A fake `cpd` on `PATH`: `session run <id>` records its environment and
 /// sleeps (the pane's program); `watch --ensure` runs `watch`; everything
 /// else is the built binary.
-fn fake_cpd2(env: &TestEnv, watch: &str) {
+fn fake_cpd(env: &TestEnv, watch: &str) {
     env.fake(
-        "cpd2",
+        "cpd",
         &format!(
             "case \"$1 $2\" in\n\
              \"session run\") env > '{root}/pane-'\"$3\".env; exec sleep 600;;\n\
              \"watch --ensure\") {watch};;\n\
-             esac\nexec '{CPD2}' \"$@\"",
+             esac\nexec '{CPD}' \"$@\"",
             root = env.root().display()
         ),
     );
@@ -62,16 +62,16 @@ const WATCH_OK: &str = "echo '{\"ok\": true, \"started\": true, \"pane\": \"%9\"
 const WATCH_FAILS: &str =
     "echo '{\"ok\": false, \"error\": {\"code\": \"watch_start_failed\", \"message\": \"No lock.\", \"details\": {}}}'; exit 1";
 
-/// The env with its config, a fake `cpd2`, Context `ctx` and the repo `pay`.
+/// The env with its config, a fake `cpd`, Context `ctx` and the repo `pay`.
 fn setup(env: &TestEnv) -> PathBuf {
     write_config(env);
-    fake_cpd2(env, WATCH_OK);
-    env.cpd2(&["context", "new", "ctx", "--title", "Payments"]).ok();
+    fake_cpd(env, WATCH_OK);
+    env.cpd(&["context", "new", "ctx", "--title", "Payments"]).ok();
     env.git_repo("pay")
 }
 
-fn cpd2_with(env: &TestEnv, vars: &[(&str, &str)], args: &[&str]) -> Run {
-    let mut cmd = env.command(CPD2);
+fn cpd_with(env: &TestEnv, vars: &[(&str, &str)], args: &[&str]) -> Run {
+    let mut cmd = env.command(CPD);
     for (k, v) in vars {
         cmd.env(k, v);
     }
@@ -95,15 +95,15 @@ fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
 }
 
 fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
-    env.cpd2(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
+    env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
 }
 
 fn new_plan(env: &TestEnv, id: &str, repo: &Path) -> Value {
-    env.cpd2(&["plan", "new", id, "--context", "ctx", "--repo", repo.to_str().unwrap(), "--title", &format!("Plan {id}")]).ok()
+    env.cpd(&["plan", "new", id, "--context", "ctx", "--repo", repo.to_str().unwrap(), "--title", &format!("Plan {id}")]).ok()
 }
 
 fn show(env: &TestEnv, plan: &str) -> Value {
-    env.cpd2(&["plan", "show", "--plan", plan]).ok()
+    env.cpd(&["plan", "show", "--plan", plan]).ok()
 }
 
 fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
@@ -170,7 +170,7 @@ fn edit_goal(env: &TestEnv, plan: &str, key: &str, goal: &str) {
 /// A Plan `id` in phase `plan` with draft Jobs `a` and `b` (needs `a`).
 fn planned(env: &TestEnv, repo: &Path, id: &str) {
     new_plan(env, id, repo);
-    env.cpd2(&["plan", "phase", "plan", "--plan", id]).ok();
+    env.cpd(&["plan", "phase", "plan", "--plan", id]).ok();
     add_job(env, id, "a", &[]);
     add_job(env, id, "b", &["a"]);
 }
@@ -185,14 +185,14 @@ fn sha256(text: &str) -> String {
 fn new_registers_the_plan_and_its_lead_and_starts_it_in_a_parked_window() {
     let env = TestEnv::new();
     let repo = setup(&env);
-    env.cpd2(&["context", "decide", "One engine per machine.", "--context", "ctx"]).ok();
+    env.cpd(&["context", "decide", "One engine per machine.", "--context", "ctx"]).ok();
     let brief = env.root().join("brief.md");
     fs::write(&brief, "Retry the failed payouts.\n").unwrap();
 
     let vars = [("PLANNOTATOR_PORT", "19432-19439"), ("PLANNOTATOR_REMOTE", "1")];
     let repo_arg = repo.to_str().unwrap();
     let args = ["plan", "new", "pay", "--context", "ctx", "--repo", repo_arg, "--title", "Retry payouts", "--jira", "PAY-1", "--brief-file", brief.to_str().unwrap()];
-    let out = cpd2_with(&env, &vars, &args).ok();
+    let out = cpd_with(&env, &vars, &args).ok();
     let real = repo.canonicalize().unwrap().display().to_string();
     let session = out["plan"]["lead_session"].as_str().unwrap().to_owned();
     assert_eq!(
@@ -205,12 +205,12 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_a_parked_window() {
     let (pane, window) = (out["lead"]["pane"].as_str().unwrap(), out["lead"]["window"].as_str().unwrap());
 
     // The Lead: stopped, in its parked window, with its pane recorded.
-    let lead = env.cpd2(&["session", "show", &session]).ok()["session"].clone();
+    let lead = env.cpd(&["session", "show", &session]).ok()["session"].clone();
     assert_eq!((&lead["role"], &lead["plan"], &lead["state"], &lead["tier"]), (&json!("lead"), &json!("pay"), &json!("stopped"), &json!("O3")));
     assert_eq!((&lead["cwd"], &lead["tmux_pane"], &lead["place"]), (&json!(real), &json!(pane), &json!("parked")));
     assert_eq!(panes(&env), vec![(pane.to_owned(), "park-pay".to_owned(), session.clone())], "the cockpit is created with the Lead's window");
 
-    // The pane runs `cpd2 session run <id>` with the Plan's and plannotator's variables (§15.5).
+    // The pane runs `cpd session run <id>` with the Plan's and plannotator's variables (§15.5).
     let pane_vars = pane_env(&env, &session);
     let pane_vars: Vec<&str> = pane_vars.lines().filter(|l| l.starts_with("CPD_") || l.starts_with("PLANNOTATOR_")).collect();
     for var in [
@@ -222,7 +222,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_a_parked_window() {
     ] {
         assert!(pane_vars.contains(&var.as_str()), "{var} not in {pane_vars:?}");
     }
-    let run = env.calls("cpd2").into_iter().find(|c| c[0] == "session").unwrap();
+    let run = env.calls("cpd").into_iter().find(|c| c[0] == "session").unwrap();
     assert_eq!(run, ["session", "run", session.as_str()]);
 
     // Events: plan-created and session-registered together, then the record, then the window.
@@ -237,7 +237,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_a_parked_window() {
     assert_eq!(moved[0]["data"], json!({"pane": pane, "window": window, "place": "parked"}));
 
     // The `plan` record in the Context store.
-    let records = env.cpd2(&["context", "show", "--context", "ctx"]).ok()["records"].clone();
+    let records = env.cpd(&["context", "show", "--context", "ctx"]).ok()["records"].clone();
     let record = records.as_array().unwrap().iter().find(|r| r["kind"] == "plan").unwrap().clone();
     assert_eq!(record["text"], "Retry payouts");
     assert_eq!(record["plan"], json!({"id": "pay", "machine": "m1", "repo": real, "jira": "PAY-1"}));
@@ -279,9 +279,9 @@ fn new_again_with_the_same_flags_is_already_and_redoes_missing_steps() {
 
     // Other flags: plan_exists.
     let repo_arg = repo.to_str().unwrap();
-    let error = refused(&env.cpd2(&["plan", "new", "pay", "--context", "ctx", "--repo", repo_arg, "--title", "Other"]), "plan_exists", 3);
+    let error = refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--repo", repo_arg, "--title", "Other"]), "plan_exists", 3);
     assert_eq!(error["details"]["plan"]["title"], "Plan pay");
-    refused(&env.cpd2(&["plan", "new", "pay", "--context", "ctx", "--repo", repo_arg, "--title", "Plan pay", "--name", "x"]), "plan_exists", 3);
+    refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--repo", repo_arg, "--title", "Plan pay", "--name", "x"]), "plan_exists", 3);
 }
 
 #[test]
@@ -292,7 +292,7 @@ fn new_refusals_write_nothing() {
     let new = |extra: &[&str]| {
         let mut args = vec!["plan", "new", "pay", "--title", "T"];
         args.extend(extra);
-        env.cpd2(&args)
+        env.cpd(&args)
     };
     let txns: i64 = query(&env, "SELECT count(*) FROM txns");
 
@@ -306,8 +306,8 @@ fn new_refusals_write_nothing() {
     env.git(&repo, &["branch", "cpd/pay"]);
     refused(&new(&["--context", "ctx", "--repo", &repo_arg]), "branch_exists", 3);
     refused(&new(&["--context", "ctx", "--repo", &repo_arg, "--brief-file", "/no/such/brief"]), "file_unreadable", 2);
-    refused(&env.cpd2(&["plan", "new", "Bad", "--context", "ctx", "--repo", &repo_arg, "--title", "T"]), "invalid_plan_id", 2);
-    refused(&env.cpd2(&["plan", "new", "pay", "--context", "ctx", "--repo", &repo_arg]), "usage", 2);
+    refused(&env.cpd(&["plan", "new", "Bad", "--context", "ctx", "--repo", &repo_arg, "--title", "T"]), "invalid_plan_id", 2);
+    refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--repo", &repo_arg]), "usage", 2);
     refused(&new(&["--context", "ctx", "--repo", &repo_arg, "--name", ""]), "invalid_name", 2);
     refused(&new(&["--context", "ctx", "--repo", &repo_arg, "--jira", "nope"]), "usage", 2);
     assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
@@ -331,7 +331,7 @@ fn new_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
     assert_eq!(out["plan"]["base"], "trunk");
     assert_eq!(out["plan"]["repo"], clone.canonicalize().unwrap().display().to_string());
     let error = refused(
-        &env.cpd2(&["plan", "new", "other", "--context", "ctx", "--repo", clone.to_str().unwrap(), "--title", "T", "--base", "side"]),
+        &env.cpd(&["plan", "new", "other", "--context", "ctx", "--repo", clone.to_str().unwrap(), "--title", "T", "--base", "side"]),
         "base_not_found",
         4,
     );
@@ -347,14 +347,14 @@ fn phase_plan_grounds_the_context_once_and_later_plans_fork_it() {
     let first = new_plan(&env, "pay", &repo);
     let lead = first["plan"]["lead_session"].as_str().unwrap().to_owned();
 
-    let out = env.cpd2(&["plan", "phase", "plan", "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
     let grounded = out["grounded_lead"]["session"].as_str().unwrap().to_owned();
     assert_eq!((&out["plan"], &out["phase"]), (&json!("pay"), &json!("plan")));
     let seq: i64 = query(&env, "SELECT max(seq) FROM context_records WHERE context = 'ctx'");
     assert_eq!(query::<String>(&env, "SELECT lead_session FROM contexts WHERE id = 'ctx'"), grounded);
     assert_eq!(query::<i64>(&env, "SELECT grounded_seq FROM contexts WHERE id = 'ctx'"), seq);
 
-    let row = env.cpd2(&["session", "show", &grounded]).ok()["session"].clone();
+    let row = env.cpd(&["session", "show", &grounded]).ok()["session"].clone();
     assert_eq!((&row["role"], &row["plan"], &row["forked_from"], &row["state"]), (&json!("lead"), &Value::Null, &json!(lead), &json!("stopped")));
     assert_eq!((&row["name"], &row["grounded_lead"], &row["place"]), (&json!("ctx (grounded)"), &json!(true), &json!("parked")));
     assert_eq!(row["tmux_pane"], out["grounded_lead"]["pane"]);
@@ -374,12 +374,12 @@ fn phase_plan_grounds_the_context_once_and_later_plans_fork_it() {
     assert_eq!(registered.last().unwrap()["data"], json!({"role": "lead", "name": "ctx (grounded)", "forked_from": lead, "tier": "O3"}));
 
     // Already in phase plan.
-    let again = env.cpd2(&["plan", "phase", "plan", "--plan", "pay"]).ok();
+    let again = env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
     assert_eq!((&again["already"], &again["grounded_lead"]["session"]), (&json!(true), &json!(grounded)));
     assert_eq!(events(&env, "plan-phase").len(), 1);
 
     // A later Plan forks the grounded Lead, and its message holds only the newer records.
-    env.cpd2(&["context", "note", "Recorded after grounding.", "--context", "ctx"]).ok();
+    env.cpd(&["context", "note", "Recorded after grounding.", "--context", "ctx"]).ok();
     let second = new_plan(&env, "refund", &repo);
     assert_eq!(second["lead"]["forked_from"], grounded);
     assert_eq!(events(&env, "plan-created").last().unwrap()["data"]["forked_from"], grounded);
@@ -389,7 +389,7 @@ fn phase_plan_grounds_the_context_once_and_later_plans_fork_it() {
     assert!(!message.contains("m1-p1"), "records up to grounded_seq are in the fork already: {message}");
 
     // Its phase plan finds the Context grounded: no new grounded Lead.
-    let out = env.cpd2(&["plan", "phase", "plan", "--plan", "refund"]).ok();
+    let out = env.cpd(&["plan", "phase", "plan", "--plan", "refund"]).ok();
     assert_eq!(out["grounded_lead"], Value::Null);
     assert_eq!(events(&env, "context-grounded").len(), 1);
     assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions WHERE plan IS NULL"), 1);
@@ -400,14 +400,14 @@ fn phase_again_creates_the_window_a_crash_left_out() {
     let env = TestEnv::new();
     let repo = setup(&env);
     new_plan(&env, "pay", &repo);
-    let out = env.cpd2(&["plan", "phase", "plan", "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
     let grounded = out["grounded_lead"]["session"].as_str().unwrap().to_owned();
     // A crash between the two transactions: the Session has no pane.
     store(&env).write("fixture", |tx| exec(tx, &format!("UPDATE sessions SET tmux_pane = NULL WHERE id = '{grounded}';"))).unwrap();
     let pane = out["grounded_lead"]["pane"].as_str().unwrap();
     env.tmux(&["kill-pane", "-t", pane]);
 
-    let again = env.cpd2(&["plan", "phase", "plan", "--plan", "pay"]).ok();
+    let again = env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
     assert_eq!(again["already"], true);
     assert_eq!(again["grounded_lead"]["session"], grounded);
     assert_ne!(again["grounded_lead"]["pane"], Value::Null);
@@ -419,16 +419,16 @@ fn phase_refusals() {
     let env = TestEnv::new();
     let repo = setup(&env);
     new_plan(&env, "pay", &repo);
-    let error = refused(&env.cpd2(&["plan", "phase", "dispatch", "--plan", "pay"]), "illegal_transition", 3);
+    let error = refused(&env.cpd(&["plan", "phase", "dispatch", "--plan", "pay"]), "illegal_transition", 3);
     assert_eq!((&error["details"]["from"], &error["details"]["to"]), (&json!("grounding"), &json!("dispatch")));
-    refused(&env.cpd2(&["plan", "phase", "grounding", "--plan", "pay"]), "illegal_transition", 3);
-    refused(&env.cpd2(&["plan", "phase", "bogus", "--plan", "pay"]), "usage", 2);
-    refused(&env.cpd2(&["plan", "phase", "plan"]), "plan_required", 2);
-    refused(&env.cpd2(&["plan", "phase", "plan", "--plan", "nope"]), "plan_not_found", 4);
+    refused(&env.cpd(&["plan", "phase", "grounding", "--plan", "pay"]), "illegal_transition", 3);
+    refused(&env.cpd(&["plan", "phase", "bogus", "--plan", "pay"]), "usage", 2);
+    refused(&env.cpd(&["plan", "phase", "plan"]), "plan_required", 2);
+    refused(&env.cpd(&["plan", "phase", "plan", "--plan", "nope"]), "plan_not_found", 4);
     store(&env)
         .write("fixture", |tx| exec(tx, "UPDATE plans SET phase = 'plan' WHERE id = 'pay'; UPDATE plans SET phase = 'dispatch', lead_worktree = '/w', locked_at = 't' WHERE id = 'pay';"))
         .unwrap();
-    let error = refused(&cpd2_with(&env, &[("CPD_PLAN", "pay")], &["plan", "phase", "plan"]), "illegal_transition", 3);
+    let error = refused(&cpd_with(&env, &[("CPD_PLAN", "pay")], &["plan", "phase", "plan"]), "illegal_transition", 3);
     assert_eq!(error["details"]["from"], "dispatch");
 }
 
@@ -450,7 +450,7 @@ fn plans_grounding_at_once_produce_one_grounded_lead() {
                 let (env, barrier) = (&env, &barrier);
                 scope.spawn(move || {
                     barrier.wait();
-                    env.cpd2(&["plan", "phase", "plan", "--plan", plan]).ok()
+                    env.cpd(&["plan", "phase", "plan", "--plan", plan]).ok()
                 })
             })
             .collect();
@@ -474,11 +474,11 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
     let repo = setup(&env);
     planned(&env, &repo, "pay");
     new_plan(&env, "refund", &repo);
-    env.cpd2(&["context", "new", "other", "--title", "Other"]).ok();
+    env.cpd(&["context", "new", "other", "--title", "Other"]).ok();
 
-    let list = env.cpd2(&["plan", "list"]).ok();
+    let list = env.cpd(&["plan", "list"]).ok();
     let cursor = list["events_cursor"].as_i64().unwrap();
-    assert_eq!(cursor, env.cpd2(&["events", "list", "--since", "0", "--limit", "5000"]).ok()["next"].as_i64().unwrap());
+    assert_eq!(cursor, env.cpd(&["events", "list", "--since", "0", "--limit", "5000"]).ok()["next"].as_i64().unwrap());
     let plans = list["plans"].as_array().unwrap();
     assert_eq!(plans.len(), 2);
     let pay = &plans[0];
@@ -486,13 +486,13 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
     assert_eq!(pay["counts"], json!({"draft": 2, "queued": 0, "running": 0, "merged": 0, "failed": 0, "cancelled": 0}));
     assert_eq!(pay["repo"], repo.canonicalize().unwrap().display().to_string());
     let ids = |args: &[&str]| -> Vec<String> {
-        env.cpd2(args).ok()["plans"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap().to_owned()).collect()
+        env.cpd(args).ok()["plans"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap().to_owned()).collect()
     };
     assert_eq!(ids(&["plan", "list", "--phase", "grounding"]), ["refund"]);
     assert_eq!(ids(&["plan", "list", "--context", "ctx", "--phase", "plan"]), ["pay"]);
     assert!(ids(&["plan", "list", "--context", "other"]).is_empty());
-    assert_eq!(cpd2_with(&env, &[("CPD_PLAN", "pay")], &["plan", "list"]).ok()["plans"].as_array().unwrap().len(), 2, "filters only");
-    refused(&env.cpd2(&["plan", "list", "--phase", "bogus"]), "usage", 2);
+    assert_eq!(cpd_with(&env, &[("CPD_PLAN", "pay")], &["plan", "list"]).ok()["plans"].as_array().unwrap().len(), 2, "filters only");
+    refused(&env.cpd(&["plan", "list", "--phase", "bogus"]), "usage", 2);
 
     let out = show(&env, "pay");
     let plan = &out["plan"];
@@ -505,11 +505,11 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
     assert_eq!((&out["review"], &out["escalations"], &out["tamper"]), (&Value::Null, &json!([]), &json!([])));
     assert_eq!(out["counts"]["draft"], 2);
     assert!(out["events_cursor"].as_i64().unwrap() >= cursor);
-    assert_eq!(cpd2_with(&env, &[("CPD_PLAN", "pay")], &["plan", "show"]).ok()["plan"]["id"], "pay");
+    assert_eq!(cpd_with(&env, &[("CPD_PLAN", "pay")], &["plan", "show"]).ok()["plan"]["id"], "pay");
 
-    refused(&env.cpd2(&["plan", "show"]), "plan_required", 2);
-    refused(&env.cpd2(&["plan", "show", "--plan", "nope"]), "plan_not_found", 4);
-    refused(&env.cpd2(&["plan", "show", "--plan", "Bad"]), "invalid_plan_id", 2);
+    refused(&env.cpd(&["plan", "show"]), "plan_required", 2);
+    refused(&env.cpd(&["plan", "show", "--plan", "nope"]), "plan_not_found", 4);
+    refused(&env.cpd(&["plan", "show", "--plan", "Bad"]), "invalid_plan_id", 2);
 }
 
 #[test]
@@ -558,7 +558,7 @@ fn render_writes_the_plan_markdown_and_its_fingerprint() {
     add_job(&env, "pay", "gone", &[]);
     store(&env).write("fixture", |tx| exec(tx, "UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE key = 'gone';")).unwrap();
 
-    let out = env.cpd2(&["plan", "render", "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "render", "--plan", "pay"]).ok();
     let path = home(&env).plan_md(&pid("pay"));
     assert_eq!(out["path"], path.display().to_string());
     assert_eq!(out["draft_jobs"], 2);
@@ -577,11 +577,11 @@ fn render_writes_the_plan_markdown_and_its_fingerprint() {
     assert!(!text.contains("gone"), "cancelled Jobs are left out: {text}");
 
     // Idempotent: the same Jobs render the same file.
-    let again = env.cpd2(&["plan", "render", "--plan", "pay"]).ok();
+    let again = env.cpd(&["plan", "render", "--plan", "pay"]).ok();
     assert_eq!(again, out);
     assert_eq!(fs::read_to_string(&path).unwrap(), text);
-    refused(&env.cpd2(&["plan", "render"]), "plan_required", 2);
-    refused(&env.cpd2(&["plan", "render", "--plan", "nope"]), "plan_not_found", 4);
+    refused(&env.cpd(&["plan", "render"]), "plan_required", 2);
+    refused(&env.cpd(&["plan", "render", "--plan", "nope"]), "plan_not_found", 4);
 }
 
 // ---------- plan review, plan decide ----------
@@ -591,14 +591,14 @@ fn review_requests_a_pending_review_once_per_fingerprint() {
     let env = TestEnv::new();
     let repo = setup(&env);
     new_plan(&env, "pay", &repo);
-    let error = refused(&env.cpd2(&["plan", "review", "--plan", "pay"]), "illegal_phase", 3);
+    let error = refused(&env.cpd(&["plan", "review", "--plan", "pay"]), "illegal_phase", 3);
     assert_eq!(error["details"]["phase"], "grounding");
-    env.cpd2(&["plan", "phase", "plan", "--plan", "pay"]).ok();
-    refused(&env.cpd2(&["plan", "review", "--plan", "pay"]), "no_draft_jobs", 3);
+    env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
+    refused(&env.cpd(&["plan", "review", "--plan", "pay"]), "no_draft_jobs", 3);
     add_job(&env, "pay", "a", &[]);
 
-    let out = env.cpd2(&["plan", "review", "--plan", "pay"]).ok();
-    let fingerprint = env.cpd2(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"].clone();
+    let out = env.cpd(&["plan", "review", "--plan", "pay"]).ok();
+    let fingerprint = env.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"].clone();
     let review_path = home(&env).plan_review_md(&pid("pay"), ReviewId::parse("r1").unwrap());
     assert_eq!((&out["review"]["id"], &out["review"]["status"], &out["review"]["fingerprint"]), (&json!("r1"), &json!("pending"), &fingerprint));
     assert_eq!(out["path"], review_path.display().to_string());
@@ -608,20 +608,20 @@ fn review_requests_a_pending_review_once_per_fingerprint() {
     assert_eq!((&event["plan"], &event["data"]), (&json!("pay"), &json!({"review": "r1", "fingerprint": fingerprint, "status": "pending"})));
 
     // Same Jobs: the pending review again.
-    let again = cpd2_with(&env, &[("CPD_PLAN", "pay")], &["plan", "review"]).ok();
+    let again = cpd_with(&env, &[("CPD_PLAN", "pay")], &["plan", "review"]).ok();
     assert_eq!((&again["already"], &again["review"]), (&json!(true), &out["review"]));
     assert_eq!(events(&env, "plan-review").len(), 1);
 
     // Changed Jobs: a new review; the copy of r1 is what the User saw.
     let r1 = fs::read_to_string(&review_path).unwrap();
     edit_goal(&env, "pay", "a", "A new goal.");
-    let r2 = env.cpd2(&["plan", "review", "--plan", "pay"]).ok();
+    let r2 = env.cpd(&["plan", "review", "--plan", "pay"]).ok();
     assert_eq!(r2["review"]["id"], "r2");
     assert_ne!(r2["review"]["fingerprint"], fingerprint);
     assert_eq!(fs::read_to_string(&review_path).unwrap(), r1);
     assert!(fs::read_to_string(r2["path"].as_str().unwrap()).unwrap().contains("A new goal."));
     assert_eq!(show(&env, "pay")["review"]["id"], "r2");
-    refused(&env.cpd2(&["plan", "review"]), "plan_required", 2);
+    refused(&env.cpd(&["plan", "review"]), "plan_required", 2);
 }
 
 #[test]
@@ -629,35 +629,35 @@ fn decide_records_the_decision_once() {
     let env = TestEnv::new();
     let repo = setup(&env);
     planned(&env, &repo, "pay");
-    env.cpd2(&["plan", "review", "--plan", "pay"]).ok();
+    env.cpd(&["plan", "review", "--plan", "pay"]).ok();
     let feedback = env.root().join("feedback.md");
     fs::write(&feedback, "Split job b.").unwrap();
 
-    refused(&env.cpd2(&["plan", "decide", "r1", "--plan", "pay"]), "usage", 2);
-    refused(&env.cpd2(&["plan", "decide", "r1", "--approve", "--reject", "--plan", "pay"]), "usage", 2);
-    refused(&env.cpd2(&["plan", "decide", "x1", "--approve", "--plan", "pay"]), "invalid_review_id", 2);
-    refused(&env.cpd2(&["plan", "decide", "r9", "--approve", "--plan", "pay"]), "review_not_found", 4);
-    refused(&env.cpd2(&["plan", "decide", "r1", "--approve", "--plan", "pay", "--feedback-file", "/no/file"]), "file_unreadable", 2);
+    refused(&env.cpd(&["plan", "decide", "r1", "--plan", "pay"]), "usage", 2);
+    refused(&env.cpd(&["plan", "decide", "r1", "--approve", "--reject", "--plan", "pay"]), "usage", 2);
+    refused(&env.cpd(&["plan", "decide", "x1", "--approve", "--plan", "pay"]), "invalid_review_id", 2);
+    refused(&env.cpd(&["plan", "decide", "r9", "--approve", "--plan", "pay"]), "review_not_found", 4);
+    refused(&env.cpd(&["plan", "decide", "r1", "--approve", "--plan", "pay", "--feedback-file", "/no/file"]), "file_unreadable", 2);
 
-    let out = env.cpd2(&["plan", "decide", "r1", "--reject", "--feedback-file", feedback.to_str().unwrap(), "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "decide", "r1", "--reject", "--feedback-file", feedback.to_str().unwrap(), "--plan", "pay"]).ok();
     assert_eq!((&out["review"]["status"], &out["review"]["feedback"], &out["current"], &out["next"]), (&json!("rejected"), &json!("Split job b."), &json!(true), &Value::Null));
     assert!(out["review"]["decided_at"].is_string());
     let decided = events(&env, "plan-review").last().unwrap().clone();
     assert_eq!(decided["data"]["status"], "rejected");
     assert_eq!(decided["data"]["feedback"], "Split job b.");
-    let again = env.cpd2(&["plan", "decide", "r1", "--reject", "--plan", "pay"]).ok();
+    let again = env.cpd(&["plan", "decide", "r1", "--reject", "--plan", "pay"]).ok();
     assert_eq!(again["already"], true);
-    let error = refused(&env.cpd2(&["plan", "decide", "r1", "--approve", "--plan", "pay"]), "review_decided", 3);
+    let error = refused(&env.cpd(&["plan", "decide", "r1", "--approve", "--plan", "pay"]), "review_decided", 3);
     assert_eq!(error["details"]["status"], "rejected");
     assert_eq!(events(&env, "plan-review").len(), 2);
 
     // Approved, then the Jobs change: no longer current, so no plan lock.
-    let r2 = env.cpd2(&["plan", "review", "--plan", "pay"]).ok();
+    let r2 = env.cpd(&["plan", "review", "--plan", "pay"]).ok();
     assert_eq!(r2["review"]["id"], "r2");
-    let out = env.cpd2(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
-    assert_eq!((&out["review"]["status"], &out["review"]["feedback"], &out["current"], &out["next"]), (&json!("approved"), &Value::Null, &json!(true), &json!("cpd2 plan lock")));
+    let out = env.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
+    assert_eq!((&out["review"]["status"], &out["review"]["feedback"], &out["current"], &out["next"]), (&json!("approved"), &Value::Null, &json!(true), &json!("cpd plan lock")));
     edit_goal(&env, "pay", "a", "Changed.");
-    let again = env.cpd2(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
+    let again = env.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
     assert_eq!((&again["already"], &again["current"], &again["next"]), (&json!(true), &json!(false), &Value::Null));
 }
 
@@ -666,12 +666,12 @@ fn decide_records_the_decision_once() {
 /// A Plan `pay` in phase `plan` with an approved, current review.
 fn approved(env: &TestEnv, repo: &Path) {
     planned(env, repo, "pay");
-    env.cpd2(&["plan", "review", "--plan", "pay"]).ok();
-    env.cpd2(&["plan", "decide", "r1", "--approve", "--plan", "pay"]).ok();
+    env.cpd(&["plan", "review", "--plan", "pay"]).ok();
+    env.cpd(&["plan", "decide", "r1", "--approve", "--plan", "pay"]).ok();
 }
 
 fn watch_calls(env: &TestEnv) -> Vec<Vec<String>> {
-    env.calls("cpd2").into_iter().filter(|c| c[0] == "watch").collect()
+    env.calls("cpd").into_iter().filter(|c| c[0] == "watch").collect()
 }
 
 #[test]
@@ -681,7 +681,7 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
     approved(&env, &repo);
     let head = env.git(&repo, &["rev-parse", "HEAD"]);
 
-    let out = env.cpd2(&["plan", "lock", "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
     let worktree = repo.parent().unwrap().canonicalize().unwrap().join("pay.pay");
     assert_eq!(
         out,
@@ -709,7 +709,7 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
     assert_eq!(phase["data"], json!({"from": "plan", "to": "dispatch", "jobs": ["a", "b"]}));
 
     // Already: still makes sure the engine runs.
-    let again = env.cpd2(&["plan", "lock", "--plan", "pay"]).ok();
+    let again = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
     assert_eq!((&again["already"], &again["phase"], &again["watch"]["started"]), (&json!(true), &json!("dispatch"), &json!(true)));
     assert_eq!(watch_calls(&env).len(), 2);
     assert_eq!(events(&env, "plan-phase").len(), 2);
@@ -720,15 +720,15 @@ fn lock_stays_locked_when_the_engine_cannot_start() {
     let env = TestEnv::new();
     let repo = setup(&env);
     approved(&env, &repo);
-    fake_cpd2(&env, WATCH_FAILS);
-    let error = refused(&env.cpd2(&["plan", "lock", "--plan", "pay"]), "watch_start_failed", 1);
-    assert_eq!(error["details"]["next"], "cpd2 watch --ensure");
+    fake_cpd(&env, WATCH_FAILS);
+    let error = refused(&env.cpd(&["plan", "lock", "--plan", "pay"]), "watch_start_failed", 1);
+    assert_eq!(error["details"]["next"], "cpd watch --ensure");
     assert_eq!(error["details"]["error"]["message"], "No lock.");
     assert_eq!(show(&env, "pay")["plan"]["phase"], "dispatch", "the Plan stays locked");
 
     // An engine that prints nothing usable fails the same way.
-    fake_cpd2(&env, "echo nonsense; exit 0");
-    let error = refused(&env.cpd2(&["plan", "lock", "--plan", "pay"]), "watch_start_failed", 1);
+    fake_cpd(&env, "echo nonsense; exit 0");
+    let error = refused(&env.cpd(&["plan", "lock", "--plan", "pay"]), "watch_start_failed", 1);
     assert_eq!(error["details"]["error"]["stdout"], "nonsense");
 }
 
@@ -737,35 +737,35 @@ fn lock_refusals_change_nothing() {
     let env = TestEnv::new();
     let repo = setup(&env);
     new_plan(&env, "pay", &repo);
-    let lock = || env.cpd2(&["plan", "lock", "--plan", "pay"]);
+    let lock = || env.cpd(&["plan", "lock", "--plan", "pay"]);
     let error = refused(&lock(), "illegal_transition", 3);
     assert_eq!(error["details"]["from"], "grounding");
-    env.cpd2(&["plan", "phase", "plan", "--plan", "pay"]).ok();
+    env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
     refused(&lock(), "no_draft_jobs", 3);
 
     add_job(&env, "pay", "b", &[]);
     add_job(&env, "pay", "a", &["b"]);
     let error = refused(&lock(), "plan_not_approved", 3);
     assert_eq!(error["details"]["review"], Value::Null);
-    env.cpd2(&["plan", "review", "--plan", "pay"]).ok();
+    env.cpd(&["plan", "review", "--plan", "pay"]).ok();
     refused(&lock(), "plan_not_approved", 3);
-    env.cpd2(&["plan", "decide", "r1", "--reject", "--plan", "pay"]).ok();
+    env.cpd(&["plan", "decide", "r1", "--reject", "--plan", "pay"]).ok();
     let error = refused(&lock(), "plan_not_approved", 3);
     assert_eq!(error["details"]["review"]["status"], "rejected");
-    env.cpd2(&["plan", "review", "--plan", "pay"]).ok();
-    env.cpd2(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
+    env.cpd(&["plan", "review", "--plan", "pay"]).ok();
+    env.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
     edit_goal(&env, "pay", "a", "Changed after approval.");
     refused(&lock(), "plan_not_approved", 3);
 
     // A cycle (b needs a, a needs b), approved.
     store(&env).write("fixture", |tx| exec(tx, "INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'b', 'a');")).unwrap();
-    env.cpd2(&["plan", "review", "--plan", "pay"]).ok();
-    env.cpd2(&["plan", "decide", "r3", "--approve", "--plan", "pay"]).ok();
+    env.cpd(&["plan", "review", "--plan", "pay"]).ok();
+    env.cpd(&["plan", "decide", "r3", "--approve", "--plan", "pay"]).ok();
     let error = refused(&lock(), "dependency_cycle", 3);
     assert_eq!(error["details"]["cycle"].as_array().unwrap().len(), 3);
     store(&env).write("fixture", |tx| exec(tx, "DELETE FROM dependencies WHERE plan = 'pay' AND job = 'b';")).unwrap();
-    env.cpd2(&["plan", "review", "--plan", "pay"]).ok();
-    env.cpd2(&["plan", "decide", "r4", "--approve", "--plan", "pay"]).ok();
+    env.cpd(&["plan", "review", "--plan", "pay"]).ok();
+    env.cpd(&["plan", "decide", "r4", "--approve", "--plan", "pay"]).ok();
 
     // Something at the Lead worktree's path, then the branch.
     let path = repo.parent().unwrap().join("pay.pay");
@@ -789,5 +789,5 @@ fn lock_refusals_change_nothing() {
     assert_eq!(show(&env, "pay")["plan"]["phase"], "plan");
     assert_eq!(show(&env, "pay")["counts"]["draft"], 2);
     assert!(watch_calls(&env).is_empty());
-    refused(&env.cpd2(&["plan", "lock"]), "plan_required", 2);
+    refused(&env.cpd(&["plan", "lock"]), "plan_required", 2);
 }

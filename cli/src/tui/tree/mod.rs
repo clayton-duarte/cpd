@@ -5,9 +5,9 @@
 //!
 //! - [`rows`]: Contexts, their Plans (each Plan's row is its Lead's) and a Plan's side forks;
 //! - [`view`]: the state, keys and drawing; [`cursor`], [`prompt`]: its parts;
-//! - [`actions`]: what it does, as `cpd2` commands (`session open`, `plan new`, `session close`), and the
+//! - [`actions`]: what it does, as `cpd` commands (`session open`, `plan new`, `session close`), and the
 //!   legend popup;
-//! - [`follow`]: `cpd2 events follow`, which tells it when to take a new snapshot.
+//! - [`follow`]: `cpd events follow`, which tells it when to take a new snapshot.
 //!
 //! Keys and clicks are the reference's (commands.md §13.2, `tui/README.md` "Context column" on `main`): arrows
 //! or `j`/`k` move the cursor between Sessions (shown after the first arrow key, while the pane has focus);
@@ -62,7 +62,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
     let _ = execute!(std::io::stdout(), DisableFocusChange, DisableMouseCapture);
     ratatui::restore();
     result.map(|()| Output::Owned).map_err(|e| {
-        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd2 tui view tree failed: {e}."))
+        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view tree failed: {e}."))
             .with("command", "tui view tree")
     })
 }

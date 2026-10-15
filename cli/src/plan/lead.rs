@@ -1,7 +1,7 @@
 //! Lead windows in the cockpit (contract §6.2, §6.4, §6.5; commands.md §4.1
 //! step 4, §4.4): `plan new` starts a Plan's Lead in `park-<plan>`, and
 //! `plan phase plan` a Context's grounded Lead in `ctx-<context>`. Each pane
-//! runs `cpd2 session run <id>`, which starts pi (§6.7).
+//! runs `cpd session run <id>`, which starts pi (§6.7).
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -34,7 +34,7 @@ pub(super) struct Lead<'a> {
     pub cwd: &'a Path,
 }
 
-/// What tmux runs for `lead`: `cpd2 session run <id>` in its cwd, with
+/// What tmux runs for `lead`: `cpd session run <id>` in its cwd, with
 /// `CPD_HOME`, `CPD_SESSION`, and for a Plan's Lead `CPD_PLAN` plus
 /// `PLANNOTATOR_PORT` and `PLANNOTATOR_REMOTE` from cpd's own environment
 /// when set (commands.md §15.5, amendment 8): passed with `-e`, so the pane
@@ -64,7 +64,7 @@ fn spawn(env: &Env, lead: &Lead) -> Spawn {
 
 /// Starts `lead` in a new window `window` of the cockpit session, starting the
 /// server and the cockpit session when they are missing: the cockpit is then
-/// created with this window as its first window, and `cpd2 tui` builds `main`
+/// created with this window as its first window, and `cpd tui` builds `main`
 /// later (commands.md §4.1; Escalation `rs-plan-a1-q3`). Marks the pane with
 /// `@cpd_session`, then records `tmux_pane` and appends `session-moved`
 /// `{place: "parked"}` in one transaction.

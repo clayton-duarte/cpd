@@ -4,11 +4,11 @@
 use std::fs;
 use std::path::Path;
 
-use cpd2::config::Tier;
-use cpd2::error::ErrorCode;
-use cpd2::home::CpdHome;
-use cpd2::ids::{AttemptId, EscalationId, PlanId};
-use cpd2::spec::{self, Answer, Cause, Input, Previous};
+use cpd::config::Tier;
+use cpd::error::ErrorCode;
+use cpd::home::CpdHome;
+use cpd::ids::{AttemptId, EscalationId, PlanId};
+use cpd::spec::{self, Answer, Cause, Input, Previous};
 
 fn plan() -> PlanId {
     PlanId::parse("pay").unwrap()
@@ -116,7 +116,7 @@ fn every_cause_has_its_outcome_and_a_sentence() {
         ("setup_failed", "failed", "The worktree or its `pre-start` hook failed, so the Worker never started."),
         ("timed_out", "failed", "The Worker ran out of time before it submitted."),
         ("crashed", "failed", "The Worker or its driver died before the work was merged."),
-        ("no_submit", "failed", "The Worker went idle twice without running `cpd2 attempt submit`, even after a nudge."),
+        ("no_submit", "failed", "The Worker went idle twice without running `cpd attempt submit`, even after a nudge."),
         ("merge_conflict", "failed", "Rebasing it onto the newer Lead Branch conflicted."),
         ("cas_lost", "failed", "The Lead Branch kept moving, so the merge could not be completed."),
         ("dirty_target", "failed", "The Lead worktree was not clean when the merge ran."),
@@ -206,7 +206,7 @@ Your worktree is `/w/pay--api-schema-a1`. Your current directory is that worktre
 - Never ask the User anything. You have no conversation with them.
 - If continuing would require guessing, ask the Lead and wait for the answer. The command blocks until the Lead answers:
 
-      cpd2 ask api-schema-a1 "<your question>"
+      cpd ask api-schema-a1 "<your question>"
 
   Ask one real blocker at a time. Do not ask what this Spec or the code already answers.
 - Do not stop until you have submitted.
@@ -240,7 +240,7 @@ Nothing is listed. Still do only what the Goal and Acceptance require.
 
 When the Acceptance items hold and your work is committed, run exactly:
 
-    cpd2 attempt submit api-schema-a1
+    cpd attempt submit api-schema-a1
 
 If it succeeds, stop at once and make no more changes. If it refuses, the error code says what to do:
 
@@ -252,7 +252,7 @@ If it succeeds, stop at once and make no more changes. If it refuses, the error 
 - `check_error`: the quick check could not run. Ask the Lead.
 - `attempt_not_running`: the Attempt was stopped. Stop.
 
-Do not stop until `cpd2 attempt submit` has succeeded.
+Do not stop until `cpd attempt submit` has succeeded.
 "####;
 
 const LATER: &str = r####"# Worker Spec: api-schema, Attempt 3
@@ -277,7 +277,7 @@ Your worktree is `/w/pay--api-schema-a3`. Your current directory is that worktre
 - Never ask the User anything. You have no conversation with them.
 - If continuing would require guessing, ask the Lead and wait for the answer. The command blocks until the Lead answers:
 
-      cpd2 ask api-schema-a3 "<your question>"
+      cpd ask api-schema-a3 "<your question>"
 
   Ask one real blocker at a time. Do not ask what this Spec or the code already answers.
 - Do not stop until you have submitted.
@@ -345,7 +345,7 @@ serde.
 
 When the Acceptance items hold and your work is committed, run exactly:
 
-    cpd2 attempt submit api-schema-a3
+    cpd attempt submit api-schema-a3
 
 If it succeeds, stop at once and make no more changes. If it refuses, the error code says what to do:
 
@@ -357,5 +357,5 @@ If it succeeds, stop at once and make no more changes. If it refuses, the error 
 - `check_error`: the quick check could not run. Ask the Lead.
 - `attempt_not_running`: the Attempt was stopped. Stop.
 
-Do not stop until `cpd2 attempt submit` has succeeded.
+Do not stop until `cpd attempt submit` has succeeded.
 "####;

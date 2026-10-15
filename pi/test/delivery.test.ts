@@ -95,7 +95,7 @@ test("Plan Lead: escalation opens `escalation:<id>`, answered and expired close 
   assert.equal(f.pi.delivered().length, 3, "expired is no message");
 });
 
-test("session-renamed for itself: setSessionName and a notice, no message, no turn, no echo to cpd2", async (t) => {
+test("session-renamed for itself: setSessionName and a notice, no message, no turn, no echo to cpd", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   await started(f, "lead");

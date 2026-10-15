@@ -212,7 +212,7 @@ pub fn end_merging(
     }
     let cancel = cancel_request(tx, attempt)?;
     let tier = attempt.tier.to_string();
-    let show = format!("cpd2 job show {job} --plan {plan}");
+    let show = format!("cpd job show {job} --plan {plan}");
 
     let (status, failed_cause, event) = match end {
         End::Merged { sha } => {
@@ -227,7 +227,7 @@ pub fn end_merging(
         }
         End::Cancelled => {
             let reason = cancel.ok_or_else(|| cas_lost("The Job's cancel request"))?;
-            let text = format!("Job {job} cancelled ({reason}): Attempt {id} stopped before its merge. Next: cpd2 plan show --plan {plan}");
+            let text = format!("Job {job} cancelled ({reason}): Attempt {id} stopped before its merge. Next: cpd plan show --plan {plan}");
             ("cancelled", None, NewEvent::new(Kind::JobCancelled, text, json!({"reason": reason})).attempt(attempt.id.clone()))
         }
         End::Failed { cause, detail } => match next_tier(tx, attempt, *cause, ladder)? {
@@ -246,7 +246,7 @@ pub fn end_merging(
                     |r| r.get(0),
                 )?;
                 let text = format!(
-                    "Job {job} failed ({}): {detail} Decide: cpd2 job retry {job} --tier <T> --plan {plan}, or cpd2 job cancel {job} --reason <text> --plan {plan}",
+                    "Job {job} failed ({}): {detail} Decide: cpd job retry {job} --tier <T> --plan {plan}, or cpd job cancel {job} --reason <text> --plan {plan}",
                     cause.as_str()
                 );
                 let data = json!({"cause": cause.as_str(), "detail": detail, "tier": tier, "attempts": attempts});

@@ -1,5 +1,5 @@
 // Reads the model catalog of an installed pi release (contract §9).
-// Run by cpd2 with pi's Node: node --input-type=module -e <this file> -- \
+// Run by cpd with pi's Node: node --input-type=module -e <this file> -- \
 //   <pi-coding-agent entry> <pi-ai entry> <letter>=<provider>/<model-id>…
 // Prints one JSON object: letter -> the model's supported thinking levels
 // (pi's own names, in pi's order), or null when pi has no such model.

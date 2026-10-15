@@ -190,11 +190,11 @@ pub fn end(tx: &WriteTxn<'_>, target: &Target, end: &End, metrics: Option<&Value
         return Err(cas_lost("The Attempt's status"));
     }
     let tier = target.tier.to_string();
-    let show = format!("cpd2 job show {job} --plan {plan}");
+    let show = format!("cpd job show {job} --plan {plan}");
     let (status, failed_cause, event) = match end {
         End::Cancelled => {
             let reason = cancel_request(tx, &target.plan, &target.job)?.ok_or_else(|| cas_lost("The Job's cancel request"))?;
-            let text = format!("Job {job} cancelled ({reason}): its driver stopped Attempt {id}. Next: cpd2 plan show --plan {plan}");
+            let text = format!("Job {job} cancelled ({reason}): its driver stopped Attempt {id}. Next: cpd plan show --plan {plan}");
             ("cancelled", None, NewEvent::new(Kind::JobCancelled, text, json!({"reason": reason})))
         }
         End::Failed { cause, detail } => match next_tier(tx, target, *cause, ladder)? {
@@ -210,7 +210,7 @@ pub fn end(tx: &WriteTxn<'_>, target: &Target, end: &End, metrics: Option<&Value
                 let attempts: i64 =
                     tx.query_row("SELECT count(*) FROM attempts WHERE plan = ?1 AND job = ?2", params![plan, job], |r| r.get(0))?;
                 let text = format!(
-                    "Job {job} failed ({}): {detail} Decide: cpd2 job retry {job} --tier <T> --plan {plan}, or cpd2 job cancel {job} --reason <text> --plan {plan}",
+                    "Job {job} failed ({}): {detail} Decide: cpd job retry {job} --tier <T> --plan {plan}, or cpd job cancel {job} --reason <text> --plan {plan}",
                     cause.as_str()
                 );
                 let data = json!({"cause": cause.as_str(), "detail": detail, "tier": tier, "attempts": attempts});
@@ -258,7 +258,7 @@ pub fn append_error(tx: &WriteTxn<'_>, target: &Target, error: &CpdError) -> Res
         "details": error.details(),
     });
     let text = format!(
-        "The driver of Attempt {} failed: {} See: cpd2 attempt show {} --plan {}",
+        "The driver of Attempt {} failed: {} See: cpd attempt show {} --plan {}",
         target.id,
         error.message(),
         target.id,

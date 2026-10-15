@@ -9,12 +9,12 @@ use std::process::{Child, Stdio};
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
-use common::{CPD2, Run, TestEnv};
-use cpd2::error::{CpdError, ErrorCode};
-use cpd2::events::{Kind, NewEvent, append};
-use cpd2::home::CpdHome;
-use cpd2::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId};
-use cpd2::store::{Store, WriteTxn};
+use common::{CPD, Run, TestEnv};
+use cpd::error::{CpdError, ErrorCode};
+use cpd::events::{Kind, NewEvent, append};
+use cpd::home::CpdHome;
+use cpd::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId};
+use cpd::store::{Store, WriteTxn};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
@@ -101,11 +101,11 @@ fn seed(store: &mut Store) {
         )
         .plan(plan("pay"))
         .session(session("lead1")),
-        NewEvent::new(JobMerged, "Job api merged. Next: cpd2 plan show", json!({"sha": "c0ffee1", "tier": "S2"}))
+        NewEvent::new(JobMerged, "Job api merged. Next: cpd plan show", json!({"sha": "c0ffee1", "tier": "S2"}))
             .plan(plan("pay"))
             .job(job())
             .attempt(attempt()),
-        NewEvent::new(AttemptNudge, "Submit your work.", json!({"prompt": "Run cpd2 attempt submit"}))
+        NewEvent::new(AttemptNudge, "Submit your work.", json!({"prompt": "Run cpd attempt submit"}))
             .plan(plan("pay"))
             .job(job())
             .attempt(attempt())
@@ -159,7 +159,7 @@ fn ids(events: &Value) -> Vec<i64> {
 fn list(env: &TestEnv, args: &[&str]) -> Value {
     let mut argv = vec!["events", "list"];
     argv.extend_from_slice(args);
-    env.cpd2(&argv).ok()
+    env.cpd(&argv).ok()
 }
 
 /// What `events follow --until-idle` printed: one JSON value per line.
@@ -171,11 +171,11 @@ fn follow_lines(run: &Run) -> Vec<Value> {
 fn follow_until_idle(env: &TestEnv, args: &[&str]) -> Vec<Value> {
     let mut argv = vec!["events", "follow", "--until-idle"];
     argv.extend_from_slice(args);
-    follow_lines(&env.cpd2(&argv))
+    follow_lines(&env.cpd(&argv))
 }
 
 fn refused(env: &TestEnv, args: &[&str], code: &str, exit: i32) -> Value {
-    let run = env.cpd2(args);
+    let run = env.cpd(args);
     let err = run.error();
     assert_eq!((err["code"].as_str().unwrap(), run.exit), (code, exit), "{args:?}: {run:?}");
     err
@@ -451,7 +451,7 @@ fn list_prints_events_in_the_shape_of_11_1() {
     assert_eq!(merged["job"], "api");
     assert_eq!(merged["attempt"], "api-a1");
     assert_eq!(merged["session"], Value::Null);
-    assert_eq!(merged["text"], "Job api merged. Next: cpd2 plan show");
+    assert_eq!(merged["text"], "Job api merged. Next: cpd plan show");
     assert_eq!(merged["data"], json!({"sha": "c0ffee1", "tier": "S2"}));
     assert!(merged["at"].as_str().unwrap().ends_with('Z'));
 }
@@ -493,7 +493,7 @@ fn list_selects_by_plan_context_session_and_kind() {
 fn list_selection_flags_do_not_fall_back_to_the_environment() {
     let env = seeded();
     let out = env
-        .command(CPD2)
+        .command(CPD)
         .args(["events", "list"])
         .env("CPD_PLAN", "pay")
         .env("CPD_SESSION", "worker1")
@@ -506,12 +506,12 @@ fn list_selection_flags_do_not_fall_back_to_the_environment() {
 #[test]
 fn list_is_read_only_and_repeatable() {
     let env = seeded();
-    let a = env.cpd2(&["events", "list", "--plan", "pay"]);
-    let b = env.cpd2(&["events", "list", "--plan", "pay"]);
+    let a = env.cpd(&["events", "list", "--plan", "pay"]);
+    let b = env.cpd(&["events", "list", "--plan", "pay"]);
     assert_eq!(a.stdout, b.stdout);
     let conn = Connection::open(home(&env).db()).unwrap();
     let txns: i64 = conn.query_row("SELECT count(*) FROM txns", [], |r| r.get(0)).unwrap();
-    env.cpd2(&["events", "list"]).ok();
+    env.cpd(&["events", "list"]).ok();
     assert_eq!(txns, conn.query_row("SELECT count(*) FROM txns", [], |r| r.get::<_, i64>(0)).unwrap());
 }
 
@@ -549,7 +549,7 @@ fn follow_until_idle_replays_since_zero_one_event_per_line() {
     let env = seeded();
     let lines = follow_until_idle(&env, &["--since", "0"]);
     assert_eq!(lines, list(&env, &["--since", "0"])["events"].as_array().unwrap().clone());
-    let run = env.cpd2(&["events", "follow", "--until-idle", "--since", "0"]);
+    let run = env.cpd(&["events", "follow", "--until-idle", "--since", "0"]);
     assert_eq!(run.stdout.lines().count(), 11);
     assert!(run.stdout.ends_with('\n'));
     assert_eq!(run.stderr, "");
@@ -633,7 +633,7 @@ struct Follower {
 impl Follower {
     fn start(env: &TestEnv, args: &[&str]) -> Follower {
         let mut child = env
-            .command(CPD2)
+            .command(CPD)
             .args(["events", "follow"])
             .args(args)
             .stdout(Stdio::piped())
@@ -750,7 +750,7 @@ fn follow_a_failure_after_the_first_line_is_the_last_line() {
     let env = seeded();
     let mut follower = Follower::start(&env, &["--since", "10"]);
     assert_eq!(follower.next().unwrap()["id"], 11);
-    // An upgrade by a newer cpd2 while the follower runs.
+    // An upgrade by a newer cpd while the follower runs.
     let conn = Connection::open(home(&env).db()).unwrap();
     conn.pragma_update(None, "user_version", 99).unwrap();
     let last = follower.next().unwrap();

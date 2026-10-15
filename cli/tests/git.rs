@@ -7,15 +7,15 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use common::TestEnv;
-use cpd2::error::ErrorCode;
-use cpd2::git::hooks::{HookError, HookOutcome, load, run_hook};
-use cpd2::git::{
+use cpd::error::ErrorCode;
+use cpd::git::hooks::{HookError, HookOutcome, load, run_hook};
+use cpd::git::{
     Operation, Setup, attempt_branch, attempt_worktree_path, create_attempt_worktree, create_lead_worktree,
     discard_worktree, lead_branch, lead_worktree_path, protected_list, remove_merged_attempt, tamper_check,
     touched_protected,
 };
-use cpd2::home::Hook;
-use cpd2::ids::{AttemptId, PlanId};
+use cpd::home::Hook;
+use cpd::ids::{AttemptId, PlanId};
 
 fn plan() -> PlanId {
     PlanId::parse("pay-4521").unwrap()
@@ -252,11 +252,11 @@ fn hooks(wt: &str) -> Hooks {
 }
 
 impl Hooks {
-    fn run(&self, hook: Hook) -> cpd2::git::HookResult {
+    fn run(&self, hook: Hook) -> cpd::git::HookResult {
         self.run_for(hook, Duration::from_secs(30))
     }
 
-    fn run_for(&self, hook: Hook, timeout: Duration) -> cpd2::git::HookResult {
+    fn run_for(&self, hook: Hook, timeout: Duration) -> cpd::git::HookResult {
         let op = Operation { branch: "main" };
         run_hook(hook, &self.repo, Some(&op), timeout, &self.log).unwrap()
     }

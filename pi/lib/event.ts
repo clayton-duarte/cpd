@@ -1,4 +1,4 @@
-import { errorOfEnvelope, isObject, type CpdError } from "./cpd2.ts";
+import { errorOfEnvelope, isObject, type CpdError } from "./cpd.ts";
 
 /** contract.md §5.2: every Event kind. A line with any other kind is not a valid Event. */
 export const KINDS = [

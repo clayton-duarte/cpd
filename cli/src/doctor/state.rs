@@ -26,7 +26,7 @@ pub fn store(opened: Result<Store, CpdError>) -> (Check, Option<Store>) {
         Ok(store) => {
             let check = match store.schema_mismatch() {
                 None => Check::pass("store", Severity::Error),
-                Some(m) => Check::fail("store", Severity::Error, "The schema is not this cpd2's: a table or trigger was changed outside cpd.")
+                Some(m) => Check::fail("store", Severity::Error, "The schema is not this cpd's: a table or trigger was changed outside cpd.")
                     .found(m.found.clone())
                     .expected(m.expected.clone()),
             };
@@ -147,7 +147,7 @@ pub fn watch(home: &CpdHome, store: Option<&mut Store>) -> Check {
     }
     match engine_runs(&home.watch_lock()) {
         Ok(true) => Check::pass(name, Severity::Warn).found(format!("{plans} Plan(s) in dispatch or pr; the engine runs")),
-        Ok(false) => Check::fail(name, Severity::Warn, format!("{plans} Plan(s) are in dispatch or pr and no engine runs: start it with `cpd2 watch --ensure`.")),
+        Ok(false) => Check::fail(name, Severity::Warn, format!("{plans} Plan(s) are in dispatch or pr and no engine runs: start it with `cpd watch --ensure`.")),
         Err(message) => Check::fail(name, Severity::Warn, message),
     }
 }

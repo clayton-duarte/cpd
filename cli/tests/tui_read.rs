@@ -1,20 +1,20 @@
 //! The TUI's read model (commands.md §17), against a store prepared through the
 //! store API (`Store::write`, as the other areas' tests do, because Plans, Jobs
-//! and Attempts belong to their areas) and through the built `cpd2` commands.
+//! and Attempts belong to their areas) and through the built `cpd` commands.
 
 mod common;
 
 use std::time::{Duration, Instant};
 
 use common::TestEnv;
-use cpd2::config::Tier;
-use cpd2::error::{CpdError, ErrorCode};
-use cpd2::home::CpdHome;
-use cpd2::ids::{AttemptId, EscalationId, JobKey, PlanId, SessionId};
-use cpd2::plan::{Phase, jobs, plan_fingerprint};
-use cpd2::session::State;
-use cpd2::store::Store;
-use cpd2::tui::read::{
+use cpd::config::Tier;
+use cpd::error::{CpdError, ErrorCode};
+use cpd::home::CpdHome;
+use cpd::ids::{AttemptId, EscalationId, JobKey, PlanId, SessionId};
+use cpd::plan::{Phase, jobs, plan_fingerprint};
+use cpd::session::State;
+use cpd::store::Store;
+use cpd::tui::read::{
     self, AttemptStatus, Cause, Checks, Engine, EscalationStatus, JobStatus, Origin, Outcome, Place, PrState, ReviewStatus,
 };
 use rusqlite::Connection;
@@ -404,8 +404,8 @@ fn a_command_that_changes_a_session_shows_in_the_next_snapshot() {
     let (env, mut store) = fixture();
     std::fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
     let before = read::tree(&mut store).unwrap();
-    env.cpd2(&["session", "state", "blocked", "--label", "cpd: asking", "--session", "f-ship"]).ok();
-    env.cpd2(&["session", "rename", "renamed fork", "--session", "f-ship"]).ok();
+    env.cpd(&["session", "state", "blocked", "--label", "cpd: asking", "--session", "f-ship"]).ok();
+    env.cpd(&["session", "rename", "renamed fork", "--session", "f-ship"]).ok();
     let after = read::tree(&mut store).unwrap();
     let fork = &after.contexts[0].plans[0].sessions[1];
     assert_eq!((fork.state, fork.state_label.as_deref(), fork.name.as_str()), (State::Blocked, Some("cpd: asking"), "renamed fork"));

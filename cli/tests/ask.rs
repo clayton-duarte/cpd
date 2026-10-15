@@ -9,10 +9,10 @@ use std::process::{Child, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use common::{CPD2, Run, TestEnv};
-use cpd2::error::CpdError;
-use cpd2::home::CpdHome;
-use cpd2::store::{Store, WriteTxn};
+use common::{CPD, Run, TestEnv};
+use cpd::error::CpdError;
+use cpd::home::CpdHome;
+use cpd::store::{Store, WriteTxn};
 use serde_json::{Value, json};
 
 // ---------- fixtures ----------
@@ -67,7 +67,7 @@ fn refused(run: &Run, code: &str, exit: i32) -> Value {
 }
 
 fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
-    env.cpd2(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
+    env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
 }
 
 fn session_state(env: &TestEnv) -> (String, Option<String>) {
@@ -76,9 +76,9 @@ fn session_state(env: &TestEnv) -> (String, Option<String>) {
         .unwrap()
 }
 
-/// `cpd2 ask a-a1 <question> --plan p` running in the background.
+/// `cpd ask a-a1 <question> --plan p` running in the background.
 fn spawn_ask(env: &TestEnv, question: &str) -> Child {
-    env.command(CPD2)
+    env.command(CPD)
         .args(["ask", "a-a1", question, "--plan", "pl"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -126,12 +126,12 @@ fn ask_blocks_until_answered_and_prints_the_answer() {
     assert_eq!(asked[0]["job"], "a");
     assert_eq!(asked[0]["attempt"], "a-a1");
     assert_eq!(asked[0]["data"], json!({"escalation": "a-a1-q1", "question": "Which field names?"}));
-    assert!(asked[0]["text"].as_str().unwrap().contains("cpd2 answer a-a1-q1"));
+    assert!(asked[0]["text"].as_str().unwrap().contains("cpd answer a-a1-q1"));
     let states = events(&env, "session-state");
     assert_eq!(states.last().unwrap()["data"], json!({"from": "working", "to": "blocked", "label": "cpd: question to the Lead"}));
     assert_eq!(states.last().unwrap()["session"], "w1");
 
-    env.cpd2(&["answer", "a-a1-q1", "Use the v2 field names.", "--plan", "pl"]).ok();
+    env.cpd(&["answer", "a-a1-q1", "Use the v2 field names.", "--plan", "pl"]).ok();
     let run = finish(child);
     assert_eq!(run.ok(), json!({"ok": true, "escalation": "a-a1-q1", "answer": "Use the v2 field names."}));
     assert_eq!(session_state(&env), ("working".to_owned(), None));
@@ -147,7 +147,7 @@ fn every_ask_is_a_new_escalation() {
         let child = spawn_ask(&env, "Again?");
         let id = format!("a-a1-q{k}");
         wait_for(&env, &id);
-        env.cpd2(&["answer", &id, "Yes.", "--plan", "pl"]).ok();
+        env.cpd(&["answer", &id, "Yes.", "--plan", "pl"]).ok();
         assert_eq!(finish(child).ok()["escalation"], id.as_str());
     }
 }
@@ -156,7 +156,7 @@ fn every_ask_is_a_new_escalation() {
 fn ask_times_out_and_expires_the_escalation() {
     let env = TestEnv::new();
     setup(&env);
-    let run = env.cpd2(&["ask", "a-a1", "Anyone?", "--timeout-minutes", "0", "--plan", "pl"]);
+    let run = env.cpd(&["ask", "a-a1", "Anyone?", "--timeout-minutes", "0", "--plan", "pl"]);
     let error = refused(&run, "ask_timeout", 5);
     assert_eq!(error["details"]["escalation"], "a-a1-q1");
 
@@ -173,7 +173,7 @@ fn ask_times_out_and_expires_the_escalation() {
     assert_eq!(session_state(&env), ("working".to_owned(), None));
 
     // An expired Escalation cannot be answered any more.
-    refused(&env.cpd2(&["answer", "a-a1-q1", "Late.", "--plan", "pl"]), "escalation_expired", 3);
+    refused(&env.cpd(&["answer", "a-a1-q1", "Late.", "--plan", "pl"]), "escalation_expired", 3);
 }
 
 #[test]
@@ -181,10 +181,10 @@ fn ask_refuses_an_attempt_that_is_not_running() {
     let env = TestEnv::new();
     setup(&env);
     fixture(&env, "UPDATE attempts SET status = 'merging', submitted_sha = 's', submitted_at = 't' WHERE id = 'a-a1';");
-    let error = refused(&env.cpd2(&["ask", "a-a1", "Q?", "--plan", "pl"]), "attempt_not_running", 3);
+    let error = refused(&env.cpd(&["ask", "a-a1", "Q?", "--plan", "pl"]), "attempt_not_running", 3);
     assert_eq!(error["details"]["status"], "merging");
     fixture(&env, "UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE id = 'a-a1';");
-    refused(&env.cpd2(&["ask", "a-a1", "Q?", "--plan", "pl"]), "attempt_not_running", 3);
+    refused(&env.cpd(&["ask", "a-a1", "Q?", "--plan", "pl"]), "attempt_not_running", 3);
     // Nothing was written.
     assert_eq!(query::<i64>(&env, "SELECT count(*) FROM escalations"), 0);
     assert!(events(&env, "escalation").is_empty());
@@ -194,15 +194,15 @@ fn ask_refuses_an_attempt_that_is_not_running() {
 fn ask_refusals_before_the_attempt() {
     let env = TestEnv::new();
     setup(&env);
-    refused(&env.cpd2(&["ask", "a-a2", "Q?", "--plan", "pl"]), "attempt_not_found", 4);
-    refused(&env.cpd2(&["ask", "a-a1", "Q?", "--plan", "nope"]), "plan_not_found", 4);
-    refused(&env.cpd2(&["ask", "a-a1", "Q?"]), "plan_required", 2);
-    refused(&env.cpd2(&["ask", "not-an-attempt", "Q?", "--plan", "pl"]), "invalid_attempt_id", 2);
-    refused(&env.cpd2(&["ask", "a-a1", "", "--plan", "pl"]), "usage", 2);
-    refused(&env.cpd2(&["ask", "a-a1", "Q?", "--timeout-minutes", "soon", "--plan", "pl"]), "usage", 2);
+    refused(&env.cpd(&["ask", "a-a2", "Q?", "--plan", "pl"]), "attempt_not_found", 4);
+    refused(&env.cpd(&["ask", "a-a1", "Q?", "--plan", "nope"]), "plan_not_found", 4);
+    refused(&env.cpd(&["ask", "a-a1", "Q?"]), "plan_required", 2);
+    refused(&env.cpd(&["ask", "not-an-attempt", "Q?", "--plan", "pl"]), "invalid_attempt_id", 2);
+    refused(&env.cpd(&["ask", "a-a1", "", "--plan", "pl"]), "usage", 2);
+    refused(&env.cpd(&["ask", "a-a1", "Q?", "--timeout-minutes", "soon", "--plan", "pl"]), "usage", 2);
     // A stopped Worker Session cannot become blocked (§3.6): nothing is written.
     fixture(&env, "UPDATE sessions SET state = 'stopped' WHERE id = 'w1';");
-    refused(&env.cpd2(&["ask", "a-a1", "Q?", "--plan", "pl"]), "illegal_transition", 3);
+    refused(&env.cpd(&["ask", "a-a1", "Q?", "--plan", "pl"]), "illegal_transition", 3);
     assert_eq!(query::<i64>(&env, "SELECT count(*) FROM escalations"), 0);
 }
 
@@ -211,7 +211,7 @@ fn ask_takes_the_plan_from_the_environment() {
     let env = TestEnv::new();
     setup(&env);
     let run = {
-        let out = env.command(CPD2).env("CPD_PLAN", "pl").args(["ask", "a-a1", "Q?", "--timeout-minutes", "0"]).output().unwrap();
+        let out = env.command(CPD).env("CPD_PLAN", "pl").args(["ask", "a-a1", "Q?", "--timeout-minutes", "0"]).output().unwrap();
         Run { exit: out.status.code().unwrap(), stdout: String::from_utf8(out.stdout).unwrap(), stderr: String::new() }
     };
     refused(&run, "ask_timeout", 5);
@@ -233,7 +233,7 @@ fn answer_records_the_answer() {
     let env = TestEnv::new();
     setup(&env);
     open_escalation(&env);
-    let out = env.cpd2(&["answer", "a-a1-q1", "Use the v2 field names.", "--plan", "pl"]).ok();
+    let out = env.cpd(&["answer", "a-a1-q1", "Use the v2 field names.", "--plan", "pl"]).ok();
     assert_eq!(out["escalation"], "a-a1-q1");
     assert_eq!(out["attempt"], "a-a1");
     let answered_at = out["answered_at"].as_str().unwrap();
@@ -254,9 +254,9 @@ fn answer_is_refused_unless_the_escalation_is_open() {
     let env = TestEnv::new();
     setup(&env);
     open_escalation(&env);
-    env.cpd2(&["answer", "a-a1-q1", "First.", "--plan", "pl"]).ok();
+    env.cpd(&["answer", "a-a1-q1", "First.", "--plan", "pl"]).ok();
     let events_before = events(&env, "escalation-answered").len();
-    refused(&env.cpd2(&["answer", "a-a1-q1", "Second.", "--plan", "pl"]), "escalation_answered", 3);
+    refused(&env.cpd(&["answer", "a-a1-q1", "Second.", "--plan", "pl"]), "escalation_answered", 3);
     assert_eq!(query::<String>(&env, "SELECT answer FROM escalations WHERE id = 'a-a1-q1'"), "First.");
     assert_eq!(events(&env, "escalation-answered").len(), events_before);
 
@@ -265,7 +265,7 @@ fn answer_is_refused_unless_the_escalation_is_open() {
         "INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at, expired_at)
          VALUES ('pl', 'a-a1-q2', 'a-a1', 2, 'Gone?', 'expired', 1, 't', 't');",
     );
-    refused(&env.cpd2(&["answer", "a-a1-q2", "Late.", "--plan", "pl"]), "escalation_expired", 3);
+    refused(&env.cpd(&["answer", "a-a1-q2", "Late.", "--plan", "pl"]), "escalation_expired", 3);
 }
 
 #[test]
@@ -273,10 +273,10 @@ fn answer_refusals_before_the_escalation() {
     let env = TestEnv::new();
     setup(&env);
     open_escalation(&env);
-    refused(&env.cpd2(&["answer", "a-a1-q9", "A.", "--plan", "pl"]), "escalation_not_found", 4);
-    refused(&env.cpd2(&["answer", "a-a1-q1", "A.", "--plan", "other"]), "escalation_not_found", 4);
-    refused(&env.cpd2(&["answer", "a-a1-q1", "A."]), "plan_required", 2);
-    refused(&env.cpd2(&["answer", "q1", "A.", "--plan", "pl"]), "invalid_escalation_id", 2);
-    refused(&env.cpd2(&["answer", "a-a1-q1", "", "--plan", "pl"]), "usage", 2);
+    refused(&env.cpd(&["answer", "a-a1-q9", "A.", "--plan", "pl"]), "escalation_not_found", 4);
+    refused(&env.cpd(&["answer", "a-a1-q1", "A.", "--plan", "other"]), "escalation_not_found", 4);
+    refused(&env.cpd(&["answer", "a-a1-q1", "A."]), "plan_required", 2);
+    refused(&env.cpd(&["answer", "q1", "A.", "--plan", "pl"]), "invalid_escalation_id", 2);
+    refused(&env.cpd(&["answer", "a-a1-q1", "", "--plan", "pl"]), "usage", 2);
     assert_eq!(query::<String>(&env, "SELECT status FROM escalations WHERE id = 'a-a1-q1'"), "open");
 }

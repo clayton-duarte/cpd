@@ -72,10 +72,10 @@ fn complete(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<bool, CpdError> {
         text += &format!(" Cancelled: {}.", cancelled.join(", "));
     }
     if failed.is_empty() {
-        text += &format!(" Next: cpd2 pr open --plan {plan}");
+        text += &format!(" Next: cpd pr open --plan {plan}");
     } else {
         text += &format!(
-            " Failed: {}; decide each with cpd2 job retry <job> --tier <T> --plan {plan} or cpd2 job cancel <job> --reason <text> --plan {plan}, then: cpd2 pr open --plan {plan}",
+            " Failed: {}; decide each with cpd job retry <job> --tier <T> --plan {plan} or cpd job cancel <job> --reason <text> --plan {plan}, then: cpd pr open --plan {plan}",
             failed.join(", ")
         );
     }

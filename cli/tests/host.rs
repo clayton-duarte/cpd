@@ -10,10 +10,10 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use common::TestEnv;
-use cpd2::error::ErrorCode;
-use cpd2::host::layout::{self, View};
-use cpd2::host::{Pane, PaneId, Spawn, Split, Tmux};
-use cpd2::ids::{AttemptId, PlanId, SessionId};
+use cpd::error::ErrorCode;
+use cpd::host::layout::{self, View};
+use cpd::host::{Pane, PaneId, Spawn, Split, Tmux};
+use cpd::ids::{AttemptId, PlanId, SessionId};
 
 /// The wrapper runs `tmux` with this process's environment, so each test
 /// points `TMUX_TMPDIR` at its own `TestEnv` while holding this lock. Rust's
@@ -169,7 +169,7 @@ fn respawn_killing_restarts_a_live_pane_in_place() {
     t.set_pane_view(&id, View::Plan).unwrap();
     let before = pane(&t.list_panes().unwrap(), &id).clone();
     let out = s.env.root().join("respawned.txt");
-    t.respawn_pane_killing(&id, &sh(&format!("echo \"$CPD2_HOST_TEST_VAR\" > '{}'; sleep 600", out.display()))).unwrap();
+    t.respawn_pane_killing(&id, &sh(&format!("echo \"$CPD_HOST_TEST_VAR\" > '{}'; sleep 600", out.display()))).unwrap();
     let after = pane(&t.list_panes().unwrap(), &id).clone();
     assert!(!after.dead);
     assert_ne!(after.pid, before.pid);
@@ -177,7 +177,7 @@ fn respawn_killing_restarts_a_live_pane_in_place() {
 
     // An empty argv reruns the pane's own command, with the environment given again.
     let mut rerun = Spawn::default();
-    rerun.env.insert("CPD2_HOST_TEST_VAR".into(), "again".into());
+    rerun.env.insert("CPD_HOST_TEST_VAR".into(), "again".into());
     t.respawn_pane_killing(&id, &rerun).unwrap();
     wait_for("the rerun to write", || std::fs::read_to_string(&out).is_ok_and(|s| s == "again\n"));
     assert_ne!(pane(&t.list_panes().unwrap(), &id).pid, after.pid);
@@ -187,12 +187,12 @@ fn respawn_killing_restarts_a_live_pane_in_place() {
 fn create_session_returns_the_first_window_and_pane_once() {
     let s = server();
     let mut spawn = sleeper(s.env.root());
-    spawn.env.insert("CPD2_HOST_TEST_VAR".into(), "pay".into());
+    spawn.env.insert("CPD_HOST_TEST_VAR".into(), "pay".into());
     let (window, pane) = s.tmux.create_session("cpd", "park-x", &spawn).unwrap().expect("created");
     // -e reaches the first pane only, not the session's later windows.
     let session_env = s.env.tmux(&["show-environment", "-t", "=cpd"]);
-    assert!(!String::from_utf8_lossy(&session_env.stdout).contains("CPD2_HOST_TEST_VAR"), "{session_env:?}");
-    let later = s.tmux.new_window("cpd", "later", &sh("echo \"plan=$CPD2_HOST_TEST_VAR\"; sleep 600")).unwrap().1;
+    assert!(!String::from_utf8_lossy(&session_env.stdout).contains("CPD_HOST_TEST_VAR"), "{session_env:?}");
+    let later = s.tmux.new_window("cpd", "later", &sh("echo \"plan=$CPD_HOST_TEST_VAR\"; sleep 600")).unwrap().1;
     wait_for("the later window's output", || {
         let out = s.env.tmux(&["capture-pane", "-p", "-t", later.as_str()]);
         String::from_utf8_lossy(&out.stdout).contains("plan=")
@@ -367,7 +367,7 @@ fn the_statusbar_is_a_view_and_a_pane_marked_so_parses() {
     assert_eq!(View::parse("nope"), None);
 }
 
-/// Finding 4: a pane made by a newer cpd2 (a view this binary does not know)
+/// Finding 4: a pane made by a newer cpd (a view this binary does not know)
 /// is skipped, and the rest of the listing is intact.
 #[test]
 fn a_pane_with_an_unknown_view_is_skipped_not_a_failed_listing() {

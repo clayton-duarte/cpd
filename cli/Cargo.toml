@@ -1,12 +1,12 @@
 [package]
-name = "cpd2"
+name = "cpd"
 description = "cpd 2: the Rust rewrite of cpd"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "cpd2"
+name = "cpd"
 path = "src/main.rs"
 
 [dependencies]

@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
-import { CpdError } from "./cpd2.ts";
+import { CpdError } from "./cpd.ts";
 
 export type Timing = {
   /** First restart delay of the follower; doubles up to `restartMaxMs`. */
@@ -29,7 +29,7 @@ export type FollowerHooks = {
 };
 
 /**
- * commands.md §15.2: `cpd2 events follow --session <id> --since <cursor>` as a child process (argv, stdin `/dev/null`),
+ * commands.md §15.2: `cpd events follow --session <id> --since <cursor>` as a child process (argv, stdin `/dev/null`),
  * read line by line. When it ends it is restarted with the in-memory cursor after `restartInitialMs`,
  * backing off to `restartMaxMs`; reading a valid Event resets the delay.
  */
@@ -69,9 +69,9 @@ export class Follower {
     const args = ["events", "follow", "--session", this.sessionId, "--since", String(this.hooks.cursor())];
     let child: ChildProcess;
     try {
-      child = this.spawn("cpd2", args, { stdio: ["ignore", "pipe", "pipe"] });
+      child = this.spawn("cpd", args, { stdio: ["ignore", "pipe", "pipe"] });
     } catch (e) {
-      this.hooks.onFailure(new CpdError("spawn_failed", `cannot run cpd2 ${args.join(" ")}: ${e instanceof Error ? e.message : String(e)}`));
+      this.hooks.onFailure(new CpdError("spawn_failed", `cannot run cpd ${args.join(" ")}: ${e instanceof Error ? e.message : String(e)}`));
       this.restartLater();
       return;
     }
@@ -108,9 +108,9 @@ export class Follower {
       if (failure) this.hooks.onFailure(failure);
       this.restartLater();
     };
-    child.on("error", (e) => end(new CpdError("spawn_failed", `cannot run cpd2 ${args.join(" ")}: ${e.message}`)));
+    child.on("error", (e) => end(new CpdError("spawn_failed", `cannot run cpd ${args.join(" ")}: ${e.message}`)));
     child.on("close", (code, signal) => {
-      end(code === 0 ? undefined : new CpdError("follower_exit", `cpd2 events follow ended with ${code === null ? `signal ${signal}` : `exit ${code}`}${stderr.trim() ? `: ${stderr.trim()}` : ""}`, { exit: code }));
+      end(code === 0 ? undefined : new CpdError("follower_exit", `cpd events follow ended with ${code === null ? `signal ${signal}` : `exit ${code}`}${stderr.trim() ? `: ${stderr.trim()}` : ""}`, { exit: code }));
     });
   }
 

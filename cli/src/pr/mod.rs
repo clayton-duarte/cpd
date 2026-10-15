@@ -145,7 +145,7 @@ fn gate(env: &Env, plan: &PlanRow, lead: &Path, again: &str) -> Result<(), CpdEr
         HookOutcome::Failed { exit } => Err(CpdError::new(
             ErrorCode::GateFailed,
             format!(
-                "The Gate failed on {} (exit {exit}): nothing was pushed. Append fix Jobs (cpd2 job add), then run cpd2 {again} again once they are Merged.",
+                "The Gate failed on {} (exit {exit}): nothing was pushed. Append fix Jobs (cpd job add), then run cpd {again} again once they are Merged.",
                 plan.lead_branch
             ),
         )

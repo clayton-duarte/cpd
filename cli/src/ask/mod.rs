@@ -44,12 +44,12 @@ pub struct AnswerArgs {
     plan: PlanArg,
 }
 
-/// `cpd2 ask` (§8.1).
+/// `cpd ask` (§8.1).
 pub fn ask(args: AskArgs) -> Result<Output, CpdError> {
     question::ask(args)
 }
 
-/// `cpd2 answer` (§8.2).
+/// `cpd answer` (§8.2).
 pub fn answer(args: AnswerArgs) -> Result<Output, CpdError> {
     reply::answer(args)
 }

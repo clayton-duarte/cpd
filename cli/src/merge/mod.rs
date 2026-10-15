@@ -128,7 +128,7 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<(End, Option<CpdError>),
         // 8. Fast-forward with a compare-and-swap.
         let new = git::run::rev_parse(&target.worktree, "HEAD")?;
         git::run::ok(repo, &["merge-base", "--is-ancestor", &old, &new])?;
-        let message = format!("cpd2: merge {}/{}", target.plan, target.id);
+        let message = format!("cpd: merge {}/{}", target.plan, target.id);
         let out = run(repo, &["update-ref", "-m", &message, &lead_ref, &new, &old])?;
         if out.code == 0 {
             // 9. Sync the Lead worktree; the merge stands whatever happens here.

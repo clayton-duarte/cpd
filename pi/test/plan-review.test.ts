@@ -134,7 +134,7 @@ test("approval: plan decide --approve with the feedback in a file, the entry, th
   const f = new Fixture();
   t.after(() => f.close());
   await opens(f);
-  f.respond("plan-decide", { ok: true, review: { id: "r1", status: "approved" }, current: true, next: "cpd2 plan lock" });
+  f.respond("plan-decide", { ok: true, review: { id: "r1", status: "approved" }, current: true, next: "cpd plan lock" });
   result(f, { reviewId: "pn-1", approved: true, feedback: "Looks good.\nShip it." });
   await waitFor("the decision message", () => decisions(f).length === 1);
 
@@ -147,7 +147,7 @@ test("approval: plan decide --approve with the feedback in a file, the entry, th
   assert.deepEqual(entries(f).at(-1), { plan: "p1", review: "r1", plannotator_id: "pn-1", status: "approved" });
   await waitFor("unblocked", () => stateCalls(f).at(-1) === "idle");
   const d = decisions(f)[0]!;
-  assert.equal(d.message.content, "Plan review r1 was APPROVED.\nFeedback from the reviewer:\nLooks good.\nShip it.\nNext: cpd2 plan lock");
+  assert.equal(d.message.content, "Plan review r1 was APPROVED.\nFeedback from the reviewer:\nLooks good.\nShip it.\nNext: cpd plan lock");
   assert.deepEqual(d.options, { triggerTurn: true, deliverAs: "followUp" });
   assert.equal(f.pi.delivered().length, 0, "the custom type differs from cpd, so it never moves the cursor");
 
@@ -224,7 +224,7 @@ const NOTE = "This review was decided outside plannotator. plannotator offers no
 const decidedEvent = (id: number, status: string, feedback: string | null, review = "r1") => ev(id, "plan-review", { data: { review, fingerprint: "ff", status, feedback } });
 
 for (const [status, feedback, text] of [
-  ["approved", "Ship it.", `Plan review r1 was APPROVED.\nFeedback from the reviewer:\nShip it.\nNext: cpd2 plan lock\n${NOTE}`],
+  ["approved", "Ship it.", `Plan review r1 was APPROVED.\nFeedback from the reviewer:\nShip it.\nNext: cpd plan lock\n${NOTE}`],
   ["rejected", null, `Plan review r1 was REJECTED.\nRevise the plan (job edit, job add, job cancel), then call cpd_plan_review again.\n${NOTE}`],
 ] as const) {
   test(`an Event-only ${status} unblocks the Lead and tells it once, without plan decide; a late plannotator result is ignored`, async (t) => {

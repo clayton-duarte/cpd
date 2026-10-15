@@ -46,7 +46,7 @@ pub(super) fn answer(args: AnswerArgs) -> Result<Output, CpdError> {
         )?;
         let at: String =
             tx.query_row("SELECT answered_at FROM escalations WHERE plan = ?1 AND id = ?2", [plan.as_str(), &id.to_string()], |r| r.get(0))?;
-        let text = format!("Escalation {id} of Attempt {attempt} was answered. Next: cpd2 attempt show {attempt} --plan {plan}");
+        let text = format!("Escalation {id} of Attempt {attempt} was answered. Next: cpd attempt show {attempt} --plan {plan}");
         append(
             tx,
             NewEvent::new(Kind::EscalationAnswered, text, json!({"escalation": id.to_string()}))

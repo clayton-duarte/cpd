@@ -25,7 +25,7 @@ use crate::store::Store;
 
 pub use start::{Origin, StartCtx, Started, start};
 
-/// The arguments of `cpd2 attempt run` (commands.md §6.4).
+/// The arguments of `cpd attempt run` (commands.md §6.4).
 #[derive(clap::Args, Debug)]
 pub struct RunArgs {
     /// The Attempt id
@@ -35,7 +35,7 @@ pub struct RunArgs {
     plan: PlanArg,
 }
 
-/// The arguments of `cpd2 job dispatch` (commands.md §5.5).
+/// The arguments of `cpd job dispatch` (commands.md §5.5).
 #[derive(clap::Args, Debug)]
 pub struct DispatchArgs {
     /// The Job key
@@ -45,13 +45,13 @@ pub struct DispatchArgs {
     plan: PlanArg,
 }
 
-/// `cpd2 attempt run` (internal): the driver, started detached with the
+/// `cpd attempt run` (internal): the driver, started detached with the
 /// driver lock as fd 3.
 pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     run::run(args)
 }
 
-/// `cpd2 job dispatch` (commands.md §5.5): starts one Ready Job now, as E3 does.
+/// `cpd job dispatch` (commands.md §5.5): starts one Ready Job now, as E3 does.
 pub fn dispatch(args: DispatchArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let home = CpdHome::from_env()?;

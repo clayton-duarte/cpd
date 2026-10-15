@@ -1,6 +1,6 @@
 //! The starter (contract §3.4 "The driver lock"; commands.md §5.5): what
 //! `job dispatch` and engine E3 share. It takes the driver lock, inserts the
-//! `starting` Attempt with its Tier (§9), and spawns the driver `cpd2 attempt
+//! `starting` Attempt with its Tier (§9), and spawns the driver `cpd attempt
 //! run` detached, handing it the lock as fd 3.
 
 use std::fs::OpenOptions;
@@ -240,7 +240,7 @@ fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &N
     }
     let attempt = &next.attempt;
     let text = format!(
-        "Attempt {attempt} of Job {key} started at Tier {} ({}). See: cpd2 attempt show {attempt} --plan {plan}",
+        "Attempt {attempt} of Job {key} started at Tier {} ({}). See: cpd attempt show {attempt} --plan {plan}",
         next.tier,
         next.origin.as_str()
     );
@@ -249,11 +249,11 @@ fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &N
     Ok(())
 }
 
-/// Spawns `cpd2 attempt run <attempt> --plan <plan>` detached (`setsid`), with
+/// Spawns `cpd attempt run <attempt> --plan <plan>` detached (`setsid`), with
 /// the lock as fd 3, stdin from `/dev/null`, and stdout and stderr appended to
 /// `run/<plan>/logs/attempt-<attempt>.log`. Returns its pid.
 fn spawn(home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock: &Starter) -> Result<u32, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("cannot find the cpd2 binary: {e}"))?;
+    let exe = std::env::current_exe().map_err(|e| format!("cannot find the cpd binary: {e}"))?;
     let log_path = home.driver_log(plan, attempt);
     let dir = log_path.parent().expect("a log lives in a directory");
     std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;

@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { callCpd2, CpdError, isObject, toCpdError } from "./cpd2.ts";
+import { callCpd, CpdError, isObject, toCpdError } from "./cpd.ts";
 import { cursorFrom } from "./cursor.ts";
 import { errorMessage, eventMessage, FOLLOW_UP, LEAD_MESSAGES } from "./delivery.ts";
 import type { CpdEvent } from "./event.ts";
@@ -52,9 +52,9 @@ const asString = (v: unknown): string | null => (typeof v === "string" ? v : nul
 function parseSession(show: Record<string, unknown>): SessionInfo {
   const s = show.session;
   if (!isObject(s) || typeof s.plan_lead !== "boolean" || !Number.isSafeInteger(s.registered_event) || (s.plan !== null && typeof s.plan !== "string") || (s.name !== null && typeof s.name !== "string")) {
-    throw new CpdError("bad_output", "cpd2 session show: the session object lacks plan, plan_lead, registered_event or name");
+    throw new CpdError("bad_output", "cpd session show: the session object lacks plan, plan_lead, registered_event or name");
   }
-  if (s.plan_lead && typeof s.plan !== "string") throw new CpdError("bad_output", "cpd2 session show: a Plan Lead without a plan");
+  if (s.plan_lead && typeof s.plan !== "string") throw new CpdError("bad_output", "cpd session show: a Plan Lead without a plan");
   return { plan: asString(s.plan), planLead: s.plan_lead, registeredEvent: s.registered_event as number, name: asString(s.name) };
 }
 
@@ -67,7 +67,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   const ctxOf: { current: Ctx | undefined } = { current: undefined };
 
   const exec = (command: string, args: string[]) => pi.exec(command, args);
-  const call = (args: string[]) => callCpd2(exec, args);
+  const call = (args: string[]) => callCpd(exec, args);
 
   const deliver = (what: string, e: unknown, extra: Record<string, unknown> = {}) => {
     const err = toCpdError(e);
@@ -342,7 +342,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
 
   /**
    * §15.5 "Deciding elsewhere": a `plan-review` Event with status `approved` or `rejected` for a pending entry means a caller other than
-   * plannotator decided it. cpd2 already has the decision, so there is no `plan decide`. A failure leaves the entry pending.
+   * plannotator decided it. cpd already has the decision, so there is no `plan decide`. A failure leaves the entry pending.
    */
   async function decidedElsewhere(r: Run, entry: ReviewEntry, ev: CpdEvent): Promise<void> {
     if (entry.status !== "pending" || r.deciding.has(entry.review)) return;
@@ -361,7 +361,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     }
   }
 
-  /** Records the User's decision with cpd2, then tells the Lead. A failure other than `review_decided` leaves the entry pending. */
+  /** Records the User's decision with cpd, then tells the Lead. A failure other than `review_decided` leaves the entry pending. */
   async function decide(r: Run, entry: ReviewEntry, approved: boolean, feedback: string | undefined): Promise<void> {
     if (entry.status !== "pending" || r.deciding.has(entry.review)) return;
     r.deciding.add(entry.review);

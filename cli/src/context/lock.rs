@@ -17,7 +17,7 @@ pub struct ContextLock {
     _lock: Flock<File>,
 }
 
-/// Waits for the lock without a limit: a holder is another cpd2 process
+/// Waits for the lock without a limit: a holder is another cpd process
 /// doing a bounded amount of work (contract §4.6 gives no timeout).
 pub fn acquire(home: &CpdHome, context: &ContextId) -> Result<ContextLock, CpdError> {
     let path = home.context_lock(context);
