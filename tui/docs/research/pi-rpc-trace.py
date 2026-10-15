@@ -8,7 +8,7 @@ Sequence: get_state -> prompt (one tool call) -> steer while the tool runs -> se
 """
 import json, subprocess, sys, threading, time, queue
 
-CMD = ["pi", "--mode", "rpc", "--no-session", "-ne", "-e", "/tmp/pi-rpc-demo/ext.ts (a copy of pi-rpc-demo-ext.ts)",
+CMD = ["pi", "--mode", "rpc", "--no-session", "-ne", "-e", "/tmp/pi-rpc-demo/ext.ts",
        "--model", "github-copilot/claude-haiku-4.5", "--thinking", "off"]
 out = open(sys.argv[1], "w")
 t0 = time.monotonic()
