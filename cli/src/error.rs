@@ -71,6 +71,7 @@ error_codes! {
     StoreTooNew = "store_too_new" => Failure,
     MigrationFailed = "migration_failed" => Failure,
     StoreTampered = "store_tampered" => Failure,
+    StoreFailed = "store_failed" => Failure,
     GitFailed = "git_failed" => Failure,
     TmuxFailed = "tmux_failed" => Failure,
     GhFailed = "gh_failed" => Failure,

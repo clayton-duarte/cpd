@@ -49,7 +49,7 @@ Exit codes (kept from cpd 1 §2):
 | Exit | Meaning | Examples of codes |
 |---|---|---|
 | `0` | ok | |
-| `1` | failure: an external tool or something unexpected | `git_failed`, `tmux_failed`, `store_tampered`, `config_invalid` |
+| `1` | failure: an external tool or something unexpected | `git_failed`, `tmux_failed`, `store_tampered`, `store_failed` (the database cannot be opened, is not cpd's, or a statement fails through a bug; Escalation `rs-store-a1-q1`), `config_invalid` |
 | `2` | usage error | `usage`, `plan_required`, `invalid_plan_id` |
 | `3` | refused by an invariant: Locked, an illegal transition, a precondition | `job_locked`, `illegal_transition`, `dirty_tree`, `cas_lost` |
 | `4` | not found | `plan_not_found`, `job_not_found`, `session_not_found` |
