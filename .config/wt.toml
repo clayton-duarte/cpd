@@ -6,9 +6,5 @@ deps = "npm ci --no-audit --no-fund"
 typecheck = "npm run typecheck || exit 64"
 cargo = "scripts/cargo.sh build --workspace || exit 64"
 
-# Temporary: Attempts started before cpd 1's R19 change went live still run pre-merge after their merge,
-# so pre-merge stays the fast check until they have merged.
-# Then restore: verify = "npm run verify || exit 64" (the full Gate, run only at pr open / pr rebase).
 [pre-merge]
-typecheck = "npm run typecheck || exit 64"
-cargo = "scripts/cargo.sh build --workspace || exit 64"
+verify = "npm run verify || exit 64"
