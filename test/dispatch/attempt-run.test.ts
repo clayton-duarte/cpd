@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { CRASH_SETTLE_MS, decideReview, runAttempt, observeWorker, type RunResult } from "../../src/dispatch/attempt-run.ts";
+import { mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { CRASH_SETTLE_MS, decideReview, findSessionById, sessionTail, runAttempt, observeWorker, type RunResult } from "../../src/dispatch/attempt-run.ts";
 import type { MergeOutcome } from "../../src/git/merge.ts";
 import { CpdError, failure } from "../../src/lib/errors.ts";
 import { reviewDiffPath } from "../../src/lib/paths.ts";
 import { tmpDir } from "../helpers/index.ts";
-import { LEAD_SESSION, SHA_POST, SHA_PRE, makeWorld, reviewerName, verdictText, workerName, type Script, type World } from "./fakes.ts";
+import { LEAD_SESSION, SHA_POST, SHA_PRE, TMUX_REVIEWER_PANE, TMUX_SOCKET, makeWorld, reviewerName, verdictText, workerName, type Script, type World } from "./fakes.ts";
 
 process.env.CPD_HOME = tmpDir("cpd-attempt-run-");
 
@@ -515,4 +516,112 @@ test("the lifecycle logs every step to the attempt log", async () => {
   for (const step of ["1 load", "2 worktree", "3 spec", "4 placement", "5 start", "6 prompt", "7 decide", "9 review", "11 merge", "12 merged", "slot"]) {
     assert.ok(w.logs.some((l) => l.startsWith(`[${step}]`)), `no log line for step ${step}`);
   }
+});
+
+// --- the Reviewer of a tmux Lead: a hidden window of the Lead's tmux server, not a herdr pane (contract §12 step 9) ---
+
+const tmuxGo = (script: Script = {}) => go({ leadHost: "tmux", ...script });
+/** The words of a window command that tmux runs through the shell: every word single-quoted. */
+const words = (command: string): string[] => command.slice(1, -1).split("' '");
+const newWindowOf = (w: World) => w.tmuxCalls.find((c) => c.args[0] === "new-window")!;
+const sends = (w: World) => w.tmuxCalls.filter((c) => c.args[0] === "send-keys").map((c) => c.args);
+const LEAD_ONLY = "ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox";
+
+test("tmux Lead: the Reviewer starts in a new window of the Lead's server, forked from the Lead, read-only, with respawn off; a valid verdict merges; the window is killed", async () => {
+  const { w, r } = await tmuxGo();
+  assert.deepEqual(r, { state: "merged", sha: SHA_POST });
+
+  const open = newWindowOf(w);
+  assert.equal(open.socket, TMUX_SOCKET);
+  assert.deepEqual(open.args.slice(0, 6), ["new-window", "-d", "-n", "review api-a1", "-c", "/wt/api-a1"]);
+  const argv = words(open.args[6]!);
+  const id = argv[argv.indexOf("--session-id") + 1]!;
+  assert.match(id, /^[0-9a-f-]{36}$/);
+  assert.deepEqual(argv, [
+    "pi", "--approve", "--no-skills", "--exclude-tools", LEAD_ONLY, "--fork", LEAD_SESSION, "--tools", "read,grep,find,ls", "--model", "p/sonnet:xhigh",
+    "--session-id", id, "-n", "review api-a1", "--", "Read /reviews/api-a1.md and follow it exactly.",
+  ]);
+
+  assert.deepEqual(w.tmuxCalls.map((c) => c.socket), Array(w.tmuxCalls.length).fill(TMUX_SOCKET), "every call goes to the Lead's server");
+  assert.deepEqual(w.tmuxCalls.slice(1).map((c) => c.args), [
+    ["set-option", "-w", "-t", TMUX_REVIEWER_PANE, "remain-on-exit", "off"],
+    ["kill-window", "-t", TMUX_REVIEWER_PANE],
+  ]);
+  assert.deepEqual(sends(w), [], "a valid first verdict needs no re-prompt");
+  assert.equal(w.events.some((e) => e.startsWith("herdr.split") || e === `herdr.startAgent ${reviewerName()}`), false, "no herdr pane for the Reviewer");
+  assert.equal(w.prompts.some((p) => p.name === reviewerName()), false);
+  assert.equal(w.metricsCalls.find((c) => c.path.endsWith("reviewer.jsonl"))!.since! > 0, true, "its metrics skip the forked history");
+  assert.ok(w.ledger.includes("recordVerdict approve"));
+});
+
+test("tmux Lead, reviewMode fresh: no --fork", async () => {
+  const { w } = await tmuxGo({ reviewMode: "fresh" });
+  assert.equal(words(newWindowOf(w).args[6]!).includes("--fork"), false);
+});
+
+test("tmux Lead: an invalid verdict is re-prompted once through send-keys (text, then Enter), then accepted", async () => {
+  const { w, r } = await tmuxGo({ reviewer: ["I think it is fine.", verdictText("reject", "tests are missing")] });
+  assert.deepEqual(r, { state: "retry_queued", cause: "review_rejected", nextAttempt: "api-a2", nextTier: "S4" });
+  const [text, enter, ...more] = sends(w);
+  assert.deepEqual(more, []);
+  assert.deepEqual(text!.slice(0, 3), ["send-keys", "-t", TMUX_REVIEWER_PANE]);
+  assert.equal(text![3], "-l");
+  assert.match(text![4]!, /did not end with a valid verdict/);
+  assert.deepEqual(enter, ["send-keys", "-t", TMUX_REVIEWER_PANE, "Enter"]);
+  assert.equal(w.tmuxCalls.at(-1)!.args[0], "kill-window");
+});
+
+test("tmux Lead: invalid twice → review-needed, one re-prompt only, window killed, metrics recorded", async () => {
+  const { w, r } = await tmuxGo({ reviewer: ["I think it is fine.", "Still no block, sorry."] });
+  assert.deepEqual(r, { state: "review_needed" });
+  assert.deepEqual(kinds(w), ["review-needed"]);
+  assert.equal(sends(w).length, 2);
+  assert.deepEqual(w.tmuxCalls.at(-1)!.args, ["kill-window", "-t", TMUX_REVIEWER_PANE]);
+  assert.ok(w.ledger.includes("recordMetrics review_metrics"));
+});
+
+test("tmux Lead: a Reviewer that never finishes a turn is bounded by the Attempt timeout → review-needed, window killed", async () => {
+  const { w, r } = await tmuxGo({ reviewerSilent: true });
+  assert.deepEqual(r, { state: "review_needed" });
+  assert.match(w.messages[0]!.text, /reviewer_timeout/);
+  assert.equal(sends(w).length, 0);
+  assert.deepEqual(w.tmuxCalls.at(-1)!.args, ["kill-window", "-t", TMUX_REVIEWER_PANE]);
+});
+
+test("herdr Lead: no tmux call at all", async () => {
+  const { w } = await go();
+  assert.deepEqual(w.tmuxCalls, []);
+});
+
+// --- the real session readers of the tmux Reviewer, on fixture session files ---
+
+const entry = (type: string, extra: object = {}) => JSON.stringify({ type, timestamp: "2026-01-01T00:00:10.000Z", ...extra });
+const message = (role: string, stopReason?: string) => entry("message", { message: { role, ...(stopReason ? { stopReason } : {}), content: [] } });
+const sessionFile = (lines: string[], end = "\n") => {
+  const path = join(tmpDir("cpd-session-"), "s.jsonl");
+  writeFileSync(path, lines.join("\n") + end);
+  return path;
+};
+
+test("sessionTail: the newest message entry, whatever its role; other entries are skipped; the mtime is the file's", () => {
+  const path = sessionFile([entry("session", { id: "x", cwd: "/" }), message("assistant", "stop"), message("user"), entry("model_change")]);
+  utimesSync(path, 1_000, 1_000);
+  assert.deepEqual(sessionTail(path), { role: "user", stopReason: null, writtenMs: Date.parse("2026-01-01T00:00:10.000Z"), mtimeMs: 1_000_000 });
+  assert.equal(sessionTail(sessionFile([message("assistant", "toolUse")]))!.stopReason, "toolUse");
+  assert.equal(sessionTail(sessionFile([entry("session", { id: "x", cwd: "/" })])), null);
+});
+
+test("sessionTail: a last line still being written is ignored; a broken complete line fails loud", () => {
+  assert.equal(sessionTail(sessionFile([message("user"), message("assistant", "stop").slice(0, 20)], ""))!.role, "user");
+  assert.throws(() => sessionTail(sessionFile([message("user"), "{broken", message("assistant", "stop")].slice(0, 2))), (e: unknown) => e instanceof CpdError && e.code === "session_malformed");
+});
+
+test("findSessionById: <agent dir>/sessions/*/*_<id>.jsonl, null while pi has not created it", () => {
+  const agent = tmpDir("cpd-agent-");
+  assert.equal(findSessionById(agent, "abc"), null);
+  mkdirSync(join(agent, "sessions", "--proj--"), { recursive: true });
+  writeFileSync(join(agent, "sessions", "--proj--", "2026-01-01T00-00-00-000Z_abc.jsonl"), "");
+  writeFileSync(join(agent, "sessions", "--proj--", "2026-01-01T00-00-00-000Z_xabc2.jsonl"), "");
+  assert.equal(findSessionById(agent, "abc"), join(agent, "sessions", "--proj--", "2026-01-01T00-00-00-000Z_abc.jsonl"));
+  assert.equal(findSessionById(agent, "ab"), null);
 });

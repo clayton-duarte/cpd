@@ -1,7 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, appendFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, appendFileSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import { join } from "node:path";
+import { z } from "zod";
 import { createAttemptWorktree, removeAttemptWorktree } from "../git/attempt-worktree.ts";
 import { git } from "../git/git.ts";
 import { mergeAttempt, type MergeOutcome } from "../git/merge.ts";
@@ -25,6 +27,7 @@ import type { Job } from "../ledger/jobs.ts";
 import { recordMetrics, type MetricsPrefix } from "../ledger/metrics.ts";
 import { readWorkflow } from "../ledger/workflow.ts";
 import { loadConfig, type Config } from "../lib/config.ts";
+import { locatePi } from "../lib/pi-install.ts";
 import { CpdError, failure, refused } from "../lib/errors.ts";
 import { agentName, attemptBranch, attemptLogPath, logsDir, reviewDiffPath, reviewGatePath } from "../lib/paths.ts";
 import { releaseSlot } from "../lib/slots.ts";
@@ -34,6 +37,7 @@ import { notifyLead, type NotifyInput } from "../queue/lead-queue.ts";
 import { renderReviewBrief, type ReviewInputs } from "../render/review.ts";
 import { renderWorkerSpec } from "../render/spec.ts";
 import { writeTextAtomic } from "../render/template.ts";
+import { killWindow, newWindow, sendKeys, setWindowOption, shellQuote } from "../tmux/tmux.ts";
 import { tierForAttempt, automaticAttemptCount } from "./dispatch-one.ts";
 import { parseVerdict, type ParsedVerdict } from "./verdict.ts";
 
@@ -72,8 +76,21 @@ export type HerdrPort = {
   closePane(id: string): Promise<void>;
   closeWorkspace(id: string): Promise<void>;
 };
+/** `tmux -S <socket> …` calls on the Lead's tmux server (contract §12 step 9, for a tmux Lead). */
+export type TmuxPort = {
+  newWindow(socket: string, o: { name: string; cwd: string; command: string }): Promise<string>;
+  setWindowOption(socket: string, pane: string, option: string, value: string): Promise<void>;
+  sendKeys(socket: string, pane: string, keys: string[], literal?: boolean): Promise<void>;
+  killWindow(socket: string, pane: string): Promise<void>;
+};
+/** The newest `message` entry of a session: who wrote it, how it stopped, when it was written, and when the file last changed. */
+export type SessionTail = { role: string; stopReason: string | null; writtenMs: number; mtimeMs: number };
 export type SessionPort = {
   lastAssistant(path: string): { stopReason: string; text: string } | null;
+  /** The session file with this id (`<pi agent dir>/sessions/<dir>/<time>_<id>.jsonl`), or null while pi has not created it. */
+  findById(id: string): string | null;
+  /** Null while the session has no `message` entry. */
+  tail(path: string): SessionTail | null;
   cwdOf(path: string): string;
   /** Metrics of the entries written at or after `sinceMs` (a forked Reviewer session starts with the Lead's history). */
   metrics(path: string, sinceMs?: number): SessionMetrics;
@@ -90,10 +107,11 @@ export type Deps = {
   attemptId: string;
   config: Pick<Config, "retryCap" | "reviewMode" | "attemptTimeoutMinutes">;
   catalog: Catalog;
-  workflow: { repo: string; leadWorktree: string; leadBranch: string; lead: { sessionPath: string } };
+  workflow: { repo: string; leadWorktree: string; leadBranch: string; lead: { sessionPath: string } & ({ host: "herdr" } | { host: "tmux"; tmuxSocket: string }) };
   ledger: LedgerPort;
   git: GitPort;
   herdr: HerdrPort;
+  tmux: TmuxPort;
   session: SessionPort;
   queue: QueuePort;
   render: RenderPort;
@@ -122,6 +140,9 @@ export const CRASH_SETTLE_MS = 5_000;
 /** `herdr agent start` readiness timeout (§12 steps 5 and 9). */
 const START_TIMEOUT_MS = 60_000;
 const FEEDBACK_IN_MESSAGE = 600;
+/** A tmux Reviewer's turn is over when its session file has been quiet this long (§12 step 9). */
+export const REVIEWER_QUIET_MS = 5_000;
+const REVIEWER_POLL_MS = 1_000;
 
 // --- small helpers ---
 
@@ -410,11 +431,19 @@ async function readVerdict(d: Deps, sessionPath: string): Promise<ParsedVerdict>
   return parseVerdict(last.text);
 }
 
+const REPROMPT = `Your last message did not end with a valid verdict. Reply again and end with exactly one fenced json block {"verdict": "approve" or "reject", "feedback": "<text>"} and nothing after it.`;
+
+/** Run the Reviewer where the Lead runs: a hidden tmux window for a tmux Lead, a herdr pane otherwise. */
+function runReviewer(d: Deps, l: LoadedAttempt, brief: string): Promise<ParsedVerdict> {
+  const { lead } = d.workflow;
+  return lead.host === "tmux" ? runTmuxReviewer(d, l, brief, lead.tmuxSocket) : runHerdrReviewer(d, l, brief);
+}
+
 /**
- * Run the Reviewer: a pane split from the Attempt's Worker pane (so, in the Attempt's herdr workspace, whatever the Lead's host), a read-only pi (forked from the Lead session unless `reviewMode` is
+ * Run the Reviewer in a herdr pane split from the Attempt's Worker pane (so, in the Attempt's herdr workspace, whatever the Lead's host), a read-only pi (forked from the Lead session unless `reviewMode` is
  * `fresh`), one re-prompt when the verdict is missing or invalid. A Reviewer that cannot run at all counts as no verdict.
  */
-async function runReviewer(d: Deps, l: LoadedAttempt, brief: string): Promise<ParsedVerdict> {
+async function runHerdrReviewer(d: Deps, l: LoadedAttempt, brief: string): Promise<ParsedVerdict> {
   const name = agentName(d.wf, d.attemptId, "r");
   const sinceMs = d.clock.now();
   const timeoutMs = d.config.attemptTimeoutMinutes * 60_000;
@@ -442,7 +471,7 @@ async function runReviewer(d: Deps, l: LoadedAttempt, brief: string): Promise<Pa
         d,
         "9 review",
         name,
-        `Your last message did not end with a valid verdict. Reply again and end with exactly one fenced json block {"verdict": "approve" or "reject", "feedback": "<text>"} and nothing after it.`,
+        REPROMPT,
         timeoutMs,
       );
       v = await readVerdict(d, sessionPath);
@@ -455,6 +484,70 @@ async function runReviewer(d: Deps, l: LoadedAttempt, brief: string): Promise<Pa
   } finally {
     if (sessionPath !== null) await collectMetrics(d, "review_metrics", sessionPath, sinceMs);
     if (pane !== null) await cleanup(d, "9 review", `close Reviewer pane ${pane}`, () => d.herdr.closePane(pane!));
+  }
+}
+
+/**
+ * Run the Reviewer for a tmux Lead: a read-only pi, forked from the Lead session unless `reviewMode` is `fresh`, in a new
+ * detached window of the Lead's tmux server, in the Attempt's worktree. The window must not respawn when pi exits
+ * (the cockpit's `remain-on-exit on` and `pane-died` hook would), so `remain-on-exit` is turned off for it. The
+ * verdict comes from the session file, found by the id given to pi, once its last message is a finished assistant turn
+ * and the file has been quiet for `REVIEWER_QUIET_MS`. One re-prompt through `send-keys`; the whole wait is bounded by
+ * the Attempt timeout. A Reviewer that cannot run at all counts as no verdict.
+ */
+async function runTmuxReviewer(d: Deps, l: LoadedAttempt, brief: string, socket: string): Promise<ParsedVerdict> {
+  const sinceMs = d.clock.now();
+  const deadlineMs = sinceMs + d.config.attemptTimeoutMinutes * 60_000;
+  const sessionId = randomUUID();
+  const title = `review ${d.attemptId}`;
+  let pane: string | null = null;
+  let sessionPath: string | null = null;
+
+  /** Wait for a finished assistant turn written at or after `fromMs`. */
+  const settled = async (fromMs: number): Promise<string> => {
+    for (;;) {
+      sessionPath ??= d.session.findById(sessionId);
+      const tail = sessionPath === null ? null : d.session.tail(sessionPath);
+      if (sessionPath !== null && tail !== null && tail.role === "assistant" && tail.stopReason === "stop" && tail.writtenMs >= fromMs && d.clock.now() - tail.mtimeMs >= REVIEWER_QUIET_MS) {
+        return sessionPath;
+      }
+      if (d.clock.now() >= deadlineMs) throw failure("reviewer_timeout", `the Reviewer did not finish a turn within ${d.config.attemptTimeoutMinutes} minutes`, { sessionId });
+      await d.clock.sleep(REVIEWER_POLL_MS);
+    }
+  };
+
+  try {
+    const { lead } = d.workflow;
+    const worktree = l.attempt.worktree;
+    if (worktree === null) throw failure("worktree_missing", `Attempt ${d.attemptId} has no worktree recorded, so the Reviewer window has no directory`);
+    const args = [
+      ...reviewerArgs(d.config.reviewMode === "fork" ? lead.sessionPath : null, piModelArgFor(d, l.job.reviewTier)),
+      "--session-id",
+      sessionId,
+      "-n",
+      title,
+      "--",
+      `Read ${brief} and follow it exactly.`,
+    ];
+    pane = await d.tmux.newWindow(socket, { name: title, cwd: worktree, command: ["pi", ...args].map(shellQuote).join(" ") });
+    await d.tmux.setWindowOption(socket, pane, "remain-on-exit", "off");
+    d.log("9 review", `Reviewer ${title} started in tmux pane ${pane} (${d.config.reviewMode})`, { argv: ["pi", ...args], sessionId });
+    let v = await readVerdict(d, await settled(sinceMs));
+    if (v.verdict === "invalid") {
+      d.log("9 review", `no valid verdict: ${v.reason}; re-prompting once`);
+      const sentMs = d.clock.now();
+      await d.tmux.sendKeys(socket, pane, [REPROMPT], true);
+      await d.tmux.sendKeys(socket, pane, ["Enter"]);
+      v = await readVerdict(d, await settled(sentMs));
+    }
+    return v;
+  } catch (e) {
+    if (!(e instanceof CpdError)) throw e;
+    d.log("9 review", `the Reviewer could not run: ${e.code}: ${e.message}`);
+    return { verdict: "invalid", reason: `the Reviewer could not run: ${e.code}: ${e.message}` };
+  } finally {
+    if (pane !== null) await cleanup(d, "9 review", `kill Reviewer window ${pane}`, () => d.tmux.killWindow(socket, pane!));
+    if (sessionPath !== null) await collectMetrics(d, "review_metrics", sessionPath, sinceMs);
   }
 }
 
@@ -675,6 +768,50 @@ export function metricsSince(path: string, sinceMs?: number): SessionMetrics {
   }
 }
 
+const SessionEntry = z.looseObject({ type: z.string() });
+const MessageEntry = z.looseObject({
+  timestamp: z.string(),
+  message: z.looseObject({ role: z.string(), stopReason: z.string().optional() }),
+});
+
+/** The newest `message` entry of a session file (`SessionTail`). A last line pi is still writing (no newline yet) is not looked at. */
+export function sessionTail(path: string): SessionTail | null {
+  const text = readFileSync(path, "utf8");
+  const mtimeMs = statSync(path).mtimeMs; // after the read: a write in between only makes the file look less quiet
+  const lines = text.split("\n");
+  lines.pop(); // after the final newline: "" or the line being written
+  const bad = (i: number, why: string) => failure("session_malformed", `${path}:${i + 1}: ${why}`, { path, line: i + 1 });
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let json: unknown;
+    try {
+      json = JSON.parse(lines[i]!);
+    } catch (e) {
+      throw bad(i, `invalid JSON: ${(e as Error).message}`);
+    }
+    const entry = SessionEntry.safeParse(json);
+    if (!entry.success) throw bad(i, `not a session entry: ${z.prettifyError(entry.error)}`);
+    if (entry.data.type !== "message") continue;
+    const m = MessageEntry.safeParse(json);
+    if (!m.success) throw bad(i, `bad message entry: ${z.prettifyError(m.error)}`);
+    const writtenMs = Date.parse(m.data.timestamp);
+    if (Number.isNaN(writtenMs)) throw bad(i, `bad timestamp: ${m.data.timestamp}`);
+    return { role: m.data.message.role, stopReason: m.data.message.stopReason ?? null, writtenMs, mtimeMs };
+  }
+  return null;
+}
+
+/** `<pi agent dir>/sessions/<dir>/<time>_<id>.jsonl`, or null when pi has not created it yet. */
+export function findSessionById(agentDir: string, id: string): string | null {
+  const root = join(agentDir, "sessions");
+  if (!existsSync(root)) return null;
+  for (const dir of readdirSync(root, { withFileTypes: true })) {
+    if (!dir.isDirectory()) continue;
+    const hit = readdirSync(join(root, dir.name)).find((f) => f.endsWith(`_${id}.jsonl`));
+    if (hit !== undefined) return join(root, dir.name, hit);
+  }
+  return null;
+}
+
 /** Append one line to `logs/attempt-<id>.log`. */
 export function attemptLogger(wf: string, attemptId: string): Deps["log"] {
   const path = attemptLogPath(wf, attemptId);
@@ -698,7 +835,7 @@ export async function realDeps(wf: string, attemptId: string, slot: number | nul
     attemptId,
     config,
     catalog,
-    workflow: { repo, leadWorktree, leadBranch, lead: { sessionPath: w.lead.sessionPath } },
+    workflow: { repo, leadWorktree, leadBranch, lead: { sessionPath: w.lead.sessionPath, ...(w.lead.host === "tmux" ? { host: "tmux" as const, tmuxSocket: w.lead.tmuxSocket! } : { host: "herdr" as const }) } }, // `Lead` guarantees tmuxSocket for tmux
     ledger: {
       load: () => findAttempt(readLedger(wf), attemptId),
       verifyJob: async () => verifyJob(wf, (await findAttempt(readLedger(wf), attemptId)).job.key),
@@ -728,7 +865,14 @@ export async function realDeps(wf: string, attemptId: string, slot: number | nul
       closePane,
       closeWorkspace,
     },
-    session: { lastAssistant, cwdOf: (p) => readSessionHeader(p).cwd, metrics: metricsSince },
+    tmux: { newWindow, setWindowOption, sendKeys, killWindow },
+    session: {
+      lastAssistant,
+      findById: (id) => findSessionById(locatePi().agentDir, id),
+      tail: sessionTail,
+      cwdOf: (p) => readSessionHeader(p).cwd,
+      metrics: metricsSince,
+    },
     queue: { notify: (input) => notifyLead(wf, input) },
     render: {
       workerSpec: () => renderWorkerSpec(wf, attemptId),

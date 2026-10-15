@@ -23,6 +23,8 @@ export const CATALOG: Catalog = {
 export const LEAD_SESSION = "/sessions/lead.jsonl";
 export const WORKER_SESSION = "/sessions/worker.jsonl";
 export const REVIEWER_SESSION = "/sessions/reviewer.jsonl";
+export const TMUX_SOCKET = "/tmp/tmux-1000/cpd";
+export const TMUX_REVIEWER_PANE = "%9";
 export const SHA_PRE = "a".repeat(40);
 export const SHA_POST = "b".repeat(40);
 
@@ -35,6 +37,10 @@ export type Script = {
   jobMetadata?: Record<string, unknown>;
   retryCap?: number;
   reviewMode?: "fork" | "fresh";
+  /** Where the Lead runs. A tmux Lead's Reviewer opens in a tmux window (default herdr). */
+  leadHost?: "herdr" | "tmux";
+  /** tmux Lead: the Reviewer window opens but pi never finishes a turn. */
+  reviewerSilent?: boolean;
   /** What the Worker does on its n-th prompt (the Spec prompt is the first, the nudge the second). */
   worker?: WorkerAction[];
   /** The text of the Reviewer's last assistant message after its n-th prompt. */
@@ -76,6 +82,8 @@ export type World = {
   closedWorkspaces: string[];
   agentStarts: { name: string; args: string[] }[];
   prompts: { name: string; text: string }[];
+  /** Every tmux call as `tmux -S <socket> <args>` minus the `-S <socket>`, in order. */
+  tmuxCalls: { socket: string; args: string[] }[];
   metricsCalls: { path: string; since: number | undefined }[];
   mergeCalls: number;
   removed: string[];
@@ -107,6 +115,7 @@ export function makeWorld(script: Script = {}): World {
     closedWorkspaces: [],
     agentStarts: [],
     prompts: [],
+    tmuxCalls: [],
     metricsCalls: [],
     mergeCalls: 0,
     removed: [],
@@ -123,6 +132,14 @@ export function makeWorld(script: Script = {}): World {
     ev(`ledger.${e}`);
   };
   let workerAlive = true;
+  /** When the tmux Reviewer's newest assistant message was written; null before its first one. */
+  let reviewerWrittenAt: number | null = null;
+  let reviewerFindPolls = 0;
+  const reviewerReplies = () => {
+    if (script.reviewerSilent) return;
+    last[REVIEWER_SESSION] = { stopReason: "stop", text: reviewer.shift() ?? "" };
+    reviewerWrittenAt = clock.t;
+  };
   const last: Record<string, { stopReason: string; text: string } | null> = { [WORKER_SESSION]: null, [REVIEWER_SESSION]: null };
 
   const attemptView = (n: number, current: boolean): Attempt => {
@@ -176,7 +193,12 @@ export function makeWorld(script: Script = {}): World {
     attemptId: id,
     config: { retryCap: script.retryCap ?? 2, reviewMode: script.reviewMode ?? "fork", attemptTimeoutMinutes: 30 },
     catalog: CATALOG,
-    workflow: { repo: "/repo", leadWorktree: "/repo.lead", leadBranch: `cpd/${WF}`, lead: { sessionPath: LEAD_SESSION } },
+    workflow: {
+      repo: "/repo",
+      leadWorktree: "/repo.lead",
+      leadBranch: `cpd/${WF}`,
+      lead: script.leadHost === "tmux" ? { sessionPath: LEAD_SESSION, host: "tmux", tmuxSocket: TMUX_SOCKET } : { sessionPath: LEAD_SESSION, host: "herdr" },
+    },
     ledger: {
       async load() {
         const siblings = Array.from({ length: number }, (_, i) => attemptView(i + 1, i + 1 === number));
@@ -306,7 +328,34 @@ export function makeWorld(script: Script = {}): World {
         w.closedWorkspaces.push(ws);
       },
     },
+    tmux: {
+      async newWindow(socket, o) {
+        w.tmuxCalls.push({ socket, args: ["new-window", "-d", "-n", o.name, "-c", o.cwd, o.command] });
+        ev("tmux.newWindow");
+        reviewerReplies(); // pi starts, reads the brief from its command line and answers
+        return TMUX_REVIEWER_PANE;
+      },
+      async setWindowOption(socket, pane, option, value) {
+        w.tmuxCalls.push({ socket, args: ["set-option", "-w", "-t", pane, option, value] });
+      },
+      async sendKeys(socket, pane, keys, literal = false) {
+        w.tmuxCalls.push({ socket, args: ["send-keys", "-t", pane, ...(literal ? ["-l"] : []), ...keys] });
+        if (keys.includes("Enter")) reviewerReplies(); // the re-prompt is submitted: pi answers it
+      },
+      async killWindow(socket, pane) {
+        w.tmuxCalls.push({ socket, args: ["kill-window", "-t", pane] });
+        ev(`tmux.killWindow ${pane}`);
+      },
+    },
     session: {
+      findById(id) {
+        void id;
+        return reviewerWrittenAt !== null && ++reviewerFindPolls > 1 ? REVIEWER_SESSION : null; // pi creates the file a moment after the window opens
+      },
+      tail(path) {
+        void path;
+        return reviewerWrittenAt === null ? null : { role: "assistant", stopReason: "stop", writtenMs: reviewerWrittenAt, mtimeMs: reviewerWrittenAt };
+      },
       lastAssistant(path) {
         const v = last[path];
         if (v === undefined) throw new CpdError("session_not_found", `no such session ${path}`, 4);
