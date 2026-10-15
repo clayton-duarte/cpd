@@ -21,6 +21,7 @@ PLAN=$($T split-window -v -b -t "$CHAT" -l 20% -P -F '#{pane_id}' "$EXE plan")
 BAR=$($T split-window -v -f -l 1 -P -F '#{pane_id}' "$EXE statusbar")
 $T set -p -t "$BAR" @view statusbar
 $T set -p -t "$LEFT" @view context; $T set -p -t "$PLAN" @view plan; $T set -p -t "$RIGHT" @view dispatch
+"$EXE" reset-layout   # the User's sizes, the same function as the StatusBar's ⧉ button
 for p in $PLANS; do
   [ "$p" = "$FIRST" ] && continue
   $T new-window -d -t "$SESS" -n "park-$p" "$(chat "$p")"
