@@ -77,10 +77,6 @@ const PENDING: &[(&[&str], &str)] = &[
     // plan
     // job
     // attempt
-    (&["attempt", "submit", "api-schema-a1"], "attempt submit"),
-    (&["attempt", "read", "api-schema-a1", "--lines", "10"], "attempt read"),
-    (&["attempt", "show", "api-schema-a1"], "attempt show"),
-    (&["attempt", "list", "--active"], "attempt list"),
     // driver
     (&["attempt", "run", "api-schema-a1", "--plan", "cpd2"], "attempt run"),
     (&["job", "dispatch", "api-schema"], "job dispatch"),
