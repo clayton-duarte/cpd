@@ -1,0 +1,109 @@
+# cpd 2: implementing
+
+Read this first, then [contract.md](contract.md), [commands.md](commands.md) and [CONTEXT.md](CONTEXT.md), which are normative. This file only says where things go in the code.
+
+## The one-area rule
+
+Each Job edits **only its own area** (`cli/src/<area>/`) **plus its tests** (`cli/tests/<area>*.rs`, and deleting its own lines from `PENDING` in `cli/tests/command_index.rs`). It does not edit `cli/src/lib.rs`, `cli/src/cli.rs`, the shared modules (`error.rs`, `output.rs`, `ids.rs`, `args.rs`, `home.rs`), `cli/tests/common/`, another area, `Cargo.toml` or `Cargo.lock`. This is how parallel Jobs merge without conflicts. Need a change outside your area: ask the Lead (`cpd ask`), don't make it.
+
+Within your area you may add files (`cli/src/<area>/foo.rs`, declared in your `mod.rs`) and use any other area's public items once that area has landed.
+
+## Layout
+
+- `Cargo.toml`: the workspace. One member, `cli/` (crate `cpd2`, edition 2024). `tui/` is the cockpit spike, excluded from the workspace so it still builds on its own.
+- `cli/src/main.rs`: the binary `cpd2`; it only calls `cpd2::main_with`.
+- `cli/src/lib.rs`: the crate root. It declares every module below, once.
+
+### Module map
+
+| Module | Owner (Job) | Commands (commands.md) | Contract |
+|---|---|---|---|
+| `store` | rs-store | none | §4.1–§4.5 |
+| `events` | rs-events | `events list`, `events follow` (§11) | §5 |
+| `config` | rs-config | `config`, `tiers` (§14.2, §14.3) | §8, §9 |
+| `git` | rs-git | none | §7.1–§7.3, §7.5 |
+| `host` | rs-host | none | §6 |
+| `context` | rs-context | `context …` (§3) | §2.2, §4.6 |
+| `session` | rs-session | `session …` (§10) | §3.6, §6 |
+| `plan` | rs-plan | `plan …` (§4) | §3.1 |
+| `job` | rs-job | `job add/edit/cancel/retry/list/show` (§5) | §3.2 |
+| `merge` | rs-merge | none | §7.4 |
+| `attempt` | rs-attempt-cmds | `attempt submit/read/show/list` (§6.1–§6.3) | §3.4, §7.3 |
+| `ask` | rs-ask | `ask`, `answer` (§8) | §3.5 |
+| `review` | rs-review | `review decide` (§7), review files and verdict (§16.2, §16.3) | §3.4 A6–A7 |
+| `spec` | rs-spec-metrics | none: the Worker Spec (§16.1) | §3.4 A3 |
+| `metrics` | rs-spec-metrics | none: session metrics | §2.2 Attempt |
+| `driver` | rs-driver | `attempt run` (§6.4), `job dispatch` (§5.5) | §3.4 |
+| `pr` | rs-pr | `pr …` (§9) | §7.6 |
+| `watch` | rs-watch | `watch` (§12) | §3.7 |
+| `doctor` | rs-doctor | `doctor` (§14.1) | |
+| `tui` | the TUI Job | `tui`, `tui view` (§13) | §6.2 |
+
+`attempt run` and `job dispatch` are declared in `attempt` and `job` but their argument types (`driver::RunArgs`, `driver::DispatchArgs`) and functions (`driver::run`, `driver::dispatch`) are the driver's, so the driver Job never edits those modules.
+
+## The command tree
+
+`cli/src/cli.rs` holds the root `Command` enum; each variant delegates to its area (`context::run(cmd)`, `watch::run(args)`, …). Each area owns its subcommand enum and its argument types. Until a command lands, its arguments are `cli::Pending`, which accepts anything, so the command fails with `not_implemented` whatever it is given.
+
+To implement a command:
+1. In your module, replace `Pending` (or the `pub type … = Pending` alias) with your own `#[derive(clap::Args)]` struct. Keep the type's name when the root or another area names it (`watch::Args`, `config::ConfigArgs`, `driver::RunArgs`, …).
+2. Make `run` return `Ok(Output::success(json!({…})))` or `Err(CpdError::…)`.
+3. Delete the command's line(s) from `PENDING` in `cli/tests/command_index.rs` and test it in your own test file. `every_documented_command_exists` keeps checking that it exists.
+
+Parsing:
+- `--help` and `--version` print one JSON value too: `{"ok": true, "help": "<text>"}` and `{"ok": true, "version": "…"}`.
+- Every clap failure is `usage` (exit 2) with clap's text in `details.help`, except a value that failed one of our own `FromStr` types (ids, `Text`, `Name`), which keeps that type's code (`invalid_plan_id`, `invalid_name`, …). So parse ids by typing the field (`plan: PlanId`), not by validating strings later.
+
+## Output and errors
+
+- **`output::Output`** (`cli/src/output.rs`): `Output::success(json!({…}))` prints `{"ok": true, …fields}`, with `"ok"` first. `Output::Owned` prints nothing and exits 0: only for the commands that write their own stdout or own their terminal (commands.md §1.2, amendment 10): `events follow`, `session run`, `tui view`, `tui --attach`. Their failures before taking the terminal are still returned as `Err`. `output::to_line` is one JSON value plus a newline, for `events follow`'s lines.
+- **`error::CpdError`** (`cli/src/error.rs`): `CpdError::new(ErrorCode::CasLost, "One sentence.").with("attempt", id.to_string())`. Printed as `{"ok": false, "error": {"code", "message", "details"}}`; `details` is always an object. `to_json()` gives the `error` object alone, the shape of an `error` Event's data (add `source` there).
+- **`error::ErrorCode`**: every code of contract.md and commands.md, each with its exit code (`Exit`: 1 failure, 2 usage, 3 refused, 4 not found, 5 timeout). A code cannot be printed with the wrong exit.
+- **Adding an error code:** the documents name every code; use those. If you truly need a new one, ask the Lead first: it is an amendment to the contract, and `error.rs` is shared. The change is one line in the `error_codes!` list, under its exit code.
+- `not_implemented` (exit 1) is this skeleton's only code the documents do not name: a command whose area has not landed. Exit 1 because contract §1.2's exit 1 is "something unexpected".
+
+## Shared helpers
+
+- **`ids`** (contract §2.1): `ContextId`, `PlanId`, `JobKey`, `AttemptId` (`job()`, `number()`), `EscalationId` (`attempt()`, `number()`), `ReviewId`, `SessionId` (`SessionId::new_v4()` for sessions cpd starts), `MachineName` (`config_invalid` when wrong), `RecordId` and `RecordKind` (`letter()`, `as_str()`). Each has `parse`, `FromStr`, `Display` and serde as a string; holding one proves it is valid.
+- **`args`** (commands.md §1.3, §1.5): `PlanArg` (`--plan`, else `CPD_PLAN`; `.require()` gives `plan_required`), `SessionArg` (`--session`, else `CPD_SESSION`; `session_required`), `Text` (1–20 000 characters, no NUL; else `usage`) and `Name` (1–80, no control characters; else `invalid_name`). Flatten them into your clap structs. `--context` falls back to the selected Plan's Context, which needs the store: the context Job writes that resolution.
+- **`home::CpdHome`** (contract §1.4, commands.md §1.4): `CpdHome::from_env()` is `$CPD_HOME`, else `~/.cpd`; an empty or relative `CPD_HOME`, or no home directory, is `usage` (exit 2). Every path under it has a method: `config()`, `db()`, `context_dir()`, `watch_lock()`, `repo_lock(git_common_dir_realpath)`, `attempt_lock()`, `context_lock()`, `watch_log()`, `plan_md()`, `plan_review_md()`, `lead_message()`, `session_message()`, `worker_spec()`, `review_brief()`, `review_diff()`, `review_check()`, `review_gate()`, `driver_log()`, `hook_log(…, Hook)`. Never build these paths by hand.
+
+## Tests
+
+- **Unit tests** go in the module they test (`#[cfg(test)] mod tests`), in your area.
+- **Integration tests** go in `cli/tests/<area>.rs` (or `<area>_<topic>.rs`); they start with `mod common;` and use the harness `cli/tests/common/mod.rs`:
+  - `TestEnv::new()`: a temporary directory with its own `$CPD_HOME` (`cpd_home()`, empty), `$HOME` (`home()`, with a git identity), and `bin/` first on `PATH`; `CPD_*`, `PI_*`, `GIT_*`, `XDG_*`, `TMUX` and `TMUX_PANE` are removed from the environment.
+  - `env.cpd2(&[…])` / `env.cpd2_in(cwd, &[…])` run the built binary and return a `Run` (`exit`, `stdout`, `stderr`); `run.json()` asserts exactly one JSON value, `run.ok()` the success envelope, `run.error()` the failure's `error` object.
+  - `env.git_repo("name")`: a repo on `main` with one commit; `env.git(dir, &[…])`.
+  - `env.tmux(&[…])` and `env.tmux_socket()`: a private tmux server (own `TMUX_TMPDIR` and socket name, killed when the `TestEnv` drops). Put the socket name in the test's `config.toml` as `tmux.socket`.
+  - `env.fake_pi(body)`, `env.fake_gh(body)`, `env.fake(name, body)`: shell scripts on `PATH` that record their argv (`env.calls("pi")`) and then run `body`.
+  - `env.command(program)`: any other program in the same environment.
+- Never touch the real `~/.cpd`, the tmux server `-L cpd`, pi, or the network.
+- A test must fail first, for the right reason.
+
+## Dependencies
+
+Every dependency is declared once, in the root `Cargo.toml` `[workspace.dependencies]`, and used with `x.workspace = true` in `cli/Cargo.toml`. **Later Jobs may not add, remove or change dependencies or features**, so parallel Jobs never conflict on `Cargo.lock`. The only planned addition is the TUI Job's ratatui and crossterm. If you need something not listed, ask the Lead.
+
+| Crate | Features | Why |
+|---|---|---|
+| `rusqlite` 0.40 | `bundled`, `functions` | the database (§4.1): SQLite bundled into the binary (3.53, so `STRICT` and JSON functions exist); `functions` registers `cpd_txn()` (§4.3) |
+| `serde` 1 | `derive` | typed parsing at the boundary: config, Specs, records, session lines, `gh` output |
+| `serde_json` 1 | | JSON output (§1.2), Events' `data`, Context records (§4.6), pi session files, canonical JSON for fingerprints (§2.3: its default map is sorted, so keys come out sorted; do not enable `preserve_order`) |
+| `clap` 4 | `derive`, `env` | the command tree; `env` for the `CPD_PLAN` / `CPD_SESSION` fallbacks (§1.3) |
+| `toml` 1 | | `config.toml` (§8), `.config/wt.toml` (§7.3), `.config/cpd.toml` (§7.5); use serde `deny_unknown_fields` |
+| `minijinja` 3 | | rendering the hooks' `{{ … }}` / `{% … %}` templates (§7.3), with `UndefinedBehavior::Strict` so an undefined variable or unknown filter fails before anything runs (`hook_invalid`) |
+| `nix` 0.31 | `fs`, `process`, `signal` | `flock(2)` locks (§1.4, `Flock`; it derefs to the `File`), the driver lock's fd hand-over (§3.4: clear close-on-exec with `fcntl`, `dup2` to fd 3, `setsid`), probing pids (`kill(pid, None)`, E1), killing a hook's process group at its timeout (`killpg`, §7.3), SIGTERM/SIGINT for `watch` (§12) |
+| `uuid` 1 | `v4` | Session ids cpd chooses (§2.1); use `ids::SessionId::new_v4()` |
+| `time` 0.3 | `formatting`, `parsing`, `macros` | RFC 3339 UTC times with milliseconds (§1.3) |
+| `sha2` 0.10 | | the Locked-Job and plan fingerprints (§2.3) and the schema hash (§4.3); `format!("{:x}", Sha256::digest(…))` gives hex (0.10, not 0.11, for that) |
+| `sha1` 0.10 | | the per-repo lock's name `repo-<sha1>.lock` (§1.4, §7.4); use `CpdHome::repo_lock` |
+| `tempfile` 3 | dev only | temporary `$CPD_HOME`, repos and files in tests |
+
+Deliberately absent: a regex crate (the id patterns of §2.1 are checked by hand in `ids`), an error-derive crate (`CpdError` is one struct), a hex crate (see `sha2`), `libc` (`nix` covers it), ratatui and crossterm (the TUI Job).
+
+## Running cargo, the Gate, installing
+
+- cargo is not on `PATH` for Workers and the Gate. Run it as `scripts/cargo.sh <args>` (`$CARGO`, else `cargo` on `PATH`, else `${CARGO_HOME:-$HOME/.cargo}/bin/cargo`; exit 127 with a message when none exists). rustfmt and clippy are not installed.
+- The Gate is `npm run verify`: the TypeScript typecheck and tests, then `scripts/cargo.sh build --workspace` and `scripts/cargo.sh test --workspace`. Run it before you submit.
+- `scripts/install-cpd2.sh` builds `--release` and installs `~/.local/bin/cpd2`, replacing it atomically; safe to rerun.

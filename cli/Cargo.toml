@@ -1,0 +1,26 @@
+[package]
+name = "cpd2"
+description = "cpd 2: the Rust rewrite of cpd"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "cpd2"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+minijinja.workspace = true
+nix.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+time.workspace = true
+toml.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,28 @@
+[workspace]
+resolver = "3"
+members = ["cli"]
+# tui/ is the cockpit spike, a standalone package with its own Cargo.lock.
+# Excluded so it still builds on its own and no Job compiles it by accident.
+exclude = ["tui"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Every dependency of cpd 2 except the TUI's (ratatui, crossterm), declared
+# once here. Later Jobs may not add any: the list and the reasons are in
+# docs/v2/implementing.md.
+[workspace.dependencies]
+clap = { version = "4.6", features = ["derive", "env"] }
+minijinja = "3.0"
+nix = { version = "0.31", features = ["fs", "process", "signal"] }
+rusqlite = { version = "0.40", features = ["bundled", "functions"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha1 = "0.10"
+sha2 = "0.10"
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+toml = "1.1"
+uuid = { version = "1.28", features = ["v4"] }
+tempfile = "3.27"
