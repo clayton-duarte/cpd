@@ -107,7 +107,7 @@ pub fn job_status(status: &str) -> (&'static str, Meaning) {
     match status {
         "queued" => ("○", Meaning::NotStarted),
         "running" => ("◐", Meaning::InProgress),
-        "in_review" => ("◉", Meaning::Review),
+        "in_review" => ("⇥", Meaning::Review),
         "closed" | "merged" => ("✓", Meaning::Done),
         "failed" | "blocked" | "escalated" => ("✗", Meaning::Failed),
         "draft" => ("◌", Meaning::Nothing),
@@ -117,7 +117,7 @@ pub fn job_status(status: &str) -> (&'static str, Meaning) {
 
 /// The Job statuses the legend lists: the name shown, and the status it stands for.
 pub const JOB_LEGEND: [(&str, &str); 7] =
-    [("queued", "queued"), ("running", "running"), ("in review", "in_review"), ("merged", "closed"), ("failed", "failed"), ("draft", "draft"), ("unknown", "?")];
+    [("queued", "queued"), ("running", "running"), ("merging", "in_review"), ("merged", "closed"), ("failed", "failed"), ("draft", "draft"), ("unknown", "?")];
 
 /// Meaning of a Workflow phase (`None`: no Workflow; an unknown phase is nothing too).
 pub fn phase(phase: Option<&str>) -> Meaning {
@@ -203,7 +203,7 @@ mod tests {
         let table = [
             ("queued", "○", Meaning::NotStarted),
             ("running", "◐", Meaning::InProgress),
-            ("in_review", "◉", Meaning::Review),
+            ("in_review", "⇥", Meaning::Review),
             ("closed", "✓", Meaning::Done),
             ("merged", "✓", Meaning::Done),
             ("failed", "✗", Meaning::Failed),
