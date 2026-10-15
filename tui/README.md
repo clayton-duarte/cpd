@@ -24,9 +24,9 @@ phase, PR state and PR checks to `(icon, Meaning)`. Every view takes both from i
 the test `no_colour_outside_the_palette` fails when another `src/*.rs` names a colour. Grounding shares white with "not
 started", and done shares dark grey with "nothing" (the User's choice): the two deliberate exceptions to one colour per meaning.
 
-| Job status | queued | running | in review | merged | failed | draft | unknown |
+| Job status | queued | running | merging | merged | failed | draft | unknown |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Icon | `○` | `◐` | `◉` | `✓` | `✗` | `◌` | `?` |
+| Icon | `○` | `◐` | `⇥` | `✓` | `✗` | `◌` | `?` |
 
 `●` means only "needs you" (the Context dot); PR checks are `✓ ✗ … –`.
 
@@ -76,11 +76,11 @@ scrolling and the clicks):
       └ ○ cpd-ui          1⋅0⋅2⋅0⋅3
 
 A session row is guide, dot, name (cut with `…` before the counters), and its Workflow's five Job counters at the right:
-queued, running, in review, failed, merged (in phase `plan` the drafts come first). Cancelled Jobs are not counted; a session with no
+queued, running, merging, failed, merged (in phase `plan` the drafts come first). Cancelled Jobs are not counted; a session with no
 Workflow shows no counters. Zeros are dark grey, the `⋅` separators grey.
 
 Colours are the palette's: the dot's is the Workflow's phase (none dark grey, context white, plan magenta, dispatch green,
-pr yellow, done grey); a counter's is its Job status (queued white, running green, in review yellow, failed red, merged grey;
+pr yellow, done grey); a counter's is its Job status (queued white, running green, merging yellow, failed red, merged grey;
 zeros and the drafts of phase `plan` dark grey).
 
 A Context's dot has the colour of the busiest phase inside (dispatch > plan > context > pr > done > none). 

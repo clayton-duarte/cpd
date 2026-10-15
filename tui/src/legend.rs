@@ -205,7 +205,7 @@ mod tests {
             assert_eq!(fg(&buf, (counter, y)), palette::color(palette::job_status(status).1), "{name}: counter");
         }
         assert!(row_text(&buf, find(&buf, "counters row").1).contains("1⋅1⋅2⋅0⋅3"));
-        assert!(row_text(&buf, find(&buf, "counters row").1).contains("queued⋅running⋅in review⋅failed⋅merged"));
+        assert!(row_text(&buf, find(&buf, "counters row").1).contains("queued⋅running⋅merging⋅failed⋅merged"));
     }
 
     #[test]

@@ -31,7 +31,7 @@ const INDENT: usize = 2;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Workflow {
     pub phase: String,
-    /// Jobs per status, in the fixed order: queued (drafts in phase `plan`), running, in review, failed, merged.
+    /// Jobs per status, in the fixed order: queued (drafts in phase `plan`), running, merging, failed, merged.
     pub counts: [usize; 5],
 }
 
