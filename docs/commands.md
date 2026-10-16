@@ -103,6 +103,7 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `context list`, `context show` | Lead, TUI | no | §2.2 |
 | `context decide`, `note`, `ask`, `answer` | Lead | yes | §4.6 |
 | `context sync` | engine E6, User | yes | §4.6 |
+| `context rename` | User (TUI) | yes | §2.2 |
 | `plan new` | User (TUI), Lead | yes | §3.1, §6.7 |
 | `plan list`, `plan show` | Lead, TUI | no | |
 | `plan phase plan` | Lead | yes | §3.1 |
@@ -110,6 +111,7 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `plan review` | Lead (tool `cpd_plan_review`) | yes | §2.2 Plan review |
 | `plan decide` | pi adapter | yes | §2.2 Plan review |
 | `plan lock` | Lead | yes | §3.1, §7.2 |
+| `plan rename` | User (TUI) | yes | §2.2 |
 | `job add`, `edit`, `cancel`, `retry` | Lead | yes | §3.2 |
 | `job dispatch` | Lead | yes | §3.4 |
 | `job list`, `job show` | Lead, TUI | no | |

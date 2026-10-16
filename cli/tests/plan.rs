@@ -791,3 +791,36 @@ fn lock_refusals_change_nothing() {
     assert!(watch_calls(&env).is_empty());
     refused(&env.cpd(&["plan", "lock"]), "plan_required", 2);
 }
+
+// ---- plan rename ----------------------------------------------------------
+
+#[test]
+fn rename_sets_the_title_and_appends_one_event() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    new_plan(&env, "pay", &repo);
+    let out = env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Retry payouts"]).ok();
+    assert_eq!(out["plan"], json!({"id": "pay", "context": "ctx", "title": "Retry payouts"}));
+    assert!(out.get("already").is_none());
+    assert_eq!(show(&env, "pay")["plan"]["title"], "Retry payouts");
+    let renamed = events(&env, "plan-renamed");
+    assert_eq!(renamed.len(), 1);
+    assert_eq!((renamed[0]["context"].as_str(), renamed[0]["plan"].as_str()), (Some("ctx"), Some("pay")));
+    assert_eq!(renamed[0]["data"], json!({"title": "Retry payouts"}));
+
+    // CPD_PLAN selects the Plan; the same title is already and writes nothing.
+    let again = cpd_with(&env, &[("CPD_PLAN", "pay")], &["plan", "rename", "--title", "Retry payouts"]).ok();
+    assert_eq!(again["already"], true);
+    assert_eq!(events(&env, "plan-renamed").len(), 1);
+}
+
+#[test]
+fn rename_refusals() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    new_plan(&env, "pay", &repo);
+    refused(&env.cpd(&["plan", "rename", "--plan", "nope", "--title", "X"]), "plan_not_found", 4);
+    refused(&env.cpd(&["plan", "rename", "--title", "X"]), "plan_required", 2);
+    refused(&env.cpd(&["plan", "rename", "--plan", "pay", "--title", ""]), "usage", 2);
+    assert!(events(&env, "plan-renamed").is_empty());
+}

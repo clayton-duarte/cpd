@@ -782,3 +782,43 @@ fn a_sync_failure_from_the_engine_is_recorded_once() {
 fn bare_at(env: &TestEnv, path: &Path) {
     env.git(env.root(), &["init", "-q", "--bare", "-b", "main", path.to_str().unwrap()]);
 }
+
+// ---- context rename -------------------------------------------------------
+
+fn rename_events(env: &TestEnv) -> Vec<Value> {
+    env.cpd(&["events", "list", "--kind", "context-renamed"]).ok()["events"].as_array().unwrap().clone()
+}
+
+#[test]
+fn rename_sets_the_title_and_appends_one_event() {
+    let env = hs();
+    new_context(&env);
+    let out = env.cpd(&["context", "rename", CTX, "--title", "Building cpd 2"]).ok();
+    assert_eq!(out["context"], json!({"id": CTX, "title": "Building cpd 2"}));
+    assert!(out.get("already").is_none());
+    assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"][0]["title"], "Building cpd 2");
+    let events = rename_events(&env);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["context"], CTX);
+    assert_eq!(events[0]["data"], json!({"title": "Building cpd 2"}));
+    // The git store is not touched.
+    let stored: Value = serde_json::from_str(&fs::read_to_string(dir(&env, CTX).join("context.json")).unwrap()).unwrap();
+    assert_eq!(stored["title"], "Building cpd");
+}
+
+#[test]
+fn rename_to_the_same_title_is_already_and_writes_nothing() {
+    let env = hs();
+    new_context(&env);
+    assert_eq!(env.cpd(&["context", "rename", CTX, "--title", "Building cpd"]).ok()["already"], true);
+    assert!(rename_events(&env).is_empty());
+}
+
+#[test]
+fn rename_refusals() {
+    let env = hs();
+    new_context(&env);
+    refused(env.cpd(&["context", "rename", "nope", "--title", "X"]), 4, "context_not_found");
+    refused(env.cpd(&["context", "rename", CTX, "--title", ""]), 2, "usage");
+    assert!(rename_events(&env).is_empty());
+}

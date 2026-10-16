@@ -1,0 +1,26 @@
+//! `context rename` (commands.md §3.7): the title only, in the database.
+
+use serde_json::json;
+
+use super::{ContextRow, RenameArgs, open};
+use crate::error::CpdError;
+use crate::events::{Kind, NewEvent, append};
+use crate::output::Output;
+
+pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
+    let (_, _, mut store) = open()?;
+    let (id, title) = (&args.id, args.title.as_str());
+    let row = store.read(|conn| ContextRow::require(conn, id))?;
+    let mut out = json!({"context": {"id": id, "title": title}});
+    if row.title == title {
+        out["already"] = json!(true);
+        return Ok(Output::success(out));
+    }
+    store.write("context rename", |tx| {
+        tx.execute("UPDATE contexts SET title = ?1 WHERE id = ?2", [title, id.as_str()])?;
+        let text = format!("Context {id} renamed to {title:?}.");
+        append(tx, NewEvent::new(Kind::ContextRenamed, text, json!({"title": title})).context(id.clone()))?;
+        Ok(())
+    })?;
+    Ok(Output::success(out))
+}

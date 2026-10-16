@@ -11,6 +11,7 @@ mod lock;
 mod new;
 mod phase;
 mod render;
+mod rename;
 mod review;
 mod row;
 mod show;
@@ -47,6 +48,8 @@ pub enum Command {
     Decide(DecideArgs),
     /// Lock the Plan and start dispatching (§4.8)
     Lock(LockArgs),
+    /// Change the Plan's title (§4.9)
+    Rename(RenameArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -140,6 +143,15 @@ pub struct LockArgs {
     plan: PlanArg,
 }
 
+#[derive(clap::Args, Debug)]
+pub struct RenameArgs {
+    #[command(flatten)]
+    plan: PlanArg,
+    /// The new title
+    #[arg(long, value_name = "text")]
+    title: Text,
+}
+
 pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
         Command::New(args) => new::new(args),
@@ -150,6 +162,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Review(args) => review::review(args),
         Command::Decide(args) => review::decide(args),
         Command::Lock(args) => lock::lock(args),
+        Command::Rename(args) => rename::rename(args),
     }
 }
 

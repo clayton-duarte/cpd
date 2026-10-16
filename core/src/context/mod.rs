@@ -14,6 +14,7 @@ mod git;
 mod lock;
 mod record;
 pub(crate) mod render;
+mod rename;
 mod repo;
 mod sync;
 
@@ -57,6 +58,8 @@ pub enum Command {
     Answer(AnswerArgs),
     /// Sync the Context stores with their remotes (§3.6)
     Sync(SyncArgs),
+    /// Change a Context's title (§3.7)
+    Rename(RenameArgs),
 }
 
 /// A Jira Epic key: `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage` (commands.md §3.1).
@@ -197,6 +200,15 @@ pub struct SyncArgs {
     context: Option<ContextId>,
 }
 
+#[derive(Args, Debug)]
+pub struct RenameArgs {
+    /// The Context
+    id: ContextId,
+    /// The new title
+    #[arg(long, value_name = "text")]
+    title: Text,
+}
+
 pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
         Command::New(args) => new(args),
@@ -212,6 +224,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
             write("context answer", &args.select, &args.text, Draft::Answer { question: args.question })
         }
         Command::Sync(args) => sync(args),
+        Command::Rename(args) => rename::rename(args),
     }
 }
 
