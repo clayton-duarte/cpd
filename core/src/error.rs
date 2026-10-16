@@ -157,6 +157,8 @@ error_codes! {
     CursorAhead = "cursor_ahead" => Refused,
     WatchRunning = "watch_running" => Refused,
     NotATerminal = "not_a_terminal" => Refused,
+    ArchiveBlocked = "archive_blocked" => Refused,
+    Archived = "archived" => Refused,
 
     // Exit 4: not found.
     ContextNotFound = "context_not_found" => NotFound,

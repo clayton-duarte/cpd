@@ -82,6 +82,8 @@ pub(super) struct Row {
     pub grounded_lead: bool,
     /// The id of its `session-registered` Event.
     pub registered_event: Option<i64>,
+    /// When it was archived (contract §2.2 "Archived"), else none.
+    pub archived_at: Option<String>,
 }
 
 const SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt, s.name, s.file, s.forked_from, s.cwd, s.tier,
@@ -90,7 +92,8 @@ const SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt, s.name,
          WHERE e.session = s.id AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1),
        EXISTS (SELECT 1 FROM plans p WHERE p.lead_session = s.id),
        EXISTS (SELECT 1 FROM contexts c WHERE c.lead_session = s.id),
-       (SELECT min(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-registered')
+       (SELECT min(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-registered'),
+       s.archived_at
   FROM sessions s";
 
 /// A row as SQLite returns it, before parsing.
@@ -114,6 +117,7 @@ struct Raw {
     plan_lead: bool,
     grounded_lead: bool,
     registered_event: Option<i64>,
+    archived_at: Option<String>,
 }
 
 fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
@@ -137,6 +141,7 @@ fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
         plan_lead: r.get(16)?,
         grounded_lead: r.get(17)?,
         registered_event: r.get(18)?,
+        archived_at: r.get(19)?,
     })
 }
 
@@ -166,6 +171,7 @@ impl Row {
             plan_lead: raw.plan_lead,
             grounded_lead: raw.grounded_lead,
             registered_event: raw.registered_event,
+            archived_at: raw.archived_at,
             id,
         })
     }
@@ -182,6 +188,7 @@ impl Row {
             "state": self.state.as_str(),
             "state_label": self.state_label,
             "state_at": self.state_at,
+            "archived_at": self.archived_at,
             "place": self.place,
             "tmux_pane": self.tmux_pane,
             "file": self.file,
