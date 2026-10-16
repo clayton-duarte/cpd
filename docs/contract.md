@@ -138,9 +138,10 @@ The knowledge several Plans share, optionally a Jira Epic. Not a session (ADR-00
 | Field | Type | Meaning |
 |---|---|---|
 | `id` | text | Context id (§2.1) |
-| `title` | text | |
+| `title` | text | the visible label; editable (`context rename`). The id is immutable and need not be readable |
 | `jira` | text? | Jira Epic key, stored only |
 | `created_at`, `created_on` | time, text | when and on which machine `context new` ran |
+| `archived_at` | time? | null, or when the Context was archived (migration 3, §4.5); see "Archived" below |
 | `lead_session` | text? | this machine's **grounded Lead**: a Session that every new Plan of this Context forks (D2). Null until a first Plan of the Context has been grounded on this machine |
 | `grounded_seq` | int? | the Context record index position (`context_records.seq`) at the moment the grounded Lead was forked; set together with `lead_session` |
 | `sync_failing` | bool | the last `context sync` failed (so the failure is reported once, §4.6) |
@@ -171,7 +172,7 @@ One deliverable: one repo, one Lead Branch, one PR, optionally a Jira task. This
 |---|---|---|
 | `id` | text | Plan id |
 | `context` | text | its Context (required: every Plan belongs to one) |
-| `title`, `jira` | text, text? | |
+| `title`, `jira` | text, text? | `title` is the visible label and editable (`plan rename`); the id is immutable |
 | `repo` | text | realpath of the repo's main worktree |
 | `base` | text | the branch the PR targets; default the repo's `origin` HEAD branch, else `main` (cpd 1 §11 `workflow init`) |
 | `lead_branch` | text | `cpd/<id>` |
@@ -183,6 +184,7 @@ One deliverable: one repo, one Lead Branch, one PR, optionally a Jira task. This
 | `pr_title`, `pr_review_decision`, `pr_checks` | text?, text?, text? | what `pr poll` last read from the PR, for the cockpit's Dispatch column (migration 2, §4.5): the PR's title; the review decision `none`, `approved` or `changes_requested`; the checks' summary `none`, `passed`, `pending` or `failed`. All null until the first poll, then all set |
 | `all_merged_at` | time? | when `all-merged` was appended (it is appended once) |
 | `created_at`, `locked_at`, `done_at` | time, time?, time? | |
+| `archived_at` | time? | null, or when the Plan was archived (migration 3, §4.5); see "Archived" below |
 
 #### Plan review
 
@@ -279,6 +281,15 @@ A pi session cpd knows about: every Lead and Worker is one.
 | `state` | text | `working`, `blocked`, `idle`, `stopped` (§3.6) |
 | `state_label` | text? | why it is blocked (for example `cpd: Worker question`); set only while `blocked` |
 | `state_at`, `created_at` | time | |
+| `archived_at` | time? | null, or when the Session was archived (migration 3, §4.5); see "Archived" below |
+
+#### Archived
+
+Context, Plan and Session carry `archived_at`. Archiving hides an object from the cockpit's tree (it collapses into a `…` row); it deletes nothing and changes no phase, status or state. Ids are unique and immutable; the **title** (Context, Plan) or **name** (Session) is the visible label.
+
+- **Refused while live** (`archive_blocked`, exit 3, `details.blockers` lists each): a Session in state `working` or `blocked`; a Job `queued` or `running`; an open Escalation; a pending Plan review. The Lead in the chat slot is refused with `in_chat_slot`. A Plan's own Lead (`plans.lead_session`) is archived only with its Plan. Phases do not matter: a Plan in `pr` is archivable, and the engine keeps polling its PR.
+- **Cascade, all or nothing:** a Context archives with its Plans, all their Sessions and its grounded Lead; a Plan with its Lead and side forks. Every object is checked first (nothing is written if any blocks); then every live Lead pane is closed as `session close` does (§6.4: pi stops, the session files stay); then `archived_at` is set and the Events appended in one transaction, which re-checks the rule. Unarchiving clears `archived_at` with the same cascade and touches no pane; `session open` resumes a Lead later. Unarchiving a Plan or Session whose Context (or Plan) is archived is refused with `archived`.
+- **Refused on an archived object** (`archived`, exit 3, `details.next` is the unarchive command): `session open` and `session fork` of an archived Session, `plan new` in an archived Context.
 
 #### Event
 
@@ -955,6 +966,15 @@ CREATE TRIGGER events_no_delete  BEFORE DELETE ON events  BEGIN SELECT RAISE(ABO
   ```
 
   A Plan that has a PR when the migration runs keeps the three columns null until its next `pr poll`. `pr poll` writes the three together (§7.6); `ALTER TABLE` cannot add a check across columns, so the binary keeps them all null or all set.
+- **Migration 3** (archive and rename, the tree's right-click menu): adds a nullable `archived_at` to `contexts`, `plans` and `sessions`, rebuilds `events`, and drops and recreates the history triggers of the three tables (the rule above):
+
+  ```sql
+  ALTER TABLE contexts ADD COLUMN archived_at TEXT;
+  ALTER TABLE plans    ADD COLUMN archived_at TEXT;
+  ALTER TABLE sessions ADD COLUMN archived_at TEXT;
+  ```
+
+  `events`' `kind` check gains `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived` and `session-archived` (§5.2). SQLite cannot alter a check, so the migration **recreates the table**: it creates the new `events` with the longer check, copies every row (ids included, so the `AUTOINCREMENT` sequence and every Event cursor stay valid), drops the old table, renames the new one, and recreates `events`' indexes (`events_plan`, `events_context`, `events_session`) and its triggers (`events_own`, `events_no_update`, `events_no_delete`). Existing rows are unchanged. Every `archived_at` is null until the first archive. If another migration numbered 3 reaches `main` first, this one is renumbered when it is rebased.
 - No migration from cpd 1's beads Ledgers (R7): running Workflows finish on cpd 1.
 
 ### 4.6 The Context store
@@ -1022,6 +1042,11 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `session-state` | a Session's state or label changes | context, plan?, session | `{from, to, label}` |
 | `session-moved` | the Session's pane is created, moved into the chat slot, parked or gone (§6.4); gone is appended by E2 or by `session close`, with `pane` and `window` null (§3.6, §6.4) | context, plan?, session | `{pane, window, place}`, `place` is `chat`, `parked`, `work` or `none` |
 | `session-renamed` | `session rename` (cpd 1's `rename`, User decision 7 in the vision) | context, plan?, session | `{name}` |
+| `context-renamed` | `context rename` | context | `{title}` |
+| `plan-renamed` | `plan rename` | context, plan | `{title}` |
+| `context-archived` | `context archive` or `unarchive`, for the Context | context | `{archived: bool}` |
+| `plan-archived` | `plan archive` or `unarchive`, or the cascade of the Context's, for each Plan | context, plan | `{archived: bool}` |
+| `session-archived` | `session archive` or `unarchive`, or a cascade, for each Session | context, plan?, session | `{archived: bool}` |
 | `watch-started`, `watch-stopped` | the engine starts or stops | (none) | `{pid}` |
 | `error` | `watch`, a driver or a sync hit an unexpected failure | context?, plan?, … | `{source, code, message, details}` |
 
@@ -1048,6 +1073,7 @@ It delivers a message with `pi.sendMessage({customType: "cpd", content: text, di
 | `job-cancelled` | message, no turn (it may come from the engine, after a request) | |
 | `session-renamed` (own session) | no message, no turn: `pi.setSessionName(name)` and a one-line notice (cpd 1 §10, kept) | same |
 | `attempt-nudge` (own session) | | message, **turn** (replaces cpd 1's `herdr agent prompt`) |
+| `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | ignored: no message, no turn (they are for the TUI) | ignored |
 | every other kind | ignored | ignored |
 
 The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-done` → `plan-done` and `rename` → `session-renamed`.
