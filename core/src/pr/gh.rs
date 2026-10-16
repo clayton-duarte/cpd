@@ -58,6 +58,9 @@ pub struct Check {
     pub context: Option<String>,
     pub conclusion: Option<String>,
     pub state: Option<String>,
+    /// A CheckRun's `detailsUrl`, else a StatusContext's `targetUrl`.
+    #[serde(rename = "detailsUrl", alias = "targetUrl")]
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,17 +88,16 @@ pub struct InlineComment {
     pub body: Option<String>,
 }
 
-/// `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision`.
+/// `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url`.
 #[derive(Debug, Deserialize)]
 pub struct View {
     pub state: String,
-    #[serde(rename = "mergedAt")]
-    pub merged_at: Option<String>,
     #[serde(rename = "statusCheckRollup")]
     pub checks: Option<Vec<Check>>,
     pub reviews: Vec<Review>,
     pub comments: Vec<Comment>,
     pub title: String,
+    pub url: String,
     /// `APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED` or empty.
     #[serde(rename = "reviewDecision")]
     pub review_decision: Option<String>,
@@ -216,7 +218,7 @@ pub fn create_pr(cwd: &Path, base: &str, head: &str, title: &str, body: &str) ->
 
 pub fn view(cwd: &Path, number: i64) -> Result<View, CpdError> {
     let n = number.to_string();
-    let args = ["pr", "view", &n, "--json", "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision"];
+    let args = ["pr", "view", &n, "--json", "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url"];
     parse(&args, &run(cwd, &args)?)
 }
 

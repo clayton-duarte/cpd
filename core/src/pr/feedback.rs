@@ -54,8 +54,8 @@ mod tests {
     fn view(checks: Vec<(&str, &str)>) -> View {
         View {
             state: "OPEN".into(),
-            merged_at: None,
             title: "T".into(),
+            url: "u".into(),
             review_decision: None,
             checks: Some(
                 checks
@@ -65,6 +65,7 @@ mod tests {
                         context: None,
                         conclusion: Some(conclusion.into()),
                         state: None,
+                        url: None,
                     })
                     .collect(),
             ),

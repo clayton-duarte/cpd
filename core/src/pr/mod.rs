@@ -4,6 +4,7 @@
 //! - `start`: starting a PR (`pr start`), the routine `plan lock` and engine E7 call too;
 //! - `open`: the Gate, the push and the PR (`pr open`);
 //! - `poll`, with `feedback` and `pulls` (the table `pull_requests`, written only there): one poll of every open pull request of the User (`pr poll`);
+//! - `view`: a PR's checks, reviews and comments, read-only (`pr view`);
 //! - `rebase`: the Lead Branch onto the base, the Gate and the push (`pr rebase`);
 //! - `gh`: the one gateway to `gh`; `status`: the PR status enums; `row`: the Plan as these commands read it.
 //!
@@ -13,11 +14,7 @@
 mod add;
 mod cancel;
 mod edit;
-// `current_checks` is `pr view`'s (Job `pr-view2`); until then nothing calls it.
-#[allow(dead_code)]
 mod feedback;
-// `pr view` (Job `pr-view2`) reads the reviews, the comments and `inline_comments`; until then nothing does.
-#[allow(dead_code)]
 mod gh;
 mod open;
 mod poll;
@@ -25,9 +22,8 @@ pub mod pulls;
 mod rebase;
 mod row;
 pub mod start;
-// The summary of `gh pr view`'s checks (`ChecksSummary::of`) is `pr view`'s (Job `pr-view2`); until then nothing calls it.
-#[allow(dead_code)]
 mod status;
+mod view;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -61,6 +57,8 @@ pub enum Command {
     Poll(PollArgs),
     /// Rebase the Lead Branch onto the base and push (§9.3)
     Rebase(Args),
+    /// Show the PR's checks, reviews and comments (§9.8)
+    View(Args),
 }
 
 #[derive(clap::Args, Debug)]
@@ -143,6 +141,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Open(args) => open::open(args),
         Command::Poll(args) => poll::poll(args),
         Command::Rebase(args) => rebase::rebase(args),
+        Command::View(args) => view::view(args),
     }
 }
 
