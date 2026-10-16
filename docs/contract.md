@@ -62,7 +62,7 @@ Exit codes (kept from cpd 1 §2):
 |---|---|
 | `1` | `gate_error`, `context_store_invalid`, `watch_start_failed`, `spawn_failed`, `session_malformed`, `driver_lock_missing`, `doctor_failed`, `pi_not_found`, `catalog_failed` |
 | `2` | `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `spec_invalid`, `tier_invalid`, `nothing_to_edit`, `file_unreadable`, `invalid_name`, `pr_required`, `invalid_pr_id` (R34) |
-| `3` | `pr_exists`, `pr_in_use`, `pr_empty`, `pr_locked`, `pr_not_ready`, `pr_ended`, `needs_other_pr`, `branch_exists` (R34, §3.8), `context_exists`, `question_answered`, `not_a_git_repo`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `job_merged`, `job_not_failed`, `job_not_ready`, `attempt_not_running`, `jobs_not_done`, `gate_failed`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `in_chat_slot`, `cursor_ahead`, `not_a_terminal` |
+| `3` | `pr_exists`, `pr_in_use`, `pr_empty`, `pr_locked`, `pr_not_ready`, `pr_ended`, `needs_other_pr`, `branch_exists` (R34, §3.8), `context_exists`, `question_answered`, `not_a_git_repo`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `review_commits`, `review_missing`, `job_merged`, `job_not_failed`, `job_not_ready`, `attempt_not_running`, `jobs_not_done`, `gate_failed`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `in_chat_slot`, `cursor_ahead`, `not_a_terminal` |
 | `4` | `base_not_found`, `pr_not_found` (R34) |
 
 ### 1.3 Conventions every command follows
@@ -96,6 +96,7 @@ $CPD_HOME/
     <plan>/plan-<review>.md       the Plan review's content, written by `plan review`, opened in plannotator by the pi adapter
     <plan>/messages/<session>.md  a forked Session's first message, copied by `session fork --message-file`
     <plan>/specs/<attempt>.md     rendered Worker Spec
+    <plan>/reviews/<k>.md         a review Job's findings, written by its Worker (B2, §3.4); the directory R19 removed, reused for this
     <plan>/logs/attempt-<attempt>.log      the Attempt driver's stderr
     <plan>/logs/<attempt>.<hook>.log       full output of a hook run (§7.3)
     <plan>/logs/pr-<key>.pre-merge.log     full output of the last Gate run by `pr open` or `pr rebase` on PR <key> (§7.6)
@@ -214,12 +215,13 @@ One request for the User's approval of the draft Jobs, through plannotator (cpd 
 
 #### Job and Spec
 
-A self-contained unit of work. Its **Spec** is the fields `goal`, `context`, `touches`, `acceptance` and `out_of_scope`; with `title`, `tier`, `pr` and the Job's Dependencies, they are the Job's **Locked fields**. A Job runs in its PR's repo: its Attempts' worktrees are cut from, and merged into, its PR's Lead Branch (§7).
+A self-contained unit of work. Its **Spec** is the fields `goal`, `context`, `touches`, `acceptance` and `out_of_scope`; with `title`, `tier`, `pr`, `review` and the Job's Dependencies, they are the Job's **Locked fields**. A Job runs in its PR's repo: its Attempts' worktrees are cut from, and merged into, its PR's Lead Branch (§7).
 
 | Field | Type | Meaning |
 |---|---|---|
 | `plan`, `key` | text | |
 | `pr` | text | the key of the Job's PR (R34, A7): every Job belongs to exactly one PR; set by `job add --pr` (§1.3), changed only by `job edit --pr` while `draft`; a Locked field |
+| `review` | bool | a **review Job** (B2, below): set by `job add --review`, never changed (`job edit` has no such flag); default 0 (every Job before B2 is 0); a Locked field |
 | `seq` | int | machine-wide creation order (scheduling order, §3.2) |
 | `title` | text | |
 | `tier` | text | Tier (§9) |
@@ -235,6 +237,10 @@ A self-contained unit of work. Its **Spec** is the fields `goal`, `context`, `to
 | `failed_cause` | text? | the cause that failed the Job (§3.4); set exactly while `failed` |
 | `merged_sha` | text? | the Lead Branch commit after the merge; set exactly when `merged` |
 | `created_at` | time | |
+
+**Review Job** (B2, hs-d70). A Job with `review = 1`: its Worker is a **fork of the Plan's Lead Session**, so it knows the intention, instead of a fresh session (§3.4, §6.5). It reads its PR's Lead Branch diff against the PR's base and the Plan's Specs, and writes its findings to `run/<plan>/reviews/<k>.md` (§1.4). It commits nothing: `attempt submit` without commits is allowed only for a review Job, which then ends `merged` with no change to the Lead Branch (§3.4, §7.4). Its Dependencies are set by `job add --review` to every Job of **its PR** that exists at that moment and is not `cancelled`; Jobs appended later (CI or PR-feedback fixes) do not become its Dependencies. The Lead turns the findings into fix Jobs before `pr open`; a final review Job is optional, and the Lead adds one only when it makes sense (B3). It belongs to a PR like every Job (A7). This is not cpd 1's Reviewer (removed by R19): it is an ordinary Job of the Plan, once, where the Lead wants it, and no Gate or verdict belongs to it.
+
+*Decided where B2 is silent:* (1) "every Job of the Plan" is read as every Job **of its PR**, because Dependencies stay inside one PR (A7); a review of another PR is a review Job of that PR. (2) A review Job is its own Job, so a later review Job of the same PR depends on an earlier one.
 
 #### Dependency
 
@@ -290,7 +296,7 @@ A pi session cpd knows about: every Lead and Worker is one.
 | `attempt` | text? | set exactly for Workers |
 | `name` | text | pi display name (`-n`); 1–80 characters, no control characters |
 | `file` | text? | absolute path of the session JSONL, known once pi has created it |
-| `forked_from` | text? | the Session it was forked from |
+| `forked_from` | text? | the Session it was forked from. A fork is never drawn under its source or a Plan: §6.8 (B1) |
 | `cwd`, `tier` | text | |
 | `tmux_pane` | text? | `%<n>` pane id on the cpd tmux server; null when it has no pane |
 | `state` | text | `working`, `blocked`, `idle`, `stopped` (§3.6) |
@@ -314,7 +320,7 @@ An append-only record of something that happened (D4, §5).
 
 - **Locked-Job fingerprint:** `sha256` of the canonical JSON (keys sorted, no whitespace) of `{goal, tier, context, touches, acceptance, out_of_scope, needs}` with `needs` sorted. Stored at `plan lock` and at append. Every engine step that reads a Job recomputes it; a mismatch is `locked_job_tampered` (exit 3) and the Job is not scheduled (cpd 1 §8, kept).
 - **Plan fingerprint:** `sha256` of the canonical JSON object `{jobs, prs}` (R34): `jobs` is the array of the Locked fields of every `draft` Job, `pr` included, ordered by key (cpd 1 §11 `plan render`, kept); `prs` is the array of `{key, repo, base, needs}` of every PR that is not `cancelled`, `needs` sorted, ordered by key, so adding, editing or cancelling a PR changes it (A13). `plan lock` requires the latest Plan review to be `approved` for the current plan fingerprint. A Plan in phase `plan` when migration 3 runs (§4.5) therefore needs a new review before it can be locked.
-- The Locked-Job fingerprint does **not** include `pr`: adding it would invalidate every fingerprint stored before R34. A Locked Job's `pr` is guarded by the trigger `jobs_locked` instead (§4.4).
+- The Locked-Job fingerprint does **not** include `pr`: adding it would invalidate every fingerprint stored before R34. A Locked Job's `pr` is guarded by the trigger `jobs_locked` instead (§4.4). The same holds for `review` (B2): it is not in the fingerprint, which would invalidate every fingerprint stored before it, and `jobs_locked` guards it.
 
 ### 2.4 Relations
 
@@ -445,6 +451,8 @@ A Job stays `running` from the start of its Attempt until it is `merged`, `queue
 
 **Ready.** A `queued` Job whose every Dependency is `merged`, whose PR is `dispatch` or `open` (R34: a Job of a `waiting` PR waits for its PR to start, §3.8), in a Plan whose phase is `dispatch` or `pr`.
 
+**Review Job** (B2). `job add --review` sets its Dependencies to every non-`cancelled` Job of its PR at that moment, so it is Ready only when all of them are `merged` (a `failed` Job of the PR makes the add refuse `needs_unavailable`: retry or cancel it first). Its Attempt is §3.4's "A review Job's Attempt"; it ends `merged` like any Job and its `merged_sha` is the Lead Branch tip.
+
 **Locked.** Every Job that is not `draft` is Locked: its Locked fields and Dependencies can never change. It can only be re-attempted (the ladder, `job retry`) or cancelled, and new Jobs can be appended (ADR-0003, cpd 1 requirements §2, kept). `job edit` on a Locked Job is refused with `job_locked` (exit 3); a database trigger refuses the same write (§4.4).
 
 **Cancel.** Kept from cpd 1 §11 `job cancel`, with one change: a cancel request is honoured even after the Worker submitted, up to the compare-and-swap of the merge; after it, the Job is Merged and the request is reported as too late in `job-merged`'s data (`cancel_too_late: true`). (cpd 1 could not cancel an Attempt once it was approved for merge: Workflow lead-fork's `session-rename-2` and `review-off-lead` stayed in cpd 1's `in_review` and were merged by hand with the Gate bypassed; `~/.cpd/plans/cpd-ui/fork-note.md`.) Dependents of a `cancelled` or `failed` Job stay blocked.
@@ -487,6 +495,13 @@ stateDiagram-v2
 | `merging` | `ended` | `merged` / `merged` | R (§7.4): the driver's lock is free and the Attempt branch's tip is already on the Lead Branch (the driver died after A8's compare-and-swap); `merged_sha` = that tip | `job-merged` |
 | `merging` | `ended` | `failed` / `crashed` | R (§7.4): the driver's lock is free and the tip is not on the Lead Branch | `attempt-retry` or `job-failed` |
 
+**A review Job's Attempt** (B2; every row of the tables above holds, except as stated here).
+- **A3, the Worker.** A review Job's Worker is a fork of the Plan's Lead Session (`plans.lead_session`), not a fresh session. The driver first **waits until the Lead is idle**, by §6.7 step 1 (every 2 seconds, with no limit; the Attempt stays `starting`, so the Attempt timeout, which counts from `running`, does not run, and a cancel request is honoured at the next safe point), then starts the Worker with the argv of §6.5 "Worker (review Job)": pi `--fork <lead session file>` plus the Worker's exclusions (`--approve --no-skills --exclude-tools …`). Its Session row is a Worker's (`role = worker`, `attempt` set, hidden in `cpd-work`, never in the tree), with `forked_from` = the Lead's Session, and `session-registered` carries that. The Lead is never interrupted and never takes a turn for it.
+- **The Spec.** The rendered Worker Spec (`commands.md` §16.1) tells it to read the diff of the PR's Lead Branch against the PR's base and the Plan's Specs, to write its findings to `$CPD_HOME/run/<plan>/reviews/<k>.md`, to commit nothing, and then to submit.
+- **Submit.** `attempt submit` for a review Job: the `no_commits` precondition is replaced by two (`commands.md` §6.1): the Attempt branch has **no** commits ahead of `base_sha` (`review_commits`, exit 3), and `run/<plan>/reviews/<k>.md` exists and is not empty (`review_missing`, exit 3). The quick check does not run (nothing was changed to check; `check_tail` stays null). A non-review Job submitted without commits is refused `no_commits`, as before.
+- **The merge, A8.** `merging` → `ended` as usual, but with no rebase, no fast-forward, no push and no worktree sync (§7.4 "A review Job's merge"): the Lead Branch is unchanged, the Attempt ends `merged` / `merged` and the Job `merged` with `merged_sha` = the Lead Branch tip at that moment.
+- **Everything else is a Worker's:** the ladder (a `crashed` or `no_submit` review Attempt is followed by a new Attempt, a new fork of the Lead), the nudge, Escalations (`cpd ask`), cancel, timeout and A9.
+
 **Ladder causes** are `crashed`, `no_submit` and `merge_conflict`: the next Attempt starts from the newer Lead Branch HEAD and its Spec carries the previous outcome and the conflict list. Every other cause fails the Job, and the Lead decides (`job retry`, `job cancel`). Change (R19): the merge runs no Gate, so `gate_failed` and `gate_error` are no longer Attempt causes; the Gate runs at `pr open` and `pr rebase` (§7.6), and a failure there is fixed by Jobs the Lead appends.
 
 **The driver, `cpd attempt run`** (internal; started detached by E3 or `job dispatch` with `setsid`, stderr to `run/<plan>/logs/attempt-<attempt>.log`; holds the driver lock, below, for its whole life). Steps, adapted from cpd 1 §12:
@@ -495,12 +510,12 @@ stateDiagram-v2
 |---|---|
 | A1 | Check that fd 3 is the driver lock (below); load the Attempt and Job; recompute the Locked-Job fingerprint (§2.3) |
 | A2 | Create the worktree from the HEAD of the Lead Branch of the Job's PR, in that PR's repo, and run `pre-start` (§7.2, §7.3); record `base_sha` |
-| A3 | Render the Worker Spec to `run/<plan>/specs/<attempt>.md` (content: `commands.md`); start the Worker in the hidden session (§6.5); register its Session |
+| A3 | Render the Worker Spec to `run/<plan>/specs/<attempt>.md` (content: `commands.md`); start the Worker in the hidden session (§6.5); register its Session. A review Job's Worker is a fork of the Lead (below) |
 | A4 | Wait. Active time is wall time minus time with an `open` Escalation. |
 | A5 | Decide the end of `running`: submitted (the Attempt is `merging`) → A8; `stop_request` → end; pane dead or bad stop reason → `crashed`; Worker `idle` without a submit → append `attempt-nudge` once, then `no_submit` if idle again without a submit. A Worker's idleness is read from its Session state and confirmed from its session file (the last assistant `stopReason`), never from the state alone (t1 F7, kept) |
 | A6 | Removed by R19 (no Job-level Reviewer). |
 | A7 | Removed by R19 (no Job-level Reviewer). |
-| A8 | Merge (§7.4) |
+| A8 | Merge (§7.4); a review Job's Attempt has no commits to merge (below) |
 | A9 | End: record `metrics` (parsed from the Worker's session file, cpd 1 §14) in the transaction that ends the Attempt; kill the Attempt's tmux window; on `merged`, remove the worktree and branch; otherwise keep them for debugging until the Plan is `done` (cpd 1 requirements §2, kept) |
 
 **The driver lock** `locks/attempt-<plan>--<attempt>.lock` is held without a gap from before the Attempt row exists until its driver exits, so a free lock always means a dead driver, and E2 never ends a healthy Attempt whose driver has not started running yet. Chosen fix: the starter takes the lock and hands it to the driver at the spawn. Rejected alternative: an E2 grace period for young `starting` Attempts, which rests on a timing guess and needs a new key.
@@ -762,6 +777,7 @@ CREATE TABLE jobs (
   seq                 INTEGER PRIMARY KEY AUTOINCREMENT,
   plan                TEXT NOT NULL REFERENCES plans(id),
   pr                  TEXT NOT NULL,          -- R34: the Job's PR (A7)
+  review              INTEGER NOT NULL DEFAULT 0 CHECK (review IN (0, 1)),  -- B2: a review Job (added by migration 3)
   key                 TEXT NOT NULL CHECK (length(key) BETWEEN 1 AND 32),
   title               TEXT NOT NULL CHECK (length(title) >= 1),
   tier                TEXT NOT NULL CHECK (length(tier) = 2 AND substr(tier, 1, 1) IN ('O', 'S', 'H') AND substr(tier, 2, 1) BETWEEN '0' AND '5'),
@@ -976,7 +992,7 @@ END;
 Locked, in the database:
 
 ```sql
-CREATE TRIGGER jobs_locked BEFORE UPDATE OF title, tier, goal, context, touches, acceptance, out_of_scope, plan, key, pr ON jobs
+CREATE TRIGGER jobs_locked BEFORE UPDATE OF title, tier, goal, context, touches, acceptance, out_of_scope, plan, key, pr, review ON jobs
 WHEN OLD.status <> 'draft'
 BEGIN SELECT RAISE(ABORT, 'job_locked'); END;
 
@@ -1082,7 +1098,7 @@ CREATE TRIGGER events_no_delete  BEFORE DELETE ON events  BEGIN SELECT RAISE(ABO
   ```
 
   A Plan that has a PR when the migration runs keeps the three columns null until its next `pr poll`. `pr poll` writes the three together (§7.6); `ALTER TABLE` cannot add a check across columns, so the binary keeps them all null or all set (migration 3 moves them to `prs`, where a check holds it).
-- **Migration 3** (R34, A6: Plans across repos). It moves the per-repo columns from `plans` to the new table `prs`, adds `jobs.pr`, adds the six `pr-*` Event kinds and drops `context_records.plan_repo`. `ALTER TABLE` can do none of it except `CREATE TABLE`: SQLite refuses `DROP COLUMN` on a column named in a table `CHECK` or `UNIQUE` (`plans.repo` is not, but `lead_branch`, `lead_worktree` and `pr_number` are), cannot add a composite foreign key to `jobs`, and cannot change the `CHECK` on `events.kind` or `context_records` (docs: SQLite `ALTER TABLE`). So migration 3 rebuilds `plans`, `jobs`, `events` and `context_records` with SQLite's documented procedure (docs: "Making Other Kinds Of Table Schema Changes"):
+- **Migration 3** (R34, A6: Plans across repos). It moves the per-repo columns from `plans` to the new table `prs`, adds `jobs.pr` and `jobs.review` (B2: `INTEGER NOT NULL DEFAULT 0 CHECK (review IN (0, 1))`, 0 for every existing Job), adds the six `pr-*` Event kinds and drops `context_records.plan_repo`. `ALTER TABLE` can do none of it except `CREATE TABLE`: SQLite refuses `DROP COLUMN` on a column named in a table `CHECK` or `UNIQUE` (`plans.repo` is not, but `lead_branch`, `lead_worktree` and `pr_number` are), cannot add a composite foreign key to `jobs`, and cannot change the `CHECK` on `events.kind` or `context_records` (docs: SQLite `ALTER TABLE`). So migration 3 rebuilds `plans`, `jobs`, `events` and `context_records` with SQLite's documented procedure (docs: "Making Other Kinds Of Table Schema Changes"):
   1. before its `BEGIN IMMEDIATE`, `PRAGMA foreign_keys = OFF` (the pragma is a no-op inside a transaction, docs) and `PRAGMA legacy_alter_table = ON`, so the renames below do not re-check the triggers of other tables that name a table while it is being replaced (unverified: the store Job must test the whole procedure);
   2. `CREATE TABLE prs` and `pr_needs` (§4.4) with their history triggers, and fill `prs` with **one PR per Plan**, one row per `plans` row:
 
@@ -1098,8 +1114,8 @@ CREATE TRIGGER events_no_delete  BEFORE DELETE ON events  BEGIN SELECT RAISE(ABO
      | `created_at`, `started_at`, `merged_at` | `created_at`, `locked_at`, `done_at` |
 
      No `pr_needs` rows: one PR has no needs;
-  3. for each of `plans`, `jobs`, `events` and `context_records`: `CREATE TABLE <t>_new` with the §4.4 definition, `INSERT INTO <t>_new SELECT …` every row with its primary key kept (`jobs.seq`, `events.id`, `context_records.seq`), `DROP TABLE <t>`, `ALTER TABLE <t>_new RENAME TO <t>`. `jobs.pr` is filled with the key of its Plan's one PR; `plans` loses the moved columns; `context_records` loses `plan_repo`; `events` gains the six kinds;
-  4. recreate every index and trigger of the rebuilt tables (§4.4: `plans_phase`, `jobs_locked`, `jobs_status`, `jobs_pr_dependencies`, `events_own`, `events_no_update`, `events_no_delete`, `context_records_immutable`, the indexes `events_plan`, `events_context`, `events_session`), the new ones (`prs_status`, `prs_locked`, `pr_needs_locked`, `pr_needs_no_delete`, `dependencies_same_pr`), and the history triggers of `plans`, `jobs` and `context_records` (the rule above). `events_own` is created after the copy, because the copied rows carry their old `txn`;
+  3. for each of `plans`, `jobs`, `events` and `context_records`: `CREATE TABLE <t>_new` with the §4.4 definition, `INSERT INTO <t>_new SELECT …` every row with its primary key kept (`jobs.seq`, `events.id`, `context_records.seq`), `DROP TABLE <t>`, `ALTER TABLE <t>_new RENAME TO <t>`. `jobs.pr` is filled with the key of its Plan's one PR and `jobs.review` with 0; `plans` loses the moved columns; `context_records` loses `plan_repo`; `events` gains the six kinds;
+  4. recreate every index and trigger of the rebuilt tables (§4.4: `plans_phase`, `jobs_locked` (which now lists `review`), `jobs_status`, `jobs_pr_dependencies`, `events_own`, `events_no_update`, `events_no_delete`, `context_records_immutable`, the indexes `events_plan`, `events_context`, `events_session`), the new ones (`prs_status`, `prs_locked`, `pr_needs_locked`, `pr_needs_no_delete`, `dependencies_same_pr`), and the history triggers of `plans`, `jobs` and `context_records` (the rule above). `events_own` is created after the copy, because the copied rows carry their old `txn`;
   5. `PRAGMA foreign_key_check` must return no row, else the migration fails (`migration_failed`) and rolls back; set `user_version = 3`; commit; then `PRAGMA legacy_alter_table = OFF` and `PRAGMA foreign_keys = ON`.
 
   History: each migrated PR gets an `insert` history row in the migration's `txns` row (step 2); the copies of step 3 write none, because the rebuilt tables' history triggers exist only after them, and the moved values stay readable in the earlier history rows of `plans`. A Plan in phase `plan` keeps its Jobs `draft` and its review, but the new plan fingerprint (§2.3) no longer matches the review's, so it needs a new `plan review` before `plan lock`. The test the store Job must add: a version-2 database with one Plan in each phase, Jobs, Attempts, Events and Context records migrates to 3, keeps every row and id, passes `PRAGMA foreign_key_check`, and its schema hash equals that of a fresh database migrated to 3.
@@ -1150,7 +1166,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `plan-phase` | `grounding → plan`, `plan → dispatch` (also moves every draft Job to `queued`), `dispatch → pr` (when the last PR not yet open opens, A10) | plan | `{from, to}`; at lock also `jobs: [key]` and `prs: [key]` (the PRs it started); at `pr` also `prs: [{key, number, url}]` (every PR not `cancelled`) |
 | `plan-review` | a Plan review is requested or decided | plan | `{review, fingerprint, status, feedback?}` |
 | `plan-done` | `pr → done`, when the last PR not `cancelled` is merged; appended once (cpd 1's `workflow-done`) | plan | `{prs: [{key, number, url, merged_at}]}` |
-| `job-added` | `job add` | plan, job | `{pr, status, appended, tier, needs}` |
+| `job-added` | `job add` | plan, job | `{pr, status, appended, tier, needs, review}` |
 | `job-edited` | `job edit` | plan, job | `{fields: [name]}` |
 | `job-merged` | Job → `merged` | plan, job, attempt | `{sha, tier, cancel_too_late?: true}` |
 | `job-failed` | Job → `failed` | plan, job, attempt? | `{cause, detail, tier, attempts}` |
@@ -1314,6 +1330,7 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 | Lead (fork) | `--fork <source file>` added to the above (§6.7) | same |
 | Lead (resume) | `--session <file>` and the `[-e …]` arguments, no first message | same |
 | Lead (grounded, no Plan) | as a fresh, forked or resumed Lead (a Context's grounded Lead is a fork with no first message, §3.1) | `CPD_HOME`, `CPD_SESSION=<id>`, `PLANNOTATOR_UPDATE_CHECK=0`; no `CPD_PLAN` and no other `PLANNOTATOR_*` (it has no Plan and is never typed into) |
+| Worker (review Job, B2) | `--fork <lead session file>` added to the Worker's argv below, with the same exclusions (`--approve --no-skills --exclude-tools …`), model, `--session-id`, `-n` and first message; started only after the §6.7 idle wait | same as a Worker |
 | Worker | `--approve --no-skills --exclude-tools ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox [-e …] --model <model:level> --session-id <id> -n "<plan> <job> a<n>" -- "Read <spec path> and follow it exactly. Your attempt id is <attempt>."` | `CPD_HOME`, `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT` |
 
 - **cwd** (R34, A12): a Plan's Lead runs in the cwd of `plan new` (stored as its Session's `cwd`, also when `plan new` forks the Context's grounded Lead, whose own cwd may differ: unverified that `pi --fork` in another cwd keeps the session intact; a side fork by `session fork` takes its source's cwd); a Worker in its Attempt worktree, in the repo of its Job's PR. The project settings read below (`<cwd>/.pi/settings.json`) are therefore those of that directory.
@@ -1341,6 +1358,16 @@ One `cpd watch` per machine, in `cpd-work:watch`. It is not tied to any Lead's p
 3. When pi exits: reports `stopped`, prints `pi exited. Press Enter to resume <name> here.`, and on Enter runs `pi --session <file>` again. If the session file already exists when `session run` starts, it resumes instead of forking (idempotent restart, as `fork-lead.sh`).
 
 The fork never copies a half-done turn, and the source is never interrupted.
+
+### 6.8 Forks: why they happen and where they are drawn (B1, B4)
+
+Forks happen for two reasons only, and neither nests:
+- a **review Job** (B2): its Worker is a fork of the Plan's Lead, started by its driver after the §6.7 idle wait (§3.4). Workers are hidden in `cpd-work` and are not in the tree, so this fork is not drawn;
+- `cpd session fork` (B4), kept for tangents the User starts (a bug, an idea): a Lead Session forked from a Lead.
+
+Both are **siblings**: a forked Session is drawn in the tree **directly under its Context**, after the Context's Plans, a sibling of the Plans' Leads and of its source, and never under a Plan or under the Session it came from (a fork of a fork is drawn the same way). `forked_from` records the source and `plan` the Plan whose Events and `CPD_PLAN` it uses, but neither moves the row in the tree. (A Context's grounded Lead and a Plan's own Lead, forked by `plan new` for D2, are not `session fork` forks and keep their places, §3.1.)
+
+*Decided where B1 is silent:* a forked Session's row in the tree is ordered by `created_at` after every Plan Lead row of its Context, and carries no Job counters (the Plan's are on the Plan Lead's row); `commands.md` §13.2 and §17 state it.
 
 ## 7. git and the Gate
 
@@ -1418,7 +1445,7 @@ Change from cpd 1: exit code 64 is no longer special. cpd 1 needed `verify = "./
 **`attempt submit` preconditions**, in order, each refused with exit 3 and a code the Worker can act on (cpd 1 §11, kept except the check; R20 keeps exactly these at submit):
 1. the caller's cwd is inside the Attempt worktree, which is on the Attempt branch (`wrong_worktree`);
 2. clean tree, untracked files included (`dirty_tree`);
-3. at least one commit ahead of `base_sha` (`no_commits`);
+3. at least one commit ahead of `base_sha` (`no_commits`); **for a review Job (B2) instead: no commit ahead of `base_sha` (`review_commits`) and a non-empty `run/<plan>/reviews/<k>.md` (`review_missing`)**, and precondition 5 is skipped for it (§3.4);
 4. the tamper check passes (`gate_tampered`, §7.5);
 5. the quick check passes (`check_failed`, or `check_error` exit 1); with no `pre-commit` table it passes without running anything, and `check_tail` stays null.
 
@@ -1453,6 +1480,8 @@ Who runs R:
 - **E2**, for every Attempt in `merging` whose driver lock is free (§3.7). It tries the per-repo lock without waiting; if the lock is held, E2 tries again at its next tick, and the next process to take the lock runs R anyway (next point).
 - **Every holder of the per-repo lock**, right after taking it (A8 before step 1, `pr open` and `pr rebase` before their step 1): R for each Attempt in `merging` whose Job's PR is on the same repo (any Plan, any PR) and whose driver lock is free; R uses that Job's PR's Lead Branch and Lead worktree. A driver waiting for the lock is the likeliest to get it when another driver dies; this way it never meets the dead driver's stale Lead worktree (which step 3 would report as `dirty_target`), and `pr open` and `pr rebase` never gate or push a Lead Branch with a merge the Ledger has not recorded.
 - **Nothing restarts a driver at A8.** A dead driver's Attempt is ended by R or E2, never resumed; an implementation that adds a restart at A8 must run R first, so a merge is never done twice.
+
+**A review Job's merge** (B2). Under the same per-repo lock, after R, the driver runs step 1 (cancel check), step 2 (snapshot `old`) and step 7 (cancel check again); it skips steps 3–6 and 8–9 (no tamper check, rebase, fast-forward, push or worktree sync: the Attempt has no commits and the Lead Branch does not move), then runs step 10 with `merged_sha = old`. R ends a review Attempt found in `merging` with a free driver lock `merged` (its submit already proved the findings file and the absence of commits), with `merged_sha` the Lead Branch's tip at that moment, and pushes nothing. A9 removes its worktree and branch as for a merged Attempt (`git branch -d` succeeds: the branch has no commits of its own).
 
 **No Gate at the merge** (R19). A merge is checked by the Attempt's quick check at submit (§7.3), the tamper check (step 4) and a clean rebase (step 5); the Gate runs on the whole Lead Branch, at `pr open` and `pr rebase` (§7.6), and a failure there is fixed by Jobs the Lead appends. cpd 1 ran the Gate on the rebased Attempt and again on the Lead (cpd 1 §12 step 11); both runs are dropped. The tamper check still guards the Gate's own files (§7.5), so an Attempt cannot weaken the Gate that later runs on its commits.
 
@@ -1596,6 +1625,7 @@ Kept from cpd 1 §7, with one change in how pi's catalog is read.
 | R13 the full contract at Tier O3, review S4 | §9 (defaults); the Job that wrote this. Its review Tier no longer exists in cpd 2 (R19) |
 | R35 the Lead Branch on the remote: `plan lock` reuses or creates and pushes the Lead Branch, every merge pushes it (hs-d30, hs-d42); since R34 per PR branch, at each PR's start (A5) | §3.1 (`plan → dispatch` row), §3.8 (the start), §7.2, §7.4 (push after step 8, R2), §5.2 `error` (`push_failed`); `commands.md` §4.8, §9.1 |
 | R34 Plans across repos: a Plan has one or more PRs, each with its own repo, base, Lead Branch, Lead worktree, Gate and pull request (hs-d28, hs-d29, hs-d36, hs-a2, hs-d43, hs-d44, hs-d45) | A4 PR object: §2.1 (PR key), §2.2 PR; A5 naming: §2.1, §7.1; A6 storage: §4.4 (`prs`, `pr_needs`, `jobs.pr`), §4.5 migration 3; A7 Jobs in one PR, Dependencies inside it: §2.2 Job and Dependency, §2.4, §4.4 (`dependencies_same_pr`); A8 PR statuses and the lock: §3.1, §3.8; A9 the engine starts PRs: §3.7 E7, §3.8, §5.2 `pr-started`, §5.3; A10 phases and polling: §3.1, §3.7 E4–E5, §7.6; A11 a PR closed unmerged: §3.8, §7.6; A12 no `--repo`, the Lead's cwd: §2.2 Context record, §2.5, §3.1, §4.6, §6.2, §6.4, §6.5; A13 `pr add`, `pr edit`, `pr cancel`, `pr start`: §2.3, §2.5, §3.8; A14 `--pr`, `plan show`: §1.3, §2.5, §7.6; A15 the plan view: §2.5; A16 the cpd-lead skill: not in this document (`pi/skills/cpd-lead/`); `commands.md` (Job `r34-commands`) |
+| B1–B4 forks are siblings under their Context; `job add --review` makes a review Job whose Worker is a fork of the Lead (hs-d70, User) | B1: §2.2 Session, §6.8; `commands.md` §13.2, §17. B2: §1.4, §2.2 Job (Review Job), §3.2, §3.4 (A review Job's Attempt), §4.4 (`jobs.review`), §4.5 (migration 3), §5.2 `job-added`, §6.5, §7.4 (A review Job's merge); `commands.md` §5.1, §5.7, §6.1, §16.1. B3: §2.2 Review Job; the cpd-lead skill is Job `r34-skill`'s. B4: §6.7, §6.8; `commands.md` §10.3 |
 | R14 the Plan starts from `main` after lead-fork's PR | §3.1 (`plan lock` creates the Lead Branch from `origin/<base>`), §7.2 |
 | R15 Contexts follow ADR-0011 and ADR-0012: the grounded Lead is a fork taken at the first Plan's `grounding → plan`, parked and never typed into; later forks get the newer records; the Context store is typed JSONL records in git, indexed by SQLite | §2.2 Context and Context record, §3.1, §4.6, §6.7 |
 | R17 a Reviewer is a fork of the Lead | **superseded for cpd 2 by R19**: cpd 2 has no Reviewer, so nothing implements it |

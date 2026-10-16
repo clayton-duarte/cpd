@@ -81,13 +81,14 @@ Common refusals, which apply to every command and are not repeated in the sectio
 
 ### 1.4 Files written by commands
 
-The `$CPD_HOME` layout is §1.4. Commands in this file write three files the contract's layout does not list (amendment 4, §19); each is beside its peers and named so it cannot collide:
+The `$CPD_HOME` layout is §1.4. Commands in this file write four files the contract's layout does not list (amendment 4, §19); each is beside its peers and named so it cannot collide:
 
 | File | Written by | Read by |
 |---|---|---|
 | `run/<plan>/lead-message.md` | `plan new` | the Plan's Lead `session run` (its first message) |
 | `run/<plan>/plan-<review>.md` | `plan review` | the pi adapter, which opens it in plannotator (§15.5) |
 | `run/<plan>/messages/<session>.md` | `session fork --message-file` copies the file here | that Session's `session run` |
+| `run/<plan>/reviews/<job>.md` | a review Job's Worker (B2, contract §1.4) | the Lead (and the User) |
 
 ### 1.5 Text arguments
 
@@ -349,7 +350,7 @@ cpd plan show [--plan <id>]
 
 Effects: none; one read transaction, so the result is one consistent snapshot. It is the TUI's snapshot of a Plan (§17).
 
-Output: every field of the Plan (§2.2); `prs` (R34, A14), every PR of the Plan in key order, `cancelled` ones included, each with its fields (§2.2 PR: `key`, `repo`, `base`, `needs`, `status`, `lead_branch`, `lead_worktree`, `pr`, `pr_seen`, `pr_title`, `pr_review_decision`, `pr_checks`, `all_merged_at`, `start_failed_at`, `created_at`, `started_at`, `merged_at`) and `jobs`, the keys of its Jobs in `seq` order; `jobs` with each Job's fields (Spec included, `pr` among them), `needs`, and its Attempts (`id`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `worker_session`, `started_at`, `ended_at`); `escalations` that are `open`; the latest Plan review; `counts`; `tamper` (the tamper report of §4.3: `{kind: "schema" | "fingerprint" | "history", …}`); `events_cursor`.
+Output: every field of the Plan (§2.2); `prs` (R34, A14), every PR of the Plan in key order, `cancelled` ones included, each with its fields (§2.2 PR: `key`, `repo`, `base`, `needs`, `status`, `lead_branch`, `lead_worktree`, `pr`, `pr_seen`, `pr_title`, `pr_review_decision`, `pr_checks`, `all_merged_at`, `start_failed_at`, `created_at`, `started_at`, `merged_at`) and `jobs`, the keys of its Jobs in `seq` order; `jobs` with each Job's fields (Spec included, `pr` and `review` among them), `needs`, and its Attempts (`id`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `worker_session`, `started_at`, `ended_at`); `escalations` that are `open`; the latest Plan review; `counts`; `tamper` (the tamper report of §4.3: `{kind: "schema" | "fingerprint" | "history", …}`); `events_cursor`.
 
 ```json
 {"ok": true,
@@ -502,7 +503,7 @@ Jobs, Specs and Dependencies (§2.2, §3.2). Kept from cpd 1 §11 "Jobs" except 
 ### 5.1 `job add`
 
 ```
-cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs <k1,k2>] [--plan <id>]
+cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs <k1,k2> | --review] [--plan <id>]
 ```
 
 | Flag | Meaning |
@@ -510,6 +511,7 @@ cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs 
 | `<key>` | Job key (§2.1). Change: positional, like every other `job` command (cpd 1 had `--key`) |
 | `--pr <key>` | the Job's PR (R34, A14), selected by §1.3's rule: required when the Plan has two or more PRs that are not `cancelled`, defaulted to the one when it has one |
 | `--needs <k1,k2>` | Dependencies, comma-separated, no duplicates (`usage`); Jobs of the same PR only (A7) |
+| `--review` | a **review Job** (B2, contract §2.2): its Worker is a fork of the Plan's Lead, it commits nothing and writes `run/<plan>/reviews/<key>.md`. Its Dependencies are **set** to every Job of its PR that exists at that moment and is not `cancelled`, so `--needs` with `--review` is `usage` (exit 2). Jobs added later do not become its Dependencies. The Spec file is as for any Job; its `touches` is informational for a review Job (*decided*: the Lead lists `run/<plan>/reviews/<key>.md`) |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -518,15 +520,15 @@ cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs 
 | no Job with this key, unless its Locked fields (`pr` included) and needs are identical (then `already`) | `job_key_exists` | 3 |
 | every `needs` key is a Job of the Plan | `needs_unknown` | 3 |
 | every `needs` Job is in the same PR; `details.jobs` lists those that are not | `needs_other_pr` | 3 |
-| no `needs` Job is `cancelled` or `failed` | `needs_unavailable` | 3 |
+| no `needs` Job is `cancelled` or `failed`; with `--review`, no Job of the PR is `failed` (retry or cancel it first; `details.jobs` lists them), because a Dependency on a `failed` Job is refused | `needs_unavailable` | 3 |
 
-Effects: **rows**, one transaction: `jobs` (`pr` = the PR's key; `status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = queued`, `appended = 1`, fingerprint stored, in `dispatch` or `pr`); one `dependencies` row per need. **Event** `job-added` `{pr, status, appended, tier, needs}`. No cycle is possible: nothing needs a new Job yet. An appended Job of a `waiting` PR is not Ready until its PR starts (§3.2); one of an `open` PR reaches its pull request through `pr rebase --pr <key>` (§9.3).
+Effects: **rows**, one transaction: `jobs` (`pr` = the PR's key; `review` = 1 with `--review`; `status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = queued`, `appended = 1`, fingerprint stored, in `dispatch` or `pr`); one `dependencies` row per need (with `--review`, per Job of the PR, as the Dependencies are set in the same transaction). **Event** `job-added` `{pr, status, appended, tier, needs, review}`. No cycle is possible: nothing needs a new Job yet. An appended Job of a `waiting` PR is not Ready until its PR starts (§3.2); one of an `open` PR reaches its pull request through `pr rebase --pr <key>` (§9.3).
 
 ```json
-{"ok": true, "job": {"key": "api-schema", "pr": "api", "status": "draft", "appended": false, "tier": "S2", "needs": []}}
+{"ok": true, "job": {"key": "api-schema", "pr": "api", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false}}
 ```
 
-Idempotent: yes, as stated.
+Idempotent: yes, as stated. `--review` is repeatable like any add: an identical call (same Locked fields, `review` included, same Dependencies) is `already`; a call after another Job was added to the PR differs in its Dependencies and is `job_key_exists`. `job edit` has no `--review` and refuses `--needs` and `--no-needs` on a review Job with `usage` (*decided*: its Dependencies are fixed by the add; to change them, cancel it and add a new one).
 
 ### 5.2 `job edit`
 
@@ -633,7 +635,7 @@ cpd job list [--status <status>] [--plan <id>]
 cpd job show <key> [--plan <id>]
 ```
 
-Effects: none. Output: every field of the Job (§2.2), `needs`, `needed_by`, and every Attempt with all its fields (`check_tail`, `metrics`) and its Escalations (cpd 1 §11, kept).
+Effects: none. Output: every field of the Job (§2.2; `review: true` for a review Job, B2), `needs`, `needed_by`, and every Attempt with all its fields (`check_tail`, `metrics`) and its Escalations (cpd 1 §11, kept).
 
 ```json
 {"ok": true, "job": {"key": "worker", "pr": "api", "status": "failed", "failed_cause": "timed_out", "tier": "S2", "…": "…"}, "needs": ["api-schema"], "needed_by": ["ui"],
@@ -657,15 +659,16 @@ Run by the Worker, from its worktree. Preconditions are §7.3's list, in that or
 | the Attempt is `running` (already `merging` or later with `submitted_sha` = the worktree's HEAD: `already`) | `attempt_not_running` | 3 |
 | the caller's cwd is inside the Attempt worktree, on the Attempt branch | `wrong_worktree` | 3 |
 | clean tree, untracked files included | `dirty_tree` | 3 |
-| at least one commit ahead of `base_sha` | `no_commits` | 3 |
+| at least one commit ahead of `base_sha`; **for a review Job (B2) instead**: no commit ahead of `base_sha` | `no_commits`; `review_commits` | 3 |
+| (review Job only) `run/<plan>/reviews/<job>.md` exists and is not empty (contract §7.3, precondition 3) | `review_missing` | 3 |
 | the tamper check passes (§7.5); `details.paths` lists the protected paths touched | `gate_tampered` | 3 |
-| the quick check passes (no `pre-commit` table: it passes without running, R20); `details.tail` is its last 60 lines, `details.log` the full log | `check_failed` | 3 |
+| the quick check passes (skipped for a review Job, B2: nothing was changed to check; no `pre-commit` table: it passes without running, R20); `details.tail` is its last 60 lines, `details.log` the full log | `check_failed` | 3 |
 | the quick check ran (not killed, not `hook_invalid`) | `check_error` | 1 |
 
 Effects:
 - **Hooks:** `pre-commit` only, in the worktree (§7.3); output to `run/<plan>/logs/<attempt>.pre-commit.log`. With no `pre-commit` table nothing runs, no log is written and `check_tail` stays null; `pre-merge` never runs at submit (R20).
 - **Rows**, one transaction with a compare-and-swap on `status = 'running'` and on the HEAD checked: Attempt `merging`, `submitted_sha`, `submitted_at`, `check_tail`; the Job stays `running`. **Event** `attempt-status` `{from: "running", to: "merging"}`.
-- The driver sees `merging` at A5 and starts the merge (A8, §7.4).
+- The driver sees `merging` at A5 and starts the merge (A8, §7.4). For a review Job the merge changes nothing: the Attempt and the Job end `merged` with the Lead Branch unchanged and `merged_sha` its tip (contract §3.4, §7.4).
 
 ```json
 {"ok": true, "attempt": "api-schema-a1", "submitted": true, "sha": "a1b2c3d…", "next": "Stop now. Do not make more changes."}
@@ -1050,12 +1053,12 @@ Read-only.
 cpd session fork <source> [--plan <id>] [--name <name>] [--message-file <file>]
 ```
 
-§6.7. Registers a new Lead Session forked from `<source>` and starts it in a parked window; the waiting for the source to be idle happens in that window, so the command returns at once.
+§6.7, §6.8. Registers a new Lead Session forked from `<source>` and starts it in a parked window; the waiting for the source to be idle happens in that window, so the command returns at once.
 
 | Flag | Meaning |
 |---|---|
-| `<source>` | the Session to fork; a Lead |
-| `--plan <id>` | the new Session's Plan; default the source's Plan. The fork is a **side session** of the Plan: the Plan's `lead_session` does not change, so Plan Events still go to the Plan's Lead only (§15.2) |
+| `<source>` | the Session to fork; a Lead. This command is for **tangents the User starts** (a bug, an idea), B4; a review is a review Job (§5.1), not a fork by hand |
+| `--plan <id>` | the new Session's Plan; default the source's Plan. The fork is a **side session** of the Plan: the Plan's `lead_session` does not change, so Plan Events still go to the Plan's Lead only (§15.2). It is drawn in the tree **directly under its Context**, after the Context's Plans, never under the Plan or under `<source>` (B1, §13.2) |
 | `--name <name>` | default `<source name> (fork)`, cut to 80 characters |
 | `--message-file <file>` | its first message, copied to `run/<plan>/messages/<session>.md`; without it the fork starts with no message |
 
@@ -1330,7 +1333,7 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
 | `logs` | the Event log, in a popup | ↑↓, j/k, PgUp/PgDn scroll; `q` or Esc closes it |
 
 **`tree`.**
-- **Rows.** A Context row (a dot of the busiest phase inside, its name bold, the Plan count when collapsed) and under it one row per Lead Session: guide, dot, name (cut with `…` before the counters), and the five Job counters `queued⋅running⋅merging⋅failed⋅merged` right-aligned (cancelled Jobs are not counted; no counters without a Plan). `⏵` marks the Session in the chat slot, in column 0, and its name is bold. The dot is `●` when the Session **needs you**, else `○`; the rule is §17's.
+- **Rows.** A Context row (a dot of the busiest phase inside, its name bold, the Plan count when collapsed) and under it one row per Lead Session: the Plans' Lead Sessions in `created_at` order, **then, after them, every Session forked by `session fork`** (B1, contract §6.8: a fork is a sibling under the Context, never nested under a Plan or under the Session it came from, whatever its `plan` or `forked_from`; *decided*: they are ordered by `created_at` and show no counters, the counters being the Plan Lead's). Row: guide, dot, name (cut with `…` before the counters), and the five Job counters `queued⋅running⋅merging⋅failed⋅merged` right-aligned (cancelled Jobs are not counted; no counters without a Plan). `⏵` marks the Session in the chat slot, in column 0, and its name is bold. The dot is `●` when the Session **needs you**, else `○`; the rule is §17's.
 - **Cursor.** Keyboard only: a click never moves or shows it. It moves between Sessions only (Context rows are not selectable), is drawn inverted across the full row only while the pane has keyboard focus (`focus-events`, §6.1) and after an arrow key; Enter, `n` and `x` act on it only while it shows.
 - **Clicks.** A click on a Session opens it in the chat slot and focuses the chat (`session open`, then `select-pane`); a click on a Context row collapses or expands it. Clicks are ignored while a prompt is open.
 - **`n`** asks for a name in one inline row at the bottom (Enter starts, Esc cancels, an empty name is refused) and runs `plan new` (§4.1) in the selected Session's Context: the Plan forks the Context's grounded Lead (R15), the one deviation from cpd 1's `n`, which forked the selected session. On a Context row it says `pick the session to fork`.
@@ -1339,7 +1342,7 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
 
 **`plan`.**
 - **Top row:** only ` <context id> ▸ ` (dim) and the tabs, over a separator line (`Borders::TOP`, colour 8). Nothing at the right: no PR, no workers count, no Plan title.
-- **Tabs:** one per Lead Session of the Context that has a pane in the cockpit (a Plan's Lead and its side forks; a grounded Lead never), labelled by the Session's name, else its Plan id, else the first 8 characters of its id, as ` <label> ` with one space between tabs and separators in colour 8. The active tab (the chat slot's) is reversed and bold; that is its only marker. With none: ` no Lead session in the centre` (dim). A click on a tab runs `session open <id>` and then `select-pane` on the chat slot.
+- **Tabs:** one per Lead Session of the Context that has a pane in the cockpit (a Plan's Lead and its side forks, B1; a grounded Lead never), labelled by the Session's name, else its Plan id, else the first 8 characters of its id, as ` <label> ` with one space between tabs and separators in colour 8. The active tab (the chat slot's) is reversed and bold; that is its only marker. With none: ` no Lead session in the centre` (dim). A click on a tab runs `session open <id>` and then `select-pane` on the chat slot.
 - **Chart:** the Plan's Jobs as cards (reference `flow.rs`, ported), inside `Margin{2, 1}`; cancelled Jobs hidden. Messages are one row at the bottom of the window: `no Plan yet`, `loading… (first fetch)`, or the note.
 - **PR boxes** (R34, A15; contract §2.5). The chart is split into **one box per PR** that is not `cancelled`, each a bordered block (`Borders::ALL`, colour 8) holding the cards and Dependency arrows of that PR's Jobs, laid out inside it as the single chart was. The box's title, on its top border, reads ` <key> · <repo name> → <base> · <pull request> `: the PR key in bold; the repo's directory name (the last component of `prs.repo`); its base; then `#<number> <state>` once the PR has a pull request, where `<state>` is `open`, `merged`, or `closed` while the pull request is closed without a merge (`pr_seen.closed`, A11), in the palette's PR state colours (reference `pr_state`), else the PR's status (`waiting`, `dispatch`) dim. The boxes are laid out **left to right** in the order of the needs graph: a box stands to the right of every box it needs (its column is one more than the highest column among its needs; boxes in the same column are stacked top to bottom by key), and each need is drawn as an arrow from the needed box's right border to the needing box's left border. A PR with no Jobs shows an empty box (` no Jobs `, dim). A Plan with one PR shows one box; a Plan with no PR yet shows the message `no PR yet: cpd pr add` (dim). Selection and Enter work on Job cards across boxes: ←→ move to the nearest card in the next column, crossing into the neighbouring box; the wheel and the scroll offsets apply to the whole row of boxes.
 
@@ -1573,6 +1576,8 @@ Rendered by the driver at A3 to `run/<plan>/specs/<attempt>.md` from a template 
 | Answers already given | new: every `answered` Escalation of earlier Attempts, question and answer, so a Worker does not ask again |
 | Finish | `cpd attempt submit <attempt>`; on success stop at once; on a refusal, what each code means: `wrong_worktree` (run it from the worktree), `dirty_tree`, `no_commits`, `gate_tampered` (revert the protected paths), `check_failed` (fix, commit, submit again; the tail is in `details`), `check_error` (the check could not run: ask the Lead), `attempt_not_running` (the Attempt was stopped: stop) |
 
+**A review Job's Spec** (B2) differs from the table in these rows: *Who you are* says it is a review Job and that it is a fork of the Lead; *Rules* replace "commit your work" and the quick check with **commit nothing**, and tell it to read the diff of the PR's Lead Branch against the PR's base (`<lead branch>` and `<base>` are given) and the Plan's Specs, to write its findings to `$CPD_HOME/run/<plan>/reviews/<job>.md` (absolute path given, non-empty), and not to edit the repo; *Finish* adds `review_commits` (you committed: undo it and submit again) and `review_missing` (write the findings file) to the refusal codes and drops `no_commits` and `check_failed`. The findings are Markdown; the Lead reads them and turns them into fix Jobs before `pr open`.
+
 The Worker is started as §6.5 says, with the first message `Read <spec path> and follow it exactly. Your attempt id is <attempt>.` and `CPD_HOME`, `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT` in its environment.
 
 **Nudge** (A5, once): an `attempt-nudge` Event to the Worker's Session with `data.prompt` = `You ended your turn without running cpd attempt submit <attempt>. Finish the Spec and submit, or run cpd ask <attempt> "<question>" if you are blocked.` (cpd 1 §12 step 7, kept), delivered with a turn (§15.3).
@@ -1595,7 +1600,7 @@ Outline §8 and D4: the views take one **snapshot** with a read command, then **
 
 | View (`@cpd_view`) | Snapshot (the read of the command named) | Events it acts on | What it updates |
 |---|---|---|---|
-| `tree` (Context column) | `cpd context list`, `cpd session list` | `context-created`, `context-grounded`, `plan-created`, `plan-phase`, `plan-done`, `session-registered`, `session-state`, `session-moved`, `session-renamed` | Contexts, their Plans and Lead Sessions, each with its state, name, Job counters and **needs-you** dot (rule below) |
+| `tree` (Context column) | `cpd context list`, `cpd session list` | `context-created`, `context-grounded`, `plan-created`, `plan-phase`, `plan-done`, `session-registered`, `session-state`, `session-moved`, `session-renamed` | Contexts, their Plans' Lead Sessions, then the Sessions forked by `session fork` as siblings under their Context (B1), each with its state, name, Job counters (Plan Leads only) and **needs-you** dot (rule below) |
 | `plan` (centre top) | `cpd plan show --plan <p>` for the Plan of the Lead in the chat slot (its `prs`, each PR's key, repo, base, needs, status, `pr`, `pr_seen.closed` and `jobs`, for the PR boxes, §13.2), and the Context's Lead Sessions that have a pane (the tabs) | every Event with `plan = p` (the `pr-*` kinds and `pr-feedback` included: they change a box's title or add a box); `session-moved` with `place: "chat"` (the slot changed: switch Plan and take a new snapshot) | one box per PR that is not `cancelled`, left to right by needs and linked by them, each with the flowchart of its Jobs, Attempts and Tiers (R34, A15); and the tabs. Not drawn, so not read: open Escalations, the latest Plan review |
 | `widgets` (Dispatch column) | `cpd plan list` for the Plans whose Lead Session has a pane in the cockpit (`session-moved` places `chat` or `parked`), with each one's PRs: number, state, checks, review decision and title (`pr`, `status`, `pr_title`, `pr_review_decision`, `pr_checks` of §4.2, §7.6, contract §4.4); and the host's load average (`/proc/loadavg`; on macOS `sysctl -n vm.loadavg`), re-read every 2 s with no Event | `plan-created`, `plan-phase`, `pr-opened`, `pr-feedback`, `pr-merged`, `plan-done` (and `session-moved`, for which Plans have a pane) | the machine's name and load, and the pull requests of each Plan. No engine, slots, Escalations or Events |
 | `statusbar` (bottom row) | the slots and config `concurrency`: the Attempts not ended, and `concurrency` | any (re-read when the store's highest Event id moved, coalesced to 500 ms, at least every 2 s); no subprocess, no `gh` | `workers N/M` |
