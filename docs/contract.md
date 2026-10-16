@@ -341,7 +341,7 @@ stateDiagram-v2
 |---|---|---|---|---|
 | (none) | `grounding` | `plan new --context X` | Context exists; Plan id free; Lead Branch absent from the repo | `plan-created`, `session-registered` |
 | `grounding` | `plan` | `plan phase plan` (the Lead) | none | `plan-phase`. If the Context has no grounded Lead on this machine, the same transaction also registers one (below): `session-registered` and `context-grounded`. The pi fork itself runs after the commit |
-| `plan` | `dispatch` | `plan lock` | latest Plan review `approved` for the current plan fingerprint (`plan_not_approved`); at least one `draft` Job; acyclic graph | `plan-phase`. All `draft` Jobs become `queued` with their fingerprints; the Lead worktree is created (§7.2); `watch` is started if it is not running (§6.6) |
+| `plan` | `dispatch` | `plan lock` | latest Plan review `approved` for the current plan fingerprint (`plan_not_approved`); at least one `draft` Job; acyclic graph; Lead Branch absent from the repo, and on the remote either absent or reusable, i.e. `origin/<base>` is its ancestor (`branch_exists`, §7.2) | `plan-phase`. All `draft` Jobs become `queued` with their fingerprints; the Lead worktree is created, reusing or creating and pushing the Lead Branch on the remote (§7.2); `watch` is started if it is not running (§6.6) |
 | `dispatch` | `pr` | `pr open` | every Job `merged` or `cancelled`, at least one `merged` | `plan-phase` |
 | `pr` | `done` | engine E5 (`pr poll`) | `gh` reports the PR merged | `plan-done` |
 
@@ -1011,7 +1011,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `session-moved` | the Session's pane is created, moved into the chat slot, parked or gone (§6.4); gone is appended by E2 or by `session close`, with `pane` and `window` null (§3.6, §6.4) | context, plan?, session | `{pane, window, place}`, `place` is `chat`, `parked`, `work` or `none` |
 | `session-renamed` | `session rename` (cpd 1's `rename`, User decision 7 in the vision) | context, plan?, session | `{name}` |
 | `watch-started`, `watch-stopped` | the engine starts or stops | (none) | `{pid}` |
-| `error` | `watch`, a driver or a sync hit an unexpected failure | context?, plan?, … | `{source, code, message, details}` |
+| `error` | `watch`, a driver or a sync hit an unexpected failure; codes include `lead_worktree_stale`, `merge_check_failed` and `push_failed` (a failed push of the Lead Branch at `plan lock` or at a merge, §7.2, §7.4) | context?, plan?, … | `{source, code, message, details}` |
 
 ### 5.3 Delivery by the pi adapter
 
@@ -1188,7 +1188,14 @@ The repo's main checkout is never touched; Lead and Attempt worktrees are siblin
 
 ### 7.2 Creating worktrees
 
-- **Lead worktree** (`plan lock`): `git -C <repo> fetch origin <base>`; `git -C <repo> worktree add -b cpd/<plan> <path> origin/<base>` (or `<base>` when the repo has no `origin`); then `pre-start` in it (§7.3). On failure: `git worktree remove --force <path>`, `git branch -D cpd/<plan>`, and `plan lock` fails with `setup_failed` (exit 1); nothing in the database changed.
+- **Lead worktree** (`plan lock`; R35): `git -C <repo> fetch origin <base>`, then look for the Lead Branch on the remote: `git -C <repo> ls-remote --exit-code --heads origin cpd/<plan>` (exit 0: it exists; exit 2: it does not; any other result is `setup_failed`). Three cases:
+  - **On the remote, and `origin/<base>` is its ancestor** (`git -C <repo> fetch origin cpd/<plan>`, then `git -C <repo> merge-base --is-ancestor origin/<base> origin/cpd/<plan>` exits 0): **reuse** it, `git -C <repo> worktree add -b cpd/<plan> <path> origin/cpd/<plan>`. This is how a Plan locked again after an interrupted lock, or on another machine, continues from the pushed branch.
+  - **On the remote, and `origin/<base>` is not its ancestor** (the same command exits 1): `plan lock` is refused `branch_exists` (exit 3) and nothing is changed; cpd never resets or force-pushes a branch it did not create.
+  - **Absent from the remote:** create it from the base, `git -C <repo> worktree add -b cpd/<plan> <path> origin/<base>`, and, after `pre-start` has passed, push it at once: `git -C <lead worktree> push -u origin cpd/<plan>`. A failed push does not fail the lock: cpd appends one `error` Event with code `push_failed` (with git's stderr), and the next merge (§7.4) or `pr open` (§7.6) pushes again.
+
+  A repo with no `origin` remote (A3): no fetch, no remote check and no push; the worktree is `git -C <repo> worktree add -b cpd/<plan> <path> <base>`, as before R35.
+
+  Then `pre-start` in the worktree (§7.3). On failure: `git worktree remove --force <path>`, `git branch -D cpd/<plan>`, and `plan lock` fails with `setup_failed` (exit 1); nothing in the database changed. The remote is touched only after `pre-start` has passed; a lock that fails after its push leaves the pushed branch, which the next `plan lock` reuses.
 - **Attempt worktree** (A2): read `L = git rev-parse refs/heads/cpd/<plan>`; `git -C <lead worktree> worktree add -b cpd/<plan>--<attempt> <path> L`; record `base_sha = L`; run `pre-start` in it, blocking, so the Worker never starts before setup has finished (requirements §5, kept). On failure: remove the worktree and branch as above, outcome `failed` / `setup_failed`.
 - **Removal** after a Merged Attempt (A9): `git worktree remove <path>` then `git branch -d cpd/<plan>--<attempt>` (`-d`, not `-D`: git refuses unless the branch is merged into HEAD of the Lead worktree, a native guard; t3 F9). Failed and cancelled Attempts keep theirs until the Plan is `done`.
 
@@ -1254,13 +1261,14 @@ All of it runs under the **per-repo lock** `locks/repo-<sha1>.lock` (sha1 of the
 6. Removed by R19 (no Job-level Gate): the merge runs no Gate; the Gate runs at `pr open` and `pr rebase` (§7.6). The step keeps its number so that steps 7–10 keep theirs.
 7. **Cancel check** again (the last safe point).
 8. **Fast-forward with a compare-and-swap:** `new = git -C <attempt worktree> rev-parse HEAD`; verify `git merge-base --is-ancestor old new`; then `git update-ref -m "cpd: merge <plan>/<attempt>" refs/heads/cpd/<plan> new old`. git applies it only if the ref still equals `old` (t3 F7). If it fails because the ref moved (someone outside cpd moved it, since cpd holds the lock): back to step 2, at most 3 times, then `cas_lost`.
+    **Push** (R35), right after the fast-forward, still inside the per-repo lock: `git -C <lead worktree> push origin cpd/<plan>` (a plain push, never forced). A repo with no `origin` remote does not push. A failed push does not fail the Job: the merge stands and the Job is Merged, cpd appends one `error` Event with code `push_failed` (with git's stderr), and the next merge or `pr open` pushes again.
 9. **Sync the Lead worktree** to the new commit: `git -C <lead worktree> read-tree -m -u old new` (the tree was clean at step 3, so this cannot conflict with local edits). If it fails (for example an untracked file in the way), the merge stands, because the ref has moved, and cpd appends `error` with code `lead_worktree_stale` and the command that fixes it.
 10. End the Attempt `merged` / `merged` with `merged_sha = new`, and the Job `merged`, in one transaction (`job-merged`). Once it has committed, release the lock.
 
 **R: recovering an interrupted merge.** The ref moves at step 8, but the Ledger records the merge only at step 10. A driver that dies in between leaves an Attempt in `merging` whose commits are already on the Lead Branch; ending it `crashed` would make the ladder re-run a Merged Job. So an Attempt in `merging` whose driver lock is free is ended only by R, which runs under the per-repo lock:
 
 - **R1.** `tip = git -C <repo> rev-parse refs/heads/cpd/<plan>--<attempt>`, then `git -C <repo> merge-base --is-ancestor <tip> refs/heads/cpd/<plan>`.
-- **R2. Exit 0: the merge happened.** If the Lead worktree is stale (below), finish step 9. Then run the step-10 transaction with `merged_sha = tip` and A9's `metrics` (`job-merged`, with `cancel_too_late: true` if the Job has a cancel request), then the rest of A9.
+- **R2. Exit 0: the merge happened.** If the Lead worktree is stale (below), finish step 9. Then run the step-10 transaction with `merged_sha = tip` and A9's `metrics` (`job-merged`, with `cancel_too_late: true` if the Job has a cancel request), then the rest of A9. R also pushes, as step 8's push does (`git -C <lead worktree> push origin cpd/<plan>`), after it records the merge; a failure is `push_failed` and does not undo it.
 - **R3. Exit 1: no merge.** End the Attempt `cancelled` / `cancel_requested` if the Job has a cancel request, else `failed` / `crashed` (a ladder cause, §3.4).
 - **R4. Any other result** (git failed) proves nothing either way: R changes nothing and appends `error` with code `merge_check_failed` the first time it fails for that Attempt; it is run again at the next occasion below.
 
@@ -1408,6 +1416,7 @@ Kept from cpd 1 §7, with one change in how pi's catalog is read.
 | R11 one big Plan, one PR | §2.2 Plan (one repo, one PR), §3.1 |
 | R12 the binary was installed as `cpd2` during development (history: since the switch-over it is `cpd`) | §1.1; every command in this document is written `cpd` |
 | R13 the full contract at Tier O3, review S4 | §9 (defaults); the Job that wrote this. Its review Tier no longer exists in cpd 2 (R19) |
+| R35 the Lead Branch on the remote: `plan lock` reuses or creates and pushes `cpd/<plan>`, every merge pushes it (hs-d30, hs-d42) | §3.1 (`plan → dispatch` row), §7.2, §7.4 (push after step 8, R2), §5.2 `error` (`push_failed`); `commands.md` §4.8, §9.1 |
 | R14 the Plan starts from `main` after lead-fork's PR | §3.1 (`plan lock` creates the Lead Branch from `origin/<base>`), §7.2 |
 | R15 Contexts follow ADR-0011 and ADR-0012: the grounded Lead is a fork taken at the first Plan's `grounding → plan`, parked and never typed into; later forks get the newer records; the Context store is typed JSONL records in git, indexed by SQLite | §2.2 Context and Context record, §3.1, §4.6, §6.7 |
 | R17 a Reviewer is a fork of the Lead | **superseded for cpd 2 by R19**: cpd 2 has no Reviewer, so nothing implements it |

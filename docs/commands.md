@@ -455,15 +455,16 @@ cpd plan lock [--plan <id>]
 | the Dependency graph of the draft Jobs is acyclic | `dependency_cycle` | 3 |
 | the Lead worktree path does not exist, except a leftover of an interrupted lock (a worktree of this repo on `cpd/<plan>`), which is removed first | `worktree_exists` | 3 |
 | `refs/heads/cpd/<plan>` does not exist, except that leftover's branch | `branch_exists` | 3 |
+| `origin/cpd/<plan>` does not exist, or `origin/<base>` is its ancestor (§7.2); a repo with no `origin` has no remote check | `branch_exists` | 3 |
 | `pre-start` passed in the new worktree (§7.3) | `setup_failed` | 1 |
 
 Effects:
-- **git** (§7.2): `fetch origin <base>`; `worktree add -b cpd/<plan> <lead worktree> origin/<base>` (or `<base>`); `pre-start`. On any failure the worktree and branch are removed and nothing in the database changes.
+- **git** (§7.2, R35): `fetch origin <base>`; `ls-remote --exit-code --heads origin cpd/<plan>`. When it is on the remote and `origin/<base>` is its ancestor (`merge-base --is-ancestor`): reuse it, `fetch origin cpd/<plan>` and `worktree add -b cpd/<plan> <lead worktree> origin/cpd/<plan>`. When it is absent: `worktree add -b cpd/<plan> <lead worktree> origin/<base>`, then, after `pre-start`, `push -u origin cpd/<plan>`. A repo with no `origin` (A3): no remote check and no push, `worktree add` from `<base>`. On any failure before the push the worktree and branch are removed and nothing in the database changes. A failed push does not fail the lock: one `error` Event with code `push_failed` is appended, and the next merge or `pr open` pushes again.
 - **Rows**, one transaction, with a compare-and-swap on `phase = 'plan'` and on the review read: `plans.phase = dispatch`, `lead_worktree`, `locked_at`; every `draft` Job `queued` with its Locked-Job fingerprint. **Event** `plan-phase` `{from: "plan", to: "dispatch", jobs: [key]}`. If the transaction fails, the worktree and branch are removed.
 - **tmux:** `watch --ensure` (§12): starts `cpd watch` in `cpd-work:watch` when `locks/watch.lock` is free.
 
 ```json
-{"ok": true, "plan": "pay-4521", "phase": "dispatch", "lead_branch": "cpd/pay-4521", "lead_worktree": "/home/clayton/projects/pay.pay-4521", "base_sha": "4b825dc…",
+{"ok": true, "plan": "pay-4521", "phase": "dispatch", "lead_branch": "cpd/pay-4521", "reused": false, "pushed": true, "lead_worktree": "/home/clayton/projects/pay.pay-4521", "base_sha": "4b825dc…",
  "jobs": ["api-schema", "worker", "ui"], "watch": {"started": true, "pane": "%3"}}
 ```
 
@@ -788,7 +789,7 @@ cpd pr open [--plan <id>]
 Effects:
 - **Lock:** the per-repo lock (§7.4), then R for orphaned merges; held until the push has finished.
 - **Hooks:** the Gate, `pre-merge` from `<lead worktree>/.config/wt.toml`, in the Lead worktree on the Lead Branch, before anything is pushed (R19); output to `run/<plan>/logs/pr.pre-merge.log`. On `gate_failed` or `gate_error` nothing is pushed, no row is written and the phase stays `dispatch`: the Lead appends fix Jobs (`job add`) and runs `pr open` again once they are Merged.
-- **git:** `git -C <lead worktree> push -u origin cpd/<plan>`.
+- **git:** `git -C <lead worktree> push -u origin cpd/<plan>`. The Lead Branch is usually on the remote already: `plan lock` pushed it and every merge pushed it (§7.2, §7.4, R35), so this push is normally a no-op that sets the upstream, and it pushes again what an earlier `push_failed` left behind.
 - **gh:** `gh pr list --head cpd/<plan> --state open --json number,url`; when a PR exists (an earlier run died before its transaction) it is adopted; else `gh pr create --base <base> --head cpd/<plan> --title <title> --body <summary>`, the summary being the Jobs table and the Merged commits (cpd 1 §11, kept).
 - **Rows**, one transaction: `pr_number`, `pr_url`, `pr_opened_at`, `phase = pr`. **Event** `plan-phase` `{from: "dispatch", to: "pr", pr: {number, url}}`.
 
