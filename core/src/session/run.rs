@@ -5,7 +5,7 @@
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
@@ -29,9 +29,13 @@ use crate::output::Output;
 const SOURCE_POLL: Duration = Duration::from_secs(2);
 /// How often it looks for pi's session file while pi runs.
 const FILE_POLL: Duration = Duration::from_millis(500);
+/// How often a reload looks whether pi exited after `SIGTERM`.
+const STOP_POLL: Duration = Duration::from_millis(50);
 /// How long the Lead in the chat slot must have been idle before a reload
 /// restarts its pi without it being parked (hs-d49).
 const CHAT_IDLE: Duration = Duration::from_secs(10 * 60);
+/// How long a reload waits for pi to exit after `SIGTERM` before it sends `SIGKILL`.
+const PI_STOP: Duration = Duration::from_secs(10);
 /// How long it waits for `new-window`'s caller to set `@cpd_session` on its pane.
 const PANE_WAIT: Duration = Duration::from_secs(5);
 
@@ -98,8 +102,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 print!("  new cpd installed: restarting pi for {}…\n", row.name);
                 let _ = std::io::stdout().flush();
                 // The adapter reports `stopped` at `session_shutdown`; this process does not.
-                let _ = kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM);
-                let _ = child.wait();
+                stop_pi(&mut child, PI_STOP);
                 return Err(reload(&exe, &row.id));
             }
             std::thread::sleep(FILE_POLL);
@@ -120,6 +123,21 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
             return Err(reload(&exe, &row.id));
         }
     }
+}
+
+/// Sends pi `SIGTERM` and waits for it to exit; if it has not exited after
+/// `grace`, sends `SIGKILL` and waits again (§6.7 "Reload on install").
+fn stop_pi(child: &mut std::process::Child, grace: Duration) {
+    let _ = kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM);
+    let deadline = Instant::now() + grace;
+    while Instant::now() < deadline {
+        if !matches!(child.try_wait(), Ok(None)) {
+            return;
+        }
+        std::thread::sleep(STOP_POLL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Replaces this process with the newly installed cpd, which resumes pi on

@@ -279,3 +279,55 @@ fn a_driver_reloads_at_the_merging_safe_point_and_completes_the_merge() {
     assert!(log.find(RELOAD) < log.find("A8: merging"), "{log}");
     assert_eq!(log.matches("A1: resuming").count(), 0, "{log}");
 }
+
+/// After a reload exec, fd 3 of the driver is the lock and nothing the new driver
+/// starts holds it (§3.4 step 4, "Reload on install"). A `tmux` stand-in, which the
+/// driver starts at each A4 tick, lists its own open files once `probe` exists.
+#[cfg(target_os = "linux")]
+#[test]
+fn after_a_reload_fd_3_is_the_lock_and_the_drivers_children_do_not_hold_it() {
+    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let fx = fx();
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|dir| dir.join("tmux"))
+        .find(|p| p.is_file())
+        .expect("tmux on PATH");
+    executable(
+        &fx.env.bin().join("tmux"),
+        &format!(
+            "#!/bin/sh\n\
+             case \" $* \" in *\" list-panes \"*)\n\
+               if [ -e '{probe}' ] && [ ! -e '{out}' ]; then\n\
+                 for fd in /proc/$$/fd/*; do readlink \"$fd\"; done > '{tmp}'\n\
+                 mv '{tmp}' '{out}'\n\
+               fi;;\n\
+             esac\n\
+             exec '{real}' \"$@\"\n",
+            probe = fx.path("probe").display(),
+            out = fx.path("probe.out").display(),
+            tmp = fx.path("probe.tmp").display(),
+            real = real.display()
+        ),
+    );
+    let pid = fx.dispatch();
+    wait_until("the Attempt to run", || fx.status() == "running");
+    let lock = fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(ATTEMPT).unwrap()).canonicalize().unwrap();
+    let fd3 = || fs::read_link(format!("/proc/{pid}/fd/3")).ok();
+    assert_eq!(fd3().as_deref(), Some(lock.as_path()), "before the reload");
+
+    fx.install();
+    wait_until("the driver to reload", || !fx.runs().is_empty());
+    assert_eq!(fx.runs(), [format!("{pid} attempt run {ATTEMPT} --plan {PLAN}")], "the same process");
+    assert_eq!(fd3().as_deref(), Some(lock.as_path()), "after the reload fd 3 is the lock");
+
+    fs::write(fx.path("probe"), "").unwrap();
+    wait_until("a child of the new driver to list its files", || fx.path("probe.out").exists());
+    let open = fs::read_to_string(fx.path("probe.out")).unwrap();
+    assert!(!open.trim().is_empty(), "the child listed no files");
+    let lock = lock.display().to_string();
+    assert!(open.lines().all(|l| l.trim_end_matches(" (deleted)") != lock), "a child of the driver holds the lock:\n{open}");
+    assert_eq!(fd3().as_deref(), Some(std::path::Path::new(&lock)), "the driver still holds it");
+
+    fs::write(fx.path("go"), "").unwrap();
+    fx.finish(pid);
+}

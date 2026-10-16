@@ -50,6 +50,11 @@ impl Fixture {
         fs::read_to_string(self.path("pi.signals")).unwrap_or_default()
     }
 
+    /// The pid of each pi started so far.
+    fn pi_pids(&self) -> Vec<i32> {
+        fs::read_to_string(self.path("pi.pids")).unwrap_or_default().lines().map(|l| l.parse().unwrap()).collect()
+    }
+
     /// The pane's process: what the wrapper is, before and after the reload.
     fn pane_pid(&self) -> String {
         let out = self.env.tmux(&["display-message", "-p", "-t", &self.pane, "#{pane_pid}"]);
@@ -78,6 +83,12 @@ impl Fixture {
 /// `session run` from a copy of `cpd` in its own pane, with its fake pi started once.
 /// The fake pi records `SIGTERM` in `pi.signals` and exits at it, or when `pi.exit` appears.
 fn start(state: &str) -> Fixture {
+    start_with(state, "exit 0")
+}
+
+/// As [`start`]; `on_term` is what the fake pi runs after it records `SIGTERM`
+/// (`exit 0`, or `:` to ignore it). Every pi records its pid in `pi.pids`.
+fn start_with(state: &str, on_term: &str) -> Fixture {
     let env = TestEnv::new();
     fs::write(
         env.cpd_home().join("config.toml"),
@@ -109,7 +120,8 @@ fn start(state: &str) -> Fixture {
 
     let home_dir = env.home().display().to_string();
     env.fake_pi(&format!(
-        "trap 'echo TERM >> \"{home_dir}/pi.signals\"; exit 0' TERM\n\
+        "echo $$ >> \"{home_dir}/pi.pids\"\n\
+         trap 'echo TERM >> \"{home_dir}/pi.signals\"; {on_term}' TERM\n\
          while :; do\n  if [ -e \"{home_dir}/pi.exit\" ]; then rm \"{home_dir}/pi.exit\"; exit 0; fi\n  sleep 0.2\ndone"
     ));
 
@@ -172,4 +184,36 @@ fn a_working_lead_is_not_restarted_and_pi_exiting_on_its_own_execs_before_any_st
     assert_eq!(query::<String>(&f.env, "SELECT state FROM sessions WHERE id = 'lead1'"), "working");
     assert_eq!(query::<i64>(&f.env, "SELECT count(*) FROM events WHERE kind = 'session-state'"), 0);
     f.env.tmux(&["kill-window", "-t", &f.pane]);
+}
+
+fn alive(pid: i32) -> bool {
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
+}
+
+#[test]
+fn a_pi_that_ignores_sigterm_is_killed_after_ten_seconds_and_the_new_binary_starts_pi_again() {
+    let f = start_with("idle", ":");
+    let pid = f.pane_pid();
+    let old_pi = f.pi_pids()[0];
+
+    let installed_at = Instant::now();
+    f.install();
+
+    wait_until("SIGTERM to reach pi", || !f.signals().is_empty());
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(alive(old_pi), "pi is not killed before the ten seconds are up");
+    assert_eq!(f.env.calls("pi").len(), 1);
+    assert!(f.runs().is_empty(), "the wrapper waits for pi");
+
+    wait_until("pi restarted", || f.env.calls("pi").len() == 2);
+    assert!(installed_at.elapsed() >= Duration::from_secs(10), "killed after {:?}", installed_at.elapsed());
+    assert!(!alive(old_pi), "the old pi is dead");
+    assert_eq!(f.signals(), "TERM\n", "SIGTERM once, then SIGKILL");
+    assert_eq!(f.runs(), [format!("{pid} session run {LEAD}")], "the same process re-execed the new file");
+    assert_eq!(f.pane_pid(), pid);
+    let new_pi = f.pi_pids()[1];
+    assert!(alive(new_pi) && new_pi != old_pi);
+    // pi ignores SIGTERM, so the pane's hangup is what ends the new one.
+    f.env.tmux(&["kill-window", "-t", &f.pane]);
+    wait_until("the new pi to end", || !alive(new_pi));
 }
