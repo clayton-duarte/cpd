@@ -1,5 +1,6 @@
 //! Pull requests (contract §7.6; commands.md §9), through `gh`:
 //!
+//! - `add`, `edit`, `cancel`: the Plan's PRs before they start (`pr add`, `pr edit`, `pr cancel`);
 //! - `open`: the Gate, the push and the PR (`pr open`);
 //! - `poll`, with `feedback`: the PR's checks, reviews, comments and merge (`pr poll`);
 //! - `rebase`: the Lead Branch onto the base, the Gate and the push (`pr rebase`);
@@ -7,6 +8,9 @@
 //!
 //! `pr open` and `pr rebase` run under the per-repo lock, after R (§7.4).
 
+mod add;
+mod cancel;
+mod edit;
 mod feedback;
 mod gh;
 mod open;
@@ -14,7 +18,7 @@ mod poll;
 mod rebase;
 mod row;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::args::PlanArg;
@@ -22,14 +26,22 @@ use crate::config::{self, Config};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, HookOutcome, Operation, run_hook};
 use crate::home::{CpdHome, Hook};
-use crate::ids::{AttemptId, PlanId};
+use crate::ids::{AttemptId, PlanId, PrKey};
 use crate::merge::{self, RepoLock};
 use crate::output::Output;
+use crate::plan::Phase;
+use crate::plan::fingerprint::PrSpec;
 use crate::store::Store;
 use row::PlanRow;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
+    /// Add a PR to the Plan (§9.4)
+    Add(AddArgs),
+    /// Change a waiting PR before the lock (§9.5)
+    Edit(EditArgs),
+    /// Remove a PR from the Plan before the lock (§9.6)
+    Cancel(CancelArgs),
     /// Push the Lead Branch and open the PR (§9.1)
     Open(Args),
     /// Poll the PR for feedback and the merge (§9.2)
@@ -44,8 +56,59 @@ pub struct Args {
     plan: PlanArg,
 }
 
+#[derive(clap::Args, Debug)]
+pub struct AddArgs {
+    /// The PR key, chosen by the Lead
+    #[arg(value_name = "key")]
+    key: PrKey,
+    /// The PR's repo: a path inside it
+    #[arg(long, value_name = "path")]
+    repo: PathBuf,
+    /// The branch the pull request targets [default: origin's HEAD branch, else main]
+    #[arg(long, value_name = "branch")]
+    base: Option<String>,
+    /// PRs of the Plan that must be merged before this one starts, comma-separated
+    #[arg(long, value_name = "k1,k2", value_delimiter = ',')]
+    needs: Vec<PrKey>,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct EditArgs {
+    /// The PR key
+    #[arg(value_name = "key")]
+    key: PrKey,
+    /// The new repo: a path inside it
+    #[arg(long, value_name = "path")]
+    repo: Option<PathBuf>,
+    /// The new base branch
+    #[arg(long, value_name = "branch")]
+    base: Option<String>,
+    /// The new needs, replacing the list, comma-separated
+    #[arg(long, value_name = "k1,k2", value_delimiter = ',', conflicts_with = "no_needs")]
+    needs: Option<Vec<PrKey>>,
+    /// Remove every need
+    #[arg(long = "no-needs")]
+    no_needs: bool,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct CancelArgs {
+    /// The PR key
+    #[arg(value_name = "key")]
+    key: PrKey,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
 pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
+        Command::Add(args) => add::add(args),
+        Command::Edit(args) => edit::edit(args),
+        Command::Cancel(args) => cancel::cancel(args),
         Command::Open(args) => open::open(args),
         Command::Poll(args) => poll::poll(args),
         Command::Rebase(args) => rebase::rebase(args),
@@ -74,13 +137,73 @@ impl Env {
 
 /// `illegal_phase` (exit 3): `command` needs a Plan in phase `needs`.
 fn illegal_phase(plan: &PlanRow, command: &str, needs: &str) -> CpdError {
+    wrong_phase(&plan.id, plan.phase, command, needs)
+}
+
+fn wrong_phase(plan: &PlanId, phase: Phase, command: &str, needs: &str) -> CpdError {
+    CpdError::new(ErrorCode::IllegalPhase, format!("Plan {plan} is in phase {}: {command} needs phase {needs}.", phase.as_str()))
+        .with("plan", plan.as_str())
+        .with("phase", phase.as_str())
+        .with("needs", needs)
+}
+
+/// `pr_locked` (exit 3): the Plan is past the phases where its PRs change (§3.8).
+fn pr_locked(plan: &PlanId, phase: Phase, command: &str) -> CpdError {
     CpdError::new(
-        ErrorCode::IllegalPhase,
-        format!("Plan {} is in phase {}: {command} needs phase {needs}.", plan.id, plan.phase.as_str()),
+        ErrorCode::PrLocked,
+        format!("Plan {plan} is in phase {}: {command} needs phase grounding or plan, and after the lock its PRs are Locked.", phase.as_str()),
     )
-    .with("plan", plan.id.as_str())
-    .with("phase", plan.phase.as_str())
-    .with("needs", needs)
+    .with("plan", plan.as_str())
+    .with("phase", phase.as_str())
+}
+
+/// The Plan's phase, else `plan_not_found`.
+fn plan_phase(conn: &rusqlite::Connection, plan: &PlanId) -> Result<Phase, CpdError> {
+    use rusqlite::OptionalExtension;
+    let phase: String = conn
+        .query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))
+        .optional()?
+        .ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str()))?;
+    Phase::parse(&phase)
+        .ok_or_else(|| CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: Plan {plan} has phase {phase:?}.")))
+}
+
+/// The PR `key` among `prs`, else `pr_not_found` (exit 4).
+fn find_pr<'a>(prs: &'a [PrSpec], plan: &PlanId, key: &PrKey) -> Result<&'a PrSpec, CpdError> {
+    prs.iter().find(|p| p.key == key.as_str()).ok_or_else(|| {
+        CpdError::new(ErrorCode::PrNotFound, format!("No PR {key} in Plan {plan}."))
+            .with("plan", plan.as_str())
+            .with("pr", key.as_str())
+    })
+}
+
+/// `needs` as the sorted keys, refusing a repeat with `usage` (§9.4).
+fn sorted_needs(needs: &[PrKey]) -> Result<Vec<String>, CpdError> {
+    let mut keys: Vec<String> = needs.iter().map(|k| k.as_str().to_owned()).collect();
+    keys.sort();
+    if let Some(pair) = keys.windows(2).find(|w| w[0] == w[1]) {
+        return Err(CpdError::new(ErrorCode::Usage, format!("--needs lists {} twice.", pair[0])).with("pr", pair[0].as_str()));
+    }
+    Ok(keys)
+}
+
+/// Every key of `needs` is a PR of the Plan other than `own` (`needs_unknown`)
+/// and none is `cancelled` (`needs_unavailable`) (§9.4, §9.5).
+fn check_needs(prs: &[PrSpec], plan: &PlanId, own: Option<&PrKey>, needs: &[String]) -> Result<(), CpdError> {
+    let unknown: Vec<String> =
+        needs.iter().filter(|n| own.is_some_and(|o| o.as_str() == n.as_str()) || !prs.iter().any(|p| p.key == **n)).cloned().collect();
+    if !unknown.is_empty() {
+        return Err(CpdError::new(ErrorCode::NeedsUnknown, format!("Plan {plan} has no PR {} to need.", unknown.join(", ")))
+            .with("plan", plan.as_str())
+            .with("needs", unknown));
+    }
+    let unavailable: Vec<String> = needs.iter().filter(|n| prs.iter().any(|p| p.key == **n && p.status == "cancelled")).cloned().collect();
+    if !unavailable.is_empty() {
+        return Err(CpdError::new(ErrorCode::NeedsUnavailable, format!("A PR cannot need the cancelled PR {}.", unavailable.join(", ")))
+            .with("plan", plan.as_str())
+            .with("needs", unavailable));
+    }
+    Ok(())
 }
 
 /// Takes the per-repo lock, waiting at most `lock_wait_seconds` (`lock_timeout`),

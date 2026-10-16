@@ -11,7 +11,7 @@ use cpd_core::config::Tier;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, EscalationId, JobKey, PlanId, SessionId};
-use cpd_core::plan::{Phase, jobs, plan_fingerprint};
+use cpd_core::plan::{Phase, plan_fingerprint};
 use cpd_core::session::State;
 use cpd_core::store::Store;
 use cpd_tui::read::{

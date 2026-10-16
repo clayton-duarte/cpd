@@ -120,6 +120,7 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `ask` | Worker | yes | §3.5 |
 | `answer` | Lead | yes | §3.5 |
 | `pr open`, `pr rebase` | Lead | yes | §7.3, §7.6 |
+| `pr add`, `edit`, `cancel` | Lead | yes | §2.3, §2.5, §3.8 |
 | `pr poll` | engine E5 | yes | §7.6 |
 | `session list`, `session show` | TUI, Lead | no | |
 | `session fork`, `open`, `park`, `close`, `rename` | User (TUI), Lead | yes | §6.4, §6.7 |
@@ -130,7 +131,7 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `tui`, `tui view` (internal) | User | no | §6.2 |
 | `doctor`, `config`, `tiers` | User | `tiers` refreshes its cache | §8, §9 |
 
-`pr add`, `pr edit`, `pr cancel` and `pr start` (R34, §9.4–§9.7; Lead; they write; §2.5, §3.8) are not in this table yet: the Job that implements each command adds its row in the same commit, as for `session close` (§10.9), because `every_documented_command_exists` (`cli/tests/command_index.rs`) fails for a row whose command does not exist.
+`pr start` (R34, §9.7; Lead; it writes; §2.5, §3.8) is not in this table yet: the Job that implements it adds its row in the same commit, as for `session close` (§10.9), because `every_documented_command_exists` (`cli/tests/command_index.rs`) fails for a row whose command does not exist.
 
 ## 3. `context`
 
