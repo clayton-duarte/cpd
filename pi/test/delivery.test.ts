@@ -24,6 +24,8 @@ const LEAD: Record<string, "turn" | "no turn"> = {
   escalation: "turn",
   "attempt-retry": "no turn",
   "job-cancelled": "no turn",
+  "pr-started": "no turn",
+  "pr-merged": "no turn",
 };
 
 async function started(f: Fixture, role: "lead" | "worker") {
