@@ -39,40 +39,44 @@ fn context(id: &str) -> String {
     )
 }
 
-/// A Plan; `pr` is `(number, polled)`, where `polled` is `pr poll`'s `(title, review decision, checks)`, `None` before the
-/// first poll.
-fn plan_row(id: &str, phase: &str, created: &str, pr: Option<(i64, Option<(&str, &str, &str)>)>) -> String {
+/// A Plan; `pr` is `(number, polled)`, where `polled` is the pull request row's `(title, review decision, checks)`: what `pr open`
+/// writes (the Plan's title, no review, no checks) until the first poll changes it.
+fn plan_row(id: &str, phase: &str, created: &str, pr: Option<(i64, (&str, &str, &str))>) -> String {
     let late = !matches!(phase, "grounding" | "plan");
     let worktree = if late { "'/wt'" } else { "NULL" };
     let locked = if late { "'2026-01-02T00:00:00.000Z'" } else { "NULL" };
     let done = if phase == "done" { "'2026-01-09T00:00:00.000Z'" } else { "NULL" };
-    let (number, url, opened, seen, polled_at) = match pr {
-        Some((n, polled)) => (
-            n.to_string(),
-            format!("'https://example.test/pull/{n}'"),
-            "'2026-01-05T00:00:00.000Z'".to_owned(),
-            r#"'{"checks":{},"reviewIds":[],"commentIds":[]}'"#.to_owned(),
-            if polled.is_some() { "'2026-01-06T00:00:00.000Z'" } else { "NULL" }.to_owned(),
-        ),
-        None => ("NULL".into(), "NULL".into(), "NULL".into(), r#"'{"checks":{},"reviewIds":[],"commentIds":[]}'"#.to_owned(), "NULL".into()),
-    };
-    let (title, decision, checks) = match pr.and_then(|p| p.1) {
-        Some((t, d, c)) => (format!("'{t}'"), format!("'{d}'"), format!("'{c}'")),
-        None => ("NULL".into(), "NULL".into(), "NULL".into()),
-    };
     let status = match phase {
         "grounding" | "plan" => "waiting",
         "dispatch" => "dispatch",
         "pr" => "open",
         _ => "merged",
     };
+    let (row, number, url, opened, pull_request) = match pr {
+        Some((n, (title, decision, checks))) => {
+            let (state, merged) = if status == "merged" { ("merged", "'2026-01-09T00:00:00.000Z'") } else { ("open", "NULL") };
+            (
+                format!(
+                    "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+                     VALUES ('acme/repo', {n}, 'https://github.com/acme/repo/pull/{n}', '{title}', 0, '{state}', '{decision}', '{checks}',
+                             '2026-01-05T00:00:00.000Z', {merged}, '2026-01-06T00:00:00.000Z');"
+                ),
+                n.to_string(),
+                format!("'https://github.com/acme/repo/pull/{n}'"),
+                "'2026-01-05T00:00:00.000Z'",
+                format!("(SELECT id FROM pull_requests WHERE number = {n})"),
+            )
+        }
+        None => (String::new(), "NULL".into(), "NULL".into(), "NULL", "NULL".into()),
+    };
     format!(
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
          VALUES ('{id}', 'alpha', 'Plan {id}', '{phase}', 'l-{id}', '{created}', {locked}, {done});
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pr_seen,
-                          pr_polled_at, pr_title, pr_review_decision, pr_checks, created_txn, created_at, started_at, merged_at)
-         VALUES ('{id}', 'repo', '/repo', 'main', '{status}', 'cpd/{id}', {worktree}, {number}, {url}, {opened}, {seen},
-                 {polled_at}, {title}, {decision}, {checks}, cpd_txn(), '{created}', {locked}, {done});"
+         {row}
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+                          created_txn, created_at, started_at, merged_at)
+         VALUES ('{id}', 'repo', '/repo', 'main', '{status}', 'cpd/{id}', {worktree}, {number}, {url}, {opened}, {pull_request},
+                 cpd_txn(), '{created}', {locked}, {done});"
     )
 }
 
@@ -96,27 +100,27 @@ fn moved(at: &str, plan: &str, place: &str) -> String {
 /// One Context and these Plans, each named by its Lead Session (the label), oldest first:
 /// - `old` ("cpd-ui"): done, its merged PR 3, every check passed, no review; the Lead in the chat slot;
 /// - `rel` ("cpd visual lead"): PR 7, open, failing checks, changes requested; the Lead parked;
-/// - `fresh` ("fresh lead"): PR 11, not polled yet; the Lead parked;
+/// - `fresh` ("fresh lead"): PR 11, as `pr open` wrote its row (no review, no checks); the Lead parked;
 /// - `ship` ("v1"): in dispatch, no PR; the Lead in the chat slot;
 /// - `sketch` ("sketch lead"): no PR; the Lead has no pane (`none`);
 /// - `away` ("away lead"): PR 9, merged; the Lead's pane is in the `work` window, so the Plan is not in the cockpit;
 /// - `never` ("never lead"): no PR; the Lead was never moved.
 fn populate(store: &mut Store) {
     let mut s = context("alpha");
-    let plans: [(&str, &str, &str, Option<(i64, Option<(&str, &str, &str)>)>, &str, Option<&str>); 7] = [
-        ("old", "cpd-ui", "done", Some((3, Some(("cpd-ui: cockpit rows", "none", "passed")))), "2026-01-01T12:00:00.000Z", Some("chat")),
+    let plans: [(&str, &str, &str, Option<(i64, (&str, &str, &str))>, &str, Option<&str>); 7] = [
+        ("old", "cpd-ui", "done", Some((3, ("cpd-ui: cockpit rows", "none", "passed"))), "2026-01-01T12:00:00.000Z", Some("chat")),
         (
             "rel",
             "cpd visual lead",
             "pr",
-            Some((7, Some(("cpd-tui cockpit column and its long title", "changes_requested", "failed")))),
+            Some((7, ("cpd-tui cockpit column and its long title", "changes_requested", "failed"))),
             "2026-01-02T00:00:00.000Z",
             Some("parked"),
         ),
-        ("fresh", "fresh lead", "pr", Some((11, None)), "2026-01-02T00:00:01.000Z", Some("parked")),
+        ("fresh", "fresh lead", "pr", Some((11, ("Plan fresh", "none", "none"))), "2026-01-02T00:00:01.000Z", Some("parked")),
         ("ship", "v1", "dispatch", None, "2026-01-02T00:00:02.000Z", Some("chat")),
         ("sketch", "sketch lead", "plan", None, "2026-01-02T00:00:03.000Z", Some("none")),
-        ("away", "away lead", "done", Some((9, Some(("away", "approved", "pending")))), "2026-01-02T00:00:04.000Z", Some("work")),
+        ("away", "away lead", "done", Some((9, ("away", "approved", "pending"))), "2026-01-02T00:00:04.000Z", Some("work")),
         ("never", "never lead", "dispatch", None, "2026-01-02T00:00:05.000Z", None),
     ];
     for (n, (id, name, phase, pr, created, place)) in plans.into_iter().enumerate() {
@@ -208,7 +212,7 @@ fn the_column_shows_the_machine_the_cockpits_prs_git_and_jira() {
         " cpd visual lead",
         "  #7 open ✗ changes requested  cpd-tui cockpi…",
         " fresh lead",
-        "  #11 loading…",
+        "  #11 open – no review  Plan fresh",
         " v1  no PR",
         "",
         "",
@@ -272,12 +276,12 @@ fn the_column_takes_every_colour_from_the_palette() {
     assert_eq!(fg(find(&buf, RULE)), c(Meaning::Nothing));
     let dim = |at: (u16, u16)| buf[at].modifier.contains(Modifier::DIM);
     let bold = |at: (u16, u16)| buf[at].modifier.contains(Modifier::BOLD);
-    // Bold: the machine, the section titles and the labels; dim: the title of the PR, `no PR`, `loading…`, `(future)`.
+    // Bold: the machine, the section titles and the labels; dim: the title of the PR, `no PR`, `(future)`.
     for title in ["homeserver", "PRs", "cpd-ui", "cpd visual lead", "v1", "git", "Jira"] {
         assert!(bold(find(&buf, title)), "{title}");
         assert!(!dim(find(&buf, title)), "{title}");
     }
-    for faint in ["cpd-ui: cockpit", "no PR", "loading…", "(future)"] {
+    for faint in ["cpd-ui: cockpit", "no PR", "Plan fresh", "(future)"] {
         assert!(dim(find(&buf, faint)), "{faint}");
         assert!(!bold(find(&buf, faint)), "{faint}");
     }
@@ -313,7 +317,7 @@ fn a_short_pane_drops_the_plans_without_a_pr_before_the_rest() {
     assert!(full.iter().any(|r| r.contains("v1  no PR")), "{full:#?}");
     let short = rows(&render(46, 9 + 7, &w));
     assert!(!short.iter().any(|r| r.contains("no PR")), "{short:#?}");
-    assert!(short.iter().any(|r| r.contains("#11 loading…")), "the Plans with a PR stay:\n{short:#?}");
+    assert!(short.iter().any(|r| r.contains("#11 open")), "the Plans with a PR stay:\n{short:#?}");
 }
 
 #[test]
@@ -324,13 +328,18 @@ fn a_plan_of_several_prs_takes_one_line_per_pull_request_in_key_order() {
     let mut s = context("alpha") + &lead_row("multi", "multi lead");
     s += r#"INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
             VALUES ('multi', 'alpha', 'Plan multi', 'dispatch', 'l-multi', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
+            INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+            VALUES ('acme/web', 21, 'https://github.com/acme/web/pull/21', 'web side', 0, 'open', 'none', 'pending',
+                    '2026-01-05T00:00:00.000Z', NULL, '2026-01-06T00:00:00.000Z'),
+                   ('acme/api', 20, 'https://github.com/acme/api/pull/20', 'api side', 0, 'merged', 'approved', 'passed',
+                    '2026-01-05T00:00:00.000Z', '2026-01-07T00:00:00.000Z', '2026-01-06T00:00:00.000Z');
             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
-                             pr_polled_at, pr_title, pr_review_decision, pr_checks, created_txn, created_at, started_at, merged_at)
-            VALUES ('multi', 'web', '/src/web', 'main', 'open', 'cpd/multi/web', '/wt/web', 21, 'https://example.test/pull/21',
-                    '2026-01-05T00:00:00.000Z', '2026-01-06T00:00:00.000Z', 'web side', 'none', 'pending', cpd_txn(),
+                             pull_request, created_txn, created_at, started_at, merged_at)
+            VALUES ('multi', 'web', '/src/web', 'main', 'open', 'cpd/multi/web', '/wt/web', 21, 'https://github.com/acme/web/pull/21',
+                    '2026-01-05T00:00:00.000Z', (SELECT id FROM pull_requests WHERE number = 21), cpd_txn(),
                     '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', NULL),
-                   ('multi', 'api', '/src/api', 'main', 'merged', 'cpd/multi/api', '/wt/api', 20, 'https://example.test/pull/20',
-                    '2026-01-05T00:00:00.000Z', '2026-01-06T00:00:00.000Z', 'api side', 'approved', 'passed', cpd_txn(),
+                   ('multi', 'api', '/src/api', 'main', 'merged', 'cpd/multi/api', '/wt/api', 20, 'https://github.com/acme/api/pull/20',
+                    '2026-01-05T00:00:00.000Z', (SELECT id FROM pull_requests WHERE number = 20), cpd_txn(),
                     '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', '2026-01-07T00:00:00.000Z');
             INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
             VALUES ('multi', 'docs', '/src/docs', 'main', 'waiting', 'cpd/multi/docs', cpd_txn(), '2026-01-02T00:00:00.000Z');"#;
