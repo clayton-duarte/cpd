@@ -1310,6 +1310,39 @@ fn poll_covers_every_open_pr_in_dispatch_and_pr_and_ends_the_plan_with_the_last_
 }
 
 #[test]
+fn a_reopened_plan_whose_new_pr_merges_is_done_again_with_a_second_plan_done() {
+    let fx = fx("pr");
+    fx.merged_on_github(None);
+    assert_eq!(fx.pr("poll").ok()["phase"], "done");
+    assert_eq!(fx.events("plan-done").len(), 1);
+
+    // `pr add` moves the legacy branch and reopens the Plan.
+    fx.env.cpd(&["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--plan", "pay"]).ok();
+    assert_eq!(fx.phase(), "dispatch");
+    // The engine would start the PR and the Lead open it: written straight, as the other tests do.
+    fx.store()
+        .write("fixture", |tx| {
+            tx.execute_batch(&format!(
+                "UPDATE prs SET status = 'dispatch', lead_worktree = '{lead}', started_at = 't' WHERE plan = 'pay' AND key = 'fix';
+                 UPDATE prs SET status = 'open', pr_number = 900, pr_url = 'https://github.com/acme/pay/pull/900', pr_opened_at = 'opened'
+                  WHERE plan = 'pay' AND key = 'fix';
+                 UPDATE plans SET phase = 'pr' WHERE id = 'pay';",
+                lead = fx.lead.display()
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+
+    let out = fx.pr("poll").ok();
+    assert_eq!((out["phase"].as_str(), out["prs"][0]["pr"].as_str()), (Some("done"), Some("fix")));
+    assert_eq!((fx.phase().as_str(), fx.pr_status("fix").as_str()), ("done", "merged"));
+    let done = fx.events("plan-done");
+    assert_eq!(done.len(), 2, "plan-done once each time the Plan reaches done");
+    let listed: Vec<&str> = done[1].1["prs"].as_array().unwrap().iter().map(|p| p["key"].as_str().unwrap()).collect();
+    assert_eq!(listed, ["fix", "repo"]);
+}
+
+#[test]
 fn poll_of_a_pr_that_is_not_open_is_illegal_transition() {
     let fx = fx("dispatch");
     let run = fx.pr_cmd("poll", "repo");

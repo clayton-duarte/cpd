@@ -227,12 +227,133 @@ fn add_refusals_write_nothing() {
 }
 
 #[test]
-fn add_is_refused_after_the_dispatch() {
+fn add_in_pr_or_done_reopens_the_plan_in_dispatch() {
     for phase in ["pr", "done"] {
         let fx = fx(phase);
-        let error = fx.refused(&fx.add("api", &fx.pay, &[]), "illegal_phase", 3, fx.writes());
-        assert_eq!(error["details"]["phase"], phase);
+        let out = fx.add("fix", &fx.pay, &[]).ok();
+        assert_eq!((out["pr"]["appended"].clone(), out["pr"]["status"].clone()), (json!(true), json!("waiting")), "{phase}");
+        let row: (String, Option<String>) = fx
+            .store()
+            .read(|c| Ok(c.query_row("SELECT phase, done_at FROM plans WHERE id = 'pay-1'", [], |r| Ok((r.get(0)?, r.get(1)?)))?))
+            .unwrap();
+        assert_eq!(row, ("dispatch".to_owned(), None), "{phase}");
+
+        let moved = fx.events("plan-phase");
+        assert_eq!(moved.len(), 1, "{phase}");
+        assert_eq!(moved[0]["data"], json!({"from": phase, "to": "dispatch"}));
+        let added = fx.events("pr-added");
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0]["data"]["appended"], true);
+        assert!(moved[0]["id"].as_i64() < added[0]["id"].as_i64(), "plan-phase comes before pr-added");
+
+        // A rerun is already and writes nothing.
+        let writes = fx.writes();
+        let again = fx.add("fix", &fx.pay, &[]).ok();
+        assert_eq!((again["already"].clone(), again["pr"]["appended"].clone()), (json!(true), json!(true)));
+        assert_eq!(fx.writes(), writes);
     }
+}
+
+#[test]
+fn add_to_an_archived_plan_is_archived() {
+    for phase in ["grounding", "dispatch", "done"] {
+        let fx = fx(phase);
+        fx.sql("UPDATE plans SET archived_at = '2001-01-01T00:00:00.000Z' WHERE id = 'pay-1'");
+        let writes = fx.writes();
+        fx.refused(&fx.add("api", &fx.pay, &[]), "archived", 3, writes);
+    }
+}
+
+/// Plan `pay-1` in `done` with one PR `old` on the legacy Lead Branch `cpd/pay-1`: the repo `pay`
+/// has a bare `origin` with that branch, and a second worktree has it checked out.
+struct Legacy {
+    fx: Fx,
+    origin: PathBuf,
+    lead: PathBuf,
+    sha: String,
+}
+
+fn legacy(status: &str) -> Legacy {
+    let fx = fx("done");
+    let origin = fx.env.root().join("repos/pay-origin.git");
+    fx.env.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
+    fx.env.git(&fx.pay, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    fx.env.git(&fx.pay, &["push", "-q", "origin", "main"]);
+    fx.env.git(&fx.pay, &["fetch", "-q", "origin"]);
+    let lead = fx.env.root().join("repos/pay.pay-1");
+    fx.env.git(&fx.pay, &["worktree", "add", "-q", "-b", "cpd/pay-1", lead.to_str().unwrap(), "main"]);
+    fx.env.git(&lead, &["config", "user.name", "cpd test"]);
+    fx.env.git(&lead, &["config", "user.email", "test@cpd.invalid"]);
+    fs::write(lead.join("api.txt"), "api\n").unwrap();
+    fx.env.git(&lead, &["add", "-A"]);
+    fx.env.git(&lead, &["commit", "-q", "-m", "api"]);
+    fx.env.git(&lead, &["push", "-q", "-u", "origin", "cpd/pay-1"]);
+    let sha = fx.env.git(&lead, &["rev-parse", "HEAD"]);
+    fx.sql(&format!(
+        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+                            pr_number, pr_url, pr_opened_at, merged_at)
+           VALUES ('pay-1', 'old', '{}', 'main', '{status}', 'cpd/pay-1', '{}', cpd_txn(), 't', 't', 1, 'u', 't',
+                   iif('{status}' = 'merged', 't', NULL));",
+        fx.pay.display(),
+        lead.display()
+    ));
+    Legacy { fx, origin, lead, sha }
+}
+
+#[test]
+fn add_moves_the_legacy_lead_branch_of_a_merged_pr() {
+    let Legacy { fx, origin, lead, sha } = legacy("merged");
+    let out = fx.add("fix", &fx.pay, &[]).ok();
+    assert_eq!(out["pr"]["lead_branch"], "cpd/pay-1/fix");
+
+    assert_eq!(fx.env.git(&fx.pay, &["rev-parse", "refs/heads/cpd/pay-1/old"]), sha);
+    assert_eq!(fx.env.git(&fx.pay, &["branch", "--list", "cpd/pay-1"]), "", "gone locally");
+    assert_eq!(fx.env.git(&origin, &["branch", "--list", "cpd/pay-1*"]), "", "gone on origin");
+    assert_eq!(fx.env.git(&lead, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay-1/old", "the worktree follows");
+    let branches: Vec<String> =
+        fx.query::<String>("SELECT group_concat(key || '=' || lead_branch) FROM (SELECT * FROM prs ORDER BY key)").split(',').map(str::to_owned).collect();
+    assert_eq!(branches, ["fix=cpd/pay-1/fix", "old=cpd/pay-1/old"]);
+    assert_eq!(fx.query::<String>("SELECT phase FROM plans"), "dispatch");
+
+    // A second PR finds nothing to move.
+    fx.add("more", &fx.pay, &[]).ok();
+}
+
+#[test]
+fn add_completes_a_legacy_move_that_stopped_after_the_rename() {
+    let Legacy { fx, origin, sha, .. } = legacy("merged");
+    fx.env.git(&fx.pay, &["branch", "-m", "cpd/pay-1", "cpd/pay-1/old"]);
+    assert_ne!(fx.env.git(&origin, &["branch", "--list", "cpd/pay-1"]), "");
+
+    fx.add("fix", &fx.pay, &[]).ok();
+    assert_eq!(fx.env.git(&origin, &["branch", "--list", "cpd/pay-1*"]), "");
+    assert_eq!(fx.env.git(&fx.pay, &["rev-parse", "refs/heads/cpd/pay-1/old"]), sha);
+    assert_eq!(fx.query::<String>("SELECT lead_branch FROM prs WHERE key = 'old'"), "cpd/pay-1/old");
+}
+
+#[test]
+fn add_refuses_push_failed_when_origin_will_not_delete_and_writes_nothing() {
+    let Legacy { fx, origin, .. } = legacy("merged");
+    let hook = origin.join("hooks/pre-receive");
+    fs::write(&hook, "#!/bin/sh\necho no >&2\nexit 1\n").unwrap();
+    fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let writes = fx.writes();
+    let error = fx.refused(&fx.add("fix", &fx.pay, &[]), "push_failed", 1, writes);
+    assert_eq!(error["details"]["branch"], "cpd/pay-1");
+    assert_eq!(error["details"]["repo"], fx.pay.display().to_string());
+    assert!(error["details"]["stderr"].as_str().is_some_and(|s| s.contains("no")), "{error}");
+    assert_eq!(fx.query::<String>("SELECT lead_branch FROM prs WHERE key = 'old'"), "cpd/pay-1");
+    assert_eq!(fx.query::<String>("SELECT phase FROM plans"), "done");
+}
+
+#[test]
+fn add_keeps_refusing_the_legacy_lead_branch_of_a_pr_that_is_not_merged() {
+    let Legacy { fx, origin, lead, .. } = legacy("open");
+    let writes = fx.writes();
+    let error = fx.refused(&fx.add("fix", &fx.pay, &[]), "branch_exists", 3, writes);
+    assert_eq!(error["details"]["branch"], "cpd/pay-1");
+    assert_eq!(fx.env.git(&lead, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay-1");
+    assert_ne!(fx.env.git(&origin, &["branch", "--list", "cpd/pay-1"]), "");
 }
 
 // ---------- pr edit ----------
