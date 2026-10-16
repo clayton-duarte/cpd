@@ -85,13 +85,13 @@ pub struct PlanCard {
     pub feedback: Option<PrFeedback>,
 }
 
-/// A PR's pull request: number, state, and what `pr poll` last stored (contract §4.4, §7.6).
+/// A PR's pull request: number, state, and what `pr poll` last stored in its row (contract §4.4, §7.6).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrRow {
     pub key: PrKey,
     pub number: i64,
     pub state: PrState,
-    /// `None` until the PR's first poll: the three columns are stored together.
+    /// Always set: a PR with a pull request has its row (`prs` CHECK). Job `dispatch-prs2` drops the `Option`.
     pub polled: Option<PolledPr>,
 }
 
@@ -103,7 +103,7 @@ pub struct PolledPr {
     pub checks: Checks,
 }
 
-/// The PR's review decision, from `prs.pr_review_decision`.
+/// The PR's review decision, from `pull_requests.review_decision`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReviewDecision {
     None,
@@ -116,11 +116,10 @@ pub enum ReviewDecision {
 pub struct PrFeedback {
     pub event: i64,
     pub at: String,
-    /// `OPEN` or `CLOSED`, as the Event carries it.
+    /// `open` or `closed`, as the Event carries it (`OPEN` or `CLOSED` in Events written before migration 5).
     pub state: String,
-    pub failing_checks: Vec<String>,
-    pub reviews: usize,
-    pub comments: usize,
+    /// `checks_failed`, `changes_requested`, `closed`: why the Plan's Lead was told (D7).
+    pub reasons: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -182,47 +181,29 @@ fn labels(conn: &Connection) -> Result<BTreeMap<String, (String, Place)>, CpdErr
     Ok(out)
 }
 
-/// Plan id → its PRs that have a pull request, in key order, each with what `pr poll` stored once it polled it.
+/// Plan id → its PRs that have a pull request, in key order, each with what `pr poll` stored in its `pull_requests` row.
 fn pulls(conn: &Connection) -> Result<BTreeMap<String, Vec<PrRow>>, CpdError> {
     let mut stmt = conn.prepare(
-        "SELECT plan, key, pr_number, status, coalesce(json_extract(pr_seen, '$.closed'), 0), pr_title, pr_review_decision,
-                pr_checks
-           FROM prs WHERE pr_number IS NOT NULL ORDER BY plan, key",
+        "SELECT r.plan, r.key, r.pr_number, r.status, q.state, q.title, q.review_decision, q.checks
+           FROM prs r JOIN pull_requests q ON q.id = r.pull_request ORDER BY r.plan, r.key",
     )?;
     let mut rows = stmt.query([])?;
     let mut out: BTreeMap<String, Vec<PrRow>> = BTreeMap::new();
     while let Some(r) = rows.next()? {
-        let (plan, key, number, status, closed): (String, String, i64, String, bool) =
+        let (plan, key, number, status, row_state): (String, String, i64, String, String) =
             (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?);
         let what = format!("PR {plan}/{key}");
-        let state = match status.as_str() {
-            "merged" => PrState::Merged,
-            _ if closed => PrState::Closed,
-            _ => PrState::Open,
+        let state = PrState::of(status == "merged", Some(&row_state));
+        let (title, decision, checks): (String, String, String) = (r.get(5)?, r.get(6)?, r.get(7)?);
+        let decision = match decision.as_str() {
+            "none" => ReviewDecision::None,
+            "approved" => ReviewDecision::Approved,
+            "changes_requested" => ReviewDecision::ChangesRequested,
+            _ => return Err(bad_row(format!("{what} has review_decision {decision:?}"))),
         };
-        let (title, decision, checks): (Option<String>, Option<String>, Option<String>) = (r.get(5)?, r.get(6)?, r.get(7)?);
-        let polled = match (title, decision, checks) {
-            (None, None, None) => None,
-            (Some(title), Some(decision), Some(checks)) => {
-                let decision = match decision.as_str() {
-                    "none" => ReviewDecision::None,
-                    "approved" => ReviewDecision::Approved,
-                    "changes_requested" => ReviewDecision::ChangesRequested,
-                    _ => return Err(bad_row(format!("{what} has pr_review_decision {decision:?}"))),
-                };
-                let checks = match checks.as_str() {
-                    "none" => Checks::None,
-                    "passed" => Checks::Passed,
-                    "pending" => Checks::Pending,
-                    "failed" => Checks::Failed,
-                    _ => return Err(bad_row(format!("{what} has pr_checks {checks:?}"))),
-                };
-                Some(PolledPr { title, decision, checks })
-            }
-            _ => return Err(bad_row(format!("{what} has only some of pr_title, pr_review_decision and pr_checks"))),
-        };
+        let polled = PolledPr { title, decision, checks: Checks::parse(&what, &checks)? };
         let key = id("PR key", &key, PrKey::parse)?;
-        out.entry(plan).or_default().push(PrRow { key, number, state, polled });
+        out.entry(plan).or_default().push(PrRow { key, number, state, polled: Some(polled) });
     }
     Ok(out)
 }
@@ -286,19 +267,17 @@ fn feedback(conn: &Connection, plan: &PlanId) -> Result<Option<PrFeedback>, CpdE
         .map(|(event, at, data)| {
             let bad = || bad_row(format!("pr-feedback Event {event} has data {data}"));
             let d: Value = serde_json::from_str(&data).map_err(|_| bad())?;
-            let list = |key: &str| d[key].as_array().ok_or_else(bad);
-            let failing_checks = list("checks")?
-                .iter()
-                .map(|c| c["name"].as_str().map(str::to_owned).ok_or_else(bad))
-                .collect::<Result<_, _>>()?;
-            Ok(PrFeedback {
-                event,
-                at,
-                state: d["state"].as_str().ok_or_else(bad)?.to_owned(),
-                failing_checks,
-                reviews: list("reviews")?.len(),
-                comments: list("comments")?.len(),
-            })
+            // An Event written before migration 5 lists the new checks, reviews and comments, not `reasons` (D7): none.
+            let reasons = match d.get("reasons") {
+                None => Vec::new(),
+                Some(list) => list
+                    .as_array()
+                    .ok_or_else(bad)?
+                    .iter()
+                    .map(|r| r.as_str().map(str::to_owned).ok_or_else(bad))
+                    .collect::<Result<_, _>>()?,
+            };
+            Ok(PrFeedback { event, at, state: d["state"].as_str().ok_or_else(bad)?.to_owned(), reasons })
         })
         .transpose()
 }
