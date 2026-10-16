@@ -46,7 +46,6 @@ pub fn run(_args: Args) -> Result<Output, CpdError> {
     checks.push(with_config("tiers", Severity::Error, &pi::tiers));
     checks.push(with_config("pi_adapter", Severity::Error, &pi::adapter));
     checks.push(with_config("lead_packages", Severity::Warn, &pi::lead_packages));
-    checks.push(pi::plannotator_port());
     checks.push(state::contexts(&home, store.as_mut()));
     checks.push(state::watch(&home, store.as_mut()));
 
