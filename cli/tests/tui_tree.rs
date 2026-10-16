@@ -211,6 +211,13 @@ impl<'a> Pane<'a> {
         }
     }
 
+    /// A left click at 0-based `column` and `row`, as the terminal sends it (SGR mouse reporting, 1-based).
+    fn click(&self, column: u16, row: u16) {
+        for end in ['M', 'm'] {
+            self.type_text(&format!("\x1b[<0;{};{}{end}", column + 1, row + 1));
+        }
+    }
+
     fn dead(&self) -> bool {
         let out = self.env.tmux(&["list-panes", "-t", SESSION, "-F", "#{pane_dead}"]);
         String::from_utf8_lossy(&out.stdout).trim() == "1"
@@ -258,17 +265,17 @@ fn the_tree_of_a_prepared_store() {
     assert_eq!(
         screen,
         [
-            "● alpha".to_owned(),
-            row("⏵ ├ ○ ship lead", "1⋅1⋅0⋅1⋅2"),
+            "● Title of alpha".to_owned(),
+            row("⏵ ├ ○ Plan ship", "1⋅1⋅0⋅1⋅2"),
             "  │ ├ ○ ship fork".to_owned(),
             "  │ └ ● ship review".to_owned(),
-            row("  └ ○ sketch", "2⋅0⋅0⋅0⋅0"),
-            "● beta".to_owned(),
-            row("  ├ ● rel lead", "0⋅0⋅0⋅0⋅1"),
-            row("  └ ○ old lead", "0⋅0⋅0⋅0⋅0"),
-            "○ gamma".to_owned(),
+            row("  └ ○ Plan sketch", "2⋅0⋅0⋅0⋅0"),
+            "● Title of beta".to_owned(),
+            row("  ├ ● Plan rel", "0⋅0⋅0⋅0⋅1"),
+            row("  └ ○ Plan old", "0⋅0⋅0⋅0⋅0"),
+            "○ Title of gamma".to_owned(),
         ],
-        "the grounded Lead g-alpha is no row; the Jobs: queued, running, merging, failed, merged; no state text"
+        "the Context and Plan titles, the forks' names; the grounded Lead g-alpha is no row; the Jobs: queued, running, merging, failed, merged; no state text"
     );
 }
 
@@ -341,9 +348,9 @@ fn n_starts_a_plan_named_in_the_prompt_with_plan_new() {
     pane.ready();
     pane.down(4); // ship, f-idle, f-blocked, sketch
     pane.keys(&["n"]);
-    pane.wait("the prompt", |_| pane.footer_has("Fork sketch into a new Plan, name: █ (Enter starts, Esc cancels)"));
+    pane.wait("the prompt", |_| pane.footer_has("Fork Plan sketch into a new Plan, name: █ (Enter starts, Esc cancels)"));
     pane.keys(&["Enter"]);
-    pane.wait("the refusal", |_| pane.footer_has("A name is required. Fork sketch into a new Plan, name:"));
+    pane.wait("the refusal", |_| pane.footer_has("A name is required. Fork Plan sketch into a new Plan, name:"));
     pane.type_text("pay-4521");
     pane.keys(&["Enter"]);
     // the Context and the repo of the cursor's Session's Plan; the name is the id and the title
@@ -363,11 +370,11 @@ fn x_closes_a_session_after_y_with_session_close() {
     pane.ready();
     pane.down(4); // sketch
     pane.keys(&["x"]);
-    pane.wait("the prompt", |_| pane.footer_has("Close sketch? pi stops; the session file stays (y/N)"));
+    pane.wait("the prompt", |_| pane.footer_has("Close Plan sketch? pi stops; the session file stays (y/N)"));
     pane.keys(&["n"]);
-    pane.wait("the prompt gone", |_| !pane.footer_has("Close sketch?"));
+    pane.wait("the prompt gone", |_| !pane.footer_has("Close Plan sketch?"));
     pane.keys(&["x"]);
-    pane.wait("the prompt again", |_| pane.footer_has("Close sketch?"));
+    pane.wait("the prompt again", |_| pane.footer_has("Close Plan sketch?"));
     pane.keys(&["y"]);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "close", "l-sketch"])]);
     pane.wait("the note", |_| pane.footer_has("closed"));
@@ -395,7 +402,7 @@ fn x_refuses_a_session_that_moved_to_the_chat_slot_while_the_prompt_was_open() {
     pane.ready();
     pane.down(4); // sketch
     pane.keys(&["x"]);
-    pane.wait("the prompt", |_| pane.footer_has("Close sketch?"));
+    pane.wait("the prompt", |_| pane.footer_has("Close Plan sketch?"));
     pane.keys(&["y"]);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "close", "l-sketch"])]);
     pane.wait("the refusal", |_| pane.footer_has("switch to another session first"));
@@ -436,12 +443,123 @@ fn the_tree_follows_the_events_of_the_store() {
     populate(&env);
     let pane = Pane::start(&env, 46, 14);
     pane.ready();
-    // session-renamed
-    let run = env.cpd(&["session", "rename", "--session", "l-sketch", "--", "sketch renamed"]);
+    // session-renamed (a fork shows its Session's name)
+    let run = env.cpd(&["session", "rename", "--session", "f-idle", "--", "fork renamed"]);
     run.ok();
-    pane.wait("the new name", |s| s.iter().any(|r| r.contains("└ ○ sketch renamed")));
+    pane.wait("the new name", |s| s.iter().any(|r| r.contains("├ ○ fork renamed")));
     // session-state
     env.cpd(&["session", "state", "blocked", "--label", "cpd: Ask", "--session", "l-sketch"]).ok();
-    let screen = pane.wait("the new state", |s| s.iter().any(|r| r.contains("└ ● sketch renamed")));
-    assert!(screen.iter().any(|r| r.starts_with("● alpha")));
+    let screen = pane.wait("the new state", |s| s.iter().any(|r| r.contains("└ ● Plan sketch")));
+    assert!(screen.iter().any(|r| r.starts_with("● Title of alpha")));
+}
+
+/// `populate`, with the Context `gamma` and the Plan `old` of `beta` (and its Lead) archived.
+fn archive(env: &TestEnv) {
+    sql(
+        &mut open(env),
+        "UPDATE contexts SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'gamma';
+         UPDATE plans SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'old';
+         UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'l-old';",
+    );
+}
+
+#[test]
+fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_collapses_them() {
+    let env = env();
+    populate(&env);
+    archive(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 46, 16);
+    let screen = pane.ready();
+    let row = |left: &str, right: &str| format!("{left:<w$}{right}", w = 46 - right.chars().count());
+    assert_eq!(
+        screen,
+        [
+            "● Title of alpha".to_owned(),
+            row("⏵ ├ ○ Plan ship", "1⋅1⋅0⋅1⋅2"),
+            "  │ ├ ○ ship fork".to_owned(),
+            "  │ └ ● ship review".to_owned(),
+            row("  └ ○ Plan sketch", "2⋅0⋅0⋅0⋅0"),
+            "● Title of beta".to_owned(),
+            row("  ├ ● Plan rel", "0⋅0⋅0⋅0⋅1"),
+            "  └ …".to_owned(),
+            "…".to_owned(),
+        ],
+        "the archived Plan `old` is behind beta's `…`, the archived Context `gamma` behind the last"
+    );
+    // a click on beta's `…` shows the archived Plan, muted, under a dotted line
+    pane.click(4, 7);
+    let screen = pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("┆ ○ Plan old")));
+    assert_eq!(screen[6..10], [row("  ├ ● Plan rel", "0⋅0⋅0⋅0⋅1"), "  ┊".to_owned(), row("  ┊ ┆ ○ Plan old", "0⋅0⋅0⋅0⋅0"), "…".to_owned()]);
+    // a click on the archived Plan opens nothing; then the other `…` shows the archived Context
+    pane.click(10, 8);
+    pane.click(0, 9);
+    let screen = pane.wait("the archived Context", |s| s.iter().any(|r| r.contains("┊ ○ Title of gamma")));
+    assert_eq!(screen[9..11], ["┊".to_owned(), "┊ ○ Title of gamma".to_owned()]);
+    // a click on the dotted line of beta's group collapses it again
+    pane.click(2, 8);
+    let screen = pane.wait("the group collapsed", |s| s.iter().all(|r| !r.contains("Plan old")));
+    assert_eq!(screen[6..8], [row("  ├ ● Plan rel", "0⋅0⋅0⋅0⋅1"), "  └ …".to_owned()]);
+    assert!(calls(&env).is_empty(), "a click on an archived row, or on a `…` row, runs no command: {:?}", calls(&env));
+}
+
+#[test]
+fn the_cursor_skips_archived_rows_and_enter_never_opens_one() {
+    let env = env();
+    populate(&env);
+    archive(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 46, 16);
+    pane.ready();
+    pane.click(4, 7); // beta's `…`: its archived Plan is drawn
+    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("┆ ○ Plan old")));
+    pane.down(6); // ship, f-idle, f-blocked, sketch, rel, and then nowhere: the archived Plan `old` is not a stop
+    pane.keys(&["Enter"]);
+    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "l-rel"])]);
+    pane.keys(&["x"]);
+    pane.wait("the prompt", |_| pane.footer_has("Close Plan rel?"));
+}
+
+#[test]
+fn the_tree_follows_the_archive_and_rename_events() {
+    let env = env();
+    populate(&env);
+    let pane = Pane::start(&env, 46, 16);
+    pane.ready();
+    // the kinds of migration 3, written as the commands will: the row, then its Event
+    sql(
+        &mut open(&env),
+        "UPDATE contexts SET title = 'Renamed' WHERE id = 'gamma';
+         INSERT INTO events (txn, at, kind, context, text, data)
+         VALUES (cpd_txn(), '2026-02-01T00:00:00.000Z', 'context-renamed', 'gamma', 'fixture', '{\"title\":\"Renamed\"}');",
+    );
+    pane.wait("the new title", |s| s.iter().any(|r| r == "○ Renamed"));
+    sql(
+        &mut open(&env),
+        "UPDATE plans SET title = 'Plan renamed' WHERE id = 'old';
+         INSERT INTO events (txn, at, kind, context, plan, text, data)
+         VALUES (cpd_txn(), '2026-02-01T00:00:01.000Z', 'plan-renamed', 'beta', 'old', 'fixture', '{\"title\":\"Plan renamed\"}');",
+    );
+    pane.wait("the new Plan title", |s| s.iter().any(|r| r.contains("└ ○ Plan renamed")));
+    sql(
+        &mut open(&env),
+        "UPDATE plans SET archived_at = '2026-02-02T00:00:00.000Z' WHERE id = 'old';
+         INSERT INTO events (txn, at, kind, context, plan, text, data)
+         VALUES (cpd_txn(), '2026-02-02T00:00:00.000Z', 'plan-archived', 'beta', 'old', 'fixture', '{\"archived\":true}');",
+    );
+    pane.wait("the Plan behind `…`", |s| s.iter().any(|r| r == "  └ …") && s.iter().all(|r| !r.contains("Plan renamed")));
+    sql(
+        &mut open(&env),
+        "UPDATE contexts SET archived_at = '2026-02-02T00:00:00.000Z' WHERE id = 'gamma';
+         INSERT INTO events (txn, at, kind, context, text, data)
+         VALUES (cpd_txn(), '2026-02-02T00:00:01.000Z', 'context-archived', 'gamma', 'fixture', '{\"archived\":true}');",
+    );
+    pane.wait("the Context behind `…`", |s| s.iter().any(|r| r == "…") && s.iter().all(|r| !r.contains("Renamed")));
+    sql(
+        &mut open(&env),
+        "UPDATE sessions SET archived_at = '2026-02-03T00:00:00.000Z' WHERE id = 'f-idle';
+         INSERT INTO events (txn, at, kind, context, plan, session, text, data)
+         VALUES (cpd_txn(), '2026-02-03T00:00:00.000Z', 'session-archived', 'alpha', 'ship', 'f-idle', 'fixture', '{\"archived\":true}');",
+    );
+    pane.wait("the fork behind `…`", |s| s.iter().all(|r| !r.contains("ship fork")) && s.iter().filter(|r| r.as_str() == "  └ …").count() == 2);
 }
