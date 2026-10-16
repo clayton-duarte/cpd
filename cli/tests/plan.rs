@@ -6,6 +6,7 @@
 mod common;
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -713,6 +714,120 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
     assert_eq!((&again["already"], &again["phase"], &again["watch"]["started"]), (&json!(true), &json!("dispatch"), &json!(true)));
     assert_eq!(watch_calls(&env).len(), 2);
     assert_eq!(events(&env, "plan-phase").len(), 2);
+}
+
+// ---------- plan lock and the remote Lead Branch (R35) ----------
+
+/// A bare `origin` for `repo`, holding `main`; returns its path.
+fn with_origin(env: &TestEnv, repo: &Path) -> PathBuf {
+    let origin = env.root().join("origins").join("pay.git");
+    fs::create_dir_all(&origin).unwrap();
+    env.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
+    env.git(repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    env.git(repo, &["push", "-q", "origin", "main"]);
+    origin
+}
+
+/// Commits an empty commit on `main` of `repo` and pushes it.
+fn push_main_commit(env: &TestEnv, repo: &Path, message: &str) -> String {
+    env.git(repo, &["commit", "-q", "--allow-empty", "-m", message]);
+    env.git(repo, &["push", "-q", "origin", "main"]);
+    env.git(repo, &["rev-parse", "HEAD"])
+}
+
+#[test]
+fn lock_creates_and_pushes_the_lead_branch_when_the_remote_has_none() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    let origin = with_origin(&env, &repo);
+    approved(&env, &repo);
+    let head = env.git(&repo, &["rev-parse", "HEAD"]);
+
+    let out = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+
+    assert_eq!(out["base_sha"], head);
+    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay"]), format!("{head}\trefs/heads/cpd/pay"));
+    let worktree = repo.parent().unwrap().canonicalize().unwrap().join("pay.pay");
+    assert_eq!(env.git(&worktree, &["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/cpd/pay");
+    assert_eq!(env.git(&origin, &["rev-parse", "cpd/pay"]), head);
+    assert!(events(&env, "error").is_empty());
+}
+
+#[test]
+fn lock_reuses_a_remote_lead_branch_that_contains_the_base() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    with_origin(&env, &repo);
+    approved(&env, &repo);
+    // A commit only the remote has, on top of the base.
+    env.git(&repo, &["commit", "-q", "--allow-empty", "-m", "only on the remote"]);
+    let remote_tip = env.git(&repo, &["rev-parse", "HEAD"]);
+    env.git(&repo, &["push", "-q", "origin", "HEAD:refs/heads/cpd/pay"]);
+    env.git(&repo, &["reset", "-q", "--hard", "HEAD~1"]);
+    assert_eq!(env.git(&repo, &["branch", "--list", "cpd/pay"]), "");
+
+    let out = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+
+    let worktree = repo.parent().unwrap().canonicalize().unwrap().join("pay.pay");
+    assert_eq!(out["base_sha"], remote_tip);
+    assert_eq!(env.git(&worktree, &["rev-parse", "HEAD"]), remote_tip);
+    assert_eq!(env.git(&repo, &["rev-parse", "refs/heads/cpd/pay"]), remote_tip);
+    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay"]), format!("{remote_tip}\trefs/heads/cpd/pay"));
+    assert!(events(&env, "error").is_empty());
+}
+
+#[test]
+fn lock_refuses_a_remote_lead_branch_that_does_not_contain_the_base() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    with_origin(&env, &repo);
+    approved(&env, &repo);
+    // cpd/pay at the old main; then main moves on, so origin/main is not its ancestor.
+    env.git(&repo, &["push", "-q", "origin", "main:refs/heads/cpd/pay"]);
+    let remote_branch = env.git(&repo, &["rev-parse", "HEAD"]);
+    push_main_commit(&env, &repo, "main moves on");
+
+    let error = refused(&env.cpd(&["plan", "lock", "--plan", "pay"]), "branch_exists", 3);
+
+    assert_eq!(error["details"]["branch"], "cpd/pay");
+    assert_eq!(env.git(&repo, &["branch", "--list", "cpd/pay"]), "");
+    assert!(!repo.parent().unwrap().join("pay.pay").exists());
+    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay"]), format!("{remote_branch}\trefs/heads/cpd/pay"));
+    assert_eq!(show(&env, "pay")["plan"]["phase"], "plan");
+    assert!(watch_calls(&env).is_empty());
+}
+
+#[test]
+fn lock_without_an_origin_remote_is_as_before() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    approved(&env, &repo);
+    env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+    assert_eq!(env.git(&repo, &["remote"]), "");
+    assert_eq!(show(&env, "pay")["plan"]["phase"], "dispatch");
+    assert!(events(&env, "error").is_empty());
+}
+
+#[test]
+fn a_push_failure_at_lock_still_locks_and_appends_one_push_failed_error() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    let origin = with_origin(&env, &repo);
+    let hook = origin.join("hooks").join("pre-receive");
+    fs::write(&hook, "#!/bin/sh\necho refused by hook >&2\nexit 1\n").unwrap();
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    approved(&env, &repo);
+
+    let out = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+
+    assert_eq!(out["phase"], "dispatch");
+    assert_eq!(show(&env, "pay")["plan"]["phase"], "dispatch");
+    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay"]), "");
+    let errors = events(&env, "error");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0]["data"]["code"], "push_failed");
+    assert_eq!(errors[0]["data"]["source"], "plan lock");
+    assert!(errors[0]["data"]["details"]["stderr"].as_str().unwrap().contains("refused by hook"));
 }
 
 #[test]

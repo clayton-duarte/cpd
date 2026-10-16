@@ -85,6 +85,10 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
                 }
                 Ok(())
             })?;
+            // R35: push as step 8 does; a failure does not undo the merge.
+            if let Err(e) = git::push_lead_branch(&attempt.lead_worktree, &attempt.lead_branch, false) {
+                store.write(ctx.source, |tx| ledger::append_error(tx, attempt, ctx.source, &e, push_text(attempt, &e)))?;
+            }
             rest_of_a9(ctx, attempt)?;
             Ok(Some(end))
         }
@@ -187,6 +191,18 @@ pub(super) fn stale_text(attempt: &Attempt, error: &CpdError) -> String {
         "Attempt {} is merged, but the Lead worktree {} still holds the previous tree. {fix}. Then: cpd plan show --plan {}",
         attempt.id,
         attempt.lead_worktree.display(),
+        attempt.plan
+    )
+}
+
+/// The `error` Event's text for a failed push of the Lead Branch (R35).
+pub(super) fn push_text(attempt: &Attempt, error: &CpdError) -> String {
+    format!(
+        "Attempt {} is merged, but pushing {} to origin failed: {}. The next merge or cpd pr open pushes it again. See: cpd attempt show {} --plan {}",
+        attempt.id,
+        attempt.lead_branch,
+        error.message(),
+        attempt.id,
         attempt.plan
     )
 }

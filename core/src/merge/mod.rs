@@ -70,7 +70,7 @@ pub fn merge(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, attempt: &AttemptI
     }
     let lock = RepoLock::wait(ctx.home, &target.repo)?;
     let recovered = recover::recover_except(store, ctx, &lock, Some((plan, attempt)))?;
-    let (end, stale) = steps(store, &target)?;
+    let (end, stale, push) = steps(store, &target)?;
     let metrics = (ctx.metrics)(&target);
     let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };
     // Step 10, and every other end, while the lock is held.
@@ -79,15 +79,21 @@ pub fn merge(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, attempt: &AttemptI
         if let Some(e) = &stale {
             ledger::append_error(tx, &target, ctx.source, e, recover::stale_text(&target, e))?;
         }
+        if let Some(e) = &push {
+            ledger::append_error(tx, &target, ctx.source, e, recover::push_text(&target, e))?;
+        }
         Ok(())
     })?;
     drop(lock);
     Ok(Merge { end, recovered })
 }
 
-/// Steps 1–9. Returns how the Attempt ends and, when step 9 failed, its
-/// `lead_worktree_stale` error.
-fn steps(store: &mut Store, target: &Attempt) -> Result<(End, Option<CpdError>), CpdError> {
+/// What [`steps`] returns: how the Attempt ends, step 9's `lead_worktree_stale`
+/// error and step 8's `push_failed` error, when they happened.
+type Stepped = (End, Option<CpdError>, Option<CpdError>);
+
+/// Steps 1–9, with step 8's push.
+fn steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
     let repo = &target.repo;
     let lead = &target.lead_worktree;
     let lead_ref = format!("refs/heads/{}", target.lead_branch);
@@ -95,7 +101,7 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<(End, Option<CpdError>),
     loop {
         // 1. Cancel check.
         if store.read(|conn| ledger::cancel_request(conn, target))?.is_some() {
-            return Ok((End::Cancelled, None));
+            return Ok((End::Cancelled, None, None));
         }
         // 2. Snapshot.
         let old = git::run::rev_parse(repo, &lead_ref)?;
@@ -107,23 +113,23 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<(End, Option<CpdError>),
                 lead.display(),
                 status.lines().take(10).map(str::trim).collect::<Vec<_>>().join(", ")
             );
-            return Ok((End::Failed { cause: Failure::DirtyTarget, detail }, None));
+            return Ok((End::Failed { cause: Failure::DirtyTarget, detail }, None, None));
         }
         // 4. Tamper check of old...<attempt branch>.
         let touched = git::touched_protected(repo, &old, &old, &target.branch)?;
         if !touched.is_empty() {
             let detail = format!("The diff touches protected paths: {}.", touched.join(", "));
-            return Ok((End::Failed { cause: Failure::Tampered, detail }, None));
+            return Ok((End::Failed { cause: Failure::Tampered, detail }, None, None));
         }
         // 5. Rebase in the Attempt worktree, never in the Lead worktree.
         if let Some(files) = rebase(&target.worktree, &old)? {
             let detail = format!("The rebase onto the Lead Branch conflicted in: {}.", files.join(", "));
-            return Ok((End::Failed { cause: Failure::MergeConflict, detail }, None));
+            return Ok((End::Failed { cause: Failure::MergeConflict, detail }, None, None));
         }
         // 6. Removed by R19: no Gate at the merge.
         // 7. Cancel check again: the last safe point.
         if store.read(|conn| ledger::cancel_request(conn, target))?.is_some() {
-            return Ok((End::Cancelled, None));
+            return Ok((End::Cancelled, None, None));
         }
         // 8. Fast-forward with a compare-and-swap.
         let new = git::run::rev_parse(&target.worktree, "HEAD")?;
@@ -131,6 +137,8 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<(End, Option<CpdError>),
         let message = format!("cpd: merge {}/{}", target.plan, target.id);
         let out = run(repo, &["update-ref", "-m", &message, &lead_ref, &new, &old])?;
         if out.code == 0 {
+            // Push (R35): the merge stands whatever happens here.
+            let push = git::push_lead_branch(lead, &target.lead_branch, false).err();
             // 9. Sync the Lead worktree; the merge stands whatever happens here.
             let sync = run(lead, &["read-tree", "-m", "-u", &old, &new])?;
             let stale = (sync.code != 0).then(|| {
@@ -140,7 +148,7 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<(End, Option<CpdError>),
                 );
                 recover::stale_error(lead, &sync.stderr, fix)
             });
-            return Ok((End::Merged { sha: new }, stale));
+            return Ok((End::Merged { sha: new }, stale, push));
         }
         if git::run::rev_parse(repo, &lead_ref)? == old {
             return Err(CpdError::new(ErrorCode::GitFailed, "git update-ref failed, and the Lead Branch did not move.")
@@ -155,7 +163,7 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<(End, Option<CpdError>),
                 target.lead_branch,
                 CAS_RETRIES + 1
             );
-            return Ok((End::Failed { cause: Failure::CasLost, detail }, None));
+            return Ok((End::Failed { cause: Failure::CasLost, detail }, None, None));
         }
     }
 }

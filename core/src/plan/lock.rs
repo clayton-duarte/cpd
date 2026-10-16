@@ -100,6 +100,19 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         }
         let text = format!("Plan {id} is locked: {} Jobs queued for the engine. Next: cpd plan show --plan {id}", keys.len());
         append(tx, NewEvent::new(Kind::PlanPhase, text, json!({"from": "plan", "to": "dispatch", "jobs": keys})).plan(id.clone()))?;
+        if let Some(error) = &created.push_failed {
+            // R35: a failed push does not fail the lock; the next merge or `pr open` pushes again.
+            let text = format!(
+                "The Lead Branch {} of Plan {id} is locked but was not pushed to origin: {}. The next merge or cpd pr open pushes it again.",
+                created.branch,
+                error.message()
+            );
+            let data = json!({
+                "source": COMMAND, "code": error.code().as_str(),
+                "message": error.message(), "details": error.details(),
+            });
+            append(tx, NewEvent::new(Kind::Error, text, data).plan(id.clone()))?;
+        }
         Ok(())
     });
     if let Err(e) = committed {

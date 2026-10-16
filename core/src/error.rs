@@ -90,6 +90,7 @@ error_codes! {
     HookInvalid = "hook_invalid" => Failure,
     LeadWorktreeStale = "lead_worktree_stale" => Failure,
     MergeCheckFailed = "merge_check_failed" => Failure,
+    PushFailed = "push_failed" => Failure,
 
     // Exit 2: usage error.
     Usage = "usage" => Usage,

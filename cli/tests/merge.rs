@@ -53,15 +53,34 @@ fn fx() -> Fx {
 }
 
 fn fx_with(config_extra: &str) -> Fx {
+    build(config_extra, false).0
+}
+
+/// [`fx`] for a repo with a bare `origin` (and the path of that bare repo),
+/// which already holds `main` and, from the lock, `cpd/pay` (R35).
+fn fx_origin() -> (Fx, PathBuf) {
+    build("", true)
+}
+
+fn build(config_extra: &str, with_origin: bool) -> (Fx, PathBuf) {
     let env = TestEnv::new();
     let repo = env.git_repo("pay").canonicalize().unwrap();
+    let origin = env.root().join("origins").join("pay.git");
+    if with_origin {
+        fs::create_dir_all(&origin).unwrap();
+        env.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
+        env.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        env.git(&repo, &["push", "-q", "origin", "main"]);
+    }
     // The merge runs git in this process, whose environment is not the
     // TestEnv's: the repo's own config gives rebase an identity.
     for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
         env.git(&repo, &["config", key, value]);
     }
     let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("lead.log") };
-    let lead = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap().path;
+    let created = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap();
+    assert!(created.push_failed.is_none());
+    let lead = created.path;
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     fs::write(
         home.config(),
@@ -86,7 +105,7 @@ fn fx_with(config_extra: &str) -> Fx {
             )
         })
         .unwrap();
-    fx
+    (fx, origin)
 }
 
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
@@ -462,6 +481,63 @@ fn merging_an_attempt_that_is_not_merging_is_refused() {
     fx.merge(&attempt);
     let err = merge::merge(&mut fx.store(), &fx.ctx("attempt run"), &plan(), &attempt).unwrap_err();
     assert_eq!(err.code(), ErrorCode::IllegalTransition);
+}
+
+// ------------------------------------------------------------ the push (R35)
+
+#[test]
+fn a_merge_pushes_the_lead_branch_to_origin() {
+    let (fx, origin) = fx_origin();
+    let (attempt, _) = fx.submitted("api", "api.txt", "api\n");
+
+    let result = fx.merge(&attempt);
+
+    let End::Merged { sha } = &result.end else { panic!("{result:?}") };
+    assert_eq!(&fx.lead_sha(), sha);
+    assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), *sha);
+    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+}
+
+#[test]
+fn a_rejected_push_leaves_the_job_merged_with_one_push_failed_error() {
+    let (fx, origin) = fx_origin();
+    let before = fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]);
+    let hook = origin.join("hooks").join("pre-receive");
+    fs::write(&hook, "#!/bin/sh\necho nope >&2\nexit 1\n").unwrap();
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    let (attempt, _) = fx.submitted("api", "api.txt", "api\n");
+
+    let result = fx.merge(&attempt);
+
+    let End::Merged { sha } = &result.end else { panic!("{result:?}") };
+    assert_eq!(&fx.lead_sha(), sha);
+    assert_eq!(fx.job_row("api"), ("merged".into(), Some(sha.clone()), None));
+    assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), before);
+    let events = fx.events(&attempt);
+    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged", "error"]);
+    assert_eq!(events[1].1["code"], "push_failed");
+    assert_eq!(events[1].1["source"], "attempt run");
+    assert!(events[1].1["details"]["stderr"].as_str().unwrap().contains("nope"));
+}
+
+#[test]
+fn a_repo_without_origin_does_not_push_and_appends_no_error() {
+    let fx = fx();
+    let (attempt, _) = fx.submitted("api", "api.txt", "api\n");
+    fx.merge(&attempt);
+    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+}
+
+#[test]
+fn r_pushes_after_it_records_a_merge() {
+    let (fx, origin) = fx_origin();
+    let (_, worktree) = fx.submitted("api", "api.txt", "api\n");
+    let tip = die_after_step_8(&fx, &worktree);
+    assert_ne!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), tip);
+
+    fx.recover();
+
+    assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), tip);
 }
 
 // ------------------------------------------------------------ the per-repo lock
