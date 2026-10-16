@@ -3,7 +3,7 @@
 //! - `add`, `edit`, `cancel`: the Plan's PRs before they start (`pr add`, `pr edit`, `pr cancel`);
 //! - `start`: starting a PR (`pr start`), the routine `plan lock` and engine E7 call too;
 //! - `open`: the Gate, the push and the PR (`pr open`);
-//! - `poll`, with `feedback` and `pulls` (the table `pull_requests`, written only there): the PRs' state and merge (`pr poll`);
+//! - `poll`, with `feedback` and `pulls` (the table `pull_requests`, written only there): one poll of every open pull request of the User (`pr poll`);
 //! - `rebase`: the Lead Branch onto the base, the Gate and the push (`pr rebase`);
 //! - `gh`: the one gateway to `gh`; `status`: the PR status enums; `row`: the Plan as these commands read it.
 //!
@@ -13,6 +13,8 @@
 mod add;
 mod cancel;
 mod edit;
+// `current_checks` is `pr view`'s (Job `pr-view2`); until then nothing calls it.
+#[allow(dead_code)]
 mod feedback;
 // `pr view` (Job `pr-view2`) reads the reviews, the comments and `inline_comments`; until then nothing does.
 #[allow(dead_code)]
@@ -23,6 +25,8 @@ pub mod pulls;
 mod rebase;
 mod row;
 pub mod start;
+// The summary of `gh pr view`'s checks (`ChecksSummary::of`) is `pr view`'s (Job `pr-view2`); until then nothing calls it.
+#[allow(dead_code)]
 mod status;
 
 use std::path::{Path, PathBuf};
@@ -53,8 +57,8 @@ pub enum Command {
     Start(StartArgs),
     /// Push the Lead Branch and open the PR (§9.1)
     Open(Args),
-    /// Poll the PR for feedback and the merge (§9.2)
-    Poll(Args),
+    /// Poll every open pull request of the User (§9.2)
+    Poll(PollArgs),
     /// Rebase the Lead Branch onto the base and push (§9.3)
     Rebase(Args),
 }
@@ -63,6 +67,12 @@ pub enum Command {
 pub struct Args {
     #[command(flatten)]
     pr: PrArg,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct PollArgs {
     #[command(flatten)]
     plan: PlanArg,
 }
