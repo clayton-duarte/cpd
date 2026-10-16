@@ -220,9 +220,9 @@ fn add_in_phase_plan_writes_a_draft_job_its_needs_and_an_event() {
     setup(&env);
     plan(&env, "pl", "plan");
     let out = job_add(&env, "pl", "a", "S2", &[]).ok();
-    assert_eq!(out["job"], json!({"key": "a", "pr": "repo", "status": "draft", "appended": false, "tier": "S2", "needs": []}));
+    assert_eq!(out["job"], json!({"key": "a", "pr": "repo", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false}));
     let out = job_add(&env, "pl", "b", "O3", &["a"]).ok();
-    assert_eq!(out["job"], json!({"key": "b", "pr": "repo", "status": "draft", "appended": false, "tier": "O3", "needs": ["a"]}));
+    assert_eq!(out["job"], json!({"key": "b", "pr": "repo", "status": "draft", "appended": false, "tier": "O3", "needs": ["a"], "review": false}));
     assert!(out.get("already").is_none());
 
     assert_eq!(job_row(&env, "pl", "b", "title"), "Title of b");
@@ -242,7 +242,7 @@ fn add_in_phase_plan_writes_a_draft_job_its_needs_and_an_event() {
     assert_eq!(added[1]["job"], "b");
     assert_eq!(added[1]["plan"], "pl");
     assert_eq!(added[1]["context"], "ctx");
-    assert_eq!(added[1]["data"], json!({"pr": "repo", "status": "draft", "appended": false, "tier": "O3", "needs": ["a"]}));
+    assert_eq!(added[1]["data"], json!({"pr": "repo", "status": "draft", "appended": false, "tier": "O3", "needs": ["a"], "review": false}));
     assert_eq!(query::<i64>(&env, "SELECT count(*) FROM history WHERE tbl = 'jobs' AND op = 'insert'"), 2);
 }
 
@@ -262,7 +262,7 @@ fn add_in_phase_dispatch_or_pr_appends_a_queued_job_with_its_fingerprint() {
             );
         }
         let out = job_add(&env, "pl", "late", "H1", &["a"]).ok();
-        assert_eq!(out["job"], json!({"key": "late", "pr": "repo", "status": "queued", "appended": true, "tier": "H1", "needs": ["a"]}), "{phase}");
+        assert_eq!(out["job"], json!({"key": "late", "pr": "repo", "status": "queued", "appended": true, "tier": "H1", "needs": ["a"], "review": false}), "{phase}");
         assert_eq!(job_row(&env, "pl", "late", "appended"), 1);
         let id = PlanId::parse("pl").unwrap();
         let all = store(&env).read(|conn| jobs::load(conn, &id)).unwrap();

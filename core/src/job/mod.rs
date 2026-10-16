@@ -71,6 +71,10 @@ pub struct AddArgs {
     /// Dependencies, comma-separated
     #[arg(long, value_name = "k1,k2", value_delimiter = ',')]
     needs: Vec<JobKey>,
+    /// A review Job (B2): its Worker forks the Lead, it commits nothing and
+    /// writes run/<plan>/reviews/<key>.md; it needs every Job of its PR so far
+    #[arg(long, conflicts_with = "needs")]
+    review: bool,
     #[command(flatten)]
     pr: PrArg,
     #[command(flatten)]
@@ -190,6 +194,19 @@ fn plan_phase(conn: &Connection, plan: &PlanId) -> Result<String, CpdError> {
     conn.query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))
         .optional()?
         .ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str()))
+}
+
+/// Whether Job `key` of `plan` is a review Job (`jobs.review`, B2).
+pub(crate) fn is_review(conn: &Connection, plan: &PlanId, key: &str) -> Result<bool, CpdError> {
+    Ok(conn
+        .query_row("SELECT review FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), key], |r| r.get(0))
+        .optional()?
+        .unwrap_or(false))
+}
+
+/// Where a review Job's Worker writes its findings: `run/<plan>/reviews/<job>.md` (contract §1.4).
+pub(crate) fn findings_path(home: &CpdHome, plan: &PlanId, job: &str) -> PathBuf {
+    home.plan_dir(plan).join("reviews").join(format!("{job}.md"))
 }
 
 /// The Job `key` among `jobs`, else `job_not_found`.

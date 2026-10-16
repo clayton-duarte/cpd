@@ -142,13 +142,25 @@ impl Driver {
             return self.end(&target, End::Cancelled, &dirs);
         }
 
+        // A3 of a review Job (B2): the Worker forks the Lead, once the Lead is idle.
+        let review = self.store.read(|conn| crate::job::is_review(conn, &target.plan, job.key.as_str()))?;
+        let fork = if review {
+            log("A3: waiting for the Lead to be idle, to fork it");
+            match worker::wait_for_lead(&mut self.store, &self.config, &dirs, &target)? {
+                Some(fork) => Some(fork),
+                None => return self.end(&target, End::Cancelled, &dirs),
+            }
+        } else {
+            None
+        };
+
         // A3: the Spec, the Session, the Worker.
         log("A3: rendering the Spec and starting the Worker");
         let home = &self.home;
         let spec = self.store.read(|conn| worker::render_spec(conn, home, &target, &job))?;
         let session = SessionId::new_v4();
-        self.register(&target, &session, &spec)?;
-        let pane = worker::start(&self.home, &self.config, self.catalog(), &self.tmux, &dirs, &target, &session)?;
+        self.register(&target, &session, &spec, fork.as_ref().map(|f| &f.session))?;
+        let pane = worker::start(&self.home, &self.config, self.catalog(), &self.tmux, &dirs, &target, &session, fork.as_ref())?;
         self.running(&target, &session, &pane)?;
 
         // A4 and A5.
@@ -157,7 +169,7 @@ impl Driver {
 
     /// A3's first transaction: the Worker's Session, registered before pi
     /// starts (§3.6), and the Attempt's `worker_session` and `spec_path`.
-    fn register(&mut self, target: &Target, session: &SessionId, spec: &std::path::Path) -> Result<(), CpdError> {
+    fn register(&mut self, target: &Target, session: &SessionId, spec: &std::path::Path, forked_from: Option<&SessionId>) -> Result<(), CpdError> {
         let name = format!("{} {} a{}", target.plan, target.job, target.id.number());
         let worktree = target.worktree.to_string_lossy().into_owned();
         let tier = target.tier.to_string();
@@ -165,7 +177,7 @@ impl Driver {
             tx.execute(
                 "INSERT INTO sessions (id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane,
                                        state, state_label, state_at, created_at)
-                 SELECT ?1, 'worker', ?2, ?3, ?4, ?5, NULL, NULL, ?6, ?7, NULL, 'stopped', NULL, at, at
+                 SELECT ?1, 'worker', ?2, ?3, ?4, ?5, NULL, ?8, ?6, ?7, NULL, 'stopped', NULL, at, at
                    FROM txns WHERE id = cpd_txn()",
                 params![
                     session.as_str(),
@@ -174,7 +186,8 @@ impl Driver {
                     target.id.to_string(),
                     name,
                     worktree,
-                    tier
+                    tier,
+                    forked_from.map(SessionId::as_str)
                 ],
             )?;
             let changed = tx.execute(
@@ -185,7 +198,7 @@ impl Driver {
                 return Err(CpdError::new(ErrorCode::CasLost, format!("Attempt {} is no longer starting.", target.id)));
             }
             let text = format!("Worker {name} of Attempt {} registered.", target.id);
-            let data = json!({"role": "worker", "name": name, "forked_from": null, "tier": tier});
+            let data = json!({"role": "worker", "name": name, "forked_from": forked_from, "tier": tier});
             events::append(
                 tx,
                 NewEvent::new(Kind::SessionRegistered, text, data)

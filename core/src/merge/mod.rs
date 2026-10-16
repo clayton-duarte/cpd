@@ -70,7 +70,8 @@ pub fn merge(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, attempt: &AttemptI
     }
     let lock = RepoLock::wait(ctx.home, &target.repo)?;
     let recovered = recover::recover_except(store, ctx, &lock, Some((plan, attempt)))?;
-    let (end, stale, push) = steps(store, &target)?;
+    let review = store.read(|conn| crate::job::is_review(conn, plan, target.job.as_str()))?;
+    let (end, stale, push) = if review { review_steps(store, &target)? } else { steps(store, &target)? };
     let metrics = (ctx.metrics)(&target);
     let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };
     // Step 10, and every other end, while the lock is held.
@@ -91,6 +92,21 @@ pub fn merge(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, attempt: &AttemptI
 /// What [`steps`] returns: how the Attempt ends, step 9's `lead_worktree_stale`
 /// error and step 8's `push_failed` error, when they happened.
 type Stepped = (End, Option<CpdError>, Option<CpdError>);
+
+/// A review Job's merge (B2, §7.4): step 1 (cancel check), step 2 (snapshot `old`)
+/// and step 7 (cancel check again); no tamper check, rebase, fast-forward, push
+/// or worktree sync, because the Attempt has no commits and the Lead Branch does
+/// not move; then the Attempt ends `merged` with `merged_sha = old`.
+fn review_steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
+    if store.read(|conn| ledger::cancel_request(conn, target))?.is_some() {
+        return Ok((End::Cancelled, None, None));
+    }
+    let old = git::run::rev_parse(&target.repo, &format!("refs/heads/{}", target.lead_branch))?;
+    if store.read(|conn| ledger::cancel_request(conn, target))?.is_some() {
+        return Ok((End::Cancelled, None, None));
+    }
+    Ok((End::Merged { sha: old }, None, None))
+}
 
 /// Steps 1–9, with step 8's push.
 fn steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
