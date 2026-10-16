@@ -384,9 +384,9 @@ fn list_summarises_every_context() {
     assert_eq!(contexts.len(), 2);
     assert_eq!(
         contexts[0],
-        json!({"id": CTX, "title": "Building cpd", "jira": null, "grounded": false, "lead_session": null,
+        json!({"id": CTX, "title": "Building cpd", "jira": null, "archived_at": null, "grounded": false, "lead_session": null,
                "grounded_seq": null, "records": 4, "open_questions": 1, "sync_failing": false,
-               "plans": [{"id": "cpd2", "title": "The cpd2 plan", "phase": "grounding", "lead_session": "lead-cpd2"}]})
+               "plans": [{"id": "cpd2", "title": "The cpd2 plan", "phase": "grounding", "lead_session": "lead-cpd2", "archived_at": null}]})
     );
     assert_eq!(contexts[1]["id"], "home-lab");
     assert_eq!(contexts[1]["jira"], "LAB-3");
@@ -828,4 +828,258 @@ fn a_sync_failure_from_the_engine_is_recorded_once() {
 
 fn bare_at(env: &TestEnv, path: &Path) {
     env.git(env.root(), &["init", "-q", "--bare", "-b", "main", path.to_str().unwrap()]);
+}
+
+// ---- context rename -------------------------------------------------------
+
+fn rename_events(env: &TestEnv) -> Vec<Value> {
+    env.cpd(&["events", "list", "--kind", "context-renamed"]).ok()["events"].as_array().unwrap().clone()
+}
+
+#[test]
+fn rename_sets_the_title_and_appends_one_event() {
+    let env = hs();
+    new_context(&env);
+    let out = env.cpd(&["context", "rename", CTX, "--title", "Building cpd 2"]).ok();
+    assert_eq!(out["context"], json!({"id": CTX, "title": "Building cpd 2"}));
+    assert!(out.get("already").is_none());
+    assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"][0]["title"], "Building cpd 2");
+    let events = rename_events(&env);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["context"], CTX);
+    assert_eq!(events[0]["data"], json!({"title": "Building cpd 2"}));
+    // The git store is not touched.
+    let stored: Value = serde_json::from_str(&fs::read_to_string(dir(&env, CTX).join("context.json")).unwrap()).unwrap();
+    assert_eq!(stored["title"], "Building cpd");
+}
+
+#[test]
+fn rename_to_the_same_title_is_already_and_writes_nothing() {
+    let env = hs();
+    new_context(&env);
+    assert_eq!(env.cpd(&["context", "rename", CTX, "--title", "Building cpd"]).ok()["already"], true);
+    assert!(rename_events(&env).is_empty());
+}
+
+#[test]
+fn rename_refusals() {
+    let env = hs();
+    new_context(&env);
+    refused(env.cpd(&["context", "rename", "nope", "--title", "X"]), 4, "context_not_found");
+    refused(env.cpd(&["context", "rename", CTX, "--title", ""]), 2, "usage");
+    assert!(rename_events(&env).is_empty());
+}
+
+// ---- context archive and unarchive ----------------------------------------
+
+use common::SLEEP_SECONDS;
+
+/// `hs()` on its private tmux server.
+fn hs_tmux() -> TestEnv {
+    let env = hs();
+    let config = format!("version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket());
+    fs::write(env.cpd_home().join("config.toml"), config).unwrap();
+    env
+}
+
+fn sql(env: &TestEnv, sql: &str) {
+    let (_, _, mut store) = library(env);
+    store.write("fixture", |tx| {
+        tx.execute_batch(sql)?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+fn count(env: &TestEnv, sql: &str) -> i64 {
+    let (_, _, mut store) = library(env);
+    store.read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
+}
+
+/// The cockpit: session `cpd`, window `main` with a tree pane.
+fn cockpit(env: &TestEnv) {
+    let out = env.tmux(&["new-session", "-d", "-s", "cpd", "-n", "main", "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let tree = String::from_utf8(out.stdout).unwrap().trim().to_owned();
+    assert!(env.tmux(&["set", "-p", "-t", &tree, "@cpd_view", "tree"]).status.success());
+}
+
+/// Gives Session `id` a live parked pane in the cockpit, as `@cpd_session`.
+fn pane(env: &TestEnv, id: &str) -> String {
+    let started =
+        env.tmux(&["new-window", "-d", "-t", "=cpd:", "-n", &format!("park-{id}"), "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
+    assert!(started.status.success(), "{}", String::from_utf8_lossy(&started.stderr));
+    let pane = String::from_utf8(started.stdout).unwrap().trim().to_owned();
+    assert!(env.tmux(&["set", "-p", "-t", &pane, "@cpd_session", id]).status.success());
+    sql(env, &format!("UPDATE sessions SET tmux_pane = '{pane}' WHERE id = '{id}'"));
+    pane
+}
+
+fn live_panes(env: &TestEnv) -> Vec<String> {
+    let out = env.tmux(&["list-panes", "-a", "-F", "#{pane_id}"]);
+    String::from_utf8(out.stdout).unwrap().lines().map(str::to_owned).collect()
+}
+
+fn archived_ats(env: &TestEnv) -> i64 {
+    count(
+        env,
+        "SELECT count(*) FROM (SELECT archived_at FROM contexts UNION ALL SELECT archived_at FROM plans
+                              UNION ALL SELECT archived_at FROM sessions) WHERE archived_at IS NOT NULL",
+    )
+}
+
+fn event_count(env: &TestEnv) -> i64 {
+    count(env, "SELECT count(*) FROM events")
+}
+
+/// Context `building-cpd` with a grounded Lead, Plans `pay` and `ship` (each with a Lead),
+/// a side fork of `pay`, and a Worker of `pay`'s Job `api`; another Context `other` with Plan
+/// `side`. Live parked panes: `lead-pay`, `fork-pay` and `grounded`.
+fn archivable(env: &TestEnv) {
+    new_context(env);
+    env.cpd(&["context", "new", "other", "--title", "Other"]).ok();
+    fixture_plan(env, "pay", CTX);
+    fixture_plan(env, "ship", CTX);
+    fixture_plan(env, "side", "other");
+    sql(
+        env,
+        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from)
+           VALUES ('fork-pay', 'lead', 'building-cpd', 'pay', 'Fork', '/', 'O3', 'stopped', 't', 't1', 'lead-pay'),
+                  ('grounded', 'lead', 'building-cpd', NULL, 'Grounded', '/', 'O3', 'idle', 't', 't0', NULL);
+         UPDATE contexts SET lead_session = 'grounded', grounded_seq = 0 WHERE id = 'building-cpd';
+         INSERT INTO jobs (plan, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+           VALUES ('pay', 'api', 'r', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, 1, 't');
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)
+           VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pay--api-a1', '/w', 'worker1', 't');
+         INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at)
+           VALUES ('worker1', 'worker', 'building-cpd', 'pay', 'api-a1', 'Worker', '/', 'S2', 'idle', 't', 't2');",
+    );
+    cockpit(env);
+    for id in ["lead-pay", "fork-pay", "grounded"] {
+        pane(env, id);
+    }
+}
+
+fn ids(out: &Value, kind: &str) -> Vec<String> {
+    let mut ids: Vec<String> =
+        out["archived"].as_array().unwrap().iter().filter(|o| o["kind"] == kind).map(|o| o["id"].as_str().unwrap().to_owned()).collect();
+    ids.sort();
+    ids
+}
+
+#[test]
+fn archive_covers_plans_leads_forks_and_the_grounded_lead_with_one_event_each() {
+    let env = hs_tmux();
+    archivable(&env);
+    let panes = live_panes(&env);
+    let out = env.cpd(&["context", "archive", CTX]).ok();
+    assert_eq!(out["archived"][0], json!({"kind": "context", "id": CTX}));
+    assert_eq!(ids(&out, "context"), [CTX]);
+    assert_eq!(ids(&out, "plan"), ["pay", "ship"]);
+    assert_eq!(ids(&out, "session"), ["fork-pay", "grounded", "lead-pay", "lead-ship"]);
+    assert_eq!(out["archived"].as_array().unwrap().len(), 7);
+    assert_eq!(out["closed"].as_array().unwrap().len(), 3);
+    // Every pane the cascade closed is gone; the cockpit's other panes are not ours to count.
+    let left = live_panes(&env);
+    assert!(out["closed"].as_array().unwrap().iter().all(|p| panes.contains(&p.as_str().unwrap().to_owned()) && !left.contains(&p.as_str().unwrap().to_owned())));
+
+    assert_eq!(events(&env, "context-archived").len(), 1);
+    assert_eq!(events(&env, "plan-archived").len(), 2);
+    assert_eq!(events(&env, "session-archived").len(), 4);
+    assert!(events(&env, "context-archived")[0]["data"] == json!({"archived": true}));
+    assert_eq!(archived_ats(&env), 7);
+    // The Worker's Session and the other Context are not touched.
+    assert_eq!(count(&env, "SELECT count(*) FROM sessions WHERE id = 'worker1' AND archived_at IS NULL"), 1);
+    assert_eq!(count(&env, "SELECT count(*) FROM plans WHERE id = 'side' AND archived_at IS NULL"), 1);
+    assert_eq!(count(&env, "SELECT count(*) FROM sessions WHERE tmux_pane IS NOT NULL"), 0);
+
+    let list = env.cpd(&["context", "list"]).ok();
+    let context = |id: &str| list["contexts"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap().clone();
+    assert!(context(CTX)["archived_at"].is_string());
+    assert!(context(CTX)["plans"].as_array().unwrap().iter().all(|p| p["archived_at"].is_string()));
+    assert_eq!(context("other")["archived_at"], Value::Null);
+    assert_eq!(context("other")["plans"][0]["archived_at"], Value::Null);
+
+    let events_before = event_count(&env);
+    let again = env.cpd(&["context", "archive", CTX]).ok();
+    assert_eq!(again, json!({"ok": true, "archived": [], "closed": [], "already": true}));
+    assert_eq!(event_count(&env), events_before);
+}
+
+#[test]
+fn archive_refused_by_any_one_blocker_changes_nothing() {
+    let fingerprint = "a".repeat(64);
+    let blockers = [
+        ("job", format!("UPDATE jobs SET status = 'queued', fingerprint = '{fingerprint}' WHERE key = 'api'")),
+        (
+            "escalation",
+            "INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
+             VALUES ('pay', 'api-a1-q1', 'api-a1', 1, 'Which?', 'open', 1, 't')"
+                .to_owned(),
+        ),
+        (
+            "review",
+            format!("INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at) VALUES ('ship', 'r1', 1, '{fingerprint}', 'pending', 't')"),
+        ),
+        ("session", "UPDATE sessions SET state = 'working' WHERE id = 'fork-pay'".to_owned()),
+    ];
+    for (kind, apply) in blockers {
+        let env = hs_tmux();
+        archivable(&env);
+        sql(&env, &apply);
+        let (events_before, panes_before) = (event_count(&env), live_panes(&env));
+        let error = refused(env.cpd(&["context", "archive", CTX]), 3, "archive_blocked");
+        let listed = error["details"]["blockers"].as_array().unwrap();
+        assert_eq!(listed.len(), 1, "{kind}: {error}");
+        assert_eq!(listed[0]["kind"], kind, "{error}");
+        assert_eq!(archived_ats(&env), 0, "{kind}");
+        assert_eq!(event_count(&env), events_before, "{kind}");
+        assert_eq!(live_panes(&env), panes_before, "{kind}");
+        assert_eq!(count(&env, "SELECT count(*) FROM sessions WHERE tmux_pane IS NOT NULL"), 3, "{kind}");
+    }
+}
+
+#[test]
+fn archive_refuses_a_lead_in_the_chat_slot_before_closing_any_pane() {
+    let env = hs_tmux();
+    archivable(&env);
+    // The chat slot: the pane of window `main` running the grounded Lead's pane.
+    let grounded = env.tmux(&["list-panes", "-a", "-F", "#{pane_id}\t#{@cpd_session}"]);
+    let grounded = String::from_utf8(grounded.stdout).unwrap();
+    let grounded = grounded.lines().find_map(|l| l.strip_suffix("\tgrounded")).unwrap().to_owned();
+    assert!(env.tmux(&["rename-window", "-t", &grounded, "main"]).status.success());
+    let (events_before, panes_before) = (event_count(&env), live_panes(&env));
+    let error = refused(env.cpd(&["context", "archive", CTX]), 3, "in_chat_slot");
+    assert_eq!(error["details"]["next"], "cpd session park");
+    assert_eq!((event_count(&env), live_panes(&env), archived_ats(&env)), (events_before, panes_before, 0));
+}
+
+#[test]
+fn unarchive_clears_the_cascade_with_one_event_each_and_touches_no_pane() {
+    let env = hs_tmux();
+    archivable(&env);
+    env.cpd(&["context", "archive", CTX]).ok();
+    let (events_before, panes_before) = (event_count(&env), live_panes(&env));
+
+    let out = env.cpd(&["context", "unarchive", CTX]).ok();
+    assert_eq!(out["archived"][0], json!({"kind": "context", "id": CTX}));
+    assert_eq!(ids(&out, "plan"), ["pay", "ship"]);
+    assert_eq!(ids(&out, "session"), ["fork-pay", "grounded", "lead-pay", "lead-ship"]);
+    assert_eq!(out["closed"], json!([]));
+    assert_eq!(archived_ats(&env), 0);
+    assert_eq!(event_count(&env), events_before + 7);
+    assert_eq!(live_panes(&env), panes_before);
+    assert_eq!(events(&env, "context-archived")[1]["data"], json!({"archived": false}));
+    assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"][0]["archived_at"], Value::Null);
+
+    let again = env.cpd(&["context", "unarchive", CTX]).ok();
+    assert_eq!(again, json!({"ok": true, "archived": [], "closed": [], "already": true}));
+    assert_eq!(event_count(&env), events_before + 7);
+}
+
+#[test]
+fn archive_and_unarchive_of_an_unknown_context_are_refused() {
+    let env = hs_tmux();
+    refused(env.cpd(&["context", "archive", "nope"]), 4, "context_not_found");
+    refused(env.cpd(&["context", "unarchive", "nope"]), 4, "context_not_found");
 }

@@ -247,7 +247,7 @@ fn list_filters_and_derives_place_and_leads() {
     assert_eq!(
         *lead1,
         json!({"id": "lead1", "role": "lead", "context": "ctx", "plan": "pay", "attempt": null, "name": "Lead one",
-               "state": "idle", "state_label": null, "state_at": "t1", "place": "none", "tmux_pane": null, "file": null,
+               "state": "idle", "state_label": null, "state_at": "t1", "archived_at": null, "place": "none", "tmux_pane": null, "file": null,
                "forked_from": null, "plan_lead": true, "grounded_lead": false, "tier": "O3",
                "cwd": env.root().display().to_string()})
     );
@@ -672,6 +672,162 @@ fn close_of_a_stopped_lead_with_a_pane_appends_only_session_moved() {
     let lead2 = show(&env, LEAD2);
     assert_eq!((&lead2["tmux_pane"], &lead2["place"]), (&Value::Null, &json!("none")));
     assert!(panes(&env).iter().all(|p| p.session != LEAD2));
+}
+
+// ---------- archive ----------
+
+/// A parked side fork of `lead1` (stopped, with a pane): fake pi and cpd, and the cockpit.
+fn parked_fork(env: &TestEnv) -> String {
+    setup(env);
+    fake_cpd(env);
+    fake_pi(env, &format!("exec sleep {SLEEP_SECONDS}"));
+    cockpit(env);
+    env.cpd(&["session", "fork", LEAD1]).ok()["session"]["id"].as_str().unwrap().to_owned()
+}
+
+fn archived_at(env: &TestEnv, id: &str) -> Value {
+    show(env, id)["archived_at"].clone()
+}
+
+#[test]
+fn archive_kills_the_pane_of_an_idle_parked_fork_and_appends_one_event() {
+    let env = TestEnv::new();
+    let fork = parked_fork(&env);
+    exec_sql(&env, &format!("UPDATE sessions SET state = 'idle' WHERE id = '{fork}'"));
+    let pane = show(&env, &fork)["tmux_pane"].as_str().unwrap().to_owned();
+    assert_eq!(archived_at(&env, &fork), Value::Null);
+
+    let out = env.cpd(&["session", "archive", &fork]).ok();
+    assert_eq!(out, json!({"ok": true, "archived": [{"kind": "session", "id": fork}], "closed": [pane]}));
+    assert!(panes(&env).iter().all(|p| p.session != fork));
+    let row = show(&env, &fork);
+    assert!(row["archived_at"].is_string(), "{row}");
+    assert_eq!((&row["state"], &row["tmux_pane"], &row["place"]), (&json!("stopped"), &Value::Null, &json!("none")));
+    let archived = events(&env, "session-archived");
+    assert_eq!(archived.len(), 1);
+    assert_eq!((&archived[0]["session"], &archived[0]["data"]), (&json!(fork), &json!({"archived": true})));
+
+    // `session list` shows it; the Plan's Lead and the other Sessions are not archived.
+    let list = env.cpd(&["session", "list"]).ok();
+    let at = |id: &str| list["sessions"].as_array().unwrap().iter().find(|s| s["id"] == id).unwrap()["archived_at"].clone();
+    assert_eq!(at(&fork), row["archived_at"]);
+    assert_eq!(at(LEAD1), Value::Null);
+
+    // Idempotent: nothing more is written, nothing closed.
+    let again = env.cpd(&["session", "archive", &fork]).ok();
+    assert_eq!(again, json!({"ok": true, "archived": [], "closed": [], "already": true}));
+    assert_eq!(events(&env, "session-archived").len(), 1);
+}
+
+#[test]
+fn archive_of_a_lead_with_no_pane_closes_nothing() {
+    let env = TestEnv::new();
+    setup(&env);
+    let fork = "forkless";
+    exec_sql(
+        &env,
+        &format!(
+            "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from)
+               VALUES ('{fork}', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'stopped', 't', 't', 'lead1')"
+        ),
+    );
+    let out = env.cpd(&["session", "archive", fork]).ok();
+    assert_eq!(out, json!({"ok": true, "archived": [{"kind": "session", "id": fork}], "closed": []}));
+    assert_eq!(events(&env, "session-archived").len(), 1);
+}
+
+#[test]
+fn archive_refuses_a_working_or_blocked_session_and_changes_nothing() {
+    let env = TestEnv::new();
+    let fork = parked_fork(&env);
+    let pane = show(&env, &fork)["tmux_pane"].as_str().unwrap().to_owned();
+    let moved = events(&env, "session-moved").len();
+    for state in ["working", "blocked"] {
+        exec_sql(&env, &format!("UPDATE sessions SET state = '{state}', state_label = {} WHERE id = '{fork}'", if state == "blocked" { "'why'" } else { "NULL" }));
+        let error = refused(&env.cpd(&["session", "archive", &fork]), "archive_blocked", 3);
+        let blockers = error["details"]["blockers"].as_array().unwrap();
+        assert_eq!(blockers.len(), 1, "{error}");
+        assert_eq!((&blockers[0]["kind"], &blockers[0]["id"]), (&json!("session"), &json!(fork)));
+        assert!(blockers[0]["reason"].as_str().unwrap().contains(state), "{error}");
+        assert_eq!(archived_at(&env, &fork), Value::Null);
+        assert_eq!(show(&env, &fork)["tmux_pane"], json!(pane));
+        assert!(panes(&env).iter().any(|p| p.session == fork));
+    }
+    assert_eq!(events(&env, "session-archived").len(), 0);
+    assert_eq!(events(&env, "session-moved").len(), moved);
+}
+
+#[test]
+fn archive_refuses_the_chat_slot_a_plan_lead_a_worker_and_an_unknown_session() {
+    let env = TestEnv::new();
+    let fork = parked_fork(&env);
+    exec_sql(&env, &format!("UPDATE sessions SET state = 'idle' WHERE id = '{fork}'"));
+    let pane = env.cpd(&["session", "open", &fork]).ok()["pane"].as_str().unwrap().to_owned();
+    let error = refused(&env.cpd(&["session", "archive", &fork]), "in_chat_slot", 3);
+    assert_eq!(error["details"]["next"], "cpd session park");
+    assert_eq!(slot(&env).pane, pane);
+    assert_eq!(archived_at(&env, &fork), Value::Null);
+
+    let error = refused(&env.cpd(&["session", "archive", LEAD1]), "archive_blocked", 3);
+    assert_eq!(error["details"]["next"], "cpd plan archive --plan pay");
+    assert_eq!(archived_at(&env, LEAD1), Value::Null);
+
+    refused(&env.cpd(&["session", "archive", WORKER]), "not_a_lead", 3);
+    refused(&env.cpd(&["session", "archive", "nobody"]), "session_not_found", 4);
+    assert_eq!(events(&env, "session-archived").len(), 0);
+}
+
+#[test]
+fn unarchive_clears_archived_at_with_one_event_and_touches_no_pane() {
+    let env = TestEnv::new();
+    let fork = parked_fork(&env);
+    env.cpd(&["session", "archive", &fork]).ok();
+    let before = panes(&env);
+
+    let out = env.cpd(&["session", "unarchive", &fork]).ok();
+    assert_eq!(out, json!({"ok": true, "archived": [{"kind": "session", "id": fork}], "closed": []}));
+    assert_eq!(archived_at(&env, &fork), Value::Null);
+    assert_eq!(panes(&env), before);
+    let archived = events(&env, "session-archived");
+    assert_eq!(archived.len(), 2);
+    assert_eq!(archived[1]["data"], json!({"archived": false}));
+
+    // Idempotent.
+    let again = env.cpd(&["session", "unarchive", &fork]).ok();
+    assert_eq!(again, json!({"ok": true, "archived": [], "closed": [], "already": true}));
+    assert_eq!(events(&env, "session-archived").len(), 2);
+
+    refused(&env.cpd(&["session", "unarchive", WORKER]), "not_a_lead", 3);
+    refused(&env.cpd(&["session", "unarchive", "nobody"]), "session_not_found", 4);
+}
+
+#[test]
+fn unarchive_is_refused_while_its_plan_or_context_is_archived() {
+    let env = TestEnv::new();
+    setup(&env);
+    exec_sql(&env, "UPDATE sessions SET archived_at = 't' WHERE id = 'lead2'");
+    exec_sql(&env, "UPDATE plans SET archived_at = 't' WHERE id = 'other'");
+    let error = refused(&env.cpd(&["session", "unarchive", LEAD2]), "archived", 3);
+    assert_eq!(error["details"]["next"], "cpd plan unarchive --plan other");
+    exec_sql(&env, "UPDATE contexts SET archived_at = 't' WHERE id = 'ctx'");
+    let error = refused(&env.cpd(&["session", "unarchive", LEAD2]), "archived", 3);
+    assert_eq!(error["details"]["next"], "cpd context unarchive ctx");
+    assert_eq!(archived_at(&env, LEAD2), json!("t"));
+    assert_eq!(events(&env, "session-archived").len(), 0);
+}
+
+/// No tmux server runs here: an `archived` refusal, not `no_cockpit`, shows that nothing asked tmux first.
+#[test]
+fn open_and_fork_of_an_archived_session_are_refused_before_any_tmux() {
+    let env = TestEnv::new();
+    setup(&env);
+    exec_sql(&env, "UPDATE sessions SET archived_at = 't' WHERE id = 'lead2'");
+    for args in [["session", "open", LEAD2], ["session", "fork", LEAD2]] {
+        let error = refused(&env.cpd(&args), "archived", 3);
+        assert_eq!(error["details"]["next"], "cpd session unarchive lead2");
+    }
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions"), 4);
+    assert_eq!(events(&env, "session-registered").len(), 1);
 }
 
 // ---------- dead Lead panes (contract §3.6, §3.7 E2; commands.md §10.4) ----------

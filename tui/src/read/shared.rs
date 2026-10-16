@@ -217,6 +217,8 @@ pub struct SessionNode {
     pub grounded_lead: bool,
     /// The ● of the tree: [`needs_you`], derived from the Session's Events.
     pub needs_you: bool,
+    /// When it was archived (contract §4.5); archived Sessions are in the model.
+    pub archived_at: Option<String>,
 }
 
 /// The ● rule (cockpit parity, §1.3): a Session needs the User when it is
@@ -233,6 +235,10 @@ impl SessionNode {
     pub fn is_active(&self) -> bool {
         self.place == Place::Chat
     }
+
+    pub fn is_archived(&self) -> bool {
+        self.archived_at.is_some()
+    }
 }
 
 const SESSION_SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt, s.name, s.file, s.forked_from, s.tier,
@@ -244,7 +250,8 @@ const SESSION_SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt,
        (SELECT e.id FROM events e WHERE e.session = s.id AND e.kind = 'session-state'
            AND json_extract(e.data, '$.to') = 'idle' ORDER BY e.id DESC LIMIT 1),
        (SELECT e.id FROM events e WHERE e.session = s.id AND e.kind = 'session-moved'
-           AND json_extract(e.data, '$.place') = 'chat' ORDER BY e.id DESC LIMIT 1)
+           AND json_extract(e.data, '$.place') = 'chat' ORDER BY e.id DESC LIMIT 1),
+       s.archived_at
   FROM sessions s";
 
 /// The Sessions matching `filter` (SQL after `WHERE`, over `s`), oldest first.
@@ -279,6 +286,7 @@ pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -
             place,
             plan_lead: r.get(15)?,
             grounded_lead: r.get(16)?,
+            archived_at: r.get(19)?,
             id: session,
         });
     }
@@ -307,9 +315,15 @@ pub struct PlanHead {
     pub locked_at: Option<String>,
     pub all_merged_at: Option<String>,
     pub done_at: Option<String>,
+    /// When it was archived (contract §4.5); archived Plans are in the model.
+    pub archived_at: Option<String>,
 }
 
 impl PlanHead {
+    pub fn is_archived(&self) -> bool {
+        self.archived_at.is_some()
+    }
+
     /// The Plan waits on the User: an open Escalation, a pending Plan review, or a Session with the ● (`SessionNode::needs_you`).
     pub fn needs_you(&self, sessions: &[SessionNode]) -> bool {
         self.open_escalations > 0 || self.review_pending || sessions.iter().any(|s| s.needs_you)
@@ -361,7 +375,7 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
 
     let mut stmt = conn.prepare(
         "SELECT p.id, p.context, p.title, p.jira, r.repo, r.base, r.lead_branch, p.phase, p.lead_session, r.pr_number,
-                r.pr_url, r.pr_opened_at, r.pr_seen, r.pr_polled_at, p.created_at, p.locked_at, r.all_merged_at, p.done_at
+                r.pr_url, r.pr_opened_at, r.pr_seen, r.pr_polled_at, p.created_at, p.locked_at, r.all_merged_at, p.done_at, p.archived_at
            FROM plans p JOIN prs r ON r.plan = p.id
                 AND r.key = (SELECT key FROM prs WHERE plan = p.id ORDER BY created_txn, key LIMIT 1)
           WHERE ?1 IS NULL OR p.id = ?1 ORDER BY p.created_at, p.id",
@@ -411,6 +425,7 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
             locked_at: r.get(15)?,
             all_merged_at: r.get(16)?,
             done_at: r.get(17)?,
+            archived_at: r.get(18)?,
             phase,
             pr,
             id: plan,

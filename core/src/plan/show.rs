@@ -29,6 +29,8 @@ pub(super) struct Head {
     pub created_at: String,
     pub locked_at: Option<String>,
     pub done_at: Option<String>,
+    /// When it was archived (contract §2.2 "Archived"), else none.
+    pub archived_at: Option<String>,
 }
 
 impl Head {
@@ -37,14 +39,15 @@ impl Head {
         json!({
             "id": self.id, "context": self.context, "title": self.title, "jira": self.jira, "phase": self.phase.as_str(),
             "lead_session": self.lead_session, "created_at": self.created_at, "locked_at": self.locked_at, "done_at": self.done_at,
+            "archived_at": self.archived_at,
         })
     }
 }
 
-type RawHead = (String, String, String, Option<String>, String, String, String, Option<String>, Option<String>);
+type RawHead = (String, String, String, Option<String>, String, String, String, Option<String>, Option<String>, Option<String>);
 
 fn parse_head(raw: RawHead) -> Result<Head, CpdError> {
-    let (id, context, title, jira, phase, lead_session, created_at, locked_at, done_at) = raw;
+    let (id, context, title, jira, phase, lead_session, created_at, locked_at, done_at, archived_at) = raw;
     let id = PlanId::parse(&id).map_err(|_| bad_row(format!("Plan id {id:?}")))?;
     let field = |name: &str, value: &str| bad_row(format!("Plan {id} has {name} {value:?}"));
     Ok(Head {
@@ -56,14 +59,15 @@ fn parse_head(raw: RawHead) -> Result<Head, CpdError> {
         created_at,
         locked_at,
         done_at,
+        archived_at,
         id,
     })
 }
 
-const HEAD_COLUMNS: &str = "id, context, title, jira, phase, lead_session, created_at, locked_at, done_at";
+const HEAD_COLUMNS: &str = "id, context, title, jira, phase, lead_session, created_at, locked_at, done_at, archived_at";
 
 fn head_row(r: &rusqlite::Row) -> rusqlite::Result<RawHead> {
-    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?))
+    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?))
 }
 
 /// The Plan `id`, else `plan_not_found`.

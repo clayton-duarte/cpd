@@ -8,6 +8,12 @@ use cpd_core::session::{Role, State};
 use crate::read::{ContextNode, Place, PlanHead, PlanNode, SessionNode, Tree};
 use crate::read::JobCounts;
 
+/// The title of a Context or Plan `id`: the id with a capital, so that a test can tell a title from an id and a name.
+fn titled(id: &str) -> String {
+    let mut chars = id.chars();
+    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
 pub fn session(id: &str, name: &str, state: State, label: Option<&str>, place: Place) -> SessionNode {
     SessionNode {
         id: SessionId::parse(id).unwrap(),
@@ -28,6 +34,7 @@ pub fn session(id: &str, name: &str, state: State, label: Option<&str>, place: P
         plan_lead: false,
         grounded_lead: false,
         needs_you: state == State::Blocked,
+        archived_at: None,
     }
 }
 
@@ -47,7 +54,7 @@ pub fn plan(id: &str, context: &str, phase: Phase, counts: [usize; 6], mut lead:
         head: PlanHead {
             id: pid,
             context: ContextId::parse(context).unwrap(),
-            title: format!("Title of {id}"),
+            title: titled(id),
             jira: None,
             repo: format!("/repo/{id}"),
             base: "main".into(),
@@ -62,6 +69,7 @@ pub fn plan(id: &str, context: &str, phase: Phase, counts: [usize; 6], mut lead:
             locked_at: None,
             all_merged_at: None,
             done_at: None,
+            archived_at: None,
         },
         sessions,
     }
@@ -70,12 +78,13 @@ pub fn plan(id: &str, context: &str, phase: Phase, counts: [usize; 6], mut lead:
 pub fn context(id: &str, plans: Vec<PlanNode>) -> ContextNode {
     ContextNode {
         id: ContextId::parse(id).unwrap(),
-        title: format!("Title of {id}"),
+        title: titled(id),
         jira: None,
         grounded_lead: None,
         records: 0,
         open_questions: 0,
         sync_failing: false,
+        archived_at: None,
         plans,
     }
 }
@@ -118,3 +127,22 @@ pub fn sample() -> Tree {
         context("gamma", vec![]),
     ])
 }
+
+pub const WHEN: &str = "2026-02-01T00:00:00.000Z";
+
+    /// `sample()` with archived objects: in `alpha`, the fork `f-blocked` of `ship` and the Plan `old`; and a
+    /// whole archived Context `zeta` with its Plan `zp` (a Lead and a fork).
+pub fn archived() -> Tree {
+        let mut t = sample();
+        t.contexts[0].plans[0].sessions[2].archived_at = Some(WHEN.into());
+        t.contexts[0].plans[2].head.archived_at = Some(WHEN.into());
+        let mut zp = plan("zp", "zeta", Phase::Dispatch, [0, 0, 0, 0, 0, 2], session("l-zp", "zp lead", State::Stopped, None, Place::None), vec![session("f-zp", "zp fork", State::Stopped, None, Place::None)]);
+        zp.head.archived_at = Some(WHEN.into());
+        for s in &mut zp.sessions {
+            s.archived_at = Some(WHEN.into());
+        }
+        let mut zeta = context("zeta", vec![zp]);
+        zeta.archived_at = Some(WHEN.into());
+        t.contexts.push(zeta);
+        t
+    }

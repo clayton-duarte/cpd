@@ -74,6 +74,8 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `store_tampered` | 1 | a write command, when the schema check fails (§4.3); read commands report it in `tamper` instead |
 | `store_busy` | 5 | no write lock within `store_busy_ms` (§4.2) |
 | `context_not_found`, `plan_not_found`, `pr_not_found`, `job_not_found`, `attempt_not_found`, `escalation_not_found`, `review_not_found`, `session_not_found` | 4 | the selected or named object does not exist. (A Context record that names a missing record is `record_not_found`, exit 3, §4.6) |
+| `archive_blocked` | 3 | `context archive`, `plan archive` or `session archive` found a live object (contract §2.2 "Archived"); `details.blockers` lists each, `details.next` says what to do |
+| `archived` | 3 | the object (or its Context or Plan) is archived and the command does not work on archived objects; `details.next` is the unarchive command |
 | `cas_lost` | 3 | a compare-and-swap found the state changed since it was read (§4.2); rerun the command |
 | `illegal_transition` | 3 | a transition not in §3, refused by the command or by a trigger |
 | `locked_job_tampered` | 3 | a Locked Job's fingerprint does not match (§2.3) |
@@ -104,6 +106,8 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `context list`, `context show` | Lead, TUI | no | §2.2 |
 | `context decide`, `note`, `ask`, `answer` | Lead | yes | §4.6 |
 | `context sync` | engine E6, User | yes | §4.6 |
+| `context rename` | User (TUI) | yes | §2.2 |
+| `context archive`, `unarchive` | User (TUI) | yes | §2.2 |
 | `plan new` | User (TUI), Lead | yes | §3.1, §6.7 |
 | `plan list`, `plan show` | Lead, TUI | no | |
 | `plan phase plan` | Lead | yes | §3.1 |
@@ -111,6 +115,8 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `plan review` | Lead (tool `cpd_plan_review`) | yes | §2.2 Plan review |
 | `plan decide` | pi adapter | yes | §2.2 Plan review |
 | `plan lock` | Lead | yes | §3.1, §7.2 |
+| `plan rename` | User (TUI) | yes | §2.2 |
+| `plan archive`, `unarchive` | User (TUI) | yes | §2.2 |
 | `job add`, `edit`, `cancel`, `retry` | Lead | yes | §3.2 |
 | `job dispatch` | Lead | yes | §3.4 |
 | `job list`, `job show` | Lead, TUI | no | |
@@ -125,6 +131,7 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `pr poll` | engine E5 | yes | §7.6 |
 | `session list`, `session show` | TUI, Lead | no | |
 | `session fork`, `open`, `park`, `close`, `rename` | User (TUI), Lead | yes | §6.4, §6.7 |
+| `session archive`, `unarchive` | User (TUI) | yes | §2.2 |
 | `session state` | pi adapter | yes | §3.6 |
 | `session run` (internal) | cockpit panes | yes | §6.7 |
 | `events list`, `events follow` | pi adapter, TUI, scripts | no | §5.4 |
@@ -180,13 +187,13 @@ No flags, no preconditions, no effects (one read transaction).
 
 ```json
 {"ok": true, "contexts": [
-  {"id": "building-cpd", "title": "Building cpd", "jira": null, "grounded": true, "lead_session": "6f1c…", "grounded_seq": 41,
+  {"id": "building-cpd", "title": "Building cpd", "jira": null, "archived_at": null, "grounded": true, "lead_session": "6f1c…", "grounded_seq": 41,
    "records": 57, "open_questions": 2, "sync_failing": false,
-   "plans": [{"id": "cpd2", "title": "cpd in Rust", "phase": "dispatch", "lead_session": "596d007f-…"}]}],
+   "plans": [{"id": "cpd2", "title": "cpd in Rust", "phase": "dispatch", "lead_session": "596d007f-…", "archived_at": null}]}],
  "events_cursor": 48213}
 ```
 
-`events_cursor` is the highest Event id visible in the same read transaction (§17). Idempotent: read-only.
+`archived_at` (here and on each Plan) is null, or the time the object was archived (contract §2.2 "Archived"). Archived Contexts and Plans are listed too. `events_cursor` is the highest Event id visible in the same read transaction (§17). Idempotent: read-only.
 
 ### 3.3 `context show`
 
@@ -282,6 +289,71 @@ Effects (§4.6, under the Context lock):
 
 Without `--context`, one failing Context makes the whole result a failure (exit of the first failure) whose `details.contexts` holds every Context's entry, failures included as `{"id", "error": {code, message}}`; the others are still synced. Idempotent: yes; a second run imports and pushes nothing.
 
+### 3.7 `context rename`
+
+```
+cpd context rename <id> --title <text>
+```
+
+Changes the Context's visible label (contract §2.2: ids are immutable, titles editable). `--title` is required, 1–200 characters like `context new`'s, no control characters.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Context exists | `context_not_found` | 4 |
+
+Effects: an unchanged title: `"already": true`, nothing written. Otherwise **rows**, one transaction: `contexts.title`; **Event** `context-renamed` `{title}`. Only the database changes: the git store's `context.json` is not touched (the git store is going away), so another machine keeps the old title.
+
+```json
+{"ok": true, "context": {"id": "building-cpd", "title": "Building cpd 2"}}
+```
+
+Idempotent: yes.
+
+### 3.8 `context archive`
+
+```
+cpd context archive <id>
+```
+
+Archives the Context with its Plans, all their Sessions and its grounded Lead (contract §2.2 "Archived").
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Context exists | `context_not_found` | 4 |
+| no object of the cascade is live: no Session `working` or `blocked`, no Job `queued` or `running`, no open Escalation, no pending Plan review; `details.blockers` lists each as `{kind, id, reason}` | `archive_blocked` | 3 |
+| no Lead of the cascade is in the chat slot; `details.next` = `cpd session park` | `in_chat_slot` | 3 |
+
+Effects, in this order (all or nothing):
+1. **Check** every object of the cascade. If any blocks, nothing is written and nothing is closed.
+2. **tmux:** close every live Lead pane exactly as `session close` does (§10.9): `kill-pane`, `state = stopped`, `tmux_pane = NULL`, with its `session-state` and `session-moved` Events. pi stops; the session files stay.
+3. **Rows**, one transaction that re-checks the rule first (`archive_blocked` if something became live meanwhile): `archived_at` = now on the Context, on each of its Plans and on each Session of the cascade, that is not archived yet. One **Event** per object changed: `context-archived` `{archived: true}`, `plan-archived`, `session-archived`.
+
+```json
+{"ok": true, "archived": [{"kind": "context", "id": "building-cpd"}, {"kind": "plan", "id": "cpd2"}, {"kind": "session", "id": "596d007f-…"}], "closed": ["%41"]}
+```
+
+`closed` lists the panes closed in step 2. Idempotent: yes; a Context that is archived already (and whose cascade has nothing to archive) returns `"already": true`, writes nothing and closes nothing.
+
+### 3.9 `context unarchive`
+
+```
+cpd context unarchive <id>
+```
+
+Clears `archived_at` on the Context and, with the same cascade as `context archive`, on its Plans and Sessions.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Context exists | `context_not_found` | 4 |
+
+Effects: **rows**, one transaction: `archived_at = NULL` on the Context and every archived Plan and Session of the cascade; one **Event** per object changed (`context-archived`, `plan-archived`, `session-archived`, each with `{archived: false}`). No tmux: no pane is touched, and `session open` resumes a Lead later (§10.4). No archive rule applies.
+
+```json
+{"ok": true, "archived": [{"kind": "context", "id": "building-cpd"}, {"kind": "plan", "id": "cpd2"}, {"kind": "session", "id": "596d007f-…"}], "closed": []}
+```
+
+`archived` lists the objects changed (their `archived_at` is now null); `closed` is always empty. Idempotent: yes; nothing archived: `"already": true`, nothing written.
+
 ## 4. `plan`
 
 A Plan (§2.2) and its phases (§3.1). Replaces cpd 1's `workflow` group (D3) and `plan` group.
@@ -307,6 +379,7 @@ A Plan has no repo (R34, A12): its PRs are added later with `pr add` (§9.4), an
 |---|---|---|
 | the Context exists | `context_not_found` | 4 |
 | no Plan with this id, unless every flag matches it (then the result is `already`) | `plan_exists` | 3 |
+| the Context is not archived; `details.next` = `cpd context unarchive <c>` | `archived` | 3 |
 
 Effects, in this order:
 1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the realpath of the caller's cwd; `tier = lead_tier`; `forked_from` = the Context's `lead_session` or null; `state = stopped`); `plans` (`phase = grounding`, `lead_session` = the new Session); no `prs` row. **Events** `plan-created` `{title, jira, lead_session, forked_from, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
@@ -331,10 +404,10 @@ Idempotent: yes. With the same flags it returns `"already": true` and redoes any
 cpd plan list [--context <id>] [--phase <phase>]
 ```
 
-`--phase` is one of §3.1's phases. Effects: none. Each Plan lists its PRs (R34) in key order, `cancelled` ones included, with the fields the Dispatch column shows (§13.2, §17): `key`, `repo`, `status`, `pr` (`{number, url, opened_at}` or null), `pr_title`, `pr_review_decision`, `pr_checks`.
+`--phase` is one of §3.1's phases. Archived Plans are listed, with `archived_at` (null, or a time). Effects: none. Each Plan lists its PRs (R34) in key order, `cancelled` ones included, with the fields the Dispatch column shows (§13.2, §17): `key`, `repo`, `status`, `pr` (`{number, url, opened_at}` or null), `pr_title`, `pr_review_decision`, `pr_checks`.
 
 ```json
-{"ok": true, "plans": [{"id": "cpd2", "context": "building-cpd", "title": "cpd in Rust", "phase": "dispatch", "lead_session": "596d007f-…",
+{"ok": true, "plans": [{"id": "cpd2", "context": "building-cpd", "title": "cpd in Rust", "phase": "dispatch", "lead_session": "596d007f-…", "archived_at": null,
   "counts": {"draft": 0, "queued": 2, "running": 1, "merged": 2, "failed": 0, "cancelled": 0},
   "prs": [{"key": "cpd", "repo": "/home/clayton/projects/cpd", "status": "dispatch", "pr": null, "pr_title": null, "pr_review_decision": null, "pr_checks": null}]}],
  "events_cursor": 48213}
@@ -354,7 +427,7 @@ Output: every field of the Plan (§2.2); `prs` (R34, A14), every PR of the Plan 
 
 ```json
 {"ok": true,
- "plan": {"id": "cpd2", "context": "building-cpd", "title": "cpd in Rust", "jira": null, "phase": "dispatch", "lead_session": "596d007f-…", "created_at": "…", "locked_at": "…", "done_at": null},
+ "plan": {"id": "cpd2", "context": "building-cpd", "title": "cpd in Rust", "jira": null, "phase": "dispatch", "lead_session": "596d007f-…", "created_at": "…", "locked_at": "…", "done_at": null, "archived_at": null},
  "prs": [{"key": "cpd", "repo": "/home/clayton/projects/cpd", "base": "main", "needs": [], "status": "dispatch", "lead_branch": "cpd/cpd2/cpd", "lead_worktree": "/home/clayton/projects/cpd.cpd2.cpd",
           "pr": null, "pr_seen": {"checks": {}, "reviewIds": [], "commentIds": []}, "pr_title": null, "pr_review_decision": null, "pr_checks": null, "all_merged_at": null, "start_failed_at": null,
           "created_at": "…", "started_at": "…", "merged_at": null, "jobs": ["contract-core", "contract-commands"]},
@@ -485,6 +558,72 @@ Effects (§3.1, §3.8, §7.2; R34, A8): every PR's `draft` Jobs are approved at 
 ```
 
 If the engine cannot be started, the Plan stays locked and the result is `watch_start_failed` (exit 1) with `details.next` = `cpd watch --ensure` (cpd 1's `watch_pane_failed`, renamed). Idempotent: yes; in phase `dispatch` it returns `"already": true` and still runs `watch --ensure`.
+
+### 4.9 `plan rename`
+
+```
+cpd plan rename [--plan <id>] --title <text>
+```
+
+Changes the Plan's title, the label the tree shows (contract §2.2). `--title` is required, as `plan new`'s.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Plan exists | `plan_not_found` | 4 |
+
+Effects: an unchanged title: `"already": true`, nothing written. Otherwise **rows**, one transaction: `plans.title`; **Event** `plan-renamed` `{title}`. The Context store's `plan` record keeps the old title. Archived Plans can be renamed.
+
+```json
+{"ok": true, "plan": {"id": "cpd2", "context": "building-cpd", "title": "cpd in Rust, done"}}
+```
+
+Idempotent: yes.
+
+### 4.10 `plan archive`
+
+```
+cpd plan archive [--plan <id>]
+```
+
+Archives the Plan with its Lead and its side forks (contract §2.2 "Archived").
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Plan exists | `plan_not_found` | 4 |
+| no object of the cascade is live: no Session `working` or `blocked`, no Job `queued` or `running`, no open Escalation, no pending Plan review; `details.blockers` lists each as `{kind, id, reason}`. The phase does not matter: a Plan in `pr` is archivable, and the engine keeps polling its PR | `archive_blocked` | 3 |
+| neither the Lead nor a side fork is in the chat slot; `details.next` = `cpd session park` | `in_chat_slot` | 3 |
+
+Effects, in this order (all or nothing):
+1. **Check** every object of the cascade; nothing is written if any blocks.
+2. **tmux:** close every live Lead pane as `session close` does (§10.9).
+3. **Rows**, one transaction that re-checks the rule: `archived_at` = now on the Plan and each of its Sessions not archived yet. One **Event** per object: `plan-archived` `{archived: true}`, `session-archived`.
+
+```json
+{"ok": true, "archived": [{"kind": "plan", "id": "cpd2"}, {"kind": "session", "id": "596d007f-…"}], "closed": ["%41"]}
+```
+
+Idempotent: yes; already archived: `"already": true`, nothing written, nothing closed.
+
+### 4.11 `plan unarchive`
+
+```
+cpd plan unarchive [--plan <id>]
+```
+
+Clears `archived_at` on the Plan and its Sessions.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Plan exists | `plan_not_found` | 4 |
+| the Plan's Context is not archived; `details.next` = `cpd context unarchive <c>` | `archived` | 3 |
+
+Effects: **rows**, one transaction: `archived_at = NULL` on the Plan and each archived Session of it; one **Event** per object (`plan-archived`, `session-archived`, each `{archived: false}`). No tmux and no archive rule.
+
+```json
+{"ok": true, "archived": [{"kind": "plan", "id": "cpd2"}, {"kind": "session", "id": "596d007f-…"}], "closed": []}
+```
+
+Idempotent: yes; not archived: `"already": true`, nothing written.
 
 ## 5. `job`
 
@@ -1019,13 +1158,13 @@ Sessions (§2.2, §3.6) and their tmux panes (§6). Every tmux call is `tmux -L 
 cpd session list [--context <id>] [--plan <id>] [--role <role>] [--state <state>]
 ```
 
-Filters combine with AND; `--role` and `--state` may repeat. Without filters: every Session. Here `--context` and `--plan` are filters only: neither falls back to `CPD_PLAN`.
+Filters combine with AND; `--role` and `--state` may repeat. Without filters: every Session, archived ones included (`archived_at` is null or a time). Here `--context` and `--plan` are filters only: neither falls back to `CPD_PLAN`.
 
 Effects: none; one read transaction.
 
 ```json
 {"ok": true, "sessions": [
-  {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "blocked", "state_label": "cpd: Worker question", "state_at": "…",
+  {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "blocked", "state_label": "cpd: Worker question", "state_at": "…", "archived_at": null,
    "place": "chat", "tmux_pane": "%12", "file": "/home/clayton/.pi/agent/sessions/…_596d007f-….jsonl", "forked_from": "6f1c…", "plan_lead": true, "grounded_lead": false, "tier": "O3", "cwd": "/home/clayton/projects/cpd"}],
  "events_cursor": 48213}
 ```
@@ -1066,6 +1205,7 @@ cpd session fork <source> [--plan <id>] [--name <name>] [--message-file <file>]
 |---|---|---|
 | the source is a `lead` Session | `not_a_lead` | 3 |
 | a Plan is known: `--plan`, else the source's Plan (a grounded Lead has none and is forked only by `plan new`) | `plan_required` | 2 |
+| the source is not archived; `details.next` = `cpd session unarchive <source>` | `archived` | 3 |
 | the cockpit's tmux session (`tmux.cockpit_session`) exists, checked before anything is written; `details.next` = `cpd tui` | `no_cockpit` | 3 |
 
 Effects:
@@ -1091,6 +1231,7 @@ Brings a Lead into the chat slot (§6.4).
 |---|---|---|
 | the Session is a `lead` | `not_a_lead` | 3 |
 | it has a Plan (a grounded Lead is never typed into, §3.1) | `grounded_lead` | 3 |
+| it is not archived; `details.next` = `cpd session unarchive <id>` | `archived` | 3 |
 | the cockpit's `main` window and its chat slot exist; `details.next` = `cpd tui` | `no_cockpit` | 3 |
 
 Effects:
@@ -1213,6 +1354,53 @@ Effects:
 
 Idempotent: yes.
 
+### 10.10 `session archive`
+
+```
+cpd session archive <id>
+```
+
+Archives one Session (contract §2.2 "Archived"). The §2 index row is added by the Job that implements the command, in the same commit.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Session exists | `session_not_found` | 4 |
+| it is a `lead` (a Worker's Session is archived only by its Plan's cascade) | `not_a_lead` | 3 |
+| it is not its Plan's own Lead (`plans.lead_session`); `details.next` = `cpd plan archive --plan <p>` | `archive_blocked` | 3 |
+| its state is not `working` or `blocked`; `details.blockers` lists it | `archive_blocked` | 3 |
+| it is not in the chat slot; `details.next` = `cpd session park` | `in_chat_slot` | 3 |
+
+Effects, in this order:
+1. **Check** the rule above; nothing is written if it blocks.
+2. **tmux:** a live pane is closed as `session close` does (§10.9).
+3. **Rows**, one transaction that re-checks the rule: `sessions.archived_at` = now; **Event** `session-archived` `{archived: true}`.
+
+```json
+{"ok": true, "archived": [{"kind": "session", "id": "a41b…"}], "closed": ["%52"]}
+```
+
+Idempotent: yes; already archived: `"already": true`, nothing written, nothing closed.
+
+### 10.11 `session unarchive`
+
+```
+cpd session unarchive <id>
+```
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Session exists | `session_not_found` | 4 |
+| it is a `lead` | `not_a_lead` | 3 |
+| its Plan is not archived (nor its Context); `details.next` = `cpd plan unarchive --plan <p>` or `cpd context unarchive <c>` | `archived` | 3 |
+
+Effects: **rows**, one transaction: `sessions.archived_at = NULL`; **Event** `session-archived` `{archived: false}`. No tmux: no pane is started; `session open` resumes the Lead (§10.4).
+
+```json
+{"ok": true, "archived": [{"kind": "session", "id": "a41b…"}], "closed": []}
+```
+
+Idempotent: yes; not archived: `"already": true`, nothing written.
+
 ## 11. `events`
 
 §5. Selection: `--plan <id>`, `--context <id>` or `--session <id>`, at most one (`usage`), or none for every Event; `--kind <kind>` may repeat (a kind not in §5.2 is `usage`). These flags are filters: they do not fall back to `CPD_PLAN` or `CPD_SESSION`.
@@ -1328,7 +1516,7 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
 
 | View | What it is | Keys and mouse |
 |---|---|---|
-| `tree` | the **Context column**: Contexts, their Plans' Lead Sessions, and counters | ↑↓ and j/k move the cursor, Enter opens the Lead in the chat slot, `n` a new Plan, `x` closes a Lead's pane, `?` the legend; clicks as below |
+| `tree` | the **Context column**: Contexts, their Plans' Lead Sessions, and counters | ↑↓ and j/k move the cursor, Enter opens the Lead in the chat slot, `n` a new Plan, `x` closes a Lead's pane, `?` the legend; clicks and the right-click menu as below |
 | `plan` | the **Plan view**: one box per PR of the chat slot's Plan, each holding the flowchart of its Jobs, under a row of tabs | ←→↑↓ and h/j/k/l select, Enter opens a Job's Worker, Esc clears the selection; the wheel scrolls (3 rows, 4 columns); clicks as below; no `q` |
 | `widgets` | the **Dispatch column**: the machine, the cockpit's PRs, git and Jira (future) | `q` quits; nothing else |
 | `worker` | the read-only Worker view: the Attempt's Worker session file (vision decision 5), `you` and its text in cyan, `agent` in green, `→ tool` in yellow, `← last` dim | `q` or Esc quits; ↑/k, ↓/j, PageUp, PageDown and the wheel (3 rows) scroll; End or `G` follows the end again; no other keys |
@@ -1343,7 +1531,22 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
 - **Clicks.** A click on a Session opens it in the chat slot and focuses the chat (`session open`, then `select-pane`); a click on a Context row collapses or expands it. Clicks are ignored while a prompt is open.
 - **`n`** asks for a name in one inline row at the bottom (Enter starts, Esc cancels, an empty name is refused) and runs `plan new` (§4.1) in the selected Session's Context: the Plan forks the Context's grounded Lead (R15), the one deviation from cpd 1's `n`, which forked the selected session. On a Context row it says `pick the session to fork`.
 - **`x`** closes the selected Session's pane after the inline prompt `Close <label>? pi stops; the session file stays (y/N)`, preceded by `<label> is working.` when its state is `working`; only `y` closes. It runs `cpd session close <id>` (§10.9). The Session in the chat slot is refused with `switch to another session first`, also when it moved there while the prompt was open. On a Context row it does nothing. `<label>` is the Session's name.
-- **`?`** opens the legend popup. The view has no other key; what a key used to do is still a command.
+- **`?`** opens the legend popup. The view has no other key that opens the menu or acts on it; what a key used to do is still a command.
+- **Labels** (contract §2.2: ids are unique, immutable and need not be readable; the title is the visible label). A Context row shows the Context's **title**, a Plan row the Plan's **title** (not the Lead's name), a fork row (a side Session) the Session's **name**. (This supersedes the Context id and Lead name drawn so far.)
+- **Archived rows.** Archived Contexts collapse into one `…` row at the end of the Context list; the archived Plans and Sessions of a Context collapse into one `…` row at the end of that Context's subtree. A click on a `…` row expands them: they are drawn muted (grey, the palette's Nothing colour) with dotted, muted tree lines; a click on that dotted line collapses them again. Expanded or not is view state only: no command, no write. Every row of an archived object carries `archived_at` from the read model (§17).
+- **Right-click menu** (**every item is a `cpd` command**: the tree only runs commands). A right click opens a menu, drawn by the view (ratatui) over the tree at the click and clamped inside the pane. ↑↓ and Enter pick an item, Esc closes it; a click picks an item; a click outside closes it. There is **no key** that opens the menu: `n`, `x` and `?` stay as above. Text is typed in the inline prompt row of the `n` key (`tui/src/tree/prompt.rs`); **Rename…** starts with the current text; **Archive** and **Close** ask `y/N` first, as `x` does. The items by row:
+
+  | Row | Items | Command each runs |
+  |---|---|---|
+  | Context | New Plan…, Rename…, Archive | `plan new` (§4.1), `context rename` (§3.7), `context archive` (§3.8) |
+  | Plan | New session…, Rename…, Archive | `session fork <the Plan's Lead>` (§10.3), `plan rename` (§4.9), `plan archive` (§4.10) |
+  | Fork (side Session) | Open, Rename…, Fork…, Close, Archive | `session open` (§10.4), `session rename` (§10.7, `--session <id>`), `session fork` (§10.3), `session close` (§10.9), `session archive` (§10.10) |
+  | empty tree area | New Context… | `context new` (§3.1) |
+  | any archived row, and the children of a `…` row | Unarchive only | `context unarchive` (§3.9), `plan unarchive` (§4.11), `session unarchive` (§10.11) |
+
+  A refusal (`archive_blocked`, `in_chat_slot`, `archived`, …) is shown in the prompt row as the command's own message.
+- **New Plan… and New Context…** ask only a title; the tree derives the id. The id is a lowercase ASCII slug of the title: each run of other characters becomes `-`, leading non-letters are dropped, and it is cut to fit the id pattern (Plan `^[a-z][a-z0-9-]{1,23}$`, Context: contract §2.1); `-2`, `-3`, … are appended while the id is taken in the tree's snapshot. New Plan… runs `plan new <id> --context=<c> --title=<title>`: no repo, a Plan has none (R34, A12; its PRs are added with `pr add`). New Context… runs `context new <id> --title=<title>`.
+- **Right button.** The view relies on tmux 3.4's default root `MouseDown3Pane` binding: believed to pass the click to a pane whose app captures the mouse (`mouse_any_flag`), and to show tmux's own menu otherwise (**unverified**). cpd adds no binding for it (§6.1, §13.1 unchanged).
 
 **`plan`.**
 - **Top row:** only ` <context id> ▸ ` (dim) and the tabs, over a separator line (`Borders::TOP`, colour 8). Nothing at the right: no PR, no workers count, no Plan title.
@@ -1507,6 +1710,7 @@ Events arrive in id order; the follower already applied §11's `--session` rule,
 | `plan-review` with `status: approved` or `rejected`, for a pending entry of this session | a decision made outside plannotator (§15.5 "Deciding elsewhere"): closes `plan-review:<review>`; message `cpd-plan-decision`, **turn** (own custom type, not `cpd`). For any other review: ignored | |
 | `session-renamed` (`session` = itself) | `pi.setSessionName(name)` and `ctx.ui.notify("cpd: session renamed to \"<name>\"")`; no message, no turn | same |
 | `attempt-nudge` (`session` = itself) | | message with `data.prompt` as content, **turn** |
+| `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | ignored: no message, no turn | ignored |
 | every other kind | ignored | ignored |
 
 This is §5.3's table; the `plan-review` row is the Plan review protocol §5.3 leaves to this file (amendment 6, §19). A blocking reason opened twice or closed when not open changes nothing (cpd 1 `blocked.ts`, kept), which makes replays harmless.
@@ -1604,7 +1808,7 @@ Outline §8 and D4: the views take one **snapshot** with a read command, then **
 
 | View (`@cpd_view`) | Snapshot (the read of the command named) | Events it acts on | What it updates |
 |---|---|---|---|
-| `tree` (Context column) | `cpd context list`, `cpd session list` | `context-created`, `context-grounded`, `plan-created`, `plan-phase`, `plan-done`, `session-registered`, `session-state`, `session-moved`, `session-renamed` | Contexts, their Plans' Lead Sessions, then the Sessions forked by `session fork` as siblings under their Context (B1), each with its state, name, Job counters (Plan Leads only) and **needs-you** dot (rule below) |
+| `tree` (Context column) | `cpd context list`, `cpd session list` | `context-created`, `context-grounded`, `plan-created`, `plan-phase`, `plan-done`, `session-registered`, `session-state`, `session-moved`, `session-renamed`, `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | Contexts, their Plans' Lead Sessions, then the Sessions forked by `session fork` as siblings under their Context (B1), each with its title or name, state, `archived_at` (archived objects are in the read model), Job counters (Plan Leads only) and **needs-you** dot (rule below) |
 | `plan` (centre top) | `cpd plan show --plan <p>` for the Plan of the Lead in the chat slot (its `prs`, each PR's key, repo, base, needs, status, `pr`, `pr_seen.closed` and `jobs`, for the PR boxes, §13.2), and the Context's Lead Sessions that have a pane (the tabs) | every Event with `plan = p` (the `pr-*` kinds and `pr-feedback` included: they change a box's title or add a box); `session-moved` with `place: "chat"` (the slot changed: switch Plan and take a new snapshot) | one box per PR that is not `cancelled`, left to right by needs and linked by them, each with the flowchart of its Jobs, Attempts and Tiers (R34, A15); and the tabs. Not drawn, so not read: open Escalations, the latest Plan review |
 | `widgets` (Dispatch column) | `cpd plan list` for the Plans whose Lead Session has a pane in the cockpit (`session-moved` places `chat` or `parked`), with each one's PRs: number, state, checks, review decision and title (`pr`, `status`, `pr_title`, `pr_review_decision`, `pr_checks` of §4.2, §7.6, contract §4.4); and the host's load average (`/proc/loadavg`; on macOS `sysctl -n vm.loadavg`), re-read every 2 s with no Event | `plan-created`, `plan-phase`, `pr-opened`, `pr-feedback`, `pr-merged`, `plan-done` (and `session-moved`, for which Plans have a pane) | the machine's name and load, and the pull requests of each Plan. No engine, slots, Escalations or Events |
 | `statusbar` (bottom row) | the slots and config `concurrency`: the Attempts not ended, and `concurrency` | any (re-read when the store's highest Event id moved, coalesced to 500 ms, at least every 2 s); no subprocess, no `gh` | `workers N/M` |
@@ -1621,7 +1825,7 @@ Outline §8 and D4: the views take one **snapshot** with a read command, then **
 
 **The tree's ● rule (needs you).** A Lead Session's dot is `●` when its state is `blocked`, or when it is `idle`, not in the chat slot, and its latest `session-state` Event with `to: "idle"` is newer than its latest `session-moved` Event with `place: "chat"` (never in the slot counts as older than everything). It is derived from Events, with no write: it replaces cpd 1's `@asking`, `@settled_at` and `@seen_at` pane options, and shows the same thing, a Lead that waits on the User or finished a turn the User has not seen.
 
-**Actions.** The views change state only through commands: selecting a Lead runs `cpd session open <id>`; the new-Plan key runs `cpd plan new …`; the close key runs `cpd session close <id>`; parking runs `cpd session park`; opening a Job's Worker opens a `cpd tui view worker` pane beside the chat (`split-window`, `@cpd_view worker`), which is the view's own layout, not Ledger state. The StatusBar's ⧉ click resets the layout (`resize-pane`, the view's own layout, not Ledger state), its legend button opens the legend popup and its ` ≡ logs ` button the logs popup (§13.2).
+**Actions.** The views change state only through commands: selecting a Lead runs `cpd session open <id>`; the new-Plan key runs `cpd plan new …`; the close key runs `cpd session close <id>`; each item of the tree's right-click menu runs the command §13.2 names; parking runs `cpd session park`; opening a Job's Worker opens a `cpd tui view worker` pane beside the chat (`split-window`, `@cpd_view worker`), which is the view's own layout, not Ledger state. The StatusBar's ⧉ click resets the layout (`resize-pane`, the view's own layout, not Ledger state), its legend button opens the legend popup and its ` ≡ logs ` button the logs popup (§13.2).
 
 Change from the spike and cpd 1's cockpit: the tree no longer discovers Sessions from tmux pane options (`@session_id`, `@agent_state`) or `leads/<id>/workflow`, and the plan view no longer reads `/tmp/cpd-tui/cache/`; both read the database through commands.
 
@@ -1652,7 +1856,7 @@ Applied to contract.md by Job contract-amend.
 
 This file specifies the following, which contract.md does not state or states otherwise. contract.md is not edited by this Job; the Lead appends a follow-up Job that applies this list. Each item names the contract.md section it changes.
 
-Rows 12–21 were added by Job `parity-contract` (cockpit parity, User, 2026-10-15, and R36); the checklist behind them is [cockpit-parity.md](cockpit-parity.md). Rows 12–14 and 16 are also applied to contract.md itself; rows 15 and 17–21 state what contract.md leaves to this file.
+Rows 22–27 were added by Job `docs` of Plan `tree-menu` (renames, archive and the tree's right-click menu); they are applied to contract.md itself. Rows 12–21 were added by Job `parity-contract` (cockpit parity, User, 2026-10-15, and R36); the checklist behind them is [cockpit-parity.md](cockpit-parity.md). Rows 12–14 and 16 are also applied to contract.md itself; rows 15 and 17–21 state what contract.md leaves to this file.
 
 | # | contract.md section | Amendment | Where here |
 |---|---|---|---|
@@ -1677,6 +1881,12 @@ Rows 12–21 were added by Job `parity-contract` (cockpit parity, User, 2026-10-
 | 19 | §6.2 (the views) | what each view reads, in process; the tree's ● (needs you) rule from Events; the plan row no longer reads Escalations, the Plan review or the PR | §17 |
 | 20 | §6.2 (the views) | the legend opens from the tree's `?` and the StatusBar button, not from the Dispatch column; its section titles say Context, and it lists no `cancelled` | §13.2 |
 | 21 | §6.2 (the views), R36 | the StatusBar's left side holds action buttons only (`⧉ `, ` ? legend `, ` ≡ logs `) and its right side read-only information; the Event log is the `logs` view, a popup the ` ≡ logs ` button opens, not part of the Dispatch column | §13.2, §17 |
+| 22 | §2.2 Context, Plan, Session | `archived_at` on the three; "Archived" (the archive rule, the cascade, the `archived` refusals); titles editable, ids immutable | §3.7–§3.9, §4.9–§4.11, §10.10–§10.11, §1.3 |
+| 23 | §4.5 | Migration 3: `archived_at` on `contexts`, `plans`, `sessions`; `events` recreated with the five new kinds | §3.2, §4.2, §10.1 |
+| 24 | §5.2 | Event kinds `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | §3.7–§3.9, §4.9–§4.11, §10.10–§10.11, §17 |
+| 25 | §5.3, delivery table | the adapter ignores the five kinds: no message, no turn | §15.3 |
+| 26 | §2.2 "Archived", §1.3 table of codes | refusals `archive_blocked` and `archived` (exit 3); `in_chat_slot` for archive | §1.3, §4.1, §10.3, §10.4 |
+| 27 | §6.2 (the views) | the tree: labels are titles and names, `…` rows for archived objects, the right-click menu | §13.2, §17 |
 
 ## 20. Sections changed by R19 and R20
 

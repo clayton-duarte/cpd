@@ -84,6 +84,23 @@ fn starts_the_server_once_with_the_contract_options() {
     assert_eq!(String::from_utf8_lossy(&size.stdout).trim(), "215x62");
 }
 
+/// How a right click reaches the tree (commands.md §13.2): cpd adds no `MouseDown3Pane` binding, so on a server it
+/// configured the key is tmux 3.4's own default, which selects the pane and passes the click on (`send-keys -M`) to
+/// an app that captures the mouse (`#{mouse_any_flag}`, which the tree sets), and shows tmux's menu otherwise.
+#[test]
+fn a_right_click_is_tmuxs_default_binding_that_passes_it_to_a_pane_that_captures_the_mouse() {
+    let s = server();
+    s.tmux.ensure_session("cpd", "main", &sleeper(s.env.root())).unwrap();
+    let out = s.env.tmux(&["list-keys", "-T", "root", "MouseDown3Pane"]);
+    let binding = String::from_utf8_lossy(&out.stdout).split_whitespace().collect::<Vec<_>>().join(" ");
+    let default_start = "bind-key -T root MouseDown3Pane if-shell -F -t = \"#{||:#{mouse_any_flag},#{&&:#{pane_in_mode},";
+    assert!(binding.starts_with(default_start), "{binding}");
+    assert!(binding.contains("{ select-pane -t = ; send-keys -M } { display-menu "), "{binding}");
+    // and cpd's own binding is on the same server, so the list is of this server's keys
+    let own = s.env.tmux(&["list-keys", "-T", "root", "MouseDown1Pane"]);
+    assert!(String::from_utf8_lossy(&own.stdout).contains("@cpd_view"));
+}
+
 /// Every option, binding and hook of contract §6.1: the reference's
 /// `tui/scripts/tmux.conf` lines 2–17, renamed, with the conditional hook.
 fn assert_server_options(s: &Server) {

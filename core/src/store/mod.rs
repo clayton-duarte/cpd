@@ -145,7 +145,7 @@ impl Store {
     /// §4.5: below N, migrate in one `BEGIN IMMEDIATE` transaction; above N, refuse.
     ///
     /// The transaction runs with foreign keys off and `legacy_alter_table` on
-    /// (§4.5 migration 3, step 1: both only take effect outside a
+    /// (§4.5 migration 4, step 1: both only take effect outside a
     /// transaction), so a migration can rebuild a table that others reference;
     /// `PRAGMA foreign_key_check` then holds before the commit (step 5). Both
     /// are restored afterwards, whether the migration committed or not.

@@ -13,14 +13,15 @@ use crate::ids::PrKey;
 pub(super) type Migration = fn(&Connection) -> Result<()>;
 
 /// Migrations `1..=N`, in order; `MIGRATIONS[i]` takes the schema to version `i + 1`.
-pub(super) const MIGRATIONS: &[Migration] = &[migration_1, migration_2, migration_3];
+pub(super) const MIGRATIONS: &[Migration] = &[migration_1, migration_2, migration_3, migration_4];
 
 /// The schema hash of each version (§4.3): `SCHEMA_HASHES[i]` is version `i + 1`'s.
 /// A test asserts that migrating an empty database gives each of them.
 pub(super) const SCHEMA_HASHES: &[&str] = &[
     "0c73adb58e9a2027348333015d1aaf952d3bc3b0923ea27bcd41cac1079dcced",
     "37449f2445f3d621405857abab17a5f3760382270a1b6a55f46a116792998646",
-    "f91dd416097aa862afda7c4b120efc99a220013a5521bce53290e776a878a332",
+    "c4529a6f3cd787333b8115bade42de35504eb4902773945cfbde80ba93acfc5f",
+    "62a082772ccbcd0c989f5181e3b934ba96a3ab3f1d9db81cf8e39cef5ef89579",
 ];
 
 const _: () = assert!(SCHEMA_HASHES.len() == MIGRATIONS.len(), "one schema hash per migration");
@@ -77,7 +78,21 @@ fn migration_2(conn: &Connection) -> Result<()> {
     create_history_triggers(conn, "plans", true)
 }
 
-/// The line of `0003.sql` that splits it into the part before the PRs are
+/// Archive and rename (§4.5): `archived_at` on `contexts`, `plans` and `sessions`
+/// and `events` rebuilt with five more kinds, so the three tables' history
+/// triggers are dropped and generated again to list the new column.
+fn migration_3(conn: &Connection) -> Result<()> {
+    conn.execute_batch(include_str!("migrations/0003.sql"))?;
+    for table in ["contexts", "plans", "sessions"] {
+        conn.execute_batch(&format!(
+            "DROP TRIGGER {table}_hist_ins; DROP TRIGGER {table}_hist_upd; DROP TRIGGER {table}_no_delete;"
+        ))?;
+        create_history_triggers(conn, table, true)?;
+    }
+    Ok(())
+}
+
+/// The line of `0004.sql` that splits it into the part before the PRs are
 /// filled and the part after.
 const FILL_PRS: &str = "\n-- @fill-prs\n";
 
@@ -85,10 +100,10 @@ const FILL_PRS: &str = "\n-- @fill-prs\n";
 /// off, `legacy_alter_table` on) and step 5 (`foreign_key_check`) are the
 /// caller's, around the migrating transaction. Needs the migration's `txns`
 /// row: each migrated PR's `created_txn` and history row name it.
-fn migration_3(conn: &Connection) -> Result<()> {
-    let (tables, rebuild) = include_str!("migrations/0003.sql")
+fn migration_4(conn: &Connection) -> Result<()> {
+    let (tables, rebuild) = include_str!("migrations/0004.sql")
         .split_once(FILL_PRS)
-        .expect("0003.sql has its `-- @fill-prs` line");
+        .expect("0004.sql has its `-- @fill-prs` line");
     conn.execute_batch(tables)?;
     create_history_triggers(conn, "prs", true)?;
     create_history_triggers(conn, "pr_needs", false)?;
@@ -123,7 +138,7 @@ fn fill_prs(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// The key of the PR migration 3 makes from a Plan (§4.5): the base name of
+/// The key of the PR migration 4 makes from a Plan (§4.5): the base name of
 /// its repo, lower-cased, each character outside `[a-z0-9-]` replaced by `-`,
 /// prefixed `pr-` when it does not then start with a letter, cut to 24
 /// characters.
@@ -222,7 +237,7 @@ mod tests {
     }
 
     /// The schema after the first `n` migrations only, with the pragmas
-    /// `Store::open` sets around them (§4.5 migration 3, step 1).
+    /// `Store::open` sets around them (§4.5 migration 4, step 1).
     fn at_version(conn: &Connection, n: usize) {
         conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
         conn.pragma_update(None, "legacy_alter_table", "ON").unwrap();
@@ -331,6 +346,116 @@ mod tests {
     }
 
     // ---------- migration 3 ----------
+
+    /// A version 2 database with Events, as a real `cpd.db` is; the Event ids are 1, 2 and 5
+    /// (not contiguous), so the next one must be above 5.
+    fn version_2_with_events(home: &CpdHome) {
+        let events: String = [1, 2, 5]
+            .iter()
+            .map(|id| {
+                format!(
+                    "INSERT INTO events (id, txn, at, kind, context, plan, text, data)
+                       VALUES ({id}, 1, '2026-01-01T00:00:00.000Z', 'plan-created', 'ctx', 'pay', 'event {id}', '{{}}');"
+                )
+            })
+            .collect();
+        database_at(home, 2, &format!("{VERSION_1_PLAN}\n{events}"));
+    }
+
+    const NEW_KINDS: [&str; 5] =
+        ["context-renamed", "plan-renamed", "context-archived", "plan-archived", "session-archived"];
+
+    #[test]
+    fn a_version_2_database_migrates_through_3_keeping_every_row_and_event_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_2_with_events(&home);
+
+        let mut store = Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+        let (version, events, archived, triggers): (i64, Vec<(i64, String)>, i64, i64) = store
+            .read(|c| {
+                let mut stmt = c.prepare("SELECT id, text FROM events ORDER BY id")?;
+                let events = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>>>()?;
+                Ok((
+                    c.pragma_query_value(None, "user_version", |r| r.get(0))?,
+                    events,
+                    c.query_row(
+                        "SELECT (SELECT count(*) FROM contexts WHERE id = 'ctx' AND archived_at IS NULL)
+                              + (SELECT count(*) FROM plans WHERE id = 'pay' AND archived_at IS NULL)
+                              + (SELECT count(*) FROM sessions WHERE id = 'l-pay' AND archived_at IS NULL)",
+                        [],
+                        |r| r.get(0),
+                    )?,
+                    c.query_row(
+                        "SELECT count(*) FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'events'",
+                        [],
+                        |r| r.get(0),
+                    )?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(version, VERSION);
+        assert_eq!(events, [(1, "event 1".to_owned()), (2, "event 2".to_owned()), (5, "event 5".to_owned())]);
+        assert_eq!(archived, 3, "every row kept, every archived_at null");
+        assert_eq!(triggers, 3, "events_own, events_no_update, events_no_delete");
+
+        let id = store
+            .write("test", |tx| {
+                tx.execute(
+                    "INSERT INTO events (txn, at, kind, context, text, data)
+                     VALUES (cpd_txn(), '2026-01-02T00:00:00.000Z', 'context-archived', 'ctx', 't', '{\"archived\":true}')",
+                    [],
+                )?;
+                Ok::<i64, CpdError>(tx.last_insert_rowid())
+            })
+            .unwrap();
+        assert!(id > 5, "the next Event id {id} is above the old maximum");
+    }
+
+    #[test]
+    fn after_migration_3_the_sequence_never_goes_back_and_the_history_lists_archived_at() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_2_with_events(&home);
+        // An old sequence above the highest id (rows that no longer exist) is kept.
+        Connection::open(home.db()).unwrap().execute("UPDATE sqlite_sequence SET seq = 40 WHERE name = 'events'", []).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        let (seq, after): (i64, String) = store
+            .write("test", |tx| {
+                tx.execute("UPDATE plans SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'pay'", [])?;
+                Ok::<_, CpdError>((
+                    tx.query_row("SELECT seq FROM sqlite_sequence WHERE name = 'events'", [], |r| r.get(0))?,
+                    tx.query_row("SELECT after FROM history WHERE tbl = 'plans' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(seq, 40);
+        let after: Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(after["archived_at"], "2026-02-01T00:00:00.000Z");
+    }
+
+    #[test]
+    fn the_events_check_allows_the_five_new_kinds_and_still_refuses_an_unknown_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_2_with_events(&home);
+        let mut store = Store::open(&home, 5000).unwrap();
+        let insert = |tx: &Connection, kind: &str| {
+            tx.execute(
+                "INSERT INTO events (txn, at, kind, context, text, data)
+                 VALUES (cpd_txn(), '2026-01-02T00:00:00.000Z', ?1, 'ctx', 't', '{}')",
+                [kind],
+            )
+        };
+        for kind in NEW_KINDS {
+            store.write("test", |tx| Ok::<_, CpdError>(insert(tx, kind)?)).unwrap_or_else(|e| panic!("{kind}: {e:?}"));
+        }
+        let err = store.write("test", |tx| Ok::<_, CpdError>(insert(tx, "plan-exploded")?)).unwrap_err();
+        assert!(format!("{err:?}").contains("CHECK"), "{err:?}");
+    }
+
+    // ---------- migration 4 ----------
 
     #[test]
     fn migrated_pr_keys_follow_4_5() {
@@ -445,10 +570,10 @@ mod tests {
     }
 
     #[test]
-    fn a_version_2_database_migrates_to_3_with_one_pr_per_plan() {
+    fn a_version_2_database_migrates_through_3_to_4_with_one_pr_per_plan() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = migrated(&dir);
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 3);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), 4);
         let migrate = count(&mut store, "SELECT max(id) FROM txns WHERE command = 'migrate'");
         assert_eq!(migrate, 2);
 
@@ -526,7 +651,7 @@ mod tests {
         assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
 
         // The moved and dropped columns are gone.
-        assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('plans')"), 9);
+        assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('plans')"), 10);
         assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('context_records') WHERE name = 'plan_repo'"), 0);
 
         // History: one insert per migrated PR in the migration's txn; the copies write none.
@@ -561,6 +686,77 @@ mod tests {
         assert_eq!((job, event, record), (7, 4, 3));
     }
 
+    /// A version 3 database as tree-menu's migration 3 leaves it (the User's
+    /// real case): archived rows and the Events of the archive kinds.
+    fn version_3(home: &CpdHome) {
+        let sql = format!(
+            "INSERT INTO contexts (id, title, created_at, created_on, archived_at) VALUES ('ctx', 'Ctx', '{T}', 'm1', '2026-01-06T00:00:00.000Z');
+             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, archived_at) VALUES
+               ('l-ar', 'lead', 'ctx', 'ar', 'lead', '/src', 'O3', 'stopped', '{T}', '{T}', '2026-01-06T00:00:00.001Z'),
+               ('l-li', 'lead', 'ctx', 'li', 'lead', '/src', 'O3', 'idle', '{T}', '{T}', NULL);
+             INSERT INTO plans (id, context, title, repo, base, lead_branch, lead_worktree, phase, lead_session, created_at, archived_at) VALUES
+               ('ar', 'ctx', 'Archived', '/src/pay', 'main', 'cpd/ar', NULL, 'plan', 'l-ar', '2026-01-01T00:00:00.001Z', '2026-01-06T00:00:00.002Z'),
+               ('li', 'ctx', 'Live', '/src/web', 'main', 'cpd/li', NULL, 'grounding', 'l-li', '2026-01-01T00:00:00.002Z', NULL);
+             INSERT INTO events (txn, at, kind, context, plan, session, text, data) VALUES
+               (1, '{T}', 'plan-renamed', 'ctx', 'ar', NULL, 'x', '{{}}'),
+               (1, '{T}', 'plan-archived', 'ctx', 'ar', NULL, 'x', '{{}}'),
+               (1, '{T}', 'session-archived', 'ctx', NULL, 'l-ar', 'x', '{{}}'),
+               (1, '{T}', 'context-archived', 'ctx', NULL, NULL, 'x', '{{}}');"
+        );
+        database_at(home, 3, &sql);
+    }
+
+    #[test]
+    fn a_tree_menu_version_3_database_migrates_to_4_keeping_archived_at() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_3(&home);
+        // The starting schema is exactly the one tree-menu's migration 3 installs.
+        assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[2]);
+
+        let mut store = Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+        assert_eq!(count(&mut store, "PRAGMA user_version"), 4);
+        let n = Value::Null;
+        assert_eq!(
+            rows(&mut store, "SELECT id, phase, archived_at FROM plans ORDER BY id"),
+            vec![
+                serde_json::json!(["ar", "plan", "2026-01-06T00:00:00.002Z"]),
+                serde_json::json!(["li", "grounding", n]),
+            ]
+        );
+        assert_eq!(rows(&mut store, "SELECT id, archived_at FROM contexts"), vec![serde_json::json!(["ctx", "2026-01-06T00:00:00.000Z"])]);
+        assert_eq!(
+            rows(&mut store, "SELECT id, archived_at FROM sessions ORDER BY id"),
+            vec![serde_json::json!(["l-ar", "2026-01-06T00:00:00.001Z"]), serde_json::json!(["l-li", n])]
+        );
+        assert_eq!(
+            rows(&mut store, "SELECT plan, key, repo, status, lead_branch FROM prs ORDER BY plan"),
+            vec![
+                serde_json::json!(["ar", "pay", "/src/pay", "waiting", "cpd/ar"]),
+                serde_json::json!(["li", "web", "/src/web", "waiting", "cpd/li"]),
+            ]
+        );
+        assert_eq!(
+            rows(&mut store, "SELECT id, kind FROM events ORDER BY id"),
+            vec![
+                serde_json::json!([1, "plan-renamed"]),
+                serde_json::json!([2, "plan-archived"]),
+                serde_json::json!([3, "session-archived"]),
+                serde_json::json!([4, "context-archived"]),
+            ]
+        );
+        // Both sides' Event kinds are accepted, and a Plan's history lists archived_at.
+        write(&mut store, "INSERT INTO events (txn, at, kind, context, text, data) VALUES
+                             (cpd_txn(), 't', 'plan-archived', 'ctx', 'x', '{}'), (cpd_txn(), 't', 'pr-started', 'ctx', 'x', '{}');
+                           UPDATE plans SET archived_at = NULL WHERE id = 'ar'")
+            .unwrap();
+        let after = rows(&mut store, "SELECT after FROM history WHERE tbl = 'plans' ORDER BY id DESC LIMIT 1");
+        let plan: Value = serde_json::from_str(after[0][0].as_str().unwrap()).unwrap();
+        assert!(plan.as_object().unwrap().contains_key("archived_at") && plan["archived_at"].is_null(), "{plan}");
+        assert_eq!(count(&mut store, "SELECT max(id) FROM events"), 6);
+    }
+
     #[test]
     fn a_migrated_database_has_the_schema_of_a_new_one() {
         let dir = tempfile::tempdir().unwrap();
@@ -570,7 +766,7 @@ mod tests {
         drop(Store::open(&fresh_home, 5000).unwrap());
         let hash = |home: &CpdHome| schema_hash(&Connection::open(home.db()).unwrap()).unwrap();
         assert_eq!(hash(&home(&dir)), hash(&fresh_home));
-        assert_eq!(hash(&fresh_home), SCHEMA_HASHES[2]);
+        assert_eq!(hash(&fresh_home), SCHEMA_HASHES[3]);
     }
 
     #[test]
@@ -591,7 +787,7 @@ mod tests {
         assert_eq!(schema_hash(&conn).unwrap(), SCHEMA_HASHES[1]);
     }
 
-    // ---------- the triggers of §4.4 after migration 3 ----------
+    // ---------- the triggers of §4.4 after migration 4 ----------
 
     /// Runs `sql` in its own write transaction.
     fn write(store: &mut Store, sql: &str) -> std::result::Result<(), CpdError> {

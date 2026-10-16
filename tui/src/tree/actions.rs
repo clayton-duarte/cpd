@@ -3,9 +3,11 @@
 //! every pane cpd starts ([`PROGRAM`]). Besides those, it lays out the cockpit
 //! as the reference does: a Session opened in the chat slot gets the focus
 //! (`select-pane`), and `?` opens the legend popup.
+//! The menu's Open, Close, Archive, Unarchive, Rename…, Fork…, New session…, New Plan… and New Context… are
+//! the same commands.
 //!
-//! Text the User typed is passed as `--flag=value`, so a value that starts with
-//! `-` is still a value.
+//! Text the User typed is passed as `--flag=value`, or after `--` when it is a positional, so a value that starts
+//! with `-` is still a value.
 
 use std::process::{Command, Stdio};
 
@@ -18,15 +20,49 @@ use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::session::PROGRAM;
 use crate::widgets::open_legend;
 
+/// The object an archive or unarchive is about.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Subject {
+    Context(ContextId),
+    Plan(PlanId),
+    Session(SessionId),
+}
+
+impl Subject {
+    /// The words of the command: `context archive <id>`, `plan archive --plan=<id>`, `session archive <id>`.
+    fn command(&self, verb: &str) -> Vec<String> {
+        let words = |w: &[&str]| w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        match self {
+            Subject::Context(id) => words(&["context", verb, id.as_str()]),
+            Subject::Plan(id) => vec!["plan".to_owned(), verb.to_owned(), format!("--plan={id}")],
+            Subject::Session(id) => words(&["session", verb, id.as_str()]),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     /// `session open <id>` (§10.4), then the focus on the chat slot: Enter, or a click on a Session.
     Open(SessionId),
-    /// `plan new <id> --context=<c> --title=<id>` (§4.1): `n`. The Lead forks the Context's grounded
-    /// Lead (R15).
-    NewPlan { context: ContextId, id: PlanId },
+    /// `plan new <id> --context=<c> --title=<title>` (§4.1): `n` (the title is the id) and New Plan….
+    /// The Lead forks the Context's grounded Lead (R15).
+    NewPlan { context: ContextId, id: PlanId, title: String },
+    /// `context new <id> --title=<title>` (§3.1): New Context….
+    NewContext { id: ContextId, title: String },
+    /// `context rename <id> --title=<title>` (§3.7).
+    RenameContext { id: ContextId, title: String },
+    /// `plan rename --plan=<id> --title=<title>` (§4.9).
+    RenamePlan { id: PlanId, title: String },
+    /// `session rename --session=<id> -- <name>` (§10.7).
+    RenameSession { id: SessionId, name: String },
+    /// `session fork <source> --name=<name>` (§10.3): Fork… and New session….
+    Fork { source: SessionId, name: String },
     /// `session close <id>` (§10.9): `x`.
     Close(SessionId),
+    /// `context|plan|session archive` (§3.8, §4.10, §10.10): the menu's Archive, after its y/N.
+    Archive(Subject),
+    /// `context|plan|session unarchive` (§3.9, §4.11, §10.11): the menu's Unarchive.
+    Unarchive(Subject),
 }
 
 /// The refusal of `x` on the Session in the chat slot (the reference's), also when `session close` refuses it
@@ -39,12 +75,21 @@ impl Action {
         let words = |w: &[&str]| w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         match self {
             Action::Open(id) => words(&["session", "open", id.as_str()]),
-            Action::NewPlan { context, id } => {
+            Action::NewPlan { context, id, title } => {
                 let mut argv = words(&["plan", "new", id.as_str()]);
-                argv.extend([format!("--context={context}"), format!("--title={id}")]);
+                argv.extend([format!("--context={context}"), format!("--title={title}")]);
                 argv
             }
+            Action::NewContext { id, title } => vec!["context".into(), "new".into(), id.to_string(), format!("--title={title}")],
+            Action::RenameContext { id, title } => vec!["context".into(), "rename".into(), id.to_string(), format!("--title={title}")],
+            Action::RenamePlan { id, title } => vec!["plan".into(), "rename".into(), format!("--plan={id}"), format!("--title={title}")],
+            Action::RenameSession { id, name } => {
+                vec!["session".into(), "rename".into(), format!("--session={id}"), "--".into(), name.clone()]
+            }
+            Action::Fork { source, name } => vec!["session".into(), "fork".into(), source.to_string(), format!("--name={name}")],
             Action::Close(id) => words(&["session", "close", id.as_str()]),
+            Action::Archive(subject) => subject.command("archive"),
+            Action::Unarchive(subject) => subject.command("unarchive"),
         }
     }
 
@@ -53,8 +98,18 @@ impl Action {
         match self {
             Action::Open(_) => String::new(),
             Action::NewPlan { id, .. } => format!("forking {id} in window park-{id}"),
+            Action::NewContext { id, .. } => format!("created {id}"),
+            Action::RenameContext { .. } | Action::RenamePlan { .. } | Action::RenameSession { .. } if reply["already"] == true => {
+                "already named so".into()
+            }
+            Action::RenameContext { .. } | Action::RenamePlan { .. } | Action::RenameSession { .. } => "renamed".into(),
+            Action::Fork { name, .. } => format!("forking {name}"),
             Action::Close(_) if reply["already"] == true => "session is already gone".into(),
             Action::Close(_) => "closed".into(),
+            Action::Archive(_) if reply["already"] == true => "already archived".into(),
+            Action::Archive(_) => "archived".into(),
+            Action::Unarchive(_) if reply["already"] == true => "already unarchived".into(),
+            Action::Unarchive(_) => "unarchived".into(),
         }
     }
 
@@ -137,10 +192,34 @@ mod tests {
         let cases = [
             (Action::Open(sid("l-ship")), vec!["session", "open", "l-ship"]),
             (Action::Close(sid("l-ship")), vec!["session", "close", "l-ship"]),
+            (Action::Archive(Subject::Context(ContextId::parse("alpha").unwrap())), vec!["context", "archive", "alpha"]),
+            (Action::Archive(Subject::Plan(PlanId::parse("ship").unwrap())), vec!["plan", "archive", "--plan=ship"]),
+            (Action::Archive(Subject::Session(sid("f-idle"))), vec!["session", "archive", "f-idle"]),
+            (Action::Unarchive(Subject::Context(ContextId::parse("alpha").unwrap())), vec!["context", "unarchive", "alpha"]),
+            (Action::Unarchive(Subject::Plan(PlanId::parse("ship").unwrap())), vec!["plan", "unarchive", "--plan=ship"]),
+            (Action::Unarchive(Subject::Session(sid("f-idle"))), vec!["session", "unarchive", "f-idle"]),
             (
-                Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay-4521").unwrap() },
-                vec!["plan", "new", "pay-4521", "--context=alpha", "--title=pay-4521"],
+                Action::NewPlan {
+                    context: ContextId::parse("alpha").unwrap(),
+                    id: PlanId::parse("pay-4521").unwrap(),
+                    title: "Pay 4521".into(),
+                },
+                vec!["plan", "new", "pay-4521", "--context=alpha", "--title=Pay 4521"],
             ),
+            (
+                Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into() },
+                vec!["context", "new", "building-cpd", "--title=Building cpd!"],
+            ),
+            (
+                Action::RenameContext { id: ContextId::parse("alpha").unwrap(), title: "-Dash".into() },
+                vec!["context", "rename", "alpha", "--title=-Dash"],
+            ),
+            (Action::RenamePlan { id: PlanId::parse("ship").unwrap(), title: "Ship it".into() }, vec!["plan", "rename", "--plan=ship", "--title=Ship it"]),
+            (
+                Action::RenameSession { id: sid("f-idle"), name: "-x y".into() },
+                vec!["session", "rename", "--session=f-idle", "--", "-x y"],
+            ),
+            (Action::Fork { source: sid("l-ship"), name: "ship (fork)".into() }, vec!["session", "fork", "l-ship", "--name=ship (fork)"]),
         ];
         for (action, argv) in cases {
             assert_eq!(action.argv(), argv, "{action:?}");
@@ -154,8 +233,21 @@ mod tests {
         let close = Action::Close(sid("l-ship"));
         assert_eq!(close.done(&json!({"ok": true, "session": "l-ship", "pane": "%4"})), "closed");
         assert_eq!(close.done(&json!({"ok": true, "already": true})), "session is already gone");
-        let new = Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay").unwrap() };
+        let new = Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay").unwrap(), title: "Pay".into() };
         assert_eq!(new.done(&json!({"ok": true})), "forking pay in window park-pay");
+        let context = Action::NewContext { id: ContextId::parse("alpha").unwrap(), title: "Alpha".into() };
+        assert_eq!(context.done(&json!({"ok": true})), "created alpha");
+        let rename = Action::RenameSession { id: sid("f-idle"), name: "x".into() };
+        assert_eq!(rename.done(&json!({"ok": true, "name": "x"})), "renamed");
+        assert_eq!(rename.done(&json!({"ok": true, "already": true})), "already named so");
+        let fork = Action::Fork { source: sid("l-ship"), name: "ship (fork)".into() };
+        assert_eq!(fork.done(&json!({"ok": true})), "forking ship (fork)");
+        let archive = Action::Archive(Subject::Session(sid("f-idle")));
+        assert_eq!(archive.done(&json!({"ok": true, "archived": [], "closed": []})), "archived");
+        assert_eq!(archive.done(&json!({"ok": true, "already": true})), "already archived");
+        let unarchive = Action::Unarchive(Subject::Session(sid("f-idle")));
+        assert_eq!(unarchive.done(&json!({"ok": true, "archived": [], "closed": []})), "unarchived");
+        assert_eq!(unarchive.done(&json!({"ok": true, "already": true})), "already unarchived");
     }
 
     #[test]
@@ -164,5 +256,7 @@ mod tests {
         assert_eq!(close.failed("in_chat_slot", "It is in the chat slot."), IN_CHAT_SLOT);
         assert_eq!(close.failed("not_a_lead", "Not a Lead."), "not_a_lead: Not a Lead.");
         assert_eq!(Action::Open(sid("l-ship")).failed("in_chat_slot", "x"), "in_chat_slot: x");
+        let archive = Action::Archive(Subject::Session(sid("l-ship")));
+        assert_eq!(archive.failed("archive_blocked", "A Session is working."), "archive_blocked: A Session is working.");
     }
 }

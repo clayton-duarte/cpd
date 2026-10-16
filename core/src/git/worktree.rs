@@ -42,7 +42,7 @@ pub fn lead_worktree_path(repo: &Path, plan: &PlanId) -> Result<PathBuf, CpdErro
 }
 
 /// The Lead worktree of a PR (contract §7.1): `<repo-parent>/<repo-name>.<plan>.<key>`.
-/// A PR made by migration 3 keeps the Lead Branch `cpd/<plan>` and with it the
+/// A PR made by migration 4 keeps the Lead Branch `cpd/<plan>` and with it the
 /// worktree `<repo-parent>/<repo-name>.<plan>` it had.
 pub fn pr_lead_worktree_path(repo: &Path, plan: &PlanId, key: &PrKey, lead_branch_name: &str) -> Result<PathBuf, CpdError> {
     if lead_branch_name == lead_branch(plan) {
@@ -382,7 +382,7 @@ pub fn prepare_lead_worktree(
 }
 
 /// Creates the Lead worktree of a Plan's Lead Branch `cpd/<plan>` and runs
-/// `pre-start` in it (contract §7.2 for a PR made by migration 3), then pushes
+/// `pre-start` in it (contract §7.2 for a PR made by migration 4), then pushes
 /// a new branch (R35). A failed push does not fail it: see [`Created`].
 pub fn create_lead_worktree(repo: &Path, plan: &PlanId, base: &str, setup: &Setup) -> Result<Created, CpdError> {
     let path = lead_worktree_path(repo, plan)?;

@@ -57,10 +57,12 @@ pub(super) struct PlanRow {
     pub created_at: String,
     pub locked_at: Option<String>,
     pub done_at: Option<String>,
+    /// When it was archived (contract §2.2 "Archived"), else none.
+    pub archived_at: Option<String>,
 }
 
 const COLUMNS: &str = "p.id, p.context, p.title, p.jira, r.key, r.repo, r.base, r.lead_branch, r.lead_worktree, p.phase, p.lead_session,
-    r.pr_number, r.pr_url, r.pr_opened_at, r.pr_seen, r.all_merged_at, p.created_at, p.locked_at, p.done_at";
+    r.pr_number, r.pr_url, r.pr_opened_at, r.pr_seen, r.all_merged_at, p.created_at, p.locked_at, p.done_at, p.archived_at";
 
 /// `plans p` with its one PR `r` (R34: until a Plan has several PRs, the
 /// first PR it got stands for the Plan's repo, branch, worktree and PR).
@@ -86,6 +88,7 @@ type Raw = (
     String,
     Option<String>,
     Option<String>,
+    Option<String>,
 );
 
 fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
@@ -107,12 +110,13 @@ fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
         r.get(16)?,
         r.get(17)?,
         r.get(18)?,
+        r.get(19)?,
     ))
 }
 
 impl PlanRow {
     fn parse(raw: Raw) -> Result<PlanRow, CpdError> {
-        let (id, context, title, jira, pr_key, repo, base, lead_branch, lead_worktree, phase, lead_session, pr, pr_seen, all_merged_at, created_at, locked_at, done_at) = raw;
+        let (id, context, title, jira, pr_key, repo, base, lead_branch, lead_worktree, phase, lead_session, pr, pr_seen, all_merged_at, created_at, locked_at, done_at, archived_at) = raw;
         let id = PlanId::parse(&id).map_err(|_| bad_row(format!("Plan id {id:?}")))?;
         let field = |name: &str, value: &str| bad_row(format!("Plan {id} has {name} {value:?}"));
         let pr = match pr {
@@ -136,6 +140,7 @@ impl PlanRow {
             created_at,
             locked_at,
             done_at,
+            archived_at,
             id,
         })
     }
@@ -148,6 +153,7 @@ impl PlanRow {
             "lead_worktree": self.lead_worktree, "phase": self.phase.as_str(), "lead_session": self.lead_session,
             "pr": self.pr, "pr_seen": self.pr_seen, "all_merged_at": self.all_merged_at,
             "created_at": self.created_at, "locked_at": self.locked_at, "done_at": self.done_at,
+            "archived_at": self.archived_at,
         })
     }
 }

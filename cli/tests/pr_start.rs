@@ -493,7 +493,7 @@ fn a_repo_without_origin_starts_a_pr_as_before() {
 fn a_pr_made_before_r34_keeps_its_branch_and_worktree_name() {
     let fx = fx();
     let repo = fx.repo("pay");
-    // As migration 3 leaves it: the Lead Branch is `cpd/<plan>`.
+    // As migration 4 leaves it: the Lead Branch is `cpd/<plan>`.
     fx.sql(&format!(
         "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
          VALUES ('pay', 'pay', '{}', 'main', 'waiting', 'cpd/pay', cpd_txn(), 't');",

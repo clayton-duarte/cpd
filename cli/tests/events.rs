@@ -223,6 +223,11 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("session-state", "cs", "p", &["from", "to", "label"], &[]),
     ("session-moved", "cs", "p", &["pane", "window", "place"], &[]),
     ("session-renamed", "cs", "p", &["name"], &[]),
+    ("context-renamed", "c", "", &["title"], &[]),
+    ("plan-renamed", "cp", "", &["title"], &[]),
+    ("context-archived", "c", "", &["archived"], &[]),
+    ("plan-archived", "cp", "", &["archived"], &[]),
+    ("session-archived", "cs", "p", &["archived"], &[]),
     ("watch-started", "", "", &["pid"], &[]),
     ("watch-stopped", "", "", &["pid"], &[]),
     ("error", "", "cpjas", &["source", "code", "message", "details"], &[]),
@@ -383,6 +388,15 @@ fn an_unknown_kind_is_refused() {
     let env = seeded();
     refused(&env, &["events", "list", "--kind", "job-exploded"], "usage", 2);
     refused(&env, &["events", "follow", "--kind", "job-exploded"], "usage", 2);
+}
+
+#[test]
+fn the_new_archive_and_rename_kinds_are_accepted_by_list_and_follow() {
+    let env = seeded();
+    for kind in ["context-renamed", "plan-renamed", "context-archived", "plan-archived", "session-archived"] {
+        let run = env.cpd(&["events", "list", "--kind", kind]);
+        assert_eq!(ids(&run.ok()["events"]), Vec::<i64>::new(), "{kind}: {run:?}");
+    }
 }
 
 #[test]

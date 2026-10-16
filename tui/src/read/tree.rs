@@ -31,6 +31,8 @@ pub struct ContextNode {
     /// Questions no answer refers to.
     pub open_questions: usize,
     pub sync_failing: bool,
+    /// When it was archived (contract §4.5); archived Contexts are in the model.
+    pub archived_at: Option<String>,
     /// Its Plans, oldest first.
     pub plans: Vec<PlanNode>,
 }
@@ -54,6 +56,10 @@ impl PlanNode {
 }
 
 impl ContextNode {
+    pub fn is_archived(&self) -> bool {
+        self.archived_at.is_some()
+    }
+
     /// The Sessions forked by `session fork` (B1, contract §6.8), each with the Plan it belongs to, oldest first
     /// (ties by Plan, then by the order in the Plan). The tree draws them directly under the Context, after the
     /// Plans, whatever their Plan or source.
@@ -94,7 +100,7 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
         let mut heads = plan_heads(conn, None)?;
 
         let mut stmt = conn
-            .prepare("SELECT id, title, jira, lead_session, sync_failing FROM contexts ORDER BY id")?;
+            .prepare("SELECT id, title, jira, lead_session, sync_failing, archived_at FROM contexts ORDER BY id")?;
         let mut rows = stmt.query([])?;
         let mut contexts = Vec::new();
         while let Some(r) = rows.next()? {
@@ -129,6 +135,7 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
                 records: records.remove(&cid).unwrap_or(0),
                 open_questions: questions.remove(&cid).unwrap_or(0),
                 sync_failing: r.get(4)?,
+                archived_at: r.get(5)?,
                 plans,
                 id: context,
             });

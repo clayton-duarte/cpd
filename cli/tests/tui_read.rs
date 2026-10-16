@@ -349,6 +349,32 @@ fn the_tree_is_contexts_then_plans_then_lead_sessions_with_their_states() {
     assert_eq!(tree.events_cursor, last_event(&mut store));
 }
 
+#[test]
+fn archived_objects_are_in_the_tree_with_their_archived_at() {
+    let (_env, mut store) = fixture();
+    let before = read::tree(&mut store).unwrap();
+    assert!(
+        before.contexts.iter().all(|c| c.archived_at.is_none() && c.plans.iter().all(|p| p.head.archived_at.is_none() && p.sessions.iter().all(|s| s.archived_at.is_none()))),
+        "nothing is archived by default"
+    );
+    sql(
+        &mut store,
+        "UPDATE contexts SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'gamma';
+         UPDATE plans SET archived_at = '2026-02-02T00:00:00.000Z' WHERE id = 'sketch';
+         UPDATE sessions SET archived_at = '2026-02-03T00:00:00.000Z' WHERE id = 'f-ship';",
+    );
+    let tree = read::tree(&mut store).unwrap();
+    assert_eq!(tree.contexts.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["alpha", "beta", "gamma"], "archived ones are included");
+    let [alpha, _, gamma] = &tree.contexts[..] else { panic!() };
+    assert_eq!((gamma.archived_at.as_deref(), gamma.is_archived(), alpha.is_archived()), (Some("2026-02-01T00:00:00.000Z"), true, false));
+    let (ship, sketch) = (&alpha.plans[0], &alpha.plans[1]);
+    assert_eq!((sketch.head.archived_at.as_deref(), sketch.head.is_archived(), ship.head.is_archived()), (Some("2026-02-02T00:00:00.000Z"), true, false));
+    assert_eq!(sketch.sessions.len(), 1, "an archived Plan keeps its Lead");
+    let fork = &ship.sessions[1];
+    assert_eq!((fork.id.as_str(), fork.archived_at.as_deref(), fork.is_archived()), ("f-ship", Some("2026-02-03T00:00:00.000Z"), true));
+    assert!(!ship.sessions[0].is_archived());
+}
+
 fn settled(session: &str) -> String {
     event("session-state", Some("alpha"), Some("sketch"), Some(session), r#"{"from":"working","to":"idle","label":null}"#)
 }
