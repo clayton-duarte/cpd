@@ -934,7 +934,7 @@ Brings a Lead into the chat slot (§6.4).
 
 Effects:
 - In the chat slot already: nothing; `"already": true`.
-- **tmux:** when the Session has no live pane (`stopped`, or its pane is gone): `new-window -d -t =cpd: -n park-<label> … -- cpd session run <id>` first, which resumes it (`pi --session <file>`, §6.5), and `tmux_pane` is recorded. Then `swap-pane -d -s <its pane> -t <chat slot pane>`, and `rename-window -t <window> park-<displaced label>` for the window that now holds the displaced Lead. When the displaced pane is the placeholder, `kill-pane` on it instead, which closes the now-empty park window with it, so placeholders never pile up in park windows.
+- **tmux:** when the Session has no live pane (`stopped`, or its pane is gone): first `kill-pane` on a dead pane of the Lead, if one is still there, so it never adds a second window; then `new-window -d -t =cpd: -n park-<label> … -- cpd session run <id>` first, which resumes it (`pi --session <file>`, §6.5), and `tmux_pane` is recorded. Then `swap-pane -d -s <its pane> -t <chat slot pane>`, and `rename-window -t <window> park-<displaced label>` for the window that now holds the displaced Lead. When the displaced pane is the placeholder, `kill-pane` on it instead, which closes the now-empty park window with it, so placeholders never pile up in park windows.
 - **Rows**, one transaction: **Events** `session-moved` `{place: "chat"}` for this Session and `{place: "parked"}` for the displaced one.
 
 ```json
@@ -1016,7 +1016,7 @@ The program in every Lead pane (§6.2): owns its terminal (§1.2). Steps of §6.
 
 Before it starts pi (steps 1–3) a Lead with a Plan gets its plannotator port (§6.5 "The Plan's plannotator port"): `PLANNOTATOR_PORT=<port>` replaces the value in the pane's environment. When the range is full the pane shows `no_port` and names the Plans that hold it, and Enter retries; pi is not started. A grounded Lead gets no port.
 
-**Reload on install** (hs-d33, hs-d38, hs-d49; §6.7 "Reload on install"). The wrapper detects a new install by the identity of its executable (§3.4 of the contract). At the Lead's next idle (state `idle`, last turn finished, session file quiet `fork_quiet_seconds`) it sends pi `SIGTERM`, waits for it to exit and `exec`s the same path with the same argv; the new `session run` takes step 1. A parked Lead reloads at once. The Lead in the chat slot waits until it is idle **and** parked, or idle for 10 minutes, so unsent typing is not lost. A `blocked` Lead is never idle. If pi exits on its own after an install, the wrapper `exec`s before any store write.
+**Reload on install** (hs-d33, hs-d38, hs-d49; §6.7 "Reload on install"). The wrapper detects a new install by the identity of its executable (§3.4 of the contract). At the Lead's next idle (state `idle`, last turn finished, session file quiet `fork_quiet_seconds`) it sends pi `SIGTERM`, waits for it to exit and `exec`s the same path with the same argv; the new `session run` takes step 1. A parked Lead reloads at once. The Lead in the chat slot waits until it is idle **and** parked, or idle for 10 minutes, so unsent typing is not lost. A `blocked` Lead is never idle. If pi has not exited 10 s after `SIGTERM`, the wrapper sends `SIGKILL`, then `exec`s. If pi exits on its own after an install, the wrapper `exec`s before any store write.
 
 The first message is the file `plan new` or `session fork` wrote (§1.4); none for a grounded Lead. While pi runs, it watches for the session file (§6.5) and records `sessions.file` once it appears (a data write, no Event). When pi exits it runs `session state stopped` if the adapter did not, prints `pi exited. Press Enter to resume <name> here.` and resumes on Enter.
 
@@ -1081,7 +1081,7 @@ cpd events list [--plan <id> | --context <id> | --session <id>] [--kind <kind>]�
 cpd events follow [--plan <id> | --context <id> | --session <id>] [--kind <kind>]… [--since <id>] [--until-idle]
 ```
 
-§5.4, normative: one Event per line, in id order; without `--since`, only Events committed after it starts; polling `PRAGMA data_version` every `events.poll_ms`; ends on EPIPE or kill with exit 0, or with `--until-idle` once it has printed everything committed when it started.
+§5.4, normative: one Event per line, in id order; without `--since`, only Events committed after it starts; polling `PRAGMA data_version` every `events.poll_ms`; ends on EPIPE, on kill, or when its stdout is closed (`POLLHUP` or `POLLERR` on fd 1, checked at each poll, so an idle stream whose reader is gone still ends), with exit 0, or with `--until-idle` once it has printed everything committed when it started.
 
 | Precondition | Code | Exit |
 |---|---|---|

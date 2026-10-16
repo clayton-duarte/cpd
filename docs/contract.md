@@ -84,7 +84,7 @@ $CPD_HOME/
   locks/
     watch.lock                    held by the one `cpd watch` (§6.6)
     repo-<sha1>.lock              per-repo lock: merges, `pr open`, `pr rebase` (§7.4, §7.6); sha1 of the repo's git common dir realpath
-    attempt-<plan>--<attempt>.lock  the driver lock: taken by the Attempt's starter, inherited by its driver (§3.4)
+    attempt-<plan>--<attempt>.lock  the driver lock: taken by the Attempt's starter, inherited by its driver, removed when the Attempt ends (§3.4)
     context-<context>.lock        held while writing or syncing a Context store (§4.6)
     plannotator-ports.lock        held while a Plan's review port is assigned (§6.5)
     store.lock                    held by every open of `cpd.db` during its one-time setup only: the WAL switch and the migration check (§4.1, §4.5)
@@ -458,7 +458,7 @@ stateDiagram-v2
 | A6 | Removed by R19 (no Job-level Reviewer). |
 | A7 | Removed by R19 (no Job-level Reviewer). |
 | A8 | Merge (§7.4) |
-| A9 | End: record `metrics` (parsed from the Worker's session file, cpd 1 §14) in the transaction that ends the Attempt; kill the Attempt's tmux window; on `merged`, remove the worktree and branch; otherwise keep them for debugging until the Plan is `done` (cpd 1 requirements §2, kept) |
+| A9 | End: record `metrics` (parsed from the Worker's session file, cpd 1 §14) in the transaction that ends the Attempt; kill the Attempt's tmux window (`kill-window` is tried 3 times, 1 s apart, before the `error` Event); remove the driver lock file `locks/attempt-<plan>--<attempt>.lock`; on `merged`, remove the worktree and branch; otherwise keep them for debugging until the Plan is `done` (cpd 1 requirements §2, kept) |
 
 **The driver lock** `locks/attempt-<plan>--<attempt>.lock` is held without a gap from before the Attempt row exists until its driver exits, so a free lock always means a dead driver, and E2 never ends a healthy Attempt whose driver has not started running yet. Chosen fix: the starter takes the lock and hands it to the driver at the spawn. Rejected alternative: an E2 grace period for young `starting` Attempts, which rests on a timing guess and needs a new key.
 
@@ -475,7 +475,7 @@ stateDiagram-v2
 - **Resume.** The new driver's A1 checks fd 3 as above, then resumes: at A4 for `running` (the Worker's Session and pane from the store; the nudge-once state from the Attempt's `attempt-nudge` Event), at A8 for `merging`.
 - A Worker's pi is never touched by a driver reload; it is replaced only between Attempts (a new Attempt starts the installed pi adapter).
 
-If the insert fails (`no_slot`, `cas_lost`), the starter closes the descriptor and no Attempt exists. If the spawn fails, the starter ends the Attempt `failed` / `crashed` itself, as E2 would, and then closes the descriptor. E2 probes a lock by opening the file afresh and trying `flock(LOCK_EX | LOCK_NB)`.
+If the insert fails (`no_slot`, `cas_lost`), the starter closes the descriptor and no Attempt exists. If the spawn fails, the starter ends the Attempt `failed` / `crashed` itself, as E2 would, and then closes the descriptor. E2 probes a lock by opening the file afresh and trying `flock(LOCK_EX | LOCK_NB)`. The lock file is removed when the Attempt ends: by the driver at A9, and by E2 when it ends a dead driver's Attempt. E2's probe never creates the file (it opens without `O_CREAT`): a missing file means no driver.
 
 The concurrency slot is implicit: an Attempt holds one from `starting` until `ended`. E3 and `job dispatch` insert an Attempt only inside a write transaction that counts the Attempts not `ended` on the machine and refuses at `concurrency` (`no_slot`, exit 3). This replaces cpd 1's slot files (§9).
 
@@ -504,7 +504,7 @@ The concurrency slot is implicit: an Attempt holds one from `starting` until `en
 
 The adapter counts blocking reasons and reports `blocked` while the count is above zero, the model of `tmux-agent-state.ts` (spike, verified), now written to the database instead of tmux options. `session state` writes nothing and appends nothing when the state and label are unchanged.
 
-**A pane that is gone.** Engine E2 records a Session's pane as gone (Escalation `e2e-a1-q1`), and so does `session close` (commands.md §10.9), which kills the pane itself and writes the same rows. E2: when the pane in `tmux_pane` is dead or missing, one transaction sets `state = stopped` (with `session-state` if it was not `stopped`), `tmux_pane = NULL`, and appends `session-moved` `{pane: null, window: null, place: "none"}`. `stopped` alone does not mean the pane is gone: a Session gets its pane while still `stopped` (registered before pi starts), and `session run` keeps its pane after pi exits, so `session state stopped` leaves `tmux_pane` alone.
+**A pane that is gone.** Engine E2 records a Session's pane as gone (Escalation `e2e-a1-q1`), and so does `session close` (commands.md §10.9), which kills the pane itself and writes the same rows. E2: when the pane in `tmux_pane` is dead or missing, one transaction sets `state = stopped` (with `session-state` if it was not `stopped`), `tmux_pane = NULL`, and appends `session-moved` `{pane: null, window: null, place: "none"}`. **Dead Lead panes are cleaned up** (G2): when E2 records a Lead's pane as gone it also kills that pane's window, unless the window is `<cockpit>:main` (a park or ctx window is only that pane's). A dead Lead pane in the chat slot (in `main`) is replaced by the placeholder instead: `respawn-pane -k` running `cpd tui view chat`, with `@cpd_view chat` set and `@cpd_session` unset. `stopped` alone does not mean the pane is gone: a Session gets its pane while still `stopped` (registered before pi starts), and `session run` keeps its pane after pi exits, so `session state stopped` leaves `tmux_pane` alone.
 
 ### 3.7 The engine, `cpd watch`
 
@@ -513,7 +513,7 @@ One per machine (D5). Every `tick_seconds`:
 | Step | What it does |
 |---|---|
 | E1 | **Escalations:** expire `open` Escalations whose `asker_pid` is dead |
-| E2 | **Liveness:** for every Attempt not `ended` whose driver lock is free (the driver died; §3.4): in `merging`, run the merge recovery R (§7.4), which ends it `merged` when its commits are already on the Lead Branch, and otherwise `cancelled` if a cancel was requested, else `crashed`; in any other status, end it `cancelled` if a cancel was requested, else `crashed`. For every Attempt with a live driver: active time over `attempt_minutes` → set `stop_request = timed_out`; Job `cancel_requested_at` set → set `stop_request = cancelled`. For every Session not `stopped` or with a pane: pane dead or missing (`tmux list-panes -a`) → `stopped` with no pane (§3.6) |
+| E2 | **Liveness:** for every Attempt not `ended` whose driver lock is free (the driver died; §3.4): in `merging`, run the merge recovery R (§7.4), which ends it `merged` when its commits are already on the Lead Branch, and otherwise `cancelled` if a cancel was requested, else `crashed`; in any other status, end it `cancelled` if a cancel was requested, else `crashed`. For every Attempt with a live driver: active time over `attempt_minutes` → set `stop_request = timed_out`; Job `cancel_requested_at` set → set `stop_request = cancelled`. For every Session not `stopped` or with a pane: pane dead or missing (`tmux list-panes -a`) → `stopped` with no pane, and a Lead's dead pane's window is killed, or the chat slot's pane is replaced by the placeholder (§3.6) |
 | E3 | **Scheduling:** for each Ready Job, by `jobs.seq` across all Plans, while a slot is free: verify the fingerprint, take the driver lock, create the Attempt, start its driver with the lock inherited (§3.4) |
 | E4 | **Completion:** for each Plan in `dispatch` with no Job `queued` or `running`, at least one `merged`, and `all_merged_at` null: append `all-merged` and set `all_merged_at` |
 | E5 | **PR:** for each Plan in `pr`, every `pr_poll_seconds`: run `cpd pr poll --plan <id>` as a subprocess (a process boundary, cpd 1 §11 step 5) |
@@ -1199,7 +1199,7 @@ The fork never copies a half-done turn, and the source is never interrupted.
 - **in the chat slot:** waits until it is idle **and** parked, or idle for 10 minutes, so unsent typing in the pane is not lost;
 - **`blocked`** (a dialog, a pending Plan review): is never idle, so never reloads.
 
-Reload: send pi `SIGTERM` (pi 1.2.0 runs `session_shutdown` on SIGTERM and SIGHUP; `dist/modes/interactive/interactive-mode.js`), wait for it to exit, then `exec` the same path with the same argv; the new `session run` resumes pi on the session file (step 3), so the new adapter loads and no turn is cut. If pi exits on its own after an install, the wrapper `exec`s the new binary before any store write.
+Reload: send pi `SIGTERM` (pi 1.2.0 runs `session_shutdown` on SIGTERM and SIGHUP; `dist/modes/interactive/interactive-mode.js`), wait for it to exit (if it has not exited 10 s after `SIGTERM`, send `SIGKILL`), then `exec` the same path with the same argv; the new `session run` resumes pi on the session file (step 3), so the new adapter loads and no turn is cut. If pi exits on its own after an install, the wrapper `exec`s the new binary before any store write.
 
 ## 7. git and the Gate
 
@@ -1249,7 +1249,7 @@ The hook's result is the first failing command's exit code in file order, or 0. 
 - stdin: the hook's template variables as one JSON object (verified: wt passes the JSON context on stdin).
 - Environment: cpd's own environment, minus `TMUX`, `TMUX_PANE`, every `PI_*` and every `CPD_*` variable, so a test suite run by the Gate cannot reach the real cockpit, pi session or cpd database. wt adds no variables of its own (verified), and neither does cpd.
 - Templates: `{{ … }}` and `{% … %}` are rendered before running, with the variables `branch`, `worktree_path`, `worktree_name`, `commit`, `short_commit`, `repo`, `repo_path`, `primary_worktree_path`, `default_branch`, `remote`, `remote_url`, `cwd`, `hook_type`, `hook_name`, `args` (`[]`), plus `base` and `base_worktree_path` for `pre-start`, `target` and `target_worktree_path` for `pre-commit` (the Lead Branch and Lead worktree), and `target` and `target_worktree_path` for `pre-merge` (the Plan's `base`, and the worktree that has it checked out; when none has, `target_worktree_path` is undefined, as in wt). Their values follow wt's table (docs). worktrunk's own filters and functions (`sanitize`, `sanitize_db`, `sanitize_hash`, `hash`, `hash_port`, `codename`, `worktree_path_of_branch`) and `vars.*` are not provided: a command that uses one, or an undefined variable, fails before anything runs with `hook_invalid`. User hooks in `~/.config/worktrunk/config.toml` are not run: the repo owns its setup and Gate (R5), and a machine-local hook would make Gates differ between machines. There are no approvals (cpd behaves as `wt --yes`).
-- Timeout: `setup_minutes` for `pre-start`, `gate_minutes` for `pre-commit` and `pre-merge`. At the limit cpd kills the command's process group.
+- Timeout: `setup_minutes` for `pre-start`, `gate_minutes` for `pre-commit` and `pre-merge`. At the limit cpd kills the command's process group; it also kills it when the command's `sh` exits (`killpg` with `SIGKILL`, `ESRCH` ignored), so a background child the hook left behind does not outlive it. A caller (cpd) that dies mid-hook has no portable teardown (macOS has no `PDEATHSIG`); there is no detector (hs-d34, hs-d39).
 
 **What each result means:**
 
