@@ -1,7 +1,7 @@
 //! The `widgets` view's snapshot (commands.md §17), the Dispatch column: the
-//! machine-wide numbers (slots, the engine), every Plan's pull requests,
-//! every open Escalation and the latest Events (`plan list`, with the rows the
-//! column draws from).
+//! machine-wide numbers (slots, the engine), every open pull request of the
+//! User, every open Escalation and the latest Events (`plan list`, with the
+//! rows the column draws from).
 
 use std::collections::BTreeMap;
 
@@ -24,8 +24,10 @@ use super::shared::{AttemptStatus, Checks, Place, PlanHead, PrState, bad_row, id
 pub struct Widgets {
     pub slots: Slots,
     pub engine: Engine,
-    /// Every Plan, oldest first; the view picks the ones with a PR or in Dispatch.
+    /// Every Plan, oldest first.
     pub plans: Vec<PlanCard>,
+    /// Every `open` row of `pull_requests`, oldest `created_at` first (then `repo`, `number`): what the PRs section lists.
+    pub prs: Vec<OpenPr>,
     /// Every `open` Escalation of the machine, oldest first.
     pub escalations: Vec<MachineEscalation>,
     /// The latest Events, oldest first.
@@ -70,14 +72,28 @@ pub enum Engine {
     Crashed { pid: u32, since: String },
 }
 
-/// A Plan, for the Dispatch column: its head (counts), its label and the rows of its PRs that have a pull request.
+/// An open pull request of the User, as the PRs section draws it (commands.md §13.2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenPr {
+    /// GitHub's `owner/name`.
+    pub repo: String,
+    pub number: i64,
+    pub title: String,
+    pub draft: bool,
+    pub checks: Checks,
+    pub review_decision: ReviewDecision,
+    /// A PR of the Plan whose Lead is in the chat slot points to this pull request.
+    pub active: bool,
+}
+
+/// A Plan: its head (counts), its label and the rows of its PRs that have a pull request. The PRs section no longer draws it
+/// (it draws [`OpenPr`]s); `cli/tests/pr.rs` still reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlanCard {
     pub head: PlanHead,
     /// The Lead Session's name: the Plan's label, as its tab's (commands.md §13.2).
     pub label: String,
-    /// Where the Lead Session's pane is (its latest `session-moved`; `None` before any): the Dispatch column lists
-    /// the Plans whose Lead is in the cockpit, in the chat slot or parked (commands.md §17).
+    /// Where the Lead Session's pane is (its latest `session-moved`; `None` before any).
     pub lead_place: Place,
     /// Its PRs that have a pull request, in key order (R34), as the column draws them; empty when none has one.
     pub prs: Vec<PrRow>,
@@ -125,6 +141,7 @@ pub fn widgets(store: &mut Store, concurrency: u32, recent: u32) -> Result<Widge
             slots: slots(conn, concurrency)?,
             engine: engine(conn)?,
             plans: plan_cards(conn)?,
+            prs: open_prs(conn)?,
             escalations: escalations(conn)?,
             events: recent_events(conn, recent)?,
             events_cursor: highest_id(conn)?,
@@ -146,6 +163,42 @@ fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
             Ok(PlanCard { label, lead_place, prs, head })
         })
         .collect()
+}
+
+/// The `open` pull requests, oldest first. `active`: a PR of the Plan of the chat slot's Lead (the Plan Lead whose latest
+/// `session-moved` says `chat`, the newest when there are several: `chat_slot`'s rule) points to it.
+fn open_prs(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT q.repo, q.number, q.title, q.draft, q.checks, q.review_decision,
+                EXISTS (SELECT 1 FROM prs r WHERE r.pull_request = q.id AND r.plan =
+                        (SELECT s.plan FROM sessions s
+                           JOIN events m ON m.id = (SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-moved')
+                          WHERE s.role = 'lead' AND s.plan IS NOT NULL AND json_extract(m.data, '$.place') = 'chat'
+                          ORDER BY m.id DESC LIMIT 1))
+           FROM pull_requests q WHERE q.state = 'open' ORDER BY q.created_at, q.repo, q.number",
+    )?;
+    let mut rows = stmt.query([])?;
+    let mut out = Vec::new();
+    while let Some(r) = rows.next()? {
+        let (repo, number): (String, i64) = (r.get(0)?, r.get(1)?);
+        let what = format!("Pull request {repo}#{number}");
+        let decision: String = r.get(5)?;
+        out.push(OpenPr {
+            title: r.get(2)?,
+            draft: r.get(3)?,
+            checks: Checks::parse(&what, &r.get::<_, String>(4)?)?,
+            review_decision: match decision.as_str() {
+                "none" => ReviewDecision::None,
+                "approved" => ReviewDecision::Approved,
+                "changes_requested" => ReviewDecision::ChangesRequested,
+                _ => return Err(bad_row(format!("{what} has review_decision {decision:?}"))),
+            },
+            active: r.get(6)?,
+            repo,
+            number,
+        });
+    }
+    Ok(out)
 }
 
 /// Plan id → its Lead Session's name and place.

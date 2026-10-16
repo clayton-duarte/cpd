@@ -10,7 +10,7 @@ use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use cpd_tui::palette::{self, Meaning};
-use cpd_tui::read::{self, Place, Widgets};
+use cpd_tui::read::{self, Widgets};
 use cpd_tui::widgets::{self, Machine, legend};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -173,8 +173,7 @@ fn find(buf: &Buffer, needle: &str) -> (u16, u16) {
 
 const RULE: &str = "──────────────────────────────────────────────";
 
-/// The column on the prepared store as the User sees it: the Plans with a PR (oldest first), then the Plans without
-/// one, of the Plans whose Lead has a pane in the cockpit.
+/// The column on the prepared store as the User sees it: the open pull requests, oldest first.
 fn column(height: u16) -> (Vec<String>, Buffer) {
     let (_env, mut store) = fixture();
     let w = read::widgets(&mut store, 3, 0).unwrap();
@@ -182,8 +181,40 @@ fn column(height: u16) -> (Vec<String>, Buffer) {
     (rows(&buf), buf)
 }
 
+/// One row of `pull_requests` of `repo`, created at `created` (GitHub's time).
+fn pull_request(repo: &str, number: i64, title: &str, draft: bool, state: &str, decision: &str, checks: &str, created: &str) -> String {
+    let merged = if state == "merged" { "'2026-02-01T00:00:00.000Z'" } else { "NULL" };
+    format!(
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+         VALUES ('{repo}', {number}, 'https://github.com/{repo}/pull/{number}', '{title}', {}, '{state}', '{decision}', '{checks}',
+                 '{created}', {merged}, '2026-02-02T00:00:00.000Z');",
+        u8::from(draft)
+    )
+}
+
+/// Pull requests in two repos, none created in the order they are listed here; `mine` (its Lead in the chat slot) owns
+/// `acme/repo#20`, `bare` (its Lead parked) owns none:
+/// - `acme/web#4`: draft, changes requested, failed checks, created 01-03;
+/// - `acme/repo#20`: pending, no review, created 01-05 (the Plan `mine`'s);
+/// - `acme/repo#9`: approved, passed, created 01-04;
+/// - `acme/web#2` closed and `acme/api#1` merged: not open.
+fn prs_store(env: &TestEnv) -> Store {
+    let mut store = open(env);
+    let mut s = context("alpha") + &lead_row("mine", "mine lead") + &lead_row("bare", "bare lead");
+    s += &plan_row("mine", "pr", "2026-01-02T00:00:00.000Z", Some((20, ("Mine to review", "none", "pending"))));
+    s += &plan_row("bare", "dispatch", "2026-01-02T00:00:01.000Z", None);
+    s += &pull_request("acme/web", 4, "Older web fix", true, "open", "changes_requested", "failed", "2026-01-03T00:00:00.000Z");
+    s += &pull_request("acme/repo", 9, "Middle one", false, "open", "approved", "passed", "2026-01-04T00:00:00.000Z");
+    s += &pull_request("acme/web", 2, "Closed web", false, "closed", "none", "none", "2026-01-01T00:00:00.000Z");
+    s += &pull_request("acme/api", 1, "Merged api", false, "merged", "approved", "passed", "2026-01-01T00:00:00.000Z");
+    s += &moved("2026-01-03T00:00:00.000Z", "mine", "chat");
+    s += &moved("2026-01-03T00:00:01.000Z", "bare", "parked");
+    sql(&mut store, &s);
+    store
+}
+
 /// The reference's own test, `the_dispatch_sections_are_titled_with_a_separator_between_each_pair` (`tui/src/main.rs:1053–1062`):
-/// the same lines on the same 30×14 pane, for a machine with no Plan in the cockpit.
+/// the same lines on the same 30×14 pane, for a machine with no open pull request.
 #[test]
 fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let env = TestEnv::new();
@@ -195,25 +226,25 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let rule = "─".repeat(30);
     assert_eq!(lines[..3], [" homeserver", " load 0.1 0.2 0.3", rule.as_str()]);
     assert_eq!(lines[3], " PRs");
-    assert_eq!(lines[4], " no Plans in the cockpit");
+    assert_eq!(lines[4], " no open PRs");
     assert_eq!(lines[5..], ["", "", "", rule.as_str(), " git", " (future)", rule.as_str(), " Jira", " (future)"]);
 }
 
 #[test]
-fn the_column_shows_the_machine_the_cockpits_prs_git_and_jira() {
+fn the_column_shows_the_machine_the_open_prs_git_and_jira() {
     let (got, _) = column(25);
     let expected = [
         " homeserver",
         " load 3.70 3.05 4.84",
         RULE,
         " PRs",
-        " cpd-ui",
-        "  #3 merged ✓ no review  cpd-ui: cockpit rows",
-        " cpd visual lead",
-        "  #7 open ✗ changes requested  cpd-tui cockpi…",
-        " fresh lead",
-        "  #11 open – no review  Plan fresh",
-        " v1  no PR",
+        " acme/repo#7",
+        "  open ✗ changes requested  cpd-tui cockpit c…",
+        " acme/repo#11",
+        "  open – no review  Plan fresh",
+        "",
+        "",
+        "",
         "",
         "",
         "",
@@ -233,25 +264,106 @@ fn the_column_shows_the_machine_the_cockpits_prs_git_and_jira() {
 }
 
 #[test]
-fn only_plans_whose_lead_is_in_the_chat_slot_or_parked_are_listed() {
-    let (_env, mut store) = fixture();
+fn three_open_prs_in_two_repos_come_out_oldest_first_in_two_lines_each() {
+    let env = TestEnv::new();
+    let mut store = prs_store(&env);
     let w = read::widgets(&mut store, 3, 0).unwrap();
-    let place = |plan: &str| w.plans.iter().find(|c| c.head.id.as_str() == plan).unwrap().lead_place;
+    let listed: Vec<(&str, i64)> = w.prs.iter().map(|p| (p.repo.as_str(), p.number)).collect();
+    assert_eq!(listed, [("acme/web", 4), ("acme/repo", 9), ("acme/repo", 20)]);
+    let got = rows(&render(46, 25, &w));
     assert_eq!(
-        ["old", "rel", "fresh", "ship", "sketch", "away", "never"].map(place),
-        [Place::Chat, Place::Parked, Place::Parked, Place::Chat, Place::None, Place::Work, Place::None]
+        got[3..10],
+        [
+            " PRs",
+            " acme/web#4",
+            "  draft ✗ changes requested  Older web fix",
+            " acme/repo#9",
+            "  open ✓ approved  Middle one",
+            " acme/repo#20",
+            "  open … no review  Mine to review",
+        ],
+        "{got:#?}"
     );
+    assert_eq!(got[10], "", "nothing else is listed");
+}
+
+#[test]
+fn a_draft_shows_draft_and_the_others_open() {
+    let env = TestEnv::new();
+    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    assert_eq!(w.prs.iter().map(|p| p.draft).collect::<Vec<_>>(), [true, false, false]);
     let got = rows(&render(46, 25, &w)).join("\n");
-    for listed in ["cpd-ui", "cpd visual lead", "fresh lead", "v1"] {
-        assert!(got.contains(listed), "{listed}");
+    assert_eq!(got.matches("draft").count(), 1, "{got}");
+}
+
+#[test]
+fn the_pr_of_the_plan_in_the_chat_slot_is_reversed_and_bold_and_the_others_are_not() {
+    let env = TestEnv::new();
+    let mut store = prs_store(&env);
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    assert_eq!(w.prs.iter().map(|p| p.active).collect::<Vec<_>>(), [false, false, true]);
+    let buf = render(46, 25, &w);
+    let style = |needle: &str| {
+        let (x, y) = find(&buf, needle);
+        let m = buf[(x, y)].modifier;
+        (m.contains(Modifier::REVERSED), m.contains(Modifier::BOLD))
+    };
+    // Both lines of the active one: reversed and bold.
+    assert_eq!(style("acme/repo#20"), (true, true));
+    assert_eq!(style("Mine to review"), (true, true));
+    assert_eq!(style("no review"), (true, true));
+    // The others: the name bold, the second line neither reversed nor bold.
+    assert_eq!(style("acme/web#4"), (false, true));
+    assert_eq!(style("acme/repo#9"), (false, true));
+    for line_two in ["Older web fix", "approved", "Middle one"] {
+        assert_eq!(style(line_two), (false, false), "{line_two}");
     }
-    for hidden in ["sketch lead", "away lead", "never lead", "#9"] {
+    // The chat slot moves to `bare`, which owns none: nothing is active.
+    sql(&mut store, &moved("2026-01-04T00:00:00.000Z", "bare", "chat"));
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    assert!(w.prs.iter().all(|p| !p.active));
+    let buf = render(46, 25, &w);
+    let at = find(&buf, "Mine to review");
+    assert!(!buf[at].modifier.contains(Modifier::REVERSED));
+}
+
+#[test]
+fn closed_and_merged_pull_requests_are_not_listed() {
+    let env = TestEnv::new();
+    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let got = rows(&render(46, 25, &w)).join("\n");
+    for hidden in ["acme/web#2", "Closed web", "acme/api#1", "Merged api"] {
         assert!(!got.contains(hidden), "{hidden}:\n{got}");
     }
-    // The latest move wins: `ship` leaves the cockpit.
-    sql(&mut store, &moved("2026-01-04T00:00:00.000Z", "ship", "work"));
+    // The fixture's merged ones (a Plan's own, `old` #3 and `away` #9) are not listed either.
+    let (got, _) = column(25);
+    let got = got.join("\n");
+    assert!(!got.contains("#3") && !got.contains("#9"), "{got}");
+}
+
+#[test]
+fn a_plan_without_a_pr_is_not_listed_and_no_label_is_drawn() {
+    let (got, _) = column(25);
+    let got = got.join("\n");
+    for hidden in ["v1", "sketch lead", "never lead", "no PR", "cpd-ui", "cpd visual lead", "fresh lead", "Plans in the cockpit"] {
+        assert!(!got.contains(hidden), "{hidden}:\n{got}");
+    }
+}
+
+#[test]
+fn no_open_pull_request_says_so() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    let mut s = context("alpha") + &lead_row("ship", "v1");
+    s += &plan_row("ship", "dispatch", "2026-01-02T00:00:00.000Z", None);
+    s += &pull_request("acme/web", 2, "Closed web", false, "closed", "none", "none", "2026-01-01T00:00:00.000Z");
+    sql(&mut store, &s);
     let w = read::widgets(&mut store, 3, 0).unwrap();
-    assert!(!rows(&render(46, 25, &w)).join("\n").contains("v1"));
+    assert!(w.prs.is_empty());
+    let buf = render(46, 25, &w);
+    let got = rows(&buf);
+    assert_eq!(got[3..5], [" PRs", " no open PRs"], "{got:#?}");
+    assert!(buf[find(&buf, "no open PRs")].modifier.contains(Modifier::DIM));
 }
 
 #[test]
@@ -269,87 +381,54 @@ fn the_column_takes_every_colour_from_the_palette() {
     let fg = |at: (u16, u16)| buf[at].fg;
     let c = palette::color;
     // The PRs: state and checks.
-    assert_eq!(fg(find(&buf, "merged")), c(Meaning::Done));
-    assert_eq!(fg(find(&buf, "✓")), c(Meaning::Done));
     assert_eq!(fg(find(&buf, "open")), c(Meaning::Review));
     assert_eq!(fg(find(&buf, "✗")), c(Meaning::Failed));
+    assert_eq!(fg(find(&buf, "–")), c(Meaning::Nothing));
     assert_eq!(fg(find(&buf, RULE)), c(Meaning::Nothing));
     let dim = |at: (u16, u16)| buf[at].modifier.contains(Modifier::DIM);
     let bold = |at: (u16, u16)| buf[at].modifier.contains(Modifier::BOLD);
-    // Bold: the machine, the section titles and the labels; dim: the title of the PR, `no PR`, `(future)`.
-    for title in ["homeserver", "PRs", "cpd-ui", "cpd visual lead", "v1", "git", "Jira"] {
+    // Bold: the machine, the section titles and the pull request names; dim: the title of the PR, `(future)`.
+    for title in ["homeserver", "PRs", "acme/repo#7", "git", "Jira"] {
         assert!(bold(find(&buf, title)), "{title}");
         assert!(!dim(find(&buf, title)), "{title}");
     }
-    for faint in ["cpd-ui: cockpit", "no PR", "Plan fresh", "(future)"] {
+    for faint in ["cpd-tui cockpit", "Plan fresh", "(future)"] {
         assert!(dim(find(&buf, faint)), "{faint}");
         assert!(!bold(find(&buf, faint)), "{faint}");
     }
-    // Plain: the number, the review decision and the load.
-    for plain in ["#3", "no review", "changes requested", "load 3.70"] {
+    // Plain: the review decision and the load.
+    for plain in ["no review", "changes requested", "load 3.70"] {
         let at = find(&buf, plain);
         assert!(!dim(at) && !bold(at), "{plain}");
     }
 }
 
 #[test]
-fn a_narrow_column_cuts_the_title_first_then_the_label_and_never_wraps() {
+fn a_long_title_is_cut_with_an_ellipsis_first_and_a_line_never_wraps() {
     let (_env, mut store) = fixture();
     let w = read::widgets(&mut store, 3, 0).unwrap();
-    let wide = rows(&render(33, 25, &w));
-    assert!(wide.contains(&"  #7 open ✗ changes requested".to_owned()), "no room for a title of 4 characters:\n{wide:#?}");
+    let wide = rows(&render(30, 25, &w));
+    assert!(wide.contains(&"  open ✗ changes requested".to_owned()), "no room for a title of 4 characters:\n{wide:#?}");
+    let got = rows(&render(36, 25, &w));
+    assert!(got.contains(&"  open ✗ changes requested  cpd-tui…".to_owned()), "{got:#?}");
     let got = rows(&render(24, 25, &w));
     assert!(got.iter().all(|r| r.chars().count() <= 24), "{got:#?}");
-    for cut in [" cpd visual lead", "  #7 open ✗ changes requested", " fresh lead", " v1  no PR"] {
-        assert!(got.iter().any(|r| r.starts_with(cut.chars().take(24).collect::<String>().as_str())), "{cut:?} in {got:#?}");
-    }
-    let narrow = rows(&render(10, 25, &w));
-    assert!(narrow.contains(&" cpd visu…".to_owned()), "{narrow:#?}");
-    assert!(narrow.contains(&" v1  no PR".to_owned()), "{narrow:#?}");
+    assert!(got.contains(&"  open ✗ changes request".to_owned()), "the pane clips what is left:\n{got:#?}");
+    let narrow = rows(&render(8, 25, &w));
+    assert!(narrow.contains(&" acme/r…".to_owned()), "the name is cut when it must be:\n{narrow:#?}");
 }
 
 #[test]
-fn a_short_pane_drops_the_plans_without_a_pr_before_the_rest() {
-    let (_env, mut store) = fixture();
-    let w = read::widgets(&mut store, 3, 0).unwrap();
-    // Beside the 9 rows of the other sections and the PRs title, the three Plans with a PR take 6; `v1` needs a 7th.
-    let full = rows(&render(46, 9 + 8, &w));
-    assert!(full.iter().any(|r| r.contains("v1  no PR")), "{full:#?}");
-    let short = rows(&render(46, 9 + 7, &w));
-    assert!(!short.iter().any(|r| r.contains("no PR")), "{short:#?}");
-    assert!(short.iter().any(|r| r.contains("#11 open")), "the Plans with a PR stay:\n{short:#?}");
-}
-
-#[test]
-fn a_plan_of_several_prs_takes_one_line_per_pull_request_in_key_order() {
+fn a_short_pane_drops_the_pull_requests_that_do_not_fit_from_the_end() {
     let env = TestEnv::new();
-    let mut store = open(&env);
-    // `web` (#21, open) and `api` (#20, merged) have pull requests; `docs` waits and has none
-    let mut s = context("alpha") + &lead_row("multi", "multi lead");
-    s += r#"INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
-            VALUES ('multi', 'alpha', 'Plan multi', 'dispatch', 'l-multi', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
-            INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-            VALUES ('acme/web', 21, 'https://github.com/acme/web/pull/21', 'web side', 0, 'open', 'none', 'pending',
-                    '2026-01-05T00:00:00.000Z', NULL, '2026-01-06T00:00:00.000Z'),
-                   ('acme/api', 20, 'https://github.com/acme/api/pull/20', 'api side', 0, 'merged', 'approved', 'passed',
-                    '2026-01-05T00:00:00.000Z', '2026-01-07T00:00:00.000Z', '2026-01-06T00:00:00.000Z');
-            INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
-                             pull_request, created_txn, created_at, started_at, merged_at)
-            VALUES ('multi', 'web', '/src/web', 'main', 'open', 'cpd/multi/web', '/wt/web', 21, 'https://github.com/acme/web/pull/21',
-                    '2026-01-05T00:00:00.000Z', (SELECT id FROM pull_requests WHERE number = 21), cpd_txn(),
-                    '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', NULL),
-                   ('multi', 'api', '/src/api', 'main', 'merged', 'cpd/multi/api', '/wt/api', 20, 'https://github.com/acme/api/pull/20',
-                    '2026-01-05T00:00:00.000Z', (SELECT id FROM pull_requests WHERE number = 20), cpd_txn(),
-                    '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', '2026-01-07T00:00:00.000Z');
-            INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
-            VALUES ('multi', 'docs', '/src/docs', 'main', 'waiting', 'cpd/multi/docs', cpd_txn(), '2026-01-02T00:00:00.000Z');"#;
-    s += &moved("2026-01-03T00:00:00.000Z", "multi", "chat");
-    sql(&mut store, &s);
-    let w = read::widgets(&mut store, 3, 0).unwrap();
-    let keys: Vec<&str> = w.plans[0].prs.iter().map(|p| p.key.as_str()).collect();
-    assert_eq!(keys, ["api", "web"], "the PRs with a pull request, in key order");
-    let got = rows(&render(46, 16, &w));
-    assert_eq!(got[3..7], [" PRs", " multi lead", "  #20 merged ✓ approved  api side", "  #21 open … no review  web side"], "{got:#?}");
+    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    // Beside the 9 rows of the other sections and the PRs title, each pull request takes 2.
+    for (height, listed) in [(9 + 1 + 6, 3), (9 + 1 + 5, 2), (9 + 1 + 2, 1), (9 + 1 + 1, 0)] {
+        let got = rows(&render(46, height, &w)).join("\n");
+        let shown = ["acme/web#4", "acme/repo#9", "acme/repo#20"].iter().filter(|n| got.contains(**n)).count();
+        assert_eq!(shown, listed, "height {height}:\n{got}");
+        assert!(listed == 0 || got.contains("acme/web#4"), "the oldest stay:\n{got}");
+    }
 }
 
 // ---------- the legend ----------
