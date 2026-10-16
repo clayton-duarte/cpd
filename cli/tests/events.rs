@@ -707,6 +707,24 @@ fn follow_streams_new_events_in_commit_order_and_exits_zero_when_stdout_closes()
 }
 
 #[test]
+fn follow_exits_zero_when_stdout_closes_with_no_event_to_write() {
+    let env = seeded();
+    let mut follower = Follower::start(&env, &["--session", "lead1"]);
+    // Let it start and settle into its poll loop, then close its stdout; append nothing.
+    std::thread::sleep(Duration::from_millis(500));
+    follower.close_stdout();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let code = loop {
+        if let Some(status) = follower.child.try_wait().unwrap() {
+            break status.code().expect("not killed");
+        }
+        assert!(Instant::now() < deadline, "the follower did not exit within 2 s of its reader going away");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(code, 0);
+}
+
+#[test]
 fn follow_without_since_prints_only_events_committed_after_it_started() {
     let env = seeded();
     let mut store = open(&env);
