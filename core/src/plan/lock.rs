@@ -85,11 +85,19 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
             return Err(cas_lost(&id));
         }
         let moved = tx.execute(
-            "UPDATE plans SET phase = 'dispatch', lead_worktree = ?1, locked_at = (SELECT at FROM txns WHERE id = cpd_txn())
-              WHERE id = ?2 AND phase = 'plan'",
-            [worktree.as_str(), id.as_str()],
+            "UPDATE plans SET phase = 'dispatch', locked_at = (SELECT at FROM txns WHERE id = cpd_txn())
+              WHERE id = ?1 AND phase = 'plan'",
+            [id.as_str()],
         )?;
         if moved == 0 {
+            return Err(cas_lost(&id));
+        }
+        let started = tx.execute(
+            "UPDATE prs SET status = 'dispatch', lead_worktree = ?1, started_at = (SELECT at FROM txns WHERE id = cpd_txn())
+              WHERE plan = ?2 AND key = ?3 AND status = 'waiting'",
+            [worktree.as_str(), id.as_str(), plan.pr_key.as_str()],
+        )?;
+        if started == 0 {
             return Err(cas_lost(&id));
         }
         for job in jobs_now.iter().filter(|j| j.is_draft()) {

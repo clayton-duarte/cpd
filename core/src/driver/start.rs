@@ -134,17 +134,21 @@ pub fn start(store: &mut Store, ctx: &StartCtx<'_>, plan: &PlanId, key: &JobKey)
 /// Decides the next Attempt of Job `key`, refusing a Job that is not Ready or
 /// does not match its fingerprint.
 fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey) -> Result<Next, CpdError> {
-    let found: Option<(String, String)> = conn
-        .query_row("SELECT phase, repo FROM plans WHERE id = ?1", [plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
-        .optional()?;
-    let (phase, repo) =
-        found.ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str()))?;
+    let found: Option<String> =
+        conn.query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
+    let phase = found.ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str()))?;
     let all = jobs::load(conn, plan)?;
     let job = all.iter().find(|j| j.key == key.as_str()).ok_or_else(|| {
         CpdError::new(ErrorCode::JobNotFound, format!("No Job {key} in Plan {plan}."))
             .with("plan", plan.as_str())
             .with("job", key.as_str())
     })?;
+    // The repo of the Job's PR (R34 A7).
+    let repo: String = conn.query_row(
+        "SELECT r.repo FROM jobs j JOIN prs r ON r.plan = j.plan AND r.key = j.pr WHERE j.plan = ?1 AND j.key = ?2",
+        [plan.as_str(), key.as_str()],
+        |r| r.get(0),
+    )?;
     require_ready(&all, job, plan, &phase)?;
     let found = locked_fingerprint(job);
     if job.fingerprint.as_deref() != Some(found.as_str()) {

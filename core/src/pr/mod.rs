@@ -93,7 +93,9 @@ fn lock(env: &mut Env, plan: &PlanRow, source: &str) -> Result<RepoLock, CpdErro
     let repo = plan.repo.to_string_lossy().into_owned();
     let merging = env.store.read(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT a.plan, a.id FROM attempts a JOIN plans p ON p.id = a.plan WHERE a.status = 'merging' AND p.repo = ?1",
+            "SELECT a.plan, a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+               JOIN prs r ON r.plan = j.plan AND r.key = j.pr
+              WHERE a.status = 'merging' AND r.repo = ?1",
         )?;
         let rows = stmt.query_map([repo], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)

@@ -124,12 +124,14 @@ fn same_locked_fields(a: &Job, b: &Job) -> bool {
         == (&b.title, &b.tier, &b.goal, &b.context, &b.touches, &b.acceptance, &b.out_of_scope, &b.needs)
 }
 
+/// The Job's PR is the Plan's one PR (R34 A7; `--pr` is Job `r34-job-pr`'s).
 fn insert(tx: &Connection, plan: &PlanId, job: &Job) -> Result<(), CpdError> {
     let array = |v: &Value| v.to_string();
     tx.execute(
-        "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                            status, appended, fingerprint, created_txn, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, cpd_txn(),
+         VALUES (?1, (SELECT key FROM prs WHERE plan = ?1 ORDER BY created_txn, key LIMIT 1),
+                 ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, cpd_txn(),
                  (SELECT at FROM txns WHERE id = cpd_txn()))",
         rusqlite::params![
             plan.as_str(),

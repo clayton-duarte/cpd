@@ -1,4 +1,5 @@
-//! The `plans` row as `pr` reads it: parsed once, so what follows holds valid values.
+//! The `plans` row with its one PR (`prs`, R34 A6) as `pr` reads it: parsed
+//! once, so what follows holds valid values.
 
 use std::path::PathBuf;
 
@@ -6,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
 use crate::error::{CpdError, ErrorCode};
-use crate::ids::PlanId;
+use crate::ids::{PlanId, PrKey};
 use crate::plan::Phase;
 
 /// The PR of a Plan in phase `pr` or `done` (contract §2.2 Plan).
@@ -33,6 +34,8 @@ impl Pr {
 pub(super) struct PlanRow {
     pub id: PlanId,
     pub title: String,
+    /// The key of the Plan's one PR, whose columns follow.
+    pub key: PrKey,
     pub repo: PathBuf,
     pub base: String,
     pub lead_branch: String,
@@ -48,7 +51,7 @@ fn bad_row(what: String) -> CpdError {
 }
 
 impl PlanRow {
-    /// The Lead worktree: set in every phase from `dispatch` on (`plans` CHECK).
+    /// The Lead worktree: set from the PR's status `dispatch` on (`prs` CHECK).
     pub fn lead(&self) -> Result<&PathBuf, CpdError> {
         self.lead_worktree.as_ref().ok_or_else(|| bad_row(format!("Plan {} has no Lead worktree", self.id)))
     }
@@ -58,8 +61,10 @@ impl PlanRow {
 pub(super) fn load(conn: &Connection, id: &PlanId) -> Result<PlanRow, CpdError> {
     let raw = conn
         .query_row(
-            "SELECT title, repo, base, lead_branch, lead_worktree, phase, pr_number, pr_url, pr_opened_at, pr_seen
-               FROM plans WHERE id = ?1",
+            "SELECT p.title, r.repo, r.base, r.lead_branch, r.lead_worktree, p.phase, r.pr_number, r.pr_url, r.pr_opened_at,
+                    r.pr_seen, r.key
+               FROM plans p JOIN prs r ON r.plan = p.id
+              WHERE p.id = ?1 ORDER BY r.created_txn, r.key LIMIT 1",
             [id.as_str()],
             |r| {
                 Ok((
@@ -71,12 +76,14 @@ pub(super) fn load(conn: &Connection, id: &PlanId) -> Result<PlanRow, CpdError> 
                     r.get::<_, String>(5)?,
                     (r.get::<_, Option<i64>>(6)?, r.get::<_, Option<String>>(7)?, r.get::<_, Option<String>>(8)?),
                     r.get::<_, String>(9)?,
+                    r.get::<_, String>(10)?,
                 ))
             },
         )
         .optional()?
         .ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {id}.")).with("plan", id.as_str()))?;
-    let (title, repo, base, lead_branch, lead_worktree, phase, pr, pr_seen) = raw;
+    let (title, repo, base, lead_branch, lead_worktree, phase, pr, pr_seen, key) = raw;
+    let key = PrKey::parse(&key).map_err(|_| bad_row(format!("Plan {id} has a PR key {key:?}")))?;
     let phase = Phase::parse(&phase).ok_or_else(|| bad_row(format!("Plan {id} has phase {phase:?}")))?;
     let pr = match pr {
         (Some(number), Some(url), Some(opened_at)) => Some(Pr { number, url, opened_at }),
@@ -85,6 +92,7 @@ pub(super) fn load(conn: &Connection, id: &PlanId) -> Result<PlanRow, CpdError> 
     Ok(PlanRow {
         id: id.clone(),
         title,
+        key,
         repo: PathBuf::from(repo),
         base,
         lead_branch,

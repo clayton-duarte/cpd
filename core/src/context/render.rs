@@ -42,7 +42,8 @@ pub fn markdown(title: &str, jira: Option<&str>, records: &[Indexed], since: i64
     section(&mut out, "Plans", of_kind(RecordKind::Plan).map(|(_, r)| {
         let plan = r.plan().expect("a plan record has its plan");
         let jira = plan.jira.as_deref().map(|j| format!(", {j}")).unwrap_or_default();
-        item(r, &format!("{} (on {}, repo {}{jira}): {}", plan.id, plan.machine, plan.repo, r.text))
+        let repo = plan.repo.as_deref().map(|repo| format!(", repo {repo}")).unwrap_or_default();
+        item(r, &format!("{} (on {}{repo}{jira}): {}", plan.id, plan.machine, r.text))
     }));
     section(&mut out, "Decisions", of_kind(RecordKind::Decision).filter(|(_, r)| !successor.contains_key(&r.id.to_string())).map(|(_, r)| {
         let replaces = r.supersedes().map(|s| format!(" (supersedes {s})")).unwrap_or_default();

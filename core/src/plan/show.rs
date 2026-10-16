@@ -20,7 +20,7 @@ pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
     let (plans, cursor) = env.store.read(|conn| {
         let context = args.context.as_ref().map(|c| c.as_str().to_owned());
         let phase = args.phase.map(|p| p.as_str());
-        let plans = row::query(conn, "(?1 IS NULL OR context = ?1) AND (?2 IS NULL OR phase = ?2)", &[&context, &phase])?;
+        let plans = row::query(conn, "(?1 IS NULL OR p.context = ?1) AND (?2 IS NULL OR p.phase = ?2)", &[&context, &phase])?;
         let mut out = Vec::new();
         for plan in plans {
             let jobs = jobs::load(conn, &plan.id)?;

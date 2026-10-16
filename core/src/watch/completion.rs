@@ -1,6 +1,6 @@
 //! E4, completion (contract §3.7): a Plan in `dispatch` with no Job `queued`
-//! or `running`, at least one `merged`, and `all_merged_at` null gets
-//! `all-merged` `{merged, cancelled}` and its `all_merged_at`, once.
+//! or `running`, at least one `merged`, and its one PR's `all_merged_at` null
+//! gets `all-merged` `{merged, cancelled}` and that `all_merged_at`, once.
 
 use serde_json::json;
 
@@ -14,7 +14,8 @@ use crate::store::WriteTxn;
 
 /// The Plans E4 is for; `?1` is one Plan's id, or NULL for every Plan.
 const DONE: &str = "SELECT p.id FROM plans p
-  WHERE (?1 IS NULL OR p.id = ?1) AND p.phase = 'dispatch' AND p.all_merged_at IS NULL
+  WHERE (?1 IS NULL OR p.id = ?1) AND p.phase = 'dispatch'
+    AND NOT EXISTS (SELECT 1 FROM prs r WHERE r.plan = p.id AND r.all_merged_at IS NOT NULL)
     AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = p.id AND j.status IN ('queued', 'running'))
     AND EXISTS (SELECT 1 FROM jobs j WHERE j.plan = p.id AND j.status = 'merged')
   ORDER BY p.id";
@@ -61,7 +62,7 @@ fn complete(tx: &WriteTxn<'_>, plan: &PlanId) -> Result<bool, CpdError> {
         return Ok(false);
     }
     tx.execute(
-        "UPDATE plans SET all_merged_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE id = ?1 AND all_merged_at IS NULL",
+        "UPDATE prs SET all_merged_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE plan = ?1 AND all_merged_at IS NULL",
         [plan.as_str()],
     )?;
     let merged = keys(tx, plan, "merged")?;

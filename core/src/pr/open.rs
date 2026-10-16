@@ -42,10 +42,15 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
         None => gh::create_pr(&lead, &plan.base, &plan.lead_branch, &plan.title, &summary(&plan, &list))?,
     };
     env.store.write(COMMAND, |tx| {
+        let moved = tx.execute("UPDATE plans SET phase = 'pr' WHERE id = ?1 AND phase = 'dispatch'", [id.as_str()])?;
+        if moved == 0 {
+            return Err(CpdError::new(ErrorCode::CasLost, format!("Plan {id} left phase dispatch meanwhile: rerun the command."))
+                .with("plan", id.as_str()));
+        }
         let moved = tx.execute(
-            "UPDATE plans SET pr_number = ?1, pr_url = ?2, pr_opened_at = (SELECT at FROM txns WHERE id = cpd_txn()), phase = 'pr'
-              WHERE id = ?3 AND phase = 'dispatch'",
-            rusqlite::params![found.number, found.url, id.as_str()],
+            "UPDATE prs SET status = 'open', pr_number = ?1, pr_url = ?2, pr_opened_at = (SELECT at FROM txns WHERE id = cpd_txn())
+              WHERE plan = ?3 AND key = ?4 AND status = 'dispatch'",
+            rusqlite::params![found.number, found.url, id.as_str(), plan.key.as_str()],
         )?;
         if moved == 0 {
             return Err(CpdError::new(ErrorCode::CasLost, format!("Plan {id} left phase dispatch meanwhile: rerun the command."))
@@ -75,7 +80,7 @@ fn require_dispatch(plan: &PlanRow) -> Result<Option<Output>, CpdError> {
     match plan.phase {
         Phase::Dispatch => Ok(None),
         Phase::Pr | Phase::Done => {
-            let pr = plan.pr.as_ref().expect("a Plan in phase pr or done has a PR (plans CHECK)");
+            let pr = plan.pr.as_ref().expect("a Plan in phase pr or done has an open or merged PR (prs CHECK)");
             Ok(Some(Output::success(json!({"plan": plan.id, "phase": plan.phase.as_str(), "pr": pr.to_json(), "already": true}))))
         }
         _ => Err(illegal_phase(plan, COMMAND, "dispatch")),

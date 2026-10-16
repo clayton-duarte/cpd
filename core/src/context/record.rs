@@ -26,7 +26,10 @@ pub struct By {
 pub struct PlanRef {
     pub id: PlanId,
     pub machine: MachineName,
-    pub repo: String,
+    /// Interim (R34 A12, until Job `r34-plan-new`): written by `plan new
+    /// --repo`, not indexed, so `None` when read back from the index.
+    #[serde(default)]
+    pub repo: Option<String>,
     #[serde(default)]
     pub jira: Option<String>,
 }
@@ -114,7 +117,9 @@ impl Record {
             let mut p = Map::new();
             p.insert("id".into(), json!(plan.id));
             p.insert("machine".into(), json!(plan.machine));
-            p.insert("repo".into(), json!(plan.repo));
+            if let Some(repo) = &plan.repo {
+                p.insert("repo".into(), json!(repo));
+            }
             if let Some(jira) = &plan.jira {
                 p.insert("jira".into(), json!(jira));
             }
@@ -173,7 +178,7 @@ impl Record {
 
     /// The columns of `context_records` in [`Record::from_row`]'s order, after `seq`.
     pub const COLUMNS: &'static str = "seq, id, kind, at, machine, by_session, by_plan, text, supersedes, question, \
-                                       plan_id, plan_machine, plan_repo, plan_jira";
+                                       plan_id, plan_machine, plan_jira";
 
     /// Reads a row selected with [`Record::COLUMNS`]: its `seq` and the record.
     pub fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(i64, Record)> {
@@ -203,8 +208,8 @@ impl Record {
             Some(plan) => Some(PlanRef {
                 id: PlanId::parse(&plan).map_err(|e| bad(10, e))?,
                 machine: MachineName::parse(&row.get::<_, String>(11)?).map_err(|e| bad(11, e))?,
-                repo: row.get(12)?,
-                jira: optional(13)?,
+                repo: None,
+                jira: optional(12)?,
             }),
         };
         let draft = Draft::from_parts(kind, record_id(8)?, record_id(9)?, plan).map_err(|m| invalid(2, m))?;
@@ -219,8 +224,8 @@ impl Record {
         let added = conn.execute(
             "INSERT INTO context_records
                (context, id, kind, at, machine, by_session, by_plan, text, supersedes, question,
-                plan_id, plan_machine, plan_repo, plan_jira)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                plan_id, plan_machine, plan_jira)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT (context, id) DO NOTHING",
             rusqlite::params![
                 context.as_str(),
@@ -235,7 +240,6 @@ impl Record {
                 self.question().map(RecordId::to_string),
                 plan.map(|p| p.id.as_str()),
                 plan.map(|p| p.machine.as_str()),
-                plan.map(|p| p.repo.as_str()),
                 plan.and_then(|p| p.jira.as_deref()),
             ],
         )?;

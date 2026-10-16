@@ -50,8 +50,8 @@ pub(super) fn run(engine: &mut Engine) {
 fn attempts(engine: &mut Engine) {
     let active = engine.store.read(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT a.plan, a.id, a.status, a.started_at, a.stop_request, j.cancel_requested_at IS NOT NULL, p.repo
-               FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job JOIN plans p ON p.id = a.plan
+            "SELECT a.plan, a.id, a.status, a.started_at, a.stop_request, j.cancel_requested_at IS NOT NULL, r.repo
+               FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job JOIN prs r ON r.plan = j.plan AND r.key = j.pr
               WHERE a.status <> 'ended' ORDER BY a.plan, a.id",
         )?;
         let rows = stmt

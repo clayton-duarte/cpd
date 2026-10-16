@@ -18,7 +18,7 @@ use crate::events::{Kind, NewEvent, append};
 use crate::git::lead_branch;
 use crate::git::run::{branch_exists, run};
 use crate::git::worktree::list as worktrees;
-use crate::ids::{PlanId, SessionId};
+use crate::ids::{PlanId, PrKey, SessionId};
 use crate::output::Output;
 
 pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
@@ -75,9 +75,15 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
             rusqlite::params![session.as_str(), args.context.as_str(), id.as_str(), name, forked_from, repo_str, tier],
         )?;
         tx.execute(
-            "INSERT INTO plans (id, context, title, jira, repo, base, lead_branch, phase, lead_session, created_at)
-             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'grounding', ?8, at FROM txns WHERE id = cpd_txn()",
-            rusqlite::params![id.as_str(), args.context.as_str(), args.title.as_str(), jira, repo_str, base, branch, session.as_str()],
+            "INSERT INTO plans (id, context, title, jira, phase, lead_session, created_at)
+             SELECT ?1, ?2, ?3, ?4, 'grounding', ?5, at FROM txns WHERE id = cpd_txn()",
+            rusqlite::params![id.as_str(), args.context.as_str(), args.title.as_str(), jira, session.as_str()],
+        )?;
+        // Interim until `plan new` loses `--repo` (R34 A12): the Plan's one PR.
+        tx.execute(
+            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+             SELECT ?1, ?2, ?3, ?4, 'waiting', ?5, id, at FROM txns WHERE id = cpd_txn()",
+            rusqlite::params![id.as_str(), pr_key(&repo).as_str(), repo_str, base, branch],
         )?;
         let text = format!("Plan {id} \"{}\" created in Context {}, phase grounding. Next: cpd plan show --plan {id}", args.title, args.context);
         let data = json!({"title": args.title.as_str(), "repo": repo_str, "base": base, "jira": jira,
@@ -164,7 +170,7 @@ fn summary(plan: &PlanRow) -> Value {
 /// Returns its id.
 fn write_record(env: &mut Env, plan: &PlanRow) -> Result<String, CpdError> {
     let by = By { session: env_id("CPD_SESSION", SessionId::parse)?.or(env_id("PI_SESSION_ID", SessionId::parse)?), plan: env_id("CPD_PLAN", PlanId::parse)? };
-    let draft = Draft::Plan(PlanRef { id: plan.id.clone(), machine: env.config.machine.clone(), repo: plan.repo.clone(), jira: plan.jira.clone() });
+    let draft = Draft::Plan(PlanRef { id: plan.id.clone(), machine: env.config.machine.clone(), repo: Some(plan.repo.clone()), jira: plan.jira.clone() });
     let title: Text = plan.title.parse().map_err(|_| bad_row(format!("Plan {} has title {:?}", plan.id, plan.title)))?;
     let written = Contexts::new(&env.home, &env.config, &mut env.store).write(&plan.context, "plan new", by, &title, draft)?;
     Ok(written.record.id.to_string())
@@ -205,6 +211,21 @@ fn start_lead(env: &mut Env, plan: &PlanRow, session: &SessionId, name: &str) ->
     let window = crate::host::layout::park_window(session, Some(&plan.id));
     let lead = Lead { session, context: &plan.context, plan: Some(&plan.id), name, cwd: Path::new(&plan.repo) };
     lead::start(env, &lead, &window, "plan new")
+}
+
+/// The key of the one PR `plan new --repo` makes: the rule of migration 3
+/// (contract §4.5), the base name of the repo, lower-cased, each character
+/// outside `[a-z0-9-]` replaced by `-`, prefixed `pr-` when it does not then
+/// start with a letter, cut to 24 characters. Interim until Job `r34-plan-new`.
+fn pr_key(repo: &Path) -> PrKey {
+    let name = repo.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let mut key: String =
+        name.chars().map(|c| if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' { c } else { '-' }).collect();
+    if !key.starts_with(|c: char| c.is_ascii_lowercase()) {
+        key.insert_str(0, "pr-");
+    }
+    key.truncate(24);
+    PrKey::parse(&key).expect("the rule above always makes a valid PR key")
 }
 
 fn not_a_git_repo(path: &Path, why: &str) -> CpdError {
@@ -263,6 +284,7 @@ mod tests {
             context: ContextId::parse("payments").unwrap(),
             title: "Retry failed payouts".into(),
             jira: None,
+            pr_key: PrKey::parse("pay").unwrap(),
             repo: "/r/pay".into(),
             base: "main".into(),
             lead_branch: "cpd/pay-4521".into(),

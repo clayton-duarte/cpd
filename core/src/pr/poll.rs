@@ -33,7 +33,7 @@ pub(super) fn poll(args: Args) -> Result<Output, CpdError> {
         }
         _ => return Err(illegal_phase(&plan, COMMAND, "pr")),
     }
-    let pr = plan.pr.clone().expect("a Plan in phase pr has a PR (plans CHECK)");
+    let pr = plan.pr.clone().expect("a Plan in phase pr has an open PR (prs CHECK)");
     let lead = plan.lead()?.clone();
     let seen = Seen::parse(&plan.pr_seen)?;
 
@@ -43,8 +43,8 @@ pub(super) fn poll(args: Args) -> Result<Output, CpdError> {
     let checks = ChecksSummary::of(&feedback::current_checks(&view));
     let stored = |tx: &WriteTxn<'_>| -> rusqlite::Result<()> {
         tx.execute(
-            "UPDATE plans SET pr_title = ?1, pr_review_decision = ?2, pr_checks = ?3 WHERE id = ?4",
-            rusqlite::params![view.title, decision.as_str(), checks.as_str(), id.as_str()],
+            "UPDATE prs SET pr_title = ?1, pr_review_decision = ?2, pr_checks = ?3 WHERE plan = ?4 AND key = ?5",
+            rusqlite::params![view.title, decision.as_str(), checks.as_str(), id.as_str(), plan.key.as_str()],
         )?;
         Ok(())
     };
@@ -57,10 +57,18 @@ pub(super) fn poll(args: Args) -> Result<Output, CpdError> {
     if view.state == "MERGED" {
         env.store.write(COMMAND, |tx| {
             let moved = tx.execute(
-                "UPDATE plans SET phase = 'done', done_at = (SELECT at FROM txns WHERE id = cpd_txn()),
-                        pr_polled_at = (SELECT at FROM txns WHERE id = cpd_txn())
+                "UPDATE plans SET phase = 'done', done_at = (SELECT at FROM txns WHERE id = cpd_txn())
                   WHERE id = ?1 AND phase = 'pr'",
                 [id.as_str()],
+            )?;
+            if moved == 0 {
+                return Err(cas_lost(&id));
+            }
+            let moved = tx.execute(
+                "UPDATE prs SET status = 'merged', merged_at = (SELECT at FROM txns WHERE id = cpd_txn()),
+                        pr_polled_at = (SELECT at FROM txns WHERE id = cpd_txn())
+                  WHERE plan = ?1 AND key = ?2 AND status = 'open'",
+                [id.as_str(), plan.key.as_str()],
             )?;
             if moved == 0 {
                 return Err(cas_lost(&id));
@@ -86,9 +94,10 @@ pub(super) fn poll(args: Args) -> Result<Output, CpdError> {
 
     env.store.write(COMMAND, |tx| {
         let moved = tx.execute(
-            "UPDATE plans SET pr_seen = ?1, pr_polled_at = (SELECT at FROM txns WHERE id = cpd_txn())
-              WHERE id = ?2 AND phase = 'pr' AND pr_seen = ?3",
-            rusqlite::params![next.to_text(), id.as_str(), plan.pr_seen],
+            "UPDATE prs SET pr_seen = ?1, pr_polled_at = (SELECT at FROM txns WHERE id = cpd_txn())
+              WHERE plan = ?2 AND key = ?3 AND status = 'open' AND pr_seen = ?4
+                AND (SELECT phase FROM plans WHERE id = ?2) = 'pr'",
+            rusqlite::params![next.to_text(), id.as_str(), plan.key.as_str(), plan.pr_seen],
         )?;
         if moved == 0 {
             return Err(cas_lost(&id));
