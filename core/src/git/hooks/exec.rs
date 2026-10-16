@@ -124,7 +124,8 @@ fn start(command: &Rendered, cwd: &Path, prefixed: bool, output: &Arc<Mutex<Vec<
 }
 
 /// Waits for every command of a block, all of them, even after one fails; at
-/// the deadline kills the process groups of those still running.
+/// the deadline kills the process groups of those still running; a command whose
+/// `sh` exited has its group killed too (ESRCH, an empty group, is ignored).
 fn wait(running: &mut [Running], deadline: Instant) {
     loop {
         let mut pending = false;
@@ -135,6 +136,8 @@ fn wait(running: &mut [Running], deadline: Instant) {
             }
             match child.try_wait() {
                 Ok(Some(status)) => {
+                    // The sh is gone: nothing it left in its group may outlive the hook.
+                    let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
                     r.ended = Some(match (status.code(), status.signal()) {
                         (Some(code), _) => Ended::Exit(code),
                         (None, Some(sig)) => Ended::Signal(sig),
