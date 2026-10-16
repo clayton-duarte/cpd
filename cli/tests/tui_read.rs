@@ -594,7 +594,7 @@ fn the_slots_are_the_attempts_not_ended_against_the_limit() {
 }
 
 #[test]
-fn the_widgets_list_every_plan_with_its_pr_and_feedback() {
+fn the_widgets_list_every_plan_with_its_pr() {
     let (_env, mut store) = fixture();
     let w = read::widgets(&mut store, 3, 0).unwrap();
     let ids: Vec<&str> = w.plans.iter().map(|p| p.head.id.as_str()).collect();
@@ -602,9 +602,6 @@ fn the_widgets_list_every_plan_with_its_pr_and_feedback() {
 
     let rel = w.plans.iter().find(|p| p.head.id.as_str() == "rel").unwrap();
     assert_eq!(rel.head.pr.as_ref().unwrap().number, 7);
-    let feedback = rel.feedback.as_ref().unwrap();
-    assert_eq!((feedback.state.as_str(), feedback.reasons.as_slice()), ("open", &["checks_failed".to_owned()][..]));
-    assert!(w.plans.iter().filter(|p| p.head.id.as_str() != "rel").all(|p| p.feedback.is_none()));
     let ship = w.plans.iter().find(|p| p.head.id.as_str() == "ship").unwrap();
     assert_eq!((ship.head.phase, ship.head.counts.merged, ship.head.pr.is_none()), (Phase::Dispatch, 1, true));
 }

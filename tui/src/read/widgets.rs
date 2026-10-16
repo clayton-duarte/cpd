@@ -1,5 +1,5 @@
 //! The `widgets` view's snapshot (commands.md §17), the Dispatch column: the
-//! machine-wide numbers (slots, the engine), every Plan's pull requests and feedback,
+//! machine-wide numbers (slots, the engine), every Plan's pull requests,
 //! every open Escalation and the latest Events (`plan list`, with the rows the
 //! column draws from).
 
@@ -70,8 +70,7 @@ pub enum Engine {
     Crashed { pid: u32, since: String },
 }
 
-/// A Plan, for the Dispatch column: its head (counts), its label, the rows of its PRs that have a pull request and its
-/// latest PR feedback.
+/// A Plan, for the Dispatch column: its head (counts), its label and the rows of its PRs that have a pull request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlanCard {
     pub head: PlanHead,
@@ -82,7 +81,6 @@ pub struct PlanCard {
     pub lead_place: Place,
     /// Its PRs that have a pull request, in key order (R34), as the column draws them; empty when none has one.
     pub prs: Vec<PrRow>,
-    pub feedback: Option<PrFeedback>,
 }
 
 /// A PR's pull request: number, state, and what `pr poll` last stored in its row (contract §4.4, §7.6).
@@ -109,17 +107,6 @@ pub enum ReviewDecision {
     None,
     Approved,
     ChangesRequested,
-}
-
-/// The Plan's latest `pr-feedback` Event (§5.2).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PrFeedback {
-    pub event: i64,
-    pub at: String,
-    /// `open` or `closed`, as the Event carries it (`OPEN` or `CLOSED` in Events written before migration 5).
-    pub state: String,
-    /// `checks_failed`, `changes_requested`, `closed`: why the Plan's Lead was told (D7).
-    pub reasons: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -156,9 +143,7 @@ fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
                 .cloned()
                 .ok_or_else(|| bad_row(format!("Plan {} has no Lead Session {}", head.id, head.lead_session)))?;
             let prs = pulls.remove(head.id.as_str()).unwrap_or_default();
-            // Only a Plan with a pull request has feedback: one query per such Plan, not per Plan.
-            let feedback = if prs.is_empty() { None } else { feedback(conn, &head.id)? };
-            Ok(PlanCard { label, lead_place, prs, feedback, head })
+            Ok(PlanCard { label, lead_place, prs, head })
         })
         .collect()
 }
@@ -253,33 +238,6 @@ fn engine(conn: &Connection) -> Result<Engine, CpdError> {
         .and_then(|p| u32::try_from(p).ok())
         .ok_or_else(|| bad_row(format!("a watch-started Event has data {data}")))?;
     Ok(if alive(pid) { Engine::Running { pid, since: at } } else { Engine::Crashed { pid, since: at } })
-}
-
-fn feedback(conn: &Connection, plan: &PlanId) -> Result<Option<PrFeedback>, CpdError> {
-    let latest: Option<(i64, String, String)> = conn
-        .query_row(
-            "SELECT id, at, data FROM events WHERE plan = ?1 AND kind = 'pr-feedback' ORDER BY id DESC LIMIT 1",
-            [plan.as_str()],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
-        .optional()?;
-    latest
-        .map(|(event, at, data)| {
-            let bad = || bad_row(format!("pr-feedback Event {event} has data {data}"));
-            let d: Value = serde_json::from_str(&data).map_err(|_| bad())?;
-            // An Event written before migration 5 lists the new checks, reviews and comments, not `reasons` (D7): none.
-            let reasons = match d.get("reasons") {
-                None => Vec::new(),
-                Some(list) => list
-                    .as_array()
-                    .ok_or_else(bad)?
-                    .iter()
-                    .map(|r| r.as_str().map(str::to_owned).ok_or_else(bad))
-                    .collect::<Result<_, _>>()?,
-            };
-            Ok(PrFeedback { event, at, state: d["state"].as_str().ok_or_else(bad)?.to_owned(), reasons })
-        })
-        .transpose()
 }
 
 fn escalations(conn: &Connection) -> Result<Vec<MachineEscalation>, CpdError> {

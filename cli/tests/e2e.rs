@@ -58,7 +58,7 @@ const GH: &str = r#"
 case "$1 $2" in
   "pr list") echo '[]' ;;
   "pr create") echo 'https://github.com/acme/pay/pull/7' ;;
-  "pr view") echo '{"state":"OPEN","mergedAt":null,"title":"Pay","reviewDecision":"","statusCheckRollup":[{"name":"ci","conclusion":"SUCCESS"}],"reviews":[{"id":"PRR_1","author":{"login":"ann"},"state":"CHANGES_REQUESTED","body":"Rename it."}],"comments":[]}' ;;
+  "pr view") echo '{"state":"OPEN","mergedAt":null,"title":"Pay","reviewDecision":"","statusCheckRollup":[{"name":"ci","conclusion":"FAILURE"}],"reviews":[{"id":"PRR_1","author":{"login":"ann"},"state":"CHANGES_REQUESTED","body":"Rename it."}],"comments":[]}' ;;
   "api repos/{owner}/{repo}/pulls/7/comments") echo '[]' ;;
   *) echo "unexpected gh call: $*" >&2; exit 9 ;;
 esac
@@ -460,16 +460,18 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(events[1]["data"], json!({"from": "dispatch", "to": "pr", "prs": [{"key": "pay", "number": 7, "url": PR_URL}]}));
     cursor = fx.cursor();
 
-    // ---------- 11. pr poll reports the review, once
+    // ---------- 11. pr poll reports the failing checks, once (D7)
     let out = fx.ok(&["pr", "poll", "--plan", PLAN]);
-    let review = json!({"id": "PRR_1", "author": "ann", "state": "CHANGES_REQUESTED", "body": "Rename it."});
     assert_eq!(out["prs"][0]["pr"], "pay");
-    assert_eq!(out["prs"][0]["changes"], json!({"checks": [], "reviews": [review], "comments": []}));
+    assert_eq!(out["prs"][0]["reasons"], json!(["checks_failed"]));
     let events = fx.events_since(cursor);
     assert_eq!(kinds(&events), ["pr-feedback"]);
-    assert_eq!(events[0]["data"]["reviews"], json!([review]));
+    assert_eq!(
+        events[0]["data"],
+        json!({"pr": "pay", "number": 7, "url": PR_URL, "state": "open", "checks": "failed", "review_decision": "none", "reasons": ["checks_failed"]})
+    );
     let again = fx.ok(&["pr", "poll", "--plan", PLAN]);
-    assert_eq!(again["prs"][0]["changes"], json!({"checks": [], "reviews": [], "comments": []}));
+    assert_eq!(again["prs"][0]["reasons"], json!([]));
     assert_eq!(fx.events_since(cursor).len(), 1);
 
     // ---------- the whole run: no `error` Event, nothing tampered, nothing left running
