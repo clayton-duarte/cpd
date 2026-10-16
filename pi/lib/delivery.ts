@@ -12,6 +12,8 @@ export const LEAD_MESSAGES: Partial<Record<Kind, { turn: boolean }>> = {
   escalation: { turn: true },
   "attempt-retry": { turn: false },
   "job-cancelled": { turn: false },
+  "pr-started": { turn: false },
+  "pr-merged": { turn: false },
 };
 
 export const FOLLOW_UP = (turn: boolean): SendOptions => ({ triggerTurn: turn, deliverAs: "followUp" });

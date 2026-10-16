@@ -42,12 +42,14 @@ fn setup(env: &TestEnv) {
         env,
         &format!(
             "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Context', 't', 'm1');
-             INSERT INTO plans (id, context, title, repo, base, lead_branch, phase, lead_session, created_at)
-             VALUES ('pl', 'ctx', 'Plan', '/repo', 'main', 'cpd/pl', 'grounding', 'lead-pl', 't');
+             INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+             VALUES ('pl', 'ctx', 'Plan', 'grounding', 'lead-pl', 't');
+             INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+             VALUES ('pl', 'repo', '/repo', 'main', 'waiting', 'cpd/pl', cpd_txn(), 't');
              INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
              VALUES ('lead-pl', 'lead', 'ctx', 'pl', 'pl', '/repo', 'O3', 'idle', 't', 't');
-             INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
-             VALUES ('pl', 'a', 'A', 'S2', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', 'draft', 0, NULL, cpd_txn(), 't');
+             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+             VALUES ('pl', 'repo', 'a', 'A', 'S2', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', 'draft', 0, NULL, cpd_txn(), 't');
              UPDATE jobs SET status = 'queued', fingerprint = '{fp}' WHERE key = 'a';
              UPDATE jobs SET status = 'running' WHERE key = 'a';
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)

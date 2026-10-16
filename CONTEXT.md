@@ -15,11 +15,11 @@ The phase where the Lead turns Requirements into a draft graph of Jobs and the U
 _Avoid_: breakdown, decomposition
 
 **Dispatch**:
-The phase that starts when the Plan is locked, in which Jobs are executed and merged, ending when the Pull Request is opened, after the Gate passes.
+The phase that starts when the Plan is locked, in which PRs start, their Jobs are executed and merged, and each PR is opened after its Gate passes; it ends when every PR of the Plan is open.
 _Avoid_: execution, run phase
 
 **PR** (phase):
-The phase from opening the Pull Request until it is merged; PR feedback becomes appended Jobs. Then the Plan is **done**.
+The phase from when every PR of the Plan is open until all are merged; PR feedback becomes appended Jobs. Then the Plan is **done**.
 _Avoid_: review phase
 
 ## Work units
@@ -40,20 +40,28 @@ _Avoid_: wiki, notes folder
 The Lead session that holds a Context's grounding on one machine, forked once from the first Plan's Lead when it leaves the grounding phase. It is never typed into again; every new Plan of the Context starts as a fork of it.
 _Avoid_: master session, template session
 
-**Plan** (entity, new: replaces Workflow):
-One deliverable: one repository, one Lead Branch and one Pull Request, optionally mapped to a Jira task, belonging to exactly one Context. cpd 1 called this a **Workflow**; the term Workflow is retired and every `workflow` command is now a `plan` command. Distinct from the Plan phase.
+**Plan** (entity, new: replaces Workflow; changed by R34):
+One deliverable over one or more PRs, optionally mapped to a Jira task, belonging to exactly one Context. Its Lead starts in the directory `plan new` runs from, not in a repository. cpd 1 called this a **Workflow**; the term Workflow is retired and every `workflow` command is now a `plan` command. Distinct from the Plan phase.
 _Avoid_: workflow, task, project, run
 
-**Job**:
-A self-contained unit of work defined by a Spec, executable by a fresh agent session with no other context.
+**PR** (entity, new: R34):
+The part of a Plan in one repository, tied to its Lead Branch: a repo, a base branch, a Lead Branch and Lead worktree, its Jobs, and the Pull Request opened from that branch. A PR may need other PRs of the same Plan to be merged before it starts; one repository may hold several PRs of one Plan. Distinct from the PR phase.
+_Avoid_: sub-plan, track, slice, repo plan
+
+**Job** (changed):
+A self-contained unit of work defined by a Spec, executable by a fresh agent session with no other context. It belongs to exactly one PR of its Plan.
 _Avoid_: card, task, step
 
 **Spec**:
 The complete, guess-free description of a Job: goal, context, files it touches, acceptance criteria and what is out of scope.
 _Avoid_: brief, prompt, ticket
 
+**Review Job** (new: B2):
+A Job added with `job add --review`, whose Worker is a fork of the Plan's Lead, so it knows the intention. It depends on every Job of its PR that exists when it is added, reads the Lead Branch's diff against the base and the Plan's Specs, and writes its findings to `run/<plan>/reviews/<job>.md`. It commits nothing and ends Merged with no change to the Lead Branch; the Lead turns the findings into fix Jobs before `pr open`. Optional: the Lead adds one only when it makes sense. Not a Reviewer, and no Gate or verdict belongs to it.
+_Avoid_: reviewer, verdict, code review Job
+
 **Dependency**:
-A relation saying a Job may only start after another Job is Merged.
+A relation saying a Job may only start after another Job of the same PR is Merged. Order across PRs is the PRs' needs.
 _Avoid_: blocker, prerequisite
 
 **Attempt**:
@@ -71,7 +79,7 @@ _Avoid_: frozen, final
 ## Runtime
 
 **Session** (new):
-A pi session cpd knows about, with a role (Lead or Worker), a Context, usually a Plan, a tmux pane, and an agent state: working, blocked, idle or stopped.
+A pi session cpd knows about, with a role (Lead or Worker), a Context, usually a Plan, a tmux pane, and an agent state: working, blocked, idle or stopped. A Session forked for a tangent the User starts (`cpd session fork`) is a sibling: drawn in the tree directly under its Context, after its Plans, never under a Plan or under the Session it came from (B1, B4). The other fork, a review Job's Worker, is hidden like every Worker.
 _Avoid_: agent, pane, chat
 
 **Event** (new: replaces the Lead queue):
@@ -83,7 +91,7 @@ The User's interface: one tmux window with global side bars and a centre bound t
 _Avoid_: dashboard, TUI session
 
 **Engine** (new):
-The one `cpd watch` per machine that schedules every Plan's Jobs under one concurrency limit, watches liveness and timeouts, and polls Pull Requests.
+The one `cpd watch` per machine that schedules every Plan's Jobs under one concurrency limit, watches liveness and timeouts, polls Pull Requests, and starts a PR once the PRs it needs are merged.
 _Avoid_: daemon, scheduler, watcher per workflow
 
 ## Roles
@@ -109,19 +117,19 @@ _Avoid_: blocker, ask
 ## Outcomes
 
 **Gate** (changed):
-The repository's mechanical checks (tests, typecheck, lint), defined by the repo as its `pre-merge` hook in `.config/wt.toml` and run by cpd only at the Plan level: on the Lead Branch, in the Lead worktree, before `pr open` and `pr rebase` push. Never per Job or per merge (R19).
+The repository's mechanical checks (tests, typecheck, lint), defined by the repo as its `pre-merge` hook in `.config/wt.toml` and run by cpd only at the PR level: on a PR's Lead Branch, in its Lead worktree, before `pr open` and `pr rebase` push. Never per Job or per merge (R19).
 _Avoid_: CI, checks
 
 **Quick check** (new):
 The repository's `pre-commit` hook, run by cpd when a Worker submits; when the repo defines none, there is no quick check and nothing runs instead (R20).
 _Avoid_: pre-flight, lint step
 
-**Lead Branch**:
-The branch that accumulates Merged Jobs and becomes the Pull Request.
+**Lead Branch** (changed):
+The branch of one PR that accumulates its Merged Jobs and becomes its Pull Request; a Plan has one per PR.
 _Avoid_: feature branch, integration branch
 
 **Merged** (changed):
-The terminal success state of a Job, and the outcome of its successful Attempt: the Attempt passed the quick check and the tamper check, rebased cleanly onto the Lead Branch, and the Lead Branch was fast-forwarded to it.
+The terminal success state of a Job, and the outcome of its successful Attempt: the Attempt passed the quick check and the tamper check, rebased cleanly onto its PR's Lead Branch, and that Lead Branch was fast-forwarded to it.
 _Avoid_: done, completed
 
 **Tier**:

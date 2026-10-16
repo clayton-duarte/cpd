@@ -66,12 +66,15 @@ fn fixture(store: &mut Store) {
                        ('lead2', 'lead', 'ctx', 'other', NULL, 'Lead', '/', 'O3', 'idle', 't', 't'),
                        ('side', 'lead', 'ctx', NULL, NULL, 'Side', '/', 'O3', 'idle', 't', 't'),
                        ('worker1', 'worker', 'ctx', 'pay', 'api-a1', 'Worker', '/', 'S2', 'working', 't', 't');
-                     INSERT INTO plans (id, context, title, repo, base, lead_branch, phase, lead_session, created_at) VALUES
-                       ('pay', 'ctx', 'Pay', '/r', 'main', 'cpd/pay', 'grounding', 'lead1', 't'),
-                       ('other', 'ctx', 'Other', '/r', 'main', 'cpd/other', 'grounding', 'lead2', 't');
-                     INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                     INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
+                       ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't'),
+                       ('other', 'ctx', 'Other', 'grounding', 'lead2', 't');
+                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES
+                       ('pay', 'r', '/r', 'main', 'waiting', 'cpd/pay', {id}, 't'),
+                       ('other', 'r', '/r', 'main', 'waiting', 'cpd/other', {id}, 't');
+                     INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, created_txn, created_at)
-                       VALUES ('pay', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, '{fp}', {id}, 't');
+                       VALUES ('pay', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, '{fp}', {id}, 't');
                      INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
                        VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pay--api-a1', '/w', 't');",
                     fp = "a".repeat(64),
@@ -91,7 +94,7 @@ fn seed(store: &mut Store) {
         NewEvent::new(
             PlanCreated,
             "Plan pay created.",
-            json!({"title": "Pay", "repo": "/r", "base": "main", "jira": null, "lead_session": "lead1", "forked_from": null}),
+            json!({"title": "Pay", "jira": null, "lead_session": "lead1", "forked_from": null, "cwd": "/r"}),
         )
         .plan(plan("pay")),
         NewEvent::new(
@@ -120,7 +123,7 @@ fn seed(store: &mut Store) {
         NewEvent::new(
             PlanCreated,
             "Plan other created.",
-            json!({"title": "Other", "repo": "/r", "base": "main", "jira": null, "lead_session": "lead2", "forked_from": null}),
+            json!({"title": "Other", "jira": null, "lead_session": "lead2", "forked_from": null, "cwd": "/r"}),
         )
         .plan(plan("other")),
         NewEvent::new(ContextCreated, "Context ctx2 created.", json!({"title": "Ctx2", "jira": null, "created_on": "m"}))
@@ -190,11 +193,11 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("context-created", "c", "", &["title", "jira", "created_on"], &[]),
     ("context-record", "c", "", &["record", "kind", "machine", "seq"], &[]),
     ("context-grounded", "cs", "", &["seq", "forked_from"], &[]),
-    ("plan-created", "cp", "", &["title", "repo", "base", "jira", "lead_session", "forked_from"], &[]),
+    ("plan-created", "cp", "", &["title", "jira", "lead_session", "forked_from", "cwd"], &[]),
     ("plan-phase", "cp", "", &["from", "to"], &["jobs", "pr"]),
     ("plan-review", "cp", "", &["review", "fingerprint", "status"], &["feedback"]),
-    ("plan-done", "cp", "", &["pr", "merged_at"], &[]),
-    ("job-added", "cpj", "", &["status", "appended", "tier", "needs"], &[]),
+    ("plan-done", "cp", "", &["prs"], &[]),
+    ("job-added", "cpj", "", &["pr", "status", "appended", "tier", "needs", "review"], &[]),
     ("job-edited", "cpj", "", &["fields"], &[]),
     ("job-merged", "cpja", "", &["sha", "tier"], &["cancel_too_late"]),
     ("job-failed", "cpj", "a", &["cause", "detail", "tier", "attempts"], &[]),
@@ -205,8 +208,14 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("attempt-status", "cpja", "", &["from", "to"], &[]),
     ("attempt-retry", "cpja", "", &["outcome", "cause", "next_tier"], &["feedback"]),
     ("attempt-nudge", "cpjas", "", &["prompt"], &[]),
-    ("all-merged", "cp", "", &["merged", "cancelled"], &[]),
-    ("pr-feedback", "cp", "", &["checks", "reviews", "comments", "state"], &[]),
+    ("all-merged", "cp", "", &["pr", "merged", "cancelled"], &[]),
+    ("pr-feedback", "cp", "", &["pr", "checks", "reviews", "comments", "state"], &[]),
+    ("pr-added", "cp", "", &["pr", "repo", "base", "needs", "appended"], &[]),
+    ("pr-edited", "cp", "", &["pr", "fields"], &[]),
+    ("pr-cancelled", "cp", "", &["pr"], &[]),
+    ("pr-started", "cp", "", &["pr", "repo", "base", "lead_branch", "lead_worktree", "base_sha", "reused", "pushed", "by"], &[]),
+    ("pr-opened", "cp", "", &["pr", "number", "url"], &[]),
+    ("pr-merged", "cp", "", &["pr", "number", "url", "merged_at"], &[]),
     ("escalation", "cpja", "", &["escalation", "question"], &[]),
     ("escalation-answered", "cpja", "", &["escalation"], &[]),
     ("escalation-expired", "cpja", "", &["escalation", "reason"], &[]),

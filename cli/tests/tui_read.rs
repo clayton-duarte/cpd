@@ -11,7 +11,7 @@ use cpd_core::config::Tier;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, EscalationId, JobKey, PlanId, SessionId};
-use cpd_core::plan::{Phase, jobs, plan_fingerprint};
+use cpd_core::plan::{Phase, plan_fingerprint};
 use cpd_core::session::State;
 use cpd_core::store::Store;
 use cpd_tui::read::{
@@ -86,11 +86,19 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr:
             "NULL".into(),
         ),
     };
+    let status = match phase {
+        "grounding" | "plan" => "waiting",
+        "dispatch" => "dispatch",
+        "pr" => "open",
+        _ => "merged",
+    };
     format!(
-        "INSERT INTO plans (id, context, title, repo, base, lead_branch, lead_worktree, phase, lead_session, pr_number,
-                            pr_url, pr_opened_at, pr_seen, pr_polled_at, created_at, locked_at, done_at)
-         VALUES ('{id}', '{context}', 'Plan {id}', '/repo', 'main', 'cpd/{id}', {worktree}, '{phase}', '{lead}',
-                 {number}, {url}, {opened}, '{seen}', {polled}, '{created}', {locked}, {done});"
+        "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+         VALUES ('{id}', '{context}', 'Plan {id}', '{phase}', '{lead}', '{created}', {locked}, {done});
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pr_seen,
+                          pr_polled_at, created_txn, created_at, started_at, merged_at)
+         VALUES ('{id}', 'repo', '/repo', 'main', '{status}', 'cpd/{id}', {worktree}, {number}, {url}, {opened}, '{seen}',
+                 {polled}, cpd_txn(), '{created}', {locked}, {done});"
     )
 }
 
@@ -113,9 +121,9 @@ fn job_row(plan: &str, key: &str, status: &str, tier: &str, needs: &[&str]) -> S
     let (reason, requested) =
         if status == "cancelled" { ("'not needed'", "'2026-01-04T00:00:00.000Z'") } else { ("NULL", "NULL") };
     let mut out = format!(
-        "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at)
-         VALUES ('{plan}', '{key}', 'Job {key}', '{tier}', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, {fingerprint},
+         VALUES ('{plan}', 'repo', '{key}', 'Job {key}', '{tier}', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, {fingerprint},
                  cpd_txn(), {reason}, {requested}, {failed}, {merged}, '2026-01-02T00:00:00.000Z');"
     );
     for n in needs {
@@ -276,7 +284,7 @@ fn populate(store: &mut Store) {
     s += &event("watch-started", None, None, None, &format!(r#"{{"pid":{}}}"#, std::process::id()));
     sql(store, &s);
 
-    let fingerprint = store.read(|c| Ok(plan_fingerprint(&jobs::load(c, &plan("ship"))?))).unwrap();
+    let fingerprint = store.read(|c| Ok(plan_fingerprint(c, &plan("ship"))?)).unwrap();
     sql(
         store,
         &format!(
@@ -324,6 +332,9 @@ fn the_tree_is_contexts_then_plans_then_lead_sessions_with_their_states() {
         "the Lead first, then the side fork; the Workers and the grounded Lead are not in the tree's Plans"
     );
     assert!(ship.sessions[0].is_active() && !ship.sessions[1].is_active());
+    let forks: Vec<(&str, &str)> = alpha.forks().iter().map(|(p, s)| (p.head.id.as_str(), s.id.as_str())).collect();
+    assert_eq!(forks, [("ship", "f-ship")], "a side fork of a Plan's Lead is a fork of the Context, listed after its Plans (B1)");
+    assert!(beta.forks().is_empty() && gamma.forks().is_empty(), "a Lead is no fork");
     assert_eq!(ship.lead().unwrap().id.as_str(), "l-ship");
     assert_eq!(ship.sessions[0].name, "name of l-ship");
 
@@ -409,6 +420,12 @@ fn a_session_needs_you_when_blocked_or_idle_with_a_turn_the_user_has_not_seen() 
         "by id: idle again after being seen; blocked; idle with no turn; idle and seen; in the slot; idle and unseen; working"
     );
     assert!(sketch.needs_you() && tree.contexts[0].needs_you());
+    let forks: Vec<&str> = tree.contexts[0].forks().iter().map(|(_, s)| s.id.as_str()).collect();
+    assert_eq!(
+        forks,
+        ["f-ship", "x-again", "x-blocked", "x-quiet", "x-seen", "x-slot", "x-unseen", "x-working"],
+        "forks of every Plan, oldest first, Plans' Leads never"
+    );
 }
 
 #[test]

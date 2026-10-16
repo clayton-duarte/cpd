@@ -1,11 +1,12 @@
-//! The `plans` row as read (contract §2.2 Plan), and the phases of §3.1.
+//! The `plans` row as read (contract §2.2 Plan), with the per-repo columns of
+//! its one PR (`prs`, R34 A6), and the phases of §3.1.
 
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
 use super::{bad_row, plan_not_found};
 use crate::error::CpdError;
-use crate::ids::{ContextId, PlanId, SessionId};
+use crate::ids::{ContextId, PlanId, PrKey, SessionId};
 
 /// A Plan's phase (§3.1).
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,6 +43,8 @@ pub(super) struct PlanRow {
     pub context: ContextId,
     pub title: String,
     pub jira: Option<String>,
+    /// The key of the Plan's one PR, whose columns follow.
+    pub pr_key: PrKey,
     pub repo: String,
     pub base: String,
     pub lead_branch: String,
@@ -58,8 +61,13 @@ pub(super) struct PlanRow {
     pub archived_at: Option<String>,
 }
 
-const COLUMNS: &str = "id, context, title, jira, repo, base, lead_branch, lead_worktree, phase, lead_session,
-    pr_number, pr_url, pr_opened_at, pr_seen, all_merged_at, created_at, locked_at, done_at, archived_at";
+const COLUMNS: &str = "p.id, p.context, p.title, p.jira, r.key, r.repo, r.base, r.lead_branch, r.lead_worktree, p.phase, p.lead_session,
+    r.pr_number, r.pr_url, r.pr_opened_at, r.pr_seen, r.all_merged_at, p.created_at, p.locked_at, p.done_at, p.archived_at";
+
+/// `plans p` with its one PR `r` (R34: until a Plan has several PRs, the
+/// first PR it got stands for the Plan's repo, branch, worktree and PR).
+const PLAN_WITH_PR: &str = "plans p JOIN prs r ON r.plan = p.id
+    AND r.key = (SELECT key FROM prs WHERE plan = p.id ORDER BY created_txn, key LIMIT 1)";
 
 /// The columns as SQLite returns them, before parsing.
 type Raw = (
@@ -67,6 +75,7 @@ type Raw = (
     String,
     String,
     Option<String>,
+    String,
     String,
     String,
     String,
@@ -94,19 +103,20 @@ fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
         r.get(7)?,
         r.get(8)?,
         r.get(9)?,
-        (r.get(10)?, r.get(11)?, r.get(12)?),
-        r.get(13)?,
+        r.get(10)?,
+        (r.get(11)?, r.get(12)?, r.get(13)?),
         r.get(14)?,
         r.get(15)?,
         r.get(16)?,
         r.get(17)?,
         r.get(18)?,
+        r.get(19)?,
     ))
 }
 
 impl PlanRow {
     fn parse(raw: Raw) -> Result<PlanRow, CpdError> {
-        let (id, context, title, jira, repo, base, lead_branch, lead_worktree, phase, lead_session, pr, pr_seen, all_merged_at, created_at, locked_at, done_at, archived_at) = raw;
+        let (id, context, title, jira, pr_key, repo, base, lead_branch, lead_worktree, phase, lead_session, pr, pr_seen, all_merged_at, created_at, locked_at, done_at, archived_at) = raw;
         let id = PlanId::parse(&id).map_err(|_| bad_row(format!("Plan id {id:?}")))?;
         let field = |name: &str, value: &str| bad_row(format!("Plan {id} has {name} {value:?}"));
         let pr = match pr {
@@ -115,6 +125,7 @@ impl PlanRow {
         };
         Ok(PlanRow {
             context: ContextId::parse(&context).map_err(|_| field("context", &context))?,
+            pr_key: PrKey::parse(&pr_key).map_err(|_| field("PR key", &pr_key))?,
             phase: Phase::parse(&phase).ok_or_else(|| field("phase", &phase))?,
             lead_session: SessionId::parse(&lead_session).map_err(|_| field("lead_session", &lead_session))?,
             pr_seen: serde_json::from_str(&pr_seen).map_err(|_| field("pr_seen", &pr_seen))?,
@@ -147,9 +158,9 @@ impl PlanRow {
     }
 }
 
-/// Every Plan matching `filter` (SQL after `WHERE`), oldest first.
+/// Every Plan matching `filter` (SQL after `WHERE`, on `p` and `r`), oldest first.
 pub(super) fn query(conn: &Connection, filter: &str, params: &[&dyn rusqlite::ToSql]) -> Result<Vec<PlanRow>, CpdError> {
-    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM plans WHERE {filter} ORDER BY created_at, id"))?;
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM {PLAN_WITH_PR} WHERE {filter} ORDER BY p.created_at, p.id"))?;
     let rows = stmt.query_map(params, raw)?.collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter().map(PlanRow::parse).collect()
 }
@@ -157,7 +168,7 @@ pub(super) fn query(conn: &Connection, filter: &str, params: &[&dyn rusqlite::To
 /// The Plan `id`, if it exists.
 pub(super) fn find(conn: &Connection, id: &PlanId) -> Result<Option<PlanRow>, CpdError> {
     let raw = conn
-        .query_row(&format!("SELECT {COLUMNS} FROM plans WHERE id = ?1"), [id.as_str()], raw)
+        .query_row(&format!("SELECT {COLUMNS} FROM {PLAN_WITH_PR} WHERE p.id = ?1"), [id.as_str()], raw)
         .optional()?;
     raw.map(PlanRow::parse).transpose()
 }

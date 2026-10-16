@@ -32,10 +32,8 @@ pub enum Ask {
     Fork { source: SessionId },
     /// The title of a new Context; its id is derived against the ids `taken`.
     NewContext { taken: Vec<String> },
-    /// The title of a new Plan in `context`, on `repo` (the repo of the Context's latest Plan; none: asks for it next).
-    NewPlan { context: ContextId, repo: Option<String>, taken: Vec<String> },
-    /// The repo path of the new Plan `id` titled `title`, in `context`.
-    PlanRepo { context: ContextId, id: PlanId, title: String },
+    /// The title of a new Plan in `context` (R34 A12: no repo; the Plan's PRs name theirs).
+    NewPlan { context: ContextId, taken: Vec<String> },
 }
 
 impl Ask {
@@ -43,7 +41,6 @@ impl Ask {
         match self {
             Ask::RenameContext(_) | Ask::RenamePlan(_) | Ask::NewContext { .. } | Ask::NewPlan { .. } => "Title: ",
             Ask::RenameSession(_) | Ask::Fork { .. } => "Name: ",
-            Ask::PlanRepo { .. } => "Repo path: ",
         }
     }
 
@@ -51,7 +48,6 @@ impl Ask {
         match self {
             Ask::RenameContext(_) | Ask::RenamePlan(_) | Ask::NewContext { .. } | Ask::NewPlan { .. } => "A title is required.",
             Ask::RenameSession(_) | Ask::Fork { .. } => NAME_REQUIRED,
-            Ask::PlanRepo { .. } => "A repo path is required.",
         }
     }
 }
@@ -64,9 +60,9 @@ pub enum Prompt {
     /// The menu's `…` items: `ask`, typed into `input` (prefilled for a rename). `refused` is why the last Enter was
     /// not taken.
     Text { ask: Ask, input: String, refused: Option<String> },
-    /// `n`: asks for the name of a new Plan in `context`, on `repo` (those of `target`'s Plan). `refused` is why the
+    /// `n`: asks for the name of a new Plan in `context` (that of `target`'s Plan). `refused` is why the
     /// last Enter was not taken.
-    Name { target: Target, context: ContextId, repo: String, input: String, refused: Option<String> },
+    Name { target: Target, context: ContextId, input: String, refused: Option<String> },
     /// `x`: asks whether to close `target`'s pane.
     Close { target: Target },
     /// The menu's Archive: asks whether to archive `subject`, shown as `label`.
@@ -80,8 +76,8 @@ pub enum Outcome {
     Open,
     /// The prompt is dismissed; nothing happens.
     Cancel,
-    /// `plan new <id> --context <context> --repo <repo> --title <id>`.
-    NewPlan { context: ContextId, id: PlanId, repo: String },
+    /// `plan new <id> --context <context> --title <id>`.
+    NewPlan { context: ContextId, id: PlanId },
     /// `session close <id>`.
     Close { id: SessionId },
     /// `context|plan|session archive`.
@@ -94,8 +90,8 @@ pub enum Outcome {
 const NAME_REQUIRED: &str = "A name is required.";
 
 impl Prompt {
-    pub fn name(target: Target, context: ContextId, repo: String) -> Self {
-        Prompt::Name { target, context, repo, input: String::new(), refused: None }
+    pub fn name(target: Target, context: ContextId) -> Self {
+        Prompt::Name { target, context, input: String::new(), refused: None }
     }
 
     /// A text prompt of the menu, starting with `input`.
@@ -113,7 +109,7 @@ impl Prompt {
 
     pub fn key(&mut self, key: KeyEvent) -> Outcome {
         match self {
-            Prompt::Name { context, repo, input, refused, .. } => match key.code {
+            Prompt::Name { context, input, refused, .. } => match key.code {
                 KeyCode::Esc => Outcome::Cancel,
                 KeyCode::Enter => {
                     let name = input.trim();
@@ -122,7 +118,7 @@ impl Prompt {
                         return Outcome::Open;
                     }
                     match PlanId::parse(name) {
-                        Ok(id) => Outcome::NewPlan { context: context.clone(), id, repo: repo.clone() },
+                        Ok(id) => Outcome::NewPlan { context: context.clone(), id },
                         Err(e) => {
                             *refused = Some(e.message().to_owned());
                             Outcome::Open
@@ -148,13 +144,7 @@ impl Prompt {
                         return Outcome::Open;
                     }
                     match answer(ask, text) {
-                        Ok(Answer::Run(action)) => Outcome::Run(action),
-                        Ok(Answer::Next(next)) => {
-                            *ask = next;
-                            input.clear();
-                            *refused = None;
-                            Outcome::Open
-                        }
+                        Ok(action) => Outcome::Run(action),
                         Err(why) => {
                             *refused = Some(why);
                             Outcome::Open
@@ -202,35 +192,21 @@ impl Prompt {
     }
 }
 
-/// What Enter on a non-empty text does.
-enum Answer {
-    Run(Action),
-    /// Asks the next thing, in the same prompt.
-    Next(Ask),
-}
-
-/// The command (or the next question) for the `text` typed to `ask`; or why the text is refused.
-fn answer(ask: &Ask, text: String) -> Result<Answer, String> {
+/// The command for the `text` typed to `ask`; or why the text is refused.
+fn answer(ask: &Ask, text: String) -> Result<Action, String> {
     let refuse = |e: cpd_core::error::CpdError| e.message().to_owned();
     Ok(match ask {
-        Ask::RenameContext(id) => Answer::Run(Action::RenameContext { id: id.clone(), title: text }),
-        Ask::RenamePlan(id) => Answer::Run(Action::RenamePlan { id: id.clone(), title: text }),
-        Ask::RenameSession(id) => Answer::Run(Action::RenameSession { id: id.clone(), name: text }),
-        Ask::Fork { source } => Answer::Run(Action::Fork { source: source.clone(), name: text }),
+        Ask::RenameContext(id) => Action::RenameContext { id: id.clone(), title: text },
+        Ask::RenamePlan(id) => Action::RenamePlan { id: id.clone(), title: text },
+        Ask::RenameSession(id) => Action::RenameSession { id: id.clone(), name: text },
+        Ask::Fork { source } => Action::Fork { source: source.clone(), name: text },
         Ask::NewContext { taken } => {
             let id = slug::derive(&text, CONTEXT_MAX, |id| taken.iter().any(|t| t == id)).ok_or(NO_ID)?;
-            Answer::Run(Action::NewContext { id: ContextId::parse(&id).map_err(refuse)?, title: text })
+            Action::NewContext { id: ContextId::parse(&id).map_err(refuse)?, title: text }
         }
-        Ask::NewPlan { context, repo, taken } => {
+        Ask::NewPlan { context, taken } => {
             let id = slug::derive(&text, PLAN_MAX, |id| taken.iter().any(|t| t == id)).ok_or(NO_ID)?;
-            let id = PlanId::parse(&id).map_err(refuse)?;
-            match repo {
-                Some(repo) => Answer::Run(Action::NewPlan { context: context.clone(), id, repo: repo.clone(), title: text }),
-                None => Answer::Next(Ask::PlanRepo { context: context.clone(), id, title: text }),
-            }
-        }
-        Ask::PlanRepo { context, id, title } => {
-            Answer::Run(Action::NewPlan { context: context.clone(), id: id.clone(), repo: text, title: title.clone() })
+            Action::NewPlan { context: context.clone(), id: PlanId::parse(&id).map_err(refuse)?, title: text }
         }
     })
 }
@@ -244,7 +220,7 @@ mod tests {
     }
 
     fn name() -> Prompt {
-        Prompt::name(target(false), ContextId::parse("cpd").unwrap(), "/repo".into())
+        Prompt::name(target(false), ContextId::parse("cpd").unwrap())
     }
 
     fn press(p: &mut Prompt, code: KeyCode) -> Outcome {
@@ -258,7 +234,7 @@ mod tests {
     }
 
     fn new_plan(id: &str) -> Outcome {
-        Outcome::NewPlan { context: ContextId::parse("cpd").unwrap(), id: PlanId::parse(id).unwrap(), repo: "/repo".into() }
+        Outcome::NewPlan { context: ContextId::parse("cpd").unwrap(), id: PlanId::parse(id).unwrap() }
     }
 
     fn cpd() -> ContextId {
@@ -298,17 +274,10 @@ mod tests {
     }
 
     #[test]
-    fn new_plan_with_a_repo_runs_and_without_one_asks_for_it_in_a_second_prompt() {
-        let plan = |repo: Option<&str>| Ask::NewPlan { context: cpd(), repo: repo.map(Into::into), taken: taken(&["pay"]) };
-        let run = |id: &str, repo: &str| {
-            Outcome::Run(Action::NewPlan { context: cpd(), id: PlanId::parse(id).unwrap(), repo: repo.into(), title: "Pay".into() })
-        };
-        assert_eq!(press(&mut typing(plan(Some("/r")), "Pay"), KeyCode::Enter), run("pay-2", "/r"));
-        let mut p = typing(plan(None), "Pay");
-        assert_eq!(press(&mut p, KeyCode::Enter), Outcome::Open);
-        assert_eq!(p.text(), "Repo path: █ (Enter confirms, Esc cancels)");
-        type_str(&mut p, " /work/pay ");
-        assert_eq!(press(&mut p, KeyCode::Enter), run("pay-2", "/work/pay"));
+    fn new_plan_derives_its_id_from_the_title_and_asks_for_no_repo() {
+        let plan = Ask::NewPlan { context: cpd(), taken: taken(&["pay"]) };
+        let run = Outcome::Run(Action::NewPlan { context: cpd(), id: PlanId::parse("pay-2").unwrap(), title: "Pay".into() });
+        assert_eq!(press(&mut typing(plan, "Pay"), KeyCode::Enter), run);
     }
 
     #[test]
@@ -316,7 +285,7 @@ mod tests {
         let mut p = typing(Ask::NewContext { taken: vec![] }, "123");
         assert_eq!(press(&mut p, KeyCode::Enter), Outcome::Open);
         assert_eq!(p.text(), format!("{NO_ID} Title: 123█ (Enter confirms, Esc cancels)"));
-        let mut p = typing(Ask::NewPlan { context: cpd(), repo: Some("/r".into()), taken: vec![] }, "!");
+        let mut p = typing(Ask::NewPlan { context: cpd(), taken: vec![] }, "!");
         assert_eq!(press(&mut p, KeyCode::Enter), Outcome::Open);
         assert!(p.text().starts_with(NO_ID));
     }

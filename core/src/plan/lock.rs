@@ -1,23 +1,23 @@
 //! `plan lock` (commands.md §4.8, contract §3.1, §7.2): `plan → dispatch`.
-//! Creates the Lead worktree, queues every draft Job with its Locked-Job
-//! fingerprint, and starts the engine with `cpd watch --ensure`.
+//! Starts the PRs that need no other PR (all or nothing, `pr::start`), queues
+//! every draft Job with its Locked-Job fingerprint, and starts the engine with
+//! `cpd watch --ensure`.
 
-use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
+use super::fingerprint::plan_fingerprint;
 use super::jobs::{self, Job};
 use super::review::{latest_approved_for, latest_json, no_draft_jobs};
-use super::row::{self, Phase, PlanRow};
+use super::row::{self, Phase};
 use super::{Env, LockArgs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
-use crate::git::{self, Setup, TAIL_LINES, discard_worktree, tail};
-use crate::home::Hook;
+use crate::git::{TAIL_LINES, tail};
 use crate::ids::PlanId;
 use crate::output::Output;
+use crate::pr::start::{self, By, Pr, Pushed};
 use crate::session::PROGRAM;
 
 const COMMAND: &str = "plan lock";
@@ -25,14 +25,13 @@ const COMMAND: &str = "plan lock";
 pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (plan, jobs) = env.store.read(|conn| Ok((row::load(conn, &id)?, jobs::load(conn, &id)?)))?;
+    let (plan, jobs, prs) = env.store.read(|conn| Ok((row::load(conn, &id)?, jobs::load(conn, &id)?, start::load(conn, &id)?)))?;
     match plan.phase {
         Phase::Plan => {}
         Phase::Dispatch => {
-            let watch = ensure_watch(&env, &plan)?;
+            let watch = ensure_watch(&env, &id)?;
             return Ok(Output::success(json!({
-                "plan": id, "phase": "dispatch", "lead_branch": plan.lead_branch,
-                "lead_worktree": plan.lead_worktree, "watch": watch, "already": true,
+                "plan": id, "phase": "dispatch", "prs": listed(&prs, &[]), "watch": watch, "already": true,
             })));
         }
         other => {
@@ -49,7 +48,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     if drafts.is_empty() {
         return Err(no_draft_jobs(&id));
     }
-    let fingerprint = jobs::plan_fingerprint(&jobs);
+    let fingerprint = env.store.read(|conn| plan_fingerprint(conn, &id))?;
     let (review, latest) = env.store.read(|conn| Ok((latest_approved_for(conn, &id, &fingerprint)?, latest_json(conn, &id)?)))?;
     let Some(review) = review else {
         return Err(CpdError::new(
@@ -61,33 +60,53 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         .with("review", latest)
         .with("next", format!("cpd plan review --plan {id}")));
     };
+    let live: Vec<&Pr> = prs.iter().filter(|p| p.status != "cancelled").collect();
+    let empty: Vec<&str> =
+        live.iter().filter(|p| !drafts.iter().any(|j| j.pr == p.key.as_str())).map(|p| p.key.as_str()).collect();
+    if live.is_empty() || !empty.is_empty() {
+        let message = if live.is_empty() {
+            format!("Plan {id} has no PR: add one with cpd pr add.")
+        } else {
+            format!("Plan {id} has PRs without a draft Job: {}.", empty.join(", "))
+        };
+        let mut error = CpdError::new(ErrorCode::PrEmpty, message).with("plan", id.as_str()).with("prs", empty);
+        if live.is_empty() {
+            error = error.with("next", format!("cpd pr add <key> --repo <path> --plan {id}"));
+        }
+        return Err(error);
+    }
     if let Some(cycle) = jobs::cycle(&jobs) {
         return Err(CpdError::new(ErrorCode::DependencyCycle, format!("The draft Jobs of {id} depend on each other in a cycle: {}.", cycle.join(" → ")))
             .with("plan", id.as_str())
             .with("cycle", cycle));
     }
 
-    // git, outside any transaction (§7.2); on failure nothing was written.
-    let repo = Path::new(&plan.repo);
-    let setup = Setup {
-        timeout: Duration::from_secs(u64::from(env.config.timeouts.setup_minutes) * 60),
-        log: env.home.lead_hook_log(&id, Hook::PreStart),
-    };
-    let created = git::create_lead_worktree(repo, &id, &plan.base, &setup)?;
-    let worktree = created.path.display().to_string();
+    // git, outside any transaction (§7.2): every PR with no needs is prepared first,
+    // and only when all have passed are the new branches pushed. On failure nothing is left.
+    let mut prepared = Vec::new();
+    for pr in prs.iter().filter(|p| p.status == "waiting" && p.needs.is_empty()) {
+        match start::prepare(&env.home, &env.config, &id, pr) {
+            Ok(p) => prepared.push(p),
+            Err(failed) => {
+                prepared.iter().for_each(start::Prepared::discard);
+                return Err(failed.into_error());
+            }
+        }
+    }
+    let started: Vec<Pushed> = prepared.into_iter().map(start::Prepared::push).collect();
 
     let keys: Vec<String> = drafts.iter().map(|j| j.key.clone()).collect();
     let committed = env.store.write(COMMAND, |tx| {
         // Compare-and-swap on what was read: the phase, the drafts and the review.
         let jobs_now = jobs::load(tx, &id)?;
         let review_now = latest_approved_for(tx, &id, &fingerprint)?;
-        if jobs::plan_fingerprint(&jobs_now) != fingerprint || review_now.as_deref() != Some(review.as_str()) {
+        if plan_fingerprint(tx, &id)? != fingerprint || review_now.as_deref() != Some(review.as_str()) {
             return Err(cas_lost(&id));
         }
         let moved = tx.execute(
-            "UPDATE plans SET phase = 'dispatch', lead_worktree = ?1, locked_at = (SELECT at FROM txns WHERE id = cpd_txn())
-              WHERE id = ?2 AND phase = 'plan'",
-            [worktree.as_str(), id.as_str()],
+            "UPDATE plans SET phase = 'dispatch', locked_at = (SELECT at FROM txns WHERE id = cpd_txn())
+              WHERE id = ?1 AND phase = 'plan'",
+            [id.as_str()],
         )?;
         if moved == 0 {
             return Err(cas_lost(&id));
@@ -99,21 +118,43 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
             )?;
         }
         let text = format!("Plan {id} is locked: {} Jobs queued for the engine. Next: cpd plan show --plan {id}", keys.len());
-        append(tx, NewEvent::new(Kind::PlanPhase, text, json!({"from": "plan", "to": "dispatch", "jobs": keys})).plan(id.clone()))?;
+        let started_keys: Vec<&str> = started.iter().map(|p| p.key()).collect();
+        append(
+            tx,
+            NewEvent::new(Kind::PlanPhase, text, json!({"from": "plan", "to": "dispatch", "jobs": keys, "prs": started_keys})).plan(id.clone()),
+        )?;
+        for pr in &started {
+            start::record(tx, &id, pr, By::Lock)?;
+        }
         Ok(())
     });
     if let Err(e) = committed {
-        // Best effort: the failure to report is the transaction's.
-        let _ = discard_worktree(repo, &created.path, &created.branch);
+        started.iter().for_each(Pushed::discard);
         return Err(e);
     }
 
-    let plan = env.store.read(|conn| row::load(conn, &id))?;
-    let watch = ensure_watch(&env, &plan)?;
-    Ok(Output::success(json!({
-        "plan": id, "phase": "dispatch", "lead_branch": created.branch, "lead_worktree": worktree,
-        "base_sha": created.base_sha, "jobs": keys, "watch": watch,
-    })))
+    let watch = ensure_watch(&env, &id)?;
+    Ok(Output::success(json!({"plan": id, "phase": "dispatch", "jobs": keys, "prs": listed(&prs, &started), "watch": watch})))
+}
+
+/// `prs` of the result (commands.md §4.8): every PR that is not `cancelled`, in
+/// key order. A PR started by this lock has its worktree and R35's outcome;
+/// every other has null for those.
+fn listed(prs: &[Pr], started: &[Pushed]) -> Vec<Value> {
+    prs.iter()
+        .filter(|p| p.status != "cancelled")
+        .map(|pr| match started.iter().find(|s| s.key() == pr.key.as_str()) {
+            Some(s) => {
+                let mut one = s.to_json();
+                one["needs"] = json!(pr.needs);
+                one
+            }
+            None => json!({
+                "key": pr.key, "status": pr.status, "needs": pr.needs, "lead_branch": pr.lead_branch,
+                "lead_worktree": pr.lead_worktree, "base_sha": null, "reused": null, "pushed": null,
+            }),
+        })
+        .collect()
 }
 
 fn cas_lost(id: &PlanId) -> CpdError {
@@ -126,15 +167,14 @@ fn cas_lost(id: &PlanId) -> CpdError {
 /// engine's start belongs to the watch area. Returns its fields without `ok`.
 /// If it fails, the Plan stays locked and the result is `watch_start_failed`
 /// with the ensure's error in `details.error` (commands.md §4.8).
-fn ensure_watch(env: &Env, plan: &PlanRow) -> Result<Value, CpdError> {
+fn ensure_watch(env: &Env, plan: &PlanId) -> Result<Value, CpdError> {
     let argv = [PROGRAM, "watch", "--ensure"];
     let failed = |why: String, error: Value| {
         CpdError::new(
             ErrorCode::WatchStartFailed,
-            format!("Plan {} is locked, but the engine could not be started: {why}", plan.id),
+            format!("Plan {plan} is locked, but the engine could not be started: {why}"),
         )
-        .with("plan", plan.id.as_str())
-        .with("lead_worktree", plan.lead_worktree.clone())
+        .with("plan", plan.as_str())
         .with("argv", json!(argv))
         .with("error", error)
         .with("next", "cpd watch --ensure")

@@ -304,7 +304,7 @@ fn wait_for_source(env: &mut Env, dirs: &PiDirs, source: &SessionId, name: &str)
 }
 
 /// The file has not been modified for `quiet`.
-fn quiet_since(file: &Path, quiet: Duration) -> bool {
+pub(crate) fn quiet_since(file: &Path, quiet: Duration) -> bool {
     std::fs::metadata(file)
         .and_then(|m| m.modified())
         .is_ok_and(|modified| SystemTime::now().duration_since(modified).is_ok_and(|age| age >= quiet))
@@ -313,7 +313,7 @@ fn quiet_since(file: &Path, quiet: Duration) -> bool {
 /// The last `message` entry of a pi session file is a finished assistant
 /// turn (`stopReason` `stop`). A line that is not JSON after it means pi is
 /// writing: not finished.
-fn turn_finished(text: &str) -> bool {
+pub(crate) fn turn_finished(text: &str) -> bool {
     for line in text.lines().rev().filter(|l| !l.trim().is_empty()) {
         let Ok(entry) = serde_json::from_str::<Value>(line) else { return false };
         if entry["type"] == "message" {

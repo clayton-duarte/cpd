@@ -83,6 +83,11 @@ pub fn branch_exists(dir: &Path, branch: &str) -> Result<bool, CpdError> {
     }
 }
 
+/// Whether the repo `dir` belongs to has a remote called `origin` (R35, A3).
+pub fn has_origin(dir: &Path) -> Result<bool, CpdError> {
+    Ok(run(dir, &["remote", "get-url", "origin"])?.code == 0)
+}
+
 /// The checked-out branch of the worktree at `dir`; `None` when detached.
 pub fn current_branch(dir: &Path) -> Result<Option<String>, CpdError> {
     let out = run(dir, &["symbolic-ref", "--short", "-q", "HEAD"])?;

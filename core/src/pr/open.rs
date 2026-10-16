@@ -1,14 +1,17 @@
-//! `pr open` (commands.md §9.1, contract §7.6): the Gate, the push, the PR.
+//! `pr open` (commands.md §9.1, contract §7.6): the Gate, the push, the PR, for
+//! one PR of the Plan.
 
 use serde_json::json;
 
-use super::row::{PlanRow, Pr};
+use super::row::{PlanRow, PrRow};
 use super::{Args, Env, gate, gh, illegal_phase, lock, require_clean};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
 use crate::git;
+use crate::ids::{PlanId, PrKey};
 use crate::output::Output;
 use crate::plan::{Phase, jobs};
+use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr open";
 
@@ -17,74 +20,118 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
 
     let plan = env.plan(&id)?;
-    if let Some(done) = require_dispatch(&plan)? {
-        return Ok(done);
-    }
-    require_jobs_done(&mut env, &plan)?;
+    let key = match require_dispatch(&plan, &args)? {
+        Step::Already(done) => return Ok(done),
+        Step::Go(key) => key,
+    };
+    require_jobs_done(&mut env, &plan, &key)?;
 
     // Under the per-repo lock, after R: R may have recorded a merge, and
     // another `pr open` may have finished while this one waited.
-    let lock = lock(&mut env, &plan, COMMAND)?;
+    let lock = lock(&mut env, pr_of(&plan, &key), COMMAND)?;
     let plan = env.plan(&id)?;
-    if let Some(done) = require_dispatch(&plan)? {
+    if let Step::Already(done) = require_dispatch(&plan, &args)? {
         return Ok(done);
     }
-    let list = require_jobs_done(&mut env, &plan)?;
-    let lead = plan.lead()?.clone();
-    require_clean(&plan, &lead)?;
-    gate(&env, &plan, &lead, COMMAND)?;
-    git::run::ok(&lead, &["push", "-u", "origin", &plan.lead_branch])?;
+    let list = require_jobs_done(&mut env, &plan, &key)?;
+    let pr = pr_of(&plan, &key);
+    let lead = pr.lead(&id)?.clone();
+    require_clean(&id, pr, &lead)?;
+    gate(&env, &id, pr, &lead, &format!("pr open --pr {key}"))?;
+    git::run::ok(&lead, &["push", "-u", "origin", &pr.lead_branch])?;
     drop(lock);
 
     // An earlier run that died before its transaction already created the PR: adopt it.
-    let found = match gh::open_pr(&lead, &plan.lead_branch)? {
+    let found = match gh::open_pr(&lead, &pr.lead_branch)? {
         Some(found) => found,
-        None => gh::create_pr(&lead, &plan.base, &plan.lead_branch, &plan.title, &summary(&plan, &list))?,
+        None => {
+            let title = title(&plan, &key);
+            gh::create_pr(&lead, &pr.base, &pr.lead_branch, &title, &summary(&title, &list))?
+        }
     };
-    env.store.write(COMMAND, |tx| {
+    let phase = env.store.write(COMMAND, |tx| {
         let moved = tx.execute(
-            "UPDATE plans SET pr_number = ?1, pr_url = ?2, pr_opened_at = (SELECT at FROM txns WHERE id = cpd_txn()), phase = 'pr'
-              WHERE id = ?3 AND phase = 'dispatch'",
-            rusqlite::params![found.number, found.url, id.as_str()],
+            "UPDATE prs SET status = 'open', pr_number = ?1, pr_url = ?2, pr_opened_at = (SELECT at FROM txns WHERE id = cpd_txn())
+              WHERE plan = ?3 AND key = ?4 AND status = 'dispatch'",
+            rusqlite::params![found.number, found.url, id.as_str(), key.as_str()],
         )?;
         if moved == 0 {
-            return Err(CpdError::new(ErrorCode::CasLost, format!("Plan {id} left phase dispatch meanwhile: rerun the command."))
-                .with("plan", id.as_str()));
+            return Err(cas_lost(&id, &key));
         }
-        let text = format!(
-            "Plan {id} opened PR #{}: {}. The engine polls it; to follow it by hand: cpd pr poll --plan {id}",
-            found.number, found.url
-        );
-        let data = json!({"from": "dispatch", "to": "pr", "pr": {"number": found.number, "url": found.url}});
-        append(tx, NewEvent::new(Kind::PlanPhase, text, data).plan(id.clone()))?;
-        Ok(())
+        let text = format!("PR {key} of Plan {id} opened as #{}: {}. The engine polls it; to follow it by hand: cpd pr poll --plan {id}", found.number, found.url);
+        let data = json!({"pr": key, "number": found.number, "url": found.url});
+        append(tx, NewEvent::new(Kind::PrOpened, text, data).plan(id.clone()))?;
+
+        // The last PR to open moves the Plan on (§3.1, A10).
+        let waiting: i64 = tx.query_row(
+            "SELECT count(*) FROM prs WHERE plan = ?1 AND status NOT IN ('open', 'merged', 'cancelled')",
+            [id.as_str()],
+            |r| r.get(0),
+        )?;
+        if waiting > 0 {
+            return Ok(Phase::Dispatch);
+        }
+        let moved = tx.execute("UPDATE plans SET phase = 'pr' WHERE id = ?1 AND phase = 'dispatch'", [id.as_str()])?;
+        if moved == 0 {
+            return Err(cas_lost(&id, &key));
+        }
+        let opened = opened_prs(tx, &id)?;
+        let text = format!("Every PR of Plan {id} is open. The engine polls them; to follow them by hand: cpd pr poll --plan {id}");
+        append(tx, NewEvent::new(Kind::PlanPhase, text, json!({"from": "dispatch", "to": "pr", "prs": opened})).plan(id.clone()))?;
+        Ok(Phase::Pr)
     })?;
 
-    let pr = pr_of(&mut env, &id)?;
-    Ok(Output::success(json!({"plan": id, "phase": "pr", "pr": pr.to_json()})))
+    let plan = env.plan(&id)?;
+    Ok(Output::success(json!({"plan": id, "phase": phase.as_str(), "pr": pr_of(&plan, &key).to_json()})))
 }
 
-fn pr_of(env: &mut Env, id: &crate::ids::PlanId) -> Result<Pr, CpdError> {
-    let plan = env.plan(id)?;
-    plan.pr.ok_or_else(|| CpdError::new(ErrorCode::StoreFailed, format!("Plan {id} is in phase pr but has no PR.")))
+fn cas_lost(id: &PlanId, key: &PrKey) -> CpdError {
+    CpdError::new(ErrorCode::CasLost, format!("PR {key} of Plan {id} left status dispatch meanwhile: rerun the command."))
+        .with("plan", id.as_str())
+        .with("pr", key.as_str())
 }
 
-/// The phase must be `dispatch`. `pr` and `done` are `already` (the second value:
-/// the success to print); any other phase is `illegal_phase`.
-fn require_dispatch(plan: &PlanRow) -> Result<Option<Output>, CpdError> {
-    match plan.phase {
-        Phase::Dispatch => Ok(None),
-        Phase::Pr | Phase::Done => {
-            let pr = plan.pr.as_ref().expect("a Plan in phase pr or done has a PR (plans CHECK)");
-            Ok(Some(Output::success(json!({"plan": plan.id, "phase": plan.phase.as_str(), "pr": pr.to_json(), "already": true}))))
+/// `[{key, number, url}]` of every PR that is not `cancelled`, in key order.
+fn opened_prs(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_json::Value>, CpdError> {
+    let mut stmt = tx.prepare("SELECT key, pr_number, pr_url FROM prs WHERE plan = ?1 AND status <> 'cancelled' ORDER BY key")?;
+    let rows = stmt
+        .query_map([id.as_str()], |r| Ok(json!({"key": r.get::<_, String>(0)?, "number": r.get::<_, i64>(1)?, "url": r.get::<_, String>(2)?})))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// The PR `key`, which the Plan has.
+fn pr_of<'a>(plan: &'a PlanRow, key: &PrKey) -> &'a PrRow {
+    plan.prs.iter().find(|p| p.key == *key).expect("the selected PR is still in the Plan")
+}
+
+enum Step {
+    /// The PR is `dispatch`: go on, with its key.
+    Go(PrKey),
+    /// The PR is `open` or `merged`: the success to print.
+    Already(Output),
+}
+
+/// The PR must be `dispatch`. `open` and `merged` are `already`; `waiting` and
+/// `cancelled` are `illegal_transition`. A Plan that has not been locked is
+/// `illegal_phase`.
+fn require_dispatch(plan: &PlanRow, args: &Args) -> Result<Step, CpdError> {
+    if matches!(plan.phase, Phase::Grounding | Phase::Plan) {
+        return Err(illegal_phase(plan, COMMAND, "dispatch"));
+    }
+    let pr = plan.select(&args.pr)?;
+    match pr.status.as_str() {
+        "dispatch" => Ok(Step::Go(pr.key.clone())),
+        "open" | "merged" => {
+            Ok(Step::Already(Output::success(json!({"plan": plan.id, "phase": plan.phase.as_str(), "pr": pr.to_json(), "already": true}))))
         }
-        _ => Err(illegal_phase(plan, COMMAND, "dispatch")),
+        _ => Err(pr.refuse(&plan.id, COMMAND, "dispatch")),
     }
 }
 
-/// Every Job `merged` or `cancelled`, and at least one `merged`; else `jobs_not_done`.
-fn require_jobs_done(env: &mut Env, plan: &PlanRow) -> Result<Vec<jobs::Job>, CpdError> {
-    let all = env.store.read(|conn| jobs::load(conn, &plan.id))?;
+/// Every Job of the PR `merged` or `cancelled`, and at least one `merged`; else `jobs_not_done`.
+fn require_jobs_done(env: &mut Env, plan: &PlanRow, key: &PrKey) -> Result<Vec<jobs::Job>, CpdError> {
+    let all: Vec<jobs::Job> = env.store.read(|conn| jobs::load(conn, &plan.id))?.into_iter().filter(|j| j.pr == key.as_str()).collect();
     let open: Vec<_> = all
         .iter()
         .filter(|j| j.status != "merged" && j.status != "cancelled")
@@ -93,17 +140,24 @@ fn require_jobs_done(env: &mut Env, plan: &PlanRow) -> Result<Vec<jobs::Job>, Cp
     if !open.is_empty() {
         return Err(CpdError::new(
             ErrorCode::JobsNotDone,
-            format!("{} Jobs of Plan {} are not Merged or cancelled yet: see cpd job list.", open.len(), plan.id),
+            format!("{} Jobs of PR {key} of Plan {} are not Merged or cancelled yet: see cpd job list.", open.len(), plan.id),
         )
         .with("plan", plan.id.as_str())
+        .with("pr", key.as_str())
         .with("jobs", open));
     }
     if !all.iter().any(|j| j.status == "merged") {
-        return Err(CpdError::new(ErrorCode::JobsNotDone, format!("No Job of Plan {} is Merged: there is nothing to open a PR for.", plan.id))
+        return Err(CpdError::new(ErrorCode::JobsNotDone, format!("No Job of PR {key} of Plan {} is Merged: there is nothing to open a PR for.", plan.id))
             .with("plan", plan.id.as_str())
+            .with("pr", key.as_str())
             .with("jobs", json!([])));
     }
     Ok(all)
+}
+
+/// The Plan's title when it has one PR that is not `cancelled`, else `<title> (<key>)` (§7.6).
+fn title(plan: &PlanRow, key: &PrKey) -> String {
+    if plan.live().count() == 1 { plan.title.clone() } else { format!("{} ({key})", plan.title) }
 }
 
 /// A table cell: one line, no `|`.
@@ -111,9 +165,9 @@ fn cell(text: &str) -> String {
     text.replace('|', "\\|").split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// The PR body: the Plan's title, the Jobs table with each Job's Merged commit, and the generator line.
-fn summary(plan: &PlanRow, list: &[jobs::Job]) -> String {
-    let mut lines = vec![format!("# {}", plan.title), String::new(), "| Job | Title | Status | Merged commit |".to_owned(), "| --- | --- | --- | --- |".to_owned()];
+/// The PR body: the title, the PR's Jobs table with each Job's Merged commit, and the generator line.
+fn summary(title: &str, list: &[jobs::Job]) -> String {
+    let mut lines = vec![format!("# {title}"), String::new(), "| Job | Title | Status | Merged commit |".to_owned(), "| --- | --- | --- | --- |".to_owned()];
     for j in list {
         let sha = j.merged_sha.as_deref().map_or("-".to_owned(), |s| format!("`{s}`"));
         lines.push(format!("| {} | {} | {} | {sha} |", cell(&j.key), cell(&j.title), j.status));

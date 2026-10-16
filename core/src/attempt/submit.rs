@@ -45,22 +45,30 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
         .with("attempt", id.to_string())
         .with("files", status.lines().map(|l| l.trim().to_owned()).collect::<Vec<_>>()));
     }
-    // 4. At least one commit ahead of base_sha.
+    // 4. At least one commit ahead of base_sha; a review Job (B2) instead: none, and its findings.
     let base = attempt
         .base_sha
         .clone()
         .ok_or_else(|| bad_row(format!("Attempt {plan}/{id} is running with no base_sha")))?;
     let ahead = git::run::ok(&root, &["rev-list", "--count", &format!("{base}..HEAD")])?;
-    if ahead.trim() == "0" {
+    let review = env.store.read(|conn| crate::plan::jobs::load(conn, &plan)?.iter().find(|j| j.key == attempt.job).map(|j| j.review).ok_or_else(|| bad_row(format!("Attempt {plan}/{id} has no Job {}", attempt.job))))?;
+    if review {
+        require_review(&env, &plan, &id, &attempt.job, &base, ahead.trim() != "0")?;
+    } else if ahead.trim() == "0" {
         return Err(CpdError::new(ErrorCode::NoCommits, "There is no commit on top of the base: commit your work, then submit again.")
             .with("attempt", id.to_string())
             .with("base_sha", base));
     }
     let sha = git::run::rev_parse(&root, "HEAD")?;
-    // 5. The tamper check.
-    git::tamper_check(&root, &git::lead_branch(&plan), &base, &sha)?;
-    // 6. The quick check.
-    let check_tail = quick_check(&env, &plan, &id, &root)?;
+    // 5 and 6. The tamper check, against the Lead Branch of the Job's PR (R34 A5), and the
+    // quick check; neither for a review Job: nothing was changed to check.
+    let check_tail = if review {
+        None
+    } else {
+        let lead = env.store.read(|conn| lead_branch(conn, &plan, &attempt.job))?;
+        git::tamper_check(&root, &lead, &base, &sha)?;
+        quick_check(&env, &plan, &id, &root, &lead)?
+    };
 
     // The Worker is the only one who moves its HEAD, and it is waiting for us: but the
     // compare-and-swap of §6.1 is on the HEAD that was checked.
@@ -88,8 +96,9 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
                 .with("attempt", id.to_string()));
         }
         let text = format!(
-            "Attempt {id} of Job {} was submitted and passed the quick check; the driver merges it. Next: cpd attempt show {id} --plan {plan}",
-            now.job
+            "Attempt {id} of Job {} was submitted{}; the driver merges it. Next: cpd attempt show {id} --plan {plan}",
+            now.job,
+            if review { " (a review Job: nothing to check)" } else { " and passed the quick check" }
         );
         let job = crate::ids::JobKey::parse(&now.job).map_err(|_| bad_row(format!("job key {:?}", now.job)))?;
         append(
@@ -102,6 +111,38 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
         Ok(false)
     })?;
     Ok(done(&id, &sha, outcome))
+}
+
+/// A review Job's preconditions (B2, contract §7.3 precondition 3): no commit
+/// ahead of `base` (`review_commits`), and a non-empty `run/<plan>/reviews/<job>.md` (`review_missing`).
+fn require_review(env: &Env, plan: &PlanId, id: &AttemptId, job: &str, base: &str, committed: bool) -> Result<(), CpdError> {
+    if committed {
+        return Err(CpdError::new(
+            ErrorCode::ReviewCommits,
+            "A review Job commits nothing: undo your commits (git reset --hard to the base commit), then submit again.",
+        )
+        .with("attempt", id.to_string())
+        .with("base_sha", base));
+    }
+    let findings = crate::job::findings_path(&env.home, plan, job);
+    if !std::fs::metadata(&findings).is_ok_and(|m| m.is_file() && m.len() > 0) {
+        return Err(CpdError::new(
+            ErrorCode::ReviewMissing,
+            format!("Write your findings to {} (not empty), then submit again.", findings.display()),
+        )
+        .with("attempt", id.to_string())
+        .with("path", findings.display().to_string()));
+    }
+    Ok(())
+}
+
+/// The Lead Branch of the PR that holds Job `job` of `plan`.
+fn lead_branch(conn: &rusqlite::Connection, plan: &PlanId, job: &str) -> Result<String, CpdError> {
+    Ok(conn.query_row(
+        "SELECT r.lead_branch FROM jobs j JOIN prs r ON r.plan = j.plan AND r.key = j.pr WHERE j.plan = ?1 AND j.key = ?2",
+        [plan.as_str(), job],
+        |r| r.get(0),
+    )?)
 }
 
 /// The success output; `already` marks a rerun that found the effect in place.
@@ -163,10 +204,10 @@ fn require_inside(attempt: &Attempt, worktree: &Path) -> Result<PathBuf, CpdErro
 
 /// The quick check of §7.3: `pre-commit` in the worktree. Its last 60 lines for `check_tail`;
 /// `None` when nothing ran. Refuses `check_failed` (exit 3) or `check_error` (exit 1).
-fn quick_check(env: &Env, plan: &PlanId, id: &AttemptId, root: &Path) -> Result<Option<String>, CpdError> {
+fn quick_check(env: &Env, plan: &PlanId, id: &AttemptId, root: &Path, lead: &str) -> Result<Option<String>, CpdError> {
     let log = env.home.hook_log(plan, id, Hook::PreCommit);
     let timeout = Duration::from_secs(u64::from(env.config.timeouts.gate_minutes) * 60);
-    let operation = Operation { branch: &git::lead_branch(plan) };
+    let operation = Operation { branch: lead };
     let result = run_hook(Hook::PreCommit, root, Some(&operation), timeout, &log)?;
     let refuse = |code: ErrorCode, message: String| {
         let mut e = CpdError::new(code, message).with("attempt", id.to_string()).with("tail", result.tail.clone());

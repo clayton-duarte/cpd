@@ -134,18 +134,22 @@ pub fn start(store: &mut Store, ctx: &StartCtx<'_>, plan: &PlanId, key: &JobKey)
 /// Decides the next Attempt of Job `key`, refusing a Job that is not Ready or
 /// does not match its fingerprint.
 fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey) -> Result<Next, CpdError> {
-    let found: Option<(String, String)> = conn
-        .query_row("SELECT phase, repo FROM plans WHERE id = ?1", [plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
-        .optional()?;
-    let (phase, repo) =
-        found.ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str()))?;
+    let found: Option<String> =
+        conn.query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
+    let phase = found.ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str()))?;
     let all = jobs::load(conn, plan)?;
     let job = all.iter().find(|j| j.key == key.as_str()).ok_or_else(|| {
         CpdError::new(ErrorCode::JobNotFound, format!("No Job {key} in Plan {plan}."))
             .with("plan", plan.as_str())
             .with("job", key.as_str())
     })?;
-    require_ready(&all, job, plan, &phase)?;
+    // The repo and status of the Job's PR (R34 A7).
+    let (repo, pr_status): (String, String) = conn.query_row(
+        "SELECT r.repo, r.status FROM jobs j JOIN prs r ON r.plan = j.plan AND r.key = j.pr WHERE j.plan = ?1 AND j.key = ?2",
+        [plan.as_str(), key.as_str()],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    require_ready(&all, job, plan, &phase, &pr_status)?;
     let found = locked_fingerprint(job);
     if job.fingerprint.as_deref() != Some(found.as_str()) {
         return Err(CpdError::new(ErrorCode::LockedJobTampered, format!("Job {key} does not match its Locked-Job fingerprint."))
@@ -184,9 +188,10 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey) -> 
     Ok(Next { branch: git::attempt_branch(plan, &attempt), attempt, tier, origin, worktree })
 }
 
-/// Ready (§3.2): `queued`, in a Plan in phase `dispatch` or `pr`, with every
+/// Ready (§3.2): `queued`, in a Plan in phase `dispatch` or `pr`, whose PR is
+/// `dispatch` or `open` (a `waiting` PR has no Lead worktree yet), with every
 /// Dependency `merged`; else `job_not_ready`.
-fn require_ready(all: &[Job], job: &Job, plan: &PlanId, phase: &str) -> Result<(), CpdError> {
+fn require_ready(all: &[Job], job: &Job, plan: &PlanId, phase: &str, pr_status: &str) -> Result<(), CpdError> {
     let waiting: Vec<&str> = job
         .needs
         .iter()
@@ -197,6 +202,8 @@ fn require_ready(all: &[Job], job: &Job, plan: &PlanId, phase: &str) -> Result<(
         format!("it is {}, not queued", job.status)
     } else if !matches!(phase, "dispatch" | "pr") {
         format!("Plan {plan} is in phase {phase}")
+    } else if !matches!(pr_status, "dispatch" | "open") {
+        format!("its PR {} is {pr_status}", job.pr)
     } else if !waiting.is_empty() {
         format!("it needs {}, not merged yet", waiting.join(", "))
     } else {
@@ -207,6 +214,8 @@ fn require_ready(all: &[Job], job: &Job, plan: &PlanId, phase: &str) -> Result<(
         .with("job", job.key.as_str())
         .with("status", job.status.as_str())
         .with("phase", phase)
+        .with("pr", job.pr.as_str())
+        .with("pr_status", pr_status)
         .with("waiting_for", waiting))
 }
 

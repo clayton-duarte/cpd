@@ -5,9 +5,11 @@ use std::path::Path;
 
 use serde_json::json;
 
+use super::row::{PlanRow, PrRow};
 use super::{Args, Env, gate, illegal_phase, lock, require_clean};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, TAIL_LINES, tail};
+use crate::ids::{PlanId, PrKey};
 use crate::output::Output;
 use crate::plan::Phase;
 
@@ -18,21 +20,17 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
 
     let plan = env.plan(&id)?;
-    if plan.phase != Phase::Pr {
-        return Err(illegal_phase(&plan, COMMAND, "pr"));
-    }
+    let key = require_open(&plan, &args)?.key.clone();
 
     // Under the per-repo lock, after R, so that no merge interleaves and none is unrecorded.
-    let lock = lock(&mut env, &plan, COMMAND)?;
+    let lock = lock(&mut env, plan_pr(&plan, &key), COMMAND)?;
     let plan = env.plan(&id)?;
-    if plan.phase != Phase::Pr {
-        return Err(illegal_phase(&plan, COMMAND, "pr"));
-    }
-    let lead = plan.lead()?.clone();
-    require_clean(&plan, &lead)?;
-    git::run::ok(&lead, &["fetch", "origin", &plan.base])?;
-    let onto = format!("origin/{}", plan.base);
-    let branch = plan.lead_branch.as_str();
+    let pr = require_open(&plan, &args)?;
+    let lead = pr.lead(&id)?.clone();
+    require_clean(&id, pr, &lead)?;
+    git::run::ok(&lead, &["fetch", "origin", &pr.base])?;
+    let onto = format!("origin/{}", pr.base);
+    let branch = pr.lead_branch.as_str();
 
     // What the remote had when we last saw it, for the lease.
     let remote = git::run::rev_parse(&lead, &format!("refs/remotes/origin/{branch}"))?;
@@ -43,7 +41,7 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
         1 => {
             // The tree's id, the conflicted files, a blank line, then git's messages.
             let files: Vec<String> = merge.stdout.lines().skip(1).take_while(|l| !l.is_empty()).map(str::to_owned).collect();
-            return Err(conflict(&plan.id, branch, &onto, files));
+            return Err(conflict(&id, &key, branch, &onto, files));
         }
         code => {
             return Err(CpdError::new(ErrorCode::GitFailed, format!("git merge-tree exited {code}."))
@@ -54,24 +52,42 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
 
     let old = git::run::rev_parse(&lead, &format!("refs/heads/{branch}"))?;
     if let Some(files) = rebase_onto(&lead, &onto)? {
-        return Err(conflict(&plan.id, branch, &onto, files));
+        return Err(conflict(&id, &key, branch, &onto, files));
     }
     let new = git::run::rev_parse(&lead, &format!("refs/heads/{branch}"))?;
 
-    gate(&env, &plan, &lead, COMMAND)?;
+    gate(&env, &id, pr, &lead, &format!("pr rebase --pr {key}"))?;
     let lease = format!("--force-with-lease=refs/heads/{branch}:{remote}");
     git::run::ok(&lead, &["push", &lease, "origin", branch])?;
     drop(lock);
 
-    Ok(Output::success(json!({"plan": id, "rebased": old != new, "old": old, "new": new, "pushed": true})))
+    Ok(Output::success(json!({"plan": id, "pr": key, "rebased": old != new, "old": old, "new": new, "pushed": true})))
 }
 
-fn conflict(plan: &crate::ids::PlanId, branch: &str, onto: &str, files: Vec<String>) -> CpdError {
+fn plan_pr<'a>(plan: &'a PlanRow, key: &PrKey) -> &'a PrRow {
+    plan.prs.iter().find(|p| p.key == *key).expect("the selected PR is still in the Plan")
+}
+
+/// The selected PR must be `open` (`illegal_transition`); a Plan that has not
+/// been locked is `illegal_phase`.
+fn require_open<'a>(plan: &'a PlanRow, args: &Args) -> Result<&'a PrRow, CpdError> {
+    if matches!(plan.phase, Phase::Grounding | Phase::Plan) {
+        return Err(illegal_phase(plan, COMMAND, "pr"));
+    }
+    let pr = plan.select(&args.pr)?;
+    if pr.status != "open" {
+        return Err(pr.refuse(&plan.id, COMMAND, "open"));
+    }
+    Ok(pr)
+}
+
+fn conflict(plan: &PlanId, key: &PrKey, branch: &str, onto: &str, files: Vec<String>) -> CpdError {
     CpdError::new(
         ErrorCode::RebaseConflict,
         format!("{branch} conflicts with {onto} in {} files: nothing was changed. Decide, for example by appending a Job that resolves it.", files.len()),
     )
     .with("plan", plan.as_str())
+    .with("pr", key.as_str())
     .with("files", files)
 }
 

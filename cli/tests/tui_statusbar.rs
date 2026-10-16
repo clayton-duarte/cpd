@@ -49,10 +49,11 @@ fn plan_with_attempts(attempts: &[&str]) -> String {
          INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
          VALUES ('g-ctx', 'lead', 'ctx', NULL, NULL, 'g', '/s/g.jsonl', '/repo', 'O3', NULL, 'idle', NULL,
                  '2026-01-03T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
-         INSERT INTO plans (id, context, title, repo, base, lead_branch, lead_worktree, phase, lead_session, pr_number,
-                            pr_url, pr_opened_at, pr_seen, pr_polled_at, created_at, locked_at)
-         VALUES ('ship', 'ctx', 'Plan ship', '/repo', 'main', 'cpd/ship', '/wt', 'dispatch', 'lead-ship', NULL, NULL, NULL,
-                 '{{\"checks\":{{}},\"reviewIds\":[],\"commentIds\":[]}}', NULL, '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+         VALUES ('ship', 'ctx', 'Plan ship', 'dispatch', 'lead-ship', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+         VALUES ('ship', 'repo', '/repo', 'main', 'dispatch', 'cpd/ship', '/wt', cpd_txn(), '2026-01-02T00:00:00.000Z',
+                 '2026-01-02T00:00:00.000Z');
          INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
          VALUES ('lead-ship', 'lead', 'ctx', 'ship', NULL, 'l', '/s/l.jsonl', '/repo', 'O3', NULL, 'idle', NULL,
                  '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:00.000Z');"
@@ -68,9 +69,9 @@ fn attempt_row(n: usize, status: &str) -> String {
     let (outcome, cause, ended) =
         if status == "ended" { ("'failed'", "'crashed'", "'2026-01-03T01:00:00.000Z'") } else { ("NULL", "NULL", "NULL") };
     format!(
-        "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at)
-         VALUES ('ship', 'j{n}', 'Job {n}', 'S3', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', 'running', 0, '{FP}',
+         VALUES ('ship', 'repo', 'j{n}', 'Job {n}', 'S3', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', 'running', 0, '{FP}',
                  cpd_txn(), NULL, NULL, NULL, NULL, '2026-01-02T00:00:00.000Z');
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, worker_session,
                                submitted_sha, submitted_at, merged_sha, started_at, ended_at)

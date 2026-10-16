@@ -12,7 +12,7 @@ mod archive;
 mod moves;
 mod port;
 mod row;
-mod run;
+pub(crate) mod run;
 mod state;
 
 use std::path::PathBuf;

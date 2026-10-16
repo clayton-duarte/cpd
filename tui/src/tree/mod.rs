@@ -3,7 +3,7 @@
 //! `context.rs`, `sessions.rs`, `cursor.rs`, `actions.rs`, `prompt.rs`,
 //! `separator.rs`) onto the read model.
 //!
-//! - [`rows`]: Contexts, their Plans (each Plan's row is its Lead's) and a Plan's side forks, labelled by title and
+//! - [`rows`]: Contexts, their Plans (each Plan's row is its Lead's) and the forked Sessions after them (B1), labelled by title and
 //!   name, and the archived ones behind `…` rows;
 //! - [`view`]: the state, keys and drawing; [`cursor`], [`prompt`], [`menu`]: its parts (the right-click menu);
 //! - [`actions`]: what it does, as `cpd` commands (`session open`, `plan new`, `session close`, the menu's), and the
