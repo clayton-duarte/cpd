@@ -705,3 +705,67 @@ fn unarchive_in_the_menu_runs_without_a_prompt_and_a_refusal_shows_in_the_note_r
     assert_eq!(wait_for_calls(&env, 1), [words(&["plan", "unarchive", "--plan=old"])]);
     pane.wait("the refusal", |_| pane.footer_has("archived: The Context is archived."));
 }
+
+#[test]
+fn rename_on_a_plan_row_starts_from_its_title_and_runs_plan_rename() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true,"plan":"ship","title":"Plan ship!"}"#);
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    pane.right_click(8, 1); // the Plan `ship`
+    pane.wait("the menu", |s| menu_open(s, "New session…"));
+    pane.keys(&["Down", "Enter"]); // Rename…
+    pane.wait("the prompt, from the title", |_| pane.footer_has("Title: Plan ship█ (Enter confirms, Esc cancels)"));
+    assert!(the_menu_is_closed(&pane.screen()));
+    pane.type_text("!");
+    pane.keys(&["Enter"]);
+    assert_eq!(wait_for_calls(&env, 1), [words(&["plan", "rename", "--plan=ship", "--title=Plan ship!"])]);
+    pane.wait("the note", |_| pane.footer_has("renamed"));
+}
+
+#[test]
+fn new_context_asks_a_title_and_runs_context_new_with_the_derived_id() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true,"context":{"id":"building-cpd"}}"#);
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    pane.right_click(5, 12); // the empty area
+    pane.wait("the menu", |s| menu_open(s, "New Context…"));
+    pane.keys(&["Enter"]);
+    pane.wait("the prompt", |_| pane.footer_has("Title: █ (Enter confirms, Esc cancels)"));
+    pane.keys(&["Enter"]);
+    pane.wait("the refusal", |_| pane.footer_has("A title is required. Title:"));
+    pane.type_text("Building cpd!");
+    pane.keys(&["Enter"]);
+    assert_eq!(wait_for_calls(&env, 1), [words(&["context", "new", "building-cpd", "--title=Building cpd!"])]);
+    pane.wait("the note", |_| pane.footer_has("created building-cpd"));
+}
+
+#[test]
+fn new_plan_and_fork_run_plan_new_with_the_repo_of_the_latest_plan_and_session_fork() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    pane.right_click(5, 0); // the Context `alpha`
+    pane.wait("the menu", |s| menu_open(s, "New Plan…"));
+    pane.keys(&["Enter"]);
+    pane.wait("the prompt", |_| pane.footer_has("Title: █"));
+    pane.type_text("Ship");
+    pane.keys(&["Enter"]);
+    // `ship` is taken in the tree; `sketch` is the latest Plan of `alpha`
+    assert_eq!(
+        wait_for_calls(&env, 1),
+        [words(&["plan", "new", "ship-2", "--context=alpha", "--repo=/repo/sketch", "--title=Ship"])]
+    );
+    pane.wait("the prompt gone", |_| !pane.footer_has("Title:"));
+    pane.right_click(8, 2); // the fork `ship fork`
+    pane.wait("the menu", |s| menu_open(s, "Open"));
+    pane.keys(&["Down", "Down", "Enter"]); // Fork…
+    pane.wait("the prompt", |_| pane.footer_has("Name: ship fork (fork)█"));
+    pane.keys(&["Enter"]);
+    assert_eq!(wait_for_calls(&env, 2)[1], words(&["session", "fork", "f-idle", "--name=ship fork (fork)"]));
+}
