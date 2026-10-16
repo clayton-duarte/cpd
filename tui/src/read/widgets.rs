@@ -187,8 +187,9 @@ fn labels(conn: &Connection) -> Result<BTreeMap<String, (String, Place)>, CpdErr
 /// Plan id → what `pr poll` stored, for the Plans it has polled.
 fn polled(conn: &Connection) -> Result<BTreeMap<String, PolledPr>, CpdError> {
     let mut stmt = conn.prepare(
-        "SELECT id, pr_title, pr_review_decision, pr_checks FROM plans
-          WHERE pr_title IS NOT NULL OR pr_review_decision IS NOT NULL OR pr_checks IS NOT NULL",
+        "SELECT r.plan, r.pr_title, r.pr_review_decision, r.pr_checks FROM prs r
+          WHERE r.key = (SELECT key FROM prs WHERE plan = r.plan ORDER BY created_txn, key LIMIT 1)
+            AND (r.pr_title IS NOT NULL OR r.pr_review_decision IS NOT NULL OR r.pr_checks IS NOT NULL)",
     )?;
     let mut rows = stmt.query([])?;
     let mut out = BTreeMap::new();
