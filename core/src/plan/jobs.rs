@@ -47,10 +47,10 @@ impl Job {
         self.status == "draft"
     }
 
-    /// The fields `plan show` prints for a Job (commands.md §4.3), without its Attempts.
+    /// The fields `plan show` prints for a Job (commands.md §4.3), without `review` and its Attempts.
     pub fn to_json(&self) -> Value {
         json!({
-            "key": self.key, "seq": self.seq, "title": self.title, "status": self.status, "tier": self.tier,
+            "key": self.key, "seq": self.seq, "pr": self.pr, "title": self.title, "status": self.status, "tier": self.tier,
             "appended": self.appended, "needs": self.needs,
             "goal": self.goal, "context": self.context, "touches": self.touches,
             "acceptance": self.acceptance, "out_of_scope": self.out_of_scope,

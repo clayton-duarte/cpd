@@ -1,5 +1,6 @@
-//! `plan list` and `plan show` (commands.md §4.2, §4.3): read-only snapshots,
-//! each in one read transaction with its `events_cursor` (§17).
+//! `plan show` (commands.md §4.3): a read-only snapshot in one read
+//! transaction with its `events_cursor` (§17), and the readers it shares with
+//! `plan list` and `plan render`: the Plan row alone and its PRs.
 
 use std::collections::BTreeMap;
 
@@ -8,31 +9,117 @@ use serde_json::{Value, json};
 
 use super::fingerprint::plan_fingerprint;
 use super::jobs::{self, Job};
-use super::row::{self, PlanRow};
-use super::{Env, ListArgs, ShowArgs};
+use super::row::Phase;
+use super::{Env, ShowArgs, bad_row, plan_not_found};
 use crate::error::CpdError;
 use crate::events::highest_id;
-use crate::ids::PlanId;
+use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::Output;
 
-/// `plan list` (§4.2).
-pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
-    let mut env = Env::open()?;
-    let (plans, cursor) = env.store.read(|conn| {
-        let context = args.context.as_ref().map(|c| c.as_str().to_owned());
-        let phase = args.phase.map(|p| p.as_str());
-        let plans = row::query(conn, "(?1 IS NULL OR p.context = ?1) AND (?2 IS NULL OR p.phase = ?2)", &[&context, &phase])?;
-        let mut out = Vec::new();
-        for plan in plans {
-            let jobs = jobs::load(conn, &plan.id)?;
-            out.push(json!({
-                "id": plan.id, "context": plan.context, "title": plan.title, "phase": plan.phase.as_str(),
-                "repo": plan.repo, "lead_session": plan.lead_session, "counts": jobs::counts(&jobs), "pr": plan.pr,
-            }));
-        }
-        Ok((out, highest_id(conn)?))
-    })?;
-    Ok(Output::success(json!({"plans": plans, "events_cursor": cursor})))
+/// A Plan as `plan list`, `plan show` and `plan render` read it: the `plans`
+/// row alone, so a Plan with no PR (just created) is found too.
+#[derive(Clone, Debug)]
+pub(super) struct Head {
+    pub id: PlanId,
+    pub context: ContextId,
+    pub title: String,
+    pub jira: Option<String>,
+    pub phase: Phase,
+    pub lead_session: SessionId,
+    pub created_at: String,
+    pub locked_at: Option<String>,
+    pub done_at: Option<String>,
+}
+
+impl Head {
+    /// Every field of §2.2 Plan except `prs`, as `plan show` prints them.
+    fn to_json(&self) -> Value {
+        json!({
+            "id": self.id, "context": self.context, "title": self.title, "jira": self.jira, "phase": self.phase.as_str(),
+            "lead_session": self.lead_session, "created_at": self.created_at, "locked_at": self.locked_at, "done_at": self.done_at,
+        })
+    }
+}
+
+type RawHead = (String, String, String, Option<String>, String, String, String, Option<String>, Option<String>);
+
+fn parse_head(raw: RawHead) -> Result<Head, CpdError> {
+    let (id, context, title, jira, phase, lead_session, created_at, locked_at, done_at) = raw;
+    let id = PlanId::parse(&id).map_err(|_| bad_row(format!("Plan id {id:?}")))?;
+    let field = |name: &str, value: &str| bad_row(format!("Plan {id} has {name} {value:?}"));
+    Ok(Head {
+        context: ContextId::parse(&context).map_err(|_| field("context", &context))?,
+        phase: Phase::parse(&phase).ok_or_else(|| field("phase", &phase))?,
+        lead_session: SessionId::parse(&lead_session).map_err(|_| field("lead_session", &lead_session))?,
+        title,
+        jira,
+        created_at,
+        locked_at,
+        done_at,
+        id,
+    })
+}
+
+const HEAD_COLUMNS: &str = "id, context, title, jira, phase, lead_session, created_at, locked_at, done_at";
+
+fn head_row(r: &rusqlite::Row) -> rusqlite::Result<RawHead> {
+    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?))
+}
+
+/// The Plan `id`, else `plan_not_found`.
+pub(super) fn load_head(conn: &Connection, id: &PlanId) -> Result<Head, CpdError> {
+    let raw = conn
+        .query_row(&format!("SELECT {HEAD_COLUMNS} FROM plans WHERE id = ?1"), [id.as_str()], head_row)
+        .optional()?
+        .ok_or_else(|| plan_not_found(id))?;
+    parse_head(raw)
+}
+
+/// Every Plan matching `filter` (SQL after `WHERE`), oldest first.
+pub(super) fn query_heads(conn: &Connection, filter: &str, params: &[&dyn rusqlite::ToSql]) -> Result<Vec<Head>, CpdError> {
+    let mut stmt = conn.prepare(&format!("SELECT {HEAD_COLUMNS} FROM plans WHERE {filter} ORDER BY created_at, id"))?;
+    let rows = stmt.query_map(params, head_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter().map(parse_head).collect()
+}
+
+/// Every PR of `plan` in key order, `cancelled` ones included, with every
+/// field of §2.2 PR (`needs`, `pr` and `pr_seen` parsed). `jobs` is not here.
+pub(super) fn pr_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, CpdError> {
+    let mut needs: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1 ORDER BY pr, needs")?;
+    for row in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+        let (pr, need) = row?;
+        needs.entry(pr).or_default().push(need);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pr_seen, pr_title,
+                pr_review_decision, pr_checks, all_merged_at, start_failed_at, created_at, started_at, merged_at
+           FROM prs WHERE plan = ?1 ORDER BY key",
+    )?;
+    let rows = stmt
+        .query_map([plan.as_str()], |r| {
+            let pull = match (r.get::<_, Option<i64>>(6)?, r.get::<_, Option<String>>(7)?, r.get::<_, Option<String>>(8)?) {
+                (Some(number), Some(url), Some(opened_at)) => json!({"number": number, "url": url, "opened_at": opened_at}),
+                _ => Value::Null,
+            };
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(9)?, json!({
+                "key": r.get::<_, String>(0)?, "repo": r.get::<_, String>(1)?, "base": r.get::<_, String>(2)?,
+                "status": r.get::<_, String>(3)?, "lead_branch": r.get::<_, String>(4)?,
+                "lead_worktree": r.get::<_, Option<String>>(5)?, "pr": pull,
+                "pr_title": r.get::<_, Option<String>>(10)?, "pr_review_decision": r.get::<_, Option<String>>(11)?,
+                "pr_checks": r.get::<_, Option<String>>(12)?, "all_merged_at": r.get::<_, Option<String>>(13)?,
+                "start_failed_at": r.get::<_, Option<String>>(14)?, "created_at": r.get::<_, String>(15)?,
+                "started_at": r.get::<_, Option<String>>(16)?, "merged_at": r.get::<_, Option<String>>(17)?,
+            })))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(|(key, seen, mut value)| {
+            value["pr_seen"] = serde_json::from_str(&seen).map_err(|_| bad_row(format!("PR {key} of Plan {plan} has pr_seen {seen:?}")))?;
+            value["needs"] = json!(needs.remove(&key).unwrap_or_default());
+            Ok(value)
+        })
+        .collect()
 }
 
 /// `plan show` (§4.3).
@@ -40,26 +127,34 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
     let snapshot = env.store.read(|conn| {
-        let plan = row::load(conn, &id)?;
+        let plan = load_head(conn, &id)?;
+        let prs = pr_values(conn, &id)?;
         let jobs = jobs::load(conn, &id)?;
+        let reviews = review_flags(conn, &id)?;
         let attempts = attempts(conn, &id)?;
         let escalations = open_escalations(conn, &id)?;
         let review = latest_review(conn, &id)?;
-        Ok((plan, jobs, attempts, escalations, review, highest_id(conn)?))
+        Ok((plan, prs, jobs, reviews, attempts, escalations, review, highest_id(conn)?))
     })?;
-    let (plan, jobs, mut attempts, escalations, review, cursor): (PlanRow, Vec<Job>, _, _, _, _) = snapshot;
+    let (plan, mut prs, jobs, reviews, mut attempts, escalations, review, cursor): (Head, Vec<Value>, Vec<Job>, _, _, _, _, _) = snapshot;
     let mut tamper = env.store.tamper()?;
     tamper.extend(jobs::tampered(&id, &jobs));
+    for pr in &mut prs {
+        let key = pr["key"].as_str().expect("a PR key").to_owned();
+        pr["jobs"] = json!(jobs.iter().filter(|j| j.pr == key).map(|j| j.key.as_str()).collect::<Vec<_>>());
+    }
     let job_values: Vec<Value> = jobs
         .iter()
         .map(|j| {
             let mut v = j.to_json();
+            v["review"] = json!(reviews.get(&j.key).copied().unwrap_or(false));
             v["attempts"] = json!(attempts.remove(&j.key).unwrap_or_default());
             v
         })
         .collect();
     Ok(Output::success(json!({
         "plan": plan.to_json(),
+        "prs": prs,
         "jobs": job_values,
         "escalations": escalations,
         "review": review,
@@ -67,6 +162,15 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         "tamper": tamper,
         "events_cursor": cursor,
     })))
+}
+
+/// Which Jobs of the Plan are review Jobs (`jobs.review`, B2) by key.
+fn review_flags(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, bool>, CpdError> {
+    let mut stmt = conn.prepare("SELECT key, review FROM jobs WHERE plan = ?1")?;
+    let rows = stmt
+        .query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
 }
 
 /// Every Attempt of the Plan by Job, oldest first.

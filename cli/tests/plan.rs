@@ -525,9 +525,10 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
     let plans = list["plans"].as_array().unwrap();
     assert_eq!(plans.len(), 2);
     let pay = &plans[0];
-    assert_eq!((&pay["id"], &pay["context"], &pay["phase"], &pay["pr"]), (&json!("pay"), &json!("ctx"), &json!("plan"), &Value::Null));
+    assert_eq!((&pay["id"], &pay["context"], &pay["phase"]), (&json!("pay"), &json!("ctx"), &json!("plan")));
     assert_eq!(pay["counts"], json!({"draft": 2, "queued": 0, "running": 0, "merged": 0, "failed": 0, "cancelled": 0}));
-    assert_eq!(pay["repo"], repo.canonicalize().unwrap().display().to_string());
+    assert_eq!(pay["prs"][0]["repo"], repo.canonicalize().unwrap().display().to_string());
+    assert_eq!((&pay["prs"][0]["key"], &pay["prs"][0]["pr"]), (&json!("pay"), &Value::Null));
     let ids = |args: &[&str]| -> Vec<String> {
         env.cpd(args).ok()["plans"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap().to_owned()).collect()
     };
@@ -539,8 +540,10 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
 
     let out = show(&env, "pay");
     let plan = &out["plan"];
-    assert_eq!((&plan["id"], &plan["phase"], &plan["lead_worktree"], &plan["pr"]), (&json!("pay"), &json!("plan"), &Value::Null, &Value::Null));
-    assert_eq!(plan["pr_seen"], json!({"checks": {}, "reviewIds": [], "commentIds": []}));
+    assert_eq!((&plan["id"], &plan["phase"]), (&json!("pay"), &json!("plan")));
+    let pr = &out["prs"][0];
+    assert_eq!((&pr["lead_worktree"], &pr["pr"]), (&Value::Null, &Value::Null));
+    assert_eq!(pr["pr_seen"], json!({"checks": {}, "reviewIds": [], "commentIds": []}));
     let jobs = out["jobs"].as_array().unwrap();
     assert_eq!(jobs.len(), 2);
     assert_eq!((&jobs[1]["key"], &jobs[1]["needs"], &jobs[1]["status"]), (&json!("b"), &json!(["a"]), &json!("draft")));
@@ -620,8 +623,10 @@ fn render_writes_the_plan_markdown_and_its_fingerprint() {
     assert!(text.starts_with("# Plan: Plan pay\n\nContext: `ctx` · Phase: `plan`\n"), "{text}");
     assert!(text.contains("| `b` | Job b | S2 | draft | `a` | `src/b.rs` |"), "{text}");
     assert!(text.contains("```mermaid\ngraph TD\n  j1[\"a\"]\n  j2[\"b\"]\n  j1 --> j2\n```"), "{text}");
-    assert!(text.contains("## `a`: Job a\n"), "{text}");
-    assert!(text.contains("### Goal\n\nGoal of b.\n"), "{text}");
+    assert!(text.contains("\n## PR pay\n"), "{text}");
+    assert!(text.contains("\n### `a`: Job a\n"), "{text}");
+    assert!(text.contains("\n#### Goal\n\nGoal of b.\n"), "{text}");
+    assert_eq!(out["prs"], 1);
     assert!(!text.contains("gone"), "cancelled Jobs are left out: {text}");
 
     // Idempotent: the same Jobs render the same file.
@@ -742,7 +747,7 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
     assert_eq!(watch_calls(&env), vec![vec!["watch".to_owned(), "--ensure".to_owned()]]);
 
     let shown = show(&env, "pay");
-    assert_eq!((&shown["plan"]["phase"], &shown["plan"]["lead_worktree"]), (&json!("dispatch"), &json!(worktree.display().to_string())));
+    assert_eq!((&shown["plan"]["phase"], &shown["prs"][0]["lead_worktree"]), (&json!("dispatch"), &json!(worktree.display().to_string())));
     assert!(shown["plan"]["locked_at"].is_string());
     for job in shown["jobs"].as_array().unwrap() {
         assert_eq!(job["status"], "queued");

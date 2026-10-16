@@ -426,7 +426,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(all["data"], json!({"pr": "pay", "merged": ["api", "ui"], "cancelled": []}));
     let shown = fx.plan();
     assert_eq!(shown["plan"]["phase"], "dispatch");
-    assert!(shown["plan"]["all_merged_at"].is_string(), "{shown}");
+    assert!(shown["prs"][0]["all_merged_at"].is_string(), "{shown}");
     assert_eq!(shown["counts"], json!({"draft": 0, "queued": 0, "running": 0, "merged": 2, "failed": 0, "cancelled": 0}));
     assert_eq!(shown["tamper"], json!([]));
 

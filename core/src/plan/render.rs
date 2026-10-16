@@ -1,13 +1,15 @@
 //! The plan markdown the User reviews in plannotator (commands.md §4.5, kept
-//! from cpd 1 §11 `plan render`): title, Context and phase; a table of every
-//! Job not `cancelled`; a Mermaid graph of the Dependencies; one section per
-//! Job with its Spec. GitHub-flavoured Markdown only: tables, code and
-//! Mermaid, no footnotes, no raw HTML (t4).
+//! from cpd 1 §11 `plan render`, grouped by PR): title, Context and phase; a
+//! table of the PRs not `cancelled` and, from two, a Mermaid graph of their
+//! needs; then a section per PR with its Jobs' table, their Dependencies graph
+//! and one subsection per Job with its Spec. GitHub-flavoured Markdown only:
+//! tables, code and Mermaid, no footnotes, no raw HTML (t4).
 
 use std::collections::BTreeMap;
 
 use serde_json::Value;
 
+use super::fingerprint::PrSpec;
 use super::jobs::Job;
 
 /// Inline text made safe for GFM: no HTML tags, no footnote syntax. Code
@@ -104,16 +106,17 @@ fn joined(items: &[String], f: fn(&str) -> String) -> String {
     if items.is_empty() { "none".to_owned() } else { items.iter().map(|i| f(i)).collect::<Vec<_>>().join(", ") }
 }
 
-/// Mermaid node ids are positional (`j1`, `j2`, …) because Job keys may be
-/// reserved words; the label is the key.
-fn graph(jobs: &[&Job]) -> String {
-    let ids: BTreeMap<&str, String> = jobs.iter().enumerate().map(|(i, j)| (j.key.as_str(), format!("j{}", i + 1))).collect();
-    let mut lines = vec!["```mermaid".to_owned(), "graph TD".to_owned()];
-    lines.extend(jobs.iter().map(|j| format!("  {}[\"{}\"]", ids[j.key.as_str()], j.key)));
-    for j in jobs {
-        for need in &j.needs {
+/// A Mermaid graph of `nodes` (key, keys it needs), `direction` `TD` or `LR`.
+/// Node ids are positional (`n1`, `n2`, …) because keys may be reserved
+/// words; the label is the key. A need that is not a node is left out.
+fn graph(direction: &str, prefix: &str, nodes: &[(&str, &[String])]) -> String {
+    let ids: BTreeMap<&str, String> = nodes.iter().enumerate().map(|(i, (k, _))| (*k, format!("{prefix}{}", i + 1))).collect();
+    let mut lines = vec!["```mermaid".to_owned(), format!("graph {direction}")];
+    lines.extend(nodes.iter().map(|(k, _)| format!("  {}[\"{k}\"]", ids[k])));
+    for (key, needs) in nodes {
+        for need in *needs {
             if let Some(from) = ids.get(need.as_str()) {
-                lines.push(format!("  {from} --> {}", ids[j.key.as_str()]));
+                lines.push(format!("  {from} --> {}", ids[key]));
             }
         }
     }
@@ -121,22 +124,42 @@ fn graph(jobs: &[&Job]) -> String {
     lines.join("\n")
 }
 
-/// The plan markdown for `jobs` (every Job of the Plan, in creation order);
-/// `cancelled` Jobs are left out. Pure: the same Jobs give the same text.
-pub fn markdown(title: &str, context: &str, phase: &str, jobs: &[Job]) -> String {
-    let jobs: Vec<&Job> = jobs.iter().filter(|j| j.status != "cancelled").collect();
-    let mut out = vec![format!("# Plan: {}", inline(title)), String::new(), format!("Context: `{context}` · Phase: `{phase}`"), String::new()];
+/// The PRs in the order of the needs graph: a PR comes after every PR it
+/// needs, ties by key. Needs outside `prs` are ignored; a cycle (the schema
+/// forbids none, `pr add` does) ends the order with the rest by key.
+fn ordered<'a>(prs: &[&'a PrSpec]) -> Vec<&'a PrSpec> {
+    let mut rest: Vec<&PrSpec> = prs.to_vec();
+    rest.sort_by(|a, b| a.key.cmp(&b.key));
+    let mut out: Vec<&PrSpec> = Vec::new();
+    while !rest.is_empty() {
+        let next = rest
+            .iter()
+            .position(|p| p.needs.iter().all(|n| out.iter().any(|o| o.key == *n) || !rest.iter().any(|r| r.key == *n)))
+            .unwrap_or(0);
+        out.push(rest.remove(next));
+    }
+    out
+}
+
+/// One PR's section: repo, base, needs, its Jobs' table and graph, its Jobs' Specs.
+fn pr_section(out: &mut Vec<String>, pr: &PrSpec, jobs: &[&Job]) {
+    out.extend([
+        format!("## PR {}", pr.key),
+        String::new(),
+        format!("Repo: {} · Base: `{}` · Needs: {}", code(&pr.repo), pr.base, joined(&pr.needs, code)),
+        String::new(),
+    ]);
     if jobs.is_empty() {
         out.extend(["No Jobs yet.".to_owned(), String::new()]);
-        return out.join("\n");
+        return;
     }
     out.extend([
-        "## Jobs".to_owned(),
+        "### Jobs".to_owned(),
         String::new(),
         "| Key | Title | Tier | Status | Needs | Touches |".to_owned(),
         "|---|---|---|---|---|---|".to_owned(),
     ]);
-    for j in &jobs {
+    for j in jobs {
         out.push(format!(
             "| {} | {} | {} | {} | {} | {} |",
             tcode(&j.key),
@@ -147,35 +170,67 @@ pub fn markdown(title: &str, context: &str, phase: &str, jobs: &[Job]) -> String
             joined(&strings(&j.touches), tcode),
         ));
     }
-    out.extend([String::new(), "## Dependencies".to_owned(), String::new(), graph(&jobs), String::new()]);
-    for j in &jobs {
+    let nodes: Vec<(&str, &[String])> = jobs.iter().map(|j| (j.key.as_str(), j.needs.as_slice())).collect();
+    out.extend([String::new(), "### Dependencies".to_owned(), String::new(), graph("TD", "j", &nodes), String::new()]);
+    for j in jobs {
         let out_of_scope = strings(&j.out_of_scope);
         out.extend([
-            format!("## {}: {}", code(&j.key), inline(&j.title)),
+            format!("### {}: {}", code(&j.key), inline(&j.title)),
             String::new(),
             format!("Status: `{}` · Tier: `{}` · Needs: {}", j.status, j.tier, joined(&j.needs, code)),
             String::new(),
-            "### Goal".to_owned(),
+            "#### Goal".to_owned(),
             String::new(),
             block(&j.goal),
             String::new(),
-            "### Context".to_owned(),
+            "#### Context".to_owned(),
             String::new(),
             if j.context.is_empty() { "None.".to_owned() } else { block(&j.context) },
             String::new(),
-            "### Files it touches".to_owned(),
+            "#### Files it touches".to_owned(),
             String::new(),
             strings(&j.touches).iter().map(|t| format!("- {}", code(t))).collect::<Vec<_>>().join("\n"),
             String::new(),
-            "### Acceptance".to_owned(),
+            "#### Acceptance".to_owned(),
             String::new(),
             list(&strings(&j.acceptance)),
             String::new(),
-            "### Out of scope".to_owned(),
+            "#### Out of scope".to_owned(),
             String::new(),
             if out_of_scope.is_empty() { "None.".to_owned() } else { list(&out_of_scope) },
             String::new(),
         ]);
+    }
+}
+
+/// The plan markdown for `prs` and `jobs` (every one of the Plan); `cancelled`
+/// PRs and Jobs are left out, and so are the Jobs of a `cancelled` PR. Pure:
+/// the same PRs and Jobs give the same text.
+pub fn markdown(title: &str, context: &str, phase: &str, prs: &[PrSpec], jobs: &[Job]) -> String {
+    let prs: Vec<&PrSpec> = prs.iter().filter(|p| p.status != "cancelled").collect();
+    let mut out = vec![format!("# Plan: {}", inline(title)), String::new(), format!("Context: `{context}` · Phase: `{phase}`"), String::new()];
+    if prs.is_empty() {
+        out.extend(["No PRs yet.".to_owned(), String::new()]);
+        return out.join("\n");
+    }
+    let order = ordered(&prs);
+    out.extend([
+        "## PRs".to_owned(),
+        String::new(),
+        "| Key | Repo | Base | Needs |".to_owned(),
+        "|---|---|---|---|".to_owned(),
+    ]);
+    for p in &prs {
+        out.push(format!("| {} | {} | {} | {} |", tcode(&p.key), tcode(&p.repo), tcode(&p.base), joined(&p.needs, tcode)));
+    }
+    out.push(String::new());
+    if prs.len() >= 2 {
+        let nodes: Vec<(&str, &[String])> = order.iter().map(|p| (p.key.as_str(), p.needs.as_slice())).collect();
+        out.extend([graph("LR", "p", &nodes), String::new()]);
+    }
+    for pr in order {
+        let jobs: Vec<&Job> = jobs.iter().filter(|j| j.pr == pr.key && j.status != "cancelled").collect();
+        pr_section(&mut out, pr, &jobs);
     }
     out.join("\n")
 }
@@ -206,7 +261,19 @@ mod tests {
     }
 
     #[test]
-    fn a_plan_without_jobs_says_so() {
-        assert_eq!(markdown("T", "ctx", "plan", &[]), "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo Jobs yet.\n");
+    fn a_plan_without_prs_says_so() {
+        assert_eq!(markdown("T", "ctx", "plan", &[], &[]), "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n");
+    }
+
+    fn pr(key: &str, needs: &[&str]) -> PrSpec {
+        PrSpec { key: key.into(), repo: format!("/r/{key}"), base: "main".into(), needs: needs.iter().map(|n| (*n).to_owned()).collect(), status: "waiting".into() }
+    }
+
+    #[test]
+    fn prs_are_ordered_by_needs_then_key() {
+        let all = [pr("a-integration", &["b"]), pr("b", &["a-contract"]), pr("a-contract", &[]), pr("z", &[]), pr("c", &["gone"])];
+        let refs: Vec<&PrSpec> = all.iter().collect();
+        let keys: Vec<&str> = ordered(&refs).iter().map(|p| p.key.as_str()).collect();
+        assert_eq!(keys, ["a-contract", "b", "a-integration", "c", "z"]);
     }
 }

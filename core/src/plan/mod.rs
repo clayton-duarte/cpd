@@ -4,11 +4,12 @@
 //! - [`fingerprint`]: the plan fingerprint of §2.3, over the draft Jobs and the PRs;
 //! - [`render`]: the plan markdown of `plan render` and `plan review`;
 //! - [`lead`]: Lead windows in the cockpit (`plan new`, `plan phase plan`);
-//! - `new`, `show`, `phase`, `review`, `lock`: the commands.
+//! - `new`, `list`, `show`, `phase`, `review`, `lock`: the commands.
 
 pub mod fingerprint;
 pub mod jobs;
 mod lead;
+mod list;
 mod lock;
 mod new;
 mod phase;
@@ -140,7 +141,7 @@ pub struct LockArgs {
 pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
         Command::New(args) => new::new(args),
-        Command::List(args) => show::list(args),
+        Command::List(args) => list::list(args),
         Command::Show(args) => show::show(args),
         Command::Phase(args) => phase::phase(args),
         Command::Render(args) => review::render(args),
