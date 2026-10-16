@@ -143,7 +143,7 @@ impl Driver {
         }
 
         // A3 of a review Job (B2): the Worker forks the Lead, once the Lead is idle.
-        let review = self.store.read(|conn| crate::job::is_review(conn, &target.plan, job.key.as_str()))?;
+        let review = job.review;
         let fork = if review {
             log("A3: waiting for the Lead to be idle, to fork it");
             match worker::wait_for_lead(&mut self.store, &self.config, &dirs, &target)? {

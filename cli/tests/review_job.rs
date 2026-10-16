@@ -248,6 +248,14 @@ fn a_review_job_needs_every_existing_job_of_its_pr_that_is_not_cancelled() {
     assert_eq!(out["job"]["status"], "queued");
     assert_eq!(out["job"]["appended"], true);
     assert_eq!(fx.show("final")["needs"], json!(["api", "web"]));
+    assert_eq!(fx.show("final")["review"], true);
+    assert_eq!(fx.show("api")["review"], false);
+    let listed = fx.env.cpd(&["job", "list", "--plan", PLAN]).ok()["jobs"].clone();
+    let flag = |k: &str| listed.as_array().unwrap().iter().find(|j| j["key"] == k).unwrap()["review"].clone();
+    assert_eq!((flag("final"), flag("api")), (json!(true), json!(false)));
+    let shown = fx.env.cpd(&["plan", "show", "--plan", PLAN]).ok()["jobs"].clone();
+    let flag = |k: &str| shown.as_array().unwrap().iter().find(|j| j["key"] == k).unwrap()["review"].clone();
+    assert_eq!((flag("final"), flag("api")), (json!(true), json!(false)));
     assert_eq!(fx.query::<i64>("SELECT review FROM jobs WHERE plan = 'pay' AND key = 'final'"), 1);
     assert_eq!(fx.query::<i64>("SELECT review FROM jobs WHERE plan = 'pay' AND key = 'api'"), 0);
     let events = fx.env.cpd(&["events", "list", "--kind", "job-added", "--plan", PLAN]).ok()["events"].as_array().unwrap().clone();

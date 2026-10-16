@@ -94,6 +94,7 @@ mod tests {
             out_of_scope: json!([]),
             status: status.into(),
             appended: false,
+            review: false,
             fingerprint: None,
             retry_tier: None,
             cancel_reason: None,

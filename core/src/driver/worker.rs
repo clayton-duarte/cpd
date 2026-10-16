@@ -136,7 +136,7 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
             answers: &answers,
         },
     )?;
-    if crate::job::is_review(conn, &target.plan, job.key.as_str())? {
+    if job.review {
         let base: String = conn.query_row(
             "SELECT r.base FROM jobs j JOIN prs r ON r.plan = j.plan AND r.key = j.pr WHERE j.plan = ?1 AND j.key = ?2",
             params![target.plan.as_str(), job.key],

@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 
 use super::spec::{self, Spec};
-use super::{AddArgs, Env, check_needs_available, check_needs_known, check_needs_same_pr, check_pr_live, is_review, plan_phase, sorted_needs};
+use super::{AddArgs, Env, check_needs_available, check_needs_known, check_needs_same_pr, check_pr_live, plan_phase, sorted_needs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
 use crate::ids::{JobKey, PlanId};
@@ -101,6 +101,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
         out_of_scope: json!(wanted.spec.out_of_scope),
         status: if appended { "queued" } else { "draft" }.to_owned(),
         appended,
+        review: wanted.review,
         fingerprint: None,
         retry_tier: None,
         cancel_reason: None,
@@ -111,7 +112,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
         needs,
     };
     if let Some(existing) = all.iter().find(|j| j.key == job.key) {
-        if same_locked_fields(existing, &job) && is_review(conn, plan, &job.key)? == wanted.review {
+        if same_locked_fields(existing, &job) && existing.review == wanted.review {
             return Ok(Decision::Already(existing.clone()));
         }
         return Err(CpdError::new(

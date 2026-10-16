@@ -70,7 +70,7 @@ pub fn merge(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, attempt: &AttemptI
     }
     let lock = RepoLock::wait(ctx.home, &target.repo)?;
     let recovered = recover::recover_except(store, ctx, &lock, Some((plan, attempt)))?;
-    let review = store.read(|conn| crate::job::is_review(conn, plan, target.job.as_str()))?;
+    let review = store.read(|conn| crate::job::find(&crate::plan::jobs::load(conn, plan)?, plan, &target.job).map(|j| j.review))?;
     let (end, stale, push) = if review { review_steps(store, &target)? } else { steps(store, &target)? };
     let metrics = (ctx.metrics)(&target);
     let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };

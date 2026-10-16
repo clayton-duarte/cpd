@@ -130,13 +130,12 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         let plan = load_head(conn, &id)?;
         let prs = pr_values(conn, &id)?;
         let jobs = jobs::load(conn, &id)?;
-        let reviews = review_flags(conn, &id)?;
         let attempts = attempts(conn, &id)?;
         let escalations = open_escalations(conn, &id)?;
         let review = latest_review(conn, &id)?;
-        Ok((plan, prs, jobs, reviews, attempts, escalations, review, highest_id(conn)?))
+        Ok((plan, prs, jobs, attempts, escalations, review, highest_id(conn)?))
     })?;
-    let (plan, mut prs, jobs, reviews, mut attempts, escalations, review, cursor): (Head, Vec<Value>, Vec<Job>, _, _, _, _, _) = snapshot;
+    let (plan, mut prs, jobs, mut attempts, escalations, review, cursor): (Head, Vec<Value>, Vec<Job>, _, _, _, _) = snapshot;
     let mut tamper = env.store.tamper()?;
     tamper.extend(jobs::tampered(&id, &jobs));
     for pr in &mut prs {
@@ -147,7 +146,6 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         .iter()
         .map(|j| {
             let mut v = j.to_json();
-            v["review"] = json!(reviews.get(&j.key).copied().unwrap_or(false));
             v["attempts"] = json!(attempts.remove(&j.key).unwrap_or_default());
             v
         })
@@ -162,15 +160,6 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         "tamper": tamper,
         "events_cursor": cursor,
     })))
-}
-
-/// Which Jobs of the Plan are review Jobs (`jobs.review`, B2) by key.
-fn review_flags(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, bool>, CpdError> {
-    let mut stmt = conn.prepare("SELECT key, review FROM jobs WHERE plan = ?1")?;
-    let rows = stmt
-        .query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?)))?
-        .collect::<rusqlite::Result<_>>()?;
-    Ok(rows)
 }
 
 /// Every Attempt of the Plan by Job, oldest first.

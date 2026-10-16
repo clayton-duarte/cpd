@@ -31,6 +31,8 @@ pub struct Job {
     pub out_of_scope: Value,
     pub status: String,
     pub appended: bool,
+    /// A review Job (`jobs.review`, B2).
+    pub review: bool,
     pub fingerprint: Option<String>,
     pub retry_tier: Option<String>,
     pub cancel_reason: Option<String>,
@@ -47,11 +49,11 @@ impl Job {
         self.status == "draft"
     }
 
-    /// The fields `plan show` prints for a Job (commands.md §4.3), without `review` and its Attempts.
+    /// The fields `plan show` prints for a Job (commands.md §4.3), without its Attempts.
     pub fn to_json(&self) -> Value {
         json!({
             "key": self.key, "seq": self.seq, "pr": self.pr, "title": self.title, "status": self.status, "tier": self.tier,
-            "appended": self.appended, "needs": self.needs,
+            "appended": self.appended, "review": self.review, "needs": self.needs,
             "goal": self.goal, "context": self.context, "touches": self.touches,
             "acceptance": self.acceptance, "out_of_scope": self.out_of_scope,
             "fingerprint": self.fingerprint, "retry_tier": self.retry_tier,
@@ -71,7 +73,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
     }
     let mut stmt = conn.prepare(
         "SELECT seq, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
-                fingerprint, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at
+                fingerprint, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, review
            FROM jobs WHERE plan = ?1 ORDER BY seq",
     )?;
     let rows = stmt
@@ -82,12 +84,12 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 (r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, String>(9)?),
                 (r.get::<_, String>(10)?, r.get::<_, bool>(11)?, r.get::<_, Option<String>>(12)?, r.get::<_, Option<String>>(13)?),
                 (r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?, r.get::<_, Option<String>>(16)?),
-                (r.get::<_, Option<String>>(17)?, r.get::<_, String>(18)?),
+                (r.get::<_, Option<String>>(17)?, r.get::<_, String>(18)?, r.get::<_, bool>(19)?),
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|((seq, key, pr, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at))| {
+        .map(|((seq, key, pr, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, review))| {
             let array = |name: &str, text: &str| -> Result<Value, CpdError> {
                 serde_json::from_str::<Value>(text)
                     .ok()
@@ -108,6 +110,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 context,
                 status,
                 appended,
+                review,
                 fingerprint,
                 retry_tier,
                 cancel_reason,
@@ -218,6 +221,7 @@ mod tests {
             out_of_scope: json!([]),
             status: status.into(),
             appended: false,
+            review: false,
             fingerprint: None,
             retry_tier: None,
             cancel_reason: None,

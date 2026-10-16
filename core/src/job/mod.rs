@@ -196,21 +196,13 @@ fn plan_phase(conn: &Connection, plan: &PlanId) -> Result<String, CpdError> {
         .ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str()))
 }
 
-/// Whether Job `key` of `plan` is a review Job (`jobs.review`, B2).
-pub(crate) fn is_review(conn: &Connection, plan: &PlanId, key: &str) -> Result<bool, CpdError> {
-    Ok(conn
-        .query_row("SELECT review FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), key], |r| r.get(0))
-        .optional()?
-        .unwrap_or(false))
-}
-
 /// Where a review Job's Worker writes its findings: `run/<plan>/reviews/<job>.md` (contract §1.4).
 pub(crate) fn findings_path(home: &CpdHome, plan: &PlanId, job: &str) -> PathBuf {
     home.plan_dir(plan).join("reviews").join(format!("{job}.md"))
 }
 
 /// The Job `key` among `jobs`, else `job_not_found`.
-fn find<'a>(jobs: &'a [Job], plan: &PlanId, key: &JobKey) -> Result<&'a Job, CpdError> {
+pub(crate) fn find<'a>(jobs: &'a [Job], plan: &PlanId, key: &JobKey) -> Result<&'a Job, CpdError> {
     jobs.iter().find(|j| j.key == key.as_str()).ok_or_else(|| {
         CpdError::new(ErrorCode::JobNotFound, format!("No Job {key} in Plan {plan}."))
             .with("plan", plan.as_str())
