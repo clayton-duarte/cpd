@@ -5,7 +5,7 @@
 //!
 //! - [`rows`]: Contexts, their Plans (each Plan's row is its Lead's) and a Plan's side forks, labelled by title and
 //!   name, and the archived ones behind `…` rows;
-//! - [`view`]: the state, keys and drawing; [`cursor`], [`prompt`]: its parts;
+//! - [`view`]: the state, keys and drawing; [`cursor`], [`prompt`], [`menu`]: its parts (the right-click menu);
 //! - [`actions`]: what it does, as `cpd` commands (`session open`, `plan new`, `session close`), and the
 //!   legend popup;
 //! - [`follow`]: `cpd events follow`, which tells it when to take a new snapshot.
@@ -14,11 +14,12 @@
 //! or `j`/`k` move the cursor between Sessions (shown after the first arrow key, while the pane has focus);
 //! Enter opens the cursor's Session in the chat slot and focuses it; `n` starts a new Plan; `x` closes a
 //! Session's pane; `?` opens the legend. A click on a Context collapses or expands it, on a Session opens it, on a `…` row expands the archived rows
-//! (muted, dotted guides) and on their dotted line collapses them.
+//! (muted, dotted guides) and on their dotted line collapses them; a right click opens the menu.
 
 mod actions;
 mod cursor;
 mod follow;
+mod menu;
 mod prompt;
 mod rows;
 mod view;

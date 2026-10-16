@@ -3,6 +3,7 @@
 //! every pane cpd starts ([`PROGRAM`]). Besides those, it lays out the cockpit
 //! as the reference does: a Session opened in the chat slot gets the focus
 //! (`select-pane`), and `?` opens the legend popup.
+//! The menu's Open, Close, Archive and Unarchive are the same commands.
 //!
 //! Text the User typed is passed as `--flag=value`, so a value that starts with
 //! `-` is still a value.
@@ -18,6 +19,26 @@ use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::session::PROGRAM;
 use crate::widgets::open_legend;
 
+/// The object an archive or unarchive is about.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Subject {
+    Context(ContextId),
+    Plan(PlanId),
+    Session(SessionId),
+}
+
+impl Subject {
+    /// The words of the command: `context archive <id>`, `plan archive --plan=<id>`, `session archive <id>`.
+    fn command(&self, verb: &str) -> Vec<String> {
+        let words = |w: &[&str]| w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        match self {
+            Subject::Context(id) => words(&["context", verb, id.as_str()]),
+            Subject::Plan(id) => vec!["plan".to_owned(), verb.to_owned(), format!("--plan={id}")],
+            Subject::Session(id) => words(&["session", verb, id.as_str()]),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     /// `session open <id>` (§10.4), then the focus on the chat slot: Enter, or a click on a Session.
@@ -27,6 +48,10 @@ pub enum Action {
     NewPlan { context: ContextId, id: PlanId, repo: String },
     /// `session close <id>` (§10.9): `x`.
     Close(SessionId),
+    /// `context|plan|session archive` (§3.8, §4.10, §10.10): the menu's Archive, after its y/N.
+    Archive(Subject),
+    /// `context|plan|session unarchive` (§3.9, §4.11, §10.11): the menu's Unarchive.
+    Unarchive(Subject),
 }
 
 /// The refusal of `x` on the Session in the chat slot (the reference's), also when `session close` refuses it
@@ -45,6 +70,8 @@ impl Action {
                 argv
             }
             Action::Close(id) => words(&["session", "close", id.as_str()]),
+            Action::Archive(subject) => subject.command("archive"),
+            Action::Unarchive(subject) => subject.command("unarchive"),
         }
     }
 
@@ -55,6 +82,10 @@ impl Action {
             Action::NewPlan { id, .. } => format!("forking {id} in window park-{id}"),
             Action::Close(_) if reply["already"] == true => "session is already gone".into(),
             Action::Close(_) => "closed".into(),
+            Action::Archive(_) if reply["already"] == true => "already archived".into(),
+            Action::Archive(_) => "archived".into(),
+            Action::Unarchive(_) if reply["already"] == true => "already unarchived".into(),
+            Action::Unarchive(_) => "unarchived".into(),
         }
     }
 
@@ -137,6 +168,12 @@ mod tests {
         let cases = [
             (Action::Open(sid("l-ship")), vec!["session", "open", "l-ship"]),
             (Action::Close(sid("l-ship")), vec!["session", "close", "l-ship"]),
+            (Action::Archive(Subject::Context(ContextId::parse("alpha").unwrap())), vec!["context", "archive", "alpha"]),
+            (Action::Archive(Subject::Plan(PlanId::parse("ship").unwrap())), vec!["plan", "archive", "--plan=ship"]),
+            (Action::Archive(Subject::Session(sid("f-idle"))), vec!["session", "archive", "f-idle"]),
+            (Action::Unarchive(Subject::Context(ContextId::parse("alpha").unwrap())), vec!["context", "unarchive", "alpha"]),
+            (Action::Unarchive(Subject::Plan(PlanId::parse("ship").unwrap())), vec!["plan", "unarchive", "--plan=ship"]),
+            (Action::Unarchive(Subject::Session(sid("f-idle"))), vec!["session", "unarchive", "f-idle"]),
             (
                 Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay-4521").unwrap(), repo: "/work/pay".into() },
                 vec!["plan", "new", "pay-4521", "--context=alpha", "--repo=/work/pay", "--title=pay-4521"],
@@ -156,6 +193,12 @@ mod tests {
         assert_eq!(close.done(&json!({"ok": true, "already": true})), "session is already gone");
         let new = Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay").unwrap(), repo: "/r".into() };
         assert_eq!(new.done(&json!({"ok": true})), "forking pay in window park-pay");
+        let archive = Action::Archive(Subject::Session(sid("f-idle")));
+        assert_eq!(archive.done(&json!({"ok": true, "archived": [], "closed": []})), "archived");
+        assert_eq!(archive.done(&json!({"ok": true, "already": true})), "already archived");
+        let unarchive = Action::Unarchive(Subject::Session(sid("f-idle")));
+        assert_eq!(unarchive.done(&json!({"ok": true, "archived": [], "closed": []})), "unarchived");
+        assert_eq!(unarchive.done(&json!({"ok": true, "already": true})), "already unarchived");
     }
 
     #[test]
@@ -164,5 +207,7 @@ mod tests {
         assert_eq!(close.failed("in_chat_slot", "It is in the chat slot."), IN_CHAT_SLOT);
         assert_eq!(close.failed("not_a_lead", "Not a Lead."), "not_a_lead: Not a Lead.");
         assert_eq!(Action::Open(sid("l-ship")).failed("in_chat_slot", "x"), "in_chat_slot: x");
+        let archive = Action::Archive(Subject::Session(sid("l-ship")));
+        assert_eq!(archive.failed("archive_blocked", "A Session is working."), "archive_blocked: A Session is working.");
     }
 }
