@@ -1,5 +1,5 @@
 //! The Dispatch column's drawing (commands.md §13.2), a port of the reference's `draw_dispatch` and `pr::render`
-//! (`tui/src/main.rs`, `tui/src/pr.rs`): the machine, the PRs of the Plans in the cockpit, git and Jira (the last two
+//! (`tui/src/main.rs`, `tui/src/pr.rs`): the machine, the pull requests of the Plans in the cockpit (one line per PR), git and Jira (the last two
 //! still future), with one dim rule between sections. Pure: [`draw`] only writes to the frame.
 
 use ratatui::Frame;
@@ -43,20 +43,25 @@ fn truncate(text: &str, max: usize) -> String {
     cut
 }
 
-/// The lines of one Plan: its label, then `#n state checks review title` (the title cut first to fit `width`); a Plan
-/// without a PR takes one line.
+/// The lines of one Plan: its label, then one line per PR with a pull request, `#n state checks review title` (the title
+/// cut first to fit `width`); a Plan without a pull request takes one line.
 fn plan_lines(card: &PlanCard, width: usize) -> Vec<Line<'static>> {
-    let Some(PrRow { number, state, polled }) = &card.pr else {
+    if card.prs.is_empty() {
         return vec![Line::from(vec![
             " ".into(),
             bold(truncate(&card.label, width.saturating_sub(8))),
             dim("  no PR"),
         ])];
-    };
+    }
     let head = Line::from(vec![" ".into(), bold(truncate(&card.label, width.saturating_sub(1)))]);
+    std::iter::once(head).chain(card.prs.iter().map(|pr| pr_line(pr, width))).collect()
+}
+
+/// One pull request: `  #n state checks review  title`, or `  #n loading…` before its first poll.
+fn pr_line(pr: &PrRow, width: usize) -> Line<'static> {
+    let PrRow { number, state, polled, .. } = pr;
     let num = format!("  #{number}");
-    // Not polled yet: the number only.
-    let Some(polled) = polled else { return vec![head, Line::from(vec![dim(num), dim(" loading…")])] };
+    let Some(polled) = polled else { return Line::from(vec![dim(num), dim(" loading…")]) };
     let state_text = match state {
         PrState::Open => "open",
         PrState::Closed => "closed",
@@ -82,7 +87,7 @@ fn plan_lines(card: &PlanCard, width: usize) -> Vec<Line<'static>> {
     if room >= 4 {
         spans.push(dim(format!("  {}", truncate(&polled.title, room))));
     }
-    vec![head, Line::from(spans)]
+    Line::from(spans)
 }
 
 fn separator(f: &mut Frame, area: Rect) {
@@ -110,13 +115,14 @@ pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine) {
         home,
     );
     let mut text = vec![Line::from(bold(" PRs"))];
-    // The Plans in the cockpit: Plans with a PR first, then those without only while the pane has room for the rest.
+    // The Plans in the cockpit: Plans with a pull request first, then those without only while the pane has room for the
+    // rest.
     let cockpit: Vec<&PlanCard> = w.plans.iter().filter(|c| matches!(c.lead_place, Place::Chat | Place::Parked)).collect();
     let room = usize::from(area.height).saturating_sub(usize::from(FIXED_ROWS) + text.len());
     let mut used = 0;
-    for card in cockpit.iter().filter(|c| c.pr.is_some()).chain(cockpit.iter().filter(|c| c.pr.is_none())) {
+    for card in cockpit.iter().filter(|c| !c.prs.is_empty()).chain(cockpit.iter().filter(|c| c.prs.is_empty())) {
         let lines = plan_lines(card, usize::from(area.width));
-        if card.pr.is_none() && used + lines.len() > room {
+        if card.prs.is_empty() && used + lines.len() > room {
             continue;
         }
         used += lines.len();
