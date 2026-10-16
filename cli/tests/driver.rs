@@ -373,6 +373,31 @@ fn a_dead_worker_pane_ends_crashed_through_the_ladder() {
 }
 
 #[test]
+fn a_failed_kill_window_is_retried_and_appends_no_error() {
+    let fx = fx();
+    fx.pi("exit 3");
+    let real = String::from_utf8(fx.env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
+    let real = real.trim();
+    assert!(real.starts_with('/'), "{real}");
+    // Fails the first `kill-window` only; every other call is the real tmux.
+    let marker = fx.env.root().join("kill-failed");
+    fx.env.fake(
+        "tmux",
+        &format!(
+            "for a in \"$@\"; do if [ \"$a\" = kill-window ] && [ ! -e '{m}' ]; then : > '{m}'; echo 'fake: kill-window failed' >&2; exit 1; fi; done\nexec '{real}' \"$@\"",
+            m = marker.display()
+        ),
+    );
+
+    let out = fx.dispatch(JOB).ok();
+    fx.wait_end(ATTEMPT, &out["pid"]);
+
+    assert!(marker.exists(), "the fake tmux never failed a kill-window");
+    assert!(!fx.windows().contains("pay--api-a1"), "{}", fx.windows());
+    assert!(!fx.kinds(ATTEMPT).contains(&"error".to_owned()), "{:?}", fx.kinds(ATTEMPT));
+}
+
+#[test]
 fn a_failing_pre_start_ends_setup_failed_and_fails_the_job() {
     let fx = fx();
     fx.wt_toml("pre-start = \"exit 7\"\n");
