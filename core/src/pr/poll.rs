@@ -1,13 +1,16 @@
-//! `pr poll` (commands.md §9.2, contract §7.6): each open PR's feedback and merge,
-//! compared with `pr_seen`.
+//! `pr poll` (commands.md §9.2, contract §7.6): each open PR's state, stored in
+//! its `pull_requests` row, and its merge.
 
 use std::path::Path;
 
 use serde_json::json;
 
-use super::feedback::{self, Changes, ChecksSummary, ReviewDecision, Seen};
+use super::feedback;
+use super::gh::{self, PolledPr};
+use super::pulls::{self, Reason};
 use super::row::{PlanRow, PrRow};
-use super::{Args, Env, gh, illegal_phase};
+use super::status::{ChecksSummary, PrState, ReviewDecision};
+use super::{Args, Env, illegal_phase};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
 use crate::git;
@@ -57,43 +60,48 @@ pub(super) fn poll(args: Args) -> Result<Output, CpdError> {
     Ok(Output::success(json!({"plan": id, "phase": after.phase.as_str(), "prs": polled})))
 }
 
-/// Polls one `open` PR (§7.6): what `gh` says, compared with its `pr_seen`.
+/// Polls one `open` PR (§7.6): what `gh` says, stored in its `pull_requests`
+/// row when a value changed (and only then: a poll that finds nothing new opens
+/// no write transaction), and `pr-feedback` when D7's rules say so.
 fn poll_pr(env: &mut Env, plan: &PlanRow, pr: &PrRow) -> Result<serde_json::Value, CpdError> {
     let id = &plan.id;
     let key = &pr.key;
     let pull = pr.pull.clone().expect("an open PR has its pull request (prs CHECK)");
+    let row_id = pr.pull_request.expect("an open PR has its pull_requests row (prs CHECK)");
     let lead = pr.lead(id)?.clone();
-    let seen = Seen::parse(&pr.pr_seen)?;
 
     let view = gh::view(&lead, pull.number)?;
-    // Stored on every poll, together, with `pr_polled_at`, and printed (contract §7.6).
+    let state = PrState::of_graphql(&view.state)?;
     let decision = ReviewDecision::of(view.review_decision.as_deref());
     let checks = ChecksSummary::of(&feedback::current_checks(&view));
-    let stored = |tx: &WriteTxn<'_>| -> rusqlite::Result<()> {
-        tx.execute(
-            "UPDATE prs SET pr_title = ?1, pr_review_decision = ?2, pr_checks = ?3 WHERE plan = ?4 AND key = ?5",
-            rusqlite::params![view.title, decision.as_str(), checks.as_str(), id.as_str(), key.as_str()],
-        )?;
-        Ok(())
+    let stored = env.store.read(|conn| pulls::load(conn, row_id))?;
+    // What the row would hold: `gh pr view` has no `isDraft` or `createdAt`, so those stay as stored.
+    let polled = |merged_at: Option<String>| -> Result<PolledPr, CpdError> {
+        Ok(PolledPr { title: view.title.clone(), state, review_decision: decision, checks, merged_at, ..stored.polled()? })
     };
-    let printed = |changes: &Changes, merged: bool| {
+    let printed = |reasons: &[Reason], merged: bool| {
         json!({
             "pr": key, "number": pull.number, "state": view.state, "merged": merged, "title": view.title,
-            "review_decision": decision.as_str(), "checks": checks.as_str(), "changes": changes.to_json(),
+            "review_decision": decision.as_str(), "checks": checks.as_str(),
+            "reasons": reasons.iter().map(|r| r.as_str()).collect::<Vec<_>>(),
         })
     };
-    if view.state == "MERGED" {
+    if state == PrState::Merged {
         env.store.write(COMMAND, |tx| {
             let moved = tx.execute(
-                "UPDATE prs SET status = 'merged', merged_at = (SELECT at FROM txns WHERE id = cpd_txn()),
-                        pr_polled_at = (SELECT at FROM txns WHERE id = cpd_txn())
+                "UPDATE prs SET status = 'merged', merged_at = (SELECT at FROM txns WHERE id = cpd_txn())
                   WHERE plan = ?1 AND key = ?2 AND status = 'open'",
                 [id.as_str(), key.as_str()],
             )?;
             if moved == 0 {
                 return Err(cas_lost(id, key));
             }
-            stored(tx)?;
+            // A merged row needs a merge time: GitHub's, else this poll's.
+            let merged_at = match &view.merged_at {
+                Some(at) => at.clone(),
+                None => tx.query_row("SELECT at FROM txns WHERE id = cpd_txn()", [], |r| r.get(0))?,
+            };
+            pulls::upsert(tx, &polled(Some(merged_at))?)?;
             let text = format!("PR {key} (#{}) of Plan {id} is merged.", pull.number);
             let data = json!({"pr": key, "number": pull.number, "url": pull.url, "merged_at": view.merged_at});
             append(tx, NewEvent::new(Kind::PrMerged, text, data).plan(id.clone()))?;
@@ -116,34 +124,24 @@ fn poll_pr(env: &mut Env, plan: &PlanRow, pr: &PrRow) -> Result<serde_json::Valu
             append(tx, NewEvent::new(Kind::PlanDone, text, json!({"prs": merged})).plan(id.clone()))?;
             Ok(())
         })?;
-        return Ok(printed(&Changes::default(), true));
+        return Ok(printed(&[], true));
     }
 
-    let inline = gh::inline_comments(&lead, pull.number)?;
-    let (changes, mut next) = feedback::diff(&seen, &view, &inline);
-    let closed = view.state == "CLOSED";
-    // The closure is reported once; the mark goes when the PR is open again.
-    let closure = closed && seen.closed != Some(true);
-    next.closed = closed.then_some(true);
-
-    env.store.write(COMMAND, |tx| {
-        let moved = tx.execute(
-            "UPDATE prs SET pr_seen = ?1, pr_polled_at = (SELECT at FROM txns WHERE id = cpd_txn())
-              WHERE plan = ?2 AND key = ?3 AND status = 'open' AND pr_seen = ?4",
-            rusqlite::params![next.to_text(), id.as_str(), key.as_str(), pr.pr_seen],
-        )?;
-        if moved == 0 {
-            return Err(cas_lost(id, key));
-        }
-        stored(tx)?;
-        if !changes.is_empty() || closure {
-            let text = feedback::text(id.as_str(), key.as_str(), pull.number, &changes, closure);
-            let data = feedback::data(key.as_str(), &changes, &view.state);
+    let polled = polled(None)?;
+    if stored.polled()? == polled {
+        return Ok(printed(&[], false));
+    }
+    let reasons = env.store.write(COMMAND, |tx| {
+        let Some(change) = pulls::upsert(tx, &polled)? else { return Ok(Vec::new()) };
+        let reasons = pulls::attention(change.before.as_ref(), &change.after);
+        if !reasons.is_empty() {
+            let text = feedback::text(id.as_str(), key.as_str(), pull.number, &reasons);
+            let data = feedback::data(key.as_str(), &change.after, &reasons);
             append(tx, NewEvent::new(Kind::PrFeedback, text, data).plan(id.clone()))?;
         }
-        Ok(())
+        Ok(reasons)
     })?;
-    Ok(printed(&changes, false))
+    Ok(printed(&reasons, false))
 }
 
 /// `[{key, number, url, merged_at}]` of every PR that is not `cancelled`, in key

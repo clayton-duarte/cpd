@@ -3,7 +3,7 @@
 //! - `add`, `edit`, `cancel`: the Plan's PRs before they start (`pr add`, `pr edit`, `pr cancel`);
 //! - `start`: starting a PR (`pr start`), the routine `plan lock` and engine E7 call too;
 //! - `open`: the Gate, the push and the PR (`pr open`);
-//! - `poll`, with `feedback`: the PR's checks, reviews, comments and merge (`pr poll`);
+//! - `poll`, with `feedback` and `pulls` (the table `pull_requests`, written only there): the PRs' state and merge (`pr poll`);
 //! - `rebase`: the Lead Branch onto the base, the Gate and the push (`pr rebase`);
 //! - `gh`: the one gateway to `gh`; `status`: the PR status enums; `row`: the Plan as these commands read it.
 //!
@@ -14,9 +14,12 @@ mod add;
 mod cancel;
 mod edit;
 mod feedback;
+// `pr view` (Job `pr-view2`) reads the reviews, the comments and `inline_comments`; until then nothing does.
+#[allow(dead_code)]
 mod gh;
 mod open;
 mod poll;
+pub mod pulls;
 mod rebase;
 mod row;
 pub mod start;

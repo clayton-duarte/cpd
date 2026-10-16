@@ -15,6 +15,7 @@ use crate::error::CpdError;
 use crate::events::highest_id;
 use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::Output;
+use crate::pr::pulls;
 
 /// A Plan as `plan list`, `plan show` and `plan render` read it: the `plans`
 /// row alone, so a Plan with no PR (just created) is found too.
@@ -87,7 +88,7 @@ pub(super) fn query_heads(conn: &Connection, filter: &str, params: &[&dyn rusqli
 }
 
 /// Every PR of `plan` in key order, `cancelled` ones included, with every
-/// field of §2.2 PR (`needs`, `pr` and `pr_seen` parsed). `jobs` is not here.
+/// field of §2.2 PR (`needs`, `pr` and `pull_request` parsed). `jobs` is not here.
 pub(super) fn pr_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, CpdError> {
     let mut needs: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1 ORDER BY pr, needs")?;
@@ -96,8 +97,8 @@ pub(super) fn pr_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, 
         needs.entry(pr).or_default().push(need);
     }
     let mut stmt = conn.prepare(
-        "SELECT key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pr_seen, pr_title,
-                pr_review_decision, pr_checks, all_merged_at, start_failed_at, created_at, started_at, merged_at
+        "SELECT key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+                all_merged_at, start_failed_at, created_at, started_at, merged_at
            FROM prs WHERE plan = ?1 ORDER BY key",
     )?;
     let rows = stmt
@@ -106,20 +107,22 @@ pub(super) fn pr_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, 
                 (Some(number), Some(url), Some(opened_at)) => json!({"number": number, "url": url, "opened_at": opened_at}),
                 _ => Value::Null,
             };
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(9)?, json!({
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(9)?, json!({
                 "key": r.get::<_, String>(0)?, "repo": r.get::<_, String>(1)?, "base": r.get::<_, String>(2)?,
                 "status": r.get::<_, String>(3)?, "lead_branch": r.get::<_, String>(4)?,
                 "lead_worktree": r.get::<_, Option<String>>(5)?, "pr": pull,
-                "pr_title": r.get::<_, Option<String>>(10)?, "pr_review_decision": r.get::<_, Option<String>>(11)?,
-                "pr_checks": r.get::<_, Option<String>>(12)?, "all_merged_at": r.get::<_, Option<String>>(13)?,
-                "start_failed_at": r.get::<_, Option<String>>(14)?, "created_at": r.get::<_, String>(15)?,
-                "started_at": r.get::<_, Option<String>>(16)?, "merged_at": r.get::<_, Option<String>>(17)?,
+                "all_merged_at": r.get::<_, Option<String>>(10)?,
+                "start_failed_at": r.get::<_, Option<String>>(11)?, "created_at": r.get::<_, String>(12)?,
+                "started_at": r.get::<_, Option<String>>(13)?, "merged_at": r.get::<_, Option<String>>(14)?,
             })))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|(key, seen, mut value)| {
-            value["pr_seen"] = serde_json::from_str(&seen).map_err(|_| bad_row(format!("PR {key} of Plan {plan} has pr_seen {seen:?}")))?;
+        .map(|(key, pull_request, mut value)| {
+            value["pull_request"] = match pull_request {
+                Some(row) => pulls::load(conn, row)?.to_json(),
+                None => Value::Null,
+            };
             value["needs"] = json!(needs.remove(&key).unwrap_or_default());
             Ok(value)
         })
