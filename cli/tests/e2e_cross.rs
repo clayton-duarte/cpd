@@ -399,7 +399,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     let create = calls.iter().find(|c| c[..2] == ["pr", "create"]).unwrap();
     assert_eq!(create[..6], ["pr", "create", "--base", "main", "--head", "cpd/chain/a1"]);
     // E5 polls an open PR in phase `dispatch` too, and a1 is not merged: nothing starts.
-    fx.wait("the first poll of a1", 30, || fx.pr("a1")["pr_title"].as_str().map(|_| ()));
+    fx.wait("the first poll of a1", 30, || fx.env.calls("gh").iter().any(|c| c[..2] == ["pr", "view"]).then_some(()));
     std::thread::sleep(Duration::from_millis(2500));
     assert_eq!((fx.pr_status("b"), fx.pr_status("a2")), ("waiting".to_owned(), "waiting".to_owned()));
     assert!(of_kind(&fx.events(), "attempt-started").iter().all(|e| e["job"] == "schema"));

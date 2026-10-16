@@ -117,13 +117,19 @@ impl Fx {
     fn open(&self, key: &str) {
         self.sql(&format!(
             "UPDATE prs SET status = 'dispatch', lead_worktree = '/x/{key}', started_at = 't' WHERE plan = 'pay' AND key = '{key}';
-             UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'u', pr_opened_at = 't' WHERE plan = 'pay' AND key = '{key}';"
+             INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
+               VALUES ('acme/{key}', 1, 'https://github.com/acme/{key}/pull/1', 'T', 0, 'open', 'none', 'none', 't', 't');
+             UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/{key}/pull/1', pr_opened_at = 't',
+                    pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/{key}') WHERE plan = 'pay' AND key = '{key}';"
         ));
     }
 
     /// An `open` PR `key` merged.
     fn merge(&self, key: &str) {
-        self.sql(&format!("UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pay' AND key = '{key}';"));
+        self.sql(&format!(
+            "UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pay' AND key = '{key}';
+             UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE repo = 'acme/{key}';"
+        ));
     }
 
     fn merged(&self, key: &str) {
