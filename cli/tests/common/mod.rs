@@ -186,12 +186,34 @@ impl TestEnv {
 
     /// Installs `bin/<name>`: a shell script that records its argv (see
     /// [`TestEnv::calls`]) and then runs `body` (`sh` code; `"$@"` are its arguments).
+    ///
+    /// A call is recorded atomically using only `sh` builtins, because some tests
+    /// run cpd with `PATH` set to `bin/` alone (no coreutils, no `flock`). The call
+    /// claims the next free number `<n>` by creating `<n>.rec` exclusively (`set -C`:
+    /// `O_EXCL`, so two calls never share a number and the number is the call order),
+    /// writes its argv there (each argument ended by NUL), and only then creates
+    /// `<n>.done`. [`TestEnv::calls`] reads the `.done` records, so it never sees a
+    /// call half written.
     pub fn fake(&self, name: &str, body: &str) -> PathBuf {
         let path = self.bin().join(name);
-        let calls = self.calls_file(name);
+        let dir = self.calls_dir(name);
+        fs::create_dir_all(&dir).expect("create calls dir");
         let script = format!(
-            "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\0' \"$a\"; done >> '{calls}'\nprintf '\\036' >> '{calls}'\n{body}\n",
-            calls = calls.display(),
+            r#"#!/bin/sh
+_d='{dir}'
+_n=1
+for _f in "$_d"/*.rec; do [ -e "$_f" ] && _n=$((_n+1)); done
+set -C
+until for _a in "$@"; do printf '%s\0' "$_a"; done 2>/dev/null > "$_d/$_n.rec"; do
+  [ -e "$_d/$_n.rec" ] || {{ echo "fake {name}: cannot record the call" >&2; exit 97; }}
+  _n=$((_n+1))
+done
+true > "$_d/$_n.done"
+set +C
+unset _d _n _f _a
+{body}
+"#,
+            dir = dir.display(),
         );
         fs::write(&path, script).expect("write fake");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod fake");
@@ -208,17 +230,28 @@ impl TestEnv {
         self.fake("gh", body)
     }
 
-    /// Every call of the fake `name` so far, each as its argv (without the program).
+    /// Every call of the fake `name` so far, each as its argv (without the program),
+    /// in the order the calls reached the recorder: calls that do not overlap in time
+    /// are in the order they ran; overlapping calls are in some one fixed order.
     pub fn calls(&self, name: &str) -> Vec<Vec<String>> {
-        let Ok(bytes) = fs::read(self.calls_file(name)) else { return Vec::new() };
-        let text = String::from_utf8(bytes).expect("calls are UTF-8");
-        // Each argument ends with NUL, each call with RS (0x1e).
-        text.split_terminator('\u{1e}')
-            .map(|call| call.split_terminator('\0').map(str::to_owned).collect())
+        let Ok(entries) = fs::read_dir(self.calls_dir(name)) else { return Vec::new() };
+        // A call `<n>` is complete once `<n>.done` exists; `<n>.rec` holds its argv.
+        let mut records: Vec<(u64, PathBuf)> = entries
+            .map(|e| e.expect("read calls dir").path())
+            .filter(|p| p.extension().is_some_and(|e| e == "done"))
+            .filter_map(|p| Some((p.file_stem()?.to_str()?.parse().ok()?, p.with_extension("rec"))))
+            .collect();
+        records.sort();
+        records
+            .into_iter()
+            .map(|(_, p)| {
+                let text = String::from_utf8(fs::read(p).expect("read call record")).expect("calls are UTF-8");
+                text.split_terminator('\0').map(str::to_owned).collect()
+            })
             .collect()
     }
 
-    fn calls_file(&self, name: &str) -> PathBuf {
+    fn calls_dir(&self, name: &str) -> PathBuf {
         self.bin().join(format!(".{name}.calls"))
     }
 }
