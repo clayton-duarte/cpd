@@ -96,6 +96,26 @@ pub struct Inherited {
     _file: File,
 }
 
+impl Inherited {
+    /// Clears close-on-exec on fd 3, just before the driver re-executes itself
+    /// after an install (§3.4 "Reload on install"): the lock stays held, with
+    /// no gap, by the new process.
+    pub fn keep_across_exec(&self) -> Result<(), CpdError> {
+        self.set_flags(FdFlag::empty())
+    }
+
+    /// Sets close-on-exec on fd 3 again: the re-exec failed and the driver goes on.
+    pub fn close_on_exec(&self) -> Result<(), CpdError> {
+        self.set_flags(FdFlag::FD_CLOEXEC)
+    }
+
+    fn set_flags(&self, flags: FdFlag) -> Result<(), CpdError> {
+        fcntl(&self._file, FcntlArg::F_SETFD(flags)).map(drop).map_err(|e| {
+            CpdError::new(ErrorCode::DriverLockMissing, format!("Cannot change close-on-exec on the driver lock (fd 3): {e}."))
+        })
+    }
+}
+
 /// A1 (§3.4 step 4): fd 3 must be the lock file `locks/attempt-<plan>--<attempt>.lock`
 /// (same device and inode as the path), else `driver_lock_missing` and the
 /// driver exits at once without writing. Then fd 3 is made close-on-exec, so
