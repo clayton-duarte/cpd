@@ -340,7 +340,7 @@ fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
         assert!(pill_at > x, "{name}: the pill follows the name");
         assert_eq!(buf[(pill_at, y)].bg, palette::color(m), "{name}: pill");
         assert_eq!(buf[(pill_at, y)].fg, palette::pill(m).fg.unwrap(), "{name}: pill text");
-        assert!(text.contains(" key S1 "), "{name}: {text}");
+        assert!(text.contains(" key │S1 "), "{name}: {text}");
         let counter = text.chars().collect::<Vec<_>>().iter().rposition(|c| *c == '3').unwrap() as u16;
         assert_eq!(buf[(counter, y)].fg, palette::color(palette::job_status(status, merging).1), "{name}: counter");
     }

@@ -98,7 +98,7 @@ fn sections() -> Vec<Section> {
             let (icon, meaning) = palette::job_status(*status, *merging);
             vec![
                 plain(name),
-                Line::from(Span::styled(format!(" {icon} key S1 "), palette::pill(meaning))),
+                Line::from(Span::styled(format!(" {icon} key │S1 "), palette::pill(meaning))),
                 Line::from(Span::styled("3", palette::count_style(*status, *merging, 3))),
             ]
         })

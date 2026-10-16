@@ -275,19 +275,19 @@ fn each_job_status_has_its_icon_and_a_cancelled_job_is_not_drawn() {
     sql(&env, &plan_with("dispatch", None, jobs));
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 14 && s[3].contains("draft"));
-    // a column is as wide as its widest pill (`✗ failed S3 a3`); the tier, and `aN` from the second Attempt, sit at its right
+    // a column is as wide as its widest pill (`✗ failed │S3│a3`); the tier, and `aN` from the second Attempt, sit at its right
     let want = "
-  ◌ draft     S3
+  ◌ draft     │S3
 
-  ○ queued    S3
+  ○ queued    │S3
 
-  ◐ running   S3
+  ◐ running   │S3
 
-  ⇥ merging   S3
+  ⇥ merging   │S3
 
-  ✓ merged    S3
+  ✓ merged    │S3
 
-  ✗ failed S3 a3";
+  ✗ failed │S3│a3";
     assert_eq!(chart_rows(&screen, 11), want.strip_prefix('\n').unwrap(), "{}", screen.join("\n"));
     assert!(screen.iter().all(|l| !l.contains("gone")), "a cancelled Job is not drawn:\n{}", screen.join("\n"));
 }
@@ -376,12 +376,12 @@ fn the_view_follows_events_and_switches_plan_when_the_chat_slot_changes() {
             + &event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":["a"]}"#)),
     );
     let screen = screen_when(&env, &pane, "Job b", |s| s.len() > 3 && s[3].contains(" b "));
-    assert_eq!(chart_rows(&screen, 1), "  ○ a S3 ───── ○ b S3");
+    assert_eq!(chart_rows(&screen, 1), "  ○ a │S3 ───── ○ b │S3");
 
     // the other Lead moves into the chat slot: the view shows its Plan
     sql(&env, &in_chat("ctx", "side", "lead-side"));
     let screen = screen_when(&env, &pane, "the other Plan", |s| s.len() > 3 && s[3].contains("other"));
-    assert_eq!(chart_rows(&screen, 1), "  ○ other O3");
+    assert_eq!(chart_rows(&screen, 1), "  ○ other │O3");
     assert!(!screen.iter().any(|l| l.contains("○ a ")), "{}", screen.join("\n"));
 }
 
