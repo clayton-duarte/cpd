@@ -57,10 +57,11 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
             .with("base_sha", base));
     }
     let sha = git::run::rev_parse(&root, "HEAD")?;
-    // 5. The tamper check.
-    git::tamper_check(&root, &git::lead_branch(&plan), &base, &sha)?;
+    // 5. The tamper check, against the Lead Branch of the Job's PR (R34 A5).
+    let lead = env.store.read(|conn| lead_branch(conn, &plan, &attempt.job))?;
+    git::tamper_check(&root, &lead, &base, &sha)?;
     // 6. The quick check.
-    let check_tail = quick_check(&env, &plan, &id, &root)?;
+    let check_tail = quick_check(&env, &plan, &id, &root, &lead)?;
 
     // The Worker is the only one who moves its HEAD, and it is waiting for us: but the
     // compare-and-swap of §6.1 is on the HEAD that was checked.
@@ -102,6 +103,15 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
         Ok(false)
     })?;
     Ok(done(&id, &sha, outcome))
+}
+
+/// The Lead Branch of the PR that holds Job `job` of `plan`.
+fn lead_branch(conn: &rusqlite::Connection, plan: &PlanId, job: &str) -> Result<String, CpdError> {
+    Ok(conn.query_row(
+        "SELECT r.lead_branch FROM jobs j JOIN prs r ON r.plan = j.plan AND r.key = j.pr WHERE j.plan = ?1 AND j.key = ?2",
+        [plan.as_str(), job],
+        |r| r.get(0),
+    )?)
 }
 
 /// The success output; `already` marks a rerun that found the effect in place.
@@ -163,10 +173,10 @@ fn require_inside(attempt: &Attempt, worktree: &Path) -> Result<PathBuf, CpdErro
 
 /// The quick check of §7.3: `pre-commit` in the worktree. Its last 60 lines for `check_tail`;
 /// `None` when nothing ran. Refuses `check_failed` (exit 3) or `check_error` (exit 1).
-fn quick_check(env: &Env, plan: &PlanId, id: &AttemptId, root: &Path) -> Result<Option<String>, CpdError> {
+fn quick_check(env: &Env, plan: &PlanId, id: &AttemptId, root: &Path, lead: &str) -> Result<Option<String>, CpdError> {
     let log = env.home.hook_log(plan, id, Hook::PreCommit);
     let timeout = Duration::from_secs(u64::from(env.config.timeouts.gate_minutes) * 60);
-    let operation = Operation { branch: &git::lead_branch(plan) };
+    let operation = Operation { branch: lead };
     let result = run_hook(Hook::PreCommit, root, Some(&operation), timeout, &log)?;
     let refuse = |code: ErrorCode, message: String| {
         let mut e = CpdError::new(code, message).with("attempt", id.to_string()).with("tail", result.tail.clone());

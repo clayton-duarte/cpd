@@ -105,7 +105,7 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
     let previous = previous(conn, target)?;
     let answers = answers(conn, target)?;
     let quick_check = spec::quick_check(&target.worktree)?;
-    let protected = git::protected_list(&target.worktree, &git::lead_branch(&target.plan))?;
+    let protected = git::protected_list(&target.worktree, &target.lead_branch)?;
     let (touches, acceptance, out_of_scope) = (
         strings(&job.touches, "touches")?,
         strings(&job.acceptance, "acceptance")?,

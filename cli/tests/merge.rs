@@ -14,9 +14,9 @@ use std::time::Duration;
 use common::TestEnv;
 use cpd_core::config::{Catalog, Config, TierModel};
 use cpd_core::error::{CpdError, ErrorCode};
-use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
+use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree, pr_lead_worktree_path, prepare_lead_worktree};
 use cpd_core::home::CpdHome;
-use cpd_core::ids::{AttemptId, PlanId};
+use cpd_core::ids::{AttemptId, PlanId, PrKey};
 use cpd_core::merge::{self, Attempt, Ctx, End, Failure, Merge, RepoLock, take_free_driver_lock};
 use cpd_core::store::{Store, WriteTxn};
 use rusqlite::params;
@@ -48,6 +48,17 @@ struct Fx {
     lead: PathBuf,
 }
 
+/// A PR of Plan `pay` as the tests drive it: its key, repo, Lead Branch and
+/// Lead worktree, and the bare `origin` of its repo when it has one.
+#[derive(Clone)]
+struct Pr {
+    key: String,
+    repo: PathBuf,
+    branch: String,
+    lead: PathBuf,
+    origin: Option<PathBuf>,
+}
+
 fn fx() -> Fx {
     fx_with("")
 }
@@ -63,43 +74,18 @@ fn fx_origin() -> (Fx, PathBuf) {
 }
 
 fn build(config_extra: &str, with_origin: bool) -> (Fx, PathBuf) {
-    let env = TestEnv::new();
-    let repo = env.git_repo("pay").canonicalize().unwrap();
-    let origin = env.root().join("origins").join("pay.git");
-    if with_origin {
-        fs::create_dir_all(&origin).unwrap();
-        env.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
-        env.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
-        env.git(&repo, &["push", "-q", "origin", "main"]);
-    }
-    // The merge runs git in this process, whose environment is not the
-    // TestEnv's: the repo's own config gives rebase an identity.
-    for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
-        env.git(&repo, &["config", key, value]);
-    }
-    let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("lead.log") };
-    let created = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap();
+    let mut fx = plan_without_prs(config_extra);
+    let origin = if with_origin { add_origin(&fx.env, &fx.repo) } else { fx.env.root().join("origins").join("pay.git") };
+    let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("lead.log") };
+    let created = create_lead_worktree(&fx.repo, &plan(), "main", &setup).unwrap();
     assert!(created.push_failed.is_none());
-    let lead = created.path;
-    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
-    fs::write(
-        home.config(),
-        format!("version = 1\nmachine = \"t\"\n{config_extra}\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket()),
-    )
-    .unwrap();
-    let config = Config::load(&home).unwrap();
-    let fx = Fx { env, home, config, catalog: catalog(), repo, lead };
+    fx.lead = created.path;
     fx.store()
         .write("fixture", |tx| {
             exec(
                 tx,
                 &format!(
-                    "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
-                     INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-                       VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
-                     INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
-                       VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                    "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                        VALUES ('pay', 'repo', '{repo}', 'main', 'dispatch', 'cpd/pay', '{lead}', cpd_txn(), 't', 't');",
                     repo = fx.repo.display(),
                     lead = fx.lead.display()
@@ -108,6 +94,54 @@ fn build(config_extra: &str, with_origin: bool) -> (Fx, PathBuf) {
         })
         .unwrap();
     (fx, origin)
+}
+
+/// A bare `origin` for `repo`, which already holds `main`.
+fn add_origin(env: &TestEnv, repo: &Path) -> PathBuf {
+    let name = repo.file_name().unwrap().to_string_lossy().into_owned();
+    let origin = env.root().join("origins").join(format!("{name}.git"));
+    fs::create_dir_all(&origin).unwrap();
+    env.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
+    env.git(repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    env.git(repo, &["push", "-q", "origin", "main"]);
+    origin
+}
+
+/// The merge runs git in this process, whose environment is not the
+/// TestEnv's: the repo's own config gives rebase an identity.
+fn identify(env: &TestEnv, repo: &Path) {
+    for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
+        env.git(repo, &["config", key, value]);
+    }
+}
+
+/// The repo `pay`, a database with Context, Lead Session and Plan `pay`
+/// (phase `dispatch`) but no PR yet, and a config. `lead` is not set.
+fn plan_without_prs(config_extra: &str) -> Fx {
+    let env = TestEnv::new();
+    let repo = env.git_repo("pay").canonicalize().unwrap();
+    identify(&env, &repo);
+    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
+    fs::write(
+        home.config(),
+        format!("version = 1\nmachine = \"t\"\n{config_extra}\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket()),
+    )
+    .unwrap();
+    let config = Config::load(&home).unwrap();
+    let fx = Fx { env, home, config, catalog: catalog(), repo, lead: PathBuf::new() };
+    fx.store()
+        .write("fixture", |tx| {
+            exec(
+                tx,
+                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
+                 INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                   VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
+                 INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+                   VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');",
+            )
+        })
+        .unwrap();
+    fx
 }
 
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
@@ -147,21 +181,31 @@ impl Fx {
         self.commit(&self.lead, path, content)
     }
 
-    /// Job `key` (`running`, Tier S2) with Attempt `<key>-a1` in `merging`:
+    /// The PR `repo` that [`fx`] makes: Lead Branch `cpd/pay` in `self.repo`.
+    fn first_pr(&self) -> Pr {
+        Pr { key: "repo".into(), repo: self.repo.clone(), branch: "cpd/pay".into(), lead: self.lead.clone(), origin: None }
+    }
+
+    /// Job `key` (`running`, Tier S2) of the first PR with Attempt `<key>-a1` in `merging`:
     /// its worktree cut from the Lead Branch HEAD, with one commit writing
     /// `path` = `content`, submitted.
     fn submitted(&self, key: &str, path: &str, content: &str) -> (AttemptId, PathBuf) {
+        self.submitted_on(&self.first_pr(), key, path, content)
+    }
+
+    /// [`Fx::submitted`] for a Job of `pr`.
+    fn submitted_on(&self, pr: &Pr, key: &str, path: &str, content: &str) -> (AttemptId, PathBuf) {
         let attempt = AttemptId::parse(&format!("{key}-a1")).unwrap();
         let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("attempt.log") };
-        let made = create_attempt_worktree(&self.repo, &self.lead, &plan(), &attempt, &setup).unwrap();
+        let made = create_attempt_worktree(&pr.repo, &pr.lead, &plan(), &attempt, &setup).unwrap();
         let sha = self.commit(&made.path, path, content);
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, created_txn, created_at)
-                     VALUES ('pay', 'repo', ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't')",
-                    params![key, "f".repeat(64), tx.id()],
+                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't')",
+                    params![key, "f".repeat(64), tx.id(), pr.key],
                 )?;
                 tx.execute(
                     "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha,
@@ -180,6 +224,48 @@ impl Fx {
             })
             .unwrap();
         (attempt, made.path)
+    }
+
+    /// Adds PR `key` of Plan `pay` on `repo`, started as `pr start` does: Lead Branch
+    /// `cpd/pay/<key>` and its Lead worktree, pushed when the repo has an `origin`.
+    fn add_pr(&self, key: &str, repo: &Path, origin: Option<PathBuf>) -> Pr {
+        let branch = format!("cpd/pay/{key}");
+        let path = pr_lead_worktree_path(repo, &plan(), &PrKey::parse(key).unwrap(), &branch).unwrap();
+        let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("lead.log") };
+        let prepared = prepare_lead_worktree(repo, &plan(), &path, &branch, "main", &setup).map_err(|f| f.error).unwrap();
+        prepared.push().unwrap();
+        self.store()
+            .write("fixture", |tx| {
+                tx.execute(
+                    "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                     VALUES ('pay', ?1, ?2, 'main', 'dispatch', ?3, ?4, ?5, 't', 't')",
+                    params![key, repo.to_str().unwrap(), branch, path.to_str().unwrap(), tx.id()],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        Pr { key: key.into(), repo: repo.to_owned(), branch, lead: path, origin }
+    }
+
+    /// The tip of `pr`'s Lead Branch, read in its repo.
+    fn tip(&self, pr: &Pr) -> String {
+        self.git(&pr.repo, &["rev-parse", &format!("refs/heads/{}", pr.branch)])
+    }
+
+    /// Another Job's merge into `pr`: a commit through its Lead worktree.
+    fn advance(&self, pr: &Pr, path: &str, content: &str) -> String {
+        self.commit(&pr.lead, path, content)
+    }
+
+    /// The tip of `branch` on `pr`'s `origin`.
+    fn remote_tip(&self, pr: &Pr) -> String {
+        self.git(pr.origin.as_ref().expect("the PR's repo has an origin"), &["rev-parse", &format!("refs/heads/{}", pr.branch)])
+    }
+
+    /// R as E2 runs it for `repo`.
+    fn recover_in(&self, repo: &Path) -> Vec<merge::Recovered> {
+        let lock = RepoLock::try_take(&self.home, repo).unwrap().expect("the per-repo lock is free");
+        merge::recover(&mut self.store(), &self.ctx("watch"), &lock).unwrap()
     }
 
     fn request_cancel(&self, key: &str) {
@@ -709,4 +795,292 @@ fn the_merge_runs_r_first_so_a_dead_drivers_stale_lead_worktree_is_no_dirty_targ
     assert!(fx.lead.join("api.txt").exists() && fx.lead.join("ui.txt").exists());
     assert_eq!(fx.job_row("api").0, "merged");
     assert_eq!(fx.job_row("ui").0, "merged");
+}
+
+// ------------------------------------------------------------ PRs across repos (R34)
+
+/// Plan `pay` with two PRs, `schema` and `web`, both started: in two repos
+/// (`pay` and `web`), or both in `pay` (then on branches `cpd/pay/schema` and
+/// `cpd/pay/web`). With `with_origin` each repo has a bare `origin`.
+fn two_prs(same_repo: bool, with_origin: bool) -> (Fx, Pr, Pr) {
+    let fx = plan_without_prs("");
+    let origin = |repo: &Path| with_origin.then(|| add_origin(&fx.env, repo));
+    let schema_origin = origin(&fx.repo);
+    let schema = fx.add_pr("schema", &fx.repo, schema_origin.clone());
+    let web = if same_repo {
+        fx.add_pr("web", &fx.repo, schema_origin)
+    } else {
+        let repo = fx.env.git_repo("web").canonicalize().unwrap();
+        identify(&fx.env, &repo);
+        let web_origin = origin(&repo);
+        fx.add_pr("web", &repo, web_origin)
+    };
+    (fx, schema, web)
+}
+
+/// [`die_after_step_8`] for a Job of `pr`.
+fn die_after_step_8_on(fx: &Fx, pr: &Pr, worktree: &Path) -> String {
+    let old = fx.tip(pr);
+    fx.git(worktree, &["rebase", "-q", &old]);
+    let tip = fx.git(worktree, &["rev-parse", "HEAD"]);
+    fx.git(&pr.repo, &["update-ref", &format!("refs/heads/{}", pr.branch), &tip, &old]);
+    tip
+}
+
+fn merged_sha(result: &Merge) -> String {
+    let End::Merged { sha } = &result.end else { panic!("{result:?}") };
+    sha.clone()
+}
+
+#[test]
+fn in_two_repos_each_merge_lands_on_its_own_prs_branch_only() {
+    let (fx, schema, web) = two_prs(false, false);
+    let (schema_old, web_old) = (fx.tip(&schema), fx.tip(&web));
+    let (api, api_worktree) = fx.submitted_on(&schema, "api", "api.txt", "api\n");
+    let (ui, ui_worktree) = fx.submitted_on(&web, "ui", "ui.txt", "ui\n");
+    // The Attempt worktrees are siblings of their own PR's repo, cut from its Lead Branch.
+    assert_eq!(api_worktree.parent(), schema.repo.parent());
+    assert_eq!(fx.git(&api_worktree, &["rev-parse", "HEAD~1"]), schema_old);
+    assert_eq!(fx.git(&ui_worktree, &["rev-parse", "HEAD~1"]), web_old);
+
+    let on_schema = merged_sha(&fx.merge(&api));
+    assert_eq!(fx.tip(&schema), on_schema);
+    assert_eq!(fx.tip(&web), web_old, "the other PR's branch did not move");
+    let on_web = merged_sha(&fx.merge(&ui));
+
+    assert_eq!(fx.tip(&schema), on_schema);
+    assert_eq!(fx.tip(&web), on_web);
+    assert_eq!(fx.git(&schema.repo, &["rev-parse", &format!("{on_schema}~1")]), schema_old);
+    assert_eq!(fx.git(&web.repo, &["rev-parse", &format!("{on_web}~1")]), web_old);
+    // Each repo holds its own PR's branch and not the other's.
+    assert!(!fx.git(&web.repo, &["branch", "--list", "cpd/pay/schema"]).contains("schema"));
+    assert!(!fx.git(&schema.repo, &["branch", "--list", "cpd/pay/web"]).contains("web"));
+    // Step 9 synced each Lead worktree; step 10 recorded both.
+    assert_eq!(fs::read_to_string(schema.lead.join("api.txt")).unwrap(), "api\n");
+    assert_eq!(fs::read_to_string(web.lead.join("ui.txt")).unwrap(), "ui\n");
+    assert!(!schema.lead.join("ui.txt").exists() && !web.lead.join("api.txt").exists());
+    assert_eq!((fx.status(&schema.lead), fx.status(&web.lead)), (String::new(), String::new()));
+    assert_eq!(fx.job_row("api"), ("merged".into(), Some(on_schema.clone()), None));
+    assert_eq!(fx.job_row("ui"), ("merged".into(), Some(on_web.clone()), None));
+    let reflog = fx.git(&web.repo, &["reflog", "-1", "--format=%gs", "refs/heads/cpd/pay/web"]);
+    assert_eq!(reflog, "cpd: merge pay/ui-a1");
+}
+
+#[test]
+fn in_one_repo_each_merge_lands_on_its_own_prs_branch_only() {
+    let (fx, schema, web) = two_prs(true, false);
+    assert_eq!(schema.repo, web.repo);
+    let web_old = fx.tip(&web);
+    let (api, _) = fx.submitted_on(&schema, "api", "api.txt", "api\n");
+
+    let on_schema = merged_sha(&fx.merge(&api));
+    assert_eq!(fx.tip(&schema), on_schema);
+    assert_eq!(fx.tip(&web), web_old);
+    assert!(!web.lead.join("api.txt").exists());
+    // Submitted only now: the merge above ran R, which ends an Attempt of its repo whose driver is dead.
+    let (ui, _) = fx.submitted_on(&web, "ui", "ui.txt", "ui\n");
+    let on_web = merged_sha(&fx.merge(&ui));
+
+    assert_eq!(fx.tip(&schema), on_schema);
+    assert_eq!(fx.tip(&web), on_web);
+    // The two branches share the base, not each other's commits.
+    assert_eq!(fx.git(&web.repo, &["merge-base", &on_schema, &on_web]), fx.git(&web.repo, &["rev-parse", &format!("{on_web}~1")]));
+    assert!(schema.lead.join("api.txt").exists() && !schema.lead.join("ui.txt").exists());
+    assert!(web.lead.join("ui.txt").exists() && !web.lead.join("api.txt").exists());
+    assert_eq!((fx.status(&schema.lead), fx.status(&web.lead)), (String::new(), String::new()));
+    assert_eq!(fx.job_row("api").0, "merged");
+    assert_eq!(fx.job_row("ui").0, "merged");
+}
+
+#[test]
+fn the_cas_and_the_dirty_check_are_those_of_the_prs_own_branch_and_worktree() {
+    let (fx, schema, web) = two_prs(true, false);
+    let (api, _) = fx.submitted_on(&schema, "api", "api.txt", "api\n");
+    // Another Job's merge moved the web PR's branch, and its Lead worktree is dirty: not schema's concern.
+    fx.advance(&web, "other.txt", "other\n");
+    fs::write(web.lead.join("stray.txt"), "untracked\n").unwrap();
+    // And one that moved the schema PR's branch: the rebase picks it up.
+    let moved = fx.advance(&schema, "moved.txt", "moved\n");
+
+    let worktree = fx.store().read(|c| Ok(c.query_row("SELECT worktree FROM attempts WHERE id = 'api-a1'", [], |r| r.get::<_, String>(0))?)).unwrap();
+    let sha = merged_sha(&fx.merge(&api));
+
+    assert_eq!(fx.git(Path::new(&worktree), &["rev-parse", "HEAD~1"]), moved);
+    assert_eq!(fx.tip(&schema), sha);
+}
+
+#[test]
+fn a_merge_takes_the_lock_of_its_prs_repo_only() {
+    let (fx, schema, web) = two_prs(false, false);
+    let (api, _) = fx.submitted_on(&schema, "api", "api.txt", "api\n");
+    let (ui, _) = fx.submitted_on(&web, "ui", "ui.txt", "ui\n");
+    assert_ne!(RepoLock::path(&fx.home, &schema.repo).unwrap(), RepoLock::path(&fx.home, &web.repo).unwrap());
+    let held = RepoLock::wait(&fx.home, &schema.repo).unwrap();
+
+    std::thread::scope(|s| {
+        let waiting = s.spawn(|| fx.merge(&api));
+        // The other repo's merge is not held up by schema's lock.
+        let result = fx.merge(&ui);
+        assert!(matches!(result.end, End::Merged { .. }), "{result:?}");
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(fx.attempt_row(&api).0, "merging");
+        assert!(!waiting.is_finished());
+        drop(held);
+        let result = waiting.join().unwrap();
+        assert!(matches!(result.end, End::Merged { .. }), "{result:?}");
+    });
+    // Both locks are free again.
+    assert!(RepoLock::try_take(&fx.home, &schema.repo).unwrap().is_some());
+    assert!(RepoLock::try_take(&fx.home, &web.repo).unwrap().is_some());
+}
+
+#[test]
+fn two_prs_in_one_repo_share_its_lock() {
+    let (fx, schema, web) = two_prs(true, false);
+    let (ui, _) = fx.submitted_on(&web, "ui", "ui.txt", "ui\n");
+    // Held through the other PR's Lead worktree: the same repo, the same lock.
+    assert_eq!(RepoLock::path(&fx.home, &schema.lead).unwrap(), RepoLock::path(&fx.home, &web.repo).unwrap());
+    let held = RepoLock::wait(&fx.home, &schema.repo).unwrap();
+
+    std::thread::scope(|s| {
+        let waiting = s.spawn(|| fx.merge(&ui));
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(fx.attempt_row(&ui).0, "merging");
+        assert!(!waiting.is_finished());
+        drop(held);
+        let result = waiting.join().unwrap();
+        assert!(matches!(result.end, End::Merged { .. }), "{result:?}");
+    });
+}
+
+#[test]
+fn the_tamper_list_is_that_of_the_prs_own_lead_branch() {
+    let (fx, schema, web) = two_prs(true, false);
+    // Only the schema PR's Lead Branch protects verify.sh.
+    fx.advance(&schema, ".config/cpd.toml", "protected = [\"verify.sh\"]\n");
+    let (api, _) = fx.submitted_on(&schema, "api", "verify.sh", "exit 0\n");
+
+    let result = fx.merge(&api);
+    assert!(matches!(result.end, End::Failed { cause: Failure::Tampered, .. }), "{result:?}");
+    fx.assert_failed(&api, "api", "tampered");
+
+    // Submitted only now: the merge above ran R, which ends an Attempt of its repo whose driver is dead.
+    let (ui, _) = fx.submitted_on(&web, "ui", "verify.sh", "exit 0\n");
+    let on_web = merged_sha(&fx.merge(&ui));
+    assert_eq!(fx.tip(&web), on_web);
+    assert!(web.lead.join("verify.sh").exists());
+}
+
+#[test]
+fn each_merge_pushes_its_own_prs_branch_to_its_own_origin() {
+    let (fx, schema, web) = two_prs(false, true);
+    let (schema_remote, web_remote) = (fx.remote_tip(&schema), fx.remote_tip(&web));
+    let (api, _) = fx.submitted_on(&schema, "api", "api.txt", "api\n");
+    let (ui, _) = fx.submitted_on(&web, "ui", "ui.txt", "ui\n");
+
+    let on_schema = merged_sha(&fx.merge(&api));
+    assert_eq!(fx.remote_tip(&schema), on_schema);
+    assert_eq!(fx.remote_tip(&web), web_remote, "the other repo's origin was not touched");
+    let on_web = merged_sha(&fx.merge(&ui));
+
+    assert_eq!(fx.remote_tip(&web), on_web);
+    assert_eq!(fx.remote_tip(&schema), on_schema);
+    assert_ne!(schema_remote, on_schema);
+    for attempt in [&api, &ui] {
+        assert_eq!(fx.events(attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+    }
+}
+
+#[test]
+fn in_one_repo_a_merge_pushes_its_prs_branch_and_not_the_others() {
+    let (fx, schema, web) = two_prs(true, true);
+    let web_remote = fx.remote_tip(&web);
+    let (api, _) = fx.submitted_on(&schema, "api", "api.txt", "api\n");
+
+    let on_schema = merged_sha(&fx.merge(&api));
+
+    assert_eq!(fx.remote_tip(&schema), on_schema);
+    assert_eq!(fx.remote_tip(&web), web_remote);
+    assert_eq!(fx.events(&api).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+}
+
+#[test]
+fn a_rejected_push_of_one_prs_branch_is_that_attempts_push_failed_only() {
+    let (fx, schema, web) = two_prs(false, true);
+    let hook = schema.origin.as_ref().unwrap().join("hooks").join("pre-receive");
+    fs::write(&hook, "#!/bin/sh\necho nope >&2\nexit 1\n").unwrap();
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    let (api, _) = fx.submitted_on(&schema, "api", "api.txt", "api\n");
+    let (ui, _) = fx.submitted_on(&web, "ui", "ui.txt", "ui\n");
+
+    let on_schema = merged_sha(&fx.merge(&api));
+    let on_web = merged_sha(&fx.merge(&ui));
+
+    assert_eq!(fx.job_row("api"), ("merged".into(), Some(on_schema), None));
+    assert_eq!(fx.remote_tip(&web), on_web);
+    let events = fx.events(&api);
+    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged", "error"]);
+    assert_eq!(events[1].1["code"], "push_failed");
+    assert_eq!(fx.events(&ui).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+}
+
+#[test]
+fn r_recovers_the_orphans_of_its_repo_per_pr_and_pushes_each_prs_branch() {
+    let (fx, schema, web) = two_prs(true, true);
+    let (_, api_worktree) = fx.submitted_on(&schema, "api", "api.txt", "api\n");
+    let (_, ui_worktree) = fx.submitted_on(&web, "ui", "ui.txt", "ui\n");
+    let on_schema = die_after_step_8_on(&fx, &schema, &api_worktree);
+    let on_web = die_after_step_8_on(&fx, &web, &ui_worktree);
+    assert_ne!(fx.remote_tip(&schema), on_schema);
+
+    let recovered = fx.recover_in(&web.repo);
+
+    let ends: Vec<_> = recovered.iter().map(|r| (r.attempt.to_string(), r.end.clone())).collect();
+    assert_eq!(
+        ends,
+        [
+            ("api-a1".to_owned(), Some(End::Merged { sha: on_schema.clone() })),
+            ("ui-a1".to_owned(), Some(End::Merged { sha: on_web.clone() })),
+        ]
+    );
+    assert_eq!((fx.remote_tip(&schema), fx.remote_tip(&web)), (on_schema.clone(), on_web.clone()));
+    // Step 9 finished in each PR's own Lead worktree.
+    assert_eq!(fs::read_to_string(schema.lead.join("api.txt")).unwrap(), "api\n");
+    assert_eq!(fs::read_to_string(web.lead.join("ui.txt")).unwrap(), "ui\n");
+    assert_eq!((fx.status(&schema.lead), fx.status(&web.lead)), (String::new(), String::new()));
+    assert_eq!(fx.job_row("api"), ("merged".into(), Some(on_schema), None));
+    assert_eq!(fx.job_row("ui"), ("merged".into(), Some(on_web), None));
+    assert!(!api_worktree.exists() && !ui_worktree.exists());
+}
+
+#[test]
+fn r_of_one_repo_leaves_the_orphans_of_another_repo() {
+    let (fx, schema, web) = two_prs(false, false);
+    let (api, api_worktree) = fx.submitted_on(&schema, "api", "api.txt", "api\n");
+    let (ui, ui_worktree) = fx.submitted_on(&web, "ui", "ui.txt", "ui\n");
+    die_after_step_8_on(&fx, &schema, &api_worktree);
+    let on_web = die_after_step_8_on(&fx, &web, &ui_worktree);
+
+    let recovered = fx.recover_in(&web.repo);
+
+    assert_eq!(recovered.len(), 1);
+    assert_eq!((&recovered[0].attempt, &recovered[0].end), (&ui, &Some(End::Merged { sha: on_web })));
+    assert_eq!(fx.attempt_row(&api).0, "merging");
+    assert_eq!(fx.job_row("api").0, "running");
+}
+
+#[test]
+fn a_merge_runs_r_for_its_repo_first_across_prs() {
+    let (fx, schema, web) = two_prs(true, false);
+    let (dead, dead_worktree) = fx.submitted_on(&schema, "api", "api.txt", "api\n");
+    let (live, _) = fx.submitted_on(&web, "ui", "ui.txt", "ui\n");
+    let dead_tip = die_after_step_8_on(&fx, &schema, &dead_worktree);
+
+    let result = fx.merge(&live);
+
+    assert_eq!(result.recovered.len(), 1);
+    assert_eq!((&result.recovered[0].attempt, &result.recovered[0].end), (&dead, &Some(End::Merged { sha: dead_tip.clone() })));
+    assert_eq!(fx.tip(&schema), dead_tip);
+    assert_eq!(fx.tip(&web), merged_sha(&result));
+    assert_eq!(fx.job_row("api").0, "merged");
 }

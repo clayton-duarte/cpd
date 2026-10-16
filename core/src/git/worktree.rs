@@ -392,8 +392,24 @@ pub fn create_lead_worktree(repo: &Path, plan: &PlanId, base: &str, setup: &Setu
     Ok(Created { path: prepared.path, branch: prepared.branch, base_sha: prepared.base_sha, push_failed })
 }
 
-/// Creates an Attempt worktree from the Lead Branch HEAD and runs `pre-start`
-/// in it, blocking (contract §7.2, A2). On failure the worktree and branch are
+/// The Lead Branch of the PR whose Lead worktree is `lead_worktree` (R34 A5):
+/// the branch checked out there, which must be `cpd/<plan>` (a PR migrated from
+/// cpd 2's first schema) or `cpd/<plan>/<key>`. A detached HEAD or any other
+/// branch is `setup_failed`; there is no fallback to `cpd/<plan>`.
+fn checked_out_lead_branch(lead_worktree: &Path, plan: &PlanId) -> Result<String, CpdError> {
+    let fail = |why: String| {
+        CpdError::new(ErrorCode::SetupFailed, format!("The Lead worktree {} has no Lead Branch of Plan {plan}: {why}.", lead_worktree.display()))
+            .with("lead_worktree", lead_worktree.to_string_lossy().into_owned())
+    };
+    match super::run::current_branch(lead_worktree)? {
+        Some(branch) if branch == lead_branch(plan) || branch.starts_with(&format!("{}/", lead_branch(plan))) => Ok(branch),
+        Some(branch) => Err(fail(format!("it is on {branch}"))),
+        None => Err(fail("its HEAD is detached".to_owned())),
+    }
+}
+
+/// Creates an Attempt worktree from the Lead Branch HEAD (the branch checked
+/// out in `lead_worktree`) and runs `pre-start` in it, blocking (contract §7.2, A2). On failure the worktree and branch are
 /// removed; the driver ends the Attempt `failed` / `setup_failed`.
 pub fn create_attempt_worktree(
     repo: &Path,
@@ -403,7 +419,7 @@ pub fn create_attempt_worktree(
     setup: &Setup,
 ) -> Result<Created, CpdError> {
     let path = attempt_worktree_path(repo, plan, attempt)?;
-    let lead = lead_branch(plan);
+    let lead = checked_out_lead_branch(lead_worktree, plan)?;
     let branch = attempt_branch(plan, attempt);
 
     let base_sha = rev_parse(lead_worktree, &format!("refs/heads/{lead}"))?;
