@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
+use super::fingerprint::plan_fingerprint;
 use super::jobs::{self, Job};
 use super::row::{self, PlanRow};
 use super::{Env, ListArgs, ShowArgs};
@@ -43,7 +44,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         let jobs = jobs::load(conn, &id)?;
         let attempts = attempts(conn, &id)?;
         let escalations = open_escalations(conn, &id)?;
-        let review = latest_review(conn, &id, &jobs)?;
+        let review = latest_review(conn, &id)?;
         Ok((plan, jobs, attempts, escalations, review, highest_id(conn)?))
     })?;
     let (plan, jobs, mut attempts, escalations, review, cursor): (PlanRow, Vec<Job>, _, _, _, _) = snapshot;
@@ -109,8 +110,8 @@ fn open_escalations(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, CpdE
 }
 
 /// The latest Plan review, with `current`: whether its fingerprint is still
-/// the plan fingerprint of `jobs`. Null when the Plan has none.
-fn latest_review(conn: &Connection, plan: &PlanId, jobs: &[Job]) -> Result<Value, CpdError> {
+/// the plan fingerprint. Null when the Plan has none.
+fn latest_review(conn: &Connection, plan: &PlanId) -> Result<Value, CpdError> {
     let review = conn
         .query_row(
             "SELECT id, status, fingerprint, feedback, requested_at, decided_at FROM plan_reviews
@@ -131,7 +132,7 @@ fn latest_review(conn: &Connection, plan: &PlanId, jobs: &[Job]) -> Result<Value
     Ok(match review {
         None => Value::Null,
         Some((id, status, fingerprint, feedback, requested_at, decided_at)) => {
-            let current = fingerprint == jobs::plan_fingerprint(jobs);
+            let current = fingerprint == plan_fingerprint(conn, plan)?;
             json!({"id": id, "status": status, "fingerprint": fingerprint, "current": current,
                    "feedback": feedback, "requested_at": requested_at, "decided_at": decided_at})
         }

@@ -82,6 +82,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
     let mut job = Job {
         seq: 0,
         key: wanted.key.as_str().to_owned(),
+        pr: String::new(), // `insert` takes the Plan's one PR; `--pr` is Job `r34-job-pr`'s
         title: wanted.title.clone(),
         tier: wanted.tier.clone(),
         goal: wanted.spec.goal.clone(),

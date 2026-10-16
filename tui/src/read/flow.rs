@@ -10,7 +10,7 @@ use cpd_core::config::Tier;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::highest_id;
 use cpd_core::ids::{AttemptId, EscalationId, JobKey, PlanId, SessionId};
-use cpd_core::plan::jobs;
+use cpd_core::plan::{jobs, plan_fingerprint};
 use cpd_core::session::State;
 use cpd_core::store::Store;
 
@@ -118,7 +118,7 @@ pub fn flow(store: &mut Store, plan: &PlanId) -> Result<Flow, CpdError> {
         let head = plan_heads(conn, Some(plan))?.pop().ok_or_else(|| plan_not_found(plan))?;
         let rows = jobs::load(conn, plan)?;
         let mut attempts = attempts(conn, plan)?;
-        let review = latest_review(conn, plan, &jobs::plan_fingerprint(&rows))?;
+        let review = latest_review(conn, plan, &plan_fingerprint(conn, plan)?)?;
         let nodes = rows
             .into_iter()
             .map(|j| {

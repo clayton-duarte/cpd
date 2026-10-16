@@ -284,7 +284,7 @@ fn populate(store: &mut Store) {
     s += &event("watch-started", None, None, None, &format!(r#"{{"pid":{}}}"#, std::process::id()));
     sql(store, &s);
 
-    let fingerprint = store.read(|c| Ok(plan_fingerprint(&jobs::load(c, &plan("ship"))?))).unwrap();
+    let fingerprint = store.read(|c| Ok(plan_fingerprint(c, &plan("ship"))?)).unwrap();
     sql(
         store,
         &format!(

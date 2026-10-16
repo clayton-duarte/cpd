@@ -566,12 +566,16 @@ fn render_writes_the_plan_markdown_and_its_fingerprint() {
     let path = home(&env).plan_md(&pid("pay"));
     assert_eq!(out["path"], path.display().to_string());
     assert_eq!(out["draft_jobs"], 2);
+    let (pr_key, pr_repo, pr_base): (String, String, String) = store(&env)
+        .read(|c| Ok(c.query_row("SELECT key, repo, base FROM prs WHERE plan = 'pay'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
+        .unwrap();
     let spec = |key: &str, needs: &str| {
         format!(
-            "{{\"acceptance\":[\"cargo test\"],\"context\":\"Context of {key}.\",\"goal\":\"Goal of {key}.\",\"key\":\"{key}\",\"needs\":[{needs}],\"out_of_scope\":[],\"tier\":\"S2\",\"title\":\"Job {key}\",\"touches\":[\"src/{key}.rs\"]}}"
+            "{{\"acceptance\":[\"cargo test\"],\"context\":\"Context of {key}.\",\"goal\":\"Goal of {key}.\",\"key\":\"{key}\",\"needs\":[{needs}],\"out_of_scope\":[],\"pr\":\"{pr_key}\",\"tier\":\"S2\",\"title\":\"Job {key}\",\"touches\":[\"src/{key}.rs\"]}}"
         )
     };
-    assert_eq!(out["fingerprint"], sha256(&format!("[{},{}]", spec("a", ""), spec("b", "\"a\""))));
+    let prs = format!("[{{\"base\":\"{pr_base}\",\"key\":\"{pr_key}\",\"needs\":[],\"repo\":{}}}]", serde_json::to_string(&pr_repo).unwrap());
+    assert_eq!(out["fingerprint"], sha256(&format!("{{\"jobs\":[{},{}],\"prs\":{prs}}}", spec("a", ""), spec("b", "\"a\""))));
     let text = fs::read_to_string(&path).unwrap();
     assert!(text.starts_with("# Plan: Plan pay\n\nContext: `ctx` · Phase: `plan`\n"), "{text}");
     assert!(text.contains("| `b` | Job b | S2 | draft | `a` | `src/b.rs` |"), "{text}");

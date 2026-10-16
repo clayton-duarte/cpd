@@ -4,6 +4,7 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
+use super::fingerprint::plan_fingerprint;
 use super::jobs::{self, Job};
 use super::row::{self, Phase, PlanRow};
 use super::{DecideArgs, Env, RenderArgs, ReviewArgs, read_text_file, render, write_file};
@@ -62,9 +63,9 @@ fn find(conn: &Connection, plan: &PlanId, review: ReviewId) -> Result<Option<Rev
     parse_review(raw)
 }
 
-/// The Plan, its Jobs and its latest review, in one read transaction.
-fn snapshot(env: &mut Env, id: &PlanId) -> Result<(PlanRow, Vec<Job>, Option<Review>), CpdError> {
-    env.store.read(|conn| Ok((row::load(conn, id)?, jobs::load(conn, id)?, latest(conn, id)?)))
+/// The Plan, its Jobs, its latest review and its plan fingerprint, in one read transaction.
+fn snapshot(env: &mut Env, id: &PlanId) -> Result<(PlanRow, Vec<Job>, Option<Review>, String), CpdError> {
+    env.store.read(|conn| Ok((row::load(conn, id)?, jobs::load(conn, id)?, latest(conn, id)?, plan_fingerprint(conn, id)?)))
 }
 
 fn plan_markdown(plan: &PlanRow, jobs: &[Job]) -> String {
@@ -75,12 +76,12 @@ fn plan_markdown(plan: &PlanRow, jobs: &[Job]) -> String {
 pub(super) fn render(args: RenderArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (plan, jobs, _) = snapshot(&mut env, &id)?;
+    let (plan, jobs, _, fingerprint) = snapshot(&mut env, &id)?;
     let path = env.home.plan_md(&id);
     write_file(&path, &plan_markdown(&plan, &jobs))?;
     Ok(Output::success(json!({
         "path": path.display().to_string(),
-        "fingerprint": jobs::plan_fingerprint(&jobs),
+        "fingerprint": fingerprint,
         "draft_jobs": jobs.iter().filter(|j| j.is_draft()).count(),
     })))
 }
@@ -89,7 +90,7 @@ pub(super) fn render(args: RenderArgs) -> Result<Output, CpdError> {
 pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (plan, jobs, latest_review) = snapshot(&mut env, &id)?;
+    let (plan, jobs, latest_review, fingerprint) = snapshot(&mut env, &id)?;
     if plan.phase != Phase::Plan {
         return Err(CpdError::new(
             ErrorCode::IllegalPhase,
@@ -102,7 +103,6 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     if drafts == 0 {
         return Err(no_draft_jobs(&id));
     }
-    let fingerprint = jobs::plan_fingerprint(&jobs);
     if let Some(r) = latest_review.as_ref().filter(|r| r.status == "pending" && r.fingerprint == fingerprint) {
         return Ok(Output::success(json!({
             "review": {"id": r.id, "fingerprint": r.fingerprint, "status": r.status, "requested_at": r.requested_at},
@@ -121,10 +121,10 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     write_file(&path, &text)?;
 
     let requested_at = env.store.write("plan review", |tx| {
-        // Compare-and-swap on what was read: the phase, the Jobs and the latest review.
-        let (now, jobs_now, latest_now) = (row::load(tx, &id)?, jobs::load(tx, &id)?, latest(tx, &id)?);
+        // Compare-and-swap on what was read: the phase, the plan fingerprint and the latest review.
+        let (now, fingerprint_now, latest_now) = (row::load(tx, &id)?, plan_fingerprint(tx, &id)?, latest(tx, &id)?);
         let latest_number = latest_now.map_or(0, |r| r.id.number().get());
-        if now.phase != Phase::Plan || jobs::plan_fingerprint(&jobs_now) != fingerprint || latest_number + 1 != number {
+        if now.phase != Phase::Plan || fingerprint_now != fingerprint || latest_number + 1 != number {
             return Err(CpdError::new(ErrorCode::CasLost, format!("Plan {id} changed while its review was rendered: rerun the command."))
                 .with("plan", id.as_str()));
         }
@@ -156,16 +156,16 @@ pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
     let status = if args.approve { "approved" } else { "rejected" };
     let feedback = args.feedback_file.as_deref().map(read_text_file).transpose()?;
     let mut env = Env::open()?;
-    let (review, jobs) = env.store.read(|conn| {
+    let (review, fingerprint) = env.store.read(|conn| {
         row::load(conn, &id)?;
         let review = find(conn, &id, args.review)?.ok_or_else(|| {
             CpdError::new(ErrorCode::ReviewNotFound, format!("Plan {id} has no review {}.", args.review))
                 .with("plan", id.as_str())
                 .with("review", args.review.to_string())
         })?;
-        Ok((review, jobs::load(conn, &id)?))
+        Ok((review, plan_fingerprint(conn, &id)?))
     })?;
-    let current = review.fingerprint == jobs::plan_fingerprint(&jobs);
+    let current = review.fingerprint == fingerprint;
     if review.status == status {
         return Ok(decided(&review, current, true));
     }

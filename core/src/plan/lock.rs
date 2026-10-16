@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
+use super::fingerprint::plan_fingerprint;
 use super::jobs::{self, Job};
 use super::review::{latest_approved_for, latest_json, no_draft_jobs};
 use super::row::{self, Phase, PlanRow};
@@ -49,7 +50,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     if drafts.is_empty() {
         return Err(no_draft_jobs(&id));
     }
-    let fingerprint = jobs::plan_fingerprint(&jobs);
+    let fingerprint = env.store.read(|conn| plan_fingerprint(conn, &id))?;
     let (review, latest) = env.store.read(|conn| Ok((latest_approved_for(conn, &id, &fingerprint)?, latest_json(conn, &id)?)))?;
     let Some(review) = review else {
         return Err(CpdError::new(
@@ -81,7 +82,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         // Compare-and-swap on what was read: the phase, the drafts and the review.
         let jobs_now = jobs::load(tx, &id)?;
         let review_now = latest_approved_for(tx, &id, &fingerprint)?;
-        if jobs::plan_fingerprint(&jobs_now) != fingerprint || review_now.as_deref() != Some(review.as_str()) {
+        if plan_fingerprint(tx, &id)? != fingerprint || review_now.as_deref() != Some(review.as_str()) {
             return Err(cas_lost(&id));
         }
         let moved = tx.execute(

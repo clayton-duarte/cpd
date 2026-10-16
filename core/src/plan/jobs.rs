@@ -20,6 +20,8 @@ pub const STATUSES: [&str; 6] = ["draft", "queued", "running", "merged", "failed
 pub struct Job {
     pub seq: i64,
     pub key: String,
+    /// The key of the PR the Job belongs to (`jobs.pr`, §2.2).
+    pub pr: String,
     pub title: String,
     pub tier: String,
     pub goal: String,
@@ -68,24 +70,24 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
         needs.entry(job).or_default().push(need);
     }
     let mut stmt = conn.prepare(
-        "SELECT seq, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+        "SELECT seq, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                 fingerprint, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at
            FROM jobs WHERE plan = ?1 ORDER BY seq",
     )?;
     let rows = stmt
         .query_map([plan.as_str()], |r| {
             Ok((
-                (r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?),
-                (r.get::<_, String>(4)?, r.get::<_, String>(5)?),
-                (r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?),
-                (r.get::<_, String>(9)?, r.get::<_, bool>(10)?, r.get::<_, Option<String>>(11)?, r.get::<_, Option<String>>(12)?),
-                (r.get::<_, Option<String>>(13)?, r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?),
-                (r.get::<_, Option<String>>(16)?, r.get::<_, String>(17)?),
+                (r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?),
+                (r.get::<_, String>(5)?, r.get::<_, String>(6)?),
+                (r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, String>(9)?),
+                (r.get::<_, String>(10)?, r.get::<_, bool>(11)?, r.get::<_, Option<String>>(12)?, r.get::<_, Option<String>>(13)?),
+                (r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?, r.get::<_, Option<String>>(16)?),
+                (r.get::<_, Option<String>>(17)?, r.get::<_, String>(18)?),
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|((seq, key, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at))| {
+        .map(|((seq, key, pr, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at))| {
             let array = |name: &str, text: &str| -> Result<Value, CpdError> {
                 serde_json::from_str::<Value>(text)
                     .ok()
@@ -99,6 +101,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 needs: needs.remove(&key).unwrap_or_default(),
                 seq,
                 key,
+                pr,
                 title,
                 tier,
                 goal,
@@ -129,7 +132,7 @@ pub fn counts(jobs: &[Job]) -> Value {
 /// `sha256` of `value`'s canonical JSON: keys sorted, no whitespace (§2.3).
 /// serde_json's map is sorted (the crate is built without `preserve_order`),
 /// so its compact form is canonical.
-fn sha256_of(value: &Value) -> String {
+pub(super) fn sha256_of(value: &Value) -> String {
     format!("{:x}", Sha256::digest(value.to_string().as_bytes()))
 }
 
@@ -143,26 +146,6 @@ pub fn locked_fingerprint(job: &Job) -> String {
         "goal": job.goal, "tier": job.tier, "context": job.context, "touches": job.touches,
         "acceptance": job.acceptance, "out_of_scope": job.out_of_scope, "needs": needs,
     }))
-}
-
-/// The plan fingerprint (§2.3): the canonical JSON array of the Locked fields
-/// (title, Tier, Spec and needs, with the key, as cpd 1 §11 `plan render`) of
-/// every `draft` Job, ordered by key.
-pub fn plan_fingerprint(jobs: &[Job]) -> String {
-    let mut drafts: Vec<&Job> = jobs.iter().filter(|j| j.is_draft()).collect();
-    drafts.sort_by(|a, b| a.key.cmp(&b.key));
-    let array: Vec<Value> = drafts
-        .into_iter()
-        .map(|j| {
-            let mut needs = j.needs.clone();
-            needs.sort();
-            json!({
-                "key": j.key, "title": j.title, "tier": j.tier, "goal": j.goal, "context": j.context,
-                "touches": j.touches, "acceptance": j.acceptance, "out_of_scope": j.out_of_scope, "needs": needs,
-            })
-        })
-        .collect();
-    sha256_of(&Value::Array(array))
 }
 
 /// The Locked Jobs whose stored fingerprint differs from the recomputed one:
@@ -225,6 +208,7 @@ mod tests {
         Job {
             seq: 1,
             key: key.into(),
+            pr: "web".into(),
             title: format!("Title {key}"),
             tier: "S2".into(),
             goal: "g".into(),
@@ -258,22 +242,6 @@ mod tests {
         let mut retitled = job("k", "queued", &["x", "y"]);
         retitled.title = "Other".into();
         assert_eq!(locked_fingerprint(&retitled), expected, "the title is not in the Locked-Job fingerprint");
-    }
-
-    #[test]
-    fn the_plan_fingerprint_covers_the_drafts_by_key() {
-        let a = job("a", "draft", &[]);
-        let b = job("b", "draft", &["a"]);
-        let gone = job("c", "cancelled", &[]);
-        let base = plan_fingerprint(&[a.clone(), b.clone()]);
-        assert_eq!(plan_fingerprint(&[b.clone(), gone, a.clone()]), base, "order and non-drafts do not count");
-        let mut retitled = b.clone();
-        retitled.title = "New".into();
-        assert_ne!(plan_fingerprint(&[a.clone(), retitled]), base);
-        let mut retiered = b;
-        retiered.tier = "O3".into();
-        assert_ne!(plan_fingerprint(&[a, retiered]), base);
-        assert_eq!(plan_fingerprint(&[]), format!("{:x}", Sha256::digest(b"[]")));
     }
 
     #[test]

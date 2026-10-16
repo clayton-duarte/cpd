@@ -1,10 +1,12 @@
 //! Plans and their phases (contract §2.2, §2.3, §3.1; commands.md §4).
 //!
-//! - [`jobs`]: a Plan's Jobs as read, the fingerprints of §2.3, the cycle check;
+//! - [`jobs`]: a Plan's Jobs as read, the Locked-Job fingerprint of §2.3, the cycle check;
+//! - [`fingerprint`]: the plan fingerprint of §2.3, over the draft Jobs and the PRs;
 //! - [`render`]: the plan markdown of `plan render` and `plan review`;
 //! - [`lead`]: Lead windows in the cockpit (`plan new`, `plan phase plan`);
 //! - `new`, `show`, `phase`, `review`, `lock`: the commands.
 
+pub mod fingerprint;
 pub mod jobs;
 mod lead;
 mod lock;
@@ -26,7 +28,8 @@ use crate::ids::{ContextId, PlanId, ReviewId};
 use crate::output::Output;
 use crate::store::Store;
 
-pub use jobs::{locked_fingerprint, plan_fingerprint};
+pub use fingerprint::plan_fingerprint;
+pub use jobs::locked_fingerprint;
 pub use row::Phase;
 
 #[derive(clap::Subcommand, Debug)]
