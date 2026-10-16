@@ -1,5 +1,5 @@
 //! The engine, `cpd watch` (contract §3.7, §6.6; commands.md §12): the lock
-//! and its refusal, the signals, `--ensure`, and each step E1–E6 on a
+//! and its refusal, the signals, `--ensure`, and each step E1–E6 (E7, the PR start, is in pr_start.rs) on a
 //! prepared database, with a private tmux server and fake `pi` and `cpd`.
 
 mod common;

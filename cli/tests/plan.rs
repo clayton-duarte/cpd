@@ -693,8 +693,10 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
     let worktree = repo.parent().unwrap().canonicalize().unwrap().join("pay.pay");
     assert_eq!(
         out,
-        json!({"ok": true, "plan": "pay", "phase": "dispatch", "lead_branch": "cpd/pay", "lead_worktree": worktree.display().to_string(),
-               "base_sha": head, "jobs": ["a", "b"], "watch": {"started": true, "pane": "%9"}})
+        json!({"ok": true, "plan": "pay", "phase": "dispatch", "jobs": ["a", "b"],
+               "prs": [{"key": "pay", "status": "dispatch", "needs": [], "lead_branch": "cpd/pay", "lead_worktree": worktree.display().to_string(),
+                        "base_sha": head, "reused": false, "pushed": false}],
+               "watch": {"started": true, "pane": "%9"}})
     );
     assert_eq!(env.git(&worktree, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay");
     assert_eq!(watch_calls(&env), vec![vec!["watch".to_owned(), "--ensure".to_owned()]]);
@@ -714,7 +716,10 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
     }
     assert_eq!(shown["tamper"], json!([]));
     let phase = events(&env, "plan-phase").last().unwrap().clone();
-    assert_eq!(phase["data"], json!({"from": "plan", "to": "dispatch", "jobs": ["a", "b"]}));
+    assert_eq!(phase["data"], json!({"from": "plan", "to": "dispatch", "jobs": ["a", "b"], "prs": ["pay"]}));
+    let started = events(&env, "pr-started");
+    assert_eq!(started.len(), 1, "{started:?}");
+    assert_eq!((&started[0]["data"]["pr"], &started[0]["data"]["by"]), (&json!("pay"), &json!("lock")));
 
     // Already: still makes sure the engine runs.
     let again = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
@@ -752,7 +757,7 @@ fn lock_creates_and_pushes_the_lead_branch_when_the_remote_has_none() {
 
     let out = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
-    assert_eq!(out["base_sha"], head);
+    assert_eq!((&out["prs"][0]["base_sha"], &out["prs"][0]["pushed"], &out["prs"][0]["reused"]), (&json!(head), &json!(true), &json!(false)));
     assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay"]), format!("{head}\trefs/heads/cpd/pay"));
     let worktree = repo.parent().unwrap().canonicalize().unwrap().join("pay.pay");
     assert_eq!(env.git(&worktree, &["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/cpd/pay");
@@ -776,7 +781,7 @@ fn lock_reuses_a_remote_lead_branch_that_contains_the_base() {
     let out = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
     let worktree = repo.parent().unwrap().canonicalize().unwrap().join("pay.pay");
-    assert_eq!(out["base_sha"], remote_tip);
+    assert_eq!((&out["prs"][0]["base_sha"], &out["prs"][0]["reused"], &out["prs"][0]["pushed"]), (&json!(remote_tip), &json!(true), &json!(false)));
     assert_eq!(env.git(&worktree, &["rev-parse", "HEAD"]), remote_tip);
     assert_eq!(env.git(&repo, &["rev-parse", "refs/heads/cpd/pay"]), remote_tip);
     assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay"]), format!("{remote_tip}\trefs/heads/cpd/pay"));
@@ -796,7 +801,7 @@ fn lock_refuses_a_remote_lead_branch_that_does_not_contain_the_base() {
 
     let error = refused(&env.cpd(&["plan", "lock", "--plan", "pay"]), "branch_exists", 3);
 
-    assert_eq!(error["details"]["branch"], "cpd/pay");
+    assert_eq!((&error["details"]["branch"], &error["details"]["pr"]), (&json!("cpd/pay"), &json!("pay")));
     assert_eq!(env.git(&repo, &["branch", "--list", "cpd/pay"]), "");
     assert!(!repo.parent().unwrap().join("pay.pay").exists());
     assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay"]), format!("{remote_branch}\trefs/heads/cpd/pay"));
@@ -904,7 +909,8 @@ fn lock_refusals_change_nothing() {
     env.git(&repo, &["add", "-A"]);
     env.git(&repo, &["commit", "-q", "-m", "setup"]);
     let error = refused(&lock(), "setup_failed", 1);
-    assert_eq!(error["details"]["log"], home(&env).root().join("run/pay/logs/lead.pre-start.log").display().to_string());
+    assert_eq!(error["details"]["log"], home(&env).root().join("run/pay/logs/lead-pay.pre-start.log").display().to_string());
+    assert_eq!((&error["details"]["pr"], &error["details"]["step"]), (&json!("pay"), &json!("pre-start")));
     assert!(!path.exists());
     assert_eq!(env.git(&repo, &["branch", "--list", "cpd/pay"]), "");
 

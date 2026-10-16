@@ -341,15 +341,15 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     // ---------- 5. plan lock: the Lead worktree, Jobs queued, the engine started
     let out = fx.ok(&["plan", "lock", "--plan", PLAN]);
     assert_eq!(out["phase"], "dispatch");
-    assert_eq!(out["lead_worktree"], fx.lead.to_str().unwrap());
+    assert_eq!(out["prs"][0]["lead_worktree"], fx.lead.to_str().unwrap());
     assert_eq!(out["jobs"], json!(["api", "ui"]));
     assert_eq!(out["watch"]["started"], true, "{out}");
     let base_sha = fx.git(&fx.repo, &["rev-parse", "main"]);
-    assert_eq!(out["base_sha"], base_sha.as_str());
+    assert_eq!(out["prs"][0]["base_sha"], base_sha.as_str());
     assert!(fx.hooks_log().contains("pre-start cpd/pay\n"), "{}", fx.hooks_log());
     let events = fx.events_since(cursor);
     assert_eq!(&kinds(&events)[..1], ["plan-phase"]);
-    assert_eq!(events[0]["data"], json!({"from": "plan", "to": "dispatch", "jobs": ["api", "ui"]}));
+    assert_eq!(events[0]["data"], json!({"from": "plan", "to": "dispatch", "jobs": ["api", "ui"], "prs": ["pay"]}));
     assert!(kinds(&events).contains(&"watch-started"), "{events:?}");
 
     // ---------- 6. the engine runs in the background, once per machine

@@ -121,7 +121,7 @@ impl Kind {
             PlanCreated => {
                 spec([Y, Y, N, N, N], &["title", "repo", "base", "jira", "lead_session", "forked_from"], &[])
             }
-            PlanPhase => spec([Y, Y, N, N, N], &["from", "to"], &["jobs", "pr"]),
+            PlanPhase => spec([Y, Y, N, N, N], &["from", "to"], &["jobs", "pr", "prs"]),
             PlanReview => spec([Y, Y, N, N, N], &["review", "fingerprint", "status"], &["feedback"]),
             PlanDone => spec([Y, Y, N, N, N], &["pr", "merged_at"], &[]),
             JobAdded => spec([Y, Y, Y, N, N], &["pr", "status", "appended", "tier", "needs"], &[]),
