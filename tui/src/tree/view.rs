@@ -18,14 +18,33 @@ use tui_tree_widget::TreeState;
 use super::actions::{Action, IN_CHAT_SLOT, Subject};
 use super::cursor::{self, Input};
 use super::menu::{self, Item, Kind, Menu};
-use super::prompt::{Outcome, Prompt, Target};
+use super::prompt::{Ask, Outcome, Prompt, Target};
 use super::rows::{self, Id, Row};
 use cpd_core::session::State;
 use crate::palette;
-use crate::read::Tree;
+use crate::read::{ContextNode, SessionNode, Tree};
 
-/// The note of an item that needs typed text, which this view does not take yet.
-const NOT_YET: &str = "not yet";
+/// The longest name of a Session (commands.md §1.4).
+const NAME_MAX: usize = 80;
+const FORK_SUFFIX: &str = " (fork)";
+
+/// The prompt of Fork… and New session…: the name of a fork of `source`, starting with `<label> (fork)` (the label cut
+/// so that the name is not too long).
+fn fork_of(source: &SessionNode, label: &str) -> Prompt {
+    let label: String = label.chars().take(NAME_MAX - FORK_SUFFIX.len()).collect();
+    Prompt::typed(Ask::Fork { source: source.id.clone() }, format!("{label}{FORK_SUFFIX}"))
+}
+
+/// The prompt of Rename… on `row`, starting with its current label.
+fn rename_of(row: &Row<'_>) -> Option<Prompt> {
+    let ask = match *row {
+        Row::Context(c) => Ask::RenameContext(c.id.clone()),
+        Row::Plan(_, p) => Ask::RenamePlan(p.head.id.clone()),
+        Row::Fork(_, _, s) => Ask::RenameSession(s.id.clone()),
+        Row::More => return None,
+    };
+    Some(Prompt::typed(ask, row.label()))
+}
 
 /// What `x` and the menu's Close do on `row`: the confirmation, or the note that refuses it (the Session is in the
 /// chat slot); nothing on a row with no Session.
@@ -135,7 +154,12 @@ impl View {
                 }
                 Outcome::NewPlan { context, id, repo } => {
                     self.prompt = None;
-                    Effect::Run(Action::NewPlan { context, id, repo })
+                    let title = id.to_string();
+                    Effect::Run(Action::NewPlan { context, id, repo, title })
+                }
+                Outcome::Run(action) => {
+                    self.prompt = None;
+                    Effect::Run(action)
                 }
                 Outcome::Close { id } => {
                     self.prompt = None;
@@ -232,8 +256,9 @@ impl View {
     fn pick(&mut self, item: Item) -> Effect {
         let Some(menu) = self.menu.take() else { return Effect::None };
         self.note.clear();
-        if item.needs_text() {
-            self.note = NOT_YET.into();
+        if item == Item::NewContext {
+            let taken = self.tree.contexts.iter().map(|c| c.id.to_string()).collect();
+            self.prompt = Some(Prompt::typed(Ask::NewContext { taken }, String::new()));
             return Effect::None;
         }
         // the row may be gone, with a snapshot taken while the menu was open
@@ -250,8 +275,32 @@ impl View {
                 Effect::None
             }
             Item::Unarchive => subject_of(&row).map_or(Effect::None, |subject| Effect::Run(Action::Unarchive(subject))),
-            Item::NewPlan | Item::Rename | Item::NewSession | Item::Fork | Item::NewContext => Effect::None,
+            Item::Rename => {
+                self.ask(rename_of(&row).map(Ok));
+                Effect::None
+            }
+            Item::Fork | Item::NewSession => {
+                let prompt = row.session().map(|source| fork_of(source, &row.label()));
+                self.ask(prompt.map(Ok));
+                Effect::None
+            }
+            Item::NewPlan => {
+                let prompt = match row {
+                    Row::Context(c) => Some(self.new_plan_in(c)),
+                    _ => None,
+                };
+                self.ask(prompt.map(Ok));
+                Effect::None
+            }
+            Item::NewContext => Effect::None,
         }
+    }
+
+    /// The prompt of New Plan… in `context`: the repo is that of its latest Plan (by creation), asked for when it has none.
+    fn new_plan_in(&self, context: &ContextNode) -> Prompt {
+        let repo = context.plans.iter().max_by(|a, b| a.head.created_at.cmp(&b.head.created_at)).map(|p| p.head.repo.clone());
+        let taken = self.tree.contexts.iter().flat_map(|c| &c.plans).map(|p| p.head.id.to_string()).collect();
+        Prompt::typed(Ask::NewPlan { context: context.id.clone(), repo, taken }, String::new())
     }
 
     /// Opens the prompt, or says why not.
@@ -420,6 +469,7 @@ mod tests {
                 context: ContextId::parse("alpha").unwrap(),
                 id: PlanId::parse("pay-4521").unwrap(),
                 repo: "/repo/sketch".into(),
+                title: "pay-4521".into(),
             })
         );
         assert!(view.prompt.is_none());
@@ -800,20 +850,213 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_items_that_need_text_say_not_yet_and_run_nothing() {
-        let mut view = View::new(sample(), true);
-        drawn(&mut view, 44, 16);
-        for (column, row, index) in [(5, 0, 0), (5, 0, 1), (8, 1, 0), (8, 1, 1), (8, 2, 1), (8, 2, 2), (8, 14, 0)] {
-            right_click(&mut view, column, row);
-            for _ in 0..index {
-                press(&mut view, KeyCode::Down);
-            }
-            assert_eq!(press(&mut view, KeyCode::Enter), Effect::None, "({column}, {row}) #{index}");
-            assert_eq!(view.footer(), "not yet");
-            assert!(view.menu.is_none() && view.prompt.is_none());
-            view.note.clear();
+    /// Right-clicks (`column`, `row`) and picks the item `index` of its menu with Enter.
+    fn pick_at(view: &mut View, column: u16, row: u16, index: usize) -> Effect {
+        view.menu = None;
+        drawn(view, 44, 16);
+        right_click(view, column, row);
+        for _ in 0..index {
+            press(view, KeyCode::Down);
         }
+        press(view, KeyCode::Enter)
+    }
+
+    fn erase(view: &mut View, n: usize) {
+        for _ in 0..n {
+            press(view, KeyCode::Backspace);
+        }
+    }
+
+    #[test]
+    fn rename_starts_from_the_current_label_and_runs_the_rename_of_the_row() {
+        let mut view = View::new(sample(), true);
+        // a Context: its title
+        assert_eq!(pick_at(&mut view, 5, 0, 1), Effect::None);
+        assert!(view.menu.is_none());
+        assert_eq!(view.footer(), "Title: Alpha█ (Enter confirms, Esc cancels)");
+        typed(&mut view, " two");
+        assert_eq!(
+            press(&mut view, KeyCode::Enter),
+            Effect::Run(Action::RenameContext { id: ContextId::parse("alpha").unwrap(), title: "Alpha two".into() })
+        );
+        assert!(view.prompt.is_none());
+        // a Plan: its title
+        pick_at(&mut view, 8, 1, 1);
+        assert_eq!(view.footer(), "Title: Ship█ (Enter confirms, Esc cancels)");
+        erase(&mut view, 4);
+        typed(&mut view, "Release");
+        assert_eq!(
+            press(&mut view, KeyCode::Enter),
+            Effect::Run(Action::RenamePlan { id: PlanId::parse("ship").unwrap(), title: "Release".into() })
+        );
+        // a fork: its name
+        pick_at(&mut view, 8, 2, 1);
+        assert_eq!(view.footer(), "Name: ship fork█ (Enter confirms, Esc cancels)");
+        typed(&mut view, "!");
+        assert_eq!(
+            press(&mut view, KeyCode::Enter),
+            Effect::Run(Action::RenameSession { id: sid("f-idle"), name: "ship fork!".into() })
+        );
+    }
+
+    #[test]
+    fn rename_refuses_an_empty_text_in_the_prompt_and_esc_cancels() {
+        let mut view = View::new(sample(), true);
+        pick_at(&mut view, 8, 1, 1);
+        erase(&mut view, 4);
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
+        assert_eq!(view.footer(), "A title is required. Title: █ (Enter confirms, Esc cancels)");
+        typed(&mut view, "   ");
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None, "blanks are no title");
+        assert!(view.prompt.is_some());
+        assert_eq!(press(&mut view, KeyCode::Esc), Effect::None);
+        assert!(view.prompt.is_none());
+        pick_at(&mut view, 8, 2, 1);
+        erase(&mut view, 20);
+        press(&mut view, KeyCode::Enter);
+        assert_eq!(view.footer(), "A name is required. Name: █ (Enter confirms, Esc cancels)");
+    }
+
+    #[test]
+    fn fork_and_new_session_ask_a_name_and_fork_the_right_source() {
+        let mut view = View::new(sample(), true);
+        // a fork row: Fork… forks that fork
+        assert_eq!(pick_at(&mut view, 8, 2, 2), Effect::None);
+        assert_eq!(view.footer(), "Name: ship fork (fork)█ (Enter confirms, Esc cancels)");
+        assert_eq!(
+            press(&mut view, KeyCode::Enter),
+            Effect::Run(Action::Fork { source: sid("f-idle"), name: "ship fork (fork)".into() })
+        );
+        // a Plan row: New session… forks the Plan's Lead, from the Plan's title
+        assert_eq!(pick_at(&mut view, 8, 1, 0), Effect::None);
+        assert_eq!(view.footer(), "Name: Ship (fork)█ (Enter confirms, Esc cancels)");
+        erase(&mut view, 7);
+        typed(&mut view, " again");
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Fork { source: sid("l-ship"), name: "Ship again".into() }));
+        pick_at(&mut view, 8, 1, 0);
+        press(&mut view, KeyCode::Esc);
+        assert!(view.prompt.is_none());
+    }
+
+    #[test]
+    fn the_name_of_a_fork_is_cut_to_fit_the_limit() {
+        let mut tree = sample();
+        tree.contexts[0].plans[1].head.title = "x".repeat(150);
+        let mut view = View::new(tree, true);
+        pick_at(&mut view, 8, 4, 0);
+        let Some(Prompt::Text { input, .. }) = &view.prompt else { panic!("a prompt") };
+        assert_eq!(input.chars().count(), 80);
+        assert!(input.ends_with("x (fork)"));
+    }
+
+    #[test]
+    fn new_context_asks_a_title_and_derives_the_id() {
+        let mut view = View::new(sample(), true);
+        assert_eq!(pick_at(&mut view, 8, 14, 0), Effect::None);
+        assert_eq!(view.footer(), "Title: █ (Enter confirms, Esc cancels)");
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
+        assert_eq!(view.footer(), "A title is required. Title: █ (Enter confirms, Esc cancels)");
+        typed(&mut view, "Building cpd!");
+        assert_eq!(
+            press(&mut view, KeyCode::Enter),
+            Effect::Run(Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into() })
+        );
+        assert!(view.prompt.is_none());
+        // a taken id (also of an archived Context) gets `-2`, then `-3`
+        let mut view = View::new(archived(), true);
+        pick_at(&mut view, 8, 14, 0);
+        typed(&mut view, "Alpha");
+        assert_eq!(
+            press(&mut view, KeyCode::Enter),
+            Effect::Run(Action::NewContext { id: ContextId::parse("alpha-2").unwrap(), title: "Alpha".into() })
+        );
+        pick_at(&mut view, 8, 14, 0);
+        typed(&mut view, "zeta");
+        assert_eq!(
+            press(&mut view, KeyCode::Enter),
+            Effect::Run(Action::NewContext { id: ContextId::parse("zeta-2").unwrap(), title: "zeta".into() })
+        );
+        // a title that no id is made of is refused in the prompt
+        pick_at(&mut view, 8, 14, 0);
+        typed(&mut view, "2024");
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
+        assert!(view.footer().starts_with("A title needs at least two letters"), "{}", view.footer());
+        assert!(view.prompt.is_some());
+    }
+
+    #[test]
+    fn new_plan_derives_the_id_and_takes_the_repo_of_the_latest_plan_of_the_context() {
+        let mut tree = sample();
+        // `sketch` is the latest of `alpha`'s Plans by creation, though not the last in the list
+        tree.contexts[0].plans[1].head.created_at = "2026-03-01T00:00:00.000Z".into();
+        let mut view = View::new(tree, true);
+        assert_eq!(pick_at(&mut view, 5, 0, 0), Effect::None);
+        assert_eq!(view.footer(), "Title: █ (Enter confirms, Esc cancels)");
+        typed(&mut view, "Pay 4521");
+        assert_eq!(
+            press(&mut view, KeyCode::Enter),
+            Effect::Run(Action::NewPlan {
+                context: ContextId::parse("alpha").unwrap(),
+                id: PlanId::parse("pay-4521").unwrap(),
+                repo: "/repo/sketch".into(),
+                title: "Pay 4521".into(),
+            })
+        );
+        // an id taken by any Plan of the tree gets the suffix
+        pick_at(&mut view, 5, 0, 0);
+        typed(&mut view, "Rel");
+        assert_eq!(
+            press(&mut view, KeyCode::Enter),
+            Effect::Run(Action::NewPlan {
+                context: ContextId::parse("alpha").unwrap(),
+                id: PlanId::parse("rel-2").unwrap(),
+                repo: "/repo/sketch".into(),
+                title: "Rel".into(),
+            })
+        );
+        pick_at(&mut view, 5, 0, 0);
+        typed(&mut view, "!!");
+        press(&mut view, KeyCode::Enter);
+        assert!(view.footer().starts_with("A title needs at least two letters"));
+    }
+
+    #[test]
+    fn new_plan_in_a_context_with_no_plan_asks_for_the_repo_next() {
+        let mut view = View::new(sample(), true);
+        assert_eq!(pick_at(&mut view, 5, 8, 0), Effect::None, "the Context `gamma`");
+        typed(&mut view, "First plan");
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
+        assert_eq!(view.footer(), "Repo path: █ (Enter confirms, Esc cancels)");
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
+        assert_eq!(view.footer(), "A repo path is required. Repo path: █ (Enter confirms, Esc cancels)");
+        typed(&mut view, "/work/first");
+        assert_eq!(
+            press(&mut view, KeyCode::Enter),
+            Effect::Run(Action::NewPlan {
+                context: ContextId::parse("gamma").unwrap(),
+                id: PlanId::parse("first-plan").unwrap(),
+                repo: "/work/first".into(),
+                title: "First plan".into(),
+            })
+        );
+        assert!(view.prompt.is_none());
+        // Esc in the second prompt cancels the whole
+        pick_at(&mut view, 5, 8, 0);
+        typed(&mut view, "Other");
+        press(&mut view, KeyCode::Enter);
+        assert_eq!(press(&mut view, KeyCode::Esc), Effect::None);
+        assert!(view.prompt.is_none());
+    }
+
+    #[test]
+    fn a_text_prompt_takes_every_key_and_ignores_clicks() {
+        let mut view = View::new(sample(), true);
+        pick_at(&mut view, 8, 1, 1);
+        typed(&mut view, "qnxjk?");
+        assert_eq!(view.footer(), "Title: Shipqnxjk?█ (Enter confirms, Esc cancels)");
+        assert_eq!(click(&mut view, 5, 0), Effect::None);
+        assert_eq!(right_click(&mut view, 5, 0), Effect::None);
+        assert!(view.menu.is_none() && view.prompt.is_some());
     }
 
     #[test]

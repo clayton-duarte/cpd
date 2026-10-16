@@ -40,11 +40,6 @@ impl Item {
             Item::Unarchive => "Unarchive",
         }
     }
-
-    /// The item asks for typed text first (the `…` ones).
-    pub fn needs_text(self) -> bool {
-        matches!(self, Item::NewPlan | Item::Rename | Item::NewSession | Item::Fork | Item::NewContext)
-    }
 }
 
 /// What a right click was on, which decides the items.
@@ -222,13 +217,6 @@ mod tests {
         assert_eq!(labels(Kind::Fork), ["Open", "Rename…", "Fork…", "Close", "Archive"]);
         assert_eq!(labels(Kind::Empty), ["New Context…"]);
         assert_eq!(labels(Kind::Archived), ["Unarchive"]);
-    }
-
-    #[test]
-    fn the_items_that_need_text_are_the_ones_ending_in_an_ellipsis() {
-        for item in [Item::NewPlan, Item::Rename, Item::NewSession, Item::Fork, Item::NewContext, Item::Open, Item::Close, Item::Archive, Item::Unarchive] {
-            assert_eq!(item.needs_text(), item.label().ends_with('…'), "{item:?}");
-        }
     }
 
     #[test]
