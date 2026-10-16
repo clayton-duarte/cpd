@@ -319,7 +319,7 @@ fn a_plan_of_two_prs_is_two_titled_boxes_linked_by_an_arrow() {
     let screen = screen_when(&env, &pane, "the boxes", |s| s.len() > 6 && s[5].ends_with('┘'));
     let want = [
         "  ┌ api · api-server → main · #12 open ┐     ┌ web · web → develop · waiting ┐",
-        "  │  ✓ a O3 ───── ✓ b S3               ├────▶│  ○ c S3                       │",
+        "  │  ✓ a │O3 ───── ✓ b │S3             ├────▶│  ○ c │S3                      │",
         "  └────────────────────────────────────┘     └───────────────────────────────┘",
     ];
     assert_eq!(screen[3..6], want, "{}", screen.join("\n"));

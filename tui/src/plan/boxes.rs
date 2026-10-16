@@ -294,7 +294,7 @@ mod tests {
         let c = layout(&prs, &jobs);
         snap(&c, "
 ┌ api · api-repo → main · dispatch ┐     ┌ web · web-repo → main · dispatch ┐
-│  ○ a S1 ───── ○ b S1             ├────▶│  ○ c S1                          │
+│  ○ a │S1 ───── ○ b │S1           ├────▶│  ○ c │S1                         │
 └──────────────────────────────────┘     └──────────────────────────────────┘");
     }
 
