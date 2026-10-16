@@ -6,7 +6,9 @@
 //!   has a cancel request, `timed_out` when its active time is over
 //!   `attempt_minutes`; the driver acts on it (A5);
 //! - a Session whose pane is dead or missing: `stopped`, with no pane
-//!   (`session::pane_gone`); a Session not `stopped` with no pane: `stopped`.
+//!   (`session::pane_gone`); a Session not `stopped` with no pane: `stopped`;
+//!   and a Lead's dead pane is cleaned up (G2): its park or ctx window is
+//!   killed, or, in the chat slot, the pane becomes the placeholder (§3.6).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -21,7 +23,8 @@ use super::engine::{Engine, metrics};
 use super::report::{About, Step};
 use crate::driver::ledger::{self, Cause, End, Ladder};
 use crate::error::{CpdError, ErrorCode};
-use crate::host::layout::attempt_window;
+use crate::host::layout::{MAIN_WINDOW, View, attempt_window};
+use crate::host::tmux::{OPT_SESSION, Pane, Spawn};
 use crate::ids::{AttemptId, PlanId, SessionId};
 use crate::merge::{self, DriverLock, RepoLock, take_free_driver_lock};
 
@@ -251,6 +254,7 @@ fn parse_time(text: &str) -> Result<OffsetDateTime, CpdError> {
 /// A Session not `stopped`, or with a pane, as read before the panes are listed.
 struct Live {
     id: SessionId,
+    role: String,
     state: String,
     pane: Option<String>,
     name: String,
@@ -266,13 +270,21 @@ struct Live {
 fn sessions(engine: &mut Engine) {
     let live = engine.store.read(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, state, tmux_pane, name FROM sessions WHERE state <> 'stopped' OR tmux_pane IS NOT NULL ORDER BY id",
+            "SELECT id, role, state, tmux_pane, name FROM sessions WHERE state <> 'stopped' OR tmux_pane IS NOT NULL ORDER BY id",
         )?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?)))?
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
-            .map(|(id, state, pane, name)| Ok(Live { id: SessionId::parse(&id)?, state, pane, name }))
+            .map(|(id, role, state, pane, name)| Ok(Live { id: SessionId::parse(&id)?, role, state, pane, name }))
             .collect::<Result<Vec<_>, CpdError>>()
     });
     let panes = live.and_then(|live| Ok((live, engine.tmux.list_panes()?)));
@@ -292,21 +304,54 @@ fn sessions(engine: &mut Engine) {
             (None, _) => "it has no pane".to_owned(),
         };
         let about = About::Session(session.id.clone());
-        match stop(engine, &session, &why) {
+        let dead_lead = found.filter(|pane| pane.dead && session.role == "lead");
+        match stop_and_clean(engine, &session, &why, dead_lead) {
             Ok(()) => engine.clear(Step::E2, &about),
             Err(e) => engine.fail(Step::E2, about, &e),
         }
     }
 }
 
-fn stop(engine: &mut Engine, session: &Live, why: &str) -> Result<(), CpdError> {
+/// [`stop`], and for a Lead's dead pane (G2, §3.6) its cleanup: a pane outside
+/// the chat slot is killed with its window before the write, so a failure is
+/// tried again at the next tick; the chat slot's pane is replaced by the
+/// placeholder after the write that records it gone.
+fn stop_and_clean(engine: &mut Engine, session: &Live, why: &str, dead_lead: Option<&Pane>) -> Result<(), CpdError> {
+    let in_slot = dead_lead.is_some_and(|pane| pane.session_name == engine.config.tmux.cockpit_session && pane.window_name == MAIN_WINDOW);
+    if let Some(pane) = dead_lead.filter(|_| !in_slot) {
+        engine.tmux.kill_window(&pane.window)?;
+        engine.log.line(&format!("E2: killed the window {} of Lead {}'s dead pane {}", pane.window, session.name, pane.pane));
+    }
+    let changed = stop(engine, session, why)?;
+    if let Some(pane) = dead_lead.filter(|_| in_slot && changed) {
+        replace_with_placeholder(engine, pane)?;
+        engine.log.line(&format!("E2: replaced Lead {}'s dead pane {} in the chat slot by the placeholder", session.name, pane.pane));
+    }
+    Ok(())
+}
+
+/// `respawn-pane -k` running `cpd tui view chat`, with `@cpd_view chat` set
+/// and `@cpd_session` unset (§3.6): the placeholder `session park` builds.
+fn replace_with_placeholder(engine: &mut Engine, pane: &Pane) -> Result<(), CpdError> {
+    let spawn = Spawn {
+        argv: [crate::session::PROGRAM, "tui", "view", "chat"].map(str::to_owned).into(),
+        ..Spawn::default()
+    };
+    engine.tmux.respawn_pane_killing(&pane.pane, &spawn)?;
+    engine.tmux.set_pane_view(&pane.pane, View::Chat)?;
+    let unset = ["set", "-p", "-u", "-t", pane.pane.as_str(), OPT_SESSION].map(str::to_owned);
+    engine.tmux.run(&unset).map(drop)
+}
+
+/// Whether the write changed the Session.
+fn stop(engine: &mut Engine, session: &Live, why: &str) -> Result<bool, CpdError> {
     let changed = engine
         .store
         .write(SOURCE, |tx| crate::session::pane_gone(tx, &session.id, &session.state, session.pane.as_deref(), why))?;
     if changed {
         engine.log.line(&format!("E2: Session {} ({}) is stopped with no pane: {why}", session.id, session.name));
     }
-    Ok(())
+    Ok(changed)
 }
 
 #[cfg(test)]

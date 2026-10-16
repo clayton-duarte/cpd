@@ -671,6 +671,122 @@ fn close_of_a_stopped_lead_with_a_pane_appends_only_session_moved() {
     assert!(panes(&env).iter().all(|p| p.session != LEAD2));
 }
 
+// ---------- dead Lead panes (contract §3.6, §3.7 E2; commands.md §10.4) ----------
+
+/// Like [`fake_cpd`], but `cpd session run` reads no input, so it returns when its pi
+/// exits and the pane dies (`remain-on-exit`).
+fn fake_cpd_returning(env: &TestEnv) {
+    env.fake(
+        "cpd",
+        &format!(
+            "case \"$1 $2 $3\" in \"tui view chat\") exec sleep 600;; \"session run \"*) exec '{CPD}' \"$@\" </dev/null;; esac\nexec '{CPD}' \"$@\""
+        ),
+    );
+}
+
+/// The cockpit with `lead2`'s pi alive and every other Lead's pi exiting at once.
+fn dying_leads(env: &TestEnv) {
+    setup(env);
+    fake_cpd_returning(env);
+    fake_pi(env, "[ \"$CPD_SESSION\" = lead2 ] && exec sleep 600\nexit 0");
+    cockpit(env);
+    assert!(env.tmux(&["set", "-g", "remain-on-exit", "on"]).status.success());
+}
+
+fn is_dead(env: &TestEnv, pane: &str) -> bool {
+    let out = env.tmux(&["list-panes", "-a", "-F", "#{pane_id} #{pane_dead}"]);
+    String::from_utf8(out.stdout).unwrap().lines().any(|l| l == format!("{pane} 1"))
+}
+
+/// `cpd watch` with a one-second tick, killed when dropped.
+struct Engine(std::process::Child);
+
+impl Drop for Engine {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn engine(env: &TestEnv) -> Engine {
+    let path = env.cpd_home().join("config.toml");
+    let config = fs::read_to_string(&path).unwrap();
+    fs::write(&path, format!("{config}[watch]\ntick_seconds = 1\n")).unwrap();
+    let child = env.command(CPD).arg("watch").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
+    Engine(child)
+}
+
+#[test]
+fn e2_kills_the_window_of_a_dead_parked_lead() {
+    let env = TestEnv::new();
+    dying_leads(&env);
+    let lead1_pane = env.cpd(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
+    env.cpd(&["session", "open", LEAD2]).ok();
+    assert_eq!(window_names(&env), ["main", "park-pay"]);
+    wait_until("lead1's pane to die", || is_dead(&env, &lead1_pane));
+
+    let _engine = engine(&env);
+    wait_until("E2 to kill the window", || window_names(&env) == ["main"]);
+    wait_until("E2 to record the pane gone", || show(&env, LEAD1)["tmux_pane"].is_null());
+    assert_eq!((show(&env, LEAD1)["state"].clone(), show(&env, LEAD1)["place"].clone()), (json!("stopped"), json!("none")));
+    assert_eq!(slot(&env).session, LEAD2, "the chat slot is untouched");
+}
+
+#[test]
+fn open_leaves_one_window_for_a_lead_with_a_dead_pane() {
+    let env = TestEnv::new();
+    dying_leads(&env);
+    let lead1_pane = env.cpd(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
+    env.cpd(&["session", "open", LEAD2]).ok();
+    wait_until("lead1's pane to die", || is_dead(&env, &lead1_pane));
+    assert_eq!(window_names(&env), ["main", "park-pay"]);
+
+    // No engine runs: `open` itself kills the dead pane before it makes a window.
+    let out = env.cpd(&["session", "open", LEAD1]).ok();
+    assert_ne!(out["pane"], json!(lead1_pane));
+    assert_eq!(out["displaced"], LEAD2);
+    assert_eq!(window_names(&env), ["main", "park-other"]);
+    let lead1: Vec<P> = panes(&env).into_iter().filter(|p| p.session == LEAD1).collect();
+    assert_eq!(lead1.len(), 1, "{lead1:?}");
+    assert_eq!(lead1[0].window_name, "main");
+}
+
+#[test]
+fn e2_replaces_a_dead_lead_in_the_chat_slot_by_the_placeholder() {
+    let env = TestEnv::new();
+    dying_leads(&env);
+    let lead1_pane = env.cpd(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
+    wait_until("lead1's pane to die", || is_dead(&env, &lead1_pane));
+    assert_eq!(slot(&env).session, LEAD1);
+
+    let _engine = engine(&env);
+    wait_until("the placeholder", || slot(&env).session.is_empty());
+    let s = slot(&env);
+    assert_eq!((s.pane.as_str(), s.view.as_str(), s.window_name.as_str()), (lead1_pane.as_str(), "chat", "main"));
+    wait_until("the placeholder to run", || !is_dead(&env, &lead1_pane));
+    assert_placeholders(&env, 1);
+    assert_eq!(window_names(&env), ["main"]);
+    wait_until("E2 to record the pane gone", || show(&env, LEAD1)["tmux_pane"].is_null());
+    assert_eq!(show(&env, LEAD1)["place"], "none");
+}
+
+#[test]
+fn open_replaces_a_dead_lead_in_the_chat_slot() {
+    let env = TestEnv::new();
+    dying_leads(&env);
+    let lead1_pane = env.cpd(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
+    wait_until("lead1's pane to die", || is_dead(&env, &lead1_pane));
+
+    // No engine runs, and the slot holds a dead pane of this very Lead: it is not "already" there.
+    let out = env.cpd(&["session", "open", LEAD1]).ok();
+    assert_eq!(out["displaced"], Value::Null);
+    assert_ne!(out["pane"], json!(lead1_pane));
+    assert_eq!(window_names(&env), ["main"]);
+    let lead1: Vec<P> = panes(&env).into_iter().filter(|p| p.session == LEAD1).collect();
+    assert_eq!(lead1.len(), 1, "{lead1:?}");
+    assert_eq!(slot(&env).pane, out["pane"].as_str().unwrap());
+}
+
 // ---------- run ----------
 
 #[test]
