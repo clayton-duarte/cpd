@@ -17,9 +17,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use common::{CPD, TestEnv};
-use cpd_core::error::CpdError;
-use cpd_core::home::CpdHome;
-use cpd_core::store::Store;
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde_json::{Value, json};
@@ -133,7 +130,7 @@ impl Fx {
         env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
         env.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
         env.git(&repo, &["push", "-q", "-u", "origin", "main"]);
-        let lead = repo.parent().unwrap().join(format!("pay.{PLAN}"));
+        let lead = repo.parent().unwrap().join(format!("pay.{PLAN}.pay"));
         Fx { env, repo, origin, lead }
     }
 
@@ -304,14 +301,6 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(out["pr"]["base"], "main");
     assert_eq!(out["pr"]["lead_branch"], "cpd/pay/pay");
     assert_eq!(kinds(&fx.events_since(cursor)), ["pr-added"]);
-    // interim: until r34-merge-driver makes Attempts use the PR branch cpd/<plan>/<key>; remove then
-    Store::open(&CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap(), 5000)
-        .unwrap()
-        .write("fixture", |tx| {
-            tx.execute("UPDATE prs SET lead_branch = 'cpd/pay' WHERE plan = 'pay' AND key = 'pay'", [])?;
-            Ok::<_, CpdError>(())
-        })
-        .unwrap();
     cursor = fx.cursor();
 
     // ---------- 3. plan phase plan: the Context gets its grounded Lead, a fork of this one
@@ -361,7 +350,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(out["watch"]["started"], true, "{out}");
     let base_sha = fx.git(&fx.repo, &["rev-parse", "main"]);
     assert_eq!(out["prs"][0]["base_sha"], base_sha.as_str());
-    assert!(fx.hooks_log().contains("pre-start cpd/pay\n"), "{}", fx.hooks_log());
+    assert!(fx.hooks_log().contains("pre-start cpd/pay/pay\n"), "{}", fx.hooks_log());
     let events = fx.events_since(cursor);
     assert_eq!(&kinds(&events)[..1], ["plan-phase"]);
     assert_eq!(events[0]["data"], json!({"from": "plan", "to": "dispatch", "jobs": ["api", "ui"], "prs": ["pay"]}));
@@ -414,9 +403,9 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     let ui = fx.ok(&["attempt", "show", "ui-a1", "--plan", PLAN])["attempt"].clone();
     assert_eq!(ui["base_sha"], api_merged["data"]["sha"]);
     // The Lead Branch holds both Jobs' commits, in order, and the Lead worktree has them.
-    let lead_sha = fx.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay"]);
+    let lead_sha = fx.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay/pay"]);
     assert_eq!(lead_sha, ui_merged["data"]["sha"].as_str().unwrap());
-    assert_eq!(fx.git(&fx.repo, &["log", "--format=%s", "main..cpd/pay"]), "ui-a1\napi-a1");
+    assert_eq!(fx.git(&fx.repo, &["log", "--format=%s", "main..cpd/pay/pay"]), "ui-a1\napi-a1");
     assert_eq!(fs::read_to_string(fx.lead.join("api.txt")).unwrap(), "api\n");
     assert_eq!(fs::read_to_string(fx.lead.join("ui.txt")).unwrap(), "ui\n");
     assert_eq!(fx.git(&fx.lead, &["status", "--porcelain"]), "");
@@ -456,12 +445,12 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(out["pr"]["key"], "pay");
     assert_eq!(out["pr"]["pr"]["number"], 7);
     assert_eq!(out["pr"]["pr"]["url"], PR_URL);
-    assert!(fx.hooks_log().ends_with("pre-merge cpd/pay\n"), "{}", fx.hooks_log());
-    let pushed = fx.git(&fx.origin, &["rev-parse", "refs/heads/cpd/pay"]);
+    assert!(fx.hooks_log().ends_with("pre-merge cpd/pay/pay\n"), "{}", fx.hooks_log());
+    let pushed = fx.git(&fx.origin, &["rev-parse", "refs/heads/cpd/pay/pay"]);
     assert_eq!(pushed, lead_sha);
     let gh = fx.env.calls("gh");
-    assert_eq!(gh[0], ["pr", "list", "--head", "cpd/pay", "--state", "open", "--json", "number,url"]);
-    assert_eq!(gh[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay", "--title", "Retry failed payouts"]);
+    assert_eq!(gh[0], ["pr", "list", "--head", "cpd/pay/pay", "--state", "open", "--json", "number,url"]);
+    assert_eq!(gh[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay/pay", "--title", "Retry failed payouts"]);
     let body = &gh[1][9];
     for sha in [&api_merged["data"]["sha"], &ui_merged["data"]["sha"]] {
         assert!(body.contains(sha.as_str().unwrap()), "{body}");
