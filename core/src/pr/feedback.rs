@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::gh::{InlineComment, View};
+use super::status::failing;
+// poll.rs (not this Job's to touch) still imports these from here; Job `pr-poll2` rewrites it.
+pub(super) use super::status::{ChecksSummary, ReviewDecision};
 use crate::error::{CpdError, ErrorCode};
 
 /// Longest body an Event carries, in characters.
@@ -15,79 +18,6 @@ const BODY_MAX: usize = 2000;
 const LISTED_MAX: usize = 20;
 /// Longest excerpt of a body in the Event's `text`.
 const EXCERPT_MAX: usize = 300;
-
-/// Check conclusions that count as failing (cpd 1 §13, kept).
-const FAILING: [&str; 6] = ["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"];
-
-fn failing(conclusion: &str) -> bool {
-    FAILING.contains(&conclusion.to_ascii_uppercase().as_str())
-}
-
-/// Check conclusions that are not final yet (upper-cased; an empty one is pending too).
-const PENDING: [&str; 5] = ["", "PENDING", "IN_PROGRESS", "QUEUED", "EXPECTED"];
-
-/// `plans.pr_checks` (contract §7.6): the summary of the PR's current checks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ChecksSummary {
-    None,
-    Passed,
-    Pending,
-    Failed,
-}
-
-impl ChecksSummary {
-    /// Any failure wins over pending, pending over passed; no checks is `none`.
-    pub fn of(checks: &BTreeMap<String, String>) -> ChecksSummary {
-        let upper: Vec<String> = checks.values().map(|c| c.to_ascii_uppercase()).collect();
-        if upper.is_empty() {
-            ChecksSummary::None
-        } else if upper.iter().any(|c| failing(c)) {
-            ChecksSummary::Failed
-        } else if upper.iter().any(|c| PENDING.contains(&c.as_str())) {
-            ChecksSummary::Pending
-        } else {
-            ChecksSummary::Passed
-        }
-    }
-
-    /// As stored and printed.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ChecksSummary::None => "none",
-            ChecksSummary::Passed => "passed",
-            ChecksSummary::Pending => "pending",
-            ChecksSummary::Failed => "failed",
-        }
-    }
-}
-
-/// `plans.pr_review_decision` (contract §7.6), from gh's `reviewDecision`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ReviewDecision {
-    None,
-    Approved,
-    ChangesRequested,
-}
-
-impl ReviewDecision {
-    /// `APPROVED` and `CHANGES_REQUESTED` are themselves; anything else (`REVIEW_REQUIRED`, empty, absent) is `none`.
-    pub fn of(gh: Option<&str>) -> ReviewDecision {
-        match gh {
-            Some("APPROVED") => ReviewDecision::Approved,
-            Some("CHANGES_REQUESTED") => ReviewDecision::ChangesRequested,
-            _ => ReviewDecision::None,
-        }
-    }
-
-    /// As stored and printed.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ReviewDecision::None => "none",
-            ReviewDecision::Approved => "approved",
-            ReviewDecision::ChangesRequested => "changes_requested",
-        }
-    }
-}
 
 /// `plans.pr_seen`: what `pr poll` has already reported.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -279,6 +209,7 @@ pub(super) fn data(key: &str, changes: &Changes, state: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::super::gh::{Check, Comment, Id, Login, Review};
+    use super::super::status::ChecksSummary;
     use super::*;
 
     fn view(checks: Vec<(&str, &str)>, reviews: Vec<&str>, comments: Vec<&str>) -> View {
@@ -338,15 +269,6 @@ mod tests {
         assert_eq!(summary(vec![("a", "success")]), ChecksSummary::Passed);
         assert_eq!(summary(vec![("a", "SUCCESS"), ("b", "")]), ChecksSummary::Pending);
         assert_eq!(summary(vec![("a", "SKIPPED"), ("b", "queued"), ("c", "startup_failure")]), ChecksSummary::Failed);
-    }
-
-    #[test]
-    fn only_approved_and_changes_requested_are_decisions() {
-        assert_eq!(ReviewDecision::of(Some("APPROVED")), ReviewDecision::Approved);
-        assert_eq!(ReviewDecision::of(Some("CHANGES_REQUESTED")), ReviewDecision::ChangesRequested);
-        for other in [Some("REVIEW_REQUIRED"), Some(""), None] {
-            assert_eq!(ReviewDecision::of(other), ReviewDecision::None, "{other:?}");
-        }
     }
 
     #[test]

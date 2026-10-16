@@ -5,7 +5,7 @@
 //! - `open`: the Gate, the push and the PR (`pr open`);
 //! - `poll`, with `feedback`: the PR's checks, reviews, comments and merge (`pr poll`);
 //! - `rebase`: the Lead Branch onto the base, the Gate and the push (`pr rebase`);
-//! - `gh`: the one gateway to `gh`; `row`: the Plan as these commands read it.
+//! - `gh`: the one gateway to `gh`; `status`: the PR status enums; `row`: the Plan as these commands read it.
 //!
 //! `pr open` and `pr rebase` run under the per-repo lock, after R (§7.4); each
 //! works on one PR of the Plan, `poll` on every open one (§7.6).
@@ -20,6 +20,7 @@ mod poll;
 mod rebase;
 mod row;
 pub mod start;
+mod status;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
