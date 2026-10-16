@@ -89,6 +89,46 @@ impl Starter {
     }
 }
 
+/// A driver lock found free by [`probe`]: its driver is dead. Holds the lock
+/// (when the file exists) until it is dropped.
+#[derive(Debug)]
+pub struct Free {
+    _file: Option<File>,
+}
+
+/// E2's probe (§3.4): whether the driver of an Attempt is dead. Opens the lock
+/// file afresh **without creating it**: a missing file means no driver (the
+/// starter creates it before the Attempt row exists and [`remove`] deletes it
+/// only after the end is committed). `Some` when the lock was free or missing,
+/// `None` when a live driver holds it.
+pub fn probe(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<Option<Free>, CpdError> {
+    let path = home.attempt_lock(plan, attempt);
+    let file = match OpenOptions::new().read(true).write(true).create(false).open(&path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Some(Free { _file: None })),
+        Err(e) => return Err(lock_failed(&path, e)),
+    };
+    match file.try_lock() {
+        Ok(()) => Ok(Some(Free { _file: Some(file) })),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Error(e)) => Err(lock_failed(&path, e)),
+    }
+}
+
+/// A9: removes the lock file of an Attempt that has ended; a missing file is
+/// fine. Call it after the end is committed. Removing the path while the
+/// driver still holds fd 3 is safe: the `flock` is on the open file
+/// description, not on the path. And no one can take a lock on a fresh file
+/// for an Attempt that is still running: ids are never reused, so after the
+/// end nobody opens this path again (E2's [`probe`] never creates it).
+pub fn remove(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<(), CpdError> {
+    let path = home.attempt_lock(plan, attempt);
+    match fs::remove_file(&path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(lock_failed(&path, e)),
+        _ => Ok(()),
+    }
+}
+
 /// The driver's descriptor of its lock, checked at A1. Keep it alive for the
 /// driver's whole life: dropping it closes fd 3 and releases the lock.
 #[derive(Debug)]

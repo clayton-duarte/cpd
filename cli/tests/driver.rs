@@ -16,7 +16,7 @@ use common::{CPD, Run, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_lead_worktree};
 use cpd_core::home::CpdHome;
-use cpd_core::ids::PlanId;
+use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::plan::{jobs, locked_fingerprint};
 use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
@@ -314,6 +314,11 @@ fn a_dispatched_attempt_runs_its_worker_merges_and_ends_merged() {
     assert!(!fx.worktree(ATTEMPT).exists());
     let branches = fx.env.git(&fx.repo, &["branch", "--list", "cpd/pay--api-a1"]);
     assert_eq!(branches, "");
+
+    // A9: the driver lock file is removed.
+    assert!(!fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(ATTEMPT).unwrap()).exists());
+    let left = fs::read_dir(fx.home().locks_dir()).unwrap().map(|e| e.unwrap().file_name()).collect::<Vec<_>>();
+    assert!(left.iter().all(|n| !n.to_string_lossy().starts_with("attempt-")), "{left:?}");
 }
 
 // ---------- failures ----------

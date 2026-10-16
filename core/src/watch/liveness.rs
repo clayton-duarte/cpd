@@ -22,11 +22,12 @@ use super::SOURCE;
 use super::engine::{Engine, metrics};
 use super::report::{About, Step};
 use crate::driver::ledger::{self, Cause, End, Ladder};
+use crate::driver::lock::{self, Free};
 use crate::error::{CpdError, ErrorCode};
 use crate::host::layout::{MAIN_WINDOW, View, attempt_window};
 use crate::host::tmux::{OPT_SESSION, Pane, Spawn};
 use crate::ids::{AttemptId, PlanId, SessionId};
-use crate::merge::{self, DriverLock, RepoLock, take_free_driver_lock};
+use crate::merge::{self, RepoLock};
 
 /// An Attempt not `ended`, as E2 reads it.
 struct Active {
@@ -95,7 +96,7 @@ fn attempts(engine: &mut Engine) {
     // The repos with a `merging` Attempt whose driver died, and a Plan to report against.
     let mut orphaned: BTreeMap<PathBuf, PlanId> = BTreeMap::new();
     for attempt in &active {
-        let probe = take_free_driver_lock(&engine.home, &attempt.plan, &attempt.id);
+        let probe = lock::probe(&engine.home, &attempt.plan, &attempt.id);
         let result = match probe {
             // Released at once: R takes it again itself.
             Ok(Some(_free)) if attempt.status == "merging" => {
@@ -124,7 +125,7 @@ fn attempts(engine: &mut Engine) {
 /// `cancelled` if its Job has a cancel request, else `failed` / `crashed` (a
 /// ladder cause), as the driver would (§3.4), then kill its window (A9).
 /// Holds the driver lock meanwhile, so no one else ends it at the same time.
-fn end_dead(engine: &mut Engine, active: &Active, lock: DriverLock) -> Result<(), CpdError> {
+fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdError> {
     let (plan, id) = (&active.plan, &active.id);
     let target = engine.store.read(|conn| ledger::load(conn, plan, id))?;
     if !matches!(target.status.as_str(), "starting" | "running") {
@@ -139,6 +140,8 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: DriverLock) -> Result<()
     let ladder = Ladder { catalog: &catalog, retry_cap: engine.config.retry_cap };
     let metrics = metrics(target.worker_session.as_ref());
     engine.store.write(SOURCE, |tx| ledger::end(tx, &target, &end, metrics.as_ref(), &ladder))?;
+    // A9: after the end is committed, while the lock is still held.
+    lock::remove(&engine.home, plan, id)?;
     drop(lock);
     engine.log.line(&format!("E2: the driver of {id} (Plan {plan}) is dead: ended {} / {}", end.outcome(), end.cause()));
     let name = attempt_window(plan, id);

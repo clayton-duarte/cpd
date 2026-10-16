@@ -8,7 +8,7 @@
 //! - `worker`: the Worker Spec, the Worker's pane, its session file.
 
 pub(crate) mod ledger;
-mod lock;
+pub(crate) mod lock;
 mod run;
 mod start;
 mod worker;

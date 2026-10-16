@@ -493,13 +493,16 @@ impl Driver {
     }
 
     /// The rest of A9: kill the Attempt's window; on `merged`, remove the
-    /// worktree and branch (§7.2); otherwise keep them for debugging. A
+    /// worktree and branch (§7.2); otherwise keep them for debugging; remove
+    /// the driver lock file (this process keeps fd 3 until it exits). A
     /// failure here changes no state: it is reported as an `error` Event.
     fn cleanup(&mut self, target: &Target, merged: bool) {
         let mut result = worker::kill_window(&self.config, &self.tmux, target);
         if merged && result.is_ok() {
             result = git::remove_merged_attempt(&target.lead_worktree, &target.worktree, &target.branch);
         }
+        let removed = lock::remove(&self.home, &self.plan, &self.id);
+        result = result.and(removed);
         if let Err(e) = result {
             log(&format!("A9 failed: {}", e.message()));
             let _ = self.store.write(SOURCE, |tx| ledger::append_error(tx, target, &e));
