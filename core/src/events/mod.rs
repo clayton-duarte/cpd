@@ -172,6 +172,23 @@ fn follow(args: FollowArgs) -> Result<Output, CpdError> {
         if until.is_some() {
             return Ok(Output::Owned);
         }
+        if reader_gone(&stdout) {
+            return Ok(Output::Owned);
+        }
         std::thread::sleep(poll);
+    }
+}
+
+/// Whether the reader of `stdout` is gone, checked without writing (G1): a follower with no Event to
+/// write would otherwise never meet EPIPE. A pipe whose read end closed reports `POLLERR` on Linux; the
+/// hangup flag `POLLHUP` is handled too, as macOS reports it (unverified: not run on macOS).
+fn reader_gone(stdout: &impl std::os::fd::AsFd) -> bool {
+    use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+    let mut fds = [PollFd::new(stdout.as_fd(), PollFlags::empty())];
+    match poll(&mut fds, PollTimeout::ZERO) {
+        Ok(n) if n > 0 => fds[0]
+            .revents()
+            .is_some_and(|r| r.intersects(PollFlags::POLLHUP | PollFlags::POLLERR)),
+        _ => false,
     }
 }

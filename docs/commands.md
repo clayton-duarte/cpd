@@ -934,7 +934,7 @@ Brings a Lead into the chat slot (§6.4).
 
 Effects:
 - In the chat slot already: nothing; `"already": true`.
-- **tmux:** when the Session has no live pane (`stopped`, or its pane is gone): `new-window -d -t =cpd: -n park-<label> … -- cpd session run <id>` first, which resumes it (`pi --session <file>`, §6.5), and `tmux_pane` is recorded. Then `swap-pane -d -s <its pane> -t <chat slot pane>`, and `rename-window -t <window> park-<displaced label>` for the window that now holds the displaced Lead. When the displaced pane is the placeholder, `kill-pane` on it instead, which closes the now-empty park window with it, so placeholders never pile up in park windows.
+- **tmux:** when the Session has no live pane (`stopped`, or its pane is gone): first `kill-pane` on a dead pane of the Lead, if one is still there, so it never adds a second window; then `new-window -d -t =cpd: -n park-<label> … -- cpd session run <id>` first, which resumes it (`pi --session <file>`, §6.5), and `tmux_pane` is recorded. Then `swap-pane -d -s <its pane> -t <chat slot pane>`, and `rename-window -t <window> park-<displaced label>` for the window that now holds the displaced Lead. When the displaced pane is the placeholder, `kill-pane` on it instead, which closes the now-empty park window with it, so placeholders never pile up in park windows.
 - **Rows**, one transaction: **Events** `session-moved` `{place: "chat"}` for this Session and `{place: "parked"}` for the displaced one.
 
 ```json
@@ -1014,12 +1014,17 @@ The program in every Lead pane (§6.2): owns its terminal (§1.2). Steps of §6.
 2. Else, if `forked_from` is set, wait until the source is idle (§6.7 step 1, every 2 s, showing the waiting line), then `pi … --fork <source file> --session-id <id> -n <name> [-- <first message>]`.
 3. Else start a fresh Lead: `pi --model … --session-id <id> -n <name> -- <first message>`.
 
+Before it starts pi (steps 1–3) a Lead with a Plan gets its plannotator port (§6.5 "The Plan's plannotator port"): `PLANNOTATOR_PORT=<port>` replaces the value in the pane's environment. When the range is full the pane shows `no_port` and names the Plans that hold it, and Enter retries; pi is not started. A grounded Lead gets no port.
+
+**Reload on install** (hs-d33, hs-d38, hs-d49; §6.7 "Reload on install"). The wrapper detects a new install by the identity of its executable (§3.4 of the contract). At the Lead's next idle (state `idle`, last turn finished, session file quiet `fork_quiet_seconds`) it sends pi `SIGTERM`, waits for it to exit and `exec`s the same path with the same argv; the new `session run` takes step 1. A parked Lead reloads at once. The Lead in the chat slot waits until it is idle **and** parked, or idle for 10 minutes, so unsent typing is not lost. A `blocked` Lead is never idle. If pi has not exited 10 s after `SIGTERM`, the wrapper sends `SIGKILL`, then `exec`s. If pi exits on its own after an install, the wrapper `exec`s before any store write.
+
 The first message is the file `plan new` or `session fork` wrote (§1.4); none for a grounded Lead. While pi runs, it watches for the session file (§6.5) and records `sessions.file` once it appears (a data write, no Event). When pi exits it runs `session state stopped` if the adapter did not, prints `pi exited. Press Enter to resume <name> here.` and resumes on Enter.
 
 | Precondition | Code | Exit |
 |---|---|---|
 | the Session is a `lead` | `not_a_lead` | 3 |
 | its pane's `@cpd_session` is this Session | `wrong_pane` | 3 |
+| the Plan's port is free in the range (Lead with a Plan only) | `no_port` | 3 |
 
 Idempotent: yes; a restart resumes (§6.7 step 3).
 
@@ -1076,7 +1081,7 @@ cpd events list [--plan <id> | --context <id> | --session <id>] [--kind <kind>]�
 cpd events follow [--plan <id> | --context <id> | --session <id>] [--kind <kind>]… [--since <id>] [--until-idle]
 ```
 
-§5.4, normative: one Event per line, in id order; without `--since`, only Events committed after it starts; polling `PRAGMA data_version` every `events.poll_ms`; ends on EPIPE or kill with exit 0, or with `--until-idle` once it has printed everything committed when it started.
+§5.4, normative: one Event per line, in id order; without `--since`, only Events committed after it starts; polling `PRAGMA data_version` every `events.poll_ms`; ends on EPIPE, on kill, or when its stdout is closed (`POLLHUP` or `POLLERR` on fd 1, checked at each poll, so an idle stream whose reader is gone still ends), with exit 0, or with `--until-idle` once it has printed everything committed when it started.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -1247,7 +1252,6 @@ Checks, in order:
 | `tiers` | error | each `tiers.*` model is in pi's catalog, and `lead_tier` is a valid Tier (§9) |
 | `pi_adapter` | error | the `pi_adapter` directory has a `package.json` |
 | `lead_packages` | warn | reports, for each `lead_pi_packages` entry and the adapter, whether a Lead gets it by `-e` or from which settings file (§6.5); warns when an entry is neither declared nor resolvable |
-| `plannotator_port` | warn | when `PLANNOTATOR_REMOTE` is set, `PLANNOTATOR_PORT` is a range of at least two ports (§15.5); a single port lets only one Plan review be open on the machine |
 | `contexts` | warn | every directory under `contexts/` is a valid store and none is `sync_failing` |
 | `watch` | warn | the engine runs when any Plan is in `dispatch` or `pr` |
 
@@ -1256,8 +1260,7 @@ Checks, in order:
   {"name": "git", "ok": true, "severity": "error", "found": "2.43.0", "expected": ">= 2.43.0"},
   {"name": "tmux", "ok": true, "severity": "error", "found": "3.4", "expected": ">= 3.4"},
   {"name": "pi", "ok": true, "severity": "error", "found": "1.2.0", "expected": ">= 1.2.0 < 2.0.0"},
-  {"name": "gh", "ok": true, "severity": "error", "found": "2.45.0", "expected": ">= 2.45.0"},
-  {"name": "plannotator_port", "ok": false, "severity": "warn", "found": "19432", "expected": "a range, e.g. 19432-19439", "message": "only one Plan review can be open at a time"}]}
+  {"name": "gh", "ok": true, "severity": "error", "found": "2.45.0", "expected": ">= 2.45.0"}]}
 ```
 
 Change from cpd 1: no `node`, `bd`, `wt` or `herdr` checks (§1.1); `gh` now has a minimum. Idempotent: yes; it writes nothing except a migration on first open.
@@ -1390,10 +1393,11 @@ A failure of `plan show` is an error message and leaves the entry pending. An Ev
 
 **Recovery** at `session_start` (t4 F5, kept): for each pending entry, `plannotator:request` `review-status` every second until it is not pending: `completed` is handled as a result; `missing` (plannotator restarted) appends the entry as `lost`, closes the reason, and tells the Lead to call `cpd_plan_review` again, which reopens it (above).
 
-**Several Leads at once** (follow-up "Plan reviews collide across Leads"). plannotator in remote mode listens on one port, `PLANNOTATOR_PORT` or 19432, and a second Lead's review fails with `Port 19432 in use after 5 retries` while the first is open (docs: plannotator 0.28.17 `server/network.ts`; seen on 2026-10-14). The same variable also accepts an inclusive range `<a>-<b>`, and each review server then takes the first free port in it (docs: same file, `parsePortSelection` and `listenOnPort`). So:
-- the User's environment sets a range, for example `PLANNOTATOR_PORT=19432-19439`, and the Macs forward the range over ssh: up to 8 reviews open at once; plannotator prints each review's URL in its Lead's chat;
-- cpd passes `PLANNOTATOR_PORT` and `PLANNOTATOR_REMOTE` from its own environment into every Lead pane with `-e`, when set (amendment 8, §19), so a pane gets them whatever environment the tmux server was started with;
-- `doctor` warns about a single port (§14.1).
+**Several Leads at once** (follow-up "Plan reviews collide across Leads"; hs-d35, hs-d40, hs-d50). plannotator in remote mode listens on one port, `PLANNOTATOR_PORT` or 19432, and a second Lead's review fails with `Port 19432 in use after 5 retries` while the first is open (docs: plannotator 0.28.17 `server/network.ts`; seen on 2026-10-14). So each Plan gets its own port from the config range:
+- config `plannotator_ports` (contract §8.2), default `19432-19441`: up to 10 Plan reviews open at once; each Plan gets the lowest free port of the range and keeps it (`run/<plan>/plannotator-port`, contract §6.5); plannotator prints each review's URL in its Lead's chat;
+- `session run` assigns the port when it starts pi and passes it as `PLANNOTATOR_PORT`; `PLANNOTATOR_REMOTE` comes from cpd's own environment (§19 amendment 8). A range that is full refuses with `no_port` (§10.8);
+- the Macs forward the range over ssh (dotfiles Plan `dotfiles-sync`);
+- `doctor` no longer checks the port (§14.1).
 
 Rejected alternatives: one shared review server (cpd would have to run plannotator's server outside pi, which plannotator does not offer to extensions), and a queue (a review waiting for another Plan's User decision could wait for hours). Unverified: that two plannotator servers in one range do not disturb each other's sessions; the adapter Job tests it.
 
@@ -1407,7 +1411,7 @@ Rendered by the driver at A3 to `run/<plan>/specs/<attempt>.md` from a template 
 |---|---|
 | Title | `# Worker Spec: <job>, Attempt <n>` |
 | Who you are | Attempt `<n>` of Job `<job>` (`<title>`) in Plan `<plan>` (was "Workflow"); attempt id, Tier, worktree path |
-| Rules | work only in this worktree and touch only the listed files; commit your work; before submitting, run the quick check yourself: the commands of `pre-commit` from the worktree's `.config/wt.toml`, listed verbatim, or, when the file has no `pre-commit` table, the line `This repo defines no quick check.` (change: cpd 1 said `./verify.sh`; R20: no fallback to `pre-merge`); never edit the protected paths, listed: `.config/wt.toml`, `.config/cpd.toml`, `.cpd/`, and each entry of the repo's protected list (§7.5; change: cpd 1 hard-coded `verify.sh`); never ask the User anything; if continuing would require guessing, `cpd ask <attempt> "<question>"`, which blocks until the Lead answers (change: no `--wf`, the pane has `CPD_PLAN`); one blocker at a time; do not stop until you have submitted |
+| Rules | work only in this worktree and touch only the listed files; commit your work; before submitting, run the quick check yourself: the commands of `pre-commit` from the worktree's `.config/wt.toml`, listed verbatim, or, when the file has no `pre-commit` table, the line `This repo defines no quick check.` (change: cpd 1 said `./verify.sh`; R20: no fallback to `pre-merge`); never edit the protected paths, listed: `.config/wt.toml`, `.config/cpd.toml`, `.cpd/`, and each entry of the repo's protected list (§7.5; change: cpd 1 hard-coded `verify.sh`); never ask the User anything; tear down everything it started before it submits (private tmux servers, background processes, temporary homes, a `cpd watch` it started; hs-d34, hs-d39); if continuing would require guessing, `cpd ask <attempt> "<question>"`, which blocks until the Lead answers (change: no `--wf`, the pane has `CPD_PLAN`); one blocker at a time; do not stop until you have submitted |
 | Job | Goal, Context, Files you may touch (`touches`), Acceptance, Out of scope (or "Nothing is listed. Still do only what the Goal and Acceptance require.") |
 | Previous Attempts | only when the Job has ended Attempts: for each, number, Tier, outcome and cause, and what explains it: the conflicting files (`merge_conflict`), or one sentence for every other cause (change: cpd 1 showed only feedback) |
 | Answers already given | new: every `answered` Escalation of earlier Attempts, question and answer, so a Worker does not ask again |

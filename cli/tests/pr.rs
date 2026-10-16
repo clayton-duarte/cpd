@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use common::{Run, TestEnv};
+use common::{Run, SLEEP_SECONDS, TestEnv};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId};
@@ -831,9 +831,9 @@ fn window_names(fx: &Fx) -> String {
 fn poll_of_a_merged_pr_ends_the_plan_and_removes_its_attempt_leftovers() {
     let fx = fx("pr");
     let (worktree, branch) = kept_attempt(&fx);
-    let started = fx.env.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "pay--b-a1", "sleep 300"]);
+    let started = fx.env.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "pay--b-a1", &format!("sleep {SLEEP_SECONDS}")]);
     assert!(started.status.success(), "{started:?}");
-    assert!(fx.env.tmux(&["new-window", "-d", "-t", "cpd-work", "-n", "other-plan", "sleep 300"]).status.success());
+    assert!(fx.env.tmux(&["new-window", "-d", "-t", "cpd-work", "-n", "other-plan", &format!("sleep {SLEEP_SECONDS}")]).status.success());
     fx.gh("view.json", r#"{"state":"MERGED","mergedAt":"2026-10-14T10:00:00Z","title":"Add the payment webhook","reviewDecision":"","statusCheckRollup":[],"reviews":[],"comments":[]}"#);
 
     let out = fx.pr("poll").ok();

@@ -3,6 +3,7 @@
 //! session, and its session file.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
@@ -173,7 +174,34 @@ pub fn start(
     Ok(Pane { pane, window })
 }
 
-/// A9: kills the Attempt's window in the work session, if any is left.
+/// A9 (§3.4): `kill-window` is tried this many times, `KILL_PAUSE` apart.
+const KILL_TRIES: u32 = 3;
+const KILL_PAUSE: Duration = Duration::from_secs(1);
+
+/// Runs `kill` up to `tries` times, `pause` apart; a failure after which
+/// `gone` says the window is already gone counts as success. The last error
+/// is returned when every try failed.
+fn retry_kill(
+    tries: u32,
+    pause: Duration,
+    mut kill: impl FnMut() -> Result<(), CpdError>,
+    mut gone: impl FnMut() -> bool,
+) -> Result<(), CpdError> {
+    let mut tried = 0;
+    loop {
+        tried += 1;
+        match kill() {
+            Ok(()) => return Ok(()),
+            Err(_) if gone() => return Ok(()),
+            Err(e) if tried >= tries => return Err(e),
+            Err(_) => std::thread::sleep(pause),
+        }
+    }
+}
+
+/// A9: kills the Attempt's window in the work session, if any is left. A
+/// failed `kill-window` is retried (see [`KILL_TRIES`]); a window already
+/// gone counts as killed.
 pub fn kill_window(config: &Config, tmux: &Tmux, target: &Target) -> Result<(), CpdError> {
     let name = attempt_window(&target.plan, &target.id);
     let windows: Vec<WindowId> = tmux
@@ -183,7 +211,8 @@ pub fn kill_window(config: &Config, tmux: &Tmux, target: &Target) -> Result<(), 
         .map(|p| p.window)
         .collect();
     for window in windows {
-        tmux.kill_window(&window)?;
+        let gone = || tmux.list_panes().is_ok_and(|panes| panes.iter().all(|p| p.window != window));
+        retry_kill(KILL_TRIES, KILL_PAUSE, || tmux.kill_window(&window), gone)?;
     }
     Ok(())
 }
@@ -210,6 +239,34 @@ pub fn last_stop(file: &Path) -> Option<(Option<String>, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn failure() -> CpdError {
+        CpdError::new(ErrorCode::TmuxFailed, "kill failed")
+    }
+
+    #[test]
+    fn a_kill_that_fails_three_times_reports_the_error() {
+        let mut calls = 0;
+        let result = retry_kill(3, Duration::ZERO, || { calls += 1; Err(failure()) }, || false);
+        assert_eq!(calls, 3);
+        assert_eq!(result.unwrap_err().code(), ErrorCode::TmuxFailed);
+    }
+
+    #[test]
+    fn a_kill_that_fails_twice_then_works_is_ok() {
+        let mut calls = 0;
+        let result = retry_kill(3, Duration::ZERO, || { calls += 1; if calls < 3 { Err(failure()) } else { Ok(()) } }, || false);
+        assert_eq!(calls, 3);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn a_window_already_gone_is_success_without_a_retry() {
+        let mut calls = 0;
+        let result = retry_kill(3, Duration::ZERO, || { calls += 1; Err(failure()) }, || true);
+        assert_eq!(calls, 1);
+        assert!(result.is_ok());
+    }
 
     #[test]
     fn conflict_files_come_from_the_merges_detail() {

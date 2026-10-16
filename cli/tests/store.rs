@@ -681,8 +681,56 @@ fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
 }
 
+/// Kills and reaps its child on drop, so a panicking test leaves no process.
+struct KillOnDrop(Option<Child>);
+
+impl KillOnDrop {
+    fn new(child: Child) -> Self {
+        KillOnDrop(Some(child))
+    }
+
+    fn into_inner(mut self) -> Child {
+        self.0.take().unwrap()
+    }
+}
+
+impl std::ops::Deref for KillOnDrop {
+    type Target = Child;
+    fn deref(&self) -> &Child {
+        self.0.as_ref().unwrap()
+    }
+}
+
+impl std::ops::DerefMut for KillOnDrop {
+    fn deref_mut(&mut self) -> &mut Child {
+        self.0.as_mut().unwrap()
+    }
+}
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+#[test]
+fn a_guarded_child_is_gone_after_a_panic() {
+    let pid = std::cell::Cell::new(0);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let child = KillOnDrop::new(std::process::Command::new("sleep").arg("60").spawn().unwrap());
+        pid.set(child.id());
+        panic!("boom");
+    }));
+    assert!(result.is_err());
+    let alive = std::process::Command::new("kill").args(["-0", &pid.get().to_string()]).output().unwrap().status.success();
+    assert!(!alive, "child {} survived the panic", pid.get());
+}
+
 struct Writer {
-    child: Child,
+    child: KillOnDrop,
     out: PathBuf,
 }
 
@@ -699,7 +747,7 @@ impl Writer {
         if let Some(started) = started {
             cmd.env("STORE_CHILD_STARTED", started);
         }
-        Writer { child: cmd.spawn().unwrap(), out }
+        Writer { child: KillOnDrop::new(cmd.spawn().unwrap()), out }
     }
 
     fn wait(mut self) -> Value {

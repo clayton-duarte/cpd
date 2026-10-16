@@ -1,5 +1,5 @@
 //! pi's side of the machine (commands.md §14.1): the catalog, the adapter, the
-//! Lead's packages and plannotator's port.
+//! Lead's packages.
 
 use std::path::Path;
 
@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use super::check::{Check, Severity};
 use crate::config::catalog::read as read_catalog;
 use crate::config::{Config, locate_pi};
-use crate::host::pi::{PackageId, PiDirs, Plannotator, declared, package_identity, project_settings};
+use crate::host::pi::{PackageId, PiDirs, declared, package_identity, project_settings};
 
 /// Each `tiers.*` model is in pi's catalog and `lead_tier` is valid for its model.
 ///
@@ -84,47 +84,4 @@ pub fn lead_packages(config: &Config) -> Check {
         return check;
     }
     check.message(format!("Neither declared in pi's settings nor resolvable: {}.", unresolvable.join(", ")))
-}
-
-const PORT_HINT: &str = "a range, e.g. 19432-19439";
-
-/// When `PLANNOTATOR_REMOTE` is set, `PLANNOTATOR_PORT` is a range of at least
-/// two ports: one port lets only one Plan review be open (§15.5).
-pub fn plannotator_port() -> Check {
-    plannotator_port_of(&Plannotator::from_env())
-}
-
-fn plannotator_port_of(env: &Plannotator) -> Check {
-    let name = "plannotator_port";
-    if env.remote.is_none() {
-        return Check::pass(name, Severity::Warn).message("PLANNOTATOR_REMOTE is not set.");
-    }
-    let found = env.port.clone().unwrap_or_else(|| "unset (plannotator uses 19432)".to_owned());
-    let range = env.port.as_deref().and_then(|p| p.split_once('-')).and_then(|(a, b)| Some((a.parse::<u16>().ok()?, b.parse::<u16>().ok()?)));
-    let ok = range.is_some_and(|(first, last)| last > first);
-    let check = Check::new(name, Severity::Warn, ok).found(found).expected(PORT_HINT);
-    if ok { check } else { check.message("only one Plan review can be open at a time") }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn port(remote: Option<&str>, port: Option<&str>) -> bool {
-        plannotator_port_of(&Plannotator { port: port.map(str::to_owned), remote: remote.map(str::to_owned) }).ok
-    }
-
-    #[test]
-    fn only_a_remote_plannotator_needs_a_range_of_two_ports_or_more() {
-        assert!(port(None, None));
-        assert!(port(None, Some("19432")));
-        assert!(port(Some("1"), Some("19432-19439")));
-        assert!(port(Some("1"), Some("19432-19433")));
-        assert!(!port(Some("1"), None));
-        assert!(!port(Some("1"), Some("19432")));
-        assert!(!port(Some("1"), Some("19432-19432")));
-        assert!(!port(Some("1"), Some("19439-19432")));
-        assert!(!port(Some("1"), Some("a-b")));
-        assert!(!port(Some("1"), Some("")));
-    }
 }

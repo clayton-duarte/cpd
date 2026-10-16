@@ -452,6 +452,15 @@ fn a_hook_is_killed_with_its_process_group_at_the_timeout() {
 }
 
 #[test]
+fn a_background_child_of_a_finished_hook_is_killed_when_the_hook_returns() {
+    let h = hooks("pre-merge = \"sleep 30 & echo $! > pid\"\n");
+    assert_eq!(h.run(Hook::PreMerge).outcome, HookOutcome::Passed);
+    let pid = h.file("pid").trim().to_owned();
+    let alive = std::process::Command::new("kill").args(["-0", &pid]).status().unwrap().success();
+    assert!(!alive, "the background child {pid} outlived the hook");
+}
+
+#[test]
 fn a_command_killed_by_a_signal_is_an_error_not_a_failure() {
     let h = hooks("pre-merge = \"echo started; kill -9 $$\"\n");
     let result = h.run(Hook::PreMerge);

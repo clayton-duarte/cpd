@@ -9,7 +9,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use common::TestEnv;
+use common::{SLEEP_SECONDS, TestEnv};
 use cpd_core::error::ErrorCode;
 use cpd_core::host::layout::{self, View};
 use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux};
@@ -169,7 +169,7 @@ fn respawn_killing_restarts_a_live_pane_in_place() {
     t.set_pane_view(&id, View::Plan).unwrap();
     let before = pane(&t.list_panes().unwrap(), &id).clone();
     let out = s.env.root().join("respawned.txt");
-    t.respawn_pane_killing(&id, &sh(&format!("echo \"$CPD_HOST_TEST_VAR\" > '{}'; sleep 600", out.display()))).unwrap();
+    t.respawn_pane_killing(&id, &sh(&format!("echo \"$CPD_HOST_TEST_VAR\" > '{}'; sleep {SLEEP_SECONDS}", out.display()))).unwrap();
     let after = pane(&t.list_panes().unwrap(), &id).clone();
     assert!(!after.dead);
     assert_ne!(after.pid, before.pid);
@@ -192,7 +192,7 @@ fn create_session_returns_the_first_window_and_pane_once() {
     // -e reaches the first pane only, not the session's later windows.
     let session_env = s.env.tmux(&["show-environment", "-t", "=cpd"]);
     assert!(!String::from_utf8_lossy(&session_env.stdout).contains("CPD_HOST_TEST_VAR"), "{session_env:?}");
-    let later = s.tmux.new_window("cpd", "later", &sh("echo \"plan=$CPD_HOST_TEST_VAR\"; sleep 600")).unwrap().1;
+    let later = s.tmux.new_window("cpd", "later", &sh(&format!("echo \"plan=$CPD_HOST_TEST_VAR\"; sleep {SLEEP_SECONDS}"))).unwrap().1;
     wait_for("the later window's output", || {
         let out = s.env.tmux(&["capture-pane", "-p", "-t", later.as_str()]);
         String::from_utf8_lossy(&out.stdout).contains("plan=")
@@ -300,7 +300,7 @@ fn a_worker_window_gets_its_cwd_environment_and_argv() {
     t.ensure_session("cpd-work", layout::WATCH_WINDOW, &sleeper(s.env.root())).unwrap();
 
     let mut spawn = sh(&format!(
-        "printf '%s|%s|%s|%s|%s' \"$PWD\" \"$CPD_PLAN\" \"$A_B\" \"${{TMUX_PANE:+set}}\" \"$1\" > '{}'; sleep 600",
+        "printf '%s|%s|%s|%s|%s' \"$PWD\" \"$CPD_PLAN\" \"$A_B\" \"${{TMUX_PANE:+set}}\" \"$1\" > '{}'; sleep {SLEEP_SECONDS}",
         out.display()
     ));
     spawn.argv.extend(["argv0".into(), "two words; $HOME".into()]);

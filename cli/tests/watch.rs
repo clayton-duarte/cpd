@@ -422,6 +422,28 @@ fn e2_ends_attempts_whose_driver_died_crashed_or_cancelled() {
 }
 
 #[test]
+fn e2_removes_the_lock_of_a_dead_driver_it_ends_and_does_not_recreate_it() {
+    let fx = fx("retry_cap = 0");
+    // `api-a1`: a dead driver left its lock file, free. `web-a1`: the file is missing, as an ended
+    // Attempt's is (E2's probe must not create it: no driver).
+    drop(fx.live_driver("api-a1"));
+    fx.add_running("api", "running", &ago(1));
+    fx.add_running("web", "running", &ago(1));
+    let lock = |attempt: &str| fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(attempt).unwrap());
+    assert!(lock("api-a1").exists() && !lock("web-a1").exists());
+
+    let engine = fx.start();
+    wait_until("both ended", || fx.attempt("api-a1").0 == "ended" && fx.attempt("web-a1").0 == "ended");
+    // The lock goes with the end, and the next ticks do not bring it back.
+    std::thread::sleep(Duration::from_millis(2500));
+    engine.stop();
+
+    assert!(!lock("api-a1").exists() && !lock("web-a1").exists());
+    let left = fs::read_dir(fx.home().locks_dir()).unwrap().map(|e| e.unwrap().file_name()).collect::<Vec<_>>();
+    assert!(left.iter().all(|n| !n.to_string_lossy().starts_with("attempt-")), "{left:?}");
+}
+
+#[test]
 fn e2_climbs_the_ladder_for_a_dead_driver() {
     let fx = fx("concurrency = 1");
     // A live Attempt holds the only slot, so E3 does not start the next one.

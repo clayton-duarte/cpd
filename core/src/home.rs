@@ -123,6 +123,11 @@ impl CpdHome {
         self.locks_dir().join(format!("attempt-{plan}--{attempt}.lock"))
     }
 
+    /// `locks/plannotator-ports.lock`: held while a Plan's plannotator port is assigned (contract §6.5).
+    pub fn plannotator_ports_lock(&self) -> PathBuf {
+        self.locks_dir().join("plannotator-ports.lock")
+    }
+
     /// `locks/context-<context>.lock`: held while writing or syncing a Context store.
     pub fn context_lock(&self, context: &ContextId) -> PathBuf {
         self.locks_dir().join(format!("context-{context}.lock"))
@@ -195,6 +200,11 @@ impl CpdHome {
     /// `run/<plan>/logs/attempt-<attempt>.log`: the Attempt driver's stderr.
     pub fn driver_log(&self, plan: &PlanId, attempt: &AttemptId) -> PathBuf {
         self.plan_dir(plan).join("logs").join(format!("attempt-{attempt}.log"))
+    }
+
+    /// `run/<plan>/plannotator-port`: the Plan's plannotator port, one line (contract §6.5).
+    pub fn plannotator_port(&self, plan: &PlanId) -> PathBuf {
+        self.plan_dir(plan).join("plannotator-port")
     }
 
     /// `run/<plan>/logs/<attempt>.<hook>.log`: the full output of a hook run.
@@ -272,6 +282,8 @@ mod tests {
             p("/h/.cpd/locks/attempt-pay-4521--api-schema-a2.lock")
         );
         assert_eq!(h.context_lock(&context), p("/h/.cpd/locks/context-building-cpd.lock"));
+        assert_eq!(h.plannotator_ports_lock(), p("/h/.cpd/locks/plannotator-ports.lock"));
+        assert_eq!(h.plannotator_port(&plan()), p("/h/.cpd/run/pay-4521/plannotator-port"));
         assert_eq!(h.watch_log(), p("/h/.cpd/run/watch.log"));
         assert_eq!(h.plan_md(&plan()), p("/h/.cpd/run/pay-4521/plan.md"));
         assert_eq!(h.worker_spec(&plan(), &attempt()), p("/h/.cpd/run/pay-4521/specs/api-schema-a2.md"));

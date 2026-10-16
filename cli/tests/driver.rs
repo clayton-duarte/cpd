@@ -16,7 +16,7 @@ use common::{CPD, Run, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_lead_worktree};
 use cpd_core::home::CpdHome;
-use cpd_core::ids::PlanId;
+use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::plan::{jobs, locked_fingerprint};
 use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
@@ -314,6 +314,11 @@ fn a_dispatched_attempt_runs_its_worker_merges_and_ends_merged() {
     assert!(!fx.worktree(ATTEMPT).exists());
     let branches = fx.env.git(&fx.repo, &["branch", "--list", "cpd/pay--api-a1"]);
     assert_eq!(branches, "");
+
+    // A9: the driver lock file is removed.
+    assert!(!fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(ATTEMPT).unwrap()).exists());
+    let left = fs::read_dir(fx.home().locks_dir()).unwrap().map(|e| e.unwrap().file_name()).collect::<Vec<_>>();
+    assert!(left.iter().all(|n| !n.to_string_lossy().starts_with("attempt-")), "{left:?}");
 }
 
 // ---------- failures ----------
@@ -370,6 +375,31 @@ fn a_dead_worker_pane_ends_crashed_through_the_ladder() {
     assert_eq!(retry["data"]["next_tier"], "S3");
     assert!(retry["data"]["feedback"].as_str().unwrap().contains("pane died"), "{retry}");
     assert!(!fx.windows().contains("pay--api-a1"), "{}", fx.windows());
+}
+
+#[test]
+fn a_failed_kill_window_is_retried_and_appends_no_error() {
+    let fx = fx();
+    fx.pi("exit 3");
+    let real = String::from_utf8(fx.env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
+    let real = real.trim();
+    assert!(real.starts_with('/'), "{real}");
+    // Fails the first `kill-window` only; every other call is the real tmux.
+    let marker = fx.env.root().join("kill-failed");
+    fx.env.fake(
+        "tmux",
+        &format!(
+            "for a in \"$@\"; do if [ \"$a\" = kill-window ] && [ ! -e '{m}' ]; then : > '{m}'; echo 'fake: kill-window failed' >&2; exit 1; fi; done\nexec '{real}' \"$@\"",
+            m = marker.display()
+        ),
+    );
+
+    let out = fx.dispatch(JOB).ok();
+    fx.wait_end(ATTEMPT, &out["pid"]);
+
+    assert!(marker.exists(), "the fake tmux never failed a kill-window");
+    assert!(!fx.windows().contains("pay--api-a1"), "{}", fx.windows());
+    assert!(!fx.kinds(ATTEMPT).contains(&"error".to_owned()), "{:?}", fx.kinds(ATTEMPT));
 }
 
 #[test]

@@ -10,7 +10,7 @@ mod common;
 use std::fs;
 use std::time::{Duration, Instant};
 
-use common::{CPD, TestEnv};
+use common::{CPD, SLEEP_SECONDS, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
@@ -408,7 +408,7 @@ fn the_view_starts_no_subprocess_and_asks_gh_nothing() {
 fn centre(env: &TestEnv) -> (String, String) {
     env.fake(
         "cpd",
-        &format!("if [ \"$1\" = tui ] && [ \"$3\" = worker ]; then exec sleep 3600; fi\nexec '{CPD}' \"$@\""),
+        &format!("if [ \"$1\" = tui ] && [ \"$3\" = worker ]; then exec sleep {SLEEP_SECONDS}; fi\nexec '{CPD}' \"$@\""),
     );
     let plan = tmux_out(
         env,
