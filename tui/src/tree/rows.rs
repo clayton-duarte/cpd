@@ -1,18 +1,18 @@
 //! The tree itself (the spike's `context.rs`, on the read model): Contexts,
-//! their Plans, and a Plan's side forks as a `tui-tree-widget` tree.
+//! their Plans, and the Sessions forked by `session fork` as a `tui-tree-widget` tree.
 //!
 //! The widget draws one text per row (guide, dot, name). It has no
 //! right-aligned column, so each Plan's five Job counters are drawn as a
 //! right-aligned `Line` into the row's `Rect` after the tree. The `⏵` of the
-//! Session in the chat slot, and the `│` guide of a fork under a Plan that is
-//! not the last, are drawn over the indent of their rows for the same reason
-//! (the widget owns the indent). Context rows are not selectable (a click only
+//! Session in the chat slot is drawn over the indent of its row for the same
+//! reason (the widget owns the indent). Context rows are not selectable (a click only
 //! collapses or expands them): the cursor moves between Sessions only, and is
 //! inverted over its row's whole width, only while the pane has keyboard focus.
 //!
 //! Rows (identifiers are paths): a Context `[context]`, a Plan `[context, plan]`
 //! (its row shows its Lead and is the Lead's: selecting it opens the Lead),
-//! a side fork of the Plan's Lead `[context, plan, session]`.
+//! a forked Session `[context, session]`: a sibling of the Plans directly under its Context, after them, never
+//! under a Plan or under its source (B1, contract §6.8).
 //!
 //! Everything here is pure except `draw`, which only writes to the frame's buffer.
 
@@ -29,7 +29,7 @@ use crate::palette::{self, Meaning};
 use cpd_core::plan::Phase;
 use crate::read::{ContextNode, JobStatus, PlanNode, SessionNode, Tree};
 
-/// Tree identifiers: a Context's id, a Plan's id, a Session's id.
+/// Tree identifiers: a Context's id, then a Plan's id or a forked Session's id.
 pub type Id = String;
 
 /// One tree level is indented by two columns (`tui-tree-widget`'s own indentation).
@@ -44,18 +44,22 @@ pub enum Row<'a> {
     Context(&'a ContextNode),
     /// A Plan, with its Lead.
     Plan(&'a PlanNode),
-    /// A side fork of the Plan's Lead.
-    Fork(&'a ContextNode, &'a PlanNode, &'a SessionNode),
+    /// A Session forked by `session fork`, with the Plan it belongs to.
+    Fork(&'a PlanNode, &'a SessionNode),
 }
 
 /// The row at `path`, `None` when the tree has none.
 pub fn row<'a>(tree: &'a Tree, path: &[Id]) -> Option<Row<'a>> {
     let context = tree.contexts.iter().find(|c| Some(c.id.as_str()) == path.first().map(String::as_str))?;
     let Some(plan) = path.get(1) else { return Some(Row::Context(context)) };
-    let plan = context.plans.iter().find(|p| p.head.id.as_str() == plan)?;
-    let Some(fork) = path.get(2) else { return Some(Row::Plan(plan)) };
-    let fork = forks(plan).find(|s| s.id.as_str() == fork)?;
-    Some(Row::Fork(context, plan, fork))
+    if path.len() > 2 {
+        return None;
+    }
+    if let Some(plan) = context.plans.iter().find(|p| p.head.id.as_str() == plan) {
+        return Some(Row::Plan(plan));
+    }
+    let (plan, fork) = context.forks().into_iter().find(|(_, s)| s.id.as_str() == plan)?;
+    Some(Row::Fork(plan, fork))
 }
 
 impl<'a> Row<'a> {
@@ -64,7 +68,7 @@ impl<'a> Row<'a> {
         match *self {
             Row::Context(_) => None,
             Row::Plan(p) => p.lead(),
-            Row::Fork(_, _, s) => Some(s),
+            Row::Fork(_, s) => Some(s),
         }
     }
 
@@ -72,7 +76,7 @@ impl<'a> Row<'a> {
     pub fn plan(&self) -> Option<&'a PlanNode> {
         match *self {
             Row::Context(_) => None,
-            Row::Plan(p) | Row::Fork(_, p, _) => Some(p),
+            Row::Plan(p) | Row::Fork(p, _) => Some(p),
         }
     }
 
@@ -81,14 +85,9 @@ impl<'a> Row<'a> {
         match *self {
             Row::Context(c) => c.id.to_string(),
             Row::Plan(p) => plan_label(p),
-            Row::Fork(_, _, s) => session_label(s),
+            Row::Fork(_, s) => session_label(s),
         }
     }
-}
-
-/// A Plan's side forks, oldest first (its Lead is the Plan's own row).
-fn forks(plan: &PlanNode) -> impl Iterator<Item = &SessionNode> {
-    plan.sessions.iter().filter(|s| !s.plan_lead)
 }
 
 /// A Session's pi name, else the first 8 characters of its id.
@@ -150,13 +149,11 @@ pub fn truncate(text: &str, width: usize) -> String {
     }
 }
 
-/// What a Plan's or fork's row says.
+/// What a Plan's or fork's row says (both are one level under their Context).
 struct RowText<'a> {
     /// The Session of the row: its chat is marked with `⏵`, and its name is bold, when it is in the chat slot.
     session: Option<&'a SessionNode>,
     name: String,
-    /// 1 for a Plan, 2 for a fork.
-    depth: usize,
     last: bool,
     phase: Phase,
     /// The width of the counters drawn at the right (0: none).
@@ -172,7 +169,7 @@ fn row_text(r: RowText, width: u16) -> Line<'static> {
         palette::dot(needs_you, Some(r.phase)),
         " ".into(),
     ];
-    let used = r.depth * INDENT + Line::from(spans.clone()).width() + if r.counters_width > 0 { r.counters_width + 1 } else { 0 };
+    let used = INDENT + Line::from(spans.clone()).width() + if r.counters_width > 0 { r.counters_width + 1 } else { 0 };
     let name = truncate(&r.name, (width as usize).saturating_sub(used));
     let active = r.session.is_some_and(SessionNode::is_active);
     spans.push(if active { Span::styled(name, Style::new().add_modifier(Modifier::BOLD)) } else { name.into() });
@@ -199,50 +196,36 @@ fn context_text(c: &ContextNode, collapsed: bool) -> Line<'static> {
 }
 
 /// The tree's items for a column `width` wide. `opened` is the tree state's open set: a Context not in it is
-/// collapsed (a Plan with forks is always open: [`open_new`]).
+/// collapsed.
 pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16) -> Vec<TreeItem<'static, Id>> {
     tree.contexts
         .iter()
         .map(|c| {
             let context_path = vec![c.id.to_string()];
+            let forks = c.forks();
             let plans = c.plans.iter().enumerate().map(|(i, p)| {
-                let phase = p.head.phase;
-                let plan_last = i + 1 == c.plans.len();
-                let kids: Vec<&SessionNode> = forks(p).collect();
                 let text = row_text(
                     RowText {
                         session: p.lead(),
                         name: plan_label(p),
-                        depth: 1,
-                        last: plan_last,
-                        phase,
+                        last: forks.is_empty() && i + 1 == c.plans.len(),
+                        phase: p.head.phase,
                         counters_width: counters(p).width(),
                     },
                     width,
                 );
-                let fork_items: Vec<TreeItem<'static, Id>> = kids
-                    .iter()
-                    .enumerate()
-                    .map(|(j, s)| {
-                        let text = row_text(
-                            RowText {
-                                session: Some(s),
-                                name: session_label(s),
-                                depth: 2,
-                                last: j + 1 == kids.len(),
-                                phase,
-                                counters_width: 0,
-                            },
-                            width,
-                        );
-                        TreeItem::new_leaf(s.id.to_string(), text)
-                    })
-                    .collect();
-                TreeItem::new(p.head.id.to_string(), text, fork_items).expect("a Session is in one Plan once")
+                TreeItem::new_leaf(p.head.id.to_string(), text)
             });
-            let plans: Vec<TreeItem<'static, Id>> = plans.collect();
-            TreeItem::new(c.id.to_string(), context_text(c, !opened.contains(&context_path)), plans)
-                .expect("Plan ids are unique")
+            let fork_items = forks.iter().enumerate().map(|(j, (p, s))| {
+                let text = row_text(
+                    RowText { session: Some(s), name: session_label(s), last: j + 1 == forks.len(), phase: p.head.phase, counters_width: 0 },
+                    width,
+                );
+                TreeItem::new_leaf(s.id.to_string(), text)
+            });
+            let children: Vec<TreeItem<'static, Id>> = plans.chain(fork_items).collect();
+            TreeItem::new(c.id.to_string(), context_text(c, !opened.contains(&context_path)), children)
+                .expect("Plan and Session ids are unique")
         })
         .collect()
 }
@@ -268,10 +251,7 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
                     Span::styled(ACTIVE_MARK, Style::new().add_modifier(Modifier::BOLD)).render(rect, buf);
                 }
             }
-            Some(Row::Fork(context, plan, fork)) => {
-                if context.plans.last().is_some_and(|last| last.head.id != plan.head.id) {
-                    Span::styled("│", palette::fg(Meaning::Nothing)).render(Rect::new(area.x + INDENT as u16, y, 1, 1), buf);
-                }
+            Some(Row::Fork(_, fork)) => {
                 if fork.is_active() {
                     Span::styled(ACTIVE_MARK, Style::new().add_modifier(Modifier::BOLD)).render(rect, buf);
                 }
@@ -285,20 +265,17 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
 }
 
 /// Open each Context the first time it is seen (Contexts start expanded; a collapse by the User is kept across
-/// refreshes), and every Plan with forks (nothing collapses a Plan: its forks are Lead Sessions, always listed).
+/// refreshes).
 pub fn open_new(state: &mut TreeState<Id>, known: &mut HashSet<Vec<Id>>, tree: &Tree) {
     for c in &tree.contexts {
         let path = vec![c.id.to_string()];
         if known.insert(path.clone()) {
             state.open(path);
         }
-        for p in c.plans.iter().filter(|p| forks(p).next().is_some()) {
-            state.open(vec![c.id.to_string(), p.head.id.to_string()]);
-        }
     }
 }
 
-/// The visible Session rows (the only selectable ones: a Plan's Lead and the forks), in order.
+/// The visible Session rows (the only selectable ones: the Plans' Leads and the forks), in order.
 fn visible(state: &TreeState<Id>, tree: &Tree) -> Vec<Vec<Id>> {
     state.flatten(&items(tree, state.opened(), 0)).into_iter().map(|f| f.identifier).filter(|id| id.len() >= 2).collect()
 }
@@ -431,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn the_tree_shows_contexts_plans_and_forks() {
+    fn the_tree_shows_contexts_plans_and_then_the_forks_as_their_siblings() {
         let tree = sample();
         let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 10, false);
         assert_eq!(
@@ -439,10 +416,10 @@ mod tests {
             [
                 "● alpha".to_owned(),
                 row_of("⏵ ├ ○ ship lead", "2⋅1⋅1⋅0⋅5", 44),
-                "  │ ├ ○ ship fork".to_owned(),
-                "  │ └ ● ship review".to_owned(),
                 row_of("  ├ ○ sketch", "4⋅0⋅0⋅0⋅0", 44),
-                row_of("  └ ○ old", "0⋅0⋅0⋅1⋅36", 44),
+                row_of("  ├ ○ old", "0⋅0⋅0⋅1⋅36", 44),
+                "  ├ ○ ship fork".to_owned(),
+                "  └ ● ship review".to_owned(),
                 "● beta".to_owned(),
                 row_of("  └ ● rel lead", "0⋅0⋅0⋅0⋅3", 44),
                 "○ gamma".to_owned(),
@@ -555,25 +532,25 @@ mod tests {
     fn the_guides_are_dark_grey() {
         let tree = sample();
         let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 8, false);
-        for (x, y, glyph) in [(2, 1, '├'), (2, 2, '│'), (4, 2, '├'), (4, 3, '└'), (2, 5, '└')] {
+        for (x, y, glyph) in [(2, 1, '├'), (2, 2, '├'), (2, 3, '├'), (2, 4, '├'), (2, 5, '└')] {
             assert_eq!((text(&buf, y).chars().nth(x), fg(&buf, x as u16, y)), (Some(glyph), color(Meaning::Nothing)), "({x}, {y})");
         }
     }
 
     #[test]
-    fn the_last_plans_forks_have_no_guide_to_the_left() {
+    fn a_fork_is_a_sibling_of_the_plans_and_the_last_row_closes_the_guide() {
         let t = tree(vec![context(
             "cc",
             vec![plan("pp", "cc", Phase::Plan, [0; 6], session("l", "lead", State::Idle, None, Place::None), vec![session("f", "fork", State::Idle, None, Place::None)])],
         )]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 30, 3, false);
-        assert_eq!(lines(&buf)[2], "    └ ○ fork");
+        assert_eq!(lines(&buf)[1..], [row_of("  ├ ○ lead", "0⋅0⋅0⋅0⋅0", 30), "  └ ○ fork".to_owned()]);
     }
 
     #[test]
     fn the_selected_session_row_is_reversed_across_the_full_width_and_no_other_row() {
         let tree = sample();
-        for (selected, y) in [(&["alpha", "ship"][..], 1), (&["alpha", "ship", "f-idle"], 2)] {
+        for (selected, y) in [(&["alpha", "ship"][..], 1), (&["alpha", "f-idle"], 4)] {
             let buf = render(&tree, &mut state_for(&tree, &[], selected), 44, 9, true);
             for row in 0..9 {
                 assert_eq!(reversed(&buf, row), vec![row == y; 44], "{selected:?}, row {row}");
@@ -609,11 +586,11 @@ mod tests {
         tree.contexts[0].plans[0].sessions[0].place = Place::Parked;
         tree.contexts[0].plans[0].sessions[1].place = Place::Chat;
         let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 8, false);
-        assert_eq!(text(&buf, 2), "⏵ │ ├ ○ ship fork");
-        for y in [0, 1, 3, 4, 5, 6, 7] {
+        assert_eq!(text(&buf, 4), "⏵ ├ ○ ship fork");
+        for y in [0, 1, 2, 3, 5, 6, 7] {
             assert!(!text(&buf, y).contains(ACTIVE_MARK), "row {y}");
         }
-        assert!(buf[(8, 2)].modifier.contains(Modifier::BOLD));
+        assert!(buf[(6, 4)].modifier.contains(Modifier::BOLD));
         assert!(!buf[(8, 1)].modifier.contains(Modifier::BOLD));
     }
 
@@ -626,13 +603,13 @@ mod tests {
             state.selected().to_vec()
         };
         assert_eq!(at(&mut state, 1), path(&["alpha", "ship"]), "down from nothing: the first Session");
-        assert_eq!(at(&mut state, 1), path(&["alpha", "ship", "f-idle"]));
-        assert_eq!(at(&mut state, 1), path(&["alpha", "ship", "f-blocked"]));
         assert_eq!(at(&mut state, 1), path(&["alpha", "sketch"]));
         assert_eq!(at(&mut state, 1), path(&["alpha", "old"]));
+        assert_eq!(at(&mut state, 1), path(&["alpha", "f-idle"]), "the forks come after the Plans");
+        assert_eq!(at(&mut state, 1), path(&["alpha", "f-blocked"]));
         assert_eq!(at(&mut state, 1), path(&["beta", "rel"]), "over the Context row `beta`");
         assert_eq!(at(&mut state, 1), path(&["beta", "rel"]), "clamped at the end: `gamma` has no Session");
-        assert_eq!(at(&mut state, -1), path(&["alpha", "old"]), "back over the Context row");
+        assert_eq!(at(&mut state, -1), path(&["alpha", "f-blocked"]), "back over the Context row");
         let mut none = state_for(&tree, &[], &[]);
         move_cursor(&mut none, &tree, -1);
         assert_eq!(none.selected(), path(&["beta", "rel"]), "up from nothing: the last Session");
@@ -659,7 +636,7 @@ mod tests {
         click_context(&mut fresh, &path(&["beta"]));
         assert!(fresh.selected().is_empty());
         assert!(!click_context(&mut fresh, &path(&["alpha", "ship"])), "a Session is not a Context");
-        assert!(fresh.opened().contains(&path(&["alpha", "ship"])), "and a Plan never folds");
+        assert!(!click_context(&mut fresh, &path(&["alpha", "f-idle"])), "nor is a fork");
     }
 
     #[test]
@@ -667,13 +644,14 @@ mod tests {
         let tree = sample();
         assert!(matches!(row(&tree, &path(&["alpha"])), Some(Row::Context(c)) if c.id.as_str() == "alpha"));
         assert!(matches!(row(&tree, &path(&["alpha", "ship"])), Some(Row::Plan(p)) if p.head.id.as_str() == "ship"));
-        let fork = row(&tree, &path(&["alpha", "ship", "f-idle"])).unwrap();
+        let fork = row(&tree, &path(&["alpha", "f-idle"])).unwrap();
+        assert!(matches!(fork, Row::Fork(..)), "a fork is a row of its Context, not of its Plan");
         assert_eq!(fork.session().unwrap().id.as_str(), "f-idle");
         assert_eq!(fork.plan().unwrap().head.id.as_str(), "ship");
         assert_eq!(fork.label(), "ship fork");
         assert_eq!(row(&tree, &path(&["alpha", "ship"])).unwrap().session().unwrap().id.as_str(), "l-ship", "a Plan row is its Lead's");
         assert!(row(&tree, &path(&["gamma"])).unwrap().session().is_none());
-        for missing in [&["nope"][..], &["alpha", "nope"], &["alpha", "ship", "l-ship"], &["alpha", "ship", "nope"], &[]] {
+        for missing in [&["nope"][..], &["alpha", "nope"], &["alpha", "l-ship"], &["alpha", "ship", "f-idle"], &["alpha", "ship", "nope"], &[]] {
             assert!(row(&tree, &path(missing)).is_none(), "{missing:?}");
         }
     }
@@ -683,10 +661,10 @@ mod tests {
         let tree = sample();
         let (mut state, mut known) = (TreeState::default(), HashSet::new());
         open_new(&mut state, &mut known, &tree);
-        assert_eq!(state.opened().len(), 4, "three Contexts and the Plan with forks");
+        assert_eq!(state.opened().len(), 3, "the three Contexts");
         state.close(&path(&["alpha"]));
         open_new(&mut state, &mut known, &tree);
-        assert_eq!(state.opened().len(), 3);
+        assert_eq!(state.opened().len(), 2);
     }
 
     #[test]
@@ -694,7 +672,7 @@ mod tests {
         let mut tree = sample();
         let mut state = state_for(&tree, &[], &["alpha", "sketch"]);
         let before = selected_index(&state, &tree);
-        assert_eq!(before, Some(3));
+        assert_eq!(before, Some(1));
         tree.contexts[0].plans.remove(1);
         reselect(&mut state, &tree, before);
         assert_eq!(state.selected(), path(&["alpha", "old"]));

@@ -243,7 +243,7 @@ mod tests {
         press(&mut view, KeyCode::Down);
         assert_eq!(view.state.selected(), ["alpha", "ship"], "the first arrow only shows the cursor");
         press(&mut view, KeyCode::Char('j'));
-        assert_eq!(view.state.selected(), ["alpha", "ship", "f-idle"]);
+        assert_eq!(view.state.selected(), ["alpha", "sketch"]);
         press(&mut view, KeyCode::Char('k'));
         assert_eq!(view.state.selected(), ["alpha", "ship"]);
         press(&mut view, KeyCode::Up);
@@ -278,7 +278,7 @@ mod tests {
     #[test]
     fn enter_opens_the_lead_of_a_plan_row_and_a_fork() {
         assert_eq!(press(&mut on(&["alpha", "ship"]), KeyCode::Enter), Effect::Run(Action::Open(sid("l-ship"))));
-        assert_eq!(press(&mut on(&["alpha", "ship", "f-blocked"]), KeyCode::Enter), Effect::Run(Action::Open(sid("f-blocked"))));
+        assert_eq!(press(&mut on(&["alpha", "f-blocked"]), KeyCode::Enter), Effect::Run(Action::Open(sid("f-blocked"))));
     }
 
     #[test]
@@ -297,7 +297,7 @@ mod tests {
             })
         );
         assert!(view.prompt.is_none());
-        let mut view = on(&["alpha", "ship", "f-idle"]);
+        let mut view = on(&["alpha", "f-idle"]);
         press(&mut view, KeyCode::Char('n'));
         assert_eq!(view.footer(), "Fork ship fork into a new Plan, name: █ (Enter starts, Esc cancels)");
     }
@@ -321,7 +321,7 @@ mod tests {
         tree.contexts[0].plans[0].sessions[1].state = State::Working;
         let mut view = View::new(tree, true);
         press(&mut view, KeyCode::Down);
-        view.state.select(vec!["alpha".into(), "ship".into(), "f-idle".into()]);
+        view.state.select(vec!["alpha".into(), "f-idle".into()]);
         press(&mut view, KeyCode::Char('x'));
         assert_eq!(view.footer(), "ship fork is working. Close ship fork? pi stops; the session file stays (y/N)");
     }
@@ -398,7 +398,7 @@ mod tests {
         click(&mut view, 5, 0);
         drawn(&mut view, 44, 10);
         assert_eq!(click(&mut view, 8, 1), Effect::Run(Action::Open(sid("l-ship"))), "the Plan row");
-        assert_eq!(click(&mut view, 8, 3), Effect::Run(Action::Open(sid("f-blocked"))), "a fork row");
+        assert_eq!(click(&mut view, 8, 5), Effect::Run(Action::Open(sid("f-blocked"))), "a fork row");
         assert_eq!(click(&mut view, 8, 9), Effect::None, "below the tree");
         assert_eq!(view.state.selected(), ["alpha", "sketch"], "no click moved the cursor");
     }

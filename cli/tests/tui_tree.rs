@@ -267,15 +267,15 @@ fn the_tree_of_a_prepared_store() {
         [
             "● alpha".to_owned(),
             row("⏵ ├ ○ ship lead", "1⋅1⋅0⋅1⋅2"),
-            "  │ ├ ○ ship fork".to_owned(),
-            "  │ └ ● ship review".to_owned(),
-            row("  └ ○ sketch", "2⋅0⋅0⋅0⋅0"),
+            row("  ├ ○ sketch", "2⋅0⋅0⋅0⋅0"),
+            "  ├ ○ ship fork".to_owned(),
+            "  └ ● ship review".to_owned(),
             "● beta".to_owned(),
             row("  ├ ● rel lead", "0⋅0⋅0⋅0⋅1"),
             row("  └ ○ old lead", "0⋅0⋅0⋅0⋅0"),
             "○ gamma".to_owned(),
         ],
-        "the grounded Lead g-alpha is no row; the Jobs: queued, running, merging, failed, merged; no state text"
+        "the forks are siblings of the Plans, after them, under their Context (B1); the grounded Lead g-alpha is no row; the Jobs: queued, running, merging, failed, merged; no state text"
     );
 }
 
@@ -304,10 +304,10 @@ fn enter_opens_the_lead_of_a_plan_and_a_fork_with_session_open() {
     fake_cpd(&env, r#"{"ok":true,"session":"x","pane":"%1","displaced":null}"#);
     let pane = Pane::start(&env, 46, 14);
     pane.ready();
-    pane.down(2); // the cursor appears on ship (Context rows are not selectable), then f-idle
+    pane.down(3); // the cursor appears on ship (Context rows are not selectable), then sketch, then f-idle
     pane.keys(&["Enter"]);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "f-idle"])]);
-    pane.keys(&["k", "Enter"]);
+    pane.keys(&["k", "k", "Enter"]);
     assert_eq!(wait_for_calls(&env, 2)[1], words(&["session", "open", "l-ship"]));
 }
 
@@ -331,7 +331,7 @@ fn no_key_but_the_references_does_anything() {
     fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 46, 14);
     let before = pane.ready();
-    pane.down(4); // on sketch
+    pane.down(2); // on sketch
     pane.keys(&["q", "f", "r", "p", "Space", "G", "Escape"]);
     std::thread::sleep(Duration::from_millis(500));
     assert!(!pane.dead(), "q does not end the view");
@@ -346,7 +346,7 @@ fn n_starts_a_plan_named_in_the_prompt_with_plan_new() {
     fake_cpd(&env, r#"{"ok":true,"plan":{"id":"pay-4521"}}"#);
     let pane = Pane::start(&env, 80, 14);
     pane.ready();
-    pane.down(4); // ship, f-idle, f-blocked, sketch
+    pane.down(2); // ship, sketch
     pane.keys(&["n"]);
     pane.wait("the prompt", |_| pane.footer_has("Fork sketch into a new Plan, name: █ (Enter starts, Esc cancels)"));
     pane.keys(&["Enter"]);
@@ -368,7 +368,7 @@ fn x_closes_a_session_after_y_with_session_close() {
     fake_cpd(&env, r#"{"ok":true,"session":"l-sketch","pane":"%4"}"#);
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
-    pane.down(4); // sketch
+    pane.down(2); // sketch
     pane.keys(&["x"]);
     pane.wait("the prompt", |_| pane.footer_has("Close sketch? pi stops; the session file stays (y/N)"));
     pane.keys(&["n"]);
@@ -400,7 +400,7 @@ fn x_refuses_a_session_that_moved_to_the_chat_slot_while_the_prompt_was_open() {
     env.fake("cpd", r#"echo '{"ok":false,"error":{"code":"in_chat_slot","message":"In the chat slot.","details":{}}}'; exit 3"#);
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
-    pane.down(4); // sketch
+    pane.down(2); // sketch
     pane.keys(&["x"]);
     pane.wait("the prompt", |_| pane.footer_has("Close sketch?"));
     pane.keys(&["y"]);
@@ -446,9 +446,9 @@ fn the_tree_follows_the_events_of_the_store() {
     // session-renamed
     let run = env.cpd(&["session", "rename", "--session", "l-sketch", "--", "sketch renamed"]);
     run.ok();
-    pane.wait("the new name", |s| s.iter().any(|r| r.contains("└ ○ sketch renamed")));
+    pane.wait("the new name", |s| s.iter().any(|r| r.contains("├ ○ sketch renamed")));
     // session-state
     env.cpd(&["session", "state", "blocked", "--label", "cpd: Ask", "--session", "l-sketch"]).ok();
-    let screen = pane.wait("the new state", |s| s.iter().any(|r| r.contains("└ ● sketch renamed")));
+    let screen = pane.wait("the new state", |s| s.iter().any(|r| r.contains("├ ● sketch renamed")));
     assert!(screen.iter().any(|r| r.starts_with("● alpha")));
 }

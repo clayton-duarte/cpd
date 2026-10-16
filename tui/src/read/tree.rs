@@ -1,5 +1,7 @@
 //! The `tree` view's snapshot (commands.md §17): Contexts → Plans → Lead
 //! Sessions, each with its state, label and name (`context list`, `session list`).
+//! A Plan keeps its side forks in `sessions` (its Events and `CPD_PLAN` are the Plan's), but the tree draws them
+//! under the Context ([`ContextNode::forks`], B1).
 
 use std::collections::BTreeMap;
 
@@ -52,6 +54,16 @@ impl PlanNode {
 }
 
 impl ContextNode {
+    /// The Sessions forked by `session fork` (B1, contract §6.8), each with the Plan it belongs to, oldest first
+    /// (ties by Plan, then by the order in the Plan). The tree draws them directly under the Context, after the
+    /// Plans, whatever their Plan or source.
+    pub fn forks(&self) -> Vec<(&PlanNode, &SessionNode)> {
+        let mut forks: Vec<(&PlanNode, &SessionNode)> =
+            self.plans.iter().flat_map(|p| p.sessions.iter().filter(|s| !s.plan_lead).map(move |s| (p, s))).collect();
+        forks.sort_by(|a, b| a.1.created_at.cmp(&b.1.created_at)); // stable
+        forks
+    }
+
     pub fn needs_you(&self) -> bool {
         self.plans.iter().any(PlanNode::needs_you)
     }

@@ -332,6 +332,9 @@ fn the_tree_is_contexts_then_plans_then_lead_sessions_with_their_states() {
         "the Lead first, then the side fork; the Workers and the grounded Lead are not in the tree's Plans"
     );
     assert!(ship.sessions[0].is_active() && !ship.sessions[1].is_active());
+    let forks: Vec<(&str, &str)> = alpha.forks().iter().map(|(p, s)| (p.head.id.as_str(), s.id.as_str())).collect();
+    assert_eq!(forks, [("ship", "f-ship")], "a side fork of a Plan's Lead is a fork of the Context, listed after its Plans (B1)");
+    assert!(beta.forks().is_empty() && gamma.forks().is_empty(), "a Lead is no fork");
     assert_eq!(ship.lead().unwrap().id.as_str(), "l-ship");
     assert_eq!(ship.sessions[0].name, "name of l-ship");
 
@@ -391,6 +394,12 @@ fn a_session_needs_you_when_blocked_or_idle_with_a_turn_the_user_has_not_seen() 
         "by id: idle again after being seen; blocked; idle with no turn; idle and seen; in the slot; idle and unseen; working"
     );
     assert!(sketch.needs_you() && tree.contexts[0].needs_you());
+    let forks: Vec<&str> = tree.contexts[0].forks().iter().map(|(_, s)| s.id.as_str()).collect();
+    assert_eq!(
+        forks,
+        ["f-ship", "x-again", "x-blocked", "x-quiet", "x-seen", "x-slot", "x-unseen", "x-working"],
+        "forks of every Plan, oldest first, Plans' Leads never"
+    );
 }
 
 #[test]
