@@ -5,11 +5,13 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 
 use super::spec::{self, Spec};
-use super::{AddArgs, Env, check_needs, plan_phase, sorted_needs};
+use super::{AddArgs, Env, check_needs_available, check_needs_known, check_needs_same_pr, check_pr_live, plan_phase, sorted_needs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
 use crate::ids::{JobKey, PlanId};
 use crate::output::Output;
+use crate::args::PrArg;
+use crate::plan::fingerprint::load_prs;
 use crate::plan::jobs::{self, Job};
 use crate::plan::locked_fingerprint;
 
@@ -18,6 +20,7 @@ const COMMAND: &str = "job add";
 /// What `job add` was asked for, parsed.
 struct Wanted {
     key: JobKey,
+    pr: PrArg,
     title: String,
     tier: String,
     spec: Spec,
@@ -36,7 +39,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let spec = spec::read(&args.spec)?;
     let mut env = Env::open()?;
     env.check_tier(args.tier)?;
-    let wanted = Wanted { key: args.key, title: args.title.as_str().to_owned(), tier: args.tier.to_string(), spec, needs };
+    let wanted = Wanted { key: args.key, pr: args.pr, title: args.title.as_str().to_owned(), tier: args.tier.to_string(), spec, needs };
 
     let decision = env.store.read(|conn| decide(conn, &plan, &wanted))?;
     let (job, already) = match decision {
@@ -51,7 +54,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                     NewEvent::new(
                         Kind::JobAdded,
                         text,
-                        json!({"status": job.status, "appended": job.appended, "tier": job.tier, "needs": job.needs}),
+                        json!({"pr": job.pr, "status": job.status, "appended": job.appended, "tier": job.tier, "needs": job.needs}),
                     )
                     .plan(plan.clone())
                     .job(wanted.key.clone()),
@@ -60,7 +63,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
             }
         })?,
     };
-    let mut out = json!({"job": {"key": job.key, "status": job.status, "appended": job.appended, "tier": job.tier, "needs": job.needs}});
+    let mut out = json!({"job": {"key": job.key, "pr": job.pr, "status": job.status, "appended": job.appended, "tier": job.tier, "needs": job.needs}});
     if already {
         out["already"] = json!(true);
     }
@@ -77,12 +80,15 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
         .with("plan", plan.as_str())
         .with("phase", phase));
     }
+    let prs = load_prs(conn, plan)?;
+    let pr = wanted.pr.select(plan, &prs)?.key.clone();
+    check_pr_live(&prs, plan, &pr)?;
     let all = jobs::load(conn, plan)?;
     let appended = phase != "plan";
     let mut job = Job {
         seq: 0,
         key: wanted.key.as_str().to_owned(),
-        pr: String::new(), // `insert` takes the Plan's one PR; `--pr` is Job `r34-job-pr`'s
+        pr,
         title: wanted.title.clone(),
         tier: wanted.tier.clone(),
         goal: wanted.spec.goal.clone(),
@@ -112,27 +118,27 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
         .with("plan", plan.as_str())
         .with("job", job.key.as_str()));
     }
-    check_needs(&all, plan, &wanted.needs)?;
+    check_needs_known(&all, plan, &wanted.needs)?;
+    check_needs_same_pr(&all, plan, &job.pr, &wanted.needs)?;
+    check_needs_available(&all, plan, &wanted.needs)?;
     if appended {
         job.fingerprint = Some(locked_fingerprint(&job));
     }
     Ok(Decision::Insert(job))
 }
 
-/// The Locked fields (§2.2: the Spec, `title`, `tier`) and the needs.
+/// The Locked fields (§2.2: the Spec, `title`, `tier`, `pr`) and the needs.
 fn same_locked_fields(a: &Job, b: &Job) -> bool {
-    (&a.title, &a.tier, &a.goal, &a.context, &a.touches, &a.acceptance, &a.out_of_scope, &a.needs)
-        == (&b.title, &b.tier, &b.goal, &b.context, &b.touches, &b.acceptance, &b.out_of_scope, &b.needs)
+    (&a.pr, &a.title, &a.tier, &a.goal, &a.context, &a.touches, &a.acceptance, &a.out_of_scope, &a.needs)
+        == (&b.pr, &b.title, &b.tier, &b.goal, &b.context, &b.touches, &b.acceptance, &b.out_of_scope, &b.needs)
 }
 
-/// The Job's PR is the Plan's one PR (R34 A7; `--pr` is Job `r34-job-pr`'s).
 fn insert(tx: &Connection, plan: &PlanId, job: &Job) -> Result<(), CpdError> {
     let array = |v: &Value| v.to_string();
     tx.execute(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                            status, appended, fingerprint, created_txn, created_at)
-         VALUES (?1, (SELECT key FROM prs WHERE plan = ?1 ORDER BY created_txn, key LIMIT 1),
-                 ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, cpd_txn(),
+         VALUES (?1, ?13, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, cpd_txn(),
                  (SELECT at FROM txns WHERE id = cpd_txn()))",
         rusqlite::params![
             plan.as_str(),
@@ -147,6 +153,7 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job) -> Result<(), CpdError> {
             job.status,
             job.appended,
             job.fingerprint,
+            job.pr,
         ],
     )?;
     for need in &job.needs {

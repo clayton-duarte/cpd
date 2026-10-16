@@ -25,13 +25,14 @@ use std::path::PathBuf;
 use clap::builder::PossibleValuesParser;
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::args::{PlanArg, Text};
+use crate::args::{PlanArg, PrArg, Text};
 use crate::config::{self, Config, Tier};
 use crate::driver;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::ids::{JobKey, PlanId};
+use crate::ids::{JobKey, PlanId, PrKey};
 use crate::output::Output;
+use crate::plan::fingerprint::PrSpec;
 use crate::plan::jobs::{Job, STATUSES};
 use crate::store::Store;
 
@@ -71,6 +72,8 @@ pub struct AddArgs {
     #[arg(long, value_name = "k1,k2", value_delimiter = ',')]
     needs: Vec<JobKey>,
     #[command(flatten)]
+    pr: PrArg,
+    #[command(flatten)]
     plan: PlanArg,
 }
 
@@ -94,6 +97,9 @@ pub struct EditArgs {
     /// Remove every Dependency
     #[arg(long = "no-needs")]
     no_needs: bool,
+    /// Move the Job to this PR (it keeps no old Dependency)
+    #[arg(long = "pr", value_name = "key")]
+    pr: Option<PrKey>,
     #[command(flatten)]
     plan: PlanArg,
 }
@@ -205,15 +211,19 @@ fn sorted_needs(needs: &[JobKey]) -> Result<Vec<String>, CpdError> {
     Ok(keys)
 }
 
-/// Every key of `needs` is a Job of the Plan (`needs_unknown`) and none is
-/// `cancelled` or `failed` (`needs_unavailable`) (§5.1).
-fn check_needs(jobs: &[Job], plan: &PlanId, needs: &[String]) -> Result<(), CpdError> {
+/// Every key of `needs` is a Job of the Plan (`needs_unknown`) (§5.1).
+fn check_needs_known(jobs: &[Job], plan: &PlanId, needs: &[String]) -> Result<(), CpdError> {
     let unknown: Vec<&String> = needs.iter().filter(|n| !jobs.iter().any(|j| j.key == **n)).collect();
     if !unknown.is_empty() {
         return Err(CpdError::new(ErrorCode::NeedsUnknown, format!("Plan {plan} has no Job {}.", join(&unknown)))
             .with("plan", plan.as_str())
             .with("needs", serde_json::json!(unknown)));
     }
+    Ok(())
+}
+
+/// No key of `needs` is a `cancelled` or `failed` Job (`needs_unavailable`) (§5.1).
+fn check_needs_available(jobs: &[Job], plan: &PlanId, needs: &[String]) -> Result<(), CpdError> {
     let unavailable: Vec<serde_json::Value> = jobs
         .iter()
         .filter(|j| needs.contains(&j.key) && matches!(j.status.as_str(), "cancelled" | "failed"))
@@ -225,6 +235,35 @@ fn check_needs(jobs: &[Job], plan: &PlanId, needs: &[String]) -> Result<(), CpdE
             .with("needs", unavailable));
     }
     Ok(())
+}
+
+/// Every Job of `needs` is in PR `pr` (`needs_other_pr`; `details.jobs` lists the others) (A7).
+fn check_needs_same_pr(jobs: &[Job], plan: &PlanId, pr: &str, needs: &[String]) -> Result<(), CpdError> {
+    let others: Vec<&str> = jobs.iter().filter(|j| needs.contains(&j.key) && j.pr != pr).map(|j| j.key.as_str()).collect();
+    if !others.is_empty() {
+        return Err(CpdError::new(
+            ErrorCode::NeedsOtherPr,
+            format!("A Dependency can only link Jobs of the same PR: {} {} not in PR {pr}.", others.join(", "), if others.len() == 1 { "is" } else { "are" }),
+        )
+        .with("plan", plan.as_str())
+        .with("pr", pr)
+        .with("jobs", others));
+    }
+    Ok(())
+}
+
+/// The PR `pr` of the Plan is not `merged` or `cancelled` (`pr_ended`) (§3.2).
+fn check_pr_live(prs: &[PrSpec], plan: &PlanId, pr: &str) -> Result<(), CpdError> {
+    match prs.iter().find(|p| p.key == pr) {
+        Some(p) if matches!(p.status.as_str(), "merged" | "cancelled") => Err(CpdError::new(
+            ErrorCode::PrEnded,
+            format!("PR {pr} of Plan {plan} is {}: Jobs are not added to or moved into it.", p.status),
+        )
+        .with("plan", plan.as_str())
+        .with("pr", pr)
+        .with("status", p.status.as_str())),
+        _ => Ok(()),
+    }
 }
 
 fn join(keys: &[&String]) -> String {

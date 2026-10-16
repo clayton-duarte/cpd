@@ -220,9 +220,9 @@ fn add_in_phase_plan_writes_a_draft_job_its_needs_and_an_event() {
     setup(&env);
     plan(&env, "pl", "plan");
     let out = job_add(&env, "pl", "a", "S2", &[]).ok();
-    assert_eq!(out["job"], json!({"key": "a", "status": "draft", "appended": false, "tier": "S2", "needs": []}));
+    assert_eq!(out["job"], json!({"key": "a", "pr": "repo", "status": "draft", "appended": false, "tier": "S2", "needs": []}));
     let out = job_add(&env, "pl", "b", "O3", &["a"]).ok();
-    assert_eq!(out["job"], json!({"key": "b", "status": "draft", "appended": false, "tier": "O3", "needs": ["a"]}));
+    assert_eq!(out["job"], json!({"key": "b", "pr": "repo", "status": "draft", "appended": false, "tier": "O3", "needs": ["a"]}));
     assert!(out.get("already").is_none());
 
     assert_eq!(job_row(&env, "pl", "b", "title"), "Title of b");
@@ -242,7 +242,7 @@ fn add_in_phase_plan_writes_a_draft_job_its_needs_and_an_event() {
     assert_eq!(added[1]["job"], "b");
     assert_eq!(added[1]["plan"], "pl");
     assert_eq!(added[1]["context"], "ctx");
-    assert_eq!(added[1]["data"], json!({"status": "draft", "appended": false, "tier": "O3", "needs": ["a"]}));
+    assert_eq!(added[1]["data"], json!({"pr": "repo", "status": "draft", "appended": false, "tier": "O3", "needs": ["a"]}));
     assert_eq!(query::<i64>(&env, "SELECT count(*) FROM history WHERE tbl = 'jobs' AND op = 'insert'"), 2);
 }
 
@@ -262,7 +262,7 @@ fn add_in_phase_dispatch_or_pr_appends_a_queued_job_with_its_fingerprint() {
             );
         }
         let out = job_add(&env, "pl", "late", "H1", &["a"]).ok();
-        assert_eq!(out["job"], json!({"key": "late", "status": "queued", "appended": true, "tier": "H1", "needs": ["a"]}), "{phase}");
+        assert_eq!(out["job"], json!({"key": "late", "pr": "repo", "status": "queued", "appended": true, "tier": "H1", "needs": ["a"]}), "{phase}");
         assert_eq!(job_row(&env, "pl", "late", "appended"), 1);
         let id = PlanId::parse("pl").unwrap();
         let all = store(&env).read(|conn| jobs::load(conn, &id)).unwrap();
@@ -755,4 +755,217 @@ fn show_has_every_field_the_needs_and_the_attempts_with_their_escalations() {
     refused(&job(&env, &["show", "b"], "nope"), "plan_not_found", 4);
     refused(&env.cpd(&["job", "show", "b"]), "plan_required", 2);
     refused(&env.cpd(&["job", "show", "B", "--plan", "pl"]), "invalid_job_id", 2);
+}
+
+// ---------- --pr (R34, commands.md §1.3, §5.1, §5.2) ----------
+
+/// Adds PR `key` to Plan `plan_id` in `status`, walking the statuses the way the engine would.
+fn add_pr(env: &TestEnv, plan_id: &str, key: &str, status: &str) {
+    const STEPS: [(&str, &str); 3] = [
+        ("dispatch", ", lead_worktree = '/wt', started_at = 't'"),
+        ("open", ", pr_number = 1, pr_url = 'u', pr_opened_at = 't'"),
+        ("merged", ", merged_at = 't'"),
+    ];
+    let mut sql = format!(
+        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         VALUES ('{plan_id}', '{key}', '/{key}', 'main', 'waiting', 'cpd/{plan_id}/{key}', cpd_txn(), 't');"
+    );
+    match status {
+        "waiting" => {}
+        "cancelled" => sql += &format!("UPDATE prs SET status = 'cancelled' WHERE plan = '{plan_id}' AND key = '{key}';"),
+        _ => {
+            let last = STEPS.iter().position(|(s, _)| *s == status).unwrap_or_else(|| panic!("{status}"));
+            for (step, set) in &STEPS[..=last] {
+                sql += &format!("UPDATE prs SET status = '{step}'{set} WHERE plan = '{plan_id}' AND key = '{key}';");
+            }
+        }
+    }
+    fixture(env, &sql);
+}
+
+fn job_add_in(env: &TestEnv, plan_id: &str, key: &str, pr: Option<&str>, needs: &[&str]) -> Run {
+    let spec = spec_file(env);
+    let title = format!("Title of {key}");
+    let needs = needs.join(",");
+    let mut args = vec!["job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--plan", plan_id];
+    if let Some(pr) = pr {
+        args.extend(["--pr", pr]);
+    }
+    if !needs.is_empty() {
+        args.extend(["--needs", &needs]);
+    }
+    env.cpd(&args)
+}
+
+/// Plan `pl` in phase `plan` with PRs `repo` (the fixture's) and `web`, and a draft Job `a` in `repo`.
+fn two_prs(env: &TestEnv) {
+    setup(env);
+    plan(env, "pl", "plan");
+    add_pr(env, "pl", "web", "waiting");
+    job_add_in(env, "pl", "a", Some("repo"), &[]).ok();
+}
+
+#[test]
+fn add_defaults_to_the_one_pr_and_names_the_pr_it_was_given() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    // One PR: `--pr` may be omitted or given.
+    assert_eq!(job_add_in(&env, "pl", "a", None, &[]).ok()["job"]["pr"], "repo");
+    assert_eq!(job_add_in(&env, "pl", "b", Some("repo"), &["a"]).ok()["job"]["pr"], "repo");
+    // A cancelled PR does not count: the one that is not cancelled is the default.
+    add_pr(&env, "pl", "old", "cancelled");
+    assert_eq!(job_add_in(&env, "pl", "c", None, &[]).ok()["job"]["pr"], "repo");
+
+    add_pr(&env, "pl", "web", "waiting");
+    let out = job_add_in(&env, "pl", "w", Some("web"), &[]).ok();
+    assert_eq!(out["job"]["pr"], "web");
+    assert_eq!(job_row(&env, "pl", "w", "pr"), "web");
+    assert_eq!(job_row(&env, "pl", "a", "pr"), "repo");
+    assert_eq!(events(&env, "job-added").last().unwrap()["data"]["pr"], "web");
+
+    // Rerun: the same PR is `already`, another PR is `job_key_exists`.
+    let (txns, evs) = (count(&env, "txns"), count(&env, "events"));
+    assert_eq!(job_add_in(&env, "pl", "w", Some("web"), &[]).ok()["already"], true);
+    refused(&job_add_in(&env, "pl", "w", Some("repo"), &[]), "job_key_exists", 3);
+    assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs));
+}
+
+#[test]
+fn add_refuses_a_missing_unknown_or_ended_pr_and_writes_nothing() {
+    let env = TestEnv::new();
+    two_prs(&env);
+    add_pr(&env, "pl", "gone", "cancelled");
+    let (txns, evs, rows) = (count(&env, "txns"), count(&env, "events"), count(&env, "jobs"));
+
+    // Two PRs that are not cancelled: `--pr` is required.
+    let e = refused(&job_add_in(&env, "pl", "k", None, &[]), "pr_required", 2);
+    assert_eq!(e["details"]["prs"], json!(["repo", "web"]));
+    let e = refused(&job_add_in(&env, "pl", "k", Some("nope"), &[]), "pr_not_found", 4);
+    assert_eq!(e["details"]["pr"], "nope");
+    let e = refused(&job_add_in(&env, "pl", "k", Some("gone"), &[]), "pr_ended", 3);
+    assert_eq!(e["details"]["status"], "cancelled");
+    refused(&job_add_in(&env, "pl", "k", Some("Web"), &[]), "invalid_pr_id", 2);
+    assert_eq!((count(&env, "txns"), count(&env, "events"), count(&env, "jobs")), (txns, evs, rows));
+
+    // No PR that is not cancelled: `pr_required` too, and its message names `cpd pr add`.
+    fixture(&env, "UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE plan = 'pl';
+                   UPDATE prs SET status = 'cancelled' WHERE plan = 'pl';");
+    let e = refused(&job_add_in(&env, "pl", "k", None, &[]), "pr_required", 2);
+    assert!(e["message"].as_str().unwrap().contains("cpd pr add"), "{e}");
+}
+
+#[test]
+fn add_into_a_merged_pr_is_refused_and_into_a_waiting_pr_is_appended() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    add_pr(&env, "pl", "web", "waiting");
+    job_add_in(&env, "pl", "a", Some("repo"), &[]).ok();
+    lock(&env, "pl");
+    // `lock` starts every PR; put `web` back as the engine would find a PR waiting on `repo`.
+    fixture(&env, "UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'u', pr_opened_at = 't' WHERE plan = 'pl' AND key = 'repo';
+                   UPDATE prs SET status = 'open', pr_number = 2, pr_url = 'u', pr_opened_at = 't' WHERE plan = 'pl' AND key = 'web';
+                   UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pl' AND key = 'repo';");
+    let e = refused(&job_add_in(&env, "pl", "k", Some("repo"), &[]), "pr_ended", 3);
+    assert_eq!(e["details"]["status"], "merged");
+    let out = job_add_in(&env, "pl", "k", Some("web"), &[]).ok();
+    assert_eq!(out["job"]["pr"], "web");
+    assert_eq!(out["job"]["status"], "queued");
+    assert_eq!(out["job"]["appended"], true);
+}
+
+#[test]
+fn add_needs_must_be_jobs_of_the_same_pr() {
+    let env = TestEnv::new();
+    two_prs(&env);
+    job_add_in(&env, "pl", "w", Some("web"), &[]).ok();
+    job_add_in(&env, "pl", "a2", Some("repo"), &["a"]).ok();
+    let (txns, evs, rows) = (count(&env, "txns"), count(&env, "events"), count(&env, "jobs"));
+
+    let e = refused(&job_add_in(&env, "pl", "k", Some("web"), &["w", "a"]), "needs_other_pr", 3);
+    assert_eq!(e["details"]["jobs"], json!(["a"]));
+    let e = refused(&job_add_in(&env, "pl", "k", Some("repo"), &["w", "a", "a2"]), "needs_other_pr", 3);
+    assert_eq!(e["details"]["jobs"], json!(["w"]));
+    // An unknown need is reported first.
+    refused(&job_add_in(&env, "pl", "k", Some("web"), &["a", "ghost"]), "needs_unknown", 3);
+    assert_eq!((count(&env, "txns"), count(&env, "events"), count(&env, "jobs")), (txns, evs, rows));
+    job_add_in(&env, "pl", "w2", Some("web"), &["w"]).ok();
+}
+
+#[test]
+fn edit_moves_a_draft_job_to_another_pr() {
+    let env = TestEnv::new();
+    two_prs(&env);
+    job_add_in(&env, "pl", "w", Some("web"), &[]).ok();
+    job_add_in(&env, "pl", "b", Some("repo"), &[]).ok();
+
+    let out = job(&env, &["edit", "b", "--pr", "web", "--needs", "w"], "pl").ok();
+    assert_eq!(out["fields"], json!(["pr", "needs"]));
+    assert_eq!(job_row(&env, "pl", "b", "pr"), "web");
+    assert_eq!(query::<String>(&env, "SELECT needs FROM dependencies WHERE job = 'b'"), "w");
+    assert_eq!(events(&env, "job-edited").last().unwrap()["data"], json!({"fields": ["pr", "needs"]}));
+
+    // A Job with old needs may move with `--no-needs`.
+    let out = job(&env, &["edit", "b", "--pr", "repo", "--no-needs"], "pl").ok();
+    assert_eq!(out["fields"], json!(["pr", "needs"]));
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM dependencies"), 0);
+    // A Job with no needs and no dependents moves alone.
+    let out = job(&env, &["edit", "b", "--pr", "web"], "pl").ok();
+    assert_eq!(out["fields"], json!(["pr"]));
+    assert_eq!(job_row(&env, "pl", "b", "pr"), "web");
+
+    // The PR it is already in changes nothing, whatever its needs.
+    job(&env, &["edit", "b", "--needs", "w"], "pl").ok();
+    let (txns, evs) = (count(&env, "txns"), count(&env, "events"));
+    let out = job(&env, &["edit", "b", "--pr", "web"], "pl").ok();
+    assert_eq!(out["already"], true);
+    assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs));
+}
+
+#[test]
+fn edit_pr_refusals_write_nothing() {
+    let env = TestEnv::new();
+    two_prs(&env);
+    add_pr(&env, "pl", "gone", "cancelled");
+    job_add_in(&env, "pl", "w", Some("web"), &[]).ok();
+    job_add_in(&env, "pl", "b", Some("repo"), &["a"]).ok();
+    job_add_in(&env, "pl", "c", Some("repo"), &[]).ok();
+    job(&env, &["cancel", "c", "--reason", "No."], "pl").ok();
+    let (txns, evs) = (count(&env, "txns"), count(&env, "events"));
+
+    let e = refused(&job(&env, &["edit", "a", "--pr", "nope"], "pl"), "pr_not_found", 4);
+    assert_eq!(e["details"]["pr"], "nope");
+    let e = refused(&job(&env, &["edit", "a", "--pr", "gone"], "pl"), "pr_ended", 3);
+    assert_eq!(e["details"]["status"], "cancelled");
+    refused(&job(&env, &["edit", "a", "--pr", "Web"], "pl"), "invalid_pr_id", 2);
+    refused(&job(&env, &["edit", "a", "--pr", "web", "--needs", "ghost"], "pl"), "needs_unknown", 3);
+    refused(&job(&env, &["edit", "a", "--pr", "web", "--needs", "c"], "pl"), "needs_unavailable", 3);
+    // The Job keeps no old needs: `b` needs `a`.
+    let e = refused(&job(&env, &["edit", "b", "--pr", "web"], "pl"), "needs_other_pr", 3);
+    assert_eq!(e["details"]["jobs"], json!(["a"]));
+    // No Job may need it: `b` needs `a`.
+    let e = refused(&job(&env, &["edit", "a", "--pr", "web"], "pl"), "needs_other_pr", 3);
+    assert_eq!(e["details"]["jobs"], json!(["b"]));
+    let e = refused(&job(&env, &["edit", "a", "--pr", "web", "--no-needs"], "pl"), "needs_other_pr", 3);
+    assert_eq!(e["details"]["jobs"], json!(["b"]));
+    // The new needs are Jobs of the new PR.
+    job_add_in(&env, "pl", "w2", Some("web"), &[]).ok();
+    let (txns, evs) = (count(&env, "txns"), count(&env, "events"));
+    let e = refused(&job(&env, &["edit", "w", "--pr", "repo", "--needs", "w2", "--tier", "S3"], "pl"), "needs_other_pr", 3);
+    assert_eq!(e["details"]["jobs"], json!(["w2"]));
+    // Without `--pr` the needs are those of the Job's own PR.
+    let e = refused(&job(&env, &["edit", "w", "--needs", "a"], "pl"), "needs_other_pr", 3);
+    assert_eq!(e["details"]["jobs"], json!(["a"]));
+    assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs));
+    assert_eq!(job_row(&env, "pl", "a", "pr"), "repo");
+}
+
+#[test]
+fn a_locked_job_cannot_change_pr() {
+    let env = TestEnv::new();
+    two_prs(&env);
+    lock(&env, "pl");
+    refused(&job(&env, &["edit", "a", "--pr", "web"], "pl"), "job_locked", 3);
+    assert_eq!(job_row(&env, "pl", "a", "pr"), "repo");
 }
