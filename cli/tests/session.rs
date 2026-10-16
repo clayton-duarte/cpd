@@ -843,13 +843,26 @@ fn fake_cpd_returning(env: &TestEnv) {
     );
 }
 
-/// The cockpit with `lead2`'s pi alive and every other Lead's pi exiting at once.
+/// The cockpit with `lead2`'s pi alive and every other Lead's pi alive until [`release_leads`]
+/// (a pi that exits at once would race the test's own `open`s).
 fn dying_leads(env: &TestEnv) {
     setup(env);
     fake_cpd_returning(env);
-    fake_pi(env, &format!("[ \"$CPD_SESSION\" = lead2 ] && exec sleep {SLEEP_SECONDS}\nexit 0"));
+    let release = env.home().join("release-leads");
+    fake_pi(
+        env,
+        &format!(
+            "[ \"$CPD_SESSION\" = lead2 ] && exec sleep {SLEEP_SECONDS}\nwhile [ ! -e '{}' ]; do sleep 0.1; done\nexit 0",
+            release.display()
+        ),
+    );
     cockpit(env);
     assert!(env.tmux(&["set", "-g", "remain-on-exit", "on"]).status.success());
+}
+
+/// Lets every Lead's pi but `lead2`'s exit, so its pane dies.
+fn release_leads(env: &TestEnv) {
+    fs::write(env.home().join("release-leads"), "").unwrap();
 }
 
 fn is_dead(env: &TestEnv, pane: &str) -> bool {
@@ -882,6 +895,7 @@ fn e2_kills_the_window_of_a_dead_parked_lead() {
     let lead1_pane = env.cpd(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
     env.cpd(&["session", "open", LEAD2]).ok();
     assert_eq!(window_names(&env), ["main", "park-pay"]);
+    release_leads(&env);
     wait_until("lead1's pane to die", || is_dead(&env, &lead1_pane));
 
     let _engine = engine(&env);
@@ -897,8 +911,9 @@ fn open_leaves_one_window_for_a_lead_with_a_dead_pane() {
     dying_leads(&env);
     let lead1_pane = env.cpd(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
     env.cpd(&["session", "open", LEAD2]).ok();
-    wait_until("lead1's pane to die", || is_dead(&env, &lead1_pane));
     assert_eq!(window_names(&env), ["main", "park-pay"]);
+    release_leads(&env);
+    wait_until("lead1's pane to die", || is_dead(&env, &lead1_pane));
 
     // No engine runs: `open` itself kills the dead pane before it makes a window.
     let out = env.cpd(&["session", "open", LEAD1]).ok();
@@ -915,6 +930,7 @@ fn e2_replaces_a_dead_lead_in_the_chat_slot_by_the_placeholder() {
     let env = TestEnv::new();
     dying_leads(&env);
     let lead1_pane = env.cpd(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
+    release_leads(&env);
     wait_until("lead1's pane to die", || is_dead(&env, &lead1_pane));
     assert_eq!(slot(&env).session, LEAD1);
 
@@ -934,6 +950,7 @@ fn open_replaces_a_dead_lead_in_the_chat_slot() {
     let env = TestEnv::new();
     dying_leads(&env);
     let lead1_pane = env.cpd(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
+    release_leads(&env);
     wait_until("lead1's pane to die", || is_dead(&env, &lead1_pane));
 
     // No engine runs, and the slot holds a dead pane of this very Lead: it is not "already" there.
