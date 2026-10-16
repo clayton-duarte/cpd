@@ -92,8 +92,10 @@ fn fixture_plan(env: &TestEnv, plan: &str, context: &str) {
             tx.execute_batch(&format!(
                 "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
                    VALUES ('lead-{plan}', 'lead', '{context}', '{plan}', 'Lead', '/', 'O3', 'idle', 't', 't');
-                 INSERT INTO plans (id, context, title, repo, base, lead_branch, phase, lead_session, created_at)
-                   VALUES ('{plan}', '{context}', 'The {plan} plan', '/r', 'main', 'cpd/{plan}', 'grounding', 'lead-{plan}', 't');"
+                 INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+                   VALUES ('{plan}', '{context}', 'The {plan} plan', 'grounding', 'lead-{plan}', 't');
+                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                   VALUES ('{plan}', 'r', '/r', 'main', 'waiting', 'cpd/{plan}', cpd_txn(), 't');"
             ))?;
             Ok(())
         })

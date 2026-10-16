@@ -61,8 +61,10 @@ fn fixture(files: &[(&str, &str)]) -> Fx {
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
-         INSERT INTO plans (id, context, title, repo, base, lead_branch, lead_worktree, phase, lead_session, created_at, locked_at)
-           VALUES ('pay', 'ctx', 'Pay', '{}', 'main', 'cpd/pay', '{}', 'dispatch', 'lead1', 't', 't');",
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+           VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+           VALUES ('pay', 'repo', '{}', 'main', 'dispatch', 'cpd/pay', '{}', cpd_txn(), 't', 't');",
         fx.repo.display(),
         fx.lead.display()
     ));
@@ -106,9 +108,9 @@ impl Fx {
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, created_txn, created_at)
-                     VALUES ('pay', ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't')",
+                     VALUES ('pay', 'repo', ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't')",
                     params![key, "f".repeat(64), tx.id()],
                 )?;
                 tx.execute(
@@ -546,8 +548,8 @@ fn list_refuses_what_does_not_exist() {
     refused(&fx.env.cpd(&["attempt", "list", "--plan", "nope"]), "plan_not_found", 4);
     refused(&fx.env.cpd(&["attempt", "list"]), "plan_required", 2);
     fx.sql(
-        "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-         VALUES ('pay', 'idle', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, 1, 't')",
+        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+         VALUES ('pay', 'repo', 'idle', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, 1, 't')",
     );
     assert_eq!(ids(&fx.cpd(&["list", "--job", "idle"]).ok()), Vec::<&str>::new());
 }

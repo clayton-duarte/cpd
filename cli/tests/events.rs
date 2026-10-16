@@ -66,12 +66,15 @@ fn fixture(store: &mut Store) {
                        ('lead2', 'lead', 'ctx', 'other', NULL, 'Lead', '/', 'O3', 'idle', 't', 't'),
                        ('side', 'lead', 'ctx', NULL, NULL, 'Side', '/', 'O3', 'idle', 't', 't'),
                        ('worker1', 'worker', 'ctx', 'pay', 'api-a1', 'Worker', '/', 'S2', 'working', 't', 't');
-                     INSERT INTO plans (id, context, title, repo, base, lead_branch, phase, lead_session, created_at) VALUES
-                       ('pay', 'ctx', 'Pay', '/r', 'main', 'cpd/pay', 'grounding', 'lead1', 't'),
-                       ('other', 'ctx', 'Other', '/r', 'main', 'cpd/other', 'grounding', 'lead2', 't');
-                     INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                     INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
+                       ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't'),
+                       ('other', 'ctx', 'Other', 'grounding', 'lead2', 't');
+                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES
+                       ('pay', 'r', '/r', 'main', 'waiting', 'cpd/pay', {id}, 't'),
+                       ('other', 'r', '/r', 'main', 'waiting', 'cpd/other', {id}, 't');
+                     INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, created_txn, created_at)
-                       VALUES ('pay', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, '{fp}', {id}, 't');
+                       VALUES ('pay', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, '{fp}', {id}, 't');
                      INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
                        VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pay--api-a1', '/w', 't');",
                     fp = "a".repeat(64),

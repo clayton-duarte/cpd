@@ -60,12 +60,19 @@ fn plan_row(id: &str, phase: &str, created: &str, pr: Option<(i64, Option<(&str,
         Some((t, d, c)) => (format!("'{t}'"), format!("'{d}'"), format!("'{c}'")),
         None => ("NULL".into(), "NULL".into(), "NULL".into()),
     };
+    let status = match phase {
+        "grounding" | "plan" => "waiting",
+        "dispatch" => "dispatch",
+        "pr" => "open",
+        _ => "merged",
+    };
     format!(
-        "INSERT INTO plans (id, context, title, repo, base, lead_branch, lead_worktree, phase, lead_session, pr_number,
-                            pr_url, pr_opened_at, pr_seen, pr_polled_at, pr_title, pr_review_decision, pr_checks,
-                            created_at, locked_at, done_at)
-         VALUES ('{id}', 'alpha', 'Plan {id}', '/repo', 'main', 'cpd/{id}', {worktree}, '{phase}', 'l-{id}',
-                 {number}, {url}, {opened}, {seen}, {polled_at}, {title}, {decision}, {checks}, '{created}', {locked}, {done});"
+        "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+         VALUES ('{id}', 'alpha', 'Plan {id}', '{phase}', 'l-{id}', '{created}', {locked}, {done});
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pr_seen,
+                          pr_polled_at, pr_title, pr_review_decision, pr_checks, created_txn, created_at, started_at, merged_at)
+         VALUES ('{id}', 'repo', '/repo', 'main', '{status}', 'cpd/{id}', {worktree}, {number}, {url}, {opened}, {seen},
+                 {polled_at}, {title}, {decision}, {checks}, cpd_txn(), '{created}', {locked}, {done});"
     )
 }
 

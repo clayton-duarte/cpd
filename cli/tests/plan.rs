@@ -147,9 +147,9 @@ fn add_job(env: &TestEnv, plan: &str, key: &str, needs: &[&str]) {
             exec(
                 tx,
                 &format!(
-                    "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, created_txn, created_at)
-                     VALUES ('{plan}', '{key}', 'Job {key}', 'S2', 'Goal of {key}.', 'Context of {key}.', '[\"src/{key}.rs\"]',
+                     VALUES ('{plan}', (SELECT key FROM prs WHERE plan = '{plan}'), '{key}', 'Job {key}', 'S2', 'Goal of {key}.', 'Context of {key}.', '[\"src/{key}.rs\"]',
                              '[\"cargo test\"]', '[]', 'draft', 0, {id}, 't');",
                     id = tx.id()
                 ),
@@ -241,7 +241,8 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_a_parked_window() {
     let records = env.cpd(&["context", "show", "--context", "ctx"]).ok()["records"].clone();
     let record = records.as_array().unwrap().iter().find(|r| r["kind"] == "plan").unwrap().clone();
     assert_eq!(record["text"], "Retry payouts");
-    assert_eq!(record["plan"], json!({"id": "pay", "machine": "m1", "repo": real, "jira": "PAY-1"}));
+    // Migration 3 dropped `plan_repo` from the index (R34 A12): the record read back has no `repo`.
+    assert_eq!(record["plan"], json!({"id": "pay", "machine": "m1", "jira": "PAY-1"}));
 
     // The first message: the header, the brief, then every record (a fresh Lead).
     let message = fs::read_to_string(home(&env).lead_message(&pid("pay"))).unwrap();
@@ -427,7 +428,8 @@ fn phase_refusals() {
     refused(&env.cpd(&["plan", "phase", "plan"]), "plan_required", 2);
     refused(&env.cpd(&["plan", "phase", "plan", "--plan", "nope"]), "plan_not_found", 4);
     store(&env)
-        .write("fixture", |tx| exec(tx, "UPDATE plans SET phase = 'plan' WHERE id = 'pay'; UPDATE plans SET phase = 'dispatch', lead_worktree = '/w', locked_at = 't' WHERE id = 'pay';"))
+        .write("fixture", |tx| exec(tx, "UPDATE plans SET phase = 'plan' WHERE id = 'pay'; UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';
+                 UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'pay';"))
         .unwrap();
     let error = refused(&cpd_with(&env, &[("CPD_PLAN", "pay")], &["plan", "phase", "plan"]), "illegal_transition", 3);
     assert_eq!(error["details"]["from"], "dispatch");
@@ -524,7 +526,8 @@ fn show_lists_attempts_open_escalations_and_tampered_fingerprints() {
             exec(
                 tx,
                 &format!(
-                    "UPDATE plans SET phase = 'dispatch', lead_worktree = '/w', locked_at = 't' WHERE id = 'pay';
+                    "UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';
+                     UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'pay';
                      UPDATE jobs SET status = 'queued', fingerprint = '{fingerprint}' WHERE plan = 'pay';
                      UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = 'a';
                      INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)

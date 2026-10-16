@@ -68,22 +68,26 @@ fn setup(env: &TestEnv) {
 
 /// Plan `id` in `phase`, with its Lead session, moved there one phase at a time.
 fn plan(env: &TestEnv, id: &str, phase: &str) {
-    const STEPS: [(&str, &str); 4] = [
-        ("plan", ""),
-        ("dispatch", ", lead_worktree = '/wt', locked_at = 't'"),
-        ("pr", ", pr_number = 1, pr_url = 'u', pr_opened_at = 't'"),
-        ("done", ", done_at = 't'"),
+    // (phase, what else the Plan gets, its PR's status and what else the PR gets)
+    const STEPS: [(&str, &str, &str, &str); 4] = [
+        ("plan", "", "waiting", ""),
+        ("dispatch", ", locked_at = 't'", "dispatch", ", lead_worktree = '/wt', started_at = 't'"),
+        ("pr", "", "open", ", pr_number = 1, pr_url = 'u', pr_opened_at = 't'"),
+        ("done", ", done_at = 't'", "merged", ", merged_at = 't'"),
     ];
     let mut sql = format!(
-        "INSERT INTO plans (id, context, title, repo, base, lead_branch, phase, lead_session, created_at)
-         VALUES ('{id}', 'ctx', 'Plan {id}', '/repo', 'main', 'cpd/{id}', 'grounding', 'lead-{id}', 't');
+        "INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+         VALUES ('{id}', 'ctx', 'Plan {id}', 'grounding', 'lead-{id}', 't');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+         VALUES ('{id}', 'repo', '/repo', 'main', 'waiting', 'cpd/{id}', cpd_txn(), 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
          VALUES ('lead-{id}', 'lead', 'ctx', '{id}', '{id}', '/repo', 'O3', 'stopped', 't', 't');"
     );
     if phase != "grounding" {
-        let last = STEPS.iter().position(|(p, _)| *p == phase).unwrap_or_else(|| panic!("{phase}"));
-        for (step, set) in &STEPS[..=last] {
+        let last = STEPS.iter().position(|(p, ..)| *p == phase).unwrap_or_else(|| panic!("{phase}"));
+        for (step, set, status, pr_set) in &STEPS[..=last] {
             sql += &format!("UPDATE plans SET phase = '{step}'{set} WHERE id = '{id}';");
+            sql += &format!("UPDATE prs SET status = '{status}'{pr_set} WHERE plan = '{id}';");
         }
     }
     fixture(env, &sql);
@@ -149,7 +153,10 @@ fn drafted(env: &TestEnv) {
 fn lock(env: &TestEnv, plan_id: &str) {
     let id = PlanId::parse(plan_id).unwrap();
     let all = store(env).read(|conn| jobs::load(conn, &id)).unwrap();
-    let mut sql = format!("UPDATE plans SET phase = 'dispatch', lead_worktree = '/wt', locked_at = 't' WHERE id = '{plan_id}';");
+    let mut sql = format!(
+        "UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = '{plan_id}';
+         UPDATE prs SET status = 'dispatch', lead_worktree = '/wt', started_at = 't' WHERE plan = '{plan_id}';"
+    );
     for job in all.iter().filter(|j| j.is_draft()) {
         sql += &format!(
             "UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = '{plan_id}' AND key = '{}';",
@@ -248,7 +255,11 @@ fn add_in_phase_dispatch_or_pr_appends_a_queued_job_with_its_fingerprint() {
         job_add(&env, "pl", "a", "S2", &[]).ok();
         lock(&env, "pl");
         if phase == "pr" {
-            fixture(&env, "UPDATE plans SET phase = 'pr', pr_number = 1, pr_url = 'u', pr_opened_at = 't' WHERE id = 'pl';");
+            fixture(
+                &env,
+                "UPDATE plans SET phase = 'pr' WHERE id = 'pl';
+                 UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'u', pr_opened_at = 't' WHERE plan = 'pl';",
+            );
         }
         let out = job_add(&env, "pl", "late", "H1", &["a"]).ok();
         assert_eq!(out["job"], json!({"key": "late", "status": "queued", "appended": true, "tier": "H1", "needs": ["a"]}), "{phase}");

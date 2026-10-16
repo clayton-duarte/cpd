@@ -483,14 +483,16 @@ fn locked_jobs(env: &TestEnv) {
                 "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Context', 't', 'hs');
                  INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
                    VALUES ('lead-pl', 'lead', 'ctx', 'pl', 'pl', '/repo', 'O3', 'stopped', 't', 't');
-                 INSERT INTO plans (id, context, title, repo, base, lead_branch, phase, lead_session, created_at)
-                   VALUES ('pl', 'ctx', 'Plan', '/repo', 'main', 'cpd/pl', 'plan', 'lead-pl', 't');",
+                 INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+                   VALUES ('pl', 'ctx', 'Plan', 'plan', 'lead-pl', 't');
+                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                   VALUES ('pl', 'repo', '/repo', 'main', 'waiting', 'cpd/pl', cpd_txn(), 't');",
             )?;
             for key in ["a", "b", "c"] {
                 tx.execute(
-                    "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                        created_txn, created_at)
-                     VALUES ('pl', ?1, 'T', 'S2', 'Do it.', 'Because.', '[\"x\"]', '[\"y\"]', '[]', 'draft', 0, cpd_txn(), 't')",
+                     VALUES ('pl', 'repo', ?1, 'T', 'S2', 'Do it.', 'Because.', '[\"x\"]', '[\"y\"]', '[]', 'draft', 0, cpd_txn(), 't')",
                     [key],
                 )?;
             }
@@ -636,10 +638,10 @@ fn a_sync_failing_context_is_a_warning() {
 // -------------------------------------------------------------------- watch
 
 fn plan_in_phase(env: &TestEnv, phase: &str) {
-    let (worktree, locked, pr) = match phase {
-        "grounding" | "plan" => ("NULL", "NULL", ""),
-        "dispatch" => ("'/w'", "'t'", ""),
-        "pr" => ("'/w'", "'t'", ", pr_number, pr_url, pr_opened_at"),
+    let (worktree, locked, status, pr) = match phase {
+        "grounding" | "plan" => ("NULL", "NULL", "waiting", ""),
+        "dispatch" => ("'/w'", "'t'", "dispatch", ""),
+        "pr" => ("'/w'", "'t'", "open", ", pr_number, pr_url, pr_opened_at"),
         other => panic!("{other}"),
     };
     let pr_values = if phase == "pr" { ", 1, 'u', 't'" } else { "" };
@@ -649,8 +651,10 @@ fn plan_in_phase(env: &TestEnv, phase: &str) {
                 "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'hs');
                  INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
                    VALUES ('lead1', 'lead', 'ctx', 'Lead', '/', 'O3', 'idle', 't', 't');
-                 INSERT INTO plans (id, context, title, repo, base, lead_branch, phase, lead_session, created_at, lead_worktree, locked_at{pr})
-                   VALUES ('pay', 'ctx', 'Pay', '/r', 'main', 'cpd/pay', '{phase}', 'lead1', 't', {worktree}, {locked}{pr_values});"
+                 INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+                   VALUES ('pay', 'ctx', 'Pay', '{phase}', 'lead1', 't', {locked});
+                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at{pr})
+                   VALUES ('pay', 'r', '/r', 'main', '{status}', 'cpd/pay', {worktree}, {locked}, cpd_txn(), 't'{pr_values});"
             ))?;
             Ok(())
         })

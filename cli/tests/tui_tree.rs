@@ -59,12 +59,19 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr:
     } else {
         ("NULL", "NULL", "NULL", "NULL")
     };
+    let status = match phase {
+        "grounding" | "plan" => "waiting",
+        "dispatch" => "dispatch",
+        "pr" => "open",
+        _ => "merged",
+    };
     format!(
-        "INSERT INTO plans (id, context, title, repo, base, lead_branch, lead_worktree, phase, lead_session, pr_number,
-                            pr_url, pr_opened_at, pr_seen, pr_polled_at, created_at, locked_at, done_at)
-         VALUES ('{id}', '{context}', 'Plan {id}', '/repo/{id}', 'main', 'cpd/{id}', {worktree}, '{phase}', '{lead}',
-                 {number}, {url}, {opened}, '{{\"checks\":{{}},\"reviewIds\":[],\"commentIds\":[]}}', {polled},
-                 '{created}', {locked}, {done});"
+        "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+         VALUES ('{id}', '{context}', 'Plan {id}', '{phase}', '{lead}', '{created}', {locked}, {done});
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+                          pr_polled_at, created_txn, created_at, started_at, merged_at)
+         VALUES ('{id}', 'repo', '/repo/{id}', 'main', '{status}', 'cpd/{id}', {worktree}, {number}, {url}, {opened},
+                 {polled}, cpd_txn(), '{created}', {locked}, {done});"
     )
 }
 
@@ -83,9 +90,9 @@ fn job_row(plan: &str, key: &str, status: &str) -> String {
     let merged = if status == "merged" { "'abc123'" } else { "NULL" };
     let failed = if status == "failed" { "'crashed'" } else { "NULL" };
     format!(
-        "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at)
-         VALUES ('{plan}', '{key}', 'Job {key}', 'S3', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, {fingerprint},
+         VALUES ('{plan}', 'repo', '{key}', 'Job {key}', 'S3', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, {fingerprint},
                  cpd_txn(), NULL, NULL, {failed}, {merged}, '2026-01-02T00:00:00.000Z');"
     )
 }

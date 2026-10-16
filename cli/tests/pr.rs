@@ -95,36 +95,36 @@ fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
     if phase == "pr" {
         fx.git(&fx.lead, &["push", "-q", "-u", "origin", "cpd/pay"]);
     }
-    let (worktree, columns, values) = match phase {
-        "plan" => ("NULL".to_owned(), "", ""),
-        "dispatch" => (format!("'{}'", fx.lead.display()), ", locked_at", ", 't'"),
-        "pr" => (
-            format!("'{}'", fx.lead.display()),
-            ", locked_at, pr_number, pr_url, pr_opened_at",
-            &format!(", 't', 812, '{URL}', 'opened'")[..],
-        ),
-        "done" => (
-            format!("'{}'", fx.lead.display()),
-            ", locked_at, pr_number, pr_url, pr_opened_at, done_at",
-            &format!(", 't', 812, '{URL}', 'opened', 'finished'")[..],
-        ),
+    let lead = format!("'{}'", fx.lead.display());
+    let (locked, status, columns, values) = match phase {
+        "plan" => ("NULL", "waiting", "", String::new()),
+        "dispatch" => ("'t'", "dispatch", "", String::new()),
+        "pr" => ("'t'", "open", ", pr_number, pr_url, pr_opened_at", format!(", 812, '{URL}', 'opened'")),
+        "done" => ("'t'", "merged", ", pr_number, pr_url, pr_opened_at, merged_at", format!(", 812, '{URL}', 'opened', 'finished'")),
         other => panic!("no phase {other}"),
+    };
+    let (worktree, done) = match phase {
+        "plan" => ("NULL", "NULL"),
+        "done" => (&lead[..], "'finished'"),
+        _ => (&lead[..], "NULL"),
     };
     let sql = format!(
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
-         INSERT INTO plans (id, context, title, repo, base, lead_branch, lead_worktree, phase, lead_session, created_at{columns})
-           VALUES ('pay', 'ctx', 'Pay the bills', '{repo}', 'main', 'cpd/pay', {worktree}, '{phase}', 'lead1', 't'{values});",
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+           VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', {locked}, {done});
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{columns})
+           VALUES ('pay', 'repo', '{repo}', 'main', '{status}', 'cpd/pay', {worktree}, cpd_txn(), 't', {locked}{values});",
         repo = fx.repo.display(),
     );
     fx.store()
         .write("fixture", |tx| {
             tx.execute_batch(&sql)?;
             tx.execute(
-                "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, merged_sha, cancel_reason, cancel_requested_at, created_txn, created_at)
-                 VALUES ('pay', 'api', 'The | API', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', ?4, 0, ?1,
+                 VALUES ('pay', 'repo', 'api', 'The | API', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', ?4, 0, ?1,
                          iif(?4 = 'merged', ?2, NULL), iif(?4 = 'cancelled', 'not needed', NULL), iif(?4 = 'cancelled', 't', NULL), ?3, 't')",
                 params!["f".repeat(64), fx.merged_sha, tx.id(), job],
             )?;
@@ -174,7 +174,8 @@ impl Fx {
         self.store()
             .read(|c| {
                 Ok(c.query_row(
-                    "SELECT phase, pr_number, pr_url, pr_opened_at, pr_seen, pr_polled_at, done_at FROM plans WHERE id = 'pay'",
+                    "SELECT p.phase, r.pr_number, r.pr_url, r.pr_opened_at, r.pr_seen, r.pr_polled_at, p.done_at
+                       FROM plans p JOIN prs r ON r.plan = p.id WHERE p.id = 'pay'",
                     [],
                     |r| {
                         let seen: String = r.get(4)?;
@@ -190,7 +191,7 @@ impl Fx {
         let (title, decision, checks): (Option<String>, Option<String>, Option<String>) = self
             .store()
             .read(|c| {
-                Ok(c.query_row("SELECT pr_title, pr_review_decision, pr_checks FROM plans WHERE id = 'pay'", [], |r| {
+                Ok(c.query_row("SELECT pr_title, pr_review_decision, pr_checks FROM prs WHERE plan = 'pay'", [], |r| {
                     Ok((r.get(0)?, r.get(1)?, r.get(2)?))
                 })?)
             })
@@ -327,9 +328,9 @@ fn open_refuses_while_a_job_is_not_merged_or_cancelled() {
     fx.store()
         .write("fixture", |tx| {
             tx.execute(
-                "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, created_txn, created_at)
-                 VALUES ('pay', 'ui', 'UI', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, ?1, ?2, 't')",
+                 VALUES ('pay', 'repo', 'ui', 'UI', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, ?1, ?2, 't')",
                 params!["f".repeat(64), tx.id()],
             )?;
             Ok(())
@@ -491,15 +492,17 @@ fn orphaned_merge(fx: &Fx) -> (PathBuf, PathBuf) {
             tx.execute_batch(&format!(
                 "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
                    VALUES ('lead2', 'lead', 'ctx', 'oth', 'Lead', '/', 'O3', 'idle', 't', 't');
-                 INSERT INTO plans (id, context, title, repo, base, lead_branch, lead_worktree, phase, lead_session, created_at, locked_at)
-                   VALUES ('oth', 'ctx', 'Other', '{repo}', 'main', 'cpd/oth', '{lead}', 'dispatch', 'lead2', 't', 't');",
+                 INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+                   VALUES ('oth', 'ctx', 'Other', 'dispatch', 'lead2', 't', 't');
+                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                   VALUES ('oth', 'repo', '{repo}', 'main', 'dispatch', 'cpd/oth', '{lead}', cpd_txn(), 't', 't');",
                 repo = fx.repo.display(),
                 lead = lead.display()
             ))?;
             tx.execute(
-                "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, created_txn, created_at)
-                 VALUES ('oth', 'x', 'X', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?1, ?2, 't')",
+                 VALUES ('oth', 'repo', 'x', 'X', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?1, ?2, 't')",
                 params!["f".repeat(64), tx.id()],
             )?;
             tx.execute(
@@ -805,9 +808,9 @@ fn kept_attempt(fx: &Fx) -> (PathBuf, String) {
     fx.store()
         .write("fixture", |tx| {
             tx.execute(
-                "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, cancel_reason, cancel_requested_at, created_txn, created_at)
-                 VALUES ('pay', 'b', 'B', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'cancelled', 0, ?1, 'no', 't', ?2, 't')",
+                 VALUES ('pay', 'repo', 'b', 'B', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'cancelled', 0, ?1, 'no', 't', ?2, 't')",
                 params!["f".repeat(64), tx.id()],
             )?;
             tx.execute(
