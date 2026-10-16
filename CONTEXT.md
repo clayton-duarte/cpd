@@ -4,7 +4,7 @@ CPD (Context → Plan → Dispatch) turns one human ticket into a reviewed pull 
 
 ## Phases
 
-A Plan moves through the phases **grounding → plan → dispatch → pr → done** (contract §3.1).
+A Plan moves through the phases **grounding → plan → dispatch → pr → done** (contract §3.1). A Plan in **pr** or **done** returns to **dispatch** when a PR is added (`cpd pr add`).
 
 **Grounding** (phase, new name):
 The first phase of every Plan, in which the Lead grounds itself on the Plan's Context: it reads the Context's records and the material the User provides, receives Requirements, and interviews the User until unknowns are minimised. When the Lead is a fork of the Context's grounded Lead, it only adds what it learns and moves on. Replaces cpd 1's "Context" phase name, so that "Context" names only the entity.
@@ -19,7 +19,7 @@ The phase that starts when the Plan is locked, in which PRs start, their Jobs ar
 _Avoid_: execution, run phase
 
 **PR** (phase):
-The phase from when every PR of the Plan is open until all are merged; PR feedback becomes appended Jobs. Then the Plan is **done**.
+The phase from when every PR of the Plan is open until all are merged; PR feedback becomes appended Jobs. Then the Plan is **done**; a PR added later (a follow-up to a bug or regression) moves it back to dispatch, and it is done again when that PR merges.
 _Avoid_: review phase
 
 ## Work units
