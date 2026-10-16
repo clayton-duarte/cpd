@@ -101,9 +101,9 @@ impl View {
                     self.prompt = None;
                     Effect::None
                 }
-                Outcome::NewPlan { context, id, repo } => {
+                Outcome::NewPlan { context, id } => {
                     self.prompt = None;
-                    Effect::Run(Action::NewPlan { context, id, repo })
+                    Effect::Run(Action::NewPlan { context, id })
                 }
                 Outcome::Close { id } => {
                     self.prompt = None;
@@ -116,7 +116,7 @@ impl View {
                 self.note.clear();
                 if let Some((row, session, plan)) = self.cursor_row().and_then(|r| Some((r, r.session()?, r.plan()?))) {
                     let target = Target { id: session.id.clone(), label: row.label(), working: session.state == State::Working };
-                    self.prompt = Some(Prompt::name(target, plan.head.context.clone(), plan.head.repo.clone()));
+                    self.prompt = Some(Prompt::name(target, plan.head.context.clone()));
                 }
             }
             KeyCode::Char('x') => {
@@ -282,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn n_asks_for_a_name_and_starts_a_plan_in_the_context_and_repo_of_the_session() {
+    fn n_asks_for_a_name_and_starts_a_plan_in_the_context_of_the_session() {
         let mut view = on(&["alpha", "sketch"]);
         assert_eq!(press(&mut view, KeyCode::Char('n')), Effect::None);
         assert_eq!(view.footer(), "Fork sketch into a new Plan, name: █ (Enter starts, Esc cancels)");
@@ -294,7 +294,6 @@ mod tests {
             Effect::Run(Action::NewPlan {
                 context: ContextId::parse("alpha").unwrap(),
                 id: PlanId::parse("pay-4521").unwrap(),
-                repo: "/repo/sketch".into(),
             })
         );
         assert!(view.prompt.is_none());

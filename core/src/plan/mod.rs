@@ -60,15 +60,9 @@ pub struct NewArgs {
     /// The Plan's Context
     #[arg(long, value_name = "c")]
     context: ContextId,
-    /// The repo
-    #[arg(long, value_name = "path")]
-    repo: PathBuf,
     /// The title
     #[arg(long, value_name = "text")]
     title: Text,
-    /// The branch the PR targets [default: origin's HEAD branch, else main]
-    #[arg(long, value_name = "branch")]
-    base: Option<String>,
     /// The Jira task key, stored only
     #[arg(long, value_name = "key")]
     jira: Option<Jira>,

@@ -94,7 +94,7 @@ fn seed(store: &mut Store) {
         NewEvent::new(
             PlanCreated,
             "Plan pay created.",
-            json!({"title": "Pay", "repo": "/r", "base": "main", "jira": null, "lead_session": "lead1", "forked_from": null}),
+            json!({"title": "Pay", "jira": null, "lead_session": "lead1", "forked_from": null, "cwd": "/r"}),
         )
         .plan(plan("pay")),
         NewEvent::new(
@@ -123,7 +123,7 @@ fn seed(store: &mut Store) {
         NewEvent::new(
             PlanCreated,
             "Plan other created.",
-            json!({"title": "Other", "repo": "/r", "base": "main", "jira": null, "lead_session": "lead2", "forked_from": null}),
+            json!({"title": "Other", "jira": null, "lead_session": "lead2", "forked_from": null, "cwd": "/r"}),
         )
         .plan(plan("other")),
         NewEvent::new(ContextCreated, "Context ctx2 created.", json!({"title": "Ctx2", "jira": null, "created_on": "m"}))
@@ -193,7 +193,7 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("context-created", "c", "", &["title", "jira", "created_on"], &[]),
     ("context-record", "c", "", &["record", "kind", "machine", "seq"], &[]),
     ("context-grounded", "cs", "", &["seq", "forked_from"], &[]),
-    ("plan-created", "cp", "", &["title", "repo", "base", "jira", "lead_session", "forked_from"], &[]),
+    ("plan-created", "cp", "", &["title", "jira", "lead_session", "forked_from", "cwd"], &[]),
     ("plan-phase", "cp", "", &["from", "to"], &["jobs", "pr"]),
     ("plan-review", "cp", "", &["review", "fingerprint", "status"], &["feedback"]),
     ("plan-done", "cp", "", &["prs"], &[]),

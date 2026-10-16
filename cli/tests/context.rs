@@ -429,6 +429,51 @@ fn show_renders_the_records() {
 }
 
 #[test]
+fn show_lists_the_repos_of_each_plans_prs_from_the_database() {
+    let env = hs();
+    new_context(&env);
+    // A `plan` record has no repo; a line written before R34 has one, which is read and dropped (§4.6).
+    let file = records_file(&env, CTX, "hs");
+    let plan = |n: u32, plan: &str, machine: &str, repo: &str| {
+        format!(
+            "{{\"v\":1,\"id\":\"hs-p{n}\",\"kind\":\"plan\",\"at\":\"2026-10-14T21:12:00.000Z\",\"machine\":\"hs\",\"by\":{{\"session\":null,\"plan\":null}},\"text\":\"The {plan} plan\",\"plan\":{{\"id\":\"{plan}\",\"machine\":\"{machine}\"{repo}}}}}\n"
+        )
+    };
+    let text = [plan(1, "old", "hs", ",\"repo\":\"/gone\""), plan(2, "two", "hs", ""), plan(3, "none", "hs", ""), plan(4, "far", "zz", "")].concat();
+    fs::write(&file, text).unwrap();
+    env.git(&dir(&env, CTX), &["add", "-A"]);
+    env.git(&dir(&env, CTX), &["commit", "-q", "-m", "plans"]);
+    env.cpd(&["context", "sync", "--context", CTX]).ok();
+    for name in ["old", "two"] {
+        fixture_plan(&env, name, CTX);
+    }
+    let (_, _, mut store) = library(&env);
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(
+                "UPDATE prs SET repo = '/r/b', key = 'b' WHERE plan = 'two';
+                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                   VALUES ('two', 'a', '/r/a', 'main', 'waiting', 'cpd/two/a', cpd_txn(), 't'),
+                          ('two', 'c', '/r/b', 'main', 'waiting', 'cpd/two/c', cpd_txn(), 't'),
+                          ('two', 'd', '/r/dropped', 'main', 'cancelled', 'cpd/two/d', cpd_txn(), 't');",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let out = env.cpd(&["context", "show", "--context", CTX]).ok();
+    let records = out["records"].as_array().unwrap();
+    assert_eq!(records[0]["plan"], json!({"id": "old", "machine": "hs"}), "the old repo is dropped");
+    let repos: Vec<&Value> = records.iter().map(|r| &r["repos"]).collect();
+    assert_eq!(repos, [&json!(["/r"]), &json!(["/r/a", "/r/b"]), &json!([]), &json!([])], "{records:?}");
+    let md = out["markdown"].as_str().unwrap();
+    assert!(md.contains("old (on hs, repos /r): The old plan"), "{md}");
+    assert!(md.contains("two (on hs, repos /r/a, /r/b): The two plan"), "{md}");
+    assert!(md.contains("none (on hs): The none plan") && md.contains("far (on zz): The far plan"), "{md}");
+    assert!(!md.contains("/gone") && !md.contains("/r/dropped"), "{md}");
+}
+
+#[test]
 fn show_since_lists_only_the_later_records() {
     let env = hs();
     new_context(&env);

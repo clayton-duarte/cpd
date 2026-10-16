@@ -17,6 +17,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use common::{CPD, TestEnv};
+use cpd_core::error::CpdError;
+use cpd_core::home::CpdHome;
+use cpd_core::store::Store;
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde_json::{Value, json};
@@ -254,12 +257,10 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     let mut cursor = fx.cursor();
 
     // ---------- 2. plan new: a fresh Lead in its parked window
-    let out = fx.ok(&["plan", "new", PLAN, "--context", CONTEXT, "--repo", repo, "--title", "Retry failed payouts"]);
+    let out = fx.ok(&["plan", "new", PLAN, "--context", CONTEXT, "--title", "Retry failed payouts"]);
     let lead_session = out["plan"]["lead_session"].as_str().unwrap().to_owned();
     assert_eq!(out["plan"]["phase"], "grounding");
-    assert_eq!(out["plan"]["repo"], repo);
-    assert_eq!(out["plan"]["base"], "main");
-    assert_eq!(out["plan"]["lead_branch"], "cpd/pay");
+    assert_eq!(out["plan"]["prs"], json!([]));
     assert_eq!(out["lead"]["session"], lead_session.as_str());
     assert!(out["lead"]["forked_from"].is_null(), "{out}");
     // The Lead's pi reports `idle` (stopped -> idle, a `session-state` Event) as soon as
@@ -284,6 +285,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(state[0]["session"], lead_session.as_str());
     assert_eq!(state[0]["data"]["from"], "stopped");
     assert_eq!(state[0]["data"]["to"], "idle");
+    assert_eq!(events[0]["data"]["cwd"], fx.env.root().canonicalize().unwrap().display().to_string());
     let message = fs::read_to_string(fx.env.cpd_home().join("run/pay/lead-message.md")).unwrap();
     assert!(message.starts_with("You are the Lead of Plan pay \"Retry failed payouts\" in Context ctx."), "{message}");
     // The Lead's `session run` started pi fresh with that message (§6.5), and
@@ -297,6 +299,19 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(flag(&calls[0], "-n"), Some(PLAN));
     assert_eq!(calls[0].last().unwrap(), &message);
     assert!(!calls[0].contains(&"--fork".to_owned()), "{calls:?}");
+    cursor = fx.cursor();
+    let out = fx.ok(&["pr", "add", "pay", "--repo", repo, "--plan", PLAN]);
+    assert_eq!(out["pr"]["base"], "main");
+    assert_eq!(out["pr"]["lead_branch"], "cpd/pay/pay");
+    assert_eq!(kinds(&fx.events_since(cursor)), ["pr-added"]);
+    // interim: until r34-merge-driver makes Attempts use the PR branch cpd/<plan>/<key>; remove then
+    Store::open(&CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap(), 5000)
+        .unwrap()
+        .write("fixture", |tx| {
+            tx.execute("UPDATE prs SET lead_branch = 'cpd/pay' WHERE plan = 'pay' AND key = 'pay'", [])?;
+            Ok::<_, CpdError>(())
+        })
+        .unwrap();
     cursor = fx.cursor();
 
     // ---------- 3. plan phase plan: the Context gets its grounded Lead, a fork of this one

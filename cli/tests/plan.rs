@@ -99,8 +99,16 @@ fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
     env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
 }
 
+/// `plan new` from the test root, with no PR.
+fn new_plan_only(env: &TestEnv, id: &str) -> Value {
+    env.cpd(&["plan", "new", id, "--context", "ctx", "--title", &format!("Plan {id}")]).ok()
+}
+
+/// `plan new` and the Plan's one PR, keyed `pay` (R34 A12: a Plan has no repo of its own).
 fn new_plan(env: &TestEnv, id: &str, repo: &Path) -> Value {
-    env.cpd(&["plan", "new", id, "--context", "ctx", "--repo", repo.to_str().unwrap(), "--title", &format!("Plan {id}")]).ok()
+    let out = new_plan_only(env, id);
+    env.cpd(&["pr", "add", "pay", "--repo", repo.to_str().unwrap(), "--plan", id]).ok();
+    out
 }
 
 fn show(env: &TestEnv, plan: &str) -> Value {
@@ -183,33 +191,40 @@ fn sha256(text: &str) -> String {
 // ---------- plan new ----------
 
 #[test]
-fn new_registers_the_plan_and_its_lead_and_starts_it_in_a_parked_window() {
+fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     let env = TestEnv::new();
     let repo = setup(&env);
     env.cpd(&["context", "decide", "One engine per machine.", "--context", "ctx"]).ok();
     let brief = env.root().join("brief.md");
     fs::write(&brief, "Retry the failed payouts.\n").unwrap();
+    // Not the repo, not the root: the directory the User runs `plan new` from.
+    let home_dir = env.root().join("home");
+    fs::create_dir_all(&home_dir).unwrap();
+    let cwd = home_dir.canonicalize().unwrap().display().to_string();
 
-    let vars = [("PLANNOTATOR_PORT", "19432-19439"), ("PLANNOTATOR_REMOTE", "1")];
-    let repo_arg = repo.to_str().unwrap();
-    let args = ["plan", "new", "pay", "--context", "ctx", "--repo", repo_arg, "--title", "Retry payouts", "--jira", "PAY-1", "--brief-file", brief.to_str().unwrap()];
-    let out = cpd_with(&env, &vars, &args).ok();
-    let real = repo.canonicalize().unwrap().display().to_string();
+    let mut cmd = env.command(CPD);
+    let args = ["plan", "new", "pay", "--context", "ctx", "--title", "Retry payouts", "--jira", "PAY-1", "--brief-file", brief.to_str().unwrap()];
+    let out = cmd.env("PLANNOTATOR_PORT", "19432-19439").env("PLANNOTATOR_REMOTE", "1").args(args).current_dir(&home_dir).output().unwrap();
+    let out = Run { exit: out.status.code().unwrap(), stdout: String::from_utf8(out.stdout).unwrap(), stderr: String::new() }.ok();
     let session = out["plan"]["lead_session"].as_str().unwrap().to_owned();
     assert_eq!(
         out["plan"],
-        json!({"id": "pay", "context": "ctx", "title": "Retry payouts", "jira": "PAY-1", "repo": real, "base": "main",
-               "lead_branch": "cpd/pay", "phase": "grounding", "lead_session": session})
+        json!({"id": "pay", "context": "ctx", "title": "Retry payouts", "jira": "PAY-1", "phase": "grounding", "lead_session": session, "prs": []})
     );
     assert_eq!((&out["lead"]["session"], &out["lead"]["name"], &out["lead"]["forked_from"]), (&json!(session), &json!("pay"), &Value::Null));
+    assert_eq!(out["lead"]["cwd"], cwd);
     assert_eq!(out["record"], "m1-p1");
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM prs"), 0, "a new Plan has no PR");
     let (pane, window) = (out["lead"]["pane"].as_str().unwrap(), out["lead"]["window"].as_str().unwrap());
 
-    // The Lead: stopped, in its parked window, with its pane recorded.
+    // The Lead: stopped, in its parked window, with its pane recorded, in the caller's cwd.
     let lead = env.cpd(&["session", "show", &session]).ok()["session"].clone();
     assert_eq!((&lead["role"], &lead["plan"], &lead["state"], &lead["tier"]), (&json!("lead"), &json!("pay"), &json!("stopped"), &json!("O3")));
-    assert_eq!((&lead["cwd"], &lead["tmux_pane"], &lead["place"]), (&json!(real), &json!(pane), &json!("parked")));
+    assert_eq!((&lead["cwd"], &lead["tmux_pane"], &lead["place"]), (&json!(cwd), &json!(pane), &json!("parked")));
     assert_eq!(panes(&env), vec![(pane.to_owned(), "park-pay".to_owned(), session.clone())], "the cockpit is created with the Lead's window");
+    pane_env(&env, &session);
+    let path = env.tmux(&["display-message", "-p", "-t", pane, "#{pane_current_path}"]);
+    assert_eq!(String::from_utf8(path.stdout).unwrap().trim(), cwd, "the pane starts in the caller's cwd");
 
     // The pane runs `cpd session run <id>` with the Plan's and plannotator's variables (§15.5).
     let pane_vars = pane_env(&env, &session);
@@ -228,7 +243,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_a_parked_window() {
 
     // Events: plan-created and session-registered together, then the record, then the window.
     let created = &events(&env, "plan-created")[0];
-    assert_eq!(created["data"], json!({"title": "Retry payouts", "repo": real, "base": "main", "jira": "PAY-1", "lead_session": session, "forked_from": null}));
+    assert_eq!(created["data"], json!({"title": "Retry payouts", "jira": "PAY-1", "lead_session": session, "forked_from": null, "cwd": cwd}));
     let registered = events(&env, "session-registered");
     assert_eq!(registered.len(), 1);
     assert_eq!((&registered[0]["plan"], &registered[0]["session"]), (&json!("pay"), &json!(session)));
@@ -237,30 +252,61 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_a_parked_window() {
     let moved = events(&env, "session-moved");
     assert_eq!(moved[0]["data"], json!({"pane": pane, "window": window, "place": "parked"}));
 
-    // The `plan` record in the Context store.
-    let records = env.cpd(&["context", "show", "--context", "ctx"]).ok()["records"].clone();
-    let record = records.as_array().unwrap().iter().find(|r| r["kind"] == "plan").unwrap().clone();
+    // The `plan` record in the Context store: no `repo`; `context show` lists the Plan's PR repos.
+    let shown = env.cpd(&["context", "show", "--context", "ctx"]).ok();
+    let record = shown["records"].as_array().unwrap().iter().find(|r| r["kind"] == "plan").unwrap().clone();
     assert_eq!(record["text"], "Retry payouts");
-    // Migration 3 dropped `plan_repo` from the index (R34 A12): the record read back has no `repo`.
     assert_eq!(record["plan"], json!({"id": "pay", "machine": "m1", "jira": "PAY-1"}));
+    assert_eq!(record["repos"], json!([]), "no PR yet");
+    let line = fs::read_to_string(env.cpd_home().join("contexts/ctx/records/m1.jsonl")).unwrap();
+    assert!(!line.contains("\"repo\""), "{line}");
+    let real = repo.canonicalize().unwrap().display().to_string();
+    let other = env.git_repo("web");
+    env.cpd(&["pr", "add", "api", "--repo", &real, "--plan", "pay"]).ok();
+    env.cpd(&["pr", "add", "api2", "--repo", &real, "--plan", "pay"]).ok();
+    env.cpd(&["pr", "add", "web", "--repo", other.to_str().unwrap(), "--plan", "pay"]).ok();
+    env.cpd(&["pr", "add", "gone", "--repo", env.git_repo("old").to_str().unwrap(), "--plan", "pay"]).ok();
+    env.cpd(&["pr", "cancel", "gone", "--plan", "pay"]).ok();
+    let shown = env.cpd(&["context", "show", "--context", "ctx"]).ok();
+    let record = shown["records"].as_array().unwrap().iter().find(|r| r["kind"] == "plan").unwrap().clone();
+    let web = other.canonicalize().unwrap().display().to_string();
+    assert_eq!(record["repos"], json!([real, web]), "each repo once, in PR key order, no cancelled PR");
+    assert!(shown["markdown"].as_str().unwrap().contains(&format!("pay (on m1, repos {real}, {web}, PAY-1): Retry payouts")), "{shown}");
 
     // The first message: the header, the brief, then every record (a fresh Lead).
     let message = fs::read_to_string(home(&env).lead_message(&pid("pay"))).unwrap();
-    let header = format!("You are the Lead of Plan pay \"Retry payouts\" in Context ctx. Repo {real}, base main. Phase grounding: follow the cpd-lead skill.\n\nRetry the failed payouts.\n\n# Payments\n");
-    assert!(message.starts_with(&header), "{message}");
+    let header = "You are the Lead of Plan pay \"Retry payouts\" in Context ctx. Phase grounding: follow the cpd-lead skill.\n\nRetry the failed payouts.\n\n# Payments\n";
+    assert!(message.starts_with(header), "{message}");
     assert!(message.contains("One engine per machine."), "{message}");
     assert!(message.contains("m1-p1"), "{message}");
+}
+
+#[test]
+fn new_takes_neither_repo_nor_base() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    let repo_arg = repo.to_str().unwrap();
+    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    for extra in [["--repo", repo_arg], ["--base", "main"]] {
+        let mut args = vec!["plan", "new", "pay", "--context", "ctx", "--title", "T"];
+        args.extend(extra);
+        refused(&env.cpd(&args), "usage", 2);
+    }
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans"), 0);
+    assert!(panes(&env).is_empty());
 }
 
 #[test]
 fn new_again_with_the_same_flags_is_already_and_redoes_missing_steps() {
     let env = TestEnv::new();
     let repo = setup(&env);
-    let first = new_plan(&env, "pay", &repo);
+    let first = new_plan_only(&env, "pay");
     let session = first["plan"]["lead_session"].as_str().unwrap().to_owned();
     let txns: i64 = query(&env, "SELECT count(*) FROM txns");
 
-    let again = new_plan(&env, "pay", &repo);
+    // From another directory: still `already`, and the stored cwd stays.
+    let again = env.cpd_in(&repo, &["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok();
     assert_eq!(again["already"], true);
     assert_eq!((&again["plan"], &again["record"]), (&first["plan"], &first["record"]));
     assert_eq!((&again["lead"]["pane"], &again["lead"]["window"]), (&first["lead"]["pane"], &first["lead"]["window"]));
@@ -271,8 +317,11 @@ fn new_again_with_the_same_flags_is_already_and_redoes_missing_steps() {
     store(&env).write("fixture", |tx| exec(tx, &format!("UPDATE sessions SET tmux_pane = NULL WHERE id = '{session}';"))).unwrap();
     fs::remove_file(home(&env).lead_message(&pid("pay"))).unwrap();
     env.tmux(&["kill-server"]);
-    let redone = new_plan(&env, "pay", &repo);
+    let redone = env.cpd_in(&repo, &["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok();
     assert_eq!(redone["already"], true);
+    assert_eq!(redone["lead"]["cwd"], first["lead"]["cwd"]);
+    let path = env.tmux(&["display-message", "-p", "-t", redone["lead"]["pane"].as_str().unwrap(), "#{pane_current_path}"]);
+    assert_eq!(String::from_utf8(path.stdout).unwrap().trim(), first["lead"]["cwd"].as_str().unwrap(), "redone in the stored cwd");
     assert_ne!(redone["lead"]["pane"], Value::Null);
     assert_eq!(panes(&env).len(), 1);
     assert!(home(&env).lead_message(&pid("pay")).exists());
@@ -280,17 +329,15 @@ fn new_again_with_the_same_flags_is_already_and_redoes_missing_steps() {
     assert_eq!(events(&env, "plan-created").len(), 1);
 
     // Other flags: plan_exists.
-    let repo_arg = repo.to_str().unwrap();
-    let error = refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--repo", repo_arg, "--title", "Other"]), "plan_exists", 3);
+    let error = refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Other"]), "plan_exists", 3);
     assert_eq!(error["details"]["plan"]["title"], "Plan pay");
-    refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--repo", repo_arg, "--title", "Plan pay", "--name", "x"]), "plan_exists", 3);
+    refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay", "--name", "x"]), "plan_exists", 3);
 }
 
 #[test]
 fn new_refusals_write_nothing() {
     let env = TestEnv::new();
-    let repo = setup(&env);
-    let repo_arg = repo.to_str().unwrap().to_owned();
+    setup(&env);
     let new = |extra: &[&str]| {
         let mut args = vec!["plan", "new", "pay", "--title", "T"];
         args.extend(extra);
@@ -298,26 +345,18 @@ fn new_refusals_write_nothing() {
     };
     let txns: i64 = query(&env, "SELECT count(*) FROM txns");
 
-    refused(&new(&["--context", "nope", "--repo", &repo_arg]), "context_not_found", 4);
-    let not_repo = env.root().join("plain");
-    fs::create_dir_all(&not_repo).unwrap();
-    refused(&new(&["--context", "ctx", "--repo", not_repo.to_str().unwrap()]), "not_a_git_repo", 3);
-    refused(&new(&["--context", "ctx", "--repo", "/does/not/exist"]), "not_a_git_repo", 3);
-    let error = refused(&new(&["--context", "ctx", "--repo", &repo_arg, "--base", "develop"]), "base_not_found", 4);
-    assert_eq!(error["details"]["ref"], "refs/heads/develop");
-    env.git(&repo, &["branch", "cpd/pay"]);
-    refused(&new(&["--context", "ctx", "--repo", &repo_arg]), "branch_exists", 3);
-    refused(&new(&["--context", "ctx", "--repo", &repo_arg, "--brief-file", "/no/such/brief"]), "file_unreadable", 2);
-    refused(&env.cpd(&["plan", "new", "Bad", "--context", "ctx", "--repo", &repo_arg, "--title", "T"]), "invalid_plan_id", 2);
-    refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--repo", &repo_arg]), "usage", 2);
-    refused(&new(&["--context", "ctx", "--repo", &repo_arg, "--name", ""]), "invalid_name", 2);
-    refused(&new(&["--context", "ctx", "--repo", &repo_arg, "--jira", "nope"]), "usage", 2);
+    refused(&new(&["--context", "nope"]), "context_not_found", 4);
+    refused(&new(&["--context", "ctx", "--brief-file", "/no/such/brief"]), "file_unreadable", 2);
+    refused(&env.cpd(&["plan", "new", "Bad", "--context", "ctx", "--title", "T"]), "invalid_plan_id", 2);
+    refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx"]), "usage", 2);
+    refused(&new(&["--context", "ctx", "--name", ""]), "invalid_name", 2);
+    refused(&new(&["--context", "ctx", "--jira", "nope"]), "usage", 2);
     assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
     assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans"), 0);
 }
 
 #[test]
-fn new_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
+fn pr_add_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
     let env = TestEnv::new();
     let origin = setup(&env);
     env.git(&origin, &["branch", "trunk"]);
@@ -329,11 +368,12 @@ fn new_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
     env.git(&clone, &["worktree", "add", "-q", linked.to_str().unwrap(), "-b", "side"]);
     fs::create_dir_all(linked.join("sub")).unwrap();
 
-    let out = new_plan(&env, "pay", &linked.join("sub"));
-    assert_eq!(out["plan"]["base"], "trunk");
-    assert_eq!(out["plan"]["repo"], clone.canonicalize().unwrap().display().to_string());
+    new_plan_only(&env, "pay");
+    let out = env.cpd(&["pr", "add", "pay", "--repo", linked.join("sub").to_str().unwrap(), "--plan", "pay"]).ok();
+    assert_eq!(out["pr"]["base"], "trunk");
+    assert_eq!(out["pr"]["repo"], clone.canonicalize().unwrap().display().to_string());
     let error = refused(
-        &env.cpd(&["plan", "new", "other", "--context", "ctx", "--repo", clone.to_str().unwrap(), "--title", "T", "--base", "side"]),
+        &env.cpd(&["pr", "add", "other", "--repo", clone.to_str().unwrap(), "--base", "side", "--plan", "pay"]),
         "base_not_found",
         4,
     );
@@ -690,15 +730,15 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
     let head = env.git(&repo, &["rev-parse", "HEAD"]);
 
     let out = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
-    let worktree = repo.parent().unwrap().canonicalize().unwrap().join("pay.pay");
+    let worktree = repo.parent().unwrap().canonicalize().unwrap().join("pay.pay.pay");
     assert_eq!(
         out,
         json!({"ok": true, "plan": "pay", "phase": "dispatch", "jobs": ["a", "b"],
-               "prs": [{"key": "pay", "status": "dispatch", "needs": [], "lead_branch": "cpd/pay", "lead_worktree": worktree.display().to_string(),
+               "prs": [{"key": "pay", "status": "dispatch", "needs": [], "lead_branch": "cpd/pay/pay", "lead_worktree": worktree.display().to_string(),
                         "base_sha": head, "reused": false, "pushed": false}],
                "watch": {"started": true, "pane": "%9"}})
     );
-    assert_eq!(env.git(&worktree, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay");
+    assert_eq!(env.git(&worktree, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay/pay");
     assert_eq!(watch_calls(&env), vec![vec!["watch".to_owned(), "--ensure".to_owned()]]);
 
     let shown = show(&env, "pay");
@@ -758,10 +798,10 @@ fn lock_creates_and_pushes_the_lead_branch_when_the_remote_has_none() {
     let out = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
     assert_eq!((&out["prs"][0]["base_sha"], &out["prs"][0]["pushed"], &out["prs"][0]["reused"]), (&json!(head), &json!(true), &json!(false)));
-    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay"]), format!("{head}\trefs/heads/cpd/pay"));
-    let worktree = repo.parent().unwrap().canonicalize().unwrap().join("pay.pay");
-    assert_eq!(env.git(&worktree, &["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/cpd/pay");
-    assert_eq!(env.git(&origin, &["rev-parse", "cpd/pay"]), head);
+    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{head}\trefs/heads/cpd/pay/pay"));
+    let worktree = repo.parent().unwrap().canonicalize().unwrap().join("pay.pay.pay");
+    assert_eq!(env.git(&worktree, &["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/cpd/pay/pay");
+    assert_eq!(env.git(&origin, &["rev-parse", "cpd/pay/pay"]), head);
     assert!(events(&env, "error").is_empty());
 }
 
@@ -774,17 +814,17 @@ fn lock_reuses_a_remote_lead_branch_that_contains_the_base() {
     // A commit only the remote has, on top of the base.
     env.git(&repo, &["commit", "-q", "--allow-empty", "-m", "only on the remote"]);
     let remote_tip = env.git(&repo, &["rev-parse", "HEAD"]);
-    env.git(&repo, &["push", "-q", "origin", "HEAD:refs/heads/cpd/pay"]);
+    env.git(&repo, &["push", "-q", "origin", "HEAD:refs/heads/cpd/pay/pay"]);
     env.git(&repo, &["reset", "-q", "--hard", "HEAD~1"]);
-    assert_eq!(env.git(&repo, &["branch", "--list", "cpd/pay"]), "");
+    assert_eq!(env.git(&repo, &["branch", "--list", "cpd/pay/pay"]), "");
 
     let out = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
-    let worktree = repo.parent().unwrap().canonicalize().unwrap().join("pay.pay");
+    let worktree = repo.parent().unwrap().canonicalize().unwrap().join("pay.pay.pay");
     assert_eq!((&out["prs"][0]["base_sha"], &out["prs"][0]["reused"], &out["prs"][0]["pushed"]), (&json!(remote_tip), &json!(true), &json!(false)));
     assert_eq!(env.git(&worktree, &["rev-parse", "HEAD"]), remote_tip);
-    assert_eq!(env.git(&repo, &["rev-parse", "refs/heads/cpd/pay"]), remote_tip);
-    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay"]), format!("{remote_tip}\trefs/heads/cpd/pay"));
+    assert_eq!(env.git(&repo, &["rev-parse", "refs/heads/cpd/pay/pay"]), remote_tip);
+    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{remote_tip}\trefs/heads/cpd/pay/pay"));
     assert!(events(&env, "error").is_empty());
 }
 
@@ -794,17 +834,17 @@ fn lock_refuses_a_remote_lead_branch_that_does_not_contain_the_base() {
     let repo = setup(&env);
     with_origin(&env, &repo);
     approved(&env, &repo);
-    // cpd/pay at the old main; then main moves on, so origin/main is not its ancestor.
-    env.git(&repo, &["push", "-q", "origin", "main:refs/heads/cpd/pay"]);
+    // cpd/pay/pay at the old main; then main moves on, so origin/main is not its ancestor.
+    env.git(&repo, &["push", "-q", "origin", "main:refs/heads/cpd/pay/pay"]);
     let remote_branch = env.git(&repo, &["rev-parse", "HEAD"]);
     push_main_commit(&env, &repo, "main moves on");
 
     let error = refused(&env.cpd(&["plan", "lock", "--plan", "pay"]), "branch_exists", 3);
 
-    assert_eq!((&error["details"]["branch"], &error["details"]["pr"]), (&json!("cpd/pay"), &json!("pay")));
-    assert_eq!(env.git(&repo, &["branch", "--list", "cpd/pay"]), "");
-    assert!(!repo.parent().unwrap().join("pay.pay").exists());
-    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay"]), format!("{remote_branch}\trefs/heads/cpd/pay"));
+    assert_eq!((&error["details"]["branch"], &error["details"]["pr"]), (&json!("cpd/pay/pay"), &json!("pay")));
+    assert_eq!(env.git(&repo, &["branch", "--list", "cpd/pay/pay"]), "");
+    assert!(!repo.parent().unwrap().join("pay.pay.pay").exists());
+    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{remote_branch}\trefs/heads/cpd/pay/pay"));
     assert_eq!(show(&env, "pay")["plan"]["phase"], "plan");
     assert!(watch_calls(&env).is_empty());
 }
@@ -834,7 +874,7 @@ fn a_push_failure_at_lock_still_locks_and_appends_one_push_failed_error() {
 
     assert_eq!(out["phase"], "dispatch");
     assert_eq!(show(&env, "pay")["plan"]["phase"], "dispatch");
-    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay"]), "");
+    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), "");
     let errors = events(&env, "error");
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert_eq!(errors[0]["data"]["code"], "push_failed");
@@ -895,13 +935,13 @@ fn lock_refusals_change_nothing() {
     env.cpd(&["plan", "decide", "r4", "--approve", "--plan", "pay"]).ok();
 
     // Something at the Lead worktree's path, then the branch.
-    let path = repo.parent().unwrap().join("pay.pay");
+    let path = repo.parent().unwrap().join("pay.pay.pay");
     fs::create_dir_all(&path).unwrap();
     refused(&lock(), "worktree_exists", 3);
     fs::remove_dir(&path).unwrap();
-    env.git(&repo, &["branch", "cpd/pay"]);
+    env.git(&repo, &["branch", "cpd/pay/pay"]);
     refused(&lock(), "branch_exists", 3);
-    env.git(&repo, &["branch", "-D", "cpd/pay"]);
+    env.git(&repo, &["branch", "-D", "cpd/pay/pay"]);
 
     // pre-start fails: the worktree and branch are removed.
     fs::create_dir_all(repo.join(".config")).unwrap();
@@ -912,7 +952,7 @@ fn lock_refusals_change_nothing() {
     assert_eq!(error["details"]["log"], home(&env).root().join("run/pay/logs/lead-pay.pre-start.log").display().to_string());
     assert_eq!((&error["details"]["pr"], &error["details"]["step"]), (&json!("pay"), &json!("pre-start")));
     assert!(!path.exists());
-    assert_eq!(env.git(&repo, &["branch", "--list", "cpd/pay"]), "");
+    assert_eq!(env.git(&repo, &["branch", "--list", "cpd/pay/pay"]), "");
 
     assert_eq!(show(&env, "pay")["plan"]["phase"], "plan");
     assert_eq!(show(&env, "pay")["counts"]["draft"], 2);

@@ -235,8 +235,7 @@ fn a_server_started_by_plan_new_has_every_server_option() {
     )
     .unwrap();
     env.cpd(&["context", "new", "ctx", "--title", "Payments"]).ok();
-    let repo = env.git_repo("pay");
-    env.cpd(&["plan", "new", "pay", "--context", "ctx", "--repo", repo.to_str().unwrap(), "--title", "Pay"]).ok();
+    env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Pay"]).ok();
     assert_eq!(windows(&env, "cpd"), ["park-pay"], "plan new started the server, not tui");
     assert_server_options(&env);
 }

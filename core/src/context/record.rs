@@ -26,10 +26,6 @@ pub struct By {
 pub struct PlanRef {
     pub id: PlanId,
     pub machine: MachineName,
-    /// Interim (R34 A12, until Job `r34-plan-new`): written by `plan new
-    /// --repo`, not indexed, so `None` when read back from the index.
-    #[serde(default)]
-    pub repo: Option<String>,
     #[serde(default)]
     pub jira: Option<String>,
 }
@@ -117,9 +113,6 @@ impl Record {
             let mut p = Map::new();
             p.insert("id".into(), json!(plan.id));
             p.insert("machine".into(), json!(plan.machine));
-            if let Some(repo) = &plan.repo {
-                p.insert("repo".into(), json!(repo));
-            }
             if let Some(jira) = &plan.jira {
                 p.insert("jira".into(), json!(jira));
             }
@@ -155,7 +148,19 @@ impl Record {
             #[serde(default)]
             question: Option<RecordId>,
             #[serde(default)]
-            plan: Option<PlanRef>,
+            plan: Option<RawPlan>,
+        }
+        /// A `plan` record written before R34 carries `repo`: read and dropped (§4.6).
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawPlan {
+            id: PlanId,
+            machine: MachineName,
+            #[serde(default)]
+            #[allow(dead_code)]
+            repo: Option<String>,
+            #[serde(default)]
+            jira: Option<String>,
         }
         let raw: Raw = serde_json::from_str(line).map_err(|e| e.to_string())?;
         if raw.v != VERSION {
@@ -172,7 +177,8 @@ impl Record {
         if raw.text.is_empty() {
             return Err("text is empty".into());
         }
-        let draft = Draft::from_parts(kind, raw.supersedes, raw.question, raw.plan)?;
+        let plan = raw.plan.map(|p| PlanRef { id: p.id, machine: p.machine, jira: p.jira });
+        let draft = Draft::from_parts(kind, raw.supersedes, raw.question, plan)?;
         Ok(Record { id: raw.id, at: raw.at, by: raw.by, text: raw.text, draft })
     }
 
@@ -208,7 +214,6 @@ impl Record {
             Some(plan) => Some(PlanRef {
                 id: PlanId::parse(&plan).map_err(|e| bad(10, e))?,
                 machine: MachineName::parse(&row.get::<_, String>(11)?).map_err(|e| bad(11, e))?,
-                repo: None,
                 jira: optional(12)?,
             }),
         };
@@ -311,6 +316,20 @@ mod tests {
         assert_eq!(record.supersedes().unwrap().to_string(), "hs-d9");
         let again = Record::parse_line(record.to_line().trim_end(), &machine()).unwrap();
         assert_eq!(again, record);
+    }
+
+    #[test]
+    fn a_plan_record_from_before_r34_is_read_without_its_repo() {
+        let old = line("")
+            .replace("hs-d1", "hs-p1")
+            .replace("decision", "plan")
+            .replace(r#""text""#, r#""plan":{"id":"pay","machine":"hs","repo":"/r/pay","jira":"ABC-1"},"text""#);
+        let record = Record::parse_line(&old, &machine()).unwrap();
+        let plan = record.plan().unwrap();
+        assert_eq!((plan.id.as_str(), plan.jira.as_deref()), ("pay", Some("ABC-1")));
+        assert!(!record.to_json()["plan"].as_object().unwrap().contains_key("repo"));
+        let other = old.replace(r#""repo":"/r/pay""#, r#""base":"main""#);
+        assert!(Record::parse_line(&other, &machine()).is_err(), "no other unknown field");
     }
 
     #[test]

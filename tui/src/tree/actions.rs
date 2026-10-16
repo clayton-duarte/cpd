@@ -22,9 +22,9 @@ use crate::widgets::open_legend;
 pub enum Action {
     /// `session open <id>` (§10.4), then the focus on the chat slot: Enter, or a click on a Session.
     Open(SessionId),
-    /// `plan new <id> --context=<c> --repo=<path> --title=<id>` (§4.1): `n`. The Lead forks the Context's grounded
+    /// `plan new <id> --context=<c> --title=<id>` (§4.1): `n`. The Lead forks the Context's grounded
     /// Lead (R15).
-    NewPlan { context: ContextId, id: PlanId, repo: String },
+    NewPlan { context: ContextId, id: PlanId },
     /// `session close <id>` (§10.9): `x`.
     Close(SessionId),
 }
@@ -39,9 +39,9 @@ impl Action {
         let words = |w: &[&str]| w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         match self {
             Action::Open(id) => words(&["session", "open", id.as_str()]),
-            Action::NewPlan { context, id, repo } => {
+            Action::NewPlan { context, id } => {
                 let mut argv = words(&["plan", "new", id.as_str()]);
-                argv.extend([format!("--context={context}"), format!("--repo={repo}"), format!("--title={id}")]);
+                argv.extend([format!("--context={context}"), format!("--title={id}")]);
                 argv
             }
             Action::Close(id) => words(&["session", "close", id.as_str()]),
@@ -138,8 +138,8 @@ mod tests {
             (Action::Open(sid("l-ship")), vec!["session", "open", "l-ship"]),
             (Action::Close(sid("l-ship")), vec!["session", "close", "l-ship"]),
             (
-                Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay-4521").unwrap(), repo: "/work/pay".into() },
-                vec!["plan", "new", "pay-4521", "--context=alpha", "--repo=/work/pay", "--title=pay-4521"],
+                Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay-4521").unwrap() },
+                vec!["plan", "new", "pay-4521", "--context=alpha", "--title=pay-4521"],
             ),
         ];
         for (action, argv) in cases {
@@ -154,7 +154,7 @@ mod tests {
         let close = Action::Close(sid("l-ship"));
         assert_eq!(close.done(&json!({"ok": true, "session": "l-ship", "pane": "%4"})), "closed");
         assert_eq!(close.done(&json!({"ok": true, "already": true})), "session is already gone");
-        let new = Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay").unwrap(), repo: "/r".into() };
+        let new = Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay").unwrap() };
         assert_eq!(new.done(&json!({"ok": true})), "forking pay in window park-pay");
     }
 

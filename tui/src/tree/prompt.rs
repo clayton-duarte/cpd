@@ -22,9 +22,9 @@ pub struct Target {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Prompt {
-    /// `n`: asks for the name of a new Plan in `context`, on `repo` (those of `target`'s Plan). `refused` is why the
+    /// `n`: asks for the name of a new Plan in `context` (that of `target`'s Plan). `refused` is why the
     /// last Enter was not taken.
-    Name { target: Target, context: ContextId, repo: String, input: String, refused: Option<String> },
+    Name { target: Target, context: ContextId, input: String, refused: Option<String> },
     /// `x`: asks whether to close `target`'s pane.
     Close { target: Target },
 }
@@ -36,8 +36,8 @@ pub enum Outcome {
     Open,
     /// The prompt is dismissed; nothing happens.
     Cancel,
-    /// `plan new <id> --context <context> --repo <repo> --title <id>`.
-    NewPlan { context: ContextId, id: PlanId, repo: String },
+    /// `plan new <id> --context <context> --title <id>`.
+    NewPlan { context: ContextId, id: PlanId },
     /// `session close <id>`.
     Close { id: SessionId },
 }
@@ -46,8 +46,8 @@ pub enum Outcome {
 const NAME_REQUIRED: &str = "A name is required.";
 
 impl Prompt {
-    pub fn name(target: Target, context: ContextId, repo: String) -> Self {
-        Prompt::Name { target, context, repo, input: String::new(), refused: None }
+    pub fn name(target: Target, context: ContextId) -> Self {
+        Prompt::Name { target, context, input: String::new(), refused: None }
     }
 
     pub fn close(target: Target) -> Self {
@@ -56,7 +56,7 @@ impl Prompt {
 
     pub fn key(&mut self, key: KeyEvent) -> Outcome {
         match self {
-            Prompt::Name { context, repo, input, refused, .. } => match key.code {
+            Prompt::Name { context, input, refused, .. } => match key.code {
                 KeyCode::Esc => Outcome::Cancel,
                 KeyCode::Enter => {
                     let name = input.trim();
@@ -65,7 +65,7 @@ impl Prompt {
                         return Outcome::Open;
                     }
                     match PlanId::parse(name) {
-                        Ok(id) => Outcome::NewPlan { context: context.clone(), id, repo: repo.clone() },
+                        Ok(id) => Outcome::NewPlan { context: context.clone(), id },
                         Err(e) => {
                             *refused = Some(e.message().to_owned());
                             Outcome::Open
@@ -113,7 +113,7 @@ mod tests {
     }
 
     fn name() -> Prompt {
-        Prompt::name(target(false), ContextId::parse("cpd").unwrap(), "/repo".into())
+        Prompt::name(target(false), ContextId::parse("cpd").unwrap())
     }
 
     fn press(p: &mut Prompt, code: KeyCode) -> Outcome {
@@ -127,7 +127,7 @@ mod tests {
     }
 
     fn new_plan(id: &str) -> Outcome {
-        Outcome::NewPlan { context: ContextId::parse("cpd").unwrap(), id: PlanId::parse(id).unwrap(), repo: "/repo".into() }
+        Outcome::NewPlan { context: ContextId::parse("cpd").unwrap(), id: PlanId::parse(id).unwrap() }
     }
 
     // The reference's tests (`main:tui/src/prompt.rs`), on Plan ids for names.

@@ -10,14 +10,20 @@ use crate::ids::RecordKind;
 /// A record and its index position.
 pub type Indexed = (i64, Record);
 
+/// The repos of each Plan record's PRs, by record id.
+pub type Repos = HashMap<String, Vec<String>>;
+
 /// The Context as markdown: title and Jira key; Plans; active decisions;
 /// superseded decisions, each naming its successor; open questions; answered
 /// questions with their answers; notes. Each item shows its id and date.
 ///
+/// A Plan record lists `repos[<record id>]`: the repos of its PRs, from the
+/// database (commands.md §3.3; the record itself has none).
+///
 /// Only the records after `since` are listed, but which decision is active and
 /// which question is open is decided from all of `records`. An answer after
 /// `since` is listed with its question, whatever the question's position.
-pub fn markdown(title: &str, jira: Option<&str>, records: &[Indexed], since: i64) -> String {
+pub fn markdown(title: &str, jira: Option<&str>, records: &[Indexed], since: i64, repos: &Repos) -> String {
     let shown = |seq: i64| seq > since;
     let mut successor: HashMap<String, &Record> = HashMap::new();
     let mut answers: HashMap<String, Vec<&Indexed>> = HashMap::new();
@@ -42,8 +48,11 @@ pub fn markdown(title: &str, jira: Option<&str>, records: &[Indexed], since: i64
     section(&mut out, "Plans", of_kind(RecordKind::Plan).map(|(_, r)| {
         let plan = r.plan().expect("a plan record has its plan");
         let jira = plan.jira.as_deref().map(|j| format!(", {j}")).unwrap_or_default();
-        let repo = plan.repo.as_deref().map(|repo| format!(", repo {repo}")).unwrap_or_default();
-        item(r, &format!("{} (on {}{repo}{jira}): {}", plan.id, plan.machine, r.text))
+        let repos = match repos.get(&r.id.to_string()) {
+            Some(repos) if !repos.is_empty() => format!(", repos {}", repos.join(", ")),
+            _ => String::new(),
+        };
+        item(r, &format!("{} (on {}{repos}{jira}): {}", plan.id, plan.machine, r.text))
     }));
     section(&mut out, "Decisions", of_kind(RecordKind::Decision).filter(|(_, r)| !successor.contains_key(&r.id.to_string())).map(|(_, r)| {
         let replaces = r.supersedes().map(|s| format!(" (supersedes {s})")).unwrap_or_default();
@@ -139,7 +148,7 @@ mod tests {
 
     #[test]
     fn sections_in_order() {
-        let md = markdown("Building", Some("ABC-1"), &all(), 0);
+        let md = markdown("Building", Some("ABC-1"), &all(), 0, &Repos::new());
         let at = |needle: &str| md.find(needle).unwrap_or_else(|| panic!("{needle} in\n{md}"));
         assert!(md.starts_with("# Building (ABC-1)\n"));
         let order = ["## Decisions", "## Superseded decisions", "## Open questions", "## Answered questions", "## Notes"];
@@ -154,7 +163,7 @@ mod tests {
 
     #[test]
     fn since_lists_later_records_but_judges_from_all() {
-        let md = markdown("Building", None, &all(), 3);
+        let md = markdown("Building", None, &all(), 3, &Repos::new());
         assert!(md.contains("hs-d2"), "{md}");
         assert!(!md.contains("- hs-d1 ("), "{md}");
         assert!(!md.contains("hs-q2"), "{md}");

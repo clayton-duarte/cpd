@@ -353,10 +353,10 @@ fn n_starts_a_plan_named_in_the_prompt_with_plan_new() {
     pane.wait("the refusal", |_| pane.footer_has("A name is required. Fork sketch into a new Plan, name:"));
     pane.type_text("pay-4521");
     pane.keys(&["Enter"]);
-    // the Context and the repo of the cursor's Session's Plan; the name is the id and the title
+    // the Context of the cursor's Session's Plan; the name is the id and the title
     assert_eq!(
         wait_for_calls(&env, 1),
-        [words(&["plan", "new", "pay-4521", "--context=alpha", "--repo=/repo/sketch", "--title=pay-4521"])]
+        [words(&["plan", "new", "pay-4521", "--context=alpha", "--title=pay-4521"])]
     );
     pane.wait("the note", |_| pane.footer_has("forking pay-4521 in window park-pay-4521"));
 }

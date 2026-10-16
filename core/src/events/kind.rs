@@ -118,9 +118,7 @@ impl Kind {
             ContextCreated => spec([Y, N, N, N, N], &["title", "jira", "created_on"], &[]),
             ContextRecord => spec([Y, N, N, N, N], &["record", "kind", "machine", "seq"], &[]),
             ContextGrounded => spec([Y, N, N, N, Y], &["seq", "forked_from"], &[]),
-            PlanCreated => {
-                spec([Y, Y, N, N, N], &["title", "repo", "base", "jira", "lead_session", "forked_from"], &[])
-            }
+            PlanCreated => spec([Y, Y, N, N, N], &["title", "jira", "lead_session", "forked_from", "cwd"], &[]),
             PlanPhase => spec([Y, Y, N, N, N], &["from", "to"], &["jobs", "pr", "prs"]),
             PlanReview => spec([Y, Y, N, N, N], &["review", "fingerprint", "status"], &["feedback"]),
             PlanDone => spec([Y, Y, N, N, N], &["prs"], &[]),
