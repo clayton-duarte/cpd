@@ -40,18 +40,21 @@ fn attempt_counts(conn: &Connection, plan: &PlanId) -> Result<Vec<(String, i64)>
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (job, needed_by, attempts) = env.store.read(|conn| {
+    let (job, review, needed_by, attempts) = env.store.read(|conn| {
         plan_phase(conn, &plan)?;
         let all = jobs::load(conn, &plan)?;
         let job = find(&all, &plan, &args.key)?.clone();
         let needed_by: Vec<&str> = all.iter().filter(|j| j.needs.contains(&job.key)).map(|j| j.key.as_str()).collect();
         let needed_by = needed_by.into_iter().map(str::to_owned).collect::<Vec<_>>();
         let attempts = attempts(conn, &plan, &job.key)?;
-        Ok((job, needed_by, attempts))
+        let review: bool = conn.query_row("SELECT review FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.key.as_str()], |r| r.get(0))?;
+        Ok((job, review, needed_by, attempts))
     })?;
     let tamper = jobs::tampered(&plan, std::slice::from_ref(&job));
+    let mut fields = job.to_json();
+    fields["review"] = json!(review);
     Ok(Output::success(json!({
-        "job": job.to_json(), "needs": job.needs, "needed_by": needed_by, "attempts": attempts, "tamper": tamper,
+        "job": fields, "needs": job.needs, "needed_by": needed_by, "attempts": attempts, "tamper": tamper,
     })))
 }
 
