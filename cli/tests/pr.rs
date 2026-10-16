@@ -51,6 +51,8 @@ struct Fx {
     origin: PathBuf,
     lead: PathBuf,
     merged_sha: String,
+    /// What the lock pushed to `cpd/pay` on origin (R35, §7.2): the base.
+    lock_pushed: String,
 }
 
 fn fx(phase: &str) -> Fx {
@@ -70,7 +72,8 @@ fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
     env.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
     env.git(&repo, &["push", "-q", "origin", "main"]);
     let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("lead.log") };
-    let lead = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap().path;
+    let created = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap();
+    let (lead, lock_pushed) = (created.path, created.base_sha);
     env.git(&lead, &["config", "user.name", "cpd test"]);
     env.git(&lead, &["config", "user.email", "test@cpd.invalid"]);
     fs::write(lead.join("api.txt"), "api\n").unwrap();
@@ -91,7 +94,7 @@ fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
     }
     env.fake_gh(GH);
 
-    let fx = Fx { env, home, repo, origin, lead, merged_sha };
+    let fx = Fx { env, home, repo, origin, lead, merged_sha, lock_pushed };
     if phase == "pr" {
         fx.git(&fx.lead, &["push", "-q", "-u", "origin", "cpd/pay"]);
     }
@@ -362,7 +365,7 @@ fn open_times_out_waiting_for_the_per_repo_lock() {
     let run = fx.pr("open");
 
     assert_eq!(code(&run), ("lock_timeout".into(), 5));
-    assert_eq!(fx.remote_branch("cpd/pay"), None);
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "pr open pushed nothing");
     assert_eq!(fx.plan_row().0, "dispatch");
 }
 
@@ -375,7 +378,7 @@ fn open_refuses_a_dirty_lead_worktree() {
 
     assert_eq!(code(&run), ("dirty_target".into(), 3));
     assert_eq!(run.error()["details"]["files"], json!(["?? scratch.txt"]));
-    assert_eq!(fx.remote_branch("cpd/pay"), None);
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "pr open pushed nothing");
 }
 
 #[test]
@@ -392,7 +395,7 @@ fn open_refuses_a_failed_gate_and_pushes_nothing() {
     assert_eq!(details["log"], fx.home.plan_dir(&plan()).join("logs/pr.pre-merge.log").to_str().unwrap());
     assert!(fx.gate_log().contains("the suite is red"));
     // Nothing pushed, no PR, no row: the phase stays dispatch.
-    assert_eq!(fx.remote_branch("cpd/pay"), None);
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "pr open pushed nothing");
     assert!(fx.gh_calls().is_empty());
     let row = fx.plan_row();
     assert_eq!((row.0.as_str(), row.1), ("dispatch", None));
@@ -412,7 +415,7 @@ fn open_reports_a_gate_that_could_not_be_judged_as_gate_error() {
     assert!(details["reason"].as_str().unwrap().contains("hook_invalid"), "{details}");
     assert_eq!(details["tail"], "");
     assert!(details["log"].as_str().unwrap().ends_with("logs/pr.pre-merge.log"));
-    assert_eq!(fx.remote_branch("cpd/pay"), None);
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "pr open pushed nothing");
     assert_eq!(fx.plan_row().0, "dispatch");
 }
 
