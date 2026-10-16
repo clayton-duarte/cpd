@@ -671,9 +671,9 @@ fn list_shows_every_job_in_creation_order_and_filters_by_status() {
     assert_eq!(keys, ["a", "b", "c"]);
     assert_eq!(
         jobs[0],
-        json!({"key": "a", "title": "Title of a", "status": "merged", "tier": "S2", "appended": false, "needs": [], "attempts": 1, "merged_sha": "c0ffee"})
+        json!({"key": "a", "title": "Title of a", "status": "merged", "tier": "S2", "appended": false, "needs": [], "attempts": 1, "merged_sha": "c0ffee", "review": false})
     );
-    assert_eq!(jobs[1], json!({"key": "b", "title": "Title of b", "status": "queued", "tier": "S2", "appended": false, "needs": ["a"], "attempts": 0, "merged_sha": null}));
+    assert_eq!(jobs[1], json!({"key": "b", "title": "Title of b", "status": "queued", "tier": "S2", "appended": false, "needs": ["a"], "attempts": 0, "merged_sha": null, "review": false}));
     assert_eq!(jobs[2]["attempts"], 1);
 
     let out = job(&env, &["list", "--status", "queued"], "pl").ok();
