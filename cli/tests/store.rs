@@ -53,8 +53,8 @@ fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     Ok(())
 }
 
-/// A Context, its Lead, a Plan, a `queued` Job `api` (with a running Attempt
-/// and an open Escalation) and a `draft` Job `ui` that needs `api`.
+/// A Context, its Lead, a Plan with one PR `pay`, a `queued` Job `api` (with a
+/// running Attempt and an open Escalation) and a `draft` Job `ui` that needs `api`.
 fn fixture(store: &mut Store) -> i64 {
     store
         .write("fixture", |tx| {
@@ -64,12 +64,14 @@ fn fixture(store: &mut Store) -> i64 {
                     "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
                      INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
                        VALUES ('lead1', 'lead', 'ctx', 'Lead', '/', 'O3', 'idle', 't', 't');
-                     INSERT INTO plans (id, context, title, repo, base, lead_branch, phase, lead_session, created_at)
-                       VALUES ('pay', 'ctx', 'Pay', '/r', 'main', 'cpd/pay', 'grounding', 'lead1', 't');
-                     INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                     INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+                       VALUES ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't');
+                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                       VALUES ('pay', 'pay', '/r', 'main', 'waiting', 'cpd/pay/pay', {id}, 't');
+                     INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, created_txn, created_at)
-                       VALUES ('pay', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, '{FP}', {id}, 't'),
-                              ('pay', 'ui', 'Ui', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, NULL, {id}, 't');
+                       VALUES ('pay', 'pay', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, '{FP}', {id}, 't'),
+                              ('pay', 'pay', 'ui', 'Ui', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, NULL, {id}, 't');
                      INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'ui', 'api');
                      INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
                        VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pay--api-a1', '/w', 't');
@@ -169,23 +171,42 @@ fn normalized(sql: &str) -> String {
     sql.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn migration_1_sql() -> String {
-    let text = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/src/store/migrations/0001.sql")).unwrap();
-    // Drop the file's leading comment header (up to the first blank line).
-    text.split_once("\n\n").unwrap().1.to_owned()
+/// `(name, sql)` of every table, index and trigger in `conn`, normalized: a
+/// table rebuilt by a migration is stored as `CREATE TABLE "<name>"`.
+fn schema_sql(conn: &Connection) -> Vec<(String, String)> {
+    let mut stmt = conn
+        .prepare("SELECT name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' AND sql IS NOT NULL ORDER BY name")
+        .unwrap();
+    stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .unwrap()
+        .map(|row| {
+            let (name, sql) = row.unwrap();
+            let sql = normalized(&sql.replacen(&format!("CREATE TABLE \"{name}\""), &format!("CREATE TABLE {name}"), 1));
+            (name, sql)
+        })
+        .collect()
 }
 
 #[test]
-fn migration_1_is_contract_4_4_as_written() {
+fn the_schema_is_contract_4_4_as_written() {
     let blocks = contract_ddl_blocks();
-    assert_eq!(blocks.len(), 6, "§4.4 changed shape");
+    assert_eq!(blocks.len(), 7, "§4.4 changed shape");
     assert!(blocks[1].contains("CREATE TRIGGER escalations_hist_ins"), "block 2 is the generated example");
-    let expected: String = [&blocks[0], &blocks[2], &blocks[3], &blocks[4], &blocks[5]]
-        .iter()
-        .map(|b| b.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_eq!(normalized(&migration_1_sql()), normalized(&expected));
+    // The contract's DDL, every block but the generated example, run as written.
+    let contract = Connection::open_in_memory().unwrap();
+    for (i, block) in blocks.iter().enumerate() {
+        if i != 1 {
+            contract.execute_batch(block).unwrap_or_else(|e| panic!("block {}: {e}", i + 1));
+        }
+    }
+    let expected = schema_sql(&contract);
+    assert!(expected.len() > 40, "{expected:?}");
+    let env = TestEnv::new();
+    drop(open(&env));
+    let found: std::collections::BTreeMap<String, String> = schema_sql(&raw(&env)).into_iter().collect();
+    for (name, sql) in expected {
+        assert_eq!(found.get(&name), Some(&sql), "{name}");
+    }
 }
 
 #[test]
@@ -209,6 +230,8 @@ fn every_table_index_and_trigger_of_4_4_exists() {
         expected.insert(format!("{table}_hist_upd"));
         expected.insert(format!("{table}_no_delete"));
     }
+    // Described in §4.4's prose, written like `dependencies_hist_del`.
+    expected.insert("pr_needs_hist_del".to_owned());
     let found = names(
         &raw(&env),
         "SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
@@ -216,7 +239,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     assert_eq!(found, expected);
     // Every table is STRICT.
     let tables = names(&raw(&env), "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'");
-    assert_eq!(tables.len(), 13);
+    assert_eq!(tables.len(), 15);
     for table in tables {
         let strict: i64 = raw(&env)
             .query_row("SELECT strict FROM pragma_table_list WHERE name = ?1", [&table], |r| r.get(0))
@@ -262,10 +285,10 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
             assert!(upd.contains(&format!("'{column}', OLD.{column}")), "{table}_hist_upd lacks OLD.{column}");
             assert!(upd.contains(&format!("'{column}', NEW.{column}")), "{table}_hist_upd lacks NEW.{column}");
         }
-        if *table == "dependencies" {
-            let del = sql_of("dependencies_hist_del");
+        if ["dependencies", "pr_needs"].contains(table) {
+            let del = sql_of(&format!("{table}_hist_del"));
             for column in &columns {
-                assert!(del.contains(&format!("'{column}', OLD.{column}")), "dependencies_hist_del lacks {column}");
+                assert!(del.contains(&format!("'{column}', OLD.{column}")), "{table}_hist_del lacks {column}");
             }
         }
     }
@@ -313,9 +336,11 @@ fn check_constraints_reject_a_bad_value_in_every_constrained_table() {
         ("history", "INSERT INTO history (txn, tbl, pk, op, before, after) VALUES (cpd_txn(), 'x', '{}', 'insert', NULL, '{}')".to_owned()),
         ("contexts", "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('x', 'T', 't', 'm')".to_owned()),
         ("context_records", "INSERT INTO context_records (context, id, kind, at, machine, text) VALUES ('ctx', 'n1', 'bogus', 't', 'm', 'x')".to_owned()),
-        ("plans", "INSERT INTO plans (id, context, title, repo, base, lead_branch, phase, lead_session, created_at) VALUES ('ops', 'ctx', 'O', '/r', 'main', 'cpd/other', 'grounding', 'lead1', 't')".to_owned()),
+        ("plans", "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('ops', 'ctx', 'O', 'bogus', 'lead1', 't')".to_owned()),
+        ("prs", format!("INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES ('pay', 'web', '/r', 'main', 'waiting', 'cpd/other', {txn}, 't')")),
+        ("pr_needs", "INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'pay', 'pay')".to_owned()),
         ("plan_reviews", format!("INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at) VALUES ('pay', 'r2', 1, '{FP}', 'pending', 't')")),
-        ("jobs", format!("INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at) VALUES ('pay', 'web', 'W', 'X9', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, NULL, {txn}, 't')")),
+        ("jobs", format!("INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at) VALUES ('pay', 'pay', 'web', 'W', 'X9', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, NULL, {txn}, 't')")),
         ("dependencies", "INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'ui', 'ui')".to_owned()),
         ("attempts", "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at) VALUES ('pay', 'ui-a1', 'ui', 1, 'S2', 'ladder', 'reviewing', 'cpd/pay--ui-a1', '/w', 't')".to_owned()),
         ("escalations", "INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at) VALUES ('pay', 'api-a1-q2', 'api-a1', 2, 'Q', 'pending', 1, 't')".to_owned()),
@@ -344,7 +369,7 @@ fn transitions_outside_section_3_are_illegal_transition() {
     let mut store = open(&env);
     fixture(&mut store);
     for sql in [
-        "UPDATE plans SET phase = 'dispatch', lead_worktree = '/w', locked_at = 't' WHERE id = 'pay'",
+        "UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay'",
         "UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api'",
         "UPDATE attempts SET status = 'starting' WHERE id = 'api-a1'",
         "UPDATE escalations SET status = 'answered', answer = 'a', answered_at = 't' WHERE id = 'api-a1-q1';
@@ -372,8 +397,8 @@ fn a_locked_job_and_its_dependencies_are_job_locked() {
     fixture(&mut store);
     for sql in [
         "UPDATE jobs SET title = 'New' WHERE key = 'api'",
-        "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-           VALUES ('pay', 'web', 'W', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, 1, 't');
+        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+           VALUES ('pay', 'pay', 'web', 'W', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, 1, 't');
          INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'api', 'web')",
     ] {
         let err = refused(&mut store, sql);
@@ -412,8 +437,8 @@ fn appending_a_job_inserts_its_dependencies_in_its_own_transaction() {
             exec(
                 tx,
                 &format!(
-                    "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
-                       VALUES ('pay', 'web', 'W', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, '{FP}', {}, 't');
+                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+                       VALUES ('pay', 'pay', 'web', 'W', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, '{FP}', {}, 't');
                      INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'web', 'api');",
                     tx.id()
                 ),
@@ -455,7 +480,7 @@ fn append_only_tables_refuse_updates_and_deletes() {
         assert_eq!(sqlite_message(&err), message, "{sql}");
     }
     // The fixture's rows: the generated `<table>_no_delete` refuses them.
-    for table in ["contexts", "sessions", "plans", "jobs", "attempts", "escalations"] {
+    for table in ["contexts", "sessions", "plans", "prs", "jobs", "attempts", "escalations"] {
         let err = refused(&mut store, &format!("DELETE FROM {table}"));
         assert_eq!(err.code(), ErrorCode::StoreFailed, "{table}: {err:?}");
         assert_eq!(sqlite_message(&err), format!("append_only: {table}"));
@@ -630,7 +655,7 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
     let mut store = fixture_store(&env);
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     let hash = store.read(|c| Ok(cpd_core::store::schema_hash(c)?)).unwrap();
-    assert_eq!(hash, "c4529a6f3cd787333b8115bade42de35504eb4902773945cfbde80ba93acfc5f");
+    assert_eq!(hash, "62a082772ccbcd0c989f5181e3b934ba96a3ab3f1d9db81cf8e39cef5ef89579", "version 4 (R34) on top of migration 3");
 
     for table in ["contexts", "plans", "sessions"] {
         let archived: Option<String> =

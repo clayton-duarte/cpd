@@ -109,10 +109,12 @@ fn fx() -> Fx {
          INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
-         INSERT INTO plans (id, context, title, repo, base, lead_branch, lead_worktree, phase, lead_session, created_at, locked_at)
-           VALUES ('pay', 'ctx', 'Pay', '{repo}', 'main', 'cpd/pay', '{lead}', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-           VALUES ('pay', 'api', 'Title of api', 'S2', 'Do api.', 'Because.', '[\"api.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');",
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+           VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+           VALUES ('pay', 'repo', '{repo}', 'main', 'dispatch', 'cpd/pay', '{lead}', cpd_txn(), 't', 't');
+         INSERT INTO jobs (plan, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+           VALUES ('pay', 'api', 'repo', 'Title of api', 'S2', 'Do api.', 'Because.', '[\"api.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');",
         repo = fx.repo.display(),
         lead = fx.lead.display()
     ));

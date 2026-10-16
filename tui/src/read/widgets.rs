@@ -1,5 +1,5 @@
 //! The `widgets` view's snapshot (commands.md §17), the Dispatch column: the
-//! machine-wide numbers (slots, the engine), every Plan's PR and feedback,
+//! machine-wide numbers (slots, the engine), every Plan's pull requests and feedback,
 //! every open Escalation and the latest Events (`plan list`, with the rows the
 //! column draws from).
 
@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use cpd_core::error::CpdError;
 use cpd_core::events::{Event, highest_id};
-use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId};
+use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, PrKey};
 use cpd_core::store::Store;
 
 use super::flow::{OpenEscalation, open_escalation};
@@ -70,7 +70,8 @@ pub enum Engine {
     Crashed { pid: u32, since: String },
 }
 
-/// A Plan, for the Dispatch column: its head (counts, PR), its label, its PR's row and its latest PR feedback.
+/// A Plan, for the Dispatch column: its head (counts), its label, the rows of its PRs that have a pull request and its
+/// latest PR feedback.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlanCard {
     pub head: PlanHead,
@@ -79,14 +80,15 @@ pub struct PlanCard {
     /// Where the Lead Session's pane is (its latest `session-moved`; `None` before any): the Dispatch column lists
     /// the Plans whose Lead is in the cockpit, in the chat slot or parked (commands.md §17).
     pub lead_place: Place,
-    /// The PR as the column draws it; `None` when the Plan has no PR.
-    pub pr: Option<PrRow>,
+    /// Its PRs that have a pull request, in key order (R34), as the column draws them; empty when none has one.
+    pub prs: Vec<PrRow>,
     pub feedback: Option<PrFeedback>,
 }
 
-/// A Plan's PR: number, state, and what `pr poll` last stored (contract §4.5, §7.6).
+/// A PR's pull request: number, state, and what `pr poll` last stored (contract §4.4, §7.6).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrRow {
+    pub key: PrKey,
     pub number: i64,
     pub state: PrState,
     /// `None` until the PR's first poll: the three columns are stored together.
@@ -101,7 +103,7 @@ pub struct PolledPr {
     pub checks: Checks,
 }
 
-/// The PR's review decision, from `plans.pr_review_decision`.
+/// The PR's review decision, from `prs.pr_review_decision`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReviewDecision {
     None,
@@ -146,7 +148,7 @@ pub fn widgets(store: &mut Store, concurrency: u32, recent: u32) -> Result<Widge
 
 fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
     let labels = labels(conn)?;
-    let mut polled = polled(conn)?;
+    let mut pulls = pulls(conn)?;
     plan_heads(conn, None)?
         .into_iter()
         .map(|head| {
@@ -154,14 +156,10 @@ fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
                 .get(head.id.as_str())
                 .cloned()
                 .ok_or_else(|| bad_row(format!("Plan {} has no Lead Session {}", head.id, head.lead_session)))?;
-            let pr = head.pr.as_ref().map(|pr| PrRow {
-                number: pr.number,
-                state: pr.state,
-                polled: polled.remove(head.id.as_str()),
-            });
-            // Only a Plan with a PR has feedback: one query per PR, not per Plan.
-            let feedback = if head.pr.is_some() { feedback(conn, &head.id)? } else { None };
-            Ok(PlanCard { label, lead_place, pr, feedback, head })
+            let prs = pulls.remove(head.id.as_str()).unwrap_or_default();
+            // Only a Plan with a pull request has feedback: one query per such Plan, not per Plan.
+            let feedback = if prs.is_empty() { None } else { feedback(conn, &head.id)? };
+            Ok(PlanCard { label, lead_place, prs, feedback, head })
         })
         .collect()
 }
@@ -184,34 +182,47 @@ fn labels(conn: &Connection) -> Result<BTreeMap<String, (String, Place)>, CpdErr
     Ok(out)
 }
 
-/// Plan id → what `pr poll` stored, for the Plans it has polled.
-fn polled(conn: &Connection) -> Result<BTreeMap<String, PolledPr>, CpdError> {
+/// Plan id → its PRs that have a pull request, in key order, each with what `pr poll` stored once it polled it.
+fn pulls(conn: &Connection) -> Result<BTreeMap<String, Vec<PrRow>>, CpdError> {
     let mut stmt = conn.prepare(
-        "SELECT id, pr_title, pr_review_decision, pr_checks FROM plans
-          WHERE pr_title IS NOT NULL OR pr_review_decision IS NOT NULL OR pr_checks IS NOT NULL",
+        "SELECT plan, key, pr_number, status, coalesce(json_extract(pr_seen, '$.closed'), 0), pr_title, pr_review_decision,
+                pr_checks
+           FROM prs WHERE pr_number IS NOT NULL ORDER BY plan, key",
     )?;
     let mut rows = stmt.query([])?;
-    let mut out = BTreeMap::new();
+    let mut out: BTreeMap<String, Vec<PrRow>> = BTreeMap::new();
     while let Some(r) = rows.next()? {
-        let plan: String = r.get(0)?;
-        let (title, decision, checks): (Option<String>, Option<String>, Option<String>) = (r.get(1)?, r.get(2)?, r.get(3)?);
-        let (Some(title), Some(decision), Some(checks)) = (title, decision, checks) else {
-            return Err(bad_row(format!("Plan {plan} has only some of pr_title, pr_review_decision and pr_checks")));
+        let (plan, key, number, status, closed): (String, String, i64, String, bool) =
+            (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?);
+        let what = format!("PR {plan}/{key}");
+        let state = match status.as_str() {
+            "merged" => PrState::Merged,
+            _ if closed => PrState::Closed,
+            _ => PrState::Open,
         };
-        let decision = match decision.as_str() {
-            "none" => ReviewDecision::None,
-            "approved" => ReviewDecision::Approved,
-            "changes_requested" => ReviewDecision::ChangesRequested,
-            _ => return Err(bad_row(format!("Plan {plan} has pr_review_decision {decision:?}"))),
+        let (title, decision, checks): (Option<String>, Option<String>, Option<String>) = (r.get(5)?, r.get(6)?, r.get(7)?);
+        let polled = match (title, decision, checks) {
+            (None, None, None) => None,
+            (Some(title), Some(decision), Some(checks)) => {
+                let decision = match decision.as_str() {
+                    "none" => ReviewDecision::None,
+                    "approved" => ReviewDecision::Approved,
+                    "changes_requested" => ReviewDecision::ChangesRequested,
+                    _ => return Err(bad_row(format!("{what} has pr_review_decision {decision:?}"))),
+                };
+                let checks = match checks.as_str() {
+                    "none" => Checks::None,
+                    "passed" => Checks::Passed,
+                    "pending" => Checks::Pending,
+                    "failed" => Checks::Failed,
+                    _ => return Err(bad_row(format!("{what} has pr_checks {checks:?}"))),
+                };
+                Some(PolledPr { title, decision, checks })
+            }
+            _ => return Err(bad_row(format!("{what} has only some of pr_title, pr_review_decision and pr_checks"))),
         };
-        let checks = match checks.as_str() {
-            "none" => Checks::None,
-            "passed" => Checks::Passed,
-            "pending" => Checks::Pending,
-            "failed" => Checks::Failed,
-            _ => return Err(bad_row(format!("Plan {plan} has pr_checks {checks:?}"))),
-        };
-        out.insert(plan, PolledPr { title, decision, checks });
+        let key = id("PR key", &key, PrKey::parse)?;
+        out.entry(plan).or_default().push(PrRow { key, number, state, polled });
     }
     Ok(out)
 }

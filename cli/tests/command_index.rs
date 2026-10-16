@@ -70,3 +70,21 @@ fn session_close_is_indexed_and_exists() {
     assert!(documented_commands().contains(&vec!["session".to_owned(), "close".to_owned()]));
     assert!(Cli::command().find_subcommand("session").unwrap().find_subcommand("close").is_some());
 }
+
+/// `pr add`, `pr edit` and `pr cancel` are documented in §2 (R34) and exist.
+#[test]
+fn pr_crud_is_indexed_and_exists() {
+    let documented = documented_commands();
+    let pr = Cli::command().find_subcommand("pr").unwrap().clone();
+    for word in ["add", "edit", "cancel"] {
+        assert!(documented.contains(&vec!["pr".to_owned(), word.to_owned()]), "pr {word} is not in §2");
+        assert!(pr.find_subcommand(word).is_some(), "pr {word} does not exist");
+    }
+}
+
+/// `pr start` is documented in §2 (R34, §9.7) and exists.
+#[test]
+fn pr_start_is_indexed_and_exists() {
+    assert!(documented_commands().contains(&vec!["pr".to_owned(), "start".to_owned()]));
+    assert!(Cli::command().find_subcommand("pr").unwrap().find_subcommand("start").is_some());
+}

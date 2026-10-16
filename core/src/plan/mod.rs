@@ -1,14 +1,17 @@
 //! Plans and their phases (contract §2.2, §2.3, §3.1; commands.md §4).
 //!
-//! - [`jobs`]: a Plan's Jobs as read, the fingerprints of §2.3, the cycle check;
+//! - [`jobs`]: a Plan's Jobs as read, the Locked-Job fingerprint of §2.3, the cycle check;
+//! - [`fingerprint`]: the plan fingerprint of §2.3, over the draft Jobs and the PRs;
 //! - [`render`]: the plan markdown of `plan render` and `plan review`;
 //! - [`lead`]: Lead windows in the cockpit (`plan new`, `plan phase plan`);
 //! - [`archive`]: `plan archive` and `unarchive`, and the cascade `context archive` shares;
-//! - `new`, `show`, `phase`, `review`, `lock`: the commands.
+//! - `new`, `list`, `show`, `phase`, `review`, `lock`: the commands.
 
 pub mod archive;
+pub mod fingerprint;
 pub mod jobs;
 mod lead;
+mod list;
 mod lock;
 mod new;
 mod phase;
@@ -29,7 +32,8 @@ use crate::ids::{ContextId, PlanId, ReviewId};
 use crate::output::Output;
 use crate::store::Store;
 
-pub use jobs::{locked_fingerprint, plan_fingerprint};
+pub use fingerprint::plan_fingerprint;
+pub use jobs::locked_fingerprint;
 pub use row::Phase;
 
 #[derive(clap::Subcommand, Debug)]
@@ -66,15 +70,9 @@ pub struct NewArgs {
     /// The Plan's Context
     #[arg(long, value_name = "c")]
     context: ContextId,
-    /// The repo
-    #[arg(long, value_name = "path")]
-    repo: PathBuf,
     /// The title
     #[arg(long, value_name = "text")]
     title: Text,
-    /// The branch the PR targets [default: origin's HEAD branch, else main]
-    #[arg(long, value_name = "branch")]
-    base: Option<String>,
     /// The Jira task key, stored only
     #[arg(long, value_name = "key")]
     jira: Option<Jira>,
@@ -173,7 +171,7 @@ pub struct UnarchiveArgs {
 pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
         Command::New(args) => new::new(args),
-        Command::List(args) => show::list(args),
+        Command::List(args) => list::list(args),
         Command::Show(args) => show::show(args),
         Command::Phase(args) => phase::phase(args),
         Command::Render(args) => review::render(args),

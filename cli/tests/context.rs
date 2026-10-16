@@ -92,8 +92,10 @@ fn fixture_plan(env: &TestEnv, plan: &str, context: &str) {
             tx.execute_batch(&format!(
                 "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
                    VALUES ('lead-{plan}', 'lead', '{context}', '{plan}', 'Lead', '/', 'O3', 'idle', 't', 't');
-                 INSERT INTO plans (id, context, title, repo, base, lead_branch, phase, lead_session, created_at)
-                   VALUES ('{plan}', '{context}', 'The {plan} plan', '/r', 'main', 'cpd/{plan}', 'grounding', 'lead-{plan}', 't');"
+                 INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+                   VALUES ('{plan}', '{context}', 'The {plan} plan', 'grounding', 'lead-{plan}', 't');
+                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                   VALUES ('{plan}', 'r', '/r', 'main', 'waiting', 'cpd/{plan}', cpd_txn(), 't');"
             ))?;
             Ok(())
         })
@@ -424,6 +426,51 @@ fn show_renders_the_records() {
     assert!(md.contains("hs-q2") && md.contains("When?"), "{md}");
     assert!(md.contains("answer hs-a1") && md.contains("Because."), "{md}");
     assert!(md.contains(&format!("({})", &records[0]["at"].as_str().unwrap()[..10])), "{md}");
+}
+
+#[test]
+fn show_lists_the_repos_of_each_plans_prs_from_the_database() {
+    let env = hs();
+    new_context(&env);
+    // A `plan` record has no repo; a line written before R34 has one, which is read and dropped (§4.6).
+    let file = records_file(&env, CTX, "hs");
+    let plan = |n: u32, plan: &str, machine: &str, repo: &str| {
+        format!(
+            "{{\"v\":1,\"id\":\"hs-p{n}\",\"kind\":\"plan\",\"at\":\"2026-10-14T21:12:00.000Z\",\"machine\":\"hs\",\"by\":{{\"session\":null,\"plan\":null}},\"text\":\"The {plan} plan\",\"plan\":{{\"id\":\"{plan}\",\"machine\":\"{machine}\"{repo}}}}}\n"
+        )
+    };
+    let text = [plan(1, "old", "hs", ",\"repo\":\"/gone\""), plan(2, "two", "hs", ""), plan(3, "none", "hs", ""), plan(4, "far", "zz", "")].concat();
+    fs::write(&file, text).unwrap();
+    env.git(&dir(&env, CTX), &["add", "-A"]);
+    env.git(&dir(&env, CTX), &["commit", "-q", "-m", "plans"]);
+    env.cpd(&["context", "sync", "--context", CTX]).ok();
+    for name in ["old", "two"] {
+        fixture_plan(&env, name, CTX);
+    }
+    let (_, _, mut store) = library(&env);
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(
+                "UPDATE prs SET repo = '/r/b', key = 'b' WHERE plan = 'two';
+                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                   VALUES ('two', 'a', '/r/a', 'main', 'waiting', 'cpd/two/a', cpd_txn(), 't'),
+                          ('two', 'c', '/r/b', 'main', 'waiting', 'cpd/two/c', cpd_txn(), 't'),
+                          ('two', 'd', '/r/dropped', 'main', 'cancelled', 'cpd/two/d', cpd_txn(), 't');",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    let out = env.cpd(&["context", "show", "--context", CTX]).ok();
+    let records = out["records"].as_array().unwrap();
+    assert_eq!(records[0]["plan"], json!({"id": "old", "machine": "hs"}), "the old repo is dropped");
+    let repos: Vec<&Value> = records.iter().map(|r| &r["repos"]).collect();
+    assert_eq!(repos, [&json!(["/r"]), &json!(["/r/a", "/r/b"]), &json!([]), &json!([])], "{records:?}");
+    let md = out["markdown"].as_str().unwrap();
+    assert!(md.contains("old (on hs, repos /r): The old plan"), "{md}");
+    assert!(md.contains("two (on hs, repos /r/a, /r/b): The two plan"), "{md}");
+    assert!(md.contains("none (on hs): The none plan") && md.contains("far (on zz): The far plan"), "{md}");
+    assert!(!md.contains("/gone") && !md.contains("/r/dropped"), "{md}");
 }
 
 #[test]
@@ -900,8 +947,8 @@ fn archivable(env: &TestEnv) {
            VALUES ('fork-pay', 'lead', 'building-cpd', 'pay', 'Fork', '/', 'O3', 'stopped', 't', 't1', 'lead-pay'),
                   ('grounded', 'lead', 'building-cpd', NULL, 'Grounded', '/', 'O3', 'idle', 't', 't0', NULL);
          UPDATE contexts SET lead_session = 'grounded', grounded_seq = 0 WHERE id = 'building-cpd';
-         INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-           VALUES ('pay', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, 1, 't');
+         INSERT INTO jobs (plan, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+           VALUES ('pay', 'api', 'r', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, 1, 't');
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)
            VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pay--api-a1', '/w', 'worker1', 't');
          INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at)

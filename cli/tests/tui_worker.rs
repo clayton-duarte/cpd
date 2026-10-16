@@ -44,15 +44,17 @@ fn populate(env: &TestEnv, file: Option<&Path>) {
         &format!(
             "INSERT INTO contexts (id, title, jira, created_at, created_on, lead_session, grounded_seq)
              VALUES ('alpha', 'Title', NULL, '2026-01-01T00:00:00.000Z', 'm1', NULL, NULL);
-             INSERT INTO plans (id, context, title, repo, base, lead_branch, lead_worktree, phase, lead_session, created_at, locked_at)
-             VALUES ('ship', 'alpha', 'Plan ship', '/repo', 'main', 'cpd/ship', '/wt', 'dispatch', 'l1',
-                     '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
+             INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+             VALUES ('ship', 'alpha', 'Plan ship', 'dispatch', 'l1', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
+             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+             VALUES ('ship', 'repo', '/repo', 'main', 'dispatch', 'cpd/ship', '/wt', cpd_txn(), '2026-01-02T00:00:00.000Z',
+                     '2026-01-02T00:00:00.000Z');
              INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
              VALUES ('l1', 'lead', 'alpha', 'ship', NULL, 'lead', '/sessions/l1.jsonl', '/repo', 'O3', NULL, 'idle', NULL,
                      '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
-             INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                                created_txn, created_at)
-             VALUES ('ship', 'api', 'Job api', 'S3', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', 'running', 0, '{}',
+             VALUES ('ship', 'repo', 'api', 'Job api', 'S3', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', 'running', 0, '{}',
                      cpd_txn(), '2026-01-02T00:00:00.000Z');
              INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)
              VALUES ('ship', 'api-a1', 'api', 1, 'S3', 'ladder', 'running', 'cpd/ship--api-a1', '/w/api-a1', 'w1',

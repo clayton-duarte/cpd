@@ -60,12 +60,19 @@ fn plan_row(id: &str, phase: &str, created: &str, pr: Option<(i64, Option<(&str,
         Some((t, d, c)) => (format!("'{t}'"), format!("'{d}'"), format!("'{c}'")),
         None => ("NULL".into(), "NULL".into(), "NULL".into()),
     };
+    let status = match phase {
+        "grounding" | "plan" => "waiting",
+        "dispatch" => "dispatch",
+        "pr" => "open",
+        _ => "merged",
+    };
     format!(
-        "INSERT INTO plans (id, context, title, repo, base, lead_branch, lead_worktree, phase, lead_session, pr_number,
-                            pr_url, pr_opened_at, pr_seen, pr_polled_at, pr_title, pr_review_decision, pr_checks,
-                            created_at, locked_at, done_at)
-         VALUES ('{id}', 'alpha', 'Plan {id}', '/repo', 'main', 'cpd/{id}', {worktree}, '{phase}', 'l-{id}',
-                 {number}, {url}, {opened}, {seen}, {polled_at}, {title}, {decision}, {checks}, '{created}', {locked}, {done});"
+        "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+         VALUES ('{id}', 'alpha', 'Plan {id}', '{phase}', 'l-{id}', '{created}', {locked}, {done});
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pr_seen,
+                          pr_polled_at, pr_title, pr_review_decision, pr_checks, created_txn, created_at, started_at, merged_at)
+         VALUES ('{id}', 'repo', '/repo', 'main', '{status}', 'cpd/{id}', {worktree}, {number}, {url}, {opened}, {seen},
+                 {polled_at}, {title}, {decision}, {checks}, cpd_txn(), '{created}', {locked}, {done});"
     )
 }
 
@@ -307,6 +314,33 @@ fn a_short_pane_drops_the_plans_without_a_pr_before_the_rest() {
     let short = rows(&render(46, 9 + 7, &w));
     assert!(!short.iter().any(|r| r.contains("no PR")), "{short:#?}");
     assert!(short.iter().any(|r| r.contains("#11 loading…")), "the Plans with a PR stay:\n{short:#?}");
+}
+
+#[test]
+fn a_plan_of_several_prs_takes_one_line_per_pull_request_in_key_order() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    // `web` (#21, open) and `api` (#20, merged) have pull requests; `docs` waits and has none
+    let mut s = context("alpha") + &lead_row("multi", "multi lead");
+    s += r#"INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+            VALUES ('multi', 'alpha', 'Plan multi', 'dispatch', 'l-multi', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
+            INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+                             pr_polled_at, pr_title, pr_review_decision, pr_checks, created_txn, created_at, started_at, merged_at)
+            VALUES ('multi', 'web', '/src/web', 'main', 'open', 'cpd/multi/web', '/wt/web', 21, 'https://example.test/pull/21',
+                    '2026-01-05T00:00:00.000Z', '2026-01-06T00:00:00.000Z', 'web side', 'none', 'pending', cpd_txn(),
+                    '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', NULL),
+                   ('multi', 'api', '/src/api', 'main', 'merged', 'cpd/multi/api', '/wt/api', 20, 'https://example.test/pull/20',
+                    '2026-01-05T00:00:00.000Z', '2026-01-06T00:00:00.000Z', 'api side', 'approved', 'passed', cpd_txn(),
+                    '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', '2026-01-07T00:00:00.000Z');
+            INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+            VALUES ('multi', 'docs', '/src/docs', 'main', 'waiting', 'cpd/multi/docs', cpd_txn(), '2026-01-02T00:00:00.000Z');"#;
+    s += &moved("2026-01-03T00:00:00.000Z", "multi", "chat");
+    sql(&mut store, &s);
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    let keys: Vec<&str> = w.plans[0].prs.iter().map(|p| p.key.as_str()).collect();
+    assert_eq!(keys, ["api", "web"], "the PRs with a pull request, in key order");
+    let got = rows(&render(46, 16, &w));
+    assert_eq!(got[3..7], [" PRs", " multi lead", "  #20 merged ✓ approved  api side", "  #21 open … no review  web side"], "{got:#?}");
 }
 
 // ---------- the legend ----------

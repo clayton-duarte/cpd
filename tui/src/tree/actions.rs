@@ -44,9 +44,9 @@ impl Subject {
 pub enum Action {
     /// `session open <id>` (§10.4), then the focus on the chat slot: Enter, or a click on a Session.
     Open(SessionId),
-    /// `plan new <id> --context=<c> --repo=<path> --title=<title>` (§4.1): `n` (the title is the id) and New Plan….
+    /// `plan new <id> --context=<c> --title=<title>` (§4.1): `n` (the title is the id) and New Plan….
     /// The Lead forks the Context's grounded Lead (R15).
-    NewPlan { context: ContextId, id: PlanId, repo: String, title: String },
+    NewPlan { context: ContextId, id: PlanId, title: String },
     /// `context new <id> --title=<title>` (§3.1): New Context….
     NewContext { id: ContextId, title: String },
     /// `context rename <id> --title=<title>` (§3.7).
@@ -75,9 +75,9 @@ impl Action {
         let words = |w: &[&str]| w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         match self {
             Action::Open(id) => words(&["session", "open", id.as_str()]),
-            Action::NewPlan { context, id, repo, title } => {
+            Action::NewPlan { context, id, title } => {
                 let mut argv = words(&["plan", "new", id.as_str()]);
-                argv.extend([format!("--context={context}"), format!("--repo={repo}"), format!("--title={title}")]);
+                argv.extend([format!("--context={context}"), format!("--title={title}")]);
                 argv
             }
             Action::NewContext { id, title } => vec!["context".into(), "new".into(), id.to_string(), format!("--title={title}")],
@@ -202,10 +202,9 @@ mod tests {
                 Action::NewPlan {
                     context: ContextId::parse("alpha").unwrap(),
                     id: PlanId::parse("pay-4521").unwrap(),
-                    repo: "/work/pay".into(),
                     title: "Pay 4521".into(),
                 },
-                vec!["plan", "new", "pay-4521", "--context=alpha", "--repo=/work/pay", "--title=Pay 4521"],
+                vec!["plan", "new", "pay-4521", "--context=alpha", "--title=Pay 4521"],
             ),
             (
                 Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into() },
@@ -234,7 +233,7 @@ mod tests {
         let close = Action::Close(sid("l-ship"));
         assert_eq!(close.done(&json!({"ok": true, "session": "l-ship", "pane": "%4"})), "closed");
         assert_eq!(close.done(&json!({"ok": true, "already": true})), "session is already gone");
-        let new = Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay").unwrap(), repo: "/r".into(), title: "Pay".into() };
+        let new = Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay").unwrap(), title: "Pay".into() };
         assert_eq!(new.done(&json!({"ok": true})), "forking pay in window park-pay");
         let context = Action::NewContext { id: ContextId::parse("alpha").unwrap(), title: "Alpha".into() };
         assert_eq!(context.done(&json!({"ok": true})), "created alpha");

@@ -225,7 +225,7 @@ mod tests {
         let kind = |p: &[&str]| Kind::of(rows::row(&tree, &path(p)));
         assert_eq!(kind(&["alpha"]), Some(Kind::Context));
         assert_eq!(kind(&["alpha", "ship"]), Some(Kind::Plan));
-        assert_eq!(kind(&["alpha", "ship", "f-idle"]), Some(Kind::Fork));
+        assert_eq!(kind(&["alpha", "f-idle"]), Some(Kind::Fork));
         assert_eq!(Kind::of(None), Some(Kind::Empty));
         let tree = archived();
         let kind = |p: &[&str]| Kind::of(rows::row(&tree, &path(p)));
@@ -235,7 +235,7 @@ mod tests {
         assert_eq!(kind(&["alpha", "…", "fork:f-blocked"]), Some(Kind::Archived), "an archived fork of a live Plan");
         assert_eq!(kind(&["…", "zeta"]), Some(Kind::Archived), "an archived Context");
         assert_eq!(kind(&["…", "zeta", "zp"]), Some(Kind::Archived));
-        assert_eq!(kind(&["…", "zeta", "zp", "f-zp"]), Some(Kind::Archived));
+        assert_eq!(kind(&["…", "zeta", "f-zp"]), Some(Kind::Archived));
         assert_eq!(kind(&["alpha", "ship"]), Some(Kind::Plan), "a live row of a tree with archived ones");
     }
 

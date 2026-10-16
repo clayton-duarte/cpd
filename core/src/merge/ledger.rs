@@ -25,9 +25,9 @@ pub struct Attempt {
     pub branch: String,
     pub worktree: PathBuf,
     pub worker_session: Option<SessionId>,
-    /// The Plan's repo: the realpath of its main worktree.
+    /// The repo of the Job's PR: the realpath of its main worktree.
     pub repo: PathBuf,
-    /// `cpd/<plan>`.
+    /// The Lead Branch of the Job's PR.
     pub lead_branch: String,
     pub lead_worktree: PathBuf,
 }
@@ -40,8 +40,9 @@ fn corrupt(what: String) -> CpdError {
 pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt, CpdError> {
     let row = conn
         .query_row(
-            "SELECT a.job, a.tier, a.status, a.branch, a.worktree, a.worker_session, p.repo, p.lead_branch, p.lead_worktree
-             FROM attempts a JOIN plans p ON p.id = a.plan WHERE a.plan = ?1 AND a.id = ?2",
+            "SELECT a.job, a.tier, a.status, a.branch, a.worktree, a.worker_session, r.repo, r.lead_branch, r.lead_worktree
+             FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job JOIN prs r ON r.plan = j.plan AND r.key = j.pr
+             WHERE a.plan = ?1 AND a.id = ?2",
             params![plan.as_str(), id.to_string()],
             |r| {
                 Ok((
@@ -82,11 +83,12 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
     })
 }
 
-/// Every Attempt in `merging` of a Plan whose repo is `repo`, in id order.
+/// Every Attempt in `merging` whose Job's PR is on `repo`, in id order.
 pub fn merging_on_repo(conn: &Connection, repo: &str) -> Result<Vec<(PlanId, AttemptId)>, CpdError> {
     let mut stmt = conn.prepare(
-        "SELECT a.plan, a.id FROM attempts a JOIN plans p ON p.id = a.plan
-         WHERE a.status = 'merging' AND p.repo = ?1 ORDER BY a.plan, a.id",
+        "SELECT a.plan, a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+           JOIN prs r ON r.plan = j.plan AND r.key = j.pr
+         WHERE a.status = 'merging' AND r.repo = ?1 ORDER BY a.plan, a.id",
     )?;
     let rows = stmt
         .query_map([repo], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?

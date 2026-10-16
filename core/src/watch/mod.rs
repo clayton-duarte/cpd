@@ -1,7 +1,8 @@
 //! The engine, `cpd watch` (contract §3.7, §6.6; commands.md §12): one per
-//! machine, running E1–E6 every `tick_seconds` under `locks/watch.lock`.
+//! machine, running E1–E7 every `tick_seconds` under `locks/watch.lock`.
 //!
-//! - [`engine`]: the loop, its signals, `watch-started` and `watch-stopped`;
+//! - [`engine`]: the loop, its signals, `watch-started` and `watch-stopped`, and E7
+//!   (the PR start, which calls `pr::start`);
 //! - [`escalations`] E1, [`liveness`] E2, [`schedule`] E3, [`completion`] E4,
 //!   [`pr`] E5, [`contexts`] E6: one module per step;
 //! - [`report`]: an unexpected failure as an `error` Event, once until it clears;

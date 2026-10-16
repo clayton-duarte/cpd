@@ -1,8 +1,9 @@
 //! The `plan` view (commands.md §13.2, §17): the centre-top pane of the cockpit, ported from the cockpit of branch
 //! `cpd/cpd-ui` (`tui/src/flow.rs`, `tabs.rs`, `pr.rs`, `workers.rs`) onto the read model of [`crate::read`].
 //!
-//! It shows the Plan of the Lead in the chat slot as a left-to-right flow chart of its Jobs ([`flow`]), under the tabs
-//! of the Context's Leads ([`tabs`]): the top row is only the Context's id and the tabs, with nothing at the right.
+//! It shows the Plan of the Lead in the chat slot as one box per PR ([`boxes`], R34 A15), left to right by the PRs'
+//! needs, each holding the left-to-right flow chart of its Jobs ([`flow`]), under the tabs of the Context's Leads
+//! ([`tabs`]): the top row is only the Context's id and the tabs, with nothing at the right.
 //!
 //! Data: one snapshot of the store ([`snapshot`]), then the Events, followed in this process from the snapshot's
 //! cursor (one `events` query every `events.poll_ms`, no subprocess); a snapshot is retaken at most every
@@ -13,6 +14,7 @@
 //! tab. There is no `q`: a layout pane that dies stays dead (contract §6.1).
 
 mod actions;
+mod boxes;
 mod flow;
 mod tabs;
 
@@ -23,12 +25,14 @@ use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event as Input, KeyCode, KeyEventKind, MouseButton, MouseEventKind,
 };
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
+use ratatui::style::Stylize;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use self::actions::Actions;
 use self::flow::{Chart, Dir, Selection};
 use crate::palette;
-use super::read::{self, ChatSlot, Flow, Place, SessionNode};
+use super::read::{self, ChatSlot, Place, PlanBoxes, SessionNode};
 use super::{RunCommand, not_a_terminal, on_a_terminal};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
@@ -44,7 +48,7 @@ const COALESCE: Duration = Duration::from_millis(500);
 /// What the pane shows when a Lead is in the chat slot.
 struct Centre {
     slot: ChatSlot,
-    flow: Flow,
+    plan: PlanBoxes,
     /// The Context's id.
     context: String,
     tabs: Vec<(SessionId, String)>,
@@ -73,9 +77,9 @@ fn snapshot(store: &mut Store) -> Result<Snapshot, CpdError> {
     // Read first: whatever the later reads see is at least this new, so following from here loses nothing.
     let cursor = store.read(highest_id)?;
     let Some(slot) = read::chat_slot(store)? else { return Ok(Snapshot { cursor, centre: None }) };
-    let flow = read::flow(store, &slot.plan)?;
+    let plan = read::plan_boxes(store, &slot.plan)?;
     let tree = read::tree(store)?;
-    let context = tree.contexts.into_iter().find(|c| c.id == flow.head.context);
+    let context = tree.contexts.into_iter().find(|c| c.id == plan.context);
     let tabs = context
         .iter()
         .flat_map(|c| &c.plans)
@@ -83,9 +87,9 @@ fn snapshot(store: &mut Store) -> Result<Snapshot, CpdError> {
         .filter(|s| s.place != Place::None) // a tab is a Lead with a pane in the cockpit
         .map(|s| (s.id.clone(), tab_label(s)))
         .collect();
-    let context = flow.head.context.to_string();
-    let chart = flow::layout(&flow::flow_jobs(&flow));
-    Ok(Snapshot { cursor, centre: Some(Centre { slot, flow, context, tabs, chart }) })
+    let context = plan.context.to_string();
+    let chart = boxes::layout(&plan.prs, &plan.jobs);
+    Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, context, tabs, chart }) })
 }
 
 /// Whether an Event changes what the pane shows: the Plan's or the Context's, or a move of a Lead (the chat slot or the
@@ -93,19 +97,34 @@ fn snapshot(store: &mut Store) -> Result<Snapshot, CpdError> {
 fn concerns(event: &Event, centre: Option<&Centre>) -> bool {
     let mine = |column: &Option<String>, id: &str| column.as_deref() == Some(id);
     event.kind == "session-moved"
-        || centre.is_some_and(|c| mine(&event.plan, c.flow.head.id.as_str()) || mine(&event.context, c.flow.head.context.as_str()))
+        || centre.is_some_and(|c| mine(&event.plan, c.plan.plan.as_str()) || mine(&event.context, c.plan.context.as_str()))
 }
 
-/// The line at the foot of the chart: an error, `no Plan yet`, then the note of the last action.
-fn message(error: Option<&str>, note: &str, centre: Option<&Centre>) -> Option<String> {
-    let mut parts: Vec<&str> = error.into_iter().collect();
-    if centre.is_some_and(|c| c.flow.jobs.is_empty()) {
-        parts.push("no Plan yet");
+/// The line at the foot of the chart: an error, `no PR yet: cpd pr add` (dim) or `no Plan yet`, then the note of the
+/// last action.
+fn message(error: Option<&str>, note: &str, centre: Option<&Centre>) -> Option<Line<'static>> {
+    let mut parts: Vec<Span<'static>> = error.into_iter().map(|e| Span::styled(e.to_owned(), palette::note())).collect();
+    match centre {
+        Some(c) if c.plan.prs.is_empty() => parts.push("no PR yet: cpd pr add".dim()),
+        Some(c) if c.plan.jobs.is_empty() => parts.push(Span::styled("no Plan yet", palette::note())),
+        _ => {}
     }
     if !note.is_empty() {
-        parts.push(note);
+        parts.push(Span::styled(note.to_owned(), palette::note()));
     }
-    (!parts.is_empty()).then(|| parts.join("  "))
+    (!parts.is_empty()).then(|| Line::from(spaced(parts)))
+}
+
+/// `parts` with two spaces between each pair.
+fn spaced(parts: Vec<Span<'static>>) -> Vec<Span<'static>> {
+    let mut out = Vec::with_capacity(parts.len() * 2);
+    for (i, part) in parts.into_iter().enumerate() {
+        if i > 0 {
+            out.push("  ".into());
+        }
+        out.push(part);
+    }
+    out
 }
 
 /// The User's state in the view, and where the last draw put things (for clicks).
@@ -145,7 +164,7 @@ impl Ui {
         let mut window = body.inner(Margin { horizontal: 2, vertical: 1 });
         if let Some(text) = message(self.error.as_deref(), &self.note, centre) {
             let [chart_area, message_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(window);
-            f.render_widget(Paragraph::new(text).style(palette::note()), message_area);
+            f.render_widget(Paragraph::new(text), message_area);
             window = chart_area;
         }
         self.body = window;
@@ -161,7 +180,7 @@ impl Ui {
 
 /// The Attempt a pill opens: the Job's current one.
 fn attempt_of(centre: &Centre, key: &str) -> Option<AttemptId> {
-    let job = centre.flow.jobs.iter().find(|j| j.key.as_str() == key)?;
+    let job = centre.plan.jobs.iter().find(|j| j.key.as_str() == key)?;
     job.current_attempt().map(|a| a.id.clone())
 }
 
@@ -299,7 +318,7 @@ fn show(
         if let Some(key) = open {
             ui.note = match attempt_of(centre, &key) {
                 None => format!("{key} has not started yet"),
-                Some(attempt) => match actions.toggle_worker(&centre.flow.head.id, &key, &attempt) {
+                Some(attempt) => match actions.toggle_worker(&centre.plan.plan, &key, &attempt) {
                     Ok(_) => String::new(),
                     Err(e) => e.message().to_owned(),
                 },

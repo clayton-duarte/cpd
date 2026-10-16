@@ -130,6 +130,8 @@ pub struct WorkerLaunch<'a> {
     pub model: &'a str,
     /// The `-e` sources to pass, from [`extensions_to_pass`].
     pub extensions: &'a [String],
+    /// A review Job's Worker (B2) is a fork of the Plan's Lead: its session file.
+    pub fork: Option<&'a Path>,
 }
 
 fn push_extensions(argv: &mut Vec<String>, extensions: &[String]) {
@@ -192,16 +194,18 @@ fn lead_env(launch: &LeadLaunch) -> BTreeMap<String, String> {
     env
 }
 
-/// A Worker: contract §6.5's last row.
+/// A Worker: contract §6.5's last two rows (a review Job's Worker forks the Lead).
 pub fn worker(launch: &WorkerLaunch) -> Launch {
     let mut argv: Vec<String> =
         ["pi", "--approve", "--no-skills", "--exclude-tools", WORKER_EXCLUDED_TOOLS].map(str::to_owned).into();
     push_extensions(&mut argv, launch.extensions);
     let attempt = launch.attempt;
     let spec = launch.home.worker_spec(launch.plan, attempt);
+    argv.extend(["--model".to_owned(), launch.model.to_owned()]);
+    if let Some(source) = launch.fork {
+        argv.extend(["--fork".to_owned(), source.display().to_string()]);
+    }
     argv.extend([
-        "--model".to_owned(),
-        launch.model.to_owned(),
         "--session-id".to_owned(),
         launch.session.to_string(),
         "-n".to_owned(),
@@ -587,6 +591,7 @@ mod tests {
             attempt: &attempt,
             model: "github-copilot/claude-sonnet-5.5:xhigh",
             extensions: &extensions,
+            fork: None,
         });
         assert_eq!(
             launch.argv,
@@ -606,6 +611,28 @@ mod tests {
         let spawn = launch.spawn(Path::new("/wt"));
         assert_eq!(spawn.cwd.as_deref(), Some(Path::new("/wt")));
         assert_eq!((spawn.argv, spawn.env), (launch.argv, launch.env));
+    }
+
+    #[test]
+    fn a_review_workers_argv_adds_the_fork_of_the_lead() {
+        let home = home();
+        let session = SessionId::parse(ID).unwrap();
+        let plan = PlanId::parse("cpd2").unwrap();
+        let attempt = AttemptId::new(JobKey::parse("final-review").unwrap(), NonZeroU32::new(1).unwrap());
+        let launch = super::worker(&WorkerLaunch {
+            home: &home,
+            session: &session,
+            plan: &plan,
+            attempt: &attempt,
+            model: "p/m:high",
+            extensions: &[],
+            fork: Some(Path::new("/s/lead.jsonl")),
+        });
+        let argv = &launch.argv;
+        let at = argv.iter().position(|a| a == "--fork").expect("--fork");
+        assert_eq!(argv[at + 1], "/s/lead.jsonl");
+        assert!(argv.contains(&"--approve".to_owned()) && argv.contains(&"--exclude-tools".to_owned()));
+        assert_eq!(&argv[at - 2..at], ["--model", "p/m:high"]);
     }
 
     #[test]

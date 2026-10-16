@@ -1,5 +1,5 @@
 //! The engine, `cpd watch` (contract §3.7, §6.6; commands.md §12): the lock
-//! and its refusal, the signals, `--ensure`, and each step E1–E6 on a
+//! and its refusal, the signals, `--ensure`, and each step E1–E6 (E7, the PR start, is in pr_start.rs) on a
 //! prepared database, with a private tmux server and fake `pi` and `cpd`.
 
 mod common;
@@ -136,8 +136,10 @@ fn fx(config_extra: &str) -> Fx {
          INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'stopped', 't', 't');
-         INSERT INTO plans (id, context, title, repo, base, lead_branch, lead_worktree, phase, lead_session, created_at, locked_at)
-           VALUES ('pay', 'ctx', 'Pay', '{repo}', 'main', 'cpd/pay', '{lead}', 'dispatch', 'lead1', 't', 't');",
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+           VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+           VALUES ('pay', 'repo', '{repo}', 'main', 'dispatch', 'cpd/pay', '{lead}', cpd_txn(), 't', 't');",
         repo = fx.repo.display(),
         lead = fx.lead.display()
     ));
@@ -165,8 +167,8 @@ impl Fx {
     /// moved to `status` by `then` (SQL run after the fingerprint is set).
     fn add_job(&self, key: &str, needs: &[&str], then: &str) {
         let mut sql = format!(
-            "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-             VALUES ('pay', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+             VALUES ('pay', 'repo', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         );
         for need in needs {
             sql += &format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');");
@@ -680,9 +682,9 @@ fn e4_appends_all_merged_once_when_no_job_is_left_to_run() {
     std::thread::sleep(Duration::from_millis(2500));
     engine.stop();
 
-    assert_eq!(fx.events("all-merged"), [(Some("pay".into()), None, None, json!({"merged": ["api"], "cancelled": ["web"]}))]);
-    assert!(fx.texts("all-merged")[0].ends_with("Next: cpd pr open --plan pay"));
-    assert!(fx.query::<Option<String>>("SELECT all_merged_at FROM plans WHERE id = 'pay'").is_some());
+    assert_eq!(fx.events("all-merged"), [(Some("pay".into()), None, None, json!({"pr": "repo", "merged": ["api"], "cancelled": ["web"]}))]);
+    assert!(fx.texts("all-merged")[0].ends_with("Next: cpd pr open --pr repo --plan pay"));
+    assert!(fx.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_some());
 }
 
 #[test]
@@ -703,7 +705,10 @@ fn e4_waits_while_a_job_is_queued() {
 
 /// Plan `pay` in phase `pr`.
 fn in_pr(fx: &Fx) {
-    fx.fixture("UPDATE plans SET phase = 'pr', pr_number = 7, pr_url = 'https://example.invalid/pr/7', pr_opened_at = 't' WHERE id = 'pay';");
+    fx.fixture(
+        "UPDATE plans SET phase = 'pr' WHERE id = 'pay';
+         UPDATE prs SET status = 'open', pr_number = 7, pr_url = 'https://example.invalid/pr/7', pr_opened_at = 't' WHERE plan = 'pay';",
+    );
 }
 
 #[test]

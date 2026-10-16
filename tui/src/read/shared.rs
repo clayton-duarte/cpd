@@ -132,7 +132,7 @@ impl JobCounts {
     }
 }
 
-/// `plans.pr_seen` (contract §2.2): what `pr poll` has already reported.
+/// `prs.pr_seen` (contract §2.2): what `pr poll` has already reported.
 #[derive(Deserialize)]
 struct Seen {
     checks: BTreeMap<String, String>,
@@ -374,9 +374,11 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
     }
 
     let mut stmt = conn.prepare(
-        "SELECT id, context, title, jira, repo, base, lead_branch, phase, lead_session, pr_number, pr_url,
-                pr_opened_at, pr_seen, pr_polled_at, created_at, locked_at, all_merged_at, done_at, archived_at
-           FROM plans WHERE ?1 IS NULL OR id = ?1 ORDER BY created_at, id",
+        "SELECT p.id, p.context, p.title, p.jira, r.repo, r.base, r.lead_branch, p.phase, p.lead_session, r.pr_number,
+                r.pr_url, r.pr_opened_at, r.pr_seen, r.pr_polled_at, p.created_at, p.locked_at, r.all_merged_at, p.done_at, p.archived_at
+           FROM plans p JOIN prs r ON r.plan = p.id
+                AND r.key = (SELECT key FROM prs WHERE plan = p.id ORDER BY created_txn, key LIMIT 1)
+          WHERE ?1 IS NULL OR p.id = ?1 ORDER BY p.created_at, p.id",
     )?;
     let mut rows = stmt.query([&only])?;
     let mut heads = Vec::new();

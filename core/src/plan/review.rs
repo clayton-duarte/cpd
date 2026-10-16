@@ -4,8 +4,10 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
+use super::fingerprint::{PrSpec, load_prs, plan_fingerprint};
 use super::jobs::{self, Job};
-use super::row::{self, Phase, PlanRow};
+use super::row::Phase;
+use super::show::{Head, load_head};
 use super::{DecideArgs, Env, RenderArgs, ReviewArgs, read_text_file, render, write_file};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
@@ -62,26 +64,43 @@ fn find(conn: &Connection, plan: &PlanId, review: ReviewId) -> Result<Option<Rev
     parse_review(raw)
 }
 
-/// The Plan, its Jobs and its latest review, in one read transaction.
-fn snapshot(env: &mut Env, id: &PlanId) -> Result<(PlanRow, Vec<Job>, Option<Review>), CpdError> {
-    env.store.read(|conn| Ok((row::load(conn, id)?, jobs::load(conn, id)?, latest(conn, id)?)))
+/// What `plan render` and `plan review` read, in one read transaction.
+struct Snapshot {
+    plan: Head,
+    prs: Vec<PrSpec>,
+    jobs: Vec<Job>,
+    review: Option<Review>,
+    fingerprint: String,
 }
 
-fn plan_markdown(plan: &PlanRow, jobs: &[Job]) -> String {
-    render::markdown(&plan.title, plan.context.as_str(), plan.phase.as_str(), jobs)
+fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
+    env.store.read(|conn| {
+        Ok(Snapshot {
+            plan: load_head(conn, id)?,
+            prs: load_prs(conn, id)?,
+            jobs: jobs::load(conn, id)?,
+            review: latest(conn, id)?,
+            fingerprint: plan_fingerprint(conn, id)?,
+        })
+    })
+}
+
+fn plan_markdown(s: &Snapshot) -> String {
+    render::markdown(&s.plan.title, s.plan.context.as_str(), s.plan.phase.as_str(), &s.prs, &s.jobs)
 }
 
 /// `plan render` (§4.5).
 pub(super) fn render(args: RenderArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (plan, jobs, _) = snapshot(&mut env, &id)?;
+    let s = snapshot(&mut env, &id)?;
     let path = env.home.plan_md(&id);
-    write_file(&path, &plan_markdown(&plan, &jobs))?;
+    write_file(&path, &plan_markdown(&s))?;
     Ok(Output::success(json!({
         "path": path.display().to_string(),
-        "fingerprint": jobs::plan_fingerprint(&jobs),
-        "draft_jobs": jobs.iter().filter(|j| j.is_draft()).count(),
+        "fingerprint": s.fingerprint,
+        "draft_jobs": s.jobs.iter().filter(|j| j.is_draft()).count(),
+        "prs": s.prs.iter().filter(|p| p.status != "cancelled").count(),
     })))
 }
 
@@ -89,7 +108,8 @@ pub(super) fn render(args: RenderArgs) -> Result<Output, CpdError> {
 pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (plan, jobs, latest_review) = snapshot(&mut env, &id)?;
+    let s = snapshot(&mut env, &id)?;
+    let (plan, jobs, latest_review, fingerprint) = (&s.plan, &s.jobs, s.review.clone(), s.fingerprint.clone());
     if plan.phase != Phase::Plan {
         return Err(CpdError::new(
             ErrorCode::IllegalPhase,
@@ -102,7 +122,6 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     if drafts == 0 {
         return Err(no_draft_jobs(&id));
     }
-    let fingerprint = jobs::plan_fingerprint(&jobs);
     if let Some(r) = latest_review.as_ref().filter(|r| r.status == "pending" && r.fingerprint == fingerprint) {
         return Ok(Output::success(json!({
             "review": {"id": r.id, "fingerprint": r.fingerprint, "status": r.status, "requested_at": r.requested_at},
@@ -115,16 +134,16 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     // The files first, so the review row never names a file that is missing.
     let number = latest_review.as_ref().map_or(0, |r| r.id.number().get()) + 1;
     let review = ReviewId::new(std::num::NonZeroU32::new(number).expect("one more than a count"));
-    let text = plan_markdown(&plan, &jobs);
+    let text = plan_markdown(&s);
     write_file(&env.home.plan_md(&id), &text)?;
     let path = env.home.plan_review_md(&id, review);
     write_file(&path, &text)?;
 
     let requested_at = env.store.write("plan review", |tx| {
-        // Compare-and-swap on what was read: the phase, the Jobs and the latest review.
-        let (now, jobs_now, latest_now) = (row::load(tx, &id)?, jobs::load(tx, &id)?, latest(tx, &id)?);
+        // Compare-and-swap on what was read: the phase, the plan fingerprint and the latest review.
+        let (now, fingerprint_now, latest_now) = (load_head(tx, &id)?, plan_fingerprint(tx, &id)?, latest(tx, &id)?);
         let latest_number = latest_now.map_or(0, |r| r.id.number().get());
-        if now.phase != Phase::Plan || jobs::plan_fingerprint(&jobs_now) != fingerprint || latest_number + 1 != number {
+        if now.phase != Phase::Plan || fingerprint_now != fingerprint || latest_number + 1 != number {
             return Err(CpdError::new(ErrorCode::CasLost, format!("Plan {id} changed while its review was rendered: rerun the command."))
                 .with("plan", id.as_str()));
         }
@@ -156,16 +175,16 @@ pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
     let status = if args.approve { "approved" } else { "rejected" };
     let feedback = args.feedback_file.as_deref().map(read_text_file).transpose()?;
     let mut env = Env::open()?;
-    let (review, jobs) = env.store.read(|conn| {
-        row::load(conn, &id)?;
+    let (review, fingerprint) = env.store.read(|conn| {
+        load_head(conn, &id)?;
         let review = find(conn, &id, args.review)?.ok_or_else(|| {
             CpdError::new(ErrorCode::ReviewNotFound, format!("Plan {id} has no review {}.", args.review))
                 .with("plan", id.as_str())
                 .with("review", args.review.to_string())
         })?;
-        Ok((review, jobs::load(conn, &id)?))
+        Ok((review, plan_fingerprint(conn, &id)?))
     })?;
-    let current = review.fingerprint == jobs::plan_fingerprint(&jobs);
+    let current = review.fingerprint == fingerprint;
     if review.status == status {
         return Ok(decided(&review, current, true));
     }

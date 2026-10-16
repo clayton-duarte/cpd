@@ -333,23 +333,27 @@ fn list() -> Result<Output, CpdError> {
 
 /// `context show` (§3.3).
 fn show(args: ShowArgs) -> Result<Output, CpdError> {
-    let (_, _, mut store) = open()?;
+    let (_, config, mut store) = open()?;
     let id = args.select.resolve(&mut store)?;
     let since = args.since.map_or(0, |s| i64::try_from(s).unwrap_or(i64::MAX));
-    let (row, records) = store.read(|conn| {
+    let (row, records, repos) = store.read(|conn| {
         let row = ContextRow::require(conn, &id)?;
         let mut stmt =
             conn.prepare(&format!("SELECT {} FROM context_records WHERE context = ?1 ORDER BY seq", Record::COLUMNS))?;
         let records = stmt.query_map([id.as_str()], Record::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok((row, records))
+        let repos = plan_repos(conn, &config.machine, &records)?;
+        Ok((row, records, repos))
     })?;
-    let markdown = render::markdown(&row.title, row.jira.as_deref(), &records, since);
+    let markdown = render::markdown(&row.title, row.jira.as_deref(), &records, since, &repos);
     let records: Vec<Value> = records
         .iter()
         .filter(|(seq, _)| *seq > since)
         .map(|(seq, record)| {
             let mut v = record.to_json();
             v["seq"] = json!(seq);
+            if let Some(repos) = repos.get(&record.id.to_string()) {
+                v["repos"] = json!(repos);
+            }
             v
         })
         .collect();
@@ -359,6 +363,32 @@ fn show(args: ShowArgs) -> Result<Output, CpdError> {
         "records": records,
         "markdown": markdown,
     })))
+}
+
+/// The repos of the PRs that are not `cancelled` of each `plan` record's Plan
+/// (commands.md §3.3), by record id: each repo once, in PR key order, from
+/// this machine's database. A Plan of another machine has none.
+pub(crate) fn plan_repos(
+    conn: &rusqlite::Connection,
+    machine: &crate::ids::MachineName,
+    records: &[render::Indexed],
+) -> Result<render::Repos, CpdError> {
+    let mut stmt = conn.prepare("SELECT repo FROM prs WHERE plan = ?1 AND status <> 'cancelled' ORDER BY key")?;
+    let mut out = render::Repos::new();
+    for (_, record) in records {
+        let Some(plan) = record.plan() else { continue };
+        let mut repos: Vec<String> = Vec::new();
+        if plan.machine == *machine {
+            for repo in stmt.query_map([plan.id.as_str()], |r| r.get::<_, String>(0))? {
+                let repo = repo?;
+                if !repos.contains(&repo) {
+                    repos.push(repo);
+                }
+            }
+        }
+        out.insert(record.id.to_string(), repos);
+    }
+    Ok(out)
 }
 
 /// `context decide`, `note`, `ask` and `answer` (§3.4, §3.5).

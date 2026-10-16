@@ -112,3 +112,14 @@ test("relative links resolve to files of the skill", () => {
     }
   }
 });
+
+test("rules allow git and gh for diagnosis, still forbid tmux, wt, force pushes and product commits", () => {
+  const text = skillFiles()[0]!.text;
+  const rule = text.split("\n").find((l) => l.startsWith("- `git` and `gh`") || /`git` and `gh` are allowed/.test(l));
+  assert.ok(rule, "Rules must say what git and gh may do");
+  assert.match(rule, /Never run `tmux` or `wt`/);
+  assert.match(rule, /never force-push/);
+  assert.match(rule, /never commit product changes/);
+  assert.ok(!/Never run `git`/.test(text), "git is no longer forbidden");
+  assert.match(text, /gh pr checks <n>[^|\n]*gh run view <run-id> --log-failed/);
+});

@@ -152,10 +152,10 @@ impl View {
                     self.prompt = None;
                     Effect::None
                 }
-                Outcome::NewPlan { context, id, repo } => {
+                Outcome::NewPlan { context, id } => {
                     self.prompt = None;
                     let title = id.to_string();
-                    Effect::Run(Action::NewPlan { context, id, repo, title })
+                    Effect::Run(Action::NewPlan { context, id, title })
                 }
                 Outcome::Run(action) => {
                     self.prompt = None;
@@ -187,7 +187,7 @@ impl View {
                 self.note.clear();
                 if let Some((row, session, plan)) = self.cursor_row().and_then(|r| Some((r, r.session()?, r.plan()?))) {
                     let target = Target { id: session.id.clone(), label: row.label(), working: session.state == State::Working };
-                    self.prompt = Some(Prompt::name(target, plan.head.context.clone(), plan.head.repo.clone()));
+                    self.prompt = Some(Prompt::name(target, plan.head.context.clone()));
                 }
             }
             KeyCode::Char('x') => {
@@ -296,11 +296,10 @@ impl View {
         }
     }
 
-    /// The prompt of New Plan… in `context`: the repo is that of its latest Plan (by creation), asked for when it has none.
+    /// The prompt of New Plan… in `context` (R34 A12: no repo).
     fn new_plan_in(&self, context: &ContextNode) -> Prompt {
-        let repo = context.plans.iter().max_by(|a, b| a.head.created_at.cmp(&b.head.created_at)).map(|p| p.head.repo.clone());
         let taken = self.tree.contexts.iter().flat_map(|c| &c.plans).map(|p| p.head.id.to_string()).collect();
-        Prompt::typed(Ask::NewPlan { context: context.id.clone(), repo, taken }, String::new())
+        Prompt::typed(Ask::NewPlan { context: context.id.clone(), taken }, String::new())
     }
 
     /// Opens the prompt, or says why not.
@@ -417,7 +416,7 @@ mod tests {
         press(&mut view, KeyCode::Down);
         assert_eq!(view.state.selected(), ["alpha", "ship"], "the first arrow only shows the cursor");
         press(&mut view, KeyCode::Char('j'));
-        assert_eq!(view.state.selected(), ["alpha", "ship", "f-idle"]);
+        assert_eq!(view.state.selected(), ["alpha", "sketch"]);
         press(&mut view, KeyCode::Char('k'));
         assert_eq!(view.state.selected(), ["alpha", "ship"]);
         press(&mut view, KeyCode::Up);
@@ -452,11 +451,11 @@ mod tests {
     #[test]
     fn enter_opens_the_lead_of_a_plan_row_and_a_fork() {
         assert_eq!(press(&mut on(&["alpha", "ship"]), KeyCode::Enter), Effect::Run(Action::Open(sid("l-ship"))));
-        assert_eq!(press(&mut on(&["alpha", "ship", "f-blocked"]), KeyCode::Enter), Effect::Run(Action::Open(sid("f-blocked"))));
+        assert_eq!(press(&mut on(&["alpha", "f-blocked"]), KeyCode::Enter), Effect::Run(Action::Open(sid("f-blocked"))));
     }
 
     #[test]
-    fn n_asks_for_a_name_and_starts_a_plan_in_the_context_and_repo_of_the_session() {
+    fn n_asks_for_a_name_and_starts_a_plan_in_the_context_of_the_session() {
         let mut view = on(&["alpha", "sketch"]);
         assert_eq!(press(&mut view, KeyCode::Char('n')), Effect::None);
         assert_eq!(view.footer(), "Fork Sketch into a new Plan, name: █ (Enter starts, Esc cancels)");
@@ -468,12 +467,11 @@ mod tests {
             Effect::Run(Action::NewPlan {
                 context: ContextId::parse("alpha").unwrap(),
                 id: PlanId::parse("pay-4521").unwrap(),
-                repo: "/repo/sketch".into(),
                 title: "pay-4521".into(),
             })
         );
         assert!(view.prompt.is_none());
-        let mut view = on(&["alpha", "ship", "f-idle"]);
+        let mut view = on(&["alpha", "f-idle"]);
         press(&mut view, KeyCode::Char('n'));
         assert_eq!(view.footer(), "Fork ship fork into a new Plan, name: █ (Enter starts, Esc cancels)");
     }
@@ -497,7 +495,7 @@ mod tests {
         tree.contexts[0].plans[0].sessions[1].state = State::Working;
         let mut view = View::new(tree, true);
         press(&mut view, KeyCode::Down);
-        view.state.select(vec!["alpha".into(), "ship".into(), "f-idle".into()]);
+        view.state.select(vec!["alpha".into(), "f-idle".into()]);
         press(&mut view, KeyCode::Char('x'));
         assert_eq!(view.footer(), "ship fork is working. Close ship fork? pi stops; the session file stays (y/N)");
     }
@@ -574,7 +572,7 @@ mod tests {
         click(&mut view, 5, 0);
         drawn(&mut view, 44, 10);
         assert_eq!(click(&mut view, 8, 1), Effect::Run(Action::Open(sid("l-ship"))), "the Plan row");
-        assert_eq!(click(&mut view, 8, 3), Effect::Run(Action::Open(sid("f-blocked"))), "a fork row");
+        assert_eq!(click(&mut view, 8, 5), Effect::Run(Action::Open(sid("f-blocked"))), "a fork row");
         assert_eq!(click(&mut view, 8, 9), Effect::None, "below the tree");
         assert_eq!(view.state.selected(), ["alpha", "sketch"], "no click moved the cursor");
     }
@@ -654,7 +652,7 @@ mod tests {
         }
         // the cursor is put on archived rows by hand, as a bug might: no key acts on it
         press(&mut view, KeyCode::Down);
-        for path in [&["alpha", "…", "old"][..], &["alpha", "…", "fork:f-blocked"], &["…", "zeta", "zp"], &["…", "zeta", "zp", "f-zp"], &["alpha", "…"]] {
+        for path in [&["alpha", "…", "old"][..], &["alpha", "…", "fork:f-blocked"], &["…", "zeta", "zp"], &["…", "zeta", "f-zp"], &["alpha", "…"]] {
             view.state.select(path.iter().map(|p| (*p).to_owned()).collect());
             for key in [KeyCode::Enter, KeyCode::Char('x'), KeyCode::Char('n')] {
                 assert_eq!(press(&mut view, key), Effect::None, "{path:?} {key:?}");
@@ -671,7 +669,7 @@ mod tests {
         let mut tree = archived();
         tree.contexts[0].plans[1].head.archived_at = Some(super::super::fixture::WHEN.into());
         view.refresh(tree);
-        assert_eq!(view.state.selected(), ["beta", "rel"], "the Session at its place, now");
+        assert_eq!(view.state.selected(), ["alpha", "f-idle"], "the Session at its place, now (the forks follow the Plans, B1)");
     }
 
     // ----- the right-click menu -----
@@ -701,7 +699,7 @@ mod tests {
         let mut view = View::new(sample(), true);
         assert_eq!(menu_at(&mut view, 5, 0), ["New Plan…", "Rename…", "Archive"], "a Context");
         assert_eq!(menu_at(&mut view, 8, 1), ["New session…", "Rename…", "Archive"], "a Plan");
-        assert_eq!(menu_at(&mut view, 8, 2), ["Open", "Rename…", "Fork…", "Close", "Archive"], "a fork");
+        assert_eq!(menu_at(&mut view, 8, 4), ["Open", "Rename…", "Fork…", "Close", "Archive"], "a fork");
         assert_eq!(menu_at(&mut view, 8, 14), ["New Context…"], "the empty area");
         assert_eq!(menu_at(&mut view, 8, 10), ["New Context…"], "below the last row");
         assert_eq!(view.note, "");
@@ -734,20 +732,20 @@ mod tests {
     fn the_menu_is_drawn_at_the_click_and_clamped_inside_the_pane() {
         let mut view = View::new(sample(), true);
         drawn(&mut view, 44, 16);
-        right_click(&mut view, 8, 2);
+        right_click(&mut view, 8, 4);
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!(rows[2], "  │ ├ ○ ┌─────────┐", "{rows:?}");
-        assert_eq!(rows[3], "  │ └ ● │ Open    │");
-        assert!(rows[4].starts_with("  ├ ○ Sk│ Rename… │"), "drawn over the tree: {rows:?}");
-        assert_eq!(rows[8], "○ Gamma └─────────┘");
+        assert_eq!(rows[4], "  ├ ○ sh┌─────────┐", "{rows:?}");
+        assert_eq!(rows[5], "  └ ● sh│ Open    │");
+        assert!(rows[6].starts_with("● Beta  │ Rename… │"), "drawn over the tree: {rows:?}");
+        assert_eq!(rows[10], "        └─────────┘");
         let reversed = |view: &mut View, x, y| {
             let mut terminal = Terminal::new(TestBackend::new(44, 16)).unwrap();
             terminal.draw(|f| view.draw(f)).unwrap();
             terminal.backend().buffer()[(x, y)].modifier.contains(Modifier::REVERSED)
         };
-        assert!(reversed(&mut view, 10, 3), "the first item is selected");
+        assert!(reversed(&mut view, 10, 5), "the first item is selected");
         press(&mut view, KeyCode::Down);
-        assert!(reversed(&mut view, 10, 4) && !reversed(&mut view, 10, 3));
+        assert!(reversed(&mut view, 10, 6) && !reversed(&mut view, 10, 5));
         view.menu = None;
         right_click(&mut view, 43, 15);
         let rows = drawn(&mut view, 44, 16);
@@ -759,10 +757,10 @@ mod tests {
     fn enter_on_the_menu_picks_its_selected_item_and_esc_closes_it_running_nothing() {
         let mut view = View::new(sample(), true);
         drawn(&mut view, 44, 16);
-        right_click(&mut view, 8, 2); // a fork: f-idle
+        right_click(&mut view, 8, 4); // a fork: f-idle
         assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Open(sid("f-idle"))));
         assert!(view.menu.is_none());
-        right_click(&mut view, 8, 2);
+        right_click(&mut view, 8, 4);
         assert_eq!(press(&mut view, KeyCode::Esc), Effect::None);
         assert!(view.menu.is_none() && view.prompt.is_none());
         assert_eq!(view.footer(), "");
@@ -772,7 +770,7 @@ mod tests {
     fn archive_asks_first_and_only_y_runs_it() {
         let mut view = View::new(sample(), true);
         drawn(&mut view, 44, 16);
-        right_click(&mut view, 8, 2);
+        right_click(&mut view, 8, 4);
         for _ in 0..4 {
             press(&mut view, KeyCode::Down);
         }
@@ -781,8 +779,8 @@ mod tests {
         assert_eq!(view.footer(), "Archive ship fork? its panes close (y/N)");
         assert_eq!(press(&mut view, KeyCode::Char('y')), Effect::Run(Action::Archive(Subject::Session(sid("f-idle")))));
         assert!(view.prompt.is_none());
-        right_click(&mut view, 8, 2);
-        view.mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 10, row: 7, modifiers: KeyModifiers::NONE });
+        right_click(&mut view, 8, 4);
+        view.mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 10, row: 9, modifiers: KeyModifiers::NONE });
         assert_eq!(view.footer(), "Archive ship fork? its panes close (y/N)", "a click picks");
         assert_eq!(press(&mut view, KeyCode::Enter), Effect::None, "anything but y cancels");
         assert!(view.prompt.is_none());
@@ -810,7 +808,7 @@ mod tests {
     fn close_in_the_menu_asks_as_x_does_and_refuses_the_session_in_the_chat_slot() {
         let mut view = View::new(sample(), true);
         drawn(&mut view, 44, 16);
-        right_click(&mut view, 8, 2);
+        right_click(&mut view, 8, 4);
         for _ in 0..3 {
             press(&mut view, KeyCode::Down);
         }
@@ -822,7 +820,7 @@ mod tests {
         tree.contexts[0].plans[0].sessions[1].place = crate::read::Place::Chat;
         let mut view = View::new(tree, true);
         drawn(&mut view, 44, 16);
-        right_click(&mut view, 8, 2);
+        right_click(&mut view, 8, 4);
         for _ in 0..3 {
             press(&mut view, KeyCode::Down);
         }
@@ -890,7 +888,7 @@ mod tests {
             Effect::Run(Action::RenamePlan { id: PlanId::parse("ship").unwrap(), title: "Release".into() })
         );
         // a fork: its name
-        pick_at(&mut view, 8, 2, 1);
+        pick_at(&mut view, 8, 4, 1);
         assert_eq!(view.footer(), "Name: ship fork█ (Enter confirms, Esc cancels)");
         typed(&mut view, "!");
         assert_eq!(
@@ -911,7 +909,7 @@ mod tests {
         assert!(view.prompt.is_some());
         assert_eq!(press(&mut view, KeyCode::Esc), Effect::None);
         assert!(view.prompt.is_none());
-        pick_at(&mut view, 8, 2, 1);
+        pick_at(&mut view, 8, 4, 1);
         erase(&mut view, 20);
         press(&mut view, KeyCode::Enter);
         assert_eq!(view.footer(), "A name is required. Name: █ (Enter confirms, Esc cancels)");
@@ -921,7 +919,7 @@ mod tests {
     fn fork_and_new_session_ask_a_name_and_fork_the_right_source() {
         let mut view = View::new(sample(), true);
         // a fork row: Fork… forks that fork
-        assert_eq!(pick_at(&mut view, 8, 2, 2), Effect::None);
+        assert_eq!(pick_at(&mut view, 8, 4, 2), Effect::None);
         assert_eq!(view.footer(), "Name: ship fork (fork)█ (Enter confirms, Esc cancels)");
         assert_eq!(
             press(&mut view, KeyCode::Enter),
@@ -943,7 +941,7 @@ mod tests {
         let mut tree = sample();
         tree.contexts[0].plans[1].head.title = "x".repeat(150);
         let mut view = View::new(tree, true);
-        pick_at(&mut view, 8, 4, 0);
+        pick_at(&mut view, 8, 2, 0);
         let Some(Prompt::Text { input, .. }) = &view.prompt else { panic!("a prompt") };
         assert_eq!(input.chars().count(), 80);
         assert!(input.ends_with("x (fork)"));
@@ -985,11 +983,8 @@ mod tests {
     }
 
     #[test]
-    fn new_plan_derives_the_id_and_takes_the_repo_of_the_latest_plan_of_the_context() {
-        let mut tree = sample();
-        // `sketch` is the latest of `alpha`'s Plans by creation, though not the last in the list
-        tree.contexts[0].plans[1].head.created_at = "2026-03-01T00:00:00.000Z".into();
-        let mut view = View::new(tree, true);
+    fn new_plan_derives_the_id_and_asks_no_repo() {
+        let mut view = View::new(sample(), true);
         assert_eq!(pick_at(&mut view, 5, 0, 0), Effect::None);
         assert_eq!(view.footer(), "Title: █ (Enter confirms, Esc cancels)");
         typed(&mut view, "Pay 4521");
@@ -998,7 +993,6 @@ mod tests {
             Effect::Run(Action::NewPlan {
                 context: ContextId::parse("alpha").unwrap(),
                 id: PlanId::parse("pay-4521").unwrap(),
-                repo: "/repo/sketch".into(),
                 title: "Pay 4521".into(),
             })
         );
@@ -1010,7 +1004,6 @@ mod tests {
             Effect::Run(Action::NewPlan {
                 context: ContextId::parse("alpha").unwrap(),
                 id: PlanId::parse("rel-2").unwrap(),
-                repo: "/repo/sketch".into(),
                 title: "Rel".into(),
             })
         );
@@ -1021,30 +1014,18 @@ mod tests {
     }
 
     #[test]
-    fn new_plan_in_a_context_with_no_plan_asks_for_the_repo_next() {
+    fn new_plan_in_a_context_with_no_plan_asks_only_the_title() {
         let mut view = View::new(sample(), true);
         assert_eq!(pick_at(&mut view, 5, 8, 0), Effect::None, "the Context `gamma`");
         typed(&mut view, "First plan");
-        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
-        assert_eq!(view.footer(), "Repo path: █ (Enter confirms, Esc cancels)");
-        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
-        assert_eq!(view.footer(), "A repo path is required. Repo path: █ (Enter confirms, Esc cancels)");
-        typed(&mut view, "/work/first");
         assert_eq!(
             press(&mut view, KeyCode::Enter),
             Effect::Run(Action::NewPlan {
                 context: ContextId::parse("gamma").unwrap(),
                 id: PlanId::parse("first-plan").unwrap(),
-                repo: "/work/first".into(),
                 title: "First plan".into(),
             })
         );
-        assert!(view.prompt.is_none());
-        // Esc in the second prompt cancels the whole
-        pick_at(&mut view, 5, 8, 0);
-        typed(&mut view, "Other");
-        press(&mut view, KeyCode::Enter);
-        assert_eq!(press(&mut view, KeyCode::Esc), Effect::None);
         assert!(view.prompt.is_none());
     }
 
@@ -1095,7 +1076,7 @@ mod tests {
     fn a_click_on_an_item_picks_it() {
         let mut view = View::new(sample(), true);
         drawn(&mut view, 44, 16);
-        right_click(&mut view, 8, 2);
+        right_click(&mut view, 8, 4);
         let rect = view.menu.as_ref().unwrap().rect(view.pane);
         assert_eq!(click(&mut view, rect.x + 2, rect.y + 1), Effect::Run(Action::Open(sid("f-idle"))));
         assert!(view.menu.is_none());
@@ -1119,7 +1100,7 @@ mod tests {
     fn a_snapshot_that_drops_the_menus_row_makes_its_item_do_nothing() {
         let mut view = View::new(sample(), true);
         drawn(&mut view, 44, 16);
-        right_click(&mut view, 8, 2);
+        right_click(&mut view, 8, 4);
         let mut tree = sample();
         tree.contexts[0].plans[0].sessions.retain(|s| s.id.as_str() != "f-idle");
         view.refresh(tree);

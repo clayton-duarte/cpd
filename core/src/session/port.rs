@@ -121,13 +121,12 @@ mod tests {
         );
         for (id, phase) in plans {
             let extra = match *phase {
-                "done" => "'/w', 't', 1, 'u', 't', 't'",
-                _ => "NULL, NULL, NULL, NULL, NULL, NULL",
+                "done" => "'t', 't'",
+                _ => "NULL, NULL",
             };
             sql.push_str(&format!(
-                "INSERT INTO plans (id, context, title, repo, base, lead_branch, phase, lead_session, created_at,
-                                   lead_worktree, locked_at, pr_number, pr_url, pr_opened_at, done_at)
-                   VALUES ('{id}', 'ctx', 'T', '/r', 'main', 'cpd/{id}', '{phase}', 's1', 't', {extra});"
+                "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+                   VALUES ('{id}', 'ctx', 'T', '{phase}', 's1', 't', {extra});"
             ));
         }
         store.write("fixture", |tx| Ok(tx.execute_batch(&sql)?)).unwrap();

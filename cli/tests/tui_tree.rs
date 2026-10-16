@@ -59,12 +59,19 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr:
     } else {
         ("NULL", "NULL", "NULL", "NULL")
     };
+    let status = match phase {
+        "grounding" | "plan" => "waiting",
+        "dispatch" => "dispatch",
+        "pr" => "open",
+        _ => "merged",
+    };
     format!(
-        "INSERT INTO plans (id, context, title, repo, base, lead_branch, lead_worktree, phase, lead_session, pr_number,
-                            pr_url, pr_opened_at, pr_seen, pr_polled_at, created_at, locked_at, done_at)
-         VALUES ('{id}', '{context}', 'Plan {id}', '/repo/{id}', 'main', 'cpd/{id}', {worktree}, '{phase}', '{lead}',
-                 {number}, {url}, {opened}, '{{\"checks\":{{}},\"reviewIds\":[],\"commentIds\":[]}}', {polled},
-                 '{created}', {locked}, {done});"
+        "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+         VALUES ('{id}', '{context}', 'Plan {id}', '{phase}', '{lead}', '{created}', {locked}, {done});
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+                          pr_polled_at, created_txn, created_at, started_at, merged_at)
+         VALUES ('{id}', 'repo', '/repo/{id}', 'main', '{status}', 'cpd/{id}', {worktree}, {number}, {url}, {opened},
+                 {polled}, cpd_txn(), '{created}', {locked}, {done});"
     )
 }
 
@@ -83,9 +90,9 @@ fn job_row(plan: &str, key: &str, status: &str) -> String {
     let merged = if status == "merged" { "'abc123'" } else { "NULL" };
     let failed = if status == "failed" { "'crashed'" } else { "NULL" };
     format!(
-        "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at)
-         VALUES ('{plan}', '{key}', 'Job {key}', 'S3', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, {fingerprint},
+         VALUES ('{plan}', 'repo', '{key}', 'Job {key}', 'S3', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, {fingerprint},
                  cpd_txn(), NULL, NULL, {failed}, {merged}, '2026-01-02T00:00:00.000Z');"
     )
 }
@@ -281,15 +288,15 @@ fn the_tree_of_a_prepared_store() {
         [
             "● Title of alpha".to_owned(),
             row("⏵ ├ ○ Plan ship", "1⋅1⋅0⋅1⋅2"),
-            "  │ ├ ○ ship fork".to_owned(),
-            "  │ └ ● ship review".to_owned(),
-            row("  └ ○ Plan sketch", "2⋅0⋅0⋅0⋅0"),
+            row("  ├ ○ Plan sketch", "2⋅0⋅0⋅0⋅0"),
+            "  ├ ○ ship fork".to_owned(),
+            "  └ ● ship review".to_owned(),
             "● Title of beta".to_owned(),
             row("  ├ ● Plan rel", "0⋅0⋅0⋅0⋅1"),
             row("  └ ○ Plan old", "0⋅0⋅0⋅0⋅0"),
             "○ Title of gamma".to_owned(),
         ],
-        "the Context and Plan titles, the forks' names; the grounded Lead g-alpha is no row; the Jobs: queued, running, merging, failed, merged; no state text"
+        "the Context and Plan titles, the forks' names; the forks are siblings of the Plans, after them, under their Context (B1); the grounded Lead g-alpha is no row; the Jobs: queued, running, merging, failed, merged; no state text"
     );
 }
 
@@ -318,10 +325,10 @@ fn enter_opens_the_lead_of_a_plan_and_a_fork_with_session_open() {
     fake_cpd(&env, r#"{"ok":true,"session":"x","pane":"%1","displaced":null}"#);
     let pane = Pane::start(&env, 46, 14);
     pane.ready();
-    pane.down(2); // the cursor appears on ship (Context rows are not selectable), then f-idle
+    pane.down(3); // the cursor appears on ship (Context rows are not selectable), then sketch, then f-idle
     pane.keys(&["Enter"]);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "f-idle"])]);
-    pane.keys(&["k", "Enter"]);
+    pane.keys(&["k", "k", "Enter"]);
     assert_eq!(wait_for_calls(&env, 2)[1], words(&["session", "open", "l-ship"]));
 }
 
@@ -345,7 +352,7 @@ fn no_key_but_the_references_does_anything() {
     fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 46, 14);
     let before = pane.ready();
-    pane.down(4); // on sketch
+    pane.down(2); // on sketch
     pane.keys(&["q", "f", "r", "p", "Space", "G", "Escape"]);
     std::thread::sleep(Duration::from_millis(500));
     assert!(!pane.dead(), "q does not end the view");
@@ -360,17 +367,17 @@ fn n_starts_a_plan_named_in_the_prompt_with_plan_new() {
     fake_cpd(&env, r#"{"ok":true,"plan":{"id":"pay-4521"}}"#);
     let pane = Pane::start(&env, 80, 14);
     pane.ready();
-    pane.down(4); // ship, f-idle, f-blocked, sketch
+    pane.down(2); // ship, sketch
     pane.keys(&["n"]);
     pane.wait("the prompt", |_| pane.footer_has("Fork Plan sketch into a new Plan, name: █ (Enter starts, Esc cancels)"));
     pane.keys(&["Enter"]);
     pane.wait("the refusal", |_| pane.footer_has("A name is required. Fork Plan sketch into a new Plan, name:"));
     pane.type_text("pay-4521");
     pane.keys(&["Enter"]);
-    // the Context and the repo of the cursor's Session's Plan; the name is the id and the title
+    // the Context of the cursor's Session's Plan; the name is the id and the title
     assert_eq!(
         wait_for_calls(&env, 1),
-        [words(&["plan", "new", "pay-4521", "--context=alpha", "--repo=/repo/sketch", "--title=pay-4521"])]
+        [words(&["plan", "new", "pay-4521", "--context=alpha", "--title=pay-4521"])]
     );
     pane.wait("the note", |_| pane.footer_has("forking pay-4521 in window park-pay-4521"));
 }
@@ -382,7 +389,7 @@ fn x_closes_a_session_after_y_with_session_close() {
     fake_cpd(&env, r#"{"ok":true,"session":"l-sketch","pane":"%4"}"#);
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
-    pane.down(4); // sketch
+    pane.down(2); // sketch
     pane.keys(&["x"]);
     pane.wait("the prompt", |_| pane.footer_has("Close Plan sketch? pi stops; the session file stays (y/N)"));
     pane.keys(&["n"]);
@@ -414,7 +421,7 @@ fn x_refuses_a_session_that_moved_to_the_chat_slot_while_the_prompt_was_open() {
     env.fake("cpd", r#"echo '{"ok":false,"error":{"code":"in_chat_slot","message":"In the chat slot.","details":{}}}'; exit 3"#);
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
-    pane.down(4); // sketch
+    pane.down(2); // sketch
     pane.keys(&["x"]);
     pane.wait("the prompt", |_| pane.footer_has("Close Plan sketch?"));
     pane.keys(&["y"]);
@@ -463,7 +470,7 @@ fn the_tree_follows_the_events_of_the_store() {
     pane.wait("the new name", |s| s.iter().any(|r| r.contains("├ ○ fork renamed")));
     // session-state
     env.cpd(&["session", "state", "blocked", "--label", "cpd: Ask", "--session", "l-sketch"]).ok();
-    let screen = pane.wait("the new state", |s| s.iter().any(|r| r.contains("└ ● Plan sketch")));
+    let screen = pane.wait("the new state", |s| s.iter().any(|r| r.contains("├ ● Plan sketch")));
     assert!(screen.iter().any(|r| r.starts_with("● Title of alpha")));
 }
 
@@ -491,9 +498,9 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
         [
             "● Title of alpha".to_owned(),
             row("⏵ ├ ○ Plan ship", "1⋅1⋅0⋅1⋅2"),
-            "  │ ├ ○ ship fork".to_owned(),
-            "  │ └ ● ship review".to_owned(),
-            row("  └ ○ Plan sketch", "2⋅0⋅0⋅0⋅0"),
+            row("  ├ ○ Plan sketch", "2⋅0⋅0⋅0⋅0"),
+            "  ├ ○ ship fork".to_owned(),
+            "  └ ● ship review".to_owned(),
             "● Title of beta".to_owned(),
             row("  ├ ● Plan rel", "0⋅0⋅0⋅0⋅1"),
             "  └ …".to_owned(),
@@ -527,7 +534,7 @@ fn the_cursor_skips_archived_rows_and_enter_never_opens_one() {
     pane.ready();
     pane.click(4, 7); // beta's `…`: its archived Plan is drawn
     pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("┆ ○ Plan old")));
-    pane.down(6); // ship, f-idle, f-blocked, sketch, rel, and then nowhere: the archived Plan `old` is not a stop
+    pane.down(6); // ship, sketch, f-idle, f-blocked, rel, and then nowhere: the archived Plan `old` is not a stop
     pane.keys(&["Enter"]);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "l-rel"])]);
     pane.keys(&["x"]);
@@ -605,7 +612,7 @@ fn a_right_click_opens_the_menu_of_the_row_and_esc_or_a_click_outside_closes_it_
     fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 46, 14);
     pane.ready();
-    pane.right_click(8, 2); // the fork `ship fork`
+    pane.right_click(8, 3); // the fork `ship fork`
     let screen = pane.wait("the fork's menu", |s| menu_open(s, "Open"));
     for item in ["Open", "Rename…", "Fork…", "Close", "Archive"] {
         assert!(screen.iter().any(|r| r.contains(&format!("│ {item} "))), "{item} in\n{}", screen.join("\n"));
@@ -637,7 +644,7 @@ fn archive_on_a_fork_asks_and_after_y_runs_session_archive() {
     fake_cpd(&env, r#"{"ok":true,"archived":[{"kind":"session","id":"f-idle"}],"closed":[]}"#);
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
-    pane.right_click(8, 2);
+    pane.right_click(8, 3);
     pane.wait("the menu", |s| menu_open(s, "Open"));
     pane.keys(&["Down", "Down", "Down", "Down", "Enter"]); // Archive is the fifth item
     pane.wait("the prompt", |_| pane.footer_has("Archive ship fork? its panes close (y/N)"));
@@ -676,11 +683,11 @@ fn open_and_close_in_the_menu_run_session_open_and_after_y_session_close() {
     fake_cpd(&env, r#"{"ok":true,"session":"x","pane":"%1","displaced":null}"#);
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
-    pane.right_click(8, 3); // the fork `ship review`
+    pane.right_click(8, 4); // the fork `ship review`
     pane.wait("the menu", |s| menu_open(s, "Open"));
     pane.keys(&["Enter"]);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "f-blocked"])]);
-    pane.right_click(8, 3);
+    pane.right_click(8, 4);
     pane.wait("the menu", |s| menu_open(s, "Open"));
     pane.keys(&["Down", "Down", "Down", "Enter"]); // Close
     pane.wait("the prompt", |_| pane.footer_has("Close ship review? pi stops; the session file stays (y/N)"));
@@ -744,7 +751,7 @@ fn new_context_asks_a_title_and_runs_context_new_with_the_derived_id() {
 }
 
 #[test]
-fn new_plan_and_fork_run_plan_new_with_the_repo_of_the_latest_plan_and_session_fork() {
+fn new_plan_and_fork_run_plan_new_without_a_repo_and_session_fork() {
     let env = env();
     populate(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
@@ -756,13 +763,10 @@ fn new_plan_and_fork_run_plan_new_with_the_repo_of_the_latest_plan_and_session_f
     pane.wait("the prompt", |_| pane.footer_has("Title: █"));
     pane.type_text("Ship");
     pane.keys(&["Enter"]);
-    // `ship` is taken in the tree; `sketch` is the latest Plan of `alpha`
-    assert_eq!(
-        wait_for_calls(&env, 1),
-        [words(&["plan", "new", "ship-2", "--context=alpha", "--repo=/repo/sketch", "--title=Ship"])]
-    );
+    // `ship` is taken in the tree; no repo (R34 A12)
+    assert_eq!(wait_for_calls(&env, 1), [words(&["plan", "new", "ship-2", "--context=alpha", "--title=Ship"])]);
     pane.wait("the prompt gone", |_| !pane.footer_has("Title:"));
-    pane.right_click(8, 2); // the fork `ship fork`
+    pane.right_click(8, 3); // the fork `ship fork`
     pane.wait("the menu", |s| menu_open(s, "Open"));
     pane.keys(&["Down", "Down", "Enter"]); // Fork…
     pane.wait("the prompt", |_| pane.footer_has("Name: ship fork (fork)█"));

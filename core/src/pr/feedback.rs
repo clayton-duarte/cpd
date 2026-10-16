@@ -241,13 +241,13 @@ fn excerpt(text: &str) -> String {
 
 /// The Event's `text`, written for the Lead (§5.1): one line per change, then
 /// the commands it may run.
-pub(super) fn text(plan: &str, number: i64, changes: &Changes, closed: bool) -> String {
+pub(super) fn text(plan: &str, key: &str, number: i64, changes: &Changes, closed: bool) -> String {
     let mut lines = Vec::new();
     if closed {
-        lines.push(format!("PR #{number} of Plan {plan} was closed without being merged."));
+        lines.push(format!("PR {key} (#{number}) of Plan {plan} was closed without being merged."));
     }
     if !changes.is_empty() {
-        lines.push(format!("PR #{number} has new feedback:"));
+        lines.push(format!("PR {key} (#{number}) of Plan {plan} has new feedback:"));
     }
     let who = |a: &Option<String>| a.clone().unwrap_or_else(|| "unknown".to_owned());
     let mut items = Vec::new();
@@ -263,14 +263,15 @@ pub(super) fn text(plan: &str, number: i64, changes: &Changes, closed: bool) -> 
         lines.push(format!("- …and {more} more (see data)"));
     }
     lines.push(format!(
-        "Turn what needs work into Jobs: cpd job add <key> --title <text> --tier <T> --spec <file> --plan {plan}; then cpd pr rebase --plan {plan} once they are Merged."
+        "Turn what needs work into Jobs: cpd job add <key> --title <text> --tier <T> --spec <file> --pr {key} --plan {plan}; then cpd pr rebase --pr {key} --plan {plan} once they are Merged."
     ));
     lines.join("\n")
 }
 
 /// The Event's `data` (§5.2).
-pub(super) fn data(changes: &Changes, state: &str) -> Value {
+pub(super) fn data(key: &str, changes: &Changes, state: &str) -> Value {
     let mut data = changes.to_json();
+    data["pr"] = json!(key);
     data["state"] = json!(state);
     data
 }
@@ -361,7 +362,7 @@ mod tests {
     fn the_text_ends_with_the_commands_and_caps_the_list() {
         let many: Vec<String> = (0..25).map(|i| format!("C{i}")).collect();
         let (changes, _) = diff(&Seen::default(), &view(vec![], vec![], many.iter().map(String::as_str).collect()), &[]);
-        let text = text("pay", 7, &changes, false);
+        let text = text("pay", "api", 7, &changes, false);
         assert!(text.contains("…and 5 more"), "{text}");
         assert!(text.lines().last().unwrap().contains("cpd job add"));
     }

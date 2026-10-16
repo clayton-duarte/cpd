@@ -22,8 +22,10 @@ pub const SOURCE: &str = "attempt run";
 pub struct Target {
     pub plan: PlanId,
     pub context: ContextId,
-    /// The Plan's repo: the realpath of its main worktree.
+    /// The repo of the Job's PR: the realpath of its main worktree.
     pub repo: PathBuf,
+    /// The Lead Branch of the Job's PR (R34 A5).
+    pub lead_branch: String,
     pub lead_worktree: PathBuf,
     pub id: AttemptId,
     pub job: JobKey,
@@ -42,17 +44,17 @@ fn corrupt(what: String) -> CpdError {
 
 /// Attempt `id` of `plan`: `plan_not_found`, else `attempt_not_found` (exit 4).
 pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Target, CpdError> {
-    let found: Option<(String, String, Option<String>)> = conn
-        .query_row("SELECT context, repo, lead_worktree FROM plans WHERE id = ?1", [plan.as_str()], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-        })
-        .optional()?;
-    let (context, repo, lead_worktree) =
-        found.ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str()))?;
+    let found: Option<String> =
+        conn.query_row("SELECT context FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
+    let context = found.ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str()))?;
+    // The repo and Lead worktree are those of the Job's PR (R34 A7).
     let row = conn
         .query_row(
-            "SELECT job, tier, status, branch, worktree, worker_session, nudged, stop_request
-               FROM attempts WHERE plan = ?1 AND id = ?2",
+            "SELECT a.job, a.tier, a.status, a.branch, a.worktree, a.worker_session, a.nudged, a.stop_request,
+                    r.repo, r.lead_worktree, r.lead_branch
+               FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+               JOIN prs r ON r.plan = j.plan AND r.key = j.pr
+              WHERE a.plan = ?1 AND a.id = ?2",
             params![plan.as_str(), id.to_string()],
             |r| {
                 Ok((
@@ -64,6 +66,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Target, 
                     r.get::<_, Option<String>>(5)?,
                     r.get::<_, bool>(6)?,
                     r.get::<_, Option<String>>(7)?,
+                    (r.get::<_, String>(8)?, r.get::<_, Option<String>>(9)?, r.get::<_, String>(10)?),
                 ))
             },
         )
@@ -73,12 +76,13 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Target, 
                 .with("plan", plan.as_str())
                 .with("attempt", id.to_string())
         })?;
-    let (job, tier, status, branch, worktree, worker_session, nudged, stop_request) = row;
+    let (job, tier, status, branch, worktree, worker_session, nudged, stop_request, (repo, lead_worktree, lead_branch)) = row;
     let lead_worktree = lead_worktree.ok_or_else(|| corrupt(format!("Plan {plan} has an Attempt but no Lead worktree")))?;
     Ok(Target {
         plan: plan.clone(),
         context: ContextId::parse(&context).map_err(|_| corrupt(format!("context id {context:?}")))?,
         repo: PathBuf::from(repo),
+        lead_branch,
         lead_worktree: PathBuf::from(lead_worktree),
         id: id.clone(),
         job: JobKey::parse(&job).map_err(|_| corrupt(format!("job key {job:?}")))?,

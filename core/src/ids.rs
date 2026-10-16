@@ -137,6 +137,12 @@ simple_id!(
 );
 
 simple_id!(
+    /// PR key (R34): `^[a-z][a-z0-9-]{0,23}$`, unique in its Plan.
+    PrKey, InvalidPrId, "PR key", "^[a-z][a-z0-9-]{0,23}$",
+    |s| matches(s, lower, lower_digit_dash, 0, 23)
+);
+
+simple_id!(
     /// Session id as accepted on input: `^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`.
     /// The ids cpd chooses itself are lowercase UUID v4 ([`SessionId::new_v4`]).
     SessionId, InvalidSessionId, "Session id", "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
@@ -402,6 +408,24 @@ mod tests {
         for bad in ["", "1a", "A", "a_b", &format!("a{}", "b".repeat(32))] {
             assert_eq!(code(JobKey::parse(bad)), ErrorCode::InvalidJobId, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn pr_keys() {
+        for ok in ["a", "schema", "web-2", "a-", &format!("a{}", "b".repeat(23))] {
+            assert_eq!(PrKey::parse(ok).unwrap().to_string(), ok);
+            assert_eq!(ok.parse::<PrKey>().unwrap().as_str(), ok);
+        }
+        for bad in ["", "1a", "-a", "A", "a_b", "a/b", "a.b", &format!("a{}", "b".repeat(24))] {
+            assert_eq!(code(PrKey::parse(bad)), ErrorCode::InvalidPrId, "{bad:?}");
+        }
+        let err = PrKey::parse("Web").unwrap_err();
+        assert_eq!(err.exit().code(), 2);
+        assert_eq!(err.details()["expected"], "^[a-z][a-z0-9-]{0,23}$");
+        let key: PrKey = serde_json::from_str("\"web\"").unwrap();
+        assert_eq!(serde_json::to_string(&key).unwrap(), "\"web\"");
+        let err = serde_json::from_str::<PrKey>("\"Web\"").unwrap_err();
+        assert!(err.to_string().contains("invalid_pr_id"), "{err}");
     }
 
     #[test]

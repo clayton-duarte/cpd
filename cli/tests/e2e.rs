@@ -129,7 +129,7 @@ impl Fx {
         env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
         env.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
         env.git(&repo, &["push", "-q", "-u", "origin", "main"]);
-        let lead = repo.parent().unwrap().join(format!("pay.{PLAN}"));
+        let lead = repo.parent().unwrap().join(format!("pay.{PLAN}.pay"));
         Fx { env, repo, origin, lead }
     }
 
@@ -253,12 +253,10 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     let mut cursor = fx.cursor();
 
     // ---------- 2. plan new: a fresh Lead in its parked window
-    let out = fx.ok(&["plan", "new", PLAN, "--context", CONTEXT, "--repo", repo, "--title", "Retry failed payouts"]);
+    let out = fx.ok(&["plan", "new", PLAN, "--context", CONTEXT, "--title", "Retry failed payouts"]);
     let lead_session = out["plan"]["lead_session"].as_str().unwrap().to_owned();
     assert_eq!(out["plan"]["phase"], "grounding");
-    assert_eq!(out["plan"]["repo"], repo);
-    assert_eq!(out["plan"]["base"], "main");
-    assert_eq!(out["plan"]["lead_branch"], "cpd/pay");
+    assert_eq!(out["plan"]["prs"], json!([]));
     assert_eq!(out["lead"]["session"], lead_session.as_str());
     assert!(out["lead"]["forked_from"].is_null(), "{out}");
     // The Lead's pi reports `idle` (stopped -> idle, a `session-state` Event) as soon as
@@ -283,6 +281,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(state[0]["session"], lead_session.as_str());
     assert_eq!(state[0]["data"]["from"], "stopped");
     assert_eq!(state[0]["data"]["to"], "idle");
+    assert_eq!(events[0]["data"]["cwd"], fx.env.root().canonicalize().unwrap().display().to_string());
     let message = fs::read_to_string(fx.env.cpd_home().join("run/pay/lead-message.md")).unwrap();
     assert!(message.starts_with("You are the Lead of Plan pay \"Retry failed payouts\" in Context ctx."), "{message}");
     // The Lead's `session run` started pi fresh with that message (§6.5), and
@@ -296,6 +295,11 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(flag(&calls[0], "-n"), Some(PLAN));
     assert_eq!(calls[0].last().unwrap(), &message);
     assert!(!calls[0].contains(&"--fork".to_owned()), "{calls:?}");
+    cursor = fx.cursor();
+    let out = fx.ok(&["pr", "add", "pay", "--repo", repo, "--plan", PLAN]);
+    assert_eq!(out["pr"]["base"], "main");
+    assert_eq!(out["pr"]["lead_branch"], "cpd/pay/pay");
+    assert_eq!(kinds(&fx.events_since(cursor)), ["pr-added"]);
     cursor = fx.cursor();
 
     // ---------- 3. plan phase plan: the Context gets its grounded Lead, a fork of this one
@@ -320,11 +324,11 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
 
     // ---------- 4. two Jobs, `ui` needing `api`; the Plan review, approved
     let out = fx.ok(&["job", "add", "api", "--title", "The API", "--tier", "S2", "--spec", &spec_file(&fx, "api"), "--plan", PLAN]);
-    assert_eq!(out["job"], json!({"key": "api", "status": "draft", "appended": false, "tier": "S2", "needs": []}));
+    assert_eq!(out["job"], json!({"key": "api", "pr": "pay", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false}));
     let out = fx.ok(&[
         "job", "add", "ui", "--title", "The UI", "--tier", "H1", "--spec", &spec_file(&fx, "ui"), "--needs", "api", "--plan", PLAN,
     ]);
-    assert_eq!(out["job"], json!({"key": "ui", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"]}));
+    assert_eq!(out["job"], json!({"key": "ui", "pr": "pay", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false}));
     let review = fx.ok(&["plan", "review", "--plan", PLAN]);
     assert_eq!(review["review"]["id"], "r1");
     let decided = fx.ok(&["plan", "decide", "r1", "--approve", "--plan", PLAN]);
@@ -332,7 +336,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     let events = fx.events_since(cursor);
     assert_eq!(kinds(&events), ["job-added", "job-added", "plan-review", "plan-review"]);
     assert_eq!(events[1]["job"], "ui");
-    assert_eq!(events[1]["data"], json!({"status": "draft", "appended": false, "tier": "H1", "needs": ["api"]}));
+    assert_eq!(events[1]["data"], json!({"pr": "pay", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false}));
     assert_eq!(events[2]["data"]["status"], "pending");
     assert_eq!(events[3]["data"]["status"], "approved");
     cursor = fx.cursor();
@@ -340,15 +344,15 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     // ---------- 5. plan lock: the Lead worktree, Jobs queued, the engine started
     let out = fx.ok(&["plan", "lock", "--plan", PLAN]);
     assert_eq!(out["phase"], "dispatch");
-    assert_eq!(out["lead_worktree"], fx.lead.to_str().unwrap());
+    assert_eq!(out["prs"][0]["lead_worktree"], fx.lead.to_str().unwrap());
     assert_eq!(out["jobs"], json!(["api", "ui"]));
     assert_eq!(out["watch"]["started"], true, "{out}");
     let base_sha = fx.git(&fx.repo, &["rev-parse", "main"]);
-    assert_eq!(out["base_sha"], base_sha.as_str());
-    assert!(fx.hooks_log().contains("pre-start cpd/pay\n"), "{}", fx.hooks_log());
+    assert_eq!(out["prs"][0]["base_sha"], base_sha.as_str());
+    assert!(fx.hooks_log().contains("pre-start cpd/pay/pay\n"), "{}", fx.hooks_log());
     let events = fx.events_since(cursor);
     assert_eq!(&kinds(&events)[..1], ["plan-phase"]);
-    assert_eq!(events[0]["data"], json!({"from": "plan", "to": "dispatch", "jobs": ["api", "ui"]}));
+    assert_eq!(events[0]["data"], json!({"from": "plan", "to": "dispatch", "jobs": ["api", "ui"], "prs": ["pay"]}));
     assert!(kinds(&events).contains(&"watch-started"), "{events:?}");
 
     // ---------- 6. the engine runs in the background, once per machine
@@ -398,19 +402,19 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     let ui = fx.ok(&["attempt", "show", "ui-a1", "--plan", PLAN])["attempt"].clone();
     assert_eq!(ui["base_sha"], api_merged["data"]["sha"]);
     // The Lead Branch holds both Jobs' commits, in order, and the Lead worktree has them.
-    let lead_sha = fx.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay"]);
+    let lead_sha = fx.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay/pay"]);
     assert_eq!(lead_sha, ui_merged["data"]["sha"].as_str().unwrap());
-    assert_eq!(fx.git(&fx.repo, &["log", "--format=%s", "main..cpd/pay"]), "ui-a1\napi-a1");
+    assert_eq!(fx.git(&fx.repo, &["log", "--format=%s", "main..cpd/pay/pay"]), "ui-a1\napi-a1");
     assert_eq!(fs::read_to_string(fx.lead.join("api.txt")).unwrap(), "api\n");
     assert_eq!(fs::read_to_string(fx.lead.join("ui.txt")).unwrap(), "ui\n");
     assert_eq!(fx.git(&fx.lead, &["status", "--porcelain"]), "");
 
     // ---------- 9. all-merged, once
     let all = fx.wait_event(cursor, "all-merged", 30, |_| true);
-    assert_eq!(all["data"], json!({"merged": ["api", "ui"], "cancelled": []}));
+    assert_eq!(all["data"], json!({"pr": "pay", "merged": ["api", "ui"], "cancelled": []}));
     let shown = fx.plan();
     assert_eq!(shown["plan"]["phase"], "dispatch");
-    assert!(shown["plan"]["all_merged_at"].is_string(), "{shown}");
+    assert!(shown["prs"][0]["all_merged_at"].is_string(), "{shown}");
     assert_eq!(shown["counts"], json!({"draft": 0, "queued": 0, "running": 0, "merged": 2, "failed": 0, "cancelled": 0}));
     assert_eq!(shown["tamper"], json!([]));
 
@@ -437,32 +441,35 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     // ---------- 10. pr open: the Gate on the Lead Branch, the push, gh
     let out = fx.ok(&["pr", "open", "--plan", PLAN]);
     assert_eq!(out["phase"], "pr");
-    assert_eq!(out["pr"]["number"], 7);
-    assert_eq!(out["pr"]["url"], PR_URL);
-    assert!(fx.hooks_log().ends_with("pre-merge cpd/pay\n"), "{}", fx.hooks_log());
-    let pushed = fx.git(&fx.origin, &["rev-parse", "refs/heads/cpd/pay"]);
+    assert_eq!(out["pr"]["key"], "pay");
+    assert_eq!(out["pr"]["pr"]["number"], 7);
+    assert_eq!(out["pr"]["pr"]["url"], PR_URL);
+    assert!(fx.hooks_log().ends_with("pre-merge cpd/pay/pay\n"), "{}", fx.hooks_log());
+    let pushed = fx.git(&fx.origin, &["rev-parse", "refs/heads/cpd/pay/pay"]);
     assert_eq!(pushed, lead_sha);
     let gh = fx.env.calls("gh");
-    assert_eq!(gh[0], ["pr", "list", "--head", "cpd/pay", "--state", "open", "--json", "number,url"]);
-    assert_eq!(gh[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay", "--title", "Retry failed payouts"]);
+    assert_eq!(gh[0], ["pr", "list", "--head", "cpd/pay/pay", "--state", "open", "--json", "number,url"]);
+    assert_eq!(gh[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay/pay", "--title", "Retry failed payouts"]);
     let body = &gh[1][9];
     for sha in [&api_merged["data"]["sha"], &ui_merged["data"]["sha"]] {
         assert!(body.contains(sha.as_str().unwrap()), "{body}");
     }
     let events = fx.events_since(cursor);
-    assert_eq!(kinds(&events), ["plan-phase"]);
-    assert_eq!(events[0]["data"], json!({"from": "dispatch", "to": "pr", "pr": {"number": 7, "url": PR_URL}}));
+    assert_eq!(kinds(&events), ["pr-opened", "plan-phase"]);
+    assert_eq!(events[0]["data"], json!({"pr": "pay", "number": 7, "url": PR_URL}));
+    assert_eq!(events[1]["data"], json!({"from": "dispatch", "to": "pr", "prs": [{"key": "pay", "number": 7, "url": PR_URL}]}));
     cursor = fx.cursor();
 
     // ---------- 11. pr poll reports the review, once
     let out = fx.ok(&["pr", "poll", "--plan", PLAN]);
     let review = json!({"id": "PRR_1", "author": "ann", "state": "CHANGES_REQUESTED", "body": "Rename it."});
-    assert_eq!(out["changes"], json!({"checks": [], "reviews": [review], "comments": []}));
+    assert_eq!(out["prs"][0]["pr"], "pay");
+    assert_eq!(out["prs"][0]["changes"], json!({"checks": [], "reviews": [review], "comments": []}));
     let events = fx.events_since(cursor);
     assert_eq!(kinds(&events), ["pr-feedback"]);
     assert_eq!(events[0]["data"]["reviews"], json!([review]));
     let again = fx.ok(&["pr", "poll", "--plan", PLAN]);
-    assert_eq!(again["changes"], json!({"checks": [], "reviews": [], "comments": []}));
+    assert_eq!(again["prs"][0]["changes"], json!({"checks": [], "reviews": [], "comments": []}));
     assert_eq!(fx.events_since(cursor).len(), 1);
 
     // ---------- the whole run: no `error` Event, nothing tampered, nothing left running
