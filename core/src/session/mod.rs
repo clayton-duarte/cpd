@@ -4,9 +4,11 @@
 //! - [`row`]: the `sessions` row as read, and `session list` / `show`;
 //! - [`state`]: the agent states of §3.6, `session state` and `rename`;
 //! - [`moves`]: the panes: `session fork`, `open`, `park` and `close`;
+//! - [`archive`]: `session archive` and `unarchive`, and the archive rule;
 //! - [`port`]: a Plan's plannotator port;
 //! - [`run`]: `session run`, the program in every Lead pane (§6.7).
 
+mod archive;
 mod moves;
 mod port;
 mod row;
@@ -24,6 +26,8 @@ use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::Output;
 use crate::store::Store;
 
+pub use archive::{Blocker, archive_blocked, blockers};
+pub use moves::{Closed, close_lead};
 pub use row::{Role, State};
 pub use state::Label;
 pub(crate) use state::pane_gone;
@@ -46,6 +50,10 @@ pub enum Command {
     Park(ParkArgs),
     /// End a Lead's pane; its session file stays (§10.9)
     Close(CloseArgs),
+    /// Archive a Lead Session (§10.10)
+    Archive(ArchiveArgs),
+    /// Unarchive a Lead Session (§10.11)
+    Unarchive(UnarchiveArgs),
     /// Rename a Session (§10.7)
     Rename(RenameArgs),
     /// Report a Session's agent state (pi adapter) (§10.6)
@@ -117,6 +125,20 @@ pub struct CloseArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct ArchiveArgs {
+    /// The Lead Session to archive
+    #[arg(value_name = "id")]
+    id: SessionId,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct UnarchiveArgs {
+    /// The Lead Session to unarchive
+    #[arg(value_name = "id")]
+    id: SessionId,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct RenameArgs {
     /// The new name
     #[arg(value_name = "name")]
@@ -152,6 +174,8 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Open(args) => moves::open(args),
         Command::Park(args) => moves::park(args),
         Command::Close(args) => moves::close(args),
+        Command::Archive(args) => archive::archive(args),
+        Command::Unarchive(args) => archive::unarchive(args),
         Command::Rename(args) => state::rename(args),
         Command::State(args) => state::state(args),
         Command::Run(args) => run::run(args),

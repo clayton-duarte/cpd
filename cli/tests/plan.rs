@@ -791,3 +791,253 @@ fn lock_refusals_change_nothing() {
     assert!(watch_calls(&env).is_empty());
     refused(&env.cpd(&["plan", "lock"]), "plan_required", 2);
 }
+
+// ---- plan rename ----------------------------------------------------------
+
+#[test]
+fn rename_sets_the_title_and_appends_one_event() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    new_plan(&env, "pay", &repo);
+    let out = env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Retry payouts"]).ok();
+    assert_eq!(out["plan"], json!({"id": "pay", "context": "ctx", "title": "Retry payouts"}));
+    assert!(out.get("already").is_none());
+    assert_eq!(show(&env, "pay")["plan"]["title"], "Retry payouts");
+    let renamed = events(&env, "plan-renamed");
+    assert_eq!(renamed.len(), 1);
+    assert_eq!((renamed[0]["context"].as_str(), renamed[0]["plan"].as_str()), (Some("ctx"), Some("pay")));
+    assert_eq!(renamed[0]["data"], json!({"title": "Retry payouts"}));
+
+    // CPD_PLAN selects the Plan; the same title is already and writes nothing.
+    let again = cpd_with(&env, &[("CPD_PLAN", "pay")], &["plan", "rename", "--title", "Retry payouts"]).ok();
+    assert_eq!(again["already"], true);
+    assert_eq!(events(&env, "plan-renamed").len(), 1);
+}
+
+#[test]
+fn rename_refusals() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    new_plan(&env, "pay", &repo);
+    refused(&env.cpd(&["plan", "rename", "--plan", "nope", "--title", "X"]), "plan_not_found", 4);
+    refused(&env.cpd(&["plan", "rename", "--title", "X"]), "plan_required", 2);
+    refused(&env.cpd(&["plan", "rename", "--plan", "pay", "--title", ""]), "usage", 2);
+    assert!(events(&env, "plan-renamed").is_empty());
+}
+
+// ---- plan archive and unarchive -------------------------------------------
+
+/// Plan `pay` with its Lead and one side fork, each with a live parked pane.
+fn plan_with_fork(env: &TestEnv) -> (String, String) {
+    let repo = setup(env);
+    let lead = new_plan(env, "pay", &repo)["lead"]["session"].as_str().unwrap().to_owned();
+    pane_env(env, &lead);
+    let fork = env.cpd(&["session", "fork", &lead]).ok()["session"]["id"].as_str().unwrap().to_owned();
+    pane_env(env, &fork);
+    (lead, fork)
+}
+
+fn has_pane(env: &TestEnv, session: &str) -> bool {
+    panes(env).iter().any(|p| p.2 == session)
+}
+
+fn archived_ats(env: &TestEnv) -> i64 {
+    query(
+        env,
+        "SELECT count(*) FROM (SELECT archived_at FROM contexts UNION ALL SELECT archived_at FROM plans
+                              UNION ALL SELECT archived_at FROM sessions) WHERE archived_at IS NOT NULL",
+    )
+}
+
+fn event_count(env: &TestEnv) -> i64 {
+    query(env, "SELECT count(*) FROM events")
+}
+
+#[test]
+fn archive_covers_the_plan_its_lead_and_forks_kills_their_panes_and_appends_one_event_each() {
+    let env = TestEnv::new();
+    let (lead, fork) = plan_with_fork(&env);
+    let (lead_pane, fork_pane) = (
+        panes(&env).into_iter().find(|p| p.2 == lead).unwrap().0,
+        panes(&env).into_iter().find(|p| p.2 == fork).unwrap().0,
+    );
+    let listed = env.cpd(&["plan", "list"]).ok();
+    assert_eq!(listed["plans"][0]["archived_at"], Value::Null);
+    assert_eq!(show(&env, "pay")["plan"]["archived_at"], Value::Null);
+
+    let out = env.cpd(&["plan", "archive", "--plan", "pay"]).ok();
+    assert_eq!(out["archived"][0], json!({"kind": "plan", "id": "pay"}));
+    let mut sessions: Vec<&str> = out["archived"].as_array().unwrap()[1..].iter().map(|o| o["id"].as_str().unwrap()).collect();
+    sessions.sort();
+    let mut expected = vec![lead.as_str(), fork.as_str()];
+    expected.sort();
+    assert_eq!(sessions, expected);
+    assert!(out["archived"].as_array().unwrap()[1..].iter().all(|o| o["kind"] == "session"), "{out}");
+    let mut closed: Vec<&str> = out["closed"].as_array().unwrap().iter().map(|p| p.as_str().unwrap()).collect();
+    closed.sort();
+    let mut panes_closed = vec![lead_pane.as_str(), fork_pane.as_str()];
+    panes_closed.sort();
+    assert_eq!(closed, panes_closed);
+    assert!(!has_pane(&env, &lead) && !has_pane(&env, &fork));
+
+    assert_eq!(archived_ats(&env), 3);
+    let plan_events = events(&env, "plan-archived");
+    assert_eq!(plan_events.len(), 1);
+    assert_eq!((plan_events[0]["plan"].as_str(), &plan_events[0]["data"]), (Some("pay"), &json!({"archived": true})));
+    let session_events = events(&env, "session-archived");
+    assert_eq!(session_events.len(), 2);
+    assert!(session_events.iter().all(|e| e["data"] == json!({"archived": true}) && e["plan"] == "pay"));
+    let at = show(&env, "pay")["plan"]["archived_at"].clone();
+    assert!(at.is_string());
+    assert_eq!(env.cpd(&["plan", "list"]).ok()["plans"][0]["archived_at"], at);
+    assert_eq!(query::<String>(&env, &format!("SELECT state FROM sessions WHERE id = '{lead}'")), "stopped");
+
+    // Again: nothing is written.
+    let before = event_count(&env);
+    let again = env.cpd(&["plan", "archive", "--plan", "pay"]).ok();
+    assert_eq!(again, json!({"ok": true, "archived": [], "closed": [], "already": true}));
+    assert_eq!(event_count(&env), before);
+}
+
+#[test]
+fn unarchive_clears_the_cascade_with_one_event_each_and_touches_no_pane() {
+    let env = TestEnv::new();
+    let (lead, fork) = plan_with_fork(&env);
+    env.cpd(&["plan", "archive", "--plan", "pay"]).ok();
+    let events_before = event_count(&env);
+
+    let out = env.cpd(&["plan", "unarchive", "--plan", "pay"]).ok();
+    assert_eq!(out["archived"].as_array().unwrap().len(), 3, "{out}");
+    assert_eq!(out["archived"][0], json!({"kind": "plan", "id": "pay"}));
+    assert_eq!(out["closed"], json!([]));
+    assert_eq!(archived_ats(&env), 0);
+    assert_eq!(event_count(&env), events_before + 3);
+    assert!(events(&env, "plan-archived")[1]["data"] == json!({"archived": false}));
+    assert!(!has_pane(&env, &lead) && !has_pane(&env, &fork), "no pane is started");
+    assert_eq!(show(&env, "pay")["plan"]["archived_at"], Value::Null);
+
+    let again = env.cpd(&["plan", "unarchive", "--plan", "pay"]).ok();
+    assert_eq!(again, json!({"ok": true, "archived": [], "closed": [], "already": true}));
+    assert_eq!(event_count(&env), events_before + 3);
+}
+
+#[test]
+fn unarchive_inside_an_archived_context_is_refused() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    new_plan(&env, "pay", &repo);
+    env.cpd(&["context", "archive", "ctx"]).ok();
+    let events_before = event_count(&env);
+    let archived = archived_ats(&env);
+    let error = refused(&env.cpd(&["plan", "unarchive", "--plan", "pay"]), "archived", 3);
+    assert_eq!(error["details"]["next"], "cpd context unarchive ctx");
+    assert_eq!((event_count(&env), archived_ats(&env)), (events_before, archived));
+    refused(&env.cpd(&["plan", "unarchive", "--plan", "nope"]), "plan_not_found", 4);
+    refused(&env.cpd(&["plan", "archive", "--plan", "nope"]), "plan_not_found", 4);
+    refused(&env.cpd(&["plan", "archive"]), "plan_required", 2);
+}
+
+#[test]
+fn plan_new_in_an_archived_context_is_refused_before_any_write() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    env.cpd(&["context", "archive", "ctx"]).ok();
+    let events_before = event_count(&env);
+    let args = ["plan", "new", "pay", "--context", "ctx", "--repo", repo.to_str().unwrap(), "--title", "Pay"];
+    let error = refused(&env.cpd(&args), "archived", 3);
+    assert_eq!(error["details"]["next"], "cpd context unarchive ctx");
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans"), 0);
+    assert_eq!(event_count(&env), events_before);
+    assert!(panes(&env).is_empty());
+
+    env.cpd(&["context", "unarchive", "ctx"]).ok();
+    env.cpd(&args).ok();
+}
+
+const JOB: &str = "INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                   status, appended, fingerprint, created_txn, created_at)
+                   VALUES ('pay', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '$STATUS', 0, '$FP', 1, 't');";
+const ATTEMPT: &str = "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+                       VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', '$STATUS', 'cpd/pay--api-a1', '/w', 't');";
+
+/// Job `api` of `pay`; a locked one (not `draft`) has its fingerprint.
+fn job(status: &str) -> String {
+    let fingerprint = if status == "draft" { "NULL".to_owned() } else { format!("'{}'", "a".repeat(64)) };
+    JOB.replace("'$FP'", &fingerprint).replace("$STATUS", status)
+}
+
+#[test]
+fn archive_refused_by_any_one_blocker_changes_nothing() {
+    let review = format!(
+        "INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at) VALUES ('pay', 'r1', 1, '{}', 'pending', 't');",
+        "a".repeat(64)
+    );
+    let escalation = format!(
+        "{}{}INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
+         VALUES ('pay', 'api-a1-q1', 'api-a1', 1, 'Which?', 'open', 1, 't');",
+        job("draft"),
+        ATTEMPT.replace("$STATUS", "running")
+    );
+    // One blocker at a time, each in its own environment: Jobs are append-only.
+    for (kind, apply) in [("job", job("queued")), ("job", job("running")), ("escalation", escalation), ("review", review), ("session", String::new())] {
+        let env = TestEnv::new();
+        let (_, fork) = plan_with_fork(&env);
+        let apply = if kind == "session" { format!("UPDATE sessions SET state = 'working' WHERE id = '{fork}'") } else { apply };
+        store(&env).write("fixture", |tx| exec(tx, &apply)).unwrap();
+        let (events_before, panes_before) = (event_count(&env), panes(&env));
+        let error = refused(&env.cpd(&["plan", "archive", "--plan", "pay"]), "archive_blocked", 3);
+        let listed = error["details"]["blockers"].as_array().unwrap();
+        assert_eq!(listed.len(), 1, "{kind}: {error}");
+        assert_eq!(listed[0]["kind"], kind, "{error}");
+        assert_eq!(archived_ats(&env), 0, "{kind}");
+        assert_eq!(event_count(&env), events_before, "{kind}");
+        assert_eq!(panes(&env), panes_before, "{kind}");
+    }
+}
+
+#[test]
+fn archive_lists_every_blocker() {
+    let env = TestEnv::new();
+    plan_with_fork(&env);
+    store(&env).write("fixture", |tx| exec(tx, &job("queued"))).unwrap();
+    store(&env)
+        .write("fixture", |tx| {
+            exec(tx, &format!("INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at) VALUES ('pay', 'r1', 1, '{}', 'pending', 't');", "a".repeat(64)))
+        })
+        .unwrap();
+    let error = refused(&env.cpd(&["plan", "archive", "--plan", "pay"]), "archive_blocked", 3);
+    let kinds: Vec<&str> = error["details"]["blockers"].as_array().unwrap().iter().map(|b| b["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["job", "review"]);
+}
+
+#[test]
+fn a_plan_in_phase_pr_with_no_live_job_archives() {
+    let env = TestEnv::new();
+    let (lead, _) = plan_with_fork(&env);
+    env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
+    store(&env)
+        .write("fixture", |tx| {
+            exec(tx, "UPDATE plans SET phase = 'dispatch', lead_worktree = '/w', locked_at = 't' WHERE id = 'pay'")?;
+            exec(tx, "UPDATE plans SET phase = 'pr', pr_number = 1, pr_url = 'u', pr_opened_at = 't' WHERE id = 'pay'")
+        })
+        .unwrap();
+    let out = env.cpd(&["plan", "archive", "--plan", "pay"]).ok();
+    assert_eq!(out["archived"][0], json!({"kind": "plan", "id": "pay"}));
+    assert!(!has_pane(&env, &lead));
+    assert_eq!(show(&env, "pay")["plan"]["phase"], "pr");
+    assert!(show(&env, "pay")["plan"]["archived_at"].is_string());
+}
+
+#[test]
+fn archive_refuses_a_lead_in_the_chat_slot_before_closing_any_pane() {
+    let env = TestEnv::new();
+    let (lead, fork) = plan_with_fork(&env);
+    // The chat slot: the pane of window `main` running a Lead (the fork).
+    let fork_pane = panes(&env).into_iter().find(|p| p.2 == fork).unwrap().0;
+    env.tmux(&["rename-window", "-t", &fork_pane, "main"]);
+    let (events_before, panes_before) = (event_count(&env), panes(&env));
+    let error = refused(&env.cpd(&["plan", "archive", "--plan", "pay"]), "in_chat_slot", 3);
+    assert_eq!(error["details"]["next"], "cpd session park");
+    assert!(has_pane(&env, &lead));
+    assert_eq!((event_count(&env), panes(&env), archived_ats(&env)), (events_before, panes_before, 0));
+}

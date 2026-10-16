@@ -83,6 +83,13 @@ fn fixture(store: &mut Store) -> i64 {
         .unwrap()
 }
 
+/// An open store holding the fixture's Context, Lead and Plan.
+fn fixture_store(env: &TestEnv) -> Store {
+    let mut store = open(env);
+    fixture(&mut store);
+    store
+}
+
 fn names(conn: &Connection, sql: &str) -> BTreeSet<String> {
     let mut stmt = conn.prepare(sql).unwrap();
     stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
@@ -615,6 +622,39 @@ fn migrating_an_empty_file_creates_the_schema_once() {
     assert_eq!(version, VERSION);
     let app: i32 = conn.pragma_query_value(None, "application_id", |r| r.get(0)).unwrap();
     assert_eq!(app, APPLICATION_ID);
+}
+
+#[test]
+fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its_schema_hash() {
+    let env = TestEnv::new();
+    let mut store = fixture_store(&env);
+    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    let hash = store.read(|c| Ok(cpd_core::store::schema_hash(c)?)).unwrap();
+    assert_eq!(hash, "c4529a6f3cd787333b8115bade42de35504eb4902773945cfbde80ba93acfc5f");
+
+    for table in ["contexts", "plans", "sessions"] {
+        let archived: Option<String> =
+            store.read(|c| Ok(c.query_row(&format!("SELECT archived_at FROM {table} LIMIT 1"), [], |r| r.get(0))?)).unwrap();
+        assert_eq!(archived, None, "{table}.archived_at is null until the first archive");
+    }
+    let insert = |tx: &WriteTxn<'_>, kind: &str| {
+        tx.execute(
+            "INSERT INTO events (txn, at, kind, context, text, data) VALUES (cpd_txn(), 't', ?1, 'ctx', 'x', '{}')",
+            [kind],
+        )
+    };
+    let mut last = 0;
+    for kind in ["context-renamed", "plan-renamed", "context-archived", "plan-archived", "session-archived"] {
+        last = store
+            .write("test", |tx| {
+                insert(tx, kind)?;
+                Ok(tx.last_insert_rowid())
+            })
+            .unwrap_or_else(|e| panic!("{kind}: {e:?}"));
+    }
+    assert_eq!(last, 5);
+    let err = store.write("test", |tx| Ok(insert(tx, "plan-exploded")?)).unwrap_err();
+    assert!(format!("{err:?}").contains("CHECK"), "{err:?}");
 }
 
 #[test]

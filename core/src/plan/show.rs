@@ -26,7 +26,7 @@ pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
             let jobs = jobs::load(conn, &plan.id)?;
             out.push(json!({
                 "id": plan.id, "context": plan.context, "title": plan.title, "phase": plan.phase.as_str(),
-                "repo": plan.repo, "lead_session": plan.lead_session, "counts": jobs::counts(&jobs), "pr": plan.pr,
+                "repo": plan.repo, "lead_session": plan.lead_session, "archived_at": plan.archived_at, "counts": jobs::counts(&jobs), "pr": plan.pr,
             }));
         }
         Ok((out, highest_id(conn)?))

@@ -1,0 +1,40 @@
+//! `plan rename` (commands.md §4.9): the title only.
+
+use rusqlite::OptionalExtension;
+use serde_json::json;
+
+use super::{Env, RenameArgs, plan_not_found};
+use crate::error::CpdError;
+use crate::events::{Kind, NewEvent, append};
+use crate::ids::ContextId;
+use crate::output::Output;
+
+pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
+    let id = args.plan.require()?.clone();
+    let title = args.title.as_str();
+    let mut env = Env::open()?;
+    let (context, old) = env
+        .store
+        .read(|conn| {
+            Ok(conn
+                .query_row("SELECT context, title FROM plans WHERE id = ?1", [id.as_str()], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })
+                .optional()?)
+        })?
+        .ok_or_else(|| plan_not_found(&id))?;
+    let context = ContextId::parse(&context)?;
+    let mut out = json!({"plan": {"id": id, "context": context, "title": title}});
+    if old == title {
+        out["already"] = json!(true);
+        return Ok(Output::success(out));
+    }
+    env.store.write("plan rename", |tx| {
+        tx.execute("UPDATE plans SET title = ?1 WHERE id = ?2", [title, id.as_str()])?;
+        let text = format!("Plan {id} renamed to {title:?}.");
+        let event = NewEvent::new(Kind::PlanRenamed, text, json!({"title": title})).context(context.clone()).plan(id.clone());
+        append(tx, event)?;
+        Ok(())
+    })?;
+    Ok(Output::success(out))
+}
