@@ -218,6 +218,20 @@ impl<'a> Pane<'a> {
         }
     }
 
+    /// A right click at 0-based `column` and `row`: SGR button 2, which tmux calls button 3.
+    fn right_click(&self, column: u16, row: u16) {
+        for end in ['M', 'm'] {
+            self.type_text(&format!("\x1b[<2;{};{}{end}", column + 1, row + 1));
+        }
+    }
+
+    /// Whether the pane's app has asked for mouse events (any mode): what makes tmux's default `MouseDown3Pane`
+    /// pass a right click to it instead of showing its own menu.
+    fn captures_the_mouse(&self) -> bool {
+        let out = self.env.tmux(&["display-message", "-p", "-t", SESSION, "#{mouse_any_flag}"]);
+        String::from_utf8_lossy(&out.stdout).trim() == "1"
+    }
+
     fn dead(&self) -> bool {
         let out = self.env.tmux(&["list-panes", "-t", SESSION, "-F", "#{pane_dead}"]);
         String::from_utf8_lossy(&out.stdout).trim() == "1"
@@ -562,4 +576,132 @@ fn the_tree_follows_the_archive_and_rename_events() {
          VALUES (cpd_txn(), '2026-02-03T00:00:00.000Z', 'session-archived', 'alpha', 'ship', 'f-idle', 'fixture', '{\"archived\":true}');",
     );
     pane.wait("the fork behind `…`", |s| s.iter().all(|r| !r.contains("ship fork")) && s.iter().filter(|r| r.as_str() == "  └ …").count() == 2);
+}
+
+// ---------- the right-click menu ----------
+
+/// The screen has a menu box whose first inner row (after the top border) holds `first`.
+fn menu_open(screen: &[String], first: &str) -> bool {
+    screen.windows(2).any(|w| w[0].contains('┌') && w[0].contains('┐') && w[1].contains(&format!("│ {first}")))
+}
+
+fn the_menu_is_closed(screen: &[String]) -> bool {
+    screen.iter().all(|r| !r.contains('┌') && !r.contains('┘'))
+}
+
+#[test]
+fn the_tree_captures_the_mouse_so_tmuxs_default_right_click_binding_passes_it_on() {
+    let env = env();
+    populate(&env);
+    let pane = Pane::start(&env, 46, 14);
+    pane.ready();
+    pane.wait("the mouse capture", |_| pane.captures_the_mouse());
+}
+
+#[test]
+fn a_right_click_opens_the_menu_of_the_row_and_esc_or_a_click_outside_closes_it_running_nothing() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 46, 14);
+    pane.ready();
+    pane.right_click(8, 2); // the fork `ship fork`
+    let screen = pane.wait("the fork's menu", |s| menu_open(s, "Open"));
+    for item in ["Open", "Rename…", "Fork…", "Close", "Archive"] {
+        assert!(screen.iter().any(|r| r.contains(&format!("│ {item} "))), "{item} in\n{}", screen.join("\n"));
+    }
+    pane.keys(&["Escape"]);
+    pane.wait("the menu closed", the_menu_is_closed);
+    pane.right_click(5, 0); // the Context `alpha`
+    let screen = pane.wait("the Context's menu", |s| menu_open(s, "New Plan…"));
+    assert!(screen.iter().any(|r| r.contains("│ Rename… ")) && screen.iter().any(|r| r.contains("│ Archive ")));
+    pane.click(40, 12); // outside it
+    pane.wait("the menu closed", the_menu_is_closed);
+    pane.right_click(8, 1); // the Plan `ship`
+    pane.wait("the Plan's menu", |s| menu_open(s, "New session…"));
+    pane.right_click(45, 13); // a right click outside closes it too
+    pane.wait("the menu closed", the_menu_is_closed);
+    pane.right_click(5, 12); // the empty area
+    pane.wait("the empty area's menu", |s| menu_open(s, "New Context…"));
+    pane.keys(&["Escape"]);
+    pane.wait("the menu closed", the_menu_is_closed);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(calls(&env).is_empty(), "{:?}", calls(&env));
+    assert!(!pane.footer_has("Archive"), "no prompt");
+}
+
+#[test]
+fn archive_on_a_fork_asks_and_after_y_runs_session_archive() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true,"archived":[{"kind":"session","id":"f-idle"}],"closed":[]}"#);
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    pane.right_click(8, 2);
+    pane.wait("the menu", |s| menu_open(s, "Open"));
+    pane.keys(&["Down", "Down", "Down", "Down", "Enter"]); // Archive is the fifth item
+    pane.wait("the prompt", |_| pane.footer_has("Archive ship fork? its panes close (y/N)"));
+    assert!(the_menu_is_closed(&pane.screen()), "the menu closes when an item is picked");
+    assert!(calls(&env).is_empty());
+    pane.keys(&["y"]);
+    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "archive", "f-idle"])]);
+    pane.wait("the note", |_| pane.footer_has("archived"));
+}
+
+#[test]
+fn a_click_on_an_item_picks_it_and_a_n_cancels_the_archive() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    pane.right_click(5, 0); // the Context: New Plan…, Rename…, Archive at rows 1, 2, 3 of the box
+    pane.wait("the menu", |s| menu_open(s, "New Plan…"));
+    pane.click(7, 3); // Archive
+    pane.wait("the prompt", |_| pane.footer_has("Archive Title of alpha? its panes close (y/N)"));
+    pane.keys(&["n"]);
+    pane.wait("the prompt gone", |_| !pane.footer_has("Archive Title of alpha?"));
+    pane.right_click(8, 1); // the Plan `ship`
+    pane.wait("the menu", |s| menu_open(s, "New session…"));
+    pane.click(10, 4); // Archive
+    pane.wait("the prompt", |_| pane.footer_has("Archive Plan ship? its panes close (y/N)"));
+    pane.keys(&["y"]);
+    assert_eq!(wait_for_calls(&env, 1), [words(&["plan", "archive", "--plan=ship"])]);
+}
+
+#[test]
+fn open_and_close_in_the_menu_run_session_open_and_after_y_session_close() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true,"session":"x","pane":"%1","displaced":null}"#);
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    pane.right_click(8, 3); // the fork `ship review`
+    pane.wait("the menu", |s| menu_open(s, "Open"));
+    pane.keys(&["Enter"]);
+    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "f-blocked"])]);
+    pane.right_click(8, 3);
+    pane.wait("the menu", |s| menu_open(s, "Open"));
+    pane.keys(&["Down", "Down", "Down", "Enter"]); // Close
+    pane.wait("the prompt", |_| pane.footer_has("Close ship review? pi stops; the session file stays (y/N)"));
+    pane.keys(&["y"]);
+    assert_eq!(wait_for_calls(&env, 2)[1], words(&["session", "close", "f-blocked"]));
+}
+
+#[test]
+fn unarchive_in_the_menu_runs_without_a_prompt_and_a_refusal_shows_in_the_note_row() {
+    let env = env();
+    populate(&env);
+    archive(&env);
+    env.fake("cpd", r#"echo '{"ok":false,"error":{"code":"archived","message":"The Context is archived.","details":{}}}'; exit 3"#);
+    let pane = Pane::start(&env, 46, 16);
+    pane.ready();
+    pane.click(4, 7); // beta's `…`
+    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("┆ ○ Plan old")));
+    pane.right_click(10, 8); // the archived Plan `old`
+    let screen = pane.wait("the menu", |s| menu_open(s, "Unarchive"));
+    assert!(screen.iter().all(|r| !r.contains("New Plan") && !r.contains("Rename") && !r.contains("Archive ")), "Unarchive only: {screen:?}");
+    pane.keys(&["Enter"]);
+    assert_eq!(wait_for_calls(&env, 1), [words(&["plan", "unarchive", "--plan=old"])]);
+    pane.wait("the refusal", |_| pane.footer_has("archived: The Context is archived."));
 }
