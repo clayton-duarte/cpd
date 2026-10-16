@@ -67,28 +67,47 @@ fi
 /// pi's catalog as the embedded module prints it (§9).
 const CATALOG: &str = r#"{"O":["off","minimal","low","medium","high","xhigh","max"],"S":["off","minimal","low","medium","high","xhigh","max"],"H":["off","minimal","low","medium","high"]}"#;
 
-/// What gh knows of each pull request, by the Lead worktree it is run in:
-/// `a1` is #11, `b` #12 and `a2` #13. A pull request is `OPEN` until the test
-/// creates `merged-<number>` in `$FLAGS`: GitHub merging it.
+/// What gh knows of each pull request: `a1` is #11, `b` #12 and `a2` #13 (`pr create` finds the number by the Lead
+/// worktree it is run in). A pull request exists once `pr create` made it (`created-<number>` in `$FLAGS`) and is
+/// `OPEN` until the test creates `merged-<number>` there: GitHub merging it. The poller's search lists the ones
+/// that exist and are not merged; its lookup answers the ones it names.
 fn gh(flags: &Path) -> String {
     format!(
         r#"FLAGS='{flags}'
-case "$PWD" in
-  *.{PLAN}.a1) n=11 ;;
-  *.{PLAN}.b) n=12 ;;
-  *.{PLAN}.a2) n=13 ;;
-  *) echo "gh run outside a Lead worktree: $PWD" >&2; exit 8 ;;
-esac
+node() {{
+  state="$2"; merged=null
+  if [ "$state" = MERGED ]; then merged='"2026-10-15T10:00:00Z"'; fi
+  printf '%s' '{{"repository":{{"nameWithOwner":"acme/repo"}},"number":'"$1"',"url":"https://github.com/acme/repo/pull/'"$1"'","title":"Chain","isDraft":false,"state":"'"$state"'","createdAt":"2026-10-15T09:00:00Z","mergedAt":'"$merged"',"reviewDecision":null,"commits":{{"nodes":[]}}}}'
+}}
 case "$1 $2" in
   "pr list") echo '[]' ;;
-  "pr create") echo "https://github.com/acme/repo/pull/$n" ;;
-  "pr view")
-    if [ -f "$FLAGS/merged-$n" ]; then
-      echo '{{"state":"MERGED","mergedAt":"2026-10-15T10:00:00Z","title":"Chain","reviewDecision":"APPROVED","statusCheckRollup":[],"reviews":[],"comments":[]}}'
-    else
-      echo '{{"state":"OPEN","mergedAt":null,"title":"Chain","reviewDecision":"","statusCheckRollup":[],"reviews":[],"comments":[]}}'
-    fi ;;
-  api*) echo '[]' ;;
+  "pr create")
+    case "$PWD" in
+      *.{PLAN}.a1) n=11 ;;
+      *.{PLAN}.b) n=12 ;;
+      *.{PLAN}.a2) n=13 ;;
+      *) echo "gh pr create outside a Lead worktree: $PWD" >&2; exit 8 ;;
+    esac
+    touch "$FLAGS/created-$n"
+    echo "https://github.com/acme/repo/pull/$n" ;;
+  "api graphql")
+    case "$4" in
+      *"search(type: ISSUE"*)
+        nodes=''
+        for n in 11 12 13; do
+          if [ -f "$FLAGS/created-$n" ] && [ ! -f "$FLAGS/merged-$n" ]; then nodes="$nodes${{nodes:+,}}$(node $n OPEN)"; fi
+        done
+        echo '{{"data":{{"search":{{"issueCount":0,"nodes":['"$nodes"']}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}}}}' ;;
+      *"p0: repository"*)
+        data=''; i=0
+        for n in $(printf '%s' "$4" | grep -o 'pullRequest(number: [0-9]*' | grep -o '[0-9]*$'); do
+          if [ -f "$FLAGS/merged-$n" ]; then state=MERGED; else state=OPEN; fi
+          data="$data${{data:+,}}\"p$i\":{{\"pullRequest\":$(node $n $state)}}"
+          i=$((i+1))
+        done
+        echo "{{\"data\":{{$data}}}}" ;;
+      *) echo "unexpected graphql query: $4" >&2; exit 9 ;;
+    esac ;;
   *) echo "unexpected gh call: $*" >&2; exit 9 ;;
 esac
 "#,
@@ -398,8 +417,10 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     let calls = fx.env.calls("gh");
     let create = calls.iter().find(|c| c[..2] == ["pr", "create"]).unwrap();
     assert_eq!(create[..6], ["pr", "create", "--base", "main", "--head", "cpd/chain/a1"]);
-    // E5 polls an open PR in phase `dispatch` too, and a1 is not merged: nothing starts.
-    fx.wait("the first poll of a1", 30, || fx.env.calls("gh").iter().any(|c| c[..2] == ["pr", "view"]).then_some(()));
+    // E5 polls whatever the phase, and a1 is not merged: nothing starts. Two polls after the PR was created.
+    let polls = |fx: &Fx| fx.env.calls("gh").iter().filter(|c| c[0] == "api").count();
+    let before = polls(&fx);
+    fx.wait("two more polls", 30, || (polls(&fx) >= before + 2).then_some(()));
     std::thread::sleep(Duration::from_millis(2500));
     assert_eq!((fx.pr_status("b"), fx.pr_status("a2")), ("waiting".to_owned(), "waiting".to_owned()));
     assert!(of_kind(&fx.events(), "attempt-started").iter().all(|e| e["job"] == "schema"));
