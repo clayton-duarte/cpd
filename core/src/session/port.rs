@@ -10,7 +10,7 @@ use nix::fcntl::{Flock, FlockArg};
 use rusqlite::params;
 use serde_json::json;
 
-use crate::config::{Config, PortRange};
+use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::ids::PlanId;
@@ -27,7 +27,7 @@ pub fn assign(home: &CpdHome, store: &mut Store, config: &Config, plan: &PlanId)
     if let Some(port) = read_port(&file)?.filter(|p| range.contains(*p)) {
         return Ok(port);
     }
-    let holders = holders(home, store, range, plan)?;
+    let holders = holders(home, store, config, plan)?;
     let Some(port) = range.ports().find(|p| !holders.iter().any(|(_, held)| held == p)) else {
         let names = holders.iter().map(|(plan, port)| format!("{plan} ({port})")).collect::<Vec<_>>().join(", ");
         return Err(CpdError::new(
@@ -42,12 +42,13 @@ pub fn assign(home: &CpdHome, store: &mut Store, config: &Config, plan: &PlanId)
 }
 
 /// The other Plans, not `done`, whose file holds a port inside the range, by Plan id.
-fn holders(home: &CpdHome, store: &mut Store, range: PortRange, plan: &PlanId) -> Result<Vec<(String, u16)>, CpdError> {
+fn holders(home: &CpdHome, store: &mut Store, config: &Config, plan: &PlanId) -> Result<Vec<(String, u16)>, CpdError> {
     let others = store.read(|conn| {
         let mut stmt = conn.prepare("SELECT id FROM plans WHERE id != ?1 AND phase != 'done' ORDER BY id")?;
         let ids = stmt.query_map(params![plan.as_str()], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
         Ok(ids)
     })?;
+    let range = config.plannotator_ports;
     let mut held = Vec::new();
     for id in others {
         let id_parsed = PlanId::parse(&id).map_err(|e| {
