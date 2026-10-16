@@ -7,7 +7,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
 use serde_json::Value;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use super::moves::first_message;
 use super::port;
@@ -15,6 +19,7 @@ use super::row::{self, Role, Row, State};
 use super::{Env, RunArgs, bad_row, not_a_lead, state};
 use crate::config::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
+use crate::host::exe::Exe;
 use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs, Plannotator};
 use crate::host::{PaneId, Tmux};
 use crate::ids::{PlanId, SessionId};
@@ -24,6 +29,9 @@ use crate::output::Output;
 const SOURCE_POLL: Duration = Duration::from_secs(2);
 /// How often it looks for pi's session file while pi runs.
 const FILE_POLL: Duration = Duration::from_millis(500);
+/// How long the Lead in the chat slot must have been idle before a reload
+/// restarts its pi without it being parked (hs-d49).
+const CHAT_IDLE: Duration = Duration::from_secs(10 * 60);
 /// How long it waits for `new-window`'s caller to set `@cpd_session` on its pane.
 const PANE_WAIT: Duration = Duration::from_secs(5);
 
@@ -34,6 +42,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
         return Err(not_a_lead(&row.id, row.role));
     }
     check_pane(&env.tmux(), &row.id)?;
+    let exe = Exe::current()?;
     let dirs = PiDirs::from_env()?;
     // From here on this process owns the terminal (commands.md §1.2).
     loop {
@@ -72,11 +81,26 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
             let exited = child.try_wait().map_err(|e| {
                 CpdError::new(ErrorCode::SpawnFailed, format!("Cannot wait for pi: {e}.")).with("argv", launch.argv.clone())
             })?;
+            if exited.is_some() {
+                // A new install: restart before any store write (§6.7 "Reload on install").
+                if exe.replaced() {
+                    return Err(reload(&exe, &row.id));
+                }
+                if !recorded {
+                    record_file(&mut env, &dirs, &row.id)?;
+                }
+                break;
+            }
             if !recorded {
                 recorded = record_file(&mut env, &dirs, &row.id)?;
             }
-            if exited.is_some() {
-                break;
+            if exe.replaced() && reload_due(&mut env, &dirs, &row.id)? {
+                print!("  new cpd installed: restarting pi for {}…\n", row.name);
+                let _ = std::io::stdout().flush();
+                // The adapter reports `stopped` at `session_shutdown`; this process does not.
+                let _ = kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM);
+                let _ = child.wait();
+                return Err(reload(&exe, &row.id));
             }
             std::thread::sleep(FILE_POLL);
         }
@@ -92,7 +116,41 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
             Ok(0) | Err(_) => return Ok(Output::Owned),
             Ok(_) => {}
         }
+        if exe.replaced() {
+            return Err(reload(&exe, &row.id));
+        }
     }
+}
+
+/// Replaces this process with the newly installed cpd, which resumes pi on
+/// the session file (§10.8 step 1). Returns only the error of failing to.
+fn reload(exe: &Exe, id: &SessionId) -> CpdError {
+    exe.exec(["session", "run", id.as_str()])
+}
+
+/// A new cpd is installed and the Lead is at a safe point (§6.7 "Reload on
+/// install"): reads the Session and its file, and decides with [`reload_now`].
+fn reload_due(env: &mut Env, dirs: &PiDirs, id: &SessionId) -> Result<bool, CpdError> {
+    let row = env.store.read(|conn| row::load(conn, id))?;
+    // Cheap first: only an idle Lead can be at a safe point.
+    if row.state != State::Idle {
+        return Ok(false);
+    }
+    let Some(file) = existing_file(dirs, &row) else { return Ok(false) };
+    let quiet = Duration::from_secs(u64::from(env.config.timeouts.fork_quiet_seconds));
+    let since = OffsetDateTime::parse(&row.state_at, &Rfc3339)
+        .map_err(|e| bad_row(format!("{} has state_at {:?}: {e}", row.id, row.state_at)))?;
+    let idle_for = Duration::try_from(OffsetDateTime::now_utc() - since).unwrap_or_default();
+    let finished = std::fs::read_to_string(&file).is_ok_and(|text| turn_finished(&text));
+    Ok(reload_now(row.state, &row.place, idle_for, finished, quiet_since(&file, quiet)))
+}
+
+/// Whether a Lead whose pi runs reloads it now (hs-d49): it is idle, its last
+/// turn is finished and its session file is quiet (the rule of `session fork`),
+/// and it is parked, or in the chat slot and has been idle for [`CHAT_IDLE`] (so
+/// unsent typing is not lost). A `blocked` or `working` Lead never reloads.
+fn reload_now(state: State, place: &str, idle_for: Duration, turn_finished: bool, file_quiet: bool) -> bool {
+    state == State::Idle && turn_finished && file_quiet && (place != "chat" || idle_for >= CHAT_IDLE)
 }
 
 /// The Plan's plannotator port. When the range is full the pane says so, names the
@@ -255,6 +313,7 @@ mod tests {
     const USER: &str = r#"{"type":"message","id":"a","message":{"role":"user","content":"hi"}}"#;
     const DONE: &str = r#"{"type":"message","id":"b","message":{"role":"assistant","stopReason":"stop"}}"#;
     const TOOL: &str = r#"{"type":"message","id":"c","message":{"role":"assistant","stopReason":"toolUse"}}"#;
+    const MINUTE: Duration = Duration::from_secs(60);
     const NAME: &str = r#"{"type":"session_info","name":"x"}"#;
 
     #[test]
@@ -266,5 +325,36 @@ mod tests {
         assert!(!turn_finished(&[USER, DONE, "{\"type\":\"mess"].join("\n")), "a half-written line is not finished");
         assert!(!turn_finished(NAME));
         assert!(!turn_finished(""));
+    }
+
+    #[test]
+    fn a_parked_idle_lead_with_a_finished_quiet_turn_reloads_at_once() {
+        assert!(reload_now(State::Idle, "parked", Duration::ZERO, true, true));
+        assert!(reload_now(State::Idle, "none", Duration::ZERO, true, true));
+    }
+
+    #[test]
+    fn a_lead_that_is_not_idle_never_reloads() {
+        for state in [State::Working, State::Blocked, State::Stopped] {
+            for place in ["parked", "chat", "none"] {
+                assert!(!reload_now(state, place, 60 * MINUTE, true, true), "{state:?} in {place}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_idle_lead_waits_for_a_finished_turn_and_a_quiet_file() {
+        assert!(!reload_now(State::Idle, "parked", 60 * MINUTE, false, true));
+        assert!(!reload_now(State::Idle, "parked", 60 * MINUTE, true, false));
+        assert!(!reload_now(State::Idle, "chat", 60 * MINUTE, false, false));
+    }
+
+    #[test]
+    fn the_lead_in_the_chat_slot_waits_ten_minutes() {
+        assert!(!reload_now(State::Idle, "chat", Duration::ZERO, true, true));
+        assert!(!reload_now(State::Idle, "chat", 10 * MINUTE - Duration::from_secs(1), true, true));
+        assert!(reload_now(State::Idle, "chat", 10 * MINUTE, true, true));
+        assert!(reload_now(State::Idle, "chat", 11 * MINUTE, true, true));
+        assert!(!reload_now(State::Idle, "chat", 11 * MINUTE, false, true), "ten minutes do not skip the turn rule");
     }
 }
