@@ -283,6 +283,7 @@ mod tests {
             created_at: "t".into(),
             locked_at: None,
             done_at: None,
+            archived_at: None,
         };
         assert_eq!(
             header(&plan),
