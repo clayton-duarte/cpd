@@ -107,8 +107,8 @@ fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
     let (locked, status, columns, values) = match phase {
         "plan" => ("NULL", "waiting", "", String::new()),
         "dispatch" => ("'t'", "dispatch", "", String::new()),
-        "pr" => ("'t'", "open", ", pr_number, pr_url, pr_opened_at", format!(", 812, '{URL}', 'opened'")),
-        "done" => ("'t'", "merged", ", pr_number, pr_url, pr_opened_at, merged_at", format!(", 812, '{URL}', 'opened', 'finished'")),
+        "pr" => ("'t'", "open", ", pr_number, pr_url, pr_opened_at, pull_request", format!(", 812, '{URL}', 'opened', (SELECT id FROM pull_requests)")),
+        "done" => ("'t'", "merged", ", pr_number, pr_url, pr_opened_at, pull_request, merged_at", format!(", 812, '{URL}', 'opened', (SELECT id FROM pull_requests), 'finished'")),
         other => panic!("no phase {other}"),
     };
     let (worktree, done) = match phase {
@@ -116,12 +116,21 @@ fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
         "done" => (&lead[..], "'finished'"),
         _ => (&lead[..], "NULL"),
     };
+    // What `pr open` writes: the pull request's row, with the Plan's title, no review, no checks.
+    let pull_request = match phase {
+        "pr" => format!("INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+                         VALUES ('acme/pay', 812, '{URL}', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');"),
+        "done" => format!("INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+                           VALUES ('acme/pay', 812, '{URL}', 'Pay the bills', 0, 'merged', 'none', 'none', 'opened', 'finished', 'finished');"),
+        _ => String::new(),
+    };
     let sql = format!(
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', {locked}, {done});
+         {pull_request}
          INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{columns})
            VALUES ('pay', 'repo', '{repo}', 'main', '{status}', 'cpd/pay', {worktree}, cpd_txn(), 't', {locked}{values});",
         repo = fx.repo.display(),
@@ -184,38 +193,42 @@ impl Fx {
         self.git(&self.repo, &["rev-parse", "refs/heads/cpd/pay"])
     }
 
-    /// `(phase, pr_number, pr_url, pr_opened_at, pr_seen, pr_polled_at, done_at)` of the Plan.
-    fn plan_row(&self) -> (String, Option<i64>, Option<String>, Option<String>, Value, Option<String>, Option<String>) {
+    /// `(phase, pr_number, pr_url, pr_opened_at, pull_request, done_at)` of the Plan.
+    fn plan_row(&self) -> (String, Option<i64>, Option<String>, Option<String>, Option<i64>, Option<String>) {
         self.store()
             .read(|c| {
                 Ok(c.query_row(
-                    "SELECT p.phase, r.pr_number, r.pr_url, r.pr_opened_at, r.pr_seen, r.pr_polled_at, p.done_at
+                    "SELECT p.phase, r.pr_number, r.pr_url, r.pr_opened_at, r.pull_request, p.done_at
                        FROM plans p JOIN prs r ON r.plan = p.id WHERE p.id = 'pay'",
                     [],
-                    |r| {
-                        let seen: String = r.get(4)?;
-                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, serde_json::from_str(&seen).unwrap(), r.get(5)?, r.get(6)?))
-                    },
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
                 )?)
             })
             .unwrap()
     }
 
-    /// `(pr_title, pr_review_decision, pr_checks)` of the Plan; `None` while all three are null.
-    fn pr_data(&self) -> Option<(String, String, String)> {
-        let (title, decision, checks): (Option<String>, Option<String>, Option<String>) = self
-            .store()
+    /// The row of `pull_requests` the Plan's PR points to, as `(title, review_decision, checks, state)`.
+    fn pr_data(&self) -> (String, String, String, String) {
+        self.store()
             .read(|c| {
-                Ok(c.query_row("SELECT pr_title, pr_review_decision, pr_checks FROM prs WHERE plan = 'pay'", [], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-                })?)
+                Ok(c.query_row(
+                    "SELECT q.title, q.review_decision, q.checks, q.state
+                       FROM prs r JOIN pull_requests q ON q.id = r.pull_request WHERE r.plan = 'pay'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )?)
             })
-            .unwrap();
-        match (title, decision, checks) {
-            (None, None, None) => None,
-            (Some(t), Some(d), Some(c)) => Some((t, d, c)),
-            partial => panic!("the three columns are set together, or not at all: {partial:?}"),
-        }
+            .unwrap()
+    }
+
+    /// The `pull_request` of the Plan's PR, as `plan show` prints it.
+    fn shown_pull_request(&self) -> Value {
+        self.env.cpd(&["plan", "show", "--plan", "pay"]).ok()["prs"][0]["pull_request"].clone()
+    }
+
+    /// How many write transactions have run: the rows of `txns`.
+    fn txns(&self) -> i64 {
+        self.store().read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap()
     }
 
     /// `(kind, data)` of the Plan's Events of `kind`, in order.
@@ -291,8 +304,8 @@ impl Fx {
                 "open",
                 format!("'{}'", lead.display()),
                 "'t'",
-                ", pr_number, pr_url, pr_opened_at",
-                format!(", 813, '{WEB_URL}', 'opened'"),
+                ", pr_number, pr_url, pr_opened_at, pull_request",
+                format!(", 813, '{WEB_URL}', 'opened', (SELECT id FROM pull_requests WHERE number = 813)"),
                 "merged",
                 "",
             ),
@@ -301,10 +314,19 @@ impl Fx {
         self.store()
             .write("fixture", |tx| {
                 tx.execute_batch(&format!(
-                    "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{open_columns})
+                    "{row}
+                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{open_columns})
                        VALUES ('pay', 'web', '{repo}', 'main', '{status}', 'cpd/pay/web', {worktree}, cpd_txn(), 't', {started}{open_values});
                      {needs}",
                     repo = repo.display(),
+                    row = if matches!(state, Web::Open) {
+                        format!(
+                            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+                             VALUES ('acme/web', 813, '{WEB_URL}', 'Pay the bills (web)', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');"
+                        )
+                    } else {
+                        String::new()
+                    },
                 ))?;
                 tx.execute(
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
@@ -375,6 +397,13 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
     // Rows and the Event, in one transaction.
     let row = fx.plan_row();
     assert_eq!((row.0.as_str(), row.1, row.2.as_deref(), row.3.as_deref()), ("pr", Some(812), Some(URL), Some(opened_at.as_str())));
+    // The pull request's row (D6), from the URL `gh pr create` printed, and the PR points to it.
+    assert!(row.4.is_some(), "prs.pull_request is set");
+    assert_eq!(
+        fx.shown_pull_request(),
+        json!({"repo": "acme/pay", "number": 812, "url": URL, "title": "Pay the bills", "draft": false, "state": "open",
+               "review_decision": "none", "checks": "none", "created_at": opened_at, "merged_at": null})
+    );
     let opened = fx.events("pr-opened");
     assert_eq!(opened.len(), 1);
     assert_eq!(opened[0].1, json!({"pr": "repo", "number": 812, "url": URL}));
@@ -382,6 +411,31 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].1, json!({"from": "dispatch", "to": "pr", "prs": [{"key": "repo", "number": 812, "url": URL}]}));
     assert!(events[0].0.contains("cpd pr poll --plan pay"), "{}", events[0].0);
+}
+
+#[test]
+fn open_keeps_the_row_the_poll_stored_first() {
+    let fx = fx("dispatch");
+    // The poll saw the pull request (it is the User's, and open) before `pr open` recorded it.
+    fx.store()
+        .write("fixture", |tx| {
+            tx.execute_batch(&format!(
+                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+                 VALUES ('acme/pay', 812, '{URL}', 'As the poll wrote it', 1, 'open', 'approved', 'pending', 'github time', NULL, 'poll time')"
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+
+    fx.pr("open").ok();
+
+    assert_eq!(
+        fx.shown_pull_request(),
+        json!({"repo": "acme/pay", "number": 812, "url": URL, "title": "As the poll wrote it", "draft": true, "state": "open",
+               "review_decision": "approved", "checks": "pending", "created_at": "github time", "merged_at": null})
+    );
+    let rows: i64 = fx.store().read(|c| Ok(c.query_row("SELECT count(*) FROM pull_requests", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(rows, 1);
 }
 
 #[test]
@@ -686,81 +740,109 @@ fn hold_driver_lock(fx: &Fx, attempt: &AttemptId) -> cpd_core::merge::DriverLock
 
 // ------------------------------------------------------------------ pr poll
 
-fn feedback_view() -> &'static str {
-    r#"{"state":"OPEN","mergedAt":null,
-        "title":"Add the payment webhook","reviewDecision":"",
-        "statusCheckRollup":[
-          {"name":"ci/test","conclusion":"FAILURE"},
-          {"name":"lint","conclusion":"SUCCESS"},
-          {"context":"legacy","state":"ERROR"}],
-        "reviews":[{"id":"PRR_1","author":{"login":"ann"},"state":"CHANGES_REQUESTED","body":"Please fix"}],
-        "comments":[{"id":"IC_1","author":{"login":"bob"},"body":"nit"}]}"#
+/// The view of a pull request whose title is the Plan's (what `pr open` stored), so that only the other fields can differ.
+fn view(state: &str, decision: &str, checks: &str) -> String {
+    format!(
+        r#"{{"state":"{state}","mergedAt":null,"title":"Pay the bills","reviewDecision":"{decision}","statusCheckRollup":{checks},"reviews":[],"comments":[]}}"#
+    )
+}
+
+const FAILING: &str = r#"[{"name":"ci/test","conclusion":"FAILURE"},{"name":"lint","conclusion":"SUCCESS"},{"context":"legacy","state":"ERROR"}]"#;
+
+/// `pr-feedback`'s data for PR `repo`.
+fn feedback(state: &str, checks: &str, decision: &str, reasons: &[&str]) -> Value {
+    json!({"pr": "repo", "number": 812, "url": URL, "state": state, "checks": checks, "review_decision": decision, "reasons": reasons})
 }
 
 #[test]
-fn poll_reports_new_feedback_once() {
+fn poll_reports_checks_turning_failed_once() {
     let fx = fx("pr");
-    fx.gh("view.json", feedback_view());
-    fx.gh("inline.json", r#"[{"id": 77, "user": {"login": "cy"}, "path": "src/a.rs", "line": 3, "body": "why?"}]"#);
+    fx.gh("view.json", &view("OPEN", "", FAILING));
 
     let out = fx.poll();
 
-    let changes = json!({
-        "checks": [{"name": "ci/test", "conclusion": "FAILURE"}, {"name": "legacy", "conclusion": "ERROR"}],
-        "reviews": [{"id": "PRR_1", "author": "ann", "state": "CHANGES_REQUESTED", "body": "Please fix"}],
-        "comments": [{"id": "IC_1", "author": "bob", "body": "nit"}, {"id": "77", "author": "cy", "path": "src/a.rs", "body": "why?"}],
-    });
     assert_eq!(
         out,
-        json!({"pr": "repo", "number": 812, "state": "OPEN", "merged": false, "title": TITLE, "review_decision": "none", "checks": "failed", "changes": changes})
+        json!({"pr": "repo", "number": 812, "state": "OPEN", "merged": false, "title": "Pay the bills", "review_decision": "none",
+               "checks": "failed", "reasons": ["checks_failed"]})
     );
-    // gh: the view, then the inline comments of the same PR.
-    let calls = fx.gh_calls();
-    assert_eq!(calls[0], ["pr", "view", "812", "--json", "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision"]);
-    assert_eq!(calls[1], ["api", "repos/{owner}/{repo}/pulls/812/comments"]);
-    // pr_seen, pr_polled_at, and one pr-feedback Event.
-    let row = fx.plan_row();
-    assert_eq!(
-        row.4,
-        json!({
-            "checks": {"ci/test": "FAILURE", "legacy": "ERROR", "lint": "SUCCESS"},
-            "reviewIds": ["PRR_1"],
-            "commentIds": ["IC_1", "77"],
-        })
-    );
-    assert!(row.5.is_some());
-    assert_eq!(row.0, "pr");
+    // gh: the view of the PR; nothing else (what the Lead reads is `pr view`'s).
+    assert_eq!(fx.gh_calls(), [["pr", "view", "812", "--json", "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision"]]);
+    assert_eq!(fx.pr_data(), ("Pay the bills".into(), "none".into(), "failed".into(), "open".into()));
     let events = fx.events("pr-feedback");
     assert_eq!(events.len(), 1);
-    let mut data = changes;
-    data["state"] = json!("OPEN");
-    data["pr"] = json!("repo");
-    assert_eq!(events[0].1, data);
-    assert!(events[0].0.contains("cpd job add"), "{}", events[0].0);
+    assert_eq!(events[0].1, feedback("open", "failed", "none", &["checks_failed"]));
+    assert_eq!(events[0].0, "PR repo (#812) of Plan pay needs attention: checks failed. Read the details with cpd pr view --plan pay --pr repo.");
+    assert_eq!(fx.plan_row().0, "pr");
 
-    // A rerun reports nothing new, and appends nothing.
+    // A rerun with the same answer reports nothing and writes nothing: no transaction at all.
+    let txns = fx.txns();
     let again = fx.poll();
-    assert_eq!(again["changes"], json!({"checks": [], "reviews": [], "comments": []}));
+    assert_eq!(again["reasons"], json!([]));
+    assert_eq!(fx.txns(), txns);
     assert_eq!(fx.events("pr-feedback").len(), 1);
-    assert_eq!(fx.plan_row().4, row.4);
 
-    // Only what is new afterwards.
-    fx.gh("inline.json", r#"[{"id": 77, "user": {"login": "cy"}, "path": "src/a.rs", "body": "why?"}, {"id": 78, "user": null, "body": "and?"}]"#);
-    let more = fx.poll();
-    assert_eq!(more["changes"]["comments"], json!([{"id": "78", "author": null, "body": "and?"}]));
-    assert_eq!(more["changes"]["checks"], json!([]));
+    // Still failing while another check starts: not a change into `failed`.
+    fx.gh("view.json", &view("OPEN", "", r#"[{"name":"ci/test","conclusion":"FAILURE"},{"name":"slow","conclusion":"IN_PROGRESS"}]"#));
+    fx.poll();
+    assert_eq!(fx.events("pr-feedback").len(), 1);
+
+    // Passing, then failing again: from anything else, so reported again.
+    fx.gh("view.json", &view("OPEN", "", r#"[{"name":"ci/test","conclusion":"SUCCESS"}]"#));
+    assert_eq!(fx.poll()["reasons"], json!([]));
+    fx.gh("view.json", &view("OPEN", "", FAILING));
+    assert_eq!(fx.poll()["reasons"], json!(["checks_failed"]));
     assert_eq!(fx.events("pr-feedback").len(), 2);
 }
 
 #[test]
-fn poll_stores_the_title_the_review_decision_and_the_checks_on_every_poll() {
+fn poll_reports_changes_requested_once() {
     let fx = fx("pr");
-    assert_eq!(fx.pr_data(), None, "all null until the first poll");
-    fx.gh("view.json", feedback_view());
-    fx.poll();
-    assert_eq!(fx.pr_data(), Some((TITLE.into(), "none".into(), "failed".into())));
+    fx.gh("view.json", &view("OPEN", "CHANGES_REQUESTED", "[]"));
 
-    // The PR is renamed, approved and its checks pass: the next poll replaces all three, and reports nothing new.
+    let out = fx.poll();
+
+    assert_eq!((out["review_decision"].as_str(), out["reasons"].clone()), (Some("changes_requested"), json!(["changes_requested"])));
+    let events = fx.events("pr-feedback");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].1, feedback("open", "none", "changes_requested", &["changes_requested"]));
+    assert!(events[0].0.contains("needs attention: changes requested. Read"), "{}", events[0].0);
+
+    let txns = fx.txns();
+    assert_eq!(fx.poll()["reasons"], json!([]));
+    assert_eq!((fx.txns(), fx.events("pr-feedback").len()), (txns, 1));
+
+    // Approved, then changes requested again.
+    fx.gh("view.json", &view("OPEN", "APPROVED", "[]"));
+    assert_eq!(fx.poll()["reasons"], json!([]));
+    fx.gh("view.json", &view("OPEN", "CHANGES_REQUESTED", "[]"));
+    assert_eq!(fx.poll()["reasons"], json!(["changes_requested"]));
+    assert_eq!(fx.events("pr-feedback").len(), 2);
+}
+
+#[test]
+fn poll_lists_every_reason_of_one_change_in_order() {
+    let fx = fx("pr");
+    fx.gh("view.json", &view("CLOSED", "CHANGES_REQUESTED", FAILING));
+
+    let out = fx.poll();
+
+    assert_eq!(out["reasons"], json!(["checks_failed", "changes_requested", "closed"]));
+    let events = fx.events("pr-feedback");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].1, feedback("closed", "failed", "changes_requested", &["checks_failed", "changes_requested", "closed"]));
+    assert!(events[0].0.contains("needs attention: checks failed, changes requested, closed without a merge. Read"), "{}", events[0].0);
+}
+
+#[test]
+fn poll_stores_what_changed_in_the_row_and_improvements_send_no_event() {
+    let fx = fx("pr");
+    assert_eq!(fx.pr_data(), ("Pay the bills".into(), "none".into(), "none".into(), "open".into()), "as `pr open` wrote it");
+    fx.gh("view.json", &view("OPEN", "", FAILING).replace("Pay the bills", TITLE));
+    fx.poll();
+    assert_eq!(fx.pr_data(), (TITLE.into(), "none".into(), "failed".into(), "open".into()));
+
+    // The PR is renamed, approved and its checks pass: the next poll replaces all three, and tells nobody.
     fx.gh(
         "view.json",
         r#"{"state":"OPEN","mergedAt":null,"title":"Add the payment webhook v2","reviewDecision":"APPROVED",
@@ -768,9 +850,11 @@ fn poll_stores_the_title_the_review_decision_and_the_checks_on_every_poll() {
     );
     let out = fx.poll();
     assert_eq!((out["title"].as_str(), out["review_decision"].as_str(), out["checks"].as_str()), (Some("Add the payment webhook v2"), Some("approved"), Some("passed")));
-    assert_eq!(fx.pr_data(), Some(("Add the payment webhook v2".into(), "approved".into(), "passed".into())));
-    // They belong to the poll: no Event of their own.
-    assert_eq!(fx.events("pr-feedback").len(), 1);
+    assert_eq!(fx.pr_data(), ("Add the payment webhook v2".into(), "approved".into(), "passed".into(), "open".into()));
+    assert_eq!(fx.events("pr-feedback").len(), 1, "only the first poll's checks turning failed");
+    // The row's `changed_at` is the time of the write; `created_at`, which `gh pr view` does not give, is kept.
+    let shown = fx.shown_pull_request();
+    assert_eq!((&shown["created_at"], &shown["draft"], &shown["repo"]), (&json!("opened"), &json!(false), &json!("acme/pay")));
 }
 
 #[test]
@@ -811,7 +895,7 @@ fn poll_maps_gh_review_decisions_and_check_conclusions() {
         fx.gh("view.json", &view(decision, &checks));
         let out = fx.poll();
         assert_eq!((out["review_decision"].as_str(), out["checks"].as_str()), (Some(want_decision), Some(want_checks)), "{decision} {checks}");
-        assert_eq!(fx.pr_data(), Some(("T".into(), want_decision.into(), want_checks.into())), "{decision} {checks}");
+        assert_eq!(fx.pr_data(), ("T".into(), want_decision.into(), want_checks.into(), "open".into()), "{decision} {checks}");
     }
 }
 
@@ -827,8 +911,11 @@ fn dispatch_card(fx: &Fx) -> (String, Option<(i64, PrState, Option<(String, Revi
 #[test]
 fn dispatch_rows_carry_label_number_state_checks_decision_and_title() {
     let fx = fx("pr");
-    // Before the first poll the PR's number and state are known, what a poll reads is not.
-    assert_eq!(dispatch_card(&fx), ("Lead".into(), Some((812, PrState::Open, None))));
+    // Before the first poll the row is what `pr open` wrote: the Plan's title, no review, no checks.
+    assert_eq!(
+        dispatch_card(&fx),
+        ("Lead".into(), Some((812, PrState::Open, Some(("Pay the bills".into(), ReviewDecision::None, Checks::None)))))
+    );
 
     fx.gh(
         "view.json",
@@ -862,53 +949,60 @@ fn a_plan_without_a_pr_has_a_label_and_no_pr_row() {
 #[test]
 fn poll_refuses_a_view_without_a_title_and_stores_nothing() {
     let fx = fx("pr");
+    let (txns, row) = (fx.txns(), fx.pr_data());
     fx.gh("view.json", r#"{"state":"OPEN","mergedAt":null,"statusCheckRollup":[],"reviews":[],"comments":[]}"#);
     let run = fx.pr("poll");
     assert_eq!(code(&run), ("gh_failed".into(), 1));
-    assert_eq!((fx.pr_data(), fx.plan_row().5), (None, None));
+    assert_eq!((fx.txns(), fx.pr_data()), (txns, row));
 }
 
 #[test]
-fn poll_with_nothing_new_still_records_the_poll() {
+fn poll_with_nothing_changed_writes_nothing_and_appends_nothing() {
     let fx = fx("pr");
+    let txns = fx.txns();
+    fx.gh("view.json", &view("OPEN", "", "[]"));
 
     let out = fx.poll();
 
     assert_eq!(
         out,
-        json!({"pr": "repo", "number": 812, "state": "OPEN", "merged": false, "title": TITLE, "review_decision": "none", "checks": "none",
-               "changes": {"checks": [], "reviews": [], "comments": []}})
+        json!({"pr": "repo", "number": 812, "state": "OPEN", "merged": false, "title": "Pay the bills", "review_decision": "none",
+               "checks": "none", "reasons": []})
     );
-    assert!(fx.plan_row().5.is_some());
+    assert_eq!(fx.txns(), txns, "no write transaction");
     assert!(fx.events("pr-feedback").is_empty());
+    assert_eq!(fx.pr_data(), ("Pay the bills".into(), "none".into(), "none".into(), "open".into()));
 }
 
 #[test]
 fn poll_reports_a_closure_without_a_merge_once_until_the_pr_is_reopened() {
     let fx = fx("pr");
-    fx.gh("view.json", r#"{"state":"CLOSED","mergedAt":null,"title":"Add the payment webhook","reviewDecision":"","statusCheckRollup":null,"reviews":[],"comments":[]}"#);
+    fx.gh("view.json", &view("CLOSED", "", "null"));
 
     let out = fx.poll();
 
     assert_eq!(out["state"], "CLOSED");
     assert_eq!(out["merged"], false);
+    assert_eq!(out["reasons"], json!(["closed"]));
     let events = fx.events("pr-feedback");
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].1, json!({"pr": "repo", "checks": [], "reviews": [], "comments": [], "state": "CLOSED"}));
-    assert_eq!(fx.plan_row().4["closed"], true);
-    assert_eq!(fx.plan_row().0, "pr");
+    assert_eq!(events[0].1, feedback("closed", "none", "none", &["closed"]));
+    assert!(events[0].0.contains("needs attention: closed without a merge. Read"), "{}", events[0].0);
+    assert_eq!(fx.pr_data().3, "closed");
+    assert_eq!((fx.plan_row().0, fx.pr_status("repo")), ("pr".to_owned(), "open".to_owned()), "the PR stays open in cpd");
 
+    let txns = fx.txns();
     fx.poll();
-    assert_eq!(fx.events("pr-feedback").len(), 1, "a closure is reported once");
+    assert_eq!((fx.txns(), fx.events("pr-feedback").len()), (txns, 1), "a closure is reported once");
 
-    // Reopened: the mark goes, and nothing is reported.
-    fx.gh("view.json", OPEN_VIEW);
+    // Reopened: the row follows, and nothing is reported.
+    fx.gh("view.json", &view("OPEN", "", "[]"));
     fx.poll();
-    assert!(fx.plan_row().4.get("closed").is_none(), "{}", fx.plan_row().4);
+    assert_eq!(fx.pr_data().3, "open");
     assert_eq!(fx.events("pr-feedback").len(), 1);
 
     // Closed again: reported again.
-    fx.gh("view.json", r#"{"state":"CLOSED","mergedAt":null,"title":"Add the payment webhook","reviewDecision":"","statusCheckRollup":[],"reviews":[],"comments":[]}"#);
+    fx.gh("view.json", &view("CLOSED", "", "[]"));
     fx.poll();
     assert_eq!(fx.events("pr-feedback").len(), 2);
 }
@@ -958,12 +1052,13 @@ fn poll_of_a_merged_pr_ends_the_plan_and_removes_its_attempt_leftovers() {
     assert_eq!(
         out,
         json!({"pr": "repo", "number": 812, "state": "MERGED", "merged": true, "title": TITLE, "review_decision": "none", "checks": "none",
-               "changes": {"checks": [], "reviews": [], "comments": []}})
+               "reasons": []})
     );
-    assert_eq!(fx.pr_data(), Some((TITLE.into(), "none".into(), "none".into())));
+    assert_eq!(fx.pr_data(), (TITLE.into(), "none".into(), "none".into(), "merged".into()));
+    assert_eq!(fx.shown_pull_request()["merged_at"], "2026-10-14T10:00:00Z");
     let row = fx.plan_row();
     assert_eq!(row.0, "done");
-    assert!(row.6.is_some() && row.5.is_some());
+    assert!(row.5.is_some());
     let done = fx.events("plan-done");
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].1, json!({"prs": [{"key": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}]}));
@@ -1013,22 +1108,24 @@ fn poll_on_a_done_plan_is_already() {
 #[test]
 fn poll_reports_a_failing_gh_and_changes_nothing() {
     let fx = fx("pr");
+    let txns = fx.txns();
     fx.gh("fail", "rate limited");
 
     let run = fx.pr("poll");
 
     assert_eq!(code(&run), ("gh_failed".into(), 1));
     assert!(run.error()["details"]["stderr"].as_str().unwrap().contains("rate limited"));
-    assert_eq!(fx.plan_row().5, None);
+    assert_eq!(fx.txns(), txns);
 }
 
 #[test]
 fn poll_refuses_gh_output_it_cannot_parse() {
     let fx = fx("pr");
+    let txns = fx.txns();
     fx.gh("view.json", r#"{"state": 3}"#);
     let run = fx.pr("poll");
     assert_eq!(code(&run), ("gh_failed".into(), 1));
-    assert_eq!(fx.plan_row().5, None);
+    assert_eq!(fx.txns(), txns);
 }
 
 // ---------------------------------------------------------------- pr rebase
@@ -1301,7 +1398,7 @@ fn poll_covers_every_open_pr_in_dispatch_and_pr_and_ends_the_plan_with_the_last_
     let listed: Vec<(&str, i64)> = done[0].1["prs"].as_array().unwrap().iter().map(|p| (p["key"].as_str().unwrap(), p["number"].as_i64().unwrap())).collect();
     assert_eq!(listed, [("repo", 812), ("web", 813)]);
     assert_eq!(fx.events("pr-merged").len(), 2);
-    assert_eq!(fx.plan_row().6.is_some(), true);
+    assert_eq!(fx.plan_row().5.is_some(), true);
 
     // Done: already, and still one plan-done.
     let again = fx.pr("poll").ok();
