@@ -8,7 +8,7 @@ mod common;
 use std::fs;
 use std::time::{Duration, Instant};
 
-use common::{CPD, TestEnv};
+use common::{CPD, SLEEP_SECONDS, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::host::tmux::SERVER_OPTIONS;
@@ -33,7 +33,7 @@ fn env() -> TestEnv {
     .unwrap();
     env.fake(
         "cpd",
-        &format!("if [ \"$1\" = tui ] && [ \"$2\" = view ] && [ \"$3\" != chat ]; then exec sleep 3600; fi\nexec '{CPD}' \"$@\""),
+        &format!("if [ \"$1\" = tui ] && [ \"$2\" = view ] && [ \"$3\" != chat ]; then exec sleep {SLEEP_SECONDS}; fi\nexec '{CPD}' \"$@\""),
     );
     env
 }
@@ -228,7 +228,7 @@ fn assert_server_options(env: &TestEnv) {
 #[test]
 fn a_server_started_by_plan_new_has_every_server_option() {
     let env = env();
-    env.fake("cpd", &format!("if [ \"$1 $2\" = 'session run' ]; then exec sleep 3600; fi\nexec '{CPD}' \"$@\""));
+    env.fake("cpd", &format!("if [ \"$1 $2\" = 'session run' ]; then exec sleep {SLEEP_SECONDS}; fi\nexec '{CPD}' \"$@\""));
     fs::write(
         env.cpd_home().join("config.toml"),
         format!("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket()),

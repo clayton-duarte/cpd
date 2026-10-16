@@ -11,7 +11,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::{CPD, TestEnv};
+use common::{CPD, SLEEP_SECONDS, TestEnv};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 
@@ -135,7 +135,7 @@ fn start_with(state: &str, on_term: &str) -> Fixture {
         assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8(out.stdout).unwrap().trim().to_owned()
     };
-    ok(&["new-session", "-d", "-s", "cpd", "-n", "main", "sleep 600"]);
+    ok(&["new-session", "-d", "-s", "cpd", "-n", "main", &format!("sleep {SLEEP_SECONDS}")]);
     let command = format!("exec '{}' session run {LEAD}", installed.display());
     let pane = ok(&["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", &command]);
     ok(&["set", "-p", "-t", &pane, "@cpd_session", LEAD]);

@@ -8,7 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, TestEnv};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::events::{Kind, NewEvent, append};
 use cpd_core::home::CpdHome;
@@ -150,7 +150,7 @@ fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
 /// A fake `cpd` on `PATH` for the panes: `cpd tui view chat` (the TUI Job's
 /// placeholder view) just sleeps; everything else is the built binary.
 fn fake_cpd(env: &TestEnv) {
-    env.fake("cpd", &format!("case \"$1 $2 $3\" in \"tui view chat\") exec sleep 600;; esac\nexec '{CPD}' \"$@\""));
+    env.fake("cpd", &format!("case \"$1 $2 $3\" in \"tui view chat\") exec sleep {SLEEP_SECONDS};; esac\nexec '{CPD}' \"$@\""));
 }
 
 /// A fake `pi` that creates its session file (when given `--session-id`) and
@@ -171,9 +171,9 @@ fn cockpit(env: &TestEnv) {
         assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8(out.stdout).unwrap().trim().to_owned()
     };
-    let tree = ok(&["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", "sleep 600"]);
+    let tree = ok(&["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
     ok(&["set", "-p", "-t", &tree, "@cpd_view", "tree"]);
-    let chat = ok(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", "sleep 600"]);
+    let chat = ok(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
     ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
 }
 
@@ -388,7 +388,7 @@ fn fork_registers_a_stopped_lead_in_a_parked_window() {
     let env = TestEnv::new();
     setup(&env);
     fake_cpd(&env);
-    fake_pi(&env, "exec sleep 600");
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     let message = env.root().join("message.md");
     fs::write(&message, "Look at the tests.").unwrap();
@@ -491,7 +491,7 @@ fn open_and_park_keep_at_most_one_placeholder_only_in_the_slot() {
     let env = TestEnv::new();
     setup(&env);
     fake_cpd(&env);
-    fake_pi(&env, "exec sleep 600");
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     let placeholder = slot(&env);
     assert_placeholders(&env, 1);
@@ -601,7 +601,7 @@ fn close_refuses_the_lead_in_the_chat_slot_and_leaves_everything() {
     let env = TestEnv::new();
     setup(&env);
     fake_cpd(&env);
-    fake_pi(&env, "exec sleep 600");
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     let pane = env.cpd(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
     let error = refused(&env.cpd(&["session", "close", LEAD1]), "in_chat_slot", 3);
@@ -616,7 +616,7 @@ fn close_kills_a_parked_pane_and_writes_what_e2_writes() {
     let env = TestEnv::new();
     setup(&env);
     fake_cpd(&env);
-    fake_pi(&env, "exec sleep 600");
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     // lead2 displaces lead1 into a park window; lead1 is made `idle`, as pi would report.
     let lead1_pane = env.cpd(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
@@ -656,7 +656,7 @@ fn close_of_a_stopped_lead_with_a_pane_appends_only_session_moved() {
     let env = TestEnv::new();
     setup(&env);
     fake_cpd(&env);
-    fake_pi(&env, "exec sleep 600");
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     // lead2 is `stopped` (the fake pi reports nothing) and parked by lead1.
     env.cpd(&["session", "open", LEAD2]).ok();
@@ -679,7 +679,7 @@ fn fake_cpd_returning(env: &TestEnv) {
     env.fake(
         "cpd",
         &format!(
-            "case \"$1 $2 $3\" in \"tui view chat\") exec sleep 600;; \"session run \"*) exec '{CPD}' \"$@\" </dev/null;; esac\nexec '{CPD}' \"$@\""
+            "case \"$1 $2 $3\" in \"tui view chat\") exec sleep {SLEEP_SECONDS};; \"session run \"*) exec '{CPD}' \"$@\" </dev/null;; esac\nexec '{CPD}' \"$@\""
         ),
     );
 }
@@ -688,7 +688,7 @@ fn fake_cpd_returning(env: &TestEnv) {
 fn dying_leads(env: &TestEnv) {
     setup(env);
     fake_cpd_returning(env);
-    fake_pi(env, "[ \"$CPD_SESSION\" = lead2 ] && exec sleep 600\nexit 0");
+    fake_pi(env, &format!("[ \"$CPD_SESSION\" = lead2 ] && exec sleep {SLEEP_SECONDS}\nexit 0"));
     cockpit(env);
     assert!(env.tmux(&["set", "-g", "remain-on-exit", "on"]).status.success());
 }
@@ -802,7 +802,7 @@ fn run_refusals() {
 
     // In a pane of cpd's server that runs another Session.
     cockpit(&env);
-    let out = env.tmux(&["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", "sleep 600"]);
+    let out = env.tmux(&["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
     let pane = String::from_utf8(out.stdout).unwrap().trim().to_owned();
     env.tmux(&["set", "-p", "-t", &pane, "@cpd_session", LEAD2]);
     let server = String::from_utf8(env.tmux(&["display", "-p", "-t", &pane, "#{socket_path},1,0"]).stdout).unwrap();

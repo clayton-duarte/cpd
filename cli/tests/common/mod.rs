@@ -26,6 +26,9 @@ use tempfile::TempDir;
 /// The cpd binary Cargo built for this test run.
 pub const CPD: &str = env!("CARGO_BIN_EXE_cpd");
 
+/// The longest any fake sleeps, so the leftovers of a killed test run end by themselves.
+pub const SLEEP_SECONDS: u64 = 120;
+
 static NEXT_SOCKET: AtomicUsize = AtomicUsize::new(0);
 
 pub struct TestEnv {

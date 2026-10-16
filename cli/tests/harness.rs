@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::TestEnv;
+use common::{SLEEP_SECONDS, TestEnv};
 
 #[test]
 fn commands_get_an_isolated_environment() {
@@ -135,4 +135,25 @@ fn calls_come_back_in_the_order_they_started() {
     }
     let got: Vec<String> = env.calls("tmux").into_iter().map(|c| c[0].clone()).collect();
     assert_eq!(got, (0..30).map(|i| i.to_string()).collect::<Vec<_>>());
+}
+
+#[test]
+fn no_fake_sleeps_longer_than_sleep_seconds() {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(env!("CARGO_MANIFEST_DIR").to_owned() + "/tests").unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        for (n, line) in text.lines().enumerate() {
+            for (at, _) in line.match_indices("sleep ") {
+                let digits: String = line[at + 6..].chars().take_while(char::is_ascii_digit).collect();
+                if digits.parse::<u64>().is_ok_and(|s| s > SLEEP_SECONDS) {
+                    found.push(format!("{}:{}: sleep {digits}", path.display(), n + 1));
+                }
+            }
+        }
+    }
+    assert!(found.is_empty(), "fakes must sleep at most SLEEP_SECONDS ({SLEEP_SECONDS}):\n{}", found.join("\n"));
 }
