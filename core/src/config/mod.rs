@@ -16,7 +16,7 @@ use crate::home::CpdHome;
 use crate::output::Output;
 
 pub use catalog::{PiInstall, load as load_catalog, locate_pi};
-pub use file::{Config, Events, Source, Sources, Tiers, Timeouts, Tmux, Watch};
+pub use file::{Config, Events, PortRange, Source, Sources, Tiers, Timeouts, Tmux, Watch};
 pub use tier::{Catalog, Letter, Tier, TierModel};
 
 /// `cpd config` takes no arguments.

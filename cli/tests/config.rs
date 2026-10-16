@@ -50,6 +50,7 @@ fn config_with_only_the_required_keys_has_every_default() {
                 "npm:@juicesharp/rpiv-ask-user-question@2.13.8"
             ],
             "pi_adapter": "",
+            "plannotator_ports": "19432-19441",
             "tiers": {
                 "O": "github-copilot/claude-opus-5.5",
                 "S": "github-copilot/claude-sonnet-5.5",
@@ -69,6 +70,14 @@ fn config_with_only_the_required_keys_has_every_default() {
             "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}
         })
     );
+}
+
+#[test]
+fn config_shows_a_custom_plannotator_range() {
+    let env = TestEnv::new();
+    let out = config_with(&env, "version = 1\nmachine = \"hs\"\nplannotator_ports = \"20000-20000\"\n").ok();
+    assert_eq!(out["config"]["plannotator_ports"], "20000-20000");
+    assert_eq!(out["sources"]["plannotator_ports"], "file");
 }
 
 #[test]
@@ -120,6 +129,7 @@ retry_cap = 0
 lead_tier = "H0"
 lead_pi_packages = []
 pi_adapter = "{adapter}"
+plannotator_ports = "1-65535"
 [tiers]
 O = "a/b/c"
 S = "provider/model:1"
@@ -151,6 +161,7 @@ work_session = "w"
     assert_eq!(out["config"]["machine"], "a1234567");
     assert_eq!(out["config"]["lead_pi_packages"], json!([]));
     assert_eq!(out["config"]["pi_adapter"], adapter.to_str().unwrap());
+    assert_eq!(out["config"]["plannotator_ports"], "1-65535");
     assert_eq!(out["config"]["tiers"]["O"], "a/b/c");
     assert!(out["sources"].as_object().unwrap().values().all(|s| s == "file"));
 
@@ -173,6 +184,16 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\nreview_mode = \"none\"\n", "review_mode"),
         ("version = 1\nmachine = \"hs\"\ndefault_review_tier = \"S3\"\n", "default_review_tier"),
         ("version = 1\nmachine = \"hs\"\ntickSeconds = 5\n", "tickSeconds"),
+        // plannotator_ports: "<a>-<b>", a <= b, both ports
+        ("version = 1\nmachine = \"hs\"\nplannotator_ports = 19432\n", "plannotator_ports"),
+        ("version = 1\nmachine = \"hs\"\nplannotator_ports = \"19432\"\n", "plannotator_ports"),
+        ("version = 1\nmachine = \"hs\"\nplannotator_ports = \"19441-19432\"\n", "plannotator_ports"),
+        ("version = 1\nmachine = \"hs\"\nplannotator_ports = \"0-5\"\n", "plannotator_ports"),
+        ("version = 1\nmachine = \"hs\"\nplannotator_ports = \"1-65536\"\n", "plannotator_ports"),
+        ("version = 1\nmachine = \"hs\"\nplannotator_ports = \"a-b\"\n", "plannotator_ports"),
+        ("version = 1\nmachine = \"hs\"\nplannotator_ports = \"1-2-3\"\n", "plannotator_ports"),
+        ("version = 1\nmachine = \"hs\"\nplannotator_ports = \"+1-5\"\n", "plannotator_ports"),
+        ("version = 1\nmachine = \"hs\"\nplannotator_ports = \"\"\n", "plannotator_ports"),
         // required keys
         ("machine = \"hs\"\n", "version"),
         ("version = 1\n", "machine"),

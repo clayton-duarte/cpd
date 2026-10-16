@@ -135,6 +135,7 @@ error_codes! {
     JobNotFailed = "job_not_failed" => Refused,
     JobNotReady = "job_not_ready" => Refused,
     NoSlot = "no_slot" => Refused,
+    NoPort = "no_port" => Refused,
     AttemptNotRunning = "attempt_not_running" => Refused,
     WrongWorktree = "wrong_worktree" => Refused,
     DirtyTree = "dirty_tree" => Refused,

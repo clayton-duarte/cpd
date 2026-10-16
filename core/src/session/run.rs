@@ -10,13 +10,14 @@ use std::time::{Duration, SystemTime};
 use serde_json::Value;
 
 use super::moves::first_message;
+use super::port;
 use super::row::{self, Role, Row, State};
 use super::{Env, RunArgs, bad_row, not_a_lead, state};
 use crate::config::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs, Plannotator};
 use crate::host::{PaneId, Tmux};
-use crate::ids::SessionId;
+use crate::ids::{PlanId, SessionId};
 use crate::output::Output;
 
 /// How often the fork waits for its source to be idle (§6.7 step 1).
@@ -37,10 +38,19 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
     // From here on this process owns the terminal (commands.md §1.2).
     loop {
         let row = env.store.read(|conn| row::load(conn, &args.id))?;
+        // A Lead with a Plan gets the Plan's port; a grounded Lead gets none (§6.5).
+        let port = match &row.plan {
+            Some(plan) => match assign_port(&mut env, plan)? {
+                Some(port) => Some(port),
+                None => return Ok(Output::Owned),
+            },
+            None => None,
+        };
         let start = start(&mut env, &dirs, &row)?;
         let candidates = pi::lead_candidates(&env.config.pi_adapter_dir()?, &env.config.lead_pi_packages);
         let extensions = pi::extensions_to_pass(&candidates, Path::new(&row.cwd), &dirs, &mut std::io::stderr());
-        let plannotator = Plannotator::from_env();
+        // `PLANNOTATOR_REMOTE` comes from cpd's environment; the port is the Plan's, whatever the environment holds.
+        let plannotator = Plannotator { port: port.map(|p| p.to_string()), remote: Plannotator::from_env().remote };
         let launch = pi::lead(&LeadLaunch {
             home: &env.home,
             session: &row.id,
@@ -81,6 +91,26 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
         match std::io::stdin().lock().read_line(&mut line) {
             Ok(0) | Err(_) => return Ok(Output::Owned),
             Ok(_) => {}
+        }
+    }
+}
+
+/// The Plan's plannotator port. When the range is full the pane says so, names the
+/// Plans that hold it and waits for Enter to try again; `None` at the end of input.
+fn assign_port(env: &mut Env, plan: &PlanId) -> Result<Option<u16>, CpdError> {
+    loop {
+        match port::assign(&env.home, &mut env.store, &env.config, plan) {
+            Ok(port) => return Ok(Some(port)),
+            Err(e) if e.code() == ErrorCode::NoPort => {
+                print!("\n  {}: {}\n  Press Enter to retry.\n", e.code(), e.message());
+                let _ = std::io::stdout().flush();
+                let mut line = String::new();
+                match std::io::stdin().lock().read_line(&mut line) {
+                    Ok(0) | Err(_) => return Ok(None),
+                    Ok(_) => {}
+                }
+            }
+            Err(e) => return Err(e),
         }
     }
 }

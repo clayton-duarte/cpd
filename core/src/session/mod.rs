@@ -4,9 +4,11 @@
 //! - [`row`]: the `sessions` row as read, and `session list` / `show`;
 //! - [`state`]: the agent states of §3.6, `session state` and `rename`;
 //! - [`moves`]: the panes: `session fork`, `open`, `park` and `close`;
+//! - [`port`]: a Plan's plannotator port;
 //! - [`run`]: `session run`, the program in every Lead pane (§6.7).
 
 mod moves;
+mod port;
 mod row;
 mod run;
 mod state;

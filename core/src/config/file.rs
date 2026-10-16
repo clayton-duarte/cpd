@@ -41,11 +41,54 @@ pub struct Config {
     pub lead_pi_packages: Vec<String>,
     /// `""` is beside the binary: see [`Config::pi_adapter_dir`].
     pub pi_adapter: String,
+    /// One port per Plan's plannotator review (§6.5).
+    pub plannotator_ports: PortRange,
     pub tiers: Tiers,
     pub timeouts: Timeouts,
     pub watch: Watch,
     pub events: Events,
     pub tmux: Tmux,
+}
+
+/// `plannotator_ports`: an inclusive range of ports, `<first>-<last>`, `first <= last`.
+/// Shown as that text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PortRange {
+    pub first: u16,
+    pub last: u16,
+}
+
+impl PortRange {
+    pub fn parse(text: &str) -> Result<PortRange, String> {
+        let bad = || format!("{text:?} is not \"<first>-<last>\" with first <= last, both ports 1-65535");
+        let (first, last) = text.split_once('-').ok_or_else(bad)?;
+        let port = |s: &str| s.parse::<u16>().ok().filter(|p| *p != 0 && s.bytes().all(|b| b.is_ascii_digit()));
+        match (port(first), port(last)) {
+            (Some(first), Some(last)) if first <= last => Ok(PortRange { first, last }),
+            _ => Err(bad()),
+        }
+    }
+
+    pub fn contains(self, port: u16) -> bool {
+        (self.first..=self.last).contains(&port)
+    }
+
+    /// The ports, lowest first.
+    pub fn ports(self) -> impl Iterator<Item = u16> {
+        self.first..=self.last
+    }
+}
+
+impl std::fmt::Display for PortRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}-{}", self.first, self.last)
+    }
+}
+
+impl Serialize for PortRange {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
 }
 
 /// pi model per Tier letter, `<provider>/<model-id>`.
@@ -165,6 +208,10 @@ impl Config {
             Ok(dir.to_owned())
         })?;
 
+        let plannotator_ports = r.get("plannotator_ports", PortRange { first: 19432, last: 19441 }, |v| {
+            PortRange::parse(text_of(&v)?)
+        })?;
+
         let tiers = Tiers {
             o: r.get("tiers.O", "github-copilot/claude-opus-5.5".into(), |v| model_ref(text_of(&v)?))?,
             s: r.get("tiers.S", "github-copilot/claude-sonnet-5.5".into(), |v| model_ref(text_of(&v)?))?,
@@ -208,6 +255,7 @@ impl Config {
             lead_tier,
             lead_pi_packages,
             pi_adapter,
+            plannotator_ports,
             tiers,
             timeouts,
             watch,
