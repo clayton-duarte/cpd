@@ -10,7 +10,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, TestEnv};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{PlanId, ReviewId};
@@ -51,7 +51,7 @@ fn fake_cpd(env: &TestEnv, watch: &str) {
         "cpd",
         &format!(
             "case \"$1 $2\" in\n\
-             \"session run\") env > '{root}/pane-'\"$3\".env; exec sleep 600;;\n\
+             \"session run\") env > '{root}/pane-'\"$3\".env; exec sleep {SLEEP_SECONDS};;\n\
              \"watch --ensure\") {watch};;\n\
              esac\nexec '{CPD}' \"$@\"",
             root = env.root().display()

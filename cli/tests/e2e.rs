@@ -16,7 +16,7 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{CPD, TestEnv};
+use common::{CPD, SLEEP_SECONDS, TestEnv};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde_json::{Value, json};
@@ -51,7 +51,6 @@ if [ -n "$CPD_ATTEMPT" ]; then
 else
   printf '%s\n' '{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}' "$msg" > "$f"
 fi
-exec sleep 600
 "#;
 
 /// The fake `gh`: no open PR yet, the PR it creates, then a review on it.
@@ -81,7 +80,7 @@ impl Fx {
         let env = TestEnv::new();
         // `cpd` on PATH is the built binary: panes and the engine run it so (§6.5, E5).
         symlink(CPD, env.bin().join("cpd")).unwrap();
-        env.fake_pi(PI);
+        env.fake_pi(&format!("{PI}exec sleep {SLEEP_SECONDS}"));
         env.fake_gh(GH);
         // A pi install whose agent directory is the test root, and pi's own Node
         // printing its catalog (§9).

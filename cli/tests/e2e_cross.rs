@@ -19,7 +19,7 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{CPD, TestEnv};
+use common::{CPD, SLEEP_SECONDS, TestEnv};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde_json::{Value, json};
@@ -62,7 +62,6 @@ if [ -n "$CPD_ATTEMPT" ]; then
 else
   printf '%s\n' '{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}' "$msg" > "$f"
 fi
-exec sleep 600
 "##;
 
 /// pi's catalog as the embedded module prints it (§9).
@@ -118,7 +117,7 @@ impl Fx {
         symlink(CPD, env.bin().join("cpd")).unwrap();
         let flags = env.root().join("github");
         fs::create_dir_all(&flags).unwrap();
-        env.fake_pi(PI);
+        env.fake_pi(&format!("{PI}exec sleep {SLEEP_SECONDS}"));
         env.fake_gh(&gh(&flags));
         fs::create_dir_all(env.root().join("install")).unwrap();
         fs::write(env.root().join("install/current-version"), "1.2.0\n").unwrap();

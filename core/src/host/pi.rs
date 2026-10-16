@@ -89,8 +89,9 @@ pub enum LeadStart {
     Resume { file: PathBuf },
 }
 
-/// `PLANNOTATOR_PORT` and `PLANNOTATOR_REMOTE` from cpd's own environment
-/// (amendment 8): passed to every Lead when set.
+/// `PLANNOTATOR_PORT` and `PLANNOTATOR_REMOTE` for a Lead's pi. `from_env` reads
+/// cpd's own environment (amendment 8), which is what Lead panes are given;
+/// `session run` replaces the port with the Plan's (contract §6.5).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Plannotator {
     pub port: Option<String>,

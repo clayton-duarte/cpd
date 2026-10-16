@@ -14,7 +14,7 @@ use nix::fcntl::{Flock, FlockArg};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-const NAMES: [&str; 15] = [
+const NAMES: [&str; 14] = [
     "config",
     "store",
     "tamper",
@@ -27,7 +27,6 @@ const NAMES: [&str; 15] = [
     "tiers",
     "pi_adapter",
     "lead_packages",
-    "plannotator_port",
     "contexts",
     "watch",
 ];
@@ -172,7 +171,7 @@ fn a_healthy_machine_passes_every_check_in_order() {
     tool("tmux", "3.4", ">= 3.4");
     tool("pi", "1.2.0", ">= 1.2.0 < 2.0.0");
     tool("gh", "2.45.0", ">= 2.45.0");
-    for warn in ["gh_auth", "lead_packages", "plannotator_port", "contexts", "watch"] {
+    for warn in ["gh_auth", "lead_packages", "contexts", "watch"] {
         assert_eq!(check(&run, warn)["severity"], "warn", "{warn}");
     }
 }
@@ -422,25 +421,13 @@ fn an_entry_neither_declared_nor_resolvable_is_a_warning() {
 }
 
 #[test]
-fn plannotator_needs_a_range_when_remote() {
+fn doctor_has_no_plannotator_port_check() {
     let env = healthy();
-    let run = doctor(&env);
-    assert_passes(&run, "plannotator_port");
-    let run = doctor_with(&env, &[("PLANNOTATOR_PORT", "19432")]);
-    assert_passes(&run, "plannotator_port");
-
-    for port in [Some("19432"), Some("19432-19432"), None] {
-        let mut vars = vec![("PLANNOTATOR_REMOTE", "1")];
-        vars.extend(port.map(|p| ("PLANNOTATOR_PORT", p)));
-        let run = doctor_with(&env, &vars);
-        run.ok();
-        let c = assert_fails(&run, "plannotator_port", "warn", "only one Plan review");
-        assert_eq!(c["expected"], "a range, e.g. 19432-19439");
-        assert!(c["found"].is_string());
+    for vars in [&[][..], &[("PLANNOTATOR_REMOTE", "1")][..], &[("PLANNOTATOR_REMOTE", "1"), ("PLANNOTATOR_PORT", "19432")][..]] {
+        let run = doctor_with(&env, vars);
+        let checks = run.ok()["checks"].clone();
+        assert!(checks.as_array().unwrap().iter().all(|c| c["name"] != "plannotator_port"), "{checks}");
     }
-    let run = doctor_with(&env, &[("PLANNOTATOR_REMOTE", "1"), ("PLANNOTATOR_PORT", "19432-19439")]);
-    run.ok();
-    assert_passes(&run, "plannotator_port");
 }
 
 // -------------------------------------------------------------- the store

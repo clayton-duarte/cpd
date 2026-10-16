@@ -78,14 +78,62 @@ fn session_state(env: &TestEnv) -> (String, Option<String>) {
         .unwrap()
 }
 
+/// Kills and reaps its child on drop, so a panicking test leaves no process.
+struct KillOnDrop(Option<Child>);
+
+impl KillOnDrop {
+    fn new(child: Child) -> Self {
+        KillOnDrop(Some(child))
+    }
+
+    fn into_inner(mut self) -> Child {
+        self.0.take().unwrap()
+    }
+}
+
+impl std::ops::Deref for KillOnDrop {
+    type Target = Child;
+    fn deref(&self) -> &Child {
+        self.0.as_ref().unwrap()
+    }
+}
+
+impl std::ops::DerefMut for KillOnDrop {
+    fn deref_mut(&mut self) -> &mut Child {
+        self.0.as_mut().unwrap()
+    }
+}
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+#[test]
+fn a_guarded_child_is_gone_after_a_panic() {
+    let pid = std::cell::Cell::new(0);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let child = KillOnDrop::new(std::process::Command::new("sleep").arg("60").spawn().unwrap());
+        pid.set(child.id());
+        panic!("boom");
+    }));
+    assert!(result.is_err());
+    let alive = std::process::Command::new("kill").args(["-0", &pid.get().to_string()]).output().unwrap().status.success();
+    assert!(!alive, "child {} survived the panic", pid.get());
+}
+
 /// `cpd ask a-a1 <question> --plan p` running in the background.
-fn spawn_ask(env: &TestEnv, question: &str) -> Child {
-    env.command(CPD)
+fn spawn_ask(env: &TestEnv, question: &str) -> KillOnDrop {
+    KillOnDrop::new(env.command(CPD)
         .args(["ask", "a-a1", question, "--plan", "pl"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .unwrap()
+        .unwrap())
 }
 
 /// Waits until Escalation `id` exists.
@@ -97,8 +145,8 @@ fn wait_for(env: &TestEnv, id: &str) {
     }
 }
 
-fn finish(child: Child) -> Run {
-    let out = child.wait_with_output().unwrap();
+fn finish(child: KillOnDrop) -> Run {
+    let out = child.into_inner().wait_with_output().unwrap();
     Run {
         exit: out.status.code().unwrap(),
         stdout: String::from_utf8(out.stdout).unwrap(),

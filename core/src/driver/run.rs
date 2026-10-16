@@ -19,8 +19,9 @@ use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, Kind, NewEvent};
 use crate::git::{self, Setup};
 use crate::home::{CpdHome, Hook};
-use crate::host::Tmux;
+use crate::host::exe::Exe;
 use crate::host::pi::{self, PiDirs};
+use crate::host::{PaneId, Tmux};
 use crate::ids::{AttemptId, PlanId, SessionId};
 use crate::merge;
 use crate::output::Output;
@@ -44,8 +45,47 @@ struct Driver {
     tmux: Tmux,
     plan: PlanId,
     id: AttemptId,
+    /// The driver lock on fd 3, held for the driver's whole life (A1).
+    lock: lock::Inherited,
+    /// This executable as it was at start: a different file at its path is a new install.
+    exe: Exe,
     /// Loaded in A1; the ladder needs it to end an Attempt.
     catalog: Option<Catalog>,
+}
+
+/// Where A1 takes an Attempt up, by its status (§3.4 step 4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Entry {
+    /// `starting`: A2 onwards.
+    Start,
+    /// `running`, after a reload: the Worker is there, A4 onwards.
+    Resume,
+    /// `merging`, after a reload: A8.
+    Merge,
+}
+
+/// What the driver does after A1: `entry` with what a `running` Attempt's
+/// resume needs from the store.
+enum Task {
+    Start,
+    /// The Worker's Session and pane.
+    Resume(SessionId, PaneId),
+    Merge,
+}
+
+/// A1's dispatch on the Attempt's status; any other is `illegal_transition`.
+fn entry(id: &AttemptId, status: &str) -> Result<Entry, CpdError> {
+    match status {
+        "starting" => Ok(Entry::Start),
+        "running" => Ok(Entry::Resume),
+        "merging" => Ok(Entry::Merge),
+        other => Err(CpdError::new(
+            ErrorCode::IllegalTransition,
+            format!("Attempt {id} is {other}: a driver runs only a starting, running or merging Attempt."),
+        )
+        .with("attempt", id.to_string())
+        .with("status", other)),
+    }
 }
 
 /// `cpd attempt run <attempt> --plan <id>` (internal).
@@ -55,22 +95,17 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
     // A1: before anything opens a file, so fd 3 cannot be one of ours. Held
     // until this function returns, which is the driver's whole life.
-    let _lock = lock::inherited(&home, &plan, &id)?;
+    let lock = lock::inherited(&home, &plan, &id)?;
+    let exe = Exe::current()?;
     let config = Config::load(&home)?;
     let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
     let tmux = Tmux::new(config.tmux.socket.as_str());
-    let mut driver = Driver { home, config, store, tmux, plan, id, catalog: None };
+    let mut driver = Driver { home, config, store, tmux, plan, id, lock, exe, catalog: None };
 
     let target = driver.load()?;
-    if target.status != "starting" {
-        return Err(CpdError::new(
-            ErrorCode::IllegalTransition,
-            format!("Attempt {} is {}, not starting: it already has a driver.", target.id, target.status),
-        )
-        .with("attempt", target.id.to_string())
-        .with("status", target.status));
-    }
-    match driver.steps(target) {
+    let entry = entry(&target.id, &target.status)?;
+    let task = driver.task(entry, &target)?;
+    match driver.drive(task, target) {
         Ok(ended) => Ok(Output::success(json!({"attempt": driver.id, "outcome": ended.outcome, "cause": ended.cause}))),
         Err(e) => {
             driver.fail(&e);
@@ -93,9 +128,22 @@ impl Driver {
         self.catalog.as_ref().expect("A1 loads the catalog")
     }
 
-    /// A1 (after the lock) to A9.
-    fn steps(&mut self, target: Target) -> Result<Ended, CpdError> {
-        // A1: the catalog, the Job, its fingerprint.
+    /// A1 (after the lock) to A9, from `entry`.
+    fn drive(&mut self, task: Task, target: Target) -> Result<Ended, CpdError> {
+        let job = self.begin(&target)?;
+        let dirs = PiDirs::from_env()?;
+        match task {
+            Task::Start => self.start(&target, &job, &dirs),
+            Task::Resume(session, pane) => {
+                log("A1: resuming at A4 after a reload");
+                self.wait(&session, &pane, &dirs)
+            }
+            Task::Merge => self.merge(&dirs),
+        }
+    }
+
+    /// A1: the catalog, the Job, its fingerprint.
+    fn begin(&mut self, target: &Target) -> Result<jobs::Job, CpdError> {
         self.catalog = Some(load_catalog(&self.config)?);
         let all = self.store.read(|conn| jobs::load(conn, &target.plan))?;
         let job = all.into_iter().find(|j| j.key == target.job.as_str()).ok_or_else(|| {
@@ -112,8 +160,11 @@ impl Driver {
             .with("expected", job.fingerprint.clone())
             .with("found", found));
         }
-        let dirs = PiDirs::from_env()?;
+        Ok(job)
+    }
 
+    /// A2 to A5, for a `starting` Attempt.
+    fn start(&mut self, target: &Target, job: &jobs::Job, dirs: &PiDirs) -> Result<Ended, CpdError> {
         // A2: the worktree from the Lead Branch HEAD, and pre-start.
         log("A2: creating the worktree and running pre-start");
         let setup = Setup {
@@ -124,7 +175,7 @@ impl Driver {
             Ok(created) => created,
             Err(e) => {
                 let detail = format!("Setting up the worktree failed: {}", e.message());
-                return self.end(&target, End::Failed { cause: Cause::SetupFailed, detail }, &dirs);
+                return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
             }
         };
         let (plan, id) = (&self.plan, &self.id);
@@ -139,16 +190,16 @@ impl Driver {
         // The safe point before A3.
         if self.store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
             log("cancel requested before A3");
-            return self.end(&target, End::Cancelled, &dirs);
+            return self.end(target, End::Cancelled, dirs);
         }
 
         // A3 of a review Job (B2): the Worker forks the Lead, once the Lead is idle.
         let review = job.review;
         let fork = if review {
             log("A3: waiting for the Lead to be idle, to fork it");
-            match worker::wait_for_lead(&mut self.store, &self.config, &dirs, &target)? {
+            match worker::wait_for_lead(&mut self.store, &self.config, dirs, target)? {
                 Some(fork) => Some(fork),
-                None => return self.end(&target, End::Cancelled, &dirs),
+                None => return self.end(target, End::Cancelled, dirs),
             }
         } else {
             None
@@ -157,14 +208,58 @@ impl Driver {
         // A3: the Spec, the Session, the Worker.
         log("A3: rendering the Spec and starting the Worker");
         let home = &self.home;
-        let spec = self.store.read(|conn| worker::render_spec(conn, home, &target, &job))?;
+        let spec = self.store.read(|conn| worker::render_spec(conn, home, target, job))?;
         let session = SessionId::new_v4();
-        self.register(&target, &session, &spec, fork.as_ref().map(|f| &f.session))?;
-        let pane = worker::start(&self.home, &self.config, self.catalog(), &self.tmux, &dirs, &target, &session, fork.as_ref())?;
-        self.running(&target, &session, &pane)?;
+        self.register(target, &session, &spec, fork.as_ref().map(|f| &f.session))?;
+        let pane = worker::start(&self.home, &self.config, self.catalog(), &self.tmux, dirs, target, &session, fork.as_ref())?;
+        self.running(target, &session, &pane)?;
 
         // A4 and A5.
-        self.wait(&session, &pane, &dirs)
+        self.wait(&session, &pane.pane, dirs)
+    }
+
+    /// What A1 does with an Attempt of this `entry`. A `running` Attempt takes
+    /// its Worker's Session and pane from the store (A3 records both before
+    /// `running`), nothing is written: the nudge-once state is the Attempt's
+    /// `nudged`. A refusal is before any write, like A1's other refusals.
+    fn task(&mut self, entry: Entry, target: &Target) -> Result<Task, CpdError> {
+        match entry {
+            Entry::Start => Ok(Task::Start),
+            Entry::Merge => Ok(Task::Merge),
+            Entry::Resume => {
+                let nothing = |what: &str| {
+                    CpdError::new(
+                        ErrorCode::IllegalTransition,
+                        format!("Attempt {} is running but the Ledger has no {what} of its Worker: there is nothing to resume.", target.id),
+                    )
+                    .with("attempt", target.id.to_string())
+                    .with("status", target.status.as_str())
+                };
+                let session = target.worker_session.clone().ok_or_else(|| nothing("Session"))?;
+                let pane: Option<String> = self.store.read(|conn| {
+                    Ok(conn.query_row("SELECT tmux_pane FROM sessions WHERE id = ?1", [session.as_str()], |r| r.get(0))?)
+                })?;
+                let pane = pane.as_deref().and_then(PaneId::parse).ok_or_else(|| nothing("pane"))?;
+                Ok(Task::Resume(session, pane))
+            }
+        }
+    }
+
+    /// The reload (§3.4 "Reload on install"): at a safe point, when a new cpd
+    /// is installed, `exec` it with the same argv. Fd 3 stays open across the
+    /// `exec`, so the lock is held with no gap; the new process resumes from
+    /// the store. Returns only when nothing is installed; `Err` when the
+    /// `exec` failed.
+    fn reload_if_installed(&self) -> Result<(), CpdError> {
+        if !self.exe.replaced() {
+            return Ok(());
+        }
+        log("reload: new cpd installed, re-executing");
+        self.lock.keep_across_exec()?;
+        let failed = self.exe.exec(std::env::args_os().skip(1));
+        // Still here: the `exec` failed. Do not leak the lock to the children.
+        let _ = self.lock.close_on_exec();
+        Err(failed)
     }
 
     /// A3's first transaction: the Worker's Session, registered before pi
@@ -248,7 +343,7 @@ impl Driver {
 
     /// A4 and A5: waits until the Attempt is submitted (A8), stopped, or its
     /// Worker is gone or idle for good.
-    fn wait(&mut self, session: &SessionId, pane: &worker::Pane, dirs: &PiDirs) -> Result<Ended, CpdError> {
+    fn wait(&mut self, session: &SessionId, pane: &PaneId, dirs: &PiDirs) -> Result<Ended, CpdError> {
         log("A4: waiting for the Worker");
         // The Worker's session file, recorded once pi has created it.
         let mut file: Option<std::path::PathBuf> = None;
@@ -271,7 +366,7 @@ impl Driver {
             }
             let now = self.load()?;
             match now.status.as_str() {
-                "running" => {}
+                "running" => self.reload_if_installed()?,
                 "merging" => return self.merge(dirs),
                 other => {
                     return Err(CpdError::new(
@@ -292,7 +387,7 @@ impl Driver {
                     return Err(CpdError::new(ErrorCode::StoreFailed, format!("Unknown stop_request {other:?}.")));
                 }
             }
-            match panes.iter().find(|p| p.pane == pane.pane) {
+            match panes.iter().find(|p| p.pane == *pane) {
                 None => {
                     let detail = "The Worker's pane is gone.".to_owned();
                     return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs);
@@ -392,6 +487,8 @@ impl Driver {
     /// `merging`: once this driver has exited, R (§7.4) ends it, `merged` if
     /// the compare-and-swap already happened.
     fn merge(&mut self, dirs: &PiDirs) -> Result<Ended, CpdError> {
+        // The safe point before A8's rebase.
+        self.reload_if_installed()?;
         log("A8: merging");
         let metrics = |a: &merge::Attempt| -> Option<Value> { worker::metrics(dirs, a.worker_session.as_ref()) };
         let ctx = merge::Ctx {
@@ -409,13 +506,16 @@ impl Driver {
     }
 
     /// The rest of A9: kill the Attempt's window; on `merged`, remove the
-    /// worktree and branch (§7.2); otherwise keep them for debugging. A
+    /// worktree and branch (§7.2); otherwise keep them for debugging; remove
+    /// the driver lock file (this process keeps fd 3 until it exits). A
     /// failure here changes no state: it is reported as an `error` Event.
     fn cleanup(&mut self, target: &Target, merged: bool) {
         let mut result = worker::kill_window(&self.config, &self.tmux, target);
         if merged && result.is_ok() {
             result = git::remove_merged_attempt(&target.lead_worktree, &target.worktree, &target.branch);
         }
+        let removed = lock::remove(&self.home, &self.plan, &self.id);
+        result = result.and(removed);
         if let Err(e) = result {
             log(&format!("A9 failed: {}", e.message()));
             let _ = self.store.write(SOURCE, |tx| ledger::append_error(tx, target, &e));
@@ -447,5 +547,27 @@ impl Driver {
             return;
         }
         self.cleanup(&target, false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a1_takes_up_starting_running_and_merging() {
+        let id = AttemptId::parse("api-a1").unwrap();
+        assert_eq!(entry(&id, "starting").unwrap(), Entry::Start);
+        assert_eq!(entry(&id, "running").unwrap(), Entry::Resume);
+        assert_eq!(entry(&id, "merging").unwrap(), Entry::Merge);
+    }
+
+    #[test]
+    fn a1_refuses_every_other_status() {
+        let id = AttemptId::parse("api-a1").unwrap();
+        for status in ["ended", "queued", "", "Running"] {
+            let error = entry(&id, status).unwrap_err();
+            assert_eq!(error.code(), ErrorCode::IllegalTransition, "{status}");
+        }
     }
 }

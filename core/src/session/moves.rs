@@ -20,7 +20,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
 use crate::home::CpdHome;
 use crate::host::layout::park_window;
-use crate::host::{Pane, PaneId, Spawn, View, WindowId, chat_slot, session_pane};
+use crate::host::{Pane, PaneId, Spawn, View, WindowId, chat_slot};
 use crate::ids::{PlanId, SessionId};
 use crate::output::Output;
 use crate::store::WriteTxn;
@@ -162,7 +162,7 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
     let cockpit = env.config.tmux.cockpit_session.clone();
     let panes = tmux.list_panes()?;
     let slot = slot(&panes, &cockpit)?;
-    if slot.cpd_session.as_ref() == Some(&lead.id) {
+    if slot.cpd_session.as_ref() == Some(&lead.id) && !slot.dead {
         return Ok(Output::success(json!({"session": lead.id, "pane": slot.pane.as_str(), "already": true})));
     }
 
@@ -174,8 +174,14 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
                 .with("session", other.as_str())
         })?),
     };
-    // Its live pane, else a new park window resuming it.
-    let (pane, from_window) = match session_pane(&panes, &lead.id).filter(|p| !p.dead) {
+    // A dead pane of the Lead outside the slot is killed with its window first, so a new window
+    // never makes a second one (G2); one in the slot is displaced below, and dies there.
+    for dead in panes.iter().filter(|p| p.dead && p.cpd_session.as_ref() == Some(&lead.id) && p.pane != slot.pane) {
+        tmux.kill_pane(&dead.pane)?;
+    }
+    // Its live pane (a dead one never hides it), else a new park window resuming it.
+    let live = panes.iter().find(|p| !p.dead && p.cpd_session.as_ref() == Some(&lead.id));
+    let (pane, from_window) = match live {
         Some(p) => (p.pane.clone(), p.window.clone()),
         None => {
             let spawn = lead_spawn(&env.home, &lead.id, &plan, Path::new(&lead.cwd));
@@ -185,19 +191,24 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
         }
     };
     tmux.swap_pane(&pane, &slot.pane)?;
-    // The displaced pane is now in `from_window`.
+    // The displaced pane is now in `from_window`: a dead one dies there, like the placeholder.
     match &displaced {
-        None => tmux.kill_pane(&slot.pane)?,
-        Some(other) => tmux.rename_window(&from_window, &park_window(&other.id, other.plan.as_ref()))?,
+        Some(other) if !slot.dead => tmux.rename_window(&from_window, &park_window(&other.id, other.plan.as_ref()))?,
+        _ => tmux.kill_pane(&slot.pane)?,
     }
     env.store.write("session open", |tx| {
+        if let (Some(other), true) = (&displaced, slot.dead) {
+            // Its pane is gone: what E2 writes for it (§3.6), before the Lead's new pane is recorded.
+            let why = format!("its pane {} is dead", slot.pane);
+            pane_gone(tx, &other.id, other.state.as_str(), other.tmux_pane.as_deref(), &why)?;
+        }
         moved(tx, &lead, &pane, &slot.window, "chat")?;
-        if let Some(other) = &displaced {
+        if let (Some(other), false) = (&displaced, slot.dead) {
             moved(tx, other, &slot.pane, &from_window, "parked")?;
         }
         Ok(())
     })?;
-    let displaced = displaced.map_or(Value::Null, |d| json!(d.id));
+    let displaced = displaced.filter(|_| !slot.dead).map_or(Value::Null, |d| json!(d.id));
     Ok(Output::success(json!({"session": lead.id, "pane": pane.as_str(), "displaced": displaced})))
 }
 
