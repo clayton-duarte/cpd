@@ -1,4 +1,5 @@
-//! The plan view's chart: a pure layout of a Plan's Jobs as GitHub-Actions-style cards, left to right.
+//! The plan view's chart: a pure layout of one PR's Jobs as GitHub-Actions-style cards, left to right; [`super::boxes`]
+//! puts each PR's chart in its box.
 //!
 //! In: Jobs. Out: a `Buffer` of the whole chart (no padding: the view insets the window it blits into) plus each pill's
 //! rectangle. Implied needs are dropped (transitive reduction); Jobs with the same needs share one card, stacked; a card's
@@ -21,7 +22,7 @@ use ratatui::{
 
 use crate::palette::{self, Meaning};
 use cpd_core::config::Tier;
-use crate::read::{AttemptStatus, Flow, JobNode, JobStatus};
+use crate::read::{AttemptStatus, JobNode, JobStatus};
 
 /// A Job's status as the chart draws it. A cancelled Job is not drawn, so it has none; a `running` Job whose Attempt is
 /// `merging` is `Merging` (the cockpit's `in_review`).
@@ -79,9 +80,9 @@ pub struct Pill {
     pub column: usize,
 }
 
-/// The Jobs of a Plan as the chart draws them, in creation order: cancelled Jobs are left out, with the needs on them.
-pub fn flow_jobs(flow: &Flow) -> Vec<FlowJob> {
-    let live: Vec<(&JobNode, Live)> = flow.jobs.iter().filter_map(|j| Some((j, Live::of(j)?))).collect();
+/// Jobs (one PR's) as the chart draws them, in creation order: cancelled Jobs are left out, with the needs on them.
+pub fn flow_jobs<'a>(jobs: impl IntoIterator<Item = &'a JobNode>) -> Vec<FlowJob> {
+    let live: Vec<(&JobNode, Live)> = jobs.into_iter().filter_map(|j| Some((j, Live::of(j)?))).collect();
     live.iter()
         .map(|&(j, status)| FlowJob {
             key: j.key.to_string(),
@@ -196,13 +197,13 @@ fn column_of(c: usize, cards: &[Card], memo: &mut [Option<usize>], open: &mut Ha
     l
 }
 
-// ---------- line masks ----------
+// ---------- line masks (the PR boxes' arrows use them too) ----------
 const U: u8 = 1;
 const D: u8 = 2;
 const L: u8 = 4;
 const R: u8 = 8;
 
-fn glyph(m: u8) -> &'static str {
+pub(super) fn glyph(m: u8) -> &'static str {
     match m {
         3 | 1 | 2 => "│",
         12 | 4 | 8 => "─",
@@ -220,23 +221,23 @@ fn glyph(m: u8) -> &'static str {
 }
 
 /// Which of the four directions a line leaves each cell in; lines that meet in a cell merge into one junction glyph.
-struct Mask {
+pub(super) struct Mask {
     w: u16,
     cells: Vec<u8>,
 }
 
 impl Mask {
-    fn new(w: u16, h: u16) -> Self {
+    pub(super) fn new(w: u16, h: u16) -> Self {
         Mask { w, cells: vec![0; w as usize * h as usize] }
     }
     fn add(&mut self, x: u16, y: u16, d: u8) {
         let w = self.w as usize;
         self.cells[y as usize * w + x as usize] |= d;
     }
-    fn at(&self, x: u16, y: u16) -> u8 {
+    pub(super) fn at(&self, x: u16, y: u16) -> u8 {
         self.cells[y as usize * self.w as usize + x as usize]
     }
-    fn h(&mut self, y: u16, x1: u16, x2: u16) {
+    pub(super) fn h(&mut self, y: u16, x1: u16, x2: u16) {
         let (a, b) = (x1.min(x2), x1.max(x2));
         for x in a..=b {
             if x > a {
@@ -247,7 +248,7 @@ impl Mask {
             }
         }
     }
-    fn v(&mut self, x: u16, y1: u16, y2: u16) {
+    pub(super) fn v(&mut self, x: u16, y1: u16, y2: u16) {
         let (a, b) = (y1.min(y2), y1.max(y2));
         for y in a..=b {
             if y > a {
@@ -267,7 +268,7 @@ enum Seg {
 }
 
 /// The nearest row to `near` that no card takes in columns `cols` (rows below every card are always free).
-fn free_row(near: u16, cols: std::ops::Range<usize>, busy: &[HashSet<u16>]) -> u16 {
+pub(super) fn free_row(near: u16, cols: std::ops::Range<usize>, busy: &[HashSet<u16>]) -> u16 {
     (0..).flat_map(|d| [near.checked_sub(d), Some(near + d)]).flatten().find(|r| cols.clone().all(|l| !busy[l].contains(r))).unwrap()
 }
 

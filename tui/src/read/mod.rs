@@ -2,8 +2,9 @@
 //! store, which the views render.
 //!
 //! - [`tree()`]: the tree view, Contexts → Plans → Lead Sessions (`context list`, `session list`);
-//! - [`flow()`] and [`chat_slot()`]: the plan view, one Plan's Jobs, Attempts, Dependencies,
-//!   Escalations, review and PR (`plan show`), and the Plan of the Lead in the chat slot;
+//! - [`plan_boxes()`] and [`chat_slot()`]: the plan view, one Plan's PRs with their Jobs, Attempts and
+//!   Dependencies, and the Plan of the Lead in the chat slot; [`flow()`]: one Plan's Jobs, Escalations,
+//!   review and first PR (`plan show`);
 //! - [`widgets()`]: the Dispatch column, slots, the engine, PRs and their feedback,
 //!   open Escalations and the latest Events (`plan list`);
 //! - [`logs()`] and [`logs_after()`]: the Event log, the latest Events and those after a cursor (`events list`);
@@ -29,7 +30,10 @@ mod tree;
 mod widgets;
 mod worker;
 
-pub use flow::{AttemptNode, ChatSlot, Flow, JobNode, OpenEscalation, Review, WorkerRef, chat_slot, flow};
+pub use flow::{
+    AttemptNode, ChatSlot, Flow, JobNode, OpenEscalation, PlanBoxes, PrNode, PrStatus, Review, WorkerRef, chat_slot, flow,
+    plan_boxes,
+};
 pub use shared::{
     AttemptStatus, Cause, Checks, EscalationStatus, JobCounts, JobStatus, Origin, Outcome, Place, PlanHead, Pr,
     PrState, ReviewStatus, SessionNode,

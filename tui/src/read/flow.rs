@@ -1,6 +1,7 @@
-//! The `plan` view's snapshot (commands.md §17): a Plan's Jobs with their
-//! Dependencies, Attempts and Tiers, its open Escalations, its latest Plan
-//! review and its PR (`plan show`); and which Plan the chat slot holds.
+//! The `plan` view's snapshot (commands.md §17): a Plan's PRs, each with its
+//! Jobs, their Dependencies, Attempts and Tiers ([`plan_boxes`], what the view
+//! draws); a Plan's Jobs with its open Escalations, its latest Plan review and
+//! its first PR ([`flow`], `plan show`); and which Plan the chat slot holds.
 
 use std::collections::BTreeMap;
 
@@ -9,13 +10,14 @@ use rusqlite::{Connection, OptionalExtension};
 use cpd_core::config::Tier;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::highest_id;
-use cpd_core::ids::{AttemptId, EscalationId, JobKey, PlanId, SessionId};
+use cpd_core::ids::{AttemptId, ContextId, EscalationId, JobKey, PlanId, PrKey, SessionId};
 use cpd_core::plan::{jobs, plan_fingerprint};
 use cpd_core::session::State;
 use cpd_core::store::Store;
 
 use super::shared::{
-    AttemptStatus, Cause, JobStatus, Origin, Outcome, PlanHead, ReviewStatus, bad_row, id, plan_heads, tier, value_enum,
+    AttemptStatus, Cause, JobStatus, Origin, Outcome, PlanHead, PrState, ReviewStatus, bad_row, id, plan_heads, tier,
+    value_enum,
 };
 
 /// A Plan, for the flow chart.
@@ -32,9 +34,60 @@ pub struct Flow {
     pub events_cursor: i64,
 }
 
+/// A Plan as the plan view draws it (commands.md §13.2, §17): its PRs that are not `cancelled`, each a box, and the Jobs
+/// inside them. A Plan with no PR yet has none, and no Jobs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlanBoxes {
+    pub plan: PlanId,
+    pub context: ContextId,
+    /// The PRs that are not `cancelled`, in key order.
+    pub prs: Vec<PrNode>,
+    /// Every Job of the Plan, in creation order; each names its PR.
+    pub jobs: Vec<JobNode>,
+    /// The highest Event id in this snapshot's read transaction (§17).
+    pub events_cursor: i64,
+}
+
+/// A PR's status (contract §3.8). A `cancelled` PR is not drawn, so it is never read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrStatus {
+    Waiting,
+    Dispatch,
+    Open,
+    Merged,
+}
+
+impl PrStatus {
+    /// As stored.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PrStatus::Waiting => "waiting",
+            PrStatus::Dispatch => "dispatch",
+            PrStatus::Open => "open",
+            PrStatus::Merged => "merged",
+        }
+    }
+}
+
+/// One PR of a Plan, for its box's title and its place among the boxes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrNode {
+    pub key: PrKey,
+    /// The repo's directory name: the last component of `prs.repo`.
+    pub repo_name: String,
+    pub base: String,
+    pub status: PrStatus,
+    /// The PRs it needs, sorted (none is `cancelled`: `pr cancel` refuses a PR another one needs).
+    pub needs: Vec<PrKey>,
+    /// Its pull request, once it has one: the number and the state.
+    pub pull: Option<(i64, PrState)>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobNode {
     pub key: JobKey,
+    /// The Job's PR (`jobs.pr`).
+    pub pr: PrKey,
     pub seq: i64,
     pub title: String,
     pub status: JobStatus,
@@ -116,32 +169,102 @@ fn plan_not_found(plan: &PlanId) -> CpdError {
 pub fn flow(store: &mut Store, plan: &PlanId) -> Result<Flow, CpdError> {
     store.read(|conn| {
         let head = plan_heads(conn, Some(plan))?.pop().ok_or_else(|| plan_not_found(plan))?;
-        let rows = jobs::load(conn, plan)?;
-        let mut attempts = attempts(conn, plan)?;
         let review = latest_review(conn, plan, &plan_fingerprint(conn, plan)?)?;
-        let nodes = rows
-            .into_iter()
-            .map(|j| {
-                let what = format!("Job {plan}/{}", j.key);
-                let key = id("Job key", &j.key, JobKey::parse)?;
-                Ok(JobNode {
-                    status: JobStatus::parse(&format!("{what} has status"), &j.status)?,
-                    tier: tier(&what, &j.tier)?,
-                    needs: j.needs.iter().map(|n| id("Job key", n, JobKey::parse)).collect::<Result<_, _>>()?,
-                    retry_tier: j.retry_tier.as_deref().map(|t| tier(&what, t)).transpose()?,
-                    attempts: attempts.remove(j.key.as_str()).unwrap_or_default(),
-                    seq: j.seq,
-                    title: j.title,
-                    appended: j.appended,
-                    failed_cause: j.failed_cause,
-                    cancel_reason: j.cancel_reason,
-                    merged_sha: j.merged_sha,
-                    key,
-                })
-            })
-            .collect::<Result<Vec<_>, CpdError>>()?;
-        Ok(Flow { head, jobs: nodes, escalations: open_escalations(conn, plan)?, review, events_cursor: highest_id(conn)? })
+        let jobs = job_nodes(conn, plan)?;
+        Ok(Flow { head, jobs, escalations: open_escalations(conn, plan)?, review, events_cursor: highest_id(conn)? })
     })
+}
+
+/// The plan view's snapshot of `plan`: `plan_not_found` when it does not exist. Unlike [`flow`], a Plan with no PR yet
+/// is read too (R34: `plan new` adds none).
+pub fn plan_boxes(store: &mut Store, plan: &PlanId) -> Result<PlanBoxes, CpdError> {
+    store.read(|conn| {
+        let context: String = conn
+            .query_row("SELECT context FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))
+            .optional()?
+            .ok_or_else(|| plan_not_found(plan))?;
+        Ok(PlanBoxes {
+            context: id("Context id", &context, ContextId::parse)?,
+            prs: pr_nodes(conn, plan)?,
+            jobs: job_nodes(conn, plan)?,
+            events_cursor: highest_id(conn)?,
+            plan: plan.clone(),
+        })
+    })
+}
+
+/// The PRs of `plan` that are not `cancelled`, in key order, with their needs.
+fn pr_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<PrNode>, CpdError> {
+    let mut needs: BTreeMap<String, Vec<PrKey>> = BTreeMap::new();
+    let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1 ORDER BY pr, needs")?;
+    for row in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+        let (pr, need) = row?;
+        needs.entry(pr).or_default().push(id("PR key", &need, PrKey::parse)?);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT key, repo, base, status, pr_number, coalesce(json_extract(pr_seen, '$.closed'), 0)
+           FROM prs WHERE plan = ?1 AND status <> 'cancelled' ORDER BY key",
+    )?;
+    let mut rows = stmt.query([plan.as_str()])?;
+    let mut out = Vec::new();
+    while let Some(r) = rows.next()? {
+        let (key, repo, base, status): (String, String, String, String) = (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
+        let (number, closed): (Option<i64>, bool) = (r.get(4)?, r.get(5)?);
+        let what = format!("PR {plan}/{key}");
+        let status = match status.as_str() {
+            "waiting" => PrStatus::Waiting,
+            "dispatch" => PrStatus::Dispatch,
+            "open" => PrStatus::Open,
+            "merged" => PrStatus::Merged,
+            _ => return Err(bad_row(format!("{what} has status {status:?}"))),
+        };
+        let pull = match (number, status) {
+            (None, _) => None,
+            (Some(n), PrStatus::Merged) => Some((n, PrState::Merged)),
+            (Some(n), _) if closed => Some((n, PrState::Closed)),
+            (Some(n), _) => Some((n, PrState::Open)),
+        };
+        let repo_name = std::path::Path::new(&repo)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .ok_or_else(|| bad_row(format!("{what} has repo {repo:?}")))?;
+        out.push(PrNode {
+            needs: needs.remove(&key).unwrap_or_default(),
+            key: id("PR key", &key, PrKey::parse)?,
+            repo_name,
+            base,
+            status,
+            pull,
+        });
+    }
+    Ok(out)
+}
+
+/// Every Job of `plan` in creation order, with its Attempts.
+fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError> {
+    let rows = jobs::load(conn, plan)?;
+    let mut attempts = attempts(conn, plan)?;
+    rows.into_iter()
+        .map(|j| {
+            let what = format!("Job {plan}/{}", j.key);
+            let key = id("Job key", &j.key, JobKey::parse)?;
+            Ok(JobNode {
+                pr: id("PR key", &j.pr, PrKey::parse)?,
+                status: JobStatus::parse(&format!("{what} has status"), &j.status)?,
+                tier: tier(&what, &j.tier)?,
+                needs: j.needs.iter().map(|n| id("Job key", n, JobKey::parse)).collect::<Result<_, _>>()?,
+                retry_tier: j.retry_tier.as_deref().map(|t| tier(&what, t)).transpose()?,
+                attempts: attempts.remove(j.key.as_str()).unwrap_or_default(),
+                seq: j.seq,
+                title: j.title,
+                appended: j.appended,
+                failed_cause: j.failed_cause,
+                cancel_reason: j.cancel_reason,
+                merged_sha: j.merged_sha,
+                key,
+            })
+        })
+        .collect()
 }
 
 /// Every Attempt of the Plan by Job key, oldest first, with its Worker's state.

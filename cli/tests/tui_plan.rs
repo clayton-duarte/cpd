@@ -123,9 +123,18 @@ fn screen_when(env: &TestEnv, pane: &str, what: &str, ok: impl Fn(&[String]) -> 
     last
 }
 
-/// The chart rows of a screen: below the two rows of the tabs and one of padding, indented by two columns of padding.
+/// The chart rows inside the one PR box of a screen: below the two rows of the tabs, one of padding and the box's top
+/// border, indented by two columns of padding and the box's left border; the box's right border is left out.
 fn chart_rows(screen: &[String], rows: usize) -> String {
-    screen[3..3 + rows].iter().map(|l| l.chars().skip(2).collect::<String>().trim_end().to_owned()).collect::<Vec<_>>().join("\n")
+    screen[4..4 + rows]
+        .iter()
+        .map(|l| {
+            let inside: String = l.chars().skip(3).collect();
+            let inside = inside.trim_end();
+            inside.strip_suffix('│').unwrap_or_else(|| panic!("no right border: {l:?}")).trim_end().to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 // ---------- rows ----------
@@ -150,14 +159,31 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr:
         None => ("NULL".into(), "NULL".into(), "NULL".into(), r#"{"checks":{},"reviewIds":[],"commentIds":[]}"#.to_owned(), "NULL".into()),
     };
     let status = if pr.is_some() { "open" } else { "dispatch" };
-    format!(
-        "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
-         VALUES ('{id}', '{context}', 'Plan {id}', '{phase}', '{lead}', '{created}', '2026-01-02T00:00:00.000Z');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pr_seen,
+    bare_plan_row(id, context, phase, lead, created)
+        + &format!(
+            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pr_seen,
                           pr_polled_at, created_txn, created_at, started_at)
          VALUES ('{id}', 'repo', '/repo', 'main', '{status}', 'cpd/{id}', '/wt', {number}, {url}, {opened}, '{seen}',
                  {polled}, cpd_txn(), '{created}', '2026-01-02T00:00:00.000Z');"
+        )
+}
+
+/// A Plan in `phase` with its Lead, and no PR.
+fn bare_plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str) -> String {
+    let locked = if matches!(phase, "grounding" | "plan") { "NULL" } else { "'2026-01-02T00:00:00.000Z'" };
+    format!(
+        "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+         VALUES ('{id}', '{context}', 'Plan {id}', '{phase}', '{lead}', '{created}', {locked});"
     )
+}
+
+/// One Context `ctx` and one Plan `ship` in `phase`, with no PR, whose Lead `lead-ship` is in the chat slot.
+fn bare_plan(phase: &str) -> String {
+    context("ctx", "g-ctx")
+        + &lead_row("g-ctx", "ctx", "", "2026-01-01T00:00:00.000Z")
+        + &bare_plan_row("ship", "ctx", phase, "lead-ship", "2026-01-02T00:00:00.000Z")
+        + &lead_row("lead-ship", "ctx", "ship", "2026-01-02T00:00:00.000Z")
+        + &in_chat("ctx", "ship", "lead-ship")
 }
 
 /// A Lead; `plan` is empty for a Context's grounded Lead.
@@ -171,6 +197,11 @@ fn lead_row(id: &str, context: &str, plan: &str, created: &str) -> String {
 }
 
 fn job_row(plan: &str, key: &str, status: &str, tier: &str) -> String {
+    job_row_in(plan, "repo", key, status, tier)
+}
+
+/// A Job of the PR `pr`.
+fn job_row_in(plan: &str, pr: &str, key: &str, status: &str, tier: &str) -> String {
     // `merging` is a `running` Job whose Attempt is `merging`.
     let status = if status == "merging" { "running" } else { status };
     let fingerprint = if status == "draft" { "NULL".to_owned() } else { format!("'{FP}'") };
@@ -181,7 +212,7 @@ fn job_row(plan: &str, key: &str, status: &str, tier: &str) -> String {
     format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                            created_txn, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at)
-         VALUES ('{plan}', 'repo', '{key}', 'Job {key}', '{tier}', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, {fingerprint},
+         VALUES ('{plan}', '{pr}', '{key}', 'Job {key}', '{tier}', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, {fingerprint},
                  cpd_txn(), {reason}, {requested}, {failed}, {merged}, '2026-01-02T00:00:00.000Z');"
     )
 }
@@ -259,8 +290,56 @@ fn the_chart_of_a_store_equivalent_to_the_cockpits_fixture_matches_it() {
     sql(&env, &plan_with("dispatch", None, CPD_JOBS));
     let pane = start_view(&env);
     let rows = CPD_CHART.lines().count();
-    let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 3 + rows && s[3].contains("contract-core"));
+    let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 4 + rows && s[4].contains("contract-core"));
     assert_eq!(chart_rows(&screen, rows), CPD_CHART.trim_end(), "{}", screen.join("\n"));
+    // a Plan of one PR is one box, titled on its top border
+    assert!(screen[3].starts_with("  ┌ repo · repo → main · dispatch ─"), "{:?}", screen[3]);
+    assert_eq!(screen.iter().filter(|l| l.contains('┌')).count(), 1, "{}", screen.join("\n"));
+}
+
+#[test]
+fn a_plan_of_two_prs_is_two_titled_boxes_linked_by_an_arrow() {
+    let env = env();
+    // `api` has its open pull request #12; `web` needs it and waits
+    let mut s = bare_plan("dispatch");
+    s += r#"INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pr_seen,
+                          created_txn, created_at, started_at)
+            VALUES ('ship', 'api', '/src/api-server', 'main', 'open', 'cpd/ship/api', '/wt/api', 12, 'https://example.test/pull/12',
+                    '2026-01-05T00:00:00.000Z', '{"checks":{},"reviewIds":[],"commentIds":[]}', cpd_txn(), '2026-01-02T00:00:00.000Z',
+                    '2026-01-02T00:00:00.000Z');
+            INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+            VALUES ('ship', 'web', '/src/web', 'develop', 'waiting', 'cpd/ship/web', cpd_txn(), '2026-01-02T00:00:00.000Z');
+            INSERT INTO pr_needs (plan, pr, needs) VALUES ('ship', 'web', 'api');"#;
+    s += &job_row_in("ship", "api", "a", "merged", "O3");
+    s += &job_row_in("ship", "api", "b", "merged", "S3");
+    s += &need_row("ship", "b", "a");
+    s += &job_row_in("ship", "web", "c", "queued", "S3");
+    sql(&env, &s);
+    let pane = start_view(&env);
+    let screen = screen_when(&env, &pane, "the boxes", |s| s.len() > 6 && s[5].ends_with('┘'));
+    let want = [
+        "  ┌ api · api-server → main · #12 open ┐     ┌ web · web → develop · waiting ┐",
+        "  │  ✓ a O3 ───── ✓ b S3               ├────▶│  ○ c S3                       │",
+        "  └────────────────────────────────────┘     └───────────────────────────────┘",
+    ];
+    assert_eq!(screen[3..6], want, "{}", screen.join("\n"));
+    // the selection crosses from one box into the next
+    tmux_out(&env, &["send-keys", "-t", &pane, "Right", "Right", "Right", "Enter"]);
+    let screen = screen_when(&env, &pane, "the note", |s| s.iter().any(|l| l.contains("has not started yet")));
+    assert!(screen.iter().any(|l| l.trim() == "c has not started yet"), "{}", screen.join("\n"));
+}
+
+#[test]
+fn a_plan_with_no_pr_yet_says_so() {
+    let env = env();
+    sql(&env, &bare_plan("grounding"));
+    let pane = start_view(&env);
+    let screen = screen_when(&env, &pane, "the message", |s| s.iter().any(|l| l.contains("no PR yet")));
+    assert!(screen.iter().any(|l| l.trim() == "no PR yet: cpd pr add"), "{}", screen.join("\n"));
+    assert!(!screen.iter().any(|l| l.contains('┌') || l.contains("No Plan")), "{}", screen.join("\n"));
+    // dim
+    let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
+    assert!(styled.contains("2mno PR yet: cpd pr add"), "{styled}");
 }
 
 #[test]
@@ -277,7 +356,7 @@ fn each_job_status_has_its_icon_and_a_cancelled_job_is_not_drawn() {
     ];
     sql(&env, &plan_with("dispatch", None, jobs));
     let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 14 && s[3].contains("draft"));
+    let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 15 && s[4].contains("draft"));
     // a column is as wide as its widest pill (`✗ failed S3 a3`); the tier, and `aN` from the second Attempt, sit at its right
     let want = "
   ◌ draft     S3
@@ -347,7 +426,7 @@ fn escalations_and_the_plan_review_are_not_drawn() {
           VALUES ('ship', 'r1', 1, '{FP}', 'pending', '2026-01-02T01:00:00.000Z');");
     sql(&env, &s);
     let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 3 && s[3].contains(" a "));
+    let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 4 && s[4].contains(" a "));
     assert!(screen.iter().all(|l| !l.contains("Escalation") && !l.contains("review")), "{}", screen.join("\n"));
 }
 
@@ -369,7 +448,7 @@ fn the_view_follows_events_and_switches_plan_when_the_chat_slot_changes() {
     s += &job_row("side", "other", "queued", "O3");
     sql(&env, &s);
     let pane = start_view(&env);
-    screen_when(&env, &pane, "Job a", |s| s.len() > 3 && s[3].contains(" a "));
+    screen_when(&env, &pane, "Job a", |s| s.len() > 4 && s[4].contains(" a "));
 
     // a Job is appended to the shown Plan: its Event makes the view take a new snapshot
     sql(
@@ -378,12 +457,12 @@ fn the_view_follows_events_and_switches_plan_when_the_chat_slot_changes() {
             + &need_row("ship", "b", "a")
             + &event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":["a"]}"#)),
     );
-    let screen = screen_when(&env, &pane, "Job b", |s| s.len() > 3 && s[3].contains(" b "));
+    let screen = screen_when(&env, &pane, "Job b", |s| s.len() > 4 && s[4].contains(" b "));
     assert_eq!(chart_rows(&screen, 1), "  ○ a S3 ───── ○ b S3");
 
     // the other Lead moves into the chat slot: the view shows its Plan
     sql(&env, &in_chat("ctx", "side", "lead-side"));
-    let screen = screen_when(&env, &pane, "the other Plan", |s| s.len() > 3 && s[3].contains("other"));
+    let screen = screen_when(&env, &pane, "the other Plan", |s| s.len() > 4 && s[4].contains("other"));
     assert_eq!(chart_rows(&screen, 1), "  ○ other O3");
     assert!(!screen.iter().any(|l| l.contains("○ a ")), "{}", screen.join("\n"));
 }
@@ -396,7 +475,7 @@ fn the_view_starts_no_subprocess_and_asks_gh_nothing() {
     let pane = start_view(&env);
     let pid = tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_pid}"]).trim().to_owned();
     // let it draw, follow an Event and take a new snapshot
-    screen_when(&env, &pane, "the chart", |s| s.len() > 3 && s[3].contains(" a "));
+    screen_when(&env, &pane, "the chart", |s| s.len() > 4 && s[4].contains(" a "));
     sql(&env, &event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":[]}"#));
     std::thread::sleep(Duration::from_millis(1500));
     // the pane's program is the view itself, and it has no child process
@@ -430,7 +509,7 @@ fn a_selected_pill_opens_its_worker_beside_the_chat_and_a_second_enter_closes_it
     let env = env();
     sql(&env, &plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1), ("b", "queued", "S3", &["a"], 0)]));
     let (plan, chat) = centre(&env);
-    screen_when(&env, &plan, "the chart", |s| s.len() > 3 && s[3].contains(" a "));
+    screen_when(&env, &plan, "the chart", |s| s.len() > 4 && s[4].contains(" a "));
 
     let workers = || tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_view} #{@cpd_job} #{@cpd_attempt}"]);
     // nothing is selected until the User asks: an arrow selects the first pill, Enter opens its Worker
@@ -455,7 +534,7 @@ fn another_job_retargets_the_worker_pane_in_place() {
     let env = env();
     sql(&env, &plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1), ("b", "running", "S3", &["a"], 1)]));
     let (plan, _) = centre(&env);
-    screen_when(&env, &plan, "the chart", |s| s.len() > 3 && s[3].contains(" a "));
+    screen_when(&env, &plan, "the chart", |s| s.len() > 4 && s[4].contains(" a "));
     let workers = || tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{pane_id} #{@cpd_view} #{@cpd_job} #{@cpd_attempt}"]);
     tmux_out(&env, &["send-keys", "-t", &plan, "Right", "Enter"]);
     wait_until("the Worker pane of a", || workers().contains("worker a a-a1"));
@@ -475,11 +554,11 @@ fn q_does_not_quit_the_view() {
     let env = env();
     sql(&env, &plan_with("dispatch", None, &[("a", "queued", "S3", &[], 0)]));
     let pane = start_view(&env);
-    screen_when(&env, &pane, "the chart", |s| s.len() > 3 && s[3].contains(" a "));
+    screen_when(&env, &pane, "the chart", |s| s.len() > 4 && s[4].contains(" a "));
     tmux_out(&env, &["send-keys", "-t", &pane, "q"]);
     std::thread::sleep(Duration::from_millis(600));
     assert_eq!(tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_dead}"]).trim(), "0");
-    assert!(screen(&env, &pane)[3].contains(" a "));
+    assert!(screen(&env, &pane)[4].contains(" a "));
 }
 
 #[test]
