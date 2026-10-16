@@ -143,12 +143,30 @@ impl Store {
     }
 
     /// §4.5: below N, migrate in one `BEGIN IMMEDIATE` transaction; above N, refuse.
+    ///
+    /// The transaction runs with foreign keys off and `legacy_alter_table` on
+    /// (§4.5 migration 3, step 1: both only take effect outside a
+    /// transaction), so a migration can rebuild a table that others reference;
+    /// `PRAGMA foreign_key_check` then holds before the commit (step 5). Both
+    /// are restored afterwards, whether the migration committed or not.
     fn migrate(&mut self) -> Result<(), CpdError> {
         let version = user_version(&self.conn)?;
         refuse_too_new(version)?;
         if version == VERSION {
             return Ok(());
         }
+        self.conn.pragma_update(None, "foreign_keys", "OFF")?;
+        self.conn.pragma_update(None, "legacy_alter_table", "ON")?;
+        let migrated = self.migrate_in_txn();
+        let restored = self
+            .conn
+            .pragma_update(None, "legacy_alter_table", "OFF")
+            .and_then(|()| self.conn.pragma_update(None, "foreign_keys", "ON"));
+        migrated?;
+        Ok(restored?)
+    }
+
+    fn migrate_in_txn(&mut self) -> Result<(), CpdError> {
         let caller = Caller::current()?;
         let _guard = TxnGuard(&self.txn);
         let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -167,10 +185,30 @@ impl Store {
         if version == 0 {
             tx.pragma_update(None, "application_id", APPLICATION_ID).map_err(|e| failed(1, e))?;
         }
+        // The migration's `txns` row is inserted as soon as `txns` exists
+        // (migration 1 creates it), so later migrations can name it: migration
+        // 3's PRs record it as their `created_txn` and in their history.
+        let mut txn_row = false;
         for (index, migration) in schema::MIGRATIONS.iter().enumerate().skip(version as usize) {
+            if index > 0 && !txn_row {
+                begin_txn(&tx, &self.txn, MIGRATE_COMMAND, &caller).map_err(|e| failed(index as i64 + 1, e))?;
+                txn_row = true;
+            }
             migration(&tx).map_err(|e| failed(index as i64 + 1, e))?;
         }
-        begin_txn(&tx, &self.txn, MIGRATE_COMMAND, &caller).map_err(|e| failed(VERSION, e))?;
+        if !txn_row {
+            begin_txn(&tx, &self.txn, MIGRATE_COMMAND, &caller).map_err(|e| failed(VERSION, e))?;
+        }
+        let violations = foreign_key_violations(&tx).map_err(|e| failed(VERSION, e))?;
+        if !violations.is_empty() {
+            return Err(CpdError::new(
+                ErrorCode::MigrationFailed,
+                format!("Migration {VERSION} of the database failed: {} rows break a foreign key.", violations.len()),
+            )
+            .with("from", version)
+            .with("to", VERSION)
+            .with("foreign_key_violations", Value::from(violations)));
+        }
         tx.pragma_update(None, "user_version", VERSION).map_err(|e| failed(VERSION, e))?;
         tx.commit()?;
         Ok(())
@@ -291,6 +329,16 @@ fn user_version(conn: &Connection) -> rusqlite::Result<i64> {
     conn.pragma_query_value(None, "user_version", |r| r.get(0))
 }
 
+/// `PRAGMA foreign_key_check`: one `{table, rowid, parent}` per row that
+/// breaks a foreign key.
+fn foreign_key_violations(conn: &Connection) -> rusqlite::Result<Vec<Value>> {
+    let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
+    stmt.query_map([], |r| {
+        Ok(json!({"table": r.get::<_, String>(0)?, "rowid": r.get::<_, Option<i64>>(1)?, "parent": r.get::<_, String>(2)?}))
+    })?
+    .collect()
+}
+
 fn refuse_too_new(version: i64) -> Result<(), CpdError> {
     if version > VERSION {
         return Err(CpdError::new(
@@ -355,9 +403,10 @@ fn enrich(e: CpdError, path: &Path, busy_ms: u64) -> CpdError {
 }
 
 /// A SQLite failure, as Escalation `rs-store-a1-q1` decided: busy after the
-/// busy timeout is `store_busy`; the triggers' `RAISE(ABORT, 'job_locked')`
-/// and `'illegal_transition'` are those refusals; anything else is
-/// `store_failed` with `sqlite_code` and `sqlite_message`.
+/// busy timeout is `store_busy`; the triggers' `RAISE(ABORT, 'job_locked')`,
+/// `'illegal_transition'`, `'pr_locked'` and `'needs_other_pr'` (§4.4) are
+/// those refusals; anything else is `store_failed` with `sqlite_code` and
+/// `sqlite_message`.
 impl From<rusqlite::Error> for CpdError {
     fn from(e: rusqlite::Error) -> CpdError {
         let message = e.to_string();
@@ -377,6 +426,15 @@ impl From<rusqlite::Error> for CpdError {
             }
             Some(f) if f.code == SqliteCode::ConstraintViolation && message == "illegal_transition" => {
                 CpdError::new(ErrorCode::IllegalTransition, "The state change is not a legal transition (§3).")
+                    .with("sqlite_message", message)
+            }
+            Some(f) if f.code == SqliteCode::ConstraintViolation && message == "pr_locked" => CpdError::new(
+                ErrorCode::PrLocked,
+                "The PR is Locked: its repo, base and needs cannot change after the Plan's lock.",
+            )
+            .with("sqlite_message", message),
+            Some(f) if f.code == SqliteCode::ConstraintViolation && message == "needs_other_pr" => {
+                CpdError::new(ErrorCode::NeedsOtherPr, "A Dependency can only link Jobs of the same PR.")
                     .with("sqlite_message", message)
             }
             _ => CpdError::new(ErrorCode::StoreFailed, format!("The database failed: {message}."))
