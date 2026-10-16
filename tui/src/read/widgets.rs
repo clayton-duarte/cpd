@@ -101,7 +101,7 @@ pub struct PolledPr {
     pub checks: Checks,
 }
 
-/// The PR's review decision, from `plans.pr_review_decision`.
+/// The PR's review decision, from `prs.pr_review_decision`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReviewDecision {
     None,

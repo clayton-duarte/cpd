@@ -132,7 +132,7 @@ impl JobCounts {
     }
 }
 
-/// `plans.pr_seen` (contract §2.2): what `pr poll` has already reported.
+/// `prs.pr_seen` (contract §2.2): what `pr poll` has already reported.
 #[derive(Deserialize)]
 struct Seen {
     checks: BTreeMap<String, String>,
