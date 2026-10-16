@@ -1125,6 +1125,8 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 | `@cpd_view = worker` | ` Worker · #{@cpd_job} (read-only) ` |
 | any other | `#{pane_current_command}` |
 
+Every title is drawn reversed: `#[reverse]` before it and `#[noreverse]` after it, inside the branch that has a title, so untitled panes get neither. It shows as a block in the border line's colour (blue on the focused pane, from `pane-active-border-style`; the default border colour elsewhere) with the text in the background colour, so the line reads as continuous, with a wider block where the title sits. Reason: User, Plan tui-visuals (hs-d105).
+
 **The click binding.** `bind -T root MouseDown1Pane if -F '#{==:#{@cpd_view},statusbar}' 'send-keys -M' 'select-pane -t = ; send-keys -M'`: a click on the StatusBar is passed to it and never selects it, so the chat keeps the keyboard focus; every other pane is selected, then gets the click.
 
 **The `pane-died` hook.** `set-hook -g pane-died 'if -F "#{@cpd_view}" "respawn-pane"'`: only a pane that carries `@cpd_view` (a view of the cockpit) is respawned when its program dies. A Lead or engine pane stays dead, as `remain-on-exit` leaves it, because engine E2 must see its death (§3.6, §3.7). This differs from cpd 1's unconditional `set-hook -g pane-died "respawn-pane"`.
