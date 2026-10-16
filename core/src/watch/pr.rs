@@ -1,7 +1,8 @@
-//! E5, PR (contract §3.7, §7.6): for each Plan in `pr`, every
-//! `pr_poll_seconds`, `cpd pr poll --plan <id>` as a subprocess (a process
-//! boundary, cpd 1 §11 step 5). `cpd` is resolved on `PATH`, as in every
-//! pane cpd starts (`session::PROGRAM`).
+//! E5, PR (contract §3.7, §7.6): for each Plan in `dispatch` or `pr` with an
+//! `open` PR, every `pr_poll_seconds`, `cpd pr poll --plan <id>` as a
+//! subprocess (a process boundary, cpd 1 §11 step 5); it polls every open PR of
+//! the Plan. `cpd` is resolved on `PATH`, as in every pane cpd starts
+//! (`session::PROGRAM`).
 
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -17,7 +18,8 @@ use crate::session::PROGRAM;
 
 pub(super) fn run(engine: &mut Engine) {
     let plans = engine.store.read(|conn| {
-        let mut stmt = conn.prepare("SELECT id FROM plans WHERE phase = 'pr' ORDER BY id")?;
+        let mut stmt = conn.prepare("SELECT id FROM plans p WHERE phase IN ('dispatch', 'pr') AND EXISTS (SELECT 1 FROM prs r WHERE r.plan = p.id AND r.status = 'open')
+              ORDER BY id")?;
         let ids = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
         ids.iter().map(|id| PlanId::parse(id)).collect::<Result<Vec<_>, CpdError>>()
     });
@@ -37,10 +39,12 @@ pub(super) fn run(engine: &mut Engine) {
         let about = About::Plan(plan.clone());
         match poll(engine, &plan) {
             Ok(out) => {
-                let changes = &out["changes"];
-                let new = ["checks", "reviews", "comments"].iter().any(|k| changes[k].as_array().is_some_and(|a| !a.is_empty()));
-                if out["merged"] == true || new {
-                    engine.log.line(&format!("E5: polled the PR of Plan {plan}: state {}, merged {}", out["state"], out["merged"]));
+                for pr in out["prs"].as_array().into_iter().flatten() {
+                    let changes = &pr["changes"];
+                    let new = ["checks", "reviews", "comments"].iter().any(|k| changes[k].as_array().is_some_and(|a| !a.is_empty()));
+                    if pr["merged"] == true || new {
+                        engine.log.line(&format!("E5: polled PR {} of Plan {plan}: state {}, merged {}", pr["pr"], pr["state"], pr["merged"]));
+                    }
                 }
                 engine.clear(Step::E5, &about);
             }

@@ -408,7 +408,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
 
     // ---------- 9. all-merged, once
     let all = fx.wait_event(cursor, "all-merged", 30, |_| true);
-    assert_eq!(all["data"], json!({"merged": ["api", "ui"], "cancelled": []}));
+    assert_eq!(all["data"], json!({"pr": "pay", "merged": ["api", "ui"], "cancelled": []}));
     let shown = fx.plan();
     assert_eq!(shown["plan"]["phase"], "dispatch");
     assert!(shown["plan"]["all_merged_at"].is_string(), "{shown}");
@@ -438,8 +438,9 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     // ---------- 10. pr open: the Gate on the Lead Branch, the push, gh
     let out = fx.ok(&["pr", "open", "--plan", PLAN]);
     assert_eq!(out["phase"], "pr");
-    assert_eq!(out["pr"]["number"], 7);
-    assert_eq!(out["pr"]["url"], PR_URL);
+    assert_eq!(out["pr"]["key"], "pay");
+    assert_eq!(out["pr"]["pr"]["number"], 7);
+    assert_eq!(out["pr"]["pr"]["url"], PR_URL);
     assert!(fx.hooks_log().ends_with("pre-merge cpd/pay\n"), "{}", fx.hooks_log());
     let pushed = fx.git(&fx.origin, &["rev-parse", "refs/heads/cpd/pay"]);
     assert_eq!(pushed, lead_sha);
@@ -451,19 +452,21 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
         assert!(body.contains(sha.as_str().unwrap()), "{body}");
     }
     let events = fx.events_since(cursor);
-    assert_eq!(kinds(&events), ["plan-phase"]);
-    assert_eq!(events[0]["data"], json!({"from": "dispatch", "to": "pr", "pr": {"number": 7, "url": PR_URL}}));
+    assert_eq!(kinds(&events), ["pr-opened", "plan-phase"]);
+    assert_eq!(events[0]["data"], json!({"pr": "pay", "number": 7, "url": PR_URL}));
+    assert_eq!(events[1]["data"], json!({"from": "dispatch", "to": "pr", "prs": [{"key": "pay", "number": 7, "url": PR_URL}]}));
     cursor = fx.cursor();
 
     // ---------- 11. pr poll reports the review, once
     let out = fx.ok(&["pr", "poll", "--plan", PLAN]);
     let review = json!({"id": "PRR_1", "author": "ann", "state": "CHANGES_REQUESTED", "body": "Rename it."});
-    assert_eq!(out["changes"], json!({"checks": [], "reviews": [review], "comments": []}));
+    assert_eq!(out["prs"][0]["pr"], "pay");
+    assert_eq!(out["prs"][0]["changes"], json!({"checks": [], "reviews": [review], "comments": []}));
     let events = fx.events_since(cursor);
     assert_eq!(kinds(&events), ["pr-feedback"]);
     assert_eq!(events[0]["data"]["reviews"], json!([review]));
     let again = fx.ok(&["pr", "poll", "--plan", PLAN]);
-    assert_eq!(again["changes"], json!({"checks": [], "reviews": [], "comments": []}));
+    assert_eq!(again["prs"][0]["changes"], json!({"checks": [], "reviews": [], "comments": []}));
     assert_eq!(fx.events_since(cursor).len(), 1);
 
     // ---------- the whole run: no `error` Event, nothing tampered, nothing left running

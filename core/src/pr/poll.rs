@@ -1,4 +1,4 @@
-//! `pr poll` (commands.md §9.2, contract §7.6): the PR's feedback and merge,
+//! `pr poll` (commands.md §9.2, contract §7.6): each open PR's feedback and merge,
 //! compared with `pr_seen`.
 
 use std::path::Path;
@@ -6,14 +6,14 @@ use std::path::Path;
 use serde_json::json;
 
 use super::feedback::{self, Changes, ChecksSummary, ReviewDecision, Seen};
-use super::row::PlanRow;
+use super::row::{PlanRow, PrRow};
 use super::{Args, Env, gh, illegal_phase};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
 use crate::git;
 use crate::host::layout::attempt_window;
 use crate::host::tmux::Tmux;
-use crate::ids::{AttemptId, PlanId};
+use crate::ids::{AttemptId, PlanId, PrKey};
 use crate::output::Output;
 use crate::plan::Phase;
 use crate::store::WriteTxn;
@@ -25,67 +25,101 @@ pub(super) fn poll(args: Args) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let plan = env.plan(&id)?;
     match plan.phase {
-        Phase::Pr => {}
+        Phase::Dispatch | Phase::Pr => {}
         Phase::Done => {
             // Rerun the clean-up, in case the run that ended the Plan died before finishing it.
             clean_up(&mut env, &plan)?;
-            return Ok(Output::success(json!({"plan": id, "phase": "done", "merged": true, "already": true})));
+            return Ok(Output::success(json!({"plan": id, "phase": "done", "prs": [], "already": true})));
         }
-        _ => return Err(illegal_phase(&plan, COMMAND, "pr")),
+        _ => return Err(illegal_phase(&plan, COMMAND, "dispatch or pr")),
     }
-    let pr = plan.pr.clone().expect("a Plan in phase pr has an open PR (prs CHECK)");
-    let lead = plan.lead()?.clone();
-    let seen = Seen::parse(&plan.pr_seen)?;
+    // With --pr, that one; without it, every `open` PR in key order (§9.2).
+    let keys: Vec<PrKey> = match &args.pr.pr {
+        Some(_) => {
+            let pr = plan.select(&args.pr)?;
+            match pr.status.as_str() {
+                "open" => vec![pr.key.clone()],
+                "merged" => return Ok(Output::success(json!({"plan": id, "phase": plan.phase.as_str(), "prs": [], "already": true}))),
+                _ => return Err(pr.refuse(&id, COMMAND, "open")),
+            }
+        }
+        None => plan.prs.iter().filter(|p| p.status == "open").map(|p| p.key.clone()).collect(),
+    };
+    let mut polled = Vec::new();
+    for key in &keys {
+        let pr = plan.prs.iter().find(|p| p.key == *key).expect("a key taken from the Plan's own PRs");
+        polled.push(poll_pr(&mut env, &plan, pr)?);
+    }
+    let after = env.plan(&id)?;
+    if after.phase == Phase::Done {
+        clean_up(&mut env, &after)?;
+    }
+    Ok(Output::success(json!({"plan": id, "phase": after.phase.as_str(), "prs": polled})))
+}
 
-    let view = gh::view(&lead, pr.number)?;
+/// Polls one `open` PR (§7.6): what `gh` says, compared with its `pr_seen`.
+fn poll_pr(env: &mut Env, plan: &PlanRow, pr: &PrRow) -> Result<serde_json::Value, CpdError> {
+    let id = &plan.id;
+    let key = &pr.key;
+    let pull = pr.pull.clone().expect("an open PR has its pull request (prs CHECK)");
+    let lead = pr.lead(id)?.clone();
+    let seen = Seen::parse(&pr.pr_seen)?;
+
+    let view = gh::view(&lead, pull.number)?;
     // Stored on every poll, together, with `pr_polled_at`, and printed (contract §7.6).
     let decision = ReviewDecision::of(view.review_decision.as_deref());
     let checks = ChecksSummary::of(&feedback::current_checks(&view));
     let stored = |tx: &WriteTxn<'_>| -> rusqlite::Result<()> {
         tx.execute(
             "UPDATE prs SET pr_title = ?1, pr_review_decision = ?2, pr_checks = ?3 WHERE plan = ?4 AND key = ?5",
-            rusqlite::params![view.title, decision.as_str(), checks.as_str(), id.as_str(), plan.key.as_str()],
+            rusqlite::params![view.title, decision.as_str(), checks.as_str(), id.as_str(), key.as_str()],
         )?;
         Ok(())
     };
-    let printed = |mut out: serde_json::Value| {
-        out["title"] = json!(view.title);
-        out["review_decision"] = json!(decision.as_str());
-        out["checks"] = json!(checks.as_str());
-        out
+    let printed = |changes: &Changes, merged: bool| {
+        json!({
+            "pr": key, "number": pull.number, "state": view.state, "merged": merged, "title": view.title,
+            "review_decision": decision.as_str(), "checks": checks.as_str(), "changes": changes.to_json(),
+        })
     };
     if view.state == "MERGED" {
         env.store.write(COMMAND, |tx| {
+            let moved = tx.execute(
+                "UPDATE prs SET status = 'merged', merged_at = (SELECT at FROM txns WHERE id = cpd_txn()),
+                        pr_polled_at = (SELECT at FROM txns WHERE id = cpd_txn())
+                  WHERE plan = ?1 AND key = ?2 AND status = 'open'",
+                [id.as_str(), key.as_str()],
+            )?;
+            if moved == 0 {
+                return Err(cas_lost(id, key));
+            }
+            stored(tx)?;
+            let text = format!("PR {key} (#{}) of Plan {id} is merged.", pull.number);
+            let data = json!({"pr": key, "number": pull.number, "url": pull.url, "merged_at": view.merged_at});
+            append(tx, NewEvent::new(Kind::PrMerged, text, data).plan(id.clone()))?;
+            // The last PR to merge ends the Plan (§3.1).
+            let unmerged: i64 =
+                tx.query_row("SELECT count(*) FROM prs WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled')", [id.as_str()], |r| r.get(0))?;
+            if unmerged > 0 {
+                return Ok(());
+            }
             let moved = tx.execute(
                 "UPDATE plans SET phase = 'done', done_at = (SELECT at FROM txns WHERE id = cpd_txn())
                   WHERE id = ?1 AND phase = 'pr'",
                 [id.as_str()],
             )?;
             if moved == 0 {
-                return Err(cas_lost(&id));
+                return Err(cas_lost(id, key));
             }
-            let moved = tx.execute(
-                "UPDATE prs SET status = 'merged', merged_at = (SELECT at FROM txns WHERE id = cpd_txn()),
-                        pr_polled_at = (SELECT at FROM txns WHERE id = cpd_txn())
-                  WHERE plan = ?1 AND key = ?2 AND status = 'open'",
-                [id.as_str(), plan.key.as_str()],
-            )?;
-            if moved == 0 {
-                return Err(cas_lost(&id));
-            }
-            stored(tx)?;
-            let text = format!("PR #{} of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}", pr.number);
-            let data = json!({"pr": pr.short(), "merged_at": view.merged_at});
-            append(tx, NewEvent::new(Kind::PlanDone, text, data).plan(id.clone()))?;
+            let merged = merged_prs(tx, id, key, view.merged_at.as_deref())?;
+            let text = format!("Every PR of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}");
+            append(tx, NewEvent::new(Kind::PlanDone, text, json!({"prs": merged})).plan(id.clone()))?;
             Ok(())
         })?;
-        clean_up(&mut env, &plan)?;
-        return Ok(Output::success(printed(json!({
-            "plan": id, "state": view.state, "merged": true, "changes": Changes::default().to_json(),
-        }))));
+        return Ok(printed(&Changes::default(), true));
     }
 
-    let inline = gh::inline_comments(&lead, pr.number)?;
+    let inline = gh::inline_comments(&lead, pull.number)?;
     let (changes, mut next) = feedback::diff(&seen, &view, &inline);
     let closed = view.state == "CLOSED";
     // The closure is reported once; the mark goes when the PR is open again.
@@ -95,51 +129,76 @@ pub(super) fn poll(args: Args) -> Result<Output, CpdError> {
     env.store.write(COMMAND, |tx| {
         let moved = tx.execute(
             "UPDATE prs SET pr_seen = ?1, pr_polled_at = (SELECT at FROM txns WHERE id = cpd_txn())
-              WHERE plan = ?2 AND key = ?3 AND status = 'open' AND pr_seen = ?4
-                AND (SELECT phase FROM plans WHERE id = ?2) = 'pr'",
-            rusqlite::params![next.to_text(), id.as_str(), plan.key.as_str(), plan.pr_seen],
+              WHERE plan = ?2 AND key = ?3 AND status = 'open' AND pr_seen = ?4",
+            rusqlite::params![next.to_text(), id.as_str(), key.as_str(), pr.pr_seen],
         )?;
         if moved == 0 {
-            return Err(cas_lost(&id));
+            return Err(cas_lost(id, key));
         }
         stored(tx)?;
         if !changes.is_empty() || closure {
-            let text = feedback::text(id.as_str(), pr.number, &changes, closure);
-            let data = feedback::data(&changes, &view.state);
+            let text = feedback::text(id.as_str(), key.as_str(), pull.number, &changes, closure);
+            let data = feedback::data(key.as_str(), &changes, &view.state);
             append(tx, NewEvent::new(Kind::PrFeedback, text, data).plan(id.clone()))?;
         }
         Ok(())
     })?;
-    Ok(Output::success(printed(json!({"plan": id, "state": view.state, "merged": false, "changes": changes.to_json()}))))
+    Ok(printed(&changes, false))
 }
 
-fn cas_lost(id: &PlanId) -> CpdError {
-    CpdError::new(ErrorCode::CasLost, format!("Plan {id} changed while it was being polled: rerun the command."))
+/// `[{key, number, url, merged_at}]` of every PR that is not `cancelled`, in key
+/// order: `merged_at` is the moment the PR was seen merged, and for `just`, the
+/// one this poll merged, the time `gh` reports when it does.
+fn merged_prs(tx: &WriteTxn<'_>, id: &PlanId, just: &PrKey, reported: Option<&str>) -> Result<Vec<serde_json::Value>, CpdError> {
+    let mut stmt = tx.prepare("SELECT key, pr_number, pr_url, merged_at FROM prs WHERE plan = ?1 AND status = 'merged' ORDER BY key")?;
+    let rows = stmt
+        .query_map([id.as_str()], |r| {
+            let key: String = r.get(0)?;
+            let merged_at: String = r.get(3)?;
+            let merged_at = if key == just.as_str() { reported.map_or(merged_at, str::to_owned) } else { merged_at };
+            Ok(json!({"key": key, "number": r.get::<_, i64>(1)?, "url": r.get::<_, String>(2)?, "merged_at": merged_at}))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+fn cas_lost(id: &PlanId, key: &PrKey) -> CpdError {
+    CpdError::new(ErrorCode::CasLost, format!("PR {key} of Plan {id} changed while it was being polled: rerun the command."))
         .with("plan", id.as_str())
+        .with("pr", key.as_str())
 }
 
-/// After `done` (§3.4 A9): the Plan's remaining Attempt worktrees and branches
-/// are removed, kept so far for debugging, and its Attempt windows killed. The
-/// Lead worktree and the Lead Branch stay. Idempotent.
+/// After `done` (§3.4 A9): the Plan's remaining Attempt worktrees and branches,
+/// in every PR's repo, are removed, kept so far for debugging, and its Attempt
+/// windows killed. The Lead worktrees and the Lead Branches stay. Idempotent.
 fn clean_up(env: &mut Env, plan: &PlanRow) -> Result<(), CpdError> {
+    // Each Attempt with its PR's Lead worktree, from which git addresses that repo.
     let attempts = env.store.read(|conn| {
-        let mut stmt = conn.prepare("SELECT id, branch, worktree FROM attempts WHERE plan = ?1 ORDER BY id")?;
+        let mut stmt = conn.prepare(
+            "SELECT a.id, a.branch, a.worktree, r.lead_worktree
+               FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job JOIN prs r ON r.plan = j.plan AND r.key = j.pr
+              WHERE a.plan = ?1 ORDER BY a.id",
+        )?;
         let rows = stmt
-            .query_map([plan.id.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
+            .query_map([plan.id.as_str()], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     })?;
     let tmux = Tmux::new(env.config.tmux.socket.as_str());
     let work = env.config.tmux.work_session.as_str();
     let panes = tmux.list_panes()?;
-    let lead = plan.lead()?;
-    for (id, branch, worktree) in attempts {
+    for (id, branch, worktree, lead) in attempts {
         let attempt = AttemptId::parse(&id)?;
+        let lead = lead.ok_or_else(|| {
+            CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: the PR of Attempt {id} has no Lead worktree."))
+        })?;
         let name = attempt_window(&plan.id, &attempt);
         for pane in panes.iter().filter(|p| p.session_name == work && p.window_name == name) {
             tmux.kill_window(&pane.window)?;
         }
-        git::discard_worktree(lead, Path::new(&worktree), &branch)?;
+        git::discard_worktree(Path::new(&lead), Path::new(&worktree), &branch)?;
     }
     Ok(())
 }

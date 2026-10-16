@@ -660,8 +660,8 @@ fn e4_appends_all_merged_once_when_no_job_is_left_to_run() {
     std::thread::sleep(Duration::from_millis(2500));
     engine.stop();
 
-    assert_eq!(fx.events("all-merged"), [(Some("pay".into()), None, None, json!({"merged": ["api"], "cancelled": ["web"]}))]);
-    assert!(fx.texts("all-merged")[0].ends_with("Next: cpd pr open --plan pay"));
+    assert_eq!(fx.events("all-merged"), [(Some("pay".into()), None, None, json!({"pr": "repo", "merged": ["api"], "cancelled": ["web"]}))]);
+    assert!(fx.texts("all-merged")[0].ends_with("Next: cpd pr open --pr repo --plan pay"));
     assert!(fx.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_some());
 }
 

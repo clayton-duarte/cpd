@@ -519,6 +519,16 @@ fn e7_starts_a_dependent_pr_from_a_fresh_fetch_once_its_prerequisite_is_merged()
     fx.add("a3", &repo.path, &["a2"]);
     fx.dispatch();
     fx.open("a1");
+    // E5 polls an open PR in `dispatch` too (§3.7): a1 needs a directory for `gh` and a pull request to read.
+    let a1 = fx.env.root().join("a1-lead");
+    fs::create_dir_all(&a1).unwrap();
+    fx.sql(&format!("UPDATE prs SET lead_worktree = '{}' WHERE plan = 'pay' AND key = 'a1';", a1.display()));
+    fx.env.fake_gh(
+        r#"case "$1" in
+  view|"pr") echo '{"state":"OPEN","mergedAt":null,"title":"T","reviewDecision":"","statusCheckRollup":[],"reviews":[],"comments":[]}' ;;
+  *) echo '[]' ;;
+esac"#,
+    );
     let engine = fx.engine();
 
     // a1 is not merged: nothing starts, however many ticks pass.
