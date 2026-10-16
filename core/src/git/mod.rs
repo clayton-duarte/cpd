@@ -10,9 +10,9 @@ pub mod worktree;
 pub use hooks::{HookError, HookOutcome, HookResult, Operation, Pipeline, run_hook};
 pub use tamper::{check as tamper_check, protected_list, touched_protected};
 pub use worktree::{
-    Created, Setup, attempt_branch, attempt_worktree_path, create_attempt_worktree,
-    create_lead_worktree, discard_worktree, lead_branch, lead_worktree_path, push_lead_branch,
-    remove_merged_attempt,
+    Created, Prepared, Remote, Setup, StartFailure, Step, attempt_branch, attempt_worktree_path, create_attempt_worktree,
+    create_lead_worktree, discard_worktree, lead_branch, lead_worktree_path, pr_lead_worktree_path, prepare_lead_worktree,
+    push_lead_branch, remove_merged_attempt,
 };
 
 /// The last `lines` lines of `text`, joined with `\n` (contract §7.3: results

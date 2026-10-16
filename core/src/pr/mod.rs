@@ -1,6 +1,7 @@
 //! Pull requests (contract §7.6; commands.md §9), through `gh`:
 //!
 //! - `add`, `edit`, `cancel`: the Plan's PRs before they start (`pr add`, `pr edit`, `pr cancel`);
+//! - `start`: starting a PR (`pr start`), the routine `plan lock` and engine E7 call too;
 //! - `open`: the Gate, the push and the PR (`pr open`);
 //! - `poll`, with `feedback`: the PR's checks, reviews, comments and merge (`pr poll`);
 //! - `rebase`: the Lead Branch onto the base, the Gate and the push (`pr rebase`);
@@ -17,6 +18,7 @@ mod open;
 mod poll;
 mod rebase;
 mod row;
+pub mod start;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -42,6 +44,8 @@ pub enum Command {
     Edit(EditArgs),
     /// Remove a PR from the Plan before the lock (§9.6)
     Cancel(CancelArgs),
+    /// Start a waiting PR whose needs are merged, after a failed start (§9.7)
+    Start(StartArgs),
     /// Push the Lead Branch and open the PR (§9.1)
     Open(Args),
     /// Poll the PR for feedback and the merge (§9.2)
@@ -104,11 +108,21 @@ pub struct CancelArgs {
     plan: PlanArg,
 }
 
+#[derive(clap::Args, Debug)]
+pub struct StartArgs {
+    /// The PR key
+    #[arg(value_name = "key")]
+    key: PrKey,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
 pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
         Command::Add(args) => add::add(args),
         Command::Edit(args) => edit::edit(args),
         Command::Cancel(args) => cancel::cancel(args),
+        Command::Start(args) => start::run(args),
         Command::Open(args) => open::open(args),
         Command::Poll(args) => poll::poll(args),
         Command::Rebase(args) => rebase::rebase(args),

@@ -121,6 +121,7 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `answer` | Lead | yes | §3.5 |
 | `pr open`, `pr rebase` | Lead | yes | §7.3, §7.6 |
 | `pr add`, `edit`, `cancel` | Lead | yes | §2.3, §2.5, §3.8 |
+| `pr start` | Lead | yes | §2.5, §3.8, §7.2 |
 | `pr poll` | engine E5 | yes | §7.6 |
 | `session list`, `session show` | TUI, Lead | no | |
 | `session fork`, `open`, `park`, `close`, `rename` | User (TUI), Lead | yes | §6.4, §6.7 |
@@ -130,8 +131,6 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `watch` | `plan lock`, `tui`, User | yes | §3.7, §6.6 |
 | `tui`, `tui view` (internal) | User | no | §6.2 |
 | `doctor`, `config`, `tiers` | User | `tiers` refreshes its cache | §8, §9 |
-
-`pr start` (R34, §9.7; Lead; it writes; §2.5, §3.8) is not in this table yet: the Job that implements it adds its row in the same commit, as for `session close` (§10.9), because `every_documented_command_exists` (`cli/tests/command_index.rs`) fails for a row whose command does not exist.
 
 ## 3. `context`
 

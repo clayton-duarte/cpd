@@ -81,3 +81,10 @@ fn pr_crud_is_indexed_and_exists() {
         assert!(pr.find_subcommand(word).is_some(), "pr {word} does not exist");
     }
 }
+
+/// `pr start` is documented in §2 (R34, §9.7) and exists.
+#[test]
+fn pr_start_is_indexed_and_exists() {
+    assert!(documented_commands().contains(&vec!["pr".to_owned(), "start".to_owned()]));
+    assert!(Cli::command().find_subcommand("pr").unwrap().find_subcommand("start").is_some());
+}

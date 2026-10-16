@@ -1,5 +1,5 @@
 //! The engine's loop (contract §3.7; commands.md §12): `locks/watch.lock`,
-//! `watch-started`, the import of the Context stores, then E1–E6 every
+//! `watch-started`, the import of the Context stores, then E1–E7 every
 //! `tick_seconds` until SIGTERM or SIGINT, then `watch-stopped`.
 
 use std::collections::HashMap;
@@ -15,13 +15,14 @@ use super::report::{About, Failure, Report, Step};
 use super::{SOURCE, completion, contexts, escalations, liveness, pr, schedule};
 use crate::config::{Catalog, Config, load_catalog};
 use crate::context::Contexts;
-use crate::error::CpdError;
+use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, Kind, NewEvent};
 use crate::home::CpdHome;
 use crate::host::Tmux;
 use crate::host::pi::{self, PiDirs};
-use crate::ids::{PlanId, SessionId};
+use crate::ids::{PlanId, PrKey, SessionId};
 use crate::output::Output;
+use crate::pr::start::{self as start_pr, By, Failed};
 use crate::store::Store;
 
 /// Set by SIGTERM and SIGINT: the loop ends at its next check.
@@ -75,16 +76,79 @@ impl Engine {
         Ok(catalog)
     }
 
-    /// One tick: E1–E6 (§3.7), each reporting its own failures.
+    /// One tick: E1–E7 (§3.7), each reporting its own failures.
     fn tick(&mut self) {
         self.catalog = None;
-        let steps: [fn(&mut Engine); 6] =
-            [escalations::run, liveness::run, schedule::run, completion::run, pr::run, contexts::run];
+        let steps: [fn(&mut Engine); 7] =
+            [escalations::run, liveness::run, schedule::run, completion::run, pr::run, start_prs, contexts::run];
         for step in steps {
             if stopping() {
                 return;
             }
             step(self);
+        }
+    }
+}
+
+/// The PRs E7 starts: `waiting` in a Plan in `dispatch`, every need `merged`, and
+/// not marked `start_failed_at` (§3.7). Oldest Plan first, then by key.
+const STARTABLE: &str = "SELECT r.plan, r.key FROM prs r JOIN plans p ON p.id = r.plan
+  WHERE p.phase = 'dispatch' AND r.status = 'waiting' AND r.start_failed_at IS NULL
+    AND NOT EXISTS (SELECT 1 FROM pr_needs n JOIN prs q ON q.plan = n.plan AND q.key = n.needs
+                     WHERE n.plan = r.plan AND n.pr = r.key AND q.status <> 'merged')
+  ORDER BY p.created_at, r.plan, r.key";
+
+/// E7, PR start (§3.7, §3.8): starts each startable PR. A failed setup (worktree,
+/// remote check or `pre-start`) marks the PR `start_failed_at` and appends one
+/// `error` `pr_start_failed` for the Lead; the engine does not try that PR again,
+/// the Lead retries with `cpd pr start`.
+fn start_prs(engine: &mut Engine) {
+    let waiting = engine.store.read(|conn| {
+        let mut stmt = conn.prepare(STARTABLE)?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.into_iter().map(|(plan, key)| Ok((PlanId::parse(&plan)?, PrKey::parse(&key)?))).collect::<Result<Vec<_>, CpdError>>()
+    });
+    let waiting = match waiting {
+        Ok(waiting) => {
+            engine.clear(Step::E7, &About::Machine);
+            waiting
+        }
+        Err(e) => return engine.fail(Step::E7, About::Machine, &e),
+    };
+    for (plan, key) in waiting {
+        if stopping() {
+            return;
+        }
+        let about = About::Plan(plan.clone());
+        let pr = engine.store.read(|conn| Ok(start_pr::load(conn, &plan)?.into_iter().find(|p| p.key == key)));
+        let pr = match pr {
+            Ok(Some(pr)) => pr,
+            Ok(None) => continue,
+            Err(e) => {
+                engine.fail(Step::E7, about, &e);
+                continue;
+            }
+        };
+        match start_pr::start(&engine.home, &engine.config, &mut engine.store, &plan, &pr, By::Engine) {
+            Ok(started) => {
+                engine.log.line(&format!("E7: started PR {key} of Plan {plan} ({})", started.to_json()["lead_branch"]));
+                engine.clear(Step::E7, &about);
+            }
+            Err(Failed::Setup { step, error }) => {
+                match start_pr::record_failure(&mut engine.store, SOURCE, &plan, &key, step, &error) {
+                    Ok(true) => {
+                        engine.log.line(&format!("E7: PR {key} of Plan {plan} could not be started ({}): {}", step.as_str(), error.message()));
+                        engine.clear(Step::E7, &about);
+                    }
+                    Ok(false) => {}
+                    Err(e) => engine.fail(Step::E7, about, &e),
+                }
+            }
+            // The PR changed since it was read (`pr start` got there first): decided again next tick.
+            Err(Failed::Other(e)) if e.code() == ErrorCode::CasLost => {
+                engine.log.line(&format!("E7: skipped PR {key} of Plan {plan}: {}", e.message()));
+            }
+            Err(Failed::Other(e)) => engine.fail(Step::E7, about, &e),
         }
     }
 }

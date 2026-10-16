@@ -10,7 +10,7 @@ use super::run::{branch_exists, has_origin, ok, rev_parse, run};
 use super::{TAIL_LINES, tail};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::Hook;
-use crate::ids::{AttemptId, PlanId};
+use crate::ids::{AttemptId, PlanId, PrKey};
 
 /// The Lead Branch of a Plan: `cpd/<plan>`.
 pub fn lead_branch(plan: &PlanId) -> String {
@@ -39,6 +39,17 @@ fn sibling(repo: &Path, suffix: &str) -> Result<PathBuf, CpdError> {
 /// The Lead worktree: `<repo-parent>/<repo-name>.<plan>`.
 pub fn lead_worktree_path(repo: &Path, plan: &PlanId) -> Result<PathBuf, CpdError> {
     sibling(repo, plan.as_str())
+}
+
+/// The Lead worktree of a PR (contract §7.1): `<repo-parent>/<repo-name>.<plan>.<key>`.
+/// A PR made by migration 3 keeps the Lead Branch `cpd/<plan>` and with it the
+/// worktree `<repo-parent>/<repo-name>.<plan>` it had.
+pub fn pr_lead_worktree_path(repo: &Path, plan: &PlanId, key: &PrKey, lead_branch_name: &str) -> Result<PathBuf, CpdError> {
+    if lead_branch_name == lead_branch(plan) {
+        lead_worktree_path(repo, plan)
+    } else {
+        sibling(repo, &format!("{plan}.{key}"))
+    }
 }
 
 /// The Attempt worktree: `<repo-parent>/<repo-name>.<plan>--<attempt>`.
@@ -193,7 +204,8 @@ pub fn push_lead_branch(lead_worktree: &Path, branch: &str, set_upstream: bool) 
 }
 
 /// What the remote has of the Lead Branch (contract §7.2, R35).
-enum Remote {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Remote {
     /// No `origin`: no remote check (A3).
     None,
     /// `origin` has no such branch: create it and push it.
@@ -241,54 +253,143 @@ fn check_remote(repo: &Path, branch: &str, base: &str) -> Result<Remote, CpdErro
     }
 }
 
-/// Creates the Lead worktree and runs `pre-start` in it (contract §7.2, `plan lock`).
-///
-/// `repo` is the main checkout. With an `origin`, the Lead Branch on the
-/// remote is reused when it contains `origin/<base>`, refused `branch_exists`
-/// when it does not, and created from `origin/<base>` and pushed (after
-/// `pre-start`) when absent (R35). A leftover of an interrupted lock (a worktree
-/// of this repo at the path, on `cpd/<plan>`) is removed first; any other
-/// thing at the path is `worktree_exists`, any other `cpd/<plan>` is
-/// `branch_exists`. On failure the worktree and branch are removed.
-pub fn create_lead_worktree(repo: &Path, plan: &PlanId, base: &str, setup: &Setup) -> Result<Created, CpdError> {
-    let path = lead_worktree_path(repo, plan)?;
-    let branch = lead_branch(plan);
+/// The part of a Lead worktree's start that failed (contract §3.8 "A failed
+/// start": `step` of `pr_start_failed`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    /// The path, the local branches, `git worktree add`.
+    Worktree,
+    /// `fetch origin`, `ls-remote`, the ancestor check.
+    Remote,
+    /// The `pre-start` hook.
+    PreStart,
+}
 
-    let leftover = list(repo)?.iter().any(|w| real(&w.path) == real(&path) && w.branch.as_deref() == Some(&branch));
+impl Step {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Step::Worktree => "worktree",
+            Step::Remote => "remote",
+            Step::PreStart => "pre-start",
+        }
+    }
+}
+
+/// A failed start: the error and the step it happened in. Nothing is left behind.
+#[derive(Clone, Debug)]
+pub struct StartFailure {
+    pub step: Step,
+    pub error: CpdError,
+}
+
+/// A Lead worktree that exists on its Lead Branch with `pre-start` passed;
+/// nothing is pushed yet.
+#[derive(Clone, Debug)]
+pub struct Prepared {
+    pub path: PathBuf,
+    pub branch: String,
+    /// The commit the branch was cut at (the tip of `origin/<branch>` when reused).
+    pub base_sha: String,
+    pub remote: Remote,
+}
+
+impl Prepared {
+    /// The Lead Branch was already on the remote and is continued (R35).
+    pub fn reused(&self) -> bool {
+        self.remote == Remote::Reusable
+    }
+
+    /// Removes the worktree and branch again.
+    pub fn discard(&self, repo: &Path) -> Result<(), CpdError> {
+        discard_worktree(repo, &self.path, &self.branch)
+    }
+
+    /// After `pre-start`: pushes a Lead Branch that is new on the remote,
+    /// `push -u origin <branch>`. `Ok(true)`: pushed; `Ok(false)`: nothing to push
+    /// (reused, or no `origin`); `Err`: the `push_failed` error, which never
+    /// fails the caller's operation.
+    pub fn push(&self) -> Result<bool, CpdError> {
+        match self.remote {
+            Remote::Absent => push_lead_branch(&self.path, &self.branch, true).map(|()| true),
+            Remote::None | Remote::Reusable => Ok(false),
+        }
+    }
+}
+
+/// Creates a Lead worktree at `path` on `branch` and runs `pre-start` in it,
+/// without pushing (contract §7.2; `plan lock`, engine E7 and `pr start` all
+/// start a PR this way).
+///
+/// `repo` is the main checkout. A leftover of an interrupted start (a worktree
+/// of this repo at `path`, on `branch`) is removed first; any other thing at
+/// the path is `worktree_exists`, any other `branch` (or a local `cpd/<plan>`
+/// under a `cpd/<plan>/<key>` branch, which would make it impossible) is
+/// `branch_exists`. With an `origin`, the branch on the remote is reused when
+/// it contains `origin/<base>`, refused `branch_exists` when it does not, and
+/// cut from `origin/<base>` when absent (R35). On failure the worktree and
+/// branch are removed.
+pub fn prepare_lead_worktree(
+    repo: &Path,
+    plan: &PlanId,
+    path: &Path,
+    branch: &str,
+    base: &str,
+    setup: &Setup,
+) -> Result<Prepared, StartFailure> {
+    let at = |step| move |error| StartFailure { step, error };
+    let in_worktree = at(Step::Worktree);
+
+    let leftover = list(repo).map_err(in_worktree)?.iter().any(|w| real(&w.path) == real(path) && w.branch.as_deref() == Some(branch));
     if leftover {
-        discard_worktree(repo, &path, &branch)?;
+        discard_worktree(repo, path, branch).map_err(in_worktree)?;
     }
     if path.exists() {
-        return Err(CpdError::new(ErrorCode::WorktreeExists, format!("{} already exists.", path.display()))
-            .with("path", path.to_string_lossy().into_owned()));
+        let error = CpdError::new(ErrorCode::WorktreeExists, format!("{} already exists.", path.display()))
+            .with("path", path.to_string_lossy().into_owned());
+        return Err(in_worktree(error));
     }
-    if branch_exists(repo, &branch)? {
-        return Err(CpdError::new(ErrorCode::BranchExists, format!("Branch {branch} already exists."))
-            .with("branch", branch));
+    let mut clashes = vec![branch.to_owned()];
+    if branch != lead_branch(plan) {
+        clashes.push(lead_branch(plan));
+    }
+    for clash in clashes {
+        if branch_exists(repo, &clash).map_err(in_worktree)? {
+            let error = CpdError::new(ErrorCode::BranchExists, format!("Branch {clash} already exists.")).with("branch", clash);
+            return Err(in_worktree(error));
+        }
     }
 
-    let remote = check_remote(repo, &branch, base)?;
+    let remote = check_remote(repo, branch, base).map_err(at(Step::Remote))?;
     let start = match remote {
         Remote::None => base.to_owned(),
         Remote::Absent => format!("origin/{base}"),
         Remote::Reusable => format!("origin/{branch}"),
     };
 
-    ok(repo, &["worktree", "add", "-b", &branch, path_str(&path)?, &start])?;
-    let base_sha = match rev_parse(&path, "HEAD") {
+    let created = (|| {
+        ok(repo, &["worktree", "add", "-b", branch, path_str(path)?, &start])?;
+        rev_parse(path, "HEAD")
+    })();
+    let base_sha = match created {
         Ok(sha) => sha,
         Err(e) => {
-            let _ = discard_worktree(repo, &path, &branch);
-            return Err(e);
+            let _ = discard_worktree(repo, path, branch);
+            return Err(in_worktree(e));
         }
     };
-    run_setup(repo, &path, &branch, base, setup)?;
+    run_setup(repo, path, branch, base, setup).map_err(at(Step::PreStart))?;
+    Ok(Prepared { path: path.to_path_buf(), branch: branch.to_owned(), base_sha, remote })
+}
+
+/// Creates the Lead worktree of a Plan's Lead Branch `cpd/<plan>` and runs
+/// `pre-start` in it (contract §7.2 for a PR made by migration 3), then pushes
+/// a new branch (R35). A failed push does not fail it: see [`Created`].
+pub fn create_lead_worktree(repo: &Path, plan: &PlanId, base: &str, setup: &Setup) -> Result<Created, CpdError> {
+    let path = lead_worktree_path(repo, plan)?;
+    let prepared = prepare_lead_worktree(repo, plan, &path, &lead_branch(plan), base, setup).map_err(|f| f.error)?;
     // The remote is touched only after `pre-start` has passed.
-    let push_failed = match remote {
-        Remote::Absent => push_lead_branch(&path, &branch, true).err(),
-        Remote::None | Remote::Reusable => None,
-    };
-    Ok(Created { path, branch, base_sha, push_failed })
+    let push_failed = prepared.push().err();
+    Ok(Created { path: prepared.path, branch: prepared.branch, base_sha: prepared.base_sha, push_failed })
 }
 
 /// Creates an Attempt worktree from the Lead Branch HEAD and runs `pre-start`
