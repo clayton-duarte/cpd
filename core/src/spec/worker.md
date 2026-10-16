@@ -30,6 +30,7 @@ Your worktree is `{{ worktree }}`. Your current directory is that worktree.
       cpd ask {{ attempt }} "<your question>"
 
   Ask one real blocker at a time. Do not ask what this Spec or the code already answers.
+- Before submitting, stop every process you started (background commands, private tmux servers you started with `tmux -L <name>` — kill them with `tmux -L <name> kill-server` —, any `cpd watch`, servers, watchers) and remove the temporary homes and files you created outside the worktree. Never leave anything running when you submit.
 - Do not stop until you have submitted.
 
 ## Job
@@ -106,6 +107,8 @@ Answer:
 {% endfor %}
 {% endif %}
 ## Finish
+
+Before you submit, tear down what you started: stop every process you started and remove the temporary homes and files you created outside the worktree.
 
 When the Acceptance items hold and your work is committed, run exactly:
 

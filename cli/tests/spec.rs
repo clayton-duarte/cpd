@@ -62,6 +62,16 @@ fn the_first_attempt_s_spec() {
     assert_eq!(spec::render(&first_input(&plan, &attempt, &lists)).unwrap(), FIRST);
 }
 
+#[test]
+fn the_spec_tells_the_worker_to_tear_down_what_it_started() {
+    let (plan, attempt, lists) = (plan(), attempt("api-schema-a1"), lists());
+    let spec = spec::render(&first_input(&plan, &attempt, &lists)).unwrap();
+    assert!(spec.contains("- Before submitting, stop every process you started"));
+    assert!(spec.contains("`tmux -L <name> kill-server`"));
+    assert!(spec.contains("Never leave anything running when you submit."));
+    assert!(spec.contains("Before you submit, tear down what you started:"));
+}
+
 /// Attempt 3, after one that conflicted and one that crashed, with a question already answered,
 /// no quick check, things out of scope, a protected list of the repo's own (one entry repeating
 /// an always-protected path) and Spec text that looks like template syntax.
@@ -209,6 +219,7 @@ Your worktree is `/w/pay--api-schema-a1`. Your current directory is that worktre
       cpd ask api-schema-a1 "<your question>"
 
   Ask one real blocker at a time. Do not ask what this Spec or the code already answers.
+- Before submitting, stop every process you started (background commands, private tmux servers you started with `tmux -L <name>` — kill them with `tmux -L <name> kill-server` —, any `cpd watch`, servers, watchers) and remove the temporary homes and files you created outside the worktree. Never leave anything running when you submit.
 - Do not stop until you have submitted.
 
 ## Job
@@ -237,6 +248,8 @@ Every item must hold when you submit.
 Nothing is listed. Still do only what the Goal and Acceptance require.
 
 ## Finish
+
+Before you submit, tear down what you started: stop every process you started and remove the temporary homes and files you created outside the worktree.
 
 When the Acceptance items hold and your work is committed, run exactly:
 
@@ -280,6 +293,7 @@ Your worktree is `/w/pay--api-schema-a3`. Your current directory is that worktre
       cpd ask api-schema-a3 "<your question>"
 
   Ask one real blocker at a time. Do not ask what this Spec or the code already answers.
+- Before submitting, stop every process you started (background commands, private tmux servers you started with `tmux -L <name>` — kill them with `tmux -L <name> kill-server` —, any `cpd watch`, servers, watchers) and remove the temporary homes and files you created outside the worktree. Never leave anything running when you submit.
 - Do not stop until you have submitted.
 
 ## Job
@@ -342,6 +356,8 @@ Answer:
 serde.
 
 ## Finish
+
+Before you submit, tear down what you started: stop every process you started and remove the temporary homes and files you created outside the worktree.
 
 When the Acceptance items hold and your work is committed, run exactly:
 
