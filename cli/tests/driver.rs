@@ -14,9 +14,9 @@ use std::time::{Duration, Instant};
 
 use common::{CPD, Run, TestEnv};
 use cpd_core::error::CpdError;
-use cpd_core::git::{Setup, create_lead_worktree};
+use cpd_core::git::{Setup, create_lead_worktree, pr_lead_worktree_path, prepare_lead_worktree};
 use cpd_core::home::CpdHome;
-use cpd_core::ids::PlanId;
+use cpd_core::ids::{PlanId, PrKey};
 use cpd_core::plan::{jobs, locked_fingerprint};
 use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
@@ -117,11 +117,37 @@ impl Fx {
         self.store().read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
     }
 
-    /// Job `key` of Plan `pay`, queued with its Locked-Job fingerprint.
+    /// Job `key` of PR `repo` of Plan `pay`, queued with its Locked-Job fingerprint.
     fn add_job(&self, key: &str, needs: &[&str]) {
+        self.add_job_in("repo", key, needs);
+    }
+
+    /// PR `key` of Plan `pay` in a new repo `<key>`, started: Lead Branch `cpd/pay/<key>`
+    /// and its Lead worktree. Returns the repo and the Lead worktree.
+    fn add_pr(&self, key: &str) -> (PathBuf, PathBuf) {
+        let repo = self.env.git_repo(key).canonicalize().unwrap();
+        for (name, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
+            self.env.git(&repo, &["config", name, value]);
+        }
+        let plan = PlanId::parse(PLAN).unwrap();
+        let branch = format!("cpd/pay/{key}");
+        let path = pr_lead_worktree_path(&repo, &plan, &PrKey::parse(key).unwrap(), &branch).unwrap();
+        let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("lead.log") };
+        prepare_lead_worktree(&repo, &plan, &path, &branch, "main", &setup).map_err(|f| f.error).unwrap();
+        self.fixture(&format!(
+            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+               VALUES ('pay', '{key}', '{}', 'main', 'dispatch', '{branch}', '{}', cpd_txn(), 't', 't');",
+            repo.display(),
+            path.display()
+        ));
+        (repo, path)
+    }
+
+    /// [`Fx::add_job`] in PR `pr`.
+    fn add_job_in(&self, pr: &str, key: &str, needs: &[&str]) {
         let mut sql = format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-             VALUES ('pay', 'repo', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
+             VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         );
         for need in needs {
             sql += &format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');");
@@ -316,6 +342,63 @@ fn a_dispatched_attempt_runs_its_worker_merges_and_ends_merged() {
     assert!(!fx.worktree(ATTEMPT).exists());
     let branches = fx.env.git(&fx.repo, &["branch", "--list", "cpd/pay--api-a1"]);
     assert_eq!(branches, "");
+}
+
+// ---------- PRs across repos (R34) ----------
+
+#[test]
+fn an_attempt_of_a_pr_in_another_repo_is_cut_from_and_merged_into_that_prs_branch() {
+    let fx = fx();
+    fx.pi(WORKER);
+    let (web, web_lead) = fx.add_pr("web");
+    fx.add_job_in("web", "ui", &[]);
+    // The Lead Branch of the web PR defines its hooks: pre-start sees it as {{ base }}.
+    fs::create_dir_all(web_lead.join(".config")).unwrap();
+    fs::write(web_lead.join(".config/wt.toml"), "[pre-start]\nmark = \"echo {{ base }} > ../base-seen.txt\"\n").unwrap();
+    fx.env.git(&web_lead, &["add", "-A"]);
+    fx.env.git(&web_lead, &["commit", "-q", "-m", "wt.toml"]);
+    let (pay_old, web_old) =
+        (fx.lead_sha(), fx.env.git(&web, &["rev-parse", "refs/heads/cpd/pay/web"]));
+
+    let out = fx.dispatch("ui").ok();
+    let (attempt, driver) = fx.wait_end("ui-a1", &out["pid"]);
+
+    assert_eq!(driver["outcome"], "merged", "{driver}");
+    let web_new = fx.env.git(&web, &["rev-parse", "refs/heads/cpd/pay/web"]);
+    assert_ne!(web_new, web_old);
+    assert_eq!(attempt["merged_sha"], web_new);
+    assert_eq!(attempt["base_sha"], web_old);
+    // The other PR's repo and branch did not move.
+    assert_eq!(fx.lead_sha(), pay_old);
+    assert!(!fx.lead.join("api.txt").exists());
+    assert_eq!(fs::read_to_string(web_lead.join("api.txt")).unwrap(), "api\n");
+    assert_eq!(fs::read_to_string(fx.env.root().join("repos/base-seen.txt")).unwrap(), "cpd/pay/web\n");
+    assert_eq!(fx.job_status("ui"), "merged");
+    // A9 in the PR's repo.
+    assert!(!web.parent().unwrap().join("web.pay--ui-a1").exists());
+    assert_eq!(fx.env.git(&web, &["branch", "--list", "cpd/pay--ui-a1"]), "");
+}
+
+#[test]
+fn dispatch_refuses_a_job_of_a_pr_that_has_not_started() {
+    let fx = fx();
+    fx.fixture(&format!(
+        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+           VALUES ('pay', 'web', '{}', 'main', 'waiting', 'cpd/pay/web', cpd_txn(), 't');",
+        fx.repo.display()
+    ));
+    fx.add_job_in("web", "ui", &[]);
+    let before = fx.txns();
+
+    let run = fx.dispatch("ui");
+
+    refused(&run, "job_not_ready", 3);
+    assert_eq!(run.error()["details"]["pr"], "web");
+    assert_eq!(run.error()["details"]["pr_status"], "waiting");
+    assert_eq!(fx.txns(), before);
+    assert_eq!(fx.job_status("ui"), "queued");
+    // The first PR's Job is unaffected.
+    assert_eq!(fx.job_status(JOB), "queued");
 }
 
 // ---------- failures ----------

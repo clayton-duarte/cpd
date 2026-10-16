@@ -12,9 +12,9 @@ use std::time::Duration;
 
 use common::{Run, TestEnv};
 use cpd_core::error::CpdError;
-use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
+use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree, pr_lead_worktree_path, prepare_lead_worktree};
 use cpd_core::home::CpdHome;
-use cpd_core::ids::{AttemptId, PlanId};
+use cpd_core::ids::{AttemptId, PlanId, PrKey};
 use cpd_core::store::{Store, WriteTxn};
 use rusqlite::params;
 use serde_json::{Value, json};
@@ -72,6 +72,13 @@ fn fixture(files: &[(&str, &str)]) -> Fx {
     fx
 }
 
+/// A started PR of Plan `pay`: its key, repo and Lead worktree.
+struct Pr {
+    key: String,
+    repo: PathBuf,
+    lead: PathBuf,
+}
+
 fn plan() -> PlanId {
     PlanId::parse(PLAN).unwrap()
 }
@@ -102,16 +109,48 @@ impl Fx {
 
     /// [`Fx::attempt`] with the Attempt in `status`.
     fn attempt_as(&self, key: &str, status: &str) -> PathBuf {
+        self.attempt_in(&Pr { key: "repo".into(), repo: self.repo.clone(), lead: self.lead.clone() }, key, status)
+    }
+
+    /// PR `key` of Plan `pay` in a new repo `<key>`, started: Lead Branch `cpd/pay/<key>` and
+    /// its Lead worktree. `files` are committed on the Lead Branch.
+    fn add_pr(&self, key: &str, files: &[(&str, &str)]) -> Pr {
+        let repo = self.env.git_repo(key).canonicalize().unwrap();
+        for (name, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
+            self.env.git(&repo, &["config", name, value]);
+        }
+        let branch = format!("cpd/pay/{key}");
+        let lead = pr_lead_worktree_path(&repo, &plan(), &PrKey::parse(key).unwrap(), &branch).unwrap();
+        let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("setup.log") };
+        prepare_lead_worktree(&repo, &plan(), &lead, &branch, "main", &setup).map_err(|f| f.error).unwrap();
+        for (path, content) in files {
+            let full = lead.join(path);
+            fs::create_dir_all(full.parent().unwrap()).unwrap();
+            fs::write(full, content).unwrap();
+        }
+        self.env.git(&lead, &["add", "-A"]);
+        self.env.git(&lead, &["commit", "-q", "-m", "setup", "--allow-empty"]);
+        self.sql(&format!(
+            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+               VALUES ('pay', '{key}', '{}', 'main', 'dispatch', '{branch}', '{}', cpd_txn(), 't', 't');",
+            repo.display(),
+            lead.display()
+        ));
+        Pr { key: key.into(), repo, lead }
+    }
+
+    /// [`Fx::attempt_as`] for a Job of `pr`.
+    fn attempt_in(&self, pr: &Pr, key: &str, status: &str) -> PathBuf {
         let attempt = AttemptId::parse(&format!("{key}-a1")).unwrap();
         let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("attempt.log") };
-        let made = create_attempt_worktree(&self.repo, &self.lead, &plan(), &attempt, &setup).unwrap();
+        let made = create_attempt_worktree(&pr.repo, &pr.lead, &plan(), &attempt, &setup).unwrap();
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, fingerprint, created_txn, created_at)
-                     VALUES ('pay', 'repo', ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't')",
-                    params![key, "f".repeat(64), tx.id()],
+                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't')",
+                    params![key, "f".repeat(64), tx.id(), pr.key],
                 )?;
                 tx.execute(
                     "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
@@ -319,6 +358,48 @@ fn submit_refuses_a_diff_that_touches_protected_paths() {
     paths.sort();
     assert_eq!(paths, [".config/wt.toml", ".cpd/note", "scripts/ci/run.sh", "verify.sh"]);
     assert_eq!(fx.status(), "running");
+}
+
+#[test]
+fn submit_takes_the_protected_list_from_the_lead_branch_of_the_jobs_pr() {
+    let fx = fixture(&[]);
+    // Only the web PR's Lead Branch protects verify.sh.
+    let web = fx.add_pr("web", &[(".config/cpd.toml", "protected = [\"verify.sh\"]\n")]);
+    let ui = fx.attempt_in(&web, "ui", "running");
+    let on = |dir: &Path, path: &str| {
+        fs::write(dir.join(path), "exit 0\n").unwrap();
+        fx.env.git(dir, &["add", "-A"]);
+        fx.env.git(dir, &["commit", "-q", "-m", path]);
+    };
+    on(&ui, "verify.sh");
+    on(&fx.work, "verify.sh");
+
+    let error = refused(&fx.env.cpd_in(&ui, &["attempt", "submit", "ui-a1", "--plan", PLAN]), "gate_tampered", 3);
+    assert_eq!(error["details"]["paths"], json!(["verify.sh"]));
+    assert_eq!(fx.query::<String>("SELECT status FROM attempts WHERE id = 'ui-a1'"), "running");
+    // The first PR's Lead Branch has no such list: the same file is fine there.
+    fx.submit().ok();
+    assert_eq!(fx.status(), "merging");
+}
+
+#[test]
+fn submit_runs_the_quick_check_of_the_jobs_pr_with_its_lead_branch_as_target() {
+    let fx = fixture(&[]);
+    let web = fx.add_pr("web", &[(".config/wt.toml", "[pre-commit]\ncheck = \"echo {{ target }} > ../target-seen.txt; echo checking-web\"\n")]);
+    let ui = fx.attempt_in(&web, "ui", "running");
+    fs::write(ui.join("ui.txt"), "ui\n").unwrap();
+    fx.env.git(&ui, &["add", "-A"]);
+    fx.env.git(&ui, &["commit", "-q", "-m", "ui"]);
+
+    fx.env.cpd_in(&ui, &["attempt", "submit", "ui-a1", "--plan", PLAN]).ok();
+
+    assert_eq!(fs::read_to_string(fx.env.root().join("repos/target-seen.txt")).unwrap(), "cpd/pay/web\n");
+    let tail: String = fx.query("SELECT check_tail FROM attempts WHERE id = 'ui-a1'");
+    assert!(tail.contains("checking-web"), "{tail}");
+    // The first PR's Attempt has no hook of its own to run.
+    fx.commit("a.txt", "a\n");
+    fx.submit().ok();
+    assert_eq!(fx.query::<Option<String>>("SELECT check_tail FROM attempts WHERE id = 'api-a1'"), None);
 }
 
 #[test]
