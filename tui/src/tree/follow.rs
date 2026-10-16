@@ -32,6 +32,11 @@ pub const KINDS: &[&str] = &[
     "session-state",
     "session-moved",
     "session-renamed",
+    "context-renamed",
+    "plan-renamed",
+    "context-archived",
+    "plan-archived",
+    "session-archived",
 ];
 
 /// What the follower says.
@@ -99,6 +104,11 @@ mod tests {
             "session-state",
             "session-moved",
             "session-renamed",
+            "context-renamed",
+            "plan-renamed",
+            "context-archived",
+            "plan-archived",
+            "session-archived",
         ] {
             assert!(KINDS.contains(&kind), "{kind}");
         }
