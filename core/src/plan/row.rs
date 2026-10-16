@@ -54,10 +54,12 @@ pub(super) struct PlanRow {
     pub created_at: String,
     pub locked_at: Option<String>,
     pub done_at: Option<String>,
+    /// When it was archived (contract §2.2 "Archived"), else none.
+    pub archived_at: Option<String>,
 }
 
 const COLUMNS: &str = "id, context, title, jira, repo, base, lead_branch, lead_worktree, phase, lead_session,
-    pr_number, pr_url, pr_opened_at, pr_seen, all_merged_at, created_at, locked_at, done_at";
+    pr_number, pr_url, pr_opened_at, pr_seen, all_merged_at, created_at, locked_at, done_at, archived_at";
 
 /// The columns as SQLite returns them, before parsing.
 type Raw = (
@@ -75,6 +77,7 @@ type Raw = (
     String,
     Option<String>,
     String,
+    Option<String>,
     Option<String>,
     Option<String>,
 );
@@ -97,12 +100,13 @@ fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
         r.get(15)?,
         r.get(16)?,
         r.get(17)?,
+        r.get(18)?,
     ))
 }
 
 impl PlanRow {
     fn parse(raw: Raw) -> Result<PlanRow, CpdError> {
-        let (id, context, title, jira, repo, base, lead_branch, lead_worktree, phase, lead_session, pr, pr_seen, all_merged_at, created_at, locked_at, done_at) = raw;
+        let (id, context, title, jira, repo, base, lead_branch, lead_worktree, phase, lead_session, pr, pr_seen, all_merged_at, created_at, locked_at, done_at, archived_at) = raw;
         let id = PlanId::parse(&id).map_err(|_| bad_row(format!("Plan id {id:?}")))?;
         let field = |name: &str, value: &str| bad_row(format!("Plan {id} has {name} {value:?}"));
         let pr = match pr {
@@ -125,6 +129,7 @@ impl PlanRow {
             created_at,
             locked_at,
             done_at,
+            archived_at,
             id,
         })
     }
@@ -137,6 +142,7 @@ impl PlanRow {
             "lead_worktree": self.lead_worktree, "phase": self.phase.as_str(), "lead_session": self.lead_session,
             "pr": self.pr, "pr_seen": self.pr_seen, "all_merged_at": self.all_merged_at,
             "created_at": self.created_at, "locked_at": self.locked_at, "done_at": self.done_at,
+            "archived_at": self.archived_at,
         })
     }
 }

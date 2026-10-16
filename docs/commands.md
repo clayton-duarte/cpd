@@ -104,6 +104,7 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `context decide`, `note`, `ask`, `answer` | Lead | yes | §4.6 |
 | `context sync` | engine E6, User | yes | §4.6 |
 | `context rename` | User (TUI) | yes | §2.2 |
+| `context archive`, `unarchive` | User (TUI) | yes | §2.2 |
 | `plan new` | User (TUI), Lead | yes | §3.1, §6.7 |
 | `plan list`, `plan show` | Lead, TUI | no | |
 | `plan phase plan` | Lead | yes | §3.1 |
@@ -112,6 +113,7 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `plan decide` | pi adapter | yes | §2.2 Plan review |
 | `plan lock` | Lead | yes | §3.1, §7.2 |
 | `plan rename` | User (TUI) | yes | §2.2 |
+| `plan archive`, `unarchive` | User (TUI) | yes | §2.2 |
 | `job add`, `edit`, `cancel`, `retry` | Lead | yes | §3.2 |
 | `job dispatch` | Lead | yes | §3.4 |
 | `job list`, `job show` | Lead, TUI | no | |
@@ -306,7 +308,7 @@ Idempotent: yes.
 cpd context archive <id>
 ```
 
-Archives the Context with its Plans, all their Sessions and its grounded Lead (contract §2.2 "Archived"). The §2 index row is added by the Job that implements the command, in the same commit.
+Archives the Context with its Plans, all their Sessions and its grounded Lead (contract §2.2 "Archived").
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -420,7 +422,7 @@ Output: every field of the Plan (§2.2); `jobs` with each Job's fields (Spec inc
 
 ```json
 {"ok": true,
- "plan": {"id": "cpd2", "context": "building-cpd", "title": "cpd in Rust", "jira": null, "repo": "/home/clayton/projects/cpd", "base": "main", "lead_branch": "cpd/cpd2", "lead_worktree": "/home/clayton/projects/cpd.cpd2", "phase": "dispatch", "lead_session": "596d007f-…", "pr": null, "all_merged_at": null, "created_at": "…", "locked_at": "…", "done_at": null},
+ "plan": {"id": "cpd2", "context": "building-cpd", "title": "cpd in Rust", "jira": null, "repo": "/home/clayton/projects/cpd", "base": "main", "lead_branch": "cpd/cpd2", "lead_worktree": "/home/clayton/projects/cpd.cpd2", "phase": "dispatch", "lead_session": "596d007f-…", "pr": null, "all_merged_at": null, "created_at": "…", "locked_at": "…", "done_at": null, "archived_at": null},
  "jobs": [{"key": "contract-commands", "title": "cpd 2 contract: every command", "status": "running", "tier": "O3", "appended": false, "needs": ["contract-core"],
            "goal": "…", "context": "…", "touches": ["docs/commands.md"], "acceptance": ["…"], "out_of_scope": ["…"],
            "attempts": [{"id": "contract-commands-a1", "number": 1, "tier": "O3", "origin": "ladder", "status": "running", "outcome": null, "cause": null, "worker_session": "c1a2…", "started_at": "…", "ended_at": null}]}],
@@ -566,7 +568,7 @@ Idempotent: yes.
 cpd plan archive [--plan <id>]
 ```
 
-Archives the Plan with its Lead and its side forks (contract §2.2 "Archived"). The §2 index row is added by the Job that implements the command, in the same commit.
+Archives the Plan with its Lead and its side forks (contract §2.2 "Archived").
 
 | Precondition | Code | Exit |
 |---|---|---|

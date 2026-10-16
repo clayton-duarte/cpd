@@ -9,6 +9,7 @@
 //! [`Contexts::write`], and `watch` calls [`Contexts::import_all`] at start-up
 //! and [`Contexts::sync`] with [`Trigger::Engine`] every `context_sync_seconds`.
 
+mod archive;
 mod contexts;
 mod git;
 mod lock;
@@ -60,6 +61,10 @@ pub enum Command {
     Sync(SyncArgs),
     /// Change a Context's title (§3.7)
     Rename(RenameArgs),
+    /// Archive the Context with its Plans and their Sessions (§3.8)
+    Archive(ArchiveArgs),
+    /// Unarchive the Context with its Plans and their Sessions (§3.9)
+    Unarchive(UnarchiveArgs),
 }
 
 /// A Jira Epic key: `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage` (commands.md §3.1).
@@ -209,6 +214,18 @@ pub struct RenameArgs {
     title: Text,
 }
 
+#[derive(Args, Debug)]
+pub struct ArchiveArgs {
+    /// The Context
+    id: ContextId,
+}
+
+#[derive(Args, Debug)]
+pub struct UnarchiveArgs {
+    /// The Context
+    id: ContextId,
+}
+
 pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
         Command::New(args) => new(args),
@@ -225,6 +242,8 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         }
         Command::Sync(args) => sync(args),
         Command::Rename(args) => rename::rename(args),
+        Command::Archive(args) => archive::archive(args),
+        Command::Unarchive(args) => archive::unarchive(args),
     }
 }
 
@@ -291,15 +310,16 @@ fn list() -> Result<Output, CpdError> {
                 |r| r.get(0),
             )?;
             let mut stmt =
-                conn.prepare("SELECT id, title, phase, lead_session FROM plans WHERE context = ?1 ORDER BY created_at, id")?;
+                conn.prepare("SELECT id, title, phase, lead_session, archived_at FROM plans WHERE context = ?1 ORDER BY created_at, id")?;
             let plans = stmt
                 .query_map([&row.id], |r| {
                     Ok(json!({"id": r.get::<_, String>(0)?, "title": r.get::<_, String>(1)?,
-                              "phase": r.get::<_, String>(2)?, "lead_session": r.get::<_, String>(3)?}))
+                              "phase": r.get::<_, String>(2)?, "lead_session": r.get::<_, String>(3)?,
+                              "archived_at": r.get::<_, Option<String>>(4)?}))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             contexts.push(json!({
-                "id": row.id, "title": row.title, "jira": row.jira,
+                "id": row.id, "title": row.title, "jira": row.jira, "archived_at": row.archived_at,
                 "grounded": row.lead_session.is_some(), "lead_session": row.lead_session,
                 "grounded_seq": row.grounded_seq, "records": records, "open_questions": open_questions,
                 "sync_failing": row.sync_failing, "plans": plans,

@@ -3,8 +3,10 @@
 //! - [`jobs`]: a Plan's Jobs as read, the fingerprints of §2.3, the cycle check;
 //! - [`render`]: the plan markdown of `plan render` and `plan review`;
 //! - [`lead`]: Lead windows in the cockpit (`plan new`, `plan phase plan`);
+//! - [`archive`]: `plan archive` and `unarchive`, and the cascade `context archive` shares;
 //! - `new`, `show`, `phase`, `review`, `lock`: the commands.
 
+pub mod archive;
 pub mod jobs;
 mod lead;
 mod lock;
@@ -50,6 +52,10 @@ pub enum Command {
     Lock(LockArgs),
     /// Change the Plan's title (§4.9)
     Rename(RenameArgs),
+    /// Archive the Plan, its Lead and its side forks (§4.10)
+    Archive(ArchiveArgs),
+    /// Unarchive the Plan, its Lead and its side forks (§4.11)
+    Unarchive(UnarchiveArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -152,6 +158,18 @@ pub struct RenameArgs {
     title: Text,
 }
 
+#[derive(clap::Args, Debug)]
+pub struct ArchiveArgs {
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct UnarchiveArgs {
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
 pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
         Command::New(args) => new::new(args),
@@ -163,6 +181,8 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Decide(args) => review::decide(args),
         Command::Lock(args) => lock::lock(args),
         Command::Rename(args) => rename::rename(args),
+        Command::Archive(args) => archive::plan_archive(args),
+        Command::Unarchive(args) => archive::plan_unarchive(args),
     }
 }
 
