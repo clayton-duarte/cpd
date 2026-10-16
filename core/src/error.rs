@@ -172,6 +172,19 @@ error_codes! {
     StoreBusy = "store_busy" => Timeout,
     LockTimeout = "lock_timeout" => Timeout,
     AskTimeout = "ask_timeout" => Timeout,
+
+    // R34, Plans across repos (contract §1.2, §3.8). `branch_exists` is above.
+    PrStartFailed = "pr_start_failed" => Failure,
+    PrRequired = "pr_required" => Usage,
+    InvalidPrId = "invalid_pr_id" => Usage,
+    PrExists = "pr_exists" => Refused,
+    PrInUse = "pr_in_use" => Refused,
+    PrEmpty = "pr_empty" => Refused,
+    PrLocked = "pr_locked" => Refused,
+    PrNotReady = "pr_not_ready" => Refused,
+    PrEnded = "pr_ended" => Refused,
+    NeedsOtherPr = "needs_other_pr" => Refused,
+    PrNotFound = "pr_not_found" => NotFound,
 }
 
 impl fmt::Display for ErrorCode {
@@ -315,6 +328,17 @@ mod tests {
             (ErrorCode::StoreBusy, 5),
             (ErrorCode::LockTimeout, 5),
             (ErrorCode::AskTimeout, 5),
+            (ErrorCode::PrStartFailed, 1),
+            (ErrorCode::PrRequired, 2),
+            (ErrorCode::InvalidPrId, 2),
+            (ErrorCode::PrExists, 3),
+            (ErrorCode::PrInUse, 3),
+            (ErrorCode::PrEmpty, 3),
+            (ErrorCode::PrLocked, 3),
+            (ErrorCode::PrNotReady, 3),
+            (ErrorCode::PrEnded, 3),
+            (ErrorCode::NeedsOtherPr, 3),
+            (ErrorCode::PrNotFound, 4),
         ];
         for (code, exit) in cases {
             assert_eq!(code.exit().code(), exit, "{code}");
