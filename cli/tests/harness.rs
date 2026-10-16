@@ -100,3 +100,39 @@ fn tmux_server_is_private_and_killed_on_drop() {
     });
     assert!(gone, "the tmux server {pid} outlived its TestEnv");
 }
+
+#[test]
+fn concurrent_fake_calls_are_recorded_whole() {
+    use std::collections::BTreeSet;
+
+    const CALLS: usize = 16;
+    let env = TestEnv::new();
+    env.fake("tmux", "exit 0");
+    // Every call gets several long arguments of its own, so a torn record is
+    // visible as an argv that is none of these.
+    let argv = |i: usize| -> Vec<String> { (0..8).map(|j| format!("call{i}-arg{j}-{}", "x".repeat(400))).collect() };
+    for _round in 0..5 {
+        let children: Vec<_> = (0..CALLS).map(|i| env.command("tmux").args(argv(i)).spawn().unwrap()).collect();
+        for mut child in children {
+            assert!(child.wait().unwrap().success());
+        }
+    }
+    let got = env.calls("tmux");
+    assert_eq!(got.len(), CALLS * 5);
+    let expected: BTreeSet<_> = (0..CALLS).map(argv).collect();
+    for call in &got {
+        assert!(expected.contains(call), "a recorded call is none of the argvs given: {} args, first {:.20?}", call.len(), call.first());
+    }
+    assert_eq!(got.iter().collect::<BTreeSet<_>>().len(), CALLS, "every argv was recorded");
+}
+
+#[test]
+fn calls_come_back_in_the_order_they_started() {
+    let env = TestEnv::new();
+    env.fake("tmux", "exit 0");
+    for i in 0..30 {
+        env.command("tmux").arg(i.to_string()).status().unwrap();
+    }
+    let got: Vec<String> = env.calls("tmux").into_iter().map(|c| c[0].clone()).collect();
+    assert_eq!(got, (0..30).map(|i| i.to_string()).collect::<Vec<_>>());
+}
