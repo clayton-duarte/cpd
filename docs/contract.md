@@ -1404,7 +1404,7 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 
 | Pane | Title |
 |---|---|
-| has `@cpd_session` (a Lead), `@cpd_view = chat` (the placeholder), or `@cpd_view = statusbar` | none: pi and the placeholder say what they are |
+| has `@cpd_session` (a Lead), `@cpd_view = chat` (the placeholder), `@cpd_view = history` (an archived Session's history) or `@cpd_view = statusbar` | none: pi and the placeholder say what they are |
 | `@cpd_view = tree` | ` Context ` |
 | `@cpd_view = plan` | ` Plan ` |
 | `@cpd_view = widgets` | ` Dispatch ` |
@@ -1426,7 +1426,7 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 | `cpd-work` | `<plan>--<attempt>` (one per Attempt) | one pane, the Worker | `pi` |
 
 - `<label>` is the Session's Plan id, or the first 8 characters of its id when it has no Plan. tmux targets are always pane ids (`%<n>`) or window ids (`@<n>`), never names; names are labels for people.
-- **Pane options** identify panes, never state: `@cpd_session` (Session id) on every pane that runs a Session, and `@cpd_view` (`tree`, `plan`, `widgets`, `statusbar`, `worker`, `chat`) on the TUI's panes. A Worker view pane (`@cpd_view worker`) also carries `@cpd_job` (the Job's key, shown in its border title) and `@cpd_attempt` (the Attempt id it shows). The Worker pane opens beside the chat slot with `split-window -h -d -l 50%` (no focus); a click on another Job retargets it with `respawn-pane -k` and new `@cpd_job` and `@cpd_attempt`; a click on the Job it shows closes it. Its size in reset-layout stays the reference's (`-x 30%`, commands.md §13.2). The chat slot is the pane of `cpd:main` that has `@cpd_session` **or** `@cpd_view = chat`. The value `chat` marks the **placeholder**: the pane running `cpd tui view chat`, text `No Lead here: pick a Plan in the session tree`, which holds the slot while no Lead is there. At most one placeholder exists, and only ever in the slot. Pane options move with the pane on `swap-pane`, which is why the chat slot is found by that rule and not by a fixed option.
+- **Pane options** identify panes, never state: `@cpd_session` (Session id) on every pane that runs a Session, and `@cpd_view` (`tree`, `plan`, `widgets`, `statusbar`, `worker`, `chat`, `history`) on the TUI's panes. A Worker view pane (`@cpd_view worker`) also carries `@cpd_job` (the Job's key, shown in its border title) and `@cpd_attempt` (the Attempt id it shows). The Worker pane opens beside the chat slot with `split-window -h -d -l 50%` (no focus); a click on another Job retargets it with `respawn-pane -k` and new `@cpd_job` and `@cpd_attempt`; a click on the Job it shows closes it. Its size in reset-layout stays the reference's (`-x 30%`, commands.md §13.2). The chat slot is the pane of `cpd:main` that has `@cpd_session`, **or** `@cpd_view` `chat` or `history`. The value `chat` marks the **placeholder**: the pane running `cpd tui view chat`, text `No Lead here: pick a Plan in the session tree`, which holds the slot while no Lead is there. The value `history` marks a **history pane**: the pane running `cpd tui view history <id>`, an archived Session's file read-only, with `@cpd_history` set to that Session's id; it holds the slot like the placeholder and is never a Lead. At most one placeholder or history pane exists, and only ever in the slot. Pane options move with the pane on `swap-pane`, which is why the chat slot is found by that rule and not by a fixed option.
 - The User attaches with `tmux -L cpd attach -t cpd` (locally or `ssh -t <host> …`). Several clients may attach at once. The User never needs to look at `cpd-work`.
 
 ### 6.3 tmux commands cpd uses
@@ -1437,12 +1437,12 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 | the full-width StatusBar | `split-window -v -f -l 1` |
 | reset-layout (§13.2) | `resize-pane -t <pane> -x\|-y <size>` |
 | the StatusBar never takes focus (§6.1) | `bind -T root MouseDown1Pane if -F '#{==:#{@cpd_view},statusbar}' 'send-keys -M' 'select-pane -t = ; send-keys -M'` |
-| options | `set -g <option> <value>`; `set -p -t <pane> @cpd_session <id>` |
+| options | `set -g <option> <value>`; `set -p -t <pane> @cpd_session <id>`; `set -p -t <pane> @cpd_view history` and `@cpd_history <id>` |
 | a new parked window or Attempt window | `new-window -d -t =<session>: -n <name> -c <cwd> -e K=V … -P -F '#{window_id} #{pane_id}' -- <argv…>` (several arguments run without a shell, docs: tmux(1)) |
 | bring a Lead into the chat slot | `swap-pane -d -s <parked pane> -t <chat slot pane>` (verified: both processes keep their pids, the slot keeps its size), then `rename-window -t <window id> park-<label>` for the window that now holds the displaced Lead |
 | liveness | `list-panes -a -F '#{pane_id} #{window_id} #{session_name} #{pane_dead} #{pane_dead_status} #{pane_pid} #{@cpd_session}'` (plus `#{window_name}` and `#{@cpd_view}`); a pane whose `@cpd_view` this binary does not know is skipped and logged once, never an error (R31, finding 4) |
 | a dead pane of the cockpit's layout | `respawn-pane` |
-| retarget the Worker view to another Attempt; restart every live view (`cpd tui --respawn`, commands.md §13.1) | `respawn-pane -k -t <pane> -- <argv…>` |
+| retarget the Worker view to another Attempt; restart every live view (`cpd tui --respawn`, commands.md §13.1); put the history view in the chat slot's placeholder (`session history`, commands.md §10.12) | `respawn-pane -k -t <pane> -- <argv…>` |
 | the Worker view beside the chat | `split-window -h -d -t <chat slot pane> -l 50% -P -F '#{pane_id}' -- <argv…>` |
 | the conditional respawn of a dead view (§6.1) | `set-hook -g pane-died '<command>'` |
 | the legend and `logs` popups (commands.md §13.2) | `display-popup -E -T <title> -w <width> -h <height> -- <argv…>`, at most the client's size |
@@ -1458,7 +1458,7 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 | `cpd watch` | `cpd-work`, window `watch` | `plan lock`, `cpd tui` and `cpd watch --ensure`: each starts it when `locks/watch.lock` is free |
 | Attempt drivers | detached processes (`setsid`), not in tmux; logs in `run/<plan>/logs/` | E3 |
 
-`session open <id>` brings a Lead into the chat slot; `session park <id>` moves the Lead in the chat slot back into a parked window: it creates a new `park-<label>` window holding a placeholder, then `swap-pane`s the Lead and the placeholder. When a Lead takes the slot, `session open` kills the placeholder pane it displaced, with its window. Each appends `session-moved` for every Session whose place changed.
+`session open <id>` brings a Lead into the chat slot; `session park <id>` moves the Lead in the chat slot back into a parked window: it creates a new `park-<label>` window holding a placeholder, then `swap-pane`s the Lead and the placeholder. When a Lead takes the slot, `session open` kills the placeholder or history pane it displaced, with its window. `session history <id>` parks a Lead in the slot first, then respawns the placeholder with the history view (commands.md §10.12). A Lead that quits pi with status 0 is archived by its own `session run` (commands.md §10.8). Each appends `session-moved` for every Session whose place changed.
 
 `session close <id>` ends a Lead's pane: `kill-pane` (pi stops, and the Session's file stays, so `session open` resumes it later), then the Session is `stopped` with no pane, and `session-moved` `{pane: null, window: null, place: "none"}` is appended, the rows E2 writes for a pane that is gone (§3.6). It refuses the Session in the chat slot (commands.md §10.9).
 

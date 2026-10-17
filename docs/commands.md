@@ -1287,7 +1287,7 @@ Brings a Lead into the chat slot (§6.4).
 
 Effects:
 - In the chat slot already: nothing; `"already": true`.
-- **tmux:** when the Session has no live pane (`stopped`, or its pane is gone): first `kill-pane` on a dead pane of the Lead, if one is still there, so it never adds a second window; then `new-window -d -t =cpd: -n park-<label> … -- cpd session run <id>` first, which resumes it (`pi --session <file>`, §6.5), and `tmux_pane` is recorded. Then `swap-pane -d -s <its pane> -t <chat slot pane>`, and `rename-window -t <window> park-<displaced label>` for the window that now holds the displaced Lead. When the displaced pane is the placeholder, `kill-pane` on it instead, which closes the now-empty park window with it, so placeholders never pile up in park windows.
+- **tmux:** when the Session has no live pane (`stopped`, or its pane is gone): first `kill-pane` on a dead pane of the Lead, if one is still there, so it never adds a second window; then `new-window -d -t =cpd: -n park-<label> … -- cpd session run <id>` first, which resumes it (`pi --session <file>`, §6.5), and `tmux_pane` is recorded. Then `swap-pane -d -s <its pane> -t <chat slot pane>`, and `rename-window -t <window> park-<displaced label>` for the window that now holds the displaced Lead. When the displaced pane is the placeholder or a history pane (`@cpd_view` `chat` or `history`, §10.12), `kill-pane` on it instead, which closes the now-empty park window with it, so placeholders and history panes never pile up in park windows.
 - **Rows**, one transaction: **Events** `session-moved` `{place: "chat"}` for this Session and `{place: "parked"}` for the displaced one.
 
 ```json
@@ -1310,7 +1310,7 @@ Moves the Lead in the chat slot back into a parked window (§6.4). `<id>` defaul
 | the Session is a `lead` | `not_a_lead` | 3 |
 
 Effects:
-- Not in the chat slot: nothing; `"already": true`.
+- Not in the chat slot: nothing; `"already": true`. A history pane in the slot (§10.12) has no Lead to park: nothing; `"already": true`.
 - **tmux** (**amends contract.md §6.4**, which says only that park moves the Lead into a parked window): `new-window -d -t =cpd: -n park-<label> -P -F '#{window_id} #{pane_id}' -- cpd tui view chat` (a new park window holding a placeholder), `set -p -t <placeholder> @cpd_view chat`, then `swap-pane -d -s <placeholder> -t <chat slot pane>`. The Lead keeps its pid and is now alone in `park-<label>`; the placeholder fills the slot.
 - **Rows**, one transaction: **Event** `session-moved` `{place: "parked"}`.
 
@@ -1371,7 +1371,14 @@ Before it starts pi (steps 1–3) a Lead with a Plan gets its plannotator port (
 
 **Reload on install** (hs-d33, hs-d38, hs-d49; §6.7 "Reload on install"). The wrapper detects a new install by the identity of its executable (§3.4 of the contract). At the Lead's next idle (state `idle`, last turn finished, session file quiet `fork_quiet_seconds`) it sends pi `SIGTERM`, waits for it to exit and `exec`s the same path with the same argv; the new `session run` takes step 1. A parked Lead reloads at once. The Lead in the chat slot waits until it is idle **and** parked, or idle for 10 minutes, so unsent typing is not lost. A `blocked` Lead is never idle. If pi has not exited 10 s after `SIGTERM`, the wrapper sends `SIGKILL`, then `exec`s. If pi exits on its own after an install, the wrapper `exec`s before any store write.
 
-The first message is the file `plan new` or `session fork` wrote (§1.4); none for a grounded Lead. While pi runs, it watches for the session file (§6.5) and records `sessions.file` once it appears (a data write, no Event). When pi exits it runs `session state stopped` if the adapter did not, prints `pi exited. Press Enter to resume <name> here.` and resumes on Enter.
+The first message is the file `plan new` or `session fork` wrote (§1.4); none for a grounded Lead. While pi runs, it watches for the session file (§6.5) and records `sessions.file` once it appears (a data write, no Event). When pi exits it runs `session state stopped` if the adapter did not, prints `pi exited. Press Enter to resume <name> here.` and resumes on Enter, except after a quit by the User (below).
+
+**Auto-archive on the User's quit** (hs-d91, hs-d122). pi exits with status 0 on the User's `/quit` and Ctrl+D (pi 1.2.0, `interactive-mode.js`: `shutdown()` ends in `process.exit(0)`; verified by reading it). The wrapper tells that quit from its own: when pi exits with status 0 and the wrapper did not cause the exit (it sent no reload `SIGTERM`), the User quit. Then, in this order:
+1. If the Lead is in the chat slot, `session park` it first (§10.5), so the placeholder takes the slot.
+2. Archive: a side fork or a grounded Lead runs `session archive <id>` (§10.10); a Plan's own Lead runs `plan archive --plan <p>` (§4.10), the cascade, forks included. The archive **rows are written before** any pane is killed, and the wrapper's own pane is killed **last**.
+3. The wrapper's pane is closed with the archive (§10.10 step 2, §4.10).
+
+If the archive is refused (`archive_blocked`, for example a Job running), nothing is archived: the pane prints the refusal's message and then `pi exited. Press Enter to resume <name> here.`, as before. A non-zero exit, a signal, or an exit the wrapper caused (a reload) keeps the behaviour above: no archive. The tests use the harness's fake pi, exiting 0 or 1.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -1451,6 +1458,32 @@ Effects: **rows**, one transaction: `sessions.archived_at = NULL`; **Event** `se
 ```
 
 Idempotent: yes; not archived: `"already": true`, nothing written.
+
+### 10.12 `session history`
+
+```
+cpd session history <id>
+```
+
+Shows an archived Session's history, read-only, in the chat slot (hs-d91, hs-d122). It is the tree's click on an archived Session row (§13.2). The §2 index row is added by the Job that implements the command, in the same commit.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Session exists | `session_not_found` | 4 |
+| it is a `lead` | `not_a_lead` | 3 |
+| it has a session file (`sessions.file` set and readable) | `file_unreadable` | 3 |
+| the cockpit's `main` window and its chat slot exist; `details.next` = `cpd tui` | `no_cockpit` | 3 |
+
+Effects, in this order:
+1. **Park:** if a Lead holds the chat slot, park it as `session park` does (§10.5): a new `park-<label>` window with a placeholder, `swap-pane`, **Event** `session-moved` `{place: "parked"}` for that Lead.
+2. **tmux:** `respawn-pane -k -t <the slot's pane> -- cpd tui view history <id>` (§13.2), then `set -p -t <pane> @cpd_view history` and `set -p -t <pane> @cpd_history <id>`, and `@cpd_session` unset. A placeholder or an earlier history pane is the slot's pane, so it is respawned in place.
+3. **Rows:** none besides step 1's Event.
+
+```json
+{"ok": true, "session": "8d0e…", "pane": "%41", "parked": "596d007f-…"}
+```
+
+`parked` is null when no Lead held the slot. Idempotent: yes; rerunning for the same id respawns the slot's one pane, so exactly one history pane exists and no Lead is parked.
 
 ## 11. `events`
 
@@ -1559,6 +1592,7 @@ With `--respawn` the value also has `"respawned": ["%1", "%2", …]`, the panes 
 ```
 cpd tui view <tree|plan|widgets|statusbar|chat|legend|logs>
 cpd tui view worker <attempt> --plan <id>
+cpd tui view history <id>
 ```
 
 The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§1.2), make no writes of their own, and change state only by running `cpd` commands (`session open`, `plan new`, `session close`, `session park`, …) as subprocesses. What they read is §17.
@@ -1571,6 +1605,7 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
 | `plan` | the **Plan view**: one box per PR of the chat slot's Plan, each holding the flowchart of its Jobs, under a row of tabs | ←→↑↓ and h/j/k/l select, Enter opens a Job's Worker, Esc clears the selection; the wheel scrolls (3 rows, 4 columns); clicks as below; no `q` |
 | `widgets` | the **Dispatch column**: the machine, the cockpit's PRs, git and Jira (future) | `q` quits; nothing else |
 | `worker` | the read-only Worker view: the Attempt's Worker session file (vision decision 5), `you` and its text in cyan, `agent` in green, `→ tool` in yellow, `← last` dim | `q` or Esc quits; ↑/k, ↓/j, PageUp, PageDown and the wheel (3 rows) scroll; End or `G` follows the end again; no other keys |
+| `history` | an archived Session's history, read-only: the Session's pi file drawn with the Worker view's renderer (`tui/src/worker/render.rs`); its top line is `<name> (archived, read-only)`. Started by `session history` (§10.12) in the chat slot | `q` or Esc quits to the placeholder text; ↑/k, ↓/j, PageUp, PageDown and the wheel (3 rows) scroll; End or `G` follows the end again; no other keys |
 | `statusbar` | one row across the bottom | no keys, no focus; clicks on its buttons |
 | `chat` | the chat slot's placeholder (§10) | none |
 | `legend` | the key legend, in a popup | any key closes it |
@@ -1579,13 +1614,13 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
 **`tree`.**
 - **Rows.** A Context row (a dot of the busiest phase inside, its name bold, the Plan count when collapsed) and under it one row per Lead Session: the Plans' Lead Sessions in `created_at` order, **then, after them, every Session forked by `session fork`** (B1, contract §6.8: a fork is a sibling under the Context, never nested under a Plan or under the Session it came from, whatever its `plan` or `forked_from`; *decided*: they are ordered by `created_at` and show no counters, the counters being the Plan Lead's). Row: guide, dot, name (cut with `…` before the counters), and the five Job counters `queued⋅running⋅merging⋅failed⋅merged` right-aligned (cancelled Jobs are not counted; no counters without a Plan). `⏵` marks the Session in the chat slot, in column 0, and its name is bold. The dot is `●` when the Session **needs you**, else `○`; the rule is §17's.
 - **Cursor.** Keyboard only: a click never moves or shows it. It moves between Sessions only (Context rows are not selectable), is drawn inverted across the full row only while the pane has keyboard focus (`focus-events`, §6.1) and after an arrow key; Enter, `n` and `x` act on it only while it shows.
-- **Clicks.** A click on a Session opens it in the chat slot and focuses the chat (`session open`, then `select-pane`); a click on a Context row collapses or expands it. Clicks are ignored while a prompt is open.
+- **Clicks.** A click on a live Session opens it in the chat slot and focuses the chat (`session open`, then `select-pane`); a click on an **archived Session** row (a Plan row's Lead or a fork) runs `session history <id>` (§10.12), then focuses the chat; a click on a Context row collapses or expands it; a click on a `…` row toggles its archived rows (below). Clicks are ignored while a prompt is open.
 - **`n`** asks for a name in one inline row at the bottom (Enter starts, Esc cancels, an empty name is refused) and runs `plan new` (§4.1) in the selected Session's Context: the Plan forks the Context's grounded Lead (R15), the one deviation from cpd 1's `n`, which forked the selected session. On a Context row it says `pick the session to fork`.
 - **`x`** closes the selected Session's pane after the inline prompt `Close <label>? pi stops; the session file stays (y/N)`, preceded by `<label> is working.` when its state is `working`; only `y` closes. It runs `cpd session close <id>` (§10.9). The Session in the chat slot is refused with `switch to another session first`, also when it moved there while the prompt was open. On a Context row it does nothing. `<label>` is the Session's name.
 - **`?`** opens the legend popup. The view has no other key that opens the menu or acts on it; what a key used to do is still a command.
 - **Labels** (contract §2.2: ids are unique, immutable and need not be readable; the title is the visible label). A Context row shows the Context's **title**, a Plan row the Plan's **title** (not the Lead's name), a fork row (a side Session) the Session's **name**. (This supersedes the Context id and Lead name drawn so far.)
-- **Archived rows.** Archived Contexts collapse into one `…` row at the end of the Context list; the archived Plans and Sessions of a Context collapse into one `…` row at the end of that Context's subtree. A click on a `…` row expands them: they are drawn muted (grey, the palette's Nothing colour) with dotted, muted tree lines; a click on that dotted line collapses them again. Expanded or not is view state only: no command, no write. Every row of an archived object carries `archived_at` from the read model (§17).
-- **Right-click menu** (**every item is a `cpd` command**: the tree only runs commands). A right click opens a menu, drawn by the view (ratatui) over the tree at the click and clamped inside the pane. ↑↓ and Enter pick an item, Esc closes it; a click picks an item; a click outside closes it. There is **no key** that opens the menu: `n`, `x` and `?` stay as above. Text is typed in the inline prompt row of the `n` key (`tui/src/tree/prompt.rs`); **Rename…** starts with the current text; **Archive** and **Close** ask `y/N` first, as `x` does. The items by row:
+- **Archived rows** (hs-n38, hs-n39). Archived Contexts collapse into one `…` row at the end of the Context list; the archived Plans and Sessions of a Context collapse into one `…` row at the end of that Context's subtree. A click on the `…` row expands them and a click on it again collapses them (hs-d53); a click on a guide does nothing. Expanded, an archived Plan or fork is drawn **at the depth it would have if live**, under its own Context (or Plan), not one level deeper under the `…` row. It uses the normal tree guide characters, and the row, guides included, is coloured the palette's darker grey (`Meaning::Nothing`). There are no dotted lines and **no empty row** between the live rows and the archived ones. Expanded or not is view state only: no command, no write. Every row of an archived object carries `archived_at` from the read model (§17).
+- **Right-click menu** (**every item is a `cpd` command**: the tree only runs commands). A right click opens a menu, drawn by the view (ratatui) over the tree at the click and clamped inside the pane. ↑↓ and Enter pick an item, Esc closes it; a click picks an item; a click outside closes it. There is **no key** that opens the menu: `n`, `x` and `?` stay as above. Text is typed in the inline prompt row of the `n` key (`tui/src/tree/prompt.rs`); **Rename…** starts with the current text; **Close** asks `y/N` first, as `x` does; **Archive** runs at once, with no `y/N` (hs-d90). The items by row:
 
   | Row | Items | Command each runs |
   |---|---|---|
@@ -1593,7 +1628,9 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
   | Plan | New session…, Rename…, Archive | `session fork <the Plan's Lead>` (§10.3), `plan rename` (§4.9), `plan archive` (§4.10) |
   | Fork (side Session) | Open, Rename…, Fork…, Close, Archive | `session open` (§10.4), `session rename` (§10.7, `--session <id>`), `session fork` (§10.3), `session close` (§10.9), `session archive` (§10.10) |
   | empty tree area | New Context… | `context new` (§3.1) |
-  | any archived row, and the children of a `…` row | Unarchive only | `context unarchive` (§3.9), `plan unarchive` (§4.11), `session unarchive` (§10.11) |
+  | any archived row | Rename…, Unarchive | `context rename` (§3.7), `plan rename` (§4.9) or `session rename` (§10.7), and `context unarchive` (§3.9), `plan unarchive` (§4.11) or `session unarchive` (§10.11); the rename commands accept archived objects (F4) |
+
+  **Archive of the chat slot's Lead** (F3, hs-d90). Archive on a Session row (a Plan row's Lead, or a fork) whose Lead holds the chat slot cannot go straight to `session archive`, which refuses with `in_chat_slot` (§10.10, unchanged). The tree first frees the slot, then archives: it opens the next live Session in tree order (`session open`, then focuses the chat); if none follows, the previous one; if there is none at all, it runs `session park`, so the placeholder holds the slot. Then it runs the archive command. Only the tree does this two-step; the CLI keeps its refusal.
 
   A refusal (`archive_blocked`, `in_chat_slot`, `archived`, …) is shown in the prompt row as the command's own message.
 - **New Plan… and New Context…** ask only a title; the tree derives the id. The id is a lowercase ASCII slug of the title: each run of other characters becomes `-`, leading non-letters are dropped, and it is cut to fit the id pattern (Plan `^[a-z][a-z0-9-]{1,23}$`, Context: contract §2.1); `-2`, `-3`, … are appended while the id is taken in the tree's snapshot. New Plan… runs `plan new <id> --context=<c> --title=<title>`: no repo, a Plan has none (R34, A12; its PRs are added with `pr add`). New Context… runs `context new <id> --title=<title>`.
@@ -1865,6 +1902,7 @@ Outline §8 and D4: the views take one **snapshot** with a read command, then **
 | `statusbar` (bottom row) | the slots and config `concurrency`: the Attempts not ended, and `concurrency` | any (re-read when the store's highest Event id moved, coalesced to 500 ms, at least every 2 s); no subprocess, no `gh` | `workers N/M` |
 | `logs` (popup of the StatusBar's ` ≡ logs ` button) | the latest 500 Events (the `events list` default), oldest first | every Event: it follows live while the view shows the bottom (R36) | the Event log |
 | `worker` (beside the chat) | `cpd attempt show <attempt>` for the Worker's session file | `session-state` for its Session; `attempt-status` for its Attempt | the session file itself, read-only (vision decision 5), and the state |
+| `history` (chat slot, an archived Session) | the Session's file, named by `cpd session history <id>` (its `sessions.file`) | none: the view is static and re-reads nothing | the Session's pi file itself, read-only, once |
 | `chat` (placeholder) | none | none | the static text `No Lead here: pick a Plan in the session tree` |
 
 **Rates.**
@@ -1907,7 +1945,7 @@ Applied to contract.md by Job contract-amend.
 
 This file specifies the following, which contract.md does not state or states otherwise. contract.md is not edited by this Job; the Lead appends a follow-up Job that applies this list. Each item names the contract.md section it changes.
 
-Rows 22–27 were added by Job `docs` of Plan `tree-menu` (renames, archive and the tree's right-click menu); they are applied to contract.md itself. Rows 12–21 were added by Job `parity-contract` (cockpit parity, User, 2026-10-15, and R36); the checklist behind them is [cockpit-parity.md](cockpit-parity.md). Rows 12–14 and 16 are also applied to contract.md itself; rows 15 and 17–21 state what contract.md leaves to this file.
+Rows 22–27 were added by Job `docs` of Plan `tree-menu` (renames, archive and the tree's right-click menu); they are applied to contract.md itself. Rows 28–31 were added by Job `docs-followups` of Plan `tree-menu` (PR `followups`); rows 28 and 29 are applied to contract.md itself. Rows 12–21 were added by Job `parity-contract` (cockpit parity, User, 2026-10-15, and R36); the checklist behind them is [cockpit-parity.md](cockpit-parity.md). Rows 12–14 and 16 are also applied to contract.md itself; rows 15 and 17–21 state what contract.md leaves to this file.
 
 | # | contract.md section | Amendment | Where here |
 |---|---|---|---|
@@ -1938,6 +1976,10 @@ Rows 22–27 were added by Job `docs` of Plan `tree-menu` (renames, archive and 
 | 25 | §5.3, delivery table | the adapter ignores the five kinds: no message, no turn | §15.3 |
 | 26 | §2.2 "Archived", §1.3 table of codes | refusals `archive_blocked` and `archived` (exit 3); `in_chat_slot` for archive | §1.3, §4.1, §10.3, §10.4 |
 | 27 | §6.2 (the views) | the tree: labels are titles and names, `…` rows for archived objects, the right-click menu | §13.2, §17 |
+| 28 | §6.2, chat slot rule and `@cpd_view` values | the chat slot is the pane of `cpd:main` that has `@cpd_session`, or `@cpd_view` `chat` or `history`; new value `history`, a pane running `cpd tui view history <id>` with `@cpd_history <id>`; at most one placeholder or history pane, only in the slot; the pane title table lists `history` | §10.4, §10.5, §10.12, §13.2, §17 |
+| 29 | §6.3, §6.4 | tmux commands: `respawn-pane -k` also puts the history view in the slot; `set -p` also sets `@cpd_view history` and `@cpd_history`; `session open` kills a history pane like the placeholder; `session history` parks a Lead in the slot first; `session run` archives on the User's quit | §10.4, §10.8, §10.12 |
+| 30 | §2.2 "Archived", §6.2 (the views) | the tree: archived rows drawn at their live depth, normal guides, `Meaning::Nothing` colour, no blank row; a click on `…` toggles, a click on a guide does nothing; Archive without `y/N`; Archive of the chat slot's Lead opens another Session or parks first; archived rows offer Rename… and Unarchive; a click on an archived Session runs `session history` | §13.2 |
+| 31 | §2.2 "Archived", §6.7 | auto-archive when pi exits with status 0 and the wrapper did not cause it: park if in the chat slot, then `session archive` or (a Plan's own Lead) `plan archive`; a refusal archives nothing and keeps the resume prompt | §10.8 |
 
 ## 20. Sections changed by R19 and R20
 
