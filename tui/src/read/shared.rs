@@ -6,7 +6,6 @@ use std::collections::BTreeMap;
 
 use clap::ValueEnum;
 use rusqlite::{Connection, ToSql};
-use serde::Deserialize;
 
 use cpd_core::config::Tier;
 use cpd_core::error::{CpdError, ErrorCode};
@@ -132,18 +131,6 @@ impl JobCounts {
     }
 }
 
-/// `prs.pr_seen` (contract §2.2): what `pr poll` has already reported.
-#[derive(Deserialize)]
-struct Seen {
-    checks: BTreeMap<String, String>,
-    #[serde(rename = "reviewIds")]
-    review_ids: Vec<String>,
-    #[serde(rename = "commentIds")]
-    comment_ids: Vec<String>,
-    #[serde(default)]
-    closed: Option<bool>,
-}
-
 /// The state of a PR as cpd knows it (it never asks GitHub: the engine polls).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrState {
@@ -151,6 +138,19 @@ pub enum PrState {
     /// Closed without a merge, as `pr poll` reported.
     Closed,
     Merged,
+}
+
+impl PrState {
+    /// The state of a PR that is `merged` or not, whose pull request row says `row_state`
+    /// (`pull_requests.state`; none before `pr open`): merged once the PR is, closed while the pull
+    /// request is closed without a merge (A11).
+    pub(super) fn of(merged: bool, row_state: Option<&str>) -> PrState {
+        match row_state {
+            _ if merged => PrState::Merged,
+            Some("closed") => PrState::Closed,
+            _ => PrState::Open,
+        }
+    }
 }
 
 /// The summary of a PR's checks, cpd-ui's `pr.rs`: any failure wins over pending, pending over passed.
@@ -162,35 +162,27 @@ pub enum Checks {
     Failed,
 }
 
-/// A Plan's Pull Request: the columns of `plans`, with what `pr poll` last saw.
+impl Checks {
+    pub(super) fn parse(what: &str, value: &str) -> Result<Checks, CpdError> {
+        match value {
+            "none" => Ok(Checks::None),
+            "passed" => Ok(Checks::Passed),
+            "pending" => Ok(Checks::Pending),
+            "failed" => Ok(Checks::Failed),
+            _ => Err(bad_row(format!("{what} has checks {value:?}"))),
+        }
+    }
+}
+
+/// A Plan's Pull Request: the columns of `prs`, with what `pr poll` last stored in its `pull_requests` row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pr {
     pub number: i64,
     pub url: String,
     pub opened_at: String,
-    pub polled_at: Option<String>,
     pub state: PrState,
-    /// Check name → conclusion, as of the last poll.
-    pub checks: BTreeMap<String, String>,
-    pub reviews: usize,
-    pub comments: usize,
-}
-
-impl Pr {
-    pub fn checks_summary(&self) -> Checks {
-        const FAILING: [&str; 6] = ["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"];
-        const PENDING: [&str; 5] = ["", "PENDING", "IN_PROGRESS", "QUEUED", "EXPECTED"];
-        let conclusions: Vec<String> = self.checks.values().map(|c| c.to_ascii_uppercase()).collect();
-        if conclusions.is_empty() {
-            Checks::None
-        } else if conclusions.iter().any(|c| FAILING.contains(&c.as_str())) {
-            Checks::Failed
-        } else if conclusions.iter().any(|c| PENDING.contains(&c.as_str())) {
-            Checks::Pending
-        } else {
-            Checks::Passed
-        }
-    }
+    /// `pull_requests.checks`, as of the last poll.
+    pub checks: Checks,
 }
 
 /// A Session as the views show it.
@@ -375,9 +367,10 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
 
     let mut stmt = conn.prepare(
         "SELECT p.id, p.context, p.title, p.jira, r.repo, r.base, r.lead_branch, p.phase, p.lead_session, r.pr_number,
-                r.pr_url, r.pr_opened_at, r.pr_seen, r.pr_polled_at, p.created_at, p.locked_at, r.all_merged_at, p.done_at, p.archived_at
+                r.pr_url, r.pr_opened_at, q.state, q.checks, p.created_at, p.locked_at, r.all_merged_at, p.done_at, p.archived_at
            FROM plans p JOIN prs r ON r.plan = p.id
                 AND r.key = (SELECT key FROM prs WHERE plan = p.id ORDER BY created_txn, key LIMIT 1)
+                LEFT JOIN pull_requests q ON q.id = r.pull_request
           WHERE ?1 IS NULL OR p.id = ?1 ORDER BY p.created_at, p.id",
     )?;
     let mut rows = stmt.query([&only])?;
@@ -386,26 +379,19 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
         let pid: String = r.get(0)?;
         let plan = id("Plan id", &pid, PlanId::parse)?;
         let field = |name: &str, value: &str| bad_row(format!("Plan {plan} has {name} {value:?}"));
-        let (context, phase, lead, pr_seen): (String, String, String, String) =
-            (r.get(1)?, r.get(7)?, r.get(8)?, r.get(12)?);
+        let (context, phase, lead): (String, String, String) = (r.get(1)?, r.get(7)?, r.get(8)?);
         let phase: Phase = value_enum(&format!("Plan {plan} has phase"), &phase)?;
+        let (row_state, row_checks): (Option<String>, Option<String>) = (r.get(12)?, r.get(13)?);
         let pr = match (r.get::<_, Option<i64>>(9)?, r.get::<_, Option<String>>(10)?, r.get::<_, Option<String>>(11)?) {
             (Some(number), Some(url), Some(opened_at)) => {
-                let seen: Seen = serde_json::from_str(&pr_seen).map_err(|_| field("pr_seen", &pr_seen))?;
-                let state = match (phase, seen.closed) {
-                    (Phase::Done, _) => PrState::Merged,
-                    (_, Some(true)) => PrState::Closed,
-                    _ => PrState::Open,
-                };
+                // A PR with a number has its pull request (`prs` CHECK).
+                let checks = row_checks.ok_or_else(|| bad_row(format!("PR of Plan {plan} has no pull request row")))?;
                 Some(Pr {
                     number,
                     url,
                     opened_at,
-                    polled_at: r.get(13)?,
-                    state,
-                    checks: seen.checks,
-                    reviews: seen.review_ids.len(),
-                    comments: seen.comment_ids.len(),
+                    state: PrState::of(phase == Phase::Done, row_state.as_deref()),
+                    checks: Checks::parse(&format!("PR of Plan {plan}"), &checks)?,
                 })
             }
             _ => None,
