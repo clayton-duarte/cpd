@@ -54,22 +54,10 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr:
     let worktree = if late { "'/wt'" } else { "NULL" };
     let locked = if late { "'2026-01-02T00:00:00.000Z'" } else { "NULL" };
     let done = if phase == "done" { "'2026-01-09T00:00:00.000Z'" } else { "NULL" };
-    let (row, number, url, opened, pull_request) = if pr {
-        let state = if phase == "done" { "merged" } else { "open" };
-        let merged = if phase == "done" { "'2026-01-09T00:00:00.000Z'" } else { "NULL" };
-        (
-            format!(
-                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-                 VALUES ('acme/{id}', 7, 'https://github.com/acme/{id}/pull/7', 'PR of {id}', 0, '{state}', 'none', 'none',
-                         '2026-01-05T00:00:00.000Z', {merged}, '2026-01-06T00:00:00.000Z');"
-            ),
-            "7",
-            format!("'https://github.com/acme/{id}/pull/7'"),
-            "'2026-01-05T00:00:00.000Z'",
-            format!("(SELECT id FROM pull_requests WHERE repo = 'acme/{id}')"),
-        )
+    let (number, url, opened, polled) = if pr {
+        ("7", "'https://example.test/pull/7'", "'2026-01-05T00:00:00.000Z'", "'2026-01-06T00:00:00.000Z'")
     } else {
-        (String::new(), "NULL", "NULL".to_owned(), "NULL", "NULL".to_owned())
+        ("NULL", "NULL", "NULL", "NULL")
     };
     let status = match phase {
         "grounding" | "plan" => "waiting",
@@ -80,11 +68,10 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr:
     format!(
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
          VALUES ('{id}', '{context}', 'Plan {id}', '{phase}', '{lead}', '{created}', {locked}, {done});
-         {row}
          INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
-                          pull_request, created_txn, created_at, started_at, merged_at)
+                          pr_polled_at, created_txn, created_at, started_at, merged_at)
          VALUES ('{id}', 'repo', '/repo/{id}', 'main', '{status}', 'cpd/{id}', {worktree}, {number}, {url}, {opened},
-                 {pull_request}, cpd_txn(), '{created}', {locked}, {done});"
+                 {polled}, cpd_txn(), '{created}', {locked}, {done});"
     )
 }
 

@@ -624,20 +624,14 @@ fn a_sync_failing_context_is_a_warning() {
 
 // -------------------------------------------------------------------- watch
 
-/// The pull request row of an `open` PR (`prs.pull_request`, migration 5).
-const PULL_REQUEST: &str = "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
-     VALUES ('acme/r', 1, 'https://github.com/acme/r/pull/1', 'Pay', 0, 'open', 'none', 'none', 't', 't');";
-
 fn plan_in_phase(env: &TestEnv, phase: &str) {
     let (worktree, locked, status, pr) = match phase {
         "grounding" | "plan" => ("NULL", "NULL", "waiting", ""),
         "dispatch" => ("'/w'", "'t'", "dispatch", ""),
-        "pr" => ("'/w'", "'t'", "open", ", pr_number, pr_url, pr_opened_at, pull_request"),
+        "pr" => ("'/w'", "'t'", "open", ", pr_number, pr_url, pr_opened_at"),
         other => panic!("{other}"),
     };
-    let pr_values = if phase == "pr" { ", 1, 'https://github.com/acme/r/pull/1', 't', (SELECT id FROM pull_requests WHERE number = 1)" } else { "" };
-    // `pr open` writes the pull request's row first (D6): an `open` PR points to one.
-    let pull = if phase == "pr" { PULL_REQUEST } else { "" };
+    let pr_values = if phase == "pr" { ", 1, 'u', 't'" } else { "" };
     open_store(env)
         .write("test", |tx| {
             tx.execute_batch(&format!(
@@ -646,7 +640,6 @@ fn plan_in_phase(env: &TestEnv, phase: &str) {
                    VALUES ('lead1', 'lead', 'ctx', 'Lead', '/', 'O3', 'idle', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                    VALUES ('pay', 'ctx', 'Pay', '{phase}', 'lead1', 't', {locked});
-                 {pull}
                  INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at{pr})
                    VALUES ('pay', 'r', '/r', 'main', '{status}', 'cpd/pay', {worktree}, {locked}, cpd_txn(), 't'{pr_values});"
             ))?;

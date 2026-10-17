@@ -3,10 +3,9 @@
 //! - `add`, `edit`, `cancel`: the Plan's PRs before they start (`pr add`, `pr edit`, `pr cancel`);
 //! - `start`: starting a PR (`pr start`), the routine `plan lock` and engine E7 call too;
 //! - `open`: the Gate, the push and the PR (`pr open`);
-//! - `poll`, with `feedback` and `pulls` (the table `pull_requests`, written only there): one poll of every open pull request of the User (`pr poll`);
-//! - `view`: a PR's checks, reviews and comments, read-only (`pr view`);
+//! - `poll`, with `feedback`: the PR's checks, reviews, comments and merge (`pr poll`);
 //! - `rebase`: the Lead Branch onto the base, the Gate and the push (`pr rebase`);
-//! - `gh`: the one gateway to `gh`; `status`: the PR status enums; `row`: the Plan as these commands read it.
+//! - `gh`: the one gateway to `gh`; `row`: the Plan as these commands read it.
 //!
 //! `pr open` and `pr rebase` run under the per-repo lock, after R (§7.4); each
 //! works on one PR of the Plan, `poll` on every open one (§7.6).
@@ -18,12 +17,9 @@ mod feedback;
 mod gh;
 mod open;
 mod poll;
-pub mod pulls;
 mod rebase;
 mod row;
 pub mod start;
-mod status;
-mod view;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -53,24 +49,16 @@ pub enum Command {
     Start(StartArgs),
     /// Push the Lead Branch and open the PR (§9.1)
     Open(Args),
-    /// Poll every open pull request of the User (§9.2)
-    Poll(PollArgs),
+    /// Poll the PR for feedback and the merge (§9.2)
+    Poll(Args),
     /// Rebase the Lead Branch onto the base and push (§9.3)
     Rebase(Args),
-    /// Show the PR's checks, reviews and comments (§9.8)
-    View(Args),
 }
 
 #[derive(clap::Args, Debug)]
 pub struct Args {
     #[command(flatten)]
     pr: PrArg,
-    #[command(flatten)]
-    plan: PlanArg,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct PollArgs {
     #[command(flatten)]
     plan: PlanArg,
 }
@@ -141,7 +129,6 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Open(args) => open::open(args),
         Command::Poll(args) => poll::poll(args),
         Command::Rebase(args) => rebase::rebase(args),
-        Command::View(args) => view::view(args),
     }
 }
 

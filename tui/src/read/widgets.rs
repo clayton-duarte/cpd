@@ -1,7 +1,7 @@
 //! The `widgets` view's snapshot (commands.md §17), the Dispatch column: the
-//! machine-wide numbers (slots, the engine), every open pull request of the
-//! User, every open Escalation and the latest Events (`plan list`, with the
-//! rows the column draws from).
+//! machine-wide numbers (slots, the engine), every Plan's pull requests and feedback,
+//! every open Escalation and the latest Events (`plan list`, with the rows the
+//! column draws from).
 
 use std::collections::BTreeMap;
 
@@ -24,10 +24,8 @@ use super::shared::{AttemptStatus, Checks, Place, PlanHead, PrState, bad_row, id
 pub struct Widgets {
     pub slots: Slots,
     pub engine: Engine,
-    /// Every Plan, oldest first.
+    /// Every Plan, oldest first; the view picks the ones with a PR or in Dispatch.
     pub plans: Vec<PlanCard>,
-    /// Every `open` row of `pull_requests`, oldest `created_at` first (then `repo`, `number`): what the PRs section lists.
-    pub prs: Vec<OpenPr>,
     /// Every `open` Escalation of the machine, oldest first.
     pub escalations: Vec<MachineEscalation>,
     /// The latest Events, oldest first.
@@ -72,40 +70,28 @@ pub enum Engine {
     Crashed { pid: u32, since: String },
 }
 
-/// An open pull request of the User, as the PRs section draws it (commands.md §13.2).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OpenPr {
-    /// GitHub's `owner/name`.
-    pub repo: String,
-    pub number: i64,
-    pub title: String,
-    pub draft: bool,
-    pub checks: Checks,
-    pub review_decision: ReviewDecision,
-    /// A PR of the Plan whose Lead is in the chat slot points to this pull request.
-    pub active: bool,
-}
-
-/// A Plan: its head (counts), its label and the rows of its PRs that have a pull request. The PRs section no longer draws it
-/// (it draws [`OpenPr`]s); `cli/tests/pr.rs` still reads it.
+/// A Plan, for the Dispatch column: its head (counts), its label, the rows of its PRs that have a pull request and its
+/// latest PR feedback.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlanCard {
     pub head: PlanHead,
     /// The Lead Session's name: the Plan's label, as its tab's (commands.md §13.2).
     pub label: String,
-    /// Where the Lead Session's pane is (its latest `session-moved`; `None` before any).
+    /// Where the Lead Session's pane is (its latest `session-moved`; `None` before any): the Dispatch column lists
+    /// the Plans whose Lead is in the cockpit, in the chat slot or parked (commands.md §17).
     pub lead_place: Place,
     /// Its PRs that have a pull request, in key order (R34), as the column draws them; empty when none has one.
     pub prs: Vec<PrRow>,
+    pub feedback: Option<PrFeedback>,
 }
 
-/// A PR's pull request: number, state, and what `pr poll` last stored in its row (contract §4.4, §7.6).
+/// A PR's pull request: number, state, and what `pr poll` last stored (contract §4.4, §7.6).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrRow {
     pub key: PrKey,
     pub number: i64,
     pub state: PrState,
-    /// Always set: a PR with a pull request has its row (`prs` CHECK). Job `dispatch-prs2` drops the `Option`.
+    /// `None` until the PR's first poll: the three columns are stored together.
     pub polled: Option<PolledPr>,
 }
 
@@ -117,12 +103,24 @@ pub struct PolledPr {
     pub checks: Checks,
 }
 
-/// The PR's review decision, from `pull_requests.review_decision`.
+/// The PR's review decision, from `prs.pr_review_decision`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReviewDecision {
     None,
     Approved,
     ChangesRequested,
+}
+
+/// The Plan's latest `pr-feedback` Event (§5.2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrFeedback {
+    pub event: i64,
+    pub at: String,
+    /// `OPEN` or `CLOSED`, as the Event carries it.
+    pub state: String,
+    pub failing_checks: Vec<String>,
+    pub reviews: usize,
+    pub comments: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -141,7 +139,6 @@ pub fn widgets(store: &mut Store, concurrency: u32, recent: u32) -> Result<Widge
             slots: slots(conn, concurrency)?,
             engine: engine(conn)?,
             plans: plan_cards(conn)?,
-            prs: open_prs(conn)?,
             escalations: escalations(conn)?,
             events: recent_events(conn, recent)?,
             events_cursor: highest_id(conn)?,
@@ -160,45 +157,11 @@ fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
                 .cloned()
                 .ok_or_else(|| bad_row(format!("Plan {} has no Lead Session {}", head.id, head.lead_session)))?;
             let prs = pulls.remove(head.id.as_str()).unwrap_or_default();
-            Ok(PlanCard { label, lead_place, prs, head })
+            // Only a Plan with a pull request has feedback: one query per such Plan, not per Plan.
+            let feedback = if prs.is_empty() { None } else { feedback(conn, &head.id)? };
+            Ok(PlanCard { label, lead_place, prs, feedback, head })
         })
         .collect()
-}
-
-/// The `open` pull requests, oldest first. `active`: a PR of the Plan of the chat slot's Lead (the Plan Lead whose latest
-/// `session-moved` says `chat`, the newest when there are several: `chat_slot`'s rule) points to it.
-fn open_prs(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
-    let mut stmt = conn.prepare(
-        "SELECT q.repo, q.number, q.title, q.draft, q.checks, q.review_decision,
-                EXISTS (SELECT 1 FROM prs r WHERE r.pull_request = q.id AND r.plan =
-                        (SELECT s.plan FROM sessions s
-                           JOIN events m ON m.id = (SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-moved')
-                          WHERE s.role = 'lead' AND s.plan IS NOT NULL AND json_extract(m.data, '$.place') = 'chat'
-                          ORDER BY m.id DESC LIMIT 1))
-           FROM pull_requests q WHERE q.state = 'open' ORDER BY q.created_at, q.repo, q.number",
-    )?;
-    let mut rows = stmt.query([])?;
-    let mut out = Vec::new();
-    while let Some(r) = rows.next()? {
-        let (repo, number): (String, i64) = (r.get(0)?, r.get(1)?);
-        let what = format!("Pull request {repo}#{number}");
-        let decision: String = r.get(5)?;
-        out.push(OpenPr {
-            title: r.get(2)?,
-            draft: r.get(3)?,
-            checks: Checks::parse(&what, &r.get::<_, String>(4)?)?,
-            review_decision: match decision.as_str() {
-                "none" => ReviewDecision::None,
-                "approved" => ReviewDecision::Approved,
-                "changes_requested" => ReviewDecision::ChangesRequested,
-                _ => return Err(bad_row(format!("{what} has review_decision {decision:?}"))),
-            },
-            active: r.get(6)?,
-            repo,
-            number,
-        });
-    }
-    Ok(out)
 }
 
 /// Plan id → its Lead Session's name and place.
@@ -219,29 +182,47 @@ fn labels(conn: &Connection) -> Result<BTreeMap<String, (String, Place)>, CpdErr
     Ok(out)
 }
 
-/// Plan id → its PRs that have a pull request, in key order, each with what `pr poll` stored in its `pull_requests` row.
+/// Plan id → its PRs that have a pull request, in key order, each with what `pr poll` stored once it polled it.
 fn pulls(conn: &Connection) -> Result<BTreeMap<String, Vec<PrRow>>, CpdError> {
     let mut stmt = conn.prepare(
-        "SELECT r.plan, r.key, r.pr_number, r.status, q.state, q.title, q.review_decision, q.checks
-           FROM prs r JOIN pull_requests q ON q.id = r.pull_request ORDER BY r.plan, r.key",
+        "SELECT plan, key, pr_number, status, coalesce(json_extract(pr_seen, '$.closed'), 0), pr_title, pr_review_decision,
+                pr_checks
+           FROM prs WHERE pr_number IS NOT NULL ORDER BY plan, key",
     )?;
     let mut rows = stmt.query([])?;
     let mut out: BTreeMap<String, Vec<PrRow>> = BTreeMap::new();
     while let Some(r) = rows.next()? {
-        let (plan, key, number, status, row_state): (String, String, i64, String, String) =
+        let (plan, key, number, status, closed): (String, String, i64, String, bool) =
             (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?);
         let what = format!("PR {plan}/{key}");
-        let state = PrState::of(status == "merged", Some(&row_state));
-        let (title, decision, checks): (String, String, String) = (r.get(5)?, r.get(6)?, r.get(7)?);
-        let decision = match decision.as_str() {
-            "none" => ReviewDecision::None,
-            "approved" => ReviewDecision::Approved,
-            "changes_requested" => ReviewDecision::ChangesRequested,
-            _ => return Err(bad_row(format!("{what} has review_decision {decision:?}"))),
+        let state = match status.as_str() {
+            "merged" => PrState::Merged,
+            _ if closed => PrState::Closed,
+            _ => PrState::Open,
         };
-        let polled = PolledPr { title, decision, checks: Checks::parse(&what, &checks)? };
+        let (title, decision, checks): (Option<String>, Option<String>, Option<String>) = (r.get(5)?, r.get(6)?, r.get(7)?);
+        let polled = match (title, decision, checks) {
+            (None, None, None) => None,
+            (Some(title), Some(decision), Some(checks)) => {
+                let decision = match decision.as_str() {
+                    "none" => ReviewDecision::None,
+                    "approved" => ReviewDecision::Approved,
+                    "changes_requested" => ReviewDecision::ChangesRequested,
+                    _ => return Err(bad_row(format!("{what} has pr_review_decision {decision:?}"))),
+                };
+                let checks = match checks.as_str() {
+                    "none" => Checks::None,
+                    "passed" => Checks::Passed,
+                    "pending" => Checks::Pending,
+                    "failed" => Checks::Failed,
+                    _ => return Err(bad_row(format!("{what} has pr_checks {checks:?}"))),
+                };
+                Some(PolledPr { title, decision, checks })
+            }
+            _ => return Err(bad_row(format!("{what} has only some of pr_title, pr_review_decision and pr_checks"))),
+        };
         let key = id("PR key", &key, PrKey::parse)?;
-        out.entry(plan).or_default().push(PrRow { key, number, state, polled: Some(polled) });
+        out.entry(plan).or_default().push(PrRow { key, number, state, polled });
     }
     Ok(out)
 }
@@ -291,6 +272,35 @@ fn engine(conn: &Connection) -> Result<Engine, CpdError> {
         .and_then(|p| u32::try_from(p).ok())
         .ok_or_else(|| bad_row(format!("a watch-started Event has data {data}")))?;
     Ok(if alive(pid) { Engine::Running { pid, since: at } } else { Engine::Crashed { pid, since: at } })
+}
+
+fn feedback(conn: &Connection, plan: &PlanId) -> Result<Option<PrFeedback>, CpdError> {
+    let latest: Option<(i64, String, String)> = conn
+        .query_row(
+            "SELECT id, at, data FROM events WHERE plan = ?1 AND kind = 'pr-feedback' ORDER BY id DESC LIMIT 1",
+            [plan.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    latest
+        .map(|(event, at, data)| {
+            let bad = || bad_row(format!("pr-feedback Event {event} has data {data}"));
+            let d: Value = serde_json::from_str(&data).map_err(|_| bad())?;
+            let list = |key: &str| d[key].as_array().ok_or_else(bad);
+            let failing_checks = list("checks")?
+                .iter()
+                .map(|c| c["name"].as_str().map(str::to_owned).ok_or_else(bad))
+                .collect::<Result<_, _>>()?;
+            Ok(PrFeedback {
+                event,
+                at,
+                state: d["state"].as_str().ok_or_else(bad)?.to_owned(),
+                failing_checks,
+                reviews: list("reviews")?.len(),
+                comments: list("comments")?.len(),
+            })
+        })
+        .transpose()
 }
 
 fn escalations(conn: &Connection) -> Result<Vec<MachineEscalation>, CpdError> {

@@ -89,7 +89,6 @@ error_codes! {
     TierModelUnknown = "tier_model_unknown" => Failure,
     HookInvalid = "hook_invalid" => Failure,
     LeadWorktreeStale = "lead_worktree_stale" => Failure,
-    GhRateLimited = "gh_rate_limited" => Failure,
     MergeCheckFailed = "merge_check_failed" => Failure,
     PushFailed = "push_failed" => Failure,
 

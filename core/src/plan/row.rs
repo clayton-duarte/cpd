@@ -52,6 +52,7 @@ pub(super) struct PlanRow {
     pub phase: Phase,
     pub lead_session: SessionId,
     pub pr: Option<Value>,
+    pub pr_seen: Value,
     pub all_merged_at: Option<String>,
     pub created_at: String,
     pub locked_at: Option<String>,
@@ -61,7 +62,7 @@ pub(super) struct PlanRow {
 }
 
 const COLUMNS: &str = "p.id, p.context, p.title, p.jira, r.key, r.repo, r.base, r.lead_branch, r.lead_worktree, p.phase, p.lead_session,
-    r.pr_number, r.pr_url, r.pr_opened_at, r.all_merged_at, p.created_at, p.locked_at, p.done_at, p.archived_at";
+    r.pr_number, r.pr_url, r.pr_opened_at, r.pr_seen, r.all_merged_at, p.created_at, p.locked_at, p.done_at, p.archived_at";
 
 /// `plans p` with its one PR `r` (R34: until a Plan has several PRs, the
 /// first PR it got stands for the Plan's repo, branch, worktree and PR).
@@ -82,6 +83,7 @@ type Raw = (
     String,
     String,
     (Option<i64>, Option<String>, Option<String>),
+    String,
     Option<String>,
     String,
     Option<String>,
@@ -108,12 +110,13 @@ fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
         r.get(16)?,
         r.get(17)?,
         r.get(18)?,
+        r.get(19)?,
     ))
 }
 
 impl PlanRow {
     fn parse(raw: Raw) -> Result<PlanRow, CpdError> {
-        let (id, context, title, jira, pr_key, repo, base, lead_branch, lead_worktree, phase, lead_session, pr, all_merged_at, created_at, locked_at, done_at, archived_at) = raw;
+        let (id, context, title, jira, pr_key, repo, base, lead_branch, lead_worktree, phase, lead_session, pr, pr_seen, all_merged_at, created_at, locked_at, done_at, archived_at) = raw;
         let id = PlanId::parse(&id).map_err(|_| bad_row(format!("Plan id {id:?}")))?;
         let field = |name: &str, value: &str| bad_row(format!("Plan {id} has {name} {value:?}"));
         let pr = match pr {
@@ -125,6 +128,7 @@ impl PlanRow {
             pr_key: PrKey::parse(&pr_key).map_err(|_| field("PR key", &pr_key))?,
             phase: Phase::parse(&phase).ok_or_else(|| field("phase", &phase))?,
             lead_session: SessionId::parse(&lead_session).map_err(|_| field("lead_session", &lead_session))?,
+            pr_seen: serde_json::from_str(&pr_seen).map_err(|_| field("pr_seen", &pr_seen))?,
             title,
             jira,
             repo,
@@ -147,7 +151,7 @@ impl PlanRow {
             "id": self.id, "context": self.context, "title": self.title, "jira": self.jira,
             "repo": self.repo, "base": self.base, "lead_branch": self.lead_branch,
             "lead_worktree": self.lead_worktree, "phase": self.phase.as_str(), "lead_session": self.lead_session,
-            "pr": self.pr, "all_merged_at": self.all_merged_at,
+            "pr": self.pr, "pr_seen": self.pr_seen, "all_merged_at": self.all_merged_at,
             "created_at": self.created_at, "locked_at": self.locked_at, "done_at": self.done_at,
             "archived_at": self.archived_at,
         })

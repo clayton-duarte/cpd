@@ -190,7 +190,7 @@ fn schema_sql(conn: &Connection) -> Vec<(String, String)> {
 #[test]
 fn the_schema_is_contract_4_4_as_written() {
     let blocks = contract_ddl_blocks();
-    assert_eq!(blocks.len(), 8, "§4.4 changed shape");
+    assert_eq!(blocks.len(), 7, "§4.4 changed shape");
     assert!(blocks[1].contains("CREATE TRIGGER escalations_hist_ins"), "block 2 is the generated example");
     // The contract's DDL, every block but the generated example, run as written.
     let contract = Connection::open_in_memory().unwrap();
@@ -228,14 +228,10 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     for table in HISTORY_TABLES {
         expected.insert(format!("{table}_hist_ins"));
         expected.insert(format!("{table}_hist_upd"));
-        // `pull_requests` has no `_no_delete`: an unowned row may be deleted (`pull_requests_owned` is in the DDL).
-        if *table != "pull_requests" {
-            expected.insert(format!("{table}_no_delete"));
-        }
+        expected.insert(format!("{table}_no_delete"));
     }
     // Described in §4.4's prose, written like `dependencies_hist_del`.
     expected.insert("pr_needs_hist_del".to_owned());
-    expected.insert("pull_requests_hist_del".to_owned());
     let found = names(
         &raw(&env),
         "SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
@@ -243,7 +239,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     assert_eq!(found, expected);
     // Every table is STRICT.
     let tables = names(&raw(&env), "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'");
-    assert_eq!(tables.len(), 16);
+    assert_eq!(tables.len(), 15);
     for table in tables {
         let strict: i64 = raw(&env)
             .query_row("SELECT strict FROM pragma_table_list WHERE name = ?1", [&table], |r| r.get(0))
@@ -289,7 +285,7 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
             assert!(upd.contains(&format!("'{column}', OLD.{column}")), "{table}_hist_upd lacks OLD.{column}");
             assert!(upd.contains(&format!("'{column}', NEW.{column}")), "{table}_hist_upd lacks NEW.{column}");
         }
-        if ["dependencies", "pr_needs", "pull_requests"].contains(table) {
+        if ["dependencies", "pr_needs"].contains(table) {
             let del = sql_of(&format!("{table}_hist_del"));
             for column in &columns {
                 assert!(del.contains(&format!("'{column}', OLD.{column}")), "{table}_hist_del lacks {column}");
@@ -659,7 +655,7 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
     let mut store = fixture_store(&env);
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     let hash = store.read(|c| Ok(cpd_core::store::schema_hash(c)?)).unwrap();
-    assert_eq!(hash, "3d03739b6d268de82df8f4273b405fb498b86cc8696a08af8bdcfeb580288ab7", "version 5 (the PR poller) on top of migration 4");
+    assert_eq!(hash, "62a082772ccbcd0c989f5181e3b934ba96a3ab3f1d9db81cf8e39cef5ef89579", "version 4 (R34) on top of migration 3");
 
     for table in ["contexts", "plans", "sessions"] {
         let archived: Option<String> =
@@ -714,199 +710,6 @@ fn a_failed_migration_rolls_back_entirely() {
     assert_eq!(version, 0);
     let app: i32 = conn.pragma_query_value(None, "application_id", |r| r.get(0)).unwrap();
     assert_eq!(app, 0);
-}
-
-// ---------- §4.5 migration 5: pull_requests and prs.pull_request ----------
-
-/// The `CREATE TABLE prs (...) STRICT;` of version 4, from `0004.sql`.
-fn prs_at_version_4() -> String {
-    let text = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/src/store/migrations/0004.sql")).unwrap();
-    let start = text.find("CREATE TABLE prs (").unwrap();
-    let end = start + text[start..].find(") STRICT;").unwrap() + ") STRICT;".len();
-    text[start..end].to_owned()
-}
-
-/// A database at version 4: a fresh one with `pull_requests` gone and `prs` as migration 4 made it, holding
-/// - `op1`: its PR open, `pr_title` and the review and the checks polled;
-/// - `op2`: its PR open, never polled (`pr_title` null);
-/// - `mg`: its PR merged;
-/// - `wt`: its PR waiting.
-fn version_4_database(env: &TestEnv) {
-    drop(open(env));
-    let conn = raw(env);
-    conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
-    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, |_| Ok(1_i64)).unwrap();
-    let pr = |plan: &str, key: &str, status: &str, more: &str, values: &str| {
-        let (worktree, started) = if status == "waiting" { ("NULL", "NULL") } else { ("'/wt'", "'2026-01-02T00:00:00.000Z'") };
-        format!(
-            "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
-               VALUES ('{plan}', 'ctx', 'Plan {plan}', '{phase}', 'l-{plan}', 't', {locked}, {done});
-             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-               VALUES ('l-{plan}', 'lead', 'ctx', '{plan}', 'Lead', '/', 'O3', 'idle', 't', 't');
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at {more})
-               VALUES ('{plan}', '{key}', '/r/{key}', 'main', '{status}', 'cpd/{plan}/{key}', {worktree}, {started}, 1, 't' {values});",
-            phase = match status {
-                "waiting" => "plan",
-                "merged" => "done",
-                _ => "pr",
-            },
-            locked = if status == "waiting" { "NULL" } else { "'2026-01-02T00:00:00.000Z'" },
-            done = if status == "merged" { "'2026-01-09T00:00:00.000Z'" } else { "NULL" },
-        )
-    };
-    conn.execute_batch(&format!(
-        "DROP TABLE pull_requests;
-         DROP TABLE prs;
-         {}
-         INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
-         {}{}{}{}
-         PRAGMA user_version = 4;",
-        prs_at_version_4(),
-        pr(
-            "op1",
-            "api",
-            "open",
-            ", pr_number, pr_url, pr_opened_at, pr_polled_at, pr_title, pr_review_decision, pr_checks",
-            ", 7, 'https://github.com/acme/api/pull/7', '2026-01-05T00:00:00.000Z', '2026-01-06T00:00:00.000Z', 'Add api', 'approved', 'passed'",
-        ),
-        pr(
-            "op2",
-            "web",
-            "open",
-            ", pr_number, pr_url, pr_opened_at",
-            ", 8, 'https://github.com/acme/web/pull/8', '2026-01-05T00:00:01.000Z'",
-        ),
-        pr(
-            "mg",
-            "docs",
-            "merged",
-            ", pr_number, pr_url, pr_opened_at, merged_at",
-            ", 9, 'https://github.com/acme/docs/pull/9', '2026-01-05T00:00:02.000Z', '2026-01-08T00:00:00.000Z'",
-        ),
-        pr("wt", "cli", "waiting", "", ""),
-    ))
-    .unwrap();
-    assert_eq!(names(&conn, "SELECT name FROM pragma_table_info('prs') WHERE name LIKE 'pr\\_%' ESCAPE '\\'").len(), 8);
-}
-
-#[test]
-fn a_version_4_database_migrates_to_5_with_the_back_filled_rows_and_the_link() {
-    let env = TestEnv::new();
-    version_4_database(&env);
-    let store = open(&env);
-    // Its schema is exactly that of a fresh database at version 5.
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-    drop(store);
-    let conn = raw(&env);
-    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-    assert_eq!(version, 5);
-    let violations: i64 = conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
-    assert_eq!(violations, 0);
-
-    // One row per PR with a number, in Plan and key order; the title is the polled one, else the Plan's.
-    let row = |r: &rusqlite::Row| -> rusqlite::Result<Value> {
-        Ok(json!([r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?,
-                  r.get::<_, i64>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, String>(9)?,
-                  r.get::<_, Option<String>>(10)?, r.get::<_, String>(11)?]))
-    };
-    let rows: Vec<Value> = conn
-        .prepare("SELECT id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at FROM pull_requests ORDER BY id")
-        .unwrap()
-        .query_map([], row)
-        .unwrap()
-        .map(Result::unwrap)
-        .collect();
-    assert_eq!(
-        rows,
-        vec![
-            json!([1, "acme/docs", 9, "https://github.com/acme/docs/pull/9", "Plan mg", 0, "merged", "none", "none",
-                   "2026-01-05T00:00:02.000Z", "2026-01-08T00:00:00.000Z", "2026-01-05T00:00:02.000Z"]),
-            json!([2, "acme/api", 7, "https://github.com/acme/api/pull/7", "Add api", 0, "open", "approved", "passed",
-                   "2026-01-05T00:00:00.000Z", null, "2026-01-05T00:00:00.000Z"]),
-            json!([3, "acme/web", 8, "https://github.com/acme/web/pull/8", "Plan op2", 0, "open", "none", "none",
-                   "2026-01-05T00:00:01.000Z", null, "2026-01-05T00:00:01.000Z"]),
-        ]
-    );
-
-    // `pull_request` is set exactly for the open and the merged PR; every other column is kept.
-    let prs: Vec<(String, String, Option<i64>, Option<i64>, Option<String>)> = conn
-        .prepare("SELECT plan, status, pull_request, pr_number, merged_at FROM prs ORDER BY plan")
-        .unwrap()
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
-        .unwrap()
-        .map(Result::unwrap)
-        .collect();
-    let some = |s: &str| Some(s.to_owned());
-    assert_eq!(
-        prs,
-        vec![
-            ("mg".into(), "merged".into(), Some(1), Some(9), some("2026-01-08T00:00:00.000Z")),
-            ("op1".into(), "open".into(), Some(2), Some(7), None),
-            ("op2".into(), "open".into(), Some(3), Some(8), None),
-            ("wt".into(), "waiting".into(), None, None, None),
-        ]
-    );
-    let columns = names(&conn, "SELECT name FROM pragma_table_info('prs')");
-    for gone in ["pr_seen", "pr_polled_at", "pr_title", "pr_review_decision", "pr_checks"] {
-        assert!(!columns.contains(gone), "{gone}");
-    }
-    for kept in ["pr_number", "pr_url", "pr_opened_at", "pull_request"] {
-        assert!(columns.contains(kept), "{kept}");
-    }
-
-    // The history triggers of both tables exist; the back-fill wrote an `insert` row for each pull request.
-    let triggers = names(&conn, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name IN ('pull_requests', 'prs')");
-    for trigger in ["pull_requests_hist_ins", "pull_requests_hist_upd", "pull_requests_hist_del", "pull_requests_owned", "prs_hist_ins", "prs_hist_upd"] {
-        assert!(triggers.contains(trigger), "{trigger}: {triggers:?}");
-    }
-    assert!(!triggers.contains("pull_requests_no_delete"));
-    let inserted: Vec<String> = conn
-        .prepare("SELECT pk FROM history WHERE tbl = 'pull_requests' AND op = 'insert' ORDER BY id")
-        .unwrap()
-        .query_map([], |r| r.get(0))
-        .unwrap()
-        .map(Result::unwrap)
-        .collect();
-    assert_eq!(inserted, ["[1]", "[2]", "[3]"]);
-}
-
-#[test]
-fn an_owned_pull_request_cannot_be_deleted_and_an_unowned_one_can_with_a_history_row() {
-    let env = TestEnv::new();
-    version_4_database(&env);
-    let mut store = open(&env);
-    // Owned by the open PR of `op1`.
-    let err = refused(&mut store, "DELETE FROM pull_requests WHERE number = 7");
-    assert_eq!(err.code(), ErrorCode::StoreFailed, "{err:?}");
-    assert!(sqlite_message(&err).starts_with("append_only"), "{err:?}");
-    // Owned by the merged PR of `mg`.
-    assert!(sqlite_message(&refused(&mut store, "DELETE FROM pull_requests WHERE number = 9")).starts_with("append_only"));
-    // One no PR points to: a pull request of the User's that no Plan owns.
-    store
-        .write("test", |tx| {
-            exec(
-                tx,
-                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
-                 VALUES ('acme/other', 3, 'https://github.com/acme/other/pull/3', 'Other', 1, 'open', 'none', 'pending', 't', 't')",
-            )
-        })
-        .unwrap();
-    let id: i64 = store.read(|c| Ok(c.query_row("SELECT id FROM pull_requests WHERE number = 3", [], |r| r.get(0))?)).unwrap();
-    store.write("test", |tx| exec(tx, "DELETE FROM pull_requests WHERE number = 3")).unwrap();
-    let (op, pk, before, after): (String, String, String, Option<String>) = store
-        .read(|c| {
-            Ok(c.query_row(
-                "SELECT op, pk, before, after FROM history WHERE tbl = 'pull_requests' ORDER BY id DESC LIMIT 1",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-            )?)
-        })
-        .unwrap();
-    assert_eq!((op.as_str(), pk, after), ("delete", format!("[{id}]"), None));
-    let before: Value = serde_json::from_str(&before).unwrap();
-    assert_eq!((&before["repo"], &before["number"], &before["draft"], &before["checks"]), (&json!("acme/other"), &json!(3), &json!(1), &json!("pending")));
-    let left: i64 = store.read(|c| Ok(c.query_row("SELECT count(*) FROM pull_requests", [], |r| r.get(0))?)).unwrap();
-    assert_eq!(left, 3);
 }
 
 // ---------- §4.2 two writers in separate processes ----------

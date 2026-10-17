@@ -38,8 +38,8 @@ pub(super) struct PrRow {
     /// `waiting`, `dispatch`, `open`, `merged` or `cancelled` (§3.8).
     pub status: String,
     pub pull: Option<Pull>,
-    /// The id of the PR's `pull_requests` row: set exactly when the status is `open` or `merged` (`prs` CHECK).
-    pub pull_request: Option<i64>,
+    /// `pr_seen` exactly as stored, for the compare-and-swap of `pr poll`.
+    pub pr_seen: String,
 }
 
 impl PrRow {
@@ -102,7 +102,7 @@ impl PlanRow {
     }
 }
 
-type Raw = (String, String, String, String, Option<String>, String, (Option<i64>, Option<String>, Option<String>), Option<i64>);
+type Raw = (String, String, String, String, Option<String>, String, (Option<i64>, Option<String>, Option<String>), String);
 
 /// The Plan `id` with its PRs, else `plan_not_found`.
 pub(super) fn load(conn: &Connection, id: &PlanId) -> Result<PlanRow, CpdError> {
@@ -114,7 +114,7 @@ pub(super) fn load(conn: &Connection, id: &PlanId) -> Result<PlanRow, CpdError> 
         })?;
     let phase = Phase::parse(&phase).ok_or_else(|| bad_row(format!("Plan {id} has phase {phase:?}")))?;
     let mut stmt = conn.prepare(
-        "SELECT key, repo, base, lead_branch, lead_worktree, status, pr_number, pr_url, pr_opened_at, pull_request
+        "SELECT key, repo, base, lead_branch, lead_worktree, status, pr_number, pr_url, pr_opened_at, pr_seen
            FROM prs WHERE plan = ?1 ORDER BY key",
     )?;
     let raw: Vec<Raw> = stmt
@@ -133,13 +133,13 @@ pub(super) fn load(conn: &Connection, id: &PlanId) -> Result<PlanRow, CpdError> 
         .collect::<rusqlite::Result<_>>()?;
     let prs = raw
         .into_iter()
-        .map(|(key, repo, base, lead_branch, lead_worktree, status, pull, pull_request)| {
+        .map(|(key, repo, base, lead_branch, lead_worktree, status, pull, pr_seen)| {
             let key = PrKey::parse(&key).map_err(|_| bad_row(format!("Plan {id} has a PR key {key:?}")))?;
             let pull = match pull {
                 (Some(number), Some(url), Some(opened_at)) => Some(Pull { number, url, opened_at }),
                 _ => None,
             };
-            Ok(PrRow { key, repo: PathBuf::from(repo), base, lead_branch, lead_worktree: lead_worktree.map(PathBuf::from), status, pull, pull_request })
+            Ok(PrRow { key, repo: PathBuf::from(repo), base, lead_branch, lead_worktree: lead_worktree.map(PathBuf::from), status, pull, pr_seen })
         })
         .collect::<Result<Vec<_>, CpdError>>()?;
     Ok(PlanRow { id: id.clone(), title, phase, prs })
