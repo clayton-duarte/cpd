@@ -167,7 +167,10 @@ fn find(buf: &Buffer, needle: &str) -> (u16, u16) {
 
 // ---------- the Dispatch column ----------
 
-const RULE: &str = "──────────────────────────────────────────────";
+/// A section header on the 46-column test pane: `──`, ` <title> `, then `─` to the edge.
+fn header(title: &str) -> String {
+    format!("── {title} {}", "─".repeat(46 - 4 - title.chars().count()))
+}
 
 /// The column on the prepared store as the User sees it: the Plans with a PR (oldest first), then the Plans without
 /// one, of the Plans whose Lead has a pane in the cockpit.
@@ -188,21 +191,22 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let machine = Machine { name: "homeserver".to_owned(), load: ["0.1", "0.2", "0.3"].map(str::to_owned).to_vec() };
     terminal.draw(|f| widgets::draw(f, f.area(), &w, &machine)).unwrap();
     let lines = rows(terminal.backend().buffer());
-    let rule = "─".repeat(30);
-    assert_eq!(lines[..3], [" homeserver", " load 0.1 0.2 0.3", rule.as_str()]);
-    assert_eq!(lines[3], " PRs");
+    let head = |title: &str| format!("── {title} {}", "─".repeat(30 - 4 - title.chars().count()));
+    assert_eq!(lines[..3], ["", " homeserver", " load 0.1 0.2 0.3"]);
+    assert_eq!(lines[3], head("PRs"));
     assert_eq!(lines[4], " no Plans in the cockpit");
-    assert_eq!(lines[5..], ["", "", "", rule.as_str(), " git", " (future)", rule.as_str(), " Jira", " (future)"]);
+    assert_eq!(lines[5..], ["", "", "", "", "", head("git").as_str(), " (future)", head("Jira").as_str(), " (future)"]);
 }
 
 #[test]
 fn the_column_shows_the_machine_the_cockpits_prs_git_and_jira() {
     let (got, _) = column(25);
+    let (prs, git, jira) = (header("PRs"), header("git"), header("Jira"));
     let expected = [
+        "",
         " homeserver",
         " load 3.70 3.05 4.84",
-        RULE,
-        " PRs",
+        prs.as_str(),
         " cpd-ui",
         "  #3 merged ✓ no review  cpd-ui: cockpit rows",
         " cpd visual lead",
@@ -218,11 +222,11 @@ fn the_column_shows_the_machine_the_cockpits_prs_git_and_jira() {
         "",
         "",
         "",
-        RULE,
-        " git",
+        "",
+        "",
+        git.as_str(),
         " (future)",
-        RULE,
-        " Jira",
+        jira.as_str(),
         " (future)",
     ];
     assert_eq!(got, expected, "\n{}", got.join("\n"));
@@ -269,11 +273,19 @@ fn the_column_takes_every_colour_from_the_palette() {
     assert_eq!(fg(find(&buf, "✓")), c(Meaning::Done));
     assert_eq!(fg(find(&buf, "open")), c(Meaning::Review));
     assert_eq!(fg(find(&buf, "✗")), c(Meaning::Failed));
-    assert_eq!(fg(find(&buf, RULE)), c(Meaning::Nothing));
+    // The headers: grey, the title a reversed block, not bold.
+    for title in ["PRs", "git", "Jira"] {
+        let (x, y) = find(&buf, &format!("── {title} "));
+        assert_eq!(buf[(x, y)].fg, c(Meaning::Nothing), "{title}");
+        let block = buf[(x + 3, y)].clone();
+        assert_eq!(block.fg, c(Meaning::Nothing), "{title}");
+        assert!(block.modifier.contains(Modifier::REVERSED) && !block.modifier.contains(Modifier::BOLD), "{title}");
+        assert!(!buf[(x, y)].modifier.contains(Modifier::REVERSED), "{title}");
+    }
     let dim = |at: (u16, u16)| buf[at].modifier.contains(Modifier::DIM);
     let bold = |at: (u16, u16)| buf[at].modifier.contains(Modifier::BOLD);
-    // Bold: the machine, the section titles and the labels; dim: the title of the PR, `no PR`, `loading…`, `(future)`.
-    for title in ["homeserver", "PRs", "cpd-ui", "cpd visual lead", "v1", "git", "Jira"] {
+    // Bold: the machine and the labels (the section titles are reversed, not bold); dim: the title of the PR, `no PR`, `loading…`, `(future)`.
+    for title in ["homeserver", "cpd-ui", "cpd visual lead", "v1"] {
         assert!(bold(find(&buf, title)), "{title}");
         assert!(!dim(find(&buf, title)), "{title}");
     }
@@ -308,10 +320,10 @@ fn a_narrow_column_cuts_the_title_first_then_the_label_and_never_wraps() {
 fn a_short_pane_drops_the_plans_without_a_pr_before_the_rest() {
     let (_env, mut store) = fixture();
     let w = read::widgets(&mut store, 3, 0).unwrap();
-    // Beside the 9 rows of the other sections and the PRs title, the three Plans with a PR take 6; `v1` needs a 7th.
-    let full = rows(&render(46, 9 + 8, &w));
+    // Beside the 8 rows of the blank row, the machine and the headers, the three Plans with a PR take 6; `v1` needs a 7th.
+    let full = rows(&render(46, 8 + 7, &w));
     assert!(full.iter().any(|r| r.contains("v1  no PR")), "{full:#?}");
-    let short = rows(&render(46, 9 + 7, &w));
+    let short = rows(&render(46, 8 + 6, &w));
     assert!(!short.iter().any(|r| r.contains("no PR")), "{short:#?}");
     assert!(short.iter().any(|r| r.contains("#11 loading…")), "the Plans with a PR stay:\n{short:#?}");
 }
@@ -340,7 +352,7 @@ fn a_plan_of_several_prs_takes_one_line_per_pull_request_in_key_order() {
     let keys: Vec<&str> = w.plans[0].prs.iter().map(|p| p.key.as_str()).collect();
     assert_eq!(keys, ["api", "web"], "the PRs with a pull request, in key order");
     let got = rows(&render(46, 16, &w));
-    assert_eq!(got[3..7], [" PRs", " multi lead", "  #20 merged ✓ approved  api side", "  #21 open … no review  web side"], "{got:#?}");
+    assert_eq!(got[3..7], [header("PRs").as_str(), " multi lead", "  #20 merged ✓ approved  api side", "  #21 open … no review  web side"], "{got:#?}");
 }
 
 // ---------- the legend ----------

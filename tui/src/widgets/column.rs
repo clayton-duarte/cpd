@@ -1,20 +1,19 @@
 //! The Dispatch column's drawing (commands.md §13.2), a port of the reference's `draw_dispatch` and `pr::render`
 //! (`tui/src/main.rs`, `tui/src/pr.rs`): the machine, the pull requests of the Plans in the cockpit (one line per PR), git and Jira (the last two
-//! still future), with one dim rule between sections. Pure: [`draw`] only writes to the frame.
+//! still future), under one blank row; each section but the first starts with a header. Pure: [`draw`] only writes to the frame.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::palette::{self, Meaning};
 use crate::read::{Place, PlanCard, PrState, PrRow, ReviewDecision, Widgets};
 
-/// The rows a separator takes.
-const SEPARATOR: u16 = 1;
-/// Rows of the sections other than the PRs: the machine, git and Jira take two each; three separators lie between the four.
-const FIXED_ROWS: u16 = 2 + 2 + 2 + 3 * SEPARATOR;
+/// Rows of the column besides the PR rows: the blank top row, the machine (two), and the three headers with the two
+/// `(future)` rows of git and Jira.
+const FIXED_ROWS: u16 = 1 + 2 + 1 + 2 + 2;
 
 /// The machine the column names: its hostname and the first three fields of its load average.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,35 +89,49 @@ fn pr_line(pr: &PrRow, width: usize) -> Line<'static> {
     Line::from(spans)
 }
 
-fn separator(f: &mut Frame, area: Rect) {
-    // `Borders::TOP` of a one-row block is the line itself.
-    f.render_widget(Block::new().borders(Borders::TOP).border_style(palette::fg(Meaning::Nothing)), area);
+/// A section header, one line: `──`, then ` <title> ` as a grey reversed block (not bold), then `─` to the right edge, all in
+/// the Nothing colour. A title wider than `width` is cut; the line never wraps.
+fn section_header(title: &str, width: usize) -> Line<'static> {
+    let grey = palette::fg(Meaning::Nothing);
+    let lead = width.min(2);
+    let block: String = format!(" {title} ").chars().take(width - lead).collect();
+    let rest = width - lead - block.chars().count();
+    Line::from(vec![
+        Span::styled("─".repeat(lead), grey),
+        Span::styled(block, grey.add_modifier(Modifier::REVERSED)),
+        Span::styled("─".repeat(rest), grey),
+    ])
 }
 
-/// Draws the column in `area`: the machine, the PRs, git and Jira, with the shared separator between each pair.
+fn render_header(f: &mut Frame, area: Rect, title: &str) {
+    f.render_widget(Paragraph::new(section_header(title, usize::from(area.width))), area);
+}
+
+/// Draws the column in `area`: a blank row, the machine, then the PRs, git and Jira, each under its header.
 pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine) {
-    let [home, sep1, prs, sep2, git, sep3, jira] = Layout::vertical([
+    let [_blank, home, prs_header, prs, git_header, git, jira_header, jira] = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(2),
-        Constraint::Length(SEPARATOR),
+        Constraint::Length(1),
         Constraint::Min(1),
-        Constraint::Length(SEPARATOR),
-        Constraint::Length(2),
-        Constraint::Length(SEPARATOR),
-        Constraint::Length(2),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
     ])
     .areas(area);
-    for sep in [sep1, sep2, sep3] {
-        separator(f, sep);
-    }
+    render_header(f, prs_header, "PRs");
+    render_header(f, git_header, "git");
+    render_header(f, jira_header, "Jira");
     f.render_widget(
         Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::from(format!(" load {}", machine.load.join(" ")))]),
         home,
     );
-    let mut text = vec![Line::from(bold(" PRs"))];
+    let mut text = vec![];
     // The Plans in the cockpit: Plans with a pull request first, then those without only while the pane has room for the
     // rest.
     let cockpit: Vec<&PlanCard> = w.plans.iter().filter(|c| matches!(c.lead_place, Place::Chat | Place::Parked)).collect();
-    let room = usize::from(area.height).saturating_sub(usize::from(FIXED_ROWS) + text.len());
+    let room = usize::from(area.height).saturating_sub(usize::from(FIXED_ROWS));
     let mut used = 0;
     for card in cockpit.iter().filter(|c| !c.prs.is_empty()).chain(cockpit.iter().filter(|c| c.prs.is_empty())) {
         let lines = plan_lines(card, usize::from(area.width));
@@ -132,6 +145,79 @@ pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine) {
         text.push(Line::from(dim(" no Plans in the cockpit")));
     }
     f.render_widget(Paragraph::new(text), prs);
-    f.render_widget(Paragraph::new(vec![Line::from(bold(" git")), Line::from(dim(" (future)"))]), git);
-    f.render_widget(Paragraph::new(vec![Line::from(bold(" Jira")), Line::from(dim(" (future)"))]), jira);
+    f.render_widget(Paragraph::new(dim(" (future)")), git);
+    f.render_widget(Paragraph::new(dim(" (future)")), jira);
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+
+    use super::*;
+    use crate::read::{Engine, Slots};
+
+    fn buffer(width: u16, height: u16) -> Buffer {
+        let w = Widgets {
+            slots: Slots { limit: 3, held: vec![] },
+            engine: Engine::Never,
+            plans: vec![],
+            escalations: vec![],
+            events: vec![],
+            events_cursor: 0,
+        };
+        let machine = Machine { name: "homeserver".to_owned(), load: ["0.52", "0.41", "0.30"].map(str::to_owned).to_vec() };
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &w, &machine)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    fn row(buf: &Buffer, y: u16) -> String {
+        (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned()
+    }
+
+    #[test]
+    fn a_header_is_two_rules_the_title_block_and_rules_to_the_edge() {
+        let mut terminal = Terminal::new(TestBackend::new(20, 1)).unwrap();
+        terminal.draw(|f| render_header(f, f.area(), "PRs")).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        assert_eq!(row(&buf, 0), format!("── PRs {}", "─".repeat(13)));
+        for x in 0..20 {
+            let cell = &buf[(x, 0)];
+            let title = (2..7).contains(&x);
+            assert_eq!(cell.fg, palette::color(Meaning::Nothing), "x={x}");
+            assert_eq!(cell.modifier.contains(Modifier::REVERSED), title, "x={x}");
+            assert!(!cell.modifier.contains(Modifier::BOLD), "x={x}");
+        }
+    }
+
+    #[test]
+    fn a_header_narrower_than_its_title_cuts_the_title() {
+        let text = |width| section_header("Jira", width).spans.iter().map(|s| s.content.to_string()).collect::<String>();
+        assert_eq!(text(5), "── Ji");
+        assert_eq!(text(1), "─");
+        assert_eq!(text(0), "");
+    }
+
+    #[test]
+    fn the_column_has_a_blank_row_an_untitled_machine_and_three_headers() {
+        let buf = buffer(20, 9);
+        let rule = |title: &str| format!("── {title} {}", "─".repeat(20 - 4 - title.chars().count()));
+        let got: Vec<String> = (0..9).map(|y| row(&buf, y)).collect();
+        let expected = [
+            "".to_owned(),
+            " homeserver".to_owned(),
+            " load 0.52 0.41 0.30".to_owned(),
+            rule("PRs"),
+            " no Plans in the coc".to_owned(),
+            rule("git"),
+            " (future)".to_owned(),
+            rule("Jira"),
+            " (future)".to_owned(),
+        ];
+        assert_eq!(got, expected, "{got:#?}");
+        assert!(buf[(1, 1)].modifier.contains(Modifier::BOLD), "the hostname is bold");
+        assert!(buf[(1, 6)].modifier.contains(Modifier::DIM), "(future) is dim");
+    }
 }
