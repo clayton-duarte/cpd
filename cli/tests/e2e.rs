@@ -2,7 +2,7 @@
 //! `plan new`, `plan phase plan`, two Jobs (one needing the other), the Plan
 //! review, `plan lock`, the engine in the background dispatching both
 //! Attempts, fake Workers that commit and submit, both merges in dependency
-//! order, `all-merged`, `pr open` with the Gate and `pr poll` with failing checks.
+//! order, `all-merged`, `pr open` with the Gate and `pr poll` with a review.
 //!
 //! Everything external is faked: `pi` (Leads and Workers), `gh`, pi's Node for
 //! the Tier catalog, a bare `origin`, and a private tmux server. Nothing is
@@ -53,19 +53,13 @@ else
 fi
 "#;
 
-/// The fake `gh`: no open PR yet, the PR it creates, then the poller's search finds that PR with failing checks (the
-/// engine polls from its first tick, before the PR exists: the search finds nothing then).
+/// The fake `gh`: no open PR yet, the PR it creates, then a review on it.
 const GH: &str = r#"
-created="$(dirname "$0")/../pr-created"
 case "$1 $2" in
   "pr list") echo '[]' ;;
-  "pr create") touch "$created"; echo 'https://github.com/acme/pay/pull/7' ;;
-  "api graphql")
-    nodes=''
-    if [ -e "$created" ]; then
-      nodes='{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"2026-10-14T21:00:00Z","mergedAt":null,"reviewDecision":null,"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}}'
-    fi
-    echo '{"data":{"search":{"issueCount":1,"nodes":['"$nodes"']},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}' ;;
+  "pr create") echo 'https://github.com/acme/pay/pull/7' ;;
+  "pr view") echo '{"state":"OPEN","mergedAt":null,"title":"Pay","reviewDecision":"","statusCheckRollup":[{"name":"ci","conclusion":"SUCCESS"}],"reviews":[{"id":"PRR_1","author":{"login":"ann"},"state":"CHANGES_REQUESTED","body":"Rename it."}],"comments":[]}' ;;
+  "api repos/{owner}/{repo}/pulls/7/comments") echo '[]' ;;
   *) echo "unexpected gh call: $*" >&2; exit 9 ;;
 esac
 "#;
@@ -424,7 +418,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(shown["counts"], json!({"draft": 0, "queued": 0, "running": 0, "merged": 2, "failed": 0, "cancelled": 0}));
     assert_eq!(shown["tamper"], json!([]));
 
-    // The engine stops on SIGTERM, so the `pr poll` below is the only one that finds the PR. First,
+    // The engine stops on SIGTERM, so `pr poll` below is the only poll. First,
     // E2 records that each Worker's pane is gone after A9 killed its window
     // (Escalation e2e-a1-q1): `stopped`, no pane, place `none`.
     for attempt in ["api-a1", "ui-a1"] {
@@ -453,8 +447,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert!(fx.hooks_log().ends_with("pre-merge cpd/pay/pay\n"), "{}", fx.hooks_log());
     let pushed = fx.git(&fx.origin, &["rev-parse", "refs/heads/cpd/pay/pay"]);
     assert_eq!(pushed, lead_sha);
-    // The engine's polls (`api graphql`) aside, `pr open` made these two calls.
-    let gh: Vec<_> = fx.env.calls("gh").into_iter().filter(|c| c[0] != "api").collect();
+    let gh = fx.env.calls("gh");
     assert_eq!(gh[0], ["pr", "list", "--head", "cpd/pay/pay", "--state", "open", "--json", "number,url"]);
     assert_eq!(gh[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay/pay", "--title", "Retry failed payouts"]);
     let body = &gh[1][9];
@@ -467,18 +460,16 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(events[1]["data"], json!({"from": "dispatch", "to": "pr", "prs": [{"key": "pay", "number": 7, "url": PR_URL}]}));
     cursor = fx.cursor();
 
-    // ---------- 11. pr poll reports the failing checks, once (D7)
+    // ---------- 11. pr poll reports the review, once
     let out = fx.ok(&["pr", "poll", "--plan", PLAN]);
-    assert_eq!(out["feedback"], json!([{"plan": PLAN, "pr": "pay"}]));
-    assert_eq!(out["prs"][0]["pull_request"]["checks"], "failed");
+    let review = json!({"id": "PRR_1", "author": "ann", "state": "CHANGES_REQUESTED", "body": "Rename it."});
+    assert_eq!(out["prs"][0]["pr"], "pay");
+    assert_eq!(out["prs"][0]["changes"], json!({"checks": [], "reviews": [review], "comments": []}));
     let events = fx.events_since(cursor);
     assert_eq!(kinds(&events), ["pr-feedback"]);
-    assert_eq!(
-        events[0]["data"],
-        json!({"pr": "pay", "number": 7, "url": PR_URL, "state": "open", "checks": "failed", "review_decision": "none", "reasons": ["checks_failed"]})
-    );
+    assert_eq!(events[0]["data"]["reviews"], json!([review]));
     let again = fx.ok(&["pr", "poll", "--plan", PLAN]);
-    assert_eq!((again["feedback"].clone(), again["changed"].clone()), (json!([]), json!([])));
+    assert_eq!(again["prs"][0]["changes"], json!({"checks": [], "reviews": [], "comments": []}));
     assert_eq!(fx.events_since(cursor).len(), 1);
 
     // ---------- the whole run: no `error` Event, nothing tampered, nothing left running

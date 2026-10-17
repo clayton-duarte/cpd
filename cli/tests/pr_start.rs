@@ -30,9 +30,6 @@ struct Repo {
     origin: PathBuf,
 }
 
-/// The poller's search answering no pull requests.
-const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#;
-
 /// The env with its config (a one-second tick), a fake `cpd` whose `watch --ensure`
 /// succeeds, Context `ctx` and Plan `pay` in phase `plan`.
 fn fx() -> Fx {
@@ -43,8 +40,6 @@ fn fx() -> Fx {
     );
     fs::write(env.cpd_home().join("config.toml"), config).unwrap();
     env.fake("cpd", &format!("if [ \"$1 $2\" = 'watch --ensure' ]; then {WATCH_OK}; fi\nexec '{CPD}' \"$@\""));
-    // E5 polls on every engine: a `gh` that finds no pull requests, so that no test reaches the real one.
-    env.fake_gh(&format!("echo '{EMPTY_SEARCH}'"));
     let fx = Fx { env };
     fx.sql(
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
@@ -122,19 +117,13 @@ impl Fx {
     fn open(&self, key: &str) {
         self.sql(&format!(
             "UPDATE prs SET status = 'dispatch', lead_worktree = '/x/{key}', started_at = 't' WHERE plan = 'pay' AND key = '{key}';
-             INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
-               VALUES ('acme/{key}', 1, 'https://github.com/acme/{key}/pull/1', 'T', 0, 'open', 'none', 'none', 't', 't');
-             UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/{key}/pull/1', pr_opened_at = 't',
-                    pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/{key}') WHERE plan = 'pay' AND key = '{key}';"
+             UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'u', pr_opened_at = 't' WHERE plan = 'pay' AND key = '{key}';"
         ));
     }
 
     /// An `open` PR `key` merged.
     fn merge(&self, key: &str) {
-        self.sql(&format!(
-            "UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pay' AND key = '{key}';
-             UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE repo = 'acme/{key}';"
-        ));
+        self.sql(&format!("UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pay' AND key = '{key}';"));
     }
 
     fn merged(&self, key: &str) {
@@ -530,27 +519,25 @@ fn e7_starts_a_dependent_pr_from_a_fresh_fetch_once_its_prerequisite_is_merged()
     fx.add("a3", &repo.path, &["a2"]);
     fx.dispatch();
     fx.open("a1");
-    // E5 polls whatever the phase (§3.7): its search lists nothing, so it looks up a1's pull request (acme/a1#1), which GitHub
-    // merges when the file `merged` exists.
-    let merged = fx.env.root().join("merged");
-    let node = r#"{"repository":{"nameWithOwner":"acme/a1"},"number":1,"url":"https://github.com/acme/a1/pull/1","title":"T","isDraft":false,"state":"'"$state"'","createdAt":"t","mergedAt":'"$at"',"reviewDecision":null,"commits":{"nodes":[]}}"#;
-    fx.env.fake_gh(&format!(
-        r#"case "$4" in
-  *"search(type: ISSUE"*) echo '{EMPTY_SEARCH}' ;;
-  *) if [ -e '{merged}' ]; then state=MERGED; at='"2026-10-14T10:00:00Z"'; else state=OPEN; at=null; fi
-     echo '{{"data":{{"p0":{{"pullRequest":{node}}}}}}}' ;;
+    // E5 polls an open PR in `dispatch` too (§3.7): a1 needs a directory for `gh` and a pull request to read.
+    let a1 = fx.env.root().join("a1-lead");
+    fs::create_dir_all(&a1).unwrap();
+    fx.sql(&format!("UPDATE prs SET lead_worktree = '{}' WHERE plan = 'pay' AND key = 'a1';", a1.display()));
+    fx.env.fake_gh(
+        r#"case "$1" in
+  view|"pr") echo '{"state":"OPEN","mergedAt":null,"title":"T","reviewDecision":"","statusCheckRollup":[],"reviews":[],"comments":[]}' ;;
+  *) echo '[]' ;;
 esac"#,
-        merged = merged.display()
-    ));
+    );
     let engine = fx.engine();
 
     // a1 is not merged: nothing starts, however many ticks pass.
     std::thread::sleep(Duration::from_millis(2500));
     assert_eq!((fx.pr_status("a2"), fx.pr_status("a3")), ("waiting".to_owned(), "waiting".to_owned()));
 
-    // a1 merges on GitHub: what it brought is on the remote, which this repo has not fetched.
+    // a1 merges: what it brought is on the remote, which this repo has not fetched.
     let tip = fx.land_on_origin(&repo, "what a1 merged");
-    fs::write(&merged, "").unwrap();
+    fx.merge("a1");
     wait_until("E7 to start a2", || fx.pr_status("a2") == "dispatch");
 
     let worktree = fx.lead_path(&repo.path, "a2");
@@ -564,8 +551,6 @@ esac"#,
         json!({"pr": "a2", "repo": repo.path.display().to_string(), "base": "main", "lead_branch": "cpd/pay/a2",
                "lead_worktree": worktree.display().to_string(), "base_sha": tip, "reused": false, "pushed": true, "by": "engine"})
     );
-    // E5 saw a1 merged (the R34 merged path) before E7 started a2.
-    assert_eq!(fx.events("pr-merged").len(), 1);
     // a3 needs a2, which is started but not merged.
     assert_eq!(fx.pr_status("a3"), "waiting");
     assert!(fx.events("error").is_empty());

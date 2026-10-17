@@ -202,15 +202,14 @@ fn pr_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<PrNode>, CpdError> {
         needs.entry(pr).or_default().push(id("PR key", &need, PrKey::parse)?);
     }
     let mut stmt = conn.prepare(
-        "SELECT r.key, r.repo, r.base, r.status, r.pr_number, q.state
-           FROM prs r LEFT JOIN pull_requests q ON q.id = r.pull_request
-          WHERE r.plan = ?1 AND r.status <> 'cancelled' ORDER BY r.key",
+        "SELECT key, repo, base, status, pr_number, coalesce(json_extract(pr_seen, '$.closed'), 0)
+           FROM prs WHERE plan = ?1 AND status <> 'cancelled' ORDER BY key",
     )?;
     let mut rows = stmt.query([plan.as_str()])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
         let (key, repo, base, status): (String, String, String, String) = (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
-        let (number, row_state): (Option<i64>, Option<String>) = (r.get(4)?, r.get(5)?);
+        let (number, closed): (Option<i64>, bool) = (r.get(4)?, r.get(5)?);
         let what = format!("PR {plan}/{key}");
         let status = match status.as_str() {
             "waiting" => PrStatus::Waiting,
@@ -219,7 +218,12 @@ fn pr_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<PrNode>, CpdError> {
             "merged" => PrStatus::Merged,
             _ => return Err(bad_row(format!("{what} has status {status:?}"))),
         };
-        let pull = number.map(|n| (n, PrState::of(status == PrStatus::Merged, row_state.as_deref())));
+        let pull = match (number, status) {
+            (None, _) => None,
+            (Some(n), PrStatus::Merged) => Some((n, PrState::Merged)),
+            (Some(n), _) if closed => Some((n, PrState::Closed)),
+            (Some(n), _) => Some((n, PrState::Open)),
+        };
         let repo_name = std::path::Path::new(&repo)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
