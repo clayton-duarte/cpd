@@ -36,6 +36,19 @@ impl Phase {
     }
 }
 
+/// The columns of a Plan's one PR (R34).
+#[derive(Clone, Debug)]
+pub(super) struct PlanPr {
+    pub key: PrKey,
+    pub repo: String,
+    pub base: String,
+    pub lead_branch: String,
+    pub lead_worktree: Option<String>,
+    /// The pull request, once opened.
+    pub pull_request: Option<Value>,
+    pub all_merged_at: Option<String>,
+}
+
 /// One Plan, parsed at the boundary.
 #[derive(Clone, Debug)]
 pub(super) struct PlanRow {
@@ -43,16 +56,10 @@ pub(super) struct PlanRow {
     pub context: ContextId,
     pub title: String,
     pub jira: Option<String>,
-    /// The key of the Plan's one PR, whose columns follow.
-    pub pr_key: PrKey,
-    pub repo: String,
-    pub base: String,
-    pub lead_branch: String,
-    pub lead_worktree: Option<String>,
+    /// The Plan's one PR; none until `pr add` (a Plan in grounding or plan may have none).
+    pub pr: Option<PlanPr>,
     pub phase: Phase,
     pub lead_session: SessionId,
-    pub pr: Option<Value>,
-    pub all_merged_at: Option<String>,
     pub created_at: String,
     pub locked_at: Option<String>,
     pub done_at: Option<String>,
@@ -63,9 +70,9 @@ pub(super) struct PlanRow {
 const COLUMNS: &str = "p.id, p.context, p.title, p.jira, r.key, r.repo, r.base, r.lead_branch, r.lead_worktree, p.phase, p.lead_session,
     r.pr_number, r.pr_url, r.pr_opened_at, r.all_merged_at, p.created_at, p.locked_at, p.done_at, p.archived_at";
 
-/// `plans p` with its one PR `r` (R34: until a Plan has several PRs, the
-/// first PR it got stands for the Plan's repo, branch, worktree and PR).
-const PLAN_WITH_PR: &str = "plans p JOIN prs r ON r.plan = p.id
+/// `plans p` with its one PR `r`, if it has one (R34: until a Plan has several
+/// PRs, the first PR it got stands for the Plan's repo, branch, worktree and PR).
+const PLAN_WITH_PR: &str = "plans p LEFT JOIN prs r ON r.plan = p.id
     AND r.key = (SELECT key FROM prs WHERE plan = p.id ORDER BY created_txn, key LIMIT 1)";
 
 /// The columns as SQLite returns them, before parsing.
@@ -74,10 +81,10 @@ type Raw = (
     String,
     String,
     Option<String>,
-    String,
-    String,
-    String,
-    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
     Option<String>,
     String,
     String,
@@ -113,26 +120,34 @@ fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
 
 impl PlanRow {
     fn parse(raw: Raw) -> Result<PlanRow, CpdError> {
-        let (id, context, title, jira, pr_key, repo, base, lead_branch, lead_worktree, phase, lead_session, pr, all_merged_at, created_at, locked_at, done_at, archived_at) = raw;
+        let (id, context, title, jira, pr_key, repo, base, lead_branch, lead_worktree, phase, lead_session, pull_request, all_merged_at, created_at, locked_at, done_at, archived_at) = raw;
         let id = PlanId::parse(&id).map_err(|_| bad_row(format!("Plan id {id:?}")))?;
         let field = |name: &str, value: &str| bad_row(format!("Plan {id} has {name} {value:?}"));
-        let pr = match pr {
+        let pull_request = match pull_request {
             (Some(number), Some(url), Some(opened_at)) => Some(json!({"number": number, "url": url, "opened_at": opened_at})),
             _ => None,
         };
+        // The PR columns come from a LEFT JOIN: all null, or all present (`key`, `repo`, `base` and `lead_branch` are NOT NULL in `prs`).
+        let pr = match (pr_key, repo, base, lead_branch) {
+            (Some(key), Some(repo), Some(base), Some(lead_branch)) => Some(PlanPr {
+                key: PrKey::parse(&key).map_err(|_| field("PR key", &key))?,
+                repo,
+                base,
+                lead_branch,
+                lead_worktree,
+                pull_request,
+                all_merged_at,
+            }),
+            (None, None, None, None) => None,
+            _ => return Err(bad_row(format!("Plan {id} has a partial PR row"))),
+        };
         Ok(PlanRow {
             context: ContextId::parse(&context).map_err(|_| field("context", &context))?,
-            pr_key: PrKey::parse(&pr_key).map_err(|_| field("PR key", &pr_key))?,
             phase: Phase::parse(&phase).ok_or_else(|| field("phase", &phase))?,
             lead_session: SessionId::parse(&lead_session).map_err(|_| field("lead_session", &lead_session))?,
             title,
             jira,
-            repo,
-            base,
-            lead_branch,
-            lead_worktree,
             pr,
-            all_merged_at,
             created_at,
             locked_at,
             done_at,
@@ -141,13 +156,14 @@ impl PlanRow {
         })
     }
 
-    /// Every field of §2.2 Plan, as `plan show` prints it.
+    /// Every field of §2.2 Plan, as `plan show` prints it; the PR's are null for a Plan with no PR.
     pub fn to_json(&self) -> Value {
+        let pr = self.pr.as_ref();
         json!({
             "id": self.id, "context": self.context, "title": self.title, "jira": self.jira,
-            "repo": self.repo, "base": self.base, "lead_branch": self.lead_branch,
-            "lead_worktree": self.lead_worktree, "phase": self.phase.as_str(), "lead_session": self.lead_session,
-            "pr": self.pr, "all_merged_at": self.all_merged_at,
+            "repo": pr.map(|p| &p.repo), "base": pr.map(|p| &p.base), "lead_branch": pr.map(|p| &p.lead_branch),
+            "lead_worktree": pr.map(|p| &p.lead_worktree), "phase": self.phase.as_str(), "lead_session": self.lead_session,
+            "pr": pr.map(|p| &p.pull_request), "all_merged_at": pr.map(|p| &p.all_merged_at),
             "created_at": self.created_at, "locked_at": self.locked_at, "done_at": self.done_at,
             "archived_at": self.archived_at,
         })
