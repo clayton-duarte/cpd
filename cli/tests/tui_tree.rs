@@ -525,9 +525,9 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
     pane.click(4, 7);
     let screen = pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ○ Plan old")));
     assert_eq!(screen[6..10], [row("  ├ ● Plan rel", "0⋅0⋅0⋅0⋅1"), "  ├ …".to_owned(), row("  └ ○ Plan old", "0⋅0⋅0⋅0⋅0"), "…".to_owned()]);
-    // a click on the archived Plan or on its guide opens or collapses nothing; then the other `…` shows the archived Context
+    // a click on the archived Plan shows its history (below); then the other `…` shows the archived Context
     pane.click(10, 8);
-    pane.click(2, 8);
+    wait_for_calls(&env, 1);
     pane.click(0, 9);
     let screen = pane.wait("the archived Context", |s| s.iter().any(|r| r == "○ Title of gamma"));
     assert_eq!(screen[8..11], [row("  └ ○ Plan old", "0⋅0⋅0⋅0⋅0"), "…".to_owned(), "○ Title of gamma".to_owned()]);
@@ -535,7 +535,7 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
     pane.click(4, 7);
     let screen = pane.wait("the group collapsed", |s| s.iter().all(|r| !r.contains("Plan old")));
     assert_eq!(screen[6..8], [row("  ├ ● Plan rel", "0⋅0⋅0⋅0⋅1"), "  └ …".to_owned()]);
-    assert!(calls(&env).is_empty(), "a click on an archived row, or on a `…` row, runs no command: {:?}", calls(&env));
+    assert_eq!(calls(&env), [words(&["session", "history", "l-old"])], "only the click on the archived Session ran a command");
 }
 
 #[test]
@@ -652,7 +652,7 @@ fn a_right_click_opens_the_menu_of_the_row_and_esc_or_a_click_outside_closes_it_
 }
 
 #[test]
-fn archive_on_a_fork_asks_and_after_y_runs_session_archive() {
+fn archive_on_a_fork_runs_session_archive_at_once_with_no_prompt() {
     let env = env();
     populate(&env);
     fake_cpd(&env, r#"{"ok":true,"archived":[{"kind":"session","id":"f-idle"}],"closed":[]}"#);
@@ -661,16 +661,102 @@ fn archive_on_a_fork_asks_and_after_y_runs_session_archive() {
     pane.right_click(8, 3);
     pane.wait("the menu", |s| menu_open(s, "Open"));
     pane.keys(&["Down", "Down", "Down", "Down", "Enter"]); // Archive is the fifth item
-    pane.wait("the prompt", |_| pane.footer_has("Archive ship fork? its panes close (y/N)"));
-    assert!(the_menu_is_closed(&pane.screen()), "the menu closes when an item is picked");
-    assert!(calls(&env).is_empty());
-    pane.keys(&["y"]);
-    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "archive", "f-idle"])]);
+    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "archive", "f-idle"])], "no y/N, and `f-idle` is not in the chat slot");
     pane.wait("the note", |_| pane.footer_has("archived"));
+    assert!(!pane.footer_has("(y/N)"));
+    assert!(the_menu_is_closed(&pane.screen()), "the menu closes when an item is picked");
 }
 
 #[test]
-fn a_click_on_an_item_picks_it_and_a_n_cancels_the_archive() {
+fn archive_on_the_chat_slots_lead_opens_the_next_session_first_then_archives() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    pane.right_click(5, 0); // the Context `alpha`, whose Lead `l-ship` holds the chat slot: Archive is its third item
+    pane.wait("the menu", |s| menu_open(s, "New Plan…"));
+    pane.click(7, 3);
+    assert_eq!(
+        wait_for_calls(&env, 2),
+        [words(&["session", "open", "l-rel"]), words(&["context", "archive", "alpha"])],
+        "the first live Session after the Context, then the archive"
+    );
+    pane.right_click(8, 1); // the Plan `ship`: its Lead is the chat slot's, so the Plan below it opens first
+    pane.wait("the menu", |s| menu_open(s, "New session…"));
+    pane.click(10, 4);
+    assert_eq!(
+        wait_for_calls(&env, 4)[2..],
+        [words(&["session", "open", "l-sketch"]), words(&["plan", "archive", "--plan=ship"])]
+    );
+}
+
+#[test]
+fn a_refusal_of_a_step_shows_in_the_note_row_and_stops_the_archive() {
+    let env = env();
+    populate(&env);
+    env.fake("cpd", r#"echo '{"ok":false,"error":{"code":"no_cockpit","message":"There is no cockpit.","details":{}}}'; exit 3"#);
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    pane.right_click(8, 1);
+    pane.wait("the menu", |s| menu_open(s, "New session…"));
+    pane.click(10, 4);
+    pane.wait("the refusal", |_| pane.footer_has("no_cockpit: There is no cockpit."));
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(calls(&env), [words(&["session", "open", "l-sketch"])], "the archive did not run");
+}
+
+#[test]
+fn archive_on_the_only_live_lead_in_the_chat_slot_parks_it_first() {
+    let env = env();
+    populate(&env);
+    sql(
+        &mut open(&env),
+        "UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id IN ('f-idle', 'f-blocked', 'l-sketch', 'l-rel', 'l-old');
+         UPDATE plans SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id IN ('sketch', 'rel', 'old');",
+    );
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    pane.right_click(8, 1); // the Plan `ship`
+    pane.wait("the menu", |s| menu_open(s, "New session…"));
+    pane.click(10, 4);
+    assert_eq!(wait_for_calls(&env, 2), [words(&["session", "park"]), words(&["plan", "archive", "--plan=ship"])]);
+}
+
+#[test]
+fn a_click_on_an_archived_fork_runs_session_history() {
+    let env = env();
+    populate(&env);
+    sql(&mut open(&env), "UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'f-blocked';");
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 60, 14);
+    let screen = pane.ready();
+    assert_eq!(screen[4], "  └ …", "the archived fork is behind alpha's `…`");
+    pane.click(4, 4);
+    pane.wait("the archived fork", |s| s.iter().any(|r| r.contains("└ ○ ship review")));
+    pane.click(10, 5);
+    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "history", "f-blocked"])]);
+    pane.click(8, 3); // a live fork still opens
+    assert_eq!(wait_for_calls(&env, 2)[1], words(&["session", "open", "f-idle"]));
+}
+
+#[test]
+fn a_click_that_shows_a_history_is_refused_in_the_note_row() {
+    let env = env();
+    populate(&env);
+    sql(&mut open(&env), "UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'f-blocked';");
+    env.fake("cpd", r#"echo '{"ok":false,"error":{"code":"file_unreadable","message":"The session file is missing.","details":{}}}'; exit 1"#);
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    pane.click(4, 4);
+    pane.wait("the archived fork", |s| s.iter().any(|r| r.contains("└ ○ ship review")));
+    pane.click(10, 5);
+    pane.wait("the refusal", |_| pane.footer_has("file_unreadable: The session file is missing."));
+}
+
+#[test]
+fn a_click_on_an_item_picks_it_and_a_prompt_cancels() {
     let env = env();
     populate(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
@@ -678,16 +764,11 @@ fn a_click_on_an_item_picks_it_and_a_n_cancels_the_archive() {
     pane.ready();
     pane.right_click(5, 0); // the Context: New Plan…, Rename…, Archive at rows 1, 2, 3 of the box
     pane.wait("the menu", |s| menu_open(s, "New Plan…"));
-    pane.click(7, 3); // Archive
-    pane.wait("the prompt", |_| pane.footer_has("Archive Title of alpha? its panes close (y/N)"));
-    pane.keys(&["n"]);
-    pane.wait("the prompt gone", |_| !pane.footer_has("Archive Title of alpha?"));
-    pane.right_click(8, 1); // the Plan `ship`
-    pane.wait("the menu", |s| menu_open(s, "New session…"));
-    pane.click(10, 4); // Archive
-    pane.wait("the prompt", |_| pane.footer_has("Archive Plan ship? its panes close (y/N)"));
-    pane.keys(&["y"]);
-    assert_eq!(wait_for_calls(&env, 1), [words(&["plan", "archive", "--plan=ship"])]);
+    pane.click(7, 2); // Rename…
+    pane.wait("the prompt", |_| pane.footer_has("Title: Title of alpha"));
+    pane.keys(&["Escape"]);
+    pane.wait("the prompt gone", |_| !pane.footer_has("Title: "));
+    assert!(calls(&env).is_empty(), "{:?}", calls(&env));
 }
 
 #[test]
@@ -720,11 +801,31 @@ fn unarchive_in_the_menu_runs_without_a_prompt_and_a_refusal_shows_in_the_note_r
     pane.click(4, 7); // beta's `…`
     pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ○ Plan old")));
     pane.right_click(10, 8); // the archived Plan `old`
-    let screen = pane.wait("the menu", |s| menu_open(s, "Unarchive"));
-    assert!(screen.iter().all(|r| !r.contains("New Plan") && !r.contains("Rename") && !r.contains("Archive ")), "Unarchive only: {screen:?}");
-    pane.keys(&["Enter"]);
+    let screen = pane.wait("the menu", |s| menu_open(s, "Rename…"));
+    assert!(screen.iter().any(|r| r.contains("│ Rename… ")), "{screen:?}");
+    assert!(screen.iter().all(|r| !r.contains("New Plan") && !r.contains("Archive ")), "Rename… and Unarchive only: {screen:?}");
+    pane.keys(&["Down", "Enter"]);
     assert_eq!(wait_for_calls(&env, 1), [words(&["plan", "unarchive", "--plan=old"])]);
     pane.wait("the refusal", |_| pane.footer_has("archived: The Context is archived."));
+}
+
+#[test]
+fn rename_on_an_archived_plan_runs_plan_rename() {
+    let env = env();
+    populate(&env);
+    archive(&env);
+    fake_cpd(&env, r#"{"ok":true,"plan":"old","title":"Older"}"#);
+    let pane = Pane::start(&env, 60, 16);
+    pane.ready();
+    pane.click(4, 7); // beta's `…`
+    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ○ Plan old")));
+    pane.right_click(10, 8);
+    pane.wait("the menu", |s| menu_open(s, "Rename…"));
+    pane.keys(&["Enter"]);
+    pane.wait("the prompt", |_| pane.footer_has("Title: Plan old"));
+    pane.type_text("er");
+    pane.keys(&["Enter"]);
+    assert_eq!(wait_for_calls(&env, 1), [words(&["plan", "rename", "--plan=old", "--title=Plan older"])]);
 }
 
 #[test]

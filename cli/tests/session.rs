@@ -798,6 +798,18 @@ fn close_of_a_stopped_lead_with_a_pane_appends_only_session_moved() {
     assert!(panes(&env).iter().all(|p| p.session != LEAD2));
 }
 
+#[test]
+fn rename_works_on_an_archived_session() {
+    let env = TestEnv::new();
+    setup(&env);
+    exec_sql(&env, "UPDATE sessions SET archived_at = 't9' WHERE id = 'lead2'");
+    let out = env.cpd(&["session", "rename", "Archived and renamed", "--session", "lead2"]).ok();
+    assert_eq!(out, json!({"ok": true, "session": "lead2", "name": "Archived and renamed"}));
+    let row = show(&env, "lead2");
+    assert_eq!((&row["name"], &row["archived_at"]), (&json!("Archived and renamed"), &json!("t9")));
+    assert_eq!(events(&env, "session-renamed").len(), 1);
+}
+
 // ---------- archive ----------
 
 /// A parked side fork of `lead1` (stopped, with a pane): fake pi and cpd, and the cockpit.

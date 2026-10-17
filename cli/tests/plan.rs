@@ -1025,6 +1025,20 @@ fn rename_refusals() {
     assert!(events(&env, "plan-renamed").is_empty());
 }
 
+#[test]
+fn rename_works_on_an_archived_plan() {
+    let env = TestEnv::new();
+    setup(&env);
+    new_plan_only(&env, "pay");
+    env.cpd(&["plan", "archive", "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Archived and renamed"]).ok();
+    assert_eq!(out["plan"]["title"], "Archived and renamed");
+    let plan = show(&env, "pay");
+    assert_eq!(plan["plan"]["title"], "Archived and renamed");
+    assert_ne!(plan["plan"]["archived_at"], Value::Null, "still archived");
+    assert_eq!(events(&env, "plan-renamed").len(), 1);
+}
+
 // ---- plan archive and unarchive -------------------------------------------
 
 /// Plan `pay` with its Lead and one side fork, each with a live parked pane.

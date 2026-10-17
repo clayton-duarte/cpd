@@ -74,7 +74,7 @@ impl Kind {
             Kind::Context => &[Item::NewPlan, Item::Rename, Item::Archive],
             Kind::Plan => &[Item::NewSession, Item::Rename, Item::Archive],
             Kind::Fork => &[Item::Open, Item::Rename, Item::Fork, Item::Close, Item::Archive],
-            Kind::Archived => &[Item::Unarchive],
+            Kind::Archived => &[Item::Rename, Item::Unarchive],
             Kind::Empty => &[Item::NewContext],
         }
     }
@@ -216,7 +216,7 @@ mod tests {
         assert_eq!(labels(Kind::Plan), ["New session…", "Rename…", "Archive"]);
         assert_eq!(labels(Kind::Fork), ["Open", "Rename…", "Fork…", "Close", "Archive"]);
         assert_eq!(labels(Kind::Empty), ["New Context…"]);
-        assert_eq!(labels(Kind::Archived), ["Unarchive"]);
+        assert_eq!(labels(Kind::Archived), ["Rename…", "Unarchive"]);
     }
 
     #[test]
