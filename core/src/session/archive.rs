@@ -5,13 +5,15 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
-use super::moves::close_lead;
+use super::moves::{Closed, close_lead, close_own, park_lead};
 use super::row::{self, Row};
 use super::state::scoped;
 use super::{ArchiveArgs, Env, UnarchiveArgs, not_a_lead};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
+use crate::host::chat_slot;
 use crate::ids::{PlanId, SessionId};
+use crate::plan::archive::{Objects, archive_keeping};
 use crate::output::Output;
 
 /// One live object that stops an archive (contract §2.2 "Archived").
@@ -112,6 +114,13 @@ pub(super) fn archive(args: ArchiveArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let lead = env.store.read(|conn| row::load(conn, &args.id))?;
     require_lead(&lead)?;
+    archive_lead(&mut env, &lead, false)
+}
+
+/// The archive of Lead `lead` (a side fork or a grounded Lead): the rules of §10.10, then its
+/// pane is closed and the row written. With `keep` its pane is left alone: the caller runs in
+/// it and closes it itself, after the row is written (`session run`, commands.md §10.8).
+pub(super) fn archive_lead(env: &mut Env, lead: &Row, keep: bool) -> Result<Output, CpdError> {
     if lead.archived_at.is_some() {
         return Ok(Output::success(json!({"archived": [], "closed": [], "already": true})));
     }
@@ -131,7 +140,11 @@ pub(super) fn archive(args: ArchiveArgs) -> Result<Output, CpdError> {
 
     let tmux = env.tmux();
     let cockpit = env.config.tmux.cockpit_session.clone();
-    let closed = close_lead(&mut env.store, &tmux, &cockpit, &lead.id, "session archive")?;
+    let closed = if keep {
+        Closed { pane: None, already: true }
+    } else {
+        close_lead(&mut env.store, &tmux, &cockpit, &lead.id, "session archive")?
+    };
 
     let changed = env.store.write("session archive", |tx| {
         let live = blockers(tx, &ids, &[])?;
@@ -153,6 +166,43 @@ pub(super) fn archive(args: ArchiveArgs) -> Result<Output, CpdError> {
     }
     let closed: Vec<String> = closed.pane.into_iter().filter(|_| !closed.already).collect();
     Ok(Output::success(json!({"archived": [{"kind": "session", "id": lead.id}], "closed": closed})))
+}
+
+/// The archive when the User quits pi in Lead `id`'s pane (commands.md §10.8), called by
+/// `session run` in that pane. Refused (`archive_blocked`) before anything moves when something
+/// is live. Else: the Lead is parked when it holds the chat slot, so the placeholder takes the
+/// slot; then the archive of a Plan's own Lead (`plan archive`, forks included) or of any other
+/// Lead (`session archive`) writes its rows and closes the other panes; the wrapper's own pane
+/// is closed last. Returns only when that pane could not be closed.
+pub(super) fn archive_on_quit(env: &mut Env, id: &SessionId) -> Result<(), CpdError> {
+    let lead = env.store.read(|conn| row::load(conn, id))?;
+    let own_plan = lead.plan.clone().filter(|_| lead.plan_lead);
+    let objects = match &own_plan {
+        Some(plan) => env.store.read(|conn| Objects::of_plan(conn, plan))?,
+        None => Objects { context: None, plans: Vec::new(), sessions: vec![lead.id.clone()] },
+    };
+    let live = env.store.read(|conn| blockers(conn, &objects.sessions, &objects.plans))?;
+    if !live.is_empty() {
+        return Err(archive_blocked(&live, None));
+    }
+
+    let tmux = env.tmux();
+    let cockpit = env.config.tmux.cockpit_session.clone();
+    let panes = tmux.list_panes()?;
+    if let Some(slot) = chat_slot(&panes, &cockpit).filter(|p| p.cpd_session.as_ref() == Some(&lead.id)) {
+        park_lead(env, &tmux, &cockpit, &lead, slot, "session park")?;
+    }
+    match own_plan {
+        Some(_) => {
+            archive_keeping(&mut env.store, &env.config, "plan archive", &objects, Some(&lead.id))?;
+        }
+        None => {
+            // Re-read: parking moved it.
+            let lead = env.store.read(|conn| row::load(conn, id))?;
+            archive_lead(env, &lead, true)?;
+        }
+    }
+    close_own(env, &lead.id, "session archive")
 }
 
 /// `session unarchive` (commands.md §10.11).
