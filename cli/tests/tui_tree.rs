@@ -521,17 +521,18 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
         ],
         "the archived Plan `old` is behind beta's `…`, the archived Context `gamma` behind the last"
     );
-    // a click on beta's `…` shows the archived Plan, muted, under a dotted line
+    // a click on beta's `…` shows the archived Plan at the depth it would have if live, with the normal guide
     pane.click(4, 7);
-    let screen = pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("┆ ○ Plan old")));
-    assert_eq!(screen[6..10], [row("  ├ ● Plan rel", "0⋅0⋅0⋅0⋅1"), "  ┊".to_owned(), row("  ┊ ┆ ○ Plan old", "0⋅0⋅0⋅0⋅0"), "…".to_owned()]);
-    // a click on the archived Plan opens nothing; then the other `…` shows the archived Context
+    let screen = pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ○ Plan old")));
+    assert_eq!(screen[6..10], [row("  ├ ● Plan rel", "0⋅0⋅0⋅0⋅1"), "  ├ …".to_owned(), row("  └ ○ Plan old", "0⋅0⋅0⋅0⋅0"), "…".to_owned()]);
+    // a click on the archived Plan or on its guide opens or collapses nothing; then the other `…` shows the archived Context
     pane.click(10, 8);
-    pane.click(0, 9);
-    let screen = pane.wait("the archived Context", |s| s.iter().any(|r| r.contains("┊ ○ Title of gamma")));
-    assert_eq!(screen[9..11], ["┊".to_owned(), "┊ ○ Title of gamma".to_owned()]);
-    // a click on the dotted line of beta's group collapses it again
     pane.click(2, 8);
+    pane.click(0, 9);
+    let screen = pane.wait("the archived Context", |s| s.iter().any(|r| r == "○ Title of gamma"));
+    assert_eq!(screen[8..11], [row("  └ ○ Plan old", "0⋅0⋅0⋅0⋅0"), "…".to_owned(), "○ Title of gamma".to_owned()]);
+    // a click on beta's `…` collapses its group again
+    pane.click(4, 7);
     let screen = pane.wait("the group collapsed", |s| s.iter().all(|r| !r.contains("Plan old")));
     assert_eq!(screen[6..8], [row("  ├ ● Plan rel", "0⋅0⋅0⋅0⋅1"), "  └ …".to_owned()]);
     assert!(calls(&env).is_empty(), "a click on an archived row, or on a `…` row, runs no command: {:?}", calls(&env));
@@ -546,7 +547,7 @@ fn the_cursor_skips_archived_rows_and_enter_never_opens_one() {
     let pane = Pane::start(&env, 46, 16);
     pane.ready();
     pane.click(4, 7); // beta's `…`: its archived Plan is drawn
-    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("┆ ○ Plan old")));
+    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ○ Plan old")));
     pane.down(6); // ship, sketch, f-idle, f-blocked, rel, and then nowhere: the archived Plan `old` is not a stop
     pane.keys(&["Enter"]);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "l-rel"])]);
@@ -717,7 +718,7 @@ fn unarchive_in_the_menu_runs_without_a_prompt_and_a_refusal_shows_in_the_note_r
     let pane = Pane::start(&env, 46, 16);
     pane.ready();
     pane.click(4, 7); // beta's `…`
-    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("┆ ○ Plan old")));
+    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ○ Plan old")));
     pane.right_click(10, 8); // the archived Plan `old`
     let screen = pane.wait("the menu", |s| menu_open(s, "Unarchive"));
     assert!(screen.iter().all(|r| !r.contains("New Plan") && !r.contains("Rename") && !r.contains("Archive ")), "Unarchive only: {screen:?}");

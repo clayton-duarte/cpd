@@ -316,8 +316,8 @@ impl View {
         self.note.clear();
         self.last_input = Input::Click;
         let Some(path) = self.row_at(Position::new(m.column, m.row)) else { return Effect::None };
-        // a `…` row expands; the dotted line of an expanded group collapses it
-        if rows::click_group(&mut self.state, &path, m.column) {
+        // a `…` row expands or collapses its archived rows
+        if rows::click_more(&mut self.state, &self.tree, &path) {
             return Effect::None;
         }
         // a Context row only collapses or expands; a live Session row opens it; an archived row does nothing
@@ -603,24 +603,27 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_a_more_row_expands_it_and_a_click_on_its_dotted_line_collapses_it() {
+    fn a_click_on_a_more_row_expands_it_and_a_click_on_it_again_collapses_it() {
         let mut view = View::new(archived(), true);
         let rows = drawn(&mut view, 44, 16);
         assert_eq!((rows[4].as_str(), rows[8].as_str()), ("  └ …", "…"));
         assert_eq!(click(&mut view, 3, 4), Effect::None, "the `…` of alpha");
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!(rows[4], "  ┊");
-        assert!(rows[5].starts_with("  ┊ ┆ ○ Old"), "{rows:?}");
-        assert_eq!(rows[6], "  ┊ ┆ ○ ship review (Ship)");
+        assert_eq!(rows[4], "  ├ …");
+        assert!(rows[5].starts_with("  ├ ○ Old"), "{rows:?}");
+        assert_eq!(rows[6], "  └ ○ ship review (Ship)");
         assert_eq!(rows[10], "…");
         assert_eq!(click(&mut view, 0, 10), Effect::None, "the `…` of the archived Contexts");
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!((rows[10].as_str(), rows[11].as_str()), ("┊", "┊ ○ Zeta"));
-        // the dotted line of a group collapses it again, in any of its rows
-        assert_eq!(click(&mut view, 0, 12), Effect::None);
+        assert_eq!((rows[10].as_str(), rows[11].as_str()), ("…", "○ Zeta"));
+        assert!(rows[12].starts_with("  ├ ○ Zp"), "{rows:?}");
+        // a click on a guide does nothing; a click on `…` collapses
+        assert_eq!(click(&mut view, 2, 12), Effect::None);
+        assert_eq!(drawn(&mut view, 44, 16)[11], "○ Zeta");
+        assert_eq!(click(&mut view, 0, 10), Effect::None);
         let rows = drawn(&mut view, 44, 16);
         assert_eq!((rows[10].as_str(), rows[11].as_str()), ("…", ""));
-        assert_eq!(click(&mut view, 2, 5), Effect::None);
+        assert_eq!(click(&mut view, 3, 4), Effect::None);
         let rows = drawn(&mut view, 44, 16);
         assert_eq!((rows[4].as_str(), rows[5].as_str()), ("  └ …", "● Beta"));
     }
@@ -631,9 +634,10 @@ mod tests {
         drawn(&mut view, 44, 12);
         assert_eq!(click(&mut view, 0, 11), Effect::None);
         assert_eq!(click(&mut view, 3, 9), Effect::None, "the row right below the last");
-        assert!(drawn(&mut view, 44, 12).iter().all(|r| !r.contains('┊')), "the `…` rows are at rows 4 and 8");
+        let none_shown = |rows: Vec<String>| rows.iter().all(|r| !r.contains("Old") && !r.contains("Zeta"));
+        assert!(none_shown(drawn(&mut view, 44, 12)), "the `…` rows are at rows 4 and 8");
         let _ = right_click(&mut view, 0, 8);
-        assert!(drawn(&mut view, 44, 12).iter().all(|r| !r.contains('┊')), "only the left button clicks");
+        assert!(none_shown(drawn(&mut view, 44, 12)), "only the left button clicks");
     }
 
     #[test]
@@ -644,7 +648,7 @@ mod tests {
         drawn(&mut view, 44, 16);
         click(&mut view, 0, 10);
         let rows = drawn(&mut view, 44, 16);
-        assert!(rows[5].starts_with("  ┊ ┆ ○ Old") && rows[11] == "┊ ○ Zeta", "{rows:?}");
+        assert!(rows[5].starts_with("  ├ ○ Old") && rows[11] == "○ Zeta", "{rows:?}");
         // the Plan, its fork, the stray fork and the archived Plan of the archived Context
         for (column, row) in [(8, 5), (8, 6), (8, 12), (8, 13)] {
             assert_eq!(click(&mut view, column, row), Effect::None, "({column}, {row})");
@@ -652,7 +656,7 @@ mod tests {
         }
         // the cursor is put on archived rows by hand, as a bug might: no key acts on it
         press(&mut view, KeyCode::Down);
-        for path in [&["alpha", "…", "old"][..], &["alpha", "…", "fork:f-blocked"], &["…", "zeta", "zp"], &["…", "zeta", "f-zp"], &["alpha", "…"]] {
+        for path in [&["alpha", "old"][..], &["alpha", "f-blocked"], &["zeta", "zp"], &["zeta", "f-zp"], &["alpha", "…"]] {
             view.state.select(path.iter().map(|p| (*p).to_owned()).collect());
             for key in [KeyCode::Enter, KeyCode::Char('x'), KeyCode::Char('n')] {
                 assert_eq!(press(&mut view, key), Effect::None, "{path:?} {key:?}");
@@ -715,7 +719,7 @@ mod tests {
         drawn(&mut view, 44, 16);
         click(&mut view, 0, 10);
         let rows = drawn(&mut view, 44, 16);
-        assert!(rows[5].starts_with("  ┊ ┆ ○ Old") && rows[11] == "┊ ○ Zeta", "{rows:?}");
+        assert!(rows[5].starts_with("  ├ ○ Old") && rows[11] == "○ Zeta", "{rows:?}");
         // the archived Plan, its fork, an archived Context and its Plan, and an archived fork of a live Plan
         for (column, row) in [(8, 5), (8, 6), (8, 11), (8, 12), (8, 13)] {
             assert_eq!(menu_at(&mut view, column, row), ["Unarchive"], "({column}, {row})");
