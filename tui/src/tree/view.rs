@@ -11,7 +11,7 @@ use std::collections::HashSet;
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
-use ratatui::layout::{Constraint, Layout, Position, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::widgets::{Paragraph, Wrap};
 use tui_tree_widget::TreeState;
 
@@ -88,7 +88,8 @@ pub struct View {
     prompt: Option<Prompt>,
     /// The right-click menu, while it is open; never together with a prompt.
     menu: Option<Menu>,
-    /// The area of the last frame: the menu is clamped inside it and hit-tested against it.
+    /// The inner area of the last frame (the pane less a blank column on each side, below the blank top row): the
+    /// menu is clamped inside it and hit-tested against it, and its `x` is the column of the tree's first cell.
     pane: Rect,
     /// The one-line result or refusal of the last action, until the next `n`, `x` or click.
     pub note: String,
@@ -317,7 +318,7 @@ impl View {
         self.last_input = Input::Click;
         let Some(path) = self.row_at(Position::new(m.column, m.row)) else { return Effect::None };
         // a `…` row expands; the dotted line of an expanded group collapses it
-        if rows::click_group(&mut self.state, &path, m.column) {
+        if rows::click_group(&mut self.state, &path, m.column.saturating_sub(self.pane.x)) {
             return Effect::None;
         }
         // a Context row only collapses or expands; a live Session row opens it; an archived row does nothing
@@ -343,25 +344,25 @@ impl View {
     }
 
     /// Draw a blank row, the tree below it, and (when there is something to say) the footer in the rows at the bottom: the
-    /// reference's layout, the prompt bold.
+    /// reference's layout, the prompt bold. One blank column is left on each side of all of it.
     pub fn draw(&mut self, f: &mut Frame) {
-        let area = f.area();
+        let inner = f.area().inner(Margin::new(1, 0));
         let footer = self.footer();
-        let width = area.width.max(1) as usize;
+        let width = inner.width.max(1) as usize;
         let wrapped = footer.chars().count().div_ceil(width);
         let footer_height =
-            if footer.is_empty() { 0 } else { (wrapped + usize::from(wrapped > 1)).max(1).min(area.height as usize) as u16 };
+            if footer.is_empty() { 0 } else { (wrapped + usize::from(wrapped > 1)).max(1).min(inner.height as usize) as u16 };
         let [_, list, footer_area] =
-            Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(footer_height)]).areas(area);
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(footer_height)]).areas(inner);
         if footer_height > 0 {
             let style = if self.prompt.is_some() { palette::note().bold() } else { palette::note() };
             f.render_widget(Paragraph::new(footer).style(style).wrap(Wrap { trim: false }), footer_area);
         }
         let cursor = self.cursor_shown();
         rows::draw(f, list, &self.tree, &mut self.state, cursor);
-        self.pane = area;
+        self.pane = Rect { y: inner.y + inner.height.min(1), height: inner.height.saturating_sub(1), ..inner };
         if let Some(menu) = &self.menu {
-            menu.draw(f, area);
+            menu.draw(f, self.pane);
         }
     }
 }
@@ -541,20 +542,20 @@ mod tests {
         let mut view = on(&["alpha", "sketch"]);
         press(&mut view, KeyCode::Char('n'));
         let rows = drawn(&mut view, 44, 14);
-        assert_eq!(rows[9], "○ Gamma");
-        assert_eq!(rows[11], "Fork Sketch into a new Plan, name: █ (Enter");
-        assert_eq!(rows[12], "starts, Esc cancels)");
+        assert_eq!(rows[9], " ○ Gamma");
+        assert_eq!(rows[11], " Fork Sketch into a new Plan, name: █");
+        assert_eq!(rows[12], " (Enter starts, Esc cancels)");
         assert_eq!(rows[13], "", "two wrapped rows take three");
         let mut terminal = Terminal::new(TestBackend::new(44, 14)).unwrap();
         terminal.draw(|f| view.draw(f)).unwrap();
-        let cell = &terminal.backend().buffer()[(0, 11)];
+        let cell = &terminal.backend().buffer()[(1, 11)];
         assert_eq!((cell.fg, cell.modifier.contains(Modifier::BOLD)), (palette::ui(palette::Ui::Note), true));
         press(&mut view, KeyCode::Esc);
         let rows = drawn(&mut view, 44, 14);
         assert!(rows[10..].iter().all(|r| r.is_empty()), "{rows:?}");
         view.done(Err("closed".into()));
         let rows = drawn(&mut view, 44, 14);
-        assert_eq!(rows[13], "closed", "a note is one row at the bottom");
+        assert_eq!(rows[13], " closed", "a note is one row at the bottom");
     }
 
     fn click(view: &mut View, column: u16, row: u16) -> Effect {
@@ -583,14 +584,104 @@ mod tests {
         let mut view = View::new(sample(), true);
         let rows = drawn(&mut view, 44, 12);
         assert_eq!(rows[0], "", "the blank row at the top");
-        assert_eq!(rows[1], "● Alpha");
-        assert!(rows[2].starts_with("⏵ ├ ○ Ship"), "{rows:?}");
+        assert_eq!(rows[1], " ● Alpha");
+        assert!(rows[2].starts_with(" ⏵ ├ ○ Ship"), "{rows:?}");
         assert_eq!(click(&mut view, 8, 0), Effect::None, "the blank row is no row: not the Context row below it, not the first Session");
         assert!(view.state.opened().contains(&vec!["alpha".to_owned()]), "alpha is not folded");
         assert_eq!(click(&mut view, 8, 2), Effect::Run(Action::Open(sid("l-ship"))), "the first Session's row");
         assert_eq!(click(&mut view, 8, 3), Effect::Run(Action::Open(sid("l-sketch"))), "the Session below it");
         assert_eq!(right_click(&mut view, 8, 0), Effect::None);
         assert_eq!(view.menu.as_ref().map(|m| m.path.clone()), Some(vec![]), "the blank row is the empty area: its menu");
+    }
+
+    /// The buffer of a drawn frame.
+    fn buffer(view: &mut View, width: u16, height: u16) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| view.draw(f)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    /// Column 0 and the last column are blank, and unstyled, on every row.
+    fn assert_margins_blank(view: &mut View, width: u16, height: u16, what: &str) {
+        let buf = buffer(view, width, height);
+        for y in 0..height {
+            for x in [0, width - 1] {
+                let cell = &buf[(x, y)];
+                assert_eq!((cell.symbol(), cell.modifier), (" ", Modifier::empty()), "{what}: ({x}, {y})");
+                assert_eq!(cell.bg, ratatui::style::Color::Reset, "{what}: ({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn column_0_and_the_last_column_are_blank_on_every_row() {
+        for (width, height) in [(44, 16), (30, 16), (12, 8)] {
+            let mut view = on(&["alpha", "sketch"]); // the cursor is shown: its row is inverted inside the margins
+            assert_margins_blank(&mut view, width, height, "the tree");
+            let mut view = View::new(archived(), true);
+            assert_margins_blank(&mut view, width, height, "archived rows");
+            let mut view = on(&["alpha", "sketch"]);
+            view.done(Err("a note that is long enough to wrap onto several rows of the pane".into()));
+            assert_margins_blank(&mut view, width, height, "a wrapped note");
+            press(&mut view, KeyCode::Char('x'));
+            assert_margins_blank(&mut view, width, height, "a prompt");
+            let mut view = View::new(sample(), true);
+            drawn(&mut view, width, height);
+            right_click(&mut view, 5, 1);
+            assert_margins_blank(&mut view, width, height, "a menu");
+            view.menu = None;
+            right_click(&mut view, width - 1, height - 1);
+            assert!(view.menu.is_some());
+            assert_margins_blank(&mut view, width, height, "a menu at the corner");
+        }
+        let mut view = View::new(Tree { contexts: Vec::new(), events_cursor: 0 }, true);
+        assert_margins_blank(&mut view, 30, 5, "no Contexts");
+    }
+
+    #[test]
+    fn the_counters_end_at_width_minus_2_and_the_cursor_row_is_inverted_between_the_margins() {
+        let mut view = on(&["alpha", "ship"]);
+        let buf = buffer(&mut view, 44, 12);
+        let ship: String = (0..44).map(|x| buf[(x, 2)].symbol()).collect();
+        assert!(ship.trim_end().ends_with("2⋅1⋅1⋅0⋅5") && ship.chars().nth(42) == Some('5'), "{ship:?}");
+        let reversed: Vec<u16> = (0..44).filter(|x| buf[(*x, 2)].modifier.contains(Modifier::REVERSED)).collect();
+        assert_eq!(reversed, (1..43).collect::<Vec<u16>>());
+    }
+
+    #[test]
+    fn a_click_on_the_first_drawn_cell_of_a_row_acts_on_that_row_and_the_margins_are_no_row() {
+        let mut view = View::new(sample(), true);
+        drawn(&mut view, 44, 12);
+        assert_eq!(click(&mut view, 1, 2), Effect::Run(Action::Open(sid("l-ship"))), "the Plan row's `⏵`");
+        assert_eq!(click(&mut view, 1, 3), Effect::Run(Action::Open(sid("l-sketch"))));
+        assert_eq!(click(&mut view, 42, 3), Effect::Run(Action::Open(sid("l-sketch"))), "the last cell of the list");
+        for row in [2, 3] {
+            assert_eq!(click(&mut view, 0, row), Effect::None, "the left margin of row {row}");
+            assert_eq!(click(&mut view, 43, row), Effect::None, "the right margin of row {row}");
+        }
+        assert_eq!(click(&mut view, 1, 1), Effect::None, "the Context row folds");
+        assert!(!view.state.opened().contains(&vec!["alpha".to_owned()]));
+        drawn(&mut view, 44, 12);
+        assert_eq!(click(&mut view, 0, 1), Effect::None);
+        assert!(!view.state.opened().contains(&vec!["alpha".to_owned()]), "the margin did not unfold it");
+        assert_eq!(click(&mut view, 1, 1), Effect::None);
+        assert!(view.state.opened().contains(&vec!["alpha".to_owned()]));
+    }
+
+    #[test]
+    fn the_menu_is_clamped_inside_the_inner_area_and_a_click_on_a_margin_is_outside_it() {
+        let mut view = View::new(sample(), true);
+        drawn(&mut view, 44, 16);
+        right_click(&mut view, 43, 15);
+        drawn(&mut view, 44, 16);
+        let rect = view.menu.as_ref().unwrap().rect(view.pane);
+        assert_eq!((rect.x, rect.y, rect.right(), rect.bottom()), (27, 13, 43, 16));
+        right_click(&mut view, 0, 0); // an open menu takes the click: a right click outside closes it
+        assert!(view.menu.is_none());
+        right_click(&mut view, 0, 0);
+        drawn(&mut view, 44, 16);
+        let rect = view.menu.as_ref().unwrap().rect(view.pane);
+        assert_eq!((rect.x, rect.y), (1, 1), "not on the blank column or row");
     }
 
     #[test]
@@ -622,33 +713,33 @@ mod tests {
     fn a_click_on_a_more_row_expands_it_and_a_click_on_its_dotted_line_collapses_it() {
         let mut view = View::new(archived(), true);
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!((rows[5].as_str(), rows[9].as_str()), ("  └ …", "…"));
+        assert_eq!((rows[5].as_str(), rows[9].as_str()), ("   └ …", " …"));
         assert_eq!(click(&mut view, 3, 5), Effect::None, "the `…` of alpha");
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!(rows[5], "  ┊");
-        assert!(rows[6].starts_with("  ┊ ┆ ○ Old"), "{rows:?}");
-        assert_eq!(rows[7], "  ┊ ┆ ○ ship review (Ship)");
-        assert_eq!(rows[11], "…");
-        assert_eq!(click(&mut view, 0, 11), Effect::None, "the `…` of the archived Contexts");
+        assert_eq!(rows[5], "   ┊");
+        assert!(rows[6].starts_with("   ┊ ┆ ○ Old"), "{rows:?}");
+        assert_eq!(rows[7], "   ┊ ┆ ○ ship review (Ship)");
+        assert_eq!(rows[11], " …");
+        assert_eq!(click(&mut view, 1, 11), Effect::None, "the `…` of the archived Contexts");
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!((rows[11].as_str(), rows[12].as_str()), ("┊", "┊ ○ Zeta"));
+        assert_eq!((rows[11].as_str(), rows[12].as_str()), (" ┊", " ┊ ○ Zeta"));
         // the dotted line of a group collapses it again, in any of its rows
-        assert_eq!(click(&mut view, 0, 13), Effect::None);
+        assert_eq!(click(&mut view, 1, 13), Effect::None);
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!((rows[11].as_str(), rows[12].as_str()), ("…", ""));
-        assert_eq!(click(&mut view, 2, 6), Effect::None);
+        assert_eq!((rows[11].as_str(), rows[12].as_str()), (" …", ""));
+        assert_eq!(click(&mut view, 3, 6), Effect::None);
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!((rows[5].as_str(), rows[6].as_str()), ("  └ …", "● Beta"));
+        assert_eq!((rows[5].as_str(), rows[6].as_str()), ("   └ …", " ● Beta"));
     }
 
     #[test]
     fn a_click_below_the_last_row_expands_nothing() {
         let mut view = View::new(archived(), true);
         drawn(&mut view, 44, 12);
-        assert_eq!(click(&mut view, 0, 11), Effect::None);
+        assert_eq!(click(&mut view, 1, 11), Effect::None);
         assert_eq!(click(&mut view, 3, 10), Effect::None, "the row right below the last");
         assert!(drawn(&mut view, 44, 12).iter().all(|r| !r.contains('┊')), "the `…` rows are at rows 5 and 9");
-        let _ = right_click(&mut view, 0, 9);
+        let _ = right_click(&mut view, 1, 9);
         assert!(drawn(&mut view, 44, 12).iter().all(|r| !r.contains('┊')), "only the left button clicks");
     }
 
@@ -658,9 +749,9 @@ mod tests {
         drawn(&mut view, 44, 16);
         click(&mut view, 3, 5);
         drawn(&mut view, 44, 16);
-        click(&mut view, 0, 11);
+        click(&mut view, 1, 11);
         let rows = drawn(&mut view, 44, 16);
-        assert!(rows[6].starts_with("  ┊ ┆ ○ Old") && rows[12] == "┊ ○ Zeta", "{rows:?}");
+        assert!(rows[6].starts_with("   ┊ ┆ ○ Old") && rows[12] == " ┊ ○ Zeta", "{rows:?}");
         // the Plan, its fork, the stray fork and the archived Plan of the archived Context
         for (column, row) in [(8, 6), (8, 7), (8, 13), (8, 14)] {
             assert_eq!(click(&mut view, column, row), Effect::None, "({column}, {row})");
@@ -729,15 +820,15 @@ mod tests {
         drawn(&mut view, 44, 16);
         click(&mut view, 3, 5);
         drawn(&mut view, 44, 16);
-        click(&mut view, 0, 11);
+        click(&mut view, 1, 11);
         let rows = drawn(&mut view, 44, 16);
-        assert!(rows[6].starts_with("  ┊ ┆ ○ Old") && rows[12] == "┊ ○ Zeta", "{rows:?}");
+        assert!(rows[6].starts_with("   ┊ ┆ ○ Old") && rows[12] == " ┊ ○ Zeta", "{rows:?}");
         // the archived Plan, its fork, an archived Context and its Plan, and an archived fork of a live Plan
         for (column, row) in [(8, 6), (8, 7), (8, 12), (8, 13), (8, 14)] {
             assert_eq!(menu_at(&mut view, column, row), ["Unarchive"], "({column}, {row})");
             press(&mut view, KeyCode::Esc);
         }
-        for (column, row) in [(3, 5), (0, 11), (0, 15)] {
+        for (column, row) in [(3, 5), (1, 11), (1, 15)] {
             let _ = right_click(&mut view, column, row);
             assert_eq!(view.menu.is_some(), row == 15, "({column}, {row}): `…` rows have none, the empty area has one");
             view.menu = None;
@@ -750,9 +841,9 @@ mod tests {
         drawn(&mut view, 44, 16);
         right_click(&mut view, 8, 5);
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!(rows[5], "  ├ ○ sh┌─────────┐", "{rows:?}");
-        assert_eq!(rows[6], "  └ ● sh│ Open    │");
-        assert!(rows[7].starts_with("● Beta  │ Rename… │"), "drawn over the tree: {rows:?}");
+        assert_eq!(rows[5], "   ├ ○ s┌─────────┐", "{rows:?}");
+        assert_eq!(rows[6], "   └ ● s│ Open    │");
+        assert!(rows[7].starts_with(" ● Beta │ Rename… │"), "drawn over the tree: {rows:?}");
         assert_eq!(rows[11], "        └─────────┘");
         let reversed = |view: &mut View, x, y| {
             let mut terminal = Terminal::new(TestBackend::new(44, 16)).unwrap();
@@ -765,7 +856,7 @@ mod tests {
         view.menu = None;
         right_click(&mut view, 43, 15);
         let rows = drawn(&mut view, 44, 16);
-        let box_row = |left: char, fill: &str, right: char| format!("{}{left}{fill}{right}", " ".repeat(28));
+        let box_row = |left: char, fill: &str, right: char| format!("{}{left}{fill}{right}", " ".repeat(27));
         assert_eq!((rows[13].clone(), rows[14].clone(), rows[15].clone()), (box_row('┌', &"─".repeat(14), '┐'), box_row('│', " New Context… ", '│'), box_row('└', &"─".repeat(14), '┘')));
     }
 
@@ -851,7 +942,7 @@ mod tests {
         drawn(&mut view, 44, 16);
         click(&mut view, 3, 5);
         drawn(&mut view, 44, 16);
-        click(&mut view, 0, 11);
+        click(&mut view, 1, 11);
         drawn(&mut view, 44, 16);
         for (row, subject) in [
             (6, Subject::Plan(PlanId::parse("old").unwrap())),

@@ -282,23 +282,35 @@ fn the_tree_of_a_prepared_store() {
     populate(&env);
     let pane = Pane::start(&env, 46, 14);
     let screen = pane.ready();
-    let row = |left: &str, right: &str| format!("{left:<w$}{right}", w = 46 - right.chars().count());
+    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
     assert_eq!(
         screen,
         [
             String::new(),
-            "● Title of alpha".to_owned(),
+            " ● Title of alpha".to_owned(),
             row("⏵ ├ ○ Plan ship", "1⋅1⋅0⋅1⋅2"),
             row("  ├ ○ Plan sketch", "2⋅0⋅0⋅0⋅0"),
-            "  ├ ○ ship fork".to_owned(),
-            "  └ ● ship review".to_owned(),
-            "● Title of beta".to_owned(),
+            "   ├ ○ ship fork".to_owned(),
+            "   └ ● ship review".to_owned(),
+            " ● Title of beta".to_owned(),
             row("  ├ ● Plan rel", "0⋅0⋅0⋅0⋅1"),
             row("  └ ○ Plan old", "0⋅0⋅0⋅0⋅0"),
-            "○ Title of gamma".to_owned(),
+            " ○ Title of gamma".to_owned(),
         ],
         "the Context and Plan titles, the forks' names; the forks are siblings of the Plans, after them, under their Context (B1); the grounded Lead g-alpha is no row; the Jobs: queued, running, merging, failed, merged; no state text"
     );
+}
+
+#[test]
+fn the_tree_leaves_the_first_and_the_last_column_blank() {
+    let env = env();
+    populate(&env);
+    let pane = Pane::start(&env, 46, 14);
+    let screen = pane.ready();
+    // `screen` is trimmed at the right, so the last column is blank when no row is longer than 45 columns
+    assert!(screen.iter().all(|r| r.is_empty() || r.starts_with(' ')), "column 0: {screen:?}");
+    assert!(screen.iter().all(|r| r.chars().count() <= 45), "the last column: {screen:?}");
+    assert!(screen.iter().any(|r| r.chars().count() == 45), "the counters end at width − 2: {screen:?}");
 }
 
 #[test]
@@ -306,7 +318,7 @@ fn an_empty_store_says_so() {
     let env = env();
     drop(open(&env));
     let pane = Pane::start(&env, 30, 5);
-    assert_eq!(pane.wait("the empty tree", |s| !s.is_empty()), ["", " no Contexts"]);
+    assert_eq!(pane.wait("the empty tree", |s| !s.is_empty()), ["", "  no Contexts"]);
 }
 
 #[test]
@@ -472,7 +484,7 @@ fn the_tree_follows_the_events_of_the_store() {
     // session-state
     env.cpd(&["session", "state", "blocked", "--label", "cpd: Ask", "--session", "l-sketch"]).ok();
     let screen = pane.wait("the new state", |s| s.iter().any(|r| r.contains("├ ● Plan sketch")));
-    assert!(screen.iter().any(|r| r.starts_with("● Title of alpha")));
+    assert!(screen.iter().any(|r| r.starts_with(" ● Title of alpha")));
 }
 
 /// `populate`, with the Context `gamma` and the Plan `old` of `beta` (and its Lead) archived.
@@ -493,36 +505,36 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
     fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 46, 16);
     let screen = pane.ready();
-    let row = |left: &str, right: &str| format!("{left:<w$}{right}", w = 46 - right.chars().count());
+    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
     assert_eq!(
         screen,
         [
             String::new(),
-            "● Title of alpha".to_owned(),
+            " ● Title of alpha".to_owned(),
             row("⏵ ├ ○ Plan ship", "1⋅1⋅0⋅1⋅2"),
             row("  ├ ○ Plan sketch", "2⋅0⋅0⋅0⋅0"),
-            "  ├ ○ ship fork".to_owned(),
-            "  └ ● ship review".to_owned(),
-            "● Title of beta".to_owned(),
+            "   ├ ○ ship fork".to_owned(),
+            "   └ ● ship review".to_owned(),
+            " ● Title of beta".to_owned(),
             row("  ├ ● Plan rel", "0⋅0⋅0⋅0⋅1"),
-            "  └ …".to_owned(),
-            "…".to_owned(),
+            "   └ …".to_owned(),
+            " …".to_owned(),
         ],
         "the archived Plan `old` is behind beta's `…`, the archived Context `gamma` behind the last"
     );
     // a click on beta's `…` shows the archived Plan, muted, under a dotted line
     pane.click(4, 8);
     let screen = pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("┆ ○ Plan old")));
-    assert_eq!(screen[7..11], [row("  ├ ● Plan rel", "0⋅0⋅0⋅0⋅1"), "  ┊".to_owned(), row("  ┊ ┆ ○ Plan old", "0⋅0⋅0⋅0⋅0"), "…".to_owned()]);
+    assert_eq!(screen[7..11], [row("  ├ ● Plan rel", "0⋅0⋅0⋅0⋅1"), "   ┊".to_owned(), row("  ┊ ┆ ○ Plan old", "0⋅0⋅0⋅0⋅0"), " …".to_owned()]);
     // a click on the archived Plan opens nothing; then the other `…` shows the archived Context
     pane.click(10, 9);
-    pane.click(0, 10);
+    pane.click(1, 10);
     let screen = pane.wait("the archived Context", |s| s.iter().any(|r| r.contains("┊ ○ Title of gamma")));
-    assert_eq!(screen[10..12], ["┊".to_owned(), "┊ ○ Title of gamma".to_owned()]);
+    assert_eq!(screen[10..12], [" ┊".to_owned(), " ┊ ○ Title of gamma".to_owned()]);
     // a click on the dotted line of beta's group collapses it again
-    pane.click(2, 9);
+    pane.click(3, 9);
     let screen = pane.wait("the group collapsed", |s| s.iter().all(|r| !r.contains("Plan old")));
-    assert_eq!(screen[7..9], [row("  ├ ● Plan rel", "0⋅0⋅0⋅0⋅1"), "  └ …".to_owned()]);
+    assert_eq!(screen[7..9], [row("  ├ ● Plan rel", "0⋅0⋅0⋅0⋅1"), "   └ …".to_owned()]);
     assert!(calls(&env).is_empty(), "a click on an archived row, or on a `…` row, runs no command: {:?}", calls(&env));
 }
 
@@ -556,7 +568,7 @@ fn the_tree_follows_the_archive_and_rename_events() {
          INSERT INTO events (txn, at, kind, context, text, data)
          VALUES (cpd_txn(), '2026-02-01T00:00:00.000Z', 'context-renamed', 'gamma', 'fixture', '{\"title\":\"Renamed\"}');",
     );
-    pane.wait("the new title", |s| s.iter().any(|r| r == "○ Renamed"));
+    pane.wait("the new title", |s| s.iter().any(|r| r == " ○ Renamed"));
     sql(
         &mut open(&env),
         "UPDATE plans SET title = 'Plan renamed' WHERE id = 'old';
@@ -570,21 +582,21 @@ fn the_tree_follows_the_archive_and_rename_events() {
          INSERT INTO events (txn, at, kind, context, plan, text, data)
          VALUES (cpd_txn(), '2026-02-02T00:00:00.000Z', 'plan-archived', 'beta', 'old', 'fixture', '{\"archived\":true}');",
     );
-    pane.wait("the Plan behind `…`", |s| s.iter().any(|r| r == "  └ …") && s.iter().all(|r| !r.contains("Plan renamed")));
+    pane.wait("the Plan behind `…`", |s| s.iter().any(|r| r == "   └ …") && s.iter().all(|r| !r.contains("Plan renamed")));
     sql(
         &mut open(&env),
         "UPDATE contexts SET archived_at = '2026-02-02T00:00:00.000Z' WHERE id = 'gamma';
          INSERT INTO events (txn, at, kind, context, text, data)
          VALUES (cpd_txn(), '2026-02-02T00:00:01.000Z', 'context-archived', 'gamma', 'fixture', '{\"archived\":true}');",
     );
-    pane.wait("the Context behind `…`", |s| s.iter().any(|r| r == "…") && s.iter().all(|r| !r.contains("Renamed")));
+    pane.wait("the Context behind `…`", |s| s.iter().any(|r| r == " …") && s.iter().all(|r| !r.contains("Renamed")));
     sql(
         &mut open(&env),
         "UPDATE sessions SET archived_at = '2026-02-03T00:00:00.000Z' WHERE id = 'f-idle';
          INSERT INTO events (txn, at, kind, context, plan, session, text, data)
          VALUES (cpd_txn(), '2026-02-03T00:00:00.000Z', 'session-archived', 'alpha', 'ship', 'f-idle', 'fixture', '{\"archived\":true}');",
     );
-    pane.wait("the fork behind `…`", |s| s.iter().all(|r| !r.contains("ship fork")) && s.iter().filter(|r| r.as_str() == "  └ …").count() == 2);
+    pane.wait("the fork behind `…`", |s| s.iter().all(|r| !r.contains("ship fork")) && s.iter().filter(|r| r.as_str() == "   └ …").count() == 2);
 }
 
 // ---------- the right-click menu ----------
