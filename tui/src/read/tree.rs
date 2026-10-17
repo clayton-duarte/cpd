@@ -30,7 +30,6 @@ pub struct ContextNode {
     pub records: usize,
     /// Questions no answer refers to.
     pub open_questions: usize,
-    pub sync_failing: bool,
     /// When it was archived (contract §4.5); archived Contexts are in the model.
     pub archived_at: Option<String>,
     /// Its Plans, oldest first.
@@ -100,7 +99,7 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
         let mut heads = plan_heads(conn, None)?;
 
         let mut stmt = conn
-            .prepare("SELECT id, title, jira, lead_session, sync_failing, archived_at FROM contexts ORDER BY id")?;
+            .prepare("SELECT id, title, jira, lead_session, archived_at FROM contexts ORDER BY id")?;
         let mut rows = stmt.query([])?;
         let mut contexts = Vec::new();
         while let Some(r) = rows.next()? {
@@ -134,8 +133,7 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
                 grounded_lead: grounded,
                 records: records.remove(&cid).unwrap_or(0),
                 open_questions: questions.remove(&cid).unwrap_or(0),
-                sync_failing: r.get(4)?,
-                archived_at: r.get(5)?,
+                archived_at: r.get(4)?,
                 plans,
                 id: context,
             });

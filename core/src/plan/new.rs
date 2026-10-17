@@ -209,7 +209,7 @@ fn write_record(env: &mut Env, plan: &Created) -> Result<String, CpdError> {
     let by = By { session: env_id("CPD_SESSION", SessionId::parse)?.or(env_id("PI_SESSION_ID", SessionId::parse)?), plan: env_id("CPD_PLAN", PlanId::parse)? };
     let draft = Draft::Plan(PlanRef { id: plan.id.clone(), machine: env.config.machine.clone(), jira: plan.jira.clone() });
     let title: Text = plan.title.parse().map_err(|_| bad_row(format!("Plan {} has title {:?}", plan.id, plan.title)))?;
-    let written = Contexts::new(&env.home, &env.config, &mut env.store).write(&plan.context, "plan new", by, &title, draft)?;
+    let written = Contexts::new(&env.config, &mut env.store).write(&plan.context, "plan new", by, &title, draft)?;
     Ok(written.record.id.to_string())
 }
 

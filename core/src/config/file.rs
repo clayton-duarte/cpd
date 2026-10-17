@@ -124,7 +124,6 @@ pub struct Timeouts {
 pub struct Watch {
     pub tick_seconds: u32,
     pub pr_poll_seconds: u32,
-    pub context_sync_seconds: u32,
     /// The same `error` Event (step and code) is appended at most once per this (§3.7).
     pub error_repeat_seconds: u32,
 }
@@ -230,7 +229,6 @@ impl Config {
         let watch = Watch {
             tick_seconds: positive(&mut r, "watch.tick_seconds", 5)?,
             pr_poll_seconds: positive(&mut r, "watch.pr_poll_seconds", 5)?,
-            context_sync_seconds: positive(&mut r, "watch.context_sync_seconds", 300)?,
             error_repeat_seconds: positive(&mut r, "watch.error_repeat_seconds", 600)?,
         };
         let events = Events { poll_ms: r.get("events.poll_ms", 200, |v| int(v, 20, 10_000))? };

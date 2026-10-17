@@ -316,7 +316,7 @@ fn the_tree_is_contexts_then_plans_then_lead_sessions_with_their_states() {
     assert_eq!(ids, ["alpha", "beta", "gamma"]);
     let [alpha, beta, gamma] = &tree.contexts[..] else { panic!() };
 
-    assert_eq!((alpha.title.as_str(), alpha.records, alpha.open_questions, alpha.sync_failing), ("Title of alpha", 4, 1, false));
+    assert_eq!((alpha.title.as_str(), alpha.records, alpha.open_questions), ("Title of alpha", 4, 1));
     let grounded = alpha.grounded_lead.as_ref().unwrap();
     assert_eq!((grounded.id.as_str(), grounded.plan.as_ref(), grounded.grounded_lead, grounded.place), ("g-alpha", None, true, Place::Work));
     assert!(beta.grounded_lead.is_none() && gamma.grounded_lead.is_none());

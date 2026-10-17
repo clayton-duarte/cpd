@@ -1,5 +1,5 @@
-//! A Context record (contract §2.2) as it is held in memory, written to a
-//! JSONL line, parsed from one, and stored in the index (§4.6).
+//! A Context record (contract §2.2) as it is held in memory, stored in the
+//! database (§4.6), and parsed from a JSONL line of an old store (`legacy`).
 
 use rusqlite::types::Type;
 use serde::Deserialize;
@@ -119,15 +119,6 @@ impl Record {
             map.insert("plan".into(), Value::Object(p));
         }
         Value::Object(map)
-    }
-
-    /// The line appended to `records/<machine>.jsonl`, with its newline.
-    pub fn to_line(&self) -> String {
-        let mut value = self.to_json();
-        value["v"] = json!(VERSION);
-        let mut line = value.to_string();
-        line.push('\n');
-        line
     }
 
     /// Parses one line of a record file. The error says what is wrong with it.
@@ -314,7 +305,9 @@ mod tests {
     fn a_record_survives_its_line() {
         let record = Record::parse_line(&line(r#","supersedes":"hs-d9""#), &machine()).unwrap();
         assert_eq!(record.supersedes().unwrap().to_string(), "hs-d9");
-        let again = Record::parse_line(record.to_line().trim_end(), &machine()).unwrap();
+        let mut value = record.to_json();
+        value["v"] = json!(VERSION);
+        let again = Record::parse_line(&value.to_string(), &machine()).unwrap();
         assert_eq!(again, record);
     }
 

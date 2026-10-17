@@ -3,17 +3,32 @@
 
 use std::path::Path;
 
-use rusqlite::{Connection, Result};
-use serde_json::Value;
+use rusqlite::{Connection, OptionalExtension, Result, params};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::context::legacy;
+use crate::home::CpdHome;
 use crate::ids::PrKey;
 
-/// A migration: applied once, in order, inside the migrating transaction.
-pub(super) type Migration = fn(&Connection) -> Result<()>;
+/// A migration: applied once, in order, inside the migrating transaction. It
+/// gets `$CPD_HOME` for the files an earlier version left there (migration 7).
+pub(super) type Migration = fn(&Connection, &CpdHome) -> Result<()>;
 
 /// Migrations `1..=N`, in order; `MIGRATIONS[i]` takes the schema to version `i + 1`.
-pub(super) const MIGRATIONS: &[Migration] = &[migration_1, migration_2, migration_3, migration_4, migration_5, migration_6];
+pub(super) const MIGRATIONS: &[Migration] = &[
+    |conn, _| migration_1(conn),
+    |conn, _| migration_2(conn),
+    |conn, _| migration_3(conn),
+    |conn, _| migration_4(conn),
+    |conn, _| migration_5(conn),
+    |conn, _| migration_6(conn),
+    migration_7,
+];
+
+/// The first migration that imports the old git stores of the Contexts; the
+/// code that applies it moves the folders afterwards (`store/mod.rs`).
+pub(super) const IMPORTS_OLD_STORES: usize = 7;
 
 /// The schema hash of each version (§4.3): `SCHEMA_HASHES[i]` is version `i + 1`'s.
 /// A test asserts that migrating an empty database gives each of them.
@@ -24,6 +39,7 @@ pub(super) const SCHEMA_HASHES: &[&str] = &[
     "62a082772ccbcd0c989f5181e3b934ba96a3ab3f1d9db81cf8e39cef5ef89579",
     "c4ac18dd07a1a89318a0ef2191ef37a3f78c758dc7ccf2ea62d17c7544a4f672",
     "a1b657a955520d2dd6dd71e143cee1fd8aba88fafc9284a7e8ab89dfc05c82af",
+    "6377d30a1c0e58581cb8576410c5187c6cfcb48eacf4ec193e5b24d0eacdea77",
 ];
 
 const _: () = assert!(SCHEMA_HASHES.len() == MIGRATIONS.len(), "one schema hash per migration");
@@ -144,6 +160,76 @@ fn migration_6(conn: &Connection) -> Result<()> {
     create_history_triggers(conn, "pull_requests", false)?;
     conn.execute_batch(rebuild)?;
     create_history_triggers(conn, "prs", true)
+}
+
+/// Context records only in the database (§4.5 migration 0007, hs-a1): drops
+/// `contexts.sync_failing` (its history triggers are generated again), then
+/// imports every Context and record of `$CPD_HOME/contexts/<id>/` the database
+/// does not hold yet. A folder that is not a valid store fails the migration.
+/// The folders are moved after the commit, by the caller.
+fn migration_7(conn: &Connection, home: &CpdHome) -> Result<()> {
+    conn.execute_batch(include_str!("migrations/0007.sql"))?;
+    create_history_triggers(conn, "contexts", true)?;
+    import_old_stores(conn, &home.old_contexts_dir())
+}
+
+/// The import of migration 0007, with the row values and Events the engine's
+/// earlier `import_all` wrote: a `contexts` row and `context-created` for a
+/// Context the database lacks, and for each record whose `(context, id)` it
+/// lacks the row and `context-record`. Idempotent. The Events are written in
+/// SQL: they belong to this migration's `txns` row, whatever the Event writer
+/// of later versions does.
+fn import_old_stores(conn: &Connection, dir: &Path) -> Result<()> {
+    let refused = |message: String| rusqlite::Error::UserFunctionError(message.into());
+    let event = |kind: &str, context: &str, text: String, data: Value| {
+        conn.execute(
+            "INSERT INTO events (txn, at, kind, context, text, data)
+             SELECT id, at, ?1, ?2, ?3, ?4 FROM txns WHERE id = cpd_txn()",
+            params![kind, context, text, data.to_string()],
+        )
+    };
+    for folder in legacy::folders(dir).map_err(refused)? {
+        let store = legacy::read(&folder).map_err(refused)?;
+        let manifest = &store.manifest;
+        let id = manifest.id.as_str();
+        let added = conn.execute(
+            "INSERT INTO contexts (id, title, jira, created_at, created_on) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (id) DO NOTHING",
+            params![id, manifest.title, manifest.jira, manifest.created_at, manifest.created_on.as_str()],
+        )?;
+        if added == 1 {
+            event(
+                "context-created",
+                id,
+                format!("Context {id} \"{}\" exists. Next: cpd context show --context {id}", manifest.title),
+                json!({"title": manifest.title, "jira": manifest.jira, "created_on": manifest.created_on}),
+            )?;
+        }
+        for record in &store.records {
+            // Looked up first: a conflicting insert would still use up an index position.
+            let held = conn
+                .query_row("SELECT 1 FROM context_records WHERE context = ?1 AND id = ?2", params![id, record.id.to_string()], |_| Ok(()))
+                .optional()?
+                .is_some();
+            if held || !record.insert(conn, &manifest.id)? {
+                continue;
+            }
+            let seq = conn.last_insert_rowid();
+            let snippet: String = record.text.chars().take(80).map(|c| if c.is_control() { ' ' } else { c }).collect();
+            event(
+                "context-record",
+                id,
+                format!(
+                    "{} {} imported in Context {id}: {snippet}. Next: cpd context show --context {id} --since {}",
+                    record.kind().as_str(),
+                    record.id,
+                    seq - 1
+                ),
+                json!({"record": record.id, "kind": record.kind().as_str(), "machine": record.machine(), "seq": seq}),
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// §4.5 step 2: one PR per Plan, its per-repo columns kept as stored, its
@@ -268,12 +354,14 @@ mod tests {
     }
 
     /// The schema after the first `n` migrations only, with the pragmas
-    /// `Store::open` sets around them (§4.5 migration 4, step 1).
+    /// `Store::open` sets around them (§4.5 migration 4, step 1), in a
+    /// `$CPD_HOME` that holds no old Context store.
     fn at_version(conn: &Connection, n: usize) {
+        let home = CpdHome::resolve(Some("/nonexistent/cpd".into()), None).unwrap();
         conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
         conn.pragma_update(None, "legacy_alter_table", "ON").unwrap();
         for migration in &MIGRATIONS[..n] {
-            migration(conn).unwrap();
+            migration(conn, &home).unwrap();
         }
         conn.pragma_update(None, "legacy_alter_table", "OFF").unwrap();
         conn.pragma_update(None, "user_version", n as i64).unwrap();
@@ -608,7 +696,7 @@ mod tests {
     fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = migrated(&dir);
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 6);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
         let migrate = count(&mut store, "SELECT max(id) FROM txns WHERE command = 'migrate'");
         assert_eq!(migrate, 2);
 
@@ -757,7 +845,7 @@ mod tests {
 
         let mut store = Store::open(&home, 5000).unwrap();
         assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 6);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
         let n = Value::Null;
         assert_eq!(
             rows(&mut store, "SELECT id, phase, archived_at FROM plans ORDER BY id"),
@@ -842,7 +930,7 @@ mod tests {
     fn a_version_4_database_with_a_done_plan_migrates_to_5_and_6_keeping_every_row() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = migrated_4(&dir);
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 6);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
         assert_eq!(
             rows(&mut store, "SELECT id, phase, done_at FROM plans ORDER BY id"),
             vec![
@@ -976,7 +1064,7 @@ mod tests {
     fn a_version_5_database_migrates_to_6_with_the_pull_requests_back_filled() {
         let dir = tempfile::tempdir().unwrap();
         let (mut store, _) = migrated_5(&dir);
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 6);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
         let n = Value::Null;
         assert_eq!(
             rows(&mut store, "SELECT id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at
@@ -1046,7 +1134,186 @@ mod tests {
         drop(Store::open(&fresh_home, 5000).unwrap());
         let hash = |home: &CpdHome| schema_hash(&Connection::open(home.db()).unwrap()).unwrap();
         assert_eq!(hash(&home(&dir)), hash(&fresh_home));
-        assert_eq!(hash(&fresh_home), SCHEMA_HASHES[5]);
+        assert_eq!(hash(&fresh_home), SCHEMA_HASHES[VERSION as usize - 1]);
+    }
+
+    // ---------- migration 7: the old Context stores ----------
+
+    const NOTE_1: &str = r#"{"v":1,"id":"m1-n1","kind":"note","at":"2026-01-02T00:00:00.000Z","machine":"m1","by":{"session":null,"plan":null},"text":"Indexed"}"#;
+    const NOTE_2: &str = r#"{"v":1,"id":"m1-n2","kind":"note","at":"2026-01-03T00:00:00.000Z","machine":"m1","by":{"session":null,"plan":null},"text":"Not indexed"}"#;
+    const PLAN_1: &str = r#"{"v":1,"id":"m1-p1","kind":"plan","at":"2026-01-04T00:00:00.000Z","machine":"m1","by":{"session":null,"plan":null},"text":"Pay","plan":{"id":"pay","machine":"m1","repo":"/r/pay","jira":"PAY-1"}}"#;
+    const OTHER_1: &str = r#"{"v":1,"id":"m2-n1","kind":"note","at":"2026-01-05T00:00:00.000Z","machine":"m2","by":{"session":null,"plan":null},"text":"From m2"}"#;
+
+    /// `contexts/<id>/` as an earlier version wrote it, with its record files.
+    fn old_store(home: &CpdHome, id: &str, files: &[(&str, &[&str])]) {
+        let dir = home.old_contexts_dir().join(id);
+        std::fs::create_dir_all(dir.join("records")).unwrap();
+        std::fs::write(
+            dir.join("context.json"),
+            format!(r#"{{"v":1,"id":"{id}","title":"Title of {id}","jira":"ABC-1","created_at":"{T}","created_on":"m1"}}"#),
+        )
+        .unwrap();
+        for (machine, lines) in files {
+            let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+            std::fs::write(dir.join("records").join(format!("{machine}.jsonl")), text).unwrap();
+        }
+    }
+
+    /// A version-6 database whose index holds Context `known` with its first note only.
+    fn version_6_with_known_context(home: &CpdHome) {
+        database_at(
+            home,
+            6,
+            &format!(
+                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('known', 'Known', '{T}', 'm1');
+                 UPDATE contexts SET lead_session = NULL WHERE id = 'known';
+                 INSERT INTO context_records (context, id, kind, at, machine, text) VALUES ('known', 'm1-n1', 'note', '{T}', 'm1', 'Indexed');"
+            ),
+        );
+    }
+
+    #[test]
+    fn migration_7_imports_what_the_index_lacks_and_archives_the_folders_and_a_reopen_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_6_with_known_context(&home);
+        old_store(&home, "known", &[("m1", &[NOTE_1, NOTE_2, PLAN_1]), ("m2", &[OTHER_1])]);
+        old_store(&home, "fresh", &[("m1", &[NOTE_1])]);
+        std::fs::write(home.old_contexts_dir().join("README"), "not a store").unwrap();
+
+        let mut store = Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
+        assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('contexts') WHERE name = 'sync_failing'"), 0);
+        // The Context the index had keeps its row; the index's own record keeps its seq.
+        assert_eq!(
+            rows(&mut store, "SELECT id, title, jira FROM contexts ORDER BY id"),
+            vec![serde_json::json!(["fresh", "Title of fresh", "ABC-1"]), serde_json::json!(["known", "Known", null])]
+        );
+        assert_eq!(
+            rows(&mut store, "SELECT context, id, seq FROM context_records ORDER BY seq"),
+            vec![
+                serde_json::json!(["known", "m1-n1", 1]),
+                serde_json::json!(["fresh", "m1-n1", 2]),
+                serde_json::json!(["known", "m1-n2", 3]),
+                serde_json::json!(["known", "m1-p1", 4]),
+                serde_json::json!(["known", "m2-n1", 5]),
+            ]
+        );
+        assert_eq!(
+            rows(&mut store, "SELECT plan_id, plan_machine, plan_jira FROM context_records WHERE id = 'm1-p1'"),
+            vec![serde_json::json!(["pay", "m1", "PAY-1"])]
+        );
+        // `context-created` for the new Context, `context-record` for each imported record, in the migration's txn.
+        assert_eq!(
+            rows(&mut store, "SELECT kind, context, json_extract(data, '$.record'), txn FROM events ORDER BY id"),
+            vec![
+                serde_json::json!(["context-created", "fresh", null, 2]),
+                serde_json::json!(["context-record", "fresh", "m1-n1", 2]),
+                serde_json::json!(["context-record", "known", "m1-n2", 2]),
+                serde_json::json!(["context-record", "known", "m1-p1", 2]),
+                serde_json::json!(["context-record", "known", "m2-n1", 2]),
+            ]
+        );
+        assert_eq!(
+            rows(&mut store, "SELECT text FROM events WHERE kind = 'context-created'"),
+            vec![serde_json::json!(["Context fresh \"Title of fresh\" exists. Next: cpd context show --context fresh"])]
+        );
+
+        // The folders are archived, nothing else is touched.
+        let archived = home.archived_contexts_dir();
+        for id in ["known", "fresh"] {
+            assert!(!home.old_contexts_dir().join(id).exists(), "{id} is still in contexts/");
+            assert!(archived.join(id).join("context.json").is_file(), "{id} is not archived");
+        }
+        assert!(archived.join("known/records/m2.jsonl").is_file());
+        assert!(home.old_contexts_dir().join("README").is_file(), "a file that is no store stays");
+
+        // A second open changes nothing.
+        let before = (
+            count(&mut store, "SELECT count(*) FROM context_records"),
+            count(&mut store, "SELECT max(id) FROM events"),
+            count(&mut store, "SELECT max(id) FROM txns"),
+        );
+        drop(store);
+        let mut store = Store::open(&home, 5000).unwrap();
+        let after = (
+            count(&mut store, "SELECT count(*) FROM context_records"),
+            count(&mut store, "SELECT max(id) FROM events"),
+            count(&mut store, "SELECT max(id) FROM txns"),
+        );
+        assert_eq!(before, after);
+        assert!(archived.join("fresh/context.json").is_file());
+    }
+
+    #[test]
+    fn the_import_of_migration_7_is_idempotent_on_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        old_store(&home, "again", &[("m1", &[NOTE_1, NOTE_2])]);
+        let conn = connection(&dir.path().join("x.db"));
+        at_version(&conn, 6);
+        conn.execute_batch(&format!(
+            "INSERT INTO txns (id, at, command, pid, session, cwd) VALUES (1, '{T}', 'migrate', 1, NULL, '/')"
+        ))
+        .unwrap();
+        migration_7(&conn, &home).unwrap();
+        let counts = |conn: &Connection| -> (i64, i64, i64) {
+            let n = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+            (n("SELECT count(*) FROM contexts"), n("SELECT count(*) FROM context_records"), n("SELECT count(*) FROM events"))
+        };
+        assert_eq!(counts(&conn), (1, 2, 3));
+        conn.execute_batch("DROP TRIGGER contexts_hist_ins; DROP TRIGGER contexts_hist_upd; DROP TRIGGER contexts_no_delete;")
+            .unwrap();
+        conn.execute_batch("ALTER TABLE contexts ADD COLUMN sync_failing INTEGER NOT NULL DEFAULT 0").unwrap();
+        import_old_stores(&conn, &home.old_contexts_dir()).unwrap();
+        assert_eq!(counts(&conn), (1, 2, 3));
+    }
+
+    #[test]
+    fn an_existing_destination_is_never_overwritten_the_folder_stays_and_the_open_fails_loud() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_6_with_known_context(&home);
+        old_store(&home, "blocked", &[("m1", &[NOTE_1])]);
+        old_store(&home, "moves", &[("m1", &[NOTE_1])]);
+        let taken = home.archived_contexts_dir().join("blocked");
+        std::fs::create_dir_all(&taken).unwrap();
+        std::fs::write(taken.join("mine.txt"), "keep").unwrap();
+
+        let err = Store::open(&home, 5000).err().unwrap();
+        assert_eq!(err.code(), ErrorCode::StoreFailed, "{err:?}");
+        assert!(err.message().contains("blocked"), "{}", err.message());
+        assert!(home.old_contexts_dir().join("blocked/context.json").is_file(), "the folder stays");
+        assert_eq!(std::fs::read_to_string(taken.join("mine.txt")).unwrap(), "keep");
+        assert!(!taken.join("context.json").exists(), "nothing was written over it");
+        assert!(home.archived_contexts_dir().join("moves/context.json").is_file(), "the others are moved");
+
+        // The database did migrate, so the next open works; the folder still stays.
+        let mut store = Store::open(&home, 5000).unwrap();
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
+        assert_eq!(count(&mut store, "SELECT count(*) FROM context_records WHERE context = 'blocked'"), 1);
+        assert!(home.old_contexts_dir().join("blocked/context.json").is_file());
+    }
+
+    #[test]
+    fn a_folder_that_is_not_a_valid_store_fails_the_migration_and_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_6_with_known_context(&home);
+        old_store(&home, "good", &[("m1", &[NOTE_1])]);
+        old_store(&home, "bad", &[("m1", &[NOTE_1, "{not json"])]);
+        let err = Store::open(&home, 5000).err().unwrap();
+        assert_eq!(err.code(), ErrorCode::MigrationFailed, "{err:?}");
+        assert!(err.message().contains("Context bad") && err.message().contains("line 2"), "{}", err.message());
+        let conn = Connection::open(home.db()).unwrap();
+        let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(version, 6);
+        assert_eq!(schema_hash(&conn).unwrap(), SCHEMA_HASHES[5]);
+        let contexts: i64 = conn.query_row("SELECT count(*) FROM contexts", [], |r| r.get(0)).unwrap();
+        assert_eq!(contexts, 1);
+        assert!(home.old_contexts_dir().join("good/context.json").is_file(), "no folder is moved");
+        assert!(!home.archived_contexts_dir().exists());
     }
 
     #[test]

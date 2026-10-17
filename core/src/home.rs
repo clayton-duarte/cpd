@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use sha1::{Digest, Sha1};
 
 use crate::error::{CpdError, ErrorCode};
-use crate::ids::{AttemptId, ContextId, PlanId, ReviewId, SessionId};
+use crate::ids::{AttemptId, PlanId, ReviewId, SessionId};
 
 /// The repo hooks whose full output is logged per Attempt (contract §7.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,14 +90,15 @@ impl CpdHome {
         self.root.join("cpd.db")
     }
 
-    /// `contexts/`: one git repository per Context (contract §4.6).
-    pub fn contexts_dir(&self) -> PathBuf {
+    /// `contexts/`: the git stores of earlier versions, one folder per Context.
+    /// Only migration 0007 reads it (contract §4.5); nothing creates it.
+    pub fn old_contexts_dir(&self) -> PathBuf {
         self.root.join("contexts")
     }
 
-    /// `contexts/<context>/`.
-    pub fn context_dir(&self, context: &ContextId) -> PathBuf {
-        self.contexts_dir().join(context.as_str())
+    /// `archive/contexts/`: where migration 0007 moves each old store (contract §1.4).
+    pub fn archived_contexts_dir(&self) -> PathBuf {
+        self.root.join("archive").join("contexts")
     }
 
     /// `locks/`.
@@ -131,11 +132,6 @@ impl CpdHome {
     /// `locks/pr-poll.lock`: held by `pr poll` for the whole poll (contract §7.6).
     pub fn pr_poll_lock(&self) -> PathBuf {
         self.locks_dir().join("pr-poll.lock")
-    }
-
-    /// `locks/context-<context>.lock`: held while writing or syncing a Context store.
-    pub fn context_lock(&self, context: &ContextId) -> PathBuf {
-        self.locks_dir().join(format!("context-{context}.lock"))
     }
 
     /// `run/`.
@@ -276,17 +272,15 @@ mod tests {
     #[test]
     fn layout_of_contract_1_4() {
         let h = home();
-        let context = ContextId::parse("building-cpd").unwrap();
         assert_eq!(h.config(), p("/h/.cpd/config.toml"));
         assert_eq!(h.db(), p("/h/.cpd/cpd.db"));
-        assert_eq!(h.contexts_dir(), p("/h/.cpd/contexts"));
-        assert_eq!(h.context_dir(&context), p("/h/.cpd/contexts/building-cpd"));
+        assert_eq!(h.old_contexts_dir(), p("/h/.cpd/contexts"));
+        assert_eq!(h.archived_contexts_dir(), p("/h/.cpd/archive/contexts"));
         assert_eq!(h.watch_lock(), p("/h/.cpd/locks/watch.lock"));
         assert_eq!(
             h.attempt_lock(&plan(), &attempt()),
             p("/h/.cpd/locks/attempt-pay-4521--api-schema-a2.lock")
         );
-        assert_eq!(h.context_lock(&context), p("/h/.cpd/locks/context-building-cpd.lock"));
         assert_eq!(h.plannotator_ports_lock(), p("/h/.cpd/locks/plannotator-ports.lock"));
         assert_eq!(h.pr_poll_lock(), p("/h/.cpd/locks/pr-poll.lock"));
         assert_eq!(h.plannotator_port(&plan()), p("/h/.cpd/run/pay-4521/plannotator-port"));
@@ -343,7 +337,7 @@ mod tests {
     #[test]
     fn no_name_collides_with_cpd_1() {
         let h = home();
-        let ours = [h.config(), h.db(), h.contexts_dir(), h.locks_dir(), h.run_dir()];
+        let ours = [h.config(), h.db(), h.old_contexts_dir(), h.archived_contexts_dir(), h.locks_dir(), h.run_dir()];
         for theirs in ["config.json", "leads", "slots", "workflows"] {
             assert!(!ours.contains(&h.root().join(theirs)), "{theirs}");
         }

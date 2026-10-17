@@ -83,7 +83,6 @@ pub fn context(id: &str, plans: Vec<PlanNode>) -> ContextNode {
         grounded_lead: None,
         records: 0,
         open_questions: 0,
-        sync_failing: false,
         archived_at: None,
         plans,
     }
