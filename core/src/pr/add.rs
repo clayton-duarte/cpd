@@ -7,15 +7,16 @@ use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 use serde_json::json;
 
-use super::{AddArgs, Env, check_needs, plan_phase, sorted_needs, wrong_phase};
+use super::{AddArgs, Env, check_needs, plan_phase, sorted_needs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
-use crate::git::run::{branch_exists, has_origin, run};
+use crate::git::run::{branch_exists, delete_remote_branch, has_origin, ok, remote_has_branch, run};
 use crate::git::worktree::list as worktrees;
 use crate::ids::{PlanId, PrKey};
 use crate::output::Output;
 use crate::plan::Phase;
 use crate::plan::fingerprint::{PrSpec, load_prs};
+use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr add";
 
@@ -31,14 +32,21 @@ enum Decision {
     /// The PR exists with these values; its status and `lead_branch` as stored, and `appended`
     /// as the Event recorded it.
     Already { status: String, lead_branch: String, appended: bool },
-    Insert { appended: bool },
+    /// The PR is new, in a Plan in this phase.
+    Insert { phase: Phase },
+}
+
+/// The merged PR whose Lead Branch is the legacy `cpd/<plan>` (contract §3.8, D3).
+struct Legacy {
+    key: String,
+    repo: PathBuf,
 }
 
 pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let needs = sorted_needs(&args.needs)?;
     let mut env = Env::open()?;
-    check_phase(&plan, env.store.read(|conn| plan_phase(conn, &plan))?)?;
+    env.store.read(|conn| check_plan(conn, &plan))?;
     let repo = main_worktree(&args.repo)?;
     let wanted = Wanted {
         base: resolve_base(&repo, args.base.as_deref())?,
@@ -51,13 +59,24 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         Decision::Already { status, lead_branch, appended } => (status, lead_branch, appended, true),
         Decision::Insert { .. } => {
             // git, outside any transaction.
+            let legacy = env.store.read(|conn| legacy_pr(conn, &plan))?;
+            if let Some(legacy) = &legacy {
+                move_legacy_branch(&plan, legacy)?;
+            }
             no_branch_clash(&repo, &plan, &wanted.key)?;
             env.store.write(COMMAND, |tx| match decide(tx, &plan, &wanted)? {
                 Decision::Already { status, lead_branch, appended } => Ok((status, lead_branch, appended, true)),
-                Decision::Insert { appended } => {
+                Decision::Insert { phase } => {
+                    let appended = matches!(phase, Phase::Dispatch | Phase::Pr | Phase::Done);
                     let lead_branch = pr_branch(&plan, &wanted.key);
-                    insert(tx, &plan, &wanted, &lead_branch)?;
                     let key = &wanted.key;
+                    if matches!(phase, Phase::Pr | Phase::Done) {
+                        reopen(tx, &plan, phase, key)?;
+                    }
+                    if let Some(legacy) = &legacy {
+                        rename_legacy(tx, &plan, legacy)?;
+                    }
+                    insert(tx, &plan, &wanted, &lead_branch)?;
                     let with = if wanted.needs.is_empty() { String::new() } else { format!(", needs {}", wanted.needs.join(", ")) };
                     let text = format!(
                         "PR {key} added to Plan {plan} (repo {}, base {}{with}), waiting. Next: cpd plan show --plan {plan}",
@@ -80,17 +99,20 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     Ok(Output::success(out))
 }
 
-/// `pr add` is for the phases `grounding`, `plan` and `dispatch` (`illegal_phase`).
-fn check_phase(plan: &PlanId, phase: Phase) -> Result<(), CpdError> {
-    match phase {
-        Phase::Grounding | Phase::Plan | Phase::Dispatch => Ok(()),
-        Phase::Pr | Phase::Done => Err(wrong_phase(plan, phase, COMMAND, "grounding, plan or dispatch")),
+/// `pr add` is for every phase (D1), but not for an archived Plan (`archived`); returns the phase.
+fn check_plan(conn: &Connection, plan: &PlanId) -> Result<Phase, CpdError> {
+    let phase = plan_phase(conn, plan)?;
+    let archived: bool = conn.query_row("SELECT archived_at IS NOT NULL FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?;
+    if archived {
+        return Err(CpdError::new(ErrorCode::Archived, format!("Plan {plan} is archived: unarchive it first."))
+            .with("plan", plan.as_str())
+            .with("next", format!("cpd plan unarchive {plan}")));
     }
+    Ok(phase)
 }
 
 fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision, CpdError> {
-    let phase = plan_phase(conn, plan)?;
-    check_phase(plan, phase)?;
+    let phase = check_plan(conn, plan)?;
     let prs = load_prs(conn, plan)?;
     if let Some(existing) = prs.iter().find(|p| p.key == wanted.key.as_str()) {
         if same(existing, wanted) {
@@ -112,7 +134,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
             .with("status", existing.status.as_str()));
     }
     check_needs(&prs, plan, None, &wanted.needs)?;
-    Ok(Decision::Insert { appended: phase == Phase::Dispatch })
+    Ok(Decision::Insert { phase })
 }
 
 fn same(existing: &PrSpec, wanted: &Wanted) -> bool {
@@ -127,6 +149,63 @@ fn insert(tx: &Connection, plan: &PlanId, wanted: &Wanted, lead_branch: &str) ->
     )?;
     for need in &wanted.needs {
         tx.execute("INSERT INTO pr_needs (plan, pr, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), wanted.key.as_str(), need.as_str()])?;
+    }
+    Ok(())
+}
+
+/// In `pr` or `done` the Plan goes back to `dispatch` (D1): the phase is compared and set, then
+/// `plan-phase` is appended (before `pr-added`).
+fn reopen(tx: &WriteTxn<'_>, plan: &PlanId, from: Phase, key: &PrKey) -> Result<(), CpdError> {
+    let moved = tx.execute("UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = ?1 AND phase = ?2", [plan.as_str(), from.as_str()])?;
+    if moved == 0 {
+        return Err(CpdError::new(ErrorCode::CasLost, format!("Plan {plan} left phase {} meanwhile: rerun the command.", from.as_str()))
+            .with("plan", plan.as_str()));
+    }
+    let text = format!("Plan {plan} is back in dispatch: PR {key} was added.");
+    append(tx, NewEvent::new(Kind::PlanPhase, text, json!({"from": from.as_str(), "to": "dispatch"})).plan(plan.clone()))?;
+    Ok(())
+}
+
+/// The Plan's `merged` PR on the legacy Lead Branch `cpd/<plan>`, if any (D3). A PR on it that
+/// is not `merged` is not returned: `no_branch_clash` refuses it.
+fn legacy_pr(conn: &Connection, plan: &PlanId) -> Result<Option<Legacy>, CpdError> {
+    use rusqlite::OptionalExtension;
+    let row: Option<(String, String)> = conn
+        .query_row(
+            "SELECT key, repo FROM prs WHERE plan = ?1 AND lead_branch = ?2 AND status = 'merged'",
+            [plan.as_str(), &format!("cpd/{plan}")],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    Ok(row.map(|(key, repo)| Legacy { key, repo: PathBuf::from(repo) }))
+}
+
+/// D3 steps 1 and 2, in the legacy PR's repo: `git branch -m cpd/<plan> cpd/<plan>/<key>` when
+/// `cpd/<plan>` exists, then `push origin --delete cpd/<plan>` when `origin` has it
+/// (`push_failed`). Each step is skipped when done, so a rerun completes (A3).
+fn move_legacy_branch(plan: &PlanId, legacy: &Legacy) -> Result<(), CpdError> {
+    let old = format!("cpd/{plan}");
+    let new = format!("{old}/{}", legacy.key);
+    let repo = &legacy.repo;
+    if branch_exists(repo, &old)? {
+        ok(repo, &["branch", "-m", &old, &new])?;
+    }
+    if has_origin(repo)? && remote_has_branch(repo, &old)? {
+        delete_remote_branch(repo, &old)?;
+    }
+    Ok(())
+}
+
+/// D3 step 3: the legacy PR's `lead_branch` follows the rename.
+fn rename_legacy(tx: &Connection, plan: &PlanId, legacy: &Legacy) -> Result<(), CpdError> {
+    let moved = tx.execute(
+        "UPDATE prs SET lead_branch = ?3 WHERE plan = ?1 AND key = ?2 AND lead_branch = ?4 AND status = 'merged'",
+        [plan.as_str(), &legacy.key, &format!("cpd/{plan}/{}", legacy.key), &format!("cpd/{plan}")],
+    )?;
+    if moved == 0 {
+        return Err(CpdError::new(ErrorCode::CasLost, format!("PR {} of Plan {plan} changed meanwhile: rerun the command.", legacy.key))
+            .with("plan", plan.as_str())
+            .with("pr", legacy.key.as_str()));
     }
     Ok(())
 }

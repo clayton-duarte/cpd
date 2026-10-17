@@ -655,7 +655,7 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
     let mut store = fixture_store(&env);
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     let hash = store.read(|c| Ok(cpd_core::store::schema_hash(c)?)).unwrap();
-    assert_eq!(hash, "62a082772ccbcd0c989f5181e3b934ba96a3ab3f1d9db81cf8e39cef5ef89579", "version 4 (R34) on top of migration 3");
+    assert_eq!(hash, "c4ac18dd07a1a89318a0ef2191ef37a3f78c758dc7ccf2ea62d17c7544a4f672", "version 5 (hs-d118) on top of migration 4");
 
     for table in ["contexts", "plans", "sessions"] {
         let archived: Option<String> =

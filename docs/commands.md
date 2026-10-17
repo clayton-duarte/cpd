@@ -989,7 +989,7 @@ Without `--pr`, a Plan with no `open` PR polls nothing and returns `prs: []`.
 
 Effects, for each PR polled, in the PR's Lead worktree:
 - **gh:** `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision` and `gh api repos/{owner}/{repo}/pulls/<n>/comments`, compared with the PR's `pr_seen` (cpd 1 §13, kept).
-- **Rows**, one transaction per PR: its `pr_seen`, `pr_polled_at`, and `pr_title`, `pr_review_decision` (`none`, `approved`, `changes_requested`) and `pr_checks` (`none`, `passed`, `pending`, `failed`), set together on every poll (contract §7.6). They are what the Dispatch column shows (§13.2, §17) and append no Event of their own. New failing checks, reviews or comments, or `state = CLOSED` without a merge: **Event** `pr-feedback` (data of §5.2, with `pr`). Merged: the PR `status = merged`, `merged_at`, **Event** `pr-merged` `{pr, number, url, merged_at}`; when every PR that is not `cancelled` is then `merged`, the same transaction sets `plans.phase = done`, `done_at` and appends `plan-done` `{prs: [{key, number, url, merged_at}]}`, once (§3.1).
+- **Rows**, one transaction per PR: its `pr_seen`, `pr_polled_at`, and `pr_title`, `pr_review_decision` (`none`, `approved`, `changes_requested`) and `pr_checks` (`none`, `passed`, `pending`, `failed`), set together on every poll (contract §7.6). They are what the Dispatch column shows (§13.2, §17) and append no Event of their own. New failing checks, reviews or comments, or `state = CLOSED` without a merge: **Event** `pr-feedback` (data of §5.2, with `pr`). Merged: the PR `status = merged`, `merged_at`, **Event** `pr-merged` `{pr, number, url, merged_at}`; when every PR that is not `cancelled` is then `merged`, the same transaction sets `plans.phase = done`, `done_at` and appends `plan-done` `{prs: [{key, number, url, merged_at}]}`, once each time the Plan reaches `done`: again when a reopened Plan's last PR merges (§3.1, D2).
 - **Starting the PRs that waited for it** (A9): `pr poll` does not start a PR itself. Engine E7, which runs after E5 in the same tick (§3.7), starts every `waiting` PR whose needs are now all `merged`, from a fresh `fetch origin <base>`; when `pr poll` was run by hand, the next tick does, or the Lead runs `pr start <key>` (§9.7).
 - **A pull request closed without a merge** (A11): `pr-feedback` with `state: "CLOSED"`; the PR stays `open` in cpd, every PR that needs it stays `waiting`, and the Lead asks the User.
 - **After `done`:** the Plan's remaining Attempt worktrees and branches, kept for debugging (§3.4 A9), are removed in every PR's repo (`git worktree remove --force`, `git branch -D`), and any of its Attempt windows killed. The Lead worktrees and the Lead Branches stay.
@@ -1039,7 +1039,7 @@ Idempotent: yes; a base that has not moved gives `"rebased": false`, and only th
 cpd pr add <key> --repo <path> [--base <branch>] [--needs <k1,k2>] [--plan <id>]
 ```
 
-Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `plan` it is part of the plan fingerprint (§2.3), so the Plan needs a review that includes it; in `dispatch` it is **appended**, like `job add`, and engine E7 starts it once its needs are `merged` (at once when it has none, §3.7).
+Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `plan` it is part of the plan fingerprint (§2.3), so the Plan needs a review that includes it; in `dispatch`, `pr` and `done` it is **appended**, like `job add`, and engine E7 starts it once its needs are `merged` (at once when it has none, §3.7). In `pr` and `done` it also **moves the Plan back to `dispatch`** (hs-d87: a merged PR can hold a bug or a regression, so a Plan takes follow-up work at any time; no Plan review, D4). When the Plan has a `merged` PR on the legacy Lead Branch `cpd/<plan>`, it first **moves that branch** to `cpd/<plan>/<that PR's key>` (below).
 
 | Flag | Meaning |
 |---|---|
@@ -1050,23 +1050,31 @@ Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `p
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the phase is `grounding`, `plan` or `dispatch` | `illegal_phase` | 3 |
+| the Plan is not archived | `archived` | 3 |
 | `--repo` is inside a git repository (`git -C <path> rev-parse --git-common-dir`) | `not_a_git_repo` | 3 |
 | `<base>` exists: `refs/remotes/origin/<base>`, or `refs/heads/<base>` when the repo has no `origin` | `base_not_found` | 4 |
 | no PR of the Plan has this key, `cancelled` ones included, unless its repo, base and needs equal the resolved flags (then `already`) | `pr_exists` | 3 |
 | every need is a PR of the Plan; `details.needs` lists the unknown keys | `needs_unknown` | 3 |
 | no need is `cancelled`; `details.needs` lists them | `needs_unavailable` | 3 |
-| neither `refs/heads/cpd/<plan>/<key>` nor `refs/heads/cpd/<plan>` exists in the repo (§2.1); `details.branch` names it | `branch_exists` | 3 |
+| `refs/heads/cpd/<plan>/<key>` does not exist in the repo, and neither does `refs/heads/cpd/<plan>`, except the legacy branch of a PR of the Plan that is `merged` (moved below); `details.branch` names it | `branch_exists` | 3 |
+| the legacy move's `git push origin --delete cpd/<plan>` succeeds; `details`: `branch`, `repo`, `stderr` | `push_failed` | 1 |
 
-No cycle is possible: nothing needs a new PR yet.
+Any phase is allowed: `grounding`, `plan`, `dispatch`, `pr` and `done`, so no `illegal_phase`. No cycle is possible: nothing needs a new PR yet.
 
-Effects: **rows**, one transaction: `prs` (`status = waiting`, `repo`, `base`, `lead_branch = cpd/<plan>/<key>`, `created_txn`, `created_at`; `lead_worktree` null); one `pr_needs` row per need. **Event** `pr-added` `{pr, repo, base, needs, appended}`, `appended` true in phase `dispatch`. No git write and no tmux: the Lead Branch and Lead worktree are created when the PR starts (§3.8, §7.2).
+**The legacy move** (contract §3.8, D3, hs-d118). Every Plan locked before R34 stored `prs.lead_branch = 'cpd/<plan>'`, and git cannot hold both `cpd/<plan>` and `cpd/<plan>/<key>`. When a PR of the Plan has `lead_branch = cpd/<plan>` and status `merged`, `pr add` does, before the insert and in this order, with `<k>` that PR's key:
+1. `git -C <repo> branch -m cpd/<plan> cpd/<plan>/<k>`, when `refs/heads/cpd/<plan>` exists (a worktree that has it checked out follows the rename; unverified on git 2.43);
+2. `git -C <repo> push origin --delete cpd/<plan>`, when the repo has `origin` and `git ls-remote --heads origin cpd/<plan>` lists it; a failure is `push_failed` and the database is unchanged;
+3. in the transaction of the insert below, `UPDATE prs SET lead_branch = 'cpd/<plan>/<k>'` for that PR.
+
+A legacy branch of a PR that is not `merged` still refuses `branch_exists`.
+
+Effects: **rows**, one transaction: in `pr` or `done`, `plans` (`phase = dispatch`, `done_at = null`); `prs` (`status = waiting`, `repo`, `base`, `lead_branch = cpd/<plan>/<key>`, `created_txn`, `created_at`; `lead_worktree` null); one `pr_needs` row per need; and the legacy PR's `lead_branch` update (step 3). **Events**, in this order: in `pr` or `done`, `plan-phase` `{from: "pr"|"done", to: "dispatch"}`; then `pr-added` `{pr, repo, base, needs, appended}`, `appended` true in phases `dispatch`, `pr` and `done`. Engine E7 then starts the PR like any appended PR (at once when it has no needs). No tmux and no other git write: the Lead Branch and Lead worktree are created when the PR starts (§3.8, §7.2).
 
 ```json
 {"ok": true, "pr": {"key": "web", "repo": "/home/clayton/projects/web", "base": "main", "needs": ["api"], "status": "waiting", "lead_branch": "cpd/pay-4521/web", "appended": false}}
 ```
 
-Idempotent: yes, as stated; the comparison uses the resolved repo and base, so a rerun without `--base` matches a PR whose base was defaulted to the same branch.
+Idempotent: yes, as stated; every step of the legacy move is too (A3): a rerun after a crash between the local rename and the transaction finds `cpd/<plan>/<k>` and no `cpd/<plan>`, skips what is done and completes. The comparison uses the resolved repo and base, so a rerun without `--base` matches a PR whose base was defaulted to the same branch.
 
 ### 9.5 `pr edit`
 

@@ -116,7 +116,7 @@ Locks are `flock(2)` locks on these files: the kernel releases them when the hol
 | Context id | `^[a-z][a-z0-9-]{1,39}$` | all machines (it names a git repo) | `building-cpd` |
 | Machine name | `^[a-z][a-z0-9]{0,7}$`, set in `config.toml` (§8) | the User's machines | `hs` |
 | Context record id | `<machine>-<letter><n>`; letter `d` decision, `n` note, `q` question, `a` answer, `p` plan; `n` from 1, sequential per machine, Context and letter | the Context | `hs-d3` |
-| Plan id | `^[a-z][a-z0-9-]{1,23}$` (cpd 1's Workflow id) | the machine; `pr add` and every PR start (§3.8) also refuse a PR whose Lead Branch `cpd/<plan>/<key>`, or the branch `cpd/<plan>` itself (git cannot hold `cpd/<plan>` and `cpd/<plan>/…` at once), already exists in the PR's repo (`branch_exists`), so cpd 1 Workflows and cpd 2 Plans on one repo never share a branch | `pay-4521` |
+| Plan id | `^[a-z][a-z0-9-]{1,23}$` (cpd 1's Workflow id) | the machine; `pr add` and every PR start (§3.8) also refuse a PR whose Lead Branch `cpd/<plan>/<key>`, or the branch `cpd/<plan>` itself (git cannot hold `cpd/<plan>` and `cpd/<plan>/…` at once), already exists in the PR's repo (`branch_exists`), so cpd 1 Workflows and cpd 2 Plans on one repo never share a branch. The one exception is the legacy branch `cpd/<plan>` of a `merged` PR, which `pr add` first moves to `cpd/<plan>/<that PR's key>` (§3.8, hs-d118) | `pay-4521` |
 | PR key (R34) | `^[a-z][a-z0-9-]{0,23}$`, chosen by the Lead (`pr add`); invalid: `invalid_pr_id` (exit 2) | the Plan (a `cancelled` PR keeps its key) | `schema`, `web` |
 | Job key | `^[a-z][a-z0-9-]{0,31}$` | the Plan | `api-schema` |
 | Attempt id | `<job>-a<n>`, `n` from 1 per Job | the Plan | `api-schema-a2` |
@@ -372,7 +372,7 @@ The command surface of PRs; `commands.md` specifies each command in full.
 | Command | Phases | What it does |
 |---|---|---|
 | `plan new <id> --context <c> --title <t> …` | | no `--repo` and no `--base` any more (A12): the Plan has no repo; the Lead starts in the directory `plan new` runs from (usually `~`, §6.4) |
-| `pr add <key> --repo <path> [--base <b>] [--needs <k1,k2>]` | `grounding`, `plan`, `dispatch` | adds a PR, `waiting` (§3.8). In `grounding` and `plan` it is part of the plan fingerprint (§2.3); in `dispatch` it is **appended**, like `job add`, and the engine starts it when its needs are merged (E7). Refused in `pr` and `done` (`illegal_phase`) |
+| `pr add <key> --repo <path> [--base <b>] [--needs <k1,k2>]` | `grounding`, `plan`, `dispatch`, `pr`, `done` | adds a PR, `waiting` (§3.8). In `grounding` and `plan` it is part of the plan fingerprint (§2.3); in `dispatch`, `pr` and `done` it is **appended**, like `job add`, and the engine starts it when its needs are merged (E7). In `pr` and `done` it also moves the Plan back to `dispatch` (§3.1). Refused on an archived Plan (`archived`) |
 | `pr edit <key> [--repo <path>] [--base <b>] [--needs <k1,k2>]` | `grounding`, `plan` | changes a `waiting` PR; `--needs` replaces the whole list. After the lock: `pr_locked` (exit 3) |
 | `pr cancel <key>` | `grounding`, `plan` | `waiting → cancelled`; refused `pr_in_use` (exit 3) while a Job of the PR is not `cancelled` or a PR that is not `cancelled` needs it |
 | `pr start <key>` | `dispatch` | starts a `waiting` PR whose needs are all `merged` (`pr_not_ready`, exit 3): the retry after a failed start (A9) |
@@ -396,7 +396,8 @@ stateDiagram-v2
   plan --> dispatch: plan lock
   dispatch --> pr: pr open of the last PR not yet open
   pr --> done: pr poll sees the last PR merged
-  done --> [*]
+  pr --> dispatch: pr add
+  done --> dispatch: pr add
 ```
 
 | From | To | Moved by | Preconditions | Event |
@@ -405,9 +406,10 @@ stateDiagram-v2
 | `grounding` | `plan` | `plan phase plan` (the Lead) | none | `plan-phase`. If the Context has no grounded Lead on this machine, the same transaction also registers one (below): `session-registered` and `context-grounded`. The pi fork itself runs after the commit |
 | `plan` | `dispatch` | `plan lock` | latest Plan review `approved` for the current plan fingerprint (`plan_not_approved`); at least one `draft` Job; at least one PR that is not `cancelled`, and each such PR has at least one `draft` Job (`pr_empty`); acyclic Dependency graph and acyclic needs graph (`dependency_cycle`); for every PR with no needs, its Lead Branch absent from its repo, and on the remote either absent or reusable, i.e. `origin/<base>` is its ancestor (`branch_exists`, §7.2) | `plan-phase`, and `pr-started` for each PR started. All `draft` Jobs of every PR become `queued` with their fingerprints at once (A8). Every PR with no needs **starts** (§3.8): its Lead worktree is created, reusing or creating and pushing its Lead Branch on the remote (§7.2), and it becomes `dispatch`; every other PR stays `waiting`. `watch` is started if it is not running (§6.6) |
 | `dispatch` | `pr` | `pr open --pr <key>` (§7.6), in the transaction that makes that PR `open` | afterwards every PR that is not `cancelled` is `open` or `merged` (A10) | `pr-opened`, then `plan-phase` |
-| `pr` | `done` | `pr poll` (engine E5), in the transaction that makes a PR `merged` | afterwards every PR that is not `cancelled` is `merged` | `pr-merged`, then `plan-done`, appended once |
+| `pr` | `done` | `pr poll` (engine E5), in the transaction that makes a PR `merged` | afterwards every PR that is not `cancelled` is `merged` | `pr-merged`, then `plan-done`, appended once each time the Plan reaches `done` |
+| `pr` or `done` | `dispatch` | `pr add` (§3.8, D1), in the transaction that appends the PR | the Plan is not archived (`archived`); the other preconditions of `pr add` (§3.8) | `plan-phase` `{from: "pr"\|"done", to: "dispatch"}`, then `pr-added` (`appended: true`). `plans.phase = 'dispatch'` and `done_at = NULL` in the same transaction |
 
-**PRs across the phases** (R34, A8–A10). `grounding` and `plan`: the Lead adds, edits and cancels PRs (`pr add`, `pr edit`, `pr cancel`), all `waiting`; they are part of the plan fingerprint (§2.3). `dispatch`: from the lock until every PR that is not `cancelled` is `open` (or already `merged`): the PRs start as their needs are merged (§3.8, E7), their Jobs run, and each is opened by its own `pr open`; `pr poll` polls every `open` PR in this phase too (E5), so a prerequisite PR merged during `dispatch` starts its dependents. `pr`: every PR is `open` or `merged`; Jobs appended to an `open` PR reach its pull request through `pr rebase --pr <key>`. `done`: every PR that is not `cancelled` is `merged`. The lock is all or nothing across PRs: if any started PR's worktree or `pre-start` fails, every worktree and branch the lock created is removed, nothing is pushed and nothing in the database changes (§7.2).
+**PRs across the phases** (R34, A8–A10). `grounding` and `plan`: the Lead adds, edits and cancels PRs (`pr add`, `pr edit`, `pr cancel`), all `waiting`; they are part of the plan fingerprint (§2.3). `dispatch`: from the lock until every PR that is not `cancelled` is `open` (or already `merged`): the PRs start as their needs are merged (§3.8, E7), their Jobs run, and each is opened by its own `pr open`; `pr poll` polls every `open` PR in this phase too (E5), so a prerequisite PR merged during `dispatch` starts its dependents. `pr`: every PR is `open` or `merged`; Jobs appended to an `open` PR reach its pull request through `pr rebase --pr <key>`. `done`: every PR that is not `cancelled` is `merged`. `pr` and `done` take appended PRs too (hs-d87): a merged PR can hold a bug or a regression, so `pr add` in `pr` or `done` appends the PR `waiting` and moves the Plan back to `dispatch` (the table above); engine E7 then starts it like any PR appended in `dispatch`, at once when it has no needs. When its last PR is opened the Plan goes `dispatch → pr`, and when the last is merged `pr → done`, as before; each arrival at `done` appends `plan-done` again. A reopened Plan has no Plan review (D4): its appended PRs and Jobs work as appended work does in `dispatch`. Only deleting or editing committed (Locked) Jobs stays forbidden. The lock is all or nothing across PRs: if any started PR's worktree or `pre-start` fails, every worktree and branch the lock created is removed, nothing is pushed and nothing in the database changes (§7.2).
 
 **Grounding.** The phase in which the Lead grounds itself on the Context: it reads the rendered Context records, the material the User gives, and interviews the User (cpd 1 requirements §2 "Context", kept). The phase is always entered; a Lead forked from an already grounded Lead (D2) adds to the Context with `context decide`, `note` or `ask` if it learns something, or moves on to `plan` at once. That is how "skipped or appended to" (ADR-0011) is represented: one phase name, `grounding`, and no special case.
 
@@ -611,7 +613,7 @@ stateDiagram-v2
 
 | From | To | Moved by | Preconditions | Event |
 |---|---|---|---|---|
-| (none) | `waiting` | `pr add <key> --repo <path> [--base <b>] [--needs <k,…>]`, phase `grounding`, `plan` or `dispatch` (else `illegal_phase`) | key valid (`invalid_pr_id`) and free in the Plan (`pr_exists`, unless every flag matches: `already`); `--repo` inside a git repository (`not_a_git_repo`); `<base>` exists as `origin/<base>`, or as a local branch when the repo has no `origin` (`base_not_found`); every need is a PR of the Plan (`needs_unknown`) that is not `cancelled` (`needs_unavailable`), and the needs graph stays acyclic (`dependency_cycle`); neither `refs/heads/cpd/<plan>/<key>` nor `refs/heads/cpd/<plan>` exists in the repo (`branch_exists`, §2.1) | `pr-added` |
+| (none) | `waiting` | `pr add <key> --repo <path> [--base <b>] [--needs <k,…>]`, phase `grounding`, `plan`, `dispatch`, `pr` or `done`; the Plan is not archived (`archived`) | key valid (`invalid_pr_id`) and free in the Plan (`pr_exists`, unless every flag matches: `already`); `--repo` inside a git repository (`not_a_git_repo`); `<base>` exists as `origin/<base>`, or as a local branch when the repo has no `origin` (`base_not_found`); every need is a PR of the Plan (`needs_unknown`) that is not `cancelled` (`needs_unavailable`), and the needs graph stays acyclic (`dependency_cycle`); `refs/heads/cpd/<plan>/<key>` does not exist in the repo, and neither does `refs/heads/cpd/<plan>`, except the legacy branch of a `merged` PR, which is moved first (below); the legacy branch of a PR that is not `merged` is `branch_exists` (§2.1); the move's `git push origin --delete` fails: `push_failed` | in phase `pr` or `done`, `plan-phase` (`pr` or `done` → `dispatch`, §3.1), then `pr-added` |
 | `waiting` | `waiting` | `pr edit <key>`, phase `grounding` or `plan` (after: `pr_locked`) | as `pr add` for the fields given | `pr-edited` |
 | `waiting` | `cancelled` | `pr cancel <key>`, phase `grounding` or `plan` (after: `pr_locked`) | every Job of the PR is `cancelled`, and no PR that is not `cancelled` needs it (`pr_in_use`) | `pr-cancelled` |
 | `waiting` | `dispatch` | **the PR's start**: `plan lock` for every PR with no needs; engine E7 for a PR whose needs are all `merged`; or `pr start <key>` by the Lead | Plan phase `dispatch` (or the lock's own transaction; `pr start` in another phase: `illegal_phase`); the PR `waiting` (`pr start` on a started PR: `already`; on a `cancelled` one: `illegal_transition`); every need `merged` (`pr_not_ready`); its Lead worktree created and `pre-start` passed, R35's rules applied to its Lead Branch (§7.2) | `pr-started` |
@@ -620,6 +622,14 @@ stateDiagram-v2
 | `open` | `merged` | `pr poll` (E5, §7.6), in phase `dispatch` or `pr` | `gh` reports the pull request merged | `pr-merged`; and `plan-done` when every PR that is not `cancelled` is now `merged` (§3.1) |
 
 `merged` and `cancelled` are terminal. A PR can be cancelled only before the lock (A13); a PR still `waiting` after the lock keeps the Plan in `dispatch` until it starts and opens.
+
+**The legacy Lead Branch** (D3, hs-d118). Every Plan locked before R34 stored `prs.lead_branch = 'cpd/<plan>'`, and git cannot hold both `cpd/<plan>` and `cpd/<plan>/<key>` (a ref file and a directory clash, locally and on `origin`). When the Plan has a PR whose `lead_branch` is `cpd/<plan>` and whose status is `merged`, `pr add` (in any allowed phase) first moves it to `cpd/<plan>/<that PR's key>`, in this order:
+
+1. locally, `git branch -m cpd/<plan> cpd/<plan>/<key>`, when `refs/heads/cpd/<plan>` exists (a worktree that has the branch checked out follows the rename; unverified on git 2.43, the code Job tests it);
+2. on the remote, `git push origin --delete cpd/<plan>`, when the repo has `origin` and `origin` has the branch (`git ls-remote --heads origin cpd/<plan>`). If it fails, `pr add` is refused `push_failed` (exit 1; `details`: `branch`, `repo`, `stderr`) and the database is unchanged (A3);
+3. in the same transaction as the new PR's insert, `UPDATE prs SET lead_branch = 'cpd/<plan>/<key>'` for that PR (the one change `prs_locked` allows, §4.4).
+
+Each step is idempotent: a rerun after a crash between the local rename and the transaction finds `cpd/<plan>/<key>` and no `cpd/<plan>`, skips what is done and completes (A3). A legacy branch of a PR that is not `merged` still refuses `branch_exists`.
 
 **The start** (A8, A9) creates the PR's Lead worktree from a fresh `fetch origin <base>`, so a PR that needs another PR in the same repo and on the same base starts from a base that already contains it (A1 → B → A2: A2 is cut after A1 merged). It applies R35 to the PR's Lead Branch (§7.2), runs `pre-start` from the PR's repo, then writes, in one transaction with a compare-and-swap on `status = 'waiting'`: `status = dispatch`, `lead_worktree`, `started_at`, `start_failed_at = null`, and `pr-started`. The PR's `queued` Jobs then become Ready (§3.2).
 
@@ -1024,8 +1034,13 @@ WHEN OLD.status <> 'draft'
 BEGIN SELECT RAISE(ABORT, 'job_locked'); END;
 
 -- R34: a PR's identity, repo and base are Locked once its Plan is locked; needs only at the PR's own insert (pr add in dispatch)
+-- migration 5 (hs-d118): one exception, the legacy Lead Branch of a merged PR moves to `cpd/<plan>/<key>` (pr add, §3.8)
 CREATE TRIGGER prs_locked BEFORE UPDATE OF plan, key, repo, base, lead_branch ON prs
 WHEN (SELECT phase FROM plans WHERE id = OLD.plan) NOT IN ('grounding', 'plan')
+ AND NOT (OLD.status = 'merged'
+          AND NEW.plan IS OLD.plan AND NEW.key IS OLD.key AND NEW.repo IS OLD.repo AND NEW.base IS OLD.base
+          AND OLD.lead_branch = 'cpd/' || OLD.plan
+          AND NEW.lead_branch = 'cpd/' || OLD.plan || '/' || OLD.key)
 BEGIN SELECT RAISE(ABORT, 'pr_locked'); END;
 
 CREATE TRIGGER pr_needs_locked BEFORE INSERT ON pr_needs
@@ -1057,7 +1072,7 @@ Legal transitions, in the database (the tables of §3 as data):
 ```sql
 CREATE TRIGGER plans_phase BEFORE UPDATE OF phase ON plans
 WHEN OLD.phase <> NEW.phase AND (OLD.phase || '>' || NEW.phase) NOT IN
-  ('grounding>plan', 'plan>dispatch', 'dispatch>pr', 'pr>done')
+  ('grounding>plan', 'plan>dispatch', 'dispatch>pr', 'pr>done', 'pr>dispatch', 'done>dispatch')
 BEGIN SELECT RAISE(ABORT, 'illegal_transition'); END;
 
 CREATE TRIGGER prs_status BEFORE UPDATE OF status ON prs
@@ -1155,6 +1170,11 @@ CREATE TRIGGER events_no_delete  BEFORE DELETE ON events  BEGIN SELECT RAISE(ABO
   5. `PRAGMA foreign_key_check` must return no row, else the migration fails (`migration_failed`) and rolls back; set `user_version = 4`; commit; then `PRAGMA legacy_alter_table = OFF` and `PRAGMA foreign_keys = ON`.
 
   History: each migrated PR gets an `insert` history row in the migration's `txns` row (step 2); the copies of step 3 write none, because the rebuilt tables' history triggers exist only after them, and the moved values stay readable in the earlier history rows of `plans`. A Plan in phase `plan` keeps its Jobs `draft` and its review, but the new plan fingerprint (§2.3) no longer matches the review's, so it needs a new `plan review` before `plan lock`. The tests: a version-2 database with one Plan in each phase, Jobs, Attempts, Events and Context records migrates through 3 to 4, keeps every row and id, passes `PRAGMA foreign_key_check`, and its schema hash equals that of a fresh database migrated to 4; a version-3 database as migration 3 leaves it (archived rows, the archive Event kinds) migrates to 4 keeping every `archived_at`.
+- **Migration 5** (hs-d87, A4: a Plan takes follow-up PRs after `pr` and `done`; no table rebuild), applied after migration 4. It drops and recreates two triggers and changes no table:
+  - `plans_phase` gains `pr>dispatch` and `done>dispatch` (§4.4). The existing `CHECK ((phase = 'done') = (done_at IS NOT NULL))` already forces `done_at` to be cleared by the same update;
+  - `prs_locked` gains one exception (§4.4): an update whose only `lead_branch` change is from `'cpd/' || OLD.plan` to `'cpd/' || OLD.plan || '/' || OLD.key`, on a PR with `OLD.status = 'merged'`. Every other column it guards is still refused.
+
+  Every row is unchanged; `user_version = 5`. Plan pr-poller also adds a migration 5 (hs-n59): whichever lands on `main` second is renumbered when it is rebased (hs-d68).
 - No migration from cpd 1's beads Ledgers (R7): running Workflows finish on cpd 1.
 
 ### 4.6 The Context store
@@ -1199,9 +1219,9 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `context-record` | a record is written or imported (§4.6) | context | `{record, kind, machine, seq}` |
 | `context-grounded` | the Context gets its grounded Lead (§3.1) | context, session | `{seq, forked_from}` |
 | `plan-created` | `plan new` | plan | `{title, jira, lead_session, forked_from, cwd}`; R34: no `repo` or `base` (A12), `cwd` is the directory `plan new` ran from |
-| `plan-phase` | `grounding → plan`, `plan → dispatch` (also moves every draft Job to `queued`), `dispatch → pr` (when the last PR not yet open opens, A10) | plan | `{from, to}`; at lock also `jobs: [key]` and `prs: [key]` (the PRs it started); at `pr` also `prs: [{key, number, url}]` (every PR not `cancelled`) |
+| `plan-phase` | `grounding → plan`, `plan → dispatch` (also moves every draft Job to `queued`), `dispatch → pr` (when the last PR not yet open opens, A10), `pr → dispatch` and `done → dispatch` (`pr add` appends a PR to a Plan that was past `dispatch`, D1; appended before `pr-added`) | plan | `{from, to}` (`from` is `pr` or `done` and `to` is `dispatch` when `pr add` reopens the Plan); at lock also `jobs: [key]` and `prs: [key]` (the PRs it started); at `pr` also `prs: [{key, number, url}]` (every PR not `cancelled`) |
 | `plan-review` | a Plan review is requested or decided | plan | `{review, fingerprint, status, feedback?}` |
-| `plan-done` | `pr → done`, when the last PR not `cancelled` is merged; appended once (cpd 1's `workflow-done`) | plan | `{prs: [{key, number, url, merged_at}]}` |
+| `plan-done` | `pr → done`, when the last PR not `cancelled` is merged; appended each time the Plan reaches `done`, so again after a reopen (D2; cpd 1's `workflow-done`) | plan | `{prs: [{key, number, url, merged_at}]}` |
 | `job-added` | `job add` | plan, job | `{pr, status, appended, tier, needs, review}` |
 | `job-edited` | `job edit` | plan, job | `{fields: [name]}` |
 | `job-merged` | Job → `merged` | plan, job, attempt | `{sha, tier, cancel_too_late?: true}` |
@@ -1215,7 +1235,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `attempt-nudge` | A5 (the Worker ended its turn without submitting) | plan, job, attempt, session | `{prompt}` |
 | `all-merged` | E4, once per PR | plan | `{pr, merged: [key], cancelled: [key]}`; `pr` is the PR's key, the lists its Jobs |
 | `pr-feedback` | `pr poll` found new failing checks, reviews or comments on a PR's pull request, or it was closed unmerged (A11) | plan | `{pr, number, checks: [{name, conclusion}], reviews: [{id, author, state, body}], comments: [{id, author, path?, body}], state}` |
-| `pr-added` | `pr add` (R34) | plan | `{pr, repo, base, needs: [key], appended}`; `appended` is true in phase `dispatch` |
+| `pr-added` | `pr add` (R34) | plan | `{pr, repo, base, needs: [key], appended}`; `appended` is true in phases `dispatch`, `pr` and `done` |
 | `pr-edited` | `pr edit` | plan | `{pr, fields: [name]}` |
 | `pr-cancelled` | `pr cancel` | plan | `{pr}` |
 | `pr-started` | a PR's start: `plan lock`, engine E7 or `pr start` (§3.8) | plan | `{pr, repo, base, lead_branch, lead_worktree, base_sha, reused, pushed, by}`; `reused` and `pushed` as R35 (§7.2), `by` is `lock`, `engine` or `pr start` |
@@ -1564,7 +1584,7 @@ Each command here works on **one PR** (R34, A14), selected by `--pr <key>` (§1.
   4. one transaction: the PR `open` with `pr_number`, `pr_url`, `pr_opened_at`, `pr-opened`; and, when every PR that is not `cancelled` is now `open` or `merged`, the Plan `dispatch → pr` with `plan-phase` (§3.1).
 
   The hooks come from the tree under test, the Lead Branch's own `.config/wt.toml`, which the tamper check keeps every Attempt from changing (§7.5); this is what fixes v0's stale-hook incident.
-- **`pr poll`:** `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision` and `gh api repos/{owner}/{repo}/pulls/<n>/comments`, compared with the PR's `pr_seen` (cpd 1 §11 and §13, kept), for each `open` PR, in phase `dispatch` or `pr` (A10). New failing checks, reviews or comments, or `state = CLOSED` without a merge: one `pr-feedback` with `data.pr` (A11, §3.8). Merged: the PR `merged` with `merged_at` (`pr-merged`); when every PR that is not `cancelled` is then `merged`, the Plan's phase `done` with `done_at` (`plan-done`, once), after which the Plan's remaining Attempt worktrees and branches are removed in every PR's repo. Engine E7 then starts the PRs whose last prerequisite this was (§3.7). **Also stored on every poll** (the `--json` fields include `title,reviewDecision`): `pr_title` (the PR's title), `pr_review_decision` (gh's `reviewDecision` `APPROVED` is `approved`, `CHANGES_REQUESTED` is `changes_requested`, anything else, including `REVIEW_REQUIRED` and an empty value, is `none`) and `pr_checks`, the summary of the PR's current check conclusions (upper-cased): `failed` when any is `FAILURE`, `TIMED_OUT`, `CANCELLED`, `ACTION_REQUIRED`, `STARTUP_FAILURE` or `ERROR`; else `pending` when any is empty, `PENDING`, `IN_PROGRESS`, `QUEUED` or `EXPECTED`; else `passed`; `none` when the PR has no checks (cpd 1's `pr.rs`). They belong to the poll and append no Event of their own (§5.1).
+- **`pr poll`:** `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision` and `gh api repos/{owner}/{repo}/pulls/<n>/comments`, compared with the PR's `pr_seen` (cpd 1 §11 and §13, kept), for each `open` PR, in phase `dispatch` or `pr` (A10). New failing checks, reviews or comments, or `state = CLOSED` without a merge: one `pr-feedback` with `data.pr` (A11, §3.8). Merged: the PR `merged` with `merged_at` (`pr-merged`); when every PR that is not `cancelled` is then `merged`, the Plan's phase `done` with `done_at` (`plan-done`, once each time the Plan reaches `done`, so again when a reopened Plan's last PR merges), after which the Plan's remaining Attempt worktrees and branches are removed in every PR's repo. Engine E7 then starts the PRs whose last prerequisite this was (§3.7). **Also stored on every poll** (the `--json` fields include `title,reviewDecision`): `pr_title` (the PR's title), `pr_review_decision` (gh's `reviewDecision` `APPROVED` is `approved`, `CHANGES_REQUESTED` is `changes_requested`, anything else, including `REVIEW_REQUIRED` and an empty value, is `none`) and `pr_checks`, the summary of the PR's current check conclusions (upper-cased): `failed` when any is `FAILURE`, `TIMED_OUT`, `CANCELLED`, `ACTION_REQUIRED`, `STARTUP_FAILURE` or `ERROR`; else `pending` when any is empty, `PENDING`, `IN_PROGRESS`, `QUEUED` or `EXPECTED`; else `passed`; `none` when the PR has no checks (cpd 1's `pr.rs`). They belong to the poll and append no Event of their own (§5.1).
 - **`pr rebase --pr <key>`** onto the PR's base; the PR must be `open` (else `illegal_transition`). Under the per-repo lock (§7.4) and after running R there, so no merge interleaves and none is left unrecorded:
   1. `git -C <lead worktree> fetch origin <base>`; the Lead worktree must be clean (`dirty_target`, exit 3);
   2. `git merge-tree --write-tree --name-only origin/<base> <lead branch>`: exit 1 means a conflict; return `rebase_conflict` (exit 3) with the file list and change nothing (t3 F10; the Lead decides, for example by appending a Job);

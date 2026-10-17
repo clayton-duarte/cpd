@@ -13,7 +13,7 @@ use crate::ids::PrKey;
 pub(super) type Migration = fn(&Connection) -> Result<()>;
 
 /// Migrations `1..=N`, in order; `MIGRATIONS[i]` takes the schema to version `i + 1`.
-pub(super) const MIGRATIONS: &[Migration] = &[migration_1, migration_2, migration_3, migration_4];
+pub(super) const MIGRATIONS: &[Migration] = &[migration_1, migration_2, migration_3, migration_4, migration_5];
 
 /// The schema hash of each version (§4.3): `SCHEMA_HASHES[i]` is version `i + 1`'s.
 /// A test asserts that migrating an empty database gives each of them.
@@ -22,6 +22,7 @@ pub(super) const SCHEMA_HASHES: &[&str] = &[
     "37449f2445f3d621405857abab17a5f3760382270a1b6a55f46a116792998646",
     "c4529a6f3cd787333b8115bade42de35504eb4902773945cfbde80ba93acfc5f",
     "62a082772ccbcd0c989f5181e3b934ba96a3ab3f1d9db81cf8e39cef5ef89579",
+    "c4ac18dd07a1a89318a0ef2191ef37a3f78c758dc7ccf2ea62d17c7544a4f672",
 ];
 
 const _: () = assert!(SCHEMA_HASHES.len() == MIGRATIONS.len(), "one schema hash per migration");
@@ -113,6 +114,13 @@ fn migration_4(conn: &Connection) -> Result<()> {
         create_history_triggers(conn, table, true)?;
     }
     Ok(())
+}
+
+/// Reopening a Plan (§4.5, hs-d118): `plans_phase` allows `pr>dispatch` and
+/// `done>dispatch`, `prs_locked` allows the legacy Lead Branch of a merged PR to
+/// move to `cpd/<plan>/<key>`. No table changes.
+fn migration_5(conn: &Connection) -> Result<()> {
+    conn.execute_batch(include_str!("migrations/0005.sql"))
 }
 
 /// §4.5 step 2: one PR per Plan, its per-repo columns kept as stored, its
@@ -573,7 +581,7 @@ mod tests {
     fn a_version_2_database_migrates_through_3_to_4_with_one_pr_per_plan() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = migrated(&dir);
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 4);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), 5);
         let migrate = count(&mut store, "SELECT max(id) FROM txns WHERE command = 'migrate'");
         assert_eq!(migrate, 2);
 
@@ -716,7 +724,7 @@ mod tests {
 
         let mut store = Store::open(&home, 5000).unwrap();
         assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 4);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), 5);
         let n = Value::Null;
         assert_eq!(
             rows(&mut store, "SELECT id, phase, archived_at FROM plans ORDER BY id"),
@@ -757,6 +765,130 @@ mod tests {
         assert_eq!(count(&mut store, "SELECT max(id) FROM events"), 6);
     }
 
+    // ---------- migration 5 ----------
+
+    /// A version 4 database, as the User's real one: Plans in `dispatch`, `pr`
+    /// and `done`, each PR on its legacy Lead Branch `cpd/<plan>`; `dn` has its
+    /// PR merged, `pr` an open one.
+    fn version_4(home: &CpdHome) {
+        let sql = format!(
+            "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');
+             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at) VALUES
+               ('l-di', 'lead', 'ctx', 'di', 'lead', '/src', 'O3', 'idle', '{T}', '{T}'),
+               ('l-pr', 'lead', 'ctx', 'pr', 'lead', '/src', 'O3', 'idle', '{T}', '{T}'),
+               ('l-dn', 'lead', 'ctx', 'dn', 'lead', '/src', 'O3', 'idle', '{T}', '{T}');
+             INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at) VALUES
+               ('di', 'ctx', 'Dispatch', 'dispatch', 'l-di', '{T}', '{T}'),
+               ('pr', 'ctx', 'Open', 'pr', 'l-pr', '{T}', '{T}');
+             INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at) VALUES
+               ('dn', 'ctx', 'Done', 'done', 'l-dn', '{T}', '{T}', '2026-01-05T00:00:00.000Z');
+             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+                              created_txn, created_at, started_at, merged_at) VALUES
+               ('di', 'pay', '/src/pay', 'main', 'dispatch', 'cpd/di', '/src/pay.di', NULL, NULL, NULL, 1, '{T}', '{T}', NULL),
+               ('pr', 'pay', '/src/pay', 'main', 'open', 'cpd/pr', '/src/pay.pr', 7, 'https://example.test/pull/7', '{T}', 1, '{T}', '{T}', NULL),
+               ('dn', 'web', '/src/web', 'develop', 'merged', 'cpd/dn', '/src/web.dn', 9, 'https://example.test/pull/9', '{T}', 1, '{T}', '{T}',
+                '2026-01-05T00:00:00.000Z');
+             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+                               fingerprint, created_txn, created_at, merged_sha) VALUES
+               ('dn', 'web', 'w', 'W', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, '{FP}', 1, '{T}', 'def');"
+        );
+        database_at(home, 4, &sql);
+    }
+
+    /// `version_4`, migrated by `Store::open`.
+    fn migrated_4(dir: &tempfile::TempDir) -> Store {
+        let home = home(dir);
+        version_4(&home);
+        assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[3]);
+        let store = Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+        store
+    }
+
+    #[test]
+    fn a_version_4_database_with_a_done_plan_migrates_to_5_keeping_every_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = migrated_4(&dir);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), 5);
+        assert_eq!(
+            rows(&mut store, "SELECT id, phase, done_at FROM plans ORDER BY id"),
+            vec![
+                serde_json::json!(["di", "dispatch", Value::Null]),
+                serde_json::json!(["dn", "done", "2026-01-05T00:00:00.000Z"]),
+                serde_json::json!(["pr", "pr", Value::Null]),
+            ]
+        );
+        assert_eq!(
+            rows(&mut store, "SELECT plan, key, status, lead_branch FROM prs ORDER BY plan"),
+            vec![
+                serde_json::json!(["di", "pay", "dispatch", "cpd/di"]),
+                serde_json::json!(["dn", "web", "merged", "cpd/dn"]),
+                serde_json::json!(["pr", "pay", "open", "cpd/pr"]),
+            ]
+        );
+        assert_eq!(count(&mut store, "SELECT count(*) FROM jobs"), 1);
+        assert_eq!(count(&mut store, "SELECT count(*) FROM sessions"), 3);
+    }
+
+    #[test]
+    fn plans_phase_allows_pr_and_done_back_to_dispatch_and_refuses_the_other_backward_moves() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = migrated_4(&dir);
+        for sql in [
+            "UPDATE plans SET phase = 'plan', locked_at = NULL, done_at = NULL WHERE id = 'dn'",
+            "UPDATE plans SET phase = 'plan', locked_at = NULL WHERE id = 'pr'",
+            "UPDATE plans SET phase = 'grounding', locked_at = NULL WHERE id = 'di'",
+            "UPDATE plans SET phase = 'pr', done_at = NULL WHERE id = 'dn'",
+            "UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'di'",
+        ] {
+            let err = refused(&mut store, sql);
+            assert_eq!(err.code(), ErrorCode::IllegalTransition, "{sql}: {err:?}");
+        }
+        // `done_at` must be cleared by the same update (the CHECK of §4.4).
+        assert!(write(&mut store, "UPDATE plans SET phase = 'dispatch' WHERE id = 'dn'").is_err());
+        write(&mut store, "UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = 'dn';
+                           UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = 'pr'")
+            .unwrap();
+        assert_eq!(
+            rows(&mut store, "SELECT id, phase, done_at FROM plans ORDER BY id"),
+            vec![
+                serde_json::json!(["di", "dispatch", Value::Null]),
+                serde_json::json!(["dn", "dispatch", Value::Null]),
+                serde_json::json!(["pr", "dispatch", Value::Null]),
+            ]
+        );
+    }
+
+    #[test]
+    fn prs_locked_allows_only_the_legacy_lead_branch_rename_of_a_merged_pr() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = migrated_4(&dir);
+        for sql in [
+            // another value
+            "UPDATE prs SET lead_branch = 'cpd/dn/other' WHERE plan = 'dn'",
+            "UPDATE prs SET lead_branch = 'cpd/dn/web/x' WHERE plan = 'dn'",
+            "UPDATE prs SET lead_branch = 'cpd/pr/pay' WHERE plan = 'dn'",
+            // the rename together with another guarded column
+            "UPDATE prs SET lead_branch = 'cpd/dn/web', repo = '/src/other' WHERE plan = 'dn'",
+            "UPDATE prs SET lead_branch = 'cpd/dn/web', base = 'main' WHERE plan = 'dn'",
+            // the other guarded columns alone
+            "UPDATE prs SET repo = '/src/other' WHERE plan = 'dn'",
+            "UPDATE prs SET base = 'main' WHERE plan = 'dn'",
+            // a PR that is not merged
+            "UPDATE prs SET lead_branch = 'cpd/pr/pay' WHERE plan = 'pr'",
+            "UPDATE prs SET lead_branch = 'cpd/di/pay' WHERE plan = 'di'",
+        ] {
+            let err = refused(&mut store, sql);
+            assert_eq!(err.code(), ErrorCode::PrLocked, "{sql}: {err:?}");
+            assert_eq!(err.exit().code(), 3);
+        }
+        write(&mut store, "UPDATE prs SET lead_branch = 'cpd/dn/web' WHERE plan = 'dn'").unwrap();
+        assert_eq!(rows(&mut store, "SELECT lead_branch FROM prs WHERE plan = 'dn'"), vec![serde_json::json!(["cpd/dn/web"])]);
+        // And back is not allowed.
+        let err = refused(&mut store, "UPDATE prs SET lead_branch = 'cpd/dn' WHERE plan = 'dn'");
+        assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
+    }
+
     #[test]
     fn a_migrated_database_has_the_schema_of_a_new_one() {
         let dir = tempfile::tempdir().unwrap();
@@ -766,7 +898,7 @@ mod tests {
         drop(Store::open(&fresh_home, 5000).unwrap());
         let hash = |home: &CpdHome| schema_hash(&Connection::open(home.db()).unwrap()).unwrap();
         assert_eq!(hash(&home(&dir)), hash(&fresh_home));
-        assert_eq!(hash(&fresh_home), SCHEMA_HASHES[3]);
+        assert_eq!(hash(&fresh_home), SCHEMA_HASHES[4]);
     }
 
     #[test]
