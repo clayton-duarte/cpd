@@ -27,14 +27,16 @@ pub const SESSION_HEIGHT: u32 = 62;
 pub const OPT_SESSION: &str = "@cpd_session";
 /// The pane option naming the TUI view a pane runs (contract §6.2, amendment 2).
 pub const OPT_VIEW: &str = "@cpd_view";
+/// The pane option naming the Session a history pane shows (commands.md §10.12).
+pub const OPT_HISTORY: &str = "@cpd_history";
 
 /// The pane border titles (contract §6.1), keyed by the pane options, first
-/// match: a Lead's pane (`@cpd_session`), the chat placeholder and the
+/// match: a Lead's pane (`@cpd_session`), the chat placeholder, a history pane and the
 /// StatusBar have none, since pi and the placeholder say what they are; the
 /// views have their column titles; any other pane shows its command.
-pub const BORDER_FORMAT: &str = "#{?#{@cpd_session},,#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},statusbar},,\
+pub const BORDER_FORMAT: &str = "#{?#{@cpd_session},,#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,#{?#{==:#{@cpd_view},statusbar},,\
 #{?#{==:#{@cpd_view},worker}, Worker · #{@cpd_job} (read-only) ,#{?#{==:#{@cpd_view},tree}, Context ,\
-#{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Dispatch ,#{pane_current_command}}}}}}}}";
+#{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Dispatch ,#{pane_current_command}}}}}}}}}";
 
 /// The `pane-died` hook (contract §6.1): only a pane that carries `@cpd_view`
 /// (a view of the cockpit) is respawned when its program dies; a Lead or
@@ -349,6 +351,11 @@ impl Tmux {
     /// `set -p -t <pane> @cpd_view <view>`.
     pub fn set_pane_view(&self, pane: &PaneId, view: View) -> Result<(), CpdError> {
         self.run(&strings(&["set", "-p", "-t", pane.as_str(), OPT_VIEW, view.as_str()])).map(drop)
+    }
+
+    /// `set -p -t <pane> @cpd_history <id>`.
+    pub fn set_pane_history(&self, pane: &PaneId, session: &SessionId) -> Result<(), CpdError> {
+        self.run(&strings(&["set", "-p", "-t", pane.as_str(), OPT_HISTORY, session.as_str()])).map(drop)
     }
 
     /// `new-window -d -t =<session>: -n <name> [-c <cwd>] [-e K=V …] -P -F

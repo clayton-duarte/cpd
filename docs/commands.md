@@ -133,6 +133,7 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `pr view` | a Lead | no | §7.6, §9.8 |
 | `session list`, `session show` | TUI, Lead | no | |
 | `session fork`, `open`, `park`, `close`, `rename` | User (TUI), Lead | yes | §6.4, §6.7 |
+| `session history` | User (TUI) | only the park's Event | §6.2, §6.4 |
 | `session archive`, `unarchive` | User (TUI) | yes | §2.2 |
 | `session state` | pi adapter | yes | §3.6 |
 | `session run` (internal) | cockpit panes | yes | §6.7 |
@@ -1465,13 +1466,13 @@ Idempotent: yes; not archived: `"already": true`, nothing written.
 cpd session history <id>
 ```
 
-Shows an archived Session's history, read-only, in the chat slot (hs-d91, hs-d122). It is the tree's click on an archived Session row (§13.2). The §2 index row is added by the Job that implements the command, in the same commit.
+Shows an archived Session's history, read-only, in the chat slot (hs-d91, hs-d122). It is the tree's click on an archived Session row (§13.2).
 
 | Precondition | Code | Exit |
 |---|---|---|
 | the Session exists | `session_not_found` | 4 |
 | it is a `lead` | `not_a_lead` | 3 |
-| it has a session file (`sessions.file` set and readable) | `file_unreadable` | 3 |
+| it has a session file (`sessions.file` set and readable) | `file_unreadable` | 2 |
 | the cockpit's `main` window and its chat slot exist; `details.next` = `cpd tui` | `no_cockpit` | 3 |
 
 Effects, in this order:
