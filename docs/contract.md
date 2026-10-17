@@ -2,7 +2,7 @@
 
 Status: **normative for every cpd 2 implementation Job.** A Plan is one deliverable over one or more PRs (R34). Vocabulary: [CONTEXT.md](../CONTEXT.md). Command-by-command reference (synopses, flags, every refusal, JSON examples, the pi adapter protocol, the Worker contract, what the TUI reads): `docs/commands.md`, written by Job `contract-commands` after this document. Where the two disagree, this document wins and `commands.md` is fixed.
 
-Sources: the User's decisions R1–R14 and R19–R20 (applied by Job `contract-gate-pr`, §10), R34 (a Plan is one deliverable over one or more PRs, each with its own repo, base, Lead Branch, Lead worktree, Gate and GitHub pull request; Job `r34-contract`, §10), R35 (§10) and the approved outline with D1–D5 (`~/.cpd/plans/cpd-rust/`), ADR-0009 to ADR-0012 (`docs/adr/`), the cockpit vision and research (`~/.cpd/plans/cpd-ui/`). cpd 1 (`docs/archive/cpd1/cli-contract.md`, cited below as "cpd 1 §n") is reference only: where its behaviour is kept, the section is cited; where it changes, the change and its reason are stated.
+Sources: the User's decisions R1–R14 and R19–R20 (applied by Job `contract-gate-pr`, §10), R34 (a Plan is one deliverable over one or more PRs, each with its own repo, base, Lead Branch, Lead worktree, Gate and GitHub pull request; Job `r34-contract`, §10), R35 (§10) and the approved outline with D1–D5 (`~/.cpd/plans/cpd-rust/`), ADR-0009 to ADR-0012 (`docs/adr/`; ADR-0012 is superseded by hs-d23 and hs-a1, Plan manager B1, §4.6), the cockpit vision and research (`~/.cpd/plans/cpd-ui/`). cpd 1 (`docs/archive/cpd1/cli-contract.md`, cited below as "cpd 1 §n") is reference only: where its behaviour is kept, the section is cited; where it changes, the change and its reason are stated.
 
 Evidence labels, as in the research notes: **verified** means run on the homeserver on 2026-10-14 (tmux 3.4, git 2.43.0, gh 2.45.0, pi 1.2.0, worktrunk 0.80.0); **docs** means read in the named tool's documentation; **unverified** means a design assumption the implementation Job must check.
 
@@ -27,7 +27,7 @@ Evidence labels, as in the research notes: **verified** means run on the homeser
 - **One binary, written in Rust.** The Cargo workspace at the root of the repo has three crates: `core/` (`cpd-core`, the library), `cli/` (`cpd`, the binary) and `tui/` (`cpd-tui`, the cockpit) (R6, switch-over; `implementing.md`). The binary is `cpd`, and this contract writes every command as `cpd …`. Until the switch-over the binary was installed as `cpd2` beside the TypeScript cpd (R12); the switch-over replaced cpd 1 and renamed the binary everywhere, including in rendered Specs and the pi adapter.
 - **System dependencies:** `git`, `tmux`, `pi` and, for pull requests only, `gh`. No `bd`, no `wt` (worktrunk), no `herdr`, and no Node.js of cpd's own. pi brings its own Node runtime; cpd uses it only to read pi's model catalog (§9).
 - **State in SQLite inside the binary** (R1): one database per machine, `$CPD_HOME/cpd.db`, in WAL mode, with SQLite bundled into the binary (no system SQLite). Reads never wait for writers. Every write is recorded in the append-only `history` table (§4).
-- **Context knowledge in git.** A Context's records (decisions, notes, questions and answers, Plans) live in an append-only JSONL store in a git repository per Context, shared across the User's machines; SQLite holds a rebuildable index of them (ADR-0012, §4.6).
+- **Context records in the database.** A Context's records (decisions, notes, questions and answers, Plans) live only in the database tables `contexts` and `context_records`; Contexts are machine-local (hs-d23, hs-a1; Plan manager B1, §4.6). ADR-0012's git store is superseded.
 - **tmux is the only host.** Leads run in the cockpit; Workers and the engine run in a hidden session of the same tmux server (§6).
 - **The repo owns its setup and its Gate,** in `.config/wt.toml`, read by cpd itself so that repos set up for worktrunk work unchanged (R4, R5, §7).
 - **Events are the single channel** to Leads, the TUI and agent states (D4, §5). There are no queue directories, no cache directories and no tmux user options carrying state.
@@ -60,7 +60,7 @@ Exit codes (kept from cpd 1 §2):
 
 | Exit | Codes |
 |---|---|
-| `1` | `gate_error`, `context_store_invalid`, `watch_start_failed`, `spawn_failed`, `session_malformed`, `driver_lock_missing`, `doctor_failed`, `pi_not_found`, `catalog_failed` |
+| `1` | `gate_error`, `watch_start_failed`, `spawn_failed`, `session_malformed`, `driver_lock_missing`, `doctor_failed`, `pi_not_found`, `catalog_failed` |
 | `2` | `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `spec_invalid`, `tier_invalid`, `nothing_to_edit`, `file_unreadable`, `invalid_name`, `pr_required`, `invalid_pr_id` (R34) |
 | `3` | `pr_exists`, `pr_in_use`, `pr_empty`, `pr_locked`, `pr_not_ready`, `pr_ended`, `needs_other_pr`, `branch_exists` (R34, §3.8), `context_exists`, `question_answered`, `not_a_git_repo`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `review_commits`, `review_missing`, `job_merged`, `job_not_failed`, `job_not_ready`, `attempt_not_running`, `no_port`, `jobs_not_done`, `gate_failed`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `in_chat_slot`, `cursor_ahead`, `not_a_terminal` |
 | `4` | `base_not_found`, `pr_not_found` (R34) |
@@ -82,13 +82,12 @@ Exit codes (kept from cpd 1 §2):
 $CPD_HOME/
   config.toml                     machine config (§8)
   cpd.db, cpd.db-wal, cpd.db-shm  the database (§4)
-  contexts/<context>/             one git repository per Context (§4.6)
+  archive/contexts/<context>/     an old git store of a Context, moved here by migration 0007 (§4.5); nothing reads it
   locks/
     watch.lock                    held by the one `cpd watch` (§6.6)
     repo-<sha1>.lock              per-repo lock: merges, `pr open`, `pr rebase` (§7.4, §7.6); sha1 of the repo's git common dir realpath
     attempt-<plan>--<attempt>.lock  the driver lock: taken by the Attempt's starter, inherited by its driver, removed when the Attempt ends (§3.4)
     pr-poll.lock                  held by `pr poll` for the whole poll (§7.6, hs-d96)
-    context-<context>.lock        held while writing or syncing a Context store (§4.6)
     plannotator-ports.lock        held while a Plan's review port is assigned (§6.5)
     store.lock                    held by every open of `cpd.db` during its one-time setup only: the WAL switch and the migration check (§4.1, §4.5)
   run/
@@ -114,7 +113,7 @@ Locks are `flock(2)` locks on these files: the kernel releases them when the hol
 
 | Thing | Format | Unique within | Example |
 |---|---|---|---|
-| Context id | `^[a-z][a-z0-9-]{1,39}$` | all machines (it names a git repo) | `building-cpd` |
+| Context id | `^[a-z][a-z0-9-]{1,39}$` | this machine (Contexts are machine-local, §4.6) | `building-cpd` |
 | Machine name | `^[a-z][a-z0-9]{0,7}$`, set in `config.toml` (§8) | the User's machines | `hs` |
 | Context record id | `<machine>-<letter><n>`; letter `d` decision, `n` note, `q` question, `a` answer, `p` plan; `n` from 1, sequential per machine, Context and letter | the Context | `hs-d3` |
 | Plan id | `^[a-z][a-z0-9-]{1,23}$` (cpd 1's Workflow id) | the machine; `pr add` and every PR start (§3.8) also refuse a PR whose Lead Branch `cpd/<plan>/<key>`, or the branch `cpd/<plan>` itself (git cannot hold `cpd/<plan>` and `cpd/<plan>/…` at once), already exists in the PR's repo (`branch_exists`), so cpd 1 Workflows and cpd 2 Plans on one repo never share a branch. The one exception is the legacy branch `cpd/<plan>` of a `merged` PR, which `pr add` first moves to `cpd/<plan>/<that PR's key>` (§3.8, hs-d118) | `pay-4521` |
@@ -149,12 +148,11 @@ The knowledge several Plans share, optionally a Jira Epic. Not a session (ADR-00
 | `archived_at` | time? | null, or when the Context was archived (migration 3, §4.5); see "Archived" below |
 | `lead_session` | text? | this machine's **grounded Lead**: a Session that every new Plan of this Context forks (D2). Null until a first Plan of the Context has been grounded on this machine |
 | `grounded_seq` | int? | the Context record index position (`context_records.seq`) at the moment the grounded Lead was forked; set together with `lead_session` |
-| `sync_failing` | bool | the last `context sync` failed (so the failure is reported once, §4.6) |
 | records | [Context record] | append-only, below |
 
 #### Context record
 
-One typed, append-only entry of a Context's store (ADR-0012). Written only by `cpd context …` commands and by `plan new` (the `plan` kind).
+One typed, append-only row of `context_records`, a Context's only store (§4.6). Written only by `cpd context …` commands and by `plan new` (the `plan` kind), each in one database transaction.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -165,9 +163,9 @@ One typed, append-only entry of a Context's store (ADR-0012). Written only by `c
 | `text` | text | the decision, note, question or answer; for `plan`, the Plan's title |
 | `supersedes` | text? | `decision` only: the id of the decision it replaces (must exist) |
 | `question` | text? | `answer` only, required: the id of the question it answers (must exist) |
-| `plan` | json? | `plan` only, required: `{id, machine, jira?}`; references the Plan by id and machine. R34 (A12): no `repo`, because a Plan has one or more PRs and none when it is created; a record written before R34 may still carry `repo`, which is read and ignored (§4.6) |
+| `plan` | json? | `plan` only, required: `{id, machine, jira?}`; references the Plan by id and machine. R34 (A12): no `repo`, because a Plan has one or more PRs and none when it is created; a record written before R34 may still carry `repo`, which migration 0007's import drops (§4.5) |
 
-A decision is **active** unless a later decision supersedes it. A question is **open** until an answer names it. The rendering Leads read (`context show`) lists, in order: title and Jira key; Plans, each with the repos of its PRs that are not `cancelled`, read from this machine's database (a Plan of another machine shows none); active decisions; superseded decisions, each naming its successor; open questions; answered questions with their answers; notes. Each item shows its id and date. Commands (detail in `commands.md`): `context new`, `list`, `show`, `decide`, `note`, `ask`, `answer`, `sync`.
+A decision is **active** unless a later decision supersedes it. A question is **open** until an answer names it. The rendering Leads read (`context show`) lists, in order: title and Jira key; Plans, each with the repos of its PRs that are not `cancelled`, read from this machine's database (a Plan of another machine shows none); active decisions; superseded decisions, each naming its successor; open questions; answered questions with their answers; notes. Each item shows its id and date. Commands (detail in `commands.md`): `context new`, `list`, `show`, `decide`, `note`, `ask`, `answer`.
 
 #### Plan
 
@@ -613,7 +611,7 @@ One per machine (D5). Every `tick_seconds`:
 | E3 | **Scheduling:** for each Ready Job, by `jobs.seq` across all Plans, while a slot is free: verify the fingerprint, take the driver lock, create the Attempt, start its driver with the lock inherited (§3.4) |
 | E4 | **Completion**, per PR (R34): for each PR in status `dispatch` with no Job `queued` or `running`, at least one `merged`, and `all_merged_at` null: append `all-merged` (`data.pr` = its key) and set the PR's `all_merged_at`. The Lead answers with `pr open --pr <key>` |
 | E5 | **PR poll** (hs-d96, hs-d97): run `cpd pr poll` (no `--plan`) as a subprocess (a process boundary, cpd 1 §11 step 5), `pr_poll_seconds` after the **end** of the previous poll (never overlapping, never more often than one per tick), whether or not any Plan is in `pr`. One poll covers every open pull request of the User (§7.6). When the output's `rate_limit.remaining` is below 100, E5 skips polls until `rate_limit.reset_at` and reports one `error` Event with code `gh_rate_limited` (`details`: `remaining`, `reset_at`); the error clears when polling resumes |
-| E6 | **Contexts:** every `context_sync_seconds`, `context sync` each Context that has a remote (§4.6) |
+| E6 | *Removed by Plan manager B1 (hs-a1): Contexts are machine-local, so there is nothing to sync. The number stays.* |
 | E7 | **PR start** (R34, A9): for each Plan in `dispatch`, each PR in status `waiting` whose needs are all `merged` and whose `start_failed_at` is null: start it (§3.8, §7.2). E7 runs after E5 in the same tick, so a PR starts in the tick in which E5's poll sees its last prerequisite merged; it also starts a PR appended in `dispatch` with no needs. A failed start sets `start_failed_at` and appends one `error` Event with code `pr_start_failed` for the Plan's Lead; E7 does not try that PR again, the Lead retries with `cpd pr start <key>` |
 
 `watch` holds `locks/watch.lock` (a second one exits with `watch_running`, exit 3), appends `watch-started` and `watch-stopped`, and never exits on its own: unlike cpd 1, it serves every Plan.
@@ -690,7 +688,7 @@ The **tamper report** (`plan show`'s `tamper` list, `doctor`): the schema check;
 
 ### 4.4 DDL
 
-The schema at the current version, 6. Migration 1 created these tables as they were at version 1 (`core/src/store/migrations/0001.sql`); migrations 2 to 4 (§4.5) brought `plans`, `jobs`, `events` and `context_records` to the shape below and created `prs` and `pr_needs` (R34); migration 5 changed the triggers `plans_phase` and `prs_locked` (hs-d118); migration 6 created `pull_requests` and rebuilt `prs` (hs-d96). Check constraints that need regular expressions are enforced in the binary at the boundary (§2.1), and the database checks shapes and lengths.
+The schema at the current version, 7. Migration 1 created these tables as they were at version 1 (`core/src/store/migrations/0001.sql`); migrations 2 to 4 (§4.5) brought `plans`, `jobs`, `events` and `context_records` to the shape below and created `prs` and `pr_needs` (R34); migration 5 changed the triggers `plans_phase` and `prs_locked` (hs-d118); migration 6 created `pull_requests` and rebuilt `prs` (hs-d96). Migration 7 (file 0007) dropped `contexts.sync_failing` and made `context_records` the only store of Context records (§4.5, §4.6). Check constraints that need regular expressions are enforced in the binary at the boundary (§2.1), and the database checks shapes and lengths.
 
 ```sql
 -- ---------- audit ----------
@@ -726,13 +724,12 @@ CREATE TABLE contexts (
   created_on    TEXT NOT NULL,
   lead_session  TEXT REFERENCES sessions(id) DEFERRABLE INITIALLY DEFERRED,
   grounded_seq  INTEGER,
-  sync_failing  INTEGER NOT NULL DEFAULT 0 CHECK (sync_failing IN (0, 1)),
   archived_at   TEXT,
   CHECK ((lead_session IS NULL) = (grounded_seq IS NULL))
 ) STRICT;
 
-CREATE TABLE context_records (               -- index of the git store (§4.6); rebuildable
-  seq          INTEGER PRIMARY KEY AUTOINCREMENT,   -- local index position
+CREATE TABLE context_records (               -- the only store of Context records (§4.6)
+  seq          INTEGER PRIMARY KEY AUTOINCREMENT,   -- position in this machine's database
   context      TEXT NOT NULL REFERENCES contexts(id),
   id           TEXT NOT NULL,
   kind         TEXT NOT NULL CHECK (kind IN ('decision', 'note', 'question', 'answer', 'plan')),
@@ -1253,31 +1250,18 @@ CREATE TRIGGER events_no_delete  BEFORE DELETE ON events  BEGIN SELECT RAISE(ABO
   6. `PRAGMA foreign_key_check` must return no row, else `migration_failed`; set `user_version = 6`; commit; then `PRAGMA legacy_alter_table = OFF` and `PRAGMA foreign_keys = ON`.
 
   The five dropped columns' values stay readable in `prs`' earlier history rows. The tests: a version-5 database with PRs in every status, open ones with `pr_title` set and null, migrates to 6 keeping every other column and migration 5's triggers on `prs`, gets one row per PR with a number, passes `PRAGMA foreign_key_check`, and its schema hash equals that of a fresh database migrated to 6; deleting a row a PR points to is refused, deleting any other is allowed and leaves a `delete` history row.
+- **Migration 0007** (Plan manager B1, hs-d23, hs-a1, A2: Context records only in the database), applied after migration 6; migration 0008 follows it (it renames the Plan phase `pr`, Job `deploy-contract`). It imports from `$CPD_HOME/contexts/<id>/` (`context.json` and `records/*.jsonl`, the git store's format: one JSON record per line with `"v": 1`; a `plan` record may carry the pre-R34 field `plan.repo`, which is accepted and dropped) every Context and every record the database does not hold yet, keyed by Context id and by `(context, id)`, with the same row values the earlier import (`import_all`) wrote, and drops the column `contexts.sync_failing` (the history triggers of `contexts` are generated again, the rule above). A folder that is not a valid store fails the migration, which rolls back entirely (`migration_failed`). After the transaction commits, the code that applied the migration moves each `$CPD_HOME/contexts/<id>/` to `$CPD_HOME/archive/contexts/<id>/`, creating the parents. Nothing is deleted. Rerunning is safe: a folder already moved is absent. An existing destination is never overwritten: the folder stays and the failure is reported loud.
 - No migration from cpd 1's beads Ledgers (R7): running Workflows finish on cpd 1.
 
 ### 4.6 The Context store
 
-Decided by ADR-0012 and the Lead's answer to Escalation `contract-core-a1-q1`: the source of truth for a Context's records is append-only JSONL in a git repository; SQLite holds an index.
+Since Plan manager B1 (hs-d23, hs-a1, hs-d128; migration 0007, §4.5) the database tables `contexts` and `context_records` (§4.4) are the only store of Context records. ADR-0012's git store, its index and its sync are superseded and gone.
 
-```
-$CPD_HOME/contexts/<context>/        a git repository, branch main; remote origin (private) added by the User
-  context.json                       {"v": 1, "id", "title", "jira", "created_at", "created_on"}; written once by context new
-  records/<machine>.jsonl            append-only; only that machine ever writes its file
-  .gitattributes                     records/*.jsonl merge=union
-  .gitignore                         *.tmp
-```
-
-- **One record per line**, the JSON of §2.2 "Context record" with `"v": 1`. Each machine appends only to its own file, so two machines never edit the same file and merges are trivial; the union driver is a second guard. A `plan` record written before R34 carries `plan.repo`: import accepts that one extra field on `plan` records and drops it, and no other unknown field (R34, A12; the store stays `"v": 1`, because old lines remain valid).
-- **A write** (`context decide`, `note`, `ask`, `answer`, and `plan new`'s `plan` record) holds `locks/context-<id>.lock`, validates (`supersedes` names an existing decision, `question` an existing question; else `record_not_found`, exit 3), appends the line, runs `git add` and `git commit -q -m "<kind> <id>: <first 60 characters>"`, then inserts the index row and appends `context-record` in one database transaction. Rendering is on demand (`context show`); no rendered file is stored, so nothing generated can conflict.
-- **The index** (`contexts`, `context_records`) is rebuildable: `context sync` and start-up of `watch` re-import every record file and insert the records whose `(context, id)` is not yet indexed, appending `context-record` for each. A crash between the commit and the index insert is repaired by that import. Import is idempotent.
-- **Sync** (`context sync`, and engine E6 for Contexts with a remote), under the Context lock:
-  1. no `origin` remote: no-op, `{synced: false, reason: "no_remote"}`;
-  2. `git fetch origin`, then `git merge --no-edit origin/main`. Record files merge cleanly. A conflict can only come from `context.json` (two machines created the same id): `git merge --abort`, nothing changes, the result is `context_sync_conflict` (exit 3) naming the files, and the User resolves it by hand;
-  3. `git push origin main`; rejected because the remote moved: repeat from step 2, at most 3 times, then `context_sync_failed` (exit 1);
-  4. import new records into the index (above).
-  
-  A sync failure from E6 appends one `error` Event for the Context and sets `sync_failing`; later failures append nothing until a sync succeeds and clears it. A network failure is a sync failure.
-- **Grounded Lead and index positions are machine-local**: `contexts.lead_session` and `grounded_seq` are not in the git store.
+- **Contexts are machine-local** (hs-a1): a Context and its records exist on the machine that wrote them. Nothing copies them to another machine, so there is no sync, no remote, no conflict and no lock file.
+- **One record per row**, the fields of §2.2 "Context record". A record's id is `<machine>-<letter><n>` (§2.1); existing ids never change.
+- **A write** (`context decide`, `note`, `ask`, `answer`, and `plan new`'s `plan` record) is one database transaction: validate (`supersedes` names an existing decision, `question` an existing question; else `record_not_found`, exit 3), insert the `context_records` row, append `context-record`. `context new` writes only its `contexts` row and appends `context-created`. Rendering is on demand (`context show`); no rendered file is stored.
+- **Grounded Lead and positions are machine-local**: `contexts.lead_session` and `grounded_seq` (`context_records.seq`) belong to this database.
+- **Old stores.** A `$CPD_HOME/contexts/<id>/` folder of an earlier version is imported and archived by migration 0007 (§4.5, §1.4). Nothing reads `archive/contexts/` afterwards.
 
 ## 5. Events
 
@@ -1293,8 +1277,8 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 
 | Kind | Appended when | Set | `data` |
 |---|---|---|---|
-| `context-created` | `context new`; or import of a Context first seen on sync | context | `{title, jira, created_on}` |
-| `context-record` | a record is written or imported (§4.6) | context | `{record, kind, machine, seq}` |
+| `context-created` | `context new` | context | `{title, jira, created_on}` |
+| `context-record` | a record is written (§4.6) | context | `{record, kind, machine, seq}` |
 | `context-grounded` | the Context gets its grounded Lead (§3.1) | context, session | `{seq, forked_from}` |
 | `plan-created` | `plan new` | plan | `{title, jira, lead_session, forked_from, cwd}`; R34: no `repo` or `base` (A12), `cwd` is the directory `plan new` ran from |
 | `plan-phase` | `grounding → plan`, `plan → dispatch` (also moves every draft Job to `queued`), `dispatch → pr` (when the last PR not yet open opens, A10), `pr → dispatch` and `done → dispatch` (`pr add` appends a PR to a Plan that was past `dispatch`, D1; appended before `pr-added`) | plan | `{from, to}` (`from` is `pr` or `done` and `to` is `dispatch` when `pr add` reopens the Plan); at lock also `jobs: [key]` and `prs: [key]` (the PRs it started); at `pr` also `prs: [{key, number, url}]` (every PR not `cancelled`) |
@@ -1332,7 +1316,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `plan-archived` | `plan archive` or `unarchive`, or the cascade of the Context's, for each Plan | context, plan | `{archived: bool}` |
 | `session-archived` | `session archive` or `unarchive`, or a cascade, for each Session | context, plan?, session | `{archived: bool}` |
 | `watch-started`, `watch-stopped` | the engine starts or stops | (none) | `{pid}` |
-| `error` | `watch`, a driver or a sync hit an unexpected failure; codes include `lead_worktree_stale`, `merge_check_failed`, `push_failed` (a failed push of a Lead Branch at a PR's start or at a merge, §7.2, §7.4; `details.pr` names the PR) `pr_start_failed` (engine E7 could not start a PR, §3.8; `details: {pr, step, tail?, log?}`) and `gh_rate_limited` (engine E5 skips polls while GitHub's rate limit is nearly used, §3.7; `details: {remaining, reset_at}`; no Plan, it concerns the User's account) | context?, plan?, … | `{source, code, message, details}` |
+| `error` | `watch` or a driver hit an unexpected failure; codes include `lead_worktree_stale`, `merge_check_failed`, `push_failed` (a failed push of a Lead Branch at a PR's start or at a merge, §7.2, §7.4; `details.pr` names the PR) `pr_start_failed` (engine E7 could not start a PR, §3.8; `details: {pr, step, tail?, log?}`) and `gh_rate_limited` (engine E5 skips polls while GitHub's rate limit is nearly used, §3.7; `details: {remaining, reset_at}`; no Plan, it concerns the User's account) | context?, plan?, … | `{source, code, message, details}` |
 
 ### 5.3 Delivery by the pi adapter
 
@@ -1727,7 +1711,6 @@ fork_quiet_seconds = 5       # fork-when-idle (§6.7)
 [watch]
 tick_seconds = 5
 pr_poll_seconds = 5             # one GitHub search of every open PR of the User (E5, §3.7, hs-d97); one point a poll, 720 an hour
-context_sync_seconds = 300
 error_repeat_seconds = 600   # the same `error` Event at most once per this (§3.7)
 
 [events]
@@ -1792,7 +1775,7 @@ Kept from cpd 1 §7, with one change in how pi's catalog is read.
 | The PR poller: one engine poll every 5 s of all the User's open PRs by one GraphQL search through `gh`, stored in `pull_requests`; `pr-feedback` only to the owning Lead; `pr view` for the detail (hs-d65, hs-d72, hs-d96, hs-d97, hs-d98, hs-d107; `docs/research/gh-interface.md`) | §1.3, §2.2 (Pull request, PR), §2.4, §2.5, §3.1, §3.7 E5, §3.8, §4.4 (`pull_requests`, `prs`), §4.5 migration 6, §5.1, §5.2 (`pr-feedback`, `error` `gh_rate_limited`), §7.6 (`pr poll`, `pr view`), §8.2 (`pr_poll_seconds`); `commands.md` §1.2, §1.3, §2, §4.2, §4.3, §9.2, §9.8, §13.2, §17 |
 | B1–B4 forks are siblings under their Context; `job add --review` makes a review Job whose Worker is a fork of the Lead (hs-d70, User) | B1: §2.2 Session, §6.8; `commands.md` §13.2, §17. B2: §1.4, §2.2 Job (Review Job), §3.2, §3.4 (A review Job's Attempt), §4.4 (`jobs.review`), §4.5 (migration 4), §5.2 `job-added`, §6.5, §7.4 (A review Job's merge); `commands.md` §5.1, §5.7, §6.1, §16.1. B3: §2.2 Review Job; the cpd-lead skill is Job `r34-skill`'s. B4: §6.7, §6.8; `commands.md` §10.3 |
 | R14 the Plan starts from `main` after lead-fork's PR | §3.1 (`plan lock` creates the Lead Branch from `origin/<base>`), §7.2 |
-| R15 Contexts follow ADR-0011 and ADR-0012: the grounded Lead is a fork taken at the first Plan's `grounding → plan`, parked and never typed into; later forks get the newer records; the Context store is typed JSONL records in git, indexed by SQLite | §2.2 Context and Context record, §3.1, §4.6, §6.7 |
+| R15 Contexts follow ADR-0011 and ADR-0012: the grounded Lead is a fork taken at the first Plan's `grounding → plan`, parked and never typed into; later forks get the newer records; the Context store was typed JSONL records in git, indexed by SQLite (superseded by hs-d23 and hs-a1: records in the database, §4.6) | §2.2 Context and Context record, §3.1, §4.6, §6.7 |
 | R17 a Reviewer is a fork of the Lead | **superseded for cpd 2 by R19**: cpd 2 has no Reviewer, so nothing implements it |
 | R19 no Job-level Gate or Reviewer: the Gate runs only at the Plan level, before the PR opens (`pr open`) and before `pr rebase` pushes; the review is the PR's own, on GitHub | §1.1, §1.2, §1.4, §2.2–§2.4, §3.2 (no `in_review`), §3.4 (no review statuses, outcomes or causes; A6–A7 removed; outcome `merged`), §3.6, §3.7, §4.4, §5.1–§5.3, §6.2–§6.5, §7.3, §7.4 (step 6 removed), §7.6, §8.2, §9; `commands.md` §20 lists every changed section |
 | R20 at submit: the mechanical checks plus the quick check, the `pre-commit` hook; no `pre-commit` table means no quick check, with no fallback to `pre-merge` | §7.3 (hook table, `attempt submit` preconditions) |
@@ -1804,4 +1787,4 @@ Kept from cpd 1 §7, with one change in how pi's catalog is read.
 | D4 Events are the single channel | §5, §3.6 (agent states as Events), §6.2 (no state in tmux options) |
 | D5 one `cpd watch` per machine | §3.7, §6.4, §6.6 |
 | ADR-0011 Contexts and Plans; a new Plan forks the Context's grounded Lead | §2.2, §3.1 |
-| ADR-0012 the Context store: typed records in a git repository, rendered for Leads | §2.2 Context record, §4.6 |
+| ADR-0012 the Context store: typed records in a git repository, rendered for Leads (**superseded** by hs-d23 and hs-a1: records in the database, Contexts machine-local; Plan manager B1) | §2.2 Context record, §4.6 |

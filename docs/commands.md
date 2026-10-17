@@ -106,7 +106,6 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `context new` | Lead, User | yes | §2.2, §4.6 |
 | `context list`, `context show` | Lead, TUI | no | §2.2 |
 | `context decide`, `note`, `ask`, `answer` | Lead | yes | §4.6 |
-| `context sync` | engine E6, User | yes | §4.6 |
 | `context rename` | User (TUI) | yes | §2.2 |
 | `context archive`, `unarchive` | User (TUI) | yes | §2.2 |
 | `plan new` | User (TUI), Lead | yes | §3.1, §6.7 |
@@ -143,11 +142,9 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 
 ## 3. `context`
 
-A Context and its records (§2.2, §4.6). Every record write follows §4.6 exactly: under `locks/context-<id>.lock`, validate, append one line to `contexts/<id>/records/<machine>.jsonl`, `git add`, `git commit`, then one transaction inserting the `context_records` row and appending `context-record` `{record, kind, machine, seq}`.
+A Context and its records (§2.2, §4.6). The records live only in the database, and Contexts are machine-local (hs-a1). Every record write follows §4.6 exactly: one transaction that validates, inserts the `context_records` row and appends `context-record` `{record, kind, machine, seq}`. No lock file, no git, no file.
 
-**git identity.** cpd commits in a Context store with `git -c user.name="cpd <machine>" -c user.email=cpd@<machine>.invalid`, so a commit never depends on the machine's git configuration. (New: cpd 1 had no Context store.)
-
-**Record ids.** `<machine>-<letter><n>` with `n` = 1 + the highest `n` already in this Context's index for this machine and letter (§2.1). The Context lock makes it race-free on one machine; only this machine writes its letter sequence.
+**Record ids.** `<machine>-<letter><n>` with `n` = 1 + the highest `n` already in this Context's records for this machine and letter (§2.1). The write transaction makes it race-free; only this machine writes its letter sequence.
 
 **Retries.** A record write is recognised as a retry, and returns the existing record with `"already": true`, when this machine's latest record in the Context has the same `kind`, `text`, `supersedes`, `question` and `by.session`. Any other write appends a new record; records are never edited.
 
@@ -166,18 +163,16 @@ cpd context new <id> --title <text> [--jira <key>]
 | Precondition | Code | Exit |
 |---|---|---|
 | no Context row with this id, unless it has the same title and Jira key | `context_exists` | 3 |
-| `contexts/<id>/` does not exist (for example cloned from another machine but not imported); `details.next` is `cpd context sync --context <id>` | `context_exists` | 3 |
 
 Effects:
-- **git:** under the Context lock: `git init -q -b main contexts/<id>`; write `context.json` (§4.6), `.gitattributes` (`records/*.jsonl merge=union`), `.gitignore` (`*.tmp`) and an empty `records/<machine>.jsonl`; `git add -A`; `git commit -q -m "context <id>: <title>"`. No remote: the User adds `origin` (§4.6).
-- **Rows**, one transaction: `contexts` (`created_on` = `machine`, `lead_session` and `grounded_seq` null). **Event** `context-created` `{title, jira, created_on}`.
+- **Rows**, one transaction: `contexts` (`created_on` = `machine`, `lead_session` and `grounded_seq` null). **Event** `context-created` `{title, jira, created_on}`. Nothing else is written: no directory, no git.
 - **tmux:** none.
 
 ```json
-{"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null, "created_at": "2026-10-14T21:10:00.000Z", "created_on": "hs", "dir": "/home/clayton/.cpd/contexts/building-cpd"}}
+{"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null, "created_at": "2026-10-14T21:10:00.000Z", "created_on": "hs"}}
 ```
 
-Idempotent: yes. The same id, title and Jira key return `"already": true`. If the git commit happened but the row did not (a crash), the second rule refuses and `context sync --context <id>` imports it.
+Idempotent: yes. The same id, title and Jira key return `"already": true`.
 
 ### 3.2 `context list`
 
@@ -190,7 +185,7 @@ No flags, no preconditions, no effects (one read transaction).
 ```json
 {"ok": true, "contexts": [
   {"id": "building-cpd", "title": "Building cpd", "jira": null, "archived_at": null, "grounded": true, "lead_session": "6f1c…", "grounded_seq": 41,
-   "records": 57, "open_questions": 2, "sync_failing": false,
+   "records": 57, "open_questions": 2,
    "plans": [{"id": "cpd2", "title": "cpd in Rust", "phase": "dispatch", "lead_session": "596d007f-…", "archived_at": null}]}],
  "events_cursor": 48213}
 ```
@@ -209,7 +204,7 @@ cpd context show [--context <id>] [--since <seq>]
 
 Effects: none. Output: the Context, its records in index order, and `markdown`, the rendering of §2.2 "Context record" (title and Jira key; Plans; active decisions; superseded decisions with their successor; open questions; answered questions with their answers; notes; each item with its id and date). With `--since`, `markdown` renders only those records, in the same order of sections.
 
-**Plans** (R34, A12): each `plan` record is listed with the repos of its Plan's PRs that are not `cancelled`, read from this machine's database (`prs.repo`) in the same read transaction, each repo once, in PR key order; a Plan of another machine, or one with no PR yet, shows none. The record itself carries no repo (§2.2; a `repo` in a record written before R34 is ignored, §4.6). In `records`, a `plan` record's `plan` is `{id, machine, jira}`, and the entry has `repos`, the list just described.
+**Plans** (R34, A12): each `plan` record is listed with the repos of its Plan's PRs that are not `cancelled`, read from this machine's database (`prs.repo`) in the same read transaction, each repo once, in PR key order; a Plan of another machine, or one with no PR yet, shows none. The record itself carries no repo (§2.2; a `repo` in a record written before R34 was dropped by migration 0007's import, contract §4.5). In `records`, a `plan` record's `plan` is `{id, machine, jira}`, and the entry has `repos`, the list just described.
 
 ```json
 {"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null, "grounded": true, "grounded_seq": 41},
@@ -237,13 +232,13 @@ cpd context ask <question> [--context <id>]
 |---|---|---|
 | `--supersedes` names a record of this Context whose kind is `decision` | `record_not_found` | 3 |
 
-Effects: the record write above, with kind `decision` (letter `d`), `note` (`n`) or `question` (`q`); `by` = `{session: CPD_SESSION or PI_SESSION_ID or null, plan: the selected Plan or null}`. **Event** `context-record`. No tmux.
+Effects: the record write above (one transaction), with kind `decision` (letter `d`), `note` (`n`) or `question` (`q`); `by` = `{session: CPD_SESSION or PI_SESSION_ID or null, plan: the selected Plan or null}`. **Event** `context-record`. No tmux.
 
 ```json
 {"ok": true, "record": {"id": "hs-d8", "kind": "decision", "at": "2026-10-14T21:30:00.000Z", "machine": "hs", "by": {"session": "596d007f-…", "plan": "cpd2"}, "text": "…", "supersedes": "hs-d2"}, "seq": 58}
 ```
 
-Idempotent: a retry is recognised (above); otherwise each call appends a record, by design (the store is append-only).
+Idempotent: a retry is recognised (above); otherwise each call inserts a record, by design (records are never edited).
 
 ### 3.5 `context answer`
 
@@ -256,7 +251,7 @@ cpd context answer <question> <text> [--context <id>]
 | Precondition | Code | Exit |
 |---|---|---|
 | `<question>` is a record of this Context of kind `question` | `record_not_found` | 3 |
-| no answer in this machine's index names it yet | `question_answered` | 3 |
+| no answer in this Context's records names it yet | `question_answered` | 3 |
 
 Effects: the record write with kind `answer` (letter `a`) and `question` = `<question>`; **Event** `context-record`.
 
@@ -264,32 +259,11 @@ Effects: the record write with kind `answer` (letter `a`) and `question` = `<que
 {"ok": true, "record": {"id": "hs-a2", "kind": "answer", "at": "…", "machine": "hs", "by": {"session": "596d007f-…", "plan": "cpd2"}, "text": "Yes, per machine.", "question": "hs-q3"}, "seq": 59}
 ```
 
-Idempotent: a retry is recognised; a second, different answer is refused. Two machines may still answer the same question before they sync; `context show` then lists both answers.
+Idempotent: a retry is recognised; a second, different answer is refused. Contexts are machine-local, so only this machine answers.
 
 ### 3.6 `context sync`
 
-```
-cpd context sync [--context <id>]
-```
-
-Without `--context`, every directory under `contexts/` is synced, in name order. Run by engine E6 every `context_sync_seconds` for Contexts with a remote, and by the User.
-
-| Precondition | Code | Exit |
-|---|---|---|
-| `contexts/<id>/` is a git repository with a valid `context.json` whose `id` is `<id>` | `context_store_invalid` | 1 |
-| the merge did not conflict (§4.6 step 2); `details.files` lists the files | `context_sync_conflict` | 3 |
-| fetch, merge and push succeeded within 3 rounds (§4.6 step 3) | `context_sync_failed` | 1 |
-
-Effects (§4.6, under the Context lock):
-- **git:** no `origin`: nothing. Else `git fetch origin`, `git merge --no-edit origin/main` (`git merge --abort` on a conflict), `git push origin main`, repeated at most 3 times.
-- **Rows**, one transaction per Context: a Context first seen (no row): `contexts` from `context.json` and **Event** `context-created`; each record not yet indexed: `context_records` and **Event** `context-record`; `sync_failing = 0` on success. A failure from E6 sets `sync_failing = 1` and, only when it was 0, appends `error` `{source: "context sync", code, message, details}` for the Context (§4.6). A failure run by hand only reports it.
-
-```json
-{"ok": true, "contexts": [{"id": "building-cpd", "synced": true, "imported": 3, "pushed": true},
-                          {"id": "home-lab", "synced": false, "reason": "no_remote", "imported": 0, "pushed": false}]}
-```
-
-Without `--context`, one failing Context makes the whole result a failure (exit of the first failure) whose `details.contexts` holds every Context's entry, failures included as `{"id", "error": {code, message}}`; the others are still synced. Idempotent: yes; a second run imports and pushes nothing.
+Removed by Plan manager B1 (hs-a1): Contexts are machine-local; records live in the database. The command is now unknown (`usage`, exit 2); engine E6 is removed with it (contract §3.7).
 
 ### 3.7 `context rename`
 
@@ -303,7 +277,7 @@ Changes the Context's visible label (contract §2.2: ids are immutable, titles e
 |---|---|---|
 | the Context exists | `context_not_found` | 4 |
 
-Effects: an unchanged title: `"already": true`, nothing written. Otherwise **rows**, one transaction: `contexts.title`; **Event** `context-renamed` `{title}`. Only the database changes: the git store's `context.json` is not touched (the git store is going away), so another machine keeps the old title.
+Effects: an unchanged title: `"already": true`, nothing written. Otherwise **rows**, one transaction: `contexts.title`; **Event** `context-renamed` `{title}`. Only the database changes.
 
 ```json
 {"ok": true, "context": {"id": "building-cpd", "title": "Building cpd 2"}}
@@ -385,7 +359,7 @@ A Plan has no repo (R34, A12): its PRs are added later with `pr add` (§9.4), an
 
 Effects, in this order:
 1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the realpath of the caller's cwd; `tier = lead_tier`; `forked_from` = the Context's `lead_session` or null; `state = stopped`); `plans` (`phase = grounding`, `lead_session` = the new Session); no `prs` row. **Events** `plan-created` `{title, jira, lead_session, forked_from, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
-2. **Context store:** the record write of §3 with kind `plan` (letter `p`), `text` = the title, `plan` = `{id, machine, jira}`; **Event** `context-record`.
+2. **Context record:** the record write of §3 (one transaction) with kind `plan` (letter `p`), `text` = the title, `plan` = `{id, machine, jira}`; **Event** `context-record`.
 3. **First message**, written to `run/<id>/lead-message.md`: a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the brief file's text if given, then `context show --context <c>` rendered as markdown, with `--since <grounded_seq>` when the Lead is a fork (§3.1).
 4. **tmux:** start the server if it is not running (§6.1) and the cockpit session `cpd` if it is missing; then `new-window -d -t =cpd: -n park-<id> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -e CPD_PLAN=<id> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, and `set -p -t <pane> @cpd_session <session>`. One transaction: `sessions.tmux_pane`; **Event** `session-moved` `{pane, window, place: "parked"}`.
 5. In the pane, `session run` (§10.8) forks the grounded Lead when it is idle (§6.7), or starts a fresh Lead, with the first message.
@@ -398,7 +372,7 @@ When the cockpit session is missing, plan new creates it with the new Lead's par
  "record": "hs-p4"}
 ```
 
-Idempotent: yes. With the same flags it returns `"already": true` and redoes any step that did not happen: the `plan` record when the index has none for this Plan, and step 4 when the Lead is `stopped` with no pane (in the stored `cwd`). The caller's cwd is not a flag: a rerun from another directory is still `already` and keeps the stored `cwd`. Different flags: `plan_exists`.
+Idempotent: yes. With the same flags it returns `"already": true` and redoes any step that did not happen: the `plan` record when the Context has none for this Plan, and step 4 when the Lead is `stopped` with no pane (in the stored `cwd`). The caller's cwd is not a flag: a rerun from another directory is still `already` and keeps the stored `cwd`. Different flags: `plan_exists`.
 
 ### 4.2 `plan list`
 
@@ -1504,13 +1478,13 @@ cpd watch [--ensure]
 
 The engine, one per machine (§3.7, §6.6, D5).
 
-**Without `--ensure`:** runs E1–E7 (E7, the PR start, since R34) every `tick_seconds` in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`. At start it imports the Context stores (§4.6).
+**Without `--ensure`:** runs E1–E5 and E7 (E6 is removed; E7, the PR start, since R34) every `tick_seconds` in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
 
 | Precondition | Code | Exit |
 |---|---|---|
 | `locks/watch.lock` is free | `watch_running` | 3 |
 
-Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, and every row and Event of E1–E7 (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0. Idempotent: a second one is refused.
+Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, and every row and Event of E1–E5 and E7 (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0. Idempotent: a second one is refused.
 
 **With `--ensure`:** starts the engine when it is not running, and returns at once.
 
@@ -1668,7 +1642,6 @@ Checks, in order:
 | `tiers` | error | each `tiers.*` model is in pi's catalog, and `lead_tier` is a valid Tier (§9) |
 | `pi_adapter` | error | the `pi_adapter` directory has a `package.json` |
 | `lead_packages` | warn | reports, for each `lead_pi_packages` entry and the adapter, whether a Lead gets it by `-e` or from which settings file (§6.5); warns when an entry is neither declared nor resolvable |
-| `contexts` | warn | every directory under `contexts/` is a valid store and none is `sync_failing` |
 | `watch` | warn | the engine runs when any Plan is in `dispatch` or `pr` |
 
 ```json
@@ -1921,7 +1894,7 @@ Rows 22–27 were added by Job `docs` of Plan `tree-menu` (renames, archive and 
 | 8 | §6.5, environment | Lead panes also get `PLANNOTATOR_PORT` and `PLANNOTATOR_REMOTE` from cpd's environment, when set (several Plan reviews at once) | §15.5 |
 | 9 | §6.3, tmux commands | `respawn-pane`, for a dead pane of the cockpit's layout | §13.1 |
 | 10 | §1.2, output | `session run`, `tui view` and `tui --attach` own their terminal instead of printing one JSON value (the outline's "builds and attaches the cockpit") | §1.2 |
-| 11 | §1.2 table of codes | the error codes this file introduces: `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `context_exists`, `context_store_invalid`, `question_answered`, `not_a_git_repo`, `base_not_found`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `watch_start_failed`, `spec_invalid`, `tier_invalid`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `nothing_to_edit`, `job_merged`, `job_not_failed`, `job_not_ready`, `spawn_failed`, `attempt_not_running`, `session_malformed`, `driver_lock_missing`, `jobs_not_done`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `cursor_ahead`, `not_a_terminal`, `doctor_failed`, `pi_not_found`, `catalog_failed`, `file_unreadable`, `invalid_name`; most are cpd 1's (cpd 1 §11 and its `src/`) | §1.3 and each command |
+| 11 | §1.2 table of codes | the error codes this file introduces: `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `context_exists`, `question_answered`, `not_a_git_repo`, `base_not_found`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `watch_start_failed`, `spec_invalid`, `tier_invalid`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `nothing_to_edit`, `job_merged`, `job_not_failed`, `job_not_ready`, `spawn_failed`, `attempt_not_running`, `session_malformed`, `driver_lock_missing`, `jobs_not_done`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `cursor_ahead`, `not_a_terminal`, `doctor_failed`, `pi_not_found`, `catalog_failed`, `file_unreadable`, `invalid_name`; most are cpd 1's (cpd 1 §11 and its `src/`) | §1.3 and each command |
 | 12 | §6.1, global options | the options `focus-events on`, `pane-active-border-style fg=blue` and `pane-border-format` (titles: ` Context `, ` Plan `, ` Dispatch `, ` Worker · <job> (read-only) `; none for Leads, the chat placeholder and the StatusBar), the root `MouseDown1Pane` binding and the `pane-died` hook that respawns only a pane with `@cpd_view`: all set at every server start, not only by `cpd tui` | §13.1 |
 | 13 | §6.2, §6.3 | a Worker view pane carries `@cpd_view worker`, `@cpd_job` and `@cpd_attempt`, opens with `split-window -h -d -l 50%` and retargets with `respawn-pane -k`; tmux commands `respawn-pane -k`, `set-hook` and `display-popup` | §13.2 |
 | 14 | §6.4, §3.6, §5.2, §1.2 | `session close <id>`: kills a Lead's pane, the Session is `stopped` with `session-moved {place: "none"}`, the Lead in the chat slot refused (`in_chat_slot`, exit 3) | §10.9 |

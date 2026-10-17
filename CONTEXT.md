@@ -33,7 +33,7 @@ One typed, append-only entry of a Context's knowledge: a decision (which may sup
 _Avoid_: wiki page, memory
 
 **Context store**:
-A Context's records as append-only JSONL in a git repository at `~/.cpd/contexts/<id>/`, shared across the User's machines through a private remote, and indexed in the machine's database. Rendered as markdown for Leads on demand.
+A Context's records, held only in the machine's database (tables `contexts` and `context_records`). Contexts are machine-local (hs-d23, hs-a1); an earlier git store was imported and archived by migration 0007. Rendered as markdown for Leads on demand.
 _Avoid_: wiki, notes folder
 
 **Grounded Lead**:
