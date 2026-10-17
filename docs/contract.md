@@ -1329,11 +1329,11 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 | has `@cpd_session` (a Lead), `@cpd_view = chat` (the placeholder), or `@cpd_view = statusbar` | none: pi and the placeholder say what they are |
 | `@cpd_view = tree` | ` Context ` |
 | `@cpd_view = plan` | ` Plan ` |
-| `@cpd_view = widgets` | ` Dispatch ` |
+| `@cpd_view = widgets` | ` Deploy ` |
 | `@cpd_view = worker` | ` Worker · #{@cpd_job} (read-only) ` |
 | any other | `#{pane_current_command}` |
 
-Every title is drawn reversed: `#[reverse]` before it and `#[noreverse]` after it, inside the branch that has a title, so untitled panes get neither. It shows as a block in the border line's colour (blue on the focused pane, from `pane-active-border-style`; the default border colour elsewhere) with the text in the background colour, so the line reads as continuous, with a wider block where the title sits. Reason: User, Plan tui-visuals (hs-d105).
+Every title is drawn reversed: `#[reverse]` before it and `#[noreverse]` after it, inside the branch that has a title, so untitled panes get neither. It shows as a block in the border line's colour (blue on the focused pane, from `pane-active-border-style`; the default border colour elsewhere) with the text in the background colour, so the line reads as continuous, with a wider block where the title sits. Reason: User, Plan tui-visuals (hs-d105). Pane borders are the cockpit's top-level separators: white, the focused pane's blue (`pane-active-border-style`); separators inside a slot are grey (`commands.md` §13.2, design rule; hs-d124). The widgets title is ` Deploy ` (User, hs-d76, Plan tui-visuals).
 
 **The click binding.** `bind -T root MouseDown1Pane if -F '#{==:#{@cpd_view},statusbar}' 'send-keys -M' 'select-pane -t = ; send-keys -M'`: a click on the StatusBar is passed to it and never selects it, so the chat keeps the keyboard focus; every other pane is selected, then gets the click.
 
