@@ -475,6 +475,33 @@ fn phase_refusals() {
     assert_eq!(error["details"]["from"], "dispatch");
 }
 
+/// A Plan with no PR yet (`plan new` alone) is found by every Plan read: phase, list, show, archive and unarchive.
+#[test]
+fn a_plan_with_no_pr_is_read_by_phase_list_show_archive_and_unarchive() {
+    let env = TestEnv::new();
+    setup(&env);
+    new_plan_only(&env, "pay");
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM prs"), 0);
+
+    assert_eq!(show(&env, "pay")["prs"], json!([]));
+    let ids = |env: &TestEnv| -> Vec<String> {
+        env.cpd(&["plan", "list"]).ok()["plans"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap().to_owned()).collect()
+    };
+    assert_eq!(ids(&env), ["pay"]);
+
+    let archived = env.cpd(&["plan", "archive", "--plan", "pay"]).ok();
+    assert_eq!(archived["archived"][0], json!({"kind": "plan", "id": "pay"}));
+    assert_ne!(show(&env, "pay")["plan"]["archived_at"], Value::Null);
+    env.cpd(&["plan", "unarchive", "--plan", "pay"]).ok();
+    assert_eq!(show(&env, "pay")["plan"]["archived_at"], Value::Null);
+
+    let out = env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
+    assert_eq!((&out["plan"], &out["phase"]), (&json!("pay"), &json!("plan")));
+    assert_eq!(show(&env, "pay")["plan"]["phase"], "plan");
+    // A Plan with no PR has no Job: lock keeps its own refusal.
+    refused(&env.cpd(&["plan", "lock", "--plan", "pay"]), "no_draft_jobs", 3);
+}
+
 /// Two Plans grounding at once produce one grounded Lead: the
 /// compare-and-swap on `contexts.lead_session` (contract §3.1).
 #[test]
@@ -996,6 +1023,20 @@ fn rename_refusals() {
     refused(&env.cpd(&["plan", "rename", "--title", "X"]), "plan_required", 2);
     refused(&env.cpd(&["plan", "rename", "--plan", "pay", "--title", ""]), "usage", 2);
     assert!(events(&env, "plan-renamed").is_empty());
+}
+
+#[test]
+fn rename_works_on_an_archived_plan() {
+    let env = TestEnv::new();
+    setup(&env);
+    new_plan_only(&env, "pay");
+    env.cpd(&["plan", "archive", "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Archived and renamed"]).ok();
+    assert_eq!(out["plan"]["title"], "Archived and renamed");
+    let plan = show(&env, "pay");
+    assert_eq!(plan["plan"]["title"], "Archived and renamed");
+    assert_ne!(plan["plan"]["archived_at"], Value::Null, "still archived");
+    assert_eq!(events(&env, "plan-renamed").len(), 1);
 }
 
 // ---- plan archive and unarchive -------------------------------------------

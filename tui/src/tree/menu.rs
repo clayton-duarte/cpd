@@ -74,7 +74,7 @@ impl Kind {
             Kind::Context => &[Item::NewPlan, Item::Rename, Item::Archive],
             Kind::Plan => &[Item::NewSession, Item::Rename, Item::Archive],
             Kind::Fork => &[Item::Open, Item::Rename, Item::Fork, Item::Close, Item::Archive],
-            Kind::Archived => &[Item::Unarchive],
+            Kind::Archived => &[Item::Rename, Item::Unarchive],
             Kind::Empty => &[Item::NewContext],
         }
     }
@@ -216,7 +216,7 @@ mod tests {
         assert_eq!(labels(Kind::Plan), ["New session…", "Rename…", "Archive"]);
         assert_eq!(labels(Kind::Fork), ["Open", "Rename…", "Fork…", "Close", "Archive"]);
         assert_eq!(labels(Kind::Empty), ["New Context…"]);
-        assert_eq!(labels(Kind::Archived), ["Unarchive"]);
+        assert_eq!(labels(Kind::Archived), ["Rename…", "Unarchive"]);
     }
 
     #[test]
@@ -231,11 +231,11 @@ mod tests {
         let kind = |p: &[&str]| Kind::of(rows::row(&tree, &path(p)));
         assert_eq!(kind(&["alpha", "…"]), None, "a `…` row has no menu");
         assert_eq!(kind(&["…"]), None);
-        assert_eq!(kind(&["alpha", "…", "old"]), Some(Kind::Archived), "an archived Plan");
-        assert_eq!(kind(&["alpha", "…", "fork:f-blocked"]), Some(Kind::Archived), "an archived fork of a live Plan");
-        assert_eq!(kind(&["…", "zeta"]), Some(Kind::Archived), "an archived Context");
-        assert_eq!(kind(&["…", "zeta", "zp"]), Some(Kind::Archived));
-        assert_eq!(kind(&["…", "zeta", "f-zp"]), Some(Kind::Archived));
+        assert_eq!(kind(&["alpha", "old"]), Some(Kind::Archived), "an archived Plan");
+        assert_eq!(kind(&["alpha", "f-blocked"]), Some(Kind::Archived), "an archived fork of a live Plan");
+        assert_eq!(kind(&["zeta"]), Some(Kind::Archived), "an archived Context");
+        assert_eq!(kind(&["zeta", "zp"]), Some(Kind::Archived));
+        assert_eq!(kind(&["zeta", "f-zp"]), Some(Kind::Archived));
         assert_eq!(kind(&["alpha", "ship"]), Some(Kind::Plan), "a live row of a tree with archived ones");
     }
 

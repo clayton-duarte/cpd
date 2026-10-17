@@ -15,11 +15,12 @@
 //! **Forks** (B1, contract §6.8): a forked Session is a sibling of the Plans directly under its Context, after
 //! them, never under a Plan or under its source.
 //!
-//! **Archived rows** (hs-d53). Archived Contexts collapse into one `…` row at the end of the Context list;
-//! the archived Plans, and the forks that are archived or of an archived Plan, of a live Context into one `…`
-//! row at the end of that Context's subtree. Expanded, the `…` row becomes a dotted line (`┊`) and its children hang under it,
-//! one level deeper, drawn muted with dotted guides (`┆`) and the dotted line in the column of the head. Whether
-//! a group is expanded is the tree state's open set, so view state only. The cursor never rests on them.
+//! **Archived rows** (hs-d53, F1). Archived Contexts are behind one `…` row at the end of the live Context list;
+//! the archived Plans, and the forks that are archived or of an archived Plan, of a live Context are behind one
+//! `…` row at the end of that Context's live rows. The `…` row is a leaf that stays where it is; expanded, the
+//! archived rows follow it at the depth they would have if live, with the normal guides, the whole row drawn in
+//! the darker grey. Whether a `…` row is expanded is the tree state's open set, so view state only. The cursor
+//! never rests on them.
 //!
 //! Rows (identifiers are paths; `…` is [`MORE`]):
 //!
@@ -27,10 +28,8 @@
 //! |---|---|
 //! | `[context]`, `[context, plan]`, `[context, session]` | a live Context, a Plan (its row is its Lead's), a forked Session |
 //! | `[…]` | the `…` row of the archived Contexts |
-//! | `[…, context]`, `[…, context, plan]`, `[…, context, session]` | the same, in an archived Context |
+//! | `[context]`, `[context, plan]`, `[context, session]` | the same, for an archived Context, Plan or fork |
 //! | `[context, …]` | the `…` row of the Context's archived Plans and forks |
-//! | `[context, …, plan]` | an archived Plan |
-//! | `[context, …, fork:<session>]` | an archived fork, or a fork of an archived Plan |
 //!
 //! Everything here is pure except `draw`, which only writes to the frame's buffer.
 
@@ -58,13 +57,6 @@ pub const ACTIVE_MARK: &str = "⏵";
 
 /// The identifier of a `…` row. No id has this shape.
 pub const MORE: &str = "…";
-
-/// The prefix of the identifier of a fork in a Context's `…` row, beside the archived Plans (no Plan id has a
-/// `:`).
-const STRAY: &str = "fork:";
-
-/// The dotted line of an expanded group.
-const DOTTED: &str = "┊";
 
 /// What a row of the tree stands for.
 #[derive(Clone, Copy, Debug)]
@@ -109,35 +101,23 @@ fn kids(c: &ContextNode) -> Kids<'_> {
 
 /// The row at `path`, `None` when the tree has none.
 pub fn row<'a>(tree: &'a Tree, path: &[Id]) -> Option<Row<'a>> {
-    let (archived, path) = match path.split_first() {
-        Some((first, rest)) if first == MORE => (true, rest),
-        _ => (false, path),
-    };
-    let Some((context, path)) = path.split_first() else { return archived.then_some(Row::More) };
-    let context = tree.contexts.iter().find(|c| c.id.as_str() == context && c.is_archived() == archived)?;
-    let Some((next, path)) = path.split_first() else { return Some(Row::Context(context)) };
-    let k = kids(context);
-    if next == MORE {
-        if archived || !k.has_group() {
-            return None;
-        }
-        let plan = |id: &String| k.archived.iter().copied().find(|p| p.head.id.as_str() == id);
-        return match path {
-            [] => Some(Row::More),
-            [x] => match x.strip_prefix(STRAY) {
-                Some(session) => k.strays.iter().find(|(_, s)| s.id.as_str() == session).map(|(p, s)| Row::Fork(context, p, s)),
-                None => plan(x).map(|p| Row::Plan(context, p)),
-            },
-            _ => None,
-        };
+    let (context, path) = path.split_first()?;
+    if context == MORE {
+        return (path.is_empty() && tree.contexts.iter().any(ContextNode::is_archived)).then_some(Row::More);
     }
+    let context = tree.contexts.iter().find(|c| c.id.as_str() == context)?;
+    let Some((next, path)) = path.split_first() else { return Some(Row::Context(context)) };
     if !path.is_empty() {
         return None;
     }
-    if let Some(plan) = k.direct.iter().copied().find(|p| p.head.id.as_str() == next) {
+    let k = kids(context);
+    if next == MORE {
+        return k.has_group().then_some(Row::More);
+    }
+    if let Some(plan) = k.direct.iter().chain(&k.archived).copied().find(|p| p.head.id.as_str() == next) {
         return Some(Row::Plan(context, plan));
     }
-    k.forks.iter().find(|(_, s)| s.id.as_str() == next).map(|(p, s)| Row::Fork(context, p, s))
+    k.forks.iter().chain(&k.strays).find(|(_, s)| s.id.as_str() == next).map(|(p, s)| Row::Fork(context, p, s))
 }
 
 impl<'a> Row<'a> {
@@ -248,20 +228,15 @@ struct RowText<'a> {
     phase: Phase,
     /// The width of the counters drawn at the right (0: none).
     counters_width: usize,
-    /// Archived: the guide is dotted (the colours are muted when drawn).
+    /// Archived: no needs-you dot and no bold name (the colours are muted when drawn).
     muted: bool,
 }
 
-/// A Plan's or fork's row text (the reference's `session_text`): guide (`├ `, `└ ` for the last; `┆ ` when
-/// muted), dot, name. The name is cut so that, in a column `width` wide, it never reaches the counters drawn at
+/// A Plan's or fork's row text (the reference's `session_text`): guide (`├ `, `└ ` for the last), dot, name. The name is cut so that, in a column `width` wide, it never reaches the counters drawn at
 /// the right.
 fn row_text(r: RowText, width: u16) -> Line<'static> {
     let needs_you = !r.muted && r.session.is_some_and(|s| s.needs_you);
-    let guide = match (r.muted, r.last) {
-        (true, _) => "┆ ",
-        (false, true) => "└ ",
-        (false, false) => "├ ",
-    };
+    let guide = if r.last { "└ " } else { "├ " };
     let mut spans = vec![Span::styled(guide, palette::fg(Meaning::Nothing)), palette::dot(needs_you, Some(r.phase)), " ".into()];
     let used = r.depth * INDENT + Line::from(spans.clone()).width() + if r.counters_width > 0 { r.counters_width + 1 } else { 0 };
     let name = truncate(&r.name, (width as usize).saturating_sub(used));
@@ -286,45 +261,41 @@ fn context_text(c: &ContextNode, collapsed: bool) -> Line<'static> {
     Line::from(spans)
 }
 
-/// The text of a `…` row at `depth` levels: `…` (`└ …` below a Context), or the dotted line when expanded.
-fn more_text(depth: usize, expanded: bool) -> Line<'static> {
-    let text = match (expanded, depth) {
-        (true, _) => DOTTED,
-        (false, 0) => MORE,
-        (false, _) => "└ …",
+/// The text of a `…` row: `…` in the list of Contexts, below a Context the guide first (`├ ` when its archived
+/// rows follow, i.e. expanded, else `└ `).
+fn more_text(in_context: bool, expanded: bool) -> Line<'static> {
+    let text = match (in_context, expanded) {
+        (false, _) => MORE,
+        (true, true) => "├ …",
+        (true, false) => "└ …",
     };
     Line::from(Span::styled(text, palette::fg(Meaning::Nothing)))
 }
 
-/// A Plan's item at `depth` levels; `last` when it is the last child of its parent.
-fn plan_item(c: &ContextNode, p: &PlanNode, depth: usize, last: bool, width: u16) -> TreeItem<'static, Id> {
+/// A Plan's item, one level under its Context; `last` when it is the last child of its Context.
+fn plan_item(c: &ContextNode, p: &PlanNode, last: bool, width: u16) -> TreeItem<'static, Id> {
     let muted = c.is_archived() || p.head.is_archived();
     let text = row_text(
-        RowText { session: p.lead(), name: p.head.title.clone(), depth, last, phase: p.head.phase, counters_width: counters(p).width(), muted },
+        RowText { session: p.lead(), name: p.head.title.clone(), depth: 1, last, phase: p.head.phase, counters_width: counters(p).width(), muted },
         width,
     );
     TreeItem::new_leaf(p.head.id.to_string(), text)
 }
 
-/// A Context's item at `depth` levels (0, or 1 under the `…` row of the archived Contexts); `opened` is the
-/// tree state's open set.
-fn context_item(c: &ContextNode, depth: usize, opened: &HashSet<Vec<Id>>, width: u16) -> TreeItem<'static, Id> {
-    let mut path = if depth == 0 { Vec::new() } else { vec![MORE.to_owned()] };
-    path.push(c.id.to_string());
+/// A Context's item; `opened` is the tree state's open set. Under it: its live Plans and forks, then, when it has
+/// archived ones, its `…` row and, expanded, those.
+fn context_item(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16) -> TreeItem<'static, Id> {
+    let path = vec![c.id.to_string()];
     let k = kids(c);
     let n = k.direct.len();
-    let mut children: Vec<TreeItem<'static, Id>> = k
-        .direct
-        .iter()
-        .enumerate()
-        .map(|(i, p)| plan_item(c, p, depth + 1, i + 1 == n && k.forks.is_empty() && !k.has_group(), width))
-        .collect();
+    let mut children: Vec<TreeItem<'static, Id>> =
+        k.direct.iter().enumerate().map(|(i, p)| plan_item(c, p, i + 1 == n && k.forks.is_empty() && !k.has_group(), width)).collect();
     for (j, (p, s)) in k.forks.iter().enumerate() {
         let text = row_text(
             RowText {
                 session: Some(s),
                 name: session_label(s),
-                depth: depth + 1,
+                depth: 1,
                 last: j + 1 == k.forks.len() && !k.has_group(),
                 phase: p.head.phase,
                 counters_width: 0,
@@ -335,26 +306,27 @@ fn context_item(c: &ContextNode, depth: usize, opened: &HashSet<Vec<Id>>, width:
         children.push(TreeItem::new_leaf(s.id.to_string(), text));
     }
     if k.has_group() {
-        let n = k.archived.len();
-        let mut group: Vec<TreeItem<'static, Id>> =
-            k.archived.iter().enumerate().map(|(i, p)| plan_item(c, p, depth + 2, i + 1 == n && k.strays.is_empty(), width)).collect();
-        for (i, (p, s)) in k.strays.iter().enumerate() {
-            let text = row_text(
-                RowText {
-                    session: Some(s),
-                    name: format!("{} ({})", session_label(s), p.head.title),
-                    depth: depth + 2,
-                    last: i + 1 == k.strays.len(),
-                    phase: p.head.phase,
-                    counters_width: 0,
-                    muted: true,
-                },
-                width,
-            );
-            group.push(TreeItem::new_leaf(format!("{STRAY}{}", s.id), text));
-        }
         let expanded = opened.contains(&[path.clone(), vec![MORE.to_owned()]].concat());
-        children.push(TreeItem::new(MORE.to_owned(), more_text(depth + 1, expanded), group).expect("Plan and Session ids are unique"));
+        children.push(TreeItem::new_leaf(MORE.to_owned(), more_text(true, expanded)));
+        if expanded {
+            let n = k.archived.len();
+            children.extend(k.archived.iter().enumerate().map(|(i, p)| plan_item(c, p, i + 1 == n && k.strays.is_empty(), width)));
+            for (i, (p, s)) in k.strays.iter().enumerate() {
+                let text = row_text(
+                    RowText {
+                        session: Some(s),
+                        name: format!("{} ({})", session_label(s), p.head.title),
+                        depth: 1,
+                        last: i + 1 == k.strays.len(),
+                        phase: p.head.phase,
+                        counters_width: 0,
+                        muted: true,
+                    },
+                    width,
+                );
+                children.push(TreeItem::new_leaf(s.id.to_string(), text));
+            }
+        }
     }
     TreeItem::new(c.id.to_string(), context_text(c, !opened.contains(&path)), children).expect("Plan and Session ids are unique")
 }
@@ -363,27 +335,18 @@ fn context_item(c: &ContextNode, depth: usize, opened: &HashSet<Vec<Id>>, width:
 /// collapsed, and so is a `…` row.
 pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16) -> Vec<TreeItem<'static, Id>> {
     let (archived, live): (Vec<&ContextNode>, Vec<&ContextNode>) = tree.contexts.iter().partition(|c| c.is_archived());
-    let mut items: Vec<TreeItem<'static, Id>> = live.into_iter().map(|c| context_item(c, 0, opened, width)).collect();
+    let mut items: Vec<TreeItem<'static, Id>> = live.into_iter().map(|c| context_item(c, opened, width)).collect();
     if !archived.is_empty() {
-        let expanded = opened.contains(&vec![MORE.to_owned()]);
-        let group = archived.into_iter().map(|c| context_item(c, 1, opened, width)).collect();
-        items.push(TreeItem::new(MORE.to_owned(), more_text(0, expanded), group).expect("Context ids are unique"));
+        items.push(TreeItem::new_leaf(MORE.to_owned(), more_text(false, false)));
+        if opened.contains(&vec![MORE.to_owned()]) {
+            items.extend(archived.into_iter().map(|c| context_item(c, opened, width)));
+        }
     }
     items
 }
 
-/// The column of the dotted line of the group a row at `path` is in, with the length of the path of the group's `…`
-/// row; none for a row outside every group.
-fn group_of(path: &[Id]) -> Option<(usize, usize)> {
-    match path {
-        [m, ..] if m == MORE => Some((0, 1)),
-        [_, m, ..] if m == MORE => Some((INDENT, 2)),
-        _ => None,
-    }
-}
-
 /// Draw the column into `area`: the tree, then the counters, the guides and the active mark of each visible
-/// row, the archived rows muted with the dotted line of their group, then the cursor's Session row inverted when
+/// row, the archived rows muted, then the cursor's Session row inverted when
 /// `cursor` says it is shown (a Context row never is).
 pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, cursor: bool) {
     if tree.contexts.is_empty() {
@@ -414,11 +377,6 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
             }
             Row::Context(_) | Row::More => {}
         }
-        if let Some((column, head)) = group_of(path) {
-            if path.len() > head {
-                Span::styled(DOTTED, palette::fg(Meaning::Nothing)).render(Rect::new(area.x + column as u16, y, 1, 1), buf);
-            }
-        }
         if muted {
             buf.set_style(rect, palette::fg(Meaning::Nothing));
         }
@@ -432,7 +390,7 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
 /// refreshes). The `…` rows are not opened: they start collapsed.
 pub fn open_new(state: &mut TreeState<Id>, known: &mut HashSet<Vec<Id>>, tree: &Tree) {
     for c in &tree.contexts {
-        let context = if c.is_archived() { vec![MORE.to_owned(), c.id.to_string()] } else { vec![c.id.to_string()] };
+        let context = vec![c.id.to_string()];
         if known.insert(context.clone()) {
             state.open(context);
         }
@@ -487,16 +445,13 @@ pub fn click_context(state: &mut TreeState<Id>, tree: &Tree, path: &[Id]) -> boo
     is_context
 }
 
-/// A click at `column` of the row at `path` on an archive group: on its `…` row it expands, on the expanded
-/// group's dotted line (its head row, or the column of the line in the rows below) it collapses. Returns whether
-/// the click was on a group.
-pub fn click_group(state: &mut TreeState<Id>, path: &[Id], column: u16) -> bool {
-    let Some((guide, head)) = group_of(path) else { return false };
-    if path.len() == head || usize::from(column) == guide {
-        state.toggle(path[..head].to_vec());
-        return true;
+/// A click on a `…` row expands or collapses its archived rows. Returns whether `path` was a `…` row.
+pub fn click_more(state: &mut TreeState<Id>, tree: &Tree, path: &[Id]) -> bool {
+    let is_more = matches!(row(tree, path), Some(Row::More));
+    if is_more {
+        state.toggle(path.to_vec());
     }
-    false
+    is_more
 }
 
 #[cfg(test)]
@@ -887,8 +842,8 @@ mod tests {
     // ---------- archived rows (hs-d53) ----------
 
     /// `state` with the group whose `…` row is at `head` expanded.
-    fn expand(state: &mut TreeState<Id>, head: &[&str]) {
-        assert!(click_group(state, &path(head), 0));
+    fn expand(state: &mut TreeState<Id>, t: &Tree, head: &[&str]) {
+        assert!(click_more(state, t, &path(head)));
     }
 
     #[test]
@@ -934,10 +889,10 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_a_more_row_shows_the_archived_rows_muted_with_dotted_guides_and_a_click_on_the_dotted_line_collapses_them() {
+    fn a_click_on_a_more_row_shows_the_archived_rows_at_their_live_depth_with_normal_dark_grey_guides_and_a_click_on_it_again_collapses_them() {
         let t = archived();
         let mut state = state_for(&t, &[], &[]);
-        expand(&mut state, &["alpha", "…"]);
+        expand(&mut state, &t, &["alpha", "…"]);
         let buf = render(&t, &mut state, 44, 12, false);
         assert_eq!(
             lines(&buf)[..9],
@@ -946,67 +901,69 @@ mod tests {
                 row_of("⏵ ├ ○ Ship", "2⋅1⋅1⋅0⋅5", 44),
                 row_of("  ├ ○ Sketch", "4⋅0⋅0⋅0⋅0", 44),
                 "  ├ ○ ship fork".to_owned(),
-                "  ┊".to_owned(),
-                row_of("  ┊ ┆ ○ Old", "0⋅0⋅0⋅1⋅36", 44),
-                "  ┊ ┆ ○ ship review (Ship)".to_owned(),
+                "  ├ …".to_owned(),
+                row_of("  ├ ○ Old", "0⋅0⋅0⋅1⋅36", 44),
+                "  └ ○ ship review (Ship)".to_owned(),
                 "● Beta".to_owned(),
                 row_of("  └ ● Rel", "0⋅0⋅0⋅0⋅3", 44),
-            ]
+            ],
+            "no empty row; the archived Plan and fork are as deep as the live ones"
         );
-        // the live rows keep their colours; the archived ones are all dark grey, counters and dots included
+        // the live rows keep their colours; the archived ones are all dark grey, guides, counters and dots included
         assert_eq!(fg(&buf, 4, 2), color(Meaning::Planning), "a live dot");
-        for (y, columns) in [(4, 2..3), (5, 2..44), (6, 2..24)] {
+        for (y, columns) in [(4, 2..5), (5, 2..44), (6, 2..24)] {
             for x in columns {
                 if buf[(x, y)].symbol() != " " {
                     assert_eq!(fg(&buf, x, y), color(Meaning::Nothing), "({x}, {y}) {}", buf[(x, y)].symbol());
                 }
             }
         }
-        // a click on the dotted column collapses; elsewhere on an archived row nothing happens
-        assert!(!click_group(&mut state, &path(&["alpha", "…", "old"]), 7), "not on the dotted line");
+        assert_eq!((buf[(2, 5)].symbol(), buf[(2, 6)].symbol()), ("├", "└"), "the normal guides");
+        // a click on the `…` row collapses; a click on a guide or an archived row does not
+        assert!(!click_more(&mut state, &t, &path(&["alpha", "old"])), "an archived row is no `…` row");
+        assert!(!click_more(&mut state, &t, &path(&["alpha", "ship"])), "nor is a live one");
+        assert!(!click_more(&mut state, &t, &path(&["alpha"])), "nor a Context");
         assert!(state.opened().contains(&path(&["alpha", "…"])));
-        assert!(click_group(&mut state, &path(&["alpha", "…", "old"]), 2));
+        assert!(click_more(&mut state, &t, &path(&["alpha", "…"])));
         assert!(!state.opened().contains(&path(&["alpha", "…"])));
         assert_eq!(text(&render(&t, &mut state, 44, 10, false), 4), "  └ …");
-        expand(&mut state, &["alpha", "…"]);
-        assert!(click_group(&mut state, &path(&["alpha", "…"]), 30), "the dotted line row collapses anywhere");
-        assert!(!state.opened().contains(&path(&["alpha", "…"])));
-        assert!(!click_group(&mut state, &path(&["alpha", "ship"]), 2), "a live row is in no group");
+        expand(&mut state, &t, &["alpha", "…"]);
+        assert_eq!(text(&render(&t, &mut state, 44, 10, false), 4), "  ├ …");
     }
 
     #[test]
-    fn expanded_archived_contexts_are_muted_with_the_dotted_line_in_column_0() {
+    fn expanded_archived_contexts_are_drawn_like_live_ones_in_dark_grey_and_the_more_row_collapses_them() {
         let t = archived();
         let mut state = state_for(&t, &[], &[]);
-        expand(&mut state, &["…"]);
+        expand(&mut state, &t, &["…"]);
         let buf = render(&t, &mut state, 44, 14, false);
         let rows = lines(&buf);
         assert_eq!(
-            rows[8..13],
-            ["┊", "┊ ○ Zeta", row_of("┊   ┆ ○ Zp", "0⋅0⋅0⋅0⋅2", 44).as_str(), "┊   ┆ ○ zp fork", ""],
+            rows[8..12],
+            ["…", "○ Zeta", row_of("  ├ ○ Zp", "0⋅0⋅0⋅0⋅2", 44).as_str(), "  └ ○ zp fork"],
             "{rows:#?}"
         );
-        for y in 8..12 {
+        for y in 9..12 {
             for x in 0..44 {
                 if buf[(x, y)].symbol() != " " {
                     assert_eq!(fg(&buf, x, y), color(Meaning::Nothing), "({x}, {y})");
                 }
             }
         }
-        assert!(click_group(&mut state, &path(&["…", "zeta"]), 0));
-        assert_eq!(text(&render(&t, &mut state, 44, 14, false), 8), "…");
+        assert!(click_more(&mut state, &t, &path(&["…"])));
+        assert_eq!(lines(&render(&t, &mut state, 44, 14, false))[8..10], ["…", ""]);
         // an archived Context folds like any other
-        expand(&mut state, &["…"]);
-        assert!(click_context(&mut state, &t, &path(&["…", "zeta"])));
-        assert_eq!(text(&render(&t, &mut state, 44, 14, false), 9), "┊ ○ Zeta 1");
+        expand(&mut state, &t, &["…"]);
+        assert!(click_context(&mut state, &t, &path(&["zeta"])));
+        assert_eq!(text(&render(&t, &mut state, 44, 14, false), 9), "○ Zeta 1");
     }
 
     #[test]
     fn the_cursor_never_stops_on_an_archived_or_more_row() {
         let t = archived();
         let mut state = state_for(&t, &[], &[]);
-        expand(&mut state, &["alpha", "…"]);
-        expand(&mut state, &["…"]);
+        expand(&mut state, &t, &["alpha", "…"]);
+        expand(&mut state, &t, &["…"]);
         let mut seen = vec![];
         for _ in 0..8 {
             move_cursor(&mut state, &t, 1);
@@ -1037,25 +994,25 @@ mod tests {
         assert_eq!(archived_of(&["alpha", "f-idle"]), Some(false));
         assert_eq!(archived_of(&["alpha", "…"]), Some(false), "a `…` row is no object");
         assert!(matches!(row(&t, &path(&["…"])), Some(Row::More)));
-        assert_eq!(archived_of(&["alpha", "…", "old"]), Some(true));
-        assert_eq!(archived_of(&["alpha", "…", "fork:f-blocked"]), Some(true));
-        assert_eq!(archived_of(&["…", "zeta"]), Some(true));
-        assert_eq!(archived_of(&["…", "zeta", "f-zp"]), Some(true), "a fork of an archived Context is its sibling too");
-        let fork = row(&t, &path(&["alpha", "…", "fork:f-blocked"])).unwrap();
+        assert_eq!(archived_of(&["alpha", "old"]), Some(true));
+        assert_eq!(archived_of(&["alpha", "f-blocked"]), Some(true));
+        assert_eq!(archived_of(&["zeta"]), Some(true));
+        assert_eq!(archived_of(&["zeta", "f-zp"]), Some(true), "a fork of an archived Context is its sibling too");
+        let fork = row(&t, &path(&["alpha", "f-blocked"])).unwrap();
         assert_eq!((fork.session().unwrap().id.as_str(), fork.plan().unwrap().head.id.as_str()), ("f-blocked", "ship"));
-        assert_eq!(row(&t, &path(&["…", "zeta"])).unwrap().label(), "Zeta");
+        assert_eq!(row(&t, &path(&["zeta"])).unwrap().label(), "Zeta");
         for missing in [
-            &["zeta"][..],
+            &["…", "zeta"][..],
             &["…", "alpha"],
-            &["alpha", "old"],
             &["alpha", "ship", "f-blocked"],
-            &["alpha", "f-blocked"],
             &["alpha", "…", "ship"],
-            &["alpha", "…", "f-blocked"],
-            &["…", "zeta", "zp", "f-zp"],
+            &["alpha", "…", "old"],
+            &["zeta", "zp", "f-zp"],
             &["beta", "…"],
-            &["…", "zeta", "…"],
+            &["zeta", "…"],
             &["…", "…"],
+            &["nope"],
+            &[],
         ] {
             assert!(row(&t, &path(missing)).is_none(), "{missing:?}");
         }

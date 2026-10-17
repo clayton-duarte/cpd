@@ -870,6 +870,19 @@ fn rename_refusals() {
     assert!(rename_events(&env).is_empty());
 }
 
+#[test]
+fn rename_works_on_an_archived_context() {
+    let env = hs();
+    new_context(&env);
+    env.cpd(&["context", "archive", CTX]).ok();
+    let out = env.cpd(&["context", "rename", CTX, "--title", "Archived and renamed"]).ok();
+    assert_eq!(out["context"], json!({"id": CTX, "title": "Archived and renamed"}));
+    let listed = env.cpd(&["context", "list"]).ok();
+    assert_eq!(listed["contexts"][0]["title"], "Archived and renamed");
+    assert!(listed["contexts"][0]["archived_at"].is_string(), "{listed}");
+    assert_eq!(rename_events(&env).len(), 1);
+}
+
 // ---- context archive and unarchive ----------------------------------------
 
 use common::SLEEP_SECONDS;

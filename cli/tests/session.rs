@@ -150,10 +150,10 @@ fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
 
 // ---------- tmux ----------
 
-/// A fake `cpd` on `PATH` for the panes: `cpd tui view chat` (the TUI Job's
-/// placeholder view) just sleeps; everything else is the built binary.
+/// A fake `cpd` on `PATH` for the panes: `cpd tui view chat` and `cpd tui view history <id>`
+/// (the TUI Job's views) just sleep; everything else is the built binary.
 fn fake_cpd(env: &TestEnv) {
-    env.fake("cpd", &format!("case \"$1 $2 $3\" in \"tui view chat\") exec sleep {SLEEP_SECONDS};; esac\nexec '{CPD}' \"$@\""));
+    env.fake("cpd", &format!("case \"$1 $2 $3\" in \"tui view chat\"|\"tui view history\") exec sleep {SLEEP_SECONDS};; esac\nexec '{CPD}' \"$@\""));
 }
 
 /// A fake `pi` that creates its session file (when given `--session-id`) and
@@ -187,24 +187,25 @@ struct P {
     window_name: String,
     session: String,
     view: String,
+    history: String,
 }
 
 fn panes(env: &TestEnv) -> Vec<P> {
-    let out = env.tmux(&["list-panes", "-a", "-F", "#{pane_id}\t#{window_id}\t#{window_name}\t#{@cpd_session}\t#{@cpd_view}"]);
+    let out = env.tmux(&["list-panes", "-a", "-F", "#{pane_id}\t#{window_id}\t#{window_name}\t#{@cpd_session}\t#{@cpd_view}\t#{@cpd_history}"]);
     String::from_utf8(out.stdout)
         .unwrap()
         .lines()
         .map(|l| {
             let f: Vec<&str> = l.split('\t').collect();
-            P { pane: f[0].into(), window: f[1].into(), window_name: f[2].into(), session: f[3].into(), view: f[4].into() }
+            P { pane: f[0].into(), window: f[1].into(), window_name: f[2].into(), session: f[3].into(), view: f[4].into(), history: f[5].into() }
         })
         .collect()
 }
 
-/// The chat slot: the pane of `main` with a Session or the placeholder.
+/// The chat slot: the pane of `main` with a Session, the placeholder or a history pane.
 fn slot(env: &TestEnv) -> P {
     let found: Vec<P> =
-        panes(env).into_iter().filter(|p| p.window_name == "main" && (!p.session.is_empty() || p.view == "chat")).collect();
+        panes(env).into_iter().filter(|p| p.window_name == "main" && (!p.session.is_empty() || p.view == "chat" || p.view == "history")).collect();
     assert_eq!(found.len(), 1, "one chat slot: {found:?}");
     found[0].clone()
 }
@@ -438,7 +439,7 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
     let env = TestEnv::new();
     setup(&env);
     fake_cpd(&env);
-    fake_pi(&env, "exit 0");
+    fake_pi(&env, "exit 1");
     cockpit(&env);
     env.cpd(&["session", "state", "working", "--session", LEAD1]).ok();
     let message = env.root().join("message.md");
@@ -579,6 +580,129 @@ fn open_and_park_refusals() {
     assert_eq!(window_names(&env), ["main"]);
 }
 
+// ---------- history ----------
+
+/// Lead `lead2`, archived, with a readable session file.
+fn archived_lead2(env: &TestEnv) {
+    let file = env.root().join("lead2.jsonl");
+    fs::write(&file, "{\"type\":\"session\"}\n").unwrap();
+    exec_sql(
+        env,
+        &format!("UPDATE sessions SET file = '{}', archived_at = 't9' WHERE id = 'lead2'", file.display()),
+    );
+}
+
+fn history_panes(env: &TestEnv) -> Vec<P> {
+    panes(env).into_iter().filter(|p| p.view == "history").collect()
+}
+
+#[test]
+fn history_parks_the_lead_in_the_slot_and_open_kills_the_history_pane() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd(&env);
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
+    cockpit(&env);
+    archived_lead2(&env);
+    let lead1_pane = env.cpd(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
+    assert_eq!(window_names(&env), ["main"]);
+
+    // The Lead in the slot is parked; the history pane takes the slot.
+    let out = env.cpd(&["session", "history", LEAD2]).ok();
+    assert_eq!(out["session"], LEAD2);
+    assert_eq!(out["parked"], LEAD1);
+    let s = slot(&env);
+    assert_eq!((s.view.as_str(), s.history.as_str(), s.session.as_str()), ("history", LEAD2, ""));
+    assert_eq!(out["pane"], json!(s.pane));
+    assert_eq!(s.window_name, "main");
+    wait_until("the history view's start", || {
+        env.calls("cpd").contains(&["tui", "view", "history", LEAD2].map(str::to_owned).to_vec())
+    });
+    let lead1 = panes(&env).into_iter().find(|p| p.session == LEAD1).unwrap();
+    assert_eq!((lead1.pane.as_str(), lead1.window_name.as_str()), (lead1_pane.as_str(), "park-pay"));
+    assert_eq!(show(&env, LEAD1)["place"], "parked");
+    assert_eq!(history_panes(&env).len(), 1);
+    assert_placeholders(&env, 0);
+    assert_eq!(window_names(&env), ["main", "park-pay"]);
+
+    // A rerun respawns the same pane: still one history pane, nothing parked.
+    let again = env.cpd(&["session", "history", LEAD2]).ok();
+    assert_eq!((&again["pane"], &again["parked"]), (&out["pane"], &Value::Null));
+    assert_eq!(history_panes(&env).len(), 1);
+    assert_eq!(window_names(&env), ["main", "park-pay"]);
+
+    // There is no Lead to park in a history pane.
+    assert_eq!(env.cpd(&["session", "park"]).ok(), json!({"ok": true, "session": null, "already": true}));
+    assert_eq!(env.cpd(&["session", "park", LEAD1]).ok()["already"], true);
+    assert_eq!(history_panes(&env).len(), 1);
+
+    // A Lead taking the slot kills the history pane with its window.
+    let out = env.cpd(&["session", "open", LEAD1]).ok();
+    assert_eq!((&out["pane"], &out["displaced"]), (&json!(lead1_pane), &Value::Null));
+    assert_eq!(slot(&env).session, LEAD1);
+    assert!(history_panes(&env).is_empty());
+    assert_placeholders(&env, 0);
+    assert_eq!(window_names(&env), ["main"]);
+
+    let moved: Vec<(String, String)> = events(&env, "session-moved")
+        .iter()
+        .map(|e| (e["session"].as_str().unwrap().to_owned(), e["data"]["place"].as_str().unwrap().to_owned()))
+        .collect();
+    let expected = [(LEAD1, "chat"), (LEAD1, "parked"), (LEAD1, "chat")];
+    assert_eq!(moved, expected.map(|(s, p)| (s.to_owned(), p.to_owned())));
+}
+
+#[test]
+fn history_replaces_the_placeholder_in_place_and_park_brings_it_back() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd(&env);
+    cockpit(&env);
+    archived_lead2(&env);
+    let placeholder = slot(&env);
+
+    let out = env.cpd(&["session", "history", LEAD2]).ok();
+    assert_eq!(out["parked"], Value::Null);
+    let s = slot(&env);
+    assert_eq!((s.pane.as_str(), s.view.as_str(), s.history.as_str()), (placeholder.pane.as_str(), "history", LEAD2));
+    assert_placeholders(&env, 0);
+    assert_eq!(window_names(&env), ["main"]);
+    assert!(events(&env, "session-moved").is_empty());
+
+    // The history of another Session retargets the same pane.
+    exec_sql(&env, &format!("UPDATE sessions SET file = '{}' WHERE id = 'lead1'", env.root().join("lead2.jsonl").display()));
+    env.cpd(&["session", "history", LEAD1]).ok();
+    let s = slot(&env);
+    assert_eq!((s.pane.as_str(), s.history.as_str()), (placeholder.pane.as_str(), LEAD1));
+    assert_eq!(history_panes(&env).len(), 1);
+}
+
+#[test]
+fn history_refusals_change_nothing() {
+    let env = TestEnv::new();
+    setup(&env);
+    refused(&env.cpd(&["session", "history", "nobody"]), "session_not_found", 4);
+    refused(&env.cpd(&["session", "history", WORKER]), "not_a_lead", 3);
+    refused(&env.cpd(&["session", "history", GROUNDED]), "file_unreadable", 2);
+    exec_sql(&env, "UPDATE sessions SET file = '/nonexistent/lead2.jsonl' WHERE id = 'lead2'");
+    refused(&env.cpd(&["session", "history", LEAD2]), "file_unreadable", 2);
+    archived_lead2(&env);
+    // No cockpit yet.
+    let error = refused(&env.cpd(&["session", "history", LEAD2]), "no_cockpit", 3);
+    assert_eq!(error["details"]["next"], "cpd tui");
+
+    fake_cpd(&env);
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
+    cockpit(&env);
+    env.cpd(&["session", "open", LEAD1]).ok();
+    refused(&env.cpd(&["session", "history", WORKER]), "not_a_lead", 3);
+    refused(&env.cpd(&["session", "history", GROUNDED]), "file_unreadable", 2);
+    // The refused ones parked nothing.
+    assert_eq!(slot(&env).session, LEAD1);
+    assert!(history_panes(&env).is_empty());
+    assert_eq!(events(&env, "session-moved").len(), 1);
+}
+
 // ---------- close ----------
 
 #[test]
@@ -672,6 +796,18 @@ fn close_of_a_stopped_lead_with_a_pane_appends_only_session_moved() {
     let lead2 = show(&env, LEAD2);
     assert_eq!((&lead2["tmux_pane"], &lead2["place"]), (&Value::Null, &json!("none")));
     assert!(panes(&env).iter().all(|p| p.session != LEAD2));
+}
+
+#[test]
+fn rename_works_on_an_archived_session() {
+    let env = TestEnv::new();
+    setup(&env);
+    exec_sql(&env, "UPDATE sessions SET archived_at = 't9' WHERE id = 'lead2'");
+    let out = env.cpd(&["session", "rename", "Archived and renamed", "--session", "lead2"]).ok();
+    assert_eq!(out, json!({"ok": true, "session": "lead2", "name": "Archived and renamed"}));
+    let row = show(&env, "lead2");
+    assert_eq!((&row["name"], &row["archived_at"]), (&json!("Archived and renamed"), &json!("t9")));
+    assert_eq!(events(&env, "session-renamed").len(), 1);
 }
 
 // ---------- archive ----------
@@ -838,7 +974,7 @@ fn fake_cpd_returning(env: &TestEnv) {
     env.fake(
         "cpd",
         &format!(
-            "case \"$1 $2 $3\" in \"tui view chat\") exec sleep {SLEEP_SECONDS};; \"session run \"*) exec '{CPD}' \"$@\" </dev/null;; esac\nexec '{CPD}' \"$@\""
+            "case \"$1 $2 $3\" in \"tui view chat\"|\"tui view history\") exec sleep {SLEEP_SECONDS};; \"session run \"*) exec '{CPD}' \"$@\" </dev/null;; esac\nexec '{CPD}' \"$@\""
         ),
     );
 }
@@ -852,7 +988,7 @@ fn dying_leads(env: &TestEnv) {
     fake_pi(
         env,
         &format!(
-            "[ \"$CPD_SESSION\" = lead2 ] && exec sleep {SLEEP_SECONDS}\nwhile [ ! -e '{}' ]; do sleep 0.1; done\nexit 0",
+            "[ \"$CPD_SESSION\" = lead2 ] && exec sleep {SLEEP_SECONDS}\nwhile [ ! -e '{}' ]; do sleep 0.1; done\nexit 1",
             release.display()
         ),
     );
@@ -990,12 +1126,12 @@ fn run_refusals() {
 
 // ---------- run: the Plan's plannotator port ----------
 
-/// A fake `pi` that records `PLANNOTATOR_PORT` per Session and exits, and the
+/// A fake `pi` that records `PLANNOTATOR_PORT` per Session and exits with status 1 (not a quit), and the
 /// session files of both Plans' Leads, so `session run` resumes them.
 fn port_fixture(env: &TestEnv) {
     setup(env);
     fake_cpd(env);
-    fake_pi(env, "echo \"${PLANNOTATOR_PORT-unset}\" >> \"$HOME/ports.$CPD_SESSION\"\nexit 0");
+    fake_pi(env, "echo \"${PLANNOTATOR_PORT-unset}\" >> \"$HOME/ports.$CPD_SESSION\"\nexit 1");
     cockpit(env);
     let sessions = env.home().join(".pi/agent/sessions/g");
     fs::create_dir_all(&sessions).unwrap();
@@ -1076,4 +1212,180 @@ fn run_with_the_range_full_says_no_port_and_waits_for_enter() {
     fs::remove_file(home(&env).plannotator_port(&PlanId::parse("pay").unwrap())).unwrap();
     env.tmux(&["send-keys", "-t", &pane, "Enter"]);
     wait_until("pi with the port", || recorded_ports(&env, LEAD2) == ["19432"]);
+}
+
+// ---------- run: the User's quit archives (commands.md §10.8) ----------
+
+/// A fake `pi` that waits for [`quit`], then exits with the status given there; on `SIGTERM` it
+/// exits 0, as pi 1.2.0 does (`interactive-mode.js`: `shutdown({fromSignal})` ends in `process.exit(0)`).
+fn quitting_pi(env: &TestEnv) {
+    fake_pi(
+        env,
+        "trap 'exit 0' TERM\nwhile [ ! -e \"$HOME/quit.$CPD_SESSION\" ]; do sleep 0.1; done\nexit $(cat \"$HOME/quit.$CPD_SESSION\")",
+    );
+}
+
+/// Makes `id`'s pi exit with `status`.
+fn quit(env: &TestEnv, id: &str, status: u8) {
+    let tmp = env.home().join(format!("quit.{id}.tmp"));
+    fs::write(&tmp, status.to_string()).unwrap();
+    fs::rename(tmp, env.home().join(format!("quit.{id}"))).unwrap();
+}
+
+/// pi's session file for `id`, so `session run` resumes it; `finished` ends it on a finished turn.
+fn pi_file(env: &TestEnv, id: &str, finished: bool) {
+    let dir = env.home().join(".pi/agent/sessions/g");
+    fs::create_dir_all(&dir).unwrap();
+    let turn = if finished { "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}\n" } else { "" };
+    fs::write(dir.join(format!("2026_{id}.jsonl")), format!("{{\"type\":\"session\"}}\n{turn}")).unwrap();
+}
+
+/// The fixture of the quit tests: a side fork `side` of `lead1` and `side2` of `lead2`, both idle
+/// with a session file, a quitting pi and the cockpit.
+fn quit_fixture(env: &TestEnv) {
+    setup(env);
+    fake_cpd(env);
+    quitting_pi(env);
+    cockpit(env);
+    exec_sql(
+        env,
+        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from) VALUES
+           ('side', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'idle', 't', 't', 'lead1'),
+           ('side2', 'lead', 'ctx', 'other', 'Side two', '/', 'O3', 'idle', 't', 't', 'lead2')",
+    );
+    for id in ["side", "side2", LEAD1, LEAD2] {
+        pi_file(env, id, false);
+    }
+}
+
+/// [`run_lead`], and the Session's row has the pane, as when cpd started it.
+fn run_lead_with_pane(env: &TestEnv, id: &str) -> String {
+    let pane = run_lead(env, id);
+    exec_sql(env, &format!("UPDATE sessions SET tmux_pane = '{pane}' WHERE id = '{id}'"));
+    pane
+}
+
+fn session_archived(env: &TestEnv, id: &str) -> bool {
+    show(env, id)["archived_at"].is_string()
+}
+
+fn pane_exists(env: &TestEnv, pane: &str) -> bool {
+    panes(env).iter().any(|p| p.pane == pane)
+}
+
+#[test]
+fn quitting_pi_archives_a_side_fork_and_closes_its_pane() {
+    let env = TestEnv::new();
+    quit_fixture(&env);
+    let pane = run_lead_with_pane(&env, "side");
+    wait_until("pi", || !env.calls("pi").is_empty());
+    quit(&env, "side", 0);
+    wait_until("the archive", || session_archived(&env, "side"));
+    wait_until("its pane to go", || !pane_exists(&env, &pane));
+    let row = show(&env, "side");
+    assert_eq!((&row["state"], &row["tmux_pane"], &row["place"]), (&json!("stopped"), &Value::Null, &json!("none")));
+    assert_eq!(events(&env, "session-archived").len(), 1);
+    // Nothing else was archived.
+    for other in [LEAD1, LEAD2, "side2"] {
+        assert!(!session_archived(&env, other), "{other}");
+    }
+    assert_eq!(query::<Option<String>>(&env, "SELECT archived_at FROM plans WHERE id = 'pay'"), None);
+}
+
+#[test]
+fn quitting_a_plan_s_own_lead_archives_the_plan_with_its_fork() {
+    let env = TestEnv::new();
+    quit_fixture(&env);
+    let lead = run_lead_with_pane(&env, LEAD2);
+    let fork = run_lead_with_pane(&env, "side2");
+    wait_until("both pi", || env.calls("pi").len() == 2);
+    quit(&env, LEAD2, 0);
+    wait_until("the archive", || session_archived(&env, LEAD2));
+    wait_until("both panes to go", || !pane_exists(&env, &lead) && !pane_exists(&env, &fork));
+    assert!(session_archived(&env, "side2"));
+    assert!(query::<Option<String>>(&env, "SELECT archived_at FROM plans WHERE id = 'other'").is_some());
+    assert_eq!(events(&env, "plan-archived").len(), 1);
+    assert_eq!(events(&env, "session-archived").len(), 2);
+    // Another Plan is untouched.
+    assert!(!session_archived(&env, LEAD1));
+    assert_eq!(query::<Option<String>>(&env, "SELECT archived_at FROM plans WHERE id = 'pay'"), None);
+}
+
+#[test]
+fn quitting_the_lead_in_the_chat_slot_parks_it_first_and_the_placeholder_holds_the_slot() {
+    let env = TestEnv::new();
+    quit_fixture(&env);
+    env.cpd(&["session", "open", "side"]).ok();
+    let pane = slot(&env).pane;
+    assert_eq!(slot(&env).session, "side");
+    wait_until("pi", || !env.calls("pi").is_empty());
+    quit(&env, "side", 0);
+    wait_until("the archive", || session_archived(&env, "side"));
+    wait_until("its pane to go", || !pane_exists(&env, &pane));
+    let held = slot(&env);
+    assert_eq!((held.session.as_str(), held.view.as_str()), ("", "chat"), "{held:?}");
+    assert_placeholders(&env, 1);
+    assert!(panes(&env).iter().all(|p| p.session != "side"));
+    assert_eq!(window_names(&env), ["main"], "the Lead's park window went with its pane");
+    // Parked first: `session-moved` to `parked`, then to none.
+    let places: Vec<Value> = events(&env, "session-moved").iter().filter(|e| e["session"] == "side").map(|e| e["data"]["place"].clone()).collect();
+    assert_eq!(places, [json!("chat"), json!("parked"), json!("none")]);
+}
+
+#[test]
+fn a_pi_that_exits_with_status_1_is_not_archived() {
+    let env = TestEnv::new();
+    quit_fixture(&env);
+    let pane = run_lead_with_pane(&env, "side");
+    wait_until("pi", || !env.calls("pi").is_empty());
+    quit(&env, "side", 1);
+    wait_until("the resume prompt", || capture(&env, &pane).contains("pi exited. Press Enter to resume Side here."));
+    assert!(!session_archived(&env, "side"));
+    assert_eq!(show(&env, "side")["state"], "stopped");
+    assert!(pane_exists(&env, &pane));
+    assert_eq!(events(&env, "session-archived").len(), 0);
+}
+
+#[test]
+fn a_refused_archive_prints_the_refusal_and_offers_the_resume_in_place() {
+    let env = TestEnv::new();
+    quit_fixture(&env);
+    // `pay` has a running Job; its Lead holds the chat slot.
+    env.cpd(&["session", "open", LEAD1]).ok();
+    let pane = slot(&env).pane;
+    wait_until("pi", || !env.calls("pi").is_empty());
+    quit(&env, LEAD1, 0);
+    wait_until("the resume prompt", || capture(&env, &pane).contains("pi exited. Press Enter to resume Lead one here."));
+    let shown = capture(&env, &pane);
+    assert!(shown.contains("archive_blocked"), "{shown}");
+    assert!(shown.contains("Job api of Plan pay is running."), "{shown}");
+    // Nothing was archived, and the Lead was not parked.
+    assert!(!session_archived(&env, LEAD1));
+    assert_eq!(query::<Option<String>>(&env, "SELECT archived_at FROM plans WHERE id = 'pay'"), None);
+    assert_eq!(events(&env, "session-archived").len() + events(&env, "plan-archived").len(), 0);
+    assert_eq!((slot(&env).pane, slot(&env).session), (pane, LEAD1.to_owned()));
+}
+
+#[test]
+fn a_reload_is_not_a_quit_even_though_pi_exits_0_on_sigterm() {
+    let env = TestEnv::new();
+    quit_fixture(&env);
+    // A copy of cpd that the test can replace, as an install does.
+    let copy = env.home().join("cpd-installed");
+    fs::copy(CPD, &copy).unwrap();
+    env.fake("cpd", &format!("case \"$1 $2 $3\" in \"tui view chat\"|\"tui view history\") exec sleep {SLEEP_SECONDS};; esac\nexec '{}' \"$@\"", copy.display()));
+    // An idle Lead at a finished turn, parked: the reload is due at once.
+    pi_file(&env, "side", true);
+    exec_sql(&env, "UPDATE sessions SET state_at = '2020-01-01T00:00:00Z' WHERE id = 'side'");
+    std::thread::sleep(Duration::from_secs(2));
+    let pane = run_lead_with_pane(&env, "side");
+    wait_until("pi", || env.calls("pi").len() == 1);
+
+    let next = env.home().join("cpd-next");
+    fs::copy(CPD, &next).unwrap();
+    fs::rename(&next, &copy).unwrap();
+    wait_until("pi, started again", || env.calls("pi").len() == 2);
+    assert!(pane_exists(&env, &pane));
+    assert!(!session_archived(&env, "side"));
+    assert_eq!(events(&env, "session-archived").len(), 0);
 }
