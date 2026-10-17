@@ -44,7 +44,7 @@ pub fn draw(f: &mut Frame, area: Rect, left: &[Item], right: &[Item]) -> Vec<(Re
 mod tests {
     use super::*;
 
-    use ratatui::{Terminal, backend::TestBackend, style::Modifier};
+    use ratatui::{Terminal, backend::TestBackend, style::{Color, Modifier}};
 
     use super::super::{items, workers::Workers};
 
@@ -63,19 +63,19 @@ mod tests {
     #[test]
     fn left_items_start_at_column_0_and_right_items_end_at_the_last_column() {
         for width in [80u16, 215] {
-            let left = [item(" ? legend ", Some(Action::Legend)), item("L2", None)];
+            let left = [item("?", Some(Action::Legend)), item("L2", None)];
             let right = [item("R1", None), item("workers 1/4", None)];
             let (text, hits) = row(width, &left, &right);
-            assert!(text.starts_with(" ? legend  L2"), "{width}: {text:?}");
+            assert!(text.starts_with("? L2"), "{width}: {text:?}");
             assert!(text.ends_with("R1 workers 1/4"), "{width}: {text:?}");
-            let middle = &text[" ? legend  L2".len()..text.len() - "R1 workers 1/4".len()];
+            let middle = &text["? L2".len()..text.len() - "R1 workers 1/4".len()];
             assert!(!middle.is_empty() && middle.trim().is_empty(), "{width}: blank middle, got {middle:?}");
-            assert_eq!(hits, [(Rect::new(0, 0, 10, 1), Action::Legend)]);
+            assert_eq!(hits, [(Rect::new(0, 0, 1, 1), Action::Legend)]);
         }
     }
 
     #[test]
-    fn the_statusbar_has_both_buttons_left_and_the_workers_right() {
+    fn the_statusbar_has_three_one_cell_buttons_left_and_the_workers_right() {
         let mut terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();
         let mut hits = Vec::new();
         terminal
@@ -86,19 +86,21 @@ mod tests {
             .unwrap();
         let buf = terminal.backend().buffer();
         let text: String = (0..40).map(|x| buf[(x, 0)].symbol()).collect();
-        assert_eq!(text, format!("⧉   ? legend   ≡ logs {}workers 1/4", " ".repeat(7)));
-        // ⧉ is one cell wide, and its button is `⧉ `: two columns, then the spacing column
+        assert_eq!(text, format!("⧉ ? ▤{}workers 1/4", " ".repeat(24)));
         assert_eq!(
             hits,
             [
-                (Rect::new(0, 0, 2, 1), Action::ResetLayout),
-                (Rect::new(3, 0, 10, 1), Action::Legend),
-                (Rect::new(14, 0, 8, 1), Action::Logs)
+                (Rect::new(0, 0, 1, 1), Action::ResetLayout),
+                (Rect::new(2, 0, 1, 1), Action::Legend),
+                (Rect::new(4, 0, 1, 1), Action::Logs)
             ]
         );
-        assert!((0..2).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
-        assert!(!buf[(2, 0)].modifier.contains(Modifier::REVERSED));
-        assert!((3..13).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
-        assert!((14..22).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
+        for x in [0, 2, 4] {
+            assert!(buf[(x, 0)].modifier.contains(Modifier::REVERSED), "x={x}");
+            assert_eq!(buf[(x, 0)].fg, Color::DarkGray, "x={x}");
+        }
+        for x in [1, 3] {
+            assert!(!buf[(x, 0)].modifier.contains(Modifier::REVERSED), "x={x}");
+        }
     }
 }

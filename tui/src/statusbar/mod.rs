@@ -1,5 +1,5 @@
 //! The `statusbar` view (commands.md §13.2, §17): one row across the full width at the bottom of the cockpit.
-//! Left, the ⧉ reset-layout, legend and logs buttons, then the note of a failed click; right, the workers
+//! Left, the ⧉ reset-layout, ? legend and ▤ logs buttons, then the note of a failed click; right, the workers
 //! indicator `workers N/M`. It has no keys and never takes keyboard focus (the root mouse binding passes a click on
 //! with `send-keys -M`, §6.3).
 //!
@@ -20,12 +20,13 @@ use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, MouseButton, MouseEventKind,
 };
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::Line;
 
 use self::bar::{Action, Item};
 use self::workers::Workers;
 use super::logs;
+use super::palette::{self, Meaning};
 use super::read;
 use super::widgets::open_legend;
 use super::{not_a_terminal, on_a_terminal};
@@ -44,16 +45,16 @@ const COALESCE: Duration = Duration::from_millis(500);
 /// A read at least this often.
 const REFRESH: Duration = Duration::from_secs(2);
 
-/// The reset button: `⧉` is one cell wide, and the space is part of the button.
-const RESET_BUTTON: &str = "⧉ ";
-const LEGEND_BUTTON: &str = " ? legend ";
-const LOGS_BUTTON: &str = " ≡ logs ";
+/// The buttons: one glyph, one cell each.
+const RESET_BUTTON: &str = "⧉";
+const LEGEND_BUTTON: &str = "?";
+const LOGS_BUTTON: &str = "▤";
 
 /// The bar's items: the three buttons, then the failure note if any (left), and the workers indicator (right), which
 /// gets the full `width` as in the reference (`main.rs` `statusbar_items`).
 fn items(workers: &Workers, note: &str, width: u16) -> (Vec<Item>, Vec<Item>) {
     let button = |text: &'static str, action| Item {
-        line: Line::from(text).style(Style::new().add_modifier(Modifier::REVERSED)),
+        line: Line::from(text).style(palette::fg(Meaning::Nothing).add_modifier(Modifier::REVERSED)),
         action: Some(action),
     };
     let mut left = vec![
@@ -152,9 +153,9 @@ mod tests {
         (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_string()
     }
 
-    /// The reference's `the_statusbar_has_the_legend_button_left_and_the_workers_right` (`tui/src/main.rs:1028`).
+    /// Each button is one grey reversed cell, one space apart; the workers end at the right edge.
     #[test]
-    fn the_statusbar_has_the_legend_button_left_and_the_workers_right() {
+    fn the_statusbar_has_the_glyph_buttons_left_and_the_workers_right() {
         let mut terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();
         let mut hits = Vec::new();
         terminal
@@ -164,22 +165,24 @@ mod tests {
             })
             .unwrap();
         let buf = terminal.backend().buffer();
-        let left = format!("{RESET_BUTTON} {LEGEND_BUTTON} {LOGS_BUTTON}");
-        assert_eq!(text(buf, 0), format!("{left}{}workers 1/4", " ".repeat(40 - left.chars().count() - "workers 1/4".len())));
+        assert_eq!(text(buf, 0), format!("⧉ ? ▤{}workers 1/4", " ".repeat(40 - 5 - "workers 1/4".len())));
         assert_eq!(Line::from("⧉").width(), 1);
         assert_eq!(
             hits,
             [
-                (Rect::new(0, 0, 2, 1), Action::ResetLayout),
-                (Rect::new(3, 0, LEGEND_BUTTON.len() as u16, 1), Action::Legend),
-                (Rect::new(14, 0, LOGS_BUTTON.chars().count() as u16, 1), Action::Logs),
+                (Rect::new(0, 0, 1, 1), Action::ResetLayout),
+                (Rect::new(2, 0, 1, 1), Action::Legend),
+                (Rect::new(4, 0, 1, 1), Action::Logs),
             ]
         );
-        assert_eq!(buf[(0, 0)].symbol(), "⧉");
-        assert!((0..2).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
-        assert!(!buf[(2, 0)].modifier.contains(Modifier::REVERSED));
-        assert!((3..3 + LEGEND_BUTTON.len() as u16).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
-        assert!((14..22).all(|x| buf[(x, 0)].modifier.contains(Modifier::REVERSED)));
+        for x in [0, 2, 4] {
+            let cell = &buf[(x, 0)];
+            assert_eq!(cell.fg, palette::fg(Meaning::Nothing).fg.unwrap(), "x={x}");
+            assert!(cell.modifier.contains(Modifier::REVERSED), "x={x}");
+        }
+        for x in [1, 3, 5] {
+            assert!(!buf[(x, 0)].modifier.contains(Modifier::REVERSED), "x={x}");
+        }
     }
 
     /// The workers get the whole width, not what the buttons leave: the long form is chosen whenever it fits the row.
