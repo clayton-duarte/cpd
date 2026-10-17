@@ -9,11 +9,11 @@ use crate::driver::{self, StartCtx};
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{JobKey, PlanId};
 
-/// Ready (§3.2): `queued`, in a Plan in `dispatch` or `pr`, whose PR is `dispatch`
+/// Ready (§3.2): `queued`, in a Plan in `dispatch` or `deploy`, whose PR is `dispatch`
 /// or `open`, every Dependency `merged`. `driver::start`'s `require_ready` says the same.
 const READY: &str = "SELECT j.plan, j.key FROM jobs j JOIN plans p ON p.id = j.plan
   JOIN prs r ON r.plan = j.plan AND r.key = j.pr
-  WHERE j.status = 'queued' AND p.phase IN ('dispatch', 'pr') AND r.status IN ('dispatch', 'open')
+  WHERE j.status = 'queued' AND p.phase IN ('dispatch', 'deploy') AND r.status IN ('dispatch', 'open')
     AND NOT EXISTS (SELECT 1 FROM dependencies d JOIN jobs n ON n.plan = d.plan AND n.key = d.needs
                      WHERE d.plan = j.plan AND d.job = j.key AND n.status <> 'merged')
   ORDER BY j.seq";

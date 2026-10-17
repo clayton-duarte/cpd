@@ -14,19 +14,19 @@ pub enum Phase {
     Grounding,
     Plan,
     Dispatch,
-    Pr,
+    Deploy,
     Done,
 }
 
 impl Phase {
-    pub const ALL: [Phase; 5] = [Phase::Grounding, Phase::Plan, Phase::Dispatch, Phase::Pr, Phase::Done];
+    pub const ALL: [Phase; 5] = [Phase::Grounding, Phase::Plan, Phase::Dispatch, Phase::Deploy, Phase::Done];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Phase::Grounding => "grounding",
             Phase::Plan => "plan",
             Phase::Dispatch => "dispatch",
-            Phase::Pr => "pr",
+            Phase::Deploy => "deploy",
             Phase::Done => "done",
         }
     }

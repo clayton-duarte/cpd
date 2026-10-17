@@ -719,10 +719,10 @@ fn e4_waits_while_a_job_is_queued() {
 
 // ---------- E5 ----------
 
-/// Plan `pay` in phase `pr`.
+/// Plan `pay` in phase `deploy`.
 fn in_pr(fx: &Fx) {
     fx.fixture(
-        "UPDATE plans SET phase = 'pr' WHERE id = 'pay';
+        "UPDATE plans SET phase = 'deploy' WHERE id = 'pay';
          INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
            VALUES ('acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'Pay', 0, 'open', 'none', 'none', 't', 't');
          UPDATE prs SET status = 'open', pr_number = 7, pr_url = 'https://github.com/acme/pay/pull/7', pr_opened_at = 't',

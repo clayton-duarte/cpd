@@ -446,7 +446,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
 
     // ---------- 10. pr open: the Gate on the Lead Branch, the push, gh
     let out = fx.ok(&["pr", "open", "--plan", PLAN]);
-    assert_eq!(out["phase"], "pr");
+    assert_eq!(out["phase"], "deploy");
     assert_eq!(out["pr"]["key"], "pay");
     assert_eq!(out["pr"]["pr"]["number"], 7);
     assert_eq!(out["pr"]["pr"]["url"], PR_URL);
@@ -464,7 +464,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     let events = fx.events_since(cursor);
     assert_eq!(kinds(&events), ["pr-opened", "plan-phase"]);
     assert_eq!(events[0]["data"], json!({"pr": "pay", "number": 7, "url": PR_URL}));
-    assert_eq!(events[1]["data"], json!({"from": "dispatch", "to": "pr", "prs": [{"key": "pay", "number": 7, "url": PR_URL}]}));
+    assert_eq!(events[1]["data"], json!({"from": "dispatch", "to": "deploy", "prs": [{"key": "pay", "number": 7, "url": PR_URL}]}));
     cursor = fx.cursor();
 
     // ---------- 11. pr poll reports the failing checks, once (D7)
@@ -485,7 +485,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     let all = fx.events_since(0);
     assert!(of_kind(&all, "error").is_empty(), "{:?}", of_kind(&all, "error"));
     let shown = fx.plan();
-    assert_eq!(shown["plan"]["phase"], "pr");
+    assert_eq!(shown["plan"]["phase"], "deploy");
     assert_eq!(shown["tamper"], json!([]));
     assert_eq!(fx.ok(&["attempt", "list", "--active", "--plan", PLAN])["attempts"], json!([]));
     assert!(started.elapsed() < Duration::from_secs(120), "took {:?}", started.elapsed());

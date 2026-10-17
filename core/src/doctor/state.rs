@@ -65,12 +65,12 @@ fn tamper_report(store: &mut Store) -> Result<Vec<Value>, CpdError> {
     Ok(report)
 }
 
-/// The engine runs (it holds `locks/watch.lock`) when any Plan is in `dispatch` or `pr`.
+/// The engine runs (it holds `locks/watch.lock`) when any Plan is in `dispatch` or `deploy`.
 pub fn watch(home: &CpdHome, store: Option<&mut Store>) -> Check {
     let name = "watch";
     let Some(store) = store else { return Check::not_checked(name, Severity::Warn, NO_STORE) };
     let plans = store.read(|conn| {
-        Ok(conn.query_row("SELECT count(*) FROM plans WHERE phase IN ('dispatch', 'pr')", [], |r| r.get::<_, i64>(0))?)
+        Ok(conn.query_row("SELECT count(*) FROM plans WHERE phase IN ('dispatch', 'deploy')", [], |r| r.get::<_, i64>(0))?)
     });
     let plans = match plans {
         Ok(plans) => plans,

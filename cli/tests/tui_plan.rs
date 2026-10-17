@@ -146,7 +146,7 @@ fn context(id: &str, lead: &str) -> String {
     )
 }
 
-/// A Plan in `phase` (`dispatch` or `pr`) with its Lead; `pr` is `(number, checks)`.
+/// A Plan in `phase` (`dispatch` or `deploy`) with its Lead; `pr` is `(number, checks)`.
 fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr: Option<(i64, &str)>) -> String {
     let (row, number, url, opened, pull_request) = match pr {
         Some((n, checks)) => (
@@ -392,7 +392,7 @@ fn the_top_row_is_the_context_id_and_one_tab_per_lead_with_a_pane_and_nothing_at
     let env = env();
     let jobs: &[(&str, &str, &str, &[&str], u32)] =
         &[("a", "merged", "O3", &[], 1), ("b", "running", "S3", &["a"], 1), ("c", "running", "S3", &["a"], 2)];
-    let mut s = plan_with("pr", Some((7, "failed")), jobs);
+    let mut s = plan_with("deploy", Some((7, "failed")), jobs);
     // a side fork with a pane, one without a pane (no tab), and one whose name is blank (the Plan id labels it)
     s += &lead_row("fork-ship", "ctx", "ship", "2026-01-02T00:00:09.000Z");
     s += &parked("ctx", "ship", "fork-ship");
@@ -477,7 +477,7 @@ fn the_view_follows_events_and_switches_plan_when_the_chat_slot_changes() {
 #[test]
 fn the_view_starts_no_subprocess_and_asks_gh_nothing() {
     let env = env();
-    sql(&env, &plan_with("pr", Some((7, "failed")), &[("a", "running", "S3", &[], 1)]));
+    sql(&env, &plan_with("deploy", Some((7, "failed")), &[("a", "running", "S3", &[], 1)]));
     let pane = start_view(&env);
     let pid = tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_pid}"]).trim().to_owned();
     // let it draw, follow an Event and take a new snapshot

@@ -1202,13 +1202,13 @@ fn a_plan_in_phase_pr_with_no_live_job_archives() {
                 "UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/pay/pull/1', pr_opened_at = 't',
                         pull_request = (SELECT id FROM pull_requests WHERE number = 1) WHERE plan = 'pay'",
             )?;
-            exec(tx, "UPDATE plans SET phase = 'pr' WHERE id = 'pay'")
+            exec(tx, "UPDATE plans SET phase = 'deploy' WHERE id = 'pay'")
         })
         .unwrap();
     let out = env.cpd(&["plan", "archive", "--plan", "pay"]).ok();
     assert_eq!(out["archived"][0], json!({"kind": "plan", "id": "pay"}));
     assert!(!has_pane(&env, &lead));
-    assert_eq!(show(&env, "pay")["plan"]["phase"], "pr");
+    assert_eq!(show(&env, "pay")["plan"]["phase"], "deploy");
     assert!(show(&env, "pay")["plan"]["archived_at"].is_string());
 }
 

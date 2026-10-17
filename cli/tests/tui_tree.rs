@@ -48,7 +48,7 @@ fn context(id: &str, grounded: Option<&str>) -> String {
     )
 }
 
-/// `pr`: the Plan has a PR (the schema ties phases `pr` and `done` to one).
+/// `pr`: the Plan has a PR (the schema ties phases `deploy` and `done` to one).
 fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr: bool) -> String {
     let late = !matches!(phase, "grounding" | "plan");
     let worktree = if late { "'/wt'" } else { "NULL" };
@@ -74,7 +74,7 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr:
     let status = match phase {
         "grounding" | "plan" => "waiting",
         "dispatch" => "dispatch",
-        "pr" => "open",
+        "deploy" => "open",
         _ => "merged",
     };
     format!(
@@ -132,7 +132,7 @@ fn populate(env: &TestEnv) {
     s += &context("gamma", None);
     s += &plan_row("ship", "alpha", "dispatch", "l-ship", "2026-01-02T00:00:00.000Z", false);
     s += &plan_row("sketch", "alpha", "plan", "l-sketch", "2026-01-02T00:00:01.000Z", false);
-    s += &plan_row("rel", "beta", "pr", "l-rel", "2026-01-02T00:00:02.000Z", true);
+    s += &plan_row("rel", "beta", "deploy", "l-rel", "2026-01-02T00:00:02.000Z", true);
     s += &plan_row("old", "beta", "done", "l-old", "2026-01-02T00:00:03.000Z", true);
     s += &session_row("g-alpha", "grounded", "alpha", "", "idle", None, "2026-01-02T00:00:00.000Z");
     s += &session_row("l-ship", "ship lead", "alpha", "ship", "working", None, "2026-01-02T00:00:00.000Z");

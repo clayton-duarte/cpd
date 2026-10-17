@@ -73,7 +73,7 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr:
     let status = match phase {
         "grounding" | "plan" => "waiting",
         "dispatch" => "dispatch",
-        "pr" => "open",
+        "deploy" => "open",
         _ => "merged",
     };
     let (row, number, url, opened, pull_request) = match pr {
@@ -203,7 +203,7 @@ fn populate(store: &mut Store) {
     s += &plan_row(
         "rel",
         "beta",
-        "pr",
+        "deploy",
         "l-rel",
         "2026-01-02T00:00:02.000Z",
         Some((7, "open", "failed")),
@@ -211,7 +211,7 @@ fn populate(store: &mut Store) {
     s += &plan_row(
         "shut",
         "beta",
-        "pr",
+        "deploy",
         "l-shut",
         "2026-01-02T00:00:03.000Z",
         Some((8, "closed", "none")),

@@ -23,7 +23,7 @@ pub enum Meaning {
     NotStarted,
     /// A running Job; phase `dispatch`; PR checks pending.
     InProgress,
-    /// A merging Job; an open PR; phase `pr`.
+    /// A merging Job; an open PR; phase `deploy`.
     Review,
     /// A merged Job; a merged PR; phase `done`; checks passed.
     Done,
@@ -155,7 +155,7 @@ pub fn phase(phase: Option<Phase>) -> Meaning {
         Some(Phase::Grounding) => Meaning::Grounding,
         Some(Phase::Plan) => Meaning::Planning,
         Some(Phase::Dispatch) => Meaning::InProgress,
-        Some(Phase::Pr) => Meaning::Review,
+        Some(Phase::Deploy) => Meaning::Review,
         Some(Phase::Done) => Meaning::Done,
         None => Meaning::Nothing,
     }
@@ -167,7 +167,7 @@ pub const PHASE_LEGEND: [(&str, Option<Phase>); 6] = [
     ("grounding", Some(Phase::Grounding)),
     ("plan", Some(Phase::Plan)),
     ("dispatch", Some(Phase::Dispatch)),
-    ("pr", Some(Phase::Pr)),
+    ("deploy", Some(Phase::Deploy)),
     ("done", Some(Phase::Done)),
 ];
 
@@ -266,7 +266,7 @@ mod tests {
             (Some(Phase::Grounding), Meaning::Grounding),
             (Some(Phase::Plan), Meaning::Planning),
             (Some(Phase::Dispatch), Meaning::InProgress),
-            (Some(Phase::Pr), Meaning::Review),
+            (Some(Phase::Deploy), Meaning::Review),
             (Some(Phase::Done), Meaning::Done),
         ];
         for (p, m) in phases {
@@ -278,7 +278,7 @@ mod tests {
     #[test]
     fn the_dot_is_filled_when_the_session_needs_you_and_coloured_by_phase() {
         assert_eq!(dot(true, Some(Phase::Dispatch)), Span::styled("●", Style::new().fg(Color::Green)));
-        assert_eq!(dot(false, Some(Phase::Pr)), Span::styled("○", Style::new().fg(Color::Yellow)));
+        assert_eq!(dot(false, Some(Phase::Deploy)), Span::styled("○", Style::new().fg(Color::Yellow)));
         assert_eq!(dot(false, None), Span::styled("○", Style::new().fg(Color::DarkGray)));
     }
 

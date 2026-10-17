@@ -1,5 +1,5 @@
 //! `job add` (commands.md §5.1): `[*] → draft` in phase `plan`, and an
-//! appended `queued` Job, fingerprint stored at once, in `dispatch` or `pr`.
+//! appended `queued` Job, fingerprint stored at once, in `dispatch` or `deploy`.
 
 use rusqlite::Connection;
 use serde_json::{Value, json};
@@ -74,10 +74,10 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
 
 fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision, CpdError> {
     let phase = plan_phase(conn, plan)?;
-    if !matches!(phase.as_str(), "plan" | "dispatch" | "pr") {
+    if !matches!(phase.as_str(), "plan" | "dispatch" | "deploy") {
         return Err(CpdError::new(
             ErrorCode::IllegalPhase,
-            format!("Plan {plan} is in phase {phase}: Jobs are added in phase plan, dispatch or pr."),
+            format!("Plan {plan} is in phase {phase}: Jobs are added in phase plan, dispatch or deploy."),
         )
         .with("plan", plan.as_str())
         .with("phase", phase));

@@ -590,12 +590,12 @@ fn plan_in_phase(env: &TestEnv, phase: &str) {
     let (worktree, locked, status, pr) = match phase {
         "grounding" | "plan" => ("NULL", "NULL", "waiting", ""),
         "dispatch" => ("'/w'", "'t'", "dispatch", ""),
-        "pr" => ("'/w'", "'t'", "open", ", pr_number, pr_url, pr_opened_at, pull_request"),
+        "deploy" => ("'/w'", "'t'", "open", ", pr_number, pr_url, pr_opened_at, pull_request"),
         other => panic!("{other}"),
     };
-    let pr_values = if phase == "pr" { ", 1, 'https://github.com/acme/r/pull/1', 't', (SELECT id FROM pull_requests WHERE number = 1)" } else { "" };
+    let pr_values = if phase == "deploy" { ", 1, 'https://github.com/acme/r/pull/1', 't', (SELECT id FROM pull_requests WHERE number = 1)" } else { "" };
     // `pr open` writes the pull request's row first (D6): an `open` PR points to one.
-    let pull = if phase == "pr" { PULL_REQUEST } else { "" };
+    let pull = if phase == "deploy" { PULL_REQUEST } else { "" };
     open_store(env)
         .write("test", |tx| {
             tx.execute_batch(&format!(
@@ -620,8 +620,8 @@ fn hold_watch_lock(env: &TestEnv) -> Flock<fs::File> {
 }
 
 #[test]
-fn the_engine_must_run_when_a_plan_is_in_dispatch_or_pr() {
-    for phase in ["dispatch", "pr"] {
+fn the_engine_must_run_when_a_plan_is_in_dispatch_or_deploy() {
+    for phase in ["dispatch", "deploy"] {
         let env = healthy();
         plan_in_phase(&env, phase);
         let run = doctor(&env);

@@ -24,6 +24,7 @@ pub(super) const MIGRATIONS: &[Migration] = &[
     |conn, _| migration_5(conn),
     |conn, _| migration_6(conn),
     migration_7,
+    |conn, _| migration_8(conn),
 ];
 
 /// The first migration that imports the old git stores of the Contexts; the
@@ -40,6 +41,7 @@ pub(super) const SCHEMA_HASHES: &[&str] = &[
     "c4ac18dd07a1a89318a0ef2191ef37a3f78c758dc7ccf2ea62d17c7544a4f672",
     "a1b657a955520d2dd6dd71e143cee1fd8aba88fafc9284a7e8ab89dfc05c82af",
     "6377d30a1c0e58581cb8576410c5187c6cfcb48eacf4ec193e5b24d0eacdea77",
+    "21897859b666aff79e8c16dcb58e9ad2f7ddde4c880fa019738e2904ca28009d",
 ];
 
 const _: () = assert!(SCHEMA_HASHES.len() == MIGRATIONS.len(), "one schema hash per migration");
@@ -171,6 +173,14 @@ fn migration_7(conn: &Connection, home: &CpdHome) -> Result<()> {
     conn.execute_batch(include_str!("migrations/0007.sql"))?;
     create_history_triggers(conn, "contexts", true)?;
     import_old_stores(conn, &home.old_contexts_dir())
+}
+
+/// The Plan phase `pr` is called `deploy` (§4.5 migration 0008, hs-d76): `plans`
+/// is rebuilt, `plans_phase` and the `plan-phase` Events are rewritten; the
+/// history triggers of `plans` are generated again.
+fn migration_8(conn: &Connection) -> Result<()> {
+    conn.execute_batch(include_str!("migrations/0008.sql"))?;
+    create_history_triggers(conn, "plans", true)
 }
 
 /// The import of migration 0007, with the row values and Events the engine's
@@ -755,7 +765,7 @@ mod tests {
                 serde_json::json!(["gr", "grounding", n, n]),
                 serde_json::json!(["pl", "plan", n, n]),
                 serde_json::json!(["di", "dispatch", "2026-01-02T00:00:00.003Z", n]),
-                serde_json::json!(["pr", "pr", "2026-01-02T00:00:00.004Z", n]),
+                serde_json::json!(["pr", "deploy", "2026-01-02T00:00:00.004Z", n]),
                 serde_json::json!(["dn", "done", "2026-01-02T00:00:00.005Z", "2026-01-05T00:00:00.005Z"]),
             ]
         );
@@ -936,7 +946,7 @@ mod tests {
             vec![
                 serde_json::json!(["di", "dispatch", Value::Null]),
                 serde_json::json!(["dn", "done", "2026-01-05T00:00:00.000Z"]),
-                serde_json::json!(["pr", "pr", Value::Null]),
+                serde_json::json!(["pr", "deploy", Value::Null]),
             ]
         );
         assert_eq!(
@@ -952,14 +962,14 @@ mod tests {
     }
 
     #[test]
-    fn plans_phase_allows_pr_and_done_back_to_dispatch_and_refuses_the_other_backward_moves() {
+    fn plans_phase_allows_deploy_and_done_back_to_dispatch_and_refuses_the_other_backward_moves() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = migrated_4(&dir);
         for sql in [
             "UPDATE plans SET phase = 'plan', locked_at = NULL, done_at = NULL WHERE id = 'dn'",
             "UPDATE plans SET phase = 'plan', locked_at = NULL WHERE id = 'pr'",
             "UPDATE plans SET phase = 'grounding', locked_at = NULL WHERE id = 'di'",
-            "UPDATE plans SET phase = 'pr', done_at = NULL WHERE id = 'dn'",
+            "UPDATE plans SET phase = 'deploy', done_at = NULL WHERE id = 'dn'",
             "UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'di'",
         ] {
             let err = refused(&mut store, sql);
@@ -1496,7 +1506,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut store = migrated(&dir);
         for sql in [
-            "UPDATE plans SET phase = 'pr', locked_at = 't' WHERE id = 'pl'",
+            "UPDATE plans SET phase = 'deploy', locked_at = 't' WHERE id = 'pl'",
             "UPDATE plans SET phase = 'plan', locked_at = NULL WHERE id = 'di'",
             "UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE plan = 'di' AND key = 'x'",
         ] {
@@ -1543,5 +1553,109 @@ mod tests {
         assert_eq!((job["pr"].clone(), job["review"].clone()), (Value::from("my-repo-git"), Value::from(1)));
         let plan: Value = serde_json::from_str(after[1][1].as_str().unwrap()).unwrap();
         assert!(plan.get("repo").is_none() && plan["title"] == "G2", "{plan}");
+    }
+
+    // ---------- migration 8 ----------
+
+    /// A version-7 database with a Plan in each phase and `plan-phase` Events that say `pr`.
+    fn version_7_with_a_plan_in_pr(home: &CpdHome) {
+        let plan = |id: &str, phase: &str, locked: &str, done: &str| {
+            format!(
+                "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                   VALUES ('l-{id}', 'lead', 'ctx', '{id}', 'lead', '/repo', 'O3', 'idle', '{T}', '{T}');
+                 INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+                   VALUES ('{id}', 'ctx', 'Plan {id}', '{phase}', 'l-{id}', '{T}', {locked}, {done});"
+            )
+        };
+        let event = |plan: &str, from: &str, to: &str| {
+            format!(
+                "INSERT INTO events (txn, at, kind, context, plan, text, data) VALUES
+                   (1, '{T}', 'plan-phase', 'ctx', '{plan}', 'Plan {plan} is in phase pr. Next: cpd pr poll',
+                    '{{\"from\":\"{from}\",\"to\":\"{to}\",\"prs\":[{{\"key\":\"pr\"}}]}}');"
+            )
+        };
+        let locked = format!("'{T}'");
+        database_at(
+            home,
+            7,
+            &format!(
+                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');
+                 {} {} {} {} {}
+                 {} {} {} {}",
+                plan("gr", "grounding", "NULL", "NULL"),
+                plan("pl", "plan", "NULL", "NULL"),
+                plan("di", "dispatch", &locked, "NULL"),
+                plan("pr", "pr", &locked, "NULL"),
+                plan("dn", "done", &locked, &locked),
+                event("di", "plan", "dispatch"),
+                event("pr", "dispatch", "pr"),
+                event("pr", "pr", "dispatch"),
+                event("dn", "pr", "done"),
+            ),
+        );
+    }
+
+    #[test]
+    fn a_version_7_database_migrates_the_phase_pr_to_deploy_everywhere_and_keeps_the_event_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_7_with_a_plan_in_pr(&home);
+        let events_before = {
+            let conn = connection(&home.db());
+            conn.prepare("SELECT id, kind, plan, text FROM events ORDER BY id")
+                .unwrap()
+                .query_map([], |r| Ok(serde_json::json!([r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?])))
+                .unwrap()
+                .collect::<Result<Vec<_>>>()
+                .unwrap()
+        };
+
+        let mut store = Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
+        assert_eq!(
+            rows(&mut store, "SELECT id, phase FROM plans ORDER BY created_at, id"),
+            vec![
+                serde_json::json!(["di", "dispatch"]),
+                serde_json::json!(["dn", "done"]),
+                serde_json::json!(["gr", "grounding"]),
+                serde_json::json!(["pl", "plan"]),
+                serde_json::json!(["pr", "deploy"]),
+            ]
+        );
+        assert_eq!(
+            rows(&mut store, "SELECT plan, json_extract(data, '$.from'), json_extract(data, '$.to') FROM events ORDER BY id"),
+            vec![
+                serde_json::json!(["di", "plan", "dispatch"]),
+                serde_json::json!(["pr", "dispatch", "deploy"]),
+                serde_json::json!(["pr", "deploy", "dispatch"]),
+                serde_json::json!(["dn", "deploy", "done"]),
+            ]
+        );
+        // Only `from` and `to` change: the rest of `data` and the text stay.
+        assert_eq!(count(&mut store, "SELECT count(*) FROM events WHERE json_extract(data, '$.prs[0].key') = 'pr'"), 4);
+        assert_eq!(
+            rows(&mut store, "SELECT id, kind, plan, text FROM events ORDER BY id"),
+            events_before
+        );
+        assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
+        // The guards are back; the new phase graph is in force.
+        assert_eq!(
+            sqlite_message(&refused(&mut store, "UPDATE events SET text = 'x'")),
+            "append_only: events"
+        );
+        assert_eq!(
+            sqlite_message(&refused(&mut store, "DELETE FROM events")),
+            "append_only: events"
+        );
+        write(&mut store, "UPDATE plans SET phase = 'done', done_at = '2026-01-09T00:00:00.000Z' WHERE id = 'pr'").unwrap();
+        assert_eq!(
+            sqlite_message(&refused(&mut store, "UPDATE plans SET phase = 'pr' WHERE id = 'di'")),
+            "illegal_transition"
+        );
+        assert_eq!(
+            sqlite_message(&refused(&mut store, "UPDATE plans SET phase = 'deploy' WHERE id = 'gr'")),
+            "illegal_transition"
+        );
     }
 }

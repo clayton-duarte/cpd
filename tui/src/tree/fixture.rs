@@ -121,7 +121,7 @@ pub fn sample() -> Tree {
         ),
         context(
             "beta",
-            vec![plan("rel", "beta", Phase::Pr, [0, 0, 0, 0, 0, 3], session("l-rel", "rel lead", Blocked, Some("cpd: Plan review"), Place::Parked), vec![])],
+            vec![plan("rel", "beta", Phase::Deploy, [0, 0, 0, 0, 0, 3], session("l-rel", "rel lead", Blocked, Some("cpd: Plan review"), Place::Parked), vec![])],
         ),
         context("gamma", vec![]),
     ])

@@ -191,10 +191,10 @@ pub fn session_label(s: &SessionNode) -> String {
     if name.is_empty() { s.id.as_str().chars().take(8).collect() } else { name.to_owned() }
 }
 
-/// The busiest phase among Plans: dispatch > plan > grounding > pr > done > none.
+/// The busiest phase among Plans: dispatch > plan > grounding > deploy > done > none.
 pub fn busiest<'a>(plans: impl IntoIterator<Item = &'a PlanNode>) -> Option<Phase> {
     let plans: Vec<&PlanNode> = plans.into_iter().collect();
-    [Phase::Dispatch, Phase::Plan, Phase::Grounding, Phase::Pr, Phase::Done]
+    [Phase::Dispatch, Phase::Plan, Phase::Grounding, Phase::Deploy, Phase::Done]
         .into_iter()
         .find(|p| plans.iter().any(|n| n.head.phase == *p))
 }
@@ -569,7 +569,7 @@ mod tests {
             vec![
                 plan("v1", "cpd", Phase::Done, [0, 36, 0, 0, 1, 5], session("s-v1", "v1", State::Idle, None, Place::Parked), vec![]),
                 plan("rust", "cpd", Phase::Dispatch, [0, 0, 1, 0, 0, 1], rust, vec![]),
-                plan("ui", "cpd", Phase::Pr, [0, 1, 0, 2, 0, 3], session("s-ui", "cpd-ui", State::Idle, None, Place::Parked), vec![]),
+                plan("ui", "cpd", Phase::Deploy, [0, 1, 0, 2, 0, 3], session("s-ui", "cpd-ui", State::Idle, None, Place::Parked), vec![]),
             ],
         )])
     }
@@ -671,7 +671,7 @@ mod tests {
             (Phase::Grounding, Meaning::Grounding),
             (Phase::Plan, Meaning::Planning),
             (Phase::Dispatch, Meaning::InProgress),
-            (Phase::Pr, Meaning::Review),
+            (Phase::Deploy, Meaning::Review),
             (Phase::Done, Meaning::Done),
         ] {
             let t = tree(vec![context("cc", vec![lone("pp", "x", phase, [0; 6])])]);
@@ -686,10 +686,10 @@ mod tests {
             phases.iter().enumerate().map(|(i, ph)| lone(&format!("pp{i}"), "s", *ph, [0; 6])).collect()
         };
         use Phase::*;
-        assert_eq!(busiest(&plans(&[Done, Pr, Grounding, Plan, Dispatch])), Some(Dispatch));
-        assert_eq!(busiest(&plans(&[Done, Pr, Grounding, Plan])), Some(Plan));
-        assert_eq!(busiest(&plans(&[Done, Pr, Grounding])), Some(Grounding));
-        assert_eq!(busiest(&plans(&[Done, Pr])), Some(Pr));
+        assert_eq!(busiest(&plans(&[Done, Deploy, Grounding, Plan, Dispatch])), Some(Dispatch));
+        assert_eq!(busiest(&plans(&[Done, Deploy, Grounding, Plan])), Some(Plan));
+        assert_eq!(busiest(&plans(&[Done, Deploy, Grounding])), Some(Grounding));
+        assert_eq!(busiest(&plans(&[Done, Deploy])), Some(Deploy));
         assert_eq!(busiest(&plans(&[Done])), Some(Done));
         assert_eq!(busiest(&[]), None);
         let t = tree(vec![context("cc", plans(&[Done, Plan]))]);

@@ -662,7 +662,7 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
     let mut store = fixture_store(&env);
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     let hash = store.read(|c| Ok(cpd_core::store::schema_hash(c)?)).unwrap();
-    assert_eq!(hash, "6377d30a1c0e58581cb8576410c5187c6cfcb48eacf4ec193e5b24d0eacdea77", "version 7 (Context records only in the database, hs-a1) on top of version 6 (the PR poller)");
+    assert_eq!(hash, "21897859b666aff79e8c16dcb58e9ad2f7ddde4c880fa019738e2904ca28009d", "version 8 (the Plan phase deploy, hs-d76) on top of version 7 (Context records only in the database, hs-a1)");
 
     for table in ["contexts", "plans", "sessions"] {
         let archived: Option<String> =
@@ -754,7 +754,7 @@ fn version_5_database(env: &TestEnv) {
             phase = match status {
                 "waiting" => "plan",
                 "merged" => "done",
-                _ => "pr",
+                _ => "deploy",
             },
             locked = if status == "waiting" { "NULL" } else { "'2026-01-02T00:00:00.000Z'" },
             done = if status == "merged" { "'2026-01-09T00:00:00.000Z'" } else { "NULL" },
