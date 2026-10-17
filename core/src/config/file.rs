@@ -229,7 +229,7 @@ impl Config {
         };
         let watch = Watch {
             tick_seconds: positive(&mut r, "watch.tick_seconds", 5)?,
-            pr_poll_seconds: positive(&mut r, "watch.pr_poll_seconds", 120)?,
+            pr_poll_seconds: positive(&mut r, "watch.pr_poll_seconds", 5)?,
             context_sync_seconds: positive(&mut r, "watch.context_sync_seconds", 300)?,
             error_repeat_seconds: positive(&mut r, "watch.error_repeat_seconds", 600)?,
         };

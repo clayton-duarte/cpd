@@ -13,7 +13,7 @@ use crate::ids::PrKey;
 pub(super) type Migration = fn(&Connection) -> Result<()>;
 
 /// Migrations `1..=N`, in order; `MIGRATIONS[i]` takes the schema to version `i + 1`.
-pub(super) const MIGRATIONS: &[Migration] = &[migration_1, migration_2, migration_3, migration_4, migration_5];
+pub(super) const MIGRATIONS: &[Migration] = &[migration_1, migration_2, migration_3, migration_4, migration_5, migration_6];
 
 /// The schema hash of each version (§4.3): `SCHEMA_HASHES[i]` is version `i + 1`'s.
 /// A test asserts that migrating an empty database gives each of them.
@@ -23,6 +23,7 @@ pub(super) const SCHEMA_HASHES: &[&str] = &[
     "c4529a6f3cd787333b8115bade42de35504eb4902773945cfbde80ba93acfc5f",
     "62a082772ccbcd0c989f5181e3b934ba96a3ab3f1d9db81cf8e39cef5ef89579",
     "c4ac18dd07a1a89318a0ef2191ef37a3f78c758dc7ccf2ea62d17c7544a4f672",
+    "a1b657a955520d2dd6dd71e143cee1fd8aba88fafc9284a7e8ab89dfc05c82af",
 ];
 
 const _: () = assert!(SCHEMA_HASHES.len() == MIGRATIONS.len(), "one schema hash per migration");
@@ -34,10 +35,13 @@ pub const VERSION: i64 = MIGRATIONS.len() as i64;
 /// at the current version. `dependencies` and `pr_needs` get no generated
 /// `_no_delete`: their migrations write their own (a draft Job's Dependency,
 /// and a PR's need before the lock, may be deleted) and their `_hist_del`.
+/// `pull_requests` gets no `_no_delete` either: its migration writes its
+/// `_hist_del` and `pull_requests_owned` (an unowned row may be deleted).
 pub const HISTORY_TABLES: &[&str] = &[
     "contexts",
     "context_records",
     "plans",
+    "pull_requests",
     "prs",
     "pr_needs",
     "plan_reviews",
@@ -121,6 +125,25 @@ fn migration_4(conn: &Connection) -> Result<()> {
 /// move to `cpd/<plan>/<key>`. No table changes.
 fn migration_5(conn: &Connection) -> Result<()> {
     conn.execute_batch(include_str!("migrations/0005.sql"))
+}
+
+/// The line of `0006.sql` that splits it into the part that creates
+/// `pull_requests` and the part that fills it and rebuilds `prs`.
+const HISTORY: &str = "\n-- @history\n";
+
+/// The PR poller (§4.5 migration 6, D5, D6), steps 2 to 5; step 1 and step 6
+/// are the caller's, as for migration 4. `pull_requests` gets its history
+/// triggers before the back-fill, so each back-filled row has an `insert`
+/// history row in the migration's `txns` row; the rebuild of `prs` writes
+/// none, and its history triggers are generated after it.
+fn migration_6(conn: &Connection) -> Result<()> {
+    let (create, rebuild) = include_str!("migrations/0006.sql")
+        .split_once(HISTORY)
+        .expect("0006.sql has its `-- @history` line");
+    conn.execute_batch(create)?;
+    create_history_triggers(conn, "pull_requests", false)?;
+    conn.execute_batch(rebuild)?;
+    create_history_triggers(conn, "prs", true)
 }
 
 /// §4.5 step 2: one PR per Plan, its per-repo columns kept as stored, its
@@ -293,37 +316,40 @@ mod tests {
            VALUES ('l-pay', 'lead', 'ctx', 'pay', 'lead', '/repo', 'O3', 'idle', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
          INSERT INTO plans (id, context, title, repo, base, lead_branch, lead_worktree, phase, lead_session,
                             pr_number, pr_url, pr_opened_at, created_at, locked_at)
-           VALUES ('pay', 'ctx', 'Pay', '/repo', 'main', 'cpd/pay', '/wt', 'pr', 'l-pay', 7, 'https://example.test/pull/7',
+           VALUES ('pay', 'ctx', 'Pay', '/repo', 'main', 'cpd/pay', '/wt', 'pr', 'l-pay', 7, 'https://github.com/acme/pay/pull/7',
                    '2026-01-05T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z');";
 
     #[test]
-    fn a_version_1_database_migrates_and_its_pr_keeps_the_poll_columns_null() {
+    fn a_version_1_database_migrates_and_its_pr_gets_a_row_titled_like_the_plan() {
         let dir = tempfile::tempdir().unwrap();
         let home = home(&dir);
         database_at(&home, 1, VERSION_1_PLAN);
 
         let mut store = Store::open(&home, 5000).unwrap();
         assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-        let (version, row, migrations): (i64, (String, i64, Option<String>, Option<String>, Option<String>), i64) = store
+        type Row = (String, i64, String, String, String, String);
+        let (version, row, migrations): (i64, Row, i64) = store
             .read(|c| {
                 Ok((
                     c.pragma_query_value(None, "user_version", |r| r.get(0))?,
                     c.query_row(
-                        "SELECT key, pr_number, pr_title, pr_review_decision, pr_checks FROM prs WHERE plan = 'pay'",
+                        "SELECT r.key, r.pr_number, p.repo, p.title, p.review_decision, p.checks
+                           FROM prs r JOIN pull_requests p ON p.id = r.pull_request WHERE r.plan = 'pay'",
                         [],
-                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
                     )?,
                     c.query_row("SELECT count(*) FROM txns WHERE command = 'migrate'", [], |r| r.get(0))?,
                 ))
             })
             .unwrap();
         assert_eq!(version, VERSION);
-        assert_eq!(row, ("repo".to_owned(), 7, None, None, None), "the PR keeps the three columns null until its next poll");
+        let expected: Row = ("repo".into(), 7, "acme/pay".into(), "Pay".into(), "none".into(), "none".into());
+        assert_eq!(row, expected, "no title was polled: the Plan's title, and no review or checks");
         assert_eq!(migrations, 2, "the old migration's row and the new one");
     }
 
     #[test]
-    fn prs_history_lists_the_poll_columns_and_their_checks_hold() {
+    fn pull_requests_history_lists_every_column_and_their_checks_hold() {
         let dir = tempfile::tempdir().unwrap();
         let home = home(&dir);
         database_at(&home, 1, VERSION_1_PLAN);
@@ -332,22 +358,23 @@ mod tests {
         store
             .write("test", |tx| {
                 tx.execute(
-                    "UPDATE prs SET pr_title = 'T', pr_review_decision = 'approved', pr_checks = 'passed' WHERE plan = 'pay'",
+                    "UPDATE pull_requests SET title = 'T', review_decision = 'approved', checks = 'passed', draft = 1 WHERE number = 7",
                     [],
                 )?;
                 Ok::<(), CpdError>(())
             })
             .unwrap();
         let after: String = store
-            .read(|c| Ok(c.query_row("SELECT after FROM history WHERE tbl = 'prs' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))?))
+            .read(|c| Ok(c.query_row("SELECT after FROM history WHERE tbl = 'pull_requests' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))?))
             .unwrap();
         let after: Value = serde_json::from_str(&after).unwrap();
-        assert_eq!(after["pr_title"], "T");
-        assert_eq!(after["pr_review_decision"], "approved");
-        assert_eq!(after["pr_checks"], "passed");
+        assert_eq!(after["title"], "T");
+        assert_eq!(after["review_decision"], "approved");
+        assert_eq!(after["checks"], "passed");
+        assert_eq!(after["draft"], 1);
 
-        for bad in ["pr_title = ''", "pr_review_decision = 'maybe'", "pr_checks = 'green'", "pr_title = NULL"] {
-            let sql = format!("UPDATE prs SET {bad} WHERE plan = 'pay'");
+        for bad in ["title = ''", "review_decision = 'maybe'", "checks = 'green'", "state = 'merged'", "repo = 'x'", "number = 0", "draft = 2"] {
+            let sql = format!("UPDATE pull_requests SET {bad} WHERE number = 7");
             let err = store.write("test", |tx| Ok::<(), CpdError>({ tx.execute(&sql, [])?; })).unwrap_err();
             assert!(err.to_string().contains("CHECK") || format!("{err:?}").contains("CHECK"), "{bad}: {err:?}");
         }
@@ -505,12 +532,12 @@ mod tests {
                                 pr_number, pr_url, pr_opened_at, pr_seen, pr_polled_at, pr_title, pr_review_decision, pr_checks,
                                 all_merged_at, created_at, locked_at) VALUES
                ('pr', 'ctx', 'Open', '/src/a-very-long-repository-name-indeed', 'main', 'cpd/pr', '/src/long.pr', 'pr', 'l-pr',
-                7, 'https://example.test/pull/7', '2026-01-03T00:00:00.004Z', '{{\"checks\":{{\"ci\":\"SUCCESS\"}},\"reviewIds\":[\"r1\"],\"commentIds\":[]}}',
+                7, 'https://github.com/acme/pay/pull/7', '2026-01-03T00:00:00.004Z', '{{\"checks\":{{\"ci\":\"SUCCESS\"}},\"reviewIds\":[\"r1\"],\"commentIds\":[]}}',
                 '2026-01-04T00:00:00.004Z', 'Open PR', 'approved', 'passed', '2026-01-03T00:00:00.004Z', '2026-01-01T00:00:00.004Z', '2026-01-02T00:00:00.004Z');
              INSERT INTO plans (id, context, title, repo, base, lead_branch, lead_worktree, phase, lead_session,
                                 pr_number, pr_url, pr_opened_at, created_at, locked_at, done_at) VALUES
                ('dn', 'ctx', 'Done', '/src/web/', 'develop', 'cpd/dn', '/src/web.dn', 'done', 'l-dn',
-                9, 'https://example.test/pull/9', '2026-01-03T00:00:00.005Z', '2026-01-01T00:00:00.005Z', '2026-01-02T00:00:00.005Z', '2026-01-05T00:00:00.005Z');
+                9, 'https://github.com/acme/long/pull/9', '2026-01-03T00:00:00.005Z', '2026-01-01T00:00:00.005Z', '2026-01-02T00:00:00.005Z', '2026-01-05T00:00:00.005Z');
              INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at, decided_at)
                VALUES ('pl', 'r1', 1, '{FP}', 'approved', '{T}', '{T}');
              INSERT INTO jobs (plan, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
@@ -578,39 +605,44 @@ mod tests {
     }
 
     #[test]
-    fn a_version_2_database_migrates_through_3_to_4_with_one_pr_per_plan() {
+    fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = migrated(&dir);
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 5);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), 6);
         let migrate = count(&mut store, "SELECT max(id) FROM txns WHERE command = 'migrate'");
         assert_eq!(migrate, 2);
 
         let prs = rows(
             &mut store,
-            "SELECT plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pr_seen,
-                    pr_polled_at, pr_title, pr_review_decision, pr_checks, all_merged_at, start_failed_at, created_txn,
-                    created_at, started_at, merged_at
+            "SELECT plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+                    pull_request, all_merged_at, start_failed_at, created_txn, created_at, started_at, merged_at
              FROM prs ORDER BY created_at",
         );
-        let empty_seen = r#"{"checks":{},"reviewIds":[],"commentIds":[]}"#;
         let n = Value::Null;
         assert_eq!(
             prs,
             vec![
-                serde_json::json!(["gr", "pay", "/src/pay", "main", "waiting", "cpd/gr", n, n, n, n, empty_seen,
-                                   n, n, n, n, n, n, migrate, "2026-01-01T00:00:00.001Z", n, n]),
-                serde_json::json!(["pl", "my-repo-git", "/src/My Repo.git", "main", "waiting", "cpd/pl", n, n, n, n, empty_seen,
-                                   n, n, n, n, n, n, migrate, "2026-01-01T00:00:00.002Z", n, n]),
-                serde_json::json!(["di", "pr-2fa", "/src/2fa", "main", "dispatch", "cpd/di", "/src/2fa.di", n, n, n, empty_seen,
-                                   n, n, n, n, n, n, migrate, "2026-01-01T00:00:00.003Z", "2026-01-02T00:00:00.003Z", n]),
+                serde_json::json!(["gr", "pay", "/src/pay", "main", "waiting", "cpd/gr", n, n, n, n, n, n, n,
+                                   migrate, "2026-01-01T00:00:00.001Z", n, n]),
+                serde_json::json!(["pl", "my-repo-git", "/src/My Repo.git", "main", "waiting", "cpd/pl", n, n, n, n, n, n, n,
+                                   migrate, "2026-01-01T00:00:00.002Z", n, n]),
+                serde_json::json!(["di", "pr-2fa", "/src/2fa", "main", "dispatch", "cpd/di", "/src/2fa.di", n, n, n, n, n, n,
+                                   migrate, "2026-01-01T00:00:00.003Z", "2026-01-02T00:00:00.003Z", n]),
                 serde_json::json!(["pr", "a-very-long-repository-n", "/src/a-very-long-repository-name-indeed", "main", "open",
-                                   "cpd/pr", "/src/long.pr", 7, "https://example.test/pull/7", "2026-01-03T00:00:00.004Z",
-                                   r#"{"checks":{"ci":"SUCCESS"},"reviewIds":["r1"],"commentIds":[]}"#,
-                                   "2026-01-04T00:00:00.004Z", "Open PR", "approved", "passed", "2026-01-03T00:00:00.004Z", n,
+                                   "cpd/pr", "/src/long.pr", 7, "https://github.com/acme/pay/pull/7", "2026-01-03T00:00:00.004Z",
+                                   2, "2026-01-03T00:00:00.004Z", n,
                                    migrate, "2026-01-01T00:00:00.004Z", "2026-01-02T00:00:00.004Z", n]),
                 serde_json::json!(["dn", "web", "/src/web/", "develop", "merged", "cpd/dn", "/src/web.dn", 9,
-                                   "https://example.test/pull/9", "2026-01-03T00:00:00.005Z", empty_seen, n, n, n, n, n, n,
+                                   "https://github.com/acme/long/pull/9", "2026-01-03T00:00:00.005Z", 1, n, n,
                                    migrate, "2026-01-01T00:00:00.005Z", "2026-01-02T00:00:00.005Z", "2026-01-05T00:00:00.005Z"]),
+            ]
+        );
+        // One pull request row for each PR with a number, in Plan and key order (migration 6).
+        assert_eq!(
+            rows(&mut store, "SELECT id, repo, number, title, draft, state, review_decision, checks, created_at, merged_at, changed_at FROM pull_requests ORDER BY id"),
+            vec![
+                serde_json::json!([1, "acme/long", 9, "Done", 0, "merged", "none", "none", "2026-01-03T00:00:00.005Z", "2026-01-05T00:00:00.005Z", "2026-01-03T00:00:00.005Z"]),
+                serde_json::json!([2, "acme/pay", 7, "Open PR", 0, "open", "approved", "passed", "2026-01-03T00:00:00.004Z", n, "2026-01-03T00:00:00.004Z"]),
             ]
         );
         assert_eq!(count(&mut store, "SELECT count(*) FROM pr_needs"), 0);
@@ -662,17 +694,18 @@ mod tests {
         assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('plans')"), 10);
         assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('context_records') WHERE name = 'plan_repo'"), 0);
 
-        // History: one insert per migrated PR in the migration's txn; the copies write none.
-        assert_eq!(
-            rows(&mut store, "SELECT txn, tbl, pk, op FROM history WHERE txn = 2 ORDER BY id"),
-            ["di", "dn", "gr", "pl", "pr"]
-                .iter()
-                .map(|plan| {
-                    let key = prs.iter().find(|p| p[0] == *plan).unwrap()[1].clone();
-                    serde_json::json!([2, "prs", serde_json::json!([plan, key]).to_string(), "insert"])
-                })
-                .collect::<Vec<_>>()
-        );
+        // History: one insert per migrated PR (migration 4) and one per back-filled pull request
+        // (migration 6) in the migration's txn; the copies write none.
+        let mut expected: Vec<Value> = ["di", "dn", "gr", "pl", "pr"]
+            .iter()
+            .map(|plan| {
+                let key = prs.iter().find(|p| p[0] == *plan).unwrap()[1].clone();
+                serde_json::json!([2, "prs", serde_json::json!([plan, key]).to_string(), "insert"])
+            })
+            .collect();
+        expected.push(serde_json::json!([2, "pull_requests", "[1]", "insert"]));
+        expected.push(serde_json::json!([2, "pull_requests", "[2]", "insert"]));
+        assert_eq!(rows(&mut store, "SELECT txn, tbl, pk, op FROM history WHERE txn = 2 ORDER BY id"), expected);
 
         // AUTOINCREMENT goes on after the kept ids.
         let (job, event, record) = store
@@ -715,7 +748,7 @@ mod tests {
     }
 
     #[test]
-    fn a_tree_menu_version_3_database_migrates_to_4_keeping_archived_at() {
+    fn a_tree_menu_version_3_database_migrates_to_6_keeping_archived_at() {
         let dir = tempfile::tempdir().unwrap();
         let home = home(&dir);
         version_3(&home);
@@ -724,7 +757,7 @@ mod tests {
 
         let mut store = Store::open(&home, 5000).unwrap();
         assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 5);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), 6);
         let n = Value::Null;
         assert_eq!(
             rows(&mut store, "SELECT id, phase, archived_at FROM plans ORDER BY id"),
@@ -785,8 +818,8 @@ mod tests {
              INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
                               created_txn, created_at, started_at, merged_at) VALUES
                ('di', 'pay', '/src/pay', 'main', 'dispatch', 'cpd/di', '/src/pay.di', NULL, NULL, NULL, 1, '{T}', '{T}', NULL),
-               ('pr', 'pay', '/src/pay', 'main', 'open', 'cpd/pr', '/src/pay.pr', 7, 'https://example.test/pull/7', '{T}', 1, '{T}', '{T}', NULL),
-               ('dn', 'web', '/src/web', 'develop', 'merged', 'cpd/dn', '/src/web.dn', 9, 'https://example.test/pull/9', '{T}', 1, '{T}', '{T}',
+               ('pr', 'pay', '/src/pay', 'main', 'open', 'cpd/pr', '/src/pay.pr', 7, 'https://github.com/acme/pay/pull/7', '{T}', 1, '{T}', '{T}', NULL),
+               ('dn', 'web', '/src/web', 'develop', 'merged', 'cpd/dn', '/src/web.dn', 9, 'https://github.com/acme/web/pull/9', '{T}', 1, '{T}', '{T}',
                 '2026-01-05T00:00:00.000Z');
              INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                fingerprint, created_txn, created_at, merged_sha) VALUES
@@ -806,10 +839,10 @@ mod tests {
     }
 
     #[test]
-    fn a_version_4_database_with_a_done_plan_migrates_to_5_keeping_every_row() {
+    fn a_version_4_database_with_a_done_plan_migrates_to_5_and_6_keeping_every_row() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = migrated_4(&dir);
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 5);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), 6);
         assert_eq!(
             rows(&mut store, "SELECT id, phase, done_at FROM plans ORDER BY id"),
             vec![
@@ -889,6 +922,121 @@ mod tests {
         assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
     }
 
+    // ---------- migration 6 ----------
+
+    /// A version 5 database as plan-reopen's migration 5 leaves it: `op`'s PR is
+    /// open on its legacy Lead Branch with a polled title, `dn`'s merged, `wa`'s
+    /// waiting in a Plan in `dispatch`.
+    fn version_5(home: &CpdHome) {
+        let sql = format!(
+            "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');
+             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at) VALUES
+               ('l-op', 'lead', 'ctx', 'op', 'lead', '/src', 'O3', 'idle', '{T}', '{T}'),
+               ('l-dn', 'lead', 'ctx', 'dn', 'lead', '/src', 'O3', 'idle', '{T}', '{T}'),
+               ('l-wa', 'lead', 'ctx', 'wa', 'lead', '/src', 'O3', 'idle', '{T}', '{T}');
+             INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at) VALUES
+               ('op', 'ctx', 'Open', 'pr', 'l-op', '{T}', '{T}'),
+               ('wa', 'ctx', 'Waiting', 'dispatch', 'l-wa', '{T}', '{T}');
+             INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at) VALUES
+               ('dn', 'ctx', 'Done', 'done', 'l-dn', '{T}', '{T}', '2026-01-05T00:00:00.000Z');
+             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+                              pr_polled_at, pr_title, pr_review_decision, pr_checks, created_txn, created_at, started_at, merged_at) VALUES
+               ('op', 'pay', '/src/pay', 'main', 'open', 'cpd/op', '/src/pay.op', 7, 'https://github.com/acme/pay/pull/7',
+                '2026-01-03T00:00:00.000Z', '2026-01-04T00:00:00.000Z', 'Polled title', 'approved', 'failed', 1, '{T}', '{T}', NULL),
+               ('dn', 'web', '/src/web', 'develop', 'merged', 'cpd/dn', '/src/web.dn', 9, 'https://github.com/acme/web/pull/9',
+                '2026-01-02T00:00:00.000Z', NULL, NULL, NULL, NULL, 1, '{T}', '{T}', '2026-01-05T00:00:00.000Z'),
+               ('wa', 'web', '/src/web', 'main', 'waiting', 'cpd/wa/web', NULL, NULL, NULL, NULL,
+                NULL, NULL, NULL, NULL, 1, '{T}', NULL, NULL);"
+        );
+        database_at(home, 5, &sql);
+    }
+
+    /// The triggers on `prs`, `(name, sql)` by name.
+    fn prs_triggers(conn: &Connection) -> Vec<(String, String)> {
+        let mut stmt = conn
+            .prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'prs' ORDER BY name")
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<Result<_>>().unwrap()
+    }
+
+    /// `version_5`, migrated by `Store::open`, and the triggers on `prs` before.
+    fn migrated_5(dir: &tempfile::TempDir) -> (Store, Vec<(String, String)>) {
+        let home = home(dir);
+        version_5(&home);
+        let conn = Connection::open(home.db()).unwrap();
+        assert_eq!(schema_hash(&conn).unwrap(), SCHEMA_HASHES[4]);
+        let before = prs_triggers(&conn);
+        drop(conn);
+        let store = Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+        (store, before)
+    }
+
+    #[test]
+    fn a_version_5_database_migrates_to_6_with_the_pull_requests_back_filled() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _) = migrated_5(&dir);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), 6);
+        let n = Value::Null;
+        assert_eq!(
+            rows(&mut store, "SELECT id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at
+                              FROM pull_requests ORDER BY id"),
+            vec![
+                serde_json::json!([1, "acme/web", 9, "https://github.com/acme/web/pull/9", "Done", 0, "merged", "none", "none",
+                                   "2026-01-02T00:00:00.000Z", "2026-01-05T00:00:00.000Z", "2026-01-02T00:00:00.000Z"]),
+                serde_json::json!([2, "acme/pay", 7, "https://github.com/acme/pay/pull/7", "Polled title", 0, "open", "approved", "failed",
+                                   "2026-01-03T00:00:00.000Z", n, "2026-01-03T00:00:00.000Z"]),
+            ]
+        );
+        assert_eq!(
+            rows(&mut store, "SELECT plan, key, status, lead_branch, pr_number, pull_request FROM prs ORDER BY plan"),
+            vec![
+                serde_json::json!(["dn", "web", "merged", "cpd/dn", 9, 1]),
+                serde_json::json!(["op", "pay", "open", "cpd/op", 7, 2]),
+                serde_json::json!(["wa", "web", "waiting", "cpd/wa/web", n, n]),
+            ]
+        );
+        assert_eq!(
+            rows(&mut store, "SELECT tbl, pk, op FROM history WHERE txn = 2 ORDER BY id"),
+            vec![serde_json::json!(["pull_requests", "[1]", "insert"]), serde_json::json!(["pull_requests", "[2]", "insert"])]
+        );
+    }
+
+    #[test]
+    fn migration_6_keeps_migration_5s_triggers_on_prs() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, before) = migrated_5(&dir);
+        drop(store);
+        let after = prs_triggers(&Connection::open(home(&dir).db()).unwrap());
+        let names = |t: &[(String, String)]| t.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&after), names(&before), "the same triggers on prs");
+        for ((name, old), (_, new)) in before.iter().zip(&after) {
+            // The history triggers list the rebuilt table's columns; every other keeps its text.
+            if name != "prs_hist_ins" && name != "prs_hist_upd" {
+                assert_eq!(new, old, "{name}");
+            }
+        }
+        let locked = &after.iter().find(|(name, _)| name == "prs_locked").unwrap().1;
+        assert!(locked.contains("OLD.status = 'merged'"), "migration 5's prs_locked: {locked}");
+    }
+
+    #[test]
+    fn after_migration_6_prs_locked_still_allows_only_the_legacy_lead_branch_rename_of_a_merged_pr() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _) = migrated_5(&dir);
+        for sql in [
+            "UPDATE prs SET lead_branch = 'cpd/op/pay' WHERE plan = 'op'",
+            "UPDATE prs SET lead_branch = 'cpd/wa' WHERE plan = 'wa'",
+            "UPDATE prs SET lead_branch = 'cpd/dn/web', base = 'main' WHERE plan = 'dn'",
+            "UPDATE prs SET repo = '/src/other' WHERE plan = 'dn'",
+        ] {
+            let err = refused(&mut store, sql);
+            assert_eq!(err.code(), ErrorCode::PrLocked, "{sql}: {err:?}");
+        }
+        write(&mut store, "UPDATE prs SET lead_branch = 'cpd/dn/web' WHERE plan = 'dn'").unwrap();
+        assert_eq!(rows(&mut store, "SELECT lead_branch FROM prs WHERE plan = 'dn'"), vec![serde_json::json!(["cpd/dn/web"])]);
+    }
+
     #[test]
     fn a_migrated_database_has_the_schema_of_a_new_one() {
         let dir = tempfile::tempdir().unwrap();
@@ -898,7 +1046,7 @@ mod tests {
         drop(Store::open(&fresh_home, 5000).unwrap());
         let hash = |home: &CpdHome| schema_hash(&Connection::open(home.db()).unwrap()).unwrap();
         assert_eq!(hash(&home(&dir)), hash(&fresh_home));
-        assert_eq!(hash(&fresh_home), SCHEMA_HASHES[4]);
+        assert_eq!(hash(&fresh_home), SCHEMA_HASHES[5]);
     }
 
     #[test]
@@ -957,7 +1105,10 @@ mod tests {
         }
         write(&mut store, "UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'gr';
                            UPDATE prs SET status = 'cancelled' WHERE plan = 'pl';
-                           UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'u', pr_opened_at = 't' WHERE plan = 'di';
+                           INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
+                             VALUES ('acme/di', 11, 'u', 'D', 0, 'open', 'none', 'none', 't', 't');
+                           UPDATE prs SET status = 'open', pr_number = 11, pr_url = 'u', pr_opened_at = 't',
+                                  pull_request = (SELECT id FROM pull_requests WHERE number = 11) WHERE plan = 'di';
                            UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pr'")
             .unwrap();
     }
@@ -978,7 +1129,7 @@ mod tests {
         }
         // Before the lock they may change; after it, the other columns may.
         write(&mut store, "UPDATE prs SET repo = '/src/other', base = 'develop' WHERE plan IN ('gr', 'pl');
-                           UPDATE prs SET pr_polled_at = 't' WHERE plan = 'pr'")
+                           UPDATE prs SET all_merged_at = 't' WHERE plan = 'pr'")
             .unwrap();
     }
 
