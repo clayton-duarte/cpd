@@ -82,6 +82,13 @@ fn pr_crud_is_indexed_and_exists() {
     }
 }
 
+/// `context sync` went with the git store (Plan manager B1, hs-a1): neither documented nor a command.
+#[test]
+fn context_sync_is_neither_indexed_nor_a_command() {
+    assert!(!documented_commands().contains(&vec!["context".to_owned(), "sync".to_owned()]));
+    assert!(Cli::command().find_subcommand("context").unwrap().find_subcommand("sync").is_none());
+}
+
 /// `pr start` is documented in §2 (R34, §9.7) and exists.
 #[test]
 fn pr_start_is_indexed_and_exists() {

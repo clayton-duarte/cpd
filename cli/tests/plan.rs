@@ -258,8 +258,8 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     assert_eq!(record["text"], "Retry payouts");
     assert_eq!(record["plan"], json!({"id": "pay", "machine": "m1", "jira": "PAY-1"}));
     assert_eq!(record["repos"], json!([]), "no PR yet");
-    let line = fs::read_to_string(env.cpd_home().join("contexts/ctx/records/m1.jsonl")).unwrap();
-    assert!(!line.contains("\"repo\""), "{line}");
+    assert!(!record.to_string().contains("\"repo\""), "{record}");
+    assert!(!env.cpd_home().join("contexts").exists(), "the record is in the database only");
     let real = repo.canonicalize().unwrap().display().to_string();
     let other = env.git_repo("web");
     env.cpd(&["pr", "add", "api", "--repo", &real, "--plan", "pay"]).ok();

@@ -60,7 +60,10 @@ pub fn read(folder: &Path) -> Result<OldStore, String> {
     let name = folder.file_name().and_then(|n| n.to_str()).unwrap_or_default();
     let id = ContextId::parse(name)
         .map_err(|_| format!("{} is not a Context id: a Context store is contexts/<id>/", folder.display()))?;
-    let invalid = |path: &Path, message: String| format!("the store of Context {id} is invalid: {} {message}", path.display());
+    // Messages end without a period: the caller's sentence adds one.
+    let invalid = |path: &Path, message: String| {
+        format!("the store of Context {id} is invalid: {} {}", path.display(), message.trim_end_matches('.'))
+    };
 
     let path = folder.join("context.json");
     let text = fs::read_to_string(&path).map_err(|e| invalid(&path, format!("is unreadable: {e}.")))?;

@@ -659,7 +659,7 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
     let mut store = fixture_store(&env);
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     let hash = store.read(|c| Ok(cpd_core::store::schema_hash(c)?)).unwrap();
-    assert_eq!(hash, "a1b657a955520d2dd6dd71e143cee1fd8aba88fafc9284a7e8ab89dfc05c82af", "version 6 (the PR poller) on top of migration 5 (hs-d118)");
+    assert_eq!(hash, "6377d30a1c0e58581cb8576410c5187c6cfcb48eacf4ec193e5b24d0eacdea77", "version 7 (Context records only in the database, hs-a1) on top of version 6 (the PR poller)");
 
     for table in ["contexts", "plans", "sessions"] {
         let archived: Option<String> =
@@ -734,6 +734,9 @@ fn prs_at_version_4() -> String {
 fn version_5_database(env: &TestEnv) {
     drop(open(env));
     let conn = raw(env);
+    // Migration 7 drops it: a database of version 5 still has `contexts.sync_failing`.
+    conn.execute_batch("ALTER TABLE contexts ADD COLUMN sync_failing INTEGER NOT NULL DEFAULT 0 CHECK (sync_failing IN (0, 1))")
+        .unwrap();
     conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
     conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, |_| Ok(1_i64)).unwrap();
     let pr = |plan: &str, key: &str, status: &str, more: &str, values: &str| {
@@ -799,7 +802,7 @@ fn a_version_5_database_migrates_to_6_with_the_back_filled_rows_and_the_link() {
     drop(store);
     let conn = raw(&env);
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-    assert_eq!(version, 6);
+    assert_eq!(version, VERSION);
     let violations: i64 = conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
     assert_eq!(violations, 0);
 

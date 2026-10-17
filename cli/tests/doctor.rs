@@ -14,7 +14,7 @@ use nix::fcntl::{Flock, FlockArg};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-const NAMES: [&str; 14] = [
+const NAMES: [&str; 13] = [
     "config",
     "store",
     "tamper",
@@ -27,7 +27,6 @@ const NAMES: [&str; 14] = [
     "tiers",
     "pi_adapter",
     "lead_packages",
-    "contexts",
     "watch",
 ];
 
@@ -171,7 +170,7 @@ fn a_healthy_machine_passes_every_check_in_order() {
     tool("tmux", "3.4", ">= 3.4");
     tool("pi", "1.2.0", ">= 1.2.0 < 2.0.0");
     tool("gh", "2.45.0", ">= 2.45.0");
-    for warn in ["gh_auth", "lead_packages", "contexts", "watch"] {
+    for warn in ["gh_auth", "lead_packages", "watch"] {
         assert_eq!(check(&run, warn)["severity"], "warn", "{warn}");
     }
 }
@@ -217,7 +216,6 @@ fn a_missing_config_fails_and_what_needs_it_is_not_checked() {
         assert_fails(&run, name, "error", "not checked");
     }
     assert_fails(&run, "lead_packages", "warn", "not checked");
-    assert_fails(&run, "contexts", "warn", "not checked");
     assert_passes(&run, "git");
 }
 
@@ -571,55 +569,15 @@ fn a_database_newer_than_this_binary_fails_store() {
 
 // ----------------------------------------------------------------- contexts
 
-fn context_store(env: &TestEnv, id: &str) {
-    let dir = env.cpd_home().join("contexts").join(id);
-    fs::create_dir_all(&dir).unwrap();
-    // The real git: the test's `bin/` holds a fake one.
-    let init = std::process::Command::new("git").args(["init", "-q", "-b", "main"]).current_dir(&dir).status().unwrap();
-    assert!(init.success());
-    fs::write(dir.join("context.json"), json!({"v": 1, "id": id, "title": "T", "jira": null, "created_at": "t", "created_on": "hs"}).to_string()).unwrap();
-}
-
 #[test]
-fn every_context_store_must_be_valid_and_not_sync_failing() {
+fn doctor_has_no_contexts_check_and_ignores_an_old_store_folder() {
     let env = healthy();
-    context_store(&env, "good-one");
-    let run = doctor(&env);
-    run.ok();
-    assert_passes(&run, "contexts");
-
-    // Invalid stores, each named in found.
+    drop(open_store(&env));
+    // What an earlier version left: the check of `contexts/` is gone with the git store.
     fs::create_dir_all(env.cpd_home().join("contexts/no-git")).unwrap();
-    context_store(&env, "bad-json");
-    fs::write(env.cpd_home().join("contexts/bad-json/context.json"), "{").unwrap();
-    context_store(&env, "other-id");
-    fs::write(env.cpd_home().join("contexts/other-id/context.json"), json!({"v": 1, "id": "else", "title": "T"}).to_string()).unwrap();
-    fs::write(env.cpd_home().join("contexts/a-file"), "").unwrap();
     let run = doctor(&env);
     run.ok();
-    let c = assert_fails(&run, "contexts", "warn", "4 Context problem");
-    let problems: Vec<(&str, &str)> =
-        c["found"].as_array().unwrap().iter().map(|p| (p["context"].as_str().unwrap(), p["problem"].as_str().unwrap())).collect();
-    let contexts: Vec<&str> = problems.iter().map(|p| p.0).collect();
-    assert_eq!(contexts, ["a-file", "bad-json", "no-git", "other-id"]);
-    assert!(problems[2].1.contains("git"), "{problems:?}");
-}
-
-#[test]
-fn a_sync_failing_context_is_a_warning() {
-    let env = healthy();
-    context_store(&env, "syncing");
-    let mut store = open_store(&env);
-    store
-        .write("test", |tx| {
-            tx.execute_batch("INSERT INTO contexts (id, title, created_at, created_on, sync_failing) VALUES ('syncing', 'T', 't', 'hs', 1)")?;
-            Ok(())
-        })
-        .unwrap();
-    let run = doctor(&env);
-    run.ok();
-    let c = assert_fails(&run, "contexts", "warn", "1 Context problem");
-    assert_eq!(c["found"], json!([{"context": "syncing", "problem": "sync_failing"}]));
+    assert!(checks(&run).iter().all(|c| c["name"] != "contexts"), "{run:?}");
 }
 
 // -------------------------------------------------------------------- watch

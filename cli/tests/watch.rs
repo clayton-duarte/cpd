@@ -895,49 +895,33 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     assert_eq!(fx.count("error"), 0);
 }
 
-// ---------- E6 ----------
+// ---------- E6 (removed) ----------
 
 #[test]
-fn e6_imports_the_context_stores_at_start_and_syncs_those_with_a_remote() {
+fn the_engine_neither_imports_nor_syncs_a_context_store() {
     let fx = fx("");
-    // Context `demo` with a note, written on another home of this machine.
-    let other = fx.env.root().join("other-home");
-    fs::create_dir_all(&other).unwrap();
-    fs::copy(fx.env.cpd_home().join("config.toml"), other.join("config.toml")).unwrap();
-    let on_other = |args: &[&str]| {
-        let out = fx.env.command(CPD).args(args).env("CPD_HOME", &other).output().unwrap();
-        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stdout));
-    };
-    on_other(&["context", "new", "demo", "--title", "Demo"]);
-    on_other(&["context", "note", "Remember this.", "--context", "demo"]);
+    // An old git store the database does not hold: only migration 0007 reads those, once.
     let store = fx.env.cpd_home().join("contexts/demo");
-    copy_dir(&other.join("contexts/demo"), &store);
-    let remote = fx.env.root().join("remote.git");
-    fx.env.git(fx.env.root(), &["init", "-q", "--bare", remote.to_str().unwrap()]);
-    fx.env.git(&store, &["remote", "add", "origin", remote.to_str().unwrap()]);
+    fs::create_dir_all(store.join("records")).unwrap();
+    fs::write(store.join("context.json"), r#"{"v":1,"id":"demo","title":"Demo","jira":null,"created_at":"2026-10-14T21:00:00.000Z","created_on":"m1"}"#).unwrap();
+    fs::write(
+        store.join("records/m1.jsonl"),
+        "{\"v\":1,\"id\":\"m1-n1\",\"kind\":\"note\",\"at\":\"2026-10-14T21:00:00.000Z\",\"machine\":\"m1\",\"by\":{\"session\":null,\"plan\":null},\"text\":\"Remember this.\"}\n",
+    )
+    .unwrap();
+    // Not a store at all: E6 used to log and skip it; nothing looks now.
+    fs::create_dir_all(fx.env.cpd_home().join("contexts/not a context")).unwrap();
 
     let engine = fx.start();
-    wait_until("the push", || fx.env.git(&remote, &["branch", "--list", "main"]).contains("main"));
-    engine.stop();
+    std::thread::sleep(Duration::from_millis(2500)); // two ticks
+    let run = engine.stop();
 
-    assert_eq!(fx.query::<String>("SELECT title FROM contexts WHERE id = 'demo'"), "Demo");
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM context_records WHERE context = 'demo'"), 1);
-    assert_eq!(fx.count("context-created"), 1);
-    assert_eq!(fx.count("context-record"), 1);
-    assert_eq!(fx.env.git(&remote, &["rev-parse", "main"]), fx.env.git(&store, &["rev-parse", "main"]));
-}
-
-fn copy_dir(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap();
-    for entry in fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let target = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_dir(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), target).unwrap();
-        }
-    }
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM contexts WHERE id = 'demo'"), 0);
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM context_records"), 0);
+    assert_eq!(fx.count("context-created") + fx.count("context-record"), 0);
+    assert_eq!(fx.count("error"), 0);
+    assert!(store.join("context.json").is_file(), "the folder is left alone");
+    assert!(!run.stderr.contains("E6"), "{}", run.stderr);
 }
 
 // ---------- scripts/install-cpd.sh (Finding 5) ----------
