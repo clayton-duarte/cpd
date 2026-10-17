@@ -44,6 +44,10 @@ use cpd_core::store::Store;
 /// A snapshot is retaken at most this often, whatever the Event rate (§17).
 const COALESCE: Duration = Duration::from_millis(500);
 
+/// The blank space around the chart's content, inside the canvas the view scrolls over: at scroll (0, 0) nothing of the
+/// chart touches the pane's edges, and scrolled the chart reaches them.
+const MARGIN: Margin = Margin { horizontal: 2, vertical: 1 };
+
 /// What the pane shows when a Lead is in the chat slot.
 struct Centre {
     slot: ChatSlot,
@@ -62,7 +66,7 @@ fn snapshot(store: &mut Store) -> Result<Snapshot, CpdError> {
     let cursor = store.read(highest_id)?;
     let Some(slot) = read::chat_slot(store)? else { return Ok(Snapshot { cursor, centre: None }) };
     let plan = read::plan_boxes(store, &slot.plan)?;
-    let chart = boxes::layout(&plan.prs, &plan.jobs);
+    let chart = boxes::layout(&plan.prs, &plan.jobs).with_margin(MARGIN);
     Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, chart }) })
 }
 
@@ -123,11 +127,11 @@ impl Ui {
 
     fn draw(&mut self, f: &mut Frame, centre: Option<&Centre>) {
         let body = f.area();
-        // two columns and one row of padding: nothing of the chart touches the pane's edges
-        let mut window = body.inner(Margin { horizontal: 2, vertical: 1 });
+        let mut window = body; // the chart's own margin keeps it off the pane's edges at scroll (0, 0)
         if let Some(text) = message(self.error.as_deref(), &self.note, centre) {
             let [chart_area, message_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(window);
-            f.render_widget(Paragraph::new(text), message_area);
+            // the pane's last row, indented like the chart's content at scroll (0, 0)
+            f.render_widget(Paragraph::new(text), message_area.inner(Margin { horizontal: MARGIN.horizontal, vertical: 0 }));
             window = chart_area;
         }
         self.body = window;

@@ -381,4 +381,27 @@ mod tests {
         assert_eq!(c.columns, [vec![at("a"), at("d")], vec![at("w")]]);
         assert_eq!((c.step(at("a"), Dir::Down), c.step(at("d"), Dir::Right)), (at("d"), at("w")));
     }
+
+    /// The pane's body of `w`×`h` cells showing the margined chart of one empty PR at `scroll`, one row per string.
+    fn body(w: u16, h: u16, scroll: (u16, u16)) -> Vec<String> {
+        let c = layout(&[pr("api", &[])], &[]).with_margin(Margin { horizontal: 2, vertical: 1 });
+        let mut dst = Buffer::empty(Rect::new(0, 0, w, h));
+        c.blit(&mut dst, Rect::new(0, 0, w, h), scroll, None);
+        (0..h).map(|y| (0..w).map(|x| dst[(x, y)].symbol()).collect()).collect()
+    }
+
+    #[test]
+    fn at_scroll_zero_the_first_box_starts_two_columns_and_one_row_inside_the_body() {
+        let rows = body(40, 6, (0, 0));
+        assert_eq!(rows[0].trim(), "");
+        assert_eq!(rows[1], "  ┌ api · api-repo → main · dispatch ┐  ");
+    }
+
+    #[test]
+    fn scrolled_the_box_is_drawn_up_to_every_edge_of_the_body() {
+        // the box is 34 columns by 3 rows; the body is 10×3, scrolled to the box's top-left corner, then to its
+        // bottom-right one (the margin is 2 columns and 1 row on every side of it)
+        assert_eq!(body(10, 3, (2, 1)), ["┌ api · ap", "│ no Jobs ", "└─────────"]);
+        assert_eq!(body(10, 3, (28, 1)), ["dispatch ┐", "         │", "─────────┘"]);
+    }
 }

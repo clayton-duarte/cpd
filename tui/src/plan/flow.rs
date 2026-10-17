@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::Line,
     widgets::Widget,
@@ -460,6 +460,21 @@ impl Selection {
 }
 
 impl Chart {
+    /// The same chart on a larger canvas: `margin` blank columns left and right and rows above and below it. The buffer and
+    /// the pills' rectangles are on the canvas, so scrolling, `scroll_to` and clicks all share its coordinates.
+    pub fn with_margin(self, margin: Margin) -> Chart {
+        let (dx, dy) = (margin.horizontal, margin.vertical);
+        let area = self.buf.area;
+        let mut buf = Buffer::empty(Rect::new(0, 0, area.width + 2 * dx, area.height + 2 * dy));
+        for y in 0..area.height {
+            for x in 0..area.width {
+                buf[(x + dx, y + dy)] = self.buf[(x, y)].clone();
+            }
+        }
+        let pills = self.pills.into_iter().map(|p| Pill { rect: Rect { x: p.rect.x + dx, y: p.rect.y + dy, ..p.rect }, ..p }).collect();
+        Chart { buf, pills, columns: self.columns }
+    }
+
     pub fn pill_at(&self, x: u16, y: u16) -> Option<usize> {
         self.pills.iter().position(|p| x >= p.rect.x && x < p.rect.right() && y == p.rect.y)
     }
@@ -809,5 +824,22 @@ mod tests {
         let cell = &dst[(3, 1)];
         assert!(cell.modifier.contains(Modifier::REVERSED | Modifier::BOLD));
         assert_eq!(dst[(3, 0)].symbol(), " "); // the padding is untouched
+    }
+
+    #[test]
+    fn a_margin_moves_the_buffer_and_the_pills_together() {
+        let plain = two();
+        let c = two().with_margin(Margin { horizontal: 2, vertical: 1 });
+        assert_eq!((c.buf.area.width, c.buf.area.height), (plain.buf.area.width + 4, plain.buf.area.height + 2));
+        for (p, q) in c.pills.iter().zip(&plain.pills) {
+            assert_eq!((p.rect.x, p.rect.y), (q.rect.x + 2, q.rect.y + 1));
+            assert_eq!(c.buf[(p.rect.x + 1, p.rect.y)].symbol(), plain.buf[(q.rect.x + 1, q.rect.y)].symbol());
+            assert_eq!(c.pill_at(p.rect.x, p.rect.y), c.pills.iter().position(|r| r.key == p.key));
+        }
+        assert_eq!(c.pill_at(q_x(&plain), 0), None, "the margin is not a pill");
+    }
+
+    fn q_x(c: &Chart) -> u16 {
+        c.pills[0].rect.x
     }
 }

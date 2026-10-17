@@ -402,7 +402,7 @@ fn no_lead_in_the_chat_slot_says_so() {
     sql(&env, &(context("ctx", "g-ctx") + &lead_row("g-ctx", "ctx", "", "2026-01-01T00:00:00.000Z")));
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the message", |s| s.iter().any(|l| l.contains("no Lead")));
-    // in the message row, the last row of the window inside the margin; nothing above it
+    // in the message row, the pane's last row, indented by the margin; nothing above it
     assert_eq!(screen.iter().filter(|l| !l.is_empty()).collect::<Vec<_>>(), [&"   no Lead session in the centre".to_owned()], "{}", screen.join("\n"));
     let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
     assert!(styled.contains("2m no Lead session in the centre"), "{styled}");
