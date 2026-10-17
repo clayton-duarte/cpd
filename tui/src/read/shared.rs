@@ -292,9 +292,6 @@ pub struct PlanHead {
     pub context: ContextId,
     pub title: String,
     pub jira: Option<String>,
-    pub repo: String,
-    pub base: String,
-    pub lead_branch: String,
     pub phase: Phase,
     pub lead_session: SessionId,
     pub pr: Option<Pr>,
@@ -366,9 +363,9 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
     }
 
     let mut stmt = conn.prepare(
-        "SELECT p.id, p.context, p.title, p.jira, r.repo, r.base, r.lead_branch, p.phase, p.lead_session, r.pr_number,
+        "SELECT p.id, p.context, p.title, p.jira, p.phase, p.lead_session, r.pr_number,
                 r.pr_url, r.pr_opened_at, q.state, q.checks, p.created_at, p.locked_at, r.all_merged_at, p.done_at, p.archived_at
-           FROM plans p JOIN prs r ON r.plan = p.id
+           FROM plans p LEFT JOIN prs r ON r.plan = p.id
                 AND r.key = (SELECT key FROM prs WHERE plan = p.id ORDER BY created_txn, key LIMIT 1)
                 LEFT JOIN pull_requests q ON q.id = r.pull_request
           WHERE ?1 IS NULL OR p.id = ?1 ORDER BY p.created_at, p.id",
@@ -379,10 +376,10 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
         let pid: String = r.get(0)?;
         let plan = id("Plan id", &pid, PlanId::parse)?;
         let field = |name: &str, value: &str| bad_row(format!("Plan {plan} has {name} {value:?}"));
-        let (context, phase, lead): (String, String, String) = (r.get(1)?, r.get(7)?, r.get(8)?);
+        let (context, phase, lead): (String, String, String) = (r.get(1)?, r.get(4)?, r.get(5)?);
         let phase: Phase = value_enum(&format!("Plan {plan} has phase"), &phase)?;
-        let (row_state, row_checks): (Option<String>, Option<String>) = (r.get(12)?, r.get(13)?);
-        let pr = match (r.get::<_, Option<i64>>(9)?, r.get::<_, Option<String>>(10)?, r.get::<_, Option<String>>(11)?) {
+        let (row_state, row_checks): (Option<String>, Option<String>) = (r.get(9)?, r.get(10)?);
+        let pr = match (r.get::<_, Option<i64>>(6)?, r.get::<_, Option<String>>(7)?, r.get::<_, Option<String>>(8)?) {
             (Some(number), Some(url), Some(opened_at)) => {
                 // A PR with a number has its pull request (`prs` CHECK).
                 let checks = row_checks.ok_or_else(|| bad_row(format!("PR of Plan {plan} has no pull request row")))?;
@@ -401,17 +398,14 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
             lead_session: SessionId::parse(&lead).map_err(|_| field("lead_session", &lead))?,
             title: r.get(2)?,
             jira: r.get(3)?,
-            repo: r.get(4)?,
-            base: r.get(5)?,
-            lead_branch: r.get(6)?,
             counts: counts.remove(&pid).unwrap_or_default(),
             open_escalations: open.remove(&pid).unwrap_or(0),
             review_pending: pending.contains(&pid),
-            created_at: r.get(14)?,
-            locked_at: r.get(15)?,
-            all_merged_at: r.get(16)?,
-            done_at: r.get(17)?,
-            archived_at: r.get(18)?,
+            created_at: r.get(11)?,
+            locked_at: r.get(12)?,
+            all_merged_at: r.get(13)?,
+            done_at: r.get(14)?,
+            archived_at: r.get(15)?,
             phase,
             pr,
             id: plan,

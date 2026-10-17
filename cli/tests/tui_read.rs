@@ -465,7 +465,7 @@ fn a_plan_is_its_jobs_dependencies_attempts_and_tiers() {
     let flow = read::flow(&mut store, &plan("ship")).unwrap();
 
     assert_eq!((flow.head.id.as_str(), flow.head.context.as_str(), flow.head.phase), ("ship", "alpha", Phase::Dispatch));
-    assert_eq!((flow.head.lead_branch.as_str(), flow.head.base.as_str(), flow.head.pr.is_none()), ("cpd/ship", "main", true));
+    assert!(flow.head.pr.is_none());
     let shape: Vec<(&str, JobStatus, String, Vec<&str>, usize)> = flow
         .jobs
         .iter()
@@ -540,6 +540,37 @@ fn a_plan_carries_its_pr_and_what_the_poll_saw() {
     assert_eq!(state("shut"), Some((PrState::Closed, Checks::None)));
     assert_eq!(state("old"), Some((PrState::Merged, Checks::Passed)));
     assert_eq!(state("ship"), None);
+}
+
+/// A Plan as `plan new` leaves it: in grounding, with its Lead and no `prs` row (hs-n54).
+fn add_plan_without_pr(store: &mut Store) {
+    let lead = session_row("l-fresh", "lead", "gamma", "fresh", None, "idle", None, "2026-01-02T00:00:09.000Z");
+    sql(
+        store,
+        &format!(
+            "INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+             VALUES ('fresh', 'gamma', 'Plan fresh', 'grounding', 'l-fresh', '2026-01-02T00:00:09.000Z');
+             {lead}"
+        ),
+    );
+}
+
+#[test]
+fn a_plan_with_no_pr_is_in_the_tree_the_widgets_and_the_flow() {
+    let (_env, mut store) = fixture();
+    add_plan_without_pr(&mut store);
+
+    let tree = read::tree(&mut store).unwrap();
+    let gamma = tree.contexts.iter().find(|c| c.id.as_str() == "gamma").unwrap();
+    let [fresh] = &gamma.plans[..] else { panic!("gamma has the one Plan") };
+    assert_eq!((fresh.head.id.as_str(), fresh.head.phase, fresh.head.pr.is_none()), ("fresh", Phase::Grounding, true));
+    assert_eq!(fresh.sessions.iter().map(|s| (s.id.as_str(), s.plan_lead)).collect::<Vec<_>>(), [("l-fresh", true)]);
+
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    assert!(w.plans.iter().any(|p| p.head.id.as_str() == "fresh" && p.head.pr.is_none()));
+
+    let head = read::flow(&mut store, &plan("fresh")).unwrap().head;
+    assert_eq!((head.id.as_str(), head.phase, head.pr.is_none()), ("fresh", Phase::Grounding, true));
 }
 
 #[test]
