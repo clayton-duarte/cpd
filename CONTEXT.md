@@ -94,6 +94,10 @@ _Avoid_: dashboard, TUI session
 The one `cpd watch` per machine that schedules every Plan's Jobs under one concurrency limit, watches liveness and timeouts, polls Pull Requests, and starts a PR once the PRs it needs are merged.
 _Avoid_: daemon, scheduler, watcher per workflow
 
+**PR poll** (new):
+The engine's poll, every 5 s, of every open pull request of the User on GitHub, by one search through `gh`. It stores them (table `pull_requests`), feeds the Dispatch column, and sends `pr-feedback` only to the Lead whose PR owns the pull request that needs attention (contract §7.6). A Lead may run it by hand (`cpd pr poll`), and reads the detail with `cpd pr view`.
+_Avoid_: PR watcher, PR sync
+
 ## Roles
 
 **User**:

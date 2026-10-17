@@ -290,10 +290,12 @@ fn legacy(status: &str) -> Legacy {
     fx.env.git(&lead, &["push", "-q", "-u", "origin", "cpd/pay-1"]);
     let sha = fx.env.git(&lead, &["rev-parse", "HEAD"]);
     fx.sql(&format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
-                            pr_number, pr_url, pr_opened_at, merged_at)
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+           VALUES ('acme/pay', 1, 'u', 'T', 0, '{status}', 'none', 'none', 't', iif('{status}' = 'merged', 't', NULL), 't');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+                            pr_number, pr_url, pr_opened_at, pull_request, merged_at)
            VALUES ('pay-1', 'old', '{}', 'main', '{status}', 'cpd/pay-1', '{}', cpd_txn(), 't', 't', 1, 'u', 't',
-                   iif('{status}' = 'merged', 't', NULL));",
+                   (SELECT id FROM pull_requests WHERE number = 1), iif('{status}' = 'merged', 't', NULL));",
         fx.pay.display(),
         lead.display()
     ));

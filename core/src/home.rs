@@ -128,6 +128,11 @@ impl CpdHome {
         self.locks_dir().join("plannotator-ports.lock")
     }
 
+    /// `locks/pr-poll.lock`: held by `pr poll` for the whole poll (contract §7.6).
+    pub fn pr_poll_lock(&self) -> PathBuf {
+        self.locks_dir().join("pr-poll.lock")
+    }
+
     /// `locks/context-<context>.lock`: held while writing or syncing a Context store.
     pub fn context_lock(&self, context: &ContextId) -> PathBuf {
         self.locks_dir().join(format!("context-{context}.lock"))
@@ -283,6 +288,7 @@ mod tests {
         );
         assert_eq!(h.context_lock(&context), p("/h/.cpd/locks/context-building-cpd.lock"));
         assert_eq!(h.plannotator_ports_lock(), p("/h/.cpd/locks/plannotator-ports.lock"));
+        assert_eq!(h.pr_poll_lock(), p("/h/.cpd/locks/pr-poll.lock"));
         assert_eq!(h.plannotator_port(&plan()), p("/h/.cpd/run/pay-4521/plannotator-port"));
         assert_eq!(h.watch_log(), p("/h/.cpd/run/watch.log"));
         assert_eq!(h.plan_md(&plan()), p("/h/.cpd/run/pay-4521/plan.md"));

@@ -5,7 +5,7 @@
 //! - [`plan_boxes()`] and [`chat_slot()`]: the plan view, one Plan's PRs with their Jobs, Attempts and
 //!   Dependencies, and the Plan of the Lead in the chat slot; [`flow()`]: one Plan's Jobs, Escalations,
 //!   review and first PR (`plan show`);
-//! - [`widgets()`]: the Dispatch column, slots, the engine, PRs and their feedback,
+//! - [`widgets()`]: the Dispatch column, slots, the engine, the open pull requests,
 //!   open Escalations and the latest Events (`plan list`);
 //! - [`logs()`] and [`logs_after()`]: the Event log, the latest Events and those after a cursor (`events list`);
 //! - [`worker()`]: the worker view, an Attempt and its Worker Session (`attempt show`).
@@ -41,6 +41,6 @@ pub use shared::{
 pub use logs::{Logs, logs, logs_after};
 pub use tree::{ContextNode, PlanNode, Tree, tree};
 pub use widgets::{
-    Engine, HeldSlot, MachineEscalation, PlanCard, PolledPr, PrFeedback, PrRow, ReviewDecision, Slots, Widgets, widgets,
+    Engine, HeldSlot, MachineEscalation, OpenPr, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets, widgets,
 };
 pub use worker::{AttemptDetail, AttemptEscalation, Worker, worker};

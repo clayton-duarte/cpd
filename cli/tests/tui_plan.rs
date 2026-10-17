@@ -146,25 +146,30 @@ fn context(id: &str, lead: &str) -> String {
     )
 }
 
-/// A Plan in `phase` (`dispatch` or `pr`) with its Lead; `pr` is `(number, pr_seen)`.
+/// A Plan in `phase` (`dispatch` or `pr`) with its Lead; `pr` is `(number, checks)`.
 fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr: Option<(i64, &str)>) -> String {
-    let (number, url, opened, seen, polled) = match pr {
-        Some((n, seen)) => (
+    let (row, number, url, opened, pull_request) = match pr {
+        Some((n, checks)) => (
+            format!(
+                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+                 VALUES ('acme/repo', {n}, 'https://github.com/acme/repo/pull/{n}', 'PR {n}', 0, 'open', 'none', '{checks}',
+                         '2026-01-05T00:00:00.000Z', NULL, '2026-01-06T00:00:00.000Z');"
+            ),
             n.to_string(),
-            format!("'https://example.test/pull/{n}'"),
-            "'2026-01-05T00:00:00.000Z'".to_owned(),
-            seen.to_owned(),
-            "'2026-01-06T00:00:00.000Z'".to_owned(),
+            format!("'https://github.com/acme/repo/pull/{n}'"),
+            "'2026-01-05T00:00:00.000Z'",
+            format!("(SELECT id FROM pull_requests WHERE number = {n})"),
         ),
-        None => ("NULL".into(), "NULL".into(), "NULL".into(), r#"{"checks":{},"reviewIds":[],"commentIds":[]}"#.to_owned(), "NULL".into()),
+        None => (String::new(), "NULL".into(), "NULL".into(), "NULL", "NULL".into()),
     };
     let status = if pr.is_some() { "open" } else { "dispatch" };
     bare_plan_row(id, context, phase, lead, created)
         + &format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pr_seen,
-                          pr_polled_at, created_txn, created_at, started_at)
-         VALUES ('{id}', 'repo', '/repo', 'main', '{status}', 'cpd/{id}', '/wt', {number}, {url}, {opened}, '{seen}',
-                 {polled}, cpd_txn(), '{created}', '2026-01-02T00:00:00.000Z');"
+            "{row}
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+                          created_txn, created_at, started_at)
+         VALUES ('{id}', 'repo', '/repo', 'main', '{status}', 'cpd/{id}', '/wt', {number}, {url}, {opened}, {pull_request},
+                 cpd_txn(), '{created}', '2026-01-02T00:00:00.000Z');"
         )
 }
 
@@ -302,10 +307,13 @@ fn a_plan_of_two_prs_is_two_titled_boxes_linked_by_an_arrow() {
     let env = env();
     // `api` has its open pull request #12; `web` needs it and waits
     let mut s = bare_plan("dispatch");
-    s += r#"INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pr_seen,
+    s += r#"INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+            VALUES ('acme/api-server', 12, 'https://github.com/acme/api-server/pull/12', 'api', 0, 'open', 'none', 'none',
+                    '2026-01-05T00:00:00.000Z', NULL, '2026-01-05T00:00:00.000Z');
+            INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                           created_txn, created_at, started_at)
-            VALUES ('ship', 'api', '/src/api-server', 'main', 'open', 'cpd/ship/api', '/wt/api', 12, 'https://example.test/pull/12',
-                    '2026-01-05T00:00:00.000Z', '{"checks":{},"reviewIds":[],"commentIds":[]}', cpd_txn(), '2026-01-02T00:00:00.000Z',
+            VALUES ('ship', 'api', '/src/api-server', 'main', 'open', 'cpd/ship/api', '/wt/api', 12, 'https://github.com/acme/api-server/pull/12',
+                    '2026-01-05T00:00:00.000Z', (SELECT id FROM pull_requests WHERE number = 12), cpd_txn(), '2026-01-02T00:00:00.000Z',
                     '2026-01-02T00:00:00.000Z');
             INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
             VALUES ('ship', 'web', '/src/web', 'develop', 'waiting', 'cpd/ship/web', cpd_txn(), '2026-01-02T00:00:00.000Z');
@@ -384,8 +392,7 @@ fn the_top_row_is_the_context_id_and_one_tab_per_lead_with_a_pane_and_nothing_at
     let env = env();
     let jobs: &[(&str, &str, &str, &[&str], u32)] =
         &[("a", "merged", "O3", &[], 1), ("b", "running", "S3", &["a"], 1), ("c", "running", "S3", &["a"], 2)];
-    let seen = r#"{"checks":{"ci":"FAILURE","lint":"SUCCESS"},"reviewIds":["r1"],"commentIds":["c1","c2"]}"#;
-    let mut s = plan_with("pr", Some((7, seen)), jobs);
+    let mut s = plan_with("pr", Some((7, "failed")), jobs);
     // a side fork with a pane, one without a pane (no tab), and one whose name is blank (the Plan id labels it)
     s += &lead_row("fork-ship", "ctx", "ship", "2026-01-02T00:00:09.000Z");
     s += &parked("ctx", "ship", "fork-ship");
@@ -470,8 +477,7 @@ fn the_view_follows_events_and_switches_plan_when_the_chat_slot_changes() {
 #[test]
 fn the_view_starts_no_subprocess_and_asks_gh_nothing() {
     let env = env();
-    let seen = r#"{"checks":{"ci":"FAILURE"},"reviewIds":[],"commentIds":[]}"#;
-    sql(&env, &plan_with("pr", Some((7, seen)), &[("a", "running", "S3", &[], 1)]));
+    sql(&env, &plan_with("pr", Some((7, "failed")), &[("a", "running", "S3", &[], 1)]));
     let pane = start_view(&env);
     let pid = tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_pid}"]).trim().to_owned();
     // let it draw, follow an Event and take a new snapshot

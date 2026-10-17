@@ -1,13 +1,21 @@
-//! `pr poll` (commands.md §9.2, contract §7.6): each open PR's feedback and merge,
-//! compared with `pr_seen`.
+//! `pr poll` (commands.md §9.2, contract §7.6): one poll of every open pull
+//! request of the User, stored in `pull_requests`, and the merge of the PRs
+//! the Plans own.
 
+use std::fs::{self, OpenOptions};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
-use serde_json::json;
+use nix::errno::Errno;
+use nix::fcntl::{Flock, FlockArg};
+use serde_json::{Value, json};
 
-use super::feedback::{self, Changes, ChecksSummary, ReviewDecision, Seen};
-use super::row::{PlanRow, PrRow};
-use super::{Args, Env, gh, illegal_phase};
+use super::feedback;
+use super::gh::{self, PolledPr};
+use super::pulls::{self, Change, Reason};
+use super::row::PlanRow;
+use super::status::PrState;
+use super::{Env, PollArgs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
 use crate::git;
@@ -15,135 +23,218 @@ use crate::host::layout::attempt_window;
 use crate::host::tmux::Tmux;
 use crate::ids::{AttemptId, PlanId, PrKey};
 use crate::output::Output;
-use crate::plan::Phase;
 use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr poll";
 
-pub(super) fn poll(args: Args) -> Result<Output, CpdError> {
-    let id = args.plan.require()?.clone();
-    let mut env = Env::open()?;
-    let plan = env.plan(&id)?;
-    match plan.phase {
-        Phase::Dispatch | Phase::Pr => {}
-        Phase::Done => {
-            // Rerun the clean-up, in case the run that ended the Plan died before finishing it.
-            clean_up(&mut env, &plan)?;
-            return Ok(Output::success(json!({"plan": id, "phase": "done", "prs": [], "already": true})));
-        }
-        _ => return Err(illegal_phase(&plan, COMMAND, "dispatch or pr")),
-    }
-    // With --pr, that one; without it, every `open` PR in key order (§9.2).
-    let keys: Vec<PrKey> = match &args.pr.pr {
-        Some(_) => {
-            let pr = plan.select(&args.pr)?;
-            match pr.status.as_str() {
-                "open" => vec![pr.key.clone()],
-                "merged" => return Ok(Output::success(json!({"plan": id, "phase": plan.phase.as_str(), "prs": [], "already": true}))),
-                _ => return Err(pr.refuse(&id, COMMAND, "open")),
-            }
-        }
-        None => plan.prs.iter().filter(|p| p.status == "open").map(|p| p.key.clone()).collect(),
-    };
-    let mut polled = Vec::new();
-    for key in &keys {
-        let pr = plan.prs.iter().find(|p| p.key == *key).expect("a key taken from the Plan's own PRs");
-        polled.push(poll_pr(&mut env, &plan, pr)?);
-    }
-    let after = env.plan(&id)?;
-    if after.phase == Phase::Done {
-        clean_up(&mut env, &after)?;
-    }
-    Ok(Output::success(json!({"plan": id, "phase": after.phase.as_str(), "prs": polled})))
+/// How long `pr poll` waits for `locks/pr-poll.lock` (`lock_timeout`).
+const LOCK_WAIT: Duration = Duration::from_secs(60);
+
+/// How often the wait tries the lock again.
+const RETRY: Duration = Duration::from_millis(100);
+
+/// A pull request an `open` PR of a Plan points to.
+type Owned = (PlanId, PrKey, pulls::PullRequest);
+
+/// What the transaction did.
+#[derive(Default)]
+struct Outcome {
+    changed: Vec<Value>,
+    removed: usize,
+    feedback: Vec<(PlanId, PrKey)>,
+    merged: Vec<(PlanId, PrKey)>,
+    done: Vec<PlanId>,
 }
 
-/// Polls one `open` PR (§7.6): what `gh` says, compared with its `pr_seen`.
-fn poll_pr(env: &mut Env, plan: &PlanRow, pr: &PrRow) -> Result<serde_json::Value, CpdError> {
-    let id = &plan.id;
-    let key = &pr.key;
-    let pull = pr.pull.clone().expect("an open PR has its pull request (prs CHECK)");
-    let lead = pr.lead(id)?.clone();
-    let seen = Seen::parse(&pr.pr_seen)?;
+pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
+    let mut env = Env::open()?;
+    let selected = args.plan.plan;
+    if let Some(id) = &selected {
+        env.plan(id)?;
+    }
+    let _lock = take_lock(&env.home.pr_poll_lock())?;
+    let root = env.home.root().to_owned();
 
-    let view = gh::view(&lead, pull.number)?;
-    // Stored on every poll, together, with `pr_polled_at`, and printed (contract §7.6).
-    let decision = ReviewDecision::of(view.review_decision.as_deref());
-    let checks = ChecksSummary::of(&feedback::current_checks(&view));
-    let stored = |tx: &WriteTxn<'_>| -> rusqlite::Result<()> {
-        tx.execute(
-            "UPDATE prs SET pr_title = ?1, pr_review_decision = ?2, pr_checks = ?3 WHERE plan = ?4 AND key = ?5",
-            rusqlite::params![view.title, decision.as_str(), checks.as_str(), id.as_str(), key.as_str()],
-        )?;
-        Ok(())
-    };
-    let printed = |changes: &Changes, merged: bool| {
-        json!({
-            "pr": key, "number": pull.number, "state": view.state, "merged": merged, "title": view.title,
-            "review_decision": decision.as_str(), "checks": checks.as_str(), "changes": changes.to_json(),
-        })
-    };
-    if view.state == "MERGED" {
-        env.store.write(COMMAND, |tx| {
-            let moved = tx.execute(
-                "UPDATE prs SET status = 'merged', merged_at = (SELECT at FROM txns WHERE id = cpd_txn()),
-                        pr_polled_at = (SELECT at FROM txns WHERE id = cpd_txn())
-                  WHERE plan = ?1 AND key = ?2 AND status = 'open'",
-                [id.as_str(), key.as_str()],
-            )?;
-            if moved == 0 {
-                return Err(cas_lost(id, key));
+    let search = gh::search_open(&root)?;
+    let present: Vec<(String, i64)> = search.prs.iter().map(|p| (p.repo.clone(), p.number)).collect();
+    let owned = env.store.read(pulls::owned_open)?;
+
+    // The owned pull requests that left the open search: merged, closed, or the index lags (D3).
+    let mut absent: Vec<(String, i64)> = Vec::new();
+    for (_, _, row) in &owned {
+        let key = (row.repo.clone(), row.number);
+        if !present.contains(&key) && !absent.contains(&key) {
+            absent.push(key);
+        }
+    }
+    let looked_up = gh::lookup(&root, &absent)?;
+    let mut seen = search.prs.clone();
+    // `OPEN` is "not decided yet", `None` a pull request GitHub cannot find: nothing changes.
+    seen.extend(looked_up.into_iter().flatten().filter(|p| p.state != PrState::Open));
+
+    let dirty = env.store.read(|conn| {
+        for polled in &seen {
+            match pulls::find(conn, &polled.repo, polled.number)? {
+                Some(row) if row.polled()? == *polled => {}
+                _ => return Ok(true),
             }
-            stored(tx)?;
-            let text = format!("PR {key} (#{}) of Plan {id} is merged.", pull.number);
-            let data = json!({"pr": key, "number": pull.number, "url": pull.url, "merged_at": view.merged_at});
-            append(tx, NewEvent::new(Kind::PrMerged, text, data).plan(id.clone()))?;
-            // The last PR to merge ends the Plan (§3.1).
-            let unmerged: i64 =
-                tx.query_row("SELECT count(*) FROM prs WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled')", [id.as_str()], |r| r.get(0))?;
-            if unmerged > 0 {
-                return Ok(());
-            }
-            let moved = tx.execute(
-                "UPDATE plans SET phase = 'done', done_at = (SELECT at FROM txns WHERE id = cpd_txn())
-                  WHERE id = ?1 AND phase = 'pr'",
-                [id.as_str()],
-            )?;
-            if moved == 0 {
-                return Err(cas_lost(id, key));
-            }
-            let merged = merged_prs(tx, id, key, view.merged_at.as_deref())?;
-            let text = format!("Every PR of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}");
-            append(tx, NewEvent::new(Kind::PlanDone, text, json!({"prs": merged})).plan(id.clone()))?;
-            Ok(())
-        })?;
-        return Ok(printed(&Changes::default(), true));
+        }
+        let mut stmt = conn
+            .prepare("SELECT repo, number FROM pull_requests WHERE NOT EXISTS (SELECT 1 FROM prs WHERE prs.pull_request = pull_requests.id)")?;
+        let unowned = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(unowned.iter().any(|row| !present.contains(row)))
+    })?;
+    // A poll that finds nothing new opens no write transaction (D5).
+    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &present, &owned))? } else { Outcome::default() };
+
+    // After the transaction: the clean-up of each Plan that became `done`, and of the selected one when it already was.
+    for id in &outcome.done {
+        let plan = env.plan(id)?;
+        clean_up(&mut env, &plan)?;
+    }
+    let mut printed_prs = None;
+    if let Some(id) = &selected {
+        let plan = env.plan(id)?;
+        if plan.phase == crate::plan::Phase::Done && !outcome.done.contains(id) {
+            // Rerun the clean-up, in case the run that ended the Plan died before finishing it.
+            clean_up(&mut env, &plan)?;
+        }
+        printed_prs = Some(plan_prs(&mut env, &plan)?);
     }
 
-    let inline = gh::inline_comments(&lead, pull.number)?;
-    let (changes, mut next) = feedback::diff(&seen, &view, &inline);
-    let closed = view.state == "CLOSED";
-    // The closure is reported once; the mark goes when the PR is open again.
-    let closure = closed && seen.closed != Some(true);
-    next.closed = closed.then_some(true);
+    let pair = |(plan, pr): &(PlanId, PrKey)| json!({"plan": plan, "pr": pr});
+    let mut out = json!({
+        "polled": search.prs.len(),
+        "changed": outcome.changed,
+        "removed": outcome.removed,
+        "feedback": outcome.feedback.iter().map(pair).collect::<Vec<_>>(),
+        "merged": outcome.merged.iter().map(pair).collect::<Vec<_>>(),
+        "done": outcome.done,
+        "rate_limit": {"cost": search.rate.cost, "remaining": search.rate.remaining, "reset_at": search.rate.reset_at},
+    });
+    if let Some(prs) = printed_prs {
+        out["prs"] = Value::Array(prs);
+    }
+    Ok(Output::success(out))
+}
 
-    env.store.write(COMMAND, |tx| {
-        let moved = tx.execute(
-            "UPDATE prs SET pr_seen = ?1, pr_polled_at = (SELECT at FROM txns WHERE id = cpd_txn())
-              WHERE plan = ?2 AND key = ?3 AND status = 'open' AND pr_seen = ?4",
-            rusqlite::params![next.to_text(), id.as_str(), key.as_str(), pr.pr_seen],
-        )?;
-        if moved == 0 {
-            return Err(cas_lost(id, key));
+/// `flock` on `path`, waiting at most [`LOCK_WAIT`]: `lock_timeout` (exit 5). The
+/// descriptor stays open while waiting.
+fn take_lock(path: &Path) -> Result<Flock<fs::File>, CpdError> {
+    let failed = |what: &dyn std::fmt::Display| {
+        CpdError::new(ErrorCode::StoreFailed, format!("Cannot use the lock {}: {what}.", path.display())).with("lock", path.display().to_string())
+    };
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| failed(&e))?;
+    }
+    let mut file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| failed(&e))?;
+    let deadline = Instant::now() + LOCK_WAIT;
+    loop {
+        match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
+            Ok(lock) => return Ok(lock),
+            Err((back, Errno::EWOULDBLOCK | Errno::EINTR)) => file = back,
+            Err((_, errno)) => return Err(failed(&format!("flock failed: {errno}"))),
         }
-        stored(tx)?;
-        if !changes.is_empty() || closure {
-            let text = feedback::text(id.as_str(), key.as_str(), pull.number, &changes, closure);
-            let data = feedback::data(key.as_str(), &changes, &view.state);
-            append(tx, NewEvent::new(Kind::PrFeedback, text, data).plan(id.clone()))?;
+        if Instant::now() >= deadline {
+            return Err(CpdError::new(
+                ErrorCode::LockTimeout,
+                format!("Another pr poll held {} for longer than {}s.", path.display(), LOCK_WAIT.as_secs()),
+            )
+            .with("lock", path.display().to_string())
+            .with("waited_seconds", LOCK_WAIT.as_secs()));
         }
-        Ok(())
-    })?;
-    Ok(printed(&changes, false))
+        std::thread::sleep(RETRY);
+    }
+}
+
+/// The one write transaction (D5, D7): every changed row, the Events of the
+/// owning Plans, the rows that left the search.
+fn apply(tx: &WriteTxn<'_>, seen: &[PolledPr], present: &[(String, i64)], owned: &[Owned]) -> Result<Outcome, CpdError> {
+    let mut out = Outcome::default();
+    for polled in seen {
+        // A merged row needs a merge time: GitHub's, else this poll's.
+        let mut polled = polled.clone();
+        if polled.state == PrState::Merged && polled.merged_at.is_none() {
+            polled.merged_at = Some(pulls::txn_time(tx)?);
+        }
+        let Some(change) = pulls::upsert(tx, &polled)? else { continue };
+        let after = &change.after;
+        out.changed.push(json!({
+            "repo": after.repo, "number": after.number, "state": after.state, "draft": after.draft,
+            "checks": after.checks, "review_decision": after.review_decision,
+        }));
+        for (plan, key, _) in owned.iter().filter(|(_, _, row)| row.id == after.id) {
+            if polled.state == PrState::Merged {
+                out.merged.push((plan.clone(), key.clone()));
+                if merge(tx, plan, key, after)? {
+                    out.done.push(plan.clone());
+                }
+            } else if tell(tx, plan, key, &change)? {
+                out.feedback.push((plan.clone(), key.clone()));
+            }
+        }
+    }
+    out.removed = pulls::delete_unowned_absent(tx, present)?;
+    Ok(out)
+}
+
+/// D7: `pr-feedback` to the Plan, when the change needs its attention.
+fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, change: &Change) -> Result<bool, CpdError> {
+    let reasons: Vec<Reason> = pulls::attention(change.before.as_ref(), &change.after);
+    if reasons.is_empty() {
+        return Ok(false);
+    }
+    let text = feedback::text(plan.as_str(), key.as_str(), change.after.number, &reasons);
+    let data = feedback::data(key.as_str(), &change.after, &reasons);
+    append(tx, NewEvent::new(Kind::PrFeedback, text, data).plan(plan.clone()))?;
+    Ok(true)
+}
+
+/// The PR `key` of the Plan is merged on GitHub (§7.6): `prs` `merged`,
+/// `pr-merged`, and, when it was the last PR, the Plan `done` with `plan-done`
+/// (§3.1). Whether the Plan became `done`.
+fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest) -> Result<bool, CpdError> {
+    let moved = tx.execute(
+        "UPDATE prs SET status = 'merged', merged_at = (SELECT at FROM txns WHERE id = cpd_txn())
+          WHERE plan = ?1 AND key = ?2 AND status = 'open'",
+        [id.as_str(), key.as_str()],
+    )?;
+    if moved == 0 {
+        return Err(cas_lost(id, key));
+    }
+    let text = format!("PR {key} (#{}) of Plan {id} is merged.", pull.number);
+    let data = json!({"pr": key, "number": pull.number, "url": pull.url, "merged_at": pull.merged_at});
+    append(tx, NewEvent::new(Kind::PrMerged, text, data).plan(id.clone()))?;
+    // The last PR to merge ends the Plan (§3.1).
+    let unmerged: i64 =
+        tx.query_row("SELECT count(*) FROM prs WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled')", [id.as_str()], |r| r.get(0))?;
+    if unmerged > 0 {
+        return Ok(false);
+    }
+    let moved = tx.execute(
+        "UPDATE plans SET phase = 'done', done_at = (SELECT at FROM txns WHERE id = cpd_txn())
+          WHERE id = ?1 AND phase = 'pr'",
+        [id.as_str()],
+    )?;
+    if moved == 0 {
+        return Err(cas_lost(id, key));
+    }
+    let merged = merged_prs(tx, id, key, pull.merged_at.as_deref())?;
+    let text = format!("Every PR of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}");
+    append(tx, NewEvent::new(Kind::PlanDone, text, json!({"prs": merged})).plan(id.clone()))?;
+    Ok(true)
+}
+
+/// `[{key, status, pull_request}]` of the Plan's PRs that are not `cancelled`, in key order.
+fn plan_prs(env: &mut Env, plan: &PlanRow) -> Result<Vec<Value>, CpdError> {
+    env.store.read(|conn| {
+        plan.live()
+            .map(|pr| {
+                let row = pr.pull_request.map(|id| pulls::load(conn, id)).transpose()?;
+                Ok(json!({"key": pr.key, "status": pr.status, "pull_request": row.map(|r| r.to_json())}))
+            })
+            .collect()
+    })
 }
 
 /// `[{key, number, url, merged_at}]` of every PR that is not `cancelled`, in key
