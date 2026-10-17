@@ -103,3 +103,30 @@ pub fn current_branch(dir: &Path) -> Result<Option<String>, CpdError> {
         )),
     }
 }
+
+/// Whether `origin` has `refs/heads/<branch>` (`git ls-remote --heads origin`); a failure is
+/// `push_failed`, as the delete it guards.
+pub fn remote_has_branch(dir: &Path, branch: &str) -> Result<bool, CpdError> {
+    let reference = format!("refs/heads/{branch}");
+    let out = run(dir, &["ls-remote", "--heads", "origin", &reference])?;
+    if out.code != 0 {
+        return Err(push_failed(dir, branch, &out.stderr));
+    }
+    Ok(out.stdout.lines().any(|line| line.split_whitespace().nth(1) == Some(reference.as_str())))
+}
+
+/// `git push origin --delete <branch>`; a failure is `push_failed` (`branch`, `repo`, `stderr`).
+pub fn delete_remote_branch(dir: &Path, branch: &str) -> Result<(), CpdError> {
+    let out = run(dir, &["push", "origin", "--delete", branch])?;
+    if out.code != 0 {
+        return Err(push_failed(dir, branch, &out.stderr));
+    }
+    Ok(())
+}
+
+fn push_failed(dir: &Path, branch: &str, stderr: &str) -> CpdError {
+    CpdError::new(ErrorCode::PushFailed, format!("Cannot delete {branch} on origin of {}.", dir.display()))
+        .with("branch", branch)
+        .with("repo", dir.display().to_string())
+        .with("stderr", tail(stderr, TAIL_LINES))
+}
