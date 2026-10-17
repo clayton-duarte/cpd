@@ -7,10 +7,12 @@
 //! - [`widgets`]: the Dispatch column and the key legend (`tui view legend`), with the shared [`palette`];
 //! - [`logs`]: the Event log, a popup of the StatusBar (R36);
 //! - [`statusbar`]: the StatusBar, the bottom row, with reset-layout;
+//! - [`history`]: an archived Session's pi file, read-only, in the chat slot;
 //! - [`tree`], [`plan`], [`worker`]: the other views of §13.2.
 
 mod chat;
 mod cockpit;
+mod history;
 pub mod logs;
 pub mod palette;
 mod plan;
@@ -62,6 +64,8 @@ pub enum View {
     Statusbar,
     /// An Attempt's Worker, read-only (beside the chat)
     Worker(worker::Args),
+    /// An archived Session's history, read-only (the chat slot)
+    History(history::Args),
     /// The key legend (opened by `?` in the Dispatch column, in a tmux popup)
     Legend,
     /// The Event log (opened by the StatusBar's logs button, in a tmux popup)
@@ -79,6 +83,7 @@ pub fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdError> {
             View::Widgets => widgets::run(),
             View::Statusbar => statusbar::run(),
             View::Worker(args) => worker::run(args),
+            View::History(args) => history::run(args),
             View::Legend => widgets::legend::run(),
             View::Logs => logs::run(),
             View::Chat => chat::run(),
