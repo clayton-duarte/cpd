@@ -41,14 +41,26 @@ impl Fx {
     /// A PR of `pay-1` in `status`, with the columns that status requires.
     fn pr(&self, key: &str, status: &str, needs: &[&str]) {
         let (worktree, started, pull) = match status {
-            "waiting" | "cancelled" => ("NULL".to_owned(), "NULL", "NULL, NULL, NULL"),
-            "dispatch" => (format!("'/r/pay.pay-1.{key}'"), "'2000-01-01T00:00:01.000Z'", "NULL, NULL, NULL"),
-            "open" => (format!("'/r/pay.pay-1.{key}'"), "'2000-01-01T00:00:01.000Z'", "7, 'https://gh/pull/7', '2000-01-01T00:00:02.000Z'"),
+            "waiting" | "cancelled" => ("NULL".to_owned(), "NULL", "NULL, NULL, NULL, NULL"),
+            "dispatch" => (format!("'/r/pay.pay-1.{key}'"), "'2000-01-01T00:00:01.000Z'", "NULL, NULL, NULL, NULL"),
+            "open" => (
+                format!("'/r/pay.pay-1.{key}'"),
+                "'2000-01-01T00:00:01.000Z'",
+                "7, 'https://github.com/acme/api/pull/7', '2000-01-01T00:00:02.000Z', (SELECT id FROM pull_requests WHERE number = 7)",
+            ),
             other => panic!("no fixture for {other}"),
+        };
+        let row = if status == "open" {
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+             VALUES ('acme/api', 7, 'https://github.com/acme/api/pull/7', 'Add api', 0, 'open', 'approved', 'passed',
+                     '2000-01-01T00:00:02.000Z', NULL, '2000-01-01T00:00:03.000Z');"
+        } else {
+            ""
         };
         let needs: String = needs.iter().map(|n| format!("INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay-1', '{key}', '{n}');")).collect();
         self.sql(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+            "{row}
+             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                               created_txn, created_at, started_at)
              VALUES ('pay-1', '{key}', '/r/{key}', 'main', '{status}', 'cpd/pay-1/{key}', {worktree}, {pull}, cpd_txn(), 't', {started});
              {needs}"
@@ -81,6 +93,12 @@ impl Fx {
         let text = fs::read_to_string(out["path"].as_str().unwrap()).unwrap();
         (out, text)
     }
+}
+
+/// The pull request row `Fx::pr` writes for an `open` PR, as `plan show` and `plan list` print it.
+fn pull_request() -> Value {
+    json!({"repo": "acme/api", "number": 7, "url": "https://github.com/acme/api/pull/7", "title": "Add api", "draft": false,
+           "state": "open", "review_decision": "approved", "checks": "passed", "created_at": "2000-01-01T00:00:02.000Z", "merged_at": null})
 }
 
 fn keys(values: &Value) -> Vec<&str> {
@@ -131,8 +149,7 @@ fn show_with_one_pr_lists_its_fields_and_its_jobs() {
         prs[0],
         json!({"key": "pay", "repo": "/r/pay", "base": "main", "needs": [], "status": "dispatch",
                "lead_branch": "cpd/pay-1/pay", "lead_worktree": "/r/pay.pay-1.pay",
-               "pr": null, "pr_seen": {"checks": {}, "reviewIds": [], "commentIds": []},
-               "pr_title": null, "pr_review_decision": null, "pr_checks": null, "all_merged_at": null, "start_failed_at": null,
+               "pr": null, "pull_request": null, "all_merged_at": null, "start_failed_at": null,
                "created_at": "t", "started_at": "2000-01-01T00:00:01.000Z", "merged_at": null,
                "jobs": ["a", "b", "gone"]})
     );
@@ -152,7 +169,7 @@ fn list_with_one_pr_has_the_dispatch_columns() {
     assert_eq!(plan["counts"], json!({"draft": 2, "queued": 0, "running": 0, "merged": 0, "failed": 0, "cancelled": 1}));
     assert_eq!(
         plan["prs"],
-        json!([{"key": "pay", "repo": "/r/pay", "status": "dispatch", "pr": null, "pr_title": null, "pr_review_decision": null, "pr_checks": null}])
+        json!([{"key": "pay", "repo": "/r/pay", "status": "dispatch", "pr": null, "pull_request": null}])
     );
 }
 
@@ -182,7 +199,6 @@ fn two_prs() -> Fx {
     fx.pr("z-api", "open", &[]);
     fx.pr("a-web", "waiting", &["z-api"]);
     fx.pr("old", "cancelled", &[]);
-    fx.sql("UPDATE prs SET pr_title = 'Add api', pr_review_decision = 'approved', pr_checks = 'passed' WHERE key = 'z-api'");
     fx.job("api-1", "z-api", "draft", &[]);
     fx.job("api-2", "z-api", "draft", &["api-1"]);
     fx.job("web-1", "a-web", "draft", &[]);
@@ -200,8 +216,9 @@ fn show_with_two_prs_lists_every_pr_in_key_order_with_its_jobs() {
     let (web, api, old) = (by_key("a-web"), by_key("z-api"), by_key("old"));
     assert_eq!((&web["status"], &web["needs"], &web["lead_worktree"], &web["started_at"], &web["jobs"]), (&json!("waiting"), &json!(["z-api"]), &Value::Null, &Value::Null, &json!(["web-1"])));
     assert_eq!((&api["status"], &api["needs"], &api["jobs"]), (&json!("open"), &json!([]), &json!(["api-1", "api-2"])));
-    assert_eq!(api["pr"], json!({"number": 7, "url": "https://gh/pull/7", "opened_at": "2000-01-01T00:00:02.000Z"}));
-    assert_eq!((&api["pr_title"], &api["pr_review_decision"], &api["pr_checks"]), (&json!("Add api"), &json!("approved"), &json!("passed")));
+    assert_eq!(api["pr"], json!({"number": 7, "url": "https://github.com/acme/api/pull/7", "opened_at": "2000-01-01T00:00:02.000Z"}));
+    assert_eq!(api["pull_request"], pull_request());
+    assert_eq!((&web["pull_request"], &old["pull_request"]), (&Value::Null, &Value::Null));
     assert_eq!((&old["status"], &old["jobs"]), (&json!("cancelled"), &json!(["old-1"])));
     assert_eq!(keys(&show["jobs"]), ["api-1", "api-2", "web-1", "old-1"], "Jobs in seq order");
     let job_pr: Vec<&str> = show["jobs"].as_array().unwrap().iter().map(|j| j["pr"].as_str().unwrap()).collect();
@@ -215,11 +232,11 @@ fn list_with_two_prs_has_each_prs_columns_in_key_order() {
     assert_eq!(
         plan["prs"],
         json!([
-            {"key": "a-web", "repo": "/r/a-web", "status": "waiting", "pr": null, "pr_title": null, "pr_review_decision": null, "pr_checks": null},
-            {"key": "old", "repo": "/r/old", "status": "cancelled", "pr": null, "pr_title": null, "pr_review_decision": null, "pr_checks": null},
+            {"key": "a-web", "repo": "/r/a-web", "status": "waiting", "pr": null, "pull_request": null},
+            {"key": "old", "repo": "/r/old", "status": "cancelled", "pr": null, "pull_request": null},
             {"key": "z-api", "repo": "/r/z-api", "status": "open",
-             "pr": {"number": 7, "url": "https://gh/pull/7", "opened_at": "2000-01-01T00:00:02.000Z"},
-             "pr_title": "Add api", "pr_review_decision": "approved", "pr_checks": "passed"},
+             "pr": {"number": 7, "url": "https://github.com/acme/api/pull/7", "opened_at": "2000-01-01T00:00:02.000Z"},
+             "pull_request": pull_request()},
         ])
     );
     assert_eq!(plan["counts"], json!({"draft": 3, "queued": 0, "running": 0, "merged": 0, "failed": 0, "cancelled": 1}));

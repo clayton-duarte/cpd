@@ -29,6 +29,15 @@ fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     Ok(())
 }
 
+/// The pull request row (`acme/<repo>#<number>`, migration 5) that a PR in status `open` (or `merged`) points to.
+fn pull_request(repo: &str, number: i64, state: &str) -> String {
+    let merged = if state == "merged" { "'t'" } else { "NULL" };
+    format!(
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+         VALUES ('acme/{repo}', {number}, 'https://github.com/acme/{repo}/pull/{number}', 'T', 0, '{state}', 'none', 'none', 't', {merged}, 't');"
+    )
+}
+
 /// Runs `sql` in one write transaction.
 fn fixture(env: &TestEnv, sql: &str) {
     store(env).write("fixture", |tx| exec(tx, sql)).unwrap();
@@ -72,7 +81,7 @@ fn plan(env: &TestEnv, id: &str, phase: &str) {
     const STEPS: [(&str, &str, &str, &str); 4] = [
         ("plan", "", "waiting", ""),
         ("dispatch", ", locked_at = 't'", "dispatch", ", lead_worktree = '/wt', started_at = 't'"),
-        ("pr", "", "open", ", pr_number = 1, pr_url = 'u', pr_opened_at = 't'"),
+        ("pr", "", "open", ", pr_number = 1, pr_url = 'https://github.com/acme/{id}/pull/1', pr_opened_at = 't', pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/{id}')"),
         ("done", ", done_at = 't'", "merged", ", merged_at = 't'"),
     ];
     let mut sql = format!(
@@ -87,7 +96,13 @@ fn plan(env: &TestEnv, id: &str, phase: &str) {
         let last = STEPS.iter().position(|(p, ..)| *p == phase).unwrap_or_else(|| panic!("{phase}"));
         for (step, set, status, pr_set) in &STEPS[..=last] {
             sql += &format!("UPDATE plans SET phase = '{step}'{set} WHERE id = '{id}';");
-            sql += &format!("UPDATE prs SET status = '{status}'{pr_set} WHERE plan = '{id}';");
+            if *step == "pr" {
+                sql += &pull_request(id, 1, "open");
+            }
+            sql += &format!("UPDATE prs SET status = '{status}'{} WHERE plan = '{id}';", pr_set.replace("{id}", id));
+            if *step == "done" {
+                sql += &format!("UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE repo = 'acme/{id}';");
+            }
         }
     }
     fixture(env, &sql);
@@ -257,8 +272,13 @@ fn add_in_phase_dispatch_or_pr_appends_a_queued_job_with_its_fingerprint() {
         if phase == "pr" {
             fixture(
                 &env,
-                "UPDATE plans SET phase = 'pr' WHERE id = 'pl';
-                 UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'u', pr_opened_at = 't' WHERE plan = 'pl';",
+                &format!(
+                    "UPDATE plans SET phase = 'pr' WHERE id = 'pl';
+                     {}
+                     UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/pl/pull/1', pr_opened_at = 't',
+                            pull_request = (SELECT id FROM pull_requests WHERE number = 1) WHERE plan = 'pl';",
+                    pull_request("pl", 1, "open")
+                ),
             );
         }
         let out = job_add(&env, "pl", "late", "H1", &["a"]).ok();
@@ -763,9 +783,10 @@ fn show_has_every_field_the_needs_and_the_attempts_with_their_escalations() {
 fn add_pr(env: &TestEnv, plan_id: &str, key: &str, status: &str) {
     const STEPS: [(&str, &str); 3] = [
         ("dispatch", ", lead_worktree = '/wt', started_at = 't'"),
-        ("open", ", pr_number = 1, pr_url = 'u', pr_opened_at = 't'"),
+        ("open", ", pr_number = 1, pr_url = 'https://github.com/acme/{repo}/pull/1', pr_opened_at = 't', pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/{repo}')"),
         ("merged", ", merged_at = 't'"),
     ];
+    let repo = format!("{plan_id}-{key}");
     let mut sql = format!(
         "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
          VALUES ('{plan_id}', '{key}', '/{key}', 'main', 'waiting', 'cpd/{plan_id}/{key}', cpd_txn(), 't');"
@@ -776,7 +797,13 @@ fn add_pr(env: &TestEnv, plan_id: &str, key: &str, status: &str) {
         _ => {
             let last = STEPS.iter().position(|(s, _)| *s == status).unwrap_or_else(|| panic!("{status}"));
             for (step, set) in &STEPS[..=last] {
-                sql += &format!("UPDATE prs SET status = '{step}'{set} WHERE plan = '{plan_id}' AND key = '{key}';");
+                if *step == "open" {
+                    sql += &pull_request(&repo, 1, "open");
+                }
+                sql += &format!("UPDATE prs SET status = '{step}'{} WHERE plan = '{plan_id}' AND key = '{key}';", set.replace("{repo}", &repo));
+                if *step == "merged" {
+                    sql += &format!("UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE repo = 'acme/{repo}';");
+                }
             }
         }
     }
@@ -864,9 +891,19 @@ fn add_into_a_merged_pr_is_refused_and_into_a_waiting_pr_is_appended() {
     job_add_in(&env, "pl", "a", Some("repo"), &[]).ok();
     lock(&env, "pl");
     // `lock` starts every PR; put `web` back as the engine would find a PR waiting on `repo`.
-    fixture(&env, "UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'u', pr_opened_at = 't' WHERE plan = 'pl' AND key = 'repo';
-                   UPDATE prs SET status = 'open', pr_number = 2, pr_url = 'u', pr_opened_at = 't' WHERE plan = 'pl' AND key = 'web';
-                   UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pl' AND key = 'repo';");
+    fixture(
+        &env,
+        &format!(
+            "{} {}
+             UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/repo/pull/1', pr_opened_at = 't',
+                    pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/repo') WHERE plan = 'pl' AND key = 'repo';
+             UPDATE prs SET status = 'open', pr_number = 2, pr_url = 'https://github.com/acme/web/pull/2', pr_opened_at = 't',
+                    pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/web') WHERE plan = 'pl' AND key = 'web';
+             UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pl' AND key = 'repo';",
+            pull_request("repo", 1, "merged"),
+            pull_request("web", 2, "open")
+        ),
+    );
     let e = refused(&job_add_in(&env, "pl", "k", Some("repo"), &[]), "pr_ended", 3);
     assert_eq!(e["details"]["status"], "merged");
     let out = job_add_in(&env, "pl", "k", Some("web"), &[]).ok();

@@ -4,7 +4,10 @@
 use serde_json::json;
 
 use super::row::{PlanRow, PrRow};
-use super::{Args, Env, gate, gh, illegal_phase, lock, require_clean};
+use super::gh::{self, PolledPr};
+use super::pulls;
+use super::status::{ChecksSummary, PrState, ReviewDecision};
+use super::{Args, Env, gate, illegal_phase, lock, require_clean};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
 use crate::git;
@@ -42,18 +45,35 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     drop(lock);
 
     // An earlier run that died before its transaction already created the PR: adopt it.
+    let title = title(&plan, &key);
     let found = match gh::open_pr(&lead, &pr.lead_branch)? {
         Some(found) => found,
-        None => {
-            let title = title(&plan, &key);
-            gh::create_pr(&lead, &pr.base, &pr.lead_branch, &title, &summary(&title, &list))?
-        }
+        None => gh::create_pr(&lead, &pr.base, &pr.lead_branch, &title, &summary(&title, &list))?,
     };
+    let (repo, _) = pulls::parse_url(&found.url).ok_or_else(|| {
+        CpdError::new(ErrorCode::GhFailed, format!("gh printed the pull request URL {:?}, which is not https://github.com/<owner>/<name>/pull/<n>.", found.url))
+            .with("url", found.url.as_str())
+    })?;
     let phase = env.store.write(COMMAND, |tx| {
+        // The pull request's row (D6): inserted, or kept as the poll wrote it when it stored it first.
+        let row = PolledPr {
+            repo,
+            number: found.number,
+            url: found.url.clone(),
+            title,
+            draft: false,
+            state: PrState::Open,
+            review_decision: ReviewDecision::None,
+            checks: ChecksSummary::None,
+            created_at: pulls::txn_time(tx)?,
+            merged_at: None,
+        };
+        let pull_request = pulls::ensure(tx, &row)?;
         let moved = tx.execute(
-            "UPDATE prs SET status = 'open', pr_number = ?1, pr_url = ?2, pr_opened_at = (SELECT at FROM txns WHERE id = cpd_txn())
-              WHERE plan = ?3 AND key = ?4 AND status = 'dispatch'",
-            rusqlite::params![found.number, found.url, id.as_str(), key.as_str()],
+            "UPDATE prs SET status = 'open', pr_number = ?1, pr_url = ?2, pr_opened_at = (SELECT at FROM txns WHERE id = cpd_txn()),
+                    pull_request = ?3
+              WHERE plan = ?4 AND key = ?5 AND status = 'dispatch'",
+            rusqlite::params![found.number, found.url, pull_request, id.as_str(), key.as_str()],
         )?;
         if moved == 0 {
             return Err(cas_lost(&id, &key));

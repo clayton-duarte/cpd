@@ -543,7 +543,7 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
     assert_eq!((&plan["id"], &plan["phase"]), (&json!("pay"), &json!("plan")));
     let pr = &out["prs"][0];
     assert_eq!((&pr["lead_worktree"], &pr["pr"]), (&Value::Null, &Value::Null));
-    assert_eq!(pr["pr_seen"], json!({"checks": {}, "reviewIds": [], "commentIds": []}));
+    assert_eq!(pr["pull_request"], Value::Null);
     let jobs = out["jobs"].as_array().unwrap();
     assert_eq!(jobs.len(), 2);
     assert_eq!((&jobs[1]["key"], &jobs[1]["needs"], &jobs[1]["status"]), (&json!("b"), &json!(["a"]), &json!("draft")));
@@ -1192,7 +1192,16 @@ fn a_plan_in_phase_pr_with_no_live_job_archives() {
         .write("fixture", |tx| {
             exec(tx, "UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay'")?;
             exec(tx, "UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'pay'")?;
-            exec(tx, "UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'u', pr_opened_at = 't' WHERE plan = 'pay'")?;
+            exec(
+                tx,
+                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
+                 VALUES ('acme/pay', 1, 'https://github.com/acme/pay/pull/1', 'Pay', 0, 'open', 'none', 'none', 't', 't')",
+            )?;
+            exec(
+                tx,
+                "UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/pay/pull/1', pr_opened_at = 't',
+                        pull_request = (SELECT id FROM pull_requests WHERE number = 1) WHERE plan = 'pay'",
+            )?;
             exec(tx, "UPDATE plans SET phase = 'pr' WHERE id = 'pay'")
         })
         .unwrap();

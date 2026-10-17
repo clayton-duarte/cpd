@@ -11,7 +11,7 @@ use crate::events::highest_id;
 use crate::output::Output;
 
 /// What the Dispatch column shows of a PR (§13.2, §17).
-const PR_FIELDS: [&str; 7] = ["key", "repo", "status", "pr", "pr_title", "pr_review_decision", "pr_checks"];
+const PR_FIELDS: [&str; 5] = ["key", "repo", "status", "pr", "pull_request"];
 
 pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
