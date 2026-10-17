@@ -167,8 +167,11 @@ fn contract_ddl_blocks() -> Vec<String> {
     section.split("```sql\n").skip(1).map(|b| b.split("```").next().unwrap().to_owned()).collect()
 }
 
+/// The SQL without its `--` comments and with its whitespace collapsed: comments are
+/// documentation, not schema (a migration cannot change one without rebuilding the table).
 fn normalized(sql: &str) -> String {
-    sql.split_whitespace().collect::<Vec<_>>().join(" ")
+    let code: Vec<&str> = sql.lines().map(|line| line.split("--").next().unwrap_or_default()).collect();
+    code.join(" ").split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// `(name, sql)` of every table, index and trigger in `conn`, normalized: a
