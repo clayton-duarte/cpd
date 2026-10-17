@@ -187,26 +187,28 @@ fn column(height: u16) -> (Vec<String>, Buffer) {
 fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let env = TestEnv::new();
     let w = read::widgets(&mut open(&env), 3, 0).unwrap();
-    let mut terminal = Terminal::new(TestBackend::new(30, 14)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
     let machine = Machine { name: "homeserver".to_owned(), load: ["0.1", "0.2", "0.3"].map(str::to_owned).to_vec() };
     terminal.draw(|f| widgets::draw(f, f.area(), &w, &machine)).unwrap();
     let lines = rows(terminal.backend().buffer());
     let head = |title: &str| format!("── {title} {}", "─".repeat(30 - 4 - title.chars().count()));
     assert_eq!(lines[..3], ["", " homeserver", " load 0.1 0.2 0.3"]);
-    assert_eq!(lines[3], head("PRs"));
-    assert_eq!(lines[4], " no Plans in the cockpit");
-    assert_eq!(lines[5..], ["", "", "", "", "", head("git").as_str(), " (future)", head("Jira").as_str(), " (future)"]);
+    assert_eq!(lines[3..6], ["", head("PRs").as_str(), ""]);
+    assert_eq!(lines[6], " no Plans in the cockpit");
+    assert_eq!(lines[7..], ["", "", "", "", "", "", head("git").as_str(), "", " (future)", "", head("Jira").as_str(), "", " (future)"]);
 }
 
 #[test]
 fn the_column_shows_the_machine_the_cockpits_prs_git_and_jira() {
-    let (got, _) = column(25);
+    let (got, _) = column(29);
     let (prs, git, jira) = (header("PRs"), header("git"), header("Jira"));
     let expected = [
         "",
         " homeserver",
         " load 3.70 3.05 4.84",
+        "",
         prs.as_str(),
+        "",
         " cpd-ui",
         "  #3 merged ✓ no review  cpd-ui: cockpit rows",
         " cpd visual lead",
@@ -218,18 +220,27 @@ fn the_column_shows_the_machine_the_cockpits_prs_git_and_jira() {
         "",
         "",
         "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
         git.as_str(),
+        "",
         " (future)",
+        "",
         jira.as_str(),
+        "",
         " (future)",
     ];
     assert_eq!(got, expected, "\n{}", got.join("\n"));
+}
+
+#[test]
+fn each_section_header_has_a_blank_row_above_and_below() {
+    for height in [20, 25, 29] {
+        let (got, _) = column(height);
+        for title in ["PRs", "git", "Jira"] {
+            let at = got.iter().position(|r| *r == header(title)).unwrap_or_else(|| panic!("{title} at {height}:\n{got:#?}"));
+            assert_eq!(got[at - 1], "", "above {title} at {height}:\n{got:#?}");
+            assert_eq!(got[at + 1], "", "below {title} at {height}:\n{got:#?}");
+        }
+    }
 }
 
 #[test]
@@ -241,7 +252,7 @@ fn only_plans_whose_lead_is_in_the_chat_slot_or_parked_are_listed() {
         ["old", "rel", "fresh", "ship", "sketch", "away", "never"].map(place),
         [Place::Chat, Place::Parked, Place::Parked, Place::Chat, Place::None, Place::Work, Place::None]
     );
-    let got = rows(&render(46, 25, &w)).join("\n");
+    let got = rows(&render(46, 29, &w)).join("\n");
     for listed in ["cpd-ui", "cpd visual lead", "fresh lead", "v1"] {
         assert!(got.contains(listed), "{listed}");
     }
@@ -251,12 +262,12 @@ fn only_plans_whose_lead_is_in_the_chat_slot_or_parked_are_listed() {
     // The latest move wins: `ship` leaves the cockpit.
     sql(&mut store, &moved("2026-01-04T00:00:00.000Z", "ship", "work"));
     let w = read::widgets(&mut store, 3, 0).unwrap();
-    assert!(!rows(&render(46, 25, &w)).join("\n").contains("v1"));
+    assert!(!rows(&render(46, 29, &w)).join("\n").contains("v1"));
 }
 
 #[test]
 fn the_column_has_no_engine_slots_escalations_events_or_hint() {
-    let (got, _) = column(25);
+    let (got, _) = column(29);
     let all = got.join("\n");
     for gone in ["Engine", "Slots", "Escalations", "Events", "legend", "quit"] {
         assert!(!all.contains(gone), "{gone}:\n{all}");
@@ -265,7 +276,7 @@ fn the_column_has_no_engine_slots_escalations_events_or_hint() {
 
 #[test]
 fn the_column_takes_every_colour_from_the_palette() {
-    let (_, buf) = column(25);
+    let (_, buf) = column(29);
     let fg = |at: (u16, u16)| buf[at].fg;
     let c = palette::color;
     // The PRs: state and checks.
@@ -304,14 +315,14 @@ fn the_column_takes_every_colour_from_the_palette() {
 fn a_narrow_column_cuts_the_title_first_then_the_label_and_never_wraps() {
     let (_env, mut store) = fixture();
     let w = read::widgets(&mut store, 3, 0).unwrap();
-    let wide = rows(&render(33, 25, &w));
+    let wide = rows(&render(33, 29, &w));
     assert!(wide.contains(&"  #7 open ✗ changes requested".to_owned()), "no room for a title of 4 characters:\n{wide:#?}");
-    let got = rows(&render(24, 25, &w));
+    let got = rows(&render(24, 29, &w));
     assert!(got.iter().all(|r| r.chars().count() <= 24), "{got:#?}");
     for cut in [" cpd visual lead", "  #7 open ✗ changes requested", " fresh lead", " v1  no PR"] {
         assert!(got.iter().any(|r| r.starts_with(cut.chars().take(24).collect::<String>().as_str())), "{cut:?} in {got:#?}");
     }
-    let narrow = rows(&render(10, 25, &w));
+    let narrow = rows(&render(10, 29, &w));
     assert!(narrow.contains(&" cpd visu…".to_owned()), "{narrow:#?}");
     assert!(narrow.contains(&" v1  no PR".to_owned()), "{narrow:#?}");
 }
@@ -320,10 +331,10 @@ fn a_narrow_column_cuts_the_title_first_then_the_label_and_never_wraps() {
 fn a_short_pane_drops_the_plans_without_a_pr_before_the_rest() {
     let (_env, mut store) = fixture();
     let w = read::widgets(&mut store, 3, 0).unwrap();
-    // Beside the 8 rows of the blank row, the machine and the headers, the three Plans with a PR take 6; `v1` needs a 7th.
-    let full = rows(&render(46, 8 + 7, &w));
+    // Beside the 14 rows of the blank row, the machine, the headers and their blank rows, the three Plans with a PR take 6; `v1` needs a 7th.
+    let full = rows(&render(46, 14 + 7, &w));
     assert!(full.iter().any(|r| r.contains("v1  no PR")), "{full:#?}");
-    let short = rows(&render(46, 8 + 6, &w));
+    let short = rows(&render(46, 14 + 6, &w));
     assert!(!short.iter().any(|r| r.contains("no PR")), "{short:#?}");
     assert!(short.iter().any(|r| r.contains("#11 loading…")), "the Plans with a PR stay:\n{short:#?}");
 }
@@ -351,8 +362,8 @@ fn a_plan_of_several_prs_takes_one_line_per_pull_request_in_key_order() {
     let w = read::widgets(&mut store, 3, 0).unwrap();
     let keys: Vec<&str> = w.plans[0].prs.iter().map(|p| p.key.as_str()).collect();
     assert_eq!(keys, ["api", "web"], "the PRs with a pull request, in key order");
-    let got = rows(&render(46, 16, &w));
-    assert_eq!(got[3..7], [header("PRs").as_str(), " multi lead", "  #20 merged ✓ approved  api side", "  #21 open … no review  web side"], "{got:#?}");
+    let got = rows(&render(46, 22, &w));
+    assert_eq!(got[4..8], [header("PRs").as_str(), " multi lead", "  #20 merged ✓ approved  api side", "  #21 open … no review  web side"], "{got:#?}");
 }
 
 // ---------- the legend ----------

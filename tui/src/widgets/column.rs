@@ -11,9 +11,9 @@ use ratatui::widgets::Paragraph;
 use crate::palette::{self, Meaning};
 use crate::read::{Place, PlanCard, PrState, PrRow, ReviewDecision, Widgets};
 
-/// Rows of the column besides the PR rows: the blank top row, the machine (two), and the three headers with the two
-/// `(future)` rows of git and Jira.
-const FIXED_ROWS: u16 = 1 + 2 + 1 + 2 + 2;
+/// Rows of the column besides the PR rows: the blank top row, the machine (two), the three headers each with a blank row
+/// above and below, and the two `(future)` rows of git and Jira.
+const FIXED_ROWS: u16 = 1 + 2 + 3 * 3 + 2;
 
 /// The machine the column names: its hostname and the first three fields of its load average.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,16 +109,23 @@ fn render_header(f: &mut Frame, area: Rect, title: &str) {
 
 /// Draws the column in `area`: a blank row, the machine, then the PRs, git and Jira, each under its header.
 pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine) {
-    let [_blank, home, prs_header, prs, git_header, git, jira_header, jira] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(2),
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
+    let [_top, home, _above_prs, prs_header, _below_prs, prs, _above_git, git_header, _below_git, git, _above_jira, jira_header, _below_jira, jira] =
+        Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(2),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
     .areas(area);
     render_header(f, prs_header, "PRs");
     render_header(f, git_header, "git");
@@ -202,22 +209,28 @@ mod tests {
 
     #[test]
     fn the_column_has_a_blank_row_an_untitled_machine_and_three_headers() {
-        let buf = buffer(20, 9);
+        let buf = buffer(20, 15);
         let rule = |title: &str| format!("── {title} {}", "─".repeat(20 - 4 - title.chars().count()));
-        let got: Vec<String> = (0..9).map(|y| row(&buf, y)).collect();
+        let got: Vec<String> = (0..15).map(|y| row(&buf, y)).collect();
         let expected = [
             "".to_owned(),
             " homeserver".to_owned(),
             " load 0.52 0.41 0.30".to_owned(),
+            "".to_owned(),
             rule("PRs"),
+            "".to_owned(),
             " no Plans in the coc".to_owned(),
+            "".to_owned(),
             rule("git"),
+            "".to_owned(),
             " (future)".to_owned(),
+            "".to_owned(),
             rule("Jira"),
+            "".to_owned(),
             " (future)".to_owned(),
         ];
         assert_eq!(got, expected, "{got:#?}");
         assert!(buf[(1, 1)].modifier.contains(Modifier::BOLD), "the hostname is bold");
-        assert!(buf[(1, 6)].modifier.contains(Modifier::DIM), "(future) is dim");
+        assert!(buf[(1, 10)].modifier.contains(Modifier::DIM), "(future) is dim");
     }
 }
