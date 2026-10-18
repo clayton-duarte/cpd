@@ -1270,7 +1270,7 @@ fn install_accepts_a_build_equal_to_the_store_or_a_home_without_a_database() {
 
 /// Runs `scripts/restart-tmux.sh` in `env`, whose private tmux server runs one
 /// session `cpd`. The fake `tmux` forwards everything to the real one but
-/// answers `-V` with `installed`; the fake `cpd` answers `config`,
+/// answers `-V` with `installed` (empty: the real one); the fake `cpd` answers `config`,
 /// `plan list` (one Plan `p1`), `attempt list` with `attempts` (a JSON array),
 /// `session list` (a Lead with a pane and one without), and `tui`, which
 /// records whether the server was gone by then. `tmux_env` is the script's `$TMUX`.
@@ -1282,7 +1282,7 @@ fn restart(env: &TestEnv, installed: &str, attempts: &str, tmux_env: Option<&str
     let real = std::env::split_paths(&path).map(|d| d.join("tmux")).find(|p| p.exists()).expect("tmux on PATH");
     env.fake(
         "tmux",
-        &format!("[ \"$1\" = -V ] && {{ echo 'tmux {installed}'; exit 0; }}\nexec '{}' \"$@\"", real.display()),
+        &format!("[ \"$1\" = -V ] && [ -n '{installed}' ] && {{ echo 'tmux {installed}'; exit 0; }}\nexec '{}' \"$@\"", real.display()),
     );
     env.fake(
         "cpd",
@@ -1302,10 +1302,6 @@ esac"#,
         cmd.env("TMUX", value);
     }
     cmd.output().unwrap()
-}
-
-fn server_version(env: &TestEnv) -> String {
-    String::from_utf8(env.tmux(&["display", "-p", "#{version}"]).stdout).unwrap().trim().to_owned()
 }
 
 fn killed(env: &TestEnv) -> bool {
@@ -1333,11 +1329,7 @@ fn restart_tmux_refuses_while_an_attempt_runs_and_touches_nothing() {
 #[test]
 fn restart_tmux_with_the_same_version_does_not_kill() {
     let env = TestEnv::new();
-    // The server version first needs a server: `restart` starts it, so ask the real one up front.
-    env.tmux(&["new-session", "-d", "-s", "probe", "sleep", "600"]);
-    let version = server_version(&env);
-    env.tmux(&["kill-server"]);
-    let out = restart(&env, &version, "[]", None);
+    let out = restart(&env, "", "[]", None);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(stdout.contains("nothing to do"), "{stdout}");
