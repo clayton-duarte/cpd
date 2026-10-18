@@ -59,6 +59,7 @@ impl Step {
             Step::E5 => "E5",
             Step::E7 => "E7",
             Step::E8 => "E8",
+            Step::Workers => "@cpd_workers",
         }
     }
 }
