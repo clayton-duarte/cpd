@@ -1,7 +1,7 @@
 import { Text } from "@earendil-works/pi-tui";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { callCpd, CpdError, cpdProtocol, installedIdentity, isObject, toCpdError } from "./cpd.ts";
 import { cursorFrom } from "./cursor.ts";
@@ -457,7 +457,9 @@ export function adapter(pi: PiApi, options: Options = {}): void {
 
   // ---- the Plan review through plannotator (§15.5) ----
 
-  const planFile = (plan: string, review: string) => join(env.CPD_HOME || join(homedir(), ".cpd"), "run", plan, `plan-${review}.md`);
+  const runDir = (plan: string) => join(env.CPD_HOME || join(homedir(), ".cpd"), "run", plan);
+  const planFile = (plan: string, review: string) => join(runDir(plan), `plan-${review}.md`);
+  const feedbackFile = (plan: string, review: string) => join(runDir(plan), `feedback-${review}.md`);
 
   /** §15.5 "Latest only": a pending request for `review` closes the reasons of this session's older reviews. It does not report: the caller refreshes once the request is handled, so the Lead does not flicker to `idle` between the two reviews. */
   function supersede(r: Run, review: string): void {
@@ -544,12 +546,11 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     let verdict = approved;
     let text = feedback;
     let current = true;
-    let dir: string | undefined;
     try {
       const args = ["plan", "decide", entry.review, approved ? "--approve" : "--reject"];
       if (feedback !== undefined && feedback !== "") {
-        dir = mkdtempSync(join(tmpdir(), "cpd-feedback-"));
-        const file = join(dir, "feedback.md");
+        const file = feedbackFile(plan, entry.review);
+        mkdirSync(dirname(file), { recursive: true });
         writeFileSync(file, feedback);
         args.push("--feedback-file", file);
       }
@@ -575,7 +576,6 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       deliver(`plan decide ${entry.review}`, e);
     } finally {
       r.deciding.delete(entry.review);
-      if (dir) rmSync(dir, { recursive: true, force: true });
     }
   }
 
