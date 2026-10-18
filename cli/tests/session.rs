@@ -657,6 +657,34 @@ fn open_and_park_keep_at_most_one_placeholder_only_in_the_slot() {
 }
 
 #[test]
+fn open_writes_session_moved_before_the_rename_so_a_failing_rename_keeps_the_swap_recorded() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd(&env);
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
+    cockpit(&env);
+    env.cpd(&["session", "open", LEAD1]).ok();
+
+    // A tmux that fails `rename-window` and runs everything else on the real one.
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|d| d.join("tmux"))
+        .find(|p| p.is_file())
+        .expect("a tmux on PATH");
+    env.fake("tmux", &format!("case \"$*\" in *rename-window*) echo 'rename-window: refused' >&2; exit 1;; esac\nexec '{}' \"$@\"", real.display()));
+
+    let run = env.cpd(&["session", "open", LEAD2]);
+    refused(&run, "tmux_failed", 1);
+    assert_eq!(slot(&env).session, LEAD2, "the swap happened");
+    let moved: Vec<(String, String)> = events(&env, "session-moved")
+        .iter()
+        .map(|e| (e["session"].as_str().unwrap().to_owned(), e["data"]["place"].as_str().unwrap().to_owned()))
+        .collect();
+    let expected = [(LEAD1, "chat"), (LEAD2, "chat"), (LEAD1, "parked")];
+    assert_eq!(moved, expected.map(|(s, p)| (s.to_owned(), p.to_owned())));
+    assert_eq!((show(&env, LEAD1)["place"].clone(), show(&env, LEAD2)["place"].clone()), (json!("parked"), json!("chat")));
+}
+
+#[test]
 fn open_and_park_take_a_context_s_manager_and_park_it_in_its_context_window() {
     let env = TestEnv::new();
     setup(&env);
