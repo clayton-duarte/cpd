@@ -9,7 +9,7 @@ mod common;
 use std::fs;
 use std::time::{Duration, Instant};
 
-use common::{CPD, SLEEP_SECONDS, TestEnv};
+use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until, wait_until_for};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 
@@ -17,14 +17,6 @@ const LEAD: &str = "lead1";
 /// The watchdog's limit (the wrapper's constant), and a margin for its 2 s poll.
 const LIMIT: Duration = Duration::from_secs(60);
 const MARGIN: Duration = Duration::from_secs(8);
-
-fn wait_until(what: &str, timeout: Duration, mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + timeout;
-    while !ready() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
 
 fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
@@ -100,7 +92,7 @@ fn start(pi: &str) -> Fixture {
     ok(&["set", "-p", "-t", &pane, "@cpd_session", LEAD]);
     let started = Instant::now();
     let fixture = Fixture { env, pane, started };
-    wait_until("the first pi", Duration::from_secs(30), || fixture.env.calls("pi").len() == 1);
+    wait_until("the first pi", || fixture.env.calls("pi").len() == 1);
     fixture
 }
 
@@ -111,7 +103,7 @@ fn a_pi_alive_with_its_state_stopped_for_sixty_seconds_is_restarted_with_one_err
     assert_eq!(f.env.calls("pi").len(), 1, "not restarted before the limit");
     assert_eq!(f.errors(), 0);
 
-    wait_until("pi restarted", LIMIT, || f.env.calls("pi").len() == 2);
+    wait_until_for("pi restarted", LIMIT, || f.env.calls("pi").len() == 2);
     let after = f.started.elapsed();
     assert!(after >= LIMIT && after < LIMIT + MARGIN, "restarted after {after:?}");
     let session_file = f.env.home().join(format!(".pi/agent/sessions/g/2026_{LEAD}.jsonl")).display().to_string();
@@ -132,7 +124,7 @@ fn a_pi_alive_with_its_state_stopped_for_sixty_seconds_is_restarted_with_one_err
 #[test]
 fn a_pi_whose_adapter_reports_idle_within_the_limit_is_left_alone() {
     let f = start("sleep 1; report idle");
-    wait_until("idle", Duration::from_secs(30), || query::<String>(&f.env, "SELECT state FROM sessions WHERE id = 'lead1'") == "idle");
+    wait_until("idle", || query::<String>(&f.env, "SELECT state FROM sessions WHERE id = 'lead1'") == "idle");
     std::thread::sleep((LIMIT + MARGIN).saturating_sub(f.started.elapsed()));
     assert_eq!(f.env.calls("pi").len(), 1);
     assert_eq!(f.errors(), 0);
@@ -142,7 +134,7 @@ fn a_pi_whose_adapter_reports_idle_within_the_limit_is_left_alone() {
 fn a_pi_that_exits_is_handled_as_before_with_no_error_event() {
     // Status 1: a crash, not the User's quit (which archives and ends the wrapper).
     let f = start("sleep 1; exit 1");
-    wait_until("the exit to be reported", Duration::from_secs(30), || {
+    wait_until("the exit to be reported", || {
         f.env.tmux(&["capture-pane", "-p", "-t", &f.pane]).stdout.windows(9).any(|w| w == b"pi exited")
     });
     std::thread::sleep(Duration::from_secs(5));

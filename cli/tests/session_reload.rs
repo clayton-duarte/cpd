@@ -10,19 +10,11 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::{CPD, SLEEP_SECONDS, TestEnv, copy_executable, write_executable};
+use common::{CPD, SLEEP_SECONDS, TestEnv, copy_executable, wait_until, write_executable};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 
 const LEAD: &str = "lead1";
-
-fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !ready() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
 
 fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();

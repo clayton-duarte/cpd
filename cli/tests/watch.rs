@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, TestEnv, copy_executable};
+use common::{CPD, Run, TestEnv, copy_executable, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -53,15 +53,6 @@ fn parse_time(text: &str) -> OffsetDateTime {
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;
     Ok(())
-}
-
-/// Waits until `done` holds, at most 30 s.
-fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !done() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
 }
 
 /// A running `cpd watch`; SIGKILLed if a test panics before it stops it.

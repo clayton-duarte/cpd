@@ -10,7 +10,7 @@ use std::fs::{self, File};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, TestEnv};
+use common::{CPD, Run, TestEnv, refused};
 use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -212,13 +212,6 @@ impl Fx {
         let text = fs::read_to_string(&path).unwrap();
         serde_json::from_str(text.trim()).unwrap_or_else(|e| panic!("{name}: {e}: {text}"))
     }
-}
-
-fn refused(run: &Run, code: &str, exit: i32) -> Value {
-    let error = run.error();
-    assert_eq!(error["code"], code, "{run:?}");
-    assert_eq!(run.exit, exit, "{run:?}");
-    error
 }
 
 /// A review Worker: it submits with no findings, then with a commit and findings, then

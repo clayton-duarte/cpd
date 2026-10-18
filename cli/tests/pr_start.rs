@@ -10,9 +10,9 @@ mod common;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use common::{CPD, Run, TestEnv, write_executable};
+use common::{CPD, Run, TestEnv, refused, wait_until, write_executable};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use serde_json::{Value, json};
@@ -206,21 +206,6 @@ impl Drop for Engine {
             let _ = child.wait();
         }
     }
-}
-
-fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !done() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-fn refused(run: &Run, code: &str, exit: i32) -> Value {
-    let error = run.error();
-    assert_eq!(error["code"], code, "{run:?}");
-    assert_eq!(run.exit, exit, "{run:?}");
-    error
 }
 
 fn head(fx: &Fx, repo: &Path, rev: &str) -> String {

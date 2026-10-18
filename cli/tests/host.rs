@@ -6,9 +6,9 @@ mod common;
 
 use std::path::Path;
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use common::{SLEEP_SECONDS, TestEnv};
+use common::{SLEEP_SECONDS, TestEnv, wait_until};
 use cpd_core::error::ErrorCode;
 use cpd_core::host::layout::{self, View};
 use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux};
@@ -36,14 +36,6 @@ fn sh(script: &str) -> Spawn {
 
 fn pane<'a>(panes: &'a [Pane], id: &PaneId) -> &'a Pane {
     panes.iter().find(|p| &p.pane == id).unwrap_or_else(|| panic!("no pane {id} in {panes:?}"))
-}
-
-fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
-    let start = Instant::now();
-    while !ok() {
-        assert!(start.elapsed() < Duration::from_secs(10), "timed out waiting for {what}");
-        sleep(Duration::from_millis(50));
-    }
 }
 
 #[test]
@@ -153,11 +145,11 @@ fn a_killed_view_pane_respawns_and_a_killed_lead_or_engine_pane_stays_dead() {
     for id in [&engine, &view, &lead] {
         kill_program(t, id);
     }
-    wait_for("the Lead and the engine to die", || {
+    wait_until("the Lead and the engine to die", || {
         let panes = t.list_panes().unwrap();
         pane(&panes, &lead).dead && pane(&panes, &engine).dead
     });
-    wait_for("the view to respawn", || {
+    wait_until("the view to respawn", || {
         let panes = t.list_panes().unwrap();
         let p = pane(&panes, &view);
         !p.dead && p.pid.is_some() && p.pid != view_pid
@@ -186,7 +178,7 @@ fn respawn_killing_restarts_a_live_pane_in_place() {
     let mut rerun = Spawn::default();
     rerun.env.insert("CPD_HOST_TEST_VAR".into(), "again".into());
     t.respawn_pane_killing(&id, &rerun).unwrap();
-    wait_for("the rerun to write", || std::fs::read_to_string(&out).is_ok_and(|s| s == "again\n"));
+    wait_until("the rerun to write", || std::fs::read_to_string(&out).is_ok_and(|s| s == "again\n"));
     assert_ne!(pane(&t.list_panes().unwrap(), &id).pid, after.pid);
 }
 
@@ -200,7 +192,7 @@ fn create_session_returns_the_first_window_and_pane_once() {
     let session_env = s.env.tmux(&["show-environment", "-t", "=cpd"]);
     assert!(!String::from_utf8_lossy(&session_env.stdout).contains("CPD_HOST_TEST_VAR"), "{session_env:?}");
     let later = s.tmux.new_window("cpd", "later", &sh(&format!("echo \"plan=$CPD_HOST_TEST_VAR\"; sleep {SLEEP_SECONDS}"))).unwrap().1;
-    wait_for("the later window's output", || {
+    wait_until("the later window's output", || {
         let out = s.env.tmux(&["capture-pane", "-p", "-t", later.as_str()]);
         String::from_utf8_lossy(&out.stdout).contains("plan=")
     });
@@ -319,7 +311,7 @@ fn a_worker_window_gets_its_cwd_environment_and_argv() {
     let session = SessionId::new_v4();
     t.set_pane_session(&worker, &session).unwrap();
 
-    wait_for("the worker to write", || std::fs::read_to_string(&out).is_ok_and(|s| !s.is_empty()));
+    wait_until("the worker to write", || std::fs::read_to_string(&out).is_ok_and(|s| !s.is_empty()));
     // tmux sets TMUX_PANE in its panes itself; the argument arrives verbatim, no shell.
     assert_eq!(
         std::fs::read_to_string(&out).unwrap(),
@@ -336,7 +328,7 @@ fn a_dead_pane_stays_and_is_respawned() {
     let t = &s.tmux;
     t.ensure_session("cpd", layout::MAIN_WINDOW, &sleeper(s.env.root())).unwrap();
     let (_, dying) = t.new_window("cpd", "x", &sh("exit 3")).unwrap();
-    wait_for("the pane to die", || pane(&t.list_panes().unwrap(), &dying).dead);
+    wait_until("the pane to die", || pane(&t.list_panes().unwrap(), &dying).dead);
     let dead = pane(&t.list_panes().unwrap(), &dying).clone();
     assert_eq!(dead.dead_status, Some(3));
 

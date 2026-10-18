@@ -11,7 +11,7 @@ use std::fs::{self, File, OpenOptions};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv, write_executable};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv, refused, write_executable};
 use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_lead_worktree, pr_lead_worktree_path, prepare_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -691,11 +691,6 @@ fn a_driver_refuses_an_attempt_that_is_not_starting() {
 }
 
 // ---------- job dispatch refusals ----------
-
-fn refused(run: &Run, code: &str, exit: i32) {
-    assert_eq!(run.error()["code"], code, "{run:?}");
-    assert_eq!(run.exit, exit, "{run:?}");
-}
 
 #[test]
 fn dispatch_refuses_a_job_that_is_not_ready() {

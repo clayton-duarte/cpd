@@ -7,9 +7,8 @@ mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv, write_executable};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv, refused, wait_until, write_executable};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{PlanId, ReviewId};
@@ -83,13 +82,6 @@ fn cpd_with(env: &TestEnv, vars: &[(&str, &str)], args: &[&str]) -> Run {
     }
 }
 
-fn refused(run: &Run, code: &str, exit: i32) -> Value {
-    let error = run.error();
-    assert_eq!(error["code"], code, "{run:?}");
-    assert_eq!(run.exit, exit, "{run:?}");
-    error
-}
-
 fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
     store(env).read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
 }
@@ -112,14 +104,6 @@ fn new_plan(env: &TestEnv, id: &str, repo: &Path) -> Value {
 
 fn show(env: &TestEnv, plan: &str) -> Value {
     env.cpd(&["plan", "show", "--plan", plan]).ok()
-}
-
-fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !ready() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
 }
 
 /// The environment the fake `session run` of `session` was started with.

@@ -6,9 +6,9 @@ mod common;
 
 use std::fs;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv, copy_executable};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv, copy_executable, refused, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::events::{Kind, NewEvent, append};
 use cpd_core::home::CpdHome;
@@ -116,13 +116,6 @@ fn cpd_with(env: &TestEnv, vars: &[(&str, &str)], args: &[&str]) -> Run {
     }
 }
 
-fn refused(run: &Run, code: &str, exit: i32) -> Value {
-    let error = run.error();
-    assert_eq!(error["code"], code, "{run:?}");
-    assert_eq!(run.exit, exit, "{run:?}");
-    error
-}
-
 fn exec_sql(env: &TestEnv, sql: &str) {
     store(env).write("test", |tx| exec(tx, sql)).unwrap();
 }
@@ -137,14 +130,6 @@ fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
 
 fn show(env: &TestEnv, id: &str) -> Value {
     env.cpd(&["session", "show", id]).ok()["session"].clone()
-}
-
-fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !ready() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
 }
 
 // ---------- tmux ----------

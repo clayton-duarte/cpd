@@ -9,7 +9,7 @@ mod common;
 use std::fs;
 use std::path::PathBuf;
 
-use common::{Run, TestEnv};
+use common::{Run, TestEnv, refused};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::ids::PlanId;
@@ -138,13 +138,6 @@ fn job(env: &TestEnv, args: &[&str], plan: &str) -> Run {
     all.extend(args);
     all.extend(["--plan", plan]);
     env.cpd(&all)
-}
-
-fn refused(run: &Run, code: &str, exit: i32) -> Value {
-    let error = run.error();
-    assert_eq!(error["code"], code, "{run:?}");
-    assert_eq!(run.exit, exit, "{run:?}");
-    error
 }
 
 fn events(env: &TestEnv, kind: &str) -> Vec<Value> {

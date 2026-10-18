@@ -6,9 +6,8 @@ mod common;
 
 use std::fs;
 use std::process::Stdio;
-use std::time::{Duration, Instant};
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv, refused, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::{Store, WriteTxn};
@@ -35,21 +34,6 @@ fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
 
 fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
     env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
-}
-
-fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !ready() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-fn refused(run: &Run, code: &str, exit: i32) -> Value {
-    let error = run.error();
-    assert_eq!(error["code"], code, "{run:?}");
-    assert_eq!(run.exit, exit, "{run:?}");
-    error
 }
 
 /// A fake `cpd` on `PATH`: `session run <id>` records its environment and sleeps (the pane's
