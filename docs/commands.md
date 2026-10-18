@@ -138,7 +138,7 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `attempt run` (internal) | E3, `job dispatch` | yes | §3.4 |
 | `ask` | Worker | yes | §3.5 |
 | `answer` | Lead | yes | §3.5 |
-| `pr open`, `pr rebase` | Lead | yes | §7.3, §7.6 |
+| `pr open`, `pr rebase`, `pr push` | Lead | yes | §7.3, §7.6 |
 | `pr add`, `edit`, `cancel` | Lead | yes | §2.3, §2.5, §3.8 |
 | `pr start` | Lead | yes | §2.5, §3.8, §7.2 |
 | `pr poll` | engine E5, a Lead | only when a value changed | §7.6 |
@@ -1216,7 +1216,7 @@ Idempotent: yes (a read).
 cpd pr push [--pr <key>] [--plan <id>]
 ```
 
-Publishes an `open` PR's Lead Branch with a plain push, after the Gate (hs-d139; contract §7.6). It does not rebase: use it when the branch carries a merge of the base, which `pr rebase` would drop (§9.3), or when the remote has not moved and the Jobs Merged since only need to reach the pull request. The §2 index row is added by the Job that implements the command, in the same commit.
+Publishes an `open` PR's Lead Branch with a plain push, after the Gate (hs-d139; contract §7.6). It does not rebase: use it when the branch carries a merge of the base, which `pr rebase` would drop (§9.3), or when the remote has not moved and the Jobs Merged since only need to reach the pull request.
 
 | Flag | Meaning |
 |---|---|
@@ -1436,7 +1436,7 @@ Idempotent: yes; a restart resumes (§6.7 step 3).
 cpd session close <id>
 ```
 
-Ends a Lead's pane (`<id>` accepts the short forms of §1.3): pi stops and the Session's file stays, so `session open` resumes it later (§10.4). It is the tree's `x` key (§13.2). Added by cockpit parity (amendment 14, §19). The §2 index row is added by the Job that implements the command, in the same commit.
+Ends a Lead's pane (`<id>` accepts the short forms of §1.3): pi stops and the Session's file stays, so `session open` resumes it later (§10.4). It is the tree's `x` key (§13.2). Added by cockpit parity (amendment 14, §19).
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -1460,7 +1460,7 @@ Idempotent: yes.
 cpd session archive <id>
 ```
 
-Archives one Session (contract §2.2 "Archived"); `<id>` accepts the short forms of §1.3. The §2 index row is added by the Job that implements the command, in the same commit.
+Archives one Session (contract §2.2 "Archived"); `<id>` accepts the short forms of §1.3.
 
 | Precondition | Code | Exit |
 |---|---|---|

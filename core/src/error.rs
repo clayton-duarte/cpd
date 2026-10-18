@@ -153,6 +153,7 @@ error_codes! {
     DirtyTarget = "dirty_target" => Refused,
     GateFailed = "gate_failed" => Refused,
     RebaseConflict = "rebase_conflict" => Refused,
+    PushRejected = "push_rejected" => Refused,
     NotALead = "not_a_lead" => Refused,
     GroundedLead = "grounded_lead" => Refused,
     NoCockpit = "no_cockpit" => Refused,
