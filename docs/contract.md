@@ -359,7 +359,7 @@ One thing that needs the User: the **single source of "needs you"** (hs-d165), s
 | `id` | int | |
 | `kind` | text | the table below |
 | `urgency` | text | `red` (blocked work), `yellow` (review or merge due), `magenta` (a decision before the work runs), `white` (an unread turn) |
-| `subject` | text | the identity key: `session:<uuid>`, `review:<id>`, `job:<plan>/<key>`, `error:<step>/<scope>/<code>`, `record:<id>` |
+| `subject` | text | the identity key: `session:<uuid>`, `review:<id>`, `job:<plan>/<key>`, `error:<step>/<scope>/<code>`, `record:<id>` (review ids are per Plan and record ids repeat across Contexts, so both are qualified) |
 | `context`, `plan`, `job`, `session`, `record` | text? | what it is about, when it has one |
 | `event` | int? | the Event that caused it (the `session-state`, `job-failed` or `error` Event), for "jump to the cause" |
 | `label` | text | the short text of the table below |
