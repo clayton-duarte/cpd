@@ -581,6 +581,9 @@ mod tests {
             "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt mergedAt \
              reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
+             reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { \
+             issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt mergedAt \
+             reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
              rateLimit { cost remaining resetAt } }"
         );
     }
@@ -588,20 +591,43 @@ mod tests {
     #[test]
     fn a_search_of_two_pull_requests_is_typed() {
         let body = format!(
-            r#"{{"data":{{"search":{{"issueCount":2,"nodes":[{},{}]}},"rateLimit":{{"cost":1,"remaining":4990,"resetAt":"2026-05-01T11:00:00Z"}}}}}}"#,
+            r#"{{"data":{{"search":{{"issueCount":2,"nodes":[{},{}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4990,"resetAt":"2026-05-01T11:00:00Z"}}}}}}"#,
             pr("o/a", 7, true, "OPEN", r#"{"state":"FAILURE"}"#),
             pr("o/b", 8, false, "OPEN", "null"),
         );
         let found = search(&reply(&body, 0)).unwrap();
         assert_eq!((found.issue_count, found.rate.cost, found.rate.remaining), (2, 1, 4990));
         assert_eq!(found.rate.reset_at, "2026-05-01T11:00:00Z");
-        let [a, b] = &found.prs[..] else { panic!("{:?}", found.prs) };
+        let [a, b] = &found.prs.iter().map(|l| &l.pr).collect::<Vec<_>>()[..] else { panic!("{:?}", found.prs) };
         assert_eq!((a.repo.as_str(), a.number, a.draft, a.state, a.checks), ("o/a", 7, true, PrState::Open, ChecksSummary::Failed));
         assert_eq!((a.review_decision, a.title.as_str(), a.merged_at.as_deref()), (ReviewDecision::Approved, "T7", None));
         assert_eq!(a.url, "https://github.com/o/a/pull/7");
         assert_eq!(a.created_at, "2026-05-01T10:00:00Z");
         assert_eq!((b.draft, b.checks), (false, ChecksSummary::None));
         assert_eq!((a.mergeable, a.merge_state), (Mergeable::Conflicting, MergeState::Dirty));
+    }
+
+    #[test]
+    fn the_two_searches_are_merged_into_one_list_with_their_memberships() {
+        let body = format!(
+            r#"{{"data":{{"search":{{"issueCount":2,"nodes":[{},{}]}},
+            "reviewRequests":{{"issueCount":2,"nodes":[{},{}]}},
+            "rateLimit":{{"cost":2,"remaining":4990,"resetAt":"r"}}}}}}"#,
+            pr("o/a", 1, false, "OPEN", "null"),
+            pr("o/a", 2, false, "OPEN", "null"),
+            pr("o/a", 2, false, "OPEN", "null"),
+            pr("o/b", 3, false, "OPEN", "null"),
+        );
+        let found = search(&reply(&body, 0)).unwrap();
+        assert_eq!(found.issue_count, 4);
+        let listed: Vec<_> = found.prs.iter().map(|l| (l.pr.repo.as_str(), l.pr.number, l.membership.authored, l.membership.review_requested)).collect();
+        assert_eq!(listed, [("o/a", 1, true, false), ("o/a", 2, true, true), ("o/b", 3, false, true)]);
+    }
+
+    #[test]
+    fn a_reply_without_the_review_request_search_is_gh_failed() {
+        let body = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":9,"resetAt":"r"}}}"#;
+        assert_eq!(search(&reply(body, 0)).unwrap_err().code(), ErrorCode::GhFailed);
     }
 
     #[test]
@@ -614,9 +640,9 @@ mod tests {
             let node = pr("o/a", 7, false, "OPEN", "null")
                 .replace(r#""mergeable":"CONFLICTING","mergeStateStatus":"DIRTY""#, &format!(r#""mergeable":"{mergeable}","mergeStateStatus":"{merge_state}""#));
             let body = format!(
-                r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
+                r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
             );
-            let found = &search(&reply(&body, 0)).unwrap().prs[0];
+            let found = &search(&reply(&body, 0)).unwrap().prs[0].pr;
             assert_eq!((found.mergeable, found.merge_state), want, "{mergeable} {merge_state}");
         }
     }
@@ -631,7 +657,7 @@ mod tests {
         ] {
             let node = pr("o/a", 7, false, "OPEN", "null").replace(from, to);
             let body = format!(
-                r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
+                r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
             );
             assert_eq!(search(&reply(&body, 0)).unwrap_err().code(), ErrorCode::GhFailed, "search {name}");
             let body = format!(r#"{{"data":{{"p0":{{"pullRequest":{node}}}}}}}"#);
@@ -643,7 +669,7 @@ mod tests {
     fn a_pull_request_without_the_two_fields_is_gh_failed() {
         let node = pr("o/a", 7, false, "OPEN", "null").replace(r#""mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","#, "");
         let body = format!(
-            r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
+            r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
         );
         assert_eq!(search(&reply(&body, 0)).unwrap_err().code(), ErrorCode::GhFailed);
     }
@@ -652,19 +678,19 @@ mod tests {
     fn a_pull_request_without_a_commit_has_no_checks() {
         let body = pr("o/a", 7, false, "OPEN", "null").replace(r#"{"commit":{"statusCheckRollup":null}}"#, r#"{"commit":null}"#);
         let body = format!(
-            r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{body}]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
+            r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{body}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
         );
-        assert_eq!(search(&reply(&body, 0)).unwrap().prs[0].checks, ChecksSummary::None);
+        assert_eq!(search(&reply(&body, 0)).unwrap().prs[0].pr.checks, ChecksSummary::None);
     }
 
     #[test]
     fn a_search_that_is_not_an_answer_is_gh_failed() {
         let nodes = pr("o/a", 7, false, "OPEN", "null");
         let with_errors = format!(
-            r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{nodes}]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}},"errors":[{{"message":"nope"}}]}}"#
+            r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{nodes}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}},"errors":[{{"message":"nope"}}]}}"#
         );
         let unknown_state = format!(
-            r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{}]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#,
+            r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#,
             pr("o/a", 7, false, "WEIRD", "null")
         );
         for (name, stdout, exit) in [

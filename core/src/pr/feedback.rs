@@ -114,6 +114,8 @@ mod tests {
             changed_at: "t".into(),
             mergeable: mergeable.into(),
             merge_state: merge_state.into(),
+            authored: true,
+            review_requested: false,
         }
     }
 

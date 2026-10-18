@@ -662,7 +662,7 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
     let mut store = fixture_store(&env);
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     let hash = store.read(|c| Ok(cpd_core::store::schema_hash(c)?)).unwrap();
-    assert_eq!(hash, "ae8ea2361df62ed1a89912b6e39227f4afd043475f27ac7faf78ce847e208cbb", "version 12 (the Inbox, migration 0012) on top of version 11 (the PR poll's mergeable state, hs-d188)");
+    assert_eq!(hash, "a37244a187d2565a96d5e31fe78ddfc0aa0ccdface5b495887a6db6711bcb140", "version 13 (the PR poll's Inbox kinds, migration 0013) on top of version 12 (the Inbox, migration 0012)");
 
     for table in ["contexts", "plans", "sessions"] {
         let archived: Option<String> =

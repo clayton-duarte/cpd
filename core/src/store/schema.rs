@@ -51,7 +51,7 @@ pub(super) const SCHEMA_HASHES: &[&str] = &[
     "2f8e238fbc3b0d5f768fe3c5e6c118b26eda5581d93841449563979a51144168",
     "d2623567062d0367ddcf3dcd0b96c6d7e2b45d447e3b841f77d0249129736277",
     "ae8ea2361df62ed1a89912b6e39227f4afd043475f27ac7faf78ce847e208cbb",
-    "0000",
+    "a37244a187d2565a96d5e31fe78ddfc0aa0ccdface5b495887a6db6711bcb140",
 ];
 
 const _: () = assert!(SCHEMA_HASHES.len() == MIGRATIONS.len(), "one schema hash per migration");
@@ -1231,6 +1231,73 @@ mod tests {
             write(&mut store, &format!("UPDATE pull_requests SET {ok} WHERE number = 7")).unwrap();
         }
         for bad in ["mergeable = 'MERGEABLE'", "mergeable = 'dirty'", "mergeable = NULL", "merge_state = 'DIRTY'", "merge_state = 'conflicting'", "merge_state = NULL"] {
+            let err = refused(&mut store, &format!("UPDATE pull_requests SET {bad} WHERE number = 7"));
+            assert!(format!("{err:?}").contains("CHECK") || format!("{err:?}").contains("NOT NULL"), "{bad}: {err:?}");
+        }
+    }
+
+    // ---------- migration 13: the PR poll's Inbox kinds ----------
+
+    #[test]
+    fn a_version_12_database_migrates_to_13_with_its_rows_authored_and_its_history_listing_both_columns() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        database_at(
+            &home,
+            12,
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at) VALUES
+               ('acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'Pay', 0, 'open', 'none', 'failed', 't', 't'),
+               ('acme/web', 9, 'https://github.com/acme/web/pull/9', 'Web', 1, 'open', 'approved', 'passed', 't', 't');",
+        );
+        assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[11]);
+        let mut store = Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
+        assert_eq!(
+            rows(&mut store, "SELECT number, authored, review_requested FROM pull_requests ORDER BY id"),
+            vec![serde_json::json!([7, 1, 0]), serde_json::json!([9, 1, 0])]
+        );
+        assert_eq!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'pull_requests'"), 2, "the migration wrote no history row");
+
+        // An update, an insert and a delete: each history row lists both new columns.
+        write(&mut store, "UPDATE pull_requests SET authored = 0, review_requested = 1 WHERE number = 7").unwrap();
+        write(
+            &mut store,
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored, review_requested)
+             VALUES ('acme/new', 1, 'https://github.com/acme/new/pull/1', 'New', 0, 'open', 'none', 'none', 't', 't', 0, 1)",
+        )
+        .unwrap();
+        write(&mut store, "DELETE FROM pull_requests WHERE number = 9").unwrap();
+        let history = rows(&mut store, "SELECT op, before, after FROM history WHERE tbl = 'pull_requests' AND id > 2 ORDER BY id");
+        let side = |row: &Value, n: usize| -> Value {
+            row[n].as_str().map_or(Value::Null, |text| serde_json::from_str(text).unwrap())
+        };
+        let columns = |v: &Value| (v["authored"].clone(), v["review_requested"].clone());
+        let pair = |a: i64, r: i64| (Value::from(a), Value::from(r));
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0][0], "update");
+        assert_eq!((columns(&side(&history[0], 1)), columns(&side(&history[0], 2))), (pair(1, 0), pair(0, 1)));
+        assert_eq!((history[1][0].as_str(), columns(&side(&history[1], 2))), (Some("insert"), pair(0, 1)));
+        assert_eq!((history[2][0].as_str(), columns(&side(&history[2], 1))), (Some("delete"), pair(1, 0)));
+
+        // `pull_requests_owned` is kept and `pull_requests` still gets no `_no_delete`.
+        let triggers = rows(&mut store, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'pull_requests' ORDER BY name");
+        assert_eq!(
+            triggers,
+            ["pull_requests_hist_del", "pull_requests_hist_ins", "pull_requests_hist_upd", "pull_requests_owned"].map(|n| serde_json::json!([n]))
+        );
+    }
+
+    #[test]
+    fn the_checks_of_authored_and_review_requested_refuse_a_value_outside_0_and_1() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_10(&home);
+        let mut store = Store::open(&home, 5000).unwrap();
+        for ok in ["authored = 0", "review_requested = 1", "authored = 1", "review_requested = 0"] {
+            write(&mut store, &format!("UPDATE pull_requests SET {ok} WHERE number = 7")).unwrap();
+        }
+        for bad in ["authored = 2", "review_requested = -1", "authored = NULL", "review_requested = NULL"] {
             let err = refused(&mut store, &format!("UPDATE pull_requests SET {bad} WHERE number = 7"));
             assert!(format!("{err:?}").contains("CHECK") || format!("{err:?}").contains("NOT NULL"), "{bad}: {err:?}");
         }
