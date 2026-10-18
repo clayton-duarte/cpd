@@ -193,7 +193,28 @@ fn populate(env: &TestEnv) {
     s += &manager_row("m-alpha", "alpha");
     s += &manager_row("m-beta", "beta");
     sql(&mut store, &s);
-    reconcile(&mut store, &items(), "2026-01-04T00:00:00.000Z").unwrap();
+    reconcile(&mut store, &items(), &opened_ago()).unwrap();
+}
+
+/// When `populate`'s Inbox items were opened: five minutes and a half ago, so that their age reads `5m` for the half
+/// minute a test takes at most.
+fn opened_ago() -> String {
+    let at = time::OffsetDateTime::now_utc() - time::Duration::seconds(330);
+    at.format(&time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z")).unwrap()
+}
+
+/// The Inbox section of `populate`'s four items in a pane `width` wide: the header, three rows and `+1 more`.
+fn inbox_section(width: usize) -> Vec<String> {
+    let inner = width - 2;
+    let title = " Inbox 4 ";
+    let item = |label: &str| format!(" ● {label}{}5m", " ".repeat(inner - 2 - label.len() - 2));
+    vec![
+        format!(" ──{title}{}", "─".repeat(inner - 2 - title.len())),
+        item("f-blocked label"),
+        item("l-rel label"),
+        item("m-beta label"),
+        " +1 more".to_owned(),
+    ]
 }
 
 // ---------- the pane ----------
@@ -338,24 +359,27 @@ fn words(w: &[&str]) -> Vec<String> {
 fn the_tree_of_a_prepared_store() {
     let env = env();
     populate(&env);
-    let pane = Pane::start(&env, 46, 14);
+    let pane = Pane::start(&env, 46, 18);
     let screen = pane.ready();
     let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
+    let mut expected = vec![
+        String::new(),
+        " ▾ ● alpha".to_owned(),
+        row("⏵ ├ ◐ ship", "1⋅1⋅0⋅1⋅2"),
+        row("  ├ ○ sketch", "2⋅0⋅0⋅0⋅0"),
+        "   ├ ○ ship·f-id".to_owned(),
+        "   └ ● ship·f-bl".to_owned(),
+        " ▾ ● beta".to_owned(),
+        row("  ├ ● rel", "0⋅0⋅0⋅0⋅1"),
+        row("  └ ◌ old", "0⋅0⋅0⋅0⋅0"),
+        " ▾ ◌ gamma".to_owned(),
+    ];
+    expected.extend(["", "", ""].map(String::from)); // the rest of the tree's rows, then the Inbox section pinned below
+    expected.extend(inbox_section(46));
     assert_eq!(
         screen,
-        [
-            String::new(),
-            " ▾ ● alpha".to_owned(),
-            row("⏵ ├ ◐ ship", "1⋅1⋅0⋅1⋅2"),
-            row("  ├ ○ sketch", "2⋅0⋅0⋅0⋅0"),
-            "   ├ ○ ship·f-id".to_owned(),
-            "   └ ● ship·f-bl".to_owned(),
-            " ▾ ● beta".to_owned(),
-            row("  ├ ● rel", "0⋅0⋅0⋅0⋅1"),
-            row("  └ ◌ old", "0⋅0⋅0⋅0⋅0"),
-            " ▾ ◌ gamma".to_owned(),
-        ],
-        "the Context and Plan ids, the forks' `<plan id>·<4 characters of the Session id>`; the forks are siblings of the Plans, after them, under their Context (B1); the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text"
+        expected,
+        "the Context and Plan ids, the forks' `<plan id>·<4 characters of the Session id>`; the forks are siblings of the Plans, after them, under their Context (B1); the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text; the Inbox section at the bottom: its header, three items with their age, `+1 more`"
     );
 }
 
@@ -363,7 +387,7 @@ fn the_tree_of_a_prepared_store() {
 fn the_tree_leaves_the_first_and_the_last_column_blank() {
     let env = env();
     populate(&env);
-    let pane = Pane::start(&env, 46, 14);
+    let pane = Pane::start(&env, 46, 18);
     let screen = pane.ready();
     // `screen` is trimmed at the right, so the last column is blank when no row is longer than 45 columns
     assert!(screen.iter().all(|r| r.is_empty() || r.starts_with(' ')), "column 0: {screen:?}");
@@ -376,7 +400,8 @@ fn an_empty_store_says_so() {
     let env = env();
     drop(open(&env));
     let pane = Pane::start(&env, 30, 5);
-    assert_eq!(pane.wait("the empty tree", |s| !s.is_empty()), ["", "  no Contexts"]);
+    let header = format!(" ── Inbox 0 {}", "─".repeat(28 - 2 - " Inbox 0 ".len()));
+    assert_eq!(pane.wait("the empty tree", |s| !s.is_empty()), ["", "  no Contexts", "", "", header.as_str()], "the section is there with no item");
 }
 
 #[test]
@@ -615,23 +640,26 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
     populate(&env);
     archive(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
-    let pane = Pane::start(&env, 46, 16);
+    let pane = Pane::start(&env, 46, 20);
     let screen = pane.ready();
     let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
+    let mut expected = vec![
+        String::new(),
+        " ▾ ● alpha".to_owned(),
+        row("⏵ ├ ◐ ship", "1⋅1⋅0⋅1⋅2"),
+        row("  ├ ○ sketch", "2⋅0⋅0⋅0⋅0"),
+        "   ├ ○ ship·f-id".to_owned(),
+        "   └ ● ship·f-bl".to_owned(),
+        " ▾ ● beta".to_owned(),
+        row("  ├ ● rel", "0⋅0⋅0⋅0⋅1"),
+        "   └ …".to_owned(),
+        " …".to_owned(),
+    ];
+    expected.extend(["", "", "", "", ""].map(String::from)); // the rest of the tree's rows
+    expected.extend(inbox_section(46));
     assert_eq!(
         screen,
-        [
-            String::new(),
-            " ▾ ● alpha".to_owned(),
-            row("⏵ ├ ◐ ship", "1⋅1⋅0⋅1⋅2"),
-            row("  ├ ○ sketch", "2⋅0⋅0⋅0⋅0"),
-            "   ├ ○ ship·f-id".to_owned(),
-            "   └ ● ship·f-bl".to_owned(),
-            " ▾ ● beta".to_owned(),
-            row("  ├ ● rel", "0⋅0⋅0⋅0⋅1"),
-            "   └ …".to_owned(),
-            " …".to_owned(),
-        ],
+        expected,
         "the archived Plan `old` is behind beta's `…`, the archived Context `gamma` behind the last"
     );
     // a click on beta's `…` shows the archived Plan at the depth it would have if live, with the normal guide
@@ -723,7 +751,7 @@ fn a_right_click_opens_the_menu_of_the_row_and_esc_or_a_click_outside_closes_it_
     let env = env();
     populate(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
-    let pane = Pane::start(&env, 46, 14);
+    let pane = Pane::start(&env, 46, 18);
     pane.ready();
     pane.right_click(8, 4); // the fork `ship fork`
     let screen = pane.wait("the fork's menu", |s| menu_open(s, "Open"));
@@ -950,7 +978,7 @@ fn new_context_asks_a_title_and_runs_context_new_with_the_derived_id() {
     let env = env();
     populate(&env);
     fake_cpd(&env, r#"{"ok":true,"context":{"id":"building-cpd"}}"#);
-    let pane = Pane::start(&env, 60, 14);
+    let pane = Pane::start(&env, 60, 18);
     pane.ready();
     pane.right_click(5, 12); // the empty area
     pane.wait("the menu", |s| menu_open(s, "New Context…"));
