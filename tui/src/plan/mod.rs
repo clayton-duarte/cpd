@@ -90,10 +90,11 @@ impl ReviewRow {
     fn draw(&self, buf: &mut Buffer, area: Rect) {
         let area = area.inner(Margin { horizontal: MARGIN.horizontal, vertical: 0 });
         let line = self.line();
-        let arrow = area.x + line.width() as u16 - 1;
+        let width = line.width() as u16;
         line.render(area, buf);
-        if let (Some(url), true) = (&self.url, arrow < area.right()) {
-            link(buf, Rect::new(arrow, area.y, 1, 1), url);
+        if let Some(url) = &self.url {
+            // from `Plan` (after the leading blank) through `↗`
+            link(buf, Rect::new(area.x + 1, area.y, width - 1, 1).intersection(area), url);
         }
     }
 }
@@ -445,6 +446,19 @@ mod tests {
         symbol.replace(OPEN, "").replace("\x1b]8;;https://github.com/acme/api/pull/12\x07", "").replace("\x1b]8;;\x07", "")
     }
 
+    use ratatui::buffer::CellWidth;
+
+    /// The columns of row `y` covered by a link opened with `open`, a piece's second cell included.
+    fn linked(buf: &Buffer, y: u16, open: &str) -> Vec<u16> {
+        let mut xs = Vec::new();
+        for x in 0..buf.area.width {
+            if buf[(x, y)].symbol().contains(open) {
+                xs.extend(x..x + buf[(x, y)].cell_width().max(1));
+            }
+        }
+        xs
+    }
+
     /// The pane `centre` draws on a 60 × 8 terminal, and its screen text, one string per row.
     fn drawn(centre: &Centre) -> (Buffer, Vec<String>, Ui) {
         let mut terminal = Terminal::new(TestBackend::new(60, 8)).unwrap();
@@ -452,7 +466,22 @@ mod tests {
         terminal.draw(|f| ui.draw(f, Some(centre))).unwrap();
         let buf = terminal.backend().buffer().clone();
         let rows = (0..8)
-            .map(|y| (0..60).map(|x| plain(buf[(x, y)].symbol())).collect::<String>().trim_end().to_owned())
+            .map(|y| {
+                let mut covered = 0;
+                (0..60)
+                    .map(|x| {
+                        // the second cell of a link piece is drawn by the piece
+                        if covered > 0 {
+                            covered -= 1;
+                            return String::new();
+                        }
+                        covered = buf[(x, y)].cell_width().saturating_sub(1);
+                        plain(buf[(x, y)].symbol())
+                    })
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
             .collect();
         (buf, rows, ui)
     }
@@ -475,12 +504,11 @@ mod tests {
         assert_eq!(without.2.body.y, 0);
         // `pending` is yellow, `↗` links to the plannotator page; the title's `↗` still links to the pull request
         assert_eq!(buf[(18, 0)].fg, palette::fg(Meaning::Review).fg.unwrap());
-        assert_eq!(buf[(26, 0)].symbol(), format!("{OPEN}↗\x1b]8;;\x07"));
-        let title_arrow = rows[2].chars().position(|c| c == '↗').unwrap() as u16;
-        assert_eq!(
-            buf[(title_arrow, 2)].symbol(),
-            "\x1b]8;;https://github.com/acme/api/pull/12\x07↗\x1b]8;;\x07"
-        );
+        assert_eq!(linked(&buf, 0, OPEN), (3..=26).collect::<Vec<u16>>(), "`Plan` through `↗`, not the blank before it");
+        let pull = "\x1b]8;;https://github.com/acme/api/pull/12\x07";
+        let title: Vec<char> = rows[2].chars().collect();
+        let (first, arrow) = (title.iter().position(|&c| c == '#').unwrap() as u16, title.iter().position(|&c| c == '↗').unwrap() as u16);
+        assert_eq!(linked(&buf, 2, pull), (first..=arrow).collect::<Vec<u16>>(), "the title's `#12 open ↗` links to the pull request");
     }
 
     #[test]
@@ -489,6 +517,7 @@ mod tests {
         let (buf, rows, _) = drawn(&centre(Some(row)));
         assert_eq!(rows[0], "   Plan review r2 pending");
         assert!((0..60).all(|x| !buf[(x, 0)].symbol().contains("]8;;")));
+        assert!(linked(&buf, 0, "]8;;").is_empty());
     }
 
     #[test]
