@@ -75,7 +75,7 @@ Phase `grounding`. Steps: [Grounding](#grounding), [Clarifying](#clarifying), [S
    ```
 
    Use `decide` for a settled choice (`--supersedes` when it replaces an earlier one), `note` for a fact, `ask` for a question the User has not settled and `answer` when it is. Plan-only detail (this Plan's assumptions, its Jobs) belongs in the Specs, not the Context.
-2. **Assumptions.** List what remains as numbered assumptions (A1, A2, …). Confirm them with the User in one `ask_user_question` (Accept or Change). Copy each accepted assumption into the `context` of every Job it affects: a Worker sees only its Spec. Move on only after the User accepts.
+2. **Assumptions.** List what remains as numbered assumptions (A1, A2, …). List them in the chat first, then confirm them with the User in one short `ask_user_question` (Accept or Change). Copy each accepted assumption into the `context` of every Job it affects: a Worker sees only its Spec. Move on only after the User accepts.
 3. **Move to `plan`.** `cpd plan phase plan` is the only manual phase change. PRs and Jobs can be drafted only from here. Run it once Grounding, Clarifying and Specifying are done.
 
 ## 2. Plan
@@ -100,7 +100,7 @@ cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --pr <key>
 
 The spec file has `goal`, `context`, `touches`, `acceptance` and `out_of_scope`. Details, an example, Tiers and Dependencies: [references/spec-files.md](references/spec-files.md). The rules:
 
-- **Size:** about 13 min and about 150 turns per Job, including worktree setup and dependency install. The timeout is 30 min of active time. Split anything larger.
+- **Size:** an Attempt gets `attempt_minutes` (90 on the User's machines); the timeout is that configured value, not a fixed one. Size a Job to fit well inside it (about 150 turns), including worktree setup and dependency install. Split anything larger.
 - **Every PR needs at least one Job.**
 - **Tier:** `S1` for coding, `H2` for docs. Use `O` only for judgement-heavy work.
 - **Complete and guess-free:** a fresh Worker with only this Spec must finish without asking. If you cannot fill a field without guessing, return to [Clarifying](#clarifying).
