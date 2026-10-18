@@ -20,7 +20,7 @@ struct Tool {
 
 const TOOLS: [Tool; 4] = [
     Tool { name: "git", args: &["--version"], parts: 3, min: [2, 43, 0], below: None, expected: ">= 2.43.0" },
-    Tool { name: "tmux", args: &["-V"], parts: 2, min: [3, 4, 0], below: None, expected: ">= 3.4" },
+    Tool { name: "tmux", args: &["-V"], parts: 2, min: [3, 6, 0], below: None, expected: ">= 3.6" },
     Tool { name: "pi", args: &["--version"], parts: 3, min: [1, 2, 0], below: Some([2, 0, 0]), expected: ">= 1.2.0 < 2.0.0" },
     Tool { name: "gh", args: &["--version"], parts: 3, min: [2, 45, 0], below: None, expected: ">= 2.45.0" },
 ];
