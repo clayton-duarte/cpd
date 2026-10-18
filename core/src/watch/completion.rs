@@ -1,6 +1,7 @@
 //! E4, completion (contract §3.7), per PR: a PR in status `dispatch` with no
-//! Job `queued` or `running`, at least one `merged`, and `all_merged_at` null
-//! gets `all-merged` `{pr, merged, cancelled}` and that `all_merged_at`, once.
+//! Job `draft`, `queued` or `running`, at least one `merged`, and
+//! `all_merged_at` null gets `all-merged` `{pr, merged, cancelled}` and that
+//! `all_merged_at`, once. A `draft` is an unapproved batch: the PR waits for it.
 
 use serde_json::json;
 
@@ -16,7 +17,7 @@ use crate::store::WriteTxn;
 const DONE: &str = "SELECT r.plan, r.key FROM prs r
   WHERE (?1 IS NULL OR r.plan = ?1) AND (?2 IS NULL OR r.key = ?2)
     AND r.status = 'dispatch' AND r.all_merged_at IS NULL
-    AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = r.plan AND j.pr = r.key AND j.status IN ('queued', 'running'))
+    AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = r.plan AND j.pr = r.key AND j.status IN ('draft', 'queued', 'running'))
     AND EXISTS (SELECT 1 FROM jobs j WHERE j.plan = r.plan AND j.pr = r.key AND j.status = 'merged')
   ORDER BY r.plan, r.key";
 
@@ -70,7 +71,7 @@ fn complete(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrKey) -> Result<bool, CpdErr
     let merged = keys(tx, plan, pr, "merged")?;
     let cancelled = keys(tx, plan, pr, "cancelled")?;
     let failed = keys(tx, plan, pr, "failed")?;
-    let mut text = format!("No Job of PR {pr} of Plan {plan} is queued or running. Merged: {}.", merged.join(", "));
+    let mut text = format!("No Job of PR {pr} of Plan {plan} is draft, queued or running. Merged: {}.", merged.join(", "));
     if !cancelled.is_empty() {
         text += &format!(" Cancelled: {}.", cancelled.join(", "));
     }

@@ -68,16 +68,21 @@ fn wait_started(tmux: &Tmux, store: &mut Store, pane: &PaneId, since: i64) -> Re
         let found = tmux.list_panes()?.into_iter().find(|p| p.pane == *pane);
         let Some(found) = found else { return Err(failed("its pane is gone.".to_owned())) };
         if found.dead {
-            let status = found.dead_status.map_or_else(String::new, |s| format!(" with status {s}"));
+            let status = found.dead_status.map_or_else(|| ", its exit status is unknown".to_owned(), |s| format!(" with status {s}"));
             return Err(failed(format!("it exited{status}; see the pane and run/watch.log.")).with("exit", found.dead_status));
         }
-        let started: bool = store.read(|conn| {
-            Ok(conn.query_row(
-                "SELECT EXISTS (SELECT 1 FROM events WHERE id > ?1 AND kind = 'watch-started' AND json_extract(data, '$.pid') = ?2)",
-                rusqlite::params![since, found.pid],
-                |r| r.get(0),
-            )?)
-        })?;
+        // No pid: tmux >= 3.8 has seen its tty close, so it is dying and is
+        // dead at a later poll.
+        let started = match found.pid {
+            Some(pid) => store.read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM events WHERE id > ?1 AND kind = 'watch-started' AND json_extract(data, '$.pid') = ?2)",
+                    rusqlite::params![since, pid],
+                    |r| r.get::<_, bool>(0),
+                )?)
+            })?,
+            None => false,
+        };
         if started {
             return Ok(());
         }

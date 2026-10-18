@@ -123,3 +123,11 @@ test("rules allow git and gh for diagnosis, still forbid tmux, wt, force pushes 
   assert.ok(!/Never run `git`/.test(text), "git is no longer forbidden");
   assert.match(text, /gh pr checks <n>[^|\n]*gh run view <run-id> --log-failed/);
 });
+
+test("the skill adds later batches as drafts and approves each with cpd_plan_review in any phase", () => {
+  const text = skillFiles()[0]!.text;
+  assert.match(text, /--pr <key> --draft/, "later batches are added with job add --draft");
+  assert.match(text, /### Starting a later batch[\s\S]*cpd_plan_review[\s\S]*### Appending fixes/, "a later batch starts with a Plan review");
+  assert.doesNotMatch(text, /no Plan review for appended work/, "the append-in-chat flow is gone");
+  assert.ok(synopses().get("job add")!.has("--draft"), "commands.md documents job add --draft");
+});

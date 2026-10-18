@@ -148,7 +148,7 @@ fn assert_server_options(s: &Server) {
 /// killed then (the pane is dead, its status never read, so `pane-died` never
 /// fires), about one time in two right after `display`, never 20 ms later.
 fn kill_program(t: &Tmux, id: &PaneId) {
-    let pid = pane(&t.list_panes().unwrap(), id).pid;
+    let pid = pane(&t.list_panes().unwrap(), id).pid.expect("a live pane has a pid");
     sleep(Duration::from_millis(100));
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), nix::sys::signal::Signal::SIGKILL).unwrap();
 }
@@ -175,7 +175,7 @@ fn a_killed_view_pane_respawns_and_a_killed_lead_or_engine_pane_stays_dead() {
     wait_for("the view to respawn", || {
         let panes = t.list_panes().unwrap();
         let p = pane(&panes, &view);
-        !p.dead && p.pid != view_pid
+        !p.dead && p.pid.is_some() && p.pid != view_pid
     });
     sleep(Duration::from_millis(300));
     let panes = t.list_panes().unwrap();
@@ -267,7 +267,7 @@ fn builds_the_cockpit_and_finds_its_panes_by_option() {
     assert_eq!((&parked.pane, &parked.window, parked.window_name.as_str()), (&lead_pane, &park_window, "park-cpd2"));
     let lead_pid = parked.pid;
     let placeholder_pid = pane(&panes, &placeholder).pid;
-    let slot_size = |pid: u32| {
+    let slot_size = |pid: Option<u32>| {
         let panes = t.list_panes().unwrap();
         let p = panes.iter().find(|p| p.pid == pid).unwrap().pane.clone();
         let out = s.env.tmux(&["display", "-p", "-t", p.as_str(), "#{pane_width}x#{pane_height}"]);

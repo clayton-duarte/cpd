@@ -119,7 +119,7 @@ mod tests {
             window_name: window.into(),
             dead: false,
             dead_status: None,
-            pid: 1,
+            pid: Some(1),
             cpd_session: session.map(|s| SessionId::parse(s).unwrap()),
             cpd_view: view,
         }
