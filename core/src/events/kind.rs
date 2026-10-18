@@ -31,6 +31,12 @@ pub struct Spec {
     pub optional: &'static [&'static str],
 }
 
+/// The adapter/cpd protocol number (commands.md §1.2, contract §5.2 "The protocol number"),
+/// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
+/// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
+/// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
+pub const PROTOCOL: u32 = 1;
+
 use Set::{Maybe as M, No as N, Yes as Y};
 
 const fn spec(scope: [Set; 5], required: &'static [&'static str], optional: &'static [&'static str]) -> Spec {
@@ -183,5 +189,31 @@ impl FromStr for Kind {
                 .with("kind", s)
                 .with("kinds", Kind::ALL.iter().map(|k| k.as_str()).collect::<Vec<_>>())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
+    /// The protocol and the `sha256` of the sorted kinds, joined by `\n`, they were last raised for.
+    const PINNED: (u32, &str) = (1, "894fdc95a585e7aec7fa1250be20861170546ec969905ba74a1e23aaf816f2ed");
+
+    fn kinds_hash() -> String {
+        let mut names: Vec<&str> = Kind::ALL.iter().map(|k| k.as_str()).collect();
+        names.sort_unstable();
+        format!("{:x}", Sha256::digest(names.join("\n").as_bytes()))
+    }
+
+    #[test]
+    fn the_event_kinds_are_pinned_to_the_protocol() {
+        assert_eq!(
+            (PROTOCOL, kinds_hash().as_str()),
+            PINNED,
+            "The Event kinds or PROTOCOL changed. Raise PROTOCOL (core/src/events/kind.rs) when the kinds changed, \
+             then set PINNED to ({PROTOCOL}, {:?}) and update `PROTOCOL` and `KINDS` in pi/lib/event.ts.",
+            kinds_hash()
+        );
     }
 }
