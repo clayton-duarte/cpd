@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { adapter, type Options } from "../lib/adapter.ts";
-import type { Ctx, Message, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
+import type { CommandCtx, Ctx, Message, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
 
 /** A fake `cpd` on PATH and a fake pi, so the adapter is tested through its real boundaries (child processes, pi's API). */
 
@@ -66,6 +66,8 @@ export type Call = { phase: "start" | "end"; argv: string[]; since?: string; fee
 export class Fixture {
   readonly dir = mkdtempSync(join(tmpdir(), "pi-test-"));
   readonly cpdHome = join(this.dir, "cpd-home");
+  /** Stands for the adapter's installed directory (`options.reload.dir`). */
+  readonly adapterDir = join(this.dir, "adapter");
   readonly pi: FakePi;
   private readonly saved: Record<string, string | undefined> = {};
 
@@ -73,6 +75,7 @@ export class Fixture {
     mkdirSync(join(this.dir, "bin"));
     mkdirSync(join(this.dir, "resp"));
     mkdirSync(this.cpdHome);
+    mkdirSync(this.adapterDir);
     writeFileSync(join(this.dir, "bin", "cpd"), FAKE_CPD);
     chmodSync(join(this.dir, "bin", "cpd"), 0o755);
     for (const k of ["PATH", "FAKE_CPD_DIR", "CPD_SESSION", "CPD_PLAN", "CPD_HOME"]) this.saved[k] = process.env[k];
@@ -140,7 +143,7 @@ export class Fixture {
 
   /** Start the adapter under test with fast timing. */
   load(options: Options = {}): void {
-    adapter(this.pi, { timing: { restartInitialMs: 30, restartMaxMs: 120, requestTimeoutMs: 300, pollMs: 30, shutdownWaitMs: 200 }, ...options });
+    adapter(this.pi, { timing: { restartInitialMs: 30, restartMaxMs: 120, requestTimeoutMs: 300, pollMs: 30, shutdownWaitMs: 200 }, reload: { dir: this.adapterDir, intervalMs: 20 }, ...options });
   }
 
   async close(): Promise<void> {
@@ -178,6 +181,15 @@ export class FakePi implements PiApi {
   readonly emitted: { channel: string; data: any }[] = [];
   sessionName: string | undefined;
   idle = true;
+  pendingMessages = false;
+  editorText = "";
+  /** How many times a command's `ctx.reload()` was called. */
+  reloads = 0;
+  /** What `ctx.reload()` does: by default nothing, like pi's mid-turn reload. */
+  onReload: () => void | Promise<void> = () => {};
+  readonly commands = new Map<string, (args: string, ctx: CommandCtx) => Promise<void>>();
+  readonly commandErrors: unknown[] = [];
+  readonly userMessages: { content: string; options: { expandPromptTemplates: boolean } }[] = [];
   mode = "tui";
   sessionId = ID;
 
@@ -226,13 +238,44 @@ export class FakePi implements PiApi {
     this.tools.push(tool);
   }
 
+  registerCommand(name: string, options: { handler: (args: string, ctx: CommandCtx) => Promise<void> }): void {
+    this.commands.set(name, options.handler);
+  }
+
+  /** Like pi: with `expandPromptTemplates` a registered extension command runs at once (not awaited by the sender). */
+  sendUserMessage(content: string, options: { expandPromptTemplates: boolean }): void {
+    this.userMessages.push({ content, options });
+    const handler = options.expandPromptTemplates && content.startsWith("/") ? this.commands.get(content.slice(1).split(" ")[0]!) : undefined;
+    if (handler) void handler("", this.commandCtx()).catch((e) => void this.commandErrors.push(e));
+  }
+
   ctx(): Ctx {
     return {
       mode: this.mode,
-      ui: { notify: (m) => void this.notices.push(m) },
+      ui: { notify: (m) => void this.notices.push(m), getEditorText: () => this.editorText },
       sessionManager: { getSessionId: () => this.sessionId, getEntries: () => this.entries },
       isIdle: () => this.idle,
+      hasPendingMessages: () => this.pendingMessages,
     };
+  }
+
+  /** A command context that, like pi's, throws on any use once `reload()` has resolved. */
+  commandCtx(): CommandCtx {
+    let stale = false;
+    const ctx: CommandCtx = {
+      ...this.ctx(),
+      reload: async () => {
+        this.reloads++;
+        await this.onReload();
+        stale = true;
+      },
+    };
+    return new Proxy(ctx, {
+      get: (target, key) => {
+        if (stale) throw new Error(`stale ctx: .${String(key)} used after reload()`);
+        return Reflect.get(target, key);
+      },
+    });
   }
 
   async fire(event: string, payload: Record<string, unknown> = {}): Promise<void> {

@@ -8,9 +8,10 @@ import { errorMessage, eventMessage, FOLLOW_UP, LEAD_MESSAGES } from "./delivery
 import type { CpdEvent } from "./event.ts";
 import { parseLine } from "./event.ts";
 import { DEFAULT_TIMING, Follower, type Spawn, type Timing } from "./follower.ts";
-import type { Ctx, PiApi } from "./pi.ts";
+import type { CommandCtx, Ctx, PiApi } from "./pi.ts";
 import { parseOpened, parseResult, parseStatus, request } from "./plannotator.ts";
 import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, REVIEW_LABEL, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
+import { adapterDir, DEFAULT_POLL_MS, pollAdapter, type Poll, refusal, RELOAD_COMMAND, RELOAD_TRIGGER } from "./reload.ts";
 import { Facts, Reporter, stateArgs, type Wanted } from "./state.ts";
 
 export type Options = {
@@ -18,6 +19,8 @@ export type Options = {
   env?: Record<string, string | undefined>;
   timing?: Partial<Timing>;
   spawn?: Spawn;
+  /** The directory whose replacement means an install, and how often it is polled. Default: the adapter's own directory, every {@link DEFAULT_POLL_MS}. */
+  reload?: { dir?: string; intervalMs?: number };
 };
 
 export const QUESTION_LABEL = "cpd: Worker question";
@@ -44,6 +47,8 @@ type Run = {
   /** False until the start-up's `session state idle` is done: facts are kept, nothing is reported before. */
   reporting: boolean;
   abort: AbortController;
+  /** Watches the adapter directory for an install (§15 "Reload after an install"). */
+  reload: Poll | undefined;
   unsubscribe: (() => void)[];
 };
 
@@ -87,6 +92,23 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       (e) => deliver("session state", e),
     );
 
+  // ---- reload after an install ----
+
+  const guardOf = (r: Run, ctx: Ctx) => ({ idle: ctx.isIdle(), pending: ctx.hasPendingMessages(), state: r.facts.wanted().state, editorText: ctx.ui.getEditorText() });
+
+  pi.registerCommand(RELOAD_COMMAND, {
+    description: "cpd: reload pi after an install (runs by itself; does nothing unless pi is idle, unblocked and the editor is empty)",
+    async handler(_args: string, ctx: CommandCtx) {
+      const r = run;
+      if (!r || refusal(guardOf(r, ctx)) !== undefined) return r?.reload?.retry();
+      try {
+        await ctx.reload(); // `ctx` is stale from here on
+      } finally {
+        r.reload?.retry(); // still running: the reload did not happen, the next tick may try again
+      }
+    },
+  });
+
   // ---- start-up (§15.2) ----
 
   async function start(ctx: Ctx): Promise<void> {
@@ -127,6 +149,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       knownName: info.name,
       reporting: false,
       abort,
+      reload: undefined,
       unsubscribe: [],
     };
     r.follower = new Follower(
@@ -194,6 +217,13 @@ export function adapter(pi: PiApi, options: Options = {}): void {
 
     // 6. follow
     r.follower.start();
+    r.reload = pollAdapter({
+      dir: options.reload?.dir ?? adapterDir(),
+      intervalMs: options.reload?.intervalMs ?? DEFAULT_POLL_MS,
+      allowed: () => run === r && ctxOf.current !== undefined && refusal(guardOf(r, ctxOf.current)) === undefined,
+      trigger: () => pi.sendUserMessage(RELOAD_TRIGGER, { expandPromptTemplates: true }),
+      onError: (e) => deliver("reload after install", e),
+    });
 
     // Recovery of the reviews this session opened (§15.5), in the background.
     r.unsubscribe.push(
@@ -212,6 +242,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     if (!r) return;
     run = undefined;
     ctxOf.current = undefined;
+    r.reload?.stop();
     r.abort.abort();
     r.follower.stop();
     r.unsubscribe.forEach((u) => u());
