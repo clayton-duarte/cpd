@@ -163,6 +163,7 @@ error_codes! {
     NotATerminal = "not_a_terminal" => Refused,
     ArchiveBlocked = "archive_blocked" => Refused,
     Archived = "archived" => Refused,
+    ItemClosed = "item_closed" => Refused,
 
     // Exit 4: not found.
     ContextNotFound = "context_not_found" => NotFound,
@@ -173,6 +174,7 @@ error_codes! {
     ReviewNotFound = "review_not_found" => NotFound,
     SessionNotFound = "session_not_found" => NotFound,
     BaseNotFound = "base_not_found" => NotFound,
+    ItemNotFound = "item_not_found" => NotFound,
 
     // Exit 5: timeout.
     StoreBusy = "store_busy" => Timeout,
@@ -328,6 +330,8 @@ mod tests {
             (ErrorCode::LockedJobTampered, 3),
             (ErrorCode::RecordNotFound, 3),
             (ErrorCode::PlanNotFound, 4),
+            (ErrorCode::ItemNotFound, 4),
+            (ErrorCode::ItemClosed, 3),
             (ErrorCode::JobNotFound, 4),
             (ErrorCode::SessionNotFound, 4),
             (ErrorCode::BaseNotFound, 4),

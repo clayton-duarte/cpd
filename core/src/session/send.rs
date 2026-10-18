@@ -60,9 +60,9 @@ pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
         };
         let preview: String = text.as_str().chars().take(PREVIEW_CHARS).collect();
         let summary = format!("Message for {} from {who}: {preview}", target.name);
-        let data = json!({"from": from, "text": text.as_str()});
+        let data = json!({"from": from, "text": text.as_str(), "wake": args.wake});
         let event = append(tx, scoped(NewEvent::new(Kind::SessionMessage, summary, data), &target))?;
         Ok((event, target))
     })?;
-    Ok(Output::success(json!({"event": event, "session": target.id, "from": from})))
+    Ok(Output::success(json!({"event": event, "session": target.id, "from": from, "wake": args.wake})))
 }

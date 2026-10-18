@@ -30,6 +30,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 18. [Changes from cpd 1](#18-changes-from-cpd-1)
 19. [Amendments to contract.md](#19-amendments-to-contractmd)
 20. [Sections changed by R19 and R20](#20-sections-changed-by-r19-and-r20)
+21. [`inbox`](#21-inbox)
 
 ## 1. Conventions
 
@@ -55,7 +56,7 @@ Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Thr
 | `cpd session run`, `cpd tui view` (internal) | they run pi or draw a ratatui view in their pane | they are the programs inside cockpit panes (§6.2), not commands an agent calls. If they fail before taking the terminal, they print the failure envelope and exit with its code |
 | `cpd tui --attach` | nothing on success: it replaces itself with `tmux attach` | the approved outline says `tui` "builds and attaches the cockpit"; without `--attach`, `cpd tui` prints JSON like every command |
 
-`cpd --version` (like `--help`) prints one JSON value too: `{"ok": true, "version": "0.0.0", "schema": 6, "store_schema": 6, "protocol": 2}`. `schema` is the newest store schema the binary supports (contract §4.5); `store_schema` is the database's current schema, `PRAGMA user_version` of `$CPD_HOME`'s database opened read-only, without migrating and without the schema check, or `null` when the database file does not exist. A binary can open the store when `store_schema` is `null` or `<= schema`. `protocol` is an integer, **2** today (1 until Plan manager added `session-message`), raised whenever an Event kind, an Event `data` field the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on (contract §5.2 "The protocol number"); the adapter checks it (§15.2). `--version` never creates, migrates or writes the database.
+`cpd --version` (like `--help`) prints one JSON value too: `{"ok": true, "version": "0.0.0", "schema": 6, "store_schema": 6, "protocol": 2}`. `schema` is the newest store schema the binary supports (contract §4.5); `store_schema` is the database's current schema, `PRAGMA user_version` of `$CPD_HOME`'s database opened read-only, without migrating and without the schema check, or `null` when the database file does not exist. A binary can open the store when `store_schema` is `null` or `<= schema`. `protocol` is an integer, **3** today (1 until Plan manager added `session-message`, 2 until Plan inbox added the four `inbox-*` kinds), raised whenever an Event kind, an Event `data` field the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on (contract §5.2 "The protocol number"); the adapter checks it (§15.2). `--version` never creates, migrates or writes the database.
 
 ### 1.3 Selection and common refusals
 
@@ -90,6 +91,8 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `store_tampered` | 1 | a write command, when the schema check fails (§4.3); read commands report it in `tamper` instead |
 | `store_busy` | 5 | no write lock within `store_busy_ms` (§4.2) |
 | `context_not_found`, `plan_not_found`, `pr_not_found`, `job_not_found`, `attempt_not_found`, `escalation_not_found`, `review_not_found`, `session_not_found` | 4 | the selected or named object does not exist. (A Context record that names a missing record is `record_not_found`, exit 3, §4.6) |
+| `item_not_found` | 4 | `inbox show`, `snooze` or `dismiss` named an Inbox item that does not exist |
+| `item_closed` | 3 | `inbox snooze` or `dismiss` named an Inbox item that is closed (§21) |
 | `archive_blocked` | 3 | `context archive`, `plan archive` or `session archive` found a live object (contract §2.2 "Archived"); `details.blockers` lists each, `details.next` says what to do |
 | `archived` | 3 | the object (or its Context or Plan) is archived and the command does not work on archived objects; `details.next` is the unarchive command |
 | `cas_lost` | 3 | a compare-and-swap found the state changed since it was read (§4.2); rerun the command |
@@ -161,6 +164,8 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `events list`, `events follow` | pi adapter, TUI, scripts | no | §5.4 |
 | `watch` | `plan lock`, `tui`, User | yes | §3.7, §6.6 |
 | `tui`, `tui view` (internal) | User | no | §6.2 |
+| `inbox list`, `inbox show` | User, TUI | no | §2.2 Inbox item |
+| `inbox snooze`, `dismiss` | User (TUI) | yes | §2.2 Inbox item |
 | `doctor`, `config`, `tiers` | User | `tiers` refreshes its cache | §8, §9 |
 
 ## 3. `context`
@@ -223,7 +228,7 @@ cpd context show [--context <id>] [--since <seq>] [--record <id>]
 
 | Flag | Meaning |
 |---|---|
-| `--since <seq>` | only records whose index position `seq` is greater (exclusive, like `events --since`); what a Session's turn-start update holds (§15.7) |
+| `--since <seq>` | only records whose index position `seq` is greater (exclusive, like `events --since`); what a Manager's turn-start update holds (§15.7); a Lead passes the `seq` it last read |
 | `--record <id>` | print that one record in full (B3-A4): `records` has only it, `markdown` renders only it with its whole `text`. Exclusive with `--since` (`usage`). A record not in the Context: `record_not_found` (exit 3, §4.6) |
 
 Effects: none. Output: the Context, its records in index order, and `markdown`, the rendering of §2.2 "Context record" (title and Jira key; Plans; active decisions; superseded decisions with their successor; open questions; answered questions with their answers; notes; each item with its id and date; briefs under their Plan, see below). With `--since`, `markdown` renders only those records, in the same order of sections.
@@ -1084,7 +1089,7 @@ Effects (contract §7.6 gives the query, the mapping and the caveats):
 - **Events**, in that transaction, for the Plan whose PR points to the pull request only: **Event** `pr-feedback` (data of contract §5.2) when the checks became `failed`, the review `changes_requested`, the state `closed` or `mergeable` `conflicting` (reason `conflict`; from anything else, once per transition). A pull request that became `merged`: the PR `status = merged`, `merged_at`, **Event** `pr-merged` `{pr, number, url, merged_at}`; when every PR that is not `cancelled` is then `merged`, the same transaction sets `plans.phase = done`, `done_at` and appends `plan-done` `{prs: [{key, number, url, merged_at}]}`, once each time the Plan reaches `done`: again when a reopened Plan's last PR merges (§3.1, D2). Pull requests no Plan owns get no Event.
 - **Starting the PRs that waited for it** (A9): `pr poll` does not start a PR itself. Engine E7, which runs after E5 in the same tick (§3.7), starts every `waiting` PR whose needs are now all `merged`, from a fresh `fetch origin <base>`; when `pr poll` was run by hand, the next tick does, or the Lead runs `pr start <key>` (§9.7).
 - **A pull request closed without a merge** (A11): `pr-feedback` with `reasons: ["closed"]`; the PR stays `open` in cpd, every PR that needs it stays `waiting`, and the Lead asks the User.
-- **After a PR is merged** (§7.2; hs-d138, hs-d142): for each PR that became `merged` in this poll, kill that PR's Attempt windows; then, per Attempt of its Jobs whose worktree exists: `git worktree remove --force`, `git branch -D`; then its Lead worktree: kept when dirty (`git status --porcelain` not empty, untracked files included) or unpushed (`git rev-list HEAD --not --remotes=origin` not empty), else `git worktree remove` and `git -C <repo> branch -D <lead branch>`. Best effort per item: a failure does not stop the others. Remote branches are never touched. A kept or failed Lead worktree appends one **Event** `error` `{source: "pr poll", code: "cleanup_failed", details: {plan, pr, path, reason}}` (`reason`: `dirty`, `unpushed` or git's stderr tail), only from the poll that saw the merge. Every later poll retries the merged PRs that still have a path on disk, and those retries append no Event. It is per PR, not at `done`; PRs closed unmerged and abandoned Plans are not cleaned up here (G5).
+- **After a PR is merged** (§7.2; hs-d138, hs-d142): for each PR that became `merged` in this poll, kill that PR's Attempt windows; then, per Attempt of its Jobs whose worktree exists: `git worktree remove --force`, `git branch -D`; then its Lead worktree: kept when dirty (`git status --porcelain` not empty, untracked files included) or unpushed (`git rev-list HEAD --not --remotes=origin` not empty), else `git worktree remove` and `git -C <repo> branch -D <lead branch>`. The removals of a PR run under its repo's per-repo lock (contract §1.4), taken without waiting and held only while that PR's paths are removed; when it is held (a Gate, a merge or a push runs in that repo), the poll skips that PR with no Event and a later poll cleans it up, because the poll never waits and a Gate must not lose its worktree (hs-n124); a lock that cannot be opened counts as a failed removal. Killing the Attempt windows does not need the lock. Best effort per item: a failure does not stop the others. Remote branches are never touched. A kept or failed Lead worktree appends one **Event** `error` `{source: "pr poll", code: "cleanup_failed", details: {plan, pr, path, reason}}` (`reason`: `dirty`, `unpushed` or git's stderr tail), only from the poll that saw the merge. Every later poll retries the merged PRs that still have a path on disk, and those retries append no Event. It is per PR, not at `done`; PRs closed unmerged and abandoned Plans are not cleaned up here (G5).
 
 Output: `polled`, the number of pull requests in the search; `changed`, one entry for each pull request whose row was inserted or updated; `removed`, the number of rows deleted; `feedback`, `merged` and `done`, the `{plan, pr}` pairs that got `pr-feedback` or `pr-merged`, and the Plans that became `done`; `rate_limit`, the search's `cost`, `remaining` and `reset_at` (E5 reads it, §3.7); and, only with a Plan, `prs`, one entry for each of its PRs in key order that is not `cancelled`, with its `status` and its `pull_request` row (or null).
 
@@ -1609,16 +1614,17 @@ Effects, in this order:
 ### 10.13 `session send`
 
 ```
-cpd session send <id> (<text> | --file <f>)
+cpd session send <id> (<text> | --file <f>) [--wake]
 ```
 
-Sends one message to a Lead or a Manager Session (hs-d92, hs-d133). It appends an Event; the target's adapter delivers it (§15.3).
+Sends one message to a Lead or a Manager Session (hs-d92, hs-d133). It appends an Event; the target's adapter delivers it (§15.3). **By default it never starts a turn** (hs-d209, D3): the target holds the message in its context at its next turn.
 
 | Argument | Meaning |
 |---|---|
 | `<id>` | the target Session (the short forms of §1.3 are accepted) |
 | `<text>` | the message, a `Text` (1–20 000 characters) |
 | `--file <f>` | the message read from a file, same limits |
+| `--wake` | the message starts a turn when the target is idle (a working or blocked target gets it after its running turn, never interrupted). For a Manager waking a stalled Lead; use it sparingly. Default: off |
 
 Exactly one of `<text>` and `--file` (else `usage`).
 
@@ -1631,14 +1637,14 @@ Exactly one of `<text>` and `--file` (else `usage`).
 A `stopped` Lead or Manager is accepted: it gets the message when its pi starts (its follower replays from its cursor, §15.2).
 
 Effects:
-- **Rows**, one transaction: **Event** `session-message` with `session` = the target, `context` and `plan` = the target's, `data` = `{from, text}`. `from` is `CPD_SESSION`, else `PI_SESSION_ID`, else null (the User). The Event's `text` is the message text; the adapter composes the delivered content (§15.3).
+- **Rows**, one transaction: **Event** `session-message` with `session` = the target, `context` and `plan` = the target's, `data` = `{from, text, wake}`; `wake` is true only with `--wake`. `from` is `CPD_SESSION`, else `PI_SESSION_ID`, else null (the User). The Event's `text` is the message text; the adapter composes the delivered content (§15.3).
 - **tmux:** none. No pane is started or typed into.
 
 ```json
-{"ok": true, "event": 4812, "session": "a41b…", "from": "596d007f-…"}
+{"ok": true, "event": 4812, "session": "a41b…", "from": "596d007f-…", "wake": false}
 ```
 
-`from` is null when neither variable is set. Idempotent: no; each call is one message.
+`from` is null when neither variable is set. `wake` echoes the flag. Idempotent: no; each call is one message.
 
 ## 11. `events`
 
@@ -1695,13 +1701,13 @@ cpd watch [--ensure]
 
 The engine, one per machine (§3.7, §6.6, D5).
 
-**Without `--ensure`:** runs E1–E5 and E7 (E6 is removed; E7, the PR start, since R34) every `tick_seconds` in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
+**Without `--ensure`:** runs E1–E5, E7 and E8 (E6 is removed; E7, the PR start, since R34; E8, the Inbox, §21) every `tick_seconds` in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
 
 | Precondition | Code | Exit |
 |---|---|---|
 | `locks/watch.lock` is free | `watch_running` | 3 |
 
-Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, and every row and Event of E1–E5 and E7 (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0. Idempotent: a second one is refused.
+Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, and every row and Event of E1–E5, E7 and E8 (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0. Idempotent: a second one is refused.
 
 **With `--ensure`:** starts the engine when it is not running, and returns at once.
 
@@ -1953,7 +1959,7 @@ The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays
 ### 15.2 Start-up and the cursor
 
 At `session_start`, in this order:
-0. **Protocol check** (hs-a4): `cpd --version`, whose `protocol` (§1.2) is compared with the number the adapter was built for (2 today). Equal: nothing is said. Different: one message to the Session, `cpd adapter: protocol mismatch: protocol_mismatch: cpd speaks protocol N, this adapter M; reload pi (/reload)`, with `details: {kind: "error", code: "protocol_mismatch", cpd: N, adapter: M}`, delivered like the other errors (§15.1), once per installed cpd binary (the identity of the file `cpd` resolves to), not once per follower restart. The adapter keeps following Events either way; it never types into a pane. A `--version` that fails or lacks `protocol` is an ordinary error with its code, once per error code.
+0. **Protocol check** (hs-a4): `cpd --version`, whose `protocol` (§1.2) is compared with the number the adapter was built for (3 today). Equal: nothing is said. Different: one message to the Session, `cpd adapter: protocol mismatch: protocol_mismatch: cpd speaks protocol N, this adapter M; reload pi (/reload)`, with `details: {kind: "error", code: "protocol_mismatch", cpd: N, adapter: M}`, delivered like the other errors (§15.1), once per installed cpd binary (the identity of the file `cpd` resolves to), not once per follower restart. The adapter keeps following Events either way; it never types into a pane. A `--version` that fails or lacks `protocol` is an ordinary error with its code, once per error code.
 1. `cpd session show <id>`: role, Plan, Context, `plan_lead`, `registered_event`, name.
 2. `cpd session state idle --session <id>` (`stopped → idle`, §3.6); then `working` if `ctx.isIdle()` is false.
 3. **Name:** if pi's session name differs from the Session's `name`, `pi.setSessionName(name)`: a `session-renamed` missed while pi was down still applies.
@@ -1980,11 +1986,11 @@ Events arrive in id order; the follower already applied §11's `--session` rule,
 | `plan-review` with `status: approved` or `rejected`, for a pending entry of this session | a decision made outside plannotator (§15.5 "Deciding elsewhere"): closes `plan-review:<review>`; message `cpd-plan-decision`, **turn** (own custom type, not `cpd`). For any other review: ignored | |
 | `session-renamed` (`session` = itself) | `pi.setSessionName(name)` and `ctx.ui.notify("cpd: session renamed to \"<name>\"")`; no message, no turn | same |
 | `attempt-nudge` (`session` = itself) | | message with `data.prompt` as content, **turn** |
-| `session-message` (`session` = itself) | message, **turn**, `deliverAs: "followUp"`; for every Lead (Plan Lead, side fork) and the Manager (the `--session` rule delivers Events addressed to a Session to it). Content `Message from <sender>: <text>`, `<sender>` = the sender Session's name and id (`<name> (<id>)`), or `the User` when `data.from` is null. An idle Lead starts a turn at once; a working or blocked one gets it after its running turn, never interrupted | |
+| `session-message` (`session` = itself) | message, `deliverAs: "followUp"`, **turn only when `data.wake` is true** (`triggerTurn: false` otherwise, hs-d209 D3); for every Lead (Plan Lead, side fork) and the Manager (the `--session` rule delivers Events addressed to a Session to it). Content `Message from <sender>: <text>`, `<sender>` = the sender Session's name and id (`<name> (<id>)`), or `the User` when `data.from` is null. With `data.wake`, an idle Lead starts a turn at once; a working or blocked one gets it after its running turn, never interrupted. Without it, the message is in the Lead's context at its next turn and starts none | |
 | `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | ignored: no message, no turn | ignored |
 | every other kind | ignored | ignored |
 
-**The Manager** (B3-A5) is a Session of role `manager`: it has no Plan, so §15.2 step 5 (blocking reasons) and §15.5 (plannotator, the tool `cpd_plan_review`) do not apply to it and nothing is opened or registered for them. Its follower follows only Events addressed to it (§11), so of this table only `session-message` and `session-renamed` reach it: a Plan's Events never wake it. It learns of them through the digest at turn start (§15.7).
+**The Manager** (B3-A5) is a Session of role `manager`: it has no Plan, so §15.2 step 5 (blocking reasons) and §15.5 (plannotator, the tool `cpd_plan_review`) do not apply to it and nothing is opened or registered for them. Its follower follows only Events addressed to it (§11), so of this table only `session-message` and `session-renamed` reach it: a Plan's Events never wake it. It learns of them through the digest at turn start (§15.7), which only a Manager gets.
 
 This is §5.3's table; the `plan-review` row is the Plan review protocol §5.3 leaves to this file (amendment 6, §19). A blocking reason opened twice or closed when not open changes nothing (cpd 1 `blocked.ts`, kept), which makes replays harmless.
 
@@ -2070,9 +2076,11 @@ When a step fails: **no reload**; the recorded identity stays, so the check runs
 
 ### 15.7 Context updates at turn start
 
-Batch B2 (hs-d79, hs-d132). A Lead sees what other Sessions wrote to its Context without polling.
+Batch B2 (hs-d79, hs-d132; narrowed by hs-d209, D1). A Manager sees what other Sessions wrote to its Context, and what its Plans did, without polling.
 
-**When.** At pi's `before_agent_start`, for every run of a Session whose role is `lead` or `manager`; never a Worker. It never starts or interrupts a turn: it only adds a message to the run that is starting.
+**Leads get none** (hs-d209, D1, D2; this supersedes hs-d79 for Leads). Nothing from the Context is pushed into a Lead's turn: a Session of role `lead` (a Plan Lead, a side fork) gets no `cpd-context` message. A Lead reads the Context on demand, `cpd context show --since <seq>`, at the points the cpd-lead skill names: grounding; before drafting each batch; before answering an Escalation from the records; before `pr open`.
+
+**When.** At pi's `before_agent_start`, for every run of a Session whose role is `manager`; never a Lead, never a Worker. It never starts or interrupts a turn: it only adds a message to the run that is starting.
 
 **What.** The adapter returns one message, `customType: "cpd-context"`, `display: true`, listing the Context records written **by other Sessions** (`by.session` ≠ this Session) since its cursor, oldest first, each in full, except a `brief`, which is shown short: its id and first line, with its Plan (§3.3; the whole text is `cpd context show --record <id>`). Nothing is returned when there are none. Format:
 
@@ -2285,3 +2293,93 @@ Job `contract-gate-pr` applied the User's decisions R19 (no Job-level Gate or Re
 **commands.md:** the introduction and contents; §1.5, §2, §4.2, §4.3, §4.5, §5 (the Tier flag), §5.1, §5.2, §5.3, §5.6, §5.7, §6.1, §6.2, §6.3, §6.4, §7 and §7.1 (emptied), §9.1, §9.3, §11, §13.2, §14.1, §14.2, §15.3, §16 (now "The Worker contract"), §16.1, §16.2 and §16.3 (emptied), §17, §18, §19 (amendment 11), §20 (new).
 
 **CONTEXT.md:** Dispatch, Ledger, Session, Reviewer (removed), Gate, Quick check, Merged.
+
+## 21. `inbox`
+
+Contract §2.2 "Inbox item", §3.7 E8, §4.4, §5.2. The Inbox is the single source of "needs you": one stored item per thing that needs the User, opened and closed by the engine (E8) from its cause, never by a command. The commands read the items and hide them. Area `core/src/inbox/`. More kinds come from the PR poll; this section describes the core kinds (`dialog`, `plan-review`, `unread`, `job-stuck`, `engine-error`, `question`, and `engine-down`, which is not stored).
+
+An item as printed:
+
+```json
+{"id": 12, "kind": "job-stuck", "urgency": "red", "label": "inbox/core-docs failed", "subject": "job:inbox/core-docs", "context": "building-cpd", "plan": "inbox", "job": "core-docs", "session": null, "record": null, "event": 48311, "url": null, "opened_at": "2026-10-14T21:40:02.114Z", "closed_at": null, "snoozed_until": null, "dismissed_at": null, "age_seconds": 1260}
+```
+
+`age_seconds` is `closed_at` (or now, for an open item) minus `opened_at`. The item `engine-down` has `id: null`, `subject: "engine"` and no links.
+
+### 21.1 `inbox list`
+
+```
+cpd inbox list [--context <c>] [--all] [--closed] [--limit <n>]
+```
+
+| Flag | Meaning |
+|---|---|
+| `--context <c>` | keep the items of that Context (`engine-down` has none, so it is dropped) |
+| `--all` | also list the snoozed and dismissed items, each with `hidden: "snoozed"` or `"dismissed"` |
+| `--closed` | list closed items instead of open ones, newest `closed_at` first |
+| `--limit <n>` | with `--closed`: at most n items; default 50 (1–5000) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--all` and `--closed` are not given together, and `--limit` comes only with `--closed` | `usage` | 2 |
+| `--context` names a Context that exists | `context_not_found` | 4 |
+
+Effects: none; it takes no lock (§4.2). Open visible items come in the order of §2.2 (red, yellow, magenta, white; oldest `opened_at` first), with `engine-down` first when `locks/watch.lock` is free. A snoozed item whose `snoozed_until` has passed is visible again. `hidden` counts the open items now hidden, whether or not `--all` lists them. `events_cursor` is the highest Event id, so a follower can start from it.
+
+```json
+{"ok": true, "engine": {"running": true}, "items": [ {"id": 12, "kind": "job-stuck", "…": "…"} ], "hidden": {"snoozed": 1, "dismissed": 0}, "events_cursor": 48320}
+```
+
+Idempotent: read-only.
+
+### 21.2 `inbox show`
+
+```
+cpd inbox show <id>
+```
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the item exists (open or closed) | `item_not_found` | 4 |
+
+Effects: none. Output `{"ok": true, "item": {…}}`, the item as above. Idempotent: read-only.
+
+### 21.3 `inbox snooze`
+
+```
+cpd inbox snooze <id> <15m | 1h | tomorrow>
+```
+
+`15m` and `1h` are that long from now; `tomorrow` is the next 09:00 in local time (the offset read with `date +%z`, which GNU and BSD `date` both print). Any other value is `usage` (exit 2).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the item exists | `item_not_found` | 4 |
+| the item is open | `item_closed` | 3 |
+
+Effects, one transaction: **rows** `inbox_items.snoozed_until`; **Event** `inbox-snoozed` `{item, until}`. The item returns at its rank when the time passes; its `opened_at` is kept.
+
+```json
+{"ok": true, "item": {"id": 12, "snoozed_until": "2026-10-14T22:40:02.114Z", "…": "…"}}
+```
+
+Idempotent: snoozing again replaces the time and appends another Event.
+
+### 21.4 `inbox dismiss`
+
+```
+cpd inbox dismiss <id>
+```
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the item exists | `item_not_found` | 4 |
+| the item is open | `item_closed` | 3 |
+
+Effects, one transaction: **rows** `inbox_items.dismissed_at`; **Event** `inbox-dismissed` `{item}`. The item stays hidden for the rest of its life; because an item lives only while its cause holds, a new cause is a new item and shows again.
+
+```json
+{"ok": true, "item": {"id": 12, "dismissed_at": "2026-10-14T21:41:02.114Z", "…": "…"}}
+```
+
+Idempotent: yes. An item already dismissed returns `"already": true` and writes nothing, with no Event.

@@ -561,7 +561,17 @@ fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_re
     let mut down = vec!["send-keys", "-t", &pane];
     down.extend(std::iter::repeat_n("j", 45));
     tmux_out(&env, &down);
-    let scrolled = screen_when(&env, &pane, "the chart scrolled", |s| s.iter().all(|l| !l.contains(" j10 ")));
+    // the view takes the keys one by one: wait for the last one (the 45th pill from j10, j54, selected), then for a screen that holds still
+    wait_until("the last pill selected", || {
+        tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]).lines().any(|l| l.contains(" j54 ") && selected(l))
+    });
+    let mut scrolled = screen(&env, &pane);
+    wait_until("the chart to hold still", || {
+        std::thread::sleep(Duration::from_millis(300));
+        let now = screen(&env, &pane);
+        std::mem::replace(&mut scrolled, now) == scrolled
+    });
+    assert!(scrolled.iter().all(|l| !l.contains(" j10 ")), "{}", scrolled.join("\n"));
     assert!(selected(&tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane])), "no pill is selected before the switch");
 
     // another Plan starts at its corner; coming back shows the chart where it was left, with nothing selected
