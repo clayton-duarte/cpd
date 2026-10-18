@@ -8,7 +8,7 @@ mod common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv, refused, wait_until, write_executable};
+use common::{CPD, Run, TestEnv, WATCH_OK, refused, wait_until, write_executable};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{PlanId, ReviewId};
@@ -30,41 +30,18 @@ fn pid(id: &str) -> PlanId {
     PlanId::parse(id).unwrap()
 }
 
-/// `config.toml` on this env's private tmux server.
-fn write_config(env: &TestEnv) {
-    let config = format!("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket());
-    fs::write(env.cpd_home().join("config.toml"), config).unwrap();
-}
-
 /// Where the fake `cpd session run <id>` writes its environment.
 fn pane_env_file(env: &TestEnv, session: &str) -> PathBuf {
     env.root().join(format!("pane-{session}.env"))
 }
 
-/// A fake `cpd` on `PATH`: `session run <id>` records its environment and
-/// sleeps (the pane's program); `watch --ensure` runs `watch`; everything
-/// else is the built binary.
-fn fake_cpd(env: &TestEnv, watch: &str) {
-    env.fake(
-        "cpd",
-        &format!(
-            "case \"$1 $2\" in\n\
-             \"session run\") env > '{root}/pane-'\"$3\".env; exec sleep {SLEEP_SECONDS};;\n\
-             \"watch --ensure\") {watch};;\n\
-             esac\nexec '{CPD}' \"$@\"",
-            root = env.root().display()
-        ),
-    );
-}
-
-const WATCH_OK: &str = "echo '{\"ok\": true, \"started\": true, \"pane\": \"%9\"}'; exit 0";
 const WATCH_FAILS: &str =
     "echo '{\"ok\": false, \"error\": {\"code\": \"watch_start_failed\", \"message\": \"No lock.\", \"details\": {}}}'; exit 1";
 
 /// The env with its config, a fake `cpd`, Context `ctx` and the repo `pay`.
 fn setup(env: &TestEnv) -> PathBuf {
-    write_config(env);
-    fake_cpd(env, WATCH_OK);
+    env.write_tmux_config("");
+    env.fake_cpd_panes(WATCH_OK);
     env.cpd(&["context", "new", "ctx", "--title", "Payments"]).ok();
     env.git_repo("pay")
 }
@@ -1092,14 +1069,14 @@ fn lock_stays_locked_when_the_engine_cannot_start() {
     let env = TestEnv::new();
     let repo = setup(&env);
     approved(&env, &repo);
-    fake_cpd(&env, WATCH_FAILS);
+    env.fake_cpd_panes(WATCH_FAILS);
     let error = refused(&env.cpd(&["plan", "lock", "--plan", "pay"]), "watch_start_failed", 1);
     assert_eq!(error["details"]["next"], "cpd watch --ensure");
     assert_eq!(error["details"]["error"]["message"], "No lock.");
     assert_eq!(show(&env, "pay")["plan"]["phase"], "dispatch", "the Plan stays locked");
 
     // An engine that prints nothing usable fails the same way.
-    fake_cpd(&env, "echo nonsense; exit 0");
+    env.fake_cpd_panes("echo nonsense; exit 0");
     let error = refused(&env.cpd(&["plan", "lock", "--plan", "pay"]), "watch_start_failed", 1);
     assert_eq!(error["details"]["error"]["stdout"], "nonsense");
 }

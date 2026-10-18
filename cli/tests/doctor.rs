@@ -61,7 +61,7 @@ fn write_config(env: &TestEnv, extra: &str) {
         adapter.display()
     );
     // `extra` holds top-level keys, so it must come before the `[tiers]` table.
-    fs::write(env.cpd_home().join("config.toml"), text).unwrap();
+    env.write_config(&text);
 }
 
 /// A fake pi install whose agent directory is the test root: `bin/pi` answering

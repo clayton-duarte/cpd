@@ -11,8 +11,6 @@ use std::fs;
 use std::time::Duration;
 
 use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until};
-use cpd_core::home::CpdHome;
-use cpd_core::store::Store;
 use serde_json::json;
 
 /// The expected chart of the store `cpd_jobs()` makes: the fixture of the cockpit of branch `cpd/cpd-ui`
@@ -71,10 +69,6 @@ fn env() -> TestEnv {
     env.fake_gh("exit 1");
     env.fake_pi("exit 1");
     env
-}
-
-fn open(env: &TestEnv) -> Store {
-    Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
 }
 
 fn tmux_out(env: &TestEnv, args: &[&str]) -> String {

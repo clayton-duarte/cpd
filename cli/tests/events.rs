@@ -26,9 +26,8 @@ fn open(env: &TestEnv) -> Store {
     Store::open(&home(env), 5000).unwrap()
 }
 
-fn write_config(env: &TestEnv) {
-    fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n[events]\npoll_ms = 20\n").unwrap();
-}
+/// The machine's `config.toml`, with a short Events poll.
+const CONFIG: &str = "version = 1\nmachine = \"m1\"\n[events]\npoll_ms = 20\n";
 
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;
@@ -148,7 +147,7 @@ fn seed(store: &mut Store) {
 /// A configured home with the fixture and the eleven Events.
 fn seeded() -> TestEnv {
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     let mut store = open(&env);
     fixture(&mut store);
     seed(&mut store);
@@ -267,7 +266,7 @@ fn the_kinds_are_exactly_those_of_5_2_and_of_the_table_check() {
 
     // The `events.kind` CHECK of the DDL lists the same kinds.
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     drop(open(&env));
     let conn = Connection::open(home(&env).db()).unwrap();
     let ddl: String =
@@ -283,7 +282,7 @@ fn the_kinds_are_exactly_those_of_5_2_and_of_the_table_check() {
 #[test]
 fn every_kind_is_appended_with_its_fields() {
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     let mut store = open(&env);
     fixture(&mut store);
     for (name, always, maybe, data, optional) in SPEC {
@@ -302,7 +301,7 @@ fn every_kind_is_appended_with_its_fields() {
 #[test]
 fn a_missing_field_is_refused() {
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     let mut store = open(&env);
     fixture(&mut store);
     for (name, always, _, data, _) in SPEC {
@@ -319,7 +318,7 @@ fn a_missing_field_is_refused() {
 #[test]
 fn an_unknown_field_or_a_data_that_is_not_an_object_is_refused() {
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     let mut store = open(&env);
     fixture(&mut store);
     for (name, always, _, data, _) in SPEC {
@@ -344,7 +343,7 @@ fn an_unknown_field_or_a_data_that_is_not_an_object_is_refused() {
 #[test]
 fn a_column_the_kind_does_not_set_is_refused_and_one_it_must_set_is_required() {
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     let mut store = open(&env);
     fixture(&mut store);
     for (name, always, maybe, data, _) in SPEC {
@@ -415,7 +414,7 @@ fn append_takes_the_context_of_the_plan_else_of_the_session() {
 #[test]
 fn append_names_a_missing_plan_or_session() {
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     let mut store = open(&env);
     fixture(&mut store);
     let e = NewEvent::new(Kind::JobRetried, "x", json!({"tier": 1})).plan(plan("nope")).job(job());
@@ -427,7 +426,7 @@ fn append_names_a_missing_plan_or_session() {
 #[test]
 fn an_event_belongs_to_its_transaction_and_rolls_back_with_it() {
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     let mut store = open(&env);
     fixture(&mut store);
     let (txn, id) = store
@@ -619,7 +618,7 @@ fn follow_refusals() {
 #[test]
 fn follow_since_zero_on_an_empty_store_is_fine_and_since_one_is_ahead() {
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     assert!(follow_until_idle(&env, &["--since", "0"]).is_empty());
     refused(&env, &["events", "follow", "--since", "1", "--until-idle"], "cursor_ahead", 3);
 }
@@ -627,7 +626,7 @@ fn follow_since_zero_on_an_empty_store_is_fine_and_since_one_is_ahead() {
 #[test]
 fn follow_reads_full_batches_until_it_has_everything() {
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     let mut store = open(&env);
     store
         .write("bulk", |tx| {

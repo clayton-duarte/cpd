@@ -29,15 +29,6 @@ fn store(env: &TestEnv) -> Store {
     Store::open(&home(env), 5000).unwrap()
 }
 
-/// `config.toml` on this env's private tmux server, with a 1 s quiet time for forks.
-fn write_config(env: &TestEnv) {
-    let config = format!(
-        "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[timeouts]\nfork_quiet_seconds = 1\n[tmux]\nsocket = \"{}\"\n",
-        env.tmux_socket()
-    );
-    fs::write(env.cpd_home().join("config.toml"), config).unwrap();
-}
-
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;
     Ok(())
@@ -51,7 +42,7 @@ fn sid(id: &str) -> SessionId {
 /// Job `api` with Attempt `api-a1`, Worker `worker1` and an open Escalation)
 /// and `other` (Lead `lead2`, stopped). Every Session's cwd is the env's root.
 fn setup(env: &TestEnv) {
-    write_config(env);
+    env.write_tmux_config("[timeouts]\nfork_quiet_seconds = 1\n"); // a 1 s quiet time for forks
     let cwd = env.root().display().to_string();
     let mut store = store(env);
     store
@@ -133,12 +124,6 @@ fn show(env: &TestEnv, id: &str) -> Value {
 }
 
 // ---------- tmux ----------
-
-/// A fake `cpd` on `PATH` for the panes: `cpd tui view chat` and `cpd tui view history <id>`
-/// (the TUI Job's views) just sleep; everything else is the built binary.
-fn fake_cpd(env: &TestEnv) {
-    env.fake("cpd", &format!("case \"$1 $2 $3\" in \"tui view chat\"|\"tui view history\") exec sleep {SLEEP_SECONDS};; esac\nexec '{CPD}' \"$@\""));
-}
 
 /// A fake `pi` that creates its session file (when given `--session-id`) and
 /// then runs `then`.
@@ -381,7 +366,7 @@ fn fork_refusals_register_nothing() {
 fn fork_registers_a_stopped_lead_in_a_parked_window() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     let message = env.root().join("message.md");
@@ -428,7 +413,7 @@ fn fork_registers_a_stopped_lead_in_a_parked_window() {
 fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, "exit 1");
     cockpit(&env);
     env.cpd(&["session", "state", "working", "--session", LEAD1]).ok();
@@ -485,7 +470,7 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
 fn fork_stops_waiting_for_a_stopped_source_without_a_file_and_retries_on_enter() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, "exit 1");
     cockpit(&env);
     let message = env.root().join("message.md");
@@ -530,7 +515,7 @@ fn big_message() -> String {
 fn a_fresh_lead_with_a_first_message_over_128_kib_starts_pi_with_its_file() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &copy_last_file());
     cockpit(&env);
     let path = home(&env).lead_message(&PlanId::parse("pay").unwrap());
@@ -551,7 +536,7 @@ fn a_fresh_lead_with_a_first_message_over_128_kib_starts_pi_with_its_file() {
 fn a_fork_with_a_message_file_over_128_kib_starts_pi_with_the_copied_file() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &copy_last_file());
     cockpit(&env);
     pi_file(&env, LEAD2, true);
@@ -575,7 +560,7 @@ fn a_fork_with_a_message_file_over_128_kib_starts_pi_with_the_copied_file() {
 fn open_and_park_keep_at_most_one_placeholder_only_in_the_slot() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     let placeholder = slot(&env);
@@ -645,7 +630,7 @@ fn open_and_park_keep_at_most_one_placeholder_only_in_the_slot() {
 fn open_and_park_take_a_context_s_manager_and_park_it_in_its_context_window() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     // `context manager` wrote its first message.
@@ -687,7 +672,7 @@ fn open_and_park_refusals() {
     refused(&env.cpd(&["session", "park"]), "no_cockpit", 3);
     refused(&env.cpd(&["session", "park", LEAD1]), "no_cockpit", 3);
 
-    fake_cpd(&env);
+    env.fake_cpd_views();
     cockpit(&env);
     refused(&env.cpd(&["session", "open", WORKER]), "not_a_lead", 3);
     refused(&env.cpd(&["session", "open", "nobody"]), "session_not_found", 4);
@@ -717,7 +702,7 @@ fn history_panes(env: &TestEnv) -> Vec<P> {
 fn history_parks_the_lead_in_the_slot_and_open_kills_the_history_pane() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     archived_lead2(&env);
@@ -773,7 +758,7 @@ fn history_parks_the_lead_in_the_slot_and_open_kills_the_history_pane() {
 fn history_replaces_the_placeholder_in_place_and_park_brings_it_back() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     cockpit(&env);
     archived_lead2(&env);
     let placeholder = slot(&env);
@@ -808,7 +793,7 @@ fn history_refusals_change_nothing() {
     let error = refused(&env.cpd(&["session", "history", LEAD2]), "no_cockpit", 3);
     assert_eq!(error["details"]["next"], "cpd tui");
 
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     env.cpd(&["session", "open", LEAD1]).ok();
@@ -829,7 +814,7 @@ fn close_refusals_and_nothing_to_close() {
     refused(&env.cpd(&["session", "close", WORKER]), "not_a_lead", 3);
     refused(&env.cpd(&["session", "close", "nobody"]), "session_not_found", 4);
     // A Lead with no pane: nothing to do.
-    fake_cpd(&env);
+    env.fake_cpd_views();
     cockpit(&env);
     assert_eq!(env.cpd(&["session", "close", LEAD2]).ok(), json!({"ok": true, "session": LEAD2, "pane": null, "already": true}));
     // A pane that is gone, with E2 not having recorded it: nothing is written.
@@ -844,7 +829,7 @@ fn close_refusals_and_nothing_to_close() {
 fn close_refuses_the_lead_in_the_chat_slot_and_leaves_everything() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     let pane = env.cpd(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
@@ -859,7 +844,7 @@ fn close_refuses_the_lead_in_the_chat_slot_and_leaves_everything() {
 fn close_kills_a_parked_pane_and_writes_what_e2_writes() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     // lead2 displaces lead1 into a park window; lead1 is made `idle`, as pi would report.
@@ -899,7 +884,7 @@ fn close_kills_a_parked_pane_and_writes_what_e2_writes() {
 fn close_of_a_stopped_lead_with_a_pane_appends_only_session_moved() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     // lead2 is `stopped` (the fake pi reports nothing) and parked by lead1.
@@ -948,7 +933,7 @@ fn rename_sets_the_title_of_a_forks_live_pane_to_its_name() {
 fn open_gives_a_new_pane_the_plans_title_for_the_plans_lead_and_the_name_for_a_fork() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     let title = |env: &TestEnv, session: &str| {
@@ -967,7 +952,7 @@ fn open_gives_a_new_pane_the_plans_title_for_the_plans_lead_and_the_name_for_a_f
 /// A parked side fork of `lead1` (stopped, with a pane): fake pi and cpd, and the cockpit.
 fn parked_fork(env: &TestEnv) -> String {
     setup(env);
-    fake_cpd(env);
+    env.fake_cpd_views();
     fake_pi(env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(env);
     env.cpd(&["session", "fork", LEAD1]).ok()["session"]["id"].as_str().unwrap().to_owned()
@@ -1283,7 +1268,7 @@ fn run_refusals() {
 /// session files of both Plans' Leads, so `session run` resumes them.
 fn port_fixture(env: &TestEnv) {
     setup(env);
-    fake_cpd(env);
+    env.fake_cpd_views();
     fake_pi(env, "echo \"${PLANNOTATOR_PORT-unset}\" >> \"$HOME/ports.$CPD_SESSION\"\nexit 1");
     cockpit(env);
     let sessions = env.home().join(".pi/agent/sessions/g");
@@ -1397,7 +1382,7 @@ fn pi_file(env: &TestEnv, id: &str, finished: bool) {
 /// with a session file, a quitting pi and the cockpit.
 fn quit_fixture(env: &TestEnv) {
     setup(env);
-    fake_cpd(env);
+    env.fake_cpd_views();
     quitting_pi(env);
     cockpit(env);
     exec_sql(
@@ -1652,7 +1637,7 @@ fn unmatched_values_are_session_not_found_and_malformed_ones_usage_errors() {
 fn every_session_command_accepts_the_short_forms() {
     let env = TestEnv::new();
     setup_short(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     cockpit(&env);
     // `--session` and `CPD_SESSION`.
     let out = env.cpd(&["session", "rename", "renamed", "--session", "pay"]).ok();

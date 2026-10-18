@@ -24,17 +24,6 @@ fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
     env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
 }
 
-/// `config.toml` on this env's private tmux server.
-fn write_config(env: &TestEnv, extra: &str) {
-    let config = format!("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n{extra}\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket());
-    fs::write(env.cpd_home().join("config.toml"), config).unwrap();
-}
-
-/// A fake `cpd` for the panes: the placeholder view sleeps; everything else is the built binary.
-fn fake_cpd(env: &TestEnv) {
-    env.fake("cpd", &format!("case \"$1 $2 $3\" in \"tui view chat\") exec sleep {SLEEP_SECONDS};; esac\nexec '{CPD}' \"$@\""));
-}
-
 /// A fake `pi` that creates its session file (when given `--session-id`), records
 /// its environment per Session, and sleeps.
 fn fake_pi(env: &TestEnv) {
@@ -72,8 +61,8 @@ fn cockpit(env: &TestEnv) {
 
 /// The env with its config, the fakes, Context `ctx` with a note, and no cockpit yet.
 fn setup(env: &TestEnv) {
-    write_config(env, "");
-    fake_cpd(env);
+    env.write_tmux_config("");
+    env.fake_cpd_views();
     fake_pi(env);
     env.cpd(&["context", "new", "ctx", "--title", "Payments"]).ok();
     env.cpd(&["context", "note", "Mind the ledger.", "--context", "ctx"]).ok();
@@ -223,7 +212,7 @@ fn a_managers_pi_gets_no_plannotator_variable_from_its_callers() {
 fn the_manager_tier_is_the_config_key() {
     let env = TestEnv::new();
     setup(&env);
-    write_config(&env, "manager_tier = \"O3\"");
+    env.write_tmux_config("manager_tier = \"O3\"");
     cockpit(&env);
     let out = env.cpd(&["context", "manager", "--context", "ctx"]).ok();
     let id = out["manager"]["session"].as_str().unwrap();

@@ -11,12 +11,8 @@ use serde_json::{Value, json};
 
 const MINIMAL: &str = "version = 1\nmachine = \"hs\"\n";
 
-fn write_config(env: &TestEnv, text: &str) {
-    fs::write(env.cpd_home().join("config.toml"), text).expect("write config.toml");
-}
-
 fn config_with(env: &TestEnv, text: &str) -> Run {
-    write_config(env, text);
+    env.write_config(text);
     env.cpd(&["config"])
 }
 
@@ -173,7 +169,7 @@ work_session = "w"
     // 0 turns the stall kill off (contract §8.2), unlike every other timeout.
     assert_eq!(out["config"]["timeouts"]["stall_seconds"], 0);
 
-    write_config(&env, &text.replace("poll_ms = 20", "poll_ms = 10000"));
+    env.write_config(&text.replace("poll_ms = 20", "poll_ms = 10000"));
     assert_eq!(env.cpd(&["config"]).ok()["config"]["events"]["poll_ms"], 10000);
 }
 
@@ -321,7 +317,7 @@ fn config_leaves_cpd_1s_config_json_alone() {
 #[test]
 fn config_is_read_only_and_idempotent() {
     let env = TestEnv::new();
-    write_config(&env, MINIMAL);
+    env.write_config(MINIMAL);
     let first = env.cpd(&["config"]);
     let second = env.cpd(&["config"]);
     assert_eq!(first.stdout, second.stdout);
@@ -334,7 +330,7 @@ fn config_is_read_only_and_idempotent() {
 #[test]
 fn config_with_a_bad_argument_is_usage() {
     let env = TestEnv::new();
-    write_config(&env, MINIMAL);
+    env.write_config(MINIMAL);
     for args in [&["config", "--surprise"][..], &["config", "extra"], &["tiers", "--surprise"], &["tiers", "extra"]] {
         let run = env.cpd(args);
         assert_eq!(run.error()["code"], "usage", "{args:?}");
@@ -412,7 +408,7 @@ const ALL_LEVELS_JSON: &str = r#"{"O":["off","low","medium","high","xhigh","max"
 #[test]
 fn tiers_reads_efforts_from_pi_with_pis_node() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "9.9.9", FAKE_CODING_AGENT, FAKE_PI_AI);
     symlink(real_node(), env.bin().join("node")).unwrap();
     let out = cpd_isolated(&env, &["tiers"]).ok();
@@ -433,7 +429,7 @@ fn tiers_reads_efforts_from_pi_with_pis_node() {
 #[test]
 fn tiers_runs_the_catalog_module_from_argv() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     let (coding_agent, pi_ai) = install_pi(&env, "1.2.0", "", "");
     env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
     let out = cpd_isolated(&env, &["tiers"]).ok();
@@ -465,7 +461,7 @@ fn tiers_runs_the_catalog_module_from_argv() {
 #[test]
 fn tiers_prefers_pis_own_node_over_node_on_path() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", "echo 'the node on PATH must not run' >&2; exit 1");
 
@@ -496,7 +492,7 @@ fn tiers_prefers_pis_own_node_over_node_on_path() {
 #[test]
 fn tiers_without_pi_on_path_is_pi_not_found() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
     let run = cpd_isolated(&env, &["tiers"]);
     assert_eq!(run.error()["code"], "pi_not_found");
@@ -508,7 +504,7 @@ fn tiers_without_pi_on_path_is_pi_not_found() {
 fn tiers_with_a_broken_pi_install_is_pi_not_found() {
     // No current-version file.
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     env.fake_pi("exit 0");
     let run = cpd_isolated(&env, &["tiers"]);
     assert_eq!(run.error()["code"], "pi_not_found");
@@ -517,7 +513,7 @@ fn tiers_with_a_broken_pi_install_is_pi_not_found() {
     // A version that is not a plain name.
     for bad in ["", "..", "../x", "1 2"] {
         let env = TestEnv::new();
-        write_config(&env, TIERS_CONFIG);
+        env.write_config(TIERS_CONFIG);
         install_pi(&env, "1.2.0", "", "");
         fs::write(env.root().join("install/current-version"), format!("{bad}\n")).unwrap();
         let run = cpd_isolated(&env, &["tiers"]);
@@ -526,7 +522,7 @@ fn tiers_with_a_broken_pi_install_is_pi_not_found() {
 
     // A release without its entry points.
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     fs::remove_file(env.root().join("install/releases/1.2.0/node_modules/@earendil-works/pi-ai/dist/index.js")).unwrap();
     let run = cpd_isolated(&env, &["tiers"]);
@@ -538,7 +534,7 @@ fn tiers_with_a_broken_pi_install_is_pi_not_found() {
 #[test]
 fn tiers_finds_pi_through_a_symlink() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     // The agent directory is `real/agent`; `bin/pi` is a symlink into it.
     let agent = env.root().join("real/agent");
     fs::create_dir_all(agent.join("bin")).unwrap();
@@ -569,7 +565,7 @@ fn tiers_catalog_failures_are_catalog_failed() {
     ];
     for (name, body) in cases {
         let env = TestEnv::new();
-        write_config(&env, TIERS_CONFIG);
+        env.write_config(TIERS_CONFIG);
         install_pi(&env, "1.2.0", "", "");
         env.fake("node", body);
         let run = cpd_isolated(&env, &["tiers"]);
@@ -579,7 +575,7 @@ fn tiers_catalog_failures_are_catalog_failed() {
 
     // The failing node's exit and stderr are in `details`.
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", "echo 'boom: cannot import' >&2; exit 3");
     let err = cpd_isolated(&env, &["tiers"]).error();
@@ -590,7 +586,7 @@ fn tiers_catalog_failures_are_catalog_failed() {
 #[test]
 fn tiers_without_any_node_is_catalog_failed() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     let run = cpd_isolated(&env, &["tiers"]);
     assert_eq!(run.error()["code"], "catalog_failed");
@@ -600,7 +596,7 @@ fn tiers_without_any_node_is_catalog_failed() {
 #[test]
 fn tiers_with_a_model_pi_does_not_have_is_tier_model_unknown() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", r#"echo '{"O":["off"],"S":null,"H":null}'"#);
     let run = cpd_isolated(&env, &["tiers"]);
@@ -613,7 +609,7 @@ fn tiers_with_a_model_pi_does_not_have_is_tier_model_unknown() {
 #[test]
 fn tiers_with_a_model_unknown_to_real_pi_modules_is_tier_model_unknown() {
     let env = TestEnv::new();
-    write_config(&env, "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/other\"\nH = \"q/m-low\"\n");
+    env.write_config("version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/other\"\nH = \"q/m-low\"\n");
     install_pi(&env, "1.2.0", FAKE_CODING_AGENT, FAKE_PI_AI);
     symlink(real_node(), env.bin().join("node")).unwrap();
     let err = cpd_isolated(&env, &["tiers"]).error();
@@ -626,7 +622,7 @@ fn tiers_checks_pi_before_the_catalog_and_config_before_both() {
     let env = TestEnv::new();
     let run = cpd_isolated(&env, &["tiers"]);
     assert_eq!(run.error()["code"], "config_missing");
-    write_config(&env, "version = 1\nmachine = \"hs\"\nconcurrency = 0\n");
+    env.write_config("version = 1\nmachine = \"hs\"\nconcurrency = 0\n");
     assert_eq!(cpd_isolated(&env, &["tiers"]).error()["code"], "config_invalid");
 }
 
@@ -653,7 +649,7 @@ fn row(version: &str, letter: &str, model: &str, efforts: &str) -> (String, Stri
 #[test]
 fn tiers_with_a_cold_cache_asks_pi_and_fills_the_cache() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
     assert!(!env.cpd_home().join("cpd.db").exists());
@@ -674,7 +670,7 @@ fn tiers_with_a_cold_cache_asks_pi_and_fills_the_cache() {
 #[test]
 fn tiers_with_a_warm_cache_answers_from_it_without_node_or_a_write() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
     let cold = cpd_isolated(&env, &["tiers"]);
@@ -690,7 +686,7 @@ fn tiers_with_a_warm_cache_answers_from_it_without_node_or_a_write() {
 #[test]
 fn tiers_refreshes_the_cache_when_pis_current_version_changes() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
     cpd_isolated(&env, &["tiers"]).ok();
@@ -723,12 +719,12 @@ fn tiers_refreshes_the_cache_when_pis_current_version_changes() {
 #[test]
 fn tiers_refreshes_the_cache_when_a_configured_model_changes() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
     cpd_isolated(&env, &["tiers"]).ok();
 
-    write_config(&env, &TIERS_CONFIG.replace("p/m-sonnet", "p/m-other"));
+    env.write_config(&TIERS_CONFIG.replace("p/m-sonnet", "p/m-other"));
     let out = cpd_isolated(&env, &["tiers"]).ok();
     assert_eq!(out["tiers"]["S"]["model"], "p/m-other");
     assert_eq!(env.calls("node").len(), 2);
@@ -740,7 +736,7 @@ fn tiers_refreshes_the_cache_when_a_configured_model_changes() {
 #[test]
 fn tiers_does_not_cache_a_failed_catalog() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", r#"echo '{"O":["off"],"S":null,"H":["off"]}'"#);
     assert_eq!(cpd_isolated(&env, &["tiers"]).error()["code"], "tier_model_unknown");
@@ -751,7 +747,7 @@ fn tiers_does_not_cache_a_failed_catalog() {
 #[test]
 fn tiers_is_idempotent() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
     let first = cpd_isolated(&env, &["tiers"]);

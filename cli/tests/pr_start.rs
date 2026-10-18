@@ -12,12 +12,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::time::Duration;
 
-use common::{CPD, Run, TestEnv, refused, wait_until, write_executable};
+use common::{CPD, Run, TestEnv, WATCH_OK, refused, wait_until, write_executable};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use serde_json::{Value, json};
 
-const WATCH_OK: &str = "echo '{\"ok\": true, \"started\": true, \"pane\": \"%9\"}'; exit 0";
 
 struct Fx {
     env: TestEnv,

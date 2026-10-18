@@ -140,6 +140,9 @@ static NEXT_SOCKET: AtomicUsize = AtomicUsize::new(0);
 /// The tools a test never runs for real: `TestEnv::new` installs a deny shim for each.
 pub const DENIED_TOOLS: [&str; 5] = ["gh", "pi", "curl", "wget", "ssh"];
 
+/// What a fake `cpd watch --ensure` prints when the engine started.
+pub const WATCH_OK: &str = "echo '{\"ok\": true, \"started\": true, \"pane\": \"%9\"}'; exit 0";
+
 /// The exit status of a deny shim.
 pub const DENIED_EXIT: i32 = 97;
 
@@ -524,6 +527,28 @@ unset _d _n _f _a
         );
         write_executable(&path, &script);
         path
+    }
+
+    /// A fake `cpd` on `PATH` for panes that hold views: `cpd tui view chat` and `cpd tui view
+    /// history <id>` just sleep; everything else is the built binary.
+    pub fn fake_cpd_views(&self) {
+        self.fake("cpd", &format!("case \"$1 $2 $3\" in \"tui view chat\"|\"tui view history\") exec sleep {SLEEP_SECONDS};; esac\nexec '{CPD}' \"$@\""));
+    }
+
+    /// A fake `cpd` on `PATH` for panes that run a Session: `session run <id>` records its
+    /// environment in `<root>/pane-<id>.env` and sleeps (the pane's program); `watch --ensure`
+    /// runs the shell code `watch` (for example [`WATCH_OK`]); everything else is the built binary.
+    pub fn fake_cpd_panes(&self, watch: &str) {
+        self.fake(
+            "cpd",
+            &format!(
+                "case \"$1 $2\" in\n\
+                 \"session run\") env > '{root}/pane-'\"$3\".env; exec sleep {SLEEP_SECONDS};;\n\
+                 \"watch --ensure\") {watch};;\n\
+                 esac\nexec '{CPD}' \"$@\"",
+                root = self.root().display()
+            ),
+        );
     }
 
     /// A fake `pi` on `PATH`.

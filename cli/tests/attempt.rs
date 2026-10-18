@@ -11,11 +11,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use common::{Run, TestEnv, refused};
-use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree, pr_lead_worktree_path, prepare_lead_worktree};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId, PrKey};
-use cpd_core::store::{Store, WriteTxn};
+use cpd_core::store::Store;
 use rusqlite::params;
 use serde_json::{Value, json};
 
@@ -81,11 +80,6 @@ struct Pr {
 
 fn plan() -> PlanId {
     PlanId::parse(PLAN).unwrap()
-}
-
-fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
-    tx.execute_batch(sql)?;
-    Ok(())
 }
 
 impl Fx {

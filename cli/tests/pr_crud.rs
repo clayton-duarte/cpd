@@ -8,7 +8,6 @@ mod common;
 use std::fs;
 use std::path::PathBuf;
 
-use clap::Parser;
 use common::{Run, TestEnv, write_executable};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::PlanId;
