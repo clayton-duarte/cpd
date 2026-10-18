@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::Line,
     widgets::Widget,
@@ -121,10 +121,10 @@ fn truncate(s: &str, w: usize) -> String {
     }
 }
 
-/// The left half of a pill (` <icon> <key> `, the key cut to `key_w` characters) and the right half (`<tier>[ aN] `).
+/// The left half of a pill (` <icon> <key> `, the key cut to `key_w` characters) and the right half (`│<tier>[│aN] `).
 fn pill_parts(j: &FlowJob, key_w: usize) -> (String, String) {
-    let a = if j.attempt > 1 { format!(" a{}", j.attempt) } else { String::new() };
-    (format!(" {} {} ", j.status.icon().0, truncate(&j.key, key_w)), format!("{}{} ", j.tier, a))
+    let a = if j.attempt > 1 { format!("│a{}", j.attempt) } else { String::new() };
+    (format!(" {} {} ", j.status.icon().0, truncate(&j.key, key_w)), format!("│{}{} ", j.tier, a))
 }
 
 /// The needs of each Job (as indices) that no other need already implies: a need reachable through another need is dropped.
@@ -460,6 +460,21 @@ impl Selection {
 }
 
 impl Chart {
+    /// The same chart on a larger canvas: `margin` blank columns left and right and rows above and below it. The buffer and
+    /// the pills' rectangles are on the canvas, so scrolling, `scroll_to` and clicks all share its coordinates.
+    pub fn with_margin(self, margin: Margin) -> Chart {
+        let (dx, dy) = (margin.horizontal, margin.vertical);
+        let area = self.buf.area;
+        let mut buf = Buffer::empty(Rect::new(0, 0, area.width + 2 * dx, area.height + 2 * dy));
+        for y in 0..area.height {
+            for x in 0..area.width {
+                buf[(x + dx, y + dy)] = self.buf[(x, y)].clone();
+            }
+        }
+        let pills = self.pills.into_iter().map(|p| Pill { rect: Rect { x: p.rect.x + dx, y: p.rect.y + dy, ..p.rect }, ..p }).collect();
+        Chart { buf, pills, columns: self.columns }
+    }
+
     pub fn pill_at(&self, x: u16, y: u16) -> Option<usize> {
         self.pills.iter().position(|p| x >= p.rect.x && x < p.rect.right() && y == p.rect.y)
     }
@@ -558,7 +573,7 @@ mod tests {
     fn columns_run_left_to_right() {
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b"])]);
         snap(&c, "
-  ○ a S1 ───── ○ b S1 ───── ○ c S1");
+  ○ a │S1 ───── ○ b │S1 ───── ○ c │S1");
         assert_eq!(c.columns, vec![vec![0], vec![1], vec![2]]);
     }
 
@@ -567,7 +582,7 @@ mod tests {
         // c needs a through b, so its own need of a is dropped: a has one line out, to b
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b", "a"])]);
         snap(&c, "
-  ○ a S1 ───── ○ b S1 ───── ○ c S1");
+  ○ a │S1 ───── ○ b │S1 ───── ○ c │S1");
         // the same with the implied need listed first
         assert_eq!(text(&layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a", "b"])])), text(&c));
     }
@@ -576,9 +591,9 @@ mod tests {
     fn jobs_with_the_same_needs_share_a_card_stacked_with_no_space() {
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("d", &["a"])]);
         snap(&c, "
-             ╭ ○ b S1 ╮
-  ○ a S1 ────┤ ○ c S1 │
-             ╰ ○ d S1 ╯");
+              ╭ ○ b │S1 ╮
+  ○ a │S1 ────┤ ○ c │S1 │
+              ╰ ○ d │S1 ╯");
         assert_eq!(c.pills.iter().map(|p| p.rect.y).collect::<Vec<_>>(), [1, 0, 1, 2]);
     }
 
@@ -587,23 +602,23 @@ mod tests {
         // three Jobs: both brackets are joined at the middle row, where the line in and the line out meet them
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("e", &["a"]), job("d", &["b", "c", "e"])]);
         snap(&c, "
-             ╭ ○ b S1 ╮
-  ○ a S1 ────┤ ○ c S1 ├──── ○ d S1
-             ╰ ○ e S1 ╯");
+              ╭ ○ b │S1 ╮
+  ○ a │S1 ────┤ ○ c │S1 ├──── ○ d │S1
+              ╰ ○ e │S1 ╯");
         // two Jobs: the middle row is the upper one
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"])]);
         snap(&c, "
-  ○ a S1 ────┬ ○ b S1 ╮
-             ╰ ○ c S1 ╯");
+  ○ a │S1 ────┬ ○ b │S1 ╮
+              ╰ ○ c │S1 ╯");
     }
 
     #[test]
     fn single_cards_are_one_row_apart_and_have_plain_line_ends() {
         let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a"]), job("d", &["b"])]);
         snap(&c, "
-  ○ a S1 ──┬── ○ c S1
-           │
-  ○ b S1 ──┴── ○ d S1");
+  ○ a │S1 ──┬── ○ c │S1
+            │
+  ○ b │S1 ──┴── ○ d │S1");
     }
 
     #[test]
@@ -612,11 +627,14 @@ mod tests {
         long.attempt = 2;
         let c = layout(&[job("a", &[]), long, job("b", &[])]);
         snap(&c, "
-  ○ a               S1
+  ○ a               │S1
 
-  ○ a-longer-key S1 a2
+  ○ a-longer-key │S1│a2
 
-  ○ b               S1");
+  ○ b               │S1");
+        // the last cell of the widest pill is a hit, the one after it is not
+        let r = c.pills[1].rect;
+        assert_eq!((c.pill_at(r.right() - 1, r.y), c.pill_at(r.right(), r.y)), (Some(1), None));
     }
 
     #[test]
@@ -628,18 +646,18 @@ mod tests {
         assert_eq!(glyphs, ["┬", "│", "┴"]);
         let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a", "b"])]);
         snap(&c, "
-  ○ a S1 ──╮
-           ├── ○ c S1
-  ○ b S1 ──╯");
+  ○ a │S1 ──╮
+            ├── ○ c │S1
+  ○ b │S1 ──╯");
     }
 
     #[test]
     fn a_line_that_skips_columns_rides_a_free_row() {
         let c = layout(&[job("a", &[]), job("x", &[]), job("b", &["a"]), job("c", &["b", "x"])]);
         snap(&c, "
-  ○ a S1 ──╮
-           ├── ○ b S1 ──┬── ○ c S1
-  ○ x S1 ──┴────────────╯");
+  ○ a │S1 ──╮
+            ├── ○ b │S1 ──┬── ○ c │S1
+  ○ x │S1 ──┴─────────────╯");
     }
 
     #[test]
@@ -806,5 +824,22 @@ mod tests {
         let cell = &dst[(3, 1)];
         assert!(cell.modifier.contains(Modifier::REVERSED | Modifier::BOLD));
         assert_eq!(dst[(3, 0)].symbol(), " "); // the padding is untouched
+    }
+
+    #[test]
+    fn a_margin_moves_the_buffer_and_the_pills_together() {
+        let plain = two();
+        let c = two().with_margin(Margin { horizontal: 2, vertical: 1 });
+        assert_eq!((c.buf.area.width, c.buf.area.height), (plain.buf.area.width + 4, plain.buf.area.height + 2));
+        for (p, q) in c.pills.iter().zip(&plain.pills) {
+            assert_eq!((p.rect.x, p.rect.y), (q.rect.x + 2, q.rect.y + 1));
+            assert_eq!(c.buf[(p.rect.x + 1, p.rect.y)].symbol(), plain.buf[(q.rect.x + 1, q.rect.y)].symbol());
+            assert_eq!(c.pill_at(p.rect.x, p.rect.y), c.pills.iter().position(|r| r.key == p.key));
+        }
+        assert_eq!(c.pill_at(q_x(&plain), 0), None, "the margin is not a pill");
+    }
+
+    fn q_x(c: &Chart) -> u16 {
+        c.pills[0].rect.x
     }
 }

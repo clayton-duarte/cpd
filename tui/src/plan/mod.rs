@@ -1,22 +1,21 @@
 //! The `plan` view (commands.md §13.2, §17): the centre-top pane of the cockpit, ported from the cockpit of branch
-//! `cpd/cpd-ui` (`tui/src/flow.rs`, `tabs.rs`, `pr.rs`, `workers.rs`) onto the read model of [`crate::read`].
+//! `cpd/cpd-ui` (`tui/src/flow.rs`, `pr.rs`, `workers.rs`) onto the read model of [`crate::read`].
 //!
 //! It shows the Plan of the Lead in the chat slot as one box per PR ([`boxes`], R34 A15), left to right by the PRs'
-//! needs, each holding the left-to-right flow chart of its Jobs ([`flow`]), under the tabs of the Context's Leads
-//! ([`tabs`]): the top row is only the Context's id and the tabs, with nothing at the right.
+//! needs, each holding the left-to-right flow chart of its Jobs ([`flow`]). The boxes start at the top of the pane:
+//! there is no top row and there are no tabs (switching Leads is the tree's).
 //!
 //! Data: one snapshot of the store ([`snapshot`]), then the Events, followed in this process from the snapshot's
 //! cursor (one `events` query every `events.poll_ms`, no subprocess); a snapshot is retaken at most every
 //! [`COALESCE`] after an Event that concerns the view.
 //! The User's keys and clicks run commands ([`actions`]); nothing else starts a process.
 //!
-//! Keys: ←→↑↓/hjkl select, Enter opens or closes the Worker, Esc clears; the wheel scrolls; clicks select a pill or a
-//! tab. There is no `q`: a layout pane that dies stays dead (contract §6.1).
+//! Keys: ←→↑↓/hjkl select, Enter opens or closes the Worker, Esc clears; the wheel scrolls; clicks select a pill. There is no `q`: a layout pane that
+//! dies stays dead (contract §6.1).
 
 mod actions;
 mod boxes;
 mod flow;
-mod tabs;
 
 use std::time::{Duration, Instant};
 
@@ -32,26 +31,27 @@ use ratatui::widgets::Paragraph;
 use self::actions::Actions;
 use self::flow::{Chart, Dir, Selection};
 use crate::palette;
-use super::read::{self, ChatSlot, Place, PlanBoxes, SessionNode};
+use super::read::{self, ChatSlot, PlanBoxes};
 use super::{RunCommand, not_a_terminal, on_a_terminal};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{self, Event, highest_id};
 use cpd_core::home::CpdHome;
-use cpd_core::ids::{AttemptId, SessionId};
+use cpd_core::ids::AttemptId;
 use cpd_core::output::Output;
 use cpd_core::store::Store;
 
 /// A snapshot is retaken at most this often, whatever the Event rate (§17).
 const COALESCE: Duration = Duration::from_millis(500);
 
+/// The blank space around the chart's content, inside the canvas the view scrolls over: at scroll (0, 0) nothing of the
+/// chart touches the pane's edges, and scrolled the chart reaches them.
+const MARGIN: Margin = Margin { horizontal: 2, vertical: 1 };
+
 /// What the pane shows when a Lead is in the chat slot.
 struct Centre {
     slot: ChatSlot,
     plan: PlanBoxes,
-    /// The Context's id.
-    context: String,
-    tabs: Vec<(SessionId, String)>,
     chart: Chart,
 }
 
@@ -61,53 +61,32 @@ struct Snapshot {
     centre: Option<Centre>,
 }
 
-/// The tab label of a Lead Session: its name, else its Plan's id, else the first 8 characters of its id.
-fn tab_label(s: &SessionNode) -> String {
-    let name = s.name.trim();
-    if !name.is_empty() {
-        name.to_owned()
-    } else if let Some(plan) = &s.plan {
-        plan.to_string()
-    } else {
-        s.id.as_str().chars().take(8).collect()
-    }
-}
-
 fn snapshot(store: &mut Store) -> Result<Snapshot, CpdError> {
     // Read first: whatever the later reads see is at least this new, so following from here loses nothing.
     let cursor = store.read(highest_id)?;
     let Some(slot) = read::chat_slot(store)? else { return Ok(Snapshot { cursor, centre: None }) };
     let plan = read::plan_boxes(store, &slot.plan)?;
-    let tree = read::tree(store)?;
-    let context = tree.contexts.into_iter().find(|c| c.id == plan.context);
-    let tabs = context
-        .iter()
-        .flat_map(|c| &c.plans)
-        .flat_map(|p| &p.sessions)
-        .filter(|s| s.place != Place::None) // a tab is a Lead with a pane in the cockpit
-        .map(|s| (s.id.clone(), tab_label(s)))
-        .collect();
-    let context = plan.context.to_string();
-    let chart = boxes::layout(&plan.prs, &plan.jobs);
-    Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, context, tabs, chart }) })
+    let chart = boxes::layout(&plan.prs, &plan.jobs).with_margin(MARGIN);
+    Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, chart }) })
 }
 
-/// Whether an Event changes what the pane shows: the Plan's or the Context's, or a move of a Lead (the chat slot or the
-/// tabs may change).
+/// Whether an Event changes what the pane shows: the Plan's or the Context's, or a move of a Lead (the chat slot may
+/// change).
 fn concerns(event: &Event, centre: Option<&Centre>) -> bool {
     let mine = |column: &Option<String>, id: &str| column.as_deref() == Some(id);
     event.kind == "session-moved"
         || centre.is_some_and(|c| mine(&event.plan, c.plan.plan.as_str()) || mine(&event.context, c.plan.context.as_str()))
 }
 
-/// The line at the foot of the chart: an error, `no PR yet: cpd pr add` (dim) or `no Plan yet`, then the note of the
-/// last action.
+/// The line at the foot of the chart: an error, ` no Lead session in the centre` (dim), `no PR yet: cpd pr add` (dim)
+/// or `no Plan yet`, then the note of the last action.
 fn message(error: Option<&str>, note: &str, centre: Option<&Centre>) -> Option<Line<'static>> {
     let mut parts: Vec<Span<'static>> = error.into_iter().map(|e| Span::styled(e.to_owned(), palette::note())).collect();
     match centre {
+        None => parts.push(" no Lead session in the centre".dim()),
         Some(c) if c.plan.prs.is_empty() => parts.push("no PR yet: cpd pr add".dim()),
         Some(c) if c.plan.jobs.is_empty() => parts.push(Span::styled("no Plan yet", palette::note())),
-        _ => {}
+        Some(_) => {}
     }
     if !note.is_empty() {
         parts.push(Span::styled(note.to_owned(), palette::note()));
@@ -135,9 +114,7 @@ struct Ui {
     scroll: (u16, u16),
     note: String,
     error: Option<String>,
-    head: Rect,
     body: Rect,
-    tabs: tabs::Hits,
 }
 
 impl Ui {
@@ -149,22 +126,12 @@ impl Ui {
     }
 
     fn draw(&mut self, f: &mut Frame, centre: Option<&Centre>) {
-        let [head, body] = Layout::vertical([Constraint::Length(tabs::HEIGHT), Constraint::Min(1)]).areas(f.area());
-        let tab_list: Vec<tabs::Tab> = centre
-            .iter()
-            .flat_map(|c| &c.tabs)
-            .map(|(id, label)| tabs::Tab {
-                id: id.clone(),
-                label: label.clone(),
-                active: centre.is_some_and(|c| &c.slot.session == id),
-            })
-            .collect();
-        (self.head, self.tabs) = tabs::draw(f, head, centre.map(|c| c.context.as_str()), &tab_list);
-        // two columns and one row of padding: nothing of the chart touches the pane's edges
-        let mut window = body.inner(Margin { horizontal: 2, vertical: 1 });
+        let body = f.area();
+        let mut window = body; // the chart's own margin keeps it off the pane's edges at scroll (0, 0)
         if let Some(text) = message(self.error.as_deref(), &self.note, centre) {
             let [chart_area, message_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(window);
-            f.render_widget(Paragraph::new(text), message_area);
+            // the pane's last row, indented like the chart's content at scroll (0, 0)
+            f.render_widget(Paragraph::new(text), message_area.inner(Margin { horizontal: MARGIN.horizontal, vertical: 0 }));
             window = chart_area;
         }
         self.body = window;
@@ -275,15 +242,6 @@ fn show(
                 }
             }
             Input::Mouse(m) => match m.kind {
-                MouseEventKind::Down(MouseButton::Left) if m.row == ui.head.y => {
-                    if let Some((_, _, id)) = ui.tabs.iter().find(|(a, b, _)| m.column >= *a && m.column < *b) {
-                        if let Err(e) = actions.open_lead(id) {
-                            ui.note = e.message().to_owned();
-                        }
-                        stale = true; // the move is an Event, but take the snapshot at once
-                        taken = Instant::now() - COALESCE;
-                    }
-                }
                 MouseEventKind::Down(MouseButton::Left) if ui.body.contains(Position::new(m.column, m.row)) => {
                     let hit = snap.centre.as_ref().and_then(|c| {
                         let (x, y) = (m.column - ui.body.x + ui.scroll.0, m.row - ui.body.y + ui.scroll.1);

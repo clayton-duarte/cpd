@@ -33,10 +33,12 @@ pub const OPT_HISTORY: &str = "@cpd_history";
 /// The pane border titles (contract §6.1), keyed by the pane options, first
 /// match: a Lead's pane (`@cpd_session`), the chat placeholder, a history pane and the
 /// StatusBar have none, since pi and the placeholder say what they are; the
-/// views have their column titles; any other pane shows its command.
+/// views have their column titles; any other pane shows its command. Every
+/// title is drawn reversed (`#[reverse]`..`#[noreverse]`), a block in the border's
+/// colour with the text in the background colour.
 pub const BORDER_FORMAT: &str = "#{?#{@cpd_session},,#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,#{?#{==:#{@cpd_view},statusbar},,\
-#{?#{==:#{@cpd_view},worker}, Worker · #{@cpd_job} (read-only) ,#{?#{==:#{@cpd_view},tree}, Context ,\
-#{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Dispatch ,#{pane_current_command}}}}}}}}}";
+#[reverse]#{?#{==:#{@cpd_view},worker}, Worker · #{@cpd_job} (read-only) ,#{?#{==:#{@cpd_view},tree}, Context ,\
+#{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Deploy ,#{pane_current_command}}}}}#[noreverse]}}}}";
 
 /// The `pane-died` hook (contract §6.1): only a pane that carries `@cpd_view`
 /// (a view of the cockpit) is respawned when its program dies; a Lead or
