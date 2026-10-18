@@ -113,7 +113,7 @@ Fast: nothing measured here. One pointer for `sql-perf`: on the copy 1584 of 704
 ### store-W6: a deleted cwd makes every write fail
 
 - **What.** `Caller::current()` calls `std::env::current_dir()` before every write transaction (it fills `txns.cwd NOT NULL`) and returns `store_failed` "The current directory is unreadable" when it fails. It is also called in `migrate_in_txn`, so the first open of a new home fails and leaves a half-created `cpd.db` (WAL, `application_id` 0, version 0).
-- **Where.** `core/src/store/mod.rs:170` (`migrate_in_txn`), `mod.rs:268` (`write`), `mod.rs:376-388` (`Caller::current`).
+- **Where.** `core/src/store/mod.rs:170` (`migrate_in_txn`), `mod.rs:268` (`write`), `mod.rs:372-386` (`Caller::current`).
 - **Evidence.** On a scratch `CPD_HOME` (config copied from the copy, empty database), cwd deleted:
 
       D=$(mktemp -d); cd $D && rmdir $D && CPD_HOME=$H timeout 60 target/release/cpd events list
