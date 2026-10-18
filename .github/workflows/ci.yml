@@ -11,22 +11,22 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   rust:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moves to Ubuntu 26 on 2026-10-19; change the image on purpose, not by label.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # No sccache on CI (docs/research/ci-cache.md): an empty RUSTC_WRAPPER
+    # makes scripts/cargo.sh skip sccache even if the runner image has it.
     env:
-      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-        with:
-          cache-targets: false
-      - uses: mozilla-actions/sccache-action@v0.0.9
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -64,16 +64,14 @@ jobs:
         run: scripts/cargo.sh build --workspace
       - name: Test
         run: scripts/cargo.sh test --workspace
-      - name: sccache stats
-        if: always()
-        run: sccache --show-stats
 
   pi:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moves to Ubuntu 26 on 2026-10-19; change the image on purpose, not by label.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm

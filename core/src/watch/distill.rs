@@ -1,4 +1,4 @@
-//! E8, Context digests (contract §3.7; hs-d194 D4): starts `cpd context distill`
+//! E9, Context digests (contract §3.7; hs-d194 D4): starts `cpd context distill`
 //! for each Context whose digest is behind its records once its newest record is
 //! quiet. It only decides and spawns, as E3 does: the run takes its own lock,
 //! does its own work and appends its own `error` Event.
@@ -18,7 +18,7 @@ use crate::context::{Record, inforce};
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::ContextId;
 
-/// How old a Context's newest record must be before its digest is rebuilt (§3.7 E8).
+/// How old a Context's newest record must be before its digest is rebuilt (§3.7 E9).
 const QUIET: time::Duration = time::Duration::minutes(10);
 
 /// Whether the newest record, written at `newest`, is quiet at `now`.
@@ -44,7 +44,7 @@ pub(super) fn run(engine: &mut Engine) {
     });
     let newest = match newest {
         Ok(newest) => newest,
-        Err(e) => return engine.fail(Step::E8, About::Machine, &e),
+        Err(e) => return engine.fail(Step::E9, About::Machine, &e),
     };
     let now = OffsetDateTime::now_utc();
     let mut failed = false;
@@ -54,11 +54,11 @@ pub(super) fn run(engine: &mut Engine) {
         }
         if let Err(e) = start_if_due(engine, &context, seq, &at, now) {
             failed = true;
-            engine.fail(Step::E8, About::Machine, &e);
+            engine.fail(Step::E9, About::Machine, &e);
         }
     }
     if !failed {
-        engine.clear(Step::E8, &About::Machine);
+        engine.clear(Step::E9, &About::Machine);
     }
 }
 
@@ -84,7 +84,7 @@ fn start_if_due(engine: &mut Engine, context: &ContextId, seq: i64, at: &str, no
     }
     let pid = spawn(engine, context)?;
     engine.distill_started.insert(context.clone(), seq);
-    engine.log.line(&format!("E8: started the distill run of Context {context} up to record {seq} (pid {pid})"));
+    engine.log.line(&format!("E9: started the distill run of Context {context} up to record {seq} (pid {pid})"));
     Ok(())
 }
 

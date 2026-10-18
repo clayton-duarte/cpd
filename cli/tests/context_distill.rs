@@ -1,5 +1,5 @@
 //! `cpd context distill` (commands.md §3.12, contract §4.6 "The distill run") and the engine's debounced
-//! rebuild (contract §3.7 E8), run as the built binary with a fake `pi` on `PATH`.
+//! rebuild (contract §3.7 E9), run as the built binary with a fake `pi` on `PATH`.
 
 mod common;
 
@@ -425,7 +425,7 @@ fn the_engine_starts_a_run_only_after_the_quiet_period_and_never_two_at_once() {
     fx.cpd(&["context", "new", "quiet", "--title", "Quiet"]).ok();
     fx.insert("quiet", "hs-d6", &ago(60), "A decision.", Draft::Decision { supersedes: None });
 
-    // `quiet`'s run is alive (its lock is held): E8 starts none for it.
+    // `quiet`'s run is alive (its lock is held): E9 starts none for it.
     let home = fx.home();
     fs::create_dir_all(home.root().join("locks")).unwrap();
     let held = Flock::lock(File::create(home.distill_lock(&ContextId::parse("quiet").unwrap())).unwrap(), FlockArg::LockExclusiveNonblock).unwrap();

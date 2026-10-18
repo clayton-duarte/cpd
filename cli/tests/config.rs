@@ -69,6 +69,7 @@ fn config_with_only_the_required_keys_has_every_default() {
                 "distill_minutes": 15
             },
             "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "error_repeat_seconds": 600},
+            "inbox": {"stuck_job_minutes": 10},
             "events": {"poll_ms": 200},
             "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}
         })
@@ -152,6 +153,8 @@ distill_minutes = 1
 tick_seconds = 1
 pr_poll_seconds = 1
 error_repeat_seconds = 1
+[inbox]
+stuck_job_minutes = 1
 [events]
 poll_ms = 20
 [tmux]
@@ -183,6 +186,7 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nsurprise = 1\n", "timeouts.surprise"),
         ("version = 1\nmachine = \"hs\"\n[tiers]\nX = \"a/b\"\n", "tiers.X"),
         ("version = 1\nmachine = \"hs\"\n[watch]\nsurprise = 1\n", "watch.surprise"),
+        ("version = 1\nmachine = \"hs\"\n[inbox]\nsurprise = 1\n", "inbox.surprise"),
         ("version = 1\nmachine = \"hs\"\n[events]\nsurprise = 1\n", "events.surprise"),
         ("version = 1\nmachine = \"hs\"\n[tmux]\nsurprise = 1\n", "tmux.surprise"),
         ("version = 1\nmachine = \"hs\"\n[surprise]\nx = 1\n", "surprise"),
@@ -224,6 +228,8 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nstore_busy_ms = 0\n", "timeouts.store_busy_ms"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nlock_wait_seconds = 0\n", "timeouts.lock_wait_seconds"),
         ("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0\n", "watch.tick_seconds"),
+        ("version = 1\nmachine = \"hs\"\n[inbox]\nstuck_job_minutes = 0\n", "inbox.stuck_job_minutes"),
+        ("version = 1\nmachine = \"hs\"\n[inbox]\nstuck_job_minutes = \"10\"\n", "inbox.stuck_job_minutes"),
         ("version = 1\nmachine = \"hs\"\n[events]\npoll_ms = 19\n", "events.poll_ms"),
         ("version = 1\nmachine = \"hs\"\n[events]\npoll_ms = 10001\n", "events.poll_ms"),
         // text constraints

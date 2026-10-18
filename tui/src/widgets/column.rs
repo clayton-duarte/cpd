@@ -2,14 +2,36 @@
 //! (`tui/src/main.rs`, `tui/src/pr.rs`): the machine, the open pull requests (two lines each), git and Jira (the last two
 //! still future), under one blank row; each section but the first starts with a header. Pure: [`draw`] only writes to the frame.
 
+use cpd_core::ids::SessionId;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Clear, Paragraph};
 
+use crate::link;
 use crate::palette::{self, Meaning};
 use crate::read::{OpenPr, PrState, ReviewDecision, Widgets};
+
+/// The glyph at the right end of a PR's first line: a link to the pull request.
+const ARROW: &str = "↗";
+
+/// What a click on an owned PR reaches: its two lines, except the `↗` cell (the terminal opens that link).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Hit {
+    /// The PR's two rows, the column's full width.
+    pub area: Rect,
+    /// The `↗` cell, inside `area`.
+    pub arrow: Position,
+    /// The Lead of the owner: `cpd session open <lead>`.
+    pub lead: SessionId,
+}
+
+impl Hit {
+    pub fn contains(&self, at: Position) -> bool {
+        self.area.contains(at) && at != self.arrow
+    }
+}
 
 /// The machine the column names: its hostname and the first three fields of its load average.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,10 +60,12 @@ fn truncate(text: &str, max: usize) -> String {
     cut
 }
 
-/// One open pull request, two lines (commands.md §13.2): ` owner/repo#n`, then `  <open|draft> <checks> <review>  <title>`, the
-/// title cut first to fit `width`. An `active` one (a PR of the chat slot's Plan) is reversed and bold, as the active tab is.
+/// One open pull request, two lines (commands.md §13.2): ` owner/repo#n` with `↗` in the last column, then
+/// `  <open|draft> <checks> <review>  <title>`, the title cut first to fit `width`; the name is cut so it never reaches the `↗`.
+/// An `active` one (a PR of the chat slot's Plan) is reversed and bold, as the active tab is; one no Plan owns is dim.
 fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
-    let name = truncate(&format!(" {}#{}", pr.repo, pr.number), width);
+    let name = truncate(&format!(" {}#{}", pr.repo, pr.number), width.saturating_sub(2));
+    let gap = " ".repeat(width.saturating_sub(name.chars().count() + 1));
     let state_text = if pr.draft { "draft" } else { "open" };
     let review = match pr.review_decision {
         ReviewDecision::Approved => "approved",
@@ -63,12 +87,16 @@ fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
         let title = format!("  {}", truncate(&pr.title, room));
         spans.push(if pr.active { Span::raw(title) } else { dim(title) });
     }
-    let (first, second) = (Line::from(bold(name)), Line::from(spans));
-    if pr.active {
-        let active = Style::new().add_modifier(Modifier::REVERSED | Modifier::BOLD);
-        return [first.patch_style(active), second.patch_style(active)];
-    }
-    [first, second]
+    let first = Line::from(vec![bold(name), gap.into(), ARROW.into()]);
+    let second = Line::from(spans);
+    let style = if pr.active {
+        Style::new().add_modifier(Modifier::REVERSED | Modifier::BOLD)
+    } else if pr.lead.is_none() {
+        Style::new().add_modifier(Modifier::DIM)
+    } else {
+        Style::new()
+    };
+    [first.patch_style(style), second.patch_style(style)]
 }
 
 /// A section header, one line: `──`, then ` <title> ` as a grey reversed block (not bold), then `─` to the right edge, all in
@@ -89,8 +117,9 @@ fn render_header(f: &mut Frame, area: Rect, title: &str) {
     f.render_widget(Paragraph::new(section_header(title, usize::from(area.width))), area);
 }
 
-/// Draws the column in `area`: a blank row, the machine, then the PRs, git and Jira, each under its header.
-pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine) {
+/// Draws the column in `area`: a blank row, the machine, then the PRs, git and Jira, each under its header. A non-empty
+/// `note` replaces the column's last row, in `palette::note()`. Returns where a click reaches an owned PR.
+pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &str) -> Vec<Hit> {
     let [_top, home, _above_prs, prs_header, _below_prs, prs, _above_git, git_header, _below_git, git, _above_jira, jira_header, _below_jira, jira] =
         Layout::vertical([
             Constraint::Length(1),
@@ -117,17 +146,34 @@ pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine) {
         home,
     );
     let mut text = vec![];
+    let mut hits = vec![];
     // Whole pull requests only: what does not fit the section is dropped from the end.
-    let room = usize::from(prs.height);
-    for pr in w.prs.iter().take(room / 2) {
-        text.extend(pr_lines(pr, usize::from(area.width)));
+    let shown: Vec<(u16, &OpenPr)> = (prs.y..).step_by(2).zip(w.prs.iter().take(usize::from(prs.height) / 2)).collect();
+    // The `↗` is the last column of the section's first line of each PR.
+    let arrow_x = prs.right().checked_sub(1);
+    for (y, pr) in &shown {
+        text.extend(pr_lines(pr, usize::from(prs.width)));
+        if let (Some(lead), Some(x)) = (&pr.lead, arrow_x) {
+            hits.push(Hit { area: Rect::new(prs.x, *y, prs.width, 2), arrow: Position::new(x, *y), lead: lead.clone() });
+        }
     }
     if w.prs.is_empty() {
         text.push(Line::from(dim(" no open PRs")));
     }
     f.render_widget(Paragraph::new(text), prs);
+    for (y, pr) in &shown {
+        if let Some(x) = arrow_x {
+            link::link(f.buffer_mut(), Rect::new(x, *y, 1, 1), &pr.url);
+        }
+    }
     f.render_widget(Paragraph::new(dim(" (future)")), git);
     f.render_widget(Paragraph::new(dim(" (future)")), jira);
+    if !note.is_empty() {
+        let last = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1.min(area.height));
+        f.render_widget(Clear, last);
+        f.render_widget(Paragraph::new(Span::styled(note.to_owned(), palette::note())), last);
+    }
+    hits
 }
 
 #[cfg(test)]
@@ -138,21 +184,44 @@ mod tests {
 
     use super::*;
     use crate::read::{Engine, Slots};
+    use cpd_core::ids::SessionId;
 
-    fn buffer(width: u16, height: u16) -> Buffer {
-        let w = Widgets {
+    fn widgets(prs: Vec<OpenPr>) -> Widgets {
+        Widgets {
             slots: Slots { limit: 3, held: vec![] },
             engine: Engine::Never,
             plans: vec![],
-            prs: vec![],
+            prs,
             escalations: vec![],
             events: vec![],
             events_cursor: 0,
-        };
+        }
+    }
+
+    fn drawn(width: u16, height: u16, w: &Widgets, note: &str) -> (Buffer, Vec<Hit>) {
         let machine = Machine { name: "homeserver".to_owned(), load: ["0.52", "0.41", "0.30"].map(str::to_owned).to_vec() };
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|f| draw(f, f.area(), &w, &machine)).unwrap();
-        terminal.backend().buffer().clone()
+        let mut hits = vec![];
+        terminal.draw(|f| hits = draw(f, f.area(), w, &machine, note)).unwrap();
+        (terminal.backend().buffer().clone(), hits)
+    }
+
+    fn buffer(width: u16, height: u16) -> Buffer {
+        drawn(width, height, &widgets(vec![]), "").0
+    }
+
+    fn pr(number: i64, lead: Option<&str>) -> OpenPr {
+        OpenPr {
+            repo: "acme/repo".to_owned(),
+            number,
+            url: format!("https://github.com/acme/repo/pull/{number}"),
+            title: "A title".to_owned(),
+            draft: false,
+            checks: crate::read::Checks::Passed,
+            review_decision: ReviewDecision::None,
+            active: false,
+            lead: lead.map(|l| SessionId::parse(l).unwrap()),
+        }
     }
 
     fn row(buf: &Buffer, y: u16) -> String {
@@ -207,5 +276,46 @@ mod tests {
         assert_eq!(got, expected, "{got:#?}");
         assert!(buf[(1, 1)].modifier.contains(Modifier::BOLD), "the hostname is bold");
         assert!(buf[(1, 10)].modifier.contains(Modifier::DIM), "(future) is dim");
+    }
+
+    #[test]
+    fn a_pr_ends_its_first_line_in_a_linked_arrow_and_the_name_never_reaches_it() {
+        let (buf, _) = drawn(24, 20, &widgets(vec![pr(7, Some("l-a"))]), "");
+        // the arrow's cell carries the link: its symbol is wrapped in the OSC 8 escapes
+        let link = "\x1b]8;;https://github.com/acme/repo/pull/7\x07↗\x1b]8;;\x07";
+        assert_eq!(row(&buf, 6), format!(" acme/repo#7{}{link}", " ".repeat(11)));
+        // the name is cut before the arrow's column and its gap
+        let (buf, _) = drawn(9, 20, &widgets(vec![pr(7, Some("l-a"))]), "");
+        assert_eq!(row(&buf, 6).replace(link, "↗"), " acme/… ↗");
+    }
+
+    #[test]
+    fn an_unowned_pr_is_dim_on_both_lines_and_has_no_hit_area() {
+        let (buf, hits) = drawn(30, 20, &widgets(vec![pr(7, None), pr(8, Some("l-a"))]), "");
+        for (y, dim) in [(6, true), (7, true), (8, false), (9, false)] {
+            assert_eq!(buf[(1, y)].modifier.contains(Modifier::DIM), dim, "row {y}");
+            assert_eq!(buf[(2, y)].modifier.contains(Modifier::DIM), dim, "row {y}");
+        }
+        assert!(buf[(29, 6)].modifier.contains(Modifier::DIM) && buf[(29, 6)].symbol().contains('↗'), "the arrow stays");
+        let [hit] = &hits[..] else { panic!("{hits:?}") };
+        assert_eq!(hit.lead.as_str(), "l-a");
+        assert_eq!((hit.area, hit.arrow), (Rect::new(0, 8, 30, 2), Position::new(29, 8)));
+    }
+
+    #[test]
+    fn a_hit_area_is_the_two_rows_except_the_arrow_cell() {
+        let (_, hits) = drawn(30, 20, &widgets(vec![pr(7, Some("l-a"))]), "");
+        let hit = &hits[0];
+        for (x, y, inside) in [(0, 6, true), (28, 6, true), (29, 6, false), (29, 7, true), (0, 7, true), (0, 8, false), (0, 5, false)] {
+            assert_eq!(hit.contains(Position::new(x, y)), inside, "({x}, {y})");
+        }
+    }
+
+    #[test]
+    fn a_note_replaces_the_last_row_in_the_note_style() {
+        let (buf, _) = drawn(30, 15, &widgets(vec![]), "no_cockpit: nothing here");
+        assert_eq!(row(&buf, 14), "no_cockpit: nothing here");
+        assert_eq!(buf[(0, 14)].fg, palette::note().fg.unwrap());
+        assert_eq!(row(&buf, 10), " (future)", "the rest is as drawn");
     }
 }

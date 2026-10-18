@@ -2,7 +2,7 @@
 //! hs-d194 D4, D5): builds a Context's digest with one-shot pi, validates it
 //! ([`super::digest`]) and renames it into place.
 //!
-//! Started on demand, or detached by engine E8 (`watch/distill.rs`). The run
+//! Started on demand, or detached by engine E9 (`watch/distill.rs`). The run
 //! holds `locks/distill-<context>.lock`, a `flock(2)` lock the kernel frees when
 //! the run dies, so a Context never has two runs and a crash leaves no stale lock.
 
@@ -83,7 +83,7 @@ impl Lock {
     }
 }
 
-/// Whether a run of the Context holds the lock (engine E8's probe): opens it
+/// Whether a run of the Context holds the lock (engine E9's probe): opens it
 /// without creating it, so a Context that never had a run has none, and lets go at once.
 pub fn running(home: &CpdHome, context: &ContextId) -> Result<bool, CpdError> {
     let path = home.distill_lock(context);

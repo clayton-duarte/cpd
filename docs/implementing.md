@@ -40,7 +40,8 @@ Within your area you may add files (`core/src/<area>/foo.rs`, declared in your `
 | `metrics` | rs-spec-metrics | none: session metrics | §2.2 Attempt |
 | `driver` | rs-driver | `attempt run` (§6.4), `job dispatch` (§5.5) | §3.4 |
 | `pr` | rs-pr | `pr …` (§9): `pr open`, `pr poll`, `pr rebase`, and since R34 `pr add`, `pr edit`, `pr cancel`, `pr start` (§9.4–§9.7); owns the tables `prs` and `pr_needs`, the PR selection by `--pr` (§1.3) and the PR start (contract §3.8, §7.2), which `plan lock` and engine E7 call | §2.5, §3.8, §7.2, §7.6 |
-| `watch` | rs-watch | `watch` (§12) | §3.7 (E1–E8) |
+| `watch` | rs-watch | `watch` (§12) | §3.7 (E1–E9) |
+| `inbox` | Plan inbox | `inbox list/show/snooze/dismiss` (§21) | §2.2 Inbox item, §3.7 (E8) |
 | `doctor` | rs-doctor | `doctor` (§14.1) | |
 | `tui` | the TUI Job | `tui`, `tui view` (§13) | §6.2 |
 
@@ -51,7 +52,7 @@ Within your area you may add files (`core/src/<area>/foo.rs`, declared in your `
 - `core/src/context/digest.rs`: the digest files (find the latest, write `.md.tmp`, rename, prune), the validation (citations, size; D3) and the one rendering of "the Context" for a first message (D6), which `plan new` (`core/src/plan/`) and `context manager` call;
 - `core/src/context/distill.rs`: `context distill` (D4, D5): the lock, `prompt.md` and `records.md`, the pi run and its timeout, the `error` Event;
 - `core/src/context/distill_prompt.md`: the distiller's prompt, embedded with `include_str!`;
-- engine E8 in `core/src/watch/` (it only decides and spawns, as E3 does);
+- engine E9 in `core/src/watch/distill.rs` (it only decides and spawns, as E3 does);
 - paths through new `CpdHome` methods (`context_digest_dir(context)`, `distill_lock(context)`), and `context_distill_tier` and `timeouts.distill_minutes` in `config`: shared modules and other areas, so the Job that builds it asks the Lead for those edits (the one-area rule).
 
 ## The command tree
