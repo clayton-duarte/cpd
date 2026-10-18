@@ -24,10 +24,6 @@ use cpd_core::session::State;
 use crate::palette;
 use crate::read::{ContextNode, SessionNode, Tree};
 
-/// The columns one level of the tree is indented by (`rows::INDENT`, private there): a Context row's fold glyph
-/// (`▸`/`▾`) is in the first column of its row's text, at its level times this.
-const FOLD_GLYPH_STEP: usize = 2;
-
 /// The longest name of a Session (commands.md §1.4).
 const NAME_MAX: usize = 80;
 const FORK_SUFFIX: &str = " (fork)";
@@ -327,7 +323,7 @@ impl View {
         // a Context row: its fold glyph folds or unfolds it, the rest of a live one opens its Manager (B3-A6); a live
         // Session row opens it; an archived row does nothing, but its Context folds
         if let Some(Row::Context(c)) = rows::row(&self.tree, &path) {
-            if usize::from(m.column) == FOLD_GLYPH_STEP * (path.len() - 1) {
+            if usize::from(m.column) == rows::fold_glyph_column(&path) {
                 rows::click_context(&mut self.state, &self.tree, &path);
                 return Effect::None;
             }
@@ -549,7 +545,7 @@ mod tests {
         let mut view = on(&["alpha", "sketch"]);
         press(&mut view, KeyCode::Char('n'));
         let rows = drawn(&mut view, 44, 14);
-        assert_eq!(rows[8], "○ Gamma");
+        assert_eq!(rows[8], "▾ ○ Gamma");
         assert_eq!(rows[11], "Fork Sketch into a new Plan, name: █ (Enter");
         assert_eq!(rows[12], "starts, Esc cancels)");
         assert_eq!(rows[13], "", "two wrapped rows take three");
@@ -660,14 +656,14 @@ mod tests {
         assert_eq!(rows[10], "…");
         assert_eq!(click(&mut view, 0, 10), Effect::None, "the `…` of the archived Contexts");
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!((rows[10].as_str(), rows[11].as_str()), ("┊", "┊ ○ Zeta"));
+        assert_eq!((rows[10].as_str(), rows[11].as_str()), ("┊", "┊ ▾ ○ Zeta"));
         // the dotted line of a group collapses it again, in any of its rows
         assert_eq!(click(&mut view, 0, 12), Effect::None);
         let rows = drawn(&mut view, 44, 16);
         assert_eq!((rows[10].as_str(), rows[11].as_str()), ("…", ""));
         assert_eq!(click(&mut view, 2, 5), Effect::None);
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!((rows[4].as_str(), rows[5].as_str()), ("  └ …", "● Beta"));
+        assert_eq!((rows[4].as_str(), rows[5].as_str()), ("  └ …", "▾ ● Beta"));
     }
 
     #[test]
@@ -689,7 +685,7 @@ mod tests {
         drawn(&mut view, 44, 16);
         click(&mut view, 0, 10);
         let rows = drawn(&mut view, 44, 16);
-        assert!(rows[5].starts_with("  ┊ ┆ ○ Old") && rows[11] == "┊ ○ Zeta", "{rows:?}");
+        assert!(rows[5].starts_with("  ┊ ┆ ○ Old") && rows[11] == "┊ ▾ ○ Zeta", "{rows:?}");
         // the Plan, its fork, the stray fork and the archived Plan of the archived Context
         for (column, row) in [(8, 5), (8, 6), (8, 12), (8, 13)] {
             assert_eq!(click(&mut view, column, row), Effect::None, "({column}, {row})");
@@ -760,7 +756,7 @@ mod tests {
         drawn(&mut view, 44, 16);
         click(&mut view, 0, 10);
         let rows = drawn(&mut view, 44, 16);
-        assert!(rows[5].starts_with("  ┊ ┆ ○ Old") && rows[11] == "┊ ○ Zeta", "{rows:?}");
+        assert!(rows[5].starts_with("  ┊ ┆ ○ Old") && rows[11] == "┊ ▾ ○ Zeta", "{rows:?}");
         // the archived Plan, its fork, an archived Context and its Plan, and an archived fork of a live Plan
         for (column, row) in [(8, 5), (8, 6), (8, 11), (8, 12), (8, 13)] {
             assert_eq!(menu_at(&mut view, column, row), ["Unarchive"], "({column}, {row})");
@@ -781,7 +777,7 @@ mod tests {
         let rows = drawn(&mut view, 44, 16);
         assert_eq!(rows[4], "  ├ ○ sh┌─────────┐", "{rows:?}");
         assert_eq!(rows[5], "  └ ● sh│ Open    │");
-        assert!(rows[6].starts_with("● Beta  │ Rename… │"), "drawn over the tree: {rows:?}");
+        assert!(rows[6].starts_with("▾ ● Beta│ Rename… │"), "drawn over the tree: {rows:?}");
         assert_eq!(rows[10], "        └─────────┘");
         let reversed = |view: &mut View, x, y| {
             let mut terminal = Terminal::new(TestBackend::new(44, 16)).unwrap();

@@ -51,7 +51,17 @@ use crate::read::{ContextNode, JobStatus, PlanNode, SessionNode, Tree};
 pub type Id = String;
 
 /// One tree level is indented by two columns (`tui-tree-widget`'s own indentation).
-const INDENT: usize = 2;
+pub(crate) const INDENT: usize = 2;
+
+/// The glyph of a folded Context row, and of an open one: the first cell of its text.
+const FOLDED: &str = "▸";
+const OPEN: &str = "▾";
+
+/// The column of the fold glyph of the Context row at `path`: the first cell of its text, one [`INDENT`] per level
+/// (a Context under the `…` row of the archived Contexts is one level in). The click that folds is exactly here.
+pub(crate) fn fold_glyph_column(path: &[Id]) -> usize {
+    INDENT * path.len().saturating_sub(1)
+}
 
 /// The mark of the Session in the chat slot, in column 0 of its row.
 pub const ACTIVE_MARK: &str = "⏵";
@@ -270,12 +280,14 @@ fn row_text(r: RowText, width: u16) -> Line<'static> {
     Line::from(spans)
 }
 
-/// A Context's row text: dot (● when a live Session inside needs you, coloured by the busiest phase), title, and
+/// A Context's row text: fold glyph (`▸` collapsed, `▾` open), dot (● when a live Session inside needs you, coloured by the busiest phase), title, and
 /// the number of Plans listed inside when collapsed.
 fn context_text(c: &ContextNode, collapsed: bool) -> Line<'static> {
     let k = kids(c);
     let needs_you = k.direct.iter().flat_map(|p| &p.sessions).any(|s| s.needs_you && !s.is_archived());
     let mut spans = vec![
+        (if collapsed { FOLDED } else { OPEN }).into(),
+        " ".into(),
         palette::dot(needs_you, busiest(k.direct.iter().copied())),
         " ".into(),
         Span::styled(c.title.clone(), Style::new().add_modifier(Modifier::BOLD)),
@@ -580,11 +592,12 @@ mod tests {
         let buf = render(&t, &mut state_for(&t, &[], &[]), 31, 4, false);
         assert_eq!(
             lines(&buf),
-            ["● Cpd", "  ├ ○ V1             36⋅0⋅0⋅1⋅5", "⏵ ├ ● Rust            0⋅1⋅0⋅0⋅1", "  └ ○ Ui              1⋅0⋅2⋅0⋅3"]
+            ["▾ ● Cpd", "  ├ ○ V1             36⋅0⋅0⋅1⋅5", "⏵ ├ ● Rust            0⋅1⋅0⋅0⋅1", "  └ ○ Ui              1⋅0⋅2⋅0⋅3"]
         );
         assert!(buf[(6, 2)].modifier.contains(Modifier::BOLD), "the name of the centre row is bold");
         assert!(buf[(0, 2)].modifier.contains(Modifier::BOLD), "so is its ⏵");
-        assert!(buf[(2, 0)].modifier.contains(Modifier::BOLD), "and a Context's name");
+        assert!(buf[(4, 0)].modifier.contains(Modifier::BOLD), "and a Context's name");
+        assert!(!buf[(0, 0)].modifier.contains(Modifier::BOLD), "but not its glyph");
         assert!(!buf[(6, 1)].modifier.contains(Modifier::BOLD));
     }
 
@@ -595,19 +608,44 @@ mod tests {
         assert_eq!(
             lines(&buf),
             [
-                "● Alpha".to_owned(),
+                "▾ ● Alpha".to_owned(),
                 row_of("⏵ ├ ○ Ship", "2⋅1⋅1⋅0⋅5", 44),
                 row_of("  ├ ○ Sketch", "4⋅0⋅0⋅0⋅0", 44),
                 row_of("  ├ ○ Old", "0⋅0⋅0⋅1⋅36", 44),
                 "  ├ ○ ship fork".to_owned(),
                 "  └ ● ship review".to_owned(),
-                "● Beta".to_owned(),
+                "▾ ● Beta".to_owned(),
                 row_of("  └ ● Rel", "0⋅0⋅0⋅0⋅3", 44),
-                "○ Gamma".to_owned(),
+                "▾ ○ Gamma".to_owned(),
                 String::new(),
             ],
             "no state text after a name"
         );
+    }
+
+    #[test]
+    fn a_context_row_starts_with_its_fold_glyph_and_no_other_row_has_one() {
+        let tree = sample();
+        let mut state = state_for(&tree, &["alpha"], &[]);
+        let buf = render(&tree, &mut state, 44, 4, false);
+        assert_eq!(lines(&buf).iter().map(|l| l.chars().next()).collect::<Vec<_>>(), [Some('▸'), Some('▾'), Some(' '), Some('▾')]);
+        let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 10, false);
+        let rows = lines(&buf);
+        for (y, row) in rows.iter().enumerate() {
+            let glyphs = row.chars().filter(|c| matches!(c, '▸' | '▾')).count();
+            assert_eq!(glyphs, [0, 6, 8].contains(&y) as usize, "row {y}: {row}");
+        }
+        assert_eq!(fg(&buf, 0, 0), fg(&buf, 43, 0), "the default foreground");
+        // the click target is the cell the glyph is drawn in, at any level
+        assert_eq!(fold_glyph_column(&path(&["alpha"])), 0);
+        assert_eq!(fold_glyph_column(&path(&["…", "zeta"])), 2);
+        let t = archived();
+        let mut state = state_for(&t, &[], &[]);
+        expand(&mut state, &["…"]);
+        let buf = render(&t, &mut state, 44, 14, false);
+        let column = fold_glyph_column(&path(&["…", "zeta"])) as u16;
+        assert_eq!(buf[(column, 9)].symbol(), "▾");
+        assert_eq!(fg(&buf, column, 9), color(Meaning::Nothing), "dim in an archived Context");
     }
 
     #[test]
@@ -621,16 +659,16 @@ mod tests {
     fn a_collapsed_context_shows_the_number_of_plans_and_hides_them() {
         let tree = sample();
         let buf = render(&tree, &mut state_for(&tree, &["alpha"], &[]), 44, 4, false);
-        assert_eq!(lines(&buf), ["● Alpha 3".to_owned(), "● Beta".to_owned(), row_of("  └ ● Rel", "0⋅0⋅0⋅0⋅3", 44), "○ Gamma".to_owned()]);
+        assert_eq!(lines(&buf), ["▸ ● Alpha 3".to_owned(), "▾ ● Beta".to_owned(), row_of("  └ ● Rel", "0⋅0⋅0⋅0⋅3", 44), "▾ ○ Gamma".to_owned()]);
     }
 
     #[test]
     fn a_context_has_the_dot_of_any_session_inside_that_needs_you() {
         let tree = sample();
         let buf = render(&tree, &mut state_for(&tree, &["alpha"], &[]), 44, 1, false);
-        assert_eq!(text(&buf, 0), "● Alpha 3", "through its blocked fork");
+        assert_eq!(text(&buf, 0), "▸ ● Alpha 3", "through its blocked fork");
         let calm = super::super::fixture::tree(vec![context("cc", vec![lone("pp", "s", Phase::Plan, [0; 6])])]);
-        assert_eq!(text(&render(&calm, &mut state_for(&calm, &[], &[]), 20, 1, false), 0), "○ Cc");
+        assert_eq!(text(&render(&calm, &mut state_for(&calm, &[], &[]), 20, 1, false), 0), "▾ ○ Cc");
     }
 
     #[test]
@@ -639,7 +677,7 @@ mod tests {
         let mut p = lone("pp", "lead", Phase::Dispatch, [0; 6]);
         p.head.open_escalations = 1;
         let t = tree(vec![context("cc", vec![p])]);
-        assert_eq!(lines(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false)), ["○ Cc".to_owned(), row_of("  └ ○ Pp", "0⋅0⋅0⋅0⋅0", 30)]);
+        assert_eq!(lines(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false)), ["▾ ○ Cc".to_owned(), row_of("  └ ○ Pp", "0⋅0⋅0⋅0⋅0", 30)]);
         let mut t = t;
         t.contexts[0].plans[0].sessions[0].needs_you = true;
         assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false), 1), row_of("  └ ● Pp", "0⋅0⋅0⋅0⋅0", 30));
@@ -676,7 +714,7 @@ mod tests {
         ] {
             let t = tree(vec![context("cc", vec![lone("pp", "x", phase, [0; 6])])]);
             let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
-            assert_eq!((fg(&buf, 0, 0), fg(&buf, 4, 1)), (color(meaning), color(meaning)), "{phase:?}");
+            assert_eq!((fg(&buf, 2, 0), fg(&buf, 4, 1)), (color(meaning), color(meaning)), "{phase:?}");
         }
     }
 
@@ -693,7 +731,7 @@ mod tests {
         assert_eq!(busiest(&plans(&[Done])), Some(Done));
         assert_eq!(busiest(&[]), None);
         let t = tree(vec![context("cc", plans(&[Done, Plan]))]);
-        assert_eq!(fg(&render(&t, &mut state_for(&t, &[], &[]), 20, 1, false), 0, 0), color(Meaning::Planning));
+        assert_eq!(fg(&render(&t, &mut state_for(&t, &[], &[]), 20, 1, false), 2, 0), color(Meaning::Planning));
     }
 
     #[test]
@@ -872,7 +910,7 @@ mod tests {
         tree.contexts[0].title = "Payments".into();
         tree.contexts[0].plans[0].head.title = "Pay by card".into();
         let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 5, false);
-        assert_eq!(text(&buf, 0), "● Payments", "not its id `alpha`");
+        assert_eq!(text(&buf, 0), "▾ ● Payments", "not its id `alpha`");
         assert_eq!(text(&buf, 1), row_of("⏵ ├ ○ Pay by card", "2⋅1⋅1⋅0⋅5", 44), "not its Lead's name `ship lead`");
         assert_eq!(text(&buf, 4), "  ├ ○ ship fork", "a fork is its Session's name");
         assert_eq!(row(&tree, &path(&["alpha"])).unwrap().label(), "Payments");
@@ -898,14 +936,14 @@ mod tests {
         assert_eq!(
             lines(&buf),
             [
-                "○ Alpha".to_owned(),
+                "▾ ○ Alpha".to_owned(),
                 row_of("⏵ ├ ○ Ship", "2⋅1⋅1⋅0⋅5", 44),
                 row_of("  ├ ○ Sketch", "4⋅0⋅0⋅0⋅0", 44),
                 "  ├ ○ ship fork".to_owned(),
                 "  └ …".to_owned(),
-                "● Beta".to_owned(),
+                "▾ ● Beta".to_owned(),
                 row_of("  └ ● Rel", "0⋅0⋅0⋅0⋅3", 44),
-                "○ Gamma".to_owned(),
+                "▾ ○ Gamma".to_owned(),
                 "…".to_owned(),
                 String::new(),
             ],
@@ -923,14 +961,14 @@ mod tests {
         fork.archived_at = Some(WHEN.into());
         t.contexts[1].plans[0].sessions.push(fork);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 44, 10, false);
-        assert_eq!(lines(&buf)[6..9], ["● Beta", row_of("  ├ ● Rel", "0⋅0⋅0⋅0⋅3", 44).as_str(), "  └ …"]);
+        assert_eq!(lines(&buf)[6..9], ["▾ ● Beta", row_of("  ├ ● Rel", "0⋅0⋅0⋅0⋅3", 44).as_str(), "  └ …"]);
         let mut t = sample();
         t.contexts[1].plans[0].head.archived_at = Some(WHEN.into());
         let mut fork = session("f-rel", "rel fork", State::Idle, None, Place::None);
         fork.plan = Some(t.contexts[1].plans[0].head.id.clone());
         t.contexts[1].plans[0].sessions.push(fork);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 44, 10, false);
-        assert_eq!(lines(&buf)[6..8], ["○ Beta", "  └ …"], "a fork of an archived Plan is in the `…` row too");
+        assert_eq!(lines(&buf)[6..8], ["▾ ○ Beta", "  └ …"], "a fork of an archived Plan is in the `…` row too");
     }
 
     #[test]
@@ -942,14 +980,14 @@ mod tests {
         assert_eq!(
             lines(&buf)[..9],
             [
-                "○ Alpha".to_owned(),
+                "▾ ○ Alpha".to_owned(),
                 row_of("⏵ ├ ○ Ship", "2⋅1⋅1⋅0⋅5", 44),
                 row_of("  ├ ○ Sketch", "4⋅0⋅0⋅0⋅0", 44),
                 "  ├ ○ ship fork".to_owned(),
                 "  ┊".to_owned(),
                 row_of("  ┊ ┆ ○ Old", "0⋅0⋅0⋅1⋅36", 44),
                 "  ┊ ┆ ○ ship review (Ship)".to_owned(),
-                "● Beta".to_owned(),
+                "▾ ● Beta".to_owned(),
                 row_of("  └ ● Rel", "0⋅0⋅0⋅0⋅3", 44),
             ]
         );
@@ -983,7 +1021,7 @@ mod tests {
         let rows = lines(&buf);
         assert_eq!(
             rows[8..13],
-            ["┊", "┊ ○ Zeta", row_of("┊   ┆ ○ Zp", "0⋅0⋅0⋅0⋅2", 44).as_str(), "┊   ┆ ○ zp fork", ""],
+            ["┊", "┊ ▾ ○ Zeta", row_of("┊   ┆ ○ Zp", "0⋅0⋅0⋅0⋅2", 44).as_str(), "┊   ┆ ○ zp fork", ""],
             "{rows:#?}"
         );
         for y in 8..12 {
@@ -998,7 +1036,7 @@ mod tests {
         // an archived Context folds like any other
         expand(&mut state, &["…"]);
         assert!(click_context(&mut state, &t, &path(&["…", "zeta"])));
-        assert_eq!(text(&render(&t, &mut state, 44, 14, false), 9), "┊ ○ Zeta 1");
+        assert_eq!(text(&render(&t, &mut state, 44, 14, false), 9), "┊ ▸ ○ Zeta 1");
     }
 
     #[test]
@@ -1066,6 +1104,6 @@ mod tests {
         let mut t = archived();
         t.contexts[0].plans[2].head.phase = Phase::Done;
         let buf = render(&t, &mut state_for(&t, &["alpha"], &[]), 44, 3, false);
-        assert_eq!(text(&buf, 0), "○ Alpha 2", "ship and sketch; the archived Plan is behind `…`");
+        assert_eq!(text(&buf, 0), "▸ ○ Alpha 2", "ship and sketch; the archived Plan is behind `…`");
     }
 }

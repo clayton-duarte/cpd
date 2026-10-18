@@ -298,15 +298,15 @@ fn the_tree_of_a_prepared_store() {
     assert_eq!(
         screen,
         [
-            "● Title of alpha".to_owned(),
+            "▾ ● Title of alpha".to_owned(),
             row("⏵ ├ ○ Plan ship", "1⋅1⋅0⋅1⋅2"),
             row("  ├ ○ Plan sketch", "2⋅0⋅0⋅0⋅0"),
             "  ├ ○ ship fork".to_owned(),
             "  └ ● ship review".to_owned(),
-            "● Title of beta".to_owned(),
+            "▾ ● Title of beta".to_owned(),
             row("  ├ ● Plan rel", "0⋅0⋅0⋅0⋅1"),
             row("  └ ○ Plan old", "0⋅0⋅0⋅0⋅0"),
-            "○ Title of gamma".to_owned(),
+            "▾ ○ Title of gamma".to_owned(),
         ],
         "the Context and Plan titles, the forks' names; the forks are siblings of the Plans, after them, under their Context (B1); the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text"
     );
@@ -360,7 +360,8 @@ fn a_click_on_a_context_row_opens_its_manager_and_its_fold_glyph_folds_it() {
     assert_eq!(calls(&env).len(), 2, "no more commands");
     assert_eq!(pane.screen(), before, "the label click folds nothing");
     pane.click(0, 0); // its fold glyph
-    pane.wait("alpha folded", |s| !s.iter().any(|r| r.contains("ship")));
+    let folded = pane.wait("alpha folded", |s| !s.iter().any(|r| r.contains("ship")));
+    assert_eq!(folded[0], "▸ ● Title of alpha 2", "a folded Context draws ▸ and its number of Plans");
     assert_eq!(calls(&env).len(), 2, "the glyph runs no command");
     pane.click(0, 0);
     pane.wait("alpha unfolded", |s| s.iter().any(|r| r.contains("ship")));
@@ -518,7 +519,7 @@ fn the_tree_follows_the_events_of_the_store() {
     // session-state
     env.cpd(&["session", "state", "blocked", "--label", "cpd: Ask", "--session", "l-sketch"]).ok();
     let screen = pane.wait("the new state", |s| s.iter().any(|r| r.contains("├ ● Plan sketch")));
-    assert!(screen.iter().any(|r| r.starts_with("● Title of alpha")));
+    assert!(screen.iter().any(|r| r.starts_with("▾ ● Title of alpha")));
 }
 
 /// `populate`, with the Context `gamma` and the Plan `old` of `beta` (and its Lead) archived.
@@ -543,12 +544,12 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
     assert_eq!(
         screen,
         [
-            "● Title of alpha".to_owned(),
+            "▾ ● Title of alpha".to_owned(),
             row("⏵ ├ ○ Plan ship", "1⋅1⋅0⋅1⋅2"),
             row("  ├ ○ Plan sketch", "2⋅0⋅0⋅0⋅0"),
             "  ├ ○ ship fork".to_owned(),
             "  └ ● ship review".to_owned(),
-            "● Title of beta".to_owned(),
+            "▾ ● Title of beta".to_owned(),
             row("  ├ ● Plan rel", "0⋅0⋅0⋅0⋅1"),
             "  └ …".to_owned(),
             "…".to_owned(),
@@ -562,8 +563,8 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
     // a click on the archived Plan opens nothing; then the other `…` shows the archived Context
     pane.click(10, 8);
     pane.click(0, 9);
-    let screen = pane.wait("the archived Context", |s| s.iter().any(|r| r.contains("┊ ○ Title of gamma")));
-    assert_eq!(screen[9..11], ["┊".to_owned(), "┊ ○ Title of gamma".to_owned()]);
+    let screen = pane.wait("the archived Context", |s| s.iter().any(|r| r.contains("┊ ▾ ○ Title of gamma")));
+    assert_eq!(screen[9..11], ["┊".to_owned(), "┊ ▾ ○ Title of gamma".to_owned()]);
     // a click on the dotted line of beta's group collapses it again
     pane.click(2, 8);
     let screen = pane.wait("the group collapsed", |s| s.iter().all(|r| !r.contains("Plan old")));
@@ -601,7 +602,7 @@ fn the_tree_follows_the_archive_and_rename_events() {
          INSERT INTO events (txn, at, kind, context, text, data)
          VALUES (cpd_txn(), '2026-02-01T00:00:00.000Z', 'context-renamed', 'gamma', 'fixture', '{\"title\":\"Renamed\"}');",
     );
-    pane.wait("the new title", |s| s.iter().any(|r| r == "○ Renamed"));
+    pane.wait("the new title", |s| s.iter().any(|r| r == "▾ ○ Renamed"));
     sql(
         &mut open(&env),
         "UPDATE plans SET title = 'Plan renamed' WHERE id = 'old';
