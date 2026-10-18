@@ -96,7 +96,8 @@ test("a malformed line is an error and is skipped; the cursor moves past it", as
 
   // a bad line with an id alone: the restart skips past it too
   f.emit({ ...ev(110, "job-merged"), at: 5 });
-  await waitFor("its error", () => f.pi.errors().some((e) => /`at` is not a string/.test(e.message.content)));
+  // 101 has the same `at` error, so the second one is 110's (the fake replays a line without an id at every start, which adds errors of its own)
+  await waitFor("its error", () => f.pi.errors().filter((e) => /`at` is not a string/.test(e.message.content)).length === 2);
   f.file("exit-next", "0");
   await waitFor("restart", () => f.follows().length === 3);
   assert.equal(f.sinces()[2], 110);
