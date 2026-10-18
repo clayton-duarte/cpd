@@ -116,3 +116,14 @@ fn plan_cancel_is_indexed_and_exists() {
     assert!(documented_commands().contains(&vec!["plan".to_owned(), "cancel".to_owned()]));
     assert!(Cli::command().find_subcommand("plan").unwrap().find_subcommand("cancel").is_some());
 }
+
+/// The code `internal` is in the error table of commands.md §1.3 and of contract §1.2 (store-W7).
+#[test]
+fn internal_is_listed_in_both_error_tables() {
+    let docs = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs");
+    for file in ["commands.md", "contract.md"] {
+        let doc = std::fs::read_to_string(format!("{docs}/{file}")).unwrap();
+        assert!(doc.lines().any(|l| l.starts_with('|') && l.contains("`internal`")), "{file} does not list `internal`");
+    }
+    assert_eq!(cpd_core::error::ErrorCode::Internal.as_str(), "internal");
+}
