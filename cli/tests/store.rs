@@ -246,7 +246,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     assert_eq!(found, expected);
     // Every table is STRICT.
     let tables = names(&raw(&env), "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'");
-    assert_eq!(tables.len(), 16);
+    assert_eq!(tables.len(), 17);
     for table in tables {
         let strict: i64 = raw(&env)
             .query_row("SELECT strict FROM pragma_table_list WHERE name = ?1", [&table], |r| r.get(0))
@@ -662,7 +662,7 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
     let mut store = fixture_store(&env);
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     let hash = store.read(|c| Ok(cpd_core::store::schema_hash(c)?)).unwrap();
-    assert_eq!(hash, "d2623567062d0367ddcf3dcd0b96c6d7e2b45d447e3b841f77d0249129736277", "version 11 (the PR poll's mergeable state) on top of version 10 (the Manager role and the brief record, hs-d92)");
+    assert_eq!(hash, "ae8ea2361df62ed1a89912b6e39227f4afd043475f27ac7faf78ce847e208cbb", "version 12 (the Inbox, migration 0012) on top of version 11 (the PR poll's mergeable state, hs-d188)");
 
     for table in ["contexts", "plans", "sessions"] {
         let archived: Option<String> =
@@ -860,7 +860,8 @@ fn version_5_database(env: &TestEnv) {
         )
     };
     conn.execute_batch(&format!(
-        "DROP TABLE pull_requests;
+        "DROP TABLE inbox_items;
+         DROP TABLE pull_requests;
          DROP TABLE prs;
          {}
          INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
@@ -899,7 +900,7 @@ fn a_version_5_database_migrates_to_6_with_the_back_filled_rows_and_the_link() {
     let env = TestEnv::new();
     version_5_database(&env);
     let store = open(&env);
-    // Its schema is exactly that of a fresh database at version 6.
+    // Its schema is exactly that of a fresh database (migrations 6 and 7 ran).
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     drop(store);
     let conn = raw(&env);
@@ -1206,7 +1207,7 @@ fn version_on_an_empty_home_reports_no_store_schema_and_creates_nothing() {
     let out = env.cpd(&["--version"]).ok();
     assert_eq!(out["schema"], VERSION);
     assert!(out["store_schema"].is_null(), "{out}");
-    assert_eq!(out["protocol"], 2, "{out}");
+    assert_eq!(out["protocol"], 3, "{out}");
     assert!(!home(&env).db().exists());
     assert!(!home(&env).locks_dir().exists());
 }

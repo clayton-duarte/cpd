@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 2;
+pub const PROTOCOL: u32 = 3;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -113,6 +113,10 @@ kinds! {
     PlanArchived = "plan-archived",
     SessionArchived = "session-archived",
     SessionMessage = "session-message",
+    InboxOpened = "inbox-opened",
+    InboxClosed = "inbox-closed",
+    InboxSnoozed = "inbox-snoozed",
+    InboxDismissed = "inbox-dismissed",
     WatchStarted = "watch-started",
     WatchStopped = "watch-stopped",
     Error = "error",
@@ -170,6 +174,10 @@ impl Kind {
             PlanArchived => spec([Y, Y, N, N, N], &["archived"], &[]),
             SessionArchived => spec([Y, M, N, N, Y], &["archived"], &[]),
             SessionMessage => spec([Y, M, N, N, Y], &["from", "text"], &[]),
+            InboxOpened => spec([M, M, M, N, M], &["item", "kind", "urgency", "label"], &[]),
+            InboxClosed => spec([M, M, M, N, M], &["item", "kind"], &[]),
+            InboxSnoozed => spec([M, M, M, N, M], &["item", "until"], &[]),
+            InboxDismissed => spec([M, M, M, N, M], &["item"], &[]),
             WatchStarted | WatchStopped => spec([N, N, N, N, N], &["pid"], &[]),
             Error => spec([M, M, M, M, M], &["source", "code", "message", "details"], &[]),
         }
@@ -200,7 +208,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     /// The protocol and the `sha256` of the sorted kinds, joined by `\n`, they were last raised for.
-    const PINNED: (u32, &str) = (2, "05bf69be064acc31536554f65e9649b8c66fbbf3efddf9fdae56f9abeb89d162");
+    const PINNED: (u32, &str) = (3, "ac82364d4f6b83ae5e1dad29db82b205a36e8705eb2ee5015a1ec9adee953abb");
 
     fn kinds_hash() -> String {
         let mut names: Vec<&str> = Kind::ALL.iter().map(|k| k.as_str()).collect();

@@ -30,6 +30,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 18. [Changes from cpd 1](#18-changes-from-cpd-1)
 19. [Amendments to contract.md](#19-amendments-to-contractmd)
 20. [Sections changed by R19 and R20](#20-sections-changed-by-r19-and-r20)
+21. [`inbox`](#21-inbox)
 
 ## 1. Conventions
 
@@ -55,7 +56,7 @@ Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Thr
 | `cpd session run`, `cpd tui view` (internal) | they run pi or draw a ratatui view in their pane | they are the programs inside cockpit panes (§6.2), not commands an agent calls. If they fail before taking the terminal, they print the failure envelope and exit with its code |
 | `cpd tui --attach` | nothing on success: it replaces itself with `tmux attach` | the approved outline says `tui` "builds and attaches the cockpit"; without `--attach`, `cpd tui` prints JSON like every command |
 
-`cpd --version` (like `--help`) prints one JSON value too: `{"ok": true, "version": "0.0.0", "schema": 6, "store_schema": 6, "protocol": 2}`. `schema` is the newest store schema the binary supports (contract §4.5); `store_schema` is the database's current schema, `PRAGMA user_version` of `$CPD_HOME`'s database opened read-only, without migrating and without the schema check, or `null` when the database file does not exist. A binary can open the store when `store_schema` is `null` or `<= schema`. `protocol` is an integer, **2** today (1 until Plan manager added `session-message`), raised whenever an Event kind, an Event `data` field the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on (contract §5.2 "The protocol number"); the adapter checks it (§15.2). `--version` never creates, migrates or writes the database.
+`cpd --version` (like `--help`) prints one JSON value too: `{"ok": true, "version": "0.0.0", "schema": 6, "store_schema": 6, "protocol": 2}`. `schema` is the newest store schema the binary supports (contract §4.5); `store_schema` is the database's current schema, `PRAGMA user_version` of `$CPD_HOME`'s database opened read-only, without migrating and without the schema check, or `null` when the database file does not exist. A binary can open the store when `store_schema` is `null` or `<= schema`. `protocol` is an integer, **3** today (1 until Plan manager added `session-message`, 2 until Plan inbox added the four `inbox-*` kinds), raised whenever an Event kind, an Event `data` field the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on (contract §5.2 "The protocol number"); the adapter checks it (§15.2). `--version` never creates, migrates or writes the database.
 
 ### 1.3 Selection and common refusals
 
@@ -90,6 +91,8 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `store_tampered` | 1 | a write command, when the schema check fails (§4.3); read commands report it in `tamper` instead |
 | `store_busy` | 5 | no write lock within `store_busy_ms` (§4.2) |
 | `context_not_found`, `plan_not_found`, `pr_not_found`, `job_not_found`, `attempt_not_found`, `escalation_not_found`, `review_not_found`, `session_not_found` | 4 | the selected or named object does not exist. (A Context record that names a missing record is `record_not_found`, exit 3, §4.6) |
+| `item_not_found` | 4 | `inbox show`, `snooze` or `dismiss` named an Inbox item that does not exist |
+| `item_closed` | 3 | `inbox snooze` or `dismiss` named an Inbox item that is closed (§21) |
 | `archive_blocked` | 3 | `context archive`, `plan archive` or `session archive` found a live object (contract §2.2 "Archived"); `details.blockers` lists each, `details.next` says what to do |
 | `archived` | 3 | the object (or its Context or Plan) is archived and the command does not work on archived objects; `details.next` is the unarchive command |
 | `cas_lost` | 3 | a compare-and-swap found the state changed since it was read (§4.2); rerun the command |
@@ -160,6 +163,8 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `events list`, `events follow` | pi adapter, TUI, scripts | no | §5.4 |
 | `watch` | `plan lock`, `tui`, User | yes | §3.7, §6.6 |
 | `tui`, `tui view` (internal) | User | no | §6.2 |
+| `inbox list`, `inbox show` | User, TUI | no | §2.2 Inbox item |
+| `inbox snooze`, `dismiss` | User (TUI) | yes | §2.2 Inbox item |
 | `doctor`, `config`, `tiers` | User | `tiers` refreshes its cache | §8, §9 |
 
 ## 3. `context`
@@ -1692,13 +1697,13 @@ cpd watch [--ensure]
 
 The engine, one per machine (§3.7, §6.6, D5).
 
-**Without `--ensure`:** runs E1–E5 and E7 (E6 is removed; E7, the PR start, since R34) every `tick_seconds` in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
+**Without `--ensure`:** runs E1–E5, E7 and E8 (E6 is removed; E7, the PR start, since R34; E8, the Inbox, §21) every `tick_seconds` in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
 
 | Precondition | Code | Exit |
 |---|---|---|
 | `locks/watch.lock` is free | `watch_running` | 3 |
 
-Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, and every row and Event of E1–E5 and E7 (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0. Idempotent: a second one is refused.
+Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, and every row and Event of E1–E5, E7 and E8 (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0. Idempotent: a second one is refused.
 
 **With `--ensure`:** starts the engine when it is not running, and returns at once.
 
@@ -1950,7 +1955,7 @@ The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays
 ### 15.2 Start-up and the cursor
 
 At `session_start`, in this order:
-0. **Protocol check** (hs-a4): `cpd --version`, whose `protocol` (§1.2) is compared with the number the adapter was built for (2 today). Equal: nothing is said. Different: one message to the Session, `cpd adapter: protocol mismatch: protocol_mismatch: cpd speaks protocol N, this adapter M; reload pi (/reload)`, with `details: {kind: "error", code: "protocol_mismatch", cpd: N, adapter: M}`, delivered like the other errors (§15.1), once per installed cpd binary (the identity of the file `cpd` resolves to), not once per follower restart. The adapter keeps following Events either way; it never types into a pane. A `--version` that fails or lacks `protocol` is an ordinary error with its code, once per error code.
+0. **Protocol check** (hs-a4): `cpd --version`, whose `protocol` (§1.2) is compared with the number the adapter was built for (3 today). Equal: nothing is said. Different: one message to the Session, `cpd adapter: protocol mismatch: protocol_mismatch: cpd speaks protocol N, this adapter M; reload pi (/reload)`, with `details: {kind: "error", code: "protocol_mismatch", cpd: N, adapter: M}`, delivered like the other errors (§15.1), once per installed cpd binary (the identity of the file `cpd` resolves to), not once per follower restart. The adapter keeps following Events either way; it never types into a pane. A `--version` that fails or lacks `protocol` is an ordinary error with its code, once per error code.
 1. `cpd session show <id>`: role, Plan, Context, `plan_lead`, `registered_event`, name.
 2. `cpd session state idle --session <id>` (`stopped → idle`, §3.6); then `working` if `ctx.isIdle()` is false.
 3. **Name:** if pi's session name differs from the Session's `name`, `pi.setSessionName(name)`: a `session-renamed` missed while pi was down still applies.
@@ -2280,3 +2285,93 @@ Job `contract-gate-pr` applied the User's decisions R19 (no Job-level Gate or Re
 **commands.md:** the introduction and contents; §1.5, §2, §4.2, §4.3, §4.5, §5 (the Tier flag), §5.1, §5.2, §5.3, §5.6, §5.7, §6.1, §6.2, §6.3, §6.4, §7 and §7.1 (emptied), §9.1, §9.3, §11, §13.2, §14.1, §14.2, §15.3, §16 (now "The Worker contract"), §16.1, §16.2 and §16.3 (emptied), §17, §18, §19 (amendment 11), §20 (new).
 
 **CONTEXT.md:** Dispatch, Ledger, Session, Reviewer (removed), Gate, Quick check, Merged.
+
+## 21. `inbox`
+
+Contract §2.2 "Inbox item", §3.7 E8, §4.4, §5.2. The Inbox is the single source of "needs you": one stored item per thing that needs the User, opened and closed by the engine (E8) from its cause, never by a command. The commands read the items and hide them. Area `core/src/inbox/`. More kinds come from the PR poll; this section describes the core kinds (`dialog`, `plan-review`, `unread`, `job-stuck`, `engine-error`, `question`, and `engine-down`, which is not stored).
+
+An item as printed:
+
+```json
+{"id": 12, "kind": "job-stuck", "urgency": "red", "label": "inbox/core-docs failed", "subject": "job:inbox/core-docs", "context": "building-cpd", "plan": "inbox", "job": "core-docs", "session": null, "record": null, "event": 48311, "url": null, "opened_at": "2026-10-14T21:40:02.114Z", "closed_at": null, "snoozed_until": null, "dismissed_at": null, "age_seconds": 1260}
+```
+
+`age_seconds` is `closed_at` (or now, for an open item) minus `opened_at`. The item `engine-down` has `id: null`, `subject: "engine"` and no links.
+
+### 21.1 `inbox list`
+
+```
+cpd inbox list [--context <c>] [--all] [--closed] [--limit <n>]
+```
+
+| Flag | Meaning |
+|---|---|
+| `--context <c>` | keep the items of that Context (`engine-down` has none, so it is dropped) |
+| `--all` | also list the snoozed and dismissed items, each with `hidden: "snoozed"` or `"dismissed"` |
+| `--closed` | list closed items instead of open ones, newest `closed_at` first |
+| `--limit <n>` | with `--closed`: at most n items; default 50 (1–5000) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--all` and `--closed` are not given together, and `--limit` comes only with `--closed` | `usage` | 2 |
+| `--context` names a Context that exists | `context_not_found` | 4 |
+
+Effects: none; it takes no lock (§4.2). Open visible items come in the order of §2.2 (red, yellow, magenta, white; oldest `opened_at` first), with `engine-down` first when `locks/watch.lock` is free. A snoozed item whose `snoozed_until` has passed is visible again. `hidden` counts the open items now hidden, whether or not `--all` lists them. `events_cursor` is the highest Event id, so a follower can start from it.
+
+```json
+{"ok": true, "engine": {"running": true}, "items": [ {"id": 12, "kind": "job-stuck", "…": "…"} ], "hidden": {"snoozed": 1, "dismissed": 0}, "events_cursor": 48320}
+```
+
+Idempotent: read-only.
+
+### 21.2 `inbox show`
+
+```
+cpd inbox show <id>
+```
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the item exists (open or closed) | `item_not_found` | 4 |
+
+Effects: none. Output `{"ok": true, "item": {…}}`, the item as above. Idempotent: read-only.
+
+### 21.3 `inbox snooze`
+
+```
+cpd inbox snooze <id> <15m | 1h | tomorrow>
+```
+
+`15m` and `1h` are that long from now; `tomorrow` is the next 09:00 in local time (the offset read with `date +%z`, which GNU and BSD `date` both print). Any other value is `usage` (exit 2).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the item exists | `item_not_found` | 4 |
+| the item is open | `item_closed` | 3 |
+
+Effects, one transaction: **rows** `inbox_items.snoozed_until`; **Event** `inbox-snoozed` `{item, until}`. The item returns at its rank when the time passes; its `opened_at` is kept.
+
+```json
+{"ok": true, "item": {"id": 12, "snoozed_until": "2026-10-14T22:40:02.114Z", "…": "…"}}
+```
+
+Idempotent: snoozing again replaces the time and appends another Event.
+
+### 21.4 `inbox dismiss`
+
+```
+cpd inbox dismiss <id>
+```
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the item exists | `item_not_found` | 4 |
+| the item is open | `item_closed` | 3 |
+
+Effects, one transaction: **rows** `inbox_items.dismissed_at`; **Event** `inbox-dismissed` `{item}`. The item stays hidden for the rest of its life; because an item lives only while its cause holds, a new cause is a new item and shows again.
+
+```json
+{"ok": true, "item": {"id": 12, "dismissed_at": "2026-10-14T21:41:02.114Z", "…": "…"}}
+```
+
+Idempotent: yes. An item already dismissed returns `"already": true` and writes nothing, with no Event.

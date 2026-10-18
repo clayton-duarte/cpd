@@ -353,6 +353,43 @@ An append-only record of something that happened (D4, §5).
 | `text` | text | one short paragraph for the Lead, ending with the exact `cpd` command(s) it may want to run (cpd 1 §10, kept) |
 | `data` | json object | kind-specific fields (§5.2) |
 
+#### Inbox item
+
+One thing that needs the User: the **single source of "needs you"** (hs-d165), shown by `cpd inbox` and the cockpit. The engine opens it when its condition starts and closes it when the condition ends (E8, §3.7); nobody else does. Its identity is (`kind`, `subject`, `urgency`): when the urgency changes (a Plan locks while a dialog is open), the item closes and a new one opens. A closed item is kept forever (hs-d168).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | int | |
+| `kind` | text | the table below |
+| `urgency` | text | `red` (blocked work), `yellow` (review or merge due), `magenta` (a decision before the work runs), `white` (an unread turn) |
+| `subject` | text | the identity key: `session:<uuid>`, `review:<plan>/<id>`, `job:<plan>/<key>`, `error:<step>/<scope>/<code>`, `record:<context>/<id>` (review ids are per Plan and record ids repeat across Contexts, so both are qualified) |
+| `context`, `plan`, `job`, `session`, `record` | text? | what it is about, when it has one |
+| `event` | int? | the Event that caused it (the `session-state`, `job-failed` or `error` Event), for "jump to the cause" |
+| `label` | text | the short text of the table below |
+| `url` | text? | a page that shows it (plannotator's for a Plan review) |
+| `opened_at` | time | |
+| `closed_at` | time? | null while open |
+| `snoozed_until` | time? | hidden until then; the item returns at its rank, `opened_at` kept |
+| `dismissed_at` | time? | hidden for the rest of its life; a new cause is a new item and shows again |
+
+A hidden (snoozed or dismissed) item fills no dot and is not counted. Escalations from Workers go to their Lead, not to the User, so they are not items; nor are the errors addressed to a Lead (`pr_start_failed`, `push_failed`, driver errors).
+
+| Kind | Condition (subject) | Urgency | Label (`<who>`: the tree's label of the Session: its Plan id, `<plan>·<suffix>` for a fork, the Context id for a Manager) |
+|---|---|---|---|
+| `dialog` | a Lead, side fork or Manager Session (never a Worker) is `blocked` with a label other than `cpd: Worker question` and `cpd: plan review` (the Session) | red when its Plan is in `dispatch` or `pr`; magenta in `grounding`, `plan`, `done` or with no Plan | `<who> asks you` |
+| `plan-review` | the Plan's latest Plan review is `pending` (the review) | magenta | `<plan> plan review` |
+| `unread` | a Lead, side fork or Manager Session is `idle`, not in the chat slot, and its latest `session-state` Event with `to: idle` is newer than its latest `session-moved` with `place: chat` (the Session) | white | `<who> replied` |
+| `job-stuck` | a Job is `failed` and its latest `job-failed` Event is at least `inbox.stuck_job_minutes` (§8.2) old; it clears on retry or cancel (the Job) | red | `<plan>/<job> failed` |
+| `engine-error` | an `error` the engine itself reported (a failure of E1–E8, §3.7) has not cleared (step, scope and code) | red | `engine <step>: <code>` |
+| `engine-down` | `locks/watch.lock` is free. **Not stored**: the engine cannot report its own absence, so `cpd inbox list` adds it, first, with `id: null` | red | `engine is down` |
+| `question` | a Context record of kind `question` has no `answer` record (the record) | magenta | `<record id> open question` |
+
+More kinds come from the PR poll (the user's pull requests and review requests); this section lists the core kinds. Labels are short, for a column of 20 % of 215 columns; the cockpit truncates with `…`.
+
+**Order** (hs-d167): red, then yellow, magenta, white; within one urgency the oldest `opened_at` first. `engine-down` is always first.
+
+**Snooze and dismiss.** `inbox snooze` hides an item until a time (15 minutes, 1 hour, or tomorrow 09:00 local time); `inbox dismiss` hides it for the rest of its life (commands.md §21).
+
 ### 2.3 Fingerprints
 
 - **Locked-Job fingerprint:** `sha256` of the canonical JSON (keys sorted, no whitespace) of `{goal, tier, context, touches, acceptance, out_of_scope, needs}` with `needs` sorted. Stored at `plan lock`, at append, and, for a draft added after the lock, when its Plan review is approved (§3.2). Every engine step that reads a Job recomputes it; a mismatch is `locked_job_tampered` (exit 3) and the Job is not scheduled (cpd 1 §8, kept).
@@ -389,6 +426,7 @@ erDiagram
 - A PR has one or more Jobs by `plan lock` (`pr_empty`, exit 3); a Job belongs to exactly one PR of its Plan (A7). Dependencies link Jobs of the same PR only; order across PRs is the PRs' needs.
 - A Job has zero or more Attempts, at most one of them not `ended`.
 - An Attempt has one Worker Session. An Escalation belongs to one Attempt.
+- An Inbox item links to at most one Context, Plan, Job, Session, Context record and Event (§2.2): the ones its condition is about, all optional.
 - Every Event about a Context or a Plan names the Context, and the Plan, Job, Attempt or Session it is about, when there is one. Events about neither, such as `watch-started` and `watch-stopped`, name no Context (§5.2).
 
 ### 2.5 PRs in commands and views (R34)
@@ -412,7 +450,7 @@ The command surface of PRs; `commands.md` specifies each command in full.
 
 ## 3. State machines
 
-Every transition below is the only way its state changes. Anything else is refused with `illegal_transition` (exit 3) by the command, and also by a trigger in the database (§4.4), so a bug cannot write it either. "Engine" steps are those of `cpd watch` (§3.7, E1–E7) and of the Attempt driver `cpd attempt run` (§3.4, A1–A9). Each row names the Event its transaction appends (§5.2).
+Every transition below is the only way its state changes. Anything else is refused with `illegal_transition` (exit 3) by the command, and also by a trigger in the database (§4.4), so a bug cannot write it either. "Engine" steps are those of `cpd watch` (§3.7, E1–E8) and of the Attempt driver `cpd attempt run` (§3.4, A1–A9). Each row names the Event its transaction appends (§5.2).
 
 ### 3.1 Plan phases
 
@@ -612,7 +650,7 @@ The adapter counts blocking reasons and reports `blocked` while the count is abo
 
 ### 3.7 The engine, `cpd watch`
 
-One per machine (D5). Every `tick_seconds`:
+One per machine (D5). Every `tick_seconds`, E1–E8 in order:
 
 | Step | What it does |
 |---|---|
@@ -623,6 +661,7 @@ One per machine (D5). Every `tick_seconds`:
 | E5 | **PR poll** (hs-d96, hs-d97): run `cpd pr poll` (no `--plan`) as a subprocess (a process boundary, cpd 1 §11 step 5), `pr_poll_seconds` after the **end** of the previous poll (never overlapping, never more often than one per tick), whether or not any Plan is in `deploy`. One poll covers every open pull request of the User (§7.6). When the output's `rate_limit.remaining` is below 100, E5 skips polls until `rate_limit.reset_at` and reports one `error` Event with code `gh_rate_limited` (`details`: `remaining`, `reset_at`); the error clears when polling resumes |
 | E6 | *Removed by Plan manager B1 (hs-a1): Contexts are machine-local, so there is nothing to sync. The number stays.* |
 | E7 | **PR start** (R34, A9): for each Plan in `dispatch`, each PR in status `waiting` whose needs are all `merged` and whose `start_failed_at` is null: start it (§3.8, §7.2). E7 runs after E5 in the same tick, so a PR starts in the tick in which E5's poll sees its last prerequisite merged; it also starts a PR appended in `dispatch` with no needs. A failed start sets `start_failed_at` and appends one `error` Event with code `pr_start_failed` for the Plan's Lead; E7 does not try that PR again, the Lead retries with `cpd pr start <key>` |
+| E8 | **Inbox** (hs-d168): after E7, compute the conditions of the Inbox kinds (§2.2) from the store, the config (`inbox.stuck_job_minutes`), the clock and the engine's own active errors; compare them with the open `inbox_items`; and in **one transaction** insert the new items, set `closed_at` on the gone ones, and append `inbox-opened` and `inbox-closed` (§5.2). Nothing is written when nothing changed (idempotent). A failure of E8 is reported like any step's, and becomes an `engine-error` item once E8 works again. `engine-down` is not computed here: it is not stored |
 
 `watch` holds `locks/watch.lock` (a second one exits with `watch_running`, exit 3), appends `watch-started` and `watch-stopped`, and never exits on its own: unlike cpd 1, it serves every Plan.
 
@@ -726,7 +765,7 @@ The **tamper report** (`plan show`'s `tamper` list, `doctor`): the schema check;
 
 ### 4.4 DDL
 
-The schema at the current version, 11. Migration 1 created these tables as they were at version 1 (`core/src/store/migrations/0001.sql`); migrations 2 to 4 (§4.5) brought `plans`, `jobs`, `events` and `context_records` to the shape below and created `prs` and `pr_needs` (R34); migration 5 changed the triggers `plans_phase` and `prs_locked` (hs-d118); migration 6 created `pull_requests` and rebuilt `prs` (hs-d96). Migration 7 (file 0007) dropped `contexts.sync_failing` and made `context_records` the only store of Context records (§4.5, §4.6). Migration 11 (file 0011) added `pull_requests.mergeable` and `merge_state`. Check constraints that need regular expressions are enforced in the binary at the boundary (§2.1), and the database checks shapes and lengths.
+The schema at the current version, 12. Migration 1 created these tables as they were at version 1 (`core/src/store/migrations/0001.sql`); migrations 2 to 4 (§4.5) brought `plans`, `jobs`, `events` and `context_records` to the shape below and created `prs` and `pr_needs` (R34); migration 5 changed the triggers `plans_phase` and `prs_locked` (hs-d118); migration 6 created `pull_requests` and rebuilt `prs` (hs-d96). Migration 7 (file 0007) dropped `contexts.sync_failing` and made `context_records` the only store of Context records (§4.5, §4.6). Migration 11 (file 0011) added `pull_requests.mergeable` and `merge_state`; migration 12 (file 0012) created `inbox_items` (the Inbox). Check constraints that need regular expressions are enforced in the binary at the boundary (§2.1), and the database checks shapes and lengths.
 
 ```sql
 -- ---------- audit ----------
@@ -1033,6 +1072,7 @@ CREATE TABLE events (
             'context-renamed', 'plan-renamed',
             'context-archived', 'plan-archived', 'session-archived',
             'session-message',
+            'inbox-opened', 'inbox-closed', 'inbox-snoozed', 'inbox-dismissed',
             'watch-started', 'watch-stopped', 'error')),
   context TEXT    REFERENCES contexts(id),
   plan    TEXT    REFERENCES plans(id),
@@ -1047,6 +1087,30 @@ CREATE INDEX events_plan ON events(plan, id);
 CREATE INDEX events_context ON events(context, id);
 CREATE INDEX events_session ON events(session, id);
 
+-- ---------- Inbox items (§2.2) ----------
+CREATE TABLE inbox_items (
+  id            INTEGER PRIMARY KEY,
+  kind          TEXT NOT NULL CHECK (kind IN ('dialog', 'plan-review', 'unread', 'job-stuck', 'engine-error', 'question')),
+  urgency       TEXT NOT NULL CHECK (urgency IN ('red', 'yellow', 'magenta', 'white')),
+  subject       TEXT NOT NULL CHECK (length(subject) >= 1),
+  context       TEXT REFERENCES contexts(id),
+  plan          TEXT REFERENCES plans(id),
+  job           TEXT,
+  session       TEXT REFERENCES sessions(id),
+  record        TEXT,
+  event         INTEGER REFERENCES events(id),
+  label         TEXT NOT NULL CHECK (length(label) >= 1),
+  url           TEXT,
+  opened_at     TEXT NOT NULL,
+  closed_at     TEXT,
+  snoozed_until TEXT,
+  dismissed_at  TEXT,
+  CHECK (plan IS NULL OR context IS NOT NULL),
+  CHECK (job IS NULL OR plan IS NOT NULL)
+) STRICT;
+CREATE UNIQUE INDEX inbox_items_open ON inbox_items(kind, subject, urgency) WHERE closed_at IS NULL;
+CREATE INDEX inbox_items_closed ON inbox_items(closed_at);
+
 -- ---------- Tier catalog cache (§9) ----------
 CREATE TABLE tier_catalog (
   pi_version TEXT NOT NULL,
@@ -1058,7 +1122,7 @@ CREATE TABLE tier_catalog (
 ) STRICT;
 ```
 
-**Triggers.** For each table `T` in `contexts`, `context_records`, `plans`, `pull_requests`, `prs`, `pr_needs`, `plan_reviews`, `jobs`, `dependencies`, `attempts`, `escalations`, `sessions` and `tier_catalog`, the migration that creates or rebuilds `T` creates three triggers, generated from the column list (shown for `escalations`; the others differ only in table name, primary key and columns):
+**Triggers.** For each table `T` in `contexts`, `context_records`, `plans`, `pull_requests`, `prs`, `pr_needs`, `plan_reviews`, `jobs`, `dependencies`, `attempts`, `escalations`, `sessions`, `inbox_items` and `tier_catalog`, the migration that creates or rebuilds `T` creates three triggers, generated from the column list (shown for `escalations`; the others differ only in table name, primary key and columns):
 
 ```sql
 CREATE TRIGGER escalations_hist_ins AFTER INSERT ON escalations BEGIN
@@ -1086,7 +1150,7 @@ CREATE TRIGGER escalations_no_delete BEFORE DELETE ON escalations BEGIN
 END;
 ```
 
-The store Job generates these triggers from the table definitions above (primary key: `id` for `contexts`, `plans` and `sessions`; `seq` for `context_records` and `jobs`; `id` for `pull_requests` too, the declared `PRIMARY KEY` for the others, `prs` and `pr_needs` included), and a test asserts that every column of every table appears in its `json_object` calls.
+The store Job generates these triggers from the table definitions above (primary key: `id` for `contexts`, `plans` and `sessions`; `seq` for `context_records` and `jobs`; `id` for `pull_requests` and `inbox_items` too, the declared `PRIMARY KEY` for the others, `prs` and `pr_needs` included), and a test asserts that every column of every table appears in its `json_object` calls.
 
 The exceptions to "never delete": a pull request row that no PR points to may be deleted (the poller deletes it when its pull request leaves the open search; hs-d96, D5), a Dependency of a `draft` Job may be deleted (that is how `job edit --needs` changes a draft), and a PR's need may be deleted while its Plan is in `grounding` or `plan` (that is how `pr edit --needs` changes it; R34). `pr_needs` gets `pr_needs_no_delete` and `pr_needs_hist_del`, written as below for `dependencies` with the condition `(SELECT phase FROM plans WHERE id = OLD.plan) NOT IN ('grounding', 'plan')` and the error `pr_locked`:
 
@@ -1310,6 +1374,7 @@ CREATE TRIGGER events_no_delete  BEFORE DELETE ON events  BEGIN SELECT RAISE(ABO
   ```
 
   Existing rows get `unknown` for both until their next poll. `pull_requests_hist_del` is rewritten with the new columns; `pull_requests_owned` is unchanged and `pull_requests` still gets no `_no_delete`. Set `user_version = 11`.
+- **Migration 0012** (the Inbox, hs-d168; D4 of Plan inbox; applied after migration 0011, the PR poll's mergeable state): creates `inbox_items` with its partial unique index, `inbox_items_no_delete` and its history triggers (§4.4), and rebuilds `events` with the four `inbox-*` kinds in its `kind` check, as migrations 3 and 0009 did (copy with ids kept, drop, rename, recreate its indexes and triggers). Every other row is unchanged. The `pr-*` kinds of the PR poll's items come with a later migration (the PR poll's, 0013).
 - No migration from cpd 1's beads Ledgers (R7): running Workflows finish on cpd 1.
 
 ### 4.6 The Context store
@@ -1375,6 +1440,10 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `plan-archived` | `plan archive` or `unarchive`, or the cascade of the Context's, for each Plan | context, plan | `{archived: bool}` |
 | `session-archived` | `session archive` or `unarchive`, or a cascade, for each Session | context, plan?, session | `{archived: bool}` |
 | `session-message` | `session send` (commands.md §10.13): one message to a Lead or a Manager | context, plan?, session = the target | `{from, text}`; `from` is the sender Session's id or null (the User) |
+| `inbox-opened` | E8 inserts an Inbox item (§3.7) | context?, plan?, job?, session? | `{item, kind, urgency, label}` |
+| `inbox-closed` | E8 closes an Inbox item | context?, plan?, job?, session? | `{item, kind}` |
+| `inbox-snoozed` | `inbox snooze` | context?, plan?, job?, session? | `{item, until}` |
+| `inbox-dismissed` | `inbox dismiss` | context?, plan?, job?, session? | `{item}` |
 | `watch-started`, `watch-stopped` | the engine starts or stops | (none) | `{pid}` |
 | `error` | `watch` or a driver hit an unexpected failure; codes include `lead_worktree_stale`, `merge_check_failed`, `push_failed` (a failed push of a Lead Branch at a PR's start or at a merge, §7.2, §7.4; `details.pr` names the PR) `cleanup_failed` (`pr poll` kept a merged PR's Lead worktree, or a removal failed, §7.2; `details: {plan, pr, path, reason}`, `reason` `dirty`, `unpushed` or git's stderr tail) `pr_start_failed` (engine E7 could not start a PR, §3.8; `details: {pr, step, tail?, log?}`) and `adapter_missing` (the `session run` wrapper restarted a pi whose adapter reported `stopped` for more than 60 s, §6.7 "Adapter watchdog"; `details: {session, state_since, seconds}`) and `gh_rate_limited` (engine E5 skips polls while GitHub's rate limit is nearly used, §3.7; `details: {remaining, reset_at}`; no Plan, it concerns the User's account) | context?, plan?, … | `{source, code, message, details}` |
 
@@ -1407,6 +1476,7 @@ It delivers a message with `pi.sendMessage({customType: "cpd", content: text, di
 | `attempt-nudge` (own session) | | message, **turn** (replaces cpd 1's `herdr agent prompt`) |
 | `session-message` (own session) | message, **turn** (`Message from <sender>: <text>`), for every Lead and a Manager: an idle Lead starts a turn at once, a working or blocked one gets it after its running turn | |
 | `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | ignored: no message, no turn (they are for the TUI) | ignored |
+| `inbox-opened`, `inbox-closed`, `inbox-snoozed`, `inbox-dismissed` | ignored: delivered to no Session, they are for the views that follow Events (the adapter only learns the kinds) | ignored |
 | every other kind | ignored | ignored |
 
 The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-done` → `plan-done` and `rename` → `session-renamed`.
@@ -1807,6 +1877,9 @@ tick_seconds = 5
 pr_poll_seconds = 5             # one GitHub search of every open PR of the User (E5, §3.7, hs-d97); one point a poll, 720 an hour
 error_repeat_seconds = 600   # the same `error` Event at most once per this (§3.7)
 
+[inbox]
+stuck_job_minutes = 10     # a failed Job becomes a `job-stuck` item after this (E8, §2.2)
+
 [events]
 poll_ms = 200                # events follow (§5.4)
 
@@ -1829,6 +1902,7 @@ work_session = "cpd-work"    # the hidden session for Workers and watch
 | `tiers.O`, `tiers.S`, `tiers.H` | text | above | `^[^/\s]+/\S+$` |
 | `timeouts.*` | int | above | ≥ 1 |
 | `watch.*` | int | above | ≥ 1 |
+| `inbox.stuck_job_minutes` | int | `10` | ≥ 1 |
 | `events.poll_ms` | int | `200` | 20–10000 |
 | `tmux.socket`, `tmux.cockpit_session`, `tmux.work_session` | text | above | `^[A-Za-z0-9_-]{1,32}$`; the two sessions differ |
 
