@@ -30,6 +30,7 @@ pub(super) enum Step {
     E5,
     E6,
     E7,
+    Workers,
 }
 
 impl fmt::Display for Step {
@@ -43,6 +44,7 @@ impl fmt::Display for Step {
             Step::E5 => "E5 (PR)",
             Step::E6 => "E6 (Contexts)",
             Step::E7 => "E7 (PR start)",
+            Step::Workers => "the @cpd_workers step",
         })
     }
 }

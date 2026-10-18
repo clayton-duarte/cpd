@@ -5,6 +5,7 @@
 //!   (the PR start, which calls `pr::start`);
 //! - [`escalations`] E1, [`liveness`] E2, [`schedule`] E3, [`completion`] E4,
 //!   [`pr`] E5, [`contexts`] E6: one module per step;
+//! - [`workers`]: the `@cpd_workers` step, which sets the StatusBar's `workers N/M` text;
 //! - [`report`]: an unexpected failure as an `error` Event, once until it clears;
 //! - [`ensure`]: `watch --ensure`, which starts the engine in `cpd-work:watch`;
 //! - [`lock`]: `locks/watch.lock`; [`log`]: stderr and `run/watch.log`.
@@ -20,6 +21,7 @@ mod log;
 mod pr;
 mod report;
 mod schedule;
+mod workers;
 
 use crate::error::CpdError;
 use crate::output::Output;

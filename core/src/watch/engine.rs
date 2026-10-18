@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use super::lock::WatchLock;
 use super::log::Log;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, completion, contexts, escalations, liveness, pr, schedule};
+use super::{SOURCE, completion, contexts, escalations, liveness, pr, schedule, workers};
 use crate::config::{Catalog, Config, load_catalog};
 use crate::context::Contexts;
 use crate::error::{CpdError, ErrorCode};
@@ -54,6 +54,8 @@ pub(super) struct Engine {
     pub paused_until: Option<Instant>,
     /// When E6 last ran.
     pub synced: Option<Instant>,
+    /// The `@cpd_workers` text last set on the tmux server.
+    pub workers: Option<String>,
 }
 
 impl Engine {
@@ -77,11 +79,11 @@ impl Engine {
         Ok(catalog)
     }
 
-    /// One tick: E1–E7 (§3.7), each reporting its own failures.
+    /// One tick: the `@cpd_workers` step, then E1–E7 (§3.7), each reporting its own failures.
     fn tick(&mut self) {
         self.catalog = None;
-        let steps: [fn(&mut Engine); 7] =
-            [escalations::run, liveness::run, schedule::run, completion::run, pr::run, start_prs, contexts::run];
+        let steps: [fn(&mut Engine); 8] =
+            [workers::run, escalations::run, liveness::run, schedule::run, completion::run, pr::run, start_prs, contexts::run];
         for step in steps {
             if stopping() {
                 return;
@@ -202,6 +204,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
         last_poll_end: None,
         paused_until: None,
         synced: None,
+        workers: None,
     };
     import(&mut engine);
 

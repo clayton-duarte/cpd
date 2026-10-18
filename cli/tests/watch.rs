@@ -387,6 +387,88 @@ fn ensure_fails_when_the_engine_does_not_start() {
     assert!(error["details"]["pane"].as_str().unwrap().starts_with('%'));
 }
 
+// ---------- @cpd_workers ----------
+
+const NO_WORKERS: &str = "#[dim]workers #[nodim,fg=colour8]0#[default,dim]/3#[default]";
+const ONE_WORKER: &str = "#[dim]workers #[nodim,fg=green]1#[default,dim]/3#[default]";
+
+impl Fx {
+    /// A tmux server with one session, `keepalive`.
+    fn tmux_server(&self) {
+        assert!(self.env.tmux(&["new-session", "-d", "-s", "keepalive", "sleep", "600"]).status.success());
+    }
+
+    fn workers(&self) -> String {
+        let out = self.env.tmux(&["show", "-gv", "@cpd_workers"]);
+        String::from_utf8_lossy(&out.stdout).trim_end().to_owned()
+    }
+}
+
+#[test]
+fn the_engine_sets_cpd_workers_at_start_and_only_when_it_changes() {
+    let fx = fx("");
+    fx.tmux_server();
+    let lock = fx.live_driver("api-a1");
+    fx.add_running("api", "running", &ago(1));
+
+    let engine = fx.start();
+    wait_until("@cpd_workers", || fx.workers() == ONE_WORKER);
+
+    // Unchanged, it is not set again: a value put there by hand survives the next ticks.
+    assert!(fx.env.tmux(&["set", "-g", "@cpd_workers", "by hand"]).status.success());
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(fx.workers(), "by hand");
+
+    // A change sets it.
+    fx.fixture("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = 'api-a1';");
+    wait_until("@cpd_workers to change", || fx.workers() == NO_WORKERS);
+    engine.stop();
+    drop(lock);
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
+#[test]
+fn without_a_tmux_server_the_workers_step_does_nothing_and_sets_the_text_once_one_appears() {
+    let fx = fx("");
+    let engine = fx.start();
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+    assert!(!fx.env.tmux(&["has-session"]).status.success());
+
+    fx.tmux_server();
+    wait_until("@cpd_workers", || fx.workers() == NO_WORKERS);
+    let out = engine.stop();
+    assert_eq!(out.exit, 0, "{out:?}");
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
+#[test]
+fn a_tmux_failure_of_the_workers_step_is_one_error_and_the_engine_goes_on() {
+    let fx = fx("");
+    fx.tmux_server();
+    // A tmux that fails `set` and is the real one otherwise, first on the engine's PATH.
+    let real = std::env::var("PATH")
+        .unwrap()
+        .split(':')
+        .map(|dir| Path::new(dir).join("tmux"))
+        .find(|p| p.is_file())
+        .expect("tmux on PATH");
+    fx.env.fake("tmux", &format!("case \" $*\" in *\" set -g @cpd_workers\"*) echo boom >&2; exit 1;; esac\nexec '{}' \"$@\"", real.display()));
+    let engine = fx.start();
+    let workers_errors = || fx.texts("error").into_iter().filter(|t| t.contains("@cpd_workers")).collect::<Vec<_>>();
+    wait_until("the error", || workers_errors().len() == 1);
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(workers_errors().len(), 1, "{:?}", workers_errors());
+    assert!(workers_errors()[0].contains("tmux set failed: boom"), "{:?}", workers_errors());
+    assert_eq!(fx.workers(), "");
+
+    // It kept running, and sets the text once tmux works again.
+    fx.env.fake("tmux", &format!("exec '{}' \"$@\"", real.display()));
+    wait_until("@cpd_workers", || fx.workers() == NO_WORKERS);
+    let out = engine.stop();
+    assert_eq!(out.exit, 0, "{out:?}");
+}
+
 // ---------- E1 ----------
 
 #[test]
