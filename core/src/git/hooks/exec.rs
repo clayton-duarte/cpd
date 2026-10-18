@@ -1,6 +1,8 @@
 //! Running rendered hook commands (contract §7.3): `sh -c`, concurrent within
 //! a block, blocks in order, one deadline, process groups killed at it.
 
+use std::collections::VecDeque;
+use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
@@ -30,12 +32,38 @@ pub enum Ended {
     NotStarted(String),
 }
 
-/// Everything a hook run produced: how it ended and its output, line by line.
+/// Everything a hook run produced: how it ended and the end of its output (the
+/// whole of it went to the log as it arrived).
 pub struct Executed {
     /// The first command that did not exit 0, in file order; `None` if all did
     /// (and for a pipeline stopped by a block, that block's).
     pub failure: Option<Ended>,
-    pub output: Vec<String>,
+    /// The last `tail_lines` lines of the output, one per element.
+    pub tail: Vec<String>,
+    /// The I/O error that stopped the log being written, if any.
+    pub log_error: Option<String>,
+}
+
+/// Where the output goes: each line to the log at once, the last `keep` in memory.
+struct Output {
+    log: File,
+    tail: VecDeque<String>,
+    keep: usize,
+    log_error: Option<String>,
+}
+
+impl Output {
+    fn push(&mut self, line: String) {
+        if self.log_error.is_none() {
+            if let Err(e) = writeln!(self.log, "{line}") {
+                self.log_error = Some(e.to_string());
+            }
+        }
+        if self.tail.len() == self.keep {
+            self.tail.pop_front();
+        }
+        self.tail.push_back(line);
+    }
 }
 
 /// `TMUX`, `TMUX_PANE`, `PI_*` and `CPD_*` are not passed to hooks, so a test
@@ -53,10 +81,12 @@ struct Running {
     ended: Option<Ended>,
 }
 
-/// Runs the blocks in order in `cwd`; a failing block stops the pipeline.
-pub fn execute(blocks: &[Vec<Rendered>], cwd: &Path, timeout: Duration) -> Executed {
+/// Runs the blocks in order in `cwd`; a failing block stops the pipeline. Every
+/// output line is written to `log` as it arrives; only the last `tail_lines`
+/// are kept.
+pub fn execute(blocks: &[Vec<Rendered>], cwd: &Path, timeout: Duration, log: File, tail_lines: usize) -> Executed {
     let deadline = Instant::now() + timeout;
-    let output = Arc::new(Mutex::new(Vec::new()));
+    let output = Arc::new(Mutex::new(Output { log, tail: VecDeque::new(), keep: tail_lines, log_error: None }));
     let mut failure = None;
     for block in blocks.iter().filter(|b| !b.is_empty()) {
         let prefixed = block.len() > 1;
@@ -68,11 +98,11 @@ pub fn execute(blocks: &[Vec<Rendered>], cwd: &Path, timeout: Duration) -> Execu
             break;
         }
     }
-    let output = std::mem::take(&mut *output.lock().unwrap());
-    Executed { failure, output }
+    let mut output = output.lock().unwrap();
+    Executed { failure, tail: output.tail.drain(..).collect(), log_error: output.log_error.take() }
 }
 
-fn start(command: &Rendered, cwd: &Path, prefixed: bool, output: &Arc<Mutex<Vec<String>>>) -> Running {
+fn start(command: &Rendered, cwd: &Path, prefixed: bool, output: &Arc<Mutex<Output>>) -> Running {
     let not_started = |why: String| Running { child: None, done: None, ended: Some(Ended::NotStarted(why)) };
     let (reader, writer) = match std::io::pipe().and_then(|(r, w)| Ok((r, w.try_clone()?, w))) {
         Ok((r, w1, w2)) => (r, (w1, w2)),
