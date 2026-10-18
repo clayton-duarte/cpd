@@ -6,17 +6,13 @@
 //! - [`chat`]: the chat slot's placeholder (amendment 2);
 //! - [`widgets`]: the Dispatch column and the key legend (`tui view legend`), with the shared [`palette`];
 //! - [`logs`]: the Event log, a popup of the StatusBar (R36);
-//! - [`statusbar`]: the StatusBar, the bottom row;
-//! - [`click`]: `cpd tui click`, what a click on the status line's buttons runs;
-//! - [`layout`]: reset-layout;
+//! - [`statusbar`]: the StatusBar, the bottom row, with reset-layout;
 //! - [`history`]: an archived Session's pi file, read-only, in the chat slot;
 //! - [`tree`], [`plan`], [`worker`]: the other views of §13.2.
 
 mod chat;
-mod click;
 mod cockpit;
 mod history;
-mod layout;
 pub mod logs;
 pub mod palette;
 mod plan;
@@ -53,9 +49,6 @@ pub enum Command {
     /// A view in a cockpit pane (internal; owns its terminal) (§13.2)
     #[command(hide = true, subcommand)]
     View(View),
-    /// What a click on a status line button does, on the clicking client (internal; prints nothing, exits 0) (§13.2)
-    #[command(hide = true)]
-    Click(click::ClickArgs),
 }
 
 /// The views of commands.md §13.2, named as their `@cpd_view` (contract §6.2).
@@ -84,7 +77,6 @@ pub enum View {
 pub fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdError> {
     match args.command {
         None => cockpit::run(args.attach, args.respawn, run_command),
-        Some(Command::Click(args)) => click::run(args),
         Some(Command::View(view)) => match view {
             View::Tree => tree::run(),
             View::Plan => plan::run(run_command),

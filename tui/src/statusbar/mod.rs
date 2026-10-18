@@ -8,8 +8,10 @@
 //!
 //! - [`bar`]: the row's drawing and its clickable items;
 //! - [`workers`]: the indicator;
+//! - [`layout`]: reset-layout, which the ⧉ button runs and `cpd tui` runs after building a new `main`.
 
 mod bar;
+pub(crate) mod layout;
 mod workers;
 
 use std::time::{Duration, Instant};
@@ -23,7 +25,6 @@ use ratatui::text::Line;
 
 use self::bar::{Action, Item};
 use self::workers::Workers;
-use super::layout;
 use super::logs;
 use super::palette::{self, Meaning};
 use super::read;

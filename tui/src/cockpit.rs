@@ -27,7 +27,7 @@ use std::os::unix::process::CommandExt;
 use rusqlite::OptionalExtension;
 use serde_json::{Map, Value, json};
 
-use super::{RunCommand, not_a_terminal, on_a_terminal};
+use super::{RunCommand, not_a_terminal, on_a_terminal, statusbar};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode, Exit};
 use cpd_core::home::CpdHome;
@@ -120,7 +120,7 @@ fn build(tmux: &Tmux, home: &CpdHome, cockpit: &str) -> Result<(), CpdError> {
     let chat = tmux.split_window(&plan, Split::Below, Some("80%"), &spawn(View::Chat))?;
     tmux.set_pane_view(&chat, View::Chat)?;
     add_statusbar(tmux, home, &tree)?;
-    crate::layout::reset(tmux, cockpit)?;
+    statusbar::layout::reset(tmux, cockpit)?;
     // The keyboard goes to the chat slot, as in the spike.
     tmux.run(&["select-pane".to_owned(), "-t".to_owned(), chat.as_str().to_owned()])?;
     Ok(())
@@ -143,7 +143,7 @@ fn add_missing_statusbar(tmux: &Tmux, home: &CpdHome, cockpit: &str, main: &[Pan
     match main.first() {
         Some(any) => {
             add_statusbar(tmux, home, &any.pane)?;
-            crate::layout::reset(tmux, cockpit)
+            statusbar::layout::reset(tmux, cockpit)
         }
         None => Ok(()),
     }

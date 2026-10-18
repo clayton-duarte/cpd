@@ -1,6 +1,6 @@
 //! Reset-layout (commands.md §13.2): the cockpit's sizes, and the `resize-pane` calls that apply them. Not a CLI
-//! command: `cpd tui click reset` (the status line's ⧉ button) and `cpd tui` run [`reset`]; `cpd tui` runs it once after
-//! building a new `main`.
+//! command: the StatusBar's ⧉ button runs [`reset`] in-process, and `cpd tui` runs it once after building a new
+//! `main`.
 //!
 //! tmux takes `resize-pane -x/-y` with a percentage as a share of the window. The chat slot is never resized: it
 //! takes what is left.
