@@ -100,6 +100,16 @@ fn session_row(id: &str, name: &str, context: &str, plan: &str, state: &str, lab
     )
 }
 
+/// A Context's Manager Session (no Plan): its dot is the Context row's (hs-d215).
+fn manager_row(id: &str, context: &str, state: &str, label: Option<&str>) -> String {
+    let label = label.map_or("NULL".to_owned(), |l| format!("'{l}'"));
+    format!(
+        "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
+         VALUES ('{id}', 'manager', '{context}', NULL, NULL, '{id}', '/sessions/{id}.jsonl', '/repo', 'O3',
+                 NULL, '{state}', {label}, '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:10.000Z');"
+    )
+}
+
 fn job_row(plan: &str, key: &str, status: &str) -> String {
     let fingerprint = if status == "draft" { "NULL".to_owned() } else { format!("'{}'", "0".repeat(64)) };
     let merged = if status == "merged" { "'abc123'" } else { "NULL" };
@@ -126,6 +136,9 @@ fn moved(context: &str, plan: &str, session: &str, place: &str) -> String {
 ///   `f-idle` and `f-blocked`; Jobs queued, running, failed and two merged), `sketch` (plan; Lead idle; two drafts);
 /// - `beta`: `rel` (pr; its Lead is blocked), `old` (done; its Lead is stopped);
 /// - `gamma`: nothing.
+///
+/// A Context row shows its Manager's dot (hs-d215): `alpha`'s Manager `m-alpha` is idle, `beta`'s `m-beta` is blocked
+/// (magenta), `gamma` has none (stopped).
 fn populate(env: &TestEnv) {
     let mut store = open(env);
     let mut s = String::new();
@@ -143,6 +156,8 @@ fn populate(env: &TestEnv) {
     s += &session_row("l-sketch", "sketch", "alpha", "sketch", "idle", None, "2026-01-02T00:00:01.000Z");
     s += &session_row("l-rel", "rel lead", "beta", "rel", "blocked", Some("cpd: PR feedback"), "2026-01-02T00:00:02.000Z");
     s += &session_row("l-old", "old lead", "beta", "old", "stopped", None, "2026-01-02T00:00:03.000Z");
+    s += &manager_row("m-alpha", "alpha", "idle", None);
+    s += &manager_row("m-beta", "beta", "blocked", Some("cpd: asking"));
     for (key, status) in [("a", "merged"), ("b", "merged"), ("c", "running"), ("d", "queued"), ("e", "failed")] {
         s += &job_row("ship", key, status);
     }
@@ -307,7 +322,7 @@ fn the_tree_of_a_prepared_store() {
         screen,
         [
             String::new(),
-            format!(" ▾ {NEEDS_YOU} alpha").to_owned(),
+            format!(" ▾ {IDLE} alpha").to_owned(),
             row(&format!("⏵ ├ {WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
             row(&format!("  ├ {IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
             format!("   ├ {IDLE} ship·f-id").to_owned(),
@@ -383,7 +398,7 @@ fn a_click_on_a_context_row_opens_its_manager_and_its_fold_glyph_folds_it() {
     assert!(screen[1].starts_with(" ▾ ") && screen.iter().any(|r| r.contains("ship")), "the label click folds nothing: {screen:?}");
     pane.click(1, 1); // its fold glyph
     let folded = pane.wait("alpha folded", |s| !s.iter().any(|r| r.contains("ship")));
-    assert_eq!(folded[1], format!(" ▸ {NEEDS_YOU} alpha 2"), "a folded Context draws ▸ and its number of Plans");
+    assert_eq!(folded[1], format!(" ▸ {IDLE} alpha 2"), "a folded Context draws ▸ and its number of Plans");
     assert_eq!(calls(&env).len(), 2, "the glyph runs no command");
     pane.click(1, 1);
     pane.wait("alpha unfolded", |s| s.iter().any(|r| r.contains("ship")));
@@ -538,7 +553,10 @@ fn the_tree_follows_the_events_of_the_store() {
     // session-state
     env.cpd(&["session", "state", "blocked", "--label", "cpd: Ask", "--session", "l-sketch"]).ok();
     let screen = pane.wait("the new state", |s| s.iter().any(|r| r.contains(&format!("├ {NEEDS_YOU} sketch"))));
-    assert!(screen.iter().any(|r| r.starts_with(&format!(" ▾ {NEEDS_YOU} alpha"))));
+    assert!(screen.iter().any(|r| r.starts_with(&format!(" ▾ {IDLE} alpha"))), "a blocked Lead does not colour the Context row: {screen:?}");
+    // the Manager's own state does
+    env.cpd(&["session", "state", "blocked", "--label", "cpd: Ask", "--session", "m-alpha"]).ok();
+    pane.wait("the Context row follows its Manager", |s| s.iter().any(|r| r.starts_with(&format!(" ▾ {NEEDS_YOU} alpha"))));
 }
 
 /// `populate`, with the Context `gamma` and the Plan `old` of `beta` (and its Lead) archived.
@@ -564,7 +582,7 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
         screen,
         [
             String::new(),
-            format!(" ▾ {NEEDS_YOU} alpha").to_owned(),
+            format!(" ▾ {IDLE} alpha").to_owned(),
             row(&format!("⏵ ├ {WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
             row(&format!("  ├ {IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
             format!("   ├ {IDLE} ship·f-id").to_owned(),
