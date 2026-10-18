@@ -84,6 +84,8 @@ pub struct OpenPr {
     pub draft: bool,
     pub checks: Checks,
     pub review_decision: ReviewDecision,
+    /// `pull_requests.mergeable` is `'conflicting'` (`'unknown'` is not a conflict).
+    pub conflicting: bool,
     /// A PR of the Plan whose Lead is in the chat slot points to this pull request.
     pub active: bool,
     /// The Lead of the owner: `plans.lead_session` of the Plan of the `prs` row that points to this pull request (the most
@@ -175,6 +177,7 @@ fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
 fn open_prs(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT q.repo, q.number, q.title, q.draft, q.checks, q.review_decision, q.url,
+                q.mergeable = 'conflicting',
                 EXISTS (SELECT 1 FROM prs r WHERE r.pull_request = q.id AND r.plan =
                         (SELECT s.plan FROM sessions s
                            JOIN events m ON m.id = (SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-moved')
@@ -201,8 +204,9 @@ fn open_prs(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
                 _ => return Err(bad_row(format!("{what} has review_decision {decision:?}"))),
             },
             url: r.get(6)?,
-            active: r.get(7)?,
-            lead: r.get::<_, Option<String>>(8)?.map(|lead| id("Session id", &lead, SessionId::parse)).transpose()?,
+            conflicting: r.get(7)?,
+            active: r.get(8)?,
+            lead: r.get::<_, Option<String>>(9)?.map(|lead| id("Session id", &lead, SessionId::parse)).transpose()?,
             repo,
             number,
         });

@@ -50,7 +50,7 @@ const SNAPSHOT_EVERY: Duration = Duration::from_millis(500);
 /// A snapshot is taken at least this often even with no Event: a pull request's checks can change with none (§17).
 const SNAPSHOT_AT_LEAST_EVERY: Duration = Duration::from_secs(2);
 /// How long the loop waits for a key or a click before it looks at the follower again and redraws. The spinner turns
-/// every 250 ms (`palette::frame`), so the tree is redrawn at least that often.
+/// every 100 ms (`palette::frame`), so the tree is redrawn at least that often.
 const TICK: Duration = Duration::from_millis(100);
 
 /// A new snapshot is due: an Event came and `since` the last one reaches [`SNAPSHOT_EVERY`], or `since` reaches
@@ -163,7 +163,7 @@ mod tests {
     }
 
     #[test]
-    fn the_loop_redraws_at_least_every_quarter_second() {
-        assert!(TICK <= Duration::from_millis(250));
+    fn the_loop_redraws_at_least_every_frame() {
+        assert!(TICK <= Duration::from_millis(100));
     }
 }
