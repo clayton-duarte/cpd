@@ -1,6 +1,6 @@
 //! The plan view's PR boxes (commands.md §13.2, R34 A15, hs-d115): one bordered box per PR that is not `cancelled`,
 //! holding the chart of that PR's Jobs ([`flow::layout`]) with its title on the top border; the boxes top to bottom by
-//! the PRs' needs, one row of boxes per level, each need an arrow from the needed box's bottom border to the needing
+//! the PRs' needs (the PRs not merged below the merged ones, [`levels`]), one row of boxes per level, each need an arrow from the needed box's bottom border to the needing
 //! box's top border.
 //!
 //! In: the PRs and the Jobs. Out: [`Boxes`], one [`Chart`] of the whole canvas of boxes, so the scrolling and the clicks
@@ -22,7 +22,7 @@ use ratatui::{
 use super::flow::{self, Chart, Dir, Mask, Pill, free_row, glyph};
 use crate::link::link;
 use crate::palette::{self, Meaning};
-use crate::read::{JobNode, PrNode, PrState};
+use crate::read::{JobNode, PrNode, PrState, PrStatus};
 
 /// Rows between two rows of boxes: the run of lines, then the arrowheads.
 const GAP: u16 = 2;
@@ -40,18 +40,20 @@ pub struct Boxes {
     pub row_of: Vec<usize>,
 }
 
-/// The level of each PR (indices into `prs`): 0 with no needs, else one more than the highest level among its needs.
-/// A need that is not one of `prs`, or that closes a cycle, is ignored.
+/// The level of each PR (indices into `prs`). A merged PR's is 0 with no needs, else one more than the highest level
+/// among its needs. A PR that is not merged is at max(1 + the highest level among its needs, M + 1), M the highest level
+/// of any merged PR (no floor when none is merged): every box that is not merged is below every merged box, so the work
+/// in progress sits together (User, 2026-10-18). A need that is not one of `prs`, or that closes a cycle, is ignored.
 pub fn levels(prs: &[PrNode]) -> Vec<usize> {
-    fn level(i: usize, needs: &[Vec<usize>], memo: &mut [Option<usize>], open: &mut HashSet<usize>) -> usize {
+    fn level(i: usize, floor: usize, needs: &[Vec<usize>], memo: &mut [Option<usize>], open: &mut HashSet<usize>) -> usize {
         if let Some(l) = memo[i] {
             return l;
         }
         open.insert(i);
-        let mut l = 0;
+        let mut l = floor;
         for &p in &needs[i] {
             if !open.contains(&p) {
-                l = l.max(level(p, needs, memo, open) + 1);
+                l = l.max(level(p, floor, needs, memo, open) + 1);
             }
         }
         open.remove(&i);
@@ -60,8 +62,14 @@ pub fn levels(prs: &[PrNode]) -> Vec<usize> {
     }
     let needs: Vec<Vec<usize>> =
         prs.iter().map(|p| p.needs.iter().filter_map(|n| prs.iter().position(|q| &q.key == n)).collect()).collect();
+    // by the needs alone
     let mut memo = vec![None; prs.len()];
-    (0..prs.len()).map(|i| level(i, &needs, &mut memo, &mut HashSet::new())).collect()
+    let base: Vec<usize> = (0..prs.len()).map(|i| level(i, 0, &needs, &mut memo, &mut HashSet::new())).collect();
+    let merged = |i: usize| prs[i].status == PrStatus::Merged;
+    let Some(m) = (0..prs.len()).filter(|&i| merged(i)).map(|i| base[i]).max() else { return base };
+    // the merged keep their level; the others are floored below them
+    let mut memo: Vec<Option<usize>> = (0..prs.len()).map(|i| merged(i).then_some(base[i])).collect();
+    (0..prs.len()).map(|i| level(i, m + 1, &needs, &mut memo, &mut HashSet::new())).collect()
 }
 
 /// A PR state's word.
@@ -324,6 +332,70 @@ mod tests {
         assert_eq!(levels(&[]), Vec::<usize>::new());
         // a cycle is laid out without looping
         assert_eq!(levels(&[pr("a", &["b"]), pr("b", &["a"])]).len(), 2);
+    }
+
+    fn merged(key: &str, needs: &[&str]) -> PrNode {
+        PrNode { status: PrStatus::Merged, ..pr(key, needs) }
+    }
+
+    #[test]
+    fn the_prs_not_merged_are_below_every_merged_one_ordered_by_needs() {
+        // merged: cpd, drafts, followups (needs cpd); not merged: cleanup (no needs), flake (waiting), status (needs cleanup)
+        let prs = [
+            merged("cpd", &[]),
+            merged("drafts", &[]),
+            merged("followups", &["cpd"]),
+            pr("cleanup", &[]),
+            PrNode { status: PrStatus::Waiting, ..pr("flake", &[]) },
+            pr("status", &["cleanup"]),
+        ];
+        assert_eq!(levels(&prs), [0, 0, 1, 2, 2, 3]);
+        // laid out: every pill of a PR not merged is below every pill of a merged one
+        let jobs: Vec<JobNode> = prs.iter().map(|p| job(p.key.as_str(), &format!("j-{}", p.key.as_str()), &[])).collect();
+        let c = layout(&prs, &jobs, 0).chart;
+        let y = |key: &str| c.pills.iter().find(|p| p.key == format!("j-{key}")).unwrap().rect.y;
+        let last_merged = ["cpd", "drafts", "followups"].iter().map(|k| y(k)).max().unwrap();
+        let first_other = ["cleanup", "flake", "status"].iter().map(|k| y(k)).min().unwrap();
+        assert!(first_other > last_merged, "{first_other} > {last_merged}");
+        assert_eq!(y("cleanup"), y("flake"), "the others sit together, side by side");
+        assert!(y("status") > y("cleanup"), "and still by needs");
+    }
+
+    #[test]
+    fn a_pr_not_merged_that_needs_a_merged_one_sits_below_it_with_an_arrow() {
+        let prs = [merged("api", &[]), pr("web", &["api"])];
+        assert_eq!(levels(&prs), [0, 1]);
+        let b = layout(&prs, &[], 0);
+        snap(&b.chart, "
+┌ api · api-repo → main · merged ┐
+│ no Jobs                        │
+└───────────────┬────────────────┘
+                ╰╮
+                 ▼
+┌ web · web-repo → main · dispatch ┐
+│ no Jobs                          │
+└──────────────────────────────────┘");
+    }
+
+    #[test]
+    fn a_pr_not_merged_with_no_needs_is_floored_below_the_merged_ones() {
+        // the merged chain is two rows deep: the independent open PR goes to the third, not the first
+        let prs = [merged("a", &[]), merged("b", &["a"]), pr("c", &[])];
+        assert_eq!(levels(&prs), [0, 1, 2]);
+        // needs still win over the floor
+        let prs = [merged("a", &[]), pr("b", &["a"]), pr("c", &["b"])];
+        assert_eq!(levels(&prs), [0, 1, 2]);
+        let prs = [merged("a", &[]), pr("x", &[]), pr("y", &["x"]), pr("z", &["y"])];
+        assert_eq!(levels(&prs), [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn with_no_merged_pr_or_with_all_merged_the_levels_are_the_needs_alone() {
+        let names = [("api", &["schema"][..]), ("docs", &[]), ("e2e", &["docs", "web"]), ("schema", &[]), ("web", &["api", "schema"])];
+        let none: Vec<PrNode> = names.iter().map(|(k, n)| pr(k, n)).collect();
+        let all: Vec<PrNode> = names.iter().map(|(k, n)| merged(k, n)).collect();
+        assert_eq!(levels(&none), [1, 0, 3, 0, 2]);
+        assert_eq!(levels(&all), [1, 0, 3, 0, 2]);
     }
 
     #[test]
