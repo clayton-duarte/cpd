@@ -169,7 +169,7 @@ The in-flight work of a Context's active Plans: for every Plan not done and not 
 _Avoid_: backlog, WIP
 
 **Context update**:
-The message the pi adapter adds at the start of a Lead's or Manager's turn, listing the Context records other Sessions wrote since its last one (commands.md §15.7). For a Manager it ends with the **digest**: a `Plans:` section of the Plan Events (created, phase, PR opened or merged, Job failed, Escalation, done) since then.
+The message the pi adapter adds at the start of a Manager's turn only (never a Lead's: Leads read the Context on demand with `cpd context show --since <seq>`, hs-d209), listing the Context records other Sessions wrote since its last one (commands.md §15.7). It ends with the **digest**: a `Plans:` section of the Plan Events (created, phase, PR opened or merged, Job failed, Escalation, done) since then.
 _Avoid_: notification, poll
 
 **Lead**:
