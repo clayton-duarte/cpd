@@ -130,13 +130,13 @@ pub fn load(config: &Config) -> Result<Catalog, CpdError> {
     if let Some(cached) = cache::read(&mut store, &pi.version, models)? {
         return Ok(cached);
     }
-    let catalog = read(&pi, config)?;
+    let catalog = read(&pi, config, NODE_DEADLINE)?;
     cache::write(&mut store, &catalog)?;
     Ok(catalog)
 }
 
-/// Runs the embedded module with pi's Node and builds the [`Catalog`] from what it prints.
-pub(crate) fn read(pi: &PiInstall, config: &Config) -> Result<Catalog, CpdError> {
+/// Runs the embedded module with pi's Node (killed past `deadline`) and builds the [`Catalog`] from what it prints.
+pub(crate) fn read(pi: &PiInstall, config: &Config, deadline: Duration) -> Result<Catalog, CpdError> {
     let tiers = [(Letter::O, &config.tiers.o), (Letter::S, &config.tiers.s), (Letter::H, &config.tiers.h)];
     let node = node();
     let mut cmd = Command::new(&node);
@@ -147,7 +147,7 @@ pub(crate) fn read(pi: &PiInstall, config: &Config) -> Result<Catalog, CpdError>
         .env("PI_MANAGED_INSTALL_ROOT", pi.agent_dir.join("install"))
         .current_dir(&pi.agent_dir)
         .stdin(Stdio::null());
-    let out = deadline::output(&mut cmd, "node", NODE_DEADLINE).map_err(|e| match e {
+    let out = deadline::output(&mut cmd, "node", deadline).map_err(|e| match e {
         Failed::Io(e) => catalog_failed(format!("cannot run {}: {e}.", node.display())).with("node", node.display().to_string()),
         Failed::Timeout(e) => e,
     })?;
