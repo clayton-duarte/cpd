@@ -138,7 +138,10 @@ pub struct Pane {
     pub dead: bool,
     /// `#{pane_dead_status}`: the exit status of a dead pane's program, when it exited normally.
     pub dead_status: Option<i32>,
-    pub pid: u32,
+    /// `#{pane_pid}`: `None` once the pane's tty has closed on tmux >= 3.8,
+    /// which then prints it empty: when the pane is dead, and also while it
+    /// is dying (its program not yet reaped, so `dead` is still false).
+    pub pid: Option<u32>,
     /// `@cpd_session`.
     pub cpd_session: Option<SessionId>,
     /// `@cpd_view`.
@@ -518,7 +521,7 @@ fn parse_pane(line: &str) -> Option<Line> {
             _ => return None,
         },
         dead_status: if dead_status.is_empty() { None } else { Some(dead_status.parse().ok()?) },
-        pid: pid.parse().ok()?,
+        pid: if pid.is_empty() { None } else { Some(pid.parse().ok()?) },
         cpd_session: if cpd_session.is_empty() { None } else { Some(SessionId::parse(cpd_session).ok()?) },
         cpd_view: None,
     };
@@ -572,7 +575,7 @@ mod tests {
         assert_eq!(live.window_name, "main");
         assert!(!live.dead);
         assert_eq!(live.dead_status, None);
-        assert_eq!(live.pid, 4242);
+        assert_eq!(live.pid, Some(4242));
         assert_eq!(live.cpd_session.unwrap().as_str(), "596d007f-aaaa");
         assert_eq!(live.cpd_view, None);
 
@@ -580,6 +583,18 @@ mod tests {
         assert!(dead.dead);
         assert_eq!(dead.dead_status, Some(3));
         assert_eq!(dead.cpd_view, Some(View::Chat));
+        assert_eq!(dead.pid, Some(4243));
+    }
+
+    #[test]
+    fn a_pane_whose_tty_closed_has_no_pid() {
+        // tmux >= 3.8 prints `#{pane_pid}` empty once the pane's tty has
+        // closed: dead, or dying (not yet reaped, so `#{pane_dead}` is 0).
+        let dead = pane_of("%5\t@2\tcpd-work\twatch\t1\t7\t\t\t");
+        assert_eq!((dead.dead, dead.dead_status, dead.pid), (true, Some(7), None));
+        let dying = pane_of("%4\t@2\tcpd\tmain\t0\t\t\t\t");
+        assert_eq!((dying.dead, dying.pid), (false, None));
+        assert!(parse_pane("%4\t@2\tcpd\tmain\t1\t\tx\t\t").is_none());
     }
 
     #[test]
