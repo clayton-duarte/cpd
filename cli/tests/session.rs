@@ -488,6 +488,64 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
     assert!(!resume.iter().any(|a| a == "--fork" || a == "--"), "{resume:?}");
 }
 
+/// A fake pi body that copies the file named by its last argument (`@<path>`) to `$CPD_HOME/read.copy`.
+const COPY_LAST_FILE: &str = "for a in \"$@\"; do last=$a; done\ncp \"${last#@}\" \"$CPD_HOME/read.copy\"\nexec sleep 600";
+
+/// Bigger than one argv element may be (MAX_ARG_STRLEN, 131072 bytes; hs-n111).
+fn big_message() -> String {
+    "A line of a first message that is longer than one argument may be.\n".repeat(140_000 / 66 + 1)
+}
+
+/// A Lead's first message goes to pi as `@<absolute path>`, so one over 128 KiB starts pi.
+#[test]
+fn a_fresh_lead_with_a_first_message_over_128_kib_starts_pi_with_its_file() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd(&env);
+    fake_pi(&env, COPY_LAST_FILE);
+    cockpit(&env);
+    let path = home(&env).lead_message(&PlanId::parse("pay").unwrap());
+    let message = big_message();
+    assert!(message.len() > 131_072);
+    fs::write(&path, &message).unwrap();
+
+    env.cpd(&["session", "open", LEAD1]).ok();
+    wait_until("lead1's pi", || !env.calls("pi").is_empty());
+    let call = &env.calls("pi")[0];
+    assert_eq!(call[call.len() - 2..], ["--".to_owned(), format!("@{}", path.display())]);
+    wait_until("the copy", || env.cpd_home().join("read.copy").exists());
+    assert!(fs::read_to_string(env.cpd_home().join("read.copy")).unwrap() == message, "pi read the whole file");
+}
+
+/// The same for a fork with `--message-file` (`run/<plan>/messages/<session>.md`).
+#[test]
+fn a_fork_with_a_message_file_over_128_kib_starts_pi_with_the_copied_file() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd(&env);
+    fake_pi(&env, COPY_LAST_FILE);
+    cockpit(&env);
+    let sessions = env.home().join(".pi/agent/sessions/g");
+    fs::create_dir_all(&sessions).unwrap();
+    fs::write(
+        sessions.join("2026_grounded.jsonl"),
+        "{\"type\":\"session\"}\n{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}\n",
+    )
+    .unwrap();
+    let message = big_message();
+    let file = env.root().join("message.md");
+    fs::write(&file, &message).unwrap();
+
+    let out = env.cpd(&["session", "fork", GROUNDED, "--plan", "pay", "--message-file", file.to_str().unwrap()]).ok();
+    let new = out["session"]["id"].as_str().unwrap().to_owned();
+    let copied = home(&env).session_message(&PlanId::parse("pay").unwrap(), &sid(&new));
+    wait_until("the fork", || !pi_calls_with(&env, "--fork").is_empty());
+    let call = &pi_calls_with(&env, "--fork")[0];
+    assert_eq!(call[call.len() - 2..], ["--".to_owned(), format!("@{}", copied.display())]);
+    wait_until("the copy", || env.cpd_home().join("read.copy").exists());
+    assert!(fs::read_to_string(env.cpd_home().join("read.copy")).unwrap() == message, "pi read the whole file");
+}
+
 // ---------- open, park ----------
 
 #[test]
