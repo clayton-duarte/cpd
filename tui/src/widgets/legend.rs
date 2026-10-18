@@ -135,7 +135,7 @@ fn sections() -> Vec<Section> {
             vec![dot(Dot::Yellow, 0), plain("yellow: the Plan's Lead, its pull request is open with checks passed or failed")],
             vec![dot(Dot::Magenta, 0), plain("magenta: blocked while grounding, planning or done, or the Plan's review is pending")],
             vec![dot(Dot::White, 0), plain("white: idle, not seen since it last went idle")],
-            vec![plain(""), plain("Context row: its most urgent Session: red > yellow > magenta > white > ◐ > ○ > ◌")],
+            vec![plain(""), plain("Context row: its most urgent Session: red > yellow > magenta > white > ◜ > ○ > ◌")],
         ],
     };
     let prs = Section {
@@ -260,7 +260,7 @@ mod tests {
         let dots = &sections()[2];
         assert_eq!(dots.title, "Session dots");
         let shown: String = dots.rows.iter().flatten().map(text).collect();
-        for glyph in ["●", "◐◓◑◒", "○", "◌", "red > yellow > magenta > white > ◐ > ○ > ◌"] {
+        for glyph in ["●", "◜◝◞◟", "○", "◌", "red > yellow > magenta > white > ◜ > ○ > ◌"] {
             assert!(shown.contains(glyph), "{glyph}: {shown}");
         }
         for (row, dot) in dots.rows[4..8].iter().zip([Dot::Red, Dot::Yellow, Dot::Magenta, Dot::White]) {
@@ -268,7 +268,7 @@ mod tests {
         }
         assert!(!shown.contains("phase"), "{shown}");
         let frames: Vec<_> = dots.rows[1][0].spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(frames, ["◐", "◓", "◑", "◒"]);
+        assert_eq!(frames, ["◜", "◝", "◞", "◟"]);
     }
 
     #[test]

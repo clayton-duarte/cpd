@@ -509,7 +509,7 @@ fn the_session_dots_are_listed_in_their_colours() {
     assert_eq!(buf[needs_you].symbol(), "●");
     let working = glyph_at("the Lead is working");
     let frames: String = (0..4).map(|i| buf[(working.0 + i, working.1)].symbol().to_string()).collect();
-    assert_eq!(frames, "◐◓◑◒");
+    assert_eq!(frames, "◜◝◞◟");
     for (text, glyph, dot) in [
         ("idle, nothing needed", "○", Dot::Idle),
         ("pi stopped", "◌", Dot::Stopped),
@@ -524,7 +524,7 @@ fn the_session_dots_are_listed_in_their_colours() {
         assert_eq!(cell.symbol(), want.content, "{text}");
         assert_eq!(cell.fg, want.style.fg.unwrap_or(Color::Reset), "{text}");
     }
-    find_after(&buf, dots, "red > yellow > magenta > white > ◐ > ○ > ◌");
+    find_after(&buf, dots, "red > yellow > magenta > white > ◜ > ○ > ◌");
 }
 
 #[test]

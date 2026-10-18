@@ -185,10 +185,10 @@ impl<'a> Pane<'a> {
     }
 
     /// The screen, each row without trailing blanks, without the empty rows at the end. The working dot turns with the
-    /// wall clock (`◐◓◑◒`), so every frame reads as the first: a test cannot know which one it catches.
+    /// wall clock (`◜◝◞◟`), so every frame reads as the first: a test cannot know which one it catches.
     fn screen(&self) -> Vec<String> {
         let out = self.env.tmux(&["capture-pane", "-p", "-t", SESSION]);
-        let text = String::from_utf8(out.stdout).unwrap().replace(['◓', '◑', '◒'], "◐");
+        let text = String::from_utf8(out.stdout).unwrap().replace(['◝', '◞', '◟'], "◜");
         let mut rows: Vec<String> = text.lines().map(|l| l.trim_end().to_owned()).collect();
         while rows.last().is_some_and(String::is_empty) {
             rows.pop();
@@ -302,7 +302,7 @@ fn the_tree_of_a_prepared_store() {
         [
             String::new(),
             " ● alpha".to_owned(),
-            row("⏵ ├ ◐ ship", "1⋅1⋅0⋅1⋅2"),
+            row("⏵ ├ ◜ ship", "1⋅1⋅0⋅1⋅2"),
             row("  ├ ○ sketch", "2⋅0⋅0⋅0⋅0"),
             "   ├ ○ ship·f-id".to_owned(),
             "   └ ● ship·f-bl".to_owned(),
@@ -522,7 +522,7 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
         [
             String::new(),
             " ● alpha".to_owned(),
-            row("⏵ ├ ◐ ship", "1⋅1⋅0⋅1⋅2"),
+            row("⏵ ├ ◜ ship", "1⋅1⋅0⋅1⋅2"),
             row("  ├ ○ sketch", "2⋅0⋅0⋅0⋅0"),
             "   ├ ○ ship·f-id".to_owned(),
             "   └ ● ship·f-bl".to_owned(),

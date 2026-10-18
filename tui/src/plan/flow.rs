@@ -572,7 +572,7 @@ mod tests {
     #[test]
     fn a_running_pill_spins_through_the_four_frames() {
         let icons: Vec<String> = (0..4).map(|f| icon_at(Live::Running, f)).collect();
-        assert_eq!(icons, ["◐", "◓", "◑", "◒"]);
+        assert_eq!(icons, ["◜", "◝", "◞", "◟"]);
     }
 
     #[test]

@@ -440,7 +440,7 @@ fn every_session_has_a_dot_and_every_context_the_greatest_of_its_live_sessions()
         ("l-wrk", Dot::Working),
         ("l-idl", Dot::Idle),
         ("l-stp", Dot::Stopped),
-        ("l-ship", Dot::Magenta), // working, but its Plan's review is pending
+        ("l-ship", Dot::Working), // working: its own state first, though its Plan's review is pending
         ("l-rel", Dot::Red),      // blocked in pr, where a PR with failed checks is also open
         ("l-shut", Dot::Idle),    // pr, but its pull request is closed
         ("l-old", Dot::Stopped),
@@ -451,7 +451,7 @@ fn every_session_has_a_dot_and_every_context_the_greatest_of_its_live_sessions()
     let row = |id: &str| rows_now.iter().find(|(i, _)| i == id).unwrap().1;
     assert_eq!((row("hot"), row("calm"), row("dead"), row("ice")), (Dot::Red, Dot::Working, Dot::Stopped, Dot::Stopped));
     assert_eq!(row("gamma"), Dot::Stopped, "no Session at all");
-    assert_eq!(row("alpha"), Dot::Magenta, "alpha: the pending review on l-ship");
+    assert_eq!(row("alpha"), Dot::Working, "alpha: l-ship works, though its Plan's review is pending");
 
     // Archived Sessions do not count; the next most urgent one takes the row.
     sql(&mut store, "UPDATE sessions SET archived_at = '2026-02-03T00:00:00.000Z' WHERE id IN ('l-red', 'l-ds');");

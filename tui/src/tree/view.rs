@@ -619,7 +619,7 @@ mod tests {
         let rows = drawn(&mut view, 44, 12);
         assert_eq!(rows[0], "", "the blank row at the top");
         assert_eq!(rows[1], " ● alpha");
-        assert!(rows[2].starts_with(" ⏵ ├ ◐ ship"), "{rows:?}");
+        assert!(rows[2].starts_with(" ⏵ ├ ◜ ship"), "{rows:?}");
         assert_eq!(click(&mut view, 8, 0), Effect::None, "the blank row is no row: not the Context row below it, not the first Session");
         assert!(view.state.opened().contains(&vec!["alpha".to_owned()]), "alpha is not folded");
         assert_eq!(click(&mut view, 8, 2), Effect::Run(Action::Open(sid("l-ship"))), "the first Session's row");

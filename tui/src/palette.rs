@@ -122,7 +122,7 @@ pub fn pill(m: Meaning) -> Style {
 pub fn job_status(status: JobStatus, merging: bool) -> (&'static str, Meaning) {
     match (status, merging) {
         (JobStatus::Queued, _) => ("○", Meaning::NotStarted),
-        (JobStatus::Running, false) => ("◐", Meaning::InProgress),
+        (JobStatus::Running, false) => ("◜", Meaning::InProgress),
         (JobStatus::Running, true) => ("⇥", Meaning::Review),
         (JobStatus::Merged, _) => ("✓", Meaning::Done),
         (JobStatus::Failed, _) => ("✗", Meaning::Failed),
@@ -164,7 +164,7 @@ pub fn phase(phase: Option<Phase>) -> Meaning {
 }
 
 /// The four frames of the working dot, one per [`frame`].
-pub const SPINNER: [&str; 4] = ["◐", "◓", "◑", "◒"];
+pub const SPINNER: [&str; 4] = ["◜", "◝", "◞", "◟"];
 
 /// How long one frame of the spinner lasts, in milliseconds.
 const FRAME_MS: u128 = 250;
@@ -175,7 +175,7 @@ pub fn frame(now: SystemTime) -> usize {
     ((ms / FRAME_MS) % SPINNER.len() as u128) as usize
 }
 
-/// The tree's dot (commands.md §17): `●` red, yellow, magenta or white; `◐◓◑◒` (frame `frame`) in the terminal's
+/// The tree's dot (commands.md §17): `●` red, yellow, magenta or white; `◜◝◞◟` (frame `frame`) in the terminal's
 /// foreground when working; `○` in the terminal's foreground; `◌` dim. An `archived` row keeps its glyph, never
 /// animated (the first frame when working), in the colour of [`Meaning::Nothing`].
 pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
@@ -253,7 +253,7 @@ mod tests {
     fn every_job_status_has_its_icon_and_meaning() {
         let table = [
             (JobStatus::Queued, false, "○", Meaning::NotStarted),
-            (JobStatus::Running, false, "◐", Meaning::InProgress),
+            (JobStatus::Running, false, "◜", Meaning::InProgress),
             (JobStatus::Running, true, "⇥", Meaning::Review),
             (JobStatus::Merged, false, "✓", Meaning::Done),
             (JobStatus::Failed, false, "✗", Meaning::Failed),
@@ -301,9 +301,9 @@ mod tests {
     #[test]
     fn a_working_dot_turns_with_the_frame_in_the_terminals_foreground() {
         let glyphs: Vec<_> = (0..5).map(|f| dot_span(Dot::Working, f, false).content.into_owned()).collect();
-        assert_eq!(glyphs, ["◐", "◓", "◑", "◒", "◐"]);
+        assert_eq!(glyphs, ["◜", "◝", "◞", "◟", "◜"]);
         assert_eq!(dot_span(Dot::Working, 2, false).style, Style::new());
-        assert_eq!(SPINNER, ["◐", "◓", "◑", "◒"]);
+        assert_eq!(SPINNER, ["◜", "◝", "◞", "◟"]);
     }
 
     #[test]
@@ -313,7 +313,7 @@ mod tests {
             assert_eq!(dot_span(dot, 0, true), Span::styled(glyph, grey), "{dot:?}");
         }
         for f in 0..4 {
-            assert_eq!(dot_span(Dot::Working, f, true), Span::styled("◐", grey), "frame {f}");
+            assert_eq!(dot_span(Dot::Working, f, true), Span::styled("◜", grey), "frame {f}");
         }
     }
 

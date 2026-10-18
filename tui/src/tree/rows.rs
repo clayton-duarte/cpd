@@ -568,7 +568,7 @@ mod tests {
             lines(&buf),
             [
                 "● alpha".to_owned(),
-                row_of("⏵ ├ ◐ ship", "2⋅1⋅1⋅0⋅5", 44),
+                row_of("⏵ ├ ◜ ship", "2⋅1⋅1⋅0⋅5", 44),
                 row_of("  ├ ○ sketch", "4⋅0⋅0⋅0⋅0", 44),
                 row_of("  ├ ◌ old", "0⋅0⋅0⋅1⋅36", 44),
                 "  ├ ○ ship·f-id".to_owned(),
@@ -689,7 +689,7 @@ mod tests {
                 (buf[(0, 0)].symbol().to_owned(), buf[(4, 1)].symbol().to_owned())
             })
             .collect();
-        let want: Vec<(String, String)> = ["◐", "◓", "◑", "◒", "◐"].map(|g| (g.to_owned(), g.to_owned())).to_vec();
+        let want: Vec<(String, String)> = ["◜", "◝", "◞", "◟", "◜"].map(|g| (g.to_owned(), g.to_owned())).to_vec();
         assert_eq!(glyphs, want);
     }
 
@@ -705,11 +705,11 @@ mod tests {
         expand(&mut state, &t, &["…"]);
         for frame in 0..4 {
             let buf = render_at(&t, &mut state, 24, 8, false, frame);
-            let grey = (String::from("◐"), color(Meaning::Nothing));
+            let grey = (String::from("◜"), color(Meaning::Nothing));
             assert_eq!(cell(&buf, 4, 2), grey, "frame {frame}: an archived Plan row, always the first frame {:?}", lines(&buf));
             assert_eq!(cell(&buf, 0, 4), grey, "frame {frame}: an archived Context row {:?}", lines(&buf));
             assert_eq!(cell(&buf, 4, 5), grey, "frame {frame}: its Plan row");
-            assert_eq!(buf[(0, 0)].symbol(), ["◐", "◓", "◑", "◒"][frame], "while the live Context row turns");
+            assert_eq!(buf[(0, 0)].symbol(), ["◜", "◝", "◞", "◟"][frame], "while the live Context row turns");
         }
     }
 
@@ -912,7 +912,7 @@ mod tests {
         tree.contexts[0].plans[0].head.title = "Pay by card".into();
         let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 6, false);
         assert_eq!(text(&buf, 0), "● alpha", "not its title `Payments`");
-        assert_eq!(text(&buf, 1), row_of("⏵ ├ ◐ ship", "2⋅1⋅1⋅0⋅5", 44), "not its title `Pay by card`, nor its Lead's name");
+        assert_eq!(text(&buf, 1), row_of("⏵ ├ ◜ ship", "2⋅1⋅1⋅0⋅5", 44), "not its title `Pay by card`, nor its Lead's name");
         assert_eq!(text(&buf, 5), "  └ ● ship·f-bl", "the Plan id, `·`, the first 4 characters of the Session id; not its name");
         // the prompts word a row by its title or name: Rename… edits those, not the id
         assert_eq!(row(&tree, &path(&["alpha"])).unwrap().label(), "Payments");
@@ -966,8 +966,8 @@ mod tests {
         assert_eq!(
             lines(&buf),
             [
-                "◐ alpha".to_owned(),
-                row_of("⏵ ├ ◐ ship", "2⋅1⋅1⋅0⋅5", 44),
+                "◜ alpha".to_owned(),
+                row_of("⏵ ├ ◜ ship", "2⋅1⋅1⋅0⋅5", 44),
                 row_of("  ├ ○ sketch", "4⋅0⋅0⋅0⋅0", 44),
                 "  ├ ○ ship·f-id".to_owned(),
                 "  └ …".to_owned(),
@@ -1014,8 +1014,8 @@ mod tests {
         assert_eq!(
             lines(&buf)[..9],
             [
-                "◐ alpha".to_owned(),
-                row_of("⏵ ├ ◐ ship", "2⋅1⋅1⋅0⋅5", 44),
+                "◜ alpha".to_owned(),
+                row_of("⏵ ├ ◜ ship", "2⋅1⋅1⋅0⋅5", 44),
                 row_of("  ├ ○ sketch", "4⋅0⋅0⋅0⋅0", 44),
                 "  ├ ○ ship·f-id".to_owned(),
                 "  ├ …".to_owned(),
@@ -1140,6 +1140,6 @@ mod tests {
         let mut t = archived();
         t.contexts[0].plans[2].head.phase = Phase::Done;
         let buf = render(&t, &mut state_for(&t, &["alpha"], &[]), 44, 3, false);
-        assert_eq!(text(&buf, 0), "◐ alpha 2", "ship and sketch; the archived Plan is behind `…`, and the archived blocked fork does not make it ●");
+        assert_eq!(text(&buf, 0), "◜ alpha 2", "ship and sketch; the archived Plan is behind `…`, and the archived blocked fork does not make it ●");
     }
 }
