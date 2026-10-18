@@ -14,7 +14,7 @@ use crate::context::render::markdown;
 use crate::context::{By, ContextRow, Contexts, Draft, PlanRef, Record, plan_repos};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
-use crate::ids::{ContextId, PlanId, SessionId};
+use crate::ids::{ContextId, PlanId, RecordKind, SessionId};
 use crate::output::Output;
 
 /// The Plan as `plan new` reads it back: no PR is needed (a Plan starts with none, R34 A12).
@@ -62,7 +62,7 @@ fn caller_cwd() -> Result<String, CpdError> {
 }
 
 pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
-    let brief = args.brief_file.as_deref().map(read_text_file).transpose()?;
+    let brief: Option<Text> = args.brief_file.as_deref().map(|f| read_text_file(f)?.parse()).transpose()?;
     let mut env = Env::open()?;
     let id = args.id.clone();
     let name = args.name.as_ref().map_or_else(|| id.to_string(), |n| n.as_str().to_owned());
@@ -83,7 +83,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
         if !same {
             return Err(CpdError::new(ErrorCode::PlanExists, format!("Plan {id} exists with other flags.")).with("plan", summary(&plan, &[])));
         }
-        return already(&mut env, &plan, brief.as_deref());
+        return already(&mut env, &plan, brief.as_ref());
     }
     let cwd = caller_cwd()?;
 
@@ -119,7 +119,10 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
 
     // 2. The `plan` record; 3. the first message; 4. the Lead's window.
     let record = write_record(&mut env, &plan)?;
-    write_message(&mut env, &plan, brief.as_deref())?;
+    if let Some(brief) = &brief {
+        write_brief(&mut env, &plan, brief)?;
+    }
+    write_message(&mut env, &plan, brief.as_ref())?;
     let started = start_lead(&mut env, &plan, &session, &name)?;
     Ok(Output::success(json!({
         "plan": summary(&plan, &[]),
@@ -132,7 +135,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
 /// `plan new` again with the same flags: redoes the steps that did not happen
 /// (the `plan` record, the first message, the Lead's window) and returns
 /// `"already": true`.
-fn already(env: &mut Env, plan: &Created, brief: Option<&str>) -> Result<Output, CpdError> {
+fn already(env: &mut Env, plan: &Created, brief: Option<&Text>) -> Result<Output, CpdError> {
     let machine = env.config.machine.clone();
     let record: Option<String> = env.store.read(|conn| {
         Ok(conn
@@ -148,6 +151,21 @@ fn already(env: &mut Env, plan: &Created, brief: Option<&str>) -> Result<Output,
         Some(record) => record,
         None => write_record(env, plan)?,
     };
+    if let Some(brief) = brief {
+        let has_brief: bool = env.store.read(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT 1 FROM context_records WHERE context = ?1 AND kind = 'brief' AND plan_id = ?2 AND plan_machine = ?3",
+                    [plan.context.as_str(), plan.id.as_str(), machine.as_str()],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some())
+        })?;
+        if !has_brief {
+            write_brief(env, plan, brief)?;
+        }
+    }
     let (state, pane): (String, Option<String>) = env.store.read(|conn| {
         Ok(conn.query_row(
             "SELECT state, tmux_pane FROM sessions WHERE id = ?1",
@@ -193,11 +211,23 @@ fn listed(conn: &Connection, id: &PlanId) -> Result<Vec<Value>, CpdError> {
 /// Step 2: the Context record of kind `plan` (§4.6), `text` = the title.
 /// Returns its id.
 fn write_record(env: &mut Env, plan: &Created) -> Result<String, CpdError> {
-    let by = By { session: env_id("CPD_SESSION", SessionId::parse)?.or(env_id("PI_SESSION_ID", SessionId::parse)?), plan: env_id("CPD_PLAN", PlanId::parse)? };
     let draft = Draft::Plan(PlanRef { id: plan.id.clone(), machine: env.config.machine.clone(), jira: plan.jira.clone() });
     let title: Text = plan.title.parse().map_err(|_| bad_row(format!("Plan {} has title {:?}", plan.id, plan.title)))?;
-    let written = Contexts::new(&env.config, &mut env.store).write(&plan.context, "plan new", by, &title, draft)?;
+    let written = Contexts::new(&env.config, &mut env.store).write(&plan.context, "plan new", writer()?, &title, draft)?;
     Ok(written.record.id.to_string())
+}
+
+/// Step 2, with `--brief-file`: the Context record of kind `brief` (B3-A4), `text` = the brief,
+/// `plan` = `{id, machine}`. Returns its id.
+fn write_brief(env: &mut Env, plan: &Created, brief: &Text) -> Result<String, CpdError> {
+    let draft = Draft::Brief(PlanRef { id: plan.id.clone(), machine: env.config.machine.clone(), jira: None });
+    let written = Contexts::new(&env.config, &mut env.store).write(&plan.context, "plan new", writer()?, brief, draft)?;
+    Ok(written.record.id.to_string())
+}
+
+/// The caller as the writer of a record (contract §2.2 "Context record" `by`).
+fn writer() -> Result<By, CpdError> {
+    Ok(By { session: env_id("CPD_SESSION", SessionId::parse)?.or(env_id("PI_SESSION_ID", SessionId::parse)?), plan: env_id("CPD_PLAN", PlanId::parse)? })
 }
 
 /// A non-empty variable of the caller's environment, parsed (the writer of a
@@ -208,17 +238,21 @@ fn env_id<T>(name: &str, parse: fn(&str) -> Result<T, CpdError>) -> Result<Optio
 
 /// Step 3: `run/<plan>/lead-message.md`: the header, the brief, then the
 /// Context rendered as `context show` does, every record (the Lead is always fresh).
-fn write_message(env: &mut Env, plan: &Created, brief: Option<&str>) -> Result<(), CpdError> {
+fn write_message(env: &mut Env, plan: &Created, brief: Option<&Text>) -> Result<(), CpdError> {
     let (context, records, repos) = env.store.read(|conn| {
         let context = ContextRow::require(conn, &plan.context)?;
         let mut stmt = conn.prepare(&format!("SELECT {} FROM context_records WHERE context = ?1 ORDER BY seq", Record::COLUMNS))?;
-        let records = stmt.query_map([plan.context.as_str()], Record::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut records = stmt.query_map([plan.context.as_str()], Record::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        // This Plan's own brief is in the message in full: it is not listed again.
+        if brief.is_some() {
+            records.retain(|(_, r)| !(r.kind() == RecordKind::Brief && r.plan().is_some_and(|p| p.id == plan.id)));
+        }
         let repos = plan_repos(conn, &env.config.machine, &records)?;
         Ok((context, records, repos))
     })?;
     let mut message = vec![header(plan)];
     if let Some(brief) = brief {
-        message.push(brief.trim_end().to_owned());
+        message.push(brief.as_str().trim_end().to_owned());
     }
     message.push(markdown(&context.title, context.jira.as_deref(), &records, 0, &repos));
     write_file(&env.home.lead_message(&plan.id), &(message.join("\n\n") + "\n"))

@@ -31,7 +31,7 @@ use crate::args::{PlanArg, Text};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::ids::{ContextId, RecordId, SessionId};
+use crate::ids::{ContextId, RecordId, RecordKind, SessionId};
 use crate::output::Output;
 use crate::store::Store;
 
@@ -151,6 +151,9 @@ pub struct ShowArgs {
     /// Only the records whose index position is greater
     #[arg(long, value_name = "seq")]
     since: Option<u64>,
+    /// Print this one record in full
+    #[arg(long, value_name = "id", conflicts_with = "since")]
+    record: Option<RecordId>,
 }
 
 #[derive(Args, Debug)]
@@ -311,6 +314,9 @@ fn list() -> Result<Output, CpdError> {
 fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let (_, config, mut store) = open()?;
     let id = args.select.resolve(&mut store)?;
+    if let Some(record) = &args.record {
+        return show_record(&mut store, &id, record);
+    }
     let since = args.since.map_or(0, |s| i64::try_from(s).unwrap_or(i64::MAX));
     let (row, records, repos) = store.read(|conn| {
         let row = ContextRow::require(conn, &id)?;
@@ -325,7 +331,7 @@ fn show(args: ShowArgs) -> Result<Output, CpdError> {
         .iter()
         .filter(|(seq, _)| *seq > since)
         .map(|(seq, record)| {
-            let mut v = record.to_json();
+            let mut v = record.to_json_listed();
             v["seq"] = json!(seq);
             if let Some(repos) = repos.get(&record.id.to_string()) {
                 v["repos"] = json!(repos);
@@ -336,6 +342,34 @@ fn show(args: ShowArgs) -> Result<Output, CpdError> {
     Ok(Output::success(json!({
         "context": {"id": row.id, "title": row.title, "jira": row.jira},
         "records": records,
+        "markdown": markdown,
+    })))
+}
+
+/// `context show --record <id>` (§3.3): that one record in full.
+fn show_record(store: &mut Store, context: &ContextId, id: &RecordId) -> Result<Output, CpdError> {
+    let (row, found) = store.read(|conn| {
+        let row = ContextRow::require(conn, context)?;
+        let found = conn
+            .query_row(
+                &format!("SELECT {} FROM context_records WHERE context = ?1 AND id = ?2", Record::COLUMNS),
+                [context.as_str(), id.to_string().as_str()],
+                Record::from_row,
+            )
+            .optional()?;
+        Ok((row, found))
+    })?;
+    let (seq, record) = found.ok_or_else(|| {
+        CpdError::new(ErrorCode::RecordNotFound, format!("Context {context} has no record {id}."))
+            .with("context", context.as_str())
+            .with("record", id.to_string())
+    })?;
+    let markdown = render::single(&row.title, row.jira.as_deref(), &record);
+    let mut v = record.to_json();
+    v["seq"] = json!(seq);
+    Ok(Output::success(json!({
+        "context": {"id": row.id, "title": row.title, "jira": row.jira},
+        "records": [v],
         "markdown": markdown,
     })))
 }
@@ -351,7 +385,7 @@ pub(crate) fn plan_repos(
     let mut stmt = conn.prepare("SELECT repo FROM prs WHERE plan = ?1 AND status <> 'cancelled' ORDER BY key")?;
     let mut out = render::Repos::new();
     for (_, record) in records {
-        let Some(plan) = record.plan() else { continue };
+        let Some(plan) = record.plan().filter(|_| record.kind() == RecordKind::Plan) else { continue };
         let mut repos: Vec<String> = Vec::new();
         if plan.machine == *machine {
             for repo in stmt.query_map([plan.id.as_str()], |r| r.get::<_, String>(0))? {

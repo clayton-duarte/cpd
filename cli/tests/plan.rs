@@ -281,6 +281,99 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     assert!(message.contains("m1-p1"), "{message}");
 }
 
+/// `plan new` with a brief file whose text is `text`.
+fn new_with_brief(env: &TestEnv, id: &str, text: &str) -> Run {
+    let file = env.root().join(format!("{id}-brief.md"));
+    fs::write(&file, text).unwrap();
+    env.cpd(&["plan", "new", id, "--context", "ctx", "--title", &format!("Plan {id}"), "--brief-file", file.to_str().unwrap()])
+}
+
+fn briefs(env: &TestEnv) -> Vec<Value> {
+    let shown = env.cpd(&["context", "show", "--context", "ctx"]).ok();
+    shown["records"].as_array().unwrap().iter().filter(|r| r["kind"] == "brief").cloned().collect()
+}
+
+#[test]
+fn new_with_a_brief_file_writes_one_brief_record_and_the_lead_gets_it_in_full() {
+    let env = TestEnv::new();
+    setup(&env);
+    let text = "Retry the failed payouts.\n\nMore detail, second paragraph.\n";
+    let out = new_with_brief(&env, "pay", text).ok();
+    assert_eq!(out["record"], "m1-p1", "the output still names the plan record");
+
+    // One `brief` record, letter `b`, its Plan `{id, machine}`, the file's text, one `context-record` Event.
+    let rows: Vec<(String, String, String, Option<String>)> = store(&env)
+        .read(|conn| {
+            let mut stmt = conn.prepare("SELECT id, text, plan_id || '/' || plan_machine, plan_jira FROM context_records WHERE kind = 'brief'")?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .unwrap();
+    assert_eq!(rows, [("m1-b1".to_owned(), text.to_owned(), "pay/m1".to_owned(), None)]);
+    let recorded: Vec<Value> = events(&env, "context-record").into_iter().filter(|e| e["data"]["kind"] == "brief").collect();
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(recorded[0]["data"]["record"], "m1-b1");
+
+    // `context show` lists it short, under its Plan; `--record` prints it whole.
+    let shown = env.cpd(&["context", "show", "--context", "ctx"]).ok();
+    let brief = &briefs(&env)[0];
+    assert_eq!((&brief["text"], &brief["short"], &brief["plan"]), (&json!("Retry the failed payouts."), &json!(true), &json!({"id": "pay", "machine": "m1"})));
+    let md = shown["markdown"].as_str().unwrap();
+    assert!(md.contains("  - brief m1-b1 (") && md.contains("): Retry the failed payouts.\n"), "{md}");
+    assert!(!md.contains("second paragraph"), "{md}");
+    let full = env.cpd(&["context", "show", "--context", "ctx", "--record", "m1-b1"]).ok();
+    assert_eq!(full["records"][0]["text"], text);
+    assert!(full["records"][0].get("short").is_none());
+    assert!(full["markdown"].as_str().unwrap().contains("second paragraph"));
+
+    // The Lead's first message: header, the full brief, then the records; its own brief not listed twice.
+    let message = fs::read_to_string(home(&env).lead_message(&pid("pay"))).unwrap();
+    let header = "You are the Lead of Plan pay \"Plan pay\" in Context ctx. Phase grounding: follow the cpd-lead skill.\n\nRetry the failed payouts.\n\nMore detail, second paragraph.\n\n# Payments\n";
+    assert!(message.starts_with(header), "{message}");
+    assert_eq!(message.matches("Retry the failed payouts.").count(), 1, "{message}");
+
+    // Another Plan's Lead sees this brief short.
+    new_with_brief(&env, "web", "Build the web page.\nSecond line.\n").ok();
+    let message = fs::read_to_string(home(&env).lead_message(&pid("web"))).unwrap();
+    assert!(message.contains("brief m1-b1") && message.contains("Retry the failed payouts."), "{message}");
+    assert!(!message.contains("second paragraph"), "{message}");
+    assert_eq!(message.matches("Build the web page.").count(), 1, "{message}");
+    assert_eq!(briefs(&env).len(), 2);
+}
+
+#[test]
+fn new_again_with_the_brief_writes_no_second_brief_record() {
+    let env = TestEnv::new();
+    setup(&env);
+    new_with_brief(&env, "pay", "The brief.\n").ok();
+    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    let again = new_with_brief(&env, "pay", "The brief.\n").ok();
+    assert_eq!(again["already"], true);
+    assert_eq!(briefs(&env).len(), 1);
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns, "nothing written");
+
+    // A first run that stopped before the brief record (here: run without the file): the rerun writes it, once.
+    new_plan_only(&env, "web");
+    assert_eq!(briefs(&env).len(), 1);
+    assert_eq!(new_with_brief(&env, "web", "The web brief.\n").ok()["already"], true);
+    assert_eq!(new_with_brief(&env, "web", "The web brief.\n").ok()["already"], true);
+    assert_eq!(briefs(&env).len(), 2);
+
+    // A Plan without a brief file has no brief record.
+    new_plan_only(&env, "api");
+    assert_eq!(briefs(&env).len(), 2);
+}
+
+#[test]
+fn new_refuses_an_empty_brief_file_and_writes_nothing() {
+    let env = TestEnv::new();
+    setup(&env);
+    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    refused(&new_with_brief(&env, "pay", ""), "usage", 2);
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans"), 0);
+}
+
 #[test]
 fn new_takes_neither_repo_nor_base() {
     let env = TestEnv::new();

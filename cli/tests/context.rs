@@ -439,6 +439,81 @@ fn show_lists_the_repos_of_each_plans_prs_from_the_database() {
     assert!(!md.contains("/r/dropped"), "{md}");
 }
 
+/// A Plan `plan` of `CTX` with a `plan` record `hs-p<n>` and a `brief` record `hs-b<n>` (written as `plan new` does).
+fn fixture_brief(env: &TestEnv, n: u32, plan: &str, text: &str) {
+    let (_, _, mut store) = library(env);
+    store
+        .write("fixture", |tx| {
+            for (letter, kind, text) in [("p", "plan", format!("The {plan} plan")), ("b", "brief", text.to_owned())] {
+                tx.execute(
+                    "INSERT INTO context_records (context, id, kind, at, machine, text, plan_id, plan_machine)
+                     VALUES (?1, ?2, ?3, '2026-10-14T21:12:00.000Z', 'hs', ?4, ?5, 'hs')",
+                    rusqlite::params![CTX, format!("hs-{letter}{n}"), kind, text, plan],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn show_lists_a_brief_short_under_its_plan_and_record_prints_it_whole() {
+    let env = hs();
+    new_context(&env);
+    let text = "Retry payouts.\nSecond line, with detail.\n";
+    fixture_brief(&env, 1, "pay", text);
+    fixture_brief(&env, 2, "web", "Web page.");
+    env.cpd(&["context", "note", "A note.", "--context", CTX]).ok();
+
+    let out = env.cpd(&["context", "show", "--context", CTX]).ok();
+    let records = out["records"].as_array().unwrap();
+    let brief = records.iter().find(|r| r["id"] == "hs-b1").unwrap();
+    assert_eq!(brief["kind"], "brief");
+    assert_eq!(brief["text"], "Retry payouts.");
+    assert_eq!(brief["short"], true);
+    assert_eq!(brief["plan"], json!({"id": "pay", "machine": "hs"}));
+    assert!(brief.get("repos").is_none(), "{brief}");
+    assert!(records.iter().filter(|r| r["kind"] != "brief").all(|r| r.get("short").is_none()));
+    let md = out["markdown"].as_str().unwrap();
+    assert!(md.contains("- hs-p1 (2026-10-14): pay (on hs): The pay plan\n  - brief hs-b1 (2026-10-14): Retry payouts.\n"), "{md}");
+    assert!(md.contains("- hs-p2 (2026-10-14): web (on hs): The web plan\n  - brief hs-b2 (2026-10-14): Web page.\n"), "{md}");
+    assert!(!md.contains("Second line"), "{md}");
+
+    // `--since` past the Plans but before nothing else: only later records; a new brief brings its Plan.
+    let since = env.cpd(&["context", "show", "--context", CTX, "--since", "3"]).ok();
+    assert_eq!(since["records"].as_array().unwrap().len(), 2, "{since}");
+    let md = since["markdown"].as_str().unwrap();
+    assert!(md.contains("hs-p2") && md.contains("brief hs-b2") && !md.contains("hs-p1"), "{md}");
+
+    // `--record`: that one record, in full.
+    let one = env.cpd(&["context", "show", "--context", CTX, "--record", "hs-b1"]).ok();
+    let records = one["records"].as_array().unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!((&records[0]["id"], &records[0]["text"], &records[0]["seq"]), (&json!("hs-b1"), &json!(text), &json!(2)));
+    assert!(records[0].get("short").is_none(), "{one}");
+    let md = one["markdown"].as_str().unwrap();
+    assert!(md.starts_with("# Building cpd\n"), "{md}");
+    assert!(md.contains("hs-b1") && md.contains("Retry payouts.\nSecond line, with detail."), "{md}");
+    assert!(!md.contains("hs-p1") && !md.contains("Web page."), "{md}");
+    let note = env.cpd(&["context", "show", "--context", CTX, "--record", "hs-n1"]).ok();
+    assert_eq!(note["records"][0]["text"], "A note.");
+}
+
+#[test]
+fn show_record_refusals() {
+    let env = hs();
+    new_context(&env);
+    fixture_brief(&env, 1, "pay", "Retry payouts.");
+    let error = refused(env.cpd(&["context", "show", "--context", CTX, "--record", "hs-b9"]), 3, "record_not_found");
+    assert_eq!(error["details"]["record"], "hs-b9");
+    refused(env.cpd(&["context", "show", "--context", CTX, "--record", "nope"]), 2, "invalid_record_id");
+    refused(env.cpd(&["context", "show", "--context", CTX, "--record", "hs-b1", "--since", "0"]), 2, "usage");
+    refused(env.cpd(&["context", "show", "--context", "nope-ctx", "--record", "hs-b1"]), 4, "context_not_found");
+    // A record of another Context is not found.
+    env.cpd(&["context", "new", "other", "--title", "Other"]).ok();
+    refused(env.cpd(&["context", "show", "--context", "other", "--record", "hs-b1"]), 3, "record_not_found");
+}
+
 #[test]
 fn show_since_lists_only_the_later_records() {
     let env = hs();
