@@ -118,6 +118,8 @@ pub struct Timeouts {
     pub store_busy_ms: u32,
     /// Fork-when-idle (§6.7).
     pub fork_quiet_seconds: u32,
+    /// A Worker's tool call idle this long has its processes killed (§3.4 A4); 0 = off.
+    pub stall_seconds: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -226,6 +228,7 @@ impl Config {
             lock_wait_seconds: positive(&mut r, "timeouts.lock_wait_seconds", 900)?,
             store_busy_ms: positive(&mut r, "timeouts.store_busy_ms", 5000)?,
             fork_quiet_seconds: positive(&mut r, "timeouts.fork_quiet_seconds", 5)?,
+            stall_seconds: r.get("timeouts.stall_seconds", 1200, |v| int(v, 0, u32::MAX))?,
         };
         let watch = Watch {
             tick_seconds: positive(&mut r, "watch.tick_seconds", 5)?,
