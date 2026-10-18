@@ -1,6 +1,6 @@
 //! The engine's loop (contract §3.7; commands.md §12): `locks/watch.lock`,
 //! `watch-started`, then E1–E5, E7 and E8 (E6 was removed) every
-//! `tick_seconds` until SIGTERM or SIGINT, then `watch-stopped`.
+//! `tick_seconds` until SIGTERM, SIGINT or SIGHUP, then `watch-stopped`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -24,7 +24,7 @@ use crate::output::Output;
 use crate::pr::start::{self as start_pr, By, Failed};
 use crate::store::Store;
 
-/// Set by SIGTERM and SIGINT: the loop ends at its next check.
+/// Set by SIGTERM, SIGINT and SIGHUP: the loop ends at its next check.
 static STOP: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn on_signal(_: nix::libc::c_int) {
@@ -167,7 +167,7 @@ pub(super) fn metrics(session: Option<&SessionId>) -> Option<Value> {
 
 fn catch_signals() -> Result<(), CpdError> {
     let action = SigAction::new(SigHandler::Handler(on_signal), SaFlags::empty(), SigSet::empty());
-    for signal in [Signal::SIGTERM, Signal::SIGINT] {
+    for signal in [Signal::SIGTERM, Signal::SIGINT, Signal::SIGHUP] {
         // SAFETY: the handler only stores to an atomic, which is async-signal-safe.
         unsafe { sigaction(signal, &action) }.map_err(|e| {
             CpdError::new(crate::error::ErrorCode::StoreFailed, format!("Cannot handle {signal}: {e}."))

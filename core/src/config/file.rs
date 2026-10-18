@@ -303,7 +303,8 @@ struct Reader<'a> {
 
 impl Reader<'_> {
     fn invalid(&self, key: &str, why: impl std::fmt::Display) -> CpdError {
-        CpdError::new(ErrorCode::ConfigInvalid, format!("config.toml: `{key}` {why}."))
+        let why = why.to_string();
+        CpdError::new(ErrorCode::ConfigInvalid, format!("config.toml: `{key}` {}.", why.trim_end_matches('.')))
             .with("key", key)
             .with("path", self.path.display().to_string())
     }
@@ -383,6 +384,7 @@ fn int(value: Value, min: u32, max: u32) -> Result<u32, String> {
     match value {
         Value::Integer(i) => match u32::try_from(i) {
             Ok(n) if (min..=max).contains(&n) => Ok(n),
+            _ if max == u32::MAX && i > i64::from(max) => Err(format!("must be at most {max}, got {i}")),
             _ if max == u32::MAX => Err(format!("must be at least {min}, got {i}")),
             _ if min == max => Err(format!("must be {min}, got {i}")),
             _ => Err(format!("must be between {min} and {max}, got {i}")),
