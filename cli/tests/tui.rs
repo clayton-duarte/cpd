@@ -5,7 +5,7 @@
 
 mod common;
 
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::time::{Duration, Instant};
 
 use common::{CPD, SLEEP_SECONDS, TestEnv};
@@ -13,6 +13,7 @@ use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::host::tmux::{SERVER_OPTIONS, STATUS_FORMAT};
 use cpd_core::store::Store;
+use nix::fcntl::{Flock, FlockArg};
 use serde_json::{Value, json};
 
 const PLACEHOLDER: &str = "No Lead here: pick a Plan in the session tree";
@@ -677,11 +678,19 @@ fn status_line(env: &TestEnv, width: u16, needle: &str) -> String {
     line
 }
 
-/// A cockpit whose engine-fed workers options hold what `workers.rs` sets for `6/6 · 4 waiting · 9 queued`.
-fn env_with_workers() -> TestEnv {
+/// A cockpit whose workers options hold what `workers.rs` sets for `6/6 · 4 waiting · 9 queued`.
+/// No engine runs: the test holds `locks/watch.lock` as one does, so `tui`'s `watch --ensure` starts none
+/// and nothing overwrites the options set by hand (the engine's step has its own tests in `watch.rs`).
+/// The lock is held while the returned guard lives.
+fn env_with_workers() -> (TestEnv, Flock<File>) {
     let env = env();
+    let path = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap().watch_lock();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
+    let engine = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
     tmux_out(&env, &["new-session", "-d", "-s", "cpd", "-n", "park-pay", "-x", "215", "-y", "62", "sleep", "3600"]);
-    env.cpd(&["tui"]).ok();
+    let tui = env.cpd(&["tui"]).ok();
+    assert_eq!(tui["watch"], json!({"started": false, "already": true}), "{tui}");
     for (option, value) in [
         ("@cpd_workers", "#[dim]workers #[nodim,fg=green]6#[default,dim]/6 · #[nodim,fg=yellow]4#[default,dim] waiting · 9 queued#[default]"),
         ("@cpd_workers_short", "#[nodim,fg=green]6#[default,dim]/6·#[nodim,fg=yellow]4#[default,dim]·9#[default]"),
@@ -689,7 +698,7 @@ fn env_with_workers() -> TestEnv {
     ] {
         tmux_out(&env, &["set", "-g", option, value]);
     }
-    env
+    (env, engine)
 }
 
 const BUTTONS: &str = "⧉ ? ▤";
@@ -697,14 +706,14 @@ const BUTTONS: &str = "⧉ ? ▤";
 // The long form is 34 cells wide: with the buttons' 5 cells and 2 of air it needs a client of 41 columns.
 #[test]
 fn the_status_line_draws_the_long_workers_form_on_a_client_wide_enough() {
-    let env = env_with_workers();
+    let (env, _engine) = env_with_workers();
     let line = status_line(&env, 41, "queued");
     assert!(line.starts_with(BUTTONS) && line.ends_with("workers 6/6 · 4 waiting · 9 queued"), "{line:?}");
 }
 
 #[test]
 fn the_status_line_draws_the_short_workers_form_on_a_narrow_client() {
-    let env = env_with_workers();
+    let (env, _engine) = env_with_workers();
     let line = status_line(&env, 40, "6/6");
     assert!(line.starts_with(BUTTONS) && line.ends_with("6/6·4·9") && !line.contains("workers"), "{line:?}");
 }
