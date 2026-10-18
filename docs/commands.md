@@ -126,6 +126,7 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `context decide`, `note`, `ask`, `answer` | Lead, Manager | yes | §4.6 |
 | `context manager` | User (TUI), Manager | yes | §2.2, §6.5 |
 | `context pending` | Manager, Lead | no | §2.2, §2.5 |
+| `context distill` | engine (E8), Lead, User | no (an `error` Event on failure) | §3.7, §4.6 |
 | `context rename` | User (TUI) | yes | §2.2 |
 | `context archive`, `unarchive` | User (TUI) | yes | §2.2 |
 | `plan new` | User (TUI), Lead | yes | §3.1, §6.7 |

@@ -122,6 +122,8 @@ pub struct Timeouts {
     pub store_busy_ms: u32,
     /// Fork-when-idle (§6.7).
     pub fork_quiet_seconds: u32,
+    /// A distill run kills its pi after this (§4.6).
+    pub distill_minutes: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -235,6 +237,7 @@ impl Config {
             lock_wait_seconds: positive(&mut r, "timeouts.lock_wait_seconds", 900)?,
             store_busy_ms: positive(&mut r, "timeouts.store_busy_ms", 5000)?,
             fork_quiet_seconds: positive(&mut r, "timeouts.fork_quiet_seconds", 5)?,
+            distill_minutes: positive(&mut r, "timeouts.distill_minutes", 15)?,
         };
         let watch = Watch {
             tick_seconds: positive(&mut r, "watch.tick_seconds", 5)?,

@@ -65,7 +65,8 @@ fn config_with_only_the_required_keys_has_every_default() {
                 "gate_minutes": 30,
                 "lock_wait_seconds": 900,
                 "store_busy_ms": 5000,
-                "fork_quiet_seconds": 5
+                "fork_quiet_seconds": 5,
+                "distill_minutes": 15
             },
             "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "error_repeat_seconds": 600},
             "events": {"poll_ms": 200},
@@ -146,6 +147,7 @@ gate_minutes = 1
 lock_wait_seconds = 1
 store_busy_ms = 1
 fork_quiet_seconds = 1
+distill_minutes = 1
 [watch]
 tick_seconds = 1
 pr_poll_seconds = 1

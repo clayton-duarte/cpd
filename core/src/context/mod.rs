@@ -11,6 +11,7 @@
 mod archive;
 mod contexts;
 pub mod digest;
+pub(crate) mod distill;
 pub mod inforce;
 pub(crate) mod legacy;
 mod manager;
@@ -65,6 +66,8 @@ pub enum Command {
     Manager(manager::ManagerArgs),
     /// List the in-flight work of the Context's active Plans (§3.11)
     Pending(pending::PendingArgs),
+    /// Build the Context's digest with one-shot pi (§3.12)
+    Distill(distill::DistillArgs),
 }
 
 /// A Jira Epic key: `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage` (commands.md §3.1).
@@ -244,6 +247,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Unarchive(args) => archive::unarchive(args),
         Command::Manager(args) => manager::manager(args),
         Command::Pending(args) => pending::pending(args),
+        Command::Distill(args) => distill::distill(args),
     }
 }
 
