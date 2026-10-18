@@ -17,7 +17,7 @@ use crate::ids::PlanId;
 use crate::store::Store;
 
 /// The Plan's port: the one in its file when that is inside the range, else
-/// the lowest port of the range no other Plan holds (a `done` Plan holds none),
+/// the lowest port of the range no other Plan holds (a `done` or archived Plan holds none),
 /// written to the file. `no_port` when none is free. Idempotent. Waits for
 /// the lock without a limit: the holder only reads and writes a few small files.
 pub fn assign(home: &CpdHome, store: &mut Store, config: &Config, plan: &PlanId) -> Result<u16, CpdError> {
@@ -41,10 +41,10 @@ pub fn assign(home: &CpdHome, store: &mut Store, config: &Config, plan: &PlanId)
     Ok(port)
 }
 
-/// The other Plans, not `done`, whose file holds a port inside the range, by Plan id.
+/// The other Plans, neither `done` nor archived, whose file holds a port inside the range, by Plan id.
 fn holders(home: &CpdHome, store: &mut Store, config: &Config, plan: &PlanId) -> Result<Vec<(String, u16)>, CpdError> {
     let others = store.read(|conn| {
-        let mut stmt = conn.prepare("SELECT id FROM plans WHERE id != ?1 AND phase != 'done' ORDER BY id")?;
+        let mut stmt = conn.prepare("SELECT id FROM plans WHERE id != ?1 AND phase != 'done' AND archived_at IS NULL ORDER BY id")?;
         let ids = stmt.query_map(params![plan.as_str()], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
         Ok(ids)
     })?;
@@ -170,6 +170,21 @@ mod tests {
         let mut f = fixture(&[("aa", "done"), ("bb", "grounding")]);
         assert_eq!(assign_to(&mut f, "19432-19441", "aa").unwrap(), 19432);
         assert_eq!(assign_to(&mut f, "19432-19441", "bb").unwrap(), 19432);
+    }
+
+    #[test]
+    fn an_archived_plans_port_is_reused() {
+        let mut f = fixture(&[("aa", "grounding"), ("bb", "grounding")]);
+        assert_eq!(assign_to(&mut f, "19432-19441", "aa").unwrap(), 19432);
+        f.store.write("archive", |tx| Ok(tx.execute("UPDATE plans SET archived_at = 't' WHERE id = 'aa'", [])?)).unwrap();
+        assert_eq!(assign_to(&mut f, "19432-19441", "bb").unwrap(), 19432);
+    }
+
+    #[test]
+    fn a_live_plans_port_is_not_reused() {
+        let mut f = fixture(&[("aa", "grounding"), ("bb", "grounding")]);
+        assert_eq!(assign_to(&mut f, "19432-19441", "aa").unwrap(), 19432);
+        assert_eq!(assign_to(&mut f, "19432-19441", "bb").unwrap(), 19433);
     }
 
     #[test]
