@@ -154,6 +154,7 @@ error_codes! {
     GateFailed = "gate_failed" => Refused,
     RebaseConflict = "rebase_conflict" => Refused,
     PushRejected = "push_rejected" => Refused,
+    SessionAmbiguous = "session_ambiguous" => Refused,
     NotALead = "not_a_lead" => Refused,
     GroundedLead = "grounded_lead" => Refused,
     NoCockpit = "no_cockpit" => Refused,

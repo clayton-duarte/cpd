@@ -164,8 +164,9 @@ pub(super) fn state(args: StateArgs) -> Result<Output, CpdError> {
         }
         _ => {}
     }
-    let id = args.session.require()?.clone();
+    let reference = args.session.require()?.clone();
     let mut env = Env::open()?;
+    let id = env.resolve(&reference)?;
     let change = set(&mut env.store, "session state", &id, args.state, args.label.as_ref())?;
     let label = args.label.as_ref().map(Label::as_str);
     let mut out = json!({"session": id, "state": args.state.as_str(), "label": label, "from": change.from.as_str()});
@@ -177,9 +178,10 @@ pub(super) fn state(args: StateArgs) -> Result<Output, CpdError> {
 
 /// `session rename` (commands.md §10.7).
 pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
-    let id = args.session.require()?.clone();
+    let reference = args.session.require()?.clone();
     let name = args.name.as_str();
     let mut env = Env::open()?;
+    let id = env.resolve(&reference)?;
     let read = env.store.read(|conn| row::load(conn, &id))?;
     if read.name == name {
         return Ok(Output::success(json!({"session": id, "name": name, "already": true})));

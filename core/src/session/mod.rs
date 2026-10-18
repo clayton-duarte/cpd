@@ -1,6 +1,7 @@
 //! Sessions and their tmux panes (contract §2.2, §3.6, §6; commands.md §10,
 //! with §19 amendments 1–3: the chat slot, its placeholder, park and open).
 //!
+//! - [`resolve`]: short Session ids (commands.md §1.3);
 //! - [`row`]: the `sessions` row as read, and `session list` / `show`;
 //! - [`state`]: the agent states of §3.6, `session state` and `rename`;
 //! - [`moves`]: the panes: `session fork`, `open`, `park` and `close`;
@@ -13,13 +14,14 @@ mod archive;
 mod history;
 mod moves;
 mod port;
+mod resolve;
 mod row;
 pub(crate) mod run;
 mod state;
 
 use std::path::PathBuf;
 
-use crate::args::{Name, SessionArg};
+use crate::args::{Name, SessionArg, SessionRef};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
@@ -88,14 +90,14 @@ pub struct ListArgs {
 pub struct ShowArgs {
     /// The Session [default: $CPD_SESSION]
     #[arg(value_name = "id", env = "CPD_SESSION", hide_env = true)]
-    id: Option<SessionId>,
+    id: Option<SessionRef>,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct ForkArgs {
     /// The Lead Session to fork
     #[arg(value_name = "source")]
-    source: SessionId,
+    source: SessionRef,
     /// The new Session's Plan [default: the source's Plan]
     #[arg(long, value_name = "id")]
     plan: Option<PlanId>,
@@ -111,42 +113,42 @@ pub struct ForkArgs {
 pub struct OpenArgs {
     /// The Lead Session to bring into the chat slot
     #[arg(value_name = "id")]
-    id: SessionId,
+    id: SessionRef,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct ParkArgs {
     /// The Lead Session to park [default: the one in the chat slot]
     #[arg(value_name = "id")]
-    id: Option<SessionId>,
+    id: Option<SessionRef>,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct HistoryArgs {
     /// The Lead Session whose history to show
     #[arg(value_name = "id")]
-    id: SessionId,
+    id: SessionRef,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct CloseArgs {
     /// The Lead Session whose pane to close
     #[arg(value_name = "id")]
-    id: SessionId,
+    id: SessionRef,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct ArchiveArgs {
     /// The Lead Session to archive
     #[arg(value_name = "id")]
-    id: SessionId,
+    id: SessionRef,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct UnarchiveArgs {
     /// The Lead Session to unarchive
     #[arg(value_name = "id")]
-    id: SessionId,
+    id: SessionRef,
 }
 
 #[derive(clap::Args, Debug)]
@@ -207,6 +209,11 @@ impl Env {
         let config = Config::load(&home)?;
         let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
         Ok(Env { home, config, store })
+    }
+
+    /// The Session `reference` names (commands.md §1.3), resolved once at the boundary.
+    fn resolve(&mut self, reference: &SessionRef) -> Result<SessionId, CpdError> {
+        self.store.read(|conn| resolve::resolve(conn, reference))
     }
 
     fn tmux(&self) -> Tmux {
