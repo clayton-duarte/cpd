@@ -15,11 +15,23 @@ use cpd_core::home::CpdHome;
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use cpd_core::store::Store;
+use nix::fcntl::{Flock, FlockArg};
 
 // ---------- the prepared store ----------
 
-/// An env with the config `cpd` needs; its tmux server is the env's private one.
+/// An env with the config `cpd` needs and an engine running (`engine-down` is no row of the Inbox); its tmux server is
+/// the env's private one. The engine's lock is held until the test process ends.
 fn env() -> TestEnv {
+    let env = env_without_engine();
+    let path = env.cpd_home().join("locks/watch.lock");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let lock = Flock::lock(std::fs::File::create(path).unwrap(), FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+    std::mem::forget(lock);
+    env
+}
+
+/// [`env`] with no engine.
+fn env_without_engine() -> TestEnv {
     let env = TestEnv::new();
     let config = format!(
         "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[tmux]\nsocket = \"{}\"\n",
@@ -1158,6 +1170,35 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     assert!(popups[0].contains(&" logs ".to_owned()), "{:?}", popups[0]);
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(calls(&env).len(), 4, "the link and the logs ran no cpd command: {:?}", calls(&env));
+}
+
+#[test]
+fn with_no_engine_the_inbox_leads_with_engine_down_and_a_click_on_it_opens_the_logs_at_the_bottom() {
+    let env = env_without_engine();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
+    env.fake(
+        "tmux",
+        &format!("case \"$*\" in\n *list-clients*) echo '100 200 60';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac", real.trim()),
+    );
+    let pane = Pane::start(&env, 46, 20);
+    let screen = pane.ready();
+    // counted in the header and in `+N more`, first of the rows
+    let section = inbox_section(46);
+    let title = " Inbox 5 ";
+    assert_eq!(screen[15], format!(" ──{title}{}", "─".repeat(44 - 2 - title.len())));
+    assert!(screen[16].starts_with(" ● engine is down"), "{:?}", screen[16]);
+    assert_eq!(screen[17..19], section[1..3]);
+    assert_eq!(screen[19], " +2 more");
+    pane.click(10, 16);
+    let popups = || -> Vec<_> { env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).collect() };
+    wait_for(|| !popups().is_empty());
+    let popups = popups();
+    assert_eq!(popups.len(), 1, "{popups:?}");
+    assert_eq!(popups[0].last().unwrap(), "cpd tui view logs");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(calls(&env).is_empty(), "no cpd command ran: {:?}", calls(&env));
 }
 
 fn wait_for(done: impl Fn() -> bool) {

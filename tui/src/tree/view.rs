@@ -112,7 +112,7 @@ pub struct View {
 impl View {
     pub fn new(tree: Tree, focused: bool) -> View {
         let mut view = View {
-            tree: Tree { contexts: Vec::new(), events_cursor: 0, inbox: Vec::new() },
+            tree: Tree { contexts: Vec::new(), events_cursor: 0, inbox: Vec::new(), engine_running: true },
             state: TreeState::default(),
             known: HashSet::new(),
             focused,
@@ -855,7 +855,7 @@ mod tests {
             assert!(view.menu.is_some());
             assert_margins_blank(&mut view, width, height, "a menu at the corner");
         }
-        let mut view = View::new(Tree { contexts: Vec::new(), events_cursor: 0, inbox: Vec::new() }, true);
+        let mut view = View::new(Tree { contexts: Vec::new(), events_cursor: 0, inbox: Vec::new(), engine_running: true }, true);
         assert_margins_blank(&mut view, 30, 5, "no Contexts");
     }
 
@@ -2025,7 +2025,7 @@ mod tests {
 
     #[test]
     fn with_no_session_the_arrow_reaches_the_items() {
-        let mut view = View::new(Tree { contexts: Vec::new(), events_cursor: 0, inbox: five() }, true);
+        let mut view = View::new(Tree { contexts: Vec::new(), events_cursor: 0, inbox: five(), engine_running: true }, true);
         draw_now(&mut view, 43, 16);
         press(&mut view, KeyCode::Down);
         assert_eq!(view.inbox_cursor, Some(0));

@@ -4,6 +4,7 @@
 
 mod common;
 
+use std::fs::{self, File};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -16,6 +17,7 @@ use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use cpd_core::plan::{Phase, plan_fingerprint};
 use cpd_core::session::State;
 use cpd_core::store::Store;
+use nix::fcntl::{Flock, FlockArg};
 use cpd_tui::read::{
     self, AttemptStatus, Cause, Checks, Dot, Engine, EscalationStatus, JobStatus, Origin, Outcome, Place, PlanNode, PrState,
     ReviewStatus,
@@ -300,6 +302,13 @@ fn populate(store: &mut Store) {
     );
 }
 
+/// Holds `locks/watch.lock` as an engine does, until dropped.
+fn engine(env: &TestEnv) -> Flock<File> {
+    let path = env.cpd_home().join("locks/watch.lock");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    Flock::lock(File::create(path).unwrap(), FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap()
+}
+
 fn fixture() -> (TestEnv, Store) {
     let env = TestEnv::new();
     let mut store = open(&env);
@@ -311,7 +320,8 @@ fn fixture() -> (TestEnv, Store) {
 
 #[test]
 fn the_tree_is_contexts_then_plans_then_lead_sessions_with_their_states() {
-    let (_env, mut store) = fixture();
+    let (env, mut store) = fixture();
+    let _engine = engine(&env);
     let tree = read::tree(&mut store).unwrap();
 
     let ids: Vec<&str> = tree.contexts.iter().map(|c| c.id.as_str()).collect();
@@ -548,7 +558,8 @@ fn a_context_row_fills_only_from_its_managers_items() {
 
 #[test]
 fn a_snoozed_or_dismissed_item_fills_no_dot_and_is_not_in_the_snapshot() {
-    let (_env, mut store) = fixture();
+    let (env, mut store) = fixture();
+    let _engine = engine(&env);
     sql(&mut store, &session_row("m-alpha", "manager", "alpha", "", None, "idle", None, "2026-01-02T00:00:05.000Z"));
     inbox(
         &mut store,
@@ -583,7 +594,8 @@ fn a_snoozed_or_dismissed_item_fills_no_dot_and_is_not_in_the_snapshot() {
 
 #[test]
 fn the_snapshot_carries_the_visible_open_items_in_the_inbox_order() {
-    let (_env, mut store) = fixture();
+    let (env, mut store) = fixture();
+    let _engine = engine(&env);
     assert!(read::tree(&mut store).unwrap().inbox.is_empty());
     let mut white = condition(Kind::Unread, Urgency::White, Some("l-sketch"), Some("sketch"), "alpha", "session:l-sketch");
     white.url = Some("https://example.com/w".into());
@@ -1111,4 +1123,27 @@ fn every_read_runs_the_same_statements_on_a_large_store_as_on_a_small_one() {
         assert!(small.len() > 2, "{name} ran no query: {small:#?}");
         assert_eq!(small.len(), large.len(), "{name} runs a number of statements that grows with the store:\nsmall: {small:#?}\nlarge: {large:#?}");
     }
+}
+
+#[test]
+fn with_no_engine_the_snapshot_leads_with_engine_down_and_while_a_process_holds_the_lock_it_does_not() {
+    let (env, mut store) = fixture();
+    let tree = read::tree(&mut store).unwrap();
+    assert!(!tree.engine_running);
+    let [down] = &tree.inbox[..] else { panic!("only engine-down: {:?}", tree.inbox) };
+    assert_eq!((down.kind, down.urgency, down.label.as_str()), (Kind::EngineDown, Urgency::Red, "engine is down"));
+    assert_eq!((down.context.as_ref(), down.session.as_ref(), down.event, down.url.as_deref()), (None, None, None, None));
+    assert!(!tree.contexts.iter().any(|c| c.dot.needs_you()), "it is no Session's or Context's item");
+
+    // It comes before the stored items, which keep their order.
+    inbox(&mut store, &[condition(Kind::Unread, Urgency::White, Some("l-sketch"), Some("sketch"), "alpha", "session:l-sketch")], T0);
+    let tree = read::tree(&mut store).unwrap();
+    assert_eq!(tree.inbox.iter().map(|i| i.kind).collect::<Vec<_>>(), [Kind::EngineDown, Kind::Unread]);
+
+    let engine = engine(&env);
+    let tree = read::tree(&mut store).unwrap();
+    assert!(tree.engine_running);
+    assert_eq!(tree.inbox.iter().map(|i| i.kind).collect::<Vec<_>>(), [Kind::Unread]);
+    drop(engine);
+    assert!(!read::tree(&mut store).unwrap().engine_running);
 }

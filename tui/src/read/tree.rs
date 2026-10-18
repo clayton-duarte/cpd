@@ -8,7 +8,8 @@ use std::collections::BTreeMap;
 use cpd_core::error::CpdError;
 use cpd_core::events::highest_id;
 use cpd_core::ids::{ContextId, SessionId};
-use cpd_core::inbox::model::{self, Filter, Item, State};
+use cpd_core::home::CpdHome;
+use cpd_core::inbox::model::{self, Filter, Item, Kind, State, Urgency};
 use cpd_core::store::Store;
 
 use super::dot::{self, Dot};
@@ -21,8 +22,11 @@ pub struct Tree {
     /// The highest Event id in this snapshot's read transaction (§17).
     pub events_cursor: i64,
     /// The Inbox's open, visible items (not snoozed, not dismissed) in the order of `cpd inbox list`, as of this
-    /// snapshot (§17). Every dot of the tree comes from them.
+    /// snapshot (§17), `engine-down` first when no engine runs. Every dot of the tree comes from the stored ones.
     pub inbox: Vec<Item>,
+    /// Whether an engine holds `locks/watch.lock` (§1.4). `engine-down` is never stored: with none, `inbox` starts
+    /// with it (id 0, which no stored item has), as `cpd inbox list` does.
+    pub engine_running: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,8 +76,38 @@ impl ContextNode {
     }
 }
 
+/// The home the store lives in: the store file is `<home>/cpd.db`.
+fn store_home(store: &Store) -> Result<CpdHome, CpdError> {
+    let root = store.path().parent().map(|p| p.as_os_str().to_owned());
+    CpdHome::resolve(root, None)
+}
+
+/// The item `engine-down` (§2.2), opened `now`: never stored, so it has no id (0) and no links.
+fn engine_down(now: String) -> Item {
+    Item {
+        id: 0,
+        kind: Kind::EngineDown,
+        urgency: Urgency::Red,
+        subject: "engine".to_owned(),
+        label: model::ENGINE_DOWN_LABEL.to_owned(),
+        url: None,
+        context: None,
+        plan: None,
+        job: None,
+        session: None,
+        record: None,
+        event: None,
+        opened_at: now,
+        closed_at: None,
+        snoozed_until: None,
+        dismissed_at: None,
+    }
+}
+
 /// The tree's snapshot: one read transaction, a fixed set of queries whatever the number of Contexts and Plans.
 pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
+    let home = store_home(store)?;
+    let engine_running = model::engine_running(&home)?;
     store.read(|conn| {
         let mut records: BTreeMap<String, usize> = BTreeMap::new();
         let mut stmt = conn.prepare("SELECT context, count(*) FROM context_records GROUP BY context")?;
@@ -95,7 +129,7 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
 
         // Read first: the read transaction is one snapshot, so the items and the Sessions agree.
         let now: String = conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?;
-        let inbox = model::list(conn, &Filter { context: None, state: State::Visible { now } })?;
+        let mut inbox = model::list(conn, &Filter { context: None, state: State::Visible { now: now.clone() } })?;
 
         let mut managers: BTreeMap<String, SessionId> = BTreeMap::new();
         let mut stmt = conn.prepare("SELECT context, id FROM sessions WHERE role = 'manager' AND archived_at IS NULL")?;
@@ -155,6 +189,9 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
                 id: context,
             });
         }
-        Ok(Tree { contexts, events_cursor: highest_id(conn)?, inbox })
+        if !engine_running {
+            inbox.insert(0, engine_down(now));
+        }
+        Ok(Tree { contexts, events_cursor: highest_id(conn)?, inbox, engine_running })
     })
 }
