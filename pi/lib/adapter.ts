@@ -4,14 +4,15 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { callCpd, CpdError, isObject, toCpdError } from "./cpd.ts";
 import { cursorFrom } from "./cursor.ts";
-import { errorMessage, eventMessage, FOLLOW_UP, LEAD_MESSAGES } from "./delivery.ts";
+import { errorMessage, eventMessage, FOLLOW_UP, LEAD_MESSAGES, sessionMessage } from "./delivery.ts";
 import type { CpdEvent } from "./event.ts";
 import { parseLine } from "./event.ts";
 import { DEFAULT_TIMING, Follower, type Spawn, type Timing } from "./follower.ts";
-import type { Ctx, PiApi } from "./pi.ts";
+import type { Ctx, Message, PiApi } from "./pi.ts";
 import { parseOpened, parseResult, parseStatus, request } from "./plannotator.ts";
 import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, REVIEW_LABEL, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
 import { Facts, Reporter, stateArgs, type Wanted } from "./state.ts";
+import { contextCursorFrom, contextUpdate, parseRecordEvents, parseRecords } from "./updates.ts";
 
 export type Options = {
   /** The environment read at `session_start` (`CPD_SESSION`, `CPD_PLAN`, `CPD_HOME`). Default: `process.env`. */
@@ -22,7 +23,7 @@ export type Options = {
 
 export const QUESTION_LABEL = "cpd: Worker question";
 
-type SessionInfo = { plan: string | null; planLead: boolean; registeredEvent: number; name: string | null };
+type SessionInfo = { role: string; context: string; plan: string | null; planLead: boolean; registeredEvent: number; name: string | null };
 
 /** One activation of the adapter: from `session_start` to `session_shutdown`. */
 type Run = {
@@ -39,6 +40,10 @@ type Run = {
   /** Error codes already delivered since the last valid Event (commands.md §15.2, "The follower ends"). */
   followerReported: Set<string>;
   failureLineThisRun: boolean;
+  /** Events are handled one after the other, in id order, though a handler may wait for `cpd`. */
+  tail: Promise<void>;
+  /** True while a failed read of Context updates is reported and no read has succeeded since (§15.6 "Failure"). */
+  contextFailed: boolean;
   /** The name last known to be the Session's, so `session_info_changed` can tell a User's rename from ours. */
   knownName: string | null;
   /** False until the start-up's `session state idle` is done: facts are kept, nothing is reported before. */
@@ -51,11 +56,11 @@ const asString = (v: unknown): string | null => (typeof v === "string" ? v : nul
 
 function parseSession(show: Record<string, unknown>): SessionInfo {
   const s = show.session;
-  if (!isObject(s) || typeof s.plan_lead !== "boolean" || !Number.isSafeInteger(s.registered_event) || (s.plan !== null && typeof s.plan !== "string") || (s.name !== null && typeof s.name !== "string")) {
-    throw new CpdError("bad_output", "cpd session show: the session object lacks plan, plan_lead, registered_event or name");
+  if (!isObject(s) || typeof s.role !== "string" || typeof s.context !== "string" || typeof s.plan_lead !== "boolean" || !Number.isSafeInteger(s.registered_event) || (s.plan !== null && typeof s.plan !== "string") || (s.name !== null && typeof s.name !== "string")) {
+    throw new CpdError("bad_output", "cpd session show: the session object lacks role, context, plan, plan_lead, registered_event or name");
   }
   if (s.plan_lead && typeof s.plan !== "string") throw new CpdError("bad_output", "cpd session show: a Plan Lead without a plan");
-  return { plan: asString(s.plan), planLead: s.plan_lead, registeredEvent: s.registered_event as number, name: asString(s.name) };
+  return { role: s.role, context: s.context, plan: asString(s.plan), planLead: s.plan_lead, registeredEvent: s.registered_event as number, name: asString(s.name) };
 }
 
 export function adapter(pi: PiApi, options: Options = {}): void {
@@ -124,6 +129,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       deciding: new Set(),
       followerReported: new Set(),
       failureLineThisRun: false,
+      tail: Promise.resolve(),
+      contextFailed: false,
       knownName: info.name,
       reporting: false,
       abort,
@@ -169,6 +176,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     // 4. cursor
     const entries = ctx.sessionManager.getEntries();
     r.cursor = cursorFrom(info.registeredEvent, entries, id);
+
+    if (info.role === "lead") registerUpdates();
 
     // 5. blocking reasons (Plan Lead only)
     if (info.planLead && info.plan !== null) {
@@ -243,17 +252,24 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     }
     r.followerReported.clear();
     const event = parsed.event;
-    try {
-      handleEvent(r, event);
-    } catch (e) {
-      deliver(`event ${event.id} (${event.kind})`, e);
-    }
+    r.tail = r.tail.then(async () => {
+      if (run !== r) return;
+      try {
+        await handleEvent(r, event);
+      } catch (e) {
+        deliver(`event ${event.id} (${event.kind})`, e);
+      }
+    });
     r.cursor = Math.max(r.cursor, event.id);
     return true;
   }
 
-  function handleEvent(r: Run, ev: CpdEvent): void {
+  async function handleEvent(r: Run, ev: CpdEvent): Promise<void> {
     const own = ev.session === r.id;
+    if (ev.kind === "session-message") {
+      if (own && r.info.role === "lead") await deliverSessionMessage(r, ev);
+      return;
+    }
     if (ev.kind === "session-renamed") {
       if (!own) return;
       const name = ev.data.name as string;
@@ -283,6 +299,60 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       const entry = r.reviews.get(ev.data.review as string);
       if (entry?.status === "pending") void decidedElsewhere(r, entry, ev).catch((e) => deliver(`plan review ${entry.review}`, e));
     }
+  }
+
+  /** §15.3 `session-message`: for every Lead, with a turn. The sender's name is read once, `cpd session show <from>`; the id stands in when it cannot be read. */
+  async function deliverSessionMessage(r: Run, ev: CpdEvent): Promise<void> {
+    const from = typeof ev.data.from === "string" ? ev.data.from : null;
+    let sender: { id: string; name: string | null } | null = null;
+    if (from !== null) {
+      sender = { id: from, name: null };
+      try {
+        const shown = (await call(["session", "show", from])).session;
+        if (isObject(shown) && typeof shown.name === "string") sender.name = shown.name;
+      } catch {
+        // an unreadable sender is still named by its id
+      }
+    }
+    if (run !== r) return;
+    pi.sendMessage(sessionMessage(ev, r.id, sender), FOLLOW_UP(true));
+  }
+
+  // ---- Context updates at turn start (§15.6) ----
+
+  /**
+   * `before_agent_start` of a Lead: the Context records other Sessions wrote since its cursor, as one `cpd-context`
+   * message added to the run. Never starts a turn: a failed read is reported once (no turn) and leaves the cursor.
+   */
+  async function contextUpdates(r: Run, ctx: Ctx): Promise<{ message: Message } | undefined> {
+    try {
+      const cursor = contextCursorFrom(r.info.registeredEvent, ctx.sessionManager.getEntries(), r.id);
+      const events = parseRecordEvents(await call(["events", "list", "--context", r.info.context, "--kind", "context-record", "--since", String(cursor)]));
+      const first = Math.min(...events.map((e) => e.seq));
+      const records = events.length === 0 ? [] : parseRecords(await call(["context", "show", "--context", r.info.context, "--since", String(first - 1)]));
+      r.contextFailed = false;
+      const message = contextUpdate(r.info.context, r.id, events, records);
+      return message === undefined ? undefined : { message };
+    } catch (e) {
+      if (!r.contextFailed) {
+        r.contextFailed = true;
+        const err = toCpdError(e);
+        const m = errorMessage("context updates", err.code, err.message, err.details);
+        pi.sendMessage(m.message, { ...m.options, triggerTurn: false });
+      }
+      return undefined;
+    }
+  }
+
+  let updatesRegistered = false;
+  /** Registered once, for a Lead only (never a Worker); pi has no way to remove a handler. */
+  function registerUpdates(): void {
+    if (updatesRegistered) return;
+    updatesRegistered = true;
+    pi.on("before_agent_start", async (_event, ctx) => {
+      const r = run;
+      return r && r.info.role === "lead" ? contextUpdates(r, ctx) : undefined;
+    });
   }
 
   // ---- the Plan review through plannotator (§15.5) ----

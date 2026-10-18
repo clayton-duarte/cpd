@@ -10,6 +10,7 @@ const DATA: Record<string, Record<string, unknown>> = {
   "plan-review": { review: "r1", fingerprint: "ff", status: "approved" },
   "session-renamed": { name: "new name" },
   "attempt-nudge": { prompt: "Submit your work." },
+  "session-message": { from: null, text: "hello" },
 };
 const event = (id: number, kind: string, over: Record<string, unknown> = {}) => ev(id, kind, { data: DATA[kind] ?? {}, ...over });
 
@@ -146,4 +147,72 @@ test("a message delivered to this Session is what a restart's cursor reads back"
   await f.pi.fire("session_start");
   await waitFor("the second follower", () => f.follows().length === 2);
   assert.deepEqual(f.sinces(), [100, 102]);
+});
+
+const message = (id: number, from: string | null, over: Record<string, unknown> = {}) =>
+  event(id, "session-message", { session: ID, text: "ship it", data: { from, text: "ship it" }, ...over });
+
+test("session-message for this Lead: one cpd message with a turn, followUp, from the sender's name and id", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f, "lead");
+  f.respond(`session-show-${OTHER}`, { ok: true, session: { id: OTHER, name: "the manager" } });
+  f.emit(message(101, OTHER));
+  await waitFor("the message", () => f.pi.delivered().length === 1);
+  await settle();
+
+  assert.equal(f.pi.sent.length, 1);
+  const s = f.pi.delivered()[0]!;
+  assert.equal(s.message.customType, "cpd");
+  assert.equal(s.message.content, `Message from the manager (${OTHER}): ship it`);
+  assert.equal((s.message.details as any).delivered_to, ID);
+  assert.equal((s.message.details as any).id, 101);
+  assert.deepEqual(s.options, { triggerTurn: true, deliverAs: "followUp" });
+  assert.equal(f.argvs().filter((a) => a[1] === "show" && a[2] === OTHER).length, 1, "the sender is read once");
+});
+
+test("session-message: from null is the User; an unreadable sender is named by its id; a message for another Session is ignored", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f, "lead");
+  f.respond("session-show-gone", { ok: false, error: { code: "session_not_found", message: "no such session" } }, { exit: 4 });
+  f.emit(message(101, null), message(102, "gone"), message(103, null, { session: OTHER }));
+  await waitFor("two messages", () => f.pi.delivered().length === 2);
+  await settle();
+  assert.equal(f.pi.delivered()[0]!.message.content, "Message from the User: ship it");
+  assert.equal(f.pi.delivered()[1]!.message.content, "Message from gone: ship it");
+  assert.equal(f.pi.sent.length, 2);
+});
+
+test("session-message arrives in id order though the sender is read first", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f, "lead");
+  f.respond(`session-show-${OTHER}`, { ok: true, session: { id: OTHER, name: "slow" } }, { delay: 100 });
+  f.emit(message(101, OTHER), event(102, "job-merged"));
+  await waitFor("both", () => f.pi.delivered().length === 2);
+  assert.deepEqual(f.pi.delivered().map((s) => (s.message.details as any).id), [101, 102]);
+});
+
+test("session-message reaches a side fork (role lead, not the Plan's Lead) too", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.respond("session-show", sessionShow({ plan_lead: false }));
+  f.load();
+  await f.pi.fire("session_start");
+  await waitFor("the follower", () => f.follows().length > 0);
+  f.emit(message(101, null), event(102, "job-merged"));
+  await waitFor("the message", () => f.pi.delivered().length === 1);
+  await settle();
+  assert.equal(f.pi.sent.length, 1, "the Plan's Events are not its");
+  assert.deepEqual(f.pi.delivered()[0]!.options, { triggerTurn: true, deliverAs: "followUp" });
+});
+
+test("a Worker ignores session-message", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f, "worker");
+  f.emit(message(101, null));
+  await settle();
+  assert.deepEqual(f.pi.sent, []);
 });

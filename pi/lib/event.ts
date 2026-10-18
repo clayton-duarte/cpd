@@ -9,7 +9,7 @@ export const KINDS = [
   "all-merged", "pr-feedback",
   "escalation", "escalation-answered", "escalation-expired",
   "session-registered", "session-state", "session-moved", "session-renamed",
-  "context-renamed", "plan-renamed", "context-archived", "plan-archived", "session-archived",
+  "context-renamed", "plan-renamed", "context-archived", "plan-archived", "session-archived", "session-message",
   "pr-added", "pr-edited", "pr-cancelled", "pr-started", "pr-opened", "pr-merged",
   "watch-started", "watch-stopped", "error",
 ] as const;
@@ -36,6 +36,7 @@ const NEEDED: Partial<Record<Kind, readonly string[]>> = {
   "plan-review": ["review", "status"],
   "session-renamed": ["name"],
   "attempt-nudge": ["prompt"],
+  "session-message": ["text"],
 };
 
 const NULLABLE = ["context", "plan", "job", "attempt", "session"] as const;
@@ -65,5 +66,6 @@ export function parseLine(text: string): Line {
   if (typeof json.text !== "string") return bad("`text` is not a string");
   if (!isObject(json.data)) return bad("`data` is not an object");
   for (const f of NEEDED[kind] ?? []) if (typeof json.data[f] !== "string") return bad(`${kind}: \`data.${f}\` is not a string`);
+  if (kind === "session-message" && json.data.from !== null && typeof json.data.from !== "string") return bad("session-message: `data.from` is neither a string nor null");
   return { type: "event", event: json as unknown as CpdEvent };
 }

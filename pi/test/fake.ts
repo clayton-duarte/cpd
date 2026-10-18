@@ -48,7 +48,7 @@ async function follow() {
   log({ phase: "start", argv, since: flag("--since") });
   if (argv[0] === "events" && argv[1] === "follow") return follow();
   const key = argv.slice(0, 2).join("-");
-  const r = JSON.parse(read("resp/" + key + ".json") || '{"stdout":{"ok":true}}');
+  const r = JSON.parse(read("resp/" + key + "-" + argv[2] + ".json") || read("resp/" + key + ".json") || '{"stdout":{"ok":true}}');
   let feedback;
   if (flag("--feedback-file")) feedback = fs.readFileSync(flag("--feedback-file"), "utf8");
   if (r.delay) await sleep(r.delay);
@@ -85,7 +85,7 @@ export class Fixture {
     this.respond("session-show", sessionShow());
   }
 
-  /** What `cpd <a> <b>` prints (an object, or a raw string) and exits with. */
+  /** What `cpd <a> <b>` prints (an object, or a raw string) and exits with. Key `<a>-<b>`; `<a>-<b>-<c>` answers `cpd <a> <b> <c>` first. */
   respond(key: string, stdout: unknown, extra: { exit?: number; delay?: number } = {}): void {
     writeFileSync(join(this.dir, "resp", `${key}.json`), JSON.stringify({ stdout, ...extra }));
   }
@@ -237,6 +237,13 @@ export class FakePi implements PiApi {
 
   async fire(event: string, payload: Record<string, unknown> = {}): Promise<void> {
     for (const h of this.handlers.get(event) ?? []) await h({ type: event, ...payload }, this.ctx());
+  }
+
+  /** Like `fire`, returning what each handler returned (`before_agent_start` returns the message to add). */
+  async fireWith(event: string, payload: Record<string, unknown> = {}): Promise<unknown[]> {
+    const out: unknown[] = [];
+    for (const h of this.handlers.get(event) ?? []) out.push(await h({ type: event, ...payload }, this.ctx()));
+    return out;
   }
 
   /** `cpd` messages delivered (not the adapter's own errors). */
