@@ -6,7 +6,7 @@ use serde_json::json;
 use super::row::{PlanRow, PrRow};
 use super::gh::{self, PolledPr};
 use super::pulls;
-use super::status::{ChecksSummary, PrState, ReviewDecision};
+use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
 use super::{Args, Env, gate, illegal_phase, lock, require_clean};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
@@ -65,6 +65,8 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
             state: PrState::Open,
             review_decision: ReviewDecision::None,
             checks: ChecksSummary::None,
+            mergeable: Mergeable::Unknown,
+            merge_state: MergeState::Unknown,
             created_at: pulls::txn_time(tx)?,
             merged_at: None,
         };
@@ -91,14 +93,14 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
         if waiting > 0 {
             return Ok(Phase::Dispatch);
         }
-        let moved = tx.execute("UPDATE plans SET phase = 'pr' WHERE id = ?1 AND phase = 'dispatch'", [id.as_str()])?;
+        let moved = tx.execute("UPDATE plans SET phase = 'deploy' WHERE id = ?1 AND phase = 'dispatch'", [id.as_str()])?;
         if moved == 0 {
             return Err(cas_lost(&id, &key));
         }
         let opened = opened_prs(tx, &id)?;
         let text = format!("Every PR of Plan {id} is open. The engine polls them; to follow them by hand: cpd pr poll --plan {id}");
-        append(tx, NewEvent::new(Kind::PlanPhase, text, json!({"from": "dispatch", "to": "pr", "prs": opened})).plan(id.clone()))?;
-        Ok(Phase::Pr)
+        append(tx, NewEvent::new(Kind::PlanPhase, text, json!({"from": "dispatch", "to": "deploy", "prs": opened})).plan(id.clone()))?;
+        Ok(Phase::Deploy)
     })?;
 
     let plan = env.plan(&id)?;

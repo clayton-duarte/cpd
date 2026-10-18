@@ -533,7 +533,7 @@ fn e7_starts_a_dependent_pr_from_a_fresh_fetch_once_its_prerequisite_is_merged()
     // E5 polls whatever the phase (§3.7): its search lists nothing, so it looks up a1's pull request (acme/a1#1), which GitHub
     // merges when the file `merged` exists.
     let merged = fx.env.root().join("merged");
-    let node = r#"{"repository":{"nameWithOwner":"acme/a1"},"number":1,"url":"https://github.com/acme/a1/pull/1","title":"T","isDraft":false,"state":"'"$state"'","createdAt":"t","mergedAt":'"$at"',"reviewDecision":null,"commits":{"nodes":[]}}"#;
+    let node = r#"{"repository":{"nameWithOwner":"acme/a1"},"number":1,"url":"https://github.com/acme/a1/pull/1","title":"T","isDraft":false,"state":"'"$state"'","createdAt":"t","mergedAt":'"$at"',"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{"nodes":[]}}"#;
     fx.env.fake_gh(&format!(
         r#"case "$4" in
   *"search(type: ISSUE"*) echo '{EMPTY_SEARCH}' ;;

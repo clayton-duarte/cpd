@@ -123,6 +123,85 @@ impl PrState {
     }
 }
 
+/// GitHub's `PullRequest.mergeable`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Mergeable {
+    Mergeable,
+    Conflicting,
+    Unknown,
+}
+
+impl Mergeable {
+    /// From GraphQL's `MergeableState`; any other value is `gh_failed`.
+    pub fn of_graphql(state: &str) -> Result<Mergeable, CpdError> {
+        match state {
+            "MERGEABLE" => Ok(Mergeable::Mergeable),
+            "CONFLICTING" => Ok(Mergeable::Conflicting),
+            "UNKNOWN" => Ok(Mergeable::Unknown),
+            other => Err(CpdError::new(ErrorCode::GhFailed, format!("gh printed the unknown mergeable state {other:?}."))
+                .with("mergeable", other)),
+        }
+    }
+
+    /// As stored and printed.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Mergeable::Mergeable => "mergeable",
+            Mergeable::Conflicting => "conflicting",
+            Mergeable::Unknown => "unknown",
+        }
+    }
+}
+
+/// GitHub's `PullRequest.mergeStateStatus`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MergeState {
+    Behind,
+    Blocked,
+    Clean,
+    Dirty,
+    Draft,
+    HasHooks,
+    Unknown,
+    Unstable,
+}
+
+impl MergeState {
+    /// Every value, in the order of the table's `CHECK`.
+    pub const ALL: [MergeState; 8] = [
+        MergeState::Behind,
+        MergeState::Blocked,
+        MergeState::Clean,
+        MergeState::Dirty,
+        MergeState::Draft,
+        MergeState::HasHooks,
+        MergeState::Unknown,
+        MergeState::Unstable,
+    ];
+
+    /// From GraphQL's `MergeStateStatus`; any other value is `gh_failed`.
+    pub fn of_graphql(state: &str) -> Result<MergeState, CpdError> {
+        MergeState::ALL.into_iter().find(|s| s.as_str().to_ascii_uppercase() == state).ok_or_else(|| {
+            CpdError::new(ErrorCode::GhFailed, format!("gh printed the unknown merge state status {state:?}."))
+                .with("merge_state", state)
+        })
+    }
+
+    /// As stored and printed.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MergeState::Behind => "behind",
+            MergeState::Blocked => "blocked",
+            MergeState::Clean => "clean",
+            MergeState::Dirty => "dirty",
+            MergeState::Draft => "draft",
+            MergeState::HasHooks => "has_hooks",
+            MergeState::Unknown => "unknown",
+            MergeState::Unstable => "unstable",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,6 +238,32 @@ mod tests {
             assert_eq!(state.as_str(), text);
         }
         assert_eq!(PrState::of_graphql("DRAFT").unwrap_err().code(), ErrorCode::GhFailed);
+    }
+
+    #[test]
+    fn mergeable_maps_and_an_unknown_value_is_gh_failed() {
+        for (graphql, mergeable, text) in [
+            ("MERGEABLE", Mergeable::Mergeable, "mergeable"),
+            ("CONFLICTING", Mergeable::Conflicting, "conflicting"),
+            ("UNKNOWN", Mergeable::Unknown, "unknown"),
+        ] {
+            assert_eq!(Mergeable::of_graphql(graphql).unwrap(), mergeable);
+            assert_eq!(mergeable.as_str(), text);
+        }
+        for bad in ["", "mergeable", "DIRTY"] {
+            assert_eq!(Mergeable::of_graphql(bad).unwrap_err().code(), ErrorCode::GhFailed, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_merge_state_maps_and_an_unknown_value_is_gh_failed() {
+        for graphql in ["BEHIND", "BLOCKED", "CLEAN", "DIRTY", "DRAFT", "HAS_HOOKS", "UNKNOWN", "UNSTABLE"] {
+            let state = MergeState::of_graphql(graphql).unwrap();
+            assert_eq!(state.as_str(), graphql.to_ascii_lowercase());
+        }
+        for bad in ["", "dirty", "MERGEABLE", "QUEUED"] {
+            assert_eq!(MergeState::of_graphql(bad).unwrap_err().code(), ErrorCode::GhFailed, "{bad:?}");
+        }
     }
 
     #[test]
