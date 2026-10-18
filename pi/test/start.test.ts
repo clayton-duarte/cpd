@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { cursorFrom } from "../lib/cursor.ts";
-import { ev, Fixture, ID, OTHER, planShow, sessionShow, settle, type Sent, stateCalls, waitFor } from "./fake.ts";
+import { ev, Fixture, ID, OTHER, planShow, sessionShow, type Sent, stateCalls, waitFor } from "./fake.ts";
 
 const cpdMessage = (id: number | undefined, deliveredTo: string | undefined) => ({
   type: "custom_message",
@@ -49,7 +49,7 @@ test("no replay at or below session-registered: a source's messages never lift t
   f.load();
   await f.pi.fire("session_start");
   await waitFor("event 101 delivered", () => f.pi.delivered().length >= 1);
-  await settle();
+  await f.drain(); // 99 and 100 were not printed, and what was is handled
   assert.deepEqual(f.sinces(), [100]);
   assert.deepEqual(f.pi.delivered().map((s) => (s.message.details as any).id), [101]);
 });
@@ -97,7 +97,7 @@ test("activation: only in a tui, only with CPD_SESSION, only when it is pi's ses
   process.env.CPD_SESSION = ID;
   f.pi.sessionId = OTHER;
   await f.pi.fire("session_start");
-  await settle();
+  await f.quiet();
   assert.deepEqual(f.calls(), [], "inactive: it would report another Session's state");
   assert.equal(f.pi.sent.length, 1);
   const m: Sent = f.pi.sent[0]!;
@@ -112,7 +112,7 @@ test("a failing session show is delivered as an error and nothing else starts", 
   f.respond("session-show", { ok: false, error: { code: "session_not_found", message: "No such Session.", details: {} } }, { exit: 4 });
   f.load();
   await f.pi.fire("session_start");
-  await settle();
+  await f.quiet();
   assert.deepEqual(f.argvs(), [["session", "show", ID]]);
   assert.equal(f.pi.sent[0]!.message.content, "cpd adapter: session show: session_not_found: No such Session.");
   assert.equal((f.pi.sent[0]!.message.details as any).code, "session_not_found");
@@ -158,7 +158,7 @@ test("a Manager reads no Plan, registers no plan-review tool, opens no plannotat
   await waitFor("the follower", () => f.follows().length > 0);
   f.emit(ev(101, "plan-review", { data: { review: "r1", status: "pending" } }), ev(102, "session-renamed", { session: ID, data: { name: "ctx-manager" } }));
   await waitFor("the rename", () => f.pi.sessionName === "ctx-manager");
-  await settle();
+  await f.quiet(); // the rename is the later Event: the plan-review before it was handled
   assert.deepEqual(f.argvs().map((a) => a.slice(0, 2).join(" ")), ["session show", "session state"], "no plan show");
   assert.deepEqual(stateCalls(f), ["idle"], "never blocked");
   assert.deepEqual(f.pi.tools, []);

@@ -119,8 +119,15 @@ export class Fixture {
 
   /** Appends Event lines (objects or raw strings) to what the fake follower prints. */
   emit(...lines: unknown[]): void {
-    for (const l of lines) appendFileSync(join(this.dir, "events.jsonl"), (typeof l === "string" ? l : JSON.stringify(l)) + "\n");
+    for (const l of lines) {
+      appendFileSync(join(this.dir, "events.jsonl"), (typeof l === "string" ? l : JSON.stringify(l)) + "\n");
+      const id = (l as { id?: unknown }).id;
+      if (typeof id === "number") this.lastId = Math.max(this.lastId, id);
+    }
   }
+
+  /** The highest Event id emitted so far (a `drain` marker follows it, and a restart's cursor passes it). */
+  private lastId = 0;
 
   file(name: string, content: string): void {
     this.write(name, content);
@@ -205,15 +212,13 @@ export class Fixture {
     await new Promise((resolve) => setImmediate(resolve)); // the `close` event of a child follows its exit
   }
 
-  private markers = 0;
-
   /**
    * Resolves when every Event emitted so far was handled, and the calls it made are done. Events are handled in order, so an Event delivered after
-   * them proves it: `marker` (default a `job-merged`, delivered to a Plan Lead; a Worker needs its own kind) is emitted last, waited for and taken out of
-   * what the pi received, so the test can assert what is left. Replaces waiting a fixed time for something that must not happen.
+   * them proves it: `marker` (default a `job-merged`, delivered to a Plan Lead; a Worker needs its own kind) is emitted last, with the id after the highest so far
+   * (a test's next Event must have a higher one, as the cursor has passed it), waited for and taken out of what the pi received, so the test can assert what is left. Replaces waiting a fixed time for something that must not happen.
    */
   async drain(marker: (id: number) => unknown = (id) => ev(id, "job-merged")): Promise<void> {
-    const id = 1_000_000 + ++this.markers;
+    const id = this.lastId + 1;
     this.emit(marker(id));
     const at = await waitFor(`the marker Event ${id}`, () => {
       const i = this.pi.sent.findIndex((s) => (s.message.details as any)?.id === id);
