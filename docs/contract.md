@@ -1366,6 +1366,8 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 
 **No loss, no duplicates.** The adapter's cursor is the highest Event id it has delivered, which it reads back at `session_start` from its own session file (the `details.id` of the last `cpd` custom message whose `details.delivered_to` is this Session), else the `id` of the Session's `session-registered` Event, whichever is greater. The adapter adds `delivered_to` (the Session's id) to the `details` of every message it delivers, so the cursor counts only messages delivered to this Session and never one at or below its `session-registered` Event: a fork's session file starts with its source's messages, whose Event ids belong to the source's stream. It runs `cpd events follow --session <id> --since <cursor>` and restarts it with the latest cursor if it exits. The exact protocol (activation, errors, the Plan review through plannotator) is in `commands.md`.
 
+**Reload after an install** (hs-d141, hs-d49). After an install the adapter reloads its own pi by itself (`ctx.reload()`), when its guard passes (idle, nothing pending, own state `idle` and not `blocked`, nothing typed in the editor); it detects the install by the identity of its own directory, runs its own command, and retries a refused reload at the next poll. Nothing reaches the model and nothing is typed into a pane. Detection, command, guard and retries: commands.md §15.6.
+
 ### 5.4 `cpd events follow`
 
 - **Selection:** `--plan <id>`, `--context <id>`, `--session <id>` (the rule of §5.3: the Plan's `lead_session` follows its Plan, its Context and itself; any other Session only Events addressed to itself) or none (every Event); `--kind <k>` may repeat.
@@ -1516,6 +1518,9 @@ The fork never copies a half-done turn, and the source is never interrupted.
 - **`blocked`** (a dialog, a pending Plan review): is never idle, so never reloads.
 
 Reload: send pi `SIGTERM` (pi 1.2.0 runs `session_shutdown` on SIGTERM and SIGHUP; `dist/modes/interactive/interactive-mode.js`), wait for it to exit (if it has not exited 10 s after `SIGTERM`, send `SIGKILL`), then `exec` the same path with the same argv; the new `session run` resumes pi on the session file (step 3), so the new adapter loads and no turn is cut. If pi exits on its own after an install, the wrapper `exec`s the new binary before any store write.
+
+The adapter's own in-process reload comes first (§5.3 "Reload after an install", commands.md §15.6); the wrapper's restart above is the **fallback** for what it cannot do: a pi without interactive UI, a reload refused for a long time, an adapter that fails to load.
+
 ### 6.8 Forks: why they happen and where they are drawn (B1, B4)
 
 Forks happen for two reasons only, and neither nests:

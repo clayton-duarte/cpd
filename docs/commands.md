@@ -1902,6 +1902,26 @@ A failure of `plan show` is an error message and leaves the entry pending. An Ev
 
 Rejected alternatives: one shared review server (cpd would have to run plannotator's server outside pi, which plannotator does not offer to extensions), and a queue (a review waiting for another Plan's User decision could wait for hours). Unverified: that two plannotator servers in one range do not disturb each other's sessions; the adapter Job tests it.
 
+### 15.6 Reload after an install
+
+Decision hs-d141 (research: `docs/research/pi-reload.md`), superseding its first answer; contract §5.3 "Reload after an install" and §6.7. After `scripts/install-cpd.sh` the adapter reloads its own pi (`ctx.reload()`: extensions, skills, prompts, themes, context files) without the User typing and without typing into a pane. Nothing reaches the model.
+
+**Detection.** At `session_start` the adapter records the identity `(dev, ino, mtimeMs)` of its own directory (`dirname` of `pi/lib/`, from `import.meta.url`; contract §8 `pi_adapter`) with `statSync`. An `unref`'d timer polls it every 5 seconds (a constant of the adapter, not a config key) and is cleared at `session_shutdown`. The install replaces the directory as a whole (`rm -rf`, `mv`), so a new package has a new identity. `ENOENT` is the install in progress, not a change: the poll waits. A different identity of an existing directory is an install. The cpd binary is not watched (it changes first, before the directory is complete). The adapter runs only in `tui` mode (§15.1), so no other mode polls.
+
+**The command.** The adapter registers `cpd-reload-after-install`. pi runs an extension's command with a full `ExtensionCommandContext` only through `pi.sendUserMessage("/cpd-reload-after-install", {expandPromptTemplates: true})` (pi 1.2.0 `agent-session.js` `prompt()`); without the flag the text goes to the model, and pi's own `/reload` cannot be reached this way. The handler checks the guard, then `await ctx.reload()`; nothing after it uses the old `ctx`. The new instance records the new identity at its `session_start`, which is why a successful reload is not repeated.
+
+**The guard**, in this order, checked by the adapter before it triggers the command and again in the handler (the handler is authoritative; only it has `ctx`, and a User typing the command by hand is harmless):
+1. `ctx.isIdle()` (mid-turn pi's `ctx.reload()` silently does nothing yet resolves, so it cannot be left to pi);
+2. `ctx.hasPendingMessages()` is false;
+3. the adapter's own state (§15.4) is `idle`: not `working`, and not `blocked`, so no Worker question, Plan review or `herdr:blocked` signal is open (pi's `isIdle()` does not see dialogs, and a reload closes an open dialog and loses its answer);
+4. `ctx.ui.getEditorText() === ""` (no unsent typing).
+
+**Retries.** A refused reload (the guard fails at the trigger or in the handler) does nothing and is **not** handled: the recorded identity stays the old one, so the next tick checks the guard again and triggers again; there is no limit and no backoff beyond the poll interval. At most one trigger is in flight.
+
+**Logged.** Nothing is delivered to the Session and no `cpd` command is run for it. The adapter notifies with `ctx.ui.notify` only when it reloads (`cpd: adapter updated, reloading`); a refusal is silent. A reload that fails (pi's "Reload failed: …") is pi's own message.
+
+**Relation to the wrapper's restart (§10.8; contract §6.7 "Reload on install").** The in-process reload is first. The wrapper's `SIGTERM` + `exec` stays as the fallback for what it cannot do: a pi without interactive UI, a reload refused for a long time (the wrapper's own idle rules: parked, or idle for 10 minutes), and an adapter that fails to load (the reload left pi without it). Both implement hs-d49 with the same guard in spirit (never with unsent typing, never `blocked`); when the adapter reloads first, pi keeps its process and the wrapper's executable check still sees the new `cpd` binary and may restart pi at its own safe point, which is harmless (the new `session run` resumes the session file).
+
 ## 16. The Worker contract
 
 ### 16.1 The Worker Spec
