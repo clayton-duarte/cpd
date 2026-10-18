@@ -44,7 +44,7 @@ fn fx(status: &str) -> Fx {
     // What `pr open` writes for a PR that has a pull request: its row, number and url.
     let (phase, state, columns, values, done) = match status {
         "dispatch" => ("dispatch", "", "", String::new(), "NULL"),
-        "open" => ("pr", "open", ", pr_number, pr_url, pr_opened_at, pull_request", format!(", 812, '{URL}', 't', (SELECT id FROM pull_requests)"), "NULL"),
+        "open" => ("deploy", "open", ", pr_number, pr_url, pr_opened_at, pull_request", format!(", 812, '{URL}', 't', (SELECT id FROM pull_requests)"), "NULL"),
         "merged" => ("done", "merged", ", pr_number, pr_url, pr_opened_at, pull_request, merged_at", format!(", 812, '{URL}', 't', (SELECT id FROM pull_requests), 't'"), "'t'"),
         other => panic!("no status {other}"),
     };

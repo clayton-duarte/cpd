@@ -138,14 +138,14 @@ fn chart_rows(screen: &[String], rows: usize) -> String {
 
 // ---------- rows ----------
 
-fn context(id: &str, lead: &str) -> String {
+fn context(id: &str) -> String {
     format!(
-        "INSERT INTO contexts (id, title, jira, created_at, created_on, lead_session, grounded_seq)
-         VALUES ('{id}', 'Title of {id}', NULL, '2026-01-01T00:00:00.000Z', 'm1', '{lead}', 0);"
+        "INSERT INTO contexts (id, title, jira, created_at, created_on)
+         VALUES ('{id}', 'Title of {id}', NULL, '2026-01-01T00:00:00.000Z', 'm1');"
     )
 }
 
-/// A Plan in `phase` (`dispatch` or `pr`) with its Lead; `pr` is `(number, checks)`.
+/// A Plan in `phase` (`dispatch` or `deploy`) with its Lead; `pr` is `(number, checks)`.
 fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr: Option<(i64, &str)>) -> String {
     let (row, number, url, opened, pull_request) = match pr {
         Some((n, checks)) => (
@@ -183,7 +183,7 @@ fn bare_plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str
 
 /// One Context `ctx` and one Plan `ship` in `phase`, with no PR, whose Lead `lead-ship` is in the chat slot.
 fn bare_plan(phase: &str) -> String {
-    context("ctx", "g-ctx")
+    context("ctx")
         + &lead_row("g-ctx", "ctx", "", "2026-01-01T00:00:00.000Z")
         + &bare_plan_row("ship", "ctx", phase, "lead-ship", "2026-01-02T00:00:00.000Z")
         + &lead_row("lead-ship", "ctx", "ship", "2026-01-02T00:00:00.000Z")
@@ -268,7 +268,7 @@ fn in_chat(context: &str, plan: &str, session: &str) -> String {
 /// One Context `ctx`, one Plan `ship` in `phase` whose Lead `lead-ship` is in the chat slot, and `jobs`
 /// as `(key, status, tier, needs, Attempts)`; no Attempt for the statuses that have none.
 fn plan_with(phase: &str, pr: Option<(i64, &str)>, jobs: &[(&str, &str, &str, &[&str], u32)]) -> String {
-    let mut s = context("ctx", "g-ctx");
+    let mut s = context("ctx");
     s += &lead_row("g-ctx", "ctx", "", "2026-01-01T00:00:00.000Z");
     s += &plan_row("ship", "ctx", phase, "lead-ship", "2026-01-02T00:00:00.000Z", pr);
     s += &lead_row("lead-ship", "ctx", "ship", "2026-01-02T00:00:00.000Z");
@@ -485,7 +485,7 @@ fn with_no_pending_review_there_is_no_row_and_the_boxes_start_at_the_top() {
 #[test]
 fn no_lead_in_the_chat_slot_says_so() {
     let env = env();
-    sql(&env, &(context("ctx", "g-ctx") + &lead_row("g-ctx", "ctx", "", "2026-01-01T00:00:00.000Z")));
+    sql(&env, &(context("ctx") + &lead_row("g-ctx", "ctx", "", "2026-01-01T00:00:00.000Z")));
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the message", |s| s.iter().any(|l| l.contains("no Lead")));
     // in the message row, the pane's last row, indented by the margin; nothing above it
@@ -540,9 +540,40 @@ fn the_view_follows_events_and_switches_plan_when_the_chat_slot_changes() {
 }
 
 #[test]
+fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_reset() {
+    let env = env();
+    let keys: Vec<String> = (10..60).map(|n| format!("j{n}")).collect();
+    let jobs: Vec<(&str, &str, &str, &[&str], u32)> = keys.iter().map(|k| (k.as_str(), "queued", "S3", &[][..], 0)).collect();
+    let mut s = plan_with("dispatch", None, &jobs);
+    s += &plan_row("side", "ctx", "dispatch", "lead-side", "2026-01-02T00:00:05.000Z", None);
+    s += &lead_row("lead-side", "ctx", "side", "2026-01-02T00:00:05.000Z");
+    s += &job_row("side", "other", "queued", "O3");
+    sql(&env, &s);
+    let selected = |styled: &str| styled.contains("\x1b[1;7m") || styled.contains("\x1b[7;1m") || styled.contains("\x1b[7m");
+    let pane = start_view(&env);
+    let top = screen_when(&env, &pane, "the top of the chart", |s| s.len() > 2 && s[2].contains(" j10 "));
+
+    // arrow keys select the pills one by one, and the chart scrolls to keep the selection visible
+    let mut down = vec!["send-keys", "-t", &pane];
+    down.extend(std::iter::repeat_n("j", 45));
+    tmux_out(&env, &down);
+    let scrolled = screen_when(&env, &pane, "the chart scrolled", |s| s.iter().all(|l| !l.contains(" j10 ")));
+    assert!(selected(&tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane])), "no pill is selected before the switch");
+
+    // another Plan starts at its corner; coming back shows the chart where it was left, with nothing selected
+    sql(&env, &in_chat("ctx", "side", "lead-side"));
+    screen_when(&env, &pane, "the other Plan", |s| s.len() > 2 && s[2].contains("other"));
+    sql(&env, &in_chat("ctx", "ship", "lead-ship"));
+    let back = screen_when(&env, &pane, "the first Plan again", |s| s.iter().any(|l| l.contains(" j")));
+    assert_eq!(back, scrolled, "{}", back.join("\n"));
+    assert_ne!(back, top);
+    assert!(!selected(&tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane])), "a pill is selected");
+}
+
+#[test]
 fn the_view_starts_no_subprocess_and_asks_gh_nothing() {
     let env = env();
-    sql(&env, &plan_with("pr", Some((7, "failed")), &[("a", "running", "S3", &[], 1)]));
+    sql(&env, &plan_with("deploy", Some((7, "failed")), &[("a", "running", "S3", &[], 1)]));
     let pane = start_view(&env);
     let pid = tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_pid}"]).trim().to_owned();
     // let it draw, follow an Event and take a new snapshot

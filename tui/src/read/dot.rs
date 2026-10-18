@@ -18,11 +18,11 @@ pub enum Dot {
     Working,
     /// `●` white: an idle turn the User has not seen.
     White,
-    /// `●` magenta: blocked outside dispatch and PR, or the Plan's review is pending.
+    /// `●` magenta: blocked outside dispatch and deploy, or the Plan's review is pending.
     Magenta,
     /// `●` yellow: the Plan's Lead, with a pull request open whose checks have finished.
     Yellow,
-    /// `●` red: blocked work in dispatch or PR.
+    /// `●` red: blocked work in dispatch or deploy.
     Red,
 }
 
@@ -55,10 +55,10 @@ pub struct DotInputs {
 impl Dot {
     pub fn of(i: DotInputs) -> Dot {
         let blocked = i.state == State::Blocked;
-        if blocked && matches!(i.phase, Some(Phase::Dispatch | Phase::Pr)) {
+        if blocked && matches!(i.phase, Some(Phase::Dispatch | Phase::Deploy)) {
             return Dot::Red;
         }
-        if i.plan_lead && i.phase == Some(Phase::Pr) && i.pr_checked {
+        if i.plan_lead && i.phase == Some(Phase::Deploy) && i.pr_checked {
             return Dot::Yellow;
         }
         if blocked || (i.plan_lead && i.review_pending) {
@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn blocked_is_red_in_dispatch_and_pr() {
-        for phase in [Phase::Dispatch, Phase::Pr] {
+        for phase in [Phase::Dispatch, Phase::Deploy] {
             assert_eq!(Dot::of(lead(State::Blocked, Some(phase))), Dot::Red);
             assert_eq!(Dot::of(fork(State::Blocked, phase)), Dot::Red, "a fork too");
         }
@@ -134,10 +134,10 @@ mod tests {
     fn yellow_is_the_plans_lead_in_pr_with_a_pull_request_open_and_checked() {
         let checked = |i: DotInputs| DotInputs { pr_checked: true, ..i };
         for state in [State::Working, State::Idle, State::Stopped] {
-            assert_eq!(Dot::of(checked(lead(state, Some(Phase::Pr)))), Dot::Yellow, "{state:?}");
+            assert_eq!(Dot::of(checked(lead(state, Some(Phase::Deploy)))), Dot::Yellow, "{state:?}");
         }
-        assert_eq!(Dot::of(checked(fork(State::Working, Phase::Pr))), Dot::Working, "never a fork");
-        assert_eq!(Dot::of(lead(State::Idle, Some(Phase::Pr))), Dot::Idle, "it clears when no such pull request remains");
+        assert_eq!(Dot::of(checked(fork(State::Working, Phase::Deploy))), Dot::Working, "never a fork");
+        assert_eq!(Dot::of(lead(State::Idle, Some(Phase::Deploy))), Dot::Idle, "it clears when no such pull request remains");
         for phase in [Phase::Grounding, Phase::Plan, Phase::Dispatch, Phase::Done] {
             assert_ne!(Dot::of(checked(lead(State::Idle, Some(phase)))), Dot::Yellow, "only in pr: {phase:?}");
         }
@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn red_beats_yellow_beats_magenta_beats_white() {
-        let all = DotInputs { settled: Some(5), review_pending: true, pr_checked: true, ..lead(State::Blocked, Some(Phase::Pr)) };
+        let all = DotInputs { settled: Some(5), review_pending: true, pr_checked: true, ..lead(State::Blocked, Some(Phase::Deploy)) };
         assert_eq!(Dot::of(all), Dot::Red, "blocked in pr with a finished-checks PR");
         assert_eq!(Dot::of(DotInputs { state: State::Idle, ..all }), Dot::Yellow, "an idle Lead in pr with passed checks");
         assert_eq!(Dot::of(DotInputs { pr_checked: false, state: State::Idle, ..all }), Dot::Magenta, "the review beats white");

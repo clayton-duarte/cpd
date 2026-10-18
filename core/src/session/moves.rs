@@ -20,23 +20,31 @@ use crate::args::Name;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
 use crate::home::CpdHome;
-use crate::host::layout::park_window;
+use crate::host::layout::{context_window, park_window};
 use crate::host::{Pane, PaneId, Spawn, Tmux, View, WindowId, chat_slot};
 use crate::ids::{PlanId, SessionId};
 use crate::output::Output;
 use crate::store::{Store, WriteTxn};
 
 /// What `tmux new-window` runs for Lead `id`: `cpd session run <id>` in its
-/// cwd, with `CPD_HOME`, `CPD_SESSION` and `CPD_PLAN` (commands.md §10.3).
-fn lead_spawn(home: &CpdHome, id: &SessionId, plan: &PlanId, cwd: &Path) -> Spawn {
-    Spawn {
-        cwd: Some(cwd.to_path_buf()),
-        env: BTreeMap::from([
-            ("CPD_HOME".to_owned(), home.root().display().to_string()),
-            ("CPD_SESSION".to_owned(), id.to_string()),
-            ("CPD_PLAN".to_owned(), plan.to_string()),
-        ]),
-        argv: [PROGRAM, "session", "run", id.as_str()].map(str::to_owned).into(),
+/// cwd, with `CPD_HOME`, `CPD_SESSION` and `CPD_PLAN` (commands.md §10.3); a
+/// Context's Manager has no Plan, so no `CPD_PLAN` (§3.10).
+pub(crate) fn lead_spawn(home: &CpdHome, id: &SessionId, plan: Option<&PlanId>, cwd: &Path) -> Spawn {
+    let mut env = BTreeMap::from([
+        ("CPD_HOME".to_owned(), home.root().display().to_string()),
+        ("CPD_SESSION".to_owned(), id.to_string()),
+    ]);
+    if let Some(plan) = plan {
+        env.insert("CPD_PLAN".to_owned(), plan.to_string());
+    }
+    Spawn { cwd: Some(cwd.to_path_buf()), env, argv: [PROGRAM, "session", "run", id.as_str()].map(str::to_owned).into() }
+}
+
+/// The window a parked Session lives in: `ctx-<context>` for a Manager, else `park-<label>`.
+fn parked_window(row: &Row) -> String {
+    match row.role {
+        Role::Manager => context_window(&row.context),
+        _ => park_window(&row.id, row.plan.as_ref()),
     }
 }
 
@@ -50,9 +58,10 @@ pub(super) fn moved(tx: &WriteTxn<'_>, row: &Row, pane: &PaneId, window: &Window
     if row.tmux_pane.as_deref() != Some(pane.as_str()) {
         tx.execute("UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2", [pane.as_str(), row.id.as_str()])?;
     }
+    let kind = if row.role == Role::Manager { "Manager" } else { "Lead" };
     let text = match place {
-        "chat" => format!("Lead {} is in the chat slot.", row.name),
-        _ => format!("Lead {} is {place}.", row.name),
+        "chat" => format!("{kind} {} is in the chat slot.", row.name),
+        _ => format!("{kind} {} is {place}.", row.name),
     };
     let event = NewEvent::new(Kind::SessionMoved, text, json!({"pane": pane.as_str(), "window": window.as_str(), "place": place}));
     append(tx, scoped(event, row))?;
@@ -62,6 +71,14 @@ pub(super) fn moved(tx: &WriteTxn<'_>, row: &Row, pane: &PaneId, window: &Window
 pub(super) fn require_lead(row: &Row) -> Result<(), CpdError> {
     match row.role {
         Role::Lead => Ok(()),
+        role => Err(not_a_lead(&row.id, role)),
+    }
+}
+
+/// `session open` and `park` take a Lead or a Context's Manager (commands.md §10.4, §10.5).
+fn require_chat_session(row: &Row) -> Result<(), CpdError> {
+    match row.role {
+        Role::Lead | Role::Manager => Ok(()),
         role => Err(not_a_lead(&row.id, role)),
     }
 }
@@ -94,7 +111,7 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
     let plan = args.plan.clone().or_else(|| source.plan.clone()).ok_or_else(|| {
         CpdError::new(
             ErrorCode::PlanRequired,
-            format!("Session {} is a grounded Lead with no Plan: pass --plan <id>.", source.id),
+            format!("Session {} has no Plan: pass --plan <id>.", source.id),
         )
         .with("source", source.id.as_str())
     })?;
@@ -137,7 +154,7 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
         Ok(row)
     })?;
 
-    let spawn = lead_spawn(&env.home, &id, &plan, Path::new(&source.cwd));
+    let spawn = lead_spawn(&env.home, &id, Some(&plan), Path::new(&source.cwd));
     let (window, pane) = tmux.new_window(&cockpit, &park_window(&id, Some(&plan)), &spawn)?;
     tmux.set_pane_session(&pane, &id)?;
     tmux.set_pane_title(&pane, &name)?;
@@ -157,16 +174,13 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let id = env.resolve(&args.id)?;
     let lead = env.store.read(|conn| row::load(conn, &id))?;
-    require_lead(&lead)?;
-    let Some(plan) = lead.plan.clone() else {
-        return Err(CpdError::new(
-            ErrorCode::GroundedLead,
-            format!("Session {} is a Context's grounded Lead: it is never typed into.", lead.id),
-        )
-        .with("session", lead.id.as_str()));
-    };
+    require_chat_session(&lead)?;
     if lead.archived_at.is_some() {
         return Err(archived(&lead));
+    }
+    // A Lead has a Plan; a Context's Manager has none.
+    if (lead.role == Role::Lead) == lead.plan.is_none() {
+        return Err(super::bad_row(format!("{} {} has plan {:?}", lead.role.as_str(), lead.id, lead.plan)));
     }
     let tmux = env.tmux();
     let cockpit = env.config.tmux.cockpit_session.clone();
@@ -194,8 +208,8 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
     let (pane, from_window) = match live {
         Some(p) => (p.pane.clone(), p.window.clone()),
         None => {
-            let spawn = lead_spawn(&env.home, &lead.id, &plan, Path::new(&lead.cwd));
-            let (window, pane) = tmux.new_window(&cockpit, &park_window(&lead.id, Some(&plan)), &spawn)?;
+            let spawn = lead_spawn(&env.home, &lead.id, lead.plan.as_ref(), Path::new(&lead.cwd));
+            let (window, pane) = tmux.new_window(&cockpit, &parked_window(&lead), &spawn)?;
             tmux.set_pane_session(&pane, &lead.id)?;
             tmux.set_pane_title(&pane, &env.store.read(|conn| lead.title(conn))?)?;
             (pane, window)
@@ -204,7 +218,7 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
     tmux.swap_pane(&pane, &slot.pane)?;
     // The displaced pane is now in `from_window`: a dead one dies there, like the placeholder.
     match &displaced {
-        Some(other) if !slot.dead => tmux.rename_window(&from_window, &park_window(&other.id, other.plan.as_ref()))?,
+        Some(other) if !slot.dead => tmux.rename_window(&from_window, &parked_window(other))?,
         _ => tmux.kill_pane(&slot.pane)?,
     }
     env.store.write("session open", |tx| {
@@ -236,7 +250,7 @@ pub(super) fn park(args: ParkArgs) -> Result<Output, CpdError> {
         return Ok(Output::success(json!({"session": null, "already": true})));
     };
     let lead = env.store.read(|conn| row::load(conn, &id))?;
-    require_lead(&lead)?;
+    require_chat_session(&lead)?;
     if slot.cpd_session.as_ref() != Some(&lead.id) {
         return Ok(Output::success(json!({"session": lead.id, "already": true})));
     }
@@ -255,7 +269,7 @@ pub(super) fn park_lead(
     slot: &Pane,
     command: &str,
 ) -> Result<(WindowId, PaneId), CpdError> {
-    let (window, placeholder) = tmux.new_window(cockpit, &park_window(&lead.id, lead.plan.as_ref()), &placeholder_spawn())?;
+    let (window, placeholder) = tmux.new_window(cockpit, &parked_window(lead), &placeholder_spawn())?;
     tmux.set_pane_view(&placeholder, View::Chat)?;
     tmux.swap_pane(&placeholder, &slot.pane)?;
     env.store.write(command, |tx| moved(tx, lead, &slot.pane, &window, "parked"))?;
@@ -277,7 +291,10 @@ pub fn close_lead(store: &mut Store, tmux: &Tmux, cockpit: &str, id: &SessionId,
     // The rows are read first, then the panes, so a Lead that reached the slot
     // meanwhile shows in at least one of them.
     let mut lead = store.read(|conn| row::load(conn, id))?;
-    require_lead(&lead)?;
+    // A Context's Manager is closed by the archive cascade as a Lead is (contract §2.2 "Archived").
+    if lead.role == Role::Worker {
+        return Err(not_a_lead(&lead.id, lead.role));
+    }
     let panes = tmux.list_panes()?;
     let in_slot = chat_slot(&panes, cockpit).is_some_and(|p| p.cpd_session.as_ref() == Some(&lead.id));
     if lead.place == "chat" || in_slot {
@@ -341,8 +358,18 @@ pub(super) fn close(args: CloseArgs) -> Result<Output, CpdError> {
 }
 
 /// The message files a Lead's `session run` reads (commands.md §1.4).
-pub(super) fn first_message(home: &CpdHome, row: &Row) -> Result<Option<String>, CpdError> {
-    let Some(plan) = &row.plan else { return Ok(None) };
+pub(super) fn first_message(home: &CpdHome, row: &Row) -> Result<Option<PathBuf>, CpdError> {
+    let Some(plan) = &row.plan else {
+        // A Context's Manager: `context manager` wrote its first message (commands.md §3.10).
+        if row.role == Role::Manager {
+            let path = home.manager_message(&row.context);
+            return match std::fs::File::open(&path) {
+                Ok(_) => Ok(Some(path)),
+                Err(e) => Err(unreadable(&path, e)),
+            };
+        }
+        return Ok(None);
+    };
     let own = home.session_message(plan, &row.id);
     let path: Option<PathBuf> = if own.exists() {
         Some(own)
@@ -351,7 +378,11 @@ pub(super) fn first_message(home: &CpdHome, row: &Row) -> Result<Option<String>,
     } else {
         None
     };
-    path.map(|p| std::fs::read_to_string(&p).map_err(|e| unreadable(&p, e))).transpose()
+    path.map(|p| match std::fs::File::open(&p) {
+        Ok(_) => Ok(p),
+        Err(e) => Err(unreadable(&p, e)),
+    })
+    .transpose()
 }
 
 #[cfg(test)]

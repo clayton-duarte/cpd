@@ -160,11 +160,12 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey) -> 
     }
 
     let bad = |what: String| CpdError::new(ErrorCode::StoreFailed, format!("The Ledger holds an invalid value: {what}."));
-    let previous: Option<(u32, String)> = conn
+    // `never_started`: the previous Attempt's driver never started (`driver_pid` null, §3.4).
+    let previous: Option<(u32, String, bool)> = conn
         .query_row(
-            "SELECT number, tier FROM attempts WHERE plan = ?1 AND job = ?2 ORDER BY number DESC LIMIT 1",
+            "SELECT number, tier, driver_pid IS NULL FROM attempts WHERE plan = ?1 AND job = ?2 ORDER BY number DESC LIMIT 1",
             params![plan.as_str(), key.as_str()],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()?;
     let retry = match &job.retry_tier {
@@ -174,21 +175,26 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey) -> 
     let (tier, origin) = match (retry, &previous) {
         (Some(tier), _) => (Tier::parse(tier).map_err(|_| bad(format!("retry_tier {tier:?} of Job {key}")))?, Origin::Retry),
         (None, None) => (Tier::parse(&job.tier).map_err(|_| bad(format!("tier {:?} of Job {key}", job.tier)))?, Origin::Ladder),
-        (None, Some((number, tier))) => {
+        (None, Some((number, tier, never_started))) => {
             let last = Tier::parse(tier).map_err(|_| bad(format!("tier {tier:?} of Attempt {key}-a{number}")))?;
-            let next = catalog.next(last)?.ok_or_else(|| {
-                bad(format!("Job {key} is queued after Attempt {number} at Tier {last}, but the ladder has no next Tier"))
-            })?;
-            (next, Origin::Ladder)
+            if *never_started {
+                // The ledger queued the Job at that Tier again: the Attempt was not a try.
+                (last, Origin::Ladder)
+            } else {
+                let next = catalog.next(last)?.ok_or_else(|| {
+                    bad(format!("Job {key} is queued after Attempt {number} at Tier {last}, but the ladder has no next Tier"))
+                })?;
+                (next, Origin::Ladder)
+            }
         }
     };
-    let number = previous.map_or(1, |(n, _)| n + 1);
+    let number = previous.map_or(1, |(n, _, _)| n + 1);
     let attempt = AttemptId::new(key.clone(), NonZeroU32::new(number).expect("numbers start at 1"));
     let worktree = git::attempt_worktree_path(std::path::Path::new(&repo), plan, &attempt)?;
     Ok(Next { branch: git::attempt_branch(plan, &attempt), attempt, tier, origin, worktree })
 }
 
-/// Ready (§3.2): `queued`, in a Plan in phase `dispatch` or `pr`, whose PR is
+/// Ready (§3.2): `queued`, in a Plan in phase `dispatch` or `deploy`, whose PR is
 /// `dispatch` or `open` (a `waiting` PR has no Lead worktree yet), with every
 /// Dependency `merged`; else `job_not_ready`.
 fn require_ready(all: &[Job], job: &Job, plan: &PlanId, phase: &str, pr_status: &str) -> Result<(), CpdError> {
@@ -200,7 +206,7 @@ fn require_ready(all: &[Job], job: &Job, plan: &PlanId, phase: &str, pr_status: 
         .collect();
     let why = if job.status != "queued" {
         format!("it is {}, not queued", job.status)
-    } else if !matches!(phase, "dispatch" | "pr") {
+    } else if !matches!(phase, "dispatch" | "deploy") {
         format!("Plan {plan} is in phase {phase}")
     } else if !matches!(pr_status, "dispatch" | "open") {
         format!("its PR {} is {pr_status}", job.pr)

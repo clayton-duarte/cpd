@@ -40,7 +40,7 @@ enum Filter {
     /// A Session that is its Plan's `lead_session` (amendment 7): its Plan, its
     /// Context's Events about no Plan, and itself.
     Lead { session: SessionId, plan: PlanId, context: ContextId },
-    /// Any other Session: Events addressed to itself.
+    /// Any other Session (a Worker, a side fork, a Manager): Events addressed to itself.
     Session(SessionId),
 }
 

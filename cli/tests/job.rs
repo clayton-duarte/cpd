@@ -81,7 +81,7 @@ fn plan(env: &TestEnv, id: &str, phase: &str) {
     const STEPS: [(&str, &str, &str, &str); 4] = [
         ("plan", "", "waiting", ""),
         ("dispatch", ", locked_at = 't'", "dispatch", ", lead_worktree = '/wt', started_at = 't'"),
-        ("pr", "", "open", ", pr_number = 1, pr_url = 'https://github.com/acme/{id}/pull/1', pr_opened_at = 't', pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/{id}')"),
+        ("deploy", "", "open", ", pr_number = 1, pr_url = 'https://github.com/acme/{id}/pull/1', pr_opened_at = 't', pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/{id}')"),
         ("done", ", done_at = 't'", "merged", ", merged_at = 't'"),
     ];
     let mut sql = format!(
@@ -96,7 +96,7 @@ fn plan(env: &TestEnv, id: &str, phase: &str) {
         let last = STEPS.iter().position(|(p, ..)| *p == phase).unwrap_or_else(|| panic!("{phase}"));
         for (step, set, status, pr_set) in &STEPS[..=last] {
             sql += &format!("UPDATE plans SET phase = '{step}'{set} WHERE id = '{id}';");
-            if *step == "pr" {
+            if *step == "deploy" {
                 sql += &pull_request(id, 1, "open");
             }
             sql += &format!("UPDATE prs SET status = '{status}'{} WHERE plan = '{id}';", pr_set.replace("{id}", id));
@@ -262,18 +262,18 @@ fn add_in_phase_plan_writes_a_draft_job_its_needs_and_an_event() {
 }
 
 #[test]
-fn add_in_phase_dispatch_or_pr_appends_a_queued_job_with_its_fingerprint() {
-    for phase in ["dispatch", "pr"] {
+fn add_in_phase_dispatch_or_deploy_appends_a_queued_job_with_its_fingerprint() {
+    for phase in ["dispatch", "deploy"] {
         let env = TestEnv::new();
         setup(&env);
         plan(&env, "pl", "plan");
         job_add(&env, "pl", "a", "S2", &[]).ok();
         lock(&env, "pl");
-        if phase == "pr" {
+        if phase == "deploy" {
             fixture(
                 &env,
                 &format!(
-                    "UPDATE plans SET phase = 'pr' WHERE id = 'pl';
+                    "UPDATE plans SET phase = 'deploy' WHERE id = 'pl';
                      {}
                      UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/pl/pull/1', pr_opened_at = 't',
                             pull_request = (SELECT id FROM pull_requests WHERE number = 1) WHERE plan = 'pl';",
@@ -1005,6 +1005,94 @@ fn a_locked_job_cannot_change_pr() {
     lock(&env, "pl");
     refused(&job(&env, &["edit", "a", "--pr", "web"], "pl"), "job_locked", 3);
     assert_eq!(job_row(&env, "pl", "a", "pr"), "repo");
+}
+
+// ---------- drafts in a running Plan (hs-d173, hs-d174, hs-d179; commands.md §5.1–§5.3) ----------
+
+/// `job add <key> --draft` in Plan `plan_id`, with `needs` and the `extra` flags.
+fn job_add_draft(env: &TestEnv, plan_id: &str, key: &str, needs: &[&str], extra: &[&str]) -> Run {
+    let spec = spec_file(env);
+    let title = format!("Title of {key}");
+    let needs = needs.join(",");
+    let mut args = vec!["job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--draft", "--plan", plan_id];
+    if !needs.is_empty() {
+        args.extend(["--needs", &needs]);
+    }
+    args.extend(extra);
+    env.cpd(&args)
+}
+
+#[test]
+fn add_draft_after_the_lock_is_an_appended_draft_that_stays_editable_and_cancellable() {
+    for phase in ["dispatch", "deploy"] {
+        let env = TestEnv::new();
+        setup(&env);
+        plan(&env, "pl", phase);
+        job_add(&env, "pl", "a", "S2", &[]).ok();
+
+        let out = job_add_draft(&env, "pl", "d", &["a"], &[]).ok();
+        assert_eq!(out["job"], json!({"key": "d", "pr": "repo", "status": "draft", "appended": true, "tier": "S2", "needs": ["a"], "review": false}), "{phase}");
+        assert_eq!((job_row(&env, "pl", "d", "status"), job_row(&env, "pl", "d", "appended")), (json!("draft"), json!(1)));
+        assert_eq!(job_row(&env, "pl", "d", "fingerprint"), Value::Null);
+        assert_eq!(
+            events(&env, "job-added").last().unwrap()["data"],
+            json!({"pr": "repo", "status": "draft", "appended": true, "tier": "S2", "needs": ["a"], "review": false})
+        );
+        // Its needs may be drafts; an identical rerun is `already`, as for any add.
+        job_add_draft(&env, "pl", "e", &["d"], &[]).ok();
+        let (txns, evs) = (count(&env, "txns"), count(&env, "events"));
+        assert_eq!(job_add_draft(&env, "pl", "e", &["d"], &[]).ok()["already"], true);
+        assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs));
+
+        // Editable and cancellable in this phase.
+        let out = job(&env, &["edit", "d", "--title", "New title", "--tier", "S3"], "pl").ok();
+        assert_eq!((&out["job"]["status"], &out["fields"]), (&json!("draft"), &json!(["title", "tier"])), "{phase}");
+        job(&env, &["edit", "e", "--needs", "a,d"], "pl").ok();
+        assert_eq!(job_row(&env, "pl", "d", "fingerprint"), Value::Null);
+        let out = job(&env, &["cancel", "e", "--reason", "Not this batch."], "pl").ok();
+        assert_eq!((&out["status"], &out["cancel_requested"]), (&json!("cancelled"), &json!(false)));
+        assert_eq!(job_row(&env, "pl", "e", "fingerprint"), Value::Null);
+    }
+
+    // In phase plan every Job is a draft: --draft changes nothing.
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    let out = job_add_draft(&env, "pl", "a", &[], &[]).ok();
+    assert_eq!((&out["job"]["status"], &out["job"]["appended"]), (&json!("draft"), &json!(false)));
+    assert_eq!(job_row(&env, "pl", "a", "appended"), 0);
+
+    // In phase done --draft passes the phase, and finds every PR ended until `pr add` reopens the Plan;
+    // without --draft the phase refuses.
+    plan(&env, "dn", "done");
+    let e = refused(&job_add_draft(&env, "dn", "k", &[], &[]), "pr_ended", 3);
+    assert_eq!(e["details"]["status"], "merged");
+    refused(&job_add(&env, "dn", "k", "S2", &[]), "illegal_phase", 3);
+}
+
+#[test]
+fn a_queued_job_may_not_need_a_draft() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "dispatch");
+    job_add(&env, "pl", "a", "S2", &[]).ok();
+    job_add_draft(&env, "pl", "d", &[], &[]).ok();
+    let (txns, evs, rows) = (count(&env, "txns"), count(&env, "events"), count(&env, "jobs"));
+
+    let e = refused(&job_add(&env, "pl", "q", "S2", &["a", "d"]), "needs_unavailable", 3);
+    assert_eq!(e["details"]["jobs"], json!(["d"]));
+    assert!(e["message"].as_str().unwrap().contains("--draft"), "{e}");
+    // A review Job needs every Job of its PR, the draft among them.
+    let spec = spec_file(&env);
+    let review = ["job", "add", "r", "--title", "Review", "--tier", "S2", "--spec", spec.as_str(), "--review", "--plan", "pl"];
+    let e = refused(&env.cpd(&review), "needs_unavailable", 3);
+    assert_eq!(e["details"]["jobs"], json!(["d"]));
+    assert_eq!((count(&env, "txns"), count(&env, "events"), count(&env, "jobs")), (txns, evs, rows));
+
+    // As drafts both are added: they are queued together when the review of the drafts is approved.
+    assert_eq!(job_add_draft(&env, "pl", "q", &["a", "d"], &[]).ok()["job"]["status"], "draft");
+    let out = job_add_draft(&env, "pl", "r", &[], &["--review"]).ok();
+    assert_eq!((&out["job"]["status"], &out["job"]["needs"]), (&json!("draft"), &json!(["a", "d", "q"])));
 }
 
 #[test]

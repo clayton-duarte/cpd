@@ -3,6 +3,7 @@
 //! every pane cpd starts ([`PROGRAM`]). Besides those, it lays out the cockpit
 //! as the reference does: a Session opened in the chat slot gets the focus
 //! (`select-pane`), and `?` opens the legend popup.
+//! A click on a Context row runs `context manager` (§3.10), then the Open of the Manager it returns.
 //! The menu's Open, Close, Archive, Unarchive, Rename…, Fork…, New session…, New Plan… and New Context… are
 //! the same commands; Copy id is the one that runs `tmux set-buffer -w` instead (OSC 52). After New Plan…, Fork… and
 //! New session… succeed, the new Lead is opened in the chat slot (`session open`, then the focus, as Open does). Two flows run more than one: an Archive of the chat slot's Lead frees the slot first
@@ -55,6 +56,8 @@ pub enum Free {
 pub enum Action {
     /// `session open <id>` (§10.4), then the focus on the chat slot: Enter, or a click on a Session.
     Open(SessionId),
+    /// `context manager --context=<c>`, then [`Action::Open`] of the Manager it returns: a click on a Context row (B3-A6).
+    OpenManager(ContextId),
     /// `session park` (§10.5): the Lead in the chat slot goes back to a parked window. Only a step of an archive.
     Park,
     /// `session history <id>` (§10.12), then the focus on the chat slot: a click on an archived Session.
@@ -94,6 +97,7 @@ impl Action {
         let words = |w: &[&str]| w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         match self {
             Action::Open(id) => words(&["session", "open", id.as_str()]),
+            Action::OpenManager(context) => vec!["context".into(), "manager".into(), format!("--context={context}")],
             Action::Park => words(&["session", "park"]),
             Action::History(id) => words(&["session", "history", id.as_str()]),
             Action::NewPlan { context, id, title } => {
@@ -116,11 +120,12 @@ impl Action {
     }
 
     /// The step that opens the Lead the action created, from its reply (`plan new`'s `lead.session`, `session fork`'s
-    /// `session.id`); none for the other actions. A reply with no Session id is an error.
+    /// `session.id`), or the Manager `context manager` returned (`manager.session`); none for the other actions. A reply with no Session id is an error.
     pub fn open_new(&self, reply: &Value) -> Result<Option<Action>, String> {
         let (command, id) = match self {
             Action::NewPlan { .. } => ("plan new", &reply["lead"]["session"]),
             Action::Fork { .. } => ("session fork", &reply["session"]["id"]),
+            Action::OpenManager(_) => ("context manager", &reply["manager"]["session"]),
             _ => return Ok(None),
         };
         match id.as_str().and_then(|id| SessionId::parse(id).ok()) {
@@ -147,7 +152,7 @@ impl Action {
     /// The note after the command succeeded, from its reply: the reference's words.
     pub fn done(&self, reply: &Value) -> String {
         match self {
-            Action::Open(_) | Action::Park | Action::History(_) => String::new(),
+            Action::Open(_) | Action::OpenManager(_) | Action::Park | Action::History(_) => String::new(),
             Action::NewPlan { id, .. } => format!("forking {id} in window park-{id}"),
             Action::NewContext { id, .. } => format!("created {id}"),
             Action::RenameContext { .. } | Action::RenamePlan { .. } | Action::RenameSession { .. } if reply["already"] == true => {
@@ -276,6 +281,7 @@ mod tests {
         let cases = [
             (Action::Open(sid("l-ship")), vec!["session", "open", "l-ship"]),
             (Action::Close(sid("l-ship")), vec!["session", "close", "l-ship"]),
+            (Action::OpenManager(ContextId::parse("alpha").unwrap()), vec!["context", "manager", "--context=alpha"]),
             (Action::Park, vec!["session", "park"]),
             (Action::History(sid("f-idle")), vec!["session", "history", "f-idle"]),
             (archive(Subject::Context(ContextId::parse("alpha").unwrap())), vec!["context", "archive", "alpha"]),
@@ -310,6 +316,15 @@ mod tests {
         for (action, argv) in cases {
             assert_eq!(action.argv(), argv, "{action:?}");
         }
+    }
+
+    #[test]
+    fn open_manager_is_followed_by_session_open_of_the_manager_from_the_reply() {
+        let manager = Action::OpenManager(ContextId::parse("alpha").unwrap());
+        let reply = json!({"ok": true, "manager": {"session": "m-alpha", "name": "alpha-manager", "state": "idle", "pane": "%3", "window": "@2"}, "started": true});
+        assert_eq!(manager.open_new(&reply), Ok(Some(Action::Open(sid("m-alpha")))));
+        assert!(manager.open_new(&json!({"ok": true})).is_err());
+        assert!(manager.open_new(&json!({"ok": true, "manager": {"session": "Not an id"}})).is_err());
     }
 
     #[test]
