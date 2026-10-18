@@ -53,14 +53,24 @@ Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Thr
 | `cpd session run`, `cpd tui view` (internal) | they run pi or draw a ratatui view in their pane | they are the programs inside cockpit panes (§6.2), not commands an agent calls. If they fail before taking the terminal, they print the failure envelope and exit with its code |
 | `cpd tui --attach` | nothing on success: it replaces itself with `tmux attach` | the approved outline says `tui` "builds and attaches the cockpit"; without `--attach`, `cpd tui` prints JSON like every command |
 
-`cpd --version` (like `--help`) prints one JSON value too: `{"ok": true, "version": "0.0.0", "schema": 6, "store_schema": 6}`. `schema` is the newest store schema the binary supports (contract §4.5); `store_schema` is the database's current schema, `PRAGMA user_version` of `$CPD_HOME`'s database opened read-only, without migrating and without the schema check, or `null` when the database file does not exist. A binary can open the store when `store_schema` is `null` or `<= schema`. `--version` never creates, migrates or writes the database.
+`cpd --version` (like `--help`) prints one JSON value too: `{"ok": true, "version": "0.0.0", "schema": 6, "store_schema": 6, "protocol": 1}`. `schema` is the newest store schema the binary supports (contract §4.5); `store_schema` is the database's current schema, `PRAGMA user_version` of `$CPD_HOME`'s database opened read-only, without migrating and without the schema check, or `null` when the database file does not exist. A binary can open the store when `store_schema` is `null` or `<= schema`. `protocol` is an integer, **1** today, raised whenever an Event kind, an Event `data` field the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on (contract §5.2 "The protocol number"); the adapter checks it (§15.2). `--version` never creates, migrates or writes the database.
 
 ### 1.3 Selection and common refusals
 
 - **Plan:** `--plan <id>`, else `CPD_PLAN`, else `plan_required` (exit 2) (§1.3).
 - **Context:** `--context <id>`, else the Context of the selected Plan when a Plan is selected (by `--plan` or `CPD_PLAN`), else `context_required` (exit 2). New: a Lead's pane has `CPD_PLAN` set (§6.5), so it never needs to name its Context.
 - **Session:** `--session <id>`, else `CPD_SESSION`, else `session_required` (exit 2). `CPD_SESSION` is set in every pane cpd starts (§6.5).
-- **PR** (R34, §1.3): `--pr <key>`, within the selected Plan, used by `job add`, `pr open`, `pr rebase` and `pr view`. It may be omitted when the Plan has exactly one PR that is not `cancelled`, which is then selected; with two or more, `pr_required` (exit 2); with none, `pr_required` too, its message naming `cpd pr add`. A key that is not one of the Plan's PRs is `pr_not_found` (exit 4). Exceptions, stated at each command: `pr poll` has no `--pr`, it polls every open pull request of the User (§9.2, hs-d96), and `job edit --pr` changes the Job's PR, so omitting it changes nothing (§5.2). `pr add`, `pr edit`, `pr cancel` and `pr start` take the key as their positional argument.
+- **Short Session ids** (hs-a3, hs-q3): wherever a command takes a Session (`--session`, `CPD_SESSION`, and the argument of `session open`, `close`, `fork`, `park`, `rename`, `archive`, `unarchive` and `show`) the value is resolved **once, at the boundary, into a `SessionId`** (`core/src/session/resolve.rs`, `docs/implementing.md`), trying these forms in this order, the first that matches deciding:
+
+  | # | Form | Resolves to |
+  |---|---|---|
+  | 1 | the full id (a Session whose id equals it, a UUID in practice) | that Session |
+  | 2 | a **Plan id** | that Plan's Lead Session, `plans.lead_session` |
+  | 3 | **`<plan>·<prefix>`** or **`<plan>.<prefix>`** (split at the first `·` or `.`; `.` because `·` is hard to type, and Plan ids never contain either) | the Session of that Plan whose id starts with `<prefix>` (at least 1 character) |
+  | 4 | a **bare id prefix of at least 4 characters** | the Session, of any Plan or none, whose id starts with it |
+
+  Matching is exact and case-sensitive, over every Session, archived ones included (so `session unarchive` and `session history` can name them). A form that matches nothing falls through to the next; when none matches, `session_not_found` (exit 4). A form (3) or (4) that matches **more than one** Session is `session_ambiguous` (exit 3) with `details.candidates`, the matching ids, and is never resolved by guessing. A value outside §2.1's input pattern is `invalid_session_id` (exit 2); one that is valid but shorter than 4 characters and no Plan id or form (3) is `session_not_found`. Output always carries the full id.
+- **PR** (R34, §1.3): `--pr <key>`, within the selected Plan, used by `job add`, `pr open`, `pr rebase`, `pr push` and `pr view`. It may be omitted when the Plan has exactly one PR that is not `cancelled`, which is then selected; with two or more, `pr_required` (exit 2); with none, `pr_required` too, its message naming `cpd pr add`. A key that is not one of the Plan's PRs is `pr_not_found` (exit 4). Exceptions, stated at each command: `pr poll` has no `--pr`, it polls every open pull request of the User (§9.2, hs-d96), and `job edit --pr` changes the Job's PR, so omitting it changes nothing (§5.2). `pr add`, `pr edit`, `pr cancel` and `pr start` take the key as their positional argument.
 - **Job, Attempt, Escalation, Plan review:** a positional id, within the selected Plan (§2.1).
 
 Common refusals, which apply to every command and are not repeated in the sections below:
@@ -70,6 +80,8 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `usage` | 2 | unknown flag, missing argument, flag value of the wrong shape, exclusive flags together |
 | `plan_required`, `context_required`, `session_required` | 2 | the command needs one and none was selected |
 | `pr_required` | 2 | the command needs a PR, `--pr` is omitted, and the Plan does not have exactly one PR that is not `cancelled` (R34) |
+| `session_ambiguous` | 3 | a short Session id (§1.3) matches more than one Session; `details.candidates` lists their ids |
+| `push_rejected` | 3 | `pr push` found the remote branch moved (§9.9); `details.stderr` is git's |
 | `invalid_context_id`, `invalid_plan_id`, `invalid_pr_id`, `invalid_job_id`, `invalid_attempt_id`, `invalid_escalation_id`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id` | 2 | an id does not match §2.1 |
 | `config_missing`, `config_invalid` | 1 | §8.1 |
 | `store_too_new`, `migration_failed` | 1 | §4.5 |
@@ -83,6 +95,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `locked_job_tampered` | 3 | a Locked Job's fingerprint does not match (§2.3) |
 | `git_failed`, `tmux_failed`, `gh_failed` | 1 | the tool exited non-zero where the command did not expect it; `details` has `argv`, `exit` and the last 60 lines of stderr. `pr poll` also returns `gh_failed` for an empty or non-JSON body, a search response with `errors`, and a lookup with no `data` (contract §7.6, hs-d96) |
 | `gh_rate_limited` | 1 | an `error` Event code of engine E5 (contract §3.7, §5.2; `details`: `remaining`, `reset_at`), reported while it skips polls because GitHub's rate limit is nearly used; never a command's refusal |
+| `adapter_missing` | 1 | an `error` Event code of the Lead wrapper `session run` (contract §6.7 "Adapter watchdog", §10.8; `details`: `session`, `state_since`, `seconds`), appended when it restarts a pi whose adapter never came back; never a command's refusal |
 
 ### 1.4 Files written by commands
 
@@ -128,7 +141,7 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `attempt run` (internal) | E3, `job dispatch` | yes | §3.4 |
 | `ask` | Worker | yes | §3.5 |
 | `answer` | Lead | yes | §3.5 |
-| `pr open`, `pr rebase` | Lead | yes | §7.3, §7.6 |
+| `pr open`, `pr rebase`, `pr push` | Lead | yes | §7.3, §7.6 |
 | `pr add`, `edit`, `cancel` | Lead | yes | §2.3, §2.5, §3.8 |
 | `pr start` | Lead | yes | §2.5, §3.8, §7.2 |
 | `pr poll` | engine E5, a Lead | only when a value changed | §7.6 |
@@ -478,7 +491,7 @@ Effects: exactly §3.1 "The Context's grounded Lead":
 cpd plan render [--plan <id>]
 ```
 
-Effects: writes `run/<plan>/plan.md` (§1.4), nothing else. Content, kept from cpd 1 §11 `plan render` and grouped by PR (R34): title, Context and phase; a table of the PRs that are not `cancelled`, with key, repo, base and needs, and, when there are two or more, a Mermaid `graph LR` of their needs; then one section per PR, in the order of the needs graph (ties by key), headed `PR <key>`, with its repo, base and needs, a table of its Jobs that are not `cancelled` with key, title, Tier, status, needs and touches, a Mermaid `graph TD` of its Jobs' Dependencies, and one subsection per Job with its Spec (goal, context, touches, acceptance, out of scope). A Job's section is under its PR only. GitHub-flavoured Markdown only: tables, code and Mermaid, no footnotes, no raw HTML (t4). Output: the path, the plan fingerprint (§2.3: Jobs and PRs), the number of `draft` Jobs and the number of PRs that are not `cancelled`.
+Effects: writes `run/<plan>/plan.md` (§1.4), nothing else. Content, kept from cpd 1 §11 `plan render` and grouped by PR (R34): title, Context and phase; a table of the PRs that are not `cancelled`, with key, repo, base and needs, and, when there are two or more, a Mermaid `graph LR` of their needs; then one section per PR, in the order of the needs graph (ties by key), headed `PR <key>`, with its repo, base and needs, a table of its Jobs that are not `cancelled` with key, title, Tier, status, needs and touches, a Mermaid `graph TD` of its Jobs' Dependencies, and one subsection per Job with its Spec (goal, context, touches, acceptance, out of scope). A Job's section is under its PR only. In a phase after `plan`, the Jobs that are not `draft` are Locked context: the render shows them as such, and marks every `draft` Job **under review** (in its table row and its section), because a review in these phases covers exactly the drafts (§4.6; User, hs-d173, hs-d174, hs-d179). In phase `plan` every Job is a draft and nothing is marked. GitHub-flavoured Markdown only: tables, code and Mermaid, no footnotes, no raw HTML (t4). Output: the path, the plan fingerprint (§2.3: Jobs and PRs), the number of `draft` Jobs and the number of PRs that are not `cancelled`.
 
 ```json
 {"ok": true, "path": "/home/clayton/.cpd/run/pay-4521/plan.md", "fingerprint": "9f86d081…", "draft_jobs": 6, "prs": 2}
@@ -492,12 +505,12 @@ Idempotent: yes (the same PRs and Jobs render the same file). Change: cpd 1's `-
 cpd plan review [--plan <id>]
 ```
 
-Requests the User's approval of the draft Jobs (§2.2 Plan review). The Lead runs it through its tool `cpd_plan_review` or directly; either way the pi adapter opens plannotator when the `plan-review` Event arrives (§15.5), so the review opens from any caller.
+Requests the User's approval of the draft Jobs (§2.2 Plan review). In phase `plan` the review covers the whole plan, as before; in every phase after `plan` it covers **exactly the draft Jobs**: its fingerprint is over the drafts only (§2.3), and the rendered plan marks them under review and shows the Locked Jobs as context (§4.5). A Lead that planned several batches adds the later ones as drafts (`job add --draft`, §5.1) and asks for one review per batch. The Lead runs it through its tool `cpd_plan_review` or directly; either way the pi adapter opens plannotator when the `plan-review` Event arrives (§15.5), so the review opens from any caller, in whatever phase the Plan is.
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the phase is `plan` | `illegal_phase` | 3 |
-| at least one Job is `draft` | `no_draft_jobs` | 3 |
+| the phase is `plan`, or any phase after it (not `grounding`) | `illegal_phase` | 3 |
+| at least one Job is `draft` (in a phase after `plan` too: the drafts are what is reviewed) | `no_draft_jobs` | 3 |
 
 Effects:
 - **Files:** renders the plan to `run/<plan>/plan.md` and copies it to `run/<plan>/plan-<review>.md`, so a later render cannot change what the User reviews.
@@ -524,11 +537,18 @@ Records the User's decision. Called by the pi adapter with plannotator's result 
 
 Effects: **rows**, one transaction: `plan_reviews.status`, `feedback` (the file's text, or null), `decided_at`. **Event** `plan-review` `{review, fingerprint, status, feedback}`.
 
+In a phase after `plan`, an **approval** also queues the drafts the review covered (§2.2, §3.2), in the same transaction:
+- **Rows:** every `draft` Job of the Plan becomes `queued` and gets its Locked-Job fingerprint (§2.3), as an appended Job has at `job add`; `appended` stays 1. The engine schedules each as soon as it is Ready (§3.2).
+- **Event:** the same `plan-review` Event, whose `data` gains `jobs: [key]`, the Jobs it queued, in key order. No new Event kind. `plan-phase` is not appended: the phase does not change.
+- Only a **current** approval queues (*decided*: a stale one would queue drafts the User never saw): when the drafts changed since the review (`current` false), the decision is recorded and nothing is queued, `jobs` is absent and `next` asks for a new `cpd plan review`.
+- A **rejection** queues nothing: the drafts stay drafts, editable, as in phase `plan`; the Lead revises them (`job edit`, `job add --draft`, `job cancel`) and asks again.
+- In phase `plan`, `plan decide` writes only what it did above, and `plan lock` (§4.8) works as before.
+
 ```json
 {"ok": true, "review": {"id": "r3", "status": "approved", "fingerprint": "9f86d081…", "feedback": null, "decided_at": "…"}, "current": true, "next": "cpd plan lock"}
 ```
 
-`current` says whether the review's fingerprint is still the plan fingerprint; `next` is `cpd plan lock` only when approved and current. Idempotent: yes, as stated.
+`current` says whether the review's fingerprint is still the plan fingerprint; `next` is `cpd plan lock` only when approved and current in phase `plan`; in a later phase an approved and current review has no `next` and its result lists `jobs` (the Jobs queued). Idempotent: yes, as stated.
 
 ### 4.8 `plan lock`
 
@@ -576,7 +596,7 @@ Changes the Plan's title, the label the tree shows (contract §2.2). `--title` i
 |---|---|---|
 | the Plan exists | `plan_not_found` | 4 |
 
-Effects: an unchanged title: `"already": true`, nothing written. Otherwise **rows**, one transaction: `plans.title`; **Event** `plan-renamed` `{title}`. The Context store's `plan` record keeps the old title. Archived Plans can be renamed.
+Effects: an unchanged title: `"already": true`, nothing written. Otherwise **rows**, one transaction: `plans.title`; **Event** `plan-renamed` `{title}`; **tmux**: sets `@cpd_title` on the Session's pane (the Plan's Lead) when it has one (§6.2 of contract.md). The Context store's `plan` record keeps the old title. Archived Plans can be renamed.
 
 ```json
 {"ok": true, "plan": {"id": "cpd2", "context": "building-cpd", "title": "cpd in Rust, done"}}
@@ -647,7 +667,7 @@ Jobs, Specs and Dependencies (§2.2, §3.2). Kept from cpd 1 §11 "Jobs" except 
 ### 5.1 `job add`
 
 ```
-cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs <k1,k2> | --review] [--plan <id>]
+cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs <k1,k2> | --review] [--draft] [--plan <id>]
 ```
 
 | Flag | Meaning |
@@ -655,24 +675,26 @@ cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs 
 | `<key>` | Job key (§2.1). Change: positional, like every other `job` command (cpd 1 had `--key`) |
 | `--pr <key>` | the Job's PR (R34, A14), selected by §1.3's rule: required when the Plan has two or more PRs that are not `cancelled`, defaulted to the one when it has one |
 | `--needs <k1,k2>` | Dependencies, comma-separated, no duplicates (`usage`); Jobs of the same PR only (A7) |
+| `--draft` | add the Job as a `draft` in a phase after `plan` too (User, hs-d173, hs-d174, hs-d179: every planned batch is visible in the Plan view before it is approved): `status = draft`, `appended = 1`, no fingerprint; the engine never runs it, and it becomes `queued` only at the approval of a Plan review of the drafts (§4.7). In phase `plan` every Job is a draft, so `--draft` changes nothing there. Its needs may be drafts |
 | `--review` | a **review Job** (B2, contract §2.2): its Worker is a fork of the Plan's Lead, it commits nothing and writes `run/<plan>/reviews/<key>.md`. Its Dependencies are **set** to every Job of its PR that exists at that moment and is not `cancelled`, so `--needs` with `--review` is `usage` (exit 2). Jobs added later do not become its Dependencies. The Spec file is as for any Job; its `touches` is informational for a review Job (*decided*: the Lead lists `run/<plan>/reviews/<key>.md`) |
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the phase is `plan`, `dispatch` or `pr` | `illegal_phase` | 3 |
+| the phase is `plan`, `dispatch`, `pr` or `done` (`done` only with `--draft`, and then only into a PR that is not `merged` or `cancelled`: none exists until `pr add` has reopened the Plan); `grounding`: `illegal_phase` | 3 |
 | the PR is not `merged` or `cancelled` (§3.2) | `pr_ended` | 3 |
 | no Job with this key, unless its Locked fields (`pr` included) and needs are identical (then `already`) | `job_key_exists` | 3 |
 | every `needs` key is a Job of the Plan | `needs_unknown` | 3 |
 | every `needs` Job is in the same PR; `details.jobs` lists those that are not | `needs_other_pr` | 3 |
 | no `needs` Job is `cancelled` or `failed`; with `--review`, no Job of the PR is `failed` (retry or cancel it first; `details.jobs` lists them), because a Dependency on a `failed` Job is refused | `needs_unavailable` | 3 |
+| without `--draft`, in a phase after `plan`: no `needs` Job is a `draft`, and with `--review` no Job of the PR is a `draft` (`details.jobs` lists them; its message says to add this Job with `--draft`, or to approve the drafts first), because a `queued` Job could start before the draft it needs exists | `needs_unavailable` | 3 |
 
-Effects: **rows**, one transaction: `jobs` (`pr` = the PR's key; `review` = 1 with `--review`; `status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = queued`, `appended = 1`, fingerprint stored, in `dispatch` or `pr`); one `dependencies` row per need (with `--review`, per Job of the PR, as the Dependencies are set in the same transaction). **Event** `job-added` `{pr, status, appended, tier, needs, review}`. No cycle is possible: nothing needs a new Job yet. An appended Job of a `waiting` PR is not Ready until its PR starts (§3.2); one of an `open` PR reaches its pull request through `pr rebase --pr <key>` (§9.3).
+Effects: **rows**, one transaction: `jobs` (`pr` = the PR's key; `review` = 1 with `--review`; `status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = draft`, `appended = 1`, no fingerprint, with `--draft` in any later phase; `status = queued`, `appended = 1`, fingerprint stored, in a later phase without `--draft`); one `dependencies` row per need (with `--review`, per Job of the PR, as the Dependencies are set in the same transaction). **Event** `job-added` `{pr, status, appended, tier, needs, review}`. **Re-arms `all-merged`** (hs-d140): the same transaction sets the PR's `all_merged_at` to null when it was set, so engine E4 appends `all-merged` for that PR again once its Jobs are all `merged` or `cancelled` (contract §3.7); a PR that never had it sent is unchanged. No cycle is possible: nothing needs a new Job yet. An appended Job of a `waiting` PR is not Ready until its PR starts (§3.2); an appended draft is not Ready at all until its review is approved; one of an `open` PR reaches its pull request through `pr rebase --pr <key>` (§9.3), or `pr push --pr <key>` (§9.9).
 
 ```json
 {"ok": true, "job": {"key": "api-schema", "pr": "api", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false}}
 ```
 
-Idempotent: yes, as stated. `--review` is repeatable like any add: an identical call (same Locked fields, `review` included, same Dependencies) is `already`; a call after another Job was added to the PR differs in its Dependencies and is `job_key_exists`. `job edit` has no `--review` and refuses `--needs` and `--no-needs` on a review Job with `usage` (*decided*: its Dependencies are fixed by the add; to change them, cancel it and add a new one).
+Idempotent: yes, as stated (`--draft` is not a Locked field: the call that found an identical Job returns `already` whatever its status). `--review` is repeatable like any add: an identical call (same Locked fields, `review` included, same Dependencies) is `already`; a call after another Job was added to the PR differs in its Dependencies and is `job_key_exists`. `job edit` has no `--review` and refuses `--needs` and `--no-needs` on a review Job with `usage` (*decided*: its Dependencies are fixed by the add; to change them, cancel it and add a new one).
 
 ### 5.2 `job edit`
 
@@ -680,12 +702,12 @@ Idempotent: yes, as stated. `--review` is repeatable like any add: an identical 
 cpd job edit <key> [--title <text>] [--tier <T>] [--spec <file>] [--pr <key>] [--needs <k1,k2> | --no-needs] [--plan <id>]
 ```
 
-`--no-needs` removes every Dependency (cpd 1 had no way to). `--pr <key>` moves the draft Job to another PR (R34, A14); it is a field flag, so §1.3's default does not apply: without it the Job keeps its PR. Dependencies stay inside one PR (A7): a Job that changes PR keeps none of its old needs, so give `--needs` with Jobs of the new PR, or `--no-needs`, and no other Job may need it.
+A draft is editable in **every phase** (User, hs-d173, hs-d174, hs-d179), including one added after the lock, whose review may be pending: the edit changes the fingerprint of the drafts, so the pending review no longer matters (§4.6). `--needs` may name drafts. `--no-needs` removes every Dependency (cpd 1 had no way to). `--pr <key>` moves the draft Job to another PR (R34, A14); it is a field flag, so §1.3's default does not apply: without it the Job keeps its PR. Dependencies stay inside one PR (A7): a Job that changes PR keeps none of its old needs, so give `--needs` with Jobs of the new PR, or `--no-needs`, and no other Job may need it.
 
 | Precondition | Code | Exit |
 |---|---|---|
 | at least one field flag | `nothing_to_edit` | 2 |
-| the Job is `draft` | `job_locked` | 3 |
+| the Job is `draft`, in whatever phase; a Job that is not `draft` is Locked | `job_locked` | 3 |
 | `--pr` names a PR of the Plan | `pr_not_found` | 4 |
 | that PR is not `cancelled` | `pr_ended` | 3 |
 | the needs exist and are usable | `needs_unknown`, `needs_unavailable` | 3 |
@@ -711,7 +733,7 @@ cpd job cancel <key> --reason <text> [--plan <id>]
 | the Job is not `merged` | `job_merged` | 3 |
 
 Effects (§3.2 "Cancel"):
-- `draft`, `queued` or `failed`: one transaction, `status = cancelled`, `cancel_reason`, `cancel_requested_at`; **Event** `job-cancelled` `{reason}`.
+- `draft` (in any phase: a draft added after the lock is cancelled like one in phase `plan`), `queued` or `failed`: one transaction, `status = cancelled`, `cancel_reason`, `cancel_requested_at`; **Event** `job-cancelled` `{reason}`.
 - `running`: one transaction, `cancel_reason` and `cancel_requested_at` only; **Event** `job-cancel-requested` `{reason}`. Engine E2 sets the Attempt's `stop_request = cancelled`, and the driver or E2 ends it `cancelled` at its next safe point (§3.4), which appends `job-cancelled`. No tmux action by this command.
 
 ```json
@@ -937,7 +959,7 @@ Idempotent: no; §3.5 refuses `answer` on an Escalation that is not `open`, so a
 
 ## 9. `pr`
 
-A Plan's PRs (R34, §2.2 PR, §3.8) and their pull requests, through `gh` (§7.6). `gh` failures are `gh_failed` (exit 1) with its stderr tail. Every command here works on **one PR**: `pr open`, `pr rebase` and `pr view` select it by `--pr <key>` (§1.3: omitted, the Plan's one PR that is not `cancelled`); `pr add`, `pr edit`, `pr cancel` and `pr start` (§9.4–§9.7) take its key as their argument; `pr poll` has no `--pr`: it polls every open pull request of the User. `<repo>`, `<base>`, `<lead branch>` and `<lead worktree>` are the selected PR's (§7); `gh` runs with cwd = its Lead worktree, so it addresses the PR's repo.
+A Plan's PRs (R34, §2.2 PR, §3.8) and their pull requests, through `gh` (§7.6). `gh` failures are `gh_failed` (exit 1) with its stderr tail. Every command here works on **one PR**: `pr open`, `pr rebase`, `pr push` and `pr view` select it by `--pr <key>` (§1.3: omitted, the Plan's one PR that is not `cancelled`); `pr add`, `pr edit`, `pr cancel` and `pr start` (§9.4–§9.7) take its key as their argument; `pr poll` has no `--pr`: it polls every open pull request of the User. `<repo>`, `<base>`, `<lead branch>` and `<lead worktree>` are the selected PR's (§7); `gh` runs with cwd = its Lead worktree, so it addresses the PR's repo.
 
 ### 9.1 `pr open`
 
@@ -1053,7 +1075,7 @@ Idempotent: yes; a base that has not moved gives `"rebased": false`, and only th
 cpd pr add <key> --repo <path> [--base <branch>] [--needs <k1,k2>] [--plan <id>]
 ```
 
-Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `plan` it is part of the plan fingerprint (§2.3), so the Plan needs a review that includes it; in `dispatch`, `pr` and `done` it is **appended**, like `job add`, and engine E7 starts it once its needs are `merged` (at once when it has none, §3.7). In `pr` and `done` it also **moves the Plan back to `dispatch`** (hs-d87: a merged PR can hold a bug or a regression, so a Plan takes follow-up work at any time; no Plan review, D4). When the Plan has a `merged` PR on the legacy Lead Branch `cpd/<plan>`, it first **moves that branch** to `cpd/<plan>/<that PR's key>` (below).
+Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `plan` it is part of the plan fingerprint (§2.3), so the Plan needs a review that includes it; in `dispatch`, `pr` and `done` it is **appended**, like `job add`, and engine E7 starts it once its needs are `merged` (at once when it has none, §3.7). In `pr` and `done` it also **moves the Plan back to `dispatch`** (hs-d87: a merged PR can hold a bug or a regression, so a Plan takes follow-up work at any time; no Plan review of the PR itself, D4; the Jobs added to it as drafts are reviewed, §4.6). When the Plan has a `merged` PR on the legacy Lead Branch `cpd/<plan>`, it first **moves that branch** to `cpd/<plan>/<that PR's key>` (below).
 
 | Flag | Meaning |
 |---|---|
@@ -1200,6 +1222,35 @@ Output: `plan`; `pr`, the PR's `key`, `number`, `url`, `title`, `state` (`open`,
 
 Idempotent: yes (a read).
 
+### 9.9 `pr push`
+
+```
+cpd pr push [--pr <key>] [--plan <id>]
+```
+
+Publishes an `open` PR's Lead Branch with a plain push, after the Gate (hs-d139; contract §7.6). It does not rebase: use it when the branch carries a merge of the base, which `pr rebase` would drop (§9.3), or when the remote has not moved and the Jobs Merged since only need to reach the pull request.
+
+| Flag | Meaning |
+|---|---|
+| `--pr <key>` | the PR to push, selected by §1.3's rule: required when the Plan has two or more PRs that are not `cancelled`, defaulted to the one when it has one |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the PR is `open` | `illegal_transition` | 3 |
+| the per-repo lock within `lock_wait_seconds` | `lock_timeout` | 5 |
+| the Lead worktree is clean | `dirty_target` | 3 |
+| the Gate passes (§7.3, as `pr open` step 2); `details.tail` is its last 60 lines, `details.log` the full log `run/<plan>/logs/pr-<key>.pre-merge.log` | `gate_failed` | 3 |
+| the Gate ran (not killed, not `hook_invalid`); `details.tail`, `details.log` as above | `gate_error` | 1 |
+| the remote branch is not an ancestor of the Lead Branch (the remote moved); `details.stderr` is git's stderr; the Lead runs `pr rebase` | `push_rejected` | 3 |
+
+Effects: under the per-repo lock of the PR's repo, after R (§7.4): the clean check, the Gate, then `git -C <lead worktree> push --porcelain origin <lead branch>` (no `-u`, never `--force` or a lease). Any other git failure is `git_failed`. **Rows**: none; no Event.
+
+```json
+{"ok": true, "plan": "pay-4521", "pr": "api", "pushed": true, "sha": "77aa01e…"}
+```
+
+`sha` is the Lead Branch's tip. Idempotent: yes; a branch already at the remote's sha (git's porcelain status `=`, "up to date") still runs the Gate, pushes nothing and returns `"pushed": false`.
+
 ## 10. `session`
 
 Sessions (§2.2, §3.6) and their tmux panes (§6). Every tmux call is `tmux -L <tmux.socket> …` with `TMUX` and `TMUX_PANE` removed (§6.1); a failing call is `tmux_failed` (exit 1). A Session's **place** is the `place` of its latest `session-moved` Event (`chat`, `parked`, `work` or `none`), or `none` when it has none.
@@ -1231,7 +1282,7 @@ Effects: none; one read transaction.
 cpd session show [<id>]
 ```
 
-`<id>` defaults to the selected Session (`CPD_SESSION`). Output: the fields of `session list` plus `created_at`, `registered_event` (the id of its `session-registered` Event, the pi adapter's first cursor, §15.2) and, for a Plan's Lead, `open_escalations` (ids). Effects: none.
+`<id>` defaults to the selected Session (`CPD_SESSION`); it accepts the short forms of §1.3. Output: the fields of `session list` plus `created_at`, `registered_event` (the id of its `session-registered` Event, the pi adapter's first cursor, §15.2) and, for a Plan's Lead, `open_escalations` (ids). Effects: none.
 
 ```json
 {"ok": true, "session": {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "idle", "state_label": null, "place": "chat", "tmux_pane": "%12", "file": "…", "forked_from": "6f1c…", "plan_lead": true, "grounded_lead": false, "tier": "O3", "cwd": "/home/clayton/projects/cpd", "created_at": "…", "registered_event": 40117},
@@ -1250,7 +1301,7 @@ cpd session fork <source> [--plan <id>] [--name <name>] [--message-file <file>]
 
 | Flag | Meaning |
 |---|---|
-| `<source>` | the Session to fork; a Lead. This command is for **tangents the User starts** (a bug, an idea), B4; a review is a review Job (§5.1), not a fork by hand |
+| `<source>` | the Session to fork (the short forms of §1.3 are accepted); a Lead. This command is for **tangents the User starts** (a bug, an idea), B4; a review is a review Job (§5.1), not a fork by hand |
 | `--plan <id>` | the new Session's Plan; default the source's Plan. The fork is a **side session** of the Plan: the Plan's `lead_session` does not change, so Plan Events still go to the Plan's Lead only (§15.2). It is drawn in the tree **directly under its Context**, after the Context's Plans, never under the Plan or under `<source>` (B1, §13.2) |
 | `--name <name>` | default `<source name> (fork)`, cut to 80 characters |
 | `--message-file <file>` | its first message, copied to `run/<plan>/messages/<session>.md`; without it the fork starts with no message |
@@ -1279,7 +1330,7 @@ Idempotent: no; each call registers a new Session.
 cpd session open <id>
 ```
 
-Brings a Lead into the chat slot (§6.4).
+Brings a Lead into the chat slot (§6.4). `<id>` accepts the short forms of §1.3, so `cpd session open <plan id>` opens that Plan's Lead.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -1305,7 +1356,7 @@ Idempotent: yes.
 cpd session park [<id>]
 ```
 
-Moves the Lead in the chat slot back into a parked window (§6.4). `<id>` defaults to the Session in the chat slot.
+Moves the Lead in the chat slot back into a parked window (§6.4). `<id>` defaults to the Session in the chat slot; it accepts the short forms of §1.3.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -1349,9 +1400,9 @@ Idempotent: yes.
 cpd session rename <name> [--session <id>]
 ```
 
-cpd 1 §11 `session rename`, kept; the queue file becomes an Event.
+cpd 1 §11 `session rename`, kept; the queue file becomes an Event. `--session` accepts the short forms of §1.3.
 
-Effects: unchanged name: `"already": true`, nothing written. Otherwise **rows**, one transaction: `sessions.name`. **Event** `session-renamed` `{name}`, addressed to the Session (`session` set), which its adapter applies with `pi.setSessionName` (§15.4). No tmux.
+Effects: unchanged name: `"already": true`, nothing written. Otherwise **rows**, one transaction: `sessions.name`. **Event** `session-renamed` `{name}`, addressed to the Session (`session` set), which its adapter applies with `pi.setSessionName` (§15.4). **tmux**: sets `@cpd_title` on the Session's pane when it has one; nothing else.
 
 ```json
 {"ok": true, "session": "596d007f-…", "name": "cpd rust lead"}
@@ -1367,14 +1418,16 @@ cpd session run <id>
 
 The program in every Lead pane (§6.2): owns its terminal (§1.2). Steps of §6.7:
 1. If the Session's file exists, resume: `pi --session <file>` with the Lead's `[-e …]` (§6.5).
-2. Else, if `forked_from` is set, wait until the source is idle (§6.7 step 1, every 2 s, showing the waiting line), then `pi … --fork <source file> --session-id <id> -n <name> [-- <first message>]`.
-3. Else start a fresh Lead: `pi --model … --session-id <id> -n <name> -- <first message>`.
+2. Else, if `forked_from` is set, wait until the source is idle (§6.7 step 1, every 2 s, showing the waiting line), then `pi … --fork <source file> --session-id <id> -n <name> [-- @<first message file>]`.
+3. Else start a fresh Lead: `pi --model … --session-id <id> -n <name> -- @<first message file>`.
 
 Before it starts pi (steps 1–3) a Lead with a Plan gets its plannotator port (§6.5 "The Plan's plannotator port"): `PLANNOTATOR_PORT=<port>` replaces the value in the pane's environment. When the range is full the pane shows `no_port` and names the Plans that hold it, and Enter retries; pi is not started. A grounded Lead gets no port.
 
 **Reload on install** (hs-d33, hs-d38, hs-d49; §6.7 "Reload on install"). The wrapper detects a new install by the identity of its executable (§3.4 of the contract). At the Lead's next idle (state `idle`, last turn finished, session file quiet `fork_quiet_seconds`) it sends pi `SIGTERM`, waits for it to exit and `exec`s the same path with the same argv; the new `session run` takes step 1. A parked Lead reloads at once. The Lead in the chat slot waits until it is idle **and** parked, or idle for 10 minutes, so unsent typing is not lost. A `blocked` Lead is never idle. If pi has not exited 10 s after `SIGTERM`, the wrapper sends `SIGKILL`, then `exec`s. If pi exits on its own after an install, the wrapper `exec`s before any store write. Before it stops pi and `exec`s, it runs `<path> --version` and reloads only when that succeeds and `store_schema` is `null` or `<= schema`; otherwise it does not `exec`, logs once per installed file (identity) `reload skipped: <path> supports store schema N, the database is at M` on the stderr of its pane and keeps running; a later install is checked again (contract §6.7). A change of pi (the identity of `<pi agent dir>/install/current-version`, else of the resolved `pi` executable) reloads the Lead the same way; see contract §6.7 "Reload on install".
 
-The first message is the file `plan new` or `session fork` wrote (§1.4); none for a grounded Lead. While pi runs, it watches for the session file (§6.5) and records `sessions.file` once it appears (a data write, no Event). When pi exits it runs `session state stopped` if the adapter did not, prints `pi exited. Press Enter to resume <name> here.` and resumes on Enter, except after a quit by the User (below).
+**Adapter watchdog** (hs-d141; contract §6.7 "Adapter watchdog"). While pi is alive, the wrapper checks the Session's state at every poll (2 s). When the state has been `stopped` for more than **60 s** (a constant of the wrapper, not a config key; measured from the `session-state` Event that set it, so a state the wrapper itself set after a pi exit does not count while pi is not running), it restarts pi on the session file: `SIGTERM`, wait (`SIGKILL` after 10 s, as for a reload), then step 1. In one transaction before the restart it appends one `error` Event `{source: "session run", code: "adapter_missing", message, details: {session, state_since, seconds}}` with `session` = this Session (and its `plan`, `context`), which the new adapter delivers once it follows (§15.3). It applies to every Lead, whatever the place and whatever the idle rules of the reload; a `stopped` that ends (`idle`) before 60 s is the adapter's own reload and is never touched. After the restart the 60 s start again; a broken install loops once per 60 s with one `error` Event per restart (no cap: each is a visible fact, and a repaired install ends it).
+
+The first message is the file `plan new` or `session fork` wrote (§1.4), passed as `@<path>` (its absolute path); none for a grounded Lead. While pi runs, it watches for the session file (§6.5) and records `sessions.file` once it appears (a data write, no Event). When pi exits it runs `session state stopped` if the adapter did not, prints `pi exited. Press Enter to resume <name> here.` and resumes on Enter, except after a quit by the User (below).
 
 **Auto-archive on the User's quit** (hs-d91, hs-d122). pi exits with status 0 on the User's `/quit` and Ctrl+D (pi 1.2.0, `interactive-mode.js`: `shutdown()` ends in `process.exit(0)`; verified by reading it). The wrapper tells that quit from its own: when pi exits with status 0 and the wrapper did not cause the exit (it sent no reload `SIGTERM`), the User quit. Then, in this order:
 1. If the Lead is in the chat slot, `session park` it first (§10.5), so the placeholder takes the slot.
@@ -1397,7 +1450,7 @@ Idempotent: yes; a restart resumes (§6.7 step 3).
 cpd session close <id>
 ```
 
-Ends a Lead's pane: pi stops and the Session's file stays, so `session open` resumes it later (§10.4). It is the tree's `x` key (§13.2). Added by cockpit parity (amendment 14, §19). The §2 index row is added by the Job that implements the command, in the same commit.
+Ends a Lead's pane (`<id>` accepts the short forms of §1.3): pi stops and the Session's file stays, so `session open` resumes it later (§10.4). It is the tree's `x` key (§13.2). Added by cockpit parity (amendment 14, §19).
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -1421,7 +1474,7 @@ Idempotent: yes.
 cpd session archive <id>
 ```
 
-Archives one Session (contract §2.2 "Archived"). The §2 index row is added by the Job that implements the command, in the same commit.
+Archives one Session (contract §2.2 "Archived"); `<id>` accepts the short forms of §1.3.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -1447,6 +1500,8 @@ Idempotent: yes; already archived: `"already": true`, nothing written, nothing c
 ```
 cpd session unarchive <id>
 ```
+
+`<id>` accepts the short forms of §1.3.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -1524,7 +1579,9 @@ cpd events follow [--plan <id> | --context <id> | --session <id>] [--kind <kind>
 | the selected Plan, Context or Session exists | `plan_not_found`, `context_not_found`, `session_not_found` | 4 |
 | `--since` is not above the highest Event id (a cursor from another database) | `cursor_ahead` | 3 |
 
-A failure after the first line (for example `store_too_new` after an upgrade) is printed as the last line, as the failure envelope, and the exit code is its exit code (§1.2). Each line:
+**Any store error ends it** (hs-d140; contract §5.4): `store_too_new` after an upgrade, `store_busy`, `store_failed`, … is printed as the last line, as the failure envelope, and the process exits with that code's exit (§1.2); it never stays alive on a store it cannot read. The pi adapter restarts a follower that ends (§15.2).
+
+**Re-exec** (hs-d140; contract §5.4): between polls it checks its executable path with `core/src/host/exe.rs`'s `(device, inode, mtime)` check, as `session run` and `attempt run` do (hs-d55); when it changed it re-execs itself with the same argv except `--since`, set to the id of the last Event it printed (none printed: the cursor it started from), so no follower outlives an install. Each line:
 
 ```json
 {"id": 48215, "at": "2026-10-14T21:41:02.114Z", "kind": "escalation", "context": "building-cpd", "plan": "cpd2", "job": "contract-commands", "attempt": "contract-commands-a1", "session": null, "text": "Worker contract-commands-a1 asks: … Answer: cpd answer contract-commands-a1-q1 \"<answer>\"", "data": {"escalation": "contract-commands-a1-q1", "question": "…"}}
@@ -1624,17 +1681,21 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
 - **`n`** asks for a name in one inline row at the bottom (Enter starts, Esc cancels, an empty name is refused) and runs `plan new` (§4.1) in the selected Session's Context: the Plan forks the Context's grounded Lead (R15), the one deviation from cpd 1's `n`, which forked the selected session. On a Context row it says `pick the session to fork`.
 - **`x`** closes the selected Session's pane after the inline prompt `Close <label>? pi stops; the session file stays (y/N)`, preceded by `<label> is working.` when its state is `working`; only `y` closes. It runs `cpd session close <id>` (§10.9). The Session in the chat slot is refused with `switch to another session first`, also when it moved there while the prompt was open. On a Context row it does nothing. `<label>` is the Session's name.
 - **`?`** opens the legend popup. The view has no other key that opens the menu or acts on it; what a key used to do is still a command.
-- **Labels** (contract §2.2: ids are unique, immutable and need not be readable; the title is the visible label). A Context row shows the Context's **title**, a Plan row the Plan's **title** (not the Lead's name), a fork row (a side Session) the Session's **name**. (This supersedes the Context id and Lead name drawn so far.)
+- **Labels** (contract §2.2: ids are unique, immutable and need not be readable; the title is the visible label). A Context row shows the Context's **id**, a Plan Lead row the Plan's **id**, and a fork row (a side Session) `<plan id>·<first 4 characters of its Session id>` (for example `cross-repo·7f3a`); a fork with no Plan keeps the fallback, the first 8 characters of its Session id. Archived rows follow the same rule. Titles and names no longer show in the tree (User, hs-d101; this supersedes the titles rule, hs-d63).
 - **Archived rows** (hs-n38, hs-n39). Archived Contexts collapse into one `…` row at the end of the Context list; the archived Plans and Sessions of a Context collapse into one `…` row at the end of that Context's subtree. A click on the `…` row expands them and a click on it again collapses them (hs-d53); a click on a guide does nothing. Expanded, an archived Plan or fork is drawn **at the depth it would have if live**, under its own Context (or Plan), not one level deeper under the `…` row. It uses the normal tree guide characters, and the row, guides included, is coloured the palette's darker grey (`Meaning::Nothing`). There are no dotted lines and **no empty row** between the live rows and the archived ones. Expanded or not is view state only: no command, no write. Every row of an archived object carries `archived_at` from the read model (§17).
 - **Right-click menu** (**every item is a `cpd` command**: the tree only runs commands). A right click opens a menu, drawn by the view (ratatui) over the tree at the click and clamped inside the pane. ↑↓ and Enter pick an item, Esc closes it; a click picks an item; a click outside closes it. There is **no key** that opens the menu: `n`, `x` and `?` stay as above. Text is typed in the inline prompt row of the `n` key (`tui/src/tree/prompt.rs`); **Rename…** starts with the current text; **Close** asks `y/N` first, as `x` does; **Archive** runs at once, with no `y/N` (hs-d90). The items by row:
 
   | Row | Items | Command each runs |
   |---|---|---|
-  | Context | New Plan…, Rename…, Archive | `plan new` (§4.1), `context rename` (§3.7), `context archive` (§3.8) |
-  | Plan | New session…, Rename…, Archive | `session fork <the Plan's Lead>` (§10.3), `plan rename` (§4.9), `plan archive` (§4.10) |
-  | Fork (side Session) | Open, Rename…, Fork…, Close, Archive | `session open` (§10.4), `session rename` (§10.7, `--session <id>`), `session fork` (§10.3), `session close` (§10.9), `session archive` (§10.10) |
+  | Context | New Plan…, Rename…, Copy id, Archive | `plan new` (§4.1), `context rename` (§3.7), `context archive` (§3.8) |
+  | Plan | New session…, Rename…, Copy id, Archive | `session fork <the Plan's Lead>` (§10.3), `plan rename` (§4.9), `plan archive` (§4.10) |
+  | Fork (side Session) | Open, Rename…, Fork…, Copy id, Close, Archive | `session open` (§10.4), `session rename` (§10.7, `--session <id>`), `session fork` (§10.3), `session close` (§10.9), `session archive` (§10.10) |
   | empty tree area | New Context… | `context new` (§3.1) |
-  | any archived row | Rename…, Unarchive | `context rename` (§3.7), `plan rename` (§4.9) or `session rename` (§10.7), and `context unarchive` (§3.9), `plan unarchive` (§4.11) or `session unarchive` (§10.11); the rename commands accept archived objects (F4) |
+  | any archived row | Rename…, Copy id, Unarchive | `context rename` (§3.7), `plan rename` (§4.9) or `session rename` (§10.7), `Copy id` (no cpd command; below), and `context unarchive` (§3.9), `plan unarchive` (§4.11) or `session unarchive` (§10.11); the rename commands accept archived objects (F4) |
+
+  **Copy id** (hs-d102) is offered on every row that has an id: Context, Plan, fork and archived rows. It copies the row's shown id (see Labels) to the User's clipboard with `tmux -L <socket> set-buffer -w -- <id>`; tmux sends it to the outer terminal by OSC 52, which works over ssh when the terminal allows it (tmux's default `terminal-features` give `xterm*` the `clipboard` feature). Whether it reaches the User's Ghostty on the Mac is **unverified** until the User tries it. The prompt row then says `copied <id>`. It is the one item that runs no `cpd` command: it changes no Ledger state.
+
+  **Opening the new Lead** (hs-d103). After **New Plan…**, **Fork…** or **New session…** succeeds, the tree runs `session open <the new Session id>` (from the command's JSON: `plan new`'s `lead.session`, `session fork`'s Session id), then focuses the chat slot, as Open does. The commands themselves never move the chat slot.
 
   **Archive of the chat slot's Lead** (F3, hs-d90). Archive on a Session row (a Plan row's Lead, or a fork) whose Lead holds the chat slot cannot go straight to `session archive`, which refuses with `in_chat_slot` (§10.10, unchanged). The tree first frees the slot, then archives: it opens the next live Session in tree order (`session open`, then focuses the chat); if none follows, the previous one; if there is none at all, it runs `session park`, so the placeholder holds the slot. Then it runs the archive command. Only the tree does this two-step; the CLI keeps its refusal.
 
@@ -1645,7 +1706,20 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
 **`plan`.**
 - **No top row, no tabs** (User, hs-d102). The PR boxes start at the top of the pane, inside the margin below; the view draws no Context id, no tab and no separator line. Switching Leads is the tree's (Enter or a click). With no Lead in the chat slot, the message row reads ` no Lead session in the centre` (dim).
 - **Chart:** the Plan's Jobs as cards (reference `flow.rs`, ported), inside a blank margin of 2 columns and 1 row that belongs to the chart's canvas, not to the scroll window (which is the whole body, so scrolled content reaches the pane's edges; at scroll (0, 0) nothing touches them); cancelled Jobs hidden. Each Job is a pill: ` <icon> <key> ` left-aligned and `│<tier>[│a<n>] ` right-aligned (`a<n>` only from the second Attempt on), the `│` (U+2502) in the pill's style (User, Plan tui-visuals). A `running` Job's icon spins `◐◓◑◒` on the tree's clock (one frame every 250 ms, `frame = (unix ms / 250) % 4`); every other status, `merging` `⇥` included, stays static. Messages are one row at the bottom of the pane: `no Plan yet`, `loading… (first fetch)`, or the note.
-- **PR boxes** (R34, A15; contract §2.5). The chart is split into **one box per PR** that is not `cancelled`, each a bordered block (`Borders::ALL`, colour 8) holding the cards and Dependency arrows of that PR's Jobs, laid out inside it as the single chart was. The box's title, on its top border, reads ` <key> · <repo name> → <base> · <pull request> `: the PR key in bold; the repo's directory name (the last component of `prs.repo`); its base; then `#<number> <state>` once the PR has a pull request, where `<state>` is `open`, `merged`, or `closed` while the pull request is closed without a merge (`pull_request.state` is `closed`, A11), in the palette's PR state colours (reference `pr_state`), else the PR's status (`waiting`, `dispatch`) dim. The boxes are laid out **left to right** in the order of the needs graph: a box stands to the right of every box it needs (its column is one more than the highest column among its needs; boxes in the same column are stacked top to bottom by key), and each need is drawn as an arrow from the needed box's right border to the needing box's left border. A PR with no Jobs shows an empty box (` no Jobs `, dim). A Plan with one PR shows one box; a Plan with no PR yet shows the message `no PR yet: cpd pr add` (dim). Selection and Enter work on Job cards across boxes: ←→ move to the nearest card in the next column, crossing into the neighbouring box; the wheel and the scroll offsets apply to the whole row of boxes.
+- **PR boxes** (R34, A15; contract §2.5). The chart is split into **one box per PR** that is not `cancelled`, each a bordered block (`Borders::ALL`, colour 8) holding the cards and Dependency arrows of that PR's Jobs, laid out inside it as the single chart was. The box's title, on its top border, reads ` <key> · <repo name> → <base> · <pull request> `: the PR key in bold; the repo's directory name (the last component of `prs.repo`); its base; then `#<number> <state>` once the PR has a pull request, where `<state>` is `open`, `merged`, or `closed` while the pull request is closed without a merge (`pull_request.state` is `closed`, A11), in the palette's PR state colours (reference `pr_state`), else the PR's status (`waiting`, `dispatch`) dim. The boxes are laid out **top to bottom** in the order of the needs graph, one row per level: a box sits below every box it needs, at a level one more than the highest level among its needs; boxes of the same level sit side by side in that row, by key (hs-d115). Each need is an arrow from the needed box's bottom border to the needing box's top border: a `┬` on the bottom border, a line with `╭╮` corners, and a `▼` into the top border. Inside a box the Jobs still flow left to right, and a box is as wide as its own chart and title.
+
+  ```
+  ┌ schema · api → main · #31 open ──┐
+  │  ✓ types │S1 ── ✓ gql │S2       │
+  └────────────────┬─────────────────┘
+            ╭──────┴──────╮
+            ▼             ▼
+  ┌ web · web → main ──┐ ┌ docs · api → main ┐
+  │  ◐ page │S1       │ │  ○ readme │H2    │
+  └───────────────────┘ └──────────────────┘
+  ```
+
+  A PR with no Jobs shows an empty box (` no Jobs `, dim). A Plan with one PR shows one box; a Plan with no PR yet shows the message `no PR yet: cpd pr add` (dim). Selection and Enter work on Job cards across boxes: ←→ move between cards within a row of boxes, crossing into the neighbouring box, and ↑↓ also cross between rows of boxes; the wheel and the scroll offsets apply to the whole canvas.
 
 **`widgets`** (reference `dispatch`), top to bottom: one blank row at the top, the first section without a header, and the section headers (design rule above), each with one blank row above and one below, in place of the shared separators and the bold section titles, as `Layout::vertical([Length(1), Length(2), Length(1), header, Length(1), Min(1), Length(1), header, Length(1), Length(1), Length(1), header, Length(1), Length(1)])`: blank row, machine, then each section header (`──[ PRs ]──`, `──[ git ]──`, `──[ Jira ]──`) with one blank row above it and one below it, then PRs, git, Jira. The title of the pane is ` Deploy ` (contract §6.1).
 1. the machine (no header): its hostname in bold (` <hostname>`) and ` load a b c`, the first three fields of `/proc/loadavg` (on macOS `sysctl -n vm.loadavg`), re-read every 2 seconds;
@@ -1777,6 +1851,7 @@ The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays
 ### 15.2 Start-up and the cursor
 
 At `session_start`, in this order:
+0. **Protocol check** (hs-a4): `cpd --version`, whose `protocol` (§1.2) is compared with the number the adapter was built for (1 today). Equal: nothing is said. Different: one message to the Session, `cpd adapter: protocol mismatch: protocol_mismatch: cpd speaks protocol N, this adapter M; reload pi (/reload)`, with `details: {kind: "error", code: "protocol_mismatch", cpd: N, adapter: M}`, delivered like the other errors (§15.1), once per installed cpd binary (the identity of the file `cpd` resolves to), not once per follower restart. The adapter keeps following Events either way; it never types into a pane. A `--version` that fails or lacks `protocol` is an ordinary error with its code, once per error code.
 1. `cpd session show <id>`: role, Plan, Context, `plan_lead`, `registered_event`, name.
 2. `cpd session state idle --session <id>` (`stopped → idle`, §3.6); then `working` if `ctx.isIdle()` is false.
 3. **Name:** if pi's session name differs from the Session's `name`, `pi.setSessionName(name)`: a `session-renamed` missed while pi was down still applies.
@@ -1786,7 +1861,7 @@ At `session_start`, in this order:
 
 The cursor in memory advances after each line is handled, delivered or not. Only delivered messages persist it, so after a restart the Events handled without a message (`escalation-answered`, `escalation-expired`, `session-renamed`, `plan-review`) are seen again; every handler below is idempotent for that reason.
 
-**The follower ends** (EOF, exit, or a failure line): the adapter restarts it with `--since <in-memory cursor>` after 1 s, then backing off to at most 30 s. A failure line or a non-zero exit is delivered as an error message once per error code, until a line is read again. A line that is not a valid Event (§5.2 fields, a known kind) is delivered as an error message and skipped, and the cursor moves past it, so one bad line cannot stop delivery. At `session_shutdown` the follower is killed.
+**The follower ends** (EOF, exit, or a failure line): the adapter restarts it with `--since <in-memory cursor>` after 1 s, then backing off to at most 30 s. A failure line or a non-zero exit is delivered as an error message once per error code, until a line is read again. A line that is not a valid Event (§5.2 fields, a known kind) is delivered as an error message and skipped, and the cursor moves past it, so one bad line cannot stop delivery. Before it spawns the follower again, the adapter repeats the protocol check of step 0; the message is sent only when the installed binary is a different one from the last that mismatched. At `session_shutdown` the follower is killed.
 
 ### 15.3 What each Event does
 
@@ -1831,7 +1906,7 @@ Replaces cpd 1 §15's `cpd_plan_review` flow; the plannotator event API is the o
 
 **Requesting.** The Lead runs `cpd plan review`, directly or through the tool `cpd_plan_review` (no parameters; registered for Plan Leads only). The tool runs `cpd plan review --plan <CPD_PLAN>` and returns its `next` text; when the result is `"already": true` and this session has no pending entry for that review, the tool opens it itself (below), so a review that failed to open can be retried. The tool's name is kept so §6.5's `--exclude-tools` list for Workers stays right.
 
-**Opening**, on a `plan-review` Event with `status: pending` for its Plan, or from the tool:
+**Opening**, on a `plan-review` Event with `status: pending` for its Plan, **whatever the Plan's phase** (a review of the drafts of a running Plan, §4.6, opens exactly like one in phase `plan`; the adapter does not read the phase and its list of Event kinds does not change), or from the tool:
 1. Skip it when the session already has a `cpd-plan-review` entry for this review, or when it is not the Plan's latest review (`cpd plan show`, `review.id`): a replayed or superseded request.
 2. Read `run/<plan>/plan-<review>.md` (§4.6).
 3. `pi.events.emit("plannotator:request", {requestId, action: "plan-review", payload: {planContent, planFilePath}, respond})`, waiting at most 15 s for `respond`. A `handled` response with `status: pending` gives plannotator's own review id.
@@ -1842,7 +1917,7 @@ If plannotator does not answer, answers `unavailable` or `error` (for example `P
 **Deciding**, on `plannotator:review-result` `{reviewId, approved, feedback?}` for a pending entry:
 1. Write the feedback, if any, to a temporary file; run `cpd plan decide <review> --approve | --reject [--feedback-file <f>] --plan <plan>`. `review_decided` means another caller decided it: the adapter reads the decision with `cpd plan show` and continues with it.
 2. Append the entry with `status` `approved` or `rejected`; close `plan-review:<review>`.
-3. Tell the Lead with `pi.sendMessage({customType: "cpd-plan-decision", …}, {triggerTurn: true, deliverAs: "followUp"})` (cpd 1 `decisionText`, kept): `Plan review r3 was APPROVED.` plus the feedback, then `Next: cpd plan lock`, or for a rejection `Revise the plan (job edit, job add, job cancel), then call cpd_plan_review again.`; when `current` is false, it says the Jobs changed since that review and asks for a new one. The custom type differs from `cpd`, so this message never moves the cursor.
+3. Tell the Lead with `pi.sendMessage({customType: "cpd-plan-decision", …}, {triggerTurn: true, deliverAs: "followUp"})` (cpd 1 `decisionText`, kept): `Plan review r3 was APPROVED.` plus the feedback, then `Next: cpd plan lock` in phase `plan`, or in a later phase that the drafts are queued and no lock is needed (the Event's `data.jobs` lists them), or for a rejection `Revise the plan (job edit, job add, job cancel), then call cpd_plan_review again.`; when `current` is false, it says the Jobs changed since that review and asks for a new one. The custom type differs from `cpd`, so this message never moves the cursor.
 
 **Deciding elsewhere**, on a `plan-review` Event with `status` `approved` or `rejected` for a pending entry of this session: any caller other than plannotator decided the review (`cpd plan decide` from the CLI, the User or a script), and the database already holds the decision, so the adapter does **not** run `plan decide`. Otherwise the Lead would stay `blocked` and never be told. It does what "Deciding" does after its own `plan decide`:
 1. Read `cpd plan show` for `current` (and for the feedback when the Event's `data.feedback` is not a string).
@@ -1861,6 +1936,33 @@ A failure of `plan show` is an error message and leaves the entry pending. An Ev
 - `doctor` no longer checks the port (§14.1).
 
 Rejected alternatives: one shared review server (cpd would have to run plannotator's server outside pi, which plannotator does not offer to extensions), and a queue (a review waiting for another Plan's User decision could wait for hours). Unverified: that two plannotator servers in one range do not disturb each other's sessions; the adapter Job tests it.
+
+### 15.6 Reload after an install
+
+Decision hs-d141 (research: `docs/research/pi-reload.md`), superseding its first answer; contract §5.3 "Reload after an install" and §6.7. After `scripts/install-cpd.sh` the adapter reloads its own pi (`ctx.reload()`: extensions, skills, prompts, themes, context files) without the User typing and without typing into a pane. Nothing reaches the model.
+
+**Detection.** At `session_start` the adapter records the identity `(dev, ino, mtimeMs)` of its own directory (`dirname` of `pi/lib/`, from `import.meta.url`; contract §8 `pi_adapter`) with `statSync`. An `unref`'d timer polls it every 5 seconds (a constant of the adapter, not a config key) and is cleared at `session_shutdown`. The install replaces the directory as a whole (`rm -rf`, `mv`), so a new package has a new identity. `ENOENT` is the install in progress, not a change: the poll waits. A different identity of an existing directory is an install. The cpd binary is not watched (it changes first, before the directory is complete). The adapter runs only in `tui` mode (§15.1), so no other mode polls.
+
+**The command.** The adapter registers `cpd-reload-after-install`. pi runs an extension's command with a full `ExtensionCommandContext` only through `pi.sendUserMessage("/cpd-reload-after-install", {expandPromptTemplates: true})` (pi 1.2.0 `agent-session.js` `prompt()`); without the flag the text goes to the model, and pi's own `/reload` cannot be reached this way. The handler checks the guard, then `await ctx.reload()`; nothing after it uses the old `ctx`. The new instance records the new identity at its `session_start`, which is why a successful reload is not repeated.
+
+**The guard**, in this order, checked by the adapter before it triggers the command and again in the handler (the handler is authoritative; only it has `ctx`, and a User typing the command by hand is harmless):
+1. `ctx.isIdle()` (mid-turn pi's `ctx.reload()` silently does nothing yet resolves, so it cannot be left to pi);
+2. `ctx.hasPendingMessages()` is false;
+3. the adapter's own state (§15.4) is `idle`: not `working`, and not `blocked`, so no Worker question, Plan review or `herdr:blocked` signal is open (pi's `isIdle()` does not see dialogs, and a reload closes an open dialog and loses its answer);
+4. `ctx.ui.getEditorText() === ""` (no unsent typing).
+
+**Retries.** A refused reload (the guard fails at the trigger or in the handler) does nothing and is **not** handled: the recorded identity stays the old one, so the next tick checks the guard again and triggers again; there is no limit and no backoff beyond the poll interval. At most one trigger is in flight.
+
+**Logged.** Nothing is delivered to the Session and no `cpd` command is run for it. The adapter notifies with `ctx.ui.notify` only when it reloads (`cpd: adapter updated, reloading`); a refusal is silent. A reload that fails (pi's "Reload failed: …") is pi's own message.
+
+**Pre-validation** (hs-d141, the User's decision of 2026-10-18; research finding A, `docs/research/pi-reload.md` "Live verification"). A failed load leaves pi running with no adapter and no message, so the adapter proves the new package loads **before** it triggers the command. At each poll, once the identity differs from the recorded one, in this order; the first that fails ends the poll with no reload:
+1. **Stable.** The new identity `(dev, ino, mtimeMs)` is equal on **two consecutive polls** (the install has finished; the first poll that sees a new identity only remembers it). `ENOENT` clears the remembered identity.
+2. **Entry files exist:** `extension.ts` and `package.json` in the directory.
+3. **A throwaway load of the new entry succeeds,** in a child process, never in pi's own: `node` run on a script of the adapter that loads `<dir>/extension.ts` through `jiti` (the loader pi uses to load extensions, unverified for pi 1.3.0: the code Job confirms it; resolved from pi's own installation) and exits 0 when the default export is a function, non-zero with the error on stderr otherwise. The child has a timeout of 10 s (a hang is a failure) and its working directory and environment are the adapter's. **Why a child:** an in-process `import()` would run the new module's top-level code a second time inside the live pi and is cached by URL; a failure or a hang would then hit the live pi, not a process we can discard. **Why `jiti`:** a native `import()` is not pi's loader (aliases, virtual modules), so it could pass what pi rejects, or fail what pi accepts. The child loads the module only: it never calls the default export, so no listener, command or tool is registered and nothing is started.
+
+When a step fails: **no reload**; the recorded identity stays, so the check runs again at a later poll (no limit, the poll interval); and **one visible error**: `ctx.ui.notify("cpd: adapter update not loaded: <reason>", "error")` (`<reason>` is the first line of the child's stderr, or `entry files missing`), shown once per distinct reason until a poll passes (a poll that passes re-arms it). Step 1 failing is not an error: it only waits. No `cpd` command is run and nothing reaches the model; the notice is the adapter's own, not an Event. Only when all three steps pass does the guard (above) run and the command trigger. A reload that still fails after a passing pre-validation (a load that differs from the throwaway one) is caught by the wrapper's watchdog (§10.8 "Adapter watchdog").
+
+**Relation to the wrapper's restart (§10.8; contract §6.7 "Reload on install").** The in-process reload is first. The wrapper's `SIGTERM` + `exec` stays as the fallback for what it cannot do: a pi without interactive UI, a reload refused for a long time (the wrapper's own idle rules: parked, or idle for 10 minutes), and an adapter that fails to load (the reload left pi without it; pre-validation above makes that rare, and the wrapper's watchdog, §10.8, recovers it). Both implement hs-d49 with the same guard in spirit (never with unsent typing, never `blocked`); when the adapter reloads first, pi keeps its process and the wrapper's executable check still sees the new `cpd` binary and may restart pi at its own safe point, which is harmless (the new `session run` resumes the session file).
 
 ## 16. The Worker contract
 
@@ -1903,7 +2005,7 @@ Outline §8 and D4: the views take one **snapshot** with a read command, then **
 | View (`@cpd_view`) | Snapshot (the read of the command named) | Events it acts on | What it updates |
 |---|---|---|---|
 | `tree` (Context column) | `cpd context list`, `cpd session list` | `context-created`, `context-grounded`, `plan-created`, `plan-phase`, `plan-done`, `session-registered`, `session-state`, `session-moved`, `session-renamed`, `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | Contexts, their Plans' Lead Sessions, then the Sessions forked by `session fork` as siblings under their Context (B1), each with its title or name, state, place, `archived_at` (archived objects are in the read model), Job counters (Plan Leads only) and **dot** (rule below). The snapshot also reads what the dots need: each Session's state and place, its Plan's phase, the Plan's pending review, and the Plan's pull requests' state and checks. A pull request's checks can change without an Event, so the tree re-reads at least every 2 s as well as on Events, and redraws every 250 ms for the spinner |
-| `plan` (centre top) | `cpd plan show --plan <p>` for the Plan of the Lead in the chat slot (its `prs`, each PR's key, repo, base, needs, status, `pr`, `pull_request` (its `state`, for a closed pull request) and `jobs`, for the PR boxes, §13.2) | every Event with `plan = p` (the `pr-*` kinds and `pr-feedback` included: they change a box's title or add a box); `session-moved` with `place: "chat"` (the slot changed: switch Plan and take a new snapshot) | one box per PR that is not `cancelled`, left to right by needs and linked by them, each with the flowchart of its Jobs, Attempts and Tiers (R34, A15). Not drawn, so not read: open Escalations, the latest Plan review |
+| `plan` (centre top) | `cpd plan show --plan <p>` for the Plan of the Lead in the chat slot (its `prs`, each PR's key, repo, base, needs, status, `pr`, `pull_request` (its `state`, for a closed pull request) and `jobs`, for the PR boxes, §13.2) | every Event with `plan = p` (the `pr-*` kinds and `pr-feedback` included: they change a box's title or add a box); `session-moved` with `place: "chat"` (the slot changed: switch Plan and take a new snapshot) | one box per PR that is not `cancelled`, top to bottom by needs and linked by them, each with the flowchart of its Jobs, Attempts and Tiers (R34, A15). Not drawn, so not read: open Escalations, the latest Plan review |
 | `widgets` (Deploy column) | the `open` rows of `pull_requests` (contract §4.4) and the PRs of the chat slot's Plan (`prs.pull_request`; the Lead Session's place is `session-moved` `chat`); and the host's load average (`/proc/loadavg`; on macOS `sysctl -n vm.loadavg`), re-read every 2 s with no Event | any Event whose id moved, and at least every 2 s: pull requests no Plan owns append no Event (hs-d96), so the poll's changes reach the column by the timer (`pr-opened`, `pr-feedback`, `pr-merged`, `plan-phase`, `plan-done` and `session-moved` move the Event id as before) | the machine's name and load, and the open pull requests. No engine, slots, Escalations or Events |
 | `statusbar` (bottom row) | the slots and config `concurrency`: the Attempts not ended, and `concurrency` | any (re-read when the store's highest Event id moved, coalesced to 500 ms, at least every 2 s); no subprocess, no `gh` | `workers N/M` |
 | `logs` (popup of the StatusBar's `▤` button) | the latest 500 Events (the `events list` default), oldest first | every Event: it follows live while the view shows the bottom (R36) | the Event log |

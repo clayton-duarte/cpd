@@ -146,6 +146,14 @@ fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
 }
 
 impl Row {
+    /// The header of its pane: its Plan's title when it is the Plan's Lead, else its name.
+    pub fn title(&self, conn: &Connection) -> Result<String, CpdError> {
+        match (&self.plan, self.plan_lead) {
+            (Some(plan), true) => Ok(conn.query_row("SELECT title FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?),
+            _ => Ok(self.name.clone()),
+        }
+    }
+
     fn parse(raw: Raw) -> Result<Row, CpdError> {
         let id = SessionId::parse(&raw.id).map_err(|_| bad_row(format!("id {:?}", raw.id)))?;
         let field = |name: &str, value: &str| bad_row(format!("{id} has {name} {value:?}"));
@@ -221,6 +229,19 @@ pub(super) fn load(conn: &Connection, id: &SessionId) -> Result<Row, CpdError> {
     find(conn, id)?.ok_or_else(|| session_not_found(id))
 }
 
+/// Sets `@cpd_title` on the Session's live pane from its current row, if it has one.
+/// `session rename` runs it, also when the name was already the new one: a rerun
+/// repairs the header.
+pub(super) fn retitle(id: &SessionId) -> Result<(), CpdError> {
+    let mut env = Env::open()?;
+    let title = env.store.read(|conn| load(conn, id)?.title(conn))?;
+    let tmux = env.tmux();
+    for pane in tmux.list_panes()?.iter().filter(|p| !p.dead && p.cpd_session.as_ref() == Some(id)) {
+        tmux.set_pane_title(&pane.pane, &title)?;
+    }
+    Ok(())
+}
+
 /// `session list` (commands.md §10.1).
 pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
@@ -249,8 +270,9 @@ pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
 
 /// `session show` (commands.md §10.2).
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
-    let id = SessionArg { session: args.id }.require()?.clone();
+    let reference = SessionArg { session: args.id }.require()?.clone();
     let mut env = Env::open()?;
+    let id = env.resolve(&reference)?;
     let (row, escalations) = env.store.read(|conn| {
         let row = load(conn, &id)?;
         let escalations = match (&row.plan, row.plan_lead) {

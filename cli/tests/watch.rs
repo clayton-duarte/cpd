@@ -860,6 +860,28 @@ fn e4_appends_all_merged_once_when_no_job_is_left_to_run() {
 }
 
 #[test]
+fn e4_sends_all_merged_again_after_a_job_is_appended_and_merged() {
+    let fx = fx("");
+    fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
+
+    let engine = fx.start();
+    wait_until("all-merged", || fx.count("all-merged") == 1);
+    let spec = fx.env.root().join("late-spec.json");
+    fs::write(&spec, json!({"goal": "Do it.", "context": "Because.", "touches": ["late.txt"], "acceptance": ["ok"], "out_of_scope": []}).to_string()).unwrap();
+    let added = fx.env.command(CPD).args(["job", "add", "late", "--title", "Late", "--tier", "S2", "--spec"]).arg(&spec).args(["--plan", "pay"]).output().unwrap();
+    assert!(added.status.success(), "{}", String::from_utf8_lossy(&added.stdout));
+    assert!(fx.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_none());
+    // The Job merges (set directly; no Worker runs here).
+    fx.fixture("UPDATE jobs SET status = 'running' WHERE key = 'late'; UPDATE jobs SET status = 'merged', merged_sha = 'def' WHERE key = 'late';");
+    wait_until("second all-merged", || fx.count("all-merged") == 2);
+    std::thread::sleep(Duration::from_millis(2500));
+    engine.stop();
+
+    assert_eq!(fx.count("all-merged"), 2);
+    assert_eq!(fx.events("all-merged")[1].3["merged"], json!(["api", "late"]));
+}
+
+#[test]
 fn e4_waits_while_a_job_is_queued() {
     let fx = fx("concurrency = 1");
     let _busy = fx.live_driver("busy-a1");
@@ -871,6 +893,37 @@ fn e4_waits_while_a_job_is_queued() {
     engine.stop();
 
     assert_eq!(fx.count("all-merged"), 0);
+}
+
+/// A draft added after the lock (`job add --draft`, contract §3.2): E3 never
+/// starts it, and E4 does not send `all-merged` while it remains, so the PR
+/// waits for the batch. Once it is cancelled, E4 completes the PR.
+#[test]
+fn e3_never_starts_a_draft_and_e4_waits_while_one_remains() {
+    let fx = fx("");
+    // The work session as tui leaves it, so E3 could start an Attempt if it chose to.
+    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
+        assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
+    }
+    fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
+    let spec = fx.env.root().join("spec.json");
+    fs::write(&spec, r#"{"goal": "Later.", "context": "c", "touches": ["b.txt"], "acceptance": ["ok"], "out_of_scope": []}"#).unwrap();
+    let added = fx.env.cpd(&["job", "add", "later", "--title", "Later", "--tier", "S2", "--spec", spec.to_str().unwrap(), "--draft", "--plan", "pay"]).ok();
+    assert_eq!((&added["job"]["status"], &added["job"]["appended"]), (&json!("draft"), &json!(true)));
+
+    let engine = fx.start();
+    std::thread::sleep(Duration::from_millis(3500));
+    engine.stop();
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts"), 0, "a draft never gets an Attempt");
+    assert_eq!(fx.job_status("later"), "draft");
+    assert_eq!(fx.count("all-merged"), 0, "the PR waits for its draft");
+    assert!(fx.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_none());
+
+    fx.env.cpd(&["job", "cancel", "later", "--reason", "Not needed.", "--plan", "pay"]).ok();
+    let engine = fx.start();
+    wait_until("all-merged", || fx.count("all-merged") == 1);
+    engine.stop();
+    assert_eq!(fx.events("all-merged")[0].3, json!({"pr": "repo", "merged": ["api"], "cancelled": ["later"]}));
 }
 
 // ---------- E5 ----------

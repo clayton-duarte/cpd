@@ -474,7 +474,8 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
     assert_eq!(after("--session-id"), new);
     assert_eq!(after("-n"), "side");
     assert_eq!(after("--model"), "github-copilot/claude-opus-5.5:high");
-    assert_eq!(fork[fork.len() - 2..], ["--".to_owned(), "Review the tests.".to_owned()]);
+    let copied = home(&env).session_message(&PlanId::parse("pay").unwrap(), &sid(&new));
+    assert_eq!(fork[fork.len() - 2..], ["--".to_owned(), format!("@{}", copied.display())]);
 
     // pi created the fork's file: it is recorded; pi exited: the pane offers a resume.
     let fork_file = sessions.join(format!("2026_{new}.jsonl")).display().to_string();
@@ -486,6 +487,66 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
     let resume = &pi_calls_with(&env, "--session")[0];
     assert_eq!(resume[..2], ["--session".to_owned(), fork_file]);
     assert!(!resume.iter().any(|a| a == "--fork" || a == "--"), "{resume:?}");
+}
+
+/// A fake pi body that copies the file named by its last argument (`@<path>`) to `$CPD_HOME/read.copy`.
+fn copy_last_file() -> String {
+    format!("for a in \"$@\"; do last=$a; done\ncp \"${{last#@}}\" \"$CPD_HOME/read.copy\"\nexec sleep {SLEEP_SECONDS}")
+}
+
+/// Bigger than one argv element may be (MAX_ARG_STRLEN, 131072 bytes; hs-n111).
+fn big_message() -> String {
+    "A line of a first message that is longer than one argument may be.\n".repeat(140_000 / 66 + 1)
+}
+
+/// A Lead's first message goes to pi as `@<absolute path>`, so one over 128 KiB starts pi.
+#[test]
+fn a_fresh_lead_with_a_first_message_over_128_kib_starts_pi_with_its_file() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd(&env);
+    fake_pi(&env, &copy_last_file());
+    cockpit(&env);
+    let path = home(&env).lead_message(&PlanId::parse("pay").unwrap());
+    let message = big_message();
+    assert!(message.len() > 131_072);
+    fs::write(&path, &message).unwrap();
+
+    env.cpd(&["session", "open", LEAD1]).ok();
+    wait_until("lead1's pi", || !env.calls("pi").is_empty());
+    let call = &env.calls("pi")[0];
+    assert_eq!(call[call.len() - 2..], ["--".to_owned(), format!("@{}", path.display())]);
+    wait_until("the copy", || env.cpd_home().join("read.copy").exists());
+    assert!(fs::read_to_string(env.cpd_home().join("read.copy")).unwrap() == message, "pi read the whole file");
+}
+
+/// The same for a fork with `--message-file` (`run/<plan>/messages/<session>.md`).
+#[test]
+fn a_fork_with_a_message_file_over_128_kib_starts_pi_with_the_copied_file() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd(&env);
+    fake_pi(&env, &copy_last_file());
+    cockpit(&env);
+    let sessions = env.home().join(".pi/agent/sessions/g");
+    fs::create_dir_all(&sessions).unwrap();
+    fs::write(
+        sessions.join("2026_grounded.jsonl"),
+        "{\"type\":\"session\"}\n{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}\n",
+    )
+    .unwrap();
+    let message = big_message();
+    let file = env.root().join("message.md");
+    fs::write(&file, &message).unwrap();
+
+    let out = env.cpd(&["session", "fork", GROUNDED, "--plan", "pay", "--message-file", file.to_str().unwrap()]).ok();
+    let new = out["session"]["id"].as_str().unwrap().to_owned();
+    let copied = home(&env).session_message(&PlanId::parse("pay").unwrap(), &sid(&new));
+    wait_until("the fork", || !pi_calls_with(&env, "--fork").is_empty());
+    let call = &pi_calls_with(&env, "--fork")[0];
+    assert_eq!(call[call.len() - 2..], ["--".to_owned(), format!("@{}", copied.display())]);
+    wait_until("the copy", || env.cpd_home().join("read.copy").exists());
+    assert!(fs::read_to_string(env.cpd_home().join("read.copy")).unwrap() == message, "pi read the whole file");
 }
 
 // ---------- open, park ----------
@@ -511,7 +572,8 @@ fn open_and_park_keep_at_most_one_placeholder_only_in_the_slot() {
     assert_eq!(show(&env, LEAD1)["place"], "chat");
     assert_eq!(show(&env, LEAD1)["tmux_pane"], json!(lead1_pane));
     wait_until("lead1's pi", || env.calls("pi").iter().any(|c| c.contains(&LEAD1.to_owned())));
-    assert!(env.calls("pi")[0].ends_with(&["--".to_owned(), "Plan pay.".to_owned()]), "a fresh Plan Lead gets lead-message.md");
+    let message = home(&env).lead_message(&PlanId::parse("pay").unwrap());
+    assert!(env.calls("pi")[0].ends_with(&["--".to_owned(), format!("@{}", message.display())]), "a fresh Plan Lead gets lead-message.md");
 
     assert_eq!(env.cpd(&["session", "open", LEAD1]).ok()["already"], true);
 
@@ -808,6 +870,41 @@ fn rename_works_on_an_archived_session() {
     let row = show(&env, "lead2");
     assert_eq!((&row["name"], &row["archived_at"]), (&json!("Archived and renamed"), &json!("t9")));
     assert_eq!(events(&env, "session-renamed").len(), 1);
+}
+
+#[test]
+fn rename_sets_the_title_of_a_forks_live_pane_to_its_name() {
+    let env = TestEnv::new();
+    let fork = parked_fork(&env);
+    let pane = panes(&env).into_iter().find(|p| p.session == fork).unwrap().pane;
+    let title = |env: &TestEnv| {
+        let out = env.tmux(&["show", "-pqv", "-t", &pane, "@cpd_title"]);
+        String::from_utf8(out.stdout).unwrap().trim_end_matches('\n').to_owned()
+    };
+    assert_eq!(title(&env), "Lead one (fork)");
+    env.cpd(&["session", "rename", "side quest", "--session", &fork]).ok();
+    assert_eq!(title(&env), "side quest");
+
+    // A Session with no pane has nothing to set.
+    env.cpd(&["session", "rename", "Lead two renamed", "--session", "lead2"]).ok();
+}
+
+#[test]
+fn open_gives_a_new_pane_the_plans_title_for_the_plans_lead_and_the_name_for_a_fork() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd(&env);
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
+    cockpit(&env);
+    let title = |env: &TestEnv, session: &str| {
+        let pane = panes(env).into_iter().find(|p| p.session == session).unwrap().pane;
+        let out = env.tmux(&["show", "-pqv", "-t", &pane, "@cpd_title"]);
+        String::from_utf8(out.stdout).unwrap().trim_end_matches('\n').to_owned()
+    };
+    env.cpd(&["session", "open", LEAD1]).ok();
+    assert_eq!(title(&env, LEAD1), "Pay");
+    let fork = env.cpd(&["session", "fork", LEAD1, "--name", "side"]).ok()["session"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(title(&env, &fork), "side");
 }
 
 // ---------- archive ----------
@@ -1388,4 +1485,135 @@ fn a_reload_is_not_a_quit_even_though_pi_exits_0_on_sigterm() {
     assert!(pane_exists(&env, &pane));
     assert!(!session_archived(&env, "side"));
     assert_eq!(events(&env, "session-archived").len(), 0);
+}
+
+// ---------- short ids (commands.md §1.3, hs-a3) ----------
+
+const UUID_A: &str = "a1b2c3d4-0000-4000-8000-000000000001";
+const UUID_B: &str = "a1b2c3d4-0000-4000-8000-000000000002";
+const CAFE_LEAD: &str = "beef0000-0000-4000-8000-000000000003";
+const CAFE_PREFIXED: &str = "cafe0001-0000-4000-8000-000000000004";
+
+/// `setup` plus: Plan `cafe` (Lead `beef0000-…`), two Sessions of Plan `pay`
+/// whose ids share the prefix `a1b2c3d4`, and one grounded Session whose id
+/// starts with `cafe`, which is also a Plan id.
+fn setup_short(env: &TestEnv) {
+    setup(env);
+    exec_sql(
+        env,
+        &format!(
+            "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('cafe', 'ctx', 'Cafe', 'grounding', '{CAFE_LEAD}', 't');
+             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at) VALUES
+               ('{UUID_A}', 'lead', 'ctx', 'pay', 'A', '/', 'O3', 'stopped', 't', 't4'),
+               ('{UUID_B}', 'lead', 'ctx', 'pay', 'B', '/', 'O3', 'stopped', 't', 't5'),
+               ('{CAFE_LEAD}', 'lead', 'ctx', 'cafe', 'Cafe lead', '/', 'O3', 'stopped', 't', 't6'),
+               ('{CAFE_PREFIXED}', 'lead', 'ctx', NULL, 'Cafe prefixed', '/', 'O3', 'stopped', 't', 't7')"
+        ),
+    );
+}
+
+fn resolved(env: &TestEnv, value: &str) -> String {
+    env.cpd(&["session", "show", value]).ok()["session"]["id"].as_str().unwrap().to_owned()
+}
+
+#[test]
+fn every_short_form_resolves_to_the_full_id() {
+    let env = TestEnv::new();
+    setup_short(&env);
+    // 1: the full id.
+    assert_eq!(resolved(&env, UUID_A), UUID_A);
+    assert_eq!(resolved(&env, LEAD2), LEAD2);
+    // 2: a Plan id is that Plan's Lead.
+    assert_eq!(resolved(&env, "pay"), LEAD1);
+    assert_eq!(resolved(&env, "other"), LEAD2);
+    // 3: <plan>.<prefix> and <plan>·<prefix>, within the Plan.
+    assert_eq!(resolved(&env, "pay.a1b2c3d4-0000-4000-8000-000000000001"), UUID_A);
+    assert_eq!(resolved(&env, "pay·worker"), WORKER);
+    assert_eq!(resolved(&env, "pay.w"), WORKER);
+    assert_eq!(resolved(&env, "other.l"), LEAD2);
+    // 4: a bare prefix of 4 or more characters, of any Plan or none.
+    assert_eq!(resolved(&env, "work"), WORKER);
+    assert_eq!(resolved(&env, "a1b2c3d4-0000-4000-8000-000000000002"), UUID_B);
+    assert_eq!(resolved(&env, "grou"), GROUNDED);
+}
+
+#[test]
+fn a_plan_id_wins_over_a_prefix_that_is_also_a_plan_id() {
+    let env = TestEnv::new();
+    setup_short(&env);
+    // `cafe` is the id of a Plan and the 4-character prefix of another Session.
+    assert_eq!(resolved(&env, "cafe"), CAFE_LEAD);
+    // The longer prefix is not a Plan id.
+    assert_eq!(resolved(&env, "cafe0"), CAFE_PREFIXED);
+}
+
+#[test]
+fn an_ambiguous_prefix_is_refused_with_its_candidates() {
+    let env = TestEnv::new();
+    setup_short(&env);
+    for value in ["a1b2", "a1b2c3d4", "pay.a1b2"] {
+        let error = refused(&env.cpd(&["session", "show", value]), "session_ambiguous", 3);
+        assert_eq!(error["details"]["candidates"], json!([UUID_A, UUID_B]), "{value}");
+    }
+    let error = refused(&env.cpd(&["session", "show", "lead"]), "session_ambiguous", 3);
+    assert_eq!(error["details"]["candidates"], json!([LEAD1, LEAD2]));
+    // Every command that takes a Session refuses it; nothing is written.
+    refused(&env.cpd(&["session", "rename", "x", "--session", "a1b2"]), "session_ambiguous", 3);
+    refused(&env.cpd(&["session", "archive", "a1b2"]), "session_ambiguous", 3);
+    refused(&env.cpd(&["session", "open", "a1b2"]), "session_ambiguous", 3);
+    assert_eq!(events(&env, "session-renamed").len(), 0);
+}
+
+#[test]
+fn a_prefix_of_fewer_than_4_characters_is_not_accepted() {
+    let env = TestEnv::new();
+    setup_short(&env);
+    for value in ["wor", "a1b", "gro", "w"] {
+        refused(&env.cpd(&["session", "show", value]), "session_not_found", 4);
+    }
+    // A Plan id of 2 or 3 characters still resolves, and so does a scoped prefix of 1.
+    assert_eq!(resolved(&env, "pay"), LEAD1);
+    assert_eq!(resolved(&env, "pay.w"), WORKER);
+}
+
+#[test]
+fn unmatched_values_are_session_not_found_and_malformed_ones_usage_errors() {
+    let env = TestEnv::new();
+    setup_short(&env);
+    for value in ["nobody", "Lead1", "WORK", "pay.zzz", "other.worker", "nosuch.lead", "pay·zzz"] {
+        let error = refused(&env.cpd(&["session", "show", value]), "session_not_found", 4);
+        // The reference is echoed in its canonical `.` form.
+        assert_eq!(error["details"]["session"], value.replace('·', "."));
+    }
+    for value in ["pay.", "pay·", ".lead", "Pay.lead", "pay.-a", "a/b"] {
+        refused(&env.cpd(&["session", "show", value]), "invalid_session_id", 2);
+    }
+}
+
+#[test]
+fn every_session_command_accepts_the_short_forms() {
+    let env = TestEnv::new();
+    setup_short(&env);
+    fake_cpd(&env);
+    cockpit(&env);
+    // `--session` and `CPD_SESSION`.
+    let out = env.cpd(&["session", "rename", "renamed", "--session", "pay"]).ok();
+    assert_eq!(out, json!({"ok": true, "session": LEAD1, "name": "renamed"}));
+    let out = cpd_with(&env, &[("CPD_SESSION", "other")], &["session", "rename", "again"]).ok();
+    assert_eq!(out["session"], LEAD2);
+    let out = cpd_with(&env, &[("CPD_SESSION", "other")], &["session", "show"]).ok();
+    assert_eq!(out["session"]["id"], LEAD2);
+    // close (no pane: nothing to do), archive and unarchive.
+    assert_eq!(env.cpd(&["session", "close", "other"]).ok(), json!({"ok": true, "session": LEAD2, "pane": null, "already": true}));
+    let out = env.cpd(&["session", "archive", "pay.a1b2c3d4-0000-4000-8000-000000000001"]).ok();
+    assert_eq!(out["archived"], json!([{"kind": "session", "id": UUID_A}]));
+    assert_eq!(archived_at(&env, UUID_A).is_string(), true);
+    // An archived Session can be named by a bare prefix to unarchive it.
+    let out = env.cpd(&["session", "unarchive", "pay.a1b2c3d4-0000-4000-8000-000000000001"]).ok();
+    assert_eq!(out["archived"], json!([{"kind": "session", "id": UUID_A}]));
+    // open and park name a Session that does not exist.
+    refused(&env.cpd(&["session", "open", "nobody"]), "session_not_found", 4);
+    refused(&env.cpd(&["session", "fork", "nobody"]), "session_not_found", 4);
+    refused(&env.cpd(&["session", "park", "nobody"]), "session_not_found", 4);
+    refused(&env.cpd(&["session", "history", "nobody"]), "session_not_found", 4);
 }

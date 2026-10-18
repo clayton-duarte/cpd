@@ -88,7 +88,8 @@ fn write_file(path: &Path, text: &str) -> Result<(), CpdError> {
 /// `session fork` (commands.md §10.3, contract §6.7).
 pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
-    let source = env.store.read(|conn| row::load(conn, &args.source))?;
+    let source_id = env.resolve(&args.source)?;
+    let source = env.store.read(|conn| row::load(conn, &source_id))?;
     require_lead(&source)?;
     let plan = args.plan.clone().or_else(|| source.plan.clone()).ok_or_else(|| {
         CpdError::new(
@@ -139,6 +140,7 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
     let spawn = lead_spawn(&env.home, &id, &plan, Path::new(&source.cwd));
     let (window, pane) = tmux.new_window(&cockpit, &park_window(&id, Some(&plan)), &spawn)?;
     tmux.set_pane_session(&pane, &id)?;
+    tmux.set_pane_title(&pane, &name)?;
     env.store.write("session fork", |tx| moved(tx, &row, &pane, &window, "parked"))?;
     Ok(Output::success(json!({"session": {
         "id": id, "name": name, "plan": plan, "forked_from": source.id, "pane": pane.as_str(), "window": window.as_str(),
@@ -153,7 +155,8 @@ pub(super) fn slot(panes: &[Pane], cockpit: &str) -> Result<Pane, CpdError> {
 /// `session open` (commands.md §10.4, contract §6.4).
 pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
-    let lead = env.store.read(|conn| row::load(conn, &args.id))?;
+    let id = env.resolve(&args.id)?;
+    let lead = env.store.read(|conn| row::load(conn, &id))?;
     require_lead(&lead)?;
     let Some(plan) = lead.plan.clone() else {
         return Err(CpdError::new(
@@ -194,6 +197,7 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
             let spawn = lead_spawn(&env.home, &lead.id, &plan, Path::new(&lead.cwd));
             let (window, pane) = tmux.new_window(&cockpit, &park_window(&lead.id, Some(&plan)), &spawn)?;
             tmux.set_pane_session(&pane, &lead.id)?;
+            tmux.set_pane_title(&pane, &env.store.read(|conn| lead.title(conn))?)?;
             (pane, window)
         }
     };
@@ -226,7 +230,8 @@ pub(super) fn park(args: ParkArgs) -> Result<Output, CpdError> {
     let cockpit = env.config.tmux.cockpit_session.clone();
     let panes = tmux.list_panes()?;
     let slot = slot(&panes, &cockpit)?;
-    let Some(id) = args.id.or_else(|| slot.cpd_session.clone()) else {
+    let named = args.id.as_ref().map(|reference| env.resolve(reference)).transpose()?;
+    let Some(id) = named.or_else(|| slot.cpd_session.clone()) else {
         // The placeholder holds the slot: there is no Lead to park.
         return Ok(Output::success(json!({"session": null, "already": true})));
     };
@@ -326,8 +331,9 @@ pub(super) fn close(args: CloseArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let tmux = env.tmux();
     let cockpit = env.config.tmux.cockpit_session.clone();
-    let closed = close_lead(&mut env.store, &tmux, &cockpit, &args.id, "session close")?;
-    let mut out = json!({"session": args.id, "pane": closed.pane});
+    let id = env.resolve(&args.id)?;
+    let closed = close_lead(&mut env.store, &tmux, &cockpit, &id, "session close")?;
+    let mut out = json!({"session": id, "pane": closed.pane});
     if closed.already {
         out["already"] = json!(true);
     }
@@ -335,7 +341,7 @@ pub(super) fn close(args: CloseArgs) -> Result<Output, CpdError> {
 }
 
 /// The message files a Lead's `session run` reads (commands.md §1.4).
-pub(super) fn first_message(home: &CpdHome, row: &Row) -> Result<Option<String>, CpdError> {
+pub(super) fn first_message(home: &CpdHome, row: &Row) -> Result<Option<PathBuf>, CpdError> {
     let Some(plan) = &row.plan else { return Ok(None) };
     let own = home.session_message(plan, &row.id);
     let path: Option<PathBuf> = if own.exists() {
@@ -345,7 +351,11 @@ pub(super) fn first_message(home: &CpdHome, row: &Row) -> Result<Option<String>,
     } else {
         None
     };
-    path.map(|p| std::fs::read_to_string(&p).map_err(|e| unreadable(&p, e))).transpose()
+    path.map(|p| match std::fs::File::open(&p) {
+        Ok(_) => Ok(p),
+        Err(e) => Err(unreadable(&p, e)),
+    })
+    .transpose()
 }
 
 #[cfg(test)]

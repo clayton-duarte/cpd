@@ -1,5 +1,6 @@
-//! `job add` (commands.md §5.1): `[*] → draft` in phase `plan`, and an
-//! appended `queued` Job, fingerprint stored at once, in `dispatch` or `pr`.
+//! `job add` (commands.md §5.1): `[*] → draft` in phase `plan`; in a phase
+//! after it, an appended `queued` Job, fingerprint stored at once, or with
+//! `--draft` an appended `draft`, which only an approved Plan review queues.
 
 use rusqlite::Connection;
 use serde_json::{Value, json};
@@ -27,6 +28,8 @@ struct Wanted {
     needs: Vec<String>,
     /// `--review` (B2): the needs are set from the Plan, not given.
     review: bool,
+    /// `--draft`: a draft in a phase after `plan` too.
+    draft: bool,
 }
 
 enum Decision {
@@ -41,7 +44,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let spec = spec::read(&args.spec)?;
     let mut env = Env::open()?;
     env.check_tier(args.tier)?;
-    let wanted = Wanted { key: args.key, pr: args.pr, title: args.title.as_str().to_owned(), tier: args.tier.to_string(), spec, needs, review: args.review };
+    let wanted = Wanted { key: args.key, pr: args.pr, title: args.title.as_str().to_owned(), tier: args.tier.to_string(), spec, needs, review: args.review, draft: args.draft };
 
     let decision = env.store.read(|conn| decide(conn, &plan, &wanted))?;
     let (job, already) = match decision {
@@ -74,10 +77,10 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
 
 fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision, CpdError> {
     let phase = plan_phase(conn, plan)?;
-    if !matches!(phase.as_str(), "plan" | "dispatch" | "pr") {
+    if phase == "grounding" || (phase == "done" && !wanted.draft) {
         return Err(CpdError::new(
             ErrorCode::IllegalPhase,
-            format!("Plan {plan} is in phase {phase}: Jobs are added in phase plan, dispatch or pr."),
+            format!("Plan {plan} is in phase {phase}: Jobs are added from phase plan on, and in phase done only as drafts (--draft)."),
         )
         .with("plan", plan.as_str())
         .with("phase", phase));
@@ -88,6 +91,8 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
     let all = jobs::load(conn, plan)?;
     let needs = if wanted.review { review_needs(&all, plan, &pr, wanted.key.as_str())? } else { wanted.needs.clone() };
     let appended = phase != "plan";
+    // In phase `plan` every Job is a draft; after it, only with `--draft`.
+    let draft = !appended || wanted.draft;
     let mut job = Job {
         seq: 0,
         key: wanted.key.as_str().to_owned(),
@@ -99,7 +104,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
         touches: json!(wanted.spec.touches),
         acceptance: json!(wanted.spec.acceptance),
         out_of_scope: json!(wanted.spec.out_of_scope),
-        status: if appended { "queued" } else { "draft" }.to_owned(),
+        status: if draft { "draft" } else { "queued" }.to_owned(),
         appended,
         review: wanted.review,
         fingerprint: None,
@@ -125,10 +130,32 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
     check_needs_known(&all, plan, &job.needs)?;
     check_needs_same_pr(&all, plan, &job.pr, &job.needs)?;
     check_needs_available(&all, plan, &job.needs)?;
-    if appended {
+    if !draft {
+        check_needs_not_draft(&all, plan, &job)?;
         job.fingerprint = Some(locked_fingerprint(&job));
     }
     Ok(Decision::Insert(job))
+}
+
+/// A `queued` Job may not need a `draft` (§5.1): it could start before its need
+/// exists. `details.jobs` lists the drafts; for a review Job they are every
+/// draft of its PR, as its needs are.
+fn check_needs_not_draft(all: &[Job], plan: &PlanId, job: &Job) -> Result<(), CpdError> {
+    let drafts: Vec<&str> = all.iter().filter(|j| j.is_draft() && job.needs.contains(&j.key)).map(|j| j.key.as_str()).collect();
+    if drafts.is_empty() {
+        return Ok(());
+    }
+    Err(CpdError::new(
+        ErrorCode::NeedsUnavailable,
+        format!(
+            "Job {} would be queued but needs the draft {}: it could start before its need exists. Add it with --draft, or have the drafts approved first (cpd plan review).",
+            job.key,
+            drafts.join(", ")
+        ),
+    )
+    .with("plan", plan.as_str())
+    .with("job", job.key.as_str())
+    .with("jobs", drafts))
 }
 
 /// A review Job's Dependencies (B2): every Job of its PR that exists now and is
@@ -181,6 +208,8 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job, review: bool) -> Result<(),
             review,
         ],
     )?;
+    // An appended Job reopens its PR for E4: `all-merged` is sent again once the Jobs are all merged or cancelled.
+    tx.execute("UPDATE prs SET all_merged_at = NULL WHERE plan = ?1 AND key = ?2 AND all_merged_at IS NOT NULL", [plan.as_str(), job.pr.as_str()])?;
     for need in &job.needs {
         tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), job.key.as_str(), need.as_str()])?;
     }

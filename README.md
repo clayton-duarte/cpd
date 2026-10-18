@@ -14,6 +14,8 @@ cpd (Context → Plan → Dispatch) turns one human ticket into a reviewed pull 
 ```sh
 sh scripts/install-cpd.sh   # ~/.local/bin/cpd and ~/.local/share/cpd/pi
 cpd tui --attach            # open the cockpit
+sh scripts/preview-tui.sh on   # preview this checkout's cockpit views
+sh scripts/preview-tui.sh off  # back to the installed cpd
 ```
 
 State lives in `$CPD_HOME` (default `~/.cpd`).
