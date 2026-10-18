@@ -137,10 +137,13 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
             let detail = format!("The diff touches protected paths: {}.", touched.join(", "));
             return Ok((End::Failed { cause: Failure::Tampered, detail }, None, None));
         }
-        // 5. Rebase in the Attempt worktree, never in the Lead worktree.
-        if let Some(files) = rebase(&target.worktree, &old)? {
-            let detail = format!("The rebase onto the Lead Branch conflicted in: {}.", files.join(", "));
-            return Ok((End::Failed { cause: Failure::MergeConflict, detail }, None, None));
+        // 5. Rebase in the Attempt worktree, never in the Lead worktree; skipped when the
+        // Attempt already contains `old` (hs-d139), so a merge of the base survives.
+        if !contains(&target.worktree, &old)? {
+            if let Some(files) = rebase(&target.worktree, &old)? {
+                let detail = format!("The rebase onto the Lead Branch conflicted in: {}.", files.join(", "));
+                return Ok((End::Failed { cause: Failure::MergeConflict, detail }, None, None));
+            }
         }
         // 6. Removed by R19: no Gate at the merge.
         // 7. Cancel check again: the last safe point.
@@ -181,6 +184,18 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
             );
             return Ok((End::Failed { cause: Failure::CasLost, detail }, None, None));
         }
+    }
+}
+
+/// Whether `commit` is an ancestor of `worktree`'s HEAD: exit 0 yes, 1 no, else `git_failed`.
+fn contains(worktree: &std::path::Path, commit: &str) -> Result<bool, CpdError> {
+    let out = run(worktree, &["merge-base", "--is-ancestor", commit, "HEAD"])?;
+    match out.code {
+        0 => Ok(true),
+        1 => Ok(false),
+        code => Err(CpdError::new(ErrorCode::GitFailed, "git merge-base --is-ancestor failed.")
+            .with("exit", code)
+            .with("stderr", git::tail(&out.stderr, git::TAIL_LINES))),
     }
 }
 
