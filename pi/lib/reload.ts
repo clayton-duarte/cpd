@@ -147,6 +147,11 @@ export type Poll = {
   stop(): void;
   /** The command ran and did not reload (refused, or reload did nothing): the next tick may trigger again. */
   retry(): void;
+  /**
+   * Decides now instead of at the next tick, for a package that already validated and is waiting for pi to be free (pi just settled: a busy
+   * Lead's idle gaps can be shorter than the interval). Does nothing before validation, while a trigger is outstanding, or when the directory changed again.
+   */
+  nudge(): void;
 };
 
 /**
@@ -188,6 +193,23 @@ export function pollAdapter(o: PollOptions): Poll {
     reported = true;
     o.onError(e);
   };
+  /** The package in `dir` validated: tells the User of a long refusal, then triggers when the guard allows. */
+  const attempt = (via: "tick" | "nudge") => {
+    if (!longTold && now() - readySince > longMs) {
+      longTold = true;
+      log(`poll: not reloaded ${Math.round((now() - readySince) / 1000)} s after the package validated; told the User`);
+      o.onLongRefusal();
+    }
+    const why = o.refusal();
+    if (why !== undefined) {
+      note(`poll: refused: ${why}`);
+      return;
+    }
+    triggered = true;
+    log(`poll: trigger sent (/${RELOAD_COMMAND}, at a ${via})`);
+    o.trigger();
+    reported = false;
+  };
   const tick = async () => {
     if (triggered || checking) return;
     checking = true;
@@ -228,20 +250,7 @@ export function pollAdapter(o: PollOptions): Poll {
         longTold = false;
         refusedFor = undefined;
       }
-      if (!longTold && now() - readySince > longMs) {
-        longTold = true;
-        log(`poll: not reloaded ${Math.round((now() - readySince) / 1000)} s after the package validated; told the User`);
-        o.onLongRefusal();
-      }
-      const why = o.refusal();
-      if (why !== undefined) {
-        note(`poll: refused: ${why}`);
-        return;
-      }
-      triggered = true;
-      log(`poll: trigger sent (/${RELOAD_COMMAND})`);
-      o.trigger();
-      reported = false;
+      attempt("tick");
     } catch (e) {
       triggered = false;
       log(`poll: failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -265,6 +274,17 @@ export function pollAdapter(o: PollOptions): Poll {
     },
     retry: () => {
       triggered = false;
+    },
+    nudge: () => {
+      if (stopped || triggered || checking || validated === undefined) return;
+      try {
+        if (identityOf(o.dir) !== validated) return; // replaced since: the next tick starts over
+        attempt("nudge");
+      } catch (e) {
+        triggered = false;
+        log(`poll: failed: ${e instanceof Error ? e.message : String(e)}`);
+        fail(e);
+      }
     },
   };
 }

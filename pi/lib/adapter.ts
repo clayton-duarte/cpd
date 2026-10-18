@@ -56,7 +56,7 @@ type Run = {
   abort: AbortController;
   /** Watches the adapter directory for an install (§15 "Reload after an install"). */
   reload: Poll | undefined;
-  /** One line of `run/adapter/<session>.log` (§15.6 "Log"); a failed write is reported once. */
+  /** One line of `run/adapter/<session>.log` (§15.6 "Log"); a failed write is notified once per run. */
   log: (line: string) => void;
   unsubscribe: (() => void)[];
 };
@@ -201,7 +201,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
         } catch (e) {
           if (!logFailed) {
             logFailed = true;
-            deliver("reload log", e);
+            ctxOf.current?.ui.notify(`cpd: cannot write the reload log: ${toCpdError(e).message}`, "error"); // not a message: it must not start a turn
           }
         }
       },
@@ -651,6 +651,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     if (!r) return;
     if (ctx.isIdle()) r.facts.active = false;
     refresh(r);
+    r.reload?.nudge(); // a busy Lead's idle gaps can be shorter than the poll interval (§15.6 "Retries")
   });
 
   pi.on("session_info_changed", () => {
