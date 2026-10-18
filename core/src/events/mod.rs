@@ -7,6 +7,7 @@ mod append;
 mod kind;
 mod select;
 
+use std::ffi::OsString;
 use std::io::Write;
 use std::time::Duration;
 
@@ -15,6 +16,7 @@ use serde_json::json;
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
+use crate::host::exe::Exe;
 use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::{Output, to_line};
 use crate::store::{Store, VERSION};
@@ -111,6 +113,7 @@ fn list(args: ListArgs) -> Result<Output, CpdError> {
 /// what was committed when it started.
 fn follow(args: FollowArgs) -> Result<Output, CpdError> {
     let (mut store, config) = open()?;
+    let exe = Exe::current()?;
     let Scope { plan, context, session } = args.scope;
     let (selection, mut cursor, until) = store.read(|conn| {
         let selection = Selection::resolve(conn, plan, context, session, args.kinds)?;
@@ -175,8 +178,29 @@ fn follow(args: FollowArgs) -> Result<Output, CpdError> {
         if reader_gone(&stdout) {
             return Ok(Output::Owned);
         }
+        // A new install: the same follower again, after the last Event printed (hs-d140). Returns only on failure.
+        if exe.replaced() {
+            return Err(exe.exec(restart_args(std::env::args_os().skip(1), cursor)));
+        }
         std::thread::sleep(poll);
     }
+}
+
+/// `args` (without the program name) with `--since` set to `cursor`: any `--since <id>` or `--since=<id>`
+/// is dropped and `--since <cursor>` put last.
+fn restart_args(args: impl Iterator<Item = OsString>, cursor: i64) -> Vec<OsString> {
+    let mut out = Vec::new();
+    let mut args = args;
+    while let Some(arg) = args.next() {
+        if arg == "--since" {
+            args.next();
+        } else if !arg.to_string_lossy().starts_with("--since=") {
+            out.push(arg);
+        }
+    }
+    out.push("--since".into());
+    out.push(cursor.to_string().into());
+    out
 }
 
 /// Whether the reader of `stdout` is gone, checked without writing (G1): a follower with no Event to
@@ -190,5 +214,24 @@ fn reader_gone(stdout: &impl std::os::fd::AsFd) -> bool {
             .revents()
             .is_some_and(|r| r.intersects(PollFlags::POLLHUP | PollFlags::POLLERR)),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn restarted(args: &[&str], cursor: i64) -> Vec<String> {
+        restart_args(args.iter().map(OsString::from), cursor).into_iter().map(|a| a.into_string().unwrap()).collect()
+    }
+
+    #[test]
+    fn restart_sets_since_and_keeps_everything_else() {
+        assert_eq!(restarted(&["events", "follow", "--plan", "pay"], 7), ["events", "follow", "--plan", "pay", "--since", "7"]);
+        assert_eq!(
+            restarted(&["events", "follow", "--since", "0", "--kind", "error", "--until-idle"], 9),
+            ["events", "follow", "--kind", "error", "--until-idle", "--since", "9"]
+        );
+        assert_eq!(restarted(&["events", "follow", "--since=3"], 4), ["events", "follow", "--since", "4"]);
     }
 }
