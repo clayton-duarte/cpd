@@ -18,7 +18,8 @@ fn history_spawn(id: &str) -> Spawn {
 
 pub(super) fn history(args: HistoryArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
-    let session = env.store.read(|conn| row::load(conn, &args.id))?;
+    let id = env.resolve(&args.id)?;
+    let session = env.store.read(|conn| row::load(conn, &id))?;
     require_lead(&session)?;
     let file = session.file.clone().ok_or_else(|| {
         CpdError::new(ErrorCode::FileUnreadable, format!("Session {} has no session file.", session.id))
