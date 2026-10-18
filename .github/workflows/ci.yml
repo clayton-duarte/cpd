@@ -17,10 +17,15 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      SCCACHE_GHA_ENABLED: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -35,6 +40,9 @@ jobs:
         run: scripts/cargo.sh build --workspace
       - name: Test
         run: scripts/cargo.sh test --workspace
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
 
   pi:
     runs-on: ubuntu-latest
