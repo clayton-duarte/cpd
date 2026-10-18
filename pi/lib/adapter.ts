@@ -197,15 +197,6 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     );
     run = r;
 
-    // Signals of other extensions count from now on.
-    r.unsubscribe.push(
-      pi.events.on("herdr:blocked", (data) => {
-        if (!isObject(data)) return;
-        facts.signal(data.active === true, typeof data.label === "string" ? data.label : undefined);
-        refresh(r);
-      }),
-    );
-
     // 2. stopped -> idle, then working when pi is busy.
     r.reporter.want({ state: "idle" });
     await r.reporter.settled();

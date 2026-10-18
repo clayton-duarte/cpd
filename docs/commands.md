@@ -753,7 +753,7 @@ cpd job retry <key> --tier <T> [--plan <id>]
 |---|---|---|
 | the Job is `failed` (or `queued` with this `retry_tier` and no Attempt since: `already`) | `job_not_failed` | 3 |
 
-Effects: **rows**, one transaction: `status = queued`, `retry_tier = <T>`, `failed_cause = null`. **Event** `job-retried` `{tier}`. The next Attempt has `origin = retry` and this Tier, and the ladder restarts from it with a fresh cap (§9).
+Effects: **rows**, one transaction: `status = queued`, `retry_tier = <T>`, `failed_cause = null`. **Event** `job-retried` `{tier}`. The next Attempt has `origin = retry` and this Tier, and the ladder restarts from it with a fresh cap (§9; Attempts whose driver never started are never counted).
 
 ```json
 {"ok": true, "job": "worker", "status": "queued", "tier": "O4"}
@@ -776,7 +776,7 @@ Starts one Ready Job now: the same step as engine E3 (cpd 1 §11, kept).
 | the driver lock is free (§3.4 step 1) | `cas_lost` | 3 |
 | fewer than `concurrency` Attempts are not `ended` | `no_slot` | 3 |
 
-Effects (§3.4 "The driver lock"): take `locks/attempt-<plan>--<attempt>.lock`; **rows**, one transaction: `attempts` (`starting`, Tier from §9, `origin`), Job `running`; **Event** `attempt-started` `{number, tier, origin}`; then spawn `cpd attempt run <attempt> --plan <plan>` with `setsid`, fd 3 = the lock, stderr to `run/<plan>/logs/attempt-<attempt>.log`, and record `driver_pid` (a data write, no Event). If the spawn fails, the command ends the Attempt `failed` / `crashed` (`attempt-retry` or `job-failed`) and returns `spawn_failed` (exit 1).
+Effects (§3.4 "The driver lock"): take `locks/attempt-<plan>--<attempt>.lock`; **rows**, one transaction: `attempts` (`starting`, Tier from §9, `origin`), Job `running`; **Event** `attempt-started` `{number, tier, origin}`; then spawn `cpd attempt run <attempt> --plan <plan>` with `setsid`, fd 3 = the lock, stderr to `run/<plan>/logs/attempt-<attempt>.log`, and record `driver_pid` (a data write, no Event). If the spawn fails, the command ends the Attempt `failed` / `crashed` with `driver_pid` still null (`attempt-retry` at the same Tier, not counted against `retry_cap`, §3.4) and returns `spawn_failed` (exit 1).
 
 ```json
 {"ok": true, "attempt": "api-schema-a1", "tier": "S2", "origin": "ladder", "pid": 81234}
@@ -1894,8 +1894,7 @@ The adapter keeps three facts and reports the state they give (the model of `tmu
 |---|---|
 | `active` | true at pi's `agent_start`; false at `agent_settled` when `ctx.isIdle()` is true |
 | its own blocking reasons | §15.3 (`escalation:<id>`) and §15.5 (`plan-review:<review>`), each with a label |
-| other extensions' blocking signals | `pi.events.on("herdr:blocked", {active, label})`, counted: one `active: false` closes one `active: true` |
-| blocking dialogs | pi's `ui_prompt_start` and `ui_prompt_end` (pi 1.2.0 `ExtensionAPI`, emitted around every blocking extension UI prompt: `select`, `confirm`, `input`, `editor`, `custom`; depth-counted, so nested prompts give one pair) open and close **one** blocking reason labelled `dialog`. `herdr:blocked` stays. The installed `ask_user_question` package does not emit `herdr:blocked` (hs-n44), so the dialog reason is what shows it |
+| blocking dialogs | pi's `ui_prompt_start` and `ui_prompt_end` (pi 1.2.0 `ExtensionAPI`, emitted around every blocking extension UI prompt: `select`, `confirm`, `input`, `editor`, `custom`; depth-counted, so nested prompts give one pair) open and close **one** blocking reason labelled `dialog`. The dialog reason covers `ask_user_question` (hs-n47) |
 
 Reported state: `blocked` with the label of the most recently opened reason while any reason or signal is open; else `working` while `active`; else `idle`. On every change it runs `cpd session state <state> [--label <label>] --session <id>`. Calls are serialised: at most one in flight, and only the latest wanted state is sent next, so states never arrive out of order. A refused call (`illegal_transition`, for example after the engine marked the Session `stopped`) is reported as an error once and the next change is tried normally. At `session_shutdown`: `session state stopped`, waited for at most 2 s; `session run` reports it as well if pi exits without it (§10.8).
 
