@@ -1265,3 +1265,109 @@ fn install_accepts_a_build_equal_to_the_store_or_a_home_without_a_database() {
         assert!(env.home().join(".local/bin/cpd").exists());
     }
 }
+
+// ---------- scripts/restart-tmux.sh ----------
+
+/// Runs `scripts/restart-tmux.sh` in `env`, whose private tmux server runs one
+/// session `cpd`. The fake `tmux` forwards everything to the real one but
+/// answers `-V` with `installed`; the fake `cpd` answers `config`,
+/// `plan list` (one Plan `p1`), `attempt list` with `attempts` (a JSON array),
+/// `session list` (a Lead with a pane and one without), and `tui`, which
+/// records whether the server was gone by then. `tmux_env` is the script's `$TMUX`.
+fn restart(env: &TestEnv, installed: &str, attempts: &str, tmux_env: Option<&str>) -> std::process::Output {
+    let socket = env.tmux_socket();
+    let out = env.tmux(&["new-session", "-d", "-s", "cpd", "sleep", "600"]);
+    assert!(out.status.success());
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let real = std::env::split_paths(&path).map(|d| d.join("tmux")).find(|p| p.exists()).expect("tmux on PATH");
+    env.fake(
+        "tmux",
+        &format!("[ \"$1\" = -V ] && {{ echo 'tmux {installed}'; exit 0; }}\nexec '{}' \"$@\"", real.display()),
+    );
+    env.fake(
+        "cpd",
+        &format!(
+            r#"case "$1 $2" in
+"config ") echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}' ;;
+"plan list") echo '{{"ok":true,"plans":[{{"id":"p1"}}]}}' ;;
+"attempt list") echo '{{"ok":true,"attempts":{attempts}}}' ;;
+"session list") echo '{{"ok":true,"sessions":[{{"id":"lead-in-pane","role":"lead","tmux_pane":"%1"}},{{"id":"lead-away","role":"lead","tmux_pane":null}}]}}' ;;
+"tui ") tmux -L '{socket}' display -p x >/dev/null 2>&1 && echo alive > '{state}' || echo gone > '{state}' ;;
+esac"#,
+            state = env.root().join("server-at-tui").display()
+        ),
+    );
+    let mut cmd = env.command(Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("scripts/restart-tmux.sh"));
+    if let Some(value) = tmux_env {
+        cmd.env("TMUX", value);
+    }
+    cmd.output().unwrap()
+}
+
+fn server_version(env: &TestEnv) -> String {
+    String::from_utf8(env.tmux(&["display", "-p", "#{version}"]).stdout).unwrap().trim().to_owned()
+}
+
+fn killed(env: &TestEnv) -> bool {
+    env.calls("tmux").iter().any(|c| c.iter().any(|a| a == "kill-server"))
+}
+
+fn tui_ran(env: &TestEnv) -> bool {
+    env.calls("cpd").iter().any(|c| c.first().is_some_and(|a| a == "tui"))
+}
+
+#[test]
+fn restart_tmux_refuses_while_an_attempt_runs_and_touches_nothing() {
+    for status in ["starting", "running", "merging"] {
+        let env = TestEnv::new();
+        let attempts = format!(r#"[{{"id":"job-a1","status":"{status}"}}]"#);
+        let out = restart(&env, "99.0", &attempts, None);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{status}: {stderr}");
+        assert!(stderr.contains("p1/job-a1"), "{stderr}");
+        assert!(!killed(&env) && !tui_ran(&env), "{status}");
+        assert!(env.tmux(&["has-session", "-t", "=cpd"]).status.success(), "{status}");
+    }
+}
+
+#[test]
+fn restart_tmux_with_the_same_version_does_not_kill() {
+    let env = TestEnv::new();
+    // The server version first needs a server: `restart` starts it, so ask the real one up front.
+    env.tmux(&["new-session", "-d", "-s", "probe", "sleep", "600"]);
+    let version = server_version(&env);
+    env.tmux(&["kill-server"]);
+    let out = restart(&env, &version, "[]", None);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(stdout.contains("nothing to do"), "{stdout}");
+    assert!(!killed(&env) && !tui_ran(&env));
+    assert!(env.tmux(&["has-session", "-t", "=cpd"]).status.success());
+}
+
+#[test]
+fn restart_tmux_with_another_version_kills_the_server_then_runs_tui_and_prints_the_resume_lines() {
+    let env = TestEnv::new();
+    let out = restart(&env, "99.0", "[]", None);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(killed(&env));
+    assert!(tui_ran(&env));
+    // `tui` ran after the kill-server, not before.
+    assert_eq!(fs::read_to_string(env.root().join("server-at-tui")).unwrap().trim(), "gone");
+    assert!(stdout.contains("resume: cpd session open lead-in-pane"), "{stdout}");
+    assert!(!stdout.contains("lead-away"), "{stdout}");
+    assert!(stdout.contains(&format!("attach: tmux -L {} attach -t cpd", env.tmux_socket())), "{stdout}");
+}
+
+#[test]
+fn restart_tmux_refuses_inside_the_server() {
+    let env = TestEnv::new();
+    let inside = format!("/tmp/tmux-1000/{},1234,0", env.tmux_socket());
+    let out = restart(&env, "99.0", "[]", Some(&inside));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("inside the server"), "{stderr}");
+    assert!(!killed(&env) && !tui_ran(&env));
+    assert!(env.tmux(&["has-session", "-t", "=cpd"]).status.success());
+}
