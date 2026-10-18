@@ -77,10 +77,21 @@ pub fn plan(id: &str, context: &str, phase: Phase, counts: [usize; 6], mut lead:
     }
 }
 
+/// The dot of a Context, as the read model takes it: the most urgent of its live (not archived) Sessions.
+fn live_dot(plans: &[PlanNode]) -> Dot {
+    plans.iter().flat_map(|p| &p.sessions).filter(|s| !s.is_archived()).map(|s| s.dot).max().unwrap_or(Dot::Stopped)
+}
+
+/// Take every Context's dot again, after a test archived some of its Sessions.
+pub fn refresh_dots(t: &mut Tree) {
+    for c in &mut t.contexts {
+        c.dot = live_dot(&c.plans);
+    }
+}
+
 pub fn context(id: &str, plans: Vec<PlanNode>) -> ContextNode {
-    let dot = plans.iter().flat_map(|p| &p.sessions).map(|s| s.dot).max().unwrap_or(Dot::Stopped);
     ContextNode {
-        dot,
+        dot: live_dot(&plans),
         id: ContextId::parse(id).unwrap(),
         title: titled(id),
         jira: None,
@@ -140,6 +151,8 @@ pub fn archived() -> Tree {
         let mut t = sample();
         t.contexts[0].plans[0].sessions[2].archived_at = Some(WHEN.into());
         t.contexts[0].plans[2].head.archived_at = Some(WHEN.into());
+        t.contexts[0].plans[2].sessions[0].archived_at = Some(WHEN.into()); // archiving a Plan archives its Sessions
+        refresh_dots(&mut t);
         let mut zp = plan("zp", "zeta", Phase::Dispatch, [0, 0, 0, 0, 0, 2], session("l-zp", "zp lead", State::Stopped, None, Place::None), vec![session("f-zp", "zp fork", State::Stopped, None, Place::None)]);
         zp.head.archived_at = Some(WHEN.into());
         for s in &mut zp.sessions {

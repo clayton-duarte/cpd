@@ -126,11 +126,11 @@ fn sections() -> Vec<Section> {
         rows: vec![
             palette::PHASE_LEGEND
                 .iter()
-                .map(|(name, phase)| {
+                .map(|(name, _)| {
                     Line::from(vec![
-                        palette::dot(true, *phase),
+                        palette::dot_span(crate::read::Dot::White, 0, false),
                         " ".into(),
-                        palette::dot(false, *phase),
+                        palette::dot_span(crate::read::Dot::Idle, 0, false),
                         format!(" {name}").into(),
                     ])
                 })

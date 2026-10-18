@@ -500,11 +500,10 @@ fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
 fn the_tree_dots_are_listed_for_every_phase() {
     let buf = legend_buffer();
     let dots = find(&buf, "Context dots").1;
-    for (name, phase) in palette::PHASE_LEGEND {
+    // The dots have no phase colour any more; Job legend-dots rewrites this section and its test.
+    for (name, _) in palette::PHASE_LEGEND {
         let (x, y) = find_after(&buf, dots, &format!(" {name}"));
         assert_eq!((buf[(x - 3, y)].symbol(), buf[(x - 1, y)].symbol()), ("●", "○"), "{name}");
-        let want = palette::color(palette::phase(phase));
-        assert_eq!((buf[(x - 3, y)].fg, buf[(x - 1, y)].fg), (want, want), "{name}");
     }
 }
 
