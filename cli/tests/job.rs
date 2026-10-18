@@ -1197,3 +1197,18 @@ fn promote_refuses_and_writes_nothing() {
     assert_eq!(job_row(&env, "pl", "e", "status"), "draft");
 }
 
+#[test]
+fn add_to_a_pr_already_all_merged_clears_all_merged_at_and_only_that_pr() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    job_add(&env, "pl", "a", "S2", &[]).ok();
+    lock(&env, "pl");
+    fixture(&env, "UPDATE prs SET all_merged_at = 't' WHERE plan = 'pl';");
+    let marked = |env: &TestEnv| store(env).read(|c| Ok(c.query_row("SELECT all_merged_at FROM prs WHERE plan = 'pl'", [], |r| r.get::<_, Option<String>>(0))?)).unwrap();
+    // A rerun of an existing Job writes nothing.
+    job_add(&env, "pl", "a", "S2", &[]).ok();
+    assert_eq!(marked(&env), Some("t".into()));
+    job_add(&env, "pl", "late", "S2", &[]).ok();
+    assert_eq!(marked(&env), None);
+}

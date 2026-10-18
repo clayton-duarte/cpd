@@ -88,7 +88,8 @@ fn write_file(path: &Path, text: &str) -> Result<(), CpdError> {
 /// `session fork` (commands.md §10.3, contract §6.7).
 pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
-    let source = env.store.read(|conn| row::load(conn, &args.source))?;
+    let source_id = env.resolve(&args.source)?;
+    let source = env.store.read(|conn| row::load(conn, &source_id))?;
     require_lead(&source)?;
     let plan = args.plan.clone().or_else(|| source.plan.clone()).ok_or_else(|| {
         CpdError::new(
@@ -154,7 +155,8 @@ pub(super) fn slot(panes: &[Pane], cockpit: &str) -> Result<Pane, CpdError> {
 /// `session open` (commands.md §10.4, contract §6.4).
 pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
-    let lead = env.store.read(|conn| row::load(conn, &args.id))?;
+    let id = env.resolve(&args.id)?;
+    let lead = env.store.read(|conn| row::load(conn, &id))?;
     require_lead(&lead)?;
     let Some(plan) = lead.plan.clone() else {
         return Err(CpdError::new(
@@ -228,7 +230,8 @@ pub(super) fn park(args: ParkArgs) -> Result<Output, CpdError> {
     let cockpit = env.config.tmux.cockpit_session.clone();
     let panes = tmux.list_panes()?;
     let slot = slot(&panes, &cockpit)?;
-    let Some(id) = args.id.or_else(|| slot.cpd_session.clone()) else {
+    let named = args.id.as_ref().map(|reference| env.resolve(reference)).transpose()?;
+    let Some(id) = named.or_else(|| slot.cpd_session.clone()) else {
         // The placeholder holds the slot: there is no Lead to park.
         return Ok(Output::success(json!({"session": null, "already": true})));
     };
@@ -328,8 +331,9 @@ pub(super) fn close(args: CloseArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let tmux = env.tmux();
     let cockpit = env.config.tmux.cockpit_session.clone();
-    let closed = close_lead(&mut env.store, &tmux, &cockpit, &args.id, "session close")?;
-    let mut out = json!({"session": args.id, "pane": closed.pane});
+    let id = env.resolve(&args.id)?;
+    let closed = close_lead(&mut env.store, &tmux, &cockpit, &id, "session close")?;
+    let mut out = json!({"session": id, "pane": closed.pane});
     if closed.already {
         out["already"] = json!(true);
     }

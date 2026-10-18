@@ -95,3 +95,10 @@ fn pr_start_is_indexed_and_exists() {
     assert!(documented_commands().contains(&vec!["pr".to_owned(), "start".to_owned()]));
     assert!(Cli::command().find_subcommand("pr").unwrap().find_subcommand("start").is_some());
 }
+
+/// `pr push` is documented in §2 (hs-d139) and exists.
+#[test]
+fn pr_push_is_indexed_and_exists() {
+    assert!(documented_commands().contains(&vec!["pr".to_owned(), "push".to_owned()]));
+    assert!(Cli::command().find_subcommand("pr").unwrap().find_subcommand("push").is_some());
+}

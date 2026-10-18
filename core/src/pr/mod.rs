@@ -6,9 +6,10 @@
 //! - `poll`, with `feedback` and `pulls` (the table `pull_requests`, written only there): one poll of every open pull request of the User (`pr poll`);
 //! - `view`: a PR's checks, reviews and comments, read-only (`pr view`);
 //! - `rebase`: the Lead Branch onto the base, the Gate and the push (`pr rebase`);
+//! - `push`: the Gate and a plain push of the Lead Branch (`pr push`);
 //! - `gh`: the one gateway to `gh`; `status`: the PR status enums; `row`: the Plan as these commands read it.
 //!
-//! `pr open` and `pr rebase` run under the per-repo lock, after R (§7.4); each
+//! `pr open`, `pr rebase` and `pr push` run under the per-repo lock, after R (§7.4); each
 //! works on one PR of the Plan, `poll` on every open one (§7.6).
 
 mod add;
@@ -19,6 +20,7 @@ mod gh;
 mod open;
 mod poll;
 pub mod pulls;
+mod push;
 mod rebase;
 mod row;
 pub mod start;
@@ -57,6 +59,8 @@ pub enum Command {
     Poll(PollArgs),
     /// Rebase the Lead Branch onto the base and push (§9.3)
     Rebase(Args),
+    /// Gate, then push the Lead Branch as it is, without a rebase (§9.9)
+    Push(Args),
     /// Show the PR's checks, reviews and comments (§9.8)
     View(Args),
 }
@@ -141,6 +145,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Open(args) => open::open(args),
         Command::Poll(args) => poll::poll(args),
         Command::Rebase(args) => rebase::rebase(args),
+        Command::Push(args) => push::push(args),
         Command::View(args) => view::view(args),
     }
 }

@@ -800,3 +800,65 @@ fn follow_a_failure_after_the_first_line_is_the_last_line() {
     assert_eq!(follower.next(), None);
     assert_eq!(follower.exit(), 1);
 }
+
+#[test]
+fn follow_exits_on_a_store_too_new_before_it_has_printed_anything() {
+    let env = seeded();
+    let conn = Connection::open(home(&env).db()).unwrap();
+    conn.pragma_update(None, "user_version", 99).unwrap();
+    let mut follower = Follower::start(&env, &["--since", "11"]);
+    let last = follower.next().unwrap();
+    assert_eq!(last["ok"], false);
+    assert_eq!(last["error"]["code"], "store_too_new");
+    assert_eq!(follower.next(), None);
+    assert_eq!(follower.exit(), 1);
+}
+
+#[test]
+fn follow_exits_non_zero_when_the_store_becomes_newer_while_it_is_idle() {
+    let env = seeded();
+    let mut follower = Follower::start(&env, &["--plan", "pay"]);
+    std::thread::sleep(Duration::from_millis(300));
+    let conn = Connection::open(home(&env).db()).unwrap();
+    conn.pragma_update(None, "user_version", 99).unwrap();
+    let last = follower.next().unwrap();
+    assert_eq!(last["error"]["code"], "store_too_new");
+    assert_eq!(follower.exit(), 1);
+}
+
+#[test]
+fn follow_re_execs_when_its_binary_is_replaced_and_loses_and_repeats_no_event() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = seeded();
+    let mut store = open(&env);
+    // The follower runs a copy of cpd, which the test then replaces by a wrapper that records its
+    // arguments and runs the real cpd.
+    let copy = env.root().join("cpd-copy");
+    fs::copy(CPD, &copy).unwrap();
+    let mut child = env
+        .command(copy.to_str().unwrap())
+        .args(["events", "follow", "--plan", "pay", "--since", "11"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut follower = Follower { lines: Some(BufReader::new(child.stdout.take().unwrap())), child };
+    let a = append_edit(&mut store, "goal");
+    assert_eq!(follower.next().unwrap()["id"].as_i64().unwrap(), a);
+
+    let recorded = env.root().join("argv");
+    let wrapper = env.root().join("cpd-wrapper");
+    fs::write(&wrapper, format!("#!/bin/sh\necho \"$@\" > '{}'\nexec '{CPD}' \"$@\"\n", recorded.display())).unwrap();
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::rename(&wrapper, &copy).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !recorded.exists() {
+        assert!(Instant::now() < deadline, "the follower did not re-exec");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let b = append_edit(&mut store, "tier");
+    let c = append_edit(&mut store, "touches");
+    assert_eq!(follower.next().unwrap()["id"].as_i64().unwrap(), b);
+    assert_eq!(follower.next().unwrap()["id"].as_i64().unwrap(), c);
+    assert_eq!(fs::read_to_string(&recorded).unwrap().trim(), format!("events follow --plan pay --since {a}"));
+}

@@ -270,8 +270,9 @@ pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
 
 /// `session show` (commands.md §10.2).
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
-    let id = SessionArg { session: args.id }.require()?.clone();
+    let reference = SessionArg { session: args.id }.require()?.clone();
     let mut env = Env::open()?;
+    let id = env.resolve(&reference)?;
     let (row, escalations) = env.store.read(|conn| {
         let row = load(conn, &id)?;
         let escalations = match (&row.plan, row.plan_lead) {
