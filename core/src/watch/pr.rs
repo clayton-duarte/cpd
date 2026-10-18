@@ -1,8 +1,8 @@
 //! E5, PR poll (contract §3.7, §7.6; hs-d96, hs-d97): `cpd pr poll` as a
 //! subprocess (a process boundary, cpd 1 §11 step 5), `pr_poll_seconds` after the
 //! end of the previous poll, whether or not any Plan is in `deploy`: one poll covers
-//! every open pull request of the User. `cpd` is resolved on `PATH`, as in every
-//! pane cpd starts (`session::PROGRAM`).
+//! every open pull request of the User. `cpd` is the executable the engine started
+//! from (`host::exe::started_as`), as for the drivers of E3 (hs-d151): not `PATH`.
 //!
 //! The rate guard: when a poll leaves fewer than [`RATE_FLOOR`] requests of
 //! GitHub's rate limit, no poll runs until the limit resets, and one `error`
@@ -19,7 +19,7 @@ use super::engine::Engine;
 use super::report::{About, Failure, Step};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{TAIL_LINES, tail};
-use crate::session::PROGRAM;
+use crate::host::exe::started_as;
 
 /// Below this many requests remaining, E5 stops polling until the limit resets (D9).
 const RATE_FLOOR: u64 = 100;
@@ -81,8 +81,9 @@ fn rate_guard(out: &Value) -> Result<Option<(Instant, Failure)>, Failure> {
 
 /// Runs `cpd pr poll` and returns its success value, or the failure it printed.
 fn poll(engine: &Engine) -> Result<Value, Failure> {
-    let argv = [PROGRAM, "pr", "poll"];
-    let out = Command::new(argv[0])
+    let exe = started_as().map_err(|e| Failure::from(&e))?;
+    let argv = [&*exe.to_string_lossy(), "pr", "poll"];
+    let out = Command::new(exe)
         .args(&argv[1..])
         .env("CPD_HOME", engine.home.root())
         // The engine's own selection is not the subprocess's.

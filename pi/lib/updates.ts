@@ -4,6 +4,22 @@ import type { Message } from "./pi.ts";
 /** commands.md §15.7: the custom type of the message that lists new Context records. */
 export const CONTEXT_TYPE = "cpd-context";
 
+/** What the display line counts (commands.md §15.7 "Display"): the message's `details` carries these besides `records`. */
+export type ContextCounts = { records: readonly unknown[]; plan_events: number; plans_pending: number };
+
+/** The counts of a message's `details` (§15.7 "Display"); undefined when `details` lacks a count (a message of an older adapter). */
+export function countsOf(details: unknown): ContextCounts | undefined {
+  if (!isObject(details) || !Array.isArray(details.records) || !Number.isSafeInteger(details.plan_events) || !Number.isSafeInteger(details.plans_pending)) return undefined;
+  return { records: details.records, plan_events: details.plan_events as number, plans_pending: details.plans_pending as number };
+}
+
+/** §15.7 "Display": `cpd-context: 6 records · 17 Plan Events · 10 Plans pending`, with a zero part left out. */
+export function summaryLine(details: ContextCounts): string {
+  const part = (n: number, one: string, many: string) => (n === 0 ? [] : [`${n} ${n === 1 ? one : many}`]);
+  const parts = [...part(details.records.length, "record", "records"), ...part(details.plan_events, "Plan Event", "Plan Events"), ...part(details.plans_pending, "Plan pending", "Plans pending")];
+  return parts.length === 0 ? CONTEXT_TYPE : `${CONTEXT_TYPE}: ${parts.join(" · ")}`;
+}
+
 /** At most this many records are listed in one message; the rest are named by a count and a command. */
 export const MAX_LISTED = 20;
 
@@ -171,6 +187,6 @@ export function contextUpdate(context: string, sessionId: string, events: readon
     customType: CONTEXT_TYPE,
     content: lines.join("\n"),
     display: true,
-    details: { event: Math.max(0, ...events.map((e) => e.event), ...digest.map((p) => p.event)), delivered_to: sessionId, records: fresh.map((r) => r.id) },
+    details: { event: Math.max(0, ...events.map((e) => e.event), ...digest.map((p) => p.event)), delivered_to: sessionId, records: fresh.map((r) => r.id), plan_events: digest.length, plans_pending: pending?.filter((p) => p.prs.length > 0).length ?? 0 },
   };
 }

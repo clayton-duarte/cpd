@@ -825,6 +825,27 @@ fn r_before_step_8_ends_crashed_through_the_ladder() {
     assert!(worktree.exists());
 }
 
+/// G13: R removes the driver lock file of an Attempt it ended, and nothing recreates it.
+#[test]
+fn r_removes_the_driver_lock_of_the_attempt_it_ended() {
+    for merged in [true, false] {
+        let fx = fx();
+        let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
+        if merged {
+            die_after_step_8(&fx, &worktree);
+        }
+        let lock = fx.home.attempt_lock(&plan(), &attempt);
+
+        let recovered = fx.recover();
+
+        assert_eq!(recovered.len(), 1, "merged: {merged}");
+        assert_eq!(fx.attempt_row(&attempt).0, "ended");
+        assert!(!lock.exists(), "merged: {merged}: {}", lock.display());
+        assert!(fx.recover().is_empty());
+        assert!(!lock.exists(), "a second R recreated {}", lock.display());
+    }
+}
+
 #[test]
 fn r_before_step_8_with_a_cancel_request_ends_cancelled() {
     let fx = fx();

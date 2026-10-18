@@ -40,12 +40,20 @@ Within your area you may add files (`core/src/<area>/foo.rs`, declared in your `
 | `metrics` | rs-spec-metrics | none: session metrics | §2.2 Attempt |
 | `driver` | rs-driver | `attempt run` (§6.4), `job dispatch` (§5.5) | §3.4 |
 | `pr` | rs-pr | `pr …` (§9): `pr open`, `pr poll`, `pr rebase`, and since R34 `pr add`, `pr edit`, `pr cancel`, `pr start` (§9.4–§9.7); owns the tables `prs` and `pr_needs`, the PR selection by `--pr` (§1.3) and the PR start (contract §3.8, §7.2), which `plan lock` and engine E7 call | §2.5, §3.8, §7.2, §7.6 |
-| `watch` | rs-watch | `watch` (§12) | §3.7 (E1–E8) |
+| `watch` | rs-watch | `watch` (§12) | §3.7 (E1–E9) |
 | `inbox` | Plan inbox | `inbox list/show/snooze/dismiss` (§21) | §2.2 Inbox item, §3.7 (E8) |
 | `doctor` | rs-doctor | `doctor` (§14.1) | |
 | `tui` | the TUI Job | `tui`, `tui view` (§13) | §6.2 |
 
 `attempt run` and `job dispatch` are declared in `attempt` and `job` but their argument types (`driver::RunArgs`, `driver::DispatchArgs`) and functions (`driver::run`, `driver::dispatch`) are the driver's, so the driver Job never edits those modules.
+
+**The distilled Context** (contract §4.6, hs-d194) lives in the `context` area:
+- `core/src/context/inforce.rs`: the records in force as of a `seq` (D2), pure over the records read in one transaction;
+- `core/src/context/digest.rs`: the digest files (find the latest, write `.md.tmp`, rename, prune), the validation (citations, size; D3) and the one rendering of "the Context" for a first message (D6), which `plan new` (`core/src/plan/`) and `context manager` call;
+- `core/src/context/distill.rs`: `context distill` (D4, D5): the lock, `prompt.md` and `records.md`, the pi run and its timeout, the `error` Event;
+- `core/src/context/distill_prompt.md`: the distiller's prompt, embedded with `include_str!`;
+- engine E9 in `core/src/watch/distill.rs` (it only decides and spawns, as E3 does);
+- paths through new `CpdHome` methods (`context_digest_dir(context)`, `distill_lock(context)`), and `context_distill_tier` and `timeouts.distill_minutes` in `config`: shared modules and other areas, so the Job that builds it asks the Lead for those edits (the one-area rule).
 
 ## The command tree
 
@@ -85,6 +93,7 @@ Parsing:
   - `env.fake_pi(body)`, `env.fake_gh(body)`, `env.fake(name, body)`: shell scripts on `PATH` that record their argv (`env.calls("pi")`) and then run `body`.
   - `env.command(program)`: any other program in the same environment.
 - Never touch the real `~/.cpd`, the tmux server `-L cpd`, pi, or the network.
+- nextest runs every test in a process of its own, so a `static` or a lock that the tests of a file share (`TMUX_ENV` in `host.rs`, `ONE_AT_A_TIME` in `driver_reload.rs`) coordinates nothing there. Tests that must not overlap go in a test group of `.config/nextest.toml` (`max-threads = 1`, the reason beside it), as the tests of those two files do.
 - A test must fail first, for the right reason.
 
 ## Dependencies
@@ -113,7 +122,10 @@ Deliberately absent: a regex crate (the id patterns of §2.1 are checked by hand
 ## Running cargo, the Gate, installing
 
 - cargo is not on `PATH` for Workers and the Gate. Run it as `scripts/cargo.sh <args>` (`$CARGO`, else `cargo` on `PATH`, else `${CARGO_HOME:-$HOME/.cargo}/bin/cargo`; exit 127 with a message when none exists). rustfmt and clippy are not installed.
-- The Gate is `npm run verify`: the typecheck and tests of the pi adapter `pi/`, then `scripts/cargo.sh build --workspace` and `scripts/cargo.sh test --workspace`. Run it before you submit.
+- The Gate is `npm run verify`: the typecheck and tests of the pi adapter `pi/`, then `scripts/cargo.sh build --workspace` and `scripts/cargo.sh nextest run --workspace`. Run it before you submit. CI's `rust` job runs the same command.
+- The Rust tests run with [cargo-nextest](https://nexte.st), not `cargo test` (hs-d195). `cargo test` runs the test binaries one after another, and a binary spends most of its time waiting (tmux, the engine's tick, fixed sleeps), so the machine idles while one long binary ends; nextest runs the tests of every binary at once, each in a process of its own. Measured on 16 cores under other Workers' load (load average 20–38), 1307 tests: `scripts/cargo.sh test --workspace` 359 s; `scripts/cargo.sh nextest run --workspace` 105, 123 and 97 s in three runs, all green (the research, starting the binaries 4 at a time: 54 s against 175–200 s serial, `docs/research/quality-tests-build.md`, tests-build-F1). That gain is the reason for not using `cargo test`. `.config/nextest.toml` is nextest's defaults plus the test groups (see Tests). dotfiles installs it on every machine, at the version pinned in its `home/.chezmoidata/nextest.yaml`; CI installs the same version (`.github/workflows/ci.yml`, `tool: cargo-nextest@<version>`): bump both together.
+- Run one test file or one test with `scripts/cargo.sh nextest run -p cpd --test host` or `scripts/cargo.sh nextest run --workspace <part of the test's name>`.
+- nextest does not run doctests. The workspace has none (`scripts/cargo.sh test --workspace --doc` finds 0 tests in `cpd`, `cpd_core` and `cpd_tui`); when one is written, the Gate and CI also run that command.
 - `scripts/install-cpd.sh` builds `--release` and installs `~/.local/bin/cpd` and the adapter `pi/` at `~/.local/share/cpd/pi`, replacing the binary atomically; safe to rerun. After an install, running Lead wrappers and Attempt drivers reload themselves (contract §3.4, §6.7).
 
 ## Checking a pi version

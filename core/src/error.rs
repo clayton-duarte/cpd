@@ -92,6 +92,8 @@ error_codes! {
     MergeCheckFailed = "merge_check_failed" => Failure,
     PushFailed = "push_failed" => Failure,
     CleanupFailed = "cleanup_failed" => Failure,
+    DistillInvalid = "distill_invalid" => Failure,
+    DistillFailed = "distill_failed" => Failure,
 
     // Exit 2: usage error.
     Usage = "usage" => Usage,
@@ -114,6 +116,7 @@ error_codes! {
 
     // Exit 3: refused by an invariant.
     CasLost = "cas_lost" => Refused,
+    DistillRunning = "distill_running" => Refused,
     IllegalTransition = "illegal_transition" => Refused,
     LockedJobTampered = "locked_job_tampered" => Refused,
     RecordNotFound = "record_not_found" => Refused,
@@ -180,6 +183,7 @@ error_codes! {
     StoreBusy = "store_busy" => Timeout,
     LockTimeout = "lock_timeout" => Timeout,
     AskTimeout = "ask_timeout" => Timeout,
+    CancelTimeout = "cancel_timeout" => Timeout,
 
     // R34, Plans across repos (contract §1.2, §3.8). `branch_exists` is above.
     PrStartFailed = "pr_start_failed" => Failure,
@@ -338,6 +342,7 @@ mod tests {
             (ErrorCode::StoreBusy, 5),
             (ErrorCode::LockTimeout, 5),
             (ErrorCode::AskTimeout, 5),
+            (ErrorCode::CancelTimeout, 5),
             (ErrorCode::PrStartFailed, 1),
             (ErrorCode::PrRequired, 2),
             (ErrorCode::InvalidPrId, 2),

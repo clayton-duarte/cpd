@@ -8,7 +8,9 @@ mod common;
 use std::fs;
 use std::path::PathBuf;
 
+use clap::Parser;
 use common::{Run, TestEnv};
+use cpd::cli::Cli;
 use cpd_core::home::CpdHome;
 use cpd_core::ids::PlanId;
 use cpd_core::plan::plan_fingerprint;
@@ -260,7 +262,15 @@ fn add_to_an_archived_plan_is_archived() {
         let fx = fx(phase);
         fx.sql("UPDATE plans SET archived_at = '2001-01-01T00:00:00.000Z' WHERE id = 'pay-1'");
         let writes = fx.writes();
-        fx.refused(&fx.add("api", &fx.pay, &[]), "archived", 3, writes);
+        let error = fx.refused(&fx.add("api", &fx.pay, &[]), "archived", 3, writes);
+        // `details.next` is a command to run: it parses with the real command tree, and names this Plan.
+        let next = error["details"]["next"].as_str().unwrap();
+        let words: Vec<&str> = next.split_whitespace().collect();
+        assert_eq!(words[0], "cpd", "{next}");
+        if let Err(e) = Cli::try_parse_from(&words) {
+            panic!("`{next}` does not parse: {e}");
+        }
+        assert_eq!(next, "cpd plan unarchive --plan pay-1");
     }
 }
 
