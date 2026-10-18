@@ -662,7 +662,7 @@ mod tests {
 
     /// The canonical hash two stores that applied `ADD_A` and `ADD_B` share, pinned: a change of the
     /// canonical form (§4.3) or of the SQLite bundle changes it.
-    const A_AND_B_HASH: &str = "28c7632ec8b4aeeff452b75e26f28ba696405e460eefe9a02c476a3bbec90651";
+    const A_AND_B_HASH: &str = "2b1d6de2cbce63bf53e5fff12969ba46e2eb559692efc2ac96107953bb9991f3";
 
     /// A store opened with `named` as its migrations, whose pinned hash is the one of a fresh store with them.
     pub(super) fn open_named(home: &CpdHome, named: &[Named]) -> Result<Store, CpdError> {
@@ -750,10 +750,10 @@ mod tests {
         sql: "-- cpd-migration: additive\nINSERT INTO event_kinds (name) VALUES ('plan-pinned');\n",
         run: None,
     };
-    const KIND_MESSAGE: Named = Named {
-        name: "20300202T0000-kind-session-message",
+    const KIND_POKED: Named = Named {
+        name: "20300202T0000-kind-session-poked",
         compat: schema::Compat::Additive,
-        sql: "-- cpd-migration: additive\nINSERT INTO event_kinds (name) VALUES ('session-message');\n",
+        sql: "-- cpd-migration: additive\nINSERT INTO event_kinds (name) VALUES ('session-poked');\n",
         run: None,
     };
 
@@ -794,38 +794,38 @@ mod tests {
         let err = insert_event(&mut store, "plan-pinned").unwrap_err();
         assert!(format!("{err:?}").contains("FOREIGN KEY"), "{err:?}");
         drop(store);
-        // One `INSERT INTO event_kinds`, applied by a later binary, makes it insertable.
+        // One insert into `event_kinds`, applied by a later binary, makes it insertable.
         let mut store = open_named(&home, &with_kind_tables(&[KIND_PINNED])).unwrap();
         assert!(kinds(&mut store).contains(&"plan-pinned".to_owned()));
         insert_event(&mut store, "plan-pinned").unwrap();
         // The other kinds stay, and a kind nobody added stays refused.
         insert_event(&mut store, "plan-created").unwrap();
-        assert!(insert_event(&mut store, "session-message").is_err());
+        assert!(insert_event(&mut store, "session-poked").is_err());
         assert_eq!(applied(&mut store).last().map(|a| a.0.as_str()), Some(KIND_PINNED.name));
     }
 
     #[test]
     fn two_plans_kind_migrations_applied_in_either_order_keep_both_kinds() {
         let (_a, pinned_first) = tmp_home();
-        let (_b, message_first) = tmp_home();
+        let (_b, poked_first) = tmp_home();
         let (_c, together) = tmp_home();
-        let both = with_kind_tables(&[KIND_PINNED, KIND_MESSAGE]);
+        let both = with_kind_tables(&[KIND_PINNED, KIND_POKED]);
         drop(open_named(&pinned_first, &with_kind_tables(&[KIND_PINNED])).unwrap());
         let mut a = open_named(&pinned_first, &both).unwrap();
-        drop(open_named(&message_first, &with_kind_tables(&[KIND_MESSAGE])).unwrap());
-        // `KIND_PINNED` sorts before the applied `KIND_MESSAGE`: allowed, it is additive (O2).
-        let mut b = open_named(&message_first, &both).unwrap();
+        drop(open_named(&poked_first, &with_kind_tables(&[KIND_POKED])).unwrap());
+        // `KIND_PINNED` sorts before the applied `KIND_POKED`: allowed, it is additive (O2).
+        let mut b = open_named(&poked_first, &both).unwrap();
         let mut c = open_named(&together, &both).unwrap();
 
-        let order = |s: &mut Store| applied(s).into_iter().skip(7).map(|a| a.0).collect::<Vec<_>>();
-        assert_eq!(order(&mut a), [KIND_PINNED.name, KIND_MESSAGE.name]);
-        assert_eq!(order(&mut b), [KIND_MESSAGE.name, KIND_PINNED.name]);
+        let order = |s: &mut Store| applied(s).into_iter().skip(LEGACY.len() + 1).map(|a| a.0).collect::<Vec<_>>();
+        assert_eq!(order(&mut a), [KIND_PINNED.name, KIND_POKED.name]);
+        assert_eq!(order(&mut b), [KIND_POKED.name, KIND_PINNED.name]);
         let expected = kinds(&mut c);
-        assert!(["plan-pinned", "session-message"].iter().all(|k| expected.contains(&(*k).to_owned())));
+        assert!(["plan-pinned", "session-poked"].iter().all(|k| expected.contains(&(*k).to_owned())));
         for store in [&mut a, &mut b] {
             assert_eq!(kinds(store), expected, "neither migration dropped the other's kind");
             insert_event(store, "plan-pinned").unwrap();
-            insert_event(store, "session-message").unwrap();
+            insert_event(store, "session-poked").unwrap();
             assert_eq!(store.schema_mismatch(), None);
         }
         let canonical = |s: &mut Store| s.read(|c| Ok(canonical_hash(c)?)).unwrap();

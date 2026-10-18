@@ -104,7 +104,7 @@ pub const VERSION: i64 = 1000;
 /// The canonical schema hash (§4.3) of a fresh store that applied exactly this
 /// binary's migrations, pinned here and never recorded in the store (hs-d178
 /// D2). A test asserts it and prints the new value when it is stale.
-pub const SCHEMA_HASH: &str = "439d8be71dfce266912ab02dbb73ac491b53f4f61e68e6a33d7a118c5170bf55";
+pub const SCHEMA_HASH: &str = "0ac0cb4b8519cf2d9fa2ac715240c02bec63b572b9347bb6a69bb4c28c3735a1";
 
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.
@@ -1517,10 +1517,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = home(&dir);
         version_10(&home);
-        assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[9]);
+        assert_eq!(legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[9]);
         let mut store = Store::open(&home, 5000).unwrap();
         assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 11);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
         assert_eq!(
             rows(&mut store, "SELECT number, checks, mergeable, merge_state FROM pull_requests ORDER BY id"),
             vec![serde_json::json!([7, "failed", "unknown", "unknown"]), serde_json::json!([9, "passed", "unknown", "unknown"])]
@@ -1738,7 +1738,8 @@ mod tests {
             "INSERT INTO txns (id, at, command, pid, session, cwd) VALUES (1, '{T}', 'migrate', 1, NULL, '/')"
         ))
         .unwrap();
-        migration_7(&conn, &home).unwrap();
+        migration_7(&conn).unwrap();
+        import_old_stores(&conn, &home.old_contexts_dir()).unwrap();
         let counts = |conn: &Connection| -> (i64, i64, i64) {
             let n = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
             (n("SELECT count(*) FROM contexts"), n("SELECT count(*) FROM context_records"), n("SELECT count(*) FROM events"))
@@ -1790,7 +1791,7 @@ mod tests {
         let conn = Connection::open(home.db()).unwrap();
         let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
         assert_eq!(version, 6);
-        assert_eq!(schema_hash(&conn).unwrap(), SCHEMA_HASHES[5]);
+        assert_eq!(legacy_schema_hash(&conn).unwrap(), SCHEMA_HASHES[5]);
         let contexts: i64 = conn.query_row("SELECT count(*) FROM contexts", [], |r| r.get(0)).unwrap();
         assert_eq!(contexts, 1);
         assert!(home.old_contexts_dir().join("good/context.json").is_file(), "no folder is moved");
@@ -2142,17 +2143,17 @@ mod tests {
                 .enumerate()
                 .map(|(i, m)| (m.name.to_owned(), m.compat.as_str().to_owned(), (LEGACY.len() + i) as i64 + 1, 0));
             let expected: Vec<(String, String, i64, i64)> = legacy.chain(named).collect();
-            assert_eq!(recorded, expected, "version {n}: six converted rows, one per legacy migration, then the named ones as not converted");
+            assert_eq!(recorded, expected, "version {n}: one converted row per legacy migration, then the named ones as not converted");
             assert_eq!(canonical_hash(&conn).unwrap(), fresh, "version {n}: the canonical hash of a fresh store");
 
             if n == LEGACY.len() {
-                // Nothing but the runner's own rows changes in a store that is already at 6.
+                // Nothing but the runner's own rows changes in a store that is already at the last legacy version.
                 let mut rows_after = dump(&conn);
                 let mut rows_before = rows_before;
                 assert_eq!(rows_after.remove("schema_migrations").map(|r| r.len()), Some(LEGACY.len() + NAMED.len()));
                 // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
-                assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(41));
-                assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(5));
+                assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(42));
+                assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
                 assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(16));
                 let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
                 assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
@@ -2598,7 +2599,7 @@ mod tests {
             .unwrap();
         assert_eq!(count(&mut store, "SELECT max(id) FROM events"), 42);
         assert!(sqlite_message(&refused(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'session-mail', 'x', '{}')"))
-            .contains("CHECK constraint failed"));
+            .contains("FOREIGN KEY constraint failed"), "after kind-tables a kind is a foreign key");
         // The indexes and guards are back.
         assert_eq!(count(&mut store, "SELECT count(*) FROM sqlite_schema WHERE tbl_name = 'events' AND type = 'index' AND name LIKE 'events_%'"), 3);
         assert_eq!(sqlite_message(&refused(&mut store, "UPDATE events SET text = 'x'")), "append_only: events");

@@ -388,10 +388,10 @@ mod tests {
 
     #[test]
     fn refuse_user_version_is_the_same_rows() {
-        for version in [0, 1, 6, 1000] {
+        for version in [0, 1, 6, 7, 11, 1000] {
             refuse_user_version(version).unwrap();
         }
-        for version in [7, 999, 1001] {
+        for version in [12, 999, 1001] {
             assert_eq!(refuse_user_version(version).unwrap_err().code(), ErrorCode::StoreTooNew);
         }
     }
@@ -423,7 +423,7 @@ mod tests {
             .unwrap();
         let title: String = store.read(|c| Ok(c.query_row("SELECT title FROM contexts WHERE id = 'ctx'", [], |r| r.get(0))?)).unwrap();
         assert_eq!(title, "Ctx");
-        assert_eq!(applied(&mut store).len(), 8, "nothing was applied: the store has the six legacy and a and b");
+        assert_eq!(applied(&mut store).len(), LEGACY.len() + 2, "nothing was applied: the store has the legacy set and a and b");
     }
 
     #[test]
@@ -438,7 +438,7 @@ mod tests {
         assert_eq!(verdict.pending_names(), [ADD_A.name]);
         let mut store = open_named(&home, &branch).unwrap();
         assert_eq!(store.schema_mismatch(), None, "the generated triggers cover the unknown column, the subset check the known one");
-        let names: Vec<String> = applied(&mut store).into_iter().skip(6).map(|(n, ..)| n).collect();
+        let names: Vec<String> = applied(&mut store).into_iter().skip(LEGACY.len()).map(|(n, ..)| n).collect();
         assert_eq!(names, [ADD_B.name, ADD_A.name]);
     }
 
