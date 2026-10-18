@@ -2,7 +2,8 @@
 //! from cpd 1 §11 `plan render`, grouped by PR): title, Context and phase; a
 //! table of the PRs not `cancelled` and, from two, a Mermaid graph of their
 //! needs; then a section per PR with its Jobs' table, their Dependencies graph
-//! and one subsection per Job with its Spec. GitHub-flavoured Markdown only:
+//! and one subsection per Job with its Spec; between them the `## Overlaps`
+//! section. GitHub-flavoured Markdown only:
 //! tables, code and Mermaid, no footnotes, no raw HTML (t4).
 
 use std::collections::BTreeMap;
@@ -11,6 +12,7 @@ use serde_json::Value;
 
 use super::fingerprint::PrSpec;
 use super::jobs::Job;
+use super::overlap::Overlap;
 
 /// Inline text made safe for GFM: no HTML tags, no footnote syntax. Code
 /// spans (`` `…` `` on one line) are left alone.
@@ -203,10 +205,34 @@ fn pr_section(out: &mut Vec<String>, pr: &PrSpec, jobs: &[&Job]) {
     }
 }
 
+/// The `## Overlaps` section (commands.md §4.5): a table, or that no other
+/// active Plan touches these files.
+fn overlaps_section(out: &mut Vec<String>, overlaps: &[Overlap]) {
+    out.extend(["## Overlaps".to_owned(), String::new()]);
+    if overlaps.is_empty() {
+        out.push("No other active Plan touches these files.".to_owned());
+    } else {
+        out.extend(["| Job | Path | Other Plan | PR | Job | Status |".to_owned(), "|---|---|---|---|---|---|".to_owned()]);
+        for o in overlaps {
+            out.push(format!(
+                "| {} | {} | {} | {} | {} | {} |",
+                tcode(&o.job),
+                tcode(&o.path),
+                tcode(&o.plan),
+                tcode(&o.pr),
+                tcode(&o.other_job),
+                o.status
+            ));
+        }
+    }
+    out.push(String::new());
+}
+
 /// The plan markdown for `prs` and `jobs` (every one of the Plan); `cancelled`
-/// PRs and Jobs are left out, and so are the Jobs of a `cancelled` PR. Pure:
-/// the same PRs and Jobs give the same text.
-pub fn markdown(title: &str, context: &str, phase: &str, prs: &[PrSpec], jobs: &[Job]) -> String {
+/// PRs and Jobs are left out, and so are the Jobs of a `cancelled` PR.
+/// `overlaps` are those of [`super::overlap::find`]. Pure: the same PRs, Jobs
+/// and overlaps give the same text.
+pub fn markdown(title: &str, context: &str, phase: &str, prs: &[PrSpec], jobs: &[Job], overlaps: &[Overlap]) -> String {
     let prs: Vec<&PrSpec> = prs.iter().filter(|p| p.status != "cancelled").collect();
     let mut out = vec![format!("# Plan: {}", inline(title)), String::new(), format!("Context: `{context}` · Phase: `{phase}`"), String::new()];
     if prs.is_empty() {
@@ -228,6 +254,7 @@ pub fn markdown(title: &str, context: &str, phase: &str, prs: &[PrSpec], jobs: &
         let nodes: Vec<(&str, &[String])> = order.iter().map(|p| (p.key.as_str(), p.needs.as_slice())).collect();
         out.extend([graph("LR", "p", &nodes), String::new()]);
     }
+    overlaps_section(&mut out, overlaps);
     for pr in order {
         let jobs: Vec<&Job> = jobs.iter().filter(|j| j.pr == pr.key && j.status != "cancelled").collect();
         pr_section(&mut out, pr, &jobs);
@@ -262,7 +289,7 @@ mod tests {
 
     #[test]
     fn a_plan_without_prs_says_so() {
-        assert_eq!(markdown("T", "ctx", "plan", &[], &[]), "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n");
+        assert_eq!(markdown("T", "ctx", "plan", &[], &[], &[]), "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n");
     }
 
     fn pr(key: &str, needs: &[&str]) -> PrSpec {

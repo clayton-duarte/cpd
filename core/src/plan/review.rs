@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use super::fingerprint::{PrSpec, load_prs, plan_fingerprint};
 use super::jobs::{self, Job};
+use super::overlap::{self, Overlap};
 use super::row::Phase;
 use super::show::{Head, load_head};
 use super::{DecideArgs, Env, RenderArgs, ReviewArgs, read_text_file, render, write_file};
@@ -69,24 +70,28 @@ struct Snapshot {
     plan: Head,
     prs: Vec<PrSpec>,
     jobs: Vec<Job>,
+    overlaps: Vec<Overlap>,
     review: Option<Review>,
     fingerprint: String,
 }
 
 fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
     env.store.read(|conn| {
+        let (prs, jobs) = (load_prs(conn, id)?, jobs::load(conn, id)?);
+        let overlaps = overlap::find(&prs, &jobs, &overlap::load_others(conn, id)?);
         Ok(Snapshot {
             plan: load_head(conn, id)?,
-            prs: load_prs(conn, id)?,
-            jobs: jobs::load(conn, id)?,
             review: latest(conn, id)?,
             fingerprint: plan_fingerprint(conn, id)?,
+            prs,
+            jobs,
+            overlaps,
         })
     })
 }
 
 fn plan_markdown(s: &Snapshot) -> String {
-    render::markdown(&s.plan.title, s.plan.context.as_str(), s.plan.phase.as_str(), &s.prs, &s.jobs)
+    render::markdown(&s.plan.title, s.plan.context.as_str(), s.plan.phase.as_str(), &s.prs, &s.jobs, &s.overlaps)
 }
 
 /// `plan render` (§4.5).
@@ -101,6 +106,7 @@ pub(super) fn render(args: RenderArgs) -> Result<Output, CpdError> {
         "fingerprint": s.fingerprint,
         "draft_jobs": s.jobs.iter().filter(|j| j.is_draft()).count(),
         "prs": s.prs.iter().filter(|p| p.status != "cancelled").count(),
+        "overlaps": s.overlaps.iter().map(Overlap::to_json).collect::<Vec<_>>(),
     })))
 }
 
