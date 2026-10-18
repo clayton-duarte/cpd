@@ -26,7 +26,7 @@ mod show;
 
 use std::path::{Path, PathBuf};
 
-use crate::args::{Name, PlanArg, Title};
+use crate::args::{Name, PlanArg, Text, Title};
 use crate::config::Config;
 use crate::context::Jira;
 use crate::error::{CpdError, ErrorCode};
