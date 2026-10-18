@@ -26,6 +26,7 @@ pub(super) const MIGRATIONS: &[Migration] = &[
     migration_7,
     |conn, _| migration_8(conn),
     |conn, _| migration_9(conn),
+    |conn, _| migration_10(conn),
 ];
 
 /// The first migration that imports the old git stores of the Contexts; the
@@ -44,6 +45,7 @@ pub(super) const SCHEMA_HASHES: &[&str] = &[
     "6377d30a1c0e58581cb8576410c5187c6cfcb48eacf4ec193e5b24d0eacdea77",
     "21897859b666aff79e8c16dcb58e9ad2f7ddde4c880fa019738e2904ca28009d",
     "3ea4336e93cb740321d1c5c989863c2e018d1348e4e2a22a84feee158f5bee98",
+    "2f8e238fbc3b0d5f768fe3c5e6c118b26eda5581d93841449563979a51144168",
 ];
 
 const _: () = assert!(SCHEMA_HASHES.len() == MIGRATIONS.len(), "one schema hash per migration");
@@ -189,6 +191,27 @@ fn migration_8(conn: &Connection) -> Result<()> {
 /// rebuilt with the kind in its check. No history triggers: `events` has none.
 fn migration_9(conn: &Connection) -> Result<()> {
     conn.execute_batch(include_str!("migrations/0009.sql"))
+}
+
+/// The Manager role and the `brief` record (§4.5 migration 0010, hs-d92, hs-d129):
+/// `sessions`, `context_records` and `contexts` are rebuilt, their history
+/// triggers generated again, and every grounded Lead Session (a Lead with no
+/// Plan) archived with one `session-archived` Event each, in the migration's
+/// `txns` row, as `session archive` would write it.
+fn migration_10(conn: &Connection) -> Result<()> {
+    conn.execute_batch(include_str!("migrations/0010.sql"))?;
+    for table in ["sessions", "context_records", "contexts"] {
+        create_history_triggers(conn, table, true)?;
+    }
+    conn.execute_batch(
+        "INSERT INTO events (txn, at, kind, context, session, text, data)
+           SELECT t.id, t.at, 'session-archived', s.context, s.id, 'Session ' || s.name || ' archived.', '{\"archived\":true}'
+           FROM sessions s, txns t
+           WHERE t.id = cpd_txn() AND s.role = 'lead' AND s.plan IS NULL AND s.archived_at IS NULL
+           ORDER BY s.created_at, s.id;
+         UPDATE sessions SET archived_at = (SELECT at FROM txns WHERE id = cpd_txn())
+           WHERE role = 'lead' AND plan IS NULL AND archived_at IS NULL;",
+    )
 }
 
 /// The import of migration 0007, with the row values and Events the engine's
@@ -1698,7 +1721,7 @@ mod tests {
 
         let mut store = Store::open(&home, 5000).unwrap();
         assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 9);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
         let after = rows(&mut store, "SELECT id, txn, at, kind, context, plan, job, attempt, session, text, data FROM events ORDER BY id");
         assert_eq!(after.len(), before.len());
         for (i, row) in after.iter().enumerate() {
@@ -1721,5 +1744,123 @@ mod tests {
             sqlite_message(&refused(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (1, 't', 'error', 'x', '{}')")),
             "events.txn must be cpd_txn()"
         );
+    }
+
+    // ---------- migration 10 ----------
+
+    /// A version-9 database: Context `ctx` with a grounded Lead (a Lead with no Plan),
+    /// a Plan with its Lead, a second Context with no grounded Lead, records of every
+    /// kind, and Events of kind `context-grounded`.
+    fn version_9_with_a_grounded_lead(home: &CpdHome) {
+        database_at(
+            home,
+            9,
+            &format!(
+                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1'), ('two', 'Two', '{T}', 'm1');
+                 INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, tmux_pane)
+                   VALUES ('l-g', 'lead', 'ctx', NULL, 'grounded', '/r', 'O3', 'idle', '{T}', '2026-01-01T00:00:01.000Z', '%3'),
+                          ('l-a', 'lead', 'ctx', 'aa', 'lead a', '/r', 'O3', 'idle', '{T}', '{T}', NULL);
+                 INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+                   VALUES ('aa', 'ctx', 'Plan A', 'grounding', 'l-a', '{T}');
+                 UPDATE contexts SET lead_session = 'l-g', grounded_seq = 2 WHERE id = 'ctx';
+                 INSERT INTO context_records (context, id, kind, at, machine, text, supersedes, question, plan_id, plan_machine, plan_jira) VALUES
+                   ('ctx', 'm1-d1', 'decision', '{T}', 'm1', 'D', NULL, NULL, NULL, NULL, NULL),
+                   ('ctx', 'm1-n1', 'note', '{T}', 'm1', 'N', NULL, NULL, NULL, NULL, NULL),
+                   ('ctx', 'm1-q1', 'question', '{T}', 'm1', 'Q', NULL, NULL, NULL, NULL, NULL),
+                   ('ctx', 'm1-a1', 'answer', '{T}', 'm1', 'A', NULL, 'm1-q1', NULL, NULL, NULL),
+                   ('ctx', 'm1-p1', 'plan', '{T}', 'm1', 'Plan A', NULL, NULL, 'aa', 'm1', 'ABC-1');
+                 INSERT INTO events (txn, at, kind, context, session, text, data) VALUES
+                   (1, '{T}', 'context-grounded', 'ctx', 'l-g', 'Context ctx has a grounded Lead.', '{{\"seq\":2,\"forked_from\":\"l-a\"}}');"
+            ),
+        );
+    }
+
+    #[test]
+    fn a_version_9_database_migrates_to_10_archiving_the_grounded_lead_and_dropping_its_columns() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_9_with_a_grounded_lead(&home);
+        let records = "SELECT seq, context, id, kind, at, machine, text, supersedes, question, plan_id, plan_machine, plan_jira FROM context_records ORDER BY seq";
+        let events = "SELECT id, txn, kind, context, plan, session, text, data FROM events WHERE kind <> 'session-archived' ORDER BY id";
+        let dump = |sql: &str| -> Vec<Vec<String>> {
+            let conn = connection(&home.db());
+            let mut stmt = conn.prepare(sql).unwrap();
+            let n = stmt.column_count();
+            stmt.query_map([], |r| (0..n).map(|i| r.get::<_, rusqlite::types::Value>(i).map(|v| format!("{v:?}"))).collect())
+                .unwrap()
+                .collect::<Result<_>>()
+                .unwrap()
+        };
+        let (records_before, events_before) = (dump(records), dump(events));
+
+        let mut store = Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
+        drop(store);
+        assert_eq!(dump(records), records_before);
+        assert_eq!(dump(events), events_before);
+        let mut store = Store::open(&home, 5000).unwrap();
+        assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
+        assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('contexts') WHERE name IN ('lead_session', 'grounded_seq')"), 0);
+        assert_eq!(rows(&mut store, "SELECT id, title, archived_at FROM contexts ORDER BY id").len(), 2);
+
+        // The grounded Lead is archived, once, with its Event; the Plan's Lead is not.
+        assert_eq!(
+            rows(&mut store, "SELECT id, role, plan, archived_at IS NOT NULL, tmux_pane FROM sessions ORDER BY id"),
+            vec![serde_json::json!(["l-a", "lead", "aa", 0, Value::Null]), serde_json::json!(["l-g", "lead", Value::Null, 1, "%3"])]
+        );
+        assert_eq!(
+            rows(&mut store, "SELECT kind, context, plan, session, text, data FROM events WHERE kind = 'session-archived'"),
+            vec![serde_json::json!(["session-archived", "ctx", Value::Null, "l-g", "Session grounded archived.", r#"{"archived":true}"#])]
+        );
+        assert_eq!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'sessions' AND op = 'update'"), 1);
+
+        // A `brief` record needs its Plan reference; positions continue after the old ones.
+        let brief = |plan: &str| {
+            format!("INSERT INTO context_records (context, id, kind, at, machine, text, plan_id, plan_machine) VALUES ('ctx', 'm1-b1', 'brief', 't', 'm1', 'B', {plan})")
+        };
+        assert!(sqlite_message(&refused(&mut store, &brief("NULL, NULL"))).contains("CHECK constraint failed"));
+        write(&mut store, &brief("'aa', 'm1'")).unwrap();
+        assert_eq!(count(&mut store, "SELECT seq FROM context_records WHERE id = 'm1-b1'"), 6);
+        assert_eq!(
+            sqlite_message(&refused(&mut store, "UPDATE context_records SET text = 'x'")),
+            "append_only: context_records"
+        );
+
+        // One live Manager per Context, none with a Plan, and a second after the first is archived.
+        let manager = |id: &str, context: &str, plan: &str| {
+            format!(
+                "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                   VALUES ('{id}', 'manager', '{context}', {plan}, 'm', '/', 'O5', 'stopped', 't', 't')"
+            )
+        };
+        write(&mut store, &manager("m-1", "ctx", "NULL")).unwrap();
+        let second = refused(&mut store, &manager("m-2", "ctx", "NULL"));
+        assert!(sqlite_message(&second).contains("UNIQUE constraint failed"), "{second:?}");
+        assert!(sqlite_message(&refused(&mut store, &manager("m-3", "two", "'aa'"))).contains("CHECK constraint failed"));
+        write(&mut store, &manager("m-4", "two", "NULL")).unwrap();
+        write(&mut store, "UPDATE sessions SET archived_at = 't' WHERE id = 'm-1'").unwrap();
+        write(&mut store, &manager("m-2", "ctx", "NULL")).unwrap();
+        assert_eq!(
+            sqlite_message(&refused(&mut store, "DELETE FROM sessions")),
+            "append_only: sessions"
+        );
+        // A Worker still needs an Attempt, a Lead none.
+        assert!(sqlite_message(&refused(
+            &mut store,
+            "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+               VALUES ('w', 'worker', 'ctx', 'aa', 'w', '/', 'S3', 'stopped', 't', 't')"
+        ))
+        .contains("CHECK constraint failed"));
+    }
+
+    #[test]
+    fn a_version_9_database_with_no_grounded_lead_migrates_to_10_with_no_new_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        database_at(&home, 9, &format!("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');"));
+        let mut store = Store::open(&home, 5000).unwrap();
+        assert_eq!(count(&mut store, "SELECT count(*) FROM events"), 0);
+        assert!(store.schema_mismatch().is_none());
     }
 }
