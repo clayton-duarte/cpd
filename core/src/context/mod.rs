@@ -33,7 +33,7 @@ pub use contexts::{ContextRow, Contexts, Written};
 pub use record::{By, Draft, PlanRef, Record};
 pub use sync::{Synced, Trigger, store_id, store_names};
 
-use crate::args::{PlanArg, Text};
+use crate::args::{PlanArg, Text, Title};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
@@ -143,7 +143,7 @@ pub struct NewArgs {
     id: ContextId,
     /// The title
     #[arg(long, value_name = "text")]
-    title: Text,
+    title: Title,
     /// The Jira Epic key, stored only
     #[arg(long, value_name = "key")]
     jira: Option<Jira>,
@@ -211,7 +211,7 @@ pub struct RenameArgs {
     id: ContextId,
     /// The new title
     #[arg(long, value_name = "text")]
-    title: Text,
+    title: Title,
 }
 
 #[derive(Args, Debug)]
@@ -284,7 +284,7 @@ fn context_json(row: &ContextRow, dir: &Path) -> Value {
 /// `context new` (§3.1).
 fn new(args: NewArgs) -> Result<Output, CpdError> {
     let (home, config, mut store) = open()?;
-    let (row, already) = Contexts::new(&home, &config, &mut store).create(&args.id, &args.title, args.jira.as_ref())?;
+    let (row, already) = Contexts::new(&home, &config, &mut store).create(&args.id, &Text::from(args.title.clone()), args.jira.as_ref())?;
     let mut out = json!({"context": context_json(&row, &home.context_dir(&args.id))});
     if already {
         out["already"] = json!(true);

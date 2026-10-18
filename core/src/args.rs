@@ -165,6 +165,48 @@ impl fmt::Display for Text {
     }
 }
 
+/// A Context's or Plan's title (`context new`/`rename`, `plan new`/`rename`
+/// `--title`): 1 to 200 characters, no control characters; else `usage`
+/// (commands.md §3.1, §4.1). Job titles stay [`Text`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Title(String);
+
+impl Title {
+    pub const MAX_CHARS: usize = 200;
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl FromStr for Title {
+    type Err = CpdError;
+    fn from_str(s: &str) -> Result<Title, CpdError> {
+        let chars = s.chars().count();
+        if chars == 0 || chars > Title::MAX_CHARS || s.chars().any(char::is_control) {
+            return Err(CpdError::new(
+                ErrorCode::Usage,
+                format!("A title must be 1 to {} characters with no control characters.", Title::MAX_CHARS),
+            )
+            .with("chars", chars));
+        }
+        Ok(Title(s.to_owned()))
+    }
+}
+
+impl fmt::Display for Title {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A title is free text with a smaller range.
+impl From<Title> for Text {
+    fn from(title: Title) -> Text {
+        Text(title.0)
+    }
+}
+
 /// A display name (`--name`, `session rename`): 1 to 80 characters, no control
 /// characters; else `invalid_name` (exit 2) (commands.md §1.5).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -202,6 +244,16 @@ impl fmt::Display for Name {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_title_is_1_to_200_characters_with_no_control_characters() {
+        for ok in ["a", "é".repeat(200).as_str(), "a b"] {
+            assert_eq!(ok.parse::<Title>().unwrap().as_str(), ok);
+        }
+        for bad in ["", "a".repeat(201).as_str(), "a\nb", "a\tb", "a\0b", "a\u{7f}b"] {
+            assert_eq!(bad.parse::<Title>().unwrap_err().code(), ErrorCode::Usage, "{bad:?}");
+        }
+    }
 
     #[test]
     fn plan_required_when_none() {
