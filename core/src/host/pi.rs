@@ -141,11 +141,15 @@ fn push_extensions(argv: &mut Vec<String>, extensions: &[String]) {
     }
 }
 
+/// Silences pi's own update banner in every pane cpd starts (contract §6.5).
+const SKIP_VERSION_CHECK: (&str, &str) = ("PI_SKIP_VERSION_CHECK", "1");
+
 fn base_env(home: &CpdHome, session: &SessionId, plan: &PlanId) -> BTreeMap<String, String> {
     BTreeMap::from([
         ("CPD_HOME".to_owned(), home.root().display().to_string()),
         ("CPD_SESSION".to_owned(), session.to_string()),
         ("CPD_PLAN".to_owned(), plan.to_string()),
+        (SKIP_VERSION_CHECK.0.to_owned(), SKIP_VERSION_CHECK.1.to_owned()),
     ])
 }
 
@@ -180,6 +184,7 @@ fn lead_env(launch: &LeadLaunch) -> BTreeMap<String, String> {
             ("CPD_HOME".to_owned(), launch.home.root().display().to_string()),
             ("CPD_SESSION".to_owned(), launch.session.to_string()),
             ("PLANNOTATOR_UPDATE_CHECK".to_owned(), "0".to_owned()),
+            (SKIP_VERSION_CHECK.0.to_owned(), SKIP_VERSION_CHECK.1.to_owned()),
         ]);
     };
     let mut env = base_env(launch.home, launch.session, plan);
@@ -476,6 +481,26 @@ mod tests {
     }
 
     #[test]
+    fn every_role_skips_the_pi_version_check() {
+        let plannotator = Plannotator { port: None, remote: None };
+        let resume = LeadStart::Resume { file: "/s/a.jsonl".into() };
+        assert_eq!(lead_launch(resume, &plannotator).env["PI_SKIP_VERSION_CHECK"], "1");
+        let home = home();
+        let session = SessionId::parse(ID).unwrap();
+        let grounded = lead(&LeadLaunch {
+            home: &home,
+            session: &session,
+            plan: None,
+            extensions: &[],
+            plannotator: &plannotator,
+            start: LeadStart::Resume { file: "/s/a.jsonl".into() },
+        });
+        assert_eq!(grounded.env["PI_SKIP_VERSION_CHECK"], "1");
+        let plan = PlanId::parse("cpd2").unwrap();
+        assert_eq!(base_env(&home, &session, &plan)["PI_SKIP_VERSION_CHECK"], "1");
+    }
+
+    #[test]
     fn grounded_lead_has_no_plan_in_its_environment() {
         let home = home();
         let session = SessionId::parse(ID).unwrap();
@@ -494,7 +519,7 @@ mod tests {
         );
         assert_eq!(
             launch.env,
-            env(&[("CPD_HOME", "/cpd-home"), ("CPD_SESSION", ID), ("PLANNOTATOR_UPDATE_CHECK", "0")])
+            env(&[("CPD_HOME", "/cpd-home"), ("CPD_SESSION", ID), ("PLANNOTATOR_UPDATE_CHECK", "0"), ("PI_SKIP_VERSION_CHECK", "1")])
         );
     }
 
@@ -505,6 +530,7 @@ mod tests {
             ("CPD_PLAN", "cpd2"),
             ("PLANNOTATOR_DATA_DIR", "/cpd-home/run/cpd2/plannotator"),
             ("PLANNOTATOR_UPDATE_CHECK", "0"),
+            ("PI_SKIP_VERSION_CHECK", "1"),
         ]);
         e.extend(env(extra));
         e
@@ -606,7 +632,7 @@ mod tests {
         );
         assert_eq!(
             launch.env,
-            env(&[("CPD_HOME", "/cpd-home"), ("CPD_SESSION", ID), ("CPD_PLAN", "cpd2"), ("CPD_ATTEMPT", "rs-host-a2")])
+            env(&[("CPD_HOME", "/cpd-home"), ("CPD_SESSION", ID), ("CPD_PLAN", "cpd2"), ("CPD_ATTEMPT", "rs-host-a2"), ("PI_SKIP_VERSION_CHECK", "1")])
         );
         let spawn = launch.spawn(Path::new("/wt"));
         assert_eq!(spawn.cwd.as_deref(), Some(Path::new("/wt")));
