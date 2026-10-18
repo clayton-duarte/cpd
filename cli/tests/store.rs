@@ -754,6 +754,30 @@ fn a_failed_migration_rolls_back_entirely() {
     assert_eq!(app, 0);
 }
 
+#[test]
+fn a_migration_whose_schema_differs_from_the_expected_hash_rolls_back() {
+    let env = TestEnv::new();
+    // Every migration applies, but the schema it leaves is not the one the binary
+    // describes: an object the migrations do not know stays in `sqlite_schema`.
+    raw(&env).execute_batch("CREATE TABLE stray (x)").unwrap();
+    let err = Store::open(&home(&env), 5000).err().unwrap();
+    assert_eq!(err.code(), ErrorCode::MigrationFailed, "{err:?}");
+    assert_eq!(err.exit().code(), 1);
+    assert_eq!(err.details()["version"], VERSION);
+    let expected = err.details()["expected"].as_str().unwrap();
+    let actual = err.details()["actual"].as_str().unwrap();
+    assert_ne!(expected, actual);
+    let conn = raw(&env);
+    assert_eq!(names(&conn, "SELECT name FROM sqlite_schema"), BTreeSet::from(["stray".to_owned()]));
+    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    assert_eq!(version, 0, "the store stays at its old version");
+    let app: i32 = conn.pragma_query_value(None, "application_id", |r| r.get(0)).unwrap();
+    assert_eq!(app, 0);
+    // Rerunning is safe: the same refusal, nothing written.
+    let again = Store::open(&home(&env), 5000).err().unwrap();
+    assert_eq!(again.code(), ErrorCode::MigrationFailed, "{again:?}");
+}
+
 // ---------- §4.5 migration 6: pull_requests and prs.pull_request ----------
 
 /// The `CREATE TABLE prs (...) STRICT;` of versions 4 and 5, from `0004.sql` (migration 5 changes no table).
