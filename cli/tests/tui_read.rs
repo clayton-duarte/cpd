@@ -4,7 +4,8 @@
 
 mod common;
 
-use std::time::{Duration, Instant};
+use std::sync::Mutex;
+use std::time::Instant;
 
 use common::TestEnv;
 use cpd_core::config::Tier;
@@ -56,11 +57,10 @@ fn tier(s: &str) -> Tier {
 
 const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
-fn context(id: &str, grounded: Option<&str>) -> String {
-    let (lead, seq) = grounded.map_or(("NULL".to_owned(), "NULL"), |g| (format!("'{g}'"), "0"));
+fn context(id: &str) -> String {
     format!(
-        "INSERT INTO contexts (id, title, jira, created_at, created_on, lead_session, grounded_seq)
-         VALUES ('{id}', 'Title of {id}', NULL, '2026-01-01T00:00:00.000Z', 'm1', {lead}, {seq});"
+        "INSERT INTO contexts (id, title, jira, created_at, created_on)
+         VALUES ('{id}', 'Title of {id}', NULL, '2026-01-01T00:00:00.000Z', 'm1');"
     )
 }
 
@@ -73,7 +73,7 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr:
     let status = match phase {
         "grounding" | "plan" => "waiting",
         "dispatch" => "dispatch",
-        "pr" => "open",
+        "deploy" => "open",
         _ => "merged",
     };
     let (row, number, url, opened, pull_request) = match pr {
@@ -187,7 +187,7 @@ fn moved(context: &str, plan: Option<&str>, session: &str, place: &str) -> Strin
 
 /// Three Contexts, the Plans below, Jobs in every status, Attempts, a PR, Escalations and Sessions.
 ///
-/// - `alpha` (grounded Lead `g-alpha`): `ship` (dispatch, Lead `l-ship`, side fork `f-ship`) with one Job in
+/// - `alpha` (also a Lead with no Plan, `g-alpha`, as migration 0010 leaves a grounded Lead): `ship` (dispatch, Lead `l-ship`, side fork `f-ship`) with one Job in
 ///   every status; `sketch` (phase plan, drafts only).
 /// - `beta`: `rel` (phase pr, PR 7 with a failing check), `shut` (pr, closed unmerged), `old` (done, merged PR).
 /// - `gamma`: nothing.
@@ -195,15 +195,15 @@ fn moved(context: &str, plan: Option<&str>, session: &str, place: &str) -> Strin
 /// The chat slot holds `l-ship`; `l-rel` was there before and is parked.
 fn populate(store: &mut Store) {
     let mut s = String::new();
-    s += &context("alpha", Some("g-alpha"));
-    s += &context("beta", None);
-    s += &context("gamma", None);
+    s += &context("alpha");
+    s += &context("beta");
+    s += &context("gamma");
     s += &plan_row("ship", "alpha", "dispatch", "l-ship", "2026-01-02T00:00:00.000Z", None);
     s += &plan_row("sketch", "alpha", "plan", "l-sketch", "2026-01-02T00:00:01.000Z", None);
     s += &plan_row(
         "rel",
         "beta",
-        "pr",
+        "deploy",
         "l-rel",
         "2026-01-02T00:00:02.000Z",
         Some((7, "open", "failed")),
@@ -211,7 +211,7 @@ fn populate(store: &mut Store) {
     s += &plan_row(
         "shut",
         "beta",
-        "pr",
+        "deploy",
         "l-shut",
         "2026-01-02T00:00:03.000Z",
         Some((8, "closed", "none")),
@@ -316,10 +316,7 @@ fn the_tree_is_contexts_then_plans_then_lead_sessions_with_their_states() {
     assert_eq!(ids, ["alpha", "beta", "gamma"]);
     let [alpha, beta, gamma] = &tree.contexts[..] else { panic!() };
 
-    assert_eq!((alpha.title.as_str(), alpha.records, alpha.open_questions, alpha.sync_failing), ("Title of alpha", 4, 1, false));
-    let grounded = alpha.grounded_lead.as_ref().unwrap();
-    assert_eq!((grounded.id.as_str(), grounded.plan.as_ref(), grounded.grounded_lead, grounded.place), ("g-alpha", None, true, Place::Work));
-    assert!(beta.grounded_lead.is_none() && gamma.grounded_lead.is_none());
+    assert_eq!((alpha.title.as_str(), alpha.records, alpha.open_questions), ("Title of alpha", 4, 1));
     assert!(gamma.plans.is_empty());
 
     let plans: Vec<&str> = alpha.plans.iter().map(|p| p.head.id.as_str()).collect();
@@ -331,7 +328,7 @@ fn the_tree_is_contexts_then_plans_then_lead_sessions_with_their_states() {
     assert_eq!(
         sessions,
         [("l-ship", State::Working, Place::Chat, true), ("f-ship", State::Idle, Place::None, false)],
-        "the Lead first, then the side fork; the Workers and the grounded Lead are not in the tree's Plans"
+        "the Lead first, then the side fork; the Workers and the Lead with no Plan are not in the tree's Plans"
     );
     assert!(ship.sessions[0].is_active() && !ship.sessions[1].is_active());
     let forks: Vec<(&str, &str)> = alpha.forks().iter().map(|(p, s)| (p.head.id.as_str(), s.id.as_str())).collect();
@@ -379,7 +376,7 @@ fn archived_objects_are_in_the_tree_with_their_archived_at() {
 
 /// The dots of the tree (§17): one row of the rule's tables for each Lead, and the Context row's.
 ///
-/// - `hot`: `red` (dispatch, blocked), `yel` (pr; two pull requests, only the second has finished checks; its Lead is
+/// - `hot`: `red` (dispatch, blocked), `yel` (deploy; two pull requests, only the second has finished checks; its Lead is
 ///   idle and its fork `f-yel` is working), `mag` (plan, blocked), `whi` (dispatch, idle, unseen), `wrk`, `idl`, `stp`;
 /// - `calm`: a working and an idle Lead; `dead`: a stopped one; `ice`: no Plan, no Session.
 #[test]
@@ -387,12 +384,12 @@ fn every_session_has_a_dot_and_every_context_the_greatest_of_its_live_sessions()
     let (_env, mut store) = fixture();
     let mut s = String::new();
     for c in ["hot", "calm", "dead", "ice"] {
-        s += &context(c, None);
+        s += &context(c);
     }
     let at = |n: u32| format!("2026-01-02T00:00:{n:02}.000Z");
     let plans = [
         ("red", "hot", "dispatch", "blocked"),
-        ("yel", "hot", "pr", "idle"),
+        ("yel", "hot", "deploy", "idle"),
         ("mag", "hot", "plan", "blocked"),
         ("whi", "hot", "dispatch", "idle"),
         ("wrk", "hot", "dispatch", "working"),
@@ -673,7 +670,7 @@ fn the_chat_slot_is_the_plan_lead_whose_latest_move_is_chat() {
     assert_eq!((slot.session.as_str(), slot.plan.as_str(), slot.name.as_str()), ("l-ship", "ship", "name of l-ship"));
     let id = slot.moved_event;
 
-    // The grounded Lead is never in the slot; parking leaves the placeholder.
+    // A Lead with no Plan is never in the slot; parking leaves the placeholder.
     sql(&mut store, &moved("alpha", None, "g-alpha", "chat"));
     assert_eq!(read::chat_slot(&mut store).unwrap().unwrap().session, session("l-ship"));
     sql(&mut store, &moved("alpha", Some("ship"), "l-ship", "parked"));
@@ -873,7 +870,7 @@ fn the_read_model_spawns_nothing_and_has_no_write_statement() {
 fn populate_many(store: &mut Store) {
     let mut s = String::new();
     for c in 0..10 {
-        s += &context(&format!("ctx{c}"), None);
+        s += &context(&format!("ctx{c}"));
         for p in 0..8 {
             let id = format!("p{c}x{p}");
             let lead = format!("lead-{id}");
@@ -897,30 +894,77 @@ fn populate_many(store: &mut Store) {
     sql(store, &s);
 }
 
+/// Collects the SQL text of every statement the connection starts, through `sqlite3_trace_v2` (`rusqlite::ffi`,
+/// no feature beyond `bundled` and `functions`).
+unsafe extern "C" fn record_statement(
+    _mask: std::ffi::c_uint,
+    log: *mut std::ffi::c_void,
+    _stmt: *mut std::ffi::c_void,
+    sql: *mut std::ffi::c_void,
+) -> std::ffi::c_int {
+    // SAFETY: `log` is the leaked `Mutex` of `statements_run`; for `SQLITE_TRACE_STMT` the fourth argument is the statement's SQL text.
+    let (log, sql) = unsafe { (&*log.cast::<Mutex<Vec<String>>>(), std::ffi::CStr::from_ptr(sql.cast())) };
+    log.lock().unwrap().push(sql.to_string_lossy().into_owned());
+    0
+}
+
+fn trace(store: &mut Store, mask: std::ffi::c_uint, log: &'static Mutex<Vec<String>>) {
+    let ctx = std::ptr::from_ref(log).cast_mut().cast();
+    // SAFETY: `store`'s connection is open for the call; `ctx` is leaked, so it outlives any statement.
+    let rc = store.read(|c| Ok(unsafe { rusqlite::ffi::sqlite3_trace_v2(c.handle(), mask, Some(record_statement), ctx) })).unwrap();
+    assert_eq!(rc, rusqlite::ffi::SQLITE_OK);
+}
+
+/// The statements `f` runs on the store's connection, in order, `BEGIN` and `COMMIT` of each read included.
+fn statements_run(store: &mut Store, f: impl FnOnce(&mut Store)) -> Vec<String> {
+    let log: &'static Mutex<Vec<String>> = Box::leak(Box::default());
+    trace(store, rusqlite::ffi::SQLITE_TRACE_STMT, log);
+    log.lock().unwrap().clear();
+    f(store);
+    let run = std::mem::take(&mut *log.lock().unwrap());
+    trace(store, 0, log);
+    run
+}
+
+/// §17: each read runs a fixed number of queries whatever the size of the Ledger. Counts the statements of each
+/// read on the small fixture and on the large store (a wall-clock bound measures the machine's load as much as the work).
 #[test]
-fn every_read_takes_a_few_milliseconds_on_a_large_store() {
+fn every_read_runs_the_same_statements_on_a_large_store_as_on_a_small_one() {
     let (_env, mut store) = fixture();
-    populate_many(&mut store);
-    let events: i64 = last_event(&mut store);
-    assert!(events > 1600);
-    // Warm up, then take the best of several runs: a bound on the work, not on a noisy neighbour.
-    every_read(&mut store);
-    let best = |name: &str, mut f: Box<dyn FnMut()>| {
-        let fastest = (0..7)
-            .map(|_| {
+    // The Plans and the Attempt of the small fixture, then of the large store: same reads, ten times the rows.
+    let reads: [(&str, &dyn Fn(&mut Store, bool)); 5] = [
+        ("tree", &|s, _| drop(read::tree(s).unwrap())),
+        ("flow", &|s, large| drop(read::flow(s, &plan(if large { "p3x3" } else { "ship" })).unwrap())),
+        ("chat_slot", &|s, _| drop(read::chat_slot(s).unwrap())),
+        ("widgets", &|s, _| drop(read::widgets(s, 3, 20).unwrap())),
+        (
+            "worker",
+            &|s, large| {
+                let (p, a) = if large { ("p3x3", "j2-a1") } else { ("ship", "c-a2") };
+                drop(read::worker(s, &plan(p), &attempt(a)).unwrap());
+            },
+        ),
+    ];
+    let run_all = |store: &mut Store, large: bool| -> Vec<Vec<String>> {
+        reads
+            .iter()
+            .map(|(name, read)| {
                 let start = Instant::now();
-                f();
-                start.elapsed()
+                let run = statements_run(store, |s| read(s, large));
+                eprintln!("{name}: {:?} (information only; large: {large})", start.elapsed());
+                run
             })
-            .min()
-            .unwrap();
-        assert!(fastest < Duration::from_millis(20), "{name} took {fastest:?}");
-        eprintln!("{name}: {fastest:?}");
+            .collect()
     };
-    let store = std::cell::RefCell::new(store);
-    best("tree", Box::new(|| drop(read::tree(&mut store.borrow_mut()).unwrap())));
-    best("flow", Box::new(|| drop(read::flow(&mut store.borrow_mut(), &plan("p3x3")).unwrap())));
-    best("chat_slot", Box::new(|| drop(read::chat_slot(&mut store.borrow_mut()).unwrap())));
-    best("widgets", Box::new(|| drop(read::widgets(&mut store.borrow_mut(), 3, 20).unwrap())));
-    best("worker", Box::new(|| drop(read::worker(&mut store.borrow_mut(), &plan("p3x3"), &attempt("j2-a1")).unwrap())));
+    let small = run_all(&mut store, false);
+
+    populate_many(&mut store);
+    assert!(last_event(&mut store) > 1600);
+    let large = run_all(&mut store, true);
+
+    for (((name, _), small), large) in reads.iter().zip(&small).zip(&large) {
+        eprintln!("{name}: {} statements", small.len());
+        assert!(small.len() > 2, "{name} ran no query: {small:#?}");
+        assert_eq!(small.len(), large.len(), "{name} runs a number of statements that grows with the store:\nsmall: {small:#?}\nlarge: {large:#?}");
+    }
 }

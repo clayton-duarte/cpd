@@ -1,5 +1,5 @@
-import { execFile, type ChildProcess } from "node:child_process";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -21,7 +21,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function follow() {
   const since = Number(flag("--since"));
-  // The handler first: a pid in the file means a SIGTERM leaves \`killed-<pid>\` (before it, the default action kills the process silently).
+  // the handler first: once the pid is visible a SIGTERM may come, and before the handler it would kill without a trace
   process.on("SIGTERM", () => { fs.writeFileSync(path.join(dir, "killed-" + process.pid), "1"); process.exit(143); });
   fs.appendFileSync(path.join(dir, "follower.pids"), process.pid + "\\n");
   let done = 0;
@@ -50,7 +50,7 @@ async function follow() {
   log({ phase: "start", argv, since: flag("--since") });
   if (argv[0] === "events" && argv[1] === "follow") return follow();
   const key = argv.slice(0, 2).join("-");
-  const r = JSON.parse(read("resp/" + key + ".json") || '{"stdout":{"ok":true}}');
+  const r = JSON.parse(read("resp/" + key + "@" + flag("--kind") + ".json") || read("resp/" + key + "-" + argv[2] + ".json") || read("resp/" + key + ".json") || '{"stdout":{"ok":true}}');
   let feedback;
   if (flag("--feedback-file")) feedback = fs.readFileSync(flag("--feedback-file"), "utf8");
   if (r.delay) await sleep(r.delay);
@@ -94,6 +94,7 @@ export class Fixture {
     delete process.env.CPD_PLAN;
     this.pi = new FakePi();
     this.respond("session-show", sessionShow());
+    this.respond("context-pending", { ok: true, context: "ctx", plans: [] }); // a Manager reads it at every turn start (§15.7)
     this.respond("--version", { ok: true, version: "0.0.0", schema: 6, store_schema: 6, protocol: PROTOCOL });
   }
 
@@ -106,9 +107,9 @@ export class Fixture {
   }
   private installs = 0;
 
-  /** What `cpd <a> <b>` prints (an object, or a raw string) and exits with. */
+  /** What `cpd <a> <b>` prints (an object, or a raw string) and exits with. Key `<a>-<b>`; `<a>-<b>-<c>` answers `cpd <a> <b> <c>` first; `<a>-<b>@<kind>` answers a call whose first `--kind` is `<kind>`, before both. */
   respond(key: string, stdout: unknown, extra: { exit?: number; delay?: number } = {}): void {
-    writeFileSync(join(this.dir, "resp", `${key}.json`), JSON.stringify({ stdout, ...extra }));
+    this.write(join("resp", `${key}.json`), JSON.stringify({ stdout, ...extra }));
   }
 
   /** Appends Event lines (objects or raw strings) to what the fake follower prints. */
@@ -117,8 +118,16 @@ export class Fixture {
   }
 
   file(name: string, content: string): void {
-    writeFileSync(join(this.dir, name), content);
+    this.write(name, content);
   }
+
+  /** Atomic (write, then rename): the fake `cpd` polls these files and must never read one half written. */
+  private write(name: string, content: string): void {
+    const tmp = join(this.dir, `.tmp-${++this.writes}`);
+    writeFileSync(tmp, content);
+    renameSync(tmp, join(this.dir, name));
+  }
+  private writes = 0;
 
   remove(name: string): void {
     rmSync(join(this.dir, name), { force: true });
@@ -242,8 +251,6 @@ export class FakePi implements PiApi {
   readonly commandErrors: unknown[] = [];
   /** Commands started by `sendUserMessage` and not finished. */
   readonly commandsRunning = new Set<Promise<void>>();
-  /** The `exec` children that have not exited yet. */
-  readonly execsRunning = new Set<ChildProcess>();
   readonly userMessages: { content: string; options: { expandPromptTemplates: boolean } }[] = [];
   mode = "tui";
   sessionId = ID;
@@ -264,13 +271,16 @@ export class FakePi implements PiApi {
     return () => {};
   }
 
+  /** The `exec` calls (argv, without the command) started and not yet finished: a call is in flight from the moment the adapter makes it, however long the process takes to start. */
+  readonly execsRunning = new Set<string[]>();
+
   exec(command: string, args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+    this.execsRunning.add(args);
     return new Promise((resolve) => {
-      const child = execFile(command, args, { encoding: "utf8" }, (err, stdout, stderr) => {
+      execFile(command, args, { encoding: "utf8" }, (err, stdout, stderr) => {
+        this.execsRunning.delete(args);
         resolve({ stdout, stderr, code: err ? (typeof err.code === "number" ? err.code : 1) : 0 });
       });
-      this.execsRunning.add(child);
-      for (const done of ["close", "error"]) child.on(done, () => this.execsRunning.delete(child));
     });
   }
 
@@ -346,6 +356,13 @@ export class FakePi implements PiApi {
     for (const h of this.handlers.get(event) ?? []) await h({ type: event, ...payload }, this.ctx());
   }
 
+  /** Like `fire`, returning what each handler returned (`before_agent_start` returns the message to add). */
+  async fireWith(event: string, payload: Record<string, unknown> = {}): Promise<unknown[]> {
+    const out: unknown[] = [];
+    for (const h of this.handlers.get(event) ?? []) out.push(await h({ type: event, ...payload }, this.ctx()));
+    return out;
+  }
+
   /** `cpd` messages delivered (not the adapter's own errors). */
   delivered(): Sent[] {
     return this.sent.filter((s) => s.message.customType === "cpd" && (s.message.details as any)?.delivered_to !== undefined);
@@ -356,7 +373,7 @@ export class FakePi implements PiApi {
   }
 }
 
-export async function waitFor<T>(what: string, fn: () => T | undefined | null | false, ms = 3000): Promise<T> {
+export async function waitFor<T>(what: string, fn: () => T | undefined | null | false, ms = 15000): Promise<T> {
   const deadline = Date.now() + ms;
   for (;;) {
     const v = fn();

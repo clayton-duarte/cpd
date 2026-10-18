@@ -98,7 +98,7 @@ test("a `--version` without protocol is a message", async (t) => {
   f.respond("--version", version());
   await started(f);
   const [m] = await waitFor("the message", () => (mismatches(f).length ? mismatches(f) : undefined));
-  assert.match(String(m!.message.content), /^cpd adapter: protocol mismatch: protocol_mismatch: cpd speaks no protocol .*this adapter 1; reload pi \(\/reload\)$/);
+  assert.match(String(m!.message.content), new RegExp(String.raw`^cpd adapter: protocol mismatch: protocol_mismatch: cpd speaks no protocol .*this adapter ${PROTOCOL}; reload pi \(\/reload\)$`));
   assert.equal((m!.message.details as any).cpd, null);
   await restart(f);
   await settle();

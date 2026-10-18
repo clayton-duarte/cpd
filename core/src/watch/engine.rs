@@ -1,5 +1,5 @@
 //! The engine's loop (contract §3.7; commands.md §12): `locks/watch.lock`,
-//! `watch-started`, the import of the Context stores, then E1–E7 every
+//! `watch-started`, then E1–E5 and E7 (E6 was removed) every
 //! `tick_seconds` until SIGTERM or SIGINT, then `watch-stopped`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,9 +11,8 @@ use serde_json::{Value, json};
 use super::lock::WatchLock;
 use super::log::Log;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, completion, contexts, escalations, liveness, pr, schedule};
+use super::{SOURCE, completion, escalations, liveness, pr, schedule};
 use crate::config::{Catalog, Config, load_catalog};
-use crate::context::Contexts;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, Kind, NewEvent};
 use crate::home::CpdHome;
@@ -52,8 +51,6 @@ pub(super) struct Engine {
     pub last_poll_end: Option<Instant>,
     /// While GitHub's rate limit is nearly spent, E5 runs no poll before this.
     pub paused_until: Option<Instant>,
-    /// When E6 last ran.
-    pub synced: Option<Instant>,
 }
 
 impl Engine {
@@ -77,11 +74,10 @@ impl Engine {
         Ok(catalog)
     }
 
-    /// One tick: E1–E7 (§3.7), each reporting its own failures.
+    /// One tick: E1–E5 and E7 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalog = None;
-        let steps: [fn(&mut Engine); 7] =
-            [escalations::run, liveness::run, schedule::run, completion::run, pr::run, start_prs, contexts::run];
+        let steps: [fn(&mut Engine); 6] = [escalations::run, liveness::run, schedule::run, completion::run, pr::run, start_prs];
         for step in steps {
             if stopping() {
                 return;
@@ -201,9 +197,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
         catalog: None,
         last_poll_end: None,
         paused_until: None,
-        synced: None,
     };
-    import(&mut engine);
 
     let tick = Duration::from_secs(u64::from(engine.config.watch.tick_seconds));
     while !stopping() {
@@ -219,17 +213,4 @@ pub(super) fn run() -> Result<Output, CpdError> {
         engine.log.line(&format!("cannot append watch-stopped: {} ({})", e.message(), e.code().as_str()));
     }
     Ok(Output::success(json!({"stopped": true})))
-}
-
-/// At start, the import of every Context store (§4.6, commands.md §12).
-fn import(engine: &mut Engine) {
-    let result = Contexts::new(&engine.home, &engine.config, &mut engine.store).import_all(SOURCE);
-    match result {
-        Ok(0) => engine.clear(Step::Start, &About::Machine),
-        Ok(n) => {
-            engine.log.line(&format!("imported {n} Context record(s)"));
-            engine.clear(Step::Start, &About::Machine);
-        }
-        Err(e) => engine.fail(Step::Start, About::Machine, &e),
-    }
 }
