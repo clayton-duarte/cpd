@@ -11,6 +11,7 @@
 mod archive;
 mod contexts;
 pub(crate) mod legacy;
+mod manager;
 mod record;
 pub(crate) mod render;
 mod rename;
@@ -57,6 +58,8 @@ pub enum Command {
     Archive(ArchiveArgs),
     /// Unarchive the Context with its Plans and their Sessions (§3.9)
     Unarchive(UnarchiveArgs),
+    /// Start or resume the Context's Manager (§3.10)
+    Manager(manager::ManagerArgs),
 }
 
 /// A Jira Epic key: `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage` (commands.md §3.1).
@@ -231,6 +234,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Rename(args) => rename::rename(args),
         Command::Archive(args) => archive::archive(args),
         Command::Unarchive(args) => archive::unarchive(args),
+        Command::Manager(args) => manager::manager(args),
     }
 }
 
