@@ -133,6 +133,7 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `session list`, `session show` | TUI, Lead | no | |
 | `session fork`, `open`, `park`, `close`, `rename` | User (TUI), Lead | yes | §6.4, §6.7 |
 | `session archive`, `unarchive` | User (TUI) | yes | §2.2 |
+| `session send` | Lead (the Manager), User | yes | §10.12, §15.3 |
 | `session state` | pi adapter | yes | §3.6 |
 | `session run` (internal) | cockpit panes | yes | §6.7 |
 | `events list`, `events follow` | pi adapter, TUI, scripts | no | §5.4 |
@@ -1426,6 +1427,40 @@ Effects: **rows**, one transaction: `sessions.archived_at = NULL`; **Event** `se
 
 Idempotent: yes; not archived: `"already": true`, nothing written.
 
+### 10.12 `session send`
+
+```
+cpd session send <id> (<text> | --file <f>)
+```
+
+Sends one message to a Lead Session (hs-d92, hs-d133). It appends an Event; the target's adapter delivers it (§15.3).
+
+| Argument | Meaning |
+|---|---|
+| `<id>` | the target Session |
+| `<text>` | the message, a `Text` (1–20 000 characters) |
+| `--file <f>` | the message read from a file, same limits |
+
+Exactly one of `<text>` and `--file` (else `usage`).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Session exists | `session_not_found` | 4 |
+| it is a `lead` | `not_a_lead` | 3 |
+| it is not archived; `details.next` = `cpd session unarchive <id>` | `archived` | 3 |
+
+A `stopped` Lead is accepted: it gets the message when its pi starts (its follower replays from its cursor, §15.2).
+
+Effects:
+- **Rows**, one transaction: **Event** `session-message` with `session` = the target, `context` and `plan` = the target's, `data` = `{from, text}`. `from` is `CPD_SESSION`, else `PI_SESSION_ID`, else null (the User). The Event's `text` is the message text; the adapter composes the delivered content (§15.3).
+- **tmux:** none. No pane is started or typed into.
+
+```json
+{"ok": true, "event": 4812, "session": "a41b…", "from": "596d007f-…"}
+```
+
+`from` is null when neither variable is set. Idempotent: no; each call is one message.
+
 ## 11. `events`
 
 §5. Selection: `--plan <id>`, `--context <id>` or `--session <id>`, at most one (`usage`), or none for every Event; `--kind <kind>` may repeat (a kind not in §5.2 is `usage`). These flags are filters: they do not fall back to `CPD_PLAN` or `CPD_SESSION`.
@@ -1734,6 +1769,7 @@ Events arrive in id order; the follower already applied §11's `--session` rule,
 | `plan-review` with `status: approved` or `rejected`, for a pending entry of this session | a decision made outside plannotator (§15.5 "Deciding elsewhere"): closes `plan-review:<review>`; message `cpd-plan-decision`, **turn** (own custom type, not `cpd`). For any other review: ignored | |
 | `session-renamed` (`session` = itself) | `pi.setSessionName(name)` and `ctx.ui.notify("cpd: session renamed to \"<name>\"")`; no message, no turn | same |
 | `attempt-nudge` (`session` = itself) | | message with `data.prompt` as content, **turn** |
+| `session-message` (`session` = itself) | message, **turn**, `deliverAs: "followUp"`; for every Lead (Plan Lead, side fork, grounded Lead, the Manager; the `--session` rule delivers Events addressed to a Session to it). Content `Message from <sender>: <text>`, `<sender>` = the sender Session's name and id (`<name> (<id>)`), or `the User` when `data.from` is null. An idle Lead starts a turn at once; a working or blocked one gets it after its running turn, never interrupted | |
 | `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | ignored: no message, no turn | ignored |
 | every other kind | ignored | ignored |
 
@@ -1791,6 +1827,30 @@ A failure of `plan show` is an error message and leaves the entry pending. An Ev
 - `doctor` no longer checks the port (§14.1).
 
 Rejected alternatives: one shared review server (cpd would have to run plannotator's server outside pi, which plannotator does not offer to extensions), and a queue (a review waiting for another Plan's User decision could wait for hours). Unverified: that two plannotator servers in one range do not disturb each other's sessions; the adapter Job tests it.
+
+### 15.6 Context updates at turn start
+
+Batch B2 (hs-d79, hs-d132). A Lead sees what other Sessions wrote to its Context without polling.
+
+**When.** At pi's `before_agent_start`, for every run of a Session whose role is `lead`; never a Worker. It never starts or interrupts a turn: it only adds a message to the run that is starting.
+
+**What.** The adapter returns one message, `customType: "cpd-context"`, `display: true`, listing the Context records written **by other Sessions** (`by.session` ≠ this Session) since its cursor, oldest first, each in full. Nothing is returned when there are none. Format:
+
+```
+Context building-cpd: 2 new records since your last turn.
+- hs-d41 decision (2026-10-17): Use one table for sessions, supersedes hs-d12.
+- hs-q9 answer (2026-10-17): Yes, keep it. Answers hs-q8.
+```
+
+Header `Context <c>: <N> new records since your last turn.`; each line `- <id> <kind> (<date>): <text>`; an answer names its question, a superseding decision names what it supersedes. At most 20 records are listed; more end with `and <K> more: cpd context show --context <c> --since <seq>`, with `<seq>` the `seq` before the first record not listed.
+
+**Cursor**, in `context-record` Event ids (not the Event cursor of §15.2):
+1. Start = the Session's `registered_event` (its first message already held the records up to then).
+2. Then the greatest `details.event` of the session file's `cpd-context` messages whose `details.delivered_to` is this Session: the fork-safe rule of §15.2 step 4, for the same reason.
+
+**Reading.** `cpd events list --context <c> --kind context-record --since <cursor>` gives the new `context-record` Events (each `data.seq`); then `cpd context show --context <c> --since <smallest seq - 1>` gives the records with `by`. The adapter skips its own records (`by.session` = this Session). The message's `details` is `{event: <highest context-record Event id read>, delivered_to: <id>, records: [ids]}`; `event` counts own records too, so they are not read again. If every record read is its own, no message is added and the cursor stays (the next read passes them again and skips them again). No schema change.
+
+**Failure.** A failed read adds no message and leaves the cursor, so the next run reads again. It is reported once as an error message (§15.1, no turn: `triggerTurn: false`), and again only after a read has succeeded.
 
 ## 16. The Worker contract
 
