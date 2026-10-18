@@ -108,7 +108,7 @@ pub const VERSION: i64 = 1000;
 /// The canonical schema hash (§4.3) of a fresh store that applied exactly this
 /// binary's migrations, pinned here and never recorded in the store (hs-d178
 /// D2). A test asserts it and prints the new value when it is stale.
-pub const SCHEMA_HASH: &str = "0ac0cb4b8519cf2d9fa2ac715240c02bec63b572b9347bb6a69bb4c28c3735a1";
+pub const SCHEMA_HASH: &str = "989b1ecab93839dec3096d85fc9fa690c0145529237da4da66da13fb63fc1824";
 
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.
@@ -1607,7 +1607,7 @@ mod tests {
                ('acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'Pay', 0, 'open', 'none', 'failed', 't', 't'),
                ('acme/web', 9, 'https://github.com/acme/web/pull/9', 'Web', 1, 'open', 'approved', 'passed', 't', 't');",
         );
-        assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[11]);
+        assert_eq!(legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[11]);
         let mut store = Store::open(&home, 5000).unwrap();
         assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
         assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
@@ -1749,12 +1749,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = home(&dir);
         version_6(&home);
-        assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[5]);
+        assert_eq!(legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[5]);
 
         let mut store = Store::open(&home, 5000).unwrap();
         assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
         assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
-        assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[VERSION as usize - 1]);
+        assert_eq!(canonical_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASH);
         assert_eq!(
             rows(&mut store, "SELECT id, kind FROM events ORDER BY id"),
             vec![serde_json::json!([1, "context-created"]), serde_json::json!([2, "pr-merged"])]
@@ -2258,6 +2258,12 @@ mod tests {
         if n >= 4 {
             conn.execute_batch(&format!("BEGIN; {WEB} INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay'); COMMIT;")).unwrap();
         }
+        if n >= 12 {
+            conn.execute_batch(&format!(
+                "BEGIN; INSERT INTO inbox_items (kind, urgency, subject, plan, context, label, opened_at) VALUES ('dialog', 'red', 'plan:gr', 'gr', 'ctx', 'Answer', '{T}'); COMMIT;"
+            ))
+            .unwrap();
+        }
     }
 
     /// Every row of every table, as JSON text, by table, in rowid order.
@@ -2350,9 +2356,9 @@ mod tests {
                 let mut rows_before = rows_before;
                 assert_eq!(rows_after.remove("schema_migrations").map(|r| r.len()), Some(LEGACY.len() + NAMED.len()));
                 // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
-                assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(42));
+                assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(46));
                 assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
-                assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(16));
+                assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(17));
                 let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
                 assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
                 assert_eq!(txns_after.len(), txns_before.len() + 1);
