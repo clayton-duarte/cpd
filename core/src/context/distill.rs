@@ -163,7 +163,6 @@ impl Run<'_> {
         let file = digest::install(self.home, self.context, upto)?;
         let installed = Digest { upto_seq: upto, file, text: String::from_utf8(bytes).expect("a valid digest is UTF-8") };
         Ok(json!({
-            "ok": true,
             "context": self.context.as_str(),
             "distilled": distilled,
             "digest": digest_json(Some(&installed)),
