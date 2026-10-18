@@ -1833,8 +1833,7 @@ The adapter keeps three facts and reports the state they give (the model of `tmu
 |---|---|
 | `active` | true at pi's `agent_start`; false at `agent_settled` when `ctx.isIdle()` is true |
 | its own blocking reasons | §15.3 (`escalation:<id>`) and §15.5 (`plan-review:<review>`), each with a label |
-| other extensions' blocking signals | `pi.events.on("herdr:blocked", {active, label})`, counted: one `active: false` closes one `active: true` |
-| blocking dialogs | pi's `ui_prompt_start` and `ui_prompt_end` (pi 1.2.0 `ExtensionAPI`, emitted around every blocking extension UI prompt: `select`, `confirm`, `input`, `editor`, `custom`; depth-counted, so nested prompts give one pair) open and close **one** blocking reason labelled `dialog`. `herdr:blocked` stays. The installed `ask_user_question` package does not emit `herdr:blocked` (hs-n44), so the dialog reason is what shows it |
+| blocking dialogs | pi's `ui_prompt_start` and `ui_prompt_end` (pi 1.2.0 `ExtensionAPI`, emitted around every blocking extension UI prompt: `select`, `confirm`, `input`, `editor`, `custom`; depth-counted, so nested prompts give one pair) open and close **one** blocking reason labelled `dialog`. The dialog reason covers `ask_user_question` (hs-n47) |
 
 Reported state: `blocked` with the label of the most recently opened reason while any reason or signal is open; else `working` while `active`; else `idle`. On every change it runs `cpd session state <state> [--label <label>] --session <id>`. Calls are serialised: at most one in flight, and only the latest wanted state is sent next, so states never arrive out of order. A refused call (`illegal_transition`, for example after the engine marked the Session `stopped`) is reported as an error once and the next change is tried normally. At `session_shutdown`: `session state stopped`, waited for at most 2 s; `session run` reports it as well if pi exits without it (§10.8).
 
