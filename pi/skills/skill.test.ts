@@ -1,22 +1,29 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 
 const here = new URL("./", import.meta.url);
-const skillDir = new URL("cpd-lead/", here);
 const commandsDoc = readFileSync(new URL("../../docs/commands.md", here), "utf8");
 
-/** SKILL.md plus every file under references/: the whole text the Lead can load. */
-function skillFiles(): { name: string; text: string }[] {
-  const refs = readdirSync(new URL("references/", skillDir)).sort();
+/** The skills of the package, each with the fewest `cpd …` commands it must name (a floor against a parser that finds nothing). */
+const skills = [
+  { skill: "cpd-lead", minCommands: 40 },
+  { skill: "cpd-manager", minCommands: 15 },
+] as const;
+
+/** SKILL.md plus every file under references/ (if any): the whole text the agent can load. */
+function skillFiles(skill: string): { name: string; text: string }[] {
+  const skillDir = new URL(`${skill}/`, here);
+  const refsDir = new URL("references/", skillDir);
+  const refs = existsSync(refsDir) ? readdirSync(refsDir).sort() : [];
   return [
-    { name: "SKILL.md", text: readFileSync(new URL("SKILL.md", skillDir), "utf8") },
-    ...refs.map((f) => ({ name: `references/${f}`, text: readFileSync(new URL(`references/${f}`, skillDir), "utf8") })),
+    { name: `${skill}/SKILL.md`, text: readFileSync(new URL("SKILL.md", skillDir), "utf8") },
+    ...refs.map((f) => ({ name: `${skill}/references/${f}`, text: readFileSync(new URL(f, refsDir), "utf8") })),
   ];
 }
 
-test("frontmatter: name cpd-lead and a description that says when to use it", () => {
-  const m = /^---\n([\s\S]*?)\n---\n/.exec(skillFiles()[0]!.text);
+for (const { skill } of skills) test(`${skill} frontmatter: its name and a description that says when to use it`, () => {
+  const m = /^---\n([\s\S]*?)\n---\n/.exec(skillFiles(skill)[0]!.text);
   assert.ok(m, "SKILL.md must start with a --- frontmatter block");
   const fields: Record<string, string> = {};
   for (const line of m[1]!.split("\n")) {
@@ -26,7 +33,7 @@ test("frontmatter: name cpd-lead and a description that says when to use it", ()
     fields[kv[1]!] = kv[2]!;
   }
   assert.deepEqual(Object.keys(fields).sort(), ["description", "name"]);
-  assert.equal(fields.name, "cpd-lead");
+  assert.equal(fields.name, skill);
   assert.ok(fields.description!.length <= 1024, "pi allows descriptions up to 1024 characters");
   assert.match(fields.description!, /\bUse when\b/);
 });
@@ -61,11 +68,11 @@ function synopses(): Map<string, Set<string>> {
   return map;
 }
 
-/** Every `cpd …` command the text names: inline code spans and lines of fenced blocks (not the `cpd adapter:` message prefix). */
+/** Every `cpd …` command the text names: inline code spans and lines of fenced blocks, indented or not (not the `cpd adapter:` message prefix). */
 function commandsNamed(text: string): string[] {
   const found: string[] = [];
   const fenced = text.replace(/```[^\n]*\n([\s\S]*?)```/g, (_all, body: string) => {
-    for (const line of body.split("\n")) if (line.startsWith("cpd ")) found.push(line.trim());
+    for (const line of body.split("\n")) if (line.trim().startsWith("cpd ")) found.push(line.trim()); // a block in a list item is indented
     return "";
   });
   for (const span of fenced.matchAll(/`([^`\n]+)`/g)) {
@@ -82,10 +89,10 @@ test("commands.md synopses are parsed (anchors)", () => {
   assert.ok(known.get("job add")!.has("--needs"));
 });
 
-test("every cpd command the skill names exists in commands.md, with the flags used", () => {
+for (const { skill, minCommands } of skills) test(`every cpd command ${skill} names exists in commands.md, with the flags used`, () => {
   const known = synopses();
-  const named = skillFiles().flatMap((f) => commandsNamed(f.text).map((c) => ({ file: f.name, command: c })));
-  assert.ok(named.length > 40, `expected many commands, found ${named.length}`);
+  const named = skillFiles(skill).flatMap((f) => commandsNamed(f.text).map((c) => ({ file: f.name, command: c })));
+  assert.ok(named.length > minCommands, `expected many commands, found ${named.length}`);
   for (const { file, command } of named) {
     const key = words(command.slice("cpd ".length)).join(" ");
     const flags = known.get(key);
@@ -96,25 +103,26 @@ test("every cpd command the skill names exists in commands.md, with the flags us
   }
 });
 
-test("nothing of cpd 1 or of the removed Reviewer is left", () => {
-  for (const { name, text } of skillFiles()) {
+for (const { skill } of skills) test(`${skill}: nothing of cpd 1, of the removed Reviewer or of the retired grounded Lead is left`, () => {
+  for (const { name, text } of skillFiles(skill)) {
+    assert.doesNotMatch(text, /\bgrounded\b|forked_from/i, `${name}: the grounded Lead is retired (hs-d129); a Lead starts fresh`);
     assert.doesNotMatch(text, /--wf\b|\bCPD_WF\b/, `${name}: --wf is cpd 1`);
     assert.doesNotMatch(text, /\bworkflows?\b/i, `${name}: the term Workflow is retired`);
     assert.doesNotMatch(text, /herdr|\bbd\b|queue message|reviewMode|review-tier|review-needed|review decide|outOfScope/i, `${name}: cpd 1 or removed Reviewer text`);
   }
 });
 
-test("relative links resolve to files of the skill", () => {
-  const files = new Set(skillFiles().map((f) => f.name));
-  for (const { name, text } of skillFiles()) {
+for (const { skill } of skills) test(`${skill}: relative links resolve to files of the skill`, () => {
+  const files = new Set(skillFiles(skill).map((f) => f.name));
+  for (const { name, text } of skillFiles(skill)) {
     for (const link of text.matchAll(/\]\((references\/[^)#]+)(?:#[^)]*)?\)/g)) {
-      assert.ok(files.has(link[1]!), `${name}: broken link ${link[1]}`);
+      assert.ok(files.has(`${skill}/${link[1]!}`), `${name}: broken link ${link[1]}`);
     }
   }
 });
 
-test("rules allow git and gh for diagnosis, still forbid tmux, wt, force pushes and product commits", () => {
-  const text = skillFiles()[0]!.text;
+test("cpd-lead rules allow git and gh for diagnosis, still forbid tmux, wt, force pushes and product commits", () => {
+  const text = skillFiles("cpd-lead")[0]!.text;
   const rule = text.split("\n").find((l) => l.startsWith("- `git` and `gh`") || /`git` and `gh` are allowed/.test(l));
   assert.ok(rule, "Rules must say what git and gh may do");
   assert.match(rule, /Never run `tmux` or `wt`/);
@@ -122,4 +130,24 @@ test("rules allow git and gh for diagnosis, still forbid tmux, wt, force pushes 
   assert.match(rule, /never commit product changes/);
   assert.ok(!/Never run `git`/.test(text), "git is no longer forbidden");
   assert.match(text, /gh pr checks <n>[^|\n]*gh run view <run-id> --log-failed/);
+});
+
+test("cpd-lead talks to its Manager with session send and still asks the User directly", () => {
+  const text = skillFiles("cpd-lead")[0]!.text;
+  assert.match(text, /cpd session send <manager-id>/);
+  assert.match(text, /cpd session list --role manager/);
+  assert.match(text, /session-message/);
+  assert.match(text, /cpd-context/);
+});
+
+test("cpd-manager starts Plans with a brief, messages Leads and never answers for the User", () => {
+  const named = commandsNamed(skillFiles("cpd-manager")[0]!.text);
+  const has = (re: RegExp) => named.some((c) => re.test(c));
+  assert.ok(has(/^cpd plan new .*--context .*--title .*--brief-file/), "plan new with --context, --title and --brief-file");
+  assert.ok(has(/^cpd session send /), "session send");
+  for (const kind of ["decide", "note", "ask", "answer"]) assert.ok(has(new RegExp(`^cpd context ${kind} `)), `context ${kind}`);
+  assert.ok(has(/^cpd plan list/) && has(/^cpd plan show/), "plan list and plan show");
+  const text = skillFiles("cpd-manager")[0]!.text;
+  assert.match(text, /Never answer for the User/);
+  assert.match(text, /never moves the chat slot/);
 });
