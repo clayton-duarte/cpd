@@ -387,7 +387,7 @@ A hidden (snoozed or dismissed) item fills no dot and is not counted. Escalation
 |---|---|---|---|
 | `dialog` | a Lead, side fork or Manager Session (never a Worker) is `blocked` with a label other than `cpd: Worker question` and `cpd: plan review` (the Session) | red when its Plan is in `dispatch` or `pr`; magenta in `grounding`, `plan`, `done` or with no Plan | `<who> asks you` |
 | `plan-review` | the Plan's latest Plan review is `pending` (the review) | magenta | `<plan> plan review` |
-| `unread` | a Lead, side fork or Manager Session is `idle`, not in the chat slot, and its latest `session-state` Event with `to: idle` is newer than its latest `session-moved` with `place: chat` (the Session) | white | `<who> replied` |
+| `unread` | a Lead, side fork or Manager Session is `idle`, not in the chat slot, and its latest `session-state` Event from `working` or `blocked` to `idle` is newer than its latest `session-moved` with `place: chat` (the Session); a start or reload (`stopped` → `idle`) is not a finished turn (hs-d242) | white | `<who> replied` |
 | `job-stuck` | a Job is `failed` and its latest `job-failed` Event is at least `inbox.stuck_job_minutes` (§8.2) old; it clears on retry or cancel (the Job) | red | `<plan>/<job> failed` |
 | `engine-error` | an `error` the engine itself reported (a failure of E1–E9, §3.7) has not cleared (step, scope and code) | red | `engine <step>: <code>` |
 | `engine-down` | `locks/watch.lock` is free. **Not stored**: the engine cannot report its own absence, so `cpd inbox list` adds it, first, with `id: null` | red | `engine is down` |

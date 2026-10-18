@@ -16,7 +16,7 @@ pub enum Dot {
     Idle,
     /// `palette::SPINNER`: the Lead is working.
     Working,
-    /// `palette::NEEDS_YOU` white: an idle turn the User has not seen.
+    /// `palette::NEEDS_YOU` white: a finished turn the User has not seen.
     White,
     /// `palette::NEEDS_YOU` magenta: blocked outside dispatch and deploy, or the Plan's review is pending.
     Magenta,
@@ -38,7 +38,8 @@ impl Dot {
 pub struct DotInputs {
     pub state: State,
     pub place: Place,
-    /// The id of its latest `session-state` Event with `to: "idle"`.
+    /// The id of its latest finished turn: its latest `session-state` Event from `working` or `blocked` to `idle` (a start or
+    /// reload, `stopped` to `idle`, is not one; hs-d242).
     pub settled: Option<i64>,
     /// The id of its latest `session-moved` Event with `place: "chat"`.
     pub seen: Option<i64>,
