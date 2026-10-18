@@ -61,10 +61,10 @@ fn setup(env: &TestEnv) {
                 &format!(
                     "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
                      INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
-                       ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead one', '{cwd}', 'O3', 'idle', 't1', 't1'),
+                       ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead one', '{cwd}', 'O3', 'idle', '2020-01-01T00:00:01Z', 't1'),
                        ('lead2', 'lead', 'ctx', 'other', NULL, 'Lead two', '{cwd}', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't2'),
                        ('manager1', 'manager', 'ctx', NULL, NULL, 'Manager', '{cwd}', 'O5', 'stopped', '2020-01-01T00:00:00Z', 't0'),
-                       ('worker1', 'worker', 'ctx', 'pay', 'api-a1', 'pay api a1', '{cwd}', 'S2', 'working', 't3', 't3');
+                       ('worker1', 'worker', 'ctx', 'pay', 'api-a1', 'pay api a1', '{cwd}', 'S2', 'working', '2020-01-01T00:00:03Z', 't3');
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
                        ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't'),
                        ('other', 'ctx', 'Other', 'grounding', 'lead2', 't');
@@ -247,7 +247,7 @@ fn list_filters_and_derives_place_and_leads() {
     assert_eq!(
         *lead1,
         json!({"id": "lead1", "role": "lead", "context": "ctx", "plan": "pay", "attempt": null, "name": "Lead one",
-               "state": "idle", "state_label": null, "state_at": "t1", "archived_at": null, "place": "none", "tmux_pane": null, "file": null,
+               "state": "idle", "state_label": null, "state_at": "2020-01-01T00:00:01Z", "archived_at": null, "place": "none", "tmux_pane": null, "file": null,
                "forked_from": null, "plan_lead": true, "tier": "O3",
                "cwd": env.root().display().to_string()})
     );
@@ -1031,7 +1031,7 @@ fn archive_of_a_lead_with_no_pane_closes_nothing() {
         &env,
         &format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from)
-               VALUES ('{fork}', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'stopped', 't', 't', 'lead1')"
+               VALUES ('{fork}', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't', 'lead1')"
         ),
     );
     let out = env.cpd(&["session", "archive", fork]).ok();
@@ -1418,8 +1418,8 @@ fn quit_fixture(env: &TestEnv) {
     exec_sql(
         env,
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from) VALUES
-           ('side', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'idle', 't', 't', 'lead1'),
-           ('side2', 'lead', 'ctx', 'other', 'Side two', '/', 'O3', 'idle', 't', 't', 'lead2')",
+           ('side', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'idle', '2020-01-01T00:00:00Z', 't', 'lead1'),
+           ('side2', 'lead', 'ctx', 'other', 'Side two', '/', 'O3', 'idle', '2020-01-01T00:00:00Z', 't', 'lead2')",
     );
     for id in ["side", "side2", LEAD1, LEAD2] {
         pi_file(env, id, false);
@@ -1575,10 +1575,10 @@ fn setup_short(env: &TestEnv) {
         &format!(
             "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('cafe', 'ctx', 'Cafe', 'grounding', '{CAFE_LEAD}', 't');
              INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at) VALUES
-               ('{UUID_A}', 'lead', 'ctx', 'pay', 'A', '/', 'O3', 'stopped', 't', 't4'),
-               ('{UUID_B}', 'lead', 'ctx', 'pay', 'B', '/', 'O3', 'stopped', 't', 't5'),
-               ('{CAFE_LEAD}', 'lead', 'ctx', 'cafe', 'Cafe lead', '/', 'O3', 'stopped', 't', 't6'),
-               ('{CAFE_PREFIXED}', 'lead', 'ctx', 'cafe', 'Cafe prefixed', '/', 'O3', 'stopped', 't', 't7')"
+               ('{UUID_A}', 'lead', 'ctx', 'pay', 'A', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't4'),
+               ('{UUID_B}', 'lead', 'ctx', 'pay', 'B', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't5'),
+               ('{CAFE_LEAD}', 'lead', 'ctx', 'cafe', 'Cafe lead', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't6'),
+               ('{CAFE_PREFIXED}', 'lead', 'ctx', 'cafe', 'Cafe prefixed', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't7')"
         ),
     );
 }
