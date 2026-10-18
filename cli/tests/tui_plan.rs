@@ -294,7 +294,10 @@ fn the_chart_of_a_store_equivalent_to_the_cockpits_fixture_matches_it() {
     sql(&env, &plan_with("dispatch", None, CPD_JOBS));
     let pane = start_view(&env);
     let rows = CPD_CHART.lines().count();
-    let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 2 + rows && s[2].contains("contract-core"));
+    // the screen is captured whenever it is: wait for a frame drawn to the box's right border on every row (a capture may fall in the middle of the first frame, which the view writes in pieces)
+    let screen = screen_when(&env, &pane, "the chart", |s| {
+        s.len() > 2 + rows && s[2].contains("contract-core") && s[2..2 + rows].iter().all(|l| l.ends_with('│') && l.chars().count() == s[1].chars().count()) && s.iter().any(|l| l.ends_with('┘'))
+    });
     assert_eq!(chart_rows(&screen, rows), CPD_CHART.trim_end(), "{}", screen.join("\n"));
     // a Plan of one PR is one box, titled on its top border
     assert!(screen[1].starts_with("  ┌ repo · repo → main · dispatch ─"), "{:?}", screen[1]);
@@ -455,6 +458,23 @@ fn a_pull_request_box_title_ends_in_a_link_to_it_and_a_pending_review_is_a_row_a
 }
 
 #[test]
+fn a_conflict_shows_in_the_box_title_and_clears_with_no_event_within_the_refresh() {
+    let env = env();
+    sql(&env, &plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
+    let pane = start_view(&env);
+    let title = |s: &[String], word: &str| s.iter().any(|l| l.contains(&format!("#7 {word} ↗")));
+    screen_when(&env, &pane, "the open title", |s| title(s, "open"));
+
+    // the poll stored a conflict: no Event is appended for the view to wake on, so only the 2 s re-read shows it
+    sql(&env, "UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 7;");
+    screen_when(&env, &pane, "conflict", |s| title(s, "conflict"));
+
+    // `unknown` is not a conflict
+    sql(&env, "UPDATE pull_requests SET mergeable = 'unknown' WHERE number = 7;");
+    screen_when(&env, &pane, "open again", |s| title(s, "open"));
+}
+
+#[test]
 fn without_a_port_file_the_pending_review_row_has_no_arrow() {
     let env = env();
     sql(&env, &plan_under_review(1, "pending"));
@@ -557,7 +577,17 @@ fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_re
     let mut down = vec!["send-keys", "-t", &pane];
     down.extend(std::iter::repeat_n("j", 45));
     tmux_out(&env, &down);
-    let scrolled = screen_when(&env, &pane, "the chart scrolled", |s| s.iter().all(|l| !l.contains(" j10 ")));
+    // the view takes the keys one by one: wait for the last one (the 45th pill from j10, j54, selected), then for a screen that holds still
+    wait_until("the last pill selected", || {
+        tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]).lines().any(|l| l.contains(" j54 ") && selected(l))
+    });
+    let mut scrolled = screen(&env, &pane);
+    wait_until("the chart to hold still", || {
+        std::thread::sleep(Duration::from_millis(300));
+        let now = screen(&env, &pane);
+        std::mem::replace(&mut scrolled, now) == scrolled
+    });
+    assert!(scrolled.iter().all(|l| !l.contains(" j10 ")), "{}", scrolled.join("\n"));
     assert!(selected(&tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane])), "no pill is selected before the switch");
 
     // another Plan starts at its corner; coming back shows the chart where it was left, with nothing selected

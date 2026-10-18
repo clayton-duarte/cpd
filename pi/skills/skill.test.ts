@@ -137,7 +137,8 @@ test("cpd-lead talks to its Manager with session send and still asks the User di
   assert.match(text, /cpd session send <manager-id>/);
   assert.match(text, /cpd session list --role manager/);
   assert.match(text, /session-message/);
-  assert.match(text, /cpd-context/);
+  assert.match(text, /cpd context show --since/);
+  assert.doesNotMatch(text, /cpd-context/, "Leads get no turn-start cpd-context message (hs-d209)");
 });
 
 test("cpd-manager starts Plans with a brief, messages Leads and never answers for the User", () => {
@@ -150,6 +151,26 @@ test("cpd-manager starts Plans with a brief, messages Leads and never answers fo
   const text = skillFiles("cpd-manager")[0]!.text;
   assert.match(text, /Never answer for the User/);
   assert.match(text, /never moves the chat slot/);
+  assert.match(text, /--wake/);
+  const keep = text.split("\n").find((l) => l.startsWith("- **Keep the work moving.**"));
+  assert.ok(keep, "the keep-moving rule exists");
+  assert.match(keep, /cpd session send --wake/);
+});
+
+test("cpd-manager may create Leads and open sessions, and states its focus", () => {
+  const text = skillFiles("cpd-manager")[0]!.text;
+  const named = commandsNamed(text);
+  for (const cmd of ["cpd plan new", "cpd session open", "cpd session fork"]) assert.ok(named.some((c) => c.startsWith(cmd)), `${cmd} is named`);
+  const forbidden = text.split("\n").find((l) => l.startsWith("- Never run what belongs to cpd itself or to the User"));
+  assert.ok(forbidden, "the forbidden list exists");
+  assert.doesNotMatch(forbidden, /cpd session open|cpd session fork/);
+  const allowed = text.split("\n").find((l) => l.startsWith("- You may create Leads and open sessions"));
+  assert.ok(allowed, "the allowed rule exists");
+  assert.match(allowed, /cpd plan new/);
+  assert.match(allowed, /cpd session open/);
+  assert.match(allowed, /cpd session fork/);
+  assert.match(text, /coordinate the Leads, own the Epic and the Context, make sure the work keeps moving, and help the User turn requirements into actionable Plans/);
+  assert.match(text, /Leads? .*escalates? directly to the User/);
 });
 
 /** The text of a markdown section: from its heading line to the next heading of the same or a higher level. */
@@ -161,6 +182,12 @@ function section(text: string, heading: string): string {
   const end = lines.findIndex((l, i) => i > start && new RegExp(`^#{1,${level}} `).test(l));
   return lines.slice(start, end < 0 ? undefined : end).join("\n");
 }
+
+test("cpd-lead Escalations: ask the User directly, never through the Manager", () => {
+  const esc = section(skillFiles("cpd-lead")[0]!.text, "#### Escalations");
+  assert.match(esc, /ask the User directly/);
+  assert.match(esc, /never through the Manager/);
+});
 
 test("cpd-lead is organised by the CPD flow: Context, Plan and Deploy with their steps, in order", () => {
   const text = skillFiles("cpd-lead")[0]!.text;

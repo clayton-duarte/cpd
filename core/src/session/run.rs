@@ -67,7 +67,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
             },
             None => None,
         };
-        let start = start(&mut env, &dirs, &row)?;
+        let Some(start) = start(&mut env, &dirs, &row)? else { return Ok(Output::Owned) };
         let candidates = pi::lead_candidates(&env.config.pi_adapter_dir()?, &env.config.lead_pi_packages);
         let extensions = pi::extensions_to_pass(&candidates, Path::new(&row.cwd), &dirs, &mut std::io::stderr());
         // `PLANNOTATOR_REMOTE` comes from cpd's environment; the port is the Plan's, whatever the environment holds.
@@ -334,13 +334,14 @@ fn record_file(env: &mut Env, dirs: &PiDirs, id: &SessionId) -> Result<bool, Cpd
 }
 
 /// How pi starts this time (§6.7, commands.md §10.8): resume when the file
-/// exists, else fork once the source is idle, else fresh.
-fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<LeadStart, CpdError> {
+/// exists, else fork once the source is idle, else fresh. `None` at the end of
+/// input while a fork waits for a source that can never become idle.
+fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<LeadStart>, CpdError> {
     if let Some(file) = existing_file(dirs, row) {
         if row.file.as_deref() != Some(&file.display().to_string()) {
             record_file(env, dirs, &row.id)?;
         }
-        return Ok(LeadStart::Resume { file });
+        return Ok(Some(LeadStart::Resume { file }));
     }
     let tier = Tier::parse(&row.tier).map_err(|_| bad_row(format!("{} has tier {:?}", row.id, row.tier)))?;
     let models = &env.config.tiers;
@@ -353,8 +354,8 @@ fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<LeadStart, CpdError>
     let message = first_message(&env.home, row)?;
     match &row.forked_from {
         Some(source) => {
-            let source_file = wait_for_source(env, dirs, source, &row.name)?;
-            Ok(LeadStart::Fork { model, name: row.name.clone(), source_file, first_message: message })
+            let Some(source_file) = wait_for_source(env, dirs, source, &row.name)? else { return Ok(None) };
+            Ok(Some(LeadStart::Fork { model, name: row.name.clone(), source_file, first_message: message }))
         }
         None => {
             let first_message = message.ok_or_else(|| {
@@ -366,7 +367,7 @@ fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<LeadStart, CpdError>
                         (None, _) => None,
                     })
             })?;
-            Ok(LeadStart::Fresh { model, name: row.name.clone(), first_message })
+            Ok(Some(LeadStart::Fresh { model, name: row.name.clone(), first_message }))
         }
     }
 }
@@ -374,8 +375,11 @@ fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<LeadStart, CpdError>
 /// Waits until the source is idle (§6.7 step 1) and returns its file: the file
 /// exists, its state is `idle` or `stopped`, its last `message` entry is an
 /// assistant message with `stopReason` `stop`, and it has not been modified
-/// for `fork_quiet_seconds`. Checks every 2 s, showing the waiting line.
-fn wait_for_source(env: &mut Env, dirs: &PiDirs, source: &SessionId, name: &str) -> Result<PathBuf, CpdError> {
+/// for `fork_quiet_seconds`. Checks every 2 s, showing the waiting line. A source
+/// that is `stopped` with no file can never become idle (hs-d196): the pane says so
+/// and waits for Enter to try again; `None` at the end of input. A source that is
+/// working is waited for without a time bound.
+fn wait_for_source(env: &mut Env, dirs: &PiDirs, source: &SessionId, name: &str) -> Result<Option<PathBuf>, CpdError> {
     let quiet = Duration::from_secs(u64::from(env.config.timeouts.fork_quiet_seconds));
     let mut shown = false;
     loop {
@@ -385,7 +389,18 @@ fn wait_for_source(env: &mut Env, dirs: &PiDirs, source: &SessionId, name: &str)
             && quiet_since(&file, quiet)
             && std::fs::read_to_string(&file).is_ok_and(|text| turn_finished(&text))
         {
-            return Ok(file);
+            return Ok(Some(file));
+        }
+        if src.state == State::Stopped && existing_file(dirs, &src).is_none() {
+            print!("\n  The source Lead {source} is stopped and has no session file, so it will never finish a turn.\n  Press Enter to retry.\n");
+            let _ = std::io::stdout().flush();
+            let mut line = String::new();
+            match std::io::stdin().lock().read_line(&mut line) {
+                Ok(0) | Err(_) => return Ok(None),
+                Ok(_) => {}
+            }
+            shown = false;
+            continue;
         }
         if !shown {
             print!("\n  Waiting for the source Lead to finish its turn, then forking it as \"{name}\"…\n");

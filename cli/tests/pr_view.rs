@@ -18,7 +18,10 @@ dir="$(dirname "$0")/../gh"
 if [ -e "$dir/fail" ]; then cat "$dir/fail" >&2; exit 1; fi
 case "$1 $2" in
   "pr view") cat "$dir/view.json" ;;
-  "api repos/{owner}/{repo}/pulls/812/comments") cat "$dir/inline.json" ;;
+  "api repos/{owner}/{repo}/pulls/812/comments"*)
+    cat "$dir/inline.json"
+    # `gh api --paginate` prints every page, one JSON array after the other.
+    for a in "$@"; do if [ "$a" = --paginate ] && [ -e "$dir/inline2.json" ]; then cat "$dir/inline2.json"; fi; done ;;
   *) echo "unexpected gh call: $*" >&2; exit 9 ;;
 esac
 "#;
@@ -115,7 +118,21 @@ fn view_prints_the_checks_reviews_comments_and_inline_comments() {
     let gh = fx.env.calls("gh");
     assert_eq!(gh[0][..3], ["pr", "view", "812"]);
     assert_eq!(gh[0][4], "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url");
-    assert_eq!(gh[1], ["api", "repos/{owner}/{repo}/pulls/812/comments"]);
+    assert_eq!(gh[1], ["api", "repos/{owner}/{repo}/pulls/812/comments?per_page=100", "--paginate"]);
+}
+
+#[test]
+fn view_reads_every_page_of_inline_comments() {
+    let fx = fx("open");
+    fx.gh("inline2.json", r#"[{"id": 1894, "user": {"login": "other"}, "path": "src/lib.rs", "body": "Second page."}]"#);
+
+    let out = fx.env.cpd(&["pr", "view", "--pr", "repo", "--plan", "pay"]).ok();
+
+    assert_eq!(
+        out["inline_comments"],
+        json!([{"id": "1893", "author": "reviewer", "path": "src/payout.rs", "body": "This retry never backs off."},
+               {"id": "1894", "author": "other", "path": "src/lib.rs", "body": "Second page."}])
+    );
 }
 
 #[test]

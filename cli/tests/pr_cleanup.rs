@@ -12,6 +12,7 @@ use common::TestEnv;
 use cpd_core::git::{Setup, create_attempt_worktree, prepare_lead_worktree, pr_lead_worktree_path};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId, PrKey};
+use cpd_core::merge::RepoLock;
 use cpd_core::store::Store;
 use rusqlite::params;
 use serde_json::{Value, json};
@@ -42,7 +43,7 @@ fn node(number: i64, state: &str) -> String {
 
 fn search_answer(nodes: &[String]) -> String {
     format!(
-        r#"{{"data":{{"search":{{"issueCount":{},"nodes":[{}]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}}}}"#,
+        r#"{{"data":{{"search":{{"issueCount":{},"nodes":[{}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}}}}"#,
         nodes.len(),
         nodes.join(",")
     )
@@ -306,4 +307,30 @@ fn a_locked_attempt_worktree_survives_until_it_is_unlocked() {
 
     assert_eq!(fx.gone("api"), (true, true));
     assert_eq!(fx.errors().len(), 1);
+}
+
+#[test]
+fn a_held_repo_lock_defers_the_clean_up_to_a_later_poll_with_no_event() {
+    // hs-n124: a Gate holds the repo lock in the Lead worktree while the PR merges on GitHub.
+    let fx = fx(&["api"]);
+    let api = fx.pr("api");
+    fx.github(&[], &["api"]);
+
+    let lock = RepoLock::wait(&fx.home, &fx.repo).unwrap();
+    let out = fx.poll();
+
+    assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "api"}]));
+    assert!(api.lead.exists() && fx.branch_exists(&api.lead_branch), "the Lead worktree stays under a held lock");
+    assert!(api.attempt.exists() && fx.branch_exists(&api.attempt_branch));
+    assert_eq!(fx.errors(), Vec::<Value>::new());
+
+    fx.poll();
+    assert!(api.lead.exists(), "still held");
+    assert_eq!(fx.errors(), Vec::<Value>::new());
+
+    drop(lock);
+    fx.poll();
+
+    assert_eq!(fx.gone("api"), (true, true));
+    assert_eq!(fx.errors(), Vec::<Value>::new());
 }

@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 11
+-- cpd-migration: breaking after 13
 -- The lookup tables for the lists that migrations extend (contract §4.4, §4.5
 -- K1–K4; hs-d178 D1): `event_kinds`, `record_kinds` and `history_tables`, filled
 -- with today's values. `events` and `context_records` are rebuilt once more, the
@@ -25,6 +25,7 @@ INSERT INTO event_kinds (name) VALUES
   ('context-renamed'), ('plan-renamed'),
   ('context-archived'), ('plan-archived'), ('session-archived'),
   ('session-message'),
+  ('inbox-opened'), ('inbox-closed'), ('inbox-snoozed'), ('inbox-dismissed'),
   ('watch-started'), ('watch-stopped'), ('error');
 INSERT INTO record_kinds (name) VALUES ('decision'), ('note'), ('question'), ('answer'), ('plan'), ('brief');
 -- The tables whose history triggers are generated; `no_delete` 0: no generated `_no_delete`
@@ -32,7 +33,7 @@ INSERT INTO record_kinds (name) VALUES ('decision'), ('note'), ('question'), ('a
 INSERT INTO history_tables (name, no_delete) VALUES
   ('contexts', 1), ('context_records', 1), ('plans', 1), ('pull_requests', 0), ('prs', 1), ('pr_needs', 0),
   ('plan_reviews', 1), ('jobs', 1), ('dependencies', 0), ('attempts', 1), ('escalations', 1),
-  ('sessions', 1), ('tier_catalog', 1), ('event_kinds', 1), ('record_kinds', 1), ('history_tables', 1);
+  ('sessions', 1), ('inbox_items', 1), ('tier_catalog', 1), ('event_kinds', 1), ('record_kinds', 1), ('history_tables', 1);
 
 -- ---------- events ----------
 CREATE TABLE events_new (

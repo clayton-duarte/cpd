@@ -57,6 +57,8 @@ pub(super) const LEGACY: &[Legacy] = &[
     Legacy { name: "0009-session-message", compat: Compat::Breaking, sql: include_str!("migrations/0009-session-message.sql"), apply: migration_9 },
     Legacy { name: "0010-manager", compat: Compat::Breaking, sql: include_str!("migrations/0010-manager.sql"), apply: migration_10 },
     Legacy { name: "0011-pr-mergeable", compat: Compat::Breaking, sql: include_str!("migrations/0011-pr-mergeable.sql"), apply: migration_11 },
+    Legacy { name: "0012-inbox", compat: Compat::Breaking, sql: include_str!("migrations/0012-inbox.sql"), apply: migration_12 },
+    Legacy { name: "0013-pr-inbox", compat: Compat::Breaking, sql: include_str!("migrations/0013-pr-inbox.sql"), apply: migration_13 },
 ];
 
 /// The legacy version whose migration (`0007-context-records`) imports the old
@@ -93,6 +95,8 @@ pub(super) const SCHEMA_HASHES: &[&str] = &[
     "3ea4336e93cb740321d1c5c989863c2e018d1348e4e2a22a84feee158f5bee98",
     "2f8e238fbc3b0d5f768fe3c5e6c118b26eda5581d93841449563979a51144168",
     "d2623567062d0367ddcf3dcd0b96c6d7e2b45d447e3b841f77d0249129736277",
+    "ae8ea2361df62ed1a89912b6e39227f4afd043475f27ac7faf78ce847e208cbb",
+    "7da9b792cadf9d12a54eb26ad99a78c48fdcbb2e4a220f767973a7760cd16c9a",
 ];
 
 const _: () = assert!(SCHEMA_HASHES.len() == LEGACY.len(), "one legacy schema hash per legacy migration");
@@ -330,6 +334,24 @@ fn migration_11(conn: &Connection) -> Result<()> {
     create_history_triggers(conn, "pull_requests", false)
 }
 
+/// The Inbox (§4.5 legacy migration 0012, hs-d168): `inbox_items`, and `events`
+/// rebuilt with the four `inbox-*` kinds (`0012-inbox.sql`).
+fn migration_12(conn: &Connection) -> Result<()> {
+    conn.execute_batch(LEGACY[11].sql)?;
+    create_history_triggers(conn, "inbox_items", true)
+}
+
+/// The PR poll's Inbox kinds (§4.5 legacy migration 0013, hs-d165): `authored` and
+/// `review_requested` on `pull_requests`, whose history triggers are written again
+/// to list every column, and `inbox_items` rebuilt with the four pull request kinds
+/// (`0013-pr-inbox.sql` drops and writes `pull_requests_hist_del`; the other history
+/// triggers and `inbox_items_no_delete` are generated).
+fn migration_13(conn: &Connection) -> Result<()> {
+    conn.execute_batch(LEGACY[12].sql)?;
+    create_history_triggers(conn, "pull_requests", false)?;
+    create_history_triggers(conn, "inbox_items", true)
+}
+
 /// §4.5 step 2: one PR per Plan, its per-repo columns kept as stored, its
 /// status from the Plan's phase. No `pr_needs`: one PR has no needs.
 fn fill_prs(conn: &Connection) -> Result<()> {
@@ -459,6 +481,7 @@ const LEGACY_HISTORY_TABLES: &[&str] = &[
     "attempts",
     "escalations",
     "sessions",
+    "inbox_items",
     "tier_catalog",
 ];
 
@@ -1571,6 +1594,109 @@ mod tests {
         }
     }
 
+    // ---------- migration 13: the PR poll's Inbox kinds ----------
+
+    #[test]
+    fn a_version_12_database_migrates_to_13_with_its_rows_authored_and_its_history_listing_both_columns() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        database_at(
+            &home,
+            12,
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at) VALUES
+               ('acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'Pay', 0, 'open', 'none', 'failed', 't', 't'),
+               ('acme/web', 9, 'https://github.com/acme/web/pull/9', 'Web', 1, 'open', 'approved', 'passed', 't', 't');",
+        );
+        assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[11]);
+        let mut store = Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
+        assert_eq!(
+            rows(&mut store, "SELECT number, authored, review_requested FROM pull_requests ORDER BY id"),
+            vec![serde_json::json!([7, 1, 0]), serde_json::json!([9, 1, 0])]
+        );
+        assert_eq!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'pull_requests'"), 2, "the migration wrote no history row");
+
+        // An update, an insert and a delete: each history row lists both new columns.
+        write(&mut store, "UPDATE pull_requests SET authored = 0, review_requested = 1 WHERE number = 7").unwrap();
+        write(
+            &mut store,
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored, review_requested)
+             VALUES ('acme/new', 1, 'https://github.com/acme/new/pull/1', 'New', 0, 'open', 'none', 'none', 't', 't', 0, 1)",
+        )
+        .unwrap();
+        write(&mut store, "DELETE FROM pull_requests WHERE number = 9").unwrap();
+        let history = rows(&mut store, "SELECT op, before, after FROM history WHERE tbl = 'pull_requests' AND id > 2 ORDER BY id");
+        let side = |row: &Value, n: usize| -> Value {
+            row[n].as_str().map_or(Value::Null, |text| serde_json::from_str(text).unwrap())
+        };
+        let columns = |v: &Value| (v["authored"].clone(), v["review_requested"].clone());
+        let pair = |a: i64, r: i64| (Value::from(a), Value::from(r));
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0][0], "update");
+        assert_eq!((columns(&side(&history[0], 1)), columns(&side(&history[0], 2))), (pair(1, 0), pair(0, 1)));
+        assert_eq!((history[1][0].as_str(), columns(&side(&history[1], 2))), (Some("insert"), pair(0, 1)));
+        assert_eq!((history[2][0].as_str(), columns(&side(&history[2], 1))), (Some("delete"), pair(1, 0)));
+
+        // `pull_requests_owned` is kept and `pull_requests` still gets no `_no_delete`.
+        let triggers = rows(&mut store, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'pull_requests' ORDER BY name");
+        assert_eq!(
+            triggers,
+            ["pull_requests_hist_del", "pull_requests_hist_ins", "pull_requests_hist_upd", "pull_requests_owned"].map(|n| serde_json::json!([n]))
+        );
+    }
+
+    #[test]
+    fn a_version_12_database_keeps_its_inbox_items_and_accepts_the_four_pull_request_kinds_in_13() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        database_at(
+            &home,
+            12,
+            "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES
+               ('dialog', 'red', 'session:a', 'l1', 't1'), ('unread', 'yellow', 'plan:p', 'l2', 't2');
+             INSERT INTO inbox_items (kind, urgency, subject, label, opened_at, closed_at) VALUES ('dialog', 'red', 'session:a', 'l3', 't3', 't4');",
+        );
+        let mut store = Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
+        assert_eq!(
+            rows(&mut store, "SELECT id, kind, subject, label, closed_at FROM inbox_items ORDER BY id"),
+            vec![
+                serde_json::json!([1, "dialog", "session:a", "l1", null]),
+                serde_json::json!([2, "unread", "plan:p", "l2", null]),
+                serde_json::json!([3, "dialog", "session:a", "l3", "t4"]),
+            ]
+        );
+        assert_eq!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'inbox_items'"), 3, "the copy wrote no history row (the 3 are the inserts)");
+        // The partial unique index, the history triggers and `inbox_items_no_delete` are back.
+        assert!(write(&mut store, "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('dialog', 'red', 'session:a', 'l', 't')").is_err());
+        let history = |store: &mut Store| count(store, "SELECT count(*) FROM history WHERE tbl = 'inbox_items'");
+        let kept = history(&mut store);
+        for kind in ["pr-failing", "pr-changes", "pr-ready", "review-requested"] {
+            write(&mut store, &format!("INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('{kind}', 'red', 'pr:{kind}', 'l', 't')")).unwrap_or_else(|e| panic!("{kind}: {e:?}"));
+            write(&mut store, &format!("UPDATE inbox_items SET closed_at = 't' WHERE subject = 'pr:{kind}'")).unwrap();
+        }
+        assert_eq!(history(&mut store) - kept, 8, "an insert and an update each");
+        assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM inbox_items")), "append_only: inbox_items");
+        assert!(write(&mut store, "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('engine-down', 'red', 'engine', 'l', 't')").is_err());
+    }
+
+    #[test]
+    fn the_checks_of_authored_and_review_requested_refuse_a_value_outside_0_and_1() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_10(&home);
+        let mut store = Store::open(&home, 5000).unwrap();
+        for ok in ["authored = 0", "review_requested = 1", "authored = 1", "review_requested = 0"] {
+            write(&mut store, &format!("UPDATE pull_requests SET {ok} WHERE number = 7")).unwrap();
+        }
+        for bad in ["authored = 2", "review_requested = -1", "authored = NULL", "review_requested = NULL"] {
+            let err = refused(&mut store, &format!("UPDATE pull_requests SET {bad} WHERE number = 7"));
+            assert!(format!("{err:?}").contains("CHECK") || format!("{err:?}").contains("NOT NULL"), "{bad}: {err:?}");
+        }
+    }
+
     #[test]
     fn migration_6_keeps_migration_5s_triggers_on_prs() {
         let dir = tempfile::tempdir().unwrap();
@@ -1604,6 +1730,78 @@ mod tests {
         }
         write(&mut store, "UPDATE prs SET lead_branch = 'cpd/dn/web' WHERE plan = 'dn'").unwrap();
         assert_eq!(rows(&mut store, "SELECT lead_branch FROM prs WHERE plan = 'dn'"), vec![serde_json::json!(["cpd/dn/web"])]);
+    }
+
+    // ---------- migration 12 (the Inbox) ----------
+
+    /// A version 6 database with a Context and two Events.
+    fn version_6(home: &CpdHome) {
+        let sql = format!(
+            "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');
+             INSERT INTO events (txn, at, kind, context, text, data) VALUES
+               (1, '{T}', 'context-created', 'ctx', 'x', '{{}}'), (1, '{T}', 'pr-merged', 'ctx', 'x', '{{}}');"
+        );
+        database_at(home, 6, &sql);
+    }
+
+    #[test]
+    fn a_version_6_database_migrates_to_12_with_inbox_items_and_the_four_inbox_event_kinds() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_6(&home);
+        assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[5]);
+
+        let mut store = Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
+        assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[VERSION as usize - 1]);
+        assert_eq!(
+            rows(&mut store, "SELECT id, kind FROM events ORDER BY id"),
+            vec![serde_json::json!([1, "context-created"]), serde_json::json!([2, "pr-merged"])]
+        );
+        assert_eq!(count(&mut store, "SELECT count(*) FROM inbox_items"), 0);
+
+        // The four kinds are accepted, an unknown one is not, and ids go on after the kept ones.
+        write(&mut store, "INSERT INTO events (txn, at, kind, context, text, data) VALUES
+                             (cpd_txn(), 't', 'inbox-opened', 'ctx', 'x', '{}'), (cpd_txn(), 't', 'inbox-closed', 'ctx', 'x', '{}'),
+                             (cpd_txn(), 't', 'inbox-snoozed', 'ctx', 'x', '{}'), (cpd_txn(), 't', 'inbox-dismissed', 'ctx', 'x', '{}')")
+            .unwrap();
+        assert_eq!(count(&mut store, "SELECT max(id) FROM events"), 6);
+        assert!(write(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'inbox-other', 'x', '{}')").is_err());
+        // The rebuilt table kept its triggers.
+        for sql in ["UPDATE events SET text = 'y'", "DELETE FROM events"] {
+            assert_eq!(sqlite_message(&refused(&mut store, sql)), "append_only: events", "{sql}");
+        }
+    }
+
+    #[test]
+    fn inbox_items_keep_one_open_item_per_identity_and_write_history_and_never_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_6(&home);
+        let mut store = Store::open(&home, 5000).unwrap();
+        let item = |urgency: &str| {
+            format!("INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('dialog', '{urgency}', 'session:a', 'l', 't');")
+        };
+        write(&mut store, &item("red")).unwrap();
+        // The same identity cannot be open twice; another urgency is another identity.
+        assert!(write(&mut store, &item("red")).is_err());
+        write(&mut store, &item("magenta")).unwrap();
+        // Once closed, the identity is free again.
+        write(&mut store, "UPDATE inbox_items SET closed_at = 't' WHERE urgency = 'red'").unwrap();
+        write(&mut store, &item("red")).unwrap();
+        assert_eq!(
+            rows(&mut store, "SELECT pk, op FROM history WHERE tbl = 'inbox_items' ORDER BY id"),
+            vec![
+                serde_json::json!(["[1]", "insert"]),
+                serde_json::json!(["[2]", "insert"]),
+                serde_json::json!(["[1]", "update"]),
+                serde_json::json!(["[3]", "insert"]),
+            ]
+        );
+        assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM inbox_items")), "append_only: inbox_items");
+        // A kind the poll adds later is refused until its migration; `engine-down` is never stored.
+        assert!(write(&mut store, "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('engine-down', 'red', 'engine', 'l', 't')").is_err());
     }
 
     #[test]

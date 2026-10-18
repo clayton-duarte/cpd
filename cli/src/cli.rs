@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
-use cpd_core::{ask, attempt, config, context, doctor, events, job, plan, pr, session, watch};
+use cpd_core::{ask, attempt, config, context, doctor, events, inbox, job, plan, pr, session, watch};
 
 
 /// cpd 2: every command prints exactly one JSON value on stdout.
@@ -48,6 +48,9 @@ pub enum Command {
     /// Events (commands.md §11)
     #[command(subcommand)]
     Events(events::Command),
+    /// What needs you (commands.md §21)
+    #[command(subcommand)]
+    Inbox(inbox::cmd::Command),
     /// The engine, one per machine (commands.md §12)
     Watch(watch::Args),
     /// Build the cockpit and start the engine (commands.md §13)
@@ -79,6 +82,7 @@ fn dispatch(command: Command) -> Result<Output, CpdError> {
         Command::Pr(c) => pr::run(c),
         Command::Session(c) => session::run(c),
         Command::Events(c) => events::run(c),
+        Command::Inbox(c) => inbox::cmd::run(c),
         Command::Watch(a) => watch::run(a),
         Command::Tui(a) => cpd_tui::run(a, run_command),
         Command::Doctor(a) => doctor::run(a),
@@ -195,7 +199,7 @@ mod tests {
         assert_eq!(fields["schema"], cpd_core::store::VERSION);
         assert!(fields.contains_key("store_schema"));
         assert!(fields.contains_key("store"));
-        assert_eq!(fields["protocol"], 2);
+        assert_eq!(fields["protocol"], 3);
     }
 
     /// A stand-in for an area's arguments, to test how our parsers' errors

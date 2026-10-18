@@ -115,7 +115,7 @@ impl Store {
         let mut store = Store::connect(&path, busy_ms).map_err(|e| enrich(e, &path, busy_ms))?;
         store.migrate(home, catalog).map_err(|e| enrich(e, &path, busy_ms))?;
         drop(setup);
-        store.schema = store.check_schema(home, catalog).map_err(|e| enrich(e, &path, busy_ms))?;
+        store.schema = schema_mismatch(&store.conn, home, catalog).map_err(|e| enrich(e, &path, busy_ms))?;
         Ok(store)
     }
 
@@ -164,8 +164,9 @@ impl Store {
     /// The transaction runs with foreign keys off and `legacy_alter_table` on
     /// (§4.5 migration 4, step 1: both only take effect outside a
     /// transaction), so a migration can rebuild a table that others reference;
-    /// `PRAGMA foreign_key_check` then holds before the commit. Both are
-    /// restored afterwards, whether the migration committed or not.
+    /// `PRAGMA foreign_key_check` then holds before the commit, and so does
+    /// the schema check of §4.3 (hs-n121). Both are restored afterwards,
+    /// whether the migration committed or not.
     ///
     /// When the migration that imports the old Context stores (§4.5 legacy
     /// migration 0007) committed, the folders are moved to `archive/contexts/` (§1.4).
@@ -279,26 +280,26 @@ impl Store {
         if plan.start != Start::Named {
             tx.pragma_update(None, "user_version", VERSION).map_err(|e| failed("user_version", &e))?;
         }
+        // The check of §4.3, made before the commit: a schema the binary does
+        // not describe is never committed (§4.5, hs-n121).
+        if let Some(mismatch) = schema_mismatch(&tx, home, catalog)? {
+            let mut err = CpdError::new(
+                ErrorCode::MigrationFailed,
+                format!(
+                    "Migration of the database failed: its schema does not match this cpd's (expected {}, found {}). Nothing was migrated.",
+                    mismatch.expected, mismatch.found
+                ),
+            )
+            .with("migration", "schema_check")
+            .with("expected", mismatch.expected)
+            .with("actual", mismatch.found);
+            if let Some(object) = mismatch.object {
+                err = err.with("object", object);
+            }
+            return Err(err);
+        }
         tx.commit()?;
         Ok(imported_old_stores)
-    }
-
-    /// The schema check (§4.3): every generated history trigger is what the
-    /// generator makes, and the store has what this binary's migrations
-    /// created: the canonical hash is the catalog's pinned one, or, when the
-    /// store applied additive migrations this binary does not know (inside the
-    /// window, §4.5), the canonical subset of the objects this binary's
-    /// migrations created ([`verdict::subset_mismatch`]).
-    fn check_schema(&self, home: &CpdHome, catalog: &Catalog<'_>) -> Result<Option<SchemaMismatch>, CpdError> {
-        if let Some((name, expected, found)) = schema::generated_mismatch(&self.conn)? {
-            return Ok(Some(SchemaMismatch { expected, found: found.unwrap_or_else(|| "missing".to_owned()), object: Some(name) }));
-        }
-        if !verdict_with(&self.conn, catalog)?.unknown.is_empty() {
-            return verdict::subset_mismatch(&self.conn, catalog, home);
-        }
-        let found = canonical_hash(&self.conn)?;
-        Ok((found != catalog.schema_hash)
-            .then(|| SchemaMismatch { expected: catalog.schema_hash.to_owned(), found, object: None }))
     }
 
     /// The path of the database file.
@@ -385,6 +386,25 @@ impl Store {
         report.extend(orphans);
         Ok(report)
     }
+}
+
+/// The schema check (§4.3): every generated history trigger is what the
+/// generator makes, and the store has what this binary's migrations
+/// created: the canonical hash is the catalog's pinned one, or, when the
+/// store applied additive migrations this binary does not know (inside the
+/// window, §4.5), the canonical subset of the objects this binary's
+/// migrations created ([`verdict::subset_mismatch`]).
+///
+/// Run at every open and inside the migrating transaction, before its commit.
+fn schema_mismatch(conn: &Connection, home: &CpdHome, catalog: &Catalog<'_>) -> Result<Option<SchemaMismatch>, CpdError> {
+    if let Some((name, expected, found)) = schema::generated_mismatch(conn)? {
+        return Ok(Some(SchemaMismatch { expected, found: found.unwrap_or_else(|| "missing".to_owned()), object: Some(name) }));
+    }
+    if !verdict_with(conn, catalog)?.unknown.is_empty() {
+        return verdict::subset_mismatch(conn, catalog, home);
+    }
+    let found = canonical_hash(conn)?;
+    Ok((found != catalog.schema_hash).then(|| SchemaMismatch { expected: catalog.schema_hash.to_owned(), found, object: None }))
 }
 
 /// Moves each `contexts/<id>/` folder migration 0007 imported to
@@ -668,12 +688,8 @@ mod tests {
     pub(super) fn open_named(home: &CpdHome, named: &[Named]) -> Result<Store, CpdError> {
         let probe = tempfile::tempdir().unwrap();
         let probe_home = CpdHome::resolve(Some(probe.path().join("cpd").into()), None).unwrap();
-        let pinned = {
-            // Even a refusal of `home` is judged against the pinned hash of a fresh store with the same list.
-            let catalog = Catalog { named, schema_hash: "" };
-            let fresh = Store::open_with(&probe_home, 5000, &catalog)?;
-            canonical_hash(&fresh.conn)?
-        };
+        // Even a refusal of `home` is judged against the pinned hash of a fresh store with the same list.
+        let pinned = canonical_hash(&verdict::reference_database(&Catalog { named, schema_hash: "" }, &probe_home)?)?;
         Store::open_with(home, 5000, &Catalog { named, schema_hash: &pinned })
     }
 

@@ -254,7 +254,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     assert_eq!(found, expected);
     // Every table is STRICT.
     let tables = names(&raw(&env), "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'");
-    assert_eq!(tables.len(), 20, "§4.4's tables, the three lookup tables and schema_migrations");
+    assert_eq!(tables.len(), 21, "§4.4's tables, the three lookup tables and schema_migrations");
     for table in tables {
         let strict: i64 = raw(&env)
             .query_row("SELECT strict FROM pragma_table_list WHERE name = ?1", [&table], |r| r.get(0))
@@ -767,6 +767,30 @@ fn a_failed_migration_rolls_back_entirely() {
 }
 
 #[test]
+fn a_migration_whose_schema_differs_from_the_expected_hash_rolls_back() {
+    let env = TestEnv::new();
+    // Every migration applies, but the schema it leaves is not the one the binary
+    // describes: an object the migrations do not know stays in `sqlite_schema`.
+    raw(&env).execute_batch("CREATE TABLE stray (x)").unwrap();
+    let err = Store::open(&home(&env), 5000).err().unwrap();
+    assert_eq!(err.code(), ErrorCode::MigrationFailed, "{err:?}");
+    assert_eq!(err.exit().code(), 1);
+    assert_eq!(err.details()["version"], VERSION);
+    let expected = err.details()["expected"].as_str().unwrap();
+    let actual = err.details()["actual"].as_str().unwrap();
+    assert_ne!(expected, actual);
+    let conn = raw(&env);
+    assert_eq!(names(&conn, "SELECT name FROM sqlite_schema"), BTreeSet::from(["stray".to_owned()]));
+    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    assert_eq!(version, 0, "the store stays at its old version");
+    let app: i32 = conn.pragma_query_value(None, "application_id", |r| r.get(0)).unwrap();
+    assert_eq!(app, 0);
+    // Rerunning is safe: the same refusal, nothing written.
+    let again = Store::open(&home(&env), 5000).err().unwrap();
+    assert_eq!(again.code(), ErrorCode::MigrationFailed, "{again:?}");
+}
+
+#[test]
 fn a_write_after_another_connection_bumped_user_version_is_store_too_new_and_appends_nothing() {
     let env = TestEnv::new();
     let mut store = fixture_store(&env);
@@ -1074,7 +1098,7 @@ fn version_on_an_empty_home_reports_no_store_and_creates_nothing() {
     assert_eq!(out["schema"], VERSION);
     assert!(out["store_schema"].is_null(), "{out}");
     assert!(out["store"].is_null(), "{out}");
-    assert_eq!(out["protocol"], 2, "{out}");
+    assert_eq!(out["protocol"], 3, "{out}");
     assert!(!home(&env).db().exists());
     assert!(!home(&env).locks_dir().exists());
 }

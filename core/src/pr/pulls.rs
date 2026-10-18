@@ -7,13 +7,14 @@
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde_json::{Value, json};
 
-use super::gh::PolledPr;
+use super::gh::{Listed, Membership, PolledPr};
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{PlanId, PrKey};
 use crate::store::WriteTxn;
 
 /// One row of `pull_requests`. `state`, `review_decision`, `checks`,
-/// `mergeable` and `merge_state` are the words the table's `CHECK`s allow.
+/// `mergeable` and `merge_state` are the words the table's `CHECK`s allow;
+/// `authored` and `review_requested` are the searches that last listed it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PullRequest {
     pub id: i64,
@@ -30,10 +31,12 @@ pub struct PullRequest {
     pub changed_at: String,
     pub mergeable: String,
     pub merge_state: String,
+    pub authored: bool,
+    pub review_requested: bool,
 }
 
 const COLUMNS: &str = "id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, \
-                       mergeable, merge_state";
+                       mergeable, merge_state, authored, review_requested";
 
 impl PullRequest {
     fn from_row(r: &Row) -> rusqlite::Result<PullRequest> {
@@ -52,7 +55,14 @@ impl PullRequest {
             changed_at: r.get(11)?,
             mergeable: r.get(12)?,
             merge_state: r.get(13)?,
+            authored: r.get(14)?,
+            review_requested: r.get(15)?,
         })
+    }
+
+    /// The searches that last listed the pull request.
+    pub(super) fn membership(&self) -> Membership {
+        Membership { authored: self.authored, review_requested: self.review_requested }
     }
 
     /// `{repo, number, url, title, draft, state, review_decision, checks, mergeable, merge_state, created_at, merged_at}`,
@@ -122,7 +132,6 @@ pub(super) fn find(conn: &Connection, repo: &str, number: i64) -> Result<Option<
         .optional()?)
 }
 
-#[allow(dead_code)] // Job `pr-poll2` calls it.
 /// Every row a PR in status `open` points to, with that PR's Plan and key, in Plan and key order.
 pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, PrKey, PullRequest)>, CpdError> {
     let columns: Vec<String> = COLUMNS.split(", ").map(|c| format!("pr.{c}")).collect();
@@ -149,6 +158,8 @@ pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, PrKey, PullRe
                 changed_at: r.get(13)?,
                 mergeable: r.get(14)?,
                 merge_state: r.get(15)?,
+                authored: r.get(16)?,
+                review_requested: r.get(17)?,
             };
             Ok((plan, key, pull))
         })?
@@ -175,20 +186,22 @@ pub(super) fn txn_time(tx: &WriteTxn<'_>) -> Result<String, CpdError> {
     Ok(tx.query_row("SELECT at FROM txns WHERE id = cpd_txn()", [], |r| r.get(0))?)
 }
 
-/// Inserts the row of `polled`, or updates it, **only when a value differs**
-/// (`changed_at` = the transaction's time): a poll that finds nothing new
-/// writes nothing. `None` when nothing changed.
-pub(super) fn upsert(tx: &WriteTxn<'_>, polled: &PolledPr) -> Result<Option<Change>, CpdError> {
+/// Inserts the row of `listed`, or updates it, **only when a value differs**
+/// (`changed_at` = the transaction's time; the searches that listed it are values):
+/// a poll that finds nothing new writes nothing. `None` when nothing changed.
+pub(super) fn upsert(tx: &WriteTxn<'_>, listed: &Listed) -> Result<Option<Change>, CpdError> {
+    let Listed { pr: polled, membership } = listed;
     let Some(before) = find(tx, &polled.repo, polled.number)? else {
-        return Ok(Some(Change { before: None, after: insert(tx, polled)? }));
+        return Ok(Some(Change { before: None, after: insert(tx, polled, *membership)? }));
     };
-    if before.polled()? == *polled {
+    if before.polled()? == *polled && before.membership() == *membership {
         return Ok(None);
     }
     let at = txn_time(tx)?;
     tx.execute(
         "UPDATE pull_requests SET url = ?1, title = ?2, draft = ?3, state = ?4, review_decision = ?5, checks = ?6,
-                created_at = ?7, merged_at = ?8, changed_at = ?9, mergeable = ?10, merge_state = ?11 WHERE id = ?12",
+                created_at = ?7, merged_at = ?8, changed_at = ?9, mergeable = ?10, merge_state = ?11, authored = ?12,
+                review_requested = ?13 WHERE id = ?14",
         rusqlite::params![
             polled.url,
             polled.title,
@@ -201,27 +214,30 @@ pub(super) fn upsert(tx: &WriteTxn<'_>, polled: &PolledPr) -> Result<Option<Chan
             at,
             polled.mergeable.as_str(),
             polled.merge_state.as_str(),
+            membership.authored,
+            membership.review_requested,
             before.id
         ],
     )?;
     Ok(Some(Change { after: load(tx, before.id)?, before: Some(before) }))
 }
 
-/// The row of `polled`'s pull request: inserted when absent, else **kept as it
-/// is** (`pr open`: a poll may have stored it first, D6). Its id.
+/// The row of `polled`'s pull request: inserted when absent (the User's own: `authored`
+/// 1, `review_requested` 0), else **kept as it is** (`pr open`: a poll may have stored it
+/// first, D6). Its id.
 pub(super) fn ensure(tx: &WriteTxn<'_>, polled: &PolledPr) -> Result<i64, CpdError> {
     match find(tx, &polled.repo, polled.number)? {
         Some(row) => Ok(row.id),
-        None => Ok(insert(tx, polled)?.id),
+        None => Ok(insert(tx, polled, Membership { authored: true, review_requested: false })?.id),
     }
 }
 
-fn insert(tx: &WriteTxn<'_>, polled: &PolledPr) -> Result<PullRequest, CpdError> {
+fn insert(tx: &WriteTxn<'_>, polled: &PolledPr, membership: Membership) -> Result<PullRequest, CpdError> {
     let at = txn_time(tx)?;
     tx.execute(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at,
-                                    mergeable, merge_state)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                                    mergeable, merge_state, authored, review_requested)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         rusqlite::params![
             polled.repo,
             polled.number,
@@ -235,15 +251,16 @@ fn insert(tx: &WriteTxn<'_>, polled: &PolledPr) -> Result<PullRequest, CpdError>
             polled.merged_at,
             at,
             polled.mergeable.as_str(),
-            polled.merge_state.as_str()
+            polled.merge_state.as_str(),
+            membership.authored,
+            membership.review_requested
         ],
     )?;
     load(tx, tx.last_insert_rowid())
 }
 
-#[allow(dead_code)] // Job `pr-poll2` calls it.
 /// Deletes the rows no PR points to whose `(repo, number)` is not in `present`
-/// (D5: their pull request left the open search). Rows a PR points to stay: a
+/// (D5: their pull request is in neither open search). Rows a PR points to stay: a
 /// trigger refuses their delete. The number of rows deleted.
 pub(super) fn delete_unowned_absent(tx: &WriteTxn<'_>, present: &[(String, i64)]) -> Result<usize, CpdError> {
     let mut stmt = tx.prepare(
@@ -338,6 +355,8 @@ mod tests {
             changed_at: "t".into(),
             mergeable: "unknown".into(),
             merge_state: "unknown".into(),
+            authored: true,
+            review_requested: false,
         }
     }
 
@@ -436,6 +455,13 @@ mod tests {
         }
     }
 
+    const AUTHORED: Membership = Membership { authored: true, review_requested: false };
+
+    /// `upsert` of a pull request the User wrote.
+    fn up(tx: &WriteTxn<'_>, polled: &PolledPr) -> Result<Option<Change>, CpdError> {
+        upsert(tx, &Listed { pr: polled.clone(), membership: AUTHORED })
+    }
+
     fn store(dir: &tempfile::TempDir) -> Store {
         let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
         Store::open(&home, 5000).unwrap()
@@ -449,7 +475,7 @@ mod tests {
     fn upsert_writes_only_when_a_value_changes() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
-        let first = store.write("test", |tx| upsert(tx, &polled(7, ChecksSummary::Pending))).unwrap().unwrap();
+        let first = store.write("test", |tx| up(tx, &polled(7, ChecksSummary::Pending))).unwrap().unwrap();
         assert_eq!(first.before, None);
         assert_eq!((first.after.checks.as_str(), history_rows(&mut store)), ("pending", 1));
         assert_eq!((first.after.mergeable.as_str(), first.after.merge_state.as_str()), ("unknown", "unknown"));
@@ -457,13 +483,13 @@ mod tests {
         assert_eq!((&json["mergeable"], &json["merge_state"]), (&json!("unknown"), &json!("unknown")));
 
         // The same values: no change, and nothing written (no history row, `changed_at` kept).
-        let again = store.write("test", |tx| upsert(tx, &polled(7, ChecksSummary::Pending))).unwrap();
+        let again = store.write("test", |tx| up(tx, &polled(7, ChecksSummary::Pending))).unwrap();
         assert_eq!(again, None);
         assert_eq!(history_rows(&mut store), 1);
         let kept = store.read(|c| load(c, first.after.id)).unwrap();
         assert_eq!(kept, first.after);
 
-        let changed = store.write("test", |tx| upsert(tx, &polled(7, ChecksSummary::Failed))).unwrap().unwrap();
+        let changed = store.write("test", |tx| up(tx, &polled(7, ChecksSummary::Failed))).unwrap().unwrap();
         assert_eq!(changed.before.as_ref(), Some(&first.after));
         assert_eq!((changed.after.checks.as_str(), changed.after.id), ("failed", first.after.id));
         assert_eq!(history_rows(&mut store), 2);
@@ -474,33 +500,68 @@ mod tests {
     fn a_change_of_mergeable_or_merge_state_alone_is_a_change_of_the_row() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
-        let first = store.write("test", |tx| upsert(tx, &polled(7, ChecksSummary::None))).unwrap().unwrap();
+        let first = store.write("test", |tx| up(tx, &polled(7, ChecksSummary::None))).unwrap().unwrap();
         let with = |mergeable, merge_state| PolledPr { mergeable, merge_state, ..polled(7, ChecksSummary::None) };
 
         let conflict = store
-            .write("test", |tx| upsert(tx, &with(Mergeable::Conflicting, MergeState::Unknown)))
+            .write("test", |tx| up(tx, &with(Mergeable::Conflicting, MergeState::Unknown)))
             .unwrap()
             .unwrap();
         assert_eq!((conflict.after.mergeable.as_str(), conflict.after.merge_state.as_str()), ("conflicting", "unknown"));
         assert_eq!(attention(conflict.before.as_ref(), &conflict.after), [Reason::Conflict]);
         assert_eq!(history_rows(&mut store), 2);
 
-        let dirty = store.write("test", |tx| upsert(tx, &with(Mergeable::Conflicting, MergeState::Dirty))).unwrap().unwrap();
+        let dirty = store.write("test", |tx| up(tx, &with(Mergeable::Conflicting, MergeState::Dirty))).unwrap().unwrap();
         assert_eq!((dirty.after.mergeable.as_str(), dirty.after.merge_state.as_str()), ("conflicting", "dirty"));
         assert_eq!(attention(dirty.before.as_ref(), &dirty.after), []);
         assert_eq!(history_rows(&mut store), 3);
 
-        let again = store.write("test", |tx| upsert(tx, &with(Mergeable::Conflicting, MergeState::Dirty))).unwrap();
+        let again = store.write("test", |tx| up(tx, &with(Mergeable::Conflicting, MergeState::Dirty))).unwrap();
         assert_eq!(again, None);
         assert_eq!(history_rows(&mut store), 3);
         assert_eq!(store.read(|c| load(c, first.after.id)).unwrap(), dirty.after);
     }
 
     #[test]
+    fn a_change_of_the_searches_that_list_it_alone_is_a_change_of_the_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store(&dir);
+        let both = Membership { authored: true, review_requested: true };
+        let requested = Membership { authored: false, review_requested: true };
+        let put = |store: &mut Store, membership| {
+            store.write("test", |tx| upsert(tx, &Listed { pr: polled(7, ChecksSummary::None), membership })).unwrap()
+        };
+
+        let first = put(&mut store, requested).unwrap();
+        assert_eq!(first.before, None);
+        assert_eq!((first.after.authored, first.after.review_requested), (false, true));
+        assert_eq!(put(&mut store, requested), None, "the same searches: nothing written");
+        assert_eq!(history_rows(&mut store), 1);
+
+        let both_now = put(&mut store, both).unwrap();
+        assert_eq!((both_now.after.authored, both_now.after.review_requested), (true, true));
+        assert_eq!(history_rows(&mut store), 2);
+        assert_eq!(attention(both_now.before.as_ref(), &both_now.after), [], "no Reason: the flags are no feedback");
+
+        let gone = put(&mut store, AUTHORED).unwrap();
+        assert_eq!((gone.after.authored, gone.after.review_requested), (true, false));
+        assert_eq!(history_rows(&mut store), 3);
+    }
+
+    #[test]
+    fn ensure_inserts_the_users_own_pull_request_as_authored() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store(&dir);
+        let id = store.write("test", |tx| ensure(tx, &polled(7, ChecksSummary::None))).unwrap();
+        let row = store.read(|c| load(c, id)).unwrap();
+        assert_eq!((row.authored, row.review_requested), (true, false));
+    }
+
+    #[test]
     fn ensure_keeps_a_row_the_poll_stored_first() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
-        let id = store.write("test", |tx| upsert(tx, &polled(7, ChecksSummary::Failed))).unwrap().unwrap().after.id;
+        let id = store.write("test", |tx| up(tx, &polled(7, ChecksSummary::Failed))).unwrap().unwrap().after.id;
         let kept = store.write("test", |tx| ensure(tx, &polled(7, ChecksSummary::None))).unwrap();
         assert_eq!(kept, id);
         assert_eq!(store.read(|c| load(c, id)).unwrap().checks, "failed");
@@ -513,7 +574,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
         for n in [7, 8, 9] {
-            store.write("test", |tx| upsert(tx, &polled(n, ChecksSummary::None))).unwrap();
+            store.write("test", |tx| up(tx, &polled(n, ChecksSummary::None))).unwrap();
         }
         let present = [("acme/pay".to_owned(), 8)];
         assert_eq!(store.write("test", |tx| delete_unowned_absent(tx, &present)).unwrap(), 2);
