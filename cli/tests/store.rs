@@ -963,33 +963,75 @@ fn processes_opening_a_new_database_at_once_migrate_it_once() {
 
 
 #[test]
-fn version_on_an_empty_home_reports_no_store_schema_and_creates_nothing() {
+fn version_on_an_empty_home_reports_no_store_and_creates_nothing() {
     let env = TestEnv::new();
     let out = env.cpd(&["--version"]).ok();
     assert_eq!(out["schema"], VERSION);
     assert!(out["store_schema"].is_null(), "{out}");
+    assert!(out["store"].is_null(), "{out}");
     assert_eq!(out["protocol"], 1, "{out}");
     assert!(!home(&env).db().exists());
     assert!(!home(&env).locks_dir().exists());
 }
 
 #[test]
-fn version_on_a_migrated_home_reports_the_same_schema() {
+fn version_on_a_migrated_home_reports_the_verdict_and_the_legacy_projection() {
     let env = TestEnv::new();
     drop(open(&env));
     let out = env.cpd(&["--version"]).ok();
-    assert_eq!(out["schema"], VERSION);
-    assert_eq!(out["store_schema"], VERSION);
+    assert_eq!(out["schema"], 1000);
+    assert_eq!(out["store_schema"], 1000);
+    assert_eq!(out["store"], json!({"opens": true, "refusal": null, "unknown": [], "pending": []}), "{out}");
 }
 
 #[test]
-fn version_on_a_newer_database_succeeds_and_does_not_change_it() {
+fn version_on_a_store_that_does_not_open_reports_the_refusal_and_store_schema_above_schema() {
     let env = TestEnv::new();
     drop(open(&env));
     raw(&env).pragma_update(None, "user_version", VERSION + 1).unwrap();
     let before = fs::read(home(&env).db()).unwrap();
     let out = env.cpd(&["--version"]).ok();
     assert_eq!(out["schema"], VERSION);
-    assert_eq!(out["store_schema"], VERSION + 1);
+    assert_eq!(out["store_schema"], VERSION + 1, "integer-era guards refuse: store_schema above schema");
+    assert_eq!(out["store"]["opens"], false, "{out}");
+    assert_eq!(out["store"]["refusal"]["code"], "store_too_new", "{out}");
+    assert!(out["store"]["refusal"]["message"].as_str().unwrap().contains("newer cpd"), "{out}");
     assert_eq!(fs::read(home(&env).db()).unwrap(), before);
+}
+
+/// A migration this binary lacks, recorded as a newer cpd would (`cpd_txn()` is stood in by the
+/// newest `txns` id).
+fn apply_newer(env: &TestEnv, name: &str, compat: &str) {
+    drop(open(env));
+    let conn = raw(env);
+    let txn: i64 = conn.query_row("SELECT max(id) FROM txns", [], |r| r.get(0)).unwrap();
+    conn.create_scalar_function("cpd_txn", 0, rusqlite::functions::FunctionFlags::SQLITE_UTF8, move |_| Ok(txn)).unwrap();
+    conn.execute(
+        "INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted)
+         VALUES (?1, ?2, lower(hex(zeroblob(32))), (SELECT max(seq) + 1 FROM schema_migrations), ?3, 0)",
+        rusqlite::params![name, compat, txn],
+    )
+    .unwrap();
+}
+
+#[test]
+fn version_lists_the_additive_migrations_it_lacks_and_still_opens() {
+    let env = TestEnv::new();
+    apply_newer(&env, "29991231T2358-first", "additive");
+    apply_newer(&env, "29991231T2359-second", "additive");
+    let out = env.cpd(&["--version"]).ok();
+    assert_eq!(out["store"]["opens"], true, "{out}");
+    assert_eq!(out["store"]["unknown"], json!(["29991231T2358-first", "29991231T2359-second"]), "{out}");
+    assert_eq!(out["store_schema"], 1000);
+}
+
+#[test]
+fn version_refuses_a_store_whose_floor_it_lacks() {
+    let env = TestEnv::new();
+    apply_newer(&env, "29991231T2359-breaking", "breaking");
+    let out = env.cpd(&["--version"]).ok();
+    assert_eq!(out["store"]["opens"], false, "{out}");
+    assert_eq!(out["store"]["refusal"]["code"], "store_too_new", "{out}");
+    assert_eq!(out["store"]["unknown"], json!(["29991231T2359-breaking"]), "{out}");
+    assert_eq!(out["store_schema"], 1001);
 }

@@ -9,7 +9,7 @@ use nix::fcntl::{Flock, FlockArg};
 use serde_json::{Value, json};
 
 use super::check::{Check, Severity};
-use crate::error::CpdError;
+use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::ids::{ContextId, PlanId};
 use crate::plan::jobs;
@@ -22,7 +22,7 @@ const NO_STORE: &str = "the store did not open.";
 /// failed: reads still work (contract §4.3).
 pub fn store(opened: Result<Store, CpdError>) -> (Check, Option<Store>) {
     match opened {
-        Err(e) => (Check::from_error("store", Severity::Error, &e), None),
+        Err(e) => (refusal_check(&e), None),
         Ok(store) => {
             let check = match store.schema_mismatch() {
                 None => Check::pass("store", Severity::Error),
@@ -32,6 +32,19 @@ pub fn store(opened: Result<Store, CpdError>) -> (Check, Option<Store>) {
             };
             (check, Some(store))
         }
+    }
+}
+
+/// The `store` check of a store that did not open. `found` is the verdict's refusal (`code`,
+/// `message`, commands.md §14.1) when the refusal is one of the verdict's (contract §4.5); any other
+/// failure keeps its details.
+fn refusal_check(e: &CpdError) -> Check {
+    let check = Check::from_error("store", Severity::Error, e);
+    match e.code() {
+        ErrorCode::StoreTooNew | ErrorCode::MigrationChanged | ErrorCode::MigrationOrder => {
+            check.found(json!({"code": e.code().as_str(), "message": e.message()}))
+        }
+        _ => check,
     }
 }
 
