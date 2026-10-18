@@ -250,8 +250,11 @@ fn panes_report(env: &TestEnv) -> String {
     report
 }
 
-/// `cpd <args>`'s success fields; on a failure the panic carries [`panes_report`].
+/// `cpd <args>`'s success fields, where no pane may die: it panics with
+/// [`panes_report`] when a pane is dead before the command, or the command fails.
 fn ok_with_panes(env: &TestEnv, args: &[&str]) -> Value {
+    let before = panes_report(env);
+    assert!(!before.contains(" dead=1 "), "a pane died before cpd {args:?}:\n{before}");
     let run = env.cpd(args);
     if run.exit != 0 {
         panic!("cpd {args:?} failed: {run:?}\npanes:\n{}", panes_report(env));
@@ -712,8 +715,7 @@ fn open_and_park_take_a_context_s_manager_and_park_it_in_its_context_window() {
     assert_eq!(show(&env, MANAGER)["place"], "chat");
 
     // A Lead displaces it into `ctx-<context>`.
-    let out = ok_with_panes(&env, &["session", "open", LEAD1]);
-    assert_eq!(out["displaced"], MANAGER, "panes:\n{}", panes_report(&env));
+    assert_eq!(ok_with_panes(&env, &["session", "open", LEAD1])["displaced"], MANAGER);
     let manager = panes(&env).into_iter().find(|p| p.session == MANAGER).unwrap();
     assert_eq!(manager.window_name, "ctx-ctx");
     assert_eq!(window_names(&env), ["ctx-ctx", "main"]);
