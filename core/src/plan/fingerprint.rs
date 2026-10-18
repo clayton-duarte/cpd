@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
 use super::jobs::{self, Job, sha256_of};
@@ -38,9 +38,14 @@ pub fn load_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<PrSpec>, CpdErro
 }
 
 /// The plan fingerprint of `plan` as it is now: `sha256` of the canonical JSON
-/// `{jobs, prs}` of [`of`].
+/// `{jobs, prs}` of [`of`]. In a phase after `plan` the review covers the
+/// drafts only, so `prs` is the empty array there: a PR appended after the
+/// lock must not void a review of the drafts (§2.3).
 pub fn plan_fingerprint(conn: &Connection, plan: &PlanId) -> Result<String, CpdError> {
-    Ok(of(&jobs::load(conn, plan)?, &load_prs(conn, plan)?))
+    let phase: Option<String> = conn.query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
+    let reviews_prs = matches!(phase.as_deref(), None | Some("grounding" | "plan"));
+    let prs = if reviews_prs { load_prs(conn, plan)? } else { Vec::new() };
+    Ok(of(&jobs::load(conn, plan)?, &prs))
 }
 
 /// `sha256` of `{jobs, prs}` (§2.3): `jobs` is the Locked fields of every

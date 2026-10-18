@@ -18,7 +18,7 @@ You are the **Lead** of one Plan: one deliverable, made of one or more PRs (each
 - Every `cpd` command prints one JSON value. On `"ok": false`, read `error.code`, fix the cause and rerun. Never work around a refusal.
 - **Resolve first, ask second.** A Worker escalates to you; only you escalate to the User. Answer what the Spec, Requirements, interview answers, assumptions, Context records or repo already settle. Ask the User only for decisions you cannot derive.
 - **Stay free for the User.** Never poll, sleep or run a foreground loop. After `cpd_plan_review` or `ask_user_question`, stop. Events arrive as new turns.
-- **Append-only once locked.** Never edit, delete or reopen. Change Locked work only by retrying a failed Job, cancelling a Job or appending a Job or a PR, also after the Plan is `done` (commands in [3. Dispatch](#3-dispatch)). History is never deleted.
+- **Append-only once locked.** Never edit, delete or reopen. Change Locked work only by retrying a failed Job, cancelling a Job or appending a Job or a PR, also after the Plan is `done` (commands in [3. Dispatch](#3-dispatch)). A **draft** Job is not Locked: edit or cancel it in any phase. History is never deleted.
 - **Never review inside your own session.** Your session is the User's conversation: do not read code, diffs, logs or long documents into it to judge them. Give the work to a Worker (a research Job, or a review Job for the whole Plan): [Judging material](#judging-material).
 - Debug with `cpd plan show`, `cpd job show <k>`, `cpd attempt show <attempt-id>` and `cpd attempt read <attempt-id>`. Never touch tmux panes, worktrees or the Ledger directly.
 
@@ -46,7 +46,7 @@ Phase `grounding`. `cpd plan new` already registered you and sent your first mes
 
 ## 2. Plan
 
-1. `cpd plan phase plan` is the only manual phase change. PRs and Jobs can be drafted only from here. If the Context has no grounded Lead on this machine, it also registers one as a fork of your session; every later Plan of the Context then starts as a fork of that Lead, and you never type into it. So run it only after step 5 of grounding.
+1. `cpd plan phase plan` is the only manual phase change. PRs and Jobs are drafted from here. If the Context has no grounded Lead on this machine, it also registers one as a fork of your session; every later Plan of the Context then starts as a fork of that Lead, and you never type into it. So run it only after step 5 of grounding.
 2. **Draft PRs, then Jobs.** Add every PR first (it needs an existing repo path; a PR may need only PRs added before it):
 
    ```
@@ -68,6 +68,7 @@ Phase `grounding`. `cpd plan new` already registered you and sent your first mes
    - **Parallel:** prefer many small Jobs. Jobs that touch the same files must be ordered by a Dependency (`--needs`). A Job's Dependencies are Jobs of its own PR; order across PRs is the PRs' `--needs`. Every PR needs at least one Job.
    - **Tier:** `S1` for coding, `H2` for docs. Use `O` only for judgement-heavy work.
    - **Complete and guess-free:** a fresh Worker with only this Spec must finish without asking. If you cannot fill a field without guessing, return to the interview.
+   - **Plan every batch now.** Cut the work into batches that each need the User's approval (for example: the first PR's Jobs, then the Jobs that depend on a research finding, then a follow-up PR). Draft **all** of them, so the Plan view shows the whole Plan. The first batch is what you review and lock in the steps below; every PR needs at least one Job in it. Add each later batch with `--draft` right after the lock (step 5): `plan lock` queues every Job drafted before it.
 3. **Review.**
    - Run `cpd plan render` and read the file it returns as the User will: table, graph, every Spec.
    - Call `cpd_plan_review` (no parameters), then stop. The User decides in plannotator. The decision arrives as a message: `Plan review <id> was APPROVED` or `REJECTED`, with feedback.
@@ -89,6 +90,14 @@ Phase `grounding`. `cpd plan new` already registered you and sent your first mes
    ```
 
    **Never lock without approval.** Any edit after approval changes the plan, so the lock is refused with `plan_not_approved`: call `cpd_plan_review` again. Locking approves every PR's Jobs at once and starts each PR that needs no other: its Lead Branch (`cpd/<plan>/<key>`) and worktree. The other PRs stay `waiting`. It also starts the engine, the one `cpd watch` of the machine. On `watch_start_failed` the Plan is locked anyway: run `cpd watch --ensure`. On `setup_failed`, `worktree_exists` or `branch_exists` nothing was locked: tell the User what the error says.
+5. **Add the later batches as drafts**, right after the lock, so the Plan view shows the whole Plan. A draft is not run, and the engine never opens a PR that has a draft (`all-merged` waits for it):
+
+   ```
+   cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --pr <key> --draft
+   cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --pr <key> --needs <k1,k2> --draft
+   ```
+
+   A draft may need other drafts or Locked Jobs; a Job added without `--draft` may not need a draft (`needs_unavailable`). The Spec rules of step 2 apply. Drafts stay editable and cancellable in every phase (`cpd job edit`, `cpd job cancel`, as in step 3). They start only when the User approves them: [Starting a later batch](#starting-a-later-batch).
 
 ## 3. Dispatch
 
@@ -98,18 +107,32 @@ The engine polls every open pull request of the User every 5 s. You may run `cpd
 
 | Event | Meaning | Action |
 |---|---|---|
-| `job-merged` | A Job is Merged. | Note it. Tell the User in one line only if they are waiting. A research Job: read its findings, then append the Jobs that depend on them (`cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --needs <k1,k2>`) and tell the User what you appended. When every feedback Job of a PR is Merged: `cpd pr rebase --pr <key>`. After `cpd pr open --pr <key>` was refused with `gate_failed`, when every fix Job of that PR is Merged: `cpd pr open --pr <key>` again. A review Job ([Judging material](#judging-material)): read its findings file `run/<plan>/reviews/<k>.md`, append one fix Job per real finding, then `cpd pr open --pr <key>`. |
+| `job-merged` | A Job is Merged. | Note it. Tell the User in one line only if they are waiting. A research Job: read its findings, then revise the drafts that depend on them (`cpd job edit <k> --spec <file.json>`; add missing ones with `cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --needs <k1,k2> --draft`) and start that batch ([Starting a later batch](#starting-a-later-batch)). When every feedback Job of a PR is Merged: `cpd pr rebase --pr <key>`. After `cpd pr open --pr <key>` was refused with `gate_failed`, when every fix Job of that PR is Merged: `cpd pr open --pr <key>` again. A review Job ([Judging material](#judging-material)): read its findings file `run/<plan>/reviews/<k>.md`, append one fix Job per real finding ([Appending fixes](#appending-fixes)), then `cpd pr open --pr <key>`. |
 | `attempt-retry` | An Attempt failed with a cause the ladder retries; the next one is queued at a higher Tier. | No action. Do not interrupt the User. |
-| `job-failed` | The ladder is exhausted, or a timeout, setup failure or merge failure needs a decision. | Diagnose ([Failed Jobs](#failed-jobs)), then do one of: retry higher with `cpd job retry <k> --tier <T>`; cancel with `cpd job cancel <k> --reason "<why>"` and append the replacement with `cpd job add <k2> --title "<title>" --tier <T> --spec <file.json> --needs <k1,k2>`; or escalate to the User with `ask_user_question` when the choice is theirs. |
+| `job-failed` | The ladder is exhausted, or a timeout, setup failure or merge failure needs a decision. | Diagnose ([Failed Jobs](#failed-jobs)), then do one of: retry higher with `cpd job retry <k> --tier <T>`; cancel with `cpd job cancel <k> --reason "<why>"` and append the replacement with `cpd job add <k2> --title "<title>" --tier <T> --spec <file.json> --needs <k1,k2>` ([Appending fixes](#appending-fixes)); or escalate to the User with `ask_user_question` when the choice is theirs. |
 | `job-cancelled` | A cancel took effect (the one you asked for, once the engine stopped the Attempt). | No action. |
 | `escalation` | A Worker asked a question. | Resolve first: if the Spec, Requirements, assumptions, Context records or repo settle it, answer now with `cpd answer <esc-id> "<answer>"`. Otherwise ask the User (`ask_user_question` when you can offer 2–4 options, chat otherwise) and answer with the same command. See [Escalations](#escalations). |
 | `pr-started` | A PR started (its Lead Branch and worktree exist) and its Jobs are now scheduled. | No action. |
-| `all-merged` | Every Job of one PR (`data.pr`) is Merged or cancelled. | `cpd pr open --pr <key>`. It runs the Gate first; if it is refused with `gate_failed`, see [4. Pull request](#4-pull-request). Give the User the PR URL. |
+| `all-merged` | Every Job of one PR (`data.pr`) is Merged or cancelled, and none is a draft (a PR with an unapproved batch never reports it). | `cpd pr open --pr <key>`. It runs the Gate first; if it is refused with `gate_failed`, see [4. Pull request](#4-pull-request). Give the User the PR URL. |
 | `pr-feedback` | A PR of the Plan needs attention: `data.reasons` lists `checks_failed`, `changes_requested` or `closed`. | Run `cpd pr view --pr <key>` first, then triage. For a failing check's log: `gh run view <run-id> --log-failed` (the run id is in the check's URL). Append one Job per actionable item to the PR named in `data.pr` with `cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --pr <key>`. The fix Job's Spec carries the failing test names and log lines. Reply-only comments need no Job. After the Jobs' `job-merged` messages, push with `cpd pr rebase --pr <key>`. `closed` in `data.reasons` (closed unmerged): ask the User; the PRs that need it stay `waiting`. |
-| `plan-done` | Every PR is merged. | Tell the User in one short paragraph: Jobs merged, appended and cancelled, and anything left open. If the User or a later message brings follow-up work (a bug, a regression, a missed item), add a new PR with `cpd pr add <key> --repo <path>` (the Plan returns to `dispatch`), then its Jobs with `--pr <key>`, showing the batch to the User in chat first (no Plan review for appended work). Never edit or delete Locked Jobs. |
+| `plan-done` | Every PR is merged. | Tell the User in one short paragraph: Jobs merged, appended and cancelled, and anything left open. If the User or a later message brings follow-up work (a bug, a regression, a missed item), add a new PR with `cpd pr add <key> --repo <path>` (the Plan returns to `dispatch`), then its Jobs with `--pr <key>` and `--draft`, and start the batch with a Plan review ([Starting a later batch](#starting-a-later-batch)). Never edit or delete Locked Jobs. |
 | `error` | The engine or an Attempt hit an unexpected failure. | With code `pr_start_failed` (a waiting PR could not start; the PR stays `waiting`): read the text, tell the User if the cause is theirs (the repo's `pre-start`, the remote), then `cpd pr start <key>` once it is fixed. With code `push_failed` (a Lead Branch push failed; the merge stands, the next merge or `pr open` pushes again): note it; tell the User only if it repeats. Otherwise read the text, then `cpd plan show` and, if an Attempt is named, `cpd attempt read <attempt-id>`. Tell the User what broke and what you propose. If the engine stopped, run `cpd watch --ensure`. |
 
 A message that starts `cpd adapter:` comes from the pi adapter, not from a Plan: read its code, tell the User what broke and what you propose.
+
+### Starting a later batch
+
+A batch added as drafts ([2. Plan](#2-plan) step 5, or a follow-up PR after `plan-done`) starts only with the User's approval, in any phase after the lock:
+
+1. Revise the drafts if the work since changed them (`cpd job edit <k> --spec <file.json>`; drop one as in [2. Plan](#2-plan) step 3).
+2. Run `cpd plan render`, read the file it returns, and show the batch to the User in chat (the drafts are marked under review; the Locked Jobs are context).
+3. Call `cpd_plan_review` (no parameters), then stop. The review covers exactly the drafts, all at once: keep as drafts only what should start together.
+4. **APPROVED:** the drafts are queued and start as soon as they are Ready. There is no `cpd plan lock` here and nothing else to run; the message lists the Jobs queued. If it says the Jobs changed since the review, call `cpd_plan_review` again.
+5. **REJECTED:** the drafts stay drafts. Apply the feedback with `cpd job edit`, `cpd job cancel` and `cpd job add --draft`, then call `cpd_plan_review` again.
+
+### Appending fixes
+
+Urgent fix Jobs are not a batch to approve: append them directly, without `--draft` and without a review, and they start at once. They are the `pr-feedback` fixes, the `gate_failed` fixes, review-finding fixes and the replacement of a failed Job. All other planned work goes through [Starting a later batch](#starting-a-later-batch). Such a fix Job may not need a draft.
 
 ### Failed Jobs
 

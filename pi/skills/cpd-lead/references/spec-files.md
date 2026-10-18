@@ -60,5 +60,5 @@ Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku); effort 0
 Grounding that needs more than reading (a large codebase survey, comparing libraries, checking an API against its source) goes to a Worker as an ordinary Job.
 
 - Spec: the question as `goal`; where to look and what a good answer contains as `context`; `touches` is the one Markdown file for the findings (for example `docs/research/<topic>.md`); `acceptance` says what the file must answer and cite. Tier `S1` to `S3`.
-- Jobs run only after the lock, so a research Job cannot ground the Plan that contains it. Put it in the Plan first, list in its `context` the follow-up Jobs you will append, and append them when it is Merged (`job-merged`). Tell the User what you appended.
+- Jobs run only after the lock, so a research Job cannot ground the Plan that contains it. Put it in the Plan first and add the follow-up Jobs as drafts right after the lock (`job add --draft`), listing them in its `context`. When it is Merged (`job-merged`), revise the drafts with what it found, then start them with `cpd_plan_review`. Tell the User what the batch holds.
 - If the question is cheap to answer by reading, read instead.

@@ -2,11 +2,11 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { callCpd, CpdError, isObject, toCpdError } from "./cpd.ts";
+import { callCpd, CpdError, cpdProtocol, installedIdentity, isObject, toCpdError } from "./cpd.ts";
 import { cursorFrom } from "./cursor.ts";
 import { errorMessage, eventMessage, FOLLOW_UP, LEAD_MESSAGES } from "./delivery.ts";
 import type { CpdEvent } from "./event.ts";
-import { parseLine } from "./event.ts";
+import { parseLine, PROTOCOL } from "./event.ts";
 import { DEFAULT_TIMING, Follower, type Spawn, type Timing } from "./follower.ts";
 import type { CommandCtx, Ctx, PiApi } from "./pi.ts";
 import { parseOpened, parseResult, parseStatus, request } from "./plannotator.ts";
@@ -73,6 +73,31 @@ export function adapter(pi: PiApi, options: Options = {}): void {
 
   const exec = (command: string, args: string[]) => pi.exec(command, args);
   const call = (args: string[]) => callCpd(exec, args);
+
+  // The installed cpd binaries already reported as speaking another protocol (commands.md §15.2, step 0), and the
+  // error codes of a failed `--version` already reported; both once per adapter, so a follower restart repeats nothing.
+  const mismatched = new Set<string>();
+  const versionFailures = new Set<string>();
+
+  /** commands.md §15.2, step 0. Never throws; the adapter keeps following whatever it finds. */
+  async function checkProtocol(): Promise<void> {
+    try {
+      const cpd = await cpdProtocol(exec);
+      versionFailures.clear();
+      if (cpd === PROTOCOL) return;
+      const identity = installedIdentity() ?? "cpd";
+      if (mismatched.has(identity)) return;
+      mismatched.add(identity);
+      const speaks = cpd === null ? "no protocol (`cpd --version` has no `protocol`)" : `protocol ${cpd}`;
+      const m = errorMessage("protocol mismatch", "protocol_mismatch", `cpd speaks ${speaks}, this adapter ${PROTOCOL}; reload pi (/reload)`, { cpd, adapter: PROTOCOL });
+      pi.sendMessage(m.message, m.options);
+    } catch (e) {
+      const err = toCpdError(e);
+      if (versionFailures.has(err.code)) return;
+      versionFailures.add(err.code);
+      deliver("protocol check", err);
+    }
+  }
 
   const deliver = (what: string, e: unknown, extra: Record<string, unknown> = {}) => {
     const err = toCpdError(e);
@@ -156,6 +181,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     r.follower = new Follower(
       id,
       {
+        before: checkProtocol,
         cursor: () => r.cursor,
         onRunStart: () => {
           r.failureLineThisRun = false;

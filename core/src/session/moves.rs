@@ -356,7 +356,7 @@ pub(super) fn close(args: CloseArgs) -> Result<Output, CpdError> {
 }
 
 /// The message files a Lead's `session run` reads (commands.md §1.4).
-pub(super) fn first_message(home: &CpdHome, row: &Row) -> Result<Option<String>, CpdError> {
+pub(super) fn first_message(home: &CpdHome, row: &Row) -> Result<Option<PathBuf>, CpdError> {
     let Some(plan) = &row.plan else { return Ok(None) };
     let own = home.session_message(plan, &row.id);
     let path: Option<PathBuf> = if own.exists() {
@@ -366,7 +366,11 @@ pub(super) fn first_message(home: &CpdHome, row: &Row) -> Result<Option<String>,
     } else {
         None
     };
-    path.map(|p| std::fs::read_to_string(&p).map_err(|e| unreadable(&p, e))).transpose()
+    path.map(|p| match std::fs::File::open(&p) {
+        Ok(_) => Ok(p),
+        Err(e) => Err(unreadable(&p, e)),
+    })
+    .transpose()
 }
 
 #[cfg(test)]

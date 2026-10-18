@@ -775,6 +775,37 @@ fn e4_waits_while_a_job_is_queued() {
     assert_eq!(fx.count("all-merged"), 0);
 }
 
+/// A draft added after the lock (`job add --draft`, contract §3.2): E3 never
+/// starts it, and E4 does not send `all-merged` while it remains, so the PR
+/// waits for the batch. Once it is cancelled, E4 completes the PR.
+#[test]
+fn e3_never_starts_a_draft_and_e4_waits_while_one_remains() {
+    let fx = fx("");
+    // The work session as tui leaves it, so E3 could start an Attempt if it chose to.
+    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
+        assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
+    }
+    fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
+    let spec = fx.env.root().join("spec.json");
+    fs::write(&spec, r#"{"goal": "Later.", "context": "c", "touches": ["b.txt"], "acceptance": ["ok"], "out_of_scope": []}"#).unwrap();
+    let added = fx.env.cpd(&["job", "add", "later", "--title", "Later", "--tier", "S2", "--spec", spec.to_str().unwrap(), "--draft", "--plan", "pay"]).ok();
+    assert_eq!((&added["job"]["status"], &added["job"]["appended"]), (&json!("draft"), &json!(true)));
+
+    let engine = fx.start();
+    std::thread::sleep(Duration::from_millis(3500));
+    engine.stop();
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts"), 0, "a draft never gets an Attempt");
+    assert_eq!(fx.job_status("later"), "draft");
+    assert_eq!(fx.count("all-merged"), 0, "the PR waits for its draft");
+    assert!(fx.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_none());
+
+    fx.env.cpd(&["job", "cancel", "later", "--reason", "Not needed.", "--plan", "pay"]).ok();
+    let engine = fx.start();
+    wait_until("all-merged", || fx.count("all-merged") == 1);
+    engine.stop();
+    assert_eq!(fx.events("all-merged")[0].3, json!({"pr": "repo", "merged": ["api"], "cancelled": ["later"]}));
+}
+
 // ---------- E5 ----------
 
 /// Plan `pay` in phase `pr`.
