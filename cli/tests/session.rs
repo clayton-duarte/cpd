@@ -62,8 +62,8 @@ fn setup(env: &TestEnv) {
                     "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
                      INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
                        ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead one', '{cwd}', 'O3', 'idle', 't1', 't1'),
-                       ('lead2', 'lead', 'ctx', 'other', NULL, 'Lead two', '{cwd}', 'O3', 'stopped', 't2', 't2'),
-                       ('manager1', 'manager', 'ctx', NULL, NULL, 'Manager', '{cwd}', 'O5', 'stopped', 't0', 't0'),
+                       ('lead2', 'lead', 'ctx', 'other', NULL, 'Lead two', '{cwd}', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't2'),
+                       ('manager1', 'manager', 'ctx', NULL, NULL, 'Manager', '{cwd}', 'O5', 'stopped', '2020-01-01T00:00:00Z', 't0'),
                        ('worker1', 'worker', 'ctx', 'pay', 'api-a1', 'pay api a1', '{cwd}', 'S2', 'working', 't3', 't3');
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
                        ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't'),
