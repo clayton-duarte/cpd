@@ -208,6 +208,18 @@ test("session-message reaches a side fork (role lead, not the Plan's Lead) too",
   assert.deepEqual(f.pi.delivered()[0]!.options, { triggerTurn: true, deliverAs: "followUp" });
 });
 
+test("session-message reaches a Manager (no Plan) too", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.respond("session-show", sessionShow({ role: "manager", plan: null, plan_lead: false }));
+  f.load();
+  await f.pi.fire("session_start");
+  await waitFor("the follower", () => f.follows().length > 0);
+  f.emit(message(101, null));
+  await waitFor("the message", () => f.pi.delivered().length === 1);
+  assert.deepEqual(f.pi.delivered()[0]!.options, { triggerTurn: true, deliverAs: "followUp" });
+});
+
 test("a Worker ignores session-message", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());

@@ -1462,7 +1462,7 @@ Idempotent: yes; not archived: `"already": true`, nothing written.
 cpd session send <id> (<text> | --file <f>)
 ```
 
-Sends one message to a Lead Session (hs-d92, hs-d133). It appends an Event; the target's adapter delivers it (§15.3).
+Sends one message to a Lead or a Manager Session (hs-d92, hs-d133). It appends an Event; the target's adapter delivers it (§15.3).
 
 | Argument | Meaning |
 |---|---|
@@ -1475,10 +1475,10 @@ Exactly one of `<text>` and `--file` (else `usage`).
 | Precondition | Code | Exit |
 |---|---|---|
 | the Session exists | `session_not_found` | 4 |
-| it is a `lead` | `not_a_lead` | 3 |
+| it is a `lead` or a `manager`; a Worker is refused with "Session <id> is a worker, not a Lead or a Manager." | `not_a_lead` | 3 |
 | it is not archived; `details.next` = `cpd session unarchive <id>` | `archived` | 3 |
 
-A `stopped` Lead is accepted: it gets the message when its pi starts (its follower replays from its cursor, §15.2).
+A `stopped` Lead or Manager is accepted: it gets the message when its pi starts (its follower replays from its cursor, §15.2).
 
 Effects:
 - **Rows**, one transaction: **Event** `session-message` with `session` = the target, `context` and `plan` = the target's, `data` = `{from, text}`. `from` is `CPD_SESSION`, else `PI_SESSION_ID`, else null (the User). The Event's `text` is the message text; the adapter composes the delivered content (§15.3).
@@ -1799,7 +1799,7 @@ Events arrive in id order; the follower already applied §11's `--session` rule,
 | `plan-review` with `status: approved` or `rejected`, for a pending entry of this session | a decision made outside plannotator (§15.5 "Deciding elsewhere"): closes `plan-review:<review>`; message `cpd-plan-decision`, **turn** (own custom type, not `cpd`). For any other review: ignored | |
 | `session-renamed` (`session` = itself) | `pi.setSessionName(name)` and `ctx.ui.notify("cpd: session renamed to \"<name>\"")`; no message, no turn | same |
 | `attempt-nudge` (`session` = itself) | | message with `data.prompt` as content, **turn** |
-| `session-message` (`session` = itself) | message, **turn**, `deliverAs: "followUp"`; for every Lead (Plan Lead, side fork) and the Manager ( the `--session` rule delivers Events addressed to a Session to it). Content `Message from <sender>: <text>`, `<sender>` = the sender Session's name and id (`<name> (<id>)`), or `the User` when `data.from` is null. An idle Lead starts a turn at once; a working or blocked one gets it after its running turn, never interrupted | |
+| `session-message` (`session` = itself) | message, **turn**, `deliverAs: "followUp"`; for every Lead (Plan Lead, side fork) and the Manager (the `--session` rule delivers Events addressed to a Session to it). Content `Message from <sender>: <text>`, `<sender>` = the sender Session's name and id (`<name> (<id>)`), or `the User` when `data.from` is null. An idle Lead starts a turn at once; a working or blocked one gets it after its running turn, never interrupted | |
 | `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | ignored: no message, no turn | ignored |
 | every other kind | ignored | ignored |
 

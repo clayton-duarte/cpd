@@ -165,6 +165,26 @@ fn every_kind_of_lead_is_accepted_a_stopped_one_too() {
 }
 
 #[test]
+fn a_manager_is_a_target_and_an_archived_one_is_refused() {
+    let env = TestEnv::new();
+    setup(&env);
+    exec_sql(
+        &env,
+        "INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at, forked_from)
+         VALUES ('mgr1', 'manager', 'ctx', NULL, NULL, 'ctx-manager', '/', 'O5', 'stopped', 't5', 't5', NULL)",
+    );
+    let out = cpd_with(&env, &[("CPD_SESSION", "lead1")], &["session", "send", "mgr1", "done"]).ok();
+    assert_eq!(out["session"], "mgr1");
+    let events = messages(&env);
+    assert_eq!(events.len(), 1);
+    assert_eq!((&events[0]["session"], &events[0]["context"], &events[0]["plan"]), (&json!("mgr1"), &json!("ctx"), &Value::Null));
+    assert_eq!(events[0]["data"], json!({"from": "lead1", "text": "done"}));
+    exec_sql(&env, "UPDATE sessions SET archived_at = 't' WHERE id = 'mgr1'");
+    refused(&env.cpd(&["session", "send", "mgr1", "again"]), "archived", 3);
+    assert_eq!(messages(&env).len(), 1);
+}
+
+#[test]
 fn the_refusals_write_nothing() {
     let env = TestEnv::new();
     setup(&env);
@@ -172,6 +192,7 @@ fn the_refusals_write_nothing() {
     assert_eq!(error["details"]["session"], "nope");
     let error = refused(&env.cpd(&["session", "send", "worker1", "hi"]), "not_a_lead", 3);
     assert_eq!(error["details"]["role"], "worker");
+    assert!(error["message"].as_str().unwrap().ends_with("is a worker, not a Lead or a Manager."), "{error}");
     exec_sql(&env, "UPDATE sessions SET archived_at = 't' WHERE id = 'fork1'");
     let error = refused(&env.cpd(&["session", "send", "fork1", "hi"]), "archived", 3);
     assert_eq!(error["details"]["next"], "cpd session unarchive fork1");

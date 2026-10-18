@@ -1321,7 +1321,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `context-archived` | `context archive` or `unarchive`, for the Context | context | `{archived: bool}` |
 | `plan-archived` | `plan archive` or `unarchive`, or the cascade of the Context's, for each Plan | context, plan | `{archived: bool}` |
 | `session-archived` | `session archive` or `unarchive`, or a cascade, for each Session | context, plan?, session | `{archived: bool}` |
-| `session-message` | `session send` (commands.md §10.12): one message to a Lead | context, plan?, session = the target | `{from, text}`; `from` is the sender Session's id or null (the User) |
+| `session-message` | `session send` (commands.md §10.12): one message to a Lead or a Manager | context, plan?, session = the target | `{from, text}`; `from` is the sender Session's id or null (the User) |
 | `watch-started`, `watch-stopped` | the engine starts or stops | (none) | `{pid}` |
 | `error` | `watch` or a driver hit an unexpected failure; codes include `lead_worktree_stale`, `merge_check_failed`, `push_failed` (a failed push of a Lead Branch at a PR's start or at a merge, §7.2, §7.4; `details.pr` names the PR) `pr_start_failed` (engine E7 could not start a PR, §3.8; `details: {pr, step, tail?, log?}`) and `gh_rate_limited` (engine E5 skips polls while GitHub's rate limit is nearly used, §3.7; `details: {remaining, reset_at}`; no Plan, it concerns the User's account) | context?, plan?, … | `{source, code, message, details}` |
 
@@ -1350,7 +1350,7 @@ It delivers a message with `pi.sendMessage({customType: "cpd", content: text, di
 | `job-cancelled` | message, no turn (it may come from the engine, after a request) | |
 | `session-renamed` (own session) | no message, no turn: `pi.setSessionName(name)` and a one-line notice (cpd 1 §10, kept) | same |
 | `attempt-nudge` (own session) | | message, **turn** (replaces cpd 1's `herdr agent prompt`) |
-| `session-message` (own session) | message, **turn** (`Message from <sender>: <text>`), for every Lead: an idle Lead starts a turn at once, a working or blocked one gets it after its running turn | |
+| `session-message` (own session) | message, **turn** (`Message from <sender>: <text>`), for every Lead and a Manager: an idle Lead starts a turn at once, a working or blocked one gets it after its running turn | |
 | `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | ignored: no message, no turn (they are for the TUI) | ignored |
 | every other kind | ignored | ignored |
 

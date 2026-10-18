@@ -267,7 +267,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   async function handleEvent(r: Run, ev: CpdEvent): Promise<void> {
     const own = ev.session === r.id;
     if (ev.kind === "session-message") {
-      if (own && r.info.role === "lead") await deliverSessionMessage(r, ev);
+      if (own && (r.info.role === "lead" || r.info.role === "manager")) await deliverSessionMessage(r, ev);
       return;
     }
     if (ev.kind === "session-renamed") {
@@ -301,7 +301,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     }
   }
 
-  /** §15.3 `session-message`: for every Lead, with a turn. The sender's name is read once, `cpd session show <from>`; the id stands in when it cannot be read. */
+  /** §15.3 `session-message`: for every Lead and a Manager, with a turn. The sender's name is read once, `cpd session show <from>`; the id stands in when it cannot be read. */
   async function deliverSessionMessage(r: Run, ev: CpdEvent): Promise<void> {
     const from = typeof ev.data.from === "string" ? ev.data.from : null;
     let sender: { id: string; name: string | null } | null = null;

@@ -1,4 +1,4 @@
-//! `session send` (commands.md §10.12, hs-d92, hs-d133): one message to a Lead,
+//! `session send` (commands.md §10.12, hs-d92, hs-d133): one message to a Lead or a Manager,
 //! as a `session-message` Event its adapter delivers (§15.3).
 
 use rusqlite::OptionalExtension;
@@ -7,9 +7,9 @@ use serde_json::json;
 use super::moves::unreadable;
 use super::row::{self, Role, Row};
 use super::state::scoped;
-use super::{Env, SendArgs, archive, not_a_lead};
+use super::{Env, SendArgs, archive};
 use crate::args::Text;
-use crate::error::CpdError;
+use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
 use crate::ids::SessionId;
 use crate::output::Output;
@@ -26,12 +26,14 @@ fn sender() -> Result<Option<SessionId>, CpdError> {
         .transpose()
 }
 
-/// The target is a Lead and is not archived (a `stopped` Lead is fine).
+/// The target is a Lead or a Manager and is not archived (a `stopped` one is fine).
 fn check(target: &Row) -> Result<(), CpdError> {
     match target.role {
-        Role::Lead if target.archived_at.is_none() => Ok(()),
-        Role::Lead => Err(archive::archived(target)),
-        role => Err(not_a_lead(&target.id, role)),
+        Role::Lead | Role::Manager if target.archived_at.is_none() => Ok(()),
+        Role::Lead | Role::Manager => Err(archive::archived(target)),
+        role => Err(CpdError::new(ErrorCode::NotALead, format!("Session {} is a {}, not a Lead or a Manager.", target.id, role.as_str()))
+            .with("session", target.id.as_str())
+            .with("role", role.as_str())),
     }
 }
 
