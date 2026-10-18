@@ -64,7 +64,8 @@ fn config_with_only_the_required_keys_has_every_default() {
                 "gate_minutes": 30,
                 "lock_wait_seconds": 900,
                 "store_busy_ms": 5000,
-                "fork_quiet_seconds": 5
+                "fork_quiet_seconds": 5,
+                "stall_seconds": 1200
             },
             "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "error_repeat_seconds": 600},
             "inbox": {"stuck_job_minutes": 10},
@@ -145,6 +146,7 @@ gate_minutes = 1
 lock_wait_seconds = 1
 store_busy_ms = 1
 fork_quiet_seconds = 1
+stall_seconds = 0
 [watch]
 tick_seconds = 1
 pr_poll_seconds = 1
@@ -168,6 +170,8 @@ work_session = "w"
     assert_eq!(out["config"]["plannotator_ports"], "1-65535");
     assert_eq!(out["config"]["tiers"]["O"], "a/b/c");
     assert!(out["sources"].as_object().unwrap().values().all(|s| s == "file"));
+    // 0 turns the stall kill off (contract §8.2), unlike every other timeout.
+    assert_eq!(out["config"]["timeouts"]["stall_seconds"], 0);
 
     write_config(&env, &text.replace("poll_ms = 20", "poll_ms = 10000"));
     assert_eq!(env.cpd(&["config"]).ok()["config"]["events"]["poll_ms"], 10000);
@@ -221,6 +225,7 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\nretry_cap = -1\n", "retry_cap"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nattempt_minutes = 0\n", "timeouts.attempt_minutes"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nstore_busy_ms = 0\n", "timeouts.store_busy_ms"),
+        ("version = 1\nmachine = \"hs\"\n[timeouts]\nstall_seconds = -1\n", "timeouts.stall_seconds"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nlock_wait_seconds = 0\n", "timeouts.lock_wait_seconds"),
         ("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0\n", "watch.tick_seconds"),
         ("version = 1\nmachine = \"hs\"\n[inbox]\nstuck_job_minutes = 0\n", "inbox.stuck_job_minutes"),
