@@ -46,6 +46,7 @@ pub struct Config {
     pub tiers: Tiers,
     pub timeouts: Timeouts,
     pub watch: Watch,
+    pub inbox: Inbox,
     pub events: Events,
     pub tmux: Tmux,
 }
@@ -130,6 +131,12 @@ pub struct Watch {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Inbox {
+    /// A failed Job becomes a `job-stuck` item after this (E8, §2.2).
+    pub stuck_job_minutes: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Events {
     /// `events follow` (§5.4).
     pub poll_ms: u32,
@@ -183,7 +190,7 @@ impl Config {
                 .with("path", path.display().to_string())
         })?;
         let mut r = Reader { table, path, sources: Sources::new() };
-        r.sections_are_tables(&["tiers", "timeouts", "watch", "events", "tmux"])?;
+        r.sections_are_tables(&["tiers", "timeouts", "watch", "inbox", "events", "tmux"])?;
 
         let version = r.require("version", |v| int(v, 1, 1))?;
         let machine = r.require("machine", |v| MachineName::parse(text_of(&v)?).map_err(|e| e.message().to_owned()))?;
@@ -233,6 +240,7 @@ impl Config {
             context_sync_seconds: positive(&mut r, "watch.context_sync_seconds", 300)?,
             error_repeat_seconds: positive(&mut r, "watch.error_repeat_seconds", 600)?,
         };
+        let inbox = Inbox { stuck_job_minutes: positive(&mut r, "inbox.stuck_job_minutes", 10)? };
         let events = Events { poll_ms: r.get("events.poll_ms", 200, |v| int(v, 20, 10_000))? };
         let tmux = Tmux {
             socket: r.get("tmux.socket", "cpd".into(), |v| tmux_name(text_of(&v)?))?,
@@ -259,6 +267,7 @@ impl Config {
             tiers,
             timeouts,
             watch,
+            inbox,
             events,
             tmux,
         };
@@ -357,7 +366,7 @@ impl Reader<'_> {
     }
 }
 
-const KNOWN_SECTIONS: [&str; 5] = ["tiers", "timeouts", "watch", "events", "tmux"];
+const KNOWN_SECTIONS: [&str; 6] = ["tiers", "timeouts", "watch", "inbox", "events", "tmux"];
 
 fn text_of(value: &Value) -> Result<&str, String> {
     match value {
