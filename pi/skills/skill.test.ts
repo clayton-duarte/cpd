@@ -151,3 +151,37 @@ test("cpd-manager starts Plans with a brief, messages Leads and never answers fo
   assert.match(text, /Never answer for the User/);
   assert.match(text, /never moves the chat slot/);
 });
+
+/** The text of a markdown section: from its heading line to the next heading of the same or a higher level. */
+function section(text: string, heading: string): string {
+  const level = /^#+/.exec(heading)![0].length;
+  const lines = text.split("\n");
+  const start = lines.indexOf(heading);
+  assert.ok(start >= 0, `missing heading: ${heading}`);
+  const end = lines.findIndex((l, i) => i > start && new RegExp(`^#{1,${level}} `).test(l));
+  return lines.slice(start, end < 0 ? undefined : end).join("\n");
+}
+
+test("cpd-lead is organised by the CPD flow: Context, Plan and Deploy with their steps, in order", () => {
+  const text = skillFiles("cpd-lead")[0]!.text;
+  const headings = text.split("\n").filter((l) => /^#{2,3} /.test(l));
+  const flow = headings.slice(headings.indexOf("## 1. Context"));
+  assert.deepEqual(flow, [
+    "## 1. Context", "### Grounding", "### Clarifying", "### Specifying",
+    "## 2. Plan", "### Dividing", "### Sequencing", "### Approving", "### Dispatching",
+    "## 3. Deploy", "### Mechanical checks", "### PR", "### Reviewing and Monitoring", "### Addressing",
+  ]);
+  assert.match(section(text, "### Specifying"), /cpd plan phase plan/);
+  assert.match(section(text, "### Dispatching"), /\| `job-merged` \|/, "the Events table stays under Dispatching");
+});
+
+test("cpd-lead: no local review before pr open, and the overlaps are settled before the Plan review", () => {
+  const text = skillFiles("cpd-lead")[0]!.text;
+  const deploy = section(text, "## 3. Deploy");
+  assert.match(deploy, /No local review before `pr open`/);
+  assert.match(deploy, /final review Job stays optional/);
+  const approving = section(text, "### Approving");
+  assert.ok(approving.indexOf("## Overlaps") >= 0, "Approving reads the ## Overlaps section of plan render");
+  assert.ok(approving.indexOf("## Overlaps") < approving.indexOf("Call `cpd_plan_review`"), "overlaps are settled before the review is called");
+  assert.match(approving, /cpd context note/);
+});
