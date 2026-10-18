@@ -52,7 +52,7 @@ impl Drop for Fixture {
     }
 }
 
-/// A grounded Lead `lead1`, `stopped` since long ago, with a finished session
+/// A Manager `lead1`, `stopped` since long ago, with a finished session
 /// file, running `session run` in a pane. `pi` is the body of the fake pi after
 /// it records its pid in `pi.pids`; it exits at `SIGTERM`.
 fn start(pi: &str) -> Fixture {
@@ -69,10 +69,9 @@ fn start(pi: &str) -> Fixture {
         .unwrap()
         .write("fixture", |tx| {
             tx.execute_batch(&format!(
-                "INSERT INTO contexts (id, title, created_at, created_on, lead_session, grounded_seq)
-                   VALUES ('ctx', 'Ctx', 't', 'm1', '{LEAD}', 0);
+                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
                  INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at)
-                   VALUES ('{LEAD}', 'lead', 'ctx', NULL, NULL, 'Grounded', '{cwd}', 'O3', 'stopped', '{at}', '{at}');"
+                   VALUES ('{LEAD}', 'manager', 'ctx', NULL, NULL, 'Manager', '{cwd}', 'O3', 'stopped', '{at}', '{at}');"
             ))?;
             Ok(())
         })

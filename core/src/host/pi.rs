@@ -104,9 +104,9 @@ impl Launch {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LeadStart {
     /// A new session with its first message.
-    Fresh { model: String, name: String, first_message: String },
-    /// A fork of `source_file`; the grounded Lead has no first message.
-    Fork { model: String, name: String, source_file: PathBuf, first_message: Option<String> },
+    Fresh { model: String, name: String, first_message: PathBuf },
+    /// A fork of `source_file`; a fork by `session fork` without `--message-file` has no first message.
+    Fork { model: String, name: String, source_file: PathBuf, first_message: Option<PathBuf> },
     /// The Session's own file again, with no first message.
     Resume { file: PathBuf },
 }
@@ -132,7 +132,7 @@ impl Plannotator {
 pub struct LeadLaunch<'a> {
     pub home: &'a CpdHome,
     pub session: &'a SessionId,
-    /// The Lead's Plan; `None` for a Context's grounded Lead, which gets no
+    /// The Lead's Plan; `None` for a Context's Manager, which gets no
     /// `CPD_PLAN` and no `PLANNOTATOR_*` but `PLANNOTATOR_UPDATE_CHECK`.
     pub plan: Option<&'a PlanId>,
     /// The `-e` sources to pass, from [`extensions_to_pass`].
@@ -194,14 +194,14 @@ pub fn lead(launch: &LeadLaunch) -> Launch {
     }
     argv.extend(["--session-id".to_owned(), launch.session.to_string(), "-n".to_owned(), name.clone()]);
     if let Some(message) = message {
-        argv.extend(["--".to_owned(), message.clone()]);
+        argv.extend(["--".to_owned(), format!("@{}", message.display())]);
     }
     Launch { argv, env: lead_env(launch) }
 }
 
 fn lead_env(launch: &LeadLaunch) -> BTreeMap<String, String> {
     let Some(plan) = launch.plan else {
-        // A grounded Lead (contract §6.5, "Lead (grounded, no Plan)").
+        // A Context's Manager (contract §6.5, "Manager").
         return BTreeMap::from([
             ("CPD_HOME".to_owned(), launch.home.root().display().to_string()),
             ("CPD_SESSION".to_owned(), launch.session.to_string()),
@@ -509,7 +509,7 @@ mod tests {
         assert_eq!(lead_launch(resume, &plannotator).env["PI_SKIP_VERSION_CHECK"], "1");
         let home = home();
         let session = SessionId::parse(ID).unwrap();
-        let grounded = lead(&LeadLaunch {
+        let manager = lead(&LeadLaunch {
             home: &home,
             session: &session,
             plan: None,
@@ -517,27 +517,22 @@ mod tests {
             plannotator: &plannotator,
             start: LeadStart::Resume { file: "/s/a.jsonl".into() },
         });
-        assert_eq!(grounded.env["PI_SKIP_VERSION_CHECK"], "1");
+        assert_eq!(manager.env["PI_SKIP_VERSION_CHECK"], "1");
         let plan = PlanId::parse("cpd2").unwrap();
         assert_eq!(base_env(&home, &session, &plan)["PI_SKIP_VERSION_CHECK"], "1");
     }
 
     #[test]
-    fn grounded_lead_has_no_plan_in_its_environment() {
+    fn a_manager_has_no_plan_in_its_environment() {
         let home = home();
         let session = SessionId::parse(ID).unwrap();
         let extensions = strs(&["/opt/cpd/pi"]);
         let plannotator = Plannotator { port: Some("19432".into()), remote: Some("1".into()) };
-        let start = LeadStart::Fork {
-            model: "m/x:high".into(),
-            name: "ctx".into(),
-            source_file: "/s/src.jsonl".into(),
-            first_message: None,
-        };
+        let start = LeadStart::Fresh { model: "m/x:high".into(), name: "ctx-manager".into(), first_message: "/cpd-home/run/ctx/manager-message.md".into() };
         let launch = lead(&LeadLaunch { home: &home, session: &session, plan: None, extensions: &extensions, plannotator: &plannotator, start });
         assert_eq!(
             launch.argv,
-            strs(&["pi", "--model", "m/x:high", "-e", "/opt/cpd/pi", "--fork", "/s/src.jsonl", "--session-id", ID, "-n", "ctx"])
+            strs(&["pi", "--model", "m/x:high", "-e", "/opt/cpd/pi", "--session-id", ID, "-n", "ctx-manager", "--", "@/cpd-home/run/ctx/manager-message.md"])
         );
         assert_eq!(
             launch.env,
@@ -563,7 +558,7 @@ mod tests {
         let start = LeadStart::Fresh {
             model: "github-copilot/claude-opus-5.5:high".into(),
             name: "cpd rust lead".into(),
-            first_message: "Plan the rewrite.".into(),
+            first_message: "/cpd-home/run/cpd2/lead-message.md".into(),
         };
         let launch = lead_launch(start, &Plannotator::default());
         assert_eq!(
@@ -571,7 +566,7 @@ mod tests {
             strs(&[
                 "pi", "--model", "github-copilot/claude-opus-5.5:high",
                 "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
-                "--session-id", ID, "-n", "cpd rust lead", "--", "Plan the rewrite.",
+                "--session-id", ID, "-n", "cpd rust lead", "--", "@/cpd-home/run/cpd2/lead-message.md",
             ])
         );
         assert_eq!(launch.env, lead_env(&[]));
@@ -595,21 +590,21 @@ mod tests {
             model: "m/x:high".into(),
             name: "pay-4521".into(),
             source_file: "/s/2026_6f1c.jsonl".into(),
-            first_message: first_message.map(str::to_owned),
+            first_message: first_message.map(PathBuf::from),
         };
-        let launch = lead_launch(fork(Some("Hello.")), &Plannotator::default());
+        let launch = lead_launch(fork(Some("/cpd-home/run/cpd2/messages/x.md")), &Plannotator::default());
         assert_eq!(
             launch.argv,
             strs(&[
                 "pi", "--model", "m/x:high",
                 "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
-                "--fork", "/s/2026_6f1c.jsonl", "--session-id", ID, "-n", "pay-4521", "--", "Hello.",
+                "--fork", "/s/2026_6f1c.jsonl", "--session-id", ID, "-n", "pay-4521", "--", "@/cpd-home/run/cpd2/messages/x.md",
             ])
         );
         assert_eq!(launch.env, lead_env(&[]));
-        let grounded = lead_launch(fork(None), &Plannotator::default());
-        assert_eq!(grounded.argv[grounded.argv.len() - 2..], strs(&["-n", "pay-4521"]));
-        assert!(!grounded.argv.contains(&"--".to_owned()));
+        let silent = lead_launch(fork(None), &Plannotator::default());
+        assert_eq!(silent.argv[silent.argv.len() - 2..], strs(&["-n", "pay-4521"]));
+        assert!(!silent.argv.contains(&"--".to_owned()));
     }
 
     #[test]

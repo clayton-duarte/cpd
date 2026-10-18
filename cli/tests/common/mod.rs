@@ -156,13 +156,13 @@ impl TestEnv {
     }
 
     /// A `Command` for `program` with this env's isolated environment:
-    /// `CPD_*`, `PI_*`, `GIT_*`, `XDG_*`, `TMUX` and `TMUX_PANE` removed, then
+    /// `CPD_*`, `PI_*`, `GIT_*`, `XDG_*`, `PLANNOTATOR_*`, `TMUX` and `TMUX_PANE` removed, then
     /// `CPD_HOME`, `HOME`, `PATH`, `TMUX_TMPDIR` and git's config set.
     pub fn command(&self, program: impl AsRef<OsStr>) -> Command {
         let mut cmd = Command::new(program);
         for (key, _) in std::env::vars_os() {
             let k = key.to_string_lossy();
-            let drop = ["CPD_", "PI_", "GIT_", "XDG_"].iter().any(|p| k.starts_with(p))
+            let drop = ["CPD_", "PI_", "GIT_", "XDG_", "PLANNOTATOR_"].iter().any(|p| k.starts_with(p))
                 || k == "TMUX"
                 || k == "TMUX_PANE";
             if drop {

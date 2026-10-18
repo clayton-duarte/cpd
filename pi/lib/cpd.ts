@@ -1,3 +1,5 @@
+import { statSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import type { Exec } from "./pi.ts";
 
 /** A failed `cpd` call or adapter step, with the error code the documents name. */
@@ -49,4 +51,28 @@ export async function callCpd(exec: Exec, args: string[]): Promise<Record<string
   if (json.ok === false) throw errorOfEnvelope(json);
   if (json.ok !== true || r.code !== 0) throw new CpdError("bad_output", `cpd ${args.join(" ")} exited ${r.code} with an unexpected envelope`);
   return json;
+}
+
+/**
+ * The identity of the installed `cpd`: the file the first `cpd` on `PATH` is, with its mtime and size (commands.md §15.2, step 0).
+ * A new install changes it. `undefined` when no `cpd` can be found.
+ */
+export function installedIdentity(pathEnv: string | undefined = process.env.PATH): string | undefined {
+  for (const dir of (pathEnv ?? "").split(delimiter)) {
+    if (dir === "") continue;
+    const file = join(dir, "cpd");
+    try {
+      const st = statSync(file);
+      if (st.isFile()) return `${file}:${st.mtimeMs}:${st.size}`;
+    } catch {
+      // not here
+    }
+  }
+  return undefined;
+}
+
+/** `cpd --version`'s `protocol`: a safe integer, or `null` when the output lacks it or it is not one (an old cpd). */
+export async function cpdProtocol(exec: Exec): Promise<number | null> {
+  const p = (await callCpd(exec, ["--version"])).protocol;
+  return Number.isSafeInteger(p) ? (p as number) : null;
 }

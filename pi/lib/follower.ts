@@ -17,7 +17,12 @@ export const DEFAULT_TIMING: Timing = { restartInitialMs: 1_000, restartMaxMs: 3
 
 export type Spawn = typeof nodeSpawn;
 
+/** How the restart is scheduled; tests pass their own to see the delays instead of waiting for them. */
+export type Schedule = (run: () => void, ms: number) => ReturnType<typeof setTimeout>;
+
 export type FollowerHooks = {
+  /** Awaited before every process is started, the first included (the protocol check). It must not throw. */
+  before(): Promise<void>;
   /** A process was started. */
   onRunStart(): void;
   /** Each complete stdout line. Returns true when it was a valid Event: only that resets the restart delay. */
@@ -38,33 +43,41 @@ export class Follower {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private delay: number;
   private stopped = false;
+  /** Bumped by `start` and `stop`, so a launch waiting on `before` knows it was replaced. */
+  private generation = 0;
   private readonly sessionId: string;
   private readonly hooks: FollowerHooks;
   private readonly timing: Timing;
   private readonly spawn: Spawn;
+  private readonly schedule: Schedule;
 
-  constructor(sessionId: string, hooks: FollowerHooks, timing: Timing, spawn: Spawn = nodeSpawn) {
+  constructor(sessionId: string, hooks: FollowerHooks, timing: Timing, spawn: Spawn = nodeSpawn, schedule: Schedule = setTimeout) {
     this.sessionId = sessionId;
     this.hooks = hooks;
     this.timing = timing;
     this.spawn = spawn;
+    this.schedule = schedule;
     this.delay = timing.restartInitialMs;
   }
 
   start(): void {
     this.stopped = false;
-    this.launch();
+    void this.launch();
   }
 
   stop(): void {
     this.stopped = true;
+    this.generation++;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     this.child?.kill("SIGTERM");
     this.child = undefined;
   }
 
-  private launch(): void {
+  private async launch(): Promise<void> {
+    const generation = ++this.generation;
+    await this.hooks.before();
+    if (this.generation !== generation) return; // stopped or restarted meanwhile
     this.hooks.onRunStart();
     const args = ["events", "follow", "--session", this.sessionId, "--since", String(this.hooks.cursor())];
     let child: ChildProcess;
@@ -122,9 +135,9 @@ export class Follower {
     if (this.stopped) return;
     const wait = this.delay;
     this.delay = Math.min(this.delay * 2, this.timing.restartMaxMs);
-    this.timer = setTimeout(() => {
+    this.timer = this.schedule(() => {
       this.timer = undefined;
-      if (!this.stopped) this.launch();
+      if (!this.stopped) void this.launch();
     }, wait);
   }
 }

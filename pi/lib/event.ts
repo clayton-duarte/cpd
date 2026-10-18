@@ -1,5 +1,12 @@
 import { errorOfEnvelope, isObject, type CpdError } from "./cpd.ts";
 
+/**
+ * The adapter/cpd protocol this adapter speaks (commands.md §1.2, §15.2). Equal to `PROTOCOL` in `core/src/events/kind.rs`:
+ * `pi/test/protocol.test.ts` fails otherwise. Raise both whenever an Event kind, an Event `data` field the adapter reads,
+ * or the output of a command the adapter runs changes in a way the adapter depends on.
+ */
+export const PROTOCOL = 2;
+
 /** contract.md §5.2: every Event kind. A line with any other kind is not a valid Event. */
 export const KINDS = [
   "context-created", "context-record", "context-grounded",
@@ -9,7 +16,7 @@ export const KINDS = [
   "all-merged", "pr-feedback",
   "escalation", "escalation-answered", "escalation-expired",
   "session-registered", "session-state", "session-moved", "session-renamed",
-  "context-renamed", "plan-renamed", "context-archived", "plan-archived", "session-archived",
+  "context-renamed", "plan-renamed", "context-archived", "plan-archived", "session-archived", "session-message",
   "pr-added", "pr-edited", "pr-cancelled", "pr-started", "pr-opened", "pr-merged",
   "watch-started", "watch-stopped", "error",
 ] as const;
@@ -36,6 +43,7 @@ const NEEDED: Partial<Record<Kind, readonly string[]>> = {
   "plan-review": ["review", "status"],
   "session-renamed": ["name"],
   "attempt-nudge": ["prompt"],
+  "session-message": ["text"],
 };
 
 const NULLABLE = ["context", "plan", "job", "attempt", "session"] as const;
@@ -65,5 +73,6 @@ export function parseLine(text: string): Line {
   if (typeof json.text !== "string") return bad("`text` is not a string");
   if (!isObject(json.data)) return bad("`data` is not an object");
   for (const f of NEEDED[kind] ?? []) if (typeof json.data[f] !== "string") return bad(`${kind}: \`data.${f}\` is not a string`);
+  if (kind === "session-message" && json.data.from !== null && typeof json.data.from !== "string") return bad("session-message: `data.from` is neither a string nor null");
   return { type: "event", event: json as unknown as CpdEvent };
 }

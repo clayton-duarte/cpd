@@ -138,14 +138,14 @@ fn chart_rows(screen: &[String], rows: usize) -> String {
 
 // ---------- rows ----------
 
-fn context(id: &str, lead: &str) -> String {
+fn context(id: &str) -> String {
     format!(
-        "INSERT INTO contexts (id, title, jira, created_at, created_on, lead_session, grounded_seq)
-         VALUES ('{id}', 'Title of {id}', NULL, '2026-01-01T00:00:00.000Z', 'm1', '{lead}', 0);"
+        "INSERT INTO contexts (id, title, jira, created_at, created_on)
+         VALUES ('{id}', 'Title of {id}', NULL, '2026-01-01T00:00:00.000Z', 'm1');"
     )
 }
 
-/// A Plan in `phase` (`dispatch` or `pr`) with its Lead; `pr` is `(number, checks)`.
+/// A Plan in `phase` (`dispatch` or `deploy`) with its Lead; `pr` is `(number, checks)`.
 fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr: Option<(i64, &str)>) -> String {
     let (row, number, url, opened, pull_request) = match pr {
         Some((n, checks)) => (
@@ -183,7 +183,7 @@ fn bare_plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str
 
 /// One Context `ctx` and one Plan `ship` in `phase`, with no PR, whose Lead `lead-ship` is in the chat slot.
 fn bare_plan(phase: &str) -> String {
-    context("ctx", "g-ctx")
+    context("ctx")
         + &lead_row("g-ctx", "ctx", "", "2026-01-01T00:00:00.000Z")
         + &bare_plan_row("ship", "ctx", phase, "lead-ship", "2026-01-02T00:00:00.000Z")
         + &lead_row("lead-ship", "ctx", "ship", "2026-01-02T00:00:00.000Z")
@@ -268,7 +268,7 @@ fn in_chat(context: &str, plan: &str, session: &str) -> String {
 /// One Context `ctx`, one Plan `ship` in `phase` whose Lead `lead-ship` is in the chat slot, and `jobs`
 /// as `(key, status, tier, needs, Attempts)`; no Attempt for the statuses that have none.
 fn plan_with(phase: &str, pr: Option<(i64, &str)>, jobs: &[(&str, &str, &str, &[&str], u32)]) -> String {
-    let mut s = context("ctx", "g-ctx");
+    let mut s = context("ctx");
     s += &lead_row("g-ctx", "ctx", "", "2026-01-01T00:00:00.000Z");
     s += &plan_row("ship", "ctx", phase, "lead-ship", "2026-01-02T00:00:00.000Z", pr);
     s += &lead_row("lead-ship", "ctx", "ship", "2026-01-02T00:00:00.000Z");
@@ -413,7 +413,7 @@ fn escalations_and_the_plan_review_are_not_drawn() {
 #[test]
 fn no_lead_in_the_chat_slot_says_so() {
     let env = env();
-    sql(&env, &(context("ctx", "g-ctx") + &lead_row("g-ctx", "ctx", "", "2026-01-01T00:00:00.000Z")));
+    sql(&env, &(context("ctx") + &lead_row("g-ctx", "ctx", "", "2026-01-01T00:00:00.000Z")));
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the message", |s| s.iter().any(|l| l.contains("no Lead")));
     // in the message row, the pane's last row, indented by the margin; nothing above it
@@ -470,7 +470,7 @@ fn the_view_follows_events_and_switches_plan_when_the_chat_slot_changes() {
 #[test]
 fn the_view_starts_no_subprocess_and_asks_gh_nothing() {
     let env = env();
-    sql(&env, &plan_with("pr", Some((7, "failed")), &[("a", "running", "S3", &[], 1)]));
+    sql(&env, &plan_with("deploy", Some((7, "failed")), &[("a", "running", "S3", &[], 1)]));
     let pane = start_view(&env);
     let pid = tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_pid}"]).trim().to_owned();
     // let it draw, follow an Event and take a new snapshot

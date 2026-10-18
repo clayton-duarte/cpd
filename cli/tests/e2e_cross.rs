@@ -506,17 +506,17 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     let all = fx.wait_event("all-merged", |e| e["data"]["pr"] == "a2");
     assert_eq!(all["data"], json!({"pr": "a2", "merged": ["audit", "wire"], "cancelled": []}));
     let out = fx.ok(&["pr", "open", "--pr", "a2", "--plan", PLAN]);
-    assert_eq!((&out["phase"], &out["pr"]["pr"]["number"]), (&json!("pr"), &json!(13)));
+    assert_eq!((&out["phase"], &out["pr"]["pr"]["number"]), (&json!("deploy"), &json!(13)));
     assert_eq!(fx.git(&fx.shared.origin, &["rev-parse", "refs/heads/cpd/chain/a2"]), wire_tip);
     let moved = of_kind(&fx.events(), "plan-phase").pop().unwrap().clone();
-    assert_eq!(moved["data"]["to"], "pr");
+    assert_eq!(moved["data"]["to"], "deploy");
     assert_eq!(
         moved["data"]["prs"],
         json!([{"key": "a1", "number": 11, "url": "https://github.com/acme/repo/pull/11"},
                {"key": "a2", "number": 13, "url": "https://github.com/acme/repo/pull/13"},
                {"key": "b", "number": 12, "url": "https://github.com/acme/repo/pull/12"}])
     );
-    assert_eq!(fx.ok(&["plan", "show", "--plan", PLAN])["plan"]["phase"], "pr");
+    assert_eq!(fx.ok(&["plan", "show", "--plan", PLAN])["plan"]["phase"], "deploy");
 
     // ---------- 12. GitHub merges a2: plan-done, once (A10)
     fx.github_merges(&fx.shared, "cpd/chain/a2", 13);

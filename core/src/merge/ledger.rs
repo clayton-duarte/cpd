@@ -269,17 +269,13 @@ pub fn end_merging(
 
 /// The ladder (§3.2, §9): the next Tier when `cause` is a ladder cause, the
 /// ladder has a next Tier, and the automatic Attempts since the last
-/// `job retry` (that one included) are fewer than `1 + retry_cap`.
+/// `job retry` (that one included) are fewer than `1 + retry_cap`. Attempts
+/// whose driver never started are not counted (§3.4).
 fn next_tier(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Failure, ladder: &Ladder<'_>) -> Result<Option<Tier>, CpdError> {
     if !cause.is_ladder() {
         return Ok(None);
     }
-    let run: i64 = tx.query_row(
-        "SELECT count(*) FROM attempts WHERE plan = ?1 AND job = ?2
-           AND number >= coalesce((SELECT max(number) FROM attempts WHERE plan = ?1 AND job = ?2 AND origin = 'retry'), 1)",
-        params![attempt.plan.as_str(), attempt.job.as_str()],
-        |r| r.get(0),
-    )?;
+    let run = crate::driver::ledger::automatic_attempts(tx, attempt.plan.as_str(), attempt.job.as_str())?;
     if run >= 1 + i64::from(ladder.retry_cap) {
         return Ok(None);
     }

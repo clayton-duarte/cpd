@@ -71,7 +71,7 @@ fn ref_line(stdout: &str) -> Option<&str> {
 /// been locked is `illegal_phase`.
 fn require_open<'a>(plan: &'a PlanRow, args: &Args) -> Result<&'a PrRow, CpdError> {
     if matches!(plan.phase, Phase::Grounding | Phase::Plan) {
-        return Err(illegal_phase(plan, COMMAND, "pr"));
+        return Err(illegal_phase(plan, COMMAND, "deploy"));
     }
     let pr = plan.select(&args.pr)?;
     if pr.status != "open" {

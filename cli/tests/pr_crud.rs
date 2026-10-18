@@ -227,8 +227,8 @@ fn add_refusals_write_nothing() {
 }
 
 #[test]
-fn add_in_pr_or_done_reopens_the_plan_in_dispatch() {
-    for phase in ["pr", "done"] {
+fn add_in_deploy_or_done_reopens_the_plan_in_dispatch() {
+    for phase in ["deploy", "done"] {
         let fx = fx(phase);
         let out = fx.add("fix", &fx.pay, &[]).ok();
         assert_eq!((out["pr"]["appended"].clone(), out["pr"]["status"].clone()), (json!(true), json!("waiting")), "{phase}");

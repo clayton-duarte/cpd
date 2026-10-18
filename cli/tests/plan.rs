@@ -148,8 +148,13 @@ fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     Ok(())
 }
 
-/// A draft Job `key` of `plan` needing `needs`, written as `job add` would.
+/// A draft Job `key` of `plan` needing `needs`, written as `job add` would in phase `plan`.
 fn add_job(env: &TestEnv, plan: &str, key: &str, needs: &[&str]) {
+    add_draft(env, plan, key, needs, false);
+}
+
+/// A draft Job `key` of `plan` needing `needs`, `appended` as `job add --draft` writes it after the lock.
+fn add_draft(env: &TestEnv, plan: &str, key: &str, needs: &[&str], appended: bool) {
     store(env)
         .write("fixture", |tx| {
             exec(
@@ -158,7 +163,8 @@ fn add_job(env: &TestEnv, plan: &str, key: &str, needs: &[&str]) {
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, created_txn, created_at)
                      VALUES ('{plan}', (SELECT key FROM prs WHERE plan = '{plan}'), '{key}', 'Job {key}', 'S2', 'Goal of {key}.', 'Context of {key}.', '[\"src/{key}.rs\"]',
-                             '[\"cargo test\"]', '[]', 'draft', 0, {id}, 't');",
+                             '[\"cargo test\"]', '[]', 'draft', {appended}, {id}, 't');",
+                    appended = i32::from(appended),
                     id = tx.id()
                 ),
             )?;
@@ -258,8 +264,8 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     assert_eq!(record["text"], "Retry payouts");
     assert_eq!(record["plan"], json!({"id": "pay", "machine": "m1", "jira": "PAY-1"}));
     assert_eq!(record["repos"], json!([]), "no PR yet");
-    let line = fs::read_to_string(env.cpd_home().join("contexts/ctx/records/m1.jsonl")).unwrap();
-    assert!(!line.contains("\"repo\""), "{line}");
+    assert!(!record.to_string().contains("\"repo\""), "{record}");
+    assert!(!env.cpd_home().join("contexts").exists(), "the record is in the database only");
     let real = repo.canonicalize().unwrap().display().to_string();
     let other = env.git_repo("web");
     env.cpd(&["pr", "add", "api", "--repo", &real, "--plan", "pay"]).ok();
@@ -279,6 +285,99 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     assert!(message.starts_with(header), "{message}");
     assert!(message.contains("One engine per machine."), "{message}");
     assert!(message.contains("m1-p1"), "{message}");
+}
+
+/// `plan new` with a brief file whose text is `text`.
+fn new_with_brief(env: &TestEnv, id: &str, text: &str) -> Run {
+    let file = env.root().join(format!("{id}-brief.md"));
+    fs::write(&file, text).unwrap();
+    env.cpd(&["plan", "new", id, "--context", "ctx", "--title", &format!("Plan {id}"), "--brief-file", file.to_str().unwrap()])
+}
+
+fn briefs(env: &TestEnv) -> Vec<Value> {
+    let shown = env.cpd(&["context", "show", "--context", "ctx"]).ok();
+    shown["records"].as_array().unwrap().iter().filter(|r| r["kind"] == "brief").cloned().collect()
+}
+
+#[test]
+fn new_with_a_brief_file_writes_one_brief_record_and_the_lead_gets_it_in_full() {
+    let env = TestEnv::new();
+    setup(&env);
+    let text = "Retry the failed payouts.\n\nMore detail, second paragraph.\n";
+    let out = new_with_brief(&env, "pay", text).ok();
+    assert_eq!(out["record"], "m1-p1", "the output still names the plan record");
+
+    // One `brief` record, letter `b`, its Plan `{id, machine}`, the file's text, one `context-record` Event.
+    let rows: Vec<(String, String, String, Option<String>)> = store(&env)
+        .read(|conn| {
+            let mut stmt = conn.prepare("SELECT id, text, plan_id || '/' || plan_machine, plan_jira FROM context_records WHERE kind = 'brief'")?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .unwrap();
+    assert_eq!(rows, [("m1-b1".to_owned(), text.to_owned(), "pay/m1".to_owned(), None)]);
+    let recorded: Vec<Value> = events(&env, "context-record").into_iter().filter(|e| e["data"]["kind"] == "brief").collect();
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(recorded[0]["data"]["record"], "m1-b1");
+
+    // `context show` lists it short, under its Plan; `--record` prints it whole.
+    let shown = env.cpd(&["context", "show", "--context", "ctx"]).ok();
+    let brief = &briefs(&env)[0];
+    assert_eq!((&brief["text"], &brief["short"], &brief["plan"]), (&json!("Retry the failed payouts."), &json!(true), &json!({"id": "pay", "machine": "m1"})));
+    let md = shown["markdown"].as_str().unwrap();
+    assert!(md.contains("  - brief m1-b1 (") && md.contains("): Retry the failed payouts.\n"), "{md}");
+    assert!(!md.contains("second paragraph"), "{md}");
+    let full = env.cpd(&["context", "show", "--context", "ctx", "--record", "m1-b1"]).ok();
+    assert_eq!(full["records"][0]["text"], text);
+    assert!(full["records"][0].get("short").is_none());
+    assert!(full["markdown"].as_str().unwrap().contains("second paragraph"));
+
+    // The Lead's first message: header, the full brief, then the records; its own brief not listed twice.
+    let message = fs::read_to_string(home(&env).lead_message(&pid("pay"))).unwrap();
+    let header = "You are the Lead of Plan pay \"Plan pay\" in Context ctx. Phase grounding: follow the cpd-lead skill.\n\nRetry the failed payouts.\n\nMore detail, second paragraph.\n\n# Payments\n";
+    assert!(message.starts_with(header), "{message}");
+    assert_eq!(message.matches("Retry the failed payouts.").count(), 1, "{message}");
+
+    // Another Plan's Lead sees this brief short.
+    new_with_brief(&env, "web", "Build the web page.\nSecond line.\n").ok();
+    let message = fs::read_to_string(home(&env).lead_message(&pid("web"))).unwrap();
+    assert!(message.contains("brief m1-b1") && message.contains("Retry the failed payouts."), "{message}");
+    assert!(!message.contains("second paragraph"), "{message}");
+    assert_eq!(message.matches("Build the web page.").count(), 1, "{message}");
+    assert_eq!(briefs(&env).len(), 2);
+}
+
+#[test]
+fn new_again_with_the_brief_writes_no_second_brief_record() {
+    let env = TestEnv::new();
+    setup(&env);
+    new_with_brief(&env, "pay", "The brief.\n").ok();
+    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    let again = new_with_brief(&env, "pay", "The brief.\n").ok();
+    assert_eq!(again["already"], true);
+    assert_eq!(briefs(&env).len(), 1);
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns, "nothing written");
+
+    // A first run that stopped before the brief record (here: run without the file): the rerun writes it, once.
+    new_plan_only(&env, "web");
+    assert_eq!(briefs(&env).len(), 1);
+    assert_eq!(new_with_brief(&env, "web", "The web brief.\n").ok()["already"], true);
+    assert_eq!(new_with_brief(&env, "web", "The web brief.\n").ok()["already"], true);
+    assert_eq!(briefs(&env).len(), 2);
+
+    // A Plan without a brief file has no brief record.
+    new_plan_only(&env, "api");
+    assert_eq!(briefs(&env).len(), 2);
+}
+
+#[test]
+fn new_refuses_an_empty_brief_file_and_writes_nothing() {
+    let env = TestEnv::new();
+    setup(&env);
+    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    refused(&new_with_brief(&env, "pay", ""), "usage", 2);
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans"), 0);
 }
 
 #[test]
@@ -380,80 +479,50 @@ fn pr_add_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
     assert_eq!(error["details"]["ref"], "refs/remotes/origin/side", "with an origin, the base must be on it");
 }
 
-// ---------- plan phase, the grounded Lead ----------
+// ---------- plan phase ----------
 
 #[test]
-fn phase_plan_grounds_the_context_once_and_later_plans_fork_it() {
+fn phase_plan_writes_the_phase_only_and_a_later_plan_is_a_fresh_lead() {
     let env = TestEnv::new();
     let repo = setup(&env);
     let first = new_plan(&env, "pay", &repo);
     let lead = first["plan"]["lead_session"].as_str().unwrap().to_owned();
+    let (sessions, windows, events_before) = (
+        query::<i64>(&env, "SELECT count(*) FROM sessions"),
+        panes(&env).len(),
+        query::<i64>(&env, "SELECT count(*) FROM events"),
+    );
 
     let out = env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
-    let grounded = out["grounded_lead"]["session"].as_str().unwrap().to_owned();
-    assert_eq!((&out["plan"], &out["phase"]), (&json!("pay"), &json!("plan")));
-    let seq: i64 = query(&env, "SELECT max(seq) FROM context_records WHERE context = 'ctx'");
-    assert_eq!(query::<String>(&env, "SELECT lead_session FROM contexts WHERE id = 'ctx'"), grounded);
-    assert_eq!(query::<i64>(&env, "SELECT grounded_seq FROM contexts WHERE id = 'ctx'"), seq);
-
-    let row = env.cpd(&["session", "show", &grounded]).ok()["session"].clone();
-    assert_eq!((&row["role"], &row["plan"], &row["forked_from"], &row["state"]), (&json!("lead"), &Value::Null, &json!(lead), &json!("stopped")));
-    assert_eq!((&row["name"], &row["grounded_lead"], &row["place"]), (&json!("ctx (grounded)"), &json!(true), &json!("parked")));
-    assert_eq!(row["tmux_pane"], out["grounded_lead"]["pane"]);
-    let window: Vec<_> = panes(&env).into_iter().filter(|p| p.1 == "ctx-ctx").collect();
-    assert_eq!(window, vec![(out["grounded_lead"]["pane"].as_str().unwrap().to_owned(), "ctx-ctx".to_owned(), grounded.clone())]);
-    // The grounded Lead has no Plan: no CPD_PLAN and no plannotator port (contract §6.5).
-    let vars: Vec<String> = pane_env(&env, &grounded).lines().filter(|l| l.starts_with("CPD_")).map(str::to_owned).collect();
-    assert!(vars.contains(&format!("CPD_SESSION={grounded}")), "{vars:?}");
-    assert!(!vars.iter().any(|l| l.starts_with("CPD_PLAN=")), "{vars:?}");
-
+    assert_eq!(out, json!({"ok": true, "plan": "pay", "phase": "plan"}), "no `grounded_lead`");
     let phase = &events(&env, "plan-phase")[0];
     assert_eq!((&phase["plan"], &phase["data"]), (&json!("pay"), &json!({"from": "grounding", "to": "plan"})));
-    let ctx_grounded = &events(&env, "context-grounded")[0];
-    assert_eq!((&ctx_grounded["session"], &ctx_grounded["plan"]), (&json!(grounded), &Value::Null));
-    assert_eq!(ctx_grounded["data"], json!({"seq": seq, "forked_from": lead}));
-    let registered = events(&env, "session-registered");
-    assert_eq!(registered.last().unwrap()["data"], json!({"role": "lead", "name": "ctx (grounded)", "forked_from": lead, "tier": "O3"}));
+    // No Session, no window, no Event but `plan-phase`; no `context-grounded` ever.
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions"), sessions);
+    assert_eq!(panes(&env).len(), windows);
+    assert!(panes(&env).iter().all(|p| p.1 != "ctx-ctx"));
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM events"), events_before + 1);
+    assert_eq!(events(&env, "context-grounded").len(), 0);
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions WHERE plan IS NULL"), 0);
 
-    // Already in phase plan.
+    // Already in phase plan: nothing is written.
     let again = env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
-    assert_eq!((&again["already"], &again["grounded_lead"]["session"]), (&json!(true), &json!(grounded)));
+    assert_eq!(again, json!({"ok": true, "plan": "pay", "phase": "plan", "already": true}));
     assert_eq!(events(&env, "plan-phase").len(), 1);
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM events"), events_before + 1);
 
-    // A later Plan forks the grounded Lead, and its message holds only the newer records.
-    env.cpd(&["context", "note", "Recorded after grounding.", "--context", "ctx"]).ok();
+    // A later Plan of the Context is a fresh Lead, never a fork: its first message holds every record.
+    env.cpd(&["context", "note", "Recorded after the first Plan.", "--context", "ctx"]).ok();
     let second = new_plan(&env, "refund", &repo);
-    assert_eq!(second["lead"]["forked_from"], grounded);
-    assert_eq!(events(&env, "plan-created").last().unwrap()["data"]["forked_from"], grounded);
+    assert_eq!(second["lead"]["forked_from"], Value::Null);
+    let session = second["lead"]["session"].as_str().unwrap();
+    assert_ne!(session, lead);
+    assert_eq!(query::<Option<String>>(&env, &format!("SELECT forked_from FROM sessions WHERE id = '{session}'")), None);
+    assert_eq!(events(&env, "plan-created").last().unwrap()["data"]["forked_from"], Value::Null);
+    assert_eq!(events(&env, "session-registered").last().unwrap()["data"]["forked_from"], Value::Null);
     let message = fs::read_to_string(home(&env).lead_message(&pid("refund"))).unwrap();
-    assert!(message.contains("Recorded after grounding."), "{message}");
-    assert!(message.contains("m1-p2"), "{message}");
-    assert!(!message.contains("m1-p1"), "records up to grounded_seq are in the fork already: {message}");
-
-    // Its phase plan finds the Context grounded: no new grounded Lead.
-    let out = env.cpd(&["plan", "phase", "plan", "--plan", "refund"]).ok();
-    assert_eq!(out["grounded_lead"], Value::Null);
-    assert_eq!(events(&env, "context-grounded").len(), 1);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions WHERE plan IS NULL"), 1);
-}
-
-#[test]
-fn phase_again_creates_the_window_a_crash_left_out() {
-    let env = TestEnv::new();
-    let repo = setup(&env);
-    new_plan(&env, "pay", &repo);
-    let out = env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
-    let grounded = out["grounded_lead"]["session"].as_str().unwrap().to_owned();
-    // A crash between the two transactions: the Session has no pane.
-    store(&env).write("fixture", |tx| exec(tx, &format!("UPDATE sessions SET tmux_pane = NULL WHERE id = '{grounded}';"))).unwrap();
-    let pane = out["grounded_lead"]["pane"].as_str().unwrap();
-    env.tmux(&["kill-pane", "-t", pane]);
-
-    let again = env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
-    assert_eq!(again["already"], true);
-    assert_eq!(again["grounded_lead"]["session"], grounded);
-    assert_ne!(again["grounded_lead"]["pane"], Value::Null);
-    assert_eq!(panes(&env).into_iter().filter(|p| p.1 == "ctx-ctx").count(), 1);
+    assert!(message.contains("Recorded after the first Plan."), "{message}");
+    assert!(message.contains("m1-p1") && message.contains("m1-p2"), "every record, the first Plan's too: {message}");
 }
 
 #[test]
@@ -502,18 +571,18 @@ fn a_plan_with_no_pr_is_read_by_phase_list_show_archive_and_unarchive() {
     refused(&env.cpd(&["plan", "lock", "--plan", "pay"]), "no_draft_jobs", 3);
 }
 
-/// Two Plans grounding at once produce one grounded Lead: the
-/// compare-and-swap on `contexts.lead_session` (contract §3.1).
+/// Plans moving to phase `plan` at once all move, and none registers a Session.
 #[test]
-fn plans_grounding_at_once_produce_one_grounded_lead() {
+fn plans_moving_to_phase_plan_at_once_all_move() {
     let env = TestEnv::new();
     let repo = setup(&env);
     let plans = ["pa", "pb", "pc", "pd", "pe", "pf"];
     for plan in plans {
         new_plan(&env, plan, &repo);
     }
+    let sessions = query::<i64>(&env, "SELECT count(*) FROM sessions");
     let barrier = std::sync::Barrier::new(plans.len());
-    let outs: Vec<Value> = std::thread::scope(|scope| {
+    std::thread::scope(|scope| {
         let handles: Vec<_> = plans
             .iter()
             .map(|plan| {
@@ -524,14 +593,10 @@ fn plans_grounding_at_once_produce_one_grounded_lead() {
                 })
             })
             .collect();
-        handles.into_iter().map(|h| h.join().unwrap()).collect()
+        handles.into_iter().for_each(|h| drop(h.join().unwrap()));
     });
-    let grounded: Vec<&Value> = outs.iter().filter(|o| !o["grounded_lead"].is_null()).collect();
-    assert_eq!(grounded.len(), 1, "{outs:?}");
-    let session = grounded[0]["grounded_lead"]["session"].as_str().unwrap();
-    assert_eq!(query::<String>(&env, "SELECT lead_session FROM contexts WHERE id = 'ctx'"), session);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions WHERE plan IS NULL"), 1);
-    assert_eq!(events(&env, "context-grounded").len(), 1);
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions"), sessions);
+    assert_eq!(events(&env, "context-grounded").len(), 0);
     assert_eq!(events(&env, "plan-phase").len(), plans.len());
     assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans WHERE phase = 'plan'"), plans.len() as i64);
 }
@@ -739,6 +804,98 @@ fn decide_records_the_decision_once() {
     edit_goal(&env, "pay", "a", "Changed.");
     let again = env.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
     assert_eq!((&again["already"], &again["current"], &again["next"]), (&json!(true), &json!(false), &Value::Null));
+}
+
+// ---------- a review of the drafts in a phase after plan (hs-d173, hs-d174, hs-d179) ----------
+
+/// The Locked-Job fingerprint of a Job written by `add_job` (contract §2.3).
+fn locked_fingerprint_of(key: &str, needs: &[&str]) -> String {
+    let needs: Vec<String> = needs.iter().map(|n| format!("\"{n}\"")).collect();
+    sha256(&format!(
+        "{{\"acceptance\":[\"cargo test\"],\"context\":\"Context of {key}.\",\"goal\":\"Goal of {key}.\",\"needs\":[{}],\"out_of_scope\":[],\"tier\":\"S2\",\"touches\":[\"src/{key}.rs\"]}}",
+        needs.join(",")
+    ))
+}
+
+fn job_status(env: &TestEnv, key: &str) -> String {
+    query(env, &format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
+}
+
+#[test]
+fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_them() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    approved(&env, &repo);
+    env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+    // Locked, every Job queued: there is nothing to review.
+    refused(&env.cpd(&["plan", "review", "--plan", "pay"]), "no_draft_jobs", 3);
+
+    add_draft(&env, "pay", "c", &["a"], true);
+    add_draft(&env, "pay", "d", &["c"], true);
+    let out = env.cpd(&["plan", "review", "--plan", "pay"]).ok();
+    let spec = |key: &str, needs: &str| {
+        format!(
+            "{{\"acceptance\":[\"cargo test\"],\"context\":\"Context of {key}.\",\"goal\":\"Goal of {key}.\",\"key\":\"{key}\",\"needs\":[{needs}],\"out_of_scope\":[],\"pr\":\"pay\",\"tier\":\"S2\",\"title\":\"Job {key}\",\"touches\":[\"src/{key}.rs\"]}}"
+        )
+    };
+    // The fingerprint covers exactly the drafts, and no PR.
+    let fingerprint = sha256(&format!("{{\"jobs\":[{},{}],\"prs\":[]}}", spec("c", "\"a\""), spec("d", "\"c\"")));
+    assert_eq!((&out["review"]["id"], &out["review"]["status"], &out["review"]["fingerprint"]), (&json!("r2"), &json!("pending"), &json!(fingerprint)));
+    assert_eq!(events(&env, "plan-review").last().unwrap()["data"], json!({"review": "r2", "fingerprint": fingerprint, "status": "pending"}));
+
+    // The render marks the drafts under review, and the Locked Jobs as context.
+    let text = fs::read_to_string(out["path"].as_str().unwrap()).unwrap();
+    assert!(text.contains("| Key | Title | Tier | Status | Needs | Touches | Review |"), "{text}");
+    assert!(text.contains("| `c` | Job c | S2 | draft | `a` | `src/c.rs` | **under review** |"), "{text}");
+    assert!(text.contains("| `a` | Job a | S2 | queued | none | `src/a.rs` | Locked |"), "{text}");
+    assert!(text.contains("\nStatus: `draft` · **under review** · Tier: `S2` · Needs: `c`\n"), "{text}");
+    assert!(text.contains("\nStatus: `queued` · Locked · Tier: `S2` · Needs: `a`\n"), "{text}");
+    assert_eq!(env.cpd(&["plan", "render", "--plan", "pay"]).ok()["draft_jobs"], 2);
+
+    // A PR appended after the lock is not reviewed: the review stays current.
+    let web = env.git_repo("web");
+    env.cpd(&["pr", "add", "web", "--repo", web.to_str().unwrap(), "--base", "main", "--plan", "pay"]).ok();
+    assert_eq!(show(&env, "pay")["review"]["current"], true);
+
+    // Rejected: the drafts stay drafts, editable.
+    let out = env.cpd(&["plan", "decide", "r2", "--reject", "--plan", "pay"]).ok();
+    assert!(out.get("jobs").is_none(), "{out}");
+    assert!(events(&env, "plan-review").last().unwrap()["data"].get("jobs").is_none());
+    assert_eq!((job_status(&env, "c"), job_status(&env, "d")), ("draft".into(), "draft".into()));
+    edit_goal(&env, "pay", "d", "Goal of d.");
+
+    // Approved and current: in one transaction exactly the drafts are queued with their fingerprints.
+    let phase_events = events(&env, "plan-phase").len();
+    env.cpd(&["plan", "review", "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "decide", "r3", "--approve", "--plan", "pay"]).ok();
+    assert_eq!((&out["review"]["status"], &out["current"], &out["next"], &out["jobs"]), (&json!("approved"), &json!(true), &Value::Null, &json!(["c", "d"])));
+    let decided = events(&env, "plan-review").last().unwrap().clone();
+    assert_eq!(decided["data"], json!({"review": "r3", "fingerprint": fingerprint, "status": "approved", "feedback": null, "jobs": ["c", "d"]}));
+    assert!(decided["text"].as_str().unwrap().contains("no lock is needed"), "{decided}");
+    let shown = show(&env, "pay");
+    assert_eq!(shown["plan"]["phase"], "dispatch");
+    assert_eq!(events(&env, "plan-phase").len(), phase_events, "the phase does not change");
+    for (key, needs) in [("c", &["a"]), ("d", &["c"])] {
+        let job = shown["jobs"].as_array().unwrap().iter().find(|j| j["key"] == key).unwrap();
+        assert_eq!((&job["status"], &job["appended"]), (&json!("queued"), &json!(true)), "{key}");
+        assert_eq!(job["fingerprint"], locked_fingerprint_of(key, needs), "{key}");
+    }
+    // The tamper check holds for them: the fingerprints match what the engine recomputes.
+    assert_eq!(shown["tamper"], json!([]));
+    // Idempotent: a rerun reports the same Jobs and writes nothing.
+    let again = env.cpd(&["plan", "decide", "r3", "--approve", "--plan", "pay"]).ok();
+    assert_eq!((&again["already"], &again["jobs"], &again["next"]), (&json!(true), &json!(["c", "d"]), &Value::Null));
+    assert_eq!(events(&env, "plan-review").len(), 6, "r1 and r2 requested and decided, r3 requested and approved once");
+
+    // A stale approval queues nothing and asks for a new review.
+    add_draft(&env, "pay", "e", &[], true);
+    env.cpd(&["plan", "review", "--plan", "pay"]).ok();
+    edit_goal(&env, "pay", "e", "Changed.");
+    let out = env.cpd(&["plan", "decide", "r4", "--approve", "--plan", "pay"]).ok();
+    assert_eq!((&out["current"], &out["next"]), (&json!(false), &json!("cpd plan review")));
+    assert!(out.get("jobs").is_none(), "{out}");
+    assert!(events(&env, "plan-review").last().unwrap()["data"].get("jobs").is_none());
+    assert_eq!(job_status(&env, "e"), "draft");
 }
 
 // ---------- plan lock ----------
@@ -1283,13 +1440,13 @@ fn a_plan_in_phase_pr_with_no_live_job_archives() {
                 "UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/pay/pull/1', pr_opened_at = 't',
                         pull_request = (SELECT id FROM pull_requests WHERE number = 1) WHERE plan = 'pay'",
             )?;
-            exec(tx, "UPDATE plans SET phase = 'pr' WHERE id = 'pay'")
+            exec(tx, "UPDATE plans SET phase = 'deploy' WHERE id = 'pay'")
         })
         .unwrap();
     let out = env.cpd(&["plan", "archive", "--plan", "pay"]).ok();
     assert_eq!(out["archived"][0], json!({"kind": "plan", "id": "pay"}));
     assert!(!has_pane(&env, &lead));
-    assert_eq!(show(&env, "pay")["plan"]["phase"], "pr");
+    assert_eq!(show(&env, "pay")["plan"]["phase"], "deploy");
     assert!(show(&env, "pay")["plan"]["archived_at"].is_string());
 }
 
