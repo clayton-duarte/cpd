@@ -42,8 +42,8 @@ fn populate(env: &TestEnv, file: Option<&Path>) {
     sql(
         env,
         &format!(
-            "INSERT INTO contexts (id, title, jira, created_at, created_on, lead_session, grounded_seq)
-             VALUES ('alpha', 'Title', NULL, '2026-01-01T00:00:00.000Z', 'm1', NULL, NULL);
+            "INSERT INTO contexts (id, title, jira, created_at, created_on)
+             VALUES ('alpha', 'Title', NULL, '2026-01-01T00:00:00.000Z', 'm1');
              INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
              VALUES ('ship', 'alpha', 'Plan ship', 'dispatch', 'l1', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
              INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)

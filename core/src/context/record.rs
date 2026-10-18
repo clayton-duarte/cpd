@@ -1,5 +1,5 @@
-//! A Context record (contract §2.2) as it is held in memory, written to a
-//! JSONL line, parsed from one, and stored in the index (§4.6).
+//! A Context record (contract §2.2) as it is held in memory, stored in the
+//! database (§4.6), and parsed from a JSONL line of an old store (`legacy`).
 
 use rusqlite::types::Type;
 use serde::Deserialize;
@@ -39,6 +39,8 @@ pub enum Draft {
     Question,
     Answer { question: RecordId },
     Plan(PlanRef),
+    /// A Plan's brief (B3-A4): `plan` is `{id, machine}`.
+    Brief(PlanRef),
 }
 
 impl Draft {
@@ -49,6 +51,7 @@ impl Draft {
             Draft::Question => RecordKind::Question,
             Draft::Answer { .. } => RecordKind::Answer,
             Draft::Plan(_) => RecordKind::Plan,
+            Draft::Brief(_) => RecordKind::Brief,
         }
     }
 }
@@ -86,11 +89,27 @@ impl Record {
         }
     }
 
+    /// The Plan a `plan` or `brief` record references.
     pub fn plan(&self) -> Option<&PlanRef> {
         match &self.draft {
-            Draft::Plan(plan) => Some(plan),
+            Draft::Plan(plan) | Draft::Brief(plan) => Some(plan),
             _ => None,
         }
+    }
+
+    /// The first line of a `brief`'s text: how `context show` lists it (commands.md §3.3).
+    pub fn first_line(&self) -> &str {
+        self.text.trim_start().lines().next().unwrap_or_default().trim_end()
+    }
+
+    /// [`Record::to_json`] for a listing: a `brief` is short, its `text` its first line, with `"short": true`.
+    pub fn to_json_listed(&self) -> Value {
+        let mut v = self.to_json();
+        if self.kind() == RecordKind::Brief {
+            v["text"] = json!(self.first_line());
+            v["short"] = json!(true);
+        }
+        v
     }
 
     /// The record as commands print it: `id`, `kind`, `at`, `machine`, `by`,
@@ -119,15 +138,6 @@ impl Record {
             map.insert("plan".into(), Value::Object(p));
         }
         Value::Object(map)
-    }
-
-    /// The line appended to `records/<machine>.jsonl`, with its newline.
-    pub fn to_line(&self) -> String {
-        let mut value = self.to_json();
-        value["v"] = json!(VERSION);
-        let mut line = value.to_string();
-        line.push('\n');
-        line
     }
 
     /// Parses one line of a record file. The error says what is wrong with it.
@@ -255,7 +265,7 @@ impl Record {
 impl Draft {
     /// The links a kind may have (§2.2): `supersedes` for a decision only
     /// (naming a decision), `question` for an answer only and required
-    /// (naming a question), `plan` for a plan only and required.
+    /// (naming a question), `plan` for a plan or a brief only and required.
     fn from_parts(
         kind: RecordKind,
         supersedes: Option<RecordId>,
@@ -269,7 +279,7 @@ impl Draft {
         if question.is_some() && kind != RecordKind::Answer {
             return Err(extra("question", kind));
         }
-        if plan.is_some() && kind != RecordKind::Plan {
+        if plan.is_some() && !matches!(kind, RecordKind::Plan | RecordKind::Brief) {
             return Err(extra("plan", kind));
         }
         if let Some(s) = &supersedes
@@ -288,6 +298,7 @@ impl Draft {
             RecordKind::Question => Draft::Question,
             RecordKind::Answer => Draft::Answer { question: question.ok_or("an answer needs its question")? },
             RecordKind::Plan => Draft::Plan(plan.ok_or("a plan record needs its plan")?),
+            RecordKind::Brief => Draft::Brief(plan.ok_or("a brief record needs its plan")?),
         })
     }
 }
@@ -314,7 +325,9 @@ mod tests {
     fn a_record_survives_its_line() {
         let record = Record::parse_line(&line(r#","supersedes":"hs-d9""#), &machine()).unwrap();
         assert_eq!(record.supersedes().unwrap().to_string(), "hs-d9");
-        let again = Record::parse_line(record.to_line().trim_end(), &machine()).unwrap();
+        let mut value = record.to_json();
+        value["v"] = json!(VERSION);
+        let again = Record::parse_line(&value.to_string(), &machine()).unwrap();
         assert_eq!(again, record);
     }
 
