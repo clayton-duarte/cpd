@@ -242,8 +242,8 @@ mod tests {
     fn the_inbox_counter_is_dropped_before_the_workers_indicator() {
         let workers = Workers { running: 0, limit: 4 };
         let n = |width| items(&CALM, &workers, "", width).1.len();
-        // 5 (buttons) + 7 (`inbox 0`) + 11 (`workers 0/4`) + 5 spacing
-        assert_eq!((n(28), n(27), n(11)), (2, 1, 1));
+        // 3 (buttons) + 7 (`inbox 0`) + 11 (`workers 0/4`) + 5 spacing
+        assert_eq!((n(26), n(25), n(11)), (2, 1, 1));
         assert_eq!(n(2), 0, "no workers, no counter");
     }
 }
