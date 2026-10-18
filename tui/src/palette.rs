@@ -122,7 +122,7 @@ pub fn pill(m: Meaning) -> Style {
 pub fn job_status(status: JobStatus, merging: bool) -> (&'static str, Meaning) {
     match (status, merging) {
         (JobStatus::Queued, _) => ("○", Meaning::NotStarted),
-        (JobStatus::Running, false) => ("◜", Meaning::InProgress),
+        (JobStatus::Running, false) => (SPINNER[0], Meaning::InProgress),
         (JobStatus::Running, true) => ("⇥", Meaning::Review),
         (JobStatus::Merged, _) => ("✓", Meaning::Done),
         (JobStatus::Failed, _) => ("✗", Meaning::Failed),
@@ -163,30 +163,38 @@ pub fn phase(phase: Option<Phase>) -> Meaning {
     }
 }
 
-/// The four frames of the working dot, one per [`frame`].
-pub const SPINNER: [&str; 4] = ["◜", "◝", "◞", "◟"];
+/// Nerd Font `nf-fa-circle`: a Session that needs the User (coloured by case).
+pub const NEEDS_YOU: &str = "\u{F111}";
+/// Nerd Font `nf-fa-circle_o`: an idle Session.
+pub const IDLE: &str = "\u{F10C}";
+/// Nerd Font `nf-fa-circle_thin`: a stopped Session (dim).
+pub const STOPPED: &str = "\u{F1DB}";
+
+/// Nerd Font `nf-md-circle_slice_1` … `8`: the frames of the working dot and of a running Job's pill, one per [`frame`].
+pub const SPINNER: [&str; 8] =
+    ["\u{F0A9E}", "\u{F0A9F}", "\u{F0AA0}", "\u{F0AA1}", "\u{F0AA2}", "\u{F0AA3}", "\u{F0AA4}", "\u{F0AA5}"];
 
 /// How long one frame of the spinner lasts, in milliseconds.
 const FRAME_MS: u128 = 250;
 
-/// The spinner frame at `now`: `(unix ms / 250) % 4`, one clock for every spinner, so they all turn together.
+/// The spinner frame at `now`: `(unix ms / 250) % 8`, one clock for every spinner, so they all turn together.
 pub fn frame(now: SystemTime) -> usize {
     let ms = now.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
     ((ms / FRAME_MS) % SPINNER.len() as u128) as usize
 }
 
-/// The tree's dot (commands.md §17): `●` red, yellow, magenta or white; `◜◝◞◟` (frame `frame`) in the terminal's
-/// foreground when working; `○` in the terminal's foreground; `◌` dim. An `archived` row keeps its glyph, never
+/// The tree's dot (commands.md §17): [`NEEDS_YOU`] red, yellow, magenta or white; [`SPINNER`] (frame `frame`) in the
+/// terminal's foreground when working; [`IDLE`] in the terminal's foreground; [`STOPPED`] dim. An `archived` row keeps its glyph, never
 /// animated (the first frame when working), in the colour of [`Meaning::Nothing`].
 pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
     let (glyph, style) = match dot {
-        Dot::Red => ("●", Style::new().fg(Color::Red)),
-        Dot::Yellow => ("●", Style::new().fg(Color::Yellow)),
-        Dot::Magenta => ("●", Style::new().fg(Color::Magenta)),
-        Dot::White => ("●", Style::new().fg(Color::White)),
+        Dot::Red => (NEEDS_YOU, Style::new().fg(Color::Red)),
+        Dot::Yellow => (NEEDS_YOU, Style::new().fg(Color::Yellow)),
+        Dot::Magenta => (NEEDS_YOU, Style::new().fg(Color::Magenta)),
+        Dot::White => (NEEDS_YOU, Style::new().fg(Color::White)),
         Dot::Working => (SPINNER[if archived { 0 } else { frame % SPINNER.len() }], Style::new()),
-        Dot::Idle => ("○", Style::new()),
-        Dot::Stopped => ("◌", Style::new().add_modifier(Modifier::DIM)),
+        Dot::Idle => (IDLE, Style::new()),
+        Dot::Stopped => (STOPPED, Style::new().add_modifier(Modifier::DIM)),
     };
     Span::styled(glyph, if archived { fg(Meaning::Nothing) } else { style })
 }
@@ -253,7 +261,7 @@ mod tests {
     fn every_job_status_has_its_icon_and_meaning() {
         let table = [
             (JobStatus::Queued, false, "○", Meaning::NotStarted),
-            (JobStatus::Running, false, "◜", Meaning::InProgress),
+            (JobStatus::Running, false, SPINNER[0], Meaning::InProgress),
             (JobStatus::Running, true, "⇥", Meaning::Review),
             (JobStatus::Merged, false, "✓", Meaning::Done),
             (JobStatus::Failed, false, "✗", Meaning::Failed),
@@ -292,35 +300,50 @@ mod tests {
     #[test]
     fn a_needs_you_dot_is_filled_and_coloured_by_its_case_and_nothing_else_is() {
         for (dot, colour) in [(Dot::Red, Color::Red), (Dot::Yellow, Color::Yellow), (Dot::Magenta, Color::Magenta), (Dot::White, Color::White)] {
-            assert_eq!(dot_span(dot, 0, false), Span::styled("●", Style::new().fg(colour)), "{dot:?}");
+            assert_eq!(dot_span(dot, 0, false), Span::styled(NEEDS_YOU, Style::new().fg(colour)), "{dot:?}");
         }
-        assert_eq!(dot_span(Dot::Idle, 0, false), Span::styled("○", Style::new()), "the terminal's foreground");
-        assert_eq!(dot_span(Dot::Stopped, 0, false), Span::styled("◌", Style::new().add_modifier(Modifier::DIM)), "dim, no colour");
+        assert_eq!(dot_span(Dot::Idle, 0, false), Span::styled(IDLE, Style::new()), "the terminal's foreground");
+        assert_eq!(dot_span(Dot::Stopped, 0, false), Span::styled(STOPPED, Style::new().add_modifier(Modifier::DIM)), "dim, no colour");
     }
 
     #[test]
     fn a_working_dot_turns_with_the_frame_in_the_terminals_foreground() {
-        let glyphs: Vec<_> = (0..5).map(|f| dot_span(Dot::Working, f, false).content.into_owned()).collect();
-        assert_eq!(glyphs, ["◜", "◝", "◞", "◟", "◜"]);
+        let glyphs: Vec<_> = (0..9).map(|f| dot_span(Dot::Working, f, false).content.into_owned()).collect();
+        assert_eq!(glyphs, [SPINNER.to_vec(), vec![SPINNER[0]]].concat());
         assert_eq!(dot_span(Dot::Working, 2, false).style, Style::new());
-        assert_eq!(SPINNER, ["◜", "◝", "◞", "◟"]);
+        assert_eq!(SPINNER.len(), 8);
+    }
+
+    #[test]
+    fn every_dot_glyph_is_one_cell_wide() {
+        for glyph in SPINNER.into_iter().chain([NEEDS_YOU, IDLE, STOPPED]) {
+            assert_eq!(Span::raw(glyph).width(), 1, "U+{:X}", glyph.chars().next().unwrap() as u32);
+            assert_eq!(glyph.chars().count(), 1, "{glyph:?}");
+        }
     }
 
     #[test]
     fn an_archived_dot_keeps_its_glyph_in_the_darker_grey_and_never_turns() {
         let grey = Style::new().fg(Color::DarkGray);
-        for (dot, glyph) in [(Dot::Red, "●"), (Dot::Yellow, "●"), (Dot::Magenta, "●"), (Dot::White, "●"), (Dot::Idle, "○"), (Dot::Stopped, "◌")] {
+        for (dot, glyph) in [
+            (Dot::Red, NEEDS_YOU),
+            (Dot::Yellow, NEEDS_YOU),
+            (Dot::Magenta, NEEDS_YOU),
+            (Dot::White, NEEDS_YOU),
+            (Dot::Idle, IDLE),
+            (Dot::Stopped, STOPPED),
+        ] {
             assert_eq!(dot_span(dot, 0, true), Span::styled(glyph, grey), "{dot:?}");
         }
-        for f in 0..4 {
-            assert_eq!(dot_span(Dot::Working, f, true), Span::styled("◜", grey), "frame {f}");
+        for f in 0..SPINNER.len() {
+            assert_eq!(dot_span(Dot::Working, f, true), Span::styled(SPINNER[0], grey), "frame {f}");
         }
     }
 
     #[test]
-    fn the_frame_is_the_unix_time_in_quarter_seconds_modulo_four() {
+    fn the_frame_is_the_unix_time_in_quarter_seconds_modulo_eight() {
         let at = |ms: u64| frame(UNIX_EPOCH + std::time::Duration::from_millis(ms));
-        assert_eq!([0, 249, 250, 499, 500, 750, 999, 1000, 1250].map(at), [0, 0, 1, 1, 2, 3, 3, 0, 1]);
+        assert_eq!([0, 249, 250, 499, 500, 1750, 1999, 2000, 2250].map(at), [0, 0, 1, 1, 2, 7, 7, 0, 1]);
         assert_eq!(frame(UNIX_EPOCH - std::time::Duration::from_secs(1)), 0, "before the epoch: the first frame");
     }
 

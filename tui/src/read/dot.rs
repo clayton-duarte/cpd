@@ -10,24 +10,24 @@ use super::shared::Place;
 /// Working > Idle > Stopped` (§17, Precedence). A Context row's dot is the greatest of its live Sessions'.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Dot {
-    /// `◌`: pi stopped.
+    /// `palette::STOPPED`: pi stopped.
     Stopped,
-    /// `○`: idle, nothing needed.
+    /// `palette::IDLE`: idle, nothing needed.
     Idle,
-    /// `◜◝◞◟`: the Lead is working.
+    /// `palette::SPINNER`: the Lead is working.
     Working,
-    /// `●` white: an idle turn the User has not seen.
+    /// `palette::NEEDS_YOU` white: an idle turn the User has not seen.
     White,
-    /// `●` magenta: blocked outside dispatch and PR, or the Plan's review is pending.
+    /// `palette::NEEDS_YOU` magenta: blocked outside dispatch and PR, or the Plan's review is pending.
     Magenta,
-    /// `●` yellow: the Plan's Lead, with a pull request open whose checks have finished.
+    /// `palette::NEEDS_YOU` yellow: the Plan's Lead, with a pull request open whose checks have finished.
     Yellow,
-    /// `●` red: blocked work in dispatch or PR.
+    /// `palette::NEEDS_YOU` red: blocked work in dispatch or PR.
     Red,
 }
 
 impl Dot {
-    /// The Session needs the User: a `●` of any colour.
+    /// The Session needs the User: a `palette::NEEDS_YOU` of any colour.
     pub fn needs_you(self) -> bool {
         self >= Dot::White
     }
@@ -173,8 +173,8 @@ mod tests {
     #[test]
     fn the_order_is_the_precedence() {
         let order = [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::White, Dot::Working, Dot::Idle, Dot::Stopped];
-        assert!(order.windows(2).all(|w| w[0] > w[1]), "red > yellow > magenta > white > ◜ > ○ > ◌");
+        assert!(order.windows(2).all(|w| w[0] > w[1]), "red > yellow > magenta > white > working > idle > stopped");
         assert_eq!(order.iter().copied().max(), Some(Dot::Red));
-        assert_eq!(order.iter().filter(|d| d.needs_you()).count(), 4, "the ● are the four colours");
+        assert_eq!(order.iter().filter(|d| d.needs_you()).count(), 4, "the needs-you dots are the four colours");
     }
 }

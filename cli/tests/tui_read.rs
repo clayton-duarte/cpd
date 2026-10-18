@@ -457,7 +457,7 @@ fn every_session_has_a_dot_and_every_context_the_greatest_of_its_live_sessions()
     sql(&mut store, "UPDATE sessions SET archived_at = '2026-02-03T00:00:00.000Z' WHERE id IN ('l-red', 'l-ds');");
     let rows_now = rows(&mut store);
     let row = |id: &str| rows_now.iter().find(|(i, _)| i == id).unwrap().1;
-    assert_eq!((row("hot"), row("dead")), (Dot::Yellow, Dot::Stopped), "red is archived; a Context of archived Sessions is ◌");
+    assert_eq!((row("hot"), row("dead")), (Dot::Yellow, Dot::Stopped), "red is archived; a Context of archived Sessions is stopped");
     sql(&mut store, "UPDATE sessions SET archived_at = '2026-02-03T00:00:00.000Z' WHERE id IN ('l-yel', 'l-mag', 'l-whi', 'l-wrk', 'l-idl');");
     let rows_now = rows(&mut store);
     assert_eq!(rows_now.iter().find(|(i, _)| i == "hot").unwrap().1, Dot::Working, "f-yel, a live fork of an archived Lead");
@@ -467,7 +467,7 @@ fn settled(session: &str) -> String {
     event("session-state", Some("alpha"), Some("sketch"), Some(session), r#"{"from":"working","to":"idle","label":null}"#)
 }
 
-/// The ● of a Session, from its state and its Events (cockpit parity, the tree's needs-you rule).
+/// The needs-you dot of a Session, from its state and its Events (cockpit parity, the tree's needs-you rule).
 #[test]
 fn a_session_needs_you_when_blocked_or_idle_with_a_turn_the_user_has_not_seen() {
     let (_env, mut store) = fixture();

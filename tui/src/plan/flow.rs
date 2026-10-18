@@ -570,14 +570,14 @@ mod tests {
     }
 
     #[test]
-    fn a_running_pill_spins_through_the_four_frames() {
-        let icons: Vec<String> = (0..4).map(|f| icon_at(Live::Running, f)).collect();
-        assert_eq!(icons, ["◜", "◝", "◞", "◟"]);
+    fn a_running_pill_spins_through_the_eight_frames() {
+        let icons: Vec<String> = (0..9).map(|f| icon_at(Live::Running, f)).collect();
+        assert_eq!(icons, [palette::SPINNER.to_vec(), vec![palette::SPINNER[0]]].concat());
     }
 
     #[test]
     fn a_merging_and_a_queued_pill_do_not_spin() {
-        for f in 0..4 {
+        for f in 0..palette::SPINNER.len() {
             assert_eq!(icon_at(Live::Merging, f), "⇥", "frame {f}");
             assert_eq!(icon_at(Live::Queued, f), "○", "frame {f}");
         }

@@ -477,7 +477,9 @@ mod tests {
     use super::super::fixture::{WHEN, archived, context, plan, refresh_dots, sample, session, tree};
     use super::*;
     use cpd_core::session::State;
-    use crate::palette::color;
+    use crate::palette::{IDLE, NEEDS_YOU, SPINNER, STOPPED, color};
+
+    const WORKING: &str = SPINNER[0];
     use crate::read::{Dot, Place};
 
     fn path(parts: &[&str]) -> Vec<Id> {
@@ -552,7 +554,7 @@ mod tests {
         let buf = render(&t, &mut state_for(&t, &[], &[]), 31, 4, false);
         assert_eq!(
             lines(&buf),
-            ["● cpd", "  ├ ○ v1             36⋅0⋅0⋅1⋅5", "⏵ ├ ● rust            0⋅1⋅0⋅0⋅1", "  └ ○ ui              1⋅0⋅2⋅0⋅3"]
+            [format!("{NEEDS_YOU} cpd"), format!("  ├ {IDLE} v1             36⋅0⋅0⋅1⋅5"), format!("⏵ ├ {NEEDS_YOU} rust            0⋅1⋅0⋅0⋅1"), format!("  └ {IDLE} ui              1⋅0⋅2⋅0⋅3")]
         );
         assert!(buf[(6, 2)].modifier.contains(Modifier::BOLD), "the name of the centre row is bold");
         assert!(buf[(0, 2)].modifier.contains(Modifier::BOLD), "so is its ⏵");
@@ -567,15 +569,15 @@ mod tests {
         assert_eq!(
             lines(&buf),
             [
-                "● alpha".to_owned(),
-                row_of("⏵ ├ ◜ ship", "2⋅1⋅1⋅0⋅5", 44),
-                row_of("  ├ ○ sketch", "4⋅0⋅0⋅0⋅0", 44),
-                row_of("  ├ ◌ old", "0⋅0⋅0⋅1⋅36", 44),
-                "  ├ ○ ship·f-id".to_owned(),
-                "  └ ● ship·f-bl".to_owned(),
-                "● beta".to_owned(),
-                row_of("  └ ● rel", "0⋅0⋅0⋅0⋅3", 44),
-                "◌ gamma".to_owned(),
+                format!("{NEEDS_YOU} alpha").to_owned(),
+                row_of(&format!("⏵ ├ {WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44),
+                row_of(&format!("  ├ {IDLE} sketch"), "4⋅0⋅0⋅0⋅0", 44),
+                row_of(&format!("  ├ {STOPPED} old"), "0⋅0⋅0⋅1⋅36", 44),
+                format!("  ├ {IDLE} ship·f-id").to_owned(),
+                format!("  └ {NEEDS_YOU} ship·f-bl").to_owned(),
+                format!("{NEEDS_YOU} beta").to_owned(),
+                row_of(&format!("  └ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44),
+                format!("{STOPPED} gamma").to_owned(),
                 String::new(),
             ],
             "no state text after a name"
@@ -593,16 +595,16 @@ mod tests {
     fn a_collapsed_context_shows_the_number_of_plans_and_hides_them() {
         let tree = sample();
         let buf = render(&tree, &mut state_for(&tree, &["alpha"], &[]), 44, 4, false);
-        assert_eq!(lines(&buf), ["● alpha 3".to_owned(), "● beta".to_owned(), row_of("  └ ● rel", "0⋅0⋅0⋅0⋅3", 44), "◌ gamma".to_owned()]);
+        assert_eq!(lines(&buf), [format!("{NEEDS_YOU} alpha 3").to_owned(), format!("{NEEDS_YOU} beta").to_owned(), row_of(&format!("  └ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44), format!("{STOPPED} gamma").to_owned()]);
     }
 
     #[test]
     fn a_context_has_the_dot_of_any_session_inside_that_needs_you() {
         let tree = sample();
         let buf = render(&tree, &mut state_for(&tree, &["alpha"], &[]), 44, 1, false);
-        assert_eq!(text(&buf, 0), "● alpha 3", "through its blocked fork");
+        assert_eq!(text(&buf, 0), format!("{NEEDS_YOU} alpha 3"), "through its blocked fork");
         let calm = super::super::fixture::tree(vec![context("cc", vec![lone("pp", "s", Phase::Plan, [0; 6])])]);
-        assert_eq!(text(&render(&calm, &mut state_for(&calm, &[], &[]), 20, 1, false), 0), "○ cc");
+        assert_eq!(text(&render(&calm, &mut state_for(&calm, &[], &[]), 20, 1, false), 0), format!("{IDLE} cc"));
     }
 
     #[test]
@@ -611,17 +613,17 @@ mod tests {
         let mut p = lone("pp", "lead", Phase::Dispatch, [0; 6]);
         p.head.open_escalations = 1;
         let t = tree(vec![context("cc", vec![p])]);
-        assert_eq!(lines(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false)), ["○ cc".to_owned(), row_of("  └ ○ pp", "0⋅0⋅0⋅0⋅0", 30)]);
+        assert_eq!(lines(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false)), [format!("{IDLE} cc").to_owned(), row_of(&format!("  └ {IDLE} pp"), "0⋅0⋅0⋅0⋅0", 30)]);
         let mut t = t;
         t.contexts[0].plans[0].sessions[0].dot = Dot::Red;
-        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false), 1), row_of("  └ ● pp", "0⋅0⋅0⋅0⋅0", 30));
+        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false), 1), row_of(&format!("  └ {NEEDS_YOU} pp"), "0⋅0⋅0⋅0⋅0", 30));
     }
 
     #[test]
     fn drafts_are_counted_and_dark_grey_in_phase_plan() {
         let t = tree(vec![context("cc", vec![lone("pp", "p", Phase::Plan, [4, 0, 0, 0, 0, 0])])]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
-        assert_eq!(text(&buf, 1), row_of("  └ ○ pp", "4⋅0⋅0⋅0⋅0", 20));
+        assert_eq!(text(&buf, 1), row_of(&format!("  └ {IDLE} pp"), "4⋅0⋅0⋅0⋅0", 20));
         assert_eq!(fg(&buf, 11, 1), color(Meaning::Nothing));
     }
 
@@ -630,7 +632,7 @@ mod tests {
         let long = lone("a-very-long-plan-id", "lead", Phase::Dispatch, [0, 36, 0, 0, 1, 5]);
         let t = tree(vec![context("cc", vec![long])]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 30, 2, false);
-        assert_eq!(text(&buf, 1), row_of("  └ ○ a-very-long-…", "36⋅0⋅0⋅1⋅5", 30));
+        assert_eq!(text(&buf, 1), row_of(&format!("  └ {IDLE} a-very-long-…"), "36⋅0⋅0⋅1⋅5", 30));
         assert_eq!(truncate("abc", 3), "abc");
         assert_eq!(truncate("abcd", 3), "ab…");
         assert_eq!(truncate("abcd", 0), "");
@@ -665,15 +667,15 @@ mod tests {
                 assert_eq!(cell(&buf, 0, 0), drawn_dot(dot), "its Context row too: {dot:?} in {phase:?}");
             }
         }
-        assert_eq!(drawn_dot(Dot::Red).0, "●");
-        assert_eq!(drawn_dot(Dot::Idle), ("○".to_owned(), Default::default()), "the terminal's foreground");
+        assert_eq!(drawn_dot(Dot::Red).0, format!("{NEEDS_YOU}"));
+        assert_eq!(drawn_dot(Dot::Idle), (format!("{IDLE}").to_owned(), Default::default()), "the terminal's foreground");
     }
 
     #[test]
     fn a_stopped_dot_is_dim() {
         let t = tree(vec![context("cc", vec![with_dot("pp", Dot::Stopped)])]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
-        assert_eq!((buf[(4, 1)].symbol(), buf[(0, 0)].symbol()), ("◌", "◌"));
+        assert_eq!((buf[(4, 1)].symbol(), buf[(0, 0)].symbol()), (STOPPED, STOPPED));
         assert!(buf[(4, 1)].modifier.contains(Modifier::DIM) && buf[(0, 0)].modifier.contains(Modifier::DIM));
         let t = tree(vec![context("cc", vec![with_dot("pp", Dot::Idle)])]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
@@ -683,13 +685,14 @@ mod tests {
     #[test]
     fn a_working_dot_turns_with_the_frame_on_session_rows_and_their_context() {
         let t = tree(vec![context("cc", vec![with_dot("pp", Dot::Working)])]);
-        let glyphs: Vec<(String, String)> = (0..5)
+        let glyphs: Vec<(String, String)> = (0..9)
             .map(|frame| {
                 let buf = render_at(&t, &mut state_for(&t, &[], &[]), 20, 2, false, frame);
                 (buf[(0, 0)].symbol().to_owned(), buf[(4, 1)].symbol().to_owned())
             })
             .collect();
-        let want: Vec<(String, String)> = ["◜", "◝", "◞", "◟", "◜"].map(|g| (g.to_owned(), g.to_owned())).to_vec();
+        let want: Vec<(String, String)> =
+            (0..9).map(|f| (SPINNER[f % SPINNER.len()].to_owned(), SPINNER[f % SPINNER.len()].to_owned())).collect();
         assert_eq!(glyphs, want);
     }
 
@@ -703,13 +706,13 @@ mod tests {
         let mut state = state_for(&t, &[], &[]);
         expand(&mut state, &t, &["cc", "…"]);
         expand(&mut state, &t, &["…"]);
-        for frame in 0..4 {
+        for frame in 0..SPINNER.len() {
             let buf = render_at(&t, &mut state, 24, 8, false, frame);
-            let grey = (String::from("◜"), color(Meaning::Nothing));
+            let grey = (String::from(format!("{WORKING}")), color(Meaning::Nothing));
             assert_eq!(cell(&buf, 4, 2), grey, "frame {frame}: an archived Plan row, always the first frame {:?}", lines(&buf));
             assert_eq!(cell(&buf, 0, 4), grey, "frame {frame}: an archived Context row {:?}", lines(&buf));
             assert_eq!(cell(&buf, 4, 5), grey, "frame {frame}: its Plan row");
-            assert_eq!(buf[(0, 0)].symbol(), ["◜", "◝", "◞", "◟"][frame], "while the live Context row turns");
+            assert_eq!(buf[(0, 0)].symbol(), SPINNER[frame], "while the live Context row turns");
         }
     }
 
@@ -721,7 +724,7 @@ mod tests {
         let mut state = state_for(&t, &[], &[]);
         expand(&mut state, &t, &["cc", "…"]);
         let buf = render(&t, &mut state, 24, 4, false);
-        assert_eq!(cell(&buf, 4, 2), ("●".to_owned(), color(Meaning::Nothing)), "{:?}", lines(&buf));
+        assert_eq!(cell(&buf, 4, 2), (format!("{NEEDS_YOU}").to_owned(), color(Meaning::Nothing)), "{:?}", lines(&buf));
     }
 
     #[test]
@@ -766,7 +769,7 @@ mod tests {
             vec![plan("pp", "cc", Phase::Plan, [0; 6], session("l", "lead", State::Idle, None, Place::None), vec![session("f", "fork", State::Idle, None, Place::None)])],
         )]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 30, 3, false);
-        assert_eq!(lines(&buf)[1..], [row_of("  ├ ○ pp", "0⋅0⋅0⋅0⋅0", 30), "  └ ○ pp·f".to_owned()]);
+        assert_eq!(lines(&buf)[1..], [row_of(&format!("  ├ {IDLE} pp"), "0⋅0⋅0⋅0⋅0", 30), format!("  └ {IDLE} pp·f").to_owned()]);
     }
 
     #[test]
@@ -808,7 +811,7 @@ mod tests {
         tree.contexts[0].plans[0].sessions[0].place = Place::Parked;
         tree.contexts[0].plans[0].sessions[1].place = Place::Chat;
         let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 8, false);
-        assert_eq!(text(&buf, 4), "⏵ ├ ○ ship·f-id");
+        assert_eq!(text(&buf, 4), format!("⏵ ├ {IDLE} ship·f-id"));
         for y in [0, 1, 2, 3, 5, 6, 7] {
             assert!(!text(&buf, y).contains(ACTIVE_MARK), "row {y}");
         }
@@ -911,9 +914,9 @@ mod tests {
         tree.contexts[0].title = "Payments".into();
         tree.contexts[0].plans[0].head.title = "Pay by card".into();
         let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 6, false);
-        assert_eq!(text(&buf, 0), "● alpha", "not its title `Payments`");
-        assert_eq!(text(&buf, 1), row_of("⏵ ├ ◜ ship", "2⋅1⋅1⋅0⋅5", 44), "not its title `Pay by card`, nor its Lead's name");
-        assert_eq!(text(&buf, 5), "  └ ● ship·f-bl", "the Plan id, `·`, the first 4 characters of the Session id; not its name");
+        assert_eq!(text(&buf, 0), format!("{NEEDS_YOU} alpha"), "not its title `Payments`");
+        assert_eq!(text(&buf, 1), row_of(&format!("⏵ ├ {WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44), "not its title `Pay by card`, nor its Lead's name");
+        assert_eq!(text(&buf, 5), format!("  └ {NEEDS_YOU} ship·f-bl"), "the Plan id, `·`, the first 4 characters of the Session id; not its name");
         // the prompts word a row by its title or name: Rename… edits those, not the id
         assert_eq!(row(&tree, &path(&["alpha"])).unwrap().label(), "Payments");
         assert_eq!(row(&tree, &path(&["alpha", "ship"])).unwrap().label(), "Pay by card");
@@ -931,9 +934,9 @@ mod tests {
             vec![plan("pp", "cc", Phase::Plan, [0; 6], session("l", "lead", State::Idle, None, Place::None), vec![session("0123456789abcdef", "named", State::Idle, None, Place::None)])],
         )]);
         let mut t = t;
-        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 3, false), 2), "  └ ○ pp·0123");
+        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 3, false), 2), format!("  └ {IDLE} pp·0123"));
         t.contexts[0].plans[0].sessions[1].plan = None;
-        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 3, false), 2), "  └ ○ 01234567");
+        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 3, false), 2), format!("  └ {IDLE} 01234567"));
         assert_eq!(row(&t, &path(&["cc", "0123456789abcdef"])).unwrap().shown_id().as_deref(), Some("01234567"));
     }
 
@@ -966,18 +969,18 @@ mod tests {
         assert_eq!(
             lines(&buf),
             [
-                "◜ alpha".to_owned(),
-                row_of("⏵ ├ ◜ ship", "2⋅1⋅1⋅0⋅5", 44),
-                row_of("  ├ ○ sketch", "4⋅0⋅0⋅0⋅0", 44),
-                "  ├ ○ ship·f-id".to_owned(),
+                format!("{WORKING} alpha").to_owned(),
+                row_of(&format!("⏵ ├ {WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44),
+                row_of(&format!("  ├ {IDLE} sketch"), "4⋅0⋅0⋅0⋅0", 44),
+                format!("  ├ {IDLE} ship·f-id").to_owned(),
                 "  └ …".to_owned(),
-                "● beta".to_owned(),
-                row_of("  └ ● rel", "0⋅0⋅0⋅0⋅3", 44),
-                "◌ gamma".to_owned(),
+                format!("{NEEDS_YOU} beta").to_owned(),
+                row_of(&format!("  └ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44),
+                format!("{STOPPED} gamma").to_owned(),
                 "…".to_owned(),
                 String::new(),
             ],
-            "zeta is only in the `…` row at the end; `alpha`'s archived Plan and fork are in its own `…` row, and its blocked fork no longer makes it ●: its dot is the working Lead's"
+            "zeta is only in the `…` row at the end; `alpha`'s archived Plan and fork are in its own `…` row, and its blocked fork no longer makes it a needs-you dot: its dot is the working Lead's"
         );
         assert_eq!((fg(&buf, 0, 8), fg(&buf, 4, 4)), (color(Meaning::Nothing), color(Meaning::Nothing)), "muted");
     }
@@ -991,7 +994,7 @@ mod tests {
         fork.archived_at = Some(WHEN.into());
         t.contexts[1].plans[0].sessions.push(fork);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 44, 10, false);
-        assert_eq!(lines(&buf)[6..9], ["● beta", row_of("  ├ ● rel", "0⋅0⋅0⋅0⋅3", 44).as_str(), "  └ …"]);
+        assert_eq!(lines(&buf)[6..9], [format!("{NEEDS_YOU} beta"), row_of(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44), "  └ …".to_owned()]);
         let mut t = sample();
         t.contexts[1].plans[0].head.archived_at = Some(WHEN.into());
         let mut fork = session("f-rel", "rel fork", State::Idle, None, Place::None);
@@ -1002,7 +1005,7 @@ mod tests {
         }
         refresh_dots(&mut t);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 44, 10, false);
-        assert_eq!(lines(&buf)[6..8], ["◌ beta", "  └ …"], "a fork of an archived Plan is in the `…` row too");
+        assert_eq!(lines(&buf)[6..8], [format!("{STOPPED} beta"), "  └ …".to_owned()], "a fork of an archived Plan is in the `…` row too");
     }
 
     #[test]
@@ -1014,15 +1017,15 @@ mod tests {
         assert_eq!(
             lines(&buf)[..9],
             [
-                "◜ alpha".to_owned(),
-                row_of("⏵ ├ ◜ ship", "2⋅1⋅1⋅0⋅5", 44),
-                row_of("  ├ ○ sketch", "4⋅0⋅0⋅0⋅0", 44),
-                "  ├ ○ ship·f-id".to_owned(),
+                format!("{WORKING} alpha").to_owned(),
+                row_of(&format!("⏵ ├ {WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44),
+                row_of(&format!("  ├ {IDLE} sketch"), "4⋅0⋅0⋅0⋅0", 44),
+                format!("  ├ {IDLE} ship·f-id").to_owned(),
                 "  ├ …".to_owned(),
-                row_of("  ├ ◌ old", "0⋅0⋅0⋅1⋅36", 44),
-                "  └ ● ship·f-bl".to_owned(),
-                "● beta".to_owned(),
-                row_of("  └ ● rel", "0⋅0⋅0⋅0⋅3", 44),
+                row_of(&format!("  ├ {STOPPED} old"), "0⋅0⋅0⋅1⋅36", 44),
+                format!("  └ {NEEDS_YOU} ship·f-bl").to_owned(),
+                format!("{NEEDS_YOU} beta").to_owned(),
+                row_of(&format!("  └ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44),
             ],
             "no empty row; the archived Plan and fork are as deep as the live ones"
         );
@@ -1057,7 +1060,12 @@ mod tests {
         let rows = lines(&buf);
         assert_eq!(
             rows[8..12],
-            ["…", "◌ zeta", row_of("  ├ ◌ zp", "0⋅0⋅0⋅0⋅2", 44).as_str(), "  └ ◌ zp·f-zp"],
+            [
+                "…".to_owned(),
+                format!("{STOPPED} zeta"),
+                row_of(&format!("  ├ {STOPPED} zp"), "0⋅0⋅0⋅0⋅2", 44),
+                format!("  └ {STOPPED} zp·f-zp"),
+            ],
             "{rows:#?}"
         );
         for y in 9..12 {
@@ -1072,7 +1080,7 @@ mod tests {
         // an archived Context folds like any other
         expand(&mut state, &t, &["…"]);
         assert!(click_context(&mut state, &t, &path(&["zeta"])));
-        assert_eq!(text(&render(&t, &mut state, 44, 14, false), 9), "◌ zeta 1");
+        assert_eq!(text(&render(&t, &mut state, 44, 14, false), 9), format!("{STOPPED} zeta 1"));
     }
 
     #[test]
@@ -1140,6 +1148,6 @@ mod tests {
         let mut t = archived();
         t.contexts[0].plans[2].head.phase = Phase::Done;
         let buf = render(&t, &mut state_for(&t, &["alpha"], &[]), 44, 3, false);
-        assert_eq!(text(&buf, 0), "◜ alpha 2", "ship and sketch; the archived Plan is behind `…`, and the archived blocked fork does not make it ●");
+        assert_eq!(text(&buf, 0), format!("{WORKING} alpha 2"), "ship and sketch; the archived Plan is behind `…`, and the archived blocked fork does not make it a needs-you dot");
     }
 }
