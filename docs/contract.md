@@ -60,7 +60,7 @@ Exit codes (kept from cpd 1 §2):
 
 | Exit | Codes |
 |---|---|
-| `1` | `gate_error`, `context_store_invalid`, `watch_start_failed`, `spawn_failed`, `session_malformed`, `driver_lock_missing`, `doctor_failed`, `pi_not_found`, `catalog_failed` |
+| `1` | `gate_error`, `context_store_invalid`, `watch_start_failed`, `spawn_failed`, `session_malformed`, `driver_lock_missing`, `doctor_failed`, `pi_not_found`, `catalog_failed`, `cleanup_failed` (only as an `error` Event's code, source `pr poll`, never a command's failure; §7.2) |
 | `2` | `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `spec_invalid`, `tier_invalid`, `nothing_to_edit`, `file_unreadable`, `invalid_name`, `pr_required`, `invalid_pr_id` (R34) |
 | `3` | `pr_exists`, `pr_in_use`, `pr_empty`, `pr_locked`, `pr_not_ready`, `pr_ended`, `needs_other_pr`, `branch_exists` (R34, §3.8), `context_exists`, `question_answered`, `not_a_git_repo`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `review_commits`, `review_missing`, `job_merged`, `job_not_failed`, `job_not_ready`, `attempt_not_running`, `no_port`, `jobs_not_done`, `gate_failed`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `in_chat_slot`, `cursor_ahead`, `not_a_terminal` |
 | `4` | `base_not_found`, `pr_not_found` (R34) |
@@ -554,7 +554,7 @@ stateDiagram-v2
 | A6 | Removed by R19 (no Job-level Reviewer). |
 | A7 | Removed by R19 (no Job-level Reviewer). |
 | A8 | Merge (§7.4); a review Job's Attempt has no commits to merge (below) |
-| A9 | End: record `metrics` (parsed from the Worker's session file, cpd 1 §14) in the transaction that ends the Attempt; kill the Attempt's tmux window (`kill-window` is tried 3 times, 1 s apart, before the `error` Event); remove the driver lock file `locks/attempt-<plan>--<attempt>.lock`; on `merged`, remove the worktree and branch; otherwise keep them for debugging until the Plan is `done` (cpd 1 requirements §2, kept) |
+| A9 | End: record `metrics` (parsed from the Worker's session file, cpd 1 §14) in the transaction that ends the Attempt; kill the Attempt's tmux window (`kill-window` is tried 3 times, 1 s apart, before the `error` Event); remove the driver lock file `locks/attempt-<plan>--<attempt>.lock`; on `merged`, remove the worktree and branch; otherwise keep them for debugging until their PR is merged, when the PR's clean-up removes them (§7.2) |
 
 **The driver lock** `locks/attempt-<plan>--<attempt>.lock` is held without a gap from before the Attempt row exists until its driver exits, so a free lock always means a dead driver, and E2 never ends a healthy Attempt whose driver has not started running yet. Chosen fix: the starter takes the lock and hands it to the driver at the spawn. Rejected alternative: an E2 grace period for young `starting` Attempts, which rests on a timing guess and needs a new key.
 
@@ -1336,7 +1336,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `plan-archived` | `plan archive` or `unarchive`, or the cascade of the Context's, for each Plan | context, plan | `{archived: bool}` |
 | `session-archived` | `session archive` or `unarchive`, or a cascade, for each Session | context, plan?, session | `{archived: bool}` |
 | `watch-started`, `watch-stopped` | the engine starts or stops | (none) | `{pid}` |
-| `error` | `watch`, a driver or a sync hit an unexpected failure; codes include `lead_worktree_stale`, `merge_check_failed`, `push_failed` (a failed push of a Lead Branch at a PR's start or at a merge, §7.2, §7.4; `details.pr` names the PR) `pr_start_failed` (engine E7 could not start a PR, §3.8; `details: {pr, step, tail?, log?}`) and `gh_rate_limited` (engine E5 skips polls while GitHub's rate limit is nearly used, §3.7; `details: {remaining, reset_at}`; no Plan, it concerns the User's account) | context?, plan?, … | `{source, code, message, details}` |
+| `error` | `watch`, a driver or a sync hit an unexpected failure; codes include `lead_worktree_stale`, `merge_check_failed`, `push_failed` (a failed push of a Lead Branch at a PR's start or at a merge, §7.2, §7.4; `details.pr` names the PR) `cleanup_failed` (`pr poll` kept a merged PR's Lead worktree, or a removal failed, §7.2; `details: {plan, pr, path, reason}`, `reason` `dirty`, `unpushed` or git's stderr tail) `pr_start_failed` (engine E7 could not start a PR, §3.8; `details: {pr, step, tail?, log?}`) and `gh_rate_limited` (engine E5 skips polls while GitHub's rate limit is nearly used, §3.7; `details: {remaining, reset_at}`; no Plan, it concerns the User's account) | context?, plan?, … | `{source, code, message, details}` |
 
 ### 5.3 Delivery by the pi adapter
 
@@ -1549,7 +1549,7 @@ cpd runs git itself (R4); there is no worktrunk. Every git call is `git -C <dir>
 
 `<repo-parent>` and `<repo-name>` are those of the PR's repo, and `<key>` is the PR's key (A5). One rule names every PR; Attempt names are unchanged by R34. A PR made by migration 4 from a Plan of before R34 keeps the names it had, `<repo-parent>/<repo-name>.<plan>` and `cpd/<plan>` (§4.5). Lead Branch names never collide: within a Plan the key is unique, and `cpd/<plan>/<key>` and `cpd/<plan>--<attempt>` differ by their separator.
 
-The repo's main checkout is never touched; Lead and Attempt worktrees are siblings of it (t3, kept).
+The repo's main checkout is never touched; Lead and Attempt worktrees are siblings of it (t3, kept). A PR's Lead worktree and local Lead Branch stay until the PR is merged; the PR's clean-up then removes them unless the worktree is dirty or has unpushed commits, which are kept with one `error` Event `cleanup_failed` (§7.2).
 
 ### 7.2 Creating worktrees
 
@@ -1564,7 +1564,8 @@ The repo's main checkout is never touched; Lead and Attempt worktrees are siblin
 
   **At `plan lock`** the PRs with no needs start together and all or nothing: every one's worktree is created and its `pre-start` run first; only when all have passed are the new branches pushed and the lock's transaction written. If one fails, every worktree and branch the lock created is removed, nothing is pushed, and `plan lock` fails with `setup_failed`, `details.pr` naming the PR. **From engine E7 and `pr start`** one PR starts; its failure is handled as §3.8 says.
 - **Attempt worktree** (A2): read `L = git rev-parse refs/heads/<lead branch>`; `git -C <lead worktree> worktree add -b cpd/<plan>--<attempt> <path> L`; record `base_sha = L`; run `pre-start` in it, blocking, so the Worker never starts before setup has finished (requirements §5, kept). On failure: remove the worktree and branch as above, outcome `failed` / `setup_failed`.
-- **Removal** after a Merged Attempt (A9): `git worktree remove <path>` then `git branch -d cpd/<plan>--<attempt>` (`-d`, not `-D`: git refuses unless the branch is merged into HEAD of the Lead worktree, a native guard; t3 F9). Failed and cancelled Attempts keep theirs until the Plan is `done`.
+- **Removal** after a Merged Attempt (A9): `git worktree remove <path>` then `git branch -d cpd/<plan>--<attempt>` (`-d`, not `-D`: git refuses unless the branch is merged into HEAD of the Lead worktree, a native guard; t3 F9). Failed and cancelled Attempts keep theirs until their PR is merged.
+- **Clean-up at a PR's merge** (hs-d138, hs-d142): when `pr poll` sees a PR merged (commands.md §9.2), that PR's Attempt worktrees and local Attempt branches still on disk are removed (`git worktree remove --force`, `git branch -D`), then its Lead worktree and local Lead Branch (`git worktree remove`, `git -C <repo> branch -D <lead branch>`; `-D`, because a squash merge is never an ancestor). Each removal is best effort: one failure does not stop the others, and every later poll retries the merged PRs that still have a path on disk. A Lead worktree with uncommitted changes (`git status --porcelain` not empty, untracked files included) or with commits not on origin (`git rev-list HEAD --not --remotes=origin` not empty) is **kept**, with its Lead Branch, and the poll that saw the merge appends one `error` Event `cleanup_failed`; later polls skip it silently. Remote branches are never touched. A PR closed without a merge and an abandoned Plan are not cleaned up here (G5).
 
 ### 7.3 Hooks from `.config/wt.toml`
 

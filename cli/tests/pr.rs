@@ -1029,11 +1029,11 @@ fn an_owned_pull_request_that_left_the_search_and_is_merged_takes_the_merged_pat
     assert_eq!(merged.len(), 1);
     assert_eq!(merged[0].1, json!({"pr": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}));
     assert!(fx.events("pr-feedback").is_empty());
-    // The Attempt's worktree and branch are gone, its window is killed; the Lead's stay.
+    // The Attempt's worktree and branch and the Lead's (pushed, clean) are gone, the Attempt's window is killed.
     assert!(!worktree.exists());
     assert_eq!(fx.git(&fx.repo, &["branch", "--list", &branch]), "");
-    assert!(fx.lead.exists());
-    assert_eq!(fx.git(&fx.repo, &["branch", "--list", "cpd/pay"]), "+ cpd/pay");
+    assert!(!fx.lead.exists());
+    assert_eq!(fx.git(&fx.repo, &["branch", "--list", "cpd/pay"]), "");
     let windows = window_names(&fx);
     assert!(!windows.contains("pay--b-a1") && windows.contains("cpd-work:other-plan"), "{windows}");
 
