@@ -233,7 +233,7 @@ test("a side fork gets updates", async (t) => {
   assert.ok((result as any).message.content.includes("- hs-n1 note"));
 });
 
-// ---- the Manager's digest (§15.6, B3-A5) ----
+// ---- the Manager's digest (§15.7, B3-A5) ----
 
 const planEvent = (n: number, over: Partial<PlanEvent> = {}): PlanEvent => ({ event: 300 + n, at: `2026-10-18T09:${String(n).padStart(2, "0")}:00Z`, plan: "pay-4521", text: `Plan phase ${n}.`, ...over });
 const planEventsList = (ns: number[]) => ({ ok: true, events: ns.map((n) => ({ id: 300 + n, at: planEvent(n).at, kind: "plan-phase", context: "ctx", plan: "pay-4521", text: `Plan phase ${n}.`, data: {} })), next: 300 + Math.max(...ns, 0) });
@@ -373,7 +373,7 @@ test("a Lead's message has no Plans: section and never reads Plan Events", async
   assert.deepEqual(planCalls(f), []);
 });
 
-// ---- the Manager's Pending work (§15.6, hs-d159 P2) ----
+// ---- the Manager's Pending work (§15.7, hs-d159 P2) ----
 
 const pjob = (n: number, status: string): PendingJob => ({ key: `job-${n}`, status, title: `Title ${n}` });
 const ppr = (jobs: PendingJob[], over: Record<string, unknown> = {}) => ({ key: "api", status: "dispatch", number: 212 as number | null, jobs, ...over });

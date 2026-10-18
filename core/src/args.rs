@@ -83,17 +83,51 @@ impl PrArg {
 pub struct SessionArg {
     /// The Session [default: $CPD_SESSION]
     #[arg(long = "session", value_name = "id", env = "CPD_SESSION", hide_env = true)]
-    pub session: Option<SessionId>,
+    pub session: Option<SessionRef>,
 }
 
 impl SessionArg {
-    pub fn require(&self) -> Result<&SessionId, CpdError> {
+    pub fn require(&self) -> Result<&SessionRef, CpdError> {
         self.session.as_ref().ok_or_else(|| {
             CpdError::new(
                 ErrorCode::SessionRequired,
                 "No Session selected: pass --session <id> or set CPD_SESSION.",
             )
         })
+    }
+}
+
+/// A Session as typed (commands.md §1.3, hs-a3): a Session id, a Plan id, a
+/// bare id prefix, or `<plan>·<prefix>` / `<plan>.<prefix>`. It is only
+/// syntactically valid; `session::resolve` turns it into a [`SessionId`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SessionRef {
+    /// A full id, a Plan id or a bare prefix: all match the pattern of a Session id.
+    Plain(SessionId),
+    /// `<plan>·<prefix>` or `<plan>.<prefix>`, split at the first separator.
+    Scoped { plan: PlanId, prefix: SessionId },
+}
+
+impl FromStr for SessionRef {
+    type Err = CpdError;
+    fn from_str(s: &str) -> Result<SessionRef, CpdError> {
+        let Some((plan, prefix)) = s.split_once(['·', '.']) else {
+            return SessionId::parse(s).map(SessionRef::Plain);
+        };
+        match (PlanId::parse(plan), SessionId::parse(prefix)) {
+            (Ok(plan), Ok(prefix)) => Ok(SessionRef::Scoped { plan, prefix }),
+            // Neither separator is in a Session id's pattern: this is `invalid_session_id`.
+            _ => Err(SessionId::parse(s).expect_err("a value with a separator is no Session id")),
+        }
+    }
+}
+
+impl fmt::Display for SessionRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SessionRef::Plain(id) => write!(f, "{id}"),
+            SessionRef::Scoped { plan, prefix } => write!(f, "{plan}.{prefix}"),
+        }
     }
 }
 

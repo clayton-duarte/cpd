@@ -112,7 +112,8 @@ fn archived_event(row: &Row, archived: bool) -> NewEvent {
 /// `session archive` (commands.md §10.10).
 pub(super) fn archive(args: ArchiveArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
-    let lead = env.store.read(|conn| row::load(conn, &args.id))?;
+    let id = env.resolve(&args.id)?;
+    let lead = env.store.read(|conn| row::load(conn, &id))?;
     require_lead(&lead)?;
     archive_lead(&mut env, &lead, false)
 }
@@ -208,7 +209,8 @@ pub(super) fn archive_on_quit(env: &mut Env, id: &SessionId) -> Result<(), CpdEr
 /// `session unarchive` (commands.md §10.11).
 pub(super) fn unarchive(args: UnarchiveArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
-    let lead = env.store.read(|conn| row::load(conn, &args.id))?;
+    let id = env.resolve(&args.id)?;
+    let lead = env.store.read(|conn| row::load(conn, &id))?;
     require_lead(&lead)?;
     if lead.archived_at.is_none() {
         return Ok(Output::success(json!({"archived": [], "closed": [], "already": true})));

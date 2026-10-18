@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { adapter, type Options } from "../lib/adapter.ts";
-import type { Ctx, Message, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
+import type { CommandCtx, Ctx, Message, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
 
 /** A fake `cpd` on PATH and a fake pi, so the adapter is tested through its real boundaries (child processes, pi's API). */
 
@@ -58,6 +58,9 @@ async function follow() {
 })();
 `;
 
+/** Stands for pi's jiti in the throwaway load (the real one is pi's, not a dependency of this repo): loads the file natively, which node does for `.ts`. */
+const FAKE_JITI = `export const createJiti = () => ({ import: async (path) => (await import(path)).default });\n`;
+
 export const ID = "596d007f-6775-4134-b77a-b356cc523842";
 export const OTHER = "11111111-2222-4333-8444-555555555555";
 
@@ -66,6 +69,10 @@ export type Call = { phase: "start" | "end"; argv: string[]; since?: string; fee
 export class Fixture {
   readonly dir = mkdtempSync(join(tmpdir(), "pi-test-"));
   readonly cpdHome = join(this.dir, "cpd-home");
+  /** Stands for the adapter's installed directory (`options.reload.dir`). */
+  readonly adapterDir = join(this.dir, "adapter");
+  /** The loader the throwaway load of a new package uses (`reload.loader`). */
+  readonly loader = join(this.dir, "fake-jiti.mjs");
   readonly pi: FakePi;
   private readonly saved: Record<string, string | undefined> = {};
 
@@ -73,6 +80,8 @@ export class Fixture {
     mkdirSync(join(this.dir, "bin"));
     mkdirSync(join(this.dir, "resp"));
     mkdirSync(this.cpdHome);
+    mkdirSync(this.adapterDir);
+    writeFileSync(this.loader, FAKE_JITI);
     writeFileSync(join(this.dir, "bin", "cpd"), FAKE_CPD);
     chmodSync(join(this.dir, "bin", "cpd"), 0o755);
     for (const k of ["PATH", "FAKE_CPD_DIR", "CPD_SESSION", "CPD_PLAN", "CPD_HOME"]) this.saved[k] = process.env[k];
@@ -83,7 +92,7 @@ export class Fixture {
     delete process.env.CPD_PLAN;
     this.pi = new FakePi();
     this.respond("session-show", sessionShow());
-    this.respond("context-pending", { ok: true, context: "ctx", plans: [] }); // a Manager reads it at every turn start (§15.6)
+    this.respond("context-pending", { ok: true, context: "ctx", plans: [] }); // a Manager reads it at every turn start (§15.7)
   }
 
   /** What `cpd <a> <b>` prints (an object, or a raw string) and exits with. Key `<a>-<b>`; `<a>-<b>-<c>` answers `cpd <a> <b> <c>` first; `<a>-<b>@<kind>` answers a call whose first `--kind` is `<kind>`, before both. */
@@ -141,11 +150,19 @@ export class Fixture {
 
   /** Start the adapter under test with fast timing. */
   load(options: Options = {}): void {
-    adapter(this.pi, { timing: { restartInitialMs: 30, restartMaxMs: 120, requestTimeoutMs: 300, pollMs: 30, shutdownWaitMs: 200 }, ...options });
+    adapter(this.pi, {
+      timing: { restartInitialMs: 30, restartMaxMs: 120, requestTimeoutMs: 300, pollMs: 30, shutdownWaitMs: 200 },
+      ...options,
+      reload: { dir: this.adapterDir, intervalMs: 20, loader: this.loader, ...options.reload },
+    });
   }
 
   async close(): Promise<void> {
-    await this.pi.fire("session_shutdown").catch(() => {});
+    // A reload command still running (its `reload()` shuts down and starts the adapter) would start a follower after this shutdown.
+    do {
+      await Promise.allSettled([...this.pi.commandsRunning]);
+      await this.pi.fire("session_shutdown").catch(() => {});
+    } while (this.pi.commandsRunning.size > 0);
     for (const [k, v] of Object.entries(this.saved)) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
@@ -176,9 +193,22 @@ export class FakePi implements PiApi {
   entries: unknown[] = [];
   readonly tools: ToolDefinition[] = [];
   readonly notices: string[] = [];
+  /** The notices shown with level `error`. */
+  readonly errorNotices: string[] = [];
   readonly emitted: { channel: string; data: any }[] = [];
   sessionName: string | undefined;
   idle = true;
+  pendingMessages = false;
+  editorText = "";
+  /** How many times a command's `ctx.reload()` was called. */
+  reloads = 0;
+  /** What `ctx.reload()` does: by default nothing, like pi's mid-turn reload. */
+  onReload: () => void | Promise<void> = () => {};
+  readonly commands = new Map<string, (args: string, ctx: CommandCtx) => Promise<void>>();
+  readonly commandErrors: unknown[] = [];
+  /** Commands started by `sendUserMessage` and not finished. */
+  readonly commandsRunning = new Set<Promise<void>>();
+  readonly userMessages: { content: string; options: { expandPromptTemplates: boolean } }[] = [];
   mode = "tui";
   sessionId = ID;
 
@@ -227,13 +257,51 @@ export class FakePi implements PiApi {
     this.tools.push(tool);
   }
 
+  registerCommand(name: string, options: { handler: (args: string, ctx: CommandCtx) => Promise<void> }): void {
+    this.commands.set(name, options.handler);
+  }
+
+  /** Like pi: with `expandPromptTemplates` a registered extension command runs at once (not awaited by the sender). */
+  sendUserMessage(content: string, options: { expandPromptTemplates: boolean }): void {
+    this.userMessages.push({ content, options });
+    const handler = options.expandPromptTemplates && content.startsWith("/") ? this.commands.get(content.slice(1).split(" ")[0]!) : undefined;
+    if (!handler) return;
+    const running: Promise<void> = handler("", this.commandCtx())
+      .catch((e) => void this.commandErrors.push(e))
+      .finally(() => void this.commandsRunning.delete(running));
+    this.commandsRunning.add(running);
+  }
+
   ctx(): Ctx {
     return {
       mode: this.mode,
-      ui: { notify: (m) => void this.notices.push(m) },
+      ui: { notify: (m, level) => {
+          this.notices.push(m);
+          if (level === "error") this.errorNotices.push(m);
+        }, getEditorText: () => this.editorText },
       sessionManager: { getSessionId: () => this.sessionId, getEntries: () => this.entries },
       isIdle: () => this.idle,
+      hasPendingMessages: () => this.pendingMessages,
     };
+  }
+
+  /** A command context that, like pi's, throws on any use once `reload()` has resolved. */
+  commandCtx(): CommandCtx {
+    let stale = false;
+    const ctx: CommandCtx = {
+      ...this.ctx(),
+      reload: async () => {
+        this.reloads++;
+        await this.onReload();
+        stale = true;
+      },
+    };
+    return new Proxy(ctx, {
+      get: (target, key) => {
+        if (stale) throw new Error(`stale ctx: .${String(key)} used after reload()`);
+        return Reflect.get(target, key);
+      },
+    });
   }
 
   async fire(event: string, payload: Record<string, unknown> = {}): Promise<void> {

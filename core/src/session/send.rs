@@ -45,8 +45,9 @@ pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
     };
     let from = sender()?;
     let mut env = Env::open()?;
+    let id = env.resolve(&args.id)?;
     let (event, target) = env.store.write("session send", |tx| {
-        let target = row::load(tx, &args.id)?;
+        let target = row::load(tx, &id)?;
         check(&target)?;
         let from_name: Option<String> = match &from {
             Some(id) => tx.query_row("SELECT name FROM sessions WHERE id = ?1", [id.as_str()], |r| r.get(0)).optional()?,

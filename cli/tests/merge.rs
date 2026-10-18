@@ -406,6 +406,32 @@ fn merged_rebases_fast_forwards_syncs_the_lead_worktree_and_records_it() {
 }
 
 #[test]
+fn an_attempt_that_already_contains_the_lead_tip_lands_as_is_with_its_merge_commit() {
+    let fx = fx();
+    let (attempt, worktree) = fx.submitted("api", "README.md", "mine\n");
+    // The Lead Branch changes the same file on the other side.
+    let old = fx.advance_lead("README.md", "theirs\n");
+    // The Job merges the Lead tip and resolves the conflict.
+    let merge = fx.env.command("git").args(["-C", worktree.to_str().unwrap(), "merge", "--no-ff", "--no-commit", &old]).status().unwrap();
+    assert!(!merge.success(), "the fixture needs a conflict");
+    fs::write(worktree.join("README.md"), "resolved\n").unwrap();
+    fx.git(&worktree, &["add", "-A"]);
+    fx.git(&worktree, &["commit", "-q", "-m", "merge the base"]);
+    let tip = fx.git(&worktree, &["rev-parse", "HEAD"]);
+
+    let result = fx.merge(&attempt);
+
+    assert_eq!(result.end, End::Merged { sha: tip.clone() });
+    assert_eq!(fx.lead_sha(), tip);
+    assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD"]), tip);
+    // The merge commit is kept, with both parents.
+    assert_eq!(fx.git(&fx.repo, &["rev-list", "--parents", "-n", "1", &tip]).split(' ').count(), 3);
+    assert_eq!(fx.git(&fx.repo, &["rev-parse", &format!("{tip}^2")]), old);
+    assert_eq!(fs::read_to_string(fx.lead.join("README.md")).unwrap(), "resolved\n");
+    assert_eq!(fx.job_row("api"), ("merged".into(), Some(tip), None));
+}
+
+#[test]
 fn merge_conflict_aborts_the_rebase_and_goes_up_the_ladder() {
     let fx = fx();
     let (attempt, worktree) = fx.submitted("api", "README.md", "mine\n");

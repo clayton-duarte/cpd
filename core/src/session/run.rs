@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
-use serde_json::Value;
+use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -17,11 +17,13 @@ use super::archive::archive_on_quit;
 use super::moves::first_message;
 use super::port;
 use super::row::{self, Role, Row, State};
+use super::state::scoped;
 use super::{Env, RunArgs, bad_row, not_a_lead, state};
 use crate::config::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::host::exe::{Exe, Refusal, Watched};
 use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs, Plannotator};
+use crate::events::{Kind, NewEvent, append};
 use crate::host::{PaneId, Tmux};
 use crate::ids::{PlanId, SessionId};
 use crate::output::Output;
@@ -37,6 +39,11 @@ const STOP_POLL: Duration = Duration::from_millis(50);
 const CHAT_IDLE: Duration = Duration::from_secs(10 * 60);
 /// How long a reload waits for pi to exit after `SIGTERM` before it sends `SIGKILL`.
 const PI_STOP: Duration = Duration::from_secs(10);
+/// How often the adapter watchdog reads the Session's state while pi runs (commands.md §10.8).
+const WATCHDOG_POLL: Duration = Duration::from_secs(2);
+/// How long a Session may stay `stopped` while its pi runs before the wrapper
+/// restarts pi: the adapter is missing (contract §6.7 "Adapter watchdog", hs-d141).
+const ADAPTER_WATCHDOG: Duration = Duration::from_secs(60);
 /// How long it waits for `new-window`'s caller to set `@cpd_session` on its pane.
 const PANE_WAIT: Duration = Duration::from_secs(5);
 
@@ -50,7 +57,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
     let exe = Exe::current()?;
     let dirs = PiDirs::from_env()?;
     // From here on this process owns the terminal (commands.md §1.2).
-    loop {
+    'run: loop {
         let row = env.store.read(|conn| row::load(conn, &args.id))?;
         // A Lead with a Plan gets the Plan's port; a Context's Manager gets none (§6.5).
         let port = match &row.plan {
@@ -91,6 +98,8 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start pi: {e}.")).with("argv", launch.argv.clone())
             })?;
         let mut recorded = row.file.is_some();
+        let started = Instant::now();
+        let mut watched = started;
         let status = loop {
             let exited = child.try_wait().map_err(|e| {
                 CpdError::new(ErrorCode::SpawnFailed, format!("Cannot wait for pi: {e}.")).with("argv", launch.argv.clone())
@@ -117,6 +126,15 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 // The adapter reports `stopped` at `session_shutdown`; this process does not.
                 stop_pi(&mut child, PI_STOP);
                 return Err(reload(&exe, &row.id));
+            }
+            if watched.elapsed() >= WATCHDOG_POLL {
+                watched = Instant::now();
+                if adapter_missing(&mut env, &row.id, started.elapsed())? {
+                    print!("  adapter missing: restarting pi for {}…\n", row.name);
+                    let _ = std::io::stdout().flush();
+                    stop_pi(&mut child, PI_STOP);
+                    continue 'run;
+                }
             }
             std::thread::sleep(FILE_POLL);
         };
@@ -176,6 +194,39 @@ fn stop_pi(child: &mut std::process::Child, grace: Duration) {
     }
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// The adapter watchdog (contract §6.7 "Adapter watchdog"): whether the
+/// Session has been `stopped` for more than [`ADAPTER_WATCHDOG`] while the pi
+/// started `running` ago runs. If so, appends the one `error` Event, in the
+/// transaction that re-checks the state, and returns true.
+fn adapter_missing(env: &mut Env, id: &SessionId, running: Duration) -> Result<bool, CpdError> {
+    let row = env.store.read(|conn| row::load(conn, id))?;
+    if row.state != State::Stopped {
+        return Ok(false);
+    }
+    let since = OffsetDateTime::parse(&row.state_at, &Rfc3339)
+        .map_err(|e| bad_row(format!("{} has state_at {:?}: {e}", row.id, row.state_at)))?;
+    // A `stopped` the wrapper set when the previous pi exited does not count while no pi ran.
+    let stopped_for = Duration::try_from(OffsetDateTime::now_utc() - since).unwrap_or_default().min(running);
+    if stopped_for <= ADAPTER_WATCHDOG {
+        return Ok(false);
+    }
+    let seconds = stopped_for.as_secs();
+    env.store.write("session run", |tx| {
+        let now = row::load(tx, id)?;
+        if now.state != State::Stopped || now.state_at != row.state_at {
+            return Ok(false);
+        }
+        let message = format!(
+            "Session {}: pi has run for {seconds} s with the adapter reporting stopped; the wrapper restarts pi.",
+            row.name
+        );
+        let details = json!({"session": row.id, "state_since": row.state_at, "seconds": seconds});
+        let data = json!({"source": "session run", "code": ErrorCode::AdapterMissing.as_str(), "message": message, "details": details});
+        append(tx, scoped(NewEvent::new(Kind::Error, message.clone(), data), &row))?;
+        Ok(true)
+    })
 }
 
 /// Replaces this process with the newly installed cpd, which resumes pi on

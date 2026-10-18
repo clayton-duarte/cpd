@@ -1,14 +1,14 @@
 import { CpdError, isObject } from "./cpd.ts";
 import type { Message } from "./pi.ts";
 
-/** commands.md §15.6: the custom type of the message that lists new Context records. */
+/** commands.md §15.7: the custom type of the message that lists new Context records. */
 export const CONTEXT_TYPE = "cpd-context";
 
 /** At most this many records are listed in one message; the rest are named by a count and a command. */
 export const MAX_LISTED = 20;
 
 /**
- * §15.6 "Cursor": the greater of `registered_event` and the greatest `details.event` of the session's `cpd-context`
+ * §15.7 "Cursor": the greater of `registered_event` and the greatest `details.event` of the session's `cpd-context`
  * messages whose `details.delivered_to` is this Session (the fork-safe rule of §15.2 step 4: a fork's file starts with
  * its source's messages, whose `delivered_to` is the source's id).
  */
@@ -25,7 +25,7 @@ export function contextCursorFrom(registeredEvent: number, entries: readonly unk
 /** A `context-record` Event as `events list` prints it, reduced to what the update needs. */
 export type RecordEvent = { event: number; record: string; seq: number };
 
-/** The Event kinds of the Manager's `Plans:` digest (commands.md §15.6, B3-A5). */
+/** The Event kinds of the Manager's `Plans:` digest (commands.md §15.7, B3-A5). */
 export const PLAN_KINDS = ["plan-created", "plan-phase", "pr-opened", "pr-merged", "job-failed", "escalation", "plan-done"] as const;
 
 /** A Plan Event as `events list` prints it, reduced to what the digest needs. */
@@ -117,7 +117,7 @@ export function parseRecords(out: Record<string, unknown>): ContextRecord[] {
   });
 }
 
-/** A `brief` is shown short: its first line and its Plan (§15.6); the whole text is `cpd context show --record <id>`. */
+/** A `brief` is shown short: its first line and its Plan (§15.7); the whole text is `cpd context show --record <id>`. */
 const line = (r: ContextRecord): string =>
   r.kind === "brief"
     ? `- ${r.id} brief (${r.at.slice(0, 10)}): ${r.text.trimStart().split("\n")[0]!.trimEnd()}${r.plan !== undefined ? ` Plan ${r.plan}.` : ""}`
@@ -146,7 +146,7 @@ export function pendingSection(plans: readonly PendingPlan[]): string[] {
 }
 
 /**
- * §15.6: the message for the records the Event list names, written by other Sessions, oldest first, and, for a
+ * §15.7: the message for the records the Event list names, written by other Sessions, oldest first, and, for a
  * Manager (`plans` given), the `Plans:` digest after them. Undefined when neither section has anything left after
  * skipping this Session's own records (the cursor then stays), unless `pending` (a Manager's fresh `Pending work:`,
  * not cursor-based) has a line. `details.event` is the highest Event id read of the records and `Plans:`, own records
