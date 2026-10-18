@@ -234,7 +234,7 @@ export class FakePi implements PiApi {
   readonly sent: Sent[] = [];
   /** The session's entries, as pi's `getEntries()` returns them: messages and custom entries appended so far. */
   entries: unknown[] = [];
-  readonly tools: ToolDefinition[] = [];
+  readonly tools: ToolDefinition<any, any, any>[] = [];
   readonly notices: string[] = [];
   /** The notices shown with level `error`. */
   readonly errorNotices: string[] = [];
@@ -252,7 +252,7 @@ export class FakePi implements PiApi {
   /** Commands started by `sendUserMessage` and not finished. */
   readonly commandsRunning = new Set<Promise<void>>();
   readonly userMessages: { content: string; options: { expandPromptTemplates: boolean } }[] = [];
-  mode = "tui";
+  mode: Ctx["mode"] = "tui";
   sessionId = ID;
 
   readonly events = {
@@ -266,28 +266,30 @@ export class FakePi implements PiApi {
     },
   };
 
-  on(event: string, handler: (event: any, ctx: Ctx) => unknown): () => void {
+  /** pi types `on` as one overload per event; the fake keeps every handler by name and fires it with a `Ctx`. */
+  readonly on = ((event: string, handler: (event: any, ctx: Ctx) => unknown): (() => void) => {
     this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
     return () => {};
-  }
+  }) as PiApi["on"];
 
   /** The `exec` calls (argv, without the command) started and not yet finished: a call is in flight from the moment the adapter makes it, however long the process takes to start. */
   readonly execsRunning = new Set<string[]>();
 
-  exec(command: string, args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+  exec(command: string, args: string[]): ReturnType<PiApi["exec"]> {
     this.execsRunning.add(args);
     return new Promise((resolve) => {
       execFile(command, args, { encoding: "utf8" }, (err, stdout, stderr) => {
         this.execsRunning.delete(args);
-        resolve({ stdout, stderr, code: err ? (typeof err.code === "number" ? err.code : 1) : 0 });
+        resolve({ stdout, stderr, code: err ? (typeof err.code === "number" ? err.code : 1) : 0, killed: err?.killed ?? false });
       });
     });
   }
 
-  sendMessage(message: Message, options: SendOptions): void {
-    this.sent.push({ message, options });
+  readonly sendMessage: PiApi["sendMessage"] = (message, options) => {
+    if (!options || typeof message.content !== "string") throw new Error("the adapter always passes send options and a string content");
+    this.sent.push({ message: { ...message, content: message.content }, options });
     this.entries.push({ type: "custom_message", customType: message.customType, content: message.content, display: message.display, details: message.details });
-  }
+  };
 
   appendEntry(customType: string, data: unknown): void {
     this.entries.push({ type: "custom", customType, data });
@@ -301,8 +303,14 @@ export class FakePi implements PiApi {
     return this.sessionName;
   }
 
-  registerTool(tool: ToolDefinition): void {
+  readonly registerTool: PiApi["registerTool"] = (tool) => {
     this.tools.push(tool);
+  };
+
+  /** Runs a registered tool like pi does. The adapter's tool reads nothing of the tool context, so the fake passes none of pi's. */
+  async runTool(tool: ToolDefinition<any, any, any>): Promise<{ text: string; details: unknown }> {
+    const out = await tool.execute("call-1", {}, undefined, undefined, undefined as never);
+    return { text: out.content.map((c) => (c.type === "text" ? c.text : "")).join(""), details: out.details };
   }
 
   registerCommand(name: string, options: { handler: (args: string, ctx: CommandCtx) => Promise<void> }): void {
@@ -327,7 +335,7 @@ export class FakePi implements PiApi {
           this.notices.push(m);
           if (level === "error") this.errorNotices.push(m);
         }, getEditorText: () => this.editorText },
-      sessionManager: { getSessionId: () => this.sessionId, getEntries: () => this.entries },
+      sessionManager: { getSessionId: () => this.sessionId, getEntries: () => this.entries as ReturnType<Ctx["sessionManager"]["getEntries"]> },
       isIdle: () => this.idle,
       hasPendingMessages: () => this.pendingMessages,
     };
