@@ -149,7 +149,7 @@ the build already warns about.
   - **widgets, statusbar, logs:** the `?` ends the view with the error (then W1: respawn).
   Same code, same data: `read::widgets` also parses PR rows (`Checks::parse`, `review_decision`) that the StatusBar
   never draws, so an unexpected value in one pull-request row can end the StatusBar (see F1).
-- **where:** `tui/src/plan/mod.rs:197-221` (`:201`, `:207`, `:219`, `:221`); `tui/src/tree/mod.rs:93-97`;
+- **where:** `tui/src/plan/mod.rs:197-221` (`:201`, `:207`, `:219`, `:221`); `tui/src/tree/mod.rs:92-98`;
   `tui/src/widgets/mod.rs:80-83`; `tui/src/statusbar/mod.rs:134-136`; `tui/src/logs/mod.rs:101-102`;
   `tui/src/read/widgets.rs:189,194` (`bad_row`).
 - **evidence:** by reading the lines above (unverified at runtime: provoking a read error needs a write or a `tui`
@@ -170,7 +170,7 @@ the build already warns about.
   ones and adds a missing StatusBar (amendment 15). A tree/plan/widgets/chat pane that is gone (the User ran
   `kill-pane`, or `build()` failed half-way after `create_session`) is never recreated; the call reports `built:
   false`. A failure inside `build()` (any `?` after the first pane) therefore leaves a permanent partial cockpit.
-- **where:** `tui/src/cockpit.rs:48-58` (the `built` branch), `:93-103` (`build`), `:106-120` (only the StatusBar is
+- **where:** `tui/src/cockpit.rs:57-68` (the `built` branch), `:108-129` (`build`), `:139-150` (only the StatusBar is
   added).
 - **evidence:** by reading; `grep -n "kill-pane" cli/tests/tui.rs` → only the StatusBar test (`:304`); no test kills
   another layout pane or fails `build` half-way. Not run (`cpd tui` is out of bounds). **Unverified at runtime.**
@@ -438,7 +438,7 @@ them), and macOS (`sysctl` per 2 s, W10): no macOS host.
 
 ### tui-G2 — Terminal set-up and failure handling are copied into nine views
 - **what:** `ratatui::init()` / `EnableMouseCapture` / `restore()` appear nine times, `terminal_failed` is defined
-  three times in three spellings (a closure, a fn, an inline `map_err`), and `ErrorCode::NotATerminal` is used for any
+  three times (two closures and a fn) and inlined as `map_err` in the other views, and `ErrorCode::NotATerminal` is used for any
   terminal I/O failure ("The terminal of cpd tui view X failed"), not only for "stdin is not a terminal". The
   widgets and statusbar loops are the same loop (`TICK`/`COALESCE`/`REFRESH` constants declared twice). This is where
   W1, W4, W9 and F2 would each be fixed once.
