@@ -13,23 +13,10 @@ Plan `quality`, Job `synthesis` (Attempt `synthesis-3-a1`). This file merges the
 
 ## Summary
 
-1. **Work: sound core, weak edges.** The schema matches contract §4.4, Events are tied to their transactions, and the merge, ladder and locks are well tested. Every serious defect is at a boundary:
-   - A commit made after `attempt submit` is merged without any check (engine-W1).
-   - A spawn failure burns the retry ladder: 6 Jobs failed this way (engine-W2, fixed by the open pi-pin `ladder` PR).
-   - No git, tmux or poll subprocess has a deadline, and some run under locks or inside the engine's single-threaded tick.
-   - An old process keeps writing after another process has migrated the store (store-W1).
-   - Nine tests call the real `gh`.
-   - The engine never writes `watch-stopped` (19 starts, 0 stops).
-   - Unknown Event kinds cost the adapter one turn per Event.
-2. **CI and tests.** `main` is red at `c565515` on `e2_kills_the_window_of_a_dead_parked_lead`, one of the nine tests that reach the real `gh` (I did not diagnose the failure). `ubuntu-latest` moves to Ubuntu 26 tomorrow, 2026-10-19 (pi-ci-W8).
-3. **Fast: SQL is not the bottleneck.** An engine tick is 0.3 ms of SQL. The measured costs:
-   - The Rust test run is serial: 175–200 s locally, about 54 s with the binaries run in parallel.
-   - `plan show` scans the whole `history` table: 9.4 ms now, and it grows with history.
-   - The widgets, statusbar and (since tui-dots) tree views re-read 1.4–1.65 MB/s each while idle (live, re-measured).
-   - `history` is 80 % of the database.
-   - The dev profile's full debug info costs 4.4 GB per worktree.
-   - sccache, now warm (96 % hits), has not yet made the CI `rust` job faster (339 s against 307 s before).
-4. **Good: mostly duplication and dead code.** Six warnings are printed on every build and nothing gates them. The ledger is written twice, the open-the-store block is pasted 23 times, there are nine terminal set-ups and four ways of following Events, and test helpers are copied into 10–12 files.
+1. **Work: the core is sound and the defects are at its edges.** The schema matches contract §4.4, Events are tied to their transactions, and the merge, ladder and locks are well tested. The serious defects: a commit made after `attempt submit` is merged unchecked (engine-W1); a spawn failure burns the retry ladder, and 6 Jobs failed that way (engine-W2, fixed by the open pi-pin `ladder` PR); no git, tmux or poll subprocess has a deadline, though some run under locks or in the one-thread engine tick; old processes keep writing after a migration (store-W1); nine tests call the real `gh`; the engine never writes `watch-stopped` (19 starts, 0 stops); and an unknown Event kind costs the adapter one turn per Event.
+2. **CI is red and has a deadline.** `main` is red at `c565515` on `e2_kills_the_window_of_a_dead_parked_lead`, one of the nine `gh`-reaching tests (not diagnosed). `ubuntu-latest` moves to Ubuntu 26 tomorrow, 2026-10-19 (pi-ci-W8).
+3. **Fast: SQL is not the bottleneck** (an engine tick is 0.3 ms of SQL). The measured costs: the Rust test binaries run serially (175–200 s, about 54 s in parallel); `plan show` scans all of `history` (9.4 ms now, growing); the widgets, statusbar and (since tui-dots) tree views each re-read 1.4–1.65 MB/s while idle (re-measured live); `history` is 80 % of the database; full debug info costs 4.4 GB per worktree; and warm sccache (96 % hits) has not yet made the CI `rust` job faster (339 s against 307 s before).
+4. **Good: mostly duplication and dead code.** Six warnings print on every build and nothing gates them. The ledger is written twice, the open-the-store block is pasted 23 times, there are nine terminal set-ups and four ways of following Events, and test helpers are copied into 10–12 files.
 
 ## Ranked list
 
