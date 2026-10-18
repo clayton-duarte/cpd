@@ -565,6 +565,40 @@ fn new_again_with_the_same_flags_is_already_and_redoes_missing_steps() {
 }
 
 #[test]
+fn new_again_in_an_archived_context_is_already_not_archived() {
+    let env = TestEnv::new();
+    setup(&env);
+    let first = new_plan_only(&env, "pay");
+    env.cpd(&["context", "archive", "ctx"]).ok();
+    let again = env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok();
+    assert_eq!(again["already"], true);
+    assert_eq!(again["plan"], first["plan"]);
+    // A new Plan, and a rerun with other flags, are still refused in this order.
+    refused(&env.cpd(&["plan", "new", "other", "--context", "ctx", "--title", "T"]), "archived", 3);
+    refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Other"]), "plan_exists", 3);
+}
+
+#[test]
+fn new_and_rename_titles_are_1_to_200_characters_with_no_control_characters() {
+    let env = TestEnv::new();
+    setup(&env);
+    let (long, ok) = ("a".repeat(201), "a".repeat(200));
+    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    for title in [long.as_str(), "a\nb", "a\tb", "a\u{7f}b"] {
+        refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", title]), "usage", 2);
+        refused(&env.cpd(&["plan", "rename", "--plan", "nope", "--title", title]), "usage", 2);
+    }
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+    env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", &ok]).ok();
+    for title in [long.as_str(), "a\nb", "a\tb"] {
+        refused(&env.cpd(&["plan", "rename", "--plan", "pay", "--title", title]), "usage", 2);
+    }
+    assert!(events(&env, "plan-renamed").is_empty());
+    let renamed = "b".repeat(200);
+    assert_eq!(env.cpd(&["plan", "rename", "--plan", "pay", "--title", &renamed]).ok()["plan"]["title"], renamed.as_str());
+}
+
+#[test]
 fn new_refusals_write_nothing() {
     let env = TestEnv::new();
     setup(&env);

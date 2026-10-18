@@ -125,6 +125,8 @@ pub struct Timeouts {
     pub fork_quiet_seconds: u32,
     /// A distill run kills its pi after this (§4.6).
     pub distill_minutes: u32,
+    /// A Worker's tool call idle this long has its processes killed (§3.4 A4); 0 = off.
+    pub stall_seconds: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -245,6 +247,7 @@ impl Config {
             store_busy_ms: positive(&mut r, "timeouts.store_busy_ms", 5000)?,
             fork_quiet_seconds: positive(&mut r, "timeouts.fork_quiet_seconds", 5)?,
             distill_minutes: positive(&mut r, "timeouts.distill_minutes", 15)?,
+            stall_seconds: r.get("timeouts.stall_seconds", 1200, |v| int(v, 0, u32::MAX))?,
         };
         let watch = Watch {
             tick_seconds: positive(&mut r, "watch.tick_seconds", 5)?,
@@ -312,7 +315,8 @@ struct Reader<'a> {
 
 impl Reader<'_> {
     fn invalid(&self, key: &str, why: impl std::fmt::Display) -> CpdError {
-        CpdError::new(ErrorCode::ConfigInvalid, format!("config.toml: `{key}` {why}."))
+        let why = why.to_string();
+        CpdError::new(ErrorCode::ConfigInvalid, format!("config.toml: `{key}` {}.", why.trim_end_matches('.')))
             .with("key", key)
             .with("path", self.path.display().to_string())
     }
@@ -392,6 +396,7 @@ fn int(value: Value, min: u32, max: u32) -> Result<u32, String> {
     match value {
         Value::Integer(i) => match u32::try_from(i) {
             Ok(n) if (min..=max).contains(&n) => Ok(n),
+            _ if max == u32::MAX && i > i64::from(max) => Err(format!("must be at most {max}, got {i}")),
             _ if max == u32::MAX => Err(format!("must be at least {min}, got {i}")),
             _ if min == max => Err(format!("must be {min}, got {i}")),
             _ => Err(format!("must be between {min} and {max}, got {i}")),

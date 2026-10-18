@@ -223,11 +223,19 @@ pub fn view(cwd: &Path, number: i64) -> Result<View, CpdError> {
 }
 
 /// Inline review comments, which `gh pr view` does not list. `{owner}/{repo}`
-/// are filled in by `gh` from `cwd`'s repo.
+/// are filled in by `gh` from `cwd`'s repo. Every page is read: `gh` 2.45 has no
+/// `--slurp`, so `--paginate` prints the pages as consecutive JSON arrays.
 pub fn inline_comments(cwd: &Path, number: i64) -> Result<Vec<InlineComment>, CpdError> {
-    let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments");
-    let args = ["api", endpoint.as_str()];
-    parse(&args, &run(cwd, &args)?)
+    let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments?per_page=100");
+    let args = ["api", endpoint.as_str(), "--paginate"];
+    let stdout = run(cwd, &args)?;
+    let mut comments = Vec::new();
+    for page in serde_json::Deserializer::from_str(&stdout).into_iter::<Vec<InlineComment>>() {
+        comments.extend(page.map_err(|e| {
+            failed(&args, format!("gh api printed unexpected JSON: {e}."), Some(0), "").with("stdout", tail(&stdout, TAIL_LINES))
+        })?);
+    }
+    Ok(comments)
 }
 
 // The poller (contract §7.6, commands.md §9.2): one search, one lookup.
