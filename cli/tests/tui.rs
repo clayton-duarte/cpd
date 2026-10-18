@@ -188,13 +188,36 @@ fn tui_builds_main_in_a_cockpit_that_has_only_a_park_window() {
     assert_eq!(env.cpd(&["tui"]).ok()["built"], false);
 }
 
-/// Kills a pane's program, as a crash would. Not while a tmux client is
-/// still disconnecting: tmux 3.4 was seen to lose the `SIGCHLD` of a child
-/// killed then (the pane is dead, its status never read, so `pane-died` never
-/// fires), about one time in two right after `display`, never 20 ms later.
-fn kill(pid: u32) {
-    std::thread::sleep(Duration::from_millis(100));
+/// Kills the program of `pane` (its pid `pid`), as a crash would, with the
+/// pane's tty held open by the returned file: keep it until tmux has seen the
+/// pane die, and kill no other pane of the server before then.
+///
+/// Why the tty: tmux before 3.6, built with libutempter (Ubuntu 24.04's 3.4,
+/// CI's), can lose the `SIGCHLD` of a pane whose tty closes first. On that
+/// EOF it calls `utempter_remove_record`, which sets `SIGCHLD` to `SIG_DFL`
+/// while it forks and waits for its helper. The kernel closes a dying
+/// process's files before it signals the parent, so under load the signal
+/// lands in that window and is discarded. The pane is then dead (`pane_dead`),
+/// but its status is never read and `pane-died` never fires, until the
+/// server's next `SIGCHLD`. That is tmux's bug, fixed upstream in tmux 3.6
+/// (commit fa5f3cef3d, "Send SIGCHLD after utempter_remove_record as well",
+/// tmux GitHub issue 4559); contract §6.1 notes it. While the tty is held
+/// there is no EOF, so tmux reads the status on `SIGCHLD` with no utempter
+/// call running, and these tests pin cpd's contract (which pane the hook
+/// respawns), not that race. tmux makes that `utempter_remove_record` call
+/// on every pane death, so another pane killed before tmux has seen this one
+/// die could have its `SIGCHLD` lost the same way.
+fn kill(env: &TestEnv, pane: &str, pid: u32) -> fs::File {
+    use std::os::unix::fs::OpenOptionsExt;
+    let tty = tmux_out(env, &["display", "-p", "-t", pane, "#{pane_tty}"]);
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(nix::fcntl::OFlag::O_NOCTTY.bits())
+        .open(tty.trim())
+        .unwrap_or_else(|e| panic!("open {}: {e}", tty.trim()));
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), nix::sys::signal::Signal::SIGKILL).unwrap();
+    held
 }
 
 /// `(dead, pid)` of a pane.
@@ -254,13 +277,15 @@ fn a_killed_view_respawns_at_once_and_the_engine_stays_dead() {
     let tree = view(&before, "tree").clone();
     let (_, engine_pid) = pane_state(&env, engine);
     // The engine first: once dead, it makes no tmux calls of its own.
-    kill(engine_pid);
+    let engine_tty = kill(&env, engine, engine_pid);
     wait_until("the engine pane to die", || pane_state(&env, engine).0);
-    kill(tree.pid);
+    drop(engine_tty);
+    let tree_tty = kill(&env, &tree.id, tree.pid);
     wait_until("the tree to respawn", || {
         let p = view(&main_panes(&env), "tree").clone();
         !p.dead && p.pid != tree.pid
     });
+    drop(tree_tty);
     std::thread::sleep(Duration::from_millis(300));
     assert!(pane_state(&env, engine).0, "the engine pane stays dead for E2");
     let after = main_panes(&env);
@@ -277,12 +302,11 @@ fn tui_respawns_a_dead_pane_of_the_layout_in_place_and_sets_the_hook_again() {
     tmux_out(&env, &["set-hook", "-gu", "pane-died"]);
     let before = main_panes(&env);
     let (tree, bar) = (view(&before, "tree").clone(), view(&before, "statusbar").clone());
-    kill(tree.pid);
-    kill(bar.pid);
-    wait_until("the dead tree and statusbar panes", || {
-        let panes = main_panes(&env);
-        view(&panes, "tree").dead && view(&panes, "statusbar").dead
-    });
+    for pane in [&tree, &bar] {
+        let tty = kill(&env, &pane.id, pane.pid);
+        wait_until(&format!("the dead {} pane", pane.view), || pane_state(&env, &pane.id).0);
+        drop(tty);
+    }
 
     let out = env.cpd(&["tui"]).ok();
     assert_eq!(out["built"], false, "{out}");
