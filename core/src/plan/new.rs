@@ -10,11 +10,10 @@ use serde_json::{Value, json};
 use super::lead::{self, Lead};
 use super::{Env, NewArgs, bad_row, read_text_file, write_file};
 use crate::args::Text;
-use crate::context::render::markdown;
-use crate::context::{By, ContextRow, Contexts, Draft, PlanRef, Record, plan_repos};
+use crate::context::{By, ContextRow, Contexts, Draft, PlanRef, digest};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
-use crate::ids::{ContextId, PlanId, RecordKind, SessionId};
+use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::Output;
 
 /// The Plan as `plan new` reads it back: no PR is needed (a Plan starts with none, R34 A12).
@@ -237,24 +236,17 @@ fn env_id<T>(name: &str, parse: fn(&str) -> Result<T, CpdError>) -> Result<Optio
 }
 
 /// Step 3: `run/<plan>/lead-message.md`: the header, the brief, then the
-/// Context rendered as `context show` does, every record (the Lead is always fresh).
+/// Context as the first message gives it (§4.6 "Consumers": its digest and the
+/// records after it, or every record; the Lead is always fresh).
 fn write_message(env: &mut Env, plan: &Created, brief: Option<&Text>) -> Result<(), CpdError> {
-    let (context, records, repos) = env.store.read(|conn| {
-        let context = ContextRow::require(conn, &plan.context)?;
-        let mut stmt = conn.prepare(&format!("SELECT {} FROM context_records WHERE context = ?1 ORDER BY seq", Record::COLUMNS))?;
-        let mut records = stmt.query_map([plan.context.as_str()], Record::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
-        // This Plan's own brief is in the message in full: it is not listed again.
-        if brief.is_some() {
-            records.retain(|(_, r)| !(r.kind() == RecordKind::Brief && r.plan().is_some_and(|p| p.id == plan.id)));
-        }
-        let repos = plan_repos(conn, &env.config.machine, &records)?;
-        Ok((context, records, repos))
-    })?;
+    // This Plan's own brief is in the message in full: it is not listed again.
+    let own_brief_of = brief.map(|_| &plan.id);
+    let context = env.store.read(|conn| digest::first_message(conn, &env.home, &env.config.machine, &plan.context, own_brief_of))?;
     let mut message = vec![header(plan)];
     if let Some(brief) = brief {
         message.push(brief.as_str().trim_end().to_owned());
     }
-    message.push(markdown(&context.title, context.jira.as_deref(), &records, 0, &repos));
+    message.push(context);
     write_file(&env.home.lead_message(&plan.id), &(message.join("\n\n") + "\n"))
 }
 

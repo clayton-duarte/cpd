@@ -4,18 +4,26 @@
 //! `run/context-digests/<context>/` (paths through [`CpdHome`]); the latest is
 //! the one with the highest `<upto_seq>`. [`validate`] is pure: the digest's
 //! bytes and the ids of the records in force in, the failures out.
+//! [`first_message`] is the one rendering of "the Context" for a first message (D6).
 
 use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use rusqlite::Connection;
+
+use super::render::markdown;
+use super::{ContextRow, Record, plan_repos};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::ids::{ContextId, RecordId};
+use crate::ids::{ContextId, MachineName, PlanId, RecordId, RecordKind};
 
 /// The size limit of a digest, in bytes (32 KB; contract §4.6).
 pub const LIMIT: usize = 32_768;
+
+/// The most raw records a first message lists after the digest (contract §4.6 "Consumers", D6).
+pub const NEWER_MAX: usize = 20;
 
 /// A digest file on disk.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -154,6 +162,48 @@ pub fn discard(home: &CpdHome, context: &ContextId, upto_seq: u64) -> Result<(),
         Err(e) if e.kind() != io::ErrorKind::NotFound => Err(io_error("remove", &tmp, &e)),
         _ => Ok(()),
     }
+}
+
+/// "The Context" of a Lead's or Manager's first message (contract §4.6 "Consumers", D6), read in `conn`'s
+/// transaction. With a digest: its text, then the records written after its `upto_seq`, oldest first, at
+/// most [`NEWER_MAX`], rendered as `context show --since <upto_seq>` renders them, then, when more exist,
+/// `and <K> more: cpd context show --context <c> --since <seq>`, `<seq>` the `seq` before the first record
+/// not listed. With no digest yet: `context show` as markdown, every record.
+///
+/// `own_brief_of` is the Plan whose brief the message holds in full: that brief is not listed again.
+/// The digest is read before the records, so every record it covers is in what is read.
+pub(crate) fn first_message(
+    conn: &Connection,
+    home: &CpdHome,
+    machine: &MachineName,
+    context: &ContextId,
+    own_brief_of: Option<&PlanId>,
+) -> Result<String, CpdError> {
+    let row = ContextRow::require(conn, context)?;
+    let digest = latest(home, context)?;
+    let mut stmt = conn.prepare(&format!("SELECT {} FROM context_records WHERE context = ?1 ORDER BY seq", Record::COLUMNS))?;
+    let mut records = stmt.query_map([context.as_str()], Record::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+    if let Some(plan) = own_brief_of {
+        records.retain(|(_, r)| !(r.kind() == RecordKind::Brief && r.plan().is_some_and(|p| p.id == *plan)));
+    }
+    let repos = plan_repos(conn, machine, &records)?;
+    let Some(digest) = digest else {
+        return Ok(markdown(&row.title, row.jira.as_deref(), &records, 0, &repos));
+    };
+    let upto = i64::try_from(digest.upto_seq).unwrap_or(i64::MAX);
+    let first = records.partition_point(|(seq, _)| *seq <= upto);
+    let end = records.len().min(first + NEWER_MAX);
+    let mut parts = vec![digest.text.trim_end().to_owned()];
+    if end > first {
+        // Judged from the records up to the last one listed, so no listed record is "superseded by" an unlisted one.
+        parts.push(markdown(&row.title, row.jira.as_deref(), &records[..end], upto, &repos).trim_end().to_owned());
+    }
+    if end < records.len() {
+        let more = records.len() - end;
+        let before = records[end].0 - 1;
+        parts.push(format!("and {more} more: cpd context show --context {context} --since {before}"));
+    }
+    Ok(parts.join("\n\n"))
 }
 
 #[cfg(test)]
