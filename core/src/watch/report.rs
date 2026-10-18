@@ -22,13 +22,11 @@ use crate::store::Store;
 /// The step that failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Step {
-    Start,
     E1,
     E2,
     E3,
     E4,
     E5,
-    E6,
     E7,
     Workers,
 }
@@ -36,13 +34,11 @@ pub(super) enum Step {
 impl fmt::Display for Step {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Step::Start => "start-up",
             Step::E1 => "E1 (Escalations)",
             Step::E2 => "E2 (liveness)",
             Step::E3 => "E3 (scheduling)",
             Step::E4 => "E4 (completion)",
             Step::E5 => "E5 (PR)",
-            Step::E6 => "E6 (Contexts)",
             Step::E7 => "E7 (PR start)",
             Step::Workers => "the @cpd_workers step",
         })

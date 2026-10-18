@@ -147,3 +147,21 @@ test("a Worker does not read the Plan", async (t) => {
   assert.deepEqual(f.argvs().map((a) => a.slice(0, 2).join(" ")), ["session show", "session state"]);
   assert.deepEqual(f.pi.tools, [], "cpd_plan_review is for Plan Leads only");
 });
+
+test("a Manager reads no Plan, registers no plan-review tool, opens no plannotator and has no blocking reason", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.respond("session-show", sessionShow({ role: "manager", plan: null, plan_lead: false }));
+  f.respond("plan-show", planShow({ escalations: [{ id: "j-a1-q1" }] }));
+  f.load();
+  await f.pi.fire("session_start");
+  await waitFor("the follower", () => f.follows().length > 0);
+  f.emit(ev(101, "plan-review", { data: { review: "r1", status: "pending" } }), ev(102, "session-renamed", { session: ID, data: { name: "ctx-manager" } }));
+  await waitFor("the rename", () => f.pi.sessionName === "ctx-manager");
+  await settle();
+  assert.deepEqual(f.argvs().map((a) => a.slice(0, 2).join(" ")), ["session show", "session state"], "no plan show");
+  assert.deepEqual(stateCalls(f), ["idle"], "never blocked");
+  assert.deepEqual(f.pi.tools, []);
+  assert.deepEqual(f.pi.emitted, [], "nothing is asked of plannotator");
+  assert.deepEqual(f.pi.delivered(), []);
+});

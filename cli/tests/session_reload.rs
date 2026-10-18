@@ -132,8 +132,7 @@ fn start_with(state: &str, on_term: &str) -> Fixture {
         .unwrap()
         .write("fixture", |tx| {
             tx.execute_batch(&format!(
-                "INSERT INTO contexts (id, title, created_at, created_on, lead_session, grounded_seq)
-                   VALUES ('ctx', 'Ctx', 't', 'm1', '{LEAD}', 0);
+                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
                  INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at)
                    VALUES ('{LEAD}', 'lead', 'ctx', NULL, NULL, 'Grounded', '{cwd}', 'O3', '{state}', '{at}', '{at}');"
             ))?;
@@ -150,8 +149,8 @@ fn start_with(state: &str, on_term: &str) -> Fixture {
 
     let home_dir = env.home().display().to_string();
     env.fake_pi(&format!(
-        "echo $$ >> \"{home_dir}/pi.pids\"\n\
-         trap 'echo TERM >> \"{home_dir}/pi.signals\"; {on_term}' TERM\n\
+        "trap 'echo TERM >> \"{home_dir}/pi.signals\"; {on_term}' TERM\n\
+         echo $$ >> \"{home_dir}/pi.pids\"\n\
          while :; do\n  if [ -e \"{home_dir}/pi.exit\" ]; then rm \"{home_dir}/pi.exit\"; exit 0; fi\n  sleep 0.2\ndone"
     ));
 
@@ -170,7 +169,10 @@ fn start_with(state: &str, on_term: &str) -> Fixture {
     let pane = ok(&["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", &command]);
     ok(&["set", "-p", "-t", &pane, "@cpd_session", LEAD]);
     let fixture = Fixture { env, installed, session_file, pane };
-    wait_until("the first pi", || fixture.env.calls("pi").len() == 1);
+    // The fake records its call before it runs its body, so the call alone does not
+    // say that the pid is written. The pid is written last, after the trap is set:
+    // once it is there, the pi can be signalled and its pid read.
+    wait_until("the first pi", || fixture.env.calls("pi").len() == 1 && fixture.pi_pids().len() == 1);
     fixture
 }
 
@@ -259,6 +261,7 @@ fn a_pi_that_ignores_sigterm_is_killed_after_ten_seconds_and_the_new_binary_star
     assert_eq!(f.signals(), "TERM\n", "SIGTERM once, then SIGKILL");
     assert_eq!(f.runs(), [format!("{pid} session run {LEAD}")], "the same process re-execed the new file");
     assert_eq!(f.pane_pid(), pid);
+    wait_until("the new pi to record its pid", || f.pi_pids().len() == 2);
     let new_pi = f.pi_pids()[1];
     assert!(alive(new_pi) && new_pi != old_pi);
     // pi ignores SIGTERM, so the pane's hangup is what ends the new one.
