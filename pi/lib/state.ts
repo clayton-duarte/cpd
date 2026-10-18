@@ -13,6 +13,7 @@ export class Facts {
   active = false;
   private opened: Open[] = [];
   private signals = 0;
+  private prompts = 0;
 
   open(key: string, label: string): boolean {
     if (this.opened.some((o) => o.key === key)) return false;
@@ -41,6 +42,17 @@ export class Facts {
         return;
       }
     }
+  }
+
+  /** pi's `ui_prompt_start` (`active: true`) and `ui_prompt_end`: one reason, `dialog`, while any prompt is open. An end with nothing open changes nothing. */
+  prompt(active: boolean): boolean {
+    if (active) {
+      this.prompts += 1;
+      return this.prompts === 1 && this.open("ui_prompt", "dialog");
+    }
+    if (this.prompts === 0) return false;
+    this.prompts -= 1;
+    return this.prompts === 0 && this.close("ui_prompt");
   }
 
   /** `blocked` with the label of the most recently opened reason while any is open; else `working` while active; else `idle`. */
