@@ -8,10 +8,14 @@ export type SendOptions = { triggerTurn: boolean; deliverAs: "followUp" };
 
 export type Ctx = {
   mode: string;
-  ui: { notify(message: string, level?: string): void };
+  ui: { notify(message: string, level?: string): void; getEditorText(): string };
   sessionManager: { getSessionId(): string; getEntries(): readonly unknown[] };
   isIdle(): boolean;
+  hasPendingMessages(): boolean;
 };
+
+/** The context of an extension command: the only one with `reload()`. It is stale once `reload()` has resolved. */
+export type CommandCtx = Ctx & { reload(): Promise<void> };
 
 export type ToolDefinition = {
   name: string;
@@ -31,4 +35,7 @@ export type PiApi = {
   setSessionName(name: string): void;
   getSessionName(): string | undefined;
   registerTool(tool: ToolDefinition): void;
+  registerCommand(name: string, options: { description?: string; handler: (args: string, ctx: CommandCtx) => Promise<void> }): void;
+  /** With `expandPromptTemplates` an extension command runs at once; without it the text goes to the model. */
+  sendUserMessage(content: string, options: { expandPromptTemplates: boolean }): void;
 };
