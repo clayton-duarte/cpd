@@ -455,8 +455,9 @@ stateDiagram-v2
 ```mermaid
 stateDiagram-v2
   [*] --> draft: job add (phase plan)
+  [*] --> draft: job add --draft (phase dispatch or pr)
   [*] --> queued: job add (phase dispatch or pr)
-  draft --> queued: plan lock
+  draft --> queued: plan lock or job promote
   queued --> running: engine E3 starts an Attempt
   running --> merged: driver A8 merge
   running --> queued: Attempt failed, ladder has a next Tier
@@ -473,9 +474,11 @@ stateDiagram-v2
 | From | To | Moved by | Event |
 |---|---|---|---|
 | (none) | `draft` | `job add --pr <key>` in phase `plan`, into a PR that is `waiting` | `job-added` |
+| (none) | `draft` | `job add --draft --pr <key>` in phase `dispatch` or `pr`, into a PR that is `waiting`, `dispatch` or `open` (`merged` or `cancelled`: `pr_ended`): an **appended** draft (`appended = 1`), no fingerprint; User rule 2026-10-18: work still being defined is a draft Job, so it is in the Ledger and in the Plan view | `job-added` |
 | (none) | `queued` | `job add --pr <key>` in phase `dispatch` or `pr`, into a PR that is `waiting`, `dispatch` or `open` (`merged` or `cancelled`: `pr_ended`): an **appended** Job, fingerprint stored at once (cpd 1 §11 `job add`, kept) | `job-added` |
-| `draft` | `draft` | `job edit` (Locked fields may change only here) | `job-edited` |
+| `draft` | `draft` | `job edit` (Locked fields may change only here), in phase `plan`, `dispatch` or `pr` | `job-edited` |
 | `draft` | `queued` | `plan lock` | `plan-phase` (one Event for the whole lock) |
+| `draft` | `queued` | `job promote` in phase `dispatch` or `pr` (commands §5.8): fingerprint stored, refused with `needs_unavailable` when a Dependency is `cancelled` or `failed` | `job-edited` `{fields: ["status"]}` |
 | `queued` | `running` | engine E3, or `job dispatch` by hand: creates the Attempt (§3.4) | `attempt-started` |
 | `running` | `merged` | driver A8: the merge succeeded; or R (§7.4) when the driver died after A8's compare-and-swap | `job-merged` |
 | `running` | `queued` | driver or engine: the Attempt ended `failed` with a ladder cause (§3.4), the ladder has a next Tier and the automatic Attempts are fewer than `1 + retry_cap` (§9) | `attempt-retry` |
@@ -486,6 +489,8 @@ stateDiagram-v2
 | `running` | `cancelled` | engine E2 or the driver honours the request at its next safe point (§3.4) | `job-cancelled` |
 
 A Job stays `running` from the start of its Attempt until it is `merged`, `queued` again, `failed` or `cancelled`; the Attempt's status (§3.4) says whether it is still being worked on or is being merged. Change (R19): there is no Job status `in_review`, because there is no Job-level review.
+
+**Draft.** A `draft` Job exists in phase `plan` and, since `job add --draft`, in `dispatch` and `pr` too. A draft is never Ready: engine E3 and `job dispatch` never start it. It counts as not done for its PR (§3.7 E4, `pr open` and `pr rebase`: `jobs_not_done`) until it is promoted and merged, or cancelled. A `queued` Job may need a draft Job; it waits until the draft is promoted and merged. `job edit` and `job cancel` work on a draft in every phase where it exists.
 
 **Ready.** A `queued` Job whose every Dependency is `merged`, whose PR is `dispatch` or `open` (R34: a Job of a `waiting` PR waits for its PR to start, §3.8), in a Plan whose phase is `dispatch` or `pr`.
 
@@ -612,7 +617,7 @@ One per machine (D5). Every `tick_seconds`:
 | E1 | **Escalations:** expire `open` Escalations whose `asker_pid` is dead |
 | E2 | **Liveness:** for every Attempt not `ended` whose driver lock is free (the driver died; §3.4): in `merging`, run the merge recovery R (§7.4), which ends it `merged` when its commits are already on the Lead Branch, and otherwise `cancelled` if a cancel was requested, else `crashed`; in any other status, end it `cancelled` if a cancel was requested, else `crashed`. For every Attempt with a live driver: active time over `attempt_minutes` → set `stop_request = timed_out`; Job `cancel_requested_at` set → set `stop_request = cancelled`. For every Session not `stopped` or with a pane: pane dead or missing (`tmux list-panes -a`) → `stopped` with no pane, and a Lead's dead pane's window is killed, or the chat slot's pane is replaced by the placeholder (§3.6) |
 | E3 | **Scheduling:** for each Ready Job, by `jobs.seq` across all Plans, while a slot is free: verify the fingerprint, take the driver lock, create the Attempt, start its driver with the lock inherited (§3.4) |
-| E4 | **Completion**, per PR (R34): for each PR in status `dispatch` with no Job `queued` or `running`, at least one `merged`, and `all_merged_at` null: append `all-merged` (`data.pr` = its key) and set the PR's `all_merged_at`. The Lead answers with `pr open --pr <key>` |
+| E4 | **Completion**, per PR (R34): for each PR in status `dispatch` with no Job `draft`, `queued` or `running`, at least one `merged`, and `all_merged_at` null: append `all-merged` (`data.pr` = its key) and set the PR's `all_merged_at`. The Lead answers with `pr open --pr <key>` |
 | E5 | **PR poll** (hs-d96, hs-d97): run `cpd pr poll` (no `--plan`) as a subprocess (a process boundary, cpd 1 §11 step 5), `pr_poll_seconds` after the **end** of the previous poll (never overlapping, never more often than one per tick), whether or not any Plan is in `pr`. One poll covers every open pull request of the User (§7.6). When the output's `rate_limit.remaining` is below 100, E5 skips polls until `rate_limit.reset_at` and reports one `error` Event with code `gh_rate_limited` (`details`: `remaining`, `reset_at`); the error clears when polling resumes |
 | E6 | **Contexts:** every `context_sync_seconds`, `context sync` each Context that has a remote (§4.6) |
 | E7 | **PR start** (R34, A9): for each Plan in `dispatch`, each PR in status `waiting` whose needs are all `merged` and whose `start_failed_at` is null: start it (§3.8, §7.2). E7 runs after E5 in the same tick, so a PR starts in the tick in which E5's poll sees its last prerequisite merged; it also starts a PR appended in `dispatch` with no needs. A failed start sets `start_failed_at` and appends one `error` Event with code `pr_start_failed` for the Plan's Lead; E7 does not try that PR again, the Lead retries with `cpd pr start <key>` |
@@ -644,7 +649,7 @@ stateDiagram-v2
 | `waiting` | `cancelled` | `pr cancel <key>`, phase `grounding` or `plan` (after: `pr_locked`) | every Job of the PR is `cancelled`, and no PR that is not `cancelled` needs it (`pr_in_use`) | `pr-cancelled` |
 | `waiting` | `dispatch` | **the PR's start**: `plan lock` for every PR with no needs; engine E7 for a PR whose needs are all `merged`; or `pr start <key>` by the Lead | Plan phase `dispatch` (or the lock's own transaction; `pr start` in another phase: `illegal_phase`); the PR `waiting` (`pr start` on a started PR: `already`; on a `cancelled` one: `illegal_transition`); every need `merged` (`pr_not_ready`); its Lead worktree created and `pre-start` passed, R35's rules applied to its Lead Branch (§7.2) | `pr-started` |
 | `waiting` | `waiting`, `start_failed_at` set | engine E7, when the start fails (worktree, remote check or `pre-start`, §7.2) | | `error` with code `pr_start_failed` |
-| `dispatch` | `open` | `pr open --pr <key>` (§7.6) | every Job of the PR `merged` or `cancelled`, at least one `merged` (`jobs_not_done`); the Gate passes | `pr-opened`; and `plan-phase` (`dispatch → pr`) when every PR that is not `cancelled` is now `open` or `merged` (§3.1) |
+| `dispatch` | `open` | `pr open --pr <key>` (§7.6) | every Job of the PR `merged` or `cancelled`, at least one `merged` (`jobs_not_done`; a `draft` Job of the PR blocks it); the Gate passes | `pr-opened`; and `plan-phase` (`dispatch → pr`) when every PR that is not `cancelled` is now `open` or `merged` (§3.1) |
 | `open` | `merged` | `pr poll` (E5, §7.6), in phase `dispatch` or `pr` | the poll sees the PR's pull request `merged` (hs-d96, D7: the open search no longer lists it and the lookup answers `MERGED`) | `pr-merged`; and `plan-done` when every PR that is not `cancelled` is now `merged` (§3.1) |
 
 `merged` and `cancelled` are terminal. A PR can be cancelled only before the lock (A13); a PR still `waiting` after the lock keeps the Plan in `dispatch` until it starts and opens.
@@ -1305,7 +1310,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `plan-review` | a Plan review is requested or decided | plan | `{review, fingerprint, status, feedback?}` |
 | `plan-done` | `pr → done`, when the last PR not `cancelled` is merged; appended each time the Plan reaches `done`, so again after a reopen (D2; cpd 1's `workflow-done`) | plan | `{prs: [{key, number, url, merged_at}]}` |
 | `job-added` | `job add` | plan, job | `{pr, status, appended, tier, needs, review}` |
-| `job-edited` | `job edit` | plan, job | `{fields: [name]}` |
+| `job-edited` | `job edit`; `job promote` (`{fields: ["status"]}`) | plan, job | `{fields: [name]}` |
 | `job-merged` | Job → `merged` | plan, job, attempt | `{sha, tier, cancel_too_late?: true}` |
 | `job-failed` | Job → `failed` | plan, job, attempt? | `{cause, detail, tier, attempts}` |
 | `job-retried` | `job retry` (`failed → queued`) | plan, job | `{tier}` |
@@ -1665,7 +1670,7 @@ The list lives in its own file, not in `.config/wt.toml`, because worktrunk warn
 
 Each command here works on **one PR** (R34, A14), selected by `--pr <key>` (§1.3), except `pr poll`, which has no `--pr`: it polls every open pull request of the User at once (hs-d96). Each PR has its own Gate run and its own pull request on its repo's GitHub. `gh` runs with cwd = the PR's Lead worktree, so it addresses the PR's repo; `pr poll`'s calls (`gh api graphql`) address no repo.
 
-- **`pr open --pr <key>`**: the PR must be `dispatch` (`open` or `merged`: `already`; `waiting` or `cancelled`: `illegal_transition`), and every Job of the PR `merged` or `cancelled`, at least one `merged` (`jobs_not_done`). Under the per-repo lock (§7.4) and after running R there, held until the push has finished:
+- **`pr open --pr <key>`**: the PR must be `dispatch` (`open` or `merged`: `already`; `waiting` or `cancelled`: `illegal_transition`), and every Job of the PR `merged` or `cancelled`, at least one `merged` (`jobs_not_done`; a `draft` Job of the PR blocks it, so cancel or promote it first). Under the per-repo lock (§7.4) and after running R there, held until the push has finished:
   1. the Lead worktree must be clean (`dirty_target`, exit 3);
   2. **the Gate** (R19): `pre-merge` from `<lead worktree>/.config/wt.toml`, run in the PR's Lead worktree on its Lead Branch (§7.3), its whole output in `run/<plan>/logs/pr-<key>.pre-merge.log`. A failure is refused `gate_failed` (exit 3), an error `gate_error` (exit 1), both with the last 60 lines in `details.tail` and the log's path in `details.log`. Nothing is pushed, the PR stays `dispatch`, and the Lead appends fix Jobs to it (`job add --pr <key>`, queued at once, §3.2), then runs `pr open --pr <key>` again once they are Merged;
   3. `git -C <lead worktree> push -u origin <lead branch>`, then `gh pr create --base <base> --head <lead branch> --title <title> --body <summary>` (cpd 1 §11, kept). `<title>` is the Plan's title when the Plan has one PR that is not `cancelled`, else `<plan title> (<key>)`; `<summary>` covers the PR's own Jobs and Merged commits;

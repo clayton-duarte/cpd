@@ -121,6 +121,7 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `plan rename` | User (TUI) | yes | §2.2 |
 | `plan archive`, `unarchive` | User (TUI) | yes | §2.2 |
 | `job add`, `edit`, `cancel`, `retry` | Lead | yes | §3.2 |
+| `job promote` | Lead | yes | §3.2, §5.8 |
 | `job dispatch` | Lead | yes | §3.4 |
 | `job list`, `job show` | Lead, TUI | no | |
 | `attempt submit` | Worker | yes | §7.3 |
@@ -647,7 +648,7 @@ Jobs, Specs and Dependencies (§2.2, §3.2). Kept from cpd 1 §11 "Jobs" except 
 ### 5.1 `job add`
 
 ```
-cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs <k1,k2> | --review] [--plan <id>]
+cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs <k1,k2> | --review] [--draft] [--plan <id>]
 ```
 
 | Flag | Meaning |
@@ -656,6 +657,7 @@ cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs 
 | `--pr <key>` | the Job's PR (R34, A14), selected by §1.3's rule: required when the Plan has two or more PRs that are not `cancelled`, defaulted to the one when it has one |
 | `--needs <k1,k2>` | Dependencies, comma-separated, no duplicates (`usage`); Jobs of the same PR only (A7) |
 | `--review` | a **review Job** (B2, contract §2.2): its Worker is a fork of the Plan's Lead, it commits nothing and writes `run/<plan>/reviews/<key>.md`. Its Dependencies are **set** to every Job of its PR that exists at that moment and is not `cancelled`, so `--needs` with `--review` is `usage` (exit 2). Jobs added later do not become its Dependencies. The Spec file is as for any Job; its `touches` is informational for a review Job (*decided*: the Lead lists `run/<plan>/reviews/<key>.md`) |
+| `--draft` | add the Job as a **draft** in phase `dispatch` or `pr` (User rule, 2026-10-18: all planned work is visible in the Plan view, and work still being defined is a draft Job, not something kept outside the Ledger). In phase `plan` every new Job is already a draft, so the flag changes nothing. Without it, a Job added in `dispatch` or `pr` is `queued` and starts as soon as it is Ready. A draft is never Ready, never started by engine E3 nor by `job dispatch`, and `job promote` (§5.8) queues it |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -666,13 +668,15 @@ cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs 
 | every `needs` Job is in the same PR; `details.jobs` lists those that are not | `needs_other_pr` | 3 |
 | no `needs` Job is `cancelled` or `failed`; with `--review`, no Job of the PR is `failed` (retry or cancel it first; `details.jobs` lists them), because a Dependency on a `failed` Job is refused | `needs_unavailable` | 3 |
 
-Effects: **rows**, one transaction: `jobs` (`pr` = the PR's key; `review` = 1 with `--review`; `status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = queued`, `appended = 1`, fingerprint stored, in `dispatch` or `pr`); one `dependencies` row per need (with `--review`, per Job of the PR, as the Dependencies are set in the same transaction). **Event** `job-added` `{pr, status, appended, tier, needs, review}`. No cycle is possible: nothing needs a new Job yet. An appended Job of a `waiting` PR is not Ready until its PR starts (§3.2); one of an `open` PR reaches its pull request through `pr rebase --pr <key>` (§9.3).
+A `needs` Job may be a draft, with or without `--draft`: the new Job then waits until that draft is promoted and merged.
+
+Effects: **rows**, one transaction: `jobs` (`pr` = the PR's key; `review` = 1 with `--review`; `status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = draft`, `appended = 1`, no fingerprint, with `--draft` in `dispatch` or `pr`; `status = queued`, `appended = 1`, fingerprint stored, without `--draft` in `dispatch` or `pr`); one `dependencies` row per need (with `--review`, per Job of the PR, as the Dependencies are set in the same transaction). **Event** `job-added` `{pr, status, appended, tier, needs, review}`. No cycle is possible: nothing needs a new Job yet. An appended Job of a `waiting` PR is not Ready until its PR starts (§3.2); a draft Job counts as not done for its PR (§9.1, §9.3: `jobs_not_done`); one of an `open` PR reaches its pull request through `pr rebase --pr <key>` (§9.3).
 
 ```json
 {"ok": true, "job": {"key": "api-schema", "pr": "api", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false}}
 ```
 
-Idempotent: yes, as stated. `--review` is repeatable like any add: an identical call (same Locked fields, `review` included, same Dependencies) is `already`; a call after another Job was added to the PR differs in its Dependencies and is `job_key_exists`. `job edit` has no `--review` and refuses `--needs` and `--no-needs` on a review Job with `usage` (*decided*: its Dependencies are fixed by the add; to change them, cancel it and add a new one).
+Idempotent: yes, as stated; a repeated `--draft` add is `already` on the same terms. `--review` is repeatable like any add: an identical call (same Locked fields, `review` included, same Dependencies) is `already`; a call after another Job was added to the PR differs in its Dependencies and is `job_key_exists`. `job edit` has no `--review` and refuses `--needs` and `--no-needs` on a review Job with `usage` (*decided*: its Dependencies are fixed by the add; to change them, cancel it and add a new one).
 
 ### 5.2 `job edit`
 
@@ -680,12 +684,12 @@ Idempotent: yes, as stated. `--review` is repeatable like any add: an identical 
 cpd job edit <key> [--title <text>] [--tier <T>] [--spec <file>] [--pr <key>] [--needs <k1,k2> | --no-needs] [--plan <id>]
 ```
 
-`--no-needs` removes every Dependency (cpd 1 had no way to). `--pr <key>` moves the draft Job to another PR (R34, A14); it is a field flag, so §1.3's default does not apply: without it the Job keeps its PR. Dependencies stay inside one PR (A7): a Job that changes PR keeps none of its old needs, so give `--needs` with Jobs of the new PR, or `--no-needs`, and no other Job may need it.
+`--no-needs` removes every Dependency (cpd 1 had no way to). It works on a draft Job in every phase where one exists: `plan`, `dispatch` and `pr` (`job add --draft`, §5.1); the Job stays a draft, and `job promote` (§5.8) is what locks it after the lock. `--pr <key>` moves the draft Job to another PR (R34, A14); it is a field flag, so §1.3's default does not apply: without it the Job keeps its PR. Dependencies stay inside one PR (A7): a Job that changes PR keeps none of its old needs, so give `--needs` with Jobs of the new PR, or `--no-needs`, and no other Job may need it.
 
 | Precondition | Code | Exit |
 |---|---|---|
 | at least one field flag | `nothing_to_edit` | 2 |
-| the Job is `draft` | `job_locked` | 3 |
+| the Job is `draft` (in phase `plan`, `dispatch` or `pr`) | `job_locked` | 3 |
 | `--pr` names a PR of the Plan | `pr_not_found` | 4 |
 | that PR is not `cancelled` | `pr_ended` | 3 |
 | the needs exist and are usable | `needs_unknown`, `needs_unavailable` | 3 |
@@ -711,14 +715,14 @@ cpd job cancel <key> --reason <text> [--plan <id>]
 | the Job is not `merged` | `job_merged` | 3 |
 
 Effects (§3.2 "Cancel"):
-- `draft`, `queued` or `failed`: one transaction, `status = cancelled`, `cancel_reason`, `cancel_requested_at`; **Event** `job-cancelled` `{reason}`.
+- `draft` (in phase `plan`, `dispatch` or `pr`), `queued` or `failed`: one transaction, `status = cancelled`, `cancel_reason`, `cancel_requested_at`; **Event** `job-cancelled` `{reason}`.
 - `running`: one transaction, `cancel_reason` and `cancel_requested_at` only; **Event** `job-cancel-requested` `{reason}`. Engine E2 sets the Attempt's `stop_request = cancelled`, and the driver or E2 ends it `cancelled` at its next safe point (§3.4), which appends `job-cancelled`. No tmux action by this command.
 
 ```json
 {"ok": true, "job": "worker", "status": "running", "cancel_requested": true}
 ```
 
-Idempotent: yes; a `cancelled` Job, or one with a request already recorded, returns `"already": true` (the first reason is kept). Dependents stay blocked (cpd 1 §11, kept).
+Idempotent: yes; a `cancelled` Job, or one with a request already recorded, returns `"already": true` (the first reason is kept). Dependents stay blocked (cpd 1 §11, kept). Cancelling a draft Job of a PR is how the PR stops being held by it (§9.1 `jobs_not_done`).
 
 ### 5.4 `job retry`
 
@@ -787,6 +791,32 @@ Effects: none. Output: every field of the Job (§2.2; `review: true` for a revie
 ```
 
 Both are read-only.
+
+### 5.8 `job promote`
+
+```
+cpd job promote <key> [--plan <id>]
+```
+
+Turns a draft Job of a Plan past the lock into a `queued` one: the Lead's act, after the User agreed in chat, as for any appended work (hs-d118). There is no Plan review. In phase `plan` the lock promotes drafts (§3.1), so this command is for `dispatch` and `pr`.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the phase is `dispatch` or `pr` (`plan`: the lock promotes drafts; `grounding` or `done`) | `illegal_phase` | 3 |
+| the Job exists | `job_not_found` | 4 |
+| the Job is `draft` | `job_locked` | 3 |
+| the Job's PR is not `merged` or `cancelled` (§3.2) | `pr_ended` | 3 |
+| no Dependency of the Job is `cancelled` or `failed`; `details.jobs` lists them | `needs_unavailable` | 3 |
+
+A Dependency on another draft is allowed: the Job waits until that draft is promoted and merged.
+
+Effects: **rows**, one transaction, with a compare-and-swap on `status = 'draft'`: `status = queued`, the Locked-Job fingerprint stored (contract §2.3); `appended` stays 1. **Event** `job-edited` `{fields: ["status"]}` (no new Event kind). The Job is Ready by §3.2's rule, and engine E3 starts it once its Dependencies are `merged` and its PR is `dispatch` or `open`.
+
+```json
+{"ok": true, "job": {"key": "api-retry", "pr": "api", "status": "queued", "appended": true}}
+```
+
+Idempotent: no. A second call finds the Job `queued` and is refused `job_locked`.
 
 ## 6. `attempt`
 
@@ -952,7 +982,7 @@ cpd pr open [--pr <key>] [--plan <id>]
 | Precondition | Code | Exit |
 |---|---|---|
 | the PR is `dispatch` (`open` or `merged`: `already`; `waiting` or `cancelled`) | `illegal_transition` | 3 |
-| every Job of the PR `merged` or `cancelled`, at least one `merged` | `jobs_not_done` | 3 |
+| every Job of the PR `merged` or `cancelled`, at least one `merged`; a `draft` Job of the PR blocks it (cancel or promote it first, §5.8) | `jobs_not_done` | 3 |
 | the per-repo lock within `lock_wait_seconds` | `lock_timeout` | 5 |
 | the Lead worktree is clean | `dirty_target` | 3 |
 | the Gate passes (§7.3, §7.6 `pr open` step 2); `details.tail` is its last 60 lines, `details.log` the full log | `gate_failed` | 3 |
@@ -1033,6 +1063,7 @@ Rebases the PR's Lead Branch onto its base and pushes (§7.6); also how Jobs Mer
 | Precondition | Code | Exit |
 |---|---|---|
 | the PR is `open` | `illegal_transition` | 3 |
+| no Job of the PR is `draft` (cancel or promote it first, §5.8) | `jobs_not_done` | 3 |
 | the per-repo lock within `lock_wait_seconds` | `lock_timeout` | 5 |
 | the Lead worktree is clean | `dirty_target` | 3 |
 | `git merge-tree` reports no conflict; `details.files` lists them | `rebase_conflict` | 3 |
