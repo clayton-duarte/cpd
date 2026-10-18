@@ -158,6 +158,55 @@ fn no_fake_sleeps_longer_than_sleep_seconds() {
     assert!(found.is_empty(), "fakes must sleep at most SLEEP_SECONDS ({SLEEP_SECONDS}):\n{}", found.join("\n"));
 }
 
+/// The text of every test file of this crate but this one, as (path, line number, line).
+fn test_source_lines() -> Vec<(String, usize, String)> {
+    let mut lines = Vec::new();
+    for entry in std::fs::read_dir(env!("CARGO_MANIFEST_DIR").to_owned() + "/tests").unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "rs") || path.file_name().is_some_and(|n| n == "harness.rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        for (n, line) in text.lines().enumerate() {
+            lines.push((path.display().to_string(), n + 1, line.to_owned()));
+        }
+    }
+    lines
+}
+
+/// The lines of the test files containing any of `needles`, as `path:line: text`.
+fn test_lines_with(needles: &[&str]) -> Vec<String> {
+    test_source_lines()
+        .into_iter()
+        .filter(|(_, _, line)| needles.iter().any(|n| line.contains(n)))
+        .map(|(path, n, line)| format!("{path}:{n}: {}", line.trim()))
+        .collect()
+}
+
+#[test]
+fn no_test_mutates_the_process_environment() {
+    // Test threads share one environment: `set_var` there races every `getenv` (tests-build-G3).
+    // A test sets a variable on the `Command` it spawns.
+    let found = test_lines_with(&["set_var(", "remove_var("]);
+    assert!(found.is_empty(), "use Command::env, not the process environment:\n{}", found.join("\n"));
+}
+
+#[test]
+fn executables_are_written_and_copied_only_through_the_harness() {
+    // ETXTBSY is handled once, in `common` (`write_executable`, `copy_executable`, `spawn`, `output`;
+    // tests-build-W5): no file keeps its own lock, copy helper or chmod after a write.
+    let found = test_lines_with(&[
+        "from_mode(0o755)",
+        "fs::copy(CPD",
+        "ONE_AT_A_TIME",
+        "fn copy_executable",
+        "fn executable(",
+        "ETXTBSY",
+        "Text file busy",
+    ]);
+    assert!(found.is_empty(), "write executables with common::write_executable and copy_executable:\n{}", found.join("\n"));
+}
+
 // ---- teardown: a dropped or killed test leaves no tmux server, process, dir or reaper ----
 
 const HELPER_GATE: &str = "CPD_HARNESS_KILLED_TEST_HELPER";
