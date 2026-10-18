@@ -172,7 +172,7 @@ mod tests {
         assert_eq!(fields["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(fields["schema"], cpd_core::store::VERSION);
         assert!(fields.contains_key("store_schema"));
-        assert_eq!(fields["protocol"], 2);
+        assert_eq!(fields["protocol"], 3);
     }
 
     /// A stand-in for an area's arguments, to test how our parsers' errors
