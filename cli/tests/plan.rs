@@ -538,6 +538,33 @@ fn phase_refusals() {
     assert_eq!(error["details"]["from"], "dispatch");
 }
 
+/// A Plan with no PR yet (`plan new` alone) is found by every Plan read: phase, list, show, archive and unarchive.
+#[test]
+fn a_plan_with_no_pr_is_read_by_phase_list_show_archive_and_unarchive() {
+    let env = TestEnv::new();
+    setup(&env);
+    new_plan_only(&env, "pay");
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM prs"), 0);
+
+    assert_eq!(show(&env, "pay")["prs"], json!([]));
+    let ids = |env: &TestEnv| -> Vec<String> {
+        env.cpd(&["plan", "list"]).ok()["plans"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap().to_owned()).collect()
+    };
+    assert_eq!(ids(&env), ["pay"]);
+
+    let archived = env.cpd(&["plan", "archive", "--plan", "pay"]).ok();
+    assert_eq!(archived["archived"][0], json!({"kind": "plan", "id": "pay"}));
+    assert_ne!(show(&env, "pay")["plan"]["archived_at"], Value::Null);
+    env.cpd(&["plan", "unarchive", "--plan", "pay"]).ok();
+    assert_eq!(show(&env, "pay")["plan"]["archived_at"], Value::Null);
+
+    let out = env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
+    assert_eq!((&out["plan"], &out["phase"]), (&json!("pay"), &json!("plan")));
+    assert_eq!(show(&env, "pay")["plan"]["phase"], "plan");
+    // A Plan with no PR has no Job: lock keeps its own refusal.
+    refused(&env.cpd(&["plan", "lock", "--plan", "pay"]), "no_draft_jobs", 3);
+}
+
 /// Plans moving to phase `plan` at once all move, and none registers a Session.
 #[test]
 fn plans_moving_to_phase_plan_at_once_all_move() {
@@ -1046,6 +1073,46 @@ fn rename_sets_the_title_and_appends_one_event() {
     assert_eq!(events(&env, "plan-renamed").len(), 1);
 }
 
+/// `@cpd_title` of `pane`.
+fn pane_title(env: &TestEnv, pane: &str) -> String {
+    let out = env.tmux(&["show", "-pqv", "-t", pane, "@cpd_title"]);
+    String::from_utf8(out.stdout).unwrap().trim_end_matches('\n').to_owned()
+}
+
+#[test]
+fn the_leads_pane_carries_the_plans_title_and_plan_rename_keeps_it_current() {
+    let env = TestEnv::new();
+    setup(&env);
+    let out = env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Retry payouts"]).ok();
+    let (lead, pane) = (out["lead"]["session"].as_str().unwrap().to_owned(), out["lead"]["pane"].as_str().unwrap().to_owned());
+    assert_eq!(pane_title(&env, &pane), "Retry payouts");
+
+    env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Retry the payouts"]).ok();
+    assert_eq!(pane_title(&env, &pane), "Retry the payouts");
+
+    // A side fork shows its own name; renaming the Plan leaves it alone.
+    let fork = env.cpd(&["session", "fork", &lead, "--name", "side"]).ok()["session"].clone();
+    let fork_pane = fork["pane"].as_str().unwrap();
+    assert_eq!(pane_title(&env, fork_pane), "side");
+    env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Third"]).ok();
+    assert_eq!((pane_title(&env, &pane), pane_title(&env, fork_pane)), ("Third".to_owned(), "side".to_owned()));
+
+    // Renaming the Plan's Lead Session never replaces the Plan's title.
+    env.cpd(&["session", "rename", "lead name", "--session", &lead]).ok();
+    assert_eq!(pane_title(&env, &pane), "Third");
+
+    // A rerun with the same title repairs a header that was cleared.
+    env.tmux(&["set", "-p", "-u", "-t", &pane, "@cpd_title"]);
+    assert_eq!(pane_title(&env, &pane), "");
+    let again = env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Third"]).ok();
+    assert_eq!(again["already"], true);
+    assert_eq!(pane_title(&env, &pane), "Third");
+
+    // No pane, nothing to do.
+    env.tmux(&["kill-pane", "-t", &pane]);
+    env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Fourth"]).ok();
+}
+
 #[test]
 fn rename_refusals() {
     let env = TestEnv::new();
@@ -1055,6 +1122,20 @@ fn rename_refusals() {
     refused(&env.cpd(&["plan", "rename", "--title", "X"]), "plan_required", 2);
     refused(&env.cpd(&["plan", "rename", "--plan", "pay", "--title", ""]), "usage", 2);
     assert!(events(&env, "plan-renamed").is_empty());
+}
+
+#[test]
+fn rename_works_on_an_archived_plan() {
+    let env = TestEnv::new();
+    setup(&env);
+    new_plan_only(&env, "pay");
+    env.cpd(&["plan", "archive", "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Archived and renamed"]).ok();
+    assert_eq!(out["plan"]["title"], "Archived and renamed");
+    let plan = show(&env, "pay");
+    assert_eq!(plan["plan"]["title"], "Archived and renamed");
+    assert_ne!(plan["plan"]["archived_at"], Value::Null, "still archived");
+    assert_eq!(events(&env, "plan-renamed").len(), 1);
 }
 
 // ---- plan archive and unarchive -------------------------------------------

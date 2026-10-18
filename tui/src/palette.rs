@@ -8,12 +8,14 @@
 //! there is no "unknown" icon; cpd 2 has no `in_review` Job status, and `merging`
 //! (a running Job whose Attempt is merging) takes its place and its icon.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use ratatui::{
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::Span,
 };
 
-use super::read::{AttemptStatus, Checks, JobStatus, PrState};
+use super::read::{AttemptStatus, Checks, Dot, JobStatus, PrState};
 use cpd_core::plan::Phase;
 
 /// What a colour stands for. One colour per meaning, whatever view shows it.
@@ -161,19 +163,32 @@ pub fn phase(phase: Option<Phase>) -> Meaning {
     }
 }
 
-/// The phases the legend lists, with the name shown.
-pub const PHASE_LEGEND: [(&str, Option<Phase>); 6] = [
-    ("no Plan", None),
-    ("grounding", Some(Phase::Grounding)),
-    ("plan", Some(Phase::Plan)),
-    ("dispatch", Some(Phase::Dispatch)),
-    ("deploy", Some(Phase::Deploy)),
-    ("done", Some(Phase::Done)),
-];
+/// The four frames of the working dot, one per [`frame`].
+pub const SPINNER: [&str; 4] = ["◐", "◓", "◑", "◒"];
 
-/// The tree's dot: `●` when the session needs the User, `○` when not; coloured by the Plan's phase.
-pub fn dot(needs_you: bool, plan_phase: Option<Phase>) -> Span<'static> {
-    Span::styled(if needs_you { "●" } else { "○" }, fg(phase(plan_phase)))
+/// How long one frame of the spinner lasts, in milliseconds.
+const FRAME_MS: u128 = 250;
+
+/// The spinner frame at `now`: `(unix ms / 250) % 4`, one clock for every spinner, so they all turn together.
+pub fn frame(now: SystemTime) -> usize {
+    let ms = now.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
+    ((ms / FRAME_MS) % SPINNER.len() as u128) as usize
+}
+
+/// The tree's dot (commands.md §17): `●` red, yellow, magenta or white; `◐◓◑◒` (frame `frame`) in the terminal's
+/// foreground when working; `○` in the terminal's foreground; `◌` dim. An `archived` row keeps its glyph, never
+/// animated (the first frame when working), in the colour of [`Meaning::Nothing`].
+pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
+    let (glyph, style) = match dot {
+        Dot::Red => ("●", Style::new().fg(Color::Red)),
+        Dot::Yellow => ("●", Style::new().fg(Color::Yellow)),
+        Dot::Magenta => ("●", Style::new().fg(Color::Magenta)),
+        Dot::White => ("●", Style::new().fg(Color::White)),
+        Dot::Working => (SPINNER[if archived { 0 } else { frame % SPINNER.len() }], Style::new()),
+        Dot::Idle => ("○", Style::new()),
+        Dot::Stopped => ("◌", Style::new().add_modifier(Modifier::DIM)),
+    };
+    Span::styled(glyph, if archived { fg(Meaning::Nothing) } else { style })
 }
 
 /// The `⋅` between the tree's counters.
@@ -272,14 +287,41 @@ mod tests {
         for (p, m) in phases {
             assert_eq!(phase(p), m, "{p:?}");
         }
-        assert_eq!(PHASE_LEGEND.map(|(_, p)| p), phases.map(|(p, _)| p));
     }
 
     #[test]
-    fn the_dot_is_filled_when_the_session_needs_you_and_coloured_by_phase() {
-        assert_eq!(dot(true, Some(Phase::Dispatch)), Span::styled("●", Style::new().fg(Color::Green)));
-        assert_eq!(dot(false, Some(Phase::Deploy)), Span::styled("○", Style::new().fg(Color::Yellow)));
-        assert_eq!(dot(false, None), Span::styled("○", Style::new().fg(Color::DarkGray)));
+    fn a_needs_you_dot_is_filled_and_coloured_by_its_case_and_nothing_else_is() {
+        for (dot, colour) in [(Dot::Red, Color::Red), (Dot::Yellow, Color::Yellow), (Dot::Magenta, Color::Magenta), (Dot::White, Color::White)] {
+            assert_eq!(dot_span(dot, 0, false), Span::styled("●", Style::new().fg(colour)), "{dot:?}");
+        }
+        assert_eq!(dot_span(Dot::Idle, 0, false), Span::styled("○", Style::new()), "the terminal's foreground");
+        assert_eq!(dot_span(Dot::Stopped, 0, false), Span::styled("◌", Style::new().add_modifier(Modifier::DIM)), "dim, no colour");
+    }
+
+    #[test]
+    fn a_working_dot_turns_with_the_frame_in_the_terminals_foreground() {
+        let glyphs: Vec<_> = (0..5).map(|f| dot_span(Dot::Working, f, false).content.into_owned()).collect();
+        assert_eq!(glyphs, ["◐", "◓", "◑", "◒", "◐"]);
+        assert_eq!(dot_span(Dot::Working, 2, false).style, Style::new());
+        assert_eq!(SPINNER, ["◐", "◓", "◑", "◒"]);
+    }
+
+    #[test]
+    fn an_archived_dot_keeps_its_glyph_in_the_darker_grey_and_never_turns() {
+        let grey = Style::new().fg(Color::DarkGray);
+        for (dot, glyph) in [(Dot::Red, "●"), (Dot::Yellow, "●"), (Dot::Magenta, "●"), (Dot::White, "●"), (Dot::Idle, "○"), (Dot::Stopped, "◌")] {
+            assert_eq!(dot_span(dot, 0, true), Span::styled(glyph, grey), "{dot:?}");
+        }
+        for f in 0..4 {
+            assert_eq!(dot_span(Dot::Working, f, true), Span::styled("◐", grey), "frame {f}");
+        }
+    }
+
+    #[test]
+    fn the_frame_is_the_unix_time_in_quarter_seconds_modulo_four() {
+        let at = |ms: u64| frame(UNIX_EPOCH + std::time::Duration::from_millis(ms));
+        assert_eq!([0, 249, 250, 499, 500, 750, 999, 1000, 1250].map(at), [0, 0, 1, 1, 2, 3, 3, 0, 1]);
+        assert_eq!(frame(UNIX_EPOCH - std::time::Duration::from_secs(1)), 0, "before the epoch: the first frame");
     }
 
     #[test]

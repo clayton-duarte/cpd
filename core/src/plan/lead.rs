@@ -78,6 +78,7 @@ pub(super) fn start(env: &mut Env, lead: &Lead, window: &str, command: &str) -> 
         None => tmux.new_window(&cockpit, window, &spawn)?,
     };
     tmux.set_pane_session(&pane, lead.session)?;
+    tmux.set_pane_title(&pane, &title(env, lead)?)?;
     env.store.write(command, |tx| {
         tx.execute("UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2", [pane.as_str(), lead.session.as_str()])?;
         let text = format!("Lead {} is parked in window {}.", lead.name, window.as_str());
@@ -90,6 +91,23 @@ pub(super) fn start(env: &mut Env, lead: &Lead, window: &str, command: &str) -> 
         Ok(())
     })?;
     Ok(Started { window, pane })
+}
+
+/// The header of `lead`'s pane: its Plan's title, else (a grounded Lead) its name.
+fn title(env: &mut Env, lead: &Lead) -> Result<String, CpdError> {
+    let Some(plan) = lead.plan else {
+        return Ok(lead.name.to_owned());
+    };
+    env.store.read(|conn| Ok(conn.query_row("SELECT title FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?))
+}
+
+/// Sets `@cpd_title` to `title` on `session`'s live pane, if it has one.
+pub(super) fn retitle(env: &Env, session: &SessionId, title: &str) -> Result<(), CpdError> {
+    let tmux = Tmux::new(env.config.tmux.socket.clone());
+    for pane in tmux.list_panes()?.iter().filter(|p| !p.dead && p.cpd_session.as_ref() == Some(session)) {
+        tmux.set_pane_title(&pane.pane, title)?;
+    }
+    Ok(())
 }
 
 /// The window of the Session's latest `session-moved` Event, if any.

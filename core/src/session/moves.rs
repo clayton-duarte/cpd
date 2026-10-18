@@ -49,12 +49,12 @@ fn parked_window(row: &Row) -> String {
 }
 
 /// The placeholder's program: `cpd tui view chat` (amendment 2).
-fn placeholder_spawn() -> Spawn {
+pub(super) fn placeholder_spawn() -> Spawn {
     Spawn { cwd: None, env: BTreeMap::new(), argv: [PROGRAM, "tui", "view", "chat"].map(str::to_owned).into() }
 }
 
 /// Appends `session-moved` for `row`, and records its pane when it changed.
-fn moved(tx: &WriteTxn<'_>, row: &Row, pane: &PaneId, window: &WindowId, place: &str) -> Result<(), CpdError> {
+pub(super) fn moved(tx: &WriteTxn<'_>, row: &Row, pane: &PaneId, window: &WindowId, place: &str) -> Result<(), CpdError> {
     if row.tmux_pane.as_deref() != Some(pane.as_str()) {
         tx.execute("UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2", [pane.as_str(), row.id.as_str()])?;
     }
@@ -68,7 +68,7 @@ fn moved(tx: &WriteTxn<'_>, row: &Row, pane: &PaneId, window: &WindowId, place: 
     Ok(())
 }
 
-fn require_lead(row: &Row) -> Result<(), CpdError> {
+pub(super) fn require_lead(row: &Row) -> Result<(), CpdError> {
     match row.role {
         Role::Lead => Ok(()),
         role => Err(not_a_lead(&row.id, role)),
@@ -156,6 +156,7 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
     let spawn = lead_spawn(&env.home, &id, Some(&plan), Path::new(&source.cwd));
     let (window, pane) = tmux.new_window(&cockpit, &park_window(&id, Some(&plan)), &spawn)?;
     tmux.set_pane_session(&pane, &id)?;
+    tmux.set_pane_title(&pane, &name)?;
     env.store.write("session fork", |tx| moved(tx, &row, &pane, &window, "parked"))?;
     Ok(Output::success(json!({"session": {
         "id": id, "name": name, "plan": plan, "forked_from": source.id, "pane": pane.as_str(), "window": window.as_str(),
@@ -163,7 +164,7 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
 }
 
 /// The chat slot, else `no_cockpit`.
-fn slot(panes: &[Pane], cockpit: &str) -> Result<Pane, CpdError> {
+pub(super) fn slot(panes: &[Pane], cockpit: &str) -> Result<Pane, CpdError> {
     chat_slot(panes, cockpit).cloned().ok_or_else(|| no_cockpit(cockpit))
 }
 
@@ -208,6 +209,7 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
             let spawn = lead_spawn(&env.home, &lead.id, lead.plan.as_ref(), Path::new(&lead.cwd));
             let (window, pane) = tmux.new_window(&cockpit, &parked_window(&lead), &spawn)?;
             tmux.set_pane_session(&pane, &lead.id)?;
+            tmux.set_pane_title(&pane, &env.store.read(|conn| lead.title(conn))?)?;
             (pane, window)
         }
     };
@@ -250,11 +252,25 @@ pub(super) fn park(args: ParkArgs) -> Result<Output, CpdError> {
         return Ok(Output::success(json!({"session": lead.id, "already": true})));
     }
 
-    let (window, placeholder) = tmux.new_window(&cockpit, &parked_window(&lead), &placeholder_spawn())?;
+    let (window, _) = park_lead(&mut env, &tmux, &cockpit, &lead, &slot, "session park")?;
+    Ok(Output::success(json!({"session": lead.id, "pane": slot.pane.as_str(), "window": window.as_str()})))
+}
+
+/// Parks `lead`, which holds the chat slot `slot`: a new `park-<label>` window with a placeholder,
+/// `swap-pane`, then `session-moved` as `command`. Returns the window and the placeholder, now in the slot.
+pub(super) fn park_lead(
+    env: &mut Env,
+    tmux: &Tmux,
+    cockpit: &str,
+    lead: &Row,
+    slot: &Pane,
+    command: &str,
+) -> Result<(WindowId, PaneId), CpdError> {
+    let (window, placeholder) = tmux.new_window(cockpit, &parked_window(lead), &placeholder_spawn())?;
     tmux.set_pane_view(&placeholder, View::Chat)?;
     tmux.swap_pane(&placeholder, &slot.pane)?;
-    env.store.write("session park", |tx| moved(tx, &lead, &slot.pane, &window, "parked"))?;
-    Ok(Output::success(json!({"session": lead.id, "pane": slot.pane.as_str(), "window": window.as_str()})))
+    env.store.write(command, |tx| moved(tx, lead, &slot.pane, &window, "parked"))?;
+    Ok((window, placeholder))
 }
 
 /// What [`close_lead`] found.
@@ -310,6 +326,18 @@ pub fn close_lead(store: &mut Store, tmux: &Tmux, cockpit: &str, id: &SessionId,
         }
     }
     Ok(Closed { pane: Some(pane), already: true })
+}
+
+/// Writes, as `command`, the rows engine E2 writes for the pane of Lead `id` and then kills that
+/// pane: for the caller that runs in it, which must not die before its rows are written.
+/// Returns when the pane is not there to kill.
+pub(super) fn close_own(env: &mut Env, id: &SessionId, command: &str) -> Result<(), CpdError> {
+    let lead = env.store.read(|conn| row::load(conn, id))?;
+    let Some(pane) = lead.tmux_pane.clone() else { return Ok(()) };
+    let pane_id = PaneId::parse(&pane).ok_or_else(|| super::bad_row(format!("tmux_pane {pane:?}")))?;
+    let why = format!("its pane {pane} was closed");
+    env.store.write(command, |tx| pane_gone(tx, &lead.id, lead.state.as_str(), Some(&pane), &why))?;
+    env.tmux().kill_pane(&pane_id)
 }
 
 /// `session close` (commands.md §10.9).

@@ -4,12 +4,14 @@
 //! - [`row`]: the `sessions` row as read, and `session list` / `show`;
 //! - [`state`]: the agent states of §3.6, `session state` and `rename`;
 //! - [`moves`]: the panes: `session fork`, `open`, `park` and `close`;
+//! - [`history`]: `session history`, an archived Session's history in the chat slot;
 //! - [`archive`]: `session archive` and `unarchive`, and the archive rule;
 //! - [`send`]: `session send`, one message to a Lead;
 //! - [`port`]: a Plan's plannotator port;
 //! - [`run`]: `session run`, the program in every Lead pane (§6.7).
 
 mod archive;
+mod history;
 mod moves;
 mod port;
 mod row;
@@ -53,11 +55,13 @@ pub enum Command {
     Park(ParkArgs),
     /// End a Lead's pane; its session file stays (§10.9)
     Close(CloseArgs),
+    /// Show a Lead Session's history, read-only, in the chat slot (§10.12)
+    History(HistoryArgs),
     /// Archive a Lead Session (§10.10)
     Archive(ArchiveArgs),
     /// Unarchive a Lead Session (§10.11)
     Unarchive(UnarchiveArgs),
-    /// Send a message to a Lead (§10.12)
+    /// Send a message to a Lead (§10.13)
     Send(SendArgs),
     /// Rename a Session (§10.7)
     Rename(RenameArgs),
@@ -120,6 +124,13 @@ pub struct ParkArgs {
     /// The Lead or Manager Session to park [default: the one in the chat slot]
     #[arg(value_name = "id")]
     id: Option<SessionId>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct HistoryArgs {
+    /// The Lead Session whose history to show
+    #[arg(value_name = "id")]
+    id: SessionId,
 }
 
 #[derive(clap::Args, Debug)]
@@ -193,10 +204,16 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Open(args) => moves::open(args),
         Command::Park(args) => moves::park(args),
         Command::Close(args) => moves::close(args),
+        Command::History(args) => history::history(args),
         Command::Archive(args) => archive::archive(args),
         Command::Unarchive(args) => archive::unarchive(args),
         Command::Send(args) => send::send(args),
-        Command::Rename(args) => state::rename(args),
+        Command::Rename(args) => {
+            let id = args.session.require()?.clone();
+            let out = state::rename(args)?;
+            row::retitle(&id)?;
+            Ok(out)
+        }
         Command::State(args) => state::state(args),
         Command::Run(args) => run::run(args),
     }

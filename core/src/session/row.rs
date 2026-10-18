@@ -143,6 +143,14 @@ fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
 }
 
 impl Row {
+    /// The header of its pane: its Plan's title when it is the Plan's Lead, else its name.
+    pub fn title(&self, conn: &Connection) -> Result<String, CpdError> {
+        match (&self.plan, self.plan_lead) {
+            (Some(plan), true) => Ok(conn.query_row("SELECT title FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?),
+            _ => Ok(self.name.clone()),
+        }
+    }
+
     fn parse(raw: Raw) -> Result<Row, CpdError> {
         let id = SessionId::parse(&raw.id).map_err(|_| bad_row(format!("id {:?}", raw.id)))?;
         let field = |name: &str, value: &str| bad_row(format!("{id} has {name} {value:?}"));
@@ -214,6 +222,19 @@ pub(super) fn find(conn: &Connection, id: &SessionId) -> Result<Option<Row>, Cpd
 /// The Session `id`, else `session_not_found`.
 pub(super) fn load(conn: &Connection, id: &SessionId) -> Result<Row, CpdError> {
     find(conn, id)?.ok_or_else(|| session_not_found(id))
+}
+
+/// Sets `@cpd_title` on the Session's live pane from its current row, if it has one.
+/// `session rename` runs it, also when the name was already the new one: a rerun
+/// repairs the header.
+pub(super) fn retitle(id: &SessionId) -> Result<(), CpdError> {
+    let mut env = Env::open()?;
+    let title = env.store.read(|conn| load(conn, id)?.title(conn))?;
+    let tmux = env.tmux();
+    for pane in tmux.list_panes()?.iter().filter(|p| !p.dead && p.cpd_session.as_ref() == Some(id)) {
+        tmux.set_pane_title(&pane.pane, &title)?;
+    }
+    Ok(())
 }
 
 /// `session list` (commands.md §10.1).

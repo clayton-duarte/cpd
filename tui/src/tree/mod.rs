@@ -28,13 +28,13 @@ mod view;
 #[cfg(test)]
 mod fixture;
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event};
 use ratatui::crossterm::execute;
 
-use super::read;
+use super::{palette, read};
 use super::{not_a_terminal, on_a_terminal};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
@@ -47,8 +47,17 @@ use view::{Effect, View};
 
 /// A view takes at most one snapshot per this long, whatever the Event rate (commands.md §17).
 const SNAPSHOT_EVERY: Duration = Duration::from_millis(500);
-/// How long the loop waits for a key or a click before it looks at the follower again.
+/// A snapshot is taken at least this often even with no Event: a pull request's checks can change with none (§17).
+const SNAPSHOT_AT_LEAST_EVERY: Duration = Duration::from_secs(2);
+/// How long the loop waits for a key or a click before it looks at the follower again and redraws. The spinner turns
+/// every 250 ms (`palette::frame`), so the tree is redrawn at least that often.
 const TICK: Duration = Duration::from_millis(100);
+
+/// A new snapshot is due: an Event came and `since` the last one reaches [`SNAPSHOT_EVERY`], or `since` reaches
+/// [`SNAPSHOT_AT_LEAST_EVERY`].
+fn snapshot_due(dirty: bool, since: Duration) -> bool {
+    (dirty && since >= SNAPSHOT_EVERY) || since >= SNAPSHOT_AT_LEAST_EVERY
+}
 
 pub(super) fn run() -> Result<Output, CpdError> {
     if !on_a_terminal() {
@@ -89,7 +98,7 @@ fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View,
                 }
             }
         }
-        if dirty && last_snapshot.elapsed() >= SNAPSHOT_EVERY {
+        if snapshot_due(dirty, last_snapshot.elapsed()) {
             match read::tree(store) {
                 Ok(tree) => view.refresh(tree),
                 Err(e) => view.note = e.message().to_owned(),
@@ -100,7 +109,8 @@ fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View,
                 follower = Follower::start(view.tree.events_cursor).ok();
             }
         }
-        terminal.draw(|f| view.draw(f))?;
+        let frame = palette::frame(SystemTime::now());
+        terminal.draw(|f| view.draw(f, frame))?;
         if !event::poll(TICK)? {
             continue;
         }
@@ -135,5 +145,25 @@ fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View,
                 last_snapshot = Instant::now() - SNAPSHOT_EVERY;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_snapshot_is_due_on_an_event_after_half_a_second_and_with_none_after_two() {
+        let ms = Duration::from_millis;
+        assert!(!snapshot_due(false, ms(0)));
+        assert!(!snapshot_due(false, ms(1999)), "no Event: not yet");
+        assert!(snapshot_due(false, ms(2000)), "no Event, yet pull request checks may have changed");
+        assert!(!snapshot_due(true, ms(499)), "at most one snapshot per 500 ms");
+        assert!(snapshot_due(true, ms(500)));
+    }
+
+    #[test]
+    fn the_loop_redraws_at_least_every_quarter_second() {
+        assert!(TICK <= Duration::from_millis(250));
     }
 }

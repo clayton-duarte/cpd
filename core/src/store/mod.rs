@@ -17,7 +17,7 @@ use std::time::Duration;
 use nix::errno::Errno;
 use nix::fcntl::{Flock, FlockArg};
 use rusqlite::functions::FunctionFlags;
-use rusqlite::{Connection, ErrorCode as SqliteCode, Transaction, TransactionBehavior};
+use rusqlite::{Connection, ErrorCode as SqliteCode, OpenFlags, Transaction, TransactionBehavior};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::macros::format_description;
@@ -371,6 +371,23 @@ fn setup_lock(home: &CpdHome) -> Result<Flock<File>, CpdError> {
     }
 }
 
+/// The database's `PRAGMA user_version`, or `None` when the file does not
+/// exist. Opens it read-only: no migration, no schema check, no write.
+pub fn current_schema(home: &CpdHome) -> Result<Option<i64>, CpdError> {
+    let path = home.db();
+    if !path.try_exists().map_err(|e| {
+        CpdError::new(ErrorCode::StoreFailed, format!("Cannot read {}: {e}.", path.display()))
+            .with("path", path.display().to_string())
+    })? {
+        return Ok(None);
+    }
+    let read = || -> Result<i64, CpdError> {
+        let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        Ok(user_version(&conn)?)
+    };
+    read().map(Some).map_err(|e| enrich(e, &path, 0))
+}
+
 fn user_version(conn: &Connection) -> rusqlite::Result<i64> {
     conn.pragma_query_value(None, "user_version", |r| r.get(0))
 }
@@ -487,5 +504,31 @@ impl From<rusqlite::Error> for CpdError {
                 .with("sqlite_code", sqlite.map_or(Value::Null, |f| Value::from(f.extended_code)))
                 .with("sqlite_message", message),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_schema_is_none_without_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        assert_eq!(current_schema(&home).unwrap(), None);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn current_schema_reads_user_version_and_leaves_the_file_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let conn = Connection::open(home.db()).unwrap();
+        conn.pragma_update(None, "user_version", 99).unwrap();
+        drop(conn);
+        let before = fs::read(home.db()).unwrap();
+        assert_eq!(current_schema(&home).unwrap(), Some(99));
+        assert_eq!(fs::read(home.db()).unwrap(), before);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

@@ -13,6 +13,8 @@ use cpd_core::ids::{AttemptId, ContextId, PlanId, SessionId};
 use cpd_core::plan::Phase;
 use cpd_core::session::{Role, State};
 
+use super::dot::{Dot, DotInputs};
+
 /// A row the database holds in a shape the binary does not accept: it was
 /// changed outside cpd, or by a bug.
 pub(super) fn bad_row(what: impl std::fmt::Display) -> CpdError {
@@ -205,22 +207,18 @@ pub struct SessionNode {
     pub place: Place,
     /// It is its Plan's `lead_session`.
     pub plan_lead: bool,
-    /// The ● of the tree: [`needs_you`], derived from the Session's Events.
-    pub needs_you: bool,
+    /// The dot of the tree (§17), derived from the Session's state, its Events and its Plan.
+    pub dot: Dot,
     /// When it was archived (contract §4.5); archived Sessions are in the model.
     pub archived_at: Option<String>,
 }
 
-/// The ● rule (cockpit parity, §1.3): a Session needs the User when it is
-/// `blocked`, or when it is `idle`, not in the chat slot, and its latest
-/// `session-state → idle` Event is newer than its latest `session-moved
-/// {place: chat}` (Event ids order commits; no such Event counts as 0).
-fn needs_you(state: State, place: Place, settled: Option<i64>, seen: Option<i64>) -> bool {
-    state == State::Blocked
-        || (state == State::Idle && place != Place::Chat && settled.unwrap_or(0) > seen.unwrap_or(0))
-}
-
 impl SessionNode {
+    /// The Session shows a `●`, of any colour.
+    pub fn needs_you(&self) -> bool {
+        self.dot.needs_you()
+    }
+
     /// Its chat is in the cockpit's chat slot.
     pub fn is_active(&self) -> bool {
         self.place == Place::Chat
@@ -240,7 +238,11 @@ const SESSION_SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt,
            AND json_extract(e.data, '$.to') = 'idle' ORDER BY e.id DESC LIMIT 1),
        (SELECT e.id FROM events e WHERE e.session = s.id AND e.kind = 'session-moved'
            AND json_extract(e.data, '$.place') = 'chat' ORDER BY e.id DESC LIMIT 1),
-       s.archived_at
+       s.archived_at,
+       (SELECT p.phase FROM plans p WHERE p.id = s.plan),
+       EXISTS (SELECT 1 FROM plan_reviews v WHERE v.plan = s.plan AND v.status = 'pending'),
+       EXISTS (SELECT 1 FROM prs r JOIN pull_requests q ON q.id = r.pull_request
+                WHERE r.plan = s.plan AND q.state = 'open' AND q.checks IN ('passed', 'failed'))
   FROM sessions s";
 
 /// The Sessions matching `filter` (SQL after `WHERE`, over `s`), oldest first.
@@ -257,8 +259,20 @@ pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -
         let (state, tier_text, place): (String, String, Option<String>) = (r.get(10)?, r.get(8)?, r.get(14)?);
         let state: State = value_enum("Session state", &state)?;
         let place = place.map_or(Ok(Place::None), |p| Place::parse("Session place", &p))?;
+        let phase: Option<String> = r.get(19)?;
+        let phase = phase.map(|p| value_enum::<Phase>(&format!("Plan of Session {session} has phase"), &p)).transpose()?;
+        let plan_lead: bool = r.get(15)?;
         out.push(SessionNode {
-            needs_you: needs_you(state, place, r.get(16)?, r.get(17)?),
+            dot: Dot::of(DotInputs {
+                state,
+                place,
+                settled: r.get(16)?,
+                seen: r.get(17)?,
+                plan_lead,
+                phase,
+                review_pending: r.get(20)?,
+                pr_checked: r.get(21)?,
+            }),
             role: value_enum("Session role", &role)?,
             context: ContextId::parse(&context).map_err(|_| field("context", &context))?,
             plan: plan.map(|p| PlanId::parse(&p).map_err(|_| field("plan", &p))).transpose()?,
@@ -273,7 +287,7 @@ pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -
             state_at: r.get(12)?,
             created_at: r.get(13)?,
             place,
-            plan_lead: r.get(15)?,
+            plan_lead,
             archived_at: r.get(18)?,
             id: session,
         });
@@ -288,9 +302,6 @@ pub struct PlanHead {
     pub context: ContextId,
     pub title: String,
     pub jira: Option<String>,
-    pub repo: String,
-    pub base: String,
-    pub lead_branch: String,
     pub phase: Phase,
     pub lead_session: SessionId,
     pub pr: Option<Pr>,
@@ -312,9 +323,9 @@ impl PlanHead {
         self.archived_at.is_some()
     }
 
-    /// The Plan waits on the User: an open Escalation, a pending Plan review, or a Session with the ● (`SessionNode::needs_you`).
+    /// The Plan waits on the User: an open Escalation, a pending Plan review, or a Session with a ● (`SessionNode::needs_you`).
     pub fn needs_you(&self, sessions: &[SessionNode]) -> bool {
-        self.open_escalations > 0 || self.review_pending || sessions.iter().any(|s| s.needs_you)
+        self.open_escalations > 0 || self.review_pending || sessions.iter().any(SessionNode::needs_you)
     }
 }
 
@@ -362,9 +373,9 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
     }
 
     let mut stmt = conn.prepare(
-        "SELECT p.id, p.context, p.title, p.jira, r.repo, r.base, r.lead_branch, p.phase, p.lead_session, r.pr_number,
+        "SELECT p.id, p.context, p.title, p.jira, p.phase, p.lead_session, r.pr_number,
                 r.pr_url, r.pr_opened_at, q.state, q.checks, p.created_at, p.locked_at, r.all_merged_at, p.done_at, p.archived_at
-           FROM plans p JOIN prs r ON r.plan = p.id
+           FROM plans p LEFT JOIN prs r ON r.plan = p.id
                 AND r.key = (SELECT key FROM prs WHERE plan = p.id ORDER BY created_txn, key LIMIT 1)
                 LEFT JOIN pull_requests q ON q.id = r.pull_request
           WHERE ?1 IS NULL OR p.id = ?1 ORDER BY p.created_at, p.id",
@@ -375,10 +386,10 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
         let pid: String = r.get(0)?;
         let plan = id("Plan id", &pid, PlanId::parse)?;
         let field = |name: &str, value: &str| bad_row(format!("Plan {plan} has {name} {value:?}"));
-        let (context, phase, lead): (String, String, String) = (r.get(1)?, r.get(7)?, r.get(8)?);
+        let (context, phase, lead): (String, String, String) = (r.get(1)?, r.get(4)?, r.get(5)?);
         let phase: Phase = value_enum(&format!("Plan {plan} has phase"), &phase)?;
-        let (row_state, row_checks): (Option<String>, Option<String>) = (r.get(12)?, r.get(13)?);
-        let pr = match (r.get::<_, Option<i64>>(9)?, r.get::<_, Option<String>>(10)?, r.get::<_, Option<String>>(11)?) {
+        let (row_state, row_checks): (Option<String>, Option<String>) = (r.get(9)?, r.get(10)?);
+        let pr = match (r.get::<_, Option<i64>>(6)?, r.get::<_, Option<String>>(7)?, r.get::<_, Option<String>>(8)?) {
             (Some(number), Some(url), Some(opened_at)) => {
                 // A PR with a number has its pull request (`prs` CHECK).
                 let checks = row_checks.ok_or_else(|| bad_row(format!("PR of Plan {plan} has no pull request row")))?;
@@ -397,17 +408,14 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
             lead_session: SessionId::parse(&lead).map_err(|_| field("lead_session", &lead))?,
             title: r.get(2)?,
             jira: r.get(3)?,
-            repo: r.get(4)?,
-            base: r.get(5)?,
-            lead_branch: r.get(6)?,
             counts: counts.remove(&pid).unwrap_or_default(),
             open_escalations: open.remove(&pid).unwrap_or(0),
             review_pending: pending.contains(&pid),
-            created_at: r.get(14)?,
-            locked_at: r.get(15)?,
-            all_merged_at: r.get(16)?,
-            done_at: r.get(17)?,
-            archived_at: r.get(18)?,
+            created_at: r.get(11)?,
+            locked_at: r.get(12)?,
+            all_merged_at: r.get(13)?,
+            done_at: r.get(14)?,
+            archived_at: r.get(15)?,
             phase,
             pr,
             id: plan,

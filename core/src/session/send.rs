@@ -1,4 +1,4 @@
-//! `session send` (commands.md §10.12, hs-d92, hs-d133): one message to a Lead or a Manager,
+//! `session send` (commands.md §10.13, hs-d92, hs-d133): one message to a Lead or a Manager,
 //! as a `session-message` Event its adapter delivers (§15.3).
 
 use rusqlite::OptionalExtension;

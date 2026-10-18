@@ -231,7 +231,12 @@ impl Fx {
 
     /// Starts `cpd watch` and waits for its `watch-started`.
     fn start(&self) -> Engine {
-        let child = self.env.command(CPD).arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        self.start_from(Path::new(CPD))
+    }
+
+    /// `start` with the engine run from the binary at `exe`.
+    fn start_from(&self, exe: &Path) -> Engine {
+        let child = self.env.command(exe).arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         let engine = Engine { child: Some(child) };
         let pid = engine.pid();
         wait_until("watch-started", || {
@@ -665,6 +670,37 @@ fn e3_one_tick_schedules_a_ready_job_within_the_concurrency() {
     }
 }
 
+/// The 00:02Z incident (hs-d151): the file the engine runs from is replaced, then
+/// E3 starts an Attempt. The driver starts from the path recorded at start
+/// (`cannot run <path> (deleted)` before).
+#[test]
+fn e3_starts_the_driver_after_the_engines_binary_is_replaced() {
+    let fx = fx("concurrency = 1\nretry_cap = 0");
+    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
+        assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
+    }
+    let installed = fx.env.root().join("cpd-installed");
+    fs::copy(CPD, &installed).unwrap();
+    let engine = fx.start_from(&installed);
+
+    let new = fx.env.root().join("cpd-new");
+    fs::copy(CPD, &new).unwrap();
+    fs::rename(&new, &installed).unwrap();
+    fx.add_job("api", &[], "");
+
+    wait_until("attempt-started", || fx.count("attempt-started") == 1);
+    engine.stop();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while fx.attempt("api-a1").0 != "ended" {
+        assert!(Instant::now() < deadline, "the driver never ended api-a1");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(fx.query::<Option<i64>>("SELECT driver_pid FROM attempts WHERE id = 'api-a1'").is_some(), "the driver was not started");
+    let texts = fx.texts("attempt-ended");
+    assert!(texts.iter().all(|t| !t.contains("cannot run") && !t.contains("deleted")), "{texts:?}");
+    assert!(!fx.texts("error").iter().any(|t| t.contains("deleted")));
+}
+
 #[test]
 fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
     let fx = fx("");
@@ -869,6 +905,12 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     // One tick only: whatever happens after the first poll happens in that tick.
     let config = fx.env.cpd_home().join("config.toml");
     fs::write(&config, fs::read_to_string(&config).unwrap().replace("tick_seconds = 1\n", "tick_seconds = 600\n")).unwrap();
+    // The clean-up of the merged `repo` keeps a Lead worktree with commits not on origin (and raises an `error`): give
+    // the repo an `origin` that has them, so the only `error` this test could see is E5's or E7's own.
+    let origin = fx.env.root().join("repos/origin.git");
+    fx.env.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
+    fx.env.git(&fx.repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    fx.env.git(&fx.repo, &["push", "-q", "origin", "main"]);
     // `web` is in its own repo: git cannot hold `cpd/pay` beside `cpd/pay/web`.
     let web = fx.env.git_repo("web").canonicalize().unwrap();
     fx.fixture(&format!(
@@ -892,6 +934,7 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     assert_eq!(fx.query::<String>("SELECT status FROM prs WHERE key = 'repo'"), "merged");
     assert_eq!(fx.query::<String>("SELECT status FROM prs WHERE key = 'web'"), "dispatch");
     assert!(fx.query::<i64>("SELECT id FROM events WHERE kind = 'pr-merged'") < fx.query::<i64>("SELECT id FROM events WHERE kind = 'pr-started'"));
+    assert!(!fx.lead.exists(), "the poll that saw the merge cleaned up the Lead worktree");
     assert_eq!(fx.count("error"), 0);
 }
 
@@ -931,11 +974,20 @@ fn the_engine_neither_imports_nor_syncs_a_context_store() {
 /// socket, and records `watch --ensure` with the windows of the work session
 /// at that moment. Returns the script's stderr and the fake's calls.
 fn install(env: &TestEnv) -> (String, Vec<Vec<String>>) {
+    let (out, calls) = install_with(env, 6, "6");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    (String::from_utf8_lossy(&out.stderr).into_owned(), calls)
+}
+
+/// `install`, where the fake build's `--version` reports `schema` and
+/// `store_schema` (a JSON literal: a number or `null`). Returns the output.
+fn install_with(env: &TestEnv, schema: u32, store_schema: &str) -> (std::process::Output, Vec<Vec<String>>) {
     let socket = env.tmux_socket();
     let built = env.fake(
         "cpd-built",
         &format!(
             r#"case "$1" in
+--version) echo '{{"ok":true,"version":"0.0.0","schema":{schema},"store_schema":{store_schema}}}' ;;
 config) echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}' ;;
 watch) tmux -L '{socket}' list-windows -t =cpd-work -F '#{{window_name}}' > '{windows}' 2>&1; echo '{{"ok":true,"started":true,"pane":"%9"}}' ;;
 esac"#,
@@ -951,9 +1003,7 @@ esac"#,
         .env("CARGO_TARGET_DIR", &target)
         .output()
         .unwrap();
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert!(out.status.success(), "{stderr}");
-    (stderr, env.calls("cpd-built"))
+    (out, env.calls("cpd-built"))
 }
 
 #[test]
@@ -969,7 +1019,7 @@ fn install_restarts_a_running_engine_with_ensure_and_says_so() {
     let (stderr, calls) = install(&env);
 
     assert!(stderr.contains("restarting the running engine"), "{stderr}");
-    assert_eq!(calls, [vec!["config"], vec!["watch", "--ensure"]]);
+    assert_eq!(calls, [vec!["--version"], vec!["config"], vec!["watch", "--ensure"]]);
     // The window was killed before --ensure ran; the other window is untouched.
     assert_eq!(fs::read_to_string(env.root().join("windows-at-ensure")).unwrap().trim(), "other");
 }
@@ -983,5 +1033,33 @@ fn install_leaves_a_server_without_an_engine_alone() {
     let (stderr, calls) = install(&env);
 
     assert!(!stderr.contains("restarting the running engine"), "{stderr}");
-    assert_eq!(calls, [vec!["config"]]);
+    assert_eq!(calls, [vec!["--version"], vec!["config"]]);
+}
+
+#[test]
+fn install_refuses_a_build_older_than_the_store_before_replacing_anything() {
+    let env = TestEnv::new();
+    let out = env.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "watch", "sleep", "600"]);
+    assert!(out.status.success());
+
+    let (out, calls) = install_with(&env, 5, "6");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("cpd install refused: this build supports store schema 5 but "), "{stderr}");
+    assert!(stderr.contains("cpd.db is at 6; merge main into this branch, then install again."), "{stderr}");
+    assert!(!env.home().join(".local/bin/cpd").exists());
+    assert!(!env.home().join(".local/share/cpd/pi").exists());
+    // Only --version ran: no `tui --respawn`, no `watch --ensure`.
+    assert_eq!(calls, [vec!["--version"]]);
+}
+
+#[test]
+fn install_accepts_a_build_equal_to_the_store_or_a_home_without_a_database() {
+    for store_schema in ["6", "null"] {
+        let env = TestEnv::new();
+        let (out, _) = install_with(&env, 6, store_schema);
+        assert!(out.status.success(), "{store_schema}: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(env.home().join(".local/bin/cpd").exists());
+    }
 }

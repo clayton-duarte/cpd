@@ -115,15 +115,16 @@ fn assert_server_options(s: &Server) {
         ("pane-border-lines", "heavy"),
         (
             "pane-border-format",
-            "#{?#{@cpd_session},,#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},statusbar},,\
-             #{?#{==:#{@cpd_view},worker}, Worker · #{@cpd_job} (read-only) ,#{?#{==:#{@cpd_view},tree}, Context ,\
-             #{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Dispatch ,#{pane_current_command}}}}}}}}",
+            "#{?#{@cpd_session},#{?#{@cpd_title},#[reverse] #{@cpd_title} #[noreverse],},#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,#{?#{==:#{@cpd_view},statusbar},,\
+             #[reverse]#{?#{==:#{@cpd_view},worker}, Worker · #{@cpd_job} (read-only) ,#{?#{==:#{@cpd_view},tree}, Context ,\
+             #{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Deploy ,#{pane_current_command}}}}}#[noreverse]}}}}",
         ),
         ("pane-active-border-style", "fg=blue"),
         ("remain-on-exit", "on"),
     ] {
         assert_eq!(s.tmux.global_option(option).unwrap(), value, "{option}");
     }
+    assert!(s.tmux.global_option("pane-border-format").unwrap().contains(", Deploy ,"));
     let features = s.tmux.global_option("terminal-features").unwrap();
     for feature in ["xterm*:extkeys", "xterm-ghostty:extkeys", "xterm-ghostty:hyperlinks"] {
         assert_eq!(features.matches(feature).count(), 1, "{feature} in {features}");
@@ -374,6 +375,39 @@ fn a_failing_call_is_tmux_failed_with_argv_exit_and_stderr() {
     assert_eq!(d["argv"], serde_json::json!(["tmux", "-L", s.env.tmux_socket(), "-f", "/dev/null", "kill-pane", "-t", "%999"]));
     assert_eq!(d["exit"], 1);
     assert!(d["stderr"].as_str().unwrap().contains("%999"), "{d:?}");
+}
+
+#[test]
+fn set_pane_title_runs_set_p_on_cpd_title_and_a_missing_pane_fails_with_its_argv() {
+    let s = server();
+    let t = &s.tmux;
+    let (_, pane_id) = t.create_session("cpd", layout::MAIN_WINDOW, &sleeper(s.env.root())).unwrap().unwrap();
+    t.set_pane_title(&pane_id, "Retry #{x} payouts; ok").unwrap();
+    let shown = s.env.tmux(&["show", "-pv", "-t", pane_id.as_str(), "@cpd_title"]);
+    assert_eq!(String::from_utf8_lossy(&shown.stdout), "Retry #{x} payouts; ok\n");
+
+    let missing = PaneId::parse("%999").unwrap();
+    let err = t.set_pane_title(&missing, "X").unwrap_err();
+    assert_eq!(err.code(), ErrorCode::TmuxFailed);
+    assert_eq!(
+        err.details()["argv"],
+        serde_json::json!(["tmux", "-L", s.env.tmux_socket(), "-f", "/dev/null", "set", "-p", "-t", "%999", "@cpd_title", "X"])
+    );
+}
+
+#[test]
+fn a_leads_border_shows_its_title_reversed_and_a_titleless_lead_shows_nothing() {
+    let s = server();
+    let t = &s.tmux;
+    let (_, pane_id) = t.create_session("cpd", layout::MAIN_WINDOW, &sleeper(s.env.root())).unwrap().unwrap();
+    let border = || {
+        let out = s.env.tmux(&["display-message", "-p", "-t", pane_id.as_str(), "#{T:pane-border-format}"]);
+        String::from_utf8_lossy(&out.stdout).trim_end_matches('\n').to_owned()
+    };
+    t.set_pane_session(&pane_id, &SessionId::new_v4()).unwrap();
+    assert_eq!(border(), "");
+    t.set_pane_title(&pane_id, "Retry payouts").unwrap();
+    assert_eq!(border(), "#[reverse] Retry payouts #[noreverse]");
 }
 
 #[test]

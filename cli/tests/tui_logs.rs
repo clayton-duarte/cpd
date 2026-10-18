@@ -1,4 +1,4 @@
-//! The `logs` view and the StatusBar's ` ≡ logs ` button (commands.md §13.2, §17; R36): the Event log's snapshot,
+//! The `logs` view and the StatusBar's `▤` button (commands.md §13.2, §17; R36): the Event log's snapshot,
 //! following and scrolling with ratatui's `TestBackend`, the view itself and the button's click on a private tmux
 //! server (the click is raw mouse bytes sent to the StatusBar's pane; `tmux` on `PATH` is a fake that answers
 //! `list-clients` and records `display-popup`, and runs the real one for the rest).
@@ -280,7 +280,7 @@ fn the_popup_is_sized_like_the_legends_and_at_most_80_percent_of_the_client() {
     assert_eq!(small[3], " logs ");
 }
 
-/// The StatusBar in a one-row window, with a fake `tmux` on `PATH`: `list-clients` says one client of 200x50,
+/// The StatusBar in a one-row window, with a fake `tmux` on `PATH`: `list-clients` says one client of 200x60,
 /// `display-popup` does nothing, and the rest is the real tmux.
 fn statusbar_with_fake_tmux(env: &TestEnv) -> String {
     let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
@@ -288,7 +288,7 @@ fn statusbar_with_fake_tmux(env: &TestEnv) -> String {
     env.fake(
         "tmux",
         &format!(
-            "case \"$*\" in\n *list-clients*) echo '100 200 50';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac",
+            "case \"$*\" in\n *list-clients*) echo '100 200 60';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac",
             real.trim()
         ),
     );
@@ -310,9 +310,9 @@ fn click(env: &TestEnv, pane: &str, column: u16) {
 fn a_click_on_the_logs_button_opens_the_popup_and_the_others_do_not() {
     let env = env();
     let pane = statusbar_with_fake_tmux(&env);
-    wait_screen(&env, &pane, "the buttons", |r| r.first().is_some_and(|l| l.starts_with("⧉   ? legend   ≡ logs ")));
-    // ` ≡ logs ` is columns 14–21 (0-based)
-    click(&env, &pane, 16);
+    wait_screen(&env, &pane, "the buttons", |r| r.first().is_some_and(|l| l.starts_with("⧉ ? ▤")));
+    // `▤` is column 4 (0-based)
+    click(&env, &pane, 5);
     wait_until("the popup", || !popups(&env).is_empty());
     let popup = popups(&env).remove(0);
     let at = popup.iter().position(|a| a == "display-popup").unwrap();
@@ -325,7 +325,7 @@ fn a_click_on_the_logs_button_opens_the_popup_and_the_others_do_not() {
     assert!(popup[..at].starts_with(&["-L".to_owned(), env.tmux_socket().to_owned()]), "{popup:?}");
 
     // a click on the legend button opens the legend, not the log
-    click(&env, &pane, 6);
+    click(&env, &pane, 3);
     wait_until("the legend popup", || popups(&env).len() == 2);
     assert!(popups(&env)[1].contains(&" legend ".to_owned()));
 }

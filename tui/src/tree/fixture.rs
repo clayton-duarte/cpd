@@ -5,7 +5,7 @@ use cpd_core::config::Tier;
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::plan::Phase;
 use cpd_core::session::{Role, State};
-use crate::read::{ContextNode, Place, PlanHead, PlanNode, SessionNode, Tree};
+use crate::read::{ContextNode, Dot, Place, PlanHead, PlanNode, SessionNode, Tree};
 use crate::read::JobCounts;
 
 /// The title of a Context or Plan `id`: the id with a capital, so that a test can tell a title from an id and a name.
@@ -32,7 +32,12 @@ pub fn session(id: &str, name: &str, state: State, label: Option<&str>, place: P
         created_at: "2026-01-01T00:00:00.000Z".into(),
         place,
         plan_lead: false,
-        needs_you: state == State::Blocked,
+        dot: match state {
+            State::Blocked => Dot::Red,
+            State::Working => Dot::Working,
+            State::Idle => Dot::Idle,
+            State::Stopped => Dot::Stopped,
+        },
         archived_at: None,
     }
 }
@@ -55,9 +60,6 @@ pub fn plan(id: &str, context: &str, phase: Phase, counts: [usize; 6], mut lead:
             context: ContextId::parse(context).unwrap(),
             title: titled(id),
             jira: None,
-            repo: format!("/repo/{id}"),
-            base: "main".into(),
-            lead_branch: format!("cpd/{id}"),
             phase,
             lead_session: lead.id,
             pr: None,
@@ -74,8 +76,21 @@ pub fn plan(id: &str, context: &str, phase: Phase, counts: [usize; 6], mut lead:
     }
 }
 
+/// The dot of a Context, as the read model takes it: the most urgent of its live (not archived) Sessions.
+fn live_dot(plans: &[PlanNode]) -> Dot {
+    plans.iter().flat_map(|p| &p.sessions).filter(|s| !s.is_archived()).map(|s| s.dot).max().unwrap_or(Dot::Stopped)
+}
+
+/// Take every Context's dot again, after a test archived some of its Sessions.
+pub fn refresh_dots(t: &mut Tree) {
+    for c in &mut t.contexts {
+        c.dot = live_dot(&c.plans);
+    }
+}
+
 pub fn context(id: &str, plans: Vec<PlanNode>) -> ContextNode {
     ContextNode {
+        dot: live_dot(&plans),
         id: ContextId::parse(id).unwrap(),
         title: titled(id),
         jira: None,
@@ -133,6 +148,8 @@ pub fn archived() -> Tree {
         let mut t = sample();
         t.contexts[0].plans[0].sessions[2].archived_at = Some(WHEN.into());
         t.contexts[0].plans[2].head.archived_at = Some(WHEN.into());
+        t.contexts[0].plans[2].sessions[0].archived_at = Some(WHEN.into()); // archiving a Plan archives its Sessions
+        refresh_dots(&mut t);
         let mut zp = plan("zp", "zeta", Phase::Dispatch, [0, 0, 0, 0, 0, 2], session("l-zp", "zp lead", State::Stopped, None, Place::None), vec![session("f-zp", "zp fork", State::Stopped, None, Place::None)]);
         zp.head.archived_at = Some(WHEN.into());
         for s in &mut zp.sessions {

@@ -1,4 +1,4 @@
-//! `cpd session send` and the `session-message` Event (commands.md §10.12,
+//! `cpd session send` and the `session-message` Event (commands.md §10.13,
 //! contract §5.2), run as the built binary.
 
 mod common;

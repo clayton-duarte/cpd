@@ -156,6 +156,10 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     assert_eq!(tmux_out(&env, &["show", "-gv", "remain-on-exit"]).trim(), "on");
     let border = tmux_out(&env, &["show", "-gv", "pane-border-format"]);
     assert!(border.contains("#{==:#{@cpd_view},tree}, Context "), "{border}");
+    assert!(border.contains("#[reverse]") && border.contains("#[noreverse]"), "{border}");
+    // tmux expands the format of the tree pane to its reversed title.
+    let expanded = tmux_out(&env, &["display", "-p", "-t", &view(&panes, "tree").id, "-F", &border]);
+    assert!(expanded.contains("#[reverse] Context #[noreverse]"), "{expanded}");
     // The StatusBar has no title, and a click on it never selects it.
     assert!(border.contains("#{?#{==:#{@cpd_view},statusbar},,"), "{border}");
     let binding = tmux_out(&env, &["list-keys", "-T", "root", "MouseDown1Pane"]);

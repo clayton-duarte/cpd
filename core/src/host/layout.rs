@@ -27,11 +27,13 @@ pub enum View {
     Worker,
     /// The chat slot's placeholder.
     Chat,
+    /// The chat slot showing an archived Session's history (`cpd session history`).
+    History,
 }
 
 impl View {
-    pub const ALL: [View; 6] =
-        [View::Tree, View::Plan, View::Widgets, View::Statusbar, View::Worker, View::Chat];
+    pub const ALL: [View; 7] =
+        [View::Tree, View::Plan, View::Widgets, View::Statusbar, View::Worker, View::Chat, View::History];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -41,6 +43,7 @@ impl View {
             View::Statusbar => "statusbar",
             View::Worker => "worker",
             View::Chat => "chat",
+            View::History => "history",
         }
     }
 
@@ -78,13 +81,13 @@ fn in_main(pane: &Pane, cockpit_session: &str) -> bool {
     pane.session_name == cockpit_session && pane.window_name == MAIN_WINDOW
 }
 
-/// The chat slot: the pane of `<cockpit>:main` that has `@cpd_session` or
-/// `@cpd_view = chat` (amendment 1). Options move with a pane on `swap-pane`,
+/// The chat slot: the pane of `<cockpit>:main` that has `@cpd_session`, or
+/// `@cpd_view` `chat` or `history` (amendment 1, amendment 28). Options move with a pane on `swap-pane`,
 /// which is why the slot is found by this rule and not by a fixed option.
 pub fn chat_slot<'a>(panes: &'a [Pane], cockpit_session: &str) -> Option<&'a Pane> {
-    panes
-        .iter()
-        .find(|p| in_main(p, cockpit_session) && (p.cpd_session.is_some() || p.cpd_view == Some(View::Chat)))
+    panes.iter().find(|p| {
+        in_main(p, cockpit_session) && (p.cpd_session.is_some() || matches!(p.cpd_view, Some(View::Chat | View::History)))
+    })
 }
 
 /// The pane of `<cockpit>:main` running `view` (not the chat placeholder,
@@ -152,6 +155,9 @@ mod tests {
         assert_eq!(chat_slot(&panes, "cpd"), Some(&placeholder));
         let panes = vec![worker.clone(), tree.clone(), parked.clone(), other.clone(), lead.clone()];
         assert_eq!(chat_slot(&panes, "cpd"), Some(&lead));
+        let history = pane("%4", "cpd", "main", None, Some(View::History));
+        let panes = vec![worker.clone(), tree.clone(), parked.clone(), other.clone(), history.clone()];
+        assert_eq!(chat_slot(&panes, "cpd"), Some(&history));
         assert_eq!(chat_slot(&[worker, tree.clone(), parked.clone(), other], "cpd"), None);
 
         assert_eq!(view_pane(&[parked.clone(), tree.clone()], "cpd", View::Tree), Some(&tree));

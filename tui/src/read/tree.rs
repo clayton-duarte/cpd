@@ -10,6 +10,7 @@ use cpd_core::events::highest_id;
 use cpd_core::ids::ContextId;
 use cpd_core::store::Store;
 
+use super::dot::Dot;
 use super::shared::{PlanHead, SessionNode, id, plan_heads, sessions};
 
 /// Every Context of the machine, by id.
@@ -32,6 +33,8 @@ pub struct ContextNode {
     pub archived_at: Option<String>,
     /// Its Plans, oldest first.
     pub plans: Vec<PlanNode>,
+    /// The dot of its row: the greatest dot of its live (not archived) Sessions, `Stopped` with none (§17).
+    pub dot: Dot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,8 +115,16 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
                     own.sort_by_key(|s| !s.plan_lead); // stable: the Lead first, the rest oldest first
                     PlanNode { head, sessions: own }
                 })
-                .collect();
+                .collect::<Vec<PlanNode>>();
+            let dot = plans
+                .iter()
+                .flat_map(|p| &p.sessions)
+                .filter(|s| !s.is_archived())
+                .map(|s| s.dot)
+                .max()
+                .unwrap_or(Dot::Stopped);
             contexts.push(ContextNode {
+                dot,
                 title: r.get(1)?,
                 jira: r.get(2)?,
                 records: records.remove(&cid).unwrap_or(0),

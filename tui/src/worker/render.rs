@@ -16,7 +16,7 @@ use crate::palette::{self, Ui};
 const INDENT: usize = 6;
 
 /// The text of a session file, as lines. Continuation rows of a long line are made by [`wrap`].
-pub(super) fn render(text: &str) -> Vec<Line<'static>> {
+pub(crate) fn render(text: &str) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for raw in text.lines() {
         let Ok(entry) = serde_json::from_str::<Value>(raw) else { continue };
@@ -61,7 +61,7 @@ pub(super) fn render(text: &str) -> Vec<Line<'static>> {
 
 /// `lines` broken into rows of at most `width` characters, a continuation row
 /// indented by [`INDENT`] (nothing when the pane is narrower than twice that).
-pub(super) fn wrap(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
+pub(crate) fn wrap(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
     let width = width.max(1);
     let indent = if width >= 2 * INDENT { INDENT } else { 0 };
     let mut rows = Vec::new();

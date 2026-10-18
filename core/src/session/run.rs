@@ -13,13 +13,14 @@ use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use super::archive::archive_on_quit;
 use super::moves::first_message;
 use super::port;
 use super::row::{self, Role, Row, State};
 use super::{Env, RunArgs, bad_row, not_a_lead, state};
 use crate::config::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
-use crate::host::exe::Exe;
+use crate::host::exe::{Exe, Refusal, Watched};
 use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs, Plannotator};
 use crate::host::{PaneId, Tmux};
 use crate::ids::{PlanId, SessionId};
@@ -72,6 +73,8 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
             plannotator: &plannotator,
             start,
         });
+        // Recorded right before pi starts: a change after it is a pi the Lead has not run yet.
+        let pi_install = dirs.watch_install();
         let mut child = Command::new(&launch.argv[0])
             .args(&launch.argv[1..])
             .envs(&launch.env)
@@ -81,35 +84,46 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start pi: {e}.")).with("argv", launch.argv.clone())
             })?;
         let mut recorded = row.file.is_some();
-        loop {
+        let status = loop {
             let exited = child.try_wait().map_err(|e| {
                 CpdError::new(ErrorCode::SpawnFailed, format!("Cannot wait for pi: {e}.")).with("argv", launch.argv.clone())
             })?;
-            if exited.is_some() {
+            if let Some(status) = exited {
                 // A new install: restart before any store write (§6.7 "Reload on install").
-                if exe.replaced() {
+                if exe.replaced() && may_exec(&exe) {
                     return Err(reload(&exe, &row.id));
                 }
                 if !recorded {
                     record_file(&mut env, &dirs, &row.id)?;
                 }
-                break;
+                break status;
             }
             if !recorded {
                 recorded = record_file(&mut env, &dirs, &row.id)?;
             }
-            if exe.replaced() && reload_due(&mut env, &dirs, &row.id)? {
-                print!("  new cpd installed: restarting pi for {}…\n", row.name);
+            let pi_changed = pi_install.as_ref().is_some_and(Watched::changed);
+            // `may_exec` asks the new cpd, so it comes after the cheaper tests and before pi is signalled.
+            if (exe.replaced() || pi_changed) && reload_due(&mut env, &dirs, &row.id)? && may_exec(&exe) {
+                let what = if exe.replaced() { "cpd" } else { "pi" };
+                print!("  new {what} installed: restarting pi for {}…\n", row.name);
                 let _ = std::io::stdout().flush();
                 // The adapter reports `stopped` at `session_shutdown`; this process does not.
                 stop_pi(&mut child, PI_STOP);
                 return Err(reload(&exe, &row.id));
             }
             std::thread::sleep(FILE_POLL);
-        }
+        };
         // The adapter reports `stopped` at shutdown; report it here when it did not.
         if let Err(e) = state::set(&mut env.store, "session run", &row.id, State::Stopped, None) {
             eprintln!("cpd: cannot report Session {} stopped: {}: {}", row.id, e.code(), e.message());
+        }
+        // pi exits 0 on the User's `/quit` and Ctrl+D (§10.8); a reload never gets here. A Manager is archived only
+        // with its Context (§3.8), so its quit is not archived.
+        if status.success() && row.role == Role::Lead {
+            match archive_on_quit(&mut env, &row.id) {
+                Ok(()) => return Ok(Output::Owned),
+                Err(e) => print!("\n  {}: {}\n", e.code(), e.message()),
+            }
         }
         let name = env.store.read(|conn| row::load(conn, &args.id))?.name;
         print!("\n  pi exited. Press Enter to resume {name} here.\n");
@@ -119,9 +133,26 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
             Ok(0) | Err(_) => return Ok(Output::Owned),
             Ok(_) => {}
         }
-        if exe.replaced() {
+        if exe.replaced() && may_exec(&exe) {
             return Err(reload(&exe, &row.id));
         }
+    }
+}
+
+/// Whether the wrapper may `exec` the cpd at its path: nothing replaced it (a
+/// reload for pi's sake), or what replaced it can open the store. A refused install is reported once per
+/// installed file and the wrapper carries on as if nothing was installed (hs-d151).
+fn may_exec(exe: &Exe) -> bool {
+    if !exe.replaced() {
+        return true;
+    }
+    match exe.check_store() {
+        Ok(()) => true,
+        Err(Refusal::New(reason)) => {
+            eprintln!("cpd: reload skipped: {} {reason}", exe.path().display());
+            false
+        }
+        Err(Refusal::Known) => false,
     }
 }
 
@@ -146,7 +177,7 @@ fn reload(exe: &Exe, id: &SessionId) -> CpdError {
     exe.exec(["session", "run", id.as_str()])
 }
 
-/// A new cpd is installed and the Lead is at a safe point (§6.7 "Reload on
+/// A new cpd or pi is installed and the Lead is at a safe point (§6.7 "Reload on
 /// install"): reads the Session and its file, and decides with [`reload_now`].
 fn reload_due(env: &mut Env, dirs: &PiDirs, id: &SessionId) -> Result<bool, CpdError> {
     let row = env.store.read(|conn| row::load(conn, id))?;
