@@ -144,10 +144,12 @@ test("a directory that changes between two polls is not validated or reloaded un
     dir,
     intervalMs: 10,
     validate: async () => void calls.push("validate"),
-    allowed: () => true,
+    refusal: () => undefined,
     trigger: () => void calls.push("trigger"),
     onRefused: () => void calls.push("refused"),
     onError: (e) => void calls.push(`error ${e}`),
+    log: () => {},
+    onLongRefusal: () => void calls.push("long"),
   });
   t.after(() => poll.stop());
   const tick = async () => {

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,18 @@ import type { Wanted } from "./state.ts";
 export const RELOAD_COMMAND = "cpd-reload-after-install";
 export const RELOAD_TRIGGER = `/${RELOAD_COMMAND}`;
 export const DEFAULT_POLL_MS = 5000;
+/** commands.md §15.6 "Log": a reload refused for longer than this (after the new package validated) is told to the User once. */
+export const LONG_REFUSAL_MS = 10 * 60_000;
+export const LONG_REFUSAL_NOTICE = "cpd: a new adapter is installed; reload when free (/reload)";
+
+/** commands.md §15.6 "Log": where this Session's reload decisions are written. */
+export const reloadLogPath = (cpdHome: string, session: string): string => join(cpdHome, "run", "adapter", `${session}.log`);
+
+/** Appends `<ISO time> <line>` to `path`, creating its directory. Throws when it cannot write: the caller decides who hears of it. */
+export function appendLog(path: string, line: string, now: () => Date = () => new Date()): void {
+  mkdirSync(dirname(path), { recursive: true });
+  appendFileSync(path, `${now().toISOString()} ${line}\n`);
+}
 
 /** The adapter directory: the parent of `pi/lib/`, which is what `scripts/install-cpd.sh` replaces as a whole. */
 export const adapterDir = (): string => dirname(dirname(fileURLToPath(import.meta.url)));
@@ -114,13 +126,20 @@ export type PollOptions = {
   intervalMs: number;
   /** The throwaway load of the new package: the reason it must not be reloaded, or `undefined`. */
   validate(dir: string): Promise<string | undefined>;
-  /** The guard at the trigger: false skips this tick, the next one tries again. */
-  allowed(): boolean;
+  /** The guard at the trigger: the reason it refuses (this tick is skipped, the next one tries again), or `undefined` when it may trigger. */
+  refusal(): string | undefined;
   /** Asks pi to run the reload command. */
   trigger(): void;
   /** The new package was refused: shown once per distinct reason until a poll passes. */
   onRefused(reason: string): void;
   onError(e: unknown): void;
+  /** One line per decision (commands.md §15.6 "Log"). */
+  log(line: string): void;
+  /** The validated package has been refused for more than `longRefusalMs`: called once per install. */
+  onLongRefusal(): void;
+  longRefusalMs?: number;
+  /** Milliseconds, for the long refusal. Default: `Date.now`. */
+  now?: () => number;
 };
 
 export type Poll = {
@@ -134,18 +153,36 @@ export type Poll = {
  * Polls the identity of `dir`. A changed identity that is the same on two consecutive polls (the install is finished) and whose package
  * validates triggers once; while that trigger is outstanding no second one is sent. A package that does not validate is retried at every later
  * poll. The change is not handled until the poll is replaced (a reload starts a new one that records the new identity).
+ * Every decision is logged; a waiting or refusing line is not repeated while it is the last one.
  */
 export function pollAdapter(o: PollOptions): Poll {
+  const now = o.now ?? Date.now;
+  const longMs = o.longRefusalMs ?? LONG_REFUSAL_MS;
   let baseline: string | undefined;
   /** The new identity seen at the previous poll. */
   let seen: string | undefined;
-  /** The identity whose package validated. */
+  /** The identity whose package validated, and since when it has been waiting to reload. */
   let validated: string | undefined;
+  let readySince = 0;
+  let longTold = false;
   let refusedFor: string | undefined;
+  /** The identity whose validation was logged. */
+  let announced: string | undefined;
   let triggered = false;
   let checking = false;
   let stopped = false;
   let reported = false;
+  let lastLine: string | undefined;
+  /** A waiting or refusing line: not repeated while it is the last one. */
+  const note = (line: string) => {
+    if (line === lastLine) return;
+    lastLine = line;
+    o.log(line);
+  };
+  const log = (line: string) => {
+    lastLine = undefined;
+    o.log(line);
+  };
   const fail = (e: unknown) => {
     if (reported) return;
     reported = true;
@@ -157,6 +194,7 @@ export function pollAdapter(o: PollOptions): Poll {
     try {
       const id = identityOf(o.dir);
       if (id === undefined) {
+        if (seen !== undefined || baseline !== undefined) note("poll: the adapter directory is missing (an install in progress); waiting");
         seen = undefined; // the install's rm → mv window
         return;
       }
@@ -169,26 +207,44 @@ export function pollAdapter(o: PollOptions): Poll {
         return;
       }
       if (seen !== id) {
+        note(seen === undefined ? `poll: the identity changed ${baseline} -> ${id}; not stable yet` : `poll: the identity changed again ${seen} -> ${id}; not stable yet`);
         seen = id;
         return;
       }
       if (validated !== id) {
+        if (announced !== id) log(`poll: ${id} is stable; validating the package`);
+        announced = id;
         const reason = await o.validate(o.dir);
         if (stopped || identityOf(o.dir) !== id) return; // gone, or replaced again while loading: start over
         if (reason !== undefined) {
           if (reason !== refusedFor) o.onRefused(reason);
+          note(`poll: pre-validation failed: ${reason}`);
           refusedFor = reason;
           return;
         }
+        log("poll: pre-validation passed");
         validated = id;
+        readySince = now();
+        longTold = false;
         refusedFor = undefined;
       }
-      if (!o.allowed()) return;
+      if (!longTold && now() - readySince > longMs) {
+        longTold = true;
+        log(`poll: not reloaded ${Math.round((now() - readySince) / 1000)} s after the package validated; told the User`);
+        o.onLongRefusal();
+      }
+      const why = o.refusal();
+      if (why !== undefined) {
+        note(`poll: refused: ${why}`);
+        return;
+      }
       triggered = true;
+      log(`poll: trigger sent (/${RELOAD_COMMAND})`);
       o.trigger();
       reported = false;
     } catch (e) {
       triggered = false;
+      log(`poll: failed: ${e instanceof Error ? e.message : String(e)}`);
       fail(e);
     } finally {
       checking = false;
@@ -199,6 +255,7 @@ export function pollAdapter(o: PollOptions): Poll {
   } catch (e) {
     fail(e);
   }
+  log(`poll: watching ${o.dir} (${baseline ?? "missing"}) every ${o.intervalMs} ms`);
   const timer = setInterval(() => void tick(), o.intervalMs);
   timer.unref();
   return {
