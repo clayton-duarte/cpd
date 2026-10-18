@@ -42,7 +42,7 @@ const PANE_WAIT: Duration = Duration::from_secs(5);
 pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let row = env.store.read(|conn| row::load(conn, &args.id))?;
-    if row.role != Role::Lead {
+    if row.role == Role::Worker {
         return Err(not_a_lead(&row.id, row.role));
     }
     check_pane(&env.tmux(), &row.id)?;
@@ -51,7 +51,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
     // From here on this process owns the terminal (commands.md §1.2).
     loop {
         let row = env.store.read(|conn| row::load(conn, &args.id))?;
-        // A Lead with a Plan gets the Plan's port; a grounded Lead gets none (§6.5).
+        // A Lead with a Plan gets the Plan's port; a Context's Manager gets none (§6.5).
         let port = match &row.plan {
             Some(plan) => match assign_port(&mut env, plan)? {
                 Some(port) => Some(port),
@@ -271,7 +271,11 @@ fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<LeadStart, CpdError>
             let first_message = message.ok_or_else(|| {
                 CpdError::new(ErrorCode::FileUnreadable, format!("Session {} has no first message to start with.", row.id))
                     .with("session", row.id.as_str())
-                    .with("path", row.plan.as_ref().map(|p| env.home.lead_message(p).display().to_string()))
+                    .with("path", match (&row.plan, row.role) {
+                        (Some(plan), _) => Some(env.home.lead_message(plan).display().to_string()),
+                        (None, Role::Manager) => Some(env.home.manager_message(&row.context).display().to_string()),
+                        (None, _) => None,
+                    })
             })?;
             Ok(LeadStart::Fresh { model, name: row.name.clone(), first_message })
         }

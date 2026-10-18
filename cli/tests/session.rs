@@ -564,6 +564,41 @@ fn open_and_park_keep_at_most_one_placeholder_only_in_the_slot() {
 }
 
 #[test]
+fn open_and_park_take_a_context_s_manager_and_park_it_in_its_context_window() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd(&env);
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
+    cockpit(&env);
+    // `context manager` wrote its first message.
+    let message = home(&env).manager_message(&cpd_core::ids::ContextId::parse("ctx").unwrap());
+    fs::create_dir_all(message.parent().unwrap()).unwrap();
+    fs::write(message, "You are the Manager.").unwrap();
+
+    // A stopped Manager with no pane is resumed in a new window and swapped in.
+    let out = env.cpd(&["session", "open", MANAGER]).ok();
+    assert_eq!(out["displaced"], Value::Null);
+    assert_eq!(slot(&env).session, MANAGER);
+    assert_placeholders(&env, 0);
+    wait_until("the Manager's pi", || env.calls("pi").iter().any(|c| c.contains(&"You are the Manager.".to_owned())));
+    assert_eq!(show(&env, MANAGER)["place"], "chat");
+
+    // A Lead displaces it into `ctx-<context>`.
+    assert_eq!(env.cpd(&["session", "open", LEAD1]).ok()["displaced"], MANAGER);
+    let manager = panes(&env).into_iter().find(|p| p.session == MANAGER).unwrap();
+    assert_eq!(manager.window_name, "ctx-ctx");
+    assert_eq!(window_names(&env), ["ctx-ctx", "main"]);
+    assert_eq!(show(&env, MANAGER)["place"], "parked");
+
+    // Parking the Lead, then opening the Manager again uses its live pane.
+    env.cpd(&["session", "park"]).ok();
+    let out = env.cpd(&["session", "open", MANAGER]).ok();
+    assert_eq!(out["pane"], json!(manager.pane));
+    env.cpd(&["session", "park", MANAGER]).ok();
+    assert_eq!(panes(&env).into_iter().find(|p| p.session == MANAGER).unwrap().window_name, "ctx-ctx");
+}
+
+#[test]
 fn open_and_park_refusals() {
     let env = TestEnv::new();
     setup(&env);

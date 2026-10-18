@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use sha1::{Digest, Sha1};
 
 use crate::error::{CpdError, ErrorCode};
-use crate::ids::{AttemptId, PlanId, ReviewId, SessionId};
+use crate::ids::{AttemptId, ContextId, PlanId, ReviewId, SessionId};
 
 /// The repo hooks whose full output is logged per Attempt (contract §7.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -157,6 +157,11 @@ impl CpdHome {
     /// `run/<plan>/plan-<review>.md`: the copy a Plan review shows (commands.md §1.4).
     pub fn plan_review_md(&self, plan: &PlanId, review: ReviewId) -> PathBuf {
         self.plan_dir(plan).join(format!("plan-{review}.md"))
+    }
+
+    /// `run/<context>/manager-message.md`: a Context's Manager's first message (commands.md §3.10).
+    pub fn manager_message(&self, context: &ContextId) -> PathBuf {
+        self.run_dir().join(context.as_str()).join("manager-message.md")
     }
 
     /// `run/<plan>/lead-message.md`: the Plan Lead's first message (commands.md §1.4).
@@ -323,6 +328,7 @@ mod tests {
             h.session_message(&plan(), &session),
             p("/h/.cpd/run/pay-4521/messages/596d007f-6775-4134-b77a-b356cc523842.md")
         );
+        assert_eq!(h.manager_message(&ContextId::parse("pay").unwrap()), p("/h/.cpd/run/pay/manager-message.md"));
     }
 
     #[test]

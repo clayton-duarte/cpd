@@ -30,6 +30,7 @@ use crate::store::Store;
 
 pub use archive::{Blocker, archive_blocked, blockers};
 pub use moves::{Closed, close_lead};
+pub(crate) use moves::lead_spawn;
 pub use row::{Role, State};
 pub use state::Label;
 pub(crate) use state::pane_gone;
@@ -46,9 +47,9 @@ pub enum Command {
     Show(ShowArgs),
     /// Fork a Lead into a parked window (§10.3)
     Fork(ForkArgs),
-    /// Bring a Lead into the chat slot (§10.4)
+    /// Bring a Lead, or a Context's Manager, into the chat slot (§10.4)
     Open(OpenArgs),
-    /// Move the Lead in the chat slot to a parked window (§10.5)
+    /// Move the Lead or Manager in the chat slot to a parked window (§10.5)
     Park(ParkArgs),
     /// End a Lead's pane; its session file stays (§10.9)
     Close(CloseArgs),
@@ -109,14 +110,14 @@ pub struct ForkArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct OpenArgs {
-    /// The Lead Session to bring into the chat slot
+    /// The Lead or Manager Session to bring into the chat slot
     #[arg(value_name = "id")]
     id: SessionId,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct ParkArgs {
-    /// The Lead Session to park [default: the one in the chat slot]
+    /// The Lead or Manager Session to park [default: the one in the chat slot]
     #[arg(value_name = "id")]
     id: Option<SessionId>,
 }
@@ -231,7 +232,7 @@ fn not_a_lead(id: &SessionId, role: Role) -> CpdError {
         .with("role", role.as_str())
 }
 
-fn no_cockpit(cockpit: &str) -> CpdError {
+pub(crate) fn no_cockpit(cockpit: &str) -> CpdError {
     CpdError::new(
         ErrorCode::NoCockpit,
         format!("The cockpit (tmux session {cockpit:?} with its main window and chat slot) does not exist: run cpd tui."),
