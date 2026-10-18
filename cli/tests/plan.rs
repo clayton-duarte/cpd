@@ -475,6 +475,33 @@ fn phase_refusals() {
     assert_eq!(error["details"]["from"], "dispatch");
 }
 
+/// A Plan with no PR yet (`plan new` alone) is found by every Plan read: phase, list, show, archive and unarchive.
+#[test]
+fn a_plan_with_no_pr_is_read_by_phase_list_show_archive_and_unarchive() {
+    let env = TestEnv::new();
+    setup(&env);
+    new_plan_only(&env, "pay");
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM prs"), 0);
+
+    assert_eq!(show(&env, "pay")["prs"], json!([]));
+    let ids = |env: &TestEnv| -> Vec<String> {
+        env.cpd(&["plan", "list"]).ok()["plans"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap().to_owned()).collect()
+    };
+    assert_eq!(ids(&env), ["pay"]);
+
+    let archived = env.cpd(&["plan", "archive", "--plan", "pay"]).ok();
+    assert_eq!(archived["archived"][0], json!({"kind": "plan", "id": "pay"}));
+    assert_ne!(show(&env, "pay")["plan"]["archived_at"], Value::Null);
+    env.cpd(&["plan", "unarchive", "--plan", "pay"]).ok();
+    assert_eq!(show(&env, "pay")["plan"]["archived_at"], Value::Null);
+
+    let out = env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
+    assert_eq!((&out["plan"], &out["phase"]), (&json!("pay"), &json!("plan")));
+    assert_eq!(show(&env, "pay")["plan"]["phase"], "plan");
+    // A Plan with no PR has no Job: lock keeps its own refusal.
+    refused(&env.cpd(&["plan", "lock", "--plan", "pay"]), "no_draft_jobs", 3);
+}
+
 /// Two Plans grounding at once produce one grounded Lead: the
 /// compare-and-swap on `contexts.lead_session` (contract §3.1).
 #[test]
@@ -543,7 +570,7 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
     assert_eq!((&plan["id"], &plan["phase"]), (&json!("pay"), &json!("plan")));
     let pr = &out["prs"][0];
     assert_eq!((&pr["lead_worktree"], &pr["pr"]), (&Value::Null, &Value::Null));
-    assert_eq!(pr["pr_seen"], json!({"checks": {}, "reviewIds": [], "commentIds": []}));
+    assert_eq!(pr["pull_request"], Value::Null);
     let jobs = out["jobs"].as_array().unwrap();
     assert_eq!(jobs.len(), 2);
     assert_eq!((&jobs[1]["key"], &jobs[1]["needs"], &jobs[1]["status"]), (&json!("b"), &json!(["a"]), &json!("draft")));
@@ -998,6 +1025,20 @@ fn rename_refusals() {
     assert!(events(&env, "plan-renamed").is_empty());
 }
 
+#[test]
+fn rename_works_on_an_archived_plan() {
+    let env = TestEnv::new();
+    setup(&env);
+    new_plan_only(&env, "pay");
+    env.cpd(&["plan", "archive", "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Archived and renamed"]).ok();
+    assert_eq!(out["plan"]["title"], "Archived and renamed");
+    let plan = show(&env, "pay");
+    assert_eq!(plan["plan"]["title"], "Archived and renamed");
+    assert_ne!(plan["plan"]["archived_at"], Value::Null, "still archived");
+    assert_eq!(events(&env, "plan-renamed").len(), 1);
+}
+
 // ---- plan archive and unarchive -------------------------------------------
 
 /// Plan `pay` with its Lead and one side fork, each with a live parked pane.
@@ -1192,7 +1233,16 @@ fn a_plan_in_phase_pr_with_no_live_job_archives() {
         .write("fixture", |tx| {
             exec(tx, "UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay'")?;
             exec(tx, "UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'pay'")?;
-            exec(tx, "UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'u', pr_opened_at = 't' WHERE plan = 'pay'")?;
+            exec(
+                tx,
+                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
+                 VALUES ('acme/pay', 1, 'https://github.com/acme/pay/pull/1', 'Pay', 0, 'open', 'none', 'none', 't', 't')",
+            )?;
+            exec(
+                tx,
+                "UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/pay/pull/1', pr_opened_at = 't',
+                        pull_request = (SELECT id FROM pull_requests WHERE number = 1) WHERE plan = 'pay'",
+            )?;
             exec(tx, "UPDATE plans SET phase = 'pr' WHERE id = 'pay'")
         })
         .unwrap();

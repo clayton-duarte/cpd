@@ -4,7 +4,8 @@
 //! as the reference does: a Session opened in the chat slot gets the focus
 //! (`select-pane`), and `?` opens the legend popup.
 //! The menu's Open, Close, Archive, Unarchive, Rename…, Fork…, New session…, New Plan… and New Context… are
-//! the same commands.
+//! the same commands. Two flows run more than one: an Archive of the chat slot's Lead frees the slot first
+//! ([`Free`], F3), and a click on an archived Session runs `session history` and focuses the chat (F5).
 //!
 //! Text the User typed is passed as `--flag=value`, or after `--` when it is a positional, so a value that starts
 //! with `-` is still a value.
@@ -40,10 +41,23 @@ impl Subject {
     }
 }
 
+/// How the tree frees the chat slot before it archives the Lead that holds it (F3, §13.2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Free {
+    /// `session open <id>` the next live Session (else the previous one), then the focus on the chat slot.
+    Open(SessionId),
+    /// `session park`: no other live Session, so the placeholder holds the slot.
+    Park,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     /// `session open <id>` (§10.4), then the focus on the chat slot: Enter, or a click on a Session.
     Open(SessionId),
+    /// `session park` (§10.5): the Lead in the chat slot goes back to a parked window. Only a step of an archive.
+    Park,
+    /// `session history <id>` (§10.12), then the focus on the chat slot: a click on an archived Session.
+    History(SessionId),
     /// `plan new <id> --context=<c> --title=<title>` (§4.1): `n` (the title is the id) and New Plan….
     /// The Lead forks the Context's grounded Lead (R15).
     NewPlan { context: ContextId, id: PlanId, title: String },
@@ -59,8 +73,9 @@ pub enum Action {
     Fork { source: SessionId, name: String },
     /// `session close <id>` (§10.9): `x`.
     Close(SessionId),
-    /// `context|plan|session archive` (§3.8, §4.10, §10.10): the menu's Archive, after its y/N.
-    Archive(Subject),
+    /// `context|plan|session archive` (§3.8, §4.10, §10.10): the menu's Archive, at once, after `free` when the
+    /// archived Lead holds the chat slot.
+    Archive { subject: Subject, free: Option<Free> },
     /// `context|plan|session unarchive` (§3.9, §4.11, §10.11): the menu's Unarchive.
     Unarchive(Subject),
 }
@@ -75,6 +90,8 @@ impl Action {
         let words = |w: &[&str]| w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         match self {
             Action::Open(id) => words(&["session", "open", id.as_str()]),
+            Action::Park => words(&["session", "park"]),
+            Action::History(id) => words(&["session", "history", id.as_str()]),
             Action::NewPlan { context, id, title } => {
                 let mut argv = words(&["plan", "new", id.as_str()]);
                 argv.extend([format!("--context={context}"), format!("--title={title}")]);
@@ -88,15 +105,30 @@ impl Action {
             }
             Action::Fork { source, name } => vec!["session".into(), "fork".into(), source.to_string(), format!("--name={name}")],
             Action::Close(id) => words(&["session", "close", id.as_str()]),
-            Action::Archive(subject) => subject.command("archive"),
+            Action::Archive { subject, .. } => subject.command("archive"),
             Action::Unarchive(subject) => subject.command("unarchive"),
+        }
+    }
+
+    /// The commands the action runs, in order, each stopping the flow when it is refused: the archive of the chat
+    /// slot's Lead is preceded by the step that frees the slot (F3); every other action is its own one step.
+    pub fn steps(&self) -> Vec<Action> {
+        match self {
+            Action::Archive { subject, free: Some(free) } => vec![
+                match free {
+                    Free::Open(id) => Action::Open(id.clone()),
+                    Free::Park => Action::Park,
+                },
+                Action::Archive { subject: subject.clone(), free: None },
+            ],
+            action => vec![action.clone()],
         }
     }
 
     /// The note after the command succeeded, from its reply: the reference's words.
     pub fn done(&self, reply: &Value) -> String {
         match self {
-            Action::Open(_) => String::new(),
+            Action::Open(_) | Action::Park | Action::History(_) => String::new(),
             Action::NewPlan { id, .. } => format!("forking {id} in window park-{id}"),
             Action::NewContext { id, .. } => format!("created {id}"),
             Action::RenameContext { .. } | Action::RenamePlan { .. } | Action::RenameSession { .. } if reply["already"] == true => {
@@ -106,8 +138,8 @@ impl Action {
             Action::Fork { name, .. } => format!("forking {name}"),
             Action::Close(_) if reply["already"] == true => "session is already gone".into(),
             Action::Close(_) => "closed".into(),
-            Action::Archive(_) if reply["already"] == true => "already archived".into(),
-            Action::Archive(_) => "archived".into(),
+            Action::Archive { .. } if reply["already"] == true => "already archived".into(),
+            Action::Archive { .. } => "archived".into(),
             Action::Unarchive(_) if reply["already"] == true => "already unarchived".into(),
             Action::Unarchive(_) => "unarchived".into(),
         }
@@ -133,11 +165,14 @@ impl Runner {
         Runner { tmux: Tmux::new(config.tmux.socket.clone()), cockpit: config.tmux.cockpit_session.clone() }
     }
 
-    /// Runs the action: its note, or why it failed.
+    /// Runs the action's steps: the note of the last, or why one failed (the flow stops there).
     pub fn run(&self, action: &Action) -> Result<String, String> {
-        let note = command(action)?;
-        if matches!(action, Action::Open(_)) {
-            self.focus_chat().map_err(|e| e.message().to_owned())?;
+        let mut note = String::new();
+        for step in action.steps() {
+            note = command(&step)?;
+            if matches!(step, Action::Open(_) | Action::History(_)) {
+                self.focus_chat().map_err(|e| e.message().to_owned())?;
+            }
         }
         Ok(note)
     }
@@ -187,14 +222,36 @@ mod tests {
         SessionId::parse(s).unwrap()
     }
 
+    fn archive(subject: Subject) -> Action {
+        Action::Archive { subject, free: None }
+    }
+
+    fn sequence(action: &Action) -> Vec<Vec<String>> {
+        action.steps().iter().map(Action::argv).collect()
+    }
+
+    #[test]
+    fn an_archive_of_the_chat_slots_lead_frees_the_slot_first_and_any_other_action_is_one_step() {
+        let plan = Subject::Plan(PlanId::parse("ship").unwrap());
+        let open = Action::Archive { subject: plan.clone(), free: Some(Free::Open(sid("l-sketch"))) };
+        assert_eq!(sequence(&open), [vec!["session", "open", "l-sketch"], vec!["plan", "archive", "--plan=ship"]]);
+        let park = Action::Archive { subject: Subject::Session(sid("f-idle")), free: Some(Free::Park) };
+        assert_eq!(sequence(&park), [vec!["session", "park"], vec!["session", "archive", "f-idle"]]);
+        assert_eq!(sequence(&archive(plan)), [vec!["plan", "archive", "--plan=ship"]]);
+        assert_eq!(sequence(&Action::History(sid("f-idle"))), [vec!["session", "history", "f-idle"]]);
+        assert_eq!(sequence(&Action::Open(sid("l-ship"))), [vec!["session", "open", "l-ship"]]);
+    }
+
     #[test]
     fn each_action_is_one_command_of_the_contract() {
         let cases = [
             (Action::Open(sid("l-ship")), vec!["session", "open", "l-ship"]),
             (Action::Close(sid("l-ship")), vec!["session", "close", "l-ship"]),
-            (Action::Archive(Subject::Context(ContextId::parse("alpha").unwrap())), vec!["context", "archive", "alpha"]),
-            (Action::Archive(Subject::Plan(PlanId::parse("ship").unwrap())), vec!["plan", "archive", "--plan=ship"]),
-            (Action::Archive(Subject::Session(sid("f-idle"))), vec!["session", "archive", "f-idle"]),
+            (Action::Park, vec!["session", "park"]),
+            (Action::History(sid("f-idle")), vec!["session", "history", "f-idle"]),
+            (archive(Subject::Context(ContextId::parse("alpha").unwrap())), vec!["context", "archive", "alpha"]),
+            (archive(Subject::Plan(PlanId::parse("ship").unwrap())), vec!["plan", "archive", "--plan=ship"]),
+            (archive(Subject::Session(sid("f-idle"))), vec!["session", "archive", "f-idle"]),
             (Action::Unarchive(Subject::Context(ContextId::parse("alpha").unwrap())), vec!["context", "unarchive", "alpha"]),
             (Action::Unarchive(Subject::Plan(PlanId::parse("ship").unwrap())), vec!["plan", "unarchive", "--plan=ship"]),
             (Action::Unarchive(Subject::Session(sid("f-idle"))), vec!["session", "unarchive", "f-idle"]),
@@ -242,7 +299,7 @@ mod tests {
         assert_eq!(rename.done(&json!({"ok": true, "already": true})), "already named so");
         let fork = Action::Fork { source: sid("l-ship"), name: "ship (fork)".into() };
         assert_eq!(fork.done(&json!({"ok": true})), "forking ship (fork)");
-        let archive = Action::Archive(Subject::Session(sid("f-idle")));
+        let archive = archive(Subject::Session(sid("f-idle")));
         assert_eq!(archive.done(&json!({"ok": true, "archived": [], "closed": []})), "archived");
         assert_eq!(archive.done(&json!({"ok": true, "already": true})), "already archived");
         let unarchive = Action::Unarchive(Subject::Session(sid("f-idle")));
@@ -256,7 +313,7 @@ mod tests {
         assert_eq!(close.failed("in_chat_slot", "It is in the chat slot."), IN_CHAT_SLOT);
         assert_eq!(close.failed("not_a_lead", "Not a Lead."), "not_a_lead: Not a Lead.");
         assert_eq!(Action::Open(sid("l-ship")).failed("in_chat_slot", "x"), "in_chat_slot: x");
-        let archive = Action::Archive(Subject::Session(sid("l-ship")));
+        let archive = archive(Subject::Session(sid("l-ship")));
         assert_eq!(archive.failed("archive_blocked", "A Session is working."), "archive_blocked: A Session is working.");
     }
 }

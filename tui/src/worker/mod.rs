@@ -14,7 +14,7 @@
 //! Keys: Up/`k`, Down/`j`, PageUp, PageDown and the mouse wheel scroll; End or
 //! `G` follows the end again (the view starts there); `q` or Esc ends it.
 
-mod render;
+pub(crate) mod render;
 mod view;
 
 use std::path::PathBuf;

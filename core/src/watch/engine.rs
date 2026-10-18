@@ -2,7 +2,6 @@
 //! `watch-started`, the import of the Context stores, then E1–E7 every
 //! `tick_seconds` until SIGTERM or SIGINT, then `watch-stopped`.
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -49,8 +48,10 @@ pub(super) struct Engine {
     report: Report,
     /// pi's catalog, read at most once per tick and only when a step needs it.
     catalog: Option<Catalog>,
-    /// When E5 last ran `pr poll` for each Plan.
-    pub polled: HashMap<PlanId, Instant>,
+    /// When E5's last `pr poll` ended.
+    pub last_poll_end: Option<Instant>,
+    /// While GitHub's rate limit is nearly spent, E5 runs no poll before this.
+    pub paused_until: Option<Instant>,
     /// When E6 last ran.
     pub synced: Option<Instant>,
 }
@@ -198,7 +199,8 @@ pub(super) fn run() -> Result<Output, CpdError> {
         log,
         report,
         catalog: None,
-        polled: HashMap::new(),
+        last_poll_end: None,
+        paused_until: None,
         synced: None,
     };
     import(&mut engine);

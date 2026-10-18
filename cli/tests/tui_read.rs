@@ -64,41 +64,43 @@ fn context(id: &str, grounded: Option<&str>) -> String {
     )
 }
 
-/// `phase` decides the columns the schema ties to it; `pr` is `(number, pr_seen)`.
-fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr: Option<(i64, &str)>) -> String {
+/// `phase` decides the columns the schema ties to it; `pr` is `(number, pull_requests.state, pull_requests.checks)`.
+fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr: Option<(i64, &str, &str)>) -> String {
     let late = !matches!(phase, "grounding" | "plan");
     let worktree = if late { "'/wt'" } else { "NULL" };
     let locked = if late { "'2026-01-02T00:00:00.000Z'" } else { "NULL" };
     let done = if phase == "done" { "'2026-01-09T00:00:00.000Z'" } else { "NULL" };
-    let (number, url, opened, seen, polled) = match pr {
-        Some((n, seen)) => (
-            n.to_string(),
-            format!("'https://example.test/pull/{n}'"),
-            "'2026-01-05T00:00:00.000Z'".to_owned(),
-            seen.to_owned(),
-            "'2026-01-06T00:00:00.000Z'".to_owned(),
-        ),
-        None => (
-            "NULL".into(),
-            "NULL".into(),
-            "NULL".into(),
-            r#"{"checks":{},"reviewIds":[],"commentIds":[]}"#.to_owned(),
-            "NULL".into(),
-        ),
-    };
     let status = match phase {
         "grounding" | "plan" => "waiting",
         "dispatch" => "dispatch",
         "pr" => "open",
         _ => "merged",
     };
+    let (row, number, url, opened, pull_request) = match pr {
+        Some((n, state, checks)) => {
+            let merged = if state == "merged" { "'2026-01-09T00:00:00.000Z'" } else { "NULL" };
+            (
+                format!(
+                    "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+                     VALUES ('acme/repo', {n}, 'https://github.com/acme/repo/pull/{n}', 'PR {n}', 0, '{state}', 'none', '{checks}',
+                             '2026-01-05T00:00:00.000Z', {merged}, '2026-01-06T00:00:00.000Z');"
+                ),
+                n.to_string(),
+                format!("'https://github.com/acme/repo/pull/{n}'"),
+                "'2026-01-05T00:00:00.000Z'",
+                format!("(SELECT id FROM pull_requests WHERE number = {n})"),
+            )
+        }
+        None => (String::new(), "NULL".into(), "NULL".into(), "NULL", "NULL".into()),
+    };
     format!(
         "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
          VALUES ('{id}', '{context}', 'Plan {id}', '{phase}', '{lead}', '{created}', {locked}, {done});
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pr_seen,
-                          pr_polled_at, created_txn, created_at, started_at, merged_at)
-         VALUES ('{id}', 'repo', '/repo', 'main', '{status}', 'cpd/{id}', {worktree}, {number}, {url}, {opened}, '{seen}',
-                 {polled}, cpd_txn(), '{created}', {locked}, {done});"
+         {row}
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+                          created_txn, created_at, started_at, merged_at)
+         VALUES ('{id}', 'repo', '/repo', 'main', '{status}', 'cpd/{id}', {worktree}, {number}, {url}, {opened}, {pull_request},
+                 cpd_txn(), '{created}', {locked}, {done});"
     )
 }
 
@@ -204,7 +206,7 @@ fn populate(store: &mut Store) {
         "pr",
         "l-rel",
         "2026-01-02T00:00:02.000Z",
-        Some((7, r#"{"checks":{"ci":"FAILURE","lint":"SUCCESS"},"reviewIds":["r1"],"commentIds":["c1","c2"]}"#)),
+        Some((7, "open", "failed")),
     );
     s += &plan_row(
         "shut",
@@ -212,7 +214,7 @@ fn populate(store: &mut Store) {
         "pr",
         "l-shut",
         "2026-01-02T00:00:03.000Z",
-        Some((8, r#"{"checks":{},"reviewIds":[],"commentIds":[],"closed":true}"#)),
+        Some((8, "closed", "none")),
     );
     s += &plan_row(
         "old",
@@ -220,7 +222,7 @@ fn populate(store: &mut Store) {
         "done",
         "l-old",
         "2026-01-01T12:00:00.000Z",
-        Some((3, r#"{"checks":{"ci":"SUCCESS"},"reviewIds":[],"commentIds":[]}"#)),
+        Some((3, "merged", "passed")),
     );
 
     s += &session_row("g-alpha", "lead", "alpha", "", None, "idle", None, "2026-01-02T00:00:00.000Z");
@@ -279,7 +281,7 @@ fn populate(store: &mut Store) {
         Some("beta"),
         Some("rel"),
         None,
-        r#"{"checks":[{"name":"ci","conclusion":"FAILURE"}],"reviews":[{"id":"r1","author":"x","state":"COMMENTED","body":""}],"comments":[],"state":"OPEN"}"#,
+        r#"{"pr":"repo","number":7,"url":"https://github.com/acme/repo/pull/7","state":"open","checks":"failed","review_decision":"none","reasons":["checks_failed"]}"#,
     );
     s += &event("watch-started", None, None, None, &format!(r#"{{"pid":{}}}"#, std::process::id()));
     sql(store, &s);
@@ -463,7 +465,7 @@ fn a_plan_is_its_jobs_dependencies_attempts_and_tiers() {
     let flow = read::flow(&mut store, &plan("ship")).unwrap();
 
     assert_eq!((flow.head.id.as_str(), flow.head.context.as_str(), flow.head.phase), ("ship", "alpha", Phase::Dispatch));
-    assert_eq!((flow.head.lead_branch.as_str(), flow.head.base.as_str(), flow.head.pr.is_none()), ("cpd/ship", "main", true));
+    assert!(flow.head.pr.is_none());
     let shape: Vec<(&str, JobStatus, String, Vec<&str>, usize)> = flow
         .jobs
         .iter()
@@ -530,16 +532,45 @@ fn a_plan_carries_its_pr_and_what_the_poll_saw() {
     let (_env, mut store) = fixture();
     let rel = read::flow(&mut store, &plan("rel")).unwrap().head;
     let pr = rel.pr.unwrap();
-    assert_eq!((pr.number, pr.url.as_str(), pr.state), (7, "https://example.test/pull/7", PrState::Open));
+    assert_eq!((pr.number, pr.url.as_str(), pr.state), (7, "https://github.com/acme/repo/pull/7", PrState::Open));
     assert_eq!(pr.opened_at, "2026-01-05T00:00:00.000Z");
-    assert_eq!(pr.polled_at.as_deref(), Some("2026-01-06T00:00:00.000Z"));
-    assert_eq!((pr.checks.len(), pr.checks["ci"].as_str(), pr.reviews, pr.comments), (2, "FAILURE", 1, 2));
-    assert_eq!(pr.checks_summary(), Checks::Failed);
+    assert_eq!(pr.checks, Checks::Failed);
 
-    let mut state = |p: &str| read::flow(&mut store, &plan(p)).unwrap().head.pr.map(|pr| (pr.state, pr.checks_summary()));
+    let mut state = |p: &str| read::flow(&mut store, &plan(p)).unwrap().head.pr.map(|pr| (pr.state, pr.checks));
     assert_eq!(state("shut"), Some((PrState::Closed, Checks::None)));
     assert_eq!(state("old"), Some((PrState::Merged, Checks::Passed)));
     assert_eq!(state("ship"), None);
+}
+
+/// A Plan as `plan new` leaves it: in grounding, with its Lead and no `prs` row (hs-n54).
+fn add_plan_without_pr(store: &mut Store) {
+    let lead = session_row("l-fresh", "lead", "gamma", "fresh", None, "idle", None, "2026-01-02T00:00:09.000Z");
+    sql(
+        store,
+        &format!(
+            "INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+             VALUES ('fresh', 'gamma', 'Plan fresh', 'grounding', 'l-fresh', '2026-01-02T00:00:09.000Z');
+             {lead}"
+        ),
+    );
+}
+
+#[test]
+fn a_plan_with_no_pr_is_in_the_tree_the_widgets_and_the_flow() {
+    let (_env, mut store) = fixture();
+    add_plan_without_pr(&mut store);
+
+    let tree = read::tree(&mut store).unwrap();
+    let gamma = tree.contexts.iter().find(|c| c.id.as_str() == "gamma").unwrap();
+    let [fresh] = &gamma.plans[..] else { panic!("gamma has the one Plan") };
+    assert_eq!((fresh.head.id.as_str(), fresh.head.phase, fresh.head.pr.is_none()), ("fresh", Phase::Grounding, true));
+    assert_eq!(fresh.sessions.iter().map(|s| (s.id.as_str(), s.plan_lead)).collect::<Vec<_>>(), [("l-fresh", true)]);
+
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    assert!(w.plans.iter().any(|p| p.head.id.as_str() == "fresh" && p.head.pr.is_none()));
+
+    let head = read::flow(&mut store, &plan("fresh")).unwrap().head;
+    assert_eq!((head.id.as_str(), head.phase, head.pr.is_none()), ("fresh", Phase::Grounding, true));
 }
 
 #[test]
@@ -594,7 +625,7 @@ fn the_slots_are_the_attempts_not_ended_against_the_limit() {
 }
 
 #[test]
-fn the_widgets_list_every_plan_with_its_pr_and_feedback() {
+fn the_widgets_list_every_plan_with_its_pr() {
     let (_env, mut store) = fixture();
     let w = read::widgets(&mut store, 3, 0).unwrap();
     let ids: Vec<&str> = w.plans.iter().map(|p| p.head.id.as_str()).collect();
@@ -602,9 +633,6 @@ fn the_widgets_list_every_plan_with_its_pr_and_feedback() {
 
     let rel = w.plans.iter().find(|p| p.head.id.as_str() == "rel").unwrap();
     assert_eq!(rel.head.pr.as_ref().unwrap().number, 7);
-    let feedback = rel.feedback.as_ref().unwrap();
-    assert_eq!((feedback.state.as_str(), feedback.failing_checks.as_slice(), feedback.reviews, feedback.comments), ("OPEN", &["ci".to_owned()][..], 1, 0));
-    assert!(w.plans.iter().filter(|p| p.head.id.as_str() != "rel").all(|p| p.feedback.is_none()));
     let ship = w.plans.iter().find(|p| p.head.id.as_str() == "ship").unwrap();
     assert_eq!((ship.head.phase, ship.head.counts.merged, ship.head.pr.is_none()), (Phase::Dispatch, 1, true));
 }

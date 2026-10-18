@@ -1,7 +1,7 @@
 //! The one inline prompt of the tree (the reference's `prompt.rs`), shared by
 //! the session actions: a text input for `n` (the name of the new Plan), a text input for the menu's `…` items
-//! (rename, fork, new Plan, new Context) and a y/N confirmation for `x` (close a Session) and for the menu's
-//! Archive. Pure: the view feeds it keys and acts on its [`Outcome`].
+//! (rename, fork, new Plan, new Context) and a y/N confirmation for `x` (close a Session; the menu's Archive has
+//! none, hs-d90). Pure: the view feeds it keys and acts on its [`Outcome`].
 //!
 //! The texts are the reference's, verbatim (commands.md §13.2). The one
 //! difference: the name is the new Plan's id (§2.1), so a name that is no Plan
@@ -9,7 +9,7 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::actions::{Action, Subject};
+use super::actions::Action;
 use super::slug::{self, CONTEXT_MAX, PLAN_MAX};
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 
@@ -65,8 +65,6 @@ pub enum Prompt {
     Name { target: Target, context: ContextId, input: String, refused: Option<String> },
     /// `x`: asks whether to close `target`'s pane.
     Close { target: Target },
-    /// The menu's Archive: asks whether to archive `subject`, shown as `label`.
-    Archive { subject: Subject, label: String },
 }
 
 /// What the view does after a key.
@@ -80,8 +78,6 @@ pub enum Outcome {
     NewPlan { context: ContextId, id: PlanId },
     /// `session close <id>`.
     Close { id: SessionId },
-    /// `context|plan|session archive`.
-    Archive { subject: Subject },
     /// The command a text prompt of the menu asked for.
     Run(Action),
 }
@@ -101,10 +97,6 @@ impl Prompt {
 
     pub fn close(target: Target) -> Self {
         Prompt::Close { target }
-    }
-
-    pub fn archive(subject: Subject, label: String) -> Self {
-        Prompt::Archive { subject, label }
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Outcome {
@@ -165,10 +157,6 @@ impl Prompt {
                 KeyCode::Char('y' | 'Y') => Outcome::Close { id: target.id.clone() },
                 _ => Outcome::Cancel,
             },
-            Prompt::Archive { subject, .. } => match key.code {
-                KeyCode::Char('y' | 'Y') => Outcome::Archive { subject: subject.clone() },
-                _ => Outcome::Cancel,
-            },
         }
     }
 
@@ -187,7 +175,6 @@ impl Prompt {
                 let working = if target.working { format!("{} is working. ", target.label) } else { String::new() };
                 format!("{working}Close {}? pi stops; the session file stays (y/N)", target.label)
             }
-            Prompt::Archive { label, .. } => format!("Archive {label}? its panes close (y/N)"),
         }
     }
 }
@@ -376,19 +363,6 @@ mod tests {
     #[test]
     fn the_close_prompt_warns_first_when_the_session_is_working() {
         assert_eq!(Prompt::close(target(true)).text(), "cpd-ui is working. Close cpd-ui? pi stops; the session file stays (y/N)");
-    }
-
-    #[test]
-    fn the_archive_prompt_asks_and_only_y_archives() {
-        let subject = Subject::Plan(PlanId::parse("ship").unwrap());
-        let archive = || Prompt::archive(subject.clone(), "Plan ship".into());
-        assert_eq!(archive().text(), "Archive Plan ship? its panes close (y/N)");
-        for c in ['y', 'Y'] {
-            assert_eq!(press(&mut archive(), KeyCode::Char(c)), Outcome::Archive { subject: subject.clone() });
-        }
-        for code in [KeyCode::Char('n'), KeyCode::Enter, KeyCode::Esc, KeyCode::Char(' '), KeyCode::Down] {
-            assert_eq!(press(&mut archive(), code), Outcome::Cancel);
-        }
     }
 
     #[test]

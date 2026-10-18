@@ -13,6 +13,7 @@ use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use super::archive::archive_on_quit;
 use super::moves::first_message;
 use super::port;
 use super::row::{self, Role, Row, State};
@@ -81,11 +82,11 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start pi: {e}.")).with("argv", launch.argv.clone())
             })?;
         let mut recorded = row.file.is_some();
-        loop {
+        let status = loop {
             let exited = child.try_wait().map_err(|e| {
                 CpdError::new(ErrorCode::SpawnFailed, format!("Cannot wait for pi: {e}.")).with("argv", launch.argv.clone())
             })?;
-            if exited.is_some() {
+            if let Some(status) = exited {
                 // A new install: restart before any store write (§6.7 "Reload on install").
                 if exe.replaced() {
                     return Err(reload(&exe, &row.id));
@@ -93,7 +94,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 if !recorded {
                     record_file(&mut env, &dirs, &row.id)?;
                 }
-                break;
+                break status;
             }
             if !recorded {
                 recorded = record_file(&mut env, &dirs, &row.id)?;
@@ -106,10 +107,17 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 return Err(reload(&exe, &row.id));
             }
             std::thread::sleep(FILE_POLL);
-        }
+        };
         // The adapter reports `stopped` at shutdown; report it here when it did not.
         if let Err(e) = state::set(&mut env.store, "session run", &row.id, State::Stopped, None) {
             eprintln!("cpd: cannot report Session {} stopped: {}: {}", row.id, e.code(), e.message());
+        }
+        // pi exits 0 on the User's `/quit` and Ctrl+D (§10.8); a reload never gets here.
+        if status.success() {
+            match archive_on_quit(&mut env, &row.id) {
+                Ok(()) => return Ok(Output::Owned),
+                Err(e) => print!("\n  {}: {}\n", e.code(), e.message()),
+            }
         }
         let name = env.store.read(|conn| row::load(conn, &args.id))?.name;
         print!("\n  pi exited. Press Enter to resume {name} here.\n");

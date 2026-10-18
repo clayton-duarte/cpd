@@ -1,5 +1,5 @@
 //! The Dispatch column's drawing (commands.md §13.2), a port of the reference's `draw_dispatch` and `pr::render`
-//! (`tui/src/main.rs`, `tui/src/pr.rs`): the machine, the pull requests of the Plans in the cockpit (one line per PR), git and Jira (the last two
+//! (`tui/src/main.rs`, `tui/src/pr.rs`): the machine, the open pull requests (two lines each), git and Jira (the last two
 //! still future), under one blank row; each section but the first starts with a header. Pure: [`draw`] only writes to the frame.
 
 use ratatui::Frame;
@@ -9,11 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::palette::{self, Meaning};
-use crate::read::{Place, PlanCard, PrState, PrRow, ReviewDecision, Widgets};
-
-/// Rows of the column besides the PR rows: the blank top row, the machine (two), the three headers each with a blank row
-/// above and below, and the two `(future)` rows of git and Jira.
-const FIXED_ROWS: u16 = 1 + 2 + 3 * 3 + 2;
+use crate::read::{OpenPr, PrState, ReviewDecision, Widgets};
 
 /// The machine the column names: its hostname and the first three fields of its load average.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,41 +38,21 @@ fn truncate(text: &str, max: usize) -> String {
     cut
 }
 
-/// The lines of one Plan: its label, then one line per PR with a pull request, `#n state checks review title` (the title
-/// cut first to fit `width`); a Plan without a pull request takes one line.
-fn plan_lines(card: &PlanCard, width: usize) -> Vec<Line<'static>> {
-    if card.prs.is_empty() {
-        return vec![Line::from(vec![
-            " ".into(),
-            bold(truncate(&card.label, width.saturating_sub(8))),
-            dim("  no PR"),
-        ])];
-    }
-    let head = Line::from(vec![" ".into(), bold(truncate(&card.label, width.saturating_sub(1)))]);
-    std::iter::once(head).chain(card.prs.iter().map(|pr| pr_line(pr, width))).collect()
-}
-
-/// One pull request: `  #n state checks review  title`, or `  #n loading…` before its first poll.
-fn pr_line(pr: &PrRow, width: usize) -> Line<'static> {
-    let PrRow { number, state, polled, .. } = pr;
-    let num = format!("  #{number}");
-    let Some(polled) = polled else { return Line::from(vec![dim(num), dim(" loading…")]) };
-    let state_text = match state {
-        PrState::Open => "open",
-        PrState::Closed => "closed",
-        PrState::Merged => "merged",
-    };
-    let review = match polled.decision {
+/// One open pull request, two lines (commands.md §13.2): ` owner/repo#n`, then `  <open|draft> <checks> <review>  <title>`, the
+/// title cut first to fit `width`. An `active` one (a PR of the chat slot's Plan) is reversed and bold, as the active tab is.
+fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
+    let name = truncate(&format!(" {}#{}", pr.repo, pr.number), width);
+    let state_text = if pr.draft { "draft" } else { "open" };
+    let review = match pr.review_decision {
         ReviewDecision::Approved => "approved",
         ReviewDecision::ChangesRequested => "changes requested",
         ReviewDecision::None => "no review",
     };
-    let (icon, checks) = palette::checks(polled.checks);
-    let used = num.chars().count() + 1 + state_text.chars().count() + 3 + review.chars().count();
+    let (icon, checks) = palette::checks(pr.checks);
+    let used = 2 + state_text.chars().count() + 3 + review.chars().count();
     let mut spans = vec![
-        num.into(),
-        " ".into(),
-        Span::styled(state_text, palette::fg(palette::pr_state(*state))),
+        "  ".into(),
+        Span::styled(state_text, palette::fg(palette::pr_state(PrState::Open))),
         " ".into(),
         Span::styled(icon, palette::fg(checks)),
         " ".into(),
@@ -84,9 +60,15 @@ fn pr_line(pr: &PrRow, width: usize) -> Line<'static> {
     ];
     let room = width.saturating_sub(used + 2);
     if room >= 4 {
-        spans.push(dim(format!("  {}", truncate(&polled.title, room))));
+        let title = format!("  {}", truncate(&pr.title, room));
+        spans.push(if pr.active { Span::raw(title) } else { dim(title) });
     }
-    Line::from(spans)
+    let (first, second) = (Line::from(bold(name)), Line::from(spans));
+    if pr.active {
+        let active = Style::new().add_modifier(Modifier::REVERSED | Modifier::BOLD);
+        return [first.patch_style(active), second.patch_style(active)];
+    }
+    [first, second]
 }
 
 /// A section header, one line: `──`, then ` <title> ` as a grey reversed block (not bold), then `─` to the right edge, all in
@@ -135,21 +117,13 @@ pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine) {
         home,
     );
     let mut text = vec![];
-    // The Plans in the cockpit: Plans with a pull request first, then those without only while the pane has room for the
-    // rest.
-    let cockpit: Vec<&PlanCard> = w.plans.iter().filter(|c| matches!(c.lead_place, Place::Chat | Place::Parked)).collect();
-    let room = usize::from(area.height).saturating_sub(usize::from(FIXED_ROWS));
-    let mut used = 0;
-    for card in cockpit.iter().filter(|c| !c.prs.is_empty()).chain(cockpit.iter().filter(|c| c.prs.is_empty())) {
-        let lines = plan_lines(card, usize::from(area.width));
-        if card.prs.is_empty() && used + lines.len() > room {
-            continue;
-        }
-        used += lines.len();
-        text.extend(lines);
+    // Whole pull requests only: what does not fit the section is dropped from the end.
+    let room = usize::from(prs.height);
+    for pr in w.prs.iter().take(room / 2) {
+        text.extend(pr_lines(pr, usize::from(area.width)));
     }
-    if cockpit.is_empty() {
-        text.push(Line::from(dim(" no Plans in the cockpit")));
+    if w.prs.is_empty() {
+        text.push(Line::from(dim(" no open PRs")));
     }
     f.render_widget(Paragraph::new(text), prs);
     f.render_widget(Paragraph::new(dim(" (future)")), git);
@@ -170,6 +144,7 @@ mod tests {
             slots: Slots { limit: 3, held: vec![] },
             engine: Engine::Never,
             plans: vec![],
+            prs: vec![],
             escalations: vec![],
             events: vec![],
             events_cursor: 0,
@@ -219,7 +194,7 @@ mod tests {
             "".to_owned(),
             rule("PRs"),
             "".to_owned(),
-            " no Plans in the coc".to_owned(),
+            " no open PRs".to_owned(),
             "".to_owned(),
             rule("git"),
             "".to_owned(),
