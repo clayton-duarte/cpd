@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { adapter, type Options } from "../lib/adapter.ts";
 import { PROTOCOL } from "../lib/event.ts";
-import type { CommandCtx, Ctx, Message, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
+import type { CommandCtx, Ctx, ExecOptions, ExecResult, Message, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
 
 /** A fake `cpd` on PATH and a fake pi, so the adapter is tested through its real boundaries (child processes, pi's API). */
 
@@ -176,8 +176,8 @@ export class Fixture {
   /** Start the adapter under test with fast timing. */
   load(options: Options = {}): void {
     adapter(this.pi, {
-      timing: { restartInitialMs: 30, restartMaxMs: 120, requestTimeoutMs: 300, pollMs: 30, shutdownWaitMs: 200 },
       ...options,
+      timing: { restartInitialMs: 30, restartMaxMs: 120, requestTimeoutMs: 300, pollMs: 30, shutdownWaitMs: 200, callTimeoutMs: 10_000, ...options.timing },
       reload: { dir: this.adapterDir, intervalMs: 20, loader: this.loader, ...options.reload },
     });
   }
@@ -274,15 +274,21 @@ export class FakePi implements PiApi {
   /** The `exec` calls (argv, without the command) started and not yet finished: a call is in flight from the moment the adapter makes it, however long the process takes to start. */
   readonly execsRunning = new Set<string[]>();
 
-  exec(command: string, args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+  /** Like pi's `execCommand`: `timeout` and `signal` SIGTERM the process, and the result says `killed` (its `code` is then not an exit code). */
+  exec(command: string, args: string[], options: ExecOptions = {}): Promise<ExecResult> {
     this.execsRunning.add(args);
+    this.execOptions.push({ command, args, options });
     return new Promise((resolve) => {
-      execFile(command, args, { encoding: "utf8" }, (err, stdout, stderr) => {
+      execFile(command, args, { ...options, encoding: "utf8" }, (err, stdout, stderr) => {
         this.execsRunning.delete(args);
-        resolve({ stdout, stderr, code: err ? (typeof err.code === "number" ? err.code : 1) : 0 });
+        const killed = err !== null && (err.killed === true || err.name === "AbortError");
+        resolve({ stdout, stderr, code: killed ? 0 : err ? (typeof err.code === "number" ? err.code : 1) : 0, killed });
       });
     });
   }
+
+  /** What `exec` was called with, in order. */
+  readonly execOptions: { command: string; args: string[]; options: ExecOptions }[] = [];
 
   sendMessage(message: Message, options: SendOptions): void {
     this.sent.push({ message, options });

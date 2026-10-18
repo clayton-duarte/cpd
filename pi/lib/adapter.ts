@@ -8,7 +8,7 @@ import { errorMessage, eventMessage, FOLLOW_UP, LEAD_MESSAGES, sessionMessage } 
 import type { CpdEvent } from "./event.ts";
 import { parseLine, PROTOCOL } from "./event.ts";
 import { DEFAULT_TIMING, Follower, type Schedule, type Spawn, type Timing } from "./follower.ts";
-import type { CommandCtx, Ctx, Message, PiApi } from "./pi.ts";
+import type { CommandCtx, Ctx, Exec, Message, PiApi } from "./pi.ts";
 import { parseOpened, parseResult, parseStatus, request } from "./plannotator.ts";
 import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, REVIEW_LABEL, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
 import { adapterDir, appendLog, DEFAULT_POLL_MS, LONG_REFUSAL_NOTICE, pollAdapter, type Poll, refusal, RELOAD_COMMAND, reloadLogPath, RELOAD_TRIGGER, validatePackage, type Validation } from "./reload.ts";
@@ -80,8 +80,10 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   // The context of `session_start`: `ctx.ui` is only handed to handlers.
   const ctxOf: { current: Ctx | undefined } = { current: undefined };
 
-  const exec = (command: string, args: string[]) => pi.exec(command, args);
-  const call = (args: string[]) => callCpd(exec, args);
+  // Aborted at `session_shutdown` (and by the next start): a call in flight then ends instead of outliving the run.
+  let abort = new AbortController();
+  const exec: Exec = (command, args, options) => pi.exec(command, args, options);
+  const call = (args: string[]) => callCpd(exec, args, { timeoutMs: timing.callTimeoutMs, signal: abort.signal });
 
   // The installed cpd binaries already reported as speaking another protocol (commands.md §15.2, step 0), and the
   // error codes of a failed `--version` already reported; both once per adapter, so a follower restart repeats nothing.
@@ -91,7 +93,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   /** commands.md §15.2, step 0. Never throws; the adapter keeps following whatever it finds. */
   async function checkProtocol(): Promise<void> {
     try {
-      const cpd = await cpdProtocol(exec);
+      const cpd = await cpdProtocol(exec, { timeoutMs: timing.callTimeoutMs, signal: abort.signal });
       versionFailures.clear();
       if (cpd === PROTOCOL) return;
       const identity = installedIdentity() ?? "cpd";
@@ -122,7 +124,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
 
   const newReporter = (id: string) =>
     new Reporter(
-      async (w: Wanted) => void (await call(stateArgs(w, id))),
+      // No signal: the `stopped` of `session_shutdown` is sent after the abort, and `stop()` bounds its wait.
+      async (w: Wanted) => void (await callCpd(exec, stateArgs(w, id), { timeoutMs: timing.callTimeoutMs })),
       (e) => deliver("session state", e),
     );
 
@@ -158,6 +161,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     const id = env.CPD_SESSION;
     if (id === undefined || id === "") return;
     await stop(); // a start without a shutdown (never seen) must not leave a second follower behind
+    abort = new AbortController();
     ctxOf.current = ctx;
     if (ctx.sessionManager.getSessionId() !== id) {
       const m = errorMessage("activation", "session_mismatch", `CPD_SESSION is ${id} but pi's session is ${ctx.sessionManager.getSessionId()}; the adapter stays inactive.`);
@@ -174,7 +178,6 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       return;
     }
 
-    const abort = new AbortController();
     const facts = new Facts();
     let logFailed = false;
     const r: Run = {
@@ -294,13 +297,13 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   }
 
   async function stop(): Promise<void> {
+    abort.abort(); // also a start still waiting for `session show`
     const r = run;
     if (!r) return;
     run = undefined;
     ctxOf.current = undefined;
     r.log("stop");
     r.reload?.stop();
-    r.abort.abort();
     r.follower.stop();
     r.unsubscribe.forEach((u) => u());
     if (r.reporting) {
