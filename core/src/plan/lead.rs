@@ -1,6 +1,6 @@
 //! Lead windows in the cockpit (contract §6.2, §6.4, §6.5; commands.md §4.1
-//! step 4, §4.4): `plan new` starts a Plan's Lead in `park-<plan>`, and
-//! `plan phase plan` a Context's grounded Lead in `ctx-<context>`. Each pane
+//! step 4): `plan new` starts a Plan's Lead in `park-<plan>`, and
+//! `context manager` a Context's Manager in `ctx-<context>`. Each pane
 //! runs `cpd session run <id>`, which starts pi (§6.7).
 
 use std::collections::BTreeMap;
@@ -27,7 +27,7 @@ pub(super) struct Started {
 pub(super) struct Lead<'a> {
     pub session: &'a SessionId,
     pub context: &'a ContextId,
-    /// The Lead's Plan; `None` for a Context's grounded Lead (contract §6.5:
+    /// The Lead's Plan; `None` for a Context's Manager (contract §6.5:
     /// no `CPD_PLAN` and no `PLANNOTATOR_*`).
     pub plan: Option<&'a PlanId>,
     pub name: &'a str,
@@ -100,7 +100,7 @@ pub(super) fn start(env: &mut Env, lead: &Lead, window: &str, command: &str) -> 
     Ok(Started { window, pane })
 }
 
-/// The header of `lead`'s pane: its Plan's title, else (a grounded Lead) its name.
+/// The header of `lead`'s pane: its Plan's title, else (a Context's Manager) its name.
 fn title(env: &mut Env, lead: &Lead) -> Result<String, CpdError> {
     let Some(plan) = lead.plan else {
         return Ok(lead.name.to_owned());

@@ -74,10 +74,10 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
             env.store.write(COMMAND, |tx| match decide(tx, &plan, &wanted)? {
                 Decision::Already { status, lead_branch, appended, needs } => Ok((status, lead_branch, appended, needs, true)),
                 Decision::Insert { phase, needs } => {
-                    let appended = matches!(phase, Phase::Dispatch | Phase::Pr | Phase::Done);
+                    let appended = matches!(phase, Phase::Dispatch | Phase::Deploy | Phase::Done);
                     let lead_branch = pr_branch(&plan, &wanted.key);
                     let key = &wanted.key;
-                    if matches!(phase, Phase::Pr | Phase::Done) {
+                    if matches!(phase, Phase::Deploy | Phase::Done) {
                         reopen(tx, &plan, phase, key)?;
                     }
                     if let Some(legacy) = &legacy {
@@ -142,7 +142,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
     }
     let needs = match &wanted.needs {
         Some(needs) => needs.clone(),
-        None if matches!(phase, Phase::Pr | Phase::Done) => merged_keys(&prs),
+        None if matches!(phase, Phase::Deploy | Phase::Done) => merged_keys(&prs),
         None => Vec::new(),
     };
     check_needs(&prs, plan, None, &needs)?;
@@ -178,7 +178,7 @@ fn insert(tx: &Connection, plan: &PlanId, wanted: &Wanted, needs: &[String], lea
     Ok(())
 }
 
-/// In `pr` or `done` the Plan goes back to `dispatch` (D1): the phase is compared and set, then
+/// In `deploy` or `done` the Plan goes back to `dispatch` (D1): the phase is compared and set, then
 /// `plan-phase` is appended (before `pr-added`).
 fn reopen(tx: &WriteTxn<'_>, plan: &PlanId, from: Phase, key: &PrKey) -> Result<(), CpdError> {
     let moved = tx.execute("UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = ?1 AND phase = ?2", [plan.as_str(), from.as_str()])?;

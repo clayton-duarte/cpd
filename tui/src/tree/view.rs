@@ -350,9 +350,14 @@ impl View {
         if rows::click_more(&mut self.state, &self.tree, &path) {
             return Effect::None;
         }
-        // a Context row only collapses or expands; a live Session row opens it; an archived one shows its history
-        if rows::click_context(&mut self.state, &self.tree, &path) {
-            return Effect::None;
+        // a Context row: its fold glyph folds or unfolds it, the rest of a live one opens its Manager (B3-A6); a live
+        // Session row opens it; an archived one shows its history
+        if let Some(Row::Context(c)) = rows::row(&self.tree, &path) {
+            if m.column == self.pane.x + rows::FOLD_COLUMN {
+                rows::click_context(&mut self.state, &self.tree, &path);
+                return Effect::None;
+            }
+            return if c.is_archived() { Effect::None } else { Effect::Run(Action::OpenManager(c.id.clone())) };
         }
         match rows::row(&self.tree, &path) {
             Some(row) => match row.session() {
@@ -579,7 +584,7 @@ mod tests {
         let mut view = on(&["alpha", "sketch"]);
         press(&mut view, KeyCode::Char('n'));
         let rows = drawn(&mut view, 44, 14);
-        assert_eq!(rows[9], format!(" {STOPPED} gamma"));
+        assert_eq!(rows[9], format!(" ▾ {STOPPED} gamma"));
         assert_eq!(rows[11], " Fork Sketch into a new Plan, name: █");
         assert_eq!(rows[12], " (Enter starts, Esc cancels)");
         assert_eq!(rows[13], "", "two wrapped rows take three");
@@ -603,12 +608,12 @@ mod tests {
     fn a_click_folds_a_context_and_opens_a_session_and_hides_the_cursor() {
         let mut view = on(&["alpha", "sketch"]);
         drawn(&mut view, 44, 12);
-        assert_eq!(click(&mut view, 5, 1), Effect::None, "the Context row `alpha`");
+        assert_eq!(click(&mut view, 1, 1), Effect::None, "the fold glyph of the Context row `alpha`");
         assert!(!view.state.opened().contains(&vec!["alpha".to_owned()]));
         drawn(&mut view, 44, 12);
         assert_eq!(view.state.selected(), ["alpha", "sketch"], "a click selects nothing");
         assert!(!view.cursor_shown());
-        click(&mut view, 5, 1);
+        click(&mut view, 1, 1);
         drawn(&mut view, 44, 12);
         assert_eq!(click(&mut view, 8, 2), Effect::Run(Action::Open(sid("l-ship"))), "the Plan row");
         assert_eq!(click(&mut view, 8, 6), Effect::Run(Action::Open(sid("f-blocked"))), "a fork row");
@@ -617,11 +622,45 @@ mod tests {
     }
 
     #[test]
+    fn a_click_on_a_context_rows_label_opens_its_manager_and_only_its_fold_glyph_folds() {
+        let mut view = on(&["alpha", "sketch"]);
+        drawn(&mut view, 44, 12);
+        let manager = Effect::Run(Action::OpenManager(ContextId::parse("alpha").unwrap()));
+        for column in [2, 5, 42] {
+            assert_eq!(click(&mut view, column, 1), manager, "column {column} of the Context row");
+        }
+        assert!(view.state.opened().contains(&vec!["alpha".to_owned()]), "no label click folds");
+        assert_eq!(click(&mut view, 1, 1), Effect::None, "the fold glyph runs no command");
+        assert!(!view.state.opened().contains(&vec!["alpha".to_owned()]));
+        drawn(&mut view, 44, 12);
+        assert_eq!(click(&mut view, 5, 1), manager, "a folded Context opens its Manager too");
+        assert_eq!(click(&mut view, 1, 1), Effect::None);
+        assert!(view.state.opened().contains(&vec!["alpha".to_owned()]), "the glyph unfolds");
+        let Effect::Run(action) = manager else { unreachable!() };
+        assert_eq!(action.argv(), ["context", "manager", "--context=alpha"]);
+    }
+
+    #[test]
+    fn an_archived_context_folds_at_its_glyph_and_opens_no_manager() {
+        let mut view = View::new(archived(), true);
+        let rows = drawn(&mut view, 44, 16);
+        let more = rows.iter().position(|r| r == " …").unwrap() as u16;
+        click(&mut view, 1, more); // the `…` row of the archived Contexts
+        let rows = drawn(&mut view, 44, 16);
+        let y = rows.iter().position(|r| r == " ▾ ◌ zeta").unwrap() as u16;
+        let zeta = vec!["zeta".to_owned()];
+        assert_eq!(click(&mut view, 6, y), Effect::None, "its label: no Manager for an archived Context");
+        assert!(view.state.opened().contains(&zeta));
+        assert_eq!(click(&mut view, 1, y), Effect::None);
+        assert!(!view.state.opened().contains(&zeta), "its glyph folds it");
+    }
+
+    #[test]
     fn row_0_is_blank_and_the_rows_follow_one_lower_and_clicks_land_on_the_row_under_the_pointer() {
         let mut view = View::new(sample(), true);
         let rows = drawn(&mut view, 44, 12);
         assert_eq!(rows[0], "", "the blank row at the top");
-        assert_eq!(rows[1], format!(" {NEEDS_YOU} alpha"));
+        assert_eq!(rows[1], format!(" ▾ {NEEDS_YOU} alpha"));
         assert!(rows[2].starts_with(&format!(" ⏵ ├ {WORKING} ship")), "{rows:?}");
         assert_eq!(click(&mut view, 8, 0), Effect::None, "the blank row is no row: not the Context row below it, not the first Session");
         assert!(view.state.opened().contains(&vec!["alpha".to_owned()]), "alpha is not folded");
@@ -759,18 +798,18 @@ mod tests {
         assert_eq!(rows[11], " …");
         assert_eq!(click(&mut view, 1, 11), Effect::None, "the `…` of the archived Contexts");
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!((rows[11].as_str(), rows[12].as_str()), (" …", format!(" {STOPPED} zeta").as_str()));
+        assert_eq!((rows[11].as_str(), rows[12].as_str()), (" …", format!(" ▾ {STOPPED} zeta").as_str()));
         assert!(rows[13].starts_with(&format!("   ├ {STOPPED} zp")), "{rows:?}");
         // a click on a guide no longer collapses (it is a click on its row: here an archived Plan's history); a
         // click on `…` does
         assert_eq!(click(&mut view, 3, 13), Effect::Run(Action::History(sid("l-zp"))));
-        assert_eq!(drawn(&mut view, 44, 16)[12], format!(" {STOPPED} zeta"));
+        assert_eq!(drawn(&mut view, 44, 16)[12], format!(" ▾ {STOPPED} zeta"));
         assert_eq!(click(&mut view, 1, 11), Effect::None);
         let rows = drawn(&mut view, 44, 16);
         assert_eq!((rows[11].as_str(), rows[12].as_str()), (" …", ""));
         assert_eq!(click(&mut view, 3, 5), Effect::None);
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!((rows[5].as_str(), rows[6].as_str()), ("   └ …", format!(" {NEEDS_YOU} beta").as_str()));
+        assert_eq!((rows[5].as_str(), rows[6].as_str()), ("   └ …", format!(" ▾ {NEEDS_YOU} beta").as_str()));
     }
 
     #[test]
@@ -793,7 +832,7 @@ mod tests {
         drawn(&mut view, 44, 16);
         click(&mut view, 1, 11);
         let rows = drawn(&mut view, 44, 16);
-        assert!(rows[6].starts_with(&format!("   ├ {STOPPED} old")) && rows[12] == format!(" {STOPPED} zeta"), "{rows:?}");
+        assert!(rows[6].starts_with(&format!("   ├ {STOPPED} old")) && rows[12] == format!(" ▾ {STOPPED} zeta"), "{rows:?}");
         // the archived Plan (its Lead), the archived fork of a live Plan, the Plan of the archived Context and its
         // fork: each shows the history of its Session
         for ((column, row), id) in [((8, 6), "l-old"), ((8, 7), "f-blocked"), ((8, 13), "l-zp"), ((8, 14), "f-zp")] {
@@ -867,7 +906,7 @@ mod tests {
         drawn(&mut view, 44, 16);
         click(&mut view, 1, 11);
         let rows = drawn(&mut view, 44, 16);
-        assert!(rows[6].starts_with(&format!("   ├ {STOPPED} old")) && rows[12] == format!(" {STOPPED} zeta"), "{rows:?}");
+        assert!(rows[6].starts_with(&format!("   ├ {STOPPED} old")) && rows[12] == format!(" ▾ {STOPPED} zeta"), "{rows:?}");
         // the archived Plan, its fork, an archived Context and its Plan, and an archived fork of a live Plan
         for (column, row) in [(8, 6), (8, 7), (8, 12), (8, 13), (8, 14)] {
             assert_eq!(menu_at(&mut view, column, row), ["Rename…", "Copy id", "Unarchive"], "({column}, {row})");
@@ -888,7 +927,7 @@ mod tests {
         let rows = drawn(&mut view, 44, 16);
         assert_eq!(rows[5], format!("   ├ {IDLE} s┌─────────┐"), "{rows:?}");
         assert_eq!(rows[6], format!("   └ {NEEDS_YOU} s│ Open    │"));
-        assert!(rows[7].starts_with(&format!(" {NEEDS_YOU} beta │ Rename… │")), "drawn over the tree: {rows:?}");
+        assert!(rows[7].starts_with(&format!(" ▾ {NEEDS_YOU} beta │ Rename… │")), "drawn over the tree: {rows:?}");
         assert_eq!(rows[12], "        └─────────┘");
         let reversed = |view: &mut View, x, y| {
             let mut terminal = Terminal::new(TestBackend::new(44, 16)).unwrap();

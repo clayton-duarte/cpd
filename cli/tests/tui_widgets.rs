@@ -34,8 +34,8 @@ fn sql(store: &mut Store, text: &str) {
 
 fn context(id: &str) -> String {
     format!(
-        "INSERT INTO contexts (id, title, jira, created_at, created_on, lead_session, grounded_seq)
-         VALUES ('{id}', 'Title of {id}', NULL, '2026-01-01T00:00:00.000Z', 'm1', NULL, NULL);"
+        "INSERT INTO contexts (id, title, jira, created_at, created_on)
+         VALUES ('{id}', 'Title of {id}', NULL, '2026-01-01T00:00:00.000Z', 'm1');"
     )
 }
 
@@ -49,7 +49,7 @@ fn plan_row(id: &str, phase: &str, created: &str, pr: Option<(i64, (&str, &str, 
     let status = match phase {
         "grounding" | "plan" => "waiting",
         "dispatch" => "dispatch",
-        "pr" => "open",
+        "deploy" => "open",
         _ => "merged",
     };
     let (row, number, url, opened, pull_request) = match pr {
@@ -112,12 +112,12 @@ fn populate(store: &mut Store) {
         (
             "rel",
             "cpd visual lead",
-            "pr",
+            "deploy",
             Some((7, ("cpd-tui cockpit column and its long title", "changes_requested", "failed"))),
             "2026-01-02T00:00:00.000Z",
             Some("parked"),
         ),
-        ("fresh", "fresh lead", "pr", Some((11, ("Plan fresh", "none", "none"))), "2026-01-02T00:00:01.000Z", Some("parked")),
+        ("fresh", "fresh lead", "deploy", Some((11, ("Plan fresh", "none", "none"))), "2026-01-02T00:00:01.000Z", Some("parked")),
         ("ship", "v1", "dispatch", None, "2026-01-02T00:00:02.000Z", Some("chat")),
         ("sketch", "sketch lead", "plan", None, "2026-01-02T00:00:03.000Z", Some("none")),
         ("away", "away lead", "done", Some((9, ("away", "approved", "pending"))), "2026-01-02T00:00:04.000Z", Some("work")),
@@ -204,7 +204,7 @@ fn pull_request(repo: &str, number: i64, title: &str, draft: bool, state: &str, 
 fn prs_store(env: &TestEnv) -> Store {
     let mut store = open(env);
     let mut s = context("alpha") + &lead_row("mine", "mine lead") + &lead_row("bare", "bare lead");
-    s += &plan_row("mine", "pr", "2026-01-02T00:00:00.000Z", Some((20, ("Mine to review", "none", "pending"))));
+    s += &plan_row("mine", "deploy", "2026-01-02T00:00:00.000Z", Some((20, ("Mine to review", "none", "pending"))));
     s += &plan_row("bare", "dispatch", "2026-01-02T00:00:01.000Z", None);
     s += &pull_request("acme/web", 4, "Older web fix", true, "open", "changes_requested", "failed", "2026-01-03T00:00:00.000Z");
     s += &pull_request("acme/repo", 9, "Middle one", false, "open", "approved", "passed", "2026-01-04T00:00:00.000Z");

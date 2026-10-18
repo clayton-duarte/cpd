@@ -66,7 +66,7 @@ pub fn park_window(session: &SessionId, plan: Option<&PlanId>) -> String {
     format!("park-{}", session_label(session, plan))
 }
 
-/// `ctx-<context>`: a Context's grounded Lead's window in the cockpit session.
+/// `ctx-<context>`: a Context's Manager's window in the cockpit session.
 pub fn context_window(context: &ContextId) -> String {
     format!("ctx-{context}")
 }

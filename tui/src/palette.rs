@@ -25,7 +25,7 @@ pub enum Meaning {
     NotStarted,
     /// A running Job; phase `dispatch`; PR checks pending.
     InProgress,
-    /// A merging Job; an open PR; phase `pr`.
+    /// A merging Job; an open PR; phase `deploy`.
     Review,
     /// A merged Job; a merged PR; phase `done`; checks passed.
     Done,
@@ -157,7 +157,7 @@ pub fn phase(phase: Option<Phase>) -> Meaning {
         Some(Phase::Grounding) => Meaning::Grounding,
         Some(Phase::Plan) => Meaning::Planning,
         Some(Phase::Dispatch) => Meaning::InProgress,
-        Some(Phase::Pr) => Meaning::Review,
+        Some(Phase::Deploy) => Meaning::Review,
         Some(Phase::Done) => Meaning::Done,
         None => Meaning::Nothing,
     }
@@ -289,7 +289,7 @@ mod tests {
             (Some(Phase::Grounding), Meaning::Grounding),
             (Some(Phase::Plan), Meaning::Planning),
             (Some(Phase::Dispatch), Meaning::InProgress),
-            (Some(Phase::Pr), Meaning::Review),
+            (Some(Phase::Deploy), Meaning::Review),
             (Some(Phase::Done), Meaning::Done),
         ];
         for (p, m) in phases {

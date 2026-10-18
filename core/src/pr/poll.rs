@@ -208,7 +208,7 @@ fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest)
     }
     let moved = tx.execute(
         "UPDATE plans SET phase = 'done', done_at = (SELECT at FROM txns WHERE id = cpd_txn())
-          WHERE id = ?1 AND phase = 'pr'",
+          WHERE id = ?1 AND phase = 'deploy'",
         [id.as_str()],
     )?;
     if moved == 0 {

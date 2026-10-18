@@ -43,15 +43,14 @@ fn sql(store: &mut Store, text: &str) {
         .unwrap();
 }
 
-fn context(id: &str, grounded: Option<&str>) -> String {
-    let (lead, seq) = grounded.map_or(("NULL".to_owned(), "NULL"), |g| (format!("'{g}'"), "0"));
+fn context(id: &str) -> String {
     format!(
-        "INSERT INTO contexts (id, title, jira, created_at, created_on, lead_session, grounded_seq)
-         VALUES ('{id}', 'Title of {id}', NULL, '2026-01-01T00:00:00.000Z', 'm1', {lead}, {seq});"
+        "INSERT INTO contexts (id, title, jira, created_at, created_on)
+         VALUES ('{id}', 'Title of {id}', NULL, '2026-01-01T00:00:00.000Z', 'm1');"
     )
 }
 
-/// `pr`: the Plan has a PR (the schema ties phases `pr` and `done` to one).
+/// `pr`: the Plan has a PR (the schema ties phases `deploy` and `done` to one).
 fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr: bool) -> String {
     let late = !matches!(phase, "grounding" | "plan");
     let worktree = if late { "'/wt'" } else { "NULL" };
@@ -77,7 +76,7 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr:
     let status = match phase {
         "grounding" | "plan" => "waiting",
         "dispatch" => "dispatch",
-        "pr" => "open",
+        "deploy" => "open",
         _ => "merged",
     };
     format!(
@@ -123,19 +122,19 @@ fn moved(context: &str, plan: &str, session: &str, place: &str) -> String {
 
 /// Contexts, Plans and Sessions in each state:
 ///
-/// - `alpha` (grounded Lead `g-alpha`): `ship` (dispatch; Lead `l-ship` working, in the chat slot; side forks
+/// - `alpha` (also a Lead with no Plan, `g-alpha`, as migration 0010 leaves a grounded Lead): `ship` (dispatch; Lead `l-ship` working, in the chat slot; side forks
 ///   `f-idle` and `f-blocked`; Jobs queued, running, failed and two merged), `sketch` (plan; Lead idle; two drafts);
 /// - `beta`: `rel` (pr; its Lead is blocked), `old` (done; its Lead is stopped);
 /// - `gamma`: nothing.
 fn populate(env: &TestEnv) {
     let mut store = open(env);
     let mut s = String::new();
-    s += &context("alpha", Some("g-alpha"));
-    s += &context("beta", None);
-    s += &context("gamma", None);
+    s += &context("alpha");
+    s += &context("beta");
+    s += &context("gamma");
     s += &plan_row("ship", "alpha", "dispatch", "l-ship", "2026-01-02T00:00:00.000Z", false);
     s += &plan_row("sketch", "alpha", "plan", "l-sketch", "2026-01-02T00:00:01.000Z", false);
-    s += &plan_row("rel", "beta", "pr", "l-rel", "2026-01-02T00:00:02.000Z", true);
+    s += &plan_row("rel", "beta", "deploy", "l-rel", "2026-01-02T00:00:02.000Z", true);
     s += &plan_row("old", "beta", "done", "l-old", "2026-01-02T00:00:03.000Z", true);
     s += &session_row("g-alpha", "grounded", "alpha", "", "idle", None, "2026-01-02T00:00:00.000Z");
     s += &session_row("l-ship", "ship lead", "alpha", "ship", "working", None, "2026-01-02T00:00:00.000Z");
@@ -308,17 +307,17 @@ fn the_tree_of_a_prepared_store() {
         screen,
         [
             String::new(),
-            format!(" {NEEDS_YOU} alpha").to_owned(),
+            format!(" ▾ {NEEDS_YOU} alpha").to_owned(),
             row(&format!("⏵ ├ {WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
             row(&format!("  ├ {IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
             format!("   ├ {IDLE} ship·f-id").to_owned(),
             format!("   └ {NEEDS_YOU} ship·f-bl").to_owned(),
-            format!(" {NEEDS_YOU} beta").to_owned(),
+            format!(" ▾ {NEEDS_YOU} beta").to_owned(),
             row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
             row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"),
-            format!(" {STOPPED} gamma").to_owned(),
+            format!(" ▾ {STOPPED} gamma").to_owned(),
         ],
-        "the Context and Plan ids, the forks' `<plan id>·<4 characters of the Session id>`; the forks are siblings of the Plans, after them, under their Context (B1); the grounded Lead g-alpha is no row; the Jobs: queued, running, merging, failed, merged; no state text"
+        "the Context and Plan ids, the forks' `<plan id>·<4 characters of the Session id>`; the forks are siblings of the Plans, after them, under their Context (B1); the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text"
     );
 }
 
@@ -364,6 +363,43 @@ fn enter_opens_the_lead_of_a_plan_and_a_fork_with_session_open() {
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "f-idle"])]);
     pane.keys(&["k", "k", "Enter"]);
     assert_eq!(wait_for_calls(&env, 2)[1], words(&["session", "open", "l-ship"]));
+}
+
+#[test]
+fn a_click_on_a_context_row_opens_its_manager_and_its_fold_glyph_folds_it() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true,"manager":{"session":"m-alpha","name":"alpha-manager","state":"idle","pane":"%1","window":"@1"},"started":false,"session":"m-alpha","displaced":null}"#);
+    let pane = Pane::start(&env, 46, 14);
+    pane.ready();
+    pane.click(8, 1); // the label of the Context `alpha`
+    assert_eq!(
+        wait_for_calls(&env, 2),
+        [words(&["context", "manager", "--context=alpha"]), words(&["session", "open", "m-alpha"])]
+    );
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(calls(&env).len(), 2, "no more commands");
+    let screen = pane.screen();
+    assert!(screen[1].starts_with(" ▾ ") && screen.iter().any(|r| r.contains("ship")), "the label click folds nothing: {screen:?}");
+    pane.click(1, 1); // its fold glyph
+    let folded = pane.wait("alpha folded", |s| !s.iter().any(|r| r.contains("ship")));
+    assert_eq!(folded[1], format!(" ▸ {NEEDS_YOU} alpha 2"), "a folded Context draws ▸ and its number of Plans");
+    assert_eq!(calls(&env).len(), 2, "the glyph runs no command");
+    pane.click(1, 1);
+    pane.wait("alpha unfolded", |s| s.iter().any(|r| r.contains("ship")));
+    assert_eq!(calls(&env).len(), 2);
+}
+
+#[test]
+fn a_refused_context_manager_shows_its_error_and_opens_nothing() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":false,"error":{"code":"archived","message":"The Context is archived."}}"#);
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    pane.click(8, 1);
+    pane.wait("the error", |_| pane.footer_has("archived: The Context is archived."));
+    assert_eq!(calls(&env), [words(&["context", "manager", "--context=alpha"])], "no session open");
 }
 
 #[test]
@@ -502,7 +538,7 @@ fn the_tree_follows_the_events_of_the_store() {
     // session-state
     env.cpd(&["session", "state", "blocked", "--label", "cpd: Ask", "--session", "l-sketch"]).ok();
     let screen = pane.wait("the new state", |s| s.iter().any(|r| r.contains(&format!("├ {NEEDS_YOU} sketch"))));
-    assert!(screen.iter().any(|r| r.starts_with(&format!(" {NEEDS_YOU} alpha"))));
+    assert!(screen.iter().any(|r| r.starts_with(&format!(" ▾ {NEEDS_YOU} alpha"))));
 }
 
 /// `populate`, with the Context `gamma` and the Plan `old` of `beta` (and its Lead) archived.
@@ -528,12 +564,12 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
         screen,
         [
             String::new(),
-            format!(" {NEEDS_YOU} alpha").to_owned(),
+            format!(" ▾ {NEEDS_YOU} alpha").to_owned(),
             row(&format!("⏵ ├ {WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
             row(&format!("  ├ {IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
             format!("   ├ {IDLE} ship·f-id").to_owned(),
             format!("   └ {NEEDS_YOU} ship·f-bl").to_owned(),
-            format!(" {NEEDS_YOU} beta").to_owned(),
+            format!(" ▾ {NEEDS_YOU} beta").to_owned(),
             row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
             "   └ …".to_owned(),
             " …".to_owned(),
@@ -548,8 +584,8 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
     pane.click(10, 9);
     wait_for_calls(&env, 1);
     pane.click(1, 10);
-    let screen = pane.wait("the archived Context", |s| s.iter().any(|r| r == &format!(" {STOPPED} gamma")));
-    assert_eq!(screen[9..12], [row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), " …".to_owned(), format!(" {STOPPED} gamma").to_owned()]);
+    let screen = pane.wait("the archived Context", |s| s.iter().any(|r| r == &format!(" ▾ {STOPPED} gamma")));
+    assert_eq!(screen[9..12], [row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), " …".to_owned(), format!(" ▾ {STOPPED} gamma").to_owned()]);
     // a click on beta's `…` collapses its group again
     pane.click(4, 8);
     let screen = pane.wait("the group collapsed", |s| s.iter().all(|r| !r.contains(&format!("└ {STOPPED} old"))));
