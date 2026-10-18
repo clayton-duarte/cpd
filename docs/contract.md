@@ -695,6 +695,8 @@ Every write transaction starts by inserting its row into `txns` with an explicit
 - a connection that is not a `cpd` process (for example the `sqlite3` shell) has no such function, so any write it attempts fails with "no such function: cpd_txn" (SQLite resolves trigger functions when the outer statement is prepared; verified by `cli/tests/store.rs`; a delete from an append-only table fails with its `append_only` error instead);
 - a write whose `cpd_txn()` does not match its transaction's `txns` row is refused by the triggers on `txns`, `events` and `history`.
 
+`txns.cwd` is the process's working directory; when it cannot be read (the directory was deleted under the process) it is the text `(unreadable)` and the write goes on (hs-d196).
+
 The **schema check**: at open, cpd hashes `SELECT type, name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name` and compares it with the hash the binary embeds for the current `user_version`. A mismatch means someone dropped or changed a trigger or table: write commands refuse with `store_tampered` (exit 1); read commands still work and report it in their `tamper` field. This plus the history replaces cpd 1's `bd history` actor check (§8).
 
 The **tamper report** (`plan show`'s `tamper` list, `doctor`): the schema check; every Locked Job whose recomputed fingerprint differs from the stored one; any `history` row whose `txn` has no `txns` row. The threat is an agent writing the Ledger outside cpd, as in cpd 1; a local user who drops the triggers, edits and recreates them exactly is out of scope (in cpd 1 the beads database could be edited the same way).
@@ -1185,7 +1187,7 @@ CREATE TRIGGER events_no_delete  BEFORE DELETE ON events  BEGIN SELECT RAISE(ABO
 - At start-up every `cpd` process opens the database and reads `user_version`:
   - equal to N: check the schema hash and continue;
   - below N: `BEGIN IMMEDIATE`, re-read `user_version` inside the transaction (another process may have migrated meanwhile), apply each missing migration in order, set `user_version`, insert one `txns` row with `command = 'migrate'`, commit. A migration that fails rolls back entirely and the command fails with `migration_failed` (exit 1);
-  - above N: refuse with `store_too_new` (exit 1): an older binary never writes a newer schema.
+  - above N: refuse with `store_too_new` (exit 1): an older binary never writes a newer schema. A process keeps its connection for its life, so every write transaction re-reads `user_version` after `BEGIN IMMEDIATE` and refuses with `store_too_new` the same way, before its `txns` row.
 - **Exception:** `cpd --version` opens the database read-only and reports `user_version` as `store_schema`, without migrating it and without the check above; it reports the binary's own `N` as `schema` (commands.md §1.2). It never creates or writes the database. A binary can open the store when `store_schema` is `null` (no database) or `<= schema`.
 - A migration that adds or renames columns drops and recreates the history triggers of that table, so the triggers always list every column.
 - **Migration 2** (cockpit parity; a real `cpd.db` exists since migration 1 shipped, so the change is a migration and not an edit of §4.4): adds three nullable columns to `plans`, each with its own check, then drops and recreates `plans`' history triggers (the rule above):
