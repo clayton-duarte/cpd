@@ -93,7 +93,7 @@ pub(super) fn start(env: &mut Env, lead: &Lead, window: &str, command: &str) -> 
     Ok(Started { window, pane })
 }
 
-/// The header of `lead`'s pane: its Plan's title, else (a grounded Lead) its name.
+/// The header of `lead`'s pane: its Plan's title, else (a Context's Manager) its name.
 fn title(env: &mut Env, lead: &Lead) -> Result<String, CpdError> {
     let Some(plan) = lead.plan else {
         return Ok(lead.name.to_owned());

@@ -722,7 +722,7 @@ fn history_refusals_change_nothing() {
     setup(&env);
     refused(&env.cpd(&["session", "history", "nobody"]), "session_not_found", 4);
     refused(&env.cpd(&["session", "history", WORKER]), "not_a_lead", 3);
-    refused(&env.cpd(&["session", "history", GROUNDED]), "file_unreadable", 2);
+    refused(&env.cpd(&["session", "history", MANAGER]), "not_a_lead", 3);
     exec_sql(&env, "UPDATE sessions SET file = '/nonexistent/lead2.jsonl' WHERE id = 'lead2'");
     refused(&env.cpd(&["session", "history", LEAD2]), "file_unreadable", 2);
     archived_lead2(&env);
@@ -735,7 +735,7 @@ fn history_refusals_change_nothing() {
     cockpit(&env);
     env.cpd(&["session", "open", LEAD1]).ok();
     refused(&env.cpd(&["session", "history", WORKER]), "not_a_lead", 3);
-    refused(&env.cpd(&["session", "history", GROUNDED]), "file_unreadable", 2);
+    refused(&env.cpd(&["session", "history", MANAGER]), "not_a_lead", 3);
     // The refused ones parked nothing.
     assert_eq!(slot(&env).session, LEAD1);
     assert!(history_panes(&env).is_empty());

@@ -375,7 +375,7 @@ fn archived_objects_are_in_the_tree_with_their_archived_at() {
 
 /// The dots of the tree (§17): one row of the rule's tables for each Lead, and the Context row's.
 ///
-/// - `hot`: `red` (dispatch, blocked), `yel` (pr; two pull requests, only the second has finished checks; its Lead is
+/// - `hot`: `red` (dispatch, blocked), `yel` (deploy; two pull requests, only the second has finished checks; its Lead is
 ///   idle and its fork `f-yel` is working), `mag` (plan, blocked), `whi` (dispatch, idle, unseen), `wrk`, `idl`, `stp`;
 /// - `calm`: a working and an idle Lead; `dead`: a stopped one; `ice`: no Plan, no Session.
 #[test]
@@ -383,12 +383,12 @@ fn every_session_has_a_dot_and_every_context_the_greatest_of_its_live_sessions()
     let (_env, mut store) = fixture();
     let mut s = String::new();
     for c in ["hot", "calm", "dead", "ice"] {
-        s += &context(c, None);
+        s += &context(c);
     }
     let at = |n: u32| format!("2026-01-02T00:00:{n:02}.000Z");
     let plans = [
         ("red", "hot", "dispatch", "blocked"),
-        ("yel", "hot", "pr", "idle"),
+        ("yel", "hot", "deploy", "idle"),
         ("mag", "hot", "plan", "blocked"),
         ("whi", "hot", "dispatch", "idle"),
         ("wrk", "hot", "dispatch", "working"),
