@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use common::{CPD, Run, TestEnv};
 use cpd_core::error::CpdError;
-use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
+use cpd_core::git::{self, Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::plan::{jobs, locked_fingerprint};
@@ -553,9 +553,10 @@ fn e2_asks_live_drivers_to_stop_on_timeout_or_cancel_with_escalations_pausing_th
     assert_eq!(fx.count("job-cancelled") + fx.count("job-failed") + fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
 
-#[test]
-fn e2_recovers_a_merge_whose_driver_died_after_the_compare_and_swap() {
-    let fx = fx("");
+/// Attempt `api-a1` of Plan `pay` in `merging`, its worktree cut from the Lead Branch with one commit, its driver
+/// dead. With `moved` the driver had moved the Lead Branch (step 8) and synced the Lead worktree before it died.
+/// Returns the worktree and the tip.
+fn merging_api(fx: &Fx, moved: bool) -> (git::Created, String) {
     let attempt = AttemptId::parse("api-a1").unwrap();
     let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("attempt.log") };
     let made = create_attempt_worktree(&fx.repo, &fx.lead, &PlanId::parse(PLAN).unwrap(), &attempt, &setup).unwrap();
@@ -563,8 +564,9 @@ fn e2_recovers_a_merge_whose_driver_died_after_the_compare_and_swap() {
     fx.env.git(&made.path, &["add", "-A"]);
     fx.env.git(&made.path, &["commit", "-q", "-m", "api"]);
     let tip = fx.env.git(&made.path, &["rev-parse", "HEAD"]);
-    // The driver moved the Lead Branch (step 8) and synced the Lead worktree, then died.
-    fx.env.git(&fx.lead, &["merge", "-q", "--ff-only", &made.branch]);
+    if moved {
+        fx.env.git(&fx.lead, &["merge", "-q", "--ff-only", &made.branch]);
+    }
     fx.add_job(
         "api",
         &[],
@@ -578,6 +580,14 @@ fn e2_recovers_a_merge_whose_driver_died_after_the_compare_and_swap() {
             t = ago(1)
         ),
     );
+    (made, tip)
+}
+
+#[test]
+fn e2_recovers_a_merge_whose_driver_died_after_the_compare_and_swap() {
+    let fx = fx("");
+    // The driver moved the Lead Branch (step 8) and synced the Lead worktree, then died.
+    let (made, tip) = merging_api(&fx, true);
 
     let engine = fx.start();
     wait_until("the merge recorded", || fx.attempt("api-a1").0 == "ended");
@@ -587,6 +597,89 @@ fn e2_recovers_a_merge_whose_driver_died_after_the_compare_and_swap() {
     assert_eq!(fx.job_status("api"), "merged");
     assert_eq!(fx.events("job-merged")[0].3, json!({"sha": tip, "tier": "S2"}));
     assert!(!made.path.exists());
+}
+
+/// A window `pay--api-a1` in the work session, with another to keep the session alive.
+fn worker_window(fx: &Fx) {
+    for args in [
+        &["new-session", "-d", "-s", "cpd-work", "-n", "keep", "sleep", "600"][..],
+        &["new-window", "-d", "-t", "=cpd-work:", "-n", "pay--api-a1", "sleep", "600"][..],
+    ] {
+        let out = fx.env.tmux(args);
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+    assert!(worker_window_is_up(fx));
+}
+
+fn worker_window_is_up(fx: &Fx) -> bool {
+    let out = fx.env.tmux(&["list-windows", "-a", "-F", "#{session_name}:#{window_name}"]);
+    String::from_utf8_lossy(&out.stdout).contains("cpd-work:pay--api-a1")
+}
+
+/// A `tmux` on `PATH` whose `kill-window` fails: the first call only, or every call; every other call is the real tmux.
+/// Returns the file it creates at its first failure.
+fn failing_kill_window(fx: &Fx, every_call: bool) -> PathBuf {
+    let real = String::from_utf8(fx.env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
+    let real = real.trim();
+    assert!(real.starts_with('/'), "{real}");
+    let marker = fx.env.root().join("kill-failed");
+    let only_first = format!(" && [ ! -e '{}' ]", marker.display());
+    let condition = if every_call { "" } else { only_first.as_str() };
+    fx.env.fake(
+        "tmux",
+        &format!(
+            "for a in \"$@\"; do if [ \"$a\" = kill-window ]{condition}; then : > '{m}'; echo 'fake: kill-window failed' >&2; exit 1; fi; done\nexec '{real}' \"$@\"",
+            m = marker.display()
+        ),
+    );
+    marker
+}
+
+#[test]
+fn e2_kills_the_window_of_a_dead_driver_it_ends_though_the_first_kill_window_fails() {
+    let fx = fx("retry_cap = 0");
+    fx.add_running("api", "running", &ago(1));
+    worker_window(&fx);
+    let marker = failing_kill_window(&fx, false);
+
+    let engine = fx.start();
+    wait_until("the attempt ended and its window gone", || fx.attempt("api-a1").0 == "ended" && !worker_window_is_up(&fx));
+    engine.stop();
+
+    assert!(marker.exists(), "the fake tmux never failed a kill-window");
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
+#[test]
+fn r3_kills_the_window_of_a_merge_that_did_not_happen_though_the_first_kill_window_fails() {
+    let fx = fx("");
+    let (made, _) = merging_api(&fx, false);
+    worker_window(&fx);
+    let marker = failing_kill_window(&fx, false);
+
+    let engine = fx.start();
+    wait_until("the attempt ended and its window gone", || fx.attempt("api-a1").0 == "ended" && !worker_window_is_up(&fx));
+    engine.stop();
+
+    assert!(marker.exists(), "the fake tmux never failed a kill-window");
+    assert_eq!(fx.attempt("api-a1").2.as_deref(), Some("crashed"));
+    // R3 keeps the worktree for debugging.
+    assert!(made.path.exists());
+}
+
+#[test]
+fn r2_removes_the_worktree_though_every_kill_window_fails() {
+    let fx = fx("");
+    let (made, _) = merging_api(&fx, true);
+    worker_window(&fx);
+    let marker = failing_kill_window(&fx, true);
+
+    let engine = fx.start();
+    wait_until("the merge recorded and its worktree removed", || fx.attempt("api-a1").0 == "ended" && !made.path.exists());
+    engine.stop();
+
+    assert!(marker.exists(), "the fake tmux never failed a kill-window");
+    assert_eq!(fx.attempt("api-a1").1.as_deref(), Some("merged"));
 }
 
 /// A Session whose pane is dead or gone becomes `stopped` with no pane, and
