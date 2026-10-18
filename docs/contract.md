@@ -54,7 +54,7 @@ Exit codes (kept from cpd 1 §2):
 | `2` | usage error | `usage`, `plan_required`, `invalid_plan_id` |
 | `3` | refused by an invariant: Locked, an illegal transition, a precondition | `job_locked`, `illegal_transition`, `dirty_tree`, `cas_lost` |
 | `4` | not found | `plan_not_found`, `job_not_found`, `session_not_found` |
-| `5` | timeout | `store_busy`, `lock_timeout`, `ask_timeout` |
+| `5` | timeout | `store_busy`, `lock_timeout`, `ask_timeout`, `cancel_timeout` |
 
 `commands.md` introduces more codes, most of them cpd 1's (cpd 1 §11 and its `src/`); each is specified at the command that returns it, under the same exit meanings:
 
@@ -87,7 +87,7 @@ $CPD_HOME/
   archive/contexts/<context>/     an old git store of a Context, moved here by migration 0007 (§4.5); nothing reads it
   locks/
     watch.lock                    held by the one `cpd watch` (§6.6)
-    repo-<sha1>.lock              per-repo lock: merges, `pr open`, `pr rebase` (§7.4, §7.6); sha1 of the repo's git common dir realpath
+    repo-<sha1>.lock              per-repo lock: merges, `pr open`, `pr rebase`, `pr push`, and the clean-up after a PR's merge (§7.2, §7.4, §7.6); sha1 of the repo's git common dir realpath
     attempt-<plan>--<attempt>.lock  the driver lock: taken by the Attempt's starter, inherited by its driver, removed when the Attempt ends (§3.4)
     pr-poll.lock                  held by `pr poll` for the whole poll (§7.6, hs-d96)
     distill-<context>.lock        held by the Context's one distill run, `context distill`, for its whole life (§4.6)
@@ -99,6 +99,7 @@ $CPD_HOME/
     <plan>/lead-message.md        the Lead's first message, written by `plan new`
     <plan>/plannotator-port       the Plan's plannotator port, one line, assigned by `session run` (§6.5)
     <plan>/plan-<review>.md       the Plan review's content, written by `plan review`, opened in plannotator by the pi adapter
+    <plan>/feedback-<review>.md   plannotator's feedback on a Plan review, written by the pi adapter and overwritten on a retry; passed to `plan decide --feedback-file`
     <plan>/messages/<session>.md  a forked Session's first message, copied by `session fork --message-file`
     <plan>/specs/<attempt>.md     rendered Worker Spec
     <plan>/reviews/<k>.md         a review Job's findings, written by its Worker (B2, §3.4); the directory R19 removed, reused for this
@@ -198,7 +199,7 @@ The part of a Plan in one repo (R34, A4): one repo, one base, one Lead Branch an
 | `plan`, `key` | text | the PR key (§2.1), unique in its Plan |
 | `repo` | text | realpath of the repo's main worktree |
 | `base` | text | the branch the pull request targets; default the repo's `origin` HEAD branch, else `main`; `pr add --base` overrides (cpd 1 §11 `workflow init`) |
-| `needs` | [text] | keys of other PRs of the same Plan that must be `merged` before this one starts (A7, A9); acyclic; none may be `cancelled` when the need is recorded |
+| `needs` | [text] | keys of other PRs of the same Plan that must be `merged` before this one starts (A7, A9); acyclic; none may be `cancelled` when the need is recorded. `pr add` defaults them, in phase `deploy` or `done`, to every `merged` PR of the Plan, unless `--needs` or `--no-needs` is given |
 | `status` | text | `waiting`, `dispatch`, `open`, `merged`, `cancelled` (§3.8) |
 | `lead_branch` | text | `cpd/<plan>/<key>` (§2.1); set by `pr add` |
 | `lead_worktree` | text? | `<repo-parent>/<repo-name>.<plan>.<key>`; set when the PR starts (§3.8, §7.2), null while `waiting` or `cancelled` |
@@ -611,7 +612,7 @@ stateDiagram-v2
 | A6 | Removed by R19 (no Job-level Reviewer). |
 | A7 | Removed by R19 (no Job-level Reviewer). |
 | A8 | Merge (§7.4); a review Job's Attempt has no commits to merge (below) |
-| A9 | End: record `metrics` (parsed from the Worker's session file, cpd 1 §14) in the transaction that ends the Attempt; kill the Attempt's tmux window (`kill-window` is tried 3 times, 1 s apart, before the `error` Event); remove the driver lock file `locks/attempt-<plan>--<attempt>.lock`; on `merged`, remove the worktree and branch; otherwise keep them for debugging until their PR is merged, when the PR's clean-up removes them (§7.2) |
+| A9 | End: record `metrics` (parsed from the Worker's session file, cpd 1 §14) in the transaction that ends the Attempt; kill the Attempt's tmux window (`kill-window` is tried 3 times, 1 s apart, before the `error` Event); remove the driver lock file `locks/attempt-<plan>--<attempt>.lock` (a missing file is fine; the merge recovery R does the same after it commits an Attempt's end, G13); on `merged`, remove the worktree and branch; otherwise keep them for debugging until their PR is merged, when the PR's clean-up removes them (§7.2) |
 
 **The driver lock** `locks/attempt-<plan>--<attempt>.lock` is held without a gap from before the Attempt row exists until its driver exits, so a free lock always means a dead driver, and E2 never ends a healthy Attempt whose driver has not started running yet. Chosen fix: the starter takes the lock and hands it to the driver at the spawn. Rejected alternative: an E2 grace period for young `starting` Attempts, which rests on a timing guess and needs a new key.
 
@@ -1290,8 +1291,9 @@ CREATE TRIGGER events_no_delete  BEFORE DELETE ON events  BEGIN SELECT RAISE(ABO
 - The schema version is `PRAGMA user_version`. The binary embeds an ordered list of migrations `1..N` (SQL scripts) and, for each version, the schema hash of §4.3.
 - At start-up every `cpd` process opens the database and reads `user_version`:
   - equal to N: check the schema hash and continue;
-  - below N: `BEGIN IMMEDIATE`, re-read `user_version` inside the transaction (another process may have migrated meanwhile), apply each missing migration in order, set `user_version`, insert one `txns` row with `command = 'migrate'`, commit. A migration that fails rolls back entirely and the command fails with `migration_failed` (exit 1);
+  - below N: `BEGIN IMMEDIATE`, re-read `user_version` inside the transaction (another process may have migrated meanwhile), apply each missing migration in order, set `user_version`, insert one `txns` row with `command = 'migrate'`, **verify the schema hash** (below), commit. A migration that fails rolls back entirely and the command fails with `migration_failed` (exit 1);
   - above N: refuse with `store_too_new` (exit 1): an older binary never writes a newer schema. A process keeps its connection for its life, so every write transaction re-reads `user_version` after `BEGIN IMMEDIATE` and refuses with `store_too_new` the same way, before its `txns` row.
+- **The hash check of a migration** (hs-n121, S2): after the last missing migration and before the commit, inside the same transaction, the binary computes the schema hash (§4.3) of the database as the migrations left it and compares it with the embedded hash of the version it reached (`N`, or the highest version it applied). A mismatch rolls the whole transaction back, so `user_version` and every table stay as they were, and the command fails with `migration_failed` (exit 1; `details: {version, expected, actual}`, the hashes). The check is the one the `equal to N` case runs at every start-up, made before the commit instead of only at the next open, so a migration that produces a schema the binary does not describe can never be committed. Rerunning is safe: nothing was written.
 - **Exception:** `cpd --version` opens the database read-only and reports `user_version` as `store_schema`, without migrating it and without the check above; it reports the binary's own `N` as `schema` (commands.md §1.2). It never creates or writes the database. A binary can open the store when `store_schema` is `null` (no database) or `<= schema`.
 - A migration that adds or renames columns drops and recreates the history triggers of that table, so the triggers always list every column.
 - **Migration 2** (cockpit parity; a real `cpd.db` exists since migration 1 shipped, so the change is a migration and not an edit of §4.4): adds three nullable columns to `plans`, each with its own check, then drops and recreates `plans`' history triggers (the rule above):
@@ -1669,7 +1671,7 @@ One `cpd watch` per machine, in `cpd-work:watch`. It is not tied to any Lead's p
 **The Plan's plannotator port** (hs-d35, hs-d40, hs-d50). Config key `plannotator_ports` (§8.2) is an inclusive range. A Plan's port lives in `run/<plan>/plannotator-port` (one line, the port; no schema change). `session run` assigns it when it starts pi, under `flock` on `locks/plannotator-ports.lock`:
 
 1. When the Plan's file holds a port inside the range, the Plan keeps it.
-2. Else the Plan gets the lowest port of the range that no other Plan holds, ignoring Plans whose phase is `done`, and the file is written.
+2. Else the Plan gets the lowest port of the range that no other Plan holds, and the file is written. A Plan **holds** its port unless its phase is `done` or it is archived (`archived_at` set; E1, hs-d203). An archived Plan's `plannotator-port` file stays, but its port is free: rule 1 keeps a Plan's port only while no other holder has it, else the Plan is assigned afresh by this rule. `plan archive` and `plan cancel` (commands.md §4.10, §4.12) therefore free the port, and `plan unarchive` takes none (the next `session run` assigns one).
 3. Else none is free: `no_port` (exit 3; `details`: the range and the holders `[{plan, port}]`), the Lead does not start, and the pane names the Plans that hold the range and offers Enter to retry (§10.8 of `commands.md`).
 
 `PLANNOTATOR_REMOTE` still comes from cpd's own environment. `core/src/plan/lead.rs` keeps passing `PLANNOTATOR_PORT` from cpd's environment to a Lead pane; `session run` overrides it with the Plan's port when it starts pi (A7), and `cpd doctor` no longer checks it (`commands.md` §14.1).

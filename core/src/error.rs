@@ -183,6 +183,7 @@ error_codes! {
     StoreBusy = "store_busy" => Timeout,
     LockTimeout = "lock_timeout" => Timeout,
     AskTimeout = "ask_timeout" => Timeout,
+    CancelTimeout = "cancel_timeout" => Timeout,
 
     // R34, Plans across repos (contract §1.2, §3.8). `branch_exists` is above.
     PrStartFailed = "pr_start_failed" => Failure,
@@ -341,6 +342,7 @@ mod tests {
             (ErrorCode::StoreBusy, 5),
             (ErrorCode::LockTimeout, 5),
             (ErrorCode::AskTimeout, 5),
+            (ErrorCode::CancelTimeout, 5),
             (ErrorCode::PrStartFailed, 1),
             (ErrorCode::PrRequired, 2),
             (ErrorCode::InvalidPrId, 2),

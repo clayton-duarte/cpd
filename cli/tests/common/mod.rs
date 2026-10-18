@@ -5,6 +5,9 @@
 //! - `$CPD_HOME` and `$HOME` there, never the real `~/.cpd` or home;
 //! - a private tmux server: its own `TMUX_TMPDIR` and socket name, killed on drop,
 //!   so the cockpit server `-L cpd` is never touched;
+//! - a teardown (`teardown.sh`, run by `Drop` and by a detached reaper when the test
+//!   process is killed) that kills the tmux server and every process whose command
+//!   line or cwd is under the directory, then removes the directory;
 //! - a `bin/` directory first on `PATH`, for fake `pi` and `gh` scripts that
 //!   record their calls; `gh`, `pi`, `curl`, `wget` and `ssh` start as shims that
 //!   exit 97 (`no fake installed for <name>`), and no `GH_*`, `GITHUB_*`, `SSH_*`
@@ -36,6 +39,95 @@ pub const CPD: &str = env!("CARGO_BIN_EXE_cpd");
 
 /// The longest any fake sleeps, so the leftovers of a killed test run end by themselves.
 pub const SLEEP_SECONDS: u64 = 120;
+
+/// The teardown script: `sh teardown.sh` tears the env down and removes its directory;
+/// `sh teardown.sh watch <pid>` (the reaper) waits until `<pid>` is gone or the directory
+/// is, and then tears down if the directory is still there. `dir` and `socket` are
+/// prepended by [`TestEnv::new`]. Never kills the script itself, its ancestors or its
+/// descendants. Linux only (`/proc`). Idempotent.
+const TEARDOWN_SH: &str = r#"
+me=$$
+
+# stat_of PID: sets st (state) and pp (parent pid); fails when the process is gone.
+stat_of() {
+  _l=
+  { read -r _l < "/proc/$1/stat"; } 2>/dev/null || return 1
+  _l=${_l##*) }
+  set -- $_l
+  st=$1 pp=$2
+}
+
+# alive PID: running (a zombie is dead).
+alive() { stat_of "$1" && [ "$st" != Z ] && [ "$st" != X ]; }
+
+protected=" "
+_a=$me
+while [ "$_a" -gt 0 ]; do
+  protected="$protected$_a "
+  stat_of "$_a" || break
+  _a=$pp
+done
+
+mine() {
+  _m=$1
+  while [ "$_m" -gt 1 ]; do
+    [ "$_m" = "$me" ] && return 0
+    stat_of "$_m" || return 1
+    _m=$pp
+  done
+  return 1
+}
+
+# The live processes whose command line contains $dir or whose cwd is under it.
+targets() {
+  for t in $({ grep -laF -- "$dir" /proc/[0-9]*/cmdline; find /proc -mindepth 2 -maxdepth 2 -name cwd -lname "$dir*"; } 2>/dev/null | sed -n 's|^/proc/\([0-9][0-9]*\)/.*|\1|p' | sort -u); do
+    [ "$t" -gt 1 ] || continue
+    case "$protected" in *" $t "*) continue ;; esac
+    mine "$t" && continue
+    alive "$t" || continue
+    printf '%s\n' "$t"
+  done
+}
+
+teardown() {
+  unset TMUX
+  TMUX_TMPDIR="$dir/tmux" tmux -L "$socket" kill-server >/dev/null 2>&1
+  round=0
+  while [ "$round" -lt 5 ]; do
+    round=$((round + 1))
+    pids=$(targets)
+    [ -n "$pids" ] || break
+    kill -TERM $pids 2>/dev/null
+    n=0
+    while [ "$n" -lt 10 ]; do
+      any=
+      for k in $pids; do alive "$k" && any=1; done
+      [ -z "$any" ] && break
+      sleep 0.1
+      n=$((n + 1))
+    done
+    kill -KILL $pids 2>/dev/null
+  done
+  rm -rf "$dir"
+}
+
+if [ "${1-}" = watch ]; then
+  while [ -d "$dir" ] && alive "$2"; do sleep 1; done
+  [ -d "$dir" ] || exit 0
+fi
+teardown
+exit 0
+"#;
+
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// Spawns `cmd` with stdio on /dev/null through [`spawn`] (the harness's one
+/// write-vs-spawn lock) and waits for it.
+fn run_quietly(cmd: &mut Command) -> std::io::Result<std::process::ExitStatus> {
+    spawn(cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()))?.wait()
+}
 
 static NEXT_SOCKET: AtomicUsize = AtomicUsize::new(0);
 
@@ -147,7 +239,44 @@ impl TestEnv {
             "[user]\n\tname = cpd test\n\temail = test@cpd.invalid\n[init]\n\tdefaultBranch = main\n",
         )
         .expect("write .gitconfig");
+        let script = format!(
+            "dir={}\nsocket={}\n{TEARDOWN_SH}",
+            sh_quote(&env.root().to_string_lossy()),
+            sh_quote(&env.tmux_socket)
+        );
+        fs::write(env.teardown_script(), script).expect("write teardown script");
+        env.start_reaper();
         env
+    }
+
+    fn teardown_script(&self) -> PathBuf {
+        self.root().join("teardown.sh")
+    }
+
+    /// Starts the reaper: a detached (`setsid`, stdio on /dev/null) `teardown.sh watch`
+    /// that runs the teardown once this test process is gone, so a killed test leaves nothing
+    /// behind. It exits by itself when the directory is gone (a normal drop).
+    fn start_reaper(&self) {
+        let status = run_quietly(
+            Command::new("sh")
+                .arg("-c")
+                .arg(r#"setsid sh "$0" watch "$1" </dev/null >/dev/null 2>&1 &"#)
+                .arg(self.teardown_script())
+                .arg(std::process::id().to_string())
+                .current_dir("/"),
+        )
+        .expect("start the reaper");
+        assert!(status.success(), "the reaper did not start: {status}");
+    }
+
+    /// Kills this env's tmux server, then every process whose command line or cwd is
+    /// under its directory (SIGTERM, SIGKILL after a short grace; never the test process
+    /// or its ancestors), then removes the directory. Idempotent; also what the reaper runs.
+    pub fn teardown(&self) {
+        if self.teardown_script().exists() {
+            let _ = run_quietly(Command::new("sh").arg(self.teardown_script()).current_dir("/"));
+        }
+        let _ = fs::remove_dir_all(self.root());
     }
 
     /// The temporary directory everything lives in.
@@ -327,9 +456,8 @@ unset _d _n _f _a
 
 impl Drop for TestEnv {
     fn drop(&mut self) {
-        // Fails harmlessly when no server was started.
-        let _ = spawn(self.command("tmux").arg("-L").arg(&self.tmux_socket).arg("kill-server").stderr(Stdio::null()))
-            .and_then(|mut child| child.wait());
+        // Kills the tmux server, the env's processes and removes its directory.
+        self.teardown();
     }
 }
 

@@ -62,8 +62,14 @@ jobs:
           test "$(tmux -V)" = "tmux 3.8"
       - name: Build
         run: scripts/cargo.sh build --workspace
+      # The same cargo-nextest as dotfiles pins for every machine
+      # (home/.chezmoidata/nextest.yaml); bump both together.
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.148
       - name: Test
-        run: scripts/cargo.sh test --workspace
+        run: scripts/cargo.sh nextest run --workspace
 
   pi:
     # Pinned: ubuntu-latest moves to Ubuntu 26 on 2026-10-19; change the image on purpose, not by label.

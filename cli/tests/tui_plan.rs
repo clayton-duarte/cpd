@@ -14,6 +14,7 @@ use common::{CPD, SLEEP_SECONDS, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
+use cpd_tui::palette::SPINNER;
 use serde_json::json;
 
 /// The expected chart of the store `cpd_jobs()` makes: the fixture of the cockpit of branch `cpd/cpd-ui`
@@ -123,12 +124,12 @@ fn screen_when(env: &TestEnv, pane: &str, what: &str, ok: impl Fn(&[String]) -> 
     last
 }
 
-/// The chart rows inside the one PR box of a screen: below one row of padding and the box's top border, indented by two columns of padding and the box's left border; the box's right border is left out. A running pill spins on the clock (`◐◓◑◒`): its frame is whatever the screen was captured at, so every frame reads as `◐`.
+/// The chart rows inside the one PR box of a screen: below one row of padding and the box's top border, indented by two columns of padding and the box's left border; the box's right border is left out. A running pill spins on the clock (`SPINNER`): its frame is whatever the screen was captured at, so every frame reads as the first.
 fn chart_rows(screen: &[String], rows: usize) -> String {
     screen[2..2 + rows]
         .iter()
         .map(|l| {
-            let inside: String = l.chars().skip(3).map(|c| if "◓◑◒".contains(c) { '◐' } else { c }).collect();
+            let inside: String = l.chars().skip(3).map(|c| if SPINNER[1..].iter().any(|g| g.starts_with(c)) { SPINNER[0].chars().next().unwrap() } else { c }).collect();
             let inside = inside.trim_end();
             inside.strip_suffix('│').unwrap_or_else(|| panic!("no right border: {l:?}")).trim_end().to_owned()
         })
@@ -374,18 +375,21 @@ fn each_job_status_has_its_icon_and_a_cancelled_job_is_not_drawn() {
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 13 && s[2].contains("draft"));
     // a column is as wide as its widest pill (`✗ failed │S3│a3`); the tier, and `aN` from the second Attempt, sit at its right
-    let want = "
+    let want = format!(
+        "
   ◌ draft     │S3
 
   ○ queued    │S3
 
-  ◐ running   │S3
+  {} running   │S3
 
   ⇥ merging   │S3
 
   ✓ merged    │S3
 
-  ✗ failed │S3│a3";
+  ✗ failed │S3│a3",
+        SPINNER[0]
+    );
     assert_eq!(chart_rows(&screen, 11), want.strip_prefix('\n').unwrap(), "{}", screen.join("\n"));
     assert!(screen.iter().all(|l| !l.contains("gone")), "a cancelled Job is not drawn:\n{}", screen.join("\n"));
 }
@@ -434,6 +438,26 @@ fn styled_screen(env: &TestEnv, pane: &str) -> String {
     tmux_out(env, &["capture-pane", "-p", "-e", "-t", pane])
 }
 
+/// The visible text the OSC 8 links to `url` cover in `styled`, SGR sequences dropped.
+fn linked_text(styled: &str, url: &str) -> String {
+    let (mut out, mut inside, mut rest) = (String::new(), false, styled);
+    while let Some(at) = rest.find('\x1b') {
+        if inside {
+            out.push_str(&rest[..at]);
+        }
+        rest = &rest[at..];
+        if let Some(osc) = rest.strip_prefix("\x1b]8;;") {
+            let end = osc.find("\x1b\\").expect("an OSC 8 ends in ST");
+            inside = &osc[..end] == url;
+            rest = &osc[end + 2..];
+        } else {
+            let end = rest.find('m').expect("an SGR ends in m");
+            rest = &rest[end + 1..];
+        }
+    }
+    out
+}
+
 #[test]
 fn a_pull_request_box_title_ends_in_a_link_to_it_and_a_pending_review_is_a_row_above_the_boxes() {
     let env = env();
@@ -448,12 +472,9 @@ fn a_pull_request_box_title_ends_in_a_link_to_it_and_a_pending_review_is_a_row_a
     let styled = styled_screen(&env, &pane);
     assert!(styled.contains("]8;;https://github.com/acme/repo/pull/7"), "{styled:?}");
     assert!(styled.contains("]8;;http://localhost:19433"), "{styled:?}");
-    // each link wraps its `↗` and nothing else
-    for url in ["https://github.com/acme/repo/pull/7", "http://localhost:19433"] {
-        assert!(
-            styled.lines().any(|l| l.contains(&format!("]8;;{url}\x1b\\↗\x1b]8;;\x1b\\"))),
-            "{url}: {styled:?}"
-        );
+    // each link wraps its whole text, from `#` or `Plan` through `↗`, and nothing else
+    for (url, text) in [("https://github.com/acme/repo/pull/7", "#7 open ↗"), ("http://localhost:19433", "Plan review r2 pending ↗")] {
+        assert_eq!(linked_text(&styled, url), text, "{url}: {styled:?}");
     }
 }
 

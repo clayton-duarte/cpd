@@ -93,6 +93,7 @@ Parsing:
   - `env.fake_pi(body)`, `env.fake_gh(body)`, `env.fake(name, body)`: shell scripts on `PATH` that record their argv (`env.calls("pi")`) and then run `body`.
   - `env.command(program)`: any other program in the same environment.
 - Never touch the real `~/.cpd`, the tmux server `-L cpd`, pi, or the network.
+- nextest runs every test in a process of its own, so a `static` or a lock that the tests of a file share (`TMUX_ENV` in `host.rs`, `ONE_AT_A_TIME` in `driver_reload.rs`) coordinates nothing there. Tests that must not overlap go in a test group of `.config/nextest.toml` (`max-threads = 1`, the reason beside it), as the tests of those two files do.
 - A test must fail first, for the right reason.
 
 ## Dependencies
@@ -121,7 +122,10 @@ Deliberately absent: a regex crate (the id patterns of §2.1 are checked by hand
 ## Running cargo, the Gate, installing
 
 - cargo is not on `PATH` for Workers and the Gate. Run it as `scripts/cargo.sh <args>` (`$CARGO`, else `cargo` on `PATH`, else `${CARGO_HOME:-$HOME/.cargo}/bin/cargo`; exit 127 with a message when none exists). rustfmt and clippy are not installed.
-- The Gate is `npm run verify`: the typecheck and tests of the pi adapter `pi/`, then `scripts/cargo.sh build --workspace` and `scripts/cargo.sh test --workspace`. Run it before you submit.
+- The Gate is `npm run verify`: the typecheck and tests of the pi adapter `pi/`, then `scripts/cargo.sh build --workspace` and `scripts/cargo.sh nextest run --workspace`. Run it before you submit. CI's `rust` job runs the same command.
+- The Rust tests run with [cargo-nextest](https://nexte.st), not `cargo test` (hs-d195). `cargo test` runs the test binaries one after another, and a binary spends most of its time waiting (tmux, the engine's tick, fixed sleeps), so the machine idles while one long binary ends; nextest runs the tests of every binary at once, each in a process of its own. Measured on 16 cores under other Workers' load (load average 20–38), 1307 tests: `scripts/cargo.sh test --workspace` 359 s; `scripts/cargo.sh nextest run --workspace` 105, 123 and 97 s in three runs, all green (the research, starting the binaries 4 at a time: 54 s against 175–200 s serial, `docs/research/quality-tests-build.md`, tests-build-F1). That gain is the reason for not using `cargo test`. `.config/nextest.toml` is nextest's defaults plus the test groups (see Tests). dotfiles installs it on every machine, at the version pinned in its `home/.chezmoidata/nextest.yaml`; CI installs the same version (`.github/workflows/ci.yml`, `tool: cargo-nextest@<version>`): bump both together.
+- Run one test file or one test with `scripts/cargo.sh nextest run -p cpd --test host` or `scripts/cargo.sh nextest run --workspace <part of the test's name>`.
+- nextest does not run doctests. The workspace has none (`scripts/cargo.sh test --workspace --doc` finds 0 tests in `cpd`, `cpd_core` and `cpd_tui`); when one is written, the Gate and CI also run that command.
 - `scripts/install-cpd.sh` builds `--release` and installs `~/.local/bin/cpd` and the adapter `pi/` at `~/.local/share/cpd/pi`, replacing the binary atomically; safe to rerun. After an install, running Lead wrappers and Attempt drivers reload themselves (contract §3.4, §6.7).
 
 ## Checking a pi version
