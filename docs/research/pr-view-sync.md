@@ -24,16 +24,16 @@ A throwaway test (copy of `cli/tests/tui_plan.rs`'s helpers; not committed):
 
 ## Why it works (file:line)
 
-- What a merge writes, in one transaction (`core/src/pr/poll.rs`): `apply` upserts the `pull_requests` row to `merged` (`poll.rs:~125`, `pulls::upsert`), then `merge` sets `prs.status = 'merged'` (`poll.rs:~178`) and appends `pr-merged` with `plan` set (`poll.rs:~187`), and `plan-done` when it was the last PR. A PR no Plan owns gets only the row change and no Event (hs-d96).
-- Plan view (`tui/src/plan/mod.rs`): `concerns` (`:93-97`) is true for any Event whose `plan` is the shown Plan's, so `pr-merged` and `plan-done` mark the view stale; the loop (`:237-262`) re-reads every `events.poll_ms` (200 ms) and retakes the snapshot after `COALESCE` (500 ms). The box state comes from `read::plan_boxes` → `PrState::of(status == Merged, row_state)` (`tui/src/read/flow.rs:222`, `tui/src/read/shared.rs:149`), drawn by `state_text` (`tui/src/plan/boxes.rs:67`).
-- Deploy column (`tui/src/widgets/mod.rs`, `show`): re-reads when the highest Event id moved, and in any case every `REFRESH` = 2 s (`:~72-84`), so it also catches the Event-less change of an unowned PR. The PRs section lists `pull_requests WHERE state = 'open'` (`tui/src/read/widgets.rs`, `open_prs`), so a row the poll set to `merged` leaves the list; an unowned PR that left the search is deleted (`core/src/pr/pulls.rs:228`, `delete_unowned_absent`).
+- What a merge writes, in one transaction (`core/src/pr/poll.rs`): `apply` upserts the `pull_requests` row to `merged` (`poll.rs:155`, `pulls::upsert`), then `merge` sets `prs.status = 'merged'` (`poll.rs:193`) and appends `pr-merged` with `plan` set (`poll.rs:202`), and `plan-done` when it was the last PR. A PR no Plan owns gets only the row change and no Event (hs-d96).
+- Plan view (`tui/src/plan/mod.rs`): `concerns` (`:93-97`) is true for any Event whose `plan` is the shown Plan's, so `pr-merged` and `plan-done` mark the view stale; the loop (`:242-262`) re-reads every `events.poll_ms` (200 ms) and retakes the snapshot after `COALESCE` (500 ms). The box state comes from `read::plan_boxes` → `PrState::of(status == Merged, row_state)` (`tui/src/read/flow.rs:222`, `tui/src/read/shared.rs:149`), drawn by `state_text` (`tui/src/plan/boxes.rs:67`).
+- Deploy column (`tui/src/widgets/mod.rs`, `show`): re-reads when the highest Event id moved, and in any case every `REFRESH` = 2 s (`:79-84`, `:36-38`), so it also catches the Event-less change of an unowned PR. The PRs section lists `pull_requests WHERE state = 'open'` (`tui/src/read/widgets.rs:170`, `open_prs`), so a row the poll set to `merged` leaves the list; an unowned PR that left the search is deleted (`core/src/pr/pulls.rs:228`, `delete_unowned_absent`).
 - commands.md §17 states this design for both views and the code follows it.
 
 ## Residual gaps (not bugs of the views)
 
 1. **No engine, no poll.** `pr poll` runs only from the engine's E5 step every `watch.pr_poll_seconds` (default 5; `core/src/watch/pr.rs:27-33`, `core/src/config/file.rs:236`) or by hand. With `cpd watch` stopped, a merged PR stays `open` in both views. Not reproduced; read from the code.
-2. **Rate-limit pause.** E5 pauses until `reset_at` when GitHub's remaining requests fall under 100 (`core/src/watch/pr.rs:52-76`); the views stay as they were meanwhile (the engine reports `gh_rate_limited`). Read from the code, not run.
-3. **Search index lag.** A merged PR that GitHub's search still lists as open is left unchanged until the index catches up (`poll.rs:~66-69`, "the index lags (D3)"). Not run.
+2. **Rate-limit pause.** E5 pauses until `reset_at` when GitHub's remaining requests fall under 100 (`core/src/watch/pr.rs:24,50-76`); the views stay as they were meanwhile (the engine reports `gh_rate_limited`). Read from the code, not run.
+3. **Search index lag.** A merged PR that GitHub's search still lists as open is left unchanged until the index catches up (`poll.rs:62`, "the index lags (D3)"). Not run.
 
 ## Proposed Job (only if the User wants gap 1 visible; otherwise none)
 
