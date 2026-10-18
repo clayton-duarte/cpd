@@ -294,7 +294,10 @@ fn the_chart_of_a_store_equivalent_to_the_cockpits_fixture_matches_it() {
     sql(&env, &plan_with("dispatch", None, CPD_JOBS));
     let pane = start_view(&env);
     let rows = CPD_CHART.lines().count();
-    let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 2 + rows && s[2].contains("contract-core"));
+    // the screen is captured whenever it is: wait for a frame drawn to the box's right border on every row (a capture may fall in the middle of the first frame, which the view writes in pieces)
+    let screen = screen_when(&env, &pane, "the chart", |s| {
+        s.len() > 2 + rows && s[2].contains("contract-core") && s[2..2 + rows].iter().all(|l| l.ends_with('│') && l.chars().count() == s[1].chars().count()) && s.iter().any(|l| l.ends_with('┘'))
+    });
     assert_eq!(chart_rows(&screen, rows), CPD_CHART.trim_end(), "{}", screen.join("\n"));
     // a Plan of one PR is one box, titled on its top border
     assert!(screen[1].starts_with("  ┌ repo · repo → main · dispatch ─"), "{:?}", screen[1]);
