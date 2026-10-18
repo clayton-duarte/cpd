@@ -118,7 +118,7 @@ pub(super) fn archive(args: ArchiveArgs) -> Result<Output, CpdError> {
     archive_lead(&mut env, &lead, false)
 }
 
-/// The archive of Lead `lead` (a side fork or a grounded Lead): the rules of §10.10, then its
+/// The archive of Lead `lead` (a side fork, or a Lead with no Plan left by migration 0010): the rules of §10.10, then its
 /// pane is closed and the row written. With `keep` its pane is left alone: the caller runs in
 /// it and closes it itself, after the row is written (`session run`, commands.md §10.8).
 pub(super) fn archive_lead(env: &mut Env, lead: &Row, keep: bool) -> Result<Output, CpdError> {

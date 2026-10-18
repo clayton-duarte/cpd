@@ -35,7 +35,7 @@ fn node(number: i64, state: &str) -> String {
     let merged = if state == "MERGED" { r#""2026-10-14T10:00:00Z""# } else { "null" };
     format!(
         r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":{number},"url":"https://github.com/acme/pay/pull/{number}","title":"PR {number}",
-        "isDraft":false,"state":"{state}","createdAt":"opened","mergedAt":{merged},"reviewDecision":null,
+        "isDraft":false,"state":"{state}","createdAt":"opened","mergedAt":{merged},"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN",
         "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
     )
 }
@@ -58,7 +58,7 @@ struct Pr {
     attempt_branch: String,
 }
 
-/// Plan `pay` in phase `pr`, in one repo with a bare `origin`, with one PR per key; every PR is
+/// Plan `pay` in phase `deploy`, in one repo with a bare `origin`, with one PR per key; every PR is
 /// open, its Lead Branch is pushed and its Lead worktree is clean.
 struct Fx {
     env: TestEnv,
@@ -116,7 +116,7 @@ fn fx(keys: &[&'static str]) -> Fx {
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
-           VALUES ('pay', 'ctx', 'Pay the bills', 'pr', 'lead1', 't', 't');",
+           VALUES ('pay', 'ctx', 'Pay the bills', 'deploy', 'lead1', 't', 't');",
     );
     for pr in &prs {
         sql += &format!(

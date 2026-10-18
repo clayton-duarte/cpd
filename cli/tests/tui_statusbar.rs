@@ -44,8 +44,8 @@ fn sql(env: &TestEnv, text: &str) {
 /// One Plan `ship` with one Job per entry of `attempts`, each with one Attempt in that status.
 fn plan_with_attempts(attempts: &[&str]) -> String {
     let mut s = format!(
-        "INSERT INTO contexts (id, title, jira, created_at, created_on, lead_session, grounded_seq)
-         VALUES ('ctx', 'Title', NULL, '2026-01-01T00:00:00.000Z', 'm1', 'g-ctx', 0);
+        "INSERT INTO contexts (id, title, jira, created_at, created_on)
+         VALUES ('ctx', 'Title', NULL, '2026-01-01T00:00:00.000Z', 'm1');
          INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
          VALUES ('g-ctx', 'lead', 'ctx', NULL, NULL, 'g', '/s/g.jsonl', '/repo', 'O3', NULL, 'idle', NULL,
                  '2026-01-03T00:00:00.000Z', '2026-01-01T00:00:00.000Z');

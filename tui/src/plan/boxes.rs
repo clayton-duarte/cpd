@@ -20,6 +20,7 @@ use ratatui::{
 };
 
 use super::flow::{self, Chart, Dir, Mask, Pill, free_row, glyph};
+use crate::link::link;
 use crate::palette::{self, Meaning};
 use crate::read::{JobNode, PrNode, PrState};
 
@@ -72,15 +73,19 @@ fn state_text(state: PrState) -> &'static str {
     }
 }
 
-/// The box's title: ` <key> · <repo name> → <base> · <pull request> `, the key bold; `#<number> <state>` once the PR has a
-/// pull request, the state in the palette's PR state colour, else the PR's status, dim.
+/// What follows `#<number> <state>` in a title once the PR has a pull request: the `↗` its link covers.
+const PULL_LINK: &str = " ↗";
+
+/// The box's title: ` <key> · <repo name> → <base> · <pull request> `, the key bold; `#<number> <state> ↗` once the PR has
+/// a pull request, the state in the palette's PR state colour, else the PR's status, dim.
 pub fn title(pr: &PrNode) -> Line<'static> {
     let mut spans: Vec<Span<'static>> =
         vec![" ".into(), pr.key.to_string().bold(), format!(" · {} → {} · ", pr.repo_name, pr.base).into()];
-    match pr.pull {
-        Some((number, state)) => {
-            spans.push(format!("#{number} ").into());
-            spans.push(Span::styled(state_text(state), palette::fg(palette::pr_state(state))));
+    match &pr.pull {
+        Some(pull) => {
+            spans.push(format!("#{} ", pull.number).into());
+            spans.push(Span::styled(state_text(pull.state), palette::fg(palette::pr_state(pull.state))));
+            spans.push(PULL_LINK.into());
         }
         None => spans.push(pr.status.as_str().dim()),
     }
@@ -170,6 +175,10 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], frame: usize) -> Boxes {
     for (i, chart) in charts.iter().enumerate() {
         let rect = Rect::new(at[i].0, at[i].1, size[i].0, size[i].1);
         Block::bordered().border_style(lines).title(titles[i].clone()).render(rect, &mut buf);
+        if let Some(pull) = &prs[i].pull {
+            // the title starts after the corner and ends with one space; the `↗` is the cell before it
+            link(&mut buf, Rect::new(rect.x + titles[i].width() as u16 - 1, rect.y, 1, 1), &pull.url);
+        }
         let inner = rect.inner(Margin { horizontal: 1, vertical: 1 });
         if chart.pills.is_empty() {
             Line::from(NO_JOBS.dim()).render(inner, &mut buf);
@@ -259,7 +268,7 @@ mod tests {
 
     use super::*;
     use crate::plan::flow::{Dir, Selection};
-    use crate::read::{JobStatus, PrStatus};
+    use crate::read::{JobStatus, PrStatus, Pull};
     use cpd_core::config::Tier;
     use cpd_core::ids::{JobKey, PrKey};
 
@@ -272,6 +281,10 @@ mod tests {
             needs: needs.iter().map(|n| PrKey::parse(n).unwrap()).collect(),
             pull: None,
         }
+    }
+
+    fn pull(number: i64, state: PrState) -> Pull {
+        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}") }
     }
 
     fn job(pr: &str, key: &str, needs: &[&str]) -> JobNode {
@@ -363,13 +376,13 @@ mod tests {
     #[test]
     fn the_title_names_the_pull_request_in_its_colour_else_the_status_dim() {
         let mut open = pr("api", &[]);
-        open.pull = Some((12, PrState::Open));
+        open.pull = Some(pull(12, PrState::Open));
         let t = title(&open);
-        assert_eq!(t.to_string(), " api · api-repo → main · #12 open ");
+        assert_eq!(t.to_string(), " api · api-repo → main · #12 open ↗ ");
         assert!(t.spans[1].style.add_modifier.contains(Modifier::BOLD), "the key is bold");
         assert_eq!(t.spans[4].style.fg, palette::fg(palette::pr_state(PrState::Open)).fg);
         for (state, word) in [(PrState::Merged, "merged"), (PrState::Closed, "closed")] {
-            open.pull = Some((12, state));
+            open.pull = Some(pull(12, state));
             let t = title(&open);
             assert_eq!(t.spans[4].content, word);
             assert_eq!(t.spans[4].style.fg, palette::fg(palette::pr_state(state)).fg);
@@ -379,6 +392,32 @@ mod tests {
         let t = title(&waiting);
         assert_eq!(t.to_string(), " web · web-repo → main · waiting ");
         assert!(t.spans[3].style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn a_pull_request_adds_its_arrow_to_the_title_and_widens_the_box_by_it() {
+        let mut api = pr("api", &[]);
+        let before = layout(&[api.clone()], &[], 0).chart;
+        api.pull = Some(pull(12, PrState::Open));
+        let c = layout(&[api], &[], 0).chart;
+        let mut plain = Chart { buf: c.buf.clone(), pills: Vec::new(), columns: Vec::new() };
+        for cell in &mut plain.buf.content {
+            let symbol = cell.symbol().replace("\x1b]8;;https://github.com/acme/repo/pull/12\x07", "").replace("\x1b]8;;\x07", "");
+            cell.set_symbol(&symbol);
+        }
+        snap(&plain, "
+┌ api · api-repo → main · #12 open ↗ ┐
+│ no Jobs                            │
+└────────────────────────────────────┘");
+        assert_eq!(c.buf.area.width, before.buf.area.width + 2, "`#12 open ↗` is two cells longer than `dispatch`");
+        // the `↗` cell, and only it, is an OSC 8 link to the pull request
+        let linked: Vec<(u16, &str)> = (0..c.buf.area.width)
+            .filter(|&x| c.buf[(x, 0)].symbol().contains("]8;;"))
+            .map(|x| (x, c.buf[(x, 0)].symbol()))
+            .collect();
+        let arrow = text(&plain).lines().next().unwrap().chars().position(|ch| ch == '↗').unwrap() as u16;
+        assert_eq!(linked, [(arrow, "\x1b]8;;https://github.com/acme/repo/pull/12\x07↗\x1b]8;;\x07")]);
+        assert!(before.buf.content.iter().all(|cell| !cell.symbol().contains("]8;;")), "no pull request, no link");
     }
 
     #[test]
