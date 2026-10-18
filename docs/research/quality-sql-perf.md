@@ -4,7 +4,7 @@ Area `sql-perf`, Plan `quality`, Job `sql-perf`, Attempt 1. Base `main` at `4bdf
 
 ## Summary
 
-No statement the engine tick, the cockpit views or `events follow` run is slow: the whole engine tick is 0.30 ms of SQL per 5 s tick, a tree snapshot 1.5 ms, a widgets snapshot 1.3 ms, an idle `events follow` poll is four syscalls and no read. The measurable Fast problems are elsewhere, and all of them grow with history rather than with load. (1) `cpd plan show` and `cpd doctor` scan the whole `history` table on every call (`core/src/store/mod.rs:293`): 5.7 ms of CPU in-process, about 9.8 ms in a fresh process, 3,782 `pread64` calls, roughly 70 % of the 13.9 ms the command takes (the share is derived by difference, not profiled: perf is unavailable on this host); the table is 23.4 MB of the 29.1 MB file and gains about 3,000 rows a day. (2) That table grows because every `UPDATE` writes the full row twice: a Job status change, which changes one column, writes 15 KB of history. (3) `plan list` runs 81 statements and loads every Job's full text to count statuses. (4) The cockpit's job-count statement (`tui/src/read/shared.rs:328`) scans all of `jobs` (1.7 MB, two thirds of it overflow pages) and is the largest statement in every tree, widgets and statusbar refresh: a `jobs(plan, status)` index cuts it from 0.85 to 0.28 ms and the tree snapshot from 1.51 to 0.93 ms. (5)–(7) are small: two unindexed `lead_session` lookups in the session query, an `events(kind, id)` index, and 14 follower processes of 9 MB each. Everything was measured with SQLite CLI 3.45.1 while cpd bundles SQLite 3.53.2, so query plans are unverified against the bundled build; the command latencies (measurement 4) come from the real binary.
+No statement the engine tick, the cockpit views or `events follow` run is slow: the whole engine tick is 0.30 ms of SQL per 5 s tick, a tree snapshot 1.5 ms, a widgets snapshot 1.3 ms, an idle `events follow` poll is four syscalls and no read. The measurable Fast problems are elsewhere, and all of them grow with history rather than with load. (1) `cpd plan show` and `cpd doctor` scan the whole `history` table on every call (`core/src/store/mod.rs:293`): 5.7 ms of CPU in-process, about 9.8 ms in a fresh process, 3,782 `pread64` calls, roughly 70 % of the 13.9 ms the command takes (the share is derived by difference, not profiled: perf is unavailable on this host); the table is 23.4 MB of the 29.1 MB file and gains about 3,000 rows a day (2,713 and 3,575 on the two full days). (2) That table grows because every `UPDATE` writes the full row twice: a Job status change, which changes one column, writes 15 KB of history. (3) `plan list` runs 81 statements and loads every Job's full text to count statuses. (4) The cockpit's job-count statement (`tui/src/read/shared.rs:328`) scans all of `jobs` (1.7 MB, two thirds of it overflow pages) and is the largest statement in every tree, widgets and statusbar refresh: a `jobs(plan, status)` index cuts it from 0.85 to 0.28 ms and the tree snapshot from 1.51 to 0.93 ms. (5)–(7) are small: two unindexed `lead_session` lookups in the session query, an `events(kind, id)` index, and 14 follower processes of 9 MB each. Everything was measured with SQLite CLI 3.45.1 while cpd bundles SQLite 3.53.2, so query plans are unverified against the bundled build; the command latencies (measurement 4) come from the real binary.
 
 ## Findings
 
@@ -34,7 +34,7 @@ Ranked inside the class by impact; the table lists F7 last because it is observa
   - `strace -f -e trace=pread64 cpd <command>` on the copy: `plan show --plan quality` **3,782** `pread64`, `plan list` 639, `session list` 308, `context show` 71, `events list --since 4990` 23. The 3,100 extra reads of `plan show` are this scan.
   - `plan show --plan quality` 13.85 ms median (N=20) against `plan list` 10.10 ms and `events list --since 5006` 4.69 ms. By difference, the scan is most of the 9 ms above the 4.7 ms floor: **derived, not profiled** (no in-process profile: `perf_event_paranoid=4`).
   - Growth: 8,655 history rows today = 5.65 ms warm = 0.65 µs per row; 603, 2,713, 3,575 and 1,764 (to 02:49Z) rows were written on 10-15…10-18, so about +2 ms warm per day if the rate holds (extrapolation, unverified).
-- **Impact.** `plan show` is the Lead's and the adapter's main read; its latency rises by about 2–3 ms a day of use. The database is a single machine's, so nothing breaks; the command just gets slower with age.
+- **Impact.** Every `plan show` pays it, and the adapter runs `plan show` at each Plan Lead start and review open. The latency rises with the table, by about 2–3 ms a day at the rate above (extrapolated: unverified); nothing breaks, the command gets slower with age.
 - **Proposed fix (tested, not committed).** `… FROM history h INDEXED BY history_txn WHERE NOT EXISTS (…) ORDER BY h.id`: plan `SCAN h USING COVERING INDEX history_txn` + `USE TEMP B-TREE FOR ORDER BY` (empty in the normal case). Warm **5.65 → 1.65 ms** (N=15; max 1.74); fresh process **12.01 → 6.47 ms** (N=20), **186** reads instead of 3,702. Two other rewrites tested (`NOT IN`, `LEFT JOIN … IS NULL`) stay on `SCAN h` (4.46 and 4.89 ms): do not use them. Still linear in history rows (a covering scan plus one `txns` probe per row); F2 is what bounds it.
 
 ## sql-F2: `history` is 80 % of the database
@@ -45,7 +45,7 @@ Ranked inside the class by impact; the table lists F7 last because it is observa
 - **Evidence.**
   - `dbstat` (`SELECT name, sum(pgsize) FROM dbstat GROUP BY name`): `history` 23,355,392 B of 29,069,312 B (80.3 %), `history_tbl_pk` 434,176, `history_txn` 102,400, `jobs` 1,695,744, `events` 1,282,048. `PRAGMA page_count` 7,097 × 4,096 B; `freelist_count` 0.
   - `SELECT tbl, op, count(*), sum(length(before)+length(after)) FROM history GROUP BY tbl, op`: `jobs` update 527 rows, 7,806 KB, **15,167 B per row** (27 % of the file); `prs` update 2,988 rows, 4,688 KB; `attempts` update 1,188 rows, 2,331 KB; `sessions` update 2,388 rows, 2,323 KB.
-  - Which columns changed in the last five `jobs` updates (`json_each` of `before` against `after`): `status` four times, `status, merged_sha` once, `status, cancel_reason, cancel_requested_at, failed_cause` twice. The other ~19 columns, 7 KB of text, are written again each time.
+  - Which columns changed in the last five `jobs` updates (`json_each` of `before` against `after`): `status` twice, `status, merged_sha` once, `status, cancel_reason, cancel_requested_at` once, `status, cancel_reason, cancel_requested_at, failed_cause` once. The other ~16–19 columns, 7 KB of text, are written again each time.
   - Per day (before+after text): 1,429 KB (10-15), 7,077 KB (10-16), 6,159 KB (10-17), 4,915 KB (10-18, to 02:49Z); file size 29.07 MB after 2.4 days of use (txns 2026-10-15T16:50Z…2026-10-18T02:49Z), so about 12 MB a day at this pace (extrapolation: ~4 GB a year; unverified).
   - The 4,688 KB of `prs` history is mostly the old poller: 2,939 `pr poll` rows, 1,458 of them with `before` equal to `after`, the rest a `pr_polled_at` timestamp (a column migration 6 removed). From 22Z on, `pr poll` opens a write transaction only 2–11 times an hour instead of 60 (`SELECT substr(at,1,13), count(*) FROM txns WHERE command='pr poll' GROUP BY 1`), as `core/src/pr/poll.rs:87` promises. It is ballast, not a live cost.
   - The CPU of the trigger is not the problem: `json_object` of all 200 Jobs, 20 columns, takes ~2 ms, ~10 µs per row. Bytes are: each commit writes ~15 KB to the WAL under `synchronous = FULL` (`core/src/store/mod.rs:120`). The commit latency is **unverified**: write commands are not allowed on the copy and `sqlite3` cannot run the triggers (no `cpd_txn()`).
@@ -59,7 +59,7 @@ Ranked inside the class by impact; the table lists F7 last because it is observa
 - **What.** For each Plan, `list` runs `jobs::load` (two statements, all 20 columns of every Job, each of `touches`, `acceptance`, `out_of_scope` parsed as JSON) and `pr_values` (two statements plus one `pulls::load` per PR), only to print `counts` and PR fields. 1 + 4 × 20 = 81 statements, 1.47 MB of Job text read and validated (`SELECT sum(length(goal)+length(context)+length(touches)+length(acceptance)+length(out_of_scope)+length(title)) FROM jobs` → 1,468,502 B for 200 Jobs).
 - **Where.** `core/src/plan/list.rs:24-25`; `core/src/plan/jobs.rs:69,75`; `core/src/plan/show.rs:94-100`. The read model does the same counts in one `GROUP BY` (`tui/src/read/shared.rs:328`), and its header documents "a fixed number of queries whatever the size of the Ledger" (`tui/src/read/mod.rs`).
 - **Evidence.** The 81 statements of `plan list` run in one `sqlite3` session, N=15: **2.38 ms CPU median** (max 2.63). The four read-model statements `T7+T4+T5+T6` (heads, counts, open escalations, pending reviews): **1.05 ms** (max 1.12). `plan list` through the binary: 10.10 ms median (N=20, max 12.09) against 4.69 ms for a one-query `events list`; the other ~3 ms is Rust-side row handling and JSON, **unverified** (no profiler). `strace` counts 639 `pread64` for `plan list`.
-- **Impact.** Cost per Plan is ~4 statements and the text of all its Jobs, so it is linear in Plans and in Job text; at 20 Plans it is 5 ms of a 10 ms command.
+- **Impact.** Cost per Plan is ~4 statements and the text of all its Jobs, so it is linear in Plans and in Job text; at 20 Plans the command is 5.4 ms above the one-query floor (10.10 against 4.69 ms), 2.4 ms of it SQL.
 - **Proposed fix.** Counts from `SELECT plan, status, count(*) FROM jobs GROUP BY plan, status`, PRs from one query over `prs LEFT JOIN pull_requests`, as `plan_heads` does; keep `jobs::load` for `plan show`, which needs the text. Tested only as the statement count and SQL time above (no code written).
 
 ## sql-F4: the job-count statement scans `jobs` in every cockpit refresh
@@ -76,15 +76,15 @@ Ranked inside the class by impact; the table lists F7 last because it is observa
 - **What.** `SESSION_SELECT` (cockpit) and `SELECT` (CLI) test `EXISTS (SELECT 1 FROM plans p WHERE p.lead_session = s.id)` and the same for `contexts`; neither column is indexed, so each Session row scans both tables (`SCAN p`, `SCAN c` in the plan). The per-Session lookups of `events` use `events_session (session=?)` and filter `kind` row by row.
 - **Where.** `core/src/session/row.rs:89-97` (`session list`, `session show`, 221 rows with `WHERE 1`); `tui/src/read/shared.rs:236-247` (tree, 23 Leads; worker view, 1 row).
 - **Evidence.** `EXPLAIN QUERY PLAN` of `C1`: `SCAN s`, `CORRELATED SCALAR SUBQUERY 2 / SCAN p`, `CORRELATED SCALAR SUBQUERY 3 / SCAN c`, `USE TEMP B-TREE FOR ORDER BY`. N=15: **C1 1.211 ms median, 1.277 max** (the second largest statement), `T3` (tree, 23 rows) 0.332 ms. `session list` through the binary: 9.61 ms median (N=20) with 308 `pread64`; its SQL is 12 % of that.
-- **Proposed fix (tested, not committed).** `CREATE INDEX plans_lead ON plans(lead_session); CREATE INDEX contexts_lead ON contexts(lead_session);` (`ixB.db`): the plan becomes `SEARCH p USING COVERING INDEX plans_lead (lead_session=?)`, same for `c`; **C1 1.229 → 0.918 ms** (max 0.993). `events(session, kind, id)` alone (`ixA.db`) gives C1 1.184 ms and T3 0.332 → 0.276 ms: weak, so I do not propose it. All three indexes together: C1 0.846 ms, T3 0.253 ms. At 221 Sessions × 20 Plans the scans are small; they are O(Sessions × Plans) and Sessions are never deleted (they are archived).
+- **Proposed fix (tested, not committed).** `CREATE INDEX plans_lead ON plans(lead_session); CREATE INDEX contexts_lead ON contexts(lead_session);` (`ixB.db`): the plan becomes `SEARCH p USING COVERING INDEX plans_lead (lead_session=?)`, same for `c`; **C1 1.229 → 0.918 ms** (max 0.993). `events(session, kind, id)` alone (`ixA.db`) gives C1 1.184 ms and T3 0.332 → 0.276 ms: weak, so I do not propose it. All four indexes together (`ix.db`): C1 0.844 ms, T3 0.248 ms. At 221 Sessions × 20 Plans the scans are small; they are O(Sessions × Plans) and Sessions are never deleted (they are archived).
 
 ## sql-F6: no index on `events(kind)`
 
 - **Class / size / overlap.** Fast. Job (bundle with F4's migration). Overlap as F4.
 - **What.** Four reads select Events by `kind` with no kind index: the widgets engine read, `watch --ensure`, `events follow --kind` (the tree's follower passes every kind of `tui/src/tree/follow.rs:14`) and the cockpit's chat-slot lookup. `SELECT … FROM events WHERE kind IN ('watch-started','watch-stopped') ORDER BY id DESC LIMIT 1` plans as `SCAN events`: it walks back from the newest Event to the last `watch-*` (416 Events back today, `4590` against `5006`), so its cost is the Events since the last engine start. The engine restarts often now (`watch-started` at ids 3731, 4178 and 4590 of 5,006) but nothing bounds it.
-- **Where.** `tui/src/read/widgets.rs:279` (`W2`, every widgets/statusbar snapshot); `core/src/watch/ensure.rs:76` (`ENS`); `core/src/events/select.rs:95` (`F6`, `--kind`); `tui/src/cockpit.rs:184` (`K4`).
-- **Evidence.** N=15 CPU: `W2` 0.034 ms, `ENS` 0.068 ms (scans ids above 4000), `F6` (`--since 0`) 0.406 ms, `K4` 0.018 ms. All small today.
-- **Proposed fix (tested, not committed).** `CREATE INDEX events_kind ON events(kind, id)` (`ix2.db`): `W2` 0.034 → 0.014 ms, `ENS` 0.068 → 0.011 ms, `F6` 0.413 → 0.175 ms (plan `SEARCH events USING INDEX events_kind (kind=? AND id>?)`; `W2` and `F6` gain a `USE TEMP B-TREE FOR ORDER BY`), `K4` unchanged (0.017 ms). Events is the table that every command appends to, with three indexes already (`events_plan`, `events_context`, `events_session`): a fourth costs one more index insert per Event; the saving is real but small, so take it only with F4.
+- **Where.** `tui/src/read/widgets.rs:279` (`W2`, every widgets/statusbar snapshot); `core/src/watch/ensure.rs:76` (`ENS`); `core/src/events/select.rs:95` (`EV6`, `--kind`); `tui/src/cockpit.rs:184` (`K4`).
+- **Evidence.** N=15 CPU: `W2` 0.034 ms, `ENS` 0.068 ms (scans ids above 4000), `EV6` (`--since 0`) 0.406 ms, `K4` 0.018 ms. All small today.
+- **Proposed fix (tested, not committed).** `CREATE INDEX events_kind ON events(kind, id)` (`ix2.db`): `W2` 0.034 → 0.014 ms, `ENS` 0.068 → 0.011 ms, `EV6` 0.413 → 0.175 ms (plan `SEARCH events USING INDEX events_kind (kind=? AND id>?)`; `W2` and `EV6` gain a `USE TEMP B-TREE FOR ORDER BY`), `K4` unchanged (0.017 ms). Events is the table that every command appends to, with three indexes already (`events_plan`, `events_context`, `events_session`): a fourth costs one more index insert per Event; the saving is real but small, so take it only with F4.
 
 ## sql-F7: one follower process per live Session
 
@@ -118,11 +118,22 @@ Files: the copy is 29,069,312 B (no WAL: `.backup` checkpoints). The live files,
 
 ### 2 and 3. Query plans and times
 
-Every statement the engine, the views, `events follow` and the five measured commands run. `CPU` is `user + sys` from `.timer on` (µs resolution); `wall` is the shell's `real`, which has 1 ms resolution, hence mostly 0. Each statement: one warm-up run, then N=15 in one `sqlite3` session with the rows sent to `/dev/null`; median and max of 15. Parameters are real ids from the copy (`plan quality`, Lead `62b1c19b…`, Attempt `store-work-a1`, Event ids near 5,000). The query text of each id is in Appendix A. `E` engine tick (every 5 s unless noted), `F` follow/list, `T` tree, `W` widgets/statusbar, `L` logs view, `P` plan view, `K` worker view, `C` commands.
+Every statement the engine, the views, `events follow` and the five measured commands run. `CPU` is `user + sys` from `.timer on` (µs resolution); `wall` is the shell's `real`, which has 1 ms resolution, hence mostly 0. Each statement: one warm-up run, then N=15 in one `sqlite3` session with the rows sent to `/dev/null`; median and max of 15. Parameters are real ids from the copy (`plan quality`, Lead `62b1c19b…`, Attempt `store-work-a1`, Event ids near 5,000). The query text of each id is in Appendix A. `E` engine tick (every 5 s unless noted), `EV` Event fetches (follow, list), `T` tree, `W` widgets/statusbar, `L` logs view, `P` plan view, `K` worker view, `C` commands.
 
-Sets (sum of medians): engine tick `E1+E2a+E2c+E3a+E3b+E4+E7` **0.299 ms** per 5 s tick (+ `E2b` 0.009 ms per live Attempt); tree snapshot `T1…T8` **1.513 ms**; widgets/statusbar snapshot **1.274 ms**; plan-view snapshot (`P1…P6`, `F0`) 0.232 ms; an idle `events follow` poll runs no statement (`PRAGMA data_version`, four syscalls).
+Sets (sum of medians): engine tick `E1+E2a+E2c+E3a+E3b+E4+E7` **0.299 ms** per 5 s tick (+ `E2b` 0.009 ms per live Attempt); tree snapshot `T1…T8` **1.513 ms**; widgets/statusbar snapshot **1.274 ms**; plan-view snapshot (`P1…P6`, `EV0`) 0.232 ms; an idle `events follow` poll runs no statement (`PRAGMA data_version`, four syscalls).
 
-Every `SCAN` below is a whole-table read of a table that only grows (attempts, sessions, escalations, jobs, events, context_records, pull_requests, prs); `TEMP B-TREE` is always on a result of at most a few hundred rows. The ones on the per-tick path (`E1`, `E2a`, `E2c`, `E3a`, `E4`, `E7`) cost 6–84 µs each today; I measured no scale effect (no synthetic data was allowed), so "grows with history" is an inference from the plans, labelled unverified.
+**Every `SCAN` of a table, by statement** (row counts from measurement 1; a `SCAN` reads the whole table or a whole index, a `SEARCH` seeks):
+- `events` (5,006 rows): `W2` (walks back from the newest Event to the last `watch-*`), `K4` (back to the first `chat` move), `L1` (the newest 200 ids), `W7` (`LIMIT 0`, reads nothing). The `id > cursor` fetches (`EV1`…`EV7`, `C7`, `L2`, `P9`, `ENS`) are id-range scans, bounded by the cursor, except `--since 0`.
+- `jobs` (200 rows, 1.7 MB): `E3a` (every tick), `T4` (every cockpit refresh; F4).
+- `attempts` (210): `E2a` (every tick, in `(plan, id)` order, filtering `status <> 'ended'`); `E3b` and `W1` read only the partial index `attempts_active`.
+- `sessions` (221): `E2c` (every tick), `T3`, `P1`, `W5` (inside a subquery), `C1`. `plans` (20) and `contexts` (2): `T7`, `T8`, `W3`, `C2`, and once per Session inside `T3`, `K3` and `C1` (F5).
+- `escalations` (46): `E1` (every tick), `T5`, `W6`. `plan_reviews` (19): `T6`. `context_records` (297): `T1`, `T2`.
+- `pull_requests` (25) and `prs` (29): `E5` runs `SCAN prs` once per pull request (no index on `prs(pull_request)`), `E4`, `E7`, `E5b`, `W4`. `sqlite_schema` (88): `OPEN`, every `Store::open`. `history` (8,655): `C9` (F1).
+
+**Every `USE TEMP B-TREE`**: `FOR ORDER BY` in `E2b`, `E7`, `OPEN`, `EV4`, `T3`, `T7`, `W1`, `W5`, `W6`, `P1`, `P4`, `P7`, `C1`, `C2`, `C4` (each on at most 287 rows); `FOR GROUP BY` in `T4`. None is on a table-sized result except `C4` (the 287 records of a Context) and `C1` (221 Sessions).
+
+The ones on the per-tick path (`E1`, `E2a`, `E2c`, `E3a`, `E4`, `E7`) cost 15–84 µs each today. I measured no scale effect (no synthetic data was allowed), so "these tables only grow, so the scans grow" is an inference from the plans, labelled unverified; none is proposed for an index on this evidence.
+
 
 | id | source | rows | SCAN / TEMP B-TREE | CPU ms med / max | wall ms med / max |
 |---|---|---:|---|---:|---:|
@@ -139,14 +150,14 @@ Every `SCAN` below is a whole-table read of a table that only grows (attempts, s
 | E5b | `core/src/pr/pulls.rs:117` (owned_open, columns trimmed) | 1 | SCAN r idx sqlite_autoindex_prs_1 | 0.017 / 0.024 | 0 / 1 |
 | OPEN | `core/src/store/schema.rs:237` (schema_hash, every Store::open) | 88 | SCAN sqlite_schema; TEMP B-TREE ORDER BY | 0.066 / 0.078 | 0 / 1 |
 | ENS | `core/src/watch/ensure.rs:76` (watch --ensure) | 1 | id-range scan of events | 0.068 / 0.080 | 0 / 1 |
-| F0 | `core/src/events/select.rs:165` (highest_id) | 1 | seeks only | 0.008 / 0.012 | 0 / 0 |
-| F1 | `core/src/events/select.rs:95` (fetch, no filter) | 16 | id-range scan of events | 0.022 / 0.061 | 0 / 0 |
-| F2 | `core/src/events/select.rs:95` (fetch, --plan) | 124 | seeks only | 0.113 / 0.122 | 0 / 1 |
-| F3 | `core/src/events/select.rs:95` (fetch, --context) | 500 | seeks only | 0.401 / 0.408 | 0 / 1 |
-| F4 | `core/src/events/select.rs:95` (fetch, Lead session) | 150 | TEMP B-TREE ORDER BY | 0.362 / 0.424 | 0 / 1 |
-| F5 | `core/src/events/select.rs:95` (fetch, other session) | 4 | seeks only | 0.016 / 0.024 | 0 / 0 |
-| F6 | `core/src/events/select.rs:95` (fetch, --kind) | 61 | id-range scan of events | 0.406 / 0.432 | 0 / 1 |
-| F7 | `core/src/events/select.rs:95` (fetch, --since 0 whole log) | 500 | id-range scan of events | 0.354 / 0.365 | 0 / 1 |
+| EV0 | `core/src/events/select.rs:165` (highest_id) | 1 | seeks only | 0.008 / 0.012 | 0 / 0 |
+| EV1 | `core/src/events/select.rs:95` (fetch, no filter) | 16 | id-range scan of events | 0.022 / 0.061 | 0 / 0 |
+| EV2 | `core/src/events/select.rs:95` (fetch, --plan) | 124 | seeks only | 0.113 / 0.122 | 0 / 1 |
+| EV3 | `core/src/events/select.rs:95` (fetch, --context) | 500 | seeks only | 0.401 / 0.408 | 0 / 1 |
+| EV4 | `core/src/events/select.rs:95` (fetch, Lead session) | 150 | TEMP B-TREE ORDER BY | 0.362 / 0.424 | 0 / 1 |
+| EV5 | `core/src/events/select.rs:95` (fetch, other session) | 4 | seeks only | 0.016 / 0.024 | 0 / 0 |
+| EV6 | `core/src/events/select.rs:95` (fetch, --kind) | 61 | id-range scan of events | 0.406 / 0.432 | 0 / 1 |
+| EV7 | `core/src/events/select.rs:95` (fetch, --since 0 whole log) | 500 | id-range scan of events | 0.354 / 0.365 | 0 / 1 |
 | T1 | `tui/src/read/tree.rs:82` | 2 | SCAN context_records cov.idx sqlite_autoindex_context_records_1 | 0.027 / 0.033 | 0 / 0 |
 | T2 | `tui/src/read/tree.rs:89` | 1 | SCAN q idx sqlite_autoindex_context_records_1 | 0.155 / 0.163 | 0 / 1 |
 | T3 | `tui/src/read/shared.rs:236` (SESSION_SELECT, role = 'lead') | 23 | SCAN s; SCAN p; SCAN c; TEMP B-TREE ORDER BY | 0.332 / 0.356 | 0 / 1 |
@@ -195,13 +206,13 @@ Every `SCAN` below is a whole-table read of a table that only grows (attempts, s
 |---|---:|---:|---:|---|
 | `--version` | 3.06 / 4.43 | 2.93 / 3.41 | 58 | none (process start; no store) |
 | `config` | 2.86 / 4.30 | 2.81 / 2.96 | 1,544 | none (reads `config.toml`, no store) |
-| `events list --since 5006 (0 rows)` | not run | 4.69 / 5.81 | 36 | `F1`/`C7` (`core/src/events/select.rs:95`, 0 rows) and `Store::open` (`OPEN`, schema hash) |
-| `events list --since 4990` | 5.03 / 8.13 | 4.89 / 5.39 | 5,251 | `F1`/`C7` (16 rows); the same fetch the follower, the logs view (`L2`) and the plan view (`P9`) run |
-| `events list (since 0, limit 500)` | 7.93 / 9.63 | 7.74 / 9.20 | 177,444 | `F7` (500 rows) |
-| `plan list` | 10.37 / 11.29 | 10.10 / 12.09 | 18,058 | `C2`-like heads (`core/src/plan/show.rs:85`), then per Plan `P5`+`P4` (`jobs::load`), `P2`+`P3`-like (`pr_values`) (finding F3) |
-| `plan show --plan quality` | 13.87 / 15.02 | 13.85 / 15.17 | 89,749 | `P4`, `P5` (`jobs::load`), `P2`/`P3`-like (`pr_values`), `C3` (attempts), `P7`, `P8`, `F0`, and `C9` (the tamper scan, F1) |
+| `events list --since 5006 (0 rows)` | not run | 4.69 / 5.81 | 36 | `EV1`/`C7` (`core/src/events/select.rs:95`, 0 rows) and `Store::open` (`OPEN`, schema hash) |
+| `events list --since 4990` | 5.03 / 8.13 | 4.89 / 5.39 | 5,251 | `EV1`/`C7` (16 rows); the same fetch the follower, the logs view (`L2`) and the plan view (`P9`) run |
+| `events list (since 0, limit 500)` | 7.93 / 9.63 | 7.74 / 9.20 | 177,444 | `EV7` (500 rows) |
+| `plan list` | 10.37 / 11.29 | 10.10 / 12.09 | 18,058 | `query_heads` (`core/src/plan/show.rs:85`), then per Plan `P5`+`P4` (`jobs::load`), `P2`+`P3`-like (`pr_values`) (finding F3) |
+| `plan show --plan quality` | 13.87 / 15.02 | 13.85 / 15.17 | 89,749 | `P4`, `P5` (`jobs::load`), `P2`/`P3`-like (`pr_values`), `C3` (attempts), `P7`, `P8`, `EV0`, and `C9` (the tamper scan, F1) |
 | `plan show --plan cross-repo` | 16.45 / 18.05 | 16.62 / 17.47 | 357,805 | as above, Plan with 38 Jobs and 36 Attempts |
-| `session list` | 9.93 / 10.94 | 9.61 / 10.75 | 129,865 | `C1` (221 Sessions, same shape as `T3`/`K3`), `F0` |
+| `session list` | 9.93 / 10.94 | 9.61 / 10.75 | 129,865 | `C1` (221 Sessions, same shape as `T3`/`K3`), `EV0` |
 | `context show --context building-cpd` | 8.52 / 9.72 | 8.63 / 9.33 | 284,068 | `C4` (287 records), `C5` per Plan record, the `contexts` row |
 
 ### 5. Candidates for the slow statements, tested on second copies
@@ -219,9 +230,9 @@ Copies: `cp $T/cpd.db $T/<name>.db`, then one `CREATE INDEX` per copy (no `ANALY
 | F5 | `plans(lead_session)`, `contexts(lead_session)` | `ixB.db` | `C1` | 1.229 / 1.364 | 0.918 / 0.993 | `SEARCH p USING COVERING INDEX plans_lead (lead_session=?)`, same for `c` |
 | F5 | `events(session, kind, id)` | `ixA.db` | `C1` / `T3` | 1.229 / 0.339 | 1.184 / 0.276 | `SEARCH e USING INDEX events_session_kind (session=? AND kind=?)`; weak, not proposed |
 | F4+F5+F6 | all four indexes | `ix.db` | `C1` / `T3` / `T4` | 1.211 / 0.332 / 0.852 | 0.844 / 0.248 / 0.282 | |
-| F6 | `events(kind, id)` | `ix2.db` | `W2` / `ENS` / `F6` / `K4` | 0.034 / 0.067 / 0.413 / 0.018 | 0.014 / 0.011 / 0.175 / 0.017 | `SEARCH events USING INDEX events_kind (kind=?)` |
+| F6 | `events(kind, id)` | `ix2.db` | `W2` / `ENS` / `EV6` / `K4` | 0.034 / 0.067 / 0.413 / 0.018 | 0.014 / 0.011 / 0.175 / 0.017 | `SEARCH events USING INDEX events_kind (kind=?)` |
 
-Control: on the four-index copy (`ix.db`) 55 of the 59 statements measured there stay within ±0.015 ms of their time on `cpd.db`; the four that moved are `T3`, `T4`, `C1` (intended) and `F7`, whose first reading on `ix.db` (0.515 ms against 0.354) was noise: repeated twice, 0.355 ms on both copies. The table in measurement 3 is the `cpd.db` run.
+Control: on the four-index copy (`ix.db`) 55 of the 59 statements measured there stay within ±0.015 ms of their time on `cpd.db`; the four that moved are `T3`, `T4`, `C1` (intended) and `EV7`, whose first reading on `ix.db` (0.515 ms against 0.354) was noise: repeated twice, 0.355 ms on both copies. The table in measurement 3 is the `cpd.db` run.
 
 ### Live processes (read-only observation)
 
@@ -231,7 +242,7 @@ Control: on the four-index copy (`ix.db`) 55 of the 59 statements measured there
 
 - **Every statement is index-driven or a bounded scan, and the whole workload is small.** Of 60 statements measured, 59 are ≤ 1.3 ms of CPU; the engine tick is 0.30 ms of SQL per 5 s tick (0.006 % of a core), a tree snapshot 1.5 ms (at most every 500 ms), a widgets snapshot 1.3 ms. The one exception is F1.
 - **The views read in one transaction with a fixed number of statements.** `tui/src/read/` has no N+1: tree 8 statements, widgets 12, plan view 8 (`tui/src/read/mod.rs` says so and the code agrees); per-Session lookups are correlated subqueries inside one statement, not extra round trips.
-- **An idle `events follow` is free.** Per 200 ms poll: `fcntl` read-lock, `fstat`, `fcntl` unlock, `poll` on stdout — four syscalls, zero `pread` (`strace -f -tt`, 5 s, on the copy). A busy poll is one `id > cursor` range seek: `F1` 0.022 ms; the Lead's `OR` over `plan`, `context`, `session` (`F4`) plans as a multi-index OR on the three Event indexes (0.36 ms for 150 rows).
+- **An idle `events follow` is free.** Per 200 ms poll: `fcntl` read-lock, `fstat`, `fcntl` unlock, `poll` on stdout — four syscalls, zero `pread` (`strace -f -tt`, 5 s, on the copy). A busy poll is one `id > cursor` range seek: `EV1` 0.022 ms; the Lead's `OR` over `plan`, `context`, `session` (`EV4`) plans as a multi-index OR on the three Event indexes (0.36 ms for 150 rows).
 - **The Event indexes fit the filters.** `events_plan(plan, id)`, `events_context(context, id)`, `events_session(session, id)` serve `--plan`, `--context`, `--session`; `events list --since N` is a rowid range scan.
 - **The partial indexes work.** `attempts_active` makes the slot count `E3b` a 6 µs covering scan (`SCAN attempts USING COVERING INDEX attempts_active`); `attempts_one_active` is the unique guard.
 - **`pr poll` writes only when something changed.** `core/src/pr/poll.rs:87`; since 22Z `pr poll` opened a write transaction 2–11 times an hour (`txns` by hour) against 60 before.
@@ -242,7 +253,7 @@ Control: on the four-index copy (`ix.db`) 55 of the 59 statements measured there
 ## Method
 
 - **The copy.** `T=$(mktemp -d /tmp/sqlperf-XXXX)`; `sqlite3 ~/.cpd/cpd.db ".backup $T/cpd.db"` (the only access to the live store, a read); `cp ~/.cpd/config.toml $T/`; `cp -r ~/.cpd/contexts $T/`; `printf '\n[tmux]\nsocket = "quality-%s"\n' $$ >> $T/config.toml` (the file had no `[tmux]` table). Every `cpd` command ran as `CPD_HOME=$T target/release/cpd …` with the binary built in this worktree (`timeout 900 scripts/cargo.sh build --release -p cpd`, 1 m 10 s, bundled SQLite 3.53.2 per `strings`). Only read commands ran on the copy: `config`, `plan list`, `plan show`, `session list`, `context show`, `events list`, `events follow` (5 s, killed by `timeout -s KILL`). `watch`, `tui`, `session open/run`, `pr`, `job dispatch` were not run; `tiers` ran once as a smoke test on the copy. `PRAGMA user_version` of the copy was still 6 after all of them.
-- **Statements (measurements 2 and 3).** 60 statements transcribed from the sources listed in Appendix A, with real ids from the copy. `sqlite3 -version` 3.45.1 (the bundled one is 3.53.2, so a plan can differ: unverified). `EXPLAIN QUERY PLAN <statement>` for the plans. For times, one `sqlite3 $T/cpd.db` session per statement: `.timer on`, `.output /dev/null`, 1 warm-up and N=15 runs, then `Run Time: real / user / sys` parsed; CPU = user + sys. Median and max of 15. Harness: `/tmp/sqlperf-w/run.py`, `queries.py` (deleted at teardown). The machine's load average was 2.7–6 during the runs (14.9 during the build, before the first measurement); repeats of the slow statements (`C1`, `T3`, `T4`, `F3`, `F7`) agreed within 0.03 ms.
+- **Statements (measurements 2 and 3).** 60 statements transcribed from the sources listed in Appendix A, with real ids from the copy. `sqlite3 -version` 3.45.1 (the bundled one is 3.53.2, so a plan can differ: unverified). `EXPLAIN QUERY PLAN <statement>` for the plans. For times, one `sqlite3 $T/cpd.db` session per statement: `.timer on`, `.output /dev/null`, 1 warm-up and N=15 runs, then `Run Time: real / user / sys` parsed; CPU = user + sys. Median and max of 15. Harness: `/tmp/sqlperf-w/run.py`, `queries.py` (deleted at teardown). The machine's load average was 2.7–6 during the runs (14.9 during the build, before the first measurement); repeats of the slow statements (`C1`, `T3`, `T4`, `EV3`, `EV7`) agreed within 0.03 ms.
 - **Commands (measurement 4).** `date +%s%N` around each run in a bash loop (`cli.sh`): 1 warm-up and N=20, median / min / max, twice (a second round agreed within 0.5 ms), once with no other connection to the copy and once with a `sqlite3` process holding the WAL open (like the live engine). The loop's own cost is in every figure: `/bin/true` takes 1.62 ms median (N=20).
 - **Reads of the OS.** `strace -f -e trace=pread64` on `plan show`, `plan list`, `session list`, `context show`, `events list`, and on `sqlite3` for `C9`; `strace -f -tt` on `events follow`; `/usr/bin/time -v` (max RSS 7.2 MB `--version`, 8.8 MB `events list`, 12.7 MB `plan show --plan cross-repo`); `ps` for live processes. `perf record` is refused here (`perf_event_paranoid = 4`), so no in-process profile exists: every "share of a command" above is by difference and says so.
 - **Not measured, and why.** The write path (commit latency under `synchronous = FULL`, the history triggers, `Store::open`'s `store.lock` flock held across every open): write commands are forbidden on the copy and `sqlite3` has no `cpd_txn()`; no number is given. Scale: no synthetic data was allowed, so growth is extrapolated from today's row counts and labelled. The correctness of the store is Job `store-work`'s.
@@ -250,7 +261,7 @@ Control: on the four-index copy (`ix.db`) 55 of the 59 statements measured there
 
 ## Appendix A: the statements, their plans and times
 
-`E` engine, `F` follow and list, `T` tree, `W` widgets, `L` logs, `P` plan view, `K` worker view, `C` commands. Plans are `EXPLAIN QUERY PLAN` on `cpd.db` with SQLite CLI 3.45.1. The table is measurement 3.
+`E` engine, `EV` Event fetches (follow and list), `T` tree, `W` widgets, `L` logs, `P` plan view, `K` worker view, `C` commands. Plans are `EXPLAIN QUERY PLAN` on `cpd.db` with SQLite CLI 3.45.1. The table is measurement 3.
 
 ### E1: `core/src/watch/escalations.rs:25`
 
@@ -421,7 +432,7 @@ SELECT EXISTS (SELECT 1 FROM events WHERE id > 4000 AND kind = 'watch-started' A
    `--SEARCH events USING INTEGER PRIMARY KEY (rowid>?)
 ```
 
-### F0: `core/src/events/select.rs:165 (highest_id)`
+### EV0: `core/src/events/select.rs:165 (highest_id)`
 
 ```sql
 SELECT coalesce(max(id), 0) FROM events;
@@ -431,7 +442,7 @@ SELECT coalesce(max(id), 0) FROM events;
 `--SEARCH events
 ```
 
-### F1: `core/src/events/select.rs:95 (fetch, no filter)`
+### EV1: `core/src/events/select.rs:95 (fetch, no filter)`
 
 ```sql
 SELECT id, at, kind, context, plan, job, attempt, session, text, data FROM events WHERE id > 4990 ORDER BY id LIMIT 500;
@@ -441,7 +452,7 @@ SELECT id, at, kind, context, plan, job, attempt, session, text, data FROM event
 `--SEARCH events USING INTEGER PRIMARY KEY (rowid>?)
 ```
 
-### F2: `core/src/events/select.rs:95 (fetch, --plan)`
+### EV2: `core/src/events/select.rs:95 (fetch, --plan)`
 
 ```sql
 SELECT id, at, kind, context, plan, job, attempt, session, text, data FROM events WHERE id > 4000 AND plan = 'quality' ORDER BY id LIMIT 500;
@@ -451,7 +462,7 @@ SELECT id, at, kind, context, plan, job, attempt, session, text, data FROM event
 `--SEARCH events USING INDEX events_plan (plan=? AND id>?)
 ```
 
-### F3: `core/src/events/select.rs:95 (fetch, --context)`
+### EV3: `core/src/events/select.rs:95 (fetch, --context)`
 
 ```sql
 SELECT id, at, kind, context, plan, job, attempt, session, text, data FROM events WHERE id > 4000 AND context = 'building-cpd' ORDER BY id LIMIT 500;
@@ -461,7 +472,7 @@ SELECT id, at, kind, context, plan, job, attempt, session, text, data FROM event
 `--SEARCH events USING INDEX events_context (context=? AND id>?)
 ```
 
-### F4: `core/src/events/select.rs:95 (fetch, Lead session)`
+### EV4: `core/src/events/select.rs:95 (fetch, Lead session)`
 
 ```sql
 SELECT id, at, kind, context, plan, job, attempt, session, text, data FROM events WHERE id > 4000 AND (plan = 'quality' OR (plan IS NULL AND context = 'building-cpd') OR session = '62b1c19b-62a5-492e-ae06-12ec8db845a0') ORDER BY id LIMIT 500;
@@ -478,7 +489,7 @@ SELECT id, at, kind, context, plan, job, attempt, session, text, data FROM event
 `--USE TEMP B-TREE FOR ORDER BY
 ```
 
-### F5: `core/src/events/select.rs:95 (fetch, other session)`
+### EV5: `core/src/events/select.rs:95 (fetch, other session)`
 
 ```sql
 SELECT id, at, kind, context, plan, job, attempt, session, text, data FROM events WHERE id > 4000 AND session = '0838fefc-1b82-45c4-b184-877d9070873c' ORDER BY id LIMIT 500;
@@ -488,7 +499,7 @@ SELECT id, at, kind, context, plan, job, attempt, session, text, data FROM event
 `--SEARCH events USING INDEX events_session (session=? AND id>?)
 ```
 
-### F6: `core/src/events/select.rs:95 (fetch, --kind)`
+### EV6: `core/src/events/select.rs:95 (fetch, --kind)`
 
 ```sql
 SELECT id, at, kind, context, plan, job, attempt, session, text, data FROM events WHERE id > 0 AND kind IN ('error', 'escalation') ORDER BY id LIMIT 500;
@@ -498,7 +509,7 @@ SELECT id, at, kind, context, plan, job, attempt, session, text, data FROM event
 `--SEARCH events USING INTEGER PRIMARY KEY (rowid>?)
 ```
 
-### F7: `core/src/events/select.rs:95 (fetch, --since 0 whole log)`
+### EV7: `core/src/events/select.rs:95 (fetch, --since 0 whole log)`
 
 ```sql
 SELECT id, at, kind, context, plan, job, attempt, session, text, data FROM events WHERE id > 0 ORDER BY id LIMIT 500;
