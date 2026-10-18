@@ -478,8 +478,8 @@ stateDiagram-v2
 | `draft` | `queued` | `plan lock` | `plan-phase` (one Event for the whole lock) |
 | `queued` | `running` | engine E3, or `job dispatch` by hand: creates the Attempt (§3.4) | `attempt-started` |
 | `running` | `merged` | driver A8: the merge succeeded; or R (§7.4) when the driver died after A8's compare-and-swap | `job-merged` |
-| `running` | `queued` | driver or engine: the Attempt ended `failed` with a ladder cause (§3.4), the ladder has a next Tier and the automatic Attempts are fewer than `1 + retry_cap` (§9) | `attempt-retry` |
-| `running` | `failed` | driver or engine: no next Tier, the cap is reached, or the cause is outside the ladder | `job-failed` |
+| `running` | `queued` | driver or engine: the Attempt ended `failed` with a ladder cause (§3.4), the ladder has a next Tier and the automatic Attempts are fewer than `1 + retry_cap` (§9); or the Attempt's driver never started (`driver_pid` null, §3.4): the Job goes back to `queued` at the **same** Tier and the Attempt is not counted | `attempt-retry` |
+| `running` | `failed` | driver or engine: no next Tier, the cap is reached (never for an Attempt whose driver never started), or the cause is outside the ladder | `job-failed` |
 | `failed` | `queued` | `job retry <job> --tier <T>` (the Lead's decision; sets `retry_tier`) | `job-retried` |
 | `draft`, `queued`, `failed` | `cancelled` | `job cancel --reason` with no active Attempt | `job-cancelled` |
 | `running` | (unchanged; `cancel_requested_at` set) | `job cancel --reason` with an active Attempt | `job-cancel-requested` |
@@ -540,7 +540,7 @@ stateDiagram-v2
 - **The merge, A8.** `merging` → `ended` as usual, but with no rebase, no fast-forward, no push and no worktree sync (§7.4 "A review Job's merge"): the Lead Branch is unchanged, the Attempt ends `merged` / `merged` and the Job `merged` with `merged_sha` = the Lead Branch tip at that moment.
 - **Everything else is a Worker's:** the ladder (a `crashed` or `no_submit` review Attempt is followed by a new Attempt, a new fork of the Lead), the nudge, Escalations (`cpd ask`), cancel, timeout and A9.
 
-**Ladder causes** are `crashed`, `no_submit` and `merge_conflict`: the next Attempt starts from the newer Lead Branch HEAD and its Spec carries the previous outcome and the conflict list. Every other cause fails the Job, and the Lead decides (`job retry`, `job cancel`). Change (R19): the merge runs no Gate, so `gate_failed` and `gate_error` are no longer Attempt causes; the Gate runs at `pr open` and `pr rebase` (§7.6), and a failure there is fixed by Jobs the Lead appends.
+**Ladder causes** are `crashed`, `no_submit` and `merge_conflict`: the next Attempt starts from the newer Lead Branch HEAD and its Spec carries the previous outcome and the conflict list. **An Attempt whose driver never started does not use up a try.** The marker is `attempts.driver_pid` (§4): the starter sets it only after a successful spawn, so an Attempt that ended `failed` / `crashed` with `driver_pid` null never had a driver. Such an Attempt is not counted among the automatic Attempts of `retry_cap` (§9) and does not raise the Tier: the Job goes back to `queued` (`attempt-retry` with `next_tier` = the same Tier; the next Attempt has `origin = ladder`). No schema change and no new cause. Every other cause fails the Job, and the Lead decides (`job retry`, `job cancel`). Change (R19): the merge runs no Gate, so `gate_failed` and `gate_error` are no longer Attempt causes; the Gate runs at `pr open` and `pr rebase` (§7.6), and a failure there is fixed by Jobs the Lead appends.
 
 **The driver, `cpd attempt run`** (internal; started detached by E3 or `job dispatch` with `setsid`, stderr to `run/<plan>/logs/attempt-<attempt>.log`; holds the driver lock, below, for its whole life). Steps, adapted from cpd 1 §12:
 
@@ -572,7 +572,7 @@ stateDiagram-v2
 - **Resume.** The new driver's A1 checks fd 3 as above, then resumes: at A4 for `running` (the Worker's Session and pane from the store; the nudge-once state from the Attempt's `attempt-nudge` Event), at A8 for `merging`.
 - A Worker's pi is never touched by a driver reload; it is replaced only between Attempts (a new Attempt starts the installed pi adapter).
 
-If the insert fails (`no_slot`, `cas_lost`), the starter closes the descriptor and no Attempt exists. If the spawn fails, the starter ends the Attempt `failed` / `crashed` itself, as E2 would, and then closes the descriptor. E2 probes a lock by opening the file afresh and trying `flock(LOCK_EX | LOCK_NB)`. The lock file is removed when the Attempt ends: by the driver at A9, and by E2 when it ends a dead driver's Attempt. E2's probe never creates the file (it opens without `O_CREAT`): a missing file means no driver.
+If the insert fails (`no_slot`, `cas_lost`), the starter closes the descriptor and no Attempt exists. If the spawn fails, the starter ends the Attempt `failed` / `crashed` itself, as E2 would, with `driver_pid` still null (the marker of a driver that never started; §3.4 "Ladder causes"), and then closes the descriptor. E2 probes a lock by opening the file afresh and trying `flock(LOCK_EX | LOCK_NB)`. The lock file is removed when the Attempt ends: by the driver at A9, and by E2 when it ends a dead driver's Attempt. E2's probe never creates the file (it opens without `O_CREAT`): a missing file means no driver.
 
 The concurrency slot is implicit: an Attempt holds one from `starting` until `ended`. E3 and `job dispatch` insert an Attempt only inside a write transaction that counts the Attempts not `ended` on the machine and refuses at `concurrency` (`no_slot`, exit 3). This replaces cpd 1's slot files (§9).
 
@@ -611,7 +611,7 @@ One per machine (D5). Every `tick_seconds`:
 |---|---|
 | E1 | **Escalations:** expire `open` Escalations whose `asker_pid` is dead |
 | E2 | **Liveness:** for every Attempt not `ended` whose driver lock is free (the driver died; §3.4): in `merging`, run the merge recovery R (§7.4), which ends it `merged` when its commits are already on the Lead Branch, and otherwise `cancelled` if a cancel was requested, else `crashed`; in any other status, end it `cancelled` if a cancel was requested, else `crashed`. For every Attempt with a live driver: active time over `attempt_minutes` → set `stop_request = timed_out`; Job `cancel_requested_at` set → set `stop_request = cancelled`. For every Session not `stopped` or with a pane: pane dead or missing (`tmux list-panes -a`) → `stopped` with no pane, and a Lead's dead pane's window is killed, or the chat slot's pane is replaced by the placeholder (§3.6) |
-| E3 | **Scheduling:** for each Ready Job, by `jobs.seq` across all Plans, while a slot is free: verify the fingerprint, take the driver lock, create the Attempt, start its driver with the lock inherited (§3.4) |
+| E3 | **Scheduling:** for each Ready Job, by `jobs.seq` across all Plans, while a slot is free: verify the fingerprint, take the driver lock, create the Attempt, start its driver with the lock inherited (§3.4). **Back-off:** E3 does not start a Job whose latest `k >= 1` Attempts in a row ended with `driver_pid` null (the driver never started) until `min(2^k, 300)` seconds after the last one's `ended_at`; an Attempt whose driver started resets `k`. So a permanent spawn failure does not start an Attempt at every tick. The `error` Event rule is unchanged (once until the step clears, at most once per `watch.error_repeat_seconds`) |
 | E4 | **Completion**, per PR (R34): for each PR in status `dispatch` with no Job `queued` or `running`, at least one `merged`, and `all_merged_at` null: append `all-merged` (`data.pr` = its key) and set the PR's `all_merged_at`. The Lead answers with `pr open --pr <key>` |
 | E5 | **PR poll** (hs-d96, hs-d97): run `cpd pr poll` (no `--plan`) as a subprocess (a process boundary, cpd 1 §11 step 5), `pr_poll_seconds` after the **end** of the previous poll (never overlapping, never more often than one per tick), whether or not any Plan is in `pr`. One poll covers every open pull request of the User (§7.6). When the output's `rate_limit.remaining` is below 100, E5 skips polls until `rate_limit.reset_at` and reports one `error` Event with code `gh_rate_limited` (`details`: `remaining`, `reset_at`); the error clears when polling resumes |
 | E6 | **Contexts:** every `context_sync_seconds`, `context sync` each Context that has a remote (§4.6) |
@@ -1715,7 +1715,7 @@ version = 1                  # required; the schema of this file
 machine = "hs"               # required; names this machine in Context record ids (§2.1)
 
 concurrency = 3              # Attempts not ended, machine-wide (§3.4)
-retry_cap = 2                # automatic Attempts are capped at 1 + retry_cap (§9)
+retry_cap = 2                # automatic Attempts are capped at 1 + retry_cap (§9); Attempts whose driver never started do not count
 lead_tier = "O3"
 lead_pi_packages = ["npm:@plannotator/pi-extension@0.28.17", "npm:@juicesharp/rpiv-ask-user-question@2.13.8"]
 pi_adapter = ""              # "" = <dir of the cpd binary>/../share/cpd/pi
@@ -1777,7 +1777,7 @@ Kept from cpd 1 §7, with one change in how pi's catalog is read.
   - **change:** cpd 2 has no Node of its own, so it runs a small embedded ES module with **pi's Node**, the one pi's launcher uses: `${XDG_DATA_HOME:-~/.local/share}/pi-node/current/bin/node` when it exists, else `node` on `PATH` (verified in the launcher script of pi 1.2.0). The module calls `ModelRuntime.create({allowModelNetwork: false})`, `getModel(provider, id)` and pi-ai's `getSupportedThinkingLevels`, and prints JSON;
   - the result is cached in `tier_catalog` per pi version and refreshed when `current-version` changes; an unknown model is `tier_model_unknown`.
 - **Ladder** `next(t)`: the same model at effort + 1 if valid; otherwise the next model in `H → S → O` at the lowest valid effort ≥ the current one; otherwise none. Examples: `H1→H2`, `H3→S3`, `S4→S5`, `S5→O5`, `O4→O5`, `O5→none`.
-- **Attempt Tier:** Attempt 1 uses the Job's Tier; each automatic Attempt n uses `next` applied n − 1 times from the Job's Tier. Automatic Attempts are capped at `1 + retry_cap` and stop early when `next` is none. `job retry --tier <T>` sets an explicit Tier for the next Attempt (`origin = retry`), and the ladder continues from it, with a fresh cap.
+- **Attempt Tier:** Attempt 1 uses the Job's Tier; each automatic Attempt n uses `next` applied n − 1 times from the Job's Tier. Automatic Attempts are capped at `1 + retry_cap` and stop early when `next` is none. An Attempt whose driver never started (`driver_pid` null, §3.4) is not counted in the cap and does not advance the Tier: the next Attempt uses the same Tier. `job retry --tier <T>` sets an explicit Tier for the next Attempt (`origin = retry`), and the ladder continues from it, with a fresh cap.
 - **Defaults:** Lead `O3` (`lead_tier`); the contract Jobs ran at `O3` (R13). There is no review Tier (R19).
 - `cpd tiers` prints `{ok, pi_version, tiers: {O: {model, efforts: [..]}, S: …, H: …}}`.
 
