@@ -618,8 +618,6 @@ One per machine (D5). Every `tick_seconds`:
 | E6 | **Contexts:** every `context_sync_seconds`, `context sync` each Context that has a remote (§4.6) |
 | E7 | **PR start** (R34, A9): for each Plan in `dispatch`, each PR in status `waiting` whose needs are all `merged` and whose `start_failed_at` is null: start it (§3.8, §7.2). E7 runs after E5 in the same tick, so a PR starts in the tick in which E5's poll sees its last prerequisite merged; it also starts a PR appended in `dispatch` with no needs. A failed start sets `start_failed_at` and appends one `error` Event with code `pr_start_failed` for the Plan's Lead; E7 does not try that PR again, the Lead retries with `cpd pr start <key>` |
 
-**The StatusBar's numbers** (A5, hs-d149). The engine holds a `Tmux`. At start and on every tick on which either value changed it sets the **global** tmux options `@cpd_workers_running` (the Attempts with `status <> 'ended'`) and `@cpd_workers_limit` (config `concurrency`); the status line (§6.1) shows them, so it is up to `tick_seconds` late (default 5 s). It unsets both when it stops cleanly (SIGTERM, SIGINT), so the status line shows nothing while no engine runs. A failing tmux call is an engine step error like any other (below), never fatal.
-
 `watch` holds `locks/watch.lock` (a second one exits with `watch_running`, exit 3), appends `watch-started` and `watch-stopped`, and never exits on its own: unlike cpd 1, it serves every Plan.
 
 A step's failure appends an `error` Event once until it clears, and the same `error` (step, scope and code) at most once per `watch.error_repeat_seconds` even if it clears in between (R31, finding 4). `scripts/install-cpd.sh` restarts a running engine after installing (kills the `watch` window, then `cpd watch --ensure`), because an engine keeps running the binary it started with (finding 5).
@@ -1397,15 +1395,13 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 | `extended-keys` | `on` | pi's keys (verified by the User) |
 | `terminal-features` | append `xterm*:extkeys,xterm-ghostty:extkeys,xterm-ghostty:hyperlinks` | `hyperlinks`: inside tmux, pi emits clickable OSC 8 links only when the client lists it (pi-tui `terminal-image.js`), and tmux forwards them only then |
 | `escape-time` | `10` | |
-| `status` | `off` | global; no session has a status line unless it sets its own. The cockpit session turns it on for itself (below) |
+| `status` | `off` | the cockpit draws its own bars |
 | `pane-border-status` | `top` | |
 | `pane-border-lines` | `heavy` | |
 | `remain-on-exit` | `on` | a dead pane stays, so cpd can read `#{pane_dead_status}` |
 | `focus-events` | `on` | the views are told when their pane gains or loses focus |
 | `pane-active-border-style` | `fg=blue` | the focused pane's border |
 | `pane-border-format` | the format below | the column titles |
-
-**The status line** (hs-d149; research `docs/research/statusbar-no-row.md`) is the cockpit's StatusBar. It is set on the **cockpit session only**, never with `-g`, so `cpd-work` has none: `set -t <cockpit> status on`, `set -t <cockpit> status-style default` (the terminal's colours; tmux's default is green) and `set -t <cockpit> status-format[0] <format>`. The format is, on the left, three one-glyph buttons `⧉`, `?`, `▤`, each in a `#[range=user|reset]`, `#[range=user|legend]` or `#[range=user|logs]` range, drawn as grey reversed blocks and separated by one space (a tmux 3.4 range owns one cell more than its text, so buttons must not touch); on the right (`#[align=right]`) `workers N/M`, from the global user options `@cpd_workers_running` and `@cpd_workers_limit` that the engine sets (§3.7), and nothing at all while `@cpd_workers_running` is unset. A tmux option now carries this state: an accepted deviation from commands.md §17's "no tmux option carrying state" (hs-d149). Colours come from the palette (commands.md §13.2).
 
 **Every server start sets every option, key binding and hook of this section**, whichever command starts the server (`plan new`, `watch --ensure`, `tui`), so the cockpit looks and behaves the same whatever started it. Rerunning is safe (each is a plain `set -g`, `bind` or `set-hook -g`), so `cpd tui` also applies them to a server that is already running. Cockpit parity (User, 2026-10-15): the cockpit matches the running cpd 1 cockpit, whose `tui/scripts/tmux.conf` these are, renamed (`@cpd_view`, `@cpd_job`).
 
@@ -1414,7 +1410,7 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 | Pane | Title |
 |---|---|
 | has `@cpd_session` (a Lead) | `#[reverse] #{@cpd_title} #[noreverse]` when `@cpd_title` is set (the Plan's title for a Plan's Lead, the Session's name for a side fork), else none |
-| `@cpd_view = chat` (the placeholder) or `@cpd_view = history` (an archived Session's history) | none: pi and the placeholder say what they are |
+| `@cpd_view = chat` (the placeholder), `@cpd_view = history` (an archived Session's history) or `@cpd_view = statusbar` | none: pi and the placeholder say what they are |
 | `@cpd_view = tree` | ` Context ` |
 | `@cpd_view = plan` | ` Plan ` |
 | `@cpd_view = widgets` | ` Deploy ` |
@@ -1423,7 +1419,7 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 
 Every title is drawn reversed: `#[reverse]` before it and `#[noreverse]` after it, inside the branch that has a title, so untitled panes get neither. It shows as a block in the border line's colour (blue on the focused pane, from `pane-active-border-style`; the default border colour elsewhere) with the text in the background colour, so the line reads as continuous, with a wider block where the title sits. Reason: User, Plan tui-visuals (hs-d105). Pane borders are the cockpit's top-level separators: white, the focused pane's blue (`pane-active-border-style`); separators inside a slot are grey (`commands.md` §13.2, design rule; hs-d124). The widgets title is ` Deploy ` (User, hs-d76, Plan tui-visuals).
 
-**The click bindings.** `bind -T root MouseDown1Status run-shell -b '<cpd> tui click #{mouse_status_range} --client #{client_name} >/dev/null 2>&1'`: a click on a status line button runs `cpd tui click` for the clicking client (commands.md §13.2); the click goes to the status row, not to a pane, so the chat keeps the keyboard focus. cpd sets **no** `MouseDown1Pane` binding: tmux's default (`select-pane -t = ; send-keys -M`) stays.
+**The click binding.** `bind -T root MouseDown1Pane if -F '#{==:#{@cpd_view},statusbar}' 'send-keys -M' 'select-pane -t = ; send-keys -M'`: a click on the StatusBar is passed to it and never selects it, so the chat keeps the keyboard focus; every other pane is selected, then gets the click.
 
 **The `pane-died` hook.** `set-hook -g pane-died 'if -F "#{@cpd_view}" "respawn-pane"'`: only a pane that carries `@cpd_view` (a view of the cockpit) is respawned when its program dies. A Lead or engine pane stays dead, as `remain-on-exit` leaves it, because engine E2 must see its death (§3.6, §3.7). This differs from cpd 1's unconditional `set-hook -g pane-died "respawn-pane"`.
 
@@ -1431,14 +1427,14 @@ Every title is drawn reversed: `#[reverse]` before it and `#[noreverse]` after i
 
 | tmux session | Window | Panes | What runs |
 |---|---|---|---|
-| `cpd` (the cockpit; `tmux.cockpit_session`) | `main` | the tree (left), the plan view (centre top), the **chat slot** (centre bottom), the widgets (right); optionally the read-only Worker view beside the chat. The **StatusBar** is no pane: it is the status line of this session (§6.1) | `cpd tui` views; the chat slot holds one Lead Session's pane |
+| `cpd` (the cockpit; `tmux.cockpit_session`) | `main` | the tree (left), the plan view (centre top), the **chat slot** (centre bottom), the widgets (right); the **StatusBar**, one row across the full width at the bottom; optionally the read-only Worker view beside the chat | `cpd tui` views (the StatusBar runs `cpd tui view statusbar`); the chat slot holds one Lead Session's pane |
 | `cpd` | `park-<label>` (one per Lead Session not in the chat slot) | one pane | a Lead (`cpd session run <id>`), cwd = the Session's `cwd`: for a Plan's Lead the directory `plan new` ran from, not a repo (R34, A12; §6.4) |
 | `cpd` | `ctx-<context>` | one pane | a Context's grounded Lead (`cpd session run <id>`) |
 | `cpd-work` (hidden; `tmux.work_session`) | `watch` | one pane | `cpd watch` (D5) |
 | `cpd-work` | `<plan>--<attempt>` (one per Attempt) | one pane, the Worker | `pi` |
 
 - `<label>` is the Session's Plan id, or the first 8 characters of its id when it has no Plan. tmux targets are always pane ids (`%<n>`) or window ids (`@<n>`), never names; names are labels for people.
-- **Pane options** identify panes, never state: `@cpd_session` (Session id) on every pane that runs a Session, `@cpd_title` on a Lead's pane (below), and `@cpd_view` (`tree`, `plan`, `widgets`, `worker`, `chat`, `history`) on the TUI's panes. A Worker view pane (`@cpd_view worker`) also carries `@cpd_job` (the Job's key, shown in its border title) and `@cpd_attempt` (the Attempt id it shows). The Worker pane opens beside the chat slot with `split-window -h -d -l 50%` (no focus); a click on another Job retargets it with `respawn-pane -k` and new `@cpd_job` and `@cpd_attempt`; a click on the Job it shows closes it. Its size in reset-layout stays the reference's (`-x 30%`, commands.md §13.2). The chat slot is the pane of `cpd:main` that has `@cpd_session`, **or** `@cpd_view` `chat` or `history`. The value `chat` marks the **placeholder**: the pane running `cpd tui view chat`, text `No Lead here: pick a Plan in the session tree`, which holds the slot while no Lead is there. The value `history` marks a **history pane**: the pane running `cpd tui view history <id>`, an archived Session's file read-only, with `@cpd_history` set to that Session's id; it holds the slot like the placeholder and is never a Lead. At most one placeholder or history pane exists, and only ever in the slot. **`@cpd_title` is a deliberate exception** to "identify panes, never state": it is a label for people, the title shown in a Lead's pane header (the Plan's **title** for a Plan's Lead, the Session's **name** for a side fork). cpd keeps it current: it is set wherever cpd marks a Lead's pane with `@cpd_session` (`plan new`, `session fork` and the moves; not Worker panes), and `plan rename` and `session rename` set it again on the Session's pane when it has one. The border format (§6.1) shows it when set. Pane options move with the pane on `swap-pane`, which is why the chat slot is found by that rule and not by a fixed option.
+- **Pane options** identify panes, never state: `@cpd_session` (Session id) on every pane that runs a Session, `@cpd_title` on a Lead's pane (below), and `@cpd_view` (`tree`, `plan`, `widgets`, `statusbar`, `worker`, `chat`, `history`) on the TUI's panes. A Worker view pane (`@cpd_view worker`) also carries `@cpd_job` (the Job's key, shown in its border title) and `@cpd_attempt` (the Attempt id it shows). The Worker pane opens beside the chat slot with `split-window -h -d -l 50%` (no focus); a click on another Job retargets it with `respawn-pane -k` and new `@cpd_job` and `@cpd_attempt`; a click on the Job it shows closes it. Its size in reset-layout stays the reference's (`-x 30%`, commands.md §13.2). The chat slot is the pane of `cpd:main` that has `@cpd_session`, **or** `@cpd_view` `chat` or `history`. The value `chat` marks the **placeholder**: the pane running `cpd tui view chat`, text `No Lead here: pick a Plan in the session tree`, which holds the slot while no Lead is there. The value `history` marks a **history pane**: the pane running `cpd tui view history <id>`, an archived Session's file read-only, with `@cpd_history` set to that Session's id; it holds the slot like the placeholder and is never a Lead. At most one placeholder or history pane exists, and only ever in the slot. **`@cpd_title` is a deliberate exception** to "identify panes, never state": it is a label for people, the title shown in a Lead's pane header (the Plan's **title** for a Plan's Lead, the Session's **name** for a side fork). cpd keeps it current: it is set wherever cpd marks a Lead's pane with `@cpd_session` (`plan new`, `session fork` and the moves; not Worker panes), and `plan rename` and `session rename` set it again on the Session's pane when it has one. The border format (§6.1) shows it when set. Pane options move with the pane on `swap-pane`, which is why the chat slot is found by that rule and not by a fixed option.
 - The User attaches with `tmux -L cpd attach -t cpd` (locally or `ssh -t <host> …`). Several clients may attach at once. The User never needs to look at `cpd-work`.
 
 ### 6.3 tmux commands cpd uses
@@ -1446,12 +1442,10 @@ Every title is drawn reversed: `#[reverse]` before it and `#[noreverse]` after i
 | Purpose | Command (all with `-L <socket>`) |
 |---|---|
 | server and sessions | `has-session -t =<name>`; `new-session -d -s <name> -n <window> -x 215 -y 62 -c <dir> [command]` |
-| the StatusBar (§6.1), on the cockpit session only | `set -t <cockpit> status on`, `set -t <cockpit> status-style default`, `set -t <cockpit> status-format[0] <format>` |
-| a click on a status line button (§6.1) | `bind -T root MouseDown1Status run-shell -b '<cpd> tui click #{mouse_status_range} --client #{client_name} >/dev/null 2>&1'` |
-| the legend and logs popups of a click | `display-popup -c <client> -E -T <title> -w <w> -h <h>`, sized from `#{client_width}` and `#{client_height}` of that client |
-| a failed click | `display-message -c <client> '<message>'` |
+| the full-width StatusBar | `split-window -v -f -l 1` |
 | reset-layout (§13.2) | `resize-pane -t <pane> -x\|-y <size>` |
-| options | `set -g <option> <value>`; the engine's `set -g @cpd_workers_running <n>` and `@cpd_workers_limit <m>` (and `set -gu` of both, §3.7); `set -p -t <pane> @cpd_session <id>`; `set -p -t <pane> @cpd_view history` and `@cpd_history <id>` |
+| the StatusBar never takes focus (§6.1) | `bind -T root MouseDown1Pane if -F '#{==:#{@cpd_view},statusbar}' 'send-keys -M' 'select-pane -t = ; send-keys -M'` |
+| options | `set -g <option> <value>`; `set -p -t <pane> @cpd_session <id>`; `set -p -t <pane> @cpd_view history` and `@cpd_history <id>` |
 | a new parked window or Attempt window | `new-window -d -t =<session>: -n <name> -c <cwd> -e K=V … -P -F '#{window_id} #{pane_id}' -- <argv…>` (several arguments run without a shell, docs: tmux(1)) |
 | bring a Lead into the chat slot | `swap-pane -d -s <parked pane> -t <chat slot pane>` (verified: both processes keep their pids, the slot keeps its size), then `rename-window -t <window id> park-<label>` for the window that now holds the displaced Lead |
 | liveness | `list-panes -a -F '#{pane_id} #{window_id} #{session_name} #{pane_dead} #{pane_dead_status} #{pane_pid} #{@cpd_session}'` (plus `#{window_name}` and `#{@cpd_view}`); a pane whose `@cpd_view` this binary does not know is skipped and logged once, never an error (R31, finding 4) |
