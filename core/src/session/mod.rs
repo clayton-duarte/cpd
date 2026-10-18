@@ -188,7 +188,12 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::History(args) => history::history(args),
         Command::Archive(args) => archive::archive(args),
         Command::Unarchive(args) => archive::unarchive(args),
-        Command::Rename(args) => state::rename(args),
+        Command::Rename(args) => {
+            let id = args.session.require()?.clone();
+            let out = state::rename(args)?;
+            row::retitle(&id)?;
+            Ok(out)
+        }
         Command::State(args) => state::state(args),
         Command::Run(args) => run::run(args),
     }

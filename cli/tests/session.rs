@@ -810,6 +810,41 @@ fn rename_works_on_an_archived_session() {
     assert_eq!(events(&env, "session-renamed").len(), 1);
 }
 
+#[test]
+fn rename_sets_the_title_of_a_forks_live_pane_to_its_name() {
+    let env = TestEnv::new();
+    let fork = parked_fork(&env);
+    let pane = panes(&env).into_iter().find(|p| p.session == fork).unwrap().pane;
+    let title = |env: &TestEnv| {
+        let out = env.tmux(&["show", "-pqv", "-t", &pane, "@cpd_title"]);
+        String::from_utf8(out.stdout).unwrap().trim_end_matches('\n').to_owned()
+    };
+    assert_eq!(title(&env), "Lead one (fork)");
+    env.cpd(&["session", "rename", "side quest", "--session", &fork]).ok();
+    assert_eq!(title(&env), "side quest");
+
+    // A Session with no pane has nothing to set.
+    env.cpd(&["session", "rename", "Lead two renamed", "--session", "lead2"]).ok();
+}
+
+#[test]
+fn open_gives_a_new_pane_the_plans_title_for_the_plans_lead_and_the_name_for_a_fork() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd(&env);
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
+    cockpit(&env);
+    let title = |env: &TestEnv, session: &str| {
+        let pane = panes(env).into_iter().find(|p| p.session == session).unwrap().pane;
+        let out = env.tmux(&["show", "-pqv", "-t", &pane, "@cpd_title"]);
+        String::from_utf8(out.stdout).unwrap().trim_end_matches('\n').to_owned()
+    };
+    env.cpd(&["session", "open", LEAD1]).ok();
+    assert_eq!(title(&env, LEAD1), "Pay");
+    let fork = env.cpd(&["session", "fork", LEAD1, "--name", "side"]).ok()["session"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(title(&env, &fork), "side");
+}
+
 // ---------- archive ----------
 
 /// A parked side fork of `lead1` (stopped, with a pane): fake pi and cpd, and the cockpit.
