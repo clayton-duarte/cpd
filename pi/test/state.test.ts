@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ev, Fixture, ID, planShow, settle, stateCalls, waitFor } from "./fake.ts";
+import { ev, Fixture, ID, planShow, stateCalls, waitFor } from "./fake.ts";
 
 async function started(f: Fixture) {
   f.respond("plan-show", planShow());
@@ -18,7 +18,7 @@ test("agent_start reports working; agent_settled reports idle only when pi is id
   await waitFor("working", () => stateCalls(f).length === 2);
   f.pi.idle = false; // settled, but a queued follow-up keeps pi busy
   await f.pi.fire("agent_settled", { aborted: false });
-  await settle();
+  await f.quiet();
   assert.deepEqual(stateCalls(f), ["idle", "working"]);
 
   f.pi.idle = true;
@@ -40,7 +40,7 @@ test("calls are serialised: one in flight, only the latest wanted state is sent 
   f.pi.idle = true;
   await f.pi.fire("agent_settled", { aborted: false }); // idle: the latest
   await waitFor("two more calls", () => f.argvs().filter((a) => a[1] === "state").length === 3, 3000);
-  await settle(300);
+  await f.quiet(); // the last call (in flight) ended and nothing is wanted after it
 
   assert.deepEqual(stateCalls(f), ["idle", "working", "idle"], "blocked never went out");
   const calls = f.calls().filter((c) => c.argv[1] === "state");
@@ -58,7 +58,7 @@ test("a refused call is reported once and the next change is tried normally", as
   await f.pi.fire("agent_start");
   await waitFor("the error", () => f.pi.errors().length === 1);
   assert.match(f.pi.errors()[0]!.message.content, /^cpd adapter: session state: illegal_transition: stopped to working\.$/);
-  await settle();
+  await f.quiet();
   assert.equal(f.pi.errors().length, 1, "once");
 
   f.respond("session-state", { ok: true });
@@ -79,7 +79,7 @@ test("session_shutdown reports stopped and stops the follower", async (t) => {
   assert.deepEqual(f.argvs().filter((a) => a[1] === "state").at(-1), ["session", "state", "stopped", "--session", ID]);
   await waitFor("the follower killed", () => f.killed(f.pids()[0]!));
   await f.pi.fire("agent_start"); // after shutdown nothing is reported
-  await settle();
+  await f.quiet();
   assert.equal(stateCalls(f).at(-1), "stopped");
 });
 
@@ -101,7 +101,7 @@ test("a /name typed in pi reaches cpd; a name cpd set does not echo back", async
   assert.equal(f.pi.sessionName, "the lead");
 
   await f.pi.fire("session_info_changed", { name: "the lead" });
-  await settle();
+  await f.quiet();
   assert.equal(f.argvs().some((a) => a[1] === "rename"), false);
 
   f.pi.sessionName = "typed by the User";
@@ -110,7 +110,7 @@ test("a /name typed in pi reaches cpd; a name cpd set does not echo back", async
   assert.deepEqual(f.argvs().find((a) => a[1] === "rename"), ["session", "rename", "typed by the User", "--session", ID]);
 
   await f.pi.fire("session_info_changed", { name: "typed by the User" });
-  await settle();
+  await f.quiet();
   assert.equal(f.argvs().filter((a) => a[1] === "rename").length, 1);
 
   // the Event it causes comes back and changes nothing
@@ -125,7 +125,7 @@ test("a pi dialog (ui_prompt_start..end) reports blocked `dialog`; nested prompt
   await started(f);
 
   await f.pi.fire("ui_prompt_end"); // nothing open
-  await settle();
+  await f.quiet();
   assert.deepEqual(stateCalls(f), ["idle"]);
 
   await f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "custom" });
@@ -133,13 +133,13 @@ test("a pi dialog (ui_prompt_start..end) reports blocked `dialog`; nested prompt
   assert.deepEqual(f.argvs().filter((a) => a[1] === "state")[1], ["session", "state", "blocked", "--label", "dialog", "--session", ID]);
   await f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "select" });
   await f.pi.fire("ui_prompt_end");
-  await settle();
+  await f.quiet();
   assert.deepEqual(stateCalls(f), ["idle", "blocked:dialog"], "still blocked after the inner end");
 
   await f.pi.fire("ui_prompt_end");
   await waitFor("idle", () => stateCalls(f).length === 3);
   await f.pi.fire("ui_prompt_end"); // stray, after a full cycle
-  await settle();
+  await f.quiet();
   assert.deepEqual(stateCalls(f), ["idle", "blocked:dialog", "idle"]);
 });
 
@@ -161,11 +161,11 @@ test("a herdr:blocked event no longer changes the state; the dialog reason still
   t.after(() => f.close());
   await started(f);
   f.pi.events.emit("herdr:blocked", { active: true, label: "ask" });
-  await settle();
+  await f.quiet();
   assert.deepEqual(stateCalls(f), ["idle"]);
   await f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "custom" });
   await waitFor("dialog", () => stateCalls(f).length === 2);
   f.pi.events.emit("herdr:blocked", { active: false });
-  await settle();
+  await f.quiet();
   assert.deepEqual(stateCalls(f), ["idle", "blocked:dialog"]);
 });

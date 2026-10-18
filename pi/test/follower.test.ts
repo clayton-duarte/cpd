@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ev, Fixture, planShow, settle, waitFor } from "./fake.ts";
+import { ev, Fixture, planShow, waitFor } from "./fake.ts";
 
 async function started(f: Fixture, options = {}) {
   f.respond("plan-show", planShow());
@@ -18,8 +18,7 @@ test("EOF restarts the follower with the in-memory cursor, also past Events hand
   t.after(() => f.close());
   await started(f);
   f.emit(ev(101, "job-added"), ev(102, "session-state"));
-  await settle(80);
-  f.file("exit-next", "0");
+  f.file("exit-next", "0"); // the fake prints every line of the file before it exits, so both are read first
   await waitFor("a restart", () => f.follows().length === 2);
   assert.deepEqual(f.sinces(), [100, 102]);
   assert.deepEqual(f.pi.sent, [], "a clean EOF is no error, and the ignored kinds are no message");
@@ -69,8 +68,7 @@ test("a non-zero exit without a failure line is delivered as an error, once per 
   await waitFor("the error", () => errorsOf(f, "follower_exit").length === 1);
   assert.match(errorsOf(f, "follower_exit")[0]!.message.content, /^cpd adapter: events follow: follower_exit: .*exit 2/);
   f.file("exit-next", "2");
-  await waitFor("a third start", () => f.follows().length >= 3);
-  await settle(100);
+  await waitFor("a third start", () => f.follows().length >= 3); // the second exit was reported (or not) before this start
   assert.equal(errorsOf(f, "follower_exit").length, 1);
 });
 
@@ -125,7 +123,7 @@ test("session_shutdown kills the follower and it is not restarted", async (t) =>
   await waitFor("pid", () => f.pids().length === 1);
   await f.pi.fire("session_shutdown");
   await waitFor("killed", () => f.killed(f.pids()[0]!));
-  await settle(200);
+  await f.exited();
   assert.equal(f.follows().length, 1);
   assert.equal(f.pi.errors().length, 0, "a killed follower at shutdown is no error");
 });

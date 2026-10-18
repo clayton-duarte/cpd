@@ -61,7 +61,12 @@ async function follow() {
 `;
 
 /** Stands for pi's jiti in the throwaway load (the real one is pi's, not a dependency of this repo): loads the file natively, which node does for `.ts`. */
-const FAKE_JITI = `export const createJiti = () => ({ import: async (path) => (await import(path)).default });\n`;
+const FAKE_JITI = `import { appendFileSync } from "node:fs";
+export const createJiti = () => {
+  appendFileSync(process.env.FAKE_CPD_DIR + "/loads", "x\\n"); // one line per throwaway load: the poll's retries are observable
+  return { import: async (path) => (await import(path)).default };
+};
+`;
 
 export const ID = "596d007f-6775-4134-b77a-b356cc523842";
 export const OTHER = "11111111-2222-4333-8444-555555555555";
@@ -164,6 +169,12 @@ export class Fixture {
     return this.follows().map((c) => Number(c.since));
   }
 
+  /** How many throwaway loads of a new adapter package were made (`reload.loader`). */
+  loads(): number {
+    const f = join(this.dir, "loads");
+    return existsSync(f) ? readFileSync(f, "utf8").split("\n").filter(Boolean).length : 0;
+  }
+
   pids(): number[] {
     const f = join(this.dir, "follower.pids");
     return existsSync(f) ? readFileSync(f, "utf8").split("\n").filter(Boolean).map(Number) : [];
@@ -182,6 +193,36 @@ export class Fixture {
     });
   }
 
+  /** Resolves when no `cpd` call is in flight and none can start from what already ran: calls start in the same macrotask as the work that wants them, so one macrotask boundary with none running is quiet. */
+  async quiet(): Promise<void> {
+    await new Promise((resolve) => setImmediate(resolve));
+    await waitFor("no cpd call in flight", () => this.pi.execsRunning.size === 0);
+  }
+
+  /** Resolves when every fake follower started so far is gone and node has seen it end. */
+  async exited(): Promise<void> {
+    await waitFor("every fake follower to exit", () => this.pids().every((pid) => !alive(pid)), 10_000);
+    await new Promise((resolve) => setImmediate(resolve)); // the `close` event of a child follows its exit
+  }
+
+  private markers = 0;
+
+  /**
+   * Resolves when every Event emitted so far was handled, and the calls it made are done. Events are handled in order, so an Event delivered after
+   * them proves it: `marker` (default a `job-merged`, delivered to a Plan Lead; a Worker needs its own kind) is emitted last, waited for and taken out of
+   * what the pi received, so the test can assert what is left. Replaces waiting a fixed time for something that must not happen.
+   */
+  async drain(marker: (id: number) => unknown = (id) => ev(id, "job-merged")): Promise<void> {
+    const id = 1_000_000 + ++this.markers;
+    this.emit(marker(id));
+    const at = await waitFor(`the marker Event ${id}`, () => {
+      const i = this.pi.sent.findIndex((s) => (s.message.details as any)?.id === id);
+      return i >= 0 ? { i } : undefined;
+    });
+    this.pi.sent.splice(at.i, 1);
+    await this.quiet();
+  }
+
   async close(): Promise<void> {
     // A reload command still running (its `reload()` shuts down and starts the adapter) would start a follower after this shutdown.
     do {
@@ -190,7 +231,7 @@ export class Fixture {
     } while (this.pi.commandsRunning.size > 0);
     try {
       // `session_shutdown` SIGTERMs the followers without waiting, and the fake's handler still writes `killed-<pid>` into the dir: remove it only once every follower is gone.
-      await waitFor("every fake follower to exit", () => this.pids().every((pid) => !alive(pid)), 10_000);
+      await this.exited();
       // A one-shot `cpd` call (for example a poll's `--version`) still running logs `end` into the dir when it finishes.
       await waitFor("every fake cpd call to finish", () => this.pi.execsRunning.size === 0, 10_000);
     } finally {
@@ -199,7 +240,8 @@ export class Fixture {
         else process.env[k] = v;
       }
     }
-    rmSync(this.dir, { recursive: true, force: true });
+    // A throwaway load of a package (`reload.loader`) may still log into the dir as it ends.
+    rmSync(this.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 }
 
@@ -241,6 +283,8 @@ export class FakePi implements PiApi {
   readonly emitted: { channel: string; data: any }[] = [];
   sessionName: string | undefined;
   idle = true;
+  /** How often the adapter asked whether pi is idle: the reload guard does, once per poll tick that reaches it. */
+  idleChecks = 0;
   pendingMessages = false;
   editorText = "";
   /** How many times a command's `ctx.reload()` was called. */
@@ -328,7 +372,7 @@ export class FakePi implements PiApi {
           if (level === "error") this.errorNotices.push(m);
         }, getEditorText: () => this.editorText },
       sessionManager: { getSessionId: () => this.sessionId, getEntries: () => this.entries },
-      isIdle: () => this.idle,
+      isIdle: () => (this.idleChecks++, this.idle),
       hasPendingMessages: () => this.pendingMessages,
     };
   }
@@ -382,9 +426,6 @@ export async function waitFor<T>(what: string, fn: () => T | undefined | null | 
     await sleep(10);
   }
 }
-
-/** Wait long enough for something that must NOT happen. */
-export const settle = (ms = 150) => sleep(ms);
 
 /** `session state` argvs, without the session id, as `idle` or `blocked:<label>`. */
 export const stateCalls = (f: Fixture): string[] =>
