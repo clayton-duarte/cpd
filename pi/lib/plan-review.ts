@@ -30,6 +30,16 @@ export function reviewsFromEntries(entries: readonly unknown[], plan: string): {
   return { reviews, invalid };
 }
 
+/** The `k` of a review id `r<k>` (contract §4.6); `NaN` for any other id, which then compares as neither older nor newer. */
+export const reviewNumber = (review: string): number => (/^r\d+$/.test(review) ? Number(review.slice(1)) : Number.NaN);
+
+/** The highest review id of `reviews`, or undefined when there is none. */
+export function highestReview(reviews: Iterable<string>): string | undefined {
+  let best: string | undefined;
+  for (const r of reviews) if (best === undefined || reviewNumber(r) > reviewNumber(best)) best = r;
+  return best;
+}
+
 /** plannotator's event API has no request that closes a review (`plannotator-events.ts` handles plan-mode, plan-review, review-status, code-review, annotate, annotate-last, archive), so the page stays open. */
 export const ELSEWHERE_NOTE = "This review was decided outside plannotator. plannotator offers no way to close its review page from here, so the page stays open: ignore it or close the tab.";
 
