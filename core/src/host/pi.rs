@@ -104,9 +104,9 @@ impl Launch {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LeadStart {
     /// A new session with its first message.
-    Fresh { model: String, name: String, first_message: String },
+    Fresh { model: String, name: String, first_message: PathBuf },
     /// A fork of `source_file`; a fork by `session fork` without `--message-file` has no first message.
-    Fork { model: String, name: String, source_file: PathBuf, first_message: Option<String> },
+    Fork { model: String, name: String, source_file: PathBuf, first_message: Option<PathBuf> },
     /// The Session's own file again, with no first message.
     Resume { file: PathBuf },
 }
@@ -194,7 +194,7 @@ pub fn lead(launch: &LeadLaunch) -> Launch {
     }
     argv.extend(["--session-id".to_owned(), launch.session.to_string(), "-n".to_owned(), name.clone()]);
     if let Some(message) = message {
-        argv.extend(["--".to_owned(), message.clone()]);
+        argv.extend(["--".to_owned(), format!("@{}", message.display())]);
     }
     Launch { argv, env: lead_env(launch) }
 }
@@ -528,11 +528,11 @@ mod tests {
         let session = SessionId::parse(ID).unwrap();
         let extensions = strs(&["/opt/cpd/pi"]);
         let plannotator = Plannotator { port: Some("19432".into()), remote: Some("1".into()) };
-        let start = LeadStart::Fresh { model: "m/x:high".into(), name: "ctx-manager".into(), first_message: "Hello.".into() };
+        let start = LeadStart::Fresh { model: "m/x:high".into(), name: "ctx-manager".into(), first_message: "/cpd-home/run/ctx/manager-message.md".into() };
         let launch = lead(&LeadLaunch { home: &home, session: &session, plan: None, extensions: &extensions, plannotator: &plannotator, start });
         assert_eq!(
             launch.argv,
-            strs(&["pi", "--model", "m/x:high", "-e", "/opt/cpd/pi", "--session-id", ID, "-n", "ctx-manager", "--", "Hello."])
+            strs(&["pi", "--model", "m/x:high", "-e", "/opt/cpd/pi", "--session-id", ID, "-n", "ctx-manager", "--", "@/cpd-home/run/ctx/manager-message.md"])
         );
         assert_eq!(
             launch.env,
@@ -558,7 +558,7 @@ mod tests {
         let start = LeadStart::Fresh {
             model: "github-copilot/claude-opus-5.5:high".into(),
             name: "cpd rust lead".into(),
-            first_message: "Plan the rewrite.".into(),
+            first_message: "/cpd-home/run/cpd2/lead-message.md".into(),
         };
         let launch = lead_launch(start, &Plannotator::default());
         assert_eq!(
@@ -566,7 +566,7 @@ mod tests {
             strs(&[
                 "pi", "--model", "github-copilot/claude-opus-5.5:high",
                 "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
-                "--session-id", ID, "-n", "cpd rust lead", "--", "Plan the rewrite.",
+                "--session-id", ID, "-n", "cpd rust lead", "--", "@/cpd-home/run/cpd2/lead-message.md",
             ])
         );
         assert_eq!(launch.env, lead_env(&[]));
@@ -590,15 +590,15 @@ mod tests {
             model: "m/x:high".into(),
             name: "pay-4521".into(),
             source_file: "/s/2026_6f1c.jsonl".into(),
-            first_message: first_message.map(str::to_owned),
+            first_message: first_message.map(PathBuf::from),
         };
-        let launch = lead_launch(fork(Some("Hello.")), &Plannotator::default());
+        let launch = lead_launch(fork(Some("/cpd-home/run/cpd2/messages/x.md")), &Plannotator::default());
         assert_eq!(
             launch.argv,
             strs(&[
                 "pi", "--model", "m/x:high",
                 "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
-                "--fork", "/s/2026_6f1c.jsonl", "--session-id", ID, "-n", "pay-4521", "--", "Hello.",
+                "--fork", "/s/2026_6f1c.jsonl", "--session-id", ID, "-n", "pay-4521", "--", "@/cpd-home/run/cpd2/messages/x.md",
             ])
         );
         assert_eq!(launch.env, lead_env(&[]));

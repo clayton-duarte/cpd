@@ -116,10 +116,10 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let s = snapshot(&mut env, &id)?;
     let (plan, jobs, latest_review, fingerprint) = (&s.plan, &s.jobs, s.review.clone(), s.fingerprint.clone());
-    if plan.phase != Phase::Plan {
+    if plan.phase == Phase::Grounding {
         return Err(CpdError::new(
             ErrorCode::IllegalPhase,
-            format!("Plan {id} is in phase {}: a Plan review is requested in phase plan.", plan.phase.as_str()),
+            format!("Plan {id} is in phase {}: a Plan review is requested from phase plan on.", plan.phase.as_str()),
         )
         .with("plan", id.as_str())
         .with("phase", plan.phase.as_str()));
@@ -149,7 +149,7 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
         // Compare-and-swap on what was read: the phase, the plan fingerprint and the latest review.
         let (now, fingerprint_now, latest_now) = (load_head(tx, &id)?, plan_fingerprint(tx, &id)?, latest(tx, &id)?);
         let latest_number = latest_now.map_or(0, |r| r.id.number().get());
-        if now.phase != Phase::Plan || fingerprint_now != fingerprint || latest_number + 1 != number {
+        if now.phase != plan.phase || fingerprint_now != fingerprint || latest_number + 1 != number {
             return Err(CpdError::new(ErrorCode::CasLost, format!("Plan {id} changed while its review was rendered: rerun the command."))
                 .with("plan", id.as_str()));
         }
@@ -175,30 +175,36 @@ pub(super) fn no_draft_jobs(id: &PlanId) -> CpdError {
         .with("plan", id.as_str())
 }
 
-/// `plan decide` (§4.7).
+/// `plan decide` (§4.7). In a phase after `plan`, a current approval also
+/// queues the drafts it covered, in the same transaction.
 pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let status = if args.approve { "approved" } else { "rejected" };
     let feedback = args.feedback_file.as_deref().map(read_text_file).transpose()?;
     let mut env = Env::open()?;
-    let (review, fingerprint) = env.store.read(|conn| {
-        load_head(conn, &id)?;
+    let (phase, review, fingerprint, queued) = env.store.read(|conn| {
+        let phase = load_head(conn, &id)?.phase;
         let review = find(conn, &id, args.review)?.ok_or_else(|| {
             CpdError::new(ErrorCode::ReviewNotFound, format!("Plan {id} has no review {}.", args.review))
                 .with("plan", id.as_str())
                 .with("review", args.review.to_string())
         })?;
-        Ok((review, plan_fingerprint(conn, &id)?))
+        let queued = queued_by(conn, &id, review.id)?;
+        Ok((phase, review, plan_fingerprint(conn, &id)?, queued))
     })?;
-    let current = review.fingerprint == fingerprint;
     if review.status == status {
-        return Ok(decided(&review, current, true));
+        let current = review.fingerprint == fingerprint;
+        return Ok(decided(&review, phase, current, queued.as_deref(), true));
     }
     if review.status != "pending" {
         return Err(review_decided(&id, &review));
     }
 
-    let review = env.store.write("plan decide", |tx| {
+    let (review, phase, current, queued) = env.store.write("plan decide", |tx| {
+        // The phase and the drafts as they are now: an approval queues what it covered only.
+        let phase = load_head(tx, &id)?.phase;
+        let all = jobs::load(tx, &id)?;
+        let current = review.fingerprint == plan_fingerprint(tx, &id)?;
         let changed = tx.execute(
             "UPDATE plan_reviews SET status = ?1, feedback = ?2, decided_at = (SELECT at FROM txns WHERE id = cpd_txn())
               WHERE plan = ?3 AND id = ?4 AND status = 'pending'",
@@ -208,16 +214,56 @@ pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
         if changed == 0 {
             return Err(review_decided(&id, &now));
         }
+        let queues = status == "approved" && current && phase != Phase::Plan;
+        let mut queued: Vec<String> = Vec::new();
+        if queues {
+            for job in all.iter().filter(|j| j.is_draft()) {
+                tx.execute(
+                    "UPDATE jobs SET status = 'queued', fingerprint = ?1 WHERE plan = ?2 AND key = ?3 AND status = 'draft'",
+                    [jobs::locked_fingerprint(job).as_str(), id.as_str(), job.key.as_str()],
+                )?;
+                queued.push(job.key.clone());
+            }
+            queued.sort();
+        }
         let verdict = status.to_uppercase();
-        let text = match status {
-            "approved" => format!("Plan review {} of Plan {id} was {verdict}. Next: cpd plan lock", review.id),
+        let text = match (status, phase) {
+            ("approved", Phase::Plan) => format!("Plan review {} of Plan {id} was {verdict}. Next: cpd plan lock", review.id),
+            ("approved", _) if queues => format!(
+                "Plan review {} of Plan {id} was {verdict}: the draft Jobs {} are queued for the engine; no lock is needed. Next: cpd plan show --plan {id}",
+                review.id,
+                queued.join(", ")
+            ),
+            ("approved", _) => format!(
+                "Plan review {} of Plan {id} was {verdict}, but the draft Jobs changed since it was requested: nothing is queued. Next: cpd plan review --plan {id}",
+                review.id
+            ),
             _ => format!("Plan review {} of Plan {id} was {verdict}. Revise the plan (job edit, job add, job cancel), then cpd plan review", review.id),
         };
-        let data = json!({"review": review.id, "fingerprint": review.fingerprint, "status": status, "feedback": feedback});
+        let mut data = json!({"review": review.id, "fingerprint": review.fingerprint, "status": status, "feedback": feedback});
+        if queues {
+            data["jobs"] = json!(queued);
+        }
         append(tx, NewEvent::new(Kind::PlanReview, text, data).plan(id.clone()))?;
-        Ok(now)
+        Ok((now, phase, current, queues.then_some(queued)))
     })?;
-    Ok(decided(&review, current, false))
+    Ok(decided(&review, phase, current, queued.as_deref(), false))
+}
+
+/// The Jobs an approval of `review` queued (its decision Event's `data.jobs`),
+/// if it queued any: what a rerun of `plan decide` reports again.
+fn queued_by(conn: &Connection, plan: &PlanId, review: ReviewId) -> Result<Option<Vec<String>>, CpdError> {
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT json_extract(data, '$.jobs') FROM events
+              WHERE kind = 'plan-review' AND plan = ?1 AND json_extract(data, '$.review') = ?2
+                AND json_extract(data, '$.status') = 'approved' AND json_type(data, '$.jobs') = 'array'
+              ORDER BY id DESC LIMIT 1",
+            [plan.as_str(), &review.to_string()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    raw.map(|text| serde_json::from_str(&text).map_err(|e| super::bad_row(format!("plan-review Event of {plan}/{review}: {e}")))).transpose()
 }
 
 fn review_decided(id: &PlanId, review: &Review) -> CpdError {
@@ -227,16 +273,28 @@ fn review_decided(id: &PlanId, review: &Review) -> CpdError {
         .with("status", review.status.clone())
 }
 
-/// `plan decide`'s output: `next` is `cpd plan lock` only when the review is
-/// approved and current.
-fn decided(review: &Review, current: bool, already: bool) -> Output {
-    let next = if review.status == "approved" && current { json!("cpd plan lock") } else { Value::Null };
+/// `plan decide`'s output (§4.7): in phase `plan`, `next` is `cpd plan lock`
+/// only when the review is approved and current. In a later phase, an
+/// approval that queued the drafts lists them in `jobs` and has no `next`;
+/// one that did not (the drafts changed since) asks for a new review.
+fn decided(review: &Review, phase: Phase, current: bool, queued: Option<&[String]>, already: bool) -> Output {
+    let approved = review.status == "approved";
+    let next = match (phase, queued) {
+        (_, Some(_)) => Value::Null,
+        (Phase::Plan, None) if approved && current => json!("cpd plan lock"),
+        (Phase::Plan | Phase::Grounding, None) => Value::Null,
+        (_, None) if approved => json!("cpd plan review"),
+        (_, None) => Value::Null,
+    };
     let mut out = json!({
         "review": {"id": review.id, "status": review.status, "fingerprint": review.fingerprint,
                    "feedback": review.feedback, "decided_at": review.decided_at},
         "current": current,
         "next": next,
     });
+    if let Some(jobs) = queued {
+        out["jobs"] = json!(jobs);
+    }
     if already {
         out["already"] = json!(true);
     }

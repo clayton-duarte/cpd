@@ -233,20 +233,36 @@ pub fn end(tx: &WriteTxn<'_>, target: &Target, end: &End, metrics: Option<&Value
     Ok(())
 }
 
-/// The ladder (§3.2, §9), as the merge applies it: the next Tier when `cause`
-/// is a ladder cause, the ladder has a next Tier, and the automatic Attempts
-/// since the last `job retry` (that one included) are fewer than `1 + retry_cap`.
+/// The automatic Attempts of Job `job` since the last `job retry` (that one
+/// included), for `retry_cap` (§9). An ended Attempt whose driver never started
+/// (`driver_pid` null, §3.4) is not one: it does not use up a try.
+pub(crate) fn automatic_attempts(tx: &WriteTxn<'_>, plan: &str, job: &str) -> Result<i64, CpdError> {
+    Ok(tx.query_row(
+        "SELECT count(*) FROM attempts WHERE plan = ?1 AND job = ?2
+           AND number >= coalesce((SELECT max(number) FROM attempts WHERE plan = ?1 AND job = ?2 AND origin = 'retry'), 1)
+           AND NOT (status = 'ended' AND driver_pid IS NULL)",
+        params![plan, job],
+        |r| r.get(0),
+    )?)
+}
+
+/// The ladder (§3.2, §9): when `cause` is a ladder cause, the next Tier if the
+/// ladder has one and the automatic Attempts since the last `job retry` are
+/// fewer than `1 + retry_cap`. An Attempt whose driver never started
+/// (`driver_pid` null, §3.4) does not raise the Tier: its own Tier again.
 fn next_tier(tx: &WriteTxn<'_>, target: &Target, cause: Cause, ladder: &Ladder<'_>) -> Result<Option<Tier>, CpdError> {
     if !cause.is_ladder() {
         return Ok(None);
     }
-    let run: i64 = tx.query_row(
-        "SELECT count(*) FROM attempts WHERE plan = ?1 AND job = ?2
-           AND number >= coalesce((SELECT max(number) FROM attempts WHERE plan = ?1 AND job = ?2 AND origin = 'retry'), 1)",
-        params![target.plan.as_str(), target.job.as_str()],
+    let never_started: bool = tx.query_row(
+        "SELECT driver_pid IS NULL FROM attempts WHERE plan = ?1 AND id = ?2",
+        params![target.plan.as_str(), target.id.to_string()],
         |r| r.get(0),
     )?;
-    if run >= 1 + i64::from(ladder.retry_cap) {
+    if never_started {
+        return Ok(Some(target.tier));
+    }
+    if automatic_attempts(tx, target.plan.as_str(), target.job.as_str())? >= 1 + i64::from(ladder.retry_cap) {
         return Ok(None);
     }
     ladder.catalog.next(target.tier)

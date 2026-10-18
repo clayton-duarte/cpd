@@ -22,7 +22,7 @@ use crate::output::{Output, to_line};
 use crate::store::{Store, VERSION};
 
 pub use append::{NewEvent, append};
-pub use kind::{Kind, Set, Spec};
+pub use kind::{Kind, PROTOCOL, Set, Spec};
 pub use select::{Event, Selection, highest_id};
 
 /// How many Events one query reads, and `follow`'s batch (§5.4).

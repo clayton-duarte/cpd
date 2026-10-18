@@ -185,3 +185,11 @@ test("cpd-lead: no local review before pr open, and the overlaps are settled bef
   assert.ok(approving.indexOf("## Overlaps") < approving.indexOf("Call `cpd_plan_review`"), "overlaps are settled before the review is called");
   assert.match(approving, /cpd context note/);
 });
+
+test("the skill adds later batches as drafts and approves each with cpd_plan_review in any phase", () => {
+  const text = skillFiles("cpd-lead")[0]!.text;
+  assert.match(text, /--pr <key> --draft/, "later batches are added with job add --draft");
+  assert.match(text, /### Starting a later batch[\s\S]*cpd_plan_review[\s\S]*### Appending fixes/, "a later batch starts with a Plan review");
+  assert.doesNotMatch(text, /no Plan review for appended work/, "the append-in-chat flow is gone");
+  assert.ok(synopses().get("job add")!.has("--draft"), "commands.md documents job add --draft");
+});

@@ -4,7 +4,8 @@
 
 mod common;
 
-use std::time::{Duration, Instant};
+use std::sync::Mutex;
+use std::time::Instant;
 
 use common::TestEnv;
 use cpd_core::config::Tier;
@@ -893,30 +894,77 @@ fn populate_many(store: &mut Store) {
     sql(store, &s);
 }
 
+/// Collects the SQL text of every statement the connection starts, through `sqlite3_trace_v2` (`rusqlite::ffi`,
+/// no feature beyond `bundled` and `functions`).
+unsafe extern "C" fn record_statement(
+    _mask: std::ffi::c_uint,
+    log: *mut std::ffi::c_void,
+    _stmt: *mut std::ffi::c_void,
+    sql: *mut std::ffi::c_void,
+) -> std::ffi::c_int {
+    // SAFETY: `log` is the leaked `Mutex` of `statements_run`; for `SQLITE_TRACE_STMT` the fourth argument is the statement's SQL text.
+    let (log, sql) = unsafe { (&*log.cast::<Mutex<Vec<String>>>(), std::ffi::CStr::from_ptr(sql.cast())) };
+    log.lock().unwrap().push(sql.to_string_lossy().into_owned());
+    0
+}
+
+fn trace(store: &mut Store, mask: std::ffi::c_uint, log: &'static Mutex<Vec<String>>) {
+    let ctx = std::ptr::from_ref(log).cast_mut().cast();
+    // SAFETY: `store`'s connection is open for the call; `ctx` is leaked, so it outlives any statement.
+    let rc = store.read(|c| Ok(unsafe { rusqlite::ffi::sqlite3_trace_v2(c.handle(), mask, Some(record_statement), ctx) })).unwrap();
+    assert_eq!(rc, rusqlite::ffi::SQLITE_OK);
+}
+
+/// The statements `f` runs on the store's connection, in order, `BEGIN` and `COMMIT` of each read included.
+fn statements_run(store: &mut Store, f: impl FnOnce(&mut Store)) -> Vec<String> {
+    let log: &'static Mutex<Vec<String>> = Box::leak(Box::default());
+    trace(store, rusqlite::ffi::SQLITE_TRACE_STMT, log);
+    log.lock().unwrap().clear();
+    f(store);
+    let run = std::mem::take(&mut *log.lock().unwrap());
+    trace(store, 0, log);
+    run
+}
+
+/// §17: each read runs a fixed number of queries whatever the size of the Ledger. Counts the statements of each
+/// read on the small fixture and on the large store (a wall-clock bound measures the machine's load as much as the work).
 #[test]
-fn every_read_takes_a_few_milliseconds_on_a_large_store() {
+fn every_read_runs_the_same_statements_on_a_large_store_as_on_a_small_one() {
     let (_env, mut store) = fixture();
-    populate_many(&mut store);
-    let events: i64 = last_event(&mut store);
-    assert!(events > 1600);
-    // Warm up, then take the best of several runs: a bound on the work, not on a noisy neighbour.
-    every_read(&mut store);
-    let best = |name: &str, mut f: Box<dyn FnMut()>| {
-        let fastest = (0..7)
-            .map(|_| {
+    // The Plans and the Attempt of the small fixture, then of the large store: same reads, ten times the rows.
+    let reads: [(&str, &dyn Fn(&mut Store, bool)); 5] = [
+        ("tree", &|s, _| drop(read::tree(s).unwrap())),
+        ("flow", &|s, large| drop(read::flow(s, &plan(if large { "p3x3" } else { "ship" })).unwrap())),
+        ("chat_slot", &|s, _| drop(read::chat_slot(s).unwrap())),
+        ("widgets", &|s, _| drop(read::widgets(s, 3, 20).unwrap())),
+        (
+            "worker",
+            &|s, large| {
+                let (p, a) = if large { ("p3x3", "j2-a1") } else { ("ship", "c-a2") };
+                drop(read::worker(s, &plan(p), &attempt(a)).unwrap());
+            },
+        ),
+    ];
+    let run_all = |store: &mut Store, large: bool| -> Vec<Vec<String>> {
+        reads
+            .iter()
+            .map(|(name, read)| {
                 let start = Instant::now();
-                f();
-                start.elapsed()
+                let run = statements_run(store, |s| read(s, large));
+                eprintln!("{name}: {:?} (information only; large: {large})", start.elapsed());
+                run
             })
-            .min()
-            .unwrap();
-        assert!(fastest < Duration::from_millis(20), "{name} took {fastest:?}");
-        eprintln!("{name}: {fastest:?}");
+            .collect()
     };
-    let store = std::cell::RefCell::new(store);
-    best("tree", Box::new(|| drop(read::tree(&mut store.borrow_mut()).unwrap())));
-    best("flow", Box::new(|| drop(read::flow(&mut store.borrow_mut(), &plan("p3x3")).unwrap())));
-    best("chat_slot", Box::new(|| drop(read::chat_slot(&mut store.borrow_mut()).unwrap())));
-    best("widgets", Box::new(|| drop(read::widgets(&mut store.borrow_mut(), 3, 20).unwrap())));
-    best("worker", Box::new(|| drop(read::worker(&mut store.borrow_mut(), &plan("p3x3"), &attempt("j2-a1")).unwrap())));
+    let small = run_all(&mut store, false);
+
+    populate_many(&mut store);
+    assert!(last_event(&mut store) > 1600);
+    let large = run_all(&mut store, true);
+
+    for (((name, _), small), large) in reads.iter().zip(&small).zip(&large) {
+        eprintln!("{name}: {} statements", small.len());
+        assert!(small.len() > 2, "{name} ran no query: {small:#?}");
+        assert_eq!(small.len(), large.len(), "{name} runs a number of statements that grows with the store:\nsmall: {small:#?}\nlarge: {large:#?}");
+    }
 }

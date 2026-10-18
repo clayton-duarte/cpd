@@ -148,8 +148,13 @@ fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     Ok(())
 }
 
-/// A draft Job `key` of `plan` needing `needs`, written as `job add` would.
+/// A draft Job `key` of `plan` needing `needs`, written as `job add` would in phase `plan`.
 fn add_job(env: &TestEnv, plan: &str, key: &str, needs: &[&str]) {
+    add_draft(env, plan, key, needs, false);
+}
+
+/// A draft Job `key` of `plan` needing `needs`, `appended` as `job add --draft` writes it after the lock.
+fn add_draft(env: &TestEnv, plan: &str, key: &str, needs: &[&str], appended: bool) {
     store(env)
         .write("fixture", |tx| {
             exec(
@@ -158,7 +163,8 @@ fn add_job(env: &TestEnv, plan: &str, key: &str, needs: &[&str]) {
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, created_txn, created_at)
                      VALUES ('{plan}', (SELECT key FROM prs WHERE plan = '{plan}'), '{key}', 'Job {key}', 'S2', 'Goal of {key}.', 'Context of {key}.', '[\"src/{key}.rs\"]',
-                             '[\"cargo test\"]', '[]', 'draft', 0, {id}, 't');",
+                             '[\"cargo test\"]', '[]', 'draft', {appended}, {id}, 't');",
+                    appended = i32::from(appended),
                     id = tx.id()
                 ),
             )?;
@@ -798,6 +804,98 @@ fn decide_records_the_decision_once() {
     edit_goal(&env, "pay", "a", "Changed.");
     let again = env.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
     assert_eq!((&again["already"], &again["current"], &again["next"]), (&json!(true), &json!(false), &Value::Null));
+}
+
+// ---------- a review of the drafts in a phase after plan (hs-d173, hs-d174, hs-d179) ----------
+
+/// The Locked-Job fingerprint of a Job written by `add_job` (contract §2.3).
+fn locked_fingerprint_of(key: &str, needs: &[&str]) -> String {
+    let needs: Vec<String> = needs.iter().map(|n| format!("\"{n}\"")).collect();
+    sha256(&format!(
+        "{{\"acceptance\":[\"cargo test\"],\"context\":\"Context of {key}.\",\"goal\":\"Goal of {key}.\",\"needs\":[{}],\"out_of_scope\":[],\"tier\":\"S2\",\"touches\":[\"src/{key}.rs\"]}}",
+        needs.join(",")
+    ))
+}
+
+fn job_status(env: &TestEnv, key: &str) -> String {
+    query(env, &format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
+}
+
+#[test]
+fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_them() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    approved(&env, &repo);
+    env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+    // Locked, every Job queued: there is nothing to review.
+    refused(&env.cpd(&["plan", "review", "--plan", "pay"]), "no_draft_jobs", 3);
+
+    add_draft(&env, "pay", "c", &["a"], true);
+    add_draft(&env, "pay", "d", &["c"], true);
+    let out = env.cpd(&["plan", "review", "--plan", "pay"]).ok();
+    let spec = |key: &str, needs: &str| {
+        format!(
+            "{{\"acceptance\":[\"cargo test\"],\"context\":\"Context of {key}.\",\"goal\":\"Goal of {key}.\",\"key\":\"{key}\",\"needs\":[{needs}],\"out_of_scope\":[],\"pr\":\"pay\",\"tier\":\"S2\",\"title\":\"Job {key}\",\"touches\":[\"src/{key}.rs\"]}}"
+        )
+    };
+    // The fingerprint covers exactly the drafts, and no PR.
+    let fingerprint = sha256(&format!("{{\"jobs\":[{},{}],\"prs\":[]}}", spec("c", "\"a\""), spec("d", "\"c\"")));
+    assert_eq!((&out["review"]["id"], &out["review"]["status"], &out["review"]["fingerprint"]), (&json!("r2"), &json!("pending"), &json!(fingerprint)));
+    assert_eq!(events(&env, "plan-review").last().unwrap()["data"], json!({"review": "r2", "fingerprint": fingerprint, "status": "pending"}));
+
+    // The render marks the drafts under review, and the Locked Jobs as context.
+    let text = fs::read_to_string(out["path"].as_str().unwrap()).unwrap();
+    assert!(text.contains("| Key | Title | Tier | Status | Needs | Touches | Review |"), "{text}");
+    assert!(text.contains("| `c` | Job c | S2 | draft | `a` | `src/c.rs` | **under review** |"), "{text}");
+    assert!(text.contains("| `a` | Job a | S2 | queued | none | `src/a.rs` | Locked |"), "{text}");
+    assert!(text.contains("\nStatus: `draft` · **under review** · Tier: `S2` · Needs: `c`\n"), "{text}");
+    assert!(text.contains("\nStatus: `queued` · Locked · Tier: `S2` · Needs: `a`\n"), "{text}");
+    assert_eq!(env.cpd(&["plan", "render", "--plan", "pay"]).ok()["draft_jobs"], 2);
+
+    // A PR appended after the lock is not reviewed: the review stays current.
+    let web = env.git_repo("web");
+    env.cpd(&["pr", "add", "web", "--repo", web.to_str().unwrap(), "--base", "main", "--plan", "pay"]).ok();
+    assert_eq!(show(&env, "pay")["review"]["current"], true);
+
+    // Rejected: the drafts stay drafts, editable.
+    let out = env.cpd(&["plan", "decide", "r2", "--reject", "--plan", "pay"]).ok();
+    assert!(out.get("jobs").is_none(), "{out}");
+    assert!(events(&env, "plan-review").last().unwrap()["data"].get("jobs").is_none());
+    assert_eq!((job_status(&env, "c"), job_status(&env, "d")), ("draft".into(), "draft".into()));
+    edit_goal(&env, "pay", "d", "Goal of d.");
+
+    // Approved and current: in one transaction exactly the drafts are queued with their fingerprints.
+    let phase_events = events(&env, "plan-phase").len();
+    env.cpd(&["plan", "review", "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "decide", "r3", "--approve", "--plan", "pay"]).ok();
+    assert_eq!((&out["review"]["status"], &out["current"], &out["next"], &out["jobs"]), (&json!("approved"), &json!(true), &Value::Null, &json!(["c", "d"])));
+    let decided = events(&env, "plan-review").last().unwrap().clone();
+    assert_eq!(decided["data"], json!({"review": "r3", "fingerprint": fingerprint, "status": "approved", "feedback": null, "jobs": ["c", "d"]}));
+    assert!(decided["text"].as_str().unwrap().contains("no lock is needed"), "{decided}");
+    let shown = show(&env, "pay");
+    assert_eq!(shown["plan"]["phase"], "dispatch");
+    assert_eq!(events(&env, "plan-phase").len(), phase_events, "the phase does not change");
+    for (key, needs) in [("c", &["a"]), ("d", &["c"])] {
+        let job = shown["jobs"].as_array().unwrap().iter().find(|j| j["key"] == key).unwrap();
+        assert_eq!((&job["status"], &job["appended"]), (&json!("queued"), &json!(true)), "{key}");
+        assert_eq!(job["fingerprint"], locked_fingerprint_of(key, needs), "{key}");
+    }
+    // The tamper check holds for them: the fingerprints match what the engine recomputes.
+    assert_eq!(shown["tamper"], json!([]));
+    // Idempotent: a rerun reports the same Jobs and writes nothing.
+    let again = env.cpd(&["plan", "decide", "r3", "--approve", "--plan", "pay"]).ok();
+    assert_eq!((&again["already"], &again["jobs"], &again["next"]), (&json!(true), &json!(["c", "d"]), &Value::Null));
+    assert_eq!(events(&env, "plan-review").len(), 6, "r1 and r2 requested and decided, r3 requested and approved once");
+
+    // A stale approval queues nothing and asks for a new review.
+    add_draft(&env, "pay", "e", &[], true);
+    env.cpd(&["plan", "review", "--plan", "pay"]).ok();
+    edit_goal(&env, "pay", "e", "Changed.");
+    let out = env.cpd(&["plan", "decide", "r4", "--approve", "--plan", "pay"]).ok();
+    assert_eq!((&out["current"], &out["next"]), (&json!(false), &json!("cpd plan review")));
+    assert!(out.get("jobs").is_none(), "{out}");
+    assert!(events(&env, "plan-review").last().unwrap()["data"].get("jobs").is_none());
+    assert_eq!(job_status(&env, "e"), "draft");
 }
 
 // ---------- plan lock ----------

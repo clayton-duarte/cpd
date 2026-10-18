@@ -358,12 +358,15 @@ pub(super) fn close(args: CloseArgs) -> Result<Output, CpdError> {
 }
 
 /// The message files a Lead's `session run` reads (commands.md §1.4).
-pub(super) fn first_message(home: &CpdHome, row: &Row) -> Result<Option<String>, CpdError> {
+pub(super) fn first_message(home: &CpdHome, row: &Row) -> Result<Option<PathBuf>, CpdError> {
     let Some(plan) = &row.plan else {
         // A Context's Manager: `context manager` wrote its first message (commands.md §3.10).
         if row.role == Role::Manager {
             let path = home.manager_message(&row.context);
-            return std::fs::read_to_string(&path).map(Some).map_err(|e| unreadable(&path, e));
+            return match std::fs::File::open(&path) {
+                Ok(_) => Ok(Some(path)),
+                Err(e) => Err(unreadable(&path, e)),
+            };
         }
         return Ok(None);
     };
@@ -375,7 +378,11 @@ pub(super) fn first_message(home: &CpdHome, row: &Row) -> Result<Option<String>,
     } else {
         None
     };
-    path.map(|p| std::fs::read_to_string(&p).map_err(|e| unreadable(&p, e))).transpose()
+    path.map(|p| match std::fs::File::open(&p) {
+        Ok(_) => Ok(p),
+        Err(e) => Err(unreadable(&p, e)),
+    })
+    .transpose()
 }
 
 #[cfg(test)]

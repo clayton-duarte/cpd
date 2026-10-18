@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { adapter, type Options } from "../lib/adapter.ts";
+import { PROTOCOL } from "../lib/event.ts";
 import type { CommandCtx, Ctx, Message, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
 
 /** A fake `cpd` on PATH and a fake pi, so the adapter is tested through its real boundaries (child processes, pi's API). */
@@ -93,7 +94,17 @@ export class Fixture {
     this.pi = new FakePi();
     this.respond("session-show", sessionShow());
     this.respond("context-pending", { ok: true, context: "ctx", plans: [] }); // a Manager reads it at every turn start (§15.7)
+    this.respond("--version", { ok: true, version: "0.0.0", schema: 6, store_schema: 6, protocol: PROTOCOL });
   }
+
+  /** A new install of the fake `cpd`: the same program in a file of another size and mtime. */
+  reinstall(): void {
+    const file = join(this.dir, "bin", "cpd");
+    appendFileSync(file, `// install ${++this.installs}\n`);
+    const later = new Date(Date.now() + 1000 * this.installs);
+    utimesSync(file, later, later);
+  }
+  private installs = 0;
 
   /** What `cpd <a> <b>` prints (an object, or a raw string) and exits with. Key `<a>-<b>`; `<a>-<b>-<c>` answers `cpd <a> <b> <c>` first; `<a>-<b>@<kind>` answers a call whose first `--kind` is `<kind>`, before both. */
   respond(key: string, stdout: unknown, extra: { exit?: number; delay?: number } = {}): void {
@@ -127,7 +138,12 @@ export class Fixture {
 
   /** argv of the calls that started, in order, without `events follow`. */
   argvs(): string[][] {
-    return this.calls().filter((c) => c.phase === "start" && c.argv[0] !== "events").map((c) => c.argv);
+    return this.calls().filter((c) => c.phase === "start" && c.argv[0] !== "events" && c.argv[0] !== "--version").map((c) => c.argv);
+  }
+
+  /** How often the adapter ran `cpd --version`. */
+  versions(): number {
+    return this.calls().filter((c) => c.phase === "start" && c.argv[0] === "--version").length;
   }
 
   follows(): Call[] {
