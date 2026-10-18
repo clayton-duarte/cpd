@@ -184,6 +184,7 @@ pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
     let id = env.resolve(&reference)?;
     let read = env.store.read(|conn| row::load(conn, &id))?;
     if read.name == name {
+        row::retitle(&id)?;
         return Ok(Output::success(json!({"session": id, "name": name, "already": true})));
     }
     env.store.write("session rename", |tx| {
@@ -192,6 +193,7 @@ pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
         append(tx, scoped(NewEvent::new(Kind::SessionRenamed, text, json!({"name": name})), &read))?;
         Ok(())
     })?;
+    row::retitle(&id)?;
     Ok(Output::success(json!({"session": id, "name": name})))
 }
 
