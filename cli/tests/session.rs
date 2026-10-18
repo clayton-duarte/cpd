@@ -1184,6 +1184,7 @@ impl Drop for Engine {
 }
 
 fn engine(env: &TestEnv) -> Engine {
+    env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
     let path = env.cpd_home().join("config.toml");
     let config = fs::read_to_string(&path).unwrap();
     fs::write(&path, format!("{config}[watch]\ntick_seconds = 1\n")).unwrap();
