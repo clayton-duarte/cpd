@@ -533,18 +533,12 @@ fn a_fork_with_a_message_file_over_128_kib_starts_pi_with_the_copied_file() {
     fake_cpd(&env);
     fake_pi(&env, &copy_last_file());
     cockpit(&env);
-    let sessions = env.home().join(".pi/agent/sessions/g");
-    fs::create_dir_all(&sessions).unwrap();
-    fs::write(
-        sessions.join("2026_grounded.jsonl"),
-        "{\"type\":\"session\"}\n{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}\n",
-    )
-    .unwrap();
+    pi_file(&env, LEAD2, true);
     let message = big_message();
     let file = env.root().join("message.md");
     fs::write(&file, &message).unwrap();
 
-    let out = env.cpd(&["session", "fork", GROUNDED, "--plan", "pay", "--message-file", file.to_str().unwrap()]).ok();
+    let out = env.cpd(&["session", "fork", LEAD2, "--plan", "pay", "--message-file", file.to_str().unwrap()]).ok();
     let new = out["session"]["id"].as_str().unwrap().to_owned();
     let copied = home(&env).session_message(&PlanId::parse("pay").unwrap(), &sid(&new));
     wait_until("the fork", || !pi_calls_with(&env, "--fork").is_empty());
@@ -636,14 +630,15 @@ fn open_and_park_take_a_context_s_manager_and_park_it_in_its_context_window() {
     // `context manager` wrote its first message.
     let message = home(&env).manager_message(&cpd_core::ids::ContextId::parse("ctx").unwrap());
     fs::create_dir_all(message.parent().unwrap()).unwrap();
-    fs::write(message, "You are the Manager.").unwrap();
+    fs::write(&message, "You are the Manager.").unwrap();
 
     // A stopped Manager with no pane is resumed in a new window and swapped in.
     let out = env.cpd(&["session", "open", MANAGER]).ok();
     assert_eq!(out["displaced"], Value::Null);
     assert_eq!(slot(&env).session, MANAGER);
     assert_placeholders(&env, 0);
-    wait_until("the Manager's pi", || env.calls("pi").iter().any(|c| c.contains(&"You are the Manager.".to_owned())));
+    let arg = format!("@{}", message.display());
+    wait_until("the Manager's pi", || env.calls("pi").iter().any(|c| c.contains(&arg)));
     assert_eq!(show(&env, MANAGER)["place"], "chat");
 
     // A Lead displaces it into `ctx-<context>`.

@@ -197,10 +197,12 @@ fn the_first_call_registers_the_manager_and_starts_pi_in_its_window() {
     assert!(argv[at("--model") + 1].ends_with(":max"), "O5's level: {argv:?}");
     assert_eq!(argv[at("--session-id") + 1], id);
     assert_eq!(argv[at("-n") + 1], "ctx-manager");
-    let first = &argv[at("--") + 1];
+    // The first message goes as its file, `@<path>` (hs-n111), as a Lead's does.
+    let path = env.cpd_home().join("run/ctx/manager-message.md");
+    assert_eq!(argv[at("--") + 1..], [format!("@{}", path.display())], "the file pi was given");
+    let first = fs::read_to_string(&path).unwrap();
     assert!(first.starts_with("You are the Manager of Context ctx \"Payments\". Follow the cpd-manager skill.\n\n"), "{first}");
     assert!(first.contains("Mind the ledger."), "every record: {first}");
-    assert_eq!(fs::read_to_string(env.cpd_home().join("run/ctx/manager-message.md")).unwrap(), format!("{first}"), "the file pi was given");
 
     // The chat slot did not move (hs-d103).
     assert_eq!(slot(&env), placeholder);

@@ -1024,7 +1024,7 @@ fn job_add_draft(env: &TestEnv, plan_id: &str, key: &str, needs: &[&str], extra:
 
 #[test]
 fn add_draft_after_the_lock_is_an_appended_draft_that_stays_editable_and_cancellable() {
-    for phase in ["dispatch", "pr"] {
+    for phase in ["dispatch", "deploy"] {
         let env = TestEnv::new();
         setup(&env);
         plan(&env, "pl", phase);
