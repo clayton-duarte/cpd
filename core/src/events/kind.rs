@@ -125,7 +125,7 @@ impl Kind {
             ContextGrounded => spec([Y, N, N, N, Y], &["seq", "forked_from"], &[]),
             PlanCreated => spec([Y, Y, N, N, N], &["title", "jira", "lead_session", "forked_from", "cwd"], &[]),
             PlanPhase => spec([Y, Y, N, N, N], &["from", "to"], &["jobs", "pr", "prs"]),
-            PlanReview => spec([Y, Y, N, N, N], &["review", "fingerprint", "status"], &["feedback"]),
+            PlanReview => spec([Y, Y, N, N, N], &["review", "fingerprint", "status"], &["feedback", "jobs"]),
             PlanDone => spec([Y, Y, N, N, N], &["prs"], &[]),
             JobAdded => spec([Y, Y, Y, N, N], &["pr", "status", "appended", "tier", "needs", "review"], &[]),
             JobEdited => spec([Y, Y, Y, N, N], &["fields"], &[]),
