@@ -1,20 +1,32 @@
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync, utimesSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
-import { refusal, RELOAD_COMMAND, type Guard } from "../lib/reload.ts";
+import { type Options } from "../lib/adapter.ts";
+import { pollAdapter, refusal, RELOAD_COMMAND, type Guard } from "../lib/reload.ts";
 import { Fixture, planShow, settle, waitFor } from "./fake.ts";
 
+const GOOD = "export default function (pi: unknown): void {}\n";
+
 let installs = 0;
-/** What `scripts/install-cpd.sh` does to the adapter directory: replaced as a whole (new mtime even if the inode is reused). */
-const install = (f: Fixture) => {
+/** A new mtime, as a new install has (even if the inode is reused). */
+const touch = (dir: string) => {
+  const t = new Date(Date.UTC(2030, 0, 1) + ++installs * 1000);
+  utimesSync(dir, t, t);
+};
+/** What `scripts/install-cpd.sh` does to the adapter directory: replaced as a whole, here with `files` (default: a package that loads). */
+const install = (f: Fixture, files: Record<string, string> = { "extension.ts": GOOD, "package.json": "{}" }) => {
   rmSync(f.adapterDir, { recursive: true });
   mkdirSync(f.adapterDir);
-  const t = new Date(Date.UTC(2030, 0, 1) + ++installs * 1000);
-  utimesSync(f.adapterDir, t, t);
+  for (const [name, content] of Object.entries(files)) writeFileSync(join(f.adapterDir, name), content);
+  touch(f.adapterDir);
 };
 
+const noticeFor = (reason: string) => `cpd: adapter update not loaded: ${reason}`;
+
 /** A started adapter whose `ctx.reload()` behaves like pi's: shutdown, then start of the new load. */
-async function started(t: { after(fn: () => Promise<void>): void }): Promise<Fixture> {
+async function started(t: { after(fn: () => Promise<void>): void }, options: Options = {}): Promise<Fixture> {
   const f = new Fixture();
   t.after(() => f.close());
   f.respond("plan-show", planShow());
@@ -22,7 +34,7 @@ async function started(t: { after(fn: () => Promise<void>): void }): Promise<Fix
     await f.pi.fire("session_shutdown", { reason: "reload" });
     await f.pi.fire("session_start", { reason: "reload" });
   };
-  f.load();
+  f.load(options);
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
   return f;
@@ -59,7 +71,9 @@ test("ENOENT is the install in progress, not a change", async (t) => {
   await settle(200);
   assert.deepEqual(f.pi.userMessages, []);
   mkdirSync(f.adapterDir);
-  utimesSync(f.adapterDir, new Date(Date.UTC(2031, 0, 1)), new Date(Date.UTC(2031, 0, 1)));
+  writeFileSync(join(f.adapterDir, "extension.ts"), GOOD);
+  writeFileSync(join(f.adapterDir, "package.json"), "{}");
+  touch(f.adapterDir);
   await waitFor("the trigger", () => f.pi.userMessages.length > 0);
 });
 
@@ -118,4 +132,94 @@ test("the poll stops at session_shutdown", async (t) => {
   install(f);
   await settle(200);
   assert.deepEqual(f.pi.userMessages, []);
+});
+
+// ---- pre-validation (commands.md §15.6) ----
+
+test("a directory that changes between two polls is not validated or reloaded until the identity repeats", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const dir = mkdtempSync(join(tmpdir(), "pi-poll-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const calls: string[] = [];
+  const poll = pollAdapter({
+    dir,
+    intervalMs: 10,
+    validate: async () => void calls.push("validate"),
+    allowed: () => true,
+    trigger: () => void calls.push("trigger"),
+    onRefused: () => void calls.push("refused"),
+    onError: (e) => void calls.push(`error ${e}`),
+  });
+  t.after(() => poll.stop());
+  const tick = async () => {
+    t.mock.timers.tick(10);
+    await settle(0);
+  };
+  touch(dir);
+  await tick(); // a new identity: remembered
+  touch(dir);
+  await tick(); // another one: still not the same twice
+  touch(dir);
+  await tick();
+  assert.deepEqual(calls, []);
+  await tick(); // the same identity on two consecutive polls
+  assert.deepEqual(calls, ["validate", "trigger"]);
+  rmSync(dir, { recursive: true });
+  await tick(); // ENOENT forgets what was seen
+  mkdirSync(dir);
+  touch(dir);
+  poll.retry();
+  await tick();
+  assert.deepEqual(calls, ["validate", "trigger"], "the identity seen before the ENOENT does not count");
+});
+
+const refused: [string, Record<string, string>, string][] = [
+  ["extension.ts is missing", { "package.json": "{}" }, "entry files missing"],
+  ["package.json is missing", { "extension.ts": GOOD }, "entry files missing"],
+  ["extension.ts throws when loaded", { "extension.ts": 'throw new Error("boom");\n', "package.json": "{}" }, "boom"],
+  ["extension.ts has no default export function", { "extension.ts": "export default 3;\n", "package.json": "{}" }, "the default export of extension.ts is not a function"],
+];
+
+for (const [name, files, reason] of refused) {
+  test(`no reload while ${name}: one visible error, retried at a later poll`, async (t) => {
+    const f = await started(t);
+    install(f, files);
+    await waitFor("the error", () => f.pi.errorNotices.length > 0);
+    await settle(400); // many polls
+    assert.deepEqual(f.pi.errorNotices, [noticeFor(reason)], "once, not once per poll");
+    assert.equal(f.pi.reloads, 0);
+    assert.deepEqual(f.pi.userMessages, []);
+    assert.equal(f.pi.notices.includes("cpd: adapter updated, reloading"), false);
+    assert.deepEqual(f.argvs().filter((a) => a[0] !== "plan" && a[0] !== "session"), [], "no cpd command for it");
+    assert.deepEqual(f.pi.sent.filter((s) => s.message.customType !== "cpd"), []);
+    // The same directory, repaired: the new identity is checked again and reloaded once.
+    for (const [file, content] of Object.entries({ "extension.ts": GOOD, "package.json": "{}" })) writeFileSync(join(f.adapterDir, file), content);
+    touch(f.adapterDir);
+    await waitFor("the reload", () => f.pi.reloads > 0);
+    await settle(200);
+    assert.equal(f.pi.reloads, 1);
+    assert.equal(f.pi.userMessages.length, 1);
+    assert.equal(f.pi.errorNotices.length, 1, "a package that passes shows no error");
+  });
+}
+
+test("a load that hangs is refused after the timeout", async (t) => {
+  const f = await started(t, { reload: { timeoutMs: 300 } });
+  install(f, { "extension.ts": "setInterval(() => {}, 1000);\nexport default function () {}\n", "package.json": "{}" });
+  await waitFor("the error", () => f.pi.errorNotices.length > 0, 5000);
+  assert.deepEqual(f.pi.errorNotices, [noticeFor("load timed out after 300 ms")]);
+  assert.equal(f.pi.reloads, 0);
+});
+
+test("the same refusal is shown again after a poll that passed", async (t) => {
+  const f = await started(t);
+  const bad = { "extension.ts": 'throw new Error("boom");\n', "package.json": "{}" };
+  install(f, bad);
+  await waitFor("the first error", () => f.pi.errorNotices.length === 1);
+  f.pi.onReload = () => {}; // the good package passes but pi does not reload it
+  install(f);
+  await waitFor("the trigger", () => f.pi.userMessages.length > 0);
+  install(f, bad);
+  await waitFor("the second error", () => f.pi.errorNotices.length === 2);
+  assert.deepEqual(f.pi.errorNotices, [noticeFor("boom"), noticeFor("boom")]);
 });

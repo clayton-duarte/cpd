@@ -11,7 +11,7 @@ import { DEFAULT_TIMING, Follower, type Spawn, type Timing } from "./follower.ts
 import type { CommandCtx, Ctx, PiApi } from "./pi.ts";
 import { parseOpened, parseResult, parseStatus, request } from "./plannotator.ts";
 import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, REVIEW_LABEL, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
-import { adapterDir, DEFAULT_POLL_MS, pollAdapter, type Poll, refusal, RELOAD_COMMAND, RELOAD_TRIGGER } from "./reload.ts";
+import { adapterDir, DEFAULT_POLL_MS, pollAdapter, type Poll, refusal, RELOAD_COMMAND, RELOAD_TRIGGER, validatePackage, type Validation } from "./reload.ts";
 import { Facts, Reporter, stateArgs, type Wanted } from "./state.ts";
 
 export type Options = {
@@ -19,8 +19,8 @@ export type Options = {
   env?: Record<string, string | undefined>;
   timing?: Partial<Timing>;
   spawn?: Spawn;
-  /** The directory whose replacement means an install, and how often it is polled. Default: the adapter's own directory, every {@link DEFAULT_POLL_MS}. */
-  reload?: { dir?: string; intervalMs?: number };
+  /** The directory whose replacement means an install, how often it is polled, and how the new package is validated (§15.6). Default: the adapter's own directory, every {@link DEFAULT_POLL_MS}, jiti from pi. */
+  reload?: { dir?: string; intervalMs?: number } & Validation;
 };
 
 export const QUESTION_LABEL = "cpd: Worker question";
@@ -221,8 +221,10 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     r.reload = pollAdapter({
       dir: options.reload?.dir ?? adapterDir(),
       intervalMs: options.reload?.intervalMs ?? DEFAULT_POLL_MS,
+      validate: (dir) => validatePackage(dir, options.reload),
       allowed: () => run === r && ctxOf.current !== undefined && refusal(guardOf(r, ctxOf.current)) === undefined,
       trigger: () => pi.sendUserMessage(RELOAD_TRIGGER, { expandPromptTemplates: true }),
+      onRefused: (reason) => ctxOf.current?.ui.notify(`cpd: adapter update not loaded: ${reason}`, "error"),
       onError: (e) => deliver("reload after install", e),
     });
 

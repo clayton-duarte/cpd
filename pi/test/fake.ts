@@ -58,6 +58,9 @@ async function follow() {
 })();
 `;
 
+/** Stands for pi's jiti in the throwaway load (the real one is pi's, not a dependency of this repo): loads the file natively, which node does for `.ts`. */
+const FAKE_JITI = `export const createJiti = () => ({ import: async (path) => (await import(path)).default });\n`;
+
 export const ID = "596d007f-6775-4134-b77a-b356cc523842";
 export const OTHER = "11111111-2222-4333-8444-555555555555";
 
@@ -68,6 +71,8 @@ export class Fixture {
   readonly cpdHome = join(this.dir, "cpd-home");
   /** Stands for the adapter's installed directory (`options.reload.dir`). */
   readonly adapterDir = join(this.dir, "adapter");
+  /** The loader the throwaway load of a new package uses (`reload.loader`). */
+  readonly loader = join(this.dir, "fake-jiti.mjs");
   readonly pi: FakePi;
   private readonly saved: Record<string, string | undefined> = {};
 
@@ -76,6 +81,7 @@ export class Fixture {
     mkdirSync(join(this.dir, "resp"));
     mkdirSync(this.cpdHome);
     mkdirSync(this.adapterDir);
+    writeFileSync(this.loader, FAKE_JITI);
     writeFileSync(join(this.dir, "bin", "cpd"), FAKE_CPD);
     chmodSync(join(this.dir, "bin", "cpd"), 0o755);
     for (const k of ["PATH", "FAKE_CPD_DIR", "CPD_SESSION", "CPD_PLAN", "CPD_HOME"]) this.saved[k] = process.env[k];
@@ -143,7 +149,11 @@ export class Fixture {
 
   /** Start the adapter under test with fast timing. */
   load(options: Options = {}): void {
-    adapter(this.pi, { timing: { restartInitialMs: 30, restartMaxMs: 120, requestTimeoutMs: 300, pollMs: 30, shutdownWaitMs: 200 }, reload: { dir: this.adapterDir, intervalMs: 20 }, ...options });
+    adapter(this.pi, {
+      timing: { restartInitialMs: 30, restartMaxMs: 120, requestTimeoutMs: 300, pollMs: 30, shutdownWaitMs: 200 },
+      ...options,
+      reload: { dir: this.adapterDir, intervalMs: 20, loader: this.loader, ...options.reload },
+    });
   }
 
   async close(): Promise<void> {
@@ -182,6 +192,8 @@ export class FakePi implements PiApi {
   entries: unknown[] = [];
   readonly tools: ToolDefinition[] = [];
   readonly notices: string[] = [];
+  /** The notices shown with level `error`. */
+  readonly errorNotices: string[] = [];
   readonly emitted: { channel: string; data: any }[] = [];
   sessionName: string | undefined;
   idle = true;
@@ -262,7 +274,10 @@ export class FakePi implements PiApi {
   ctx(): Ctx {
     return {
       mode: this.mode,
-      ui: { notify: (m) => void this.notices.push(m), getEditorText: () => this.editorText },
+      ui: { notify: (m, level) => {
+          this.notices.push(m);
+          if (level === "error") this.errorNotices.push(m);
+        }, getEditorText: () => this.editorText },
       sessionManager: { getSessionId: () => this.sessionId, getEntries: () => this.entries },
       isIdle: () => this.idle,
       hasPendingMessages: () => this.pendingMessages,
