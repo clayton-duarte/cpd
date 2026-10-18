@@ -1,7 +1,7 @@
 //! Jobs, Specs and Dependencies (contract §2.2, §2.3, §3.2; commands.md §5).
 //!
 //! - [`spec`]: the Spec file of `job add` and `job edit`;
-//! - `add`, `edit`, `cancel`, `retry`: the commands that write;
+//! - `add`, `edit`, `cancel`, `promote`, `retry`: the commands that write;
 //! - `show`: `job list` and `job show`.
 //!
 //! `job dispatch` belongs to the driver (`crate::driver`).
@@ -14,6 +14,7 @@
 mod add;
 mod cancel;
 mod edit;
+mod promote;
 mod retry;
 mod show;
 mod spec;
@@ -44,6 +45,8 @@ pub enum Command {
     Edit(EditArgs),
     /// Cancel a Job (§5.3)
     Cancel(CancelArgs),
+    /// Queue a draft Job of a locked Plan (§5.8)
+    Promote(PromoteArgs),
     /// Queue a failed Job again at a Tier (§5.4)
     Retry(RetryArgs),
     /// Start one Ready Job now (§5.5)
@@ -75,6 +78,9 @@ pub struct AddArgs {
     /// writes run/<plan>/reviews/<key>.md; it needs every Job of its PR so far
     #[arg(long, conflicts_with = "needs")]
     review: bool,
+    /// Add it as a draft in phase dispatch or pr (never started until `job promote`)
+    #[arg(long)]
+    draft: bool,
     #[command(flatten)]
     pr: PrArg,
     #[command(flatten)]
@@ -121,6 +127,15 @@ pub struct CancelArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct PromoteArgs {
+    /// The Job key
+    #[arg(value_name = "key")]
+    key: JobKey,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct RetryArgs {
     /// The Job key
     #[arg(value_name = "key")]
@@ -155,6 +170,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Add(args) => add::add(args),
         Command::Edit(args) => edit::edit(args),
         Command::Cancel(args) => cancel::cancel(args),
+        Command::Promote(args) => promote::promote(args),
         Command::Retry(args) => retry::retry(args),
         Command::Dispatch(args) => driver::dispatch(args),
         Command::List(args) => show::list(args),

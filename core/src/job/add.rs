@@ -1,5 +1,6 @@
-//! `job add` (commands.md §5.1): `[*] → draft` in phase `plan`, and an
-//! appended `queued` Job, fingerprint stored at once, in `dispatch` or `pr`.
+//! `job add` (commands.md §5.1): `[*] → draft` in phase `plan`, and in `dispatch`
+//! or `pr` an appended `queued` Job, fingerprint stored at once, or with
+//! `--draft` an appended `draft` Job, no fingerprint (`job promote` queues it).
 
 use rusqlite::Connection;
 use serde_json::{Value, json};
@@ -27,6 +28,8 @@ struct Wanted {
     needs: Vec<String>,
     /// `--review` (B2): the needs are set from the Plan, not given.
     review: bool,
+    /// `--draft`: a draft in `dispatch` or `pr` too; in `plan` it changes nothing.
+    draft: bool,
 }
 
 enum Decision {
@@ -41,7 +44,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let spec = spec::read(&args.spec)?;
     let mut env = Env::open()?;
     env.check_tier(args.tier)?;
-    let wanted = Wanted { key: args.key, pr: args.pr, title: args.title.as_str().to_owned(), tier: args.tier.to_string(), spec, needs, review: args.review };
+    let wanted = Wanted { key: args.key, pr: args.pr, title: args.title.as_str().to_owned(), tier: args.tier.to_string(), spec, needs, review: args.review, draft: args.draft };
 
     let decision = env.store.read(|conn| decide(conn, &plan, &wanted))?;
     let (job, already) = match decision {
@@ -88,6 +91,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
     let all = jobs::load(conn, plan)?;
     let needs = if wanted.review { review_needs(&all, plan, &pr, wanted.key.as_str())? } else { wanted.needs.clone() };
     let appended = phase != "plan";
+    let draft = !appended || wanted.draft;
     let mut job = Job {
         seq: 0,
         key: wanted.key.as_str().to_owned(),
@@ -99,7 +103,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
         touches: json!(wanted.spec.touches),
         acceptance: json!(wanted.spec.acceptance),
         out_of_scope: json!(wanted.spec.out_of_scope),
-        status: if appended { "queued" } else { "draft" }.to_owned(),
+        status: if draft { "draft" } else { "queued" }.to_owned(),
         appended,
         review: wanted.review,
         fingerprint: None,
@@ -125,7 +129,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
     check_needs_known(&all, plan, &job.needs)?;
     check_needs_same_pr(&all, plan, &job.pr, &job.needs)?;
     check_needs_available(&all, plan, &job.needs)?;
-    if appended {
+    if !draft {
         job.fingerprint = Some(locked_fingerprint(&job));
     }
     Ok(Decision::Insert(job))

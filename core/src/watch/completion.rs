@@ -1,5 +1,5 @@
 //! E4, completion (contract §3.7), per PR: a PR in status `dispatch` with no
-//! Job `queued` or `running`, at least one `merged`, and `all_merged_at` null
+//! Job `draft`, `queued` or `running`, at least one `merged`, and `all_merged_at` null
 //! gets `all-merged` `{pr, merged, cancelled}` and that `all_merged_at`, once.
 
 use serde_json::json;
@@ -16,7 +16,7 @@ use crate::store::WriteTxn;
 const DONE: &str = "SELECT r.plan, r.key FROM prs r
   WHERE (?1 IS NULL OR r.plan = ?1) AND (?2 IS NULL OR r.key = ?2)
     AND r.status = 'dispatch' AND r.all_merged_at IS NULL
-    AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = r.plan AND j.pr = r.key AND j.status IN ('queued', 'running'))
+    AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = r.plan AND j.pr = r.key AND j.status IN ('draft', 'queued', 'running'))
     AND EXISTS (SELECT 1 FROM jobs j WHERE j.plan = r.plan AND j.pr = r.key AND j.status = 'merged')
   ORDER BY r.plan, r.key";
 

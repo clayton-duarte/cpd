@@ -198,6 +198,18 @@ impl Fx {
         ));
     }
 
+    /// Job `key` of Plan `pay` as a `draft` added after the lock: `appended`, no fingerprint.
+    fn add_draft(&self, key: &str, needs: &[&str]) {
+        let mut sql = format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+             VALUES ('pay', 'repo', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, cpd_txn(), 't');"
+        );
+        for need in needs {
+            sql += &format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');");
+        }
+        self.fixture(&sql);
+    }
+
     /// Job `key` `running` with Attempt `<key>-a1` in `status`, started at `started_at`.
     fn add_running(&self, key: &str, status: &str, started_at: &str) {
         let worktree = self.repo.parent().unwrap().join(format!("pay.pay--{key}-a1"));
@@ -670,6 +682,35 @@ fn e3_one_tick_schedules_a_ready_job_within_the_concurrency() {
     }
 }
 
+/// A draft Job (commands.md §5.1 `--draft`) is never Ready: E3 and `job dispatch` leave it alone, and
+/// `job promote` makes it a queued Job that the engine starts.
+#[test]
+fn e3_never_starts_a_draft_job_until_it_is_promoted() {
+    let fx = fx("concurrency = 4\nretry_cap = 0");
+    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
+        assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
+    }
+    fx.add_job("api", &[], "");
+    fx.add_draft("later", &[]);
+
+    // `job dispatch` refuses it.
+    let run = fx.env.cpd(&["job", "dispatch", "later", "--plan", "pay"]);
+    assert_eq!((run.error()["code"].clone(), run.exit), (json!("job_not_ready"), 3), "{run:?}");
+
+    let engine = fx.start();
+    wait_until("attempt-started api", || fx.count("attempt-started") == 1);
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(fx.events("attempt-started")[0].1.as_deref(), Some("api"));
+    assert_eq!(fx.job_status("later"), "draft");
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'later'"), 0);
+
+    fx.env.cpd(&["job", "promote", "later", "--plan", "pay"]).ok();
+    wait_until("attempt-started later", || fx.count("attempt-started") == 2);
+    engine.stop();
+    assert_eq!(fx.events("attempt-started")[1].1.as_deref(), Some("later"));
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'later'"), 1);
+}
+
 /// The 00:02Z incident (hs-d151): the file the engine runs from is replaced, then
 /// E3 starts an Attempt. The driver starts from the path recorded at start
 /// (`cannot run <path> (deleted)` before).
@@ -751,6 +792,22 @@ fn e4_waits_while_a_job_is_queued() {
     engine.stop();
 
     assert_eq!(fx.count("all-merged"), 0);
+}
+
+#[test]
+fn e4_waits_while_a_draft_job_exists_and_fires_once_it_is_cancelled() {
+    let fx = fx("");
+    fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
+    fx.add_draft("later", &[]);
+
+    let engine = fx.start();
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(fx.count("all-merged"), 0, "a draft Job of the PR is not done");
+
+    fx.env.cpd(&["job", "cancel", "later", "--reason", "not needed", "--plan", "pay"]).ok();
+    wait_until("all-merged", || fx.count("all-merged") == 1);
+    engine.stop();
+    assert_eq!(fx.events("all-merged")[0].3, json!({"pr": "repo", "merged": ["api"], "cancelled": ["later"]}));
 }
 
 // ---------- E5 ----------

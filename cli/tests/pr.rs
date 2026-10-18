@@ -501,6 +501,56 @@ fn open_refuses_while_a_job_is_not_merged_or_cancelled() {
     assert_eq!(fx.plan_row().0, "dispatch");
 }
 
+/// A `draft` Job `key` of the Plan's PR, added after the lock (`appended`, no fingerprint).
+fn add_draft(fx: &Fx, key: &str) {
+    fx.store()
+        .write("fixture", |tx| {
+            tx.execute(
+                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                   status, appended, created_txn, created_at)
+                 VALUES ('pay', 'repo', ?1, 'Later', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 1, ?2, 't')",
+                params![key, tx.id()],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn open_refuses_while_a_draft_job_of_the_pr_exists() {
+    let fx = fx("dispatch");
+    add_draft(&fx, "later");
+
+    let run = fx.pr("open");
+
+    assert_eq!(code(&run), ("jobs_not_done".into(), 3));
+    assert_eq!(run.error()["details"]["jobs"], json!([{"key": "later", "status": "draft"}]));
+    assert!(fx.gh_calls().is_empty());
+    assert_eq!(fx.plan_row().0, "dispatch");
+
+    // Cancelling the draft releases the PR.
+    fx.env.cpd(&["job", "cancel", "later", "--reason", "not needed", "--plan", "pay"]).ok();
+    fx.pr("open").ok();
+    assert_eq!(fx.plan_row().0, "pr");
+}
+
+#[test]
+fn rebase_refuses_while_a_draft_job_of_the_pr_exists() {
+    let fx = fx("pr");
+    add_draft(&fx, "later");
+    let old = fx.lead_sha();
+    fx.advance_base("base.txt", "base\n");
+
+    let run = fx.pr("rebase");
+
+    assert_eq!(code(&run), ("jobs_not_done".into(), 3));
+    assert_eq!(run.error()["details"]["jobs"], json!([{"key": "later", "status": "draft"}]));
+    assert_eq!(fx.lead_sha(), old, "nothing was rebased");
+
+    fx.env.cpd(&["job", "cancel", "later", "--reason", "not needed", "--plan", "pay"]).ok();
+    assert_eq!(fx.pr("rebase").ok()["rebased"], true);
+}
+
 #[test]
 fn open_refuses_when_no_job_is_merged() {
     let fx = fx_full("dispatch", "", "cancelled");

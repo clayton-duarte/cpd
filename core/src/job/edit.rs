@@ -134,7 +134,14 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
         }
     }
     if edits.needs.is_some() {
-        let others = all.iter().filter(|j| j.key != after.key).cloned().chain([after.clone()]).collect::<Vec<_>>();
+        // After the lock a Locked Job may need a draft, so a cycle can run through one: every Job is a node.
+        let others = all
+            .iter()
+            .filter(|j| j.key != after.key)
+            .cloned()
+            .chain([after.clone()])
+            .map(|j| Job { status: "draft".to_owned(), ..j })
+            .collect::<Vec<_>>();
         if let Some(cycle) = jobs::cycle(&others) {
             return Err(CpdError::new(
                 ErrorCode::DependencyCycle,
