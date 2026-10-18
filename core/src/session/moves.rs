@@ -156,12 +156,22 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
 
     let spawn = lead_spawn(&env.home, &id, Some(&plan), Path::new(&source.cwd));
     let (window, pane) = tmux.new_window(&cockpit, &park_window(&id, Some(&plan)), &spawn)?;
-    tmux.set_pane_session(&pane, &id)?;
-    tmux.set_pane_title(&pane, &name)?;
-    env.store.write("session fork", |tx| moved(tx, &row, &pane, &window, "parked"))?;
+    kill_window_on_error(&tmux, &window, || {
+        tmux.set_pane_session(&pane, &id)?;
+        tmux.set_pane_title(&pane, &name)?;
+        env.store.write("session fork", |tx| moved(tx, &row, &pane, &window, "parked"))
+    })?;
     Ok(Output::success(json!({"session": {
         "id": id, "name": name, "plan": plan, "forked_from": source.id, "pane": pane.as_str(), "window": window.as_str(),
     }})))
+}
+
+/// Runs `steps`, the ones after `tmux.new_window` made `window`. When one fails, kills `window`
+/// (a failure of that is ignored) and returns the original error (G11).
+fn kill_window_on_error<T>(tmux: &Tmux, window: &WindowId, steps: impl FnOnce() -> Result<T, CpdError>) -> Result<T, CpdError> {
+    steps().inspect_err(|_| {
+        let _ = tmux.kill_window(window);
+    })
 }
 
 /// The chat slot, else `no_cockpit`.
@@ -210,8 +220,10 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
         None => {
             let spawn = lead_spawn(&env.home, &lead.id, lead.plan.as_ref(), Path::new(&lead.cwd));
             let (window, pane) = tmux.new_window(&cockpit, &parked_window(&lead), &spawn)?;
-            tmux.set_pane_session(&pane, &lead.id)?;
-            tmux.set_pane_title(&pane, &env.store.read(|conn| lead.title(conn))?)?;
+            kill_window_on_error(&tmux, &window, || {
+                tmux.set_pane_session(&pane, &lead.id)?;
+                tmux.set_pane_title(&pane, &env.store.read(|conn| lead.title(conn))?)
+            })?;
             (pane, window)
         }
     };
@@ -270,8 +282,11 @@ pub(super) fn park_lead(
     command: &str,
 ) -> Result<(WindowId, PaneId), CpdError> {
     let (window, placeholder) = tmux.new_window(cockpit, &parked_window(lead), &placeholder_spawn())?;
-    tmux.set_pane_view(&placeholder, View::Chat)?;
-    tmux.swap_pane(&placeholder, &slot.pane)?;
+    // Until the swap, the window holds only the placeholder: a failure kills it (G11).
+    kill_window_on_error(tmux, &window, || {
+        tmux.set_pane_view(&placeholder, View::Chat)?;
+        tmux.swap_pane(&placeholder, &slot.pane)
+    })?;
     env.store.write(command, |tx| moved(tx, lead, &slot.pane, &window, "parked"))?;
     Ok((window, placeholder))
 }

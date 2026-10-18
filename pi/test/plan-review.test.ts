@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { ev, Fixture, ID, planShow, settle, stateCalls, waitFor } from "./fake.ts";
 
@@ -141,6 +144,9 @@ test("approval: plan decide --approve with the feedback in a file, the entry, th
   const call = f.calls().find((c) => c.phase === "end" && c.argv[1] === "decide")!;
   assert.deepEqual(call.argv.slice(0, 4), ["plan", "decide", "r1", "--approve"]);
   assert.equal(call.argv[4], "--feedback-file");
+  const file = join(f.cpdHome, "run", "p1", "feedback-r1.md");
+  assert.equal(call.argv[5], file);
+  assert.equal(readFileSync(file, "utf8"), "Looks good.\nShip it.", "kept in the Plan's run directory");
   assert.deepEqual(call.argv.slice(6), ["--plan", "p1"]);
   assert.equal(call.feedback, "Looks good.\nShip it.");
 
@@ -399,4 +405,19 @@ test("the tool is not registered for a Worker", async (t) => {
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
   assert.deepEqual(f.pi.tools, []);
+});
+
+const feedbackDirs = () => readdirSync(tmpdir()).filter((n) => n.startsWith("cpd-feedback-"));
+
+test("a decision, failing or not, creates no temp directory", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  const before = feedbackDirs();
+  await opens(f);
+  f.respond("plan-decide", { error: { code: "store_error", message: "boom" } }, { exit: 1 });
+  result(f, { reviewId: "pn-1", approved: false, feedback: "Nope." });
+  await waitFor("the decide call", () => f.argvs().some((a) => a[1] === "decide"));
+  await waitFor("the error", () => f.pi.errors().length === 1);
+  assert.deepEqual(feedbackDirs(), before);
+  assert.equal(readFileSync(join(f.cpdHome, "run", "p1", "feedback-r1.md"), "utf8"), "Nope.");
 });

@@ -109,3 +109,10 @@ fn pr_push_is_indexed_and_exists() {
     assert!(documented_commands().contains(&vec!["pr".to_owned(), "push".to_owned()]));
     assert!(Cli::command().find_subcommand("pr").unwrap().find_subcommand("push").is_some());
 }
+
+/// `plan cancel` is documented in §2 (E1) and exists.
+#[test]
+fn plan_cancel_is_indexed_and_exists() {
+    assert!(documented_commands().contains(&vec!["plan".to_owned(), "cancel".to_owned()]));
+    assert!(Cli::command().find_subcommand("plan").unwrap().find_subcommand("cancel").is_some());
+}
