@@ -689,11 +689,15 @@ fn the_cursor_skips_archived_rows_and_enter_never_opens_one() {
     pane.ready();
     pane.click(4, 8); // beta's `…`: its archived Plan is drawn
     pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ◌ old")));
-    pane.down(6); // ship, sketch, f-idle, f-blocked, rel, and then nowhere: the archived Plan `old` is not a stop
+    pane.down(5); // ship, sketch, f-idle, f-blocked, rel
     pane.keys(&["Enter"]);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "l-rel"])]);
     pane.keys(&["x"]);
     pane.wait("the prompt", |_| pane.footer_has("Close Plan rel?"));
+    pane.keys(&["n"]); // any key but `y` answers it
+    pane.down(1); // then nowhere: the archived Plan `old` is not a stop, the Inbox's first item is
+    pane.keys(&["Enter"]);
+    assert_eq!(wait_for_calls(&env, 2)[1], words(&["session", "open", "f-blocked"]));
 }
 
 #[test]
@@ -1179,4 +1183,121 @@ fn a_link_kinds_label_reads_whole_on_the_screen_through_tmux() {
     let expected = format!(" ● acme/api#12 failing{}5m", " ".repeat(44 - 2 - "acme/api#12 failing".len() - 2));
     let row = screen.iter().find(|r| r.contains("acme/api#12")).unwrap();
     assert_eq!(row, &expected, "the OSC 8 pieces leave no stray cell on the row");
+}
+
+// ---------- the Inbox's menu and keys (commands.md §13.2, §21) ----------
+
+/// The row of the Inbox item labelled `label`, as the screen has it now (a note below the section moves it up).
+fn item_row(pane: &Pane, label: &str) -> u16 {
+    let screen = pane.screen();
+    screen.iter().position(|r| r.contains(label)).unwrap_or_else(|| panic!("{label} on\n{}", screen.join("\n"))) as u16
+}
+
+/// The cursor on the Inbox's first item: down through the Sessions and into the section, then back up to the first.
+fn cursor_on_the_first_item(pane: &Pane) {
+    pane.down(15); // more than there are Sessions and shown items: it stops on the last shown item
+    pane.keys(&["k", "k"]);
+}
+
+#[test]
+fn the_cursor_reaches_the_items_and_d_dismisses_and_s_snoozes_the_one_it_is_on() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 46, 20);
+    pane.ready();
+    cursor_on_the_first_item(&pane);
+    pane.keys(&["d"]);
+    pane.wait("dismissed", |_| pane.footer_has("dismissed"));
+    assert_eq!(calls(&env), [words(&["inbox", "dismiss", "1"])]);
+    pane.keys(&["j", "s"]);
+    pane.wait("the snooze choices", |s| menu_open(s, "Snooze 15 min"));
+    let screen = pane.screen();
+    assert!(!screen.iter().any(|r| r.contains("Dismiss")), "the choices are the three snoozes:\n{}", screen.join("\n"));
+    pane.keys(&["Down", "Enter"]);
+    pane.wait("snoozed", |_| pane.footer_has("snoozed"));
+    assert_eq!(wait_for_calls(&env, 2)[1], words(&["inbox", "snooze", "2", "1h"]));
+    pane.keys(&["j", "s", "Down", "Down", "Enter"]);
+    assert_eq!(wait_for_calls(&env, 3)[2], words(&["inbox", "snooze", "4", "tomorrow"]));
+    pane.keys(&["s"]);
+    pane.wait("the snooze choices", |s| menu_open(s, "Snooze 15 min"));
+    pane.keys(&["Escape"]);
+    pane.wait("the menu closed", the_menu_is_closed);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(calls(&env).len(), 3, "Esc ran nothing: {:?}", calls(&env));
+}
+
+#[test]
+fn s_and_d_do_nothing_on_a_session_row_or_before_an_arrow_key() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 46, 20);
+    pane.ready();
+    pane.keys(&["s", "d"]);
+    pane.down(1); // on the first Session
+    pane.keys(&["s", "d"]);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(the_menu_is_closed(&pane.screen()));
+    assert!(calls(&env).is_empty(), "{:?}", calls(&env));
+}
+
+#[test]
+fn enter_on_an_item_jumps_as_a_click_does() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 46, 20);
+    pane.ready();
+    cursor_on_the_first_item(&pane);
+    pane.keys(&["Enter"]);
+    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "f-blocked"])]);
+}
+
+#[test]
+fn a_right_click_on_an_item_opens_its_four_entries_and_each_runs_its_command() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 46, 20);
+    pane.ready();
+    pane.right_click(10, item_row(&pane, "l-rel label")); // `l-rel label`, item 2
+    let screen = pane.wait("the item's menu", |s| menu_open(s, "Snooze 15 min"));
+    for entry in ["Snooze 15 min", "Snooze 1 h", "Snooze until tomorrow 09:00", "Dismiss"] {
+        assert!(screen.iter().any(|r| r.contains(&format!("│ {entry}"))), "{entry} in\n{}", screen.join("\n"));
+    }
+    pane.keys(&["Enter"]);
+    assert_eq!(wait_for_calls(&env, 1), [words(&["inbox", "snooze", "2", "15m"])]);
+    for (i, expected) in [["inbox", "snooze", "2", "1h"], ["inbox", "snooze", "2", "tomorrow"]].into_iter().enumerate() {
+        pane.wait("the menu closed", the_menu_is_closed);
+        pane.right_click(10, item_row(&pane, "l-rel label"));
+        pane.wait("the item's menu", |s| menu_open(s, "Snooze 15 min"));
+        pane.keys(&vec!["Down"; i + 1]);
+        pane.keys(&["Enter"]);
+        assert_eq!(wait_for_calls(&env, 2 + i)[1 + i], words(&expected));
+    }
+    pane.wait("the menu closed", the_menu_is_closed);
+    pane.right_click(10, item_row(&pane, "m-beta label")); // item 4
+    pane.wait("the item's menu", |s| menu_open(s, "Snooze 15 min"));
+    pane.keys(&["Down", "Down", "Down", "Enter"]);
+    assert_eq!(wait_for_calls(&env, 4)[3], words(&["inbox", "dismiss", "4"]));
+    // the header has no menu
+    pane.wait("the menu closed", the_menu_is_closed);
+    pane.right_click(10, item_row(&pane, "── Inbox"));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(the_menu_is_closed(&pane.screen()));
+    assert_eq!(calls(&env).len(), 4);
+}
+
+#[test]
+fn a_refusal_of_an_item_command_shows_in_the_prompt_row() {
+    let env = env();
+    populate(&env);
+    env.fake("cpd", r#"echo '{"ok":false,"error":{"code":"item_closed","message":"Item 1 is closed.","details":{}}}'; exit 3"#);
+    let pane = Pane::start(&env, 46, 20);
+    pane.ready();
+    cursor_on_the_first_item(&pane);
+    pane.keys(&["d"]);
+    pane.wait("the refusal", |_| pane.footer_has("item_closed: Item 1 is closed."));
+    assert_eq!(calls(&env), [words(&["inbox", "dismiss", "1"])]);
 }
