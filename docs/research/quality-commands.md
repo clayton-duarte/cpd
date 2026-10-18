@@ -39,7 +39,7 @@ Commands checked against `docs/commands.md` (✔ ran it against the copy and com
 ### commands-W1 — `git` network calls have no timeout, under locks
 
 - **What:** `gh` has a 60 s timeout (15 s for the poller). `git` has none: `git::run::run` and `context::git::Git::output` use `Command::output()`. The calls include `fetch`, `push`, `ls-remote`, run by `pr open` (push), `pr rebase` (fetch, push), `pr add` (`ls-remote`, `push --delete`), `plan lock` and `pr start` (fetch, `ls-remote`, push) and `context sync` (fetch, push). `pr open` and `pr rebase` hold the per-repo lock across them (waited for at most `lock_wait_seconds`, then `lock_timeout`), so one stalled remote blocks every other merge of that repo for as long as it stalls. `context sync` holds the Context lock, which is waited for **without limit**, so `context decide/note/ask/answer` and `plan new` of that Context wait behind it.
-- **Where:** `core/src/git/run.rs:35-47` (`run`), `core/src/context/git.rs:289-312` (`output`), `core/src/context/lock.rs:344-361` (the unbounded `flock`; its doc says "contract §4.6 gives no timeout"), `core/src/pr/gh.rs:20,24` (the `gh` timeouts, for contrast), `core/src/pr/open.rs:34-45`, `core/src/pr/rebase.rs:26-62`.
+- **Where:** `core/src/git/run.rs:35-47` (`run`), `core/src/context/git.rs:84-103` (`output`), `core/src/context/lock.rs:22-37` (the unbounded `flock`; its doc says "contract §4.6 gives no timeout"), `core/src/pr/gh.rs:20,24` (the `gh` timeouts, for contrast), `core/src/pr/open.rs:34-45`, `core/src/pr/rebase.rs:26-62`.
 - **Evidence:** `rg -n "timeout|Duration" core/src/git/run.rs core/src/context/git.rs core/src/context/lock.rs` prints only `core/src/context/lock.rs:21` (a comment); `rg -n "timeout" core/src/git/*.rs` finds only the `pre-start` hook's (`worktree.rs:116,148`); `rg -n "TIMEOUT" core/src/pr/gh.rs` lists the `gh` ones (`:20`, `:24`, `:180`). Not reproduced: it needs a remote that stalls; **unverified at run time**. Today no Context has a remote (`git -C contexts/<id> remote -v` is empty on the copy), so E6 never touches the network now; the PR paths do.
 - **Impact:** a network stall turns into a hung command that holds a lock other commands and the engine's merges wait on. The failure is silent: no error, no Event.
 - **Proposed fix:** one `git` runner with a timeout (the `gh` one's `try_wait` loop, shared), `GIT_TERMINAL_PROMPT=0` already set; a `timeout` code path to `git_failed` with `argv` and `exit: null`. For the Context lock, either a `lock_timeout` like the repo lock's, or fetch outside the lock and take it only for the merge. Needs a contract line (§4.6 says no timeout).
@@ -66,7 +66,7 @@ Commands checked against `docs/commands.md` (✔ ran it against the copy and com
 ### commands-W4 — a pull request closed without a merge is looked up on every poll
 
 - **What:** `pr poll` looks up with `gh` every `open` PR's pull request that is not in the search result. A pull request that was **closed without a merge** is not in the `is:open` search, and its PR stays `open` in cpd (commands.md §9.2, "A pull request closed without a merge (A11)"), so each tick (default `pr_poll_seconds = 5`) adds one lookup call for as long as it stays so. `Reason::Closed` fires once; the lookups do not stop.
-- **Where:** `core/src/pr/poll.rs:62-73`, `core/src/pr/pulls.rs:112-116` (`owned_open` selects `r.status = 'open'` whatever the pull request's `state`), `core/src/config/file.rs:232` (default 5).
+- **Where:** `core/src/pr/poll.rs:62-73`, `core/src/pr/pulls.rs:112-118` (`owned_open` selects `r.status = 'open'` whatever the pull request's `state`), `core/src/config/file.rs:232` (default 5).
 - **Evidence:** read from the code. **Unverified at run time:** the copy has no `open` PR row (`sqlite3 $T/cpd.db "select p.plan,p.key,q.state from prs p join pull_requests q on q.id=p.pull_request where p.status='open'"` prints nothing), so I could not observe it. If it holds, it is 720 extra GraphQL calls an hour per Lead-abandoned PR set (the lookup batches all of them in one call), on top of the search's 720.
 - **Impact:** a steady drain of the 5 000-points-an-hour budget that E5's rate guard (`gh_rate_limited`) then reacts to, and a `gh` subprocess every tick.
 - **Proposed fix:** do not look up a pull request whose stored `state` is already `closed` (the row is already right); only look up rows whose state is `open`.
@@ -76,7 +76,7 @@ Commands checked against `docs/commands.md` (✔ ran it against the copy and com
 
 - **What:** `swap_pane`, then `rename_window` or `kill_pane`, then (only afterwards) the one transaction that records `session-moved` for both Leads. If `rename_window` or `kill_pane` fails after the swap, the command returns `tmux_failed` with the panes swapped and no row or Event written, so `session list`'s `place` (the latest `session-moved`) says the old Lead is in the chat slot while tmux shows the new one. It heals at the next move of either Lead.
 - **Where:** `core/src/session/moves.rs:200-217` (`open`); `park_lead` (`:245-258`, also used by `session history` and the quit path) has the same shape: its tmux calls first, its one write last, so a failed write leaves the swap done.
-- **Evidence:** read from the code; **unverified** (a fake `tmux` failing `rename-window` would show it). The `place` comes only from Events (`core/src/session/row.rs:90-92`).
+- **Evidence:** read from the code; **unverified** (a fake `tmux` failing `rename-window` would show it). The `place` comes only from Events (`core/src/session/row.rs:91-92`).
 - **Impact:** a wrong `place` (the tree's chat marker, `session close`'s `in_chat_slot` guard, which also checks the live pane) until the next move. Low, but `close_lead` trusts `place == "chat"` first.
 - **Proposed fix:** write the two `session-moved` rows right after `swap_pane` succeeds (the swap is the fact), then do the rename/kill, whose failure then only leaves a window name.
 - **Size:** Job. **Overlap:** the hs-n27 / G11 family (a window left when `set_pane_session` fails; see "Known, still open").
@@ -84,7 +84,7 @@ Commands checked against `docs/commands.md` (✔ ran it against the copy and com
 ### commands-W6 — `doctor` has no timeout on its 7 subprocesses
 
 - **What:** `doctor` runs, in sequence and with `Command::output()`: `git --version`, `tmux -V`, `pi --version`, `gh --version`, `gh auth status` (a network call), pi's `node --version`, and pi's catalog module (`node -e … catalog.mjs`, which it never reads from the cache). A hung `gh auth status` or `pi --version` hangs `doctor`, the command the User runs when something is wrong.
-- **Where:** `core/src/doctor/tools.rs:184-196` (`run_tool`), `:220-225` (`gh_auth`), `core/src/doctor/pi.rs:17-31` (`tiers`, "asked of pi each time").
+- **Where:** `core/src/doctor/tools.rs:50-62` (`run_tool`), `:86-91` (`gh_auth`), `core/src/doctor/pi.rs:17-31` (`tiers`, "asked of pi each time").
 - **Evidence:** read from the code. Not measured: running `doctor` starts `pi` and `gh`, which the Plan's measurement rules forbid; I ran it once by mistake (see Method) and did not time it.
 - **Impact:** `doctor` can hang instead of reporting the failing tool.
 - **Proposed fix:** the shared runner of W1 with a 10–20 s timeout; a timeout is a failed check with `message`.
@@ -120,7 +120,7 @@ Commands checked against `docs/commands.md` (✔ ran it against the copy and com
 ### commands-W10 — `config` messages
 
 - **What:** (a) a message ending in a full stop gets another one appended: `…expected ^[a-z][a-z0-9]{0,7}$..` and `…for example S3..`. (b) A value above `u32::MAX` is reported as "must be at least 1": the arm `max == u32::MAX` does not say the value is too large.
-- **Where:** `core/src/config/file.rs:323,339` (`invalid` wraps a `why` that already ends in `.`; the `why` comes from `core/src/ids.rs` and `core/src/config/tier.rs:89`), `:371-374` (`int`).
+- **Where:** `core/src/config/file.rs:292-296` (`invalid` appends `.` to a `why` that may already end in one; those come from `core/src/ids.rs` and `core/src/config/tier.rs:89`), `:369-377` (`int`).
 - **Evidence:** with a scratch `CPD_HOME` holding `version = 1`, `machine = "homeserver"`: `{"…"message":"config.toml: `machine` is invalid: Invalid machine name \"homeserver\": expected ^[a-z][a-z0-9]{0,7}$.."…}`; with `lead_tier = "O9"`: `…expected <O|S|H><0-5>, for example S3..`; with `[watch] tick_seconds = 4294967296`: ``…`watch.tick_seconds` is invalid: must be at least 1, got 4294967296.``
 - **Impact:** cosmetic and misleading, in the message the User reads first when a config is wrong. Every other key I tried (unknown key, `0`, wrong type, bad `tmux.socket`, `version = 2`) is refused with `config_invalid` and the right `details.key`.
 - **Proposed fix:** trim the trailing `.` in `invalid`; `int` reports "at most {max}" when `i > max`.
@@ -187,7 +187,7 @@ How: `/tmp/qc-bench.sh N cmd…` (a bash loop timing each process), SQL counts f
 ### commands-F2 — `plan list` is N+1, `plan show` repeats reads
 
 - **What:** `plan list` runs, per Plan, `jobs::load` (2 statements) and `pr_values` (2 + one `pull_requests` read per PR with a pull request); 20 Plans make 111 statements and 11.0 ms against `job list`'s 7.8. `plan show` runs `jobs::load` and the PR reads a second time inside `plan_fingerprint` (called by `latest_review`): the trace shows statements 12–13 and 17–18 identical (Jobs), 9 and 19 (`pr_needs`), 10 and 20 (`prs`).
-- **Where:** `core/src/plan/list.rs:21-24`, `core/src/plan/show.rs:92-130` and `:214-239`, `core/src/plan/fingerprint.rs`.
+- **Where:** `core/src/plan/list.rs:23-26`, `core/src/plan/show.rs:92-130` and `:214-239`, `core/src/plan/fingerprint.rs`.
 - **Evidence:** `QC_SQL=1 …/cpd plan list 2>&1 >/dev/null | grep -c QCSQL` prints 111; the same for `plan show --plan cross-repo` prints 25, and the repeated `SELECT job, needs FROM dependencies WHERE plan = 'cross-repo'` is in the trace twice (t=2608 and t=4537 µs, the Jobs query 1.25 ms and 0.9 ms).
 - **Impact:** small today (≤ 3 ms); `plan list` is a Lead's command, not the cockpit's (the TUI reads in-process). Worth doing only with F1.
 - **Proposed fix:** one query per table for all Plans (`WHERE plan IN (…)` or a single scan grouped in Rust); pass the loaded `jobs` and `prs` into `plan_fingerprint` instead of reloading.
@@ -251,7 +251,7 @@ How: `/tmp/qc-bench.sh N cmd…` (a bash loop timing each process), SQL counts f
 ### commands-G5 — modules that do not follow the layout
 
 - **What:** `plan/`, `job/`, `pr/` split each command into a file; `context/mod.rs` (432 lines) keeps the clap types, `list`, `show`, `plan_repos` and the `write` glue in one file, and `session/run.rs` (408 lines) holds the reload decision, the port wait, the fork wait and the pane check together.
-- **Where:** `core/src/context/mod.rs:296-405`, `core/src/session/run.rs`.
+- **Where:** `core/src/context/mod.rs:296-405` (`list` at 296, `show` at 335, `write` at 395), `core/src/session/run.rs`.
 - **Evidence:** `wc -l core/src/context/*.rs core/src/session/*.rs`.
 - **Impact:** low; `context list` is the one command with its SQL in `mod.rs`, which is where its N+1 (3 queries per Context) hides.
 - **Proposed fix:** `context/list.rs`, `context/show.rs`; split `session/run.rs` into `run.rs` and `reload.rs`/`fork_wait.rs`.
@@ -274,7 +274,7 @@ How: `/tmp/qc-bench.sh N cmd…` (a bash loop timing each process), SQL counts f
 - **Idempotence by construction in `job`:** each writing command decides in a read transaction, so a rerun that changes nothing writes no `txns` row, then decides again inside the write transaction (`core/src/job/mod.rs:9-12`); `plan review`/`decide`/`lock` use compare-and-swap on the phase, the fingerprint and the review read.
 - **The `gh` gateway** (`core/src/pr/gh.rs`): one place, typed parsing, every failure `gh_failed` with `argv`, `exit` and a stderr tail; both pipes drained while the child runs; timeouts (60 s, 15 s for the poller); the poll parses stdout whatever the exit code (a `NOT_FOUND` alias) and treats `errors`, a missing `data`, a null alias without `NOT_FOUND` as failures, never as "no PRs"; the search query text is a constant pinned by a test; `lookup` validates `owner/name` before it reaches a query string.
 - **`pr poll`'s no-op path:** a poll that finds nothing new opens no write transaction (`core/src/pr/poll.rs:75-88`), and the flock wait is bounded (60 s).
-- **Context records:** append-only JSONL, rewound when `git commit` fails (`core/src/context/contexts.rs:155-160`), an index rebuilt by `import_locked` after a crash, retries recognised, and the git identity and `commit.gpgsign=false` set per call.
+- **Context records:** append-only JSONL, rewound when `git commit` fails (`core/src/context/contexts.rs:186-194`), an index rebuilt by `import_locked` after a crash, retries recognised, and the git identity and `commit.gpgsign=false` set per call.
 - **Config:** unknown keys, wrong types, out-of-range values and a bad `machine` are all `config_invalid` with `details.key` (the messages need W10's trim); `version`, `machine` required.
 - **Speed where it was cheap to get:** no read command spawns a process, the store open is 6 statements, every command is ≤ 16 ms, the Job queries use the `(plan, …)` autoindexes (`EXPLAIN QUERY PLAN` on `dependencies`, `jobs`, `attempts`, `escalations`, `context_records`).
 - **Tests:** the 8 test files run in 0.04–11.6 s each (`session` is the slow one, 11.6 s, 37 tests); each command has success, `already` and refusal-writes-nothing cases (`add_refusals_write_nothing`, `edit_refusals_write_nothing`, …); `every_documented_command_exists` pins the command tree to §2.
@@ -286,6 +286,7 @@ The copy: `T=$(mktemp -d); sqlite3 ~/.cpd/cpd.db ".backup $T/cpd.db"; cp ~/.cpd/
 Commands run (against `$T` unless said):
 - Build: `scripts/cargo.sh build --release -p cpd` (binary `target/release/cpd`, 12 MB), 8 warnings (`grep -c warning`).
 - Latency: `/tmp/qc-bench.sh 20 target/release/cpd <cmd>` for the commands of the table (N=20 each; the table is the last pass, an earlier pass is in the text where they differ); cold `tiers`: 10 runs, each `rm -f $T2/cpd.db*` in a scratch home with the copy's `config.toml`.
+  The timing loop (`/tmp/qc-bench.sh`, removed after use): `for i in $(seq $N); do s=$(date +%s%N); "$@" >/dev/null 2>&1; e=$(date +%s%N); walls+=($(( (e-s)/1000 ))); done`, then sort and take the middle and the last (µs).
 - SQL: a copy of the worktree in `/tmp/qc-src` with `rusqlite` `features += ["trace"]` and a 12-line `conn.trace` hook in `Store::connect`, built with `CARGO_TARGET_DIR=/tmp/qc-target scripts/cargo.sh build --release -p cpd`; `QC_SQL=1 /tmp/qc-target/release/cpd <cmd> 2>&1 >/dev/null | grep QCSQL`.
 - Subprocesses: `strace -f -e trace=execve -o /tmp/qc-ex.txt target/release/cpd <cmd>`, `grep -c "execve("` (1 for each read command), and the same for `context note` on a scratch home.
 - Query plans: `sqlite3 $T/cpd.db "EXPLAIN QUERY PLAN …"` for the Job, session, history, Context-record and plan queries; `sqlite3 .timer` for the `history` scan.
