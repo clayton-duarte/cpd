@@ -12,6 +12,7 @@ use common::TestEnv;
 use cpd_core::git::{Setup, create_attempt_worktree, prepare_lead_worktree, pr_lead_worktree_path};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId, PrKey};
+use cpd_core::merge::RepoLock;
 use cpd_core::store::Store;
 use rusqlite::params;
 use serde_json::{Value, json};
@@ -306,4 +307,30 @@ fn a_locked_attempt_worktree_survives_until_it_is_unlocked() {
 
     assert_eq!(fx.gone("api"), (true, true));
     assert_eq!(fx.errors().len(), 1);
+}
+
+#[test]
+fn a_held_per_repo_lock_defers_the_clean_up_to_the_next_poll() {
+    let fx = fx(&["api"]);
+    let api = fx.pr("api");
+    fx.github(&[], &["api"]);
+    let held = RepoLock::wait(&fx.home, &fx.repo).unwrap();
+
+    let out = fx.poll();
+
+    assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "api"}]), "the merge is recorded anyway");
+    assert_eq!(fx.gone("api"), (false, false), "nothing is removed under a held lock");
+    assert!(api.attempt.exists() && api.lead.exists());
+    assert_eq!(fx.errors(), Vec::<Value>::new(), "a skipped clean-up appends no Event");
+
+    fx.poll();
+
+    assert_eq!(fx.gone("api"), (false, false), "still held");
+    assert_eq!(fx.errors(), Vec::<Value>::new());
+
+    drop(held);
+    fx.poll();
+
+    assert_eq!(fx.gone("api"), (true, true), "the next poll removes it");
+    assert_eq!(fx.errors(), Vec::<Value>::new());
 }

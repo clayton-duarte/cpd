@@ -21,7 +21,9 @@ use crate::events::{Kind, NewEvent, append};
 use crate::git;
 use crate::host::layout::attempt_window;
 use crate::host::tmux::Tmux;
+use crate::home::CpdHome;
 use crate::ids::{AttemptId, PlanId, PrKey};
+use crate::merge::RepoLock;
 use crate::output::Output;
 use crate::store::WriteTxn;
 
@@ -283,7 +285,7 @@ fn clean_up(env: &mut Env, just: &[(PlanId, PrKey)]) -> Result<(), CpdError> {
     let all = env.store.read(merged_prs_to_clean)?;
     let (fresh, earlier): (Vec<Merged>, Vec<Merged>) = all.into_iter().partition(|m| just.contains(&(m.plan.clone(), m.pr.clone())));
     for merged in earlier.iter().filter(|m| m.on_disk()) {
-        clean(merged);
+        clean(&env.home, merged);
     }
     if fresh.is_empty() {
         return Ok(());
@@ -302,7 +304,7 @@ fn clean_up(env: &mut Env, just: &[(PlanId, PrKey)]) -> Result<(), CpdError> {
                 }
             }
         }
-        failures.extend(clean(merged));
+        failures.extend(clean(&env.home, merged));
         events.extend(failures.into_iter().map(|(path, reason)| (merged.plan.clone(), merged.pr.clone(), path, reason)));
     }
     if events.is_empty() {
@@ -345,8 +347,17 @@ fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Merged>, CpdEr
 /// Removes the Attempt worktrees of the PR that are on disk, then its Lead worktree. Each
 /// removal runs in the PR's repo, so the order does not matter; a failure does not stop the
 /// others. What it did not remove.
-fn clean(merged: &Merged) -> Vec<Failure> {
+///
+/// G1 (hs-n124): it runs under the per-repo lock of the PR's repo, taken without waiting, so it
+/// never removes a worktree under a Gate of `pr open`, `pr push` or `pr rebase`. When the lock
+/// is held it removes nothing and returns no failure: a later poll retries it.
+fn clean(home: &CpdHome, merged: &Merged) -> Vec<Failure> {
     let repo = Path::new(&merged.repo);
+    let _lock = match RepoLock::try_take(home, repo) {
+        Ok(Some(lock)) => lock,
+        Ok(None) => return Vec::new(),
+        Err(e) => return vec![(merged.repo.clone(), reason(&e))],
+    };
     let mut failures = Vec::new();
     for (_, branch, worktree) in &merged.attempts {
         if Path::new(worktree).exists()
