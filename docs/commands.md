@@ -45,12 +45,13 @@ Commands marked **internal** are started by cpd itself (in a tmux pane or detach
 
 ### 1.2 Output and exit codes
 
-Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Three kinds of command own a terminal instead, and are the only exceptions (amendment 10, §19):
+Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Four kinds of command print something other than one JSON value, and are the only exceptions (amendment 10, §19):
 
 | Command | What it prints | Why |
 |---|---|---|
 | `cpd events follow` | one Event per line (§5.4) | the one streaming command (§1.2) |
 | `cpd session run`, `cpd tui view` (internal) | they run pi or draw a ratatui view in their pane | they are the programs inside cockpit panes (§6.2), not commands an agent calls. If they fail before taking the terminal, they print the failure envelope and exit with its code |
+| `cpd tui action` (internal) | nothing, ever | the StatusBar's click binding runs it with `run-shell -b`, which puts the active pane into view mode on a failure or any output (§13.2); it reports a failure with `display-message -c <client>` |
 | `cpd tui --attach` | nothing on success: it replaces itself with `tmux attach` | the approved outline says `tui` "builds and attaches the cockpit"; without `--attach`, `cpd tui` prints JSON like every command |
 
 `cpd --version` (like `--help`) prints one JSON value too: `{"ok": true, "version": "0.0.0", "schema": 6, "store_schema": 6}`. `schema` is the newest store schema the binary supports (contract §4.5); `store_schema` is the database's current schema, `PRAGMA user_version` of `$CPD_HOME`'s database opened read-only, without migrating and without the schema check, or `null` when the database file does not exist. A binary can open the store when `store_schema` is `null` or `<= schema`. `--version` never creates, migrates or writes the database.
@@ -142,6 +143,7 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `events list`, `events follow` | pi adapter, TUI, scripts | no | §5.4 |
 | `watch` | `plan lock`, `tui`, User | yes | §3.7, §6.6 |
 | `tui`, `tui view` (internal) | User | no | §6.2 |
+| `tui action` (internal) | the StatusBar's click binding (§6.1) | no | §6.1, §13.2 |
 | `doctor`, `config`, `tiers` | User | `tiers` refreshes its cache | §8, §9 |
 
 ## 3. `context`
@@ -1546,7 +1548,9 @@ The engine, one per machine (§3.7, §6.6, D5).
 |---|---|---|
 | `locks/watch.lock` is free | `watch_running` | 3 |
 
-Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, and every row and Event of E1–E7 (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0. Idempotent: a second one is refused.
+Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, and every row and Event of E1–E7 (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0. **The `@cpd_workers` step** (contract §6.1; User, hs-d149): on each tick the engine computes the Attempts not `ended` and config `concurrency`, builds the styled text of the StatusBar's indicator (`workers ` and `/M` dim; `N` in the palette's in-progress colour, green, above 0, else colour 8) and runs `tmux -L <socket> set -g @cpd_workers '<styled text>'` **only when the text changed** since the last tick it set (the first tick always sets it). No row, no Event. The indicator is therefore up to one tick (`watch.tick_seconds`) late, and stale while the engine is stopped; this deviates on purpose from §17's "no tmux option carries state".
+
+Idempotent: a second one is refused.
 
 **With `--ensure`:** starts the engine when it is not running, and returns at once.
 
@@ -1573,9 +1577,10 @@ cpd tui [--attach] [--respawn]
 Builds the cockpit (§6.1, §6.2) unless it exists, and starts the engine.
 
 Effects, each only when missing:
-- **tmux:** the server with §6.1's options; the session `cpd` with window `main` (`new-session -d -s cpd -n main -x 215 -y 62`), split into the tree (left, 20 %), the plan view (centre top) above the chat slot (centre bottom), and the widgets (right, 20 %), each running `cpd tui view <tree|plan|widgets>` with `@cpd_view` set, and the StatusBar, one row across the full width at the bottom (`split-window -v -f -l 1`), running `cpd tui view statusbar` with `@cpd_view statusbar`; the chat slot holds the placeholder (§10) or, when one exists, the Plan Lead whose latest `session-moved` Event with `place: "chat"` is the newest, moved in as `session open` does. "Plan Lead" here means any Lead with a Plan, as for `session open` (side forks included, a Context's grounded Lead never), and one that `session open` refuses stays where it is while the placeholder keeps the slot (Escalation `tui-cockpit-a1-q3`). The session `cpd-work`.
-- **Layout:** right after building a new `main`, `tui` runs reset-layout once (§13.2). On an existing `main` with no `statusbar` pane it adds one (same split) and then runs reset-layout, so the added row is taken from the layout and the other panes get their sizes back (amendment 15, §19).
-- **tmux options:** every option, the border format, the root mouse binding and the conditional `pane-died` hook of §6.1. `host` sets them at every server start, so a server started by `plan new` or `watch --ensure` has them too; `cpd tui` sets them again on a running server (rerunning is safe).
+- **tmux:** the server with §6.1's options; the session `cpd` with window `main` (`new-session -d -s cpd -n main -x 215 -y 62`), split into the tree (left, 20 %), the plan view (centre top) above the chat slot (centre bottom), and the widgets (right, 20 %), each running `cpd tui view <tree|plan|widgets>` with `@cpd_view` set, with no StatusBar pane (the StatusBar is the session's status line, below); the chat slot holds the placeholder (§10) or, when one exists, the Plan Lead whose latest `session-moved` Event with `place: "chat"` is the newest, moved in as `session open` does. "Plan Lead" here means any Lead with a Plan, as for `session open` (side forks included, a Context's grounded Lead never), and one that `session open` refuses stays where it is while the placeholder keeps the slot (Escalation `tui-cockpit-a1-q3`). The session `cpd-work`.
+- **Layout:** right after building a new `main`, `tui` runs reset-layout once (§13.2). On an existing `main` that still has a `statusbar` pane (a cockpit built before the StatusBar moved to the status line) it kills that pane once (`kill-pane`) and then runs reset-layout, so the other panes take the freed row and get their sizes back (amendment 15, §19).
+- **tmux options:** every option, the border format, the root `MouseDown1Status` binding and the conditional `pane-died` hook of §6.1. `host` sets them at every server start, so a server started by `plan new` or `watch --ensure` has them too; `cpd tui` sets them again on a running server (rerunning is safe). It also restores tmux's default `MouseDown1Pane` binding (`select-pane -t = ; send-keys -M`), which replaces cpd's earlier override.
+- **The status line:** `status on`, `status-style default` and `status-format[0]` (the StatusBar, §13.2), set with `-t <cockpit session>` once the session exists, never `-g`, so `cpd-work` has no status row (contract §6.1).
 - **`--respawn`:** `respawn-pane -k` on every live pane of `main` that has `@cpd_view` (the views, the chat placeholder and a Worker view), so each runs the installed binary again; a Lead or engine pane is never touched. `scripts/install-cpd.sh` runs `cpd tui --respawn` when a cockpit exists. (Why: `cpd tui` respawns only dead panes, so a reinstall would never reach a running view.)
 - `watch --ensure` (§12).
 - No rows of its own; moving a Lead appends `session-moved`.
@@ -1588,12 +1593,12 @@ Effects, each only when missing:
 {"ok": true, "built": true, "socket": "cpd", "session": "cpd", "attach": ["tmux", "-L", "cpd", "attach", "-t", "cpd"], "watch": {"started": true, "pane": "%3"}}
 ```
 
-With `--respawn` the value also has `"respawned": ["%1", "%2", …]`, the panes restarted. With `--attach` it then replaces itself with `tmux -L cpd attach -t cpd` and prints nothing (§1.2). Idempotent: yes; an existing cockpit gives `"built": false`. A pane of the layout that has died, the StatusBar included, is respawned (`respawn-pane`, amendment 9, §19), never duplicated; a view pane that dies while the cockpit runs is respawned at once by the `pane-died` hook (§6.1).
+With `--respawn` the value also has `"respawned": ["%1", "%2", …]`, the panes restarted. With `--attach` it then replaces itself with `tmux -L cpd attach -t cpd` and prints nothing (§1.2). Idempotent: yes; an existing cockpit gives `"built": false`. A pane of the layout that has died is respawned (`respawn-pane`, amendment 9, §19), never duplicated; a view pane that dies while the cockpit runs is respawned at once by the `pane-died` hook (§6.1).
 
 ### 13.2 `tui view` (internal)
 
 ```
-cpd tui view <tree|plan|widgets|statusbar|chat|legend|logs>
+cpd tui view <tree|plan|widgets|chat|legend|logs>
 cpd tui view worker <attempt> --plan <id>
 cpd tui view history <id>
 ```
@@ -1609,7 +1614,6 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
 | `widgets` | the **Deploy column**: the machine, the cockpit's PRs, git and Jira (future) | `q` quits; nothing else |
 | `worker` | the read-only Worker view: the Attempt's Worker session file (vision decision 5), `you` and its text in cyan, `agent` in green, `→ tool` in yellow, `← last` dim | `q` or Esc quits; ↑/k, ↓/j, PageUp, PageDown and the wheel (3 rows) scroll; End or `G` follows the end again; no other keys |
 | `history` | an archived Session's history, read-only: the Session's pi file drawn with the Worker view's renderer (`tui/src/worker/render.rs`); its top line is `<name> (archived, read-only)`. Started by `session history` (§10.12) in the chat slot | `q` or Esc quits to the placeholder text; ↑/k, ↓/j, PageUp, PageDown and the wheel (3 rows) scroll; End or `G` follows the end again; no other keys |
-| `statusbar` | one row across the bottom | no keys, no focus; clicks on its buttons |
 | `chat` | the chat slot's placeholder (§10) | none |
 | `legend` | the key legend, in a popup | any key closes it |
 | `logs` | the Event log, in a popup | ↑↓, j/k, PgUp/PgDn scroll; `q` or Esc closes it |
@@ -1672,25 +1676,28 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
 
 The column has no engine line, no slots, no Escalations, no Events and no footer hint. The Event log is the `logs` view (R36, below).
 
-**`statusbar`** (R36, User decision) is one row across the full width at the bottom of `cpd:main`; it has no keys, takes no keyboard focus (a click on it is passed on with `send-keys -M`, no `select-pane`, §6.3) and draws no border title. **Its left side holds action buttons only; its right side holds read-only information.** The middle expands.
-- **Left, in order:** three one-glyph buttons, `⧉` (reset layout), `?` (legend) and `▤` (logs), one space apart. Each is drawn like a section header's title block: one cell wide, grey (the palette's Nothing colour, colour 8) with `Modifier::REVERSED`, so the glyph shows in the background colour. A click on `⧉` runs reset-layout (below); on `?` opens the legend popup; on `▤` opens the logs popup. Tooltips are not built (`BACKLOG.md`).
-- **Right, in order:** a failure note when the last click failed (cleared on the next click), then the workers indicator `workers N/M`, where `N` is the number of Attempts holding a slot and `M` is config `concurrency`. The indicator gets the full width, as cpd 1's; it shortens to `N/M` when the row is too narrow and is dropped when not even that fits.
+**The StatusBar** (R36, User decision; moved to tmux's status line by the User, Plan tui-visuals, hs-d149, hs-d179) is **not a view and has no pane**: it is the one row of tmux's status line on the cockpit session (contract §6.1), across the full width at the bottom of the client, drawn by tmux from `status-format[0]`. There is no `statusbar` view, no `@cpd_view statusbar` and no process behind it; it takes no keyboard focus (a click on it is not a click on a pane) and draws no border title. **Its left side holds action buttons only; its right side holds read-only information.**
+- **Left, in order:** three one-glyph buttons, `⧉` (reset layout), `?` (legend) and `▤` (logs), **one space apart, outside their click ranges** (a range is one cell too long, so two buttons never touch). Each is drawn as before: one cell wide, a grey block (`fg=colour8,reverse`), so the glyph shows in the background colour. Each is its own `#[range=user|…]` (`reset`, `legend`, `logs`), and a click runs `cpd tui action <range> --client <name>` (below). Tooltips are not built (the User dropped them, hs-d179).
+- **Right:** `workers N/M` (`#[align=right]#{@cpd_workers}`), where `N` is the number of Attempts not `ended` and `M` is config `concurrency`. The text is fed by the engine (§12), not computed by the status line: up to one tick late, and stale while the engine is stopped (the deviation in §17). The old failure note is gone: a failed click reports with `display-message -c <client>` (below).
 
-**`legend`** is what every colour and icon of the cockpit means, from the palette. It opens in a tmux popup (`display-popup -E -T ' legend ' -w <w> -h <h>`, sized to the legend and at most the client's size) from the tree's `?` key or the StatusBar's legend button, because the columns are narrower than the legend; any key closes it. It has no `@cpd_view` pane of its own. Its section titles are `Jobs: Plan pills and Context counters` and `Session dots`; the Job statuses it lists are those the chart draws, so `cancelled` is not among them, and `running` is listed with the spinner frames `◐◓◑◒`. `Session dots` lists each glyph (`●`, `◐◓◑◒`, `○`, `◌`) and each `●` colour (red, yellow, magenta, white) with its meaning, as §17's dot rule gives them, then the precedence line `red > yellow > magenta > white > ◐ > ○ > ◌`, drawn with the real glyphs and colours. Its sample pill has the same form, ` <icon> key │S1 `.
+**`cpd tui action <reset|legend|logs> --client <name>`** (internal) is what a click on a StatusBar button runs (the `MouseDown1Status` binding, contract §6.1). Not a view, it owns no terminal; it runs the action **on the client named** (`#{client_name}` of the clicking client), so a popup opens on that client only, whatever other clients are attached.
+- `reset` runs reset-layout (below); `legend` opens the legend popup and `logs` the logs popup, each `display-popup -c <name> …` sized to that client.
+- **It prints nothing, on stdout or stderr**: tmux's `run-shell -b` puts the active pane into view mode when its command fails (research `statusbar-no-row.md` 2c), and shows any output of it in view mode (tmux(1), `run-shell`). On a failure (an unknown action, a client that has gone, a tmux error) it shows the message with `display-message -c <name> '<message>'` and exits 0; the binding also appends `2>/dev/null`.
 
-**`logs`** (R36) is the **Event log**: every Event (§5), one line each: its time of day (`HH:MM:SS`, dim), then its `text`, or its kind when the `text` is empty, an `error` Event in the failed colour. It opens in a tmux popup (`display-popup -E -T ' logs '`, at most 80 % of the client's width and height) from the StatusBar's `▤` button, and has no `@cpd_view` pane of its own. The newest Event is last; the view follows live while it shows the bottom, and stops following when the User scrolls up (it follows again at the bottom). ↑↓, j/k and PgUp/PgDn scroll; `q` or Esc closes it.
+**`legend`** is what every colour and icon of the cockpit means, from the palette. It opens in a tmux popup (`display-popup -E -T ' legend ' -w <w> -h <h>`, sized to the legend and at most the client's size) from the tree's `?` key or the StatusBar's legend button (`cpd tui action legend`), because the columns are narrower than the legend; any key closes it. It has no `@cpd_view` pane of its own. Its section titles are `Jobs: Plan pills and Context counters` and `Session dots`; the Job statuses it lists are those the chart draws, so `cancelled` is not among them, and `running` is listed with the spinner frames `◐◓◑◒`. `Session dots` lists each glyph (`●`, `◐◓◑◒`, `○`, `◌`) and each `●` colour (red, yellow, magenta, white) with its meaning, as §17's dot rule gives them, then the precedence line `red > yellow > magenta > white > ◐ > ○ > ◌`, drawn with the real glyphs and colours. Its sample pill has the same form, ` <icon> key │S1 `.
 
-**Reset-layout** is not a CLI command. It runs `resize-pane` on the panes of `<cockpit>:main` found by `@cpd_view`, in this order:
+**`logs`** (R36) is the **Event log**: every Event (§5), one line each: its time of day (`HH:MM:SS`, dim), then its `text`, or its kind when the `text` is empty, an `error` Event in the failed colour. It opens in a tmux popup (`display-popup -E -T ' logs '`, at most 80 % of the client's width and height) from the StatusBar's `▤` button (`cpd tui action logs`), and has no `@cpd_view` pane of its own. The newest Event is last; the view follows live while it shows the bottom, and stops following when the User scrolls up (it follows again at the bottom). ↑↓, j/k and PgUp/PgDn scroll; `q` or Esc closes it.
+
+**Reset-layout** is not a CLI command. `cpd tui action reset` and `cpd tui` run it. It runs `resize-pane` on the panes of `<cockpit>:main` found by `@cpd_view`, in this order:
 
 | # | `@cpd_view` | Size |
 |---|---|---|
-| 1 | `statusbar` | `-y 1` |
-| 2 | `tree` | `-x 20%` |
-| 3 | `widgets` | `-x 20%` |
-| 4 | `plan` | `-y 20%` |
-| 5 | `worker` | `-x 30%`, only when a Worker pane is open |
+| 1 | `tree` | `-x 20%` |
+| 2 | `widgets` | `-x 20%` |
+| 3 | `plan` | `-y 20%` |
+| 4 | `worker` | `-x 30%`, only when a Worker pane is open |
 
-The chat slot is never resized; it takes what is left. The StatusBar's ⧉ click runs it in-process; `cpd tui` runs it once, right after building a new `main` and after adding a missing StatusBar to an existing one (§13.1).
+The chat slot is never resized; it takes what is left. The StatusBar's ⧉ click runs it through `cpd tui action reset`; `cpd tui` runs it once, right after building a new `main` and after killing a leftover `statusbar` pane of an existing one (§13.1).
 
 Refusal before drawing: an unknown view or Attempt is `usage` or `attempt_not_found`. Idempotent: they only read.
 
@@ -1913,7 +1920,7 @@ Removed by R19 (no Job-level Reviewer).
 
 ## 17. What the TUI reads
 
-Outline §8 and D4: the views take one **snapshot** with a read command, then **follow Events**; there is no timer polling of the CLI, no cache directory and no tmux option carrying state. A view reads the database **in process**, through the read model (`tui/src/read/`): the same queries as the snapshot commands named below, one read transaction per snapshot, no subprocess and no `gh`. (An earlier draft had each view run `cpd` as a subprocess; the implementation does not, and one source of truth is the store.) Reads take no lock and never wait for writers (§4.2); cpd 1's `workflow show` took 58 s under load (research.md), which is why the spike needed a cache.
+Outline §8 and D4: the views take one **snapshot** with a read command, then **follow Events**; there is no timer polling of the CLI, no cache directory and no tmux option carrying state, **with one deliberate exception**: `@cpd_workers`, the StatusBar's `workers N/M` text, which the engine sets (below; contract §6.1). A view reads the database **in process**, through the read model (`tui/src/read/`): the same queries as the snapshot commands named below, one read transaction per snapshot, no subprocess and no `gh`. (An earlier draft had each view run `cpd` as a subprocess; the implementation does not, and one source of truth is the store.) Reads take no lock and never wait for writers (§4.2); cpd 1's `workflow show` took 58 s under load (research.md), which is why the spike needed a cache.
 
 **Gap-free start.** Every snapshot command returns `events_cursor`, the highest Event id in the same read transaction. The view then runs `cpd events follow --since <events_cursor>`, so no Event between the snapshot and the follow is lost or seen twice.
 
@@ -1922,8 +1929,8 @@ Outline §8 and D4: the views take one **snapshot** with a read command, then **
 | `tree` (Context column) | `cpd context list`, `cpd session list` | `context-created`, `context-grounded`, `plan-created`, `plan-phase`, `plan-done`, `session-registered`, `session-state`, `session-moved`, `session-renamed`, `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | Contexts, their Plans' Lead Sessions, then the Sessions forked by `session fork` as siblings under their Context (B1), each with its title or name, state, place, `archived_at` (archived objects are in the read model), Job counters (Plan Leads only) and **dot** (rule below). The snapshot also reads what the dots need: each Session's state and place, its Plan's phase, the Plan's pending review, and the Plan's pull requests' state and checks. A pull request's checks can change without an Event, so the tree re-reads at least every 2 s as well as on Events, and redraws every 250 ms for the spinner |
 | `plan` (centre top) | `cpd plan show --plan <p>` for the Plan of the Lead in the chat slot (its `prs`, each PR's key, repo, base, needs, status, `pr`, `pull_request` (its `state`, for a closed pull request) and `jobs`, for the PR boxes, §13.2) | every Event with `plan = p` (the `pr-*` kinds and `pr-feedback` included: they change a box's title or add a box); `session-moved` with `place: "chat"` (the slot changed: switch Plan and take a new snapshot) | one box per PR that is not `cancelled`, top to bottom by needs and linked by them, each with the flowchart of its Jobs, Attempts and Tiers (R34, A15). Not drawn, so not read: open Escalations, the latest Plan review |
 | `widgets` (Deploy column) | the `open` rows of `pull_requests` (contract §4.4) and the PRs of the chat slot's Plan (`prs.pull_request`; the Lead Session's place is `session-moved` `chat`); and the host's load average (`/proc/loadavg`; on macOS `sysctl -n vm.loadavg`), re-read every 2 s with no Event | any Event whose id moved, and at least every 2 s: pull requests no Plan owns append no Event (hs-d96), so the poll's changes reach the column by the timer (`pr-opened`, `pr-feedback`, `pr-merged`, `plan-phase`, `plan-done` and `session-moved` move the Event id as before) | the machine's name and load, and the open pull requests. No engine, slots, Escalations or Events |
-| `statusbar` (bottom row) | the slots and config `concurrency`: the Attempts not ended, and `concurrency` | any (re-read when the store's highest Event id moved, coalesced to 500 ms, at least every 2 s); no subprocess, no `gh` | `workers N/M` |
-| `logs` (popup of the StatusBar's `▤` button) | the latest 500 Events (the `events list` default), oldest first | every Event: it follows live while the view shows the bottom (R36) | the Event log |
+| the StatusBar (tmux's status line; no view, no pane) | the slots and config `concurrency`: the Attempts not ended, and `concurrency`, read **by the engine** (§12), not by a view | the engine's tick (`watch.tick_seconds`): it runs `tmux set -g @cpd_workers '<styled text>'` only when the value changed | `workers N/M`. **A deliberate deviation** from "no tmux option carries state" (User, hs-d149): the option holds a display string, up to one tick late and stale while the engine is stopped; nothing reads it back |
+| `logs` (popup of the StatusBar's `▤` button, via `cpd tui action logs`) | the latest 500 Events (the `events list` default), oldest first | every Event: it follows live while the view shows the bottom (R36) | the Event log |
 | `worker` (beside the chat) | `cpd attempt show <attempt>` for the Worker's session file | `session-state` for its Session; `attempt-status` for its Attempt | the session file itself, read-only (vision decision 5), and the state |
 | `history` (chat slot, an archived Session) | the Session's file, named by `cpd session history <id>` (its `sessions.file`) | none: the view is static and re-reads nothing | the Session's pi file itself, read-only, once |
 | `chat` (placeholder) | none | none | the static text `No Lead here: pick a Plan in the session tree` |
@@ -1953,7 +1960,7 @@ Outline §8 and D4: the views take one **snapshot** with a read command, then **
 
 **Precedence.** A Session row shows the most urgent case that applies: `red > yellow > magenta > white > ◐ > ○ > ◌`. A Context row shows its most urgent live (not archived) Session by the same order; a Context with no live Session shows `◌`. **Archived rows** keep their glyph, drawn in the palette's darker grey (`Meaning::Nothing`), never animated. No phase colours anywhere on dots.
 
-**Actions.** The views change state only through commands: selecting a Lead runs `cpd session open <id>`; the new-Plan key runs `cpd plan new …`; the close key runs `cpd session close <id>`; each item of the tree's right-click menu runs the command §13.2 names; parking runs `cpd session park`; opening a Job's Worker opens a `cpd tui view worker` pane beside the chat (`split-window`, `@cpd_view worker`), which is the view's own layout, not Ledger state. The StatusBar's `⧉` click resets the layout (`resize-pane`, the view's own layout, not Ledger state), its legend button opens the legend popup and its `▤` button the logs popup (§13.2).
+**Actions.** The views change state only through commands: selecting a Lead runs `cpd session open <id>`; the new-Plan key runs `cpd plan new …`; the close key runs `cpd session close <id>`; each item of the tree's right-click menu runs the command §13.2 names; parking runs `cpd session park`; opening a Job's Worker opens a `cpd tui view worker` pane beside the chat (`split-window`, `@cpd_view worker`), which is the view's own layout, not Ledger state. The StatusBar's clicks run `cpd tui action` (§13.2): `⧉` resets the layout (`resize-pane`, the view's own layout, not Ledger state), the legend button opens the legend popup and the `▤` button the logs popup.
 
 Change from the spike and cpd 1's cockpit: the tree no longer discovers Sessions from tmux pane options (`@session_id`, `@agent_state`) or `leads/<id>/workflow`, and the plan view no longer reads `/tmp/cpd-tui/cache/`; both read the database through commands.
 
