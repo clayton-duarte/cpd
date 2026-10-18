@@ -401,6 +401,7 @@ The command surface of PRs; `commands.md` specifies each command in full.
 | `pr edit <key> [--repo <path>] [--base <b>] [--needs <k1,k2>]` | `grounding`, `plan` | changes a `waiting` PR; `--needs` replaces the whole list. After the lock: `pr_locked` (exit 3) |
 | `pr cancel <key>` | `grounding`, `plan` | `waiting → cancelled`; refused `pr_in_use` (exit 3) while a Job of the PR is not `cancelled` or a PR that is not `cancelled` needs it |
 | `pr start <key>` | `dispatch` | starts a `waiting` PR whose needs are all `merged` (`pr_not_ready`, exit 3): the retry after a failed start (A9) |
+| `job add --draft` | `plan`, `dispatch`, `pr`, `done` | adds the Job as a `draft` in any phase (§3.2); the Plan review of a later phase approves the drafts (§2.2) |
 | `job add --pr <key>` | as `job add` | the Job's PR, selected by the rule of §1.3; the PR must not be `merged` or `cancelled` (`pr_ended`, exit 3) |
 | `pr open --pr <key>`, `pr rebase --pr <key>`, `pr view --pr <key>` | as §7.6 | one PR, selected by the rule of §1.3 |
 | `pr poll [--plan <id>]` | any | the PR poller (hs-d96): one poll of every open pull request of the User, run by engine E5 or a Lead (§7.6); no `--pr` |
