@@ -140,8 +140,12 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     let chat = view(&panes, "chat");
     assert_eq!(windows(&env, "cpd"), ["main"]);
     assert_eq!(windows(&env, "cpd-work"), ["watch"]);
-    let views: Vec<Vec<String>> = ["tree", "plan", "widgets", "chat", "statusbar"].iter().map(|v| vec!["tui".into(), "view".into(), (*v).into()]).collect();
-    assert_eq!(views_started(&env), views);
+    // Each view runs in its own pane process; the contract promises which views exist, not their start order.
+    let mut views: Vec<Vec<String>> = ["tree", "plan", "widgets", "chat", "statusbar"].iter().map(|v| vec!["tui".into(), "view".into(), (*v).into()]).collect();
+    views.sort();
+    let mut started = views_started(&env);
+    started.sort();
+    assert_eq!(started, views);
     // The keyboard goes to the chat slot.
     assert_eq!(tmux_out(&env, &["display", "-p", "-t", "=cpd:main", "#{pane_id}"]).trim(), chat.id);
 

@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
-use cpd_core::ids::{PlanId, ReviewId};
+use cpd_core::ids::{ContextId, PlanId, ReviewId};
 use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -387,6 +387,137 @@ fn new_again_with_the_brief_writes_no_second_brief_record() {
     // A Plan without a brief file has no brief record.
     new_plan_only(&env, "api");
     assert_eq!(briefs(&env).len(), 2);
+}
+
+// ---------- the first message: the digest and the records after it (hs-d194 D6) ----------
+
+/// Notes `note-<from>` to `note-<to>` in Context `ctx`; the `seq` of each.
+fn notes(env: &TestEnv, from: u32, to: u32) -> Vec<i64> {
+    (from..=to).map(|n| env.cpd(&["context", "note", &format!("note-{n:02}"), "--context", "ctx"]).ok()["seq"].as_i64().unwrap()).collect()
+}
+
+/// The Context's digest file `<upto>.md`, as the distiller leaves it (a first message reads it, it does not validate it).
+fn digest_at(env: &TestEnv, upto: i64, text: &str) {
+    let context = ContextId::parse("ctx").unwrap();
+    fs::create_dir_all(home(env).context_digest_dir(&context)).unwrap();
+    fs::write(home(env).context_digest(&context, u64::try_from(upto).unwrap()), text).unwrap();
+}
+
+const LEAD_HEADER: &str = "You are the Lead of Plan pay \"Plan pay\" in Context ctx. Phase grounding: follow the cpd-lead skill.";
+
+fn lead_message(env: &TestEnv, plan: &str) -> String {
+    fs::read_to_string(home(env).lead_message(&pid(plan))).unwrap()
+}
+
+/// The positions of `needles` in `text`, each after the one before it.
+fn in_order(text: &str, needles: &[&str]) {
+    let mut at = 0;
+    for needle in needles {
+        let found = text[at..].find(needle).unwrap_or_else(|| panic!("{needle:?} after byte {at} in\n{text}"));
+        at += found + needle.len();
+    }
+}
+
+#[test]
+fn a_first_message_with_no_digest_holds_every_record() {
+    let env = TestEnv::new();
+    setup(&env);
+    notes(&env, 1, 25);
+    new_plan_only(&env, "pay");
+    let shown = env.cpd(&["context", "show", "--context", "ctx"]).ok();
+    let message = lead_message(&env, "pay");
+    assert_eq!(message, format!("{LEAD_HEADER}\n\n{}\n", shown["markdown"].as_str().unwrap()), "today's message: the Context as `context show` renders it");
+    assert!(message.contains("note-01") && message.contains("note-25"), "{message}");
+    assert!(!message.contains("more: cpd context show"), "{message}");
+}
+
+#[test]
+fn a_first_message_holds_the_digest_the_first_20_records_after_it_and_a_pointer() {
+    let env = TestEnv::new();
+    setup(&env);
+    let before = notes(&env, 1, 5);
+    let upto = *before.last().unwrap();
+    digest_at(&env, upto, "# Payments: digest\n\nThe ledger rules [m1-n1, m1-n2]; retries [m1-n3, m1-n4, m1-n5].\n");
+    let after = notes(&env, 6, 30);
+    new_with_brief(&env, "pay", "Retry the failed payouts.\n").ok();
+
+    let message = lead_message(&env, "pay");
+    // Newer than the digest: 25 notes, the `plan` record and this Plan's own brief (given in full, so not listed): 26 to list, 20 listed.
+    let listed: Vec<String> = (6..=25).map(|n| format!("note-{n:02}")).collect();
+    let first: Vec<&str> = ["Retry the failed payouts.", "# Payments: digest", "The ledger rules [m1-n1, m1-n2]"]
+        .into_iter()
+        .chain(listed.iter().map(String::as_str))
+        .collect();
+    in_order(&message, &first);
+    assert!(message.starts_with(&format!("{LEAD_HEADER}\n\nRetry the failed payouts.\n\n# Payments: digest\n")), "{message}");
+    for n in (1..=5).chain(26..=30) {
+        assert!(!message.contains(&format!("note-{n:02}")), "note-{n:02} is in the digest or past the 20, not listed: {message}");
+    }
+    assert_eq!(message.matches("Retry the failed payouts.").count(), 1, "own brief not listed again: {message}");
+    assert!(!message.contains("m1-p1"), "the `plan` record is among the 6 not listed: {message}");
+    let pointer = format!("and 6 more: cpd context show --context ctx --since {}", after[19]);
+    assert!(message.ends_with(&format!("\n\n{pointer}\n")), "{message}");
+
+    // The pointer lists what the message left out, the `plan` record too.
+    let rest = env.cpd(&["context", "show", "--context", "ctx", "--since", &after[19].to_string()]).ok();
+    let markdown = rest["markdown"].as_str().unwrap();
+    for n in 26..=30 {
+        assert!(markdown.contains(&format!("note-{n:02}")), "{markdown}");
+    }
+    assert!(markdown.contains("m1-p1"), "{markdown}");
+    assert!(!markdown.contains("note-25"), "{markdown}");
+}
+
+#[test]
+fn a_first_message_names_no_more_records_up_to_20_and_the_count_beyond() {
+    let env = TestEnv::new();
+    setup(&env);
+    let upto = *notes(&env, 1, 3).last().unwrap();
+    digest_at(&env, upto, "Digest [m1-n1, m1-n2, m1-n3].\n");
+    notes(&env, 4, 22);
+    // 19 notes and this Plan's `plan` record: exactly 20 newer records.
+    new_plan_only(&env, "pay");
+    let message = lead_message(&env, "pay");
+    assert!(message.contains("Digest [m1-n1, m1-n2, m1-n3].") && message.contains("note-04") && message.contains("note-22") && message.contains("m1-p1"), "{message}");
+    assert!(!message.contains("note-01") && !message.contains("more: cpd context show"), "{message}");
+    // One more Plan makes 21: the 21st is counted and pointed to.
+    new_plan_only(&env, "web");
+    let message = lead_message(&env, "web");
+    let plan = env.cpd(&["context", "show", "--context", "ctx", "--record", "m1-p1"]).ok()["records"][0]["seq"].as_i64().unwrap();
+    assert!(message.ends_with(&format!("\n\nand 1 more: cpd context show --context ctx --since {}\n", plan)), "{message}");
+    assert!(message.contains("m1-p1") && !message.contains("m1-p2"), "{message}");
+}
+
+#[test]
+fn a_first_message_with_a_digest_and_nothing_newer_is_the_digest() {
+    let env = TestEnv::new();
+    setup(&env);
+    let upto = env.cpd(&["context", "note", "A note.", "--context", "ctx"]).ok()["seq"].as_i64().unwrap();
+    digest_at(&env, upto + 1, "Digest [m1-n1].\n");
+    digest_at(&env, upto + 10, "A later digest [m1-n1], past every record.\n");
+    new_plan_only(&env, "pay");
+    let message = lead_message(&env, "pay");
+    assert_eq!(message, format!("{LEAD_HEADER}\n\nA later digest [m1-n1], past every record.\n"), "the digest with the highest upto_seq, and no records after it: {message}");
+}
+
+#[test]
+fn a_managers_first_message_is_the_same_digest_and_records() {
+    let env = TestEnv::new();
+    setup(&env);
+    let upto = *notes(&env, 1, 5).last().unwrap();
+    digest_at(&env, upto, "# Payments: digest\n\nEverything [m1-n1, m1-n2, m1-n3, m1-n4, m1-n5].\n");
+    let after = notes(&env, 6, 30);
+    new_plan_only(&env, "pay");
+    env.cpd(&["context", "manager", "--context", "ctx"]).ok();
+    let message = fs::read_to_string(home(&env).manager_message(&ContextId::parse("ctx").unwrap())).unwrap();
+    let header = "You are the Manager of Context ctx \"Payments\". Follow the cpd-manager skill.";
+    let listed: Vec<String> = (6..=25).map(|n| format!("note-{n:02}")).collect();
+    let all: Vec<&str> = ["# Payments: digest", "Everything [m1-n1"].into_iter().chain(listed.iter().map(String::as_str)).collect();
+    assert!(message.starts_with(&format!("{header}\n\n# Payments: digest\n")), "{message}");
+    in_order(&message, &all);
+    assert!(!message.contains("note-26") && !message.contains("note-05"), "{message}");
+    // 25 notes and the `plan` record are newer than the digest: 6 are not listed.
+    assert!(message.ends_with(&format!("\n\nand 6 more: cpd context show --context ctx --since {}\n", after[19])), "{message}");
 }
 
 #[test]
