@@ -84,11 +84,12 @@ Common refusals, which apply to every command and are not repeated in the sectio
 
 ### 1.4 Files written by commands
 
-The `$CPD_HOME` layout is §1.4. Commands in this file write four files the contract's layout does not list (amendment 4, §19); each is beside its peers and named so it cannot collide:
+The `$CPD_HOME` layout is §1.4. Commands in this file write five files the contract's layout does not list (amendment 4, §19); each is beside its peers and named so it cannot collide:
 
 | File | Written by | Read by |
 |---|---|---|
 | `run/<plan>/lead-message.md` | `plan new` | the Plan's Lead `session run` (its first message) |
+| `run/<context>/manager-message.md` | `context manager` (B3-A2) | the Manager's `session run` (its first message) |
 | `run/<plan>/plan-<review>.md` | `plan review` | the pi adapter, which opens it in plannotator (§15.5) |
 | `run/<plan>/messages/<session>.md` | `session fork --message-file` copies the file here | that Session's `session run` |
 | `run/<plan>/reviews/<job>.md` | a review Job's Worker (B2, contract §1.4) | the Lead (and the User) |
@@ -105,7 +106,8 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 |---|---|---|---|
 | `context new` | Lead, User | yes | §2.2, §4.6 |
 | `context list`, `context show` | Lead, TUI | no | §2.2 |
-| `context decide`, `note`, `ask`, `answer` | Lead | yes | §4.6 |
+| `context decide`, `note`, `ask`, `answer` | Lead, Manager | yes | §4.6 |
+| `context manager` | User (TUI), Manager | yes | §2.2, §6.5 |
 | `context rename` | User (TUI) | yes | §2.2 |
 | `context archive`, `unarchive` | User (TUI) | yes | §2.2 |
 | `plan new` | User (TUI), Lead | yes | §3.1, §6.7 |
@@ -166,7 +168,7 @@ cpd context new <id> --title <text> [--jira <key>]
 | no Context row with this id, unless it has the same title and Jira key | `context_exists` | 3 |
 
 Effects:
-- **Rows**, one transaction: `contexts` (`created_on` = `machine`, `lead_session` and `grounded_seq` null). **Event** `context-created` `{title, jira, created_on}`. Nothing else is written: no directory, no git.
+- **Rows**, one transaction: `contexts` (`created_on` = `machine`). **Event** `context-created` `{title, jira, created_on}`. Nothing else is written: no directory, no git.
 - **tmux:** none.
 
 ```json
@@ -185,7 +187,7 @@ No flags, no preconditions, no effects (one read transaction).
 
 ```json
 {"ok": true, "contexts": [
-  {"id": "building-cpd", "title": "Building cpd", "jira": null, "archived_at": null, "grounded": true, "lead_session": "6f1c…", "grounded_seq": 41,
+  {"id": "building-cpd", "title": "Building cpd", "jira": null, "archived_at": null,
    "records": 57, "open_questions": 2,
    "plans": [{"id": "cpd2", "title": "cpd in Rust", "phase": "dispatch", "lead_session": "596d007f-…", "archived_at": null}]}],
  "events_cursor": 48213}
@@ -196,19 +198,22 @@ No flags, no preconditions, no effects (one read transaction).
 ### 3.3 `context show`
 
 ```
-cpd context show [--context <id>] [--since <seq>]
+cpd context show [--context <id>] [--since <seq>] [--record <id>]
 ```
 
 | Flag | Meaning |
 |---|---|
-| `--since <seq>` | only records whose index position `seq` is greater (exclusive, like `events --since`); what a forked Lead's first message holds (§3.1) |
+| `--since <seq>` | only records whose index position `seq` is greater (exclusive, like `events --since`); what a Session's turn-start update holds (§15.6) |
+| `--record <id>` | print that one record in full (B3-A4): `records` has only it, `markdown` renders only it with its whole `text`. Exclusive with `--since` (`usage`). A record not in the Context: `record_not_found` (exit 3, §4.6) |
 
-Effects: none. Output: the Context, its records in index order, and `markdown`, the rendering of §2.2 "Context record" (title and Jira key; Plans; active decisions; superseded decisions with their successor; open questions; answered questions with their answers; notes; each item with its id and date). With `--since`, `markdown` renders only those records, in the same order of sections.
+Effects: none. Output: the Context, its records in index order, and `markdown`, the rendering of §2.2 "Context record" (title and Jira key; Plans; active decisions; superseded decisions with their successor; open questions; answered questions with their answers; notes; each item with its id and date; briefs under their Plan, see below). With `--since`, `markdown` renders only those records, in the same order of sections.
+
+**Briefs** (B3-A4): a record of kind `brief` is listed **short**, in `markdown` and in `records`: its id and the first line of its `text`, under its Plan (the Plan's section), never in full. In `records` its `text` is that first line and the entry has `"short": true`; its `plan` is `{id, machine}`. The full text is `cpd context show --record <id>`. `--record` is the only way to get a brief whole.
 
 **Plans** (R34, A12): each `plan` record is listed with the repos of its Plan's PRs that are not `cancelled`, read from this machine's database (`prs.repo`) in the same read transaction, each repo once, in PR key order; a Plan of another machine, or one with no PR yet, shows none. The record itself carries no repo (§2.2; a `repo` in a record written before R34 was dropped by migration 0007's import, contract §4.5). In `records`, a `plan` record's `plan` is `{id, machine, jira}`, and the entry has `repos`, the list just described.
 
 ```json
-{"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null, "grounded": true, "grounded_seq": 41},
+{"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null},
  "records": [{"seq": 42, "id": "hs-d7", "kind": "decision", "at": "2026-10-14T21:12:00.000Z", "machine": "hs",
               "by": {"session": "596d007f-…", "plan": "cpd2"}, "text": "One engine per machine.", "supersedes": "hs-d2"}],
  "markdown": "# Building cpd\n\n## Plans\n…"}
@@ -292,7 +297,7 @@ Idempotent: yes.
 cpd context archive <id>
 ```
 
-Archives the Context with its Plans, all their Sessions and its grounded Lead (contract §2.2 "Archived").
+Archives the Context with its Plans, all their Sessions and its Manager (contract §2.2 "Archived").
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -331,6 +336,33 @@ Effects: **rows**, one transaction: `archived_at = NULL` on the Context and ever
 
 `archived` lists the objects changed (their `archived_at` is now null); `closed` is always empty. Idempotent: yes; nothing archived: `"already": true`, nothing written.
 
+### 3.10 `context manager`
+
+```
+cpd context manager [--context <c>]
+```
+
+Gets the Context's **Manager** (B3-A1, B3-A2; CONTEXT.md "Manager"): registers and starts it when the Context has none, starts it again when it is stopped. The Context is `--context`, else the selected Plan's (§1.3).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Context exists | `context_not_found` | 4 |
+| the Context is not archived; `details.next` = `cpd context unarchive <c>` | `archived` | 3 |
+| the cockpit's tmux session exists when a pane must be started; `details.next` = `cpd tui` | `no_cockpit` | 3 |
+
+Effects, by the state of the Context's live (not archived) Manager Session:
+- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>-manager`; `cwd` = the realpath of the caller's cwd; `tier` = config `manager_tier`, default `O5`; `forked_from` null; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`, no plannotator variable); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. Its first message, written to `run/<context>/manager-message.md` (§1.4): `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then `context show --context <c>` rendered as markdown (every record; briefs short).
+- **`stopped` with no pane:** the tmux step alone, in the stored `cwd`: `session run` resumes pi on its session file (`pi --session <file>`, §6.5), with no first message.
+- **Otherwise** (it has a pane): nothing.
+
+The command never moves the chat slot (hs-d103); `session open <manager>` does (§10.4).
+
+```json
+{"ok": true, "manager": {"session": "3c9a…", "name": "building-cpd-manager", "state": "stopped", "pane": "%47", "window": "@21"}, "started": true}
+```
+
+`started` is true when this call registered the Manager or started its pane. Idempotent: yes; a Manager with a pane returns `"started": false` and writes nothing.
+
 ## 4. `plan`
 
 A Plan (§2.2) and its phases (§3.1). Replaces cpd 1's `workflow` group (D3) and `plan` group.
@@ -350,7 +382,7 @@ A Plan has no repo (R34, A12): its PRs are added later with `pr add` (§9.4), an
 | `--title <text>` | required |
 | `--jira <key>` | Jira task key, stored only |
 | `--name <name>` | the Lead's pi display name; default `<id>` |
-| `--brief-file <file>` | the User's brief for the Lead: its text goes into the Lead's first message |
+| `--brief-file <file>` | the brief for the Lead (B3-A4): written as a Context record of kind `brief` and put into the Lead's first message in full |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -359,21 +391,21 @@ A Plan has no repo (R34, A12): its PRs are added later with `pr add` (§9.4), an
 | the Context is not archived; `details.next` = `cpd context unarchive <c>` | `archived` | 3 |
 
 Effects, in this order:
-1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the realpath of the caller's cwd; `tier = lead_tier`; `forked_from` = the Context's `lead_session` or null; `state = stopped`); `plans` (`phase = grounding`, `lead_session` = the new Session); no `prs` row. **Events** `plan-created` `{title, jira, lead_session, forked_from, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
-2. **Context record:** the record write of §3 (one transaction) with kind `plan` (letter `p`), `text` = the title, `plan` = `{id, machine, jira}`; **Event** `context-record`.
-3. **First message**, written to `run/<id>/lead-message.md`: a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the brief file's text if given, then `context show --context <c>` rendered as markdown, with `--since <grounded_seq>` when the Lead is a fork (§3.1).
+1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the realpath of the caller's cwd; `tier = lead_tier`; `forked_from` null; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `prs` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
+2. **Context records:** the record write of §3 (one transaction) with kind `plan` (letter `p`), `text` = the title, `plan` = `{id, machine, jira}`; **Event** `context-record`. With `--brief-file`, a second record of kind `brief` (letter `b`), `text` = the file's text, `plan` = `{id, machine}`; **Event** `context-record`.
+3. **First message**, written to `run/<id>/lead-message.md`: a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the full brief (the file's text) if given, then `context show --context <c>` rendered as markdown: every Context record, other Plans' briefs short (§3.3).
 4. **tmux:** start the server if it is not running (§6.1) and the cockpit session `cpd` if it is missing; then `new-window -d -t =cpd: -n park-<id> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -e CPD_PLAN=<id> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, and `set -p -t <pane> @cpd_session <session>`. One transaction: `sessions.tmux_pane`; **Event** `session-moved` `{pane, window, place: "parked"}`.
-5. In the pane, `session run` (§10.8) forks the grounded Lead when it is idle (§6.7), or starts a fresh Lead, with the first message.
+5. In the pane, `session run` (§10.8) starts a fresh Lead with the first message.
 
 When the cockpit session is missing, plan new creates it with the new Lead's park window as its first window; cpd tui builds main later.
 
 ```json
 {"ok": true, "plan": {"id": "pay-4521", "context": "payments", "title": "Retry failed payouts", "jira": null, "phase": "grounding", "lead_session": "8d0e…", "prs": []},
- "lead": {"session": "8d0e…", "name": "pay-4521", "forked_from": "6f1c…", "cwd": "/home/clayton", "pane": "%41", "window": "@17"},
+ "lead": {"session": "8d0e…", "name": "pay-4521", "forked_from": null, "cwd": "/home/clayton", "pane": "%41", "window": "@17"},
  "record": "hs-p4"}
 ```
 
-Idempotent: yes. With the same flags it returns `"already": true` and redoes any step that did not happen: the `plan` record when the Context has none for this Plan, and step 4 when the Lead is `stopped` with no pane (in the stored `cwd`). The caller's cwd is not a flag: a rerun from another directory is still `already` and keeps the stored `cwd`. Different flags: `plan_exists`.
+Idempotent: yes. With the same flags it returns `"already": true` and redoes any step that did not happen: the `plan` record when the Context has none for this Plan, the `brief` record when `--brief-file` is given and the Context has none for this Plan, and step 4 when the Lead is `stopped` with no pane (in the stored `cwd`). The caller's cwd is not a flag: a rerun from another directory is still `already` and keeps the stored `cwd`. Different flags: `plan_exists`.
 
 ### 4.2 `plan list`
 
@@ -434,15 +466,13 @@ The only phase moved by hand (cpd 1 §11 `workflow phase`, kept). Any other targ
 |---|---|---|
 | the phase is `grounding` (already `plan`: `already`) | `illegal_transition` | 3 |
 
-Effects: exactly §3.1 "The Context's grounded Lead":
-- **Rows**, one transaction: `plans.phase = plan`; the compare-and-swap on `contexts.lead_session` and `grounded_seq`; only if it changed a row, a `sessions` row for the grounded Lead (`role = lead`, `plan = null`, `forked_from` = this Plan's Lead, `name` = `<context> (grounded)`, `cwd` = this Lead's cwd, `tier = lead_tier`, `stopped`). **Events** `plan-phase` `{from: "grounding", to: "plan"}`, and with the new Session `session-registered` and `context-grounded` `{seq, forked_from}`.
-- **tmux**, after the commit and only with the new Session: `new-window -d -t =cpd: -n ctx-<context> … -- cpd session run <grounded id>`, `@cpd_session` on its pane; one transaction: `tmux_pane` and `session-moved` `{place: "parked"}`. Its `session run` waits until this Lead is idle, then forks it with no first message (§6.7).
+Effects (B3-A3; no grounded Lead is created, hs-d129): **rows**, one transaction: `plans.phase = plan`; **Event** `plan-phase` `{from: "grounding", to: "plan"}`. No Session, no `context-grounded` Event, no tmux.
 
 ```json
-{"ok": true, "plan": "pay-4521", "phase": "plan", "grounded_lead": {"session": "6f1c…", "pane": "%44", "window": "@19"}}
+{"ok": true, "plan": "pay-4521", "phase": "plan"}
 ```
 
-`grounded_lead` is null when the Context already had one. Idempotent: yes; in phase `plan` it returns `"already": true`, and creates the `ctx-<context>` window when the Context's grounded Lead was forked from this Plan's Lead and has no pane (a crash between the two transactions).
+Idempotent: yes; in phase `plan` it returns `"already": true` and writes nothing.
 
 ### 4.5 `plan render`
 
@@ -1191,11 +1221,11 @@ Effects: none; one read transaction.
 ```json
 {"ok": true, "sessions": [
   {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "blocked", "state_label": "cpd: Worker question", "state_at": "…", "archived_at": null,
-   "place": "chat", "tmux_pane": "%12", "file": "/home/clayton/.pi/agent/sessions/…_596d007f-….jsonl", "forked_from": "6f1c…", "plan_lead": true, "grounded_lead": false, "tier": "O3", "cwd": "/home/clayton/projects/cpd"}],
+   "place": "chat", "tmux_pane": "%12", "file": "/home/clayton/.pi/agent/sessions/…_596d007f-….jsonl", "forked_from": null, "plan_lead": true, "tier": "O3", "cwd": "/home/clayton/projects/cpd"}],
  "events_cursor": 48213}
 ```
 
-`plan_lead` is true for the Session that is its Plan's `lead_session`; `grounded_lead` for a Context's `lead_session`. Read-only.
+`role` is `lead`, `worker` or `manager` (B3-A1; a Manager has `plan` null, `attempt` null and `plan_lead` false; `--role manager` lists them). `plan_lead` is true for the Session that is its Plan's `lead_session`. Read-only.
 
 ### 10.2 `session show`
 
@@ -1206,7 +1236,7 @@ cpd session show [<id>]
 `<id>` defaults to the selected Session (`CPD_SESSION`). Output: the fields of `session list` plus `created_at`, `registered_event` (the id of its `session-registered` Event, the pi adapter's first cursor, §15.2) and, for a Plan's Lead, `open_escalations` (ids). Effects: none.
 
 ```json
-{"ok": true, "session": {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "idle", "state_label": null, "place": "chat", "tmux_pane": "%12", "file": "…", "forked_from": "6f1c…", "plan_lead": true, "grounded_lead": false, "tier": "O3", "cwd": "/home/clayton/projects/cpd", "created_at": "…", "registered_event": 40117},
+{"ok": true, "session": {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "idle", "state_label": null, "place": "chat", "tmux_pane": "%12", "file": "…", "forked_from": null, "plan_lead": true, "tier": "O3", "cwd": "/home/clayton/projects/cpd", "created_at": "…", "registered_event": 40117},
  "open_escalations": ["contract-commands-a1-q1"]}
 ```
 
@@ -1230,7 +1260,7 @@ cpd session fork <source> [--plan <id>] [--name <name>] [--message-file <file>]
 | Precondition | Code | Exit |
 |---|---|---|
 | the source is a `lead` Session | `not_a_lead` | 3 |
-| a Plan is known: `--plan`, else the source's Plan (a grounded Lead has none and is forked only by `plan new`) | `plan_required` | 2 |
+| a Plan is known: `--plan`, else the source's Plan (a Manager has none) | `plan_required` | 2 |
 | the source is not archived; `details.next` = `cpd session unarchive <source>` | `archived` | 3 |
 | the cockpit's tmux session (`tmux.cockpit_session`) exists, checked before anything is written; `details.next` = `cpd tui` | `no_cockpit` | 3 |
 
@@ -1251,12 +1281,11 @@ Idempotent: no; each call registers a new Session.
 cpd session open <id>
 ```
 
-Brings a Lead into the chat slot (§6.4).
+Brings a Lead, or a Context's Manager, into the chat slot (§6.4).
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the Session is a `lead` | `not_a_lead` | 3 |
-| it has a Plan (a grounded Lead is never typed into, §3.1) | `grounded_lead` | 3 |
+| the Session is a `lead` or a `manager` (B3-A2) | `not_a_lead` | 3 |
 | it is not archived; `details.next` = `cpd session unarchive <id>` | `archived` | 3 |
 | the cockpit's `main` window and its chat slot exist; `details.next` = `cpd tui` | `no_cockpit` | 3 |
 
@@ -1342,15 +1371,15 @@ The program in every Lead pane (§6.2): owns its terminal (§1.2). Steps of §6.
 2. Else, if `forked_from` is set, wait until the source is idle (§6.7 step 1, every 2 s, showing the waiting line), then `pi … --fork <source file> --session-id <id> -n <name> [-- <first message>]`.
 3. Else start a fresh Lead: `pi --model … --session-id <id> -n <name> -- <first message>`.
 
-Before it starts pi (steps 1–3) a Lead with a Plan gets its plannotator port (§6.5 "The Plan's plannotator port"): `PLANNOTATOR_PORT=<port>` replaces the value in the pane's environment. When the range is full the pane shows `no_port` and names the Plans that hold it, and Enter retries; pi is not started. A grounded Lead gets no port.
+Before it starts pi (steps 1–3) a Lead with a Plan gets its plannotator port (§6.5 "The Plan's plannotator port"): `PLANNOTATOR_PORT=<port>` replaces the value in the pane's environment. When the range is full the pane shows `no_port` and names the Plans that hold it, and Enter retries; pi is not started. A Manager gets no port.
 
 **Reload on install** (hs-d33, hs-d38, hs-d49; §6.7 "Reload on install"). The wrapper detects a new install by the identity of its executable (§3.4 of the contract). At the Lead's next idle (state `idle`, last turn finished, session file quiet `fork_quiet_seconds`) it sends pi `SIGTERM`, waits for it to exit and `exec`s the same path with the same argv; the new `session run` takes step 1. A parked Lead reloads at once. The Lead in the chat slot waits until it is idle **and** parked, or idle for 10 minutes, so unsent typing is not lost. A `blocked` Lead is never idle. If pi has not exited 10 s after `SIGTERM`, the wrapper sends `SIGKILL`, then `exec`s. If pi exits on its own after an install, the wrapper `exec`s before any store write.
 
-The first message is the file `plan new` or `session fork` wrote (§1.4); none for a grounded Lead. While pi runs, it watches for the session file (§6.5) and records `sessions.file` once it appears (a data write, no Event). When pi exits it runs `session state stopped` if the adapter did not, prints `pi exited. Press Enter to resume <name> here.` and resumes on Enter.
+The first message is the file `plan new` or `session fork` wrote (§1.4); for a Manager, `run/<context>/manager-message.md` (§3.10), none when resumed. While pi runs, it watches for the session file (§6.5) and records `sessions.file` once it appears (a data write, no Event). When pi exits it runs `session state stopped` if the adapter did not, prints `pi exited. Press Enter to resume <name> here.` and resumes on Enter.
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the Session is a `lead` | `not_a_lead` | 3 |
+| the Session is a `lead` or a `manager` | `not_a_lead` | 3 |
 | its pane's `@cpd_session` is this Session | `wrong_pane` | 3 |
 | the Plan's port is free in the range (Lead with a Plan only) | `no_port` | 3 |
 
@@ -1467,7 +1496,8 @@ Effects:
 
 `--session <id>` applies §5.3's rule, with "a Lead of Plan P" made precise (amendment 7, §19):
 - for the Session that is its Plan's `lead_session`: Events with `plan` = its Plan; Events with `plan IS NULL AND context` = its Context; Events with `session` = itself;
-- for any other Session (Workers, side forks, a grounded Lead): Events with `session` = itself.
+- for any other Session (Workers, side forks): Events with `session` = itself;
+- for a Manager (B3-A5): Events with `session` = itself only, so a Plan's Events never wake it (hs-d86). It reads them itself at turn start (§15.6).
 
 ### 11.1 `events list`
 
@@ -1588,7 +1618,7 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
 **`tree`.**
 - **Rows.** A Context row (a dot of the busiest phase inside, its name bold, the Plan count when collapsed) and under it one row per Lead Session: the Plans' Lead Sessions in `created_at` order, **then, after them, every Session forked by `session fork`** (B1, contract §6.8: a fork is a sibling under the Context, never nested under a Plan or under the Session it came from, whatever its `plan` or `forked_from`; *decided*: they are ordered by `created_at` and show no counters, the counters being the Plan Lead's). Row: guide, dot, name (cut with `…` before the counters), and the five Job counters `queued⋅running⋅merging⋅failed⋅merged` right-aligned (cancelled Jobs are not counted; no counters without a Plan). `⏵` marks the Session in the chat slot, in column 0, and its name is bold. The dot is `●` when the Session **needs you**, else `○`; the rule is §17's.
 - **Cursor.** Keyboard only: a click never moves or shows it. It moves between Sessions only (Context rows are not selectable), is drawn inverted across the full row only while the pane has keyboard focus (`focus-events`, §6.1) and after an arrow key; Enter, `n` and `x` act on it only while it shows.
-- **Clicks.** A click on a Session opens it in the chat slot and focuses the chat (`session open`, then `select-pane`); a click on a Context row collapses or expands it. Clicks are ignored while a prompt is open.
+- **Clicks.** A click on a Session opens it in the chat slot and focuses the chat (`session open`, then `select-pane`); a click on a Context row's fold glyph (`▸`/`▾`) folds or unfolds it, and a click elsewhere on the row runs `cpd context manager --context <c>`, then `session open <manager>`, then `select-pane` on the chat slot (B3-A6). Clicks are ignored while a prompt is open.
 - **`n`** asks for a name in one inline row at the bottom (Enter starts, Esc cancels, an empty name is refused) and runs `plan new` (§4.1) in the selected Session's Context: the Plan forks the Context's grounded Lead (R15), the one deviation from cpd 1's `n`, which forked the selected session. On a Context row it says `pick the session to fork`.
 - **`x`** closes the selected Session's pane after the inline prompt `Close <label>? pi stops; the session file stays (y/N)`, preceded by `<label> is working.` when its state is `working`; only `y` closes. It runs `cpd session close <id>` (§10.9). The Session in the chat slot is refused with `switch to another session first`, also when it moved there while the prompt was open. On a Context row it does nothing. `<label>` is the Session's name.
 - **`?`** opens the legend popup. The view has no other key that opens the menu or acts on it; what a key used to do is still a command.
@@ -1747,7 +1777,7 @@ At `session_start`, in this order:
 2. `cpd session state idle --session <id>` (`stopped → idle`, §3.6); then `working` if `ctx.isIdle()` is false.
 3. **Name:** if pi's session name differs from the Session's `name`, `pi.setSessionName(name)`: a `session-renamed` missed while pi was down still applies.
 4. **Cursor** (§5.3 "No loss, no duplicates"): the greater of `registered_event` and the `details.id` of the last `cpd` custom message in the session's entries whose `details.delivered_to` is this Session's id. The adapter puts `delivered_to` into every message it delivers (amendment 5, §19). Why: a fork's file starts with its source's messages, whose Event ids belong to the source's stream; counting them could skip Events addressed to the fork.
-5. **Blocking reasons** (Plan Lead only): one per `open` Escalation of its Plan (`cpd plan show`), and one per pending Plan review this session opened (its `cpd-plan-review` entries, §15.5).
+5. **Blocking reasons** (Plan Lead only; a Manager has none): one per `open` Escalation of its Plan (`cpd plan show`), and one per pending Plan review this session opened (its `cpd-plan-review` entries, §15.5).
 6. **Follow:** spawn `cpd events follow --session <id> --since <cursor>`.
 
 The cursor in memory advances after each line is handled, delivered or not. Only delivered messages persist it, so after a restart the Events handled without a message (`escalation-answered`, `escalation-expired`, `session-renamed`, `plan-review`) are seen again; every handler below is idempotent for that reason.
@@ -1758,7 +1788,7 @@ The cursor in memory advances after each line is handled, delivered or not. Only
 
 Events arrive in id order; the follower already applied §11's `--session` rule, so a Lead receives its Plan's Events and a Worker or side fork only those addressed to it. Delivery is `pi.sendMessage({customType: "cpd", content: event.text, display: true, details: {...event, delivered_to: <id>}}, {triggerTurn, deliverAs: "followUp"})` (§5.3).
 
-| Kind | Plan Lead | Worker, side fork, grounded Lead |
+| Kind | Plan Lead | Worker, side fork |
 |---|---|---|
 | `job-merged`, `job-failed`, `all-merged`, `pr-feedback`, `plan-done`, `error` | message, **turn**. `all-merged` and `pr-feedback` carry the PR's key in `data.pr`; the Lead answers `all-merged` with `cpd pr open --pr <key>`, and an `error` with code `pr_start_failed` with `cpd pr start <key>` once the cause is fixed (R34, A9) | |
 | `attempt-retry`, `job-cancelled` | message, no turn | |
@@ -1769,9 +1799,11 @@ Events arrive in id order; the follower already applied §11's `--session` rule,
 | `plan-review` with `status: approved` or `rejected`, for a pending entry of this session | a decision made outside plannotator (§15.5 "Deciding elsewhere"): closes `plan-review:<review>`; message `cpd-plan-decision`, **turn** (own custom type, not `cpd`). For any other review: ignored | |
 | `session-renamed` (`session` = itself) | `pi.setSessionName(name)` and `ctx.ui.notify("cpd: session renamed to \"<name>\"")`; no message, no turn | same |
 | `attempt-nudge` (`session` = itself) | | message with `data.prompt` as content, **turn** |
-| `session-message` (`session` = itself) | message, **turn**, `deliverAs: "followUp"`; for every Lead (Plan Lead, side fork, grounded Lead, the Manager; the `--session` rule delivers Events addressed to a Session to it). Content `Message from <sender>: <text>`, `<sender>` = the sender Session's name and id (`<name> (<id>)`), or `the User` when `data.from` is null. An idle Lead starts a turn at once; a working or blocked one gets it after its running turn, never interrupted | |
+| `session-message` (`session` = itself) | message, **turn**, `deliverAs: "followUp"`; for every Lead (Plan Lead, side fork) and the Manager ( the `--session` rule delivers Events addressed to a Session to it). Content `Message from <sender>: <text>`, `<sender>` = the sender Session's name and id (`<name> (<id>)`), or `the User` when `data.from` is null. An idle Lead starts a turn at once; a working or blocked one gets it after its running turn, never interrupted | |
 | `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | ignored: no message, no turn | ignored |
 | every other kind | ignored | ignored |
+
+**The Manager** (B3-A5) is a Session of role `manager`: it has no Plan, so §15.2 step 5 (blocking reasons) and §15.5 (plannotator, the tool `cpd_plan_review`) do not apply to it and nothing is opened or registered for them. Its follower follows only Events addressed to it (§11), so of this table only `session-message` and `session-renamed` reach it: a Plan's Events never wake it. It learns of them through the digest at turn start (§15.6).
 
 This is §5.3's table; the `plan-review` row is the Plan review protocol §5.3 leaves to this file (amendment 6, §19). A blocking reason opened twice or closed when not open changes nothing (cpd 1 `blocked.ts`, kept), which makes replays harmless.
 
@@ -1832,9 +1864,9 @@ Rejected alternatives: one shared review server (cpd would have to run plannotat
 
 Batch B2 (hs-d79, hs-d132). A Lead sees what other Sessions wrote to its Context without polling.
 
-**When.** At pi's `before_agent_start`, for every run of a Session whose role is `lead`; never a Worker. It never starts or interrupts a turn: it only adds a message to the run that is starting.
+**When.** At pi's `before_agent_start`, for every run of a Session whose role is `lead` or `manager`; never a Worker. It never starts or interrupts a turn: it only adds a message to the run that is starting.
 
-**What.** The adapter returns one message, `customType: "cpd-context"`, `display: true`, listing the Context records written **by other Sessions** (`by.session` ≠ this Session) since its cursor, oldest first, each in full. Nothing is returned when there are none. Format:
+**What.** The adapter returns one message, `customType: "cpd-context"`, `display: true`, listing the Context records written **by other Sessions** (`by.session` ≠ this Session) since its cursor, oldest first, each in full, except a `brief`, which is shown short: its id and first line, with its Plan (§3.3; the whole text is `cpd context show --record <id>`). Nothing is returned when there are none. Format:
 
 ```
 Context building-cpd: 2 new records since your last turn.
@@ -1851,6 +1883,16 @@ Header `Context <c>: <N> new records since your last turn.`; each line `- <id> <
 **Reading.** `cpd events list --context <c> --kind context-record --since <cursor>` gives the new `context-record` Events (each `data.seq`); then `cpd context show --context <c> --since <smallest seq - 1>` gives the records with `by`. The adapter skips its own records (`by.session` = this Session). The message's `details` is `{event: <highest context-record Event id read>, delivered_to: <id>, records: [ids]}`; `event` counts own records too, so they are not read again. If every record read is its own, no message is added and the cursor stays (the next read passes them again and skips them again). No schema change.
 
 **Failure.** A failed read adds no message and leaves the cursor, so the next run reads again. It is reported once as an error message (§15.1, no turn: `triggerTurn: false`), and again only after a read has succeeded.
+
+**The Manager's digest** (B3-A5, hs-d86). For a Session of role `manager` the message adds, after the records, a section:
+
+```
+Plans:
+- 2026-10-18T09:12:00Z pay-4521: Plan phase dispatch.
+- 2026-10-18T09:40:00Z pay-4522: Job api-1 failed.
+```
+
+One line per Event of kinds `plan-created`, `plan-phase`, `pr-opened`, `pr-merged`, `job-failed`, `escalation` and `plan-done` for the Manager's Context (`events list --context <c> --since <cursor>`, filtered by kind), oldest first, `- <at> <plan>: <event text>`. At most 20 lines; more end with `and <K> more: cpd events list --context <c> --since <id>`, `<id>` the id of the last Event listed. **One cursor** serves both sections, in Event ids: the records are read as above, the section from the same `--since`, and `details.event` is the highest Event id of either read (`context-record` or a listed kind). The message is returned when either section has something and carries nothing else when neither has. A failed read of the section fails the whole message as in "Failure". The Manager's follower is not involved (§15.3): the digest is the only way a Plan's Events reach it, and it never starts a turn.
 
 ## 16. The Worker contract
 
@@ -1909,7 +1951,7 @@ Outline §8 and D4: the views take one **snapshot** with a read command, then **
 
 **The tree's ● rule (needs you).** A Lead Session's dot is `●` when its state is `blocked`, or when it is `idle`, not in the chat slot, and its latest `session-state` Event with `to: "idle"` is newer than its latest `session-moved` Event with `place: "chat"` (never in the slot counts as older than everything). It is derived from Events, with no write: it replaces cpd 1's `@asking`, `@settled_at` and `@seen_at` pane options, and shows the same thing, a Lead that waits on the User or finished a turn the User has not seen.
 
-**Actions.** The views change state only through commands: selecting a Lead runs `cpd session open <id>`; the new-Plan key runs `cpd plan new …`; the close key runs `cpd session close <id>`; each item of the tree's right-click menu runs the command §13.2 names; parking runs `cpd session park`; opening a Job's Worker opens a `cpd tui view worker` pane beside the chat (`split-window`, `@cpd_view worker`), which is the view's own layout, not Ledger state. The StatusBar's ⧉ click resets the layout (`resize-pane`, the view's own layout, not Ledger state), its legend button opens the legend popup and its ` ≡ logs ` button the logs popup (§13.2).
+**Actions.** The views change state only through commands: selecting a Lead runs `cpd session open <id>`; a click on a Context row runs `cpd context manager --context <c>` first (§13.2); the new-Plan key runs `cpd plan new …`; the close key runs `cpd session close <id>`; each item of the tree's right-click menu runs the command §13.2 names; parking runs `cpd session park`; opening a Job's Worker opens a `cpd tui view worker` pane beside the chat (`split-window`, `@cpd_view worker`), which is the view's own layout, not Ledger state. The StatusBar's ⧉ click resets the layout (`resize-pane`, the view's own layout, not Ledger state), its legend button opens the legend popup and its ` ≡ logs ` button the logs popup (§13.2).
 
 Change from the spike and cpd 1's cockpit: the tree no longer discovers Sessions from tmux pane options (`@session_id`, `@agent_state`) or `leads/<id>/workflow`, and the plan view no longer reads `/tmp/cpd-tui/cache/`; both read the database through commands.
 

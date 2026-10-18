@@ -7,7 +7,7 @@ CPD (Context → Plan → Dispatch) turns one human ticket into a reviewed pull 
 A Plan moves through the phases **grounding → plan → dispatch → deploy → done** (contract §3.1). A Plan in **deploy** or **done** returns to **dispatch** when a PR is added (`cpd pr add`).
 
 **Grounding** (phase, new name):
-The first phase of every Plan, in which the Lead grounds itself on the Plan's Context: it reads the Context's records and the material the User provides, receives Requirements, and interviews the User until unknowns are minimised. When the Lead is a fork of the Context's grounded Lead, it only adds what it learns and moves on. Replaces cpd 1's "Context" phase name, so that "Context" names only the entity.
+The first phase of every Plan, in which the Lead grounds itself on the Plan's Context: it reads the Context's records and the material the User provides, receives Requirements, and interviews the User until unknowns are minimised. A Lead always starts fresh, from its Plan's Brief and the Context's records (B3). Replaces cpd 1's "Context" phase name, so that "Context" names only the entity.
 _Avoid_: discovery, intake, context phase
 
 **Plan** (phase):
@@ -25,19 +25,19 @@ _Avoid_: review phase
 ## Work units
 
 **Context** (entity):
-The parent shared by two or more Plans: the shared knowledge between Plans that together make a product, optionally mapped to a Jira Epic. Not a session. Each machine keeps one grounded Lead per Context, which new Plans fork.
+The parent shared by two or more Plans: the shared knowledge between Plans that together make a product, optionally mapped to a Jira Epic. Not a session. Each machine may keep one Manager per Context.
 _Avoid_: project, folder, epic
 
 **Context record**:
-One typed, append-only entry of a Context's knowledge: a decision (which may supersede another), a note, a question, an answer, or a Plan. Written only through `cpd context …`.
+One typed, append-only entry of a Context's knowledge: a decision (which may supersede another), a note, a question, an answer, a Plan, or a Brief. Written only through `cpd context …`.
 _Avoid_: wiki page, memory
 
 **Context store**:
 A Context's records, held only in the machine's database (tables `contexts` and `context_records`). Contexts are machine-local (hs-d23, hs-a1); an earlier git store was imported and archived by migration 0007. Rendered as markdown for Leads on demand.
 _Avoid_: wiki, notes folder
 
-**Grounded Lead**:
-The Lead session that holds a Context's grounding on one machine, forked once from the first Plan's Lead when it leaves the grounding phase. It is never typed into again; every new Plan of the Context starts as a fork of it.
+**Grounded Lead** (retired, hs-d129):
+No longer created (B3): the Manager replaced it, and migration 0010 archived every existing one. Formerly, the Lead session that holds a Context's grounding on one machine, forked once from the first Plan's Lead when it leaves the grounding phase. It is never typed into again; every new Plan of the Context starts as a fork of it.
 _Avoid_: master session, template session
 
 **Plan** (entity, new: replaces Workflow; changed by R34):
@@ -79,7 +79,7 @@ _Avoid_: frozen, final
 ## Runtime
 
 **Session** (new):
-A pi session cpd knows about, with a role (Lead or Worker), a Context, usually a Plan, a tmux pane, and an agent state: working, blocked, idle or stopped. A Session forked for a tangent the User starts (`cpd session fork`) is a sibling: drawn in the tree directly under its Context, after its Plans, never under a Plan or under the Session it came from (B1, B4). The other fork, a review Job's Worker, is hidden like every Worker.
+A pi session cpd knows about, with a role (Lead, Worker or Manager), a Context, usually a Plan, a tmux pane, and an agent state: working, blocked, idle or stopped. A Session forked for a tangent the User starts (`cpd session fork`) is a sibling: drawn in the tree directly under its Context, after its Plans, never under a Plan or under the Session it came from (B1, B4). The other fork, a review Job's Worker, is hidden like every Worker.
 _Avoid_: agent, pane, chat
 
 **Event** (new: replaces the Lead queue):
@@ -104,9 +104,21 @@ _Avoid_: PR watcher, PR sync
 The human who owns the ticket and talks only to the Lead.
 _Avoid_: operator, owner
 
+**Manager** (new, B3):
+The higher-level Lead of a Context, one live per Context per machine (`cpd context manager`). It works at the Epic level: holds the Context's records and Requirements, splits the User's requirements into Plans, starts their Leads with a Brief each, and knows where each is. Its memory is the Context records, not its chat. It acts only when the User talks to it (or a Lead messages it) and receives a **Context update** with a **digest** of its Plans at each turn start; Plan Events never wake it. Leads keep asking the User directly; the Manager never answers for the User. Default Tier `manager_tier` (O5).
+_Avoid_: master, supervisor, orchestrator
+
+**Brief** (new, B3):
+A Context record of kind `brief`, written by `cpd plan new --brief-file`: what the Manager (or the User) asks of one Plan's Lead. The Lead's first message holds it in full; `cpd context show` and Context updates list it short (id and first line), and `cpd context show --record <id>` prints it whole. Not a Spec, which describes a Job.
+_Avoid_: ticket, prompt
+
+**Context update**:
+The message the pi adapter adds at the start of a Lead's or Manager's turn, listing the Context records other Sessions wrote since its last one (commands.md §15.6). For a Manager it ends with the **digest**: a `Plans:` section of the Plan Events (created, phase, PR opened or merged, Job failed, Escalation, done) since then.
+_Avoid_: notification, poll
+
 **Lead**:
 The agent session that translates User intent into Specs and orchestrates the Plan; it never writes code itself.
-_Avoid_: coordinator, orchestrator, manager
+_Avoid_: coordinator, orchestrator
 
 **Worker**:
 An agent session that executes one Attempt of one Job in its own worktree.
