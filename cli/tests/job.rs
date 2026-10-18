@@ -986,6 +986,7 @@ fn edit_pr_refusals_write_nothing() {
     assert_eq!(e["details"]["jobs"], json!(["b"]));
     let e = refused(&job(&env, &["edit", "a", "--pr", "web", "--no-needs"], "pl"), "needs_other_pr", 3);
     assert_eq!(e["details"]["jobs"], json!(["b"]));
+    assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs));
     // The new needs are Jobs of the new PR.
     job_add_in(&env, "pl", "w2", Some("web"), &[]).ok();
     let (txns, evs) = (count(&env, "txns"), count(&env, "events"));
