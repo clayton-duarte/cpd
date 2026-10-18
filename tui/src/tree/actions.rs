@@ -3,6 +3,7 @@
 //! every pane cpd starts ([`PROGRAM`]). Besides those, it lays out the cockpit
 //! as the reference does: a Session opened in the chat slot gets the focus
 //! (`select-pane`), and `?` opens the legend popup.
+//! A click on a Context row runs `context manager` (§3.10), then the Open of the Manager it returns.
 //! The menu's Open, Close, Archive, Unarchive, Rename…, Fork…, New session…, New Plan… and New Context… are
 //! the same commands.
 //!
@@ -44,6 +45,8 @@ impl Subject {
 pub enum Action {
     /// `session open <id>` (§10.4), then the focus on the chat slot: Enter, or a click on a Session.
     Open(SessionId),
+    /// `context manager --context=<c>`, then [`Action::Open`] of the Manager it returns: a click on a Context row (B3-A6).
+    OpenManager(ContextId),
     /// `plan new <id> --context=<c> --title=<title>` (§4.1): `n` (the title is the id) and New Plan….
     /// The Lead forks the Context's grounded Lead (R15).
     NewPlan { context: ContextId, id: PlanId, title: String },
@@ -75,6 +78,7 @@ impl Action {
         let words = |w: &[&str]| w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         match self {
             Action::Open(id) => words(&["session", "open", id.as_str()]),
+            Action::OpenManager(context) => vec!["context".into(), "manager".into(), format!("--context={context}")],
             Action::NewPlan { context, id, title } => {
                 let mut argv = words(&["plan", "new", id.as_str()]);
                 argv.extend([format!("--context={context}"), format!("--title={title}")]);
@@ -96,7 +100,7 @@ impl Action {
     /// The note after the command succeeded, from its reply: the reference's words.
     pub fn done(&self, reply: &Value) -> String {
         match self {
-            Action::Open(_) => String::new(),
+            Action::Open(_) | Action::OpenManager(_) => String::new(),
             Action::NewPlan { id, .. } => format!("forking {id} in window park-{id}"),
             Action::NewContext { id, .. } => format!("created {id}"),
             Action::RenameContext { .. } | Action::RenamePlan { .. } | Action::RenameSession { .. } if reply["already"] == true => {
@@ -135,6 +139,10 @@ impl Runner {
 
     /// Runs the action: its note, or why it failed.
     pub fn run(&self, action: &Action) -> Result<String, String> {
+        if let Action::OpenManager(_) = action {
+            let id = manager_of(&request(action)?)?;
+            return self.run(&Action::Open(id));
+        }
         let note = command(action)?;
         if matches!(action, Action::Open(_)) {
             self.focus_chat().map_err(|e| e.message().to_owned())?;
@@ -158,8 +166,21 @@ impl Runner {
     }
 }
 
+/// The Session of the Manager in the reply of `context manager`.
+fn manager_of(reply: &Value) -> Result<SessionId, String> {
+    reply["manager"]["session"]
+        .as_str()
+        .and_then(|s| SessionId::parse(s).ok())
+        .ok_or_else(|| format!("{PROGRAM} context manager printed no Manager session: {reply}"))
+}
+
 /// Runs the command of `action`: its note, or the message of the error it printed (or why it could not run).
 fn command(action: &Action) -> Result<String, String> {
+    request(action).map(|reply| action.done(&reply))
+}
+
+/// Runs the command of `action`: its reply, or the message of the error it printed (or why it could not run).
+fn request(action: &Action) -> Result<Value, String> {
     let output = Command::new(PROGRAM)
         .args(action.argv())
         .stdin(Stdio::null())
@@ -170,7 +191,7 @@ fn command(action: &Action) -> Result<String, String> {
         format!("{PROGRAM} {} printed no JSON (exit {}): {}", action.argv().join(" "), output.status, stderr.trim())
     })?;
     if reply["ok"] == true {
-        Ok(action.done(&reply))
+        Ok(reply)
     } else {
         let error = &reply["error"];
         Err(action.failed(error["code"].as_str().unwrap_or("error"), error["message"].as_str().unwrap_or("failed")))
@@ -192,6 +213,7 @@ mod tests {
         let cases = [
             (Action::Open(sid("l-ship")), vec!["session", "open", "l-ship"]),
             (Action::Close(sid("l-ship")), vec!["session", "close", "l-ship"]),
+            (Action::OpenManager(ContextId::parse("alpha").unwrap()), vec!["context", "manager", "--context=alpha"]),
             (Action::Archive(Subject::Context(ContextId::parse("alpha").unwrap())), vec!["context", "archive", "alpha"]),
             (Action::Archive(Subject::Plan(PlanId::parse("ship").unwrap())), vec!["plan", "archive", "--plan=ship"]),
             (Action::Archive(Subject::Session(sid("f-idle"))), vec!["session", "archive", "f-idle"]),
@@ -224,6 +246,14 @@ mod tests {
         for (action, argv) in cases {
             assert_eq!(action.argv(), argv, "{action:?}");
         }
+    }
+
+    #[test]
+    fn the_manager_is_the_session_of_the_reply_of_context_manager() {
+        let reply = json!({"ok": true, "manager": {"session": "m-alpha", "name": "alpha-manager", "state": "idle", "pane": "%3", "window": "@2"}, "started": true});
+        assert_eq!(manager_of(&reply), Ok(sid("m-alpha")));
+        assert!(manager_of(&json!({"ok": true})).is_err());
+        assert!(manager_of(&json!({"ok": true, "manager": {"session": "Not an id"}})).is_err());
     }
 
     #[test]

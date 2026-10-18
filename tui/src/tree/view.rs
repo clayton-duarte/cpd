@@ -24,6 +24,10 @@ use cpd_core::session::State;
 use crate::palette;
 use crate::read::{ContextNode, SessionNode, Tree};
 
+/// The columns one level of the tree is indented by (`rows::INDENT`, private there): a Context row's fold glyph
+/// (`▸`/`▾`) is in the first column of its row's text, at its level times this.
+const FOLD_GLYPH_STEP: usize = 2;
+
 /// The longest name of a Session (commands.md §1.4).
 const NAME_MAX: usize = 80;
 const FORK_SUFFIX: &str = " (fork)";
@@ -320,9 +324,14 @@ impl View {
         if rows::click_group(&mut self.state, &path, m.column) {
             return Effect::None;
         }
-        // a Context row only collapses or expands; a live Session row opens it; an archived row does nothing
-        if rows::click_context(&mut self.state, &self.tree, &path) {
-            return Effect::None;
+        // a Context row: its fold glyph folds or unfolds it, the rest of a live one opens its Manager (B3-A6); a live
+        // Session row opens it; an archived row does nothing, but its Context folds
+        if let Some(Row::Context(c)) = rows::row(&self.tree, &path) {
+            if usize::from(m.column) == FOLD_GLYPH_STEP * (path.len() - 1) {
+                rows::click_context(&mut self.state, &self.tree, &path);
+                return Effect::None;
+            }
+            return if c.is_archived() { Effect::None } else { Effect::Run(Action::OpenManager(c.id.clone())) };
         }
         match rows::row(&self.tree, &path).filter(|r| !r.archived()).and_then(|r| r.session()) {
             Some(s) => Effect::Run(Action::Open(s.id.clone())),
@@ -564,17 +573,53 @@ mod tests {
     fn a_click_folds_a_context_and_opens_a_session_and_hides_the_cursor() {
         let mut view = on(&["alpha", "sketch"]);
         drawn(&mut view, 44, 10);
-        assert_eq!(click(&mut view, 5, 0), Effect::None, "the Context row `alpha`");
+        assert_eq!(click(&mut view, 0, 0), Effect::None, "the fold glyph of the Context row `alpha`");
         assert!(!view.state.opened().contains(&vec!["alpha".to_owned()]));
         drawn(&mut view, 44, 10);
         assert_eq!(view.state.selected(), ["alpha", "sketch"], "a click selects nothing");
         assert!(!view.cursor_shown());
-        click(&mut view, 5, 0);
+        click(&mut view, 0, 0);
         drawn(&mut view, 44, 10);
         assert_eq!(click(&mut view, 8, 1), Effect::Run(Action::Open(sid("l-ship"))), "the Plan row");
         assert_eq!(click(&mut view, 8, 5), Effect::Run(Action::Open(sid("f-blocked"))), "a fork row");
         assert_eq!(click(&mut view, 8, 9), Effect::None, "below the tree");
         assert_eq!(view.state.selected(), ["alpha", "sketch"], "no click moved the cursor");
+    }
+
+    #[test]
+    fn a_click_on_a_context_rows_label_opens_its_manager_and_only_its_fold_glyph_folds() {
+        let mut view = on(&["alpha", "sketch"]);
+        drawn(&mut view, 44, 10);
+        let manager = Effect::Run(Action::OpenManager(ContextId::parse("alpha").unwrap()));
+        for column in [1, 5, 43] {
+            assert_eq!(click(&mut view, column, 0), manager, "column {column} of the Context row");
+        }
+        assert!(view.state.opened().contains(&vec!["alpha".to_owned()]), "no label click folds");
+        assert_eq!(click(&mut view, 0, 0), Effect::None, "the fold glyph runs no command");
+        assert!(!view.state.opened().contains(&vec!["alpha".to_owned()]));
+        drawn(&mut view, 44, 10);
+        assert_eq!(click(&mut view, 5, 0), manager, "a folded Context opens its Manager too");
+        assert_eq!(click(&mut view, 0, 0), Effect::None);
+        assert!(view.state.opened().contains(&vec!["alpha".to_owned()]), "the glyph unfolds");
+        let Effect::Run(action) = manager else { unreachable!() };
+        assert_eq!(action.argv(), ["context", "manager", "--context=alpha"]);
+    }
+
+    #[test]
+    fn an_archived_context_folds_at_its_glyph_one_level_in_and_opens_no_manager() {
+        let mut view = View::new(archived(), true);
+        drawn(&mut view, 44, 14);
+        click(&mut view, 0, 8); // the `…` row of the archived Contexts
+        drawn(&mut view, 44, 14);
+        let zeta = vec!["…".to_owned(), "zeta".to_owned()];
+        let was = view.state.opened().contains(&zeta);
+        assert_eq!(drawn(&mut view, 44, 14)[9].trim_end().chars().next(), Some('┊'), "zeta's row is drawn under the dotted line");
+        assert_eq!(click(&mut view, 6, 9), Effect::None, "its label: no Manager for an archived Context");
+        assert_eq!(view.state.opened().contains(&zeta), was);
+        assert_eq!(click(&mut view, 0, 9), Effect::None, "column 0 is the dotted line");
+        assert_eq!(view.state.opened().contains(&zeta), was);
+        assert_eq!(click(&mut view, 2, 9), Effect::None);
+        assert_eq!(view.state.opened().contains(&zeta), !was, "its glyph, a level in, folds it");
     }
 
     #[test]

@@ -345,6 +345,41 @@ fn enter_opens_the_lead_of_a_plan_and_a_fork_with_session_open() {
 }
 
 #[test]
+fn a_click_on_a_context_row_opens_its_manager_and_its_fold_glyph_folds_it() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true,"manager":{"session":"m-alpha","name":"alpha-manager","state":"idle","pane":"%1","window":"@1"},"started":false,"session":"m-alpha","displaced":null}"#);
+    let pane = Pane::start(&env, 46, 14);
+    let before = pane.ready();
+    pane.click(8, 0); // the label of the Context `alpha`
+    assert_eq!(
+        wait_for_calls(&env, 2),
+        [words(&["context", "manager", "--context=alpha"]), words(&["session", "open", "m-alpha"])]
+    );
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(calls(&env).len(), 2, "no more commands");
+    assert_eq!(pane.screen(), before, "the label click folds nothing");
+    pane.click(0, 0); // its fold glyph
+    pane.wait("alpha folded", |s| !s.iter().any(|r| r.contains("ship")));
+    assert_eq!(calls(&env).len(), 2, "the glyph runs no command");
+    pane.click(0, 0);
+    pane.wait("alpha unfolded", |s| s.iter().any(|r| r.contains("ship")));
+    assert_eq!(calls(&env).len(), 2);
+}
+
+#[test]
+fn a_refused_context_manager_shows_its_error_and_opens_nothing() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":false,"error":{"code":"archived","message":"The Context is archived."}}"#);
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    pane.click(8, 0);
+    pane.wait("the error", |_| pane.footer_has("archived: The Context is archived."));
+    assert_eq!(calls(&env), [words(&["context", "manager", "--context=alpha"])], "no session open");
+}
+
+#[test]
 fn enter_n_and_x_before_any_arrow_key_do_nothing() {
     let env = env();
     populate(&env);
