@@ -349,6 +349,27 @@ fn a_dispatched_attempt_runs_its_worker_merges_and_ends_merged() {
     assert!(left.iter().all(|n| !n.to_string_lossy().starts_with("attempt-")), "{left:?}");
 }
 
+#[test]
+fn the_workers_window_is_killed_when_the_driver_sees_merging() {
+    let fx = fx();
+    fx.pi(WORKER);
+    // The merge waits for the per-repo lock, so A9's kill (after the merge) cannot be what is seen.
+    let lock = cpd_core::merge::RepoLock::wait(&fx.home(), &fx.repo).unwrap();
+
+    let out = fx.dispatch(JOB).ok();
+    fx.wait_status(ATTEMPT, "merging");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while fx.windows().contains("pay--api-a1") {
+        assert!(Instant::now() < deadline, "the Worker's window outlived `merging`: {}\nlog: {}", fx.windows(), fx.log(ATTEMPT));
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(fx.attempt(ATTEMPT)["status"], "merging");
+
+    drop(lock);
+    let (attempt, _) = fx.wait_end(ATTEMPT, &out["pid"]);
+    assert_eq!(attempt["outcome"], "merged");
+}
+
 // ---------- PRs across repos (R34) ----------
 
 #[test]

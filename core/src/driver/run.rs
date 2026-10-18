@@ -503,6 +503,14 @@ impl Driver {
     /// `merging`: once this driver has exited, R (§7.4) ends it, `merged` if
     /// the compare-and-swap already happened.
     fn merge(&mut self, dirs: &PiDirs) -> Result<Ended, CpdError> {
+        // Engine-W1 (§7.4 step 0): the Worker's window goes first, before the wait for the
+        // per-repo lock, so nothing can move the Attempt branch afterwards. A failure is
+        // reported as A9's is; the merge still runs, A9 tries the kill again.
+        let target = self.load()?;
+        if let Err(e) = worker::kill_window(&self.config, &self.tmux, &target) {
+            log(&format!("killing the Worker's window failed: {}", e.message()));
+            let _ = self.store.write(SOURCE, |tx| ledger::append_error(tx, &target, &e));
+        }
         // The safe point before A8's rebase.
         self.reload_if_installed()?;
         log("A8: merging");
