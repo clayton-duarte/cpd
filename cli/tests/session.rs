@@ -241,7 +241,7 @@ fn panes_report(env: &TestEnv) -> String {
         report.push_str(&format!("{line}\n"));
         if line.contains(" dead=1 ") {
             let pane = line.split(' ').next().unwrap();
-            let screen = String::from_utf8_lossy(&env.tmux(&["capture-pane", "-p", "-t", pane]).stdout).into_owned();
+            let screen = String::from_utf8_lossy(&env.tmux(&["capture-pane", "-p", "-J", "-t", pane]).stdout).into_owned();
             for text in screen.lines().filter(|text| !text.trim().is_empty()) {
                 report.push_str(&format!("  | {text}\n"));
             }
