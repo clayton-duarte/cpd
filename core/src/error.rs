@@ -90,6 +90,7 @@ error_codes! {
     HookInvalid = "hook_invalid" => Failure,
     LeadWorktreeStale = "lead_worktree_stale" => Failure,
     GhRateLimited = "gh_rate_limited" => Failure,
+    AdapterMissing = "adapter_missing" => Failure,
     MergeCheckFailed = "merge_check_failed" => Failure,
     PushFailed = "push_failed" => Failure,
 
