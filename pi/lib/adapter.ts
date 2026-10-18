@@ -12,7 +12,7 @@ import type { Ctx, Message, PiApi } from "./pi.ts";
 import { parseOpened, parseResult, parseStatus, request } from "./plannotator.ts";
 import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, REVIEW_LABEL, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
 import { Facts, Reporter, stateArgs, type Wanted } from "./state.ts";
-import { contextCursorFrom, contextUpdate, parsePlanEvents, parseRecordEvents, parseRecords, PLAN_KINDS } from "./updates.ts";
+import { contextCursorFrom, contextUpdate, parsePending, parsePlanEvents, parseRecordEvents, parseRecords, PLAN_KINDS } from "./updates.ts";
 
 export type Options = {
   /** The environment read at `session_start` (`CPD_SESSION`, `CPD_PLAN`, `CPD_HOME`). Default: `process.env`. */
@@ -322,7 +322,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
 
   /**
    * `before_agent_start` of a Lead or Manager: the Context records other Sessions wrote since its cursor and, for a
-   * Manager, the `Plans:` digest, as one `cpd-context` message added to the run. Never starts a turn: a failed read is reported once (no turn) and leaves the cursor.
+   * Manager, the `Plans:` digest and the fresh `Pending work:` section, as one `cpd-context` message added to the run. Never starts a turn: a failed read is reported once (no turn) and leaves the cursor.
    */
   async function contextUpdates(r: Run, ctx: Ctx): Promise<{ message: Message } | undefined> {
     try {
@@ -331,8 +331,9 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       const first = Math.min(...events.map((e) => e.seq));
       const records = events.length === 0 ? [] : parseRecords(await call(["context", "show", "--context", r.info.context, "--since", String(first - 1)]));
       const plans = r.info.role === "manager" ? parsePlanEvents(await call(["events", "list", "--context", r.info.context, ...PLAN_KINDS.flatMap((k) => ["--kind", k]), "--since", String(cursor)])) : undefined;
+      const pending = r.info.role === "manager" ? parsePending(await call(["context", "pending", "--context", r.info.context])) : undefined;
       r.contextFailed = false;
-      const message = contextUpdate(r.info.context, r.id, events, records, plans);
+      const message = contextUpdate(r.info.context, r.id, events, records, plans, pending);
       return message === undefined ? undefined : { message };
     } catch (e) {
       if (!r.contextFailed) {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { contextCursorFrom, contextUpdate, parsePlanEvents, parseRecords, type ContextRecord, type PlanEvent, type RecordEvent } from "../lib/updates.ts";
+import { contextCursorFrom, contextUpdate, parsePending, parsePlanEvents, parseRecords, pendingSection, type ContextRecord, type PendingJob, type PendingPlan, type PlanEvent, type RecordEvent } from "../lib/updates.ts";
 import { Fixture, ID, OTHER, sessionShow, settle, waitFor } from "./fake.ts";
 
 const contextMessage = (event: number | undefined, deliveredTo: string | undefined, customType = "cpd-context") => ({
@@ -371,4 +371,163 @@ test("a Lead's message has no Plans: section and never reads Plan Events", async
   const [result] = await f.pi.fireWith("before_agent_start");
   assert.ok(!(result as any).message.content.includes("Plans:"));
   assert.deepEqual(planCalls(f), []);
+});
+
+// ---- the Manager's Pending work (§15.6, hs-d159 P2) ----
+
+const pjob = (n: number, status: string): PendingJob => ({ key: `job-${n}`, status, title: `Title ${n}` });
+const ppr = (jobs: PendingJob[], over: Record<string, unknown> = {}) => ({ key: "api", status: "dispatch", number: 212 as number | null, jobs, ...over });
+const pplan = (id: string, prs: ReturnType<typeof ppr>[], phase = "dispatch"): PendingPlan => ({ id, phase, prs });
+/** What `cpd context pending` prints for the same Plans (the fields the digest does not use are there too). */
+const pendingJson = (plans: PendingPlan[]) => ({
+  ok: true,
+  context: "ctx",
+  plans: plans.map((p) => ({
+    id: p.id, title: `T ${p.id}`, phase: p.phase, lead_session: null,
+    prs: p.prs.map((r) => ({
+      key: r.key, repo: "/r", base: "main", status: r.status, lead_branch: `cpd/${p.id}/${r.key}`,
+      pull_request: r.number === null ? null : { number: r.number, url: "u", state: "OPEN" },
+      jobs: r.jobs.map((j) => ({ ...j, touches: ["a.rs"] })),
+    })),
+  })),
+});
+
+test("pendingSection: one line per PR with the counts, then its Jobs in order", () => {
+  const lines = pendingSection([pplan("pay-4521", [ppr([pjob(1, "merged"), pjob(2, "queued"), pjob(3, "running"), pjob(4, "failed"), pjob(5, "draft"), pjob(6, "queued")])])]);
+  assert.deepEqual(lines, [
+    "Pending work:",
+    "- pay-4521 (dispatch), PR api dispatch #212: 1 merged on its Lead Branch, 2 queued, 1 running, 1 failed, 1 draft",
+    "  - job-1 merged: Title 1",
+    "  - job-2 queued: Title 2",
+    "  - job-3 running: Title 3",
+    "  - job-4 failed: Title 4",
+    "  - job-5 draft: Title 5",
+    "  - job-6 queued: Title 6",
+  ]);
+});
+
+test("pendingSection: no ` #<n>` before the pull request exists; a PR with no Jobs is one line", () => {
+  assert.deepEqual(pendingSection([pplan("p", [ppr([], { number: null, status: "plan" })], "plan")]), ["Pending work:", "- p (plan), PR api plan: 0 merged on its Lead Branch, 0 queued, 0 running, 0 failed, 0 draft"]);
+});
+
+test("pendingSection: 10 Jobs are all listed, 13 list 10 and say 3 more; the counts cover all 13", () => {
+  const ten = pendingSection([pplan("p", [ppr(range(10).map((n) => pjob(n, "queued")))])]);
+  assert.equal(ten.length, 1 + 1 + 10);
+  assert.ok(!ten.some((l) => l.includes("more")));
+  const jobs = range(13).map((n) => pjob(n, "queued"));
+  const lines = pendingSection([pplan("p", [ppr(jobs)])]);
+  assert.equal(lines.length, 1 + 1 + 10 + 1);
+  assert.ok(lines[1]!.includes("13 queued"));
+  assert.equal(lines[10 + 1]!, "  - job-10 queued: Title 10");
+  assert.equal(lines.at(-1), "  and 3 more");
+});
+
+test("pendingSection: nothing when no Plan is active or no Plan has a PR", () => {
+  assert.deepEqual(pendingSection([]), []);
+  assert.deepEqual(pendingSection([pplan("p", [])]), []);
+});
+
+test("parsePending: Plans, PRs and Jobs; anything else is bad_output", () => {
+  const plans = [pplan("p", [ppr([pjob(1, "queued")]), ppr([], { key: "ui", number: null })])];
+  assert.deepEqual(parsePending(pendingJson(plans)), plans);
+  assert.throws(() => parsePending({}), { code: "bad_output" });
+  assert.throws(() => parsePending({ plans: [{ id: "p", phase: "dispatch" }] }), { code: "bad_output" });
+  assert.throws(() => parsePending({ plans: [{ id: "p", phase: "x", prs: [{ key: "a", status: "s", pull_request: null, jobs: [{ key: "j", status: "queued" }] }] }] }), { code: "bad_output" });
+  assert.throws(() => parsePending({ plans: [{ id: "p", phase: "x", prs: [{ key: "a", status: "s", jobs: [] }] }] }), { code: "bad_output" }, "pull_request is required");
+});
+
+test("message: Pending work alone is a message; it does not move details.event; it follows Plans:", () => {
+  const pending = [pplan("p", [ppr([pjob(1, "queued")])])];
+  const alone = contextUpdate("ctx", ID, [], [], [], pending)!;
+  assert.equal(alone.content.split("\n")[0], "Pending work:");
+  assert.deepEqual(alone.details, { event: 0, delivered_to: ID, records: [] });
+  const ownOnly = contextUpdate("ctx", ID, [recordEvent(1)], [record(1, { by: ID })], [], pending)!;
+  assert.deepEqual(ownOnly.details, { event: 201, delivered_to: ID, records: [] });
+  const all = contextUpdate("ctx", ID, [recordEvent(1)], [record(1)], [planEvent(1)], pending)!;
+  assert.deepEqual(all.content.split("\n").filter((l) => !l.startsWith(" ") && !l.startsWith("- ")), ["Context ctx: 1 new records since your last turn.", "Plans:", "Pending work:"]);
+  assert.ok(all.content.indexOf("Plans:") < all.content.indexOf("Pending work:"));
+  assert.equal((all.details as any).event, 301);
+  assert.equal(contextUpdate("ctx", ID, [], [], [], []), undefined);
+});
+
+const twoPlans = [
+  pplan("pay-4521", [ppr([pjob(1, "merged"), pjob(2, "queued"), pjob(3, "running")])]),
+  pplan("pay-4522", [ppr(range(12).map((n) => pjob(n, "draft")), { key: "web", status: "plan", number: null })], "plan"),
+];
+
+test("a Manager's turn start with two active Plans gets a Pending work section, one line per Plan, capped at 10 Jobs", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await manager(f);
+  f.respond("events-list@context-record", eventsList([]));
+  f.respond("events-list@plan-created", planEventsList([]));
+  f.respond("context-pending", pendingJson(twoPlans));
+  const [result] = await f.pi.fireWith("before_agent_start");
+  const m = (result as any).message;
+  assert.equal(m.customType, "cpd-context");
+  const lines = m.content.split("\n");
+  assert.deepEqual(lines.filter((l: string) => l.startsWith("- ")), [
+    "- pay-4521 (dispatch), PR api dispatch #212: 1 merged on its Lead Branch, 1 queued, 1 running, 0 failed, 0 draft",
+    "- pay-4522 (plan), PR web plan: 0 merged on its Lead Branch, 0 queued, 0 running, 0 failed, 12 draft",
+  ]); // Job lines are indented, so they do not match
+  assert.equal(lines[0], "Pending work:");
+  assert.equal(lines.length, 1 + 1 + 3 + 1 + 10 + 1);
+  assert.equal(lines.at(-1), "  and 2 more");
+  assert.deepEqual(m.details, { event: 0, delivered_to: ID, records: [] });
+  assert.deepEqual(f.calls().filter((c) => c.phase === "start").map((c) => c.argv).filter((a) => a[1] === "pending"), [["context", "pending", "--context", "ctx"]]);
+  assert.deepEqual(f.pi.sent, []);
+});
+
+test("Pending work follows Plans: and the records in one message", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await manager(f);
+  f.respond("events-list@context-record", eventsList([1]));
+  f.respond("context-show", contextShow([record(1)]));
+  f.respond("events-list@plan-created", planEventsList([1]));
+  f.respond("context-pending", pendingJson(twoPlans));
+  const [result] = await f.pi.fireWith("before_agent_start");
+  const lines = (result as any).message.content.split("\n");
+  assert.deepEqual(lines.filter((l: string) => /^[A-Z]/.test(l) && !l.startsWith("Context")), ["Plans:", "Pending work:"]);
+  assert.ok(lines.indexOf("Plans:") < lines.indexOf("Pending work:"));
+  assert.equal((result as any).message.details.event, 301);
+});
+
+test("a Manager with no active Plan gets no Pending work section", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await manager(f);
+  f.respond("events-list@context-record", eventsList([1]));
+  f.respond("context-show", contextShow([record(1)]));
+  f.respond("events-list@plan-created", planEventsList([]));
+  f.respond("context-pending", pendingJson([]));
+  const [result] = await f.pi.fireWith("before_agent_start");
+  assert.ok(!(result as any).message.content.includes("Pending work:"));
+  f.respond("events-list@context-record", eventsList([]));
+  assert.deepEqual(await f.pi.fireWith("before_agent_start"), [undefined]);
+});
+
+test("a failed Pending work read omits the message and is reported once without a turn", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await manager(f);
+  f.respond("events-list@context-record", eventsList([]));
+  f.respond("events-list@plan-created", planEventsList([1]));
+  f.respond("context-pending", { ok: false, error: { code: "store_busy", message: "database is locked" } }, { exit: 1 });
+  assert.deepEqual(await f.pi.fireWith("before_agent_start"), [undefined]);
+  assert.deepEqual(await f.pi.fireWith("before_agent_start"), [undefined]);
+  assert.equal(f.pi.errors().length, 1);
+  assert.deepEqual(f.pi.errors()[0]!.options, { triggerTurn: false, deliverAs: "followUp" });
+});
+
+test("a Lead never gets Pending work and never reads it", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await lead(f);
+  f.respond("events-list", eventsList([1]));
+  f.respond("context-show", contextShow([record(1)]));
+  f.respond("context-pending", pendingJson(twoPlans));
+  const [result] = await f.pi.fireWith("before_agent_start");
+  assert.ok(!(result as any).message.content.includes("Pending work:"));
+  assert.deepEqual(f.calls().filter((c) => c.phase === "start").map((c) => c.argv).filter((a) => a[1] === "pending"), []);
 });

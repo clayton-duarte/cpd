@@ -83,6 +83,7 @@ export class Fixture {
     delete process.env.CPD_PLAN;
     this.pi = new FakePi();
     this.respond("session-show", sessionShow());
+    this.respond("context-pending", { ok: true, context: "ctx", plans: [] }); // a Manager reads it at every turn start (§15.6)
   }
 
   /** What `cpd <a> <b>` prints (an object, or a raw string) and exits with. Key `<a>-<b>`; `<a>-<b>-<c>` answers `cpd <a> <b> <c>` first; `<a>-<b>@<kind>` answers a call whose first `--kind` is `<kind>`, before both. */
