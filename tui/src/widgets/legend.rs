@@ -164,9 +164,13 @@ fn sections() -> Vec<Section> {
     let pulse = Section {
         title: "Pulse",
         header: None,
-        rows: crate::plan::pulse::legend().into_iter().map(|(sample, meaning)| vec![Line::from(sample), plain(&meaning)]).collect(),
+        // two entries a row: the popup is at most 80 % of the client tall (one row an entry would not fit)
+        rows: crate::plan::pulse::legend()
+            .chunks(2)
+            .map(|pair| pair.iter().flat_map(|(sample, meaning)| [Line::from(sample.clone()), plain(meaning)]).collect())
+            .collect(),
     };
-    vec![meanings, jobs, dots, prs, checks, pulse]
+    vec![meanings, jobs, dots, prs, pulse, checks]
 }
 
 /// The vertical constraints: the intro, then each section after a gap.
@@ -257,27 +261,25 @@ mod tests {
                 "Jobs: Plan pills and Context counters",
                 "Session dots",
                 "PRs (Dispatch)",
-                "PR checks",
                 "Pulse",
+                "PR checks",
             ]
         );
     }
 
     #[test]
     fn the_pulse_section_lists_its_five_glyphs_in_their_colours() {
-        let pulse = &sections()[5];
-        let rows: Vec<(String, String)> = pulse.rows.iter().map(|r| (text(&r[0]), text(&r[1]))).collect();
+        let pulse = &sections()[4];
+        let cells: Vec<String> = pulse.rows.iter().flatten().map(text).collect();
         assert_eq!(
-            rows,
+            cells,
             [
-                ("▄".to_owned(), "activity per 5 minutes".to_owned()),
-                ("▄".to_owned(), "a Job merged".to_owned()),
-                ("✓".to_owned(), "a PR merged".to_owned()),
-                ("▁".to_owned(), "a Worker running".to_owned()),
-                ("quiet 41m".to_owned(), "queued or running work with no activity for 30 min".to_owned()),
+                "▄", "activity per 5 minutes", "▄", "a Job merged",
+                crate::plan::pulse::merged_icon(), "a PR merged", "▁", "a Worker running",
+                "quiet 41m", "queued or running work with no activity for 30 min",
             ]
         );
-        let colours: Vec<_> = pulse.rows.iter().map(|r| r[0].spans[0].style.fg).collect();
+        let colours: Vec<_> = pulse.rows.iter().flatten().step_by(2).map(|l| l.spans[0].style.fg).collect();
         let fg = |m| palette::fg(m).fg;
         assert_eq!(colours, [None, fg(Meaning::Done), fg(Meaning::Done), fg(Meaning::Nothing), fg(Meaning::Review)]);
     }

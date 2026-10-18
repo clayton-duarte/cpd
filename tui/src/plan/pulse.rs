@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
 use crate::palette::{self, Meaning};
-use crate::read::{Bucket, Pulse, PulseRow, QUIET_MINUTES};
+use crate::read::{Bucket, JobStatus, Pulse, PulseRow, QUIET_MINUTES};
 
 /// The fewest buckets a row draws, whatever the width.
 const MIN_BUCKETS: usize = 12;
@@ -22,6 +22,11 @@ const AGE_WIDTH: usize = 9;
 pub const NOTCH: usize = 3;
 /// The bars, level 1 to 8.
 const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+/// The merged glyph: the palette's, for a merged Job, so Pulse follows it.
+pub fn merged_icon() -> &'static str {
+    palette::job_status(JobStatus::Merged, false).0
+}
 
 /// The buckets a row draws in `width` columns (inside the margin) for ids `id_width` wide: what the other cells leave,
 /// at least [`MIN_BUCKETS`].
@@ -38,7 +43,7 @@ fn id_width(pulse: &Pulse) -> usize {
 /// The glyph of a bucket on the scale `max` (the largest count over all rows).
 pub fn glyph(bucket: &Bucket, max: u32) -> Span<'static> {
     if bucket.pr_merged {
-        Span::styled("✓", palette::fg(Meaning::Done))
+        Span::styled(merged_icon(), palette::fg(Meaning::Done))
     } else if bucket.count > 0 {
         let level = (u64::from(bucket.count) * 8).div_ceil(u64::from(max.max(bucket.count))).clamp(1, 8) as usize;
         bar(level, bucket.job_merged)
@@ -90,7 +95,7 @@ pub fn row_line(row: &PulseRow, id_width: usize, n: usize, max: u32, frame: usiz
     spans.extend(shown.iter().map(|b| glyph(b, max)));
     spans.push(Span::raw("  "));
     spans.push(if row.merges > 0 {
-        Span::styled(format!("{:>MERGES_WIDTH$}", format!("✓{}", row.merges)), palette::fg(Meaning::Done))
+        Span::styled(format!("{:>MERGES_WIDTH$}", format!("{}{}", merged_icon(), row.merges)), palette::fg(Meaning::Done))
     } else {
         Span::raw(" ".repeat(MERGES_WIDTH))
     });
@@ -187,7 +192,8 @@ mod tests {
         r.merges = 17;
         r.age_minutes = Some(4);
         let line = row_line(&r, 6, 4, 8, 0);
-        let expected = ["○ api   ", "  ", " ▁▄█", "  ", " ✓17", "  ", "       4m"].concat();
+        let dot = palette::dot_span(Dot::Idle, 0, false).content;
+        let expected = format!("{dot} api     {}", [" ▁▄█", "  ", " ", merged_icon(), "17", "  ", "       4m"].concat());
         assert_eq!(text(&line), expected);
         assert_eq!(line.spans[0], palette::dot_span(Dot::Idle, 0, false));
     }
@@ -206,7 +212,7 @@ mod tests {
     #[test]
     fn glyph_colours_and_blanks() {
         let g = glyph(&Bucket { count: 2, job_merged: false, pr_merged: true, worker_ran: true }, 8);
-        assert_eq!((g.content.as_ref(), g.style), ("✓", palette::fg(Meaning::Done)));
+        assert_eq!((g.content.as_ref(), g.style), (merged_icon(), palette::fg(Meaning::Done)));
         let g = glyph(&Bucket { count: 2, job_merged: true, pr_merged: false, worker_ran: false }, 8);
         assert_eq!(g.style, palette::fg(Meaning::Done));
         assert_eq!(glyph(&b(2), 8).style, Style::new(), "the default foreground");
@@ -221,7 +227,7 @@ mod tests {
         r.merges = 6;
         let spans = row_line(&r, 3, 1, 1, 0).spans;
         let cell = &spans[spans.len() - 3];
-        assert_eq!((cell.content.as_ref(), cell.style), ("  ✓6", palette::fg(Meaning::Done)));
+        assert_eq!((cell.content.as_ref(), cell.style), (format!("  {}6", merged_icon()).as_str(), palette::fg(Meaning::Done)));
         r.merges = 0;
         let spans = row_line(&r, 3, 1, 1, 0).spans;
         assert_eq!(spans[spans.len() - 3].content, "    ");
@@ -303,7 +309,7 @@ mod tests {
             [
                 ("▄", None),
                 ("▄", done),
-                ("✓", done),
+                (merged_icon(), done),
                 ("▁", palette::fg(Meaning::Nothing).fg),
                 ("quiet 41m", palette::fg(Meaning::Review).fg)
             ]
