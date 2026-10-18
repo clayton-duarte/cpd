@@ -282,13 +282,14 @@ pub enum RecordKind {
     Question,
     Answer,
     Plan,
+    Brief,
 }
 
 impl RecordKind {
-    pub const ALL: [RecordKind; 5] =
-        [RecordKind::Decision, RecordKind::Note, RecordKind::Question, RecordKind::Answer, RecordKind::Plan];
+    pub const ALL: [RecordKind; 6] =
+        [RecordKind::Decision, RecordKind::Note, RecordKind::Question, RecordKind::Answer, RecordKind::Plan, RecordKind::Brief];
 
-    /// The letter in record ids: `d`, `n`, `q`, `a`, `p`.
+    /// The letter in record ids: `d`, `n`, `q`, `a`, `p`, `b`.
     pub fn letter(self) -> char {
         match self {
             RecordKind::Decision => 'd',
@@ -296,6 +297,7 @@ impl RecordKind {
             RecordKind::Question => 'q',
             RecordKind::Answer => 'a',
             RecordKind::Plan => 'p',
+            RecordKind::Brief => 'b',
         }
     }
 
@@ -303,7 +305,7 @@ impl RecordKind {
         RecordKind::ALL.into_iter().find(|kind| kind.letter() == letter)
     }
 
-    /// The `kind` field of the record: `decision`, `note`, `question`, `answer`, `plan`.
+    /// The `kind` field of the record: `decision`, `note`, `question`, `answer`, `plan`, `brief`.
     pub fn as_str(self) -> &'static str {
         match self {
             RecordKind::Decision => "decision",
@@ -311,6 +313,7 @@ impl RecordKind {
             RecordKind::Question => "question",
             RecordKind::Answer => "answer",
             RecordKind::Plan => "plan",
+            RecordKind::Brief => "brief",
         }
     }
 }
@@ -515,7 +518,7 @@ mod tests {
     #[test]
     fn record_kind_names() {
         let names: Vec<_> = RecordKind::ALL.iter().map(|k| k.as_str()).collect();
-        assert_eq!(names, ["decision", "note", "question", "answer", "plan"]);
+        assert_eq!(names, ["decision", "note", "question", "answer", "plan", "brief"]);
     }
 
     #[test]

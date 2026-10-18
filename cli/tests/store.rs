@@ -167,8 +167,11 @@ fn contract_ddl_blocks() -> Vec<String> {
     section.split("```sql\n").skip(1).map(|b| b.split("```").next().unwrap().to_owned()).collect()
 }
 
+/// The SQL without its `--` comments and with its whitespace collapsed: comments are
+/// documentation, not schema (a migration cannot change one without rebuilding the table).
 fn normalized(sql: &str) -> String {
-    sql.split_whitespace().collect::<Vec<_>>().join(" ")
+    let code: Vec<&str> = sql.lines().map(|line| line.split("--").next().unwrap_or_default()).collect();
+    code.join(" ").split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// `(name, sql)` of every table, index and trigger in `conn`, normalized: a
@@ -659,7 +662,7 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
     let mut store = fixture_store(&env);
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     let hash = store.read(|c| Ok(cpd_core::store::schema_hash(c)?)).unwrap();
-    assert_eq!(hash, "a1b657a955520d2dd6dd71e143cee1fd8aba88fafc9284a7e8ab89dfc05c82af", "version 6 (the PR poller) on top of migration 5 (hs-d118)");
+    assert_eq!(hash, "d2623567062d0367ddcf3dcd0b96c6d7e2b45d447e3b841f77d0249129736277", "version 11 (the PR poll's mergeable state) on top of version 10 (the Manager role and the brief record, hs-d92)");
 
     for table in ["contexts", "plans", "sessions"] {
         let archived: Option<String> =
@@ -682,8 +685,43 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
             .unwrap_or_else(|e| panic!("{kind}: {e:?}"));
     }
     assert_eq!(last, 5);
+    store.write("test", |tx| Ok(insert(tx, "session-message")?)).unwrap(); // migration 9
     let err = store.write("test", |tx| Ok(insert(tx, "plan-exploded")?)).unwrap_err();
     assert!(format!("{err:?}").contains("CHECK"), "{err:?}");
+}
+
+#[test]
+fn a_fresh_database_holds_one_live_manager_per_context_and_a_brief_with_its_plan() {
+    let env = TestEnv::new();
+    let mut store = fixture_store(&env);
+    let columns: i64 = store
+        .read(|c| Ok(c.query_row("SELECT count(*) FROM pragma_table_info('contexts') WHERE name IN ('lead_session', 'grounded_seq')", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(columns, 0, "the grounded Lead is retired (migration 0010)");
+
+    let manager = |id: &str, context: &str, plan: &str| {
+        format!(
+            "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+               VALUES ('{id}', 'manager', '{context}', {plan}, 'm', '/', 'O5', 'stopped', 't', 't')"
+        )
+    };
+    store.write("test", |tx| exec(tx, "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('c2', 'C2', 't', 'm')")).unwrap();
+    store.write("test", |tx| exec(tx, &manager("mgr1", "ctx", "NULL"))).unwrap();
+    let second = refused(&mut store, &manager("mgr2", "ctx", "NULL"));
+    assert!(sqlite_message(&second).contains("UNIQUE constraint failed"), "{second:?}");
+    let with_plan = refused(&mut store, &manager("mgr3", "c2", "'pay'"));
+    assert!(sqlite_message(&with_plan).contains("CHECK constraint failed"), "a Manager has no Plan: {with_plan:?}");
+    // Another Context has its own; an archived Manager makes room for a new one.
+    store.write("test", |tx| exec(tx, &manager("mgr4", "c2", "NULL"))).unwrap();
+    store.write("test", |tx| exec(tx, "UPDATE sessions SET archived_at = 't' WHERE id = 'mgr1'")).unwrap();
+    store.write("test", |tx| exec(tx, &manager("mgr5", "ctx", "NULL"))).unwrap();
+
+    let brief = |plan: &str| {
+        format!("INSERT INTO context_records (context, id, kind, at, machine, text, plan_id, plan_machine) VALUES ('ctx', 'm-b1', 'brief', 't', 'm', 'B', {plan})")
+    };
+    let bare = refused(&mut store, &brief("NULL, NULL"));
+    assert!(sqlite_message(&bare).contains("CHECK constraint failed"), "a brief needs its Plan: {bare:?}");
+    store.write("test", |tx| exec(tx, &brief("'pay', 'm'"))).unwrap();
 }
 
 #[test]
@@ -734,6 +772,9 @@ fn prs_at_version_4() -> String {
 fn version_5_database(env: &TestEnv) {
     drop(open(env));
     let conn = raw(env);
+    // Migration 7 drops it: a database of version 5 still has `contexts.sync_failing`.
+    conn.execute_batch("ALTER TABLE contexts ADD COLUMN sync_failing INTEGER NOT NULL DEFAULT 0 CHECK (sync_failing IN (0, 1))")
+        .unwrap();
     conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
     conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, |_| Ok(1_i64)).unwrap();
     let pr = |plan: &str, key: &str, status: &str, more: &str, values: &str| {
@@ -748,7 +789,7 @@ fn version_5_database(env: &TestEnv) {
             phase = match status {
                 "waiting" => "plan",
                 "merged" => "done",
-                _ => "pr",
+                _ => "deploy",
             },
             locked = if status == "waiting" { "NULL" } else { "'2026-01-02T00:00:00.000Z'" },
             done = if status == "merged" { "'2026-01-09T00:00:00.000Z'" } else { "NULL" },
@@ -799,7 +840,7 @@ fn a_version_5_database_migrates_to_6_with_the_back_filled_rows_and_the_link() {
     drop(store);
     let conn = raw(&env);
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-    assert_eq!(version, 6);
+    assert_eq!(version, VERSION);
     let violations: i64 = conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
     assert_eq!(violations, 0);
 
@@ -1101,7 +1142,7 @@ fn version_on_an_empty_home_reports_no_store_schema_and_creates_nothing() {
     let out = env.cpd(&["--version"]).ok();
     assert_eq!(out["schema"], VERSION);
     assert!(out["store_schema"].is_null(), "{out}");
-    assert_eq!(out["protocol"], 1, "{out}");
+    assert_eq!(out["protocol"], 2, "{out}");
     assert!(!home(&env).db().exists());
     assert!(!home(&env).locks_dir().exists());
 }

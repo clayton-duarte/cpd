@@ -132,8 +132,7 @@ fn start_with(state: &str, on_term: &str) -> Fixture {
         .unwrap()
         .write("fixture", |tx| {
             tx.execute_batch(&format!(
-                "INSERT INTO contexts (id, title, created_at, created_on, lead_session, grounded_seq)
-                   VALUES ('ctx', 'Ctx', 't', 'm1', '{LEAD}', 0);
+                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
                  INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at)
                    VALUES ('{LEAD}', 'lead', 'ctx', NULL, NULL, 'Grounded', '{cwd}', 'O3', '{state}', '{at}', '{at}');"
             ))?;

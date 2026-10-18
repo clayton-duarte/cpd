@@ -17,6 +17,9 @@ export const DEFAULT_TIMING: Timing = { restartInitialMs: 1_000, restartMaxMs: 3
 
 export type Spawn = typeof nodeSpawn;
 
+/** How the restart is scheduled; tests pass their own to see the delays instead of waiting for them. */
+export type Schedule = (run: () => void, ms: number) => ReturnType<typeof setTimeout>;
+
 export type FollowerHooks = {
   /** Awaited before every process is started, the first included (the protocol check). It must not throw. */
   before(): Promise<void>;
@@ -46,12 +49,14 @@ export class Follower {
   private readonly hooks: FollowerHooks;
   private readonly timing: Timing;
   private readonly spawn: Spawn;
+  private readonly schedule: Schedule;
 
-  constructor(sessionId: string, hooks: FollowerHooks, timing: Timing, spawn: Spawn = nodeSpawn) {
+  constructor(sessionId: string, hooks: FollowerHooks, timing: Timing, spawn: Spawn = nodeSpawn, schedule: Schedule = setTimeout) {
     this.sessionId = sessionId;
     this.hooks = hooks;
     this.timing = timing;
     this.spawn = spawn;
+    this.schedule = schedule;
     this.delay = timing.restartInitialMs;
   }
 
@@ -130,7 +135,7 @@ export class Follower {
     if (this.stopped) return;
     const wait = this.delay;
     this.delay = Math.min(this.delay * 2, this.timing.restartMaxMs);
-    this.timer = setTimeout(() => {
+    this.timer = this.schedule(() => {
       this.timer = undefined;
       if (!this.stopped) void this.launch();
     }, wait);

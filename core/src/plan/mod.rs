@@ -14,6 +14,7 @@ mod lead;
 mod list;
 mod lock;
 mod new;
+mod overlap;
 mod phase;
 mod render;
 mod rename;

@@ -157,6 +157,7 @@ fn apply(tx: &WriteTxn<'_>, seen: &[PolledPr], present: &[(String, i64)], owned:
         out.changed.push(json!({
             "repo": after.repo, "number": after.number, "state": after.state, "draft": after.draft,
             "checks": after.checks, "review_decision": after.review_decision,
+            "mergeable": after.mergeable, "merge_state": after.merge_state,
         }));
         for (plan, key, _) in owned.iter().filter(|(_, _, row)| row.id == after.id) {
             if polled.state == PrState::Merged {
@@ -208,7 +209,7 @@ fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest)
     }
     let moved = tx.execute(
         "UPDATE plans SET phase = 'done', done_at = (SELECT at FROM txns WHERE id = cpd_txn())
-          WHERE id = ?1 AND phase = 'pr'",
+          WHERE id = ?1 AND phase = 'deploy'",
         [id.as_str()],
     )?;
     if moved == 0 {
