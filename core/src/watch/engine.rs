@@ -164,7 +164,7 @@ pub(super) fn metrics(session: Option<&SessionId>) -> Option<Value> {
 
 fn catch_signals() -> Result<(), CpdError> {
     let action = SigAction::new(SigHandler::Handler(on_signal), SaFlags::empty(), SigSet::empty());
-    for signal in [Signal::SIGTERM, Signal::SIGINT] {
+    for signal in [Signal::SIGTERM, Signal::SIGINT, Signal::SIGHUP] {
         // SAFETY: the handler only stores to an atomic, which is async-signal-safe.
         unsafe { sigaction(signal, &action) }.map_err(|e| {
             CpdError::new(crate::error::ErrorCode::StoreFailed, format!("Cannot handle {signal}: {e}."))

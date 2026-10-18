@@ -324,6 +324,19 @@ fn watch_holds_the_lock_refuses_a_second_and_stops_on_sigterm() {
     assert_eq!(fx.count("watch-stopped"), 2);
 }
 
+/// `tmux kill-window` (the install's restart of the engine) sends SIGHUP: it is a stop, not a crash.
+#[test]
+fn watch_stops_on_sighup_with_one_watch_stopped() {
+    let fx = fx("");
+    let engine = fx.start();
+    let pid = engine.pid();
+
+    let out = engine.stop_with(Signal::SIGHUP);
+    assert_eq!(out.json(), json!({"ok": true, "stopped": true}), "{out:?}");
+    assert_eq!(out.exit, 0);
+    assert_eq!(fx.events("watch-stopped"), [(None, None, None, json!({"pid": pid}))]);
+}
+
 #[test]
 fn watch_refuses_unknown_flags_and_needs_its_config() {
     let fx = fx("");
