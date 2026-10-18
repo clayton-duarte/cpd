@@ -235,7 +235,7 @@ struct RowText<'a> {
 /// A Plan's or fork's row text (the reference's `session_text`): guide (`├ `, `└ ` for the last), dot, name. The name is cut so that, in a column `width` wide, it never reaches the counters drawn at
 /// the right.
 fn row_text(r: RowText, width: u16) -> Line<'static> {
-    let needs_you = !r.muted && r.session.is_some_and(|s| s.needs_you);
+    let needs_you = !r.muted && r.session.is_some_and(SessionNode::needs_you);
     let guide = if r.last { "└ " } else { "├ " };
     let mut spans = vec![Span::styled(guide, palette::fg(Meaning::Nothing)), palette::dot(needs_you, Some(r.phase)), " ".into()];
     let used = r.depth * INDENT + Line::from(spans.clone()).width() + if r.counters_width > 0 { r.counters_width + 1 } else { 0 };
@@ -249,7 +249,7 @@ fn row_text(r: RowText, width: u16) -> Line<'static> {
 /// the number of Plans listed inside when collapsed.
 fn context_text(c: &ContextNode, collapsed: bool) -> Line<'static> {
     let k = kids(c);
-    let needs_you = k.direct.iter().flat_map(|p| &p.sessions).any(|s| s.needs_you && !s.is_archived());
+    let needs_you = k.direct.iter().flat_map(|p| &p.sessions).any(|s| s.needs_you() && !s.is_archived());
     let mut spans = vec![
         palette::dot(needs_you, busiest(k.direct.iter().copied())),
         " ".into(),
@@ -465,7 +465,7 @@ mod tests {
     use super::*;
     use cpd_core::session::State;
     use crate::palette::color;
-    use crate::read::Place;
+    use crate::read::{Dot, Place};
 
     fn path(parts: &[&str]) -> Vec<Id> {
         parts.iter().map(|p| (*p).to_owned()).collect()
@@ -518,7 +518,7 @@ mod tests {
     /// one in the chat slot needs you.
     fn readme() -> Tree {
         let mut rust = session("s-rust", "cpd rust lead", State::Blocked, Some("cpd: Worker question"), Place::Chat);
-        rust.needs_you = true;
+        rust.dot = Dot::Red;
         tree(vec![context(
             "cpd",
             vec![
@@ -596,7 +596,7 @@ mod tests {
         let t = tree(vec![context("cc", vec![p])]);
         assert_eq!(lines(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false)), ["○ Cc".to_owned(), row_of("  └ ○ Pp", "0⋅0⋅0⋅0⋅0", 30)]);
         let mut t = t;
-        t.contexts[0].plans[0].sessions[0].needs_you = true;
+        t.contexts[0].plans[0].sessions[0].dot = Dot::Red;
         assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false), 1), row_of("  └ ● Pp", "0⋅0⋅0⋅0⋅0", 30));
     }
 

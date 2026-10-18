@@ -5,7 +5,7 @@ use cpd_core::config::Tier;
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::plan::Phase;
 use cpd_core::session::{Role, State};
-use crate::read::{ContextNode, Place, PlanHead, PlanNode, SessionNode, Tree};
+use crate::read::{ContextNode, Dot, Place, PlanHead, PlanNode, SessionNode, Tree};
 use crate::read::JobCounts;
 
 /// The title of a Context or Plan `id`: the id with a capital, so that a test can tell a title from an id and a name.
@@ -33,7 +33,12 @@ pub fn session(id: &str, name: &str, state: State, label: Option<&str>, place: P
         place,
         plan_lead: false,
         grounded_lead: false,
-        needs_you: state == State::Blocked,
+        dot: match state {
+            State::Blocked => Dot::Red,
+            State::Working => Dot::Working,
+            State::Idle => Dot::Idle,
+            State::Stopped => Dot::Stopped,
+        },
         archived_at: None,
     }
 }
@@ -73,7 +78,9 @@ pub fn plan(id: &str, context: &str, phase: Phase, counts: [usize; 6], mut lead:
 }
 
 pub fn context(id: &str, plans: Vec<PlanNode>) -> ContextNode {
+    let dot = plans.iter().flat_map(|p| &p.sessions).map(|s| s.dot).max().unwrap_or(Dot::Stopped);
     ContextNode {
+        dot,
         id: ContextId::parse(id).unwrap(),
         title: titled(id),
         jira: None,
