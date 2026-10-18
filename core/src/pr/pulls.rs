@@ -12,8 +12,8 @@ use crate::error::{CpdError, ErrorCode};
 use crate::ids::{PlanId, PrKey};
 use crate::store::WriteTxn;
 
-/// One row of `pull_requests`. `state`, `review_decision` and `checks` are the
-/// words the table's `CHECK`s allow.
+/// One row of `pull_requests`. `state`, `review_decision`, `checks`,
+/// `mergeable` and `merge_state` are the words the table's `CHECK`s allow.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PullRequest {
     pub id: i64,
@@ -28,10 +28,12 @@ pub struct PullRequest {
     pub created_at: String,
     pub merged_at: Option<String>,
     pub changed_at: String,
+    pub mergeable: String,
+    pub merge_state: String,
 }
 
-const COLUMNS: &str =
-    "id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at";
+const COLUMNS: &str = "id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, \
+                       mergeable, merge_state";
 
 impl PullRequest {
     fn from_row(r: &Row) -> rusqlite::Result<PullRequest> {
@@ -48,15 +50,18 @@ impl PullRequest {
             created_at: r.get(9)?,
             merged_at: r.get(10)?,
             changed_at: r.get(11)?,
+            mergeable: r.get(12)?,
+            merge_state: r.get(13)?,
         })
     }
 
-    /// `{repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at}`,
+    /// `{repo, number, url, title, draft, state, review_decision, checks, mergeable, merge_state, created_at, merged_at}`,
     /// as `plan list`, `plan show` and `pr poll` print it (commands.md §4.2).
     pub fn to_json(&self) -> Value {
         json!({
             "repo": self.repo, "number": self.number, "url": self.url, "title": self.title, "draft": self.draft,
             "state": self.state, "review_decision": self.review_decision, "checks": self.checks,
+            "mergeable": self.mergeable, "merge_state": self.merge_state,
             "created_at": self.created_at, "merged_at": self.merged_at,
         })
     }
@@ -134,6 +139,8 @@ pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, PrKey, PullRe
                 created_at: r.get(11)?,
                 merged_at: r.get(12)?,
                 changed_at: r.get(13)?,
+                mergeable: r.get(14)?,
+                merge_state: r.get(15)?,
             };
             Ok((plan, key, pull))
         })?
@@ -202,8 +209,9 @@ pub(super) fn ensure(tx: &WriteTxn<'_>, polled: &PolledPr) -> Result<i64, CpdErr
 fn insert(tx: &WriteTxn<'_>, polled: &PolledPr) -> Result<PullRequest, CpdError> {
     let at = txn_time(tx)?;
     tx.execute(
-        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at,
+                                    mergeable, merge_state)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'unknown', 'unknown')",
         rusqlite::params![
             polled.repo,
             polled.number,
@@ -310,6 +318,8 @@ mod tests {
             created_at: "t".into(),
             merged_at: None,
             changed_at: "t".into(),
+            mergeable: "unknown".into(),
+            merge_state: "unknown".into(),
         }
     }
 
@@ -381,6 +391,9 @@ mod tests {
         let first = store.write("test", |tx| upsert(tx, &polled(7, ChecksSummary::Pending))).unwrap().unwrap();
         assert_eq!(first.before, None);
         assert_eq!((first.after.checks.as_str(), history_rows(&mut store)), ("pending", 1));
+        assert_eq!((first.after.mergeable.as_str(), first.after.merge_state.as_str()), ("unknown", "unknown"));
+        let json = first.after.to_json();
+        assert_eq!((&json["mergeable"], &json["merge_state"]), (&json!("unknown"), &json!("unknown")));
 
         // The same values: no change, and nothing written (no history row, `changed_at` kept).
         let again = store.write("test", |tx| upsert(tx, &polled(7, ChecksSummary::Pending))).unwrap();

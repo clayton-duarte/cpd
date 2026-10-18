@@ -659,7 +659,7 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
     let mut store = fixture_store(&env);
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     let hash = store.read(|c| Ok(cpd_core::store::schema_hash(c)?)).unwrap();
-    assert_eq!(hash, "a1b657a955520d2dd6dd71e143cee1fd8aba88fafc9284a7e8ab89dfc05c82af", "version 6 (the PR poller) on top of migration 5 (hs-d118)");
+    assert_eq!(hash, "6c34dbf291898d277c9e8c385ecc3c4f2751fba2a5e99acd0b20e8167e359197", "version 7 (the PR poll's mergeable state) on top of migration 6 (the PR poller)");
 
     for table in ["contexts", "plans", "sessions"] {
         let archived: Option<String> =
@@ -794,12 +794,12 @@ fn a_version_5_database_migrates_to_6_with_the_back_filled_rows_and_the_link() {
     let env = TestEnv::new();
     version_5_database(&env);
     let store = open(&env);
-    // Its schema is exactly that of a fresh database at version 6.
+    // Its schema is exactly that of a fresh database (version 7: it goes through 6 to 7).
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     drop(store);
     let conn = raw(&env);
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-    assert_eq!(version, 6);
+    assert_eq!(version, VERSION);
     let violations: i64 = conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
     assert_eq!(violations, 0);
 

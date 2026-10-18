@@ -13,7 +13,7 @@ use crate::ids::PrKey;
 pub(super) type Migration = fn(&Connection) -> Result<()>;
 
 /// Migrations `1..=N`, in order; `MIGRATIONS[i]` takes the schema to version `i + 1`.
-pub(super) const MIGRATIONS: &[Migration] = &[migration_1, migration_2, migration_3, migration_4, migration_5, migration_6];
+pub(super) const MIGRATIONS: &[Migration] = &[migration_1, migration_2, migration_3, migration_4, migration_5, migration_6, migration_7];
 
 /// The schema hash of each version (§4.3): `SCHEMA_HASHES[i]` is version `i + 1`'s.
 /// A test asserts that migrating an empty database gives each of them.
@@ -24,6 +24,7 @@ pub(super) const SCHEMA_HASHES: &[&str] = &[
     "62a082772ccbcd0c989f5181e3b934ba96a3ab3f1d9db81cf8e39cef5ef89579",
     "c4ac18dd07a1a89318a0ef2191ef37a3f78c758dc7ccf2ea62d17c7544a4f672",
     "a1b657a955520d2dd6dd71e143cee1fd8aba88fafc9284a7e8ab89dfc05c82af",
+    "6c34dbf291898d277c9e8c385ecc3c4f2751fba2a5e99acd0b20e8167e359197",
 ];
 
 const _: () = assert!(SCHEMA_HASHES.len() == MIGRATIONS.len(), "one schema hash per migration");
@@ -144,6 +145,15 @@ fn migration_6(conn: &Connection) -> Result<()> {
     create_history_triggers(conn, "pull_requests", false)?;
     conn.execute_batch(rebuild)?;
     create_history_triggers(conn, "prs", true)
+}
+
+/// The PR poll's mergeable state (§4.5 migration 7, hs-d188): two columns of
+/// `pull_requests`, whose history triggers are dropped and written again to
+/// list every column (`0007.sql` drops them and writes `_hist_del`; the other
+/// two are generated).
+fn migration_7(conn: &Connection) -> Result<()> {
+    conn.execute_batch(include_str!("migrations/0007.sql"))?;
+    create_history_triggers(conn, "pull_requests", false)
 }
 
 /// §4.5 step 2: one PR per Plan, its per-repo columns kept as stored, its
@@ -358,7 +368,7 @@ mod tests {
         store
             .write("test", |tx| {
                 tx.execute(
-                    "UPDATE pull_requests SET title = 'T', review_decision = 'approved', checks = 'passed', draft = 1 WHERE number = 7",
+                    "UPDATE pull_requests SET title = 'T', review_decision = 'approved', checks = 'passed', draft = 1, mergeable = 'conflicting', merge_state = 'dirty' WHERE number = 7",
                     [],
                 )?;
                 Ok::<(), CpdError>(())
@@ -372,8 +382,9 @@ mod tests {
         assert_eq!(after["review_decision"], "approved");
         assert_eq!(after["checks"], "passed");
         assert_eq!(after["draft"], 1);
+        assert_eq!((&after["mergeable"], &after["merge_state"]), (&Value::from("conflicting"), &Value::from("dirty")));
 
-        for bad in ["title = ''", "review_decision = 'maybe'", "checks = 'green'", "state = 'merged'", "repo = 'x'", "number = 0", "draft = 2"] {
+        for bad in ["title = ''", "review_decision = 'maybe'", "checks = 'green'", "state = 'merged'", "repo = 'x'", "number = 0", "draft = 2", "mergeable = 'maybe'", "merge_state = 'ready'"] {
             let sql = format!("UPDATE pull_requests SET {bad} WHERE number = 7");
             let err = store.write("test", |tx| Ok::<(), CpdError>({ tx.execute(&sql, [])?; })).unwrap_err();
             assert!(err.to_string().contains("CHECK") || format!("{err:?}").contains("CHECK"), "{bad}: {err:?}");
@@ -608,7 +619,7 @@ mod tests {
     fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = migrated(&dir);
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 6);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
         let migrate = count(&mut store, "SELECT max(id) FROM txns WHERE command = 'migrate'");
         assert_eq!(migrate, 2);
 
@@ -757,7 +768,7 @@ mod tests {
 
         let mut store = Store::open(&home, 5000).unwrap();
         assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 6);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
         let n = Value::Null;
         assert_eq!(
             rows(&mut store, "SELECT id, phase, archived_at FROM plans ORDER BY id"),
@@ -842,7 +853,7 @@ mod tests {
     fn a_version_4_database_with_a_done_plan_migrates_to_5_and_6_keeping_every_row() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = migrated_4(&dir);
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 6);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
         assert_eq!(
             rows(&mut store, "SELECT id, phase, done_at FROM plans ORDER BY id"),
             vec![
@@ -976,7 +987,7 @@ mod tests {
     fn a_version_5_database_migrates_to_6_with_the_pull_requests_back_filled() {
         let dir = tempfile::tempdir().unwrap();
         let (mut store, _) = migrated_5(&dir);
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 6);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
         let n = Value::Null;
         assert_eq!(
             rows(&mut store, "SELECT id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at
@@ -1000,6 +1011,78 @@ mod tests {
             rows(&mut store, "SELECT tbl, pk, op FROM history WHERE txn = 2 ORDER BY id"),
             vec![serde_json::json!(["pull_requests", "[1]", "insert"]), serde_json::json!(["pull_requests", "[2]", "insert"])]
         );
+    }
+
+    // ---------- migration 7 ----------
+
+    /// A version 6 database with two pull requests and no PR.
+    fn version_6(home: &CpdHome) {
+        database_at(
+            home,
+            6,
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at) VALUES
+               ('acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'Pay', 0, 'open', 'none', 'failed', '2026-01-03T00:00:00.000Z', '2026-01-04T00:00:00.000Z'),
+               ('acme/web', 9, 'https://github.com/acme/web/pull/9', 'Web', 1, 'open', 'approved', 'passed', '2026-01-03T00:00:00.000Z', '2026-01-04T00:00:00.000Z');",
+        );
+    }
+
+    #[test]
+    fn a_version_6_database_migrates_to_7_with_its_rows_unknown_and_its_history_listing_both_columns() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_6(&home);
+        assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[5]);
+        let mut store = Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+        assert_eq!(count(&mut store, "PRAGMA user_version"), 7);
+        assert_eq!(
+            rows(&mut store, "SELECT number, checks, mergeable, merge_state FROM pull_requests ORDER BY id"),
+            vec![serde_json::json!([7, "failed", "unknown", "unknown"]), serde_json::json!([9, "passed", "unknown", "unknown"])]
+        );
+        assert_eq!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'pull_requests'"), 2, "the migration wrote no history row");
+
+        // An update, an insert and a delete: each history row lists both new columns.
+        write(&mut store, "UPDATE pull_requests SET mergeable = 'conflicting', merge_state = 'dirty' WHERE number = 7").unwrap();
+        write(
+            &mut store,
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
+             VALUES ('acme/new', 1, 'https://github.com/acme/new/pull/1', 'New', 0, 'open', 'none', 'none', 't', 't')",
+        )
+        .unwrap();
+        write(&mut store, "DELETE FROM pull_requests WHERE number = 9").unwrap();
+        let history = rows(&mut store, "SELECT op, before, after FROM history WHERE tbl = 'pull_requests' AND id > 2 ORDER BY id");
+        let side = |row: &Value, n: usize| -> Value {
+            row[n].as_str().map_or(Value::Null, |text| serde_json::from_str(text).unwrap())
+        };
+        let columns = |v: &Value| (v["mergeable"].clone(), v["merge_state"].clone());
+        let unknown = || (Value::from("unknown"), Value::from("unknown"));
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0][0], "update");
+        assert_eq!((columns(&side(&history[0], 1)), columns(&side(&history[0], 2))), (unknown(), (Value::from("conflicting"), Value::from("dirty"))));
+        assert_eq!((history[1][0].as_str(), columns(&side(&history[1], 2))), (Some("insert"), unknown()));
+        assert_eq!((history[2][0].as_str(), columns(&side(&history[2], 1))), (Some("delete"), unknown()));
+
+        // `pull_requests_owned` is kept and `pull_requests` still gets no `_no_delete`.
+        let triggers = rows(&mut store, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'pull_requests' ORDER BY name");
+        assert_eq!(
+            triggers,
+            ["pull_requests_hist_del", "pull_requests_hist_ins", "pull_requests_hist_upd", "pull_requests_owned"].map(|n| serde_json::json!([n]))
+        );
+    }
+
+    #[test]
+    fn the_checks_of_mergeable_and_merge_state_refuse_a_value_outside_their_sets() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_6(&home);
+        let mut store = Store::open(&home, 5000).unwrap();
+        for ok in ["mergeable = 'mergeable'", "mergeable = 'conflicting'", "merge_state = 'has_hooks'", "merge_state = 'behind'"] {
+            write(&mut store, &format!("UPDATE pull_requests SET {ok} WHERE number = 7")).unwrap();
+        }
+        for bad in ["mergeable = 'MERGEABLE'", "mergeable = 'dirty'", "mergeable = NULL", "merge_state = 'DIRTY'", "merge_state = 'conflicting'", "merge_state = NULL"] {
+            let err = refused(&mut store, &format!("UPDATE pull_requests SET {bad} WHERE number = 7"));
+            assert!(format!("{err:?}").contains("CHECK") || format!("{err:?}").contains("NOT NULL"), "{bad}: {err:?}");
+        }
     }
 
     #[test]
@@ -1046,7 +1129,7 @@ mod tests {
         drop(Store::open(&fresh_home, 5000).unwrap());
         let hash = |home: &CpdHome| schema_hash(&Connection::open(home.db()).unwrap()).unwrap();
         assert_eq!(hash(&home(&dir)), hash(&fresh_home));
-        assert_eq!(hash(&fresh_home), SCHEMA_HASHES[5]);
+        assert_eq!(hash(&fresh_home), SCHEMA_HASHES[6]);
     }
 
     #[test]
