@@ -178,3 +178,204 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], expanded: bool, now: Offs
         }
     }
 }
+
+/// An open item for the tests: `kind` and `urgency`, its `label`, opened at `opened_at`; the rest is none.
+#[cfg(test)]
+pub(super) fn item(id: i64, kind: Kind, urgency: cpd_core::inbox::model::Urgency, label: &str, opened_at: &str) -> Item {
+    Item {
+        id,
+        kind,
+        urgency,
+        subject: format!("subject:{id}"),
+        label: label.to_owned(),
+        url: None,
+        context: None,
+        plan: None,
+        job: None,
+        session: None,
+        record: None,
+        event: None,
+        opened_at: opened_at.to_owned(),
+        closed_at: None,
+        snoozed_until: None,
+        dismissed_at: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::io::{self, Write};
+    use std::rc::Rc;
+
+    use ratatui::backend::CrosstermBackend;
+    use ratatui::{Terminal, TerminalOptions, Viewport};
+
+    use super::super::fixture::{archived, sample};
+    use super::*;
+    use cpd_core::ids::{ContextId, PlanId};
+    use cpd_core::inbox::model::Urgency;
+
+    const OPENED: &str = "2026-01-01T00:00:00.000Z";
+
+    fn at(text: &str) -> OffsetDateTime {
+        OffsetDateTime::parse(text, &Rfc3339).unwrap()
+    }
+
+    fn sid(s: &str) -> SessionId {
+        SessionId::parse(s).unwrap()
+    }
+
+    #[test]
+    fn an_age_is_the_largest_whole_unit() {
+        let cases = [
+            (0, "0s"),
+            (42, "42s"),
+            (59, "59s"),
+            (60, "1m"),
+            (299, "4m"),
+            (300, "5m"),
+            (3599, "59m"),
+            (3600, "1h"),
+            (3 * 3600 + 59 * 60, "3h"),
+            (86399, "23h"),
+            (86400, "1d"),
+            (2 * 86400 + 86399, "2d"),
+            (-5, "0s"),
+        ];
+        for (seconds, text) in cases {
+            assert_eq!(age(seconds), text, "{seconds} s");
+        }
+    }
+
+    #[test]
+    fn an_age_is_taken_from_opened_at_and_an_unreadable_time_is_a_question_mark() {
+        assert_eq!(age_of(OPENED, at("2026-01-01T00:00:42.900Z")), "42s");
+        assert_eq!(age_of(OPENED, at("2026-01-03T05:00:00.000Z")), "2d");
+        assert_eq!(age_of("yesterday", at("2026-01-03T05:00:00.000Z")), "?");
+    }
+
+    #[test]
+    fn the_rows_are_the_header_up_to_three_items_and_a_toggle_only_with_more() {
+        let rows = |count, expanded| {
+            let shape = Shape::new(count, expanded);
+            (0..shape.height() + 1).map(|r| shape.hit(r)).collect::<Vec<_>>()
+        };
+        assert_eq!(rows(0, false), [Some(Hit::Header), None]);
+        assert_eq!(rows(2, false), [Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), None]);
+        assert_eq!(rows(3, true), rows(3, false), "three items have nothing to expand");
+        assert_eq!(rows(5, false), [Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Toggle), None]);
+        let expanded: Vec<_> = (0..7).map(|r| Shape::new(5, true).hit(r)).collect();
+        assert_eq!(
+            expanded,
+            [Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Item(3)), Some(Hit::Item(4)), Some(Hit::Toggle)]
+        );
+        assert_eq!((Shape::new(0, false).height(), Shape::new(5, false).height(), Shape::new(5, true).height()), (1, 5, 7));
+    }
+
+    #[test]
+    fn each_kind_jumps_to_its_cause_or_is_a_link() {
+        let tree = sample();
+        let with = |kind, f: &dyn Fn(&mut Item)| {
+            let mut item = item(1, kind, Urgency::Red, "x", OPENED);
+            f(&mut item);
+            item
+        };
+        let session = |item: &mut Item| item.session = Some(sid("m-alpha"));
+        let plan = |item: &mut Item| item.plan = Some(PlanId::parse("ship").unwrap());
+        let context = |item: &mut Item| item.context = Some(ContextId::parse("alpha").unwrap());
+        let event = |item: &mut Item| item.event = Some(7);
+        let open = |id: &str| Some(Jump::Run(Action::Open(sid(id))));
+        assert_eq!(jump(&tree, &with(Kind::Dialog, &session)), open("m-alpha"));
+        assert_eq!(jump(&tree, &with(Kind::Unread, &session)), open("m-alpha"));
+        assert_eq!(jump(&tree, &with(Kind::JobStuck, &plan)), open("l-ship"), "the Lead of the item's Plan");
+        assert_eq!(jump(&tree, &with(Kind::EngineError, &event)), Some(Jump::Logs(Some(7))));
+        assert_eq!(jump(&tree, &with(Kind::EngineDown, &|_| {})), Some(Jump::Logs(None)), "engine-down has no Event: the bottom");
+        assert_eq!(jump(&tree, &with(Kind::Question, &context)), Some(Jump::Run(Action::OpenManager(ContextId::parse("alpha").unwrap()))));
+        for kind in [Kind::PlanReview, Kind::PrFailing, Kind::PrChanges, Kind::PrReady, Kind::ReviewRequested] {
+            assert_eq!(jump(&tree, &with(kind, &|i| i.url = Some("https://example.com".into()))), None, "{kind:?} is a link");
+        }
+        // an item without what its jump needs jumps nowhere
+        assert_eq!(jump(&tree, &with(Kind::Dialog, &|_| {})), None);
+        assert_eq!(jump(&tree, &with(Kind::JobStuck, &|i| i.plan = Some(PlanId::parse("nope").unwrap()))), None);
+        assert_eq!(jump(&tree, &with(Kind::Question, &|_| {})), None);
+        // an archived Session shows its history, as a click on its tree row
+        assert_eq!(
+            jump(&archived(), &with(Kind::Unread, &|i| i.session = Some(sid("f-blocked")))),
+            Some(Jump::Run(Action::History(sid("f-blocked"))))
+        );
+        assert_eq!(
+            jump(&archived(), &with(Kind::JobStuck, &|i| i.plan = Some(PlanId::parse("old").unwrap()))),
+            Some(Jump::Run(Action::History(sid("l-old"))))
+        );
+    }
+
+    /// A writer the test keeps a handle on.
+    #[derive(Clone, Default)]
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// `bytes` as text without the CSI sequences (cursor moves and colours): what is left is what is printed, and the
+    /// OSC 8 sequences.
+    fn printed(bytes: &[u8]) -> String {
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        let mut out = String::new();
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' && chars.peek() == Some(&'[') {
+                for c in chars.by_ref().skip(1) {
+                    if c.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_link_kinds_label_is_written_as_an_osc_8_link_and_its_dot_and_age_are_not() {
+        let sink = Sink::default();
+        let mut terminal = Terminal::with_options(
+            CrosstermBackend::new(sink.clone()),
+            TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 41, 2)) },
+        )
+        .unwrap();
+        let url = "https://github.com/acme/api/pull/12";
+        let mut linked = item(1, Kind::PrFailing, Urgency::Red, "api#12 failing", OPENED);
+        linked.url = Some(url.into());
+        terminal.draw(|f| draw(f, f.area(), &[linked], false, at("2026-01-01T00:03:30.000Z"), 0)).unwrap();
+        let bytes = sink.0.borrow().clone();
+        let pieces: String = ["ap", "i#", "12", " f", "ai", "li", "ng"]
+            .iter()
+            .map(|p| format!("\x1b]8;;{url}\x07{p}\x1b]8;;\x07"))
+            .collect();
+        let text = printed(&bytes);
+        assert!(text.contains(&format!("●{pieces}3m")), "the dot, the label in pieces of two cells, the age: {text:?}");
+        assert_eq!(text.matches("\x1b]8;;https").count(), 7, "one link per piece, none around the dot or the age");
+        // an item with no url, or of a kind that jumps, has no link
+        let sink = Sink::default();
+        let mut terminal = Terminal::with_options(
+            CrosstermBackend::new(sink.clone()),
+            TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 41, 3)) },
+        )
+        .unwrap();
+        let mut dialog = item(2, Kind::Dialog, Urgency::Red, "dialog", OPENED);
+        dialog.url = Some(url.into());
+        let no_url = item(3, Kind::PlanReview, Urgency::Yellow, "review", OPENED);
+        terminal.draw(|f| draw(f, f.area(), &[dialog, no_url], false, at("2026-01-01T00:03:30.000Z"), 0)).unwrap();
+        assert!(!printed(&sink.0.borrow()).contains("\x1b]8;;"));
+    }
+}
