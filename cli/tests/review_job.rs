@@ -170,26 +170,19 @@ impl Fx {
     }
 
     fn wait_status(&self, id: &str, status: &str) -> Value {
-        let deadline = Instant::now() + Duration::from_secs(60);
-        loop {
+        common::wait_some(&format!("Attempt {id} to become {status}"), Duration::from_secs(60), || {
             let attempt = self.attempt(id);
-            if attempt["status"] == status {
-                return attempt;
-            }
-            assert!(Instant::now() < deadline, "Attempt {id} never became {status}: {attempt}\nlog: {}", self.log(id));
-            std::thread::sleep(Duration::from_millis(200));
-        }
+            if attempt["status"] == status { Ok(attempt) } else { Err(format!("{attempt}\nlog: {}", self.log(id))) }
+        })
     }
 
     /// Waits until the Attempt has ended and its driver has exited.
     fn wait_end(&self, id: &str, pid: &Value) -> Value {
         let attempt = self.wait_status(id, "ended");
         let pid = nix::unistd::Pid::from_raw(pid.as_i64().unwrap() as i32);
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while nix::sys::signal::kill(pid, None).is_ok() {
-            assert!(Instant::now() < deadline, "the driver of {id} did not exit\nlog: {}", self.log(id));
-            std::thread::sleep(Duration::from_millis(100));
-        }
+        common::wait_some(&format!("the driver of {id} to exit"), Duration::from_secs(30), || {
+            if nix::sys::signal::kill(pid, None).is_ok() { Err(format!("log: {}", self.log(id))) } else { Ok(()) }
+        });
         attempt
     }
 

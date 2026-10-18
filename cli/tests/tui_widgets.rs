@@ -604,12 +604,7 @@ fn screen(env: &TestEnv, pane: &str) -> Vec<String> {
 }
 
 fn wait_for_screen(env: &TestEnv, pane: &str, what: &str, ok: impl Fn(&[String]) -> bool) -> Vec<String> {
-    let mut last = vec![];
-    wait_until(what, || {
-        last = screen(env, pane);
-        ok(&last)
-    });
-    last
+    common::wait_screen(what, || screen(env, pane), ok)
 }
 
 /// A left click at 0-based `column` and `row`, as the terminal sends it (SGR mouse reporting, 1-based).

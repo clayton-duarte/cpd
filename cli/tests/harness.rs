@@ -207,6 +207,21 @@ fn executables_are_written_and_copied_only_through_the_harness() {
     assert!(found.is_empty(), "write executables with common::write_executable and copy_executable:\n{}", found.join("\n"));
 }
 
+#[test]
+fn the_shared_helpers_are_defined_only_in_the_harness() {
+    // One wait policy, one refusal check, one fixture writer (tests-build-G2, commands-G4): a file
+    // that needs another shape calls the harness's and wraps it, it does not copy it.
+    let found = test_lines_with(&[
+        "fn wait_until(",
+        "fn wait_until_for(",
+        "fn refused(run: &Run, code: &str, exit: i32)",
+        "fn sql(&self",
+        "fn sql(env: &TestEnv",
+        "fn sql(store: &mut Store",
+    ]);
+    assert!(found.is_empty(), "use common::wait_until, wait_until_for, refused and sql:\n{}", found.join("\n"));
+}
+
 // ---- teardown: a dropped or killed test leaves no tmux server, process, dir or reaper ----
 
 const HELPER_GATE: &str = "CPD_HARNESS_KILLED_TEST_HELPER";

@@ -7,7 +7,6 @@
 mod common;
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use common::{CPD, TestEnv};
 use serde_json::json;
@@ -100,15 +99,7 @@ impl<'a> Pane<'a> {
     }
 
     fn wait(&self, what: &str, done: impl Fn(&[String]) -> bool) -> Vec<String> {
-        let start = Instant::now();
-        loop {
-            let screen = self.screen();
-            if done(&screen) {
-                return screen;
-            }
-            assert!(start.elapsed() < Duration::from_secs(10), "waiting for {what}; the screen is:\n{}", screen.join("\n"));
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        common::wait_screen(what, || self.screen(), done)
     }
 
     fn keys(&self, keys: &[&str]) {

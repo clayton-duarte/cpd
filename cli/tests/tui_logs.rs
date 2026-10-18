@@ -205,13 +205,8 @@ fn screen(env: &TestEnv, pane: &str) -> Vec<String> {
     tmux_out(env, &["capture-pane", "-p", "-t", pane]).lines().map(|l| l.trim_end().to_owned()).collect()
 }
 
-fn wait_screen(env: &TestEnv, pane: &str, what: &str, mut done: impl FnMut(&[String]) -> bool) -> Vec<String> {
-    let mut rows = Vec::new();
-    wait_until(what, || {
-        rows = screen(env, pane);
-        done(&rows)
-    });
-    rows
+fn wait_screen(env: &TestEnv, pane: &str, what: &str, done: impl FnMut(&[String]) -> bool) -> Vec<String> {
+    common::wait_screen(what, || screen(env, pane), done)
 }
 
 #[test]
