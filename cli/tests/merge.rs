@@ -520,6 +520,77 @@ fn tampered_also_by_the_repos_own_protected_list_on_the_lead_branch() {
     fx.assert_failed(&attempt, "api", "tampered");
 }
 
+/// A commit on `main` writing `path` = `content` (`None`: removing it), pushed to `origin`.
+fn base_edits(fx: &Fx, path: &str, content: Option<&str>) {
+    match content {
+        Some(content) => {
+            fx.commit(&fx.repo, path, content);
+        }
+        None => {
+            fx.git(&fx.repo, &["rm", "-q", path]);
+            fx.git(&fx.repo, &["commit", "-q", "-m", &format!("remove {path}")]);
+        }
+    }
+    fx.git(&fx.repo, &["push", "-q", "origin", "main"]);
+}
+
+/// The Attempt's worktree merges `origin/main` (the Lead tip is its ancestor, so no rebase).
+fn merge_the_base(fx: &Fx, worktree: &Path) -> String {
+    fx.git(worktree, &["merge", "-q", "--no-ff", "-m", "merge the base", "origin/main"]);
+    fx.git(worktree, &["rev-parse", "HEAD"])
+}
+
+#[test]
+fn an_attempt_that_merges_a_base_with_changed_protected_files_is_merged() {
+    for path in [".config/wt.toml", ".config/cpd.toml", ".cpd/x"] {
+        let (fx, _) = fx_origin();
+        let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
+        base_edits(&fx, path, Some("protected = [\"verify.sh\"]\n"));
+        let tip = merge_the_base(&fx, &worktree);
+
+        let result = fx.merge(&attempt);
+
+        assert_eq!(result.end, End::Merged { sha: tip.clone() }, "{path}");
+        assert_eq!(fx.lead_sha(), tip, "{path}");
+        assert_eq!(fx.job_row("api"), ("merged".into(), Some(tip), None), "{path}");
+    }
+}
+
+#[test]
+fn an_attempt_that_changes_a_protected_file_to_anything_but_the_bases_is_tampered() {
+    for path in [".config/wt.toml", ".config/cpd.toml"] {
+        let (fx, _) = fx_origin();
+        let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
+        base_edits(&fx, path, Some("protected = [\"verify.sh\"]\n"));
+        merge_the_base(&fx, &worktree);
+        fx.commit(&worktree, path, "protected = [\"mine\"]\n");
+        let old = fx.lead_sha();
+
+        let result = fx.merge(&attempt);
+
+        assert!(matches!(result.end, End::Failed { cause: Failure::Tampered, .. }), "{path}: {result:?}");
+        assert_eq!(fx.lead_sha(), old, "{path}");
+        fx.assert_failed(&attempt, "api", "tampered");
+    }
+}
+
+#[test]
+fn a_protected_file_deleted_on_the_base_and_in_the_attempt_is_merged() {
+    for path in [".config/wt.toml", ".config/cpd.toml"] {
+        let (fx, _) = fx_origin();
+        base_edits(&fx, path, Some("protected = []\n"));
+        fx.git(&fx.lead, &["merge", "-q", "--ff-only", "origin/main"]);
+        let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
+        base_edits(&fx, path, None);
+        let tip = merge_the_base(&fx, &worktree);
+        assert!(!worktree.join(path).exists());
+
+        let result = fx.merge(&attempt);
+
+        assert_eq!(result.end, End::Merged { sha: tip }, "{path}");
+    }
+}
+
 #[test]
 fn cas_lost_when_the_lead_branch_keeps_moving_outside_cpd() {
     let fx = fx();

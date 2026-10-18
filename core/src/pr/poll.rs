@@ -19,9 +19,9 @@ use super::{Env, PollArgs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
 use crate::git;
+use crate::home::CpdHome;
 use crate::host::layout::attempt_window;
 use crate::host::tmux::Tmux;
-use crate::home::CpdHome;
 use crate::ids::{AttemptId, PlanId, PrKey};
 use crate::merge::RepoLock;
 use crate::output::Output;
@@ -159,6 +159,7 @@ fn apply(tx: &WriteTxn<'_>, seen: &[PolledPr], present: &[(String, i64)], owned:
         out.changed.push(json!({
             "repo": after.repo, "number": after.number, "state": after.state, "draft": after.draft,
             "checks": after.checks, "review_decision": after.review_decision,
+            "mergeable": after.mergeable, "merge_state": after.merge_state,
         }));
         for (plan, key, _) in owned.iter().filter(|(_, _, row)| row.id == after.id) {
             if polled.state == PrState::Merged {
@@ -285,7 +286,7 @@ fn clean_up(env: &mut Env, just: &[(PlanId, PrKey)]) -> Result<(), CpdError> {
     let all = env.store.read(merged_prs_to_clean)?;
     let (fresh, earlier): (Vec<Merged>, Vec<Merged>) = all.into_iter().partition(|m| just.contains(&(m.plan.clone(), m.pr.clone())));
     for merged in earlier.iter().filter(|m| m.on_disk()) {
-        clean(&env.home, merged);
+        clean_locked(&env.home, merged);
     }
     if fresh.is_empty() {
         return Ok(());
@@ -304,7 +305,7 @@ fn clean_up(env: &mut Env, just: &[(PlanId, PrKey)]) -> Result<(), CpdError> {
                 }
             }
         }
-        failures.extend(clean(&env.home, merged));
+        failures.extend(clean_locked(&env.home, merged));
         events.extend(failures.into_iter().map(|(path, reason)| (merged.plan.clone(), merged.pr.clone(), path, reason)));
     }
     if events.is_empty() {
@@ -344,20 +345,23 @@ fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Merged>, CpdEr
     Ok(found)
 }
 
+/// [`clean`] under the PR's per-repo lock, taken without waiting (hs-n124): a Gate, a merge or
+/// a push holding it must not lose its worktree. When the lock is held, nothing is removed and
+/// there is no failure: the PR is still on disk, so a later poll cleans it up. A lock that
+/// cannot be opened is a failed removal.
+fn clean_locked(home: &CpdHome, merged: &Merged) -> Vec<Failure> {
+    match RepoLock::try_take(home, Path::new(&merged.repo)) {
+        Ok(Some(_lock)) => clean(merged),
+        Ok(None) => Vec::new(),
+        Err(e) => vec![(merged.lead_worktree.clone().unwrap_or_else(|| merged.repo.clone()), reason(&e))],
+    }
+}
+
 /// Removes the Attempt worktrees of the PR that are on disk, then its Lead worktree. Each
 /// removal runs in the PR's repo, so the order does not matter; a failure does not stop the
 /// others. What it did not remove.
-///
-/// G1 (hs-n124): it runs under the per-repo lock of the PR's repo, taken without waiting, so it
-/// never removes a worktree under a Gate of `pr open`, `pr push` or `pr rebase`. When the lock
-/// is held it removes nothing and returns no failure: a later poll retries it.
-fn clean(home: &CpdHome, merged: &Merged) -> Vec<Failure> {
+fn clean(merged: &Merged) -> Vec<Failure> {
     let repo = Path::new(&merged.repo);
-    let _lock = match RepoLock::try_take(home, repo) {
-        Ok(Some(lock)) => lock,
-        Ok(None) => return Vec::new(),
-        Err(e) => return vec![(merged.repo.clone(), reason(&e))],
-    };
     let mut failures = Vec::new();
     for (_, branch, worktree) in &merged.attempts {
         if Path::new(worktree).exists()

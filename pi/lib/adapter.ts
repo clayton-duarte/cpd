@@ -242,7 +242,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     const entries = ctx.sessionManager.getEntries();
     r.cursor = cursorFrom(info.registeredEvent, entries, id);
 
-    if (info.role === "lead" || info.role === "manager") registerUpdates();
+    if (info.role === "manager") registerUpdates();
 
     // 5. blocking reasons (Plan Lead only; a Manager has none and opens no plannotator)
     if (info.role !== "manager" && info.planLead && info.plan !== null) {
@@ -380,7 +380,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     }
   }
 
-  /** §15.3 `session-message`: for every Lead and a Manager, with a turn. The sender's name is read once, `cpd session show <from>`; the id stands in when it cannot be read. */
+  /** §15.3 `session-message`: for every Lead and a Manager; a turn only when `data.wake` is true (hs-d209, D3). The sender's name is read once, `cpd session show <from>`; the id stands in when it cannot be read. */
   async function deliverSessionMessage(r: Run, ev: CpdEvent): Promise<void> {
     const from = typeof ev.data.from === "string" ? ev.data.from : null;
     let sender: { id: string; name: string | null } | null = null;
@@ -394,14 +394,14 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       }
     }
     if (run !== r) return;
-    pi.sendMessage(sessionMessage(ev, r.id, sender), FOLLOW_UP(true));
+    pi.sendMessage(sessionMessage(ev, r.id, sender), FOLLOW_UP(ev.data.wake === true));
   }
 
   // ---- Context updates at turn start (§15.7) ----
 
   /**
-   * `before_agent_start` of a Lead or Manager: the Context records other Sessions wrote since its cursor and, for a
-   * Manager, the `Plans:` digest and the fresh `Pending work:` section, as one `cpd-context` message added to the run. Never starts a turn: a failed read is reported once (no turn) and leaves the cursor.
+   * `before_agent_start` of a Manager only (hs-d209, D1: nothing from the Context is pushed into a Lead's turn): the
+   * Context records other Sessions wrote since its cursor, the `Plans:` digest and the fresh `Pending work:` section, as one `cpd-context` message added to the run. Never starts a turn: a failed read is reported once (no turn) and leaves the cursor.
    */
   async function contextUpdates(r: Run, ctx: Ctx): Promise<{ message: Message } | undefined> {
     try {
@@ -409,8 +409,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       const events = parseRecordEvents(await call(["events", "list", "--context", r.info.context, "--kind", "context-record", "--since", String(cursor)]));
       const first = Math.min(...events.map((e) => e.seq));
       const records = events.length === 0 ? [] : parseRecords(await call(["context", "show", "--context", r.info.context, "--since", String(first - 1)]));
-      const plans = r.info.role === "manager" ? parsePlanEvents(await call(["events", "list", "--context", r.info.context, ...PLAN_KINDS.flatMap((k) => ["--kind", k]), "--since", String(cursor)])) : undefined;
-      const pending = r.info.role === "manager" ? parsePending(await call(["context", "pending", "--context", r.info.context])) : undefined;
+      const plans = parsePlanEvents(await call(["events", "list", "--context", r.info.context, ...PLAN_KINDS.flatMap((k) => ["--kind", k]), "--since", String(cursor)]));
+      const pending = parsePending(await call(["context", "pending", "--context", r.info.context]));
       r.contextFailed = false;
       const message = contextUpdate(r.info.context, r.id, events, records, plans, pending);
       return message === undefined ? undefined : { message };
@@ -426,13 +426,13 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   }
 
   let updatesRegistered = false;
-  /** Registered once, for a Lead or Manager only (never a Worker); pi has no way to remove a handler. */
+  /** Registered once, for a Manager only (never a Lead or a Worker); pi has no way to remove a handler. */
   function registerUpdates(): void {
     if (updatesRegistered) return;
     updatesRegistered = true;
     pi.on("before_agent_start", async (_event, ctx) => {
       const r = run;
-      return r && (r.info.role === "lead" || r.info.role === "manager") ? contextUpdates(r, ctx) : undefined;
+      return r && r.info.role === "manager" ? contextUpdates(r, ctx) : undefined;
     });
   }
 

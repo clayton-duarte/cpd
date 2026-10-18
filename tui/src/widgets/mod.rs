@@ -3,7 +3,8 @@
 //! model ([`read::widgets`]), then follows the Events: it looks at the highest
 //! Event id every [`TICK`] and re-reads when it moved, at most once per
 //! [`COALESCE`]; the load average is re-read at least every [`REFRESH`], since
-//! it is no Event. It makes no write of its own. Its one key is `q`.
+//! it is no Event. It makes no write of its own, but for what a click on an owned PR row asks of `cpd session open`. Its one
+//! key is `q`; mouse capture is on.
 //!
 //! - [`column`]: the drawing of the machine, the PRs, git and Jira;
 //! - [`legend`]: the key legend, `cpd tui view legend`, which the tree's `?` and
@@ -16,19 +17,25 @@ pub mod legend;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use ratatui::crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEventKind,
+};
+use ratatui::layout::Position;
 
 use super::read::{self, Widgets};
-use super::{not_a_terminal, on_a_terminal};
+use super::{RunCommand, not_a_terminal, on_a_terminal};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::highest_id;
 use cpd_core::home::CpdHome;
-use cpd_core::host::Tmux;
+use cpd_core::host::layout::MAIN_WINDOW;
+use cpd_core::host::{Pane, Tmux, chat_slot};
+use cpd_core::ids::SessionId;
+use cpd_core::session::PROGRAM;
 use cpd_core::output::Output;
 use cpd_core::store::Store;
 
-pub use column::{Machine, draw};
+pub use column::{Hit, Machine, draw};
 
 /// How often the view looks at the Events and at keys.
 const TICK: Duration = Duration::from_millis(200);
@@ -37,7 +44,7 @@ const COALESCE: Duration = Duration::from_millis(500);
 /// A snapshot and the load at least this often: the load average is no Event.
 const REFRESH: Duration = Duration::from_secs(2);
 
-pub(super) fn run() -> Result<Output, CpdError> {
+pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
     if !on_a_terminal() {
         return Err(not_a_terminal("tui view widgets"));
     }
@@ -49,31 +56,56 @@ pub(super) fn run() -> Result<Output, CpdError> {
     let first = read::widgets(&mut store, config.concurrency, 0)?;
     // From here on this process owns the terminal (commands.md §1.2).
     let mut terminal = ratatui::init();
-    let result = show(&mut terminal, &mut store, config.concurrency, first, machine);
+    let tmux = Tmux::new(config.tmux.socket.clone());
+    let lead = Opener { run_command, tmux: &tmux, cockpit: &config.tmux.cockpit_session };
+    let result = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture)
+        .map_err(terminal_failed)
+        .and_then(|()| show(&mut terminal, &mut store, config.concurrency, first, machine, &lead));
+    let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result.map(|()| Output::Owned)
 }
 
-/// Draws and follows until `q`. Reading failures end the view with their error.
+fn terminal_failed(e: std::io::Error) -> CpdError {
+    CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view widgets failed: {e}."))
+        .with("command", "tui view widgets")
+}
+
+/// What a click on an owned PR row runs: `session open <lead>` through `run_command`, then the focus on the chat slot.
+struct Opener<'a> {
+    run_command: RunCommand,
+    tmux: &'a Tmux,
+    cockpit: &'a str,
+}
+
+/// Draws and follows until `q`. Reading failures end the view with their error. A left click on an owned PR row (not on its
+/// `↗`) opens its Lead in the chat slot; a refusal is the `note` in the column's last row until the next click.
 fn show(
     terminal: &mut ratatui::DefaultTerminal,
     store: &mut Store,
     concurrency: u32,
     mut widgets: Widgets,
     mut machine: Machine,
+    opener: &Opener,
 ) -> Result<(), CpdError> {
-    let terminal_failed = |e: std::io::Error| {
-        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view widgets failed: {e}."))
-            .with("command", "tui view widgets")
-    };
     let mut read_at = Instant::now();
+    let mut hits = Vec::new();
+    let mut note = String::new();
     loop {
-        terminal.draw(|f| draw(f, f.area(), &widgets, &machine)).map_err(terminal_failed)?;
+        terminal.draw(|f| hits = draw(f, f.area(), &widgets, &machine, &note)).map_err(terminal_failed)?;
         if event::poll(TICK).map_err(terminal_failed)? {
-            if let Event::Key(key) = event::read().map_err(terminal_failed)? {
-                if quits(&key) {
-                    return Ok(());
+            match event::read().map_err(terminal_failed)? {
+                Event::Key(key) if quits(&key) => return Ok(()),
+                Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
+                    note.clear();
+                    let at = Position::new(m.column, m.row);
+                    if let Some(hit) = hits.iter().find(|h| h.contains(at)) {
+                        if let Err(e) = open_lead(opener.run_command, opener.tmux, opener.cockpit, &hit.lead) {
+                            note = e.message().to_owned();
+                        }
+                    }
                 }
+                _ => {}
             }
         }
         if read_at.elapsed() >= COALESCE {
@@ -85,6 +117,23 @@ fn show(
             }
         }
     }
+}
+
+/// A click on a tab or on an owned PR row: `session open <id>`, which moves that Lead into the chat slot, then `select-pane`
+/// on the chat. The plan view's tabs and this column's rows share it.
+pub(crate) fn open_lead(run_command: RunCommand, tmux: &Tmux, cockpit: &str, session: &SessionId) -> Result<(), CpdError> {
+    let argv = [PROGRAM, "session", "open", session.as_str()].map(std::ffi::OsString::from).into();
+    run_command(argv)?;
+    if let Some(chat) = chat_slot(&main_panes(tmux, cockpit)?, cockpit) {
+        tmux.run(&["select-pane", "-t", chat.pane.as_str()].map(str::to_owned))?;
+    }
+    Ok(())
+}
+
+/// The panes of the cockpit's `main` window.
+pub(crate) fn main_panes(tmux: &Tmux, cockpit: &str) -> Result<Vec<Pane>, CpdError> {
+    let all = tmux.list_panes()?;
+    Ok(all.into_iter().filter(|p| p.session_name == cockpit && p.window_name == MAIN_WINDOW).collect())
 }
 
 /// `q` is the view's only key (commands.md §13.2): `?` belongs to the tree and the StatusBar.
@@ -158,6 +207,7 @@ mod tests {
 
     #[test]
     fn q_is_the_only_key() {
+        // Mouse clicks are handled apart, in `show`; no other key does anything.
         let press = |code| KeyEvent::new(code, ratatui::crossterm::event::KeyModifiers::NONE);
         assert!(quits(&press(KeyCode::Char('q'))));
         for code in [KeyCode::Char('?'), KeyCode::Esc, KeyCode::Enter, KeyCode::Char('j'), KeyCode::Char('Q')] {

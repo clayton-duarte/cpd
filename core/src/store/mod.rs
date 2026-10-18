@@ -178,7 +178,7 @@ impl Store {
     /// Applies the missing migrations in one transaction. Returns whether the
     /// one that imports the old Context stores was among them.
     fn migrate_in_txn(&mut self, home: &CpdHome) -> Result<bool, CpdError> {
-        let caller = Caller::current()?;
+        let caller = Caller::current();
         let _guard = TxnGuard(&self.txn);
         let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Another process may have migrated since the read above.
@@ -273,7 +273,8 @@ impl Store {
     /// (`store_busy` after `store_busy_ms`), then the `txns` row for `command`
     /// with `cpd_txn()` set to its id, then `f`. Commits when `f` returns `Ok`,
     /// rolls everything back when it returns `Err`. Refuses with
-    /// `store_tampered` when the schema check failed.
+    /// `store_tampered` when the schema check failed and with `store_too_new`
+    /// when another process migrated the database past this cpd's schema.
     ///
     /// No external work (git, tmux, pi, `gh`) belongs inside `f`.
     pub fn write<T>(
@@ -290,11 +291,13 @@ impl Store {
             .with("expected", mismatch.expected.clone())
             .with("found", mismatch.found.clone()));
         }
-        let caller = Caller::current()?;
+        let caller = Caller::current();
         let (path, busy_ms) = (self.path.clone(), self.busy_ms);
         let _guard = TxnGuard(&self.txn);
         let result = (|| {
             let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            // Another process may have migrated since this process opened.
+            refuse_too_new(user_version(&tx)?)?;
             let id = begin_txn(&tx, &self.txn, command, &caller)?;
             let write = WriteTxn { tx, id };
             let value = f(&write)?;
@@ -429,6 +432,9 @@ fn refuse_too_new(version: i64) -> Result<(), CpdError> {
     Ok(())
 }
 
+/// What `txns.cwd` holds when the process's cwd cannot be read (§4.4).
+const UNREADABLE_CWD: &str = "(unreadable)";
+
 /// Who opens a write transaction: `txns.pid`, `session` and `cwd` (§4.4).
 struct Caller {
     pid: u32,
@@ -437,15 +443,14 @@ struct Caller {
 }
 
 impl Caller {
-    fn current() -> Result<Caller, CpdError> {
+    fn current() -> Caller {
         let session = ["CPD_SESSION", "PI_SESSION_ID"]
             .iter()
             .find_map(|name| std::env::var_os(name).filter(|v| !v.is_empty()))
             .map(|v| v.to_string_lossy().into_owned());
-        let cwd = std::env::current_dir().map_err(|e| {
-            CpdError::new(ErrorCode::StoreFailed, format!("The current directory is unreadable: {e}."))
-        })?;
-        Ok(Caller { pid: std::process::id(), session, cwd: cwd.to_string_lossy().into_owned() })
+        // The column is information, not a key: a deleted cwd must not stop a write.
+        let cwd = std::env::current_dir().map_or_else(|_| UNREADABLE_CWD.to_owned(), |d| d.to_string_lossy().into_owned());
+        Caller { pid: std::process::id(), session, cwd }
     }
 }
 
@@ -525,6 +530,19 @@ impl From<rusqlite::Error> for CpdError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_migration_leaves_foreign_keys_on_and_legacy_alter_table_off() {
+        let dir = tempfile::tempdir().unwrap();
+        // Migration 1 cannot apply: a table `history` already exists.
+        Connection::open(dir.path().join("cpd.db")).unwrap().execute_batch("CREATE TABLE history (x)").unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let mut store = Store::connect(&dir.path().join("cpd.db"), 5000).unwrap();
+        let err = store.migrate(&home).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::MigrationFailed, "{err:?}");
+        let get = |name: &str| store.conn.pragma_query_value(None, name, |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!((get("foreign_keys"), get("legacy_alter_table")), (1, 0));
+    }
 
     #[test]
     fn current_schema_is_none_without_a_file() {

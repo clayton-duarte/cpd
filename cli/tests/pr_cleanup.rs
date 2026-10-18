@@ -36,7 +36,7 @@ fn node(number: i64, state: &str) -> String {
     let merged = if state == "MERGED" { r#""2026-10-14T10:00:00Z""# } else { "null" };
     format!(
         r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":{number},"url":"https://github.com/acme/pay/pull/{number}","title":"PR {number}",
-        "isDraft":false,"state":"{state}","createdAt":"opened","mergedAt":{merged},"reviewDecision":null,
+        "isDraft":false,"state":"{state}","createdAt":"opened","mergedAt":{merged},"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN",
         "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
     )
 }
@@ -310,27 +310,27 @@ fn a_locked_attempt_worktree_survives_until_it_is_unlocked() {
 }
 
 #[test]
-fn a_held_per_repo_lock_defers_the_clean_up_to_the_next_poll() {
+fn a_held_repo_lock_defers_the_clean_up_to_a_later_poll_with_no_event() {
+    // hs-n124: a Gate holds the repo lock in the Lead worktree while the PR merges on GitHub.
     let fx = fx(&["api"]);
     let api = fx.pr("api");
     fx.github(&[], &["api"]);
-    let held = RepoLock::wait(&fx.home, &fx.repo).unwrap();
 
+    let lock = RepoLock::wait(&fx.home, &fx.repo).unwrap();
     let out = fx.poll();
 
-    assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "api"}]), "the merge is recorded anyway");
-    assert_eq!(fx.gone("api"), (false, false), "nothing is removed under a held lock");
-    assert!(api.attempt.exists() && api.lead.exists());
-    assert_eq!(fx.errors(), Vec::<Value>::new(), "a skipped clean-up appends no Event");
-
-    fx.poll();
-
-    assert_eq!(fx.gone("api"), (false, false), "still held");
+    assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "api"}]));
+    assert!(api.lead.exists() && fx.branch_exists(&api.lead_branch), "the Lead worktree stays under a held lock");
+    assert!(api.attempt.exists() && fx.branch_exists(&api.attempt_branch));
     assert_eq!(fx.errors(), Vec::<Value>::new());
 
-    drop(held);
+    fx.poll();
+    assert!(api.lead.exists(), "still held");
+    assert_eq!(fx.errors(), Vec::<Value>::new());
+
+    drop(lock);
     fx.poll();
 
-    assert_eq!(fx.gone("api"), (true, true), "the next poll removes it");
+    assert_eq!(fx.gone("api"), (true, true));
     assert_eq!(fx.errors(), Vec::<Value>::new());
 }

@@ -4,17 +4,15 @@
 //! does; the Worker pane is the view's own layout (`split-window`, `@cpd_view worker`, `@cpd_job`), not Ledger state.
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
 
 use cpd_core::config::Config;
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
-use cpd_core::host::layout::MAIN_WINDOW;
 use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux, View, chat_slot, view_pane};
 use cpd_core::ids::{AttemptId, PlanId, SessionId};
 use cpd_core::session::PROGRAM;
 
-use crate::RunCommand;
+use crate::{RunCommand, widgets};
 
 /// The pane option holding the Job a Worker pane shows (its border title shows it), so a second click on the same Job
 /// closes it.
@@ -40,21 +38,15 @@ impl Actions {
         }
     }
 
-    /// A click on a tab: `session open <id>`, which moves that Lead into the chat slot, then `select-pane` on the chat.
+    /// A click on a tab: `session open <id>`, which moves that Lead into the chat slot, then `select-pane` on the chat
+    /// (shared with the Deploy column's rows).
     pub fn open_lead(&self, session: &SessionId) -> Result<(), CpdError> {
-        let argv = [PROGRAM, "session", "open", session.as_str()].map(OsString::from).into();
-        (self.run_command)(argv)?;
-        let panes = self.main_panes()?;
-        if let Some(chat) = chat_slot(&panes, &self.cockpit) {
-            self.tmux.run(&["select-pane", "-t", chat.pane.as_str()].map(str::to_owned))?;
-        }
-        Ok(())
+        widgets::open_lead(self.run_command, &self.tmux, &self.cockpit, session)
     }
 
     /// The panes of the cockpit's `main` window.
     fn main_panes(&self) -> Result<Vec<Pane>, CpdError> {
-        let all = self.tmux.list_panes()?;
-        Ok(all.into_iter().filter(|p| p.session_name == self.cockpit && p.window_name == MAIN_WINDOW).collect())
+        widgets::main_panes(&self.tmux, &self.cockpit)
     }
 
     /// The Job a Worker pane shows.
