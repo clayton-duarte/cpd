@@ -1779,15 +1779,257 @@ mod tests {
         assert_eq!(click(&mut view, 10, 17), Effect::Run(Action::History(sid("f-blocked"))));
     }
 
+    /// The row of the Inbox item `i`, as the last frame drew it.
+    fn inbox_row(view: &View, i: u16) -> u16 {
+        view.inbox_area.y + 1 + i
+    }
+
+    /// The labels of the open menu, as `menu_items` reads them from the drawn box.
+    fn menu_labels(view: &mut View) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(43, 16)).unwrap();
+        terminal.draw(|f| view.draw_at(f, 0, now())).unwrap();
+        let buf = terminal.backend().buffer();
+        let rect = view.menu.as_ref().expect("a menu is open").rect(view.pane);
+        (rect.y + 1..rect.bottom() - 1)
+            .map(|y| (rect.x + 1..rect.right() - 1).map(|x| buf[(x, y)].symbol()).collect::<String>().trim().to_owned())
+            .collect()
+    }
+
+    /// Picks the entry `index` of the open menu with Enter.
+    fn pick_entry(view: &mut View, index: usize) -> Effect {
+        for _ in 0..index {
+            press(view, KeyCode::Down);
+        }
+        press(view, KeyCode::Enter)
+    }
+
     #[test]
-    fn the_inbox_section_has_no_menu_yet_and_a_click_there_clears_the_note() {
+    fn a_right_click_on_an_item_row_opens_its_four_entries_and_each_runs_its_command() {
         let mut view = with_inbox(3);
         draw_now(&mut view, 43, 16);
+        let row = inbox_row(&view, 1); // the pr-failing, item 2
         view.done(Err("why".into()));
-        assert_eq!(right_click(&mut view, 10, 13), Effect::None);
+        assert_eq!(right_click(&mut view, 10, row), Effect::None);
+        assert_eq!(view.note, "", "a right click clears the note");
+        assert_eq!(menu_labels(&mut view), ["Snooze 15 min", "Snooze 1 h", "Snooze until tomorrow 09:00", "Dismiss"]);
+        let expected = [
+            Action::Snooze { item: 2, until: Until::Minutes15 },
+            Action::Snooze { item: 2, until: Until::Hour1 },
+            Action::Snooze { item: 2, until: Until::Tomorrow },
+            Action::Dismiss(2),
+        ];
+        for (i, action) in expected.into_iter().enumerate() {
+            right_click(&mut view, 10, row);
+            assert_eq!(pick_entry(&mut view, i), Effect::Run(action), "entry {i}");
+            assert!(view.menu.is_none() && view.prompt.is_none());
+        }
+        // a click on an entry picks it too, and Esc closes the menu running nothing
+        right_click(&mut view, 10, row);
+        let rect = view.menu.as_ref().unwrap().rect(view.pane);
+        assert_eq!(click(&mut view, rect.x + 2, rect.y + 4), Effect::Run(Action::Dismiss(2)));
+        right_click(&mut view, 10, row);
+        assert_eq!(press(&mut view, KeyCode::Esc), Effect::None);
         assert!(view.menu.is_none());
-        click(&mut view, 10, 12);
-        assert_eq!(view.note, "");
+    }
+
+    #[test]
+    fn the_header_and_the_more_row_have_no_menu_and_engine_down_has_none() {
+        let mut view = with_inbox(5);
+        draw_now(&mut view, 43, 16);
+        let header = view.inbox_area.y;
+        assert_eq!(right_click(&mut view, 10, header), Effect::None, "the header");
+        assert!(view.menu.is_none());
+        let more = inbox_row(&view, 3);
+        assert_eq!(right_click(&mut view, 10, more), Effect::None, "`+2 more`");
+        assert!(view.menu.is_none());
+        let mut down = item(9, InboxKind::EngineDown, Urgency::Red, "engine is down", "2026-01-02T23:00:00.000Z");
+        down.id = 9;
+        view.tree.inbox.insert(0, down);
+        draw_now(&mut view, 43, 16);
+        let (first, second) = (inbox_row(&view, 0), inbox_row(&view, 1));
+        assert_eq!(right_click(&mut view, 10, first), Effect::None);
+        assert!(view.menu.is_none(), "engine-down offers no menu");
+        right_click(&mut view, 10, second);
+        assert!(view.menu.is_some(), "the next row does");
+    }
+
+    /// Down presses until the cursor is in the Inbox, from the first Session.
+    fn into_the_inbox(view: &mut View) {
+        draw_now(view, 43, 16);
+        for _ in 0..20 {
+            press(view, KeyCode::Down);
+            if view.inbox_cursor.is_some() {
+                return;
+            }
+        }
+        panic!("the cursor never reached the Inbox");
+    }
+
+    #[test]
+    fn the_cursor_goes_from_the_last_session_into_the_item_rows_and_back() {
+        let mut view = with_inbox(5);
+        draw_now(&mut view, 43, 16);
+        press(&mut view, KeyCode::Down); // shows the cursor
+        let mut last = None;
+        while view.inbox_cursor.is_none() {
+            last = view.state.selected().to_vec().into();
+            press(&mut view, KeyCode::Down);
+        }
+        assert_eq!(view.inbox_cursor, Some(0), "down from the last Session enters the first item");
+        assert_eq!(Some(view.state.selected().to_vec()), last, "the tree's cursor stays on its last Session");
+        press(&mut view, KeyCode::Down);
+        press(&mut view, KeyCode::Char('j'));
+        press(&mut view, KeyCode::Down);
+        assert_eq!(view.inbox_cursor, Some(2), "three items shown: it stops on the last of them");
+        press(&mut view, KeyCode::Up);
+        press(&mut view, KeyCode::Char('k'));
+        assert_eq!(view.inbox_cursor, Some(0));
+        press(&mut view, KeyCode::Up);
+        assert_eq!(view.inbox_cursor, None, "up from the first item is back on the last Session");
+        assert_eq!(Some(view.state.selected().to_vec()), last);
+        // the toggle row and the header are skipped; expanded, the cursor reaches every item
+        let toggle = inbox_row(&view, 3);
+        click(&mut view, 20, toggle);
+        draw_now(&mut view, 43, 16);
+        press(&mut view, KeyCode::Down);
+        for _ in 0..9 {
+            press(&mut view, KeyCode::Down);
+        }
+        assert_eq!(view.inbox_cursor, Some(4));
+        // folded again, it is on the last shown item
+        let toggle = inbox_row(&view, 5);
+        click(&mut view, 20, toggle);
+        assert_eq!(view.inbox_cursor, Some(2));
+    }
+
+    #[test]
+    fn the_item_cursor_is_drawn_inverted_across_its_row_only_while_it_shows() {
+        let mut view = with_inbox(3);
+        into_the_inbox(&mut view); // the dialog: its label is no link (a link's cells are written in pieces)
+        let buf = draw_now(&mut view, 43, 16);
+        let reversed = |y: u16| (1..42).all(|x| buf[(x, y)].modifier.contains(Modifier::REVERSED));
+        assert!(reversed(inbox_row(&view, 0)));
+        assert!(!reversed(inbox_row(&view, 1)) && !reversed(inbox_row(&view, 2)));
+        let tree_row_reversed = (1..16).any(|y| y < view.inbox_area.y && buf[(5, y)].modifier.contains(Modifier::REVERSED));
+        assert!(!tree_row_reversed, "no Session row is inverted while the cursor is in the Inbox");
+        // a click hides it; the first arrow shows it again where it was
+        let header = view.inbox_area.y;
+        click(&mut view, 20, header);
+        let buf = draw_now(&mut view, 43, 16);
+        // (row 12 is the header, whose title is inverted by design)
+        let lit: Vec<_> = (0..16).filter(|&y| y != 12).flat_map(|y| (0..43).map(move |x| (x, y))).filter(|&(x, y)| buf[(x, y)].modifier.contains(Modifier::REVERSED)).collect();
+        assert!(lit.is_empty(), "{lit:?}");
+        assert_eq!(view.inbox_cursor, Some(0));
+        press(&mut view, KeyCode::Down);
+        assert_eq!(view.inbox_cursor, Some(0), "it only shows again");
+        press(&mut view, KeyCode::Down);
+        assert_eq!(view.inbox_cursor, Some(1));
+        // focus lost hides it too
+        view.focus(false);
+        assert_eq!(press(&mut view, KeyCode::Char('d')), Effect::None);
+    }
+
+    #[test]
+    fn d_dismisses_the_item_under_the_cursor_at_once_and_s_opens_the_snooze_choices() {
+        let mut view = with_inbox(3);
+        into_the_inbox(&mut view);
+        press(&mut view, KeyCode::Down); // the second item: id 2
+        assert_eq!(press(&mut view, KeyCode::Char('d')), Effect::Run(Action::Dismiss(2)));
+        assert!(view.menu.is_none() && view.prompt.is_none());
+        assert_eq!(press(&mut view, KeyCode::Char('s')), Effect::None);
+        draw_now(&mut view, 43, 16);
+        assert_eq!(menu_labels(&mut view), ["Snooze 15 min", "Snooze 1 h", "Snooze until tomorrow 09:00"]);
+        assert_eq!(pick_entry(&mut view, 1), Effect::Run(Action::Snooze { item: 2, until: Until::Hour1 }));
+        for (i, until) in [Until::Minutes15, Until::Hour1, Until::Tomorrow].into_iter().enumerate() {
+            press(&mut view, KeyCode::Char('s'));
+            assert_eq!(pick_entry(&mut view, i), Effect::Run(Action::Snooze { item: 2, until }));
+        }
+        press(&mut view, KeyCode::Char('s'));
+        assert_eq!(press(&mut view, KeyCode::Esc), Effect::None);
+        assert!(view.menu.is_none());
+        // the menu takes every key, so `d` in it dismisses nothing
+        press(&mut view, KeyCode::Char('s'));
+        assert_eq!(press(&mut view, KeyCode::Char('d')), Effect::None);
+        assert!(view.menu.is_some());
+    }
+
+    #[test]
+    fn s_and_d_do_nothing_on_a_session_row_and_n_and_x_do_nothing_on_an_item() {
+        let mut view = on(&["alpha", "ship"]);
+        draw_now(&mut view, 43, 16);
+        view.tree.inbox = five();
+        draw_now(&mut view, 43, 16);
+        for key in ['s', 'd'] {
+            assert_eq!(press(&mut view, KeyCode::Char(key)), Effect::None, "{key}");
+            assert!(view.menu.is_none() && view.prompt.is_none());
+        }
+        // before any arrow key none shows, neither on an item
+        let mut view = with_inbox(3);
+        draw_now(&mut view, 43, 16);
+        view.inbox_cursor = Some(0);
+        for key in ['s', 'd'] {
+            assert_eq!(press(&mut view, KeyCode::Char(key)), Effect::None, "{key}: the cursor is hidden");
+        }
+        let mut view = with_inbox(3);
+        into_the_inbox(&mut view);
+        for key in ['n', 'x'] {
+            press(&mut view, KeyCode::Char(key));
+            assert!(view.prompt.is_none(), "{key}: the cursor is not on a Session");
+        }
+    }
+
+    #[test]
+    fn enter_on_an_item_jumps_as_a_click_does_and_the_refusal_shows_in_the_note() {
+        let mut view = with_inbox(5);
+        draw_now(&mut view, 43, 16);
+        press(&mut view, KeyCode::Down);
+        while view.inbox_cursor.is_none() {
+            press(&mut view, KeyCode::Down);
+        }
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Open(sid("f-blocked"))), "dialog");
+        press(&mut view, KeyCode::Down);
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None, "pr-failing: a link, Enter does nothing");
+        press(&mut view, KeyCode::Down);
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Open(sid("l-ship"))), "job-stuck: the Lead");
+        view.tree.inbox[2].kind = InboxKind::EngineError;
+        view.tree.inbox[2].event = Some(3);
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::Logs(Some(3)));
+        view.done(Err(Action::Dismiss(2).failed("item_closed", "Item 2 is closed.")));
+        assert_eq!(view.note, "item_closed: Item 2 is closed.");
+        let rows = text_rows(&draw_now(&mut view, 43, 17));
+        assert_eq!(rows[16], " item_closed: Item 2 is closed.");
+    }
+
+    #[test]
+    fn a_snapshot_keeps_the_cursor_on_its_item_or_the_one_at_its_place_and_none_leaves_the_tree() {
+        let mut view = with_inbox(5);
+        into_the_inbox(&mut view);
+        press(&mut view, KeyCode::Down);
+        press(&mut view, KeyCode::Down);
+        assert_eq!(view.inbox_cursor, Some(2));
+        let mut tree = sample();
+        tree.inbox = five().into_iter().skip(1).collect(); // item 1 left: item 3 is at 1 now
+        view.refresh(tree);
+        assert_eq!(view.inbox_cursor, Some(1));
+        let mut tree = sample();
+        tree.inbox = five().into_iter().skip(2).take(1).collect(); // only item 3 is left; it is at 0
+        view.refresh(tree);
+        assert_eq!(view.inbox_cursor, Some(0));
+        let mut tree = sample();
+        tree.inbox = Vec::new();
+        view.refresh(tree);
+        assert_eq!(view.inbox_cursor, None, "no item: the cursor is a Session's again");
+        press(&mut view, KeyCode::Up);
+        assert!(view.cursor_shown());
+    }
+
+    #[test]
+    fn with_no_session_the_arrow_reaches_the_items() {
+        let mut view = View::new(Tree { contexts: Vec::new(), events_cursor: 0, inbox: five() }, true);
+        draw_now(&mut view, 43, 16);
+        press(&mut view, KeyCode::Down);
+        assert_eq!(view.inbox_cursor, Some(0));
+        assert_eq!(press(&mut view, KeyCode::Char('d')), Effect::Run(Action::Dismiss(1)));
     }
 
     #[test]
