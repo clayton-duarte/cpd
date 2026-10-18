@@ -303,6 +303,13 @@ export class FakePi implements PiApi {
     return this.sessionName;
   }
 
+  /** The renderers registered, by custom type, with pi's own renderer type. */
+  readonly renderers = new Map<string, Parameters<PiApi["registerMessageRenderer"]>[1]>();
+
+  readonly registerMessageRenderer: PiApi["registerMessageRenderer"] = (customType, renderer) => {
+    this.renderers.set(customType, renderer as Parameters<PiApi["registerMessageRenderer"]>[1]);
+  };
+
   readonly registerTool: PiApi["registerTool"] = (tool) => {
     this.tools.push(tool);
   };

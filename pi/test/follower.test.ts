@@ -90,13 +90,13 @@ test("a non-zero exit without a failure line is delivered as an error, once per 
   assert.equal(errorsOf(f, "follower_exit").length, 1);
 });
 
-test("a line that is not a valid Event is an error and is skipped; the cursor moves past it", async (t) => {
+test("a malformed line is an error and is skipped; the cursor moves past it", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   await started(f);
   f.emit(
     "this is not json",
-    { ...ev(101, "job-merged"), kind: "no-such-kind" },
+    { ...ev(101, "job-merged"), at: 5 },
     { ...ev(102, "job-merged"), data: "not an object" },
     { ...ev(103, "escalation"), data: {} },
     ev(104, "job-merged"),
@@ -111,11 +111,31 @@ test("a line that is not a valid Event is an error and is skipped; the cursor mo
   assert.deepEqual(f.sinces(), [100, 104]);
 
   // a bad line with an id alone: the restart skips past it too
-  f.emit({ ...ev(110, "job-merged"), kind: "nope" });
-  await waitFor("its error", () => f.pi.errors().some((e) => /unknown kind "nope"/.test(e.message.content)));
+  f.emit({ ...ev(110, "job-merged"), at: 5 });
+  // 101 has the same `at` error, so the second one is 110's (the fake replays a line without an id at every start, which adds errors of its own)
+  await waitFor("its error", () => f.pi.errors().filter((e) => /`at` is not a string/.test(e.message.content)).length === 2);
   f.file("exit-next", "0");
   await waitFor("restart", () => f.follows().length === 3);
   assert.equal(f.sinces()[2], 110);
+});
+
+test("an Event of an unknown kind is skipped silently; the cursor moves past it (hs-d230)", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f);
+  f.emit(ev(101, "job-merged"), { ...ev(102, "job-merged"), kind: "from-the-future" }, ev(103, "job-merged"));
+  await waitFor("both known Events", () => f.pi.delivered().length === 2);
+  await settle();
+  assert.deepEqual(f.pi.delivered().map((s) => (s.message.details as any).id), [101, 103]);
+  assert.equal(f.pi.errors().length, 0, "no message for the unknown kind");
+
+  // the cursor is past the unknown Event: an unknown kind last still moves it
+  f.emit({ ...ev(104, "job-merged"), kind: "from-the-future" });
+  await settle();
+  f.file("exit-next", "0");
+  await waitFor("restart", () => f.follows().length === 2);
+  assert.deepEqual(f.sinces(), [100, 104]);
+  assert.equal(f.pi.errors().length, 0);
 });
 
 test("a follower that cannot be started is an error, once, and is retried", async (t) => {

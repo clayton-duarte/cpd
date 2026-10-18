@@ -1,5 +1,6 @@
 /** The part of pi's extension API the adapter uses: pi's own types (docs: pi `extensions.md`), narrowed to the members the adapter calls so a test can pass a fake. Types only: nothing of pi is bundled or run. */
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 
 export type Ctx = Pick<ExtensionContext, "mode" | "isIdle" | "hasPendingMessages"> & {
   ui: Pick<ExtensionContext["ui"], "notify" | "getEditorText">;
@@ -11,7 +12,7 @@ export type CommandCtx = Ctx & Pick<ExtensionCommandContext, "reload">;
 
 export type PiApi = Pick<
   ExtensionAPI,
-  "on" | "events" | "exec" | "sendMessage" | "appendEntry" | "setSessionName" | "getSessionName" | "registerTool" | "registerCommand" | "sendUserMessage"
+  "on" | "events" | "exec" | "sendMessage" | "appendEntry" | "setSessionName" | "getSessionName" | "registerMessageRenderer" | "registerTool" | "registerCommand" | "sendUserMessage"
 >;
 
 export type Exec = PiApi["exec"];
@@ -19,3 +20,9 @@ export type Exec = PiApi["exec"];
 export type Message = Parameters<PiApi["sendMessage"]>[0] & { content: string };
 export type SendOptions = NonNullable<Parameters<PiApi["sendMessage"]>[1]>;
 export type { ToolDefinition };
+
+/** A custom message as pi hands it to a renderer, reduced to what the adapter reads. */
+export type RenderedMessage = { customType: string; content: unknown; details?: unknown };
+export type Theme = { fg(color: "dim", text: string): string; bg(color: "customMessageBg", text: string): string };
+/** The adapter's renderers take the narrow types above, which pi's own `MessageRenderer` arguments satisfy. */
+export type MessageRenderer = (message: RenderedMessage, options: { expanded: boolean; outputPad: number }, theme: Theme) => Component | undefined;
