@@ -30,7 +30,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{PoisonError, RwLock};
+use std::time::{Duration, Instant};
 
+use clap::Parser;
+use cpd::cli::Cli;
+use cpd_core::error::CpdError;
+use cpd_core::home::CpdHome;
+use cpd_core::store::Store;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -179,6 +185,83 @@ pub fn spawn(cmd: &mut Command) -> io::Result<Child> {
 /// [`spawn`]: the lock is released before the child is waited for.
 pub fn output(cmd: &mut Command) -> io::Result<Output> {
     spawn(cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()))?.wait_with_output()
+}
+
+/// How long [`wait_until`] and [`wait_screen`] wait: the one wait policy of the suite, long
+/// enough for a loaded machine. A wait that needs longer says so with [`wait_until_for`].
+pub const WAIT: Duration = Duration::from_secs(30);
+
+/// How often a wait looks again.
+const POLL: Duration = Duration::from_millis(100);
+
+/// Waits until `ready` is true, at most [`WAIT`]; panics `timed out waiting for <what>`.
+pub fn wait_until(what: &str, ready: impl FnMut() -> bool) {
+    wait_until_for(what, WAIT, ready);
+}
+
+/// [`wait_until`] with its own `timeout`.
+pub fn wait_until_for(what: &str, timeout: Duration, mut ready: impl FnMut() -> bool) {
+    let deadline = Instant::now() + timeout;
+    while !ready() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(POLL);
+    }
+}
+
+/// Waits until `ready` gives a value, at most `timeout`. `Err(state)` is "not yet" and says
+/// where it is; the last `state` is in the panic message.
+pub fn wait_some<T>(what: &str, timeout: Duration, mut ready: impl FnMut() -> Result<T, String>) -> T {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match ready() {
+            Ok(value) => return value,
+            Err(state) => assert!(Instant::now() < deadline, "timed out waiting for {what}: {state}"),
+        }
+        std::thread::sleep(POLL);
+    }
+}
+
+/// Waits until `done` accepts the screen `screen` reads, at most [`WAIT`]; returns that
+/// screen. A timeout prints the last one.
+pub fn wait_screen(what: &str, mut screen: impl FnMut() -> Vec<String>, mut done: impl FnMut(&[String]) -> bool) -> Vec<String> {
+    wait_some(what, WAIT, || {
+        let rows = screen();
+        if done(&rows) { Ok(rows) } else { Err(format!("the screen is:\n{}", rows.join("\n"))) }
+    })
+}
+
+/// A refusal: `run` is `ok: false` with `code` and `exit`; returns its `error` object.
+///
+/// `details.next`, when there is one, is a command for the caller to run: it is parsed with
+/// the real command tree ([`Cli`]), so a `next` that names a flag or an argument that does not
+/// exist fails here, in every test that checks a refusal. (It is parsed, not executed: a
+/// `next` such as `cpd plan unarchive` would change the state the test goes on to read.)
+pub fn refused(run: &Run, code: &str, exit: i32) -> Value {
+    let error = run.error();
+    assert_eq!(error["code"], code, "{run:?}");
+    assert_eq!(run.exit, exit, "{run:?}");
+    match &error["details"]["next"] {
+        Value::Null => {}
+        Value::String(next) => {
+            let words: Vec<&str> = next.split_whitespace().collect();
+            assert_eq!(words.first(), Some(&"cpd"), "details.next `{next}` is not a cpd command: {run:?}");
+            if let Err(e) = Cli::try_parse_from(&words) {
+                panic!("details.next `{next}` does not parse: {e}");
+            }
+        }
+        other => panic!("details.next is not a string: {other}"),
+    }
+    error
+}
+
+/// Runs `sql` as the store's own write, on `store`.
+pub fn sql(store: &mut Store, text: &str) {
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(text)?;
+            Ok::<(), CpdError>(())
+        })
+        .unwrap();
 }
 
 pub struct TestEnv {
@@ -338,6 +421,31 @@ impl TestEnv {
             .current_dir(self.root())
             .stdin(Stdio::null());
         cmd
+    }
+
+    /// The store of this env's `$CPD_HOME`, opened (migrated) now.
+    pub fn store(&self) -> Store {
+        Store::open(&CpdHome::resolve(Some(self.cpd_home().into()), None).unwrap(), 5000).unwrap()
+    }
+
+    /// Runs `sql` as a write of this env's store (a fixture).
+    pub fn sql(&self, text: &str) {
+        sql(&mut self.store(), text);
+    }
+
+    /// Writes `$CPD_HOME/config.toml`.
+    pub fn write_config(&self, text: &str) {
+        fs::create_dir_all(self.cpd_home()).expect("create CPD_HOME");
+        fs::write(self.cpd_home().join("config.toml"), text).expect("write config.toml");
+    }
+
+    /// `config.toml` of machine `m1` on this env's private tmux server. `extra` is more TOML
+    /// before the `[tmux]` table (top-level keys, or tables).
+    pub fn write_tmux_config(&self, extra: &str) {
+        self.write_config(&format!(
+            "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n{extra}\n[tmux]\nsocket = \"{}\"\n",
+            self.tmux_socket()
+        ));
     }
 
     /// Runs `cpd <args>` from this env's root.

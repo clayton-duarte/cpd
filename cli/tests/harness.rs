@@ -355,3 +355,70 @@ fn teardown_is_idempotent_and_spares_the_test_process() {
     assert!(!env.root().exists());
     assert!(alive(std::process::id()));
 }
+
+// ---------- refused ----------
+
+fn refusal(next: Option<&str>) -> common::Run {
+    let details = next.map_or(serde_json::json!({}), |n| serde_json::json!({"next": n}));
+    let json = serde_json::json!({"ok": false, "error": {"code": "archived", "message": "No.", "details": details}});
+    common::Run { exit: 3, stdout: format!("{json}\n"), stderr: String::new() }
+}
+
+#[test]
+fn refused_returns_the_error_of_a_refusal_whose_next_parses() {
+    let error = common::refused(&refusal(Some("cpd plan unarchive --plan pay-1")), "archived", 3);
+    assert_eq!(error["details"]["next"], "cpd plan unarchive --plan pay-1");
+    common::refused(&refusal(None), "archived", 3);
+}
+
+#[test]
+#[should_panic(expected = "does not parse")]
+fn refused_fails_on_a_next_that_does_not_parse() {
+    common::refused(&refusal(Some("cpd plan unarchive pay-1")), "archived", 3);
+}
+
+#[test]
+#[should_panic(expected = "is not a cpd command")]
+fn refused_fails_on_a_next_that_is_not_a_cpd_command() {
+    common::refused(&refusal(Some("unarchive the plan")), "archived", 3);
+}
+
+#[test]
+#[should_panic(expected = "assertion")]
+fn refused_fails_on_another_code_or_exit() {
+    common::refused(&refusal(None), "usage", 3);
+}
+
+// ---------- waits ----------
+
+#[test]
+fn wait_until_returns_once_ready_and_names_what_it_waited_for_on_timeout() {
+    let mut n = 0;
+    common::wait_until("three polls", || {
+        n += 1;
+        n == 3
+    });
+    let caught = std::panic::catch_unwind(|| common::wait_until_for("never", std::time::Duration::from_millis(150), || false)).unwrap_err();
+    assert!(caught.downcast_ref::<String>().is_some_and(|m| m.contains("timed out waiting for never")));
+}
+
+#[test]
+fn wait_some_says_the_last_state_on_timeout() {
+    let mut n = 0;
+    let got = common::wait_some("a value", std::time::Duration::from_secs(5), || {
+        n += 1;
+        if n < 3 { Err(format!("poll {n}")) } else { Ok(n) }
+    });
+    assert_eq!(got, 3);
+    let caught = std::panic::catch_unwind(|| common::wait_some::<()>("x", std::time::Duration::from_millis(150), || Err("stuck".into()))).unwrap_err();
+    assert!(caught.downcast_ref::<String>().is_some_and(|m| m.contains("timed out waiting for x: stuck")));
+}
+
+#[test]
+fn sql_writes_the_envs_store() {
+    let env = TestEnv::new();
+    env.write_tmux_config("");
+    env.cpd(&["context", "new", "c1", "--title", "Before"]).ok();
+    env.sql("UPDATE contexts SET title = 'After' WHERE id = 'c1'");
+    assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"][0]["title"], "After");
+}
