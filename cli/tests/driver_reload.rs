@@ -30,6 +30,7 @@ static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 const PLAN: &str = "pay";
 const ATTEMPT: &str = "api-a1";
 const RELOAD: &str = "reload: new cpd installed, re-executing";
+const SKIPPED: &str = "reload skipped";
 
 fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -165,12 +166,27 @@ impl Fx {
         fs::read_to_string(self.env.cpd_home().join(format!("run/pay/logs/attempt-{ATTEMPT}.log"))).unwrap_or_default()
     }
 
-    /// A new install: a new script renamed over the copy.
+    /// A new install: a new script renamed over the copy. It answers `--version`
+    /// as the built `cpd` does (the driver asks before it reloads), and records
+    /// every other call.
     fn install(&self) {
+        self.install_script(&format!("exec '{CPD}' --version"));
+    }
+
+    /// An older `cpd` installed over the driver: its `--version` says it supports
+    /// store schema 5 while the database is at 6.
+    fn install_older(&self) {
+        self.install_script("echo '{\"ok\":true,\"version\":\"x\",\"schema\":5,\"store_schema\":6}'; exit 0");
+    }
+
+    fn install_script(&self, on_version: &str) {
         let new = self.installed.with_extension("new");
         executable(
             &new,
-            &format!("#!/bin/sh\necho \"$$ $*\" >> '{}'\nexec '{CPD}' \"$@\"\n", self.path("installed.runs").display()),
+            &format!(
+                "#!/bin/sh\ncase \"$1\" in --version) {on_version};; esac\necho \"$$ $*\" >> '{}'\nexec '{CPD}' \"$@\"\n",
+                self.path("installed.runs").display()
+            ),
         );
         fs::rename(&new, &self.installed).unwrap();
     }
@@ -280,6 +296,43 @@ fn a_driver_reloads_at_the_merging_safe_point_and_completes_the_merge() {
     assert_eq!(log.matches("A8: merging").count(), 1, "the merge starts once, after the reload: {log}");
     assert!(log.find(RELOAD) < log.find("A8: merging"), "{log}");
     assert_eq!(log.matches("A1: resuming").count(), 0, "{log}");
+}
+
+/// The 00:02Z incident: a cpd that supports an older store schema than the
+/// database's is installed over a running driver. The driver does not `exec` it,
+/// says so once, and the Attempt runs on; a cpd that can open the store, installed
+/// next, is exec'd as before.
+#[test]
+fn a_driver_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_into_one_that_can_open_it() {
+    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let fx = fx();
+    let old_lead = fx.env.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay"]);
+    let pid = fx.dispatch();
+    wait_until("the Attempt to run", || fx.status() == "running");
+
+    fx.install_older();
+    wait_until("the driver to refuse the reload", || fx.log().contains(SKIPPED));
+    // Several ticks: it is not asked again, nor exec'd.
+    std::thread::sleep(Duration::from_secs(4));
+    let log = fx.log();
+    assert_eq!(log.matches(SKIPPED).count(), 1, "{log}");
+    assert!(log.contains(&format!("reload skipped: {} supports store schema 5, the database is at 6", fx.installed.display())), "{log}");
+    assert!(!log.contains(RELOAD), "{log}");
+    assert!(fx.runs().is_empty(), "the older cpd was exec'd: {:?}", fx.runs());
+    assert_eq!(fx.status(), "running");
+    fx.assert_lock_held_by(pid);
+
+    fx.install();
+    wait_until("the driver to reload", || !fx.runs().is_empty());
+    assert_eq!(fx.runs(), [format!("{pid} attempt run {ATTEMPT} --plan {PLAN}")], "the same process, the same argv");
+    fx.assert_lock_held_by(pid);
+
+    fs::write(fx.path("go"), "").unwrap();
+    fx.finish(pid);
+    fx.assert_merged(&old_lead);
+    let log = fx.log();
+    assert_eq!(log.matches(SKIPPED).count(), 1, "{log}");
+    assert_eq!(log.matches(RELOAD).count(), 1, "{log}");
 }
 
 /// After a reload exec, fd 3 of the driver is the lock and nothing the new driver

@@ -4,11 +4,15 @@
 //! another file, and then `exec`s the same path: the new binary takes its
 //! state from the store.
 
+use std::cell::Cell;
 use std::ffi::OsStr;
+use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::sync::OnceLock;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use crate::error::{CpdError, ErrorCode};
 
@@ -28,11 +32,73 @@ impl Identity {
     }
 }
 
+/// Any file whose replacement is a change: its path and its identity when recorded.
+/// Same test as [`Exe::replaced`], without the `exec`.
+#[derive(Clone, Debug)]
+pub struct Watched {
+    path: PathBuf,
+    identity: Identity,
+}
+
+impl Watched {
+    /// Records the identity of `path`; `None` when it cannot be stat'ed now.
+    pub fn at(path: PathBuf) -> Option<Watched> {
+        let identity = Identity::of(&path).ok()?;
+        Some(Watched { path, identity })
+    }
+
+    /// The path holds another file than when recorded. A path that cannot be
+    /// stat'ed now is not a change.
+    pub fn changed(&self) -> bool {
+        Identity::of(&self.path).is_ok_and(|now| now != self.identity)
+    }
+}
+
+/// How long a newly installed cpd has to answer `--version`.
+const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// An installed cpd that a reload must not `exec` (hs-d151).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Refusal {
+    /// First time this installed file is refused: the reason, to be logged.
+    New(String),
+    /// This installed file was refused before and was not asked again.
+    Known,
+}
+
+/// The executable path recorded when this process started (hs-d151, fix 3).
+static STARTED_AS: OnceLock<PathBuf> = OnceLock::new();
+
+/// Records the path of this process's executable (`std::env::current_exe`).
+/// Call it first thing in `main`: once an install replaces the file,
+/// `current_exe()` reads `<path> (deleted)` on Linux. The first record wins.
+/// If the path cannot be found nothing is recorded, and starting a driver
+/// fails loud ([`started_as`]); other commands do not need it.
+pub fn record_start() {
+    if let Ok(path) = std::env::current_exe() {
+        record_start_as(path);
+    }
+}
+
+fn record_start_as(path: PathBuf) {
+    let _ = STARTED_AS.set(path);
+}
+
+/// The path recorded at process start: what a driver is started from, the
+/// installed file there now. An error if nothing was recorded.
+pub fn started_as() -> Result<&'static Path, CpdError> {
+    STARTED_AS.get().map(PathBuf::as_path).ok_or_else(|| {
+        CpdError::new(ErrorCode::SpawnFailed, "The path of cpd's own executable was not recorded at process start (`current_exe` failed).")
+    })
+}
+
 /// The path of this process's executable and its identity when the process started.
 #[derive(Clone, Debug)]
 pub struct Exe {
     path: PathBuf,
     identity: Identity,
+    /// The identity of the installed file last found unable to open the store.
+    refused: Cell<Option<Identity>>,
 }
 
 impl Exe {
@@ -49,13 +115,39 @@ impl Exe {
             CpdError::new(ErrorCode::SpawnFailed, format!("Cannot stat cpd's own executable {}: {e}.", path.display()))
                 .with("path", path.display().to_string())
         })?;
-        Ok(Exe { path, identity })
+        Ok(Exe { path, identity, refused: Cell::new(None) })
     }
 
     /// The path holds another file than at start: a new install. A path that
     /// cannot be stat'ed is not a replacement (there is nothing to `exec`).
     pub fn replaced(&self) -> bool {
         Identity::of(&self.path).is_ok_and(|now| now != self.identity)
+    }
+
+    /// The path of the executable.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Whether the file now at the path can open the store: it runs `<path>
+    /// --version` and compares the schema it supports with the database's.
+    /// A file refused once is not asked again until the path holds another file
+    /// ([`Refusal::Known`]).
+    pub fn check_store(&self) -> Result<(), Refusal> {
+        self.check_store_within(VERSION_TIMEOUT)
+    }
+
+    fn check_store_within(&self, timeout: Duration) -> Result<(), Refusal> {
+        let now = Identity::of(&self.path).map_err(|e| Refusal::New(format!("cannot be read: {e}")))?;
+        if self.refused.get() == Some(now) {
+            return Err(Refusal::Known);
+        }
+        let mut command = Command::new(&self.path);
+        command.arg("--version");
+        asks_to_open_store(command, timeout).map_err(|reason| {
+            self.refused.set(Some(now));
+            Refusal::New(reason)
+        })
     }
 
     /// Replaces this process with the executable at the same path, `args` as its
@@ -71,6 +163,51 @@ impl Exe {
     }
 }
 
+/// Runs `command` (a cpd's `--version`: stdin null, killed after `timeout`)
+/// and decides from its JSON whether that cpd can open the store: the database
+/// does not exist (`store_schema` null) or is not newer than the newest schema
+/// the cpd supports. `Err` is the reason it cannot, or why it could not be asked.
+fn asks_to_open_store(mut command: Command, timeout: Duration) -> Result<(), String> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("cannot run --version: {e}"))?;
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("--version did not answer in {}s", timeout.as_secs_f32()));
+            }
+            Err(e) => return Err(format!("cannot wait for --version: {e}")),
+        }
+    };
+    if !status.success() {
+        return Err(format!("--version failed: {status}"));
+    }
+    let mut out = Vec::new();
+    if let Some(stdout) = child.stdout.as_mut() {
+        stdout.read_to_end(&mut out).map_err(|e| format!("cannot read --version: {e}"))?;
+    }
+    let json: serde_json::Value = serde_json::from_slice(&out)
+        .map_err(|e| format!("--version printed no JSON: {e}"))?;
+    let schema = json.get("schema").and_then(|v| v.as_u64()).ok_or("--version does not report the store schema it supports")?;
+    match json.get("store_schema") {
+        Some(serde_json::Value::Null) => Ok(()),
+        Some(v) => match v.as_u64() {
+            Some(store) if store <= schema => Ok(()),
+            Some(store) => Err(format!("supports store schema {schema}, the database is at {store}")),
+            None => Err("--version reports a store_schema that is not a number".to_owned()),
+        },
+        None => Err("--version does not report the database's store schema".to_owned()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,6 +217,15 @@ mod tests {
     fn write_script(path: &Path, body: &str) {
         fs::write(path, body).unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn started_as_is_the_recorded_path_not_current_exe() {
+        assert!(started_as().is_err(), "nothing recorded yet");
+        record_start_as(PathBuf::from("/recorded/cpd"));
+        record_start_as(PathBuf::from("/second/cpd"));
+        assert_eq!(started_as().unwrap(), Path::new("/recorded/cpd"));
+        assert_ne!(started_as().unwrap(), std::env::current_exe().unwrap());
     }
 
     #[test]
@@ -122,6 +268,130 @@ mod tests {
         fs::remove_file(&path).unwrap();
         assert!(!exe.replaced());
         assert_eq!(Exe::at(path).unwrap_err().code(), ErrorCode::SpawnFailed);
+    }
+
+    #[test]
+    fn a_watched_file_renamed_over_or_rewritten_in_place_has_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("current-version");
+        assert!(Watched::at(path.clone()).is_none(), "nothing to watch yet");
+        fs::write(&path, "1.2.0\n").unwrap();
+        let renamed = Watched::at(path.clone()).unwrap();
+        assert!(!renamed.changed());
+        let new = dir.path().join("current-version.tmp");
+        fs::write(&new, "1.3.0\n").unwrap();
+        fs::rename(&new, &path).unwrap();
+        assert!(renamed.changed());
+
+        let rewritten = Watched::at(path.clone()).unwrap();
+        assert!(!rewritten.changed());
+        let then = fs::metadata(&path).unwrap().modified().unwrap();
+        fs::File::options().write(true).open(&path).unwrap().set_modified(then + std::time::Duration::from_secs(2)).unwrap();
+        assert!(rewritten.changed());
+    }
+
+    #[test]
+    fn a_watched_file_that_is_missing_has_not_changed_and_one_that_comes_back_has() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("current-version");
+        fs::write(&path, "1.2.0\n").unwrap();
+        let watched = Watched::at(path.clone()).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert!(!watched.changed());
+        // The inode may be reused and the clock coarse: give the new file its own mtime.
+        fs::write(&path, "1.3.0\n").unwrap();
+        let then = fs::metadata(&path).unwrap().modified().unwrap();
+        fs::File::options().write(true).open(&path).unwrap().set_modified(then + std::time::Duration::from_secs(2)).unwrap();
+        assert!(watched.changed());
+    }
+
+    fn sh(script: &str) -> Command {
+        let mut c = Command::new("/bin/sh");
+        c.args(["-c", script]);
+        c
+    }
+
+    fn ask(script: &str) -> Result<(), String> {
+        asks_to_open_store(sh(script), Duration::from_secs(10))
+    }
+
+    #[test]
+    fn a_missing_database_or_an_equal_or_newer_binary_can_open_the_store() {
+        assert_eq!(ask(r#"echo '{"ok":true,"version":"x","schema":6,"store_schema":null}'"#), Ok(()));
+        assert_eq!(ask(r#"echo '{"ok":true,"version":"x","schema":6,"store_schema":6}'"#), Ok(()));
+        assert_eq!(ask(r#"echo '{"ok":true,"version":"x","schema":7,"store_schema":6}'"#), Ok(()));
+    }
+
+    #[test]
+    fn an_older_binary_cannot_open_the_store() {
+        assert_eq!(
+            ask(r#"echo '{"ok":true,"version":"x","schema":5,"store_schema":6}'"#),
+            Err("supports store schema 5, the database is at 6".to_owned())
+        );
+    }
+
+    #[test]
+    fn malformed_output_is_a_refusal() {
+        for script in [
+            "echo not json",
+            "true",
+            r#"echo '{"ok":true,"version":"x"}'"#,
+            r#"echo '{"schema":6}'"#,
+            r#"echo '{"schema":6,"store_schema":"6"}'"#,
+            r#"echo '{"schema":"6","store_schema":6}'"#,
+        ] {
+            assert!(ask(script).is_err(), "{script}");
+        }
+    }
+
+    #[test]
+    fn a_failing_command_is_a_refusal() {
+        let reason = ask(r#"echo '{"schema":6,"store_schema":6}'; exit 3"#).unwrap_err();
+        assert!(reason.contains("--version failed"), "{reason}");
+        let reason = asks_to_open_store(Command::new("/nonexistent/cpd"), Duration::from_secs(10)).unwrap_err();
+        assert!(reason.contains("cannot run --version"), "{reason}");
+    }
+
+    #[test]
+    fn a_command_that_does_not_answer_is_killed_and_refused() {
+        let started = Instant::now();
+        let reason = asks_to_open_store(sh("exec sleep 60"), Duration::from_millis(200)).unwrap_err();
+        assert!(reason.contains("did not answer"), "{reason}");
+        assert!(started.elapsed() < Duration::from_secs(20));
+    }
+
+    #[test]
+    fn a_refused_file_is_asked_once_and_a_new_file_is_asked_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cpd");
+        let calls = dir.path().join("calls");
+        let old = format!("#!/bin/sh\necho x >> '{}'\necho '{{\"schema\":5,\"store_schema\":6}}'\n", calls.display());
+        write_script(&path, &old);
+        let exe = Exe::at(path.clone()).unwrap();
+        // The check runs the script by path; the pre-existing file is the one the
+        // identity belongs to. A `sh` script that was just written can hit ETXTBSY.
+        let ran = || fs::read_to_string(&calls).map(|t| t.lines().count()).unwrap_or(0);
+        let asked = |exe: &Exe| loop {
+            match exe.check_store() {
+                Err(Refusal::New(r)) if r.contains("Text file busy") => {
+                    exe.refused.set(None);
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                other => break other,
+            }
+        };
+        assert!(matches!(asked(&exe), Err(Refusal::New(r)) if r == "supports store schema 5, the database is at 6"));
+        assert_eq!(ran(), 1);
+        assert_eq!(exe.check_store(), Err(Refusal::Known));
+        assert_eq!(exe.check_store(), Err(Refusal::Known));
+        assert_eq!(ran(), 1, "the same file is not asked again");
+
+        let new = dir.path().join("cpd.new");
+        write_script(&new, &old);
+        fs::rename(&new, &path).unwrap();
+        assert!(matches!(asked(&exe), Err(Refusal::New(_))), "another file is asked");
+        assert_eq!(ran(), 2);
+        assert_eq!(exe.check_store(), Err(Refusal::Known));
     }
 
     #[test]

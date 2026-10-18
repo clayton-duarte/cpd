@@ -19,7 +19,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, Kind, NewEvent};
 use crate::git::{self, Setup};
 use crate::home::{CpdHome, Hook};
-use crate::host::exe::Exe;
+use crate::host::exe::{Exe, Refusal};
 use crate::host::pi::{self, PiDirs};
 use crate::host::{PaneId, Tmux};
 use crate::ids::{AttemptId, PlanId, SessionId};
@@ -248,11 +248,20 @@ impl Driver {
     /// The reload (§3.4 "Reload on install"): at a safe point, when a new cpd
     /// is installed, `exec` it with the same argv. Fd 3 stays open across the
     /// `exec`, so the lock is held with no gap; the new process resumes from
-    /// the store. Returns only when nothing is installed; `Err` when the
-    /// `exec` failed.
+    /// the store. Returns only when nothing is installed, or what is installed
+    /// cannot open the store (logged once per installed file, hs-d151); `Err`
+    /// when the `exec` failed.
     fn reload_if_installed(&self) -> Result<(), CpdError> {
         if !self.exe.replaced() {
             return Ok(());
+        }
+        match self.exe.check_store() {
+            Ok(()) => {}
+            Err(Refusal::New(reason)) => {
+                log(&format!("reload skipped: {} {reason}", self.exe.path().display()));
+                return Ok(());
+            }
+            Err(Refusal::Known) => return Ok(()),
         }
         log("reload: new cpd installed, re-executing");
         self.lock.keep_across_exec()?;
