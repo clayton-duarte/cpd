@@ -44,7 +44,7 @@ use tui_tree_widget::{Tree as TreeWidget, TreeItem, TreeState};
 
 use crate::palette::{self, Meaning};
 use cpd_core::plan::Phase;
-use crate::read::{ContextNode, JobStatus, PlanNode, SessionNode, Tree};
+use crate::read::{ContextNode, Dot, JobStatus, PlanNode, SessionNode, Tree};
 
 /// Tree identifiers: a Context's id, a Plan's id, a Session's id, or [`MORE`].
 pub type Id = String;
@@ -171,14 +171,6 @@ pub fn session_label(s: &SessionNode) -> String {
     if name.is_empty() { s.id.as_str().chars().take(8).collect() } else { name.to_owned() }
 }
 
-/// The busiest phase among Plans: dispatch > plan > grounding > pr > done > none.
-pub fn busiest<'a>(plans: impl IntoIterator<Item = &'a PlanNode>) -> Option<Phase> {
-    let plans: Vec<&PlanNode> = plans.into_iter().collect();
-    [Phase::Dispatch, Phase::Plan, Phase::Grounding, Phase::Pr, Phase::Done]
-        .into_iter()
-        .find(|p| plans.iter().any(|n| n.head.phase == *p))
-}
-
 /// `36⋅0⋅0⋅1⋅5`: each count in its status colour (nothing when zero; the drafts of phase `plan` always), `⋅` between.
 pub fn counters(plan: &PlanNode) -> Line<'static> {
     let phase = plan.head.phase;
@@ -225,19 +217,20 @@ struct RowText<'a> {
     /// How deep the row is: 1 for a Plan or fork of a live Context.
     depth: usize,
     last: bool,
-    phase: Phase,
+    /// The animation frame of the working dot (`palette::frame`).
+    frame: usize,
     /// The width of the counters drawn at the right (0: none).
     counters_width: usize,
-    /// Archived: no needs-you dot and no bold name (the colours are muted when drawn).
+    /// Archived: its dot is grey and never turns, and its name is not bold (the colours are muted when drawn).
     muted: bool,
 }
 
 /// A Plan's or fork's row text (the reference's `session_text`): guide (`├ `, `└ ` for the last), dot, name. The name is cut so that, in a column `width` wide, it never reaches the counters drawn at
 /// the right.
 fn row_text(r: RowText, width: u16) -> Line<'static> {
-    let needs_you = !r.muted && r.session.is_some_and(|s| s.needs_you);
+    let dot = r.session.map_or(Dot::Stopped, |s| s.dot);
     let guide = if r.last { "└ " } else { "├ " };
-    let mut spans = vec![Span::styled(guide, palette::fg(Meaning::Nothing)), palette::dot(needs_you, Some(r.phase)), " ".into()];
+    let mut spans = vec![Span::styled(guide, palette::fg(Meaning::Nothing)), palette::dot_span(dot, r.frame, r.muted), " ".into()];
     let used = r.depth * INDENT + Line::from(spans.clone()).width() + if r.counters_width > 0 { r.counters_width + 1 } else { 0 };
     let name = truncate(&r.name, (width as usize).saturating_sub(used));
     let active = r.session.is_some_and(SessionNode::is_active) && !r.muted;
@@ -245,13 +238,12 @@ fn row_text(r: RowText, width: u16) -> Line<'static> {
     Line::from(spans)
 }
 
-/// A Context's row text: dot (● when a live Session inside needs you, coloured by the busiest phase), title, and
-/// the number of Plans listed inside when collapsed.
-fn context_text(c: &ContextNode, collapsed: bool) -> Line<'static> {
+/// A Context's row text: its dot (the most urgent of its live Sessions, grey when the Context is archived), title,
+/// and the number of Plans listed inside when collapsed.
+fn context_text(c: &ContextNode, collapsed: bool, frame: usize) -> Line<'static> {
     let k = kids(c);
-    let needs_you = k.direct.iter().flat_map(|p| &p.sessions).any(|s| s.needs_you && !s.is_archived());
     let mut spans = vec![
-        palette::dot(needs_you, busiest(k.direct.iter().copied())),
+        palette::dot_span(c.dot, frame, c.is_archived()),
         " ".into(),
         Span::styled(c.title.clone(), Style::new().add_modifier(Modifier::BOLD)),
     ];
@@ -273,10 +265,10 @@ fn more_text(in_context: bool, expanded: bool) -> Line<'static> {
 }
 
 /// A Plan's item, one level under its Context; `last` when it is the last child of its Context.
-fn plan_item(c: &ContextNode, p: &PlanNode, last: bool, width: u16) -> TreeItem<'static, Id> {
+fn plan_item(c: &ContextNode, p: &PlanNode, last: bool, width: u16, frame: usize) -> TreeItem<'static, Id> {
     let muted = c.is_archived() || p.head.is_archived();
     let text = row_text(
-        RowText { session: p.lead(), name: p.head.title.clone(), depth: 1, last, phase: p.head.phase, counters_width: counters(p).width(), muted },
+        RowText { session: p.lead(), name: p.head.title.clone(), depth: 1, last, frame, counters_width: counters(p).width(), muted },
         width,
     );
     TreeItem::new_leaf(p.head.id.to_string(), text)
@@ -284,20 +276,20 @@ fn plan_item(c: &ContextNode, p: &PlanNode, last: bool, width: u16) -> TreeItem<
 
 /// A Context's item; `opened` is the tree state's open set. Under it: its live Plans and forks, then, when it has
 /// archived ones, its `…` row and, expanded, those.
-fn context_item(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16) -> TreeItem<'static, Id> {
+fn context_item(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> TreeItem<'static, Id> {
     let path = vec![c.id.to_string()];
     let k = kids(c);
     let n = k.direct.len();
     let mut children: Vec<TreeItem<'static, Id>> =
-        k.direct.iter().enumerate().map(|(i, p)| plan_item(c, p, i + 1 == n && k.forks.is_empty() && !k.has_group(), width)).collect();
-    for (j, (p, s)) in k.forks.iter().enumerate() {
+        k.direct.iter().enumerate().map(|(i, p)| plan_item(c, p, i + 1 == n && k.forks.is_empty() && !k.has_group(), width, frame)).collect();
+    for (j, (_, s)) in k.forks.iter().enumerate() {
         let text = row_text(
             RowText {
                 session: Some(s),
                 name: session_label(s),
                 depth: 1,
                 last: j + 1 == k.forks.len() && !k.has_group(),
-                phase: p.head.phase,
+                frame,
                 counters_width: 0,
                 muted: c.is_archived(),
             },
@@ -310,7 +302,7 @@ fn context_item(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16) -> TreeI
         children.push(TreeItem::new_leaf(MORE.to_owned(), more_text(true, expanded)));
         if expanded {
             let n = k.archived.len();
-            children.extend(k.archived.iter().enumerate().map(|(i, p)| plan_item(c, p, i + 1 == n && k.strays.is_empty(), width)));
+            children.extend(k.archived.iter().enumerate().map(|(i, p)| plan_item(c, p, i + 1 == n && k.strays.is_empty(), width, frame)));
             for (i, (p, s)) in k.strays.iter().enumerate() {
                 let text = row_text(
                     RowText {
@@ -318,7 +310,7 @@ fn context_item(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16) -> TreeI
                         name: format!("{} ({})", session_label(s), p.head.title),
                         depth: 1,
                         last: i + 1 == k.strays.len(),
-                        phase: p.head.phase,
+                        frame,
                         counters_width: 0,
                         muted: true,
                     },
@@ -328,18 +320,18 @@ fn context_item(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16) -> TreeI
             }
         }
     }
-    TreeItem::new(c.id.to_string(), context_text(c, !opened.contains(&path)), children).expect("Plan and Session ids are unique")
+    TreeItem::new(c.id.to_string(), context_text(c, !opened.contains(&path), frame), children).expect("Plan and Session ids are unique")
 }
 
 /// The tree's items for a column `width` wide. `opened` is the tree state's open set: a Context not in it is
-/// collapsed, and so is a `…` row.
-pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16) -> Vec<TreeItem<'static, Id>> {
+/// collapsed, and so is a `…` row. `frame` is the animation frame of the working dots.
+pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<TreeItem<'static, Id>> {
     let (archived, live): (Vec<&ContextNode>, Vec<&ContextNode>) = tree.contexts.iter().partition(|c| c.is_archived());
-    let mut items: Vec<TreeItem<'static, Id>> = live.into_iter().map(|c| context_item(c, opened, width)).collect();
+    let mut items: Vec<TreeItem<'static, Id>> = live.into_iter().map(|c| context_item(c, opened, width, frame)).collect();
     if !archived.is_empty() {
         items.push(TreeItem::new_leaf(MORE.to_owned(), more_text(false, false)));
         if opened.contains(&vec![MORE.to_owned()]) {
-            items.extend(archived.into_iter().map(|c| context_item(c, opened, width)));
+            items.extend(archived.into_iter().map(|c| context_item(c, opened, width, frame)));
         }
     }
     items
@@ -347,13 +339,13 @@ pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16) -> Vec<TreeItem
 
 /// Draw the column into `area`: the tree, then the counters, the guides and the active mark of each visible
 /// row, the archived rows muted, then the cursor's Session row inverted when
-/// `cursor` says it is shown (a Context row never is).
-pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, cursor: bool) {
+/// `cursor` says it is shown (a Context row never is). `frame` is the animation frame of the working dots.
+pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, cursor: bool, frame: usize) {
     if tree.contexts.is_empty() {
         f.render_widget(Paragraph::new(Line::from(Span::styled(" no Contexts", Style::new().add_modifier(Modifier::DIM)))), area);
         return;
     }
-    let items = items(tree, state.opened(), area.width);
+    let items = items(tree, state.opened(), area.width, frame);
     let widget = TreeWidget::new(&items).expect("Context ids are unique").node_closed_symbol("").node_open_symbol("").node_no_children_symbol("");
     f.render_stateful_widget(widget, area, state);
     let flat = state.flatten(&items);
@@ -400,7 +392,7 @@ pub fn open_new(state: &mut TreeState<Id>, known: &mut HashSet<Vec<Id>>, tree: &
 /// The visible Session rows (the only selectable ones: the live Plans' Leads and the live forks), in order.
 fn visible(state: &TreeState<Id>, tree: &Tree) -> Vec<Vec<Id>> {
     state
-        .flatten(&items(tree, state.opened(), 0))
+        .flatten(&items(tree, state.opened(), 0, 0))
         .into_iter()
         .map(|f| f.identifier)
         .filter(|id| row(tree, id).is_some_and(|r| r.selectable()))
@@ -461,11 +453,11 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::style::Color;
 
-    use super::super::fixture::{WHEN, archived, context, plan, sample, session, tree};
+    use super::super::fixture::{WHEN, archived, context, plan, refresh_dots, sample, session, tree};
     use super::*;
     use cpd_core::session::State;
     use crate::palette::color;
-    use crate::read::Place;
+    use crate::read::{Dot, Place};
 
     fn path(parts: &[&str]) -> Vec<Id> {
         parts.iter().map(|p| (*p).to_owned()).collect()
@@ -483,8 +475,12 @@ mod tests {
     }
 
     fn render(tree: &Tree, state: &mut TreeState<Id>, width: u16, height: u16, cursor: bool) -> Buffer {
+        render_at(tree, state, width, height, cursor, 0)
+    }
+
+    fn render_at(tree: &Tree, state: &mut TreeState<Id>, width: u16, height: u16, cursor: bool, frame: usize) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|f| draw(f, f.area(), tree, state, cursor)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), tree, state, cursor, frame)).unwrap();
         terminal.backend().buffer().clone()
     }
 
@@ -518,7 +514,7 @@ mod tests {
     /// one in the chat slot needs you.
     fn readme() -> Tree {
         let mut rust = session("s-rust", "cpd rust lead", State::Blocked, Some("cpd: Worker question"), Place::Chat);
-        rust.needs_you = true;
+        rust.dot = Dot::Red;
         tree(vec![context(
             "cpd",
             vec![
@@ -551,14 +547,14 @@ mod tests {
             lines(&buf),
             [
                 "● Alpha".to_owned(),
-                row_of("⏵ ├ ○ Ship", "2⋅1⋅1⋅0⋅5", 44),
+                row_of("⏵ ├ ◐ Ship", "2⋅1⋅1⋅0⋅5", 44),
                 row_of("  ├ ○ Sketch", "4⋅0⋅0⋅0⋅0", 44),
-                row_of("  ├ ○ Old", "0⋅0⋅0⋅1⋅36", 44),
+                row_of("  ├ ◌ Old", "0⋅0⋅0⋅1⋅36", 44),
                 "  ├ ○ ship fork".to_owned(),
                 "  └ ● ship review".to_owned(),
                 "● Beta".to_owned(),
                 row_of("  └ ● Rel", "0⋅0⋅0⋅0⋅3", 44),
-                "○ Gamma".to_owned(),
+                "◌ Gamma".to_owned(),
                 String::new(),
             ],
             "no state text after a name"
@@ -576,7 +572,7 @@ mod tests {
     fn a_collapsed_context_shows_the_number_of_plans_and_hides_them() {
         let tree = sample();
         let buf = render(&tree, &mut state_for(&tree, &["alpha"], &[]), 44, 4, false);
-        assert_eq!(lines(&buf), ["● Alpha 3".to_owned(), "● Beta".to_owned(), row_of("  └ ● Rel", "0⋅0⋅0⋅0⋅3", 44), "○ Gamma".to_owned()]);
+        assert_eq!(lines(&buf), ["● Alpha 3".to_owned(), "● Beta".to_owned(), row_of("  └ ● Rel", "0⋅0⋅0⋅0⋅3", 44), "◌ Gamma".to_owned()]);
     }
 
     #[test]
@@ -596,7 +592,7 @@ mod tests {
         let t = tree(vec![context("cc", vec![p])]);
         assert_eq!(lines(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false)), ["○ Cc".to_owned(), row_of("  └ ○ Pp", "0⋅0⋅0⋅0⋅0", 30)]);
         let mut t = t;
-        t.contexts[0].plans[0].sessions[0].needs_you = true;
+        t.contexts[0].plans[0].sessions[0].dot = Dot::Red;
         assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false), 1), row_of("  └ ● Pp", "0⋅0⋅0⋅0⋅0", 30));
     }
 
@@ -620,35 +616,103 @@ mod tests {
         assert_eq!(truncate("abcd", 0), "");
     }
 
+    /// A Plan whose Lead has the dot `dot`.
+    fn with_dot(id: &str, dot: Dot) -> PlanNode {
+        let mut p = lone(id, "s", Phase::Dispatch, [0; 6]);
+        p.sessions[0].dot = dot;
+        p
+    }
+
+    /// The glyph and foreground of the dot `dot` at frame 0, as the palette draws it.
+    fn drawn_dot(dot: Dot) -> (String, Color) {
+        let span = palette::dot_span(dot, 0, false);
+        (span.content.into_owned(), span.style.fg.unwrap_or_default())
+    }
+
+    fn cell(buf: &Buffer, x: u16, y: u16) -> (String, Color) {
+        (buf[(x, y)].symbol().to_owned(), fg(buf, x, y))
+    }
+
     #[test]
-    fn every_phase_has_its_dot_colour() {
-        for (phase, meaning) in [
-            (Phase::Grounding, Meaning::Grounding),
-            (Phase::Plan, Meaning::Planning),
-            (Phase::Dispatch, Meaning::InProgress),
-            (Phase::Pr, Meaning::Review),
-            (Phase::Done, Meaning::Done),
-        ] {
-            let t = tree(vec![context("cc", vec![lone("pp", "x", phase, [0; 6])])]);
-            let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
-            assert_eq!((fg(&buf, 0, 0), fg(&buf, 4, 1)), (color(meaning), color(meaning)), "{phase:?}");
+    fn every_dot_is_drawn_as_the_palette_draws_it_on_a_session_row_and_its_context_and_no_phase_colours_it() {
+        for phase in [Phase::Grounding, Phase::Plan, Phase::Dispatch, Phase::Pr, Phase::Done] {
+            for dot in [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::White, Dot::Working, Dot::Idle, Dot::Stopped] {
+                let mut p = with_dot("pp", dot);
+                p.head.phase = phase;
+                let t = tree(vec![context("cc", vec![p])]);
+                let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
+                assert_eq!(cell(&buf, 4, 1), drawn_dot(dot), "{dot:?} in {phase:?}");
+                assert_eq!(cell(&buf, 0, 0), drawn_dot(dot), "its Context row too: {dot:?} in {phase:?}");
+            }
+        }
+        assert_eq!(drawn_dot(Dot::Red).0, "●");
+        assert_eq!(drawn_dot(Dot::Idle), ("○".to_owned(), Default::default()), "the terminal's foreground");
+    }
+
+    #[test]
+    fn a_stopped_dot_is_dim() {
+        let t = tree(vec![context("cc", vec![with_dot("pp", Dot::Stopped)])]);
+        let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
+        assert_eq!((buf[(4, 1)].symbol(), buf[(0, 0)].symbol()), ("◌", "◌"));
+        assert!(buf[(4, 1)].modifier.contains(Modifier::DIM) && buf[(0, 0)].modifier.contains(Modifier::DIM));
+        let t = tree(vec![context("cc", vec![with_dot("pp", Dot::Idle)])]);
+        let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
+        assert!(!buf[(4, 1)].modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn a_working_dot_turns_with_the_frame_on_session_rows_and_their_context() {
+        let t = tree(vec![context("cc", vec![with_dot("pp", Dot::Working)])]);
+        let glyphs: Vec<(String, String)> = (0..5)
+            .map(|frame| {
+                let buf = render_at(&t, &mut state_for(&t, &[], &[]), 20, 2, false, frame);
+                (buf[(0, 0)].symbol().to_owned(), buf[(4, 1)].symbol().to_owned())
+            })
+            .collect();
+        let want: Vec<(String, String)> = ["◐", "◓", "◑", "◒", "◐"].map(|g| (g.to_owned(), g.to_owned())).to_vec();
+        assert_eq!(glyphs, want);
+    }
+
+    #[test]
+    fn an_archived_working_row_is_grey_and_does_not_turn() {
+        let mut p = with_dot("pp", Dot::Working);
+        p.head.archived_at = Some(WHEN.into());
+        let mut gone = context("zz", vec![with_dot("qq", Dot::Working)]);
+        gone.archived_at = Some(WHEN.into());
+        let t = tree(vec![context("cc", vec![p]), gone]);
+        let mut state = state_for(&t, &[], &[]);
+        expand(&mut state, &t, &["cc", "…"]);
+        expand(&mut state, &t, &["…"]);
+        for frame in 0..4 {
+            let buf = render_at(&t, &mut state, 24, 8, false, frame);
+            let grey = (String::from("◐"), color(Meaning::Nothing));
+            assert_eq!(cell(&buf, 4, 2), grey, "frame {frame}: an archived Plan row, always the first frame {:?}", lines(&buf));
+            assert_eq!(cell(&buf, 0, 4), grey, "frame {frame}: an archived Context row {:?}", lines(&buf));
+            assert_eq!(cell(&buf, 4, 5), grey, "frame {frame}: its Plan row");
+            assert_eq!(buf[(0, 0)].symbol(), ["◐", "◓", "◑", "◒"][frame], "while the live Context row turns");
         }
     }
 
     #[test]
-    fn the_context_dot_is_the_busiest_phase_inside() {
-        let plans = |phases: &[Phase]| -> Vec<PlanNode> {
-            phases.iter().enumerate().map(|(i, ph)| lone(&format!("pp{i}"), "s", *ph, [0; 6])).collect()
-        };
-        use Phase::*;
-        assert_eq!(busiest(&plans(&[Done, Pr, Grounding, Plan, Dispatch])), Some(Dispatch));
-        assert_eq!(busiest(&plans(&[Done, Pr, Grounding, Plan])), Some(Plan));
-        assert_eq!(busiest(&plans(&[Done, Pr, Grounding])), Some(Grounding));
-        assert_eq!(busiest(&plans(&[Done, Pr])), Some(Pr));
-        assert_eq!(busiest(&plans(&[Done])), Some(Done));
-        assert_eq!(busiest(&[]), None);
-        let t = tree(vec![context("cc", plans(&[Done, Plan]))]);
-        assert_eq!(fg(&render(&t, &mut state_for(&t, &[], &[]), 20, 1, false), 0, 0), color(Meaning::Planning));
+    fn an_archived_row_keeps_its_glyph_in_grey() {
+        let mut p = with_dot("pp", Dot::Red);
+        p.head.archived_at = Some(WHEN.into());
+        let t = tree(vec![context("cc", vec![p])]);
+        let mut state = state_for(&t, &[], &[]);
+        expand(&mut state, &t, &["cc", "…"]);
+        let buf = render(&t, &mut state, 24, 4, false);
+        assert_eq!(cell(&buf, 4, 2), ("●".to_owned(), color(Meaning::Nothing)), "{:?}", lines(&buf));
+    }
+
+    #[test]
+    fn a_context_row_shows_its_most_urgent_live_session_red_over_yellow() {
+        let t = tree(vec![context("cc", vec![with_dot("aa", Dot::Yellow), with_dot("bb", Dot::Red), with_dot("dd", Dot::White)])]);
+        let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 4, false);
+        assert_eq!(cell(&buf, 0, 0), drawn_dot(Dot::Red));
+        let collapsed = render(&t, &mut state_for(&t, &["cc"], &[]), 20, 1, false);
+        assert_eq!(cell(&collapsed, 0, 0), drawn_dot(Dot::Red), "collapsed too");
+        assert_eq!((cell(&buf, 4, 1), cell(&buf, 4, 3)), (drawn_dot(Dot::Yellow), drawn_dot(Dot::White)), "while each Session row keeps its own");
+        assert_ne!(drawn_dot(Dot::Red), drawn_dot(Dot::Yellow));
     }
 
     #[test]
@@ -828,7 +892,7 @@ mod tests {
         tree.contexts[0].plans[0].head.title = "Pay by card".into();
         let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 5, false);
         assert_eq!(text(&buf, 0), "● Payments", "not its id `alpha`");
-        assert_eq!(text(&buf, 1), row_of("⏵ ├ ○ Pay by card", "2⋅1⋅1⋅0⋅5", 44), "not its Lead's name `ship lead`");
+        assert_eq!(text(&buf, 1), row_of("⏵ ├ ◐ Pay by card", "2⋅1⋅1⋅0⋅5", 44), "not its Lead's name `ship lead`");
         assert_eq!(text(&buf, 4), "  ├ ○ ship fork", "a fork is its Session's name");
         assert_eq!(row(&tree, &path(&["alpha"])).unwrap().label(), "Payments");
         assert_eq!(row(&tree, &path(&["alpha", "ship"])).unwrap().label(), "Pay by card");
@@ -853,18 +917,18 @@ mod tests {
         assert_eq!(
             lines(&buf),
             [
-                "○ Alpha".to_owned(),
-                row_of("⏵ ├ ○ Ship", "2⋅1⋅1⋅0⋅5", 44),
+                "◐ Alpha".to_owned(),
+                row_of("⏵ ├ ◐ Ship", "2⋅1⋅1⋅0⋅5", 44),
                 row_of("  ├ ○ Sketch", "4⋅0⋅0⋅0⋅0", 44),
                 "  ├ ○ ship fork".to_owned(),
                 "  └ …".to_owned(),
                 "● Beta".to_owned(),
                 row_of("  └ ● Rel", "0⋅0⋅0⋅0⋅3", 44),
-                "○ Gamma".to_owned(),
+                "◌ Gamma".to_owned(),
                 "…".to_owned(),
                 String::new(),
             ],
-            "zeta is only in the `…` row at the end; `alpha`'s archived Plan and fork are in its own `…` row, and its blocked fork no longer makes it ●"
+            "zeta is only in the `…` row at the end; `alpha`'s archived Plan and fork are in its own `…` row, and its blocked fork no longer makes it ●: its dot is the working Lead's"
         );
         assert_eq!((fg(&buf, 0, 8), fg(&buf, 4, 4)), (color(Meaning::Nothing), color(Meaning::Nothing)), "muted");
     }
@@ -884,8 +948,12 @@ mod tests {
         let mut fork = session("f-rel", "rel fork", State::Idle, None, Place::None);
         fork.plan = Some(t.contexts[1].plans[0].head.id.clone());
         t.contexts[1].plans[0].sessions.push(fork);
+        for s in &mut t.contexts[1].plans[0].sessions {
+            s.archived_at = Some(WHEN.into()); // archiving a Plan archives its Sessions
+        }
+        refresh_dots(&mut t);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 44, 10, false);
-        assert_eq!(lines(&buf)[6..8], ["○ Beta", "  └ …"], "a fork of an archived Plan is in the `…` row too");
+        assert_eq!(lines(&buf)[6..8], ["◌ Beta", "  └ …"], "a fork of an archived Plan is in the `…` row too");
     }
 
     #[test]
@@ -897,20 +965,20 @@ mod tests {
         assert_eq!(
             lines(&buf)[..9],
             [
-                "○ Alpha".to_owned(),
-                row_of("⏵ ├ ○ Ship", "2⋅1⋅1⋅0⋅5", 44),
+                "◐ Alpha".to_owned(),
+                row_of("⏵ ├ ◐ Ship", "2⋅1⋅1⋅0⋅5", 44),
                 row_of("  ├ ○ Sketch", "4⋅0⋅0⋅0⋅0", 44),
                 "  ├ ○ ship fork".to_owned(),
                 "  ├ …".to_owned(),
-                row_of("  ├ ○ Old", "0⋅0⋅0⋅1⋅36", 44),
-                "  └ ○ ship review (Ship)".to_owned(),
+                row_of("  ├ ◌ Old", "0⋅0⋅0⋅1⋅36", 44),
+                "  └ ● ship review (Ship)".to_owned(),
                 "● Beta".to_owned(),
                 row_of("  └ ● Rel", "0⋅0⋅0⋅0⋅3", 44),
             ],
             "no empty row; the archived Plan and fork are as deep as the live ones"
         );
         // the live rows keep their colours; the archived ones are all dark grey, guides, counters and dots included
-        assert_eq!(fg(&buf, 4, 2), color(Meaning::Planning), "a live dot");
+        assert_eq!(cell(&buf, 4, 2), drawn_dot(Dot::Idle), "a live dot is not greyed");
         for (y, columns) in [(4, 2..5), (5, 2..44), (6, 2..24)] {
             for x in columns {
                 if buf[(x, y)].symbol() != " " {
@@ -940,7 +1008,7 @@ mod tests {
         let rows = lines(&buf);
         assert_eq!(
             rows[8..12],
-            ["…", "○ Zeta", row_of("  ├ ○ Zp", "0⋅0⋅0⋅0⋅2", 44).as_str(), "  └ ○ zp fork"],
+            ["…", "◌ Zeta", row_of("  ├ ◌ Zp", "0⋅0⋅0⋅0⋅2", 44).as_str(), "  └ ◌ zp fork"],
             "{rows:#?}"
         );
         for y in 9..12 {
@@ -955,7 +1023,7 @@ mod tests {
         // an archived Context folds like any other
         expand(&mut state, &t, &["…"]);
         assert!(click_context(&mut state, &t, &path(&["zeta"])));
-        assert_eq!(text(&render(&t, &mut state, 44, 14, false), 9), "○ Zeta 1");
+        assert_eq!(text(&render(&t, &mut state, 44, 14, false), 9), "◌ Zeta 1");
     }
 
     #[test]
@@ -1023,6 +1091,6 @@ mod tests {
         let mut t = archived();
         t.contexts[0].plans[2].head.phase = Phase::Done;
         let buf = render(&t, &mut state_for(&t, &["alpha"], &[]), 44, 3, false);
-        assert_eq!(text(&buf, 0), "○ Alpha 2", "ship and sketch; the archived Plan is behind `…`");
+        assert_eq!(text(&buf, 0), "◐ Alpha 2", "ship and sketch; the archived Plan is behind `…`, and the archived blocked fork does not make it ●");
     }
 }

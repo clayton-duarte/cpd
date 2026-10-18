@@ -81,10 +81,10 @@ pub fn title(pr: &PrNode) -> Line<'static> {
 }
 
 /// The whole row of boxes: one per PR of `prs` (the PRs that are not `cancelled`), each holding the chart of its `jobs`.
-/// The pills are in the order of `prs`, then of each PR's Jobs.
-pub fn layout(prs: &[PrNode], jobs: &[JobNode]) -> Chart {
+/// The pills are in the order of `prs`, then of each PR's Jobs. A running Job's icon is the spinner's `frame`.
+pub fn layout(prs: &[PrNode], jobs: &[JobNode], frame: usize) -> Chart {
     let charts: Vec<Chart> =
-        prs.iter().map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr == p.key)))).collect();
+        prs.iter().map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr == p.key)), frame)).collect();
     let titles: Vec<Line> = prs.iter().map(title).collect();
     // each box: its border around the chart, or around ` no Jobs `, and at least as wide as its title
     let size: Vec<(u16, u16)> = charts
@@ -281,7 +281,7 @@ mod tests {
     fn boxes_of_one_column_are_stacked_by_key() {
         // given out of key order: the column still stacks them by key, one row apart
         let prs = [pr("zed", &[]), pr("alpha", &[])];
-        let c = layout(&prs, &[job("zed", "z", &[]), job("alpha", "a", &[])]);
+        let c = layout(&prs, &[job("zed", "z", &[]), job("alpha", "a", &[])], 0);
         let y = |key: &str| c.pills.iter().find(|p| p.key == key).unwrap().rect.y;
         assert!(y("a") < y("z"), "alpha above zed");
         assert_eq!(c.columns, [vec![1, 0]], "one column, alpha's pill first");
@@ -291,7 +291,7 @@ mod tests {
     fn two_prs_are_two_titled_boxes_linked_by_an_arrow() {
         let prs = [pr("api", &[]), pr("web", &["api"])];
         let jobs = [job("api", "a", &[]), job("api", "b", &["a"]), job("web", "c", &[])];
-        let c = layout(&prs, &jobs);
+        let c = layout(&prs, &jobs, 0);
         snap(&c, "
 ┌ api · api-repo → main · dispatch ┐     ┌ web · web-repo → main · dispatch ┐
 │  ○ a │S1 ───── ○ b │S1           ├────▶│  ○ c │S1                         │
@@ -301,8 +301,8 @@ mod tests {
     #[test]
     fn one_pr_is_one_box_and_its_chart_is_the_single_chart_inside() {
         let jobs = [job("api", "a", &[]), job("api", "b", &[]), job("api", "c", &["a", "b"])];
-        let c = layout(&[pr("api", &[])], &jobs);
-        let single = flow::layout(&flow::flow_jobs(&jobs));
+        let c = layout(&[pr("api", &[])], &jobs, 0);
+        let single = flow::layout(&flow::flow_jobs(&jobs), 0);
         let rows: Vec<String> = text(&c).lines().map(str::to_owned).collect();
         assert_eq!(rows.len(), single.buf.area.height as usize + 2);
         for (y, want) in text(&single).lines().enumerate() {
@@ -313,14 +313,14 @@ mod tests {
 
     #[test]
     fn a_pr_with_no_jobs_is_an_empty_box() {
-        let c = layout(&[pr("api", &[])], &[]);
+        let c = layout(&[pr("api", &[])], &[], 0);
         snap(&c, "
 ┌ api · api-repo → main · dispatch ┐
 │ no Jobs                          │
 └──────────────────────────────────┘");
         assert!(c.buf[(1, 1)].modifier.contains(Modifier::DIM));
         assert!((c.pills.len(), c.columns.len()) == (0, 0));
-        assert_eq!(layout(&[], &[]).buf.area.area(), 0);
+        assert_eq!(layout(&[], &[], 0).buf.area.area(), 0);
     }
 
     #[test]
@@ -347,7 +347,7 @@ mod tests {
     #[test]
     fn a_need_that_skips_a_column_rides_a_row_free_of_boxes() {
         let prs = [pr("a", &[]), pr("b", &["a"]), pr("c", &["a", "b"])];
-        let c = layout(&prs, &[]);
+        let c = layout(&prs, &[], 0);
         snap(&c, "
 ┌ a · a-repo → main · dispatch ┐     ┌ b · b-repo → main · dispatch ┐     ┌ c · c-repo → main · dispatch ┐
 │ no Jobs                      ├──┬─▶│ no Jobs                      ├──┬─▶│ no Jobs                      │
@@ -359,7 +359,7 @@ mod tests {
     fn the_selection_crosses_boxes_left_and_right() {
         let prs = [pr("api", &[]), pr("web", &["api"])];
         let jobs = [job("api", "a", &[]), job("api", "b", &["a"]), job("web", "c", &[]), job("web", "d", &["c"])];
-        let c = layout(&prs, &jobs);
+        let c = layout(&prs, &jobs, 0);
         let at = |key: &str| c.pills.iter().position(|p| p.key == key).unwrap();
         assert_eq!(c.columns, [vec![at("a")], vec![at("b")], vec![at("c")], vec![at("d")]]);
         assert_eq!(c.step(at("b"), Dir::Right), at("c"), "into the next box");
@@ -376,7 +376,7 @@ mod tests {
         // api and docs in box column 0, web in column 1: Right from either goes to web
         let prs = [pr("api", &[]), pr("docs", &[]), pr("web", &["api", "docs"])];
         let jobs = [job("api", "a", &[]), job("docs", "d", &[]), job("web", "w", &[])];
-        let c = layout(&prs, &jobs);
+        let c = layout(&prs, &jobs, 0);
         let at = |key: &str| c.pills.iter().position(|p| p.key == key).unwrap();
         assert_eq!(c.columns, [vec![at("a"), at("d")], vec![at("w")]]);
         assert_eq!((c.step(at("a"), Dir::Down), c.step(at("d"), Dir::Right)), (at("d"), at("w")));
@@ -384,7 +384,7 @@ mod tests {
 
     /// The pane's body of `w`×`h` cells showing the margined chart of one empty PR at `scroll`, one row per string.
     fn body(w: u16, h: u16, scroll: (u16, u16)) -> Vec<String> {
-        let c = layout(&[pr("api", &[])], &[]).with_margin(Margin { horizontal: 2, vertical: 1 });
+        let c = layout(&[pr("api", &[])], &[], 0).with_margin(Margin { horizontal: 2, vertical: 1 });
         let mut dst = Buffer::empty(Rect::new(0, 0, w, h));
         c.blit(&mut dst, Rect::new(0, 0, w, h), scroll, None);
         (0..h).map(|y| (0..w).map(|x| dst[(x, y)].symbol()).collect()).collect()
