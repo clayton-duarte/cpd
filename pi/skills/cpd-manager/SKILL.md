@@ -48,8 +48,9 @@ Attribute each record to its source (the User, a Lead, a document) and date it w
 1. **Intake.** Treat everything the User brings the same way: an Epic, a PRD, an ADR, a ticket, a sentence in chat. Read the material yourself; never ask the User for a fact you can look up. Restate the Requirements in a few lines and record them.
 2. **Interview** until the Requirements have no contradictions and the cut into Plans is clear. Group independent questions into one round. Record each answer as you get it.
 3. **Split into Plans.** A Plan is one deliverable: one or more PRs, in one or more repos, that ship together. Cut the Requirements into Plans a Lead can own end to end. When one Plan needs another's result, start it after the first is done and record the order as a decision. Agree the cut with the User before starting any Plan.
-4. **Write the brief** for each Plan in a file outside any repo. Its first line is a one-line summary (it is what `context show` and every turn-start update show). Then: the goal, the Requirements it covers, what is out of scope, the record ids that apply, the repos you know of and the User's material (paths, links). The Lead reads its brief in full plus every record, and nothing else from you.
-5. **Start the Plan** from `~`, so its Lead starts there (`cd ~` first):
+4. **Check pending work first.** Before you start a Plan or route an issue to a Lead, run `cpd context pending --context <c>` (`--markdown` to read it) and compare the issue with the title and touched files of every pending Job of every active Plan. When something in flight already fixes or changes it, tell the User which Plan and Job, and do not start a Plan.
+5. **Write the brief** for each Plan in a file outside any repo. Its first line is a one-line summary (it is what `context show` and every turn-start update show). Then: the goal, the Requirements it covers, what is out of scope, the record ids that apply, the repos you know of and the User's material (paths, links). The Lead reads its brief in full plus every record, and nothing else from you.
+6. **Start the Plan** from `~`, so its Lead starts there (`cd ~` first):
 
    ```
    cpd plan new <id> --context <c> --title "<title>" --brief-file <file>
@@ -57,11 +58,11 @@ Attribute each record to its source (the User, a Lead, a document) and date it w
    ```
 
    The id matches `^[a-z][a-z0-9-]{1,23}$` (the ticket id in lowercase when there is one). It registers a fresh Lead, writes a `plan` record and the brief as a `brief` record, and starts the Lead in a parked window. It never moves the chat slot: tell the User the Plan id so they open its Lead from the session tree. Rerunning it with the same flags is safe.
-6. The Lead grounds, interviews and plans with the User directly. Do not relay between them.
+7. The Lead grounds, interviews and plans with the User directly. Do not relay between them.
 
 ## 3. Knowing where each Lead is
 
-- **The turn-start message.** At the start of each of your turns the adapter adds a `cpd-context` message: the records other Sessions wrote since your last turn (briefs short), then a `Plans:` section with one line per Plan Event since then (Plan created, phase change, PR opened or merged, Job failed, Escalation, Plan done). It holds at most 20 lines each; more end with the command that lists the rest (`cpd context show --context <c> --since <seq>`, `cpd events list --context <c> --since <id>`). Nothing new: no message.
+- **The turn-start message.** At the start of each of your turns the adapter adds a `cpd-context` message: the records other Sessions wrote since your last turn (briefs short), then a `Plans:` section with one line per Plan Event since then (Plan created, phase change, PR opened or merged, Job failed, Escalation, Plan done). It holds at most 20 lines each; more end with the command that lists the rest (`cpd context show --context <c> --since <seq>`, `cpd events list --context <c> --since <id>`). Then a `Pending work:` section, computed fresh each turn: per active Plan its PR and Job counts and up to 10 Jobs (touched files: `cpd context pending --context <c>`). Nothing new and no active Plan: no message.
 - **On demand:** `cpd plan list --context <c>` for every Plan's phase, Job counts and PRs; `cpd plan show --plan <p>` for one Plan's PRs, Jobs and open Escalations.
 - A Plan's phases are grounding → plan → dispatch → deploy → done. A `job-failed` or `escalation` line is its Lead's to handle; mention it to the User only when it touches the Epic (a blocked Plan, a cut that no longer holds).
 - When a Plan is done, record what outlives it and tell the User which Plans remain.
