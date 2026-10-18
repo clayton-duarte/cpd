@@ -391,7 +391,8 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
     assert_eq!(
         fx.shown_pull_request(),
         json!({"repo": "acme/pay", "number": 812, "url": URL, "title": "Pay the bills", "draft": false, "state": "open",
-               "review_decision": "none", "checks": "none", "created_at": opened_at, "merged_at": null})
+               "review_decision": "none", "checks": "none", "mergeable": "unknown", "merge_state": "unknown",
+               "created_at": opened_at, "merged_at": null})
     );
     let opened = fx.events("pr-opened");
     assert_eq!(opened.len(), 1);
@@ -421,7 +422,8 @@ fn open_keeps_the_row_the_poll_stored_first() {
     assert_eq!(
         fx.shown_pull_request(),
         json!({"repo": "acme/pay", "number": 812, "url": URL, "title": "As the poll wrote it", "draft": true, "state": "open",
-               "review_decision": "approved", "checks": "pending", "created_at": "github time", "merged_at": null})
+               "review_decision": "approved", "checks": "pending", "mergeable": "unknown", "merge_state": "unknown",
+               "created_at": "github time", "merged_at": null})
     );
     let rows: i64 = fx.store().read(|c| Ok(c.query_row("SELECT count(*) FROM pull_requests", [], |r| r.get(0))?)).unwrap();
     assert_eq!(rows, 1);
@@ -739,7 +741,16 @@ fn node(repo: &str, number: i64, state: &str, review: Option<&str>, rollup: Opti
     format!(
         r#"{{"repository":{{"nameWithOwner":"{repo}"}},"number":{number},"url":"https://github.com/{repo}/pull/{number}","title":"{title}",
         "isDraft":false,"state":"{state}","createdAt":"opened","mergedAt":{merged},"reviewDecision":{review},
+        "mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN",
         "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{rollup}}}}}]}}}}"#
+    )
+}
+
+/// `node`, as GitHub reports its `mergeable` and `mergeStateStatus`.
+fn merge_state(node: String, mergeable: &str, merge_state: &str) -> String {
+    node.replace(
+        r#""mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN""#,
+        &format!(r#""mergeable":"{mergeable}","mergeStateStatus":"{merge_state}""#),
     )
 }
 
@@ -780,7 +791,13 @@ fn lookup_answer(nodes: &[Option<String>]) -> String {
 
 /// `pr-feedback`'s data for PR `repo`.
 fn feedback(state: &str, checks: &str, decision: &str, reasons: &[&str]) -> Value {
-    json!({"pr": "repo", "number": 812, "url": URL, "state": state, "checks": checks, "review_decision": decision, "reasons": reasons})
+    feedback_merge(state, checks, decision, "unknown", "unknown", reasons)
+}
+
+/// `pr-feedback`'s data for PR `repo`, with the row's `mergeable` and `merge_state`; `conflict` follows `reasons`.
+fn feedback_merge(state: &str, checks: &str, decision: &str, mergeable: &str, merge_state: &str, reasons: &[&str]) -> Value {
+    json!({"pr": "repo", "number": 812, "url": URL, "state": state, "checks": checks, "review_decision": decision,
+           "mergeable": mergeable, "merge_state": merge_state, "conflict": reasons.contains(&"conflict"), "reasons": reasons})
 }
 
 impl Fx {
@@ -840,8 +857,8 @@ fn the_first_poll_inserts_every_pull_request_and_appends_nothing_for_unowned_one
         out,
         json!({"ok": true, "polled": 2,
                "changed": [
-                   {"repo": "acme/pay", "number": 901, "state": "open", "draft": false, "checks": "passed", "review_decision": "approved"},
-                   {"repo": "acme/web", "number": 902, "state": "open", "draft": false, "checks": "none", "review_decision": "none"}],
+                   {"repo": "acme/pay", "number": 901, "state": "open", "draft": false, "checks": "passed", "review_decision": "approved", "mergeable": "unknown", "merge_state": "unknown"},
+                   {"repo": "acme/web", "number": 902, "state": "open", "draft": false, "checks": "none", "review_decision": "none", "mergeable": "unknown", "merge_state": "unknown"}],
                "removed": 0, "feedback": [], "merged": [], "done": [],
                "rate_limit": {"cost": 1, "remaining": 4987, "reset_at": RESET}})
     );
@@ -882,7 +899,7 @@ fn poll_tells_the_plan_once_that_the_checks_turned_failed() {
     let out = fx.poll();
 
     assert_eq!(out["feedback"], json!([{"plan": "pay", "pr": "repo"}]));
-    assert_eq!(out["changed"], json!([{"repo": "acme/pay", "number": 812, "state": "open", "draft": false, "checks": "failed", "review_decision": "none"}]));
+    assert_eq!(out["changed"], json!([{"repo": "acme/pay", "number": 812, "state": "open", "draft": false, "checks": "failed", "review_decision": "none", "mergeable": "unknown", "merge_state": "unknown"}]));
     assert_eq!(fx.pr_data(), ("Pay the bills".into(), "none".into(), "failed".into(), "open".into()));
     let events = fx.events("pr-feedback");
     assert_eq!(events.len(), 1);
@@ -899,6 +916,98 @@ fn poll_tells_the_plan_once_that_the_checks_turned_failed() {
     fx.search(&[pay("OPEN", None, Some("FAILURE"))]);
     assert_eq!(fx.poll()["feedback"], json!([{"plan": "pay", "pr": "repo"}]));
     assert_eq!(fx.events("pr-feedback").len(), 2);
+}
+
+#[test]
+fn poll_tells_the_plan_once_per_transition_that_the_pull_request_became_conflicting() {
+    let fx = fx("deploy");
+    let conflicting = || pay("OPEN", None, None);
+    let seen = |mergeable: &str, state: &str| fx.search(&[merge_state(conflicting(), mergeable, state)]);
+    seen("MERGEABLE", "BLOCKED");
+    let out = fx.poll();
+    assert_eq!((out["feedback"].clone(), fx.events("pr-feedback").len()), (json!([]), 0), "mergeable is no conflict");
+    assert_eq!(out["changed"][0]["mergeable"], "mergeable");
+    assert_eq!(out["changed"][0]["merge_state"], "blocked");
+
+    seen("CONFLICTING", "DIRTY");
+    let out = fx.poll();
+
+    assert_eq!(out["feedback"], json!([{"plan": "pay", "pr": "repo"}]));
+    assert_eq!(out["changed"][0]["mergeable"], "conflicting");
+    assert_eq!(out["changed"][0]["merge_state"], "dirty");
+    let events = fx.events("pr-feedback");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].1, feedback_merge("open", "none", "none", "conflicting", "dirty", &["conflict"]));
+    assert_eq!(events[0].1["conflict"], true);
+    assert_eq!(events[0].0, "PR repo (#812) of Plan pay needs attention: merge conflict. Read the details with cpd pr view --plan pay --pr repo.");
+    assert_eq!(fx.shown_pull_request()["mergeable"], "conflicting");
+    assert_eq!(fx.shown_pull_request()["merge_state"], "dirty");
+
+    // The same poll again: nothing is written and nothing is told.
+    let txns = fx.txns();
+    assert_eq!(fx.poll()["feedback"], json!([]));
+    assert_eq!((fx.txns(), fx.events("pr-feedback").len()), (txns, 1));
+
+    // Still conflicting, only the merge state moved: stored, not told.
+    seen("CONFLICTING", "BEHIND");
+    let out = fx.poll();
+    assert_eq!((out["feedback"].clone(), out["changed"].as_array().unwrap().len()), (json!([]), 1));
+    assert_eq!(fx.events("pr-feedback").len(), 1);
+
+    // GitHub recomputes after the base moved: `unknown` is stored and is no conflict, and the same conflict seen again is told again.
+    seen("UNKNOWN", "UNKNOWN");
+    let out = fx.poll();
+    assert_eq!((out["feedback"].clone(), out["changed"].as_array().unwrap().len()), (json!([]), 1));
+    assert_eq!(fx.shown_pull_request()["mergeable"], "unknown");
+    assert_eq!(fx.events("pr-feedback").len(), 1);
+    seen("CONFLICTING", "DIRTY");
+    assert_eq!(fx.poll()["feedback"], json!([{"plan": "pay", "pr": "repo"}]));
+    let events = fx.events("pr-feedback");
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[1].1, events[0].1);
+}
+
+#[test]
+fn a_conflict_told_with_another_reason_lists_both() {
+    let fx = fx("deploy");
+    fx.search(&[merge_state(pay("OPEN", None, Some("FAILURE")), "CONFLICTING", "DIRTY")]);
+
+    fx.poll();
+
+    let events = fx.events("pr-feedback");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].1, feedback_merge("open", "failed", "none", "conflicting", "dirty", &["checks_failed", "conflict"]));
+    assert!(events[0].0.contains("needs attention: checks failed, merge conflict. Read"), "{}", events[0].0);
+}
+
+#[test]
+fn a_conflicting_pull_request_no_plan_owns_gets_no_event() {
+    let fx = fx("deploy");
+    fx.search(&[pay("OPEN", None, None), merge_state(node("acme/web", 902, "OPEN", None, None), "CONFLICTING", "DIRTY")]);
+    let events = fx.event_count();
+
+    let out = fx.poll();
+
+    assert_eq!(out["feedback"], json!([]));
+    assert_eq!(out["changed"][0]["mergeable"], "conflicting");
+    assert_eq!(fx.event_count(), events);
+    let stored: (String, String) = fx
+        .store()
+        .read(|c| Ok(c.query_row("SELECT mergeable, merge_state FROM pull_requests WHERE number = 902", [], |r| Ok((r.get(0)?, r.get(1)?)))?))
+        .unwrap();
+    assert_eq!(stored, ("conflicting".to_owned(), "dirty".to_owned()));
+}
+
+#[test]
+fn a_value_outside_the_mergeable_sets_fails_the_poll_and_stores_nothing() {
+    let fx = fx("deploy");
+    for bad in [merge_state(pay("OPEN", None, None), "MAYBE", "DIRTY"), merge_state(pay("OPEN", None, None), "CONFLICTING", "QUEUED")] {
+        fx.search(&[bad]);
+        let run = fx.pr("poll");
+        assert_eq!(code(&run), ("gh_failed".into(), 1));
+    }
+    assert!(fx.events("pr-feedback").is_empty());
+    assert_eq!(fx.shown_pull_request()["mergeable"], "unknown");
 }
 
 #[test]
@@ -1016,7 +1125,7 @@ fn an_owned_pull_request_that_left_the_search_and_is_merged_takes_the_merged_pat
 
     assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
     assert_eq!((out["done"].clone(), out["feedback"].clone(), out["polled"].clone()), (json!(["pay"]), json!([]), json!(0)));
-    assert_eq!(out["changed"], json!([{"repo": "acme/pay", "number": 812, "state": "merged", "draft": false, "checks": "passed", "review_decision": "approved"}]));
+    assert_eq!(out["changed"], json!([{"repo": "acme/pay", "number": 812, "state": "merged", "draft": false, "checks": "passed", "review_decision": "approved", "mergeable": "unknown", "merge_state": "unknown"}]));
     assert_eq!(out["prs"], json!([{"key": "repo", "status": "merged", "pull_request": fx.shown_pull_request()}]));
     assert_eq!(fx.shown_pull_request()["merged_at"], "2026-10-14T10:00:00Z");
     assert_eq!(fx.pr_data(), (TITLE.into(), "approved".into(), "passed".into(), "merged".into()));

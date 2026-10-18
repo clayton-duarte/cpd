@@ -209,7 +209,7 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("attempt-retry", "cpja", "", &["outcome", "cause", "next_tier"], &["feedback"]),
     ("attempt-nudge", "cpjas", "", &["prompt"], &[]),
     ("all-merged", "cp", "", &["pr", "merged", "cancelled"], &[]),
-    ("pr-feedback", "cp", "", &["pr", "number", "url", "state", "checks", "review_decision", "reasons"], &[]),
+    ("pr-feedback", "cp", "", &["pr", "number", "url", "state", "checks", "review_decision", "mergeable", "merge_state", "conflict", "reasons"], &[]),
     ("pr-added", "cp", "", &["pr", "repo", "base", "needs", "appended"], &[]),
     ("pr-edited", "cp", "", &["pr", "fields"], &[]),
     ("pr-cancelled", "cp", "", &["pr"], &[]),
