@@ -228,11 +228,6 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
         }
     };
     tmux.swap_pane(&pane, &slot.pane)?;
-    // The displaced pane is now in `from_window`: a dead one dies there, like the placeholder.
-    match &displaced {
-        Some(other) if !slot.dead => tmux.rename_window(&from_window, &parked_window(other))?,
-        _ => tmux.kill_pane(&slot.pane)?,
-    }
     env.store.write("session open", |tx| {
         if let (Some(other), true) = (&displaced, slot.dead) {
             // Its pane is gone: what E2 writes for it (§3.6), before the Lead's new pane is recorded.
@@ -245,6 +240,12 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
         }
         Ok(())
     })?;
+    // The swap is the fact and is recorded; a failure below only leaves a window name or a pane.
+    // The displaced pane is now in `from_window`: a dead one dies there, like the placeholder.
+    match &displaced {
+        Some(other) if !slot.dead => tmux.rename_window(&from_window, &parked_window(other))?,
+        _ => tmux.kill_pane(&slot.pane)?,
+    }
     let displaced = displaced.filter(|_| !slot.dead).map_or(Value::Null, |d| json!(d.id));
     Ok(Output::success(json!({"session": lead.id, "pane": pane.as_str(), "displaced": displaced})))
 }
