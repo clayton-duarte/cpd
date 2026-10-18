@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ev, Fixture, planShow, settle, waitFor } from "./fake.ts";
+import { Follower, type FollowerHooks, type Spawn } from "../lib/follower.ts";
+import { ev, Fixture, ID, planShow, settle, waitFor } from "./fake.ts";
 
 async function started(f: Fixture, options = {}) {
   f.respond("plan-show", planShow());
@@ -26,19 +28,37 @@ test("EOF restarts the follower with the in-memory cursor, also past Events hand
 });
 
 test("restarts back off from restartInitialMs up to restartMaxMs", async (t) => {
-  const f = new Fixture();
-  t.after(() => f.close());
-  await started(f);
-  for (let n = 2; n <= 5; n++) {
-    f.file("exit-next", "0");
-    await waitFor(`start ${n}`, () => f.follows().length === n);
+  // The delays the Follower schedules, not when the OS woke the timers: its `setTimeout` is captured and run by hand.
+  const children: EventEmitter[] = [];
+  const spawn = (() => {
+    const child = Object.assign(new EventEmitter(), { stdout: null, stderr: null, kill: () => true });
+    children.push(child);
+    return child;
+  }) as unknown as Spawn;
+  const hooks: FollowerHooks = { before: async () => {}, onRunStart: () => {}, onLine: () => false, onFailure: () => {}, cursor: () => 0 };
+  const follower = new Follower(ID, hooks, { restartInitialMs: 30, restartMaxMs: 120, requestTimeoutMs: 300, pollMs: 30, shutdownWaitMs: 200 }, spawn);
+  t.after(() => follower.stop());
+  follower.start();
+  await waitFor("start 1", () => children.length === 1);
+
+  const delays: number[] = [];
+  for (let n = 2; n <= 6; n++) {
+    let restart: (() => void) | undefined;
+    const real = globalThis.setTimeout;
+    globalThis.setTimeout = ((fn: () => void, ms: number) => {
+      delays.push(ms);
+      restart = fn;
+      return 0;
+    }) as unknown as typeof setTimeout;
+    try {
+      children[n - 2]!.emit("close", 0, null);
+    } finally {
+      globalThis.setTimeout = real;
+    }
+    restart!();
+    await waitFor(`start ${n}`, () => children.length === n);
   }
-  const t0 = f.follows().map((c) => c.t);
-  const gaps = t0.slice(1).map((v, i) => v - t0[i]!);
-  assert.ok(gaps[0]! >= 25, `gaps ${gaps}`);
-  assert.ok(gaps[1]! >= 55, `gaps ${gaps}`);
-  assert.ok(gaps[2]! >= 110, `gaps ${gaps}`);
-  assert.ok(gaps[3]! >= 110 && gaps[3]! < 400, `capped at restartMaxMs: ${gaps}`);
+  assert.deepEqual(delays, [30, 60, 120, 120, 120], "doubles from restartInitialMs, capped at restartMaxMs");
 });
 
 test("a failure line is delivered once per code until a line is read again; the restart goes on", async (t) => {
