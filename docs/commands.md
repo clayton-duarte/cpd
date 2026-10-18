@@ -1694,7 +1694,7 @@ cpd watch [--ensure]
 
 The engine, one per machine (§3.7, §6.6, D5).
 
-**Without `--ensure`:** runs E1–E5 and E7 (E6 is removed; E7, the PR start, since R34) every `tick_seconds` in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
+**Without `--ensure`:** runs the `@cpd_workers` step (below), then E1–E5 and E7 (E6 is removed; E7, the PR start, since R34) every `tick_seconds` in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
 
 | Precondition | Code | Exit |
 |---|---|---|
