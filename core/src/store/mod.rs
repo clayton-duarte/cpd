@@ -27,7 +27,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 
 use schema::{LEGACY, Named};
-pub use schema::{HISTORY_TABLES, SCHEMA_HASH, VERSION, canonical_hash};
+pub use schema::{SCHEMA_HASH, VERSION, canonical_hash};
 use verdict::verdict_with;
 pub use verdict::{Start, Verdict, refuse_user_version, verdict};
 
@@ -667,6 +667,101 @@ mod tests {
         a_then_b.write("test", |tx| Ok(tx.execute_batch("UPDATE plans SET note_a = 'x' WHERE 0")?)).unwrap();
     }
 
+    /// `kind-tables`, the first named migration, then `more`: the list of a binary with extra additive migrations.
+    pub(super) fn with_kind_tables(more: &[Named]) -> Vec<Named> {
+        std::iter::once(schema::NAMED[0]).chain(more.iter().copied()).collect()
+    }
+
+    /// What two Plans each write to add an Event kind (§4.5 K2): one insert, additive.
+    const KIND_PINNED: Named = Named {
+        name: "20300201T0000-kind-plan-pinned",
+        compat: schema::Compat::Additive,
+        sql: "-- cpd-migration: additive\nINSERT INTO event_kinds (name) VALUES ('plan-pinned');\n",
+        run: None,
+    };
+    const KIND_MESSAGE: Named = Named {
+        name: "20300202T0000-kind-session-message",
+        compat: schema::Compat::Additive,
+        sql: "-- cpd-migration: additive\nINSERT INTO event_kinds (name) VALUES ('session-message');\n",
+        run: None,
+    };
+
+    fn kinds(store: &mut Store) -> Vec<String> {
+        store
+            .read(|c| {
+                let mut stmt = c.prepare("SELECT name FROM event_kinds ORDER BY name")?;
+                let rows = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+                Ok(rows)
+            })
+            .unwrap()
+    }
+
+    /// Inserts an Event of `kind`, as cpd would.
+    fn insert_event(store: &mut Store, kind: &str) -> Result<(), CpdError> {
+        store.write("test", |tx| {
+            tx.execute(
+                "INSERT INTO events (txn, at, kind, context, text, data) VALUES (cpd_txn(), 't', ?1, NULL, 'x', '{}')",
+                [kind],
+            )?;
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn kind_tables_is_the_first_named_migration_and_breaking_after_the_legacy_set() {
+        let first = schema::NAMED[0];
+        assert!(first.name.ends_with("-kind-tables"), "{}", first.name);
+        assert_eq!(first.compat, schema::Compat::Breaking);
+        assert_eq!(first.sql.lines().next(), Some(format!("-- cpd-migration: breaking after {}", LEGACY.len()).as_str()));
+    }
+
+    #[test]
+    fn an_event_kind_added_only_by_a_later_additive_insert_can_be_inserted() {
+        let (_dir, home) = tmp_home();
+        // Without the migration the kind does not exist: the foreign key refuses it.
+        let mut store = open_named(&home, &with_kind_tables(&[])).unwrap();
+        let err = insert_event(&mut store, "plan-pinned").unwrap_err();
+        assert!(format!("{err:?}").contains("FOREIGN KEY"), "{err:?}");
+        drop(store);
+        // One `INSERT INTO event_kinds`, applied by a later binary, makes it insertable.
+        let mut store = open_named(&home, &with_kind_tables(&[KIND_PINNED])).unwrap();
+        assert!(kinds(&mut store).contains(&"plan-pinned".to_owned()));
+        insert_event(&mut store, "plan-pinned").unwrap();
+        // The other kinds stay, and a kind nobody added stays refused.
+        insert_event(&mut store, "plan-created").unwrap();
+        assert!(insert_event(&mut store, "session-message").is_err());
+        assert_eq!(applied(&mut store).last().map(|a| a.0.as_str()), Some(KIND_PINNED.name));
+    }
+
+    #[test]
+    fn two_plans_kind_migrations_applied_in_either_order_keep_both_kinds() {
+        let (_a, pinned_first) = tmp_home();
+        let (_b, message_first) = tmp_home();
+        let (_c, together) = tmp_home();
+        let both = with_kind_tables(&[KIND_PINNED, KIND_MESSAGE]);
+        drop(open_named(&pinned_first, &with_kind_tables(&[KIND_PINNED])).unwrap());
+        let mut a = open_named(&pinned_first, &both).unwrap();
+        drop(open_named(&message_first, &with_kind_tables(&[KIND_MESSAGE])).unwrap());
+        // `KIND_PINNED` sorts before the applied `KIND_MESSAGE`: allowed, it is additive (O2).
+        let mut b = open_named(&message_first, &both).unwrap();
+        let mut c = open_named(&together, &both).unwrap();
+
+        let order = |s: &mut Store| applied(s).into_iter().skip(7).map(|a| a.0).collect::<Vec<_>>();
+        assert_eq!(order(&mut a), [KIND_PINNED.name, KIND_MESSAGE.name]);
+        assert_eq!(order(&mut b), [KIND_MESSAGE.name, KIND_PINNED.name]);
+        let expected = kinds(&mut c);
+        assert!(["plan-pinned", "session-message"].iter().all(|k| expected.contains(&(*k).to_owned())));
+        for store in [&mut a, &mut b] {
+            assert_eq!(kinds(store), expected, "neither migration dropped the other's kind");
+            insert_event(store, "plan-pinned").unwrap();
+            insert_event(store, "session-message").unwrap();
+            assert_eq!(store.schema_mismatch(), None);
+        }
+        let canonical = |s: &mut Store| s.read(|c| Ok(canonical_hash(c)?)).unwrap();
+        assert_eq!(canonical(&mut a), canonical(&mut b));
+        assert_eq!(canonical(&mut a), canonical(&mut c));
+    }
+
     #[test]
     fn a_store_whose_floor_this_binary_lacks_is_store_too_new() {
         let (_dir, home) = tmp_home();
@@ -679,7 +774,7 @@ mod tests {
         assert_eq!(err.details()["unknown"], serde_json::json!([ADD_A.name, ADD_B.name]));
         // An additive one is inside the window (§4.5): the binary opens it (verdict.rs tests).
         let (_dir, home) = tmp_home();
-        drop(open_named(&home, &[ADD_A]).unwrap());
+        drop(open_named(&home, &with_kind_tables(&[ADD_A])).unwrap());
         assert!(Store::open(&home, 5000).is_ok());
     }
 
@@ -783,5 +878,6 @@ mod tests {
             assert_eq!(n.sql.lines().next().map(|l| l.starts_with("-- cpd-migration: ")), Some(true), "{}", n.name);
             assert!(n.name > LEGACY[LEGACY.len() - 1].name, "{}: names sort after the legacy set", n.name);
         }
+        assert!(schema::NAMED[0].name.ends_with("-kind-tables"), "no named migration sorts before kind-tables (§4.5)");
     }
 }

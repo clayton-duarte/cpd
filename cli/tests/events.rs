@@ -259,23 +259,20 @@ fn refused_append(store: &mut Store, e: NewEvent, why: &str) {
 }
 
 #[test]
-fn the_kinds_are_exactly_those_of_5_2_and_of_the_table_check() {
+fn the_kinds_are_exactly_those_of_5_2_and_of_event_kinds() {
     let names: Vec<&str> = Kind::ALL.iter().map(|k| k.as_str()).collect();
     assert_eq!(names, SPEC.iter().map(|s| s.0).collect::<Vec<_>>());
 
-    // The `events.kind` CHECK of the DDL lists the same kinds.
+    // The rows of `event_kinds` (§4.5: a kind exists when its row does) are the same kinds.
     let env = TestEnv::new();
     write_config(&env);
     drop(open(&env));
     let conn = Connection::open(home(&env).db()).unwrap();
-    let ddl: String =
-        conn.query_row("SELECT sql FROM sqlite_schema WHERE name = 'events'", [], |r| r.get(0)).unwrap();
-    let check = ddl.split("kind    TEXT").nth(1).unwrap().split("\n  context ").next().unwrap();
-    let mut in_ddl: Vec<&str> = check.split('\'').skip(1).step_by(2).collect();
-    in_ddl.sort();
+    let mut stmt = conn.prepare("SELECT name FROM event_kinds ORDER BY name").unwrap();
+    let in_table: Vec<String> = stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
     let mut expected = names.clone();
     expected.sort();
-    assert_eq!(in_ddl, expected);
+    assert_eq!(in_table, expected);
 }
 
 #[test]

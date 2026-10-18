@@ -367,12 +367,13 @@ mod tests {
     #[test]
     fn the_user_version_rows_of_the_table() {
         let legacy: Vec<&str> = LEGACY.iter().map(|l| l.name).collect();
+        let named = || schema::NAMED.iter().map(|n| n.name);
         let fresh = at_version(0);
         assert_eq!(fresh.outcome.as_ref().ok(), Some(&Start::Fresh));
-        assert_eq!(fresh.pending_names(), legacy);
+        assert_eq!(fresh.pending_names(), legacy.iter().copied().chain(named()).collect::<Vec<_>>());
         let convert = at_version(3);
         assert_eq!(convert.outcome.as_ref().ok(), Some(&Start::Convert(3)));
-        assert_eq!(convert.pending_names(), legacy[3..]);
+        assert_eq!(convert.pending_names(), legacy[3..].iter().copied().chain(named()).collect::<Vec<_>>());
         assert!(convert.unknown.is_empty());
         for numbered in [LEGACY.len() as i64 + 1, 99, 999, 1001] {
             let (code, details) = refusal(&at_version(numbered));

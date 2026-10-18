@@ -12,7 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use common::TestEnv;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
-use cpd_core::store::{APPLICATION_ID, HISTORY_TABLES, SCHEMA_HASH, Store, VERSION, WriteTxn, canonical_hash};
+use cpd_core::store::{APPLICATION_ID, SCHEMA_HASH, Store, VERSION, WriteTxn, canonical_hash};
 use rusqlite::Connection;
 use rusqlite::functions::FunctionFlags;
 use serde_json::{Value, json};
@@ -158,10 +158,12 @@ fn contract() -> String {
     fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/contract.md")).unwrap()
 }
 
-/// What contract §4.4 describes that the Job `kind-tables` has yet to create: the lookup tables, and
-/// `events` and `context_records`, whose `kind` is a foreign key there and still a `CHECK` here. The
-/// Job removes this list.
-const AFTER_KIND_TABLES: [&str; 5] = ["event_kinds", "record_kinds", "history_tables", "events", "context_records"];
+/// `(table, no_delete)` of every row of `history_tables`: the tables whose history triggers are generated (§4.4).
+fn history_tables(env: &TestEnv) -> Vec<(String, bool)> {
+    let conn = raw(env);
+    let mut stmt = conn.prepare("SELECT name, no_delete FROM history_tables ORDER BY name").unwrap();
+    stmt.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? == 1))).unwrap().map(Result::unwrap).collect()
+}
 
 /// The ```sql blocks of contract §4.4, in order.
 fn contract_ddl_blocks() -> Vec<String> {
@@ -210,9 +212,7 @@ fn the_schema_is_contract_4_4_as_written() {
     drop(open(&env));
     let found: std::collections::BTreeMap<String, String> = schema_sql(&raw(&env)).into_iter().collect();
     for (name, sql) in expected {
-        if !AFTER_KIND_TABLES.contains(&name.as_str()) {
-            assert_eq!(found.get(&name), Some(&sql), "{name}");
-        }
+        assert_eq!(found.get(&name), Some(&sql), "{name}");
     }
 }
 
@@ -229,16 +229,15 @@ fn every_table_index_and_trigger_of_4_4_exists() {
                 ["CREATE", "UNIQUE", "INDEX", name, ..] => name,
                 _ => continue,
             };
-            if !AFTER_KIND_TABLES[..3].contains(name) {
-                expected.insert(name.to_string());
-            }
+            expected.insert(name.to_string());
         }
     }
-    for table in HISTORY_TABLES {
+    for (table, no_delete) in history_tables(&env) {
         expected.insert(format!("{table}_hist_ins"));
         expected.insert(format!("{table}_hist_upd"));
         // `pull_requests` has no `_no_delete`: an unowned row may be deleted (`pull_requests_owned` is in the DDL).
-        if *table != "pull_requests" {
+        // `dependencies` and `pr_needs` write their own (in the DDL).
+        if no_delete || ["dependencies", "pr_needs"].contains(&table.as_str()) {
             expected.insert(format!("{table}_no_delete"));
         }
     }
@@ -252,7 +251,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     assert_eq!(found, expected);
     // Every table is STRICT.
     let tables = names(&raw(&env), "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'");
-    assert_eq!(tables.len(), 17, "§4.4's tables but the three lookup tables, and schema_migrations");
+    assert_eq!(tables.len(), 20, "§4.4's tables, the three lookup tables and schema_migrations");
     for table in tables {
         let strict: i64 = raw(&env)
             .query_row("SELECT strict FROM pragma_table_list WHERE name = ?1", [&table], |r| r.get(0))
@@ -288,7 +287,8 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
         conn.query_row("SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ?1", [name], |r| r.get(0))
             .unwrap_or_else(|e| panic!("{name}: {e}"))
     };
-    for table in HISTORY_TABLES {
+    for (table, _) in history_tables(&env) {
+        let table = table.as_str();
         let columns = names(&conn, &format!("SELECT name FROM pragma_table_info('{table}')"));
         assert!(!columns.is_empty(), "{table}");
         let ins = sql_of(&format!("{table}_hist_ins"));
@@ -298,7 +298,7 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
             assert!(upd.contains(&format!("'{column}', OLD.{column}")), "{table}_hist_upd lacks OLD.{column}");
             assert!(upd.contains(&format!("'{column}', NEW.{column}")), "{table}_hist_upd lacks NEW.{column}");
         }
-        if ["dependencies", "pr_needs", "pull_requests"].contains(table) {
+        if ["dependencies", "pr_needs", "pull_requests"].contains(&table) {
             let del = sql_of(&format!("{table}_hist_del"));
             for column in &columns {
                 assert!(del.contains(&format!("'{column}', OLD.{column}")), "{table}_hist_del lacks {column}");
@@ -364,9 +364,11 @@ fn check_constraints_reject_a_bad_value_in_every_constrained_table() {
     for (table, sql) in cases {
         let err = refused(&mut store, &sql);
         assert_eq!(err.code(), ErrorCode::StoreFailed, "{table}: {err:?}");
-        assert!(sqlite_message(&err).contains("CHECK constraint failed"), "{table}: {err:?}");
+        // A kind is a foreign key to its lookup table (§4.5 K1); every other bad value is a CHECK.
+        let expected = if ["events", "context_records"].contains(&table) { "FOREIGN KEY constraint failed" } else { "CHECK constraint failed" };
+        assert!(sqlite_message(&err).contains(expected), "{table}: {err:?}");
     }
-    // The same rows with the bad value fixed are accepted, so the CHECK was the cause.
+    // The same rows with the bad value fixed are accepted, so the CHECK (or the foreign key) was the cause.
     store
         .write("test", |tx| {
             exec(tx, "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('xy', 'T', 't', 'm');
@@ -692,7 +694,7 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
     }
     assert_eq!(last, 5);
     let err = store.write("test", |tx| Ok(insert(tx, "plan-exploded")?)).unwrap_err();
-    assert!(format!("{err:?}").contains("CHECK"), "{err:?}");
+    assert!(format!("{err:?}").contains("FOREIGN KEY"), "an Event kind is a foreign key to event_kinds: {err:?}");
 }
 
 #[test]
@@ -749,7 +751,12 @@ fn schema_migrations_records_every_legacy_migration_and_is_written_only_by_the_r
     ];
     let expected: Vec<(String, String, i64, i64)> =
         expected.iter().enumerate().map(|(i, (n, c))| (n.to_string(), c.to_string(), i as i64 + 1, 0)).collect();
-    assert_eq!(rows, expected, "a fresh store records its legacy migrations as not converted");
+    assert_eq!(rows[..expected.len()], expected, "a fresh store records its legacy migrations as not converted");
+    // The named migrations follow, the first being `kind-tables`; none is converted.
+    let (kind_tables, later) = rows[expected.len()..].split_first().expect("a named migration");
+    assert!(kind_tables.0.ends_with("-kind-tables"), "{kind_tables:?}");
+    assert_eq!((kind_tables.1.as_str(), kind_tables.2), ("breaking", expected.len() as i64 + 1));
+    assert!(kind_tables.3 == 0 && later.iter().all(|r| r.3 == 0), "{rows:?}");
 
     // Not from the `sqlite3` shell: there is no `cpd_txn()`.
     let err = raw(&env)

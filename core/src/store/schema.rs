@@ -86,7 +86,7 @@ pub const VERSION: i64 = 1000;
 /// The canonical schema hash (§4.3) of a fresh store that applied exactly this
 /// binary's migrations, pinned here and never recorded in the store (hs-d178
 /// D2). A test asserts it and prints the new value when it is stale.
-pub const SCHEMA_HASH: &str = "d2999fd6cb4643cba49dc67ba57a650dd665a20d0d5092dc7eff0827e3d65bce";
+pub const SCHEMA_HASH: &str = "439d8be71dfce266912ab02dbb73ac491b53f4f61e68e6a33d7a118c5170bf55";
 
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.
@@ -105,29 +105,8 @@ CREATE TRIGGER schema_migrations_no_update BEFORE UPDATE ON schema_migrations BE
 CREATE TRIGGER schema_migrations_no_delete BEFORE DELETE ON schema_migrations BEGIN SELECT RAISE(ABORT, 'append_only: schema_migrations'); END;
 ";
 
-/// The tables whose rows are copied into `history` by generated triggers (§4.4),
-/// at the current version. `dependencies` and `pr_needs` get no generated
-/// `_no_delete`: their migrations write their own (a draft Job's Dependency,
-/// and a PR's need before the lock, may be deleted) and their `_hist_del`.
-/// `pull_requests` gets no `_no_delete` either: its migration writes its
-/// `_hist_del` and `pull_requests_owned` (an unowned row may be deleted).
-pub const HISTORY_TABLES: &[&str] = &[
-    "contexts",
-    "context_records",
-    "plans",
-    "pull_requests",
-    "prs",
-    "pr_needs",
-    "plan_reviews",
-    "jobs",
-    "dependencies",
-    "attempts",
-    "escalations",
-    "sessions",
-    "tier_catalog",
-];
-
-/// [`HISTORY_TABLES`] as migration 1 created them; frozen with it.
+/// The tables migration 1 gives history triggers; frozen with it. Every later
+/// table is listed in `history_tables` (§4.4), which `kind-tables` created.
 const VERSION_1_HISTORY_TABLES: &[&str] = &[
     "contexts",
     "context_records",
@@ -333,12 +312,46 @@ fn stored_trigger(conn: &Connection, name: &str) -> Result<Option<String>> {
     conn.query_row("SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ?1", [name], |r| r.get(0)).optional()
 }
 
-/// `(table, no_delete)` for every table whose history triggers are generated.
-/// Until `kind-tables` moves the list into the store (`history_tables`), it is
-/// [`HISTORY_TABLES`]; `dependencies`, `pr_needs` and `pull_requests` have no
-/// generated `_no_delete`.
-fn history_tables() -> impl Iterator<Item = (&'static str, bool)> {
-    HISTORY_TABLES.iter().map(|t| (*t, !matches!(*t, "dependencies" | "pr_needs" | "pull_requests")))
+/// The tables with generated history triggers in a store before `kind-tables`
+/// (it has no `history_tables` yet): migration 1's and the ones the legacy
+/// migrations created. Frozen with the legacy set.
+const LEGACY_HISTORY_TABLES: &[&str] = &[
+    "contexts",
+    "context_records",
+    "plans",
+    "pull_requests",
+    "prs",
+    "pr_needs",
+    "plan_reviews",
+    "jobs",
+    "dependencies",
+    "attempts",
+    "escalations",
+    "sessions",
+    "tier_catalog",
+];
+
+/// `(table, no_delete)` for every table whose history triggers are generated:
+/// the rows of `history_tables` (§4.4), by name; a store that does not have the
+/// table yet (before `kind-tables`) has [`LEGACY_HISTORY_TABLES`]. `no_delete` 0
+/// means no generated `_no_delete` (`dependencies`, `pr_needs` and
+/// `pull_requests` write their own rule).
+fn history_tables(conn: &Connection) -> Result<Vec<(String, bool)>> {
+    let listed: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'history_tables')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !listed {
+        let mut tables: Vec<_> = LEGACY_HISTORY_TABLES
+            .iter()
+            .map(|t| (t.to_string(), !matches!(*t, "dependencies" | "pr_needs" | "pull_requests")))
+            .collect();
+        tables.sort();
+        return Ok(tables);
+    }
+    let mut stmt = conn.prepare("SELECT name, no_delete FROM history_tables ORDER BY name")?;
+    stmt.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? == 1)))?.collect()
 }
 
 /// §4.5 K4: after the last migration of a migrating transaction, makes every
@@ -347,8 +360,8 @@ fn history_tables() -> impl Iterator<Item = (&'static str, bool)> {
 /// created again. The result depends only on the final columns, so not on the
 /// order in which additive migrations added them.
 pub(super) fn reconcile(conn: &Connection) -> Result<()> {
-    for (table, no_delete) in history_tables() {
-        for (name, sql) in history_triggers(conn, table, no_delete)? {
+    for (table, no_delete) in history_tables(conn)? {
+        for (name, sql) in history_triggers(conn, &table, no_delete)? {
             let stored = stored_trigger(conn, &name)?;
             if stored.as_deref() == Some(sql.as_str()) {
                 continue;
@@ -541,7 +554,8 @@ fn table_parts(sql: &str) -> Option<TableParts> {
 /// `["table", name, columns, constraints, options]`, any other as
 /// `[type, name, sql]`.
 pub(super) fn canonical_entries(conn: &Connection) -> Result<Vec<Value>> {
-    let generated: std::collections::HashSet<String> = history_tables()
+    let generated: std::collections::HashSet<String> = history_tables(conn)?
+        .into_iter()
         .flat_map(|(t, no_delete)| {
             [format!("{t}_hist_ins"), format!("{t}_hist_upd")].into_iter().chain(no_delete.then(|| format!("{t}_no_delete")))
         })
@@ -583,11 +597,11 @@ pub fn canonical_hash(conn: &Connection) -> Result<String> {
 /// differs from what the generator makes from its table's current columns, as
 /// `(name, expected sql, stored sql)`.
 pub(super) fn generated_mismatch(conn: &Connection) -> Result<Option<(String, String, Option<String>)>> {
-    for (table, no_delete) in history_tables() {
-        if table_columns(conn, table)?.is_empty() {
+    for (table, no_delete) in history_tables(conn)? {
+        if table_columns(conn, &table)?.is_empty() {
             return Ok(Some((format!("{table}_hist_ins"), format!("a table {table}"), None)));
         }
-        for (name, sql) in history_triggers(conn, table, no_delete)? {
+        for (name, sql) in history_triggers(conn, &table, no_delete)? {
             let stored = stored_trigger(conn, &name)?;
             if stored.as_deref() != Some(sql.as_str()) {
                 return Ok(Some((name, sql, stored)));
@@ -817,7 +831,7 @@ mod tests {
     }
 
     #[test]
-    fn the_events_check_allows_the_five_new_kinds_and_still_refuses_an_unknown_one() {
+    fn events_allow_the_five_new_kinds_and_still_refuse_an_unknown_one() {
         let dir = tempfile::tempdir().unwrap();
         let home = home(&dir);
         version_2_with_events(&home);
@@ -833,7 +847,7 @@ mod tests {
             store.write("test", |tx| Ok::<_, CpdError>(insert(tx, kind)?)).unwrap_or_else(|e| panic!("{kind}: {e:?}"));
         }
         let err = store.write("test", |tx| Ok::<_, CpdError>(insert(tx, "plan-exploded")?)).unwrap_err();
-        assert!(format!("{err:?}").contains("CHECK"), "{err:?}");
+        assert!(format!("{err:?}").contains("FOREIGN KEY"), "an Event kind is a foreign key to event_kinds: {err:?}");
     }
 
     // ---------- migration 4 ----------
@@ -1676,7 +1690,10 @@ mod tests {
             .into_iter()
             .map(|table| {
                 let columns: Vec<String> = table_columns(conn, &table).unwrap().into_iter().map(|(c, _)| format!("\"{c}\"")).collect();
-                let sql = format!("SELECT json_array({}) FROM \"{table}\" ORDER BY rowid", columns.join(", "));
+                let without_rowid: bool =
+                    conn.query_row("SELECT wr FROM pragma_table_list WHERE name = ?1", [&table], |r| r.get(0)).unwrap();
+                let order = if without_rowid { columns.join(", ") } else { "rowid".to_owned() };
+                let sql = format!("SELECT json_array({}) FROM \"{table}\" ORDER BY {order}", columns.join(", "));
                 let rows = conn.prepare(&sql).unwrap().query_map([], |r| r.get(0)).unwrap().collect::<Result<_>>().unwrap();
                 (table, rows)
             })
@@ -1735,19 +1752,24 @@ mod tests {
                 .unwrap()
                 .collect::<Result<_>>()
                 .unwrap();
-            let expected: Vec<(String, String, i64, i64)> = LEGACY
+            let legacy = LEGACY.iter().enumerate().map(|(i, l)| (l.name.to_owned(), l.compat.as_str().to_owned(), i as i64 + 1, 1));
+            let named = NAMED
                 .iter()
                 .enumerate()
-                .map(|(i, l)| (l.name.to_owned(), l.compat.as_str().to_owned(), i as i64 + 1, 1))
-                .collect();
-            assert_eq!(recorded, expected, "version {n}: six converted rows, one per legacy migration");
+                .map(|(i, m)| (m.name.to_owned(), m.compat.as_str().to_owned(), (LEGACY.len() + i) as i64 + 1, 0));
+            let expected: Vec<(String, String, i64, i64)> = legacy.chain(named).collect();
+            assert_eq!(recorded, expected, "version {n}: six converted rows, one per legacy migration, then the named ones as not converted");
             assert_eq!(canonical_hash(&conn).unwrap(), fresh, "version {n}: the canonical hash of a fresh store");
 
             if n == LEGACY.len() {
                 // Nothing but the runner's own rows changes in a store that is already at 6.
                 let mut rows_after = dump(&conn);
                 let mut rows_before = rows_before;
-                assert_eq!(rows_after.remove("schema_migrations").map(|r| r.len()), Some(6));
+                assert_eq!(rows_after.remove("schema_migrations").map(|r| r.len()), Some(LEGACY.len() + NAMED.len()));
+                // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
+                assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(41));
+                assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(5));
+                assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(16));
                 let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
                 assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
                 assert_eq!(txns_after.len(), txns_before.len() + 1);
@@ -1775,9 +1797,10 @@ mod tests {
             .unwrap()
             .collect::<Result<_>>()
             .unwrap();
-        assert_eq!(converted, vec![0; LEGACY.len()]);
+        let all = LEGACY.len() + NAMED.len();
+        assert_eq!(converted, vec![0; all]);
         let txns: i64 = conn.query_row("SELECT count(*) FROM schema_migrations s JOIN txns t ON t.id = s.txn", [], |r| r.get(0)).unwrap();
-        assert_eq!(txns, LEGACY.len() as i64, "every row names the migrating transaction");
+        assert_eq!(txns, all as i64, "every row names the migrating transaction");
     }
 
     #[test]
