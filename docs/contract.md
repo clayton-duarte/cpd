@@ -1668,7 +1668,7 @@ All of it runs under the **per-repo lock** `locks/repo-<sha1>.lock` (sha1 of the
 3. **Lead worktree clean** (`git status --porcelain` empty), else `dirty_target` (t3 F8: checked first, before any work in the Attempt worktree).
 4. **Tamper check** of `old...<attempt branch>` (§7.5), else `tampered`.
 5. **Rebase** in the Attempt worktree: `git -C <attempt worktree> rebase old`. On a conflict: record `git diff --name-only --diff-filter=U`, run `git rebase --abort`, and end `merge_conflict` with the file list in the feedback. The rebase never happens in the Lead worktree (t3 F6).
-    **Skipped when `old` is already an ancestor of the Attempt's HEAD** (hs-d139, hs-n52, hs-n67): `git -C <attempt worktree> merge-base --is-ancestor old HEAD` exits 0, so the Attempt already contains the Lead tip and a rebase would add nothing; the merge goes straight to step 7 and the fast-forward of step 8 (`new` = HEAD). Why: a Job may carry a merge of the base into its branch; a rebase drops merge commits and replays the base's commits, which then conflict. Exit 1 (not an ancestor): rebase as above; any other result is `git_failed`. Known limit: step 4's tamper check still diffs `old...<attempt branch>` (§7.5), so a merge of a base that changed a protected path is refused `tampered`.
+    **Skipped when `old` is already an ancestor of the Attempt's HEAD** (hs-d139, hs-n52, hs-n67): `git -C <attempt worktree> merge-base --is-ancestor old HEAD` exits 0, so the Attempt already contains the Lead tip and a rebase would add nothing; the merge goes straight to step 7 and the fast-forward of step 8 (`new` = HEAD). Why: a Job may carry a merge of the base into its branch; a rebase drops merge commits and replays the base's commits, which then conflict. Exit 1 (not an ancestor): rebase as above; any other result is `git_failed`. The tamper check of step 4 allows the protected files such a merge brings (§7.5).
 6. Removed by R19 (no Job-level Gate): the merge runs no Gate; the Gate runs at `pr open` and `pr rebase` (§7.6). The step keeps its number so that steps 7–10 keep theirs.
 7. **Cancel check** again (the last safe point).
 8. **Fast-forward with a compare-and-swap:** `new = git -C <attempt worktree> rev-parse HEAD`; verify `git merge-base --is-ancestor old new`; then `git update-ref -m "cpd: merge <plan>/<attempt>" refs/heads/<lead branch> new old`. git applies it only if the ref still equals `old` (t3 F7). If it fails because the ref moved (someone outside cpd moved it, since cpd holds the lock): back to step 2, at most 3 times, then `cas_lost`.
@@ -1700,6 +1700,8 @@ A diff, computed as `git diff --name-only --no-renames <base>...<branch>` (so re
 - `.config/wt.toml` (the hooks) and `.config/cpd.toml` (this list);
 - anything under `.cpd/`;
 - each path in the repo's own protected list: `protected = ["verify.sh", "scripts/ci/"]` in `.config/cpd.toml`, read from the Lead Branch's tree (`git show <lead branch>:.config/cpd.toml`), never from the Attempt's. An entry ending in `/` is a directory prefix; any other entry is an exact path. The file is optional; unknown keys are `config_invalid`.
+
+**Exception: a base merge** (hs-d139). A protected path in that diff is allowed when the Attempt's version of it equals the Lead tip's or `origin/<base>`'s: the same blob id (`git rev-parse <rev>:<path>`), or absent in both. So a Job that merges its base may bring the base's protected files. Any other change to a protected path stays `tampered` (`gate_tampered` at submit). The Lead tip is the Lead Branch's tip when the check runs; `origin/<base>` is the remote-tracking ref as last fetched.
 
 The list lives in its own file, not in `.config/wt.toml`, because worktrunk warns about unknown tables in its file on every run (verified: "Project config has unknown field cpd (will be ignored)"). cpd 1 hard-coded `verify.sh`; now the repo names it. It runs at `attempt submit` (refusal `gate_tampered`) and again at merge (outcome `tampered`).
 
@@ -1736,7 +1738,7 @@ Each command here works on **one PR** (R34, A14), selected by `--pr <key>` (§1.
   2. **the Gate** (R19), exactly as `pr open` step 2: `pre-merge` in the Lead worktree, output in `run/<plan>/logs/pr-<key>.pre-merge.log`; `gate_failed` (exit 3), `gate_error` (exit 1), with `details.tail` and `details.log`. Nothing is pushed on a failure;
   3. `git -C <lead worktree> push --porcelain origin <lead branch>` (no `-u`, no force, no lease). A rejection because the remote branch is not an ancestor of the local one (the remote moved) is `push_rejected` (exit 3) with git's stderr in `details.stderr`; the Lead then runs `pr rebase`. Any other git failure is `git_failed`.
 
-  No rows and no Event. A branch already at the remote's sha still runs the Gate and pushes nothing (`pushed` false). Known limit: the merge step's tamper check (§7.4 step 5) is unchanged.
+  No rows and no Event. A branch already at the remote's sha still runs the Gate and pushes nothing (`pushed` false).
 
 ## 8. Configuration
 
