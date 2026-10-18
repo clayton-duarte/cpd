@@ -869,6 +869,12 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     // One tick only: whatever happens after the first poll happens in that tick.
     let config = fx.env.cpd_home().join("config.toml");
     fs::write(&config, fs::read_to_string(&config).unwrap().replace("tick_seconds = 1\n", "tick_seconds = 600\n")).unwrap();
+    // The clean-up of the merged `repo` keeps a Lead worktree with commits not on origin (and raises an `error`): give
+    // the repo an `origin` that has them, so the only `error` this test could see is E5's or E7's own.
+    let origin = fx.env.root().join("repos/origin.git");
+    fx.env.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
+    fx.env.git(&fx.repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    fx.env.git(&fx.repo, &["push", "-q", "origin", "main"]);
     // `web` is in its own repo: git cannot hold `cpd/pay` beside `cpd/pay/web`.
     let web = fx.env.git_repo("web").canonicalize().unwrap();
     fx.fixture(&format!(
@@ -892,6 +898,7 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     assert_eq!(fx.query::<String>("SELECT status FROM prs WHERE key = 'repo'"), "merged");
     assert_eq!(fx.query::<String>("SELECT status FROM prs WHERE key = 'web'"), "dispatch");
     assert!(fx.query::<i64>("SELECT id FROM events WHERE kind = 'pr-merged'") < fx.query::<i64>("SELECT id FROM events WHERE kind = 'pr-started'"));
+    assert!(!fx.lead.exists(), "the poll that saw the merge cleaned up the Lead worktree");
     assert_eq!(fx.count("error"), 0);
 }
 
