@@ -139,7 +139,7 @@ impl Kind {
             AttemptRetry => spec([Y, Y, Y, Y, N], &["outcome", "cause", "next_tier"], &["feedback"]),
             AttemptNudge => spec([Y, Y, Y, Y, Y], &["prompt"], &[]),
             AllMerged => spec([Y, Y, N, N, N], &["pr", "merged", "cancelled"], &[]),
-            PrFeedback => spec([Y, Y, N, N, N], &["pr", "number", "url", "state", "checks", "review_decision", "reasons"], &[]),
+            PrFeedback => spec([Y, Y, N, N, N], &["pr", "number", "url", "state", "checks", "review_decision", "mergeable", "merge_state", "conflict", "reasons"], &[]),
             PrAdded => spec([Y, Y, N, N, N], &["pr", "repo", "base", "needs", "appended"], &[]),
             PrEdited => spec([Y, Y, N, N, N], &["pr", "fields"], &[]),
             PrCancelled => spec([Y, Y, N, N, N], &["pr"], &[]),
