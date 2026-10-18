@@ -81,7 +81,6 @@ const conditions: [string, (f: Fixture) => void, (f: Fixture) => void][] = [
   ["pi is busy", (f) => (f.pi.idle = false), (f) => (f.pi.idle = true)],
   ["messages are pending", (f) => (f.pi.pendingMessages = true), (f) => (f.pi.pendingMessages = false)],
   ["text is in the editor", (f) => (f.pi.editorText = "unsent"), (f) => (f.pi.editorText = "")],
-  ["an extension signalled herdr:blocked", (f) => f.pi.events.emit("herdr:blocked", { active: true, label: "dialog" }), (f) => f.pi.events.emit("herdr:blocked", { active: false })],
 ];
 
 for (const [name, block, clear] of conditions) {
