@@ -61,6 +61,22 @@ test("a failure line is delivered once per code until a line is read again; the 
   await waitFor("delivered again", () => errorsOf(f, "store_too_new").length === 2);
 });
 
+test("a permanent failure line is reported once and the follower is not restarted (pi-ci-W4)", async (t) => {
+  for (const code of ["session_not_found", "usage"]) {
+    const f = new Fixture();
+    try {
+      await started(f);
+      f.file("follow-failure.json", JSON.stringify({ line: failure(code), exit: 4 }));
+      await waitFor("the error", () => errorsOf(f, code).length === 1);
+      await settle(500); // restarts would come after 30, 60 and 120 ms
+      assert.equal(f.follows().length, 1, `${code}: no restart`);
+      assert.equal(errorsOf(f, code).length, 1, `${code}: reported once`);
+    } finally {
+      await f.close();
+    }
+  }
+});
+
 test("a non-zero exit without a failure line is delivered as an error, once per code", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());

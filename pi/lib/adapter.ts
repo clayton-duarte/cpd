@@ -7,7 +7,7 @@ import { cursorFrom } from "./cursor.ts";
 import { errorMessage, eventMessage, FOLLOW_UP, LEAD_MESSAGES, sessionMessage } from "./delivery.ts";
 import type { CpdEvent } from "./event.ts";
 import { parseLine, PROTOCOL } from "./event.ts";
-import { DEFAULT_TIMING, Follower, type Schedule, type Spawn, type Timing } from "./follower.ts";
+import { DEFAULT_TIMING, Follower, PERMANENT_CODES, type Schedule, type Spawn, type Timing } from "./follower.ts";
 import type { CommandCtx, Ctx, Message, PiApi } from "./pi.ts";
 import { parseOpened, parseResult, parseStatus, request } from "./plannotator.ts";
 import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, REVIEW_LABEL, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
@@ -77,6 +77,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   const env = options.env ?? process.env;
   let run: Run | undefined;
   let toolRegistered = false;
+  // Set while the start-up `session show` is being retried (§15.2 step 1); `stop` aborts it.
+  let showRetry: AbortController | undefined;
   // The context of `session_start`: `ctx.ui` is only handed to handlers.
   const ctxOf: { current: Ctx | undefined } = { current: undefined };
 
@@ -168,12 +170,52 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     // 1. who am I
     let info: SessionInfo;
     try {
-      info = parseSession(await call(["session", "show", id]));
+      info = await showSession(id);
     } catch (e) {
-      deliver("session show", e);
+      const err = toCpdError(e);
+      deliver("session show", err);
+      if (PERMANENT_CODES.has(err.code)) return;
+      const retry = (showRetry = new AbortController());
+      void retryShow(id, retry, err.code)
+        .then((shown) => (shown ? begin(ctx, id, shown, reason) : undefined))
+        .catch((e) => deliver("start-up", e));
       return;
     }
+    await begin(ctx, id, info, reason);
+  }
 
+  const showSession = async (id: string) => parseSession(await call(["session", "show", id]));
+
+  /** §15.2 step 1 again, with the follower's back-off, until it works, is refused for good, or the run is stopped (then `undefined`). A code is reported once. */
+  async function retryShow(id: string, retry: AbortController, reported: string): Promise<SessionInfo | undefined> {
+    const seen = new Set([reported]);
+    let delay = timing.restartInitialMs;
+    for (;;) {
+      await sleep(delay, undefined, { signal: retry.signal }).catch(() => undefined);
+      if (retry.signal.aborted) return undefined;
+      delay = Math.min(delay * 2, timing.restartMaxMs);
+      try {
+        const info = await showSession(id);
+        if (retry.signal.aborted) return undefined;
+        showRetry = undefined;
+        return info;
+      } catch (e) {
+        if (retry.signal.aborted) return undefined;
+        const err = toCpdError(e);
+        if (!seen.has(err.code)) {
+          seen.add(err.code);
+          deliver("session show", err);
+        }
+        if (PERMANENT_CODES.has(err.code)) {
+          showRetry = undefined;
+          return undefined;
+        }
+      }
+    }
+  }
+
+  /** §15.2 steps 2 to 6, once the Session is known. */
+  async function begin(ctx: Ctx, id: string, info: SessionInfo, reason: string): Promise<void> {
     const abort = new AbortController();
     const facts = new Facts();
     let logFailed = false;
@@ -294,6 +336,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   }
 
   async function stop(): Promise<void> {
+    showRetry?.abort();
+    showRetry = undefined;
     const r = run;
     if (!r) return;
     run = undefined;
@@ -322,6 +366,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     if (parsed.type === "failure") {
       r.failureLineThisRun = true;
       followerError(r, parsed.error);
+      if (PERMANENT_CODES.has(parsed.error.code)) r.follower.stop(); // a refusal: restarting would fail the same way (§15.2)
       return false;
     }
     if (parsed.type === "invalid") {
