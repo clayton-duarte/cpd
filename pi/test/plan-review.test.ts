@@ -270,6 +270,95 @@ test("an Event-only decision for a review this session has no pending entry for 
   assert.equal(entries(f).at(-1).status, "pending");
 });
 
+// ---- latest only (hs-d224) ----
+
+test("r3 then r4 pending: only r4 blocks; r4 approved leaves the Lead not blocked though r3 stays pending", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  let n = 0;
+  plannotator(f, (req) => (req.action === "plan-review" ? opened(`pn-${++n}`) : undefined));
+  f.planFile("p1", "r3", "# r3\n");
+  f.planFile("p1", "r4", "# r4\n");
+  await lead(f, pending("r3"));
+  f.emit(reviewEvent(101, "r3"));
+  await waitFor("r3 blocks", () => stateCalls(f).includes(REVIEW_LABEL));
+  f.respond("plan-show", pending("r4"));
+  f.emit(reviewEvent(102, "r4"));
+  await waitFor("both entries", () => entries(f).length === 2);
+  assert.deepEqual(stateCalls(f), ["idle", REVIEW_LABEL], "still blocked by r4, no state change");
+
+  f.respond("plan-show", pending("r4", { status: "approved" }));
+  f.emit(decidedEvent(103, "approved", null, "r4"));
+  await waitFor("the decision message", () => decisions(f).length === 1);
+  await waitFor("not blocked", () => stateCalls(f).at(-1) === "idle");
+  assert.equal(entries(f).find((e: any) => e.review === "r3").status, "pending", "r3 is never decided");
+  assert.equal(entries(f).at(-1).review, "r4");
+});
+
+test("a replayed request for an older review does not close the newer reason", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  plannotator(f, (req) => (req.action === "plan-review" ? opened() : undefined));
+  f.planFile("p1", "r2", "# r2\n");
+  await lead(f, pending("r1"));
+  f.emit(reviewEvent(101, "r1"));
+  await waitFor("r1 blocks", () => stateCalls(f).includes(REVIEW_LABEL));
+  f.respond("plan-show", pending("r2"));
+  f.emit(reviewEvent(102, "r2"));
+  await waitFor("both entries", () => entries(f).length === 2);
+  f.emit(reviewEvent(103, "r1")); // a replayed older request must not close the newer reason
+  await settle();
+  assert.deepEqual(stateCalls(f), ["idle", REVIEW_LABEL]);
+});
+
+test("a restart with r3 and r4 entries and plan show reporting r4 approved: not blocked", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  plannotator(f, () => ({ status: "handled", result: { status: "pending" } }));
+  seeded(f, { review: "r3", plannotator_id: "pn-3" });
+  seeded(f, { review: "r4", plannotator_id: "pn-4", status: "approved" });
+  await lead(f, pending("r4", { status: "approved" }));
+  await settle();
+  assert.deepEqual(stateCalls(f), ["idle"]);
+});
+
+test("a restart with r3 and r4 both pending in the session: only r4 blocks, and r4's decision unblocks", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  plannotator(f, () => ({ status: "handled", result: { status: "pending" } }));
+  seeded(f, { review: "r3", plannotator_id: "pn-3" });
+  seeded(f, { review: "r4", plannotator_id: "pn-4" });
+  await lead(f, pending("r4"));
+  await waitFor("blocked", () => stateCalls(f).includes(REVIEW_LABEL));
+  f.respond("plan-show", pending("r4", { status: "approved" }));
+  f.emit(decidedEvent(103, "approved", null, "r4"));
+  await waitFor("not blocked", () => stateCalls(f).at(-1) === "idle");
+});
+
+test("a restart with a single pending latest review still blocks", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  plannotator(f, () => ({ status: "handled", result: { status: "pending" } }));
+  seeded(f, { review: "r3", plannotator_id: "pn-3" });
+  await lead(f, pending("r3"));
+  await waitFor("blocked", () => stateCalls(f).includes(REVIEW_LABEL));
+});
+
+test("a failing plan show at start-up: the session's highest review stands for the latest", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  plannotator(f, () => ({ status: "handled", result: { status: "pending" } }));
+  seeded(f, { review: "r2", plannotator_id: "pn-2" });
+  seeded(f, { review: "r3", plannotator_id: "pn-3" });
+  f.respond("plan-show", { ok: false, error: { code: "store_busy", message: "busy" } }, { exit: 1 });
+  f.load();
+  await f.pi.fire("session_start");
+  await waitFor("blocked", () => stateCalls(f).includes(REVIEW_LABEL));
+  f.emit(decidedEvent(103, "approved", null, "r2")); // not the latest: its reason was never open, nothing changes
+  await settle();
+  assert.deepEqual(stateCalls(f), ["idle", REVIEW_LABEL]);
+});
+
 // ---- recovery ----
 
 const seeded = (f: Fixture, over: Record<string, unknown> = {}) =>

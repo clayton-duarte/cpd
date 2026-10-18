@@ -11,7 +11,7 @@ import { parseLine, PROTOCOL } from "./event.ts";
 import { DEFAULT_TIMING, Follower, type Schedule, type Spawn, type Timing } from "./follower.ts";
 import type { CommandCtx, Ctx, Message, MessageRenderer, PiApi } from "./pi.ts";
 import { parseOpened, parseResult, parseStatus, request } from "./plannotator.ts";
-import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, REVIEW_LABEL, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
+import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, highestReview, REVIEW_LABEL, reviewNumber, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
 import { adapterDir, DEFAULT_POLL_MS, pollAdapter, type Poll, refusal, RELOAD_COMMAND, RELOAD_TRIGGER, validatePackage, type Validation } from "./reload.ts";
 import { Facts, Reporter, stateArgs, type Wanted } from "./state.ts";
 import { CONTEXT_TYPE, contextCursorFrom, contextUpdate, countsOf, parsePending, parsePlanEvents, parseRecordEvents, parseRecords, PLAN_KINDS, summaryLine } from "./updates.ts";
@@ -239,8 +239,10 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       const folded = reviewsFromEntries(entries, plan);
       if (folded.invalid > 0) deliver("session entries", new CpdError("entry_invalid", `${folded.invalid} ${ENTRY_TYPE} entries of this session do not parse and were skipped`));
       r.reviews = folded.reviews;
+      let latest: string | undefined = highestReview(r.reviews.keys()); // stands in when `plan show` fails (§15.5 "Latest only")
       try {
         const show = await call(["plan", "show", "--plan", plan]);
+        latest = isObject(show.review) && typeof show.review.id === "string" ? show.review.id : undefined;
         if (Array.isArray(show.escalations)) {
           for (const q of show.escalations) if (isObject(q) && typeof q.id === "string") facts.open(`escalation:${q.id}`, QUESTION_LABEL);
         }
@@ -248,7 +250,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
         deliver("plan show", e);
       }
       for (const entry of r.reviews.values()) {
-        if (entry.status === "pending") facts.open(`plan-review:${entry.review}`, REVIEW_LABEL);
+        if (entry.status === "pending" && entry.review === latest) facts.open(`plan-review:${entry.review}`, REVIEW_LABEL);
       }
       registerTool();
     }
@@ -357,7 +359,10 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       return;
     }
     if (ev.kind === "plan-review" && ev.data.status === "pending") {
-      void openReview(r, ev.data.review as string, "event").catch((e) => deliver(`plan review ${ev.data.review as string}`, e));
+      supersede(r, ev.data.review as string);
+      void openReview(r, ev.data.review as string, "event")
+        .catch((e) => deliver(`plan review ${ev.data.review as string}`, e))
+        .finally(() => refresh(r));
     }
     if (ev.kind === "plan-review" && (ev.data.status === "approved" || ev.data.status === "rejected")) {
       const entry = r.reviews.get(ev.data.review as string);
@@ -424,6 +429,11 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   // ---- the Plan review through plannotator (§15.5) ----
 
   const planFile = (plan: string, review: string) => join(env.CPD_HOME || join(homedir(), ".cpd"), "run", plan, `plan-${review}.md`);
+
+  /** §15.5 "Latest only": a pending request for `review` closes the reasons of this session's older reviews. It does not report: the caller refreshes once the request is handled, so the Lead does not flicker to `idle` between the two reviews. */
+  function supersede(r: Run, review: string): void {
+    for (const known of r.reviews.keys()) if (reviewNumber(known) < reviewNumber(review)) r.facts.close(`plan-review:${known}`);
+  }
 
   /** Opens a pending review in plannotator. Errors are delivered here; nothing is written to the session on failure. */
   async function openReview(r: Run, review: string, via: "event" | "tool", path?: string): Promise<void> {
