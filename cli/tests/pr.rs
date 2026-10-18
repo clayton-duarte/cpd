@@ -391,7 +391,8 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
     assert_eq!(
         fx.shown_pull_request(),
         json!({"repo": "acme/pay", "number": 812, "url": URL, "title": "Pay the bills", "draft": false, "state": "open",
-               "review_decision": "none", "checks": "none", "created_at": opened_at, "merged_at": null})
+               "review_decision": "none", "checks": "none", "mergeable": "unknown", "merge_state": "unknown",
+               "created_at": opened_at, "merged_at": null})
     );
     let opened = fx.events("pr-opened");
     assert_eq!(opened.len(), 1);
@@ -421,7 +422,8 @@ fn open_keeps_the_row_the_poll_stored_first() {
     assert_eq!(
         fx.shown_pull_request(),
         json!({"repo": "acme/pay", "number": 812, "url": URL, "title": "As the poll wrote it", "draft": true, "state": "open",
-               "review_decision": "approved", "checks": "pending", "created_at": "github time", "merged_at": null})
+               "review_decision": "approved", "checks": "pending", "mergeable": "unknown", "merge_state": "unknown",
+               "created_at": "github time", "merged_at": null})
     );
     let rows: i64 = fx.store().read(|c| Ok(c.query_row("SELECT count(*) FROM pull_requests", [], |r| r.get(0))?)).unwrap();
     assert_eq!(rows, 1);
