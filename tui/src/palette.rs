@@ -163,21 +163,23 @@ pub fn phase(phase: Option<Phase>) -> Meaning {
     }
 }
 
-/// Nerd Font `nf-fa-circle`: a Session that needs the User (coloured by case).
-pub const NEEDS_YOU: &str = "\u{F111}";
-/// Nerd Font `nf-fa-circle_o`: an idle Session.
-pub const IDLE: &str = "\u{F10C}";
-/// Nerd Font `nf-fa-circle_thin`: a stopped Session (dim).
-pub const STOPPED: &str = "\u{F1DB}";
+/// Nerd Font `nf-md-circle_outline` (U+F0766), then `nf-md-circle_slice_1` … `8` (U+F0A9E..U+F0AA5): the 9 frames of one
+/// animation. The working dot and a running Job's pill show one per [`frame`]; the other dots are its first and last.
+/// https://www.nerdfonts.com/cheat-sheet
+pub const SPINNER: [&str; 9] =
+    ["\u{F0766}", "\u{F0A9E}", "\u{F0A9F}", "\u{F0AA0}", "\u{F0AA1}", "\u{F0AA2}", "\u{F0AA3}", "\u{F0AA4}", "\u{F0AA5}"];
 
-/// Nerd Font `nf-md-circle_slice_1` … `8`: the frames of the working dot and of a running Job's pill, one per [`frame`].
-pub const SPINNER: [&str; 8] =
-    ["\u{F0A9E}", "\u{F0A9F}", "\u{F0AA0}", "\u{F0AA1}", "\u{F0AA2}", "\u{F0AA3}", "\u{F0AA4}", "\u{F0AA5}"];
+/// An idle Session: the first frame.
+pub const IDLE: &str = SPINNER[0];
+/// A stopped Session: the first frame, drawn dim.
+pub const STOPPED: &str = IDLE;
+/// A Session that needs the User (coloured by case): the last frame.
+pub const NEEDS_YOU: &str = SPINNER[8];
 
 /// How long one frame of the spinner lasts, in milliseconds.
-const FRAME_MS: u128 = 250;
+const FRAME_MS: u128 = 100;
 
-/// The spinner frame at `now`: `(unix ms / 250) % 8`, one clock for every spinner, so they all turn together.
+/// The spinner frame at `now`: `(unix ms / 100) % 9`, one clock for every spinner, so they all turn together.
 pub fn frame(now: SystemTime) -> usize {
     let ms = now.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
     ((ms / FRAME_MS) % SPINNER.len() as u128) as usize
@@ -308,10 +310,12 @@ mod tests {
 
     #[test]
     fn a_working_dot_turns_with_the_frame_in_the_terminals_foreground() {
-        let glyphs: Vec<_> = (0..9).map(|f| dot_span(Dot::Working, f, false).content.into_owned()).collect();
+        let glyphs: Vec<_> = (0..10).map(|f| dot_span(Dot::Working, f, false).content.into_owned()).collect();
         assert_eq!(glyphs, [SPINNER.to_vec(), vec![SPINNER[0]]].concat());
         assert_eq!(dot_span(Dot::Working, 2, false).style, Style::new());
-        assert_eq!(SPINNER.len(), 8);
+        assert_eq!(SPINNER.len(), 9);
+        assert_eq!((SPINNER[0], SPINNER[8]), ("\u{F0766}", "\u{F0AA5}"));
+        assert_eq!((IDLE, STOPPED, NEEDS_YOU), (SPINNER[0], SPINNER[0], SPINNER[8]));
     }
 
     #[test]
@@ -341,9 +345,9 @@ mod tests {
     }
 
     #[test]
-    fn the_frame_is_the_unix_time_in_quarter_seconds_modulo_eight() {
+    fn the_frame_is_the_unix_time_in_tenths_of_a_second_modulo_nine() {
         let at = |ms: u64| frame(UNIX_EPOCH + std::time::Duration::from_millis(ms));
-        assert_eq!([0, 249, 250, 499, 500, 1750, 1999, 2000, 2250].map(at), [0, 0, 1, 1, 2, 7, 7, 0, 1]);
+        assert_eq!([0, 99, 100, 199, 200, 800, 899, 900, 1000].map(at), [0, 0, 1, 1, 2, 8, 8, 0, 1]);
         assert_eq!(frame(UNIX_EPOCH - std::time::Duration::from_secs(1)), 0, "before the epoch: the first frame");
     }
 

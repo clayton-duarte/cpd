@@ -138,7 +138,7 @@ fn sections() -> Vec<Section> {
         header: None,
         rows: vec![
             vec![plain(palette::NEEDS_YOU), plain("the Session needs you (colour below)")],
-            vec![frames, plain("the Lead is working (one frame every 250 ms)")],
+            vec![frames, plain("the Lead is working (one frame every 100 ms)")],
             vec![dot(Dot::Idle, 0), plain("idle, nothing needed")],
             vec![dot(Dot::Stopped, 0), plain("pi stopped")],
             vec![dot(Dot::Red, 0), plain("red: blocked work (a dialog, an Escalation) in dispatch or pr")],

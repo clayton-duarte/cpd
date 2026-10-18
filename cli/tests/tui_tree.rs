@@ -202,14 +202,22 @@ impl<'a> Pane<'a> {
     }
 
     /// The screen, each row without trailing blanks, without the empty rows at the end. The working dot turns with the
-    /// wall clock (`SPINNER`), so every frame reads as the first: a test cannot know which one it catches.
+    /// wall clock (`SPINNER`), so on the row of the one working Lead (its counters `1⋅1⋅0⋅1⋅2`) every frame reads as
+    /// the first: a test cannot know which one it catches. Elsewhere a glyph is what it is: the last frame is the needs-you dot.
     fn screen(&self) -> Vec<String> {
         let out = self.env.tmux(&["capture-pane", "-p", "-t", SESSION]);
-        let text: String = String::from_utf8(out.stdout)
-            .unwrap()
-            .chars()
-            .map(|c| if SPINNER[1..].iter().any(|g| g.starts_with(c)) { WORKING.chars().next().unwrap() } else { c })
-            .collect();
+        let text: String = String::from_utf8(out.stdout).unwrap();
+        let text: String = text
+            .lines()
+            .map(|l| {
+                if l.trim_end().ends_with("1⋅1⋅0⋅1⋅2") {
+                    l.chars().map(|c| if SPINNER.iter().any(|g| g.starts_with(c)) { WORKING.chars().next().unwrap() } else { c }).collect()
+                } else {
+                    l.to_owned()
+                }
+            })
+            .collect::<Vec<String>>()
+            .join("\n");
         let mut rows: Vec<String> = text.lines().map(|l| l.trim_end().to_owned()).collect();
         while rows.last().is_some_and(String::is_empty) {
             rows.pop();
