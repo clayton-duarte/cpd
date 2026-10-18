@@ -75,8 +75,6 @@ error_codes! {
     TmuxFailed = "tmux_failed" => Failure,
     GhFailed = "gh_failed" => Failure,
     GateError = "gate_error" => Failure,
-    ContextStoreInvalid = "context_store_invalid" => Failure,
-    ContextSyncFailed = "context_sync_failed" => Failure,
     SetupFailed = "setup_failed" => Failure,
     WatchStartFailed = "watch_start_failed" => Failure,
     SpawnFailed = "spawn_failed" => Failure,
@@ -121,7 +119,6 @@ error_codes! {
     RecordNotFound = "record_not_found" => Refused,
     ContextExists = "context_exists" => Refused,
     QuestionAnswered = "question_answered" => Refused,
-    ContextSyncConflict = "context_sync_conflict" => Refused,
     NotAGitRepo = "not_a_git_repo" => Refused,
     PlanExists = "plan_exists" => Refused,
     BranchExists = "branch_exists" => Refused,
@@ -158,7 +155,6 @@ error_codes! {
     PushRejected = "push_rejected" => Refused,
     SessionAmbiguous = "session_ambiguous" => Refused,
     NotALead = "not_a_lead" => Refused,
-    GroundedLead = "grounded_lead" => Refused,
     NoCockpit = "no_cockpit" => Refused,
     WrongPane = "wrong_pane" => Refused,
     InChatSlot = "in_chat_slot" => Refused,
@@ -167,6 +163,7 @@ error_codes! {
     NotATerminal = "not_a_terminal" => Refused,
     ArchiveBlocked = "archive_blocked" => Refused,
     Archived = "archived" => Refused,
+    ItemClosed = "item_closed" => Refused,
 
     // Exit 4: not found.
     ContextNotFound = "context_not_found" => NotFound,
@@ -177,11 +174,13 @@ error_codes! {
     ReviewNotFound = "review_not_found" => NotFound,
     SessionNotFound = "session_not_found" => NotFound,
     BaseNotFound = "base_not_found" => NotFound,
+    ItemNotFound = "item_not_found" => NotFound,
 
     // Exit 5: timeout.
     StoreBusy = "store_busy" => Timeout,
     LockTimeout = "lock_timeout" => Timeout,
     AskTimeout = "ask_timeout" => Timeout,
+    CancelTimeout = "cancel_timeout" => Timeout,
 
     // R34, Plans across repos (contract §1.2, §3.8). `branch_exists` is above.
     PrStartFailed = "pr_start_failed" => Failure,
@@ -332,12 +331,15 @@ mod tests {
             (ErrorCode::LockedJobTampered, 3),
             (ErrorCode::RecordNotFound, 3),
             (ErrorCode::PlanNotFound, 4),
+            (ErrorCode::ItemNotFound, 4),
+            (ErrorCode::ItemClosed, 3),
             (ErrorCode::JobNotFound, 4),
             (ErrorCode::SessionNotFound, 4),
             (ErrorCode::BaseNotFound, 4),
             (ErrorCode::StoreBusy, 5),
             (ErrorCode::LockTimeout, 5),
             (ErrorCode::AskTimeout, 5),
+            (ErrorCode::CancelTimeout, 5),
             (ErrorCode::PrStartFailed, 1),
             (ErrorCode::PrRequired, 2),
             (ErrorCode::InvalidPrId, 2),

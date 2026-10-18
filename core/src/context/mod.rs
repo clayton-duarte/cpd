@@ -1,26 +1,23 @@
 //! Contexts and their records (contract §2.2, §4.6; commands.md §3).
 //!
-//! A Context's records are append-only JSONL in a git repository per Context
-//! (`repo`, `git`); SQLite holds a rebuildable index of them (`contexts`),
-//! and `sync` exchanges the repository with its private remote. The commands
-//! are in this file.
+//! The database tables `contexts` and `context_records` are the only store of
+//! a Context's records; Contexts are machine-local (contract §4.6). The
+//! commands are in this file, the writes in `contexts`.
 //!
 //! Other areas use [`Contexts`]: `plan new` writes its `plan` record with
-//! [`Contexts::write`], and `watch` calls [`Contexts::import_all`] at start-up
-//! and [`Contexts::sync`] with [`Trigger::Engine`] every `context_sync_seconds`.
+//! [`Contexts::write`]. [`legacy`] reads the git stores of earlier versions,
+//! for the store's migration 0007 only.
 
 mod archive;
 mod contexts;
-mod git;
-mod lock;
+pub(crate) mod legacy;
+mod manager;
+mod pending;
 mod record;
 pub(crate) mod render;
 mod rename;
-mod repo;
-mod sync;
 
 use std::fmt;
-use std::path::Path;
 use std::str::FromStr;
 
 use clap::Args;
@@ -31,13 +28,12 @@ use time::macros::format_description;
 
 pub use contexts::{ContextRow, Contexts, Written};
 pub use record::{By, Draft, PlanRef, Record};
-pub use sync::{Synced, Trigger, store_id, store_names};
 
-use crate::args::{PlanArg, Text};
+use crate::args::{PlanArg, Text, Title};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::ids::{ContextId, RecordId, SessionId};
+use crate::ids::{ContextId, RecordId, RecordKind, SessionId};
 use crate::output::Output;
 use crate::store::Store;
 
@@ -57,14 +53,16 @@ pub enum Command {
     Ask(AskArgs),
     /// Record the answer to a question (§3.5)
     Answer(AnswerArgs),
-    /// Sync the Context stores with their remotes (§3.6)
-    Sync(SyncArgs),
     /// Change a Context's title (§3.7)
     Rename(RenameArgs),
     /// Archive the Context with its Plans and their Sessions (§3.8)
     Archive(ArchiveArgs),
     /// Unarchive the Context with its Plans and their Sessions (§3.9)
     Unarchive(UnarchiveArgs),
+    /// Start or resume the Context's Manager (§3.10)
+    Manager(manager::ManagerArgs),
+    /// List the in-flight work of the Context's active Plans (§3.11)
+    Pending(pending::PendingArgs),
 }
 
 /// A Jira Epic key: `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage` (commands.md §3.1).
@@ -143,7 +141,7 @@ pub struct NewArgs {
     id: ContextId,
     /// The title
     #[arg(long, value_name = "text")]
-    title: Text,
+    title: Title,
     /// The Jira Epic key, stored only
     #[arg(long, value_name = "key")]
     jira: Option<Jira>,
@@ -159,6 +157,9 @@ pub struct ShowArgs {
     /// Only the records whose index position is greater
     #[arg(long, value_name = "seq")]
     since: Option<u64>,
+    /// Print this one record in full
+    #[arg(long, value_name = "id", conflicts_with = "since")]
+    record: Option<RecordId>,
 }
 
 #[derive(Args, Debug)]
@@ -199,19 +200,12 @@ pub struct AnswerArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct SyncArgs {
-    /// The Context [default: every Context store]
-    #[arg(long, value_name = "id")]
-    context: Option<ContextId>,
-}
-
-#[derive(Args, Debug)]
 pub struct RenameArgs {
     /// The Context
     id: ContextId,
     /// The new title
     #[arg(long, value_name = "text")]
-    title: Text,
+    title: Title,
 }
 
 #[derive(Args, Debug)]
@@ -240,10 +234,11 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Answer(args) => {
             write("context answer", &args.select, &args.text, Draft::Answer { question: args.question })
         }
-        Command::Sync(args) => sync(args),
         Command::Rename(args) => rename::rename(args),
         Command::Archive(args) => archive::archive(args),
         Command::Unarchive(args) => archive::unarchive(args),
+        Command::Manager(args) => manager::manager(args),
+        Command::Pending(args) => pending::pending(args),
     }
 }
 
@@ -252,12 +247,6 @@ fn now() -> String {
     OffsetDateTime::now_utc()
         .format(format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"))
         .expect("a UTC time always formats")
-}
-
-/// A filesystem failure in a Context store.
-fn io_error(what: &str, path: &Path, e: &std::io::Error) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("Cannot {what} {}: {e}.", path.display()))
-        .with("path", path.display().to_string())
 }
 
 fn open() -> Result<(CpdHome, Config, Store), CpdError> {
@@ -276,16 +265,16 @@ fn session_from_env() -> Result<Option<SessionId>, CpdError> {
         .transpose()
 }
 
-fn context_json(row: &ContextRow, dir: &Path) -> Value {
+fn context_json(row: &ContextRow) -> Value {
     json!({"id": row.id, "title": row.title, "jira": row.jira, "created_at": row.created_at,
-           "created_on": row.created_on, "dir": dir.display().to_string()})
+           "created_on": row.created_on})
 }
 
 /// `context new` (§3.1).
 fn new(args: NewArgs) -> Result<Output, CpdError> {
-    let (home, config, mut store) = open()?;
-    let (row, already) = Contexts::new(&home, &config, &mut store).create(&args.id, &args.title, args.jira.as_ref())?;
-    let mut out = json!({"context": context_json(&row, &home.context_dir(&args.id))});
+    let (_, config, mut store) = open()?;
+    let (row, already) = Contexts::new(&config, &mut store).create(&args.id, &Text::from(args.title.clone()), args.jira.as_ref())?;
+    let mut out = json!({"context": context_json(&row)});
     if already {
         out["already"] = json!(true);
     }
@@ -320,9 +309,7 @@ fn list() -> Result<Output, CpdError> {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             contexts.push(json!({
                 "id": row.id, "title": row.title, "jira": row.jira, "archived_at": row.archived_at,
-                "grounded": row.lead_session.is_some(), "lead_session": row.lead_session,
-                "grounded_seq": row.grounded_seq, "records": records, "open_questions": open_questions,
-                "sync_failing": row.sync_failing, "plans": plans,
+                "records": records, "open_questions": open_questions, "plans": plans,
             }));
         }
         let cursor: i64 = conn.query_row("SELECT coalesce(max(id), 0) FROM events", [], |r| r.get(0))?;
@@ -335,6 +322,9 @@ fn list() -> Result<Output, CpdError> {
 fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let (_, config, mut store) = open()?;
     let id = args.select.resolve(&mut store)?;
+    if let Some(record) = &args.record {
+        return show_record(&mut store, &id, record);
+    }
     let since = args.since.map_or(0, |s| i64::try_from(s).unwrap_or(i64::MAX));
     let (row, records, repos) = store.read(|conn| {
         let row = ContextRow::require(conn, &id)?;
@@ -349,7 +339,7 @@ fn show(args: ShowArgs) -> Result<Output, CpdError> {
         .iter()
         .filter(|(seq, _)| *seq > since)
         .map(|(seq, record)| {
-            let mut v = record.to_json();
+            let mut v = record.to_json_listed();
             v["seq"] = json!(seq);
             if let Some(repos) = repos.get(&record.id.to_string()) {
                 v["repos"] = json!(repos);
@@ -358,9 +348,36 @@ fn show(args: ShowArgs) -> Result<Output, CpdError> {
         })
         .collect();
     Ok(Output::success(json!({
-        "context": {"id": row.id, "title": row.title, "jira": row.jira,
-                    "grounded": row.lead_session.is_some(), "grounded_seq": row.grounded_seq},
+        "context": {"id": row.id, "title": row.title, "jira": row.jira},
         "records": records,
+        "markdown": markdown,
+    })))
+}
+
+/// `context show --record <id>` (§3.3): that one record in full.
+fn show_record(store: &mut Store, context: &ContextId, id: &RecordId) -> Result<Output, CpdError> {
+    let (row, found) = store.read(|conn| {
+        let row = ContextRow::require(conn, context)?;
+        let found = conn
+            .query_row(
+                &format!("SELECT {} FROM context_records WHERE context = ?1 AND id = ?2", Record::COLUMNS),
+                [context.as_str(), id.to_string().as_str()],
+                Record::from_row,
+            )
+            .optional()?;
+        Ok((row, found))
+    })?;
+    let (seq, record) = found.ok_or_else(|| {
+        CpdError::new(ErrorCode::RecordNotFound, format!("Context {context} has no record {id}."))
+            .with("context", context.as_str())
+            .with("record", id.to_string())
+    })?;
+    let markdown = render::single(&row.title, row.jira.as_deref(), &record);
+    let mut v = record.to_json();
+    v["seq"] = json!(seq);
+    Ok(Output::success(json!({
+        "context": {"id": row.id, "title": row.title, "jira": row.jira},
+        "records": [v],
         "markdown": markdown,
     })))
 }
@@ -376,7 +393,7 @@ pub(crate) fn plan_repos(
     let mut stmt = conn.prepare("SELECT repo FROM prs WHERE plan = ?1 AND status <> 'cancelled' ORDER BY key")?;
     let mut out = render::Repos::new();
     for (_, record) in records {
-        let Some(plan) = record.plan() else { continue };
+        let Some(plan) = record.plan().filter(|_| record.kind() == RecordKind::Plan) else { continue };
         let mut repos: Vec<String> = Vec::new();
         if plan.machine == *machine {
             for repo in stmt.query_map([plan.id.as_str()], |r| r.get::<_, String>(0))? {
@@ -393,40 +410,13 @@ pub(crate) fn plan_repos(
 
 /// `context decide`, `note`, `ask` and `answer` (§3.4, §3.5).
 fn write(command: &str, select: &Select, text: &Text, draft: Draft) -> Result<Output, CpdError> {
-    let (home, config, mut store) = open()?;
+    let (_, config, mut store) = open()?;
     let context = select.resolve(&mut store)?;
     let by = By { session: session_from_env()?, plan: select.plan.plan.clone() };
-    let written = Contexts::new(&home, &config, &mut store).write(&context, command, by, text, draft)?;
+    let written = Contexts::new(&config, &mut store).write(&context, command, by, text, draft)?;
     let mut out = json!({"record": written.record.to_json(), "seq": written.seq});
     if written.already {
         out["already"] = json!(true);
     }
     Ok(Output::success(out))
-}
-
-/// `context sync` (§3.6).
-fn sync(args: SyncArgs) -> Result<Output, CpdError> {
-    let (home, config, mut store) = open()?;
-    let mut contexts = Contexts::new(&home, &config, &mut store);
-    if let Some(id) = args.context {
-        let synced = contexts.sync(&id, Trigger::Hand)?;
-        return Ok(Output::success(json!({"contexts": [synced.to_json()]})));
-    }
-    // Every directory, in name order; a failing Context does not stop the others.
-    let mut entries = Vec::new();
-    let mut first_failure: Option<CpdError> = None;
-    for name in store_names(&home)? {
-        let result = store_id(&home, &name).and_then(|id| contexts.sync(&id, Trigger::Hand));
-        match result {
-            Ok(synced) => entries.push(synced.to_json()),
-            Err(e) => {
-                entries.push(json!({"id": name, "error": {"code": e.code(), "message": e.message()}}));
-                first_failure.get_or_insert(e);
-            }
-        }
-    }
-    match first_failure {
-        None => Ok(Output::success(json!({"contexts": entries}))),
-        Some(first) => Err(first.with("contexts", entries)),
-    }
 }

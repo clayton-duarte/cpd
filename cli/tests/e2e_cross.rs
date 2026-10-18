@@ -77,7 +77,7 @@ fn gh(flags: &Path) -> String {
 node() {{
   state="$2"; merged=null
   if [ "$state" = MERGED ]; then merged='"2026-10-15T10:00:00Z"'; fi
-  printf '%s' '{{"repository":{{"nameWithOwner":"acme/repo"}},"number":'"$1"',"url":"https://github.com/acme/repo/pull/'"$1"'","title":"Chain","isDraft":false,"state":"'"$state"'","createdAt":"2026-10-15T09:00:00Z","mergedAt":'"$merged"',"reviewDecision":null,"commits":{{"nodes":[]}}}}'
+  printf '%s' '{{"repository":{{"nameWithOwner":"acme/repo"}},"number":'"$1"',"url":"https://github.com/acme/repo/pull/'"$1"'","title":"Chain","isDraft":false,"state":"'"$state"'","createdAt":"2026-10-15T09:00:00Z","mergedAt":'"$merged"',"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{{"nodes":[]}}}}'
 }}
 case "$1 $2" in
   "pr list") echo '[]' ;;
@@ -97,7 +97,7 @@ case "$1 $2" in
         for n in 11 12 13; do
           if [ -f "$FLAGS/created-$n" ] && [ ! -f "$FLAGS/merged-$n" ]; then nodes="$nodes${{nodes:+,}}$(node $n OPEN)"; fi
         done
-        echo '{{"data":{{"search":{{"issueCount":0,"nodes":['"$nodes"']}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}}}}' ;;
+        echo '{{"data":{{"search":{{"issueCount":0,"nodes":['"$nodes"']}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}}}}' ;;
       *"p0: repository"*)
         data=''; i=0
         for n in $(printf '%s' "$4" | grep -o 'pullRequest(number: [0-9]*' | grep -o '[0-9]*$'); do
@@ -506,17 +506,17 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     let all = fx.wait_event("all-merged", |e| e["data"]["pr"] == "a2");
     assert_eq!(all["data"], json!({"pr": "a2", "merged": ["audit", "wire"], "cancelled": []}));
     let out = fx.ok(&["pr", "open", "--pr", "a2", "--plan", PLAN]);
-    assert_eq!((&out["phase"], &out["pr"]["pr"]["number"]), (&json!("pr"), &json!(13)));
+    assert_eq!((&out["phase"], &out["pr"]["pr"]["number"]), (&json!("deploy"), &json!(13)));
     assert_eq!(fx.git(&fx.shared.origin, &["rev-parse", "refs/heads/cpd/chain/a2"]), wire_tip);
     let moved = of_kind(&fx.events(), "plan-phase").pop().unwrap().clone();
-    assert_eq!(moved["data"]["to"], "pr");
+    assert_eq!(moved["data"]["to"], "deploy");
     assert_eq!(
         moved["data"]["prs"],
         json!([{"key": "a1", "number": 11, "url": "https://github.com/acme/repo/pull/11"},
                {"key": "a2", "number": 13, "url": "https://github.com/acme/repo/pull/13"},
                {"key": "b", "number": 12, "url": "https://github.com/acme/repo/pull/12"}])
     );
-    assert_eq!(fx.ok(&["plan", "show", "--plan", PLAN])["plan"]["phase"], "pr");
+    assert_eq!(fx.ok(&["plan", "show", "--plan", PLAN])["plan"]["phase"], "deploy");
 
     // ---------- 12. GitHub merges a2: plan-done, once (A10)
     fx.github_merges(&fx.shared, "cpd/chain/a2", 13);

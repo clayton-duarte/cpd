@@ -132,7 +132,16 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
             return Ok((End::Failed { cause: Failure::DirtyTarget, detail }, None, None));
         }
         // 4. Tamper check of old...<attempt branch>.
-        let touched = git::touched_protected(repo, &old, &old, &target.branch)?;
+        let pr_base: String = store.read(|conn| {
+            Ok(conn.query_row(
+                "SELECT r.base FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+                   JOIN prs r ON r.plan = j.plan AND r.key = j.pr WHERE a.plan = ?1 AND a.id = ?2",
+                [target.plan.as_str(), target.id.to_string().as_str()],
+                |r| r.get(0),
+            )?)
+        })?;
+        let base_ref = git::tamper::base_ref(repo, &pr_base)?;
+        let touched = git::touched_protected(repo, &old, &base_ref, &old, &target.branch)?;
         if !touched.is_empty() {
             let detail = format!("The diff touches protected paths: {}.", touched.join(", "));
             return Ok((End::Failed { cause: Failure::Tampered, detail }, None, None));

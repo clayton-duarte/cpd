@@ -9,7 +9,7 @@ use std::process::{Child, Stdio};
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, TestEnv};
+use common::{CPD, Run, TestEnv, copy_executable, output, spawn, write_executable};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{Kind, NewEvent, append};
 use cpd_core::home::CpdHome;
@@ -53,7 +53,7 @@ fn session(id: &str) -> SessionId {
 
 /// Contexts `ctx` and `ctx2`; Plans `pay` (Lead `lead1`, Job `api` with Attempt
 /// `api-a1`, Worker `worker1`) and `other` (Lead `lead2`) in `ctx`; and a
-/// grounded Lead `side` in `ctx` with no Plan.
+/// the Manager `side` of `ctx` (no Plan).
 fn fixture(store: &mut Store) {
     store
         .write("fixture", |tx| {
@@ -64,7 +64,7 @@ fn fixture(store: &mut Store) {
                      INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
                        ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead', '/', 'O3', 'idle', 't', 't'),
                        ('lead2', 'lead', 'ctx', 'other', NULL, 'Lead', '/', 'O3', 'idle', 't', 't'),
-                       ('side', 'lead', 'ctx', NULL, NULL, 'Side', '/', 'O3', 'idle', 't', 't'),
+                       ('side', 'manager', 'ctx', NULL, NULL, 'Side', '/', 'O5', 'idle', 't', 't'),
                        ('worker1', 'worker', 'ctx', 'pay', 'api-a1', 'Worker', '/', 'S2', 'working', 't', 't');
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
                        ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't'),
@@ -209,7 +209,7 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("attempt-retry", "cpja", "", &["outcome", "cause", "next_tier"], &["feedback"]),
     ("attempt-nudge", "cpjas", "", &["prompt"], &[]),
     ("all-merged", "cp", "", &["pr", "merged", "cancelled"], &[]),
-    ("pr-feedback", "cp", "", &["pr", "number", "url", "state", "checks", "review_decision", "reasons"], &[]),
+    ("pr-feedback", "cp", "", &["pr", "number", "url", "state", "checks", "review_decision", "mergeable", "merge_state", "conflict", "reasons"], &[]),
     ("pr-added", "cp", "", &["pr", "repo", "base", "needs", "appended"], &[]),
     ("pr-edited", "cp", "", &["pr", "fields"], &[]),
     ("pr-cancelled", "cp", "", &["pr"], &[]),
@@ -228,6 +228,11 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("context-archived", "c", "", &["archived"], &[]),
     ("plan-archived", "cp", "", &["archived"], &[]),
     ("session-archived", "cs", "p", &["archived"], &[]),
+    ("session-message", "cs", "p", &["from", "text", "wake"], &[]),
+    ("inbox-opened", "", "cpjs", &["item", "kind", "urgency", "label"], &[]),
+    ("inbox-closed", "", "cpjs", &["item", "kind"], &[]),
+    ("inbox-snoozed", "", "cpjs", &["item", "until"], &[]),
+    ("inbox-dismissed", "", "cpjs", &["item"], &[]),
     ("watch-started", "", "", &["pid"], &[]),
     ("watch-stopped", "", "", &["pid"], &[]),
     ("error", "", "cpjas", &["source", "code", "message", "details"], &[]),
@@ -515,13 +520,7 @@ fn list_selects_by_plan_context_session_and_kind() {
 #[test]
 fn list_selection_flags_do_not_fall_back_to_the_environment() {
     let env = seeded();
-    let out = env
-        .command(CPD)
-        .args(["events", "list"])
-        .env("CPD_PLAN", "pay")
-        .env("CPD_SESSION", "worker1")
-        .output()
-        .unwrap();
+    let out = output(env.command(CPD).args(["events", "list"]).env("CPD_PLAN", "pay").env("CPD_SESSION", "worker1")).unwrap();
     let json: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(ids(&json["events"]), (1..=11).collect::<Vec<_>>());
 }
@@ -655,14 +654,8 @@ struct Follower {
 
 impl Follower {
     fn start(env: &TestEnv, args: &[&str]) -> Follower {
-        let mut child = env
-            .command(CPD)
-            .args(["events", "follow"])
-            .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+        let mut child =
+            spawn(env.command(CPD).args(["events", "follow"]).args(args).stdout(Stdio::piped()).stderr(Stdio::piped())).unwrap();
         let lines = Some(BufReader::new(child.stdout.take().unwrap()));
         Follower { child, lines }
     }
@@ -828,28 +821,26 @@ fn follow_exits_non_zero_when_the_store_becomes_newer_while_it_is_idle() {
 
 #[test]
 fn follow_re_execs_when_its_binary_is_replaced_and_loses_and_repeats_no_event() {
-    use std::os::unix::fs::PermissionsExt;
     let env = seeded();
     let mut store = open(&env);
     // The follower runs a copy of cpd, which the test then replaces by a wrapper that records its
     // arguments and runs the real cpd.
     let copy = env.root().join("cpd-copy");
-    fs::copy(CPD, &copy).unwrap();
-    let mut child = env
-        .command(copy.to_str().unwrap())
-        .args(["events", "follow", "--plan", "pay", "--since", "11"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    copy_executable(CPD, &copy);
+    let mut child = spawn(
+        env.command(copy.to_str().unwrap())
+            .args(["events", "follow", "--plan", "pay", "--since", "11"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .unwrap();
     let mut follower = Follower { lines: Some(BufReader::new(child.stdout.take().unwrap())), child };
     let a = append_edit(&mut store, "goal");
     assert_eq!(follower.next().unwrap()["id"].as_i64().unwrap(), a);
 
     let recorded = env.root().join("argv");
     let wrapper = env.root().join("cpd-wrapper");
-    fs::write(&wrapper, format!("#!/bin/sh\necho \"$@\" > '{}'\nexec '{CPD}' \"$@\"\n", recorded.display())).unwrap();
-    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&wrapper, &format!("#!/bin/sh\necho \"$@\" > '{}'\nexec '{CPD}' \"$@\"\n", recorded.display()));
     fs::rename(&wrapper, &copy).unwrap();
     let deadline = Instant::now() + Duration::from_secs(20);
     while !recorded.exists() {

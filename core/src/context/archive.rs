@@ -1,5 +1,5 @@
 //! `context archive` and `context unarchive` (commands.md §3.8, §3.9): the
-//! cascade of the `plan` area over the Context's Plans, Sessions and grounded Lead.
+//! cascade of the `plan` area over the Context's Plans, Sessions and Manager.
 
 use super::{ArchiveArgs, ContextRow, UnarchiveArgs, open};
 use crate::error::CpdError;

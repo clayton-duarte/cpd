@@ -547,7 +547,7 @@ fn on_att(env: &TestEnv, repo: &Path, edit: impl FnOnce(&Path)) {
 }
 
 fn touched(repo: &Path) -> Vec<String> {
-    touched_protected(repo, "cpd/pay-4521", "cpd/pay-4521", "att").unwrap()
+    touched_protected(repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap()
 }
 
 #[test]
@@ -568,7 +568,7 @@ fn each_protected_path_is_refused() {
             fs::write(full, "changed\n").unwrap();
         });
         assert_eq!(touched(&repo), vec![path.to_owned()], "{path}");
-        let err = tamper_check(&repo, "cpd/pay-4521", "cpd/pay-4521", "att").unwrap_err();
+        let err = tamper_check(&repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap_err();
         assert_eq!(err.code(), ErrorCode::GateTampered, "{path}");
         assert_eq!(err.details()["paths"], serde_json::json!([path]));
     }
@@ -604,7 +604,7 @@ fn unprotected_paths_pass() {
         }
     });
     assert_eq!(touched(&repo), Vec::<String>::new());
-    tamper_check(&repo, "cpd/pay-4521", "cpd/pay-4521", "att").unwrap();
+    tamper_check(&repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap();
 }
 
 #[test]
@@ -632,7 +632,7 @@ fn the_list_is_read_at_the_lead_branchs_tip_not_the_bases() {
     commit_file(&env, &repo, LIST, "protected = [\"secret.txt\"]\n");
     env.git(&repo, &["switch", "-q", "main"]);
     let base = env.git(&repo, &["merge-base", "cpd/pay-4521", "att"]);
-    assert_eq!(touched_protected(&repo, "cpd/pay-4521", &base, "att").unwrap(), vec!["secret.txt"]);
+    assert_eq!(touched_protected(&repo, "cpd/pay-4521", "main", &base, "att").unwrap(), vec!["secret.txt"]);
 }
 
 #[test]
@@ -660,7 +660,7 @@ fn a_bad_list_file_is_config_invalid() {
         let (_env, repo) = tamper_repo(Some(text));
         let err = protected_list(&repo, "cpd/pay-4521").unwrap_err();
         assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{text}");
-        let err = touched_protected(&repo, "cpd/pay-4521", "cpd/pay-4521", "att").unwrap_err();
+        let err = touched_protected(&repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap_err();
         assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{text}");
     }
 }
@@ -670,4 +670,92 @@ fn an_unknown_lead_branch_is_git_failed() {
     let (_env, repo) = tamper_repo(Some(DEFAULT_LIST));
     let err = protected_list(&repo, "cpd/no-such").unwrap_err();
     assert_eq!(err.code(), ErrorCode::GitFailed);
+}
+
+// A base merge (§7.5): a protected path whose version on the Attempt is the Lead tip's or the
+// base's is allowed.
+
+/// `tamper_repo` plus a commit on `main` writing `path` = `content` (`None`: removing it),
+/// which `att` merges; `cpd/pay-4521` stays where it was, so the base is ahead of the Lead tip.
+fn base_merge_repo(path: &str, content: Option<&str>) -> (TestEnv, PathBuf) {
+    let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
+    match content {
+        Some(content) => {
+            commit_file(&env, &repo, path, content);
+        }
+        None => {
+            env.git(&repo, &["rm", "-q", path]);
+            env.git(&repo, &["commit", "-q", "-m", "remove"]);
+        }
+    }
+    env.git(&repo, &["switch", "-q", "att"]);
+    env.git(&repo, &["merge", "-q", "--no-ff", "-m", "merge the base", "main"]);
+    env.git(&repo, &["switch", "-q", "main"]);
+    (env, repo)
+}
+
+#[test]
+fn a_protected_path_the_attempt_has_as_the_base_has_it_is_allowed() {
+    for path in [".config/wt.toml", ".cpd/x", "verify.sh", "scripts/ci/run.sh"] {
+        let (_env, repo) = base_merge_repo(path, Some("from the base\n"));
+        assert_eq!(touched_protected(&repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap(), Vec::<String>::new(), "{path}");
+        tamper_check(&repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap();
+    }
+}
+
+#[test]
+fn the_repos_own_list_file_is_handled_like_the_others() {
+    let (env, repo) = base_merge_repo(LIST, Some("protected = [\"verify.sh\", \"x/\"]\n"));
+    assert_eq!(touched_protected(&repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap(), Vec::<String>::new());
+    // Changed again to anything else, it is tampered.
+    env.git(&repo, &["switch", "-q", "att"]);
+    commit_file(&env, &repo, LIST, "protected = []\n");
+    env.git(&repo, &["switch", "-q", "main"]);
+    assert_eq!(touched(&repo), vec![LIST]);
+    assert_eq!(touched_protected(&repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap(), vec![LIST]);
+}
+
+#[test]
+fn a_protected_path_changed_to_anything_but_the_bases_or_the_lead_tips_is_tampered() {
+    let (env, repo) = base_merge_repo(".config/wt.toml", Some("from the base\n"));
+    env.git(&repo, &["switch", "-q", "att"]);
+    commit_file(&env, &repo, ".config/wt.toml", "mine\n");
+    env.git(&repo, &["switch", "-q", "main"]);
+    assert_eq!(touched(&repo), vec![".config/wt.toml"]);
+}
+
+#[test]
+fn a_protected_path_that_matches_the_lead_tip_is_allowed() {
+    // The Lead tip gained the file and the Attempt, cut earlier, has the same version.
+    let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
+    env.git(&repo, &["switch", "-q", "cpd/pay-4521"]);
+    commit_file(&env, &repo, ".config/wt.toml", "lead\n");
+    env.git(&repo, &["switch", "-q", "att"]);
+    env.git(&repo, &["merge", "-q", "--no-ff", "-m", "merge the lead", "cpd/pay-4521"]);
+    env.git(&repo, &["switch", "-q", "main"]);
+    let base = env.git(&repo, &["merge-base", "main", "att"]);
+    assert_eq!(touched_protected(&repo, "cpd/pay-4521", "main", &base, "att").unwrap(), Vec::<String>::new());
+}
+
+#[test]
+fn a_protected_file_deleted_on_the_base_and_in_the_attempt_is_allowed() {
+    for path in ["verify.sh", ".config/cpd.toml"] {
+        let (_env, repo) = base_merge_repo(path, None);
+        assert_eq!(touched_protected(&repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap(), Vec::<String>::new(), "{path}");
+    }
+}
+
+#[test]
+fn a_protected_file_deleted_in_the_attempt_alone_is_tampered() {
+    let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
+    on_att(&env, &repo, |r| fs::remove_file(r.join("verify.sh")).unwrap());
+    assert_eq!(touched(&repo), vec!["verify.sh"]);
+}
+
+#[test]
+fn base_ref_is_origin_slash_base_only_with_an_origin() {
+    let (env, repo) = tamper_repo(None);
+    assert_eq!(cpd_core::git::tamper::base_ref(&repo, "main").unwrap(), "main");
+    env.git(&repo, &["remote", "add", "origin", "https://example.invalid/pay.git"]);
+    assert_eq!(cpd_core::git::tamper::base_ref(&repo, "main").unwrap(), "origin/main");
 }
