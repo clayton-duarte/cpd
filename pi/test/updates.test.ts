@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { contextCursorFrom, contextUpdate, parsePending, parsePlanEvents, parseRecords, pendingSection, type ContextRecord, type PendingJob, type PendingPlan, type PlanEvent, type RecordEvent } from "../lib/updates.ts";
+import { contextCursorFrom, contextUpdate, countsOf, parsePending, parsePlanEvents, parseRecords, pendingSection, summaryLine, type ContextRecord, type PendingJob, type PendingPlan, type PlanEvent, type RecordEvent } from "../lib/updates.ts";
 import { Fixture, ID, OTHER, sessionShow, settle, waitFor } from "./fake.ts";
 
 const contextMessage = (event: number | undefined, deliveredTo: string | undefined, customType = "cpd-context") => ({
@@ -38,7 +38,7 @@ test("message: 1 record, in full, with its date; answers and supersedes name the
   assert.equal(m.customType, "cpd-context");
   assert.equal(m.display, true);
   assert.equal(m.content, "Context ctx: 1 new records since your last turn.\n- hs-n1 note (2026-10-17): note 1");
-  assert.deepEqual(m.details, { event: 201, delivered_to: ID, records: ["hs-n1"] });
+  assert.deepEqual(m.details, { event: 201, delivered_to: ID, records: ["hs-n1"], plan_events: 0, plans_pending: 0 });
 
   const both = contextUpdate("ctx", ID, [recordEvent(1), recordEvent(2)], [
     record(1, { id: "hs-n1", kind: "answer", text: "Yes.", question: "hs-q8" }),
@@ -127,7 +127,7 @@ test("a Manager's run with 3 new records by others gets one cpd-context message,
   assert.equal(m.customType, "cpd-context");
   assert.equal(m.display, true);
   assert.equal(m.content, ["Context ctx: 3 new records since your last turn.", ...range(3).map((n) => `- hs-n${n} note (2026-10-17): note ${n}`)].join("\n"));
-  assert.deepEqual(m.details, { event: 204, delivered_to: ID, records: ["hs-n1", "hs-n2", "hs-n3"] });
+  assert.deepEqual(m.details, { event: 204, delivered_to: ID, records: ["hs-n1", "hs-n2", "hs-n3"], plan_events: 0, plans_pending: 0 });
   assert.deepEqual(recordCalls(f), [
     ["events", "list", "--context", "ctx", "--kind", "context-record", "--since", "100"],
     ["context", "show", "--context", "ctx", "--since", String(SEQ0)],
@@ -266,13 +266,13 @@ test("digest: records, then Plans:, one line per Event; details.event is the hig
       "- 2026-10-18T09:02:00Z pay-4522: Job api-1 failed.",
     ].join("\n"),
   );
-  assert.deepEqual(m.details, { event: 302, delivered_to: ID, records: ["hs-n1", "hs-n2"] });
+  assert.deepEqual(m.details, { event: 302, delivered_to: ID, records: ["hs-n1", "hs-n2"], plan_events: 2, plans_pending: 0 });
 });
 
 test("digest: Plan Events alone, or records alone, or none", () => {
   const plansOnly = contextUpdate("ctx", ID, [], [], [planEvent(1)])!;
   assert.equal(plansOnly.content, "Plans:\n- 2026-10-18T09:01:00Z pay-4521: Plan phase 1.");
-  assert.deepEqual(plansOnly.details, { event: 301, delivered_to: ID, records: [] });
+  assert.deepEqual(plansOnly.details, { event: 301, delivered_to: ID, records: [], plan_events: 1, plans_pending: 0 });
   assert.ok(!contextUpdate("ctx", ID, [recordEvent(1)], [record(1)], [])!.content.includes("Plans:"));
   assert.equal(contextUpdate("ctx", ID, [], [], []), undefined);
   assert.equal(contextUpdate("ctx", ID, [recordEvent(1)], [record(1, { by: ID })], []), undefined, "only own records, no Plan Events");
@@ -314,7 +314,7 @@ test("a Manager's run with 2 new records and 3 Plan Events gets one cpd-context 
   assert.equal(m.content.split("\n").filter((l: string) => l === "Plans:").length, 1);
   assert.deepEqual(m.content.split("\n").slice(0, 3), ["Context ctx: 2 new records since your last turn.", "- hs-n1 note (2026-10-17): note 1", "- hs-n2 note (2026-10-17): note 2"]);
   assert.deepEqual(m.content.split("\n").slice(3), ["Plans:", ...range(3).map((n) => `- ${planEvent(n).at} pay-4521: Plan phase ${n}.`)]);
-  assert.deepEqual(m.details, { event: 303, delivered_to: ID, records: ["hs-n1", "hs-n2"] });
+  assert.deepEqual(m.details, { event: 303, delivered_to: ID, records: ["hs-n1", "hs-n2"], plan_events: 3, plans_pending: 0 });
   assert.deepEqual(planCalls(f), [["events", "list", "--context", "ctx", ...["plan-created", "plan-phase", "pr-opened", "pr-merged", "job-failed", "escalation", "plan-done"].flatMap((k) => ["--kind", k]), "--since", "100"]]);
   assert.deepEqual(f.pi.sent, [], "it never starts a turn");
 });
@@ -443,9 +443,9 @@ test("message: Pending work alone is a message; it does not move details.event; 
   const pending = [pplan("p", [ppr([pjob(1, "queued")])])];
   const alone = contextUpdate("ctx", ID, [], [], [], pending)!;
   assert.equal(alone.content.split("\n")[0], "Pending work:");
-  assert.deepEqual(alone.details, { event: 0, delivered_to: ID, records: [] });
+  assert.deepEqual(alone.details, { event: 0, delivered_to: ID, records: [], plan_events: 0, plans_pending: 1 });
   const ownOnly = contextUpdate("ctx", ID, [recordEvent(1)], [record(1, { by: ID })], [], pending)!;
-  assert.deepEqual(ownOnly.details, { event: 201, delivered_to: ID, records: [] });
+  assert.deepEqual(ownOnly.details, { event: 201, delivered_to: ID, records: [], plan_events: 0, plans_pending: 1 });
   const all = contextUpdate("ctx", ID, [recordEvent(1)], [record(1)], [planEvent(1)], pending)!;
   assert.deepEqual(all.content.split("\n").filter((l) => !l.startsWith(" ") && !l.startsWith("- ")), ["Context ctx: 1 new records since your last turn.", "Plans:", "Pending work:"]);
   assert.ok(all.content.indexOf("Plans:") < all.content.indexOf("Pending work:"));
@@ -476,7 +476,7 @@ test("a Manager's turn start with two active Plans gets a Pending work section, 
   assert.equal(lines[0], "Pending work:");
   assert.equal(lines.length, 1 + 1 + 3 + 1 + 10 + 1);
   assert.equal(lines.at(-1), "  and 2 more");
-  assert.deepEqual(m.details, { event: 0, delivered_to: ID, records: [] });
+  assert.deepEqual(m.details, { event: 0, delivered_to: ID, records: [], plan_events: 0, plans_pending: 2 });
   assert.deepEqual(f.calls().filter((c) => c.phase === "start").map((c) => c.argv).filter((a) => a[1] === "pending"), [["context", "pending", "--context", "ctx"]]);
   assert.deepEqual(f.pi.sent, []);
 });
@@ -523,3 +523,22 @@ test("a failed Pending work read omits the message and is reported once without 
   assert.deepEqual(f.pi.errors()[0]!.options, { triggerTurn: false, deliverAs: "followUp" });
 });
 
+
+test("summaryLine: 0, 1 and many of each part; a zero part is left out; nothing else", () => {
+  const line = (records: number, plan_events: number, plans_pending: number) => summaryLine({ records: range(records), plan_events, plans_pending });
+  assert.equal(line(6, 17, 10), "cpd-context: 6 records · 17 Plan Events · 10 Plans pending");
+  assert.equal(line(1, 1, 1), "cpd-context: 1 record · 1 Plan Event · 1 Plan pending");
+  assert.equal(line(0, 17, 10), "cpd-context: 17 Plan Events · 10 Plans pending");
+  assert.equal(line(6, 0, 10), "cpd-context: 6 records · 10 Plans pending");
+  assert.equal(line(6, 17, 0), "cpd-context: 6 records · 17 Plan Events");
+  assert.equal(line(0, 0, 2), "cpd-context: 2 Plans pending");
+  assert.equal(line(0, 1, 0), "cpd-context: 1 Plan Event");
+  assert.equal(line(1, 0, 0), "cpd-context: 1 record");
+});
+
+test("message: details carry the counts: records read, every Plan Event (listed or not), Plans with a PR", () => {
+  const plans = [pplan("a", [ppr([pjob(1, "queued")]), ppr([pjob(2, "queued")], { key: "web" })]), pplan("b", []), pplan("c", [ppr([])])];
+  const m = contextUpdate("ctx", ID, [recordEvent(1), recordEvent(2)], [record(1), record(2, { by: ID })], range(25).map((n) => planEvent(n)), plans)!;
+  assert.deepEqual(m.details, { event: 325, delivered_to: ID, records: ["hs-n1"], plan_events: 25, plans_pending: 2 });
+  assert.equal(summaryLine(countsOf(m.details)!), "cpd-context: 1 record · 25 Plan Events · 2 Plans pending");
+});

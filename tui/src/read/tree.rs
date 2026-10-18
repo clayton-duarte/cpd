@@ -33,7 +33,7 @@ pub struct ContextNode {
     pub archived_at: Option<String>,
     /// Its Plans, oldest first.
     pub plans: Vec<PlanNode>,
-    /// The dot of its row: the greatest dot of its live (not archived) Sessions, `Stopped` with none (§17).
+    /// The dot of its row: its live (not archived) Manager Session's own dot, `Stopped` with none (§17, hs-d215).
     pub dot: Dot,
 }
 
@@ -98,6 +98,11 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
 
         let leads: Vec<SessionNode> = sessions(conn, "s.role = 'lead'", &[])?;
         let mut heads = plan_heads(conn, None)?;
+        // One live Manager per Context (`core/src/context/manager.rs`); the Context row shows its dot.
+        let managers: BTreeMap<ContextId, Dot> = sessions(conn, "s.role = 'manager' AND s.archived_at IS NULL", &[])?
+            .into_iter()
+            .map(|s| (s.context, s.dot))
+            .collect();
 
         let mut stmt = conn
             .prepare("SELECT id, title, jira, archived_at FROM contexts ORDER BY id")?;
@@ -116,15 +121,8 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
                     PlanNode { head, sessions: own }
                 })
                 .collect::<Vec<PlanNode>>();
-            let dot = plans
-                .iter()
-                .flat_map(|p| &p.sessions)
-                .filter(|s| !s.is_archived())
-                .map(|s| s.dot)
-                .max()
-                .unwrap_or(Dot::Stopped);
             contexts.push(ContextNode {
-                dot,
+                dot: managers.get(&context).copied().unwrap_or(Dot::Stopped),
                 title: r.get(1)?,
                 jira: r.get(2)?,
                 records: records.remove(&cid).unwrap_or(0),
