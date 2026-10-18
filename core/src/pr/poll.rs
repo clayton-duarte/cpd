@@ -159,6 +159,7 @@ fn apply(tx: &WriteTxn<'_>, seen: &[PolledPr], present: &[(String, i64)], owned:
         out.changed.push(json!({
             "repo": after.repo, "number": after.number, "state": after.state, "draft": after.draft,
             "checks": after.checks, "review_decision": after.review_decision,
+            "mergeable": after.mergeable, "merge_state": after.merge_state,
         }));
         for (plan, key, _) in owned.iter().filter(|(_, _, row)| row.id == after.id) {
             if polled.state == PrState::Merged {

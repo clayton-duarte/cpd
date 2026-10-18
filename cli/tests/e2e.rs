@@ -63,7 +63,7 @@ case "$1 $2" in
   "api graphql")
     nodes=''
     if [ -e "$created" ]; then
-      nodes='{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"2026-10-14T21:00:00Z","mergedAt":null,"reviewDecision":null,"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}}'
+      nodes='{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"2026-10-14T21:00:00Z","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}}'
     fi
     echo '{"data":{"search":{"issueCount":1,"nodes":['"$nodes"']},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}' ;;
   *) echo "unexpected gh call: $*" >&2; exit 9 ;;
@@ -467,7 +467,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(kinds(&events), ["pr-feedback"]);
     assert_eq!(
         events[0]["data"],
-        json!({"pr": "pay", "number": 7, "url": PR_URL, "state": "open", "checks": "failed", "review_decision": "none", "reasons": ["checks_failed"]})
+        json!({"pr": "pay", "number": 7, "url": PR_URL, "state": "open", "checks": "failed", "review_decision": "none", "mergeable": "unknown", "merge_state": "unknown", "conflict": false, "reasons": ["checks_failed"]})
     );
     let again = fx.ok(&["pr", "poll", "--plan", PLAN]);
     assert_eq!((again["feedback"].clone(), again["changed"].clone()), (json!([]), json!([])));
