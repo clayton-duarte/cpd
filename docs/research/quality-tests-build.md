@@ -2,20 +2,20 @@
 
 Base `e8ad70d` (main at the Plan's start; `origin/main` has since landed Plan dev-speed: `scripts/cargo.sh` sccache, `pr_cleanup.rs`, `prune_script.rs`). Machine: 16 cores, 62 GB, load 10-28 during every measurement (other Workers were building; hs-d136), so absolute times are pessimistic and noisy; every number says its N.
 
-**Summary.** The suite is sound: three full `scripts/cargo.sh test --workspace` runs (1105 passed, 0 failed, 1 ignored each) and a fourth pass over the test binaries, plus 25 runs of the four most timing-sensitive binaries at load 34-37 (16 extra busy loops) and one run with 4 binaries in parallel, produced **no failure and no flake**. Every documented command (64 of 64 in commands.md §2) and every error code (116 of 116) appears in some test; the harness isolates `HOME`, `CPD_HOME`, tmux and git. What is wrong is small: one test that cannot fail on its own claim (`job.rs:964`), test runs that are killed leave tmux servers, processes and 51 temp directories behind (observed now), about 63 s of fixed sleeps in 36 places that assert "nothing happened" or an upper time bound (they can pass vacuously or flake under load, not observed), and no enforcement that a test cannot reach the real `gh`/`pi`/network (hs-d27: it holds today by convention). The build is cheap to iterate (an edit in `core/` rebuilds in 3.6 s, in `tui/` in 1.9 s) but slow to start (clean dev 27 s, clean release 65 s, of which the bundled SQLite C compile is 61 s) and heavy on disk (a test build is **4.4 GB per worktree**, 3.3 GB of it 44 test binaries of 75-104 MB). The largest, cheapest speed-ups: run the test binaries in parallel (**175-200 s -> 54 s**, measured), and `debug = "line-tables-only"` in the dev profile (**4.4 GB -> 2.2 GB, clean test build 45 s -> 31 s**, measured on the env var, N=1). Nine compiler warnings (6 in the build, 3 in tests) are never gated.
+**Summary.** The suite is sound: three full `scripts/cargo.sh test --workspace` runs (1105 passed, 0 failed, 1 ignored each) and a fourth pass over the test binaries, plus 25 runs of the four most timing-sensitive binaries at load 34-37 (16 extra busy loops) and one run with 4 binaries in parallel, produced **no failure and no flake**. Every documented command (64 of 64 in commands.md §2) and every error code (116 of 116) appears in some test; the harness isolates `HOME`, `CPD_HOME`, tmux and git. What is wrong is small but real: nine tests start the engine, which runs the **real `gh`** (found by running the suite with a logging `gh` shim on `PATH`; hs-d27 says no test needs `gh` or the network, and the harness does not enforce it), one test cannot fail on its own claim (`job.rs:964`), killed test runs leave tmux servers, processes and 51 temp directories behind (observed now), and about 63 s of fixed sleeps in 36 places assert "nothing happened" or an upper time bound (they can pass vacuously or flake under load; not observed). The build is cheap to iterate (an edit in `core/` rebuilds in 3.6 s, in `tui/` in 1.9 s) but slow to start (clean dev 27 s, clean release 65 s median; in the one release build timed with `--timings`, the bundled SQLite C compile was 60.7 s of 82.3 s) and heavy on disk (a test build is **4.4 GB per worktree**, 3.3 GB of it 44 test binaries of 75-104 MB). The largest, cheapest speed-ups: run the test binaries in parallel (**175-200 s -> 54 s**, measured), and `debug = "line-tables-only"` in the dev profile (**4.4 GB -> 2.2 GB, clean test build 45 s -> 31 s**, measured on the env var, N=1). Nine compiler warnings (6 in the build, 3 in tests) are never gated.
 
 ## Findings
 
 | id | class | what | size |
 |---|---|---|---|
-| tests-build-W1 | Work | `edit_pr_refusals_write_nothing` counts the store's writes and never compares them | Job |
-| tests-build-W2 | Work | A killed test run leaves tmux servers, processes and `/tmp/cpd-test-*` directories (51 dirs, 1 server now) | Job |
-| tests-build-W3 | Work | 36 fixed sleeps (about 63 s) and 3 elapsed-time upper bounds: absence tests can pass vacuously, bounds can flake under load | Job |
-| tests-build-W4 | Work | Nothing stops a test from reaching the real `gh`, `pi` or network: ambient env and the real `PATH` pass through (hs-d27 by convention only) | Job |
+| tests-build-W1 | Work | Nine tests (7 in `tui.rs`, 2 in `session.rs`) start the engine, which runs the real `gh`; nothing in the harness forbids it (hs-d27) | Job |
+| tests-build-W2 | Work | `edit_pr_refusals_write_nothing` counts the store's writes and never compares them | Job |
+| tests-build-W3 | Work | A killed test run leaves tmux servers, processes and `/tmp/cpd-test-*` directories (51 dirs, 1 server now) | Job |
+| tests-build-W4 | Work | 36 fixed sleeps (about 63 s) and 3 elapsed-time upper bounds: absence tests can pass vacuously, bounds can flake under load | Job |
 | tests-build-W5 | Work | ETXTBSY is worked around per file (`driver_reload.rs`), not in `TestEnv::fake` | Job |
 | tests-build-F1 | Fast | Cargo runs the 44 test binaries one after another: 175-200 s; run in parallel they take 54 s | Job |
 | tests-build-F2 | Fast | Dev profile carries full debug info: 4.4 GB per worktree; `line-tables-only` halves it and cuts the clean test build by a third | Job |
-| tests-build-F3 | Fast | Release clean build: `libsqlite3-sys` compiles for 61 s of 82 s on the critical path | Job (covered by dev-speed if sccache is installed) |
+| tests-build-F3 | Fast | Release clean build: `libsqlite3-sys` compiles for 60.7 s of 82.3 s on the critical path (timed run) | Job (covered by dev-speed if sccache is installed) |
 | tests-build-F4 | Fast | The slowest tests wait on constants the tests cannot shorten: whole-second engine tick, `PI_STOP` = 10 s; `e2e_cross` takes 20.7 s | Plan |
 | tests-build-F5 | Fast | 40 integration-test binaries, each 75-104 MB: 3.3 GB of the 4.4 GB | Plan |
 | tests-build-F6 | Fast | One core unit test is the whole core unit-test time (3.3 s alone, 6.1 s in the suite) | Job |
@@ -25,7 +25,23 @@ Base `e8ad70d` (main at the Plan's start; `origin/main` has since landed Plan de
 
 ## Work
 
-### tests-build-W1: a test that cannot fail on its own claim
+### tests-build-W1: nine tests start the engine, and the engine runs the real `gh`
+
+- **What.** `cpd tui` starts the engine in the cockpit's `watch` window, and the engine's E5 step polls GitHub from its first tick (`gh api graphql ... search(type: ISSUE, query: "is:pr is:open author:@me ...")`). Seven tests of `tui.rs` and two of `session.rs` start a cockpit (hence the engine) without installing a fake `gh`, so the real `gh` on the developer's `PATH` runs, on the network, with whatever `GH_TOKEN`/`GITHUB_TOKEN` is in the environment. The tests still pass because the engine tolerates a failed poll: nothing notices. This is the hs-d27 violation ("nothing in a test needs ... gh, network"), and nothing in the harness prevents it: `TestEnv::command` removes only `CPD_*`, `PI_*`, `GIT_*`, `XDG_*`, `TMUX`, `TMUX_PANE` and puts `bin/` first on the **real** `PATH`, so `GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`, `SSH_AUTH_SOCK` and proxy variables reach every spawned `cpd`.
+- **Where.** The tests (listed below); the missing guard `cli/tests/common/mod.rs:122-134`.
+- **Evidence.** The suite's 44 executables run once with a directory first on `PATH` holding shims `gh pi curl wget ssh chezmoi claude` that log `$SHIM_TAG $PWD $0 $*` and exit 99 (`GH_TOKEN=shimcheck`, env otherwise as above):
+  ```
+  $ cat shim.log | cut -c1-150 | sort | uniq -c      # 9 lines, all gh, all "api graphql -f query=query { search(type: ISSUE, query: "is:pr is:open author:@me archived:false sort:created-asc" ...
+  tag=session-...  pwd=/tmp/cpd-test-jedsQR/cpd-home  .../shim/gh api graphql ...   (2 lines)
+  tag=tui-...      pwd=/tmp/cpd-test-9IxQYL/cpd-home  .../shim/gh api graphql ...   (7 lines)
+  ```
+  The calls come from the engine started by these tests (each run alone with `--exact`, 1 call each): `tui`: `a_killed_view_respawns_at_once_and_the_engine_stays_dead`, `tui_adds_a_missing_statusbar_to_an_existing_main_then_resets_the_layout`, `tui_brings_the_last_chat_lead_into_a_new_slot`, `tui_builds_main_in_a_cockpit_that_has_only_a_park_window`, `tui_builds_the_cockpit_once_and_starts_the_engine`, `tui_respawn_restarts_every_live_view_and_no_lead_or_engine`, `tui_respawns_a_dead_pane_of_the_layout_in_place_and_sets_the_hook_again`; `session`: `e2_kills_the_window_of_a_dead_parked_lead`, `e2_replaces_a_dead_lead_in_the_chat_slot_by_the_placeholder`. All other 42 binaries made no call to any shim. `grep -n 'fake_gh\|fake("gh"' cli/tests/tui.rs` is empty. Without the shim the call goes to GitHub (I did not run that: the shim run is the proof). The ambient `CPD_HOME` stayed empty after all passes, so no test used the real store.
+- **Impact.** On a machine with a `gh` login or a token in the environment, `cargo test` queries GitHub as the developer 1-9 times per run (a GraphQL search costs rate-limit points: the poll reports `rateLimit { cost remaining }`), the tests behave differently with and without network (hs-d27's reason), and CI (`gh` unauthenticated) takes the failure path every time. The failed-poll error path is exercised by accident, not asserted.
+- **Proposed fix.** (1) Install a fake `gh` (answering the empty search) in the helper these tests share before `cpd tui`; (2) make it impossible to forget: `TestEnv::new` installs deny-by-default `gh`, `pi`, `curl`, `wget`, `ssh` in `bin/` (exit 97, "no fake installed") that `fake()` overwrites, and `command` removes `GH_*`, `GITHUB_*`, `SSH_*`, `*_PROXY`. Acceptance: the shim run above logs nothing.
+- **Size.** Job.
+- **Overlap.** None (hs-d27 is the policy; AGENTS.md "prose is not enforcement"). Cross-area (engine): the engine polls with nothing to poll (quality-engine.md notes E5's period).
+
+### tests-build-W2: a test that cannot fail on its own claim
 
 - **What.** `edit_pr_refusals_write_nothing` records `(txns, evs)` before a series of refused `job edit --pr` calls and never reads them again. Its name says the refusals write nothing; the test checks only the error codes and details. A refusal that wrote a txn or an Event would pass. The compiler says so on every build.
 - **Where.** `cli/tests/job.rs:964-991`, the binding at `cli/tests/job.rs:972`. Compare `cli/tests/job.rs:957-960` (the previous test does assert `(count(txns), count(events)) == (txns, evs)`).
@@ -42,7 +58,7 @@ Base `e8ad70d` (main at the Plan's start; `origin/main` has since landed Plan de
 - **Size.** Job (minutes).
 - **Overlap.** None.
 
-### tests-build-W2: a killed test run leaves tmux servers, processes and temp directories
+### tests-build-W3: a killed test run leaves tmux servers, processes and temp directories
 
 - **What.** `TestEnv` cleans up in `Drop` (`cli/tests/common/mod.rs:262-266`: `tmux kill-server`; `TempDir` removes the directory). A test process that is SIGKILLed or timed out (a Worker's Attempt ends) runs no `Drop`. Observed now: one private tmux server and its pane processes survive for hours, and 51 `/tmp/cpd-test-*` directories (about 23 MB) are left from four killed runs. `docs/research/teardown.md` recorded `/tmp/cpd-test-*` as 0 ("TestEnv removes its directory"): that holds only for runs that end normally.
 - **Where.** `cli/tests/common/mod.rs:262-266` (the only teardown); `cli/tests/common/mod.rs:58-60` (the socket name carries the test process pid, `cpdt-<pid>-<n>`).
@@ -64,7 +80,7 @@ Base `e8ad70d` (main at the Plan's start; `origin/main` has since landed Plan de
 - **Size.** Job.
 - **Overlap.** hs-n27 / hs-n35 (deferred teardown gaps) are about runtime teardown, not tests; Plan dev-speed `cleanup` (`scripts/prune-worktrees.sh`, hs-n78) is the natural home of a sweep; `docs/research/teardown.md` line 21 (claims 0).
 
-### tests-build-W3: fixed sleeps and elapsed-time bounds
+### tests-build-W4: fixed sleeps and elapsed-time bounds
 
 - **What.** Two kinds of timing dependence (hs-d31: a flaky test is never acceptable):
   1. **Absence after a fixed sleep.** 36 unconditional `thread::sleep` of 0.3-5 s, about **63 s** in total, before an assertion that something did *not* happen ("a1 is not merged: nothing starts, however many ticks pass", "the engine does not try again", "the source is still working"). If the engine or tmux is slower than the sleep (load 40 happens, hs-d136), the assertion passes without having exercised the case: the test cannot fail for the right reason. Examples: `pr_start.rs:548` (2.5 s) and `:599` (3.5 s), `session.rs:455`, `:466` (3 s each) and `:1380`, `session_reload.rs:202`, `:222`, `:251`, `:282`, `watch.rs:461`, `:511`, `:584`, `:635`, `:711`, `:734`, `:750`, `e2e_cross.rs:424`, `:529`, `review_job.rs:416` (5 s), `driver_reload.rs:316` (4 s), `merge.rs:659`, `:925`, `:947`, `tui_tree.rs:369`, `:383`, `:481`, `:663`, `:719`, `tui_plan.rs:473`, `:552`, `tui_logs.rs:243`, `tui.rs:264`, `events.rs:737`, `host.rs:176`, `git.rs:450`.
@@ -76,23 +92,13 @@ Base `e8ad70d` (main at the Plan's start; `origin/main` has since landed Plan de
 - **Size.** Job per file group; the whole list is a Plan of three Jobs.
 - **Overlap.** hs-n12 (the tui_logs flake, fixed by hardening) is a different cause (interleaved fake-tmux calls) and is fixed in `common/mod.rs:fake`. Fast overlap: F4.
 
-### tests-build-W4: nothing enforces hs-d27 (no real `gh`, `pi`, network, `$HOME`)
-
-- **What.** `TestEnv::command` removes only variables starting `CPD_`, `PI_`, `GIT_`, `XDG_` and `TMUX`/`TMUX_PANE`, then puts `bin/` first on `PATH` *in front of the real `PATH`*. So `GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`, `SSH_AUTH_SOCK`, `NPM_*`, proxy variables reach every spawned `cpd`, and a test that forgets `fake_gh()`/`fake_pi()` runs the real program with the developer's credentials (HOME is the test home, but a token variable is enough for `gh`).
-- **Where.** `cli/tests/common/mod.rs:122-134` (scrub and `PATH`).
-- **Evidence.** Static: every test file that runs a `pr open|poll|rebase|merge` command installs a fake `gh` (`for f in cli/tests/*.rs ...` check: the one hit, `events.rs`, is a table of event field names, not a command). Dynamic: the whole suite (44 binaries, env scrubbed of `TMUX`/`CPD_*`, `GH_TOKEN`/`GITHUB_TOKEN` set to `shimcheck`) with a directory in front of `PATH` holding shims `gh pi curl wget ssh chezmoi claude` that log and exit 99: SHIMRESULT. Run with an empty temporary `CPD_HOME` as the ambient value: it was still empty after all four passes (no test used the ambient `CPD_HOME`).
-- **Impact.** Today no test reaches the outside (see evidence), so this is a missing guard, not a bug: the next test written without a fake would reach the network on one developer's machine and not on CI (CI has no `gh` auth), a classic "passes on CI, fails locally" or the reverse.
-- **Proposed fix.** `TestEnv::new` installs deny-by-default shims for `gh`, `pi`, `curl`, `wget`, `ssh` in `bin/` (exit 97, message "no fake installed"); `fake()` overwrites them. Remove `GH_*`, `GITHUB_*`, `SSH_*`, `*_PROXY` from the child env in `command`.
-- **Size.** Job.
-- **Overlap.** None (hs-d27 is the policy; this is its enforcement, AGENTS.md "prose is not enforcement").
-
 ### tests-build-W5: ETXTBSY is handled per file, not in the harness
 
 - **What.** A script written by `fs::write` and executed soon after can fail with `Text file busy` when another thread forks between the open and the close (the child holds the write fd until it execs). The project knows: production code retries (`core/src/host/exe.rs:372-378`), one unit test dodges it by running `/bin/sh` (`exe.rs:411-413`), and `driver_reload.rs` serialises all its tests with a mutex ("The tests run one at a time", `driver_reload.rs:8-9`, `:28`). `TestEnv::fake` writes a script (`common/mod.rs:221`) and every other binary runs its tests in parallel threads that spawn processes, with no such protection.
 - **Where.** `cli/tests/common/mod.rs:200-224`; `cli/tests/driver_reload.rs:8-9,28`.
 - **Evidence.** The race is real in this repo (the three places above). In 4 full passes (4 x 1105 tests) and 25 stress runs there was no `Text file busy` in any output (`grep -i 'text file busy' /tmp/.../suite-*.log` empty). The exposure in `fake` is therefore **unverified**: the window is a few microseconds and the script runs much later.
-- **Impact.** A rare, load-dependent failure, which hs-d31 forbids; the mutex in `driver_reload.rs` also costs time (in the suite its tests take 7-11 s each but 1.3-2.2 s alone: they wait for the lock, see F4).
-- **Proposed fix.** Write the file under a temp name, `fsync`/`close`, and `rename` it into place from `fake` (rename does not help ETXTBSY by itself, the retry does): retry the *spawn* of fakes in the harness is not possible since cpd spawns them; the robust fix is the one the repo already uses in `Exe`: one `write_script` helper that creates the file, then does `sync_all` and a small retry on `ETXTBSY` of a `--version`-style probe execution before the test continues. Alternatively keep as is and record the decision.
+- **Impact.** A rare, load-dependent failure, which hs-d31 forbids; the mutex in `driver_reload.rs` also costs time (in the suite its tests take 7-11 s each but 1.3-2.2 s alone: they wait for the lock, see the slowest-tests table).
+- **Proposed fix.** One `write_script` helper in `common/` (create, write, `sync_all`, close) used by `fake` and by the tests that write executables, and a short retry on `ETXTBSY` where the repo itself spawns them (as `Exe::check_store` does, `exe.rs:372-378`); then drop the `ONE_AT_A_TIME` mutex of `driver_reload.rs` if its tests stay green 3 times in a row (hs-d31). Or record the decision to keep the per-file workaround.
 - **Size.** Job.
 - **Overlap.** None.
 
@@ -116,7 +122,7 @@ All on the worktree's own `target/`, `scripts/cargo.sh`, no sccache (not install
 | full suite `test --workspace --no-fail-fast` (wall, 3 runs; sum of binary times 168 s median) | 3 | 200.5, 175.0, 179.3 | 179.3 | 200.5 |
 | the same binaries run 4 at a time (`xargs -P 4`) | 1 | 53.6 | - | - |
 
-Clean build critical path (`cargo build --workspace --timings`, `cargo-timing.html` of the dev build): `cpd-core` 14.4 s (starts at 12.4 s, after `libsqlite3-sys` 7.7 s and `minijinja` 5.3 s), then `cpd-tui` 5.1 s; the other 150 units overlap. The release build's critical path is `libsqlite3-sys` (61 s).
+Clean build critical path (`cargo build --workspace --timings`, `cargo-timing.html` of the dev build): `cpd-core` 14.4 s (starts at 12.4 s, after `libsqlite3-sys` 7.7 s and `minijinja` 5.3 s), then `cpd-tui` 5.1 s; the other 150 units overlap. The release build's critical path is `libsqlite3-sys` (60.7 s in the timed run of 82.3 s; the other two runs took 60.5 and 64.7 s in total, so the share varies with load).
 
 **Per test binary** (the harness's own "finished in", 3 full-suite runs; binaries run one after another):
 
@@ -224,8 +230,8 @@ The three `driver_reload` tests with "in-suite" 7-11 s and "alone" 1.3-2.2 s are
 
 - **What.** The long tests are long because of values they cannot shorten: the engine's `tick_seconds` is a whole number of seconds (the e2e tests set `tick_seconds = 1`, `e2e_cross.rs:159`, `e2e.rs:111`), so every hand-off through the engine costs 1-2 s; `PI_STOP` is 10 s (`core/src/session/run.rs:39`) and `session_reload.rs:257` asserts it (`>= 10 s`); `session.rs:455,466` sleep 3 s twice.
 - **Where.** `core/src/watch/engine.rs:213` (the tick nap), `core/src/session/run.rs:39`, the tests above.
-- **Evidence.** `e2e_cross` alone: 20.66 s median (N=5), 6 steps through the engine; `watch.rs e5_...` 7.35 s; `session_reload ...ten_seconds...` 11.61 s; the sleeps of W3 total 63 s. See the tables above.
-- **Impact.** About 90 s of the serial suite (e2e_cross + session_reload + the e5 tests + the fork test), wall time that does not scale with the machine.
+- **Evidence.** `e2e_cross` alone: 20.66 s median (N=5) for a Plan across two repos with three Jobs and a review Job (I infer each hand-off waits for a 1 s tick; not measured per step); `watch.rs e5_...` 7.35 s; `session_reload ...ten_seconds...` 11.61 s; the sleeps of W4 total 63 s. See the tables above.
+- **Impact.** The five longest binaries (e2e_cross, session_reload, driver_reload, session, pr: 20.8 + 12.1 + 11.7 + 11.2 + 11.0 = 66.8 s of the 168 s median sum) are the ones that wait on these constants and on the polls of W4; that wall time does not shrink with a faster machine.
 - **Proposed fix.** Decide with the User (contract change): a sub-second tick and a configurable `PI_STOP` in `[timeouts]` for tests (`fork_quiet_seconds` already is), or wake the engine on a store Event instead of the next tick.
 - **Size.** Plan (contract §3.7, commands §12, config).
 - **Overlap.** Cross-area (engine): `docs/research/quality-engine.md` engine-F/W notes on the tick; the E5 timing (`quality-engine.md:123`) is the same period question.
@@ -254,8 +260,8 @@ The three `driver_reload` tests with "in-suite" 7-11 s and "alone" 1.3-2.2 s are
 
 ### tests-build-G1: nine warnings and nothing gates them
 
-- **What.** Seven are dead code, one an unused variable pair, one an unused method in a test helper. None fails the build or CI.
-- **Where.** `core/src/plan/row.rs:42` (`PlanPr` fields `key repo base lead_branch lead_worktree pull_request all_merged_at` never read), `:57` (`PlanRow` fields `title jira pr ...` never read), `:160` (`PlanRow::to_json` never used), `:174` (`row::query` never used); `tui/src/plan/actions.rs:30` (field `run_command` never read), `:44` (`Actions::open_lead` never used); tests: `cli/tests/store.rs:954` (`KillOnDrop::into_inner` never used), `cli/tests/job.rs:972` (two unused variables: this is W1).
+- **What.** Seven are dead code (six in the libraries, one unused method in a test helper), two are the unused variables of W2. None fails the build or CI.
+- **Where.** `core/src/plan/row.rs:42` (`PlanPr` fields `key repo base lead_branch lead_worktree pull_request all_merged_at` never read), `:57` (`PlanRow` fields `title jira pr ...` never read), `:160` (`PlanRow::to_json` never used), `:174` (`row::query` never used); `tui/src/plan/actions.rs:30` (field `run_command` never read), `:44` (`Actions::open_lead` never used); tests: `cli/tests/store.rs:954` (`KillOnDrop::into_inner` never used), `cli/tests/job.rs:972` (two unused variables: this is W2).
 - **Evidence.** `scripts/cargo.sh build --workspace` (clean): `warning: multiple fields are never read --> core/src/plan/row.rs:42:9`, `... row.rs:57:9`, `method to_json is never used --> row.rs:160:12`, `function query is never used --> row.rs:174:15`, `field run_command is never read --> tui/src/plan/actions.rs:30:5`, `method open_lead is never used --> tui/src/plan/actions.rs:44:12`; `... cpd-tui (lib) generated 2 warnings`, `cpd-core (lib) generated 4 warnings`. `scripts/cargo.sh test --workspace --no-run` adds the three test warnings. `grep -n 'warnings\|RUSTFLAGS' .github/workflows/ci.yml package.json .config/wt.toml scripts/cargo.sh`: no `-D warnings`.
 - **Impact.** The dead `PlanRow` read path (`find`/`load` are used, `query`/`to_json` are not) suggests `plan show`/`plan list` read the table another way; the warning that hides W1 shows nobody reads warnings.
 - **Proposed fix.** Delete the dead items after checking nothing in flight needs them (`tui/src/plan/actions.rs` came with the plan view; its `open_lead` is the tab click that the tree later replaced: unverified); fix the test warnings; then gate: `RUSTFLAGS=-D warnings` in the CI build step and in `scripts/cargo.sh`'s Gate use (or `[workspace.lints.rust] warnings = "deny"`), with the reason written.
@@ -267,7 +273,7 @@ The three `driver_reload` tests with "in-suite" 7-11 s and "alone" 1.3-2.2 s are
 - **What.** The same helpers are redefined in many test files, with different constants: `wait_until` in 10 files (and 6 variants named `wait`, `wait_for`, `wait_status`, `wait_end`, `wait_event`, `wait_screen`), deadlines 10 s (7 uses), 20 s (3), 30 s (13), 60 s (6); `fn refused(run: &Run, code: &str, exit: i32) -> Value` identical in `ask.rs attempt.rs job.rs plan.rs pr_start.rs review_job.rs session.rs`; `sql` in 12 files; `write_config` in 5; `fake_cpd` in 5 variants.
 - **Where.** e.g. `cli/tests/{tui_logs,tui,pr_start,session,tui_plan,plan,tui_statusbar,watch,session_reload,driver_reload}.rs` (`wait_until`); `common/mod.rs` has none of them.
 - **Evidence.** `grep -ln 'fn wait_until' cli/tests/*.rs | wc -l` = 10; `grep -ln 'fn refused(run: &Run, code: &str, exit: i32) -> Value' cli/tests/*.rs` = 7 files; `grep -c 'fn sql(' cli/tests/*.rs | grep -vc ':0'` = 12; `grep -rn 'from_secs(\(10\|20\|30\|60\))' cli/tests/*.rs | grep -i 'deadline\|elapsed'` counts above.
-- **Impact.** One wait policy would mean one place to make waits load-proof (W3) and one message format; today a 10 s deadline (`host.rs:55`, `tui_worker.rs:138`, `tui_history.rs:123`) sits beside 60 s ones. 24 k lines of tests; AGENTS.md DRY.
+- **Impact.** One wait policy would mean one place to make waits load-proof (W4) and one message format; today a 10 s deadline (`host.rs:55`, `tui_worker.rs:138`, `tui_history.rs:123`) sits beside 60 s ones. 24 k lines of tests; AGENTS.md DRY.
 - **Proposed fix.** `common::wait_until(what, timeout, f)` with one default (30 s), `common::refused`, `TestEnv::sql`; migrate file by file.
 - **Size.** Job per 5 files; Plan for all.
 - **Overlap.** None.
@@ -287,8 +293,8 @@ The three `driver_reload` tests with "in-suite" 7-11 s and "alone" 1.3-2.2 s are
 - **Flake record.** 4 full passes (3 `cargo test --workspace`, 1 per-binary), 1 parallel pass, 25 stress runs at load 34-37: 0 failures, 0 `Text file busy`. The hs-n12 fix holds: `TestEnv::fake` claims call numbers with `O_EXCL` and publishes `<n>.done` last (`common/mod.rs:200-224`), and `tui_logs` passed 5 of 5 under stress and in every full pass.
 - **The harness** (`cli/tests/common/mod.rs`): `HOME` and `CPD_HOME` per test, a private tmux server per `TestEnv` killed on drop, `TMUX_TMPDIR` private, git global/system config off, `CPD_*`/`PI_*`/`GIT_*`/`XDG_*`/`TMUX*` removed, fake `pi`/`gh` that record argv (`harness.rs` tests all of that, 8 tests). With an empty temporary `CPD_HOME` set in the ambient environment, the directory was still empty after every pass: no test used the ambient one.
 - **Contract coverage.** All 64 commands of commands.md §2 are exercised by some test (`command_index.rs` also checks that each exists in clap); 116 of 116 error codes appear in a test (the five not found by string, `migration_failed`, `store_tampered`, `tmux_failed`, `spawn_failed`, `not_awaiting_review`, are covered by `ErrorCode::` variants in `store.rs:707,608`, `driver/worker.rs:371`, ... or are the removed code of `commands.md:2008`). I found **no** named contract behaviour without a test in the areas I probed (commands, error codes, events table `events.rs:200-218`); this is a probe, not a proof.
-- **Waits poll with a deadline and a message** (`wait_until(what, ...)` prints what it waited for and the screen), not blind sleeps, in the 16 files that wait on a state; panics name the Attempt id and log path (`review_job.rs:179`).
-- **Incremental builds are fast** (core edit 3.6 s, tui edit 1.9 s, N=10) and the dev build has six crates' worth of parallelism; the workspace pins every dependency once in `Cargo.toml:11-26` with a reason in `docs/implementing.md`; the dependency tree has two upstream duplicates only (`hashbrown`, `syn`).
+- **Waits poll with a deadline and a message** (`wait_until(what, ...)` panics with what it waited for; the screen-based ones also print the screen, `tui_worker.rs:138`), not blind sleeps, in the 16 files that wait on a state; panics name the Attempt id and log path (`review_job.rs:179`).
+- **Incremental builds are fast** (core edit 3.6 s, tui edit 1.9 s, N=10); the workspace pins every dependency once in `Cargo.toml:11-26` with a reason in `docs/implementing.md`; the dependency tree has two upstream duplicates only (`hashbrown`, `syn`).
 - **Tests that cannot reach the machine:** `cargo_script.rs` and `harness.rs` test their scripts with stub `PATH`s; the one `#[ignore]` (`exe.rs:424`) is a child-process helper that the parent test runs on purpose (it is why every run says "1 ignored").
 
 ## Method
@@ -308,4 +314,4 @@ Commands (all from the worktree):
 - Size: `size -A`, `strip -o`, `nm --size-sort -S -C target/release/cpd`, grouped by a script over the demangled names.
 - Dependencies: `scripts/cargo.sh tree --workspace --depth 1`, `... -d`, `-e normal`.
 - Static: `grep -rn 'sleep\|Duration::from' cli/tests`, `grep` for `set_var`, helper names, `#[ignore]`; a script that lists `#[test]` functions without any assertion-like call (16 hits; read the six suspicious ones: only `job.rs:964` cannot fail on its claim); error-code and command coverage by string search in `cli/tests` and `core/src`/`tui/src`.
-- Context: `cpd context show` (read-only) for hs-d11, hs-d27, hs-d31, hs-d63, hs-d136, hs-d137, hs-d157, hs-n12, hs-n78, hs-q5.
+- Context: `cpd context show` (read-only, against the live store as the Spec allows) for hs-d11, hs-d27, hs-d31, hs-d63, hs-d136, hs-d137, hs-d157, hs-n12, hs-n78, hs-q5.
