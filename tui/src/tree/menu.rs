@@ -24,6 +24,7 @@ pub enum Item {
     Close,
     NewContext,
     Unarchive,
+    CopyId,
 }
 
 impl Item {
@@ -38,6 +39,7 @@ impl Item {
             Item::Close => "Close",
             Item::NewContext => "New Context…",
             Item::Unarchive => "Unarchive",
+            Item::CopyId => "Copy id",
         }
     }
 }
@@ -71,10 +73,10 @@ impl Kind {
     /// The items, in order (commands.md §13.2).
     pub fn items(self) -> &'static [Item] {
         match self {
-            Kind::Context => &[Item::NewPlan, Item::Rename, Item::Archive],
-            Kind::Plan => &[Item::NewSession, Item::Rename, Item::Archive],
-            Kind::Fork => &[Item::Open, Item::Rename, Item::Fork, Item::Close, Item::Archive],
-            Kind::Archived => &[Item::Rename, Item::Unarchive],
+            Kind::Context => &[Item::NewPlan, Item::Rename, Item::CopyId, Item::Archive],
+            Kind::Plan => &[Item::NewSession, Item::Rename, Item::CopyId, Item::Archive],
+            Kind::Fork => &[Item::Open, Item::Rename, Item::Fork, Item::CopyId, Item::Close, Item::Archive],
+            Kind::Archived => &[Item::Rename, Item::CopyId, Item::Unarchive],
             Kind::Empty => &[Item::NewContext],
         }
     }
@@ -212,11 +214,11 @@ mod tests {
 
     #[test]
     fn each_kind_has_the_items_of_the_contract() {
-        assert_eq!(labels(Kind::Context), ["New Plan…", "Rename…", "Archive"]);
-        assert_eq!(labels(Kind::Plan), ["New session…", "Rename…", "Archive"]);
-        assert_eq!(labels(Kind::Fork), ["Open", "Rename…", "Fork…", "Close", "Archive"]);
+        assert_eq!(labels(Kind::Context), ["New Plan…", "Rename…", "Copy id", "Archive"]);
+        assert_eq!(labels(Kind::Plan), ["New session…", "Rename…", "Copy id", "Archive"]);
+        assert_eq!(labels(Kind::Fork), ["Open", "Rename…", "Fork…", "Copy id", "Close", "Archive"]);
         assert_eq!(labels(Kind::Empty), ["New Context…"]);
-        assert_eq!(labels(Kind::Archived), ["Rename…", "Unarchive"]);
+        assert_eq!(labels(Kind::Archived), ["Rename…", "Copy id", "Unarchive"]);
     }
 
     #[test]
@@ -252,7 +254,7 @@ mod tests {
         for _ in 0..9 {
             press(&mut menu, KeyCode::Down);
         }
-        assert_eq!(menu.selected(), 4);
+        assert_eq!(menu.selected(), 5);
         assert_eq!(press(&mut menu, KeyCode::Enter), Outcome::Pick(Item::Archive));
         assert_eq!(press(&mut menu, KeyCode::Up), Outcome::Stay);
         assert_eq!(press(&mut menu, KeyCode::Enter), Outcome::Pick(Item::Close));
@@ -270,11 +272,11 @@ mod tests {
 
     #[test]
     fn the_box_is_at_the_click_and_clamped_inside_the_pane() {
-        let menu = |x, y| Menu::new(Kind::Context, vec![], Position::new(x, y)); // 3 items, widest `New Plan…` (9)
-        assert_eq!(menu(5, 2).rect(PANE), Rect::new(5, 2, 13, 5));
-        assert_eq!(menu(40, 2).rect(PANE), Rect::new(31, 2, 13, 5), "moved left");
-        assert_eq!(menu(5, 10).rect(PANE), Rect::new(5, 7, 13, 5), "moved up");
-        assert_eq!(menu(43, 11).rect(PANE), Rect::new(31, 7, 13, 5));
+        let menu = |x, y| Menu::new(Kind::Context, vec![], Position::new(x, y)); // 4 items, widest `New Plan…` (9)
+        assert_eq!(menu(5, 2).rect(PANE), Rect::new(5, 2, 13, 6));
+        assert_eq!(menu(40, 2).rect(PANE), Rect::new(31, 2, 13, 6), "moved left");
+        assert_eq!(menu(5, 10).rect(PANE), Rect::new(5, 6, 13, 6), "moved up");
+        assert_eq!(menu(43, 11).rect(PANE), Rect::new(31, 6, 13, 6));
         let pane = Rect::new(2, 3, 8, 4);
         assert_eq!(menu(0, 0).rect(pane), Rect::new(2, 3, 8, 4), "cut to a pane smaller than the box");
         assert_eq!(menu(9, 9).rect(pane), Rect::new(2, 3, 8, 4));
@@ -282,15 +284,15 @@ mod tests {
 
     #[test]
     fn the_hit_test_tells_items_border_and_outside() {
-        let menu = Menu::new(Kind::Fork, vec![], Position::new(5, 2)); // widest `Rename…` (7): x 5..=15, y 2..=8
+        let menu = Menu::new(Kind::Fork, vec![], Position::new(5, 2)); // widest `Rename…` (7): x 5..=15, y 2..=9
         let hit = |x, y| menu.hit(PANE, Position::new(x, y));
         assert_eq!(hit(6, 3), Hit::Item(0));
         assert_eq!(hit(10, 3), Hit::Item(0));
-        assert_eq!(hit(9, 7), Hit::Item(4));
-        for (x, y) in [(5, 2), (10, 2), (5, 5), (15, 5), (10, 8), (15, 8)] {
+        assert_eq!(hit(9, 8), Hit::Item(5));
+        for (x, y) in [(5, 2), (10, 2), (5, 5), (15, 5), (10, 9), (15, 9)] {
             assert_eq!(hit(x, y), Hit::Border, "({x}, {y})");
         }
-        for (x, y) in [(4, 3), (16, 3), (6, 1), (6, 9), (0, 0), (43, 11)] {
+        for (x, y) in [(4, 3), (16, 3), (6, 1), (6, 10), (0, 0), (43, 11)] {
             assert_eq!(hit(x, y), Hit::Outside, "({x}, {y})");
         }
         assert_eq!(hit(14, 3), Hit::Item(0), "the last column inside");
@@ -299,27 +301,27 @@ mod tests {
     #[test]
     fn a_click_picks_an_item_ignores_the_border_and_closes_outside() {
         let mut menu = Menu::new(Kind::Fork, vec![], Position::new(5, 2));
-        assert_eq!(menu.click(PANE, Position::new(7, 6)), Outcome::Pick(Item::Close));
-        assert_eq!(menu.selected(), 3);
+        assert_eq!(menu.click(PANE, Position::new(7, 7)), Outcome::Pick(Item::Close));
+        assert_eq!(menu.selected(), 4);
         assert_eq!(menu.click(PANE, Position::new(7, 2)), Outcome::Stay);
         assert_eq!(menu.click(PANE, Position::new(30, 10)), Outcome::Close);
     }
 
     #[test]
     fn the_menu_is_drawn_as_a_bordered_box_over_what_is_there() {
-        let mut terminal = Terminal::new(TestBackend::new(20, 6)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(20, 7)).unwrap();
         let menu = Menu::new(Kind::Context, vec![], Position::new(3, 1));
         terminal
             .draw(|f| {
-                f.render_widget(Paragraph::new("xxxxxxxxxxxxxxxxxxxx\n".repeat(6)), f.area());
+                f.render_widget(Paragraph::new("xxxxxxxxxxxxxxxxxxxx\n".repeat(7)), f.area());
                 menu.draw(f, f.area());
             })
             .unwrap();
         let buf = terminal.backend().buffer();
-        let rows: Vec<String> = (0..6).map(|y| (0..20).map(|x| buf[(x, y)].symbol()).collect()).collect();
+        let rows: Vec<String> = (0..7).map(|y| (0..20).map(|x| buf[(x, y)].symbol()).collect()).collect();
         assert_eq!(
             rows,
-            ["xxxxxxxxxxxxxxxxxxxx", "xxx┌───────────┐xxxx", "xxx│ New Plan… │xxxx", "xxx│ Rename…   │xxxx", "xxx│ Archive   │xxxx", "xxx└───────────┘xxxx"]
+            ["xxxxxxxxxxxxxxxxxxxx", "xxx┌───────────┐xxxx", "xxx│ New Plan… │xxxx", "xxx│ Rename…   │xxxx", "xxx│ Copy id   │xxxx", "xxx│ Archive   │xxxx", "xxx└───────────┘xxxx"]
                 .map(|r| r.chars().take(20).collect::<String>()),
         );
         assert!(buf[(5, 2)].modifier.contains(Modifier::REVERSED), "the selected item");

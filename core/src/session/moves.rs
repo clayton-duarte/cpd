@@ -139,6 +139,7 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
     let spawn = lead_spawn(&env.home, &id, &plan, Path::new(&source.cwd));
     let (window, pane) = tmux.new_window(&cockpit, &park_window(&id, Some(&plan)), &spawn)?;
     tmux.set_pane_session(&pane, &id)?;
+    tmux.set_pane_title(&pane, &name)?;
     env.store.write("session fork", |tx| moved(tx, &row, &pane, &window, "parked"))?;
     Ok(Output::success(json!({"session": {
         "id": id, "name": name, "plan": plan, "forked_from": source.id, "pane": pane.as_str(), "window": window.as_str(),
@@ -194,6 +195,7 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
             let spawn = lead_spawn(&env.home, &lead.id, &plan, Path::new(&lead.cwd));
             let (window, pane) = tmux.new_window(&cockpit, &park_window(&lead.id, Some(&plan)), &spawn)?;
             tmux.set_pane_session(&pane, &lead.id)?;
+            tmux.set_pane_title(&pane, &env.store.read(|conn| lead.title(conn))?)?;
             (pane, window)
         }
     };

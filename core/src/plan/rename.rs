@@ -3,29 +3,33 @@
 use rusqlite::OptionalExtension;
 use serde_json::json;
 
+use super::lead::retitle;
 use super::{Env, RenameArgs, plan_not_found};
 use crate::error::CpdError;
 use crate::events::{Kind, NewEvent, append};
-use crate::ids::ContextId;
+use crate::ids::{ContextId, SessionId};
 use crate::output::Output;
 
 pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let title = args.title.as_str();
     let mut env = Env::open()?;
-    let (context, old) = env
+    let (context, old, lead) = env
         .store
         .read(|conn| {
             Ok(conn
-                .query_row("SELECT context, title FROM plans WHERE id = ?1", [id.as_str()], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                .query_row("SELECT context, title, lead_session FROM plans WHERE id = ?1", [id.as_str()], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
                 })
                 .optional()?)
         })?
         .ok_or_else(|| plan_not_found(&id))?;
     let context = ContextId::parse(&context)?;
     let mut out = json!({"plan": {"id": id, "context": context, "title": title}});
+    let lead = SessionId::parse(&lead)?;
     if old == title {
+        // A rerun repairs the pane's header too.
+        retitle(&env, &lead, title)?;
         out["already"] = json!(true);
         return Ok(Output::success(out));
     }
@@ -36,5 +40,6 @@ pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
         append(tx, event)?;
         Ok(())
     })?;
+    retitle(&env, &lead, title)?;
     Ok(Output::success(out))
 }
