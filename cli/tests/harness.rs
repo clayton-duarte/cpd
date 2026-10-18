@@ -157,3 +157,152 @@ fn no_fake_sleeps_longer_than_sleep_seconds() {
     }
     assert!(found.is_empty(), "fakes must sleep at most SLEEP_SECONDS ({SLEEP_SECONDS}):\n{}", found.join("\n"));
 }
+
+// ---- teardown: a dropped or killed test leaves no tmux server, process, dir or reaper ----
+
+const HELPER_GATE: &str = "CPD_HARNESS_KILLED_TEST_HELPER";
+const WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// What a helper env put up: the dir and the pids of its tmux server, a detached process
+/// under its cwd and a detached process with the dir in its command line.
+struct Up {
+    dir: std::path::PathBuf,
+    pids: Vec<(&'static str, u32)>,
+}
+
+fn put_up(env: &TestEnv) -> Up {
+    let out = env.tmux(&["new-session", "-d", "-s", "t", "sleep 100"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let tmux = String::from_utf8(env.tmux(&["display-message", "-p", "#{pid}"]).stdout).unwrap();
+    let detached = |cmd: &mut std::process::Command| {
+        cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap().id()
+    };
+    // Under the dir by its cwd only.
+    let by_cwd = detached(env.command("setsid").args(["sleep", "100"]));
+    // Under the dir by its command line only (a shell loop that never execs).
+    let marker = env.root().join("driver");
+    let by_cmdline = detached(
+        env.command("setsid")
+            .args(["sh", "-c", "while :; do sleep 1; done"])
+            .arg(&marker)
+            .current_dir("/"),
+    );
+    Up {
+        dir: env.root().to_owned(),
+        pids: vec![("tmux server", tmux.trim().parse().unwrap()), ("cwd process", by_cwd), ("cmdline process", by_cmdline)],
+    }
+}
+
+fn alive(pid: u32) -> bool {
+    // A zombie is dead; an unreadable /proc entry is gone.
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .is_ok_and(|s| s.rsplit_once(") ").is_some_and(|(_, rest)| !rest.starts_with('Z') && !rest.starts_with('X')))
+}
+
+/// Every live process whose command line mentions `dir` (the reaper's is `sh <dir>/teardown.sh watch <pid>`).
+fn processes_mentioning(dir: &std::path::Path) -> Vec<u32> {
+    let needle = dir.to_string_lossy().into_owned().into_bytes();
+    std::fs::read_dir("/proc")
+        .unwrap()
+        .filter_map(|e| e.ok()?.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| {
+            std::fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|c| c.windows(needle.len()).any(|w| w == needle.as_slice()))
+        })
+        .collect()
+}
+
+/// Waits up to WAIT until nothing of `up` is left; returns what is left otherwise.
+fn leftovers_after_wait(up: &Up) -> Vec<String> {
+    let start = std::time::Instant::now();
+    loop {
+        let mut left: Vec<String> = up.pids.iter().filter(|(_, p)| alive(*p)).map(|(n, p)| format!("{n} {p}")).collect();
+        if up.dir.exists() {
+            left.push(format!("dir {}", up.dir.display()));
+        }
+        left.extend(processes_mentioning(&up.dir).into_iter().map(|p| format!("process {p} (reaper?) mentioning the dir")));
+        if left.is_empty() || start.elapsed() > WAIT {
+            return left;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Not a test of its own: the child process the killed-test test kills. Does nothing
+/// unless the gate variable is set.
+#[test]
+fn killed_test_helper() {
+    if std::env::var_os(HELPER_GATE).is_none() {
+        return;
+    }
+    let env = TestEnv::new();
+    let up = put_up(&env);
+    // libtest prints "test <name> ... " first, without a newline.
+    println!();
+    println!("DIR {}", up.dir.display());
+    for (name, pid) in &up.pids {
+        println!("PID {name}|{pid}");
+    }
+    println!("READY");
+    std::thread::sleep(std::time::Duration::from_secs(SLEEP_SECONDS));
+    drop(env);
+}
+
+#[test]
+fn a_killed_test_leaves_no_tmux_server_process_dir_or_reaper() {
+    use std::io::{BufRead, BufReader};
+
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "killed_test_helper", "--nocapture", "--test-threads=1"])
+        .env(HELPER_GATE, "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut dir = None;
+    let mut pids = Vec::new();
+    for line in BufReader::new(child.stdout.take().unwrap()).lines() {
+        let line = line.unwrap();
+        if line == "READY" {
+            break;
+        }
+        if let Some(d) = line.strip_prefix("DIR ") {
+            dir = Some(std::path::PathBuf::from(d));
+        } else if let Some(p) = line.strip_prefix("PID ") {
+            let (name, pid) = p.split_once('|').unwrap();
+            pids.push((match name { "tmux server" => "tmux server", "cwd process" => "cwd process", _ => "cmdline process" }, pid.parse().unwrap()));
+        }
+    }
+    let up = Up { dir: dir.expect("the helper printed no DIR"), pids };
+    assert_eq!(up.pids.len(), 3, "the helper printed no READY with its pids");
+    assert!(up.pids.iter().all(|(_, p)| alive(*p)), "everything is up before the kill");
+    assert!(up.dir.exists());
+    assert!(!processes_mentioning(&up.dir).is_empty(), "the reaper is up before the kill");
+
+    child.kill().unwrap(); // SIGKILL: no Drop runs
+    child.wait().unwrap();
+
+    let left = leftovers_after_wait(&up);
+    assert!(left.is_empty(), "a killed test left behind: {left:?}");
+}
+
+#[test]
+fn a_dropped_env_leaves_no_tmux_server_process_dir_or_reaper() {
+    let env = TestEnv::new();
+    let up = put_up(&env);
+    assert!(up.pids.iter().all(|(_, p)| alive(*p)));
+    assert!(!processes_mentioning(&up.dir).is_empty(), "the reaper is up before the drop");
+    drop(env);
+    assert!(!up.dir.exists(), "the dir is removed when drop returns");
+    let left = leftovers_after_wait(&up);
+    assert!(left.is_empty(), "a dropped env left behind: {left:?}");
+}
+
+#[test]
+fn teardown_is_idempotent_and_spares_the_test_process() {
+    let env = TestEnv::new();
+    env.teardown();
+    env.teardown();
+    assert!(!env.root().exists());
+    assert!(alive(std::process::id()));
+}

@@ -5,9 +5,11 @@
 //! - [`render`]: the plan markdown of `plan render` and `plan review`;
 //! - [`lead`]: Lead windows in the cockpit (`plan new`, `plan phase plan`);
 //! - [`archive`]: `plan archive` and `unarchive`, and the cascade `context archive` shares;
+//! - [`cancel`]: `plan cancel`, which abandons a Plan;
 //! - `new`, `list`, `show`, `phase`, `review`, `lock`: the commands.
 
 pub mod archive;
+mod cancel;
 pub mod fingerprint;
 pub mod jobs;
 mod lead;
@@ -61,6 +63,8 @@ pub enum Command {
     Archive(ArchiveArgs),
     /// Unarchive the Plan, its Lead and its side forks (§4.11)
     Unarchive(UnarchiveArgs),
+    /// Cancel the Plan's Jobs and pull requests, close its Lead, archive it (§4.12)
+    Cancel(CancelArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -169,6 +173,15 @@ pub struct UnarchiveArgs {
     plan: PlanArg,
 }
 
+#[derive(clap::Args, Debug)]
+pub struct CancelArgs {
+    #[command(flatten)]
+    plan: PlanArg,
+    /// Why [default: plan cancelled]
+    #[arg(long, value_name = "text")]
+    reason: Option<Text>,
+}
+
 pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
         Command::New(args) => new::new(args),
@@ -182,6 +195,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Rename(args) => rename::rename(args),
         Command::Archive(args) => archive::plan_archive(args),
         Command::Unarchive(args) => archive::plan_unarchive(args),
+        Command::Cancel(args) => cancel::plan_cancel(args),
     }
 }
 
