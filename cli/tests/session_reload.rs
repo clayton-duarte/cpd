@@ -66,6 +66,14 @@ impl Fixture {
         fs::read_to_string(self.path("installed.runs")).map(|t| t.lines().map(str::to_owned).collect()).unwrap_or_default()
     }
 
+    /// A new pi: `install/current-version` rewritten by rename, as pi's own update does.
+    fn activate_pi(&self, version: &str) {
+        let current = self.path(".pi/agent/install/current-version");
+        let new = current.with_extension("tmp");
+        fs::write(&new, format!("{version}\n")).unwrap();
+        fs::rename(&new, &current).unwrap();
+    }
+
     /// A new install: a new file renamed over the copy.
     fn install(&self) {
         let new = self.installed.with_extension("new");
@@ -117,6 +125,9 @@ fn start_with(state: &str, on_term: &str) -> Fixture {
     fs::create_dir_all(&sessions).unwrap();
     let session_file = sessions.join(format!("2026_{LEAD}.jsonl"));
     fs::write(&session_file, FINISHED).unwrap();
+    let current_version = env.home().join(".pi/agent/install/current-version");
+    fs::create_dir_all(current_version.parent().unwrap()).unwrap();
+    fs::write(&current_version, "1.2.0\n").unwrap();
 
     let home_dir = env.home().display().to_string();
     env.fake_pi(&format!(
@@ -161,6 +172,24 @@ fn a_parked_idle_lead_restarts_its_pi_on_its_session_file_after_an_install() {
     assert!(calls[1].windows(2).any(|w| w == ["--session", &session_file]), "{:?}", calls[1]);
     assert_eq!(f.runs(), [format!("{pid} session run {LEAD}")], "the same process re-execed the new file");
     assert_eq!(f.pane_pid(), pid);
+    f.env.tmux(&["kill-window", "-t", &f.pane]);
+}
+
+#[test]
+fn a_parked_idle_lead_restarts_its_pi_on_its_session_file_after_pi_changes() {
+    let f = start("idle");
+    let session_file = f.session_file.display().to_string();
+    assert!(f.signals().is_empty());
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(f.env.calls("pi").len(), 1, "nothing changed, pi runs on");
+
+    f.activate_pi("1.3.0");
+
+    wait_until("pi restarted", || f.env.calls("pi").len() == 2);
+    assert_eq!(f.signals(), "TERM\n", "the old pi got SIGTERM once");
+    let calls = f.env.calls("pi");
+    assert!(calls[1].windows(2).any(|w| w == ["--session", &session_file]), "{:?}", calls[1]);
+    assert!(f.runs().is_empty(), "cpd was not reinstalled");
     f.env.tmux(&["kill-window", "-t", &f.pane]);
 }
 

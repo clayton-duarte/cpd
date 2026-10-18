@@ -20,7 +20,7 @@ use super::row::{self, Role, Row, State};
 use super::{Env, RunArgs, bad_row, not_a_lead, state};
 use crate::config::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
-use crate::host::exe::Exe;
+use crate::host::exe::{Exe, Watched};
 use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs, Plannotator};
 use crate::host::{PaneId, Tmux};
 use crate::ids::{PlanId, SessionId};
@@ -73,6 +73,8 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
             plannotator: &plannotator,
             start,
         });
+        // Recorded right before pi starts: a change after it is a pi the Lead has not run yet.
+        let pi_install = dirs.watch_install();
         let mut child = Command::new(&launch.argv[0])
             .args(&launch.argv[1..])
             .envs(&launch.env)
@@ -99,8 +101,10 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
             if !recorded {
                 recorded = record_file(&mut env, &dirs, &row.id)?;
             }
-            if exe.replaced() && reload_due(&mut env, &dirs, &row.id)? {
-                print!("  new cpd installed: restarting pi for {}…\n", row.name);
+            let pi_changed = pi_install.as_ref().is_some_and(Watched::changed);
+            if (exe.replaced() || pi_changed) && reload_due(&mut env, &dirs, &row.id)? {
+                let what = if exe.replaced() { "cpd" } else { "pi" };
+                print!("  new {what} installed: restarting pi for {}…\n", row.name);
                 let _ = std::io::stdout().flush();
                 // The adapter reports `stopped` at `session_shutdown`; this process does not.
                 stop_pi(&mut child, PI_STOP);
@@ -154,7 +158,7 @@ fn reload(exe: &Exe, id: &SessionId) -> CpdError {
     exe.exec(["session", "run", id.as_str()])
 }
 
-/// A new cpd is installed and the Lead is at a safe point (§6.7 "Reload on
+/// A new cpd or pi is installed and the Lead is at a safe point (§6.7 "Reload on
 /// install"): reads the Session and its file, and decides with [`reload_now`].
 fn reload_due(env: &mut Env, dirs: &PiDirs, id: &SessionId) -> Result<bool, CpdError> {
     let row = env.store.read(|conn| row::load(conn, id))?;

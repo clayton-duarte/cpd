@@ -28,6 +28,28 @@ impl Identity {
     }
 }
 
+/// Any file whose replacement is a change: its path and its identity when recorded.
+/// Same test as [`Exe::replaced`], without the `exec`.
+#[derive(Clone, Debug)]
+pub struct Watched {
+    path: PathBuf,
+    identity: Identity,
+}
+
+impl Watched {
+    /// Records the identity of `path`; `None` when it cannot be stat'ed now.
+    pub fn at(path: PathBuf) -> Option<Watched> {
+        let identity = Identity::of(&path).ok()?;
+        Some(Watched { path, identity })
+    }
+
+    /// The path holds another file than when recorded. A path that cannot be
+    /// stat'ed now is not a change.
+    pub fn changed(&self) -> bool {
+        Identity::of(&self.path).is_ok_and(|now| now != self.identity)
+    }
+}
+
 /// The path of this process's executable and its identity when the process started.
 #[derive(Clone, Debug)]
 pub struct Exe {
@@ -122,6 +144,41 @@ mod tests {
         fs::remove_file(&path).unwrap();
         assert!(!exe.replaced());
         assert_eq!(Exe::at(path).unwrap_err().code(), ErrorCode::SpawnFailed);
+    }
+
+    #[test]
+    fn a_watched_file_renamed_over_or_rewritten_in_place_has_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("current-version");
+        assert!(Watched::at(path.clone()).is_none(), "nothing to watch yet");
+        fs::write(&path, "1.2.0\n").unwrap();
+        let renamed = Watched::at(path.clone()).unwrap();
+        assert!(!renamed.changed());
+        let new = dir.path().join("current-version.tmp");
+        fs::write(&new, "1.3.0\n").unwrap();
+        fs::rename(&new, &path).unwrap();
+        assert!(renamed.changed());
+
+        let rewritten = Watched::at(path.clone()).unwrap();
+        assert!(!rewritten.changed());
+        let then = fs::metadata(&path).unwrap().modified().unwrap();
+        fs::File::options().write(true).open(&path).unwrap().set_modified(then + std::time::Duration::from_secs(2)).unwrap();
+        assert!(rewritten.changed());
+    }
+
+    #[test]
+    fn a_watched_file_that_is_missing_has_not_changed_and_one_that_comes_back_has() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("current-version");
+        fs::write(&path, "1.2.0\n").unwrap();
+        let watched = Watched::at(path.clone()).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert!(!watched.changed());
+        // The inode may be reused and the clock coarse: give the new file its own mtime.
+        fs::write(&path, "1.3.0\n").unwrap();
+        let then = fs::metadata(&path).unwrap().modified().unwrap();
+        fs::File::options().write(true).open(&path).unwrap().set_modified(then + std::time::Duration::from_secs(2)).unwrap();
+        assert!(watched.changed());
     }
 
     #[test]
