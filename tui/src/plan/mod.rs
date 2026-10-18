@@ -1,7 +1,7 @@
 //! The `plan` view (commands.md §13.2, §17): the centre-top pane of the cockpit, ported from the cockpit of branch
 //! `cpd/cpd-ui` (`tui/src/flow.rs`, `pr.rs`, `workers.rs`) onto the read model of [`crate::read`].
 //!
-//! It shows the Plan of the Lead in the chat slot as one box per PR ([`boxes`], R34 A15), left to right by the PRs'
+//! It shows the Plan of the Lead in the chat slot as one box per PR ([`boxes`], R34 A15), top to bottom by the PRs'
 //! needs, each holding the left-to-right flow chart of its Jobs ([`flow`]). The boxes start at the top of the pane:
 //! there is no top row and there are no tabs (switching Leads is the tree's).
 //!
@@ -10,7 +10,7 @@
 //! [`COALESCE`] after an Event that concerns the view.
 //! The User's keys and clicks run commands ([`actions`]); nothing else starts a process.
 //!
-//! Keys: ←→↑↓/hjkl select, Enter opens or closes the Worker, Esc clears; the wheel scrolls; clicks select a pill. There is no `q`: a layout pane that
+//! Keys: ←→↑↓/hjkl select (←→ within a row of boxes, ↑↓ across rows too), Enter opens or closes the Worker, Esc clears; the wheel scrolls; clicks select a pill. There is no `q`: a layout pane that
 //! dies stays dead (contract §6.1).
 
 mod actions;
@@ -29,7 +29,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use self::actions::Actions;
-use self::flow::{Chart, Dir, Selection};
+use self::boxes::Boxes;
+use self::flow::{Dir, Selection};
 use crate::palette;
 use super::read::{self, ChatSlot, PlanBoxes};
 use super::{RunCommand, not_a_terminal, on_a_terminal};
@@ -52,7 +53,7 @@ const MARGIN: Margin = Margin { horizontal: 2, vertical: 1 };
 struct Centre {
     slot: ChatSlot,
     plan: PlanBoxes,
-    chart: Chart,
+    boxes: Boxes,
 }
 
 /// One read of the store: the Plan of the chat slot, if any, and the Event id to follow from.
@@ -66,8 +67,8 @@ fn snapshot(store: &mut Store) -> Result<Snapshot, CpdError> {
     let cursor = store.read(highest_id)?;
     let Some(slot) = read::chat_slot(store)? else { return Ok(Snapshot { cursor, centre: None }) };
     let plan = read::plan_boxes(store, &slot.plan)?;
-    let chart = boxes::layout(&plan.prs, &plan.jobs).with_margin(MARGIN);
-    Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, chart }) })
+    let boxes = boxes::layout(&plan.prs, &plan.jobs).with_margin(MARGIN);
+    Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, boxes }) })
 }
 
 /// Whether an Event changes what the pane shows: the Plan's or the Context's, or a move of a Lead (the chat slot may
@@ -136,12 +137,23 @@ impl Ui {
         }
         self.body = window;
         let Some(c) = centre else { return };
-        let sel = self.selected.resolve(&c.chart); // keeps the User's selection, never creates one
+        let sel = self.selected.resolve(&c.boxes.chart); // keeps the User's selection, never creates one
         if let (true, Some(i)) = (self.selected.follow, sel) {
-            self.scroll = c.chart.scroll_to(i, self.scroll, (window.width, window.height));
+            self.scroll = c.boxes.chart.scroll_to(i, self.scroll, (window.width, window.height));
             self.selected.follow = false;
         }
-        self.scroll = c.chart.blit(f.buffer_mut(), window, self.scroll, sel);
+        self.scroll = c.boxes.chart.blit(f.buffer_mut(), window, self.scroll, sel);
+    }
+}
+
+/// An arrow key: as [`Selection::arrow`], each step taken across the boxes ([`Boxes::step`]).
+fn arrow(selected: &mut Selection, boxes: &Boxes, dir: Dir) {
+    match selected.resolve(&boxes.chart) {
+        Some(i) => {
+            selected.key = Some(boxes.chart.pills[boxes.step(i, dir)].key.clone());
+            selected.follow = true;
+        }
+        None => selected.arrow(&boxes.chart, dir),
     }
 }
 
@@ -233,9 +245,9 @@ fn show(
                     KeyCode::Right | KeyCode::Char('l') => Some(Dir::Right),
                     _ => None,
                 };
-                let chart = snap.centre.as_ref().map(|c| &c.chart);
-                match (k.code, dir, chart) {
-                    (_, Some(d), Some(c)) => ui.selected.arrow(c, d),
+                let boxes = snap.centre.as_ref().map(|c| &c.boxes);
+                match (k.code, dir, boxes) {
+                    (_, Some(d), Some(b)) => arrow(&mut ui.selected, b, d),
                     (KeyCode::Enter, ..) => open = ui.selected.enter(),
                     (KeyCode::Esc, ..) => unselect = ui.selected.clear(),
                     _ => {}
@@ -245,7 +257,7 @@ fn show(
                 MouseEventKind::Down(MouseButton::Left) if ui.body.contains(Position::new(m.column, m.row)) => {
                     let hit = snap.centre.as_ref().and_then(|c| {
                         let (x, y) = (m.column - ui.body.x + ui.scroll.0, m.row - ui.body.y + ui.scroll.1);
-                        c.chart.pill_at(x, y).map(|i| c.chart.pills[i].key.clone())
+                        c.boxes.chart.pill_at(x, y).map(|i| c.boxes.chart.pills[i].key.clone())
                     });
                     match hit {
                         Some(key) if ui.selected.key.as_ref() == Some(&key) => {

@@ -302,7 +302,7 @@ fn the_chart_of_a_store_equivalent_to_the_cockpits_fixture_matches_it() {
 }
 
 #[test]
-fn a_plan_of_two_prs_is_two_titled_boxes_linked_by_an_arrow() {
+fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow() {
     let env = env();
     // `api` has its open pull request #12; `web` needs it and waits
     let mut s = bare_plan("dispatch");
@@ -323,15 +323,21 @@ fn a_plan_of_two_prs_is_two_titled_boxes_linked_by_an_arrow() {
     s += &job_row_in("ship", "web", "c", "queued", "S3");
     sql(&env, &s);
     let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the boxes", |s| s.len() > 4 && s[3].ends_with('┘'));
+    let screen = screen_when(&env, &pane, "the boxes", |s| s.len() > 8 && s[8].ends_with('┘'));
+    // web below api, the arrow from api's bottom border into web's top border
     let want = [
-        "  ┌ api · api-server → main · #12 open ┐     ┌ web · web → develop · waiting ┐",
-        "  │  ✓ a │O3 ───── ✓ b │S3             ├────▶│  ○ c │S3                      │",
-        "  └────────────────────────────────────┘     └───────────────────────────────┘",
+        "  ┌ api · api-server → main · #12 open ┐",
+        "  │  ✓ a │O3 ───── ✓ b │S3             │",
+        "  └─────────────────┬──────────────────┘",
+        "                  ╭─╯",
+        "                  ▼",
+        "  ┌ web · web → develop · waiting ┐",
+        "  │  ○ c │S3                      │",
+        "  └───────────────────────────────┘",
     ];
-    assert_eq!(screen[1..4], want, "{}", screen.join("\n"));
-    // the selection crosses from one box into the next
-    tmux_out(&env, &["send-keys", "-t", &pane, "Right", "Right", "Right", "Enter"]);
+    assert_eq!(screen[1..9], want, "{}", screen.join("\n"));
+    // the selection crosses from one box down into the one below it
+    tmux_out(&env, &["send-keys", "-t", &pane, "Right", "Right", "Down", "Enter"]);
     let screen = screen_when(&env, &pane, "the note", |s| s.iter().any(|l| l.contains("has not started yet")));
     assert!(screen.iter().any(|l| l.trim() == "c has not started yet"), "{}", screen.join("\n"));
 }
