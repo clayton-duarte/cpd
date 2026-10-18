@@ -66,16 +66,43 @@ impl Fixture {
         fs::read_to_string(self.path("installed.runs")).map(|t| t.lines().map(str::to_owned).collect()).unwrap_or_default()
     }
 
-    /// A new install: a new file renamed over the copy.
+    /// A new pi: `install/current-version` rewritten by rename, as pi's own update does.
+    fn activate_pi(&self, version: &str) {
+        let current = self.path(".pi/agent/install/current-version");
+        let new = current.with_extension("tmp");
+        fs::write(&new, format!("{version}\n")).unwrap();
+        fs::rename(&new, &current).unwrap();
+    }
+
+    /// A new install: a new file renamed over the copy. It answers `--version` as
+    /// the built `cpd` does (the wrapper asks before it reloads), and records every other call.
     fn install(&self) {
+        self.install_script(&format!("exec '{CPD}' --version"));
+    }
+
+    /// An older `cpd` installed over the wrapper: its `--version` says it supports
+    /// store schema 5 while the database is at 6.
+    fn install_older(&self) {
+        self.install_script("echo '{\"ok\":true,\"version\":\"x\",\"schema\":5,\"store_schema\":6}'; exit 0");
+    }
+
+    fn install_script(&self, on_version: &str) {
         let new = self.installed.with_extension("new");
         fs::write(
             &new,
-            format!("#!/bin/sh\necho \"$$ $*\" >> '{}'\nexec '{CPD}' \"$@\"\n", self.path("installed.runs").display()),
+            format!(
+                "#!/bin/sh\ncase \"$1\" in --version) {on_version};; esac\necho \"$$ $*\" >> '{}'\nexec '{CPD}' \"$@\"\n",
+                self.path("installed.runs").display()
+            ),
         )
         .unwrap();
         fs::set_permissions(&new, fs::Permissions::from_mode(0o755)).unwrap();
         fs::rename(&new, &self.installed).unwrap();
+    }
+
+    /// What the pane shows: the wrapper's stderr is its terminal.
+    fn screen(&self) -> String {
+        String::from_utf8(self.env.tmux(&["capture-pane", "-p", "-J", "-t", &self.pane]).stdout).unwrap()
     }
 }
 
@@ -117,6 +144,9 @@ fn start_with(state: &str, on_term: &str) -> Fixture {
     fs::create_dir_all(&sessions).unwrap();
     let session_file = sessions.join(format!("2026_{LEAD}.jsonl"));
     fs::write(&session_file, FINISHED).unwrap();
+    let current_version = env.home().join(".pi/agent/install/current-version");
+    fs::create_dir_all(current_version.parent().unwrap()).unwrap();
+    fs::write(&current_version, "1.2.0\n").unwrap();
 
     let home_dir = env.home().display().to_string();
     env.fake_pi(&format!(
@@ -161,6 +191,24 @@ fn a_parked_idle_lead_restarts_its_pi_on_its_session_file_after_an_install() {
     assert!(calls[1].windows(2).any(|w| w == ["--session", &session_file]), "{:?}", calls[1]);
     assert_eq!(f.runs(), [format!("{pid} session run {LEAD}")], "the same process re-execed the new file");
     assert_eq!(f.pane_pid(), pid);
+    f.env.tmux(&["kill-window", "-t", &f.pane]);
+}
+
+#[test]
+fn a_parked_idle_lead_restarts_its_pi_on_its_session_file_after_pi_changes() {
+    let f = start("idle");
+    let session_file = f.session_file.display().to_string();
+    assert!(f.signals().is_empty());
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(f.env.calls("pi").len(), 1, "nothing changed, pi runs on");
+
+    f.activate_pi("1.3.0");
+
+    wait_until("pi restarted", || f.env.calls("pi").len() == 2);
+    assert_eq!(f.signals(), "TERM\n", "the old pi got SIGTERM once");
+    let calls = f.env.calls("pi");
+    assert!(calls[1].windows(2).any(|w| w == ["--session", &session_file]), "{:?}", calls[1]);
+    assert!(f.runs().is_empty(), "cpd was not reinstalled");
     f.env.tmux(&["kill-window", "-t", &f.pane]);
 }
 
@@ -216,4 +264,49 @@ fn a_pi_that_ignores_sigterm_is_killed_after_ten_seconds_and_the_new_binary_star
     // pi ignores SIGTERM, so the pane's hangup is what ends the new one.
     f.env.tmux(&["kill-window", "-t", &f.pane]);
     wait_until("the new pi to end", || !alive(new_pi));
+}
+
+/// The 00:02Z incident: a cpd that supports an older store schema than the
+/// database's is installed over a running wrapper. The wrapper does not signal
+/// pi, does not `exec` it and says so once; a cpd that can open the store,
+/// installed next, is exec'd as before.
+#[test]
+fn a_lead_wrapper_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_into_one_that_can_open_it() {
+    let f = start("idle");
+    let pid = f.pane_pid();
+    let old_pi = f.pi_pids()[0];
+
+    f.install_older();
+    wait_until("the wrapper to refuse the reload", || f.screen().contains("reload skipped"));
+    // Several polls: pi is not signalled, nothing is exec'd, nothing is said twice.
+    std::thread::sleep(Duration::from_millis(2500));
+    let screen = f.screen();
+    assert_eq!(screen.matches("reload skipped").count(), 1, "{screen}");
+    assert!(screen.contains(&format!("reload skipped: {} supports store schema 5, the database is at 6", f.installed.display())), "{screen}");
+    assert!(f.signals().is_empty(), "pi was signalled");
+    assert!(alive(old_pi));
+    assert!(f.runs().is_empty(), "the older cpd was exec'd: {:?}", f.runs());
+    assert_eq!(f.env.calls("pi").len(), 1);
+    assert_eq!(f.pane_pid(), pid);
+
+    f.install();
+    wait_until("the new binary", || !f.runs().is_empty());
+    wait_until("pi restarted", || f.env.calls("pi").len() == 2);
+    assert_eq!(f.signals(), "TERM\n", "the old pi got SIGTERM once");
+    assert_eq!(f.runs(), [format!("{pid} session run {LEAD}")], "the same process re-execed the new file");
+    f.env.tmux(&["kill-window", "-t", &f.pane]);
+}
+
+#[test]
+fn a_lead_wrapper_whose_pi_exits_does_not_exec_a_cpd_older_than_the_store() {
+    let f = start("working");
+    f.install_older();
+    // The Lead is not idle: the wrapper only meets the install when pi dies on its own.
+    // (An exit 0 would archive the Lead and end the wrapper.)
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(f.pi_pids()[0]), nix::sys::signal::Signal::SIGKILL).unwrap();
+    wait_until("the wrapper to refuse the reload", || f.screen().contains("reload skipped"));
+    wait_until("the wrapper to carry on", || f.screen().contains("pi exited. Press Enter"));
+    assert!(f.runs().is_empty(), "the older cpd was exec'd: {:?}", f.runs());
+    assert_eq!(f.env.calls("pi").len(), 1);
+    f.env.tmux(&["kill-window", "-t", &f.pane]);
 }

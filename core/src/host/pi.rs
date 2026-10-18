@@ -3,8 +3,9 @@
 //! settings already declare, and finding a Session's file after start.
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 
 use serde_json::Value;
@@ -13,6 +14,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::ids::{AttemptId, PlanId, SessionId};
 
+use super::exe::Watched;
 use super::tmux::Spawn;
 
 /// The tools a Worker may not use: the Lead's (cpd 1 §12 step 5, kept).
@@ -51,6 +53,26 @@ impl PiDirs {
         let agent_dir = set(agent_dir).unwrap_or_else(|| home.join(".pi").join("agent"));
         let session_dir = set(session_dir);
         Ok(PiDirs { home, agent_dir, session_dir })
+    }
+
+    /// What tells that pi's install changed (contract §6.7 "Reload on install"):
+    /// `<agent dir>/install/current-version` when it exists, else the `pi`
+    /// executable on `PATH`, symlinks resolved. None when neither exists.
+    pub fn install_file(&self, path_var: &OsStr) -> Option<PathBuf> {
+        let current = self.agent_dir.join("install").join("current-version");
+        if current.is_file() {
+            return Some(current);
+        }
+        std::env::split_paths(path_var)
+            .map(|dir| dir.join("pi"))
+            .find(|candidate| candidate.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
+            .and_then(|found| found.canonicalize().ok())
+    }
+
+    /// [`install_file`](Self::install_file) on this process's `PATH`, recorded now.
+    pub fn watch_install(&self) -> Option<Watched> {
+        let path_var = std::env::var_os("PATH")?;
+        Watched::at(self.install_file(&path_var)?)
     }
 
     /// `<agent dir>/settings.json`: pi's global settings.
@@ -141,11 +163,15 @@ fn push_extensions(argv: &mut Vec<String>, extensions: &[String]) {
     }
 }
 
+/// Silences pi's own update banner in every pane cpd starts (contract §6.5).
+const SKIP_VERSION_CHECK: (&str, &str) = ("PI_SKIP_VERSION_CHECK", "1");
+
 fn base_env(home: &CpdHome, session: &SessionId, plan: &PlanId) -> BTreeMap<String, String> {
     BTreeMap::from([
         ("CPD_HOME".to_owned(), home.root().display().to_string()),
         ("CPD_SESSION".to_owned(), session.to_string()),
         ("CPD_PLAN".to_owned(), plan.to_string()),
+        (SKIP_VERSION_CHECK.0.to_owned(), SKIP_VERSION_CHECK.1.to_owned()),
     ])
 }
 
@@ -180,6 +206,7 @@ fn lead_env(launch: &LeadLaunch) -> BTreeMap<String, String> {
             ("CPD_HOME".to_owned(), launch.home.root().display().to_string()),
             ("CPD_SESSION".to_owned(), launch.session.to_string()),
             ("PLANNOTATOR_UPDATE_CHECK".to_owned(), "0".to_owned()),
+            (SKIP_VERSION_CHECK.0.to_owned(), SKIP_VERSION_CHECK.1.to_owned()),
         ]);
     };
     let mut env = base_env(launch.home, launch.session, plan);
@@ -476,6 +503,26 @@ mod tests {
     }
 
     #[test]
+    fn every_role_skips_the_pi_version_check() {
+        let plannotator = Plannotator { port: None, remote: None };
+        let resume = LeadStart::Resume { file: "/s/a.jsonl".into() };
+        assert_eq!(lead_launch(resume, &plannotator).env["PI_SKIP_VERSION_CHECK"], "1");
+        let home = home();
+        let session = SessionId::parse(ID).unwrap();
+        let grounded = lead(&LeadLaunch {
+            home: &home,
+            session: &session,
+            plan: None,
+            extensions: &[],
+            plannotator: &plannotator,
+            start: LeadStart::Resume { file: "/s/a.jsonl".into() },
+        });
+        assert_eq!(grounded.env["PI_SKIP_VERSION_CHECK"], "1");
+        let plan = PlanId::parse("cpd2").unwrap();
+        assert_eq!(base_env(&home, &session, &plan)["PI_SKIP_VERSION_CHECK"], "1");
+    }
+
+    #[test]
     fn grounded_lead_has_no_plan_in_its_environment() {
         let home = home();
         let session = SessionId::parse(ID).unwrap();
@@ -494,7 +541,7 @@ mod tests {
         );
         assert_eq!(
             launch.env,
-            env(&[("CPD_HOME", "/cpd-home"), ("CPD_SESSION", ID), ("PLANNOTATOR_UPDATE_CHECK", "0")])
+            env(&[("CPD_HOME", "/cpd-home"), ("CPD_SESSION", ID), ("PLANNOTATOR_UPDATE_CHECK", "0"), ("PI_SKIP_VERSION_CHECK", "1")])
         );
     }
 
@@ -505,6 +552,7 @@ mod tests {
             ("CPD_PLAN", "cpd2"),
             ("PLANNOTATOR_DATA_DIR", "/cpd-home/run/cpd2/plannotator"),
             ("PLANNOTATOR_UPDATE_CHECK", "0"),
+            ("PI_SKIP_VERSION_CHECK", "1"),
         ]);
         e.extend(env(extra));
         e
@@ -606,7 +654,7 @@ mod tests {
         );
         assert_eq!(
             launch.env,
-            env(&[("CPD_HOME", "/cpd-home"), ("CPD_SESSION", ID), ("CPD_PLAN", "cpd2"), ("CPD_ATTEMPT", "rs-host-a2")])
+            env(&[("CPD_HOME", "/cpd-home"), ("CPD_SESSION", ID), ("CPD_PLAN", "cpd2"), ("CPD_ATTEMPT", "rs-host-a2"), ("PI_SKIP_VERSION_CHECK", "1")])
         );
         let spawn = launch.spawn(Path::new("/wt"));
         assert_eq!(spawn.cwd.as_deref(), Some(Path::new("/wt")));
@@ -790,6 +838,71 @@ mod tests {
         assert_eq!(d.agent_dir, Path::new("/home/u/.pi/agent"));
         assert_eq!(d.session_dir, None);
         assert_eq!(PiDirs::resolve(None, None, None).unwrap_err().code(), ErrorCode::Usage);
+    }
+
+    fn executable(path: &Path) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "#!/bin/sh\n").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn pi_s_install_is_current_version_when_it_exists_else_the_resolved_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let dirs = PiDirs::resolve(Some(root.join("home")), None, None).unwrap();
+        let real = root.join("real/pi");
+        executable(&real);
+        fs::create_dir_all(root.join("bin")).unwrap();
+        std::os::unix::fs::symlink(&real, root.join("bin/pi")).unwrap();
+        let path_var = std::env::join_paths([root.join("none"), root.join("bin")]).unwrap();
+
+        // No `install/`: the executable `PATH` finds, symlinks resolved.
+        assert_eq!(dirs.install_file(&path_var), Some(real.clone()));
+        // `install/` without `current-version`: the same.
+        fs::create_dir_all(dirs.agent_dir.join("install")).unwrap();
+        assert_eq!(dirs.install_file(&path_var), Some(real));
+        // `current-version` wins.
+        let current = dirs.agent_dir.join("install/current-version");
+        fs::write(&current, "1.3.0\n").unwrap();
+        assert_eq!(dirs.install_file(&path_var), Some(current));
+    }
+
+    #[test]
+    fn with_no_current_version_and_no_pi_there_is_nothing_to_watch() {
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = PiDirs::resolve(Some(dir.path().join("home")), None, None).unwrap();
+        let bin = dir.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join("pi"), "not executable").unwrap();
+        assert_eq!(dirs.install_file(bin.as_os_str()), None);
+        assert_eq!(dirs.install_file(OsStr::new("")), None);
+    }
+
+    #[test]
+    fn a_change_of_current_version_or_of_the_executable_is_a_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let dirs = PiDirs::resolve(Some(root.join("home")), None, None).unwrap();
+        let pi = root.join("bin/pi");
+        executable(&pi);
+        let path_var = root.join("bin").into_os_string();
+        let watched = Watched::at(dirs.install_file(&path_var).unwrap()).unwrap();
+        assert!(!watched.changed());
+        let new = root.join("bin/pi.new");
+        executable(&new);
+        fs::rename(&new, &pi).unwrap();
+        assert!(watched.changed());
+
+        let current = dirs.agent_dir.join("install/current-version");
+        fs::create_dir_all(current.parent().unwrap()).unwrap();
+        fs::write(&current, "1.2.0\n").unwrap();
+        let watched = Watched::at(dirs.install_file(&path_var).unwrap()).unwrap();
+        assert!(!watched.changed());
+        let new = current.with_extension("tmp");
+        fs::write(&new, "1.3.0\n").unwrap();
+        fs::rename(&new, &current).unwrap();
+        assert!(watched.changed());
     }
 
     #[test]

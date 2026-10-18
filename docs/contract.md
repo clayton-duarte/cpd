@@ -60,7 +60,7 @@ Exit codes (kept from cpd 1 §2):
 
 | Exit | Codes |
 |---|---|
-| `1` | `gate_error`, `context_store_invalid`, `watch_start_failed`, `spawn_failed`, `session_malformed`, `driver_lock_missing`, `doctor_failed`, `pi_not_found`, `catalog_failed` |
+| `1` | `gate_error`, `context_store_invalid`, `watch_start_failed`, `spawn_failed`, `session_malformed`, `driver_lock_missing`, `doctor_failed`, `pi_not_found`, `catalog_failed`, `cleanup_failed` (only as an `error` Event's code, source `pr poll`, never a command's failure; §7.2) |
 | `2` | `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `spec_invalid`, `tier_invalid`, `nothing_to_edit`, `file_unreadable`, `invalid_name`, `pr_required`, `invalid_pr_id` (R34) |
 | `3` | `pr_exists`, `pr_in_use`, `pr_empty`, `pr_locked`, `pr_not_ready`, `pr_ended`, `needs_other_pr`, `branch_exists` (R34, §3.8), `context_exists`, `question_answered`, `not_a_git_repo`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `review_commits`, `review_missing`, `job_merged`, `job_not_failed`, `job_not_ready`, `attempt_not_running`, `no_port`, `jobs_not_done`, `gate_failed`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `in_chat_slot`, `cursor_ahead`, `not_a_terminal` |
 | `4` | `base_not_found`, `pr_not_found` (R34) |
@@ -554,7 +554,7 @@ stateDiagram-v2
 | A6 | Removed by R19 (no Job-level Reviewer). |
 | A7 | Removed by R19 (no Job-level Reviewer). |
 | A8 | Merge (§7.4); a review Job's Attempt has no commits to merge (below) |
-| A9 | End: record `metrics` (parsed from the Worker's session file, cpd 1 §14) in the transaction that ends the Attempt; kill the Attempt's tmux window (`kill-window` is tried 3 times, 1 s apart, before the `error` Event); remove the driver lock file `locks/attempt-<plan>--<attempt>.lock`; on `merged`, remove the worktree and branch; otherwise keep them for debugging until the Plan is `done` (cpd 1 requirements §2, kept) |
+| A9 | End: record `metrics` (parsed from the Worker's session file, cpd 1 §14) in the transaction that ends the Attempt; kill the Attempt's tmux window (`kill-window` is tried 3 times, 1 s apart, before the `error` Event); remove the driver lock file `locks/attempt-<plan>--<attempt>.lock`; on `merged`, remove the worktree and branch; otherwise keep them for debugging until their PR is merged, when the PR's clean-up removes them (§7.2) |
 
 **The driver lock** `locks/attempt-<plan>--<attempt>.lock` is held without a gap from before the Attempt row exists until its driver exits, so a free lock always means a dead driver, and E2 never ends a healthy Attempt whose driver has not started running yet. Chosen fix: the starter takes the lock and hands it to the driver at the spawn. Rejected alternative: an E2 grace period for young `starting` Attempts, which rests on a timing guess and needs a new key.
 
@@ -565,8 +565,9 @@ stateDiagram-v2
 
 **Reload on install** (hs-d33, hs-d38). Installing cpd replaces the binary (§3.7); a running driver reloads itself:
 
-- **Detection.** At start the driver records the (device, inode, mtime) of its own executable path (`std::env::current_exe()`, read once). At each safe point it stats that path again; a different identity, or a path that exists again after being replaced, means a new install. Works on Linux and macOS; no new command.
+- **Detection.** At start the driver records the (device, inode, mtime) of its own executable path (`host::exe`, `std::env::current_exe()` read once at process start). At each safe point it stats that path again; a different identity, or a path that exists again after being replaced, means a new install. Works on Linux and macOS; no new command.
 - **Safe points:** each A4 tick (status `running`) and the point before A8's rebase (status `merging`). Never inside another step.
+- **Check before reload:** before the `exec` the driver runs `<path> --version` (the new binary, with its own `CPD_HOME`) and reloads only when that succeeds and `store_schema` is `null` or `<= schema` (§4.5), so a binary that cannot open the store is never `exec`ed (hs-d151). Otherwise it does not `exec`: it logs once per installed file (identity) `reload skipped: <path> supports store schema N, the database is at M` (in its log) and keeps running its old code; a later install (another identity) is checked again.
 - **Reload:** `exec` of the same path with the same argv. Before the `exec` the driver clears close-on-exec on fd 3 (A1 sets it, so the lock is not leaked to children), so the lock stays held with no gap; the new process takes its state from the store.
 - **Resume.** The new driver's A1 checks fd 3 as above, then resumes: at A4 for `running` (the Worker's Session and pane from the store; the nudge-once state from the Attempt's `attempt-nudge` Event), at A8 for `merging`.
 - A Worker's pi is never touched by a driver reload; it is replaced only between Attempts (a new Attempt starts the installed pi adapter).
@@ -620,7 +621,9 @@ One per machine (D5). Every `tick_seconds`:
 
 A step's failure appends an `error` Event once until it clears, and the same `error` (step, scope and code) at most once per `watch.error_repeat_seconds` even if it clears in between (R31, finding 4). `scripts/install-cpd.sh` restarts a running engine after installing (kills the `watch` window, then `cpd watch --ensure`), because an engine keeps running the binary it started with (finding 5).
 
-**What an install reloads** (hs-d33, hs-d38): the engine and the views, by the script (as above and `cpd tui --respawn`, commands §13); each Lead's `session run` wrapper, by itself at the Lead's next idle (§6.7 "Reload on install"); each Attempt driver, by itself between its steps (§3.4 "Reload on install"); a Worker's pi only between Attempts.
+**Which executable starts a driver** (hs-d151). The engine (E3) and `job dispatch` start each driver from the executable path the process recorded at its start (`host::exe`), never from `std::env::current_exe()` at spawn time: on Linux that reads `<path> (deleted)` once an install has replaced the file, and every new Attempt would fail with `cannot run`. **`scripts/install-cpd.sh` refuses**, before replacing anything (exit 1, nothing replaced), a build whose `schema` (`<build> --version`) is lower than the `store_schema` of `<CPD_HOME>/cpd.db`, saying `cpd install refused: this build supports store schema N but <CPD_HOME>/cpd.db is at M; merge main into this branch, then install again.`
+
+**What an install reloads** (hs-d33, hs-d38): the engine and the views, by the script (as above and `cpd tui --respawn`, commands §13); each Lead's `session run` wrapper, by itself at the Lead's next idle (§6.7 "Reload on install"); each Attempt driver, by itself between its steps (§3.4 "Reload on install"); a Lead's pi, when pi itself changes, by the same rule (a new pi from dotfiles' pin or a manual `pi update` restarts each Lead's pi, §6.7 "Reload on install"); a Worker's pi only between Attempts, so Workers get a new pi at their next Attempt.
 ### 3.8 PR statuses (R34)
 
 ```mermaid
@@ -1175,6 +1178,7 @@ CREATE TRIGGER events_no_delete  BEFORE DELETE ON events  BEGIN SELECT RAISE(ABO
   - equal to N: check the schema hash and continue;
   - below N: `BEGIN IMMEDIATE`, re-read `user_version` inside the transaction (another process may have migrated meanwhile), apply each missing migration in order, set `user_version`, insert one `txns` row with `command = 'migrate'`, commit. A migration that fails rolls back entirely and the command fails with `migration_failed` (exit 1);
   - above N: refuse with `store_too_new` (exit 1): an older binary never writes a newer schema.
+- **Exception:** `cpd --version` opens the database read-only and reports `user_version` as `store_schema`, without migrating it and without the check above; it reports the binary's own `N` as `schema` (commands.md §1.2). It never creates or writes the database. A binary can open the store when `store_schema` is `null` (no database) or `<= schema`.
 - A migration that adds or renames columns drops and recreates the history triggers of that table, so the triggers always list every column.
 - **Migration 2** (cockpit parity; a real `cpd.db` exists since migration 1 shipped, so the change is a migration and not an edit of §4.4): adds three nullable columns to `plans`, each with its own check, then drops and recreates `plans`' history triggers (the rule above):
 
@@ -1332,7 +1336,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `plan-archived` | `plan archive` or `unarchive`, or the cascade of the Context's, for each Plan | context, plan | `{archived: bool}` |
 | `session-archived` | `session archive` or `unarchive`, or a cascade, for each Session | context, plan?, session | `{archived: bool}` |
 | `watch-started`, `watch-stopped` | the engine starts or stops | (none) | `{pid}` |
-| `error` | `watch`, a driver or a sync hit an unexpected failure; codes include `lead_worktree_stale`, `merge_check_failed`, `push_failed` (a failed push of a Lead Branch at a PR's start or at a merge, §7.2, §7.4; `details.pr` names the PR) `pr_start_failed` (engine E7 could not start a PR, §3.8; `details: {pr, step, tail?, log?}`) and `gh_rate_limited` (engine E5 skips polls while GitHub's rate limit is nearly used, §3.7; `details: {remaining, reset_at}`; no Plan, it concerns the User's account) | context?, plan?, … | `{source, code, message, details}` |
+| `error` | `watch`, a driver or a sync hit an unexpected failure; codes include `lead_worktree_stale`, `merge_check_failed`, `push_failed` (a failed push of a Lead Branch at a PR's start or at a merge, §7.2, §7.4; `details.pr` names the PR) `cleanup_failed` (`pr poll` kept a merged PR's Lead worktree, or a removal failed, §7.2; `details: {plan, pr, path, reason}`, `reason` `dirty`, `unpushed` or git's stderr tail) `pr_start_failed` (engine E7 could not start a PR, §3.8; `details: {pr, step, tail?, log?}`) and `gh_rate_limited` (engine E5 skips polls while GitHub's rate limit is nearly used, §3.7; `details: {remaining, reset_at}`; no Plan, it concerns the User's account) | context?, plan?, … | `{source, code, message, details}` |
 
 ### 5.3 Delivery by the pi adapter
 
@@ -1468,12 +1472,14 @@ Every title is drawn reversed: `#[reverse]` before it and `#[noreverse]` after i
 
 | Role | argv (after `pi`) | Environment added |
 |---|---|---|
-| Lead (fresh) | `--model <tiers[L]>:<level of lead_tier> [-e …] --session-id <id> -n <name> -- <first message>` | `CPD_HOME`, `CPD_SESSION=<id>`, `CPD_PLAN=<plan>`, `PLANNOTATOR_DATA_DIR=$CPD_HOME/run/<plan>/plannotator`, `PLANNOTATOR_UPDATE_CHECK=0`, `PLANNOTATOR_PORT=<the Plan's port>` (below) and `PLANNOTATOR_REMOTE` from cpd's own environment when set (passed with `-e`, so several Plan reviews can be open at once) |
+| Lead (fresh) | `--model <tiers[L]>:<level of lead_tier> [-e …] --session-id <id> -n <name> -- <first message>` | `CPD_HOME`, `CPD_SESSION=<id>`, `CPD_PLAN=<plan>`, `PLANNOTATOR_DATA_DIR=$CPD_HOME/run/<plan>/plannotator`, `PLANNOTATOR_UPDATE_CHECK=0`, `PLANNOTATOR_PORT=<the Plan's port>` (below) and `PLANNOTATOR_REMOTE` from cpd's own environment when set (passed with `-e`, so several Plan reviews can be open at once), `PI_SKIP_VERSION_CHECK=1` |
 | Lead (fork) | `--fork <source file>` added to the above (§6.7) | same |
 | Lead (resume) | `--session <file>` and the `[-e …]` arguments, no first message | same |
-| Lead (grounded, no Plan) | as a fresh, forked or resumed Lead (a Context's grounded Lead is a fork with no first message, §3.1) | `CPD_HOME`, `CPD_SESSION=<id>`, `PLANNOTATOR_UPDATE_CHECK=0`; no `CPD_PLAN` and no other `PLANNOTATOR_*`, so no port (it has no Plan and is never typed into). A side fork with a Plan (`session fork --plan`) is a Lead with that Plan: it gets the Plan's port |
+| Lead (grounded, no Plan) | as a fresh, forked or resumed Lead (a Context's grounded Lead is a fork with no first message, §3.1) | `CPD_HOME`, `CPD_SESSION=<id>`, `PLANNOTATOR_UPDATE_CHECK=0`, `PI_SKIP_VERSION_CHECK=1`; no `CPD_PLAN` and no other `PLANNOTATOR_*`, so no port (it has no Plan and is never typed into). A side fork with a Plan (`session fork --plan`) is a Lead with that Plan: it gets the Plan's port |
 | Worker (review Job, B2) | `--fork <lead session file>` added to the Worker's argv below, with the same exclusions (`--approve --no-skills --exclude-tools …`), model, `--session-id`, `-n` and first message; started only after the §6.7 idle wait | same as a Worker |
-| Worker | `--approve --no-skills --exclude-tools ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox [-e …] --model <model:level> --session-id <id> -n "<plan> <job> a<n>" -- "Read <spec path> and follow it exactly. Your attempt id is <attempt>."` | `CPD_HOME`, `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT` |
+| Worker | `--approve --no-skills --exclude-tools ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox [-e …] --model <model:level> --session-id <id> -n "<plan> <job> a<n>" -- "Read <spec path> and follow it exactly. Your attempt id is <attempt>."` | `CPD_HOME`, `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT`, `PI_SKIP_VERSION_CHECK=1` |
+
+`PI_SKIP_VERSION_CHECK=1` is in every row (A1). It disables pi's request for the latest version and so its "Update Available" banner; dotfiles pins pi's version (hs-d134, hs-d144). cpd does not use `PI_OFFLINE`: it also stops model catalog refreshes.
 
 - **cwd** (R34, A12): a Plan's Lead runs in the cwd of `plan new` (stored as its Session's `cwd`, also when `plan new` forks the Context's grounded Lead, whose own cwd may differ: unverified that `pi --fork` in another cwd keeps the session intact; a side fork by `session fork` takes its source's cwd); a Worker in its Attempt worktree, in the repo of its Job's PR. The project settings read below (`<cwd>/.pi/settings.json`) are therefore those of that directory.
 - The excluded tools and `--approve` are kept from cpd 1 §12 step 5 and requirements §5.
@@ -1509,13 +1515,15 @@ One `cpd watch` per machine, in `cpd-work:watch`. It is not tied to any Lead's p
 
 The fork never copies a half-done turn, and the source is never interrupted.
 
-**Reload on install** (hs-d33, hs-d38, hs-d49). `session run` records the identity of its own executable as the driver does (§3.4 "Reload on install"). While pi runs it stats the path at each safe point, which is the Lead's next idle: Session state `idle`, the last turn finished (the last `message` entry is an assistant message with `stopReason` `stop`) and the session file quiet `fork_quiet_seconds`, the rule of step 1. After an install, a Lead that reaches it:
+**Reload on install** (hs-d33, hs-d38, hs-d49). `session run` records the identity of its own executable as the driver does (§3.4 "Reload on install"). While pi runs it stats the path at each safe point, which is the Lead's next idle: Session state `idle`, the last turn finished (the last `message` entry is an assistant message with `stopReason` `stop`) and the session file quiet `fork_quiet_seconds`, the rule of step 1. It also records the identity (device, inode, mtime) of pi's install when it starts pi: `<pi agent dir>/install/current-version` when that file exists (agent dir: `PI_CODING_AGENT_DIR`, else `~/.pi/agent`), else the resolved path of the `pi` executable. A different identity at a safe point is handled exactly like a new cpd install (same safe points, same `SIGTERM` and `exec`), so the Lead's pi restarts on its session file on the new pi. After an install or a pi change, a Lead that reaches it:
 
 - **parked:** reloads at once;
 - **in the chat slot:** waits until it is idle **and** parked, or idle for 10 minutes, so unsent typing in the pane is not lost;
 - **`blocked`** (a dialog, a pending Plan review): is never idle, so never reloads.
 
-Reload: send pi `SIGTERM` (pi 1.2.0 runs `session_shutdown` on SIGTERM and SIGHUP; `dist/modes/interactive/interactive-mode.js`), wait for it to exit (if it has not exited 10 s after `SIGTERM`, send `SIGKILL`), then `exec` the same path with the same argv; the new `session run` resumes pi on the session file (step 3), so the new adapter loads and no turn is cut. If pi exits on its own after an install, the wrapper `exec`s the new binary before any store write.
+**Check before reload** (hs-d151): before it stops pi and `exec`s, the wrapper runs `<path> --version` (the new binary, with its own `CPD_HOME`) and reloads only when that succeeds and `store_schema` is `null` or `<= schema` (§4.5), so a binary that cannot open the store is never `exec`ed (hs-d151). Otherwise it does not `exec`: it logs once per installed file (identity) `reload skipped: <path> supports store schema N, the database is at M` (on the stderr of its pane) and keeps running its old code; a later install (another identity) is checked again. The same check applies to the `exec` after pi exits on its own.
+
+Reload: send pi `SIGTERM` (pi 1.2.0 runs `session_shutdown` on SIGTERM and SIGHUP; `dist/modes/interactive/interactive-mode.js`), wait for it to exit (if it has not exited 10 s after `SIGTERM`, send `SIGKILL`), then `exec` the same path with the same argv; the new `session run` resumes pi on the session file (step 3), so the new adapter loads and no turn is cut. If pi exits on its own after an install, the wrapper `exec`s the new binary before any store write. If pi exits on its own after a pi change, the resume on Enter already starts the new pi.
 ### 6.8 Forks: why they happen and where they are drawn (B1, B4)
 
 Forks happen for two reasons only, and neither nests:
@@ -1541,7 +1549,7 @@ cpd runs git itself (R4); there is no worktrunk. Every git call is `git -C <dir>
 
 `<repo-parent>` and `<repo-name>` are those of the PR's repo, and `<key>` is the PR's key (A5). One rule names every PR; Attempt names are unchanged by R34. A PR made by migration 4 from a Plan of before R34 keeps the names it had, `<repo-parent>/<repo-name>.<plan>` and `cpd/<plan>` (§4.5). Lead Branch names never collide: within a Plan the key is unique, and `cpd/<plan>/<key>` and `cpd/<plan>--<attempt>` differ by their separator.
 
-The repo's main checkout is never touched; Lead and Attempt worktrees are siblings of it (t3, kept).
+The repo's main checkout is never touched; Lead and Attempt worktrees are siblings of it (t3, kept). A PR's Lead worktree and local Lead Branch stay until the PR is merged; the PR's clean-up then removes them unless the worktree is dirty or has unpushed commits, which are kept with one `error` Event `cleanup_failed` (§7.2).
 
 ### 7.2 Creating worktrees
 
@@ -1556,7 +1564,8 @@ The repo's main checkout is never touched; Lead and Attempt worktrees are siblin
 
   **At `plan lock`** the PRs with no needs start together and all or nothing: every one's worktree is created and its `pre-start` run first; only when all have passed are the new branches pushed and the lock's transaction written. If one fails, every worktree and branch the lock created is removed, nothing is pushed, and `plan lock` fails with `setup_failed`, `details.pr` naming the PR. **From engine E7 and `pr start`** one PR starts; its failure is handled as §3.8 says.
 - **Attempt worktree** (A2): read `L = git rev-parse refs/heads/<lead branch>`; `git -C <lead worktree> worktree add -b cpd/<plan>--<attempt> <path> L`; record `base_sha = L`; run `pre-start` in it, blocking, so the Worker never starts before setup has finished (requirements §5, kept). On failure: remove the worktree and branch as above, outcome `failed` / `setup_failed`.
-- **Removal** after a Merged Attempt (A9): `git worktree remove <path>` then `git branch -d cpd/<plan>--<attempt>` (`-d`, not `-D`: git refuses unless the branch is merged into HEAD of the Lead worktree, a native guard; t3 F9). Failed and cancelled Attempts keep theirs until the Plan is `done`.
+- **Removal** after a Merged Attempt (A9): `git worktree remove <path>` then `git branch -d cpd/<plan>--<attempt>` (`-d`, not `-D`: git refuses unless the branch is merged into HEAD of the Lead worktree, a native guard; t3 F9). Failed and cancelled Attempts keep theirs until their PR is merged.
+- **Clean-up at a PR's merge** (hs-d138, hs-d142): when `pr poll` sees a PR merged (commands.md §9.2), that PR's Attempt worktrees and local Attempt branches still on disk are removed (`git worktree remove --force`, `git branch -D`), then its Lead worktree and local Lead Branch (`git worktree remove`, `git -C <repo> branch -D <lead branch>`; `-D`, because a squash merge is never an ancestor). Each removal is best effort: one failure does not stop the others, and every later poll retries the merged PRs that still have a path on disk. A Lead worktree with uncommitted changes (`git status --porcelain` not empty, untracked files included) or with commits not on origin (`git rev-list HEAD --not --remotes=origin` not empty) is **kept**, with its Lead Branch, and the poll that saw the merge appends one `error` Event `cleanup_failed`; later polls skip it silently. Remote branches are never touched. A PR closed without a merge and an abandoned Plan are not cleaned up here (G5).
 
 ### 7.3 Hooks from `.config/wt.toml`
 

@@ -12,6 +12,26 @@ adapter_dir="$dest_dir/../share/cpd/pi"
 "$root/scripts/cargo.sh" build --release --locked --manifest-path "$root/Cargo.toml" -p cpd
 
 target_dir="${CARGO_TARGET_DIR:-$root/target}"
+
+# Refuse, before replacing anything, a build that cannot open the database
+# (contract §3.7, hs-d151): ask the new binary, with the caller's CPD_HOME.
+if ! version=$("$target_dir/release/cpd" --version 2>&1); then
+  echo "cpd install refused: $target_dir/release/cpd --version failed:" >&2
+  echo "$version" >&2
+  exit 1
+fi
+schema=$(printf '%s' "$version" | sed -n 's/.*"schema": *\([0-9][0-9]*\).*/\1/p')
+store_schema=$(printf '%s' "$version" | sed -n 's/.*"store_schema": *\([0-9][0-9]*\).*/\1/p')
+if [ -z "$schema" ]; then
+  echo "cpd install refused: $target_dir/release/cpd --version reports no schema:" >&2
+  echo "$version" >&2
+  exit 1
+fi
+if [ -n "$store_schema" ] && [ "$store_schema" -gt "$schema" ]; then
+  echo "cpd install refused: this build supports store schema $schema but ${CPD_HOME:-$HOME/.cpd}/cpd.db is at $store_schema; merge main into this branch, then install again." >&2
+  exit 1
+fi
+
 mkdir -p "$dest_dir"
 tmp="$dest_dir/.cpd.tmp.$$"
 trap 'rm -f "$tmp"' EXIT
