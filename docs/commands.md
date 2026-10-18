@@ -1766,7 +1766,7 @@ Checks the machine (cpd 1 §11 `doctor`, kept in shape). Each check has `name`, 
 | Tool | Command run | Output found on 2026-10-14 | Minimum | Parsed as | What cpd needs from it |
 |---|---|---|---|---|---|
 | git | `git --version` | `git version 2.43.0` | `2.43.0` | the first `x.y.z` | `worktree add`, `update-ref` with an old value, `merge-base --is-ancestor`, `merge-tree --write-tree --name-only` (git 2.38 or later, docs), `read-tree -m -u` (§7) |
-| tmux | `tmux -V` | `tmux 3.4` | `3.4` | `x.y`, ignoring a letter suffix (`3.4a`); `next-…` builds pass | `new-window`/`split-window -e`, argv commands after `--`, `swap-pane`, `pane-border-lines`, `extended-keys`, `#{pane_dead_status}` (§6) |
+| tmux | `tmux -V` | `tmux 3.4` | `3.6` | `x.y`, ignoring a letter suffix (`3.4a`); `next-…` builds pass | `new-window`/`split-window -e`, argv commands after `--`, `swap-pane`, `pane-border-lines`, `extended-keys`, `#{pane_dead_status}` (§6); **3.6 because** older tmux can lose a pane's `SIGCHLD`, so `pane-died` never respawns a cockpit view (contract §6.1; fixed in tmux 3.6, tmux/tmux#4559) |
 | pi | `pi --version` | `1.2.0` | `>= 1.2.0 < 2.0.0` | `x.y.z` | `--fork`, `--session-id`, `-n`, `--exclude-tools`, `--no-skills`, `--approve`; the catalog of §9 (cpd 1 §11: pi updates itself, so a range) |
 | gh | `gh --version` | `gh version 2.45.0 (2025-07-18 Ubuntu 2.45.0-1ubuntu0.3)` | `2.45.0` | the first `x.y.z` | `pr create`, `pr list --json`, `pr view --json …statusCheckRollup…`, `api` (§7.6) |
 | pi's Node | `<pi node> --version`, the binary §9 chooses | `v22.23.2` (`/usr/local/bin/node`; this machine has no `pi-node` directory) | none: it must run | | runs the catalog module of §9 |

@@ -115,6 +115,12 @@ Deliberately absent: a regex crate (the id patterns of §2.1 are checked by hand
 - The Gate is `npm run verify`: the typecheck and tests of the pi adapter `pi/`, then `scripts/cargo.sh build --workspace` and `scripts/cargo.sh test --workspace`. Run it before you submit.
 - `scripts/install-cpd.sh` builds `--release` and installs `~/.local/bin/cpd` and the adapter `pi/` at `~/.local/share/cpd/pi`, replacing the binary atomically; safe to rerun. After an install, running Lead wrappers and Attempt drivers reload themselves (contract §3.4, §6.7).
 
+## Restarting the cockpit tmux server
+
+cpd requires tmux >= 3.6 (contract §6.1: older versions can lose a pane's `SIGCHLD`, so `pane-died` never respawns a cockpit view). A running tmux server keeps the version it started with. `scripts/restart-tmux.sh` restarts the cpd tmux server (`tmux -L <socket>`, default `cpd`) so it runs the installed tmux.
+
+Run it, by hand, once after tmux is upgraded on a machine whose cpd tmux server still runs the old version, and only while no Attempt runs. Restarting stops every pi in the server; Leads resume from their session files. It is never run automatically.
+
 ## Checking a pi version
 
 `scripts/pi-check.sh [<pi command>]` (default `pi`) checks that the adapter `pi/` of the checkout it lives in loads and activates in that pi, offline: an empty temporary `PI_CODING_AGENT_DIR`, `PI_OFFLINE=1`, no credentials, nothing written outside a temporary directory (removed on exit). It prints `pi --version`, then:
