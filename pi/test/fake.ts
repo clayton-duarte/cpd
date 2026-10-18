@@ -61,12 +61,7 @@ async function follow() {
 `;
 
 /** Stands for pi's jiti in the throwaway load (the real one is pi's, not a dependency of this repo): loads the file natively, which node does for `.ts`. */
-const FAKE_JITI = `import { appendFileSync } from "node:fs";
-export const createJiti = () => {
-  appendFileSync(process.env.FAKE_CPD_DIR + "/loads", "x\\n"); // one line per throwaway load: the poll's retries are observable
-  return { import: async (path) => (await import(path)).default };
-};
-`;
+const FAKE_JITI = `export const createJiti = () => ({ import: async (path) => (await import(path)).default });\n`;
 
 export const ID = "596d007f-6775-4134-b77a-b356cc523842";
 export const OTHER = "11111111-2222-4333-8444-555555555555";
@@ -176,12 +171,6 @@ export class Fixture {
     return this.follows().map((c) => Number(c.since));
   }
 
-  /** How many throwaway loads of a new adapter package were made (`reload.loader`). */
-  loads(): number {
-    const f = join(this.dir, "loads");
-    return existsSync(f) ? readFileSync(f, "utf8").split("\n").filter(Boolean).length : 0;
-  }
-
   pids(): number[] {
     const f = join(this.dir, "follower.pids");
     return existsSync(f) ? readFileSync(f, "utf8").split("\n").filter(Boolean).map(Number) : [];
@@ -245,8 +234,7 @@ export class Fixture {
         else process.env[k] = v;
       }
     }
-    // A throwaway load of a package (`reload.loader`) may still log into the dir as it ends.
-    rmSync(this.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    rmSync(this.dir, { recursive: true, force: true });
   }
 }
 
@@ -288,8 +276,6 @@ export class FakePi implements PiApi {
   readonly emitted: { channel: string; data: any }[] = [];
   sessionName: string | undefined;
   idle = true;
-  /** How often the adapter asked whether pi is idle: the reload guard does, once per poll tick that reaches it. */
-  idleChecks = 0;
   pendingMessages = false;
   editorText = "";
   /** How many times a command's `ctx.reload()` was called. */
@@ -377,7 +363,7 @@ export class FakePi implements PiApi {
           if (level === "error") this.errorNotices.push(m);
         }, getEditorText: () => this.editorText },
       sessionManager: { getSessionId: () => this.sessionId, getEntries: () => this.entries },
-      isIdle: () => (this.idleChecks++, this.idle),
+      isIdle: () => this.idle,
       hasPendingMessages: () => this.pendingMessages,
     };
   }

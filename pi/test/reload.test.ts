@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { type Options } from "../lib/adapter.ts";
-import { LONG_REFUSAL_NOTICE, pollAdapter, refusal, RELOAD_COMMAND, reloadLogPath, type Guard } from "../lib/reload.ts";
-import { Fixture, ID, planShow, settle, waitFor } from "./fake.ts";
+import { identityOf, LONG_REFUSAL_NOTICE, pollAdapter, refusal, RELOAD_COMMAND, reloadLogPath, type Guard } from "../lib/reload.ts";
+import { Fixture, ID, planShow, waitFor } from "./fake.ts";
 
 const GOOD = "export default function (pi: unknown): void {}\n";
 
@@ -40,6 +40,33 @@ async function started(t: { after(fn: () => Promise<void>): void }, options: Opt
   return f;
 }
 
+/** Lets every promise settle and the callbacks they queue run (the polls under mocked timers are `async`). */
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+type Hooks = { after(fn: () => void | Promise<void>): void };
+
+/**
+ * A clock made of the adapter's own polling: a second poll of the same directory at the same interval, which sees a package that never validates
+ * and so retries at every tick. `after(n)` resolves when it has retried `n` more times: that many poll intervals passed since, a fact to wait for
+ * where the test claims "nothing happens however many polls". Make it before the install it times.
+ */
+function clock(t: Hooks, f: Fixture) {
+  let retries = 0;
+  const poll = pollAdapter({
+    dir: f.adapterDir,
+    intervalMs: 20,
+    validate: async () => (retries++, "never validates"),
+    refusal: () => undefined,
+    trigger: () => {},
+    onRefused: () => {},
+    onError: () => {},
+    log: () => {},
+    onLongRefusal: () => {},
+  });
+  t.after(() => poll.stop());
+  return { after: (n: number) => { const at = retries; return waitFor(`${n} more polls`, () => retries >= at + n); } };
+}
+
 const ok: Guard = { idle: true, pending: false, state: "idle", editorText: "" };
 
 test("guard: each condition refuses, all clear allows", () => {
@@ -53,14 +80,15 @@ test("guard: each condition refuses, all clear allows", () => {
 
 test("a changed adapter directory triggers its command once, with expandPromptTemplates, and reloads", async (t) => {
   const f = await started(t);
-  await settle();
-  assert.deepEqual(f.pi.userMessages, [], "an unchanged directory triggers nothing");
   install(f);
   await waitFor("the reload", () => f.pi.reloads > 0);
-  await settle(200);
+  await waitFor("the command's end", () => f.pi.commandsRunning.size === 0);
   assert.deepEqual(f.pi.userMessages, [{ content: `/${RELOAD_COMMAND}`, options: { expandPromptTemplates: true } }]);
   assert.ok(f.pi.notices.includes("cpd: adapter updated, reloading"));
-  assert.equal(f.pi.reloads, 1, "the new load records the new identity: no second reload");
+  assert.equal(f.pi.reloads, 1);
+  const watching = logLines(f).filter((l) => l.includes("poll: watching"));
+  assert.equal(watching.length, 2, "the new load starts a poll");
+  assert.ok(watching[1]!.includes(`(${identityOf(f.adapterDir)})`), "which records the new identity as its baseline: no second reload");
   assert.deepEqual(f.pi.commandErrors, [], "nothing used the context after reload()");
   assert.deepEqual(f.pi.sent.filter((s) => s.message.customType !== "cpd"), [], "nothing reaches the model");
 });
@@ -68,7 +96,7 @@ test("a changed adapter directory triggers its command once, with expandPromptTe
 test("ENOENT is the install in progress, not a change", async (t) => {
   const f = await started(t);
   rmSync(f.adapterDir, { recursive: true });
-  await settle(200);
+  await waitFor("the poll to see it missing", () => logLines(f).some((l) => l.endsWith("the adapter directory is missing (an install in progress); waiting")));
   assert.deepEqual(f.pi.userMessages, []);
   mkdirSync(f.adapterDir);
   writeFileSync(join(f.adapterDir, "extension.ts"), GOOD);
@@ -77,19 +105,19 @@ test("ENOENT is the install in progress, not a change", async (t) => {
   await waitFor("the trigger", () => f.pi.userMessages.length > 0);
 });
 
-const conditions: [string, (f: Fixture) => unknown, (f: Fixture) => unknown][] = [
-  ["pi is busy", (f) => (f.pi.idle = false), (f) => (f.pi.idle = true)],
-  ["messages are pending", (f) => (f.pi.pendingMessages = true), (f) => (f.pi.pendingMessages = false)],
-  ["text is in the editor", (f) => (f.pi.editorText = "unsent"), (f) => (f.pi.editorText = "")],
-  ["a pi dialog is open", (f) => f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "custom" }), (f) => f.pi.fire("ui_prompt_end")],
+const conditions: [string, string, (f: Fixture) => unknown, (f: Fixture) => unknown][] = [
+  ["pi is busy", "busy", (f) => (f.pi.idle = false), (f) => (f.pi.idle = true)],
+  ["messages are pending", "pending", (f) => (f.pi.pendingMessages = true), (f) => (f.pi.pendingMessages = false)],
+  ["text is in the editor", "typing", (f) => (f.pi.editorText = "unsent"), (f) => (f.pi.editorText = "")],
+  ["a pi dialog is open", "state", (f) => f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "custom" }), (f) => f.pi.fire("ui_prompt_end")],
 ];
 
-for (const [name, block, clear] of conditions) {
+for (const [name, why, block, clear] of conditions) {
   test(`no reload while ${name}; a later tick retries`, async (t) => {
     const f = await started(t);
     await block(f);
     install(f);
-    await settle(200);
+    await waitFor("the refusal", () => logLines(f).some((l) => l.endsWith(`poll: refused: ${why}`)));
     assert.deepEqual(f.pi.userMessages, [], "refused at the trigger");
     assert.equal(f.pi.reloads, 0);
     await clear(f);
@@ -128,10 +156,12 @@ test("the command does nothing without an active adapter", async (t) => {
 
 test("the poll stops at session_shutdown", async (t) => {
   const f = await started(t);
+  const c = clock(t, f);
   await f.pi.fire("session_shutdown");
   install(f);
-  await settle(200);
+  await c.after(4); // it would have noticed the install at its first tick
   assert.deepEqual(f.pi.userMessages, []);
+  assert.equal(logLines(f).some((l) => l.includes("the identity changed")), false);
 });
 
 // ---- pre-validation (commands.md §15.6) ----
@@ -155,7 +185,7 @@ test("a directory that changes between two polls is not validated or reloaded un
   t.after(() => poll.stop());
   const tick = async () => {
     t.mock.timers.tick(10);
-    await settle(0);
+    await flush();
   };
   touch(dir);
   await tick(); // a new identity: remembered
@@ -175,6 +205,30 @@ test("a directory that changes between two polls is not validated or reloaded un
   assert.deepEqual(calls, ["validate", "trigger"], "the identity seen before the ENOENT does not count");
 });
 
+test("an unchanged directory is never validated or triggered, however many polls", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const dir = mkdtempSync(join(tmpdir(), "pi-poll-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const calls: string[] = [];
+  const poll = pollAdapter({
+    dir,
+    intervalMs: 10,
+    validate: async () => void calls.push("validate"),
+    refusal: () => undefined,
+    trigger: () => void calls.push("trigger"),
+    onRefused: () => void calls.push("refused"),
+    onError: (e) => void calls.push(`error ${e}`),
+    log: () => {},
+    onLongRefusal: () => void calls.push("long"),
+  });
+  t.after(() => poll.stop());
+  for (let i = 0; i < 20; i++) {
+    t.mock.timers.tick(10);
+    await flush();
+  }
+  assert.deepEqual(calls, []);
+});
+
 const refused: [string, Record<string, string>, string][] = [
   ["extension.ts is missing", { "package.json": "{}" }, "entry files missing"],
   ["package.json is missing", { "extension.ts": GOOD }, "entry files missing"],
@@ -185,9 +239,10 @@ const refused: [string, Record<string, string>, string][] = [
 for (const [name, files, reason] of refused) {
   test(`no reload while ${name}: one visible error, retried at a later poll`, async (t) => {
     const f = await started(t);
+    const c = clock(t, f);
     install(f, files);
     await waitFor("the error", () => f.pi.errorNotices.length > 0);
-    await settle(400); // many polls
+    await c.after(5); // many polls
     assert.deepEqual(f.pi.errorNotices, [noticeFor(reason)], "once, not once per poll");
     assert.equal(f.pi.reloads, 0);
     assert.deepEqual(f.pi.userMessages, []);
@@ -198,7 +253,7 @@ for (const [name, files, reason] of refused) {
     for (const [file, content] of Object.entries({ "extension.ts": GOOD, "package.json": "{}" })) writeFileSync(join(f.adapterDir, file), content);
     touch(f.adapterDir);
     await waitFor("the reload", () => f.pi.reloads > 0);
-    await settle(200);
+    await waitFor("the command's end", () => f.pi.commandsRunning.size === 0);
     assert.equal(f.pi.reloads, 1);
     assert.equal(f.pi.userMessages.length, 1);
     assert.equal(f.pi.errorNotices.length, 1, "a package that passes shows no error");
@@ -274,7 +329,7 @@ test("nudge: only for a package that validated and is still the directory's iden
   t.after(() => poll.stop());
   const tick = async () => {
     t.mock.timers.tick(10);
-    await settle(0);
+    await flush();
   };
   why = undefined;
   poll.nudge();
@@ -334,9 +389,10 @@ test("every decision of an install that reloads is logged, one line each, with a
 
 test("a pre-validation failure and the command's refusal are logged with their reason", async (t) => {
   const f = await started(t);
+  const c = clock(t, f);
   install(f, { "extension.ts": 'throw new Error("boom");\n', "package.json": "{}" });
   await waitFor("the failure", () => decisions(f).includes("poll: pre-validation failed: boom"));
-  await settle(300); // many polls: the same line is not repeated
+  await c.after(5); // many polls: the same line is not repeated
   assert.equal(decisions(f).filter((l) => l === "poll: pre-validation failed: boom").length, 1);
   f.pi.editorText = "unsent";
   const handler = f.pi.commands.get(RELOAD_COMMAND)!;
@@ -346,19 +402,21 @@ test("a pre-validation failure and the command's refusal are logged with their r
 
 test("a refusal that lasts is logged once, not at every poll", async (t) => {
   const f = await started(t);
+  const c = clock(t, f);
   f.pi.pendingMessages = true;
   install(f);
   await waitFor("the refusal", () => decisions(f).includes("poll: refused: pending"));
-  await settle(300);
+  await c.after(5);
   assert.equal(decisions(f).filter((l) => l === "poll: refused: pending").length, 1);
 });
 
 test("a refusal of more than the limit tells the User once per install; a reload before it says nothing", async (t) => {
   const f = await started(t, { reload: { longRefusalMs: 250 } });
+  const c = clock(t, f);
   f.pi.idle = false;
   install(f);
   await waitFor("the notice", () => f.pi.notices.includes(LONG_REFUSAL_NOTICE), 5000);
-  await settle(400); // many more polls
+  await c.after(10); // many more polls
   assert.equal(f.pi.notices.filter((n) => n === LONG_REFUSAL_NOTICE).length, 1);
   assert.ok(decisions(f).some((l) => l.startsWith("poll: not reloaded") && l.endsWith("after the package validated; told the User")));
   assert.equal(f.pi.errorNotices.length, 0);
@@ -368,8 +426,12 @@ test("a refusal of more than the limit tells the User once per install; a reload
 
 test("a package that does not validate is not a long refusal (a reload must not be advised)", async (t) => {
   const f = await started(t, { reload: { longRefusalMs: 100 } });
+  const c = clock(t, f);
   install(f, { "extension.ts": 'throw new Error("boom");\n', "package.json": "{}" });
-  await settle(500);
+  const from = Date.now();
+  await waitFor("the failure", () => decisions(f).includes("poll: pre-validation failed: boom"));
+  await c.after(10);
+  await waitFor("longer than the limit", () => Date.now() - from > 100);
   assert.equal(f.pi.notices.includes(LONG_REFUSAL_NOTICE), false);
 });
 
@@ -377,7 +439,10 @@ test("a log that cannot be written is notified once per run, starts no turn, and
   const f = new Fixture();
   t.after(() => f.close());
   f.respond("plan-show", planShow());
+  const failures = () => f.pi.errorNotices.filter((n) => n.startsWith("cpd: cannot write the reload log"));
+  let beforeReload = -1;
   f.pi.onReload = async () => {
+    beforeReload = failures().length; // every line of the first run (watching, changed, stable, validated, trigger, reloading) is written by now
     await f.pi.fire("session_shutdown", { reason: "reload" });
     await f.pi.fire("session_start", { reason: "reload" });
   };
@@ -386,13 +451,11 @@ test("a log that cannot be written is notified once per run, starts no turn, and
   f.load();
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
-  const failures = () => f.pi.errorNotices.filter((n) => n.startsWith("cpd: cannot write the reload log"));
   await waitFor("the notice", () => failures().length > 0);
-  await settle(300);
-  assert.equal(failures().length, 1, "once per run, not once per line");
   install(f);
   await waitFor("the reload", () => f.pi.reloads > 0);
-  await settle(200);
+  assert.equal(beforeReload, 1, "once per run, not once per line");
+  await waitFor("the command's end", () => f.pi.commandsRunning.size === 0);
   assert.equal(failures().length, 2, "the new run notifies again");
   assert.deepEqual(f.pi.errors(), [], "no message, so no turn");
 });
