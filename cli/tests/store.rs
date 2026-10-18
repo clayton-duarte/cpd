@@ -243,7 +243,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     assert_eq!(found, expected);
     // Every table is STRICT.
     let tables = names(&raw(&env), "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'");
-    assert_eq!(tables.len(), 16);
+    assert_eq!(tables.len(), 17);
     for table in tables {
         let strict: i64 = raw(&env)
             .query_row("SELECT strict FROM pragma_table_list WHERE name = ?1", [&table], |r| r.get(0))
@@ -659,7 +659,7 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
     let mut store = fixture_store(&env);
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     let hash = store.read(|c| Ok(cpd_core::store::schema_hash(c)?)).unwrap();
-    assert_eq!(hash, "a1b657a955520d2dd6dd71e143cee1fd8aba88fafc9284a7e8ab89dfc05c82af", "version 6 (the PR poller) on top of migration 5 (hs-d118)");
+    assert_eq!(hash, "e1319caa9f5713c763ab018372917c6d73ecc769dd30b4fc3aeadd4991fa8fed", "version 7 (the Inbox, migration 0011) on top of the PR poller (version 6)");
 
     for table in ["contexts", "plans", "sessions"] {
         let archived: Option<String> =
@@ -755,7 +755,8 @@ fn version_5_database(env: &TestEnv) {
         )
     };
     conn.execute_batch(&format!(
-        "DROP TABLE pull_requests;
+        "DROP TABLE inbox_items;
+         DROP TABLE pull_requests;
          DROP TABLE prs;
          {}
          INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
@@ -794,12 +795,12 @@ fn a_version_5_database_migrates_to_6_with_the_back_filled_rows_and_the_link() {
     let env = TestEnv::new();
     version_5_database(&env);
     let store = open(&env);
-    // Its schema is exactly that of a fresh database at version 6.
+    // Its schema is exactly that of a fresh database (migrations 6 and 7 ran).
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     drop(store);
     let conn = raw(&env);
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-    assert_eq!(version, 6);
+    assert_eq!(version, 7);
     let violations: i64 = conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
     assert_eq!(violations, 0);
 

@@ -13,7 +13,7 @@ use crate::ids::PrKey;
 pub(super) type Migration = fn(&Connection) -> Result<()>;
 
 /// Migrations `1..=N`, in order; `MIGRATIONS[i]` takes the schema to version `i + 1`.
-pub(super) const MIGRATIONS: &[Migration] = &[migration_1, migration_2, migration_3, migration_4, migration_5, migration_6];
+pub(super) const MIGRATIONS: &[Migration] = &[migration_1, migration_2, migration_3, migration_4, migration_5, migration_6, migration_7];
 
 /// The schema hash of each version (§4.3): `SCHEMA_HASHES[i]` is version `i + 1`'s.
 /// A test asserts that migrating an empty database gives each of them.
@@ -24,6 +24,7 @@ pub(super) const SCHEMA_HASHES: &[&str] = &[
     "62a082772ccbcd0c989f5181e3b934ba96a3ab3f1d9db81cf8e39cef5ef89579",
     "c4ac18dd07a1a89318a0ef2191ef37a3f78c758dc7ccf2ea62d17c7544a4f672",
     "a1b657a955520d2dd6dd71e143cee1fd8aba88fafc9284a7e8ab89dfc05c82af",
+    "e1319caa9f5713c763ab018372917c6d73ecc769dd30b4fc3aeadd4991fa8fed",
 ];
 
 const _: () = assert!(SCHEMA_HASHES.len() == MIGRATIONS.len(), "one schema hash per migration");
@@ -50,6 +51,7 @@ pub const HISTORY_TABLES: &[&str] = &[
     "attempts",
     "escalations",
     "sessions",
+    "inbox_items",
     "tier_catalog",
 ];
 
@@ -144,6 +146,15 @@ fn migration_6(conn: &Connection) -> Result<()> {
     create_history_triggers(conn, "pull_requests", false)?;
     conn.execute_batch(rebuild)?;
     create_history_triggers(conn, "prs", true)
+}
+
+/// The Inbox (§4.5 migration 11, hs-d168): `inbox_items` and `events` rebuilt
+/// with the four `inbox-*` kinds. The file is `0011.sql`: it is numbered for
+/// the migrations of Plan manager that land before it (hs-d68), though it
+/// takes the schema to version 7 here.
+fn migration_7(conn: &Connection) -> Result<()> {
+    conn.execute_batch(include_str!("migrations/0011.sql"))?;
+    create_history_triggers(conn, "inbox_items", true)
 }
 
 /// §4.5 step 2: one PR per Plan, its per-repo columns kept as stored, its
@@ -608,7 +619,7 @@ mod tests {
     fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = migrated(&dir);
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 6);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), 7);
         let migrate = count(&mut store, "SELECT max(id) FROM txns WHERE command = 'migrate'");
         assert_eq!(migrate, 2);
 
@@ -757,7 +768,7 @@ mod tests {
 
         let mut store = Store::open(&home, 5000).unwrap();
         assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 6);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), 7);
         let n = Value::Null;
         assert_eq!(
             rows(&mut store, "SELECT id, phase, archived_at FROM plans ORDER BY id"),
@@ -842,7 +853,7 @@ mod tests {
     fn a_version_4_database_with_a_done_plan_migrates_to_5_and_6_keeping_every_row() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = migrated_4(&dir);
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 6);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), 7);
         assert_eq!(
             rows(&mut store, "SELECT id, phase, done_at FROM plans ORDER BY id"),
             vec![
@@ -976,7 +987,7 @@ mod tests {
     fn a_version_5_database_migrates_to_6_with_the_pull_requests_back_filled() {
         let dir = tempfile::tempdir().unwrap();
         let (mut store, _) = migrated_5(&dir);
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 6);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), 7);
         let n = Value::Null;
         assert_eq!(
             rows(&mut store, "SELECT id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at
@@ -1037,6 +1048,78 @@ mod tests {
         assert_eq!(rows(&mut store, "SELECT lead_branch FROM prs WHERE plan = 'dn'"), vec![serde_json::json!(["cpd/dn/web"])]);
     }
 
+    // ---------- migration 11 (the Inbox; version 7) ----------
+
+    /// A version 6 database with a Context and two Events.
+    fn version_6(home: &CpdHome) {
+        let sql = format!(
+            "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');
+             INSERT INTO events (txn, at, kind, context, text, data) VALUES
+               (1, '{T}', 'context-created', 'ctx', 'x', '{{}}'), (1, '{T}', 'pr-merged', 'ctx', 'x', '{{}}');"
+        );
+        database_at(home, 6, &sql);
+    }
+
+    #[test]
+    fn a_version_6_database_migrates_to_7_with_inbox_items_and_the_four_inbox_event_kinds() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_6(&home);
+        assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[5]);
+
+        let mut store = Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+        assert_eq!(count(&mut store, "PRAGMA user_version"), 7);
+        assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[6]);
+        assert_eq!(
+            rows(&mut store, "SELECT id, kind FROM events ORDER BY id"),
+            vec![serde_json::json!([1, "context-created"]), serde_json::json!([2, "pr-merged"])]
+        );
+        assert_eq!(count(&mut store, "SELECT count(*) FROM inbox_items"), 0);
+
+        // The four kinds are accepted, an unknown one is not, and ids go on after the kept ones.
+        write(&mut store, "INSERT INTO events (txn, at, kind, context, text, data) VALUES
+                             (cpd_txn(), 't', 'inbox-opened', 'ctx', 'x', '{}'), (cpd_txn(), 't', 'inbox-closed', 'ctx', 'x', '{}'),
+                             (cpd_txn(), 't', 'inbox-snoozed', 'ctx', 'x', '{}'), (cpd_txn(), 't', 'inbox-dismissed', 'ctx', 'x', '{}')")
+            .unwrap();
+        assert_eq!(count(&mut store, "SELECT max(id) FROM events"), 6);
+        assert!(write(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'inbox-other', 'x', '{}')").is_err());
+        // The rebuilt table kept its triggers.
+        for sql in ["UPDATE events SET text = 'y'", "DELETE FROM events"] {
+            assert_eq!(sqlite_message(&refused(&mut store, sql)), "append_only: events", "{sql}");
+        }
+    }
+
+    #[test]
+    fn inbox_items_keep_one_open_item_per_identity_and_write_history_and_never_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_6(&home);
+        let mut store = Store::open(&home, 5000).unwrap();
+        let item = |urgency: &str| {
+            format!("INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('dialog', '{urgency}', 'session:a', 'l', 't');")
+        };
+        write(&mut store, &item("red")).unwrap();
+        // The same identity cannot be open twice; another urgency is another identity.
+        assert!(write(&mut store, &item("red")).is_err());
+        write(&mut store, &item("magenta")).unwrap();
+        // Once closed, the identity is free again.
+        write(&mut store, "UPDATE inbox_items SET closed_at = 't' WHERE urgency = 'red'").unwrap();
+        write(&mut store, &item("red")).unwrap();
+        assert_eq!(
+            rows(&mut store, "SELECT pk, op FROM history WHERE tbl = 'inbox_items' ORDER BY id"),
+            vec![
+                serde_json::json!(["[1]", "insert"]),
+                serde_json::json!(["[2]", "insert"]),
+                serde_json::json!(["[1]", "update"]),
+                serde_json::json!(["[3]", "insert"]),
+            ]
+        );
+        assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM inbox_items")), "append_only: inbox_items");
+        // A kind the poll adds later is refused until its migration; `engine-down` is never stored.
+        assert!(write(&mut store, "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('engine-down', 'red', 'engine', 'l', 't')").is_err());
+    }
+
     #[test]
     fn a_migrated_database_has_the_schema_of_a_new_one() {
         let dir = tempfile::tempdir().unwrap();
@@ -1046,7 +1129,7 @@ mod tests {
         drop(Store::open(&fresh_home, 5000).unwrap());
         let hash = |home: &CpdHome| schema_hash(&Connection::open(home.db()).unwrap()).unwrap();
         assert_eq!(hash(&home(&dir)), hash(&fresh_home));
-        assert_eq!(hash(&fresh_home), SCHEMA_HASHES[5]);
+        assert_eq!(hash(&fresh_home), SCHEMA_HASHES[6]);
     }
 
     #[test]

@@ -10,6 +10,7 @@ export const KINDS = [
   "escalation", "escalation-answered", "escalation-expired",
   "session-registered", "session-state", "session-moved", "session-renamed",
   "context-renamed", "plan-renamed", "context-archived", "plan-archived", "session-archived",
+  "inbox-opened", "inbox-closed", "inbox-snoozed", "inbox-dismissed",
   "pr-added", "pr-edited", "pr-cancelled", "pr-started", "pr-opened", "pr-merged",
   "watch-started", "watch-stopped", "error",
 ] as const;
