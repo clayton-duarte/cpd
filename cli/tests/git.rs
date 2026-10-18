@@ -481,23 +481,45 @@ fn a_command_killed_by_a_signal_is_an_error_not_a_failure() {
     assert_eq!(result.tail.as_deref(), Some("started"));
 }
 
+/// Set (by the test below, on the child's `Command`) in the one process whose environment holds
+/// the cockpit's variables; the helper does nothing without it.
+const HOOK_ENV_GATE: &str = "CPD_GITTEST_HOOK_ENV_HELPER";
+
+/// Not a test of its own: the child process of the test below, whose environment is the cockpit's.
 #[test]
-fn cockpit_pi_and_cpd_variables_do_not_reach_hooks() {
-    let h = hooks("pre-merge = \"env > env.txt\"\n");
-    // Names no other test in this file reads.
-    unsafe {
-        std::env::set_var("TMUX", "/tmp/fake,1,0");
-        std::env::set_var("TMUX_PANE", "%9");
-        std::env::set_var("PI_GITTEST", "x");
-        std::env::set_var("CPD_GITTEST", "x");
-        std::env::set_var("GITTEST_KEEP", "kept");
+fn hook_env_helper() {
+    if std::env::var_os(HOOK_ENV_GATE).is_none() {
+        return;
     }
+    let h = hooks("pre-merge = \"env > env.txt\"\n");
     assert_eq!(h.run(Hook::PreMerge).outcome, HookOutcome::Passed);
     let env = h.file("env.txt");
     for gone in ["TMUX=", "TMUX_PANE=", "PI_GITTEST=", "CPD_GITTEST="] {
         assert!(!env.lines().any(|l| l.starts_with(gone)), "{gone} leaked");
     }
     assert!(env.lines().any(|l| l == "GITTEST_KEEP=kept"));
+}
+
+#[test]
+fn cockpit_pi_and_cpd_variables_do_not_reach_hooks() {
+    // The variables are on a child's `Command`, never in this multi-threaded process's environment.
+    let out = common::output(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "hook_env_helper", "--test-threads=1"])
+            .env(HOOK_ENV_GATE, "x")
+            .env("TMUX", "/tmp/fake,1,0")
+            .env("TMUX_PANE", "%9")
+            .env("PI_GITTEST", "x")
+            .env("CPD_GITTEST", "x")
+            .env("GITTEST_KEEP", "kept"),
+    )
+    .unwrap();
+    assert!(
+        out.status.success() && String::from_utf8_lossy(&out.stdout).contains("1 passed"),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]

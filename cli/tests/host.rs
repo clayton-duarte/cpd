@@ -5,7 +5,6 @@
 mod common;
 
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -15,26 +14,16 @@ use cpd_core::host::layout::{self, View};
 use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux};
 use cpd_core::ids::{AttemptId, PlanId, SessionId};
 
-/// The wrapper runs `tmux` with this process's environment, so each test
-/// points `TMUX_TMPDIR` at its own `TestEnv` while holding this lock. Rust's
-/// `Command` reads the environment under std's own lock, so this is the only
-/// cross-test interference to prevent.
-static TMUX_ENV: Mutex<()> = Mutex::new(());
-
 struct Server {
     env: TestEnv,
     tmux: Tmux,
-    _lock: MutexGuard<'static, ()>,
 }
 
+/// The wrapper gets its own `TMUX_TMPDIR` (`Tmux::with_tmpdir`): the process environment is never touched.
 fn server() -> Server {
-    let lock = TMUX_ENV.lock().unwrap_or_else(|e| e.into_inner());
     let env = TestEnv::new();
-    // SAFETY: serialised by TMUX_ENV; no other thread of this test binary
-    // spawns tmux or reads TMUX_TMPDIR without holding it.
-    unsafe { std::env::set_var("TMUX_TMPDIR", env.root().join("tmux")) };
-    let tmux = Tmux::new(env.tmux_socket());
-    Server { env, tmux, _lock: lock }
+    let tmux = Tmux::with_tmpdir(env.tmux_socket(), env.root().join("tmux"));
+    Server { env, tmux }
 }
 
 fn sleeper(cwd: &Path) -> Spawn {

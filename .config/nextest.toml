@@ -10,17 +10,10 @@
 # nextest gives each test a process of its own, where the lock holds nothing
 # back, so the group does it.
 [test-groups]
-# cli/tests/host.rs, `TMUX_ENV`: every test points the process-wide
-# `TMUX_TMPDIR` at its own TestEnv before it starts tmux.
-tmux-env = { max-threads = 1 }
 # cli/tests/driver_reload.rs, `ONE_AT_A_TIME`: every test writes executables and
 # runs them; a thread that forks while another has such a file open for writing
 # makes its exec fail with ETXTBSY ("Text file busy").
 driver-reload = { max-threads = 1 }
-
-[[profile.default.overrides]]
-filter = 'binary_id(cpd::host)'
-test-group = 'tmux-env'
 
 [[profile.default.overrides]]
 filter = 'binary_id(cpd::driver_reload)'
