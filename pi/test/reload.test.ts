@@ -77,22 +77,22 @@ test("ENOENT is the install in progress, not a change", async (t) => {
   await waitFor("the trigger", () => f.pi.userMessages.length > 0);
 });
 
-const conditions: [string, (f: Fixture) => void, (f: Fixture) => void][] = [
+const conditions: [string, (f: Fixture) => unknown, (f: Fixture) => unknown][] = [
   ["pi is busy", (f) => (f.pi.idle = false), (f) => (f.pi.idle = true)],
   ["messages are pending", (f) => (f.pi.pendingMessages = true), (f) => (f.pi.pendingMessages = false)],
   ["text is in the editor", (f) => (f.pi.editorText = "unsent"), (f) => (f.pi.editorText = "")],
-  ["an extension signalled herdr:blocked", (f) => f.pi.events.emit("herdr:blocked", { active: true, label: "dialog" }), (f) => f.pi.events.emit("herdr:blocked", { active: false })],
+  ["a pi dialog is open", (f) => f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "custom" }), (f) => f.pi.fire("ui_prompt_end")],
 ];
 
 for (const [name, block, clear] of conditions) {
   test(`no reload while ${name}; a later tick retries`, async (t) => {
     const f = await started(t);
-    block(f);
+    await block(f);
     install(f);
     await settle(200);
     assert.deepEqual(f.pi.userMessages, [], "refused at the trigger");
     assert.equal(f.pi.reloads, 0);
-    clear(f);
+    await clear(f);
     await waitFor("the reload", () => f.pi.reloads > 0);
     assert.equal(f.pi.userMessages.length, 1);
   });
@@ -100,10 +100,10 @@ for (const [name, block, clear] of conditions) {
   test(`the command itself refuses while ${name}, and the poll triggers again`, async (t) => {
     const f = await started(t);
     const handler = f.pi.commands.get(RELOAD_COMMAND)!;
-    block(f);
+    await block(f);
     await handler("", f.pi.commandCtx());
     assert.equal(f.pi.reloads, 0);
-    clear(f);
+    await clear(f);
     await handler("", f.pi.commandCtx());
     assert.equal(f.pi.reloads, 1);
   });

@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use super::record::Record;
+use super::record::{PlanRef, Record};
 use crate::ids::RecordKind;
 
 /// A record and its index position.
@@ -45,15 +45,37 @@ pub fn markdown(title: &str, jira: Option<&str>, records: &[Indexed], since: i64
 
     let of_kind = |kind: RecordKind| records.iter().filter(move |(seq, r)| shown(*seq) && r.kind() == kind);
 
-    section(&mut out, "Plans", of_kind(RecordKind::Plan).map(|(_, r)| {
+    // A brief is listed short under its Plan; a Plan is listed when it or one of its briefs is shown.
+    let briefs: Vec<&Indexed> = records.iter().filter(|(_, r)| r.kind() == RecordKind::Brief).collect();
+    let of_plan = |plan: &PlanRef| -> Vec<&Indexed> {
+        briefs.iter().copied().filter(|(_, b)| b.plan().is_some_and(|p| p.id == plan.id && p.machine == plan.machine)).collect()
+    };
+    let mut plans: Vec<String> = Vec::new();
+    for (seq, r) in records.iter().filter(|(_, r)| r.kind() == RecordKind::Plan) {
         let plan = r.plan().expect("a plan record has its plan");
+        if !(shown(*seq) || of_plan(plan).iter().any(|(s, _)| shown(*s))) {
+            continue;
+        }
         let jira = plan.jira.as_deref().map(|j| format!(", {j}")).unwrap_or_default();
         let repos = match repos.get(&r.id.to_string()) {
             Some(repos) if !repos.is_empty() => format!(", repos {}", repos.join(", ")),
             _ => String::new(),
         };
-        item(r, &format!("{} (on {}{repos}{jira}): {}", plan.id, plan.machine, r.text))
-    }));
+        let mut entry = item(r, &format!("{} (on {}{repos}{jira}): {}", plan.id, plan.machine, r.text));
+        for (_, brief) in of_plan(plan) {
+            entry.push_str(&nested_brief(brief));
+        }
+        plans.push(entry);
+    }
+    // A brief whose Plan record is not in the index (it should not happen: `plan new` writes both) is still shown.
+    for (seq, brief) in &briefs {
+        let plan = brief.plan().expect("a brief has its plan");
+        let listed = records.iter().any(|(_, r)| r.kind() == RecordKind::Plan && r.plan().is_some_and(|p| p.id == plan.id && p.machine == plan.machine));
+        if shown(*seq) && !listed {
+            plans.push(item(brief, &format!("brief of {} (on {}): {}", plan.id, plan.machine, brief.first_line())));
+        }
+    }
+    section(&mut out, "Plans", plans.into_iter());
     section(&mut out, "Decisions", of_kind(RecordKind::Decision).filter(|(_, r)| !successor.contains_key(&r.id.to_string())).map(|(_, r)| {
         let replaces = r.supersedes().map(|s| format!(" (supersedes {s})")).unwrap_or_default();
         item(r, &format!("{}{replaces}", r.text))
@@ -94,6 +116,18 @@ pub fn markdown(title: &str, jira: Option<&str>, records: &[Indexed], since: i64
     out
 }
 
+/// One record in full (`context show --record`, commands.md §3.3): the Context's title, then the record's id, kind
+/// (a `plan` or `brief` with its Plan) and date, then its whole text.
+pub fn single(title: &str, jira: Option<&str>, record: &Record) -> String {
+    let mut out = format!("# {title}");
+    if let Some(jira) = jira {
+        let _ = write!(out, " ({jira})");
+    }
+    let of = record.plan().map(|p| format!(" of {}", p.id)).unwrap_or_default();
+    let _ = write!(out, "\n\n## {} ({}{of}, {})\n\n{}\n", record.id, record.kind().as_str(), date(record), record.text.trim_end());
+    out
+}
+
 fn section(out: &mut String, heading: &str, items: impl Iterator<Item = String>) {
     let items: Vec<String> = items.collect();
     if items.is_empty() {
@@ -112,6 +146,11 @@ fn item(record: &Record, text: &str) -> String {
 
 fn nested(answer: &Record) -> String {
     format!("  - answer {} ({}): {}\n", answer.id, date(answer), answer.text.replace('\n', "\n    "))
+}
+
+/// A brief under its Plan: its id and first line only (commands.md §3.3).
+fn nested_brief(brief: &Record) -> String {
+    format!("  - brief {} ({}): {}\n", brief.id, date(brief), brief.first_line())
 }
 
 fn date(record: &Record) -> &str {
@@ -159,6 +198,29 @@ mod tests {
         assert!(md.contains("- hs-q2 (2026-10-14): When?"));
         assert!(md.contains("- hs-q1 (2026-10-14): Why?\n  - answer hs-a1 (2026-10-14): Because."));
         assert!(md.contains("Line one\n  line two"));
+    }
+
+    #[test]
+    fn a_brief_is_listed_short_under_its_plan() {
+        use crate::context::record::PlanRef;
+        use crate::ids::{MachineName, PlanId};
+        let plan = |id: &str| PlanRef { id: PlanId::parse(id).unwrap(), machine: MachineName::parse("hs").unwrap(), jira: None };
+        let records = vec![
+            (1, rec("hs-p1", "The pay plan", Draft::Plan(plan("pay")))),
+            (2, rec("hs-b1", "\nFirst line.\nSecond line.", Draft::Brief(plan("pay")))),
+            (3, rec("hs-b2", "Orphan.\nMore.", Draft::Brief(plan("gone")))),
+        ];
+        let md = markdown("Building", None, &records, 0, &Repos::new());
+        assert!(md.contains("- hs-p1 (2026-10-14): pay (on hs): The pay plan\n  - brief hs-b1 (2026-10-14): First line.\n"), "{md}");
+        assert!(md.contains("- hs-b2 (2026-10-14): brief of gone (on hs): Orphan.\n"), "{md}");
+        assert!(!md.contains("Second line") && !md.contains("More."), "{md}");
+        // A new brief brings its Plan; an older Plan alone is not listed again.
+        let md = markdown("Building", None, &records, 1, &Repos::new());
+        assert!(md.contains("hs-p1") && md.contains("brief hs-b1"), "{md}");
+        let md = markdown("Building", None, &records, 2, &Repos::new());
+        assert!(!md.contains("hs-p1") && !md.contains("hs-b1") && md.contains("hs-b2"), "{md}");
+        let one = single("Building", None, &records[1].1);
+        assert!(one.contains("## hs-b1 (brief of pay, 2026-10-14)\n\n\nFirst line.\nSecond line.\n"), "{one}");
     }
 
     #[test]

@@ -50,7 +50,7 @@ const PANE_WAIT: Duration = Duration::from_secs(5);
 pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let row = env.store.read(|conn| row::load(conn, &args.id))?;
-    if row.role != Role::Lead {
+    if row.role == Role::Worker {
         return Err(not_a_lead(&row.id, row.role));
     }
     check_pane(&env.tmux(), &row.id)?;
@@ -59,7 +59,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
     // From here on this process owns the terminal (commands.md §1.2).
     'run: loop {
         let row = env.store.read(|conn| row::load(conn, &args.id))?;
-        // A Lead with a Plan gets the Plan's port; a grounded Lead gets none (§6.5).
+        // A Lead with a Plan gets the Plan's port; a Context's Manager gets none (§6.5).
         let port = match &row.plan {
             Some(plan) => match assign_port(&mut env, plan)? {
                 Some(port) => Some(port),
@@ -82,8 +82,15 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
         });
         // Recorded right before pi starts: a change after it is a pi the Lead has not run yet.
         let pi_install = dirs.watch_install();
-        let mut child = Command::new(&launch.argv[0])
-            .args(&launch.argv[1..])
+        let mut pi = Command::new(&launch.argv[0]);
+        pi.args(&launch.argv[1..]);
+        // A Context's Manager has no plannotator variable but the one cpd sets (§6.5), whatever its caller holds.
+        if row.plan.is_none() {
+            for (key, _) in std::env::vars_os().filter(|(k, _)| k.to_string_lossy().starts_with("PLANNOTATOR_")) {
+                pi.env_remove(key);
+            }
+        }
+        let mut child = pi
             .envs(&launch.env)
             .current_dir(&row.cwd)
             .spawn()
@@ -135,8 +142,9 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
         if let Err(e) = state::set(&mut env.store, "session run", &row.id, State::Stopped, None) {
             eprintln!("cpd: cannot report Session {} stopped: {}: {}", row.id, e.code(), e.message());
         }
-        // pi exits 0 on the User's `/quit` and Ctrl+D (§10.8); a reload never gets here.
-        if status.success() {
+        // pi exits 0 on the User's `/quit` and Ctrl+D (§10.8); a reload never gets here. A Manager is archived only
+        // with its Context (§3.8), so its quit is not archived.
+        if status.success() && row.role == Role::Lead {
             match archive_on_quit(&mut env, &row.id) {
                 Ok(()) => return Ok(Output::Owned),
                 Err(e) => print!("\n  {}: {}\n", e.code(), e.message()),
@@ -353,7 +361,11 @@ fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<LeadStart>, C
             let first_message = message.ok_or_else(|| {
                 CpdError::new(ErrorCode::FileUnreadable, format!("Session {} has no first message to start with.", row.id))
                     .with("session", row.id.as_str())
-                    .with("path", row.plan.as_ref().map(|p| env.home.lead_message(p).display().to_string()))
+                    .with("path", match (&row.plan, row.role) {
+                        (Some(plan), _) => Some(env.home.lead_message(plan).display().to_string()),
+                        (None, Role::Manager) => Some(env.home.manager_message(&row.context).display().to_string()),
+                        (None, _) => None,
+                    })
             })?;
             Ok(Some(LeadStart::Fresh { model, name: row.name.clone(), first_message }))
         }

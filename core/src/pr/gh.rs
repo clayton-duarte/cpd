@@ -13,7 +13,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::error::{CpdError, ErrorCode};
-use super::status::{ChecksSummary, PrState, ReviewDecision};
+use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
 use crate::git::{TAIL_LINES, tail};
 
 /// A `gh` call that takes longer than this is killed (`gh_failed`).
@@ -244,7 +244,7 @@ pub fn inline_comments(cwd: &Path, number: i64) -> Result<Vec<InlineComment>, Cp
 macro_rules! pr_fields {
     () => {
         "repository { nameWithOwner } number url title isDraft state createdAt mergedAt reviewDecision \
-         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
+         mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
     };
 }
 
@@ -269,6 +269,8 @@ pub struct PolledPr {
     pub state: PrState,
     pub review_decision: ReviewDecision,
     pub checks: ChecksSummary,
+    pub mergeable: Mergeable,
+    pub merge_state: MergeState,
     pub created_at: String,
     pub merged_at: Option<String>,
 }
@@ -367,6 +369,9 @@ struct RawPr {
     merged_at: Option<String>,
     #[serde(rename = "reviewDecision")]
     review_decision: Option<String>,
+    mergeable: String,
+    #[serde(rename = "mergeStateStatus")]
+    merge_state: String,
     commits: RawCommits,
 }
 
@@ -405,6 +410,8 @@ impl Reply<'_> {
 
     fn polled(&self, raw: RawPr) -> Result<PolledPr, CpdError> {
         let state = PrState::of_graphql(&raw.state).map_err(|e| self.fail(e.message().to_owned()))?;
+        let mergeable = Mergeable::of_graphql(&raw.mergeable).map_err(|e| self.fail(e.message().to_owned()))?;
+        let merge_state = MergeState::of_graphql(&raw.merge_state).map_err(|e| self.fail(e.message().to_owned()))?;
         let rollup = raw.commits.nodes.first().and_then(|n| n.commit.as_ref()).and_then(|c| c.rollup.as_ref());
         Ok(PolledPr {
             repo: raw.repository.name_with_owner,
@@ -415,6 +422,8 @@ impl Reply<'_> {
             state,
             review_decision: ReviewDecision::of(raw.review_decision.as_deref()),
             checks: ChecksSummary::of_rollup(rollup.map(|r| r.state.as_str())),
+            mergeable,
+            merge_state,
             created_at: raw.created_at,
             merged_at: raw.merged_at,
         })
@@ -516,6 +525,7 @@ mod tests {
         format!(
             r#"{{"repository":{{"nameWithOwner":"{repo}"}},"number":{number},"url":"https://github.com/{repo}/pull/{number}","title":"T{number}",
             "isDraft":{draft},"state":"{state}","createdAt":"2026-05-01T10:00:00Z","mergedAt":null,"reviewDecision":"APPROVED",
+            "mergeable":"CONFLICTING","mergeStateStatus":"DIRTY",
             "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{rollup}}}}}]}}}}"#
         )
     }
@@ -534,7 +544,7 @@ mod tests {
             SEARCH_QUERY,
             "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt mergedAt \
-             reviewDecision commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
+             reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
              rateLimit { cost remaining resetAt } }"
         );
     }
@@ -555,6 +565,51 @@ mod tests {
         assert_eq!(a.url, "https://github.com/o/a/pull/7");
         assert_eq!(a.created_at, "2026-05-01T10:00:00Z");
         assert_eq!((b.draft, b.checks), (false, ChecksSummary::None));
+        assert_eq!((a.mergeable, a.merge_state), (Mergeable::Conflicting, MergeState::Dirty));
+    }
+
+    #[test]
+    fn mergeable_and_merge_state_are_typed_whatever_they_are() {
+        for (mergeable, merge_state, want) in [
+            ("MERGEABLE", "BLOCKED", (Mergeable::Mergeable, MergeState::Blocked)),
+            ("UNKNOWN", "UNKNOWN", (Mergeable::Unknown, MergeState::Unknown)),
+            ("MERGEABLE", "HAS_HOOKS", (Mergeable::Mergeable, MergeState::HasHooks)),
+        ] {
+            let node = pr("o/a", 7, false, "OPEN", "null")
+                .replace(r#""mergeable":"CONFLICTING","mergeStateStatus":"DIRTY""#, &format!(r#""mergeable":"{mergeable}","mergeStateStatus":"{merge_state}""#));
+            let body = format!(
+                r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
+            );
+            let found = &search(&reply(&body, 0)).unwrap().prs[0];
+            assert_eq!((found.mergeable, found.merge_state), want, "{mergeable} {merge_state}");
+        }
+    }
+
+    #[test]
+    fn a_mergeable_or_merge_state_outside_the_sets_is_gh_failed_in_the_search_and_the_lookup() {
+        for (name, from, to) in [
+            ("mergeable", r#""mergeable":"CONFLICTING""#, r#""mergeable":"MAYBE""#),
+            ("merge_state", r#""mergeStateStatus":"DIRTY""#, r#""mergeStateStatus":"QUEUED""#),
+            ("lowercase", r#""mergeStateStatus":"DIRTY""#, r#""mergeStateStatus":"dirty""#),
+            ("null mergeable", r#""mergeable":"CONFLICTING""#, r#""mergeable":null"#),
+        ] {
+            let node = pr("o/a", 7, false, "OPEN", "null").replace(from, to);
+            let body = format!(
+                r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
+            );
+            assert_eq!(search(&reply(&body, 0)).unwrap_err().code(), ErrorCode::GhFailed, "search {name}");
+            let body = format!(r#"{{"data":{{"p0":{{"pullRequest":{node}}}}}}}"#);
+            assert_eq!(looked_up(&reply(&body, 0), 1).unwrap_err().code(), ErrorCode::GhFailed, "lookup {name}");
+        }
+    }
+
+    #[test]
+    fn a_pull_request_without_the_two_fields_is_gh_failed() {
+        let node = pr("o/a", 7, false, "OPEN", "null").replace(r#""mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","#, "");
+        let body = format!(
+            r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
+        );
+        assert_eq!(search(&reply(&body, 0)).unwrap_err().code(), ErrorCode::GhFailed);
     }
 
     #[test]

@@ -31,7 +31,7 @@ export type Guard = {
   idle: boolean;
   /** pi's `ctx.hasPendingMessages()`. */
   pending: boolean;
-  /** The state the adapter wants to report (§15.4): `blocked` covers escalations, Plan reviews and `herdr:blocked` signals. */
+  /** The state the adapter wants to report (§15.4): `blocked` covers escalations, Plan reviews and pi dialogs. */
   state: Wanted["state"];
   /** `ctx.ui.getEditorText()`. */
   editorText: string;
