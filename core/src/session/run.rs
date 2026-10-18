@@ -75,8 +75,15 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
         });
         // Recorded right before pi starts: a change after it is a pi the Lead has not run yet.
         let pi_install = dirs.watch_install();
-        let mut child = Command::new(&launch.argv[0])
-            .args(&launch.argv[1..])
+        let mut pi = Command::new(&launch.argv[0]);
+        pi.args(&launch.argv[1..]);
+        // A Context's Manager has no plannotator variable but the one cpd sets (§6.5), whatever its caller holds.
+        if row.plan.is_none() {
+            for (key, _) in std::env::vars_os().filter(|(k, _)| k.to_string_lossy().starts_with("PLANNOTATOR_")) {
+                pi.env_remove(key);
+            }
+        }
+        let mut child = pi
             .envs(&launch.env)
             .current_dir(&row.cwd)
             .spawn()

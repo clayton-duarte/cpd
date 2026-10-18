@@ -62,6 +62,17 @@ fn fake_pi(env: &TestEnv) {
     ));
 }
 
+/// Whether the captured environment `dump` has the line `var` (`NAME=value`). A failure says nothing of the environment.
+fn has_var(dump: &str, var: &str) -> bool {
+    dump.lines().any(|l| l == var)
+}
+
+/// The names of the variables in `dump` that start with `prefix`: what a failing assertion may print (the
+/// environment holds the caller's tokens).
+fn var_names<'a>(dump: &'a str, prefix: &str) -> Vec<&'a str> {
+    dump.lines().filter_map(|l| l.split_once('=')).map(|(name, _)| name).filter(|name| name.starts_with(prefix)).collect()
+}
+
 /// The cockpit: session `cpd`, window `main` with a tree pane and the placeholder in the chat slot.
 fn cockpit(env: &TestEnv) {
     let ok = |args: &[&str]| {
@@ -175,12 +186,10 @@ fn the_first_call_registers_the_manager_and_starts_pi_in_its_window() {
     // pi: a fresh start at the Manager's Tier, with the first message, and the Manager's environment.
     let envs = pi_envs(&env, &id, 1);
     let vars = &envs[0];
-    assert!(vars.contains(&format!("CPD_SESSION={id}")), "{vars}");
-    assert!(vars.contains(&format!("CPD_HOME={}", env.cpd_home().display())), "{vars}");
-    // (`PLANNOTATOR_PORT` may be in the test runner's own environment, which the tmux server passes on.)
-    for absent in ["CPD_PLAN=", "PLANNOTATOR_DATA_DIR="] {
-        assert!(!vars.contains(absent), "{absent} in {vars}");
-    }
+    assert!(has_var(vars, &format!("CPD_SESSION={id}")), "CPD_SESSION is not the Manager's Session");
+    assert!(has_var(vars, &format!("CPD_HOME={}", env.cpd_home().display())), "CPD_HOME is not this env's");
+    assert_eq!(var_names(vars, "CPD_PLAN"), Vec::<&str>::new(), "a Manager has no Plan");
+    assert_eq!(var_names(vars, "PLANNOTATOR_"), ["PLANNOTATOR_UPDATE_CHECK"], "the only plannotator variable of a Manager");
     let calls = env.calls("pi");
     assert_eq!(calls.len(), 1);
     let argv = &calls[0];
@@ -195,6 +204,33 @@ fn the_first_call_registers_the_manager_and_starts_pi_in_its_window() {
 
     // The chat slot did not move (hs-d103).
     assert_eq!(slot(&env), placeholder);
+}
+
+#[test]
+fn a_managers_pi_gets_no_plannotator_variable_from_its_callers() {
+    let env = TestEnv::new();
+    setup(&env);
+    cockpit(&env);
+    // The tmux server's global environment is what every new pane starts from.
+    for (name, value) in [("PLANNOTATOR_DATA_DIR", "/tmp/x"), ("PLANNOTATOR_PORT", "1"), ("PLANNOTATOR_REMOTE", "1")] {
+        let out = env.tmux(&["set-environment", "-g", name, value]);
+        assert!(out.status.success(), "tmux set-environment {name}");
+    }
+    // The caller of `cpd context manager` has them too.
+    let out = env
+        .command(CPD)
+        .args(["context", "manager", "--context", "ctx"])
+        .env("PLANNOTATOR_DATA_DIR", "/tmp/x")
+        .env("PLANNOTATOR_PORT", "1")
+        .env("PLANNOTATOR_REMOTE", "1")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "cpd context manager failed: {}", String::from_utf8_lossy(&out.stderr));
+    let out: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let id = out["manager"]["session"].as_str().unwrap().to_owned();
+
+    let envs = pi_envs(&env, &id, 1);
+    assert_eq!(var_names(&envs[0], "PLANNOTATOR_"), ["PLANNOTATOR_UPDATE_CHECK"]);
 }
 
 #[test]
