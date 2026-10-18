@@ -209,8 +209,8 @@ impl Fx {
                 )?;
                 tx.execute(
                     "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha,
-                                           submitted_sha, submitted_at, started_at)
-                     VALUES ('pay', ?1, ?2, 1, 'S2', 'ladder', 'merging', ?3, ?4, ?5, ?6, 't', 't')",
+                                           submitted_sha, submitted_at, started_at, driver_pid)
+                     VALUES ('pay', ?1, ?2, 1, 'S2', 'ladder', 'merging', ?3, ?4, ?5, ?6, 't', 't', 4242)",
                     params![
                         attempt.to_string(),
                         key,

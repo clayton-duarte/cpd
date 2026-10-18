@@ -456,8 +456,21 @@ fn a_background_child_of_a_finished_hook_is_killed_when_the_hook_returns() {
     let h = hooks("pre-merge = \"sleep 30 & echo $! > pid\"\n");
     assert_eq!(h.run(Hook::PreMerge).outcome, HookOutcome::Passed);
     let pid = h.file("pid").trim().to_owned();
-    let alive = std::process::Command::new("kill").args(["-0", &pid]).status().unwrap().success();
-    assert!(!alive, "the background child {pid} outlived the hook");
+    // The contract is that the child is dead, not that its pid is already free. The
+    // hook's sh is gone, so the child is an orphan: after SIGKILL it is a zombie
+    // (`kill -0` still succeeds) until init reaps it, and on a loaded runner that
+    // window is visible. Dead means no such process or state Z; wait a bounded time
+    // for the kill to land.
+    let state = || {
+        let out = std::process::Command::new("ps").args(["-o", "stat=", "-p", &pid]).output().unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !(state().is_empty() || state().starts_with('Z')) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let last = state();
+    assert!(last.is_empty() || last.starts_with('Z'), "the background child {pid} outlived the hook (state {last:?})");
 }
 
 #[test]

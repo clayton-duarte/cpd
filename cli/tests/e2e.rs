@@ -400,8 +400,12 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
         let moved = mine.iter().find(|e| e["kind"] == "session-moved").unwrap();
         assert_eq!(moved["data"]["place"], "work");
         // A9: the worktree and branch of a Merged Attempt are removed.
-        assert!(!fx.repo.parent().unwrap().join(format!("pay.pay--{attempt}")).exists());
-        assert_eq!(fx.git(&fx.repo, &["branch", "--list", &format!("cpd/pay--{attempt}")]), "");
+        // Cleanup runs after the merge transaction (which appends job-merged), so wait for it.
+        let worktree = fx.repo.parent().unwrap().join(format!("pay.pay--{attempt}"));
+        fx.wait(&format!("A9 to remove {attempt}'s worktree and branch"), 30, || {
+            let branch = fx.git(&fx.repo, &["branch", "--list", &format!("cpd/pay--{attempt}")]);
+            (!worktree.exists() && branch.is_empty()).then_some(())
+        });
     }
     assert!(fx.hooks_log().contains("pre-commit cpd/pay--api-a1\n"), "{}", fx.hooks_log());
     assert!(fx.hooks_log().contains("pre-commit cpd/pay--ui-a1\n"), "{}", fx.hooks_log());
