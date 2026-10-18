@@ -12,7 +12,7 @@ import type { Ctx, Message, PiApi } from "./pi.ts";
 import { parseOpened, parseResult, parseStatus, request } from "./plannotator.ts";
 import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, REVIEW_LABEL, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
 import { Facts, Reporter, stateArgs, type Wanted } from "./state.ts";
-import { contextCursorFrom, contextUpdate, parseRecordEvents, parseRecords } from "./updates.ts";
+import { contextCursorFrom, contextUpdate, parsePlanEvents, parseRecordEvents, parseRecords, PLAN_KINDS } from "./updates.ts";
 
 export type Options = {
   /** The environment read at `session_start` (`CPD_SESSION`, `CPD_PLAN`, `CPD_HOME`). Default: `process.env`. */
@@ -177,10 +177,10 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     const entries = ctx.sessionManager.getEntries();
     r.cursor = cursorFrom(info.registeredEvent, entries, id);
 
-    if (info.role === "lead") registerUpdates();
+    if (info.role === "lead" || info.role === "manager") registerUpdates();
 
-    // 5. blocking reasons (Plan Lead only)
-    if (info.planLead && info.plan !== null) {
+    // 5. blocking reasons (Plan Lead only; a Manager has none and opens no plannotator)
+    if (info.role !== "manager" && info.planLead && info.plan !== null) {
       const plan = info.plan;
       const folded = reviewsFromEntries(entries, plan);
       if (folded.invalid > 0) deliver("session entries", new CpdError("entry_invalid", `${folded.invalid} ${ENTRY_TYPE} entries of this session do not parse and were skipped`));
@@ -321,8 +321,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   // ---- Context updates at turn start (§15.6) ----
 
   /**
-   * `before_agent_start` of a Lead: the Context records other Sessions wrote since its cursor, as one `cpd-context`
-   * message added to the run. Never starts a turn: a failed read is reported once (no turn) and leaves the cursor.
+   * `before_agent_start` of a Lead or Manager: the Context records other Sessions wrote since its cursor and, for a
+   * Manager, the `Plans:` digest, as one `cpd-context` message added to the run. Never starts a turn: a failed read is reported once (no turn) and leaves the cursor.
    */
   async function contextUpdates(r: Run, ctx: Ctx): Promise<{ message: Message } | undefined> {
     try {
@@ -330,8 +330,9 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       const events = parseRecordEvents(await call(["events", "list", "--context", r.info.context, "--kind", "context-record", "--since", String(cursor)]));
       const first = Math.min(...events.map((e) => e.seq));
       const records = events.length === 0 ? [] : parseRecords(await call(["context", "show", "--context", r.info.context, "--since", String(first - 1)]));
+      const plans = r.info.role === "manager" ? parsePlanEvents(await call(["events", "list", "--context", r.info.context, ...PLAN_KINDS.flatMap((k) => ["--kind", k]), "--since", String(cursor)])) : undefined;
       r.contextFailed = false;
-      const message = contextUpdate(r.info.context, r.id, events, records);
+      const message = contextUpdate(r.info.context, r.id, events, records, plans);
       return message === undefined ? undefined : { message };
     } catch (e) {
       if (!r.contextFailed) {
@@ -345,13 +346,13 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   }
 
   let updatesRegistered = false;
-  /** Registered once, for a Lead only (never a Worker); pi has no way to remove a handler. */
+  /** Registered once, for a Lead or Manager only (never a Worker); pi has no way to remove a handler. */
   function registerUpdates(): void {
     if (updatesRegistered) return;
     updatesRegistered = true;
     pi.on("before_agent_start", async (_event, ctx) => {
       const r = run;
-      return r && r.info.role === "lead" ? contextUpdates(r, ctx) : undefined;
+      return r && (r.info.role === "lead" || r.info.role === "manager") ? contextUpdates(r, ctx) : undefined;
     });
   }
 

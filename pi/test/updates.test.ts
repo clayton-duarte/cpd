@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { contextCursorFrom, contextUpdate, parseRecords, type ContextRecord, type RecordEvent } from "../lib/updates.ts";
+import { contextCursorFrom, contextUpdate, parsePlanEvents, parseRecords, type ContextRecord, type PlanEvent, type RecordEvent } from "../lib/updates.ts";
 import { Fixture, ID, OTHER, sessionShow, settle, waitFor } from "./fake.ts";
 
 const contextMessage = (event: number | undefined, deliveredTo: string | undefined, customType = "cpd-context") => ({
@@ -231,4 +231,144 @@ test("a side fork gets updates", async (t) => {
   f.respond("context-show", contextShow([record(1)]));
   const [result] = await f.pi.fireWith("before_agent_start");
   assert.ok((result as any).message.content.includes("- hs-n1 note"));
+});
+
+// ---- the Manager's digest (§15.6, B3-A5) ----
+
+const planEvent = (n: number, over: Partial<PlanEvent> = {}): PlanEvent => ({ event: 300 + n, at: `2026-10-18T09:${String(n).padStart(2, "0")}:00Z`, plan: "pay-4521", text: `Plan phase ${n}.`, ...over });
+const planEventsList = (ns: number[]) => ({ ok: true, events: ns.map((n) => ({ id: 300 + n, at: planEvent(n).at, kind: "plan-phase", context: "ctx", plan: "pay-4521", text: `Plan phase ${n}.`, data: {} })), next: 300 + Math.max(...ns, 0) });
+
+test("digest: records, then Plans:, one line per Event; details.event is the highest of either read", () => {
+  const m = contextUpdate("ctx", ID, [recordEvent(1), recordEvent(2)], [record(1), record(2)], [planEvent(1), planEvent(2, { plan: "pay-4522", text: "Job api-1 failed." })])!;
+  assert.equal(
+    m.content,
+    [
+      "Context ctx: 2 new records since your last turn.",
+      "- hs-n1 note (2026-10-17): note 1",
+      "- hs-n2 note (2026-10-17): note 2",
+      "Plans:",
+      "- 2026-10-18T09:01:00Z pay-4521: Plan phase 1.",
+      "- 2026-10-18T09:02:00Z pay-4522: Job api-1 failed.",
+    ].join("\n"),
+  );
+  assert.deepEqual(m.details, { event: 302, delivered_to: ID, records: ["hs-n1", "hs-n2"] });
+});
+
+test("digest: Plan Events alone, or records alone, or none", () => {
+  const plansOnly = contextUpdate("ctx", ID, [], [], [planEvent(1)])!;
+  assert.equal(plansOnly.content, "Plans:\n- 2026-10-18T09:01:00Z pay-4521: Plan phase 1.");
+  assert.deepEqual(plansOnly.details, { event: 301, delivered_to: ID, records: [] });
+  assert.ok(!contextUpdate("ctx", ID, [recordEvent(1)], [record(1)], [])!.content.includes("Plans:"));
+  assert.equal(contextUpdate("ctx", ID, [], [], []), undefined);
+  assert.equal(contextUpdate("ctx", ID, [recordEvent(1)], [record(1, { by: ID })], []), undefined, "only own records, no Plan Events");
+  const ownAndPlans = contextUpdate("ctx", ID, [recordEvent(1)], [record(1, { by: ID })], [planEvent(1)])!;
+  assert.equal((ownAndPlans.details as any).event, 301);
+});
+
+test("digest: 25 Plan Events list 20 and name the 5 more with the id of the last one listed", () => {
+  const m = contextUpdate("ctx", ID, [], [], range(25).map((n) => planEvent(n)))!;
+  const lines = m.content.split("\n");
+  assert.equal(lines.length, 1 + 20 + 1);
+  assert.equal(lines[20], "- 2026-10-18T09:20:00Z pay-4521: Plan phase 20.");
+  assert.equal(lines[21], "and 5 more: cpd events list --context ctx --since 320");
+  assert.equal((m.details as any).event, 325, "the highest id read, listed or not");
+});
+
+test("parsePlanEvents: id, at, plan and text; anything else is bad_output", () => {
+  assert.deepEqual(parsePlanEvents(planEventsList([1])), [planEvent(1)]);
+  assert.throws(() => parsePlanEvents({ events: [{ id: 1, at: "x", plan: null, text: "t" }] }), { code: "bad_output" });
+  assert.throws(() => parsePlanEvents({}), { code: "bad_output" });
+});
+
+async function manager(f: Fixture, over: Record<string, unknown> = {}) {
+  await lead(f, { role: "manager", plan: null, plan_lead: false, ...over });
+}
+const planCalls = (f: Fixture) => updatesCalls(f).filter((a) => a[1] === "list" && !a.includes("context-record"));
+
+test("a Manager's run with 2 new records and 3 Plan Events gets one cpd-context message with both sections", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await manager(f);
+  f.respond("events-list@context-record", eventsList([1, 2]));
+  f.respond("context-show", contextShow([record(1), record(2)]));
+  f.respond("events-list@plan-created", planEventsList([1, 2, 3]));
+
+  const [result] = await f.pi.fireWith("before_agent_start", { messageType: "user", prompt: "go" });
+  const m = (result as any).message;
+  assert.equal(m.customType, "cpd-context");
+  assert.equal(m.content.split("\n").filter((l: string) => l === "Plans:").length, 1);
+  assert.deepEqual(m.content.split("\n").slice(0, 3), ["Context ctx: 2 new records since your last turn.", "- hs-n1 note (2026-10-17): note 1", "- hs-n2 note (2026-10-17): note 2"]);
+  assert.deepEqual(m.content.split("\n").slice(3), ["Plans:", ...range(3).map((n) => `- ${planEvent(n).at} pay-4521: Plan phase ${n}.`)]);
+  assert.deepEqual(m.details, { event: 303, delivered_to: ID, records: ["hs-n1", "hs-n2"] });
+  assert.deepEqual(planCalls(f), [["events", "list", "--context", "ctx", ...["plan-created", "plan-phase", "pr-opened", "pr-merged", "job-failed", "escalation", "plan-done"].flatMap((k) => ["--kind", k]), "--since", "100"]]);
+  assert.deepEqual(f.pi.sent, [], "it never starts a turn");
+});
+
+test("a Manager's digest alone: no records, Plan Events only", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await manager(f);
+  f.respond("events-list@context-record", eventsList([]));
+  f.respond("events-list@plan-created", planEventsList([1]));
+  const [result] = await f.pi.fireWith("before_agent_start");
+  assert.equal((result as any).message.content, `Plans:\n- ${planEvent(1).at} pay-4521: Plan phase 1.`);
+  assert.deepEqual(updatesCalls(f).map((a) => a[0] + " " + a[1]), ["events list", "events list"], "no records to read");
+});
+
+test("a Manager gets nothing when nothing is new", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await manager(f);
+  f.respond("events-list@context-record", eventsList([]));
+  f.respond("events-list@plan-created", planEventsList([]));
+  assert.deepEqual(await f.pi.fireWith("before_agent_start"), [undefined]);
+});
+
+test("a Manager's 25 Plan Events show 20 and the command for the rest", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await manager(f);
+  f.respond("events-list@context-record", eventsList([]));
+  f.respond("events-list@plan-created", planEventsList(range(25)));
+  const [result] = await f.pi.fireWith("before_agent_start");
+  const lines = (result as any).message.content.split("\n");
+  assert.equal(lines.length, 22);
+  assert.equal(lines[21], "and 5 more: cpd events list --context ctx --since 320");
+  assert.equal((result as any).message.details.event, 325);
+});
+
+test("the Manager's cursor is the one for both sections: the next read starts after the highest id read", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await manager(f);
+  f.respond("events-list@context-record", eventsList([]));
+  f.respond("events-list@plan-created", planEventsList([1]));
+  const [result] = await f.pi.fireWith("before_agent_start");
+  f.pi.entries.push({ type: "custom_message", ...(result as any).message });
+  await f.pi.fireWith("before_agent_start");
+  assert.deepEqual(updatesCalls(f).filter((a) => a[1] === "list").map((a) => a.at(-1)), ["100", "100", "301", "301"]);
+});
+
+test("a failed Plan Events read fails the whole message: nothing added, the cursor stays, one error without a turn", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await manager(f);
+  f.respond("events-list@context-record", eventsList([1]));
+  f.respond("context-show", contextShow([record(1)]));
+  f.respond("events-list@plan-created", { ok: false, error: { code: "store_busy", message: "database is locked" } }, { exit: 1 });
+  assert.deepEqual(await f.pi.fireWith("before_agent_start"), [undefined]);
+  assert.equal(f.pi.errors().length, 1);
+  assert.deepEqual(f.pi.errors()[0]!.options, { triggerTurn: false, deliverAs: "followUp" });
+});
+
+test("a Lead's message has no Plans: section and never reads Plan Events", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await lead(f);
+  f.respond("events-list", eventsList([1]));
+  f.respond("events-list@plan-created", planEventsList([1, 2]));
+  f.respond("context-show", contextShow([record(1)]));
+  const [result] = await f.pi.fireWith("before_agent_start");
+  assert.ok(!(result as any).message.content.includes("Plans:"));
+  assert.deepEqual(planCalls(f), []);
 });
