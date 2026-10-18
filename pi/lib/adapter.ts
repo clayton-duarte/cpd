@@ -311,6 +311,10 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       followerError(r, parsed.error);
       return false;
     }
+    if (parsed.type === "unknown-kind") {
+      r.cursor = Math.max(r.cursor, parsed.id); // skipped silently: a kind this adapter does not know is one it cannot need
+      return false;
+    }
     if (parsed.type === "invalid") {
       deliver("events follow", new CpdError("invalid_event", `skipped a line that is not a valid Event: ${parsed.reason}`));
       if (parsed.id !== undefined) r.cursor = Math.max(r.cursor, parsed.id);
