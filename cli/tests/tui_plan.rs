@@ -438,6 +438,26 @@ fn styled_screen(env: &TestEnv, pane: &str) -> String {
     tmux_out(env, &["capture-pane", "-p", "-e", "-t", pane])
 }
 
+/// The visible text the OSC 8 links to `url` cover in `styled`, SGR sequences dropped.
+fn linked_text(styled: &str, url: &str) -> String {
+    let (mut out, mut inside, mut rest) = (String::new(), false, styled);
+    while let Some(at) = rest.find('\x1b') {
+        if inside {
+            out.push_str(&rest[..at]);
+        }
+        rest = &rest[at..];
+        if let Some(osc) = rest.strip_prefix("\x1b]8;;") {
+            let end = osc.find("\x1b\\").expect("an OSC 8 ends in ST");
+            inside = &osc[..end] == url;
+            rest = &osc[end + 2..];
+        } else {
+            let end = rest.find('m').expect("an SGR ends in m");
+            rest = &rest[end + 1..];
+        }
+    }
+    out
+}
+
 #[test]
 fn a_pull_request_box_title_ends_in_a_link_to_it_and_a_pending_review_is_a_row_above_the_boxes() {
     let env = env();
@@ -452,12 +472,9 @@ fn a_pull_request_box_title_ends_in_a_link_to_it_and_a_pending_review_is_a_row_a
     let styled = styled_screen(&env, &pane);
     assert!(styled.contains("]8;;https://github.com/acme/repo/pull/7"), "{styled:?}");
     assert!(styled.contains("]8;;http://localhost:19433"), "{styled:?}");
-    // each link wraps its `↗` and nothing else
-    for url in ["https://github.com/acme/repo/pull/7", "http://localhost:19433"] {
-        assert!(
-            styled.lines().any(|l| l.contains(&format!("]8;;{url}\x1b\\↗\x1b]8;;\x1b\\"))),
-            "{url}: {styled:?}"
-        );
+    // each link wraps its whole text, from `#` or `Plan` through `↗`, and nothing else
+    for (url, text) in [("https://github.com/acme/repo/pull/7", "#7 open ↗"), ("http://localhost:19433", "Plan review r2 pending ↗")] {
+        assert_eq!(linked_text(&styled, url), text, "{url}: {styled:?}");
     }
 }
 
