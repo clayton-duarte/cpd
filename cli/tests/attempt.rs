@@ -57,7 +57,7 @@ fn fixture(files: &[(&str, &str)]) -> Fx {
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
     let mut fx = Fx { env, home, repo, lead, work: PathBuf::new() };
-    fx.sql(&format!(
+    fx.env.sql(&format!(
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
@@ -93,10 +93,6 @@ impl Fx {
         Store::open(&self.home, 5000).unwrap()
     }
 
-    fn sql(&self, sql: &str) {
-        self.store().write("fixture", |tx| exec(tx, sql)).unwrap();
-    }
-
     fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
         self.store().read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
     }
@@ -130,7 +126,7 @@ impl Fx {
         }
         self.env.git(&lead, &["add", "-A"]);
         self.env.git(&lead, &["commit", "-q", "-m", "setup", "--allow-empty"]);
-        self.sql(&format!(
+        self.env.sql(&format!(
             "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
                VALUES ('pay', '{key}', '{}', 'main', 'dispatch', '{branch}', '{}', cpd_txn(), 't', 't');",
             repo.display(),
@@ -203,7 +199,7 @@ impl Fx {
     /// Registers a Worker Session for `api-a1` whose file is `file` (`None`: not known yet).
     fn session(&self, file: Option<&Path>) {
         let file = file.map_or("NULL".to_owned(), |f| format!("'{}'", f.display()));
-        self.sql(&format!(
+        self.env.sql(&format!(
             "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, state, state_at, created_at)
                VALUES ('w1', 'worker', 'ctx', 'pay', 'api-a1', 'api-a1', {file}, '/', 'S2', 'working', 't', 't');
              UPDATE attempts SET worker_session = 'w1' WHERE id = 'api-a1';"
@@ -272,7 +268,7 @@ fn submit_twice_is_already_and_writes_nothing() {
     // Also from outside the worktree: the Attempt's state is checked first.
     assert_eq!(fx.submit_in(fx.env.root()).ok()["already"], true);
     // And once the Attempt has ended with that submission.
-    fx.sql("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE id = 'api-a1'");
+    fx.env.sql("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE id = 'api-a1'");
     assert_eq!(fx.submit().ok()["already"], true);
 }
 
@@ -280,7 +276,7 @@ fn submit_twice_is_already_and_writes_nothing() {
 fn submit_refuses_an_attempt_that_is_not_running() {
     let fx = fixture(&[]);
     fx.commit("a.txt", "a\n");
-    fx.sql("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = 'api-a1'");
+    fx.env.sql("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = 'api-a1'");
     let error = refused(&fx.submit(), "attempt_not_running", 3);
     assert_eq!(error["details"]["status"], "ended");
     assert_eq!(error["details"]["cause"], "timed_out");
@@ -499,7 +495,7 @@ fn read_needs_a_registered_session_with_an_existing_file() {
     refused(&fx.cpd(&["read", "api-a1"]), "session_not_found", 4);
 
     let gone = fx.env.root().join("gone.jsonl");
-    fx.sql(&format!("UPDATE sessions SET file = '{}' WHERE id = 'w1'", gone.display()));
+    fx.env.sql(&format!("UPDATE sessions SET file = '{}' WHERE id = 'w1'", gone.display()));
     let error = refused(&fx.cpd(&["read", "api-a1"]), "session_not_found", 4);
     assert_eq!(error["details"]["session"], "w1");
 
@@ -515,7 +511,7 @@ fn show_returns_every_field_its_escalations_and_its_paths() {
     let fx = fixture(&[]);
     let file = fx.session_file(SESSION);
     fx.session(Some(&file));
-    fx.sql(
+    fx.env.sql(
         "UPDATE attempts SET spec_path = '/specs/api-a1.md', driver_pid = 4242, nudged = 1, metrics = '{\"turns\":3}' WHERE id = 'api-a1';
          INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
            VALUES ('pay', 'api-a1-q1', 'api-a1', 1, 'Which?', 'open', 99, 't');",
@@ -575,7 +571,7 @@ fn show_refuses_what_does_not_exist() {
 /// Attempts `api-a1` (ended), `api-a2` (running), `web-a1` (running).
 fn listed() -> Fx {
     let fx = fixture(&[]);
-    fx.sql(
+    fx.env.sql(
         "UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 'u' WHERE id = 'api-a1';
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
            VALUES ('pay', 'api-a2', 'api', 2, 'S3', 'retry', 'running', 'cpd/pay--api-a2', '/w2', 't2');",
@@ -621,7 +617,7 @@ fn list_refuses_what_does_not_exist() {
     refused(&fx.cpd(&["list", "--job", "Bad_Key"]), "invalid_job_id", 2);
     refused(&fx.env.cpd(&["attempt", "list", "--plan", "nope"]), "plan_not_found", 4);
     refused(&fx.env.cpd(&["attempt", "list"]), "plan_required", 2);
-    fx.sql(
+    fx.env.sql(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
          VALUES ('pay', 'repo', 'idle', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, 1, 't')",
     );

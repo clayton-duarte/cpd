@@ -10,9 +10,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use common::{CPD, TestEnv};
-use cpd_core::error::CpdError;
-use cpd_core::home::CpdHome;
-use cpd_core::store::Store;
 use serde_json::json;
 
 // ---------- the prepared store ----------
@@ -23,22 +20,11 @@ fn env() -> TestEnv {
     env
 }
 
-fn sql(env: &TestEnv, text: &str) {
-    let mut store = Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap();
-    store
-        .write("fixture", |tx| {
-            tx.execute_batch(text)?;
-            Ok::<(), CpdError>(())
-        })
-        .unwrap();
-}
-
 /// Context `alpha` with the Lead Session `l1`, named `old lead`, with `file` (or none registered), archived or not.
 fn populate(env: &TestEnv, file: Option<&Path>, archived: bool) {
     let file = file.map_or("NULL".to_owned(), |f| format!("'{}'", f.display()));
     let archived = if archived { "'2026-01-04T00:00:00.000Z'" } else { "NULL" };
-    sql(
-        env,
+    env.sql(
         &format!(
             "INSERT INTO contexts (id, title, jira, created_at, created_on)
              VALUES ('alpha', 'Title', NULL, '2026-01-01T00:00:00.000Z', 'm1');
@@ -198,7 +184,7 @@ fn an_unknown_session_or_a_missing_file_is_refused_before_drawing() {
     assert_eq!((run.exit, run.error()["code"].clone()), (4, json!("session_not_found")), "{run:?}");
     let run = env.cpd(&["tui", "view", "history", "l1"]);
     assert_eq!(run.error()["code"], "file_unreadable", "a Session with no file: {run:?}");
-    sql(&env, &format!("UPDATE sessions SET file = '{}' WHERE id = 'l1'", env.root().join("gone.jsonl").display()));
+    env.sql(&format!("UPDATE sessions SET file = '{}' WHERE id = 'l1'", env.root().join("gone.jsonl").display()));
     let run = env.cpd(&["tui", "view", "history", "l1"]);
     assert_eq!(run.error()["code"], "file_unreadable", "a file that is not there: {run:?}");
     let run = env.cpd(&["tui", "view", "history"]);

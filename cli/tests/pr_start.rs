@@ -45,7 +45,7 @@ fn fx() -> Fx {
     // E5 polls on every engine: a `gh` that finds no pull requests, so that no test reaches the real one.
     env.fake_gh(&format!("echo '{EMPTY_SEARCH}'"));
     let fx = Fx { env };
-    fx.sql(
+    fx.env.sql(
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'stopped', 't', 't');
@@ -58,10 +58,6 @@ fn fx() -> Fx {
 impl Fx {
     fn store(&self) -> Store {
         Store::open(&CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap(), 5000).unwrap()
-    }
-
-    fn sql(&self, sql: &str) {
-        self.store().write("fixture", |tx| Ok(tx.execute_batch(sql)?)).unwrap();
     }
 
     fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
@@ -95,7 +91,7 @@ impl Fx {
 
     /// A draft Job of PR `pr`.
     fn job(&self, key: &str, pr: &str) {
-        self.sql(&format!(
+        self.env.sql(&format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
              VALUES ('pay', '{pr}', '{key}', 'Job {key}', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         ));
@@ -114,12 +110,12 @@ impl Fx {
 
     /// The Plan locked, as `plan lock` leaves it, without starting any PR.
     fn dispatch(&self) {
-        self.sql("UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';");
+        self.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';");
     }
 
     /// PR `key` `open`, one allowed step at a time.
     fn open(&self, key: &str) {
-        self.sql(&format!(
+        self.env.sql(&format!(
             "UPDATE prs SET status = 'dispatch', lead_worktree = '/x/{key}', started_at = 't' WHERE plan = 'pay' AND key = '{key}';
              INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
                VALUES ('acme/{key}', 1, 'https://github.com/acme/{key}/pull/1', 'T', 0, 'open', 'none', 'none', 't', 't');
@@ -130,7 +126,7 @@ impl Fx {
 
     /// An `open` PR `key` merged.
     fn merge(&self, key: &str) {
-        self.sql(&format!(
+        self.env.sql(&format!(
             "UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pay' AND key = '{key}';
              UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE repo = 'acme/{key}';"
         ));
@@ -488,7 +484,7 @@ fn a_pr_made_before_r34_keeps_its_branch_and_worktree_name() {
     let fx = fx();
     let repo = fx.repo("pay");
     // As migration 4 leaves it: the Lead Branch is `cpd/<plan>`.
-    fx.sql(&format!(
+    fx.env.sql(&format!(
         "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
          VALUES ('pay', 'pay', '{}', 'main', 'waiting', 'cpd/pay', cpd_txn(), 't');",
         repo.path.display()

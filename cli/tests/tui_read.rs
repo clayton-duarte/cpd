@@ -7,9 +7,9 @@ mod common;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use common::TestEnv;
+use common::{TestEnv, sql};
 use cpd_core::config::Tier;
-use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::error::ErrorCode;
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, EscalationId, JobKey, PlanId, SessionId};
 use cpd_core::plan::{Phase, plan_fingerprint};
@@ -24,15 +24,6 @@ use rusqlite::Connection;
 
 fn open(env: &TestEnv) -> Store {
     Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
-}
-
-fn sql(store: &mut Store, text: &str) {
-    store
-        .write("fixture", |tx| {
-            tx.execute_batch(text)?;
-            Ok::<(), CpdError>(())
-        })
-        .unwrap();
 }
 
 fn plan(s: &str) -> PlanId {

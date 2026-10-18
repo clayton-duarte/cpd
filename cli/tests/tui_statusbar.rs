@@ -9,9 +9,6 @@ mod common;
 use std::fs;
 
 use common::{CPD, TestEnv, wait_until};
-use cpd_core::error::CpdError;
-use cpd_core::home::CpdHome;
-use cpd_core::store::Store;
 
 const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -28,16 +25,6 @@ fn env() -> TestEnv {
     )
     .unwrap();
     env
-}
-
-fn sql(env: &TestEnv, text: &str) {
-    Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000)
-        .unwrap()
-        .write("fixture", |tx| {
-            tx.execute_batch(text)?;
-            Ok::<(), CpdError>(())
-        })
-        .unwrap();
 }
 
 /// One Plan `ship` with one Job per entry of `attempts`, each with one Attempt in that status.
@@ -108,7 +95,7 @@ fn row_ending(env: &TestEnv, pane: &str, tail: &str) -> String {
 #[test]
 fn the_row_has_the_three_buttons_left_and_the_workers_at_the_right_edge() {
     let env = env();
-    sql(&env, &plan_with_attempts(&["ended", "running", "starting"]));
+    env.sql(&plan_with_attempts(&["ended", "running", "starting"]));
     let pane = start_view(&env, 80);
     let row = row_ending(&env, &pane, "workers 2/4");
     assert!(row.starts_with("⧉ ? ▤"), "{row:?}");
@@ -118,13 +105,13 @@ fn the_row_has_the_three_buttons_left_and_the_workers_at_the_right_edge() {
 #[test]
 fn the_workers_follow_the_slots() {
     let env = env();
-    sql(&env, &plan_with_attempts(&[]));
+    env.sql(&plan_with_attempts(&[]));
     // the shortening to `0/4` on a row under 11 columns is `the_workers_indicator_is_given_the_full_width` (unit
     // test); this one uses a row wide enough for the long form
     let pane = start_view(&env, 40);
     row_ending(&env, &pane, "workers 0/4");
     // an Attempt takes a slot: the view re-reads when the store's Events move, or within 2 s
-    sql(&env, &attempt_row(1, "running"));
+    env.sql(&attempt_row(1, "running"));
     row_ending(&env, &pane, "workers 1/4");
 }
 

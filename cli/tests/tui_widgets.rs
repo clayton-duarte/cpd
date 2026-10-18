@@ -7,8 +7,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until};
-use cpd_core::error::CpdError;
+use common::{CPD, SLEEP_SECONDS, TestEnv, sql, wait_until};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use cpd_tui::palette::{self, Meaning};
@@ -23,15 +22,6 @@ use ratatui::style::{Color, Modifier};
 
 fn open(env: &TestEnv) -> Store {
     Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
-}
-
-fn sql(store: &mut Store, text: &str) {
-    store
-        .write("fixture", |tx| {
-            tx.execute_batch(text)?;
-            Ok::<(), CpdError>(())
-        })
-        .unwrap();
 }
 
 fn context(id: &str) -> String {

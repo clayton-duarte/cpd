@@ -9,8 +9,7 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::{CPD, TestEnv};
-use cpd_core::error::CpdError;
+use common::{CPD, TestEnv, sql};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 
@@ -29,15 +28,6 @@ fn env() -> TestEnv {
 
 fn open(env: &TestEnv) -> Store {
     Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
-}
-
-fn sql(store: &mut Store, text: &str) {
-    store
-        .write("fixture", |tx| {
-            tx.execute_batch(text)?;
-            Ok::<(), CpdError>(())
-        })
-        .unwrap();
 }
 
 fn context(id: &str) -> String {

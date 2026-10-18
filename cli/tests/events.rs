@@ -178,10 +178,7 @@ fn follow_until_idle(env: &TestEnv, args: &[&str]) -> Vec<Value> {
 }
 
 fn refused(env: &TestEnv, args: &[&str], code: &str, exit: i32) -> Value {
-    let run = env.cpd(args);
-    let err = run.error();
-    assert_eq!((err["code"].as_str().unwrap(), run.exit), (code, exit), "{args:?}: {run:?}");
-    err
+    common::refused(&env.cpd(args), code, exit)
 }
 
 // ------------------------------------------------------------------ append
