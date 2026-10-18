@@ -163,16 +163,6 @@ pub fn phase(phase: Option<Phase>) -> Meaning {
     }
 }
 
-/// The phases the legend lists, with the name shown.
-pub const PHASE_LEGEND: [(&str, Option<Phase>); 6] = [
-    ("no Plan", None),
-    ("grounding", Some(Phase::Grounding)),
-    ("plan", Some(Phase::Plan)),
-    ("dispatch", Some(Phase::Dispatch)),
-    ("pr", Some(Phase::Pr)),
-    ("done", Some(Phase::Done)),
-];
-
 /// The four frames of the working dot, one per [`frame`].
 pub const SPINNER: [&str; 4] = ["◐", "◓", "◑", "◒"];
 
@@ -297,7 +287,6 @@ mod tests {
         for (p, m) in phases {
             assert_eq!(phase(p), m, "{p:?}");
         }
-        assert_eq!(PHASE_LEGEND.map(|(_, p)| p), phases.map(|(p, _)| p));
     }
 
     #[test]
