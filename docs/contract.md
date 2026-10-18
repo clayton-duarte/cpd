@@ -557,7 +557,7 @@ stateDiagram-v2
 | A1 | Check that fd 3 is the driver lock (below); load the Attempt and Job; recompute the Locked-Job fingerprint (§2.3) |
 | A2 | Create the worktree from the HEAD of the Lead Branch of the Job's PR, in that PR's repo, and run `pre-start` (§7.2, §7.3); record `base_sha` |
 | A3 | Render the Worker Spec to `run/<plan>/specs/<attempt>.md` (content: `commands.md`); start the Worker in the hidden session (§6.5); register its Session. A review Job's Worker is a fork of the Lead (below) |
-| A4 | Wait. Active time is wall time minus time with an `open` Escalation. |
+| A4 | Wait. Active time is wall time minus time with an `open` Escalation. At each tick, while the Worker's pi is alive and `timeouts.stall_seconds` is not `0`, the driver also checks for a **stall** (hs-d195): the Worker's session file (§6.5) has not been modified for `stall_seconds` **and** its last entry is an assistant message whose last content is a tool call with no tool result after it (pi is inside that tool call). It then kills the processes pi started for the call: every descendant process of the Worker's pi process, never pi itself (`SIGTERM`, then `SIGKILL` after 10 s to those still alive). pi gets the tool's failure, writes it to the session and the Worker continues. The Attempt stays `running`, and its active-time clock is unchanged. One line per kill goes to the driver log (`run/<plan>/logs/attempt-<attempt>.log`): the pids, their command lines and the idle time. No Event, no cause, no row is written; a second stall in the same Attempt is handled the same way |
 | A5 | Decide the end of `running`: submitted (the Attempt is `merging`) → A8; `stop_request` → end; pane dead or bad stop reason → `crashed`; Worker `idle` without a submit → append `attempt-nudge` once, then `no_submit` if idle again without a submit. A Worker's idleness is read from its Session state and confirmed from its session file (the last assistant `stopReason`), never from the state alone (t1 F7, kept) |
 | A6 | Removed by R19 (no Job-level Reviewer). |
 | A7 | Removed by R19 (no Job-level Reviewer). |
@@ -1757,6 +1757,7 @@ H = "github-copilot/claude-haiku-4.5"
 
 [timeouts]
 attempt_minutes = 30         # active time per Attempt (§3.4)
+stall_seconds = 1200         # a Worker idle in one tool call this long has that call's processes killed (§3.4 A4); 0 = off
 ask_minutes = 60             # an Escalation expires after this
 setup_minutes = 15           # pre-start
 gate_minutes = 30            # pre-commit and pre-merge
@@ -1789,7 +1790,8 @@ work_session = "cpd-work"    # the hidden session for Workers and watch
 | `lead_pi_packages` | [text] | the two packages above | non-empty strings |
 | `pi_adapter` | path | `""` (beside the binary) | must contain `package.json` |
 | `tiers.O`, `tiers.S`, `tiers.H` | text | above | `^[^/\s]+/\S+$` |
-| `timeouts.*` | int | above | ≥ 1 |
+| `timeouts.*` | int | above | ≥ 1, except `timeouts.stall_seconds` |
+| `timeouts.stall_seconds` | int | `1200` | ≥ 0; `0` disables the stall kill (§3.4 A4). Why (hs-n107, hs-d195): a Worker's tool call that never exits (a command run without `timeout`) left pi waiting and its session file unwritten, and the Attempt ran to `attempt_minutes` for nothing; killing that call's processes gives pi the tool's failure and the Worker continues |
 | `watch.*` | int | above | ≥ 1 |
 | `events.poll_ms` | int | `200` | 20–10000 |
 | `tmux.socket`, `tmux.cockpit_session`, `tmux.work_session` | text | above | `^[A-Za-z0-9_-]{1,32}$`; the two sessions differ |
