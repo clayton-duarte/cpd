@@ -494,9 +494,45 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
     assert!(!resume.iter().any(|a| a == "--fork" || a == "--"), "{resume:?}");
 }
 
+/// A fork whose source is `stopped` with no session file can never see it idle: it says so,
+/// offers Enter to retry, and forks once the source has a finished turn (hs-d196).
+#[test]
+fn fork_stops_waiting_for_a_stopped_source_without_a_file_and_retries_on_enter() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd(&env);
+    fake_pi(&env, "exit 1");
+    cockpit(&env);
+    let message = env.root().join("message.md");
+    fs::write(&message, "Review the tests.").unwrap();
+
+    let out = env.cpd(&["session", "fork", LEAD2, "--name", "side", "--message-file", message.to_str().unwrap()]).ok();
+    let pane = out["session"]["pane"].as_str().unwrap().to_owned();
+    let capture = || String::from_utf8(env.tmux(&["capture-pane", "-p", "-t", &pane]).stdout).unwrap();
+    wait_until("the refusal", || capture().contains("Press Enter to retry."));
+    assert!(capture().contains("is stopped and has no session file"), "{}", capture());
+    assert!(env.calls("pi").is_empty());
+
+    // The source gets a file with a finished turn; Enter retries and forks.
+    let sessions = env.home().join(".pi/agent/sessions/g");
+    fs::create_dir_all(&sessions).unwrap();
+    let source_file: PathBuf = sessions.join("2026_lead2.jsonl");
+    fs::write(
+        &source_file,
+        "{\"type\":\"session\"}\n{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}\n",
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_secs(2));
+    env.tmux(&["send-keys", "-t", &pane, "Enter"]);
+    wait_until("the fork", || !pi_calls_with(&env, "--fork").is_empty());
+    let fork = &pi_calls_with(&env, "--fork")[0];
+    assert_eq!(fork[fork.iter().position(|a| a == "--fork").unwrap() + 1], source_file.display().to_string());
+}
+
 /// A fake pi body that copies the file named by its last argument (`@<path>`) to `$CPD_HOME/read.copy`.
+/// The copy appears whole or not at all (cp to a temp name, then rename): a test waits for `read.copy` to exist.
 fn copy_last_file() -> String {
-    format!("for a in \"$@\"; do last=$a; done\ncp \"${{last#@}}\" \"$CPD_HOME/read.copy\"\nexec sleep {SLEEP_SECONDS}")
+    format!("for a in \"$@\"; do last=$a; done\ncp \"${{last#@}}\" \"$CPD_HOME/read.tmp\"\nmv \"$CPD_HOME/read.tmp\" \"$CPD_HOME/read.copy\"\nexec sleep {SLEEP_SECONDS}")
 }
 
 /// Bigger than one argv element may be (MAX_ARG_STRLEN, 131072 bytes; hs-n111).

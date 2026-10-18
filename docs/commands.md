@@ -116,7 +116,7 @@ The `$CPD_HOME` layout is §1.4. Commands in this file write five files the cont
 
 ### 1.5 Text arguments
 
-Free text (`--title`, `--reason`, Context record text, questions and answers) is one argument, 1 to 20 000 characters, with no NUL; else `usage`. Names (`--name`, `session rename`) are 1–80 characters with no control characters, else `invalid_name` (exit 2) (cpd 1 §11 `session rename`, kept). Files given by path (`--spec`, `--brief-file`, `--feedback-file`, `--message-file`) must be readable UTF-8, else `file_unreadable` (exit 2).
+Free text (Job `--title`, `--reason`, Context record text, questions and answers) is one argument, 1 to 20 000 characters, with no NUL; else `usage`. Context and Plan titles (`--title` of `context new`, `context rename`, `plan new`, `plan rename`) are 1–200 characters with no control characters, else `usage` (exit 2). Names (`--name`, `session rename`) are 1–80 characters with no control characters, else `invalid_name` (exit 2) (cpd 1 §11 `session rename`, kept). Files given by path (`--spec`, `--brief-file`, `--feedback-file`, `--message-file`) must be readable UTF-8, else `file_unreadable` (exit 2).
 
 ## 2. Command index
 
@@ -184,7 +184,7 @@ cpd context new <id> --title <text> [--jira <key>]
 | Flag | Meaning |
 |---|---|
 | `<id>` | Context id (§2.1) |
-| `--title <text>` | required |
+| `--title <text>` | required; 1–200 characters, no control characters, else `usage` (§1.5) |
 | `--jira <key>` | Jira Epic key, stored only (`^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage`) |
 
 | Precondition | Code | Exit |
@@ -301,7 +301,7 @@ Removed by Plan manager B1 (hs-a1): Contexts are machine-local; records live in 
 cpd context rename <id> --title <text>
 ```
 
-Changes the Context's visible label (contract §2.2: ids are immutable, titles editable). `--title` is required, 1–200 characters like `context new`'s, no control characters.
+Changes the Context's visible label (contract §2.2: ids are immutable, titles editable). `--title` is required, as `context new`'s: 1–200 characters, no control characters, else `usage` (§1.5).
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -439,7 +439,7 @@ A Plan has no repo (R34, A12): its PRs are added later with `pr add` (§9.4), an
 |---|---|
 | `<id>` | Plan id (§2.1) |
 | `--context <c>` | required: the Plan's Context (D2) |
-| `--title <text>` | required |
+| `--title <text>` | required; 1–200 characters, no control characters, else `usage` (§1.5) |
 | `--jira <key>` | Jira task key, stored only |
 | `--name <name>` | the Lead's pi display name; default `<id>` |
 | `--brief-file <file>` | the brief for the Lead (B3-A4): written as a Context record of kind `brief` and put into the Lead's first message in full |
@@ -654,7 +654,7 @@ If the engine cannot be started, the Plan stays locked and the result is `watch_
 cpd plan rename [--plan <id>] --title <text>
 ```
 
-Changes the Plan's title, the label the tree shows (contract §2.2). `--title` is required, as `plan new`'s.
+Changes the Plan's title, the label the tree shows (contract §2.2). `--title` is required, as `plan new`'s: 1–200 characters, no control characters, else `usage` (§1.5).
 
 | Precondition | Code | Exit |
 |---|---|---|
