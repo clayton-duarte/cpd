@@ -859,6 +859,9 @@ mod tests {
         let mut named = Vec::new();
         for entry in fs::read_dir(dir).unwrap() {
             let file = entry.unwrap().file_name().into_string().unwrap();
+            if file.ends_with(".rs") {
+                continue; // a named migration's Rust: build.rs refuses one without its .sql
+            }
             let stem = file.strip_suffix(".sql").unwrap_or_else(|| panic!("{file}: only migrations here"));
             if stem.as_bytes()[0] == b'0' { numbered.push(stem.to_owned()) } else { named.push(stem.to_owned()) }
         }

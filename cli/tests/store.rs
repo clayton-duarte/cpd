@@ -12,7 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use common::TestEnv;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
-use cpd_core::store::{APPLICATION_ID, HISTORY_TABLES, Store, VERSION, WriteTxn};
+use cpd_core::store::{APPLICATION_ID, HISTORY_TABLES, SCHEMA_HASH, Store, VERSION, WriteTxn, canonical_hash};
 use rusqlite::Connection;
 use rusqlite::functions::FunctionFlags;
 use serde_json::{Value, json};
@@ -158,6 +158,11 @@ fn contract() -> String {
     fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/contract.md")).unwrap()
 }
 
+/// What contract §4.4 describes that the Job `kind-tables` has yet to create: the lookup tables, and
+/// `events` and `context_records`, whose `kind` is a foreign key there and still a `CHECK` here. The
+/// Job removes this list.
+const AFTER_KIND_TABLES: [&str; 5] = ["event_kinds", "record_kinds", "history_tables", "events", "context_records"];
+
 /// The ```sql blocks of contract §4.4, in order.
 fn contract_ddl_blocks() -> Vec<String> {
     let text = contract();
@@ -190,12 +195,12 @@ fn schema_sql(conn: &Connection) -> Vec<(String, String)> {
 #[test]
 fn the_schema_is_contract_4_4_as_written() {
     let blocks = contract_ddl_blocks();
-    assert_eq!(blocks.len(), 8, "§4.4 changed shape");
-    assert!(blocks[1].contains("CREATE TRIGGER escalations_hist_ins"), "block 2 is the generated example");
+    assert_eq!(blocks.len(), 9, "§4.4 changed shape");
+    assert!(blocks[2].contains("CREATE TRIGGER escalations_hist_ins"), "block 3 is the generated example");
     // The contract's DDL, every block but the generated example, run as written.
     let contract = Connection::open_in_memory().unwrap();
     for (i, block) in blocks.iter().enumerate() {
-        if i != 1 {
+        if i != 2 {
             contract.execute_batch(block).unwrap_or_else(|e| panic!("block {}: {e}", i + 1));
         }
     }
@@ -205,7 +210,9 @@ fn the_schema_is_contract_4_4_as_written() {
     drop(open(&env));
     let found: std::collections::BTreeMap<String, String> = schema_sql(&raw(&env)).into_iter().collect();
     for (name, sql) in expected {
-        assert_eq!(found.get(&name), Some(&sql), "{name}");
+        if !AFTER_KIND_TABLES.contains(&name.as_str()) {
+            assert_eq!(found.get(&name), Some(&sql), "{name}");
+        }
     }
 }
 
@@ -222,7 +229,9 @@ fn every_table_index_and_trigger_of_4_4_exists() {
                 ["CREATE", "UNIQUE", "INDEX", name, ..] => name,
                 _ => continue,
             };
-            expected.insert(name.to_string());
+            if !AFTER_KIND_TABLES[..3].contains(name) {
+                expected.insert(name.to_string());
+            }
         }
     }
     for table in HISTORY_TABLES {
@@ -243,7 +252,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     assert_eq!(found, expected);
     // Every table is STRICT.
     let tables = names(&raw(&env), "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'");
-    assert_eq!(tables.len(), 16);
+    assert_eq!(tables.len(), 17, "§4.4's tables but the three lookup tables, and schema_migrations");
     for table in tables {
         let strict: i64 = raw(&env)
             .query_row("SELECT strict FROM pragma_table_list WHERE name = ?1", [&table], |r| r.get(0))
@@ -257,7 +266,7 @@ fn generated_history_triggers_match_the_contracts_example() {
     let env = TestEnv::new();
     drop(open(&env));
     let conn = raw(&env);
-    let example = &contract_ddl_blocks()[1];
+    let example = &contract_ddl_blocks()[2];
     for statement in example.split_inclusive("END;") {
         let statement = statement.trim();
         if statement.is_empty() {
@@ -658,8 +667,8 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
     let env = TestEnv::new();
     let mut store = fixture_store(&env);
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-    let hash = store.read(|c| Ok(cpd_core::store::schema_hash(c)?)).unwrap();
-    assert_eq!(hash, "a1b657a955520d2dd6dd71e143cee1fd8aba88fafc9284a7e8ab89dfc05c82af", "version 6 (the PR poller) on top of migration 5 (hs-d118)");
+    let hash = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
+    assert_eq!(hash, SCHEMA_HASH, "a fresh store hashes to the hash pinned in the code (§4.3)");
 
     for table in ["contexts", "plans", "sessions"] {
         let archived: Option<String> =
@@ -694,8 +703,9 @@ fn a_newer_schema_is_store_too_new() {
     let err = Store::open(&home(&env), 5000).err().unwrap();
     assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
     assert_eq!(err.exit().code(), 1);
-    assert_eq!(err.details()["version"], VERSION + 1);
-    assert_eq!(err.details()["supported"], VERSION);
+    assert_eq!(err.details()["user_version"], VERSION + 1);
+    assert_eq!(err.details()["floor"], Value::Null);
+    assert_eq!(err.details()["unknown"], json!([]));
 }
 
 #[test]
@@ -706,7 +716,7 @@ fn a_failed_migration_rolls_back_entirely() {
     let err = Store::open(&home(&env), 5000).err().unwrap();
     assert_eq!(err.code(), ErrorCode::MigrationFailed, "{err:?}");
     assert_eq!(err.exit().code(), 1);
-    assert_eq!(err.details()["to"], 1);
+    assert_eq!(err.details()["migration"], "0001-initial");
     let conn = raw(&env);
     let tables = names(&conn, "SELECT name FROM sqlite_schema");
     assert_eq!(tables, BTreeSet::from(["history".to_owned()]));
@@ -716,197 +726,47 @@ fn a_failed_migration_rolls_back_entirely() {
     assert_eq!(app, 0);
 }
 
-// ---------- §4.5 migration 6: pull_requests and prs.pull_request ----------
-
-/// The `CREATE TABLE prs (...) STRICT;` of versions 4 and 5, from `0004.sql` (migration 5 changes no table).
-fn prs_at_version_4() -> String {
-    let text = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/src/store/migrations/0004.sql")).unwrap();
-    let start = text.find("CREATE TABLE prs (").unwrap();
-    let end = start + text[start..].find(") STRICT;").unwrap() + ") STRICT;".len();
-    text[start..end].to_owned()
-}
-
-/// A database at version 5: a fresh one with `pull_requests` gone and `prs` as migration 4 made it, holding
-/// - `op1`: its PR open, `pr_title` and the review and the checks polled;
-/// - `op2`: its PR open, never polled (`pr_title` null);
-/// - `mg`: its PR merged;
-/// - `wt`: its PR waiting.
-fn version_5_database(env: &TestEnv) {
-    drop(open(env));
-    let conn = raw(env);
-    conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
-    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, |_| Ok(1_i64)).unwrap();
-    let pr = |plan: &str, key: &str, status: &str, more: &str, values: &str| {
-        let (worktree, started) = if status == "waiting" { ("NULL", "NULL") } else { ("'/wt'", "'2026-01-02T00:00:00.000Z'") };
-        format!(
-            "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
-               VALUES ('{plan}', 'ctx', 'Plan {plan}', '{phase}', 'l-{plan}', 't', {locked}, {done});
-             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-               VALUES ('l-{plan}', 'lead', 'ctx', '{plan}', 'Lead', '/', 'O3', 'idle', 't', 't');
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at {more})
-               VALUES ('{plan}', '{key}', '/r/{key}', 'main', '{status}', 'cpd/{plan}/{key}', {worktree}, {started}, 1, 't' {values});",
-            phase = match status {
-                "waiting" => "plan",
-                "merged" => "done",
-                _ => "pr",
-            },
-            locked = if status == "waiting" { "NULL" } else { "'2026-01-02T00:00:00.000Z'" },
-            done = if status == "merged" { "'2026-01-09T00:00:00.000Z'" } else { "NULL" },
-        )
-    };
-    conn.execute_batch(&format!(
-        "DROP TABLE pull_requests;
-         DROP TABLE prs;
-         {}
-         INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
-         {}{}{}{}
-         PRAGMA user_version = 5;",
-        prs_at_version_4(),
-        pr(
-            "op1",
-            "api",
-            "open",
-            ", pr_number, pr_url, pr_opened_at, pr_polled_at, pr_title, pr_review_decision, pr_checks",
-            ", 7, 'https://github.com/acme/api/pull/7', '2026-01-05T00:00:00.000Z', '2026-01-06T00:00:00.000Z', 'Add api', 'approved', 'passed'",
-        ),
-        pr(
-            "op2",
-            "web",
-            "open",
-            ", pr_number, pr_url, pr_opened_at",
-            ", 8, 'https://github.com/acme/web/pull/8', '2026-01-05T00:00:01.000Z'",
-        ),
-        pr(
-            "mg",
-            "docs",
-            "merged",
-            ", pr_number, pr_url, pr_opened_at, merged_at",
-            ", 9, 'https://github.com/acme/docs/pull/9', '2026-01-05T00:00:02.000Z', '2026-01-08T00:00:00.000Z'",
-        ),
-        pr("wt", "cli", "waiting", "", ""),
-    ))
-    .unwrap();
-    assert_eq!(names(&conn, "SELECT name FROM pragma_table_info('prs') WHERE name LIKE 'pr\\_%' ESCAPE '\\'").len(), 8);
-}
+// ---------- §4.5 named migrations: the runner's table ----------
 
 #[test]
-fn a_version_5_database_migrates_to_6_with_the_back_filled_rows_and_the_link() {
+fn schema_migrations_records_every_legacy_migration_and_is_written_only_by_the_runner() {
     let env = TestEnv::new();
-    version_5_database(&env);
-    let store = open(&env);
-    // Its schema is exactly that of a fresh database at version 6.
-    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-    drop(store);
-    let conn = raw(&env);
-    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-    assert_eq!(version, 6);
-    let violations: i64 = conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
-    assert_eq!(violations, 0);
-
-    // One row per PR with a number, in Plan and key order; the title is the polled one, else the Plan's.
-    let row = |r: &rusqlite::Row| -> rusqlite::Result<Value> {
-        Ok(json!([r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?,
-                  r.get::<_, i64>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, String>(9)?,
-                  r.get::<_, Option<String>>(10)?, r.get::<_, String>(11)?]))
-    };
-    let rows: Vec<Value> = conn
-        .prepare("SELECT id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at FROM pull_requests ORDER BY id")
-        .unwrap()
-        .query_map([], row)
-        .unwrap()
-        .map(Result::unwrap)
-        .collect();
-    assert_eq!(
-        rows,
-        vec![
-            json!([1, "acme/docs", 9, "https://github.com/acme/docs/pull/9", "Plan mg", 0, "merged", "none", "none",
-                   "2026-01-05T00:00:02.000Z", "2026-01-08T00:00:00.000Z", "2026-01-05T00:00:02.000Z"]),
-            json!([2, "acme/api", 7, "https://github.com/acme/api/pull/7", "Add api", 0, "open", "approved", "passed",
-                   "2026-01-05T00:00:00.000Z", null, "2026-01-05T00:00:00.000Z"]),
-            json!([3, "acme/web", 8, "https://github.com/acme/web/pull/8", "Plan op2", 0, "open", "none", "none",
-                   "2026-01-05T00:00:01.000Z", null, "2026-01-05T00:00:01.000Z"]),
-        ]
-    );
-
-    // `pull_request` is set exactly for the open and the merged PR; every other column is kept.
-    let prs: Vec<(String, String, Option<i64>, Option<i64>, Option<String>)> = conn
-        .prepare("SELECT plan, status, pull_request, pr_number, merged_at FROM prs ORDER BY plan")
-        .unwrap()
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
-        .unwrap()
-        .map(Result::unwrap)
-        .collect();
-    let some = |s: &str| Some(s.to_owned());
-    assert_eq!(
-        prs,
-        vec![
-            ("mg".into(), "merged".into(), Some(1), Some(9), some("2026-01-08T00:00:00.000Z")),
-            ("op1".into(), "open".into(), Some(2), Some(7), None),
-            ("op2".into(), "open".into(), Some(3), Some(8), None),
-            ("wt".into(), "waiting".into(), None, None, None),
-        ]
-    );
-    let columns = names(&conn, "SELECT name FROM pragma_table_info('prs')");
-    for gone in ["pr_seen", "pr_polled_at", "pr_title", "pr_review_decision", "pr_checks"] {
-        assert!(!columns.contains(gone), "{gone}");
-    }
-    for kept in ["pr_number", "pr_url", "pr_opened_at", "pull_request"] {
-        assert!(columns.contains(kept), "{kept}");
-    }
-
-    // The history triggers of both tables exist; the back-fill wrote an `insert` row for each pull request.
-    let triggers = names(&conn, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name IN ('pull_requests', 'prs')");
-    for trigger in ["pull_requests_hist_ins", "pull_requests_hist_upd", "pull_requests_hist_del", "pull_requests_owned", "prs_hist_ins", "prs_hist_upd"] {
-        assert!(triggers.contains(trigger), "{trigger}: {triggers:?}");
-    }
-    assert!(!triggers.contains("pull_requests_no_delete"));
-    let inserted: Vec<String> = conn
-        .prepare("SELECT pk FROM history WHERE tbl = 'pull_requests' AND op = 'insert' ORDER BY id")
-        .unwrap()
-        .query_map([], |r| r.get(0))
-        .unwrap()
-        .map(Result::unwrap)
-        .collect();
-    assert_eq!(inserted, ["[1]", "[2]", "[3]"]);
-}
-
-#[test]
-fn an_owned_pull_request_cannot_be_deleted_and_an_unowned_one_can_with_a_history_row() {
-    let env = TestEnv::new();
-    version_5_database(&env);
     let mut store = open(&env);
-    // Owned by the open PR of `op1`.
-    let err = refused(&mut store, "DELETE FROM pull_requests WHERE number = 7");
-    assert_eq!(err.code(), ErrorCode::StoreFailed, "{err:?}");
-    assert!(sqlite_message(&err).starts_with("append_only"), "{err:?}");
-    // Owned by the merged PR of `mg`.
-    assert!(sqlite_message(&refused(&mut store, "DELETE FROM pull_requests WHERE number = 9")).starts_with("append_only"));
-    // One no PR points to: a pull request of the User's that no Plan owns.
-    store
-        .write("test", |tx| {
-            exec(
-                tx,
-                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
-                 VALUES ('acme/other', 3, 'https://github.com/acme/other/pull/3', 'Other', 1, 'open', 'none', 'pending', 't', 't')",
-            )
-        })
-        .unwrap();
-    let id: i64 = store.read(|c| Ok(c.query_row("SELECT id FROM pull_requests WHERE number = 3", [], |r| r.get(0))?)).unwrap();
-    store.write("test", |tx| exec(tx, "DELETE FROM pull_requests WHERE number = 3")).unwrap();
-    let (op, pk, before, after): (String, String, String, Option<String>) = store
+    let rows: Vec<(String, String, i64, i64)> = store
         .read(|c| {
-            Ok(c.query_row(
-                "SELECT op, pk, before, after FROM history WHERE tbl = 'pull_requests' ORDER BY id DESC LIMIT 1",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-            )?)
+            let mut stmt = c.prepare("SELECT name, compat, seq, converted FROM schema_migrations ORDER BY seq")?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
         })
         .unwrap();
-    assert_eq!((op.as_str(), pk, after), ("delete", format!("[{id}]"), None));
-    let before: Value = serde_json::from_str(&before).unwrap();
-    assert_eq!((&before["repo"], &before["number"], &before["draft"], &before["checks"]), (&json!("acme/other"), &json!(3), &json!(1), &json!("pending")));
-    let left: i64 = store.read(|c| Ok(c.query_row("SELECT count(*) FROM pull_requests", [], |r| r.get(0))?)).unwrap();
-    assert_eq!(left, 3);
+    let expected = [
+        ("0001-initial", "breaking"),
+        ("0002-cockpit-parity", "additive"),
+        ("0003-archive", "breaking"),
+        ("0004-cross-repo", "breaking"),
+        ("0005-plan-reopen", "breaking"),
+        ("0006-pr-poller", "breaking"),
+    ];
+    let expected: Vec<(String, String, i64, i64)> =
+        expected.iter().enumerate().map(|(i, (n, c))| (n.to_string(), c.to_string(), i as i64 + 1, 0)).collect();
+    assert_eq!(rows, expected, "a fresh store records its legacy migrations as not converted");
+
+    // Not from the `sqlite3` shell: there is no `cpd_txn()`.
+    let err = raw(&env)
+        .execute("INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted) VALUES ('x-xxxx', 'additive', ?1, 99, 1, 0)", [FP])
+        .unwrap_err();
+    assert!(err.to_string().contains("cpd_txn"), "{err}");
+    // Not by cpd either, once recorded.
+    for sql in ["UPDATE schema_migrations SET compat = 'additive'", "DELETE FROM schema_migrations"] {
+        let err = refused(&mut store, sql);
+        assert!(sqlite_message(&err).starts_with("append_only"), "{sql}: {err:?}");
+    }
+    // And only for the migrating transaction.
+    let err = refused(
+        &mut store,
+        &format!("INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted) VALUES ('x-xxxx', 'additive', '{FP}', 99, 1, 0)"),
+    );
+    assert!(sqlite_message(&err).contains("must be cpd_txn()"), "{err:?}");
 }
 
 // ---------- §4.2 two writers in separate processes ----------

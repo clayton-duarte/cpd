@@ -1862,4 +1862,185 @@ mod tests {
             assert_eq!(err.code(), ErrorCode::StoreTampered, "{tamper}");
         }
     }
+
+    // ---------- migration 6: pull_requests and prs.pull_request, on a version 5 database with polled PRs ----------
+
+    fn names(conn: &Connection, sql: &str) -> std::collections::BTreeSet<String> {
+        conn.prepare(sql).unwrap().query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+    }
+
+    /// A database at version 5, holding
+    /// - `op1`: its PR open, `pr_title` and the review and the checks polled;
+    /// - `op2`: its PR open, never polled (`pr_title` null);
+    /// - `mg`: its PR merged;
+    /// - `wt`: its PR waiting.
+    fn version_5_four_prs(home: &CpdHome) {
+        let pr = |plan: &str, key: &str, status: &str, more: &str, values: &str| {
+            let (worktree, started) = if status == "waiting" { ("NULL", "NULL") } else { ("'/wt'", "'2026-01-02T00:00:00.000Z'") };
+            format!(
+                "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+                   VALUES ('{plan}', 'ctx', 'Plan {plan}', '{phase}', 'l-{plan}', 't', {locked}, {done});
+                 INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                   VALUES ('l-{plan}', 'lead', 'ctx', '{plan}', 'Lead', '/', 'O3', 'idle', 't', 't');
+                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at {more})
+                   VALUES ('{plan}', '{key}', '/r/{key}', 'main', '{status}', 'cpd/{plan}/{key}', {worktree}, {started}, 1, 't' {values});",
+                phase = match status {
+                    "waiting" => "plan",
+                    "merged" => "done",
+                    _ => "pr",
+                },
+                locked = if status == "waiting" { "NULL" } else { "'2026-01-02T00:00:00.000Z'" },
+                done = if status == "merged" { "'2026-01-09T00:00:00.000Z'" } else { "NULL" },
+            )
+        };
+        let sql = format!(
+            "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+             {}{}{}{}",
+            pr(
+                "op1",
+                "api",
+                "open",
+                ", pr_number, pr_url, pr_opened_at, pr_polled_at, pr_title, pr_review_decision, pr_checks",
+                ", 7, 'https://github.com/acme/api/pull/7', '2026-01-05T00:00:00.000Z', '2026-01-06T00:00:00.000Z', 'Add api', 'approved', 'passed'",
+            ),
+            pr(
+                "op2",
+                "web",
+                "open",
+                ", pr_number, pr_url, pr_opened_at",
+                ", 8, 'https://github.com/acme/web/pull/8', '2026-01-05T00:00:01.000Z'",
+            ),
+            pr(
+                "mg",
+                "docs",
+                "merged",
+                ", pr_number, pr_url, pr_opened_at, merged_at",
+                ", 9, 'https://github.com/acme/docs/pull/9', '2026-01-05T00:00:02.000Z', '2026-01-08T00:00:00.000Z'",
+            ),
+            pr("wt", "cli", "waiting", "", ""),
+        );
+        database_at(home, 5, &sql);
+    }
+
+    #[test]
+    fn a_version_5_database_with_polled_prs_migrates_to_6_with_the_back_filled_rows_and_the_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_5_four_prs(&home);
+        let store = Store::open(&home, 5000).unwrap();
+        // Its schema is exactly that of a fresh database at version 6.
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+        drop(store);
+        let conn = Connection::open(home.db()).unwrap();
+        let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(version, VERSION);
+        let violations: i64 = conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
+        assert_eq!(violations, 0);
+
+        // One row per PR with a number, in Plan and key order; the title is the polled one, else the Plan's.
+        let row = |r: &rusqlite::Row| -> rusqlite::Result<Value> {
+            Ok(serde_json::json!([r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?,
+                      r.get::<_, i64>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, String>(9)?,
+                      r.get::<_, Option<String>>(10)?, r.get::<_, String>(11)?]))
+        };
+        let rows: Vec<Value> = conn
+            .prepare("SELECT id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at FROM pull_requests ORDER BY id")
+            .unwrap()
+            .query_map([], row)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                serde_json::json!([1, "acme/docs", 9, "https://github.com/acme/docs/pull/9", "Plan mg", 0, "merged", "none", "none",
+                       "2026-01-05T00:00:02.000Z", "2026-01-08T00:00:00.000Z", "2026-01-05T00:00:02.000Z"]),
+                serde_json::json!([2, "acme/api", 7, "https://github.com/acme/api/pull/7", "Add api", 0, "open", "approved", "passed",
+                       "2026-01-05T00:00:00.000Z", null, "2026-01-05T00:00:00.000Z"]),
+                serde_json::json!([3, "acme/web", 8, "https://github.com/acme/web/pull/8", "Plan op2", 0, "open", "none", "none",
+                       "2026-01-05T00:00:01.000Z", null, "2026-01-05T00:00:01.000Z"]),
+            ]
+        );
+
+        // `pull_request` is set exactly for the open and the merged PR; every other column is kept.
+        let prs: Vec<(String, String, Option<i64>, Option<i64>, Option<String>)> = conn
+            .prepare("SELECT plan, status, pull_request, pr_number, merged_at FROM prs ORDER BY plan")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let some = |s: &str| Some(s.to_owned());
+        assert_eq!(
+            prs,
+            vec![
+                ("mg".into(), "merged".into(), Some(1), Some(9), some("2026-01-08T00:00:00.000Z")),
+                ("op1".into(), "open".into(), Some(2), Some(7), None),
+                ("op2".into(), "open".into(), Some(3), Some(8), None),
+                ("wt".into(), "waiting".into(), None, None, None),
+            ]
+        );
+        let columns = names(&conn, "SELECT name FROM pragma_table_info('prs')");
+        for gone in ["pr_seen", "pr_polled_at", "pr_title", "pr_review_decision", "pr_checks"] {
+            assert!(!columns.contains(gone), "{gone}");
+        }
+        for kept in ["pr_number", "pr_url", "pr_opened_at", "pull_request"] {
+            assert!(columns.contains(kept), "{kept}");
+        }
+
+        // The history triggers of both tables exist; the back-fill wrote an `insert` row for each pull request.
+        let triggers = names(&conn, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name IN ('pull_requests', 'prs')");
+        for trigger in ["pull_requests_hist_ins", "pull_requests_hist_upd", "pull_requests_hist_del", "pull_requests_owned", "prs_hist_ins", "prs_hist_upd"] {
+            assert!(triggers.contains(trigger), "{trigger}: {triggers:?}");
+        }
+        assert!(!triggers.contains("pull_requests_no_delete"));
+        let inserted: Vec<String> = conn
+            .prepare("SELECT pk FROM history WHERE tbl = 'pull_requests' AND op = 'insert' ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(inserted, ["[1]", "[2]", "[3]"]);
+    }
+
+
+    #[test]
+    fn an_owned_pull_request_cannot_be_deleted_and_an_unowned_one_can_with_a_history_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_5_four_prs(&home);
+        let mut store = Store::open(&home, 5000).unwrap();
+        // Owned by the open PR of `op1`.
+        let err = refused(&mut store, "DELETE FROM pull_requests WHERE number = 7");
+        assert_eq!(err.code(), ErrorCode::StoreFailed, "{err:?}");
+        assert!(sqlite_message(&err).starts_with("append_only"), "{err:?}");
+        // Owned by the merged PR of `mg`.
+        assert!(sqlite_message(&refused(&mut store, "DELETE FROM pull_requests WHERE number = 9")).starts_with("append_only"));
+        // One no PR points to: a pull request of the User's that no Plan owns.
+        write(
+            &mut store,
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
+             VALUES ('acme/other', 3, 'https://github.com/acme/other/pull/3', 'Other', 1, 'open', 'none', 'pending', 't', 't')",
+        )
+        .unwrap();
+        let id: i64 = store.read(|c| Ok(c.query_row("SELECT id FROM pull_requests WHERE number = 3", [], |r| r.get(0))?)).unwrap();
+        write(&mut store, "DELETE FROM pull_requests WHERE number = 3").unwrap();
+        let (op, pk, before, after): (String, String, String, Option<String>) = store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT op, pk, before, after FROM history WHERE tbl = 'pull_requests' ORDER BY id DESC LIMIT 1",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!((op.as_str(), pk, after), ("delete", format!("[{id}]"), None));
+        let before: Value = serde_json::from_str(&before).unwrap();
+        assert_eq!((&before["repo"], &before["number"], &before["draft"], &before["checks"]), (&serde_json::json!("acme/other"), &serde_json::json!(3), &serde_json::json!(1), &serde_json::json!("pending")));
+        let left: i64 = store.read(|c| Ok(c.query_row("SELECT count(*) FROM pull_requests", [], |r| r.get(0))?)).unwrap();
+        assert_eq!(left, 3);
+    }
+
+
 }
