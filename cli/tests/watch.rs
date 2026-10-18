@@ -947,11 +947,20 @@ fn copy_dir(from: &Path, to: &Path) {
 /// socket, and records `watch --ensure` with the windows of the work session
 /// at that moment. Returns the script's stderr and the fake's calls.
 fn install(env: &TestEnv) -> (String, Vec<Vec<String>>) {
+    let (out, calls) = install_with(env, 6, "6");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    (String::from_utf8_lossy(&out.stderr).into_owned(), calls)
+}
+
+/// `install`, where the fake build's `--version` reports `schema` and
+/// `store_schema` (a JSON literal: a number or `null`). Returns the output.
+fn install_with(env: &TestEnv, schema: u32, store_schema: &str) -> (std::process::Output, Vec<Vec<String>>) {
     let socket = env.tmux_socket();
     let built = env.fake(
         "cpd-built",
         &format!(
             r#"case "$1" in
+--version) echo '{{"ok":true,"version":"0.0.0","schema":{schema},"store_schema":{store_schema}}}' ;;
 config) echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}' ;;
 watch) tmux -L '{socket}' list-windows -t =cpd-work -F '#{{window_name}}' > '{windows}' 2>&1; echo '{{"ok":true,"started":true,"pane":"%9"}}' ;;
 esac"#,
@@ -967,9 +976,7 @@ esac"#,
         .env("CARGO_TARGET_DIR", &target)
         .output()
         .unwrap();
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert!(out.status.success(), "{stderr}");
-    (stderr, env.calls("cpd-built"))
+    (out, env.calls("cpd-built"))
 }
 
 #[test]
@@ -985,7 +992,7 @@ fn install_restarts_a_running_engine_with_ensure_and_says_so() {
     let (stderr, calls) = install(&env);
 
     assert!(stderr.contains("restarting the running engine"), "{stderr}");
-    assert_eq!(calls, [vec!["config"], vec!["watch", "--ensure"]]);
+    assert_eq!(calls, [vec!["--version"], vec!["config"], vec!["watch", "--ensure"]]);
     // The window was killed before --ensure ran; the other window is untouched.
     assert_eq!(fs::read_to_string(env.root().join("windows-at-ensure")).unwrap().trim(), "other");
 }
@@ -999,5 +1006,33 @@ fn install_leaves_a_server_without_an_engine_alone() {
     let (stderr, calls) = install(&env);
 
     assert!(!stderr.contains("restarting the running engine"), "{stderr}");
-    assert_eq!(calls, [vec!["config"]]);
+    assert_eq!(calls, [vec!["--version"], vec!["config"]]);
+}
+
+#[test]
+fn install_refuses_a_build_older_than_the_store_before_replacing_anything() {
+    let env = TestEnv::new();
+    let out = env.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "watch", "sleep", "600"]);
+    assert!(out.status.success());
+
+    let (out, calls) = install_with(&env, 5, "6");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("cpd install refused: this build supports store schema 5 but "), "{stderr}");
+    assert!(stderr.contains("cpd.db is at 6; merge main into this branch, then install again."), "{stderr}");
+    assert!(!env.home().join(".local/bin/cpd").exists());
+    assert!(!env.home().join(".local/share/cpd/pi").exists());
+    // Only --version ran: no `tui --respawn`, no `watch --ensure`.
+    assert_eq!(calls, [vec!["--version"]]);
+}
+
+#[test]
+fn install_accepts_a_build_equal_to_the_store_or_a_home_without_a_database() {
+    for store_schema in ["6", "null"] {
+        let env = TestEnv::new();
+        let (out, _) = install_with(&env, 6, store_schema);
+        assert!(out.status.success(), "{store_schema}: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(env.home().join(".local/bin/cpd").exists());
+    }
 }
