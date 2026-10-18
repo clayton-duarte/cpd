@@ -22,8 +22,6 @@ pub enum View {
     Tree,
     Plan,
     Widgets,
-    /// The StatusBar: one row across the bottom of `main`.
-    Statusbar,
     Worker,
     /// The chat slot's placeholder.
     Chat,
@@ -32,15 +30,13 @@ pub enum View {
 }
 
 impl View {
-    pub const ALL: [View; 7] =
-        [View::Tree, View::Plan, View::Widgets, View::Statusbar, View::Worker, View::Chat, View::History];
+    pub const ALL: [View; 6] = [View::Tree, View::Plan, View::Widgets, View::Worker, View::Chat, View::History];
 
     pub fn as_str(self) -> &'static str {
         match self {
             View::Tree => "tree",
             View::Plan => "plan",
             View::Widgets => "widgets",
-            View::Statusbar => "statusbar",
             View::Worker => "worker",
             View::Chat => "chat",
             View::History => "history",
@@ -51,6 +47,12 @@ impl View {
         View::ALL.into_iter().find(|v| v.as_str() == s)
     }
 }
+
+/// The `@cpd_view` of the StatusBar pane of a cockpit built before the
+/// StatusBar moved to tmux's status line (contract §6.1). No longer a
+/// [`View`]: `list-panes` skips such a pane quietly, and `cpd tui` kills it
+/// (commands.md §13.1).
+pub const LEGACY_STATUSBAR: &str = "statusbar";
 
 /// A Session's label: its Plan id, or the first 8 characters of its id when it
 /// has no Plan.

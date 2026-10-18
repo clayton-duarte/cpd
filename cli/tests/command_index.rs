@@ -88,3 +88,10 @@ fn pr_start_is_indexed_and_exists() {
     assert!(documented_commands().contains(&vec!["pr".to_owned(), "start".to_owned()]));
     assert!(Cli::command().find_subcommand("pr").unwrap().find_subcommand("start").is_some());
 }
+
+/// `tui action` is documented in §2 (Plan tui-visuals, the StatusBar's clicks) and exists.
+#[test]
+fn tui_action_is_indexed_and_exists() {
+    assert!(documented_commands().contains(&vec!["tui".to_owned(), "action".to_owned()]));
+    assert!(Cli::command().find_subcommand("tui").unwrap().find_subcommand("action").is_some());
+}
