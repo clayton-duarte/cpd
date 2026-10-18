@@ -92,6 +92,17 @@ pub struct Pull {
     pub state: PrState,
     /// `pull_requests.url`: what the title's `↗` links to.
     pub url: String,
+    /// `pull_requests.mergeable = 'conflicting'` as of the last poll; `unknown` is not a conflict.
+    pub conflicting: bool,
+}
+
+/// Whether a `pull_requests.mergeable` value is a conflict; a value outside the column's set is an error.
+fn conflicting(what: &str, mergeable: &str) -> Result<bool, CpdError> {
+    match mergeable {
+        "conflicting" => Ok(true),
+        "mergeable" | "unknown" => Ok(false),
+        _ => Err(bad_row(format!("{what} has mergeable {mergeable:?}"))),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -214,7 +225,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<PrNode>, CpdError> {
         needs.entry(pr).or_default().push(id("PR key", &need, PrKey::parse)?);
     }
     let mut stmt = conn.prepare(
-        "SELECT r.key, r.repo, r.base, r.status, r.pr_number, q.state, q.url
+        "SELECT r.key, r.repo, r.base, r.status, r.pr_number, q.state, q.url, q.mergeable
            FROM prs r LEFT JOIN pull_requests q ON q.id = r.pull_request
           WHERE r.plan = ?1 AND r.status <> 'cancelled' ORDER BY r.key",
     )?;
@@ -222,7 +233,8 @@ fn pr_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<PrNode>, CpdError> {
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
         let (key, repo, base, status): (String, String, String, String) = (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
-        let (number, row_state, url): (Option<i64>, Option<String>, Option<String>) = (r.get(4)?, r.get(5)?, r.get(6)?);
+        let (number, row_state, url, mergeable): (Option<i64>, Option<String>, Option<String>, Option<String>) =
+            (r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?);
         let what = format!("PR {plan}/{key}");
         let status = match status.as_str() {
             "waiting" => PrStatus::Waiting,
@@ -235,7 +247,13 @@ fn pr_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<PrNode>, CpdError> {
         let pull = number
             .map(|number| {
                 let url = url.ok_or_else(|| bad_row(format!("{what} has pr_number {number} and no pull request row")))?;
-                Ok::<_, CpdError>(Pull { number, state: PrState::of(status == PrStatus::Merged, row_state.as_deref()), url })
+                let mergeable = mergeable.ok_or_else(|| bad_row(format!("{what} has no mergeable")))?;
+                Ok::<_, CpdError>(Pull {
+                    number,
+                    state: PrState::of(status == PrStatus::Merged, row_state.as_deref()),
+                    url,
+                    conflicting: conflicting(&what, &mergeable)?,
+                })
             })
             .transpose()?;
         let repo_name = std::path::Path::new(&repo)

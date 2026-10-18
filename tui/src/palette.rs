@@ -213,6 +213,10 @@ pub fn pr_state(state: PrState) -> Meaning {
 /// The PR states the legend lists, with the name shown.
 pub const PR_LEGEND: [(&str, PrState); 3] = [("open", PrState::Open), ("merged", PrState::Merged), ("closed", PrState::Closed)];
 
+/// What an open pull request with a merge conflict reads instead of `open` (its `mergeable` is `conflicting`), and its
+/// meaning: the plan view's PR box title and the legend's PR states.
+pub const PR_CONFLICT: (&str, Meaning) = ("conflict", Meaning::Failed);
+
 /// Icon and meaning of a PR's checks.
 pub fn checks(c: Checks) -> (&'static str, Meaning) {
     match c {
@@ -339,6 +343,7 @@ mod tests {
             assert_eq!(pr_state(s), m, "{s:?}");
         }
         assert_eq!(PR_LEGEND.map(|(_, s)| s), states.map(|(s, _)| s));
+        assert_eq!(PR_CONFLICT, ("conflict", pr_state(PrState::Closed)));
         let table = [
             (Checks::Passed, "✓", Meaning::Done),
             (Checks::Failed, "✗", Meaning::Failed),
