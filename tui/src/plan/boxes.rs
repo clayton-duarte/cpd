@@ -77,14 +77,18 @@ fn state_text(state: PrState) -> &'static str {
 const PULL_LINK: &str = " ↗";
 
 /// The box's title: ` <key> · <repo name> → <base> · <pull request> `, the key bold; `#<number> <state> ↗` once the PR has
-/// a pull request, the state in the palette's PR state colour, else the PR's status, dim.
+/// a pull request, the state in the palette's PR state colour (`conflict`, failed, for an open one that conflicts), else the PR's status, dim.
 pub fn title(pr: &PrNode) -> Line<'static> {
     let mut spans: Vec<Span<'static>> =
         vec![" ".into(), pr.key.to_string().bold(), format!(" · {} → {} · ", pr.repo_name, pr.base).into()];
     match &pr.pull {
         Some(pull) => {
             spans.push(format!("#{} ", pull.number).into());
-            spans.push(Span::styled(state_text(pull.state), palette::fg(palette::pr_state(pull.state))));
+            let (word, meaning) = match pull.state {
+                PrState::Open if pull.conflicting => palette::PR_CONFLICT,
+                state => (state_text(state), palette::pr_state(state)),
+            };
+            spans.push(Span::styled(word, palette::fg(meaning)));
             spans.push(PULL_LINK.into());
         }
         None => spans.push(pr.status.as_str().dim()),
@@ -284,7 +288,7 @@ mod tests {
     }
 
     fn pull(number: i64, state: PrState) -> Pull {
-        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}") }
+        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false }
     }
 
     fn job(pr: &str, key: &str, needs: &[&str]) -> JobNode {
@@ -371,6 +375,28 @@ mod tests {
         assert!(c.buf[(1, 1)].modifier.contains(Modifier::DIM));
         assert!((c.pills.len(), c.columns.len()) == (0, 0));
         assert_eq!(layout(&[], &[], 0).chart.buf.area.area(), 0);
+    }
+
+    #[test]
+    fn an_open_pull_request_that_conflicts_reads_conflict_in_the_failed_colour() {
+        let failed = palette::fg(Meaning::Failed).fg;
+        let mut p = pr("api", &[]);
+        p.pull = Some(Pull { conflicting: true, ..pull(12, PrState::Open) });
+        let t = title(&p);
+        assert_eq!(t.to_string(), " api · api-repo → main · #12 conflict ↗ ");
+        assert_eq!(t.spans[4].style.fg, failed);
+        // `unknown` and `mergeable` are `conflicting: false`: `open`, not in the failed colour
+        p.pull = Some(pull(12, PrState::Open));
+        let t = title(&p);
+        assert_eq!(t.to_string(), " api · api-repo → main · #12 open ↗ ");
+        assert_ne!(t.spans[4].style.fg, failed);
+        // merged and closed never read `conflict`
+        for (state, word) in [(PrState::Merged, "merged"), (PrState::Closed, "closed")] {
+            p.pull = Some(Pull { conflicting: true, ..pull(12, state) });
+            let t = title(&p);
+            assert_eq!(t.spans[4].content, word);
+            assert_eq!(t.spans[4].style.fg, palette::fg(palette::pr_state(state)).fg);
+        }
     }
 
     #[test]

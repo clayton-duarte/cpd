@@ -50,6 +50,16 @@ use cpd_core::store::Store;
 /// A snapshot is retaken at most this often, whatever the Event rate (§17).
 const COALESCE: Duration = Duration::from_millis(500);
 
+/// The snapshot is retaken at least this often, Event or not: a conflict clears with no Event (`mergeable` changes
+/// silently), as the `widgets` view's `REFRESH` (§17).
+const REFRESH: Duration = Duration::from_secs(2);
+
+/// Whether the snapshot taken `since` ago is retaken: after [`COALESCE`] once an Event concerns it (`stale`), else after
+/// [`REFRESH`].
+fn due(stale: bool, since: Duration) -> bool {
+    since >= if stale { COALESCE } else { REFRESH }
+}
+
 /// The view redraws at least this often, for the spinner (one frame: palette.rs); a redraw reads nothing from the store.
 const FRAME: Duration = Duration::from_millis(250);
 
@@ -302,7 +312,7 @@ fn show(
                 }
                 Err(e) => ui.error = Some(e.to_string()),
             }
-            if stale && taken.elapsed() >= COALESCE {
+            if due(stale, taken.elapsed()) {
                 let before = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
                 match snapshot(store, home) {
                     Ok(next) => {
@@ -393,6 +403,14 @@ mod tests {
     use cpd_core::ids::{ContextId, JobKey, PrKey, SessionId};
 
 
+    #[test]
+    fn the_snapshot_is_retaken_after_the_coalescing_when_stale_else_every_two_seconds() {
+        let ms = Duration::from_millis;
+        assert!(!due(true, ms(499)) && due(true, ms(500)), "an Event that concerns it: coalesced at 500 ms");
+        assert!(!due(false, ms(1999)) && due(false, ms(2000)), "no Event: every 2 s");
+        assert!(due(false, Duration::from_secs(60)));
+    }
+
     const URL: &str = "http://localhost:19433";
     const OPEN: &str = "\x1b]8;;http://localhost:19433\x07";
 
@@ -420,6 +438,7 @@ mod tests {
                 number: 12,
                 state: read::PrState::Open,
                 url: "https://github.com/acme/api/pull/12".into(),
+                conflicting: false,
             }),
         }];
         let plan = PlanBoxes {

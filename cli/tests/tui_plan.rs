@@ -455,6 +455,23 @@ fn a_pull_request_box_title_ends_in_a_link_to_it_and_a_pending_review_is_a_row_a
 }
 
 #[test]
+fn a_conflict_shows_in_the_box_title_and_clears_with_no_event_within_the_refresh() {
+    let env = env();
+    sql(&env, &plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
+    let pane = start_view(&env);
+    let title = |s: &[String], word: &str| s.iter().any(|l| l.contains(&format!("#7 {word} ↗")));
+    screen_when(&env, &pane, "the open title", |s| title(s, "open"));
+
+    // the poll stored a conflict: no Event is appended for the view to wake on, so only the 2 s re-read shows it
+    sql(&env, "UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 7;");
+    screen_when(&env, &pane, "conflict", |s| title(s, "conflict"));
+
+    // `unknown` is not a conflict
+    sql(&env, "UPDATE pull_requests SET mergeable = 'unknown' WHERE number = 7;");
+    screen_when(&env, &pane, "open again", |s| title(s, "open"));
+}
+
+#[test]
 fn without_a_port_file_the_pending_review_row_has_no_arrow() {
     let env = env();
     sql(&env, &plan_under_review(1, "pending"));
