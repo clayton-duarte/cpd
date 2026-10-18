@@ -12,6 +12,7 @@ use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::events::{Kind, NewEvent, append};
 use cpd_core::home::CpdHome;
+use cpd_core::host::tmux::SERVER_OPTIONS;
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
@@ -166,14 +167,19 @@ fn fake_pi(env: &TestEnv, then: &str) {
 }
 
 /// The cockpit: session `cpd`, window `main` with a tree pane and the
-/// placeholder in the chat slot.
+/// placeholder in the chat slot, on a server started with cpd's
+/// [`SERVER_OPTIONS`] (contract §6.1), as cpd starts it: with `remain-on-exit`,
+/// a pane whose program exits stays, dead, instead of taking the chat slot with it.
 fn cockpit(env: &TestEnv) {
     let ok = |args: &[&str]| {
         let out = env.tmux(args);
         assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8(out.stdout).unwrap().trim().to_owned()
     };
-    let tree = ok(&["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
+    let sleep = format!("sleep {SLEEP_SECONDS}");
+    let mut args: Vec<&str> = SERVER_OPTIONS.iter().flat_map(|option| option.iter().copied().chain([";"])).collect();
+    args.extend(["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", &sleep]);
+    let tree = ok(&args);
     ok(&["set", "-p", "-t", &tree, "@cpd_view", "tree"]);
     let chat = ok(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
     ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
@@ -223,6 +229,34 @@ fn window_names(env: &TestEnv) -> Vec<String> {
     let mut names: Vec<String> = String::from_utf8(out.stdout).unwrap().lines().map(str::to_owned).collect();
     names.sort();
     names
+}
+
+/// Every pane of the server, dead ones with their screen (where a dead `cpd
+/// session run` printed its error): the evidence of what the chat slot held.
+fn panes_report(env: &TestEnv) -> String {
+    let format = "#{pane_id} #{session_name}:#{window_name} dead=#{pane_dead} status=#{pane_dead_status} view=#{@cpd_view} session=#{@cpd_session}";
+    let listed = String::from_utf8_lossy(&env.tmux(&["list-panes", "-a", "-F", format]).stdout).into_owned();
+    let mut report = String::new();
+    for line in listed.lines() {
+        report.push_str(&format!("{line}\n"));
+        if line.contains(" dead=1 ") {
+            let pane = line.split(' ').next().unwrap();
+            let screen = String::from_utf8_lossy(&env.tmux(&["capture-pane", "-p", "-t", pane]).stdout).into_owned();
+            for text in screen.lines().filter(|text| !text.trim().is_empty()) {
+                report.push_str(&format!("  | {text}\n"));
+            }
+        }
+    }
+    report
+}
+
+/// `cpd <args>`'s success fields; on a failure the panic carries [`panes_report`].
+fn ok_with_panes(env: &TestEnv, args: &[&str]) -> Value {
+    let run = env.cpd(args);
+    if run.exit != 0 {
+        panic!("cpd {args:?} failed: {run:?}\npanes:\n{}", panes_report(env));
+    }
+    run.ok()
 }
 
 fn pi_calls_with(env: &TestEnv, flag: &str) -> Vec<Vec<String>> {
@@ -669,7 +703,7 @@ fn open_and_park_take_a_context_s_manager_and_park_it_in_its_context_window() {
     fs::write(&message, "You are the Manager.").unwrap();
 
     // A stopped Manager with no pane is resumed in a new window and swapped in.
-    let out = env.cpd(&["session", "open", MANAGER]).ok();
+    let out = ok_with_panes(&env, &["session", "open", MANAGER]);
     assert_eq!(out["displaced"], Value::Null);
     assert_eq!(slot(&env).session, MANAGER);
     assert_placeholders(&env, 0);
@@ -678,17 +712,18 @@ fn open_and_park_take_a_context_s_manager_and_park_it_in_its_context_window() {
     assert_eq!(show(&env, MANAGER)["place"], "chat");
 
     // A Lead displaces it into `ctx-<context>`.
-    assert_eq!(env.cpd(&["session", "open", LEAD1]).ok()["displaced"], MANAGER);
+    let out = ok_with_panes(&env, &["session", "open", LEAD1]);
+    assert_eq!(out["displaced"], MANAGER, "panes:\n{}", panes_report(&env));
     let manager = panes(&env).into_iter().find(|p| p.session == MANAGER).unwrap();
     assert_eq!(manager.window_name, "ctx-ctx");
     assert_eq!(window_names(&env), ["ctx-ctx", "main"]);
     assert_eq!(show(&env, MANAGER)["place"], "parked");
 
     // Parking the Lead, then opening the Manager again uses its live pane.
-    env.cpd(&["session", "park"]).ok();
-    let out = env.cpd(&["session", "open", MANAGER]).ok();
+    ok_with_panes(&env, &["session", "park"]);
+    let out = ok_with_panes(&env, &["session", "open", MANAGER]);
     assert_eq!(out["pane"], json!(manager.pane));
-    env.cpd(&["session", "park", MANAGER]).ok();
+    ok_with_panes(&env, &["session", "park", MANAGER]);
     assert_eq!(panes(&env).into_iter().find(|p| p.session == MANAGER).unwrap().window_name, "ctx-ctx");
 }
 
@@ -1160,7 +1195,6 @@ fn dying_leads(env: &TestEnv) {
         ),
     );
     cockpit(env);
-    assert!(env.tmux(&["set", "-g", "remain-on-exit", "on"]).status.success());
 }
 
 /// Lets every Lead's pi but `lead2`'s exit, so its pane dies.
