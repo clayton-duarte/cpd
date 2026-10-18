@@ -972,7 +972,7 @@ fn searches(fx: &Fx) -> usize {
 }
 
 /// The lookup of PR 7 (`in_pr`) that a poll makes when the search does not list it: still open, so nothing changes.
-const LOOKUP_OPEN: &str = r#"{"data":{"p0":{"pullRequest":{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"t","mergedAt":null,"reviewDecision":null,"commits":{"nodes":[]}}}}}"#;
+const LOOKUP_OPEN: &str = r#"{"data":{"p0":{"pullRequest":{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"t","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{"nodes":[]}}}}}"#;
 
 /// Sets `pr_poll_seconds` (`tick_seconds` is one second).
 fn poll_every(fx: &Fx, seconds: u32) {
