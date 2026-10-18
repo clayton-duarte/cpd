@@ -231,7 +231,12 @@ impl Fx {
 
     /// Starts `cpd watch` and waits for its `watch-started`.
     fn start(&self) -> Engine {
-        let child = self.env.command(CPD).arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        self.start_from(Path::new(CPD))
+    }
+
+    /// `start` with the engine run from the binary at `exe`.
+    fn start_from(&self, exe: &Path) -> Engine {
+        let child = self.env.command(exe).arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         let engine = Engine { child: Some(child) };
         let pid = engine.pid();
         wait_until("watch-started", || {
@@ -663,6 +668,37 @@ fn e3_one_tick_schedules_a_ready_job_within_the_concurrency() {
         assert!(Instant::now() < deadline, "the driver never ended api-a1");
         std::thread::sleep(Duration::from_millis(200));
     }
+}
+
+/// The 00:02Z incident (hs-d151): the file the engine runs from is replaced, then
+/// E3 starts an Attempt. The driver starts from the path recorded at start
+/// (`cannot run <path> (deleted)` before).
+#[test]
+fn e3_starts_the_driver_after_the_engines_binary_is_replaced() {
+    let fx = fx("concurrency = 1\nretry_cap = 0");
+    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
+        assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
+    }
+    let installed = fx.env.root().join("cpd-installed");
+    fs::copy(CPD, &installed).unwrap();
+    let engine = fx.start_from(&installed);
+
+    let new = fx.env.root().join("cpd-new");
+    fs::copy(CPD, &new).unwrap();
+    fs::rename(&new, &installed).unwrap();
+    fx.add_job("api", &[], "");
+
+    wait_until("attempt-started", || fx.count("attempt-started") == 1);
+    engine.stop();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while fx.attempt("api-a1").0 != "ended" {
+        assert!(Instant::now() < deadline, "the driver never ended api-a1");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(fx.query::<Option<i64>>("SELECT driver_pid FROM attempts WHERE id = 'api-a1'").is_some(), "the driver was not started");
+    let texts = fx.texts("attempt-ended");
+    assert!(texts.iter().all(|t| !t.contains("cannot run") && !t.contains("deleted")), "{texts:?}");
+    assert!(!fx.texts("error").iter().any(|t| t.contains("deleted")));
 }
 
 #[test]
