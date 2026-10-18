@@ -426,6 +426,28 @@ fn two_concurrent_ensures_both_succeed_and_leave_one_engine() {
     assert_eq!(String::from_utf8_lossy(&panes.stdout), "cpd-work:watch 0\n");
 }
 
+/// engine-W10: `list-panes` fails while a concurrent call's `new-session` is starting the server, and the server is running
+/// a moment later. The call lists again instead of failing with the first call's stderr.
+#[test]
+fn ensure_lists_panes_again_when_the_first_list_panes_fails_while_the_server_runs() {
+    let fx = fx("");
+    fx.env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
+    fx.env.tmux(&["new-session", "-d", "-s", "other"]);
+    let real = fx.env.run_ok(fx.env.root(), "sh", &["-c", "command -v tmux"]);
+    let flag = fx.env.root().join("list-panes-failed");
+    fx.env.fake(
+        "tmux",
+        &format!(
+            "case \" $* \" in *\" list-panes \"*) [ -e '{flag}' ] || {{ : > '{flag}'; echo 'error connecting to x (No such file or directory)' >&2; exit 1; }};; esac\nexec '{real}' \"$@\"",
+            flag = flag.display(),
+            real = real.trim()
+        ),
+    );
+    let out = fx.env.cpd(&["watch", "--ensure"]).ok();
+    assert_eq!(out["started"], true, "{out}");
+    assert!(flag.exists());
+}
+
 #[test]
 fn ensure_fails_when_the_engine_does_not_start() {
     let fx = fx("");

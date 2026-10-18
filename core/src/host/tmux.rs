@@ -448,12 +448,17 @@ impl Tmux {
     /// `list-panes -a`: every pane of the server; none when no server runs.
     pub fn list_panes(&self) -> Result<Vec<Pane>, CpdError> {
         let args = strings(&["list-panes", "-a", "-F", LIST_PANES_FORMAT]);
-        let out = self.output(&args)?;
+        let mut out = self.output(&args)?;
         if !out.status.success() {
             if !self.server_running()? {
                 return Ok(Vec::new());
             }
-            return Err(self.failed(&args, &out));
+            // The server was starting (another caller's `new-session`) when the
+            // first call connected: list again, once.
+            out = self.output(&args)?;
+            if !out.status.success() {
+                return Err(self.failed(&args, &out));
+            }
         }
         let stdout = String::from_utf8_lossy(&out.stdout);
         let mut panes = Vec::new();
