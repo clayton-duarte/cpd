@@ -143,6 +143,7 @@ Free text (Job `--title`, `--reason`, Context record text, questions and answers
 | `plan archive`, `unarchive` | User (TUI) | yes | §2.2 |
 | `plan cancel` | Lead, User | yes | §2.2, §3.2, §3.8 |
 | `job add`, `edit`, `cancel`, `retry` | Lead | yes | §3.2 |
+| `job urgent` | Lead, Manager (only when the User asks) | yes | §2.2, §3.2, §3.7 |
 | `job dispatch` | Lead | yes | §3.4 |
 | `job list`, `job show` | Lead, TUI | no | |
 | `attempt submit` | Worker | yes | §7.3 |
@@ -494,7 +495,7 @@ cpd plan show [--plan <id>]
 
 Effects: none; one read transaction, so the result is one consistent snapshot. It is the TUI's snapshot of a Plan (§17).
 
-Output: every field of the Plan (§2.2); `prs` (R34, A14), every PR of the Plan in key order, `cancelled` ones included, each with its fields (§2.2 PR: `key`, `repo`, `base`, `needs`, `status`, `lead_branch`, `lead_worktree`, `pr`, `pull_request` (the row, as in §4.2, `mergeable` and `merge_state` included, or null), `all_merged_at`, `start_failed_at`, `created_at`, `started_at`, `merged_at`) and `jobs`, the keys of its Jobs in `seq` order; `jobs` with each Job's fields (Spec included, `pr` and `review` among them), `needs`, and its Attempts (`id`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `worker_session`, `started_at`, `ended_at`); `escalations` that are `open`; the latest Plan review; `counts`; `tamper` (the tamper report of §4.3: `{kind: "schema" | "fingerprint" | "history", …}`); `events_cursor`.
+Output: every field of the Plan (§2.2); `prs` (R34, A14), every PR of the Plan in key order, `cancelled` ones included, each with its fields (§2.2 PR: `key`, `repo`, `base`, `needs`, `status`, `lead_branch`, `lead_worktree`, `pr`, `pull_request` (the row, as in §4.2, `mergeable` and `merge_state` included, or null), `all_merged_at`, `start_failed_at`, `created_at`, `started_at`, `merged_at`) and `jobs`, the keys of its Jobs in `seq` order; `jobs` with each Job's fields (Spec included, `pr`, `review` and `urgent` among them), `needs`, and its Attempts (`id`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `worker_session`, `started_at`, `ended_at`); `escalations` that are `open`; the latest Plan review; `counts`; `tamper` (the tamper report of §4.3: `{kind: "schema" | "fingerprint" | "history", …}`); `events_cursor`.
 
 ```json
 {"ok": true,
@@ -767,7 +768,7 @@ Jobs, Specs and Dependencies (§2.2, §3.2). Kept from cpd 1 §11 "Jobs" except 
 ### 5.1 `job add`
 
 ```
-cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs <k1,k2> | --review] [--draft] [--plan <id>]
+cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs <k1,k2> | --review] [--draft] [--urgent] [--plan <id>]
 ```
 
 | Flag | Meaning |
@@ -776,6 +777,7 @@ cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs 
 | `--pr <key>` | the Job's PR (R34, A14), selected by §1.3's rule: required when the Plan has two or more PRs that are not `cancelled`, defaulted to the one when it has one |
 | `--needs <k1,k2>` | Dependencies, comma-separated, no duplicates (`usage`); Jobs of the same PR only (A7) |
 | `--draft` | add the Job as a `draft` in a phase after `plan` too (User, hs-d173, hs-d174, hs-d179: every planned batch is visible in the Plan view before it is approved): `status = draft`, `appended = 1`, no fingerprint; the engine never runs it, and it becomes `queued` only at the approval of a Plan review of the drafts (§4.7). In phase `plan` every Job is a draft, so `--draft` changes nothing there. Its needs may be drafts |
+| `--urgent` | add the Job with `urgent = 1` (contract §2.2): engine E3 starts it before every non-urgent Ready Job and may run it as one Attempt beyond `concurrency` (§3.7). Use it **only when the User explicitly asks**, usually for something that blocks all work or an incident. Not a Locked field and not in any fingerprint (§2.3); works with `--draft`, `--review` and in every phase `job add` works in. To mark an existing Job, see §5.8 |
 | `--review` | a **review Job** (B2, contract §2.2): its Worker is a fork of the Plan's Lead, it commits nothing and writes `run/<plan>/reviews/<key>.md`. Its Dependencies are **set** to every Job of its PR that exists at that moment and is not `cancelled`, so `--needs` with `--review` is `usage` (exit 2). Jobs added later do not become its Dependencies. The Spec file is as for any Job; its `touches` is informational for a review Job (*decided*: the Lead lists `run/<plan>/reviews/<key>.md`) |
 
 | Precondition | Code | Exit |
@@ -788,13 +790,13 @@ cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs 
 | no `needs` Job is `cancelled` or `failed`; with `--review`, no Job of the PR is `failed` (retry or cancel it first; `details.jobs` lists them), because a Dependency on a `failed` Job is refused | `needs_unavailable` | 3 |
 | without `--draft`, in a phase after `plan`: no `needs` Job is a `draft`, and with `--review` no Job of the PR is a `draft` (`details.jobs` lists them; its message says to add this Job with `--draft`, or to approve the drafts first), because a `queued` Job could start before the draft it needs exists | `needs_unavailable` | 3 |
 
-Effects: **rows**, one transaction: `jobs` (`pr` = the PR's key; `review` = 1 with `--review`; `status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = draft`, `appended = 1`, no fingerprint, with `--draft` in any later phase; `status = queued`, `appended = 1`, fingerprint stored, in a later phase without `--draft`); one `dependencies` row per need (with `--review`, per Job of the PR, as the Dependencies are set in the same transaction). **Event** `job-added` `{pr, status, appended, tier, needs, review}`. **Re-arms `all-merged`** (hs-d140): the same transaction sets the PR's `all_merged_at` to null when it was set, so engine E4 appends `all-merged` for that PR again once its Jobs are all `merged` or `cancelled` (contract §3.7); a PR that never had it sent is unchanged. No cycle is possible: nothing needs a new Job yet. An appended Job of a `waiting` PR is not Ready until its PR starts (§3.2); an appended draft is not Ready at all until its review is approved; one of an `open` PR reaches its pull request through `pr rebase --pr <key>` (§9.3), or `pr push --pr <key>` (§9.9).
+Effects: **rows**, one transaction: `jobs` (`pr` = the PR's key; `review` = 1 with `--review`; `urgent` = 1 with `--urgent` (else 0); `status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = draft`, `appended = 1`, no fingerprint, with `--draft` in any later phase; `status = queued`, `appended = 1`, fingerprint stored, in a later phase without `--draft`); one `dependencies` row per need (with `--review`, per Job of the PR, as the Dependencies are set in the same transaction). **Event** `job-added` `{pr, status, appended, tier, needs, review, urgent}`. **Re-arms `all-merged`** (hs-d140): the same transaction sets the PR's `all_merged_at` to null when it was set, so engine E4 appends `all-merged` for that PR again once its Jobs are all `merged` or `cancelled` (contract §3.7); a PR that never had it sent is unchanged. No cycle is possible: nothing needs a new Job yet. An appended Job of a `waiting` PR is not Ready until its PR starts (§3.2); an appended draft is not Ready at all until its review is approved; one of an `open` PR reaches its pull request through `pr rebase --pr <key>` (§9.3), or `pr push --pr <key>` (§9.9).
 
 ```json
-{"ok": true, "job": {"key": "api-schema", "pr": "api", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false}}
+{"ok": true, "job": {"key": "api-schema", "pr": "api", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": false}}
 ```
 
-Idempotent: yes, as stated (`--draft` is not a Locked field: the call that found an identical Job returns `already` whatever its status). `--review` is repeatable like any add: an identical call (same Locked fields, `review` included, same Dependencies) is `already`; a call after another Job was added to the PR differs in its Dependencies and is `job_key_exists`. `job edit` has no `--review` and refuses `--needs` and `--no-needs` on a review Job with `usage` (*decided*: its Dependencies are fixed by the add; to change them, cancel it and add a new one).
+Idempotent: yes, as stated (`--draft` and `--urgent` are not Locked fields: the call that found an identical Job returns `already` whatever its status). `--review` is repeatable like any add: an identical call (same Locked fields, `review` included, same Dependencies) is `already`; a call after another Job was added to the PR differs in its Dependencies and is `job_key_exists`. `job edit` has no `--review` and refuses `--needs` and `--no-needs` on a review Job with `usage` (*decided*: its Dependencies are fixed by the add; to change them, cancel it and add a new one).
 
 ### 5.2 `job edit`
 
@@ -873,7 +875,7 @@ Starts one Ready Job now: the same step as engine E3 (cpd 1 §11, kept).
 | the Job is Ready (§3.2) | `job_not_ready` | 3 |
 | its fingerprint matches | `locked_job_tampered` | 3 |
 | the driver lock is free (§3.4 step 1) | `cas_lost` | 3 |
-| fewer than `concurrency` Attempts are not `ended` | `no_slot` | 3 |
+| fewer than `concurrency` Attempts are not `ended` (an urgent Job: fewer than `concurrency + 1`, contract §3.7) | `no_slot` | 3 |
 
 Effects (§3.4 "The driver lock"): take `locks/attempt-<plan>--<attempt>.lock`; **rows**, one transaction: `attempts` (`starting`, Tier from §9, `origin`), Job `running`; **Event** `attempt-started` `{number, tier, origin}`; then spawn `cpd attempt run <attempt> --plan <plan>` with `setsid`, fd 3 = the lock, stderr to `run/<plan>/logs/attempt-<attempt>.log`, and record `driver_pid` (a data write, no Event). If the spawn fails, the command ends the Attempt `failed` / `crashed` with `driver_pid` still null (`attempt-retry` at the same Tier, not counted against `retry_cap`, §3.4) and returns `spawn_failed` (exit 1).
 
@@ -889,10 +891,10 @@ Idempotent: no. A second call finds the Job `running` and is refused `job_not_re
 cpd job list [--status <status>] [--plan <id>]
 ```
 
-`--status` is one of §3.2's statuses and may repeat. Effects: none.
+`--status` is one of §3.2's statuses and may repeat. Each Job carries `urgent` (a boolean). Effects: none.
 
 ```json
-{"ok": true, "jobs": [{"key": "api-schema", "pr": "api", "title": "…", "status": "merged", "tier": "S2", "appended": false, "needs": [], "attempts": 1, "merged_sha": "c0ffee…"}]}
+{"ok": true, "jobs": [{"key": "api-schema", "pr": "api", "title": "…", "status": "merged", "tier": "S2", "appended": false, "urgent": false, "needs": [], "attempts": 1, "merged_sha": "c0ffee…"}]}
 ```
 
 ### 5.7 `job show`
@@ -901,14 +903,35 @@ cpd job list [--status <status>] [--plan <id>]
 cpd job show <key> [--plan <id>]
 ```
 
-Effects: none. Output: every field of the Job (§2.2; `review: true` for a review Job, B2), `needs`, `needed_by`, and every Attempt with all its fields (`check_tail`, `metrics`) and its Escalations (cpd 1 §11, kept).
+Effects: none. Output: every field of the Job (§2.2; `review: true` for a review Job, B2; `urgent`, a boolean), `needs`, `needed_by`, and every Attempt with all its fields (`check_tail`, `metrics`) and its Escalations (cpd 1 §11, kept).
 
 ```json
-{"ok": true, "job": {"key": "worker", "pr": "api", "status": "failed", "failed_cause": "timed_out", "tier": "S2", "…": "…"}, "needs": ["api-schema"], "needed_by": ["ui"],
+{"ok": true, "job": {"key": "worker", "pr": "api", "status": "failed", "urgent": false, "failed_cause": "timed_out", "tier": "S2", "…": "…"}, "needs": ["api-schema"], "needed_by": ["ui"],
  "attempts": [{"id": "worker-a1", "status": "ended", "outcome": "failed", "cause": "timed_out", "check_tail": null, "escalations": []}]}
 ```
 
 Both are read-only.
+
+### 5.8 `job urgent`
+
+```
+cpd job urgent <key> [--plan <id>]
+```
+
+Marks an existing Job **urgent** (contract §2.2): engine E3 starts urgent Ready Jobs first, then by `jobs.seq`, across Plans, and may start one urgent Job beyond `concurrency` (§3.7). A Lead or Manager runs it **only when the User explicitly asks**, usually for something that blocks all work or an incident. `urgent` is not a Locked field and in no fingerprint (§2.3), so it is allowed on a Locked Job: a `queued` one.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Job exists in the Plan | `job_not_found` | 4 |
+| the Job is `queued` or `draft`; a `running`, `merged`, `failed` or `cancelled` Job is refused (*decided*: the flag only matters to scheduling, and E3 only starts `queued` Jobs; `job retry` makes a `failed` one `queued`, then mark it) | `illegal_transition` | 3 |
+
+Effects: **rows**, one transaction: `jobs.urgent = 1`. **Event** `job-edited` `{fields: ["urgent"]}` (no new Event kind). Nothing else changes: status, fingerprint, `appended` and Dependencies stay as they are. There is no command to clear the flag.
+
+```json
+{"ok": true, "job": {"key": "hotfix", "status": "queued", "urgent": true}, "fields": ["urgent"]}
+```
+
+Idempotent: yes; a Job that is already urgent writes nothing and returns `"already": true`.
 
 ## 6. `attempt`
 
