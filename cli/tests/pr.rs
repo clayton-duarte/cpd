@@ -103,6 +103,10 @@ fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
     for (name, text) in [("list.json", "[]"), ("create.out", URL), ("search.json", EMPTY_SEARCH), ("lookup.json", r#"{"data":{}}"#)] {
         fs::write(gh.join(name), format!("{text}\n")).unwrap();
     }
+    if phase == "dispatch" {
+        // `pr open` reads `createdAt` of the pull request it just opened (store-W5).
+        fs::write(gh.join("lookup.json"), format!("{}\n", lookup_answer(&[Some(pay("OPEN", None, None))]))).unwrap();
+    }
     env.fake_gh(GH);
 
     let fx = Fx { env, home, repo, origin, lead, merged_sha, lock_pushed };
@@ -296,6 +300,7 @@ impl Fx {
         let answers = self.env.root().join("gh/web.pay.web");
         fs::create_dir_all(&answers).unwrap();
         fs::write(answers.join("create.out"), format!("{WEB_URL}\n")).unwrap();
+        fs::write(answers.join("lookup.json"), format!("{}\n", lookup_answer(&[Some(node("acme/web", 813, "OPEN", None, None))]))).unwrap();
         let (status, worktree, started, open_columns, open_values, job, needs) = match state {
             Web::Dispatch => ("dispatch", format!("'{}'", lead.display()), "'t'", "", String::new(), "merged", ""),
             Web::Open => (
@@ -392,7 +397,7 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
         fx.shown_pull_request(),
         json!({"repo": "acme/pay", "number": 812, "url": URL, "title": "Pay the bills", "draft": false, "state": "open",
                "review_decision": "none", "checks": "none", "mergeable": "unknown", "merge_state": "unknown",
-               "created_at": opened_at, "merged_at": null})
+               "created_at": "opened", "merged_at": null})
     );
     let opened = fx.events("pr-opened");
     assert_eq!(opened.len(), 1);
@@ -427,6 +432,48 @@ fn open_keeps_the_row_the_poll_stored_first() {
     );
     let rows: i64 = fx.store().read(|c| Ok(c.query_row("SELECT count(*) FROM pull_requests", [], |r| r.get(0))?)).unwrap();
     assert_eq!(rows, 1);
+}
+
+/// `pay` as GitHub reports it, created at `created`.
+fn pay_created(state: &str, created: &str) -> String {
+    pay(state, None, None).replace(r#""createdAt":"opened""#, &format!(r#""createdAt":"{created}""#))
+}
+
+#[test]
+fn open_stores_the_created_at_gh_reports_and_later_polls_keep_it() {
+    let fx = fx("dispatch");
+    fx.lookup(&[Some(pay_created("OPEN", "2026-05-01T10:00:00Z"))]);
+
+    fx.pr("open").ok();
+
+    let created = || fx.shown_pull_request()["created_at"].clone();
+    assert_eq!(created(), json!("2026-05-01T10:00:00Z"), "GitHub's time, not cpd's");
+    let writes = || -> i64 {
+        fx.store().read(|c| Ok(c.query_row("SELECT count(*) FROM history WHERE tbl = 'pull_requests'", [], |r| r.get(0))?)).unwrap()
+    };
+    assert_eq!(writes(), 1, "one insert");
+
+    // The poll reads the same pull request: nothing to write.
+    fx.search(&[pay_created("OPEN", "2026-05-01T10:00:00Z")]);
+    fx.poll();
+    assert_eq!((created(), writes()), (json!("2026-05-01T10:00:00Z"), 1));
+
+    // Whatever a later poll reads, `created_at` is written once.
+    fx.search(&[pay_created("OPEN", "2026-05-01T10:00:01Z").replace(r#""isDraft":false"#, r#""isDraft":true"#)]);
+    fx.poll();
+    assert_eq!(created(), json!("2026-05-01T10:00:00Z"));
+    assert_eq!(fx.shown_pull_request()["draft"], json!(true), "the other values still follow the poll");
+}
+
+#[test]
+fn open_fails_loud_when_gh_cannot_find_the_pull_request_it_created() {
+    let fx = fx("dispatch");
+    fx.lookup(&[None]);
+
+    let run = fx.pr("open");
+
+    assert_eq!(code(&run).0, "gh_failed");
+    assert_eq!(fx.plan_row().0, "dispatch");
 }
 
 #[test]
@@ -1288,11 +1335,11 @@ fn an_owned_pull_request_that_left_the_search_and_is_closed_is_told_to_the_plan_
     assert_eq!(fx.pr_data().3, "closed");
     assert_eq!((fx.plan_row().0, fx.pr_status("repo")), ("deploy".to_owned(), "open".to_owned()), "the PR stays open in cpd");
 
-    // Polled again: still closed, told once; the lookup is repeated, the row is not written.
+    // Polled again: still closed, told once; the row is already right, so it is not looked up again (commands-W4).
     let txns = fx.txns();
     assert_eq!(fx.poll()["feedback"], json!([]));
     assert_eq!((fx.txns(), fx.events("pr-feedback").len()), (txns, 1));
-    assert_eq!(fx.gh_calls().iter().filter(|c| is_lookup(c)).count(), 2);
+    assert_eq!(fx.gh_calls().iter().filter(|c| is_lookup(c)).count(), 1);
 
     // Reopened: it is in the search again, and nobody is told. Closed again: told again.
     fx.search(&[pay("OPEN", None, None)]);
@@ -1303,6 +1350,24 @@ fn an_owned_pull_request_that_left_the_search_and_is_closed_is_told_to_the_plan_
     fx.lookup(&[Some(pay("CLOSED", None, None))]);
     fx.poll();
     assert_eq!(fx.events("pr-feedback").len(), 2);
+}
+
+#[test]
+fn a_pull_request_closed_without_a_merge_is_not_looked_up_again() {
+    let fx = fx("deploy");
+    fx.search(&[]);
+    fx.lookup(&[Some(pay("CLOSED", None, None))]);
+    fx.poll();
+    assert_eq!(fx.pr_data().3, "closed");
+    let lookups = || fx.gh_calls().iter().filter(|c| is_lookup(c)).count();
+    assert_eq!(lookups(), 1);
+
+    for _ in 0..3 {
+        fx.poll();
+    }
+
+    assert_eq!(lookups(), 1, "three more ticks looked it up again");
+    assert_eq!((fx.plan_row().0, fx.pr_status("repo")), ("deploy".to_owned(), "open".to_owned()));
 }
 
 #[test]
@@ -1782,8 +1847,8 @@ fn poll_covers_every_open_pr_in_dispatch_and_pr_and_ends_the_plan_with_the_last_
 
     // `web` opens: the PRs are open or merged, so the Plan moves to pr. Only `web` is owned and open now.
     assert_eq!(fx.pr_cmd("open", "web").ok()["phase"], "deploy");
-    fx.search(&[node("acme/web", 813, "OPEN", None, None)]);
-    // The row `pr open` wrote has the time of the opening, the search's `createdAt` is GitHub's: that is the change.
+    fx.search(&[node("acme/web", 813, "OPEN", None, Some("SUCCESS"))]);
+    // The row `pr open` wrote has no checks; the search's passed: that is the change.
     let out = fx.poll();
     assert_eq!((out["changed"][0]["number"].clone(), out["merged"].clone()), (json!(813), json!([])));
     assert_eq!(fx.phase(), "deploy");
