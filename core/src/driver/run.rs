@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 
 use super::ledger::{self, Cause, End, Ladder, SOURCE, Target};
 use super::lock;
+use super::stall;
 use super::worker;
 use super::RunArgs;
 use crate::config::{Catalog, Config, load_catalog};
@@ -358,6 +359,7 @@ impl Driver {
         let mut file: Option<std::path::PathBuf> = None;
         // The Worker's assistant messages when it was nudged.
         let mut nudged_at: Option<u64> = None;
+        let mut stall = stall::Watch::new(self.config.timeouts.stall_seconds);
         loop {
             std::thread::sleep(POLL);
             // The panes before the row: a Worker that submits and exits is seen `merging`.
@@ -396,7 +398,7 @@ impl Driver {
                     return Err(CpdError::new(ErrorCode::StoreFailed, format!("Unknown stop_request {other:?}.")));
                 }
             }
-            match panes.iter().find(|p| p.pane == *pane) {
+            let pi = match panes.iter().find(|p| p.pane == *pane) {
                 None => {
                     let detail = "The Worker's pane is gone.".to_owned();
                     return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs);
@@ -406,10 +408,14 @@ impl Driver {
                     let detail = format!("The Worker's pane died{status} before it submitted.");
                     return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs);
                 }
-                Some(_) => {}
-            }
+                Some(p) => p.pid,
+            };
 
             let Some(file) = file.clone() else { continue };
+            // The stall rule (§3.4 A4): pi is the pane's process, alive here.
+            if let Some(line) = stall.check(&file, pi) {
+                log(&line);
+            }
             // Idle is read from the Session state and confirmed from the file (A5).
             let state: String =
                 self.store.read(|conn| Ok(conn.query_row("SELECT state FROM sessions WHERE id = ?1", [session.as_str()], |r| r.get(0))?))?;
