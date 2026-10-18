@@ -390,7 +390,7 @@ fn no_key_but_the_references_does_anything() {
 fn n_starts_a_plan_named_in_the_prompt_with_plan_new() {
     let env = env();
     populate(&env);
-    fake_cpd(&env, r#"{"ok":true,"plan":{"id":"pay-4521"}}"#);
+    fake_cpd(&env, r#"{"ok":true,"plan":{"id":"pay-4521"},"lead":{"session":"l-new"}}"#);
     let pane = Pane::start(&env, 80, 14);
     pane.ready();
     pane.down(2); // ship, sketch
@@ -402,8 +402,9 @@ fn n_starts_a_plan_named_in_the_prompt_with_plan_new() {
     pane.keys(&["Enter"]);
     // the Context of the cursor's Session's Plan; the name is the id and the title
     assert_eq!(
-        wait_for_calls(&env, 1),
-        [words(&["plan", "new", "pay-4521", "--context=alpha", "--title=pay-4521"])]
+        wait_for_calls(&env, 2),
+        [words(&["plan", "new", "pay-4521", "--context=alpha", "--title=pay-4521"]), words(&["session", "open", "l-new"])],
+        "the new Lead is opened"
     );
     pane.wait("the note", |_| pane.footer_has("forking pay-4521 in window park-pay-4521"));
 }
@@ -656,7 +657,7 @@ fn archive_on_a_fork_runs_session_archive_at_once_with_no_prompt() {
     pane.ready();
     pane.right_click(8, 4);
     pane.wait("the menu", |s| menu_open(s, "Open"));
-    pane.keys(&["Down", "Down", "Down", "Down", "Enter"]); // Archive is the fifth item
+    pane.keys(&["Down", "Down", "Down", "Down", "Down", "Enter"]); // Archive is the sixth item
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "archive", "f-idle"])], "no y/N, and `f-idle` is not in the chat slot");
     pane.wait("the note", |_| pane.footer_has("archived"));
     assert!(!pane.footer_has("(y/N)"));
@@ -670,9 +671,9 @@ fn archive_on_the_chat_slots_lead_opens_the_next_session_first_then_archives() {
     fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
-    pane.right_click(5, 1); // the Context `alpha`, whose Lead `l-ship` holds the chat slot: Archive is its third item
+    pane.right_click(5, 1); // the Context `alpha`, whose Lead `l-ship` holds the chat slot: Archive is its fourth item
     pane.wait("the menu", |s| menu_open(s, "New Plan…"));
-    pane.click(7, 4);
+    pane.click(7, 5);
     assert_eq!(
         wait_for_calls(&env, 2),
         [words(&["session", "open", "l-rel"]), words(&["context", "archive", "alpha"])],
@@ -680,7 +681,7 @@ fn archive_on_the_chat_slots_lead_opens_the_next_session_first_then_archives() {
     );
     pane.right_click(8, 2); // the Plan `ship`: its Lead is the chat slot's, so the Plan below it opens first
     pane.wait("the menu", |s| menu_open(s, "New session…"));
-    pane.click(10, 5);
+    pane.click(10, 6);
     assert_eq!(
         wait_for_calls(&env, 4)[2..],
         [words(&["session", "open", "l-sketch"]), words(&["plan", "archive", "--plan=ship"])]
@@ -696,7 +697,7 @@ fn a_refusal_of_a_step_shows_in_the_note_row_and_stops_the_archive() {
     pane.ready();
     pane.right_click(8, 2);
     pane.wait("the menu", |s| menu_open(s, "New session…"));
-    pane.click(10, 5);
+    pane.click(10, 6);
     pane.wait("the refusal", |_| pane.footer_has("no_cockpit: There is no cockpit."));
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(calls(&env), [words(&["session", "open", "l-sketch"])], "the archive did not run");
@@ -716,7 +717,7 @@ fn archive_on_the_only_live_lead_in_the_chat_slot_parks_it_first() {
     pane.ready();
     pane.right_click(8, 2); // the Plan `ship`
     pane.wait("the menu", |s| menu_open(s, "New session…"));
-    pane.click(10, 5);
+    pane.click(10, 6);
     assert_eq!(wait_for_calls(&env, 2), [words(&["session", "park"]), words(&["plan", "archive", "--plan=ship"])]);
 }
 
@@ -780,7 +781,7 @@ fn open_and_close_in_the_menu_run_session_open_and_after_y_session_close() {
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "f-blocked"])]);
     pane.right_click(8, 5);
     pane.wait("the menu", |s| menu_open(s, "Open"));
-    pane.keys(&["Down", "Down", "Down", "Enter"]); // Close
+    pane.keys(&["Down", "Down", "Down", "Down", "Enter"]); // Close
     pane.wait("the prompt", |_| pane.footer_has("Close ship review? pi stops; the session file stays (y/N)"));
     pane.keys(&["y"]);
     assert_eq!(wait_for_calls(&env, 2)[1], words(&["session", "close", "f-blocked"]));
@@ -799,8 +800,8 @@ fn unarchive_in_the_menu_runs_without_a_prompt_and_a_refusal_shows_in_the_note_r
     pane.right_click(10, 9); // the archived Plan `old`
     let screen = pane.wait("the menu", |s| menu_open(s, "Rename…"));
     assert!(screen.iter().any(|r| r.contains("│ Rename… ")), "{screen:?}");
-    assert!(screen.iter().all(|r| !r.contains("New Plan") && !r.contains("Archive ")), "Rename… and Unarchive only: {screen:?}");
-    pane.keys(&["Down", "Enter"]);
+    assert!(screen.iter().all(|r| !r.contains("New Plan") && !r.contains("Archive ")), "Rename…, Copy id and Unarchive only: {screen:?}");
+    pane.keys(&["Down", "Down", "Enter"]); // Unarchive
     assert_eq!(wait_for_calls(&env, 1), [words(&["plan", "unarchive", "--plan=old"])]);
     pane.wait("the refusal", |_| pane.footer_has("archived: The Context is archived."));
 }
@@ -865,7 +866,7 @@ fn new_context_asks_a_title_and_runs_context_new_with_the_derived_id() {
 fn new_plan_and_fork_run_plan_new_without_a_repo_and_session_fork() {
     let env = env();
     populate(&env);
-    fake_cpd(&env, r#"{"ok":true}"#);
+    fake_cpd(&env, r#"{"ok":true,"lead":{"session":"l-new"},"session":{"id":"l-new"}}"#);
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
     pane.right_click(5, 1); // the Context `alpha`
@@ -875,12 +876,62 @@ fn new_plan_and_fork_run_plan_new_without_a_repo_and_session_fork() {
     pane.type_text("Ship");
     pane.keys(&["Enter"]);
     // `ship` is taken in the tree; no repo (R34 A12)
-    assert_eq!(wait_for_calls(&env, 1), [words(&["plan", "new", "ship-2", "--context=alpha", "--title=Ship"])]);
+    assert_eq!(
+        wait_for_calls(&env, 2),
+        [words(&["plan", "new", "ship-2", "--context=alpha", "--title=Ship"]), words(&["session", "open", "l-new"])]
+    );
     pane.wait("the prompt gone", |_| !pane.footer_has("Title:"));
     pane.right_click(8, 4); // the fork `ship fork`
     pane.wait("the menu", |s| menu_open(s, "Open"));
     pane.keys(&["Down", "Down", "Enter"]); // Fork…
     pane.wait("the prompt", |_| pane.footer_has("Name: ship fork (fork)█"));
     pane.keys(&["Enter"]);
-    assert_eq!(wait_for_calls(&env, 2)[1], words(&["session", "fork", "f-idle", "--name=ship fork (fork)"]));
+    let calls = wait_for_calls(&env, 4);
+    assert_eq!(calls[2], words(&["session", "fork", "f-idle", "--name=ship fork (fork)"]));
+    assert_eq!(calls[3], words(&["session", "open", "l-new"]), "the new fork is opened");
+}
+
+#[test]
+fn a_refused_open_of_the_new_lead_shows_its_message_and_the_plan_stays_created() {
+    let env = env();
+    populate(&env);
+    env.fake(
+        "cpd",
+        r#"case "$1" in
+  session) echo '{"ok":false,"error":{"code":"no_cockpit","message":"There is no cockpit.","details":{}}}'; exit 3;;
+  *) echo '{"ok":true,"lead":{"session":"l-new"}}';;
+esac"#,
+    );
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    pane.right_click(5, 1); // the Context `alpha`
+    pane.wait("the menu", |s| menu_open(s, "New Plan…"));
+    pane.keys(&["Enter"]);
+    pane.wait("the prompt", |_| pane.footer_has("Title: █"));
+    pane.type_text("Pay");
+    pane.keys(&["Enter"]);
+    pane.wait("the refusal", |_| pane.footer_has("no_cockpit: There is no cockpit."));
+    assert_eq!(
+        calls(&env),
+        [words(&["plan", "new", "pay", "--context=alpha", "--title=Pay"]), words(&["session", "open", "l-new"])]
+    );
+}
+
+#[test]
+fn copy_id_puts_the_shown_id_in_tmuxs_buffer_and_says_so() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    for (column, row, id) in [(5, 1, "alpha"), (8, 2, "ship"), (8, 4, "ship·f-id")] {
+        pane.right_click(column, row);
+        pane.wait("the menu", |s| menu_open(s, if id == "alpha" { "New Plan…" } else if id == "ship" { "New session…" } else { "Open" }));
+        let downs = if id == "ship·f-id" { 3 } else { 2 };
+        pane.keys(&[&["Down"; 3][..downs], &["Enter"]].concat());
+        pane.wait("the note", |_| pane.footer_has(&format!("copied {id}")));
+        let buffer = env.tmux(&["show-buffer"]);
+        assert_eq!(String::from_utf8_lossy(&buffer.stdout), id);
+    }
+    assert!(calls(&env).is_empty(), "Copy id runs no cpd command: {:?}", calls(&env));
 }
