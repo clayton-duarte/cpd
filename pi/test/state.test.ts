@@ -110,6 +110,8 @@ test("session_shutdown reports stopped and stops the follower", async (t) => {
   await started(f);
   await waitFor("the follower", () => f.pids().length === 1);
   await f.pi.fire("session_shutdown");
+  // `session_shutdown` waits at most shutdownWaitMs for the call, which under load may not have started when it returns.
+  await waitFor("`stopped` sent", () => f.argvs().some((a) => a[1] === "state" && a[2] === "stopped"));
   assert.deepEqual(f.argvs().filter((a) => a[1] === "state").at(-1), ["session", "state", "stopped", "--session", ID]);
   await waitFor("the follower killed", () => f.killed(f.pids()[0]!));
   await f.pi.fire("agent_start"); // after shutdown nothing is reported
@@ -121,11 +123,12 @@ test("session_shutdown waits at most shutdownWaitMs for `stopped`", async (t) =>
   const f = new Fixture();
   t.after(() => f.close());
   await started(f);
+  const reported = (state: string, phase: "start" | "end") => f.calls().some((c) => c.phase === phase && c.argv[1] === "state" && c.argv[2] === state);
+  await waitFor("the start-up report done", () => reported("idle", "end")); // else the slow response below delays it, and `stopped` is not even sent
   f.respond("session-state", { ok: true }, { delay: 3000 });
-  const began = Date.now();
   await f.pi.fire("session_shutdown");
-  assert.ok(Date.now() - began < 1500, `took ${Date.now() - began} ms`);
-  assert.equal(stateCalls(f).at(-1), "stopped");
+  assert.equal(reported("stopped", "end"), false, "shutdown did not wait for the slow `stopped` call");
+  await waitFor("`stopped` sent", () => reported("stopped", "start"));
 });
 
 test("a /name typed in pi reaches cpd; a name cpd set does not echo back", async (t) => {
