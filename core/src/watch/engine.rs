@@ -1,5 +1,5 @@
 //! The engine's loop (contract §3.7; commands.md §12): `locks/watch.lock`,
-//! `watch-started`, then E1–E5 and E7 (E6 was removed) every
+//! `watch-started`, then E1–E5, E7 and E8 (E6 was removed) every
 //! `tick_seconds` until SIGTERM, SIGINT or SIGHUP, then `watch-stopped`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,11 +11,12 @@ use serde_json::{Value, json};
 use super::lock::WatchLock;
 use super::log::Log;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, completion, escalations, liveness, pr, schedule};
+use super::{SOURCE, completion, escalations, inbox, liveness, pr, schedule};
 use crate::config::{Catalog, Config, load_catalog};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, Kind, NewEvent};
 use crate::home::CpdHome;
+use crate::inbox::rules::EngineError;
 use crate::host::Tmux;
 use crate::host::pi::{self, PiDirs};
 use crate::ids::{PlanId, PrKey, SessionId};
@@ -74,10 +75,16 @@ impl Engine {
         Ok(catalog)
     }
 
-    /// One tick: E1–E5 and E7 (§3.7; E6 is removed), each reporting its own failures.
+    /// The failures reported and not cleared: E8's `engine-error` items.
+    pub(super) fn errors(&self) -> Vec<EngineError> {
+        self.report.active()
+    }
+
+    /// One tick: E1–E5, E7 and E8 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalog = None;
-        let steps: [fn(&mut Engine); 6] = [escalations::run, liveness::run, schedule::run, completion::run, pr::run, start_prs];
+        let steps: [fn(&mut Engine); 7] =
+            [escalations::run, liveness::run, schedule::run, completion::run, pr::run, start_prs, inbox::run];
         for step in steps {
             if stopping() {
                 return;

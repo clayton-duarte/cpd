@@ -40,7 +40,8 @@ Within your area you may add files (`core/src/<area>/foo.rs`, declared in your `
 | `metrics` | rs-spec-metrics | none: session metrics | §2.2 Attempt |
 | `driver` | rs-driver | `attempt run` (§6.4), `job dispatch` (§5.5) | §3.4 |
 | `pr` | rs-pr | `pr …` (§9): `pr open`, `pr poll`, `pr rebase`, and since R34 `pr add`, `pr edit`, `pr cancel`, `pr start` (§9.4–§9.7); owns the tables `prs` and `pr_needs`, the PR selection by `--pr` (§1.3) and the PR start (contract §3.8, §7.2), which `plan lock` and engine E7 call | §2.5, §3.8, §7.2, §7.6 |
-| `watch` | rs-watch | `watch` (§12) | §3.7 (E1–E7) |
+| `watch` | rs-watch | `watch` (§12) | §3.7 (E1–E8) |
+| `inbox` | Plan inbox | `inbox list/show/snooze/dismiss` (§21) | §2.2 Inbox item, §3.7 (E8) |
 | `doctor` | rs-doctor | `doctor` (§14.1) | |
 | `tui` | the TUI Job | `tui`, `tui view` (§13) | §6.2 |
 
