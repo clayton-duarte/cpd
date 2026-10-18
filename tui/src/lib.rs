@@ -81,7 +81,7 @@ pub fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdError> {
         Some(Command::View(view)) => match view {
             View::Tree => tree::run(),
             View::Plan => plan::run(run_command),
-            View::Widgets => widgets::run(),
+            View::Widgets => widgets::run(run_command),
             View::Statusbar => statusbar::run(),
             View::Worker(args) => worker::run(args),
             View::History(args) => history::run(args),
