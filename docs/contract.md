@@ -62,7 +62,7 @@ Exit codes (kept from cpd 1 §2):
 |---|---|
 | `1` | `gate_error`, `watch_start_failed`, `spawn_failed`, `session_malformed`, `driver_lock_missing`, `doctor_failed`, `pi_not_found`, `catalog_failed`, `cleanup_failed` (only as an `error` Event's code, source `pr poll`, never a command's failure; §7.2), `distill_invalid` and `distill_failed` (`context distill`'s failure and, the same, its `error` Event's code; §4.6) |
 | `2` | `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `spec_invalid`, `tier_invalid`, `nothing_to_edit`, `file_unreadable`, `invalid_name`, `pr_required`, `invalid_pr_id` (R34) |
-| `3` | `distill_running` (§4.6), `push_rejected` (hs-d139, §7.6), `session_ambiguous` (hs-a3, commands §1.3), `pr_exists`, `pr_in_use`, `pr_empty`, `pr_locked`, `pr_not_ready`, `pr_ended`, `needs_other_pr`, `branch_exists` (R34, §3.8), `context_exists`, `question_answered`, `not_a_git_repo`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `review_commits`, `review_missing`, `job_merged`, `job_not_failed`, `job_not_ready`, `attempt_not_running`, `no_port`, `jobs_not_done`, `gate_failed`, `rebase_conflict`, `not_a_lead`, `no_cockpit`, `wrong_pane`, `in_chat_slot`, `cursor_ahead`, `not_a_terminal` |
+| `3` | `distill_running` (§4.6), `push_rejected` (hs-d139, §7.6), `session_ambiguous` (hs-a3, commands §1.3), `pr_exists`, `pr_in_use`, `pr_empty`, `pr_locked`, `pr_not_ready`, `pr_ended`, `needs_other_pr`, `branch_exists` (R34, §3.8), `context_exists`, `question_answered`, `not_a_git_repo`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `job_key_exists`, `draft_incomplete` (hs-d241, commands §4.6, §4.8), `needs_unknown`, `needs_unavailable`, `review_commits`, `review_missing`, `job_merged`, `job_not_failed`, `job_not_ready`, `attempt_not_running`, `no_port`, `jobs_not_done`, `gate_failed`, `rebase_conflict`, `not_a_lead`, `no_cockpit`, `wrong_pane`, `in_chat_slot`, `cursor_ahead`, `not_a_terminal` |
 | `4` | `base_not_found`, `pr_not_found` (R34) |
 
 **Adapter-only codes.** `protocol_mismatch` is never a command's failure and never an `error` Event's code: it appears only in the pi adapter's message to its Session (`cpd adapter: …`, commands.md §15.2), when `cpd --version`'s `protocol` is not the number the adapter was built for (§5.2 "The protocol number"). It has no exit code.
@@ -261,11 +261,11 @@ A self-contained unit of work. Its **Spec** is the fields `goal`, `context`, `to
 | `review` | bool | a **review Job** (B2, below): set by `job add --review`, never changed (`job edit` has no such flag); default 0 (every Job before B2 is 0); a Locked field |
 | `seq` | int | machine-wide creation order (scheduling order, §3.2) |
 | `title` | text | |
-| `tier` | text | Tier (§9) |
-| `goal`, `context` | text | Spec |
-| `touches` | json [text], ≥ 1 | Spec: files or globs the Job may touch |
-| `acceptance` | json [text], ≥ 1 | Spec: checks that must hold |
-| `out_of_scope` | json [text] | Spec |
+| `tier` | text? | Tier (§9); null only while `draft` (a stub draft) |
+| `goal`, `context` | text? | Spec; null only while `draft` |
+| `touches` | json [text]?, ≥ 1 | Spec: files or globs the Job may touch; null only while `draft` |
+| `acceptance` | json [text]?, ≥ 1 | Spec: checks that must hold; null only while `draft` |
+| `out_of_scope` | json [text]? | Spec; null only while `draft` |
 | `status` | text | §3.2 |
 | `appended` | bool | added after `plan lock`; a draft added in a later phase (`job add --draft`, §3.2) is appended too, from the add |
 | `fingerprint` | text? | Locked-Job fingerprint (§2.3); null exactly while `draft` (and for a draft that was cancelled), in every phase |
@@ -274,6 +274,8 @@ A self-contained unit of work. Its **Spec** is the fields `goal`, `context`, `to
 | `failed_cause` | text? | the cause that failed the Job (§3.4); set exactly while `failed` |
 | `merged_sha` | text? | the Lead Branch commit after the merge; set exactly when `merged` |
 | `created_at` | time | |
+
+**Stub draft** (hs-d241, R1). A `draft` Job may lack its Tier, its Spec, or both: `job add <k> --draft --title <t>` needs neither `--tier` nor `--spec` (commands §5.1), so a Lead can register planned work the moment it is planned (hs-d239). The five Spec fields are null together (all given by `--spec`, or none) and the Tier is null or valid. A draft is editable, so `job edit <k> --tier <T> --spec <f>` completes it (commands §5.2). A draft that lacks its Spec or Tier is **incomplete**: it can be neither approved (`plan review` and `plan lock` are refused `draft_incomplete`, exit 3, `details.jobs` listing each key and what it lacks) nor queued or run (§3.2). The nulls hold only while `status = 'draft'` (§4.4 CHECK): a Job that is not a draft, and a draft that was cancelled after it was complete, have every field.
 
 **Review Job** (B2, hs-d70). A Job with `review = 1`: its Worker is a **fork of the Plan's Lead Session**, so it knows the intention, instead of a fresh session (§3.4, §6.5). It reads its PR's Lead Branch diff against the PR's base and the Plan's Specs, and writes its findings to `run/<plan>/reviews/<k>.md` (§1.4). It commits nothing: `attempt submit` without commits is allowed only for a review Job, which then ends `merged` with no change to the Lead Branch (§3.4, §7.4). Its Dependencies are set by `job add --review` to every Job of **its PR** that exists at that moment and is not `cancelled`; Jobs appended later (CI or PR-feedback fixes) do not become its Dependencies. The Lead turns the findings into fix Jobs before `pr open`; a final review Job is optional, and the Lead adds one only when it makes sense (B3); no local review is required before the Gate (§3.9). It belongs to a PR like every Job (A7). This is not cpd 1's Reviewer (removed by R19): it is an ordinary Job of the Plan, once, where the Lead wants it, and no Gate or verdict belongs to it.
 
@@ -406,7 +408,7 @@ The four pull request kinds read the `pull_requests` row the poll last wrote (§
 ### 2.3 Fingerprints
 
 - **Locked-Job fingerprint:** `sha256` of the canonical JSON (keys sorted, no whitespace) of `{goal, tier, context, touches, acceptance, out_of_scope, needs}` with `needs` sorted. Stored at `plan lock`, at append, and, for a draft added after the lock, when its Plan review is approved (§3.2). Every engine step that reads a Job recomputes it; a mismatch is `locked_job_tampered` (exit 3) and the Job is not scheduled (cpd 1 §8, kept).
-- **Plan fingerprint:** `sha256` of the canonical JSON object `{jobs, prs}` (R34): `jobs` is the array of the Locked fields of every `draft` Job, `pr` included, ordered by key (cpd 1 §11 `plan render`, kept); `prs` is the array of `{key, repo, base, needs}` of every PR that is not `cancelled`, `needs` sorted, ordered by key, so adding, editing or cancelling a PR changes it (A13). In a phase after `plan` the Plan review covers the drafts only (§2.2), so the fingerprint is the same object with `prs` the empty array: the PRs added after the lock are appended and not reviewed, so adding one must not void a review of drafts. `plan lock` requires the latest Plan review to be `approved` for the current plan fingerprint. A Plan in phase `plan` when migration 4 runs (§4.5) therefore needs a new review before it can be locked.
+- **Plan fingerprint:** `sha256` of the canonical JSON object `{jobs, prs}` (R34): `jobs` is the array of the Locked fields of every `draft` Job, `pr` included, ordered by key (cpd 1 §11 `plan render`, kept), a stub draft with its missing fields as JSON `null`, as it is (title only, hs-d241), so completing it changes the fingerprint; `prs` is the array of `{key, repo, base, needs}` of every PR that is not `cancelled`, `needs` sorted, ordered by key, so adding, editing or cancelling a PR changes it (A13). In a phase after `plan` the Plan review covers the drafts only (§2.2), so the fingerprint is the same object with `prs` the empty array: the PRs added after the lock are appended and not reviewed, so adding one must not void a review of drafts. `plan lock` requires the latest Plan review to be `approved` for the current plan fingerprint. A Plan in phase `plan` when migration 4 runs (§4.5) therefore needs a new review before it can be locked.
 - The Locked-Job fingerprint does **not** include `pr`: adding it would invalidate every fingerprint stored before R34. A Locked Job's `pr` is guarded by the trigger `jobs_locked` instead (§4.4). The same holds for `review` (B2): it is not in the fingerprint, which would invalidate every fingerprint stored before it, and `jobs_locked` guards it.
 
 ### 2.4 Relations
@@ -548,6 +550,8 @@ A Job stays `running` from the start of its Attempt until it is `merged`, `queue
 **Review Job** (B2). `job add --review` sets its Dependencies to every non-`cancelled` Job of its PR at that moment, so it is Ready only when all of them are `merged` (a `failed` Job of the PR makes the add refuse `needs_unavailable`: retry or cancel it first). Its Attempt is §3.4's "A review Job's Attempt"; it ends `merged` like any Job and its `merged_sha` is the Lead Branch tip.
 
 **Drafts in a running Plan** (User, hs-d173, hs-d174, hs-d179). A `draft` Job exists in every phase, not only in `plan`: `job add --draft` adds one after the lock, so that the Plan view shows every planned batch before it is approved. A draft is drawn as the draft pill (`◌`, grey) and the engine never schedules it (a Ready Job is `queued`). Drafts stay editable and cancellable in every phase (`job edit`, `job cancel`), and Dependencies may point at drafts; a `queued` Job may not need one (`needs_unavailable`). A draft becomes `queued` only at the approval of a review (§2.2), or at `plan lock` in phase `plan`; a rejected review leaves the drafts as they are, editable.
+
+**Stubs are never queued** (hs-d241, R1). A `draft` that lacks its Spec or its Tier (§2.2) is never moved to `queued`: no review of it can be approved and `plan lock` refuses it (`draft_incomplete`, exit 3), so no transition above applies to it, and the engine never schedules a draft in any case. It leaves `draft` only by being completed with `job edit` and then approved, or by `job cancel`. The `jobs` CHECK refuses `draft → queued` on a Job with a null Tier or Spec field (§4.4).
 
 **Locked.** Every Job that is not `draft` is Locked: its Locked fields and Dependencies can never change. It can only be re-attempted (the ladder, `job retry`) or cancelled, and new Jobs can be appended (ADR-0003, cpd 1 requirements §2, kept). `job edit` on a Locked Job is refused with `job_locked` (exit 3); a database trigger refuses the same write (§4.4).
 
@@ -941,12 +945,12 @@ CREATE TABLE jobs (
   review              INTEGER NOT NULL DEFAULT 0 CHECK (review IN (0, 1)),  -- B2: a review Job (added by migration 4)
   key                 TEXT NOT NULL CHECK (length(key) BETWEEN 1 AND 32),
   title               TEXT NOT NULL CHECK (length(title) >= 1),
-  tier                TEXT NOT NULL CHECK (length(tier) = 2 AND substr(tier, 1, 1) IN ('O', 'S', 'H') AND substr(tier, 2, 1) BETWEEN '0' AND '5'),
-  goal                TEXT NOT NULL CHECK (length(goal) >= 1),
-  context             TEXT NOT NULL,
-  touches             TEXT NOT NULL CHECK (json_valid(touches) AND json_type(touches) = 'array' AND json_array_length(touches) >= 1),
-  acceptance          TEXT NOT NULL CHECK (json_valid(acceptance) AND json_type(acceptance) = 'array' AND json_array_length(acceptance) >= 1),
-  out_of_scope        TEXT NOT NULL CHECK (json_valid(out_of_scope) AND json_type(out_of_scope) = 'array'),
+  tier                TEXT CHECK (tier IS NULL OR (length(tier) = 2 AND substr(tier, 1, 1) IN ('O', 'S', 'H') AND substr(tier, 2, 1) BETWEEN '0' AND '5')),  -- null only while draft (migration 0014)
+  goal                TEXT CHECK (goal IS NULL OR length(goal) >= 1),
+  context             TEXT,
+  touches             TEXT CHECK (touches IS NULL OR (json_valid(touches) AND json_type(touches) = 'array' AND json_array_length(touches) >= 1)),
+  acceptance          TEXT CHECK (acceptance IS NULL OR (json_valid(acceptance) AND json_type(acceptance) = 'array' AND json_array_length(acceptance) >= 1)),
+  out_of_scope        TEXT CHECK (out_of_scope IS NULL OR (json_valid(out_of_scope) AND json_type(out_of_scope) = 'array')),
   status              TEXT NOT NULL CHECK (status IN ('draft', 'queued', 'running', 'merged', 'failed', 'cancelled')),
   appended            INTEGER NOT NULL CHECK (appended IN (0, 1)),
   fingerprint         TEXT CHECK (fingerprint IS NULL OR length(fingerprint) = 64),
@@ -961,6 +965,8 @@ CREATE TABLE jobs (
   FOREIGN KEY (plan, pr) REFERENCES prs(plan, key),
   CHECK (status <> 'draft' OR fingerprint IS NULL),
   CHECK (status IN ('draft', 'cancelled') OR fingerprint IS NOT NULL),
+  CHECK (status = 'draft' OR (tier IS NOT NULL AND goal IS NOT NULL AND context IS NOT NULL AND touches IS NOT NULL AND acceptance IS NOT NULL AND out_of_scope IS NOT NULL)),  -- stubs only as drafts (hs-d241)
+  CHECK ((goal IS NULL) = (context IS NULL) AND (goal IS NULL) = (touches IS NULL) AND (goal IS NULL) = (acceptance IS NULL) AND (goal IS NULL) = (out_of_scope IS NULL)),  -- the Spec is all or nothing
   CHECK ((status = 'merged') = (merged_sha IS NOT NULL)),
   CHECK ((status = 'failed') = (failed_cause IS NOT NULL)),
   CHECK ((cancel_reason IS NULL) = (cancel_requested_at IS NULL)),
@@ -1400,6 +1406,7 @@ CREATE TRIGGER events_no_delete  BEFORE DELETE ON events  BEGIN SELECT RAISE(ABO
   ```
 
   Every existing row came from the `author:@me` search, so it gets `authored` 1 and `review_requested` 0, which the defaults give. `pull_requests_owned` is unchanged and `pull_requests` still gets no `_no_delete`. Set `user_version = 13`.
+- **Migration 0014** (stub drafts, hs-d241, R1; applied after migration 0013; the next free number on its base, renumbered at rebase when another migration lands first, hs-d68, hs-d211): makes `jobs.tier`, `goal`, `context`, `touches`, `acceptance` and `out_of_scope` nullable **only while `status = 'draft'`**. SQLite cannot drop a `NOT NULL` or alter a check, so `jobs` is rebuilt as migration 4 rebuilt it (foreign-key handling of its steps 1 and 5; `jobs_new` with the §4.4 definition; copy with every primary key and column kept, `jobs.seq` included; `DROP`, `RENAME`; indexes, triggers (`jobs_locked`, `jobs_status`, `jobs_pr_dependencies`, and the others of §4.4) and history triggers generated again), in one transaction. The new definition adds the checks `status = 'draft' OR (tier IS NOT NULL AND goal IS NOT NULL AND context IS NOT NULL AND touches IS NOT NULL AND acceptance IS NOT NULL AND out_of_scope IS NOT NULL)`, so a Job that is not a draft has every field, and `(goal IS NULL) = (context IS NULL) = (touches IS NULL) = (acceptance IS NULL) = (out_of_scope IS NULL)`, so the Spec is all or nothing; each field's own check accepts null. Every existing row has every field, so no row changes; `user_version = 14`. The tests: a database at 0013 with Jobs of every status migrates keeping every row and `seq`, passes `PRAGMA foreign_key_check`, accepts a `draft` with only a title and refuses a `queued` Job with a null `tier` or `goal`, and its schema hash equals that of a fresh database migrated to 0014.
 - No migration from cpd 1's beads Ledgers (R7): running Workflows finish on cpd 1.
 
 ### 4.6 The Context store
