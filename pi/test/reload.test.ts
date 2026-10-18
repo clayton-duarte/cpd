@@ -47,6 +47,7 @@ test("a changed adapter directory triggers its command once, with expandPromptTe
   await waitFor("the reload", () => f.pi.reloads > 0);
   await settle(200);
   assert.deepEqual(f.pi.userMessages, [{ content: `/${RELOAD_COMMAND}`, options: { expandPromptTemplates: true } }]);
+  assert.ok(f.pi.notices.includes("cpd: adapter updated, reloading"));
   assert.equal(f.pi.reloads, 1, "the new load records the new identity: no second reload");
   assert.deepEqual(f.pi.commandErrors, [], "nothing used the context after reload()");
   assert.deepEqual(f.pi.sent.filter((s) => s.message.customType !== "cpd"), [], "nothing reaches the model");

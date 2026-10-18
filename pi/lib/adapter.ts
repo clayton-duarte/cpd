@@ -101,6 +101,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     async handler(_args: string, ctx: CommandCtx) {
       const r = run;
       if (!r || refusal(guardOf(r, ctx)) !== undefined) return r?.reload?.retry();
+      ctx.ui.notify("cpd: adapter updated, reloading");
       try {
         await ctx.reload(); // `ctx` is stale from here on
       } finally {

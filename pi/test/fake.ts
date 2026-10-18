@@ -147,7 +147,11 @@ export class Fixture {
   }
 
   async close(): Promise<void> {
-    await this.pi.fire("session_shutdown").catch(() => {});
+    // A reload command still running (its `reload()` shuts down and starts the adapter) would start a follower after this shutdown.
+    do {
+      await Promise.allSettled([...this.pi.commandsRunning]);
+      await this.pi.fire("session_shutdown").catch(() => {});
+    } while (this.pi.commandsRunning.size > 0);
     for (const [k, v] of Object.entries(this.saved)) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
@@ -189,6 +193,8 @@ export class FakePi implements PiApi {
   onReload: () => void | Promise<void> = () => {};
   readonly commands = new Map<string, (args: string, ctx: CommandCtx) => Promise<void>>();
   readonly commandErrors: unknown[] = [];
+  /** Commands started by `sendUserMessage` and not finished. */
+  readonly commandsRunning = new Set<Promise<void>>();
   readonly userMessages: { content: string; options: { expandPromptTemplates: boolean } }[] = [];
   mode = "tui";
   sessionId = ID;
@@ -246,7 +252,11 @@ export class FakePi implements PiApi {
   sendUserMessage(content: string, options: { expandPromptTemplates: boolean }): void {
     this.userMessages.push({ content, options });
     const handler = options.expandPromptTemplates && content.startsWith("/") ? this.commands.get(content.slice(1).split(" ")[0]!) : undefined;
-    if (handler) void handler("", this.commandCtx()).catch((e) => void this.commandErrors.push(e));
+    if (!handler) return;
+    const running: Promise<void> = handler("", this.commandCtx())
+      .catch((e) => void this.commandErrors.push(e))
+      .finally(() => void this.commandsRunning.delete(running));
+    this.commandsRunning.add(running);
   }
 
   ctx(): Ctx {
