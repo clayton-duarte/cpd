@@ -8,6 +8,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use time::OffsetDateTime;
@@ -51,7 +52,7 @@ impl Shape {
     }
 
     /// The item rows: three, or all when expanded.
-    fn shown(self) -> usize {
+    pub fn shown(self) -> usize {
         if self.expanded { self.count } else { self.count.min(SHOWN) }
     }
 
@@ -151,8 +152,9 @@ fn item_line(item: &Item, age: &str, width: usize, frame: usize) -> (Line<'stati
 }
 
 /// Draws the section into `area` (its first row is the header; rows that do not fit are cut): `items` are the
-/// snapshot's visible open items, `now` the clock the ages are taken from.
-pub fn draw(f: &mut Frame, area: Rect, items: &[Item], expanded: bool, now: OffsetDateTime, frame: usize) {
+/// snapshot's visible open items, `now` the clock the ages are taken from, `cursor` the item the keyboard cursor
+/// is on (its row is inverted across its width).
+pub fn draw(f: &mut Frame, area: Rect, items: &[Item], expanded: bool, cursor: Option<usize>, now: OffsetDateTime, frame: usize) {
     let shape = Shape::new(items.len(), expanded);
     for dy in 0..area.height.min(shape.height()) {
         let row = Rect::new(area.x, area.y + dy, area.width, 1);
@@ -165,6 +167,9 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], expanded: bool, now: Offs
                 let item = &items[i];
                 let (line, label_width) = item_line(item, &age_of(&item.opened_at, now), usize::from(row.width), frame);
                 f.render_widget(Paragraph::new(line), row);
+                if cursor == Some(i) {
+                    f.buffer_mut().set_style(row, Modifier::REVERSED);
+                }
                 if let (true, Some(url)) = (is_link(item.kind), &item.url) {
                     let label = Rect::new(row.x + DOT_WIDTH as u16, row.y, label_width as u16, 1);
                     link(f.buffer_mut(), label, url);
@@ -356,7 +361,7 @@ mod tests {
         let url = "https://github.com/acme/api/pull/12";
         let mut linked = item(1, Kind::PrFailing, Urgency::Red, "api#12 failing", OPENED);
         linked.url = Some(url.into());
-        terminal.draw(|f| draw(f, f.area(), &[linked], false, at("2026-01-01T00:03:30.000Z"), 0)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &[linked], false, None, at("2026-01-01T00:03:30.000Z"), 0)).unwrap();
         let bytes = sink.0.borrow().clone();
         let pieces: String = ["ap", "i#", "12", " f", "ai", "li", "ng"]
             .iter()
@@ -375,7 +380,7 @@ mod tests {
         let mut dialog = item(2, Kind::Dialog, Urgency::Red, "dialog", OPENED);
         dialog.url = Some(url.into());
         let no_url = item(3, Kind::PlanReview, Urgency::Yellow, "review", OPENED);
-        terminal.draw(|f| draw(f, f.area(), &[dialog, no_url], false, at("2026-01-01T00:03:30.000Z"), 0)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &[dialog, no_url], false, None, at("2026-01-01T00:03:30.000Z"), 0)).unwrap();
         assert!(!printed(&sink.0.borrow()).contains("\x1b]8;;"));
     }
 }

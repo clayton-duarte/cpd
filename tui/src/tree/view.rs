@@ -4,7 +4,9 @@
 //! runs it, then hands the result to [`View::done`].
 //!
 //! Keys (commands.md §13.2): ↑↓ and j/k move the cursor, Enter opens the cursor's Session, `n` starts a new Plan,
-//! `x` closes a Session's pane, `?` opens the legend. No other key does anything. A right click opens the menu
+//! `x` closes a Session's pane, `?` opens the legend. After the last Session the cursor goes on into the Inbox
+//! section's item rows (and back up); there Enter jumps to the item's cause, `s` opens the snooze choices and `d`
+//! dismisses. No other key does anything. A right click opens the menu
 //! ([`super::menu`]), which then takes every key and click.
 
 use std::collections::HashSet;
@@ -16,12 +18,13 @@ use ratatui::widgets::{Paragraph, Wrap};
 use time::OffsetDateTime;
 use tui_tree_widget::TreeState;
 
-use super::actions::{Action, Free, IN_CHAT_SLOT, Subject};
+use super::actions::{Action, Free, IN_CHAT_SLOT, Subject, Until};
 use super::cursor::{self, Input};
 use super::inbox::{self, Hit, Jump, Shape};
 use super::menu::{self, Item, Kind, Menu};
 use super::prompt::{Ask, Outcome, Prompt, Target};
 use super::rows::{self, Id, Row};
+use cpd_core::inbox::model::Kind as InboxKind;
 use cpd_core::session::State;
 use crate::palette;
 use crate::read::{ContextNode, SessionNode, Tree};
@@ -99,6 +102,9 @@ pub struct View {
     inbox_expanded: bool,
     /// Where the last frame drew the Inbox section (empty when it drew none): clicks there are the section's.
     inbox_area: Rect,
+    /// The item row of the Inbox section the keyboard cursor is on (an index of the snapshot's Inbox, a shown one):
+    /// the tree's cursor then rests on its last Session. Hidden like the tree's cursor ([`cursor::shown`]).
+    inbox_cursor: Option<usize>,
     /// The one-line result or refusal of the last action, until the next `n`, `x` or click.
     pub note: String,
 }
@@ -116,22 +122,41 @@ impl View {
             pane: Rect::default(),
             inbox_expanded: false,
             inbox_area: Rect::default(),
+            inbox_cursor: None,
             note: String::new(),
         };
         view.refresh(tree);
         view
     }
 
-    /// A new snapshot: keep the cursor on its Session.
+    /// A new snapshot: keep the cursor on its Session, or on its Inbox item (the item now at the same position when
+    /// it is gone).
     pub fn refresh(&mut self, tree: Tree) {
         let before = rows::selected_index(&self.state, &self.tree);
+        let item = self.inbox_cursor.and_then(|i| self.tree.inbox.get(i)).map(|item| item.id);
         self.tree = tree;
         rows::open_new(&mut self.state, &mut self.known, &self.tree);
         rows::reselect(&mut self.state, &self.tree, before);
+        if let Some(i) = self.inbox_cursor {
+            let moved = item.and_then(|id| self.tree.inbox.iter().position(|it| it.id == id));
+            self.inbox_cursor = Some(moved.unwrap_or(i));
+            self.clamp_inbox_cursor();
+        }
+    }
+
+    /// The Inbox cursor stays on a shown item row; with none, it goes.
+    fn clamp_inbox_cursor(&mut self) {
+        let shown = Shape::new(self.tree.inbox.len(), self.inbox_expanded).shown();
+        self.inbox_cursor = self.inbox_cursor.and_then(|i| shown.checked_sub(1).map(|last| i.min(last)));
     }
 
     fn cursor_shown(&self) -> bool {
-        cursor::shown(self.focused, self.last_input, !self.state.selected().is_empty())
+        cursor::shown(self.focused, self.last_input, !self.state.selected().is_empty() || self.inbox_cursor.is_some())
+    }
+
+    /// The Inbox item under the keyboard cursor, while it shows.
+    fn cursor_item(&self) -> Option<&cpd_core::inbox::model::Item> {
+        self.inbox_cursor.filter(|_| self.cursor_shown()).and_then(|i| self.tree.inbox.get(i))
     }
 
     pub fn focus(&mut self, gained: bool) {
@@ -148,7 +173,7 @@ impl View {
 
     /// The cursor's row, while the cursor shows: Enter, `n` and `x` act on it.
     fn cursor_row(&self) -> Option<Row<'_>> {
-        rows::row(&self.tree, self.state.selected()).filter(|r| self.cursor_shown() && !r.archived())
+        rows::row(&self.tree, self.state.selected()).filter(|r| self.cursor_shown() && self.inbox_cursor.is_none() && !r.archived())
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Effect {
@@ -202,18 +227,30 @@ impl View {
                 let asked = self.cursor_row().and_then(close_of);
                 self.ask(asked);
             }
+            KeyCode::Char('s') => {
+                self.note.clear();
+                if let Some(item) = self.cursor_item().filter(|i| i.kind != InboxKind::EngineDown) {
+                    let at = Position::new(self.inbox_area.x + 2, self.inbox_area.y + 1 + self.inbox_cursor.unwrap_or(0) as u16);
+                    self.menu = Some(Menu::for_item(Kind::Snooze, item.id, at));
+                }
+            }
+            KeyCode::Char('d') => {
+                self.note.clear();
+                if let Some(item) = self.cursor_item().filter(|i| i.kind != InboxKind::EngineDown) {
+                    return Effect::Run(Action::Dismiss(item.id));
+                }
+            }
             KeyCode::Char('?') => return Effect::Legend,
             // the first arrow after a click only shows the cursor again where it was (the first Session when there is none)
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Up | KeyCode::Char('k') => {
                 let delta = if matches!(key.code, KeyCode::Down | KeyCode::Char('j')) { 1 } else { -1 };
-                if self.cursor_shown() {
-                    rows::move_cursor(&mut self.state, &self.tree, delta);
-                } else if self.state.selected().is_empty() {
-                    rows::move_cursor(&mut self.state, &self.tree, 1);
-                }
+                self.arrow(delta);
                 self.last_input = Input::Arrow;
             }
             KeyCode::Enter => {
+                if let Some(i) = self.inbox_cursor.filter(|_| self.cursor_shown()) {
+                    return self.jump(i);
+                }
                 if let Some(session) = self.cursor_row().and_then(|r| r.session()) {
                     return Effect::Run(Action::Open(session.id.clone()));
                 }
@@ -223,13 +260,49 @@ impl View {
         Effect::None
     }
 
+    /// An arrow key (`delta` 1 down, -1 up) while the cursor shows: it moves through the Sessions, on from the last
+    /// into the Inbox's shown items and back up from the first to the last Session; when it does not show, the key
+    /// only shows it again where it was (on the first Session when it has none).
+    fn arrow(&mut self, delta: isize) {
+        let shown = Shape::new(self.tree.inbox.len(), self.inbox_expanded).shown();
+        if let Some(i) = self.inbox_cursor {
+            if self.cursor_shown() {
+                self.inbox_cursor = match (delta, i) {
+                    (d, 0) if d < 0 => None,
+                    (d, i) if d < 0 => Some(i - 1),
+                    (_, i) => Some((i + 1).min(shown.saturating_sub(1))),
+                };
+            }
+        } else if self.cursor_shown() {
+            let before = rows::selected_index(&self.state, &self.tree);
+            rows::move_cursor(&mut self.state, &self.tree, delta);
+            // it did not move: the last Session, so down goes into the Inbox
+            if delta > 0 && shown > 0 && rows::selected_index(&self.state, &self.tree) == before {
+                self.inbox_cursor = Some(0);
+            }
+        } else if self.state.selected().is_empty() {
+            rows::move_cursor(&mut self.state, &self.tree, 1);
+            // no Session at all: the Inbox is all there is to reach
+            if delta > 0 && shown > 0 && self.state.selected().is_empty() {
+                self.inbox_cursor = Some(0);
+            }
+        }
+    }
+
     pub fn mouse(&mut self, m: MouseEvent) -> Effect {
         if self.prompt.is_some() {
             return Effect::None;
         }
         let at = Position::new(m.column, m.row);
-        // the Inbox section has no menu of its own yet: a right click there opens none
+        // a right click on the Inbox section: the menu of an item row; the header and `+<n> more` have none
         if self.menu.is_none() && m.kind == MouseEventKind::Down(MouseButton::Right) && self.inbox_area.contains(at) {
+            self.note.clear();
+            if let Some(Hit::Item(i)) = Shape::new(self.tree.inbox.len(), self.inbox_expanded).hit(at.y - self.inbox_area.y) {
+                let item = &self.tree.inbox[i];
+                if item.kind != InboxKind::EngineDown {
+                    self.menu = Some(Menu::for_item(Kind::Inbox, item.id, at));
+                }
+            }
             return Effect::None;
         }
         if let Some(menu) = self.menu.as_mut() {
@@ -267,6 +340,15 @@ impl View {
     fn pick(&mut self, item: Item) -> Effect {
         let Some(menu) = self.menu.take() else { return Effect::None };
         self.note.clear();
+        if let Some(id) = menu.inbox {
+            return match item {
+                Item::Snooze15 => Effect::Run(Action::Snooze { item: id, until: Until::Minutes15 }),
+                Item::Snooze1h => Effect::Run(Action::Snooze { item: id, until: Until::Hour1 }),
+                Item::SnoozeTomorrow => Effect::Run(Action::Snooze { item: id, until: Until::Tomorrow }),
+                Item::Dismiss => Effect::Run(Action::Dismiss(id)),
+                _ => Effect::None,
+            };
+        }
         if item == Item::NewContext {
             let taken = self.tree.contexts.iter().map(|c| c.id.to_string()).collect();
             self.prompt = Some(Prompt::typed(Ask::NewContext { taken }, String::new()));
@@ -306,7 +388,8 @@ impl View {
                 Effect::None
             }
             Item::CopyId => row.shown_id().map_or(Effect::None, |id| Effect::Run(Action::CopyId(id))),
-            Item::NewContext => Effect::None,
+            // an Inbox item's entries are the menu's `inbox` branch above
+            Item::NewContext | Item::Snooze15 | Item::Snooze1h | Item::SnoozeTomorrow | Item::Dismiss => Effect::None,
         }
     }
 
@@ -393,14 +476,20 @@ impl View {
         match Shape::new(self.tree.inbox.len(), self.inbox_expanded).hit(row) {
             Some(Hit::Toggle) => {
                 self.inbox_expanded = !self.inbox_expanded;
+                self.clamp_inbox_cursor();
                 Effect::None
             }
-            Some(Hit::Item(i)) => match inbox::jump(&self.tree, &self.tree.inbox[i]) {
-                Some(Jump::Run(action)) => Effect::Run(action),
-                Some(Jump::Logs(event)) => Effect::Logs(event),
-                None => Effect::None,
-            },
+            Some(Hit::Item(i)) => self.jump(i),
             Some(Hit::Header) | None => Effect::None,
+        }
+    }
+
+    /// The jump of the Inbox item `i` ([`inbox::jump`]): a click on its row, or Enter on it.
+    fn jump(&self, i: usize) -> Effect {
+        match inbox::jump(&self.tree, &self.tree.inbox[i]) {
+            Some(Jump::Run(action)) => Effect::Run(action),
+            Some(Jump::Logs(event)) => Effect::Logs(event),
+            None => Effect::None,
         }
     }
 
@@ -449,12 +538,13 @@ impl View {
             self.state.select(selected);
         }
         self.inbox_area = inbox_area;
-        inbox::draw(f, inbox_area, &self.tree.inbox, self.inbox_expanded, now, frame);
+        let inbox_cursor = self.inbox_cursor.filter(|_| self.cursor_shown());
+        inbox::draw(f, inbox_area, &self.tree.inbox, self.inbox_expanded, inbox_cursor, now, frame);
         if footer_height > 0 {
             let style = if self.prompt.is_some() { palette::note().bold() } else { palette::note() };
             f.render_widget(Paragraph::new(footer).style(style).wrap(Wrap { trim: false }), footer_area);
         }
-        let cursor = self.cursor_shown();
+        let cursor = self.cursor_shown() && self.inbox_cursor.is_none();
         rows::draw(f, list, &self.tree, &mut self.state, cursor, frame);
         self.pane = Rect { y: inner.y + inner.height.min(1), height: inner.height.saturating_sub(1), ..inner };
         if let Some(menu) = &self.menu {
