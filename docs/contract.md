@@ -54,7 +54,7 @@ Exit codes (kept from cpd 1 §2):
 | `2` | usage error | `usage`, `plan_required`, `invalid_plan_id` |
 | `3` | refused by an invariant: Locked, an illegal transition, a precondition | `job_locked`, `illegal_transition`, `dirty_tree`, `cas_lost` |
 | `4` | not found | `plan_not_found`, `job_not_found`, `session_not_found` |
-| `5` | timeout | `store_busy`, `lock_timeout`, `ask_timeout` |
+| `5` | timeout | `store_busy`, `lock_timeout`, `ask_timeout`, `cancel_timeout` |
 
 `commands.md` introduces more codes, most of them cpd 1's (cpd 1 §11 and its `src/`); each is specified at the command that returns it, under the same exit meanings:
 
@@ -87,7 +87,7 @@ $CPD_HOME/
   archive/contexts/<context>/     an old git store of a Context, moved here by migration 0007 (§4.5); nothing reads it
   locks/
     watch.lock                    held by the one `cpd watch` (§6.6)
-    repo-<sha1>.lock              per-repo lock: merges, `pr open`, `pr rebase` (§7.4, §7.6); sha1 of the repo's git common dir realpath
+    repo-<sha1>.lock              per-repo lock: merges, `pr open`, `pr rebase`, `pr push`, and the clean-up after a PR's merge (§7.2, §7.4, §7.6); sha1 of the repo's git common dir realpath
     attempt-<plan>--<attempt>.lock  the driver lock: taken by the Attempt's starter, inherited by its driver, removed when the Attempt ends (§3.4)
     pr-poll.lock                  held by `pr poll` for the whole poll (§7.6, hs-d96)
     plannotator-ports.lock        held while a Plan's review port is assigned (§6.5)
@@ -206,7 +206,7 @@ The PR object is the cpd record; "pull request" names the object on GitHub that 
 
 #### Pull request
 
-What the PR poller (hs-d65, hs-d72, hs-d96, hs-d97, hs-d98, hs-d107, §7.6) last read of one of the User's GitHub pull requests: one row per pull request, kept for the Dispatch column (commands.md §13.2). A PR (above) points to its row; the User's other pull requests have a row and no PR. Table `pull_requests`, migration 6 (§4.4, §4.5).
+What the PR poller (hs-d65, hs-d72, hs-d96, hs-d97, hs-d98, hs-d107, §7.6) last read of one of the User's GitHub pull requests: one row per pull request, kept for the Dispatch column (commands.md §13.2). A PR (above) points to its row; the User's other pull requests have a row and no PR. Table `pull_requests`, migration 6; `mergeable` and `merge_state` come with migration 11, `authored` and `review_requested` with migration 0013 (§4.4, §4.5). A row is there because the User wrote the pull request, because it requests the User's review, or both.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -219,11 +219,15 @@ What the PR poller (hs-d65, hs-d72, hs-d96, hs-d97, hs-d98, hs-d107, §7.6) last
 | `state` | text | `open`, `closed` or `merged` |
 | `review_decision` | text | `none`, `approved` or `changes_requested` (§7.6 maps gh's value) |
 | `checks` | text | `none`, `passed`, `pending` or `failed` (§7.6 maps gh's value) |
+| `mergeable` | text | `mergeable`, `conflicting` or `unknown`: GitHub's `PullRequest.mergeable` (`MERGEABLE`, `CONFLICTING`, `UNKNOWN`), lowercased (§7.6). Stored as each poll reads it, `unknown` included: GitHub computes it lazily after the base moves. `pr open` inserts `unknown` |
+| `merge_state` | text | `behind`, `blocked`, `clean`, `dirty`, `draft`, `has_hooks`, `unknown` or `unstable`: GitHub's `mergeStateStatus`, lowercased (§7.6). Stored as each poll reads it. `pr open` inserts `unknown` |
+| `authored` | bool | 1 when the User wrote it: the pull request is in the `author:@me` search (§7.6). Set by each poll |
+| `review_requested` | bool | 1 when the User's review is requested: the pull request is in the `review-requested:@me` search (§7.6). Set by each poll; the Inbox kind `review-requested` (§2.2 Inbox item) reads it |
 | `created_at` | time | when GitHub created it (GitHub's time, not cpd's) |
 | `merged_at` | time? | when it was merged; set exactly when `state` is `merged` |
-| `changed_at` | time | cpd's time of the last change of any other field; a poll that finds nothing changed writes nothing (§7.6) |
+| `changed_at` | time | cpd's time of the last change of any other field (`mergeable`, `merge_state`, `authored` and `review_requested` included); a poll that finds nothing changed writes nothing (§7.6) |
 
-A row is deleted when its pull request leaves the open search and no PR points to it; a row a PR points to is never deleted (§4.4). The row appends no Event of its own (§5.1); `pr-feedback` and `pr-merged` come from the transitions it causes (§5.2).
+A row is deleted when its pull request leaves both open searches and no PR points to it; a row a PR points to is never deleted (§4.4). The row appends no Event of its own (§5.1); `pr-feedback` and `pr-merged` come from the transitions it causes (§5.2).
 
 #### Plan review
 
@@ -351,6 +355,47 @@ An append-only record of something that happened (D4, §5).
 | `text` | text | one short paragraph for the Lead, ending with the exact `cpd` command(s) it may want to run (cpd 1 §10, kept) |
 | `data` | json object | kind-specific fields (§5.2) |
 
+#### Inbox item
+
+One thing that needs the User: the **single source of "needs you"** (hs-d165), shown by `cpd inbox` and the cockpit. The engine opens it when its condition starts and closes it when the condition ends (E8, §3.7); nobody else does. Its identity is (`kind`, `subject`, `urgency`): when the urgency changes (a Plan locks while a dialog is open), the item closes and a new one opens. A closed item is kept forever (hs-d168).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | int | |
+| `kind` | text | the table below |
+| `urgency` | text | `red` (blocked work), `yellow` (review or merge due), `magenta` (a decision before the work runs), `white` (an unread turn) |
+| `subject` | text | the identity key: `session:<uuid>`, `review:<plan>/<id>`, `job:<plan>/<key>`, `error:<step>/<scope>/<code>`, `record:<context>/<id>`, `pr:<owner>/<repo>#<n>` (review ids are per Plan and record ids repeat across Contexts, so both are qualified) |
+| `context`, `plan`, `job`, `session`, `record` | text? | what it is about, when it has one |
+| `event` | int? | the Event that caused it (the `session-state`, `job-failed` or `error` Event), for "jump to the cause" |
+| `label` | text | the short text of the table below |
+| `url` | text? | a page that shows it (plannotator's for a Plan review; the pull request's page for the `pr-*` and `review-requested` kinds) |
+| `opened_at` | time | |
+| `closed_at` | time? | null while open |
+| `snoozed_until` | time? | hidden until then; the item returns at its rank, `opened_at` kept |
+| `dismissed_at` | time? | hidden for the rest of its life; a new cause is a new item and shows again |
+
+A hidden (snoozed or dismissed) item fills no dot and is not counted. Escalations from Workers go to their Lead, not to the User, so they are not items; nor are the errors addressed to a Lead (`pr_start_failed`, `push_failed`, driver errors).
+
+| Kind | Condition (subject) | Urgency | Label (`<who>`: the tree's label of the Session: its Plan id, `<plan>·<suffix>` for a fork, the Context id for a Manager) |
+|---|---|---|---|
+| `dialog` | a Lead, side fork or Manager Session (never a Worker) is `blocked` with a label other than `cpd: Worker question` and `cpd: plan review` (the Session) | red when its Plan is in `dispatch` or `pr`; magenta in `grounding`, `plan`, `done` or with no Plan | `<who> asks you` |
+| `plan-review` | the Plan's latest Plan review is `pending` (the review) | magenta | `<plan> plan review` |
+| `unread` | a Lead, side fork or Manager Session is `idle`, not in the chat slot, and its latest `session-state` Event with `to: idle` is newer than its latest `session-moved` with `place: chat` (the Session) | white | `<who> replied` |
+| `job-stuck` | a Job is `failed` and its latest `job-failed` Event is at least `inbox.stuck_job_minutes` (§8.2) old; it clears on retry or cancel (the Job) | red | `<plan>/<job> failed` |
+| `engine-error` | an `error` the engine itself reported (a failure of E1–E8, §3.7) has not cleared (step, scope and code) | red | `engine <step>: <code>` |
+| `engine-down` | `locks/watch.lock` is free. **Not stored**: the engine cannot report its own absence, so `cpd inbox list` adds it, first, with `id: null` | red | `engine is down` |
+| `question` | a Context record of kind `question` has no `answer` record (the record) | magenta | `<record id> open question` |
+| `pr-failing` | an open pull request the User authored (`authored` 1) has `checks` `failed`, **or** `mergeable` `conflicting` (hs-d188 (3)) (`pr:<owner>/<repo>#<n>`) | red | `<repo>#<n> checks failed`; `<repo>#<n> merge conflict` when only the conflict holds when it opens |
+| `pr-changes` | an open pull request the User authored has `review_decision` `changes_requested` (the pull request) | red | `<repo>#<n> changes requested` |
+| `pr-ready` | an open, non-draft pull request the User authored has `checks` `passed`, `mergeable` `mergeable` and no `changes_requested` (the pull request) | yellow | `<repo>#<n> ready to merge` |
+| `review-requested` | an open pull request requests the User's review (`review_requested` 1) (the pull request) | yellow | `review <repo>#<n>` |
+
+The four pull request kinds read the `pull_requests` row the poll last wrote (§7.6): `url` is the row's `url`, the pull request's page, and `<repo>` is the row's `repo` without the owner. When a Plan's PR points to the row, the item also links that Plan and its Context. `mergeable` and `merge_state` are only read here; the PR poll's mergeable state defines them (§2.2 Pull request, §7.6). Labels are short, for a column of 20 % of 215 columns; the cockpit truncates with `…`.
+
+**Order** (hs-d167): red, then yellow, magenta, white; within one urgency the oldest `opened_at` first. `engine-down` is always first.
+
+**Snooze and dismiss.** `inbox snooze` hides an item until a time (15 minutes, 1 hour, or tomorrow 09:00 local time); `inbox dismiss` hides it for the rest of its life (commands.md §21).
+
 ### 2.3 Fingerprints
 
 - **Locked-Job fingerprint:** `sha256` of the canonical JSON (keys sorted, no whitespace) of `{goal, tier, context, touches, acceptance, out_of_scope, needs}` with `needs` sorted. Stored at `plan lock`, at append, and, for a draft added after the lock, when its Plan review is approved (§3.2). Every engine step that reads a Job recomputes it; a mismatch is `locked_job_tampered` (exit 3) and the Job is not scheduled (cpd 1 §8, kept).
@@ -387,6 +432,7 @@ erDiagram
 - A PR has one or more Jobs by `plan lock` (`pr_empty`, exit 3); a Job belongs to exactly one PR of its Plan (A7). Dependencies link Jobs of the same PR only; order across PRs is the PRs' needs.
 - A Job has zero or more Attempts, at most one of them not `ended`.
 - An Attempt has one Worker Session. An Escalation belongs to one Attempt.
+- An Inbox item links to at most one Context, Plan, Job, Session, Context record and Event (§2.2): the ones its condition is about, all optional.
 - Every Event about a Context or a Plan names the Context, and the Plan, Job, Attempt or Session it is about, when there is one. Events about neither, such as `watch-started` and `watch-stopped`, name no Context (§5.2).
 
 ### 2.5 PRs in commands and views (R34)
@@ -410,7 +456,7 @@ The command surface of PRs; `commands.md` specifies each command in full.
 
 ## 3. State machines
 
-Every transition below is the only way its state changes. Anything else is refused with `illegal_transition` (exit 3) by the command, and also by a trigger in the database (§4.4), so a bug cannot write it either. "Engine" steps are those of `cpd watch` (§3.7, E1–E7) and of the Attempt driver `cpd attempt run` (§3.4, A1–A9). Each row names the Event its transaction appends (§5.2).
+Every transition below is the only way its state changes. Anything else is refused with `illegal_transition` (exit 3) by the command, and also by a trigger in the database (§4.4), so a bug cannot write it either. "Engine" steps are those of `cpd watch` (§3.7, E1–E8) and of the Attempt driver `cpd attempt run` (§3.4, A1–A9). Each row names the Event its transaction appends (§5.2).
 
 ### 3.1 Plan phases
 
@@ -554,7 +600,7 @@ stateDiagram-v2
 | A1 | Check that fd 3 is the driver lock (below); load the Attempt and Job; recompute the Locked-Job fingerprint (§2.3) |
 | A2 | Create the worktree from the HEAD of the Lead Branch of the Job's PR, in that PR's repo, and run `pre-start` (§7.2, §7.3); record `base_sha` |
 | A3 | Render the Worker Spec to `run/<plan>/specs/<attempt>.md` (content: `commands.md`); start the Worker in the hidden session (§6.5); register its Session. A review Job's Worker is a fork of the Lead (below) |
-| A4 | Wait. Active time is wall time minus time with an `open` Escalation. |
+| A4 | Wait. Active time is wall time minus time with an `open` Escalation. At each tick, while the Worker's pi is alive and `timeouts.stall_seconds` is not `0`, the driver also checks for a **stall** (hs-d195): the Worker's session file (§6.5) has not been modified for `stall_seconds` **and** its last entry is an assistant message whose last content is a tool call with no tool result after it (pi is inside that tool call). It then kills the processes pi started for the call: every descendant process of the Worker's pi process, never pi itself (`SIGTERM`, then `SIGKILL` after 10 s to those still alive). pi gets the tool's failure, writes it to the session and the Worker continues. The Attempt stays `running`, and its active-time clock is unchanged. One line per kill goes to the driver log (`run/<plan>/logs/attempt-<attempt>.log`): the pids, their command lines and the idle time. No Event, no cause, no row is written; a second stall in the same Attempt is handled the same way |
 | A5 | Decide the end of `running`: submitted (the Attempt is `merging`) → A8; `stop_request` → end; pane dead or bad stop reason → `crashed`; Worker `idle` without a submit → append `attempt-nudge` once, then `no_submit` if idle again without a submit. A Worker's idleness is read from its Session state and confirmed from its session file (the last assistant `stopReason`), never from the state alone (t1 F7, kept) |
 | A6 | Removed by R19 (no Job-level Reviewer). |
 | A7 | Removed by R19 (no Job-level Reviewer). |
@@ -610,7 +656,7 @@ The adapter counts blocking reasons and reports `blocked` while the count is abo
 
 ### 3.7 The engine, `cpd watch`
 
-One per machine (D5). Every `tick_seconds`:
+One per machine (D5). Every `tick_seconds`, E1–E8 in order:
 
 | Step | What it does |
 |---|---|
@@ -621,6 +667,7 @@ One per machine (D5). Every `tick_seconds`:
 | E5 | **PR poll** (hs-d96, hs-d97): run `cpd pr poll` (no `--plan`) as a subprocess (a process boundary, cpd 1 §11 step 5), `pr_poll_seconds` after the **end** of the previous poll (never overlapping, never more often than one per tick), whether or not any Plan is in `deploy`. One poll covers every open pull request of the User (§7.6). When the output's `rate_limit.remaining` is below 100, E5 skips polls until `rate_limit.reset_at` and reports one `error` Event with code `gh_rate_limited` (`details`: `remaining`, `reset_at`); the error clears when polling resumes |
 | E6 | *Removed by Plan manager B1 (hs-a1): Contexts are machine-local, so there is nothing to sync. The number stays.* |
 | E7 | **PR start** (R34, A9): for each Plan in `dispatch`, each PR in status `waiting` whose needs are all `merged` and whose `start_failed_at` is null: start it (§3.8, §7.2). E7 runs after E5 in the same tick, so a PR starts in the tick in which E5's poll sees its last prerequisite merged; it also starts a PR appended in `dispatch` with no needs. A failed start sets `start_failed_at` and appends one `error` Event with code `pr_start_failed` for the Plan's Lead; E7 does not try that PR again, the Lead retries with `cpd pr start <key>` |
+| E8 | **Inbox** (hs-d168): after E7, compute the conditions of the Inbox kinds (§2.2, the four pull request kinds included, from the `pull_requests` rows) from the store, the config (`inbox.stuck_job_minutes`), the clock and the engine's own active errors; compare them with the open `inbox_items`; and in **one transaction** insert the new items, set `closed_at` on the gone ones, and append `inbox-opened` and `inbox-closed` (§5.2). Nothing is written when nothing changed (idempotent). A failure of E8 is reported like any step's, and becomes an `engine-error` item once E8 works again. `engine-down` is not computed here: it is not stored |
 
 `watch` holds `locks/watch.lock` (a second one exits with `watch_running`, exit 3), appends `watch-started` and `watch-stopped`, and never exits on its own: unlike cpd 1, it serves every Plan.
 
@@ -716,13 +763,15 @@ Every write transaction starts by inserting its row into `txns` with an explicit
 - a connection that is not a `cpd` process (for example the `sqlite3` shell) has no such function, so any write it attempts fails with "no such function: cpd_txn" (SQLite resolves trigger functions when the outer statement is prepared; verified by `cli/tests/store.rs`; a delete from an append-only table fails with its `append_only` error instead);
 - a write whose `cpd_txn()` does not match its transaction's `txns` row is refused by the triggers on `txns`, `events` and `history`.
 
+`txns.cwd` is the process's working directory; when it cannot be read (the directory was deleted under the process) it is the text `(unreadable)` and the write goes on (hs-d196).
+
 The **schema check**: at open, cpd hashes `SELECT type, name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name` and compares it with the hash the binary embeds for the current `user_version`. A mismatch means someone dropped or changed a trigger or table: write commands refuse with `store_tampered` (exit 1); read commands still work and report it in their `tamper` field. This plus the history replaces cpd 1's `bd history` actor check (§8).
 
 The **tamper report** (`plan show`'s `tamper` list, `doctor`): the schema check; every Locked Job whose recomputed fingerprint differs from the stored one; any `history` row whose `txn` has no `txns` row. The threat is an agent writing the Ledger outside cpd, as in cpd 1; a local user who drops the triggers, edits and recreates them exactly is out of scope (in cpd 1 the beads database could be edited the same way).
 
 ### 4.4 DDL
 
-The schema at the current version, 7. Migration 1 created these tables as they were at version 1 (`core/src/store/migrations/0001.sql`); migrations 2 to 4 (§4.5) brought `plans`, `jobs`, `events` and `context_records` to the shape below and created `prs` and `pr_needs` (R34); migration 5 changed the triggers `plans_phase` and `prs_locked` (hs-d118); migration 6 created `pull_requests` and rebuilt `prs` (hs-d96). Migration 7 (file 0007) dropped `contexts.sync_failing` and made `context_records` the only store of Context records (§4.5, §4.6). Check constraints that need regular expressions are enforced in the binary at the boundary (§2.1), and the database checks shapes and lengths.
+The schema at the current version, 13. Migration 1 created these tables as they were at version 1 (`core/src/store/migrations/0001.sql`); migrations 2 to 4 (§4.5) brought `plans`, `jobs`, `events` and `context_records` to the shape below and created `prs` and `pr_needs` (R34); migration 5 changed the triggers `plans_phase` and `prs_locked` (hs-d118); migration 6 created `pull_requests` and rebuilt `prs` (hs-d96). Migration 7 (file 0007) dropped `contexts.sync_failing` and made `context_records` the only store of Context records (§4.5, §4.6). Migration 11 (file 0011) added `pull_requests.mergeable` and `merge_state`; migration 12 (file 0012) created `inbox_items` (the Inbox); migration 13 (file 0013) added `pull_requests.authored` and `review_requested` and the four pull request kinds to `inbox_items`. Check constraints that need regular expressions are enforced in the binary at the boundary (§2.1), and the database checks shapes and lengths.
 
 ```sql
 -- ---------- audit ----------
@@ -797,7 +846,7 @@ CREATE TABLE plans (
   CHECK ((phase = 'done') = (done_at IS NOT NULL))
 ) STRICT;
 
--- ---------- Pull requests (the PR poller, hs-d96; migration 6) ----------
+-- ---------- Pull requests (the PR poller, hs-d96; migration 6; mergeable and merge_state: migration 11; authored and review_requested: migration 0013) ----------
 CREATE TABLE pull_requests (
   id              INTEGER PRIMARY KEY,
   repo            TEXT NOT NULL CHECK (repo LIKE '_%/_%'),      -- GitHub's owner/name
@@ -810,7 +859,12 @@ CREATE TABLE pull_requests (
   checks          TEXT NOT NULL CHECK (checks IN ('none', 'passed', 'pending', 'failed')),
   created_at      TEXT NOT NULL,                               -- GitHub's
   merged_at       TEXT,
-  changed_at      TEXT NOT NULL,                               -- cpd's time of the last change
+  changed_at      TEXT NOT NULL,
+  mergeable       TEXT NOT NULL DEFAULT 'unknown' CHECK (mergeable IN ('mergeable', 'conflicting', 'unknown')),
+  merge_state     TEXT NOT NULL DEFAULT 'unknown' CHECK (merge_state IN ('behind', 'blocked', 'clean', 'dirty', 'draft', 'has_hooks', 'unknown', 'unstable')),
+  authored        INTEGER NOT NULL DEFAULT 1 CHECK (authored IN (0, 1)),          -- migration 0013: 1 when the User wrote it
+  review_requested INTEGER NOT NULL DEFAULT 0 CHECK (review_requested IN (0, 1)), -- migration 0013: 1 when the User's review is requested
+  -- cpd's time of the last change
   UNIQUE (repo, number),
   CHECK ((state = 'merged') = (merged_at IS NOT NULL))
 ) STRICT;
@@ -1026,6 +1080,7 @@ CREATE TABLE events (
             'context-renamed', 'plan-renamed',
             'context-archived', 'plan-archived', 'session-archived',
             'session-message',
+            'inbox-opened', 'inbox-closed', 'inbox-snoozed', 'inbox-dismissed',
             'watch-started', 'watch-stopped', 'error')),
   context TEXT    REFERENCES contexts(id),
   plan    TEXT    REFERENCES plans(id),
@@ -1040,6 +1095,30 @@ CREATE INDEX events_plan ON events(plan, id);
 CREATE INDEX events_context ON events(context, id);
 CREATE INDEX events_session ON events(session, id);
 
+-- ---------- Inbox items (§2.2) ----------
+CREATE TABLE inbox_items (
+  id            INTEGER PRIMARY KEY,
+  kind          TEXT NOT NULL CHECK (kind IN ('dialog', 'plan-review', 'unread', 'job-stuck', 'engine-error', 'question', 'pr-failing', 'pr-changes', 'pr-ready', 'review-requested')),  -- the last four: migration 0013
+  urgency       TEXT NOT NULL CHECK (urgency IN ('red', 'yellow', 'magenta', 'white')),
+  subject       TEXT NOT NULL CHECK (length(subject) >= 1),
+  context       TEXT REFERENCES contexts(id),
+  plan          TEXT REFERENCES plans(id),
+  job           TEXT,
+  session       TEXT REFERENCES sessions(id),
+  record        TEXT,
+  event         INTEGER REFERENCES events(id),
+  label         TEXT NOT NULL CHECK (length(label) >= 1),
+  url           TEXT,
+  opened_at     TEXT NOT NULL,
+  closed_at     TEXT,
+  snoozed_until TEXT,
+  dismissed_at  TEXT,
+  CHECK (plan IS NULL OR context IS NOT NULL),
+  CHECK (job IS NULL OR plan IS NOT NULL)
+) STRICT;
+CREATE UNIQUE INDEX inbox_items_open ON inbox_items(kind, subject, urgency) WHERE closed_at IS NULL;
+CREATE INDEX inbox_items_closed ON inbox_items(closed_at);
+
 -- ---------- Tier catalog cache (§9) ----------
 CREATE TABLE tier_catalog (
   pi_version TEXT NOT NULL,
@@ -1051,7 +1130,7 @@ CREATE TABLE tier_catalog (
 ) STRICT;
 ```
 
-**Triggers.** For each table `T` in `contexts`, `context_records`, `plans`, `pull_requests`, `prs`, `pr_needs`, `plan_reviews`, `jobs`, `dependencies`, `attempts`, `escalations`, `sessions` and `tier_catalog`, the migration that creates or rebuilds `T` creates three triggers, generated from the column list (shown for `escalations`; the others differ only in table name, primary key and columns):
+**Triggers.** For each table `T` in `contexts`, `context_records`, `plans`, `pull_requests`, `prs`, `pr_needs`, `plan_reviews`, `jobs`, `dependencies`, `attempts`, `escalations`, `sessions`, `inbox_items` and `tier_catalog`, the migration that creates or rebuilds `T` creates three triggers, generated from the column list (shown for `escalations`; the others differ only in table name, primary key and columns):
 
 ```sql
 CREATE TRIGGER escalations_hist_ins AFTER INSERT ON escalations BEGIN
@@ -1079,7 +1158,7 @@ CREATE TRIGGER escalations_no_delete BEFORE DELETE ON escalations BEGIN
 END;
 ```
 
-The store Job generates these triggers from the table definitions above (primary key: `id` for `contexts`, `plans` and `sessions`; `seq` for `context_records` and `jobs`; `id` for `pull_requests` too, the declared `PRIMARY KEY` for the others, `prs` and `pr_needs` included), and a test asserts that every column of every table appears in its `json_object` calls.
+The store Job generates these triggers from the table definitions above (primary key: `id` for `contexts`, `plans` and `sessions`; `seq` for `context_records` and `jobs`; `id` for `pull_requests` and `inbox_items` too, the declared `PRIMARY KEY` for the others, `prs` and `pr_needs` included), and a test asserts that every column of every table appears in its `json_object` calls.
 
 The exceptions to "never delete": a pull request row that no PR points to may be deleted (the poller deletes it when its pull request leaves the open search; hs-d96, D5), a Dependency of a `draft` Job may be deleted (that is how `job edit --needs` changes a draft), and a PR's need may be deleted while its Plan is in `grounding` or `plan` (that is how `pr edit --needs` changes it; R34). `pr_needs` gets `pr_needs_no_delete` and `pr_needs_hist_del`, written as below for `dependencies` with the condition `(SELECT phase FROM plans WHERE id = OLD.plan) NOT IN ('grounding', 'plan')` and the error `pr_locked`:
 
@@ -1204,8 +1283,9 @@ CREATE TRIGGER events_no_delete  BEFORE DELETE ON events  BEGIN SELECT RAISE(ABO
 - The schema version is `PRAGMA user_version`. The binary embeds an ordered list of migrations `1..N` (SQL scripts) and, for each version, the schema hash of §4.3.
 - At start-up every `cpd` process opens the database and reads `user_version`:
   - equal to N: check the schema hash and continue;
-  - below N: `BEGIN IMMEDIATE`, re-read `user_version` inside the transaction (another process may have migrated meanwhile), apply each missing migration in order, set `user_version`, insert one `txns` row with `command = 'migrate'`, commit. A migration that fails rolls back entirely and the command fails with `migration_failed` (exit 1);
-  - above N: refuse with `store_too_new` (exit 1): an older binary never writes a newer schema.
+  - below N: `BEGIN IMMEDIATE`, re-read `user_version` inside the transaction (another process may have migrated meanwhile), apply each missing migration in order, set `user_version`, insert one `txns` row with `command = 'migrate'`, **verify the schema hash** (below), commit. A migration that fails rolls back entirely and the command fails with `migration_failed` (exit 1);
+  - above N: refuse with `store_too_new` (exit 1): an older binary never writes a newer schema. A process keeps its connection for its life, so every write transaction re-reads `user_version` after `BEGIN IMMEDIATE` and refuses with `store_too_new` the same way, before its `txns` row.
+- **The hash check of a migration** (hs-n121, S2): after the last missing migration and before the commit, inside the same transaction, the binary computes the schema hash (§4.3) of the database as the migrations left it and compares it with the embedded hash of the version it reached (`N`, or the highest version it applied). A mismatch rolls the whole transaction back, so `user_version` and every table stay as they were, and the command fails with `migration_failed` (exit 1; `details: {version, expected, actual}`, the hashes). The check is the one the `equal to N` case runs at every start-up, made before the commit instead of only at the next open, so a migration that produces a schema the binary does not describe can never be committed. Rerunning is safe: nothing was written.
 - **Exception:** `cpd --version` opens the database read-only and reports `user_version` as `store_schema`, without migrating it and without the check above; it reports the binary's own `N` as `schema` (commands.md §1.2). It never creates or writes the database. A binary can open the store when `store_schema` is `null` (no database) or `<= schema`.
 - A migration that adds or renames columns drops and recreates the history triggers of that table, so the triggers always list every column.
 - **Migration 2** (cockpit parity; a real `cpd.db` exists since migration 1 shipped, so the change is a migration and not an edit of §4.4): adds three nullable columns to `plans`, each with its own check, then drops and recreates `plans`' history triggers (the rule above):
@@ -1295,6 +1375,23 @@ CREATE TRIGGER events_no_delete  BEFORE DELETE ON events  BEGIN SELECT RAISE(ABO
   3. `contexts` is rebuilt without `lead_session` and `grounded_seq` and without the check that tied them;
   4. **every grounded Lead Session is archived**: each Session with `role = 'lead'` and `plan IS NULL` and `archived_at IS NULL` gets `archived_at` set to the migration's time, with one `session-archived` Event each, named as `session archive` names it (§5.2). Its pane, if any, is not touched here (the grounded Lead was never typed into; a pane that is still alive is closed by engine E2 or by the User). The rows stay, with `plan` null and `role = 'lead'`, as history.
   The Event kind `context-grounded` stays in the `events` check for history and is no longer appended. Event kinds are unchanged, so `events` is not rebuilt. The error code `grounded_lead` is removed with its last use. The tests: a database at 0009 with a Context that has a grounded Lead (and Plans, records of every kind, Events of every kind) migrates keeping every row and id, passes `PRAGMA foreign_key_check`, archives the grounded Lead with one `session-archived` Event, has no `lead_session` or `grounded_seq` column, accepts a `brief` record and a `manager` Session, refuses a second live Manager for one Context and accepts one after the first is archived, and its schema hash equals that of a fresh database migrated to 0010.
+- **Migration 11** (file 0011; the PR poll's mergeable state, hs-d188; applied after migration 0010; the next free number on its base: written as 7, renumbered 11 at rebase because Plan manager's 0007–0010 landed first, hs-d68): adds two columns to `pull_requests`, then drops and recreates `pull_requests_hist_ins`, `pull_requests_hist_upd` and `pull_requests_hist_del` so they list every column (the rule above):
+
+  ```sql
+  ALTER TABLE pull_requests ADD COLUMN mergeable TEXT NOT NULL DEFAULT 'unknown' CHECK (mergeable IN ('mergeable', 'conflicting', 'unknown'));
+  ALTER TABLE pull_requests ADD COLUMN merge_state TEXT NOT NULL DEFAULT 'unknown' CHECK (merge_state IN ('behind', 'blocked', 'clean', 'dirty', 'draft', 'has_hooks', 'unknown', 'unstable'));
+  ```
+
+  Existing rows get `unknown` for both until their next poll. `pull_requests_hist_del` is rewritten with the new columns; `pull_requests_owned` is unchanged and `pull_requests` still gets no `_no_delete`. Set `user_version = 11`.
+- **Migration 0012** (the Inbox, hs-d168; D4 of Plan inbox; applied after migration 0011, the PR poll's mergeable state): creates `inbox_items` with its partial unique index, `inbox_items_no_delete` and its history triggers (§4.4), and rebuilds `events` with the four `inbox-*` kinds in its `kind` check, as migrations 3 and 0009 did (copy with ids kept, drop, rename, recreate its indexes and triggers). Every other row is unchanged. Its `kind` check lists the core kinds only; the pull request kinds come with migration 0013.
+- **Migration 0013** (the PR poll's Inbox kinds, hs-d165, D1 and D4 of Plan inbox; applied after migration 0012; the next free number on its base, renumbered at rebase when another migration lands first, hs-d68, hs-d211): adds two columns to `pull_requests`, then drops and recreates `pull_requests_hist_ins`, `pull_requests_hist_upd` and `pull_requests_hist_del` so they list every column (the rule above), and rebuilds `inbox_items` with `pr-failing`, `pr-changes`, `pr-ready` and `review-requested` in its `kind` check (copy with ids kept, drop, rename, recreate its index, `inbox_items_no_delete` and history triggers; SQLite cannot alter a check):
+
+  ```sql
+  ALTER TABLE pull_requests ADD COLUMN authored INTEGER NOT NULL DEFAULT 1 CHECK (authored IN (0, 1));
+  ALTER TABLE pull_requests ADD COLUMN review_requested INTEGER NOT NULL DEFAULT 0 CHECK (review_requested IN (0, 1));
+  ```
+
+  Every existing row came from the `author:@me` search, so it gets `authored` 1 and `review_requested` 0, which the defaults give. `pull_requests_owned` is unchanged and `pull_requests` still gets no `_no_delete`. Set `user_version = 13`.
 - No migration from cpd 1's beads Ledgers (R7): running Workflows finish on cpd 1.
 
 ### 4.6 The Context store
@@ -1340,7 +1437,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `attempt-retry` | Attempt ended with a ladder cause and the Job went back to `queued` | plan, job, attempt | `{outcome, cause, next_tier, feedback?}` |
 | `attempt-nudge` | A5 (the Worker ended its turn without submitting) | plan, job, attempt, session | `{prompt}` |
 | `all-merged` | E4, once per PR completion: again after `job add` appended a Job to a PR whose `all-merged` was sent (§3.7 E4) | plan | `{pr, merged: [key], cancelled: [key]}`; `pr` is the PR's key, the lists its Jobs |
-| `pr-feedback` | the poll (§7.6) wrote a change to the pull request of a PR of this Plan (hs-d96, D7), when any of: its checks became `failed` (from anything else), its review became `changes_requested` (from anything else), its state became `closed` (from `open`). Written in the transaction that writes the change; only the Plan whose PR points to the pull request gets it, and a pull request no Plan owns gets no Event | plan | `{pr, number, url, state, checks, review_decision, reasons}`; `pr` is the PR's key, `state`, `checks` and `review_decision` are the row's, `reasons` is a subset of `["checks_failed", "changes_requested", "closed"]`, in that order. `text`: `PR <key> (#<n>) of Plan <p> needs attention: <reasons>. Read the details with cpd pr view --plan <p> --pr <key>.`, the reasons comma-separated as `checks failed`, `changes requested`, `closed without a merge` |
+| `pr-feedback` | the poll (§7.6) wrote a change to the pull request of a PR of this Plan (hs-d96, D7), when any of: its checks became `failed` (from anything else), its review became `changes_requested` (from anything else), its state became `closed` (from `open`), its `mergeable` became `conflicting` (from anything else: `mergeable`, `unknown` or no row before). Written in the transaction that writes the change; only the Plan whose PR points to the pull request gets it, and a pull request no Plan owns gets no Event | plan | `{pr, number, url, state, checks, review_decision, mergeable, merge_state, conflict, reasons}`; `pr` is the PR's key, `state`, `checks`, `review_decision`, `mergeable` and `merge_state` are the row's, `conflict` is true exactly when `conflict` is in `reasons`, `reasons` is a subset of `["checks_failed", "changes_requested", "closed", "conflict"]`, in that order. Once per transition, not every poll: `unknown` is no conflict, and a conflict seen again after `unknown` (`conflicting` → `unknown` → `conflicting`) is a new transition and wakes the Lead again, as a re-failed check does. `text`: `PR <key> (#<n>) of Plan <p> needs attention: <reasons>. Read the details with cpd pr view --plan <p> --pr <key>.`, the reasons comma-separated as `checks failed`, `changes requested`, `closed without a merge`, `merge conflict` |
 | `pr-added` | `pr add` (R34) | plan | `{pr, repo, base, needs: [key], appended}`; `appended` is true in phases `dispatch`, `deploy` and `done` |
 | `pr-edited` | `pr edit` | plan | `{pr, fields: [name]}` |
 | `pr-cancelled` | `pr cancel` | plan | `{pr}` |
@@ -1359,7 +1456,11 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `context-archived` | `context archive` or `unarchive`, for the Context | context | `{archived: bool}` |
 | `plan-archived` | `plan archive` or `unarchive`, or the cascade of the Context's, for each Plan | context, plan | `{archived: bool}` |
 | `session-archived` | `session archive` or `unarchive`, or a cascade, for each Session | context, plan?, session | `{archived: bool}` |
-| `session-message` | `session send` (commands.md §10.13): one message to a Lead or a Manager | context, plan?, session = the target | `{from, text}`; `from` is the sender Session's id or null (the User) |
+| `session-message` | `session send` (commands.md §10.13): one message to a Lead or a Manager | context, plan?, session = the target | `{from, text, wake}`; `from` is the sender Session's id or null (the User); `wake` is a boolean, true only for `session send --wake` (hs-d209) |
+| `inbox-opened` | E8 inserts an Inbox item (§3.7) | context?, plan?, job?, session? | `{item, kind, urgency, label}` |
+| `inbox-closed` | E8 closes an Inbox item | context?, plan?, job?, session? | `{item, kind}` |
+| `inbox-snoozed` | `inbox snooze` | context?, plan?, job?, session? | `{item, until}` |
+| `inbox-dismissed` | `inbox dismiss` | context?, plan?, job?, session? | `{item}` |
 | `watch-started`, `watch-stopped` | the engine starts or stops | (none) | `{pid}` |
 | `error` | `watch` or a driver hit an unexpected failure; codes include `lead_worktree_stale`, `merge_check_failed`, `push_failed` (a failed push of a Lead Branch at a PR's start or at a merge, §7.2, §7.4; `details.pr` names the PR) `cleanup_failed` (`pr poll` kept a merged PR's Lead worktree, or a removal failed, §7.2; `details: {plan, pr, path, reason}`, `reason` `dirty`, `unpushed` or git's stderr tail) `pr_start_failed` (engine E7 could not start a PR, §3.8; `details: {pr, step, tail?, log?}`) and `adapter_missing` (the `session run` wrapper restarted a pi whose adapter reported `stopped` for more than 60 s, §6.7 "Adapter watchdog"; `details: {session, state_since, seconds}`) and `gh_rate_limited` (engine E5 skips polls while GitHub's rate limit is nearly used, §3.7; `details: {remaining, reset_at}`; no Plan, it concerns the User's account) | context?, plan?, … | `{source, code, message, details}` |
 
@@ -1369,7 +1470,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 
 The pi adapter (TypeScript in `pi/`, loaded in every pi session cpd starts, §6.5) follows the Events **for its Session**:
 - for the Session that is Plan P's `lead_session` (Context C): Events with `plan = P`; Events with `plan IS NULL AND context = C`; Events with `session` = itself. A Plan has one Lead for all its PRs (R34): every PR Event (`pr-*`, `all-merged`, `pr-feedback`), and an `error` about a PR such as `pr_start_failed`, sets `plan = P` and goes to that Lead;
-- for any other Session (a Worker, a side fork of a Lead, a Manager): Events with `session` = itself (for a Worker only `attempt-nudge` and `session-renamed` are ever addressed so). A Manager (`plan` null) therefore follows only Events addressed to it, `session-message` (`cpd session send`, hs-d86), and is never woken by the Events of its Plans. Its Plan Events reach it only as the turn-start digest, which the adapter builds when the User talks to it: after the Context records, a section `Plans:` with one line per Event since the cursor of kinds `plan-created`, `plan-phase`, `pr-opened`, `pr-merged`, `job-failed`, `escalation` and `plan-done` of the Context (`- <at> <plan>: <event text>`), at most 20, then `and <K> more: cpd events list --context <c> --since <id>`; one cursor (Event ids) serves both sections, and nothing is added when nothing is new (B3-A5; `commands.md` §15.7). Turn-start updates show a `brief` record short (§2.2).
+- for any other Session (a Worker, a side fork of a Lead, a Manager): Events with `session` = itself (for a Worker only `attempt-nudge` and `session-renamed` are ever addressed so). A Manager (`plan` null) therefore follows only Events addressed to it, `session-message` (`cpd session send`, hs-d86), and is never woken by the Events of its Plans. Its Plan Events reach it only as the turn-start digest, which the adapter builds, for a Manager only (hs-d209, D1), when the User talks to it: after the Context records, a section `Plans:` with one line per Event since the cursor of kinds `plan-created`, `plan-phase`, `pr-opened`, `pr-merged`, `job-failed`, `escalation` and `plan-done` of the Context (`- <at> <plan>: <event text>`), at most 20, then `and <K> more: cpd events list --context <c> --since <id>`; one cursor (Event ids) serves both sections, and nothing is added when nothing is new (B3-A5; `commands.md` §15.7). Turn-start updates show a `brief` record short (§2.2). **A Lead gets no turn-start update** (hs-d209, D1, D2): nothing from the Context is pushed into a Lead's turn; it reads the Context on demand with `cpd context show --since <seq>`. `cpd session send` starts no turn unless `--wake` (D3).
 
 It delivers a message with `pi.sendMessage({customType: "cpd", content: text, display: true, details: event}, {triggerTurn, deliverAs: "followUp"})` (cpd 1 §15, kept). It never types into a pane.
 
@@ -1390,8 +1491,9 @@ It delivers a message with `pi.sendMessage({customType: "cpd", content: text, di
 | `job-cancelled` | message, no turn (it may come from the engine, after a request) | |
 | `session-renamed` (own session) | no message, no turn: `pi.setSessionName(name)` and a one-line notice (cpd 1 §10, kept) | same |
 | `attempt-nudge` (own session) | | message, **turn** (replaces cpd 1's `herdr agent prompt`) |
-| `session-message` (own session) | message, **turn** (`Message from <sender>: <text>`), for every Lead and a Manager: an idle Lead starts a turn at once, a working or blocked one gets it after its running turn | |
+| `session-message` (own session) | message (`Message from <sender>: <text>`), for every Lead and a Manager; **turn only when `data.wake`** (hs-d209, D3): then an idle Session starts a turn at once, a working or blocked one gets it after its running turn; without `wake` the message waits in the Session's context for its next turn and starts none | |
 | `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | ignored: no message, no turn (they are for the TUI) | ignored |
+| `inbox-opened`, `inbox-closed`, `inbox-snoozed`, `inbox-dismissed` | ignored: delivered to no Session, they are for the views that follow Events (the adapter only learns the kinds) | ignored |
 | every other kind | ignored | ignored |
 
 The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-done` → `plan-done` and `rename` → `session-renamed`.
@@ -1552,7 +1654,7 @@ One `cpd watch` per machine, in `cpd-work:watch`. It is not tied to any Lead's p
 **The Plan's plannotator port** (hs-d35, hs-d40, hs-d50). Config key `plannotator_ports` (§8.2) is an inclusive range. A Plan's port lives in `run/<plan>/plannotator-port` (one line, the port; no schema change). `session run` assigns it when it starts pi, under `flock` on `locks/plannotator-ports.lock`:
 
 1. When the Plan's file holds a port inside the range, the Plan keeps it.
-2. Else the Plan gets the lowest port of the range that no other Plan holds, ignoring Plans whose phase is `done`, and the file is written.
+2. Else the Plan gets the lowest port of the range that no other Plan holds, and the file is written. A Plan **holds** its port unless its phase is `done` or it is archived (`archived_at` set; E1, hs-d203). An archived Plan's `plannotator-port` file stays, but its port is free: rule 1 keeps a Plan's port only while no other holder has it, else the Plan is assigned afresh by this rule. `plan archive` and `plan cancel` (commands.md §4.10, §4.12) therefore free the port, and `plan unarchive` takes none (the next `session run` assigns one).
 3. Else none is free: `no_port` (exit 3; `details`: the range and the holders `[{plan, port}]`), the Lead does not start, and the pane names the Plans that hold the range and offers Enter to retry (§10.8 of `commands.md`).
 
 `PLANNOTATOR_REMOTE` still comes from cpd's own environment. `core/src/plan/lead.rs` keeps passing `PLANNOTATOR_PORT` from cpd's environment to a Lead pane; `session run` overrides it with the Plan's port when it starts pi (A7), and `cpd doctor` no longer checks it (`commands.md` §14.1).
@@ -1622,7 +1724,7 @@ The repo's main checkout is never touched; Lead and Attempt worktrees are siblin
   **At `plan lock`** the PRs with no needs start together and all or nothing: every one's worktree is created and its `pre-start` run first; only when all have passed are the new branches pushed and the lock's transaction written. If one fails, every worktree and branch the lock created is removed, nothing is pushed, and `plan lock` fails with `setup_failed`, `details.pr` naming the PR. **From engine E7 and `pr start`** one PR starts; its failure is handled as §3.8 says.
 - **Attempt worktree** (A2): read `L = git rev-parse refs/heads/<lead branch>`; `git -C <lead worktree> worktree add -b cpd/<plan>--<attempt> <path> L`; record `base_sha = L`; run `pre-start` in it, blocking, so the Worker never starts before setup has finished (requirements §5, kept). On failure: remove the worktree and branch as above, outcome `failed` / `setup_failed`.
 - **Removal** after a Merged Attempt (A9): `git worktree remove <path>` then `git branch -d cpd/<plan>--<attempt>` (`-d`, not `-D`: git refuses unless the branch is merged into HEAD of the Lead worktree, a native guard; t3 F9). Failed and cancelled Attempts keep theirs until their PR is merged.
-- **Clean-up at a PR's merge** (hs-d138, hs-d142): when `pr poll` sees a PR merged (commands.md §9.2), that PR's Attempt worktrees and local Attempt branches still on disk are removed (`git worktree remove --force`, `git branch -D`), then its Lead worktree and local Lead Branch (`git worktree remove`, `git -C <repo> branch -D <lead branch>`; `-D`, because a squash merge is never an ancestor). Each removal is best effort: one failure does not stop the others, and every later poll retries the merged PRs that still have a path on disk. A Lead worktree with uncommitted changes (`git status --porcelain` not empty, untracked files included) or with commits not on origin (`git rev-list HEAD --not --remotes=origin` not empty) is **kept**, with its Lead Branch, and the poll that saw the merge appends one `error` Event `cleanup_failed`; later polls skip it silently. Remote branches are never touched. A PR closed without a merge and an abandoned Plan are not cleaned up here (G5).
+- **Clean-up at a PR's merge** (hs-d138, hs-d142): when `pr poll` sees a PR merged (commands.md §9.2), that PR's Attempt worktrees and local Attempt branches still on disk are removed (`git worktree remove --force`, `git branch -D`), then its Lead worktree and local Lead Branch (`git worktree remove`, `git -C <repo> branch -D <lead branch>`; `-D`, because a squash merge is never an ancestor). The removals of a PR run under its repo's per-repo lock (§1.4), taken without waiting (`RepoLock::try_take`) and held only while that PR's paths are removed: a Gate, a merge or a push that holds it (§7.4, §7.6) must not lose its worktree (hs-n124, a Lead worktree removed mid-Gate). When the lock is held, the poll skips that PR, with no Event, and a later poll cleans it up, since it is still on disk; the poll never waits for the lock. A lock that cannot be opened counts as a failed removal. Each removal is best effort: one failure does not stop the others, and every later poll retries the merged PRs that still have a path on disk. A Lead worktree with uncommitted changes (`git status --porcelain` not empty, untracked files included) or with commits not on origin (`git rev-list HEAD --not --remotes=origin` not empty) is **kept**, with its Lead Branch, and the poll that saw the merge appends one `error` Event `cleanup_failed`; later polls skip it silently. Remote branches are never touched. A PR closed without a merge and an abandoned Plan are not cleaned up here (G5).
 
 ### 7.3 Hooks from `.config/wt.toml`
 
@@ -1683,7 +1785,7 @@ All of it runs under the **per-repo lock** `locks/repo-<sha1>.lock` (sha1 of the
 3. **Lead worktree clean** (`git status --porcelain` empty), else `dirty_target` (t3 F8: checked first, before any work in the Attempt worktree).
 4. **Tamper check** of `old...<attempt branch>` (§7.5), else `tampered`.
 5. **Rebase** in the Attempt worktree: `git -C <attempt worktree> rebase old`. On a conflict: record `git diff --name-only --diff-filter=U`, run `git rebase --abort`, and end `merge_conflict` with the file list in the feedback. The rebase never happens in the Lead worktree (t3 F6).
-    **Skipped when `old` is already an ancestor of the Attempt's HEAD** (hs-d139, hs-n52, hs-n67): `git -C <attempt worktree> merge-base --is-ancestor old HEAD` exits 0, so the Attempt already contains the Lead tip and a rebase would add nothing; the merge goes straight to step 7 and the fast-forward of step 8 (`new` = HEAD). Why: a Job may carry a merge of the base into its branch; a rebase drops merge commits and replays the base's commits, which then conflict. Exit 1 (not an ancestor): rebase as above; any other result is `git_failed`. Known limit: step 4's tamper check still diffs `old...<attempt branch>` (§7.5), so a merge of a base that changed a protected path is refused `tampered`.
+    **Skipped when `old` is already an ancestor of the Attempt's HEAD** (hs-d139, hs-n52, hs-n67): `git -C <attempt worktree> merge-base --is-ancestor old HEAD` exits 0, so the Attempt already contains the Lead tip and a rebase would add nothing; the merge goes straight to step 7 and the fast-forward of step 8 (`new` = HEAD). Why: a Job may carry a merge of the base into its branch; a rebase drops merge commits and replays the base's commits, which then conflict. Exit 1 (not an ancestor): rebase as above; any other result is `git_failed`. The tamper check of step 4 allows the protected files such a merge brings (§7.5).
 6. Removed by R19 (no Job-level Gate): the merge runs no Gate; the Gate runs at `pr open` and `pr rebase` (§7.6). The step keeps its number so that steps 7–10 keep theirs.
 7. **Cancel check** again (the last safe point).
 8. **Fast-forward with a compare-and-swap:** `new = git -C <attempt worktree> rev-parse HEAD`; verify `git merge-base --is-ancestor old new`; then `git update-ref -m "cpd: merge <plan>/<attempt>" refs/heads/<lead branch> new old`. git applies it only if the ref still equals `old` (t3 F7). If it fails because the ref moved (someone outside cpd moved it, since cpd holds the lock): back to step 2, at most 3 times, then `cas_lost`.
@@ -1716,6 +1818,8 @@ A diff, computed as `git diff --name-only --no-renames <base>...<branch>` (so re
 - anything under `.cpd/`;
 - each path in the repo's own protected list: `protected = ["verify.sh", "scripts/ci/"]` in `.config/cpd.toml`, read from the Lead Branch's tree (`git show <lead branch>:.config/cpd.toml`), never from the Attempt's. An entry ending in `/` is a directory prefix; any other entry is an exact path. The file is optional; unknown keys are `config_invalid`.
 
+**Exception: a base merge** (hs-d139). A protected path in that diff is allowed when the Attempt's version of it equals the Lead tip's or `origin/<base>`'s: the same blob id (`git rev-parse <rev>:<path>`), or absent in both. So a Job that merges its base may bring the base's protected files. Any other change to a protected path stays `tampered` (`gate_tampered` at submit). The Lead tip is the Lead Branch's tip when the check runs; `origin/<base>` is the remote-tracking ref as last fetched.
+
 The list lives in its own file, not in `.config/wt.toml`, because worktrunk warns about unknown tables in its file on every run (verified: "Project config has unknown field cpd (will be ignored)"). cpd 1 hard-coded `verify.sh`; now the repo names it. It runs at `attempt submit` (refusal `gate_tampered`) and again at merge (outcome `tampered`).
 
 ### 7.6 Pull requests and the PR rebase
@@ -1726,16 +1830,16 @@ Each command here works on **one PR** (R34, A14), selected by `--pr <key>` (§1.
   1. the Lead worktree must be clean (`dirty_target`, exit 3);
   2. **the Gate** (R19): `pre-merge` from `<lead worktree>/.config/wt.toml`, run in the PR's Lead worktree on its Lead Branch (§7.3), its whole output in `run/<plan>/logs/pr-<key>.pre-merge.log`. A failure is refused `gate_failed` (exit 3), an error `gate_error` (exit 1), both with the last 60 lines in `details.tail` and the log's path in `details.log`. Nothing is pushed, the PR stays `dispatch`, and the Lead appends fix Jobs to it (`job add --pr <key>`, queued at once, §3.2), then runs `pr open --pr <key>` again once they are Merged;
   3. `git -C <lead worktree> push -u origin <lead branch>`, then `gh pr create --base <base> --head <lead branch> --title <title> --body <summary>` (cpd 1 §11, kept). `<title>` is the Plan's title when the Plan has one PR that is not `cancelled`, else `<plan title> (<key>)`; `<summary>` covers the PR's own Jobs and Merged commits;
-  4. one transaction: the `pull_requests` row of the pull request, from `gh pr create`'s URL (`repo`, `number`, `url`, the title given to `gh`, `draft` 0, `state` `open`, `review_decision` and `checks` `none`, `created_at` and `changed_at` now): inserted, or, when the poll stored it first, kept as the poll wrote it (hs-d96, D6); the PR `open` with `pr_number`, `pr_url`, `pr_opened_at`, `pull_request` (the row's id), `pr-opened`; and, when every PR that is not `cancelled` is now `open` or `merged`, the Plan `dispatch → deploy` with `plan-phase` (§3.1).
+  4. one transaction: the `pull_requests` row of the pull request, from `gh pr create`'s URL (`repo`, `number`, `url`, the title given to `gh`, `draft` 0, `state` `open`, `review_decision` and `checks` `none`, `mergeable` and `merge_state` `unknown`, `created_at` and `changed_at` now): inserted, or, when the poll stored it first, kept as the poll wrote it (hs-d96, D6); the PR `open` with `pr_number`, `pr_url`, `pr_opened_at`, `pull_request` (the row's id), `pr-opened`; and, when every PR that is not `cancelled` is now `open` or `merged`, the Plan `dispatch → deploy` with `plan-phase` (§3.1).
 
   The hooks come from the tree under test, the Lead Branch's own `.config/wt.toml`, which the tamper check keeps every Attempt from changing (§7.5); this is what fixes v0's stale-hook incident.
 - **`pr poll [--plan <id>]`** (hs-d96, hs-d97, hs-d98, hs-d107; evidence: `docs/research/gh-interface.md`, "Failure behaviour", "Facts", "Recommendation"). One poll of all of the User's open pull requests, any repo on github.com, whether or not any Plan is in `deploy`; no phase precondition. Run by engine E5 every `pr_poll_seconds` (§3.7) or by a Lead; under `flock` on `locks/pr-poll.lock`, waiting at most 60 s, else `lock_timeout` (exit 5).
-  1. **The search** (D1): one `gh api graphql` call, its query text passed inline with `-f query=<text>` (`-f query=@file` sends the literal `@file`; no temporary file): `search(type: ISSUE, query: "is:pr is:open author:@me archived:false sort:created-asc", first: 100) { issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt mergedAt reviewDecision commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } rateLimit { cost remaining resetAt }`. It costs 1 point (measured). Above 100 open pull requests only the oldest 100 are seen. An unknown search qualifier silently returns 0 pull requests, so a test pins the query string, which is a constant.
-  2. **The mapping** (D2). `checks` from `statusCheckRollup.state`: `SUCCESS` is `passed`; `FAILURE` and `ERROR` are `failed`; `PENDING` and `EXPECTED` are `pending`; a null rollup or commit is `none` (`failed` can show while other checks still run: accepted). `review_decision` from `reviewDecision`: `APPROVED` is `approved`, `CHANGES_REQUESTED` is `changes_requested`, anything else or null is `none`. `state`: `OPEN` is `open`, `CLOSED` is `closed`, `MERGED` is `merged`.
-  3. **The lookup** (D3) for the pull requests of `prs` rows in status `open` that the search did not list (they merged, were closed, or the index lags): one more `gh api graphql` call with one alias per pull request, `p0: repository(owner: "<o>", name: "<n>") { pullRequest(number: <n>) { <the same fields> } }`. `gh` exits 1 when an alias is `NOT_FOUND` although `data` holds the others, so stdout is parsed whatever the exit code; a call with no `data` is `gh_failed`. An answer `OPEN` means "not decided yet" (the search index lags, or the User switched `gh` accounts): nothing changes.
+  1. **The search** (D1): one `gh api graphql` call, its query text passed inline with `-f query=<text>` (`-f query=@file` sends the literal `@file`; no temporary file): `search(type: ISSUE, query: "is:pr is:open author:@me archived:false sort:created-asc", first: 100) { issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt mergedAt reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } rateLimit { cost remaining resetAt }`, and, in the same query, a **second search alias** for the review requests, `review-requested:@me is:pr is:open archived:false sort:created-asc` (first 100, the same fields; `author:@me` stays the first alias, `authored`'s). It costs 1 point per search (the first alone measured). Above 100 open pull requests per search only the oldest 100 are seen. An unknown search qualifier silently returns 0 pull requests, so a test pins the query string, which is a constant.
+  2. **The mapping** (D2). `checks` from `statusCheckRollup.state`: `SUCCESS` is `passed`; `FAILURE` and `ERROR` are `failed`; `PENDING` and `EXPECTED` are `pending`; a null rollup or commit is `none` (`failed` can show while other checks still run: accepted). `review_decision` from `reviewDecision`: `APPROVED` is `approved`, `CHANGES_REQUESTED` is `changes_requested`, anything else or null is `none`. `state`: `OPEN` is `open`, `CLOSED` is `closed`, `MERGED` is `merged`. `mergeable` from `mergeable`: `MERGEABLE` is `mergeable`, `CONFLICTING` is `conflicting`, `UNKNOWN` is `unknown`. `merge_state` from `mergeStateStatus`: `BEHIND`, `BLOCKED`, `CLEAN`, `DIRTY`, `DRAFT`, `HAS_HOOKS`, `UNKNOWN`, `UNSTABLE` are the same words lowercased. Both are read in the same call (no preview header). A value outside these sets fails the poll (`gh_failed`), as the other mappings do.
+  3. **The lookup** (D3) for the pull requests of `prs` rows in status `open` that neither search listed (they merged, were closed, or the index lags): one more `gh api graphql` call with one alias per pull request, `p0: repository(owner: "<o>", name: "<n>") { pullRequest(number: <n>) { <the same fields> } }`. `gh` exits 1 when an alias is `NOT_FOUND` although `data` holds the others, so stdout is parsed whatever the exit code; a call with no `data` is `gh_failed`. An answer `OPEN` means "not decided yet" (the search index lags, or the User switched `gh` accounts): nothing changes.
   4. **Failures** (D4). Each call has its own 15 s timeout (`gh` has none; GitHub cuts at 10 s). An empty body, a non-JSON body, or a search response with `errors` is `gh_failed` (exit 1; `details`: `argv`, `exit`, `stderr`), never "no pull requests". A failed poll writes nothing.
-  5. **The rows** (D5). One transaction writes every change; a value that did not change is not written, so a poll that finds nothing new opens no write transaction. A pull request in the search is inserted or updated in `pull_requests` (`changed_at` = now when a value changed). A row no PR points to is **deleted** when its pull request leaves the open search; a row a PR points to is never deleted (§4.4). The rows hold what was reported, so a rerun with no change on GitHub reports nothing and writes nothing.
-  6. **The Events** (D7, §5.2). In the transaction that writes the change, for the Plan whose `prs` row points to the pull request only: `pr-feedback` when the checks became `failed`, the review `changes_requested` or the state `closed`. A pull request becoming `merged`: the PR `merged` with `merged_at` (`pr-merged`); when every PR that is not `cancelled` is then `merged`, the Plan's phase `done` with `done_at` (`plan-done`, once each time the Plan reaches `done`, so again when a reopened Plan's last PR merges), after which the Plan's remaining Attempt worktrees and branches are removed in every PR's repo. Engine E7 then starts the PRs whose last prerequisite this was (§3.7). Pull requests no Plan owns get no Event.
+  5. **The rows** (D5). One transaction writes every change; a value that did not change is not written, so a poll that finds nothing new opens no write transaction. A pull request in either search is inserted or updated in `pull_requests` (`changed_at` = now when a value changed, `mergeable`, `merge_state`, `authored` and `review_requested` included): `authored` is 1 exactly when it is in the `author:@me` search and `review_requested` is 1 exactly when it is in the `review-requested:@me` search, so a pull request that leaves one search has that flag cleared on the next poll. Both are stored as each poll reads them, `unknown` included (GitHub computes mergeability lazily after the base moves, as checks go `pending` when CI reruns). A row no PR points to is **deleted** when its pull request is in neither open search; a row is **kept** while it is in either search or a PR points to it, and a row a PR points to is never deleted (§4.4). The rows hold what was reported, so a rerun with no change on GitHub reports nothing and writes nothing.
+  6. **The Events** (D7, §5.2). In the transaction that writes the change, for the Plan whose `prs` row points to the pull request only: `pr-feedback` when the checks became `failed`, the review `changes_requested`, the state `closed` or `mergeable` `conflicting` (from anything else, once per transition; `unknown` is no conflict). A pull request becoming `merged`: the PR `merged` with `merged_at` (`pr-merged`); when every PR that is not `cancelled` is then `merged`, the Plan's phase `done` with `done_at` (`plan-done`, once each time the Plan reaches `done`, so again when a reopened Plan's last PR merges), after which the Plan's remaining Attempt worktrees and branches are removed in every PR's repo. Engine E7 then starts the PRs whose last prerequisite this was (§3.7). Pull requests no Plan owns get no Event, and a pull request only in the review-request search gets none: `pr-feedback` is unchanged, still only for the author's Plans.
   7. **Output** (commands.md §9.2): what changed, the rate limit of the search (`cost`, `remaining`, `reset_at`, which E5 uses, §3.7), and with `--plan` (or `CPD_PLAN`) that Plan's PRs with their rows.
 - **`pr view [--pr <key>]`** (hs-d98, D10), read-only: the PR must be `open` or `merged` (else `illegal_transition`, as `pr rebase`). It runs `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url` and `gh api repos/{owner}/{repo}/pulls/<n>/comments` (the detail the poll does not store) and prints the checks, reviews, comments and inline comments typed. It writes nothing and appends no Event. A Lead reads it when `pr-feedback` arrives (§5.2).
 - **`pr rebase --pr <key>`** onto the PR's base; the PR must be `open` (else `illegal_transition`). Under the per-repo lock (§7.4) and after running R there, so no merge interleaves and none is left unrecorded:
@@ -1751,7 +1855,7 @@ Each command here works on **one PR** (R34, A14), selected by `--pr <key>` (§1.
   2. **the Gate** (R19), exactly as `pr open` step 2: `pre-merge` in the Lead worktree, output in `run/<plan>/logs/pr-<key>.pre-merge.log`; `gate_failed` (exit 3), `gate_error` (exit 1), with `details.tail` and `details.log`. Nothing is pushed on a failure;
   3. `git -C <lead worktree> push --porcelain origin <lead branch>` (no `-u`, no force, no lease). A rejection because the remote branch is not an ancestor of the local one (the remote moved) is `push_rejected` (exit 3) with git's stderr in `details.stderr`; the Lead then runs `pr rebase`. Any other git failure is `git_failed`.
 
-  No rows and no Event. A branch already at the remote's sha still runs the Gate and pushes nothing (`pushed` false). Known limit: the merge step's tamper check (§7.4 step 5) is unchanged.
+  No rows and no Event. A branch already at the remote's sha still runs the Gate and pushes nothing (`pushed` false).
 
 ## 8. Configuration
 
@@ -1793,6 +1897,7 @@ H = "github-copilot/claude-haiku-4.5"
 
 [timeouts]
 attempt_minutes = 30         # active time per Attempt (§3.4)
+stall_seconds = 1200         # a Worker idle in one tool call this long has that call's processes killed (§3.4 A4); 0 = off
 ask_minutes = 60             # an Escalation expires after this
 setup_minutes = 15           # pre-start
 gate_minutes = 30            # pre-commit and pre-merge
@@ -1804,6 +1909,9 @@ fork_quiet_seconds = 5       # fork-when-idle (§6.7)
 tick_seconds = 5
 pr_poll_seconds = 5             # one GitHub search of every open PR of the User (E5, §3.7, hs-d97); one point a poll, 720 an hour
 error_repeat_seconds = 600   # the same `error` Event at most once per this (§3.7)
+
+[inbox]
+stuck_job_minutes = 10     # a failed Job becomes a `job-stuck` item after this (E8, §2.2)
 
 [events]
 poll_ms = 200                # events follow (§5.4)
@@ -1825,8 +1933,10 @@ work_session = "cpd-work"    # the hidden session for Workers and watch
 | `lead_pi_packages` | [text] | the two packages above | non-empty strings |
 | `pi_adapter` | path | `""` (beside the binary) | must contain `package.json` |
 | `tiers.O`, `tiers.S`, `tiers.H` | text | above | `^[^/\s]+/\S+$` |
-| `timeouts.*` | int | above | ≥ 1 |
+| `timeouts.*` | int | above | ≥ 1, except `timeouts.stall_seconds` |
+| `timeouts.stall_seconds` | int | `1200` | ≥ 0; `0` disables the stall kill (§3.4 A4). Why (hs-n107, hs-d195): a Worker's tool call that never exits (a command run without `timeout`) left pi waiting and its session file unwritten, and the Attempt ran to `attempt_minutes` for nothing; killing that call's processes gives pi the tool's failure and the Worker continues |
 | `watch.*` | int | above | ≥ 1 |
+| `inbox.stuck_job_minutes` | int | `10` | ≥ 1 |
 | `events.poll_ms` | int | `200` | 20–10000 |
 | `tmux.socket`, `tmux.cockpit_session`, `tmux.work_session` | text | above | `^[A-Za-z0-9_-]{1,32}$`; the two sessions differ |
 

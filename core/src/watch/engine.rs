@@ -1,6 +1,6 @@
 //! The engine's loop (contract §3.7; commands.md §12): `locks/watch.lock`,
-//! `watch-started`, then E1–E5 and E7 (E6 was removed) every
-//! `tick_seconds` until SIGTERM or SIGINT, then `watch-stopped`.
+//! `watch-started`, then E1–E5, E7 and E8 (E6 was removed) every
+//! `tick_seconds` until SIGTERM, SIGINT or SIGHUP, then `watch-stopped`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -11,11 +11,12 @@ use serde_json::{Value, json};
 use super::lock::WatchLock;
 use super::log::Log;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, completion, escalations, liveness, pr, schedule, workers};
+use super::{SOURCE, completion, escalations, inbox, liveness, pr, schedule, workers};
 use crate::config::{Catalog, Config, load_catalog};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, Kind, NewEvent};
 use crate::home::CpdHome;
+use crate::inbox::rules::EngineError;
 use crate::host::Tmux;
 use crate::host::pi::{self, PiDirs};
 use crate::ids::{PlanId, PrKey, SessionId};
@@ -23,7 +24,7 @@ use crate::output::Output;
 use crate::pr::start::{self as start_pr, By, Failed};
 use crate::store::Store;
 
-/// Set by SIGTERM and SIGINT: the loop ends at its next check.
+/// Set by SIGTERM, SIGINT and SIGHUP: the loop ends at its next check.
 static STOP: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn on_signal(_: nix::libc::c_int) {
@@ -76,11 +77,16 @@ impl Engine {
         Ok(catalog)
     }
 
-    /// One tick: the `@cpd_workers` step, then E1–E5 and E7 (§3.7; E6 is removed), each reporting its own failures.
+    /// The failures reported and not cleared: E8's `engine-error` items.
+    pub(super) fn errors(&self) -> Vec<EngineError> {
+        self.report.active()
+    }
+
+    /// One tick: the `@cpd_workers` step, then E1–E5, E7 and E8 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalog = None;
-        let steps: [fn(&mut Engine); 7] =
-            [workers::run, escalations::run, liveness::run, schedule::run, completion::run, pr::run, start_prs];
+        let steps: [fn(&mut Engine); 8] =
+            [workers::run, escalations::run, liveness::run, schedule::run, completion::run, pr::run, start_prs, inbox::run];
         for step in steps {
             if stopping() {
                 return;
@@ -163,7 +169,7 @@ pub(super) fn metrics(session: Option<&SessionId>) -> Option<Value> {
 
 fn catch_signals() -> Result<(), CpdError> {
     let action = SigAction::new(SigHandler::Handler(on_signal), SaFlags::empty(), SigSet::empty());
-    for signal in [Signal::SIGTERM, Signal::SIGINT] {
+    for signal in [Signal::SIGTERM, Signal::SIGINT, Signal::SIGHUP] {
         // SAFETY: the handler only stores to an atomic, which is async-signal-safe.
         unsafe { sigaction(signal, &action) }.map_err(|e| {
             CpdError::new(crate::error::ErrorCode::StoreFailed, format!("Cannot handle {signal}: {e}."))

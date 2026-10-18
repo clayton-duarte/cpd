@@ -294,7 +294,10 @@ fn the_chart_of_a_store_equivalent_to_the_cockpits_fixture_matches_it() {
     sql(&env, &plan_with("dispatch", None, CPD_JOBS));
     let pane = start_view(&env);
     let rows = CPD_CHART.lines().count();
-    let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 2 + rows && s[2].contains("contract-core"));
+    // the screen is captured whenever it is: wait for a frame drawn to the box's right border on every row (a capture may fall in the middle of the first frame, which the view writes in pieces)
+    let screen = screen_when(&env, &pane, "the chart", |s| {
+        s.len() > 2 + rows && s[2].contains("contract-core") && s[2..2 + rows].iter().all(|l| l.ends_with('│') && l.chars().count() == s[1].chars().count()) && s.iter().any(|l| l.ends_with('┘'))
+    });
     assert_eq!(chart_rows(&screen, rows), CPD_CHART.trim_end(), "{}", screen.join("\n"));
     // a Plan of one PR is one box, titled on its top border
     assert!(screen[1].starts_with("  ┌ repo · repo → main · dispatch ─"), "{:?}", screen[1]);
@@ -326,10 +329,10 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
     let screen = screen_when(&env, &pane, "the boxes", |s| s.len() > 8 && s[8].ends_with('┘'));
     // web below api, the arrow from api's bottom border into web's top border
     let want = [
-        "  ┌ api · api-server → main · #12 open ┐",
-        "  │  ✓ a │O3 ───── ✓ b │S3             │",
-        "  └─────────────────┬──────────────────┘",
-        "                  ╭─╯",
+        "  ┌ api · api-server → main · #12 open ↗ ┐",
+        "  │  ✓ a │O3 ───── ✓ b │S3               │",
+        "  └──────────────────┬───────────────────┘",
+        "                  ╭──╯",
         "                  ▼",
         "  ┌ web · web → develop · waiting ┐",
         "  │  ○ c │S3                      │",
@@ -397,17 +400,106 @@ fn a_plan_without_jobs_says_no_plan_yet() {
 }
 
 #[test]
-fn escalations_and_the_plan_review_are_not_drawn() {
+fn escalations_and_a_decided_plan_review_are_not_drawn() {
     let env = env();
     let mut s = plan_with("dispatch", None, &[("a", "running", "S3", &[], 1)]);
     s += &format!("INSERT INTO escalations (plan, id, attempt, number, question, status, answer, asker_pid, asked_at, answered_at, expired_at)
           VALUES ('ship', 'a-a1-q1', 'a-a1', 1, 'Which?', 'open', NULL, 1, '2026-01-03T00:20:00.000Z', NULL, NULL);
-          INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at)
-          VALUES ('ship', 'r1', 1, '{FP}', 'pending', '2026-01-02T01:00:00.000Z');");
+          INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at, decided_at)
+          VALUES ('ship', 'r1', 1, '{FP}', 'approved', '2026-01-02T01:00:00.000Z', '2026-01-02T02:00:00.000Z');");
     sql(&env, &s);
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 2 && s[2].contains(" a "));
     assert!(screen.iter().all(|l| !l.contains("Escalation") && !l.contains("review")), "{}", screen.join("\n"));
+}
+
+/// A Plan of one PR `repo` with its pull request #7 and one Job, and a Plan review `r<number>` in `status`.
+fn plan_under_review(number: u32, status: &str) -> String {
+    let decided = if status == "pending" { "NULL" } else { "'2026-01-02T02:00:00.000Z'" };
+    plan_with("dispatch", Some((7, "none")), &[("a", "queued", "S3", &[], 0)])
+        + &format!(
+            "INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at, decided_at)
+             VALUES ('ship', 'r{number}', {number}, '{FP}', '{status}', '2026-01-02T01:00:00.000Z', {decided});"
+        )
+}
+
+fn write_port(env: &TestEnv, text: &str) {
+    let dir = env.cpd_home().join("run").join("ship");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("plannotator-port"), text).unwrap();
+}
+
+/// The screen with its escapes (`capture-pane -e`); tmux 3.4 keeps the OSC 8 links in it.
+fn styled_screen(env: &TestEnv, pane: &str) -> String {
+    tmux_out(env, &["capture-pane", "-p", "-e", "-t", pane])
+}
+
+#[test]
+fn a_pull_request_box_title_ends_in_a_link_to_it_and_a_pending_review_is_a_row_above_the_boxes() {
+    let env = env();
+    sql(&env, &plan_under_review(2, "pending"));
+    write_port(&env, "19433\n");
+    let pane = start_view(&env);
+    let screen = screen_when(&env, &pane, "the row and the box", |s| s.len() > 3 && s[3].contains(" a "));
+    // the row is the pane's first, indented by the margin; the boxes are one row lower than without it
+    assert_eq!(screen[0], "   Plan review r2 pending ↗", "{}", screen.join("\n"));
+    assert_eq!(screen[1], "");
+    assert_eq!(screen[2], "  ┌ repo · repo → main · #7 open ↗ ┐");
+    let styled = styled_screen(&env, &pane);
+    assert!(styled.contains("]8;;https://github.com/acme/repo/pull/7"), "{styled:?}");
+    assert!(styled.contains("]8;;http://localhost:19433"), "{styled:?}");
+    // each link wraps its `↗` and nothing else
+    for url in ["https://github.com/acme/repo/pull/7", "http://localhost:19433"] {
+        assert!(
+            styled.lines().any(|l| l.contains(&format!("]8;;{url}\x1b\\↗\x1b]8;;\x1b\\"))),
+            "{url}: {styled:?}"
+        );
+    }
+}
+
+#[test]
+fn a_conflict_shows_in_the_box_title_and_clears_with_no_event_within_the_refresh() {
+    let env = env();
+    sql(&env, &plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
+    let pane = start_view(&env);
+    let title = |s: &[String], word: &str| s.iter().any(|l| l.contains(&format!("#7 {word} ↗")));
+    screen_when(&env, &pane, "the open title", |s| title(s, "open"));
+
+    // the poll stored a conflict: no Event is appended for the view to wake on, so only the 2 s re-read shows it
+    sql(&env, "UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 7;");
+    screen_when(&env, &pane, "conflict", |s| title(s, "conflict"));
+
+    // `unknown` is not a conflict
+    sql(&env, "UPDATE pull_requests SET mergeable = 'unknown' WHERE number = 7;");
+    screen_when(&env, &pane, "open again", |s| title(s, "open"));
+}
+
+#[test]
+fn without_a_port_file_the_pending_review_row_has_no_arrow() {
+    let env = env();
+    sql(&env, &plan_under_review(1, "pending"));
+    let pane = start_view(&env);
+    let first = screen_when(&env, &pane, "the row", |s| s.len() > 3 && s[3].contains(" a "));
+    assert_eq!(first[0], "   Plan review r1 pending", "{}", first.join("\n"));
+    assert!(!styled_screen(&env, &pane).contains("localhost"));
+    // a port file that holds no port is no port file
+    write_port(&env, "not a port\n");
+    sql(&env, &event("plan-review", "ctx", Some("ship"), None, "{}"));
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(screen(&env, &pane)[0], "   Plan review r1 pending");
+}
+
+#[test]
+fn with_no_pending_review_there_is_no_row_and_the_boxes_start_at_the_top() {
+    let env = env();
+    sql(&env, &plan_under_review(1, "rejected"));
+    write_port(&env, "19433\n");
+    let pane = start_view(&env);
+    let screen = screen_when(&env, &pane, "the box", |s| s.len() > 2 && s[2].contains(" a "));
+    assert_eq!(screen[0], "", "{}", screen.join("\n"));
+    assert_eq!(screen[1], "  ┌ repo · repo → main · #7 open ↗ ┐");
+    assert!(screen.iter().all(|l| !l.contains("review")), "{}", screen.join("\n"));
+    assert!(!styled_screen(&env, &pane).contains("localhost"));
 }
 
 #[test]
@@ -485,7 +577,17 @@ fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_re
     let mut down = vec!["send-keys", "-t", &pane];
     down.extend(std::iter::repeat_n("j", 45));
     tmux_out(&env, &down);
-    let scrolled = screen_when(&env, &pane, "the chart scrolled", |s| s.iter().all(|l| !l.contains(" j10 ")));
+    // the view takes the keys one by one: wait for the last one (the 45th pill from j10, j54, selected), then for a screen that holds still
+    wait_until("the last pill selected", || {
+        tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]).lines().any(|l| l.contains(" j54 ") && selected(l))
+    });
+    let mut scrolled = screen(&env, &pane);
+    wait_until("the chart to hold still", || {
+        std::thread::sleep(Duration::from_millis(300));
+        let now = screen(&env, &pane);
+        std::mem::replace(&mut scrolled, now) == scrolled
+    });
+    assert!(scrolled.iter().all(|l| !l.contains(" j10 ")), "{}", scrolled.join("\n"));
     assert!(selected(&tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane])), "no pill is selected before the switch");
 
     // another Plan starts at its corner; coming back shows the chart where it was left, with nothing selected

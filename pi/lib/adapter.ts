@@ -11,7 +11,7 @@ import { DEFAULT_TIMING, Follower, type Schedule, type Spawn, type Timing } from
 import type { CommandCtx, Ctx, Message, PiApi } from "./pi.ts";
 import { parseOpened, parseResult, parseStatus, request } from "./plannotator.ts";
 import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, REVIEW_LABEL, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
-import { adapterDir, DEFAULT_POLL_MS, pollAdapter, type Poll, refusal, RELOAD_COMMAND, RELOAD_TRIGGER, validatePackage, type Validation } from "./reload.ts";
+import { adapterDir, appendLog, DEFAULT_POLL_MS, LONG_REFUSAL_NOTICE, pollAdapter, type Poll, refusal, RELOAD_COMMAND, reloadLogPath, RELOAD_TRIGGER, validatePackage, type Validation } from "./reload.ts";
 import { Facts, Reporter, stateArgs, type Wanted } from "./state.ts";
 import { contextCursorFrom, contextUpdate, parsePending, parsePlanEvents, parseRecordEvents, parseRecords, PLAN_KINDS } from "./updates.ts";
 
@@ -23,7 +23,7 @@ export type Options = {
   /** How the follower's restart is scheduled. Default: `setTimeout`. */
   schedule?: Schedule;
   /** The directory whose replacement means an install, how often it is polled, and how the new package is validated (§15.6). Default: the adapter's own directory, every {@link DEFAULT_POLL_MS}, jiti from pi. */
-  reload?: { dir?: string; intervalMs?: number } & Validation;
+  reload?: { dir?: string; intervalMs?: number; longRefusalMs?: number } & Validation;
 };
 
 export const QUESTION_LABEL = "cpd: Worker question";
@@ -56,6 +56,8 @@ type Run = {
   abort: AbortController;
   /** Watches the adapter directory for an install (§15 "Reload after an install"). */
   reload: Poll | undefined;
+  /** One line of `run/adapter/<session>.log` (§15.6 "Log"); a failed write is notified once per run. */
+  log: (line: string) => void;
   unsubscribe: (() => void)[];
 };
 
@@ -132,11 +134,18 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     description: "cpd: reload pi after an install (runs by itself; does nothing unless pi is idle, unblocked and the editor is empty)",
     async handler(_args: string, ctx: CommandCtx) {
       const r = run;
-      if (!r || refusal(guardOf(r, ctx)) !== undefined) return r?.reload?.retry();
+      if (!r) return;
+      const why = refusal(guardOf(r, ctx));
+      if (why !== undefined) {
+        r.log(`command: refused: ${why}`);
+        return r.reload?.retry();
+      }
+      r.log("command: reloading");
       ctx.ui.notify("cpd: adapter updated, reloading");
       try {
         await ctx.reload(); // `ctx` is stale from here on
       } finally {
+        r.log("command: ctx.reload() returned"); // a reload that happened is followed by the new instance's "start" line
         r.reload?.retry(); // still running: the reload did not happen, the next tick may try again
       }
     },
@@ -144,7 +153,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
 
   // ---- start-up (§15.2) ----
 
-  async function start(ctx: Ctx): Promise<void> {
+  async function start(ctx: Ctx, reason: string): Promise<void> {
     if (ctx.mode !== "tui") return;
     const id = env.CPD_SESSION;
     if (id === undefined || id === "") return;
@@ -167,6 +176,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
 
     const abort = new AbortController();
     const facts = new Facts();
+    let logFailed = false;
     const r: Run = {
       id,
       info,
@@ -185,6 +195,16 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       reporting: false,
       abort,
       reload: undefined,
+      log: (line) => {
+        try {
+          appendLog(reloadLogPath(env.CPD_HOME || join(homedir(), ".cpd"), id), line);
+        } catch (e) {
+          if (!logFailed) {
+            logFailed = true;
+            ctxOf.current?.ui.notify(`cpd: cannot write the reload log: ${toCpdError(e).message}`, "error"); // not a message: it must not start a turn
+          }
+        }
+      },
       unsubscribe: [],
     };
     r.follower = new Follower(
@@ -206,6 +226,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       options.schedule,
     );
     run = r;
+    r.log(`start: ${reason}`);
 
     // 2. stopped -> idle, then working when pi is busy.
     r.reporter.want({ state: "idle" });
@@ -221,7 +242,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     const entries = ctx.sessionManager.getEntries();
     r.cursor = cursorFrom(info.registeredEvent, entries, id);
 
-    if (info.role === "lead" || info.role === "manager") registerUpdates();
+    if (info.role === "manager") registerUpdates();
 
     // 5. blocking reasons (Plan Lead only; a Manager has none and opens no plannotator)
     if (info.role !== "manager" && info.planLead && info.plan !== null) {
@@ -251,10 +272,13 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       dir: options.reload?.dir ?? adapterDir(),
       intervalMs: options.reload?.intervalMs ?? DEFAULT_POLL_MS,
       validate: (dir) => validatePackage(dir, options.reload),
-      allowed: () => run === r && ctxOf.current !== undefined && refusal(guardOf(r, ctxOf.current)) === undefined,
+      refusal: () => (run === r && ctxOf.current !== undefined ? refusal(guardOf(r, ctxOf.current)) : "not active"),
       trigger: () => pi.sendUserMessage(RELOAD_TRIGGER, { expandPromptTemplates: true }),
       onRefused: (reason) => ctxOf.current?.ui.notify(`cpd: adapter update not loaded: ${reason}`, "error"),
       onError: (e) => deliver("reload after install", e),
+      log: r.log,
+      onLongRefusal: () => ctxOf.current?.ui.notify(LONG_REFUSAL_NOTICE),
+      longRefusalMs: options.reload?.longRefusalMs,
     });
 
     // Recovery of the reviews this session opened (§15.5), in the background.
@@ -274,6 +298,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     if (!r) return;
     run = undefined;
     ctxOf.current = undefined;
+    r.log("stop");
     r.reload?.stop();
     r.abort.abort();
     r.follower.stop();
@@ -355,7 +380,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     }
   }
 
-  /** §15.3 `session-message`: for every Lead and a Manager, with a turn. The sender's name is read once, `cpd session show <from>`; the id stands in when it cannot be read. */
+  /** §15.3 `session-message`: for every Lead and a Manager; a turn only when `data.wake` is true (hs-d209, D3). The sender's name is read once, `cpd session show <from>`; the id stands in when it cannot be read. */
   async function deliverSessionMessage(r: Run, ev: CpdEvent): Promise<void> {
     const from = typeof ev.data.from === "string" ? ev.data.from : null;
     let sender: { id: string; name: string | null } | null = null;
@@ -369,14 +394,14 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       }
     }
     if (run !== r) return;
-    pi.sendMessage(sessionMessage(ev, r.id, sender), FOLLOW_UP(true));
+    pi.sendMessage(sessionMessage(ev, r.id, sender), FOLLOW_UP(ev.data.wake === true));
   }
 
   // ---- Context updates at turn start (§15.7) ----
 
   /**
-   * `before_agent_start` of a Lead or Manager: the Context records other Sessions wrote since its cursor and, for a
-   * Manager, the `Plans:` digest and the fresh `Pending work:` section, as one `cpd-context` message added to the run. Never starts a turn: a failed read is reported once (no turn) and leaves the cursor.
+   * `before_agent_start` of a Manager only (hs-d209, D1: nothing from the Context is pushed into a Lead's turn): the
+   * Context records other Sessions wrote since its cursor, the `Plans:` digest and the fresh `Pending work:` section, as one `cpd-context` message added to the run. Never starts a turn: a failed read is reported once (no turn) and leaves the cursor.
    */
   async function contextUpdates(r: Run, ctx: Ctx): Promise<{ message: Message } | undefined> {
     try {
@@ -384,8 +409,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       const events = parseRecordEvents(await call(["events", "list", "--context", r.info.context, "--kind", "context-record", "--since", String(cursor)]));
       const first = Math.min(...events.map((e) => e.seq));
       const records = events.length === 0 ? [] : parseRecords(await call(["context", "show", "--context", r.info.context, "--since", String(first - 1)]));
-      const plans = r.info.role === "manager" ? parsePlanEvents(await call(["events", "list", "--context", r.info.context, ...PLAN_KINDS.flatMap((k) => ["--kind", k]), "--since", String(cursor)])) : undefined;
-      const pending = r.info.role === "manager" ? parsePending(await call(["context", "pending", "--context", r.info.context])) : undefined;
+      const plans = parsePlanEvents(await call(["events", "list", "--context", r.info.context, ...PLAN_KINDS.flatMap((k) => ["--kind", k]), "--since", String(cursor)]));
+      const pending = parsePending(await call(["context", "pending", "--context", r.info.context]));
       r.contextFailed = false;
       const message = contextUpdate(r.info.context, r.id, events, records, plans, pending);
       return message === undefined ? undefined : { message };
@@ -401,13 +426,13 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   }
 
   let updatesRegistered = false;
-  /** Registered once, for a Lead or Manager only (never a Worker); pi has no way to remove a handler. */
+  /** Registered once, for a Manager only (never a Lead or a Worker); pi has no way to remove a handler. */
   function registerUpdates(): void {
     if (updatesRegistered) return;
     updatesRegistered = true;
     pi.on("before_agent_start", async (_event, ctx) => {
       const r = run;
-      return r && (r.info.role === "lead" || r.info.role === "manager") ? contextUpdates(r, ctx) : undefined;
+      return r && r.info.role === "manager" ? contextUpdates(r, ctx) : undefined;
     });
   }
 
@@ -589,9 +614,9 @@ export function adapter(pi: PiApi, options: Options = {}): void {
 
   // ---- pi's lifecycle ----
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
     try {
-      await start(ctx);
+      await start(ctx, typeof event?.reason === "string" ? event.reason : "unknown");
     } catch (e) {
       deliver("start-up", e);
     }
@@ -626,6 +651,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     if (!r) return;
     if (ctx.isIdle()) r.facts.active = false;
     refresh(r);
+    r.reload?.nudge(); // a busy Lead's idle gaps can be shorter than the poll interval (§15.6 "Retries")
   });
 
   pi.on("session_info_changed", () => {
