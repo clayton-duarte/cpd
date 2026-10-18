@@ -7,7 +7,7 @@ use cpd_core::session::State;
 use super::shared::Place;
 
 /// The dot of a row, ordered by urgency: the greatest is the most urgent, `Red > Yellow > Magenta > White >
-/// Working > Idle > Stopped` (§17, Precedence). A Context row's dot is the greatest of its live Sessions'.
+/// Working > Idle > Stopped` (§17, Precedence).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Dot {
     /// `palette::STOPPED`: pi stopped.
