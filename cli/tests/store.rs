@@ -754,6 +754,70 @@ fn a_failed_migration_rolls_back_entirely() {
     assert_eq!(app, 0);
 }
 
+#[test]
+fn a_write_after_another_connection_bumped_user_version_is_store_too_new_and_appends_nothing() {
+    let env = TestEnv::new();
+    let mut store = fixture_store(&env);
+    let txns = |store: &mut Store| store.read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get::<_, i64>(0))?)).unwrap();
+    let before = txns(&mut store);
+    raw(&env).pragma_update(None, "user_version", VERSION + 1).unwrap();
+    let mut ran = false;
+    let err = store
+        .write("test", |tx| {
+            ran = true;
+            exec(tx, "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('late', 'Late', 't', 'm')")
+        })
+        .unwrap_err();
+    assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
+    assert_eq!(err.details()["version"], VERSION + 1);
+    assert_eq!(err.details()["supported"], VERSION);
+    assert!(!ran, "the closure must not run against a newer schema");
+    assert_eq!(txns(&mut store), before);
+    let contexts: i64 = store.read(|c| Ok(c.query_row("SELECT count(*) FROM contexts WHERE id = 'late'", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(contexts, 0);
+}
+
+/// `(foreign_keys, legacy_alter_table)` of the store's connection.
+fn pragmas(store: &mut Store) -> (i64, i64) {
+    store
+        .read(|c| {
+            let get = |name: &str| c.pragma_query_value(None, name, |r| r.get::<_, i64>(0));
+            Ok((get("foreign_keys")?, get("legacy_alter_table")?))
+        })
+        .unwrap()
+}
+
+#[test]
+fn foreign_keys_are_on_and_legacy_alter_table_off_after_the_migrating_open() {
+    let env = TestEnv::new();
+    version_5_database(&env);
+    let mut store = open(&env);
+    assert_eq!(pragmas(&mut store), (1, 0));
+}
+
+#[test]
+fn a_write_from_a_deleted_cwd_succeeds_and_records_unreadable() {
+    let env = TestEnv::new();
+    fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"hs\"\n").unwrap();
+    // The shell enters a directory, deletes it and runs cpd from there.
+    let out = env
+        .command("sh")
+        .args(["-c", "mkdir gone && cd gone && rmdir ../gone && exec \"$@\"", "sh", common::CPD])
+        .args(["context", "new", "ctx", "--title", "Ctx"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stdout} {}", String::from_utf8_lossy(&out.stderr));
+    let mut store = open(&env);
+    let cwds: Vec<String> = store
+        .read(|c| {
+            let mut stmt = c.prepare("SELECT cwd FROM txns WHERE command = 'context new'")?;
+            Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+        })
+        .unwrap();
+    assert_eq!(cwds, ["(unreadable)"]);
+}
+
 // ---------- §4.5 migration 6: pull_requests and prs.pull_request ----------
 
 /// The `CREATE TABLE prs (...) STRICT;` of versions 4 and 5, from `0004.sql` (migration 5 changes no table).
