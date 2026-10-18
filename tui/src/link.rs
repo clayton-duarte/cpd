@@ -63,7 +63,7 @@ mod tests {
     use std::rc::Rc;
 
     use ratatui::backend::CrosstermBackend;
-    use ratatui::style::{Color, Style};
+    use ratatui::style::{Modifier, Style};
     use ratatui::{Terminal, TerminalOptions, Viewport};
 
     use super::*;
@@ -210,7 +210,7 @@ mod tests {
     fn a_piece_never_joins_cells_of_different_style() {
         let mut buf = Buffer::empty(Rect::new(0, 0, 2, 1));
         buf.set_string(0, 0, "a", Style::default());
-        buf.set_string(1, 0, "b", Style::default().fg(Color::Red));
+        buf.set_string(1, 0, "b", Style::default().add_modifier(Modifier::BOLD));
         let area = buf.area;
         link(&mut buf, area, URL);
 
