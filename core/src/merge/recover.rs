@@ -7,6 +7,7 @@ use std::path::Path;
 use super::Ctx;
 use super::ledger::{self, Attempt, End, Failure, Ladder};
 use super::lock::{RepoLock, take_free_driver_lock};
+use crate::driver::lock;
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, run::run};
 use crate::host::layout::attempt_window;
@@ -58,7 +59,8 @@ pub(super) fn recover_except(
     Ok(done)
 }
 
-/// R1–R4 for one Attempt whose driver is dead.
+/// R1–R4 for one Attempt whose driver is dead. Once the end is committed, the Attempt's driver
+/// lock file is removed (G13).
 fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Option<End>, CpdError> {
     let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };
     let lead_ref = format!("refs/heads/{}", attempt.lead_branch);
@@ -85,6 +87,7 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
                 }
                 Ok(())
             })?;
+            lock::remove(ctx.home, &attempt.plan, &attempt.id)?;
             // R35: push as step 8 does; a failure does not undo the merge.
             if let Err(e) = git::push_lead_branch(&attempt.lead_worktree, &attempt.lead_branch, false) {
                 store.write(ctx.source, |tx| ledger::append_error(tx, attempt, ctx.source, &e, push_text(attempt, &e)))?;
@@ -104,6 +107,7 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
             };
             let metrics = (ctx.metrics)(attempt);
             store.write(ctx.source, |tx| ledger::end_merging(tx, attempt, &end, metrics.as_ref(), &ladder))?;
+            lock::remove(ctx.home, &attempt.plan, &attempt.id)?;
             Ok(Some(end))
         }
         // R4: git failed; nothing changes, reported once per Attempt.
