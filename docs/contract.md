@@ -2,7 +2,7 @@
 
 Status: **normative for every cpd 2 implementation Job.** A Plan is one deliverable over one or more PRs (R34). Vocabulary: [CONTEXT.md](../CONTEXT.md). Command-by-command reference (synopses, flags, every refusal, JSON examples, the pi adapter protocol, the Worker contract, what the TUI reads): `docs/commands.md`, written by Job `contract-commands` after this document. Where the two disagree, this document wins and `commands.md` is fixed.
 
-Sources: the User's decisions R1–R14 and R19–R20 (applied by Job `contract-gate-pr`, §10), R34 (a Plan is one deliverable over one or more PRs, each with its own repo, base, Lead Branch, Lead worktree, Gate and GitHub pull request; Job `r34-contract`, §10), R35 (§10) and the approved outline with D1–D5 (`~/.cpd/plans/cpd-rust/`), ADR-0009 to ADR-0012 (`docs/adr/`), the cockpit vision and research (`~/.cpd/plans/cpd-ui/`). cpd 1 (`docs/archive/cpd1/cli-contract.md`, cited below as "cpd 1 §n") is reference only: where its behaviour is kept, the section is cited; where it changes, the change and its reason are stated.
+Sources: the User's decisions R1–R14 and R19–R20 (applied by Job `contract-gate-pr`, §10), R34 (a Plan is one deliverable over one or more PRs, each with its own repo, base, Lead Branch, Lead worktree, Gate and GitHub pull request; Job `r34-contract`, §10), R35 (§10) and the approved outline with D1–D5 (`~/.cpd/plans/cpd-rust/`), ADR-0009 to ADR-0012 (`docs/adr/`; ADR-0012 is superseded by hs-d23 and hs-a1, Plan manager B1, §4.6), the cockpit vision and research (`~/.cpd/plans/cpd-ui/`). cpd 1 (`docs/archive/cpd1/cli-contract.md`, cited below as "cpd 1 §n") is reference only: where its behaviour is kept, the section is cited; where it changes, the change and its reason are stated.
 
 Evidence labels, as in the research notes: **verified** means run on the homeserver on 2026-10-14 (tmux 3.4, git 2.43.0, gh 2.45.0, pi 1.2.0, worktrunk 0.80.0); **docs** means read in the named tool's documentation; **unverified** means a design assumption the implementation Job must check.
 
@@ -27,13 +27,13 @@ Evidence labels, as in the research notes: **verified** means run on the homeser
 - **One binary, written in Rust.** The Cargo workspace at the root of the repo has three crates: `core/` (`cpd-core`, the library), `cli/` (`cpd`, the binary) and `tui/` (`cpd-tui`, the cockpit) (R6, switch-over; `implementing.md`). The binary is `cpd`, and this contract writes every command as `cpd …`. Until the switch-over the binary was installed as `cpd2` beside the TypeScript cpd (R12); the switch-over replaced cpd 1 and renamed the binary everywhere, including in rendered Specs and the pi adapter.
 - **System dependencies:** `git`, `tmux`, `pi` and, for pull requests only, `gh`. No `bd`, no `wt` (worktrunk), no `herdr`, and no Node.js of cpd's own. pi brings its own Node runtime; cpd uses it only to read pi's model catalog (§9).
 - **State in SQLite inside the binary** (R1): one database per machine, `$CPD_HOME/cpd.db`, in WAL mode, with SQLite bundled into the binary (no system SQLite). Reads never wait for writers. Every write is recorded in the append-only `history` table (§4).
-- **Context knowledge in git.** A Context's records (decisions, notes, questions and answers, Plans) live in an append-only JSONL store in a git repository per Context, shared across the User's machines; SQLite holds a rebuildable index of them (ADR-0012, §4.6).
+- **Context records in the database.** A Context's records (decisions, notes, questions and answers, Plans) live only in the database tables `contexts` and `context_records`; Contexts are machine-local (hs-d23, hs-a1; Plan manager B1, §4.6). ADR-0012's git store is superseded.
 - **tmux is the only host.** Leads run in the cockpit; Workers and the engine run in a hidden session of the same tmux server (§6).
 - **The repo owns its setup and its Gate,** in `.config/wt.toml`, read by cpd itself so that repos set up for worktrunk work unchanged (R4, R5, §7).
 - **Events are the single channel** to Leads, the TUI and agent states (D4, §5). There are no queue directories, no cache directories and no tmux user options carrying state.
 - **One engine per machine** (D5): one `cpd watch` schedules every Plan under one concurrency limit.
 - **A Plan is one deliverable over one or more PRs** (R34): each PR is the Plan's part in one repo, with its own base, Lead Branch, Lead worktree, Gate and GitHub pull request; one repo may hold several PRs of one Plan. A Plan of one PR behaves exactly as a Plan did before R34.
-- **Kept from cpd 1:** the vocabulary (Job, Spec, Dependency, Attempt, Escalation, Tier, Gate, Lead Branch, Merged, Locked); the roles User, Lead and Worker (cpd 1's Reviewer is removed by R19, §10); Workers write all the code; the Lead never writes code.
+- **Kept from cpd 1:** the vocabulary (Job, Spec, Dependency, Attempt, Escalation, Tier, Gate, Lead Branch, Merged, Locked); the roles User, Manager (Plan manager B3, §3.1), Lead and Worker (cpd 1's Reviewer is removed by R19, §10); Workers write all the code; the Lead never writes code.
 
 ### 1.2 Output: one JSON value (D1)
 
@@ -60,9 +60,9 @@ Exit codes (kept from cpd 1 §2):
 
 | Exit | Codes |
 |---|---|
-| `1` | `gate_error`, `context_store_invalid`, `watch_start_failed`, `spawn_failed`, `session_malformed`, `driver_lock_missing`, `doctor_failed`, `pi_not_found`, `catalog_failed`, `cleanup_failed` (only as an `error` Event's code, source `pr poll`, never a command's failure; §7.2) |
+| `1` | `gate_error`, `watch_start_failed`, `spawn_failed`, `session_malformed`, `driver_lock_missing`, `doctor_failed`, `pi_not_found`, `catalog_failed`, `cleanup_failed` (only as an `error` Event's code, source `pr poll`, never a command's failure; §7.2) |
 | `2` | `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `spec_invalid`, `tier_invalid`, `nothing_to_edit`, `file_unreadable`, `invalid_name`, `pr_required`, `invalid_pr_id` (R34) |
-| `3` | `push_rejected` (hs-d139, §7.6), `session_ambiguous` (hs-a3, commands §1.3), `pr_exists`, `pr_in_use`, `pr_empty`, `pr_locked`, `pr_not_ready`, `pr_ended`, `needs_other_pr`, `branch_exists` (R34, §3.8), `context_exists`, `question_answered`, `not_a_git_repo`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `review_commits`, `review_missing`, `job_merged`, `job_not_failed`, `job_not_ready`, `attempt_not_running`, `no_port`, `jobs_not_done`, `gate_failed`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `in_chat_slot`, `cursor_ahead`, `not_a_terminal` |
+| `3` | `push_rejected` (hs-d139, §7.6), `session_ambiguous` (hs-a3, commands §1.3), `pr_exists`, `pr_in_use`, `pr_empty`, `pr_locked`, `pr_not_ready`, `pr_ended`, `needs_other_pr`, `branch_exists` (R34, §3.8), `context_exists`, `question_answered`, `not_a_git_repo`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `review_commits`, `review_missing`, `job_merged`, `job_not_failed`, `job_not_ready`, `attempt_not_running`, `no_port`, `jobs_not_done`, `gate_failed`, `rebase_conflict`, `not_a_lead`, `no_cockpit`, `wrong_pane`, `in_chat_slot`, `cursor_ahead`, `not_a_terminal` |
 | `4` | `base_not_found`, `pr_not_found` (R34) |
 
 **Adapter-only codes.** `protocol_mismatch` is never a command's failure and never an `error` Event's code: it appears only in the pi adapter's message to its Session (`cpd adapter: …`, commands.md §15.2), when `cpd --version`'s `protocol` is not the number the adapter was built for (§5.2 "The protocol number"). It has no exit code.
@@ -84,13 +84,12 @@ Exit codes (kept from cpd 1 §2):
 $CPD_HOME/
   config.toml                     machine config (§8)
   cpd.db, cpd.db-wal, cpd.db-shm  the database (§4)
-  contexts/<context>/             one git repository per Context (§4.6)
+  archive/contexts/<context>/     an old git store of a Context, moved here by migration 0007 (§4.5); nothing reads it
   locks/
     watch.lock                    held by the one `cpd watch` (§6.6)
     repo-<sha1>.lock              per-repo lock: merges, `pr open`, `pr rebase` (§7.4, §7.6); sha1 of the repo's git common dir realpath
     attempt-<plan>--<attempt>.lock  the driver lock: taken by the Attempt's starter, inherited by its driver, removed when the Attempt ends (§3.4)
     pr-poll.lock                  held by `pr poll` for the whole poll (§7.6, hs-d96)
-    context-<context>.lock        held while writing or syncing a Context store (§4.6)
     plannotator-ports.lock        held while a Plan's review port is assigned (§6.5)
     store.lock                    held by every open of `cpd.db` during its one-time setup only: the WAL switch and the migration check (§4.1, §4.5)
   run/
@@ -116,7 +115,7 @@ Locks are `flock(2)` locks on these files: the kernel releases them when the hol
 
 | Thing | Format | Unique within | Example |
 |---|---|---|---|
-| Context id | `^[a-z][a-z0-9-]{1,39}$` | all machines (it names a git repo) | `building-cpd` |
+| Context id | `^[a-z][a-z0-9-]{1,39}$` | this machine (Contexts are machine-local, §4.6) | `building-cpd` |
 | Machine name | `^[a-z][a-z0-9]{0,7}$`, set in `config.toml` (§8) | the User's machines | `hs` |
 | Context record id | `<machine>-<letter><n>`; letter `d` decision, `n` note, `q` question, `a` answer, `p` plan; `n` from 1, sequential per machine, Context and letter | the Context | `hs-d3` |
 | Plan id | `^[a-z][a-z0-9-]{1,23}$` (cpd 1's Workflow id) | the machine; `pr add` and every PR start (§3.8) also refuse a PR whose Lead Branch `cpd/<plan>/<key>`, or the branch `cpd/<plan>` itself (git cannot hold `cpd/<plan>` and `cpd/<plan>/…` at once), already exists in the PR's repo (`branch_exists`), so cpd 1 Workflows and cpd 2 Plans on one repo never share a branch. The one exception is the legacy branch `cpd/<plan>` of a `merged` PR, which `pr add` first moves to `cpd/<plan>/<that PR's key>` (§3.8, hs-d118) | `pay-4521` |
@@ -149,27 +148,25 @@ The knowledge several Plans share, optionally a Jira Epic. Not a session (ADR-00
 | `jira` | text? | Jira Epic key, stored only |
 | `created_at`, `created_on` | time, text | when and on which machine `context new` ran |
 | `archived_at` | time? | null, or when the Context was archived (migration 3, §4.5); see "Archived" below |
-| `lead_session` | text? | this machine's **grounded Lead**: a Session that every new Plan of this Context forks (D2). Null until a first Plan of the Context has been grounded on this machine |
-| `grounded_seq` | int? | the Context record index position (`context_records.seq`) at the moment the grounded Lead was forked; set together with `lead_session` |
-| `sync_failing` | bool | the last `context sync` failed (so the failure is reported once, §4.6) |
 | records | [Context record] | append-only, below |
+| Manager | Session? | not a field: the Context's one live (not archived) Session of role `manager` (§3.1), if any |
 
 #### Context record
 
-One typed, append-only entry of a Context's store (ADR-0012). Written only by `cpd context …` commands and by `plan new` (the `plan` kind).
+One typed, append-only row of `context_records`, a Context's only store (§4.6). Written only by `cpd context …` commands and by `plan new` (the `plan` kind, and the `brief` kind with `--brief-file`), each in one database transaction.
 
 | Field | Type | Meaning |
 |---|---|---|
 | `id` | text | `<machine>-<letter><n>` (§2.1) |
-| `kind` | text | `decision`, `note`, `question`, `answer` or `plan` |
+| `kind` | text | `decision`, `note`, `question`, `answer`, `plan` or `brief` |
 | `at`, `machine` | time, text | when and where it was written |
 | `by` | json `{session: text?, plan: text?}` | the writing Session (`CPD_SESSION`, else `PI_SESSION_ID`, else null) and its Plan |
-| `text` | text | the decision, note, question or answer; for `plan`, the Plan's title |
+| `text` | text | the decision, note, question or answer; for `plan`, the Plan's title; for `brief`, the Plan's brief (B3-A4) |
 | `supersedes` | text? | `decision` only: the id of the decision it replaces (must exist) |
 | `question` | text? | `answer` only, required: the id of the question it answers (must exist) |
-| `plan` | json? | `plan` only, required: `{id, machine, jira?}`; references the Plan by id and machine. R34 (A12): no `repo`, because a Plan has one or more PRs and none when it is created; a record written before R34 may still carry `repo`, which is read and ignored (§4.6) |
+| `plan` | json? | `plan` and `brief` only, required: `{id, machine, jira?}` (a `brief` has `{id, machine}`); references the Plan by id and machine. R34 (A12): no `repo`, because a Plan has one or more PRs and none when it is created; a record written before R34 may still carry `repo`, which migration 0007's import drops (§4.5) |
 
-A decision is **active** unless a later decision supersedes it. A question is **open** until an answer names it. The rendering Leads read (`context show`) lists, in order: title and Jira key; Plans, each with the repos of its PRs that are not `cancelled`, read from this machine's database (a Plan of another machine shows none); active decisions; superseded decisions, each naming its successor; open questions; answered questions with their answers; notes. Each item shows its id and date. Commands (detail in `commands.md`): `context new`, `list`, `show`, `decide`, `note`, `ask`, `answer`, `sync`.
+A decision is **active** unless a later decision supersedes it. A question is **open** until an answer names it. The rendering Leads read (`context show`) lists, in order: title and Jira key; Plans, each with the repos of its PRs that are not `cancelled`, read from this machine's database (a Plan of another machine shows none); briefs, each listed short (its id and first line) under its Plan, never in full (`context show --record <id>` prints one record in full); active decisions; superseded decisions, each naming its successor; open questions; answered questions with their answers; notes. Each item shows its id and date. Commands (detail in `commands.md`): `context new`, `list`, `show`, `decide`, `note`, `ask`, `answer`, `manager`. The letter of a `brief` is `b`.
 
 #### Plan
 
@@ -180,7 +177,7 @@ One deliverable over one or more PRs (R34), optionally a Jira task. This was cpd
 | `id` | text | Plan id |
 | `context` | text | its Context (required: every Plan belongs to one) |
 | `title`, `jira` | text, text? | `title` is the visible label and editable (`plan rename`); the id is immutable |
-| `phase` | text | `grounding`, `plan`, `dispatch`, `pr`, `done` (§3.1) |
+| `phase` | text | `grounding`, `plan`, `dispatch`, `deploy`, `done` (§3.1) |
 | `lead_session` | text | the Plan's Lead Session; its `cwd` is the directory `plan new` ran from (A12), not a repo |
 | prs | [PR] | one or more, below; none until the Lead adds one (`pr add`, §3.8) |
 | `created_at`, `locked_at`, `done_at` | time, time?, time? | |
@@ -267,7 +264,7 @@ A self-contained unit of work. Its **Spec** is the fields `goal`, `context`, `to
 | `merged_sha` | text? | the Lead Branch commit after the merge; set exactly when `merged` |
 | `created_at` | time | |
 
-**Review Job** (B2, hs-d70). A Job with `review = 1`: its Worker is a **fork of the Plan's Lead Session**, so it knows the intention, instead of a fresh session (§3.4, §6.5). It reads its PR's Lead Branch diff against the PR's base and the Plan's Specs, and writes its findings to `run/<plan>/reviews/<k>.md` (§1.4). It commits nothing: `attempt submit` without commits is allowed only for a review Job, which then ends `merged` with no change to the Lead Branch (§3.4, §7.4). Its Dependencies are set by `job add --review` to every Job of **its PR** that exists at that moment and is not `cancelled`; Jobs appended later (CI or PR-feedback fixes) do not become its Dependencies. The Lead turns the findings into fix Jobs before `pr open`; a final review Job is optional, and the Lead adds one only when it makes sense (B3). It belongs to a PR like every Job (A7). This is not cpd 1's Reviewer (removed by R19): it is an ordinary Job of the Plan, once, where the Lead wants it, and no Gate or verdict belongs to it.
+**Review Job** (B2, hs-d70). A Job with `review = 1`: its Worker is a **fork of the Plan's Lead Session**, so it knows the intention, instead of a fresh session (§3.4, §6.5). It reads its PR's Lead Branch diff against the PR's base and the Plan's Specs, and writes its findings to `run/<plan>/reviews/<k>.md` (§1.4). It commits nothing: `attempt submit` without commits is allowed only for a review Job, which then ends `merged` with no change to the Lead Branch (§3.4, §7.4). Its Dependencies are set by `job add --review` to every Job of **its PR** that exists at that moment and is not `cancelled`; Jobs appended later (CI or PR-feedback fixes) do not become its Dependencies. The Lead turns the findings into fix Jobs before `pr open`; a final review Job is optional, and the Lead adds one only when it makes sense (B3); no local review is required before the Gate (§3.9). It belongs to a PR like every Job (A7). This is not cpd 1's Reviewer (removed by R19): it is an ordinary Job of the Plan, once, where the Lead wants it, and no Gate or verdict belongs to it.
 
 *Decided where B2 is silent:* (1) "every Job of the Plan" is read as every Job **of its PR**, because Dependencies stay inside one PR (A7); a review of another PR is a review Job of that PR. (2) A review Job is its own Job, so a later review Job of the same PR depends on an earlier one.
 
@@ -314,19 +311,19 @@ A question from a Worker to its Lead (`cpd ask`).
 
 #### Session
 
-A pi session cpd knows about: every Lead and Worker is one.
+A pi session cpd knows about: every Manager, Lead and Worker is one.
 
 | Field | Type | Meaning |
 |---|---|---|
 | `id` | text | pi session id |
-| `role` | text | `lead`, `worker` |
+| `role` | text | `manager`, `lead`, `worker`. A Manager is the Context's higher-level Lead (hs-d83..d86, §3.1); at most one live (not archived) per Context |
 | `context` | text | every Session belongs to a Context (vision: "a new session must belong to a Context") |
-| `plan` | text? | null only for a Context's grounded Lead |
+| `plan` | text? | null exactly for a Context's Manager |
 | `attempt` | text? | set exactly for Workers |
 | `name` | text | pi display name (`-n`); 1–80 characters, no control characters |
 | `file` | text? | absolute path of the session JSONL, known once pi has created it |
 | `forked_from` | text? | the Session it was forked from. A fork is never drawn under its source or a Plan: §6.8 (B1) |
-| `cwd`, `tier` | text | |
+| `cwd`, `tier` | text | a Manager's `tier` is the config key `manager_tier` (§8.2); its `cwd` is the directory `context manager` ran from |
 | `tmux_pane` | text? | `%<n>` pane id on the cpd tmux server; null when it has no pane |
 | `state` | text | `working`, `blocked`, `idle`, `stopped` (§3.6) |
 | `state_label` | text? | why it is blocked (for example `cpd: Worker question`); set only while `blocked` |
@@ -337,8 +334,8 @@ A pi session cpd knows about: every Lead and Worker is one.
 
 Context, Plan and Session carry `archived_at`. Archiving hides an object from the cockpit's tree (it collapses into a `…` row); it deletes nothing and changes no phase, status or state. Ids are unique and immutable; the **title** (Context, Plan) or **name** (Session) is the visible label.
 
-- **Refused while live** (`archive_blocked`, exit 3, `details.blockers` lists each): a Session in state `working` or `blocked`; a Job `queued` or `running`; an open Escalation; a pending Plan review. The Lead in the chat slot is refused with `in_chat_slot`. A Plan's own Lead (`plans.lead_session`) is archived only with its Plan. Phases do not matter: a Plan in `pr` is archivable, and the engine keeps polling its PR.
-- **Cascade, all or nothing:** a Context archives with its Plans, all their Sessions and its grounded Lead; a Plan with its Lead and side forks. Every object is checked first (nothing is written if any blocks); then every live Lead pane is closed as `session close` does (§6.4: pi stops, the session files stay); then `archived_at` is set and the Events appended in one transaction, which re-checks the rule. Unarchiving clears `archived_at` with the same cascade and touches no pane; `session open` resumes a Lead later. Unarchiving a Plan or Session whose Context (or Plan) is archived is refused with `archived`.
+- **Refused while live** (`archive_blocked`, exit 3, `details.blockers` lists each): a Session in state `working` or `blocked`; a Job `queued` or `running`; an open Escalation; a pending Plan review. The Lead in the chat slot is refused with `in_chat_slot`. A Plan's own Lead (`plans.lead_session`) is archived only with its Plan. Phases do not matter: a Plan in `deploy` is archivable, and the engine keeps polling its PR.
+- **Cascade, all or nothing:** a Context archives with its Plans, all their Sessions and its Manager; a Plan with its Lead and side forks. Every object is checked first (nothing is written if any blocks); then every live Lead pane is closed as `session close` does (§6.4: pi stops, the session files stay); then `archived_at` is set and the Events appended in one transaction, which re-checks the rule. Unarchiving clears `archived_at` with the same cascade and touches no pane; `session open` resumes a Lead later. Unarchiving a Plan or Session whose Context (or Plan) is archived is refused with `archived`.
 - **Refused on an archived object** (`archived`, exit 3, `details.next` is the unarchive command): `session open` and `session fork` of an archived Session, `plan new` in an archived Context.
 
 #### Event
@@ -366,7 +363,7 @@ An append-only record of something that happened (D4, §5).
 erDiagram
   CONTEXT ||--o{ CONTEXT_RECORD : "has (append-only)"
   CONTEXT ||--o{ PLAN : "parent of"
-  CONTEXT |o--o| SESSION : "grounded Lead (this machine)"
+  CONTEXT |o--o| SESSION : "Manager (one live)"
   PLAN ||--|| SESSION : "Lead"
   PLAN ||--o{ PLAN_REVIEW : "reviewed by"
   PLAN ||--o{ PR : "delivered by"
@@ -383,7 +380,7 @@ erDiagram
 ```
 
 - A Context has many Plans; a Plan has exactly one Context and one Lead Session.
-- A new Plan's Lead is a **fork** of its Context's grounded Lead when there is one (D2), else a fresh Lead that starts by grounding (§3.1).
+- A new Plan's Lead is always a fresh Lead that starts from its brief and the Context's records (§3.1); there is no fork of D2 any more (hs-d92). A Context has at most one live Manager (§3.1).
 - A Plan has one or more PRs once the Lead adds them (R34; none right after `plan new`, and `plan lock` requires one, §3.1). A PR belongs to exactly one Plan.
 - A PR points to **0..1 Pull request** (§2.2): none while `waiting` or `dispatch`, exactly one when `open` or `merged` (hs-d96). A Pull request has 0..n PRs pointing to it: none for the User's other pull requests, which the poller still stores.
 - A PR **needs** zero or more other PRs of the same Plan; the needs graph is acyclic (`dependency_cycle`, exit 3). A PR starts only when every PR it needs is `merged` (§3.8).
@@ -399,11 +396,11 @@ The command surface of PRs; `commands.md` specifies each command in full.
 | Command | Phases | What it does |
 |---|---|---|
 | `plan new <id> --context <c> --title <t> …` | | no `--repo` and no `--base` any more (A12): the Plan has no repo; the Lead starts in the directory `plan new` runs from (usually `~`, §6.4) |
-| `pr add <key> --repo <path> [--base <b>] [--needs <k1,k2>]` | `grounding`, `plan`, `dispatch`, `pr`, `done` | adds a PR, `waiting` (§3.8). In `grounding` and `plan` it is part of the plan fingerprint (§2.3); in `dispatch`, `pr` and `done` it is **appended**, like `job add`, and the engine starts it when its needs are merged (E7). In `pr` and `done` it also moves the Plan back to `dispatch` (§3.1). Refused on an archived Plan (`archived`) |
+| `pr add <key> --repo <path> [--base <b>] [--needs <k1,k2>]` | `grounding`, `plan`, `dispatch`, `deploy`, `done` | adds a PR, `waiting` (§3.8). In `grounding` and `plan` it is part of the plan fingerprint (§2.3); in `dispatch`, `deploy` and `done` it is **appended**, like `job add`, and the engine starts it when its needs are merged (E7). In `deploy` and `done` it also moves the Plan back to `dispatch` (§3.1). Refused on an archived Plan (`archived`) |
 | `pr edit <key> [--repo <path>] [--base <b>] [--needs <k1,k2>]` | `grounding`, `plan` | changes a `waiting` PR; `--needs` replaces the whole list. After the lock: `pr_locked` (exit 3) |
 | `pr cancel <key>` | `grounding`, `plan` | `waiting → cancelled`; refused `pr_in_use` (exit 3) while a Job of the PR is not `cancelled` or a PR that is not `cancelled` needs it |
 | `pr start <key>` | `dispatch` | starts a `waiting` PR whose needs are all `merged` (`pr_not_ready`, exit 3): the retry after a failed start (A9) |
-| `job add --draft` | `plan`, `dispatch`, `pr`, `done` | adds the Job as a `draft` in any phase (§3.2); the Plan review of a later phase approves the drafts (§2.2) |
+| `job add --draft` | `plan`, `dispatch`, `deploy`, `done` | adds the Job as a `draft` in any phase (§3.2); the Plan review of a later phase approves the drafts (§2.2) |
 | `job add --pr <key>` | as `job add` | the Job's PR, selected by the rule of §1.3; the PR must not be `merged` or `cancelled` (`pr_ended`, exit 3) |
 | `pr open --pr <key>`, `pr rebase --pr <key>`, `pr view --pr <key>` | as §7.6 | one PR, selected by the rule of §1.3 |
 | `pr poll [--plan <id>]` | any | the PR poller (hs-d96): one poll of every open pull request of the User, run by engine E5 or a Lead (§7.6); no `--pr` |
@@ -417,43 +414,43 @@ Every transition below is the only way its state changes. Anything else is refus
 
 ### 3.1 Plan phases
 
+The phases are the cpd side of the CPD flow (Context, Plan, Deploy): §3.9 maps each step of the flow to a phase and its commands.
+
 ```mermaid
 stateDiagram-v2
   [*] --> grounding: plan new
   grounding --> plan: plan phase plan
   plan --> dispatch: plan lock
-  dispatch --> pr: pr open of the last PR not yet open
-  pr --> done: the poll sees the last PR merged
-  pr --> dispatch: pr add
+  dispatch --> deploy: pr open of the last PR not yet open
+  deploy --> done: the poll sees the last PR merged
+  deploy --> dispatch: pr add
   done --> dispatch: pr add
 ```
+
+Before migration 0008 the phase `deploy` was called `pr` (hs-d76); old Events and migration entries above 0008 may still say `pr`.
 
 | From | To | Moved by | Preconditions | Event |
 |---|---|---|---|---|
 | (none) | `grounding` | `plan new --context X`, run from any directory: it has no `--repo` (A12) | Context exists; Plan id free | `plan-created`, `session-registered` |
-| `grounding` | `plan` | `plan phase plan` (the Lead) | none | `plan-phase`. If the Context has no grounded Lead on this machine, the same transaction also registers one (below): `session-registered` and `context-grounded`. The pi fork itself runs after the commit |
+| `grounding` | `plan` | `plan phase plan` (the Lead) | none | `plan-phase` |
 | `plan` | `dispatch` | `plan lock` | latest Plan review `approved` for the current plan fingerprint (`plan_not_approved`); at least one `draft` Job; at least one PR that is not `cancelled`, and each such PR has at least one `draft` Job (`pr_empty`); acyclic Dependency graph and acyclic needs graph (`dependency_cycle`); for every PR with no needs, its Lead Branch absent from its repo, and on the remote either absent or reusable, i.e. `origin/<base>` is its ancestor (`branch_exists`, §7.2) | `plan-phase`, and `pr-started` for each PR started. All `draft` Jobs of every PR become `queued` with their fingerprints at once (A8). Every PR with no needs **starts** (§3.8): its Lead worktree is created, reusing or creating and pushing its Lead Branch on the remote (§7.2), and it becomes `dispatch`; every other PR stays `waiting`. `watch` is started if it is not running (§6.6) |
-| `dispatch` | `pr` | `pr open --pr <key>` (§7.6), in the transaction that makes that PR `open` | afterwards every PR that is not `cancelled` is `open` or `merged` (A10) | `pr-opened`, then `plan-phase` |
-| `pr` | `done` | `pr poll` (engine E5), in the transaction that makes a PR `merged` (it sees the pull request `merged`, §7.6; hs-d96, D7) | afterwards every PR that is not `cancelled` is `merged` | `pr-merged`, then `plan-done`, appended once each time the Plan reaches `done` |
-| `pr` or `done` | `dispatch` | `pr add` (§3.8, D1), in the transaction that appends the PR | the Plan is not archived (`archived`); the other preconditions of `pr add` (§3.8) | `plan-phase` `{from: "pr"\|"done", to: "dispatch"}`, then `pr-added` (`appended: true`). `plans.phase = 'dispatch'` and `done_at = NULL` in the same transaction |
+| `dispatch` | `deploy` | `pr open --pr <key>` (§7.6), in the transaction that makes that PR `open` | afterwards every PR that is not `cancelled` is `open` or `merged` (A10) | `pr-opened`, then `plan-phase` |
+| `deploy` | `done` | `pr poll` (engine E5), in the transaction that makes a PR `merged` (it sees the pull request `merged`, §7.6; hs-d96, D7) | afterwards every PR that is not `cancelled` is `merged` | `pr-merged`, then `plan-done`, appended once each time the Plan reaches `done` |
+| `deploy` or `done` | `dispatch` | `pr add` (§3.8, D1), in the transaction that appends the PR | the Plan is not archived (`archived`); the other preconditions of `pr add` (§3.8) | `plan-phase` `{from: "deploy"\|"done", to: "dispatch"}`, then `pr-added` (`appended: true`). `plans.phase = 'dispatch'` and `done_at = NULL` in the same transaction |
 
-**PRs across the phases** (R34, A8–A10). `grounding` and `plan`: the Lead adds, edits and cancels PRs (`pr add`, `pr edit`, `pr cancel`), all `waiting`; they are part of the plan fingerprint (§2.3). `dispatch`: from the lock until every PR that is not `cancelled` is `open` (or already `merged`): the PRs start as their needs are merged (§3.8, E7), their Jobs run, and each is opened by its own `pr open`; the poll (E5) runs in this phase too and handles every `open` PR, so a prerequisite PR merged during `dispatch` starts its dependents. `pr`: every PR is `open` or `merged`; Jobs appended to an `open` PR reach its pull request through `pr rebase --pr <key>`. `done`: every PR that is not `cancelled` is `merged`. `pr` and `done` take appended PRs too (hs-d87): a merged PR can hold a bug or a regression, so `pr add` in `pr` or `done` appends the PR `waiting` and moves the Plan back to `dispatch` (the table above); engine E7 then starts it like any PR appended in `dispatch`, at once when it has no needs. When its last PR is opened the Plan goes `dispatch → pr`, and when the last is merged `pr → done`, as before; each arrival at `done` appends `plan-done` again. A reopened Plan has no Plan review of its own (D4): its appended PRs and Jobs work as appended work does in `dispatch`; only draft Jobs (`job add --draft`, §3.2) are reviewed, by a review of the drafts (§2.2). Only deleting or editing committed (Locked) Jobs stays forbidden. The lock is all or nothing across PRs: if any started PR's worktree or `pre-start` fails, every worktree and branch the lock created is removed, nothing is pushed and nothing in the database changes (§7.2).
+**PRs across the phases** (R34, A8–A10). `grounding` and `plan`: the Lead adds, edits and cancels PRs (`pr add`, `pr edit`, `pr cancel`), all `waiting`; they are part of the plan fingerprint (§2.3). `dispatch`: from the lock until every PR that is not `cancelled` is `open` (or already `merged`): the PRs start as their needs are merged (§3.8, E7), their Jobs run, and each is opened by its own `pr open`; the poll (E5) runs in this phase too and handles every `open` PR, so a prerequisite PR merged during `dispatch` starts its dependents. `deploy`: every PR is `open` or `merged`; Jobs appended to an `open` PR reach its pull request through `pr rebase --pr <key>`. `done`: every PR that is not `cancelled` is `merged`. `deploy` and `done` take appended PRs too (hs-d87): a merged PR can hold a bug or a regression, so `pr add` in `deploy` or `done` appends the PR `waiting` and moves the Plan back to `dispatch` (the table above); engine E7 then starts it like any PR appended in `dispatch`, at once when it has no needs. When its last PR is opened the Plan goes `dispatch → deploy`, and when the last is merged `deploy → done`, as before; each arrival at `done` appends `plan-done` again. A reopened Plan has no Plan review of its own (D4): its appended PRs and Jobs work as appended work does in `dispatch`; only draft Jobs (`job add --draft`, §3.2) are reviewed, by a review of the drafts (§2.2). Only deleting or editing committed (Locked) Jobs stays forbidden. The lock is all or nothing across PRs: if any started PR's worktree or `pre-start` fails, every worktree and branch the lock created is removed, nothing is pushed and nothing in the database changes (§7.2).
 
-**Grounding.** The phase in which the Lead grounds itself on the Context: it reads the rendered Context records, the material the User gives, and interviews the User (cpd 1 requirements §2 "Context", kept). The phase is always entered; a Lead forked from an already grounded Lead (D2) adds to the Context with `context decide`, `note` or `ask` if it learns something, or moves on to `plan` at once. That is how "skipped or appended to" (ADR-0011) is represented: one phase name, `grounding`, and no special case.
+**Grounding.** The phase in which the Lead grounds itself on the Context: it reads its first message (its brief and the rendered Context records), the material the User gives, and interviews the User (cpd 1 requirements §2 "Context", kept). The phase is always entered; a Lead whose brief and records already say enough adds to the Context with `context decide`, `note` or `ask` if it learns something, or moves on to `plan` at once. That is how "skipped or appended to" (ADR-0011) is represented: one phase name, `grounding`, and no special case. `plan phase plan` writes the phase and `plan-phase` and nothing else.
 
-**The Context's grounded Lead** (the Lead's answer to Escalation `contract-core-a1-q1`, consistent with D2 and ADR-0011):
-- `plan new` when the Context **has** a grounded Lead on this machine: forks it (`session fork`, §6.7). The fork's first message is the Plan's brief plus every Context record whose index position is after `grounded_seq`, so later Plans inherit what was recorded after the snapshot.
-- `plan new` when the Context **has no** grounded Lead: starts a fresh Lead whose first message is the brief plus all of the Context's records.
-- At that Plan's `grounding → plan`, if the Context still has no grounded Lead on this machine, this Plan's Lead becomes the source of one. The write transaction of `plan phase plan` (§4.2) holds exactly these writes and no external work:
-  1. `plans.phase = 'plan'`;
-  2. the compare-and-swap `UPDATE contexts SET lead_session = :new, grounded_seq = (SELECT coalesce(max(seq), 0) FROM context_records WHERE context = :context) WHERE id = :context AND lead_session IS NULL`, so two Plans grounding at once produce one grounded Lead;
-  3. only if step 2 changed a row: the new Session row (`role = lead`, `plan = null`, `forked_from` = this Plan's Lead, `state = stopped`, `file` and `tmux_pane` null);
-  4. the Events `plan-phase`, and, only with step 3, `session-registered` and `context-grounded`.
+**`plan new` always starts a fresh Lead** (hs-d92): a Session registered `forked_from` null, whose first message is the Plan header, the full brief and every Context record (`commands.md`). With `--brief-file` it also writes the brief as a Context record of kind `brief` (§2.2, B3-A4).
 
-  If step 2 changed nothing (another Plan grounded the Context first), the transaction writes only the phase and `plan-phase`.
-- **After the commit**, `plan phase plan` creates the window `ctx-<context>` running `cpd session run <new id>` and appends `session-moved` in a second transaction, as `session fork` does (§6.7). So the tmux window exists only after the commit, and the pi fork happens only inside `session run`, which waits until this Plan's Lead is idle (fork-when-idle, §6.7; the Lead that ran `plan phase plan` is still in its turn), then runs `pi --fork` with no first message, so the grounded Lead never takes a turn. pi writes the fork's session file at once, before any message (read in pi 1.2.0's `SessionManager.forkFrom`). Records the source Lead writes between the commit and the fork are in the fork and also after `grounded_seq`; later Plans then receive them twice, which is harmless, and none is missed.
-- **A second `plan new` before that fork exists** forks the grounded Lead as usual (`session fork`, §6.7): the Session is registered, so the command succeeds at once. Its own `session run` waits in step 1 until the grounded Lead's session file exists and the grounded Lead is idle, then forks it.
-- The grounded Lead is never typed into again. Replacing it (re-grounding a Context) is later work, not in this contract.
+**The Context's Manager** (hs-d83..d86, hs-d92, hs-d133; Plan manager B3). The higher-level Lead of a Context: it works at the Epic level, holds the Context's records and Requirements, splits the User's requirements into Plans, starts their Leads and knows where each is. Its memory is the records (records first; the chat is disposable). It acts only when the User talks to it; at each turn start the adapter gives it a digest (§5.3, `commands.md` §15.7). Leads keep asking the User directly; the Manager never answers for the User.
+- **One live Manager per Context**: a Session with `role = manager`, `plan` null, `tier` = `manager_tier` (§8.2, default `O5`), name `<context>-manager`, `cwd` = the caller's directory (usually `~`). A unique index allows one non-archived Manager per Context (§4.4).
+- **`cpd context manager [--context <c>]`** registers it when the Context has none live (`session-registered`), then creates its parked window `ctx-<context>` running `cpd session run <id>` and appends `session-moved` in a second transaction after the commit, as `plan new` starts a Lead (§6.5). When the Manager is `stopped` with no pane, it starts it again on its session file (resume); otherwise it changes nothing. It never moves the chat slot (hs-d103) and is idempotent. An archived Context is refused with `archived`, an unknown one with `context_not_found`.
+- **First message**: `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.` followed by `context show` rendered as markdown (every record).
+- It follows only Events addressed to it (§5.3), so it is never woken by Plan Events (hs-d86).
+
+**The grounded Lead is retired** (hs-d92, hs-d129). Until Plan manager B3 a Context's grounded Lead was a parked fork that every new Plan forked (D2, ADR-0011, R15), created by `plan phase plan` with the Event `context-grounded`. Migration 0010 (§4.5) dropped `contexts.lead_session` and `contexts.grounded_seq` and archived every grounded Lead Session. The Manager replaces its role.
 
 ### 3.2 Job statuses
 
@@ -493,7 +490,7 @@ stateDiagram-v2
 
 A Job stays `running` from the start of its Attempt until it is `merged`, `queued` again, `failed` or `cancelled`; the Attempt's status (§3.4) says whether it is still being worked on or is being merged. Change (R19): there is no Job status `in_review`, because there is no Job-level review.
 
-**Ready.** A `queued` Job whose every Dependency is `merged`, whose PR is `dispatch` or `open` (R34: a Job of a `waiting` PR waits for its PR to start, §3.8), in a Plan whose phase is `dispatch` or `pr`.
+**Ready.** A `queued` Job whose every Dependency is `merged`, whose PR is `dispatch` or `open` (R34: a Job of a `waiting` PR waits for its PR to start, §3.8), in a Plan whose phase is `dispatch` or `deploy`.
 
 **Review Job** (B2). `job add --review` sets its Dependencies to every non-`cancelled` Job of its PR at that moment, so it is Ready only when all of them are `merged` (a `failed` Job of the PR makes the add refuse `needs_unavailable`: retry or cancel it first). Its Attempt is §3.4's "A review Job's Attempt"; it ends `merged` like any Job and its `merged_sha` is the Lead Branch tip.
 
@@ -600,7 +597,7 @@ The concurrency slot is implicit: an Attempt holds one from `starting` until `en
 
 | From | To | Moved by | Event |
 |---|---|---|---|
-| (none) | `stopped` | `plan new`, `session fork`, A3: the Session is registered before pi starts | `session-registered` |
+| (none) | `stopped` | `plan new`, `context manager`, `session fork`, A3: the Session is registered before pi starts | `session-registered` |
 | `stopped` | `idle` | `session state idle`, called by the pi adapter at pi's `session_start` | `session-state` |
 | `idle`, `blocked` | `working` | `session state working`, at pi's `agent_start` (and from `blocked` when the last blocking reason closes while a turn runs) | `session-state` |
 | `working`, `blocked` | `idle` | `session state idle`, at pi's `agent_settled` with pi idle (and from `blocked` when the last blocking reason closes while idle) | `session-state` |
@@ -621,8 +618,8 @@ One per machine (D5). Every `tick_seconds`:
 | E2 | **Liveness:** for every Attempt not `ended` whose driver lock is free (the driver died; §3.4): in `merging`, run the merge recovery R (§7.4), which ends it `merged` when its commits are already on the Lead Branch, and otherwise `cancelled` if a cancel was requested, else `crashed`; in any other status, end it `cancelled` if a cancel was requested, else `crashed`. For every Attempt with a live driver: active time over `attempt_minutes` → set `stop_request = timed_out`; Job `cancel_requested_at` set → set `stop_request = cancelled`. For every Session not `stopped` or with a pane: pane dead or missing (`tmux list-panes -a`) → `stopped` with no pane, and a Lead's dead pane's window is killed, or the chat slot's pane is replaced by the placeholder (§3.6) |
 | E3 | **Scheduling:** for each Ready Job, by `jobs.seq` across all Plans, while a slot is free: verify the fingerprint, take the driver lock, create the Attempt, start its driver with the lock inherited (§3.4). **Back-off:** E3 does not start a Job whose latest `k >= 1` Attempts in a row ended with `driver_pid` null (the driver never started) until `min(2^k, 300)` seconds after the last one's `ended_at`; an Attempt whose driver started resets `k`. So a permanent spawn failure does not start an Attempt at every tick. The `error` Event rule is unchanged (once until the step clears, at most once per `watch.error_repeat_seconds`) |
 | E4 | **Completion**, per PR (R34): for each PR in status `dispatch` with no Job `draft`, `queued` or `running`, at least one `merged`, and `all_merged_at` null: append `all-merged` (`data.pr` = its key) and set the PR's `all_merged_at`. A PR with a `draft` Job (an unapproved batch, §3.2) therefore never opens by itself: it waits until the batch is approved and merged, or cancelled (User, hs-d173, hs-d174, hs-d179). The Lead answers with `pr open --pr <key>`. **Again** (hs-d140): `job add` clears `all_merged_at` of the Job's PR in its own transaction, when it was set (the Job is `queued` or a `draft`, so the PR has a Job that is not `merged` or `cancelled` and E4 waits); when that PR's Jobs are all `merged` or `cancelled` once more, E4 appends `all-merged` again and sets `all_merged_at` again |
-| E5 | **PR poll** (hs-d96, hs-d97): run `cpd pr poll` (no `--plan`) as a subprocess (a process boundary, cpd 1 §11 step 5), `pr_poll_seconds` after the **end** of the previous poll (never overlapping, never more often than one per tick), whether or not any Plan is in `pr`. One poll covers every open pull request of the User (§7.6). When the output's `rate_limit.remaining` is below 100, E5 skips polls until `rate_limit.reset_at` and reports one `error` Event with code `gh_rate_limited` (`details`: `remaining`, `reset_at`); the error clears when polling resumes |
-| E6 | **Contexts:** every `context_sync_seconds`, `context sync` each Context that has a remote (§4.6) |
+| E5 | **PR poll** (hs-d96, hs-d97): run `cpd pr poll` (no `--plan`) as a subprocess (a process boundary, cpd 1 §11 step 5), `pr_poll_seconds` after the **end** of the previous poll (never overlapping, never more often than one per tick), whether or not any Plan is in `deploy`. One poll covers every open pull request of the User (§7.6). When the output's `rate_limit.remaining` is below 100, E5 skips polls until `rate_limit.reset_at` and reports one `error` Event with code `gh_rate_limited` (`details`: `remaining`, `reset_at`); the error clears when polling resumes |
+| E6 | *Removed by Plan manager B1 (hs-a1): Contexts are machine-local, so there is nothing to sync. The number stays.* |
 | E7 | **PR start** (R34, A9): for each Plan in `dispatch`, each PR in status `waiting` whose needs are all `merged` and whose `start_failed_at` is null: start it (§3.8, §7.2). E7 runs after E5 in the same tick, so a PR starts in the tick in which E5's poll sees its last prerequisite merged; it also starts a PR appended in `dispatch` with no needs. A failed start sets `start_failed_at` and appends one `error` Event with code `pr_start_failed` for the Plan's Lead; E7 does not try that PR again, the Lead retries with `cpd pr start <key>` |
 
 `watch` holds `locks/watch.lock` (a second one exits with `watch_running`, exit 3), appends `watch-started` and `watch-stopped`, and never exits on its own: unlike cpd 1, it serves every Plan.
@@ -647,13 +644,13 @@ stateDiagram-v2
 
 | From | To | Moved by | Preconditions | Event |
 |---|---|---|---|---|
-| (none) | `waiting` | `pr add <key> --repo <path> [--base <b>] [--needs <k,…>]`, phase `grounding`, `plan`, `dispatch`, `pr` or `done`; the Plan is not archived (`archived`) | key valid (`invalid_pr_id`) and free in the Plan (`pr_exists`, unless every flag matches: `already`); `--repo` inside a git repository (`not_a_git_repo`); `<base>` exists as `origin/<base>`, or as a local branch when the repo has no `origin` (`base_not_found`); every need is a PR of the Plan (`needs_unknown`) that is not `cancelled` (`needs_unavailable`), and the needs graph stays acyclic (`dependency_cycle`); `refs/heads/cpd/<plan>/<key>` does not exist in the repo, and neither does `refs/heads/cpd/<plan>`, except the legacy branch of a `merged` PR, which is moved first (below); the legacy branch of a PR that is not `merged` is `branch_exists` (§2.1); the move's `git push origin --delete` fails: `push_failed` | in phase `pr` or `done`, `plan-phase` (`pr` or `done` → `dispatch`, §3.1), then `pr-added` |
+| (none) | `waiting` | `pr add <key> --repo <path> [--base <b>] [--needs <k,…>]`, phase `grounding`, `plan`, `dispatch`, `deploy` or `done`; the Plan is not archived (`archived`) | key valid (`invalid_pr_id`) and free in the Plan (`pr_exists`, unless every flag matches: `already`); `--repo` inside a git repository (`not_a_git_repo`); `<base>` exists as `origin/<base>`, or as a local branch when the repo has no `origin` (`base_not_found`); every need is a PR of the Plan (`needs_unknown`) that is not `cancelled` (`needs_unavailable`), and the needs graph stays acyclic (`dependency_cycle`); `refs/heads/cpd/<plan>/<key>` does not exist in the repo, and neither does `refs/heads/cpd/<plan>`, except the legacy branch of a `merged` PR, which is moved first (below); the legacy branch of a PR that is not `merged` is `branch_exists` (§2.1); the move's `git push origin --delete` fails: `push_failed` | in phase `deploy` or `done`, `plan-phase` (`deploy` or `done` → `dispatch`, §3.1), then `pr-added` |
 | `waiting` | `waiting` | `pr edit <key>`, phase `grounding` or `plan` (after: `pr_locked`) | as `pr add` for the fields given | `pr-edited` |
 | `waiting` | `cancelled` | `pr cancel <key>`, phase `grounding` or `plan` (after: `pr_locked`) | every Job of the PR is `cancelled`, and no PR that is not `cancelled` needs it (`pr_in_use`) | `pr-cancelled` |
 | `waiting` | `dispatch` | **the PR's start**: `plan lock` for every PR with no needs; engine E7 for a PR whose needs are all `merged`; or `pr start <key>` by the Lead | Plan phase `dispatch` (or the lock's own transaction; `pr start` in another phase: `illegal_phase`); the PR `waiting` (`pr start` on a started PR: `already`; on a `cancelled` one: `illegal_transition`); every need `merged` (`pr_not_ready`); its Lead worktree created and `pre-start` passed, R35's rules applied to its Lead Branch (§7.2) | `pr-started` |
 | `waiting` | `waiting`, `start_failed_at` set | engine E7, when the start fails (worktree, remote check or `pre-start`, §7.2) | | `error` with code `pr_start_failed` |
-| `dispatch` | `open` | `pr open --pr <key>` (§7.6) | every Job of the PR `merged` or `cancelled`, at least one `merged` (`jobs_not_done`); the Gate passes | `pr-opened`; and `plan-phase` (`dispatch → pr`) when every PR that is not `cancelled` is now `open` or `merged` (§3.1) |
-| `open` | `merged` | `pr poll` (E5, §7.6), in phase `dispatch` or `pr` | the poll sees the PR's pull request `merged` (hs-d96, D7: the open search no longer lists it and the lookup answers `MERGED`) | `pr-merged`; and `plan-done` when every PR that is not `cancelled` is now `merged` (§3.1) |
+| `dispatch` | `open` | `pr open --pr <key>` (§7.6) | every Job of the PR `merged` or `cancelled`, at least one `merged` (`jobs_not_done`); the Gate passes | `pr-opened`; and `plan-phase` (`dispatch → deploy`) when every PR that is not `cancelled` is now `open` or `merged` (§3.1) |
+| `open` | `merged` | `pr poll` (E5, §7.6), in phase `dispatch` or `deploy` | the poll sees the PR's pull request `merged` (hs-d96, D7: the open search no longer lists it and the lookup answers `MERGED`) | `pr-merged`; and `plan-done` when every PR that is not `cancelled` is now `merged` (§3.1) |
 
 `merged` and `cancelled` are terminal. A PR can be cancelled only before the lock (A13); a PR still `waiting` after the lock keeps the Plan in `dispatch` until it starts and opens.
 
@@ -670,6 +667,30 @@ Each step is idempotent: a rerun after a crash between the local rename and the 
 **A failed start** (A9). At `plan lock`, the lock fails as a whole (§3.1). From engine E7, the worktree and branch it created are removed, the PR stays `waiting`, and one transaction sets `start_failed_at` and appends one `error` Event (`code: pr_start_failed`, `details: {pr, step, tail?, log?}`) addressed to the Plan's Lead (§5.3). The Lead fixes the cause (or asks the User) and runs `cpd pr start <key>`, which starts the PR as E7 would; if it fails again, `pr start` returns `setup_failed` (exit 1) with the same details and changes nothing.
 
 **A PR closed without a merge** (A11, hs-d96). The poll sees the pull request `closed` (it leaves the open search and the lookup answers `CLOSED`): one `pr-feedback` with `reasons: ["closed"]` (§5.2); the PR stays `open` in cpd, every PR that needs it stays `waiting`, and the Plan cannot reach `done`. The Lead asks the User what to do. Reopening the pull request on GitHub puts it back in the open search, and the poll continues from the row; it sends no feedback for the reopening.
+
+### 3.9 The CPD flow
+
+**CPD** means Context, Plan, Deploy: the cockpit's three columns, read as past, present and future (hs-n31). The flow below names each stage's steps and maps them to the phases of §3.1 and to commands; it adds no state of its own.
+
+| Stage | Step | cpd phase | What happens | Commands |
+|---|---|---|---|---|
+| Context | Grounding | `grounding` | read the Context's records and the User's material | `context show`, `context note` |
+| Context | Clarifying | `grounding` | the interview: unknowns are minimised | `context ask`, `context decide` |
+| Context | Specifying | `grounding` | Requirements, assumptions and records are written; ends with the move to `plan` | `context decide`, `context note`, `plan phase plan` |
+| Plan | Dividing | `plan` | the work is split into PRs and Jobs | `pr add`, `job add` |
+| Plan | Sequencing | `plan` | order: Dependencies and PR needs; parallel versus serial | `job add --needs`, `pr add --needs` |
+| Plan | Approving | `plan` | the Plan review: the User reads and decides | `plan render`, `cpd_plan_review` (adapter), `plan lock` |
+| Plan | Dispatching | `dispatch` | the engine runs the Jobs; Workers merge them into the Lead Branches | `watch` (engine), `job list` |
+| Deploy | Mechanical checks | end of `dispatch` | all Jobs of a PR are merged; the Gate runs | `pr open` (the Gate, §7.6) |
+| Deploy | PR | `dispatch` → `deploy` | the pull request is opened | `pr open` |
+| Deploy | Reviewing and Monitoring | `deploy` | people, the User's review bot and CI review the open pull request; the engine polls it | `pr poll` (engine E5), `pr view`, Event `pr-feedback` |
+| Deploy | Addressing | `deploy` → `dispatch` → `deploy` | feedback Jobs are appended and run (back to Dispatching), then pushed | `job add --pr`, `pr rebase` |
+
+The Deploy stage runs from the end of `dispatch` (all Jobs merged, `pr open`) and through phase `deploy` until `done`.
+
+**Who does the Context steps.** At the Epic level the Manager does Grounding, Clarifying and Specifying for the Context (§3.1, "The Context's Manager"); each Lead does them for its Plan, in phase `grounding`.
+
+**No local review before the Gate** (hs-d171, supersedes hs-d77). A PR is reviewed after it opens, while CI runs, by people and the User's review bot (Reviewing and Monitoring). Nothing requires a review before the Gate. A final review Job (`job add --review`, §2.2) stays optional (hs-d70, B3).
 
 ## 4. Storage
 
@@ -701,7 +722,7 @@ The **tamper report** (`plan show`'s `tamper` list, `doctor`): the schema check;
 
 ### 4.4 DDL
 
-The schema at the current version, 6. Migration 1 created these tables as they were at version 1 (`core/src/store/migrations/0001.sql`); migrations 2 to 4 (§4.5) brought `plans`, `jobs`, `events` and `context_records` to the shape below and created `prs` and `pr_needs` (R34); migration 5 changed the triggers `plans_phase` and `prs_locked` (hs-d118); migration 6 created `pull_requests` and rebuilt `prs` (hs-d96). Check constraints that need regular expressions are enforced in the binary at the boundary (§2.1), and the database checks shapes and lengths.
+The schema at the current version, 7. Migration 1 created these tables as they were at version 1 (`core/src/store/migrations/0001.sql`); migrations 2 to 4 (§4.5) brought `plans`, `jobs`, `events` and `context_records` to the shape below and created `prs` and `pr_needs` (R34); migration 5 changed the triggers `plans_phase` and `prs_locked` (hs-d118); migration 6 created `pull_requests` and rebuilt `prs` (hs-d96). Migration 7 (file 0007) dropped `contexts.sync_failing` and made `context_records` the only store of Context records (§4.5, §4.6). Check constraints that need regular expressions are enforced in the binary at the boundary (§2.1), and the database checks shapes and lengths.
 
 ```sql
 -- ---------- audit ----------
@@ -735,18 +756,14 @@ CREATE TABLE contexts (
   jira          TEXT,
   created_at    TEXT NOT NULL,
   created_on    TEXT NOT NULL,
-  lead_session  TEXT REFERENCES sessions(id) DEFERRABLE INITIALLY DEFERRED,
-  grounded_seq  INTEGER,
-  sync_failing  INTEGER NOT NULL DEFAULT 0 CHECK (sync_failing IN (0, 1)),
-  archived_at   TEXT,
-  CHECK ((lead_session IS NULL) = (grounded_seq IS NULL))
+  archived_at   TEXT                          -- see migration 0010 (§4.5) for the columns it dropped
 ) STRICT;
 
-CREATE TABLE context_records (               -- index of the git store (§4.6); rebuildable
-  seq          INTEGER PRIMARY KEY AUTOINCREMENT,   -- local index position
+CREATE TABLE context_records (               -- the only store of Context records (§4.6)
+  seq          INTEGER PRIMARY KEY AUTOINCREMENT,   -- position in this machine's database
   context      TEXT NOT NULL REFERENCES contexts(id),
   id           TEXT NOT NULL,
-  kind         TEXT NOT NULL CHECK (kind IN ('decision', 'note', 'question', 'answer', 'plan')),
+  kind         TEXT NOT NULL CHECK (kind IN ('decision', 'note', 'question', 'answer', 'plan', 'brief')),
   at           TEXT NOT NULL,
   machine      TEXT NOT NULL,
   by_session   TEXT,
@@ -760,7 +777,7 @@ CREATE TABLE context_records (               -- index of the git store (§4.6); 
   UNIQUE (context, id),
   CHECK (supersedes IS NULL OR kind = 'decision'),
   CHECK ((question IS NOT NULL) = (kind = 'answer')),
-  CHECK ((plan_id IS NOT NULL) = (kind = 'plan')),
+  CHECK ((plan_id IS NOT NULL) = (kind IN ('plan', 'brief'))),
   CHECK ((plan_id IS NULL) = (plan_machine IS NULL))
 ) STRICT;
 
@@ -770,7 +787,7 @@ CREATE TABLE plans (
   context       TEXT NOT NULL REFERENCES contexts(id),
   title         TEXT NOT NULL CHECK (length(title) >= 1),
   jira          TEXT,
-  phase         TEXT NOT NULL CHECK (phase IN ('grounding', 'plan', 'dispatch', 'pr', 'done')),
+  phase         TEXT NOT NULL CHECK (phase IN ('grounding', 'plan', 'dispatch', 'deploy', 'done')),
   lead_session  TEXT NOT NULL REFERENCES sessions(id) DEFERRABLE INITIALLY DEFERRED,
   created_at    TEXT NOT NULL,
   locked_at     TEXT,
@@ -967,7 +984,7 @@ CREATE TABLE escalations (
 -- ---------- Sessions ----------
 CREATE TABLE sessions (
   id          TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 128),
-  role        TEXT NOT NULL CHECK (role IN ('lead', 'worker')),
+  role        TEXT NOT NULL CHECK (role IN ('manager', 'lead', 'worker')),
   context     TEXT NOT NULL REFERENCES contexts(id),
   plan        TEXT REFERENCES plans(id) DEFERRABLE INITIALLY DEFERRED,
   attempt     TEXT,
@@ -983,11 +1000,13 @@ CREATE TABLE sessions (
   created_at  TEXT NOT NULL,
   archived_at TEXT,
   FOREIGN KEY (plan, attempt) REFERENCES attempts(plan, id) DEFERRABLE INITIALLY DEFERRED,
-  CHECK ((role = 'lead') = (attempt IS NULL)),
-  CHECK (role = 'lead' OR plan IS NOT NULL),
+  CHECK ((role = 'worker') = (attempt IS NOT NULL)),
+  CHECK (role = 'manager' OR role = 'lead' OR plan IS NOT NULL),
+  CHECK (role <> 'manager' OR plan IS NULL),
   CHECK ((state = 'blocked') = (state_label IS NOT NULL))
 ) STRICT;
 CREATE INDEX sessions_plan ON sessions(plan);
+CREATE UNIQUE INDEX sessions_one_manager ON sessions(context) WHERE role = 'manager' AND archived_at IS NULL;   -- migration 0010
 
 -- ---------- Events ----------
 CREATE TABLE events (
@@ -1006,6 +1025,7 @@ CREATE TABLE events (
             'session-registered', 'session-state', 'session-moved', 'session-renamed',
             'context-renamed', 'plan-renamed',
             'context-archived', 'plan-archived', 'session-archived',
+            'session-message',
             'watch-started', 'watch-stopped', 'error')),
   context TEXT    REFERENCES contexts(id),
   plan    TEXT    REFERENCES plans(id),
@@ -1128,7 +1148,7 @@ Legal transitions, in the database (the tables of §3 as data):
 ```sql
 CREATE TRIGGER plans_phase BEFORE UPDATE OF phase ON plans
 WHEN OLD.phase <> NEW.phase AND (OLD.phase || '>' || NEW.phase) NOT IN
-  ('grounding>plan', 'plan>dispatch', 'dispatch>pr', 'pr>done', 'pr>dispatch', 'done>dispatch')
+  ('grounding>plan', 'plan>dispatch', 'dispatch>deploy', 'deploy>done', 'deploy>dispatch', 'done>dispatch')
 BEGIN SELECT RAISE(ABORT, 'illegal_transition'); END;
 
 CREATE TRIGGER prs_status BEFORE UPDATE OF status ON prs
@@ -1265,31 +1285,27 @@ CREATE TRIGGER events_no_delete  BEFORE DELETE ON events  BEGIN SELECT RAISE(ABO
   6. `PRAGMA foreign_key_check` must return no row, else `migration_failed`; set `user_version = 6`; commit; then `PRAGMA legacy_alter_table = OFF` and `PRAGMA foreign_keys = ON`.
 
   The five dropped columns' values stay readable in `prs`' earlier history rows. The tests: a version-5 database with PRs in every status, open ones with `pr_title` set and null, migrates to 6 keeping every other column and migration 5's triggers on `prs`, gets one row per PR with a number, passes `PRAGMA foreign_key_check`, and its schema hash equals that of a fresh database migrated to 6; deleting a row a PR points to is refused, deleting any other is allowed and leaves a `delete` history row.
+- **Migration 0007** (Plan manager B1, hs-d23, hs-a1, A2: Context records only in the database), applied after migration 6; migration 0008 follows it (it renames a Plan phase). It imports from `$CPD_HOME/contexts/<id>/` (`context.json` and `records/*.jsonl`, the git store's format: one JSON record per line with `"v": 1`; a `plan` record may carry the pre-R34 field `plan.repo`, which is accepted and dropped) every Context and every record the database does not hold yet, keyed by Context id and by `(context, id)`, with the same row values the earlier import (`import_all`) wrote, and drops the column `contexts.sync_failing` (the history triggers of `contexts` are generated again, the rule above). A folder that is not a valid store fails the migration, which rolls back entirely (`migration_failed`). After the transaction commits, the code that applied the migration moves each `$CPD_HOME/contexts/<id>/` to `$CPD_HOME/archive/contexts/<id>/`, creating the parents. Nothing is deleted. Rerunning is safe: a folder already moved is absent. An existing destination is never overwritten: the folder stays and the failure is reported loud.
+- **Migration 0008** (Plan manager B1, hs-d76, hs-d131, A4: the Plan phase `pr` is called `deploy`), applied after migration 0007. It renames the phase value in every place that holds it, in one transaction: (1) `plans` is rebuilt as migration 4 rebuilt it (`plans_new` with the §4.4 definition, whose `CHECK` lists `'grounding', 'plan', 'dispatch', 'deploy', 'done'`; copy with every primary key and column kept and `phase = 'pr'` written `'deploy'`; `DROP`, `RENAME`, history triggers generated again), because `ALTER TABLE` cannot change a `CHECK`; (2) `plans_phase` is dropped and recreated with `dispatch>deploy`, `deploy>done` and `deploy>dispatch` in place of `dispatch>pr`, `pr>done` and `pr>dispatch`; no other `CHECK` or trigger lists phases; (3) the `from` and `to` of every `plan-phase` Event's `data` that read `"pr"` are rewritten to `"deploy"`: the append-only guards `events_no_update` and `events_no_delete` are dropped before the rewrite and recreated after it, inside the transaction. Event `text`, Event kind names, the `cpd pr …` command names, the PR statuses and `data.pr` are unchanged. The tests: a database with one Plan in each phase and `plan-phase` Events with `pr` in `from` and `to` migrates keeping every row, id and `Event` `text`, holds `deploy` where it held `pr` and no `pr` phase anywhere, passes `PRAGMA foreign_key_check`, and its schema hash equals that of a fresh database migrated to 0008; `deploy>done` is accepted and `pr>done` refused.
+- **Migration 0009** (Plan manager B2, hs-d92 A4, hs-d133, B2-A3: `cpd session send`), applied after migration 0008. It adds the Event kind `session-message` (§5.2) to the `CHECK` on `events.kind`, keeping every existing kind. SQLite cannot alter a check, so the migration recreates `events` as migration 3 and 4 did: create the new table with the §4.4 definition, copy every row (ids included, so the `AUTOINCREMENT` sequence and every Event cursor stay valid), drop the old table, rename the new one, recreate its indexes (`events_plan`, `events_context`, `events_session`) and triggers (`events_own`, created after the copy, `events_no_update`, `events_no_delete`), in one transaction with the foreign-key handling of migration 4 steps 1 and 5. The adapter's `KINDS` learns the kind. The tests: a database at 0008 with Events of every earlier kind migrates keeping every row and id, passes `PRAGMA foreign_key_check`, accepts a `session-message` Event, and its schema hash equals that of a fresh database migrated to 0009.
+
+- **Migration 0010** (Plan manager B3, hs-d92, hs-d129, hs-d133, B3-A3: the Manager role and the `brief` record; the grounded Lead is retired), applied after migration 0009, in one transaction with the foreign-key handling of migration 4 steps 1 and 5. SQLite cannot alter a check or drop a column that a check names, so each table is rebuilt as migration 4 rebuilt `plans` (new table with the §4.4 definition, copy with every primary key and column kept, `DROP`, `RENAME`, indexes and history triggers generated again):
+  1. `sessions` is rebuilt: `role` accepts `manager`; the checks become those of §4.4 (`(role = 'worker') = (attempt IS NOT NULL)`; a Manager has no Plan); the unique index `sessions_one_manager` (one non-archived Manager per Context) is created;
+  2. `context_records` is rebuilt: `kind` accepts `brief`, and the `plan_id` check requires the Plan reference for `plan` and `brief` alike (§4.4); every `seq` is kept, so the `AUTOINCREMENT` sequence and every cursor stay valid;
+  3. `contexts` is rebuilt without `lead_session` and `grounded_seq` and without the check that tied them;
+  4. **every grounded Lead Session is archived**: each Session with `role = 'lead'` and `plan IS NULL` and `archived_at IS NULL` gets `archived_at` set to the migration's time, with one `session-archived` Event each, named as `session archive` names it (§5.2). Its pane, if any, is not touched here (the grounded Lead was never typed into; a pane that is still alive is closed by engine E2 or by the User). The rows stay, with `plan` null and `role = 'lead'`, as history.
+  The Event kind `context-grounded` stays in the `events` check for history and is no longer appended. Event kinds are unchanged, so `events` is not rebuilt. The error code `grounded_lead` is removed with its last use. The tests: a database at 0009 with a Context that has a grounded Lead (and Plans, records of every kind, Events of every kind) migrates keeping every row and id, passes `PRAGMA foreign_key_check`, archives the grounded Lead with one `session-archived` Event, has no `lead_session` or `grounded_seq` column, accepts a `brief` record and a `manager` Session, refuses a second live Manager for one Context and accepts one after the first is archived, and its schema hash equals that of a fresh database migrated to 0010.
 - No migration from cpd 1's beads Ledgers (R7): running Workflows finish on cpd 1.
 
 ### 4.6 The Context store
 
-Decided by ADR-0012 and the Lead's answer to Escalation `contract-core-a1-q1`: the source of truth for a Context's records is append-only JSONL in a git repository; SQLite holds an index.
+Since Plan manager B1 (hs-d23, hs-a1, hs-d128; migration 0007, §4.5) the database tables `contexts` and `context_records` (§4.4) are the only store of Context records. ADR-0012's git store, its index and its sync are superseded and gone.
 
-```
-$CPD_HOME/contexts/<context>/        a git repository, branch main; remote origin (private) added by the User
-  context.json                       {"v": 1, "id", "title", "jira", "created_at", "created_on"}; written once by context new
-  records/<machine>.jsonl            append-only; only that machine ever writes its file
-  .gitattributes                     records/*.jsonl merge=union
-  .gitignore                         *.tmp
-```
-
-- **One record per line**, the JSON of §2.2 "Context record" with `"v": 1`. Each machine appends only to its own file, so two machines never edit the same file and merges are trivial; the union driver is a second guard. A `plan` record written before R34 carries `plan.repo`: import accepts that one extra field on `plan` records and drops it, and no other unknown field (R34, A12; the store stays `"v": 1`, because old lines remain valid).
-- **A write** (`context decide`, `note`, `ask`, `answer`, and `plan new`'s `plan` record) holds `locks/context-<id>.lock`, validates (`supersedes` names an existing decision, `question` an existing question; else `record_not_found`, exit 3), appends the line, runs `git add` and `git commit -q -m "<kind> <id>: <first 60 characters>"`, then inserts the index row and appends `context-record` in one database transaction. Rendering is on demand (`context show`); no rendered file is stored, so nothing generated can conflict.
-- **The index** (`contexts`, `context_records`) is rebuildable: `context sync` and start-up of `watch` re-import every record file and insert the records whose `(context, id)` is not yet indexed, appending `context-record` for each. A crash between the commit and the index insert is repaired by that import. Import is idempotent.
-- **Sync** (`context sync`, and engine E6 for Contexts with a remote), under the Context lock:
-  1. no `origin` remote: no-op, `{synced: false, reason: "no_remote"}`;
-  2. `git fetch origin`, then `git merge --no-edit origin/main`. Record files merge cleanly. A conflict can only come from `context.json` (two machines created the same id): `git merge --abort`, nothing changes, the result is `context_sync_conflict` (exit 3) naming the files, and the User resolves it by hand;
-  3. `git push origin main`; rejected because the remote moved: repeat from step 2, at most 3 times, then `context_sync_failed` (exit 1);
-  4. import new records into the index (above).
-  
-  A sync failure from E6 appends one `error` Event for the Context and sets `sync_failing`; later failures append nothing until a sync succeeds and clears it. A network failure is a sync failure.
-- **Grounded Lead and index positions are machine-local**: `contexts.lead_session` and `grounded_seq` are not in the git store.
+- **Contexts are machine-local** (hs-a1): a Context and its records exist on the machine that wrote them. Nothing copies them to another machine, so there is no sync, no remote, no conflict and no lock file.
+- **One record per row**, the fields of §2.2 "Context record". A record's id is `<machine>-<letter><n>` (§2.1); existing ids never change.
+- **A write** (`context decide`, `note`, `ask`, `answer`, and `plan new`'s `plan` record) is one database transaction: validate (`supersedes` names an existing decision, `question` an existing question; else `record_not_found`, exit 3), insert the `context_records` row, append `context-record`. `context new` writes only its `contexts` row and appends `context-created`. Rendering is on demand (`context show`); no rendered file is stored.
+- **Positions are machine-local**: `context_records.seq` belongs to this database.
+- **Old stores.** A `$CPD_HOME/contexts/<id>/` folder of an earlier version is imported and archived by migration 0007 (§4.5, §1.4). Nothing reads `archive/contexts/` afterwards.
 
 ## 5. Events
 
@@ -1305,13 +1321,13 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 
 | Kind | Appended when | Set | `data` |
 |---|---|---|---|
-| `context-created` | `context new`; or import of a Context first seen on sync | context | `{title, jira, created_on}` |
-| `context-record` | a record is written or imported (§4.6) | context | `{record, kind, machine, seq}` |
-| `context-grounded` | the Context gets its grounded Lead (§3.1) | context, session | `{seq, forked_from}` |
-| `plan-created` | `plan new` | plan | `{title, jira, lead_session, forked_from, cwd}`; R34: no `repo` or `base` (A12), `cwd` is the directory `plan new` ran from |
-| `plan-phase` | `grounding → plan`, `plan → dispatch` (also moves every draft Job to `queued`), `dispatch → pr` (when the last PR not yet open opens, A10), `pr → dispatch` and `done → dispatch` (`pr add` appends a PR to a Plan that was past `dispatch`, D1; appended before `pr-added`) | plan | `{from, to}` (`from` is `pr` or `done` and `to` is `dispatch` when `pr add` reopens the Plan); at lock also `jobs: [key]` and `prs: [key]` (the PRs it started); at `pr` also `prs: [{key, number, url}]` (every PR not `cancelled`) |
+| `context-created` | `context new` | context | `{title, jira, created_on}` |
+| `context-record` | a record is written (§4.6) | context | `{record, kind, machine, seq}` |
+| `context-grounded` | **no longer appended** (retired by migration 0010, hs-d129; kept for history) | context, session | `{seq, forked_from}` |
+| `plan-created` | `plan new` | plan | `{title, jira, lead_session, forked_from, cwd}` (`forked_from` is always null since Plan manager B3: `plan new` starts a fresh Lead, §3.1); R34: no `repo` or `base` (A12), `cwd` is the directory `plan new` ran from |
+| `plan-phase` | `grounding → plan`, `plan → dispatch` (also moves every draft Job to `queued`), `dispatch → deploy` (when the last PR not yet open opens, A10), `deploy → dispatch` and `done → dispatch` (`pr add` appends a PR to a Plan that was past `dispatch`, D1; appended before `pr-added`) | plan | `{from, to}` (`from` is `deploy` or `done` and `to` is `dispatch` when `pr add` reopens the Plan); at lock also `jobs: [key]` and `prs: [key]` (the PRs it started); at `deploy` also `prs: [{key, number, url}]` (every PR not `cancelled`) |
 | `plan-review` | a Plan review is requested or decided | plan | `{review, fingerprint, status, feedback?, jobs?}`; `jobs: [key]` only when an approval in a phase after `plan` queued the drafts (§3.2): the Jobs it queued |
-| `plan-done` | `pr → done`, when the last PR not `cancelled` is merged; appended each time the Plan reaches `done`, so again after a reopen (D2; cpd 1's `workflow-done`) | plan | `{prs: [{key, number, url, merged_at}]}` |
+| `plan-done` | `deploy → done`, when the last PR not `cancelled` is merged; appended each time the Plan reaches `done`, so again after a reopen (D2; cpd 1's `workflow-done`) | plan | `{prs: [{key, number, url, merged_at}]}` |
 | `job-added` | `job add` | plan, job | `{pr, status, appended, tier, needs, review}`; `status` is `draft` for a draft added in a later phase too, with `appended` true |
 | `job-edited` | `job edit` | plan, job | `{fields: [name]}` |
 | `job-merged` | Job → `merged` | plan, job, attempt | `{sha, tier, cancel_too_late?: true}` |
@@ -1325,7 +1341,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `attempt-nudge` | A5 (the Worker ended its turn without submitting) | plan, job, attempt, session | `{prompt}` |
 | `all-merged` | E4, once per PR completion: again after `job add` appended a Job to a PR whose `all-merged` was sent (§3.7 E4) | plan | `{pr, merged: [key], cancelled: [key]}`; `pr` is the PR's key, the lists its Jobs |
 | `pr-feedback` | the poll (§7.6) wrote a change to the pull request of a PR of this Plan (hs-d96, D7), when any of: its checks became `failed` (from anything else), its review became `changes_requested` (from anything else), its state became `closed` (from `open`). Written in the transaction that writes the change; only the Plan whose PR points to the pull request gets it, and a pull request no Plan owns gets no Event | plan | `{pr, number, url, state, checks, review_decision, reasons}`; `pr` is the PR's key, `state`, `checks` and `review_decision` are the row's, `reasons` is a subset of `["checks_failed", "changes_requested", "closed"]`, in that order. `text`: `PR <key> (#<n>) of Plan <p> needs attention: <reasons>. Read the details with cpd pr view --plan <p> --pr <key>.`, the reasons comma-separated as `checks failed`, `changes requested`, `closed without a merge` |
-| `pr-added` | `pr add` (R34) | plan | `{pr, repo, base, needs: [key], appended}`; `appended` is true in phases `dispatch`, `pr` and `done` |
+| `pr-added` | `pr add` (R34) | plan | `{pr, repo, base, needs: [key], appended}`; `appended` is true in phases `dispatch`, `deploy` and `done` |
 | `pr-edited` | `pr edit` | plan | `{pr, fields: [name]}` |
 | `pr-cancelled` | `pr cancel` | plan | `{pr}` |
 | `pr-started` | a PR's start: `plan lock`, engine E7 or `pr start` (§3.8) | plan | `{pr, repo, base, lead_branch, lead_worktree, base_sha, reused, pushed, by}`; `reused` and `pushed` as R35 (§7.2), `by` is `lock`, `engine` or `pr start` |
@@ -1343,8 +1359,9 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `context-archived` | `context archive` or `unarchive`, for the Context | context | `{archived: bool}` |
 | `plan-archived` | `plan archive` or `unarchive`, or the cascade of the Context's, for each Plan | context, plan | `{archived: bool}` |
 | `session-archived` | `session archive` or `unarchive`, or a cascade, for each Session | context, plan?, session | `{archived: bool}` |
+| `session-message` | `session send` (commands.md §10.13): one message to a Lead or a Manager | context, plan?, session = the target | `{from, text}`; `from` is the sender Session's id or null (the User) |
 | `watch-started`, `watch-stopped` | the engine starts or stops | (none) | `{pid}` |
-| `error` | `watch`, a driver or a sync hit an unexpected failure; codes include `lead_worktree_stale`, `merge_check_failed`, `push_failed` (a failed push of a Lead Branch at a PR's start or at a merge, §7.2, §7.4; `details.pr` names the PR) `cleanup_failed` (`pr poll` kept a merged PR's Lead worktree, or a removal failed, §7.2; `details: {plan, pr, path, reason}`, `reason` `dirty`, `unpushed` or git's stderr tail) `pr_start_failed` (engine E7 could not start a PR, §3.8; `details: {pr, step, tail?, log?}`) and `adapter_missing` (the `session run` wrapper restarted a pi whose adapter reported `stopped` for more than 60 s, §6.7 "Adapter watchdog"; `details: {session, state_since, seconds}`) and `gh_rate_limited` (engine E5 skips polls while GitHub's rate limit is nearly used, §3.7; `details: {remaining, reset_at}`; no Plan, it concerns the User's account) | context?, plan?, … | `{source, code, message, details}` |
+| `error` | `watch` or a driver hit an unexpected failure; codes include `lead_worktree_stale`, `merge_check_failed`, `push_failed` (a failed push of a Lead Branch at a PR's start or at a merge, §7.2, §7.4; `details.pr` names the PR) `cleanup_failed` (`pr poll` kept a merged PR's Lead worktree, or a removal failed, §7.2; `details: {plan, pr, path, reason}`, `reason` `dirty`, `unpushed` or git's stderr tail) `pr_start_failed` (engine E7 could not start a PR, §3.8; `details: {pr, step, tail?, log?}`) and `adapter_missing` (the `session run` wrapper restarted a pi whose adapter reported `stopped` for more than 60 s, §6.7 "Adapter watchdog"; `details: {session, state_since, seconds}`) and `gh_rate_limited` (engine E5 skips polls while GitHub's rate limit is nearly used, §3.7; `details: {remaining, reset_at}`; no Plan, it concerns the User's account) | context?, plan?, … | `{source, code, message, details}` |
 
 **The protocol number** (hs-a4). `cpd --version` reports `protocol`, an integer that starts at **1** and is raised by one whenever an Event kind, a field of an Event's `data` that the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on. So **adding a kind, or a `data` field the adapter reads, raises `protocol`**; so does removing or renaming one. An addition the adapter ignores (a kind its table in §5.3 ignores, a `data` field it does not read) does not. The adapter holds the number it was built for and checks it at start-up and at every restart of its follower (commands.md §15.2); a mismatch is reported once per installed binary, with the code `protocol_mismatch` (§1.2).
 
@@ -1352,7 +1369,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 
 The pi adapter (TypeScript in `pi/`, loaded in every pi session cpd starts, §6.5) follows the Events **for its Session**:
 - for the Session that is Plan P's `lead_session` (Context C): Events with `plan = P`; Events with `plan IS NULL AND context = C`; Events with `session` = itself. A Plan has one Lead for all its PRs (R34): every PR Event (`pr-*`, `all-merged`, `pr-feedback`), and an `error` about a PR such as `pr_start_failed`, sets `plan = P` and goes to that Lead;
-- for any other Session (a Worker, a side fork of a Lead, a grounded Lead): Events with `session` = itself (for a Worker only `attempt-nudge` and `session-renamed` are ever addressed so).
+- for any other Session (a Worker, a side fork of a Lead, a Manager): Events with `session` = itself (for a Worker only `attempt-nudge` and `session-renamed` are ever addressed so). A Manager (`plan` null) therefore follows only Events addressed to it, `session-message` (`cpd session send`, hs-d86), and is never woken by the Events of its Plans. Its Plan Events reach it only as the turn-start digest, which the adapter builds when the User talks to it: after the Context records, a section `Plans:` with one line per Event since the cursor of kinds `plan-created`, `plan-phase`, `pr-opened`, `pr-merged`, `job-failed`, `escalation` and `plan-done` of the Context (`- <at> <plan>: <event text>`), at most 20, then `and <K> more: cpd events list --context <c> --since <id>`; one cursor (Event ids) serves both sections, and nothing is added when nothing is new (B3-A5; `commands.md` §15.7). Turn-start updates show a `brief` record short (§2.2).
 
 It delivers a message with `pi.sendMessage({customType: "cpd", content: text, display: true, details: event}, {triggerTurn, deliverAs: "followUp"})` (cpd 1 §15, kept). It never types into a pane.
 
@@ -1373,6 +1390,7 @@ It delivers a message with `pi.sendMessage({customType: "cpd", content: text, di
 | `job-cancelled` | message, no turn (it may come from the engine, after a request) | |
 | `session-renamed` (own session) | no message, no turn: `pi.setSessionName(name)` and a one-line notice (cpd 1 §10, kept) | same |
 | `attempt-nudge` (own session) | | message, **turn** (replaces cpd 1's `herdr agent prompt`) |
+| `session-message` (own session) | message, **turn** (`Message from <sender>: <text>`), for every Lead and a Manager: an idle Lead starts a turn at once, a working or blocked one gets it after its running turn | |
 | `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | ignored: no message, no turn (they are for the TUI) | ignored |
 | every other kind | ignored | ignored |
 
@@ -1444,7 +1462,7 @@ Every title is drawn reversed: `#[reverse]` before it and `#[noreverse]` after i
 |---|---|---|---|
 | `cpd` (the cockpit; `tmux.cockpit_session`) | `main` | the tree (left), the plan view (centre top), the **chat slot** (centre bottom), the widgets (right); the **StatusBar**, one row across the full width at the bottom; optionally the read-only Worker view beside the chat | `cpd tui` views (the StatusBar runs `cpd tui view statusbar`); the chat slot holds one Lead Session's pane |
 | `cpd` | `park-<label>` (one per Lead Session not in the chat slot) | one pane | a Lead (`cpd session run <id>`), cwd = the Session's `cwd`: for a Plan's Lead the directory `plan new` ran from, not a repo (R34, A12; §6.4) |
-| `cpd` | `ctx-<context>` | one pane | a Context's grounded Lead (`cpd session run <id>`) |
+| `cpd` | `ctx-<context>` | one pane | a Context's Manager (`cpd session run <id>`), started by `cpd context manager` (§3.1) |
 | `cpd-work` (hidden; `tmux.work_session`) | `watch` | one pane | `cpd watch` (D5) |
 | `cpd-work` | `<plan>--<attempt>` (one per Attempt) | one pane, the Worker | `pi` |
 
@@ -1476,7 +1494,7 @@ Every title is drawn reversed: `#[reverse]` before it and `#[noreverse]` after i
 | Who | Where | Started by |
 |---|---|---|
 | A Plan's Lead | the cockpit: a `park-<label>` window, or the chat slot of `cpd:main`; cwd = the directory `plan new` ran from, usually `~` (R34, A12): a Plan may span several repos, so its Lead starts in none of them | `plan new` (§3.1); `session open` resumes a `stopped` one |
-| A Context's grounded Lead | the cockpit, window `ctx-<context>`; never moved into the chat slot (it is never typed into) | `plan phase plan` (§3.1) |
+| A Context's Manager | the cockpit: window `ctx-<context>` while not in the chat slot, else the chat slot; cwd = the directory `context manager` ran from, usually `~`. `context manager` never moves the chat slot (hs-d103); `session open` does | `context manager` (§3.1); `session open` resumes a `stopped` one |
 | A Worker | `cpd-work`, window `<plan>--<attempt>`, its only pane, cwd = Attempt worktree | driver A3 |
 | `cpd watch` | `cpd-work`, window `watch` | `plan lock`, `cpd tui` and `cpd watch --ensure`: each starts it when `locks/watch.lock` is free |
 | Attempt drivers | detached processes (`setsid`), not in tmux; logs in `run/<plan>/logs/` | E3 |
@@ -1490,17 +1508,17 @@ Every title is drawn reversed: `#[reverse]` before it and `#[noreverse]` after i
 | Role | argv (after `pi`) | Environment added |
 |---|---|---|
 | Lead (fresh) | `--model <tiers[L]>:<level of lead_tier> [-e …] --session-id <id> -n <name> -- @<first message file>` | `CPD_HOME`, `CPD_SESSION=<id>`, `CPD_PLAN=<plan>`, `PLANNOTATOR_DATA_DIR=$CPD_HOME/run/<plan>/plannotator`, `PLANNOTATOR_UPDATE_CHECK=0`, `PLANNOTATOR_PORT=<the Plan's port>` (below) and `PLANNOTATOR_REMOTE` from cpd's own environment when set (passed with `-e`, so several Plan reviews can be open at once), `PI_SKIP_VERSION_CHECK=1` |
-| Lead (fork) | `--fork <source file>` added to the above (§6.7) | same |
+| Manager | as a fresh Lead (or, resumed, `--session <file>` and the `[-e …]` arguments, no first message). Model: `manager_tier` (§8.2). First message: `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.` then `context show` as markdown (every record) | `CPD_HOME`, `CPD_SESSION=<id>`, `PLANNOTATOR_UPDATE_CHECK=0`, `PI_SKIP_VERSION_CHECK=1`; no `CPD_PLAN` and no other `PLANNOTATOR_*`, so no port (it has no Plan). `session run` removes every `PLANNOTATOR_*` variable of its own environment (the tmux server's, the caller's) from pi's, so a Manager never inherits a Plan Lead's `PLANNOTATOR_DATA_DIR`. Name `<context>-manager` |
 | Lead (resume) | `--session <file>` and the `[-e …]` arguments, no first message | same |
-| Lead (grounded, no Plan) | as a fresh, forked or resumed Lead (a Context's grounded Lead is a fork with no first message, §3.1) | `CPD_HOME`, `CPD_SESSION=<id>`, `PLANNOTATOR_UPDATE_CHECK=0`, `PI_SKIP_VERSION_CHECK=1`; no `CPD_PLAN` and no other `PLANNOTATOR_*`, so no port (it has no Plan and is never typed into). A side fork with a Plan (`session fork --plan`) is a Lead with that Plan: it gets the Plan's port |
+| A side fork with a Plan (`session fork --plan`) | `--fork <source file>` added to the Lead (fresh) row (§6.7) | a Lead's: it gets the Plan's port |
 | Worker (review Job, B2) | `--fork <lead session file>` added to the Worker's argv below, with the same exclusions (`--approve --no-skills --exclude-tools …`), model, `--session-id`, `-n` and first message; started only after the §6.7 idle wait | same as a Worker |
 | Worker | `--approve --no-skills --exclude-tools ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox [-e …] --model <model:level> --session-id <id> -n "<plan> <job> a<n>" -- "Read <spec path> and follow it exactly. Your attempt id is <attempt>."` | `CPD_HOME`, `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT`, `PI_SKIP_VERSION_CHECK=1` |
 
-A Lead's first message is passed as the absolute path of its file (`run/<plan>/lead-message.md` or `run/<plan>/messages/<session>.md`, §1.4) prefixed with `@`, never as text, because Linux limits one argument to 131072 bytes (MAX_ARG_STRLEN; hs-n111) and pi reads `@` files after `--` into the first user message (pi 1.3.0 `--help`: `pi [options] [--] [@files...] [messages...]`).
+A Lead's or a Manager's first message is passed as the absolute path of its file (`run/<plan>/lead-message.md`, `run/<plan>/messages/<session>.md` or, for a Manager, `run/<context>/manager-message.md`, §1.4) prefixed with `@`, never as text, because Linux limits one argument to 131072 bytes (MAX_ARG_STRLEN; hs-n111) and pi reads `@` files after `--` into the first user message (pi 1.3.0 `--help`: `pi [options] [--] [@files...] [messages...]`).
 
 `PI_SKIP_VERSION_CHECK=1` is in every row (A1). It disables pi's request for the latest version and so its "Update Available" banner; dotfiles pins pi's version (hs-d134, hs-d144). cpd does not use `PI_OFFLINE`: it also stops model catalog refreshes.
 
-- **cwd** (R34, A12): a Plan's Lead runs in the cwd of `plan new` (stored as its Session's `cwd`, also when `plan new` forks the Context's grounded Lead, whose own cwd may differ: unverified that `pi --fork` in another cwd keeps the session intact; a side fork by `session fork` takes its source's cwd); a Worker in its Attempt worktree, in the repo of its Job's PR. The project settings read below (`<cwd>/.pi/settings.json`) are therefore those of that directory.
+- **cwd** (R34, A12): a Plan's Lead runs in the cwd of `plan new` (stored as its Session's `cwd`; a side fork by `session fork` takes its source's cwd); a Worker in its Attempt worktree, in the repo of its Job's PR. The project settings read below (`<cwd>/.pi/settings.json`) are therefore those of that directory.
 - The excluded tools and `--approve` are kept from cpd 1 §12 step 5 and requirements §5.
 - `<adapter>` is the `pi/` package installed beside the binary (§8 `pi_adapter`).
 - **`[-e …]`, the extension arguments.** The candidates are `<adapter>` for every role, plus each `lead_pi_packages` entry for a Lead. cpd passes `-e <candidate>` only for a candidate that the pi settings do not already declare. It reads the `packages` of the global settings `<agent dir>/settings.json` (`PI_CODING_AGENT_DIR`, default `~/.pi/agent`) and of the project settings `<cwd>/.pi/settings.json`; an entry is a source string or an object with `source`. Candidates and entries are compared by package identity, the way pi identifies packages (docs: pi `packages.md`, "Understand scope and identity"):
@@ -1528,8 +1546,8 @@ One `cpd watch` per machine, in `cpd-work:watch`. It is not tied to any Lead's p
 
 `cpd session fork <source> [--plan <id>] [--name <n>] [--message-file <f>]` registers a new Session (`stopped`, `forked_from = source`), creates its parked window running `cpd session run <new id>`, appends `session-registered` and `session-moved`, and returns at once with the new id. The waiting happens in the new pane, not in the command. `cpd session run <id>` (internal) then:
 
-1. **Waits until the source is idle:** its session file exists, **and** its Session state is `idle` or `stopped`, **and** the last `message` entry of its session file is an assistant message with `stopReason` `stop`, **and** the file has not been modified for `fork_quiet_seconds` (default 5). A source that is registered but has no session file yet (a grounded Lead whose own `session run` has not forked yet, §3.1) is waited for, not refused. It checks every 2 seconds and shows `Waiting for the source Lead to finish its turn, then forking it as "<name>"…`. Rule from `fork-lead.sh` (verified 2026-10-14); the Session-state and file-exists conditions are new: the first only makes the check earlier, the second covers a source that has not started.
-2. Runs `pi … --fork <source file> --session-id <id> -n <name> -- @<first message file>` (§6.5); without `--message-file` there is no first message and no `--` (the grounded Lead, §3.1).
+1. **Waits until the source is idle:** its session file exists, **and** its Session state is `idle` or `stopped`, **and** the last `message` entry of its session file is an assistant message with `stopReason` `stop`, **and** the file has not been modified for `fork_quiet_seconds` (default 5). A source that is registered but has no session file yet (a Lead whose own `session run` has not started pi yet) is waited for, not refused. It checks every 2 seconds and shows `Waiting for the source Lead to finish its turn, then forking it as "<name>"…`. Rule from `fork-lead.sh` (verified 2026-10-14); the Session-state and file-exists conditions are new: the first only makes the check earlier, the second covers a source that has not started.
+2. Runs `pi … --fork <source file> --session-id <id> -n <name> -- @<first message file>` (§6.5); without `--message-file` there is no first message and no `--`.
 3. When pi exits: reports `stopped`, prints `pi exited. Press Enter to resume <name> here.`, and on Enter runs `pi --session <file>` again. If the session file already exists when `session run` starts, it resumes instead of forking (idempotent restart, as `fork-lead.sh`).
 
 The fork never copies a half-done turn, and the source is never interrupted.
@@ -1554,7 +1572,7 @@ Forks happen for two reasons only, and neither nests:
 - a **review Job** (B2): its Worker is a fork of the Plan's Lead, started by its driver after the §6.7 idle wait (§3.4). Workers are hidden in `cpd-work` and are not in the tree, so this fork is not drawn;
 - `cpd session fork` (B4), kept for tangents the User starts (a bug, an idea): a Lead Session forked from a Lead.
 
-Both are **siblings**: a forked Session is drawn in the tree **directly under its Context**, after the Context's Plans, a sibling of the Plans' Leads and of its source, and never under a Plan or under the Session it came from (a fork of a fork is drawn the same way). `forked_from` records the source and `plan` the Plan whose Events and `CPD_PLAN` it uses, but neither moves the row in the tree. (A Context's grounded Lead and a Plan's own Lead, forked by `plan new` for D2, are not `session fork` forks and keep their places, §3.1.)
+Both are **siblings**: a forked Session is drawn in the tree **directly under its Context**, after the Context's Plans, a sibling of the Plans' Leads and of its source, and never under a Plan or under the Session it came from (a fork of a fork is drawn the same way). `forked_from` records the source and `plan` the Plan whose Events and `CPD_PLAN` it uses, but neither moves the row in the tree. (A Context's Manager and a Plan's own Lead are not `session fork` forks and keep their places, §3.1.)
 
 *Decided where B1 is silent:* a forked Session's row in the tree is ordered by `created_at` after every Plan Lead row of its Context, and carries no Job counters (the Plan's are on the Plan Lead's row); `commands.md` §13.2 and §17 state it.
 
@@ -1693,10 +1711,10 @@ Each command here works on **one PR** (R34, A14), selected by `--pr <key>` (§1.
   1. the Lead worktree must be clean (`dirty_target`, exit 3);
   2. **the Gate** (R19): `pre-merge` from `<lead worktree>/.config/wt.toml`, run in the PR's Lead worktree on its Lead Branch (§7.3), its whole output in `run/<plan>/logs/pr-<key>.pre-merge.log`. A failure is refused `gate_failed` (exit 3), an error `gate_error` (exit 1), both with the last 60 lines in `details.tail` and the log's path in `details.log`. Nothing is pushed, the PR stays `dispatch`, and the Lead appends fix Jobs to it (`job add --pr <key>`, queued at once, §3.2), then runs `pr open --pr <key>` again once they are Merged;
   3. `git -C <lead worktree> push -u origin <lead branch>`, then `gh pr create --base <base> --head <lead branch> --title <title> --body <summary>` (cpd 1 §11, kept). `<title>` is the Plan's title when the Plan has one PR that is not `cancelled`, else `<plan title> (<key>)`; `<summary>` covers the PR's own Jobs and Merged commits;
-  4. one transaction: the `pull_requests` row of the pull request, from `gh pr create`'s URL (`repo`, `number`, `url`, the title given to `gh`, `draft` 0, `state` `open`, `review_decision` and `checks` `none`, `created_at` and `changed_at` now): inserted, or, when the poll stored it first, kept as the poll wrote it (hs-d96, D6); the PR `open` with `pr_number`, `pr_url`, `pr_opened_at`, `pull_request` (the row's id), `pr-opened`; and, when every PR that is not `cancelled` is now `open` or `merged`, the Plan `dispatch → pr` with `plan-phase` (§3.1).
+  4. one transaction: the `pull_requests` row of the pull request, from `gh pr create`'s URL (`repo`, `number`, `url`, the title given to `gh`, `draft` 0, `state` `open`, `review_decision` and `checks` `none`, `created_at` and `changed_at` now): inserted, or, when the poll stored it first, kept as the poll wrote it (hs-d96, D6); the PR `open` with `pr_number`, `pr_url`, `pr_opened_at`, `pull_request` (the row's id), `pr-opened`; and, when every PR that is not `cancelled` is now `open` or `merged`, the Plan `dispatch → deploy` with `plan-phase` (§3.1).
 
   The hooks come from the tree under test, the Lead Branch's own `.config/wt.toml`, which the tamper check keeps every Attempt from changing (§7.5); this is what fixes v0's stale-hook incident.
-- **`pr poll [--plan <id>]`** (hs-d96, hs-d97, hs-d98, hs-d107; evidence: `docs/research/gh-interface.md`, "Failure behaviour", "Facts", "Recommendation"). One poll of all of the User's open pull requests, any repo on github.com, whether or not any Plan is in `pr`; no phase precondition. Run by engine E5 every `pr_poll_seconds` (§3.7) or by a Lead; under `flock` on `locks/pr-poll.lock`, waiting at most 60 s, else `lock_timeout` (exit 5).
+- **`pr poll [--plan <id>]`** (hs-d96, hs-d97, hs-d98, hs-d107; evidence: `docs/research/gh-interface.md`, "Failure behaviour", "Facts", "Recommendation"). One poll of all of the User's open pull requests, any repo on github.com, whether or not any Plan is in `deploy`; no phase precondition. Run by engine E5 every `pr_poll_seconds` (§3.7) or by a Lead; under `flock` on `locks/pr-poll.lock`, waiting at most 60 s, else `lock_timeout` (exit 5).
   1. **The search** (D1): one `gh api graphql` call, its query text passed inline with `-f query=<text>` (`-f query=@file` sends the literal `@file`; no temporary file): `search(type: ISSUE, query: "is:pr is:open author:@me archived:false sort:created-asc", first: 100) { issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt mergedAt reviewDecision commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } rateLimit { cost remaining resetAt }`. It costs 1 point (measured). Above 100 open pull requests only the oldest 100 are seen. An unknown search qualifier silently returns 0 pull requests, so a test pins the query string, which is a constant.
   2. **The mapping** (D2). `checks` from `statusCheckRollup.state`: `SUCCESS` is `passed`; `FAILURE` and `ERROR` are `failed`; `PENDING` and `EXPECTED` are `pending`; a null rollup or commit is `none` (`failed` can show while other checks still run: accepted). `review_decision` from `reviewDecision`: `APPROVED` is `approved`, `CHANGES_REQUESTED` is `changes_requested`, anything else or null is `none`. `state`: `OPEN` is `open`, `CLOSED` is `closed`, `MERGED` is `merged`.
   3. **The lookup** (D3) for the pull requests of `prs` rows in status `open` that the search did not list (they merged, were closed, or the index lags): one more `gh api graphql` call with one alias per pull request, `p0: repository(owner: "<o>", name: "<n>") { pullRequest(number: <n>) { <the same fields> } }`. `gh` exits 1 when an alias is `NOT_FOUND` although `data` holds the others, so stdout is parsed whatever the exit code; a call with no `data` is `gh_failed`. An answer `OPEN` means "not decided yet" (the search index lags, or the User switched `gh` accounts): nothing changes.
@@ -1748,6 +1766,7 @@ machine = "hs"               # required; names this machine in Context record id
 concurrency = 3              # Attempts not ended, machine-wide (§3.4)
 retry_cap = 2                # automatic Attempts are capped at 1 + retry_cap (§9); Attempts whose driver never started do not count
 lead_tier = "O3"
+manager_tier = "O5"          # the Tier of a Context's Manager (§3.1, hs-d133)
 lead_pi_packages = ["npm:@plannotator/pi-extension@0.28.17", "npm:@juicesharp/rpiv-ask-user-question@2.13.8"]
 pi_adapter = ""              # "" = <dir of the cpd binary>/../share/cpd/pi
 plannotator_ports = "19432-19441"  # inclusive "<a>-<b>", a <= b, else config_invalid; one port per Plan's review (§6.5)
@@ -1769,7 +1788,6 @@ fork_quiet_seconds = 5       # fork-when-idle (§6.7)
 [watch]
 tick_seconds = 5
 pr_poll_seconds = 5             # one GitHub search of every open PR of the User (E5, §3.7, hs-d97); one point a poll, 720 an hour
-context_sync_seconds = 300
 error_repeat_seconds = 600   # the same `error` Event at most once per this (§3.7)
 
 [events]
@@ -1788,6 +1806,7 @@ work_session = "cpd-work"    # the hidden session for Workers and watch
 | `concurrency` | int | `3` | ≥ 1 |
 | `retry_cap` | int | `2` | ≥ 0 |
 | `lead_tier` | Tier | `O3` | valid Tier (§9) |
+| `manager_tier` | Tier | `O5` | valid Tier (§9); the Tier of a Context's Manager (§3.1, hs-d133) |
 | `lead_pi_packages` | [text] | the two packages above | non-empty strings |
 | `pi_adapter` | path | `""` (beside the binary) | must contain `package.json` |
 | `tiers.O`, `tiers.S`, `tiers.H` | text | above | `^[^/\s]+/\S+$` |
@@ -1809,7 +1828,7 @@ Kept from cpd 1 §7, with one change in how pi's catalog is read.
   - the result is cached in `tier_catalog` per pi version and refreshed when `current-version` changes; an unknown model is `tier_model_unknown`.
 - **Ladder** `next(t)`: the same model at effort + 1 if valid; otherwise the next model in `H → S → O` at the lowest valid effort ≥ the current one; otherwise none. Examples: `H1→H2`, `H3→S3`, `S4→S5`, `S5→O5`, `O4→O5`, `O5→none`.
 - **Attempt Tier:** Attempt 1 uses the Job's Tier; each automatic Attempt n uses `next` applied n − 1 times from the Job's Tier. Automatic Attempts are capped at `1 + retry_cap` and stop early when `next` is none. An Attempt whose driver never started (`driver_pid` null, §3.4) is not counted in the cap and does not advance the Tier: the next Attempt uses the same Tier. `job retry --tier <T>` sets an explicit Tier for the next Attempt (`origin = retry`), and the ladder continues from it, with a fresh cap.
-- **Defaults:** Lead `O3` (`lead_tier`); the contract Jobs ran at `O3` (R13). There is no review Tier (R19).
+- **Defaults:** Lead `O3` (`lead_tier`); Manager `O5` (`manager_tier`); the contract Jobs ran at `O3` (R13). There is no review Tier (R19).
 - `cpd tiers` prints `{ok, pi_version, tiers: {O: {model, efforts: [..]}, S: …, H: …}}`.
 
 ## 10. Traceability
@@ -1834,17 +1853,18 @@ Kept from cpd 1 §7, with one change in how pi's catalog is read.
 | The PR poller: one engine poll every 5 s of all the User's open PRs by one GraphQL search through `gh`, stored in `pull_requests`; `pr-feedback` only to the owning Lead; `pr view` for the detail (hs-d65, hs-d72, hs-d96, hs-d97, hs-d98, hs-d107; `docs/research/gh-interface.md`) | §1.3, §2.2 (Pull request, PR), §2.4, §2.5, §3.1, §3.7 E5, §3.8, §4.4 (`pull_requests`, `prs`), §4.5 migration 6, §5.1, §5.2 (`pr-feedback`, `error` `gh_rate_limited`), §7.6 (`pr poll`, `pr view`), §8.2 (`pr_poll_seconds`); `commands.md` §1.2, §1.3, §2, §4.2, §4.3, §9.2, §9.8, §13.2, §17 |
 | B1–B4 forks are siblings under their Context; `job add --review` makes a review Job whose Worker is a fork of the Lead (hs-d70, User) | B1: §2.2 Session, §6.8; `commands.md` §13.2, §17. B2: §1.4, §2.2 Job (Review Job), §3.2, §3.4 (A review Job's Attempt), §4.4 (`jobs.review`), §4.5 (migration 4), §5.2 `job-added`, §6.5, §7.4 (A review Job's merge); `commands.md` §5.1, §5.7, §6.1, §16.1. B3: §2.2 Review Job; the cpd-lead skill is Job `r34-skill`'s. B4: §6.7, §6.8; `commands.md` §10.3 |
 | R14 the Plan starts from `main` after lead-fork's PR | §3.1 (`plan lock` creates the Lead Branch from `origin/<base>`), §7.2 |
-| R15 Contexts follow ADR-0011 and ADR-0012: the grounded Lead is a fork taken at the first Plan's `grounding → plan`, parked and never typed into; later forks get the newer records; the Context store is typed JSONL records in git, indexed by SQLite | §2.2 Context and Context record, §3.1, §4.6, §6.7 |
+| R15 Contexts follow ADR-0011 and ADR-0012 (the grounded Lead is **superseded** by hs-d92, hs-d129: the Manager replaces it, §3.1, §4.5 migration 0010): the grounded Lead is a fork taken at the first Plan's `grounding → plan`, parked and never typed into; later forks get the newer records; the Context store was typed JSONL records in git, indexed by SQLite (superseded by hs-d23 and hs-a1: records in the database, §4.6) | §2.2 Context and Context record, §3.1, §4.6, §6.7 |
 | R17 a Reviewer is a fork of the Lead | **superseded for cpd 2 by R19**: cpd 2 has no Reviewer, so nothing implements it |
 | R19 no Job-level Gate or Reviewer: the Gate runs only at the Plan level, before the PR opens (`pr open`) and before `pr rebase` pushes; the review is the PR's own, on GitHub | §1.1, §1.2, §1.4, §2.2–§2.4, §3.2 (no `in_review`), §3.4 (no review statuses, outcomes or causes; A6–A7 removed; outcome `merged`), §3.6, §3.7, §4.4, §5.1–§5.3, §6.2–§6.5, §7.3, §7.4 (step 6 removed), §7.6, §8.2, §9; `commands.md` §20 lists every changed section |
 | R20 at submit: the mechanical checks plus the quick check, the `pre-commit` hook; no `pre-commit` table means no quick check, with no fallback to `pre-merge` | §7.3 (hook table, `attempt submit` preconditions) |
 | Cockpit parity (User, 2026-10-15): cpd 2's cockpit matches the running cpd 1 cockpit exactly: layout, elements, text, colours, keys, mouse and behaviour | §6.1 (options, border titles, click binding, conditional `pane-died` hook), §6.2 (Worker pane options), §6.3, §6.4 (`session close`); `commands.md` §10.9, §13, §17, §19 amendments 12–21; checklist `cockpit-parity.md` |
 | R36 the StatusBar's left holds action buttons only, its right read-only information; the Event log is the `logs` view, opened by the `≡ logs` button, not part of the Dispatch column | `commands.md` §13.2 (StatusBar, `logs`), §17, §19 amendment 21 |
+| The Manager role (Plan manager B3: hs-d83..hs-d86, hs-d92, hs-d129, hs-d133, hs-d154; B3-A1..A5) | §2.2 Context, Context record (`brief`), Session (`manager`), Archived; §3.1 (The Context's Manager), §3.6; §4.4, §4.5 (migration 0010); §5.2, §5.3 (digest); §6.2, §6.4, §6.5; §8.2 (`manager_tier`) |
 | Plumbing (hs-d139, hs-d140, hs-a3): the merge step skips its rebase when the Lead tip is already in the Attempt; `pr push`; `events follow` ends on store errors and re-execs after an install; `job add` re-arms `all-merged`; short Session ids | §1.2 (`push_rejected`, `session_ambiguous`), §2.2 PR, §3.7 E4, §5.2 `all-merged`, §5.4, §7.4 step 5, §7.6 `pr push`; `commands.md` §1.3, §5.1, §9.9, §10 (every command that takes a Session), §11.2; `docs/implementing.md` |
 | D1 every command prints one JSON value; exit codes | §1.2 |
-| D2 `plan new --context X` forks the Context's grounded Lead | §2.2 Context, §3.1 (grounded Lead), §6.7 |
+| D2 `plan new --context X` forks the Context's grounded Lead (**superseded** by hs-d92: `plan new` starts a fresh Lead, the grounded Lead is retired) | §2.2 Context, §3.1 (The grounded Lead is retired), §4.5 migration 0010 |
 | D3 `workflow` becomes `plan` | §1.3 (`--plan`, `CPD_PLAN`), §2.2 Plan, CONTEXT.md |
 | D4 Events are the single channel | §5, §3.6 (agent states as Events), §6.2 (no state in tmux options) |
 | D5 one `cpd watch` per machine | §3.7, §6.4, §6.6 |
-| ADR-0011 Contexts and Plans; a new Plan forks the Context's grounded Lead | §2.2, §3.1 |
-| ADR-0012 the Context store: typed records in a git repository, rendered for Leads | §2.2 Context record, §4.6 |
+| ADR-0011 Contexts and Plans; a new Plan forks the Context's grounded Lead (**superseded** by hs-d92 for the fork; Contexts and Plans stand) | §2.2, §3.1 |
+| ADR-0012 the Context store: typed records in a git repository, rendered for Leads (**superseded** by hs-d23 and hs-a1: records in the database, Contexts machine-local; Plan manager B1) | §2.2 Context record, §4.6 |

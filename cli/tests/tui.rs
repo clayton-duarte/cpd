@@ -407,9 +407,10 @@ fn tui_respawn_restarts_every_live_view_and_no_lead_or_engine() {
 fn tui_brings_the_last_chat_lead_into_a_new_slot() {
     let env = env();
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
-    // lead-b was in the chat last among Leads with a Plan; ground-c, a
-    // Context's grounded Lead, came later but is never restored there.
-    let sql = "INSERT INTO contexts (id, title, created_at, created_on, lead_session, grounded_seq) VALUES ('ctx', 'Ctx', 't', 'm1', 'ground-c', 1);
+    // lead-b was in the chat last among Leads with a Plan; ground-c, a Lead with
+    // no Plan (what migration 0010 leaves of a grounded Lead), came later but is
+    // never restored there.
+    let sql = "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at) VALUES
            ('lead-a', 'lead', 'ctx', 'pay', 'A', '/', 'O3', 'stopped', 't', 't'),
            ('lead-b', 'lead', 'ctx', 'pay', 'B', '/', 'O3', 'stopped', 't', 't'),

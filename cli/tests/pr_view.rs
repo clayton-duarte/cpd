@@ -70,7 +70,7 @@ fn fx(status: &str) -> Fx {
            VALUES ('acme/pay', 812, '{URL}', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');
          INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{columns})
            VALUES ('pay', 'repo', '/nowhere', 'main', '{status}', 'cpd/pay', {worktree}, cpd_txn(), 't', {started}{values});",
-        phase = if status == "open" { "pr" } else { "plan" },
+        phase = if status == "open" { "deploy" } else { "plan" },
         locked = if status == "open" { "'t'" } else { "NULL" },
     )
     .replace("LEAD", &lead.display().to_string());

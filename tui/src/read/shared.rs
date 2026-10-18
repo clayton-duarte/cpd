@@ -207,8 +207,6 @@ pub struct SessionNode {
     pub place: Place,
     /// It is its Plan's `lead_session`.
     pub plan_lead: bool,
-    /// It is its Context's grounded Lead.
-    pub grounded_lead: bool,
     /// The dot of the tree (§17), derived from the Session's state, its Events and its Plan.
     pub dot: Dot,
     /// When it was archived (contract §4.5); archived Sessions are in the model.
@@ -236,7 +234,6 @@ const SESSION_SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt,
        (SELECT json_extract(e.data, '$.place') FROM events e
          WHERE e.session = s.id AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1),
        EXISTS (SELECT 1 FROM plans p WHERE p.lead_session = s.id),
-       EXISTS (SELECT 1 FROM contexts c WHERE c.lead_session = s.id),
        (SELECT e.id FROM events e WHERE e.session = s.id AND e.kind = 'session-state'
            AND json_extract(e.data, '$.to') = 'idle' ORDER BY e.id DESC LIMIT 1),
        (SELECT e.id FROM events e WHERE e.session = s.id AND e.kind = 'session-moved'
@@ -262,19 +259,19 @@ pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -
         let (state, tier_text, place): (String, String, Option<String>) = (r.get(10)?, r.get(8)?, r.get(14)?);
         let state: State = value_enum("Session state", &state)?;
         let place = place.map_or(Ok(Place::None), |p| Place::parse("Session place", &p))?;
-        let phase: Option<String> = r.get(20)?;
+        let phase: Option<String> = r.get(19)?;
         let phase = phase.map(|p| value_enum::<Phase>(&format!("Plan of Session {session} has phase"), &p)).transpose()?;
         let plan_lead: bool = r.get(15)?;
         out.push(SessionNode {
             dot: Dot::of(DotInputs {
                 state,
                 place,
-                settled: r.get(17)?,
-                seen: r.get(18)?,
+                settled: r.get(16)?,
+                seen: r.get(17)?,
                 plan_lead,
                 phase,
-                review_pending: r.get(21)?,
-                pr_checked: r.get(22)?,
+                review_pending: r.get(20)?,
+                pr_checked: r.get(21)?,
             }),
             role: value_enum("Session role", &role)?,
             context: ContextId::parse(&context).map_err(|_| field("context", &context))?,
@@ -291,8 +288,7 @@ pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -
             created_at: r.get(13)?,
             place,
             plan_lead,
-            grounded_lead: r.get(16)?,
-            archived_at: r.get(19)?,
+            archived_at: r.get(18)?,
             id: session,
         });
     }

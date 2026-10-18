@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by hs-d23 and hs-a1 (records in the database, Contexts machine-local; Plan manager B1)
 ---
 
 # A Context's shared knowledge lives in the Context store
