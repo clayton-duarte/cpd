@@ -1094,3 +1094,34 @@ fn processes_opening_a_new_database_at_once_migrate_it_once() {
     assert_eq!(migrations, 1);
 }
 
+
+#[test]
+fn version_on_an_empty_home_reports_no_store_schema_and_creates_nothing() {
+    let env = TestEnv::new();
+    let out = env.cpd(&["--version"]).ok();
+    assert_eq!(out["schema"], VERSION);
+    assert!(out["store_schema"].is_null(), "{out}");
+    assert!(!home(&env).db().exists());
+    assert!(!home(&env).locks_dir().exists());
+}
+
+#[test]
+fn version_on_a_migrated_home_reports_the_same_schema() {
+    let env = TestEnv::new();
+    drop(open(&env));
+    let out = env.cpd(&["--version"]).ok();
+    assert_eq!(out["schema"], VERSION);
+    assert_eq!(out["store_schema"], VERSION);
+}
+
+#[test]
+fn version_on_a_newer_database_succeeds_and_does_not_change_it() {
+    let env = TestEnv::new();
+    drop(open(&env));
+    raw(&env).pragma_update(None, "user_version", VERSION + 1).unwrap();
+    let before = fs::read(home(&env).db()).unwrap();
+    let out = env.cpd(&["--version"]).ok();
+    assert_eq!(out["schema"], VERSION);
+    assert_eq!(out["store_schema"], VERSION + 1);
+    assert_eq!(fs::read(home(&env).db()).unwrap(), before);
+}

@@ -8,6 +8,7 @@ use clap::error::ErrorKind;
 use clap::{Parser, Subcommand};
 
 use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
 use cpd_core::{ask, attempt, config, context, doctor, events, job, plan, pr, session, watch};
 
@@ -100,7 +101,12 @@ pub fn clap_result(err: clap::Error) -> Result<Output, CpdError> {
     match err.kind() {
         ErrorKind::DisplayHelp => Ok(Output::success(serde_json::json!({ "help": text }))),
         ErrorKind::DisplayVersion => {
-            Ok(Output::success(serde_json::json!({ "version": env!("CARGO_PKG_VERSION") })))
+            let store_schema = cpd_core::store::current_schema(&CpdHome::from_env()?)?;
+            Ok(Output::success(serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "schema": cpd_core::store::VERSION,
+                "store_schema": store_schema,
+            })))
         }
         _ => Err(usage_error(&err, &text)),
     }
@@ -159,6 +165,8 @@ mod tests {
         assert!(fields["help"].as_str().unwrap().contains("context"));
         let Ok(Output::Success(fields)) = run(argv(&["--version"])) else { panic!("version is a success") };
         assert_eq!(fields["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(fields["schema"], cpd_core::store::VERSION);
+        assert!(fields.contains_key("store_schema"));
     }
 
     /// A stand-in for an area's arguments, to test how our parsers' errors
