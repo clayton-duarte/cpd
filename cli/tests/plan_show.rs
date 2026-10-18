@@ -51,9 +51,10 @@ impl Fx {
             other => panic!("no fixture for {other}"),
         };
         let row = if status == "open" {
-            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at,
+                                        mergeable, merge_state)
              VALUES ('acme/api', 7, 'https://github.com/acme/api/pull/7', 'Add api', 0, 'open', 'approved', 'passed',
-                     '2000-01-01T00:00:02.000Z', NULL, '2000-01-01T00:00:03.000Z');"
+                     '2000-01-01T00:00:02.000Z', NULL, '2000-01-01T00:00:03.000Z', 'conflicting', 'dirty');"
         } else {
             ""
         };
@@ -98,7 +99,8 @@ impl Fx {
 /// The pull request row `Fx::pr` writes for an `open` PR, as `plan show` and `plan list` print it.
 fn pull_request() -> Value {
     json!({"repo": "acme/api", "number": 7, "url": "https://github.com/acme/api/pull/7", "title": "Add api", "draft": false,
-           "state": "open", "review_decision": "approved", "checks": "passed", "created_at": "2000-01-01T00:00:02.000Z", "merged_at": null})
+           "state": "open", "review_decision": "approved", "checks": "passed", "mergeable": "conflicting", "merge_state": "dirty",
+           "created_at": "2000-01-01T00:00:02.000Z", "merged_at": null})
 }
 
 fn keys(values: &Value) -> Vec<&str> {
