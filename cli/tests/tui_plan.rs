@@ -294,7 +294,10 @@ fn the_chart_of_a_store_equivalent_to_the_cockpits_fixture_matches_it() {
     sql(&env, &plan_with("dispatch", None, CPD_JOBS));
     let pane = start_view(&env);
     let rows = CPD_CHART.lines().count();
-    let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 2 + rows && s[2].contains("contract-core"));
+    // the screen is captured whenever it is: wait for a frame drawn to the box's right border on every row (a capture may fall in the middle of the first frame, which the view writes in pieces)
+    let screen = screen_when(&env, &pane, "the chart", |s| {
+        s.len() > 2 + rows && s[2].contains("contract-core") && s[2..2 + rows].iter().all(|l| l.ends_with('│') && l.chars().count() == s[1].chars().count()) && s.iter().any(|l| l.ends_with('┘'))
+    });
     assert_eq!(chart_rows(&screen, rows), CPD_CHART.trim_end(), "{}", screen.join("\n"));
     // a Plan of one PR is one box, titled on its top border
     assert!(screen[1].starts_with("  ┌ repo · repo → main · dispatch ─"), "{:?}", screen[1]);
@@ -469,6 +472,23 @@ fn a_pull_request_box_title_ends_in_a_link_to_it_and_a_pending_review_is_a_row_a
     for (url, text) in [("https://github.com/acme/repo/pull/7", "#7 open ↗"), ("http://localhost:19433", "Plan review r2 pending ↗")] {
         assert_eq!(linked_text(&styled, url), text, "{url}: {styled:?}");
     }
+}
+
+#[test]
+fn a_conflict_shows_in_the_box_title_and_clears_with_no_event_within_the_refresh() {
+    let env = env();
+    sql(&env, &plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
+    let pane = start_view(&env);
+    let title = |s: &[String], word: &str| s.iter().any(|l| l.contains(&format!("#7 {word} ↗")));
+    screen_when(&env, &pane, "the open title", |s| title(s, "open"));
+
+    // the poll stored a conflict: no Event is appended for the view to wake on, so only the 2 s re-read shows it
+    sql(&env, "UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 7;");
+    screen_when(&env, &pane, "conflict", |s| title(s, "conflict"));
+
+    // `unknown` is not a conflict
+    sql(&env, "UPDATE pull_requests SET mergeable = 'unknown' WHERE number = 7;");
+    screen_when(&env, &pane, "open again", |s| title(s, "open"));
 }
 
 #[test]

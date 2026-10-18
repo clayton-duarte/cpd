@@ -625,6 +625,17 @@ fn a_plan_carries_its_pr_and_what_the_poll_saw() {
     assert_eq!(state("ship"), None);
 }
 
+#[test]
+fn a_pull_request_is_conflicting_only_when_the_poll_saw_a_conflict() {
+    let (_env, mut store) = fixture();
+    let mut pull = |store: &mut Store, p: &str| read::plan_boxes(store, &plan(p)).unwrap().prs[0].pull.clone().unwrap();
+    assert!(!pull(&mut store, "rel").conflicting, "a fresh row reads `unknown`");
+    for (mergeable, want) in [("conflicting", true), ("mergeable", false), ("unknown", false)] {
+        sql(&mut store, &format!("UPDATE pull_requests SET mergeable = '{mergeable}' WHERE number = 7"));
+        assert_eq!(pull(&mut store, "rel").conflicting, want, "{mergeable}");
+    }
+}
+
 /// A Plan as `plan new` leaves it: in grounding, with its Lead and no `prs` row (hs-n54).
 fn add_plan_without_pr(store: &mut Store) {
     let lead = session_row("l-fresh", "lead", "gamma", "fresh", None, "idle", None, "2026-01-02T00:00:09.000Z");
