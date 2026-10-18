@@ -6,6 +6,7 @@
 //! [`Store::write`]; nothing else writes the database (§4.3).
 
 mod schema;
+mod verdict;
 
 use std::fs::{self, File, OpenOptions};
 use std::ops::Deref;
@@ -27,6 +28,8 @@ use crate::home::CpdHome;
 
 use schema::{LEGACY, Named};
 pub use schema::{HISTORY_TABLES, SCHEMA_HASH, VERSION, canonical_hash};
+use verdict::verdict_with;
+pub use verdict::{Start, Verdict, refuse_user_version, verdict};
 
 /// `PRAGMA application_id` of a cpd 2 database: `0x63706432`, "cpd2" (§4.1).
 pub const APPLICATION_ID: i32 = 0x6370_6432;
@@ -110,7 +113,7 @@ impl Store {
         let mut store = Store::connect(&path, busy_ms).map_err(|e| enrich(e, &path, busy_ms))?;
         store.migrate(home, catalog).map_err(|e| enrich(e, &path, busy_ms))?;
         drop(setup);
-        store.schema = store.check_schema(catalog).map_err(|e| enrich(e, &path, busy_ms))?;
+        store.schema = store.check_schema(home, catalog).map_err(|e| enrich(e, &path, busy_ms))?;
         Ok(store)
     }
 
@@ -162,7 +165,7 @@ impl Store {
     /// `PRAGMA foreign_key_check` then holds before the commit. Both are
     /// restored afterwards, whether the migration committed or not.
     fn migrate(&mut self, home: &CpdHome, catalog: &Catalog<'_>) -> Result<(), CpdError> {
-        if plan(&self.conn, catalog)?.is_none() {
+        if verdict_with(&self.conn, catalog)?.into_plan()?.is_none() {
             return Ok(());
         }
         self.conn.pragma_update(None, "foreign_keys", "OFF")?;
@@ -182,7 +185,7 @@ impl Store {
         let _guard = TxnGuard(&self.txn);
         let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Another process may have migrated since the read in `migrate`.
-        let Some(plan) = plan(&tx, catalog)? else { return Ok(()) };
+        let Some(plan) = verdict_with(&tx, catalog)?.into_plan()? else { return Ok(()) };
         let failed = |name: &str, e: &dyn std::fmt::Display| {
             CpdError::new(ErrorCode::MigrationFailed, format!("Migration {name} of the database failed: {e}."))
                 .with("migration", name)
@@ -265,10 +268,17 @@ impl Store {
     }
 
     /// The schema check (§4.3): every generated history trigger is what the
-    /// generator makes, and the canonical hash is the catalog's pinned one.
-    fn check_schema(&self, catalog: &Catalog<'_>) -> Result<Option<SchemaMismatch>, CpdError> {
+    /// generator makes, and the store has what this binary's migrations
+    /// created: the canonical hash is the catalog's pinned one, or, when the
+    /// store applied additive migrations this binary does not know (inside the
+    /// window, §4.5), the canonical subset of the objects this binary's
+    /// migrations created ([`verdict::subset_mismatch`]).
+    fn check_schema(&self, home: &CpdHome, catalog: &Catalog<'_>) -> Result<Option<SchemaMismatch>, CpdError> {
         if let Some((name, expected, found)) = schema::generated_mismatch(&self.conn)? {
             return Ok(Some(SchemaMismatch { expected, found: found.unwrap_or_else(|| "missing".to_owned()), object: Some(name) }));
+        }
+        if !verdict_with(&self.conn, catalog)?.unknown.is_empty() {
+            return verdict::subset_mismatch(&self.conn, catalog, home);
         }
         let found = canonical_hash(&self.conn)?;
         Ok((found != catalog.schema_hash)
@@ -423,104 +433,6 @@ impl Catalog<'_> {
     const BUILT_IN: Catalog<'static> = Catalog { named: schema::NAMED, schema_hash: SCHEMA_HASH };
 }
 
-/// Where a store starts (§4.5 O1, C1).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Start {
-    /// No schema yet: every legacy migration, then the named ones.
-    Fresh,
-    /// A legacy store at this `user_version`: the rest of the legacy set, the
-    /// conversion (C2), then the named ones.
-    Convert(i64),
-    /// A named store: its unapplied named migrations.
-    Named,
-}
-
-/// What a migrating transaction does.
-struct Plan<'a> {
-    start: Start,
-    /// The binary's named migrations the store has not applied, in name order.
-    pending: Vec<&'a Named>,
-}
-
-/// What a store at `user_version` needs, or `None` when it needs nothing; the
-/// refusals of §4.5 that this binary can decide: a numbered migration it
-/// lacks, a later scheme, a changed migration (R3), an applied migration it
-/// does not know. Read-only; the runner calls it before and inside `BEGIN IMMEDIATE`.
-fn plan<'a>(conn: &Connection, catalog: &Catalog<'a>) -> Result<Option<Plan<'a>>, CpdError> {
-    let version = user_version(conn)?;
-    refuse_user_version(version)?;
-    let all_named = || catalog.named.iter().collect::<Vec<_>>();
-    if version == 0 {
-        return Ok(Some(Plan { start: Start::Fresh, pending: all_named() }));
-    }
-    if version != VERSION {
-        return Ok(Some(Plan { start: Start::Convert(version), pending: all_named() }));
-    }
-    let table: i64 = conn.query_row(
-        "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = 'schema_migrations'",
-        [],
-        |r| r.get(0),
-    )?;
-    if table == 0 {
-        return Err(CpdError::new(
-            ErrorCode::StoreFailed,
-            format!("The database has user_version {VERSION} but no schema_migrations: it is not a store cpd wrote."),
-        ));
-    }
-    let mut stmt = conn.prepare("SELECT name, compat, checksum FROM schema_migrations ORDER BY seq")?;
-    let applied: Vec<(String, String, String)> =
-        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
-    let known = |name: &str| -> Option<&str> {
-        LEGACY.iter().find(|l| l.name == name).map(|l| l.sql).or_else(|| catalog.named.iter().find(|n| n.name == name).map(|n| n.sql))
-    };
-    for (name, _, checksum) in &applied {
-        if let Some(sql) = known(name) {
-            let embedded = schema::sha256_hex(sql);
-            if *checksum != embedded {
-                return Err(CpdError::new(
-                    ErrorCode::MigrationChanged,
-                    format!("The store applied migration {name} with other text than this cpd's: restore the migration's file from origin/main."),
-                )
-                .with("name", name.as_str())
-                .with("recorded", checksum.as_str())
-                .with("embedded", embedded));
-            }
-        }
-    }
-    let unknown: Vec<&str> = applied.iter().map(|(n, ..)| n.as_str()).filter(|n| known(n).is_none()).collect();
-    if !unknown.is_empty() {
-        let floor = applied.iter().rev().find(|(_, compat, _)| compat == "breaking").map(|(n, ..)| n.as_str());
-        return Err(too_new(version, floor, &unknown));
-    }
-    let mut pending: Vec<&Named> =
-        catalog.named.iter().filter(|n| !applied.iter().any(|(name, ..)| name == n.name)).collect();
-    pending.sort_by_key(|n| n.name);
-    Ok((!pending.is_empty()).then_some(Plan { start: Start::Named, pending }))
-}
-
-/// The part of the verdict that `user_version` alone decides (§4.5): `0`, a
-/// legacy version `1..=LEGACY.len()` and [`VERSION`] are the stores this
-/// binary knows the scheme of; a numbered migration it lacks, or a later
-/// scheme, is `store_too_new`. `events follow` calls it on every poll.
-pub fn refuse_user_version(version: i64) -> Result<(), CpdError> {
-    if version > LEGACY.len() as i64 && version != VERSION {
-        return Err(too_new(version, None, &[]));
-    }
-    Ok(())
-}
-
-/// `store_too_new` (§4.5): the store has a breaking migration this cpd does not
-/// know, or a later scheme. `floor` is the store's newest breaking migration.
-fn too_new(version: i64, floor: Option<&str>, unknown: &[&str]) -> CpdError {
-    CpdError::new(
-        ErrorCode::StoreTooNew,
-        format!("The database was migrated by a newer cpd (schema {version}): upgrade cpd."),
-    )
-    .with("user_version", version)
-    .with("floor", floor)
-    .with("unknown", unknown)
-}
-
 /// Records an applied migration in `schema_migrations` (§4.4).
 fn record(
     conn: &Connection,
@@ -658,19 +570,19 @@ mod tests {
 
     // ---------- named migrations (§4.5) ----------
 
-    fn tmp_home() -> (tempfile::TempDir, CpdHome) {
+    pub(super) fn tmp_home() -> (tempfile::TempDir, CpdHome) {
         let dir = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
         (dir, home)
     }
 
-    const ADD_A: Named = Named {
+    pub(super) const ADD_A: Named = Named {
         name: "20300101T0000-add-a",
         compat: schema::Compat::Additive,
         sql: "-- cpd-migration: additive\nALTER TABLE plans ADD COLUMN note_a TEXT;\nALTER TABLE jobs ADD COLUMN extra TEXT;\n",
         run: None,
     };
-    const ADD_B: Named = Named {
+    pub(super) const ADD_B: Named = Named {
         name: "20300102T0000-add-b",
         compat: schema::Compat::Additive,
         sql: "-- cpd-migration: additive\nALTER TABLE plans ADD COLUMN note_b TEXT CHECK (note_b IS NULL OR length(note_b) >= 1);\n\
@@ -683,7 +595,7 @@ mod tests {
     const A_AND_B_HASH: &str = "28c7632ec8b4aeeff452b75e26f28ba696405e460eefe9a02c476a3bbec90651";
 
     /// A store opened with `named` as its migrations, whose pinned hash is the one of a fresh store with them.
-    fn open_named(home: &CpdHome, named: &[Named]) -> Result<Store, CpdError> {
+    pub(super) fn open_named(home: &CpdHome, named: &[Named]) -> Result<Store, CpdError> {
         let probe = tempfile::tempdir().unwrap();
         let probe_home = CpdHome::resolve(Some(probe.path().join("cpd").into()), None).unwrap();
         let pinned = {
@@ -695,7 +607,7 @@ mod tests {
         Store::open_with(home, 5000, &Catalog { named, schema_hash: &pinned })
     }
 
-    fn applied(store: &mut Store) -> Vec<(String, i64, i64)> {
+    pub(super) fn applied(store: &mut Store) -> Vec<(String, i64, i64)> {
         store
             .read(|c| {
                 let mut stmt = c.prepare("SELECT name, seq, converted FROM schema_migrations ORDER BY seq")?;
@@ -705,7 +617,7 @@ mod tests {
             .unwrap()
     }
 
-    fn plan_columns(store: &mut Store) -> Vec<String> {
+    pub(super) fn plan_columns(store: &mut Store) -> Vec<String> {
         store
             .read(|c| {
                 let mut stmt = c.prepare("SELECT name FROM pragma_table_info('plans') ORDER BY cid")?;
@@ -756,7 +668,7 @@ mod tests {
     }
 
     #[test]
-    fn a_store_that_applied_a_migration_this_binary_lacks_is_store_too_new() {
+    fn a_store_whose_floor_this_binary_lacks_is_store_too_new() {
         let (_dir, home) = tmp_home();
         let breaking = Named { compat: schema::Compat::Breaking, ..ADD_B };
         drop(open_named(&home, &[ADD_A, breaking]).unwrap());
@@ -765,13 +677,10 @@ mod tests {
         assert_eq!(err.details()["user_version"], VERSION);
         assert_eq!(err.details()["floor"], ADD_B.name);
         assert_eq!(err.details()["unknown"], serde_json::json!([ADD_A.name, ADD_B.name]));
-        // An additive one too: the window is a later change.
+        // An additive one is inside the window (§4.5): the binary opens it (verdict.rs tests).
         let (_dir, home) = tmp_home();
         drop(open_named(&home, &[ADD_A]).unwrap());
-        let err = Store::open(&home, 5000).err().unwrap();
-        assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
-        assert_eq!(err.details()["floor"], LEGACY[LEGACY.len() - 1].name, "the legacy 0006-pr-poller is the newest breaking migration");
-        assert_eq!(err.details()["unknown"], serde_json::json!([ADD_A.name]));
+        assert!(Store::open(&home, 5000).is_ok());
     }
 
     #[test]

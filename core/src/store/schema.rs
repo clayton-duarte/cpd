@@ -540,7 +540,7 @@ fn table_parts(sql: &str) -> Option<TableParts> {
 /// object but the generated history triggers, a table as
 /// `["table", name, columns, constraints, options]`, any other as
 /// `[type, name, sql]`.
-fn canonical_entries(conn: &Connection) -> Result<Vec<Value>> {
+pub(super) fn canonical_entries(conn: &Connection) -> Result<Vec<Value>> {
     let generated: std::collections::HashSet<String> = history_tables()
         .flat_map(|(t, no_delete)| {
             [format!("{t}_hist_ins"), format!("{t}_hist_upd")].into_iter().chain(no_delete.then(|| format!("{t}_no_delete")))
