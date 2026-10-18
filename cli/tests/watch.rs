@@ -395,6 +395,37 @@ fn ensure_starts_the_engine_in_the_work_session_once() {
     assert_eq!(String::from_utf8_lossy(&windows.stdout), "watch\n");
 }
 
+/// engine-W10: both calls probe the lock before either engine has taken it (the fake `cpd` is slow to start), so both create
+/// a window and one engine loses the lock (`watch_running`, its pane dies). Both calls succeed, one engine runs, no dead window.
+#[test]
+fn two_concurrent_ensures_both_succeed_and_leave_one_engine() {
+    let fx = fx("");
+    fx.env.fake("cpd", &format!("sleep 1; exec '{CPD}' \"$@\""));
+
+    let spawn = || {
+        common::spawn(fx.env.command(CPD).args(["watch", "--ensure"]).stdout(Stdio::piped()).stderr(Stdio::piped())).unwrap()
+    };
+    let (first, second) = (spawn(), spawn());
+    let runs: Vec<Run> = [first, second]
+        .into_iter()
+        .map(|child| {
+            let out = child.wait_with_output().unwrap();
+            Run {
+                exit: out.status.code().expect("cpd was killed by a signal"),
+                stdout: String::from_utf8(out.stdout).unwrap(),
+                stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+            }
+        })
+        .collect();
+    for run in &runs {
+        run.ok();
+    }
+    assert_eq!(runs.iter().filter(|r| r.json()["started"] == true).count(), 1, "{runs:?}");
+    assert_eq!(fx.count("watch-started"), 1);
+    let panes = fx.env.tmux(&["list-panes", "-a", "-F", "#{session_name}:#{window_name} #{pane_dead}"]);
+    assert_eq!(String::from_utf8_lossy(&panes.stdout), "cpd-work:watch 0\n");
+}
+
 #[test]
 fn ensure_fails_when_the_engine_does_not_start() {
     let fx = fx("");
