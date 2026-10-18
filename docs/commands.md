@@ -141,6 +141,7 @@ Free text (Job `--title`, `--reason`, Context record text, questions and answers
 | `plan lock` | Lead | yes | §3.1, §7.2 |
 | `plan rename` | User (TUI) | yes | §2.2 |
 | `plan archive`, `unarchive` | User (TUI) | yes | §2.2 |
+| `plan cancel` | Lead, User | yes | §2.2, §3.2, §3.8 |
 | `job add`, `edit`, `cancel`, `retry` | Lead | yes | §3.2 |
 | `job dispatch` | Lead | yes | §3.4 |
 | `job list`, `job show` | Lead, TUI | no | |
@@ -714,6 +715,40 @@ Effects: **rows**, one transaction: `archived_at = NULL` on the Plan and each ar
 ```
 
 Idempotent: yes; not archived: `"already": true`, nothing written.
+
+### 4.12 `plan cancel`
+
+```
+cpd plan cancel [--plan <id>] [--reason <text>]
+```
+
+Abandons a Plan (E1, hs-d203): cancels every Job that is not merged, closes the Plan's pull requests that are not merged, closes its Lead and its forks, frees its plannotator port and archives it. Branches and worktrees are not removed by it; they go by the normal clean-up. `--reason` is kept in the Events' `reason`; default `plan cancelled`. The Plan may be in any phase, `done` included (nothing is left to cancel; it is then archived).
+
+| Precondition or failure | Code | Exit |
+|---|---|---|
+| the Plan exists | `plan_not_found` | 4 |
+| neither the Lead nor a side fork is in the chat slot; `details.next` = `cpd session park` | `in_chat_slot` | 3 |
+| no Plan review is `pending` (the User decides it first); `details.blockers` as `plan archive` | `archive_blocked` | 3 |
+| every running Attempt has ended within 60 s of its stop request (below); `details.attempts` lists those still running | `cancel_timeout` | 5 |
+| each `gh pr close` succeeds, or its pull request is already closed or merged; `details` is `{argv, exit, stderr}` | `gh_failed` | 1 |
+
+A Session `working` or `blocked` and a Job `running` do not block (unlike `plan archive`): the command stops them. The caller's own Lead is in that case.
+
+Effects, in this order; each step is idempotent, so a rerun after any failure continues where it stopped:
+1. **Check** the preconditions above that need no write.
+2. **Jobs**, as `job cancel` (§5.3) for every Job not `merged` and not `cancelled`, with the reason: `draft`, `queued` and `failed` become `cancelled` with **Event** `job-cancelled`; a `running` Job gets `job-cancel-requested`, and engine E2 or the driver ends its Attempt `cancelled` at the next safe point (contract §3.4). The command then waits, polling, up to 60 s until no Attempt of the Plan is not `ended`. Dependents stay blocked, as for `job cancel`; they are cancelled themselves by this step.
+3. **Escalations:** each `open` Escalation of the Plan becomes `expired`, **Event** `escalation-expired`.
+4. **Pull requests:** for each PR of the Plan with status `open` whose pull request is not `merged`, `gh pr close <number> --repo <owner/repo>`. The PR rows keep their status (`open`; PR statuses never end this way, contract §3.8); the next `pr poll` reads the closure and appends no `pr-feedback` for an archived Plan. A `waiting` PR has no pull request: nothing. A `merged` PR is never touched.
+5. **tmux:** close every live Lead pane as `session close` does (§10.9).
+6. **Rows**, one transaction: `archived_at` = now on the Plan and its Sessions, with **Event** `plan-archived` `{archived: true}` and `session-archived` per object, as `plan archive` (§4.10). The Plan's port is free from here (contract §6.5).
+
+No new Event kind and no schema change. The command's own Events are the existing ones named above.
+
+```json
+{"ok": true, "cancelled": ["api", "ui"], "closed_prs": [{"pr": "ui", "number": 813}], "closed": ["%41"], "archived": [{"kind": "plan", "id": "cpd2"}, {"kind": "session", "id": "596d007f-…"}]}
+```
+
+Idempotent: yes. An archived Plan with nothing left to cancel: `"already": true`, nothing written. A rerun after a failure repeats steps 2 to 6 on what is left; Jobs already `cancelled` and pull requests already closed are skipped.
 
 ## 5. `job`
 
@@ -2061,9 +2096,24 @@ Decision hs-d141 (research: `docs/research/pi-reload.md`), superseding its first
 3. the adapter's own state (§15.4) is `idle`: not `working`, and not `blocked`, so no Worker question, Plan review or `herdr:blocked` signal is open (pi's `isIdle()` does not see dialogs, and a reload closes an open dialog and loses its answer);
 4. `ctx.ui.getEditorText() === ""` (no unsent typing).
 
-**Retries.** A refused reload (the guard fails at the trigger or in the handler) does nothing and is **not** handled: the recorded identity stays the old one, so the next tick checks the guard again and triggers again; there is no limit and no backoff beyond the poll interval. At most one trigger is in flight.
+**Retries.** A refused reload (the guard fails at the trigger or in the handler) does nothing and is **not** handled: the recorded identity stays the old one, so the next tick checks the guard again and triggers again; there is no limit and no backoff beyond the poll interval. At most one trigger is in flight. **At settle:** a Lead that gets a message every few seconds is idle for gaps shorter than the 5 s interval, so no tick may ever see it idle (`docs/research/pi-reload.md` "Why a busy Lead did not reload"). So the adapter also decides at pi's `agent_settled` (pi has no automatic work left), after its own state is updated: for a package that **already passed pre-validation** and is still the directory's identity it runs the same guard and, when it passes, the same trigger. It adds no guard, does not shorten the stability or validation steps (a directory not yet validated waits for its ticks), and keeps one trigger in flight.
 
-**Logged.** Nothing is delivered to the Session and no `cpd` command is run for it. The adapter notifies with `ctx.ui.notify` only when it reloads (`cpd: adapter updated, reloading`); a refusal is silent. A reload that fails (pi's "Reload failed: …") is pi's own message.
+**Logged.** Nothing is delivered to the Session and no `cpd` command is run for it. The adapter notifies with `ctx.ui.notify` when it reloads (`cpd: adapter updated, reloading`); a reload that fails (pi's "Reload failed: …") is pi's own message. `ctx.ui.notify` is not written to the session file, so the notice is not evidence afterwards: the log below is.
+
+**Log** (hs-d141, finding of `docs/research/pi-reload.md` "Why a busy Lead did not reload"). Every reload decision is one line appended to `$CPD_HOME/run/adapter/<session id>.log` (`CPD_HOME` default `~/.cpd`, `CPD_SESSION`; created with its directory at the first line; one file per Session, never rotated, small because a waiting or refusing line is not repeated while it is the last one). A line is `<ISO-8601 UTC time> <text>`; the texts, in the order they occur:
+- `start: <reason>`: the adapter started (`session_start`; `reload` after a reload, `startup` or `new`, `resume`, `fork` otherwise); `poll: watching <dir> (<identity>) every <ms> ms`: the poll began, with the identity it will compare with;
+- `poll: the adapter directory is missing (an install in progress); waiting`;
+- `poll: the identity changed <old> -> <new>; not stable yet` (also `changed again`);
+- `poll: <identity> is stable; validating the package`, then `poll: pre-validation passed` or `poll: pre-validation failed: <reason>` (the reason of the visible error above);
+- `poll: refused: busy|pending|state|typing|not active`: the guard refused at a tick or at a settle;
+- `poll: trigger sent (/cpd-reload-after-install, at a tick|nudge)`;
+- `command: refused: busy|pending|state|typing`: the handler's guard refused; `command: reloading`; `command: ctx.reload() returned` (a successful reload is followed by `stop` and the new instance's `start: reload`, so this line may come after them); `stop`: `session_shutdown`;
+- `poll: not reloaded <n> s after the package validated; told the User`;
+- `poll: failed: <message>`.
+
+A line that cannot be written is notified once per run (`ctx.ui.notify`, level `error`, `cpd: cannot write the reload log: …`; not a message, so no turn) and never stops a reload.
+
+**A long refusal.** When a package that passed pre-validation has not been reloaded **more than 10 minutes** after it passed (the guard refused every time; a constant of the adapter), the adapter notifies the User **once per install**: `cpd: a new adapter is installed; reload when free (/reload)`. A package that does not validate never produces it (`/reload` would be wrong for it; it has its own visible error). The wrapper's restart (below) is the fallback after the same refusal.
 
 **Pre-validation** (hs-d141, the User's decision of 2026-10-18; research finding A, `docs/research/pi-reload.md` "Live verification"). A failed load leaves pi running with no adapter and no message, so the adapter proves the new package loads **before** it triggers the command. At each poll, once the identity differs from the recorded one, in this order; the first that fails ends the poll with no reload:
 1. **Stable.** The new identity `(dev, ino, mtimeMs)` is equal on **two consecutive polls** (the install has finished; the first poll that sees a new identity only remembers it). `ENOENT` clears the remembered identity.

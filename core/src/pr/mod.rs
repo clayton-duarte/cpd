@@ -43,6 +43,8 @@ use crate::plan::fingerprint::PrSpec;
 use crate::store::Store;
 use row::{PlanRow, PrRow};
 
+pub use gh::close_pr;
+
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Add a PR to the Plan (§9.4)
