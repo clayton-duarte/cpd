@@ -61,7 +61,7 @@ fn due(stale: bool, since: Duration) -> bool {
 }
 
 /// The view redraws at least this often, for the spinner (one frame: palette.rs); a redraw reads nothing from the store.
-const FRAME: Duration = Duration::from_millis(250);
+const FRAME: Duration = Duration::from_millis(100);
 
 /// The blank space around the chart's content, inside the canvas the view scrolls over: at scroll (0, 0) nothing of the
 /// chart touches the pane's edges, and scrolled the chart reaches them.

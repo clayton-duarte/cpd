@@ -14,6 +14,7 @@ use common::{CPD, SLEEP_SECONDS, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
+use cpd_tui::palette::SPINNER;
 use serde_json::json;
 
 /// The expected chart of the store `cpd_jobs()` makes: the fixture of the cockpit of branch `cpd/cpd-ui`
@@ -123,12 +124,12 @@ fn screen_when(env: &TestEnv, pane: &str, what: &str, ok: impl Fn(&[String]) -> 
     last
 }
 
-/// The chart rows inside the one PR box of a screen: below one row of padding and the box's top border, indented by two columns of padding and the box's left border; the box's right border is left out. A running pill spins on the clock (`◐◓◑◒`): its frame is whatever the screen was captured at, so every frame reads as `◐`.
+/// The chart rows inside the one PR box of a screen: below one row of padding and the box's top border, indented by two columns of padding and the box's left border; the box's right border is left out. A running pill spins on the clock (`SPINNER`): its frame is whatever the screen was captured at, so every frame reads as the first.
 fn chart_rows(screen: &[String], rows: usize) -> String {
     screen[2..2 + rows]
         .iter()
         .map(|l| {
-            let inside: String = l.chars().skip(3).map(|c| if "◓◑◒".contains(c) { '◐' } else { c }).collect();
+            let inside: String = l.chars().skip(3).map(|c| if SPINNER[1..].iter().any(|g| g.starts_with(c)) { SPINNER[0].chars().next().unwrap() } else { c }).collect();
             let inside = inside.trim_end();
             inside.strip_suffix('│').unwrap_or_else(|| panic!("no right border: {l:?}")).trim_end().to_owned()
         })
@@ -374,18 +375,21 @@ fn each_job_status_has_its_icon_and_a_cancelled_job_is_not_drawn() {
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 13 && s[2].contains("draft"));
     // a column is as wide as its widest pill (`✗ failed │S3│a3`); the tier, and `aN` from the second Attempt, sit at its right
-    let want = "
+    let want = format!(
+        "
   ◌ draft     │S3
 
   ○ queued    │S3
 
-  ◐ running   │S3
+  {} running   │S3
 
   ⇥ merging   │S3
 
   ✓ merged    │S3
 
-  ✗ failed │S3│a3";
+  ✗ failed │S3│a3",
+        SPINNER[0]
+    );
     assert_eq!(chart_rows(&screen, 11), want.strip_prefix('\n').unwrap(), "{}", screen.join("\n"));
     assert!(screen.iter().all(|l| !l.contains("gone")), "a cancelled Job is not drawn:\n{}", screen.join("\n"));
 }
@@ -611,7 +615,16 @@ fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_re
     sql(&env, &in_chat("ctx", "side", "lead-side"));
     screen_when(&env, &pane, "the other Plan", |s| s.len() > 2 && s[2].contains("other"));
     sql(&env, &in_chat("ctx", "ship", "lead-ship"));
-    let back = screen_when(&env, &pane, "the first Plan again", |s| s.iter().any(|l| l.contains(" j")));
+    // a frame reaches the pane in more than one write (the view's stdout flushes every 1024 bytes), so a capture can
+    // show the first rows of the chart and nothing below: wait for the whole frame, and compare the last capture
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let back = loop {
+        let now = screen(&env, &pane);
+        if now == scrolled || Instant::now() >= deadline {
+            break now;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
     assert_eq!(back, scrolled, "{}", back.join("\n"));
     assert_ne!(back, top);
     assert!(!selected(&tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane])), "a pill is selected");
