@@ -7,10 +7,11 @@ use std::collections::BTreeMap;
 
 use cpd_core::error::CpdError;
 use cpd_core::events::highest_id;
-use cpd_core::ids::ContextId;
+use cpd_core::ids::{ContextId, SessionId};
+use cpd_core::inbox::model::{self, Filter, Item, State};
 use cpd_core::store::Store;
 
-use super::dot::Dot;
+use super::dot::{self, Dot};
 use super::shared::{PlanHead, SessionNode, id, plan_heads, sessions};
 
 /// Every Context of the machine, by id.
@@ -19,6 +20,9 @@ pub struct Tree {
     pub contexts: Vec<ContextNode>,
     /// The highest Event id in this snapshot's read transaction (§17).
     pub events_cursor: i64,
+    /// The Inbox's open, visible items (not snoozed, not dismissed) in the order of `cpd inbox list`, as of this
+    /// snapshot (§17). Every dot of the tree comes from them.
+    pub inbox: Vec<Item>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,7 +37,8 @@ pub struct ContextNode {
     pub archived_at: Option<String>,
     /// Its Plans, oldest first.
     pub plans: Vec<PlanNode>,
-    /// The dot of its row: the greatest dot of its live (not archived) Sessions, `Stopped` with none (§17).
+    /// The dot of its row: a `●` only from its Manager Session's own items, else the most urgent glyph of its live
+    /// (not archived) Sessions, `Stopped` with none (§17).
     pub dot: Dot,
 }
 
@@ -45,10 +50,6 @@ pub struct PlanNode {
 }
 
 impl PlanNode {
-    pub fn needs_you(&self) -> bool {
-        self.head.needs_you(&self.sessions)
-    }
-
     /// The Lead of the Plan, which is in the list unless the database lost it.
     pub fn lead(&self) -> Option<&SessionNode> {
         self.sessions.iter().find(|s| s.plan_lead)
@@ -68,10 +69,6 @@ impl ContextNode {
             self.plans.iter().flat_map(|p| p.sessions.iter().filter(|s| !s.plan_lead).map(move |s| (p, s))).collect();
         forks.sort_by(|a, b| a.1.created_at.cmp(&b.1.created_at)); // stable
         forks
-    }
-
-    pub fn needs_you(&self) -> bool {
-        self.plans.iter().any(PlanNode::needs_you)
     }
 }
 
@@ -96,7 +93,22 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
             questions.insert(context, n);
         }
 
-        let leads: Vec<SessionNode> = sessions(conn, "s.role = 'lead'", &[])?;
+        // Read first: the read transaction is one snapshot, so the items and the Sessions agree.
+        let now: String = conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?;
+        let inbox = model::list(conn, &Filter { context: None, state: State::Visible { now } })?;
+
+        let mut managers: BTreeMap<String, SessionId> = BTreeMap::new();
+        let mut stmt = conn.prepare("SELECT context, id FROM sessions WHERE role = 'manager' AND archived_at IS NULL")?;
+        for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+            let (context, session) = row?;
+            managers.insert(context, id("Manager Session id", &session, SessionId::parse)?);
+        }
+
+        let mut leads: Vec<SessionNode> = sessions(conn, "s.role = 'lead'", &[])?;
+        for s in leads.iter_mut().filter(|s| !s.is_archived()) {
+            // An archived row keeps its glyph and takes no item (§17).
+            s.dot = Dot::of(s.state, dot::urgency(&inbox, &s.id, s.plan.as_ref().filter(|_| s.plan_lead)));
+        }
         let mut heads = plan_heads(conn, None)?;
 
         let mut stmt = conn
@@ -116,24 +128,33 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
                     PlanNode { head, sessions: own }
                 })
                 .collect::<Vec<PlanNode>>();
-            let dot = plans
-                .iter()
-                .flat_map(|p| &p.sessions)
-                .filter(|s| !s.is_archived())
-                .map(|s| s.dot)
-                .max()
-                .unwrap_or(Dot::Stopped);
+            let archived_at: Option<String> = r.get(3)?;
+            let manager_item = match (&archived_at, managers.get(&cid)) {
+                (None, Some(manager)) => dot::urgency(&inbox, manager, None),
+                _ => None,
+            };
+            // The Context's `●` is its Manager's alone; the glyph is the most urgent of its live Sessions' states.
+            let dot = match manager_item {
+                Some(urgency) => Dot::from(urgency),
+                None => plans
+                    .iter()
+                    .flat_map(|p| &p.sessions)
+                    .filter(|s| !s.is_archived())
+                    .map(|s| Dot::glyph(s.state))
+                    .max()
+                    .unwrap_or(Dot::Stopped),
+            };
             contexts.push(ContextNode {
                 dot,
                 title: r.get(1)?,
                 jira: r.get(2)?,
                 records: records.remove(&cid).unwrap_or(0),
                 open_questions: questions.remove(&cid).unwrap_or(0),
-                archived_at: r.get(3)?,
+                archived_at,
                 plans,
                 id: context,
             });
         }
-        Ok(Tree { contexts, events_cursor: highest_id(conn)? })
+        Ok(Tree { contexts, events_cursor: highest_id(conn)?, inbox })
     })
 }

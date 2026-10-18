@@ -98,7 +98,7 @@ pub struct View {
 impl View {
     pub fn new(tree: Tree, focused: bool) -> View {
         let mut view = View {
-            tree: Tree { contexts: Vec::new(), events_cursor: 0 },
+            tree: Tree { contexts: Vec::new(), events_cursor: 0, inbox: Vec::new() },
             state: TreeState::default(),
             known: HashSet::new(),
             focused,
@@ -707,7 +707,7 @@ mod tests {
             assert!(view.menu.is_some());
             assert_margins_blank(&mut view, width, height, "a menu at the corner");
         }
-        let mut view = View::new(Tree { contexts: Vec::new(), events_cursor: 0 }, true);
+        let mut view = View::new(Tree { contexts: Vec::new(), events_cursor: 0, inbox: Vec::new() }, true);
         assert_margins_blank(&mut view, 30, 5, "no Contexts");
     }
 

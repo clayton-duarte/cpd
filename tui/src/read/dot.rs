@@ -1,13 +1,13 @@
-//! The dot of a Session row (commands.md §17, "The tree's dot rule"): one pure function of the Session's state
-//! and of the facts about its Plan, with the precedence as the `Ord` of the result.
+//! The dot of a row (commands.md §17, "The tree's dot rule"): the filled `●` comes only from the open, visible
+//! Inbox items, in the colour of the most urgent one; else the glyph of the Session's state. Pure functions, with
+//! the precedence as the `Ord` of the result.
 
-use cpd_core::plan::Phase;
+use cpd_core::ids::{PlanId, SessionId};
+use cpd_core::inbox::model::{Item, Kind, Urgency};
 use cpd_core::session::State;
 
-use super::shared::Place;
-
 /// The dot of a row, ordered by urgency: the greatest is the most urgent, `Red > Yellow > Magenta > White >
-/// Working > Idle > Stopped` (§17, Precedence). A Context row's dot is the greatest of its live Sessions'.
+/// Working > Idle > Stopped` (§17, Precedence).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Dot {
     /// `◌`: pi stopped.
@@ -16,13 +16,13 @@ pub enum Dot {
     Idle,
     /// `◐◓◑◒`: the Lead is working.
     Working,
-    /// `●` white: an idle turn the User has not seen.
+    /// `●` white: an Inbox item of urgency `white`.
     White,
-    /// `●` magenta: blocked outside dispatch and deploy, or the Plan's review is pending.
+    /// `●` magenta.
     Magenta,
-    /// `●` yellow: the Plan's Lead, with a pull request open whose checks have finished.
+    /// `●` yellow.
     Yellow,
-    /// `●` red: blocked work in dispatch or deploy.
+    /// `●` red.
     Red,
 }
 
@@ -31,138 +31,154 @@ impl Dot {
     pub fn needs_you(self) -> bool {
         self >= Dot::White
     }
-}
 
-/// What the dot of one Session depends on.
-#[derive(Clone, Copy, Debug)]
-pub struct DotInputs {
-    pub state: State,
-    pub place: Place,
-    /// The id of its latest `session-state` Event with `to: "idle"`.
-    pub settled: Option<i64>,
-    /// The id of its latest `session-moved` Event with `place: "chat"`.
-    pub seen: Option<i64>,
-    /// It is its Plan's own Lead (never a fork).
-    pub plan_lead: bool,
-    /// Its Plan's phase; none for a Session without a Plan.
-    pub phase: Option<Phase>,
-    /// Its Plan's review is pending.
-    pub review_pending: bool,
-    /// At least one of its Plan's pull requests is `open` with checks `passed` or `failed`.
-    pub pr_checked: bool,
-}
-
-impl Dot {
-    pub fn of(i: DotInputs) -> Dot {
-        let blocked = i.state == State::Blocked;
-        if blocked && matches!(i.phase, Some(Phase::Dispatch | Phase::Deploy)) {
-            return Dot::Red;
-        }
-        if i.plan_lead && i.phase == Some(Phase::Deploy) && i.pr_checked {
-            return Dot::Yellow;
-        }
-        if blocked || (i.plan_lead && i.review_pending) {
-            return Dot::Magenta;
-        }
-        // Event ids order commits; never in the slot counts as older than everything.
-        if i.state == State::Idle && i.place != Place::Chat && i.settled.unwrap_or(0) > i.seen.unwrap_or(0) {
-            return Dot::White;
-        }
-        match i.state {
+    /// The glyph of a state, for a row with no item: `◐◓◑◒`, `○` or `◌`.
+    pub fn glyph(state: State) -> Dot {
+        match state {
             State::Working => Dot::Working,
             State::Stopped => Dot::Stopped,
             State::Idle | State::Blocked => Dot::Idle,
         }
     }
+
+    /// The dot of a Session in `state` whose most urgent open, visible item has urgency `item`.
+    pub fn of(state: State, item: Option<Urgency>) -> Dot {
+        item.map_or_else(|| Dot::glyph(state), Dot::from)
+    }
+}
+
+impl From<Urgency> for Dot {
+    fn from(urgency: Urgency) -> Dot {
+        match urgency {
+            Urgency::Red => Dot::Red,
+            Urgency::Yellow => Dot::Yellow,
+            Urgency::Magenta => Dot::Magenta,
+            Urgency::White => Dot::White,
+        }
+    }
+}
+
+/// The kinds a Plan's own Lead shows besides the ones linked to it (§17, "Which items fill which row").
+const PLAN_KINDS: [Kind; 5] = [Kind::PlanReview, Kind::JobStuck, Kind::PrFailing, Kind::PrChanges, Kind::PrReady];
+
+/// The urgency of the most urgent of the `visible` items that fill the dot of `session`: its `dialog` and `unread`
+/// items (`inbox_items.session`) and, when it is the Lead of `lead_of`, the Plan's `plan-review`, `job-stuck` and
+/// `pr-*` items (§17). `visible` is the open items that are neither snoozed nor dismissed.
+pub fn urgency(visible: &[Item], session: &SessionId, lead_of: Option<&PlanId>) -> Option<Urgency> {
+    visible
+        .iter()
+        .filter(|i| match i.kind {
+            Kind::Dialog | Kind::Unread => i.session.as_ref() == Some(session),
+            k => lead_of.is_some() && i.plan.as_ref() == lead_of && PLAN_KINDS.contains(&k),
+        })
+        .map(|i| i.urgency)
+        .max()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// An idle Lead of a Plan in `phase`, nothing pending, never settled.
-    fn lead(state: State, phase: Option<Phase>) -> DotInputs {
-        DotInputs {
-            state,
-            place: Place::Parked,
-            settled: None,
-            seen: None,
-            plan_lead: phase.is_some(),
-            phase,
-            review_pending: false,
-            pr_checked: false,
+    fn item(kind: Kind, urgency: Urgency, session: Option<&str>, plan: Option<&str>) -> Item {
+        Item {
+            id: 1,
+            kind,
+            urgency,
+            subject: "s".into(),
+            label: "l".into(),
+            url: None,
+            context: None,
+            plan: plan.map(|p| PlanId::parse(p).unwrap()),
+            job: None,
+            session: session.map(|s| SessionId::parse(s).unwrap()),
+            record: None,
+            event: None,
+            opened_at: "2026-01-01T00:00:00.000Z".into(),
+            closed_at: None,
+            snoozed_until: None,
+            dismissed_at: None,
         }
     }
 
-    fn fork(state: State, phase: Phase) -> DotInputs {
-        DotInputs { plan_lead: false, ..lead(state, Some(phase)) }
+    fn id(s: &str) -> SessionId {
+        SessionId::parse(s).unwrap()
+    }
+
+    fn plan(p: &str) -> PlanId {
+        PlanId::parse(p).unwrap()
     }
 
     #[test]
-    fn the_glyphs_without_a_colour() {
-        assert_eq!(Dot::of(lead(State::Working, Some(Phase::Dispatch))), Dot::Working);
-        assert_eq!(Dot::of(lead(State::Idle, Some(Phase::Dispatch))), Dot::Idle);
-        assert_eq!(Dot::of(lead(State::Stopped, Some(Phase::Dispatch))), Dot::Stopped);
-        assert_eq!(Dot::of(lead(State::Idle, None)), Dot::Idle);
-    }
-
-    #[test]
-    fn blocked_is_red_in_dispatch_and_pr() {
-        for phase in [Phase::Dispatch, Phase::Deploy] {
-            assert_eq!(Dot::of(lead(State::Blocked, Some(phase))), Dot::Red);
-            assert_eq!(Dot::of(fork(State::Blocked, phase)), Dot::Red, "a fork too");
-        }
-    }
-
-    #[test]
-    fn blocked_is_magenta_in_grounding_plan_done_and_without_a_plan() {
-        for phase in [Some(Phase::Grounding), Some(Phase::Plan), Some(Phase::Done), None] {
-            assert_eq!(Dot::of(lead(State::Blocked, phase)), Dot::Magenta, "{phase:?}");
-        }
-    }
-
-    #[test]
-    fn a_pending_review_is_magenta_on_the_plans_lead_only() {
-        let pending = |i: DotInputs| DotInputs { review_pending: true, ..i };
-        for state in [State::Working, State::Idle, State::Stopped] {
-            assert_eq!(Dot::of(pending(lead(state, Some(Phase::Plan)))), Dot::Magenta, "{state:?}");
-        }
-        assert_eq!(Dot::of(pending(fork(State::Idle, Phase::Plan))), Dot::Idle, "not on a fork");
-    }
-
-    #[test]
-    fn yellow_is_the_plans_lead_in_pr_with_a_pull_request_open_and_checked() {
-        let checked = |i: DotInputs| DotInputs { pr_checked: true, ..i };
-        for state in [State::Working, State::Idle, State::Stopped] {
-            assert_eq!(Dot::of(checked(lead(state, Some(Phase::Deploy)))), Dot::Yellow, "{state:?}");
-        }
-        assert_eq!(Dot::of(checked(fork(State::Working, Phase::Deploy))), Dot::Working, "never a fork");
-        assert_eq!(Dot::of(lead(State::Idle, Some(Phase::Deploy))), Dot::Idle, "it clears when no such pull request remains");
-        for phase in [Phase::Grounding, Phase::Plan, Phase::Dispatch, Phase::Done] {
-            assert_ne!(Dot::of(checked(lead(State::Idle, Some(phase)))), Dot::Yellow, "only in pr: {phase:?}");
+    fn the_glyphs_without_an_item() {
+        assert_eq!(Dot::of(State::Working, None), Dot::Working);
+        assert_eq!(Dot::of(State::Idle, None), Dot::Idle);
+        assert_eq!(Dot::of(State::Stopped, None), Dot::Stopped);
+        assert_eq!(Dot::of(State::Blocked, None), Dot::Idle, "blocked is no dot of its own: its dialog item is");
+        for state in [State::Working, State::Idle, State::Blocked, State::Stopped] {
+            assert!(!Dot::of(state, None).needs_you(), "no item, never a filled ●: {state:?}");
         }
     }
 
     #[test]
-    fn white_is_an_idle_turn_not_seen_outside_the_slot() {
-        let idle = |place, settled, seen| DotInputs { place, settled, seen, ..lead(State::Idle, Some(Phase::Dispatch)) };
-        assert_eq!(Dot::of(idle(Place::Parked, Some(5), None)), Dot::White, "never in the slot is older than everything");
-        assert_eq!(Dot::of(idle(Place::Parked, Some(5), Some(4))), Dot::White, "idle again after being seen");
-        assert_eq!(Dot::of(idle(Place::Parked, Some(5), Some(6))), Dot::Idle, "seen after it settled");
-        assert_eq!(Dot::of(idle(Place::Parked, Some(5), Some(5))), Dot::Idle);
-        assert_eq!(Dot::of(idle(Place::Parked, None, None)), Dot::Idle, "no turn");
-        assert_eq!(Dot::of(idle(Place::Chat, Some(5), None)), Dot::Idle, "in the slot");
-        let working = DotInputs { settled: Some(5), ..lead(State::Working, Some(Phase::Dispatch)) };
-        assert_eq!(Dot::of(working), Dot::Working, "only an idle Session is white");
+    fn an_item_gives_its_urgency_colour_whatever_the_state() {
+        for state in [State::Working, State::Idle, State::Blocked, State::Stopped] {
+            for (urgency, dot) in
+                [(Urgency::Red, Dot::Red), (Urgency::Yellow, Dot::Yellow), (Urgency::Magenta, Dot::Magenta), (Urgency::White, Dot::White)]
+            {
+                assert_eq!(Dot::of(state, Some(urgency)), dot, "{state:?} {urgency:?}");
+                assert!(dot.needs_you());
+            }
+        }
     }
 
     #[test]
-    fn red_beats_yellow_beats_magenta_beats_white() {
-        let all = DotInputs { settled: Some(5), review_pending: true, pr_checked: true, ..lead(State::Blocked, Some(Phase::Deploy)) };
-        assert_eq!(Dot::of(all), Dot::Red, "blocked in pr with a finished-checks PR");
-        assert_eq!(Dot::of(DotInputs { state: State::Idle, ..all }), Dot::Yellow, "an idle Lead in pr with passed checks");
-        assert_eq!(Dot::of(DotInputs { pr_checked: false, state: State::Idle, ..all }), Dot::Magenta, "the review beats white");
-        assert_eq!(Dot::of(DotInputs { pr_checked: false, review_pending: false, state: State::Idle, ..all }), Dot::White);
+    fn a_session_shows_its_dialog_and_unread_items_only() {
+        let a = id("s-a");
+        let items = [
+            item(Kind::Unread, Urgency::White, Some("s-a"), Some("pp")),
+            item(Kind::Dialog, Urgency::Magenta, Some("s-b"), Some("pp")),
+        ];
+        assert_eq!(urgency(&items, &a, None), Some(Urgency::White));
+        assert_eq!(urgency(&items, &id("s-b"), Some(&plan("pp"))), Some(Urgency::Magenta));
+        assert_eq!(urgency(&items, &id("s-c"), None), None, "an item linked to another Session");
+        assert_eq!(urgency(&[], &a, Some(&plan("pp"))), None, "no item, no dot");
+    }
+
+    #[test]
+    fn the_most_urgent_item_wins() {
+        let items = [
+            item(Kind::Unread, Urgency::White, Some("s-a"), None),
+            item(Kind::Dialog, Urgency::Red, Some("s-a"), None),
+            item(Kind::Dialog, Urgency::Magenta, Some("s-a"), None),
+        ];
+        assert_eq!(urgency(&items, &id("s-a"), None), Some(Urgency::Red));
+    }
+
+    #[test]
+    fn a_plans_items_fill_its_lead_only() {
+        let kinds = [
+            (Kind::PlanReview, Urgency::Magenta),
+            (Kind::JobStuck, Urgency::Red),
+            (Kind::PrFailing, Urgency::Red),
+            (Kind::PrChanges, Urgency::Red),
+            (Kind::PrReady, Urgency::Yellow),
+        ];
+        for (kind, u) in kinds {
+            let items = [item(kind, u, None, Some("pp"))];
+            assert_eq!(urgency(&items, &id("s-lead"), Some(&plan("pp"))), Some(u), "the Lead of pp: {kind:?}");
+            assert_eq!(urgency(&items, &id("s-fork"), None), None, "a fork: {kind:?}");
+            assert_eq!(urgency(&items, &id("s-lead"), Some(&plan("qq"))), None, "the Lead of another Plan: {kind:?}");
+        }
+    }
+
+    #[test]
+    fn items_that_belong_to_no_session_fill_no_dot() {
+        let items = [
+            item(Kind::EngineError, Urgency::Red, None, None),
+            item(Kind::Question, Urgency::Magenta, None, None),
+            item(Kind::ReviewRequested, Urgency::Yellow, None, Some("pp")),
+        ];
+        assert_eq!(urgency(&items, &id("s-lead"), Some(&plan("pp"))), None);
     }
 
     #[test]

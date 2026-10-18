@@ -102,7 +102,7 @@ pub fn context(id: &str, plans: Vec<PlanNode>) -> ContextNode {
 }
 
 pub fn tree(contexts: Vec<ContextNode>) -> Tree {
-    Tree { contexts, events_cursor: 1 }
+    Tree { contexts, events_cursor: 1, inbox: Vec::new() }
 }
 
 /// Every state of a Session, a side fork, a Plan in each phase and an empty Context:
