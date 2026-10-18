@@ -1,5 +1,5 @@
 //! The `logs` view (commands.md §13.2, §17; R36): the Event log, in a tmux popup opened by the StatusBar's
-//! ` ≡ logs ` button. It takes the latest [`RECENT`] Events, then looks at the store's highest Event id every
+//! `▤` button. It takes the latest [`RECENT`] Events, then looks at the store's highest Event id every
 //! `events.poll_ms` and appends what is new. ↑↓, j/k and PgUp/PgDn scroll; `q` or Esc closes it. It makes no
 //! write of its own.
 //!
@@ -39,7 +39,7 @@ pub fn popup_args(client: (u16, u16)) -> Vec<String> {
     args
 }
 
-/// The StatusBar's ` ≡ logs ` click: the log in a tmux popup over the cockpit.
+/// The StatusBar's `▤` click: the log in a tmux popup over the cockpit.
 pub(crate) fn open(tmux: &Tmux) -> Result<(), CpdError> {
     let clients = tmux.run(&["list-clients", "-F", "#{client_activity} #{client_width} #{client_height}"].map(str::to_owned))?;
     let client = newest_client(&clients).ok_or_else(|| {
@@ -103,5 +103,31 @@ fn show(
             cursor = next.events_cursor;
             log.push(next.events);
         }
+    }
+}
+
+/// Documentation drift (store-G7, tui-G5, pi-ci-G3): the docs and comments say what the code does.
+/// The phrases are split so that this file does not contain them.
+#[cfg(test)]
+mod docs_agree {
+    const CONTRACT: &str = include_str!("../../../docs/contract.md");
+    const COMMANDS: &str = include_str!("../../../docs/commands.md");
+    const LOGS: &str = include_str!("mod.rs");
+    const PLAN: &str = include_str!("../plan/mod.rs");
+
+    #[test]
+    fn no_stale_statement_is_left() {
+        let stale = [
+            (CONTRACT, concat!("the store", " Job")),
+            (CONTRACT, concat!("≡", " logs")),
+            (COMMANDS, concat!("≡", " logs")),
+            (COMMANDS, concat!("follow-up", " Job 17")),
+            (COMMANDS, concat!("the adapter Job", " tests it")),
+            (COMMANDS, concat!("applies an Event's `data`", " directly")),
+            (LOGS, concat!("≡", " logs")),
+            (PLAN, concat!("stays", " dead")),
+        ];
+        let left: Vec<&str> = stale.iter().filter(|(text, phrase)| text.contains(phrase)).map(|(_, phrase)| *phrase).collect();
+        assert!(left.is_empty(), "stale statements still present: {left:?}");
     }
 }

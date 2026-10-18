@@ -453,7 +453,7 @@ A Plan has no repo (R34, A12): its PRs are added later with `pr add` (§9.4), an
 
 Effects, in this order:
 1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the realpath of the caller's cwd; `tier = lead_tier`; `forked_from` null; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `prs` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
-2. **Context records:** the record write of §3 (one transaction) with kind `plan` (letter `p`), `text` = the title, `plan` = `{id, machine, jira}`; **Event** `context-record`. With `--brief-file`, a second record of kind `brief` (letter `b`), `text` = the file's text, `plan` = `{id, machine}`; **Event** `context-record`.
+2. **Context records:** the record write of §3 (one transaction) with kind `plan` (letter `p`), `text` = the title, `plan` = `{id, machine, jira}` (`jira` omitted when null); **Event** `context-record`. With `--brief-file`, a second record of kind `brief` (letter `b`), `text` = the file's text, `plan` = `{id, machine}`; **Event** `context-record`.
 3. **First message**, written to `run/<id>/lead-message.md`: a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the full brief (the file's text) if given, then `context show --context <c>` rendered as markdown: every Context record, other Plans' briefs short (§3.3).
 4. **tmux:** start the server if it is not running (§6.1) and the cockpit session `cpd` if it is missing; then `new-window -d -t =cpd: -n park-<id> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -e CPD_PLAN=<id> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, and `set -p -t <pane> @cpd_session <session>`. One transaction: `sessions.tmux_pane`; **Event** `session-moved` `{pane, window, place: "parked"}`.
 5. In the pane, `session run` (§10.8) starts a fresh Lead with the first message.
@@ -504,7 +504,7 @@ Output: every field of the Plan (§2.2); `prs` (R34, A14), every PR of the Plan 
          {"key": "web", "repo": "/home/clayton/projects/web", "base": "main", "needs": ["cpd"], "status": "waiting", "lead_branch": "cpd/cpd2/web", "lead_worktree": null,
           "pr": null, "pull_request": null, "all_merged_at": null, "start_failed_at": null,
           "created_at": "…", "started_at": null, "merged_at": null, "jobs": ["web-client"]}],
- "jobs": [{"key": "contract-commands", "pr": "cpd", "title": "cpd 2 contract: every command", "status": "running", "tier": "O3", "appended": false, "needs": ["contract-core"],
+ "jobs": [{"key": "contract-commands", "pr": "cpd", "title": "cpd 2 contract: every command", "status": "running", "tier": "O3", "appended": false, "review": false, "needs": ["contract-core"], "fingerprint": "9f…", "retry_tier": null,
            "goal": "…", "context": "…", "touches": ["docs/commands.md"], "acceptance": ["…"], "out_of_scope": ["…"],
            "attempts": [{"id": "contract-commands-a1", "number": 1, "tier": "O3", "origin": "ladder", "status": "running", "outcome": null, "cause": null, "worker_session": "c1a2…", "started_at": "…", "ended_at": null}]}],
  "escalations": [{"id": "contract-commands-a1-q1", "attempt": "contract-commands-a1", "question": "…", "asked_at": "…"}],
@@ -891,7 +891,7 @@ cpd job list [--status <status>] [--plan <id>]
 `--status` is one of §3.2's statuses and may repeat. Effects: none.
 
 ```json
-{"ok": true, "jobs": [{"key": "api-schema", "pr": "api", "title": "…", "status": "merged", "tier": "S2", "appended": false, "needs": [], "attempts": 1, "merged_sha": "c0ffee…"}]}
+{"ok": true, "jobs": [{"key": "api-schema", "pr": "api", "title": "…", "status": "merged", "tier": "S2", "appended": false, "review": false, "needs": [], "attempts": 1, "merged_sha": "c0ffee…"}]}
 ```
 
 ### 5.7 `job show`
@@ -903,11 +903,11 @@ cpd job show <key> [--plan <id>]
 Effects: none. Output: every field of the Job (§2.2; `review: true` for a review Job, B2), `needs`, `needed_by`, and every Attempt with all its fields (`check_tail`, `metrics`) and its Escalations (cpd 1 §11, kept).
 
 ```json
-{"ok": true, "job": {"key": "worker", "pr": "api", "status": "failed", "failed_cause": "timed_out", "tier": "S2", "…": "…"}, "needs": ["api-schema"], "needed_by": ["ui"],
+{"ok": true, "job": {"key": "worker", "pr": "api", "status": "failed", "failed_cause": "timed_out", "tier": "S2", "review": false, "fingerprint": "9f…", "retry_tier": null, "…": "…"}, "needs": ["api-schema"], "needed_by": ["ui"],
  "attempts": [{"id": "worker-a1", "status": "ended", "outcome": "failed", "cause": "timed_out", "check_tail": null, "escalations": []}]}
 ```
 
-Both are read-only.
+`tamper` is the tamper report of §4.3, as in `plan show` (empty when the Job is intact). Both are read-only.
 
 ## 6. `attempt`
 
@@ -1981,7 +1981,7 @@ The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays
 
 ### 15.1 Package and activation
 
-- **Package:** `pi/package.json` with `"keywords": ["pi-package"]` and `"pi": {"extensions": ["./extension.ts"], "skills": ["./skills"]}`; host packages are `peerDependencies: "*"` (cpd 1 §15, kept). The skill `cpd-lead` is rewritten for cpd 2 (follow-up Job 17).
+- **Package:** `pi/package.json` with `"keywords": ["pi-package"]` and `"pi": {"extensions": ["./extension.ts"], "skills": ["./skills"]}`; host packages are `peerDependencies: "*"` (cpd 1 §15, kept). The skill `cpd-lead` is the cpd 2 skill.
 - **Location:** `pi/`, installed to `~/.local/share/cpd/pi` by `scripts/install-cpd.sh`. (History: before the switch-over it lived beside cpd 1's `pi/`, in a second directory.)
 - **Activation:** at pi's `session_start`, only when `ctx.mode` is `tui` and `CPD_SESSION` is set. Change from cpd 1: cpd 1 activated in any herdr or tmux pane (`HERDR_ENV`, `TMUX_PANE`); now cpd marks its own panes with `CPD_SESSION` (§6.5), so a pi the User starts by hand is left alone.
 - **Identity:** `CPD_SESSION` must equal `ctx.sessionManager.getSessionId()`. If not, the adapter delivers one error message (below) and stays inactive: it would otherwise report another Session's state.
@@ -2077,7 +2077,7 @@ A failure of `plan show` is an error message and leaves the entry pending. An Ev
 - the Macs forward the range over ssh (dotfiles Plan `dotfiles-sync`);
 - `doctor` no longer checks the port (§14.1).
 
-Rejected alternatives: one shared review server (cpd would have to run plannotator's server outside pi, which plannotator does not offer to extensions), and a queue (a review waiting for another Plan's User decision could wait for hours). Unverified: that two plannotator servers in one range do not disturb each other's sessions; the adapter Job tests it.
+Rejected alternatives: one shared review server (cpd would have to run plannotator's server outside pi, which plannotator does not offer to extensions), and a queue (a review waiting for another Plan's User decision could wait for hours). Not verified: that two plannotator servers in one range do not disturb each other's sessions.
 
 ### 15.6 Reload after an install
 
@@ -2220,8 +2220,8 @@ Outline §8 and D4: the views take one **snapshot** with a read command, then **
 
 **Rates.**
 - Each view follows Events with no selection and filters by kind itself, through `cpd events follow` or the same poll in process (§5.4): one `PRAGMA data_version` read per `events.poll_ms` (200 ms), which costs no I/O while nothing changes (§5.4).
-- A view applies an Event's `data` directly when it carries what is shown (`session-state`, `session-renamed`, `session-moved`); otherwise it re-runs its snapshot, coalesced to at most one snapshot per view every 500 ms, whatever the Event rate.
-- The `worker` view re-reads its session file when its size or modification time changes, checked every 500 ms; the file is not in the database.
+- On an Event of a kind it shows, a view re-runs its snapshot (it never applies an Event's `data` itself), coalesced to at most one snapshot per view every 500 ms, whatever the Event rate.
+- The `worker` view does not follow Events: every 500 ms it re-reads its snapshot from the store (`attempt-status` and `session-state` are read, not followed) and re-reads its session file when its size or modification time changes; the file is not in the database.
 - Clocks such as "running 4 m" are redrawn every second from timestamps already read, without a read. The spinner (`◐◓◑◒` on the tree's dots and on a `running` Job's pill) is redrawn every 250 ms from data already read, without a read.
 - If a follower ends, the view takes a new snapshot and follows again from its `events_cursor`.
 
@@ -2298,7 +2298,7 @@ Rows 22–27 were added by Job `docs` of Plan `tree-menu` (renames, archive and 
 | 18 | §6.2 (the views) | the plan view's top row is ` <context id> ▸ ` and the tabs only; one tab per Lead Session of the Context with a pane; the tree's keys are ↑↓/jk, Enter, `n`, `x`, `?` and its cursor, clicks and prompts are the reference's | §13.2 |
 | 19 | §6.2 (the views) | what each view reads, in process; the tree's ● (needs you) rule from Events; the plan row no longer reads Escalations, the Plan review or the PR | §17 |
 | 20 | §6.2 (the views) | the legend opens from the tree's `?` and the StatusBar button, not from the Dispatch column; its section titles say Context, and it lists no `cancelled` | §13.2 |
-| 21 | §6.2 (the views), R36 | the StatusBar's left side holds action buttons only (`⧉ `, ` ? legend `, ` ≡ logs `) and its right side read-only information; the Event log is the `logs` view, a popup the ` ≡ logs ` button opens, not part of the Dispatch column | §13.2, §17 |
+| 21 | §6.2 (the views), R36 | the StatusBar's left side holds action buttons only (`⧉ `, ` ? legend `, `▤`) and its right side read-only information; the Event log is the `logs` view, a popup the `▤` button opens, not part of the Dispatch column | §13.2, §17 |
 | 22 | §2.2 Context, Plan, Session | `archived_at` on the three; "Archived" (the archive rule, the cascade, the `archived` refusals); titles editable, ids immutable | §3.7–§3.9, §4.9–§4.11, §10.10–§10.11, §1.3 |
 | 23 | §4.5 | Migration 3: `archived_at` on `contexts`, `plans`, `sessions`; `events` recreated with the five new kinds | §3.2, §4.2, §10.1 |
 | 24 | §5.2 | Event kinds `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | §3.7–§3.9, §4.9–§4.11, §10.10–§10.11, §17 |

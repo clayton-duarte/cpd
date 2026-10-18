@@ -257,7 +257,8 @@ impl Store {
 
     /// Runs `f` in a deferred read transaction on the WAL snapshot (§4.2): it
     /// never waits for a writer. Keep it short: one query or one command's reads.
-    /// Writes inside it fail: `cpd_txn()` refuses outside [`Store::write`].
+    /// Writes to the tables with history triggers fail inside it: `cpd_txn()` refuses outside
+    /// [`Store::write`]. Other tables are not guarded (docs/research/quality-store.md, store-G3).
     pub fn read<T>(&mut self, f: impl FnOnce(&Connection) -> Result<T, CpdError>) -> Result<T, CpdError> {
         let (path, busy_ms) = (self.path.clone(), self.busy_ms);
         let result = (|| {
