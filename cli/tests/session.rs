@@ -1501,20 +1501,21 @@ fn a_refused_archive_prints_the_refusal_and_offers_the_resume_in_place() {
 fn a_reload_is_not_a_quit_even_though_pi_exits_0_on_sigterm() {
     let env = TestEnv::new();
     quit_fixture(&env);
-    // A copy of cpd that the test can replace, as an install does.
-    let copy = env.home().join("cpd-installed");
-    fs::copy(CPD, &copy).unwrap();
-    env.fake("cpd", &format!("case \"$1 $2 $3\" in \"tui view chat\"|\"tui view history\") exec sleep {SLEEP_SECONDS};; esac\nexec '{}' \"$@\"", copy.display()));
-    // An idle Lead at a finished turn, parked: the reload is due at once.
+    // An idle Lead at a finished turn, parked: the restart for a new pi is due at once.
     pi_file(&env, "side", true);
     exec_sql(&env, "UPDATE sessions SET state_at = '2020-01-01T00:00:00Z' WHERE id = 'side'");
+    // pi's install, as the wrapper watches it (a cpd install does not restart pi, hs-d210).
+    let current = env.home().join(".pi/agent/install/current-version");
+    fs::create_dir_all(current.parent().unwrap()).unwrap();
+    fs::write(&current, "1.2.0\n").unwrap();
     std::thread::sleep(Duration::from_secs(2));
     let pane = run_lead_with_pane(&env, "side");
     wait_until("pi", || env.calls("pi").len() == 1);
 
-    let next = env.home().join("cpd-next");
-    fs::copy(CPD, &next).unwrap();
-    fs::rename(&next, &copy).unwrap();
+    // A new pi, as pi's own update installs it.
+    let next = current.with_extension("tmp");
+    fs::write(&next, "1.3.0\n").unwrap();
+    fs::rename(&next, &current).unwrap();
     wait_until("pi, started again", || env.calls("pi").len() == 2);
     assert!(pane_exists(&env, &pane));
     assert!(!session_archived(&env, "side"));
