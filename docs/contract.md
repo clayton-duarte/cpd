@@ -785,11 +785,12 @@ CREATE TABLE pull_requests (
   state           TEXT NOT NULL CHECK (state IN ('open', 'closed', 'merged')),
   review_decision TEXT NOT NULL CHECK (review_decision IN ('none', 'approved', 'changes_requested')),
   checks          TEXT NOT NULL CHECK (checks IN ('none', 'passed', 'pending', 'failed')),
-  mergeable       TEXT NOT NULL DEFAULT 'unknown' CHECK (mergeable IN ('mergeable', 'conflicting', 'unknown')),  -- migration 7
-  merge_state     TEXT NOT NULL DEFAULT 'unknown' CHECK (merge_state IN ('behind', 'blocked', 'clean', 'dirty', 'draft', 'has_hooks', 'unknown', 'unstable')),  -- migration 7
   created_at      TEXT NOT NULL,                               -- GitHub's
   merged_at       TEXT,
-  changed_at      TEXT NOT NULL,                               -- cpd's time of the last change
+  changed_at      TEXT NOT NULL,
+  mergeable       TEXT NOT NULL DEFAULT 'unknown' CHECK (mergeable IN ('mergeable', 'conflicting', 'unknown')),
+  merge_state     TEXT NOT NULL DEFAULT 'unknown' CHECK (merge_state IN ('behind', 'blocked', 'clean', 'dirty', 'draft', 'has_hooks', 'unknown', 'unstable')),
+  -- cpd's time of the last change
   UNIQUE (repo, number),
   CHECK ((state = 'merged') = (merged_at IS NOT NULL))
 ) STRICT;
