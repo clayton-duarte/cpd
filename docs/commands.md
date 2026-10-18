@@ -137,6 +137,7 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `plan lock` | Lead | yes | §3.1, §7.2 |
 | `plan rename` | User (TUI) | yes | §2.2 |
 | `plan archive`, `unarchive` | User (TUI) | yes | §2.2 |
+| `plan cancel` | Lead, User | yes | §2.2, §3.2, §3.8 |
 | `job add`, `edit`, `cancel`, `retry` | Lead | yes | §3.2 |
 | `job dispatch` | Lead | yes | §3.4 |
 | `job list`, `job show` | Lead, TUI | no | |

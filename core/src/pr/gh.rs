@@ -222,6 +222,23 @@ pub fn view(cwd: &Path, number: i64) -> Result<View, CpdError> {
     parse(&args, &run(cwd, &args)?)
 }
 
+/// `gh pr close <number> --repo <repo>`. A pull request that is already closed or merged is the
+/// state wanted: when `gh` fails, `gh pr view` says whether it is, and only then is the failure not one.
+pub fn close_pr(cwd: &Path, repo: &str, number: i64) -> Result<(), CpdError> {
+    #[derive(Deserialize)]
+    struct State {
+        state: String,
+    }
+    let n = number.to_string();
+    let close = ["pr", "close", &n, "--repo", repo];
+    let Err(failure) = run(cwd, &close) else { return Ok(()) };
+    let view = ["pr", "view", &n, "--repo", repo, "--json", "state"];
+    match run(cwd, &view).and_then(|out| parse::<State>(&view, &out)) {
+        Ok(State { state }) if state == "CLOSED" || state == "MERGED" => Ok(()),
+        _ => Err(failure),
+    }
+}
+
 /// Inline review comments, which `gh pr view` does not list. `{owner}/{repo}`
 /// are filled in by `gh` from `cwd`'s repo.
 pub fn inline_comments(cwd: &Path, number: i64) -> Result<Vec<InlineComment>, CpdError> {
