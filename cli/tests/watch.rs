@@ -707,11 +707,11 @@ fn e3_starts_the_driver_after_the_engines_binary_is_replaced() {
         assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
     }
     let installed = fx.env.root().join("cpd-installed");
-    fs::copy(CPD, &installed).unwrap();
+    copy_executable(CPD, &installed);
     let engine = fx.start_from(&installed);
 
     let new = fx.env.root().join("cpd-new");
-    fs::copy(CPD, &new).unwrap();
+    copy_executable(CPD, &new);
     fs::rename(&new, &installed).unwrap();
     fx.add_job("api", &[], "");
 
@@ -755,7 +755,7 @@ fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
 fn e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off() {
     let fx = fx("concurrency = 1\nretry_cap = 0");
     let installed = fx.env.root().join("cpd-installed");
-    fs::copy(CPD, &installed).unwrap();
+    copy_executable(CPD, &installed);
     let engine = fx.start_from(&installed);
     fs::remove_file(&installed).unwrap();
     fx.add_job("api", &[], "");
@@ -1088,6 +1088,19 @@ fn e6_imports_the_context_stores_at_start_and_syncs_those_with_a_remote() {
     assert_eq!(fx.count("context-created"), 1);
     assert_eq!(fx.count("context-record"), 1);
     assert_eq!(fx.env.git(&remote, &["rev-parse", "main"]), fx.env.git(&store, &["rev-parse", "main"]));
+}
+
+/// Copies the executable `from` to `to` with a child `cp`, which has exited when this returns.
+///
+/// ETXTBSY: `exec` of a file fails while any process holds it open for writing. The test binary is
+/// multi-threaded: a thread that wrote `to` itself (`fs::copy`) holds a write descriptor until the copy
+/// ends, and a `fork` by another test's thread in that window duplicates the descriptor into a child that keeps it
+/// until its own `exec`. If this test then ran `to`, it would get "Text file busy". Here only
+/// `cp` ever opens `to` for writing, so no descriptor to it exists in this process to be inherited, and
+/// none is open anywhere once `cp` is waited for.
+fn copy_executable(from: &str, to: &Path) {
+    let status = std::process::Command::new("cp").arg("--").arg(from).arg(to).status().unwrap();
+    assert!(status.success(), "cp {from} {to:?}: {status}");
 }
 
 fn copy_dir(from: &Path, to: &Path) {
