@@ -257,6 +257,25 @@ fn config_refuses_each_bad_file_with_its_key_path() {
 }
 
 #[test]
+fn config_messages_end_in_one_full_stop_and_name_the_bound_that_was_crossed() {
+    let message = |text: &str| {
+        let run = config_with(&TestEnv::new(), text);
+        assert_eq!(run.exit, 1, "{text}");
+        run.error()["message"].as_str().unwrap().to_owned()
+    };
+    // A reason that already ends in a full stop gets no second one.
+    for text in ["version = 1\nmachine = \"homeserver\"\n", "version = 1\nmachine = \"hs\"\nlead_tier = \"O9\"\n"] {
+        let said = message(text);
+        assert!(said.ends_with('.') && !said.ends_with(".."), "{said}");
+    }
+    // Above the largest value, the message says "at most"; below the smallest, "at least".
+    let above = message("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 4294967296\n");
+    assert!(above.contains("must be at most 4294967295, got 4294967296"), "{above}");
+    let below = message("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0\n");
+    assert!(below.contains("must be at least 1, got 0"), "{below}");
+}
+
+#[test]
 fn config_refuses_a_file_that_is_not_toml() {
     let env = TestEnv::new();
     let run = config_with(&env, "version = = 1\n");
