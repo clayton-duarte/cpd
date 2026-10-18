@@ -1278,3 +1278,79 @@ fn install_accepts_a_build_equal_to_the_store_or_a_home_without_a_database() {
         assert!(env.home().join(".local/bin/cpd").exists());
     }
 }
+
+// ---------- the adapter swap of scripts/install-cpd.sh (pi-ci-W9) ----------
+
+/// The names under `dir`, recursively, relative to it, sorted.
+fn tree(dir: &Path) -> Vec<String> {
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            out.push(path.strip_prefix(base).unwrap().display().to_string());
+            if path.is_dir() {
+                walk(base, &path, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
+}
+
+/// The entries directly in `dir`, sorted.
+fn names(dir: &Path) -> Vec<String> {
+    let mut out: Vec<String> = fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn install_puts_the_adapter_at_share_cpd_pi_without_its_tests() {
+    let env = TestEnv::new();
+    install(&env);
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let adapter = env.home().join(".local/share/cpd/pi");
+    let expected: Vec<String> = tree(&root.join("pi")).into_iter().filter(|p| p != "test" && !p.starts_with("test/")).collect();
+    assert!(expected.contains(&"package.json".to_string()) && expected.contains(&"extension.ts".to_string()), "{expected:?}");
+    assert_eq!(tree(&adapter), expected);
+    // No temporary directory is left beside it.
+    assert_eq!(names(adapter.parent().unwrap()), ["pi"]);
+}
+
+#[test]
+fn install_replaces_an_installed_adapter_as_a_whole_and_it_is_never_missing() {
+    let env = TestEnv::new();
+    let adapter = env.home().join(".local/share/cpd/pi");
+    fs::create_dir_all(adapter.join("old")).unwrap();
+    fs::write(adapter.join("package.json"), "{}").unwrap();
+    fs::write(adapter.join("stale.ts"), "").unwrap();
+    // A big old adapter, so that removing it in place takes a while.
+    for i in 0..5000 {
+        fs::write(adapter.join("old").join(format!("f{i}.ts")), "").unwrap();
+    }
+
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watcher = {
+        let (stop, manifest) = (stop.clone(), adapter.join("package.json"));
+        std::thread::spawn(move || {
+            let mut missing = 0u32;
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                if !manifest.exists() {
+                    missing += 1;
+                }
+            }
+            missing
+        })
+    };
+    let (out, _) = install_with(&env, 6, "6");
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let missing = watcher.join().unwrap();
+
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(missing, 0, "the adapter's package.json was missing {missing} times during the install");
+    assert!(!adapter.join("stale.ts").exists() && !adapter.join("old").exists(), "the old adapter was not replaced as a whole");
+    assert!(adapter.join("package.json").exists());
+    assert_eq!(names(adapter.parent().unwrap()), ["pi"]);
+}
