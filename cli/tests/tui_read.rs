@@ -753,6 +753,13 @@ fn an_open_pull_request_carries_its_url_and_the_lead_of_its_owner() {
         "an owned one and an unowned one; the closed and the merged are not listed"
     );
     assert!(w.prs.iter().all(|p| !p.active), "the chat slot holds l-ship, which has no PR");
+    assert!(w.prs.iter().all(|p| !p.conflicting), "the default `unknown` is not a conflict");
+
+    // `mergeable` is a conflict only when it is `conflicting`.
+    sql(&mut store, "UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 70; UPDATE pull_requests SET mergeable = 'mergeable' WHERE number = 7;");
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    assert_eq!(w.prs.iter().map(|p| (p.number, p.conflicting)).collect::<Vec<_>>(), [(7, false), (70, true)]);
+    sql(&mut store, "UPDATE pull_requests SET mergeable = 'unknown' WHERE number = 70;");
 
     // Two Plans own the same pull request (the later one took it over): the most recently created Plan's Lead owns it.
     let lead = session_row("l-rel2", "lead", "beta", "rel2", None, "idle", None, "2026-01-04T00:00:00.000Z");

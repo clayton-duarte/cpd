@@ -335,6 +335,21 @@ fn three_open_prs_in_two_repos_come_out_oldest_first_in_two_lines_each() {
 }
 
 #[test]
+fn a_conflicting_pr_shows_conflict_on_its_second_line_and_the_others_do_not() {
+    let env = TestEnv::new();
+    let mut store = prs_store(&env);
+    sql(&mut store, "UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 9; UPDATE pull_requests SET mergeable = 'mergeable' WHERE number = 4;");
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    let buf = render(46, 25, &w);
+    let got = rows(&buf);
+    assert_eq!(got[7], "  draft ✗ changes requested  Older web fix");
+    assert_eq!(got[9], "  open ✓ approved conflict  Middle one");
+    assert_eq!(got[11], "  open … no review  Mine to review");
+    let (x, y) = find(&buf, "conflict");
+    assert_eq!(buf[(x, y)].fg, palette::color(Meaning::Failed));
+}
+
+#[test]
 fn a_draft_shows_draft_and_the_others_open() {
     let env = TestEnv::new();
     let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
