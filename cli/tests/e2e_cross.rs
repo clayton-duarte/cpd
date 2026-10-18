@@ -97,7 +97,7 @@ case "$1 $2" in
         for n in 11 12 13; do
           if [ -f "$FLAGS/created-$n" ] && [ ! -f "$FLAGS/merged-$n" ]; then nodes="$nodes${{nodes:+,}}$(node $n OPEN)"; fi
         done
-        echo '{{"data":{{"search":{{"issueCount":0,"nodes":['"$nodes"']}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}}}}' ;;
+        echo '{{"data":{{"search":{{"issueCount":0,"nodes":['"$nodes"']}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}}}}' ;;
       *"p0: repository"*)
         data=''; i=0
         for n in $(printf '%s' "$4" | grep -o 'pullRequest(number: [0-9]*' | grep -o '[0-9]*$'); do

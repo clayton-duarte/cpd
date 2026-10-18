@@ -12,7 +12,7 @@ import { DEFAULT_TIMING, Follower, type Schedule, type Spawn, type Timing } from
 import type { CommandCtx, Ctx, Message, MessageRenderer, PiApi } from "./pi.ts";
 import { parseOpened, parseResult, parseStatus, request } from "./plannotator.ts";
 import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, highestReview, REVIEW_LABEL, reviewNumber, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
-import { adapterDir, DEFAULT_POLL_MS, pollAdapter, type Poll, refusal, RELOAD_COMMAND, RELOAD_TRIGGER, validatePackage, type Validation } from "./reload.ts";
+import { adapterDir, appendLog, DEFAULT_POLL_MS, LONG_REFUSAL_NOTICE, pollAdapter, type Poll, refusal, RELOAD_COMMAND, reloadLogPath, RELOAD_TRIGGER, validatePackage, type Validation } from "./reload.ts";
 import { Facts, Reporter, stateArgs, type Wanted } from "./state.ts";
 import { CONTEXT_TYPE, contextCursorFrom, contextUpdate, countsOf, parsePending, parsePlanEvents, parseRecordEvents, parseRecords, PLAN_KINDS, summaryLine } from "./updates.ts";
 
@@ -24,7 +24,7 @@ export type Options = {
   /** How the follower's restart is scheduled. Default: `setTimeout`. */
   schedule?: Schedule;
   /** The directory whose replacement means an install, how often it is polled, and how the new package is validated (§15.6). Default: the adapter's own directory, every {@link DEFAULT_POLL_MS}, jiti from pi. */
-  reload?: { dir?: string; intervalMs?: number } & Validation;
+  reload?: { dir?: string; intervalMs?: number; longRefusalMs?: number } & Validation;
 };
 
 /** commands.md §15.7 "Display": collapsed, one dim line of counts; expanded, the full text. The model gets `content` either way. A message without counts (an older adapter's) is shown in full. */
@@ -64,6 +64,8 @@ type Run = {
   abort: AbortController;
   /** Watches the adapter directory for an install (§15 "Reload after an install"). */
   reload: Poll | undefined;
+  /** One line of `run/adapter/<session>.log` (§15.6 "Log"); a failed write is notified once per run. */
+  log: (line: string) => void;
   unsubscribe: (() => void)[];
 };
 
@@ -142,11 +144,18 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     description: "cpd: reload pi after an install (runs by itself; does nothing unless pi is idle, unblocked and the editor is empty)",
     async handler(_args: string, ctx: CommandCtx) {
       const r = run;
-      if (!r || refusal(guardOf(r, ctx)) !== undefined) return r?.reload?.retry();
+      if (!r) return;
+      const why = refusal(guardOf(r, ctx));
+      if (why !== undefined) {
+        r.log(`command: refused: ${why}`);
+        return r.reload?.retry();
+      }
+      r.log("command: reloading");
       ctx.ui.notify("cpd: adapter updated, reloading");
       try {
         await ctx.reload(); // `ctx` is stale from here on
       } finally {
+        r.log("command: ctx.reload() returned"); // a reload that happened is followed by the new instance's "start" line
         r.reload?.retry(); // still running: the reload did not happen, the next tick may try again
       }
     },
@@ -154,7 +163,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
 
   // ---- start-up (§15.2) ----
 
-  async function start(ctx: Ctx): Promise<void> {
+  async function start(ctx: Ctx, reason: string): Promise<void> {
     if (ctx.mode !== "tui") return;
     const id = env.CPD_SESSION;
     if (id === undefined || id === "") return;
@@ -177,6 +186,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
 
     const abort = new AbortController();
     const facts = new Facts();
+    let logFailed = false;
     const r: Run = {
       id,
       info,
@@ -195,6 +205,16 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       reporting: false,
       abort,
       reload: undefined,
+      log: (line) => {
+        try {
+          appendLog(reloadLogPath(env.CPD_HOME || join(homedir(), ".cpd"), id), line);
+        } catch (e) {
+          if (!logFailed) {
+            logFailed = true;
+            ctxOf.current?.ui.notify(`cpd: cannot write the reload log: ${toCpdError(e).message}`, "error"); // not a message: it must not start a turn
+          }
+        }
+      },
       unsubscribe: [],
     };
     r.follower = new Follower(
@@ -216,6 +236,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       options.schedule,
     );
     run = r;
+    r.log(`start: ${reason}`);
 
     // 2. stopped -> idle, then working when pi is busy.
     r.reporter.want({ state: "idle" });
@@ -263,10 +284,13 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       dir: options.reload?.dir ?? adapterDir(),
       intervalMs: options.reload?.intervalMs ?? DEFAULT_POLL_MS,
       validate: (dir) => validatePackage(dir, options.reload),
-      allowed: () => run === r && ctxOf.current !== undefined && refusal(guardOf(r, ctxOf.current)) === undefined,
+      refusal: () => (run === r && ctxOf.current !== undefined ? refusal(guardOf(r, ctxOf.current)) : "not active"),
       trigger: () => pi.sendUserMessage(RELOAD_TRIGGER, { expandPromptTemplates: true }),
       onRefused: (reason) => ctxOf.current?.ui.notify(`cpd: adapter update not loaded: ${reason}`, "error"),
       onError: (e) => deliver("reload after install", e),
+      log: r.log,
+      onLongRefusal: () => ctxOf.current?.ui.notify(LONG_REFUSAL_NOTICE),
+      longRefusalMs: options.reload?.longRefusalMs,
     });
 
     // Recovery of the reviews this session opened (§15.5), in the background.
@@ -286,6 +310,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     if (!r) return;
     run = undefined;
     ctxOf.current = undefined;
+    r.log("stop");
     r.reload?.stop();
     r.abort.abort();
     r.follower.stop();
@@ -613,9 +638,9 @@ export function adapter(pi: PiApi, options: Options = {}): void {
 
   // ---- pi's lifecycle ----
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
     try {
-      await start(ctx);
+      await start(ctx, typeof event?.reason === "string" ? event.reason : "unknown");
     } catch (e) {
       deliver("start-up", e);
     }
@@ -650,6 +675,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     if (!r) return;
     if (ctx.isIdle()) r.facts.active = false;
     refresh(r);
+    r.reload?.nudge(); // a busy Lead's idle gaps can be shorter than the poll interval (§15.6 "Retries")
   });
 
   pi.on("session_info_changed", () => {

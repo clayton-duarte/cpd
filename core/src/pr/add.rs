@@ -106,7 +106,7 @@ fn check_plan(conn: &Connection, plan: &PlanId) -> Result<Phase, CpdError> {
     if archived {
         return Err(CpdError::new(ErrorCode::Archived, format!("Plan {plan} is archived: unarchive it first."))
             .with("plan", plan.as_str())
-            .with("next", format!("cpd plan unarchive {plan}")));
+            .with("next", format!("cpd plan unarchive --plan {plan}")));
     }
     Ok(phase)
 }

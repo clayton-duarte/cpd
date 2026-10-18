@@ -5,11 +5,13 @@
 //! - `lock`: the driver lock, taken by the starter and inherited as fd 3;
 //! - `run`: the driver itself, A1–A9;
 //! - `ledger`: the Attempt as the driver reads it, and the ends before a merge;
-//! - `worker`: the Worker Spec, the Worker's pane, its session file.
+//! - `worker`: the Worker Spec, the Worker's pane, its session file;
+//! - `stall`: A4's stall rule, the kill of a Worker's idle tool call.
 
 pub(crate) mod ledger;
 pub(crate) mod lock;
 mod run;
+mod stall;
 mod start;
 mod worker;
 
