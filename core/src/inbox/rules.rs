@@ -140,7 +140,7 @@ fn seat_condition(seat: Seat, kind: Kind, urgency: Urgency, label: String) -> Co
     }
 }
 
-/// `dialog`: a Lead, fork or Manager asks the User something. Red when its Plan is in `dispatch` or `pr`, else magenta.
+/// `dialog`: a Lead, fork or Manager asks the User something. Red when its Plan is in `dispatch` or `deploy`, else magenta.
 fn dialogs(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let [worker_question, plan_review] = NOT_A_DIALOG;
     let filter = format!("s.state = 'blocked' AND s.state_label NOT IN ('{worker_question}', '{plan_review}')");
@@ -148,7 +148,7 @@ fn dialogs(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
         .into_iter()
         .map(|seat| {
             let urgency = match seat.phase {
-                Some(Phase::Dispatch | Phase::Pr) => Urgency::Red,
+                Some(Phase::Dispatch | Phase::Deploy) => Urgency::Red,
                 _ => Urgency::Magenta,
             };
             let label = format!("{} asks you", seat.who);
@@ -434,7 +434,7 @@ mod tests {
             ("grounding", Urgency::Magenta),
             ("plan", Urgency::Magenta),
             ("dispatch", Urgency::Red),
-            ("pr", Urgency::Red),
+            ("deploy", Urgency::Red),
             ("done", Urgency::Magenta),
         ] {
             let mut f = fixture(phase);

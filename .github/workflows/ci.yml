@@ -17,32 +17,52 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # No sccache on CI (docs/research/ci-cache.md): an empty RUSTC_WRAPPER
+    # makes scripts/cargo.sh skip sccache even if the runner image has it.
     env:
-      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-        with:
-          cache-targets: false
-      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - name: Install npm dependencies
         run: npm ci --no-audit --no-fund
-      - name: Install tmux
+      # tmux 3.8 built from source, not apt's 3.4: tmux < 3.6 built with
+      # libutempter can lose a pane's SIGCHLD, so the pane shows dead with no
+      # exit status and pane-died never fires (contract §6.1; fixed upstream
+      # in 3.6, commit fa5f3cef3d, tmux/tmux#4559). cpd requires tmux >= 3.6.
+      - name: Install tmux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y tmux
+          sudo apt-get install -y build-essential libevent-dev libncurses-dev pkg-config bison
+      - name: Cache tmux
+        id: tmux-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/bin/tmux
+          key: tmux-3.8-${{ runner.os }}-${{ runner.arch }}
+      - name: Build tmux
+        if: steps.tmux-cache.outputs.cache-hit != 'true'
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL https://github.com/tmux/tmux/releases/download/3.8/tmux-3.8.tar.gz | tar xz
+          cd tmux-3.8
+          ./configure --prefix="$HOME/.local" && make -j && make install
+      - name: Put tmux on PATH
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Check tmux
+        run: |
+          command -v tmux
+          tmux -V
+          test "$(tmux -V)" = "tmux 3.8"
       - name: Build
         run: scripts/cargo.sh build --workspace
       - name: Test
         run: scripts/cargo.sh test --workspace
-      - name: sccache stats
-        if: always()
-        run: sccache --show-stats
 
   pi:
     runs-on: ubuntu-latest

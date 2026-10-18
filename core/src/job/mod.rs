@@ -75,6 +75,10 @@ pub struct AddArgs {
     /// writes run/<plan>/reviews/<key>.md; it needs every Job of its PR so far
     #[arg(long, conflicts_with = "needs")]
     review: bool,
+    /// Add it as a draft in a phase after plan too: the engine never runs it
+    /// until a Plan review of the drafts is approved
+    #[arg(long)]
+    draft: bool,
     #[command(flatten)]
     pr: PrArg,
     #[command(flatten)]

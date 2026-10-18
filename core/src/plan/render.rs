@@ -2,7 +2,8 @@
 //! from cpd 1 §11 `plan render`, grouped by PR): title, Context and phase; a
 //! table of the PRs not `cancelled` and, from two, a Mermaid graph of their
 //! needs; then a section per PR with its Jobs' table, their Dependencies graph
-//! and one subsection per Job with its Spec. GitHub-flavoured Markdown only:
+//! and one subsection per Job with its Spec; between them the `## Overlaps`
+//! section. GitHub-flavoured Markdown only:
 //! tables, code and Mermaid, no footnotes, no raw HTML (t4).
 
 use std::collections::BTreeMap;
@@ -11,6 +12,7 @@ use serde_json::Value;
 
 use super::fingerprint::PrSpec;
 use super::jobs::Job;
+use super::overlap::Overlap;
 
 /// Inline text made safe for GFM: no HTML tags, no footnote syntax. Code
 /// spans (`` `…` `` on one line) are left alone.
@@ -141,8 +143,15 @@ fn ordered<'a>(prs: &[&'a PrSpec]) -> Vec<&'a PrSpec> {
     out
 }
 
-/// One PR's section: repo, base, needs, its Jobs' table and graph, its Jobs' Specs.
-fn pr_section(out: &mut Vec<String>, pr: &PrSpec, jobs: &[&Job]) {
+/// What a Job is in a review of a phase after `plan` (§4.5): a `draft` is
+/// under review, every other Job is Locked context.
+fn mark(job: &Job) -> &'static str {
+    if job.is_draft() { "**under review**" } else { "Locked" }
+}
+
+/// One PR's section: repo, base, needs, its Jobs' table and graph, its Jobs'
+/// Specs; `later` is a phase after `plan`, where the drafts are marked.
+fn pr_section(out: &mut Vec<String>, pr: &PrSpec, jobs: &[&Job], later: bool) {
     out.extend([
         format!("## PR {}", pr.key),
         String::new(),
@@ -153,15 +162,17 @@ fn pr_section(out: &mut Vec<String>, pr: &PrSpec, jobs: &[&Job]) {
         out.extend(["No Jobs yet.".to_owned(), String::new()]);
         return;
     }
-    out.extend([
-        "### Jobs".to_owned(),
-        String::new(),
-        "| Key | Title | Tier | Status | Needs | Touches |".to_owned(),
-        "|---|---|---|---|---|---|".to_owned(),
-    ]);
+    // In a phase after `plan` the table has a last column, Review: what each Job is in this review.
+    let (head, rule) = if later {
+        ("| Key | Title | Tier | Status | Needs | Touches | Review |", "|---|---|---|---|---|---|---|")
+    } else {
+        ("| Key | Title | Tier | Status | Needs | Touches |", "|---|---|---|---|---|---|")
+    };
+    out.extend(["### Jobs".to_owned(), String::new(), head.to_owned(), rule.to_owned()]);
     for j in jobs {
+        let review = if later { format!(" {} |", mark(j)) } else { String::new() };
         out.push(format!(
-            "| {} | {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} |{review}",
             tcode(&j.key),
             cell(&j.title),
             j.tier,
@@ -177,7 +188,13 @@ fn pr_section(out: &mut Vec<String>, pr: &PrSpec, jobs: &[&Job]) {
         out.extend([
             format!("### {}: {}", code(&j.key), inline(&j.title)),
             String::new(),
-            format!("Status: `{}` · Tier: `{}` · Needs: {}", j.status, j.tier, joined(&j.needs, code)),
+            format!(
+                "Status: `{}`{} · Tier: `{}` · Needs: {}",
+                j.status,
+                if later { format!(" · {}", mark(j)) } else { String::new() },
+                j.tier,
+                joined(&j.needs, code)
+            ),
             String::new(),
             "#### Goal".to_owned(),
             String::new(),
@@ -203,12 +220,43 @@ fn pr_section(out: &mut Vec<String>, pr: &PrSpec, jobs: &[&Job]) {
     }
 }
 
+/// The `## Overlaps` section (commands.md §4.5): a table, or that no other
+/// active Plan touches these files.
+fn overlaps_section(out: &mut Vec<String>, overlaps: &[Overlap]) {
+    out.extend(["## Overlaps".to_owned(), String::new()]);
+    if overlaps.is_empty() {
+        out.push("No other active Plan touches these files.".to_owned());
+    } else {
+        out.extend(["| Job | Path | Other Plan | PR | Job | Status |".to_owned(), "|---|---|---|---|---|---|".to_owned()]);
+        for o in overlaps {
+            out.push(format!(
+                "| {} | {} | {} | {} | {} | {} |",
+                tcode(&o.job),
+                tcode(&o.path),
+                tcode(&o.plan),
+                tcode(&o.pr),
+                tcode(&o.other_job),
+                o.status
+            ));
+        }
+    }
+    out.push(String::new());
+}
+
 /// The plan markdown for `prs` and `jobs` (every one of the Plan); `cancelled`
-/// PRs and Jobs are left out, and so are the Jobs of a `cancelled` PR. Pure:
-/// the same PRs and Jobs give the same text.
-pub fn markdown(title: &str, context: &str, phase: &str, prs: &[PrSpec], jobs: &[Job]) -> String {
+/// PRs and Jobs are left out, and so are the Jobs of a `cancelled` PR.
+/// `overlaps` are those of [`super::overlap::find`]. Pure: the same PRs, Jobs
+/// and overlaps give the same text.
+pub fn markdown(title: &str, context: &str, phase: &str, prs: &[PrSpec], jobs: &[Job], overlaps: &[Overlap]) -> String {
     let prs: Vec<&PrSpec> = prs.iter().filter(|p| p.status != "cancelled").collect();
     let mut out = vec![format!("# Plan: {}", inline(title)), String::new(), format!("Context: `{context}` · Phase: `{phase}`"), String::new()];
+    let later = !matches!(phase, "grounding" | "plan");
+    if later {
+        out.extend([
+            "This review covers the Jobs marked **under review**, the draft Jobs only; the Jobs marked Locked are shown as context and are not for approval.".to_owned(),
+            String::new(),
+        ]);
+    }
     if prs.is_empty() {
         out.extend(["No PRs yet.".to_owned(), String::new()]);
         return out.join("\n");
@@ -228,9 +276,10 @@ pub fn markdown(title: &str, context: &str, phase: &str, prs: &[PrSpec], jobs: &
         let nodes: Vec<(&str, &[String])> = order.iter().map(|p| (p.key.as_str(), p.needs.as_slice())).collect();
         out.extend([graph("LR", "p", &nodes), String::new()]);
     }
+    overlaps_section(&mut out, overlaps);
     for pr in order {
         let jobs: Vec<&Job> = jobs.iter().filter(|j| j.pr == pr.key && j.status != "cancelled").collect();
-        pr_section(&mut out, pr, &jobs);
+        pr_section(&mut out, pr, &jobs, later);
     }
     out.join("\n")
 }
@@ -262,7 +311,7 @@ mod tests {
 
     #[test]
     fn a_plan_without_prs_says_so() {
-        assert_eq!(markdown("T", "ctx", "plan", &[], &[]), "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n");
+        assert_eq!(markdown("T", "ctx", "plan", &[], &[], &[]), "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n");
     }
 
     fn pr(key: &str, needs: &[&str]) -> PrSpec {

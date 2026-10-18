@@ -31,6 +31,12 @@ pub struct Spec {
     pub optional: &'static [&'static str],
 }
 
+/// The adapter/cpd protocol number (commands.md §1.2, contract §5.2 "The protocol number"),
+/// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
+/// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
+/// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
+pub const PROTOCOL: u32 = 2;
+
 use Set::{Maybe as M, No as N, Yes as Y};
 
 const fn spec(scope: [Set; 5], required: &'static [&'static str], optional: &'static [&'static str]) -> Spec {
@@ -106,6 +112,7 @@ kinds! {
     ContextArchived = "context-archived",
     PlanArchived = "plan-archived",
     SessionArchived = "session-archived",
+    SessionMessage = "session-message",
     InboxOpened = "inbox-opened",
     InboxClosed = "inbox-closed",
     InboxSnoozed = "inbox-snoozed",
@@ -129,7 +136,7 @@ impl Kind {
             ContextGrounded => spec([Y, N, N, N, Y], &["seq", "forked_from"], &[]),
             PlanCreated => spec([Y, Y, N, N, N], &["title", "jira", "lead_session", "forked_from", "cwd"], &[]),
             PlanPhase => spec([Y, Y, N, N, N], &["from", "to"], &["jobs", "pr", "prs"]),
-            PlanReview => spec([Y, Y, N, N, N], &["review", "fingerprint", "status"], &["feedback"]),
+            PlanReview => spec([Y, Y, N, N, N], &["review", "fingerprint", "status"], &["feedback", "jobs"]),
             PlanDone => spec([Y, Y, N, N, N], &["prs"], &[]),
             JobAdded => spec([Y, Y, Y, N, N], &["pr", "status", "appended", "tier", "needs", "review"], &[]),
             JobEdited => spec([Y, Y, Y, N, N], &["fields"], &[]),
@@ -143,7 +150,7 @@ impl Kind {
             AttemptRetry => spec([Y, Y, Y, Y, N], &["outcome", "cause", "next_tier"], &["feedback"]),
             AttemptNudge => spec([Y, Y, Y, Y, Y], &["prompt"], &[]),
             AllMerged => spec([Y, Y, N, N, N], &["pr", "merged", "cancelled"], &[]),
-            PrFeedback => spec([Y, Y, N, N, N], &["pr", "number", "url", "state", "checks", "review_decision", "reasons"], &[]),
+            PrFeedback => spec([Y, Y, N, N, N], &["pr", "number", "url", "state", "checks", "review_decision", "mergeable", "merge_state", "conflict", "reasons"], &[]),
             PrAdded => spec([Y, Y, N, N, N], &["pr", "repo", "base", "needs", "appended"], &[]),
             PrEdited => spec([Y, Y, N, N, N], &["pr", "fields"], &[]),
             PrCancelled => spec([Y, Y, N, N, N], &["pr"], &[]),
@@ -166,6 +173,7 @@ impl Kind {
             ContextArchived => spec([Y, N, N, N, N], &["archived"], &[]),
             PlanArchived => spec([Y, Y, N, N, N], &["archived"], &[]),
             SessionArchived => spec([Y, M, N, N, Y], &["archived"], &[]),
+            SessionMessage => spec([Y, M, N, N, Y], &["from", "text"], &[]),
             InboxOpened => spec([M, M, M, N, M], &["item", "kind", "urgency", "label"], &[]),
             InboxClosed => spec([M, M, M, N, M], &["item", "kind"], &[]),
             InboxSnoozed => spec([M, M, M, N, M], &["item", "until"], &[]),
@@ -191,5 +199,31 @@ impl FromStr for Kind {
                 .with("kind", s)
                 .with("kinds", Kind::ALL.iter().map(|k| k.as_str()).collect::<Vec<_>>())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
+    /// The protocol and the `sha256` of the sorted kinds, joined by `\n`, they were last raised for.
+    const PINNED: (u32, &str) = (2, "05bf69be064acc31536554f65e9649b8c66fbbf3efddf9fdae56f9abeb89d162");
+
+    fn kinds_hash() -> String {
+        let mut names: Vec<&str> = Kind::ALL.iter().map(|k| k.as_str()).collect();
+        names.sort_unstable();
+        format!("{:x}", Sha256::digest(names.join("\n").as_bytes()))
+    }
+
+    #[test]
+    fn the_event_kinds_are_pinned_to_the_protocol() {
+        assert_eq!(
+            (PROTOCOL, kinds_hash().as_str()),
+            PINNED,
+            "The Event kinds or PROTOCOL changed. Raise PROTOCOL (core/src/events/kind.rs) when the kinds changed, \
+             then set PINNED to ({PROTOCOL}, {:?}) and update `PROTOCOL` and `KINDS` in pi/lib/event.ts.",
+            kinds_hash()
+        );
     }
 }
