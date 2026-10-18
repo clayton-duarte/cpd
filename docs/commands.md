@@ -6,6 +6,8 @@ It specifies every command of outline §3 (synopsis, flags, preconditions with t
 
 Evidence labels as in contract.md: **verified** (run on the homeserver on 2026-10-14), **docs** (read in the named tool's documentation or source), **unverified** (a design assumption the implementation Job must check).
 
+The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Grounding, Clarifying, Specifying), **Plan** (Dividing, Sequencing, Approving, Dispatching) and **Deploy** (Mechanical checks, PR, Reviewing and Monitoring, Addressing). contract §3.9 maps each step to its phase and commands.
+
 ## Contents
 
 1. [Conventions](#1-conventions)
@@ -979,6 +981,8 @@ Idempotent: no; §3.5 refuses `answer` on an Escalation that is not `open`, so a
 A Plan's PRs (R34, §2.2 PR, §3.8) and their pull requests, through `gh` (§7.6). `gh` failures are `gh_failed` (exit 1) with its stderr tail. Every command here works on **one PR**: `pr open`, `pr rebase` and `pr view` select it by `--pr <key>` (§1.3: omitted, the Plan's one PR that is not `cancelled`); `pr add`, `pr edit`, `pr cancel` and `pr start` (§9.4–§9.7) take its key as their argument; `pr poll` has no `--pr`: it polls every open pull request of the User. `<repo>`, `<base>`, `<lead branch>` and `<lead worktree>` are the selected PR's (§7); `gh` runs with cwd = its Lead worktree, so it addresses the PR's repo.
 
 ### 9.1 `pr open`
+
+`pr open` is the **Mechanical checks** step of the Deploy stage (contract §3.9): it runs the Gate, then opens the pull request. Review follows the opening, not the Gate.
 
 ```
 cpd pr open [--pr <key>] [--plan <id>]

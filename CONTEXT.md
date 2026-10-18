@@ -1,6 +1,6 @@
 # CPD 2
 
-CPD (Context → Plan → Dispatch) turns one human ticket into a reviewed pull request by having a lead agent specify work and a swarm of agents execute it in parallel. This is cpd 2's vocabulary; the contract is [contract.md](docs/contract.md). cpd 1's vocabulary is the root `CONTEXT.md` of the commit before the switch-over (git history); every term below that is not marked new or changed means what it meant there.
+CPD (Context → Plan → Deploy) turns one human ticket into a reviewed pull request by having a lead agent specify work and a swarm of agents execute it in parallel. This is cpd 2's vocabulary; the contract is [contract.md](docs/contract.md). cpd 1's vocabulary is the root `CONTEXT.md` of the commit before the switch-over (git history); every term below that is not marked new or changed means what it meant there.
 
 ## Phases
 
@@ -21,6 +21,54 @@ _Avoid_: execution, run phase
 **PR** (phase):
 The phase from when every PR of the Plan is open until all are merged; PR feedback becomes appended Jobs. Then the Plan is **done**; a PR added later (a follow-up to a bug or regression) moves it back to dispatch, and it is done again when that PR merges.
 _Avoid_: review phase
+
+## The CPD flow
+
+**CPD** (new, hs-n31):
+Context, Plan, Deploy: the cockpit's three columns, read as past, present and future. Each stage has steps; contract §3.9 maps them to phases and commands.
+
+**Context** (stage):
+Grounding, Clarifying, Specifying; phase `grounding`, ending with `plan phase plan`. The Manager does it for the Context, each Lead for its Plan.
+
+**Grounding** (step):
+Reading the Context's records and the User's material.
+
+**Clarifying** (step):
+The interview, until unknowns are minimised.
+
+**Specifying** (step):
+Writing Requirements, assumptions and records.
+
+**Plan** (stage):
+Dividing, Sequencing, Approving, Dispatching; phases `plan` and `dispatch`.
+
+**Dividing** (step):
+Splitting the work into PRs and Jobs (`pr add`, `job add`).
+
+**Sequencing** (step):
+Ordering with `--needs` and PR needs: what runs in parallel, what in series.
+
+**Approving** (step):
+The Plan review (`plan render`, `cpd_plan_review`), then `plan lock`.
+
+**Dispatching** (step):
+The engine runs the Jobs.
+
+**Deploy** (stage):
+Mechanical checks, PR, Reviewing and Monitoring, Addressing; the end of phase `dispatch` and phase `deploy` until `done`.
+
+**Mechanical checks** (step):
+The Gate, run by `pr open`.
+
+**PR** (step):
+The pull request is opened.
+
+**Reviewing** (step, with Monitoring):
+People, the User's review bot and CI review the open pull request; the engine polls it (`pr-feedback`). There is no local review before the Gate (hs-d171, supersedes hs-d77); a final review Job stays optional.
+_Avoid_: pre-Gate review
+
+**Addressing** (step):
+Feedback Jobs are appended, the Plan returns to Dispatching, then `pr rebase`.
 
 ## Work units
 
