@@ -57,6 +57,13 @@ pub fn write_executable(path: &Path, contents: &str) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("chmod script");
 }
 
+/// Copies the executable `from` to `to` (an install of a binary the test later runs), under
+/// the same exclusive lock and for the same reason as [`write_executable`].
+pub fn copy_executable(from: &str, to: &Path) {
+    let _exclusive = SCRIPT_WRITE_VS_SPAWN.write().unwrap_or_else(PoisonError::into_inner);
+    fs::copy(from, to).expect("copy executable");
+}
+
 /// `cmd.spawn()`, never overlapping with [`write_executable`]. `Command::spawn`
 /// returns once the child has exec'd (or failed to), so the shared lock covers
 /// the whole window in which the child holds copies of this process's descriptors.

@@ -137,7 +137,8 @@ test("cpd-lead talks to its Manager with session send and still asks the User di
   assert.match(text, /cpd session send <manager-id>/);
   assert.match(text, /cpd session list --role manager/);
   assert.match(text, /session-message/);
-  assert.match(text, /cpd-context/);
+  assert.match(text, /cpd context show --since/);
+  assert.doesNotMatch(text, /cpd-context/, "Leads get no turn-start cpd-context message (hs-d209)");
 });
 
 test("cpd-manager starts Plans with a brief, messages Leads and never answers for the User", () => {
@@ -150,6 +151,7 @@ test("cpd-manager starts Plans with a brief, messages Leads and never answers fo
   const text = skillFiles("cpd-manager")[0]!.text;
   assert.match(text, /Never answer for the User/);
   assert.match(text, /never moves the chat slot/);
+  assert.match(text, /--wake/);
 });
 
 /** The text of a markdown section: from its heading line to the next heading of the same or a higher level. */

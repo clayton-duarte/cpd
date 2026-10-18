@@ -28,6 +28,7 @@ pub(super) const MIGRATIONS: &[Migration] = &[
     |conn, _| migration_9(conn),
     |conn, _| migration_10(conn),
     |conn, _| migration_11(conn),
+    |conn, _| migration_12(conn),
 ];
 
 /// The first migration that imports the old git stores of the Contexts; the
@@ -48,6 +49,7 @@ pub(super) const SCHEMA_HASHES: &[&str] = &[
     "3ea4336e93cb740321d1c5c989863c2e018d1348e4e2a22a84feee158f5bee98",
     "2f8e238fbc3b0d5f768fe3c5e6c118b26eda5581d93841449563979a51144168",
     "d2623567062d0367ddcf3dcd0b96c6d7e2b45d447e3b841f77d0249129736277",
+    "ae8ea2361df62ed1a89912b6e39227f4afd043475f27ac7faf78ce847e208cbb",
 ];
 
 const _: () = assert!(SCHEMA_HASHES.len() == MIGRATIONS.len(), "one schema hash per migration");
@@ -74,6 +76,7 @@ pub const HISTORY_TABLES: &[&str] = &[
     "attempts",
     "escalations",
     "sessions",
+    "inbox_items",
     "tier_catalog",
 ];
 
@@ -282,6 +285,13 @@ fn import_old_stores(conn: &Connection, dir: &Path) -> Result<()> {
 fn migration_11(conn: &Connection) -> Result<()> {
     conn.execute_batch(include_str!("migrations/0011.sql"))?;
     create_history_triggers(conn, "pull_requests", false)
+}
+
+/// The Inbox (§4.5 migration 12, hs-d168): `inbox_items` and `events` rebuilt
+/// with the four `inbox-*` kinds (`0012.sql`).
+fn migration_12(conn: &Connection) -> Result<()> {
+    conn.execute_batch(include_str!("migrations/0012.sql"))?;
+    create_history_triggers(conn, "inbox_items", true)
 }
 
 /// §4.5 step 2: one PR per Plan, its per-repo columns kept as stored, its
@@ -1164,7 +1174,7 @@ mod tests {
         assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[9]);
         let mut store = Store::open(&home, 5000).unwrap();
         assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
-        assert_eq!(count(&mut store, "PRAGMA user_version"), 11);
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
         assert_eq!(
             rows(&mut store, "SELECT number, checks, mergeable, merge_state FROM pull_requests ORDER BY id"),
             vec![serde_json::json!([7, "failed", "unknown", "unknown"]), serde_json::json!([9, "passed", "unknown", "unknown"])]
@@ -1248,6 +1258,78 @@ mod tests {
         }
         write(&mut store, "UPDATE prs SET lead_branch = 'cpd/dn/web' WHERE plan = 'dn'").unwrap();
         assert_eq!(rows(&mut store, "SELECT lead_branch FROM prs WHERE plan = 'dn'"), vec![serde_json::json!(["cpd/dn/web"])]);
+    }
+
+    // ---------- migration 12 (the Inbox) ----------
+
+    /// A version 6 database with a Context and two Events.
+    fn version_6(home: &CpdHome) {
+        let sql = format!(
+            "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');
+             INSERT INTO events (txn, at, kind, context, text, data) VALUES
+               (1, '{T}', 'context-created', 'ctx', 'x', '{{}}'), (1, '{T}', 'pr-merged', 'ctx', 'x', '{{}}');"
+        );
+        database_at(home, 6, &sql);
+    }
+
+    #[test]
+    fn a_version_6_database_migrates_to_12_with_inbox_items_and_the_four_inbox_event_kinds() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_6(&home);
+        assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[5]);
+
+        let mut store = Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
+        assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[VERSION as usize - 1]);
+        assert_eq!(
+            rows(&mut store, "SELECT id, kind FROM events ORDER BY id"),
+            vec![serde_json::json!([1, "context-created"]), serde_json::json!([2, "pr-merged"])]
+        );
+        assert_eq!(count(&mut store, "SELECT count(*) FROM inbox_items"), 0);
+
+        // The four kinds are accepted, an unknown one is not, and ids go on after the kept ones.
+        write(&mut store, "INSERT INTO events (txn, at, kind, context, text, data) VALUES
+                             (cpd_txn(), 't', 'inbox-opened', 'ctx', 'x', '{}'), (cpd_txn(), 't', 'inbox-closed', 'ctx', 'x', '{}'),
+                             (cpd_txn(), 't', 'inbox-snoozed', 'ctx', 'x', '{}'), (cpd_txn(), 't', 'inbox-dismissed', 'ctx', 'x', '{}')")
+            .unwrap();
+        assert_eq!(count(&mut store, "SELECT max(id) FROM events"), 6);
+        assert!(write(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'inbox-other', 'x', '{}')").is_err());
+        // The rebuilt table kept its triggers.
+        for sql in ["UPDATE events SET text = 'y'", "DELETE FROM events"] {
+            assert_eq!(sqlite_message(&refused(&mut store, sql)), "append_only: events", "{sql}");
+        }
+    }
+
+    #[test]
+    fn inbox_items_keep_one_open_item_per_identity_and_write_history_and_never_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_6(&home);
+        let mut store = Store::open(&home, 5000).unwrap();
+        let item = |urgency: &str| {
+            format!("INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('dialog', '{urgency}', 'session:a', 'l', 't');")
+        };
+        write(&mut store, &item("red")).unwrap();
+        // The same identity cannot be open twice; another urgency is another identity.
+        assert!(write(&mut store, &item("red")).is_err());
+        write(&mut store, &item("magenta")).unwrap();
+        // Once closed, the identity is free again.
+        write(&mut store, "UPDATE inbox_items SET closed_at = 't' WHERE urgency = 'red'").unwrap();
+        write(&mut store, &item("red")).unwrap();
+        assert_eq!(
+            rows(&mut store, "SELECT pk, op FROM history WHERE tbl = 'inbox_items' ORDER BY id"),
+            vec![
+                serde_json::json!(["[1]", "insert"]),
+                serde_json::json!(["[2]", "insert"]),
+                serde_json::json!(["[1]", "update"]),
+                serde_json::json!(["[3]", "insert"]),
+            ]
+        );
+        assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM inbox_items")), "append_only: inbox_items");
+        // A kind the poll adds later is refused until its migration; `engine-down` is never stored.
+        assert!(write(&mut store, "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('engine-down', 'red', 'engine', 'l', 't')").is_err());
     }
 
     #[test]
