@@ -1421,6 +1421,8 @@ Every title is drawn reversed: `#[reverse]` before it and `#[noreverse]` after i
 
 **The `pane-died` hook.** `set-hook -g pane-died 'if -F "#{@cpd_view}" "respawn-pane"'`: only a pane that carries `@cpd_view` (a view of the cockpit) is respawned when its program dies. A Lead or engine pane stays dead, as `remain-on-exit` leaves it, because engine E2 must see its death (§3.6, §3.7). This differs from cpd 1's unconditional `set-hook -g pane-died "respawn-pane"`.
 
+**Known tmux limitation (tmux < 3.6 built with libutempter, e.g. Ubuntu 24.04's 3.4).** Such a tmux can lose the `SIGCHLD` of a pane whose tty closes before the kernel signals it: on that EOF tmux calls `utempter_remove_record`, which sets `SIGCHLD` to `SIG_DFL` while it waits for its helper. The pane then shows dead, but tmux never reads its status, so `pane-died` does not fire and a dead view stays dead until the server's next `SIGCHLD` (any pane spawn, e.g. `cpd tui` respawning the dead panes of its layout). Fixed upstream in tmux 3.6 (commit fa5f3cef3d, tmux GitHub issue 4559).
+
 ### 6.2 Sessions, windows and panes
 
 | tmux session | Window | Panes | What runs |
