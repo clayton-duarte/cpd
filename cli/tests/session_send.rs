@@ -190,7 +190,7 @@ fn a_manager_is_a_target_and_an_archived_one_is_refused() {
     let events = messages(&env);
     assert_eq!(events.len(), 1);
     assert_eq!((&events[0]["session"], &events[0]["context"], &events[0]["plan"]), (&json!("mgr1"), &json!("ctx"), &Value::Null));
-    assert_eq!(events[0]["data"], json!({"from": "lead1", "text": "done"}));
+    assert_eq!(events[0]["data"], json!({"from": "lead1", "text": "done", "wake": false}));
     exec_sql(&env, "UPDATE sessions SET archived_at = 't' WHERE id = 'mgr1'");
     refused(&env.cpd(&["session", "send", "mgr1", "again"]), "archived", 3);
     assert_eq!(messages(&env).len(), 1);
