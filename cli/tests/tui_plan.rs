@@ -326,10 +326,10 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
     let screen = screen_when(&env, &pane, "the boxes", |s| s.len() > 8 && s[8].ends_with('┘'));
     // web below api, the arrow from api's bottom border into web's top border
     let want = [
-        "  ┌ api · api-server → main · #12 open ┐",
-        "  │  ✓ a │O3 ───── ✓ b │S3             │",
-        "  └─────────────────┬──────────────────┘",
-        "                  ╭─╯",
+        "  ┌ api · api-server → main · #12 open ↗ ┐",
+        "  │  ✓ a │O3 ───── ✓ b │S3               │",
+        "  └──────────────────┬───────────────────┘",
+        "                  ╭──╯",
         "                  ▼",
         "  ┌ web · web → develop · waiting ┐",
         "  │  ○ c │S3                      │",
@@ -397,17 +397,89 @@ fn a_plan_without_jobs_says_no_plan_yet() {
 }
 
 #[test]
-fn escalations_and_the_plan_review_are_not_drawn() {
+fn escalations_and_a_decided_plan_review_are_not_drawn() {
     let env = env();
     let mut s = plan_with("dispatch", None, &[("a", "running", "S3", &[], 1)]);
     s += &format!("INSERT INTO escalations (plan, id, attempt, number, question, status, answer, asker_pid, asked_at, answered_at, expired_at)
           VALUES ('ship', 'a-a1-q1', 'a-a1', 1, 'Which?', 'open', NULL, 1, '2026-01-03T00:20:00.000Z', NULL, NULL);
-          INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at)
-          VALUES ('ship', 'r1', 1, '{FP}', 'pending', '2026-01-02T01:00:00.000Z');");
+          INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at, decided_at)
+          VALUES ('ship', 'r1', 1, '{FP}', 'approved', '2026-01-02T01:00:00.000Z', '2026-01-02T02:00:00.000Z');");
     sql(&env, &s);
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 2 && s[2].contains(" a "));
     assert!(screen.iter().all(|l| !l.contains("Escalation") && !l.contains("review")), "{}", screen.join("\n"));
+}
+
+/// A Plan of one PR `repo` with its pull request #7 and one Job, and a Plan review `r<number>` in `status`.
+fn plan_under_review(number: u32, status: &str) -> String {
+    let decided = if status == "pending" { "NULL" } else { "'2026-01-02T02:00:00.000Z'" };
+    plan_with("dispatch", Some((7, "none")), &[("a", "queued", "S3", &[], 0)])
+        + &format!(
+            "INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at, decided_at)
+             VALUES ('ship', 'r{number}', {number}, '{FP}', '{status}', '2026-01-02T01:00:00.000Z', {decided});"
+        )
+}
+
+fn write_port(env: &TestEnv, text: &str) {
+    let dir = env.cpd_home().join("run").join("ship");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("plannotator-port"), text).unwrap();
+}
+
+/// The screen with its escapes (`capture-pane -e`); tmux 3.4 keeps the OSC 8 links in it.
+fn styled_screen(env: &TestEnv, pane: &str) -> String {
+    tmux_out(env, &["capture-pane", "-p", "-e", "-t", pane])
+}
+
+#[test]
+fn a_pull_request_box_title_ends_in_a_link_to_it_and_a_pending_review_is_a_row_above_the_boxes() {
+    let env = env();
+    sql(&env, &plan_under_review(2, "pending"));
+    write_port(&env, "19433\n");
+    let pane = start_view(&env);
+    let screen = screen_when(&env, &pane, "the row and the box", |s| s.len() > 3 && s[3].contains(" a "));
+    // the row is the pane's first, indented by the margin; the boxes are one row lower than without it
+    assert_eq!(screen[0], "   Plan review r2 pending ↗", "{}", screen.join("\n"));
+    assert_eq!(screen[1], "");
+    assert_eq!(screen[2], "  ┌ repo · repo → main · #7 open ↗ ┐");
+    let styled = styled_screen(&env, &pane);
+    assert!(styled.contains("]8;;https://github.com/acme/repo/pull/7"), "{styled:?}");
+    assert!(styled.contains("]8;;http://localhost:19433"), "{styled:?}");
+    // each link wraps its `↗` and nothing else
+    for url in ["https://github.com/acme/repo/pull/7", "http://localhost:19433"] {
+        assert!(
+            styled.lines().any(|l| l.contains(&format!("]8;;{url}\x1b\\↗\x1b]8;;\x1b\\"))),
+            "{url}: {styled:?}"
+        );
+    }
+}
+
+#[test]
+fn without_a_port_file_the_pending_review_row_has_no_arrow() {
+    let env = env();
+    sql(&env, &plan_under_review(1, "pending"));
+    let pane = start_view(&env);
+    let first = screen_when(&env, &pane, "the row", |s| s.len() > 3 && s[3].contains(" a "));
+    assert_eq!(first[0], "   Plan review r1 pending", "{}", first.join("\n"));
+    assert!(!styled_screen(&env, &pane).contains("localhost"));
+    // a port file that holds no port is no port file
+    write_port(&env, "not a port\n");
+    sql(&env, &event("plan-review", "ctx", Some("ship"), None, "{}"));
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(screen(&env, &pane)[0], "   Plan review r1 pending");
+}
+
+#[test]
+fn with_no_pending_review_there_is_no_row_and_the_boxes_start_at_the_top() {
+    let env = env();
+    sql(&env, &plan_under_review(1, "rejected"));
+    write_port(&env, "19433\n");
+    let pane = start_view(&env);
+    let screen = screen_when(&env, &pane, "the box", |s| s.len() > 2 && s[2].contains(" a "));
+    assert_eq!(screen[0], "", "{}", screen.join("\n"));
+    assert_eq!(screen[1], "  ┌ repo · repo → main · #7 open ↗ ┐");
+    assert!(screen.iter().all(|l| !l.contains("review")), "{}", screen.join("\n"));
+    assert!(!styled_screen(&env, &pane).contains("localhost"));
 }
 
 #[test]
