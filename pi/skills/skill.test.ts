@@ -137,7 +137,8 @@ test("cpd-lead talks to its Manager with session send and still asks the User di
   assert.match(text, /cpd session send <manager-id>/);
   assert.match(text, /cpd session list --role manager/);
   assert.match(text, /session-message/);
-  assert.match(text, /cpd-context/);
+  assert.match(text, /cpd context show --since/);
+  assert.doesNotMatch(text, /cpd-context/, "Leads get no turn-start cpd-context message (hs-d209)");
 });
 
 test("cpd-manager starts Plans with a brief, messages Leads and never answers for the User", () => {
@@ -150,6 +151,7 @@ test("cpd-manager starts Plans with a brief, messages Leads and never answers fo
   const text = skillFiles("cpd-manager")[0]!.text;
   assert.match(text, /Never answer for the User/);
   assert.match(text, /never moves the chat slot/);
+  assert.match(text, /--wake/);
 });
 
 /** The text of a markdown section: from its heading line to the next heading of the same or a higher level. */
@@ -192,4 +194,17 @@ test("the skill adds later batches as drafts and approves each with cpd_plan_rev
   assert.match(text, /### Starting a later batch[\s\S]*cpd_plan_review[\s\S]*### Appending fixes/, "a later batch starts with a Plan review");
   assert.doesNotMatch(text, /no Plan review for appended work/, "the append-in-chat flow is gone");
   assert.ok(synopses().get("job add")!.has("--draft"), "commands.md documents job add --draft");
+});
+
+test("cpd-lead: sizing follows attempt_minutes, dialogs stay short, Specs carry the bounded-command rules", () => {
+  const [skillMd, ...refs] = skillFiles("cpd-lead");
+  const all = [skillMd!, ...refs];
+  for (const { name, text } of all) assert.doesNotMatch(text, /30 min|13 min/, `${name}: the timeout is attempt_minutes`);
+  assert.match(skillMd!.text, /attempt_minutes/);
+  const questions = all.find((f) => f.name.endsWith("questions.md"))!.text;
+  assert.match(questions, /A dialog holds one short question/);
+  const spec = all.find((f) => f.name.endsWith("spec-files.md"))!.text;
+  for (const rule of ["within 10 minutes", "`timeout`", "synthetic benchmarks", "`cpd events follow`", "`cpd watch`", "`cpd tui`", "`cpd session run`"]) {
+    assert.ok(spec.includes(rule), `spec-files.md must state: ${rule}`);
+  }
 });

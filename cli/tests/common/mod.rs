@@ -13,16 +13,21 @@
 //! - temporary git repos with a fixed identity and no global or system config.
 //!
 //! Use it from a test file with `mod common;`.
+//!
+//! Writing a script and executing it must not overlap with spawning in one test
+//! process (ETXTBSY, see [`write_executable`]): write scripts with
+//! [`write_executable`] and spawn only through [`spawn`] / [`output`].
 
 #![allow(dead_code)]
 
 use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{PoisonError, RwLock};
 
 use serde_json::Value;
 use tempfile::TempDir;
@@ -116,21 +121,54 @@ fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// Held while a fake is written (open for write until closed) and while the harness itself
-/// spawns a process: a child forked meanwhile would keep the fake's write fd until its exec,
-/// and executing the fake then fails with ETXTBSY.
-static WRITE_VS_SPAWN: Mutex<()> = Mutex::new(());
-
-/// Spawns `cmd` (returns once it has exec'd) and waits for it.
+/// Spawns `cmd` with stdio on /dev/null through [`spawn`] (the harness's one
+/// write-vs-spawn lock) and waits for it.
 fn run_quietly(cmd: &mut Command) -> std::io::Result<std::process::ExitStatus> {
-    let mut child = {
-        let _lock = WRITE_VS_SPAWN.lock().unwrap_or_else(|e| e.into_inner());
-        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?
-    };
-    child.wait()
+    spawn(cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()))?.wait()
 }
 
 static NEXT_SOCKET: AtomicUsize = AtomicUsize::new(0);
+
+/// Held exclusively while a script is being written, shared while a child is
+/// being spawned. It guards no data: poisoning (a test panicked while holding
+/// it) leaves nothing inconsistent, so it is ignored.
+static SCRIPT_WRITE_VS_SPAWN: RwLock<()> = RwLock::new(());
+
+/// Writes the executable script `path` (mode 0755).
+///
+/// Tests run in parallel threads of one process. `fork` copies every open file
+/// descriptor, and close-on-exec acts only at the child's `exec`. A child forked
+/// by a concurrent test while this file is open for writing therefore holds a
+/// write descriptor to it for a moment, and an `exec` of the script in that
+/// moment fails with ETXTBSY ("Text file busy"). So the file is written and
+/// closed under the exclusive lock, and every spawn ([`spawn`], [`output`])
+/// takes the shared lock until the child has exec'd. Never retry instead.
+pub fn write_executable(path: &Path, contents: &str) {
+    let _exclusive = SCRIPT_WRITE_VS_SPAWN.write().unwrap_or_else(PoisonError::into_inner);
+    fs::write(path, contents).expect("write script");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("chmod script");
+}
+
+/// Copies the executable `from` to `to` (an install of a binary the test later runs), under
+/// the same exclusive lock and for the same reason as [`write_executable`].
+pub fn copy_executable(from: &str, to: &Path) {
+    let _exclusive = SCRIPT_WRITE_VS_SPAWN.write().unwrap_or_else(PoisonError::into_inner);
+    fs::copy(from, to).expect("copy executable");
+}
+
+/// `cmd.spawn()`, never overlapping with [`write_executable`]. `Command::spawn`
+/// returns once the child has exec'd (or failed to), so the shared lock covers
+/// the whole window in which the child holds copies of this process's descriptors.
+pub fn spawn(cmd: &mut Command) -> io::Result<Child> {
+    let _shared = SCRIPT_WRITE_VS_SPAWN.read().unwrap_or_else(PoisonError::into_inner);
+    cmd.spawn()
+}
+
+/// `cmd.output()` (stdout and stderr captured, stdin null), spawning through
+/// [`spawn`]: the lock is released before the child is waited for.
+pub fn output(cmd: &mut Command) -> io::Result<Output> {
+    spawn(cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()))?.wait_with_output()
+}
 
 pub struct TestEnv {
     dir: TempDir,
@@ -289,7 +327,7 @@ impl TestEnv {
 
     /// Runs `cpd <args>` from `cwd`.
     pub fn cpd_in(&self, cwd: &Path, args: &[&str]) -> Run {
-        let out = self.command(CPD).args(args).current_dir(cwd).output().expect("run cpd");
+        let out = output(self.command(CPD).args(args).current_dir(cwd)).expect("run cpd");
         Run {
             exit: out.status.code().expect("cpd was killed by a signal"),
             stdout: String::from_utf8(out.stdout).expect("stdout is UTF-8"),
@@ -299,7 +337,7 @@ impl TestEnv {
 
     /// Runs `program` in this env and panics unless it exits 0; returns stdout.
     pub fn run_ok(&self, cwd: &Path, program: &str, args: &[&str]) -> String {
-        let out = self.command(program).args(args).current_dir(cwd).output().expect(program);
+        let out = output(self.command(program).args(args).current_dir(cwd)).expect(program);
         assert_ok(program, args, &out);
         String::from_utf8(out.stdout).expect("stdout is UTF-8")
     }
@@ -322,7 +360,7 @@ impl TestEnv {
 
     /// `tmux -L <private socket> <args>` in this env.
     pub fn tmux(&self, args: &[&str]) -> Output {
-        self.command("tmux").arg("-L").arg(&self.tmux_socket).args(args).output().expect("run tmux")
+        output(self.command("tmux").arg("-L").arg(&self.tmux_socket).args(args)).expect("run tmux")
     }
 
     /// Installs `bin/<name>`: a shell script that records its argv (see
@@ -356,11 +394,7 @@ unset _d _n _f _a
 "#,
             dir = dir.display(),
         );
-        {
-            let _lock = WRITE_VS_SPAWN.lock().unwrap_or_else(|e| e.into_inner());
-            fs::write(&path, script).expect("write fake");
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod fake");
-        }
+        write_executable(&path, &script);
         path
     }
 
@@ -402,6 +436,7 @@ unset _d _n _f _a
 
 impl Drop for TestEnv {
     fn drop(&mut self) {
+        // Kills the tmux server, the env's processes and removes its directory.
         self.teardown();
     }
 }
