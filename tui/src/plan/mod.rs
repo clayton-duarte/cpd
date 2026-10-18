@@ -17,7 +17,7 @@ mod actions;
 mod boxes;
 mod flow;
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{
@@ -45,6 +45,9 @@ use cpd_core::store::Store;
 /// A snapshot is retaken at most this often, whatever the Event rate (§17).
 const COALESCE: Duration = Duration::from_millis(500);
 
+/// The view redraws at least this often, for the spinner (one frame: palette.rs); a redraw reads nothing from the store.
+const FRAME: Duration = Duration::from_millis(250);
+
 /// The blank space around the chart's content, inside the canvas the view scrolls over: at scroll (0, 0) nothing of the
 /// chart touches the pane's edges, and scrolled the chart reaches them.
 const MARGIN: Margin = Margin { horizontal: 2, vertical: 1 };
@@ -54,6 +57,18 @@ struct Centre {
     slot: ChatSlot,
     plan: PlanBoxes,
     boxes: Boxes,
+    /// The spinner frame `boxes` is drawn at.
+    frame: usize,
+}
+
+impl Centre {
+    /// Draw the boxes again at spinner frame `frame`, from the Plan already read.
+    fn turn(&mut self, frame: usize) {
+        if frame != self.frame {
+            self.boxes = boxes::layout(&self.plan.prs, &self.plan.jobs, frame).with_margin(MARGIN);
+            self.frame = frame;
+        }
+    }
 }
 
 /// One read of the store: the Plan of the chat slot, if any, and the Event id to follow from.
@@ -67,8 +82,9 @@ fn snapshot(store: &mut Store) -> Result<Snapshot, CpdError> {
     let cursor = store.read(highest_id)?;
     let Some(slot) = read::chat_slot(store)? else { return Ok(Snapshot { cursor, centre: None }) };
     let plan = read::plan_boxes(store, &slot.plan)?;
-    let boxes = boxes::layout(&plan.prs, &plan.jobs).with_margin(MARGIN);
-    Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, boxes }) })
+    let frame = palette::frame(SystemTime::now());
+    let boxes = boxes::layout(&plan.prs, &plan.jobs, frame).with_margin(MARGIN);
+    Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, boxes, frame }) })
 }
 
 /// Whether an Event changes what the pane shows: the Plan's or the Context's, or a move of a Lead (the chat slot may
@@ -203,11 +219,18 @@ fn show(
         Ok(f) => f,
         Err(e) => return Err(std::io::Error::other(e.to_string())),
     };
-    let (mut stale, mut taken) = (false, Instant::now());
+    let (mut stale, mut taken, mut fetched) = (false, Instant::now(), Instant::now());
     loop {
+        if let Some(c) = snap.centre.as_mut() {
+            c.turn(palette::frame(SystemTime::now()));
+        }
         terminal.draw(|f| ui.draw(f, snap.centre.as_ref()))?;
-        if !event::poll(poll)? {
-            // idle: look for Events
+        if !event::poll(poll.min(FRAME))? {
+            // idle: look for Events, every `poll`
+            if fetched.elapsed() < poll {
+                continue;
+            }
+            fetched = Instant::now();
             match store.read(|conn| follow.fetch(conn, snap.cursor, None, 500)) {
                 Ok(events) => {
                     ui.error = None;

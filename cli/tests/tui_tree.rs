@@ -184,10 +184,11 @@ impl<'a> Pane<'a> {
         Pane { env }
     }
 
-    /// The screen, each row without trailing blanks, without the empty rows at the end.
+    /// The screen, each row without trailing blanks, without the empty rows at the end. The working dot turns with the
+    /// wall clock (`◐◓◑◒`), so every frame reads as the first: a test cannot know which one it catches.
     fn screen(&self) -> Vec<String> {
         let out = self.env.tmux(&["capture-pane", "-p", "-t", SESSION]);
-        let text = String::from_utf8(out.stdout).unwrap();
+        let text = String::from_utf8(out.stdout).unwrap().replace(['◓', '◑', '◒'], "◐");
         let mut rows: Vec<String> = text.lines().map(|l| l.trim_end().to_owned()).collect();
         while rows.last().is_some_and(String::is_empty) {
             rows.pop();
@@ -301,14 +302,14 @@ fn the_tree_of_a_prepared_store() {
         [
             String::new(),
             " ● alpha".to_owned(),
-            row("⏵ ├ ○ ship", "1⋅1⋅0⋅1⋅2"),
+            row("⏵ ├ ◐ ship", "1⋅1⋅0⋅1⋅2"),
             row("  ├ ○ sketch", "2⋅0⋅0⋅0⋅0"),
             "   ├ ○ ship·f-id".to_owned(),
             "   └ ● ship·f-bl".to_owned(),
             " ● beta".to_owned(),
             row("  ├ ● rel", "0⋅0⋅0⋅0⋅1"),
-            row("  └ ○ old", "0⋅0⋅0⋅0⋅0"),
-            " ○ gamma".to_owned(),
+            row("  └ ◌ old", "0⋅0⋅0⋅0⋅0"),
+            " ◌ gamma".to_owned(),
         ],
         "the Context and Plan ids, the forks' `<plan id>·<4 characters of the Session id>`; the forks are siblings of the Plans, after them, under their Context (B1); the grounded Lead g-alpha is no row; the Jobs: queued, running, merging, failed, merged; no state text"
     );
@@ -521,7 +522,7 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
         [
             String::new(),
             " ● alpha".to_owned(),
-            row("⏵ ├ ○ ship", "1⋅1⋅0⋅1⋅2"),
+            row("⏵ ├ ◐ ship", "1⋅1⋅0⋅1⋅2"),
             row("  ├ ○ sketch", "2⋅0⋅0⋅0⋅0"),
             "   ├ ○ ship·f-id".to_owned(),
             "   └ ● ship·f-bl".to_owned(),
@@ -534,17 +535,17 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
     );
     // a click on beta's `…` shows the archived Plan at the depth it would have if live, with the normal guide
     pane.click(4, 8);
-    let screen = pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ○ old")));
-    assert_eq!(screen[7..11], [row("  ├ ● rel", "0⋅0⋅0⋅0⋅1"), "   ├ …".to_owned(), row("  └ ○ old", "0⋅0⋅0⋅0⋅0"), " …".to_owned()]);
+    let screen = pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ◌ old")));
+    assert_eq!(screen[7..11], [row("  ├ ● rel", "0⋅0⋅0⋅0⋅1"), "   ├ …".to_owned(), row("  └ ◌ old", "0⋅0⋅0⋅0⋅0"), " …".to_owned()]);
     // a click on the archived Plan shows its history (below); then the other `…` shows the archived Context
     pane.click(10, 9);
     wait_for_calls(&env, 1);
     pane.click(1, 10);
-    let screen = pane.wait("the archived Context", |s| s.iter().any(|r| r == " ○ gamma"));
-    assert_eq!(screen[9..12], [row("  └ ○ old", "0⋅0⋅0⋅0⋅0"), " …".to_owned(), " ○ gamma".to_owned()]);
+    let screen = pane.wait("the archived Context", |s| s.iter().any(|r| r == " ◌ gamma"));
+    assert_eq!(screen[9..12], [row("  └ ◌ old", "0⋅0⋅0⋅0⋅0"), " …".to_owned(), " ◌ gamma".to_owned()]);
     // a click on beta's `…` collapses its group again
     pane.click(4, 8);
-    let screen = pane.wait("the group collapsed", |s| s.iter().all(|r| !r.contains("└ ○ old")));
+    let screen = pane.wait("the group collapsed", |s| s.iter().all(|r| !r.contains("└ ◌ old")));
     assert_eq!(screen[7..9], [row("  ├ ● rel", "0⋅0⋅0⋅0⋅1"), "   └ …".to_owned()]);
     assert_eq!(calls(&env), [words(&["session", "history", "l-old"])], "only the click on the archived Session ran a command");
 }
@@ -558,7 +559,7 @@ fn the_cursor_skips_archived_rows_and_enter_never_opens_one() {
     let pane = Pane::start(&env, 46, 16);
     pane.ready();
     pane.click(4, 8); // beta's `…`: its archived Plan is drawn
-    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ○ old")));
+    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ◌ old")));
     pane.down(6); // ship, sketch, f-idle, f-blocked, rel, and then nowhere: the archived Plan `old` is not a stop
     pane.keys(&["Enter"]);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "l-rel"])]);
@@ -579,7 +580,7 @@ fn the_tree_follows_the_archive_events() {
          INSERT INTO events (txn, at, kind, context, plan, text, data)
          VALUES (cpd_txn(), '2026-02-02T00:00:00.000Z', 'plan-archived', 'beta', 'old', 'fixture', '{\"archived\":true}');",
     );
-    pane.wait("the Plan behind `…`", |s| s.iter().any(|r| r == "   └ …") && s.iter().all(|r| !r.contains("└ ○ old")));
+    pane.wait("the Plan behind `…`", |s| s.iter().any(|r| r == "   └ …") && s.iter().all(|r| !r.contains("└ ◌ old")));
     sql(
         &mut open(&env),
         "UPDATE contexts SET archived_at = '2026-02-02T00:00:00.000Z' WHERE id = 'gamma';
@@ -731,7 +732,7 @@ fn a_click_on_an_archived_fork_runs_session_history() {
     let screen = pane.ready();
     assert_eq!(screen[5], "   └ …", "the archived fork is behind alpha's `…`");
     pane.click(4, 5);
-    pane.wait("the archived fork", |s| s.iter().any(|r| r.contains("└ ○ ship·f-bl")));
+    pane.wait("the archived fork", |s| s.iter().any(|r| r.contains("└ ● ship·f-bl")));
     pane.click(10, 6);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "history", "f-blocked"])]);
     pane.click(8, 4); // a live fork still opens
@@ -747,7 +748,7 @@ fn a_click_that_shows_a_history_is_refused_in_the_note_row() {
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
     pane.click(4, 5);
-    pane.wait("the archived fork", |s| s.iter().any(|r| r.contains("└ ○ ship·f-bl")));
+    pane.wait("the archived fork", |s| s.iter().any(|r| r.contains("└ ● ship·f-bl")));
     pane.click(10, 6);
     pane.wait("the refusal", |_| pane.footer_has("file_unreadable: The session file is missing."));
 }
@@ -796,7 +797,7 @@ fn unarchive_in_the_menu_runs_without_a_prompt_and_a_refusal_shows_in_the_note_r
     let pane = Pane::start(&env, 46, 16);
     pane.ready();
     pane.click(4, 8); // beta's `…`
-    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ○ old")));
+    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ◌ old")));
     pane.right_click(10, 9); // the archived Plan `old`
     let screen = pane.wait("the menu", |s| menu_open(s, "Rename…"));
     assert!(screen.iter().any(|r| r.contains("│ Rename… ")), "{screen:?}");
@@ -815,7 +816,7 @@ fn rename_on_an_archived_plan_runs_plan_rename() {
     let pane = Pane::start(&env, 60, 16);
     pane.ready();
     pane.click(4, 8); // beta's `…`
-    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ○ old")));
+    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ◌ old")));
     pane.right_click(10, 9);
     pane.wait("the menu", |s| menu_open(s, "Rename…"));
     pane.keys(&["Enter"]);

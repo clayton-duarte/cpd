@@ -10,12 +10,12 @@ use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use cpd_tui::palette::{self, Meaning};
-use cpd_tui::read::{self, Widgets};
+use cpd_tui::read::{self, Dot, Widgets};
 use cpd_tui::widgets::{self, Machine, legend};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
-use ratatui::style::Modifier;
+use ratatui::style::{Color, Modifier};
 
 // ---------- fixtures (the store API, as tui_read.rs prepares it) ----------
 
@@ -497,15 +497,34 @@ fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
 }
 
 #[test]
-fn the_tree_dots_are_listed_for_every_phase() {
+fn the_session_dots_are_listed_in_their_colours() {
     let buf = legend_buffer();
-    let dots = find(&buf, "Context dots").1;
-    for (name, phase) in palette::PHASE_LEGEND {
-        let (x, y) = find_after(&buf, dots, &format!(" {name}"));
-        assert_eq!((buf[(x - 3, y)].symbol(), buf[(x - 1, y)].symbol()), ("●", "○"), "{name}");
-        let want = palette::color(palette::phase(phase));
-        assert_eq!((buf[(x - 3, y)].fg, buf[(x - 1, y)].fg), (want, want), "{name}");
+    let dots = find(&buf, "Session dots").1;
+    // The glyph column is as wide as the four spinner frames, then two cells of spacing.
+    let glyph_at = |text: &str| {
+        let (x, y) = find_after(&buf, dots, text);
+        (x - 6, y)
+    };
+    let needs_you = glyph_at("the Session needs you");
+    assert_eq!(buf[needs_you].symbol(), "●");
+    let working = glyph_at("the Lead is working");
+    let frames: String = (0..4).map(|i| buf[(working.0 + i, working.1)].symbol().to_string()).collect();
+    assert_eq!(frames, "◐◓◑◒");
+    for (text, glyph, dot) in [
+        ("idle, nothing needed", "○", Dot::Idle),
+        ("pi stopped", "◌", Dot::Stopped),
+        ("red:", "●", Dot::Red),
+        ("yellow:", "●", Dot::Yellow),
+        ("magenta:", "●", Dot::Magenta),
+        ("white:", "●", Dot::White),
+    ] {
+        let cell = &buf[glyph_at(text)];
+        let want = palette::dot_span(dot, 0, false);
+        assert_eq!(cell.symbol(), glyph, "{text}");
+        assert_eq!(cell.symbol(), want.content, "{text}");
+        assert_eq!(cell.fg, want.style.fg.unwrap_or(Color::Reset), "{text}");
     }
+    find_after(&buf, dots, "red > yellow > magenta > white > ◐ > ○ > ◌");
 }
 
 #[test]

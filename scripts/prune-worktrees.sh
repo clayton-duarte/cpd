@@ -1,18 +1,26 @@
 #!/bin/sh
-# One-time cleanup of leftover worktrees whose work reached origin/main (hs-d138, hs-d143).
+# One-time cleanup of leftover worktrees whose work reached origin/main (hs-d138, hs-d143, hs-d144).
 #
-# Usage: scripts/prune-worktrees.sh [--apply] <repo>...
+# Usage: scripts/prune-worktrees.sh [--apply] [--drop <lead-branch>]... <repo>...
 #
 # Without --apply nothing changes (apart from `git fetch origin`) and the script prints what it
-# would do. Needs git, gh (authenticated) and jq.
+# would do. Needs git, gh (authenticated), jq and cpd (the program in $CPD_BIN, default `cpd`).
+#
+# Before anything else the script asks cpd which branches it still runs: for every Plan that is
+# not done, the `lead_branch` of each PR whose status is not merged, and `cpd/<plan>--<attempt id>`
+# for each Attempt of a Job of such a PR. These are protected. If cpd is missing or a cpd call
+# fails, the script exits 2 before touching anything.
 #
 # Per worktree (the main one is skipped), the first rule that holds wins:
+#   keep   active       the branch is protected (also with --drop)
 #   keep   dirty        `git status --porcelain` is not empty (untracked files included)
+#   remove dropped      the Lead Branch L is one of the --drop values (merged or not)
 #   remove              HEAD is an ancestor of origin/main
-#   remove              a merged PR P has a head branch equal to the Lead Branch L or starting
-#                       with `L/`, HEAD is an ancestor of P's head commit, and P reached main
-#                       (its base is main, or the base is the head of a merged PR that reached
-#                       main, at most 5 levels)
+#   remove              a merged PR P has a head branch equal to L or starting with `L/`, or,
+#                       when L is `cpd/<plan>/<key>` (a legacy Lead Branch renamed locally),
+#                       equal to `cpd/<plan>`; HEAD is an ancestor of P's head commit, and P
+#                       reached main (its base is main, or the base is the head of a merged PR
+#                       that reached main, at most 5 levels)
 #   keep   not merged   otherwise
 # L is the branch, or for a branch containing `--` the part before the first `--`. A detached
 # HEAD has no L. Removal deletes the worktree and its local branch, never a remote branch.
@@ -22,17 +30,29 @@
 set -eu
 
 usage() {
-    echo "usage: $0 [--apply] <repo>..." >&2
+    echo "usage: $0 [--apply] [--drop <lead-branch>]... <repo>..." >&2
     exit 2
 }
 
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+: >"$tmp/drops"
+
 apply=0
-if [ "${1-}" = "--apply" ]; then
-    apply=1
+while [ $# -gt 0 ]; do
+    case "$1" in
+    --apply) apply=1 ;;
+    --drop)
+        [ $# -ge 2 ] || usage
+        printf '%s\n' "$2" >>"$tmp/drops"
+        shift
+        ;;
+    -*) usage ;;
+    *) break ;;
+    esac
     shift
-fi
+done
 [ $# -gt 0 ] || usage
-case "$1" in -*) usage ;; esac
 
 for tool in git gh jq; do
     command -v "$tool" >/dev/null 2>&1 || {
@@ -41,8 +61,41 @@ for tool in git gh jq; do
     }
 done
 
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+cpd=${CPD_BIN:-cpd}
+command -v "$cpd" >/dev/null 2>&1 || {
+    echo "$cpd not found" >&2
+    exit 2
+}
+
+# protect: writes the branches cpd still runs to $tmp/protected, one per line; exits 2 on failure.
+protect() {
+    : >"$tmp/protected"
+    "$cpd" plan list >"$tmp/plans.json" || {
+        echo "failed: cpd plan list" >&2
+        exit 2
+    }
+    plans=$(jq -r '.plans[] | select(.phase != "done") | .id' "$tmp/plans.json") || {
+        echo "failed: cannot read the output of cpd plan list" >&2
+        exit 2
+    }
+    for plan in $plans; do
+        "$cpd" plan show --plan "$plan" >"$tmp/plan.json" || {
+            echo "failed: cpd plan show --plan $plan" >&2
+            exit 2
+        }
+        jq -r --arg plan "$plan" '
+            . as $show
+            | $show.prs[] | select(.status != "merged")
+            | .lead_branch, ((.jobs[]) as $key
+                | $show.jobs[] | select(.key == $key) | .attempts[].id | "cpd/\($plan)--\(.)")' \
+            "$tmp/plan.json" >>"$tmp/protected" || {
+            echo "failed: cannot read the output of cpd plan show --plan $plan" >&2
+            exit 2
+        }
+    done
+}
+protect
+
 status=0
 
 # prune_repo <repo>: prints one line per worktree and a summary; returns 1 if a command failed.
@@ -75,8 +128,14 @@ prune_repo() {
         label=$branch
         [ "$branch" != "-" ] || label=detached
         reason=
+        dropped=0
+        lead=${branch%%--*}
 
-        if [ -d "$wt" ]; then
+        if [ "$branch" != "-" ] && grep -qxF -- "$branch" "$tmp/protected"; then
+            reason=active
+        fi
+
+        if [ -z "$reason" ] && [ -d "$wt" ]; then
             if ! dirty=$(git -C "$wt" status --porcelain 2>&1); then
                 echo "failed $wt: $dirty"
                 failed=1
@@ -86,7 +145,9 @@ prune_repo() {
         fi
 
         if [ -z "$reason" ]; then
-            if git -C "$repo" merge-base --is-ancestor "$head" origin/main; then
+            if [ "$branch" != "-" ] && grep -qxF -- "$lead" "$tmp/drops"; then
+                dropped=1
+            elif git -C "$repo" merge-base --is-ancestor "$head" origin/main; then
                 :
             elif merged_via_pr "$repo" "$branch" "$head"; then
                 :
@@ -101,7 +162,11 @@ prune_repo() {
             continue
         fi
 
-        echo "remove $wt ($label)"
+        if [ "$dropped" -eq 1 ]; then
+            echo "remove $wt ($label): dropped"
+        else
+            echo "remove $wt ($label)"
+        fi
         removes=$((removes + 1))
         [ "$apply" -eq 1 ] || continue
         if ! err=$(git -C "$repo" worktree remove --force "$wt" 2>&1); then
@@ -131,14 +196,19 @@ prune_repo() {
 merged_via_pr() {
     [ "$2" != "-" ] || return 1
     lead=${2%%--*}
-    candidates=$(jq -r --arg lead "$lead" '
+    legacy=
+    case "$lead" in
+    cpd/*/*) legacy=${lead%/*} ;;
+    esac
+    candidates=$(jq -r --arg lead "$lead" --arg legacy "$legacy" '
         . as $prs
         | def reached($base; $level):
             $base == "main"
             or ($level < 5
                 and any($prs[] | select(.headRefName == $base); reached(.baseRefName; $level + 1)));
         .[]
-        | select(.headRefName == $lead or (.headRefName | startswith($lead + "/")))
+        | select(.headRefName == $lead or (.headRefName | startswith($lead + "/"))
+            or ($legacy != "" and .headRefName == $legacy))
         | select(reached(.baseRefName; 0))
         | "\(.number) \(.headRefOid)"' "$tmp/prs.json") || {
         failed=1

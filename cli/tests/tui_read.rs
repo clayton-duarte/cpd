@@ -15,7 +15,7 @@ use cpd_core::plan::{Phase, plan_fingerprint};
 use cpd_core::session::State;
 use cpd_core::store::Store;
 use cpd_tui::read::{
-    self, AttemptStatus, Cause, Checks, Engine, EscalationStatus, JobStatus, Origin, Outcome, Place, PrState, ReviewStatus,
+    self, AttemptStatus, Cause, Checks, Dot, Engine, EscalationStatus, JobStatus, Origin, Outcome, Place, PrState, ReviewStatus,
 };
 use rusqlite::Connection;
 
@@ -377,6 +377,92 @@ fn archived_objects_are_in_the_tree_with_their_archived_at() {
     assert!(!ship.sessions[0].is_archived());
 }
 
+/// The dots of the tree (§17): one row of the rule's tables for each Lead, and the Context row's.
+///
+/// - `hot`: `red` (dispatch, blocked), `yel` (pr; two pull requests, only the second has finished checks; its Lead is
+///   idle and its fork `f-yel` is working), `mag` (plan, blocked), `whi` (dispatch, idle, unseen), `wrk`, `idl`, `stp`;
+/// - `calm`: a working and an idle Lead; `dead`: a stopped one; `ice`: no Plan, no Session.
+#[test]
+fn every_session_has_a_dot_and_every_context_the_greatest_of_its_live_sessions() {
+    let (_env, mut store) = fixture();
+    let mut s = String::new();
+    for c in ["hot", "calm", "dead", "ice"] {
+        s += &context(c, None);
+    }
+    let at = |n: u32| format!("2026-01-02T00:00:{n:02}.000Z");
+    let plans = [
+        ("red", "hot", "dispatch", "blocked"),
+        ("yel", "hot", "pr", "idle"),
+        ("mag", "hot", "plan", "blocked"),
+        ("whi", "hot", "dispatch", "idle"),
+        ("wrk", "hot", "dispatch", "working"),
+        ("idl", "hot", "dispatch", "idle"),
+        ("stp", "hot", "dispatch", "stopped"),
+        ("cw", "calm", "dispatch", "working"),
+        ("ci", "calm", "dispatch", "idle"),
+        ("ds", "dead", "dispatch", "stopped"),
+    ];
+    for (n, (plan, context, phase, state)) in plans.into_iter().enumerate() {
+        let pr = (plan == "yel").then_some((20, "open", "pending"));
+        s += &plan_row(plan, context, phase, &format!("l-{plan}"), &at(n as u32), pr);
+        let label = (state == "blocked").then_some("cpd: asking");
+        s += &session_row(&format!("l-{plan}"), "lead", context, plan, None, state, label, &at(n as u32));
+    }
+    // yel's second pull request is the one with finished checks: the first alone would not make it yellow.
+    s += "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+          VALUES ('acme/other', 21, 'https://github.com/acme/other/pull/21', 'PR 21', 0, 'open', 'none', 'passed',
+                  '2026-01-05T00:00:00.000Z', NULL, '2026-01-06T00:00:00.000Z');
+          INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+                           created_txn, created_at, started_at, merged_at)
+          VALUES ('yel', 'other', '/other', 'main', 'open', 'cpd/yel/other', '/wt2', 21, 'https://github.com/acme/other/pull/21',
+                  '2026-01-05T00:00:00.000Z', (SELECT id FROM pull_requests WHERE number = 21), cpd_txn(),
+                  '2026-01-02T00:00:30.000Z', '2026-01-02T00:00:30.000Z', NULL);";
+    s += &session_row("f-yel", "lead", "hot", "yel", None, "working", None, "2026-01-02T00:01:00.000Z");
+    s += &event("session-state", Some("hot"), Some("whi"), Some("l-whi"), r#"{"from":"working","to":"idle","label":null}"#);
+    sql(&mut store, &s);
+
+    let dots = |store: &mut Store| -> Vec<(String, Dot)> {
+        let tree = read::tree(store).unwrap();
+        tree.contexts.iter().flat_map(|c| &c.plans).flat_map(|p| &p.sessions).map(|n| (n.id.as_str().to_owned(), n.dot)).collect()
+    };
+    let rows = |store: &mut Store| -> Vec<(String, Dot)> {
+        read::tree(store).unwrap().contexts.iter().map(|c| (c.id.as_str().to_owned(), c.dot)).collect()
+    };
+    let dot = |all: &[(String, Dot)], id: &str| all.iter().find(|(i, _)| i == id).unwrap().1;
+
+    let all = dots(&mut store);
+    for (id, want) in [
+        ("l-red", Dot::Red),
+        ("l-yel", Dot::Yellow),
+        ("f-yel", Dot::Working),
+        ("l-mag", Dot::Magenta),
+        ("l-whi", Dot::White),
+        ("l-wrk", Dot::Working),
+        ("l-idl", Dot::Idle),
+        ("l-stp", Dot::Stopped),
+        ("l-ship", Dot::Magenta), // working, but its Plan's review is pending
+        ("l-rel", Dot::Red),      // blocked in pr, where a PR with failed checks is also open
+        ("l-shut", Dot::Idle),    // pr, but its pull request is closed
+        ("l-old", Dot::Stopped),
+    ] {
+        assert_eq!(dot(&all, id), want, "{id}");
+    }
+    let rows_now = rows(&mut store);
+    let row = |id: &str| rows_now.iter().find(|(i, _)| i == id).unwrap().1;
+    assert_eq!((row("hot"), row("calm"), row("dead"), row("ice")), (Dot::Red, Dot::Working, Dot::Stopped, Dot::Stopped));
+    assert_eq!(row("gamma"), Dot::Stopped, "no Session at all");
+    assert_eq!(row("alpha"), Dot::Magenta, "alpha: the pending review on l-ship");
+
+    // Archived Sessions do not count; the next most urgent one takes the row.
+    sql(&mut store, "UPDATE sessions SET archived_at = '2026-02-03T00:00:00.000Z' WHERE id IN ('l-red', 'l-ds');");
+    let rows_now = rows(&mut store);
+    let row = |id: &str| rows_now.iter().find(|(i, _)| i == id).unwrap().1;
+    assert_eq!((row("hot"), row("dead")), (Dot::Yellow, Dot::Stopped), "red is archived; a Context of archived Sessions is ◌");
+    sql(&mut store, "UPDATE sessions SET archived_at = '2026-02-03T00:00:00.000Z' WHERE id IN ('l-yel', 'l-mag', 'l-whi', 'l-wrk', 'l-idl');");
+    let rows_now = rows(&mut store);
+    assert_eq!(rows_now.iter().find(|(i, _)| i == "hot").unwrap().1, Dot::Working, "f-yel, a live fork of an archived Lead");
+}
+
 fn settled(session: &str) -> String {
     event("session-state", Some("alpha"), Some("sketch"), Some(session), r#"{"from":"working","to":"idle","label":null}"#)
 }
@@ -407,7 +493,7 @@ fn a_session_needs_you_when_blocked_or_idle_with_a_turn_the_user_has_not_seen() 
     let tree = read::tree(&mut store).unwrap();
     let sketch = &tree.contexts[0].plans[1];
     let got: Vec<(&str, bool)> =
-        sketch.sessions.iter().filter(|n| n.id.as_str().starts_with("x-")).map(|n| (n.id.as_str(), n.needs_you)).collect();
+        sketch.sessions.iter().filter(|n| n.id.as_str().starts_with("x-")).map(|n| (n.id.as_str(), n.needs_you())).collect();
     assert_eq!(
         got,
         [

@@ -37,12 +37,12 @@ pub enum Live {
 }
 
 impl Live {
-    /// The icon and meaning the palette gives this status.
-    pub fn icon(self) -> (&'static str, Meaning) {
+    /// The icon and meaning the palette gives this status; a running Job's icon is the spinner's `frame`.
+    pub fn icon(self, frame: usize) -> (&'static str, Meaning) {
         match self {
             Live::Draft => palette::job_status(JobStatus::Draft, false),
             Live::Queued => palette::job_status(JobStatus::Queued, false),
-            Live::Running => palette::job_status(JobStatus::Running, false),
+            Live::Running => (palette::SPINNER[frame % palette::SPINNER.len()], palette::job_status(JobStatus::Running, false).1),
             Live::Merging => palette::job_status(JobStatus::Running, true),
             Live::Merged => palette::job_status(JobStatus::Merged, false),
             Live::Failed => palette::job_status(JobStatus::Failed, false),
@@ -122,9 +122,9 @@ fn truncate(s: &str, w: usize) -> String {
 }
 
 /// The left half of a pill (` <icon> <key> `, the key cut to `key_w` characters) and the right half (`│<tier>[│aN] `).
-fn pill_parts(j: &FlowJob, key_w: usize) -> (String, String) {
+fn pill_parts(j: &FlowJob, key_w: usize, frame: usize) -> (String, String) {
     let a = if j.attempt > 1 { format!("│a{}", j.attempt) } else { String::new() };
-    (format!(" {} {} ", j.status.icon().0, truncate(&j.key, key_w)), format!("│{}{} ", j.tier, a))
+    (format!(" {} {} ", j.status.icon(frame).0, truncate(&j.key, key_w)), format!("│{}{} ", j.tier, a))
 }
 
 /// The needs of each Job (as indices) that no other need already implies: a need reachable through another need is dropped.
@@ -272,7 +272,8 @@ pub(super) fn free_row(near: u16, cols: std::ops::Range<usize>, busy: &[HashSet<
     (0..).flat_map(|d| [near.checked_sub(d), Some(near + d)]).flatten().find(|r| cols.clone().all(|l| !busy[l].contains(r))).unwrap()
 }
 
-pub fn layout(all: &[FlowJob]) -> Chart {
+/// The chart of `all`, a running Job's icon at spinner frame `frame` (every frame is one cell wide: the layout is the same).
+pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
     let jobs = all;
     let cards = cards_of(&reduced_needs(&jobs));
     let col_of: Vec<usize> = {
@@ -286,7 +287,7 @@ pub fn layout(all: &[FlowJob]) -> Chart {
     }
 
     // x: the left bracket column, then each column's pills, `GAP` + both bracket columns between columns
-    let parts: Vec<(String, String)> = jobs.iter().map(|j| pill_parts(j, usize::MAX)).collect();
+    let parts: Vec<(String, String)> = jobs.iter().map(|j| pill_parts(j, usize::MAX, frame)).collect();
     let pill_w = |i: usize| (Line::from(parts[i].0.as_str()).width() + Line::from(parts[i].1.as_str()).width()) as u16;
     let col_w: Vec<u16> = cols.iter().map(|cs| cs.iter().flat_map(|&c| &cards[c].jobs).map(|&i| pill_w(i)).max().unwrap_or(0)).collect();
     let spacing = GAP + 2;
@@ -388,7 +389,7 @@ pub fn layout(all: &[FlowJob]) -> Chart {
         for &c in cs {
             for (k, &i) in cards[c].jobs.iter().enumerate() {
                 let rect = Rect::new(xs[l], top[c] + k as u16, col_w[l], 1);
-                let style = palette::pill(jobs[i].status.icon().1);
+                let style = palette::pill(jobs[i].status.icon(frame).1);
                 // the icon and key to the left, the tier (and `aN`) to the right, whatever the column's width
                 Line::from(parts[i].0.as_str()).style(style).left_aligned().render(rect, &mut buf);
                 Line::from(parts[i].1.as_str()).style(style).right_aligned().render(rect, &mut buf);
@@ -553,25 +554,66 @@ mod tests {
     fn a_pill_has_the_icon_and_colour_of_its_status() {
         let statuses = [Live::Draft, Live::Queued, Live::Running, Live::Merging, Live::Merged, Live::Failed];
         let jobs: Vec<FlowJob> = statuses.iter().map(|s| FlowJob { status: *s, ..job(&format!("{s:?}"), &[]) }).collect();
-        let c = layout(&jobs);
+        let c = layout(&jobs, 0);
         for (p, status) in c.pills.iter().zip(statuses) {
-            let (icon, meaning) = status.icon();
+            let (icon, meaning) = status.icon(0);
             assert_eq!(c.buf[(p.rect.x + 1, p.rect.y)].symbol(), icon, "{status:?}");
             let cell = &c.buf[(p.rect.x, p.rect.y)];
             assert_eq!((Some(cell.fg), Some(cell.bg)), (palette::pill(meaning).fg, palette::pill(meaning).bg), "{status:?}");
         }
     }
 
+    /// The icon of the first pill of a chart of one Job in `status`, at `frame`.
+    fn icon_at(status: Live, frame: usize) -> String {
+        let c = layout(&[FlowJob { status, ..job("a", &[]) }], frame);
+        c.buf[(c.pills[0].rect.x + 1, c.pills[0].rect.y)].symbol().to_string()
+    }
+
+    #[test]
+    fn a_running_pill_spins_through_the_four_frames() {
+        let icons: Vec<String> = (0..4).map(|f| icon_at(Live::Running, f)).collect();
+        assert_eq!(icons, ["◐", "◓", "◑", "◒"]);
+    }
+
+    #[test]
+    fn a_merging_and_a_queued_pill_do_not_spin() {
+        for f in 0..4 {
+            assert_eq!(icon_at(Live::Merging, f), "⇥", "frame {f}");
+            assert_eq!(icon_at(Live::Queued, f), "○", "frame {f}");
+        }
+    }
+
+    #[test]
+    fn the_layout_is_the_same_at_every_frame() {
+        let jobs = [
+            FlowJob { status: Live::Running, ..job("a", &[]) },
+            FlowJob { status: Live::Running, ..job("b", &["a"]) },
+            FlowJob { status: Live::Merging, ..job("c", &["a"]) },
+            job("d", &["b", "c"]),
+        ];
+        let first = layout(&jobs, 0);
+        for f in 1..4 {
+            let c = layout(&jobs, f);
+            assert_eq!(c.buf.area, first.buf.area, "frame {f}");
+            assert_eq!(c.columns, first.columns, "frame {f}");
+            let rects = |c: &Chart| c.pills.iter().map(|p| (p.key.clone(), p.rect)).collect::<Vec<_>>();
+            assert_eq!(rects(&c), rects(&first), "frame {f}");
+            // only the two running pills' icons differ
+            let differing = |c: &Chart| first.buf.content.iter().zip(&c.buf.content).filter(|(x, y)| x != y).count();
+            assert_eq!(differing(&c), 2, "frame {f}");
+        }
+    }
+
     #[test]
     fn lines_are_dim_in_the_nothing_colour() {
-        let c = layout(&[job("a", &[]), job("b", &["a"])]);
+        let c = layout(&[job("a", &[]), job("b", &["a"])], 0);
         let line = &c.buf[(c.pills[0].rect.right() + 1, 0)];
         assert_eq!((line.symbol(), Some(line.fg)), ("─", palette::fg(Meaning::Nothing).fg));
     }
 
     #[test]
     fn columns_run_left_to_right() {
-        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b"])]);
+        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b"])], 0);
         snap(&c, "
   ○ a │S1 ───── ○ b │S1 ───── ○ c │S1");
         assert_eq!(c.columns, vec![vec![0], vec![1], vec![2]]);
@@ -580,16 +622,16 @@ mod tests {
     #[test]
     fn an_implied_need_is_not_drawn() {
         // c needs a through b, so its own need of a is dropped: a has one line out, to b
-        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b", "a"])]);
+        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b", "a"])], 0);
         snap(&c, "
   ○ a │S1 ───── ○ b │S1 ───── ○ c │S1");
         // the same with the implied need listed first
-        assert_eq!(text(&layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a", "b"])])), text(&c));
+        assert_eq!(text(&layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a", "b"])], 0)), text(&c));
     }
 
     #[test]
     fn jobs_with_the_same_needs_share_a_card_stacked_with_no_space() {
-        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("d", &["a"])]);
+        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("d", &["a"])], 0);
         snap(&c, "
               ╭ ○ b │S1 ╮
   ○ a │S1 ────┤ ○ c │S1 │
@@ -600,13 +642,13 @@ mod tests {
     #[test]
     fn a_card_has_one_entry_and_one_exit_at_its_middle_row() {
         // three Jobs: both brackets are joined at the middle row, where the line in and the line out meet them
-        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("e", &["a"]), job("d", &["b", "c", "e"])]);
+        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("e", &["a"]), job("d", &["b", "c", "e"])], 0);
         snap(&c, "
               ╭ ○ b │S1 ╮
   ○ a │S1 ────┤ ○ c │S1 ├──── ○ d │S1
               ╰ ○ e │S1 ╯");
         // two Jobs: the middle row is the upper one
-        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"])]);
+        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"])], 0);
         snap(&c, "
   ○ a │S1 ────┬ ○ b │S1 ╮
               ╰ ○ c │S1 ╯");
@@ -614,7 +656,7 @@ mod tests {
 
     #[test]
     fn single_cards_are_one_row_apart_and_have_plain_line_ends() {
-        let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a"]), job("d", &["b"])]);
+        let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a"]), job("d", &["b"])], 0);
         snap(&c, "
   ○ a │S1 ──┬── ○ c │S1
             │
@@ -625,7 +667,7 @@ mod tests {
     fn the_tier_is_aligned_right_and_so_is_the_attempt() {
         let mut long = job("a-longer-key", &[]);
         long.attempt = 2;
-        let c = layout(&[job("a", &[]), long, job("b", &[])]);
+        let c = layout(&[job("a", &[]), long, job("b", &[])], 0);
         snap(&c, "
   ○ a               │S1
 
@@ -639,12 +681,12 @@ mod tests {
 
     #[test]
     fn one_bus_per_gap_joins_every_exit_and_every_entry() {
-        let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a"]), job("d", &["b"])]);
+        let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a"]), job("d", &["b"])], 0);
         let bus_x = c.pills[0].rect.right() + 2;
         // the bus is one column, with a junction for each line in and out
         let glyphs: Vec<&str> = (0..c.buf.area.height).map(|y| c.buf[(bus_x, y)].symbol()).collect();
         assert_eq!(glyphs, ["┬", "│", "┴"]);
-        let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a", "b"])]);
+        let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a", "b"])], 0);
         snap(&c, "
   ○ a │S1 ──╮
             ├── ○ c │S1
@@ -653,7 +695,7 @@ mod tests {
 
     #[test]
     fn a_line_that_skips_columns_rides_a_free_row() {
-        let c = layout(&[job("a", &[]), job("x", &[]), job("b", &["a"]), job("c", &["b", "x"])]);
+        let c = layout(&[job("a", &[]), job("x", &[]), job("b", &["a"]), job("c", &["b", "x"])], 0);
         snap(&c, "
   ○ a │S1 ──╮
             ├── ○ b │S1 ──┬── ○ c │S1
@@ -662,37 +704,37 @@ mod tests {
 
     #[test]
     fn a_column_is_centred_vertically() {
-        let c = layout(&[job("a", &[]), job("b", &[]), job("c", &[]), job("d", &["a", "b", "c"])]);
+        let c = layout(&[job("a", &[]), job("b", &[]), job("c", &[]), job("d", &["a", "b", "c"])], 0);
         assert_eq!(c.pills[3].rect.y, 2);
         // an odd difference leaves the spare row below
-        let c = layout(&[job("a", &[]), job("b", &[]), job("d", &["a", "b"]), job("e", &["a", "b"]), job("f", &["d"])]);
+        let c = layout(&[job("a", &[]), job("b", &[]), job("d", &["a", "b"]), job("e", &["a", "b"]), job("f", &["d"])], 0);
         assert_eq!(c.pills.iter().map(|p| p.rect.y).collect::<Vec<_>>(), [0, 2, 0, 1, 1]);
     }
 
     #[test]
     fn a_column_is_ordered_by_the_mean_row_of_the_cards_it_needs() {
         // d needs the lower root, c the upper one: the order of the Plan (d first) would cross them
-        let c = layout(&[job("a", &[]), job("b", &[]), job("d", &["b"]), job("c", &["a"])]);
+        let c = layout(&[job("a", &[]), job("b", &[]), job("d", &["b"]), job("c", &["a"])], 0);
         assert_eq!(c.columns[1], vec![3, 2]);
     }
 
     #[test]
     fn a_cycle_is_laid_out_without_panicking() {
-        let c = layout(&[job("a", &["b"]), job("b", &["a"]), job("c", &["c"])]);
+        let c = layout(&[job("a", &["b"]), job("b", &["a"]), job("c", &["c"])], 0);
         assert_eq!(c.pills.len(), 3);
         assert!(c.columns.iter().all(|col| !col.is_empty()));
     }
 
     #[test]
     fn an_empty_workflow_is_an_empty_chart() {
-        let c = layout(&[]);
+        let c = layout(&[], 0);
         assert_eq!((c.pills.len(), c.columns.len(), c.buf.area.area()), (0, 0, 0));
     }
 
     #[test]
     fn selection_moves_between_columns_and_within_one() {
         // a | b c d | e : b, c, d share a card
-        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("d", &["a"]), job("e", &["b", "c", "d"])]);
+        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("d", &["a"]), job("e", &["b", "c", "d"])], 0);
         let (a, b, cc, d, e) = (0, 1, 2, 3, 4);
         assert_eq!(c.step(a, Dir::Right), cc); // the nearest to a's row
         assert_eq!(c.step(cc, Dir::Right), e);
@@ -705,7 +747,7 @@ mod tests {
     }
 
     fn two() -> Chart {
-        layout(&[job("a", &[]), job("b", &["a"])])
+        layout(&[job("a", &[]), job("b", &["a"])], 0)
     }
 
     #[test]
@@ -726,7 +768,7 @@ mod tests {
         s.arrow(&c, Dir::Right);
         s.arrow(&c, Dir::Right);
         assert_eq!(s.key.as_deref(), Some("b"));
-        s.arrow(&layout(&[]), Dir::Right); // an empty chart selects nothing
+        s.arrow(&layout(&[], 0), Dir::Right); // an empty chart selects nothing
         assert_eq!(s, Selection::default());
     }
 
@@ -787,7 +829,7 @@ mod tests {
     fn a_refresh_keeps_the_selection_by_key() {
         let mut s = Selection::default();
         s.click("b".into());
-        let moved = layout(&[job("x", &[]), job("a", &[]), job("b", &["a", "x"])]);
+        let moved = layout(&[job("x", &[]), job("a", &[]), job("b", &["a", "x"])], 0);
         assert_eq!(s.resolve(&moved), Some(2));
         assert_eq!(s.key.as_deref(), Some("b"));
     }
@@ -804,7 +846,7 @@ mod tests {
     fn a_selected_job_that_disappears_is_unselected() {
         let mut s = Selection::default();
         s.click("b".into());
-        assert_eq!(s.resolve(&layout(&[job("a", &[])])), None);
+        assert_eq!(s.resolve(&layout(&[job("a", &[])], 0)), None);
         assert_eq!(s, Selection::default());
         assert_eq!(s.resolve(&two()), None); // and it does not come back
     }
@@ -812,11 +854,11 @@ mod tests {
     #[test]
     fn the_window_scrolls_to_the_selection_on_both_axes_and_marks_it() {
         let jobs: Vec<FlowJob> = ["a", "b", "c", "d"].iter().map(|k| job(k, &[])).collect();
-        let c = layout(&jobs);
+        let c = layout(&jobs, 0);
         // the window shows 3 rows: pill d (row 6) pulls the view down
         assert_eq!(c.scroll_to(3, (0, 0), (20, 3)), (0, 4));
         assert_eq!(c.scroll_to(0, (0, 4), (20, 3)), (0, 0));
-        let wide = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b"])]);
+        let wide = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b"])], 0);
         assert_eq!(wide.scroll_to(2, (0, 0), (12, 1)), (wide.pills[2].rect.right() + 1 - 12, 0));
         let mut dst = Buffer::empty(Rect::new(0, 0, 30, 3));
         let (ox, oy) = c.blit(&mut dst, Rect::new(2, 1, 20, 1), (0, 100), Some(3)); // clamped to the chart

@@ -123,12 +123,12 @@ fn screen_when(env: &TestEnv, pane: &str, what: &str, ok: impl Fn(&[String]) -> 
     last
 }
 
-/// The chart rows inside the one PR box of a screen: below one row of padding and the box's top border, indented by two columns of padding and the box's left border; the box's right border is left out.
+/// The chart rows inside the one PR box of a screen: below one row of padding and the box's top border, indented by two columns of padding and the box's left border; the box's right border is left out. A running pill spins on the clock (`◐◓◑◒`): its frame is whatever the screen was captured at, so every frame reads as `◐`.
 fn chart_rows(screen: &[String], rows: usize) -> String {
     screen[2..2 + rows]
         .iter()
         .map(|l| {
-            let inside: String = l.chars().skip(3).collect();
+            let inside: String = l.chars().skip(3).map(|c| if "◓◑◒".contains(c) { '◐' } else { c }).collect();
             let inside = inside.trim_end();
             inside.strip_suffix('│').unwrap_or_else(|| panic!("no right border: {l:?}")).trim_end().to_owned()
         })

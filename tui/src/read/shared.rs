@@ -13,6 +13,8 @@ use cpd_core::ids::{AttemptId, ContextId, PlanId, SessionId};
 use cpd_core::plan::Phase;
 use cpd_core::session::{Role, State};
 
+use super::dot::{Dot, DotInputs};
+
 /// A row the database holds in a shape the binary does not accept: it was
 /// changed outside cpd, or by a bug.
 pub(super) fn bad_row(what: impl std::fmt::Display) -> CpdError {
@@ -207,22 +209,18 @@ pub struct SessionNode {
     pub plan_lead: bool,
     /// It is its Context's grounded Lead.
     pub grounded_lead: bool,
-    /// The ● of the tree: [`needs_you`], derived from the Session's Events.
-    pub needs_you: bool,
+    /// The dot of the tree (§17), derived from the Session's state, its Events and its Plan.
+    pub dot: Dot,
     /// When it was archived (contract §4.5); archived Sessions are in the model.
     pub archived_at: Option<String>,
 }
 
-/// The ● rule (cockpit parity, §1.3): a Session needs the User when it is
-/// `blocked`, or when it is `idle`, not in the chat slot, and its latest
-/// `session-state → idle` Event is newer than its latest `session-moved
-/// {place: chat}` (Event ids order commits; no such Event counts as 0).
-fn needs_you(state: State, place: Place, settled: Option<i64>, seen: Option<i64>) -> bool {
-    state == State::Blocked
-        || (state == State::Idle && place != Place::Chat && settled.unwrap_or(0) > seen.unwrap_or(0))
-}
-
 impl SessionNode {
+    /// The Session shows a `●`, of any colour.
+    pub fn needs_you(&self) -> bool {
+        self.dot.needs_you()
+    }
+
     /// Its chat is in the cockpit's chat slot.
     pub fn is_active(&self) -> bool {
         self.place == Place::Chat
@@ -243,7 +241,11 @@ const SESSION_SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt,
            AND json_extract(e.data, '$.to') = 'idle' ORDER BY e.id DESC LIMIT 1),
        (SELECT e.id FROM events e WHERE e.session = s.id AND e.kind = 'session-moved'
            AND json_extract(e.data, '$.place') = 'chat' ORDER BY e.id DESC LIMIT 1),
-       s.archived_at
+       s.archived_at,
+       (SELECT p.phase FROM plans p WHERE p.id = s.plan),
+       EXISTS (SELECT 1 FROM plan_reviews v WHERE v.plan = s.plan AND v.status = 'pending'),
+       EXISTS (SELECT 1 FROM prs r JOIN pull_requests q ON q.id = r.pull_request
+                WHERE r.plan = s.plan AND q.state = 'open' AND q.checks IN ('passed', 'failed'))
   FROM sessions s";
 
 /// The Sessions matching `filter` (SQL after `WHERE`, over `s`), oldest first.
@@ -260,8 +262,20 @@ pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -
         let (state, tier_text, place): (String, String, Option<String>) = (r.get(10)?, r.get(8)?, r.get(14)?);
         let state: State = value_enum("Session state", &state)?;
         let place = place.map_or(Ok(Place::None), |p| Place::parse("Session place", &p))?;
+        let phase: Option<String> = r.get(20)?;
+        let phase = phase.map(|p| value_enum::<Phase>(&format!("Plan of Session {session} has phase"), &p)).transpose()?;
+        let plan_lead: bool = r.get(15)?;
         out.push(SessionNode {
-            needs_you: needs_you(state, place, r.get(17)?, r.get(18)?),
+            dot: Dot::of(DotInputs {
+                state,
+                place,
+                settled: r.get(17)?,
+                seen: r.get(18)?,
+                plan_lead,
+                phase,
+                review_pending: r.get(21)?,
+                pr_checked: r.get(22)?,
+            }),
             role: value_enum("Session role", &role)?,
             context: ContextId::parse(&context).map_err(|_| field("context", &context))?,
             plan: plan.map(|p| PlanId::parse(&p).map_err(|_| field("plan", &p))).transpose()?,
@@ -276,7 +290,7 @@ pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -
             state_at: r.get(12)?,
             created_at: r.get(13)?,
             place,
-            plan_lead: r.get(15)?,
+            plan_lead,
             grounded_lead: r.get(16)?,
             archived_at: r.get(19)?,
             id: session,
@@ -313,9 +327,9 @@ impl PlanHead {
         self.archived_at.is_some()
     }
 
-    /// The Plan waits on the User: an open Escalation, a pending Plan review, or a Session with the ● (`SessionNode::needs_you`).
+    /// The Plan waits on the User: an open Escalation, a pending Plan review, or a Session with a ● (`SessionNode::needs_you`).
     pub fn needs_you(&self, sessions: &[SessionNode]) -> bool {
-        self.open_escalations > 0 || self.review_pending || sessions.iter().any(|s| s.needs_you)
+        self.open_escalations > 0 || self.review_pending || sessions.iter().any(SessionNode::needs_you)
     }
 }
 
