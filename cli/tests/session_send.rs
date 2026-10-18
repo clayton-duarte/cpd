@@ -95,12 +95,24 @@ fn a_send_appends_one_session_message_from_cpd_session() {
     let events = messages(&env);
     assert_eq!(events.len(), 1);
     let event = &events[0];
-    assert_eq!(out, json!({"ok": true, "event": event["id"], "session": "lead1", "from": "lead2"}));
+    assert_eq!(out, json!({"ok": true, "event": event["id"], "session": "lead1", "from": "lead2", "wake": false}));
     assert_eq!(event["kind"], "session-message");
     assert_eq!((&event["session"], &event["context"], &event["plan"]), (&json!("lead1"), &json!("ctx"), &json!("pay")));
     assert_eq!((&event["job"], &event["attempt"]), (&Value::Null, &Value::Null));
-    assert_eq!(event["data"], json!({"from": "lead2", "text": "hi there"}));
+    assert_eq!(event["data"], json!({"from": "lead2", "text": "hi there", "wake": false}));
     assert_eq!(event["text"], "Message for Lead one from Lead two (lead2): hi there");
+}
+
+#[test]
+fn wake_is_false_by_default_and_true_with_the_flag() {
+    let env = TestEnv::new();
+    setup(&env);
+    let quiet = env.cpd(&["session", "send", "lead1", "x"]).ok();
+    let woken = env.cpd(&["session", "send", "lead1", "y", "--wake"]).ok();
+    assert_eq!((&quiet["wake"], &woken["wake"]), (&json!(false), &json!(true)));
+    let events = messages(&env);
+    assert_eq!(events.len(), 2);
+    assert_eq!((&events[0]["data"]["wake"], &events[1]["data"]["wake"]), (&json!(false), &json!(true)));
 }
 
 #[test]
@@ -115,7 +127,7 @@ fn from_is_pi_session_id_when_cpd_session_is_unset_and_null_for_the_user() {
     assert_eq!(user["from"], Value::Null);
     let events = messages(&env);
     assert_eq!(events.len(), 3);
-    assert_eq!(events[2]["data"], json!({"from": null, "text": "from the user"}));
+    assert_eq!(events[2]["data"], json!({"from": null, "text": "from the user", "wake": false}));
     assert_eq!(events[2]["text"], "Message for Lead one from the User: from the user");
 }
 
