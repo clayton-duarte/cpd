@@ -6,6 +6,7 @@
 //! [`Store::write`]; nothing else writes the database (§4.3).
 
 mod schema;
+#[doc(hidden)] pub mod testing;
 mod verdict;
 
 use std::fs::{self, File, OpenOptions};
