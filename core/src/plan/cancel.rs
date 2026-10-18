@@ -209,17 +209,22 @@ mod tests {
         store
             .write("fixture", |tx| {
                 tx.execute_batch(
-                    "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('c', 'C', 't', 'm');
-                     INSERT INTO plans (id, context, title, phase, created_at) VALUES ('p', 'c', 'P', 'dispatch', 't');
-                     INSERT INTO jobs (plan, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, created_at)
-                     VALUES ('p', 'a', 'x', 'A', 'S2', 'g', 'c', '[]', '[]', '[]', 'running', 't');
+                    "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+                     INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                       VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
+                     INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't');
+                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                       VALUES ('pay', 'api', '/r', 'main', 'waiting', 'cpd/pay', cpd_txn(), 't');
+                     INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                       status, appended, fingerprint, created_txn, created_at)
+                       VALUES ('pay', 'api', 'a', 'A', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', cpd_txn(), 't');
                      INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
-                     VALUES ('p', 'a-a1', 'a', 1, 'S2', 'ladder', 'running', 'cpd/p--a-a1', '/w', 't');",
+                       VALUES ('pay', 'a-a1', 'a', 1, 'S2', 'ladder', 'running', 'cpd/pay--a-a1', '/w', 't');",
                 )?;
                 Ok(())
             })
             .unwrap();
-        let plan = PlanId::parse("p").unwrap();
+        let plan = PlanId::parse("pay").unwrap();
         let err = wait_until_ended(&mut store, &plan, Duration::from_millis(30), Duration::from_millis(5)).unwrap_err();
         assert_eq!(err.code(), ErrorCode::CancelTimeout);
         assert_eq!(err.details()["attempts"], json!(["a-a1"]));
