@@ -133,16 +133,7 @@ pub(super) fn pr_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, 
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let snapshot = env.store.read(|conn| {
-        let plan = load_head(conn, &id)?;
-        let prs = pr_values(conn, &id)?;
-        let jobs = jobs::load(conn, &id)?;
-        let attempts = attempts(conn, &id)?;
-        let escalations = open_escalations(conn, &id)?;
-        let review = latest_review(conn, &id)?;
-        Ok((plan, prs, jobs, attempts, escalations, review, highest_id(conn)?))
-    })?;
-    let (plan, mut prs, jobs, mut attempts, escalations, review, cursor): (Head, Vec<Value>, Vec<Job>, _, _, _, _) = snapshot;
+    let (plan, mut prs, jobs, mut attempts, escalations, review, cursor) = env.store.read(|conn| snapshot(conn, &id))?;
     let mut tamper = env.store.tamper()?;
     tamper.extend(jobs::tampered(&id, &jobs));
     for pr in &mut prs {
@@ -167,6 +158,19 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         "tamper": tamper,
         "events_cursor": cursor,
     })))
+}
+
+type Snapshot = (Head, Vec<Value>, Vec<Job>, BTreeMap<String, Vec<Value>>, Vec<Value>, Value, i64);
+
+/// Everything `plan show` prints that is read from the database, each row read once.
+fn snapshot(conn: &Connection, id: &PlanId) -> Result<Snapshot, CpdError> {
+    let plan = load_head(conn, id)?;
+    let prs = pr_values(conn, id)?;
+    let jobs = jobs::load(conn, id)?;
+    let attempts = attempts(conn, id)?;
+    let escalations = open_escalations(conn, id)?;
+    let review = latest_review(conn, id)?;
+    Ok((plan, prs, jobs, attempts, escalations, review, highest_id(conn)?))
 }
 
 /// Every Attempt of the Plan by Job, oldest first.
@@ -237,4 +241,25 @@ fn latest_review(conn: &Connection, plan: &PlanId) -> Result<Value, CpdError> {
                    "feedback": feedback, "requested_at": requested_at, "decided_at": decided_at})
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::super::sql_trace::{ledger, statements};
+    use super::*;
+
+    #[test]
+    fn plan_show_reads_no_statement_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = ledger(dir.path(), 1);
+        let id = PlanId::parse("plan-1").unwrap();
+        let (shown, seen) = store.read(|conn| Ok(statements(conn, || snapshot(conn, &id)))).unwrap();
+        assert_eq!(shown.unwrap().5["current"], false, "the fixture's review is of another fingerprint");
+        let mut once = BTreeSet::new();
+        for sql in &seen {
+            assert!(once.insert(sql), "read twice: {sql}\nall:\n{}", seen.join("\n"));
+        }
+    }
 }
