@@ -7,10 +7,12 @@
 //! on every call means no call can ever start one that reads the User's config.
 //! A call that exits non-zero where cpd did not expect it is `tmux_failed`
 //! (exit 1) with `argv`, `exit` and the last 60 lines of stderr (commands.md §1.3).
-//! A call that runs past [`DEADLINE`] is killed and fails `tool_timeout` (§6.3).
+//! A call that runs past [`DEADLINE`] is killed and fails `tool_timeout` (§6.3),
+//! except the [`INTERACTIVE`] ones.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::Mutex;
@@ -25,6 +27,17 @@ use super::layout::View;
 /// Every tmux call's deadline (contract §6.3): a local socket answers in
 /// milliseconds, so a longer wait means a hung server.
 const DEADLINE: Duration = Duration::from_secs(10);
+/// The calls with no deadline (contract §6.3): `display-popup` returns when the
+/// User closes the popup, which may be any time later.
+const INTERACTIVE: &[&str] = &["display-popup"];
+
+/// The deadline of the call `args`; `None` for an [`INTERACTIVE`] one.
+fn deadline_of(args: &[String]) -> Option<Duration> {
+    match args.first() {
+        Some(call) if INTERACTIVE.contains(&call.as_str()) => None,
+        _ => Some(DEADLINE),
+    }
+}
 
 /// tmux's `-x`/`-y` for a new session (contract §6.3).
 pub const SESSION_WIDTH: u32 = 215;
@@ -254,7 +267,13 @@ impl Tmux {
 
     fn output(&self, args: &[String]) -> Result<Output, CpdError> {
         let argv = self.argv(args);
-        deadline::output(&mut self.command(args), "tmux", DEADLINE).map_err(|e| match e {
+        let mut cmd = self.command(args);
+        let ran = match deadline_of(args) {
+            Some(limit) => deadline::output(&mut cmd, "tmux", limit),
+            // In its own process group, as every other call.
+            None => cmd.process_group(0).output().map_err(Failed::Io),
+        };
+        ran.map_err(|e| match e {
             Failed::Io(e) => CpdError::new(ErrorCode::TmuxFailed, format!("Cannot run tmux: {e}."))
                 .with("argv", argv.clone())
                 .with("exit", serde_json::Value::Null)
@@ -642,6 +661,13 @@ mod tests {
         let options: Vec<Vec<String>> = options.iter().map(|c| c.to_vec()).collect();
         let expected: Vec<Vec<String>> = SERVER_OPTIONS.iter().map(|o| strings(o)).collect();
         assert_eq!(options, expected);
+    }
+
+    #[test]
+    fn every_call_has_the_deadline_but_display_popup() {
+        assert_eq!(deadline_of(&strings(&["list-panes", "-a"])), Some(Duration::from_secs(10)));
+        assert_eq!(deadline_of(&strings(&["kill-window", "-t", "@1"])), Some(Duration::from_secs(10)));
+        assert_eq!(deadline_of(&strings(&["display-popup", "-E", "-T", "t", "cpd tui view legend"])), None);
     }
 
     #[test]
