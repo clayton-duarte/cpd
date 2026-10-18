@@ -412,8 +412,9 @@ impl Driver {
             };
 
             let Some(file) = file.clone() else { continue };
-            // The stall rule (§3.4 A4): pi is the pane's process, alive here.
-            if let Some(line) = stall.check(&file, pi) {
+            // The stall rule (§3.4 A4): pi is the pane's process, alive here. tmux
+            // gives a live pane's pid; it is empty only for a dead pane (hs-n102).
+            if let Some(line) = pi.and_then(|pi| stall.check(&file, pi)) {
                 log(&line);
             }
             // Idle is read from the Session state and confirmed from the file (A5).
