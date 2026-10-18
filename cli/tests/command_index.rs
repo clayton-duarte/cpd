@@ -71,13 +71,6 @@ fn session_close_is_indexed_and_exists() {
     assert!(Cli::command().find_subcommand("session").unwrap().find_subcommand("close").is_some());
 }
 
-/// `job promote` is documented in §2 (draft Jobs after the lock) and exists.
-#[test]
-fn job_promote_is_indexed_and_exists() {
-    assert!(documented_commands().contains(&vec!["job".to_owned(), "promote".to_owned()]));
-    assert!(Cli::command().find_subcommand("job").unwrap().find_subcommand("promote").is_some());
-}
-
 /// `pr add`, `pr edit` and `pr cancel` are documented in §2 (R34) and exist.
 #[test]
 fn pr_crud_is_indexed_and_exists() {

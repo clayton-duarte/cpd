@@ -6,13 +6,12 @@ export const LABEL_MAX = 80;
 type Open = { key: string; label: string };
 
 /**
- * The blocking reasons: its own (keyed, so opening twice or closing when not open changes nothing) and other
- * extensions' `herdr:blocked` signals (counted: one `active: false` closes one `active: true`).
+ * The blocking reasons: its own (keyed, so opening twice or closing when not open changes nothing) and the dialog
+ * reason (depth-counted).
  */
 export class Facts {
   active = false;
   private opened: Open[] = [];
-  private signals = 0;
   private prompts = 0;
 
   open(key: string, label: string): boolean {
@@ -26,22 +25,6 @@ export class Facts {
     if (i < 0) return false;
     this.opened.splice(i, 1);
     return true;
-  }
-
-  /** A `herdr:blocked` signal. Each active one is an entry of its own, so the label of the latest wins. */
-  signal(active: boolean, label: string | undefined): void {
-    if (active) {
-      this.signals += 1;
-      this.opened.push({ key: `signal:${this.signals}`, label: label ?? "blocked" });
-      return;
-    }
-    // An `active: false` with nothing open closes nothing.
-    for (let i = this.opened.length - 1; i >= 0; i--) {
-      if (this.opened[i]!.key.startsWith("signal:")) {
-        this.opened.splice(i, 1);
-        return;
-      }
-    }
   }
 
   /** pi's `ui_prompt_start` (`active: true`) and `ui_prompt_end`: one reason, `dialog`, while any prompt is open. An end with nothing open changes nothing. */

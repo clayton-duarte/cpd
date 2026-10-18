@@ -12,7 +12,6 @@ use crate::git::{self, TAIL_LINES, tail};
 use crate::ids::{PlanId, PrKey};
 use crate::output::Output;
 use crate::plan::Phase;
-use crate::plan::jobs;
 
 const COMMAND: &str = "pr rebase";
 
@@ -22,7 +21,6 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
 
     let plan = env.plan(&id)?;
     let key = require_open(&plan, &args)?.key.clone();
-    require_no_drafts(&mut env, &id, &key)?;
 
     // Under the per-repo lock, after R, so that no merge interleaves and none is unrecorded.
     let lock = lock(&mut env, plan_pr(&plan, &key), COMMAND)?;
@@ -81,27 +79,6 @@ fn require_open<'a>(plan: &'a PlanRow, args: &Args) -> Result<&'a PrRow, CpdErro
         return Err(pr.refuse(&plan.id, COMMAND, "open"));
     }
     Ok(pr)
-}
-
-/// No Job of the PR is `draft`: it is not done (cancel or promote it first); else `jobs_not_done`.
-fn require_no_drafts(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
-    let drafts: Vec<_> = env
-        .store
-        .read(|conn| jobs::load(conn, plan))?
-        .into_iter()
-        .filter(|j| j.pr == key.as_str() && j.is_draft())
-        .map(|j| json!({"key": j.key, "status": j.status}))
-        .collect();
-    if drafts.is_empty() {
-        return Ok(());
-    }
-    Err(CpdError::new(
-        ErrorCode::JobsNotDone,
-        format!("{} draft Jobs of PR {key} of Plan {plan} are not done: cancel or promote each (cpd job cancel, cpd job promote).", drafts.len()),
-    )
-    .with("plan", plan.as_str())
-    .with("pr", key.as_str())
-    .with("jobs", drafts))
 }
 
 fn conflict(plan: &PlanId, key: &PrKey, branch: &str, onto: &str, files: Vec<String>) -> CpdError {

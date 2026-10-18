@@ -1101,6 +1101,7 @@ fn version_on_an_empty_home_reports_no_store_schema_and_creates_nothing() {
     let out = env.cpd(&["--version"]).ok();
     assert_eq!(out["schema"], VERSION);
     assert!(out["store_schema"].is_null(), "{out}");
+    assert_eq!(out["protocol"], 1, "{out}");
     assert!(!home(&env).db().exists());
     assert!(!home(&env).locks_dir().exists());
 }

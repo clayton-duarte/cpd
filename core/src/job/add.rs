@@ -1,6 +1,6 @@
-//! `job add` (commands.md §5.1): `[*] → draft` in phase `plan`, and in `dispatch`
-//! or `pr` an appended `queued` Job, fingerprint stored at once, or with
-//! `--draft` an appended `draft` Job, no fingerprint (`job promote` queues it).
+//! `job add` (commands.md §5.1): `[*] → draft` in phase `plan`; in a phase
+//! after it, an appended `queued` Job, fingerprint stored at once, or with
+//! `--draft` an appended `draft`, which only an approved Plan review queues.
 
 use rusqlite::Connection;
 use serde_json::{Value, json};
@@ -28,7 +28,7 @@ struct Wanted {
     needs: Vec<String>,
     /// `--review` (B2): the needs are set from the Plan, not given.
     review: bool,
-    /// `--draft`: a draft in `dispatch` or `pr` too; in `plan` it changes nothing.
+    /// `--draft`: a draft in a phase after `plan` too.
     draft: bool,
 }
 
@@ -77,10 +77,10 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
 
 fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision, CpdError> {
     let phase = plan_phase(conn, plan)?;
-    if !matches!(phase.as_str(), "plan" | "dispatch" | "pr") {
+    if phase == "grounding" || (phase == "done" && !wanted.draft) {
         return Err(CpdError::new(
             ErrorCode::IllegalPhase,
-            format!("Plan {plan} is in phase {phase}: Jobs are added in phase plan, dispatch or pr."),
+            format!("Plan {plan} is in phase {phase}: Jobs are added from phase plan on, and in phase done only as drafts (--draft)."),
         )
         .with("plan", plan.as_str())
         .with("phase", phase));
@@ -91,6 +91,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
     let all = jobs::load(conn, plan)?;
     let needs = if wanted.review { review_needs(&all, plan, &pr, wanted.key.as_str())? } else { wanted.needs.clone() };
     let appended = phase != "plan";
+    // In phase `plan` every Job is a draft; after it, only with `--draft`.
     let draft = !appended || wanted.draft;
     let mut job = Job {
         seq: 0,
@@ -130,9 +131,31 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
     check_needs_same_pr(&all, plan, &job.pr, &job.needs)?;
     check_needs_available(&all, plan, &job.needs)?;
     if !draft {
+        check_needs_not_draft(&all, plan, &job)?;
         job.fingerprint = Some(locked_fingerprint(&job));
     }
     Ok(Decision::Insert(job))
+}
+
+/// A `queued` Job may not need a `draft` (§5.1): it could start before its need
+/// exists. `details.jobs` lists the drafts; for a review Job they are every
+/// draft of its PR, as its needs are.
+fn check_needs_not_draft(all: &[Job], plan: &PlanId, job: &Job) -> Result<(), CpdError> {
+    let drafts: Vec<&str> = all.iter().filter(|j| j.is_draft() && job.needs.contains(&j.key)).map(|j| j.key.as_str()).collect();
+    if drafts.is_empty() {
+        return Ok(());
+    }
+    Err(CpdError::new(
+        ErrorCode::NeedsUnavailable,
+        format!(
+            "Job {} would be queued but needs the draft {}: it could start before its need exists. Add it with --draft, or have the drafts approved first (cpd plan review).",
+            job.key,
+            drafts.join(", ")
+        ),
+    )
+    .with("plan", plan.as_str())
+    .with("job", job.key.as_str())
+    .with("jobs", drafts))
 }
 
 /// A review Job's Dependencies (B2): every Job of its PR that exists now and is

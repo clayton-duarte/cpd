@@ -72,12 +72,12 @@ _Avoid_: retry, run
 The durable, append-only record of every Plan's Jobs, Dependencies, Attempts, Plan reviews, Escalations, Sessions and Events, with the before and after of every write. In cpd 2 it is one SQLite database per machine, written only by `cpd`.
 _Avoid_: database, board, tracker
 
-**Draft** (Job):
-A Job still being defined: it has no fingerprint, can be edited or cancelled, is never Ready and is never started. Every Job is a draft in the Plan phase and the lock queues them; since `job add --draft` a draft can also exist after the lock, because all planned work must be visible in the Plan view and work not saved in the Ledger can be forgotten. `job promote` queues it, and until then it counts as not done for its PR.
-_Avoid_: idea, backlog item, todo
+**Draft**:
+A Job the User has not approved yet. The engine never runs it, and it is editable and cancellable. Every Job is a draft in the Plan phase; in a running Plan (any phase after it) the Lead adds its later batches as drafts (`job add --draft`), so that the Plan view shows every planned batch before it is approved, and the User approves each batch through a Plan review of the drafts, which queues them. A PR with a draft never opens by itself.
+_Avoid_: proposed, pending Job
 
 **Locked**:
-The state of every Job once the Plan is locked: its Spec, Tier and Dependencies can no longer change; it can only be re-attempted or cancelled, and new Jobs can be appended.
+The state of every Job that is not a draft: its Spec, Tier and Dependencies can no longer change; it can only be re-attempted or cancelled, and new Jobs can be appended. A Job is Locked when the Plan is locked, or, if it was added as a draft later, when the review that covers it is approved.
 _Avoid_: frozen, final
 
 ## Runtime

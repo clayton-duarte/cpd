@@ -106,6 +106,7 @@ pub fn clap_result(err: clap::Error) -> Result<Output, CpdError> {
                 "version": env!("CARGO_PKG_VERSION"),
                 "schema": cpd_core::store::VERSION,
                 "store_schema": store_schema,
+                "protocol": cpd_core::events::PROTOCOL,
             })))
         }
         _ => Err(usage_error(&err, &text)),
@@ -167,6 +168,7 @@ mod tests {
         assert_eq!(fields["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(fields["schema"], cpd_core::store::VERSION);
         assert!(fields.contains_key("store_schema"));
+        assert_eq!(fields["protocol"], 1);
     }
 
     /// A stand-in for an area's arguments, to test how our parsers' errors

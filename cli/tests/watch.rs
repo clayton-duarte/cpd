@@ -36,6 +36,20 @@ fn ago(minutes: i64) -> String {
         .unwrap()
 }
 
+/// SQL for Attempt `<key>-a<number>` ended `failed` / `crashed` at `ended_at`; `driver_pid` is null when its driver never started.
+fn ended_attempt(key: &str, number: u32, tier: &str, driver_pid: Option<i64>, ended_at: &str) -> String {
+    let pid = driver_pid.map_or("NULL".to_owned(), |p| p.to_string());
+    format!(
+        "INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, started_at, ended_at, driver_pid)
+           VALUES ('pay', '{key}-a{number}', '{key}', {number}, '{tier}', 'ladder', 'ended', 'failed', 'crashed',
+                   'cpd/pay--{key}-a{number}', '/w', '{ended_at}', '{ended_at}', {pid});"
+    )
+}
+
+fn parse_time(text: &str) -> OffsetDateTime {
+    OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339).unwrap()
+}
+
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;
     Ok(())
@@ -198,19 +212,7 @@ impl Fx {
         ));
     }
 
-    /// Job `key` of Plan `pay` as a `draft` added after the lock: `appended`, no fingerprint.
-    fn add_draft(&self, key: &str, needs: &[&str]) {
-        let mut sql = format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-             VALUES ('pay', 'repo', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, cpd_txn(), 't');"
-        );
-        for need in needs {
-            sql += &format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');");
-        }
-        self.fixture(&sql);
-    }
-
-    /// Job `key` `running` with Attempt `<key>-a1` in `status`, started at `started_at`.
+    /// Job `key` `running` with Attempt `<key>-a1` in `status`, started at `started_at`, its driver (pid 4242) started.
     fn add_running(&self, key: &str, status: &str, started_at: &str) {
         let worktree = self.repo.parent().unwrap().join(format!("pay.pay--{key}-a1"));
         self.add_job(
@@ -218,8 +220,8 @@ impl Fx {
             &[],
             &format!(
                 "UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = '{key}';
-                 INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
-                   VALUES ('pay', '{key}-a1', '{key}', 1, 'S2', 'ladder', '{status}', 'cpd/pay--{key}-a1', '{}', '{started_at}');",
+                 INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, driver_pid)
+                   VALUES ('pay', '{key}-a1', '{key}', 1, 'S2', 'ladder', '{status}', 'cpd/pay--{key}-a1', '{}', '{started_at}', 4242);",
                 worktree.display()
             ),
         );
@@ -397,6 +399,19 @@ fn ensure_fails_when_the_engine_does_not_start() {
     assert_eq!(error["details"]["exit"], 7);
     assert_eq!(error["details"]["next"], "cpd watch --ensure");
     assert!(error["details"]["pane"].as_str().unwrap().starts_with('%'));
+}
+
+#[test]
+fn ensure_says_the_exit_status_is_unknown_when_tmux_has_none() {
+    let fx = fx("");
+    // Killed by a signal: the pane is dead and `#{pane_dead_status}` is empty.
+    fx.env.fake("cpd", "kill -KILL $$");
+    let run = fx.env.cpd(&["watch", "--ensure"]);
+    let error = run.error();
+    assert_eq!(error["code"], "watch_start_failed");
+    assert_eq!(error["details"]["exit"], Value::Null);
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains("its exit status is unknown"), "{message}");
 }
 
 // ---------- E1 ----------
@@ -682,35 +697,6 @@ fn e3_one_tick_schedules_a_ready_job_within_the_concurrency() {
     }
 }
 
-/// A draft Job (commands.md §5.1 `--draft`) is never Ready: E3 and `job dispatch` leave it alone, and
-/// `job promote` makes it a queued Job that the engine starts.
-#[test]
-fn e3_never_starts_a_draft_job_until_it_is_promoted() {
-    let fx = fx("concurrency = 4\nretry_cap = 0");
-    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
-        assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
-    }
-    fx.add_job("api", &[], "");
-    fx.add_draft("later", &[]);
-
-    // `job dispatch` refuses it.
-    let run = fx.env.cpd(&["job", "dispatch", "later", "--plan", "pay"]);
-    assert_eq!((run.error()["code"].clone(), run.exit), (json!("job_not_ready"), 3), "{run:?}");
-
-    let engine = fx.start();
-    wait_until("attempt-started api", || fx.count("attempt-started") == 1);
-    std::thread::sleep(Duration::from_millis(2500));
-    assert_eq!(fx.events("attempt-started")[0].1.as_deref(), Some("api"));
-    assert_eq!(fx.job_status("later"), "draft");
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'later'"), 0);
-
-    fx.env.cpd(&["job", "promote", "later", "--plan", "pay"]).ok();
-    wait_until("attempt-started later", || fx.count("attempt-started") == 2);
-    engine.stop();
-    assert_eq!(fx.events("attempt-started")[1].1.as_deref(), Some("later"));
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'later'"), 1);
-}
-
 /// The 00:02Z incident (hs-d151): the file the engine runs from is replaced, then
 /// E3 starts an Attempt. The driver starts from the path recorded at start
 /// (`cannot run <path> (deleted)` before).
@@ -721,11 +707,11 @@ fn e3_starts_the_driver_after_the_engines_binary_is_replaced() {
         assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
     }
     let installed = fx.env.root().join("cpd-installed");
-    fs::copy(CPD, &installed).unwrap();
+    copy_executable(CPD, &installed);
     let engine = fx.start_from(&installed);
 
     let new = fx.env.root().join("cpd-new");
-    fs::copy(CPD, &new).unwrap();
+    copy_executable(CPD, &new);
     fs::rename(&new, &installed).unwrap();
     fx.add_job("api", &[], "");
 
@@ -760,6 +746,99 @@ fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
     assert!(fx.texts("error")[0].ends_with("See: cpd job show api --plan pay"), "{:?}", fx.texts("error"));
     assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts"), 0);
     assert_eq!(fx.job_status("api"), "queued");
+}
+
+/// The 00:02Z incident, reproduced: the engine cannot run the driver (its file is gone), so every Attempt
+/// ends `failed` / `crashed` with `driver_pid` null. No Tier is climbed, no try is used up (`retry_cap = 0`
+/// would fail the Job at the first), and E3 waits `2^k` seconds after the k-th failure.
+#[test]
+fn e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off() {
+    let fx = fx("concurrency = 1\nretry_cap = 0");
+    let installed = fx.env.root().join("cpd-installed");
+    copy_executable(CPD, &installed);
+    let engine = fx.start_from(&installed);
+    fs::remove_file(&installed).unwrap();
+    fx.add_job("api", &[], "");
+
+    wait_until("three spawn failures", || fx.query::<i64>("SELECT count(*) FROM attempts WHERE status = 'ended'") >= 3);
+    engine.stop();
+
+    assert_ne!(fx.job_status("api"), "failed");
+    assert_eq!(fx.count("job-failed"), 0);
+    let attempts: Vec<(String, String, String, Option<i64>, String, String)> = fx
+        .store()
+        .read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, tier, origin, driver_pid, started_at, ended_at FROM attempts WHERE job = 'api' AND status = 'ended' ORDER BY number",
+            )?;
+            Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?.collect::<rusqlite::Result<_>>()?)
+        })
+        .unwrap();
+    assert!(attempts.len() >= 3, "{attempts:?}");
+    for (id, tier, origin, pid, _, _) in &attempts {
+        assert_eq!((tier.as_str(), origin.as_str(), *pid), ("S2", "ladder", None), "{id}");
+    }
+    for (i, (id, ..)) in attempts.iter().enumerate() {
+        assert_eq!(fx.attempt(id), ("ended".into(), Some("failed".into()), Some("crashed".into()), None));
+        let retry = &fx.events("attempt-retry")[i];
+        assert_eq!((&retry.3["cause"], &retry.3["next_tier"]), (&json!("crashed"), &json!("S2")));
+    }
+    // After the k-th failure the next start waits 2^k seconds.
+    for (k, pair) in attempts.windows(2).enumerate() {
+        let waited = parse_time(&pair[1].4) - parse_time(&pair[0].5);
+        let k = (k + 1) as u32;
+        assert!(waited >= time::Duration::seconds(2i64.pow(k)), "after failure {k}: waited {waited}");
+    }
+}
+
+/// A Job whose latest 9 Attempts never had a driver, the last just ended: E3 waits 300 s, so no tick starts it.
+#[test]
+fn e3_does_not_start_a_job_in_its_backoff() {
+    let fx = fx("");
+    let now = ago(0);
+    let attempts: String = (1..=9).map(|n| ended_attempt("api", n, "S2", None, &now)).collect();
+    fx.add_job("api", &[], &attempts);
+
+    let engine = fx.start();
+    std::thread::sleep(Duration::from_millis(3500));
+    engine.stop();
+
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts"), 9);
+    assert_eq!(fx.job_status("api"), "queued");
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
+/// A started driver resets the back-off, and only Attempts whose driver started use up a try: `web`
+/// has a spawn failure (`a1`) and a started, crashed `a2` before `a3` dies at `retry_cap = 1`.
+#[test]
+fn e2_counts_only_attempts_whose_driver_started() {
+    let fx = fx("concurrency = 1\nretry_cap = 1");
+    let _busy = fx.live_driver("busy-a1");
+    fx.add_running("busy", "running", &ago(1));
+    let running = |key: &str, number: u32, tier: &str| {
+        format!(
+            "UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = '{key}';
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, driver_pid)
+               VALUES ('pay', '{key}-a{number}', '{key}', {number}, '{tier}', 'ladder', 'running', 'cpd/pay--{key}-a{number}', '/w', '{}', 4242);",
+            ago(1)
+        )
+    };
+    // `web`: spawn failure, then a started driver that died: one try used, the ladder climbs.
+    fx.add_job("web", &[], &(ended_attempt("web", 1, "S2", None, &ago(2)) + &running("web", 2, "S2")));
+    // `api`: a started driver that crashed, then another that died: both tries used, the Job fails.
+    fx.add_job("api", &[], &(ended_attempt("api", 1, "S2", Some(4242), &ago(2)) + &running("api", 2, "S3")));
+
+    let engine = fx.start();
+    wait_until("both ended", || fx.attempt("web-a2").0 == "ended" && fx.attempt("api-a2").0 == "ended");
+    engine.stop();
+
+    assert_eq!(fx.job_status("web"), "queued");
+    let retry = fx.events("attempt-retry");
+    assert_eq!(retry.len(), 1, "{retry:?}");
+    assert_eq!((retry[0].1.as_deref(), &retry[0].3["next_tier"]), (Some("web"), &json!("S3")));
+    assert_eq!(fx.job_status("api"), "failed");
+    let failed = fx.events("job-failed");
+    assert_eq!((failed.len(), failed[0].1.as_deref(), &failed[0].3["cause"]), (1, Some("api"), &json!("crashed")));
 }
 
 // ---------- E4 ----------
@@ -816,17 +895,32 @@ fn e4_waits_while_a_job_is_queued() {
     assert_eq!(fx.count("all-merged"), 0);
 }
 
+/// A draft added after the lock (`job add --draft`, contract §3.2): E3 never
+/// starts it, and E4 does not send `all-merged` while it remains, so the PR
+/// waits for the batch. Once it is cancelled, E4 completes the PR.
 #[test]
-fn e4_waits_while_a_draft_job_exists_and_fires_once_it_is_cancelled() {
+fn e3_never_starts_a_draft_and_e4_waits_while_one_remains() {
     let fx = fx("");
+    // The work session as tui leaves it, so E3 could start an Attempt if it chose to.
+    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
+        assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
+    }
     fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
-    fx.add_draft("later", &[]);
+    let spec = fx.env.root().join("spec.json");
+    fs::write(&spec, r#"{"goal": "Later.", "context": "c", "touches": ["b.txt"], "acceptance": ["ok"], "out_of_scope": []}"#).unwrap();
+    let added = fx.env.cpd(&["job", "add", "later", "--title", "Later", "--tier", "S2", "--spec", spec.to_str().unwrap(), "--draft", "--plan", "pay"]).ok();
+    assert_eq!((&added["job"]["status"], &added["job"]["appended"]), (&json!("draft"), &json!(true)));
 
     let engine = fx.start();
-    std::thread::sleep(Duration::from_millis(2500));
-    assert_eq!(fx.count("all-merged"), 0, "a draft Job of the PR is not done");
+    std::thread::sleep(Duration::from_millis(3500));
+    engine.stop();
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts"), 0, "a draft never gets an Attempt");
+    assert_eq!(fx.job_status("later"), "draft");
+    assert_eq!(fx.count("all-merged"), 0, "the PR waits for its draft");
+    assert!(fx.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_none());
 
-    fx.env.cpd(&["job", "cancel", "later", "--reason", "not needed", "--plan", "pay"]).ok();
+    fx.env.cpd(&["job", "cancel", "later", "--reason", "Not needed.", "--plan", "pay"]).ok();
+    let engine = fx.start();
     wait_until("all-merged", || fx.count("all-merged") == 1);
     engine.stop();
     assert_eq!(fx.events("all-merged")[0].3, json!({"pr": "repo", "merged": ["api"], "cancelled": ["later"]}));
@@ -1047,6 +1141,19 @@ fn e6_imports_the_context_stores_at_start_and_syncs_those_with_a_remote() {
     assert_eq!(fx.count("context-created"), 1);
     assert_eq!(fx.count("context-record"), 1);
     assert_eq!(fx.env.git(&remote, &["rev-parse", "main"]), fx.env.git(&store, &["rev-parse", "main"]));
+}
+
+/// Copies the executable `from` to `to` with a child `cp`, which has exited when this returns.
+///
+/// ETXTBSY: `exec` of a file fails while any process holds it open for writing. The test binary is
+/// multi-threaded: a thread that wrote `to` itself (`fs::copy`) holds a write descriptor until the copy
+/// ends, and a `fork` by another test's thread in that window duplicates the descriptor into a child that keeps it
+/// until its own `exec`. If this test then ran `to`, it would get "Text file busy". Here only
+/// `cp` ever opens `to` for writing, so no descriptor to it exists in this process to be inherited, and
+/// none is open anywhere once `cp` is waited for.
+fn copy_executable(from: &str, to: &Path) {
+    let status = std::process::Command::new("cp").arg("--").arg(from).arg(to).status().unwrap();
+    assert!(status.success(), "cp {from} {to:?}: {status}");
 }
 
 fn copy_dir(from: &Path, to: &Path) {
