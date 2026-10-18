@@ -30,6 +30,8 @@ Your worktree is `{{ worktree }}`. Your current directory is that worktree.
       cpd ask {{ attempt }} "<your question>"
 
   Ask one real blocker at a time. Do not ask what this Spec or the code already answers.
+- Commit a skeleton within 10 minutes of starting, then commit at least every 20 minutes.
+- Run only commands that exit. Wrap every test and measurement in `timeout`. Write no synthetic benchmarks. Never start `cpd events follow`, `cpd watch`, `cpd tui`, `cpd session run` or any other command that does not exit.
 - Before submitting, stop every process you started (background commands, private tmux servers you started with `tmux -L <name>` — kill them with `tmux -L <name> kill-server` —, any `cpd watch`, servers, watchers) and remove the temporary homes and files you created outside the worktree. Never leave anything running when you submit.
 - Do not stop until you have submitted.
 
