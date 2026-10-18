@@ -22,6 +22,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use serde_json::Value;
 use tempfile::TempDir;
@@ -39,7 +40,6 @@ pub const SLEEP_SECONDS: u64 = 120;
 /// descendants. Linux only (`/proc`). Idempotent.
 const TEARDOWN_SH: &str = r#"
 me=$$
-set -f
 
 # stat_of PID: sets st (state) and pp (parent pid); fails when the process is gone.
 stat_of() {
@@ -54,31 +54,31 @@ stat_of() {
 alive() { stat_of "$1" && [ "$st" != Z ] && [ "$st" != X ]; }
 
 protected=" "
-p=$me
-while [ "$p" -gt 0 ]; do
-  protected="$protected$p "
-  stat_of "$p" || break
-  p=$pp
+_a=$me
+while [ "$_a" -gt 0 ]; do
+  protected="$protected$_a "
+  stat_of "$_a" || break
+  _a=$pp
 done
 
 mine() {
-  p=$1
-  while [ "$p" -gt 1 ]; do
-    [ "$p" = "$me" ] && return 0
-    stat_of "$p" || return 1
-    p=$pp
+  _m=$1
+  while [ "$_m" -gt 1 ]; do
+    [ "$_m" = "$me" ] && return 0
+    stat_of "$_m" || return 1
+    _m=$pp
   done
   return 1
 }
 
 # The live processes whose command line contains $dir or whose cwd is under it.
 targets() {
-  for p in $({ grep -laF -- "$dir" /proc/[0-9]*/cmdline; find /proc -mindepth 2 -maxdepth 2 -name cwd -lname "$dir*"; } 2>/dev/null | sed -n 's|^/proc/\([0-9][0-9]*\)/.*||p' | sort -u); do
-    case "$protected" in *" $p "*) continue ;; esac
-    mine "$p" && continue
-    alive "$p" || continue
-    printf '%s
-' "$p"
+  for t in $({ grep -laF -- "$dir" /proc/[0-9]*/cmdline; find /proc -mindepth 2 -maxdepth 2 -name cwd -lname "$dir*"; } 2>/dev/null | sed -n 's|^/proc/\([0-9][0-9]*\)/.*|\1|p' | sort -u); do
+    [ "$t" -gt 1 ] || continue
+    case "$protected" in *" $t "*) continue ;; esac
+    mine "$t" && continue
+    alive "$t" || continue
+    printf '%s\n' "$t"
   done
 }
 
@@ -94,7 +94,7 @@ teardown() {
     n=0
     while [ "$n" -lt 10 ]; do
       any=
-      for p in $pids; do alive "$p" && any=1; done
+      for k in $pids; do alive "$k" && any=1; done
       [ -z "$any" ] && break
       sleep 0.1
       n=$((n + 1))
@@ -114,6 +114,20 @@ exit 0
 
 fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// Held while a fake is written (open for write until closed) and while the harness itself
+/// spawns a process: a child forked meanwhile would keep the fake's write fd until its exec,
+/// and executing the fake then fails with ETXTBSY.
+static WRITE_VS_SPAWN: Mutex<()> = Mutex::new(());
+
+/// Spawns `cmd` (returns once it has exec'd) and waits for it.
+fn run_quietly(cmd: &mut Command) -> std::io::Result<std::process::ExitStatus> {
+    let mut child = {
+        let _lock = WRITE_VS_SPAWN.lock().unwrap_or_else(|e| e.into_inner());
+        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?
+    };
+    child.wait()
 }
 
 static NEXT_SOCKET: AtomicUsize = AtomicUsize::new(0);
@@ -190,17 +204,15 @@ impl TestEnv {
     /// that runs the teardown once this test process is gone, so a killed test leaves nothing
     /// behind. It exits by itself when the directory is gone (a normal drop).
     fn start_reaper(&self) {
-        let status = Command::new("sh")
-            .arg("-c")
-            .arg(r#"setsid sh "$0" watch "$1" </dev/null >/dev/null 2>&1 &"#)
-            .arg(self.teardown_script())
-            .arg(std::process::id().to_string())
-            .current_dir("/")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .expect("start the reaper");
+        let status = run_quietly(
+            Command::new("sh")
+                .arg("-c")
+                .arg(r#"setsid sh "$0" watch "$1" </dev/null >/dev/null 2>&1 &"#)
+                .arg(self.teardown_script())
+                .arg(std::process::id().to_string())
+                .current_dir("/"),
+        )
+        .expect("start the reaper");
         assert!(status.success(), "the reaper did not start: {status}");
     }
 
@@ -209,13 +221,7 @@ impl TestEnv {
     /// or its ancestors), then removes the directory. Idempotent; also what the reaper runs.
     pub fn teardown(&self) {
         if self.teardown_script().exists() {
-            let _ = Command::new("sh")
-                .arg(self.teardown_script())
-                .current_dir("/")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+            let _ = run_quietly(Command::new("sh").arg(self.teardown_script()).current_dir("/"));
         }
         let _ = fs::remove_dir_all(self.root());
     }
@@ -350,8 +356,11 @@ unset _d _n _f _a
 "#,
             dir = dir.display(),
         );
-        fs::write(&path, script).expect("write fake");
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod fake");
+        {
+            let _lock = WRITE_VS_SPAWN.lock().unwrap_or_else(|e| e.into_inner());
+            fs::write(&path, script).expect("write fake");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod fake");
+        }
         path
     }
 
