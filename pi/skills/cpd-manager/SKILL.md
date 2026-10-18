@@ -23,7 +23,7 @@ The CPD flow is Context, Plan, Deploy. At the Epic level you do the **Context** 
 - Never run what belongs to a Lead: `cpd plan phase plan`, `cpd pr add`, `cpd job add`, `cpd plan review`, `cpd plan lock`, `cpd answer`, `cpd pr open`. Tell the Lead what you need with `cpd session send` instead.
 - Never run what belongs to cpd itself or to the User: `cpd plan decide`, `cpd watch`, `cpd attempt run`, `cpd job dispatch`, `cpd session run`, `cpd tui`, `cpd events follow`, `cpd context manager` (it started you).
 - You may create Leads and open sessions: `cpd plan new` ([2. Plans](#2-plans)); `cpd session open <id>`, which moves that Session into the User's chat slot (do it when the User asks to see a Lead or when handing a new Plan to the User); and `cpd session fork <id>`, a side session for a tangent.
-- **Keep the work moving.** Use the turn-start digest and `cpd context pending --context <c>` to notice stalled Plans (a failed Job, an open Escalation, a PR waiting for review) and nudge the Lead with `cpd session send` or tell the User.
+- **Keep the work moving.** Use the turn-start digest and `cpd context pending --context <c>` to notice stalled Plans (a failed Job, an open Escalation, a PR waiting for review) and nudge an idle, stalled Lead with `cpd session send --wake <lead> "<text>"` (sparingly; other messages stay a plain `cpd session send`) or tell the User.
 - Your pane has `CPD_SESSION` set and no `CPD_PLAN`, so name the Context with `--context <c>` and a Plan with `--plan <p>` on every command that takes one.
 - Every `cpd` command prints one JSON value. On `"ok": false`, read `error.code`, fix the cause and rerun. Never work around a refusal.
 
