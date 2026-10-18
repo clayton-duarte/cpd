@@ -138,6 +138,14 @@ _Avoid_: agent, pane, chat
 An append-only record of something that happened, numbered in commit order. Every state change appends one. Events are the single channel to Leads, the TUI and agent states: the pi adapter follows them and delivers some to its Lead as messages, with or without a turn. They replace cpd 1's **Lead queue** (the per-Lead queue directory of message files) and the tmux options that carried agent states.
 _Avoid_: message, notification, queue item
 
+**Inbox** (new):
+The single source of "needs you": the open Inbox items, shown by `cpd inbox` and the cockpit's Inbox section, opened and closed by the engine from their cause.
+_Avoid_: notifications, alerts, to-do list
+
+**Inbox item** (new):
+One thing that needs the User (a dialog, a Plan review, an unread reply, a stuck Job, an engine error, an open question, or the engine being down), kept in `inbox_items` while its condition holds and forever after, closed; the User can snooze or dismiss it.
+_Avoid_: notification, alert, task
+
 **Cockpit**:
 The User's interface: one tmux window with global side bars and a centre bound to one Plan (plan view above, the Lead's chat below). tmux hosts the panes, ratatui draws the views.
 _Avoid_: dashboard, TUI session

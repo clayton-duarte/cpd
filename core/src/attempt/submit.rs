@@ -65,8 +65,9 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
     let check_tail = if review {
         None
     } else {
-        let lead = env.store.read(|conn| lead_branch(conn, &plan, &attempt.job))?;
-        git::tamper_check(&root, &lead, &base, &sha)?;
+        let (lead, pr_base) = env.store.read(|conn| lead_branch(conn, &plan, &attempt.job))?;
+        let base_ref = git::tamper::base_ref(&root, &pr_base)?;
+        git::tamper_check(&root, &lead, &base_ref, &base, &sha)?;
         quick_check(&env, &plan, &id, &root, &lead)?
     };
 
@@ -136,12 +137,12 @@ fn require_review(env: &Env, plan: &PlanId, id: &AttemptId, job: &str, base: &st
     Ok(())
 }
 
-/// The Lead Branch of the PR that holds Job `job` of `plan`.
-fn lead_branch(conn: &rusqlite::Connection, plan: &PlanId, job: &str) -> Result<String, CpdError> {
+/// The Lead Branch and the base of the PR that holds Job `job` of `plan`.
+fn lead_branch(conn: &rusqlite::Connection, plan: &PlanId, job: &str) -> Result<(String, String), CpdError> {
     Ok(conn.query_row(
-        "SELECT r.lead_branch FROM jobs j JOIN prs r ON r.plan = j.plan AND r.key = j.pr WHERE j.plan = ?1 AND j.key = ?2",
+        "SELECT r.lead_branch, r.base FROM jobs j JOIN prs r ON r.plan = j.plan AND r.key = j.pr WHERE j.plan = ?1 AND j.key = ?2",
         [plan.as_str(), job],
-        |r| r.get(0),
+        |r| Ok((r.get(0)?, r.get(1)?)),
     )?)
 }
 

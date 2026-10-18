@@ -2,9 +2,10 @@
 
 Rules for every `ask_user_question` call (trial t5). The tool opens a dialog in the editor area; the User answers there.
 
+- **A dialog holds one short question.** Tables, lists and long text go in the chat first; then the dialog asks (hs-n48). A `preview` is a few lines at most.
 - **One call per interview round.** At most 4 questions, 2–4 options each. Header at most 16 characters. Each question ends with `?`.
 - **Every option has a `description`**: one line stating the trade-off. Never author the labels `Other`, `Type something.` or `Next` (reserved). The tool always adds a `Type something.` row, so the User can answer freely.
-- **`multiSelect: true` only when the picks are independent.** A `preview` goes on single-select options only, and stays short: the preview box is capped at 20 rows and does not scroll. It is not a place to read a Plan; the Plan goes through `cpd_plan_review`.
+- **`multiSelect: true` only when the picks are independent.** A `preview` goes on single-select options only, and stays to a few lines (the box is capped at 20 rows and does not scroll). It is not a place to read a table or a Plan; the Plan goes through `cpd_plan_review`.
 - **Ask the whole frontier at once.** Put every question whose answer does not depend on another open question into the same round. A dependent question waits for the next round.
 - **Do not ask what you can look up.** Read the repo and the User's material first. Ask for decisions, not facts.
 - **Never approve a Plan with this tool.** Plan approval is `cpd_plan_review`.
@@ -32,7 +33,7 @@ ask_user_question({questions: [
      {label: "Web UI", description: "Largest Job; depends on the HTTP API"}]}]})
 ```
 
-Assumptions (keep the preview to about 12 lines; if there are more assumptions, list them in chat and put only the count in the preview):
+Assumptions (list them in the chat first, as a table or list; the preview holds at most a few lines, or only the count):
 
 ```ts
 ask_user_question({questions: [{

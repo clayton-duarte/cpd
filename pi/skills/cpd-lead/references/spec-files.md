@@ -34,10 +34,19 @@ The Worker's submit runs only the repo's quick check (its `pre-commit` hook). Th
 
 ## Size
 
-- Target **about 13 min and about 150 turns** per Job, including worktree setup and dependency install. The timeout is **30 min** of active time per Attempt. A Job that needs more fails and costs a retry.
+- An Attempt gets `attempt_minutes` of active time (90 on the User's machines, hs-d11); the timeout is that configured value. Size a Job to fit **well inside it** (about 150 turns), including worktree setup and dependency install. A Job that needs more fails and costs a retry.
 - A Job is one outcome that one Worker can finish and verify. Two independent outcomes are two Jobs.
 - Prefer many small Jobs that run in parallel. Do not split below a unit that has its own acceptance check.
 - A Job key matches `^[a-z][a-z0-9-]{0,31}$` and is unique in the Plan.
+
+## Bounded commands
+
+Put these in the `context` of every Spec (they are a Worker's only rules; hs-n97, hs-n107):
+
+- Commit a skeleton within 10 minutes, then at least every 20 minutes.
+- Wrap every measurement and test run in `timeout` (for example `timeout 300 npm test`).
+- Write no synthetic benchmarks.
+- Never start a command that does not exit: `cpd events follow`, `cpd watch`, `cpd tui`, `cpd session run`.
 
 ## Dependencies
 
@@ -61,4 +70,5 @@ Grounding that needs more than reading (a large codebase survey, comparing libra
 
 - Spec: the question as `goal`; where to look and what a good answer contains as `context`; `touches` is the one Markdown file for the findings (for example `docs/research/<topic>.md`); `acceptance` says what the file must answer and cite. Tier `S1` to `S3`.
 - Jobs run only after the lock, so a research Job cannot ground the Plan that contains it. Put it in the Plan first and add the follow-up Jobs as drafts right after the lock (`job add --draft`), listing them in its `context`. When it is Merged (`job-merged`), revise the drafts with what it found, then start them with `cpd_plan_review`. Tell the User what the batch holds.
+- A research Job obeys the [bounded commands](#bounded-commands): it commits its findings file early and measures only under `timeout`, with real data, never a synthetic benchmark.
 - If the question is cheap to answer by reading, read instead.

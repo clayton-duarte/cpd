@@ -195,3 +195,16 @@ test("the skill adds later batches as drafts and approves each with cpd_plan_rev
   assert.doesNotMatch(text, /no Plan review for appended work/, "the append-in-chat flow is gone");
   assert.ok(synopses().get("job add")!.has("--draft"), "commands.md documents job add --draft");
 });
+
+test("cpd-lead: sizing follows attempt_minutes, dialogs stay short, Specs carry the bounded-command rules", () => {
+  const [skillMd, ...refs] = skillFiles("cpd-lead");
+  const all = [skillMd!, ...refs];
+  for (const { name, text } of all) assert.doesNotMatch(text, /30 min|13 min/, `${name}: the timeout is attempt_minutes`);
+  assert.match(skillMd!.text, /attempt_minutes/);
+  const questions = all.find((f) => f.name.endsWith("questions.md"))!.text;
+  assert.match(questions, /A dialog holds one short question/);
+  const spec = all.find((f) => f.name.endsWith("spec-files.md"))!.text;
+  for (const rule of ["within 10 minutes", "`timeout`", "synthetic benchmarks", "`cpd events follow`", "`cpd watch`", "`cpd tui`", "`cpd session run`"]) {
+    assert.ok(spec.includes(rule), `spec-files.md must state: ${rule}`);
+  }
+});
