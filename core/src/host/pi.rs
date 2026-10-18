@@ -245,6 +245,20 @@ pub fn worker(launch: &WorkerLaunch) -> Launch {
     Launch { argv, env }
 }
 
+/// The distiller (contract §6.5 "Distiller", §4.6): a one-shot pi that reads
+/// `prompt.md` and `records.md` in its working directory and prints the digest
+/// to stdout. No session, no extension, no skill, no context file, no tool, and
+/// no `CPD_*` variable: it is no Session.
+pub fn distiller(model: &str) -> Launch {
+    let argv = [
+        "pi", "--print", "--no-session", "--no-extensions", "--no-skills", "--no-context-files", "--no-tools", "--model", model,
+        "--", "@prompt.md", "@records.md",
+    ]
+    .map(str::to_owned)
+    .into();
+    Launch { argv, env: BTreeMap::from([(SKIP_VERSION_CHECK.0.to_owned(), SKIP_VERSION_CHECK.1.to_owned())]) }
+}
+
 /// A Lead's `-e` candidates: the adapter, then each `lead_pi_packages` entry.
 pub fn lead_candidates(adapter: &Path, lead_pi_packages: &[String]) -> Vec<String> {
     let mut candidates = vec![adapter.display().to_string()];
@@ -618,6 +632,19 @@ mod tests {
             ])
         );
         assert_eq!(launch.env, lead_env(&[]));
+    }
+
+    #[test]
+    fn distiller() {
+        let launch = super::distiller("p/sonnet:medium");
+        assert_eq!(
+            launch.argv,
+            strs(&[
+                "pi", "--print", "--no-session", "--no-extensions", "--no-skills", "--no-context-files", "--no-tools",
+                "--model", "p/sonnet:medium", "--", "@prompt.md", "@records.md",
+            ])
+        );
+        assert_eq!(launch.env, BTreeMap::from([("PI_SKIP_VERSION_CHECK".to_owned(), "1".to_owned())]));
     }
 
     #[test]
