@@ -18,12 +18,13 @@ use cpd_core::output::Output;
 use cpd_core::plan::Phase;
 use cpd_core::session::PROGRAM;
 use crate::palette::{self, Meaning};
-use crate::read::JobCounts;
+use crate::read::{Dot, JobCounts};
 use crate::{not_a_terminal, on_a_terminal};
 
 const COLUMN_SPACING: u16 = 2;
 /// A tmux popup draws a border of one cell on each side.
 const POPUP_BORDER: u16 = 2;
+const DOTS_TITLE: &str = "Session dots";
 const INTRO: &str = "Legend: what the cockpit's colours and icons mean   (any key closes)";
 /// The popup's command: the legend view, run like every pane of the cockpit (by `PATH`).
 const COMMAND: [&str; 4] = [PROGRAM, "tui", "view", "legend"];
@@ -120,21 +121,21 @@ fn sections() -> Vec<Section> {
         Line::from(order).style(Style::new().add_modifier(Modifier::DIM)),
     ]);
     let jobs = Section { title: "Jobs: Plan pills and Context counters", header: Some(["status", "Plan pill", "counter"]), rows: jobs };
+    let dot = |d: Dot, frame: usize| Line::from(palette::dot_span(d, frame, false));
+    let frames = Line::from((0..4).map(|f| palette::dot_span(Dot::Working, f, false)).collect::<Vec<_>>());
     let dots = Section {
-        title: "Context dots: ● needs you, ○ does not; the colour is the Plan's phase",
+        title: DOTS_TITLE,
         header: None,
         rows: vec![
-            palette::PHASE_LEGEND
-                .iter()
-                .map(|(name, _)| {
-                    Line::from(vec![
-                        palette::dot_span(crate::read::Dot::White, 0, false),
-                        " ".into(),
-                        palette::dot_span(crate::read::Dot::Idle, 0, false),
-                        format!(" {name}").into(),
-                    ])
-                })
-                .collect(),
+            vec![plain("●"), plain("the Session needs you (colour below)")],
+            vec![frames, plain("the Lead is working (one frame every 250 ms)")],
+            vec![dot(Dot::Idle, 0), plain("idle, nothing needed")],
+            vec![dot(Dot::Stopped, 0), plain("pi stopped")],
+            vec![dot(Dot::Red, 0), plain("red: blocked work (a dialog, an Escalation) in dispatch or pr")],
+            vec![dot(Dot::Yellow, 0), plain("yellow: the Plan's Lead, its pull request is open with checks passed or failed")],
+            vec![dot(Dot::Magenta, 0), plain("magenta: blocked while grounding, planning or done, or the Plan's review is pending")],
+            vec![dot(Dot::White, 0), plain("white: idle, not seen since it last went idle")],
+            vec![plain(""), plain("Context row: its most urgent Session: red > yellow > magenta > white > ◐ > ○ > ◌")],
         ],
     };
     let prs = Section {
@@ -247,11 +248,27 @@ mod tests {
             [
                 "Meanings → colour (one source for every view)",
                 "Jobs: Plan pills and Context counters",
-                "Context dots: ● needs you, ○ does not; the colour is the Plan's phase",
+                "Session dots",
                 "PRs (Dispatch)",
                 "PR checks",
             ]
         );
+    }
+
+    #[test]
+    fn session_dots_lists_every_glyph_and_each_circle_in_its_palette_colour() {
+        let dots = &sections()[2];
+        assert_eq!(dots.title, "Session dots");
+        let shown: String = dots.rows.iter().flatten().map(text).collect();
+        for glyph in ["●", "◐◓◑◒", "○", "◌", "red > yellow > magenta > white > ◐ > ○ > ◌"] {
+            assert!(shown.contains(glyph), "{glyph}: {shown}");
+        }
+        for (row, dot) in dots.rows[4..8].iter().zip([Dot::Red, Dot::Yellow, Dot::Magenta, Dot::White]) {
+            assert_eq!(row[0].spans, [palette::dot_span(dot, 0, false)], "{dot:?}");
+        }
+        assert!(!shown.contains("phase"), "{shown}");
+        let frames: Vec<_> = dots.rows[1][0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(frames, ["◐", "◓", "◑", "◒"]);
     }
 
     #[test]
