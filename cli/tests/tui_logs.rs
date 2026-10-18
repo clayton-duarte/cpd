@@ -270,12 +270,12 @@ fn the_logs_view_needs_a_terminal() {
 #[test]
 fn the_popup_is_sized_like_the_legends_and_at_most_80_percent_of_the_client() {
     let (w, h) = cpd_tui::widgets::legend::size();
-    let big = logs::popup_args((1000, 1000));
+    let big = logs::popup_args((1000, 1000), None);
     assert_eq!(
         big,
         ["display-popup", "-E", "-T", " logs ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd tui view logs"]
     );
-    let small = logs::popup_args((80, 40));
+    let small = logs::popup_args((80, 40), None);
     assert_eq!((small[5].as_str(), small[7].as_str()), ("64", "32"));
     assert_eq!(small[3], " logs ");
 }

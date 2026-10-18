@@ -19,6 +19,7 @@
 mod actions;
 mod cursor;
 mod follow;
+mod inbox;
 mod menu;
 mod prompt;
 mod rows;
@@ -135,6 +136,12 @@ fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View,
             Effect::Legend => {
                 // `display-popup` returns when the popup closes; only a failure is said
                 if let Err(why) = runner.legend() {
+                    view.done(Err(why));
+                }
+            }
+            Effect::Logs(event) => {
+                // `display-popup` returns when the popup closes; only a failure is said
+                if let Err(why) = runner.logs(event) {
                     view.done(Err(why));
                 }
             }

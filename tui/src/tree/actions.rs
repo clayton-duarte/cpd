@@ -221,6 +221,12 @@ impl Runner {
         Ok(())
     }
 
+    /// A click on an `engine-error` or `engine-down` Inbox item: the logs popup at the Event (the bottom with none);
+    /// returns when it closes.
+    pub fn logs(&self, event: Option<i64>) -> Result<(), String> {
+        crate::logs::open_at(&self.tmux, event).map_err(|e| e.message().to_owned())
+    }
+
     /// `?`: the legend popup; returns when it closes.
     pub fn legend(&self) -> Result<(), String> {
         open_legend(&self.tmux).map_err(|e| e.message().to_owned())

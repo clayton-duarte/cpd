@@ -17,11 +17,23 @@ pub struct Log {
     up: usize,
     /// The rows the last [`Log::fit`] gave.
     height: usize,
+    /// The Event the view was opened at (`--event`): its line is reversed. Kept after the User scrolls.
+    selected: Option<i64>,
+    /// The selected Event is to be scrolled into view by the next [`Log::fit`], which knows the height.
+    reveal: bool,
 }
 
 impl Log {
     pub fn new(events: Vec<Event>) -> Log {
         Log { events, ..Log::default() }
+    }
+
+    /// The view opened at the Event `id`: its line is selected and, at the first [`Log::fit`], scrolled to the middle of
+    /// the view, which then does not follow until the User scrolls down to the bottom. An `id` that is not among
+    /// `events` selects nothing and the view opens at the bottom.
+    pub fn at(events: Vec<Event>, id: i64) -> Log {
+        let found = events.iter().any(|e| e.id == id);
+        Log { events, selected: found.then_some(id), reveal: found, ..Log::default() }
     }
 
     /// Whether the view shows the bottom, and so follows new Events.
@@ -41,6 +53,13 @@ impl Log {
     /// The view is `height` rows tall.
     pub fn fit(&mut self, height: u16) {
         self.height = usize::from(height);
+        if let (true, Some(id)) = (std::mem::take(&mut self.reveal), self.selected) {
+            if let Some(i) = self.events.iter().position(|e| e.id == id) {
+                // the line goes to the middle of the view: `end` is one past the last line shown
+                let end = i + 1 + self.height.saturating_sub(1) / 2;
+                self.up = self.events.len().saturating_sub(end);
+            }
+        }
         self.clamp();
     }
 
@@ -100,4 +119,9 @@ pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
         log.visible().iter().map(|e| line(e, usize::from(area.width))).collect()
     };
     f.render_widget(Paragraph::new(lines), area);
+    // the Event the view was opened at is reversed across its whole line
+    if let Some(i) = log.visible().iter().position(|e| log.selected == Some(e.id)) {
+        let row = Rect::new(area.x, area.y + i as u16, area.width, 1);
+        f.buffer_mut().set_style(row.intersection(area), Modifier::REVERSED);
+    }
 }

@@ -13,10 +13,12 @@ use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::widgets::{Paragraph, Wrap};
+use time::OffsetDateTime;
 use tui_tree_widget::TreeState;
 
 use super::actions::{Action, Free, IN_CHAT_SLOT, Subject};
 use super::cursor::{self, Input};
+use super::inbox::{self, Hit, Jump, Shape};
 use super::menu::{self, Item, Kind, Menu};
 use super::prompt::{Ask, Outcome, Prompt, Target};
 use super::rows::{self, Id, Row};
@@ -75,6 +77,8 @@ pub enum Effect {
     Run(Action),
     /// Open the legend popup (`?`); a failure is the note.
     Legend,
+    /// Open the logs popup at this Event (the bottom with none): a click on an `engine-error` or `engine-down` item.
+    Logs(Option<i64>),
 }
 
 pub struct View {
@@ -91,6 +95,10 @@ pub struct View {
     /// The inner area of the last frame (the pane less a blank column on each side, below the blank top row): the
     /// menu is clamped inside it and hit-tested against it, and its `x` is the column of the tree's first cell.
     pane: Rect,
+    /// The Inbox section's rows (header, items, `+<n> more`) are all shown, not only the first three. View state only.
+    inbox_expanded: bool,
+    /// Where the last frame drew the Inbox section (empty when it drew none): clicks there are the section's.
+    inbox_area: Rect,
     /// The one-line result or refusal of the last action, until the next `n`, `x` or click.
     pub note: String,
 }
@@ -106,6 +114,8 @@ impl View {
             prompt: None,
             menu: None,
             pane: Rect::default(),
+            inbox_expanded: false,
+            inbox_area: Rect::default(),
             note: String::new(),
         };
         view.refresh(tree);
@@ -218,6 +228,10 @@ impl View {
             return Effect::None;
         }
         let at = Position::new(m.column, m.row);
+        // the Inbox section has no menu of its own yet: a right click there opens none
+        if self.menu.is_none() && m.kind == MouseEventKind::Down(MouseButton::Right) && self.inbox_area.contains(at) {
+            return Effect::None;
+        }
         if let Some(menu) = self.menu.as_mut() {
             // an open menu takes every click: a left click picks, any button outside closes
             let MouseEventKind::Down(button) = m.kind else { return Effect::None };
@@ -345,7 +359,11 @@ impl View {
     fn click(&mut self, m: MouseEvent) -> Effect {
         self.note.clear();
         self.last_input = Input::Click;
-        let Some(path) = self.row_at(Position::new(m.column, m.row)) else { return Effect::None };
+        let at = Position::new(m.column, m.row);
+        if self.inbox_area.contains(at) {
+            return self.click_inbox(at.y - self.inbox_area.y);
+        }
+        let Some(path) = self.row_at(at) else { return Effect::None };
         // a `…` row expands or collapses its archived rows
         if rows::click_more(&mut self.state, &self.tree, &path) {
             return Effect::None;
@@ -369,6 +387,23 @@ impl View {
         }
     }
 
+    /// A left click on the Inbox section, `row` rows below its header: `+<n> more` and `− less` toggle the inline
+    /// expansion; an item jumps to its cause ([`inbox::jump`]); the header does nothing.
+    fn click_inbox(&mut self, row: u16) -> Effect {
+        match Shape::new(self.tree.inbox.len(), self.inbox_expanded).hit(row) {
+            Some(Hit::Toggle) => {
+                self.inbox_expanded = !self.inbox_expanded;
+                Effect::None
+            }
+            Some(Hit::Item(i)) => match inbox::jump(&self.tree, &self.tree.inbox[i]) {
+                Some(Jump::Run(action)) => Effect::Run(action),
+                Some(Jump::Logs(event)) => Effect::Logs(event),
+                None => Effect::None,
+            },
+            Some(Hit::Header) | None => Effect::None,
+        }
+    }
+
     /// The row drawn at `at`, none below the last row (the tree state answers with the last row there).
     fn row_at(&self, at: Position) -> Option<Vec<Id>> {
         let path = self.state.rendered_at(at)?.to_vec();
@@ -381,18 +416,34 @@ impl View {
         self.prompt.as_ref().map(Prompt::text).unwrap_or_else(|| self.note.clone())
     }
 
-    /// Draw a blank row, the tree below it, and (when there is something to say) the footer in the rows at the bottom: the
-    /// reference's layout, the prompt bold. One blank column is left on each side of all of it. `frame` is the
-    /// animation frame of the working dots (`palette::frame`).
+    /// [`View::draw_at`] now.
     pub fn draw(&mut self, f: &mut Frame, frame: usize) {
+        self.draw_at(f, frame, OffsetDateTime::now_utc());
+    }
+
+    /// Draw a blank row, the tree below it, the Inbox section pinned under the tree and (when there is something to
+    /// say) the footer in the rows at the bottom: the reference's layout, the prompt bold. One blank column is left on
+    /// each side of all of it. `frame` is the animation frame of the working dots (`palette::frame`); the Inbox items'
+    /// ages are taken at `now`, from their `opened_at`, so they need no read.
+    pub fn draw_at(&mut self, f: &mut Frame, frame: usize, now: OffsetDateTime) {
         let inner = f.area().inner(Margin::new(1, 0));
         let footer = self.footer();
         let width = inner.width.max(1) as usize;
         let wrapped = footer.chars().count().div_ceil(width);
         let footer_height =
             if footer.is_empty() { 0 } else { (wrapped + usize::from(wrapped > 1)).max(1).min(inner.height as usize) as u16 };
-        let [_, list, footer_area] =
-            Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(footer_height)]).areas(inner);
+        // the section leaves the tree at least one row, when there is one to leave
+        let room = inner.height.saturating_sub(1 + footer_height).saturating_sub(1);
+        let inbox_height = Shape::new(self.tree.inbox.len(), self.inbox_expanded).height().min(room);
+        let [_, list, inbox_area, footer_area] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(inbox_height),
+            Constraint::Length(footer_height),
+        ])
+        .areas(inner);
+        self.inbox_area = inbox_area;
+        inbox::draw(f, inbox_area, &self.tree.inbox, self.inbox_expanded, now, frame);
         if footer_height > 0 {
             let style = if self.prompt.is_some() { palette::note().bold() } else { palette::note() };
             f.render_widget(Paragraph::new(footer).style(style).wrap(Wrap { trim: false }), footer_area);
