@@ -16,7 +16,7 @@ use crate::home::CpdHome;
 use crate::host::layout::attempt_window;
 use crate::host::pi::{self, PiDirs, WorkerLaunch, extensions_to_pass, worker_candidates};
 use crate::host::{PaneId, Tmux, WindowId};
-use crate::ids::{EscalationId, PlanId, SessionId};
+use crate::ids::{AttemptId, EscalationId, PlanId, SessionId};
 use crate::metrics;
 use crate::plan::jobs::Job;
 use crate::session::run::{quiet_since, turn_finished};
@@ -322,7 +322,13 @@ fn retry_kill(
 /// failed `kill-window` is retried (see [`KILL_TRIES`]); a window already
 /// gone counts as killed.
 pub fn kill_window(config: &Config, tmux: &Tmux, target: &Target) -> Result<(), CpdError> {
-    let name = attempt_window(&target.plan, &target.id);
+    kill_attempt_window(config, tmux, &target.plan, &target.id)
+}
+
+/// [`kill_window`] for Attempt `id` of `plan`: the one A9 kill, shared by the
+/// driver, E2 and R.
+pub fn kill_attempt_window(config: &Config, tmux: &Tmux, plan: &PlanId, id: &AttemptId) -> Result<(), CpdError> {
+    let name = attempt_window(plan, id);
     let windows: Vec<WindowId> = tmux
         .list_panes()?
         .into_iter()

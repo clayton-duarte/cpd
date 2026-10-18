@@ -23,8 +23,9 @@ use super::engine::{Engine, metrics};
 use super::report::{About, Step};
 use crate::driver::ledger::{self, Cause, End, Ladder};
 use crate::driver::lock::{self, Free};
+use crate::driver::worker;
 use crate::error::{CpdError, ErrorCode};
-use crate::host::layout::{MAIN_WINDOW, View, attempt_window};
+use crate::host::layout::{MAIN_WINDOW, View};
 use crate::host::tmux::{OPT_SESSION, Pane, Spawn};
 use crate::ids::{AttemptId, PlanId, SessionId};
 use crate::merge::{self, RepoLock};
@@ -144,14 +145,7 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
     lock::remove(&engine.home, plan, id)?;
     drop(lock);
     engine.log.line(&format!("E2: the driver of {id} (Plan {plan}) is dead: ended {} / {}", end.outcome(), end.cause()));
-    let name = attempt_window(plan, id);
-    let work = engine.config.tmux.work_session.clone();
-    for pane in engine.tmux.list_panes()? {
-        if pane.session_name == work && pane.window_name == name {
-            engine.tmux.kill_window(&pane.window)?;
-        }
-    }
-    Ok(())
+    worker::kill_attempt_window(&engine.config, &engine.tmux, plan, id)
 }
 
 /// R (§7.4) for the orphaned merges of `repo`, when its per-repo lock is free
