@@ -101,7 +101,7 @@ impl Objects {
         Ok(Objects { context: None, plans: vec![plan.clone()], sessions })
     }
 
-    /// The Context, its Plans, every Lead Session of it and its grounded Lead.
+    /// The Context, its Plans, and every Lead and Manager Session of it.
     /// The caller has checked that the Context exists.
     pub fn of_context(conn: &Connection, context: &ContextId) -> Result<Objects, CpdError> {
         let mut stmt = conn.prepare("SELECT id FROM plans WHERE context = ?1 ORDER BY created_at, id")?;
@@ -113,8 +113,7 @@ impl Objects {
             .collect::<Result<Vec<_>, _>>()?;
         let sessions = session_ids(
             conn,
-            "SELECT id FROM sessions WHERE role = 'lead' AND context = ?1
-             UNION SELECT lead_session FROM contexts WHERE id = ?1 AND lead_session IS NOT NULL",
+            "SELECT id FROM sessions WHERE role IN ('lead', 'manager') AND context = ?1 ORDER BY created_at, id",
             context.as_str(),
         )?;
         Ok(Objects { context: Some(context.clone()), plans, sessions })
@@ -144,7 +143,7 @@ fn result(changed: &[Object], closed: Vec<String>) -> Output {
 
 /// `in_chat_slot` when a Lead of `sessions` holds the chat slot: checked
 /// before any pane is closed, so a refusal leaves everything as it was.
-fn refuse_chat_slot(store: &mut Store, tmux: &Tmux, cockpit: &str, sessions: &[SessionId]) -> Result<(), CpdError> {
+pub(super) fn refuse_chat_slot(store: &mut Store, tmux: &Tmux, cockpit: &str, sessions: &[SessionId]) -> Result<(), CpdError> {
     // The rows are read first, then the panes, as `close_lead` does.
     let leads = store.read(|conn| {
         let mut found = Vec::new();

@@ -28,17 +28,17 @@ test("EOF restarts the follower with the in-memory cursor, also past Events hand
 test("restarts back off from restartInitialMs up to restartMaxMs", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  await started(f);
+  // The delays the follower asks for, not the intervals measured (those include the start-up of a process under load).
+  const delays: number[] = [];
+  f.respond("plan-show", planShow());
+  f.load({ schedule: (run, ms) => (delays.push(ms), setTimeout(run, 0)) });
+  await f.pi.fire("session_start");
+  await waitFor("the follower", () => f.follows().length > 0);
   for (let n = 2; n <= 5; n++) {
     f.file("exit-next", "0");
     await waitFor(`start ${n}`, () => f.follows().length === n);
   }
-  const t0 = f.follows().map((c) => c.t);
-  const gaps = t0.slice(1).map((v, i) => v - t0[i]!);
-  assert.ok(gaps[0]! >= 25, `gaps ${gaps}`);
-  assert.ok(gaps[1]! >= 55, `gaps ${gaps}`);
-  assert.ok(gaps[2]! >= 110, `gaps ${gaps}`);
-  assert.ok(gaps[3]! >= 110 && gaps[3]! < 400, `capped at restartMaxMs: ${gaps}`);
+  assert.deepEqual(delays.slice(0, 4), [30, 60, 120, 120], "doubling from restartInitialMs, capped at restartMaxMs");
 });
 
 test("a failure line is delivered once per code until a line is read again; the restart goes on", async (t) => {

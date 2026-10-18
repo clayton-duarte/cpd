@@ -194,7 +194,7 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey) -> 
     Ok(Next { branch: git::attempt_branch(plan, &attempt), attempt, tier, origin, worktree })
 }
 
-/// Ready (§3.2): `queued`, in a Plan in phase `dispatch` or `pr`, whose PR is
+/// Ready (§3.2): `queued`, in a Plan in phase `dispatch` or `deploy`, whose PR is
 /// `dispatch` or `open` (a `waiting` PR has no Lead worktree yet), with every
 /// Dependency `merged`; else `job_not_ready`.
 fn require_ready(all: &[Job], job: &Job, plan: &PlanId, phase: &str, pr_status: &str) -> Result<(), CpdError> {
@@ -206,7 +206,7 @@ fn require_ready(all: &[Job], job: &Job, plan: &PlanId, phase: &str, pr_status: 
         .collect();
     let why = if job.status != "queued" {
         format!("it is {}, not queued", job.status)
-    } else if !matches!(phase, "dispatch" | "pr") {
+    } else if !matches!(phase, "dispatch" | "deploy") {
         format!("Plan {plan} is in phase {phase}")
     } else if !matches!(pr_status, "dispatch" | "open") {
         format!("its PR {} is {pr_status}", job.pr)

@@ -114,7 +114,7 @@ struct Fx {
 }
 
 /// What the fake `gh` answers to the PR poller's search when a test does not care: no pull requests.
-const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#;
+const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#;
 
 fn fx(config_extra: &str) -> Fx {
     let fx = fx_bare(config_extra);
@@ -159,7 +159,7 @@ fn fx_bare(config_extra: &str) -> Fx {
     }
     env.fake_pi("exit 0");
     env.fake_gh(&format!("echo '{EMPTY_SEARCH}'"));
-    // E5 runs `cpd pr poll` from `PATH`: the one under test, not an installed one.
+    // A `cpd` on `PATH` that records its calls: E5 runs the engine's own executable, so it must see none.
     env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
     let fx = Fx { env, repo, lead };
     let catalog: String = EFFORTS
@@ -302,12 +302,6 @@ impl Fx {
     fn job_status(&self, key: &str) -> String {
         self.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
     }
-
-    /// A fake `cpd` on `PATH` that runs `pr` with `pr` (sh code) and
-    /// everything else with the built binary.
-    fn fake_cpd(&self, pr: &str) {
-        self.env.fake("cpd", &format!("if [ \"$1\" = pr ]; then {pr}; fi\nexec '{CPD}' \"$@\""));
-    }
 }
 
 // ---------- the lock, the signals, the log ----------
@@ -336,6 +330,19 @@ fn watch_holds_the_lock_refuses_a_second_and_stops_on_sigterm() {
     let out = again.stop_with(Signal::SIGINT);
     assert_eq!(out.json(), json!({"ok": true, "stopped": true}));
     assert_eq!(fx.count("watch-stopped"), 2);
+}
+
+/// `tmux kill-window` (the install's restart of the engine) sends SIGHUP: it is a stop, not a crash.
+#[test]
+fn watch_stops_on_sighup_with_one_watch_stopped() {
+    let fx = fx("");
+    let engine = fx.start();
+    let pid = engine.pid();
+
+    let out = engine.stop_with(Signal::SIGHUP);
+    assert_eq!(out.json(), json!({"ok": true, "stopped": true}), "{out:?}");
+    assert_eq!(out.exit, 0);
+    assert_eq!(fx.events("watch-stopped"), [(None, None, None, json!({"pid": pid}))]);
 }
 
 #[test]
@@ -368,8 +375,8 @@ fn ensure_starts_the_engine_in_the_work_session_once() {
     let pid: u32 = fields[3].parse().unwrap();
     assert_eq!(fx.events("watch-started"), [(None, None, None, json!({"pid": pid}))]);
     assert_eq!(fx.env.cpd(&["watch"]).error()["code"], "watch_running");
-    // E5's polls aside, the one call is the engine's own start.
-    assert_eq!(fx.env.calls("cpd").into_iter().filter(|c| c[0] != "pr").collect::<Vec<_>>(), [vec!["watch".to_owned()]]);
+    // The one call is the engine's own start: E5 runs the engine's executable, not `cpd` from `PATH`.
+    assert_eq!(fx.env.calls("cpd"), [vec!["watch".to_owned()]]);
 
     let again = fx.env.cpd(&["watch", "--ensure"]).ok();
     assert_eq!(again, json!({"ok": true, "started": false, "already": true}));
@@ -728,6 +735,21 @@ fn e3_starts_the_driver_after_the_engines_binary_is_replaced() {
     assert!(!fx.texts("error").iter().any(|t| t.contains("deleted")));
 }
 
+/// E5 runs `cpd pr poll` from the path recorded at start, not from `PATH` (where `fx_bare` put a `cpd` that records its calls).
+#[test]
+fn e5_polls_with_the_engines_recorded_executable_not_the_one_on_path() {
+    let fx = fx_bare("");
+    let installed = fx.env.root().join("cpd-installed");
+    fs::copy(CPD, &installed).unwrap();
+    let engine = fx.start_from(&installed);
+
+    wait_until("a poll (the search reaches gh)", || !fx.env.calls("gh").is_empty());
+    engine.stop();
+
+    assert_eq!(fx.env.calls("cpd"), Vec::<Vec<String>>::new(), "E5 ran the cpd on PATH");
+    assert_eq!(fx.count("error"), 0);
+}
+
 #[test]
 fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
     let fx = fx("");
@@ -928,10 +950,10 @@ fn e3_never_starts_a_draft_and_e4_waits_while_one_remains() {
 
 // ---------- E5 ----------
 
-/// Plan `pay` in phase `pr`.
+/// Plan `pay` in phase `deploy`.
 fn in_pr(fx: &Fx) {
     fx.fixture(
-        "UPDATE plans SET phase = 'pr' WHERE id = 'pay';
+        "UPDATE plans SET phase = 'deploy' WHERE id = 'pay';
          INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
            VALUES ('acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'Pay', 0, 'open', 'none', 'none', 't', 't');
          UPDATE prs SET status = 'open', pr_number = 7, pr_url = 'https://github.com/acme/pay/pull/7', pr_opened_at = 't',
@@ -939,12 +961,18 @@ fn in_pr(fx: &Fx) {
     );
 }
 
-/// What `cpd pr poll` prints (commands.md §9.2) when it found nothing, with `remaining` requests left until `reset_at`.
-fn poll_output(remaining: u32, reset_at: &str) -> String {
-    format!(
-        r#"{{"ok": true, "polled": 0, "changed": [], "removed": 0, "feedback": [], "merged": [], "done": [], "rate_limit": {{"cost": 1, "remaining": {remaining}, "reset_at": "{reset_at}"}}}}"#
-    )
+/// What the fake `gh` answers to the search when it found no pull request, with `remaining` requests left until `reset_at`.
+fn search_reply(remaining: u32, reset_at: &str) -> String {
+    format!(r#"{{"data":{{"search":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":{remaining},"resetAt":"{reset_at}"}}}}}}"#)
 }
+
+/// The fake `gh` calls that are a poll's search: one per `cpd pr poll`.
+fn searches(fx: &Fx) -> usize {
+    fx.env.calls("gh").iter().filter(|c| c[3].contains("search(type")).count()
+}
+
+/// The lookup of PR 7 (`in_pr`) that a poll makes when the search does not list it: still open, so nothing changes.
+const LOOKUP_OPEN: &str = r#"{"data":{"p0":{"pullRequest":{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"t","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{"nodes":[]}}}}}"#;
 
 /// Sets `pr_poll_seconds` (`tick_seconds` is one second).
 fn poll_every(fx: &Fx, seconds: u32) {
@@ -952,7 +980,7 @@ fn poll_every(fx: &Fx, seconds: u32) {
     fs::write(&config, fs::read_to_string(&config).unwrap().replace("tick_seconds = 1\n", &format!("tick_seconds = 1\npr_poll_seconds = {seconds}\n"))).unwrap();
 }
 
-/// Milliseconds since the epoch, as the fake `cpd` writes them.
+/// Milliseconds since the epoch, as the fake `gh` writes them.
 fn epoch_ms(at: &str) -> i128 {
     OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).unwrap().unix_timestamp_nanos() / 1_000_000
 }
@@ -971,9 +999,9 @@ fn e5_polls_every_pr_poll_seconds_after_the_previous_poll_ended_whatever_the_pla
     poll_every(&fx, 2);
     let log = fx.env.root().join("poll.log");
     // A poll that lasts a second, so that "after the end" differs from "after the start", and that notes both.
-    fx.fake_cpd(&format!(
+    fx.env.fake_gh(&format!(
         r#"echo "start $(date +%s%N)" >> '{log}'; sleep 1; echo "end $(date +%s%N)" >> '{log}'; echo '{}'; exit 0"#,
-        poll_output(4987, "2099-01-01T00:00:00Z"),
+        search_reply(4987, "2099-01-01T00:00:00Z"),
         log = log.display()
     ));
 
@@ -981,8 +1009,6 @@ fn e5_polls_every_pr_poll_seconds_after_the_previous_poll_ended_whatever_the_pla
     wait_until("three polls", || fs::read_to_string(&log).map_or(0, |t| t.matches("end").count()) >= 3);
     engine.stop();
 
-    let calls = fx.env.calls("cpd");
-    assert!(calls.iter().all(|c| c == &["pr", "poll"]), "no --plan, no Plan: {calls:?}");
     // start, end, start, end, …: a poll never starts before the previous one ended, and `pr_poll_seconds` after its end.
     let notes: Vec<(String, i128)> = fs::read_to_string(&log)
         .unwrap()
@@ -1007,17 +1033,19 @@ fn e5_polls_with_a_plan_in_pr_too_and_does_not_poll_more_often_than_every_pr_pol
     let fx = fx("");
     in_pr(&fx);
     poll_every(&fx, 3);
-    fx.fake_cpd(&format!("echo '{}'; exit 0", poll_output(4987, "2099-01-01T00:00:00Z")));
+    fx.env.fake_gh(&format!(
+        "case \"$4\" in *'search(type'*) echo '{}' ;; *) echo '{LOOKUP_OPEN}' ;; esac",
+        search_reply(4987, "2099-01-01T00:00:00Z")
+    ));
 
     let engine = fx.start();
-    wait_until("the first poll", || !fx.env.calls("cpd").is_empty());
+    wait_until("the first poll", || searches(&fx) >= 1);
     let first = Instant::now();
-    wait_until("the second poll", || fx.env.calls("cpd").len() >= 2);
+    wait_until("the second poll", || searches(&fx) >= 2);
     let gap = first.elapsed();
     engine.stop();
 
     assert!(gap >= Duration::from_millis(1500), "one poll per pr_poll_seconds, not one per tick: {gap:?}");
-    assert!(fx.env.calls("cpd").iter().all(|c| c == &["pr", "poll"]));
     assert_eq!(fx.count("error"), 0);
 }
 
@@ -1025,17 +1053,18 @@ fn e5_polls_with_a_plan_in_pr_too_and_does_not_poll_more_often_than_every_pr_pol
 fn e5_reports_a_failing_poll_once() {
     let fx = fx("");
     in_pr(&fx);
-    fx.fake_cpd(r#"echo '{"ok": false, "error": {"code": "gh_failed", "message": "gh failed.", "details": {"exit": 1}}}'; exit 1"#);
+    fx.env.fake_gh("echo 'gh: boom' >&2; exit 1");
     poll_every(&fx, 1);
 
     let engine = fx.start();
-    wait_until("three polls", || fx.env.calls("cpd").len() >= 3);
+    wait_until("three polls", || fx.env.calls("gh").len() >= 3);
     engine.stop();
 
-    assert_eq!(
-        fx.events("error"),
-        [(None, None, None, json!({"source": "watch", "code": "gh_failed", "message": "gh failed.", "details": {"exit": 1}}))]
-    );
+    let errors = fx.events("error");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let (plan, job, attempt, data) = &errors[0];
+    assert_eq!((plan, job, attempt), (&None, &None, &None));
+    assert_eq!((&data["source"], &data["code"], &data["details"]["exit"]), (&json!("watch"), &json!("gh_failed"), &json!(1)));
 }
 
 #[test]
@@ -1046,17 +1075,17 @@ fn e5_pauses_below_100_requests_until_reset_and_reports_one_gh_rate_limited() {
     let log = fx.env.root().join("poll.log");
     let first = fx.env.root().join("first-poll-done");
     // The first poll leaves 50 requests until `reset_at`; the next one, which E5 must not run before that, 4987.
-    fx.fake_cpd(&format!(
+    fx.env.fake_gh(&format!(
         r#"echo "start $(date +%s%N)" >> '{log}'
 if [ ! -e '{first}' ]; then touch '{first}'; echo '{low}'; else echo '{ok}'; fi; exit 0"#,
         log = log.display(),
         first = first.display(),
-        low = poll_output(50, &reset_at),
-        ok = poll_output(4987, "2099-01-01T00:00:00Z"),
+        low = search_reply(50, &reset_at),
+        ok = search_reply(4987, "2099-01-01T00:00:00Z"),
     ));
 
     let engine = fx.start();
-    wait_until("the second poll", || fx.env.calls("cpd").len() >= 2);
+    wait_until("the second poll", || fx.env.calls("gh").len() >= 2);
     engine.stop();
 
     // The second poll started at or after `reset_at`: the ticks in between ran no poll.
@@ -1097,7 +1126,7 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
         repo = web.display()
     ));
     // The real `pr poll`, against a `gh` that finds PR 7 merged: the search lists nothing, the lookup answers MERGED.
-    let merged = r#"{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"MERGED","createdAt":"t","mergedAt":"2026-10-14T10:00:00Z","reviewDecision":null,"commits":{"nodes":[]}}"#;
+    let merged = r#"{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"MERGED","createdAt":"t","mergedAt":"2026-10-14T10:00:00Z","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{"nodes":[]}}"#;
     fx.env.fake_gh(&format!("case \"$4\" in *'search(type'*) echo '{EMPTY_SEARCH}' ;; *) echo '{{\"data\":{{\"p0\":{{\"pullRequest\":{merged}}}}}}}' ;; esac"));
 
     let engine = fx.start();
@@ -1111,36 +1140,33 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     assert_eq!(fx.count("error"), 0);
 }
 
-// ---------- E6 ----------
+// ---------- E6 (removed) ----------
 
 #[test]
-fn e6_imports_the_context_stores_at_start_and_syncs_those_with_a_remote() {
+fn the_engine_neither_imports_nor_syncs_a_context_store() {
     let fx = fx("");
-    // Context `demo` with a note, written on another home of this machine.
-    let other = fx.env.root().join("other-home");
-    fs::create_dir_all(&other).unwrap();
-    fs::copy(fx.env.cpd_home().join("config.toml"), other.join("config.toml")).unwrap();
-    let on_other = |args: &[&str]| {
-        let out = fx.env.command(CPD).args(args).env("CPD_HOME", &other).output().unwrap();
-        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stdout));
-    };
-    on_other(&["context", "new", "demo", "--title", "Demo"]);
-    on_other(&["context", "note", "Remember this.", "--context", "demo"]);
+    // An old git store the database does not hold: only migration 0007 reads those, once.
     let store = fx.env.cpd_home().join("contexts/demo");
-    copy_dir(&other.join("contexts/demo"), &store);
-    let remote = fx.env.root().join("remote.git");
-    fx.env.git(fx.env.root(), &["init", "-q", "--bare", remote.to_str().unwrap()]);
-    fx.env.git(&store, &["remote", "add", "origin", remote.to_str().unwrap()]);
+    fs::create_dir_all(store.join("records")).unwrap();
+    fs::write(store.join("context.json"), r#"{"v":1,"id":"demo","title":"Demo","jira":null,"created_at":"2026-10-14T21:00:00.000Z","created_on":"m1"}"#).unwrap();
+    fs::write(
+        store.join("records/m1.jsonl"),
+        "{\"v\":1,\"id\":\"m1-n1\",\"kind\":\"note\",\"at\":\"2026-10-14T21:00:00.000Z\",\"machine\":\"m1\",\"by\":{\"session\":null,\"plan\":null},\"text\":\"Remember this.\"}\n",
+    )
+    .unwrap();
+    // Not a store at all: E6 used to log and skip it; nothing looks now.
+    fs::create_dir_all(fx.env.cpd_home().join("contexts/not a context")).unwrap();
 
     let engine = fx.start();
-    wait_until("the push", || fx.env.git(&remote, &["branch", "--list", "main"]).contains("main"));
-    engine.stop();
+    std::thread::sleep(Duration::from_millis(2500)); // two ticks
+    let run = engine.stop();
 
-    assert_eq!(fx.query::<String>("SELECT title FROM contexts WHERE id = 'demo'"), "Demo");
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM context_records WHERE context = 'demo'"), 1);
-    assert_eq!(fx.count("context-created"), 1);
-    assert_eq!(fx.count("context-record"), 1);
-    assert_eq!(fx.env.git(&remote, &["rev-parse", "main"]), fx.env.git(&store, &["rev-parse", "main"]));
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM contexts WHERE id = 'demo'"), 0);
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM context_records"), 0);
+    assert_eq!(fx.count("context-created") + fx.count("context-record"), 0);
+    assert_eq!(fx.count("error"), 0);
+    assert!(store.join("context.json").is_file(), "the folder is left alone");
+    assert!(!run.stderr.contains("E6"), "{}", run.stderr);
 }
 
 /// Copies the executable `from` to `to` with a child `cp`, which has exited when this returns.
@@ -1154,19 +1180,6 @@ fn e6_imports_the_context_stores_at_start_and_syncs_those_with_a_remote() {
 fn copy_executable(from: &str, to: &Path) {
     let status = std::process::Command::new("cp").arg("--").arg(from).arg(to).status().unwrap();
     assert!(status.success(), "cp {from} {to:?}: {status}");
-}
-
-fn copy_dir(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap();
-    for entry in fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let target = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_dir(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), target).unwrap();
-        }
-    }
 }
 
 // ---------- scripts/install-cpd.sh (Finding 5) ----------

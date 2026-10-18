@@ -7,6 +7,7 @@
 //! - [`moves`]: the panes: `session fork`, `open`, `park` and `close`;
 //! - [`history`]: `session history`, an archived Session's history in the chat slot;
 //! - [`archive`]: `session archive` and `unarchive`, and the archive rule;
+//! - [`send`]: `session send`, one message to a Lead;
 //! - [`port`]: a Plan's plannotator port;
 //! - [`run`]: `session run`, the program in every Lead pane (§6.7).
 
@@ -17,11 +18,12 @@ mod port;
 mod resolve;
 mod row;
 pub(crate) mod run;
+mod send;
 mod state;
 
 use std::path::PathBuf;
 
-use crate::args::{Name, SessionArg, SessionRef};
+use crate::args::{Name, SessionArg, SessionRef, Text};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
@@ -32,6 +34,7 @@ use crate::store::Store;
 
 pub use archive::{Blocker, archive_blocked, blockers};
 pub use moves::{Closed, close_lead};
+pub(crate) use moves::lead_spawn;
 pub use row::{Role, State};
 pub use state::Label;
 pub(crate) use state::pane_gone;
@@ -48,9 +51,9 @@ pub enum Command {
     Show(ShowArgs),
     /// Fork a Lead into a parked window (§10.3)
     Fork(ForkArgs),
-    /// Bring a Lead into the chat slot (§10.4)
+    /// Bring a Lead, or a Context's Manager, into the chat slot (§10.4)
     Open(OpenArgs),
-    /// Move the Lead in the chat slot to a parked window (§10.5)
+    /// Move the Lead or Manager in the chat slot to a parked window (§10.5)
     Park(ParkArgs),
     /// End a Lead's pane; its session file stays (§10.9)
     Close(CloseArgs),
@@ -60,6 +63,8 @@ pub enum Command {
     Archive(ArchiveArgs),
     /// Unarchive a Lead Session (§10.11)
     Unarchive(UnarchiveArgs),
+    /// Send a message to a Lead (§10.13)
+    Send(SendArgs),
     /// Rename a Session (§10.7)
     Rename(RenameArgs),
     /// Report a Session's agent state (pi adapter) (§10.6)
@@ -111,14 +116,14 @@ pub struct ForkArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct OpenArgs {
-    /// The Lead Session to bring into the chat slot
+    /// The Lead or Manager Session to bring into the chat slot
     #[arg(value_name = "id")]
     id: SessionRef,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct ParkArgs {
-    /// The Lead Session to park [default: the one in the chat slot]
+    /// The Lead or Manager Session to park [default: the one in the chat slot]
     #[arg(value_name = "id")]
     id: Option<SessionRef>,
 }
@@ -149,6 +154,23 @@ pub struct UnarchiveArgs {
     /// The Lead Session to unarchive
     #[arg(value_name = "id")]
     id: SessionRef,
+}
+
+#[derive(clap::Args, Debug)]
+#[command(group(clap::ArgGroup::new("message").required(true).multiple(false).args(["text", "file"])))]
+pub struct SendArgs {
+    /// The Lead Session to send to
+    #[arg(value_name = "id")]
+    id: SessionRef,
+    /// The message (1–20 000 characters)
+    #[arg(value_name = "text")]
+    text: Option<Text>,
+    /// The message, read from a file
+    #[arg(long, value_name = "f")]
+    file: Option<PathBuf>,
+    /// Start a turn when the target is idle (a Manager waking a stalled Lead; use sparingly)
+    #[arg(long)]
+    wake: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -190,6 +212,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::History(args) => history::history(args),
         Command::Archive(args) => archive::archive(args),
         Command::Unarchive(args) => archive::unarchive(args),
+        Command::Send(args) => send::send(args),
         Command::Rename(args) => state::rename(args),
         Command::State(args) => state::state(args),
         Command::Run(args) => run::run(args),
@@ -231,7 +254,7 @@ fn not_a_lead(id: &SessionId, role: Role) -> CpdError {
         .with("role", role.as_str())
 }
 
-fn no_cockpit(cockpit: &str) -> CpdError {
+pub(crate) fn no_cockpit(cockpit: &str) -> CpdError {
     CpdError::new(
         ErrorCode::NoCockpit,
         format!("The cockpit (tmux session {cockpit:?} with its main window and chat slot) does not exist: run cpd tui."),

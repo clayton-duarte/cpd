@@ -45,6 +45,7 @@ fn config_with_only_the_required_keys_has_every_default() {
             "concurrency": 3,
             "retry_cap": 2,
             "lead_tier": "O3",
+            "manager_tier": "O5",
             "lead_pi_packages": [
                 "npm:@plannotator/pi-extension@0.28.17",
                 "npm:@juicesharp/rpiv-ask-user-question@2.13.8"
@@ -63,9 +64,11 @@ fn config_with_only_the_required_keys_has_every_default() {
                 "gate_minutes": 30,
                 "lock_wait_seconds": 900,
                 "store_busy_ms": 5000,
-                "fork_quiet_seconds": 5
+                "fork_quiet_seconds": 5,
+                "stall_seconds": 1200
             },
-            "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "context_sync_seconds": 300, "error_repeat_seconds": 600},
+            "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "error_repeat_seconds": 600},
+            "inbox": {"stuck_job_minutes": 10},
             "events": {"poll_ms": 200},
             "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}
         })
@@ -106,7 +109,7 @@ fn config_has_one_source_per_leaf_key() {
     for key in ["version", "machine", "concurrency", "tiers.O", "timeouts.ask_minutes"] {
         assert_eq!(sources[key], "file", "{key}");
     }
-    for key in ["retry_cap", "lead_tier", "lead_pi_packages", "pi_adapter", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
+    for key in ["retry_cap", "lead_tier", "manager_tier", "lead_pi_packages", "pi_adapter", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
         assert_eq!(sources[key], "default", "{key}");
     }
     assert_eq!(out["config"]["concurrency"], 5);
@@ -127,6 +130,7 @@ machine = "a1234567"
 concurrency = 1
 retry_cap = 0
 lead_tier = "H0"
+manager_tier = "H1"
 lead_pi_packages = []
 pi_adapter = "{adapter}"
 plannotator_ports = "1-65535"
@@ -142,11 +146,13 @@ gate_minutes = 1
 lock_wait_seconds = 1
 store_busy_ms = 1
 fork_quiet_seconds = 1
+stall_seconds = 0
 [watch]
 tick_seconds = 1
 pr_poll_seconds = 1
-context_sync_seconds = 1
 error_repeat_seconds = 1
+[inbox]
+stuck_job_minutes = 1
 [events]
 poll_ms = 20
 [tmux]
@@ -164,6 +170,8 @@ work_session = "w"
     assert_eq!(out["config"]["plannotator_ports"], "1-65535");
     assert_eq!(out["config"]["tiers"]["O"], "a/b/c");
     assert!(out["sources"].as_object().unwrap().values().all(|s| s == "file"));
+    // 0 turns the stall kill off (contract §8.2), unlike every other timeout.
+    assert_eq!(out["config"]["timeouts"]["stall_seconds"], 0);
 
     write_config(&env, &text.replace("poll_ms = 20", "poll_ms = 10000"));
     assert_eq!(env.cpd(&["config"]).ok()["config"]["events"]["poll_ms"], 10000);
@@ -177,10 +185,12 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nsurprise = 1\n", "timeouts.surprise"),
         ("version = 1\nmachine = \"hs\"\n[tiers]\nX = \"a/b\"\n", "tiers.X"),
         ("version = 1\nmachine = \"hs\"\n[watch]\nsurprise = 1\n", "watch.surprise"),
+        ("version = 1\nmachine = \"hs\"\n[inbox]\nsurprise = 1\n", "inbox.surprise"),
         ("version = 1\nmachine = \"hs\"\n[events]\nsurprise = 1\n", "events.surprise"),
         ("version = 1\nmachine = \"hs\"\n[tmux]\nsurprise = 1\n", "tmux.surprise"),
         ("version = 1\nmachine = \"hs\"\n[surprise]\nx = 1\n", "surprise"),
-        // keys removed by R19 and from cpd 1
+        // keys removed by R19, by Plan manager B1 (hs-a1: no Context sync) and from cpd 1
+        ("version = 1\nmachine = \"hs\"\n[watch]\ncontext_sync_seconds = 300\n", "watch.context_sync_seconds"),
         ("version = 1\nmachine = \"hs\"\nreview_mode = \"none\"\n", "review_mode"),
         ("version = 1\nmachine = \"hs\"\ndefault_review_tier = \"S3\"\n", "default_review_tier"),
         ("version = 1\nmachine = \"hs\"\ntickSeconds = 5\n", "tickSeconds"),
@@ -215,9 +225,11 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\nretry_cap = -1\n", "retry_cap"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nattempt_minutes = 0\n", "timeouts.attempt_minutes"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nstore_busy_ms = 0\n", "timeouts.store_busy_ms"),
+        ("version = 1\nmachine = \"hs\"\n[timeouts]\nstall_seconds = -1\n", "timeouts.stall_seconds"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nlock_wait_seconds = 0\n", "timeouts.lock_wait_seconds"),
         ("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0\n", "watch.tick_seconds"),
-        ("version = 1\nmachine = \"hs\"\n[watch]\ncontext_sync_seconds = 0\n", "watch.context_sync_seconds"),
+        ("version = 1\nmachine = \"hs\"\n[inbox]\nstuck_job_minutes = 0\n", "inbox.stuck_job_minutes"),
+        ("version = 1\nmachine = \"hs\"\n[inbox]\nstuck_job_minutes = \"10\"\n", "inbox.stuck_job_minutes"),
         ("version = 1\nmachine = \"hs\"\n[events]\npoll_ms = 19\n", "events.poll_ms"),
         ("version = 1\nmachine = \"hs\"\n[events]\npoll_ms = 10001\n", "events.poll_ms"),
         // text constraints
@@ -229,6 +241,8 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\nlead_tier = \"X3\"\n", "lead_tier"),
         ("version = 1\nmachine = \"hs\"\nlead_tier = \"O6\"\n", "lead_tier"),
         ("version = 1\nmachine = \"hs\"\nlead_tier = \"o3\"\n", "lead_tier"),
+        ("version = 1\nmachine = \"hs\"\nmanager_tier = \"X5\"\n", "manager_tier"),
+        ("version = 1\nmachine = \"hs\"\nmanager_tier = \"O6\"\n", "manager_tier"),
         ("version = 1\nmachine = \"hs\"\nlead_pi_packages = [\"\"]\n", "lead_pi_packages"),
         ("version = 1\nmachine = \"hs\"\npi_adapter = \"/no/such/adapter\"\n", "pi_adapter"),
         ("version = 1\nmachine = \"hs\"\n[tiers]\nO = \"no-slash\"\n", "tiers.O"),
@@ -254,6 +268,25 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         assert_eq!(err["details"]["key"], *key, "{text}: {err}");
         assert_eq!(err["details"]["path"], env.cpd_home().join("config.toml").to_str().unwrap(), "{text}");
     }
+}
+
+#[test]
+fn config_messages_end_in_one_full_stop_and_name_the_bound_that_was_crossed() {
+    let message = |text: &str| {
+        let run = config_with(&TestEnv::new(), text);
+        assert_eq!(run.exit, 1, "{text}");
+        run.error()["message"].as_str().unwrap().to_owned()
+    };
+    // A reason that already ends in a full stop gets no second one.
+    for text in ["version = 1\nmachine = \"homeserver\"\n", "version = 1\nmachine = \"hs\"\nlead_tier = \"O9\"\n"] {
+        let said = message(text);
+        assert!(said.ends_with('.') && !said.ends_with(".."), "{said}");
+    }
+    // Above the largest value, the message says "at most"; below the smallest, "at least".
+    let above = message("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 4294967296\n");
+    assert!(above.contains("must be at most 4294967295, got 4294967296"), "{above}");
+    let below = message("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0\n");
+    assert!(below.contains("must be at least 1, got 0"), "{below}");
 }
 
 #[test]
@@ -513,6 +546,7 @@ fn tiers_finds_pi_through_a_symlink() {
     fs::create_dir_all(agent.join("bin")).unwrap();
     fs::write(agent.join("bin/pi"), "#!/bin/sh\nexit 0\n").unwrap();
     fs::set_permissions(agent.join("bin/pi"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::remove_file(env.bin().join("pi")).unwrap(); // the deny shim
     symlink(agent.join("bin/pi"), env.bin().join("pi")).unwrap();
     let release = agent.join("install/releases/3.0.0/node_modules/@earendil-works");
     for package in ["pi-coding-agent", "pi-ai"] {

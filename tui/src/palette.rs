@@ -25,7 +25,7 @@ pub enum Meaning {
     NotStarted,
     /// A running Job; phase `dispatch`; PR checks pending.
     InProgress,
-    /// A merging Job; an open PR; phase `pr`.
+    /// A merging Job; an open PR; phase `deploy`.
     Review,
     /// A merged Job; a merged PR; phase `done`; checks passed.
     Done,
@@ -157,7 +157,7 @@ pub fn phase(phase: Option<Phase>) -> Meaning {
         Some(Phase::Grounding) => Meaning::Grounding,
         Some(Phase::Plan) => Meaning::Planning,
         Some(Phase::Dispatch) => Meaning::InProgress,
-        Some(Phase::Pr) => Meaning::Review,
+        Some(Phase::Deploy) => Meaning::Review,
         Some(Phase::Done) => Meaning::Done,
         None => Meaning::Nothing,
     }
@@ -212,6 +212,10 @@ pub fn pr_state(state: PrState) -> Meaning {
 
 /// The PR states the legend lists, with the name shown.
 pub const PR_LEGEND: [(&str, PrState); 3] = [("open", PrState::Open), ("merged", PrState::Merged), ("closed", PrState::Closed)];
+
+/// What an open pull request with a merge conflict reads instead of `open` (its `mergeable` is `conflicting`), and its
+/// meaning: the plan view's PR box title and the legend's PR states.
+pub const PR_CONFLICT: (&str, Meaning) = ("conflict", Meaning::Failed);
 
 /// Icon and meaning of a PR's checks.
 pub fn checks(c: Checks) -> (&'static str, Meaning) {
@@ -281,7 +285,7 @@ mod tests {
             (Some(Phase::Grounding), Meaning::Grounding),
             (Some(Phase::Plan), Meaning::Planning),
             (Some(Phase::Dispatch), Meaning::InProgress),
-            (Some(Phase::Pr), Meaning::Review),
+            (Some(Phase::Deploy), Meaning::Review),
             (Some(Phase::Done), Meaning::Done),
         ];
         for (p, m) in phases {
@@ -339,6 +343,7 @@ mod tests {
             assert_eq!(pr_state(s), m, "{s:?}");
         }
         assert_eq!(PR_LEGEND.map(|(_, s)| s), states.map(|(s, _)| s));
+        assert_eq!(PR_CONFLICT, ("conflict", pr_state(PrState::Closed)));
         let table = [
             (Checks::Passed, "✓", Meaning::Done),
             (Checks::Failed, "✗", Meaning::Failed),

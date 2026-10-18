@@ -16,34 +16,48 @@ use super::SOURCE;
 use super::log::Log;
 use crate::error::CpdError;
 use crate::events::{self, Kind, NewEvent};
+use crate::inbox::rules::EngineError;
 use crate::ids::{AttemptId, JobKey, PlanId, SessionId};
 use crate::store::Store;
 
 /// The step that failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Step {
-    Start,
     E1,
     E2,
     E3,
     E4,
     E5,
-    E6,
     E7,
+    E8,
 }
 
 impl fmt::Display for Step {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Step::Start => "start-up",
             Step::E1 => "E1 (Escalations)",
             Step::E2 => "E2 (liveness)",
             Step::E3 => "E3 (scheduling)",
             Step::E4 => "E4 (completion)",
             Step::E5 => "E5 (PR)",
-            Step::E6 => "E6 (Contexts)",
             Step::E7 => "E7 (PR start)",
+            Step::E8 => "E8 (Inbox)",
         })
+    }
+}
+
+impl Step {
+    /// The step's short name, as the Inbox shows it (`engine E3: <code>`).
+    fn short(self) -> &'static str {
+        match self {
+            Step::E1 => "E1",
+            Step::E2 => "E2",
+            Step::E3 => "E3",
+            Step::E4 => "E4",
+            Step::E5 => "E5",
+            Step::E7 => "E7",
+            Step::E8 => "E8",
+        }
     }
 }
 
@@ -81,6 +95,17 @@ impl About {
         }
     }
 
+    /// The scope of an Inbox `engine-error` item (contract §2.2).
+    fn scope(&self) -> String {
+        match self {
+            About::Machine => "machine".to_owned(),
+            About::Plan(p) => format!("plan:{p}"),
+            About::Job(p, j) => format!("job:{p}/{j}"),
+            About::Attempt(_, a) => format!("attempt:{a}"),
+            About::Session(s) => format!("session:{s}"),
+        }
+    }
+
     fn event(&self, text: String, data: Value) -> NewEvent {
         let event = NewEvent::new(Kind::Error, text, data);
         match self {
@@ -107,12 +132,12 @@ impl From<&CpdError> for Failure {
     }
 }
 
-/// The failures reported and not cleared yet: `(step, about)` → code.
+/// The failures reported and not cleared yet: `(step, about)` → code and the id of its `error` Event.
 #[derive(Default)]
 pub(super) struct Report {
-    open: HashMap<(Step, About), String>,
-    /// When each `(step, about, code)` was last appended.
-    appended: HashMap<(Step, About, String), Instant>,
+    open: HashMap<(Step, About), (String, i64)>,
+    /// When each `(step, about, code)` was last appended, and the id of that Event.
+    appended: HashMap<(Step, About, String), (Instant, i64)>,
     /// `watch.error_repeat_seconds`.
     repeat: Duration,
 }
@@ -129,13 +154,13 @@ impl Report {
     pub(super) fn fail(&mut self, store: &mut Store, log: &mut Log, step: Step, about: About, failure: impl Into<Failure>) {
         let failure = failure.into();
         let key = (step, about);
-        if self.open.get(&key) == Some(&failure.code) {
+        if self.open.get(&key).is_some_and(|(code, _)| *code == failure.code) {
             return;
         }
         let repeated = (key.0, key.1.clone(), failure.code.clone());
-        if self.appended.get(&repeated).is_some_and(|at| at.elapsed() < self.repeat) {
+        if let Some(&(_, event)) = self.appended.get(&repeated).filter(|(at, _)| at.elapsed() < self.repeat) {
             // Appended recently: only remember it is still failing.
-            self.open.insert(key, failure.code);
+            self.open.insert(key, (failure.code, event));
             return;
         }
         let (step, about) = &key;
@@ -148,13 +173,29 @@ impl Report {
         );
         let data = json!({"source": SOURCE, "code": failure.code, "message": failure.message, "details": failure.details});
         match store.write(SOURCE, |tx| events::append(tx, about.event(text, data))) {
-            Ok(_) => {
-                self.appended.insert(repeated, Instant::now());
-                self.open.insert(key, failure.code);
+            Ok(event) => {
+                self.appended.insert(repeated, (Instant::now(), event));
+                self.open.insert(key, (failure.code, event));
             }
             // Not marked as reported: the next tick tries again.
             Err(e) => log.line(&format!("cannot append the error Event: {} ({})", e.message(), e.code().as_str())),
         }
+    }
+
+    /// The failures reported and not cleared, oldest `error` Event first: what E8 shows as `engine-error` items.
+    pub(super) fn active(&self) -> Vec<EngineError> {
+        let mut errors: Vec<EngineError> = self
+            .open
+            .iter()
+            .map(|((step, about), (code, event))| EngineError {
+                step: step.short().to_owned(),
+                scope: about.scope(),
+                code: code.clone(),
+                event: *event,
+            })
+            .collect();
+        errors.sort_by_key(|e| e.event);
+        errors
     }
 
     /// `step` succeeded for `about`: a later failure is reported again.
@@ -203,5 +244,36 @@ mod tests {
             report.clear(Step::E2, &About::Machine);
         }
         assert_eq!(errors(&mut store), 5);
+    }
+
+    /// What E8 shows: each failure not cleared, with the id of its `error` Event, also when that Event
+    /// was appended earlier in the repeat period.
+    #[test]
+    fn active_lists_the_uncleared_failures_with_their_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let mut log = Log::open(&home).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        let mut report = Report::new(Duration::from_secs(600));
+
+        assert!(report.active().is_empty());
+        report.fail(&mut store, &mut log, Step::E3, About::Machine, failure("store_failed"));
+        report.fail(&mut store, &mut log, Step::E2, About::Machine, failure("tmux_failed"));
+        let first: i64 = store.read(|c| Ok(c.query_row("SELECT min(id) FROM events WHERE kind = 'error'", [], |r| r.get(0))?)).unwrap();
+        let shown = |report: &Report| {
+            report.active().into_iter().map(|e| (e.step, e.scope, e.code, e.event)).collect::<Vec<_>>()
+        };
+        let both = [
+            ("E3".to_owned(), "machine".to_owned(), "store_failed".to_owned(), first),
+            ("E2".to_owned(), "machine".to_owned(), "tmux_failed".to_owned(), first + 1),
+        ];
+        assert_eq!(shown(&report), both);
+
+        // Cleared and failing again within the period: no new Event, the same id.
+        report.clear(Step::E2, &About::Machine);
+        assert_eq!(shown(&report), both[..1]);
+        report.fail(&mut store, &mut log, Step::E2, About::Machine, failure("tmux_failed"));
+        assert_eq!(shown(&report), both);
+        assert_eq!(errors(&mut store), 2);
     }
 }

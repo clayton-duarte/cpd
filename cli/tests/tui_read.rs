@@ -57,11 +57,10 @@ fn tier(s: &str) -> Tier {
 
 const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
-fn context(id: &str, grounded: Option<&str>) -> String {
-    let (lead, seq) = grounded.map_or(("NULL".to_owned(), "NULL"), |g| (format!("'{g}'"), "0"));
+fn context(id: &str) -> String {
     format!(
-        "INSERT INTO contexts (id, title, jira, created_at, created_on, lead_session, grounded_seq)
-         VALUES ('{id}', 'Title of {id}', NULL, '2026-01-01T00:00:00.000Z', 'm1', {lead}, {seq});"
+        "INSERT INTO contexts (id, title, jira, created_at, created_on)
+         VALUES ('{id}', 'Title of {id}', NULL, '2026-01-01T00:00:00.000Z', 'm1');"
     )
 }
 
@@ -74,7 +73,7 @@ fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str, pr:
     let status = match phase {
         "grounding" | "plan" => "waiting",
         "dispatch" => "dispatch",
-        "pr" => "open",
+        "deploy" => "open",
         _ => "merged",
     };
     let (row, number, url, opened, pull_request) = match pr {
@@ -188,7 +187,7 @@ fn moved(context: &str, plan: Option<&str>, session: &str, place: &str) -> Strin
 
 /// Three Contexts, the Plans below, Jobs in every status, Attempts, a PR, Escalations and Sessions.
 ///
-/// - `alpha` (grounded Lead `g-alpha`): `ship` (dispatch, Lead `l-ship`, side fork `f-ship`) with one Job in
+/// - `alpha` (also a Lead with no Plan, `g-alpha`, as migration 0010 leaves a grounded Lead): `ship` (dispatch, Lead `l-ship`, side fork `f-ship`) with one Job in
 ///   every status; `sketch` (phase plan, drafts only).
 /// - `beta`: `rel` (phase pr, PR 7 with a failing check), `shut` (pr, closed unmerged), `old` (done, merged PR).
 /// - `gamma`: nothing.
@@ -196,15 +195,15 @@ fn moved(context: &str, plan: Option<&str>, session: &str, place: &str) -> Strin
 /// The chat slot holds `l-ship`; `l-rel` was there before and is parked.
 fn populate(store: &mut Store) {
     let mut s = String::new();
-    s += &context("alpha", Some("g-alpha"));
-    s += &context("beta", None);
-    s += &context("gamma", None);
+    s += &context("alpha");
+    s += &context("beta");
+    s += &context("gamma");
     s += &plan_row("ship", "alpha", "dispatch", "l-ship", "2026-01-02T00:00:00.000Z", None);
     s += &plan_row("sketch", "alpha", "plan", "l-sketch", "2026-01-02T00:00:01.000Z", None);
     s += &plan_row(
         "rel",
         "beta",
-        "pr",
+        "deploy",
         "l-rel",
         "2026-01-02T00:00:02.000Z",
         Some((7, "open", "failed")),
@@ -212,7 +211,7 @@ fn populate(store: &mut Store) {
     s += &plan_row(
         "shut",
         "beta",
-        "pr",
+        "deploy",
         "l-shut",
         "2026-01-02T00:00:03.000Z",
         Some((8, "closed", "none")),
@@ -317,10 +316,7 @@ fn the_tree_is_contexts_then_plans_then_lead_sessions_with_their_states() {
     assert_eq!(ids, ["alpha", "beta", "gamma"]);
     let [alpha, beta, gamma] = &tree.contexts[..] else { panic!() };
 
-    assert_eq!((alpha.title.as_str(), alpha.records, alpha.open_questions, alpha.sync_failing), ("Title of alpha", 4, 1, false));
-    let grounded = alpha.grounded_lead.as_ref().unwrap();
-    assert_eq!((grounded.id.as_str(), grounded.plan.as_ref(), grounded.grounded_lead, grounded.place), ("g-alpha", None, true, Place::Work));
-    assert!(beta.grounded_lead.is_none() && gamma.grounded_lead.is_none());
+    assert_eq!((alpha.title.as_str(), alpha.records, alpha.open_questions), ("Title of alpha", 4, 1));
     assert!(gamma.plans.is_empty());
 
     let plans: Vec<&str> = alpha.plans.iter().map(|p| p.head.id.as_str()).collect();
@@ -332,7 +328,7 @@ fn the_tree_is_contexts_then_plans_then_lead_sessions_with_their_states() {
     assert_eq!(
         sessions,
         [("l-ship", State::Working, Place::Chat, true), ("f-ship", State::Idle, Place::None, false)],
-        "the Lead first, then the side fork; the Workers and the grounded Lead are not in the tree's Plans"
+        "the Lead first, then the side fork; the Workers and the Lead with no Plan are not in the tree's Plans"
     );
     assert!(ship.sessions[0].is_active() && !ship.sessions[1].is_active());
     let forks: Vec<(&str, &str)> = alpha.forks().iter().map(|(p, s)| (p.head.id.as_str(), s.id.as_str())).collect();
@@ -380,7 +376,7 @@ fn archived_objects_are_in_the_tree_with_their_archived_at() {
 
 /// The dots of the tree (§17): one row of the rule's tables for each Lead, and the Context row's.
 ///
-/// - `hot`: `red` (dispatch, blocked), `yel` (pr; two pull requests, only the second has finished checks; its Lead is
+/// - `hot`: `red` (dispatch, blocked), `yel` (deploy; two pull requests, only the second has finished checks; its Lead is
 ///   idle and its fork `f-yel` is working), `mag` (plan, blocked), `whi` (dispatch, idle, unseen), `wrk`, `idl`, `stp`;
 /// - `calm`: a working and an idle Lead; `dead`: a stopped one; `ice`: no Plan, no Session.
 #[test]
@@ -388,12 +384,12 @@ fn every_session_has_a_dot_and_every_context_the_greatest_of_its_live_sessions()
     let (_env, mut store) = fixture();
     let mut s = String::new();
     for c in ["hot", "calm", "dead", "ice"] {
-        s += &context(c, None);
+        s += &context(c);
     }
     let at = |n: u32| format!("2026-01-02T00:00:{n:02}.000Z");
     let plans = [
         ("red", "hot", "dispatch", "blocked"),
-        ("yel", "hot", "pr", "idle"),
+        ("yel", "hot", "deploy", "idle"),
         ("mag", "hot", "plan", "blocked"),
         ("whi", "hot", "dispatch", "idle"),
         ("wrk", "hot", "dispatch", "working"),
@@ -629,6 +625,17 @@ fn a_plan_carries_its_pr_and_what_the_poll_saw() {
     assert_eq!(state("ship"), None);
 }
 
+#[test]
+fn a_pull_request_is_conflicting_only_when_the_poll_saw_a_conflict() {
+    let (_env, mut store) = fixture();
+    let mut pull = |store: &mut Store, p: &str| read::plan_boxes(store, &plan(p)).unwrap().prs[0].pull.clone().unwrap();
+    assert!(!pull(&mut store, "rel").conflicting, "a fresh row reads `unknown`");
+    for (mergeable, want) in [("conflicting", true), ("mergeable", false), ("unknown", false)] {
+        sql(&mut store, &format!("UPDATE pull_requests SET mergeable = '{mergeable}' WHERE number = 7"));
+        assert_eq!(pull(&mut store, "rel").conflicting, want, "{mergeable}");
+    }
+}
+
 /// A Plan as `plan new` leaves it: in grounding, with its Lead and no `prs` row (hs-n54).
 fn add_plan_without_pr(store: &mut Store) {
     let lead = session_row("l-fresh", "lead", "gamma", "fresh", None, "idle", None, "2026-01-02T00:00:09.000Z");
@@ -674,7 +681,7 @@ fn the_chat_slot_is_the_plan_lead_whose_latest_move_is_chat() {
     assert_eq!((slot.session.as_str(), slot.plan.as_str(), slot.name.as_str()), ("l-ship", "ship", "name of l-ship"));
     let id = slot.moved_event;
 
-    // The grounded Lead is never in the slot; parking leaves the placeholder.
+    // A Lead with no Plan is never in the slot; parking leaves the placeholder.
     sql(&mut store, &moved("alpha", None, "g-alpha", "chat"));
     assert_eq!(read::chat_slot(&mut store).unwrap().unwrap().session, session("l-ship"));
     sql(&mut store, &moved("alpha", Some("ship"), "l-ship", "parked"));
@@ -722,6 +729,48 @@ fn the_widgets_list_every_plan_with_its_pr() {
     assert_eq!(rel.head.pr.as_ref().unwrap().number, 7);
     let ship = w.plans.iter().find(|p| p.head.id.as_str() == "ship").unwrap();
     assert_eq!((ship.head.phase, ship.head.counts.merged, ship.head.pr.is_none()), (Phase::Dispatch, 1, true));
+}
+
+#[test]
+fn an_open_pull_request_carries_its_url_and_the_lead_of_its_owner() {
+    let (_env, mut store) = fixture();
+    // `acme/work#70` is one of the User's own: no Plan's PR points to it.
+    sql(
+        &mut store,
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+         VALUES ('acme/work', 70, 'https://github.com/acme/work/pull/70', 'Mine', 0, 'open', 'none', 'none',
+                 '2026-01-07T00:00:00.000Z', NULL, '2026-01-07T00:00:00.000Z');",
+    );
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    let listed: Vec<(&str, i64, &str, Option<&str>)> =
+        w.prs.iter().map(|p| (p.repo.as_str(), p.number, p.url.as_str(), p.lead.as_ref().map(SessionId::as_str))).collect();
+    assert_eq!(
+        listed,
+        [
+            ("acme/repo", 7, "https://github.com/acme/repo/pull/7", Some("l-rel")),
+            ("acme/work", 70, "https://github.com/acme/work/pull/70", None),
+        ],
+        "an owned one and an unowned one; the closed and the merged are not listed"
+    );
+    assert!(w.prs.iter().all(|p| !p.active), "the chat slot holds l-ship, which has no PR");
+
+    // Two Plans own the same pull request (the later one took it over): the most recently created Plan's Lead owns it.
+    let lead = session_row("l-rel2", "lead", "beta", "rel2", None, "idle", None, "2026-01-04T00:00:00.000Z");
+    sql(
+        &mut store,
+        &format!(
+            "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+             VALUES ('rel2', 'beta', 'Plan rel2', 'deploy', 'l-rel2', '2026-01-04T00:00:00.000Z', '2026-01-04T00:00:00.000Z');
+             {lead}
+             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+                              created_txn, created_at, started_at)
+             VALUES ('rel2', 'repo', '/repo', 'main', 'open', 'cpd/rel2', '/wt', 7, 'https://github.com/acme/repo/pull/7',
+                     '2026-01-05T00:00:00.000Z', (SELECT id FROM pull_requests WHERE number = 7), cpd_txn(),
+                     '2026-01-04T00:00:00.000Z', '2026-01-04T00:00:00.000Z');"
+        ),
+    );
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    assert_eq!(w.prs[0].lead.as_ref().map(SessionId::as_str), Some("l-rel2"));
 }
 
 #[test]
@@ -874,7 +923,7 @@ fn the_read_model_spawns_nothing_and_has_no_write_statement() {
 fn populate_many(store: &mut Store) {
     let mut s = String::new();
     for c in 0..10 {
-        s += &context(&format!("ctx{c}"), None);
+        s += &context(&format!("ctx{c}"));
         for p in 0..8 {
             let id = format!("p{c}x{p}");
             let lead = format!("lead-{id}");
