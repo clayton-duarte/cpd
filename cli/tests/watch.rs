@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, TestEnv};
+use common::{CPD, Run, TestEnv, copy_executable};
 use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -740,7 +740,7 @@ fn e3_starts_the_driver_after_the_engines_binary_is_replaced() {
 fn e5_polls_with_the_engines_recorded_executable_not_the_one_on_path() {
     let fx = fx_bare("");
     let installed = fx.env.root().join("cpd-installed");
-    fs::copy(CPD, &installed).unwrap();
+    copy_executable(CPD, &installed);
     let engine = fx.start_from(&installed);
 
     wait_until("a poll (the search reaches gh)", || !fx.env.calls("gh").is_empty());
@@ -1167,19 +1167,6 @@ fn the_engine_neither_imports_nor_syncs_a_context_store() {
     assert_eq!(fx.count("error"), 0);
     assert!(store.join("context.json").is_file(), "the folder is left alone");
     assert!(!run.stderr.contains("E6"), "{}", run.stderr);
-}
-
-/// Copies the executable `from` to `to` with a child `cp`, which has exited when this returns.
-///
-/// ETXTBSY: `exec` of a file fails while any process holds it open for writing. The test binary is
-/// multi-threaded: a thread that wrote `to` itself (`fs::copy`) holds a write descriptor until the copy
-/// ends, and a `fork` by another test's thread in that window duplicates the descriptor into a child that keeps it
-/// until its own `exec`. If this test then ran `to`, it would get "Text file busy". Here only
-/// `cp` ever opens `to` for writing, so no descriptor to it exists in this process to be inherited, and
-/// none is open anywhere once `cp` is waited for.
-fn copy_executable(from: &str, to: &Path) {
-    let status = std::process::Command::new("cp").arg("--").arg(from).arg(to).status().unwrap();
-    assert!(status.success(), "cp {from} {to:?}: {status}");
 }
 
 // ---------- scripts/install-cpd.sh (Finding 5) ----------

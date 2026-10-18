@@ -4,9 +4,9 @@
 mod common;
 
 use std::fs;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::symlink;
 
-use common::{CPD, Run, TestEnv};
+use common::{CPD, Run, TestEnv, write_executable};
 use serde_json::{Value, json};
 
 const MINIMAL: &str = "version = 1\nmachine = \"hs\"\n";
@@ -473,8 +473,7 @@ fn tiers_prefers_pis_own_node_over_node_on_path() {
     let pi_node = env.home().join(".local/share/pi-node/current/bin");
     fs::create_dir_all(&pi_node).unwrap();
     let script = format!("#!/bin/sh\necho '{ALL_LEVELS_JSON}'\n");
-    fs::write(pi_node.join("node"), script).unwrap();
-    fs::set_permissions(pi_node.join("node"), fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&pi_node.join("node"), &script);
     cpd_isolated(&env, &["tiers"]).ok();
     assert!(env.calls("node").is_empty());
     // The catalog is cached now; forget it so the next call reads pi again.
@@ -486,8 +485,7 @@ fn tiers_prefers_pis_own_node_over_node_on_path() {
     let xdg = env.root().join("xdg");
     let xdg_node = xdg.join("pi-node/current/bin");
     fs::create_dir_all(&xdg_node).unwrap();
-    fs::write(xdg_node.join("node"), "#!/bin/sh\necho 'xdg node ran' >&2; exit 1\n").unwrap();
-    fs::set_permissions(xdg_node.join("node"), fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&xdg_node.join("node"), "#!/bin/sh\necho 'xdg node ran' >&2; exit 1\n");
     let out = env.command(CPD).arg("tiers").env("PATH", env.bin()).env("XDG_DATA_HOME", &xdg).output().unwrap();
     let run = Run { exit: out.status.code().unwrap(), stdout: String::from_utf8(out.stdout).unwrap(), stderr: String::new() };
     let err = run.error();
@@ -544,8 +542,7 @@ fn tiers_finds_pi_through_a_symlink() {
     // The agent directory is `real/agent`; `bin/pi` is a symlink into it.
     let agent = env.root().join("real/agent");
     fs::create_dir_all(agent.join("bin")).unwrap();
-    fs::write(agent.join("bin/pi"), "#!/bin/sh\nexit 0\n").unwrap();
-    fs::set_permissions(agent.join("bin/pi"), fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&agent.join("bin/pi"), "#!/bin/sh\nexit 0\n");
     fs::remove_file(env.bin().join("pi")).unwrap(); // the deny shim
     symlink(agent.join("bin/pi"), env.bin().join("pi")).unwrap();
     let release = agent.join("install/releases/3.0.0/node_modules/@earendil-works");

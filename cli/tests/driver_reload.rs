@@ -4,19 +4,14 @@
 //! next safe point, keeping its driver lock on fd 3, and the Attempt still ends
 //! `merged`. An install here is a new script renamed over the copy; it records
 //! its pid and arguments and then becomes the built `cpd`.
-//!
-//! The tests run one at a time: writing an executable while another thread
-//! forks can make its `exec` fail with ETXTBSY.
 
 mod common;
 
 use std::fs::{self, File};
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::{CPD, TestEnv};
+use common::{CPD, TestEnv, copy_executable, output, write_executable};
 use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -24,8 +19,6 @@ use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::plan::{jobs, locked_fingerprint};
 use cpd_core::store::{Store, WriteTxn};
 use serde_json::Value;
-
-static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
 const PLAN: &str = "pay";
 const ATTEMPT: &str = "api-a1";
@@ -43,11 +36,6 @@ fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;
     Ok(())
-}
-
-fn executable(path: &Path, text: &str) {
-    fs::write(path, text).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 struct Fx {
@@ -87,7 +75,7 @@ fn fx() -> Fx {
         assert!(env.tmux(args).status.success(), "tmux {args:?}");
     }
     let installed = env.root().join("cpd");
-    fs::copy(CPD, &installed).unwrap();
+    copy_executable(CPD, &installed);
     let go = env.root().join("go");
     env.fake_pi(&format!(
         "CPD='{CPD}'\n\
@@ -152,7 +140,7 @@ impl Fx {
 
     /// `job dispatch api` by the copy: its driver's executable is the copy. Returns the driver's pid.
     fn dispatch(&self) -> i64 {
-        let out = self.env.command(&self.installed).args(["job", "dispatch", "api", "--plan", PLAN]).output().unwrap();
+        let out = output(self.env.command(&self.installed).args(["job", "dispatch", "api", "--plan", PLAN])).unwrap();
         let json: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {out:?}"));
         assert_eq!(json["ok"], true, "{json}");
         json["pid"].as_i64().unwrap()
@@ -181,7 +169,7 @@ impl Fx {
 
     fn install_script(&self, on_version: &str) {
         let new = self.installed.with_extension("new");
-        executable(
+        write_executable(
             &new,
             &format!(
                 "#!/bin/sh\ncase \"$1\" in --version) {on_version};; esac\necho \"$$ $*\" >> '{}'\nexec '{CPD}' \"$@\"\n",
@@ -227,7 +215,6 @@ impl Fx {
 
 #[test]
 fn a_driver_reloads_while_running_keeps_its_lock_and_the_attempt_merges() {
-    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
     let fx = fx();
     let old_lead = fx.env.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay"]);
     let pid = fx.dispatch();
@@ -253,7 +240,6 @@ fn a_driver_reloads_while_running_keeps_its_lock_and_the_attempt_merges() {
 
 #[test]
 fn a_driver_reloads_at_the_merging_safe_point_and_completes_the_merge() {
-    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
     let fx = fx();
     let old_lead = fx.env.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay"]);
     // A `tmux` that holds the driver's `list-panes` (the start of its A4 tick)
@@ -263,7 +249,7 @@ fn a_driver_reloads_at_the_merging_safe_point_and_completes_the_merge() {
         .map(|dir| dir.join("tmux"))
         .find(|p| p.is_file())
         .expect("tmux on PATH");
-    executable(
+    write_executable(
         &fx.env.bin().join("tmux"),
         &format!(
             "#!/bin/sh\n\
@@ -304,7 +290,6 @@ fn a_driver_reloads_at_the_merging_safe_point_and_completes_the_merge() {
 /// next, is exec'd as before.
 #[test]
 fn a_driver_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_into_one_that_can_open_it() {
-    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
     let fx = fx();
     let old_lead = fx.env.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay"]);
     let pid = fx.dispatch();
@@ -341,13 +326,12 @@ fn a_driver_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_into_one
 #[cfg(target_os = "linux")]
 #[test]
 fn after_a_reload_fd_3_is_the_lock_and_the_drivers_children_do_not_hold_it() {
-    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
     let fx = fx();
     let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
         .map(|dir| dir.join("tmux"))
         .find(|p| p.is_file())
         .expect("tmux on PATH");
-    executable(
+    write_executable(
         &fx.env.bin().join("tmux"),
         &format!(
             "#!/bin/sh\n\

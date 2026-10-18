@@ -7,7 +7,7 @@ use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::Path;
 
-use common::{CPD, Run, TestEnv};
+use common::{CPD, Run, TestEnv, write_executable};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use nix::fcntl::{Flock, FlockArg};
@@ -315,8 +315,7 @@ fn pi_node_must_run() {
     let env = healthy();
     let pi_node = env.home().join(".local/share/pi-node/current/bin");
     fs::create_dir_all(&pi_node).unwrap();
-    fs::write(pi_node.join("node"), "#!/bin/sh\necho 'node broke' >&2; exit 7\n").unwrap();
-    fs::set_permissions(pi_node.join("node"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    write_executable(&pi_node.join("node"), "#!/bin/sh\necho 'node broke' >&2; exit 7\n");
     let run = doctor(&env);
     assert_doctor_failed(&run);
     assert_fails(&run, "pi_node", "error", "exited 7");

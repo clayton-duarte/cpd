@@ -15,11 +15,11 @@
 mod common;
 
 use std::fs;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{CPD, SLEEP_SECONDS, TestEnv};
+use common::{CPD, SLEEP_SECONDS, TestEnv, write_executable};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde_json::{Value, json};
@@ -147,8 +147,7 @@ impl Fx {
         }
         let node = env.home().join(".local/share/pi-node/current/bin/node");
         fs::create_dir_all(node.parent().unwrap()).unwrap();
-        fs::write(&node, format!("#!/bin/sh\necho '{CATALOG}'\n")).unwrap();
-        fs::set_permissions(&node, fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&node, &format!("#!/bin/sh\necho '{CATALOG}'\n"));
 
         fs::write(
             env.cpd_home().join("config.toml"),

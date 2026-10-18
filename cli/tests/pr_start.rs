@@ -8,12 +8,11 @@
 mod common;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, TestEnv};
+use common::{CPD, Run, TestEnv, write_executable};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use serde_json::{Value, json};
@@ -470,8 +469,7 @@ fn a_push_failure_at_pr_start_still_starts_it_and_appends_one_push_failed_error(
     let repo = fx.repo("pay");
     fx.a2_ready(&repo.path);
     let hook = repo.origin.join("hooks").join("pre-receive");
-    fs::write(&hook, "#!/bin/sh\necho refused by hook >&2\nexit 1\n").unwrap();
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&hook, "#!/bin/sh\necho refused by hook >&2\nexit 1\n");
 
     let out = fx.start("a2").ok();
 

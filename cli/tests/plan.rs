@@ -6,11 +6,10 @@
 mod common;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv, write_executable};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{PlanId, ReviewId};
@@ -1089,8 +1088,7 @@ fn a_push_failure_at_lock_still_locks_and_appends_one_push_failed_error() {
     let repo = setup(&env);
     let origin = with_origin(&env, &repo);
     let hook = origin.join("hooks").join("pre-receive");
-    fs::write(&hook, "#!/bin/sh\necho refused by hook >&2\nexit 1\n").unwrap();
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&hook, "#!/bin/sh\necho refused by hook >&2\nexit 1\n");
     approved(&env, &repo);
 
     let out = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();

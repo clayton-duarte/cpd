@@ -8,7 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv, copy_executable};
 use cpd_core::error::CpdError;
 use cpd_core::events::{Kind, NewEvent, append};
 use cpd_core::home::CpdHome;
@@ -1540,7 +1540,7 @@ fn a_reload_is_not_a_quit_even_though_pi_exits_0_on_sigterm() {
     quit_fixture(&env);
     // A copy of cpd that the test can replace, as an install does.
     let copy = env.home().join("cpd-installed");
-    fs::copy(CPD, &copy).unwrap();
+    copy_executable(CPD, &copy);
     env.fake("cpd", &format!("case \"$1 $2 $3\" in \"tui view chat\"|\"tui view history\") exec sleep {SLEEP_SECONDS};; esac\nexec '{}' \"$@\"", copy.display()));
     // An idle Lead at a finished turn, parked: the reload is due at once.
     pi_file(&env, "side", true);
@@ -1550,7 +1550,7 @@ fn a_reload_is_not_a_quit_even_though_pi_exits_0_on_sigterm() {
     wait_until("pi", || env.calls("pi").len() == 1);
 
     let next = env.home().join("cpd-next");
-    fs::copy(CPD, &next).unwrap();
+    copy_executable(CPD, &next);
     fs::rename(&next, &copy).unwrap();
     wait_until("pi, started again", || env.calls("pi").len() == 2);
     assert!(pane_exists(&env, &pane));

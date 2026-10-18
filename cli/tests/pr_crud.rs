@@ -9,7 +9,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use clap::Parser;
-use common::{Run, TestEnv};
+use common::{Run, TestEnv, write_executable};
 use cpd::cli::Cli;
 use cpd_core::home::CpdHome;
 use cpd_core::ids::PlanId;
@@ -347,8 +347,7 @@ fn add_completes_a_legacy_move_that_stopped_after_the_rename() {
 fn add_refuses_push_failed_when_origin_will_not_delete_and_writes_nothing() {
     let Legacy { fx, origin, .. } = legacy("merged");
     let hook = origin.join("hooks/pre-receive");
-    fs::write(&hook, "#!/bin/sh\necho no >&2\nexit 1\n").unwrap();
-    fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    write_executable(&hook, "#!/bin/sh\necho no >&2\nexit 1\n");
     let writes = fx.writes();
     let error = fx.refused(&fx.add("fix", &fx.pay, &[]), "push_failed", 1, writes);
     assert_eq!(error["details"]["branch"], "cpd/pay-1");

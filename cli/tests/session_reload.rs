@@ -7,11 +7,10 @@
 mod common;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::{CPD, SLEEP_SECONDS, TestEnv};
+use common::{CPD, SLEEP_SECONDS, TestEnv, copy_executable, write_executable};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 
@@ -88,15 +87,13 @@ impl Fixture {
 
     fn install_script(&self, on_version: &str) {
         let new = self.installed.with_extension("new");
-        fs::write(
+        write_executable(
             &new,
-            format!(
+            &format!(
                 "#!/bin/sh\ncase \"$1\" in --version) {on_version};; esac\necho \"$$ $*\" >> '{}'\nexec '{CPD}' \"$@\"\n",
                 self.path("installed.runs").display()
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&new, fs::Permissions::from_mode(0o755)).unwrap();
+        );
         fs::rename(&new, &self.installed).unwrap();
     }
 
@@ -157,7 +154,7 @@ fn start_with(state: &str, on_term: &str) -> Fixture {
     let bin = env.root().join("installed-bin");
     fs::create_dir_all(&bin).unwrap();
     let installed = bin.join("cpd");
-    fs::copy(CPD, &installed).unwrap();
+    copy_executable(CPD, &installed);
 
     let ok = |args: &[&str]| {
         let out = env.tmux(args);

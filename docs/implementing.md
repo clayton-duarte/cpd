@@ -85,7 +85,7 @@ Parsing:
   - `env.fake_pi(body)`, `env.fake_gh(body)`, `env.fake(name, body)`: shell scripts on `PATH` that record their argv (`env.calls("pi")`) and then run `body`.
   - `env.command(program)`: any other program in the same environment.
 - Never touch the real `~/.cpd`, the tmux server `-L cpd`, pi, or the network.
-- nextest runs every test in a process of its own, so a `static` or a lock that the tests of a file share (`TMUX_ENV` in `host.rs`, `ONE_AT_A_TIME` in `driver_reload.rs`) coordinates nothing there. Tests that must not overlap go in a test group of `.config/nextest.toml` (`max-threads = 1`, the reason beside it), as the tests of those two files do.
+- nextest runs every test in a process of its own, so a `static` or a lock that the tests of a file share coordinates nothing there: do not write one. Never `set_var`/`remove_var` in a test (`harness.rs` fails on it): put the variable on the `Command` (`env.command(..).env(..)`), or `Tmux::with_tmpdir` for tmux. Write and copy executables with `common::write_executable`/`copy_executable` (ETXTBSY, `harness.rs` checks it). Tests that must not overlap go in a test group of `.config/nextest.toml` (`max-threads = 1`, the reason beside it).
 - A test must fail first, for the right reason.
 
 ## Dependencies

@@ -8,11 +8,10 @@
 mod common;
 
 use std::fs::{self, File, OpenOptions};
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv, write_executable};
 use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_lead_worktree, pr_lead_worktree_path, prepare_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -598,8 +597,7 @@ fn a_cancel_before_the_compare_and_swap_ends_it_without_merging() {
     let fx = fx();
     // The request arrives during the rebase, after the first safe point.
     let hook = fx.repo.join(".git/hooks/post-rewrite");
-    fs::write(&hook, format!("#!/bin/sh\n{} > /dev/null\n", fx.cpd_line("job cancel api --reason late --plan pay"))).unwrap();
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&hook, &format!("#!/bin/sh\n{} > /dev/null\n", fx.cpd_line("job cancel api --reason late --plan pay")));
     // Another Job merges first, so the rebase rewrites the Worker's commit.
     fx.pi(
         "git -C \"$LEAD\" commit -q --allow-empty -m other\n\
