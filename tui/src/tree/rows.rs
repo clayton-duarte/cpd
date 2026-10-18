@@ -154,7 +154,19 @@ impl<'a> Row<'a> {
         matches!(self, Row::Plan(..) | Row::Fork(..)) && !self.archived()
     }
 
-    /// The label the row shows, as the prompts word it: a Context's title, a Plan's title, a Session's name.
+    /// The id the row shows in the tree: a Context's id, a Plan's id, a fork's `<plan id>·<first 4 characters of its
+    /// Session id>` (the first 8 characters of its id when it has no Plan); none for a `…` row.
+    pub fn shown_id(&self) -> Option<String> {
+        match *self {
+            Row::Context(c) => Some(c.id.to_string()),
+            Row::Plan(_, p) => Some(p.head.id.to_string()),
+            Row::Fork(_, _, s) => Some(fork_id(s)),
+            Row::More => None,
+        }
+    }
+
+    /// The label the row has in the prompts: a Context's title, a Plan's title, a Session's name. The tree itself
+    /// shows ids (`shown_id`).
     pub fn label(&self) -> String {
         match *self {
             Row::Context(c) => c.title.clone(),
@@ -162,6 +174,15 @@ impl<'a> Row<'a> {
             Row::Fork(_, _, s) => session_label(s),
             Row::More => MORE.to_owned(),
         }
+    }
+}
+
+/// What the tree shows for a fork: `<plan id>·<first 4 characters of its Session id>`, else (no Plan) the first 8
+/// characters of its Session id.
+fn fork_id(s: &SessionNode) -> String {
+    match &s.plan {
+        Some(plan) => format!("{plan}·{}", s.id.as_str().chars().take(4).collect::<String>()),
+        None => s.id.as_str().chars().take(8).collect(),
     }
 }
 
@@ -245,7 +266,7 @@ fn row_text(r: RowText, width: u16) -> Line<'static> {
     Line::from(spans)
 }
 
-/// A Context's row text: dot (● when a live Session inside needs you, coloured by the busiest phase), title, and
+/// A Context's row text: dot (● when a live Session inside needs you, coloured by the busiest phase), id, and
 /// the number of Plans listed inside when collapsed.
 fn context_text(c: &ContextNode, collapsed: bool) -> Line<'static> {
     let k = kids(c);
@@ -253,7 +274,7 @@ fn context_text(c: &ContextNode, collapsed: bool) -> Line<'static> {
     let mut spans = vec![
         palette::dot(needs_you, busiest(k.direct.iter().copied())),
         " ".into(),
-        Span::styled(c.title.clone(), Style::new().add_modifier(Modifier::BOLD)),
+        Span::styled(c.id.to_string(), Style::new().add_modifier(Modifier::BOLD)),
     ];
     if collapsed {
         spans.push(Span::styled(format!(" {}", k.direct.len()), palette::fg(Meaning::Nothing)));
@@ -276,7 +297,7 @@ fn more_text(in_context: bool, expanded: bool) -> Line<'static> {
 fn plan_item(c: &ContextNode, p: &PlanNode, last: bool, width: u16) -> TreeItem<'static, Id> {
     let muted = c.is_archived() || p.head.is_archived();
     let text = row_text(
-        RowText { session: p.lead(), name: p.head.title.clone(), depth: 1, last, phase: p.head.phase, counters_width: counters(p).width(), muted },
+        RowText { session: p.lead(), name: p.head.id.to_string(), depth: 1, last, phase: p.head.phase, counters_width: counters(p).width(), muted },
         width,
     );
     TreeItem::new_leaf(p.head.id.to_string(), text)
@@ -294,7 +315,7 @@ fn context_item(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16) -> TreeI
         let text = row_text(
             RowText {
                 session: Some(s),
-                name: session_label(s),
+                name: fork_id(s),
                 depth: 1,
                 last: j + 1 == k.forks.len() && !k.has_group(),
                 phase: p.head.phase,
@@ -315,7 +336,7 @@ fn context_item(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16) -> TreeI
                 let text = row_text(
                     RowText {
                         session: Some(s),
-                        name: format!("{} ({})", session_label(s), p.head.title),
+                        name: fork_id(s),
                         depth: 1,
                         last: i + 1 == k.strays.len(),
                         phase: p.head.phase,
@@ -535,7 +556,7 @@ mod tests {
         let buf = render(&t, &mut state_for(&t, &[], &[]), 31, 4, false);
         assert_eq!(
             lines(&buf),
-            ["● Cpd", "  ├ ○ V1             36⋅0⋅0⋅1⋅5", "⏵ ├ ● Rust            0⋅1⋅0⋅0⋅1", "  └ ○ Ui              1⋅0⋅2⋅0⋅3"]
+            ["● cpd", "  ├ ○ v1             36⋅0⋅0⋅1⋅5", "⏵ ├ ● rust            0⋅1⋅0⋅0⋅1", "  └ ○ ui              1⋅0⋅2⋅0⋅3"]
         );
         assert!(buf[(6, 2)].modifier.contains(Modifier::BOLD), "the name of the centre row is bold");
         assert!(buf[(0, 2)].modifier.contains(Modifier::BOLD), "so is its ⏵");
@@ -550,15 +571,15 @@ mod tests {
         assert_eq!(
             lines(&buf),
             [
-                "● Alpha".to_owned(),
-                row_of("⏵ ├ ○ Ship", "2⋅1⋅1⋅0⋅5", 44),
-                row_of("  ├ ○ Sketch", "4⋅0⋅0⋅0⋅0", 44),
-                row_of("  ├ ○ Old", "0⋅0⋅0⋅1⋅36", 44),
-                "  ├ ○ ship fork".to_owned(),
-                "  └ ● ship review".to_owned(),
-                "● Beta".to_owned(),
-                row_of("  └ ● Rel", "0⋅0⋅0⋅0⋅3", 44),
-                "○ Gamma".to_owned(),
+                "● alpha".to_owned(),
+                row_of("⏵ ├ ○ ship", "2⋅1⋅1⋅0⋅5", 44),
+                row_of("  ├ ○ sketch", "4⋅0⋅0⋅0⋅0", 44),
+                row_of("  ├ ○ old", "0⋅0⋅0⋅1⋅36", 44),
+                "  ├ ○ ship·f-id".to_owned(),
+                "  └ ● ship·f-bl".to_owned(),
+                "● beta".to_owned(),
+                row_of("  └ ● rel", "0⋅0⋅0⋅0⋅3", 44),
+                "○ gamma".to_owned(),
                 String::new(),
             ],
             "no state text after a name"
@@ -576,16 +597,16 @@ mod tests {
     fn a_collapsed_context_shows_the_number_of_plans_and_hides_them() {
         let tree = sample();
         let buf = render(&tree, &mut state_for(&tree, &["alpha"], &[]), 44, 4, false);
-        assert_eq!(lines(&buf), ["● Alpha 3".to_owned(), "● Beta".to_owned(), row_of("  └ ● Rel", "0⋅0⋅0⋅0⋅3", 44), "○ Gamma".to_owned()]);
+        assert_eq!(lines(&buf), ["● alpha 3".to_owned(), "● beta".to_owned(), row_of("  └ ● rel", "0⋅0⋅0⋅0⋅3", 44), "○ gamma".to_owned()]);
     }
 
     #[test]
     fn a_context_has_the_dot_of_any_session_inside_that_needs_you() {
         let tree = sample();
         let buf = render(&tree, &mut state_for(&tree, &["alpha"], &[]), 44, 1, false);
-        assert_eq!(text(&buf, 0), "● Alpha 3", "through its blocked fork");
+        assert_eq!(text(&buf, 0), "● alpha 3", "through its blocked fork");
         let calm = super::super::fixture::tree(vec![context("cc", vec![lone("pp", "s", Phase::Plan, [0; 6])])]);
-        assert_eq!(text(&render(&calm, &mut state_for(&calm, &[], &[]), 20, 1, false), 0), "○ Cc");
+        assert_eq!(text(&render(&calm, &mut state_for(&calm, &[], &[]), 20, 1, false), 0), "○ cc");
     }
 
     #[test]
@@ -594,27 +615,26 @@ mod tests {
         let mut p = lone("pp", "lead", Phase::Dispatch, [0; 6]);
         p.head.open_escalations = 1;
         let t = tree(vec![context("cc", vec![p])]);
-        assert_eq!(lines(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false)), ["○ Cc".to_owned(), row_of("  └ ○ Pp", "0⋅0⋅0⋅0⋅0", 30)]);
+        assert_eq!(lines(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false)), ["○ cc".to_owned(), row_of("  └ ○ pp", "0⋅0⋅0⋅0⋅0", 30)]);
         let mut t = t;
         t.contexts[0].plans[0].sessions[0].needs_you = true;
-        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false), 1), row_of("  └ ● Pp", "0⋅0⋅0⋅0⋅0", 30));
+        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false), 1), row_of("  └ ● pp", "0⋅0⋅0⋅0⋅0", 30));
     }
 
     #[test]
     fn drafts_are_counted_and_dark_grey_in_phase_plan() {
         let t = tree(vec![context("cc", vec![lone("pp", "p", Phase::Plan, [4, 0, 0, 0, 0, 0])])]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
-        assert_eq!(text(&buf, 1), row_of("  └ ○ Pp", "4⋅0⋅0⋅0⋅0", 20));
+        assert_eq!(text(&buf, 1), row_of("  └ ○ pp", "4⋅0⋅0⋅0⋅0", 20));
         assert_eq!(fg(&buf, 11, 1), color(Meaning::Nothing));
     }
 
     #[test]
     fn a_long_name_is_cut_with_an_ellipsis_and_the_counters_stay_right_aligned() {
-        let mut long = lone("pp", "lead", Phase::Dispatch, [0, 36, 0, 0, 1, 5]);
-        long.head.title = "a very long plan title indeed".into();
+        let long = lone("a-very-long-plan-id", "lead", Phase::Dispatch, [0, 36, 0, 0, 1, 5]);
         let t = tree(vec![context("cc", vec![long])]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 30, 2, false);
-        assert_eq!(text(&buf, 1), row_of("  └ ○ a very long …", "36⋅0⋅0⋅1⋅5", 30));
+        assert_eq!(text(&buf, 1), row_of("  └ ○ a-very-long-…", "36⋅0⋅0⋅1⋅5", 30));
         assert_eq!(truncate("abc", 3), "abc");
         assert_eq!(truncate("abcd", 3), "ab…");
         assert_eq!(truncate("abcd", 0), "");
@@ -682,7 +702,7 @@ mod tests {
             vec![plan("pp", "cc", Phase::Plan, [0; 6], session("l", "lead", State::Idle, None, Place::None), vec![session("f", "fork", State::Idle, None, Place::None)])],
         )]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 30, 3, false);
-        assert_eq!(lines(&buf)[1..], [row_of("  ├ ○ Pp", "0⋅0⋅0⋅0⋅0", 30), "  └ ○ fork".to_owned()]);
+        assert_eq!(lines(&buf)[1..], [row_of("  ├ ○ pp", "0⋅0⋅0⋅0⋅0", 30), "  └ ○ pp·f".to_owned()]);
     }
 
     #[test]
@@ -724,7 +744,7 @@ mod tests {
         tree.contexts[0].plans[0].sessions[0].place = Place::Parked;
         tree.contexts[0].plans[0].sessions[1].place = Place::Chat;
         let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 8, false);
-        assert_eq!(text(&buf, 4), "⏵ ├ ○ ship fork");
+        assert_eq!(text(&buf, 4), "⏵ ├ ○ ship·f-id");
         for y in [0, 1, 2, 3, 5, 6, 7] {
             assert!(!text(&buf, y).contains(ACTIVE_MARK), "row {y}");
         }
@@ -822,14 +842,15 @@ mod tests {
     }
 
     #[test]
-    fn a_context_row_shows_its_title_a_plan_row_its_plans_title_and_a_fork_its_name() {
+    fn a_context_row_shows_its_id_a_plan_row_its_plans_id_and_a_fork_its_plan_and_the_start_of_its_session_id() {
         let mut tree = sample();
         tree.contexts[0].title = "Payments".into();
         tree.contexts[0].plans[0].head.title = "Pay by card".into();
-        let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 5, false);
-        assert_eq!(text(&buf, 0), "● Payments", "not its id `alpha`");
-        assert_eq!(text(&buf, 1), row_of("⏵ ├ ○ Pay by card", "2⋅1⋅1⋅0⋅5", 44), "not its Lead's name `ship lead`");
-        assert_eq!(text(&buf, 4), "  ├ ○ ship fork", "a fork is its Session's name");
+        let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 6, false);
+        assert_eq!(text(&buf, 0), "● alpha", "not its title `Payments`");
+        assert_eq!(text(&buf, 1), row_of("⏵ ├ ○ ship", "2⋅1⋅1⋅0⋅5", 44), "not its title `Pay by card`, nor its Lead's name");
+        assert_eq!(text(&buf, 5), "  └ ● ship·f-bl", "the Plan id, `·`, the first 4 characters of the Session id; not its name");
+        // the prompts word a row by its title or name: Rename… edits those, not the id
         assert_eq!(row(&tree, &path(&["alpha"])).unwrap().label(), "Payments");
         assert_eq!(row(&tree, &path(&["alpha", "ship"])).unwrap().label(), "Pay by card");
         assert_eq!(row(&tree, &path(&["alpha", "f-idle"])).unwrap().label(), "ship fork");
@@ -837,6 +858,34 @@ mod tests {
         assert_eq!(session_label(&s), "01234567", "a blank name: the short id");
         s.name = " named ".into();
         assert_eq!(session_label(&s), "named");
+    }
+
+    #[test]
+    fn a_fork_with_no_plan_shows_the_first_8_characters_of_its_session_id() {
+        let t = tree(vec![context(
+            "cc",
+            vec![plan("pp", "cc", Phase::Plan, [0; 6], session("l", "lead", State::Idle, None, Place::None), vec![session("0123456789abcdef", "named", State::Idle, None, Place::None)])],
+        )]);
+        let mut t = t;
+        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 3, false), 2), "  └ ○ pp·0123");
+        t.contexts[0].plans[0].sessions[1].plan = None;
+        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 3, false), 2), "  └ ○ 01234567");
+        assert_eq!(row(&t, &path(&["cc", "0123456789abcdef"])).unwrap().shown_id().as_deref(), Some("01234567"));
+    }
+
+    #[test]
+    fn shown_id_is_the_id_each_row_shows_and_a_more_row_has_none() {
+        let t = archived();
+        let shown = |parts: &[&str]| row(&t, &path(parts)).unwrap().shown_id();
+        assert_eq!(shown(&["alpha"]).as_deref(), Some("alpha"), "a Context: its id");
+        assert_eq!(shown(&["alpha", "ship"]).as_deref(), Some("ship"), "a Plan: its id");
+        assert_eq!(shown(&["alpha", "f-idle"]).as_deref(), Some("ship·f-id"), "a fork: its Plan, `·`, 4 characters of its id");
+        assert_eq!(shown(&["alpha", "old"]).as_deref(), Some("old"), "an archived Plan");
+        assert_eq!(shown(&["alpha", "f-blocked"]).as_deref(), Some("ship·f-bl"), "an archived fork");
+        assert_eq!(shown(&["zeta"]).as_deref(), Some("zeta"), "an archived Context");
+        assert_eq!(shown(&["zeta", "f-zp"]).as_deref(), Some("zp·f-zp"), "a fork of an archived Context");
+        assert_eq!(shown(&["alpha", "…"]), None);
+        assert_eq!(shown(&["…"]), None);
     }
 
     // ---------- archived rows (hs-d53) ----------
@@ -853,14 +902,14 @@ mod tests {
         assert_eq!(
             lines(&buf),
             [
-                "○ Alpha".to_owned(),
-                row_of("⏵ ├ ○ Ship", "2⋅1⋅1⋅0⋅5", 44),
-                row_of("  ├ ○ Sketch", "4⋅0⋅0⋅0⋅0", 44),
-                "  ├ ○ ship fork".to_owned(),
+                "○ alpha".to_owned(),
+                row_of("⏵ ├ ○ ship", "2⋅1⋅1⋅0⋅5", 44),
+                row_of("  ├ ○ sketch", "4⋅0⋅0⋅0⋅0", 44),
+                "  ├ ○ ship·f-id".to_owned(),
                 "  └ …".to_owned(),
-                "● Beta".to_owned(),
-                row_of("  └ ● Rel", "0⋅0⋅0⋅0⋅3", 44),
-                "○ Gamma".to_owned(),
+                "● beta".to_owned(),
+                row_of("  └ ● rel", "0⋅0⋅0⋅0⋅3", 44),
+                "○ gamma".to_owned(),
                 "…".to_owned(),
                 String::new(),
             ],
@@ -878,14 +927,14 @@ mod tests {
         fork.archived_at = Some(WHEN.into());
         t.contexts[1].plans[0].sessions.push(fork);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 44, 10, false);
-        assert_eq!(lines(&buf)[6..9], ["● Beta", row_of("  ├ ● Rel", "0⋅0⋅0⋅0⋅3", 44).as_str(), "  └ …"]);
+        assert_eq!(lines(&buf)[6..9], ["● beta", row_of("  ├ ● rel", "0⋅0⋅0⋅0⋅3", 44).as_str(), "  └ …"]);
         let mut t = sample();
         t.contexts[1].plans[0].head.archived_at = Some(WHEN.into());
         let mut fork = session("f-rel", "rel fork", State::Idle, None, Place::None);
         fork.plan = Some(t.contexts[1].plans[0].head.id.clone());
         t.contexts[1].plans[0].sessions.push(fork);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 44, 10, false);
-        assert_eq!(lines(&buf)[6..8], ["○ Beta", "  └ …"], "a fork of an archived Plan is in the `…` row too");
+        assert_eq!(lines(&buf)[6..8], ["○ beta", "  └ …"], "a fork of an archived Plan is in the `…` row too");
     }
 
     #[test]
@@ -897,15 +946,15 @@ mod tests {
         assert_eq!(
             lines(&buf)[..9],
             [
-                "○ Alpha".to_owned(),
-                row_of("⏵ ├ ○ Ship", "2⋅1⋅1⋅0⋅5", 44),
-                row_of("  ├ ○ Sketch", "4⋅0⋅0⋅0⋅0", 44),
-                "  ├ ○ ship fork".to_owned(),
+                "○ alpha".to_owned(),
+                row_of("⏵ ├ ○ ship", "2⋅1⋅1⋅0⋅5", 44),
+                row_of("  ├ ○ sketch", "4⋅0⋅0⋅0⋅0", 44),
+                "  ├ ○ ship·f-id".to_owned(),
                 "  ├ …".to_owned(),
-                row_of("  ├ ○ Old", "0⋅0⋅0⋅1⋅36", 44),
-                "  └ ○ ship review (Ship)".to_owned(),
-                "● Beta".to_owned(),
-                row_of("  └ ● Rel", "0⋅0⋅0⋅0⋅3", 44),
+                row_of("  ├ ○ old", "0⋅0⋅0⋅1⋅36", 44),
+                "  └ ○ ship·f-bl".to_owned(),
+                "● beta".to_owned(),
+                row_of("  └ ● rel", "0⋅0⋅0⋅0⋅3", 44),
             ],
             "no empty row; the archived Plan and fork are as deep as the live ones"
         );
@@ -940,7 +989,7 @@ mod tests {
         let rows = lines(&buf);
         assert_eq!(
             rows[8..12],
-            ["…", "○ Zeta", row_of("  ├ ○ Zp", "0⋅0⋅0⋅0⋅2", 44).as_str(), "  └ ○ zp fork"],
+            ["…", "○ zeta", row_of("  ├ ○ zp", "0⋅0⋅0⋅0⋅2", 44).as_str(), "  └ ○ zp·f-zp"],
             "{rows:#?}"
         );
         for y in 9..12 {
@@ -955,7 +1004,7 @@ mod tests {
         // an archived Context folds like any other
         expand(&mut state, &t, &["…"]);
         assert!(click_context(&mut state, &t, &path(&["zeta"])));
-        assert_eq!(text(&render(&t, &mut state, 44, 14, false), 9), "○ Zeta 1");
+        assert_eq!(text(&render(&t, &mut state, 44, 14, false), 9), "○ zeta 1");
     }
 
     #[test]
@@ -1023,6 +1072,6 @@ mod tests {
         let mut t = archived();
         t.contexts[0].plans[2].head.phase = Phase::Done;
         let buf = render(&t, &mut state_for(&t, &["alpha"], &[]), 44, 3, false);
-        assert_eq!(text(&buf, 0), "○ Alpha 2", "ship and sketch; the archived Plan is behind `…`");
+        assert_eq!(text(&buf, 0), "○ alpha 2", "ship and sketch; the archived Plan is behind `…`");
     }
 }
