@@ -153,7 +153,9 @@ fn sections() -> Vec<Section> {
         header: None,
         rows: palette::PR_LEGEND
             .iter()
-            .map(|(name, state)| vec![Line::from(Span::styled(format!("#2 {name}"), palette::fg(palette::pr_state(*state))))])
+            .map(|(name, state)| (*name, palette::pr_state(*state)))
+            .chain([palette::PR_CONFLICT])
+            .map(|(name, meaning)| vec![Line::from(Span::styled(format!("#2 {name}"), palette::fg(meaning)))])
             .collect(),
     };
     let checks = Section {
@@ -280,6 +282,15 @@ mod tests {
         assert!(!shown.contains("phase"), "{shown}");
         let frames: Vec<_> = dots.rows[1][0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(frames, palette::SPINNER);
+    }
+
+    #[test]
+    fn the_pr_states_list_conflict_in_the_failed_colour_after_the_others() {
+        let prs = &sections()[3];
+        let names: Vec<String> = prs.rows.iter().map(|r| text(&r[0])).collect();
+        assert_eq!(names, ["#2 open", "#2 merged", "#2 closed", "#2 conflict"]);
+        let conflict = &prs.rows[3][0].spans[0];
+        assert_eq!(conflict.style, palette::fg(palette::Meaning::Failed));
     }
 
     #[test]

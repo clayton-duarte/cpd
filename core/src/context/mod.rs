@@ -29,7 +29,7 @@ use time::macros::format_description;
 pub use contexts::{ContextRow, Contexts, Written};
 pub use record::{By, Draft, PlanRef, Record};
 
-use crate::args::{PlanArg, Text};
+use crate::args::{PlanArg, Text, Title};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
@@ -141,7 +141,7 @@ pub struct NewArgs {
     id: ContextId,
     /// The title
     #[arg(long, value_name = "text")]
-    title: Text,
+    title: Title,
     /// The Jira Epic key, stored only
     #[arg(long, value_name = "key")]
     jira: Option<Jira>,
@@ -205,7 +205,7 @@ pub struct RenameArgs {
     id: ContextId,
     /// The new title
     #[arg(long, value_name = "text")]
-    title: Text,
+    title: Title,
 }
 
 #[derive(Args, Debug)]
@@ -273,7 +273,7 @@ fn context_json(row: &ContextRow) -> Value {
 /// `context new` (§3.1).
 fn new(args: NewArgs) -> Result<Output, CpdError> {
     let (_, config, mut store) = open()?;
-    let (row, already) = Contexts::new(&config, &mut store).create(&args.id, &args.title, args.jira.as_ref())?;
+    let (row, already) = Contexts::new(&config, &mut store).create(&args.id, &Text::from(args.title.clone()), args.jira.as_ref())?;
     let mut out = json!({"context": context_json(&row)});
     if already {
         out["already"] = json!(true);

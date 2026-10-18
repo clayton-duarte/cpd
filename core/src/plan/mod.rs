@@ -24,7 +24,7 @@ mod show;
 
 use std::path::{Path, PathBuf};
 
-use crate::args::{Name, PlanArg, Text};
+use crate::args::{Name, PlanArg, Title};
 use crate::config::Config;
 use crate::context::Jira;
 use crate::error::{CpdError, ErrorCode};
@@ -73,7 +73,7 @@ pub struct NewArgs {
     context: ContextId,
     /// The title
     #[arg(long, value_name = "text")]
-    title: Text,
+    title: Title,
     /// The Jira task key, stored only
     #[arg(long, value_name = "key")]
     jira: Option<Jira>,
@@ -154,7 +154,7 @@ pub struct RenameArgs {
     plan: PlanArg,
     /// The new title
     #[arg(long, value_name = "text")]
-    title: Text,
+    title: Title,
 }
 
 #[derive(clap::Args, Debug)]
