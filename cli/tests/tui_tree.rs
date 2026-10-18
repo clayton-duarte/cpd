@@ -40,11 +40,10 @@ fn sql(store: &mut Store, text: &str) {
         .unwrap();
 }
 
-fn context(id: &str, grounded: Option<&str>) -> String {
-    let (lead, seq) = grounded.map_or(("NULL".to_owned(), "NULL"), |g| (format!("'{g}'"), "0"));
+fn context(id: &str) -> String {
     format!(
-        "INSERT INTO contexts (id, title, jira, created_at, created_on, lead_session, grounded_seq)
-         VALUES ('{id}', 'Title of {id}', NULL, '2026-01-01T00:00:00.000Z', 'm1', {lead}, {seq});"
+        "INSERT INTO contexts (id, title, jira, created_at, created_on)
+         VALUES ('{id}', 'Title of {id}', NULL, '2026-01-01T00:00:00.000Z', 'm1');"
     )
 }
 
@@ -120,16 +119,16 @@ fn moved(context: &str, plan: &str, session: &str, place: &str) -> String {
 
 /// Contexts, Plans and Sessions in each state:
 ///
-/// - `alpha` (grounded Lead `g-alpha`): `ship` (dispatch; Lead `l-ship` working, in the chat slot; side forks
+/// - `alpha` (also a Lead with no Plan, `g-alpha`, as migration 0010 leaves a grounded Lead): `ship` (dispatch; Lead `l-ship` working, in the chat slot; side forks
 ///   `f-idle` and `f-blocked`; Jobs queued, running, failed and two merged), `sketch` (plan; Lead idle; two drafts);
 /// - `beta`: `rel` (pr; its Lead is blocked), `old` (done; its Lead is stopped);
 /// - `gamma`: nothing.
 fn populate(env: &TestEnv) {
     let mut store = open(env);
     let mut s = String::new();
-    s += &context("alpha", Some("g-alpha"));
-    s += &context("beta", None);
-    s += &context("gamma", None);
+    s += &context("alpha");
+    s += &context("beta");
+    s += &context("gamma");
     s += &plan_row("ship", "alpha", "dispatch", "l-ship", "2026-01-02T00:00:00.000Z", false);
     s += &plan_row("sketch", "alpha", "plan", "l-sketch", "2026-01-02T00:00:01.000Z", false);
     s += &plan_row("rel", "beta", "deploy", "l-rel", "2026-01-02T00:00:02.000Z", true);
@@ -309,7 +308,7 @@ fn the_tree_of_a_prepared_store() {
             row("  └ ○ Plan old", "0⋅0⋅0⋅0⋅0"),
             "○ Title of gamma".to_owned(),
         ],
-        "the Context and Plan titles, the forks' names; the forks are siblings of the Plans, after them, under their Context (B1); the grounded Lead g-alpha is no row; the Jobs: queued, running, merging, failed, merged; no state text"
+        "the Context and Plan titles, the forks' names; the forks are siblings of the Plans, after them, under their Context (B1); the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text"
     );
 }
 

@@ -56,11 +56,10 @@ fn tier(s: &str) -> Tier {
 
 const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
-fn context(id: &str, grounded: Option<&str>) -> String {
-    let (lead, seq) = grounded.map_or(("NULL".to_owned(), "NULL"), |g| (format!("'{g}'"), "0"));
+fn context(id: &str) -> String {
     format!(
-        "INSERT INTO contexts (id, title, jira, created_at, created_on, lead_session, grounded_seq)
-         VALUES ('{id}', 'Title of {id}', NULL, '2026-01-01T00:00:00.000Z', 'm1', {lead}, {seq});"
+        "INSERT INTO contexts (id, title, jira, created_at, created_on)
+         VALUES ('{id}', 'Title of {id}', NULL, '2026-01-01T00:00:00.000Z', 'm1');"
     )
 }
 
@@ -187,7 +186,7 @@ fn moved(context: &str, plan: Option<&str>, session: &str, place: &str) -> Strin
 
 /// Three Contexts, the Plans below, Jobs in every status, Attempts, a PR, Escalations and Sessions.
 ///
-/// - `alpha` (grounded Lead `g-alpha`): `ship` (dispatch, Lead `l-ship`, side fork `f-ship`) with one Job in
+/// - `alpha` (also a Lead with no Plan, `g-alpha`, as migration 0010 leaves a grounded Lead): `ship` (dispatch, Lead `l-ship`, side fork `f-ship`) with one Job in
 ///   every status; `sketch` (phase plan, drafts only).
 /// - `beta`: `rel` (phase pr, PR 7 with a failing check), `shut` (pr, closed unmerged), `old` (done, merged PR).
 /// - `gamma`: nothing.
@@ -195,9 +194,9 @@ fn moved(context: &str, plan: Option<&str>, session: &str, place: &str) -> Strin
 /// The chat slot holds `l-ship`; `l-rel` was there before and is parked.
 fn populate(store: &mut Store) {
     let mut s = String::new();
-    s += &context("alpha", Some("g-alpha"));
-    s += &context("beta", None);
-    s += &context("gamma", None);
+    s += &context("alpha");
+    s += &context("beta");
+    s += &context("gamma");
     s += &plan_row("ship", "alpha", "dispatch", "l-ship", "2026-01-02T00:00:00.000Z", None);
     s += &plan_row("sketch", "alpha", "plan", "l-sketch", "2026-01-02T00:00:01.000Z", None);
     s += &plan_row(
@@ -317,9 +316,6 @@ fn the_tree_is_contexts_then_plans_then_lead_sessions_with_their_states() {
     let [alpha, beta, gamma] = &tree.contexts[..] else { panic!() };
 
     assert_eq!((alpha.title.as_str(), alpha.records, alpha.open_questions), ("Title of alpha", 4, 1));
-    let grounded = alpha.grounded_lead.as_ref().unwrap();
-    assert_eq!((grounded.id.as_str(), grounded.plan.as_ref(), grounded.grounded_lead, grounded.place), ("g-alpha", None, true, Place::Work));
-    assert!(beta.grounded_lead.is_none() && gamma.grounded_lead.is_none());
     assert!(gamma.plans.is_empty());
 
     let plans: Vec<&str> = alpha.plans.iter().map(|p| p.head.id.as_str()).collect();
@@ -331,7 +327,7 @@ fn the_tree_is_contexts_then_plans_then_lead_sessions_with_their_states() {
     assert_eq!(
         sessions,
         [("l-ship", State::Working, Place::Chat, true), ("f-ship", State::Idle, Place::None, false)],
-        "the Lead first, then the side fork; the Workers and the grounded Lead are not in the tree's Plans"
+        "the Lead first, then the side fork; the Workers and the Lead with no Plan are not in the tree's Plans"
     );
     assert!(ship.sessions[0].is_active() && !ship.sessions[1].is_active());
     let forks: Vec<(&str, &str)> = alpha.forks().iter().map(|(p, s)| (p.head.id.as_str(), s.id.as_str())).collect();
@@ -556,7 +552,7 @@ fn the_chat_slot_is_the_plan_lead_whose_latest_move_is_chat() {
     assert_eq!((slot.session.as_str(), slot.plan.as_str(), slot.name.as_str()), ("l-ship", "ship", "name of l-ship"));
     let id = slot.moved_event;
 
-    // The grounded Lead is never in the slot; parking leaves the placeholder.
+    // A Lead with no Plan is never in the slot; parking leaves the placeholder.
     sql(&mut store, &moved("alpha", None, "g-alpha", "chat"));
     assert_eq!(read::chat_slot(&mut store).unwrap().unwrap().session, session("l-ship"));
     sql(&mut store, &moved("alpha", Some("ship"), "l-ship", "parked"));
@@ -756,7 +752,7 @@ fn the_read_model_spawns_nothing_and_has_no_write_statement() {
 fn populate_many(store: &mut Store) {
     let mut s = String::new();
     for c in 0..10 {
-        s += &context(&format!("ctx{c}"), None);
+        s += &context(&format!("ctx{c}"));
         for p in 0..8 {
             let id = format!("p{c}x{p}");
             let lead = format!("lead-{id}");

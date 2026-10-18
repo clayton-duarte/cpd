@@ -662,7 +662,7 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
     let mut store = fixture_store(&env);
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     let hash = store.read(|c| Ok(cpd_core::store::schema_hash(c)?)).unwrap();
-    assert_eq!(hash, "3ea4336e93cb740321d1c5c989863c2e018d1348e4e2a22a84feee158f5bee98", "version 9 (the Event kind session-message, hs-d133) on top of version 8 (the Plan phase deploy, hs-d76)");
+    assert_eq!(hash, "2f8e238fbc3b0d5f768fe3c5e6c118b26eda5581d93841449563979a51144168", "version 10 (the Manager role and the brief record, hs-d92) on top of version 9 (the Event kind session-message, hs-d133)");
 
     for table in ["contexts", "plans", "sessions"] {
         let archived: Option<String> =
@@ -688,6 +688,40 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
     store.write("test", |tx| Ok(insert(tx, "session-message")?)).unwrap(); // migration 9
     let err = store.write("test", |tx| Ok(insert(tx, "plan-exploded")?)).unwrap_err();
     assert!(format!("{err:?}").contains("CHECK"), "{err:?}");
+}
+
+#[test]
+fn a_fresh_database_holds_one_live_manager_per_context_and_a_brief_with_its_plan() {
+    let env = TestEnv::new();
+    let mut store = fixture_store(&env);
+    let columns: i64 = store
+        .read(|c| Ok(c.query_row("SELECT count(*) FROM pragma_table_info('contexts') WHERE name IN ('lead_session', 'grounded_seq')", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(columns, 0, "the grounded Lead is retired (migration 0010)");
+
+    let manager = |id: &str, context: &str, plan: &str| {
+        format!(
+            "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+               VALUES ('{id}', 'manager', '{context}', {plan}, 'm', '/', 'O5', 'stopped', 't', 't')"
+        )
+    };
+    store.write("test", |tx| exec(tx, "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('c2', 'C2', 't', 'm')")).unwrap();
+    store.write("test", |tx| exec(tx, &manager("mgr1", "ctx", "NULL"))).unwrap();
+    let second = refused(&mut store, &manager("mgr2", "ctx", "NULL"));
+    assert!(sqlite_message(&second).contains("UNIQUE constraint failed"), "{second:?}");
+    let with_plan = refused(&mut store, &manager("mgr3", "c2", "'pay'"));
+    assert!(sqlite_message(&with_plan).contains("CHECK constraint failed"), "a Manager has no Plan: {with_plan:?}");
+    // Another Context has its own; an archived Manager makes room for a new one.
+    store.write("test", |tx| exec(tx, &manager("mgr4", "c2", "NULL"))).unwrap();
+    store.write("test", |tx| exec(tx, "UPDATE sessions SET archived_at = 't' WHERE id = 'mgr1'")).unwrap();
+    store.write("test", |tx| exec(tx, &manager("mgr5", "ctx", "NULL"))).unwrap();
+
+    let brief = |plan: &str| {
+        format!("INSERT INTO context_records (context, id, kind, at, machine, text, plan_id, plan_machine) VALUES ('ctx', 'm-b1', 'brief', 't', 'm', 'B', {plan})")
+    };
+    let bare = refused(&mut store, &brief("NULL, NULL"));
+    assert!(sqlite_message(&bare).contains("CHECK constraint failed"), "a brief needs its Plan: {bare:?}");
+    store.write("test", |tx| exec(tx, &brief("'pay', 'm'"))).unwrap();
 }
 
 #[test]

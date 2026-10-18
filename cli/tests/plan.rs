@@ -380,80 +380,50 @@ fn pr_add_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
     assert_eq!(error["details"]["ref"], "refs/remotes/origin/side", "with an origin, the base must be on it");
 }
 
-// ---------- plan phase, the grounded Lead ----------
+// ---------- plan phase ----------
 
 #[test]
-fn phase_plan_grounds_the_context_once_and_later_plans_fork_it() {
+fn phase_plan_writes_the_phase_only_and_a_later_plan_is_a_fresh_lead() {
     let env = TestEnv::new();
     let repo = setup(&env);
     let first = new_plan(&env, "pay", &repo);
     let lead = first["plan"]["lead_session"].as_str().unwrap().to_owned();
+    let (sessions, windows, events_before) = (
+        query::<i64>(&env, "SELECT count(*) FROM sessions"),
+        panes(&env).len(),
+        query::<i64>(&env, "SELECT count(*) FROM events"),
+    );
 
     let out = env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
-    let grounded = out["grounded_lead"]["session"].as_str().unwrap().to_owned();
-    assert_eq!((&out["plan"], &out["phase"]), (&json!("pay"), &json!("plan")));
-    let seq: i64 = query(&env, "SELECT max(seq) FROM context_records WHERE context = 'ctx'");
-    assert_eq!(query::<String>(&env, "SELECT lead_session FROM contexts WHERE id = 'ctx'"), grounded);
-    assert_eq!(query::<i64>(&env, "SELECT grounded_seq FROM contexts WHERE id = 'ctx'"), seq);
-
-    let row = env.cpd(&["session", "show", &grounded]).ok()["session"].clone();
-    assert_eq!((&row["role"], &row["plan"], &row["forked_from"], &row["state"]), (&json!("lead"), &Value::Null, &json!(lead), &json!("stopped")));
-    assert_eq!((&row["name"], &row["grounded_lead"], &row["place"]), (&json!("ctx (grounded)"), &json!(true), &json!("parked")));
-    assert_eq!(row["tmux_pane"], out["grounded_lead"]["pane"]);
-    let window: Vec<_> = panes(&env).into_iter().filter(|p| p.1 == "ctx-ctx").collect();
-    assert_eq!(window, vec![(out["grounded_lead"]["pane"].as_str().unwrap().to_owned(), "ctx-ctx".to_owned(), grounded.clone())]);
-    // The grounded Lead has no Plan: no CPD_PLAN and no plannotator port (contract §6.5).
-    let vars: Vec<String> = pane_env(&env, &grounded).lines().filter(|l| l.starts_with("CPD_")).map(str::to_owned).collect();
-    assert!(vars.contains(&format!("CPD_SESSION={grounded}")), "{vars:?}");
-    assert!(!vars.iter().any(|l| l.starts_with("CPD_PLAN=")), "{vars:?}");
-
+    assert_eq!(out, json!({"ok": true, "plan": "pay", "phase": "plan"}), "no `grounded_lead`");
     let phase = &events(&env, "plan-phase")[0];
     assert_eq!((&phase["plan"], &phase["data"]), (&json!("pay"), &json!({"from": "grounding", "to": "plan"})));
-    let ctx_grounded = &events(&env, "context-grounded")[0];
-    assert_eq!((&ctx_grounded["session"], &ctx_grounded["plan"]), (&json!(grounded), &Value::Null));
-    assert_eq!(ctx_grounded["data"], json!({"seq": seq, "forked_from": lead}));
-    let registered = events(&env, "session-registered");
-    assert_eq!(registered.last().unwrap()["data"], json!({"role": "lead", "name": "ctx (grounded)", "forked_from": lead, "tier": "O3"}));
+    // No Session, no window, no Event but `plan-phase`; no `context-grounded` ever.
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions"), sessions);
+    assert_eq!(panes(&env).len(), windows);
+    assert!(panes(&env).iter().all(|p| p.1 != "ctx-ctx"));
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM events"), events_before + 1);
+    assert_eq!(events(&env, "context-grounded").len(), 0);
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions WHERE plan IS NULL"), 0);
 
-    // Already in phase plan.
+    // Already in phase plan: nothing is written.
     let again = env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
-    assert_eq!((&again["already"], &again["grounded_lead"]["session"]), (&json!(true), &json!(grounded)));
+    assert_eq!(again, json!({"ok": true, "plan": "pay", "phase": "plan", "already": true}));
     assert_eq!(events(&env, "plan-phase").len(), 1);
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM events"), events_before + 1);
 
-    // A later Plan forks the grounded Lead, and its message holds only the newer records.
-    env.cpd(&["context", "note", "Recorded after grounding.", "--context", "ctx"]).ok();
+    // A later Plan of the Context is a fresh Lead, never a fork: its first message holds every record.
+    env.cpd(&["context", "note", "Recorded after the first Plan.", "--context", "ctx"]).ok();
     let second = new_plan(&env, "refund", &repo);
-    assert_eq!(second["lead"]["forked_from"], grounded);
-    assert_eq!(events(&env, "plan-created").last().unwrap()["data"]["forked_from"], grounded);
+    assert_eq!(second["lead"]["forked_from"], Value::Null);
+    let session = second["lead"]["session"].as_str().unwrap();
+    assert_ne!(session, lead);
+    assert_eq!(query::<Option<String>>(&env, &format!("SELECT forked_from FROM sessions WHERE id = '{session}'")), None);
+    assert_eq!(events(&env, "plan-created").last().unwrap()["data"]["forked_from"], Value::Null);
+    assert_eq!(events(&env, "session-registered").last().unwrap()["data"]["forked_from"], Value::Null);
     let message = fs::read_to_string(home(&env).lead_message(&pid("refund"))).unwrap();
-    assert!(message.contains("Recorded after grounding."), "{message}");
-    assert!(message.contains("m1-p2"), "{message}");
-    assert!(!message.contains("m1-p1"), "records up to grounded_seq are in the fork already: {message}");
-
-    // Its phase plan finds the Context grounded: no new grounded Lead.
-    let out = env.cpd(&["plan", "phase", "plan", "--plan", "refund"]).ok();
-    assert_eq!(out["grounded_lead"], Value::Null);
-    assert_eq!(events(&env, "context-grounded").len(), 1);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions WHERE plan IS NULL"), 1);
-}
-
-#[test]
-fn phase_again_creates_the_window_a_crash_left_out() {
-    let env = TestEnv::new();
-    let repo = setup(&env);
-    new_plan(&env, "pay", &repo);
-    let out = env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
-    let grounded = out["grounded_lead"]["session"].as_str().unwrap().to_owned();
-    // A crash between the two transactions: the Session has no pane.
-    store(&env).write("fixture", |tx| exec(tx, &format!("UPDATE sessions SET tmux_pane = NULL WHERE id = '{grounded}';"))).unwrap();
-    let pane = out["grounded_lead"]["pane"].as_str().unwrap();
-    env.tmux(&["kill-pane", "-t", pane]);
-
-    let again = env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
-    assert_eq!(again["already"], true);
-    assert_eq!(again["grounded_lead"]["session"], grounded);
-    assert_ne!(again["grounded_lead"]["pane"], Value::Null);
-    assert_eq!(panes(&env).into_iter().filter(|p| p.1 == "ctx-ctx").count(), 1);
+    assert!(message.contains("Recorded after the first Plan."), "{message}");
+    assert!(message.contains("m1-p1") && message.contains("m1-p2"), "every record, the first Plan's too: {message}");
 }
 
 #[test]
@@ -475,18 +445,18 @@ fn phase_refusals() {
     assert_eq!(error["details"]["from"], "dispatch");
 }
 
-/// Two Plans grounding at once produce one grounded Lead: the
-/// compare-and-swap on `contexts.lead_session` (contract §3.1).
+/// Plans moving to phase `plan` at once all move, and none registers a Session.
 #[test]
-fn plans_grounding_at_once_produce_one_grounded_lead() {
+fn plans_moving_to_phase_plan_at_once_all_move() {
     let env = TestEnv::new();
     let repo = setup(&env);
     let plans = ["pa", "pb", "pc", "pd", "pe", "pf"];
     for plan in plans {
         new_plan(&env, plan, &repo);
     }
+    let sessions = query::<i64>(&env, "SELECT count(*) FROM sessions");
     let barrier = std::sync::Barrier::new(plans.len());
-    let outs: Vec<Value> = std::thread::scope(|scope| {
+    std::thread::scope(|scope| {
         let handles: Vec<_> = plans
             .iter()
             .map(|plan| {
@@ -497,14 +467,10 @@ fn plans_grounding_at_once_produce_one_grounded_lead() {
                 })
             })
             .collect();
-        handles.into_iter().map(|h| h.join().unwrap()).collect()
+        handles.into_iter().for_each(|h| drop(h.join().unwrap()));
     });
-    let grounded: Vec<&Value> = outs.iter().filter(|o| !o["grounded_lead"].is_null()).collect();
-    assert_eq!(grounded.len(), 1, "{outs:?}");
-    let session = grounded[0]["grounded_lead"]["session"].as_str().unwrap();
-    assert_eq!(query::<String>(&env, "SELECT lead_session FROM contexts WHERE id = 'ctx'"), session);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions WHERE plan IS NULL"), 1);
-    assert_eq!(events(&env, "context-grounded").len(), 1);
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions"), sessions);
+    assert_eq!(events(&env, "context-grounded").len(), 0);
     assert_eq!(events(&env, "plan-phase").len(), plans.len());
     assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans WHERE phase = 'plan'"), plans.len() as i64);
 }

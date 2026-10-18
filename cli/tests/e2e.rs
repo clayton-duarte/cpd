@@ -308,24 +308,13 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(kinds(&fx.events_since(cursor)), ["pr-added"]);
     cursor = fx.cursor();
 
-    // ---------- 3. plan phase plan: the Context gets its grounded Lead, a fork of this one
+    // ---------- 3. plan phase plan: the phase and its Event, no Session and no window
     let out = fx.ok(&["plan", "phase", "plan", "--plan", PLAN]);
     assert_eq!(out["phase"], "plan");
-    let grounded = out["grounded_lead"]["session"].as_str().unwrap().to_owned();
+    assert!(out.get("grounded_lead").is_none(), "{out}");
     let events = fx.events_since(cursor);
-    assert_eq!(kinds(&events), ["plan-phase", "session-registered", "context-grounded", "session-moved"]);
+    assert_eq!(kinds(&events), ["plan-phase"]);
     assert_eq!(events[0]["data"], json!({"from": "grounding", "to": "plan"}));
-    assert_eq!(events[2]["data"]["forked_from"], lead_session.as_str());
-    assert_eq!(events[3]["session"], grounded.as_str());
-    let contexts = fx.ok(&["context", "list"]);
-    assert_eq!(contexts["contexts"][0]["lead_session"], grounded.as_str());
-    // Its `session run` waits until the Lead is idle and quiet, then forks it with no message.
-    let fork = fx.wait("the grounded Lead's fork", 30, || {
-        fx.pi_calls().into_iter().find(|c| flag(c, "--session-id") == Some(grounded.as_str()))
-    });
-    assert_eq!(flag(&fork, "--fork"), lead["file"].as_str(), "{fork:?}");
-    assert_eq!(fork.last().unwrap(), &format!("{CONTEXT} (grounded)"), "no first message: {fork:?}");
-    fx.wait("the grounded Lead idle", 30, || (fx.session(&grounded)["state"] == "idle").then_some(()));
     cursor = fx.cursor();
 
     // ---------- 4. two Jobs, `ui` needing `api`; the Plan review, approved
@@ -434,10 +423,8 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
         let session = fx.session(&worker);
         assert_eq!((&session["state"], &session["tmux_pane"], &session["place"]), (&json!("stopped"), &Value::Null, &json!("none")));
     }
-    for lead in [&lead_session, &grounded] {
-        let session = fx.session(lead);
-        assert_eq!((&session["state"], &session["place"]), (&json!("idle"), &json!("parked")), "{session}");
-    }
+    let session = fx.session(&lead_session);
+    assert_eq!((&session["state"], &session["place"]), (&json!("idle"), &json!("parked")), "{session}");
     kill(Pid::from_raw(engine), Signal::SIGTERM).unwrap();
     fx.wait_event(cursor, "watch-stopped", 30, |e| e["data"]["pid"] == engine);
     let events = fx.events_since(cursor);

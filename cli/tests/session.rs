@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 const LEAD1: &str = "lead1";
 const LEAD2: &str = "lead2";
-const GROUNDED: &str = "grounded";
+const MANAGER: &str = "manager1";
 const WORKER: &str = "worker1";
 
 fn home(env: &TestEnv) -> CpdHome {
@@ -47,7 +47,7 @@ fn sid(id: &str) -> SessionId {
     SessionId::parse(id).unwrap()
 }
 
-/// Context `ctx` with grounded Lead `grounded`; Plans `pay` (Lead `lead1`, idle;
+/// Context `ctx` with its Manager `manager1`; Plans `pay` (Lead `lead1`, idle;
 /// Job `api` with Attempt `api-a1`, Worker `worker1` and an open Escalation)
 /// and `other` (Lead `lead2`, stopped). Every Session's cwd is the env's root.
 fn setup(env: &TestEnv) {
@@ -59,12 +59,11 @@ fn setup(env: &TestEnv) {
             exec(
                 tx,
                 &format!(
-                    "INSERT INTO contexts (id, title, created_at, created_on, lead_session, grounded_seq)
-                       VALUES ('ctx', 'Ctx', 't', 'm1', 'grounded', 0);
+                    "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
                      INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
                        ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead one', '{cwd}', 'O3', 'idle', 't1', 't1'),
                        ('lead2', 'lead', 'ctx', 'other', NULL, 'Lead two', '{cwd}', 'O3', 'stopped', 't2', 't2'),
-                       ('grounded', 'lead', 'ctx', NULL, NULL, 'Grounded', '{cwd}', 'O3', 'stopped', 't0', 't0'),
+                       ('manager1', 'manager', 'ctx', NULL, NULL, 'Manager', '{cwd}', 'O5', 'stopped', 't0', 't0'),
                        ('worker1', 'worker', 'ctx', 'pay', 'api-a1', 'pay api a1', '{cwd}', 'S2', 'working', 't3', 't3');
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
                        ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't'),
@@ -248,16 +247,21 @@ fn list_filters_and_derives_place_and_leads() {
         *lead1,
         json!({"id": "lead1", "role": "lead", "context": "ctx", "plan": "pay", "attempt": null, "name": "Lead one",
                "state": "idle", "state_label": null, "state_at": "t1", "archived_at": null, "place": "none", "tmux_pane": null, "file": null,
-               "forked_from": null, "plan_lead": true, "grounded_lead": false, "tier": "O3",
+               "forked_from": null, "plan_lead": true, "tier": "O3",
                "cwd": env.root().display().to_string()})
     );
-    let grounded = sessions.iter().find(|s| s["id"] == GROUNDED).unwrap();
-    assert_eq!((&grounded["plan_lead"], &grounded["grounded_lead"]), (&json!(false), &json!(true)));
+    let manager = sessions.iter().find(|s| s["id"] == MANAGER).unwrap();
+    assert_eq!(
+        (&manager["role"], &manager["plan"], &manager["attempt"], &manager["plan_lead"], &manager["tier"]),
+        (&json!("manager"), &Value::Null, &Value::Null, &json!(false), &json!("O5"))
+    );
+    assert!(lead1.get("grounded_lead").is_none(), "the grounded Lead is retired");
 
     assert_eq!(ids(env.cpd(&["session", "list", "--plan", "pay"])), [LEAD1, WORKER]);
     assert_eq!(ids(env.cpd(&["session", "list", "--context", "ctx", "--role", "worker"])), [WORKER]);
     assert_eq!(ids(env.cpd(&["session", "list", "--state", "idle", "--state", "working"])), [LEAD1, WORKER]);
-    assert_eq!(ids(env.cpd(&["session", "list", "--role", "lead", "--state", "stopped"])), [GROUNDED, LEAD2]);
+    assert_eq!(ids(env.cpd(&["session", "list", "--role", "lead", "--state", "stopped"])), [LEAD2]);
+    assert_eq!(ids(env.cpd(&["session", "list", "--role", "manager"])), [MANAGER]);
     assert!(ids(env.cpd(&["session", "list", "--context", "elsewhere"])).is_empty());
     // Filters only: CPD_PLAN does not select anything.
     assert_eq!(cpd_with(&env, &[("CPD_PLAN", "pay")], &["session", "list"]).ok()["sessions"].as_array().unwrap().len(), 4);
@@ -332,8 +336,8 @@ fn state_follows_section_3_6() {
     assert_eq!(all[1]["data"], json!({"from": "working", "to": "blocked", "label": "cpd: Worker question"}));
     assert_eq!(show(&env, LEAD1)["state_label"], Value::Null);
 
-    // The grounded Lead has no Plan: its Event has none either.
-    cpd_with(&env, &[("CPD_SESSION", GROUNDED)], &["session", "state", "idle"]).ok();
+    // A Manager has no Plan: its Event has none either.
+    cpd_with(&env, &[("CPD_SESSION", MANAGER)], &["session", "state", "idle"]).ok();
     assert_eq!(events(&env, "session-state").last().unwrap()["plan"], Value::Null);
 
     refused(&state(&["blocked"]), "usage", 2);
@@ -375,7 +379,8 @@ fn fork_refusals_register_nothing() {
 
     let error = refused(&env.cpd(&["session", "fork", WORKER]), "not_a_lead", 3);
     assert_eq!(error["details"]["role"], "worker");
-    refused(&env.cpd(&["session", "fork", GROUNDED]), "plan_required", 2);
+    let error = refused(&env.cpd(&["session", "fork", MANAGER]), "not_a_lead", 3);
+    assert_eq!(error["details"]["role"], "manager");
     refused(&env.cpd(&["session", "fork", "nobody"]), "session_not_found", 4);
     refused(&env.cpd(&["session", "fork", LEAD1, "--plan", "nope"]), "plan_not_found", 4);
     refused(&env.cpd(&["session", "fork", LEAD1, "--message-file", "/nonexistent/m.md"]), "file_unreadable", 2);
@@ -396,16 +401,16 @@ fn fork_registers_a_stopped_lead_in_a_parked_window() {
     let message = env.root().join("message.md");
     fs::write(&message, "Look at the tests.").unwrap();
 
-    let out = env.cpd(&["session", "fork", GROUNDED, "--plan", "pay", "--message-file", message.to_str().unwrap()]).ok();
+    let out = env.cpd(&["session", "fork", LEAD2, "--plan", "pay", "--message-file", message.to_str().unwrap()]).ok();
     let new = out["session"]["id"].as_str().unwrap().to_owned();
     assert!(SessionId::parse(&new).is_ok() && new.len() == 36, "a UUID: {new}");
-    assert_eq!(out["session"]["name"], "Grounded (fork)");
-    assert_eq!((&out["session"]["plan"], &out["session"]["forked_from"]), (&json!("pay"), &json!(GROUNDED)));
+    assert_eq!(out["session"]["name"], "Lead two (fork)");
+    assert_eq!((&out["session"]["plan"], &out["session"]["forked_from"]), (&json!("pay"), &json!(LEAD2)));
 
     let row = show(&env, &new);
     assert_eq!(
         (&row["role"], &row["context"], &row["state"], &row["tier"], &row["forked_from"], &row["place"]),
-        (&json!("lead"), &json!("ctx"), &json!("stopped"), &json!("O3"), &json!(GROUNDED), &json!("parked"))
+        (&json!("lead"), &json!("ctx"), &json!("stopped"), &json!("O3"), &json!(LEAD2), &json!("parked"))
     );
     assert_eq!(row["cwd"], env.root().display().to_string());
     assert_eq!(row["tmux_pane"], out["session"]["pane"]);
@@ -420,7 +425,7 @@ fn fork_registers_a_stopped_lead_in_a_parked_window() {
     let registered = events(&env, "session-registered");
     let registered = registered.last().unwrap();
     assert_eq!((&registered["session"], &registered["plan"]), (&json!(new), &json!("pay")));
-    assert_eq!(registered["data"], json!({"role": "lead", "name": "Grounded (fork)", "forked_from": GROUNDED, "tier": "O3"}));
+    assert_eq!(registered["data"], json!({"role": "lead", "name": "Lead two (fork)", "forked_from": LEAD2, "tier": "O3"}));
     let moved = events(&env, "session-moved");
     assert_eq!(moved.len(), 1);
     assert_eq!(moved[0]["data"], json!({"pane": out["session"]["pane"], "window": out["session"]["window"], "place": "parked"}));
@@ -571,7 +576,6 @@ fn open_and_park_refusals() {
     fake_cpd(&env);
     cockpit(&env);
     refused(&env.cpd(&["session", "open", WORKER]), "not_a_lead", 3);
-    refused(&env.cpd(&["session", "open", GROUNDED]), "grounded_lead", 3);
     refused(&env.cpd(&["session", "open", "nobody"]), "session_not_found", 4);
     refused(&env.cpd(&["session", "park", WORKER]), "not_a_lead", 3);
     refused(&env.cpd(&["session", "park", "nobody"]), "session_not_found", 4);

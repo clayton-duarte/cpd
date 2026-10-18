@@ -252,7 +252,10 @@ pub fn close_lead(store: &mut Store, tmux: &Tmux, cockpit: &str, id: &SessionId,
     // The rows are read first, then the panes, so a Lead that reached the slot
     // meanwhile shows in at least one of them.
     let mut lead = store.read(|conn| row::load(conn, id))?;
-    require_lead(&lead)?;
+    // A Context's Manager is closed by the archive cascade as a Lead is (contract §2.2 "Archived").
+    if lead.role == Role::Worker {
+        return Err(not_a_lead(&lead.id, lead.role));
+    }
     let panes = tmux.list_panes()?;
     let in_slot = chat_slot(&panes, cockpit).is_some_and(|p| p.cpd_session.as_ref() == Some(&lead.id));
     if lead.place == "chat" || in_slot {

@@ -25,7 +25,7 @@ fn exec_sql(env: &TestEnv, sql: &str) {
 }
 
 /// Context `ctx`; Plans `pay` (Lead `lead1`, idle, with a side fork `fork1`) and
-/// `other` (Lead `lead2`, stopped); Worker `worker1` of `pay`; grounded Lead `grounded`.
+/// `other` (Lead `lead2`, stopped); Worker `worker1` of `pay`.
 fn setup(env: &TestEnv) {
     fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n").unwrap();
     let fp = "a".repeat(64);
@@ -34,11 +34,10 @@ fn setup(env: &TestEnv) {
         .write("fixture", |tx| {
             let txn = tx.id();
             tx.execute_batch(&format!(
-                "INSERT INTO contexts (id, title, created_at, created_on, lead_session, grounded_seq) VALUES ('ctx', 'Ctx', 't', 'm1', 'grounded', 0);
+                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
                  INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at, forked_from) VALUES
                    ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead one', '/', 'O3', 'idle', 't1', 't1', NULL),
                    ('lead2', 'lead', 'ctx', 'other', NULL, 'Lead two', '/', 'O3', 'stopped', 't2', 't2', NULL),
-                   ('grounded', 'lead', 'ctx', NULL, NULL, 'Grounded', '/', 'O3', 'stopped', 't0', 't0', NULL),
                    ('fork1', 'lead', 'ctx', 'pay', NULL, 'Side fork', '/', 'O3', 'stopped', 't4', 't4', 'lead1'),
                    ('worker1', 'worker', 'ctx', 'pay', 'api-a1', 'pay api a1', '/', 'S2', 'working', 't3', 't3', NULL);
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
@@ -156,14 +155,13 @@ fn each_call_is_one_more_message() {
 fn every_kind_of_lead_is_accepted_a_stopped_one_too() {
     let env = TestEnv::new();
     setup(&env);
-    for lead in ["lead1", "lead2", "grounded", "fork1"] {
+    for lead in ["lead1", "lead2", "fork1"] {
         let out = env.cpd(&["session", "send", lead, "hello"]).ok();
         assert_eq!(out["session"], lead);
     }
     let events = messages(&env);
-    assert_eq!(events.iter().map(|e| e["session"].clone()).collect::<Vec<_>>(), ["lead1", "lead2", "grounded", "fork1"]);
-    // A grounded Lead has no Plan; its Event still has the Context.
-    assert_eq!((&events[2]["plan"], &events[2]["context"]), (&Value::Null, &json!("ctx")));
+    assert_eq!(events.iter().map(|e| e["session"].clone()).collect::<Vec<_>>(), ["lead1", "lead2", "fork1"]);
+    assert_eq!((&events[2]["plan"], &events[2]["context"]), (&json!("pay"), &json!("ctx")));
 }
 
 #[test]

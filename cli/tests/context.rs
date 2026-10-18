@@ -348,8 +348,7 @@ fn list_summarises_every_context() {
     assert_eq!(contexts.len(), 2);
     assert_eq!(
         contexts[0],
-        json!({"id": CTX, "title": "Building cpd", "jira": null, "archived_at": null, "grounded": false, "lead_session": null,
-               "grounded_seq": null, "records": 4, "open_questions": 1,
+        json!({"id": CTX, "title": "Building cpd", "jira": null, "archived_at": null, "records": 4, "open_questions": 1,
                "plans": [{"id": "cpd2", "title": "The cpd2 plan", "phase": "grounding", "lead_session": "lead-cpd2", "archived_at": null}]})
     );
     assert_eq!(contexts[1]["id"], "home-lab");
@@ -373,7 +372,7 @@ fn show_renders_the_records() {
     env.cpd(&["context", "note", "A note.", "--context", CTX]).ok();
 
     let out = env.cpd(&["context", "show", "--context", CTX]).ok();
-    assert_eq!(out["context"], json!({"id": CTX, "title": "Building cpd", "jira": null, "grounded": false, "grounded_seq": null}));
+    assert_eq!(out["context"], json!({"id": CTX, "title": "Building cpd", "jira": null}));
     let records = out["records"].as_array().unwrap();
     assert_eq!(records.len(), 6);
     assert_eq!(records[0]["seq"], 1);
@@ -567,9 +566,9 @@ fn event_count(env: &TestEnv) -> i64 {
     count(env, "SELECT count(*) FROM events")
 }
 
-/// Context `building-cpd` with a grounded Lead, Plans `pay` and `ship` (each with a Lead),
+/// Context `building-cpd` with its Manager, Plans `pay` and `ship` (each with a Lead),
 /// a side fork of `pay`, and a Worker of `pay`'s Job `api`; another Context `other` with Plan
-/// `side`. Live parked panes: `lead-pay`, `fork-pay` and `grounded`.
+/// `side`. Live parked panes: `lead-pay`, `fork-pay` and `manager`.
 fn archivable(env: &TestEnv) {
     new_context(env);
     env.cpd(&["context", "new", "other", "--title", "Other"]).ok();
@@ -580,8 +579,7 @@ fn archivable(env: &TestEnv) {
         env,
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from)
            VALUES ('fork-pay', 'lead', 'building-cpd', 'pay', 'Fork', '/', 'O3', 'stopped', 't', 't1', 'lead-pay'),
-                  ('grounded', 'lead', 'building-cpd', NULL, 'Grounded', '/', 'O3', 'idle', 't', 't0', NULL);
-         UPDATE contexts SET lead_session = 'grounded', grounded_seq = 0 WHERE id = 'building-cpd';
+                  ('manager', 'manager', 'building-cpd', NULL, 'Manager', '/', 'O5', 'idle', 't', 't0', NULL);
          INSERT INTO jobs (plan, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
            VALUES ('pay', 'api', 'r', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, 1, 't');
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)
@@ -590,7 +588,7 @@ fn archivable(env: &TestEnv) {
            VALUES ('worker1', 'worker', 'building-cpd', 'pay', 'api-a1', 'Worker', '/', 'S2', 'idle', 't', 't2');",
     );
     cockpit(env);
-    for id in ["lead-pay", "fork-pay", "grounded"] {
+    for id in ["lead-pay", "fork-pay", "manager"] {
         pane(env, id);
     }
 }
@@ -603,7 +601,7 @@ fn ids(out: &Value, kind: &str) -> Vec<String> {
 }
 
 #[test]
-fn archive_covers_plans_leads_forks_and_the_grounded_lead_with_one_event_each() {
+fn archive_covers_plans_leads_forks_and_the_manager_with_one_event_each() {
     let env = hs_tmux();
     archivable(&env);
     let panes = live_panes(&env);
@@ -611,7 +609,7 @@ fn archive_covers_plans_leads_forks_and_the_grounded_lead_with_one_event_each() 
     assert_eq!(out["archived"][0], json!({"kind": "context", "id": CTX}));
     assert_eq!(ids(&out, "context"), [CTX]);
     assert_eq!(ids(&out, "plan"), ["pay", "ship"]);
-    assert_eq!(ids(&out, "session"), ["fork-pay", "grounded", "lead-pay", "lead-ship"]);
+    assert_eq!(ids(&out, "session"), ["fork-pay", "lead-pay", "lead-ship", "manager"]);
     assert_eq!(out["archived"].as_array().unwrap().len(), 7);
     assert_eq!(out["closed"].as_array().unwrap().len(), 3);
     // Every pane the cascade closed is gone; the cockpit's other panes are not ours to count.
@@ -678,11 +676,11 @@ fn archive_refused_by_any_one_blocker_changes_nothing() {
 fn archive_refuses_a_lead_in_the_chat_slot_before_closing_any_pane() {
     let env = hs_tmux();
     archivable(&env);
-    // The chat slot: the pane of window `main` running the grounded Lead's pane.
-    let grounded = env.tmux(&["list-panes", "-a", "-F", "#{pane_id}\t#{@cpd_session}"]);
-    let grounded = String::from_utf8(grounded.stdout).unwrap();
-    let grounded = grounded.lines().find_map(|l| l.strip_suffix("\tgrounded")).unwrap().to_owned();
-    assert!(env.tmux(&["rename-window", "-t", &grounded, "main"]).status.success());
+    // The chat slot: the pane of window `main` running the Manager's pane.
+    let manager = env.tmux(&["list-panes", "-a", "-F", "#{pane_id}\t#{@cpd_session}"]);
+    let manager = String::from_utf8(manager.stdout).unwrap();
+    let manager = manager.lines().find_map(|l| l.strip_suffix("\tmanager")).unwrap().to_owned();
+    assert!(env.tmux(&["rename-window", "-t", &manager, "main"]).status.success());
     let (events_before, panes_before) = (event_count(&env), live_panes(&env));
     let error = refused(env.cpd(&["context", "archive", CTX]), 3, "in_chat_slot");
     assert_eq!(error["details"]["next"], "cpd session park");
@@ -699,7 +697,7 @@ fn unarchive_clears_the_cascade_with_one_event_each_and_touches_no_pane() {
     let out = env.cpd(&["context", "unarchive", CTX]).ok();
     assert_eq!(out["archived"][0], json!({"kind": "context", "id": CTX}));
     assert_eq!(ids(&out, "plan"), ["pay", "ship"]);
-    assert_eq!(ids(&out, "session"), ["fork-pay", "grounded", "lead-pay", "lead-ship"]);
+    assert_eq!(ids(&out, "session"), ["fork-pay", "lead-pay", "lead-ship", "manager"]);
     assert_eq!(out["closed"], json!([]));
     assert_eq!(archived_ats(&env), 0);
     assert_eq!(event_count(&env), events_before + 7);
