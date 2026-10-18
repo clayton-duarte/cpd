@@ -93,7 +93,7 @@ fn seats(conn: &Connection, event: &str, filter: &str) -> Result<Vec<Seat>, CpdE
     let mut stmt = conn.prepare(&format!(
         "SELECT s.id, s.context, s.plan, p.phase,
                 EXISTS (SELECT 1 FROM plans q WHERE q.lead_session = s.id),
-                EXISTS (SELECT 1 FROM contexts c WHERE c.lead_session = s.id),
+                s.role = 'manager',
                 {event}
            FROM sessions s LEFT JOIN plans p ON p.id = s.plan
           WHERE s.role <> 'worker' AND s.archived_at IS NULL AND {filter}
@@ -337,8 +337,7 @@ mod tests {
         f.sql(&format!(
             "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');
              INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
-               VALUES ('mgr', 'lead', 'ctx', 'Manager', '/', 'O3', 'working', '{T}', '{T}');
-             UPDATE contexts SET lead_session = 'mgr', grounded_seq = 0 WHERE id = 'ctx';
+               VALUES ('mgr', 'manager', 'ctx', 'Manager', '/', 'O3', 'working', '{T}', '{T}');
              INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
                VALUES ('l-pay', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'working', '{T}', '{T}');
              INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
