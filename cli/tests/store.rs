@@ -1104,6 +1104,28 @@ fn version_on_a_store_that_does_not_open_reports_the_refusal_and_store_schema_ab
     assert_eq!(fs::read(home(&env).db()).unwrap(), before);
 }
 
+#[test]
+fn version_on_a_legacy_home_reports_the_conversion_up_to_0011_and_refuses_a_later_number() {
+    let named: Vec<String> = cpd_core::store::testing::named_migrations().into_iter().map(|(n, ..)| n.to_owned()).collect();
+    for (version, legacy_pending) in [(7, &["0008-phase-deploy", "0009-session-message", "0010-manager", "0011-pr-mergeable"][..]), (11, &[][..])] {
+        let env = TestEnv::new();
+        // `--version` reads only `user_version` of a legacy store: it never converts.
+        raw(&env).pragma_update(None, "user_version", version).unwrap();
+        let before = fs::read(home(&env).db()).unwrap();
+        let out = env.cpd(&["--version"]).ok();
+        let pending: Vec<String> = legacy_pending.iter().map(|n| n.to_string()).chain(named.iter().cloned()).collect();
+        assert_eq!(out["store"], json!({"opens": true, "refusal": null, "unknown": [], "pending": pending}), "version {version}: {out}");
+        assert_eq!((&out["schema"], &out["store_schema"]), (&json!(1000), &json!(1000)), "version {version}: {out}");
+        assert_eq!(fs::read(home(&env).db()).unwrap(), before, "version {version}");
+    }
+    // 12 is no legacy version: a numbered migration this binary lacks.
+    let env = TestEnv::new();
+    raw(&env).pragma_update(None, "user_version", 12).unwrap();
+    let out = env.cpd(&["--version"]).ok();
+    assert_eq!(out["store"]["refusal"]["code"], "store_too_new", "{out}");
+    assert_eq!(out["store_schema"], 1001, "{out}");
+}
+
 /// A migration this binary lacks, recorded as a newer cpd would (`cpd_txn()` is stood in by the
 /// newest `txns` id).
 fn apply_newer(env: &TestEnv, name: &str, compat: &str) {
