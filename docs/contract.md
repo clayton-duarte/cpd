@@ -62,7 +62,7 @@ Exit codes (kept from cpd 1 §2):
 |---|---|
 | `1` | `gate_error`, `context_store_invalid`, `watch_start_failed`, `spawn_failed`, `session_malformed`, `driver_lock_missing`, `doctor_failed`, `pi_not_found`, `catalog_failed`, `cleanup_failed` (only as an `error` Event's code, source `pr poll`, never a command's failure; §7.2) |
 | `2` | `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `spec_invalid`, `tier_invalid`, `nothing_to_edit`, `file_unreadable`, `invalid_name`, `pr_required`, `invalid_pr_id` (R34) |
-| `3` | `pr_exists`, `pr_in_use`, `pr_empty`, `pr_locked`, `pr_not_ready`, `pr_ended`, `needs_other_pr`, `branch_exists` (R34, §3.8), `context_exists`, `question_answered`, `not_a_git_repo`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `review_commits`, `review_missing`, `job_merged`, `job_not_failed`, `job_not_ready`, `attempt_not_running`, `no_port`, `jobs_not_done`, `gate_failed`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `in_chat_slot`, `cursor_ahead`, `not_a_terminal` |
+| `3` | `session_ambiguous` (a positional Session id matching more than one Session, commands.md §10), `pr_exists`, `pr_in_use`, `pr_empty`, `pr_locked`, `pr_not_ready`, `pr_ended`, `needs_other_pr`, `branch_exists` (R34, §3.8), `context_exists`, `question_answered`, `not_a_git_repo`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `review_commits`, `review_missing`, `job_merged`, `job_not_failed`, `job_not_ready`, `attempt_not_running`, `no_port`, `jobs_not_done`, `gate_failed`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `in_chat_slot`, `cursor_ahead`, `not_a_terminal` |
 | `4` | `base_not_found`, `pr_not_found` (R34) |
 
 ### 1.3 Conventions every command follows
@@ -97,6 +97,7 @@ $CPD_HOME/
     <plan>/lead-message.md        the Lead's first message, written by `plan new`
     <plan>/plannotator-port       the Plan's plannotator port, one line, assigned by `session run` (§6.5)
     <plan>/plan-<review>.md       the Plan review's content, written by `plan review`, opened in plannotator by the pi adapter
+    <plan>/feedback-<review>.md   plannotator's feedback on a Plan review, written by the pi adapter and overwritten on a retry; passed to `plan decide --feedback-file`
     <plan>/messages/<session>.md  a forked Session's first message, copied by `session fork --message-file`
     <plan>/specs/<attempt>.md     rendered Worker Spec
     <plan>/reviews/<k>.md         a review Job's findings, written by its Worker (B2, §3.4); the directory R19 removed, reused for this
@@ -193,13 +194,13 @@ The part of a Plan in one repo (R34, A4): one repo, one base, one Lead Branch an
 | `plan`, `key` | text | the PR key (§2.1), unique in its Plan |
 | `repo` | text | realpath of the repo's main worktree |
 | `base` | text | the branch the pull request targets; default the repo's `origin` HEAD branch, else `main`; `pr add --base` overrides (cpd 1 §11 `workflow init`) |
-| `needs` | [text] | keys of other PRs of the same Plan that must be `merged` before this one starts (A7, A9); acyclic; none may be `cancelled` when the need is recorded |
+| `needs` | [text] | keys of other PRs of the same Plan that must be `merged` before this one starts (A7, A9); acyclic; none may be `cancelled` when the need is recorded. `pr add` defaults them, in phase `pr` or `done`, to every `merged` PR of the Plan, unless `--needs` or `--no-needs` is given |
 | `status` | text | `waiting`, `dispatch`, `open`, `merged`, `cancelled` (§3.8) |
 | `lead_branch` | text | `cpd/<plan>/<key>` (§2.1); set by `pr add` |
 | `lead_worktree` | text? | `<repo-parent>/<repo-name>.<plan>.<key>`; set when the PR starts (§3.8, §7.2), null while `waiting` or `cancelled` |
 | `pr` | json? | `{number, url, opened_at}`, set by `pr open`; `opened_at` is when the PR became `open` |
 | `pull_request` | integer? | the id of its Pull request row (below; hs-d96, migration 6, §4.5): set by `pr open`, non-null exactly when the status is `open` or `merged`. What the poll last read from the pull request (title, review decision, checks, state) is in that row, not here |
-| `all_merged_at` | time? | when this PR's `all-merged` was appended (once per PR) |
+| `all_merged_at` | time? | when this PR's `all-merged` was last appended; `job add` (also `--review`) clears it, so E4 sends `all-merged` again when the PR's Jobs are all `merged` or `cancelled` |
 | `start_failed_at` | time? | set when the engine failed to start the PR (A9); while set, the engine does not try again and `pr start` retries; cleared when the PR starts |
 | `created_at`, `started_at`, `merged_at` | time, time?, time? | `started_at` when it became `dispatch`, `merged_at` when `pr poll` saw it merged |
 
@@ -554,7 +555,7 @@ stateDiagram-v2
 | A6 | Removed by R19 (no Job-level Reviewer). |
 | A7 | Removed by R19 (no Job-level Reviewer). |
 | A8 | Merge (§7.4); a review Job's Attempt has no commits to merge (below) |
-| A9 | End: record `metrics` (parsed from the Worker's session file, cpd 1 §14) in the transaction that ends the Attempt; kill the Attempt's tmux window (`kill-window` is tried 3 times, 1 s apart, before the `error` Event); remove the driver lock file `locks/attempt-<plan>--<attempt>.lock`; on `merged`, remove the worktree and branch; otherwise keep them for debugging until their PR is merged, when the PR's clean-up removes them (§7.2) |
+| A9 | End: record `metrics` (parsed from the Worker's session file, cpd 1 §14) in the transaction that ends the Attempt; kill the Attempt's tmux window (`kill-window` is tried 3 times, 1 s apart, before the `error` Event); remove the driver lock file `locks/attempt-<plan>--<attempt>.lock` (a missing file is fine; the merge recovery R does the same after it commits an Attempt's end, G13); on `merged`, remove the worktree and branch; otherwise keep them for debugging until their PR is merged, when the PR's clean-up removes them (§7.2) |
 
 **The driver lock** `locks/attempt-<plan>--<attempt>.lock` is held without a gap from before the Attempt row exists until its driver exits, so a free lock always means a dead driver, and E2 never ends a healthy Attempt whose driver has not started running yet. Chosen fix: the starter takes the lock and hands it to the driver at the spawn. Rejected alternative: an E2 grace period for young `starting` Attempts, which rests on a timing guess and needs a new key.
 
@@ -612,7 +613,7 @@ One per machine (D5). Every `tick_seconds`:
 | E1 | **Escalations:** expire `open` Escalations whose `asker_pid` is dead |
 | E2 | **Liveness:** for every Attempt not `ended` whose driver lock is free (the driver died; §3.4): in `merging`, run the merge recovery R (§7.4), which ends it `merged` when its commits are already on the Lead Branch, and otherwise `cancelled` if a cancel was requested, else `crashed`; in any other status, end it `cancelled` if a cancel was requested, else `crashed`. For every Attempt with a live driver: active time over `attempt_minutes` → set `stop_request = timed_out`; Job `cancel_requested_at` set → set `stop_request = cancelled`. For every Session not `stopped` or with a pane: pane dead or missing (`tmux list-panes -a`) → `stopped` with no pane, and a Lead's dead pane's window is killed, or the chat slot's pane is replaced by the placeholder (§3.6) |
 | E3 | **Scheduling:** for each Ready Job, by `jobs.seq` across all Plans, while a slot is free: verify the fingerprint, take the driver lock, create the Attempt, start its driver with the lock inherited (§3.4) |
-| E4 | **Completion**, per PR (R34): for each PR in status `dispatch` with no Job `queued` or `running`, at least one `merged`, and `all_merged_at` null: append `all-merged` (`data.pr` = its key) and set the PR's `all_merged_at`. The Lead answers with `pr open --pr <key>` |
+| E4 | **Completion**, per PR (R34): for each PR in status `dispatch` with no Job `queued` or `running`, at least one `merged`, and `all_merged_at` null: append `all-merged` (`data.pr` = its key) and set the PR's `all_merged_at`. `job add` to a PR whose `all_merged_at` is set clears it in its own transaction, so `all-merged` may come again for a PR (hs-n60). The Lead answers with `pr open --pr <key>` |
 | E5 | **PR poll** (hs-d96, hs-d97): run `cpd pr poll` (no `--plan`) as a subprocess (a process boundary, cpd 1 §11 step 5), `pr_poll_seconds` after the **end** of the previous poll (never overlapping, never more often than one per tick), whether or not any Plan is in `pr`. One poll covers every open pull request of the User (§7.6). When the output's `rate_limit.remaining` is below 100, E5 skips polls until `rate_limit.reset_at` and reports one `error` Event with code `gh_rate_limited` (`details`: `remaining`, `reset_at`); the error clears when polling resumes |
 | E6 | **Contexts:** every `context_sync_seconds`, `context sync` each Context that has a remote (§4.6) |
 | E7 | **PR start** (R34, A9): for each Plan in `dispatch`, each PR in status `waiting` whose needs are all `merged` and whose `start_failed_at` is null: start it (§3.8, §7.2). E7 runs after E5 in the same tick, so a PR starts in the tick in which E5's poll sees its last prerequisite merged; it also starts a PR appended in `dispatch` with no needs. A failed start sets `start_failed_at` and appends one `error` Event with code `pr_start_failed` for the Plan's Lead; E7 does not try that PR again, the Lead retries with `cpd pr start <key>` |
@@ -1377,7 +1378,7 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 - **Order:** strictly increasing `id`, which is commit order (§4.2). Each line is one Event as JSON (the fields of §5.2, `data` as an object).
 - **Mechanism: polling, no notification channel.** Every `events_poll_ms` the follower reads `PRAGMA data_version`; when it has changed since the last read, it runs `SELECT … FROM events WHERE id > :cursor AND <filter> ORDER BY id LIMIT 500` in a fresh read transaction, prints each row, flushes, and advances the cursor. It repeats the query at once while it returns a full batch. `data_version` costs no I/O when nothing has changed, so an idle follower is cheap (docs: SQLite `PRAGMA data_version`).
 - **Back-pressure:** writes to stdout are blocking. A slow reader slows the follower, which reads the next batch only after the previous one is written; nothing is buffered beyond one batch and nothing is dropped, because the database is the buffer. A reader that falls behind or restarts resumes with `--since <last id it processed>`.
-- **End:** it runs until killed or until stdout closes (EPIPE), and then exits 0. With `--until-idle` it exits 0 once it has printed everything committed when it started (for scripts and tests).
+- **End:** it runs until killed or until stdout closes (EPIPE), and then exits 0. Any store error ends it with a non-zero exit (the failure value is the last line, §1.2). When its executable is replaced by an install it re-execs itself through `host::exe`, as `session run` does (hs-d55), with its arguments and `--since <id of the last line it printed>`. With `--until-idle` it exits 0 once it has printed everything committed when it started (for scripts and tests).
 - `cpd events list` takes the same selection and prints one JSON value `{ok, events: [...], next: <id>}`, at most `--limit` (default 500) Events.
 
 ## 6. The tmux host
@@ -1516,6 +1517,8 @@ One `cpd watch` per machine, in `cpd-work:watch`. It is not tied to any Lead's p
 
 The fork never copies a half-done turn, and the source is never interrupted.
 
+**A failed start leaves no window** (teardown G11). When anything after `new-window` fails (`set_pane_session`, the row or the `session-moved` write) while starting a Plan's Lead (`plan new`), forking (`session fork`) or opening (`session open`), the new window is killed (`kill-window`) before the error is returned.
+
 **Reload on install** (hs-d33, hs-d38, hs-d49). `session run` records the identity of its own executable as the driver does (§3.4 "Reload on install"). While pi runs it stats the path at each safe point, which is the Lead's next idle: Session state `idle`, the last turn finished (the last `message` entry is an assistant message with `stopReason` `stop`) and the session file quiet `fork_quiet_seconds`, the rule of step 1. It also records the identity (device, inode, mtime) of pi's install when it starts pi: `<pi agent dir>/install/current-version` when that file exists (agent dir: `PI_CODING_AGENT_DIR`, else `~/.pi/agent`), else the resolved path of the `pi` executable. A different identity at a safe point is handled exactly like a new cpd install (same safe points, same `SIGTERM` and `exec`), so the Lead's pi restarts on its session file on the new pi. After an install or a pi change, a Lead that reaches it:
 
 - **parked:** reloads at once;
@@ -1637,7 +1640,7 @@ All of it runs under the **per-repo lock** `locks/repo-<sha1>.lock` (sha1 of the
 **R: recovering an interrupted merge.** The ref moves at step 8, but the Ledger records the merge only at step 10. A driver that dies in between leaves an Attempt in `merging` whose commits are already on the Lead Branch; ending it `crashed` would make the ladder re-run a Merged Job. So an Attempt in `merging` whose driver lock is free is ended only by R, which runs under the per-repo lock:
 
 - **R1.** `tip = git -C <repo> rev-parse refs/heads/cpd/<plan>--<attempt>`, then `git -C <repo> merge-base --is-ancestor <tip> refs/heads/<lead branch>`.
-- **R2. Exit 0: the merge happened.** If the Lead worktree is stale (below), finish step 9. Then run the step-10 transaction with `merged_sha = tip` and A9's `metrics` (`job-merged`, with `cancel_too_late: true` if the Job has a cancel request), then the rest of A9. R also pushes, as step 8's push does (`git -C <lead worktree> push origin <lead branch>`), after it records the merge; a failure is `push_failed` and does not undo it.
+- **R2. Exit 0: the merge happened.** If the Lead worktree is stale (below), finish step 9. Then run the step-10 transaction with `merged_sha = tip` and A9's `metrics` (`job-merged`, with `cancel_too_late: true` if the Job has a cancel request), then the rest of A9. After R commits an Attempt's end (R2 or R3) it removes `locks/attempt-<plan>--<attempt>.lock` as A9 does (G13; a missing file is fine). R also pushes, as step 8's push does (`git -C <lead worktree> push origin <lead branch>`), after it records the merge; a failure is `push_failed` and does not undo it.
 - **R3. Exit 1: no merge.** End the Attempt `cancelled` / `cancel_requested` if the Job has a cancel request, else `failed` / `crashed` (a ladder cause, §3.4).
 - **R4. Any other result** (git failed) proves nothing either way: R changes nothing and appends `error` with code `merge_check_failed` the first time it fails for that Attempt; it is run again at the next occasion below.
 
