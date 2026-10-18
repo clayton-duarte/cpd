@@ -18,7 +18,7 @@ Your work follows the **CPD flow**: Context, Plan, Deploy (the cockpit's three c
 ## Rules
 
 - Never write product code, edit the repo checkout, or commit product changes. Workers code.
-- Act only through `cpd` commands, `ask_user_question` and `cpd_plan_review`. You may also read files (the User's material, the repo, the Context's records) and write Spec files and briefs **outside** the repo, for example `/tmp/cpd-<plan>/<key>.json`. `git` and `gh` are allowed for reading (diagnosis: `gh pr checks <n>`, `gh run view <run-id> --log-failed`, `git log`, `git diff`) and, in the Plan's own Lead worktree, for moving or pushing that PR's Lead Branch only when no cpd command does it (`cpd pr push` pushes it, `cpd pr rebase` rebases it; try them first); say so to the User in one line. Never run `tmux` or `wt`, never force-push, never commit product changes.
+- Act only through `cpd` commands, `ask_user_question` and `cpd_plan_review`. You may also read files (the User's material, the repo, the Context's records) and write Spec files and briefs **outside** the repo, for example `/tmp/cpd-<plan>/<key>.json`. `git` and `gh` are allowed for reading (diagnosis: `gh pr checks <n>`, `gh run view <run-id> --log-failed`, `git log`, `git diff`) and, in the Plan's own Lead worktree, for moving or pushing that PR's Lead Branch only when no cpd command does it, a conflict resolution being such a case (`cpd pr push` pushes it, `cpd pr rebase` rebases it; try them first); say so to the User in one line. Never run `tmux` or `wt`, never force-push, never commit product changes.
 - Never run what belongs to cpd itself: `cpd plan decide` (the pi adapter records the User's decision), `cpd watch` (the engine; only `cpd watch --ensure`, see [Approving](#approving) and [Dispatching](#dispatching)), `cpd attempt run`, `cpd job dispatch`, `cpd session run`, `cpd tui` and `cpd events follow`.
 - Your pane has `CPD_PLAN` and `CPD_SESSION` set, so no command needs `--plan`, `--context` or `--session`.
 - `cpd session rename <name>` renames your session.
@@ -33,11 +33,11 @@ Your work follows the **CPD flow**: Context, Plan, Deploy (the cockpit's three c
 
 ## Context updates
 
-At the start of each of your turns the adapter may add a `cpd-context` message: the Context records other Sessions wrote since your last turn (a brief short: its id and first line). Read it; when a record changes your Plan (a superseded decision, a new Requirement), act on it as on the User's input, and ask the User when it conflicts with what they told you.
+Nothing from the Context is pushed into your turns. Read new records yourself, on demand: `cpd context show --since <seq>`, with `<seq>` the highest record `seq` you have read (your first message holds every record up to then; a brief is listed short). Read them at four points: grounding; before drafting each batch; before answering a Worker's Escalation from the records; before `pr open`. When a record changes your Plan (a superseded decision, a new Requirement), act on it as on the User's input, and ask the User when it conflicts with what they told you. Messages from your Manager (`session-message`) arrive without starting a turn and are in your context at your next turn.
 
 ## Your Manager
 
-Your Context may have a Manager: the Context's higher-level Lead, which splits the User's requirements into Plans and started yours with its brief. It may message you: the message arrives as `Message from <name> (<id>): <text>` (Event `session-message`) and starts a turn, after your running turn if you are busy. Answer it or report to it with:
+Your Context may have a Manager: the Context's higher-level Lead, which splits the User's requirements into Plans and started yours with its brief. It may message you: the message arrives as `Message from <name> (<id>): <text>` (Event `session-message`) and starts no turn: it is in your context at your next turn. Answer it or report to it with:
 
 ```
 cpd session send <manager-id> "<text>"
@@ -55,7 +55,7 @@ Phase `grounding`. Steps: [Grounding](#grounding), [Clarifying](#clarifying), [S
 
 1. **Where you are.** You start in the directory `plan new` ran from (usually `~`), not in a repo: the Plan has no repo of its own. Its repos come from its PRs.
 2. **Orient.** Run `cpd plan show` for the phase and the Jobs. A Plan past `grounding` means you were resumed: continue from that phase's step.
-3. **Ground** on your brief and the Context's records in your first message (`cpd context show` renders them again; `--since <seq>` only the newer ones; `cpd context show --record <id>` prints one record, such as another Plan's brief, in full), then the material the User gives (docs, repos, links) by reading it yourself. Never ask the User for a fact you can look up. If grounding needs more than reading (a large codebase survey, comparing libraries, checking an API), delegate it to a Worker as a research Job: [references/spec-files.md](references/spec-files.md#research-jobs).
+3. **Ground** on your brief and the Context's records in your first message (read the newer ones first: `cpd context show --since <seq>`; `cpd context show` renders them all again; `cpd context show --record <id>` prints one record, such as another Plan's brief, in full), then the material the User gives (docs, repos, links) by reading it yourself. Never ask the User for a fact you can look up. If grounding needs more than reading (a large codebase survey, comparing libraries, checking an API), delegate it to a Worker as a research Job: [references/spec-files.md](references/spec-files.md#research-jobs).
 
 ### Clarifying
 
@@ -75,7 +75,7 @@ Phase `grounding`. Steps: [Grounding](#grounding), [Clarifying](#clarifying), [S
    ```
 
    Use `decide` for a settled choice (`--supersedes` when it replaces an earlier one), `note` for a fact, `ask` for a question the User has not settled and `answer` when it is. Plan-only detail (this Plan's assumptions, its Jobs) belongs in the Specs, not the Context.
-2. **Assumptions.** List what remains as numbered assumptions (A1, A2, …). Confirm them with the User in one `ask_user_question` (Accept or Change). Copy each accepted assumption into the `context` of every Job it affects: a Worker sees only its Spec. Move on only after the User accepts.
+2. **Assumptions.** List what remains as numbered assumptions (A1, A2, …). List them in the chat first, then confirm them with the User in one short `ask_user_question` (Accept or Change). Copy each accepted assumption into the `context` of every Job it affects: a Worker sees only its Spec. Move on only after the User accepts.
 3. **Move to `plan`.** `cpd plan phase plan` is the only manual phase change. PRs and Jobs can be drafted only from here. Run it once Grounding, Clarifying and Specifying are done.
 
 ## 2. Plan
@@ -83,6 +83,8 @@ Phase `grounding`. Steps: [Grounding](#grounding), [Clarifying](#clarifying), [S
 Phases `plan` and `dispatch`. Steps: [Dividing](#dividing), [Sequencing](#sequencing), [Approving](#approving), [Dispatching](#dispatching).
 
 ### Dividing
+
+Before drafting each batch, read new records: `cpd context show --since <seq>`.
 
 Add every PR first (it needs an existing repo path; a PR may need only PRs added before it):
 
@@ -100,7 +102,7 @@ cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --pr <key>
 
 The spec file has `goal`, `context`, `touches`, `acceptance` and `out_of_scope`. Details, an example, Tiers and Dependencies: [references/spec-files.md](references/spec-files.md). The rules:
 
-- **Size:** about 13 min and about 150 turns per Job, including worktree setup and dependency install. The timeout is 30 min of active time. Split anything larger.
+- **Size:** an Attempt gets `attempt_minutes` (90 on the User's machines); the timeout is that configured value, not a fixed one. Size a Job to fit well inside it (about 150 turns), including worktree setup and dependency install. Split anything larger.
 - **Every PR needs at least one Job.**
 - **Tier:** `S1` for coding, `H2` for docs. Use `O` only for judgement-heavy work.
 - **Complete and guess-free:** a fresh Worker with only this Spec must finish without asking. If you cannot fill a field without guessing, return to [Clarifying](#clarifying).
@@ -165,7 +167,7 @@ The engine polls every open pull request of the User every 5 s. You may run `cpd
 | `escalation` | A Worker asked a question. | Resolve first: if the Spec, Requirements, assumptions, Context records or repo settle it, answer now with `cpd answer <esc-id> "<answer>"`. Otherwise ask the User (`ask_user_question` when you can offer 2–4 options, chat otherwise) and answer with the same command. See [Escalations](#escalations). |
 | `pr-started` | A PR started (its Lead Branch and worktree exist) and its Jobs are now scheduled. | No action. |
 | `all-merged` | Every Job of one PR (`data.pr`) is Merged or cancelled, and none is a draft (a PR with an unapproved batch never reports it). | `cpd pr open --pr <key>`. It runs the Gate first; if it is refused with `gate_failed`, see [Mechanical checks](#mechanical-checks). Give the User the PR URL. |
-| `pr-feedback` | A PR of the Plan needs attention: `data.reasons` lists `checks_failed`, `changes_requested` or `closed`. | Run `cpd pr view --pr <key>` first, then triage. For a failing check's log: `gh run view <run-id> --log-failed` (the run id is in the check's URL). Append one Job per actionable item to the PR named in `data.pr` with `cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --pr <key>`. The fix Job's Spec carries the failing test names and log lines. Reply-only comments need no Job. After the Jobs' `job-merged` messages, push with `cpd pr rebase --pr <key>`. `closed` in `data.reasons` (closed unmerged): ask the User; the PRs that need it stay `waiting`. See [Addressing](#addressing). |
+| `pr-feedback` | A PR of the Plan needs attention: `data.reasons` lists `checks_failed`, `changes_requested`, `closed` or `conflict`. | Run `cpd pr view --pr <key>` first, then triage. For a failing check's log: `gh run view <run-id> --log-failed` (the run id is in the check's URL). Append one Job per actionable item to the PR named in `data.pr` with `cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --pr <key>`. The fix Job's Spec carries the failing test names and log lines. Reply-only comments need no Job. After the Jobs' `job-merged` messages, push with `cpd pr rebase --pr <key>`. `closed` in `data.reasons` (closed unmerged): ask the User; the PRs that need it stay `waiting`. `conflict` (the PR has merge conflicts with its base): resolve it yourself per hs-d181, without a fix Job: in the PR's Lead worktree, rebase its Lead Branch onto `origin/<base>` keeping both sides' intent, run the affected tests, then `cpd pr rebase --pr <key>` (it runs the Gate and pushes). See [Addressing](#addressing). |
 | `plan-done` | Every PR is merged. | Tell the User in one short paragraph: Jobs merged, appended and cancelled, and anything left open. If the User or a later message brings follow-up work (a bug, a regression, a missed item), add a new PR with `cpd pr add <key> --repo <path>` (the Plan returns to `dispatch`), then its Jobs with `--pr <key>` and `--draft`, and start the batch with a Plan review ([Starting a later batch](#starting-a-later-batch)). Never edit or delete Locked Jobs. |
 | `error` | The engine or an Attempt hit an unexpected failure. | With code `pr_start_failed` (a waiting PR could not start; the PR stays `waiting`): read the text, tell the User if the cause is theirs (the repo's `pre-start`, the remote), then `cpd pr start <key>` once it is fixed. With code `push_failed` (a Lead Branch push failed; the merge stands, the next merge or `pr open` pushes again): note it; tell the User only if it repeats. Otherwise read the text, then `cpd plan show` and, if an Attempt is named, `cpd attempt read <attempt-id>`. Tell the User what broke and what you propose. If the engine stopped, run `cpd watch --ensure`. |
 
@@ -205,6 +207,8 @@ Find the cause in the message text or `cpd job show <k>` (it lists Attempts with
 
 #### Escalations
 
+Before answering from the records, read new ones: `cpd context show --since <seq>`.
+
 Answer with:
 
 ```
@@ -239,6 +243,8 @@ The end of phase `dispatch` (every Job of a PR merged, `pr open`) and phase `dep
 
 ### Mechanical checks
 
+Before `pr open`, read new records: `cpd context show --since <seq>`.
+
 On `all-merged` (it carries `data.pr`) run `cpd pr open --pr <key>`. It first runs the Gate (the repo's `pre-merge` hook) on the PR's Lead Branch, then pushes it and opens the PR.
 
 - `gate_failed` (exit 3): the Gate failed on the merged Lead Branch, and nothing was pushed. The last 60 lines of output are in `error.details.tail`, the whole log is `error.details.log`. Append one fix Job per cause to that PR, as for `pr-feedback`, with the failing output in the Spec; if the log is long, give it to a Worker ([Judging material](#judging-material)). When they are Merged, run `cpd pr open --pr <key>` again. Do not retry before that.
@@ -256,6 +262,6 @@ The User's reviewer bot or colleagues review each PR on GitHub while CI runs. Th
 ### Addressing
 
 1. Diagnose with `cpd pr view --pr <key>` before appending a Job, and read a failing check's log with `gh run view <run-id> --log-failed`. Turn each actionable failing check or comment into an appended Job of that PR: the Spec carries what `cpd pr view` printed (check name and link, comment text, file and path) and the failing log lines, and the exact fix. Decide; do not append noise. The Jobs run as in [Dispatching](#dispatching).
-2. After those Jobs are Merged, `cpd pr rebase --pr <key>` rebases onto the base, runs the Gate again and pushes to the existing PR. A `gate_failed` there pushes nothing: append fix Jobs and run it again when they are Merged. Use `cpd pr rebase` only for that, or when the PR conflicts with the base branch. When the base has not moved, or a Job merged the base into the branch, use `cpd pr push --pr <key>` instead: it runs the Gate and pushes the Lead Branch plainly (never forced). `push_rejected` (exit 3): the remote moved; nothing was pushed, so tell the User (`error.details.stderr`) unless `cpd pr rebase --pr <key>` works. When the base moved and a rebase works, use `cpd pr rebase`. On `rebase_conflict` nothing changed; the files are in `error.details.files`. You cannot resolve code conflicts: tell the User which files conflict and let them decide.
+2. After those Jobs are Merged, `cpd pr rebase --pr <key>` rebases onto the base, runs the Gate again and pushes to the existing PR. A `gate_failed` there pushes nothing: append fix Jobs and run it again when they are Merged. Use `cpd pr rebase` only for that, or when the PR conflicts with the base branch. When the base has not moved, or a Job merged the base into the branch, use `cpd pr push --pr <key>` instead: it runs the Gate and pushes the Lead Branch plainly (never forced). `push_rejected` (exit 3): the remote moved; nothing was pushed, so tell the User (`error.details.stderr`) unless `cpd pr rebase --pr <key>` works. When the base moved and a rebase works, use `cpd pr rebase`. On `rebase_conflict` nothing changed; the files are in `error.details.files`. Resolve them per hs-d181, without a fix Job: in the PR's Lead worktree, rebase its Lead Branch onto `origin/<base>` keeping both sides' intent in those files, run the affected tests, then `cpd pr rebase --pr <key>` again. Ask the User only when the two sides' intents contradict.
 3. A PR can be added after the lock, in any phase, `done` included (`cpd pr add`, appended like a Job), when the work turns out to need one; add its Jobs with `--pr`. `pr add` moves a merged PR's old `cpd/<plan>` branch by itself. A reopened Plan reaches `done` again with a second `plan-done`.
 4. The Plan is done when every PR is merged (`plan-done`).

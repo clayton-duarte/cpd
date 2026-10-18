@@ -76,8 +76,9 @@ Attribute each record to its source (the User, a Lead, a document) and date it w
 ```
 cpd session send <lead-session> "<text>"
 cpd session send <lead-session> --file <file>
+cpd session send <lead-session> "<text>" --wake
 ```
 
-Find a Plan's Lead with `cpd plan show --plan <p>` (`plan.lead_session`) or `cpd session list --plan <p> --role lead`. The message starts a turn when the Lead is idle; a working or blocked Lead gets it after its running turn, never interrupted; a stopped Lead gets it when it starts again. Use it to pass a new record, a changed Requirement or a question about the Plan's progress. Write the message so it stands alone.
+Find a Plan's Lead with `cpd plan show --plan <p>` (`plan.lead_session`) or `cpd session list --plan <p> --role lead`. The message starts no turn: the Lead sees it at its next turn; a stopped Lead gets it when it starts again. `--wake` starts a turn when the Lead is idle (a working or blocked Lead gets it after its running turn, never interrupted): use it only to wake a stalled Lead, sparingly. Use it to pass a new record, a changed Requirement or a question about the Plan's progress. Write the message so it stands alone.
 
-A Lead may message you the same way: its message arrives as `Message from <name> (<id>): <text>` and starts a turn. Answer only what the records or the User settle; anything the User must decide, tell the Lead to ask the User directly. Record what its report changes.
+A Lead may message you the same way: its message arrives as `Message from <name> (<id>): <text>`. Answer only what the records or the User settle; anything the User must decide, tell the Lead to ask the User directly. Record what its report changes.
