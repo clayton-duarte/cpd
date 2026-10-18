@@ -32,7 +32,6 @@ pub fn session(id: &str, name: &str, state: State, label: Option<&str>, place: P
         created_at: "2026-01-01T00:00:00.000Z".into(),
         place,
         plan_lead: false,
-        grounded_lead: false,
         needs_you: state == State::Blocked,
         archived_at: None,
     }
@@ -80,7 +79,6 @@ pub fn context(id: &str, plans: Vec<PlanNode>) -> ContextNode {
         id: ContextId::parse(id).unwrap(),
         title: titled(id),
         jira: None,
-        grounded_lead: None,
         records: 0,
         open_questions: 0,
         archived_at: None,

@@ -205,8 +205,6 @@ pub struct SessionNode {
     pub place: Place,
     /// It is its Plan's `lead_session`.
     pub plan_lead: bool,
-    /// It is its Context's grounded Lead.
-    pub grounded_lead: bool,
     /// The ● of the tree: [`needs_you`], derived from the Session's Events.
     pub needs_you: bool,
     /// When it was archived (contract §4.5); archived Sessions are in the model.
@@ -238,7 +236,6 @@ const SESSION_SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt,
        (SELECT json_extract(e.data, '$.place') FROM events e
          WHERE e.session = s.id AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1),
        EXISTS (SELECT 1 FROM plans p WHERE p.lead_session = s.id),
-       EXISTS (SELECT 1 FROM contexts c WHERE c.lead_session = s.id),
        (SELECT e.id FROM events e WHERE e.session = s.id AND e.kind = 'session-state'
            AND json_extract(e.data, '$.to') = 'idle' ORDER BY e.id DESC LIMIT 1),
        (SELECT e.id FROM events e WHERE e.session = s.id AND e.kind = 'session-moved'
@@ -261,7 +258,7 @@ pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -
         let state: State = value_enum("Session state", &state)?;
         let place = place.map_or(Ok(Place::None), |p| Place::parse("Session place", &p))?;
         out.push(SessionNode {
-            needs_you: needs_you(state, place, r.get(17)?, r.get(18)?),
+            needs_you: needs_you(state, place, r.get(16)?, r.get(17)?),
             role: value_enum("Session role", &role)?,
             context: ContextId::parse(&context).map_err(|_| field("context", &context))?,
             plan: plan.map(|p| PlanId::parse(&p).map_err(|_| field("plan", &p))).transpose()?,
@@ -277,8 +274,7 @@ pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -
             created_at: r.get(13)?,
             place,
             plan_lead: r.get(15)?,
-            grounded_lead: r.get(16)?,
-            archived_at: r.get(19)?,
+            archived_at: r.get(18)?,
             id: session,
         });
     }

@@ -151,7 +151,6 @@ error_codes! {
     GateFailed = "gate_failed" => Refused,
     RebaseConflict = "rebase_conflict" => Refused,
     NotALead = "not_a_lead" => Refused,
-    GroundedLead = "grounded_lead" => Refused,
     NoCockpit = "no_cockpit" => Refused,
     WrongPane = "wrong_pane" => Refused,
     InChatSlot = "in_chat_slot" => Refused,

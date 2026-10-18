@@ -45,6 +45,7 @@ fn config_with_only_the_required_keys_has_every_default() {
             "concurrency": 3,
             "retry_cap": 2,
             "lead_tier": "O3",
+            "manager_tier": "O5",
             "lead_pi_packages": [
                 "npm:@plannotator/pi-extension@0.28.17",
                 "npm:@juicesharp/rpiv-ask-user-question@2.13.8"
@@ -106,7 +107,7 @@ fn config_has_one_source_per_leaf_key() {
     for key in ["version", "machine", "concurrency", "tiers.O", "timeouts.ask_minutes"] {
         assert_eq!(sources[key], "file", "{key}");
     }
-    for key in ["retry_cap", "lead_tier", "lead_pi_packages", "pi_adapter", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
+    for key in ["retry_cap", "lead_tier", "manager_tier", "lead_pi_packages", "pi_adapter", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
         assert_eq!(sources[key], "default", "{key}");
     }
     assert_eq!(out["config"]["concurrency"], 5);
@@ -127,6 +128,7 @@ machine = "a1234567"
 concurrency = 1
 retry_cap = 0
 lead_tier = "H0"
+manager_tier = "H1"
 lead_pi_packages = []
 pi_adapter = "{adapter}"
 plannotator_ports = "1-65535"
@@ -228,6 +230,8 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\nlead_tier = \"X3\"\n", "lead_tier"),
         ("version = 1\nmachine = \"hs\"\nlead_tier = \"O6\"\n", "lead_tier"),
         ("version = 1\nmachine = \"hs\"\nlead_tier = \"o3\"\n", "lead_tier"),
+        ("version = 1\nmachine = \"hs\"\nmanager_tier = \"X5\"\n", "manager_tier"),
+        ("version = 1\nmachine = \"hs\"\nmanager_tier = \"O6\"\n", "manager_tier"),
         ("version = 1\nmachine = \"hs\"\nlead_pi_packages = [\"\"]\n", "lead_pi_packages"),
         ("version = 1\nmachine = \"hs\"\npi_adapter = \"/no/such/adapter\"\n", "pi_adapter"),
         ("version = 1\nmachine = \"hs\"\n[tiers]\nO = \"no-slash\"\n", "tiers.O"),

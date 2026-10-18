@@ -93,7 +93,7 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
     let plan = args.plan.clone().or_else(|| source.plan.clone()).ok_or_else(|| {
         CpdError::new(
             ErrorCode::PlanRequired,
-            format!("Session {} is a grounded Lead with no Plan: pass --plan <id>.", source.id),
+            format!("Session {} has no Plan: pass --plan <id>.", source.id),
         )
         .with("source", source.id.as_str())
     })?;
@@ -155,16 +155,10 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let lead = env.store.read(|conn| row::load(conn, &args.id))?;
     require_lead(&lead)?;
-    let Some(plan) = lead.plan.clone() else {
-        return Err(CpdError::new(
-            ErrorCode::GroundedLead,
-            format!("Session {} is a Context's grounded Lead: it is never typed into.", lead.id),
-        )
-        .with("session", lead.id.as_str()));
-    };
     if lead.archived_at.is_some() {
         return Err(archived(&lead));
     }
+    let plan = lead.plan.clone().ok_or_else(|| super::bad_row(format!("Lead {} has no Plan", lead.id)))?;
     let tmux = env.tmux();
     let cockpit = env.config.tmux.cockpit_session.clone();
     let panes = tmux.list_panes()?;

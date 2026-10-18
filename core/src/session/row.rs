@@ -15,6 +15,7 @@ use crate::output::Output;
 /// A Session's role (§2.2).
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
+    Manager,
     Lead,
     Worker,
 }
@@ -22,13 +23,14 @@ pub enum Role {
 impl Role {
     pub fn as_str(self) -> &'static str {
         match self {
+            Role::Manager => "manager",
             Role::Lead => "lead",
             Role::Worker => "worker",
         }
     }
 
     fn parse(s: &str) -> Option<Role> {
-        [Role::Lead, Role::Worker].into_iter().find(|r| r.as_str() == s)
+        [Role::Manager, Role::Lead, Role::Worker].into_iter().find(|r| r.as_str() == s)
     }
 }
 
@@ -78,8 +80,6 @@ pub(super) struct Row {
     pub place: String,
     /// It is its Plan's `lead_session`.
     pub plan_lead: bool,
-    /// It is a Context's `lead_session`.
-    pub grounded_lead: bool,
     /// The id of its `session-registered` Event.
     pub registered_event: Option<i64>,
     /// When it was archived (contract §2.2 "Archived"), else none.
@@ -91,7 +91,6 @@ const SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt, s.name,
        (SELECT json_extract(e.data, '$.place') FROM events e
          WHERE e.session = s.id AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1),
        EXISTS (SELECT 1 FROM plans p WHERE p.lead_session = s.id),
-       EXISTS (SELECT 1 FROM contexts c WHERE c.lead_session = s.id),
        (SELECT min(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-registered'),
        s.archived_at
   FROM sessions s";
@@ -115,7 +114,6 @@ struct Raw {
     created_at: String,
     place: Option<String>,
     plan_lead: bool,
-    grounded_lead: bool,
     registered_event: Option<i64>,
     archived_at: Option<String>,
 }
@@ -139,9 +137,8 @@ fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
         created_at: r.get(14)?,
         place: r.get(15)?,
         plan_lead: r.get(16)?,
-        grounded_lead: r.get(17)?,
-        registered_event: r.get(18)?,
-        archived_at: r.get(19)?,
+        registered_event: r.get(17)?,
+        archived_at: r.get(18)?,
     })
 }
 
@@ -169,7 +166,6 @@ impl Row {
             created_at: raw.created_at,
             place: raw.place.unwrap_or_else(|| "none".to_owned()),
             plan_lead: raw.plan_lead,
-            grounded_lead: raw.grounded_lead,
             registered_event: raw.registered_event,
             archived_at: raw.archived_at,
             id,
@@ -194,7 +190,6 @@ impl Row {
             "file": self.file,
             "forked_from": self.forked_from,
             "plan_lead": self.plan_lead,
-            "grounded_lead": self.grounded_lead,
             "tier": self.tier,
             "cwd": self.cwd,
         })

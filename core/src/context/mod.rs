@@ -298,9 +298,7 @@ fn list() -> Result<Output, CpdError> {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             contexts.push(json!({
                 "id": row.id, "title": row.title, "jira": row.jira, "archived_at": row.archived_at,
-                "grounded": row.lead_session.is_some(), "lead_session": row.lead_session,
-                "grounded_seq": row.grounded_seq, "records": records, "open_questions": open_questions,
-                "plans": plans,
+                "records": records, "open_questions": open_questions, "plans": plans,
             }));
         }
         let cursor: i64 = conn.query_row("SELECT coalesce(max(id), 0) FROM events", [], |r| r.get(0))?;
@@ -336,8 +334,7 @@ fn show(args: ShowArgs) -> Result<Output, CpdError> {
         })
         .collect();
     Ok(Output::success(json!({
-        "context": {"id": row.id, "title": row.title, "jira": row.jira,
-                    "grounded": row.lead_session.is_some(), "grounded_seq": row.grounded_seq},
+        "context": {"id": row.id, "title": row.title, "jira": row.jira},
         "records": records,
         "markdown": markdown,
     })))

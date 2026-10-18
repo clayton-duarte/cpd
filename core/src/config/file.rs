@@ -38,6 +38,8 @@ pub struct Config {
     /// Automatic Attempts are capped at `1 + retry_cap` (§9).
     pub retry_cap: u32,
     pub lead_tier: Tier,
+    /// The Tier of a Context's Manager (§3.1, hs-d133).
+    pub manager_tier: Tier,
     pub lead_pi_packages: Vec<String>,
     /// `""` is beside the binary: see [`Config::pi_adapter_dir`].
     pub pi_adapter: String,
@@ -191,6 +193,9 @@ impl Config {
         let lead_tier = r.get("lead_tier", Tier::parse("O3").expect("a valid Tier"), |v| {
             Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
         })?;
+        let manager_tier = r.get("manager_tier", Tier::parse("O5").expect("a valid Tier"), |v| {
+            Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
+        })?;
         let lead_pi_packages = r.get(
             "lead_pi_packages",
             DEFAULT_LEAD_PI_PACKAGES.map(str::to_owned).to_vec(),
@@ -251,6 +256,7 @@ impl Config {
             concurrency,
             retry_cap,
             lead_tier,
+            manager_tier,
             lead_pi_packages,
             pi_adapter,
             plannotator_ports,

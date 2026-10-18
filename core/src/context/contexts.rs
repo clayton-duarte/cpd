@@ -21,15 +21,13 @@ pub struct ContextRow {
     pub jira: Option<String>,
     pub created_at: String,
     pub created_on: String,
-    pub lead_session: Option<String>,
-    pub grounded_seq: Option<i64>,
     /// When it was archived (contract §2.2 "Archived"), else none.
     pub archived_at: Option<String>,
 }
 
 impl ContextRow {
     pub const COLUMNS: &'static str =
-        "id, title, jira, created_at, created_on, lead_session, grounded_seq, archived_at";
+        "id, title, jira, created_at, created_on, archived_at";
 
     pub fn from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ContextRow> {
         Ok(ContextRow {
@@ -38,9 +36,7 @@ impl ContextRow {
             jira: r.get(2)?,
             created_at: r.get(3)?,
             created_on: r.get(4)?,
-            lead_session: r.get(5)?,
-            grounded_seq: r.get(6)?,
-            archived_at: r.get(7)?,
+            archived_at: r.get(5)?,
         })
     }
 

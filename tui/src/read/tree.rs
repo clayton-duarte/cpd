@@ -7,10 +7,10 @@ use std::collections::BTreeMap;
 
 use cpd_core::error::CpdError;
 use cpd_core::events::highest_id;
-use cpd_core::ids::{ContextId, SessionId};
+use cpd_core::ids::ContextId;
 use cpd_core::store::Store;
 
-use super::shared::{PlanHead, SessionNode, bad_row, id, plan_heads, sessions};
+use super::shared::{PlanHead, SessionNode, id, plan_heads, sessions};
 
 /// Every Context of the machine, by id.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,8 +25,6 @@ pub struct ContextNode {
     pub id: ContextId,
     pub title: String,
     pub jira: Option<String>,
-    /// This machine's grounded Lead, when the Context has one.
-    pub grounded_lead: Option<SessionNode>,
     pub records: usize,
     /// Questions no answer refers to.
     pub open_questions: usize,
@@ -95,28 +93,16 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
             questions.insert(context, n);
         }
 
-        let mut leads: Vec<SessionNode> = sessions(conn, "s.role = 'lead'", &[])?;
+        let leads: Vec<SessionNode> = sessions(conn, "s.role = 'lead'", &[])?;
         let mut heads = plan_heads(conn, None)?;
 
         let mut stmt = conn
-            .prepare("SELECT id, title, jira, lead_session, archived_at FROM contexts ORDER BY id")?;
+            .prepare("SELECT id, title, jira, archived_at FROM contexts ORDER BY id")?;
         let mut rows = stmt.query([])?;
         let mut contexts = Vec::new();
         while let Some(r) = rows.next()? {
             let cid: String = r.get(0)?;
             let context = id("Context id", &cid, ContextId::parse)?;
-            let grounded: Option<String> = r.get(3)?;
-            let grounded = grounded
-                .map(|g| {
-                    let g = SessionId::parse(&g)
-                        .map_err(|_| bad_row(format!("Context {context} has lead_session {g:?}")))?;
-                    leads
-                        .iter()
-                        .position(|s| s.id == g)
-                        .map(|i| leads.remove(i))
-                        .ok_or_else(|| bad_row(format!("Context {context} has the grounded Lead {g}, which is no Lead")))
-                })
-                .transpose()?;
             let (mine, rest): (Vec<PlanHead>, Vec<PlanHead>) = heads.drain(..).partition(|h| h.context == context);
             heads = rest;
             let plans = mine
@@ -130,10 +116,9 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
             contexts.push(ContextNode {
                 title: r.get(1)?,
                 jira: r.get(2)?,
-                grounded_lead: grounded,
                 records: records.remove(&cid).unwrap_or(0),
                 open_questions: questions.remove(&cid).unwrap_or(0),
-                archived_at: r.get(4)?,
+                archived_at: r.get(3)?,
                 plans,
                 id: context,
             });
