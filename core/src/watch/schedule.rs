@@ -48,7 +48,8 @@ fn backing_off(conn: &Connection, plan: &PlanId, key: &JobKey, now: OffsetDateTi
 
 /// Ready (§3.2): `queued`, in a Plan in `dispatch` or `pr`, whose PR is `dispatch`
 /// or `open`, every Dependency `merged`. `driver::start`'s `require_ready` says the same.
-const READY: &str = "SELECT j.plan, j.key FROM jobs j JOIN plans p ON p.id = j.plan
+/// The `workers` step counts these rows too (the StatusBar's `W waiting`).
+pub(super) const READY: &str = "SELECT j.plan, j.key FROM jobs j JOIN plans p ON p.id = j.plan
   JOIN prs r ON r.plan = j.plan AND r.key = j.pr
   WHERE j.status = 'queued' AND p.phase IN ('dispatch', 'pr') AND r.status IN ('dispatch', 'open')
     AND NOT EXISTS (SELECT 1 FROM dependencies d JOIN jobs n ON n.plan = d.plan AND n.key = d.needs

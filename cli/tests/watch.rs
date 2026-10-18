@@ -403,8 +403,8 @@ fn ensure_fails_when_the_engine_does_not_start() {
 
 // ---------- @cpd_workers ----------
 
-const NO_WORKERS: &str = "#[dim]workers #[nodim,fg=colour8]0#[default,dim]/3#[default]";
-const ONE_WORKER: &str = "#[dim]workers #[nodim,fg=green]1#[default,dim]/3#[default]";
+const NO_WORKERS: &str = "#[dim]workers #[nodim,fg=colour8]0#[default,dim]/3 · 0 waiting · 0 queued#[default]";
+const ONE_WORKER: &str = "#[dim]workers #[nodim,fg=green]1#[default,dim]/3 · 0 waiting · 0 queued#[default]";
 
 impl Fx {
     /// A tmux server with one session, `keepalive`.
@@ -413,7 +413,11 @@ impl Fx {
     }
 
     fn workers(&self) -> String {
-        let out = self.env.tmux(&["show", "-gv", "@cpd_workers"]);
+        self.option("@cpd_workers")
+    }
+
+    fn option(&self, name: &str) -> String {
+        let out = self.env.tmux(&["show", "-gv", name]);
         String::from_utf8_lossy(&out.stdout).trim_end().to_owned()
     }
 }
@@ -427,6 +431,8 @@ fn the_engine_sets_cpd_workers_at_start_and_only_when_it_changes() {
 
     let engine = fx.start();
     wait_until("@cpd_workers", || fx.workers() == ONE_WORKER);
+    assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/3·0·0#[default]");
+    assert_eq!(fx.option("@cpd_workers_width"), "34");
 
     // Unchanged, it is not set again: a value put there by hand survives the next ticks.
     assert!(fx.env.tmux(&["set", "-g", "@cpd_workers", "by hand"]).status.success());
@@ -436,6 +442,26 @@ fn the_engine_sets_cpd_workers_at_start_and_only_when_it_changes() {
     // A change sets it.
     fx.fixture("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = 'api-a1';");
     wait_until("@cpd_workers to change", || fx.workers() == NO_WORKERS);
+    engine.stop();
+    drop(lock);
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
+#[test]
+fn the_engine_counts_waiting_and_queued_jobs() {
+    let fx = fx("concurrency = 1");
+    fx.tmux_server();
+    let lock = fx.live_driver("run-a1");
+    fx.add_running("run", "running", &ago(1));
+    // Ready but the only slot is taken (E3 starts nothing); the other needs it, so it is queued and not waiting.
+    fx.add_job("free", &[], "");
+    fx.add_job("blocked", &["free"], "");
+
+    let engine = fx.start();
+    let long = "#[dim]workers #[nodim,fg=green]1#[default,dim]/1 · #[nodim,fg=yellow]1#[default,dim] waiting · 2 queued#[default]";
+    wait_until("@cpd_workers", || fx.workers() == long);
+    assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/1·#[nodim,fg=yellow]1#[default,dim]·2#[default]");
+    assert_eq!(fx.option("@cpd_workers_width"), "34");
     engine.stop();
     drop(lock);
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));

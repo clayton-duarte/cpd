@@ -89,11 +89,14 @@ pub const STATUS_CLICK: &str = "cpd tui action #{mouse_status_range} --client #{
 /// The StatusBar (contract §6.1): the cockpit session's `status-format[0]`.
 /// Three one-glyph buttons, each a grey block in its own click range, one
 /// space apart outside the ranges (a range also owns the cell after it, so
-/// touching ranges would steal each other's first cell); `workers N/M` at the
-/// right, the text the engine keeps in `@cpd_workers`.
+/// touching ranges would steal each other's first cell); the workers counts at
+/// the right (User, hs-d198): the long form the engine keeps in `@cpd_workers`
+/// when `#{client_width}` is at least `@cpd_workers_width` (its visible width)
+/// plus 7 (the buttons' 5 cells and 2 of air), else the short form in
+/// `@cpd_workers_short`.
 pub const STATUS_FORMAT: &str = "#[range=user|reset]#[fg=colour8,reverse]⧉#[norange,default] \
 #[range=user|legend]#[fg=colour8,reverse]?#[norange,default] \
-#[range=user|logs]#[fg=colour8,reverse]▤#[norange,default]#[align=right]#{@cpd_workers}";
+#[range=user|logs]#[fg=colour8,reverse]▤#[norange,default]#[align=right]#{?#{e|>=:#{client_width},#{e|+:#{@cpd_workers_width},7}},#{@cpd_workers},#{@cpd_workers_short}}";
 
 /// The cockpit session's own options (contract §6.1), set with `-t`: `status`
 /// is a session option, and `-g` would give `cpd-work` a row too.

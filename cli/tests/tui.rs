@@ -130,7 +130,7 @@ fn assert_status_line(env: &TestEnv) {
     assert_eq!(tmux_out(env, &["show", "-v", "-t", "=cpd:", "status-style"]).trim(), "default");
     let format = tmux_out(env, &["show", "-v", "-t", "=cpd:", "status-format[0]"]);
     assert_eq!(format.trim_end_matches('\n'), STATUS_FORMAT);
-    for range in ["#[range=user|reset]", "#[range=user|legend]", "#[range=user|logs]", "#[align=right]#{@cpd_workers}"] {
+    for range in ["#[range=user|reset]", "#[range=user|legend]", "#[range=user|logs]", "#[align=right]#{?#{e|>=:#{client_width},#{e|+:#{@cpd_workers_width},7}},#{@cpd_workers},#{@cpd_workers_short}}"] {
         assert!(format.contains(range), "{range} in {format}");
     }
     // The buttons are one space apart, outside their ranges: no range starts where the one before it ends.
@@ -661,4 +661,47 @@ fn tui_view_routes_by_name() {
         let run = env.cpd(words);
         assert_eq!((run.exit, run.error()["code"].clone()), (2, json!("usage")), "{words:?}: {run:?}");
     }
+}
+
+/// The status line (last row) of a client of `width` columns once it shows `needle`.
+fn status_line(env: &TestEnv, width: u16, needle: &str) -> String {
+    let outer = Outer::attach(env, width, 20);
+    let mut line = String::new();
+    wait_until(&format!("{needle} on the status line"), || {
+        line = outer.screen().lines().nth(19).unwrap_or("").trim_end().to_owned();
+        line.contains(needle)
+    });
+    line
+}
+
+/// A cockpit whose engine-fed workers options hold what `workers.rs` sets for `6/6 · 4 waiting · 9 queued`.
+fn env_with_workers() -> TestEnv {
+    let env = env();
+    tmux_out(&env, &["new-session", "-d", "-s", "cpd", "-n", "park-pay", "-x", "215", "-y", "62", "sleep", "3600"]);
+    env.cpd(&["tui"]).ok();
+    for (option, value) in [
+        ("@cpd_workers", "#[dim]workers #[nodim,fg=green]6#[default,dim]/6 · #[nodim,fg=yellow]4#[default,dim] waiting · 9 queued#[default]"),
+        ("@cpd_workers_short", "#[nodim,fg=green]6#[default,dim]/6·#[nodim,fg=yellow]4#[default,dim]·9#[default]"),
+        ("@cpd_workers_width", "34"),
+    ] {
+        tmux_out(&env, &["set", "-g", option, value]);
+    }
+    env
+}
+
+const BUTTONS: &str = "⧉ ? ▤";
+
+// The long form is 34 cells wide: with the buttons' 5 cells and 2 of air it needs a client of 41 columns.
+#[test]
+fn the_status_line_draws_the_long_workers_form_on_a_client_wide_enough() {
+    let env = env_with_workers();
+    let line = status_line(&env, 41, "queued");
+    assert!(line.starts_with(BUTTONS) && line.ends_with("workers 6/6 · 4 waiting · 9 queued"), "{line:?}");
+}
+
+#[test]
+fn the_status_line_draws_the_short_workers_form_on_a_narrow_client() {
+    let env = env_with_workers();
+    let line = status_line(&env, 40, "6/6");
+    assert!(line.starts_with(BUTTONS) && line.ends_with("6/6·4·9") && !line.contains("workers"), "{line:?}");
 }
