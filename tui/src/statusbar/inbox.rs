@@ -46,19 +46,22 @@ impl Inbox {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::style::Color;
-
     use super::*;
 
     #[test]
     fn the_counter_is_in_the_colour_of_the_most_urgent_item() {
-        for (urgency, color) in
-            [(Urgency::Red, Color::Red), (Urgency::Yellow, Color::Yellow), (Urgency::Magenta, Color::Magenta), (Urgency::White, Color::White)]
+        let mut seen = Vec::new();
+        for (urgency, dot) in
+            [(Urgency::Red, Dot::Red), (Urgency::Yellow, Dot::Yellow), (Urgency::Magenta, Dot::Magenta), (Urgency::White, Dot::White)]
         {
             let line = Inbox { count: 3, urgency: Some(urgency) }.line();
             assert_eq!(line.to_string(), "inbox 3");
-            assert_eq!(line.style.fg, Some(color), "{urgency:?}");
+            assert_eq!(line.style.fg, palette::dot_span(dot, 0, false).style.fg, "{urgency:?}: the dot's colour");
+            assert!(line.style.fg.is_some());
+            seen.push(line.style.fg);
         }
+        seen.dedup();
+        assert_eq!(seen.len(), 4, "four colours");
     }
 
     #[test]

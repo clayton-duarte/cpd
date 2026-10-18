@@ -158,7 +158,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
-    use ratatui::style::Color;
+    use crate::read::Dot;
 
     use cpd_core::inbox::model::Urgency;
 
@@ -205,7 +205,7 @@ mod tests {
         }
         let at = 40 - tail.len() as u16;
         for x in at..at + "inbox 3".len() as u16 {
-            assert_eq!(buf[(x, 0)].fg, Color::Red, "x={x}: the counter is red");
+            assert_eq!(buf[(x, 0)].fg, palette::dot_span(Dot::Red, 0, false).style.fg.unwrap(), "x={x}: the counter is red");
         }
     }
 
@@ -223,7 +223,7 @@ mod tests {
         assert!(text(buf, 0).ends_with("inbox 0 workers 1/4"), "{:?}", text(buf, 0));
         let x = 40 - "inbox 0 workers 1/4".len() as u16;
         assert!(buf[(x, 0)].modifier.contains(Modifier::DIM));
-        assert_eq!(buf[(x, 0)].fg, Color::Reset);
+        assert_eq!(buf[(x, 0)].fg, buf[(10, 0)].fg, "no colour: that of the blank middle");
     }
 
     /// The workers get the whole width, not what the buttons leave: the long form is chosen whenever it fits the row.
