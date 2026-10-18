@@ -113,3 +113,14 @@ Deliberately absent: a regex crate (the id patterns of §2.1 are checked by hand
 - cargo is not on `PATH` for Workers and the Gate. Run it as `scripts/cargo.sh <args>` (`$CARGO`, else `cargo` on `PATH`, else `${CARGO_HOME:-$HOME/.cargo}/bin/cargo`; exit 127 with a message when none exists). rustfmt and clippy are not installed.
 - The Gate is `npm run verify`: the typecheck and tests of the pi adapter `pi/`, then `scripts/cargo.sh build --workspace` and `scripts/cargo.sh test --workspace`. Run it before you submit.
 - `scripts/install-cpd.sh` builds `--release` and installs `~/.local/bin/cpd` and the adapter `pi/` at `~/.local/share/cpd/pi`, replacing the binary atomically; safe to rerun. After an install, running Lead wrappers and Attempt drivers reload themselves (contract §3.4, §6.7).
+
+## Checking a pi version
+
+`scripts/pi-check.sh [<pi command>]` (default `pi`) checks that the adapter `pi/` of the checkout it lives in loads and activates in that pi, offline: an empty temporary `PI_CODING_AGENT_DIR`, `PI_OFFLINE=1`, no credentials, nothing written outside a temporary directory (removed on exit). It prints `pi --version`, then:
+
+1. **Load:** `pi --no-extensions --no-session -e pi/ --mode rpc </dev/null` with no `CPD_*` variables must exit 0 (an extension that throws at load exits 1).
+2. **Activation:** the adapter only activates in interactive mode, so pi runs in a private `tmux` server with `CPD_SESSION` equal to pi's session id (`--session-id`), `CPD_HOME` set, and a fake `cpd` first on `PATH`. It passes when the fake was called with `events follow`.
+
+Exit 0 with `pi-check: ok (<version>)`; exit 1 with `pi-check: FAIL: <step and why>` and the tail of pi's output. It needs `tmux`; it does not run `npm test` (those tests use fakes and never run pi).
+
+dotfiles runs it (hs-d145) after updating the `cpd` checkout and before activating a new pinned pi on a machine: `scripts/pi-check.sh <path of the new pi>`; a failure leaves the active pi as it was.
