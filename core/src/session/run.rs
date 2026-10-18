@@ -20,7 +20,7 @@ use super::row::{self, Role, Row, State};
 use super::{Env, RunArgs, bad_row, not_a_lead, state};
 use crate::config::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
-use crate::host::exe::{Exe, Watched};
+use crate::host::exe::{Exe, Refusal, Watched};
 use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs, Plannotator};
 use crate::host::{PaneId, Tmux};
 use crate::ids::{PlanId, SessionId};
@@ -90,7 +90,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
             })?;
             if let Some(status) = exited {
                 // A new install: restart before any store write (§6.7 "Reload on install").
-                if exe.replaced() {
+                if exe.replaced() && may_exec(&exe) {
                     return Err(reload(&exe, &row.id));
                 }
                 if !recorded {
@@ -102,7 +102,8 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 recorded = record_file(&mut env, &dirs, &row.id)?;
             }
             let pi_changed = pi_install.as_ref().is_some_and(Watched::changed);
-            if (exe.replaced() || pi_changed) && reload_due(&mut env, &dirs, &row.id)? {
+            // `may_exec` asks the new cpd, so it comes after the cheaper tests and before pi is signalled.
+            if (exe.replaced() || pi_changed) && reload_due(&mut env, &dirs, &row.id)? && may_exec(&exe) {
                 let what = if exe.replaced() { "cpd" } else { "pi" };
                 print!("  new {what} installed: restarting pi for {}…\n", row.name);
                 let _ = std::io::stdout().flush();
@@ -131,9 +132,26 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
             Ok(0) | Err(_) => return Ok(Output::Owned),
             Ok(_) => {}
         }
-        if exe.replaced() {
+        if exe.replaced() && may_exec(&exe) {
             return Err(reload(&exe, &row.id));
         }
+    }
+}
+
+/// Whether the wrapper may `exec` the cpd at its path: nothing replaced it (a
+/// reload for pi's sake), or what replaced it can open the store. A refused install is reported once per
+/// installed file and the wrapper carries on as if nothing was installed (hs-d151).
+fn may_exec(exe: &Exe) -> bool {
+    if !exe.replaced() {
+        return true;
+    }
+    match exe.check_store() {
+        Ok(()) => true,
+        Err(Refusal::New(reason)) => {
+            eprintln!("cpd: reload skipped: {} {reason}", exe.path().display());
+            false
+        }
+        Err(Refusal::Known) => false,
     }
 }
 
