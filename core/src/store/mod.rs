@@ -794,7 +794,7 @@ mod tests {
         let err = insert_event(&mut store, "plan-pinned").unwrap_err();
         assert!(format!("{err:?}").contains("FOREIGN KEY"), "{err:?}");
         drop(store);
-        // One insert into `event_kinds`, applied by a later binary, makes it insertable.
+        // One row added to `event_kinds` by a later binary's migration makes it insertable.
         let mut store = open_named(&home, &with_kind_tables(&[KIND_PINNED])).unwrap();
         assert!(kinds(&mut store).contains(&"plan-pinned".to_owned()));
         insert_event(&mut store, "plan-pinned").unwrap();
