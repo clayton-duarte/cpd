@@ -1065,3 +1065,118 @@ fn copy_id_puts_the_shown_id_in_tmuxs_buffer_and_says_so() {
     }
     assert!(calls(&env).is_empty(), "Copy id runs no cpd command: {:?}", calls(&env));
 }
+
+// ---------- the Inbox section (commands.md §13.2) ----------
+
+#[test]
+fn the_inbox_sections_more_row_expands_the_list_inline_and_less_folds_it() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 46, 20);
+    let screen = pane.ready();
+    // the section is pinned to the bottom, the Session rows above it
+    assert_eq!(screen[15..], inbox_section(46));
+    pane.click(10, 19); // `+1 more`
+    let screen = pane.wait("the expanded list", |s| s.last().is_some_and(|r| r == " − less"));
+    let item = |label: &str| format!(" ● {label}{}5m", " ".repeat(44 - 2 - label.len() - 2));
+    assert_eq!(screen[14..], [inbox_section(46)[..4].to_vec(), vec![item("m-alpha label"), " − less".to_owned()]].concat());
+    pane.click(3, 19); // `− less`
+    let screen = pane.wait("the folded list", |s| s.last().is_some_and(|r| r == " +1 more"));
+    assert_eq!(screen[15..], inbox_section(46));
+    assert!(calls(&env).is_empty(), "expanding and folding are no commands");
+}
+
+/// `populate`'s items and one of each kind that jumps or links; the engine-error is caused by Event `event`.
+fn jumping_items(event: i64) -> Vec<Condition> {
+    let other = |kind, urgency, subject: &str, label: &str| Condition {
+        subject: subject.to_owned(),
+        label: label.to_owned(),
+        session: None,
+        ..condition(kind, urgency, "none", Some("ship"), "alpha")
+    };
+    let mut items = items();
+    items.extend([
+        Condition { event: Some(event), plan: None, context: None, ..other(Kind::EngineError, Urgency::Red, "engine:store", "engine: store busy") },
+        Condition {
+            url: Some("https://github.com/acme/api/pull/12".into()),
+            ..other(Kind::PrFailing, Urgency::Yellow, "pr:acme/api#12", "acme/api#12 failing")
+        },
+        other(Kind::JobStuck, Urgency::Yellow, "job:ship/c", "ship: c is stuck"),
+        Condition { plan: None, ..other(Kind::Question, Urgency::Magenta, "question:q1", "alpha: a question") },
+    ]);
+    items
+}
+
+#[test]
+fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
+    let env = env();
+    populate(&env);
+    let mut store = open(&env);
+    let event = store.read(cpd_core::events::highest_id).unwrap();
+    reconcile(&mut store, &jumping_items(event), &opened_ago()).unwrap();
+    fake_cpd(&env, r#"{"ok":true,"manager":{"session":"m-alpha"}}"#);
+    // a fake tmux: one client, the popup recorded and not run, the rest the real tmux
+    let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
+    env.fake(
+        "tmux",
+        &format!("case \"$*\" in\n *list-clients*) echo '100 200 60';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac", real.trim()),
+    );
+    let pane = Pane::start(&env, 46, 26);
+    pane.ready();
+    pane.wait("the more row", |s| s.last().is_some_and(|r| r.starts_with(" +")));
+    let more = pane.screen().len() as u16 - 1;
+    pane.click(10, more);
+    pane.wait("the expanded list", |s| s.last().is_some_and(|r| r == " − less"));
+    let row_of = |label: &str| {
+        let screen = pane.screen();
+        screen.iter().position(|r| r.contains(label)).unwrap_or_else(|| panic!("{label} on\n{}", screen.join("\n"))) as u16
+    };
+    // dialog: `session open <its Session>`
+    pane.click(10, row_of("f-blocked label"));
+    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "f-blocked"])]);
+    // job-stuck: the Lead of its Plan
+    pane.click(10, row_of("ship: c is stuck"));
+    assert_eq!(wait_for_calls(&env, 2)[1], words(&["session", "open", "l-ship"]));
+    // question: the Context's Manager
+    pane.click(10, row_of("alpha: a question"));
+    assert_eq!(wait_for_calls(&env, 4)[2..], [words(&["context", "manager", "--context=alpha"]), words(&["session", "open", "m-alpha"])]);
+    // pr-failing: the label is an OSC 8 link, the view runs nothing, and tmux draws the label whole
+    let failing = row_of("acme/api#12 failing");
+    pane.click(10, failing);
+    // engine-error: the logs popup at the item's Event
+    pane.click(10, row_of("engine: store busy"));
+    let popups = || -> Vec<_> { env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).collect() };
+    wait_for(|| !popups().is_empty());
+    let popups = popups();
+    assert_eq!(popups.len(), 1, "{popups:?}");
+    assert_eq!(popups[0].last().unwrap(), &format!("cpd tui view logs --event {event}"));
+    assert!(popups[0].contains(&" logs ".to_owned()), "{:?}", popups[0]);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(calls(&env).len(), 4, "the link and the logs ran no cpd command: {:?}", calls(&env));
+}
+
+fn wait_for(done: impl Fn() -> bool) {
+    let start = Instant::now();
+    while !done() {
+        assert!(start.elapsed() < Duration::from_secs(10), "timed out");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_link_kinds_label_reads_whole_on_the_screen_through_tmux() {
+    let env = env();
+    populate(&env);
+    let mut store = open(&env);
+    let event = store.read(cpd_core::events::highest_id).unwrap();
+    reconcile(&mut store, &jumping_items(event), &opened_ago()).unwrap();
+    let pane = Pane::start(&env, 46, 26);
+    pane.ready();
+    pane.wait("the more row", |s| s.last().is_some_and(|r| r.starts_with(" +")));
+    pane.click(10, pane.screen().len() as u16 - 1);
+    let screen = pane.wait("the link's row", |s| s.iter().any(|r| r.contains("acme/api#12")));
+    let expected = format!(" ● acme/api#12 failing{}5m", " ".repeat(44 - 2 - "acme/api#12 failing".len() - 2));
+    let row = screen.iter().find(|r| r.contains("acme/api#12")).unwrap();
+    assert_eq!(row, &expected, "the OSC 8 pieces leave no stray cell on the row");
+}
