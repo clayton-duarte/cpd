@@ -491,7 +491,7 @@ Effects: exactly §3.1 "The Context's grounded Lead":
 cpd plan render [--plan <id>]
 ```
 
-Effects: writes `run/<plan>/plan.md` (§1.4), nothing else. Content, kept from cpd 1 §11 `plan render` and grouped by PR (R34): title, Context and phase; a table of the PRs that are not `cancelled`, with key, repo, base and needs, and, when there are two or more, a Mermaid `graph LR` of their needs; then one section per PR, in the order of the needs graph (ties by key), headed `PR <key>`, with its repo, base and needs, a table of its Jobs that are not `cancelled` with key, title, Tier, status, needs and touches, a Mermaid `graph TD` of its Jobs' Dependencies, and one subsection per Job with its Spec (goal, context, touches, acceptance, out of scope). A Job's section is under its PR only. GitHub-flavoured Markdown only: tables, code and Mermaid, no footnotes, no raw HTML (t4). Output: the path, the plan fingerprint (§2.3: Jobs and PRs), the number of `draft` Jobs and the number of PRs that are not `cancelled`.
+Effects: writes `run/<plan>/plan.md` (§1.4), nothing else. Content, kept from cpd 1 §11 `plan render` and grouped by PR (R34): title, Context and phase; a table of the PRs that are not `cancelled`, with key, repo, base and needs, and, when there are two or more, a Mermaid `graph LR` of their needs; then one section per PR, in the order of the needs graph (ties by key), headed `PR <key>`, with its repo, base and needs, a table of its Jobs that are not `cancelled` with key, title, Tier, status, needs and touches, a Mermaid `graph TD` of its Jobs' Dependencies, and one subsection per Job with its Spec (goal, context, touches, acceptance, out of scope). A Job's section is under its PR only. In a phase after `plan`, the Jobs that are not `draft` are Locked context: the render shows them as such, and marks every `draft` Job **under review** (in its table row and its section), because a review in these phases covers exactly the drafts (§4.6; User, hs-d173, hs-d174, hs-d179). In phase `plan` every Job is a draft and nothing is marked. GitHub-flavoured Markdown only: tables, code and Mermaid, no footnotes, no raw HTML (t4). Output: the path, the plan fingerprint (§2.3: Jobs and PRs), the number of `draft` Jobs and the number of PRs that are not `cancelled`.
 
 ```json
 {"ok": true, "path": "/home/clayton/.cpd/run/pay-4521/plan.md", "fingerprint": "9f86d081…", "draft_jobs": 6, "prs": 2}
@@ -505,12 +505,12 @@ Idempotent: yes (the same PRs and Jobs render the same file). Change: cpd 1's `-
 cpd plan review [--plan <id>]
 ```
 
-Requests the User's approval of the draft Jobs (§2.2 Plan review). The Lead runs it through its tool `cpd_plan_review` or directly; either way the pi adapter opens plannotator when the `plan-review` Event arrives (§15.5), so the review opens from any caller.
+Requests the User's approval of the draft Jobs (§2.2 Plan review). In phase `plan` the review covers the whole plan, as before; in every phase after `plan` it covers **exactly the draft Jobs**: its fingerprint is over the drafts only (§2.3), and the rendered plan marks them under review and shows the Locked Jobs as context (§4.5). A Lead that planned several batches adds the later ones as drafts (`job add --draft`, §5.1) and asks for one review per batch. The Lead runs it through its tool `cpd_plan_review` or directly; either way the pi adapter opens plannotator when the `plan-review` Event arrives (§15.5), so the review opens from any caller, in whatever phase the Plan is.
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the phase is `plan` | `illegal_phase` | 3 |
-| at least one Job is `draft` | `no_draft_jobs` | 3 |
+| the phase is `plan`, or any phase after it (not `grounding`) | `illegal_phase` | 3 |
+| at least one Job is `draft` (in a phase after `plan` too: the drafts are what is reviewed) | `no_draft_jobs` | 3 |
 
 Effects:
 - **Files:** renders the plan to `run/<plan>/plan.md` and copies it to `run/<plan>/plan-<review>.md`, so a later render cannot change what the User reviews.
@@ -537,11 +537,18 @@ Records the User's decision. Called by the pi adapter with plannotator's result 
 
 Effects: **rows**, one transaction: `plan_reviews.status`, `feedback` (the file's text, or null), `decided_at`. **Event** `plan-review` `{review, fingerprint, status, feedback}`.
 
+In a phase after `plan`, an **approval** also queues the drafts the review covered (§2.2, §3.2), in the same transaction:
+- **Rows:** every `draft` Job of the Plan becomes `queued` and gets its Locked-Job fingerprint (§2.3), as an appended Job has at `job add`; `appended` stays 1. The engine schedules each as soon as it is Ready (§3.2).
+- **Event:** the same `plan-review` Event, whose `data` gains `jobs: [key]`, the Jobs it queued, in key order. No new Event kind. `plan-phase` is not appended: the phase does not change.
+- Only a **current** approval queues (*decided*: a stale one would queue drafts the User never saw): when the drafts changed since the review (`current` false), the decision is recorded and nothing is queued, `jobs` is absent and `next` asks for a new `cpd plan review`.
+- A **rejection** queues nothing: the drafts stay drafts, editable, as in phase `plan`; the Lead revises them (`job edit`, `job add --draft`, `job cancel`) and asks again.
+- In phase `plan`, `plan decide` writes only what it did above, and `plan lock` (§4.8) works as before.
+
 ```json
 {"ok": true, "review": {"id": "r3", "status": "approved", "fingerprint": "9f86d081…", "feedback": null, "decided_at": "…"}, "current": true, "next": "cpd plan lock"}
 ```
 
-`current` says whether the review's fingerprint is still the plan fingerprint; `next` is `cpd plan lock` only when approved and current. Idempotent: yes, as stated.
+`current` says whether the review's fingerprint is still the plan fingerprint; `next` is `cpd plan lock` only when approved and current in phase `plan`; in a later phase an approved and current review has no `next` and its result lists `jobs` (the Jobs queued). Idempotent: yes, as stated.
 
 ### 4.8 `plan lock`
 
@@ -660,7 +667,7 @@ Jobs, Specs and Dependencies (§2.2, §3.2). Kept from cpd 1 §11 "Jobs" except 
 ### 5.1 `job add`
 
 ```
-cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs <k1,k2> | --review] [--plan <id>]
+cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs <k1,k2> | --review] [--draft] [--plan <id>]
 ```
 
 | Flag | Meaning |
@@ -668,24 +675,26 @@ cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs 
 | `<key>` | Job key (§2.1). Change: positional, like every other `job` command (cpd 1 had `--key`) |
 | `--pr <key>` | the Job's PR (R34, A14), selected by §1.3's rule: required when the Plan has two or more PRs that are not `cancelled`, defaulted to the one when it has one |
 | `--needs <k1,k2>` | Dependencies, comma-separated, no duplicates (`usage`); Jobs of the same PR only (A7) |
+| `--draft` | add the Job as a `draft` in a phase after `plan` too (User, hs-d173, hs-d174, hs-d179: every planned batch is visible in the Plan view before it is approved): `status = draft`, `appended = 1`, no fingerprint; the engine never runs it, and it becomes `queued` only at the approval of a Plan review of the drafts (§4.7). In phase `plan` every Job is a draft, so `--draft` changes nothing there. Its needs may be drafts |
 | `--review` | a **review Job** (B2, contract §2.2): its Worker is a fork of the Plan's Lead, it commits nothing and writes `run/<plan>/reviews/<key>.md`. Its Dependencies are **set** to every Job of its PR that exists at that moment and is not `cancelled`, so `--needs` with `--review` is `usage` (exit 2). Jobs added later do not become its Dependencies. The Spec file is as for any Job; its `touches` is informational for a review Job (*decided*: the Lead lists `run/<plan>/reviews/<key>.md`) |
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the phase is `plan`, `dispatch` or `pr` | `illegal_phase` | 3 |
+| the phase is `plan`, `dispatch`, `pr` or `done` (`done` only with `--draft`, and then only into a PR that is not `merged` or `cancelled`: none exists until `pr add` has reopened the Plan); `grounding`: `illegal_phase` | 3 |
 | the PR is not `merged` or `cancelled` (§3.2) | `pr_ended` | 3 |
 | no Job with this key, unless its Locked fields (`pr` included) and needs are identical (then `already`) | `job_key_exists` | 3 |
 | every `needs` key is a Job of the Plan | `needs_unknown` | 3 |
 | every `needs` Job is in the same PR; `details.jobs` lists those that are not | `needs_other_pr` | 3 |
 | no `needs` Job is `cancelled` or `failed`; with `--review`, no Job of the PR is `failed` (retry or cancel it first; `details.jobs` lists them), because a Dependency on a `failed` Job is refused | `needs_unavailable` | 3 |
+| without `--draft`, in a phase after `plan`: no `needs` Job is a `draft`, and with `--review` no Job of the PR is a `draft` (`details.jobs` lists them; its message says to add this Job with `--draft`, or to approve the drafts first), because a `queued` Job could start before the draft it needs exists | `needs_unavailable` | 3 |
 
-Effects: **rows**, one transaction: `jobs` (`pr` = the PR's key; `review` = 1 with `--review`; `status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = queued`, `appended = 1`, fingerprint stored, in `dispatch` or `pr`); one `dependencies` row per need (with `--review`, per Job of the PR, as the Dependencies are set in the same transaction). **Event** `job-added` `{pr, status, appended, tier, needs, review}`. **Re-arms `all-merged`** (hs-d140): the same transaction sets the PR's `all_merged_at` to null when it was set, so engine E4 appends `all-merged` for that PR again once its Jobs are all `merged` or `cancelled` (contract §3.7); a PR that never had it sent is unchanged. No cycle is possible: nothing needs a new Job yet. An appended Job of a `waiting` PR is not Ready until its PR starts (§3.2); one of an `open` PR reaches its pull request through `pr rebase --pr <key>` (§9.3), or `pr push --pr <key>` (§9.9).
+Effects: **rows**, one transaction: `jobs` (`pr` = the PR's key; `review` = 1 with `--review`; `status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = draft`, `appended = 1`, no fingerprint, with `--draft` in any later phase; `status = queued`, `appended = 1`, fingerprint stored, in a later phase without `--draft`); one `dependencies` row per need (with `--review`, per Job of the PR, as the Dependencies are set in the same transaction). **Event** `job-added` `{pr, status, appended, tier, needs, review}`. **Re-arms `all-merged`** (hs-d140): the same transaction sets the PR's `all_merged_at` to null when it was set, so engine E4 appends `all-merged` for that PR again once its Jobs are all `merged` or `cancelled` (contract §3.7); a PR that never had it sent is unchanged. No cycle is possible: nothing needs a new Job yet. An appended Job of a `waiting` PR is not Ready until its PR starts (§3.2); an appended draft is not Ready at all until its review is approved; one of an `open` PR reaches its pull request through `pr rebase --pr <key>` (§9.3), or `pr push --pr <key>` (§9.9).
 
 ```json
 {"ok": true, "job": {"key": "api-schema", "pr": "api", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false}}
 ```
 
-Idempotent: yes, as stated. `--review` is repeatable like any add: an identical call (same Locked fields, `review` included, same Dependencies) is `already`; a call after another Job was added to the PR differs in its Dependencies and is `job_key_exists`. `job edit` has no `--review` and refuses `--needs` and `--no-needs` on a review Job with `usage` (*decided*: its Dependencies are fixed by the add; to change them, cancel it and add a new one).
+Idempotent: yes, as stated (`--draft` is not a Locked field: the call that found an identical Job returns `already` whatever its status). `--review` is repeatable like any add: an identical call (same Locked fields, `review` included, same Dependencies) is `already`; a call after another Job was added to the PR differs in its Dependencies and is `job_key_exists`. `job edit` has no `--review` and refuses `--needs` and `--no-needs` on a review Job with `usage` (*decided*: its Dependencies are fixed by the add; to change them, cancel it and add a new one).
 
 ### 5.2 `job edit`
 
@@ -693,12 +702,12 @@ Idempotent: yes, as stated. `--review` is repeatable like any add: an identical 
 cpd job edit <key> [--title <text>] [--tier <T>] [--spec <file>] [--pr <key>] [--needs <k1,k2> | --no-needs] [--plan <id>]
 ```
 
-`--no-needs` removes every Dependency (cpd 1 had no way to). `--pr <key>` moves the draft Job to another PR (R34, A14); it is a field flag, so §1.3's default does not apply: without it the Job keeps its PR. Dependencies stay inside one PR (A7): a Job that changes PR keeps none of its old needs, so give `--needs` with Jobs of the new PR, or `--no-needs`, and no other Job may need it.
+A draft is editable in **every phase** (User, hs-d173, hs-d174, hs-d179), including one added after the lock, whose review may be pending: the edit changes the fingerprint of the drafts, so the pending review no longer matters (§4.6). `--needs` may name drafts. `--no-needs` removes every Dependency (cpd 1 had no way to). `--pr <key>` moves the draft Job to another PR (R34, A14); it is a field flag, so §1.3's default does not apply: without it the Job keeps its PR. Dependencies stay inside one PR (A7): a Job that changes PR keeps none of its old needs, so give `--needs` with Jobs of the new PR, or `--no-needs`, and no other Job may need it.
 
 | Precondition | Code | Exit |
 |---|---|---|
 | at least one field flag | `nothing_to_edit` | 2 |
-| the Job is `draft` | `job_locked` | 3 |
+| the Job is `draft`, in whatever phase; a Job that is not `draft` is Locked | `job_locked` | 3 |
 | `--pr` names a PR of the Plan | `pr_not_found` | 4 |
 | that PR is not `cancelled` | `pr_ended` | 3 |
 | the needs exist and are usable | `needs_unknown`, `needs_unavailable` | 3 |
@@ -724,7 +733,7 @@ cpd job cancel <key> --reason <text> [--plan <id>]
 | the Job is not `merged` | `job_merged` | 3 |
 
 Effects (§3.2 "Cancel"):
-- `draft`, `queued` or `failed`: one transaction, `status = cancelled`, `cancel_reason`, `cancel_requested_at`; **Event** `job-cancelled` `{reason}`.
+- `draft` (in any phase: a draft added after the lock is cancelled like one in phase `plan`), `queued` or `failed`: one transaction, `status = cancelled`, `cancel_reason`, `cancel_requested_at`; **Event** `job-cancelled` `{reason}`.
 - `running`: one transaction, `cancel_reason` and `cancel_requested_at` only; **Event** `job-cancel-requested` `{reason}`. Engine E2 sets the Attempt's `stop_request = cancelled`, and the driver or E2 ends it `cancelled` at its next safe point (§3.4), which appends `job-cancelled`. No tmux action by this command.
 
 ```json
@@ -1066,7 +1075,7 @@ Idempotent: yes; a base that has not moved gives `"rebased": false`, and only th
 cpd pr add <key> --repo <path> [--base <branch>] [--needs <k1,k2>] [--plan <id>]
 ```
 
-Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `plan` it is part of the plan fingerprint (§2.3), so the Plan needs a review that includes it; in `dispatch`, `pr` and `done` it is **appended**, like `job add`, and engine E7 starts it once its needs are `merged` (at once when it has none, §3.7). In `pr` and `done` it also **moves the Plan back to `dispatch`** (hs-d87: a merged PR can hold a bug or a regression, so a Plan takes follow-up work at any time; no Plan review, D4). When the Plan has a `merged` PR on the legacy Lead Branch `cpd/<plan>`, it first **moves that branch** to `cpd/<plan>/<that PR's key>` (below).
+Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `plan` it is part of the plan fingerprint (§2.3), so the Plan needs a review that includes it; in `dispatch`, `pr` and `done` it is **appended**, like `job add`, and engine E7 starts it once its needs are `merged` (at once when it has none, §3.7). In `pr` and `done` it also **moves the Plan back to `dispatch`** (hs-d87: a merged PR can hold a bug or a regression, so a Plan takes follow-up work at any time; no Plan review of the PR itself, D4; the Jobs added to it as drafts are reviewed, §4.6). When the Plan has a `merged` PR on the legacy Lead Branch `cpd/<plan>`, it first **moves that branch** to `cpd/<plan>/<that PR's key>` (below).
 
 | Flag | Meaning |
 |---|---|
@@ -1896,7 +1905,7 @@ Replaces cpd 1 §15's `cpd_plan_review` flow; the plannotator event API is the o
 
 **Requesting.** The Lead runs `cpd plan review`, directly or through the tool `cpd_plan_review` (no parameters; registered for Plan Leads only). The tool runs `cpd plan review --plan <CPD_PLAN>` and returns its `next` text; when the result is `"already": true` and this session has no pending entry for that review, the tool opens it itself (below), so a review that failed to open can be retried. The tool's name is kept so §6.5's `--exclude-tools` list for Workers stays right.
 
-**Opening**, on a `plan-review` Event with `status: pending` for its Plan, or from the tool:
+**Opening**, on a `plan-review` Event with `status: pending` for its Plan, **whatever the Plan's phase** (a review of the drafts of a running Plan, §4.6, opens exactly like one in phase `plan`; the adapter does not read the phase and its list of Event kinds does not change), or from the tool:
 1. Skip it when the session already has a `cpd-plan-review` entry for this review, or when it is not the Plan's latest review (`cpd plan show`, `review.id`): a replayed or superseded request.
 2. Read `run/<plan>/plan-<review>.md` (§4.6).
 3. `pi.events.emit("plannotator:request", {requestId, action: "plan-review", payload: {planContent, planFilePath}, respond})`, waiting at most 15 s for `respond`. A `handled` response with `status: pending` gives plannotator's own review id.
@@ -1907,7 +1916,7 @@ If plannotator does not answer, answers `unavailable` or `error` (for example `P
 **Deciding**, on `plannotator:review-result` `{reviewId, approved, feedback?}` for a pending entry:
 1. Write the feedback, if any, to a temporary file; run `cpd plan decide <review> --approve | --reject [--feedback-file <f>] --plan <plan>`. `review_decided` means another caller decided it: the adapter reads the decision with `cpd plan show` and continues with it.
 2. Append the entry with `status` `approved` or `rejected`; close `plan-review:<review>`.
-3. Tell the Lead with `pi.sendMessage({customType: "cpd-plan-decision", …}, {triggerTurn: true, deliverAs: "followUp"})` (cpd 1 `decisionText`, kept): `Plan review r3 was APPROVED.` plus the feedback, then `Next: cpd plan lock`, or for a rejection `Revise the plan (job edit, job add, job cancel), then call cpd_plan_review again.`; when `current` is false, it says the Jobs changed since that review and asks for a new one. The custom type differs from `cpd`, so this message never moves the cursor.
+3. Tell the Lead with `pi.sendMessage({customType: "cpd-plan-decision", …}, {triggerTurn: true, deliverAs: "followUp"})` (cpd 1 `decisionText`, kept): `Plan review r3 was APPROVED.` plus the feedback, then `Next: cpd plan lock` in phase `plan`, or in a later phase that the drafts are queued and no lock is needed (the Event's `data.jobs` lists them), or for a rejection `Revise the plan (job edit, job add, job cancel), then call cpd_plan_review again.`; when `current` is false, it says the Jobs changed since that review and asks for a new one. The custom type differs from `cpd`, so this message never moves the cursor.
 
 **Deciding elsewhere**, on a `plan-review` Event with `status` `approved` or `rejected` for a pending entry of this session: any caller other than plannotator decided the review (`cpd plan decide` from the CLI, the User or a script), and the database already holds the decision, so the adapter does **not** run `plan decide`. Otherwise the Lead would stay `blocked` and never be told. It does what "Deciding" does after its own `plan decide`:
 1. Read `cpd plan show` for `current` (and for the feedback when the Event's `data.feedback` is not a string).
