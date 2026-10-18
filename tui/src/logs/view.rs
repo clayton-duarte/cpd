@@ -55,8 +55,9 @@ impl Log {
         self.height = usize::from(height);
         if let (true, Some(id)) = (std::mem::take(&mut self.reveal), self.selected) {
             if let Some(i) = self.events.iter().position(|e| e.id == id) {
-                // the line goes to the middle of the view: `end` is one past the last line shown
-                let end = i + 1 + self.height.saturating_sub(1) / 2;
+                // the line goes to the middle of the view, which is full when it can be: `end` is one past the last
+                // line shown
+                let end = (i + 1 + self.height.saturating_sub(1) / 2).max(self.height);
                 self.up = self.events.len().saturating_sub(end);
             }
         }

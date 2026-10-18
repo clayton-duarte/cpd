@@ -329,3 +329,93 @@ fn a_click_on_the_logs_button_opens_the_popup_and_the_others_do_not() {
     wait_until("the legend popup", || popups(&env).len() == 2);
     assert!(popups(&env)[1].contains(&" legend ".to_owned()));
 }
+
+// ---------- opening at an Event (`--event <id>`, the Inbox click of an engine-error or engine-down item) ----------
+
+/// The row indexes of `buf` whose first and last cell are reversed.
+fn reversed_rows(buf: &Buffer) -> Vec<u16> {
+    let width = buf.area.width;
+    (0..buf.area.height)
+        .filter(|&y| buf[(0, y)].modifier.contains(Modifier::REVERSED) && buf[(width - 1, y)].modifier.contains(Modifier::REVERSED))
+        .collect()
+}
+
+#[test]
+fn opened_at_an_event_its_line_is_reversed_in_the_middle_of_the_view_and_the_view_does_not_follow() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    append_numbered(&mut store, 0, 30);
+    let events = read::logs(&mut store, 500).unwrap().events;
+    let id = events.iter().find(|e| e.text == "event 10").unwrap().id;
+    let mut log = Log::at(events, id);
+    let buf = render(20, 5, &mut log);
+    assert_eq!(
+        rows(&buf),
+        [" 00:00:08 event 8", " 00:00:09 event 9", " 00:00:10 event 10", " 00:00:11 event 11", " 00:00:12 event 12"]
+    );
+    assert_eq!(reversed_rows(&buf), [2], "its whole line, and only it");
+    assert!(!log.follows());
+    // new Events do not move what is shown; scrolling to the bottom follows again
+    append_numbered(&mut store, 30, 2);
+    log.push(read::logs_after(&mut store, 30).unwrap().events);
+    assert_eq!(rows(&render(20, 5, &mut log))[2], " 00:00:10 event 10");
+    log.scroll_down(1000);
+    assert!(log.follows());
+    assert_eq!(rows(&render(20, 5, &mut log))[4], " 00:00:31 event 31");
+}
+
+#[test]
+fn an_event_at_either_end_fills_the_view_and_one_that_does_not_exist_opens_at_the_bottom() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    append_numbered(&mut store, 0, 30);
+    let events = read::logs(&mut store, 500).unwrap().events;
+    let (first, last) = (events[0].id, events[29].id);
+    let mut log = Log::at(events.clone(), first);
+    let buf = render(20, 5, &mut log);
+    assert_eq!((rows(&buf)[0].as_str(), rows(&buf)[4].as_str()), (" 00:00:00 event 0", " 00:00:04 event 4"));
+    assert_eq!(reversed_rows(&buf), [0]);
+    let mut log = Log::at(events.clone(), last);
+    let buf = render(20, 5, &mut log);
+    assert_eq!(rows(&buf)[4], " 00:00:29 event 29");
+    assert_eq!(reversed_rows(&buf), [4]);
+    assert!(log.follows(), "its line is the bottom one");
+    let mut log = Log::at(events, 9999);
+    let buf = render(20, 5, &mut log);
+    assert_eq!(rows(&buf)[4], " 00:00:29 event 29");
+    assert!(reversed_rows(&buf).is_empty() && log.follows());
+}
+
+#[test]
+fn the_popup_runs_the_view_at_the_event_of_the_item() {
+    let at = logs::popup_args((1000, 1000), Some(42));
+    assert_eq!(at.last().unwrap(), "cpd tui view logs --event 42");
+    assert_eq!(at[..at.len() - 1], logs::popup_args((1000, 1000), None)[..at.len() - 1], "sized as the button's");
+}
+
+#[test]
+fn the_view_opens_at_the_event_even_when_it_is_older_than_the_latest_500_and_does_not_follow() {
+    let env = env();
+    let mut store = open(&env);
+    append_numbered(&mut store, 0, 600);
+    // `event 2` is Event 3: older than the 500 the view starts with, so it is read on its own and shown first
+    let pane = start(&env, &["logs", "--event", "3"], 30, 5);
+    let rows = wait_screen(&env, &pane, "the Event", |r| r.first().is_some_and(|l| l == " 00:00:02 event 2"));
+    assert_eq!(rows[1], " 00:01:40 event 100", "then the latest 500");
+    append_numbered(&mut store, 600, 1);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(screen(&env, &pane)[0], " 00:00:02 event 2", "it does not follow");
+    tmux_out(&env, &["send-keys", "-t", &pane, "q"]);
+    wait_until("the view to close", || !env.tmux(&["has-session", "-t", "view"]).status.success());
+
+    // an Event among the latest 500 is in the middle of the view
+    let pane = start(&env, &["logs", "--event", "301"], 30, 5);
+    let rows = wait_screen(&env, &pane, "the Event", |r| r.get(2).is_some_and(|l| l == " 00:05:00 event 300"));
+    assert_eq!((rows[0].as_str(), rows[4].as_str()), (" 00:04:58 event 298", " 00:05:02 event 302"));
+    tmux_out(&env, &["send-keys", "-t", &pane, "Escape"]);
+    wait_until("the view to close", || !env.tmux(&["has-session", "-t", "view"]).status.success());
+
+    // an Event that does not exist: the bottom, as without the option
+    let pane = start(&env, &["logs", "--event", "99999"], 30, 5);
+    wait_screen(&env, &pane, "the bottom", |r| r.get(4).is_some_and(|l| l == " 00:10:00 event 600"));
+}
