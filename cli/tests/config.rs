@@ -513,6 +513,7 @@ fn tiers_finds_pi_through_a_symlink() {
     fs::create_dir_all(agent.join("bin")).unwrap();
     fs::write(agent.join("bin/pi"), "#!/bin/sh\nexit 0\n").unwrap();
     fs::set_permissions(agent.join("bin/pi"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::remove_file(env.bin().join("pi")).unwrap(); // the deny shim
     symlink(agent.join("bin/pi"), env.bin().join("pi")).unwrap();
     let release = agent.join("install/releases/3.0.0/node_modules/@earendil-works");
     for package in ["pi-coding-agent", "pi-ai"] {

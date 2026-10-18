@@ -6,7 +6,9 @@
 //! - a private tmux server: its own `TMUX_TMPDIR` and socket name, killed on drop,
 //!   so the cockpit server `-L cpd` is never touched;
 //! - a `bin/` directory first on `PATH`, for fake `pi` and `gh` scripts that
-//!   record their calls, so no test reaches pi or the network;
+//!   record their calls; `gh`, `pi`, `curl`, `wget` and `ssh` start as shims that
+//!   exit 97 (`no fake installed for <name>`), and no `GH_*`, `GITHUB_*`, `SSH_*`
+//!   or proxy variable reaches a command, so no test reaches pi or the network;
 //! - temporary git repos with a fixed identity and no global or system config.
 //!
 //! Use it from a test file with `mod common;`.
@@ -30,6 +32,15 @@ pub const CPD: &str = env!("CARGO_BIN_EXE_cpd");
 pub const SLEEP_SECONDS: u64 = 120;
 
 static NEXT_SOCKET: AtomicUsize = AtomicUsize::new(0);
+
+/// The tools a test never runs for real: `TestEnv::new` installs a deny shim for each.
+pub const DENIED_TOOLS: [&str; 5] = ["gh", "pi", "curl", "wget", "ssh"];
+
+/// The exit status of a deny shim.
+pub const DENIED_EXIT: i32 = 97;
+
+/// The proxy variables, dropped from every command (either case).
+const PROXY_VARS: [&str; 3] = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"];
 
 pub struct TestEnv {
     dir: TempDir,
@@ -80,6 +91,12 @@ impl TestEnv {
         for sub in ["cpd-home", "home", "bin", "tmux", "repos"] {
             fs::create_dir_all(env.dir.path().join(sub)).expect("create test dir");
         }
+        for tool in DENIED_TOOLS {
+            let path = env.bin().join(tool);
+            fs::write(&path, format!("#!/bin/sh\necho 'no fake installed for {tool}' >&2\nexit {DENIED_EXIT}\n"))
+                .expect("write deny shim");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod deny shim");
+        }
         fs::write(
             env.home().join(".gitconfig"),
             "[user]\n\tname = cpd test\n\temail = test@cpd.invalid\n[init]\n\tdefaultBranch = main\n",
@@ -116,13 +133,16 @@ impl TestEnv {
     }
 
     /// A `Command` for `program` with this env's isolated environment:
-    /// `CPD_*`, `PI_*`, `GIT_*`, `XDG_*`, `TMUX` and `TMUX_PANE` removed, then
+    /// `CPD_*`, `PI_*`, `GIT_*`, `XDG_*`, `GH_*`, `GITHUB_*`, `SSH_*`, the proxy
+    /// variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, either case), `TMUX` and
+    /// `TMUX_PANE` removed, then
     /// `CPD_HOME`, `HOME`, `PATH`, `TMUX_TMPDIR` and git's config set.
     pub fn command(&self, program: impl AsRef<OsStr>) -> Command {
         let mut cmd = Command::new(program);
         for (key, _) in std::env::vars_os() {
             let k = key.to_string_lossy();
-            let drop = ["CPD_", "PI_", "GIT_", "XDG_"].iter().any(|p| k.starts_with(p))
+            let drop = ["CPD_", "PI_", "GIT_", "XDG_", "GH_", "GITHUB_", "SSH_"].iter().any(|p| k.starts_with(p))
+                || PROXY_VARS.iter().any(|v| k.eq_ignore_ascii_case(v))
                 || k == "TMUX"
                 || k == "TMUX_PANE";
             if drop {
