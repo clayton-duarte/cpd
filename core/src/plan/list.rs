@@ -1,18 +1,18 @@
 //! `plan list` (commands.md §4.2): every Plan with its PRs, a read-only
 //! snapshot in one read transaction with its `events_cursor` (§17).
 
-use rusqlite::Connection;
+use std::collections::BTreeMap;
+
+use rusqlite::{Connection, Row};
 use serde_json::{Value, json};
 
-use super::jobs;
-use super::show::{pr_values, query_heads};
+use super::jobs::STATUSES;
+use super::show::query_heads;
 use super::{Env, ListArgs};
 use crate::error::CpdError;
 use crate::events::highest_id;
 use crate::output::Output;
-
-/// What the Dispatch column shows of a PR (§13.2, §17).
-const PR_FIELDS: [&str; 5] = ["key", "repo", "status", "pr", "pull_request"];
+use crate::pr::pulls::PullRequest;
 
 pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
@@ -20,26 +20,91 @@ pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
     Ok(Output::success(json!({"plans": plans, "events_cursor": cursor})))
 }
 
-/// The Plans and the cursor, read through `conn`.
+/// The Plans and the cursor, read through `conn` with four statements whatever
+/// the size of the Ledger (as `tui/src/read` does): the Plans, the Jobs counted
+/// by Plan and status, the PRs with their pull request, the cursor.
 fn snapshot(conn: &Connection, args: &ListArgs) -> Result<(Vec<Value>, i64), CpdError> {
-    {
-        let context = args.context.as_ref().map(|c| c.as_str().to_owned());
-        let phase = args.phase.map(|p| p.as_str());
-        let heads = query_heads(conn, "(?1 IS NULL OR context = ?1) AND (?2 IS NULL OR phase = ?2)", &[&context, &phase])?;
-        let mut out = Vec::new();
-        for plan in heads {
-            let jobs = jobs::load(conn, &plan.id)?;
-            let prs: Vec<Value> = pr_values(conn, &plan.id)?
-                .into_iter()
-                .map(|pr| Value::Object(PR_FIELDS.iter().map(|f| ((*f).to_owned(), pr[*f].clone())).collect()))
-                .collect();
-            out.push(json!({
+    let context = args.context.as_ref().map(|c| c.as_str().to_owned());
+    let phase = args.phase.map(|p| p.as_str());
+    let heads = query_heads(conn, "(?1 IS NULL OR context = ?1) AND (?2 IS NULL OR phase = ?2)", &[&context, &phase])?;
+    let mut counts = job_counts(conn)?;
+    let mut prs = prs(conn)?;
+    let out = heads
+        .into_iter()
+        .map(|plan| {
+            json!({
                 "id": plan.id, "context": plan.context, "title": plan.title, "phase": plan.phase.as_str(),
-                "lead_session": plan.lead_session, "archived_at": plan.archived_at, "counts": jobs::counts(&jobs), "prs": prs,
-            }));
-        }
-        Ok((out, highest_id(conn)?))
+                "lead_session": plan.lead_session, "archived_at": plan.archived_at,
+                "counts": counts_value(&counts.remove(plan.id.as_str()).unwrap_or_default()),
+                "prs": prs.remove(plan.id.as_str()).unwrap_or_default(),
+            })
+        })
+        .collect();
+    Ok((out, highest_id(conn)?))
+}
+
+/// How many Jobs each Plan has in each status.
+fn job_counts(conn: &Connection) -> Result<BTreeMap<String, BTreeMap<String, i64>>, CpdError> {
+    let mut stmt = conn.prepare("SELECT plan, status, count(*) FROM jobs GROUP BY plan, status")?;
+    let mut by_plan: BTreeMap<String, BTreeMap<String, i64>> = BTreeMap::new();
+    for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))? {
+        let (plan, status, n) = row?;
+        by_plan.entry(plan).or_default().insert(status, n);
     }
+    Ok(by_plan)
+}
+
+/// Every status listed, as `jobs::counts` prints it.
+fn counts_value(by_status: &BTreeMap<String, i64>) -> Value {
+    Value::Object(STATUSES.iter().map(|s| ((*s).to_owned(), json!(by_status.get(*s).copied().unwrap_or(0)))).collect())
+}
+
+/// What the Dispatch column shows of every PR (§13.2, §17), by Plan, in key order:
+/// `key`, `repo`, `status`, `pr` and `pull_request`.
+fn prs(conn: &Connection) -> Result<BTreeMap<String, Vec<Value>>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT r.plan, r.key, r.repo, r.status, r.pr_number, r.pr_url, r.pr_opened_at,
+                q.id, q.repo, q.number, q.url, q.title, q.draft, q.state, q.review_decision, q.checks, q.created_at, q.merged_at,
+                q.changed_at, q.mergeable, q.merge_state, q.authored, q.review_requested
+           FROM prs r LEFT JOIN pull_requests q ON q.id = r.pull_request ORDER BY r.plan, r.key",
+    )?;
+    let mut by_plan: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for row in stmt.query_map([], pr_row)? {
+        let (plan, pr) = row?;
+        by_plan.entry(plan).or_default().push(pr);
+    }
+    Ok(by_plan)
+}
+
+fn pr_row(r: &Row) -> rusqlite::Result<(String, Value)> {
+    let pr = match (r.get::<_, Option<i64>>(4)?, r.get::<_, Option<String>>(5)?, r.get::<_, Option<String>>(6)?) {
+        (Some(number), Some(url), Some(opened_at)) => json!({"number": number, "url": url, "opened_at": opened_at}),
+        _ => Value::Null,
+    };
+    let pull_request = match r.get::<_, Option<i64>>(7)? {
+        None => Value::Null,
+        Some(id) => PullRequest {
+            id,
+            repo: r.get(8)?,
+            number: r.get(9)?,
+            url: r.get(10)?,
+            title: r.get(11)?,
+            draft: r.get(12)?,
+            state: r.get(13)?,
+            review_decision: r.get(14)?,
+            checks: r.get(15)?,
+            created_at: r.get(16)?,
+            merged_at: r.get(17)?,
+            changed_at: r.get(18)?,
+            mergeable: r.get(19)?,
+            merge_state: r.get(20)?,
+            authored: r.get(21)?,
+            review_requested: r.get(22)?,
+        }
+        .to_json(),
+    };
+    let value = json!({"key": r.get::<_, String>(1)?, "repo": r.get::<_, String>(2)?, "status": r.get::<_, String>(3)?, "pr": pr, "pull_request": pull_request});
+    Ok((r.get(0)?, value))
 }
 
 #[cfg(test)]
