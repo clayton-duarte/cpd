@@ -13,7 +13,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::error::{CpdError, ErrorCode};
-use super::status::{ChecksSummary, PrState, ReviewDecision};
+use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
 use crate::git::{TAIL_LINES, tail};
 
 /// A `gh` call that takes longer than this is killed (`gh_failed`).
@@ -223,11 +223,19 @@ pub fn view(cwd: &Path, number: i64) -> Result<View, CpdError> {
 }
 
 /// Inline review comments, which `gh pr view` does not list. `{owner}/{repo}`
-/// are filled in by `gh` from `cwd`'s repo.
+/// are filled in by `gh` from `cwd`'s repo. Every page is read: `gh` 2.45 has no
+/// `--slurp`, so `--paginate` prints the pages as consecutive JSON arrays.
 pub fn inline_comments(cwd: &Path, number: i64) -> Result<Vec<InlineComment>, CpdError> {
-    let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments");
-    let args = ["api", endpoint.as_str()];
-    parse(&args, &run(cwd, &args)?)
+    let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments?per_page=100");
+    let args = ["api", endpoint.as_str(), "--paginate"];
+    let stdout = run(cwd, &args)?;
+    let mut comments = Vec::new();
+    for page in serde_json::Deserializer::from_str(&stdout).into_iter::<Vec<InlineComment>>() {
+        comments.extend(page.map_err(|e| {
+            failed(&args, format!("gh api printed unexpected JSON: {e}."), Some(0), "").with("stdout", tail(&stdout, TAIL_LINES))
+        })?);
+    }
+    Ok(comments)
 }
 
 // The poller (contract §7.6, commands.md §9.2): one search, one lookup.
@@ -236,14 +244,19 @@ pub fn inline_comments(cwd: &Path, number: i64) -> Result<Vec<InlineComment>, Cp
 macro_rules! pr_fields {
     () => {
         "repository { nameWithOwner } number url title isDraft state createdAt mergedAt reviewDecision \
-         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
+         mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
     };
 }
 
-/// The poll query: the User's open pull requests, oldest first, at most 100. GitHub
-/// ignores an unknown search qualifier and answers 0 PRs, so a test pins this text.
+/// The poll query, two searches in one call, each the oldest 100 open pull
+/// requests: the User's (`search`) and those that request the User's review
+/// (`reviewRequests`). GitHub ignores an unknown search qualifier and answers 0
+/// PRs, so a test pins this text.
 pub const SEARCH_QUERY: &str = concat!(
     "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { ",
+    "issueCount nodes { ... on PullRequest { ",
+    pr_fields!(),
+    " } } } reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { ",
     "issueCount nodes { ... on PullRequest { ",
     pr_fields!(),
     " } } } rateLimit { cost remaining resetAt } }"
@@ -261,8 +274,28 @@ pub struct PolledPr {
     pub state: PrState,
     pub review_decision: ReviewDecision,
     pub checks: ChecksSummary,
+    pub mergeable: Mergeable,
+    pub merge_state: MergeState,
     pub created_at: String,
     pub merged_at: Option<String>,
+}
+
+/// Which of the poll's two searches listed a pull request: what the row's
+/// `authored` and `review_requested` hold. A pull request only a lookup found
+/// (merged or closed, so in neither open search) has neither.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Membership {
+    /// In the `author:@me` search.
+    pub authored: bool,
+    /// In the `review-requested:@me` search.
+    pub review_requested: bool,
+}
+
+/// A pull request with the searches that listed it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Listed {
+    pub pr: PolledPr,
+    pub membership: Membership,
 }
 
 /// GitHub's rate limit after the call.
@@ -273,11 +306,13 @@ pub struct Rate {
     pub reset_at: String,
 }
 
-/// The first page of the search: `issue_count` is the total GitHub matched.
+/// The first page of both searches: `issue_count` is the total GitHub matched by
+/// the two. `prs` holds each pull request once: one in both searches has both
+/// memberships.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Search {
     pub issue_count: u32,
-    pub prs: Vec<PolledPr>,
+    pub prs: Vec<Listed>,
     pub rate: Rate,
 }
 
@@ -298,6 +333,8 @@ struct GqlError {
 #[derive(Deserialize)]
 struct RawSearchData {
     search: Option<RawSearch>,
+    #[serde(rename = "reviewRequests")]
+    review_requests: Option<RawSearch>,
     #[serde(rename = "rateLimit")]
     rate_limit: Option<RawRate>,
 }
@@ -359,6 +396,9 @@ struct RawPr {
     merged_at: Option<String>,
     #[serde(rename = "reviewDecision")]
     review_decision: Option<String>,
+    mergeable: String,
+    #[serde(rename = "mergeStateStatus")]
+    merge_state: String,
     commits: RawCommits,
 }
 
@@ -397,6 +437,8 @@ impl Reply<'_> {
 
     fn polled(&self, raw: RawPr) -> Result<PolledPr, CpdError> {
         let state = PrState::of_graphql(&raw.state).map_err(|e| self.fail(e.message().to_owned()))?;
+        let mergeable = Mergeable::of_graphql(&raw.mergeable).map_err(|e| self.fail(e.message().to_owned()))?;
+        let merge_state = MergeState::of_graphql(&raw.merge_state).map_err(|e| self.fail(e.message().to_owned()))?;
         let rollup = raw.commits.nodes.first().and_then(|n| n.commit.as_ref()).and_then(|c| c.rollup.as_ref());
         Ok(PolledPr {
             repo: raw.repository.name_with_owner,
@@ -407,6 +449,8 @@ impl Reply<'_> {
             state,
             review_decision: ReviewDecision::of(raw.review_decision.as_deref()),
             checks: ChecksSummary::of_rollup(rollup.map(|r| r.state.as_str())),
+            mergeable,
+            merge_state,
             created_at: raw.created_at,
             merged_at: raw.merged_at,
         })
@@ -423,7 +467,6 @@ fn graphql(cwd: &Path, query: &str) -> Result<(Vec<String>, Output), CpdError> {
 
 /// The User's open pull requests (`SEARCH_QUERY`), 15 s at most. A response with
 /// `errors`, without `data` or without JSON is `gh_failed`, never "no PRs".
-#[allow(dead_code)] // Job `pr-poll2` calls it.
 pub fn search_open(cwd: &Path) -> Result<Search, CpdError> {
     let (args, out) = graphql(cwd, SEARCH_QUERY)?;
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -435,11 +478,30 @@ fn parse_search(reply: &Reply) -> Result<Search, CpdError> {
     if let Some(first) = errors.first() {
         return Err(reply.fail(format!("gh api graphql answered with errors: {}", first.message.as_deref().unwrap_or("(no message)"))));
     }
-    let (Some(search), Some(rate)) = (data.search, data.rate_limit) else {
-        return Err(reply.fail("gh api graphql answered without search or rateLimit.".to_owned()));
+    let (Some(authored), Some(requested), Some(rate)) = (data.search, data.review_requests, data.rate_limit) else {
+        return Err(reply.fail("gh api graphql answered without search, reviewRequests or rateLimit.".to_owned()));
     };
-    let prs = search.nodes.into_iter().map(|raw| reply.polled(raw)).collect::<Result<Vec<_>, _>>()?;
-    Ok(Search { issue_count: search.issue_count, prs, rate: Rate { cost: rate.cost, remaining: rate.remaining, reset_at: rate.reset_at } })
+    let issue_count = authored.issue_count + requested.issue_count;
+    let mut prs: Vec<Listed> = Vec::new();
+    for (nodes, is_authored) in [(authored.nodes, true), (requested.nodes, false)] {
+        for raw in nodes {
+            let pr = reply.polled(raw)?;
+            let at = match prs.iter().position(|l| (&l.pr.repo, l.pr.number) == (&pr.repo, pr.number)) {
+                Some(at) => at,
+                None => {
+                    prs.push(Listed { pr, membership: Membership::default() });
+                    prs.len() - 1
+                }
+            };
+            let membership = &mut prs[at].membership;
+            if is_authored {
+                membership.authored = true;
+            } else {
+                membership.review_requested = true;
+            }
+        }
+    }
+    Ok(Search { issue_count, prs, rate: Rate { cost: rate.cost, remaining: rate.remaining, reset_at: rate.reset_at } })
 }
 
 /// `owner/name` with each part of `[A-Za-z0-9_.-]+`: nothing else reaches a query text.
@@ -452,7 +514,6 @@ fn repo_parts(repo: &str) -> Option<(&str, &str)> {
 /// most; `None` for one that GitHub cannot find (deleted, or no access). `gh`
 /// exits 1 on such an alias: stdout is parsed whatever the exit, and a call
 /// without `data` is `gh_failed`. An empty `prs` makes no call.
-#[allow(dead_code)] // Job `pr-poll2` calls it.
 pub fn lookup(cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Option<PolledPr>>, CpdError> {
     if prs.is_empty() {
         return Ok(Vec::new());
@@ -508,6 +569,7 @@ mod tests {
         format!(
             r#"{{"repository":{{"nameWithOwner":"{repo}"}},"number":{number},"url":"https://github.com/{repo}/pull/{number}","title":"T{number}",
             "isDraft":{draft},"state":"{state}","createdAt":"2026-05-01T10:00:00Z","mergedAt":null,"reviewDecision":"APPROVED",
+            "mergeable":"CONFLICTING","mergeStateStatus":"DIRTY",
             "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{rollup}}}}}]}}}}"#
         )
     }
@@ -526,7 +588,10 @@ mod tests {
             SEARCH_QUERY,
             "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt mergedAt \
-             reviewDecision commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
+             reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
+             reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { \
+             issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt mergedAt \
+             reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
              rateLimit { cost remaining resetAt } }"
         );
     }
@@ -534,38 +599,106 @@ mod tests {
     #[test]
     fn a_search_of_two_pull_requests_is_typed() {
         let body = format!(
-            r#"{{"data":{{"search":{{"issueCount":2,"nodes":[{},{}]}},"rateLimit":{{"cost":1,"remaining":4990,"resetAt":"2026-05-01T11:00:00Z"}}}}}}"#,
+            r#"{{"data":{{"search":{{"issueCount":2,"nodes":[{},{}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4990,"resetAt":"2026-05-01T11:00:00Z"}}}}}}"#,
             pr("o/a", 7, true, "OPEN", r#"{"state":"FAILURE"}"#),
             pr("o/b", 8, false, "OPEN", "null"),
         );
         let found = search(&reply(&body, 0)).unwrap();
         assert_eq!((found.issue_count, found.rate.cost, found.rate.remaining), (2, 1, 4990));
         assert_eq!(found.rate.reset_at, "2026-05-01T11:00:00Z");
-        let [a, b] = &found.prs[..] else { panic!("{:?}", found.prs) };
+        let [a, b] = &found.prs.iter().map(|l| &l.pr).collect::<Vec<_>>()[..] else { panic!("{:?}", found.prs) };
         assert_eq!((a.repo.as_str(), a.number, a.draft, a.state, a.checks), ("o/a", 7, true, PrState::Open, ChecksSummary::Failed));
         assert_eq!((a.review_decision, a.title.as_str(), a.merged_at.as_deref()), (ReviewDecision::Approved, "T7", None));
         assert_eq!(a.url, "https://github.com/o/a/pull/7");
         assert_eq!(a.created_at, "2026-05-01T10:00:00Z");
         assert_eq!((b.draft, b.checks), (false, ChecksSummary::None));
+        assert_eq!((a.mergeable, a.merge_state), (Mergeable::Conflicting, MergeState::Dirty));
+    }
+
+    #[test]
+    fn the_two_searches_are_merged_into_one_list_with_their_memberships() {
+        let body = format!(
+            r#"{{"data":{{"search":{{"issueCount":2,"nodes":[{},{}]}},
+            "reviewRequests":{{"issueCount":2,"nodes":[{},{}]}},
+            "rateLimit":{{"cost":2,"remaining":4990,"resetAt":"r"}}}}}}"#,
+            pr("o/a", 1, false, "OPEN", "null"),
+            pr("o/a", 2, false, "OPEN", "null"),
+            pr("o/a", 2, false, "OPEN", "null"),
+            pr("o/b", 3, false, "OPEN", "null"),
+        );
+        let found = search(&reply(&body, 0)).unwrap();
+        assert_eq!(found.issue_count, 4);
+        let listed: Vec<_> = found.prs.iter().map(|l| (l.pr.repo.as_str(), l.pr.number, l.membership.authored, l.membership.review_requested)).collect();
+        assert_eq!(listed, [("o/a", 1, true, false), ("o/a", 2, true, true), ("o/b", 3, false, true)]);
+    }
+
+    #[test]
+    fn a_reply_without_the_review_request_search_is_gh_failed() {
+        let body = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":9,"resetAt":"r"}}}"#;
+        assert_eq!(search(&reply(body, 0)).unwrap_err().code(), ErrorCode::GhFailed);
+    }
+
+    #[test]
+    fn mergeable_and_merge_state_are_typed_whatever_they_are() {
+        for (mergeable, merge_state, want) in [
+            ("MERGEABLE", "BLOCKED", (Mergeable::Mergeable, MergeState::Blocked)),
+            ("UNKNOWN", "UNKNOWN", (Mergeable::Unknown, MergeState::Unknown)),
+            ("MERGEABLE", "HAS_HOOKS", (Mergeable::Mergeable, MergeState::HasHooks)),
+        ] {
+            let node = pr("o/a", 7, false, "OPEN", "null")
+                .replace(r#""mergeable":"CONFLICTING","mergeStateStatus":"DIRTY""#, &format!(r#""mergeable":"{mergeable}","mergeStateStatus":"{merge_state}""#));
+            let body = format!(
+                r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
+            );
+            let found = &search(&reply(&body, 0)).unwrap().prs[0].pr;
+            assert_eq!((found.mergeable, found.merge_state), want, "{mergeable} {merge_state}");
+        }
+    }
+
+    #[test]
+    fn a_mergeable_or_merge_state_outside_the_sets_is_gh_failed_in_the_search_and_the_lookup() {
+        for (name, from, to) in [
+            ("mergeable", r#""mergeable":"CONFLICTING""#, r#""mergeable":"MAYBE""#),
+            ("merge_state", r#""mergeStateStatus":"DIRTY""#, r#""mergeStateStatus":"QUEUED""#),
+            ("lowercase", r#""mergeStateStatus":"DIRTY""#, r#""mergeStateStatus":"dirty""#),
+            ("null mergeable", r#""mergeable":"CONFLICTING""#, r#""mergeable":null"#),
+        ] {
+            let node = pr("o/a", 7, false, "OPEN", "null").replace(from, to);
+            let body = format!(
+                r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
+            );
+            assert_eq!(search(&reply(&body, 0)).unwrap_err().code(), ErrorCode::GhFailed, "search {name}");
+            let body = format!(r#"{{"data":{{"p0":{{"pullRequest":{node}}}}}}}"#);
+            assert_eq!(looked_up(&reply(&body, 0), 1).unwrap_err().code(), ErrorCode::GhFailed, "lookup {name}");
+        }
+    }
+
+    #[test]
+    fn a_pull_request_without_the_two_fields_is_gh_failed() {
+        let node = pr("o/a", 7, false, "OPEN", "null").replace(r#""mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","#, "");
+        let body = format!(
+            r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
+        );
+        assert_eq!(search(&reply(&body, 0)).unwrap_err().code(), ErrorCode::GhFailed);
     }
 
     #[test]
     fn a_pull_request_without_a_commit_has_no_checks() {
         let body = pr("o/a", 7, false, "OPEN", "null").replace(r#"{"commit":{"statusCheckRollup":null}}"#, r#"{"commit":null}"#);
         let body = format!(
-            r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{body}]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
+            r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{body}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#
         );
-        assert_eq!(search(&reply(&body, 0)).unwrap().prs[0].checks, ChecksSummary::None);
+        assert_eq!(search(&reply(&body, 0)).unwrap().prs[0].pr.checks, ChecksSummary::None);
     }
 
     #[test]
     fn a_search_that_is_not_an_answer_is_gh_failed() {
         let nodes = pr("o/a", 7, false, "OPEN", "null");
         let with_errors = format!(
-            r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{nodes}]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}},"errors":[{{"message":"nope"}}]}}"#
+            r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{nodes}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}},"errors":[{{"message":"nope"}}]}}"#
         );
         let unknown_state = format!(
-            r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{}]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#,
+            r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#,
             pr("o/a", 7, false, "WEIRD", "null")
         );
         for (name, stdout, exit) in [

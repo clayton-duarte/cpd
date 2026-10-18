@@ -31,6 +31,8 @@ fn env() -> TestEnv {
         ),
     )
     .unwrap();
+    // The engine the cockpit starts polls GitHub from its first tick: it finds nothing.
+    env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
     env.fake(
         "cpd",
         &format!("if [ \"$1\" = tui ] && [ \"$2\" = view ] && [ \"$3\" != chat ]; then exec sleep {SLEEP_SECONDS}; fi\nexec '{CPD}' \"$@\""),
@@ -483,4 +485,45 @@ fn tui_view_routes_by_name() {
         let run = env.cpd(words);
         assert_eq!((run.exit, run.error()["code"].clone()), (2, json!("usage")), "{words:?}: {run:?}");
     }
+}
+
+#[test]
+fn an_unfaked_gh_is_denied_with_exit_97() {
+    let env = TestEnv::new();
+    for tool in ["gh", "pi", "curl", "wget", "ssh"] {
+        let out = common::output(env.command(tool).arg("x")).unwrap();
+        assert_eq!(out.status.code(), Some(97), "{tool}");
+        assert_eq!(String::from_utf8_lossy(&out.stderr), format!("no fake installed for {tool}\n"));
+    }
+    env.fake_gh("echo faked");
+    let out = common::output(&mut env.command("gh")).unwrap();
+    assert_eq!((out.status.code(), String::from_utf8_lossy(&out.stdout).trim()), (Some(0), "faked"));
+}
+
+const AMBIENT: [&str; 10] = ["GH_TOKEN", "GH_HOST", "GITHUB_TOKEN", "SSH_AUTH_SOCK", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"];
+
+/// Runs [`the_ambient_gh_ssh_and_proxy_variables_do_not_reach_a_command`] in a child
+/// test process that has them set (the harness reads the process's own environment).
+#[test]
+fn a_command_has_no_gh_ssh_or_proxy_variable() {
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+    child.args(["--ignored", "--exact", "the_ambient_gh_ssh_and_proxy_variables_do_not_reach_a_command"]);
+    for name in AMBIENT {
+        child.env(name, "leak");
+    }
+    let out = common::output(&mut child).unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success() && stdout.contains("1 passed"), "{stdout}{}", String::from_utf8_lossy(&out.stderr));
+}
+
+#[test]
+#[ignore = "run by a_command_has_no_gh_ssh_or_proxy_variable, with the variables set"]
+fn the_ambient_gh_ssh_and_proxy_variables_do_not_reach_a_command() {
+    for name in AMBIENT {
+        assert_eq!(std::env::var(name).as_deref(), Ok("leak"), "the parent test sets {name}");
+    }
+    let env = TestEnv::new();
+    let text = String::from_utf8(common::output(&mut env.command("env")).unwrap().stdout).unwrap();
+    let leaked: Vec<&str> = text.lines().filter(|l| AMBIENT.iter().any(|n| l.starts_with(&format!("{n}=")))).collect();
+    assert!(leaked.is_empty(), "{leaked:?}");
 }

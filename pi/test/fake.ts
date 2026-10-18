@@ -1,4 +1,4 @@
-import { execFile, type ChildProcess } from "node:child_process";
+import { execFile } from "node:child_process";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -188,13 +188,29 @@ export class Fixture {
       await Promise.allSettled([...this.pi.commandsRunning]);
       await this.pi.fire("session_shutdown").catch(() => {});
     } while (this.pi.commandsRunning.size > 0);
-    this.pi.killExecs();
-    for (const [k, v] of Object.entries(this.saved)) {
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
+    try {
+      // `session_shutdown` SIGTERMs the followers without waiting, and the fake's handler still writes `killed-<pid>` into the dir: remove it only once every follower is gone.
+      await waitFor("every fake follower to exit", () => this.pids().every((pid) => !alive(pid)), 10_000);
+      // A one-shot `cpd` call (for example a poll's `--version`) still running logs `end` into the dir when it finishes.
+      await waitFor("every fake cpd call to finish", () => this.pi.execsRunning.size === 0, 10_000);
+    } finally {
+      for (const [k, v] of Object.entries(this.saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
     }
-    // a fake `cpd` still running may write a file while the directory is removed (ENOTEMPTY)
-    rmSync(this.dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+    rmSync(this.dir, { recursive: true, force: true });
+  }
+}
+
+/** Whether a process exists (signal 0 only checks). A child not yet reaped by node still counts: it is gone once node has seen it exit. */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw e;
   }
 }
 
@@ -257,22 +273,14 @@ export class FakePi implements PiApi {
 
   /** The `exec` calls (argv, without the command) started and not yet finished: a call is in flight from the moment the adapter makes it, however long the process takes to start. */
   readonly execsRunning = new Set<string[]>();
-  private readonly children = new Set<ChildProcess>();
-
-  /** Kills the `exec` processes still running (a slow fake `cpd`, started late under load, would write into a directory being removed). */
-  killExecs(): void {
-    for (const c of this.children) c.kill("SIGKILL");
-  }
 
   exec(command: string, args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
     this.execsRunning.add(args);
     return new Promise((resolve) => {
-      const child = execFile(command, args, { encoding: "utf8" }, (err, stdout, stderr) => {
+      execFile(command, args, { encoding: "utf8" }, (err, stdout, stderr) => {
         this.execsRunning.delete(args);
-        this.children.delete(child);
         resolve({ stdout, stderr, code: err ? (typeof err.code === "number" ? err.code : 1) : 0 });
       });
-      this.children.add(child);
     });
   }
 

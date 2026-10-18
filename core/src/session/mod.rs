@@ -168,6 +168,9 @@ pub struct SendArgs {
     /// The message, read from a file
     #[arg(long, value_name = "f")]
     file: Option<PathBuf>,
+    /// Start a turn when the target is idle (a Manager waking a stalled Lead; use sparingly)
+    #[arg(long)]
+    wake: bool,
 }
 
 #[derive(clap::Args, Debug)]

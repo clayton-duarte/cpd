@@ -5,13 +5,15 @@
 
 mod common;
 
-use common::TestEnv;
+use std::time::{Duration, Instant};
+
+use common::{CPD, SLEEP_SECONDS, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use cpd_tui::palette::{self, Meaning};
 use cpd_tui::read::{self, Dot, Widgets};
-use cpd_tui::widgets::{self, Machine, legend};
+use cpd_tui::widgets::{self, Hit, Machine, legend};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -145,17 +147,42 @@ fn machine() -> Machine {
 }
 
 fn render(width: u16, height: u16, w: &Widgets) -> Buffer {
+    render_hits(width, height, w, "").0
+}
+
+/// The column, and where a click reaches an owned PR; `note` is the last row's message.
+fn render_hits(width: u16, height: u16, w: &Widgets, note: &str) -> (Buffer, Vec<Hit>) {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal.draw(|f| widgets::draw(f, f.area(), w, &machine())).unwrap();
-    terminal.backend().buffer().clone()
+    let mut hits = vec![];
+    terminal.draw(|f| hits = widgets::draw(f, f.area(), w, &machine(), note)).unwrap();
+    (terminal.backend().buffer().clone(), hits)
 }
 
 fn rows(buf: &Buffer) -> Vec<String> {
     (0..buf.area.height).map(|y| row(buf, y).trim_end().to_owned()).collect()
 }
 
+/// The row as the terminal shows it: a linked cell's symbol carries its OSC 8 escapes (`ESC ] 8 ; ; <url> BEL`), which take no column.
 fn row(buf: &Buffer, y: u16) -> String {
-    (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect()
+    (0..buf.area.width).map(|x| plain(buf[(x, y)].symbol())).collect()
+}
+
+fn plain(symbol: &str) -> String {
+    let mut out = String::new();
+    let mut chars = symbol.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            chars.by_ref().find(|c| *c == '\x07');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// A PR's first line on a pane of `width` columns: its name, then `↗` in the last column.
+fn first_line(name: &str, width: usize) -> String {
+    format!("{name:<w$}↗", w = width - 1)
 }
 
 /// The first cell of the first row at or after `from` that contains `needle` (every glyph here is one column wide).
@@ -224,7 +251,7 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let w = read::widgets(&mut open(&env), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
     let machine = Machine { name: "homeserver".to_owned(), load: ["0.1", "0.2", "0.3"].map(str::to_owned).to_vec() };
-    terminal.draw(|f| widgets::draw(f, f.area(), &w, &machine)).unwrap();
+    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w, &machine, ""))).unwrap();
     let lines = rows(terminal.backend().buffer());
     let head = |title: &str| format!("── {title} {}", "─".repeat(30 - 4 - title.chars().count()));
     assert_eq!(lines[..3], ["", " homeserver", " load 0.1 0.2 0.3"]);
@@ -237,6 +264,7 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
 fn the_column_shows_the_machine_the_open_prs_git_and_jira() {
     let (got, _) = column(25);
     let (prs, git, jira) = (header("PRs"), header("git"), header("Jira"));
+    let (seven, eleven) = (first_line(" acme/repo#7", 46), first_line(" acme/repo#11", 46));
     let expected = [
         "",
         " homeserver",
@@ -244,9 +272,9 @@ fn the_column_shows_the_machine_the_open_prs_git_and_jira() {
         "",
         prs.as_str(),
         "",
-        " acme/repo#7",
+        seven.as_str(),
         "  open ✗ changes requested  cpd-tui cockpit c…",
-        " acme/repo#11",
+        eleven.as_str(),
         "  open – no review  Plan fresh",
         "",
         "",
@@ -287,16 +315,18 @@ fn three_open_prs_in_two_repos_come_out_oldest_first_in_two_lines_each() {
     let listed: Vec<(&str, i64)> = w.prs.iter().map(|p| (p.repo.as_str(), p.number)).collect();
     assert_eq!(listed, [("acme/web", 4), ("acme/repo", 9), ("acme/repo", 20)]);
     let got = rows(&render(46, 25, &w));
+    let (web4, repo9, repo20) =
+        (first_line(" acme/web#4", 46), first_line(" acme/repo#9", 46), first_line(" acme/repo#20", 46));
     assert_eq!(
         got[4..12],
         [
             header("PRs").as_str(),
             "",
-            " acme/web#4",
+            web4.as_str(),
             "  draft ✗ changes requested  Older web fix",
-            " acme/repo#9",
+            repo9.as_str(),
             "  open ✓ approved  Middle one",
-            " acme/repo#20",
+            repo20.as_str(),
             "  open … no review  Mine to review",
         ],
         "{got:#?}"
@@ -356,6 +386,25 @@ fn closed_and_merged_pull_requests_are_not_listed() {
     let (got, _) = column(25);
     let got = got.join("\n");
     assert!(!got.contains("#3") && !got.contains("#9"), "{got}");
+}
+
+#[test]
+fn an_open_review_request_is_not_listed_but_one_that_is_also_authored_is() {
+    let env = TestEnv::new();
+    let mut store = prs_store(&env);
+    let mut s = pull_request("acme/web", 31, "A colleague change", false, "open", "none", "passed", "2026-01-06T00:00:00.000Z");
+    s += &pull_request("acme/web", 32, "My own, and asked of me", false, "open", "none", "passed", "2026-01-07T00:00:00.000Z");
+    s += "UPDATE pull_requests SET authored = 0, review_requested = 1 WHERE number = 31;
+          UPDATE pull_requests SET review_requested = 1 WHERE number = 32;";
+    sql(&mut store, &s);
+
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+
+    let listed: Vec<(&str, i64)> = w.prs.iter().map(|p| (p.repo.as_str(), p.number)).collect();
+    assert!(listed.contains(&("acme/web", 32)), "{listed:?}");
+    assert!(listed.iter().all(|(_, n)| *n != 31), "{listed:?}");
+    let got = rows(&render(46, 30, &w)).join("\n");
+    assert!(got.contains("acme/web#32") && !got.contains("acme/web#31"), "{got}");
 }
 
 #[test]
@@ -440,7 +489,7 @@ fn a_long_title_is_cut_with_an_ellipsis_first_and_a_line_never_wraps() {
     assert!(got.iter().all(|r| r.chars().count() <= 24), "{got:#?}");
     assert!(got.contains(&"  open ✗ changes request".to_owned()), "the pane clips what is left:\n{got:#?}");
     let narrow = rows(&render(8, 25, &w));
-    assert!(narrow.contains(&" acme/r…".to_owned()), "the name is cut when it must be:\n{narrow:#?}");
+    assert!(narrow.contains(&" acme… ↗".to_owned()), "the name is cut before the arrow when it must be:\n{narrow:#?}");
 }
 
 #[test]
@@ -454,6 +503,231 @@ fn a_short_pane_drops_the_pull_requests_that_do_not_fit_from_the_end() {
         assert_eq!(shown, listed, "height {height}:\n{got}");
         assert!(listed == 0 || got.contains("acme/web#4"), "the oldest stay:\n{got}");
     }
+}
+
+// ---------- the ↗ links and the owned rows ----------
+
+/// The cell of a linked `↗`: its symbol is wrapped in the OSC 8 escapes of its link.
+fn linked_arrow(url: &str) -> String {
+    format!("\x1b]8;;{url}\x07↗\x1b]8;;\x07")
+}
+
+#[test]
+fn every_pr_row_ends_its_first_line_in_an_arrow_linking_to_the_pull_request() {
+    let env = TestEnv::new();
+    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let buf = render(46, 25, &w);
+    for (y, number, repo) in [(6, 4, "acme/web"), (8, 9, "acme/repo"), (10, 20, "acme/repo")] {
+        assert_eq!(buf[(45, y)].symbol(), linked_arrow(&format!("https://github.com/{repo}/pull/{number}")), "row {y}");
+        assert_eq!(plain(buf[(45, y)].symbol()), "↗", "row {y}");
+        assert_eq!(row(&buf, y).chars().count(), 46, "the arrow is the last column of row {y}");
+        assert_eq!(plain(buf[(45, y + 1)].symbol()), " ", "the second line has no arrow");
+    }
+}
+
+#[test]
+fn an_unowned_pr_is_dim_on_both_lines_with_its_arrow_and_an_owned_one_is_not() {
+    let env = TestEnv::new();
+    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    assert_eq!(
+        w.prs.iter().map(|p| p.lead.as_ref().map(|l| l.as_str())).collect::<Vec<_>>(),
+        [None, None, Some("l-mine")],
+        "`mine` owns acme/repo#20; no Plan owns the other two"
+    );
+    let buf = render(46, 25, &w);
+    let dim = |x: u16, y: u16| buf[(x, y)].modifier.contains(Modifier::DIM);
+    for y in [6, 8] {
+        assert!([1, 2, 12, 45].iter().all(|x| dim(*x, y)), "row {y} is dim: the name and the arrow");
+        assert!([2, 3, 12, 20].iter().all(|x| dim(*x, y + 1)), "row {} is dim: the second line", y + 1);
+    }
+    assert_eq!(plain(buf[(45, 6)].symbol()), "↗", "the arrow stays on an unowned PR");
+    // The owned one (here also the active one) is not dim.
+    assert!([1, 2, 12, 45].iter().all(|x| !dim(*x, 10)) && [2, 20].iter().all(|x| !dim(*x, 11)));
+}
+
+#[test]
+fn only_an_owned_pr_has_a_hit_area_its_two_rows_except_the_arrow() {
+    let env = TestEnv::new();
+    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let (_, hits) = render_hits(46, 25, &w, "");
+    let [hit] = &hits[..] else { panic!("{hits:?}") };
+    assert_eq!(hit.lead.as_str(), "l-mine");
+    let inside = |x, y| hit.contains(ratatui::layout::Position::new(x, y));
+    assert!(inside(0, 10) && inside(44, 10) && inside(0, 11) && inside(45, 11));
+    assert!(!inside(45, 10), "the arrow cell is the terminal's");
+    assert!(!inside(0, 9) && !inside(0, 12), "the unowned rows above and the blank row below");
+}
+
+#[test]
+fn a_note_is_the_last_row_in_the_note_colour() {
+    let env = TestEnv::new();
+    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let (buf, _) = render_hits(46, 25, &w, "no cockpit");
+    assert_eq!(row(&buf, 24).trim_end(), "no cockpit");
+    assert_eq!(buf[(0, 24)].fg, palette::note().fg.unwrap());
+    assert_eq!(row(&buf, 23).trim_end(), "", "the rest is as without it");
+}
+
+// ---------- the pane: links and clicks, with the view in a pane of a private tmux server ----------
+
+/// An env whose config has the private tmux server, as the tree's tests have.
+fn pane_env() -> TestEnv {
+    let env = TestEnv::new();
+    let config = format!(
+        "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[tmux]\nsocket = \"{}\"\n",
+        env.tmux_socket()
+    );
+    std::fs::write(env.cpd_home().join("config.toml"), config).unwrap();
+    env
+}
+
+fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
+    let out = env.tmux(args);
+    assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
+}
+
+fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !done() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// `cpd tui view widgets` in session `name`, window `main`, 120 columns by 40 rows; returns its pane.
+fn start(env: &TestEnv, name: &str) -> String {
+    tmux_out(env, &["new-session", "-d", "-s", name, "-n", "main", "-x", "120", "-y", "40", "-P", "-F", "#{pane_id}", &format!("{CPD} tui view widgets")])
+}
+
+/// The cockpit (session `cpd`, the config's default): the view, the chat placeholder beside it, and the Lead `l-mine` alone in
+/// a park window, as `session open` finds it (`@cpd_session`); its row records that pane. Returns the view's pane.
+fn cockpit(env: &TestEnv) -> String {
+    let view = start(env, "cpd");
+    tmux_out(env, &["set", "-p", "-t", &view, "@cpd_view", "widgets"]);
+    let chat = tmux_out(env, &["split-window", "-h", "-d", "-t", &view, "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
+    tmux_out(env, &["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
+    let parked =
+        tmux_out(env, &["new-window", "-d", "-t", "=cpd:", "-n", "park-mine", "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
+    tmux_out(env, &["set", "-p", "-t", &parked, "@cpd_session", "l-mine"]);
+    sql(&mut open(env), &format!("UPDATE sessions SET tmux_pane = '{parked}' WHERE id = 'l-mine';"));
+    view
+}
+
+/// The pane's rows, each without trailing blanks; `capture-pane` leaves out the empty rows at the end.
+fn screen(env: &TestEnv, pane: &str) -> Vec<String> {
+    let out = env.tmux(&["capture-pane", "-p", "-t", pane]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8(out.stdout).unwrap().lines().map(|l| l.trim_end().to_owned()).collect()
+}
+
+fn wait_for_screen(env: &TestEnv, pane: &str, what: &str, ok: impl Fn(&[String]) -> bool) -> Vec<String> {
+    let mut last = vec![];
+    wait_until(what, || {
+        last = screen(env, pane);
+        ok(&last)
+    });
+    last
+}
+
+/// A left click at 0-based `column` and `row`, as the terminal sends it (SGR mouse reporting, 1-based).
+fn click(env: &TestEnv, pane: &str, column: u16, row: u16) {
+    for end in ['M', 'm'] {
+        tmux_out(env, &["send-keys", "-t", pane, "-l", &format!("\x1b[<0;{};{}{end}", column + 1, row + 1)]);
+    }
+}
+
+fn moved_events(env: &TestEnv) -> Vec<(String, String)> {
+    open(env)
+        .read(|conn| {
+            let mut stmt = conn.prepare("SELECT session, json_extract(data, '$.place') FROM events WHERE kind = 'session-moved' ORDER BY id")?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .unwrap()
+}
+
+/// The pane of the cockpit's `main` window that has the focus: its `@cpd_session` (empty for the view and the placeholder).
+fn focused_session(env: &TestEnv) -> String {
+    let panes = tmux_out(env, &["list-panes", "-t", "=cpd:main", "-F", "#{pane_active}|#{@cpd_session}|#{@cpd_view}"]);
+    let active: Vec<&str> = panes.lines().filter(|l| l.starts_with("1|")).collect();
+    assert_eq!(active.len(), 1, "{panes}");
+    active[0].to_owned()
+}
+
+#[test]
+fn in_a_pane_each_arrow_is_a_link_at_the_right_edge_and_the_view_captures_the_mouse() {
+    let env = pane_env();
+    prs_store(&env);
+    let pane = start(&env, "view");
+    let screen = wait_for_screen(&env, &pane, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
+    let width = tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_width}"]).parse::<usize>().unwrap();
+    for name in [" acme/web#4", " acme/repo#9", " acme/repo#20"] {
+        let line = screen.iter().find(|r| r.starts_with(name)).unwrap_or_else(|| panic!("{name}: {screen:#?}"));
+        assert_eq!(line.chars().count(), width, "the arrow ends {name}'s line at the right edge: {line:?}");
+        assert!(line.ends_with('↗'), "{line:?}");
+    }
+    let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
+    for url in ["https://github.com/acme/web/pull/4", "https://github.com/acme/repo/pull/9", "https://github.com/acme/repo/pull/20"] {
+        assert!(styled.lines().any(|l| l.contains(&format!("]8;;{url}\x1b\\↗"))), "{url}: {styled:?}");
+    }
+    assert_eq!(tmux_out(&env, &["display", "-p", "-t", &pane, "#{mouse_any_flag}"]), "1", "mouse capture is on");
+}
+
+#[test]
+fn a_click_on_an_owned_row_opens_its_lead_and_focuses_the_chat_and_the_others_run_nothing() {
+    let env = pane_env();
+    let mut store = prs_store(&env);
+    sql(&mut store, &moved("2026-01-04T00:00:00.000Z", "mine", "parked"));
+    drop(store);
+    let view = cockpit(&env);
+    wait_for_screen(&env, &view, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
+    let width = tmux_out(&env, &["display", "-p", "-t", &view, "#{pane_width}"]).parse::<u16>().unwrap();
+    assert_eq!(focused_session(&env), "1||widgets", "the view has the focus");
+    let before = moved_events(&env);
+
+    // The unowned rows, and the owned row's arrow (the terminal's): nothing runs.
+    click(&env, &view, 3, 6);
+    click(&env, &view, 3, 9);
+    click(&env, &view, width - 1, 10);
+    // The owned row, on its second line: `session open l-mine`, then the chat slot has the focus.
+    click(&env, &view, 3, 11);
+    wait_until("the Lead in the chat slot", || moved_events(&env).len() > before.len());
+    let mut expected = before;
+    expected.push(("l-mine".to_owned(), "chat".to_owned()));
+    assert_eq!(moved_events(&env), expected, "one `session open`, for the owned PR's Lead");
+    wait_until("the focus", || focused_session(&env).contains("|l-mine|"));
+    let chat = tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_session}|#{pane_id}"]);
+    assert!(chat.lines().any(|l| l.starts_with("l-mine|")), "the Lead is in `main`: {chat}");
+}
+
+#[test]
+fn a_refused_session_open_shows_its_message_in_the_last_row_until_the_next_click() {
+    let env = pane_env();
+    prs_store(&env);
+    // No cockpit session: `session open` is refused with `no_cockpit`.
+    let pane = start(&env, "view");
+    wait_for_screen(&env, &pane, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
+    let height = tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_height}"]).parse::<usize>().unwrap();
+    let width = tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_width}"]).parse::<u16>().unwrap();
+    let last_row = |s: &[String]| s.get(height - 1).cloned().unwrap_or_default();
+
+    // The unowned rows and the arrow run nothing, so no note appears.
+    click(&env, &pane, 3, 6);
+    click(&env, &pane, width - 1, 10);
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(last_row(&screen(&env, &pane)), " (future)", "nothing was refused: Jira's row is still the last");
+
+    click(&env, &pane, 3, 10);
+    let shown = wait_for_screen(&env, &pane, "the refusal", |s| last_row(s).contains("cockpit"));
+    assert!(last_row(&shown).contains("cpd tui"), "{:?}", last_row(&shown));
+    let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
+    let last = styled.lines().last().unwrap();
+    assert!(last.contains("\x1b[") && last.contains("cockpit"), "{last:?}");
+    assert!(shown[..height - 1].iter().any(|r| r.contains("(future)")), "the git section is as before");
+
+    click(&env, &pane, 3, 6);
+    wait_for_screen(&env, &pane, "the note gone", |s| last_row(s) == " (future)");
 }
 
 // ---------- the legend ----------

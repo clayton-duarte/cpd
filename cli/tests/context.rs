@@ -592,6 +592,24 @@ fn rename_works_on_an_archived_context() {
     assert_eq!(rename_events(&env).len(), 1);
 }
 
+#[test]
+fn titles_are_1_to_200_characters_with_no_control_characters() {
+    let env = hs();
+    let (long, ok) = ("a".repeat(201), "a".repeat(200));
+    for title in [long.as_str(), "a\nb", "a\tb", "a\u{7f}b"] {
+        refused(env.cpd(&["context", "new", CTX, "--title", title]), 2, "usage");
+    }
+    env.cpd(&["context", "new", CTX, "--title", &ok]).ok();
+    for title in [long.as_str(), "a\nb", "a\tb"] {
+        refused(env.cpd(&["context", "rename", CTX, "--title", title]), 2, "usage");
+        // Validated before the Context is looked up.
+        refused(env.cpd(&["context", "rename", "nope", "--title", title]), 2, "usage");
+    }
+    assert!(rename_events(&env).is_empty());
+    let renamed = "b".repeat(200);
+    assert_eq!(env.cpd(&["context", "rename", CTX, "--title", &renamed]).ok()["context"]["title"], renamed.as_str());
+}
+
 // ---- context archive and unarchive ----------------------------------------
 
 use common::SLEEP_SECONDS;

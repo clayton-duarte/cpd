@@ -69,14 +69,6 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
     let jira = args.jira.as_ref().map(|j| j.as_str().to_owned());
 
     let context = env.store.read(|conn| ContextRow::require(conn, &args.context))?;
-    if context.archived_at.is_some() {
-        return Err(CpdError::new(
-            ErrorCode::Archived,
-            format!("Context {} is archived: unarchive it before creating a Plan in it.", args.context),
-        )
-        .with("context", args.context.as_str())
-        .with("next", format!("cpd context unarchive {}", args.context)));
-    }
     if let Some(plan) = env.store.read(|conn| find(conn, &id))? {
         // The caller's cwd is not a flag: a rerun from another directory is still `already`.
         let same = plan.context == args.context && plan.title == args.title.as_str() && plan.jira == jira && plan.name == name;
@@ -84,6 +76,14 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
             return Err(CpdError::new(ErrorCode::PlanExists, format!("Plan {id} exists with other flags.")).with("plan", summary(&plan, &[])));
         }
         return already(&mut env, &plan, brief.as_ref());
+    }
+    if context.archived_at.is_some() {
+        return Err(CpdError::new(
+            ErrorCode::Archived,
+            format!("Context {} is archived: unarchive it before creating a Plan in it.", args.context),
+        )
+        .with("context", args.context.as_str())
+        .with("next", format!("cpd context unarchive {}", args.context)));
     }
     let cwd = caller_cwd()?;
 
