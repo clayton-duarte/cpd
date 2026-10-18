@@ -108,6 +108,7 @@ Free text (`--title`, `--reason`, Context record text, questions and answers) is
 | `context list`, `context show` | Lead, TUI | no | §2.2 |
 | `context decide`, `note`, `ask`, `answer` | Lead, Manager | yes | §4.6 |
 | `context manager` | User (TUI), Manager | yes | §2.2, §6.5 |
+| `context pending` | Manager, Lead | no | §2.2, §2.5 |
 | `context rename` | User (TUI) | yes | §2.2 |
 | `context archive`, `unarchive` | User (TUI) | yes | §2.2 |
 | `plan new` | User (TUI), Lead | yes | §3.1, §6.7 |
@@ -362,6 +363,42 @@ The command never moves the chat slot (hs-d103); `session open <manager>` does (
 ```
 
 `started` is true when this call registered the Manager or started its pane. Idempotent: yes; a Manager with a pane returns `"started": false` and writes nothing.
+
+### 3.11 `context pending`
+
+```
+cpd context pending [--context <c>] [--markdown]
+```
+
+The in-flight work of a Context (hs-d159, P1; CONTEXT.md "Pending work"): what its active Plans have started and not yet landed on the base. The Manager runs it before starting or routing work for an issue, to see whether something already fixes or changes it. The Context is `--context`, else the selected Plan's (§1.3).
+
+| Flag | Meaning |
+|---|---|
+| `--markdown` | also print the result as markdown, instead of JSON |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| a Context was selected (§1.3) | `context_required` | 2 |
+| the Context exists | `context_not_found` | 4 |
+
+An archived Context is not refused: it has no active Plan to list unless one was left active.
+
+Effects: none. One read transaction, no write, no subprocess (no `git`, no `gh`): everything comes from the database, so the GitHub state is the last one `pr poll` stored.
+
+Output: `plans`, every Plan of the Context that is not `done` and not archived, in creation order, each with `id`, `title`, `phase`, `lead_session` and `prs`: its PRs that are not `merged` and not `cancelled`, in key order, each with `key`, `repo`, `base`, `status`, `lead_branch`, `pull_request` (`{number, url, state}` as stored by `pr poll`, or null before the PR is opened) and `jobs`: the PR's Jobs that are not `cancelled` and not yet on the base, in `seq` order, with status `draft`, `queued`, `running`, `failed` or `merged`. Here `merged` means on the Lead Branch and not yet on the base (§2.2 Job). Each Job has `key`, `status`, `title` and `touches`.
+
+```json
+{"ok": true, "context": "building-cpd",
+ "plans": [{"id": "pay-4521", "title": "Retry failed payments", "phase": "dispatch", "lead_session": "596d007f-…",
+            "prs": [{"key": "api", "repo": "/home/clayton/projects/api", "base": "main", "status": "dispatch",
+                     "lead_branch": "cpd/pay-4521/api", "pull_request": {"number": 212, "url": "https://github.com/acme/api/pull/212", "state": "OPEN"},
+                     "jobs": [{"key": "retry-core", "status": "merged", "title": "Retry policy", "touches": ["src/retry.rs"]},
+                              {"key": "retry-cli", "status": "queued", "title": "Retry flag", "touches": ["src/cli.rs", "docs/commands.md"]}]}]}]}
+```
+
+With `--markdown` the output is the same data as markdown: `# Pending work in <context>`, then per Plan `## <id> (<phase>): <title>`, per PR `### PR <key> (<repo>, base <base>): <status>` with its pull request (`#<n> <state> <url>`) or `no pull request`, then one line per Job `- <key> <status>: <title> (<touches, comma-separated>)`. A Context with no active Plan prints `No pending work.`
+
+Idempotent: yes; it only reads.
 
 ## 4. `plan`
 
@@ -1893,6 +1930,18 @@ Plans:
 ```
 
 One line per Event of kinds `plan-created`, `plan-phase`, `pr-opened`, `pr-merged`, `job-failed`, `escalation` and `plan-done` for the Manager's Context (`events list --context <c> --since <cursor>`, filtered by kind), oldest first, `- <at> <plan>: <event text>`. At most 20 lines; more end with `and <K> more: cpd events list --context <c> --since <id>`, `<id>` the id of the last Event listed. **One cursor** serves both sections, in Event ids: the records are read as above, the section from the same `--since`, and `details.event` is the highest Event id of either read (`context-record` or a listed kind). The message is returned when either section has something and carries nothing else when neither has. A failed read of the section fails the whole message as in "Failure". The Manager's follower is not involved (§15.3): the digest is the only way a Plan's Events reach it, and it never starts a turn.
+
+**Pending work** (hs-d159, P2). After `Plans:`, the Manager's message adds a section, computed fresh at every Manager turn start from `cpd context pending --context <c>` (§3.11), not from the cursor:
+
+```
+Pending work:
+- pay-4521 (dispatch), PR api dispatch #212: 1 merged on its Lead Branch, 1 queued, 1 running, 0 failed, 0 draft
+  - retry-core merged: Retry policy
+  - retry-cli queued: Retry flag
+  - retry-ui running: Retry button
+```
+
+Per active Plan (not `done`, not archived), one line `- <plan> (<phase>), PR <key> <status>[ #<n>]: <m> merged on its Lead Branch, <q> queued, <r> running, <f> failed, <d> draft` (one line per PR that is not `merged` and not `cancelled`; ` #<n>` only once the pull request exists), each followed by up to 10 lines `  - <job> <status>: <title>` for that PR's Jobs in `seq` order, then `  and <K> more` when there are more. Touched files are not listed: the Manager runs `cpd context pending` for them. The section is omitted when no Plan is active. Because it is not cursor-based it alone does not make the message appear when `Plans:` and the records have nothing new: the message is returned when either of them has something, or when `Pending work:` is not empty; `details.event` is unchanged by it. A failed read of the section fails the message as in "Failure".
 
 ## 16. The Worker contract
 

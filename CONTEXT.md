@@ -112,6 +112,10 @@ _Avoid_: master, supervisor, orchestrator
 A Context record of kind `brief`, written by `cpd plan new --brief-file`: what the Manager (or the User) asks of one Plan's Lead. The Lead's first message holds it in full; `cpd context show` and Context updates list it short (id and first line), and `cpd context show --record <id>` prints it whole. Not a Spec, which describes a Job.
 _Avoid_: ticket, prompt
 
+**Pending work** (new, hs-d159):
+The in-flight work of a Context's active Plans: for every Plan not done and not archived, each PR not merged and not cancelled and its Jobs not cancelled and not yet on the PR's base (draft, queued, running, failed, or merged on the Lead Branch only), with titles and touched files. Read by `cpd context pending`; the Manager checks it before starting or routing work for an issue, and its digest summarises it (commands.md §3.11, §15.6).
+_Avoid_: backlog, WIP
+
 **Context update**:
 The message the pi adapter adds at the start of a Lead's or Manager's turn, listing the Context records other Sessions wrote since its last one (commands.md §15.6). For a Manager it ends with the **digest**: a `Plans:` section of the Plan Events (created, phase, PR opened or merged, Job failed, Escalation, done) since then.
 _Avoid_: notification, poll
