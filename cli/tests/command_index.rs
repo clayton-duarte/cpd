@@ -95,3 +95,10 @@ fn pr_start_is_indexed_and_exists() {
     assert!(documented_commands().contains(&vec!["pr".to_owned(), "start".to_owned()]));
     assert!(Cli::command().find_subcommand("pr").unwrap().find_subcommand("start").is_some());
 }
+
+/// `context pending` is documented in §2 (hs-d159) and exists.
+#[test]
+fn context_pending_is_indexed_and_exists() {
+    assert!(documented_commands().contains(&vec!["context".to_owned(), "pending".to_owned()]));
+    assert!(Cli::command().find_subcommand("context").unwrap().find_subcommand("pending").is_some());
+}

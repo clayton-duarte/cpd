@@ -12,6 +12,7 @@ mod archive;
 mod contexts;
 pub(crate) mod legacy;
 mod manager;
+mod pending;
 mod record;
 pub(crate) mod render;
 mod rename;
@@ -60,6 +61,8 @@ pub enum Command {
     Unarchive(UnarchiveArgs),
     /// Start or resume the Context's Manager (§3.10)
     Manager(manager::ManagerArgs),
+    /// List the in-flight work of the Context's active Plans (§3.11)
+    Pending(pending::PendingArgs),
 }
 
 /// A Jira Epic key: `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage` (commands.md §3.1).
@@ -235,6 +238,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Archive(args) => archive::archive(args),
         Command::Unarchive(args) => archive::unarchive(args),
         Command::Manager(args) => manager::manager(args),
+        Command::Pending(args) => pending::pending(args),
     }
 }
 
