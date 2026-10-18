@@ -114,7 +114,7 @@ fn wait_for_pane(env: &TestEnv, session: &str) {
 ///
 /// `gh` is a fake that records its calls and says every pull request is open.
 fn setup(env: &TestEnv) -> (String, String) {
-    let config = format!("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket());
+    let config = format!("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\nplannotator_ports = \"19432-19432\"\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket());
     fs::write(env.cpd_home().join("config.toml"), config).unwrap();
     fake_cpd(env);
     env.fake_gh("case \"$1 $2\" in\n\"pr view\") echo '{\"state\":\"OPEN\"}';;\nesac\nexit 0");
@@ -393,6 +393,43 @@ fn a_plan_with_nothing_left_to_cancel_is_only_archived() {
     assert_eq!(out["closed_prs"], json!([]));
     assert_eq!(out["archived"].as_array().unwrap().len(), 3);
     assert!(gh_closes(&env).is_empty());
+}
+
+/// A new window running the built `cpd session run <id>` (its pi is the fake that records its port).
+fn run_lead(env: &TestEnv, id: &str) -> String {
+    let command = format!("'{CPD}' session run {id}");
+    let out = env.tmux(&["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", "-e", "PLANNOTATOR_PORT=1", &command]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let pane = String::from_utf8(out.stdout).unwrap().trim().to_owned();
+    env.tmux(&["set", "-p", "-t", &pane, "@cpd_session", id]);
+    pane
+}
+
+fn capture(env: &TestEnv, pane: &str) -> String {
+    String::from_utf8(env.tmux(&["capture-pane", "-p", "-t", pane]).stdout).unwrap()
+}
+
+#[test]
+fn the_cancelled_plans_port_is_free_for_another_plan() {
+    let env = TestEnv::new();
+    cockpit(&env);
+    setup(&env);
+    // The range holds one port, and Plan `pay` has it.
+    fs::create_dir_all(env.cpd_home().join("run/pay")).unwrap();
+    fs::write(env.cpd_home().join("run/pay/plannotator-port"), "19432\n").unwrap();
+    env.fake_pi("echo \"${PLANNOTATOR_PORT-unset}\" >> \"$HOME/ports.$CPD_SESSION\"\nexit 1");
+    let other = env.cpd(&["plan", "new", "other", "--context", "ctx", "--title", "Other"]).ok()["lead"]["session"].as_str().unwrap().to_owned();
+    wait_for_pane(&env, &other);
+    env.cpd(&["session", "close", &other]).ok();
+
+    let pane = run_lead(&env, &other);
+    wait_until("no_port", || capture(&env, &pane).contains("Press Enter to retry."));
+    assert!(capture(&env, &pane).contains("held by pay (19432)"), "{}", capture(&env, &pane));
+
+    cancel_with_engine(&env, &[]).ok();
+    env.tmux(&["send-keys", "-t", &pane, "Enter"]);
+    let recorded = env.home().join(format!("ports.{other}"));
+    wait_until("pi with the port", || fs::read_to_string(&recorded).is_ok_and(|t| t == "19432\n"));
 }
 
 // ---------- refusals ----------
