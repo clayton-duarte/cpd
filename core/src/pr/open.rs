@@ -6,7 +6,7 @@ use serde_json::json;
 use super::row::{PlanRow, PrRow};
 use super::gh::{self, PolledPr};
 use super::pulls;
-use super::status::{ChecksSummary, PrState, ReviewDecision};
+use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
 use super::{Args, Env, gate, illegal_phase, lock, require_clean};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
@@ -65,6 +65,8 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
             state: PrState::Open,
             review_decision: ReviewDecision::None,
             checks: ChecksSummary::None,
+            mergeable: Mergeable::Unknown,
+            merge_state: MergeState::Unknown,
             created_at: pulls::txn_time(tx)?,
             merged_at: None,
         };

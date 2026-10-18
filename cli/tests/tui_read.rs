@@ -721,6 +721,48 @@ fn the_widgets_list_every_plan_with_its_pr() {
 }
 
 #[test]
+fn an_open_pull_request_carries_its_url_and_the_lead_of_its_owner() {
+    let (_env, mut store) = fixture();
+    // `acme/work#70` is one of the User's own: no Plan's PR points to it.
+    sql(
+        &mut store,
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+         VALUES ('acme/work', 70, 'https://github.com/acme/work/pull/70', 'Mine', 0, 'open', 'none', 'none',
+                 '2026-01-07T00:00:00.000Z', NULL, '2026-01-07T00:00:00.000Z');",
+    );
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    let listed: Vec<(&str, i64, &str, Option<&str>)> =
+        w.prs.iter().map(|p| (p.repo.as_str(), p.number, p.url.as_str(), p.lead.as_ref().map(SessionId::as_str))).collect();
+    assert_eq!(
+        listed,
+        [
+            ("acme/repo", 7, "https://github.com/acme/repo/pull/7", Some("l-rel")),
+            ("acme/work", 70, "https://github.com/acme/work/pull/70", None),
+        ],
+        "an owned one and an unowned one; the closed and the merged are not listed"
+    );
+    assert!(w.prs.iter().all(|p| !p.active), "the chat slot holds l-ship, which has no PR");
+
+    // Two Plans own the same pull request (the later one took it over): the most recently created Plan's Lead owns it.
+    let lead = session_row("l-rel2", "lead", "beta", "rel2", None, "idle", None, "2026-01-04T00:00:00.000Z");
+    sql(
+        &mut store,
+        &format!(
+            "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+             VALUES ('rel2', 'beta', 'Plan rel2', 'deploy', 'l-rel2', '2026-01-04T00:00:00.000Z', '2026-01-04T00:00:00.000Z');
+             {lead}
+             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
+                              created_txn, created_at, started_at)
+             VALUES ('rel2', 'repo', '/repo', 'main', 'open', 'cpd/rel2', '/wt', 7, 'https://github.com/acme/repo/pull/7',
+                     '2026-01-05T00:00:00.000Z', (SELECT id FROM pull_requests WHERE number = 7), cpd_txn(),
+                     '2026-01-04T00:00:00.000Z', '2026-01-04T00:00:00.000Z');"
+        ),
+    );
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    assert_eq!(w.prs[0].lead.as_ref().map(SessionId::as_str), Some("l-rel2"));
+}
+
+#[test]
 fn the_widgets_list_every_open_escalation_of_the_machine() {
     let (_env, mut store) = fixture();
     let w = read::widgets(&mut store, 3, 0).unwrap();

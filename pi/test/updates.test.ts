@@ -107,11 +107,19 @@ async function lead(f: Fixture, over: Record<string, unknown> = {}) {
 
 const updatesCalls = (f: Fixture) => f.calls().filter((c) => c.phase === "start").map((c) => c.argv).filter((a) => (a[0] === "events" && a[1] === "list") || (a[0] === "context" && a[1] === "show"));
 
-test("a Lead's run with 3 new records by others gets one cpd-context message, in full", async (t) => {
+/** A Manager whose Plan Events and pending work are empty, so a test can focus on the records. */
+async function quietManager(f: Fixture) {
+  await lead(f, { role: "manager", plan: null, plan_lead: false });
+  f.respond("events-list@plan-created", { ok: true, events: [], next: 0 });
+  f.respond("context-pending", { ok: true, plans: [] });
+}
+const recordCalls = (f: Fixture) => updatesCalls(f).filter((a) => a[1] === "show" || a.includes("context-record"));
+
+test("a Manager's run with 3 new records by others gets one cpd-context message, in full", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  await lead(f);
-  f.respond("events-list", eventsList([1, 2, 3, 4]));
+  await quietManager(f);
+  f.respond("events-list@context-record", eventsList([1, 2, 3, 4]));
   f.respond("context-show", contextShow([record(1), record(2), record(3), record(4, { by: ID })]));
 
   const [result] = await f.pi.fireWith("before_agent_start", { messageType: "user", prompt: "go" });
@@ -120,7 +128,7 @@ test("a Lead's run with 3 new records by others gets one cpd-context message, in
   assert.equal(m.display, true);
   assert.equal(m.content, ["Context ctx: 3 new records since your last turn.", ...range(3).map((n) => `- hs-n${n} note (2026-10-17): note ${n}`)].join("\n"));
   assert.deepEqual(m.details, { event: 204, delivered_to: ID, records: ["hs-n1", "hs-n2", "hs-n3"] });
-  assert.deepEqual(updatesCalls(f), [
+  assert.deepEqual(recordCalls(f), [
     ["events", "list", "--context", "ctx", "--kind", "context-record", "--since", "100"],
     ["context", "show", "--context", "ctx", "--since", String(SEQ0)],
   ]);
@@ -130,18 +138,18 @@ test("a Lead's run with 3 new records by others gets one cpd-context message, in
 test("a run with no new records gets nothing, and reads no records", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  await lead(f);
-  f.respond("events-list", eventsList([]));
+  await quietManager(f);
+  f.respond("events-list@context-record", eventsList([]));
   assert.deepEqual(await f.pi.fireWith("before_agent_start"), [undefined]);
-  assert.deepEqual(updatesCalls(f).map((a) => a[0] + " " + a[1]), ["events list"]);
+  assert.deepEqual(recordCalls(f).map((a) => a[0] + " " + a[1]), ["events list"]);
   assert.deepEqual(f.pi.sent, []);
 });
 
 test("25 new records show 20 and the command for the rest", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  await lead(f);
-  f.respond("events-list", eventsList(range(25)));
+  await quietManager(f);
+  f.respond("events-list@context-record", eventsList(range(25)));
   f.respond("context-show", contextShow(range(25).map((n) => record(n))));
   const [result] = await f.pi.fireWith("before_agent_start");
   const lines = (result as any).message.content.split("\n");
@@ -152,8 +160,8 @@ test("25 new records show 20 and the command for the rest", async (t) => {
 test("only records by this Session: no message", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  await lead(f);
-  f.respond("events-list", eventsList([1]));
+  await quietManager(f);
+  f.respond("events-list@context-record", eventsList([1]));
   f.respond("context-show", contextShow([record(1, { by: ID })]));
   assert.deepEqual(await f.pi.fireWith("before_agent_start"), [undefined]);
 });
@@ -162,42 +170,42 @@ test("after a restart the cursor is read back from this session's own cpd-contex
   const f = new Fixture();
   t.after(() => f.close());
   f.pi.entries = [contextMessage(900, OTHER), contextMessage(150, ID), contextMessage(170, ID)];
-  await lead(f);
-  f.respond("events-list", eventsList([]));
+  await quietManager(f);
+  f.respond("events-list@context-record", eventsList([]));
   await f.pi.fireWith("before_agent_start");
-  assert.deepEqual(updatesCalls(f)[0], ["events", "list", "--context", "ctx", "--kind", "context-record", "--since", "170"]);
+  assert.deepEqual(recordCalls(f)[0], ["events", "list", "--context", "ctx", "--kind", "context-record", "--since", "170"]);
 });
 
 test("the cursor moves with the message the run keeps in the session", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  await lead(f);
-  f.respond("events-list", eventsList([1]));
+  await quietManager(f);
+  f.respond("events-list@context-record", eventsList([1]));
   f.respond("context-show", contextShow([record(1)]));
   const [result] = await f.pi.fireWith("before_agent_start");
   f.pi.entries.push({ type: "custom_message", ...(result as any).message }); // pi stores what the hook returned
-  f.respond("events-list", eventsList([]));
+  f.respond("events-list@context-record", eventsList([]));
   await f.pi.fireWith("before_agent_start");
-  assert.deepEqual(updatesCalls(f).filter((a) => a[1] === "list").map((a) => a.at(-1)), ["100", "201"]);
+  assert.deepEqual(recordCalls(f).filter((a) => a[1] === "list").map((a) => a.at(-1)), ["100", "201"]);
 });
 
 test("a failed read adds no message, is reported once without a turn, and the next success re-arms the report", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  await lead(f);
+  await quietManager(f);
   const fail = { ok: false, error: { code: "store_busy", message: "database is locked" } };
-  f.respond("events-list", fail, { exit: 1 });
+  f.respond("events-list@context-record", fail, { exit: 1 });
   assert.deepEqual(await f.pi.fireWith("before_agent_start"), [undefined]);
   assert.deepEqual(await f.pi.fireWith("before_agent_start"), [undefined]);
   assert.equal(f.pi.errors().length, 1, "once");
   const e = f.pi.errors()[0]!;
   assert.deepEqual(e.options, { triggerTurn: false, deliverAs: "followUp" });
   assert.ok((e.message.content as string).includes("store_busy"));
-  assert.deepEqual(updatesCalls(f).filter((a) => a[1] === "list").map((a) => a.at(-1)), ["100", "100"], "the cursor stays");
+  assert.deepEqual(recordCalls(f).filter((a) => a[1] === "list").map((a) => a.at(-1)), ["100", "100"], "the cursor stays");
 
-  f.respond("events-list", eventsList([]));
+  f.respond("events-list@context-record", eventsList([]));
   await f.pi.fireWith("before_agent_start");
-  f.respond("events-list", fail, { exit: 1 });
+  f.respond("events-list@context-record", fail, { exit: 1 });
   await f.pi.fireWith("before_agent_start");
   assert.equal(f.pi.errors().length, 2, "reported again after a successful read");
 });
@@ -205,14 +213,31 @@ test("a failed read adds no message, is reported once without a turn, and the ne
 test("a failed context show is a failed read too", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  await lead(f);
-  f.respond("events-list", eventsList([1]));
+  await quietManager(f);
+  f.respond("events-list@context-record", eventsList([1]));
   f.respond("context-show", { ok: false, error: { code: "context_not_found", message: "no such context" } }, { exit: 4 });
   assert.deepEqual(await f.pi.fireWith("before_agent_start"), [undefined]);
   assert.equal(f.pi.errors().length, 1);
 });
 
-test("a Worker never gets updates, and a side fork (role lead, not the Plan's Lead) does", async (t) => {
+test("a Lead (the Plan's, or a side fork) gets no cpd-context message and reads nothing, even with new records (hs-d209, D1)", async (t) => {
+  for (const over of [{}, { plan_lead: false }]) {
+    const f = new Fixture();
+    t.after(() => f.close());
+    await lead(f, over);
+    f.respond("events-list", eventsList([1, 2, 3]));
+    f.respond("events-list@plan-created", planEventsList([1]));
+    f.respond("context-show", contextShow([record(1), record(2), record(3)]));
+    f.respond("context-pending", pendingJson(twoPlans));
+    assert.deepEqual(await f.pi.fireWith("before_agent_start", { messageType: "user", prompt: "go" }), []);
+    await settle();
+    assert.deepEqual(updatesCalls(f), []);
+    assert.deepEqual(f.calls().filter((c) => c.phase === "start").map((c) => c.argv).filter((a) => a[1] === "pending"), []);
+    assert.deepEqual(f.pi.sent, []);
+  }
+});
+
+test("a Worker never gets updates", async (t) => {
   const worker = new Fixture();
   t.after(() => worker.close());
   await lead(worker, { role: "worker", plan_lead: false });
@@ -221,16 +246,6 @@ test("a Worker never gets updates, and a side fork (role lead, not the Plan's Le
   assert.deepEqual(await worker.pi.fireWith("before_agent_start"), []);
   await settle();
   assert.deepEqual(updatesCalls(worker), []);
-});
-
-test("a side fork gets updates", async (t) => {
-  const f = new Fixture();
-  t.after(() => f.close());
-  await lead(f, { plan_lead: false });
-  f.respond("events-list", eventsList([1]));
-  f.respond("context-show", contextShow([record(1)]));
-  const [result] = await f.pi.fireWith("before_agent_start");
-  assert.ok((result as any).message.content.includes("- hs-n1 note"));
 });
 
 // ---- the Manager's digest (§15.7, B3-A5) ----
@@ -359,18 +374,6 @@ test("a failed Plan Events read fails the whole message: nothing added, the curs
   assert.deepEqual(await f.pi.fireWith("before_agent_start"), [undefined]);
   assert.equal(f.pi.errors().length, 1);
   assert.deepEqual(f.pi.errors()[0]!.options, { triggerTurn: false, deliverAs: "followUp" });
-});
-
-test("a Lead's message has no Plans: section and never reads Plan Events", async (t) => {
-  const f = new Fixture();
-  t.after(() => f.close());
-  await lead(f);
-  f.respond("events-list", eventsList([1]));
-  f.respond("events-list@plan-created", planEventsList([1, 2]));
-  f.respond("context-show", contextShow([record(1)]));
-  const [result] = await f.pi.fireWith("before_agent_start");
-  assert.ok(!(result as any).message.content.includes("Plans:"));
-  assert.deepEqual(planCalls(f), []);
 });
 
 // ---- the Manager's Pending work (§15.7, hs-d159 P2) ----
@@ -520,14 +523,3 @@ test("a failed Pending work read omits the message and is reported once without 
   assert.deepEqual(f.pi.errors()[0]!.options, { triggerTurn: false, deliverAs: "followUp" });
 });
 
-test("a Lead never gets Pending work and never reads it", async (t) => {
-  const f = new Fixture();
-  t.after(() => f.close());
-  await lead(f);
-  f.respond("events-list", eventsList([1]));
-  f.respond("context-show", contextShow([record(1)]));
-  f.respond("context-pending", pendingJson(twoPlans));
-  const [result] = await f.pi.fireWith("before_agent_start");
-  assert.ok(!(result as any).message.content.includes("Pending work:"));
-  assert.deepEqual(f.calls().filter((c) => c.phase === "start").map((c) => c.argv).filter((a) => a[1] === "pending"), []);
-});
