@@ -92,6 +92,8 @@ test("Plan Lead: escalation opens `escalation:<id>`, answered and expired close 
   assert.deepEqual(stateCalls(f), ["idle", "blocked:cpd: Worker question", "idle"]);
   assert.equal(f.pi.delivered().length, 2, "answered is no message");
 
+  // A state change wanted while a call is in flight replaces the one wanted before: let the last call finish first.
+  await waitFor("no call in flight", () => f.pi.execsRunning.size === 0);
   f.emit(event(105, "escalation", { data: { escalation: "j-a1-q2", question: "?" } }), event(106, "escalation-expired", { data: { escalation: "j-a1-q2", reason: "timeout" } }));
   await waitFor("blocked and closed", () => stateCalls(f).length === 5);
   assert.deepEqual(stateCalls(f).slice(3), ["blocked:cpd: Worker question", "idle"]);

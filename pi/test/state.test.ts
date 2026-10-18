@@ -75,6 +75,7 @@ test("session_shutdown reports stopped and stops the follower", async (t) => {
   await started(f);
   await waitFor("the follower", () => f.pids().length === 1);
   await f.pi.fire("session_shutdown");
+  await waitFor("the stopped call", () => stateCalls(f).at(-1) === "stopped");
   assert.deepEqual(f.argvs().filter((a) => a[1] === "state").at(-1), ["session", "state", "stopped", "--session", ID]);
   await waitFor("the follower killed", () => f.killed(f.pids()[0]!));
   await f.pi.fire("agent_start"); // after shutdown nothing is reported
@@ -87,10 +88,10 @@ test("session_shutdown waits at most shutdownWaitMs for `stopped`", async (t) =>
   t.after(() => f.close());
   await started(f);
   f.respond("session-state", { ok: true }, { delay: 3000 });
-  const began = Date.now();
   await f.pi.fire("session_shutdown");
-  assert.ok(Date.now() - began < 1500, `took ${Date.now() - began} ms`);
-  assert.equal(stateCalls(f).at(-1), "stopped");
+  // It returned while the `stopped` call (which takes 3 s) was still running: it did not wait for it.
+  assert.deepEqual([...f.pi.execsRunning].filter((a) => a[1] === "state"), [["session", "state", "stopped", "--session", ID]]);
+  await waitFor("the stopped call", () => stateCalls(f).at(-1) === "stopped");
 });
 
 test("a /name typed in pi reaches cpd; a name cpd set does not echo back", async (t) => {

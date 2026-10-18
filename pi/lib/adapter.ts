@@ -7,7 +7,7 @@ import { cursorFrom } from "./cursor.ts";
 import { errorMessage, eventMessage, FOLLOW_UP, LEAD_MESSAGES, sessionMessage } from "./delivery.ts";
 import type { CpdEvent } from "./event.ts";
 import { parseLine, PROTOCOL } from "./event.ts";
-import { DEFAULT_TIMING, Follower, type Spawn, type Timing } from "./follower.ts";
+import { DEFAULT_TIMING, Follower, type Schedule, type Spawn, type Timing } from "./follower.ts";
 import type { CommandCtx, Ctx, Message, PiApi } from "./pi.ts";
 import { parseOpened, parseResult, parseStatus, request } from "./plannotator.ts";
 import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, REVIEW_LABEL, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
@@ -20,6 +20,8 @@ export type Options = {
   env?: Record<string, string | undefined>;
   timing?: Partial<Timing>;
   spawn?: Spawn;
+  /** How the follower's restart is scheduled. Default: `setTimeout`. */
+  schedule?: Schedule;
   /** The directory whose replacement means an install, how often it is polled, and how the new package is validated (§15.6). Default: the adapter's own directory, every {@link DEFAULT_POLL_MS}, jiti from pi. */
   reload?: { dir?: string; intervalMs?: number } & Validation;
 };
@@ -201,6 +203,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       },
       timing,
       options.spawn,
+      options.schedule,
     );
     run = r;
 
