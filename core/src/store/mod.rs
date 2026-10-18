@@ -221,14 +221,15 @@ impl Store {
                 }
                 (legacy.apply)(&tx).map_err(|e| failed(legacy.name, &e))?;
             }
-            let txn = match txn {
+            let id = match txn {
                 Some(id) => id,
                 None => begin_txn(&tx, &self.txn, MIGRATE_COMMAND, &caller).map_err(|e| failed("schema_migrations", &e))?,
             };
+            txn = Some(id);
             tx.execute_batch(schema::RUNNER_DDL).map_err(|e| failed("schema_migrations", &e))?;
             for legacy in LEGACY {
                 seq += 1;
-                record(&tx, legacy.name, legacy.compat, legacy.sql, seq, txn, from > 0).map_err(|e| failed(legacy.name, &e))?;
+                record(&tx, legacy.name, legacy.compat, legacy.sql, seq, id, from > 0).map_err(|e| failed(legacy.name, &e))?;
             }
         } else {
             let id = begin_txn(&tx, &self.txn, MIGRATE_COMMAND, &caller).map_err(|e| failed("schema_migrations", &e))?;
@@ -653,5 +654,222 @@ mod tests {
         assert_eq!(current_schema(&home).unwrap(), Some(99));
         assert_eq!(fs::read(home.db()).unwrap(), before);
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    // ---------- named migrations (§4.5) ----------
+
+    fn tmp_home() -> (tempfile::TempDir, CpdHome) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().join("cpd").into()), None).unwrap();
+        (dir, home)
+    }
+
+    const ADD_A: Named = Named {
+        name: "20300101T0000-add-a",
+        compat: schema::Compat::Additive,
+        sql: "-- cpd-migration: additive\nALTER TABLE plans ADD COLUMN note_a TEXT;\nALTER TABLE jobs ADD COLUMN extra TEXT;\n",
+        run: None,
+    };
+    const ADD_B: Named = Named {
+        name: "20300102T0000-add-b",
+        compat: schema::Compat::Additive,
+        sql: "-- cpd-migration: additive\nALTER TABLE plans ADD COLUMN note_b TEXT CHECK (note_b IS NULL OR length(note_b) >= 1);\n\
+              CREATE TABLE b_things (id INTEGER PRIMARY KEY, label TEXT NOT NULL) STRICT;\nCREATE INDEX b_things_label ON b_things (label);\n",
+        run: None,
+    };
+
+    /// The canonical hash two stores that applied `ADD_A` and `ADD_B` share, pinned: a change of the
+    /// canonical form (§4.3) or of the SQLite bundle changes it.
+    const A_AND_B_HASH: &str = "28c7632ec8b4aeeff452b75e26f28ba696405e460eefe9a02c476a3bbec90651";
+
+    /// A store opened with `named` as its migrations, whose pinned hash is the one of a fresh store with them.
+    fn open_named(home: &CpdHome, named: &[Named]) -> Result<Store, CpdError> {
+        let probe = tempfile::tempdir().unwrap();
+        let probe_home = CpdHome::resolve(Some(probe.path().join("cpd").into()), None).unwrap();
+        let pinned = {
+            // Even a refusal of `home` is judged against the pinned hash of a fresh store with the same list.
+            let catalog = Catalog { named, schema_hash: "" };
+            let fresh = Store::open_with(&probe_home, 5000, &catalog)?;
+            canonical_hash(&fresh.conn)?
+        };
+        Store::open_with(home, 5000, &Catalog { named, schema_hash: &pinned })
+    }
+
+    fn applied(store: &mut Store) -> Vec<(String, i64, i64)> {
+        store
+            .read(|c| {
+                let mut stmt = c.prepare("SELECT name, seq, converted FROM schema_migrations ORDER BY seq")?;
+                let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .unwrap()
+    }
+
+    fn plan_columns(store: &mut Store) -> Vec<String> {
+        store
+            .read(|c| {
+                let mut stmt = c.prepare("SELECT name FROM pragma_table_info('plans') ORDER BY cid")?;
+                let rows = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+                Ok(rows)
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn two_additive_migrations_give_the_same_canonical_hash_in_both_orders() {
+        let (_a, a_first) = tmp_home();
+        let (_b, b_first) = tmp_home();
+        let (_c, together) = tmp_home();
+        // One store applied `a` and later `b`; the other `b` and later `a`: a migration that sorts
+        // before an applied one is allowed when it is additive (O2).
+        drop(open_named(&a_first, &[ADD_A]).unwrap());
+        let mut a_then_b = open_named(&a_first, &[ADD_A, ADD_B]).unwrap();
+        drop(open_named(&b_first, &[ADD_B]).unwrap());
+        let mut b_then_a = open_named(&b_first, &[ADD_A, ADD_B]).unwrap();
+        let mut both = open_named(&together, &[ADD_A, ADD_B]).unwrap();
+
+        assert_eq!(applied(&mut a_then_b).into_iter().skip(6).collect::<Vec<_>>(), [(ADD_A.name.into(), 7, 0), (ADD_B.name.into(), 8, 0)]);
+        assert_eq!(applied(&mut b_then_a).into_iter().skip(6).collect::<Vec<_>>(), [(ADD_B.name.into(), 7, 0), (ADD_A.name.into(), 8, 0)]);
+
+        // The stores differ in the order of their columns and in their `sqlite_schema` text ...
+        let (cols_ab, cols_ba) = (plan_columns(&mut a_then_b), plan_columns(&mut b_then_a));
+        assert_ne!(cols_ab, cols_ba);
+        let legacy = |s: &mut Store| s.read(|c| Ok(schema::legacy_schema_hash(c)?)).unwrap();
+        assert_ne!(legacy(&mut a_then_b), legacy(&mut b_then_a), "the plain hash depends on the order");
+        // ... and have the same canonical hash, which is pinned.
+        let canonical = |s: &mut Store| s.read(|c| Ok(canonical_hash(c)?)).unwrap();
+        let hash = canonical(&mut a_then_b);
+        assert_eq!(canonical(&mut b_then_a), hash);
+        assert_eq!(canonical(&mut both), hash);
+        assert_eq!(hash, A_AND_B_HASH, "the pinned canonical hash of a store with a and b");
+        for store in [&a_then_b, &b_then_a, &both] {
+            assert_eq!(store.schema_mismatch(), None);
+        }
+        // Each store's generated triggers list its own column order, and every column.
+        for store in [&mut a_then_b, &mut b_then_a] {
+            let sql: String = store
+                .read(|c| Ok(c.query_row("SELECT sql FROM sqlite_schema WHERE name = 'plans_hist_ins'", [], |r| r.get(0))?))
+                .unwrap();
+            assert!(sql.contains("'note_a', NEW.note_a") && sql.contains("'note_b', NEW.note_b"), "{sql}");
+        }
+        a_then_b.write("test", |tx| Ok(tx.execute_batch("UPDATE plans SET note_a = 'x' WHERE 0")?)).unwrap();
+    }
+
+    #[test]
+    fn a_store_that_applied_a_migration_this_binary_lacks_is_store_too_new() {
+        let (_dir, home) = tmp_home();
+        let breaking = Named { compat: schema::Compat::Breaking, ..ADD_B };
+        drop(open_named(&home, &[ADD_A, breaking]).unwrap());
+        let err = Store::open(&home, 5000).err().unwrap();
+        assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
+        assert_eq!(err.details()["user_version"], VERSION);
+        assert_eq!(err.details()["floor"], ADD_B.name);
+        assert_eq!(err.details()["unknown"], serde_json::json!([ADD_A.name, ADD_B.name]));
+        // An additive one too: the window is a later change.
+        let (_dir, home) = tmp_home();
+        drop(open_named(&home, &[ADD_A]).unwrap());
+        let err = Store::open(&home, 5000).err().unwrap();
+        assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
+        assert_eq!(err.details()["floor"], LEGACY[LEGACY.len() - 1].name, "the legacy 0006-pr-poller is the newest breaking migration");
+        assert_eq!(err.details()["unknown"], serde_json::json!([ADD_A.name]));
+    }
+
+    #[test]
+    fn a_migration_whose_text_changed_is_migration_changed() {
+        let (_dir, home) = tmp_home();
+        drop(open_named(&home, &[ADD_A]).unwrap());
+        let edited = Named { sql: "-- cpd-migration: additive\nALTER TABLE plans ADD COLUMN note_a TEXT NOT NULL DEFAULT '';\n", ..ADD_A };
+        let err = open_named(&home, &[edited]).err().unwrap();
+        assert_eq!(err.code(), ErrorCode::MigrationChanged, "{err:?}");
+        assert_eq!(err.exit().code(), 1);
+        assert_eq!(err.details()["name"], ADD_A.name);
+        assert_eq!(err.details()["recorded"], schema::sha256_hex(ADD_A.sql));
+        assert_eq!(err.details()["embedded"], schema::sha256_hex(edited.sql));
+    }
+
+    #[test]
+    fn a_legacy_migration_whose_recorded_text_changed_is_migration_changed() {
+        let (_dir, home) = tmp_home();
+        drop(Store::open(&home, 5000).unwrap());
+        // `schema_migrations` is append-only; a repair by hand goes through a connection with `cpd_txn()`.
+        let conn = Connection::open(home.db()).unwrap();
+        conn.execute_batch("DROP TRIGGER schema_migrations_no_update; UPDATE schema_migrations SET checksum = lower(hex(zeroblob(32))) WHERE seq = 3").unwrap();
+        drop(conn);
+        let err = Store::open(&home, 5000).err().unwrap();
+        assert_eq!(err.code(), ErrorCode::MigrationChanged, "{err:?}");
+        assert_eq!(err.details()["name"], LEGACY[2].name);
+    }
+
+    #[test]
+    fn a_failed_named_migration_rolls_the_whole_transaction_back() {
+        let (_dir, home) = tmp_home();
+        drop(open_named(&home, &[ADD_A]).unwrap());
+        let broken = Named { name: "20300103T0000-broken", sql: "-- cpd-migration: additive\nALTER TABLE plans ADD COLUMN ok TEXT;\nALTER TABLE nope ADD COLUMN x TEXT;\n", ..ADD_B };
+        let err = open_named(&home, &[ADD_A, broken]).err().unwrap();
+        assert_eq!(err.code(), ErrorCode::MigrationFailed, "{err:?}");
+        assert_eq!(err.details()["migration"], broken.name);
+        let mut store = open_named(&home, &[ADD_A]).unwrap();
+        assert_eq!(applied(&mut store).len(), 7, "the six legacy migrations and a");
+        assert!(!plan_columns(&mut store).contains(&"ok".to_owned()));
+    }
+
+    fn make_hook_table(conn: &Connection, home: &CpdHome) -> Result<(), CpdError> {
+        conn.execute("CREATE TABLE hooked (home TEXT NOT NULL) STRICT", [])?;
+        conn.execute("INSERT INTO hooked (home) VALUES (?1)", [home.db().display().to_string()])?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_migration_with_rust_runs_it_after_its_sql_with_the_home() {
+        let (_dir, home) = tmp_home();
+        let hooked = Named { run: Some(make_hook_table), ..ADD_A };
+        let mut store = open_named(&home, &[hooked]).unwrap();
+        let at: String = store.read(|c| Ok(c.query_row("SELECT home FROM hooked", [], |r| r.get(0))?)).unwrap();
+        assert_eq!(at, home.db().display().to_string());
+        assert!(plan_columns(&mut store).contains(&"note_a".to_owned()));
+    }
+
+    #[test]
+    fn user_versions_other_than_a_legacy_one_or_the_named_scheme_are_store_too_new() {
+        for version in [7, 99, 999, 1001] {
+            let err = refuse_user_version(version).unwrap_err();
+            assert_eq!(err.code(), ErrorCode::StoreTooNew, "{version}");
+            assert_eq!(err.details()["user_version"], version);
+        }
+        for version in [0, 1, 6, 1000] {
+            refuse_user_version(version).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_named_store_without_schema_migrations_is_store_failed() {
+        let (_dir, home) = tmp_home();
+        std::fs::create_dir_all(home.db().parent().unwrap()).unwrap();
+        let conn = Connection::open(home.db()).unwrap();
+        conn.pragma_update(None, "user_version", VERSION).unwrap();
+        drop(conn);
+        let err = Store::open(&home, 5000).err().unwrap();
+        assert_eq!(err.code(), ErrorCode::StoreFailed, "{err:?}");
+    }
+
+    #[test]
+    fn the_migrations_directory_is_the_legacy_set_and_the_named_list() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/store/migrations");
+        let mut numbered = Vec::new();
+        let mut named = Vec::new();
+        for entry in fs::read_dir(dir).unwrap() {
+            let file = entry.unwrap().file_name().into_string().unwrap();
+            let stem = file.strip_suffix(".sql").unwrap_or_else(|| panic!("{file}: only migrations here"));
+            if stem.as_bytes()[0] == b'0' { numbered.push(stem.to_owned()) } else { named.push(stem.to_owned()) }
+        }
+        numbered.sort();
+        named.sort();
+        assert_eq!(numbered, LEGACY.iter().map(|l| l.name.to_owned()).collect::<Vec<_>>(), "a numbered migration is never added");
+        assert_eq!(named, schema::NAMED.iter().map(|n| n.name.to_owned()).collect::<Vec<_>>());
+        assert!(schema::NAMED.windows(2).all(|w| w[0].name < w[1].name), "sorted by name");
+        for n in schema::NAMED {
+            assert_eq!(n.sql.lines().next().map(|l| l.starts_with("-- cpd-migration: ")), Some(true), "{}", n.name);
+            assert!(n.name > LEGACY[LEGACY.len() - 1].name, "{}: names sort after the legacy set", n.name);
+        }
     }
 }

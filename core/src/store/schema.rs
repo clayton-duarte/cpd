@@ -55,6 +55,7 @@ pub(super) const LEGACY: &[Legacy] = &[
 
 /// A named migration (contract §4.5 N1–N4): a file of `migrations/`, listed by
 /// `build.rs`. `run` is the Rust beside its SQL, called after the SQL.
+#[derive(Clone, Copy)]
 pub(super) struct Named {
     pub(super) name: &'static str,
     pub(super) compat: Compat,
@@ -860,7 +861,12 @@ mod tests {
     /// A version 2 database with one Plan in each phase, Jobs, Dependencies,
     /// Attempts, an Escalation, a Plan review, Events and Context records.
     fn version_2(home: &CpdHome) {
-        let sql = format!(
+        database_at(home, 2, &version_2_sql());
+    }
+
+    /// The rows of [`version_2`].
+    fn version_2_sql() -> String {
+        format!(
             "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');
              INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at) VALUES
                ('l-gr', 'lead', 'ctx', 'gr', 'lead', '/src', 'O3', 'idle', '{T}', '{T}'),
@@ -907,8 +913,7 @@ mod tests {
              INSERT INTO context_records (context, id, kind, at, machine, text, plan_id, plan_machine, plan_repo, plan_jira) VALUES
                ('ctx', 'm1-p1', 'plan', '{T}', 'm1', 'Grounding', 'gr', 'm1', '/src/pay', 'PAY-1');
              INSERT INTO context_records (context, id, kind, at, machine, text) VALUES ('ctx', 'm1-n1', 'note', '{T}', 'm1', 'A note');"
-        );
-        database_at(home, 2, &sql);
+        )
     }
 
     /// `version_2`, migrated by `Store::open`.
@@ -1621,5 +1626,240 @@ mod tests {
         assert_eq!((job["pr"].clone(), job["review"].clone()), (Value::from("my-repo-git"), Value::from(1)));
         let plan: Value = serde_json::from_str(after[1][1].as_str().unwrap()).unwrap();
         assert!(plan.get("repo").is_none() && plan["title"] == "G2", "{plan}");
+    }
+
+    // ---------- named migrations: the conversion (§4.5 C1–C6) ----------
+
+    /// A legacy store at version `n` with a row in every table, as the
+    /// integer-era binary left it: `version_2`'s rows (without the columns
+    /// migration 2 adds, for version 1), taken through the legacy migrations
+    /// to `n`, and a tier and a need.
+    fn legacy_store(home: &CpdHome, n: usize) {
+        let tier = format!(
+            "INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('1.0', 'S', 'm', '[]', '{T}');"
+        );
+        if n == 1 {
+            let sql = version_2_sql();
+            let v1 = sql
+                .replace("pr_seen, pr_polled_at, pr_title, pr_review_decision, pr_checks,", "pr_seen, pr_polled_at,")
+                .replace("'Open PR', 'approved', 'passed', ", "");
+            assert_ne!(v1, sql);
+            return database_at(home, 1, &format!("{v1}{tier}"));
+        }
+        database_at(home, 2, &format!("{}{tier}", version_2_sql()));
+        let conn = connection(&home.db());
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        conn.pragma_update(None, "legacy_alter_table", "ON").unwrap();
+        for legacy in &LEGACY[2..n] {
+            conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+            (legacy.apply)(&conn).unwrap();
+            conn.execute_batch("COMMIT").unwrap();
+        }
+        conn.pragma_update(None, "legacy_alter_table", "OFF").unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        conn.pragma_update(None, "user_version", n as i64).unwrap();
+        if n >= 4 {
+            conn.execute_batch(&format!("BEGIN; {WEB} INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay'); COMMIT;")).unwrap();
+        }
+    }
+
+    /// Every row of every table, as JSON text, by table, in rowid order.
+    fn dump(conn: &Connection) -> std::collections::BTreeMap<String, Vec<String>> {
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_>>()
+            .unwrap();
+        tables
+            .into_iter()
+            .map(|table| {
+                let columns: Vec<String> = table_columns(conn, &table).unwrap().into_iter().map(|(c, _)| format!("\"{c}\"")).collect();
+                let sql = format!("SELECT json_array({}) FROM \"{table}\" ORDER BY rowid", columns.join(", "));
+                let rows = conn.prepare(&sql).unwrap().query_map([], |r| r.get(0)).unwrap().collect::<Result<_>>().unwrap();
+                (table, rows)
+            })
+            .collect()
+    }
+
+    fn rowids(conn: &Connection, table: &str) -> Vec<i64> {
+        conn.prepare(&format!("SELECT rowid FROM \"{table}\" ORDER BY rowid"))
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_>>()
+            .unwrap()
+    }
+
+    fn fresh_canonical_hash() -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        drop(Store::open(&home, 5000).unwrap());
+        canonical_hash(&Connection::open(home.db()).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_legacy_store_of_every_version_converts_keeping_every_row_and_id() {
+        let fresh = fresh_canonical_hash();
+        for n in 1..=LEGACY.len() {
+            let dir = tempfile::tempdir().unwrap();
+            let home = home(&dir);
+            legacy_store(&home, n);
+            let before = Connection::open(home.db()).unwrap();
+            let rows_before = dump(&before);
+            let ids_before: Vec<(String, Vec<i64>)> =
+                rows_before.keys().map(|t| (t.clone(), rowids(&before, t))).collect();
+            let empty: Vec<&String> = ids_before.iter().filter(|(_, ids)| ids.is_empty()).map(|(t, _)| t).collect();
+            assert!(empty.is_empty(), "version {n}: the fixture has no row in {empty:?}");
+            drop(before);
+
+            let store = Store::open(&home, 5000).unwrap_or_else(|e| panic!("version {n}: {e:?}"));
+            assert!(store.schema_mismatch().is_none(), "version {n}: {:?}", store.schema_mismatch());
+            drop(store);
+
+            let conn = Connection::open(home.db()).unwrap();
+            let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+            assert_eq!(version, VERSION, "version {n}");
+            let violations: i64 =
+                conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
+            assert_eq!(violations, 0, "version {n}: foreign_key_check");
+            for (table, ids) in &ids_before {
+                let after = rowids(&conn, table);
+                assert!(ids.iter().all(|id| after.contains(id)), "version {n}: {table} lost a row id");
+            }
+            let recorded: Vec<(String, String, i64, i64)> = conn
+                .prepare("SELECT name, compat, seq, converted FROM schema_migrations ORDER BY seq")
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+                .unwrap()
+                .collect::<Result<_>>()
+                .unwrap();
+            let expected: Vec<(String, String, i64, i64)> = LEGACY
+                .iter()
+                .enumerate()
+                .map(|(i, l)| (l.name.to_owned(), l.compat.as_str().to_owned(), i as i64 + 1, 1))
+                .collect();
+            assert_eq!(recorded, expected, "version {n}: six converted rows, one per legacy migration");
+            assert_eq!(canonical_hash(&conn).unwrap(), fresh, "version {n}: the canonical hash of a fresh store");
+
+            if n == LEGACY.len() {
+                // Nothing but the runner's own rows changes in a store that is already at 6.
+                let mut rows_after = dump(&conn);
+                let mut rows_before = rows_before;
+                assert_eq!(rows_after.remove("schema_migrations").map(|r| r.len()), Some(6));
+                let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
+                assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
+                assert_eq!(txns_after.len(), txns_before.len() + 1);
+                assert_eq!(rows_after, rows_before);
+            }
+
+            // Converting twice is a no-op.
+            let snapshot = dump(&conn);
+            drop(conn);
+            drop(Store::open(&home, 5000).unwrap());
+            assert_eq!(dump(&Connection::open(home.db()).unwrap()), snapshot, "version {n}: the second open writes nothing");
+        }
+    }
+
+    #[test]
+    fn a_fresh_store_records_its_legacy_migrations_as_not_converted() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        drop(Store::open(&home, 5000).unwrap());
+        let conn = Connection::open(home.db()).unwrap();
+        let converted: Vec<i64> = conn
+            .prepare("SELECT converted FROM schema_migrations ORDER BY seq")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_>>()
+            .unwrap();
+        assert_eq!(converted, vec![0; LEGACY.len()]);
+        let txns: i64 = conn.query_row("SELECT count(*) FROM schema_migrations s JOIN txns t ON t.id = s.txn", [], |r| r.get(0)).unwrap();
+        assert_eq!(txns, LEGACY.len() as i64, "every row names the migrating transaction");
+    }
+
+    #[test]
+    fn a_tampered_legacy_store_is_refused_and_left_as_it_was() {
+        for n in [1, 3, LEGACY.len()] {
+            for tamper in ["DROP TRIGGER contexts_no_delete", "CREATE INDEX stray ON contexts(title)"] {
+                let dir = tempfile::tempdir().unwrap();
+                let home = home(&dir);
+                legacy_store(&home, n);
+                let conn = connection(&home.db());
+                conn.execute_batch(tamper).unwrap();
+                let before = (dump(&conn), legacy_schema_hash(&conn).unwrap());
+                drop(conn);
+
+                let err = Store::open(&home, 5000).err().unwrap_or_else(|| panic!("version {n}, {tamper}: opened"));
+                assert_eq!(err.code(), ErrorCode::StoreTampered, "version {n}, {tamper}: {err:?}");
+                assert_eq!(err.details()["version"], n);
+
+                let conn = connection(&home.db());
+                let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+                assert_eq!(version, n as i64);
+                assert_eq!((dump(&conn), legacy_schema_hash(&conn).unwrap()), before, "version {n}, {tamper}: changed");
+            }
+        }
+    }
+
+    // ---------- the canonical form (§4.3) ----------
+
+    #[test]
+    fn normalizing_deletes_comments_and_collapses_whitespace_outside_quoted_runs() {
+        assert_eq!(normalize("  a  /* x */ b -- c\n d 'x  --y' [a  b] \"q\"\"  r\" `s  t`  "), "a b d 'x  --y' [a  b] \"q\"\"  r\" `s  t`");
+        assert_eq!(normalize("a/**/b"), "a b");
+        assert_eq!(normalize(""), "");
+    }
+
+    #[test]
+    fn a_table_is_split_into_sorted_columns_ordered_constraints_and_options() {
+        let parts = table_parts(
+            "CREATE TABLE \"t\" (\n  \"Zed\" TEXT, -- a, comment (with parens\n  b TEXT DEFAULT 'x,y' CHECK (b IN ('a', 'b')),\n  \
+             [a c] INTEGER,\n  \"check\" TEXT,\n  CONSTRAINT k UNIQUE (b, \"Zed\"),\n  check (length(b) > 0)\n) STRICT, WITHOUT ROWID",
+        )
+        .unwrap();
+        let keys: Vec<&str> = parts.columns.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["a c", "b", "check", "zed"]);
+        assert_eq!(parts.columns[1].1, "b TEXT DEFAULT 'x,y' CHECK (b IN ('a', 'b'))");
+        assert_eq!(parts.constraints, ["CONSTRAINT k UNIQUE (b, \"Zed\")", "check (length(b) > 0)"]);
+        assert_eq!(parts.options, "STRICT, WITHOUT ROWID");
+    }
+
+    #[test]
+    fn add_column_in_either_order_gives_one_canonical_table() {
+        let canonical = |statements: &[&str]| {
+            let conn = Connection::open_in_memory().unwrap();
+            conn.execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT, CHECK (a <> 'x')) STRICT;").unwrap();
+            for statement in statements {
+                conn.execute_batch(statement).unwrap();
+            }
+            canonical_entries(&conn).unwrap()
+        };
+        let (b, c) = ("ALTER TABLE t ADD COLUMN b TEXT", "ALTER TABLE t ADD COLUMN c TEXT NOT NULL DEFAULT ''");
+        assert_eq!(canonical(&[b, c]), canonical(&[c, b]));
+        assert_ne!(canonical(&[b]), canonical(&[c]));
+    }
+
+    #[test]
+    fn a_changed_generated_trigger_or_object_is_a_schema_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        for (tamper, trigger) in [
+            ("DROP TRIGGER plans_no_delete", Some("plans_no_delete")),
+            ("DROP TRIGGER plans_hist_upd; CREATE TRIGGER plans_hist_upd AFTER UPDATE ON plans BEGIN SELECT 1; END", Some("plans_hist_upd")),
+            ("DROP TRIGGER plans_phase", None),
+            ("CREATE INDEX stray ON contexts (title)", None),
+            ("CREATE TRIGGER stray AFTER INSERT ON contexts BEGIN SELECT 1; END", None),
+        ] {
+            let home = CpdHome::resolve(Some(dir.path().join(format!("{}", tamper.len())).into()), None).unwrap();
+            drop(Store::open(&home, 5000).unwrap());
+            connection(&home.db()).execute_batch(tamper).unwrap();
+            let store = Store::open(&home, 5000).unwrap();
+            let mismatch = store.schema_mismatch().unwrap_or_else(|| panic!("{tamper}: no mismatch"));
+            assert_eq!(mismatch.object.as_deref(), trigger, "{tamper}");
+            let err = { let mut store = store; store.write("test", |_| Ok(())).unwrap_err() };
+            assert_eq!(err.code(), ErrorCode::StoreTampered, "{tamper}");
+        }
     }
 }
