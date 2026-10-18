@@ -26,7 +26,7 @@ export function contextCursorFrom(registeredEvent: number, entries: readonly unk
 export type RecordEvent = { event: number; record: string; seq: number };
 
 /** A Context record as `context show` prints it, reduced to what the update needs. */
-export type ContextRecord = { seq: number; id: string; kind: string; at: string; by: string | null; text: string; supersedes?: string; question?: string };
+export type ContextRecord = { seq: number; id: string; kind: string; at: string; by: string | null; text: string; supersedes?: string; question?: string; plan?: string };
 
 const bad = (what: string, why: string) => new CpdError("bad_output", `cpd ${what}: ${why}`);
 
@@ -58,12 +58,16 @@ export function parseRecords(out: Record<string, unknown>): ContextRecord[] {
       text: r.text,
       ...(typeof r.supersedes === "string" ? { supersedes: r.supersedes } : {}),
       ...(typeof r.question === "string" ? { question: r.question } : {}),
+      ...(isObject(r.plan) && typeof r.plan.id === "string" ? { plan: r.plan.id } : {}),
     };
   });
 }
 
+/** A `brief` is shown short: its first line and its Plan (§15.6); the whole text is `cpd context show --record <id>`. */
 const line = (r: ContextRecord): string =>
-  `- ${r.id} ${r.kind} (${r.at.slice(0, 10)}): ${r.text}${r.question !== undefined ? ` Answers ${r.question}.` : ""}${r.supersedes !== undefined ? ` Supersedes ${r.supersedes}.` : ""}`;
+  r.kind === "brief"
+    ? `- ${r.id} brief (${r.at.slice(0, 10)}): ${r.text.trimStart().split("\n")[0]!.trimEnd()}${r.plan !== undefined ? ` Plan ${r.plan}.` : ""}`
+    : `- ${r.id} ${r.kind} (${r.at.slice(0, 10)}): ${r.text}${r.question !== undefined ? ` Answers ${r.question}.` : ""}${r.supersedes !== undefined ? ` Supersedes ${r.supersedes}.` : ""}`;
 
 /**
  * §15.6: the message for the records the Event list names, written by other Sessions, oldest first. Undefined when

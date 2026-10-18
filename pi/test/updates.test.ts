@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { contextCursorFrom, contextUpdate, type ContextRecord, type RecordEvent } from "../lib/updates.ts";
+import { contextCursorFrom, contextUpdate, parseRecords, type ContextRecord, type RecordEvent } from "../lib/updates.ts";
 import { Fixture, ID, OTHER, sessionShow, settle, waitFor } from "./fake.ts";
 
 const contextMessage = (event: number | undefined, deliveredTo: string | undefined, customType = "cpd-context") => ({
@@ -45,6 +45,21 @@ test("message: 1 record, in full, with its date; answers and supersedes name the
     record(2, { kind: "decision", text: "One table.", supersedes: "hs-d12" }),
   ])!;
   assert.deepEqual(both.content.split("\n").slice(1), ["- hs-n1 answer (2026-10-17): Yes. Answers hs-q8.", "- hs-n2 decision (2026-10-17): One table. Supersedes hs-d12."]);
+});
+
+test("message: a brief is shown short: its first line and its Plan, never the rest", () => {
+  const brief = record(1, { id: "hs-b1", kind: "brief", text: "Retry payouts.\nSecond line, with detail.", plan: "pay" });
+  const m = contextUpdate("ctx", ID, [recordEvent(1)], [{ ...brief, id: "hs-n1" }])!;
+  assert.equal(m.content, "Context ctx: 1 new records since your last turn.\n- hs-n1 brief (2026-10-17): Retry payouts. Plan pay.");
+  assert.ok(!m.content.includes("detail"));
+  const noPlan = contextUpdate("ctx", ID, [recordEvent(1)], [{ ...brief, id: "hs-n1", plan: undefined }])!;
+  assert.equal(noPlan.content.split("\n")[1], "- hs-n1 brief (2026-10-17): Retry payouts.");
+});
+
+test("parseRecords: a record's plan is its Plan id", () => {
+  const raw = { seq: 1, id: "hs-b1", kind: "brief", at: "2026-10-17T09:00:00.000Z", by: { session: null, plan: null }, text: "Retry.", short: true, plan: { id: "pay", machine: "hs" } };
+  assert.equal(parseRecords({ records: [raw] })[0]!.plan, "pay");
+  assert.equal("plan" in parseRecords({ records: [{ ...raw, plan: undefined }] })[0]!, false);
 });
 
 test("message: 20 records are all listed", () => {
