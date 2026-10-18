@@ -401,6 +401,19 @@ fn ensure_fails_when_the_engine_does_not_start() {
     assert!(error["details"]["pane"].as_str().unwrap().starts_with('%'));
 }
 
+#[test]
+fn ensure_says_the_exit_status_is_unknown_when_tmux_has_none() {
+    let fx = fx("");
+    // Killed by a signal: the pane is dead and `#{pane_dead_status}` is empty.
+    fx.env.fake("cpd", "kill -KILL $$");
+    let run = fx.env.cpd(&["watch", "--ensure"]);
+    let error = run.error();
+    assert_eq!(error["code"], "watch_start_failed");
+    assert_eq!(error["details"]["exit"], Value::Null);
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains("its exit status is unknown"), "{message}");
+}
+
 // ---------- E1 ----------
 
 #[test]
