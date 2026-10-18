@@ -484,7 +484,7 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::style::Color;
 
-    use super::super::fixture::{WHEN, archived, context, plan, refresh_dots, sample, session, tree};
+    use super::super::fixture::{WHEN, archived, context, plan, sample, session, tree, managed};
     use super::*;
     use cpd_core::session::State;
     use crate::palette::{IDLE, NEEDS_YOU, SPINNER, STOPPED, color};
@@ -548,14 +548,14 @@ mod tests {
     fn readme() -> Tree {
         let mut rust = session("s-rust", "cpd rust lead", State::Blocked, Some("cpd: Worker question"), Place::Chat);
         rust.dot = Dot::Red;
-        tree(vec![context(
+        tree(vec![managed(context(
             "cpd",
             vec![
                 plan("v1", "cpd", Phase::Done, [0, 36, 0, 0, 1, 5], session("s-v1", "v1", State::Idle, None, Place::Parked), vec![]),
                 plan("rust", "cpd", Phase::Dispatch, [0, 0, 1, 0, 0, 1], rust, vec![]),
                 plan("ui", "cpd", Phase::Deploy, [0, 1, 0, 2, 0, 3], session("s-ui", "cpd-ui", State::Idle, None, Place::Parked), vec![]),
             ],
-        )])
+        ), Dot::White)])
     }
 
     #[test]
@@ -631,16 +631,20 @@ mod tests {
     fn a_collapsed_context_shows_the_number_of_plans_and_hides_them() {
         let tree = sample();
         let buf = render(&tree, &mut state_for(&tree, &["alpha"], &[]), 44, 4, false);
-        assert_eq!(lines(&buf), [format!("▸ {NEEDS_YOU} alpha 3").to_owned(), format!("{NEEDS_YOU} beta").to_owned(), row_of(&format!("  └ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44), format!("{STOPPED} gamma").to_owned()]);
+        assert_eq!(lines(&buf), [format!("▸ {NEEDS_YOU} alpha 3").to_owned(), format!("▾ {NEEDS_YOU} beta").to_owned(), row_of(&format!("  └ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44), format!("▾ {STOPPED} gamma").to_owned()]);
     }
 
     #[test]
-    fn a_context_has_the_dot_of_any_session_inside_that_needs_you() {
+    fn a_context_has_the_dot_of_its_manager_and_not_of_any_session_inside() {
         let tree = sample();
         let buf = render(&tree, &mut state_for(&tree, &["alpha"], &[]), 44, 1, false);
-        assert_eq!(text(&buf, 0), format!("▸ {NEEDS_YOU} alpha 3"), "through its blocked fork");
-        let calm = super::super::fixture::tree(vec![context("cc", vec![lone("pp", "s", Phase::Plan, [0; 6])])]);
+        assert_eq!(text(&buf, 0), format!("▸ {NEEDS_YOU} alpha 3"), "its Manager's, not its working Lead's");
+        let calm = super::super::fixture::tree(vec![managed(context("cc", vec![lone("pp", "s", Phase::Plan, [0; 6])]), Dot::Idle)]);
         assert_eq!(text(&render(&calm, &mut state_for(&calm, &[], &[]), 20, 1, false), 0), format!("▾ {IDLE} cc"));
+        let blocked = super::super::fixture::tree(vec![managed(context("cc", vec![with_dot("pp", Dot::Red)]), Dot::Idle)]);
+        assert_eq!(text(&render(&blocked, &mut state_for(&blocked, &[], &[]), 20, 1, false), 0), format!("▾ {IDLE} cc"), "a blocked Lead does not show");
+        let none = super::super::fixture::tree(vec![context("cc", vec![with_dot("pp", Dot::Red)])]);
+        assert_eq!(text(&render(&none, &mut state_for(&none, &[], &[]), 20, 1, false), 0), format!("▾ {STOPPED} cc"), "no Manager: stopped");
     }
 
     #[test]
@@ -648,7 +652,7 @@ mod tests {
         // an open Escalation is not the ●: the Lead's state is (commands.md §17)
         let mut p = lone("pp", "lead", Phase::Dispatch, [0; 6]);
         p.head.open_escalations = 1;
-        let t = tree(vec![context("cc", vec![p])]);
+        let t = tree(vec![managed(context("cc", vec![p]), Dot::Idle)]);
         assert_eq!(lines(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false)), [format!("▾ {IDLE} cc").to_owned(), row_of(&format!("  └ {IDLE} pp"), "0⋅0⋅0⋅0⋅0", 30)]);
         let mut t = t;
         t.contexts[0].plans[0].sessions[0].dot = Dot::Red;
@@ -697,7 +701,7 @@ mod tests {
             for dot in [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::White, Dot::Working, Dot::Idle, Dot::Stopped] {
                 let mut p = with_dot("pp", dot);
                 p.head.phase = phase;
-                let t = tree(vec![context("cc", vec![p])]);
+                let t = tree(vec![managed(context("cc", vec![p]), dot)]);
                 let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
                 assert_eq!(cell(&buf, 4, 1), drawn_dot(dot), "{dot:?} in {phase:?}");
                 assert_eq!(cell(&buf, 2, 0), drawn_dot(dot), "its Context row too: {dot:?} in {phase:?}");
@@ -709,7 +713,7 @@ mod tests {
 
     #[test]
     fn a_stopped_dot_is_dim() {
-        let t = tree(vec![context("cc", vec![with_dot("pp", Dot::Stopped)])]);
+        let t = tree(vec![managed(context("cc", vec![with_dot("pp", Dot::Stopped)]), Dot::Stopped)]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
         assert_eq!((buf[(4, 1)].symbol(), buf[(2, 0)].symbol()), (STOPPED, STOPPED));
         assert!(buf[(4, 1)].modifier.contains(Modifier::DIM) && buf[(2, 0)].modifier.contains(Modifier::DIM));
@@ -720,7 +724,7 @@ mod tests {
 
     #[test]
     fn a_working_dot_turns_with_the_frame_on_session_rows_and_their_context() {
-        let t = tree(vec![context("cc", vec![with_dot("pp", Dot::Working)])]);
+        let t = tree(vec![managed(context("cc", vec![with_dot("pp", Dot::Working)]), Dot::Working)]);
         let glyphs: Vec<(String, String)> = (0..9)
             .map(|frame| {
                 let buf = render_at(&t, &mut state_for(&t, &[], &[]), 20, 2, false, frame);
@@ -736,9 +740,9 @@ mod tests {
     fn an_archived_working_row_is_grey_and_does_not_turn() {
         let mut p = with_dot("pp", Dot::Working);
         p.head.archived_at = Some(WHEN.into());
-        let mut gone = context("zz", vec![with_dot("qq", Dot::Working)]);
+        let mut gone = managed(context("zz", vec![with_dot("qq", Dot::Working)]), Dot::Working);
         gone.archived_at = Some(WHEN.into());
-        let t = tree(vec![context("cc", vec![p]), gone]);
+        let t = tree(vec![managed(context("cc", vec![p]), Dot::Working), gone]);
         let mut state = state_for(&t, &[], &[]);
         expand(&mut state, &t, &["cc", "…"]);
         expand(&mut state, &t, &["…"]);
@@ -764,14 +768,13 @@ mod tests {
     }
 
     #[test]
-    fn a_context_row_shows_its_most_urgent_live_session_red_over_yellow() {
-        let t = tree(vec![context("cc", vec![with_dot("aa", Dot::Yellow), with_dot("bb", Dot::Red), with_dot("dd", Dot::White)])]);
+    fn a_context_row_shows_its_managers_dot_whatever_the_sessions_inside() {
+        let t = tree(vec![managed(context("cc", vec![with_dot("aa", Dot::Yellow), with_dot("bb", Dot::Red), with_dot("dd", Dot::White)]), Dot::Working)]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 4, false);
-        assert_eq!(cell(&buf, 2, 0), drawn_dot(Dot::Red));
+        assert_eq!(cell(&buf, 2, 0), drawn_dot(Dot::Working));
         let collapsed = render(&t, &mut state_for(&t, &["cc"], &[]), 20, 1, false);
-        assert_eq!(cell(&collapsed, 2, 0), drawn_dot(Dot::Red), "collapsed too");
-        assert_eq!((cell(&buf, 4, 1), cell(&buf, 4, 3)), (drawn_dot(Dot::Yellow), drawn_dot(Dot::White)), "while each Session row keeps its own");
-        assert_ne!(drawn_dot(Dot::Red), drawn_dot(Dot::Yellow));
+        assert_eq!(cell(&collapsed, 2, 0), drawn_dot(Dot::Working), "collapsed too");
+        assert_eq!((cell(&buf, 4, 1), cell(&buf, 4, 2), cell(&buf, 4, 3)), (drawn_dot(Dot::Yellow), drawn_dot(Dot::Red), drawn_dot(Dot::White)), "while each Session row keeps its own");
     }
 
     #[test]
@@ -1005,7 +1008,7 @@ mod tests {
         assert_eq!(
             lines(&buf),
             [
-                format!("▾ {WORKING} alpha").to_owned(),
+                format!("▾ {NEEDS_YOU} alpha").to_owned(),
                 row_of(&format!("⏵ ├ {WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44),
                 row_of(&format!("  ├ {IDLE} sketch"), "4⋅0⋅0⋅0⋅0", 44),
                 format!("  ├ {IDLE} ship·f-id").to_owned(),
@@ -1016,7 +1019,7 @@ mod tests {
                 "…".to_owned(),
                 String::new(),
             ],
-            "zeta is only in the `…` row at the end; `alpha`'s archived Plan and fork are in its own `…` row, and its blocked fork no longer makes it a needs-you dot: its dot is the working Lead's"
+            "zeta is only in the `…` row at the end; `alpha`'s archived Plan and fork are in its own `…` row, and its dot is its Manager's whatever happens to its Sessions"
         );
         assert_eq!((fg(&buf, 0, 8), fg(&buf, 4, 4)), (color(Meaning::Nothing), color(Meaning::Nothing)), "muted");
     }
@@ -1039,9 +1042,8 @@ mod tests {
         for s in &mut t.contexts[1].plans[0].sessions {
             s.archived_at = Some(WHEN.into()); // archiving a Plan archives its Sessions
         }
-        refresh_dots(&mut t);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 44, 10, false);
-        assert_eq!(lines(&buf)[6..8], [format!("▾ {STOPPED} beta"), "  └ …".to_owned()], "a fork of an archived Plan is in the `…` row too");
+        assert_eq!(lines(&buf)[6..8], [format!("▾ {NEEDS_YOU} beta"), "  └ …".to_owned()], "a fork of an archived Plan is in the `…` row too");
     }
 
     #[test]
@@ -1053,7 +1055,7 @@ mod tests {
         assert_eq!(
             lines(&buf)[..9],
             [
-                format!("▾ {WORKING} alpha").to_owned(),
+                format!("▾ {NEEDS_YOU} alpha").to_owned(),
                 row_of(&format!("⏵ ├ {WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44),
                 row_of(&format!("  ├ {IDLE} sketch"), "4⋅0⋅0⋅0⋅0", 44),
                 format!("  ├ {IDLE} ship·f-id").to_owned(),
@@ -1180,10 +1182,10 @@ mod tests {
     }
 
     #[test]
-    fn only_the_live_plans_are_counted_in_a_collapsed_context_and_archived_ones_do_not_colour_its_dot() {
+    fn only_the_live_plans_are_counted_in_a_collapsed_context_whose_dot_is_its_managers() {
         let mut t = archived();
         t.contexts[0].plans[2].head.phase = Phase::Done;
         let buf = render(&t, &mut state_for(&t, &["alpha"], &[]), 44, 3, false);
-        assert_eq!(text(&buf, 0), format!("▸ {WORKING} alpha 2"), "ship and sketch; the archived Plan is behind `…`, and the archived blocked fork does not make it a needs-you dot");
+        assert_eq!(text(&buf, 0), format!("▸ {NEEDS_YOU} alpha 2"), "ship and sketch; the archived Plan is behind `…`; the dot is the Manager's");
     }
 }

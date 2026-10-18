@@ -647,7 +647,7 @@ mod tests {
         let more = rows.iter().position(|r| r == " …").unwrap() as u16;
         click(&mut view, 1, more); // the `…` row of the archived Contexts
         let rows = drawn(&mut view, 44, 16);
-        let y = rows.iter().position(|r| r == " ▾ ◌ zeta").unwrap() as u16;
+        let y = rows.iter().position(|r| *r == format!(" ▾ {STOPPED} zeta")).unwrap() as u16;
         let zeta = vec!["zeta".to_owned()];
         assert_eq!(click(&mut view, 6, y), Effect::None, "its label: no Manager for an archived Context");
         assert!(view.state.opened().contains(&zeta));
@@ -927,7 +927,7 @@ mod tests {
         let rows = drawn(&mut view, 44, 16);
         assert_eq!(rows[5], format!("   ├ {IDLE} s┌─────────┐"), "{rows:?}");
         assert_eq!(rows[6], format!("   └ {NEEDS_YOU} s│ Open    │"));
-        assert!(rows[7].starts_with(&format!(" ▾ {NEEDS_YOU} beta │ Rename… │")), "drawn over the tree: {rows:?}");
+        assert!(rows[7].starts_with(&format!(" ▾ {NEEDS_YOU} bet│ Rename… │")), "drawn over the tree: {rows:?}");
         assert_eq!(rows[12], "        └─────────┘");
         let reversed = |view: &mut View, x, y| {
             let mut terminal = Terminal::new(TestBackend::new(44, 16)).unwrap();
