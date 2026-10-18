@@ -17,6 +17,7 @@ mod actions;
 mod boxes;
 mod flow;
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::Frame;
@@ -38,7 +39,7 @@ use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{self, Event, highest_id};
 use cpd_core::home::CpdHome;
-use cpd_core::ids::AttemptId;
+use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::output::Output;
 use cpd_core::store::Store;
 
@@ -129,16 +130,23 @@ struct Ui {
     selected: Selection,
     /// The window's top-left in the chart.
     scroll: (u16, u16),
+    /// The scroll offset each Plan was left at, kept while the view runs only (hs-d197). Not clamped: the chart may
+    /// have changed size by the time it comes back, and a draw clamps.
+    remembered: HashMap<PlanId, (u16, u16)>,
     note: String,
     error: Option<String>,
     body: Rect,
 }
 
 impl Ui {
-    /// A different Lead is in the slot: nothing is selected, the chart starts at its corner.
-    fn reset(&mut self) {
+    /// A different Lead is in the slot, `from` its Plan before and `to` its Plan now: nothing is selected, the chart
+    /// is at the offset `to` was left at, or at its corner. Leads of one Plan share the Plan's offset.
+    fn switch(&mut self, from: Option<&PlanId>, to: Option<&PlanId>) {
+        if let Some(from) = from {
+            self.remembered.insert(from.clone(), self.scroll);
+        }
         self.selected.reset();
-        self.scroll = (0, 0);
+        self.scroll = to.and_then(|plan| self.remembered.get(plan).copied()).unwrap_or((0, 0));
         self.note.clear();
     }
 
@@ -242,13 +250,14 @@ fn show(
                 Err(e) => ui.error = Some(e.to_string()),
             }
             if stale && taken.elapsed() >= COALESCE {
-                let before = snap.centre.as_ref().map(|c| c.slot.session.clone());
+                let before = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
                 match snapshot(store) {
                     Ok(next) => {
                         *snap = next;
                         ui.error = None;
-                        if before != snap.centre.as_ref().map(|c| c.slot.session.clone()) {
-                            ui.reset();
+                        let after = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
+                        if before.as_ref().map(|b| &b.0) != after.as_ref().map(|a| &a.0) {
+                            ui.switch(before.as_ref().map(|b| &b.1), after.as_ref().map(|a| &a.1));
                         }
                     }
                     Err(e) => ui.error = Some(e.to_string()),
@@ -317,5 +326,129 @@ fn show(
                 },
             };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use super::*;
+    use crate::read::{JobNode, JobStatus, PrNode, PrStatus};
+    use cpd_core::config::Tier;
+    use cpd_core::ids::{ContextId, JobKey, PrKey, SessionId};
+
+    const PANE: (u16, u16) = (40, 10);
+
+    fn plan(id: &str) -> PlanId {
+        PlanId::parse(id).unwrap()
+    }
+
+    /// A Plan of one PR with `jobs` independent Jobs: a chart `jobs` rows tall (and some more for the box).
+    fn centre(plan_id: &str, jobs: usize) -> Centre {
+        let pr = PrKey::parse("web").unwrap();
+        let node = PrNode {
+            key: pr.clone(),
+            repo_name: "repo".into(),
+            base: "main".into(),
+            status: PrStatus::Dispatch,
+            needs: Vec::new(),
+            pull: None,
+        };
+        let job = |n: usize| JobNode {
+            key: JobKey::parse(&format!("job-{n}")).unwrap(),
+            pr: pr.clone(),
+            seq: 0,
+            title: String::new(),
+            status: JobStatus::Queued,
+            tier: Tier::parse("S1").unwrap(),
+            needs: Vec::new(),
+            appended: false,
+            retry_tier: None,
+            failed_cause: None,
+            cancel_reason: None,
+            merged_sha: None,
+            attempts: Vec::new(),
+        };
+        let plan = PlanBoxes {
+            plan: PlanId::parse(plan_id).unwrap(),
+            context: ContextId::parse("ctx").unwrap(),
+            prs: vec![node],
+            jobs: (0..jobs).map(job).collect(),
+            events_cursor: 0,
+        };
+        let boxes = boxes::layout(&plan.prs, &plan.jobs, 0).with_margin(MARGIN);
+        let slot = ChatSlot {
+            session: SessionId::parse("00000000-0000-4000-8000-000000000000").unwrap(),
+            name: "lead".into(),
+            plan: plan.plan.clone(),
+            moved_event: 0,
+        };
+        Centre { slot, plan, boxes, frame: 0 }
+    }
+
+    fn draw(ui: &mut Ui, centre: &Centre) {
+        let mut terminal = Terminal::new(TestBackend::new(PANE.0, PANE.1)).unwrap();
+        terminal.draw(|f| ui.draw(f, Some(centre))).unwrap();
+    }
+
+    #[test]
+    fn switching_plans_and_back_restores_the_offset_with_no_selection() {
+        let (a, b) = (plan("plan-a"), plan("plan-b"));
+        let mut ui = Ui::default();
+        draw(&mut ui, &centre("plan-a", 30));
+        ui.scroll = (0, 7);
+        ui.selected.key = Some("job-3".into());
+
+        ui.switch(Some(&a), Some(&b));
+        assert_eq!((ui.scroll, &ui.selected), ((0, 0), &Selection::default()), "B starts at its corner");
+        ui.scroll = (0, 2);
+
+        ui.switch(Some(&b), Some(&a));
+        assert_eq!((ui.scroll, &ui.selected), ((0, 7), &Selection::default()));
+        ui.switch(Some(&a), Some(&b));
+        assert_eq!(ui.scroll, (0, 2), "each Plan has its own");
+    }
+
+    #[test]
+    fn two_leads_of_one_plan_share_its_offset() {
+        let a = plan("plan-a");
+        let mut ui = Ui::default();
+        ui.scroll = (4, 9);
+        ui.switch(Some(&a), Some(&a));
+        assert_eq!(ui.scroll, (4, 9));
+    }
+
+    #[test]
+    fn no_lead_and_back_is_the_same_plan() {
+        let a = plan("plan-a");
+        let mut ui = Ui::default();
+        ui.scroll = (0, 5);
+        ui.switch(Some(&a), None);
+        assert_eq!(ui.scroll, (0, 0));
+        ui.switch(None, Some(&a));
+        assert_eq!(ui.scroll, (0, 5));
+    }
+
+    #[test]
+    fn a_chart_that_shrank_clamps_the_restored_offset_when_drawn() {
+        let (a, b) = (plan("plan-a"), plan("plan-b"));
+        let mut ui = Ui::default();
+        ui.scroll = (0, 20);
+        ui.switch(Some(&a), Some(&b));
+        ui.switch(Some(&b), Some(&a));
+        assert_eq!(ui.scroll, (0, 20), "restored as it was left");
+
+        let small = centre("plan-a", 12);
+        draw(&mut ui, &small);
+        let height = small.boxes.chart.pills.iter().map(|p| p.rect.bottom()).max().unwrap();
+        assert!(ui.scroll.1 < 20 && ui.scroll.1 + PANE.1 >= height, "{:?}, chart {height} rows", ui.scroll);
+    }
+
+    #[test]
+    fn a_view_that_restarts_starts_at_the_top() {
+        assert_eq!(Ui::default().scroll, (0, 0));
+        assert!(Ui::default().remembered.is_empty());
     }
 }

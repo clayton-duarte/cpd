@@ -468,6 +468,37 @@ fn the_view_follows_events_and_switches_plan_when_the_chat_slot_changes() {
 }
 
 #[test]
+fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_reset() {
+    let env = env();
+    let keys: Vec<String> = (10..60).map(|n| format!("j{n}")).collect();
+    let jobs: Vec<(&str, &str, &str, &[&str], u32)> = keys.iter().map(|k| (k.as_str(), "queued", "S3", &[][..], 0)).collect();
+    let mut s = plan_with("dispatch", None, &jobs);
+    s += &plan_row("side", "ctx", "dispatch", "lead-side", "2026-01-02T00:00:05.000Z", None);
+    s += &lead_row("lead-side", "ctx", "side", "2026-01-02T00:00:05.000Z");
+    s += &job_row("side", "other", "queued", "O3");
+    sql(&env, &s);
+    let selected = |styled: &str| styled.contains("\x1b[1;7m") || styled.contains("\x1b[7;1m") || styled.contains("\x1b[7m");
+    let pane = start_view(&env);
+    let top = screen_when(&env, &pane, "the top of the chart", |s| s.len() > 2 && s[2].contains(" j10 "));
+
+    // arrow keys select the pills one by one, and the chart scrolls to keep the selection visible
+    let mut down = vec!["send-keys", "-t", &pane];
+    down.extend(std::iter::repeat_n("j", 45));
+    tmux_out(&env, &down);
+    let scrolled = screen_when(&env, &pane, "the chart scrolled", |s| s.iter().all(|l| !l.contains(" j10 ")));
+    assert!(selected(&tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane])), "no pill is selected before the switch");
+
+    // another Plan starts at its corner; coming back shows the chart where it was left, with nothing selected
+    sql(&env, &in_chat("ctx", "side", "lead-side"));
+    screen_when(&env, &pane, "the other Plan", |s| s.len() > 2 && s[2].contains("other"));
+    sql(&env, &in_chat("ctx", "ship", "lead-ship"));
+    let back = screen_when(&env, &pane, "the first Plan again", |s| s.iter().any(|l| l.contains(" j")));
+    assert_eq!(back, scrolled, "{}", back.join("\n"));
+    assert_ne!(back, top);
+    assert!(!selected(&tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane])), "a pill is selected");
+}
+
+#[test]
 fn the_view_starts_no_subprocess_and_asks_gh_nothing() {
     let env = env();
     sql(&env, &plan_with("pr", Some((7, "failed")), &[("a", "running", "S3", &[], 1)]));
