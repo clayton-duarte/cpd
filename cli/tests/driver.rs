@@ -12,7 +12,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, TestEnv};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_lead_worktree, pr_lead_worktree_path, prepare_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -771,7 +771,7 @@ fn dispatch_after_job_retry_starts_a_retry_attempt_at_the_chosen_tier() {
 // ---------- the stall rule (§3.4 A4, hs-d195) ----------
 
 /// A Worker whose session file ends in a `bash` tool call, with `result` (a
-/// JSONL line, or nothing) after it, and whose tool call is a `sleep 3600`
+/// JSONL line, or nothing) after it, and whose tool call is a `sleep SLEEP_SECONDS`
 /// child of the fake pi. Its pid goes to `../stall-child.pid`. When the child
 /// dies, pi writes the tool's failure, leaves `../stall-survived` and stays.
 fn stalled_worker(result: &str) -> String {
@@ -781,15 +781,15 @@ for a in "$@"; do [ "$prev" = "--session-id" ] && sid="$a"; prev="$a"; done
 mkdir -p "$HOME/.pi/agent/sessions/w"
 f="$HOME/.pi/agent/sessions/w/2026_$sid.jsonl"
 printf '%s\n' '{{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}}' > "$f"
-printf '%s\n' '{{"type":"message","timestamp":"2026-10-14T21:00:05.000Z","message":{{"role":"assistant","content":[{{"type":"text","text":"run it"}},{{"type":"toolCall","id":"call_1","name":"bash","arguments":{{"command":"sleep 3600"}}}}],"stopReason":"toolUse"}}}}' >> "$f"
+printf '%s\n' '{{"type":"message","timestamp":"2026-10-14T21:00:05.000Z","message":{{"role":"assistant","content":[{{"type":"text","text":"run it"}},{{"type":"toolCall","id":"call_1","name":"bash","arguments":{{"command":"sleep {SLEEP_SECONDS}"}}}}],"stopReason":"toolUse"}}}}' >> "$f"
 {result}
-sleep 3600 &
+sleep {SLEEP_SECONDS} &
 child=$!
 echo "$child" > ../stall-child.pid
 wait "$child"
 printf '%s\n' '{{"type":"message","message":{{"role":"toolResult","toolCallId":"call_1","content":[{{"type":"text","text":"Terminated"}}],"isError":true}}}}' >> "$f"
 : > ../stall-survived
-exec sleep 600"#,
+exec sleep {SLEEP_SECONDS}"#,
         result = if result.is_empty() { String::new() } else { format!("printf '%s\\n' '{result}' >> \"$f\"") },
     )
 }
@@ -858,7 +858,7 @@ fn a_stalled_tool_call_has_its_processes_killed_and_the_worker_keeps_running() {
     let log = fx.log(ATTEMPT);
     let lines: Vec<&str> = log.lines().filter(|l| l.contains("stall")).collect();
     assert_eq!(lines.len(), 1, "{log}");
-    assert!(lines[0].contains(&format!("{child} (sleep 3600)")), "{log}");
+    assert!(lines[0].contains(&format!("{child} (sleep {SLEEP_SECONDS})")), "{log}");
     assert!(lines[0].contains("idle"), "{log}");
     assert!(!fx.kinds(ATTEMPT).contains(&"error".to_owned()), "{:?}", fx.kinds(ATTEMPT));
 
