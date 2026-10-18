@@ -638,13 +638,13 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   });
 
   // pi's dialogs (`ctx.ui.select/confirm/input/editor/custom`): `pi.on` has no unsubscribe, so the run is checked.
-  for (const [event, active] of [["ui_prompt_start", true], ["ui_prompt_end", false]] as const) {
-    pi.on(event, () => {
-      const r = run;
-      if (!r) return;
-      if (r.facts.prompt(active)) refresh(r);
-    });
-  }
+  const onPrompt = (active: boolean) => {
+    const r = run;
+    if (!r) return;
+    if (r.facts.prompt(active)) refresh(r);
+  };
+  pi.on("ui_prompt_start", () => onPrompt(true));
+  pi.on("ui_prompt_end", () => onPrompt(false));
 
   pi.on("agent_settled", (_event, ctx) => {
     const r = run;
