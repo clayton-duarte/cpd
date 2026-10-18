@@ -28,41 +28,6 @@ test("agent_start reports working; agent_settled reports idle only when pi is id
   assert.deepEqual(f.argvs().filter((a) => a[1] === "state").at(-1), ["session", "state", "idle", "--session", ID], "idle takes no --label");
 });
 
-test("blocking signals of other extensions are counted; the label is the latest opened; a stray close changes nothing", async (t) => {
-  const f = new Fixture();
-  t.after(() => f.close());
-  await started(f);
-
-  const signal = (active: boolean, label?: string) => f.pi.events.emit("herdr:blocked", active ? { active, label } : { active });
-  signal(false); // nothing open: nothing closes
-  await settle();
-  assert.deepEqual(stateCalls(f), ["idle"]);
-
-  signal(true, "dialog one");
-  await waitFor("blocked", () => stateCalls(f).length === 2);
-  signal(true, "dialog two");
-  await waitFor("relabelled", () => stateCalls(f).length === 3);
-  signal(false);
-  await waitFor("one closed", () => stateCalls(f).length === 4);
-  signal(false);
-  await waitFor("all closed", () => stateCalls(f).length === 5);
-  assert.deepEqual(stateCalls(f), ["idle", "blocked:dialog one", "blocked:dialog two", "blocked:dialog one", "idle"]);
-  assert.deepEqual(f.argvs().filter((a) => a[1] === "state")[1], ["session", "state", "blocked", "--label", "dialog one", "--session", ID]);
-});
-
-test("blocked beats working; when the last reason closes during a turn the state is working", async (t) => {
-  const f = new Fixture();
-  t.after(() => f.close());
-  await started(f);
-  await f.pi.fire("agent_start");
-  await waitFor("working", () => stateCalls(f).length === 2);
-  f.pi.events.emit("herdr:blocked", { active: true, label: "ask" });
-  await waitFor("blocked", () => stateCalls(f).length === 3);
-  f.pi.events.emit("herdr:blocked", { active: false });
-  await waitFor("working again", () => stateCalls(f).length === 4);
-  assert.deepEqual(stateCalls(f), ["idle", "working", "blocked:ask", "working"]);
-});
-
 test("calls are serialised: one in flight, only the latest wanted state is sent next", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
@@ -70,8 +35,8 @@ test("calls are serialised: one in flight, only the latest wanted state is sent 
   f.respond("session-state", { ok: true }, { delay: 120 });
 
   await f.pi.fire("agent_start"); // working: in flight
-  f.pi.events.emit("herdr:blocked", { active: true, label: "x" }); // superseded
-  f.pi.events.emit("herdr:blocked", { active: false });
+  await f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "custom" }); // superseded
+  await f.pi.fire("ui_prompt_end");
   f.pi.idle = true;
   await f.pi.fire("agent_settled", { aborted: false }); // idle: the latest
   await waitFor("two more calls", () => f.argvs().filter((a) => a[1] === "state").length === 3, 3000);
@@ -190,17 +155,16 @@ test("a dialog during a turn returns to working when it ends", async (t) => {
   assert.deepEqual(stateCalls(f), ["idle", "working", "blocked:dialog", "working"]);
 });
 
-test("a dialog and a herdr:blocked signal are separate reasons", async (t) => {
+test("a herdr:blocked event no longer changes the state; the dialog reason still blocks", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   await started(f);
+  f.pi.events.emit("herdr:blocked", { active: true, label: "ask" });
+  await settle();
+  assert.deepEqual(stateCalls(f), ["idle"]);
   await f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "custom" });
   await waitFor("dialog", () => stateCalls(f).length === 2);
-  f.pi.events.emit("herdr:blocked", { active: true, label: "ask" });
-  await waitFor("signal", () => stateCalls(f).length === 3);
-  await f.pi.fire("ui_prompt_end");
-  await settle();
-  assert.deepEqual(stateCalls(f), ["idle", "blocked:dialog", "blocked:ask"]);
   f.pi.events.emit("herdr:blocked", { active: false });
-  await waitFor("idle", () => stateCalls(f).length === 4);
+  await settle();
+  assert.deepEqual(stateCalls(f), ["idle", "blocked:dialog"]);
 });
