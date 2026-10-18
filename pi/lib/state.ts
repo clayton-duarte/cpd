@@ -98,7 +98,10 @@ export class Reporter {
     if (wantedKey(w) === this.lastKey) return;
     this.lastKey = wantedKey(w);
     this.inflight = this.send(w)
-      .catch(this.onError)
+      .catch((e) => {
+        this.lastKey = undefined; // refused: the same state is tried again when wanted again
+        this.onError(e);
+      })
       .finally(() => {
         this.inflight = undefined;
         this.pump();
