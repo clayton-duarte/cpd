@@ -208,6 +208,8 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job, review: bool) -> Result<(),
             review,
         ],
     )?;
+    // An appended Job reopens its PR for E4: `all-merged` is sent again once the Jobs are all merged or cancelled.
+    tx.execute("UPDATE prs SET all_merged_at = NULL WHERE plan = ?1 AND key = ?2 AND all_merged_at IS NOT NULL", [plan.as_str(), job.pr.as_str()])?;
     for need in &job.needs {
         tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), job.key.as_str(), need.as_str()])?;
     }

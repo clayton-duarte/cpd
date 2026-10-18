@@ -1424,3 +1424,134 @@ fn a_reload_is_not_a_quit_even_though_pi_exits_0_on_sigterm() {
     assert!(!session_archived(&env, "side"));
     assert_eq!(events(&env, "session-archived").len(), 0);
 }
+
+// ---------- short ids (commands.md §1.3, hs-a3) ----------
+
+const UUID_A: &str = "a1b2c3d4-0000-4000-8000-000000000001";
+const UUID_B: &str = "a1b2c3d4-0000-4000-8000-000000000002";
+const CAFE_LEAD: &str = "beef0000-0000-4000-8000-000000000003";
+const CAFE_PREFIXED: &str = "cafe0001-0000-4000-8000-000000000004";
+
+/// `setup` plus: Plan `cafe` (Lead `beef0000-…`), two Sessions of Plan `pay`
+/// whose ids share the prefix `a1b2c3d4`, and one grounded Session whose id
+/// starts with `cafe`, which is also a Plan id.
+fn setup_short(env: &TestEnv) {
+    setup(env);
+    exec_sql(
+        env,
+        &format!(
+            "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('cafe', 'ctx', 'Cafe', 'grounding', '{CAFE_LEAD}', 't');
+             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at) VALUES
+               ('{UUID_A}', 'lead', 'ctx', 'pay', 'A', '/', 'O3', 'stopped', 't', 't4'),
+               ('{UUID_B}', 'lead', 'ctx', 'pay', 'B', '/', 'O3', 'stopped', 't', 't5'),
+               ('{CAFE_LEAD}', 'lead', 'ctx', 'cafe', 'Cafe lead', '/', 'O3', 'stopped', 't', 't6'),
+               ('{CAFE_PREFIXED}', 'lead', 'ctx', NULL, 'Cafe prefixed', '/', 'O3', 'stopped', 't', 't7')"
+        ),
+    );
+}
+
+fn resolved(env: &TestEnv, value: &str) -> String {
+    env.cpd(&["session", "show", value]).ok()["session"]["id"].as_str().unwrap().to_owned()
+}
+
+#[test]
+fn every_short_form_resolves_to_the_full_id() {
+    let env = TestEnv::new();
+    setup_short(&env);
+    // 1: the full id.
+    assert_eq!(resolved(&env, UUID_A), UUID_A);
+    assert_eq!(resolved(&env, LEAD2), LEAD2);
+    // 2: a Plan id is that Plan's Lead.
+    assert_eq!(resolved(&env, "pay"), LEAD1);
+    assert_eq!(resolved(&env, "other"), LEAD2);
+    // 3: <plan>.<prefix> and <plan>·<prefix>, within the Plan.
+    assert_eq!(resolved(&env, "pay.a1b2c3d4-0000-4000-8000-000000000001"), UUID_A);
+    assert_eq!(resolved(&env, "pay·worker"), WORKER);
+    assert_eq!(resolved(&env, "pay.w"), WORKER);
+    assert_eq!(resolved(&env, "other.l"), LEAD2);
+    // 4: a bare prefix of 4 or more characters, of any Plan or none.
+    assert_eq!(resolved(&env, "work"), WORKER);
+    assert_eq!(resolved(&env, "a1b2c3d4-0000-4000-8000-000000000002"), UUID_B);
+    assert_eq!(resolved(&env, "grou"), GROUNDED);
+}
+
+#[test]
+fn a_plan_id_wins_over_a_prefix_that_is_also_a_plan_id() {
+    let env = TestEnv::new();
+    setup_short(&env);
+    // `cafe` is the id of a Plan and the 4-character prefix of another Session.
+    assert_eq!(resolved(&env, "cafe"), CAFE_LEAD);
+    // The longer prefix is not a Plan id.
+    assert_eq!(resolved(&env, "cafe0"), CAFE_PREFIXED);
+}
+
+#[test]
+fn an_ambiguous_prefix_is_refused_with_its_candidates() {
+    let env = TestEnv::new();
+    setup_short(&env);
+    for value in ["a1b2", "a1b2c3d4", "pay.a1b2"] {
+        let error = refused(&env.cpd(&["session", "show", value]), "session_ambiguous", 3);
+        assert_eq!(error["details"]["candidates"], json!([UUID_A, UUID_B]), "{value}");
+    }
+    let error = refused(&env.cpd(&["session", "show", "lead"]), "session_ambiguous", 3);
+    assert_eq!(error["details"]["candidates"], json!([LEAD1, LEAD2]));
+    // Every command that takes a Session refuses it; nothing is written.
+    refused(&env.cpd(&["session", "rename", "x", "--session", "a1b2"]), "session_ambiguous", 3);
+    refused(&env.cpd(&["session", "archive", "a1b2"]), "session_ambiguous", 3);
+    refused(&env.cpd(&["session", "open", "a1b2"]), "session_ambiguous", 3);
+    assert_eq!(events(&env, "session-renamed").len(), 0);
+}
+
+#[test]
+fn a_prefix_of_fewer_than_4_characters_is_not_accepted() {
+    let env = TestEnv::new();
+    setup_short(&env);
+    for value in ["wor", "a1b", "gro", "w"] {
+        refused(&env.cpd(&["session", "show", value]), "session_not_found", 4);
+    }
+    // A Plan id of 2 or 3 characters still resolves, and so does a scoped prefix of 1.
+    assert_eq!(resolved(&env, "pay"), LEAD1);
+    assert_eq!(resolved(&env, "pay.w"), WORKER);
+}
+
+#[test]
+fn unmatched_values_are_session_not_found_and_malformed_ones_usage_errors() {
+    let env = TestEnv::new();
+    setup_short(&env);
+    for value in ["nobody", "Lead1", "WORK", "pay.zzz", "other.worker", "nosuch.lead", "pay·zzz"] {
+        let error = refused(&env.cpd(&["session", "show", value]), "session_not_found", 4);
+        // The reference is echoed in its canonical `.` form.
+        assert_eq!(error["details"]["session"], value.replace('·', "."));
+    }
+    for value in ["pay.", "pay·", ".lead", "Pay.lead", "pay.-a", "a/b"] {
+        refused(&env.cpd(&["session", "show", value]), "invalid_session_id", 2);
+    }
+}
+
+#[test]
+fn every_session_command_accepts_the_short_forms() {
+    let env = TestEnv::new();
+    setup_short(&env);
+    fake_cpd(&env);
+    cockpit(&env);
+    // `--session` and `CPD_SESSION`.
+    let out = env.cpd(&["session", "rename", "renamed", "--session", "pay"]).ok();
+    assert_eq!(out, json!({"ok": true, "session": LEAD1, "name": "renamed"}));
+    let out = cpd_with(&env, &[("CPD_SESSION", "other")], &["session", "rename", "again"]).ok();
+    assert_eq!(out["session"], LEAD2);
+    let out = cpd_with(&env, &[("CPD_SESSION", "other")], &["session", "show"]).ok();
+    assert_eq!(out["session"]["id"], LEAD2);
+    // close (no pane: nothing to do), archive and unarchive.
+    assert_eq!(env.cpd(&["session", "close", "other"]).ok(), json!({"ok": true, "session": LEAD2, "pane": null, "already": true}));
+    let out = env.cpd(&["session", "archive", "pay.a1b2c3d4-0000-4000-8000-000000000001"]).ok();
+    assert_eq!(out["archived"], json!([{"kind": "session", "id": UUID_A}]));
+    assert_eq!(archived_at(&env, UUID_A).is_string(), true);
+    // An archived Session can be named by a bare prefix to unarchive it.
+    let out = env.cpd(&["session", "unarchive", "pay.a1b2c3d4-0000-4000-8000-000000000001"]).ok();
+    assert_eq!(out["archived"], json!([{"kind": "session", "id": UUID_A}]));
+    // open and park name a Session that does not exist.
+    refused(&env.cpd(&["session", "open", "nobody"]), "session_not_found", 4);
+    refused(&env.cpd(&["session", "fork", "nobody"]), "session_not_found", 4);
+    refused(&env.cpd(&["session", "park", "nobody"]), "session_not_found", 4);
+    refused(&env.cpd(&["session", "history", "nobody"]), "session_not_found", 4);
+}
