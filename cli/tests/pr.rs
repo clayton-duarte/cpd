@@ -920,7 +920,7 @@ fn a_review_request_is_stored_as_not_authored_and_deleted_when_it_leaves_the_sea
     let out = fx.poll_all();
     assert_eq!((out["removed"].clone(), out["changed"].clone()), (json!(1), json!([])));
     assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, false)]);
-    assert_eq!(fx.gh_calls().len(), 4, "one call per poll");
+    assert_eq!(fx.gh_calls().len(), 3, "one call per poll, three polls");
 }
 
 #[test]

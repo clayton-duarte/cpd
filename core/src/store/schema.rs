@@ -51,7 +51,7 @@ pub(super) const SCHEMA_HASHES: &[&str] = &[
     "2f8e238fbc3b0d5f768fe3c5e6c118b26eda5581d93841449563979a51144168",
     "d2623567062d0367ddcf3dcd0b96c6d7e2b45d447e3b841f77d0249129736277",
     "ae8ea2361df62ed1a89912b6e39227f4afd043475f27ac7faf78ce847e208cbb",
-    "a37244a187d2565a96d5e31fe78ddfc0aa0ccdface5b495887a6db6711bcb140",
+    "7da9b792cadf9d12a54eb26ad99a78c48fdcbb2e4a220f767973a7760cd16c9a",
 ];
 
 const _: () = assert!(SCHEMA_HASHES.len() == MIGRATIONS.len(), "one schema hash per migration");
@@ -298,11 +298,13 @@ fn migration_12(conn: &Connection) -> Result<()> {
 
 /// The PR poll's Inbox kinds (§4.5 migration 0013, hs-d165): `authored` and
 /// `review_requested` on `pull_requests`, whose history triggers are written again
-/// to list every column (`0013.sql` drops them and writes `_hist_del`; the other
-/// two are generated).
+/// to list every column, and `inbox_items` rebuilt with the four pull request kinds
+/// (`0013.sql` drops and writes `pull_requests_hist_del`; the other history
+/// triggers and `inbox_items_no_delete` are generated).
 fn migration_13(conn: &Connection) -> Result<()> {
     conn.execute_batch(include_str!("migrations/0013.sql"))?;
-    create_history_triggers(conn, "pull_requests", false)
+    create_history_triggers(conn, "pull_requests", false)?;
+    create_history_triggers(conn, "inbox_items", true)
 }
 
 /// §4.5 step 2: one PR per Plan, its per-repo columns kept as stored, its
@@ -1286,6 +1288,42 @@ mod tests {
             triggers,
             ["pull_requests_hist_del", "pull_requests_hist_ins", "pull_requests_hist_upd", "pull_requests_owned"].map(|n| serde_json::json!([n]))
         );
+    }
+
+    #[test]
+    fn a_version_12_database_keeps_its_inbox_items_and_accepts_the_four_pull_request_kinds_in_13() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        database_at(
+            &home,
+            12,
+            "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES
+               ('dialog', 'red', 'session:a', 'l1', 't1'), ('unread', 'yellow', 'plan:p', 'l2', 't2');
+             INSERT INTO inbox_items (kind, urgency, subject, label, opened_at, closed_at) VALUES ('dialog', 'red', 'session:a', 'l3', 't3', 't4');",
+        );
+        let mut store = Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
+        assert_eq!(
+            rows(&mut store, "SELECT id, kind, subject, label, closed_at FROM inbox_items ORDER BY id"),
+            vec![
+                serde_json::json!([1, "dialog", "session:a", "l1", null]),
+                serde_json::json!([2, "unread", "plan:p", "l2", null]),
+                serde_json::json!([3, "dialog", "session:a", "l3", "t4"]),
+            ]
+        );
+        assert_eq!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'inbox_items'"), 3, "the copy wrote no history row (the 3 are the inserts)");
+        // The partial unique index, the history triggers and `inbox_items_no_delete` are back.
+        assert!(write(&mut store, "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('dialog', 'red', 'session:a', 'l', 't')").is_err());
+        let history = |store: &mut Store| count(store, "SELECT count(*) FROM history WHERE tbl = 'inbox_items'");
+        let kept = history(&mut store);
+        for kind in ["pr-failing", "pr-changes", "pr-ready", "review-requested"] {
+            write(&mut store, &format!("INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('{kind}', 'red', 'pr:{kind}', 'l', 't')")).unwrap_or_else(|e| panic!("{kind}: {e:?}"));
+            write(&mut store, &format!("UPDATE inbox_items SET closed_at = 't' WHERE subject = 'pr:{kind}'")).unwrap();
+        }
+        assert_eq!(history(&mut store) - kept, 8, "an insert and an update each");
+        assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM inbox_items")), "append_only: inbox_items");
+        assert!(write(&mut store, "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('engine-down', 'red', 'engine', 'l', 't')").is_err());
     }
 
     #[test]
