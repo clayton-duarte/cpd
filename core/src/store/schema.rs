@@ -25,6 +25,7 @@ pub(super) const MIGRATIONS: &[Migration] = &[
     |conn, _| migration_6(conn),
     migration_7,
     |conn, _| migration_8(conn),
+    |conn, _| migration_9(conn),
 ];
 
 /// The first migration that imports the old git stores of the Contexts; the
@@ -42,6 +43,7 @@ pub(super) const SCHEMA_HASHES: &[&str] = &[
     "a1b657a955520d2dd6dd71e143cee1fd8aba88fafc9284a7e8ab89dfc05c82af",
     "6377d30a1c0e58581cb8576410c5187c6cfcb48eacf4ec193e5b24d0eacdea77",
     "21897859b666aff79e8c16dcb58e9ad2f7ddde4c880fa019738e2904ca28009d",
+    "3ea4336e93cb740321d1c5c989863c2e018d1348e4e2a22a84feee158f5bee98",
 ];
 
 const _: () = assert!(SCHEMA_HASHES.len() == MIGRATIONS.len(), "one schema hash per migration");
@@ -181,6 +183,12 @@ fn migration_7(conn: &Connection, home: &CpdHome) -> Result<()> {
 fn migration_8(conn: &Connection) -> Result<()> {
     conn.execute_batch(include_str!("migrations/0008.sql"))?;
     create_history_triggers(conn, "plans", true)
+}
+
+/// The Event kind `session-message` (§4.5 migration 0009, hs-d133): `events` is
+/// rebuilt with the kind in its check. No history triggers: `events` has none.
+fn migration_9(conn: &Connection) -> Result<()> {
+    conn.execute_batch(include_str!("migrations/0009.sql"))
 }
 
 /// The import of migration 0007, with the row values and Events the engine's
@@ -1656,6 +1664,62 @@ mod tests {
         assert_eq!(
             sqlite_message(&refused(&mut store, "UPDATE plans SET phase = 'deploy' WHERE id = 'gr'")),
             "illegal_transition"
+        );
+    }
+
+    // ---------- migration 9 ----------
+
+    #[test]
+    fn a_version_8_database_migrates_to_9_keeping_every_event_and_accepts_session_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        let events: String = [
+            "context-created", "context-record", "context-grounded", "plan-created", "plan-phase", "plan-review", "plan-done",
+            "job-added", "job-edited", "job-merged", "job-failed", "job-retried", "job-cancel-requested", "job-cancelled",
+            "attempt-started", "attempt-status", "attempt-retry", "attempt-nudge", "all-merged", "pr-feedback", "pr-added",
+            "pr-edited", "pr-cancelled", "pr-started", "pr-opened", "pr-merged", "escalation", "escalation-answered",
+            "escalation-expired", "session-registered", "session-state", "session-moved", "session-renamed", "context-renamed",
+            "plan-renamed", "context-archived", "plan-archived", "session-archived", "watch-started", "watch-stopped", "error",
+        ]
+        .iter()
+        .map(|kind| format!("INSERT INTO events (txn, at, kind, text, data) VALUES (1, '{T}', '{kind}', 'text of {kind}', '{{\"k\":1}}');"))
+        .collect();
+        database_at(&home, 8, &events);
+        let before = {
+            let conn = connection(&home.db());
+            conn.prepare("SELECT id, txn, at, kind, context, plan, job, attempt, session, text, data FROM events ORDER BY id")
+                .unwrap()
+                .query_map([], |r| (0..11).map(|i| r.get::<_, rusqlite::types::Value>(i).map(|v| format!("{v:?}"))).collect::<Result<Vec<_>>>())
+                .unwrap()
+                .collect::<Result<Vec<_>>>()
+                .unwrap()
+        };
+        assert_eq!(before.len(), 41);
+
+        let mut store = Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+        assert_eq!(count(&mut store, "PRAGMA user_version"), 9);
+        let after = rows(&mut store, "SELECT id, txn, at, kind, context, plan, job, attempt, session, text, data FROM events ORDER BY id");
+        assert_eq!(after.len(), before.len());
+        for (i, row) in after.iter().enumerate() {
+            assert_eq!((row[0].as_i64(), row[1].as_i64()), (Some(i as i64 + 1), Some(1)));
+            assert_eq!(row[9], format!("text of {}", row[3].as_str().unwrap()));
+        }
+        assert_eq!((after[0][3].as_str(), after[40][3].as_str()), (Some("context-created"), Some("error")));
+        assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
+        // The sequence never goes back, and the new kind is accepted; an unknown one is not.
+        write(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'session-message', 'x', '{\"from\":null,\"text\":\"hi\"}')")
+            .unwrap();
+        assert_eq!(count(&mut store, "SELECT max(id) FROM events"), 42);
+        assert!(sqlite_message(&refused(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'session-mail', 'x', '{}')"))
+            .contains("CHECK constraint failed"));
+        // The indexes and guards are back.
+        assert_eq!(count(&mut store, "SELECT count(*) FROM sqlite_schema WHERE tbl_name = 'events' AND type = 'index' AND name LIKE 'events_%'"), 3);
+        assert_eq!(sqlite_message(&refused(&mut store, "UPDATE events SET text = 'x'")), "append_only: events");
+        assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM events")), "append_only: events");
+        assert_eq!(
+            sqlite_message(&refused(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (1, 't', 'error', 'x', '{}')")),
+            "events.txn must be cpd_txn()"
         );
     }
 }

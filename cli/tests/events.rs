@@ -228,6 +228,7 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("context-archived", "c", "", &["archived"], &[]),
     ("plan-archived", "cp", "", &["archived"], &[]),
     ("session-archived", "cs", "p", &["archived"], &[]),
+    ("session-message", "cs", "p", &["from", "text"], &[]),
     ("watch-started", "", "", &["pid"], &[]),
     ("watch-stopped", "", "", &["pid"], &[]),
     ("error", "", "cpjas", &["source", "code", "message", "details"], &[]),

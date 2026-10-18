@@ -106,6 +106,7 @@ kinds! {
     ContextArchived = "context-archived",
     PlanArchived = "plan-archived",
     SessionArchived = "session-archived",
+    SessionMessage = "session-message",
     WatchStarted = "watch-started",
     WatchStopped = "watch-stopped",
     Error = "error",
@@ -162,6 +163,7 @@ impl Kind {
             ContextArchived => spec([Y, N, N, N, N], &["archived"], &[]),
             PlanArchived => spec([Y, Y, N, N, N], &["archived"], &[]),
             SessionArchived => spec([Y, M, N, N, Y], &["archived"], &[]),
+            SessionMessage => spec([Y, M, N, N, Y], &["from", "text"], &[]),
             WatchStarted | WatchStopped => spec([N, N, N, N, N], &["pid"], &[]),
             Error => spec([M, M, M, M, M], &["source", "code", "message", "details"], &[]),
         }

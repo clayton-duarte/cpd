@@ -662,7 +662,7 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
     let mut store = fixture_store(&env);
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     let hash = store.read(|c| Ok(cpd_core::store::schema_hash(c)?)).unwrap();
-    assert_eq!(hash, "21897859b666aff79e8c16dcb58e9ad2f7ddde4c880fa019738e2904ca28009d", "version 8 (the Plan phase deploy, hs-d76) on top of version 7 (Context records only in the database, hs-a1)");
+    assert_eq!(hash, "3ea4336e93cb740321d1c5c989863c2e018d1348e4e2a22a84feee158f5bee98", "version 9 (the Event kind session-message, hs-d133) on top of version 8 (the Plan phase deploy, hs-d76)");
 
     for table in ["contexts", "plans", "sessions"] {
         let archived: Option<String> =
@@ -685,6 +685,7 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
             .unwrap_or_else(|e| panic!("{kind}: {e:?}"));
     }
     assert_eq!(last, 5);
+    store.write("test", |tx| Ok(insert(tx, "session-message")?)).unwrap(); // migration 9
     let err = store.write("test", |tx| Ok(insert(tx, "plan-exploded")?)).unwrap_err();
     assert!(format!("{err:?}").contains("CHECK"), "{err:?}");
 }

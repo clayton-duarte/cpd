@@ -5,6 +5,7 @@
 //! - [`state`]: the agent states of §3.6, `session state` and `rename`;
 //! - [`moves`]: the panes: `session fork`, `open`, `park` and `close`;
 //! - [`archive`]: `session archive` and `unarchive`, and the archive rule;
+//! - [`send`]: `session send`, one message to a Lead;
 //! - [`port`]: a Plan's plannotator port;
 //! - [`run`]: `session run`, the program in every Lead pane (§6.7).
 
@@ -13,11 +14,12 @@ mod moves;
 mod port;
 mod row;
 pub(crate) mod run;
+mod send;
 mod state;
 
 use std::path::PathBuf;
 
-use crate::args::{Name, SessionArg};
+use crate::args::{Name, SessionArg, Text};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
@@ -54,6 +56,8 @@ pub enum Command {
     Archive(ArchiveArgs),
     /// Unarchive a Lead Session (§10.11)
     Unarchive(UnarchiveArgs),
+    /// Send a message to a Lead (§10.12)
+    Send(SendArgs),
     /// Rename a Session (§10.7)
     Rename(RenameArgs),
     /// Report a Session's agent state (pi adapter) (§10.6)
@@ -139,6 +143,20 @@ pub struct UnarchiveArgs {
 }
 
 #[derive(clap::Args, Debug)]
+#[command(group(clap::ArgGroup::new("message").required(true).multiple(false).args(["text", "file"])))]
+pub struct SendArgs {
+    /// The Lead Session to send to
+    #[arg(value_name = "id")]
+    id: SessionId,
+    /// The message (1–20 000 characters)
+    #[arg(value_name = "text")]
+    text: Option<Text>,
+    /// The message, read from a file
+    #[arg(long, value_name = "f")]
+    file: Option<PathBuf>,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct RenameArgs {
     /// The new name
     #[arg(value_name = "name")]
@@ -176,6 +194,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Close(args) => moves::close(args),
         Command::Archive(args) => archive::archive(args),
         Command::Unarchive(args) => archive::unarchive(args),
+        Command::Send(args) => send::send(args),
         Command::Rename(args) => state::rename(args),
         Command::State(args) => state::state(args),
         Command::Run(args) => run::run(args),

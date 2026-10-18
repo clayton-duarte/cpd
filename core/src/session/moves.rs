@@ -71,7 +71,7 @@ fn fork_name(source: &str) -> String {
     format!("{source} (fork)").chars().take(Name::MAX_CHARS).collect()
 }
 
-fn unreadable(path: &Path, e: impl std::fmt::Display) -> CpdError {
+pub(super) fn unreadable(path: &Path, e: impl std::fmt::Display) -> CpdError {
     CpdError::new(ErrorCode::FileUnreadable, format!("Cannot read {} as UTF-8 text: {e}.", path.display()))
         .with("path", path.display().to_string())
 }
