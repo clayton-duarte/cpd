@@ -56,7 +56,7 @@ To add a command:
 3. Test it in your own test file.
 
 Parsing:
-- `--help` and `--version` print one JSON value too: `{"ok": true, "help": "<text>"}` and `{"ok": true, "version": "…"}`.
+- `--help` and `--version` print one JSON value too: `{"ok": true, "help": "<text>"}` and `{"ok": true, "version": "…", "schema": <N>, "store_schema": <M or null>}`: `schema` is the newest store schema the binary supports (the store module's `VERSION`, the number of its migrations), `store_schema` is `PRAGMA user_version` of `$CPD_HOME`'s database opened read-only, without migrating and without the schema check (`null` when the file does not exist). `--version` never creates, migrates or writes the database.
 - Every clap failure is `usage` (exit 2) with clap's text in `details.help`, except a value that failed one of our own `FromStr` types (ids, `Text`, `Name`), which keeps that type's code (`invalid_plan_id`, `invalid_name`, …). So parse ids by typing the field (`plan: PlanId`), not by validating strings later.
 
 ## Output and errors
