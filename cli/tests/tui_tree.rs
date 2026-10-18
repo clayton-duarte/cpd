@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 use common::{CPD, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
+use cpd_core::ids::{ContextId, PlanId, SessionId};
+use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use cpd_core::store::Store;
 
 // ---------- the prepared store ----------
@@ -97,6 +99,43 @@ fn session_row(id: &str, name: &str, context: &str, plan: &str, state: &str, lab
     )
 }
 
+/// A Context's Manager Session (contract §3.1): idle, never a row of the tree.
+fn manager_row(id: &str, context: &str) -> String {
+    format!(
+        "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
+         VALUES ('{id}', 'manager', '{context}', NULL, NULL, '{context}-manager', '/sessions/{id}.jsonl', '/repo', 'O5',
+                 NULL, 'idle', NULL, '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:07.000Z');"
+    )
+}
+
+/// What the engine's E8 would open for `populate`'s store (the tree reads the Inbox, it does not compute it).
+fn condition(kind: Kind, urgency: Urgency, session: &str, plan: Option<&str>, context: &str) -> Condition {
+    Condition {
+        kind,
+        urgency,
+        subject: format!("session:{session}"),
+        label: format!("{session} label"),
+        url: None,
+        context: Some(ContextId::parse(context).unwrap()),
+        plan: plan.map(|p| PlanId::parse(p).unwrap()),
+        job: None,
+        session: Some(SessionId::parse(session).unwrap()),
+        record: None,
+        event: None,
+    }
+}
+
+/// The items `populate` leaves open: red dialogs of the fork `f-blocked` and of the Lead `l-rel`, and, for the two
+/// Contexts' dots, a white `unread` of alpha's Manager and a magenta `dialog` of beta's.
+fn items() -> Vec<Condition> {
+    vec![
+        condition(Kind::Dialog, Urgency::Red, "f-blocked", Some("ship"), "alpha"),
+        condition(Kind::Dialog, Urgency::Red, "l-rel", Some("rel"), "beta"),
+        condition(Kind::Unread, Urgency::White, "m-alpha", None, "alpha"),
+        condition(Kind::Dialog, Urgency::Magenta, "m-beta", None, "beta"),
+    ]
+}
+
 fn job_row(plan: &str, key: &str, status: &str) -> String {
     let fingerprint = if status == "draft" { "NULL".to_owned() } else { format!("'{}'", "0".repeat(64)) };
     let merged = if status == "merged" { "'abc123'" } else { "NULL" };
@@ -123,6 +162,9 @@ fn moved(context: &str, plan: &str, session: &str, place: &str) -> String {
 ///   `f-idle` and `f-blocked`; Jobs queued, running, failed and two merged), `sketch` (plan; Lead idle; two drafts);
 /// - `beta`: `rel` (pr; its Lead is blocked), `old` (done; its Lead is stopped);
 /// - `gamma`: nothing.
+///
+/// The Inbox ([`items`]) gives the dots their `●`: `f-blocked` and `l-rel` have a red dialog; the Contexts alpha and beta
+/// have a Manager with an item, which alone fills a Context row's `●`.
 fn populate(env: &TestEnv) {
     let mut store = open(env);
     let mut s = String::new();
@@ -148,7 +190,10 @@ fn populate(env: &TestEnv) {
     }
     s += &job_row("rel", "r1", "merged");
     s += &moved("alpha", "ship", "l-ship", "chat");
+    s += &manager_row("m-alpha", "alpha");
+    s += &manager_row("m-beta", "beta");
     sql(&mut store, &s);
+    reconcile(&mut store, &items(), "2026-01-04T00:00:00.000Z").unwrap();
 }
 
 // ---------- the pane ----------
@@ -530,8 +575,28 @@ fn the_tree_follows_the_events_of_the_store() {
     pane.ready();
     // session-state
     env.cpd(&["session", "state", "blocked", "--label", "cpd: Ask", "--session", "l-sketch"]).ok();
-    let screen = pane.wait("the new state", |s| s.iter().any(|r| r.contains("├ ● sketch")));
-    assert!(screen.iter().any(|r| r.starts_with(" ▾ ● alpha")));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(pane.screen().iter().any(|r| r.contains("├ ○ sketch")), "a blocked Session is no ● until the Inbox has its dialog");
+    // inbox-opened: the engine's E8 opens the dialog
+    let mut store = open(&env);
+    let mut now = items();
+    now.push(condition(Kind::Dialog, Urgency::Magenta, "l-sketch", Some("sketch"), "alpha"));
+    reconcile(&mut store, &now, "2026-01-04T00:01:00.000Z").unwrap();
+    pane.wait("the opened item", |s| s.iter().any(|r| r.contains("├ ● sketch")));
+    // inbox-closed: its cause ends
+    reconcile(&mut store, &items(), "2026-01-04T00:02:00.000Z").unwrap();
+    pane.wait("the closed item", |s| s.iter().any(|r| r.contains("├ ○ sketch")));
+    // inbox-dismissed, by the command: the red dialog of the fork falls back to its glyph
+    let screen = pane.screen();
+    assert!(screen.iter().any(|r| r.contains("└ ● ship·f-bl")));
+    let id = store_item(&mut store, "session:f-blocked");
+    env.cpd(&["inbox", "dismiss", &id.to_string()]).ok();
+    pane.wait("the dismissed item", |s| s.iter().any(|r| r.contains("└ ○ ship·f-bl")));
+}
+
+/// The id of the open item of `subject`.
+fn store_item(store: &mut Store, subject: &str) -> i64 {
+    store.read(|c| Ok(c.query_row("SELECT id FROM inbox_items WHERE subject = ?1 AND closed_at IS NULL", [subject], |r| r.get(0))?)).unwrap()
 }
 
 /// `populate`, with the Context `gamma` and the Plan `old` of `beta` (and its Lead) archived.
@@ -768,7 +833,7 @@ fn a_click_on_an_archived_fork_runs_session_history() {
     let screen = pane.ready();
     assert_eq!(screen[5], "   └ …", "the archived fork is behind alpha's `…`");
     pane.click(4, 5);
-    pane.wait("the archived fork", |s| s.iter().any(|r| r.contains("└ ● ship·f-bl")));
+    pane.wait("the archived fork", |s| s.iter().any(|r| r.contains("└ ○ ship·f-bl")));
     pane.click(10, 6);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "history", "f-blocked"])]);
     pane.click(8, 4); // a live fork still opens
@@ -784,7 +849,7 @@ fn a_click_that_shows_a_history_is_refused_in_the_note_row() {
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
     pane.click(4, 5);
-    pane.wait("the archived fork", |s| s.iter().any(|r| r.contains("└ ● ship·f-bl")));
+    pane.wait("the archived fork", |s| s.iter().any(|r| r.contains("└ ○ ship·f-bl")));
     pane.click(10, 6);
     pane.wait("the refusal", |_| pane.footer_has("file_unreadable: The session file is missing."));
 }
