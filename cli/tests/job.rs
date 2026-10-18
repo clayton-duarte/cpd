@@ -81,7 +81,7 @@ fn plan(env: &TestEnv, id: &str, phase: &str) {
     const STEPS: [(&str, &str, &str, &str); 4] = [
         ("plan", "", "waiting", ""),
         ("dispatch", ", locked_at = 't'", "dispatch", ", lead_worktree = '/wt', started_at = 't'"),
-        ("pr", "", "open", ", pr_number = 1, pr_url = 'https://github.com/acme/{id}/pull/1', pr_opened_at = 't', pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/{id}')"),
+        ("deploy", "", "open", ", pr_number = 1, pr_url = 'https://github.com/acme/{id}/pull/1', pr_opened_at = 't', pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/{id}')"),
         ("done", ", done_at = 't'", "merged", ", merged_at = 't'"),
     ];
     let mut sql = format!(
@@ -96,7 +96,7 @@ fn plan(env: &TestEnv, id: &str, phase: &str) {
         let last = STEPS.iter().position(|(p, ..)| *p == phase).unwrap_or_else(|| panic!("{phase}"));
         for (step, set, status, pr_set) in &STEPS[..=last] {
             sql += &format!("UPDATE plans SET phase = '{step}'{set} WHERE id = '{id}';");
-            if *step == "pr" {
+            if *step == "deploy" {
                 sql += &pull_request(id, 1, "open");
             }
             sql += &format!("UPDATE prs SET status = '{status}'{} WHERE plan = '{id}';", pr_set.replace("{id}", id));
@@ -262,18 +262,18 @@ fn add_in_phase_plan_writes_a_draft_job_its_needs_and_an_event() {
 }
 
 #[test]
-fn add_in_phase_dispatch_or_pr_appends_a_queued_job_with_its_fingerprint() {
-    for phase in ["dispatch", "pr"] {
+fn add_in_phase_dispatch_or_deploy_appends_a_queued_job_with_its_fingerprint() {
+    for phase in ["dispatch", "deploy"] {
         let env = TestEnv::new();
         setup(&env);
         plan(&env, "pl", "plan");
         job_add(&env, "pl", "a", "S2", &[]).ok();
         lock(&env, "pl");
-        if phase == "pr" {
+        if phase == "deploy" {
             fixture(
                 &env,
                 &format!(
-                    "UPDATE plans SET phase = 'pr' WHERE id = 'pl';
+                    "UPDATE plans SET phase = 'deploy' WHERE id = 'pl';
                      {}
                      UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/pl/pull/1', pr_opened_at = 't',
                             pull_request = (SELECT id FROM pull_requests WHERE number = 1) WHERE plan = 'pl';",
@@ -1025,7 +1025,7 @@ fn job_add_draft(env: &TestEnv, plan_id: &str, key: &str, needs: &[&str], extra:
 
 #[test]
 fn add_draft_after_the_lock_is_an_appended_draft_that_stays_editable_and_cancellable() {
-    for phase in ["dispatch", "pr"] {
+    for phase in ["dispatch", "deploy"] {
         let env = TestEnv::new();
         setup(&env);
         plan(&env, "pl", phase);

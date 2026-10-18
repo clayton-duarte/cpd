@@ -12,8 +12,8 @@ use crate::error::{CpdError, ErrorCode};
 use crate::ids::{PlanId, PrKey};
 use crate::store::WriteTxn;
 
-/// One row of `pull_requests`. `state`, `review_decision` and `checks` are the
-/// words the table's `CHECK`s allow.
+/// One row of `pull_requests`. `state`, `review_decision`, `checks`,
+/// `mergeable` and `merge_state` are the words the table's `CHECK`s allow.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PullRequest {
     pub id: i64,
@@ -28,10 +28,12 @@ pub struct PullRequest {
     pub created_at: String,
     pub merged_at: Option<String>,
     pub changed_at: String,
+    pub mergeable: String,
+    pub merge_state: String,
 }
 
-const COLUMNS: &str =
-    "id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at";
+const COLUMNS: &str = "id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, \
+                       mergeable, merge_state";
 
 impl PullRequest {
     fn from_row(r: &Row) -> rusqlite::Result<PullRequest> {
@@ -48,22 +50,25 @@ impl PullRequest {
             created_at: r.get(9)?,
             merged_at: r.get(10)?,
             changed_at: r.get(11)?,
+            mergeable: r.get(12)?,
+            merge_state: r.get(13)?,
         })
     }
 
-    /// `{repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at}`,
+    /// `{repo, number, url, title, draft, state, review_decision, checks, mergeable, merge_state, created_at, merged_at}`,
     /// as `plan list`, `plan show` and `pr poll` print it (commands.md §4.2).
     pub fn to_json(&self) -> Value {
         json!({
             "repo": self.repo, "number": self.number, "url": self.url, "title": self.title, "draft": self.draft,
             "state": self.state, "review_decision": self.review_decision, "checks": self.checks,
+            "mergeable": self.mergeable, "merge_state": self.merge_state,
             "created_at": self.created_at, "merged_at": self.merged_at,
         })
     }
 
     /// The row as the poller reports it: what `upsert` compares against.
     pub(super) fn polled(&self) -> Result<PolledPr, CpdError> {
-        use super::status::{ChecksSummary, PrState, ReviewDecision};
+        use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
         let bad = |what: &str, value: &str| {
             CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: pull request {} has {what} {value:?}.", self.id))
         };
@@ -85,6 +90,14 @@ impl PullRequest {
                 .into_iter()
                 .find(|s| s.as_str() == self.checks)
                 .ok_or_else(|| bad("checks", &self.checks))?,
+            mergeable: [Mergeable::Mergeable, Mergeable::Conflicting, Mergeable::Unknown]
+                .into_iter()
+                .find(|s| s.as_str() == self.mergeable)
+                .ok_or_else(|| bad("mergeable", &self.mergeable))?,
+            merge_state: MergeState::ALL
+                .into_iter()
+                .find(|s| s.as_str() == self.merge_state)
+                .ok_or_else(|| bad("merge_state", &self.merge_state))?,
             created_at: self.created_at.clone(),
             merged_at: self.merged_at.clone(),
         })
@@ -134,6 +147,8 @@ pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, PrKey, PullRe
                 created_at: r.get(11)?,
                 merged_at: r.get(12)?,
                 changed_at: r.get(13)?,
+                mergeable: r.get(14)?,
+                merge_state: r.get(15)?,
             };
             Ok((plan, key, pull))
         })?
@@ -173,7 +188,7 @@ pub(super) fn upsert(tx: &WriteTxn<'_>, polled: &PolledPr) -> Result<Option<Chan
     let at = txn_time(tx)?;
     tx.execute(
         "UPDATE pull_requests SET url = ?1, title = ?2, draft = ?3, state = ?4, review_decision = ?5, checks = ?6,
-                created_at = ?7, merged_at = ?8, changed_at = ?9 WHERE id = ?10",
+                created_at = ?7, merged_at = ?8, changed_at = ?9, mergeable = ?10, merge_state = ?11 WHERE id = ?12",
         rusqlite::params![
             polled.url,
             polled.title,
@@ -184,6 +199,8 @@ pub(super) fn upsert(tx: &WriteTxn<'_>, polled: &PolledPr) -> Result<Option<Chan
             polled.created_at,
             polled.merged_at,
             at,
+            polled.mergeable.as_str(),
+            polled.merge_state.as_str(),
             before.id
         ],
     )?;
@@ -202,8 +219,9 @@ pub(super) fn ensure(tx: &WriteTxn<'_>, polled: &PolledPr) -> Result<i64, CpdErr
 fn insert(tx: &WriteTxn<'_>, polled: &PolledPr) -> Result<PullRequest, CpdError> {
     let at = txn_time(tx)?;
     tx.execute(
-        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at,
+                                    mergeable, merge_state)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         rusqlite::params![
             polled.repo,
             polled.number,
@@ -215,7 +233,9 @@ fn insert(tx: &WriteTxn<'_>, polled: &PolledPr) -> Result<PullRequest, CpdError>
             polled.checks.as_str(),
             polled.created_at,
             polled.merged_at,
-            at
+            at,
+            polled.mergeable.as_str(),
+            polled.merge_state.as_str()
         ],
     )?;
     load(tx, tx.last_insert_rowid())
@@ -245,6 +265,7 @@ pub(super) enum Reason {
     ChecksFailed,
     ChangesRequested,
     Closed,
+    Conflict,
 }
 
 impl Reason {
@@ -254,6 +275,7 @@ impl Reason {
             Reason::ChecksFailed => "checks_failed",
             Reason::ChangesRequested => "changes_requested",
             Reason::Closed => "closed",
+            Reason::Conflict => "conflict",
         }
     }
 }
@@ -261,11 +283,12 @@ impl Reason {
 /// D7: the reasons `after` needs attention that `before` did not: checks
 /// became `failed`, the review became `changes_requested` (each from anything
 /// else), the state became `closed` from `open`. `before` none is a row first
-/// seen: it counts as no checks, no review and `open`.
+/// seen: it counts as no checks, no review, `open` and `unknown` mergeable. The
+/// `mergeable` state became `conflicting` from anything else (D3); `unknown` is no conflict.
 pub(super) fn attention(before: Option<&PullRequest>, after: &PullRequest) -> Vec<Reason> {
-    let (checks, review, state) = match before {
-        Some(b) => (b.checks.as_str(), b.review_decision.as_str(), b.state.as_str()),
-        None => ("none", "none", "open"),
+    let (checks, review, state, mergeable) = match before {
+        Some(b) => (b.checks.as_str(), b.review_decision.as_str(), b.state.as_str(), b.mergeable.as_str()),
+        None => ("none", "none", "open", "unknown"),
     };
     let mut reasons = Vec::new();
     if after.checks == "failed" && checks != "failed" {
@@ -276,6 +299,9 @@ pub(super) fn attention(before: Option<&PullRequest>, after: &PullRequest) -> Ve
     }
     if after.state == "closed" && state == "open" {
         reasons.push(Reason::Closed);
+    }
+    if after.mergeable == "conflicting" && mergeable != "conflicting" {
+        reasons.push(Reason::Conflict);
     }
     reasons
 }
@@ -291,7 +317,7 @@ pub(super) fn parse_url(url: &str) -> Option<(String, i64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::status::{ChecksSummary, PrState, ReviewDecision};
+    use super::super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
     use super::*;
     use crate::home::CpdHome;
     use crate::store::Store;
@@ -310,6 +336,8 @@ mod tests {
             created_at: "t".into(),
             merged_at: None,
             changed_at: "t".into(),
+            mergeable: "unknown".into(),
+            merge_state: "unknown".into(),
         }
     }
 
@@ -325,9 +353,50 @@ mod tests {
 
     #[test]
     fn attention_lists_every_reason_in_order() {
-        let all = attention(Some(&row("open", "none", "pending")), &row("closed", "changes_requested", "failed"));
-        assert_eq!(all, [Reason::ChecksFailed, Reason::ChangesRequested, Reason::Closed]);
-        assert_eq!(all.iter().map(|r| r.as_str()).collect::<Vec<_>>(), ["checks_failed", "changes_requested", "closed"]);
+        let all = attention(Some(&row("open", "none", "pending")), &conflicting(row("closed", "changes_requested", "failed")));
+        assert_eq!(all, [Reason::ChecksFailed, Reason::ChangesRequested, Reason::Closed, Reason::Conflict]);
+        assert_eq!(
+            all.iter().map(|r| r.as_str()).collect::<Vec<_>>(),
+            ["checks_failed", "changes_requested", "closed", "conflict"]
+        );
+    }
+
+    fn mergeable(mut row: PullRequest, value: &str) -> PullRequest {
+        row.mergeable = value.into();
+        row
+    }
+
+    fn conflicting(row: PullRequest) -> PullRequest {
+        mergeable(row, "conflicting")
+    }
+
+    #[test]
+    fn attention_is_a_conflict_when_mergeable_becomes_conflicting_from_anything_else() {
+        let open = || row("open", "none", "none");
+        assert_eq!(attention(Some(&mergeable(open(), "mergeable")), &conflicting(open())), [Reason::Conflict]);
+        assert_eq!(attention(Some(&open()), &conflicting(open())), [Reason::Conflict], "from unknown");
+        assert_eq!(attention(None, &conflicting(open())), [Reason::Conflict], "a row first seen conflicting");
+        assert!(attention(None, &mergeable(open(), "unknown")).is_empty(), "unknown is no conflict");
+        assert!(attention(None, &mergeable(open(), "mergeable")).is_empty());
+    }
+
+    #[test]
+    fn attention_is_no_conflict_while_it_stays_conflicting_or_when_it_clears() {
+        let open = || row("open", "none", "none");
+        assert!(attention(Some(&conflicting(open())), &conflicting(open())).is_empty());
+        let mut dirty = conflicting(open());
+        dirty.merge_state = "dirty".into();
+        assert!(attention(Some(&dirty), &conflicting(open())).is_empty(), "only merge_state changed");
+        assert!(attention(Some(&conflicting(open())), &mergeable(open(), "mergeable")).is_empty());
+        assert!(attention(Some(&conflicting(open())), &mergeable(open(), "unknown")).is_empty());
+    }
+
+    #[test]
+    fn attention_is_a_conflict_again_after_conflicting_unknown_conflicting() {
+        let open = || row("open", "none", "none");
+        let steps = [mergeable(open(), "unknown"), conflicting(open())];
+        assert_eq!(attention(Some(&conflicting(open())), &steps[0]), []);
+        assert_eq!(attention(Some(&steps[0]), &steps[1]), [Reason::Conflict]);
     }
 
     #[test]
@@ -352,6 +421,8 @@ mod tests {
 
     fn polled(number: i64, checks: ChecksSummary) -> PolledPr {
         PolledPr {
+            mergeable: Mergeable::Unknown,
+            merge_state: MergeState::Unknown,
             repo: "acme/pay".into(),
             number,
             url: format!("https://github.com/acme/pay/pull/{number}"),
@@ -381,6 +452,9 @@ mod tests {
         let first = store.write("test", |tx| upsert(tx, &polled(7, ChecksSummary::Pending))).unwrap().unwrap();
         assert_eq!(first.before, None);
         assert_eq!((first.after.checks.as_str(), history_rows(&mut store)), ("pending", 1));
+        assert_eq!((first.after.mergeable.as_str(), first.after.merge_state.as_str()), ("unknown", "unknown"));
+        let json = first.after.to_json();
+        assert_eq!((&json["mergeable"], &json["merge_state"]), (&json!("unknown"), &json!("unknown")));
 
         // The same values: no change, and nothing written (no history row, `changed_at` kept).
         let again = store.write("test", |tx| upsert(tx, &polled(7, ChecksSummary::Pending))).unwrap();
@@ -394,6 +468,32 @@ mod tests {
         assert_eq!((changed.after.checks.as_str(), changed.after.id), ("failed", first.after.id));
         assert_eq!(history_rows(&mut store), 2);
         assert_eq!(attention(changed.before.as_ref(), &changed.after), [Reason::ChecksFailed]);
+    }
+
+    #[test]
+    fn a_change_of_mergeable_or_merge_state_alone_is_a_change_of_the_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = store(&dir);
+        let first = store.write("test", |tx| upsert(tx, &polled(7, ChecksSummary::None))).unwrap().unwrap();
+        let with = |mergeable, merge_state| PolledPr { mergeable, merge_state, ..polled(7, ChecksSummary::None) };
+
+        let conflict = store
+            .write("test", |tx| upsert(tx, &with(Mergeable::Conflicting, MergeState::Unknown)))
+            .unwrap()
+            .unwrap();
+        assert_eq!((conflict.after.mergeable.as_str(), conflict.after.merge_state.as_str()), ("conflicting", "unknown"));
+        assert_eq!(attention(conflict.before.as_ref(), &conflict.after), [Reason::Conflict]);
+        assert_eq!(history_rows(&mut store), 2);
+
+        let dirty = store.write("test", |tx| upsert(tx, &with(Mergeable::Conflicting, MergeState::Dirty))).unwrap().unwrap();
+        assert_eq!((dirty.after.mergeable.as_str(), dirty.after.merge_state.as_str()), ("conflicting", "dirty"));
+        assert_eq!(attention(dirty.before.as_ref(), &dirty.after), []);
+        assert_eq!(history_rows(&mut store), 3);
+
+        let again = store.write("test", |tx| upsert(tx, &with(Mergeable::Conflicting, MergeState::Dirty))).unwrap();
+        assert_eq!(again, None);
+        assert_eq!(history_rows(&mut store), 3);
+        assert_eq!(store.read(|c| load(c, first.after.id)).unwrap(), dirty.after);
     }
 
     #[test]

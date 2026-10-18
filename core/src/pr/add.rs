@@ -67,10 +67,10 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
             env.store.write(COMMAND, |tx| match decide(tx, &plan, &wanted)? {
                 Decision::Already { status, lead_branch, appended } => Ok((status, lead_branch, appended, true)),
                 Decision::Insert { phase } => {
-                    let appended = matches!(phase, Phase::Dispatch | Phase::Pr | Phase::Done);
+                    let appended = matches!(phase, Phase::Dispatch | Phase::Deploy | Phase::Done);
                     let lead_branch = pr_branch(&plan, &wanted.key);
                     let key = &wanted.key;
-                    if matches!(phase, Phase::Pr | Phase::Done) {
+                    if matches!(phase, Phase::Deploy | Phase::Done) {
                         reopen(tx, &plan, phase, key)?;
                     }
                     if let Some(legacy) = &legacy {
@@ -153,7 +153,7 @@ fn insert(tx: &Connection, plan: &PlanId, wanted: &Wanted, lead_branch: &str) ->
     Ok(())
 }
 
-/// In `pr` or `done` the Plan goes back to `dispatch` (D1): the phase is compared and set, then
+/// In `deploy` or `done` the Plan goes back to `dispatch` (D1): the phase is compared and set, then
 /// `plan-phase` is appended (before `pr-added`).
 fn reopen(tx: &WriteTxn<'_>, plan: &PlanId, from: Phase, key: &PrKey) -> Result<(), CpdError> {
     let moved = tx.execute("UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = ?1 AND phase = ?2", [plan.as_str(), from.as_str()])?;

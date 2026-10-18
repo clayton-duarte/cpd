@@ -38,6 +38,8 @@ pub struct Config {
     /// Automatic Attempts are capped at `1 + retry_cap` (§9).
     pub retry_cap: u32,
     pub lead_tier: Tier,
+    /// The Tier of a Context's Manager (§3.1, hs-d133).
+    pub manager_tier: Tier,
     pub lead_pi_packages: Vec<String>,
     /// `""` is beside the binary: see [`Config::pi_adapter_dir`].
     pub pi_adapter: String,
@@ -124,7 +126,6 @@ pub struct Timeouts {
 pub struct Watch {
     pub tick_seconds: u32,
     pub pr_poll_seconds: u32,
-    pub context_sync_seconds: u32,
     /// The same `error` Event (step and code) is appended at most once per this (§3.7).
     pub error_repeat_seconds: u32,
 }
@@ -192,6 +193,9 @@ impl Config {
         let lead_tier = r.get("lead_tier", Tier::parse("O3").expect("a valid Tier"), |v| {
             Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
         })?;
+        let manager_tier = r.get("manager_tier", Tier::parse("O5").expect("a valid Tier"), |v| {
+            Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
+        })?;
         let lead_pi_packages = r.get(
             "lead_pi_packages",
             DEFAULT_LEAD_PI_PACKAGES.map(str::to_owned).to_vec(),
@@ -230,7 +234,6 @@ impl Config {
         let watch = Watch {
             tick_seconds: positive(&mut r, "watch.tick_seconds", 5)?,
             pr_poll_seconds: positive(&mut r, "watch.pr_poll_seconds", 5)?,
-            context_sync_seconds: positive(&mut r, "watch.context_sync_seconds", 300)?,
             error_repeat_seconds: positive(&mut r, "watch.error_repeat_seconds", 600)?,
         };
         let events = Events { poll_ms: r.get("events.poll_ms", 200, |v| int(v, 20, 10_000))? };
@@ -253,6 +256,7 @@ impl Config {
             concurrency,
             retry_cap,
             lead_tier,
+            manager_tier,
             lead_pi_packages,
             pi_adapter,
             plannotator_ports,

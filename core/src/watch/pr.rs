@@ -1,6 +1,6 @@
 //! E5, PR poll (contract §3.7, §7.6; hs-d96, hs-d97): `cpd pr poll` as a
 //! subprocess (a process boundary, cpd 1 §11 step 5), `pr_poll_seconds` after the
-//! end of the previous poll, whether or not any Plan is in `pr`: one poll covers
+//! end of the previous poll, whether or not any Plan is in `deploy`: one poll covers
 //! every open pull request of the User. `cpd` is the executable the engine started
 //! from (`host::exe::started_as`), as for the drivers of E3 (hs-d151): not `PATH`.
 //!
