@@ -530,8 +530,9 @@ fn fork_stops_waiting_for_a_stopped_source_without_a_file_and_retries_on_enter()
 }
 
 /// A fake pi body that copies the file named by its last argument (`@<path>`) to `$CPD_HOME/read.copy`.
+/// The copy appears whole or not at all (cp to a temp name, then rename): a test waits for `read.copy` to exist.
 fn copy_last_file() -> String {
-    format!("for a in \"$@\"; do last=$a; done\ncp \"${{last#@}}\" \"$CPD_HOME/read.copy\"\nexec sleep {SLEEP_SECONDS}")
+    format!("for a in \"$@\"; do last=$a; done\ncp \"${{last#@}}\" \"$CPD_HOME/read.tmp\"\nmv \"$CPD_HOME/read.tmp\" \"$CPD_HOME/read.copy\"\nexec sleep {SLEEP_SECONDS}")
 }
 
 /// Bigger than one argv element may be (MAX_ARG_STRLEN, 131072 bytes; hs-n111).
