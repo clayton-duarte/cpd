@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 6
+-- cpd-migration: breaking after 11
 -- The lookup tables for the lists that migrations extend (contract §4.4, §4.5
 -- K1–K4; hs-d178 D1): `event_kinds`, `record_kinds` and `history_tables`, filled
 -- with today's values. `events` and `context_records` are rebuilt once more, the
@@ -24,8 +24,9 @@ INSERT INTO event_kinds (name) VALUES
   ('session-registered'), ('session-state'), ('session-moved'), ('session-renamed'),
   ('context-renamed'), ('plan-renamed'),
   ('context-archived'), ('plan-archived'), ('session-archived'),
+  ('session-message'),
   ('watch-started'), ('watch-stopped'), ('error');
-INSERT INTO record_kinds (name) VALUES ('decision'), ('note'), ('question'), ('answer'), ('plan');
+INSERT INTO record_kinds (name) VALUES ('decision'), ('note'), ('question'), ('answer'), ('plan'), ('brief');
 -- The tables whose history triggers are generated; `no_delete` 0: no generated `_no_delete`
 -- (`pull_requests`, `pr_needs` and `dependencies` write their own rule).
 INSERT INTO history_tables (name, no_delete) VALUES
@@ -68,8 +69,8 @@ CREATE TRIGGER events_no_update  BEFORE UPDATE ON events  BEGIN SELECT RAISE(ABO
 CREATE TRIGGER events_no_delete  BEFORE DELETE ON events  BEGIN SELECT RAISE(ABORT, 'append_only: events'); END;
 
 -- ---------- context_records ----------
-CREATE TABLE context_records_new (               -- index of the git store (§4.6); rebuildable
-  seq          INTEGER PRIMARY KEY AUTOINCREMENT,   -- local index position
+CREATE TABLE context_records_new (               -- the only store of Context records (§4.6)
+  seq          INTEGER PRIMARY KEY AUTOINCREMENT,   -- position in this machine's database
   context      TEXT NOT NULL REFERENCES contexts(id),
   id           TEXT NOT NULL,
   kind         TEXT NOT NULL REFERENCES record_kinds(name),
@@ -86,7 +87,7 @@ CREATE TABLE context_records_new (               -- index of the git store (§4.
   UNIQUE (context, id),
   CHECK (supersedes IS NULL OR kind = 'decision'),
   CHECK ((question IS NOT NULL) = (kind = 'answer')),
-  CHECK ((plan_id IS NOT NULL) = (kind = 'plan')),
+  CHECK ((plan_id IS NOT NULL) = (kind IN ('plan', 'brief'))),
   CHECK ((plan_id IS NULL) = (plan_machine IS NULL))
 ) STRICT;
 INSERT INTO context_records_new (seq, context, id, kind, at, machine, by_session, by_plan, text, supersedes,

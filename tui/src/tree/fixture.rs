@@ -32,7 +32,6 @@ pub fn session(id: &str, name: &str, state: State, label: Option<&str>, place: P
         created_at: "2026-01-01T00:00:00.000Z".into(),
         place,
         plan_lead: false,
-        grounded_lead: false,
         dot: match state {
             State::Blocked => Dot::Red,
             State::Working => Dot::Working,
@@ -95,10 +94,8 @@ pub fn context(id: &str, plans: Vec<PlanNode>) -> ContextNode {
         id: ContextId::parse(id).unwrap(),
         title: titled(id),
         jira: None,
-        grounded_lead: None,
         records: 0,
         open_questions: 0,
-        sync_failing: false,
         archived_at: None,
         plans,
     }
@@ -137,7 +134,7 @@ pub fn sample() -> Tree {
         ),
         context(
             "beta",
-            vec![plan("rel", "beta", Phase::Pr, [0, 0, 0, 0, 0, 3], session("l-rel", "rel lead", Blocked, Some("cpd: Plan review"), Place::Parked), vec![])],
+            vec![plan("rel", "beta", Phase::Deploy, [0, 0, 0, 0, 0, 3], session("l-rel", "rel lead", Blocked, Some("cpd: Plan review"), Place::Parked), vec![])],
         ),
         context("gamma", vec![]),
     ])

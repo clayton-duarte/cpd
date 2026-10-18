@@ -174,8 +174,11 @@ fn contract_ddl_blocks() -> Vec<String> {
     section.split("```sql\n").skip(1).map(|b| b.split("```").next().unwrap().to_owned()).collect()
 }
 
+/// The SQL without its `--` comments and with its whitespace collapsed: comments are
+/// documentation, not schema (a migration cannot change one without rebuilding the table).
 fn normalized(sql: &str) -> String {
-    sql.split_whitespace().collect::<Vec<_>>().join(" ")
+    let code: Vec<&str> = sql.lines().map(|line| line.split("--").next().unwrap_or_default()).collect();
+    code.join(" ").split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// `(name, sql)` of every table, index and trigger in `conn`, normalized: a
@@ -693,8 +696,43 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
             .unwrap_or_else(|e| panic!("{kind}: {e:?}"));
     }
     assert_eq!(last, 5);
+    store.write("test", |tx| Ok(insert(tx, "session-message")?)).unwrap(); // migration 9
     let err = store.write("test", |tx| Ok(insert(tx, "plan-exploded")?)).unwrap_err();
     assert!(format!("{err:?}").contains("FOREIGN KEY"), "an Event kind is a foreign key to event_kinds: {err:?}");
+}
+
+#[test]
+fn a_fresh_database_holds_one_live_manager_per_context_and_a_brief_with_its_plan() {
+    let env = TestEnv::new();
+    let mut store = fixture_store(&env);
+    let columns: i64 = store
+        .read(|c| Ok(c.query_row("SELECT count(*) FROM pragma_table_info('contexts') WHERE name IN ('lead_session', 'grounded_seq')", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(columns, 0, "the grounded Lead is retired (migration 0010)");
+
+    let manager = |id: &str, context: &str, plan: &str| {
+        format!(
+            "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+               VALUES ('{id}', 'manager', '{context}', {plan}, 'm', '/', 'O5', 'stopped', 't', 't')"
+        )
+    };
+    store.write("test", |tx| exec(tx, "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('c2', 'C2', 't', 'm')")).unwrap();
+    store.write("test", |tx| exec(tx, &manager("mgr1", "ctx", "NULL"))).unwrap();
+    let second = refused(&mut store, &manager("mgr2", "ctx", "NULL"));
+    assert!(sqlite_message(&second).contains("UNIQUE constraint failed"), "{second:?}");
+    let with_plan = refused(&mut store, &manager("mgr3", "c2", "'pay'"));
+    assert!(sqlite_message(&with_plan).contains("CHECK constraint failed"), "a Manager has no Plan: {with_plan:?}");
+    // Another Context has its own; an archived Manager makes room for a new one.
+    store.write("test", |tx| exec(tx, &manager("mgr4", "c2", "NULL"))).unwrap();
+    store.write("test", |tx| exec(tx, "UPDATE sessions SET archived_at = 't' WHERE id = 'mgr1'")).unwrap();
+    store.write("test", |tx| exec(tx, &manager("mgr5", "ctx", "NULL"))).unwrap();
+
+    let brief = |plan: &str| {
+        format!("INSERT INTO context_records (context, id, kind, at, machine, text, plan_id, plan_machine) VALUES ('ctx', 'm-b1', 'brief', 't', 'm', 'B', {plan})")
+    };
+    let bare = refused(&mut store, &brief("NULL, NULL"));
+    assert!(sqlite_message(&bare).contains("CHECK constraint failed"), "a brief needs its Plan: {bare:?}");
+    store.write("test", |tx| exec(tx, &brief("'pay', 'm'"))).unwrap();
 }
 
 #[test]
@@ -728,6 +766,68 @@ fn a_failed_migration_rolls_back_entirely() {
     assert_eq!(app, 0);
 }
 
+#[test]
+fn a_write_after_another_connection_bumped_user_version_is_store_too_new_and_appends_nothing() {
+    let env = TestEnv::new();
+    let mut store = fixture_store(&env);
+    let txns = |store: &mut Store| store.read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get::<_, i64>(0))?)).unwrap();
+    let before = txns(&mut store);
+    raw(&env).pragma_update(None, "user_version", VERSION + 1).unwrap();
+    let mut ran = false;
+    let err = store
+        .write("test", |tx| {
+            ran = true;
+            exec(tx, "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('late', 'Late', 't', 'm')")
+        })
+        .unwrap_err();
+    assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
+    assert_eq!(err.details()["user_version"], VERSION + 1);
+    assert!(!ran, "the closure must not run against a newer schema");
+    assert_eq!(txns(&mut store), before);
+    let contexts: i64 = store.read(|c| Ok(c.query_row("SELECT count(*) FROM contexts WHERE id = 'late'", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(contexts, 0);
+}
+
+/// `(foreign_keys, legacy_alter_table)` of the store's connection.
+fn pragmas(store: &mut Store) -> (i64, i64) {
+    store
+        .read(|c| {
+            let get = |name: &str| c.pragma_query_value(None, name, |r| r.get::<_, i64>(0));
+            Ok((get("foreign_keys")?, get("legacy_alter_table")?))
+        })
+        .unwrap()
+}
+
+#[test]
+fn foreign_keys_are_on_and_legacy_alter_table_off_after_the_migrating_open() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    assert_eq!(pragmas(&mut store), (1, 0));
+}
+
+#[test]
+fn a_write_from_a_deleted_cwd_succeeds_and_records_unreadable() {
+    let env = TestEnv::new();
+    fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"hs\"\n").unwrap();
+    // The shell enters a directory, deletes it and runs cpd from there.
+    let out = env
+        .command("sh")
+        .args(["-c", "mkdir gone && cd gone && rmdir ../gone && exec \"$@\"", "sh", common::CPD])
+        .args(["context", "new", "ctx", "--title", "Ctx"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stdout} {}", String::from_utf8_lossy(&out.stderr));
+    let mut store = open(&env);
+    let cwds: Vec<String> = store
+        .read(|c| {
+            let mut stmt = c.prepare("SELECT cwd FROM txns WHERE command = 'context new'")?;
+            Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+        })
+        .unwrap();
+    assert_eq!(cwds, ["(unreadable)"]);
+}
+
 // ---------- §4.5 named migrations: the runner's table ----------
 
 #[test]
@@ -748,6 +848,11 @@ fn schema_migrations_records_every_legacy_migration_and_is_written_only_by_the_r
         ("0004-cross-repo", "breaking"),
         ("0005-plan-reopen", "breaking"),
         ("0006-pr-poller", "breaking"),
+        ("0007-context-records", "breaking"),
+        ("0008-phase-deploy", "breaking"),
+        ("0009-session-message", "breaking"),
+        ("0010-manager", "breaking"),
+        ("0011-pr-mergeable", "breaking"),
     ];
     let expected: Vec<(String, String, i64, i64)> =
         expected.iter().enumerate().map(|(i, (n, c))| (n.to_string(), c.to_string(), i as i64 + 1, 0)).collect();
@@ -969,7 +1074,7 @@ fn version_on_an_empty_home_reports_no_store_and_creates_nothing() {
     assert_eq!(out["schema"], VERSION);
     assert!(out["store_schema"].is_null(), "{out}");
     assert!(out["store"].is_null(), "{out}");
-    assert_eq!(out["protocol"], 1, "{out}");
+    assert_eq!(out["protocol"], 2, "{out}");
     assert!(!home(&env).db().exists());
     assert!(!home(&env).locks_dir().exists());
 }

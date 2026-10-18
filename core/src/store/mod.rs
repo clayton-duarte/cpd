@@ -24,6 +24,7 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::macros::format_description;
 
+use crate::context::legacy;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 
@@ -165,6 +166,9 @@ impl Store {
     /// transaction), so a migration can rebuild a table that others reference;
     /// `PRAGMA foreign_key_check` then holds before the commit. Both are
     /// restored afterwards, whether the migration committed or not.
+    ///
+    /// When the migration that imports the old Context stores (§4.5 legacy
+    /// migration 0007) committed, the folders are moved to `archive/contexts/` (§1.4).
     fn migrate(&mut self, home: &CpdHome, catalog: &Catalog<'_>) -> Result<(), CpdError> {
         if verdict_with(&self.conn, catalog)?.into_plan()?.is_none() {
             return Ok(());
@@ -176,17 +180,23 @@ impl Store {
             .conn
             .pragma_update(None, "legacy_alter_table", "OFF")
             .and_then(|()| self.conn.pragma_update(None, "foreign_keys", "ON"));
-        migrated?;
-        Ok(restored?)
+        let imported_old_stores = migrated?;
+        restored?;
+        if imported_old_stores {
+            archive_old_stores(home)?;
+        }
+        Ok(())
     }
 
-    fn migrate_in_txn(&mut self, home: &CpdHome, catalog: &Catalog<'_>) -> Result<(), CpdError> {
-        let caller = Caller::current()?;
+    /// Applies what the verdict plans in one transaction. Returns whether the
+    /// legacy migration that imports the old Context stores was among them.
+    fn migrate_in_txn(&mut self, home: &CpdHome, catalog: &Catalog<'_>) -> Result<bool, CpdError> {
+        let caller = Caller::current();
         let path = self.path.display().to_string();
         let _guard = TxnGuard(&self.txn);
         let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Another process may have migrated since the read in `migrate`.
-        let Some(plan) = verdict_with(&tx, catalog)?.into_plan()? else { return Ok(()) };
+        let Some(plan) = verdict_with(&tx, catalog)?.into_plan()? else { return Ok(false) };
         let failed = |name: &str, e: &dyn std::fmt::Display| {
             CpdError::new(ErrorCode::MigrationFailed, format!("Migration {name} of the database failed: {e}."))
                 .with("migration", name)
@@ -197,6 +207,7 @@ impl Store {
         // 4's PRs record it as their `created_txn` and in their history.
         let mut txn = None;
         let mut seq = 0_i64;
+        let mut imported_old_stores = false;
         if let Start::Fresh | Start::Convert(_) = plan.start {
             let from = match plan.start {
                 Start::Convert(version) => version as usize,
@@ -224,7 +235,11 @@ impl Store {
                     txn = Some(begin_txn(&tx, &self.txn, MIGRATE_COMMAND, &caller).map_err(|e| failed(legacy.name, &e))?);
                 }
                 (legacy.apply)(&tx).map_err(|e| failed(legacy.name, &e))?;
+                if index + 1 == schema::IMPORTS_OLD_STORES {
+                    schema::import_old_stores(&tx, &home.old_contexts_dir()).map_err(|e| failed(legacy.name, &e))?;
+                }
             }
+            imported_old_stores = from < schema::IMPORTS_OLD_STORES;
             let id = match txn {
                 Some(id) => id,
                 None => begin_txn(&tx, &self.txn, MIGRATE_COMMAND, &caller).map_err(|e| failed("schema_migrations", &e))?,
@@ -265,7 +280,7 @@ impl Store {
             tx.pragma_update(None, "user_version", VERSION).map_err(|e| failed("user_version", &e))?;
         }
         tx.commit()?;
-        Ok(())
+        Ok(imported_old_stores)
     }
 
     /// The schema check (§4.3): every generated history trigger is what the
@@ -314,7 +329,8 @@ impl Store {
     /// (`store_busy` after `store_busy_ms`), then the `txns` row for `command`
     /// with `cpd_txn()` set to its id, then `f`. Commits when `f` returns `Ok`,
     /// rolls everything back when it returns `Err`. Refuses with
-    /// `store_tampered` when the schema check failed.
+    /// `store_tampered` when the schema check failed and with `store_too_new`
+    /// when another process migrated the database past this cpd's schema.
     ///
     /// No external work (git, tmux, pi, `gh`) belongs inside `f`.
     pub fn write<T>(
@@ -332,11 +348,13 @@ impl Store {
             .with("found", mismatch.found.clone())
             .with("object", mismatch.object.clone()));
         }
-        let caller = Caller::current()?;
+        let caller = Caller::current();
         let (path, busy_ms) = (self.path.clone(), self.busy_ms);
         let _guard = TxnGuard(&self.txn);
         let result = (|| {
             let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            // Another process may have migrated since this process opened.
+            refuse_user_version(user_version(&tx)?)?;
             let id = begin_txn(&tx, &self.txn, command, &caller)?;
             let write = WriteTxn { tx, id };
             let value = f(&write)?;
@@ -367,6 +385,42 @@ impl Store {
         report.extend(orphans);
         Ok(report)
     }
+}
+
+/// Moves each `contexts/<id>/` folder migration 0007 imported to
+/// `archive/contexts/<id>/`, creating the parents (§4.5, §1.4). Nothing is
+/// deleted, and an existing destination is never overwritten: that folder
+/// stays, the others are still moved, and the failure is reported.
+fn archive_old_stores(home: &CpdHome) -> Result<(), CpdError> {
+    let failed = |message: String| CpdError::new(ErrorCode::StoreFailed, message);
+    let source = home.old_contexts_dir();
+    let destination = home.archived_contexts_dir();
+    let folders = legacy::folders(&source).map_err(&failed)?;
+    if folders.is_empty() {
+        return Ok(());
+    }
+    fs::create_dir_all(&destination)
+        .map_err(|e| failed(format!("Cannot create {}: {e}.", destination.display())))?;
+    let mut problems: Vec<String> = Vec::new();
+    for folder in folders {
+        let target = destination.join(folder.file_name().expect("a folder has a name"));
+        if target.symlink_metadata().is_ok() {
+            problems.push(format!("{} stays: {} exists", folder.display(), target.display()));
+        } else if let Err(e) = fs::rename(&folder, &target) {
+            problems.push(format!("{} stays: cannot move it to {}: {e}", folder.display(), target.display()));
+        }
+    }
+    if problems.is_empty() {
+        // Succeeds only when `contexts/` is empty now.
+        let _ = fs::remove_dir(&source);
+        return Ok(());
+    }
+    Err(failed(format!(
+        "The database migrated and holds every Context record, but the old Context stores were not all moved to {}: {}.",
+        destination.display(),
+        problems.join("; ")
+    ))
+    .with("problems", problems))
 }
 
 /// Takes `locks/store.lock` (§1.4), creating `$CPD_HOME` and `locks/` on first
@@ -451,6 +505,9 @@ fn record(
     Ok(())
 }
 
+/// What `txns.cwd` holds when the process's cwd cannot be read (§4.4).
+const UNREADABLE_CWD: &str = "(unreadable)";
+
 /// Who opens a write transaction: `txns.pid`, `session` and `cwd` (§4.4).
 struct Caller {
     pid: u32,
@@ -459,15 +516,14 @@ struct Caller {
 }
 
 impl Caller {
-    fn current() -> Result<Caller, CpdError> {
+    fn current() -> Caller {
         let session = ["CPD_SESSION", "PI_SESSION_ID"]
             .iter()
             .find_map(|name| std::env::var_os(name).filter(|v| !v.is_empty()))
             .map(|v| v.to_string_lossy().into_owned());
-        let cwd = std::env::current_dir().map_err(|e| {
-            CpdError::new(ErrorCode::StoreFailed, format!("The current directory is unreadable: {e}."))
-        })?;
-        Ok(Caller { pid: std::process::id(), session, cwd: cwd.to_string_lossy().into_owned() })
+        // The column is information, not a key: a deleted cwd must not stop a write.
+        let cwd = std::env::current_dir().map_or_else(|_| UNREADABLE_CWD.to_owned(), |d| d.to_string_lossy().into_owned());
+        Caller { pid: std::process::id(), session, cwd }
     }
 }
 
@@ -547,6 +603,19 @@ impl From<rusqlite::Error> for CpdError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_migration_leaves_foreign_keys_on_and_legacy_alter_table_off() {
+        let dir = tempfile::tempdir().unwrap();
+        // Migration 1 cannot apply: a table `history` already exists.
+        Connection::open(dir.path().join("cpd.db")).unwrap().execute_batch("CREATE TABLE history (x)").unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let mut store = Store::connect(&dir.path().join("cpd.db"), 5000).unwrap();
+        let err = store.migrate(&home, &Catalog::BUILT_IN).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::MigrationFailed, "{err:?}");
+        let get = |name: &str| store.conn.pragma_query_value(None, name, |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!((get("foreign_keys"), get("legacy_alter_table")), (1, 0));
+    }
 
     #[test]
     fn current_schema_is_none_without_a_file() {
@@ -641,8 +710,9 @@ mod tests {
         let mut b_then_a = open_named(&b_first, &[ADD_A, ADD_B]).unwrap();
         let mut both = open_named(&together, &[ADD_A, ADD_B]).unwrap();
 
-        assert_eq!(applied(&mut a_then_b).into_iter().skip(6).collect::<Vec<_>>(), [(ADD_A.name.into(), 7, 0), (ADD_B.name.into(), 8, 0)]);
-        assert_eq!(applied(&mut b_then_a).into_iter().skip(6).collect::<Vec<_>>(), [(ADD_B.name.into(), 7, 0), (ADD_A.name.into(), 8, 0)]);
+        let n = LEGACY.len() as i64;
+        assert_eq!(applied(&mut a_then_b).into_iter().skip(LEGACY.len()).collect::<Vec<_>>(), [(ADD_A.name.into(), n + 1, 0), (ADD_B.name.into(), n + 2, 0)]);
+        assert_eq!(applied(&mut b_then_a).into_iter().skip(LEGACY.len()).collect::<Vec<_>>(), [(ADD_B.name.into(), n + 1, 0), (ADD_A.name.into(), n + 2, 0)]);
 
         // The stores differ in the order of their columns and in their `sqlite_schema` text ...
         let (cols_ab, cols_ba) = (plan_columns(&mut a_then_b), plan_columns(&mut b_then_a));
@@ -814,7 +884,7 @@ mod tests {
         assert_eq!(err.code(), ErrorCode::MigrationFailed, "{err:?}");
         assert_eq!(err.details()["migration"], broken.name);
         let mut store = open_named(&home, &[ADD_A]).unwrap();
-        assert_eq!(applied(&mut store).len(), 7, "the six legacy migrations and a");
+        assert_eq!(applied(&mut store).len(), LEGACY.len() + 1, "the legacy migrations and a");
         assert!(!plan_columns(&mut store).contains(&"ok".to_owned()));
     }
 
@@ -836,12 +906,12 @@ mod tests {
 
     #[test]
     fn user_versions_other_than_a_legacy_one_or_the_named_scheme_are_store_too_new() {
-        for version in [7, 99, 999, 1001] {
+        for version in [12, 99, 999, 1001] {
             let err = refuse_user_version(version).unwrap_err();
             assert_eq!(err.code(), ErrorCode::StoreTooNew, "{version}");
             assert_eq!(err.details()["user_version"], version);
         }
-        for version in [0, 1, 6, 1000] {
+        for version in [0, 1, 6, 7, 11, 1000] {
             refuse_user_version(version).unwrap();
         }
     }
