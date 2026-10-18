@@ -77,19 +77,26 @@ pub(super) fn start(env: &mut Env, lead: &Lead, window: &str, command: &str) -> 
         Some(ids) => ids,
         None => tmux.new_window(&cockpit, window, &spawn)?,
     };
-    tmux.set_pane_session(&pane, lead.session)?;
-    tmux.set_pane_title(&pane, &title(env, lead)?)?;
-    env.store.write(command, |tx| {
-        tx.execute("UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2", [pane.as_str(), lead.session.as_str()])?;
-        let text = format!("Lead {} is parked in window {}.", lead.name, window.as_str());
-        let data = json!({"pane": pane.as_str(), "window": window.as_str(), "place": "parked"});
-        let mut event = NewEvent::new(Kind::SessionMoved, text, data).session(lead.session.clone()).context(lead.context.clone());
-        if let Some(plan) = lead.plan {
-            event = event.plan(plan.clone());
-        }
-        append(tx, event)?;
-        Ok(())
-    })?;
+    // A failing step now leaves a pane no row names: kill the window, keep the error (G11).
+    let marked = (|| {
+        tmux.set_pane_session(&pane, lead.session)?;
+        tmux.set_pane_title(&pane, &title(env, lead)?)?;
+        env.store.write(command, |tx| {
+            tx.execute("UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2", [pane.as_str(), lead.session.as_str()])?;
+            let text = format!("Lead {} is parked in window {}.", lead.name, window.as_str());
+            let data = json!({"pane": pane.as_str(), "window": window.as_str(), "place": "parked"});
+            let mut event = NewEvent::new(Kind::SessionMoved, text, data).session(lead.session.clone()).context(lead.context.clone());
+            if let Some(plan) = lead.plan {
+                event = event.plan(plan.clone());
+            }
+            append(tx, event)?;
+            Ok(())
+        })
+    })();
+    if let Err(e) = marked {
+        let _ = tmux.kill_window(&window);
+        return Err(e);
+    }
     Ok(Started { window, pane })
 }
 

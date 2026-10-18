@@ -281,6 +281,25 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     assert!(message.contains("m1-p1"), "{message}");
 }
 
+/// G11: `set -p … @cpd_session` fails after `new-window`: the window is killed, the error returned.
+#[test]
+fn new_leaves_no_window_when_a_step_after_new_window_fails() {
+    let env = TestEnv::new();
+    setup(&env);
+    new_plan_only(&env, "first");
+    let windows = || String::from_utf8(env.tmux(&["list-windows", "-a", "-F", "#{window_name}"]).stdout).unwrap();
+    let before = windows();
+    assert!(before.contains("park-first"), "{before}");
+
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let real = std::env::split_paths(&path).map(|d| d.join("tmux")).find(|p| p.is_file()).expect("tmux on PATH");
+    env.fake("tmux", &format!("case \" $* \" in *\" set \"*\" @cpd_session \"*) echo refused >&2; exit 1;; esac\nexec '{}' \"$@\"", real.display()));
+    let run = env.cpd(&["plan", "new", "second", "--context", "ctx", "--title", "Plan second"]);
+
+    assert_eq!(run.error()["code"], "tmux_failed", "{run:?}");
+    assert_eq!(windows(), before, "plan new left a window");
+}
+
 #[test]
 fn new_takes_neither_repo_nor_base() {
     let env = TestEnv::new();

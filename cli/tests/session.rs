@@ -432,6 +432,35 @@ fn fork_registers_a_stopped_lead_in_a_parked_window() {
     assert_ne!(again["session"]["id"], json!(new));
 }
 
+/// G11: a `tmux` that refuses `set -p … @cpd_session` and passes everything else to the real one.
+fn tmux_refusing_the_session_mark(env: &TestEnv) {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let real = std::env::split_paths(&path).map(|d| d.join("tmux")).find(|p| p.is_file()).expect("tmux on PATH");
+    env.fake("tmux", &format!("case \" $* \" in *\" set \"*\" @cpd_session \"*) echo refused >&2; exit 1;; esac\nexec '{}' \"$@\"", real.display()));
+}
+
+/// G11: a step after `new-window` fails: the new window is killed and the original error returned.
+#[test]
+fn fork_and_open_leave_no_window_when_a_step_after_new_window_fails() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd(&env);
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
+    cockpit(&env);
+    tmux_refusing_the_session_mark(&env);
+    let before = window_names(&env);
+    let panes_before = panes(&env);
+
+    let run = env.cpd(&["session", "fork", GROUNDED, "--plan", "pay"]);
+    assert_eq!(run.error()["code"], "tmux_failed", "{run:?}");
+    assert_eq!(window_names(&env), before, "fork left a window");
+
+    let run = env.cpd(&["session", "open", LEAD1]);
+    assert_eq!(run.error()["code"], "tmux_failed", "{run:?}");
+    assert_eq!(window_names(&env), before, "open left a window");
+    assert_eq!(panes(&env), panes_before);
+}
+
 /// Fork when idle (§6.7): the fork waits while the source has no file, then
 /// while it is busy, and forks once it is idle; pi exiting offers a resume.
 #[test]
