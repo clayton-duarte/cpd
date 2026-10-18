@@ -19,7 +19,7 @@ use crate::home::CpdHome;
 use crate::host::exe::Exe;
 use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::{Output, to_line};
-use crate::store::{Store, VERSION};
+use crate::store::Store;
 
 pub use append::{NewEvent, append};
 pub use kind::{Kind, PROTOCOL, Set, Spec};
@@ -145,14 +145,7 @@ fn follow(args: FollowArgs) -> Result<Output, CpdError> {
                 conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))?,
             ))
         })?;
-        if user_version > VERSION {
-            return Err(CpdError::new(
-                ErrorCode::StoreTooNew,
-                format!("The database has schema version {user_version}, newer than this cpd's {VERSION}: upgrade cpd."),
-            )
-            .with("version", user_version)
-            .with("supported", VERSION));
-        }
+        crate::store::refuse_user_version(user_version)?;
         if seen != Some(version) {
             seen = Some(version);
             loop {

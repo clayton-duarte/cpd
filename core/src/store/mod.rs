@@ -25,7 +25,8 @@ use time::macros::format_description;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 
-pub use schema::{HISTORY_TABLES, VERSION, schema_hash};
+use schema::{LEGACY, Named};
+pub use schema::{HISTORY_TABLES, SCHEMA_HASH, VERSION, canonical_hash};
 
 /// `PRAGMA application_id` of a cpd 2 database: `0x63706432`, "cpd2" (§4.1).
 pub const APPLICATION_ID: i32 = 0x6370_6432;
@@ -43,12 +44,16 @@ pub struct Store {
     schema: Option<SchemaMismatch>,
 }
 
-/// The schema check failed (§4.3): `sqlite_schema` does not hash to what this
-/// binary embeds for its version.
+/// The schema check failed (§4.3): the canonical hash of `sqlite_schema` is not
+/// the one this binary pins, or a generated history trigger is not what the
+/// generator makes. For a hash `expected` and `found` are hashes and `object` is
+/// `None`; for a trigger `object` is its name and they are its SQL (`found` is
+/// `"missing"` when the store lacks it).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SchemaMismatch {
     pub expected: String,
     pub found: String,
+    pub object: Option<String>,
 }
 
 /// The open write transaction handed to [`Store::write`]'s closure. It derefs
@@ -87,18 +92,25 @@ impl Store {
     /// (§4.3). `busy_ms` is the config's `store_busy_ms`.
     ///
     /// A failed schema check does not fail the open: [`Store::write`] refuses
-    /// with `store_tampered` and [`Store::tamper`] reports it.
+    /// with `store_tampered` and [`Store::tamper`] reports it. A legacy store
+    /// that fails its legacy schema check is not converted: the open fails.
     ///
     /// The one-time setup (the WAL switch and the migration) runs under
     /// `locks/store.lock` (§1.4): SQLite answers concurrent switches to WAL of
     /// a new database with `SQLITE_BUSY` at once, without its busy handler.
     pub fn open(home: &CpdHome, busy_ms: u64) -> Result<Store, CpdError> {
+        Store::open_with(home, busy_ms, &Catalog::BUILT_IN)
+    }
+
+    /// [`Store::open`] with the migrations and the pinned hash of `catalog`:
+    /// the tests' way to run migrations this binary does not have.
+    fn open_with(home: &CpdHome, busy_ms: u64, catalog: &Catalog<'_>) -> Result<Store, CpdError> {
         let path = home.db();
         let setup = setup_lock(home)?;
         let mut store = Store::connect(&path, busy_ms).map_err(|e| enrich(e, &path, busy_ms))?;
-        store.migrate().map_err(|e| enrich(e, &path, busy_ms))?;
+        store.migrate(home, catalog).map_err(|e| enrich(e, &path, busy_ms))?;
         drop(setup);
-        store.schema = store.check_schema().map_err(|e| enrich(e, &path, busy_ms))?;
+        store.schema = store.check_schema(catalog).map_err(|e| enrich(e, &path, busy_ms))?;
         Ok(store)
     }
 
@@ -142,22 +154,20 @@ impl Store {
         Ok(Store { conn, path: path.to_owned(), busy_ms, txn, schema: None })
     }
 
-    /// §4.5: below N, migrate in one `BEGIN IMMEDIATE` transaction; above N, refuse.
+    /// §4.5: runs what [`plan`] says, in one `BEGIN IMMEDIATE` transaction.
     ///
     /// The transaction runs with foreign keys off and `legacy_alter_table` on
     /// (§4.5 migration 4, step 1: both only take effect outside a
     /// transaction), so a migration can rebuild a table that others reference;
-    /// `PRAGMA foreign_key_check` then holds before the commit (step 5). Both
-    /// are restored afterwards, whether the migration committed or not.
-    fn migrate(&mut self) -> Result<(), CpdError> {
-        let version = user_version(&self.conn)?;
-        refuse_too_new(version)?;
-        if version == VERSION {
+    /// `PRAGMA foreign_key_check` then holds before the commit. Both are
+    /// restored afterwards, whether the migration committed or not.
+    fn migrate(&mut self, home: &CpdHome, catalog: &Catalog<'_>) -> Result<(), CpdError> {
+        if plan(&self.conn, catalog)?.is_none() {
             return Ok(());
         }
         self.conn.pragma_update(None, "foreign_keys", "OFF")?;
         self.conn.pragma_update(None, "legacy_alter_table", "ON")?;
-        let migrated = self.migrate_in_txn();
+        let migrated = self.migrate_in_txn(home, catalog);
         let restored = self
             .conn
             .pragma_update(None, "legacy_alter_table", "OFF")
@@ -166,58 +176,102 @@ impl Store {
         Ok(restored?)
     }
 
-    fn migrate_in_txn(&mut self) -> Result<(), CpdError> {
+    fn migrate_in_txn(&mut self, home: &CpdHome, catalog: &Catalog<'_>) -> Result<(), CpdError> {
         let caller = Caller::current()?;
+        let path = self.path.display().to_string();
         let _guard = TxnGuard(&self.txn);
         let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        // Another process may have migrated since the read above.
-        let version = user_version(&tx)?;
-        refuse_too_new(version)?;
-        if version == VERSION {
-            return Ok(());
-        }
-        let failed = |to: i64, e: rusqlite::Error| {
-            CpdError::new(ErrorCode::MigrationFailed, format!("Migration {to} of the database failed: {e}."))
-                .with("from", version)
-                .with("to", to)
+        // Another process may have migrated since the read in `migrate`.
+        let Some(plan) = plan(&tx, catalog)? else { return Ok(()) };
+        let failed = |name: &str, e: &dyn std::fmt::Display| {
+            CpdError::new(ErrorCode::MigrationFailed, format!("Migration {name} of the database failed: {e}."))
+                .with("migration", name)
                 .with("sqlite_message", e.to_string())
         };
-        if version == 0 {
-            tx.pragma_update(None, "application_id", APPLICATION_ID).map_err(|e| failed(1, e))?;
-        }
         // The migration's `txns` row is inserted as soon as `txns` exists
         // (migration 1 creates it), so later migrations can name it: migration
-        // 3's PRs record it as their `created_txn` and in their history.
-        let mut txn_row = false;
-        for (index, migration) in schema::MIGRATIONS.iter().enumerate().skip(version as usize) {
-            if index > 0 && !txn_row {
-                begin_txn(&tx, &self.txn, MIGRATE_COMMAND, &caller).map_err(|e| failed(index as i64 + 1, e))?;
-                txn_row = true;
+        // 4's PRs record it as their `created_txn` and in their history.
+        let mut txn = None;
+        let mut seq = 0_i64;
+        if let Start::Fresh | Start::Convert(_) = plan.start {
+            let from = match plan.start {
+                Start::Convert(version) => version as usize,
+                _ => 0,
+            };
+            if from > 0 {
+                // C2 step 2: a tampered legacy store must not become the base of the new scheme.
+                let expected = schema::SCHEMA_HASHES[from - 1];
+                let found = schema::legacy_schema_hash(&tx)?;
+                if found != expected {
+                    return Err(CpdError::new(
+                        ErrorCode::StoreTampered,
+                        "The database schema does not match any this cpd can convert: a table or trigger was changed outside cpd. Nothing was converted.",
+                    )
+                    .with("path", path)
+                    .with("version", from)
+                    .with("expected", expected)
+                    .with("found", found));
+                }
+            } else {
+                tx.pragma_update(None, "application_id", APPLICATION_ID).map_err(|e| failed(LEGACY[0].name, &e))?;
             }
-            migration(&tx).map_err(|e| failed(index as i64 + 1, e))?;
+            for (index, legacy) in LEGACY.iter().enumerate().skip(from) {
+                if index > 0 && txn.is_none() {
+                    txn = Some(begin_txn(&tx, &self.txn, MIGRATE_COMMAND, &caller).map_err(|e| failed(legacy.name, &e))?);
+                }
+                (legacy.apply)(&tx).map_err(|e| failed(legacy.name, &e))?;
+            }
+            let txn = match txn {
+                Some(id) => id,
+                None => begin_txn(&tx, &self.txn, MIGRATE_COMMAND, &caller).map_err(|e| failed("schema_migrations", &e))?,
+            };
+            tx.execute_batch(schema::RUNNER_DDL).map_err(|e| failed("schema_migrations", &e))?;
+            for legacy in LEGACY {
+                seq += 1;
+                record(&tx, legacy.name, legacy.compat, legacy.sql, seq, txn, from > 0).map_err(|e| failed(legacy.name, &e))?;
+            }
+        } else {
+            let id = begin_txn(&tx, &self.txn, MIGRATE_COMMAND, &caller).map_err(|e| failed("schema_migrations", &e))?;
+            txn = Some(id);
+            seq = tx
+                .query_row("SELECT coalesce(max(seq), 0) FROM schema_migrations", [], |r| r.get(0))
+                .map_err(|e| failed("schema_migrations", &e))?;
         }
-        if !txn_row {
-            begin_txn(&tx, &self.txn, MIGRATE_COMMAND, &caller).map_err(|e| failed(VERSION, e))?;
+        let txn = txn.expect("every path above inserts the migrating txns row");
+        for named in &plan.pending {
+            tx.execute_batch(named.sql).map_err(|e| failed(named.name, &e))?;
+            if let Some(run) = named.run {
+                run(&tx, home).map_err(|e| failed(named.name, &e.message()))?;
+            }
+            seq += 1;
+            record(&tx, named.name, named.compat, named.sql, seq, txn, false).map_err(|e| failed(named.name, &e))?;
         }
-        let violations = foreign_key_violations(&tx).map_err(|e| failed(VERSION, e))?;
+        schema::reconcile(&tx).map_err(|e| failed("reconcile", &e))?;
+        let violations = foreign_key_violations(&tx).map_err(|e| failed("foreign_key_check", &e))?;
         if !violations.is_empty() {
             return Err(CpdError::new(
                 ErrorCode::MigrationFailed,
-                format!("Migration {VERSION} of the database failed: {} rows break a foreign key.", violations.len()),
+                format!("Migration of the database failed: {} rows break a foreign key.", violations.len()),
             )
-            .with("from", version)
-            .with("to", VERSION)
+            .with("migration", "foreign_key_check")
             .with("foreign_key_violations", Value::from(violations)));
         }
-        tx.pragma_update(None, "user_version", VERSION).map_err(|e| failed(VERSION, e))?;
+        if plan.start != Start::Named {
+            tx.pragma_update(None, "user_version", VERSION).map_err(|e| failed("user_version", &e))?;
+        }
         tx.commit()?;
         Ok(())
     }
 
-    fn check_schema(&self) -> Result<Option<SchemaMismatch>, CpdError> {
-        let expected = schema::SCHEMA_HASHES[VERSION as usize - 1];
-        let found = schema_hash(&self.conn)?;
-        Ok((found != expected).then(|| SchemaMismatch { expected: expected.to_owned(), found }))
+    /// The schema check (§4.3): every generated history trigger is what the
+    /// generator makes, and the canonical hash is the catalog's pinned one.
+    fn check_schema(&self, catalog: &Catalog<'_>) -> Result<Option<SchemaMismatch>, CpdError> {
+        if let Some((name, expected, found)) = schema::generated_mismatch(&self.conn)? {
+            return Ok(Some(SchemaMismatch { expected, found: found.unwrap_or_else(|| "missing".to_owned()), object: Some(name) }));
+        }
+        let found = canonical_hash(&self.conn)?;
+        Ok((found != catalog.schema_hash)
+            .then(|| SchemaMismatch { expected: catalog.schema_hash.to_owned(), found, object: None }))
     }
 
     /// The path of the database file.
@@ -263,7 +317,8 @@ impl Store {
             )
             .with("path", self.path.display().to_string())
             .with("expected", mismatch.expected.clone())
-            .with("found", mismatch.found.clone()));
+            .with("found", mismatch.found.clone())
+            .with("object", mismatch.object.clone()));
         }
         let caller = Caller::current()?;
         let (path, busy_ms) = (self.path.clone(), self.busy_ms);
@@ -286,7 +341,7 @@ impl Store {
     pub fn tamper(&mut self) -> Result<Vec<Value>, CpdError> {
         let mut report = Vec::new();
         if let Some(m) = &self.schema {
-            report.push(json!({"kind": "schema", "expected": m.expected, "found": m.found}));
+            report.push(json!({"kind": "schema", "expected": m.expected, "found": m.found, "object": m.object}));
         }
         let orphans = self.read(|conn| {
             let mut stmt = conn.prepare(
@@ -356,15 +411,129 @@ fn foreign_key_violations(conn: &Connection) -> rusqlite::Result<Vec<Value>> {
     .collect()
 }
 
-fn refuse_too_new(version: i64) -> Result<(), CpdError> {
-    if version > VERSION {
-        return Err(CpdError::new(
-            ErrorCode::StoreTooNew,
-            format!("The database has schema version {version}, newer than this cpd's {VERSION}: upgrade cpd."),
-        )
-        .with("version", version)
-        .with("supported", VERSION));
+/// The migrations a binary knows and the canonical hash it pins for them.
+struct Catalog<'a> {
+    /// Named migrations, sorted by name.
+    named: &'a [Named],
+    schema_hash: &'a str,
+}
+
+impl Catalog<'_> {
+    const BUILT_IN: Catalog<'static> = Catalog { named: schema::NAMED, schema_hash: SCHEMA_HASH };
+}
+
+/// Where a store starts (§4.5 O1, C1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Start {
+    /// No schema yet: every legacy migration, then the named ones.
+    Fresh,
+    /// A legacy store at this `user_version`: the rest of the legacy set, the
+    /// conversion (C2), then the named ones.
+    Convert(i64),
+    /// A named store: its unapplied named migrations.
+    Named,
+}
+
+/// What a migrating transaction does.
+struct Plan<'a> {
+    start: Start,
+    /// The binary's named migrations the store has not applied, in name order.
+    pending: Vec<&'a Named>,
+}
+
+/// What a store at `user_version` needs, or `None` when it needs nothing; the
+/// refusals of §4.5 that this binary can decide: a numbered migration it
+/// lacks, a later scheme, a changed migration (R3), an applied migration it
+/// does not know. Read-only; the runner calls it before and inside `BEGIN IMMEDIATE`.
+fn plan<'a>(conn: &Connection, catalog: &Catalog<'a>) -> Result<Option<Plan<'a>>, CpdError> {
+    let version = user_version(conn)?;
+    refuse_user_version(version)?;
+    let all_named = || catalog.named.iter().collect::<Vec<_>>();
+    if version == 0 {
+        return Ok(Some(Plan { start: Start::Fresh, pending: all_named() }));
     }
+    if version != VERSION {
+        return Ok(Some(Plan { start: Start::Convert(version), pending: all_named() }));
+    }
+    let table: i64 = conn.query_row(
+        "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = 'schema_migrations'",
+        [],
+        |r| r.get(0),
+    )?;
+    if table == 0 {
+        return Err(CpdError::new(
+            ErrorCode::StoreFailed,
+            format!("The database has user_version {VERSION} but no schema_migrations: it is not a store cpd wrote."),
+        ));
+    }
+    let mut stmt = conn.prepare("SELECT name, compat, checksum FROM schema_migrations ORDER BY seq")?;
+    let applied: Vec<(String, String, String)> =
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+    let known = |name: &str| -> Option<&str> {
+        LEGACY.iter().find(|l| l.name == name).map(|l| l.sql).or_else(|| catalog.named.iter().find(|n| n.name == name).map(|n| n.sql))
+    };
+    for (name, _, checksum) in &applied {
+        if let Some(sql) = known(name) {
+            let embedded = schema::sha256_hex(sql);
+            if *checksum != embedded {
+                return Err(CpdError::new(
+                    ErrorCode::MigrationChanged,
+                    format!("The store applied migration {name} with other text than this cpd's: restore the migration's file from origin/main."),
+                )
+                .with("name", name.as_str())
+                .with("recorded", checksum.as_str())
+                .with("embedded", embedded));
+            }
+        }
+    }
+    let unknown: Vec<&str> = applied.iter().map(|(n, ..)| n.as_str()).filter(|n| known(n).is_none()).collect();
+    if !unknown.is_empty() {
+        let floor = applied.iter().rev().find(|(_, compat, _)| compat == "breaking").map(|(n, ..)| n.as_str());
+        return Err(too_new(version, floor, &unknown));
+    }
+    let mut pending: Vec<&Named> =
+        catalog.named.iter().filter(|n| !applied.iter().any(|(name, ..)| name == n.name)).collect();
+    pending.sort_by_key(|n| n.name);
+    Ok((!pending.is_empty()).then_some(Plan { start: Start::Named, pending }))
+}
+
+/// The part of the verdict that `user_version` alone decides (§4.5): `0`, a
+/// legacy version `1..=LEGACY.len()` and [`VERSION`] are the stores this
+/// binary knows the scheme of; a numbered migration it lacks, or a later
+/// scheme, is `store_too_new`. `events follow` calls it on every poll.
+pub fn refuse_user_version(version: i64) -> Result<(), CpdError> {
+    if version > LEGACY.len() as i64 && version != VERSION {
+        return Err(too_new(version, None, &[]));
+    }
+    Ok(())
+}
+
+/// `store_too_new` (§4.5): the store has a breaking migration this cpd does not
+/// know, or a later scheme. `floor` is the store's newest breaking migration.
+fn too_new(version: i64, floor: Option<&str>, unknown: &[&str]) -> CpdError {
+    CpdError::new(
+        ErrorCode::StoreTooNew,
+        format!("The database was migrated by a newer cpd (schema {version}): upgrade cpd."),
+    )
+    .with("user_version", version)
+    .with("floor", floor)
+    .with("unknown", unknown)
+}
+
+/// Records an applied migration in `schema_migrations` (§4.4).
+fn record(
+    conn: &Connection,
+    name: &str,
+    compat: schema::Compat,
+    sql: &str,
+    seq: i64,
+    txn: i64,
+    converted: bool,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![name, compat.as_str(), schema::sha256_hex(sql), seq, txn, converted],
+    )?;
     Ok(())
 }
 
