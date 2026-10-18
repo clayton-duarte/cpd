@@ -1,5 +1,5 @@
 //! The Inbox's core conditions (contract §2.2 "Inbox item", §3.7 E8) computed from a store the built binary wrote:
-//! a Plan's Lead that blocks, and a Context's questions and answers.
+//! a Plan's Lead that blocks, a Context's questions and answers, and the pull requests the poll wrote.
 
 mod common;
 
@@ -85,5 +85,55 @@ fn an_engine_error_is_an_item_while_the_engine_reports_it() {
     assert_eq!((items[0].kind, items[0].urgency), (Kind::EngineError, Urgency::Red));
     assert_eq!((items[0].subject.as_str(), items[0].label.as_str()), ("error:E5/machine/gh_rate_limited", "engine E5: gh_rate_limited"));
     assert_eq!(items[0].event, Some(7));
+    assert!(found(&env, &[]).is_empty());
+}
+
+/// Writes a pull request row as the poll would, with the columns the Inbox reads.
+fn pull_request(env: &TestEnv, n: u32, set: &str) {
+    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
+    let mut store = Store::open(&home, 5000).unwrap();
+    store
+        .write("test", |tx| {
+            tx.execute(
+                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
+                 VALUES ('acme/shop', ?1, 'https://github.com/acme/shop/pull/' || ?1, 'T', 0, 'open', 'none', 'none', 't', 't')",
+                [n],
+            )?;
+            tx.execute(&format!("UPDATE pull_requests SET {set} WHERE number = {n}"), [])?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn the_polled_pull_requests_open_and_clear_their_items() {
+    let env = TestEnv::new();
+    setup(&env);
+    pull_request(&env, 1, "checks = 'passed', mergeable = 'conflicting'");
+    pull_request(&env, 2, "review_decision = 'changes_requested'");
+    pull_request(&env, 3, "checks = 'passed', mergeable = 'mergeable'");
+    pull_request(&env, 4, "authored = 0, review_requested = 1");
+    let items = found(&env, &[]);
+    let seen: Vec<_> = items.iter().map(|c| (c.kind, c.urgency, c.label.as_str())).collect();
+    assert_eq!(
+        seen,
+        [
+            (Kind::PrFailing, Urgency::Red, "shop#1 merge conflict"),
+            (Kind::PrChanges, Urgency::Red, "shop#2 changes requested"),
+            (Kind::PrReady, Urgency::Yellow, "shop#3 ready to merge"),
+            (Kind::ReviewRequested, Urgency::Yellow, "review shop#4"),
+        ]
+    );
+    assert_eq!(items[0].subject, "pr:acme/shop#1");
+    assert_eq!(items[0].url.as_deref(), Some("https://github.com/acme/shop/pull/1"));
+
+    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
+    Store::open(&home, 5000)
+        .unwrap()
+        .write("test", |tx| {
+            tx.execute("UPDATE pull_requests SET state = 'merged', merged_at = 't'", [])?;
+            Ok(())
+        })
+        .unwrap();
     assert!(found(&env, &[]).is_empty());
 }
