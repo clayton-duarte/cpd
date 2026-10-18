@@ -1014,6 +1014,46 @@ fn rename_sets_the_title_and_appends_one_event() {
     assert_eq!(events(&env, "plan-renamed").len(), 1);
 }
 
+/// `@cpd_title` of `pane`.
+fn pane_title(env: &TestEnv, pane: &str) -> String {
+    let out = env.tmux(&["show", "-pqv", "-t", pane, "@cpd_title"]);
+    String::from_utf8(out.stdout).unwrap().trim_end_matches('\n').to_owned()
+}
+
+#[test]
+fn the_leads_pane_carries_the_plans_title_and_plan_rename_keeps_it_current() {
+    let env = TestEnv::new();
+    setup(&env);
+    let out = env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Retry payouts"]).ok();
+    let (lead, pane) = (out["lead"]["session"].as_str().unwrap().to_owned(), out["lead"]["pane"].as_str().unwrap().to_owned());
+    assert_eq!(pane_title(&env, &pane), "Retry payouts");
+
+    env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Retry the payouts"]).ok();
+    assert_eq!(pane_title(&env, &pane), "Retry the payouts");
+
+    // A side fork shows its own name; renaming the Plan leaves it alone.
+    let fork = env.cpd(&["session", "fork", &lead, "--name", "side"]).ok()["session"].clone();
+    let fork_pane = fork["pane"].as_str().unwrap();
+    assert_eq!(pane_title(&env, fork_pane), "side");
+    env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Third"]).ok();
+    assert_eq!((pane_title(&env, &pane), pane_title(&env, fork_pane)), ("Third".to_owned(), "side".to_owned()));
+
+    // Renaming the Plan's Lead Session never replaces the Plan's title.
+    env.cpd(&["session", "rename", "lead name", "--session", &lead]).ok();
+    assert_eq!(pane_title(&env, &pane), "Third");
+
+    // A rerun with the same title repairs a header that was cleared.
+    env.tmux(&["set", "-p", "-u", "-t", &pane, "@cpd_title"]);
+    assert_eq!(pane_title(&env, &pane), "");
+    let again = env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Third"]).ok();
+    assert_eq!(again["already"], true);
+    assert_eq!(pane_title(&env, &pane), "Third");
+
+    // No pane, nothing to do.
+    env.tmux(&["kill-pane", "-t", &pane]);
+    env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Fourth"]).ok();
+}
+
 #[test]
 fn rename_refusals() {
     let env = TestEnv::new();

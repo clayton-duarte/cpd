@@ -1,5 +1,5 @@
-//! The `statusbar` view (commands.md §13.2, §17), the bottom row of the cockpit, on a private tmux server: the two
-//! buttons at the left and `workers N/M` at the right edge, from the Attempts holding a slot and config `concurrency`.
+//! The `statusbar` view (commands.md §13.2, §17), the bottom row of the cockpit, on a private tmux server: the three
+//! glyph buttons at the left and `workers N/M` at the right edge, from the Attempts holding a slot and config `concurrency`.
 //!
 //! The store is prepared through the store API (`Store::write`), as `tui_plan.rs` does; the view runs as
 //! `cpd tui view statusbar` in a pane, and its screen is read with `tmux capture-pane`.
@@ -121,7 +121,7 @@ fn the_row_has_the_three_buttons_left_and_the_workers_at_the_right_edge() {
     sql(&env, &plan_with_attempts(&["ended", "running", "starting"]));
     let pane = start_view(&env, 80);
     let row = row_ending(&env, &pane, "workers 2/4");
-    assert!(row.starts_with("⧉   ? legend   ≡ logs "), "{row:?}");
+    assert!(row.starts_with("⧉ ? ▤"), "{row:?}");
     assert_eq!(row.chars().count(), 80, "the workers end at the last column: {row:?}");
 }
 
@@ -130,7 +130,7 @@ fn the_workers_follow_the_slots() {
     let env = env();
     sql(&env, &plan_with_attempts(&[]));
     // the shortening to `0/4` on a row under 11 columns is `the_workers_indicator_is_given_the_full_width` (unit
-    // test): the three buttons take 22 columns, so no row that narrow shows them and the indicator together
+    // test); this one uses a row wide enough for the long form
     let pane = start_view(&env, 40);
     row_ending(&env, &pane, "workers 0/4");
     // an Attempt takes a slot: the view re-reads when the store's Events move, or within 2 s

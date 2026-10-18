@@ -93,6 +93,7 @@ error_codes! {
     AdapterMissing = "adapter_missing" => Failure,
     MergeCheckFailed = "merge_check_failed" => Failure,
     PushFailed = "push_failed" => Failure,
+    CleanupFailed = "cleanup_failed" => Failure,
 
     // Exit 2: usage error.
     Usage = "usage" => Usage,

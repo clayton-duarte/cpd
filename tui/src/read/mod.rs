@@ -23,6 +23,7 @@
 //! [`Store`]: cpd_core::store::Store
 //! [`Store::read`]: cpd_core::store::Store::read
 
+mod dot;
 mod flow;
 mod logs;
 mod shared;
@@ -38,6 +39,7 @@ pub use shared::{
     AttemptStatus, Cause, Checks, EscalationStatus, JobCounts, JobStatus, Origin, Outcome, Place, PlanHead, Pr,
     PrState, ReviewStatus, SessionNode,
 };
+pub use dot::{Dot, DotInputs};
 pub use logs::{Logs, logs, logs_after};
 pub use tree::{ContextNode, PlanNode, Tree, tree};
 pub use widgets::{

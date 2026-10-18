@@ -262,7 +262,8 @@ fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &N
 /// the lock as fd 3, stdin from `/dev/null`, and stdout and stderr appended to
 /// `run/<plan>/logs/attempt-<attempt>.log`. Returns its pid.
 fn spawn(home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock: &Starter) -> Result<u32, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("cannot find the cpd binary: {e}"))?;
+    // The path recorded at process start: the live path of the file is `(deleted)` after an install.
+    let exe = crate::host::exe::started_as().map_err(|e| e.to_string())?;
     let log_path = home.driver_log(plan, attempt);
     let dir = log_path.parent().expect("a log lives in a directory");
     std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
@@ -273,7 +274,7 @@ fn spawn(home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock: &Starter) -> 
         .map_err(|e| format!("cannot open {}: {e}", log_path.display()))?;
     let stdout = log.try_clone().map_err(|e| format!("cannot use {}: {e}", log_path.display()))?;
 
-    let mut command = Command::new(&exe);
+    let mut command = Command::new(exe);
     command
         .args(["attempt", "run", &attempt.to_string(), "--plan", plan.as_str()])
         .current_dir(home.root())

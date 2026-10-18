@@ -4,7 +4,8 @@
 //! as the reference does: a Session opened in the chat slot gets the focus
 //! (`select-pane`), and `?` opens the legend popup.
 //! The menu's Open, Close, Archive, Unarchive, Rename…, Fork…, New session…, New Plan… and New Context… are
-//! the same commands. Two flows run more than one: an Archive of the chat slot's Lead frees the slot first
+//! the same commands; Copy id is the one that runs `tmux set-buffer -w` instead (OSC 52). After New Plan…, Fork… and
+//! New session… succeed, the new Lead is opened in the chat slot (`session open`, then the focus, as Open does). Two flows run more than one: an Archive of the chat slot's Lead frees the slot first
 //! ([`Free`], F3), and a click on an archived Session runs `session history` and focuses the chat (F5).
 //!
 //! Text the User typed is passed as `--flag=value`, or after `--` when it is a positional, so a value that starts
@@ -78,6 +79,9 @@ pub enum Action {
     Archive { subject: Subject, free: Option<Free> },
     /// `context|plan|session unarchive` (§3.9, §4.11, §10.11): the menu's Unarchive.
     Unarchive(Subject),
+    /// `tmux set-buffer -w -- <id>` (hs-d102): the menu's Copy id; the id is the one the row shows. The only action
+    /// that is no `cpd` command.
+    CopyId(String),
 }
 
 /// The refusal of `x` on the Session in the chat slot (the reference's), also when `session close` refuses it
@@ -85,7 +89,7 @@ pub enum Action {
 pub const IN_CHAT_SLOT: &str = "switch to another session first";
 
 impl Action {
-    /// The arguments of `cpd`.
+    /// The arguments of the command: `cpd`'s, or `tmux`'s for Copy id (the [`Tmux`] adds `-L <socket>`).
     pub fn argv(&self) -> Vec<String> {
         let words = |w: &[&str]| w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         match self {
@@ -107,6 +111,21 @@ impl Action {
             Action::Close(id) => words(&["session", "close", id.as_str()]),
             Action::Archive { subject, .. } => subject.command("archive"),
             Action::Unarchive(subject) => subject.command("unarchive"),
+            Action::CopyId(id) => words(&["set-buffer", "-w", "--", id.as_str()]),
+        }
+    }
+
+    /// The step that opens the Lead the action created, from its reply (`plan new`'s `lead.session`, `session fork`'s
+    /// `session.id`); none for the other actions. A reply with no Session id is an error.
+    pub fn open_new(&self, reply: &Value) -> Result<Option<Action>, String> {
+        let (command, id) = match self {
+            Action::NewPlan { .. } => ("plan new", &reply["lead"]["session"]),
+            Action::Fork { .. } => ("session fork", &reply["session"]["id"]),
+            _ => return Ok(None),
+        };
+        match id.as_str().and_then(|id| SessionId::parse(id).ok()) {
+            Some(id) => Ok(Some(Action::Open(id))),
+            None => Err(format!("{command} printed no Session id to open")),
         }
     }
 
@@ -142,6 +161,7 @@ impl Action {
             Action::Archive { .. } => "archived".into(),
             Action::Unarchive(_) if reply["already"] == true => "already unarchived".into(),
             Action::Unarchive(_) => "unarchived".into(),
+            Action::CopyId(id) => format!("copied {id}"),
         }
     }
 
@@ -169,7 +189,16 @@ impl Runner {
     pub fn run(&self, action: &Action) -> Result<String, String> {
         let mut note = String::new();
         for step in action.steps() {
-            note = command(&step)?;
+            let reply = match step {
+                Action::CopyId(_) => self.tmux.run(&step.argv()).map(|_| Value::Null).map_err(|e| e.message().to_owned())?,
+                _ => command(&step)?,
+            };
+            note = step.done(&reply);
+            if let Some(open) = step.open_new(&reply)? {
+                // the Plan or fork stays created when this is refused
+                command(&open)?;
+                self.focus_chat().map_err(|e| e.message().to_owned())?;
+            }
             if matches!(step, Action::Open(_) | Action::History(_)) {
                 self.focus_chat().map_err(|e| e.message().to_owned())?;
             }
@@ -193,8 +222,8 @@ impl Runner {
     }
 }
 
-/// Runs the command of `action`: its note, or the message of the error it printed (or why it could not run).
-fn command(action: &Action) -> Result<String, String> {
+/// Runs the command of `action`: its reply, or the message of the error it printed (or why it could not run).
+fn command(action: &Action) -> Result<Value, String> {
     let output = Command::new(PROGRAM)
         .args(action.argv())
         .stdin(Stdio::null())
@@ -205,7 +234,7 @@ fn command(action: &Action) -> Result<String, String> {
         format!("{PROGRAM} {} printed no JSON (exit {}): {}", action.argv().join(" "), output.status, stderr.trim())
     })?;
     if reply["ok"] == true {
-        Ok(action.done(&reply))
+        Ok(reply)
     } else {
         let error = &reply["error"];
         Err(action.failed(error["code"].as_str().unwrap_or("error"), error["message"].as_str().unwrap_or("failed")))
@@ -280,6 +309,42 @@ mod tests {
         ];
         for (action, argv) in cases {
             assert_eq!(action.argv(), argv, "{action:?}");
+        }
+    }
+
+    #[test]
+    fn copy_id_is_tmux_set_buffer_w_with_the_shown_id() {
+        let ids = ["alpha", "ship", "ship·7f3a", "f-idle", "-dash"]; // a Context, a Plan, a fork, a fork with no Plan, a `-` id
+        for id in ids {
+            let copy = Action::CopyId(id.into());
+            assert_eq!(sequence(&copy), [vec!["set-buffer", "-w", "--", id]], "{id}");
+            assert_eq!(copy.done(&json!(null)), format!("copied {id}"));
+        }
+        let argv = Tmux::new("sock").argv(&Action::CopyId("ship".into()).argv());
+        assert_eq!(argv, ["tmux", "-L", "sock", "-f", "/dev/null", "set-buffer", "-w", "--", "ship"]);
+    }
+
+    #[test]
+    fn new_plan_and_fork_are_followed_by_session_open_of_the_new_session_from_the_reply() {
+        let new = Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay").unwrap(), title: "Pay".into() };
+        let reply = json!({"ok": true, "plan": {"id": "pay", "lead_session": "8d0e"}, "lead": {"session": "8d0e", "pane": "%41"}});
+        let open = new.open_new(&reply).unwrap().unwrap();
+        assert_eq!(
+            [new.argv(), open.argv()],
+            [vec!["plan", "new", "pay", "--context=alpha", "--title=Pay"], vec!["session", "open", "8d0e"]]
+        );
+        let fork = Action::Fork { source: sid("l-ship"), name: "ship (fork)".into() };
+        let reply = json!({"ok": true, "session": {"id": "a41b", "name": "ship (fork)", "plan": "ship", "pane": "%52"}});
+        let open = fork.open_new(&reply).unwrap().unwrap();
+        assert_eq!(
+            [fork.argv(), open.argv()],
+            [vec!["session", "fork", "l-ship", "--name=ship (fork)"], vec!["session", "open", "a41b"]]
+        );
+        // a reply without the id is an error, not a silent skip; the other actions open nothing
+        assert!(new.open_new(&json!({"ok": true})).is_err());
+        assert!(fork.open_new(&json!({"ok": true, "lead": {"session": "8d0e"}})).is_err());
+        for action in [Action::Open(sid("l-ship")), Action::Close(sid("l-ship")), Action::CopyId("x".into())] {
+            assert_eq!(action.open_new(&json!({"ok": true, "session": {"id": "a41b"}})), Ok(None), "{action:?}");
         }
     }
 

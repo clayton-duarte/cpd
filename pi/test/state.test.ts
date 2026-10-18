@@ -152,3 +152,55 @@ test("a /name typed in pi reaches cpd; a name cpd set does not echo back", async
   await waitFor("applied", () => f.pi.notices.length === 1);
   assert.equal(f.argvs().filter((a) => a[1] === "rename").length, 1);
 });
+
+test("a pi dialog (ui_prompt_start..end) reports blocked `dialog`; nested prompts are one blocked period; a stray end changes nothing", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f);
+
+  await f.pi.fire("ui_prompt_end"); // nothing open
+  await settle();
+  assert.deepEqual(stateCalls(f), ["idle"]);
+
+  await f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "custom" });
+  await waitFor("blocked", () => stateCalls(f).length === 2);
+  assert.deepEqual(f.argvs().filter((a) => a[1] === "state")[1], ["session", "state", "blocked", "--label", "dialog", "--session", ID]);
+  await f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "select" });
+  await f.pi.fire("ui_prompt_end");
+  await settle();
+  assert.deepEqual(stateCalls(f), ["idle", "blocked:dialog"], "still blocked after the inner end");
+
+  await f.pi.fire("ui_prompt_end");
+  await waitFor("idle", () => stateCalls(f).length === 3);
+  await f.pi.fire("ui_prompt_end"); // stray, after a full cycle
+  await settle();
+  assert.deepEqual(stateCalls(f), ["idle", "blocked:dialog", "idle"]);
+});
+
+test("a dialog during a turn returns to working when it ends", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f);
+  await f.pi.fire("agent_start");
+  await waitFor("working", () => stateCalls(f).length === 2);
+  await f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "confirm" });
+  await waitFor("blocked", () => stateCalls(f).length === 3);
+  await f.pi.fire("ui_prompt_end");
+  await waitFor("working", () => stateCalls(f).length === 4);
+  assert.deepEqual(stateCalls(f), ["idle", "working", "blocked:dialog", "working"]);
+});
+
+test("a dialog and a herdr:blocked signal are separate reasons", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f);
+  await f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "custom" });
+  await waitFor("dialog", () => stateCalls(f).length === 2);
+  f.pi.events.emit("herdr:blocked", { active: true, label: "ask" });
+  await waitFor("signal", () => stateCalls(f).length === 3);
+  await f.pi.fire("ui_prompt_end");
+  await settle();
+  assert.deepEqual(stateCalls(f), ["idle", "blocked:dialog", "blocked:ask"]);
+  f.pi.events.emit("herdr:blocked", { active: false });
+  await waitFor("idle", () => stateCalls(f).length === 4);
+});

@@ -433,17 +433,67 @@ pub fn create_attempt_worktree(
 /// and when a Plan is `done` (contract §7.2, commands.md §9). Idempotent: what
 /// is already gone is skipped. Run `dir` in the main repo or another worktree.
 pub fn discard_worktree(dir: &Path, path: &Path, branch: &str) -> Result<(), CpdError> {
-    remove(dir, path, branch, true)
+    remove(dir, path, branch, true, true)
 }
 
 /// Removes the worktree and branch of a Merged Attempt (contract §7.2, A9):
 /// `git worktree remove` then `git branch -d`; git refuses the `-d` unless the
 /// branch is merged into HEAD of `lead_worktree`. Idempotent for what is already gone.
 pub fn remove_merged_attempt(lead_worktree: &Path, path: &Path, branch: &str) -> Result<(), CpdError> {
-    remove(lead_worktree, path, branch, false)
+    remove(lead_worktree, path, branch, false, false)
 }
 
-fn remove(dir: &Path, path: &Path, branch: &str, force: bool) -> Result<(), CpdError> {
+/// Why a merged PR's Lead worktree was left alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kept {
+    /// `git status --porcelain` is not empty (untracked files included).
+    Dirty,
+    /// `git rev-list HEAD --not --remotes=origin` is not empty.
+    Unpushed,
+}
+
+impl Kept {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kept::Dirty => "dirty",
+            Kept::Unpushed => "unpushed",
+        }
+    }
+}
+
+/// What [`remove_merged_lead`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeadRemoval {
+    /// The worktree and the local Lead Branch are gone (or were).
+    Removed,
+    /// Nothing was touched.
+    Kept(Kept),
+}
+
+/// Removes the Lead worktree of a merged PR and its local Lead Branch (contract
+/// §7.2, hs-d142). A worktree with uncommitted changes or commits not on
+/// `origin` is kept untouched. Otherwise `git -C <repo> worktree remove` (no
+/// `--force`: git does not count ignored files as changes) and `git -C <repo>
+/// branch -D`, because a squash merge never makes the branch an ancestor.
+/// Idempotent for what is already gone.
+pub fn remove_merged_lead(repo: &Path, path: &Path, branch: &str) -> Result<LeadRemoval, CpdError> {
+    if path.exists() {
+        if !ok(path, &["status", "--porcelain"])?.trim().is_empty() {
+            return Ok(LeadRemoval::Kept(Kept::Dirty));
+        }
+        if !ok(path, &["rev-list", "HEAD", "--not", "--remotes=origin"])?.trim().is_empty() {
+            return Ok(LeadRemoval::Kept(Kept::Unpushed));
+        }
+    } else {
+        // A leftover registration of a directory that is gone would keep the branch checked out.
+        ok(repo, &["worktree", "prune"])?;
+    }
+    remove(repo, path, branch, false, true)?;
+    Ok(LeadRemoval::Removed)
+}
+
+/// `force` is `--force` on the worktree; `delete` is `branch -D` rather than `-d`.
+fn remove(dir: &Path, path: &Path, branch: &str, force: bool, delete: bool) -> Result<(), CpdError> {
     if list(dir)?.iter().any(|w| real(&w.path) == real(path)) {
         let path = path_str(path)?;
         if force {
@@ -453,7 +503,7 @@ fn remove(dir: &Path, path: &Path, branch: &str, force: bool) -> Result<(), CpdE
         }
     }
     if branch_exists(dir, branch)? {
-        ok(dir, &["branch", if force { "-D" } else { "-d" }, branch])?;
+        ok(dir, &["branch", if delete { "-D" } else { "-d" }, branch])?;
     }
     Ok(())
 }

@@ -1,5 +1,6 @@
 //! `scripts/cargo.sh`, which the Gate runs cargo through (R9).
 
+use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -16,12 +17,19 @@ fn fake_cargo(path: &Path, name: &str) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+/// A fake cargo at `path` that prints the `RUSTC_WRAPPER` it sees.
+fn fake_cargo_printing_wrapper(path: &Path) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, "#!/bin/sh\necho RUSTC_WRAPPER=${RUSTC_WRAPPER-unset}\n").unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
 /// Runs the script with only the given environment (and `PATH` = `path_dir`).
-fn run(path_dir: &Path, vars: &[(&str, &Path)]) -> (i32, String, String) {
+fn run<V: AsRef<OsStr>>(path_dir: &Path, vars: &[(&str, V)]) -> (i32, String, String) {
     let mut cmd = Command::new("/bin/sh");
     cmd.arg(script()).args(["build", "--workspace"]).env_clear().env("PATH", path_dir);
     for (key, value) in vars {
-        cmd.env(key, value);
+        cmd.env(key, value.as_ref());
     }
     let out = cmd.output().unwrap();
     (
@@ -76,4 +84,44 @@ fn resolves_cargo_in_order() {
 
     // $CARGO wins over everything.
     assert_eq!(run(&path_dir, &[("HOME", &home), ("CARGO", &explicit)]).1, "explicit build --workspace\n");
+}
+
+/// A PATH dir holding a wrapper-printing fake cargo, and a fake sccache when asked.
+fn wrapper_path(tmp: &Path, with_sccache: bool) -> PathBuf {
+    let path_dir = tmp.join("path");
+    fake_cargo_printing_wrapper(&path_dir.join("cargo"));
+    if with_sccache {
+        fake_cargo(&path_dir.join("sccache"), "sccache");
+    }
+    path_dir
+}
+
+const NO_VARS: &[(&str, &str)] = &[];
+
+#[test]
+fn sccache_on_path_becomes_the_rustc_wrapper() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path_dir = wrapper_path(tmp.path(), true);
+    assert_eq!(run(&path_dir, NO_VARS).1, "RUSTC_WRAPPER=sccache\n");
+}
+
+#[test]
+fn without_sccache_the_rustc_wrapper_stays_unset() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path_dir = wrapper_path(tmp.path(), false);
+    assert_eq!(run(&path_dir, NO_VARS).1, "RUSTC_WRAPPER=unset\n");
+}
+
+#[test]
+fn a_preset_rustc_wrapper_is_kept() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path_dir = wrapper_path(tmp.path(), true);
+    assert_eq!(run(&path_dir, &[("RUSTC_WRAPPER", "other")]).1, "RUSTC_WRAPPER=other\n");
+}
+
+#[test]
+fn an_empty_rustc_wrapper_opts_out() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path_dir = wrapper_path(tmp.path(), true);
+    assert_eq!(run(&path_dir, &[("RUSTC_WRAPPER", "")]).1, "RUSTC_WRAPPER=\n");
 }

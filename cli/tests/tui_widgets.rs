@@ -10,12 +10,12 @@ use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use cpd_tui::palette::{self, Meaning};
-use cpd_tui::read::{self, Widgets};
+use cpd_tui::read::{self, Dot, Widgets};
 use cpd_tui::widgets::{self, Machine, legend};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
-use ratatui::style::Modifier;
+use ratatui::style::{Color, Modifier};
 
 // ---------- fixtures (the store API, as tui_read.rs prepares it) ----------
 
@@ -171,7 +171,10 @@ fn find(buf: &Buffer, needle: &str) -> (u16, u16) {
 
 // ---------- the Dispatch column ----------
 
-const RULE: &str = "──────────────────────────────────────────────";
+/// A section header on the 46-column test pane: `──`, ` <title> `, then `─` to the edge.
+fn header(title: &str) -> String {
+    format!("── {title} {}", "─".repeat(46 - 4 - title.chars().count()))
+}
 
 /// The column on the prepared store as the User sees it: the open pull requests, oldest first.
 fn column(height: u16) -> (Vec<String>, Buffer) {
@@ -219,25 +222,28 @@ fn prs_store(env: &TestEnv) -> Store {
 fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let env = TestEnv::new();
     let w = read::widgets(&mut open(&env), 3, 0).unwrap();
-    let mut terminal = Terminal::new(TestBackend::new(30, 14)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
     let machine = Machine { name: "homeserver".to_owned(), load: ["0.1", "0.2", "0.3"].map(str::to_owned).to_vec() };
     terminal.draw(|f| widgets::draw(f, f.area(), &w, &machine)).unwrap();
     let lines = rows(terminal.backend().buffer());
-    let rule = "─".repeat(30);
-    assert_eq!(lines[..3], [" homeserver", " load 0.1 0.2 0.3", rule.as_str()]);
-    assert_eq!(lines[3], " PRs");
-    assert_eq!(lines[4], " no open PRs");
-    assert_eq!(lines[5..], ["", "", "", rule.as_str(), " git", " (future)", rule.as_str(), " Jira", " (future)"]);
+    let head = |title: &str| format!("── {title} {}", "─".repeat(30 - 4 - title.chars().count()));
+    assert_eq!(lines[..3], ["", " homeserver", " load 0.1 0.2 0.3"]);
+    assert_eq!(lines[3..6], ["", head("PRs").as_str(), ""]);
+    assert_eq!(lines[6], " no open PRs");
+    assert_eq!(lines[7..], ["", "", "", "", "", "", head("git").as_str(), "", " (future)", "", head("Jira").as_str(), "", " (future)"]);
 }
 
 #[test]
 fn the_column_shows_the_machine_the_open_prs_git_and_jira() {
     let (got, _) = column(25);
+    let (prs, git, jira) = (header("PRs"), header("git"), header("Jira"));
     let expected = [
+        "",
         " homeserver",
         " load 3.70 3.05 4.84",
-        RULE,
-        " PRs",
+        "",
+        prs.as_str(),
+        "",
         " acme/repo#7",
         "  open ✗ changes requested  cpd-tui cockpit c…",
         " acme/repo#11",
@@ -250,17 +256,27 @@ fn the_column_shows_the_machine_the_open_prs_git_and_jira() {
         "",
         "",
         "",
+        git.as_str(),
         "",
-        "",
-        "",
-        RULE,
-        " git",
         " (future)",
-        RULE,
-        " Jira",
+        "",
+        jira.as_str(),
+        "",
         " (future)",
     ];
     assert_eq!(got, expected, "\n{}", got.join("\n"));
+}
+
+#[test]
+fn each_section_header_has_a_blank_row_above_and_below() {
+    for height in [20, 25, 29] {
+        let (got, _) = column(height);
+        for title in ["PRs", "git", "Jira"] {
+            let at = got.iter().position(|r| *r == header(title)).unwrap_or_else(|| panic!("{title} at {height}:\n{got:#?}"));
+            assert_eq!(got[at - 1], "", "above {title} at {height}:\n{got:#?}");
+            assert_eq!(got[at + 1], "", "below {title} at {height}:\n{got:#?}");
+        }
+    }
 }
 
 #[test]
@@ -272,9 +288,10 @@ fn three_open_prs_in_two_repos_come_out_oldest_first_in_two_lines_each() {
     assert_eq!(listed, [("acme/web", 4), ("acme/repo", 9), ("acme/repo", 20)]);
     let got = rows(&render(46, 25, &w));
     assert_eq!(
-        got[3..10],
+        got[4..12],
         [
-            " PRs",
+            header("PRs").as_str(),
+            "",
             " acme/web#4",
             "  draft ✗ changes requested  Older web fix",
             " acme/repo#9",
@@ -284,7 +301,7 @@ fn three_open_prs_in_two_repos_come_out_oldest_first_in_two_lines_each() {
         ],
         "{got:#?}"
     );
-    assert_eq!(got[10], "", "nothing else is listed");
+    assert_eq!(got[12], "", "nothing else is listed");
 }
 
 #[test]
@@ -362,13 +379,13 @@ fn no_open_pull_request_says_so() {
     assert!(w.prs.is_empty());
     let buf = render(46, 25, &w);
     let got = rows(&buf);
-    assert_eq!(got[3..5], [" PRs", " no open PRs"], "{got:#?}");
+    assert_eq!(got[4..7], [header("PRs").as_str(), "", " no open PRs"], "{got:#?}");
     assert!(buf[find(&buf, "no open PRs")].modifier.contains(Modifier::DIM));
 }
 
 #[test]
 fn the_column_has_no_engine_slots_escalations_events_or_hint() {
-    let (got, _) = column(25);
+    let (got, _) = column(29);
     let all = got.join("\n");
     for gone in ["Engine", "Slots", "Escalations", "Events", "legend", "quit"] {
         assert!(!all.contains(gone), "{gone}:\n{all}");
@@ -377,18 +394,26 @@ fn the_column_has_no_engine_slots_escalations_events_or_hint() {
 
 #[test]
 fn the_column_takes_every_colour_from_the_palette() {
-    let (_, buf) = column(25);
+    let (_, buf) = column(29);
     let fg = |at: (u16, u16)| buf[at].fg;
     let c = palette::color;
     // The PRs: state and checks.
     assert_eq!(fg(find(&buf, "open")), c(Meaning::Review));
     assert_eq!(fg(find(&buf, "✗")), c(Meaning::Failed));
     assert_eq!(fg(find(&buf, "–")), c(Meaning::Nothing));
-    assert_eq!(fg(find(&buf, RULE)), c(Meaning::Nothing));
+    // The headers: grey, the title a reversed block, not bold.
+    for title in ["PRs", "git", "Jira"] {
+        let (x, y) = find(&buf, &format!("── {title} "));
+        assert_eq!(buf[(x, y)].fg, c(Meaning::Nothing), "{title}");
+        let block = buf[(x + 3, y)].clone();
+        assert_eq!(block.fg, c(Meaning::Nothing), "{title}");
+        assert!(block.modifier.contains(Modifier::REVERSED) && !block.modifier.contains(Modifier::BOLD), "{title}");
+        assert!(!buf[(x, y)].modifier.contains(Modifier::REVERSED), "{title}");
+    }
     let dim = |at: (u16, u16)| buf[at].modifier.contains(Modifier::DIM);
     let bold = |at: (u16, u16)| buf[at].modifier.contains(Modifier::BOLD);
-    // Bold: the machine, the section titles and the pull request names; dim: the title of the PR, `(future)`.
-    for title in ["homeserver", "PRs", "acme/repo#7", "git", "Jira"] {
+    // Bold: the machine and the pull request names (the section titles are reversed, not bold); dim: the title of the PR, `(future)`.
+    for title in ["homeserver", "acme/repo#7"] {
         assert!(bold(find(&buf, title)), "{title}");
         assert!(!dim(find(&buf, title)), "{title}");
     }
@@ -422,8 +447,8 @@ fn a_long_title_is_cut_with_an_ellipsis_first_and_a_line_never_wraps() {
 fn a_short_pane_drops_the_pull_requests_that_do_not_fit_from_the_end() {
     let env = TestEnv::new();
     let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
-    // Beside the 9 rows of the other sections and the PRs title, each pull request takes 2.
-    for (height, listed) in [(9 + 1 + 6, 3), (9 + 1 + 5, 2), (9 + 1 + 2, 1), (9 + 1 + 1, 0)] {
+    // Beside the 14 rows of the blank row, the machine, the headers and their blank rows, each pull request takes 2.
+    for (height, listed) in [(14 + 6, 3), (14 + 5, 2), (14 + 2, 1), (14 + 1, 0)] {
         let got = rows(&render(46, height, &w)).join("\n");
         let shown = ["acme/web#4", "acme/repo#9", "acme/repo#20"].iter().filter(|n| got.contains(**n)).count();
         assert_eq!(shown, listed, "height {height}:\n{got}");
@@ -462,7 +487,7 @@ fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
         assert!(pill_at > x, "{name}: the pill follows the name");
         assert_eq!(buf[(pill_at, y)].bg, palette::color(m), "{name}: pill");
         assert_eq!(buf[(pill_at, y)].fg, palette::pill(m).fg.unwrap(), "{name}: pill text");
-        assert!(text.contains(" key S1 "), "{name}: {text}");
+        assert!(text.contains(" key │S1 "), "{name}: {text}");
         let counter = text.chars().collect::<Vec<_>>().iter().rposition(|c| *c == '3').unwrap() as u16;
         assert_eq!(buf[(counter, y)].fg, palette::color(palette::job_status(status, merging).1), "{name}: counter");
     }
@@ -472,15 +497,34 @@ fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
 }
 
 #[test]
-fn the_tree_dots_are_listed_for_every_phase() {
+fn the_session_dots_are_listed_in_their_colours() {
     let buf = legend_buffer();
-    let dots = find(&buf, "Context dots").1;
-    for (name, phase) in palette::PHASE_LEGEND {
-        let (x, y) = find_after(&buf, dots, &format!(" {name}"));
-        assert_eq!((buf[(x - 3, y)].symbol(), buf[(x - 1, y)].symbol()), ("●", "○"), "{name}");
-        let want = palette::color(palette::phase(phase));
-        assert_eq!((buf[(x - 3, y)].fg, buf[(x - 1, y)].fg), (want, want), "{name}");
+    let dots = find(&buf, "Session dots").1;
+    // The glyph column is as wide as the four spinner frames, then two cells of spacing.
+    let glyph_at = |text: &str| {
+        let (x, y) = find_after(&buf, dots, text);
+        (x - 6, y)
+    };
+    let needs_you = glyph_at("the Session needs you");
+    assert_eq!(buf[needs_you].symbol(), "●");
+    let working = glyph_at("the Lead is working");
+    let frames: String = (0..4).map(|i| buf[(working.0 + i, working.1)].symbol().to_string()).collect();
+    assert_eq!(frames, "◐◓◑◒");
+    for (text, glyph, dot) in [
+        ("idle, nothing needed", "○", Dot::Idle),
+        ("pi stopped", "◌", Dot::Stopped),
+        ("red:", "●", Dot::Red),
+        ("yellow:", "●", Dot::Yellow),
+        ("magenta:", "●", Dot::Magenta),
+        ("white:", "●", Dot::White),
+    ] {
+        let cell = &buf[glyph_at(text)];
+        let want = palette::dot_span(dot, 0, false);
+        assert_eq!(cell.symbol(), glyph, "{text}");
+        assert_eq!(cell.symbol(), want.content, "{text}");
+        assert_eq!(cell.fg, want.style.fg.unwrap_or(Color::Reset), "{text}");
     }
+    find_after(&buf, dots, "red > yellow > magenta > white > ◐ > ○ > ◌");
 }
 
 #[test]
