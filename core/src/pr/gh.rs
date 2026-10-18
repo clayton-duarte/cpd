@@ -240,10 +240,15 @@ macro_rules! pr_fields {
     };
 }
 
-/// The poll query: the User's open pull requests, oldest first, at most 100. GitHub
-/// ignores an unknown search qualifier and answers 0 PRs, so a test pins this text.
+/// The poll query, two searches in one call, each the oldest 100 open pull
+/// requests: the User's (`search`) and those that request the User's review
+/// (`reviewRequests`). GitHub ignores an unknown search qualifier and answers 0
+/// PRs, so a test pins this text.
 pub const SEARCH_QUERY: &str = concat!(
     "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { ",
+    "issueCount nodes { ... on PullRequest { ",
+    pr_fields!(),
+    " } } } reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { ",
     "issueCount nodes { ... on PullRequest { ",
     pr_fields!(),
     " } } } rateLimit { cost remaining resetAt } }"
@@ -267,6 +272,24 @@ pub struct PolledPr {
     pub merged_at: Option<String>,
 }
 
+/// Which of the poll's two searches listed a pull request: what the row's
+/// `authored` and `review_requested` hold. A pull request only a lookup found
+/// (merged or closed, so in neither open search) has neither.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Membership {
+    /// In the `author:@me` search.
+    pub authored: bool,
+    /// In the `review-requested:@me` search.
+    pub review_requested: bool,
+}
+
+/// A pull request with the searches that listed it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Listed {
+    pub pr: PolledPr,
+    pub membership: Membership,
+}
+
 /// GitHub's rate limit after the call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rate {
@@ -275,11 +298,13 @@ pub struct Rate {
     pub reset_at: String,
 }
 
-/// The first page of the search: `issue_count` is the total GitHub matched.
+/// The first page of both searches: `issue_count` is the total GitHub matched by
+/// the two. `prs` holds each pull request once: one in both searches has both
+/// memberships.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Search {
     pub issue_count: u32,
-    pub prs: Vec<PolledPr>,
+    pub prs: Vec<Listed>,
     pub rate: Rate,
 }
 
@@ -300,6 +325,8 @@ struct GqlError {
 #[derive(Deserialize)]
 struct RawSearchData {
     search: Option<RawSearch>,
+    #[serde(rename = "reviewRequests")]
+    review_requests: Option<RawSearch>,
     #[serde(rename = "rateLimit")]
     rate_limit: Option<RawRate>,
 }
@@ -432,7 +459,6 @@ fn graphql(cwd: &Path, query: &str) -> Result<(Vec<String>, Output), CpdError> {
 
 /// The User's open pull requests (`SEARCH_QUERY`), 15 s at most. A response with
 /// `errors`, without `data` or without JSON is `gh_failed`, never "no PRs".
-#[allow(dead_code)] // Job `pr-poll2` calls it.
 pub fn search_open(cwd: &Path) -> Result<Search, CpdError> {
     let (args, out) = graphql(cwd, SEARCH_QUERY)?;
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -444,11 +470,30 @@ fn parse_search(reply: &Reply) -> Result<Search, CpdError> {
     if let Some(first) = errors.first() {
         return Err(reply.fail(format!("gh api graphql answered with errors: {}", first.message.as_deref().unwrap_or("(no message)"))));
     }
-    let (Some(search), Some(rate)) = (data.search, data.rate_limit) else {
-        return Err(reply.fail("gh api graphql answered without search or rateLimit.".to_owned()));
+    let (Some(authored), Some(requested), Some(rate)) = (data.search, data.review_requests, data.rate_limit) else {
+        return Err(reply.fail("gh api graphql answered without search, reviewRequests or rateLimit.".to_owned()));
     };
-    let prs = search.nodes.into_iter().map(|raw| reply.polled(raw)).collect::<Result<Vec<_>, _>>()?;
-    Ok(Search { issue_count: search.issue_count, prs, rate: Rate { cost: rate.cost, remaining: rate.remaining, reset_at: rate.reset_at } })
+    let issue_count = authored.issue_count + requested.issue_count;
+    let mut prs: Vec<Listed> = Vec::new();
+    for (nodes, is_authored) in [(authored.nodes, true), (requested.nodes, false)] {
+        for raw in nodes {
+            let pr = reply.polled(raw)?;
+            let at = match prs.iter().position(|l| (&l.pr.repo, l.pr.number) == (&pr.repo, pr.number)) {
+                Some(at) => at,
+                None => {
+                    prs.push(Listed { pr, membership: Membership::default() });
+                    prs.len() - 1
+                }
+            };
+            let membership = &mut prs[at].membership;
+            if is_authored {
+                membership.authored = true;
+            } else {
+                membership.review_requested = true;
+            }
+        }
+    }
+    Ok(Search { issue_count, prs, rate: Rate { cost: rate.cost, remaining: rate.remaining, reset_at: rate.reset_at } })
 }
 
 /// `owner/name` with each part of `[A-Za-z0-9_.-]+`: nothing else reaches a query text.
@@ -461,7 +506,6 @@ fn repo_parts(repo: &str) -> Option<(&str, &str)> {
 /// most; `None` for one that GitHub cannot find (deleted, or no access). `gh`
 /// exits 1 on such an alias: stdout is parsed whatever the exit, and a call
 /// without `data` is `gh_failed`. An empty `prs` makes no call.
-#[allow(dead_code)] // Job `pr-poll2` calls it.
 pub fn lookup(cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Option<PolledPr>>, CpdError> {
     if prs.is_empty() {
         return Ok(Vec::new());

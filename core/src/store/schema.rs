@@ -29,6 +29,7 @@ pub(super) const MIGRATIONS: &[Migration] = &[
     |conn, _| migration_10(conn),
     |conn, _| migration_11(conn),
     |conn, _| migration_12(conn),
+    |conn, _| migration_13(conn),
 ];
 
 /// The first migration that imports the old git stores of the Contexts; the
@@ -50,6 +51,7 @@ pub(super) const SCHEMA_HASHES: &[&str] = &[
     "2f8e238fbc3b0d5f768fe3c5e6c118b26eda5581d93841449563979a51144168",
     "d2623567062d0367ddcf3dcd0b96c6d7e2b45d447e3b841f77d0249129736277",
     "ae8ea2361df62ed1a89912b6e39227f4afd043475f27ac7faf78ce847e208cbb",
+    "0000",
 ];
 
 const _: () = assert!(SCHEMA_HASHES.len() == MIGRATIONS.len(), "one schema hash per migration");
@@ -292,6 +294,15 @@ fn migration_11(conn: &Connection) -> Result<()> {
 fn migration_12(conn: &Connection) -> Result<()> {
     conn.execute_batch(include_str!("migrations/0012.sql"))?;
     create_history_triggers(conn, "inbox_items", true)
+}
+
+/// The PR poll's Inbox kinds (§4.5 migration 0013, hs-d165): `authored` and
+/// `review_requested` on `pull_requests`, whose history triggers are written again
+/// to list every column (`0013.sql` drops them and writes `_hist_del`; the other
+/// two are generated).
+fn migration_13(conn: &Connection) -> Result<()> {
+    conn.execute_batch(include_str!("migrations/0013.sql"))?;
+    create_history_triggers(conn, "pull_requests", false)
 }
 
 /// §4.5 step 2: one PR per Plan, its per-repo columns kept as stored, its
