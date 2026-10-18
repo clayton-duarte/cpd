@@ -71,7 +71,7 @@ fn fx() -> Fx {
     .unwrap();
     // E5 runs `cpd pr poll` from `PATH`: the one under test, and a `gh` that finds no pull requests.
     env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
-    env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
+    env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
     let out = env.tmux(&["new-session", "-d", "-s", "x", "-P", "-F", "#{pane_id}", "sleep", "600"]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let pane = String::from_utf8(out.stdout).unwrap().trim().to_owned();

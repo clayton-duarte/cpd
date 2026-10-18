@@ -114,7 +114,7 @@ struct Fx {
 }
 
 /// What the fake `gh` answers to the PR poller's search when a test does not care: no pull requests.
-const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#;
+const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#;
 
 fn fx(config_extra: &str) -> Fx {
     let fx = fx_bare(config_extra);

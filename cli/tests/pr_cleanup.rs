@@ -42,7 +42,7 @@ fn node(number: i64, state: &str) -> String {
 
 fn search_answer(nodes: &[String]) -> String {
     format!(
-        r#"{{"data":{{"search":{{"issueCount":{},"nodes":[{}]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}}}}"#,
+        r#"{{"data":{{"search":{{"issueCount":{},"nodes":[{}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}}}}"#,
         nodes.len(),
         nodes.join(",")
     )

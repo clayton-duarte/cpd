@@ -47,7 +47,7 @@ const WEB_URL: &str = "https://github.com/acme/web/pull/813";
 
 const TITLE: &str = "Add the payment webhook";
 
-const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#;
+const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#;
 
 fn plan() -> PlanId {
     PlanId::parse("pay").unwrap()
@@ -761,13 +761,21 @@ fn pay(state: &str, review: Option<&str>, rollup: Option<&str>) -> String {
 
 const RESET: &str = "2026-10-20T11:00:00Z";
 
-/// The search's answer: `nodes`, and a rate limit with `remaining` requests.
-fn search_answer(nodes: &[String], remaining: u32) -> String {
+/// The search's answer: `nodes` of the User's own pull requests, `requested` of those that ask for their
+/// review, and a rate limit with `remaining` requests.
+fn search_answer_with(nodes: &[String], requested: &[String], remaining: u32) -> String {
     format!(
-        r#"{{"data":{{"search":{{"issueCount":{},"nodes":[{}]}},"rateLimit":{{"cost":1,"remaining":{remaining},"resetAt":"{RESET}"}}}}}}"#,
+        r#"{{"data":{{"search":{{"issueCount":{},"nodes":[{}]}},"reviewRequests":{{"issueCount":{},"nodes":[{}]}},"rateLimit":{{"cost":1,"remaining":{remaining},"resetAt":"{RESET}"}}}}}}"#,
         nodes.len(),
-        nodes.join(",")
+        nodes.join(","),
+        requested.len(),
+        requested.join(",")
     )
+}
+
+/// The search's answer with no review request.
+fn search_answer(nodes: &[String], remaining: u32) -> String {
+    search_answer_with(nodes, &[], remaining)
 }
 
 /// The lookup's answer, one alias per entry; `None` is an alias GitHub cannot find.
@@ -804,6 +812,22 @@ impl Fx {
     /// What the fake `gh`'s search answers.
     fn search(&self, nodes: &[String]) {
         self.gh("search.json", &search_answer(nodes, 4987));
+    }
+
+    /// What the fake `gh`'s search answers: `authored` in the `author:@me` search, `requested` in the
+    /// `review-requested:@me` one.
+    fn search_both(&self, authored: &[String], requested: &[String]) {
+        self.gh("search.json", &search_answer_with(authored, requested, 4987));
+    }
+
+    /// `(repo, number, authored, review_requested)` of every row of `pull_requests`, in order.
+    fn memberships(&self) -> Vec<(String, i64, bool, bool)> {
+        self.store()
+            .read(|c| {
+                let mut stmt = c.prepare("SELECT repo, number, authored, review_requested FROM pull_requests ORDER BY id")?;
+                Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?)
+            })
+            .unwrap()
     }
 
     /// What the fake `gh`'s lookup answers.
@@ -869,6 +893,86 @@ fn the_first_poll_inserts_every_pull_request_and_appends_nothing_for_unowned_one
     assert_eq!(calls.len(), 1, "{calls:?}");
     assert!(is_search(&calls[0]), "{calls:?}");
     assert!(calls[0][3].ends_with("rateLimit { cost remaining resetAt } }"), "{}", calls[0][3]);
+}
+
+#[test]
+fn a_review_request_is_stored_as_not_authored_and_deleted_when_it_leaves_the_search() {
+    let fx = fx("dispatch");
+    fx.search_both(&[node("acme/pay", 901, "OPEN", None, None)], &[node("acme/web", 902, "OPEN", Some("APPROVED"), Some("FAILURE"))]);
+    let events = fx.event_count();
+
+    let out = fx.poll_all();
+
+    assert_eq!((out["polled"].clone(), out["changed"].as_array().unwrap().len(), out["removed"].clone()), (json!(2), 2, json!(0)));
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, false), ("acme/web".to_owned(), 902, false, true)]);
+    assert_eq!(fx.event_count(), events, "no PR owns either: no Event, not even for a review request with failed checks");
+    let calls = fx.gh_calls();
+    assert_eq!(calls.len(), 1, "both searches in one gh call: {calls:?}");
+    assert!(is_search(&calls[0]) && calls[0][3].contains("review-requested:@me is:pr is:open archived:false"), "{calls:?}");
+
+    // The same answer: nothing is written.
+    let txns = fx.txns();
+    assert_eq!(fx.poll_all()["changed"], json!([]));
+    assert_eq!(fx.txns(), txns);
+
+    // It leaves the review-request search: its row is deleted, the authored one stays.
+    fx.search_both(&[node("acme/pay", 901, "OPEN", None, None)], &[]);
+    let out = fx.poll_all();
+    assert_eq!((out["removed"].clone(), out["changed"].clone()), (json!(1), json!([])));
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, false)]);
+    assert_eq!(fx.gh_calls().len(), 4, "one call per poll");
+}
+
+#[test]
+fn a_pull_request_in_both_searches_is_authored_and_review_requested_and_each_flag_clears_when_it_leaves_its_search() {
+    let fx = fx("dispatch");
+    let mine = node("acme/pay", 901, "OPEN", None, None);
+    fx.search_both(&[mine.clone()], &[mine.clone()]);
+    let out = fx.poll_all();
+    assert_eq!((out["polled"].clone(), out["changed"].as_array().unwrap().len()), (json!(1), 1));
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, true)]);
+
+    // Left the author search only: `authored` clears, the row is kept and reported as changed.
+    fx.search_both(&[], &[mine.clone()]);
+    let out = fx.poll_all();
+    assert_eq!((out["changed"].as_array().unwrap().len(), out["removed"].clone()), (1, json!(0)));
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, false, true)]);
+
+    // Back in the author search only: `review_requested` clears.
+    fx.search_both(&[mine.clone()], &[]);
+    fx.poll_all();
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, false)]);
+
+    // In neither: no PR points to it, so it is deleted.
+    fx.search_both(&[], &[]);
+    assert_eq!(fx.poll_all()["removed"], 1);
+    assert!(fx.memberships().is_empty());
+}
+
+#[test]
+fn a_pr_opened_by_cpd_is_authored_and_a_row_a_pr_points_to_stays_while_in_no_search() {
+    let fx = fx("deploy");
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 812, true, false)]);
+    fx.search_both(&[], &[]);
+    fx.lookup(&[Some(pay("OPEN", None, None))]);
+    fx.poll();
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 812, true, false)], "a lookup answering open changes nothing");
+}
+
+#[test]
+fn a_poll_reply_without_the_review_request_search_is_gh_failed_and_writes_nothing() {
+    let fx = fx("deploy");
+    let (txns, events) = (fx.txns(), fx.event_count());
+    fx.gh(
+        "search.json",
+        &search_answer(&[pay("OPEN", None, Some("FAILURE"))], 4987).replace(r#""reviewRequests":{"issueCount":0,"nodes":[]},"#, ""),
+    );
+
+    let run = fx.pr("poll");
+
+    assert_eq!(code(&run), ("gh_failed".into(), 1));
+    assert!(run.error()["message"].as_str().unwrap().contains("reviewRequests"), "{}", run.error());
+    assert_eq!((fx.txns(), fx.event_count()), (txns, events));
 }
 
 #[test]
