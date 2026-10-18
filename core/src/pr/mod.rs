@@ -87,8 +87,11 @@ pub struct AddArgs {
     #[arg(long, value_name = "branch")]
     base: Option<String>,
     /// PRs of the Plan that must be merged before this one starts, comma-separated
-    #[arg(long, value_name = "k1,k2", value_delimiter = ',')]
+    #[arg(long, value_name = "k1,k2", value_delimiter = ',', conflicts_with = "no_needs")]
     needs: Vec<PrKey>,
+    /// No needs, even on a reopened Plan (default there: every merged PR of the Plan)
+    #[arg(long = "no-needs")]
+    no_needs: bool,
     #[command(flatten)]
     plan: PlanArg,
 }
