@@ -9,7 +9,9 @@ use std::path::PathBuf;
 
 use common::{Run, TestEnv};
 use cpd_core::config::Config;
+use cpd_core::context::{By, Draft, Record, digest, inforce};
 use cpd_core::home::CpdHome;
+use cpd_core::ids::{RecordId, RecordKind};
 use cpd_core::store::Store;
 use serde_json::{Value, json};
 
@@ -803,4 +805,127 @@ fn archive_and_unarchive_of_an_unknown_context_are_refused() {
     let env = hs_tmux();
     refused(env.cpd(&["context", "archive", "nope"]), 4, "context_not_found");
     refused(env.cpd(&["context", "unarchive", "nope"]), 4, "context_not_found");
+}
+
+// ---- context show --digest (contract §4.6, commands.md §3.3) --------------
+
+fn digest_dir(env: &TestEnv) -> PathBuf {
+    let (home, _, _) = library(env);
+    home.context_digest_dir(&CTX.parse().unwrap())
+}
+
+#[test]
+fn show_digest_without_a_digest_is_null_and_not_an_error() {
+    let env = hs();
+    new_context(&env);
+    env.cpd(&["context", "note", "A note.", "--context", CTX]).ok();
+    let out = env.cpd(&["context", "show", "--context", CTX, "--digest"]).ok();
+    assert_eq!(out["context"], json!({"id": CTX, "title": "Building cpd", "jira": null}));
+    assert_eq!(out["digest"], Value::Null);
+    assert_eq!(out["markdown"], Value::Null);
+    assert!(out.get("records").is_none(), "no record is read: {out}");
+    assert!(!digest_dir(&env).exists(), "reading writes nothing");
+}
+
+#[test]
+fn show_digest_prints_the_latest_digest_file() {
+    let env = hs();
+    new_context(&env);
+    let dir = digest_dir(&env);
+    fs::create_dir_all(&dir).unwrap();
+    let text = "# Building cpd: digest\n\nOne engine per machine [hs-d7] — é.\n";
+    for (name, body) in [("9.md", "old"), ("10.md", text), ("11.md.tmp", "not yet"), ("prompt.md", "p")] {
+        fs::write(dir.join(name), body).unwrap();
+    }
+    let out = env.cpd(&["context", "show", "--context", CTX, "--digest"]).ok();
+    assert_eq!(out["digest"], json!({"upto_seq": 10, "file": dir.join("10.md"), "bytes": text.len()}));
+    assert_eq!(out["markdown"], text);
+    assert!(out.get("records").is_none());
+}
+
+#[test]
+fn show_digest_is_exclusive_with_since_and_record_and_needs_a_known_context() {
+    let env = hs();
+    new_context(&env);
+    refused(env.cpd(&["context", "show", "--context", CTX, "--digest", "--since", "1"]), 2, "usage");
+    refused(env.cpd(&["context", "show", "--context", CTX, "--digest", "--record", "hs-d1"]), 2, "usage");
+    refused(env.cpd(&["context", "show", "--context", "nope", "--digest"]), 4, "context_not_found");
+}
+
+// ---- nothing is lost (contract §4.6, D7) ------------------------------------
+
+/// The record ids `docs/research/unplanned.md` lists as decided work no Plan
+/// holds: the ids in the parentheses after each MISSING item's title, and the
+/// ones in the Records column of "Owned by a record only".
+fn unplanned_ids() -> Vec<RecordId> {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/research/unplanned.md");
+    let text = fs::read_to_string(path).unwrap();
+    let section = |title: &str| {
+        let body = text.split(&format!("\n## {title}")).nth(1).unwrap_or_else(|| panic!("no section {title}"));
+        body.split("\n## ").next().unwrap().to_owned()
+    };
+    let mut ids: Vec<RecordId> = Vec::new();
+    let mut take = |from: &str| {
+        let mut rest = from;
+        while let Some(at) = rest.find("hs-") {
+            rest = &rest[at..];
+            let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).unwrap_or(rest.len());
+            if let Ok(id) = RecordId::parse(&rest[..end]) {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+            rest = &rest[end..];
+        }
+    };
+    for line in section("MISSING").lines().filter(|l| l.starts_with("**")) {
+        take(&line[line.rfind('(').expect("an item's title ends with its records in parentheses")..]);
+    }
+    for row in section("Owned by a record only").lines().filter(|l| l.starts_with("| ") && !l.starts_with("| Work") && !l.starts_with("|---")) {
+        take(row.split('|').nth(2).expect("a Records column"));
+    }
+    ids
+}
+
+fn record_of(id: &RecordId) -> Record {
+    let draft = match id.kind() {
+        RecordKind::Decision => Draft::Decision { supersedes: None },
+        RecordKind::Note => Draft::Note,
+        RecordKind::Question => Draft::Question,
+        RecordKind::Answer => Draft::Answer { question: "hs-q1".parse().unwrap() },
+        kind => panic!("{id} is a {kind:?} record, which is never in force"),
+    };
+    Record { id: id.clone(), at: "2026-10-18T05:53:00.000Z".into(), by: By { session: None, plan: None }, text: id.to_string(), draft }
+}
+
+#[test]
+fn a_digest_missing_one_of_the_unplanned_records_is_rejected() {
+    let wanted = unplanned_ids();
+    for known in ["hs-d62", "hs-d194", "hs-n127", "hs-n107", "hs-d163"] {
+        assert!(wanted.contains(&known.parse().unwrap()), "{known} is in unplanned.md: {wanted:?}");
+    }
+    assert!(wanted.len() >= 30, "{wanted:?}");
+
+    // The Context holds each of them, in force.
+    let records: Vec<(i64, Record)> = wanted.iter().enumerate().map(|(i, id)| (i as i64 + 1, record_of(id))).collect();
+    let as_of = records.len() as i64;
+    let in_force: Vec<RecordId> = inforce::in_force(&records, as_of).into_iter().map(|(_, r)| r.id.clone()).collect();
+    assert_eq!(in_force, wanted);
+
+    let digest_of = |ids: &[&RecordId]| ids.iter().map(|id| format!("- Statement [{id}].\n")).collect::<String>();
+    let all: Vec<&RecordId> = wanted.iter().collect();
+    assert_eq!(digest::validate(digest_of(&all).as_bytes(), &in_force, digest::LIMIT), Ok(()));
+
+    for left_out in &wanted {
+        let some: Vec<&RecordId> = wanted.iter().filter(|id| *id != left_out).collect();
+        let invalid = digest::validate(digest_of(&some).as_bytes(), &in_force, digest::LIMIT).unwrap_err();
+        assert_eq!(invalid.missing, [left_out.clone()], "leaving out {left_out}");
+        assert!(invalid.stray.is_empty());
+    }
+
+    // Citing a record that is no longer in force is refused too.
+    let mut with_stray = digest_of(&all);
+    with_stray.push_str("- Old [hs-d1].\n");
+    let invalid = digest::validate(with_stray.as_bytes(), &in_force, digest::LIMIT).unwrap_err();
+    assert_eq!((invalid.missing.is_empty(), invalid.stray), (true, vec!["hs-d1".parse().unwrap()]));
 }

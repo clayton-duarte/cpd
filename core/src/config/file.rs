@@ -40,6 +40,8 @@ pub struct Config {
     pub lead_tier: Tier,
     /// The Tier of a Context's Manager (§3.1, hs-d133).
     pub manager_tier: Tier,
+    /// The Tier of the distiller, the pi run that writes a Context digest (§4.6, hs-d194).
+    pub context_distill_tier: Tier,
     pub lead_pi_packages: Vec<String>,
     /// `""` is beside the binary: see [`Config::pi_adapter_dir`].
     pub pi_adapter: String,
@@ -196,6 +198,9 @@ impl Config {
         let manager_tier = r.get("manager_tier", Tier::parse("O5").expect("a valid Tier"), |v| {
             Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
         })?;
+        let context_distill_tier = r.get("context_distill_tier", Tier::parse("S2").expect("a valid Tier"), |v| {
+            Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
+        })?;
         let lead_pi_packages = r.get(
             "lead_pi_packages",
             DEFAULT_LEAD_PI_PACKAGES.map(str::to_owned).to_vec(),
@@ -257,6 +262,7 @@ impl Config {
             retry_cap,
             lead_tier,
             manager_tier,
+            context_distill_tier,
             lead_pi_packages,
             pi_adapter,
             plannotator_ports,

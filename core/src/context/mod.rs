@@ -10,6 +10,8 @@
 
 mod archive;
 mod contexts;
+pub mod digest;
+pub mod inforce;
 pub(crate) mod legacy;
 mod manager;
 mod pending;
@@ -160,6 +162,9 @@ pub struct ShowArgs {
     /// Print this one record in full
     #[arg(long, value_name = "id", conflicts_with = "since")]
     record: Option<RecordId>,
+    /// Print the Context's latest digest, and no record
+    #[arg(long, conflicts_with_all = ["since", "record"])]
+    digest: bool,
 }
 
 #[derive(Args, Debug)]
@@ -320,8 +325,11 @@ fn list() -> Result<Output, CpdError> {
 
 /// `context show` (§3.3).
 fn show(args: ShowArgs) -> Result<Output, CpdError> {
-    let (_, config, mut store) = open()?;
+    let (home, config, mut store) = open()?;
     let id = args.select.resolve(&mut store)?;
+    if args.digest {
+        return show_digest(&home, &mut store, &id);
+    }
     if let Some(record) = &args.record {
         return show_record(&mut store, &id, record);
     }
@@ -351,6 +359,17 @@ fn show(args: ShowArgs) -> Result<Output, CpdError> {
         "context": {"id": row.id, "title": row.title, "jira": row.jira},
         "records": records,
         "markdown": markdown,
+    })))
+}
+
+/// `context show --digest` (§3.3): the Context's latest digest file, and no record.
+fn show_digest(home: &CpdHome, store: &mut Store, context: &ContextId) -> Result<Output, CpdError> {
+    let row = store.read(|conn| ContextRow::require(conn, context))?;
+    let digest = digest::latest(home, context)?;
+    Ok(Output::success(json!({
+        "context": {"id": row.id, "title": row.title, "jira": row.jira},
+        "digest": digest.as_ref().map(|d| json!({"upto_seq": d.upto_seq, "file": d.file, "bytes": d.text.len()})),
+        "markdown": digest.map(|d| d.text),
     })))
 }
 
