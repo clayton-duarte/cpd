@@ -13,6 +13,7 @@
 mod chat;
 mod cockpit;
 mod history;
+pub mod link;
 pub mod logs;
 pub mod palette;
 mod plan;
