@@ -60,8 +60,8 @@ Base `e8ad70d` (main at the Plan's start; `origin/main` has since landed Plan de
 
 ### tests-build-W3: a killed test run leaves tmux servers, processes and temp directories
 
-- **What.** `TestEnv` cleans up in `Drop` (`cli/tests/common/mod.rs:262-266`: `tmux kill-server`; `TempDir` removes the directory). A test process that is SIGKILLed or timed out (a Worker's Attempt ends) runs no `Drop`. Observed now: one private tmux server and its pane processes survive for hours, and 51 `/tmp/cpd-test-*` directories (about 23 MB) are left from four killed runs. `docs/research/teardown.md` recorded `/tmp/cpd-test-*` as 0 ("TestEnv removes its directory"): that holds only for runs that end normally.
-- **Where.** `cli/tests/common/mod.rs:262-266` (the only teardown); `cli/tests/common/mod.rs:58-60` (the socket name carries the test process pid, `cpdt-<pid>-<n>`).
+- **What.** `TestEnv` cleans up in `Drop` (`cli/tests/common/mod.rs:262-269`: `tmux kill-server`; `TempDir` removes the directory). A test process that is SIGKILLed or timed out (a Worker's Attempt ends) runs no `Drop`. Observed now: one private tmux server and its pane processes survive for hours, and 51 `/tmp/cpd-test-*` directories (about 23 MB) are left from four killed runs. `docs/research/teardown.md` recorded `/tmp/cpd-test-*` as 0 ("TestEnv removes its directory"): that holds only for runs that end normally.
+- **Where.** `cli/tests/common/mod.rs:262-269` (the only teardown); `cli/tests/common/mod.rs:79` (the socket name carries the test process pid, `cpdt-<pid>-<n>`).
 - **Evidence.** Read-only observation, nothing signalled:
   ```
   $ ps -eo pid,ppid,lstart,etime,args | grep 'tmux -L cpdt-'      # excluding servers of tests running now
@@ -248,7 +248,7 @@ The three `driver_reload` tests with "in-suite" 7-11 s and "alone" 1.3-2.2 s are
 
 ### tests-build-F6: the core unit-test time is one test
 
-- **What.** `migrating_an_empty_database_gives_every_versions_schema_hash` creates and migrates one database per schema version (`SCHEMA_HASHES`, 9+ versions) under a temp dir, 3.3 s of the core lib's 7.8 s.
+- **What.** `migrating_an_empty_database_gives_every_versions_schema_hash` creates and migrates one database per schema version (one per entry of `SCHEMA_HASHES`) under a temp dir, 3.3 s of the core lib's 7.8 s.
 - **Where.** `core/src/store/schema.rs:282-290`.
 - **Evidence.** `--exact` ×5 alone: 3.78, 3.60, 3.30, 2.23, 2.66 s; in the suite 6.13 s. `/tmp` is ext4 on NVMe (`df -T /tmp`), not tmpfs. That the cost is `fsync` per migration is **unverified** (guess: each `at_version` commits per migration on a durable journal).
 - **Impact.** Small: it sets the length of the core unit run, which cargo runs before the 40 integration binaries.
