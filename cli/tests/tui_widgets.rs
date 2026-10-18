@@ -404,6 +404,25 @@ fn closed_and_merged_pull_requests_are_not_listed() {
 }
 
 #[test]
+fn an_open_review_request_is_not_listed_but_one_that_is_also_authored_is() {
+    let env = TestEnv::new();
+    let mut store = prs_store(&env);
+    let mut s = pull_request("acme/web", 31, "A colleague change", false, "open", "none", "passed", "2026-01-06T00:00:00.000Z");
+    s += &pull_request("acme/web", 32, "My own, and asked of me", false, "open", "none", "passed", "2026-01-07T00:00:00.000Z");
+    s += "UPDATE pull_requests SET authored = 0, review_requested = 1 WHERE number = 31;
+          UPDATE pull_requests SET review_requested = 1 WHERE number = 32;";
+    sql(&mut store, &s);
+
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+
+    let listed: Vec<(&str, i64)> = w.prs.iter().map(|p| (p.repo.as_str(), p.number)).collect();
+    assert!(listed.contains(&("acme/web", 32)), "{listed:?}");
+    assert!(listed.iter().all(|(_, n)| *n != 31), "{listed:?}");
+    let got = rows(&render(46, 30, &w)).join("\n");
+    assert!(got.contains("acme/web#32") && !got.contains("acme/web#31"), "{got}");
+}
+
+#[test]
 fn a_plan_without_a_pr_is_not_listed_and_no_label_is_drawn() {
     let (got, _) = column(25);
     let got = got.join("\n");
