@@ -65,6 +65,8 @@ Exit codes (kept from cpd 1 §2):
 | `3` | `push_rejected` (hs-d139, §7.6), `session_ambiguous` (hs-a3, commands §1.3), `pr_exists`, `pr_in_use`, `pr_empty`, `pr_locked`, `pr_not_ready`, `pr_ended`, `needs_other_pr`, `branch_exists` (R34, §3.8), `context_exists`, `question_answered`, `not_a_git_repo`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `review_commits`, `review_missing`, `job_merged`, `job_not_failed`, `job_not_ready`, `attempt_not_running`, `no_port`, `jobs_not_done`, `gate_failed`, `rebase_conflict`, `not_a_lead`, `grounded_lead`, `no_cockpit`, `wrong_pane`, `in_chat_slot`, `cursor_ahead`, `not_a_terminal` |
 | `4` | `base_not_found`, `pr_not_found` (R34) |
 
+**Adapter-only codes.** `protocol_mismatch` is never a command's failure and never an `error` Event's code: it appears only in the pi adapter's message to its Session (`cpd adapter: …`, commands.md §15.2), when `cpd --version`'s `protocol` is not the number the adapter was built for (§5.2 "The protocol number"). It has no exit code.
+
 ### 1.3 Conventions every command follows
 
 - **Selecting a Plan.** `--plan <id>`, else the environment variable `CPD_PLAN`, else usage error `plan_required` (exit 2). cpd sets `CPD_PLAN` in every pane it starts for a Plan (§6.5). This replaces cpd 1's `--wf` / `CPD_WF`.
@@ -1337,6 +1339,8 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `session-archived` | `session archive` or `unarchive`, or a cascade, for each Session | context, plan?, session | `{archived: bool}` |
 | `watch-started`, `watch-stopped` | the engine starts or stops | (none) | `{pid}` |
 | `error` | `watch`, a driver or a sync hit an unexpected failure; codes include `lead_worktree_stale`, `merge_check_failed`, `push_failed` (a failed push of a Lead Branch at a PR's start or at a merge, §7.2, §7.4; `details.pr` names the PR) `cleanup_failed` (`pr poll` kept a merged PR's Lead worktree, or a removal failed, §7.2; `details: {plan, pr, path, reason}`, `reason` `dirty`, `unpushed` or git's stderr tail) `pr_start_failed` (engine E7 could not start a PR, §3.8; `details: {pr, step, tail?, log?}`) and `adapter_missing` (the `session run` wrapper restarted a pi whose adapter reported `stopped` for more than 60 s, §6.7 "Adapter watchdog"; `details: {session, state_since, seconds}`) and `gh_rate_limited` (engine E5 skips polls while GitHub's rate limit is nearly used, §3.7; `details: {remaining, reset_at}`; no Plan, it concerns the User's account) | context?, plan?, … | `{source, code, message, details}` |
+
+**The protocol number** (hs-a4). `cpd --version` reports `protocol`, an integer that starts at **1** and is raised by one whenever an Event kind, a field of an Event's `data` that the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on. So **adding a kind, or a `data` field the adapter reads, raises `protocol`**; so does removing or renaming one. An addition the adapter ignores (a kind its table in §5.3 ignores, a `data` field it does not read) does not. The adapter holds the number it was built for and checks it at start-up and at every restart of its follower (commands.md §15.2); a mismatch is reported once per installed binary, with the code `protocol_mismatch` (§1.2).
 
 ### 5.3 Delivery by the pi adapter
 
