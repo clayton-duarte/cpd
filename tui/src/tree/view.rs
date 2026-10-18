@@ -640,7 +640,7 @@ mod tests {
             for x in [0, width - 1] {
                 let cell = &buf[(x, y)];
                 assert_eq!((cell.symbol(), cell.modifier), (" ", Modifier::empty()), "{what}: ({x}, {y})");
-                assert_eq!(cell.bg, ratatui::style::Color::Reset, "{what}: ({x}, {y})");
+                assert_eq!(cell.bg, ratatui::buffer::Cell::default().bg, "{what}: ({x}, {y})");
             }
         }
     }

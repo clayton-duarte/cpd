@@ -44,7 +44,7 @@ pub fn draw(f: &mut Frame, area: Rect, left: &[Item], right: &[Item]) -> Vec<(Re
 mod tests {
     use super::*;
 
-    use ratatui::{Terminal, backend::TestBackend, style::{Color, Modifier}};
+    use ratatui::{Terminal, backend::TestBackend, style::Modifier};
 
     use super::super::{items, workers::Workers};
 
@@ -97,7 +97,7 @@ mod tests {
         );
         for x in [0, 2, 4] {
             assert!(buf[(x, 0)].modifier.contains(Modifier::REVERSED), "x={x}");
-            assert_eq!(buf[(x, 0)].fg, Color::DarkGray, "x={x}");
+            assert_eq!(buf[(x, 0)].fg, crate::palette::color(crate::palette::Meaning::Nothing), "x={x}");
         }
         for x in [1, 3] {
             assert!(!buf[(x, 0)].modifier.contains(Modifier::REVERSED), "x={x}");
