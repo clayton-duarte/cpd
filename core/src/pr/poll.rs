@@ -11,7 +11,7 @@ use nix::fcntl::{Flock, FlockArg};
 use serde_json::{Value, json};
 
 use super::feedback;
-use super::gh::{self, PolledPr};
+use super::gh::{self, Listed};
 use super::pulls::{self, Change, Reason};
 use super::row::PlanRow;
 use super::status::PrState;
@@ -58,7 +58,7 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
     let root = env.home.root().to_owned();
 
     let search = gh::search_open(&root)?;
-    let present: Vec<(String, i64)> = search.prs.iter().map(|p| (p.repo.clone(), p.number)).collect();
+    let present: Vec<(String, i64)> = search.prs.iter().map(|l| (l.pr.repo.clone(), l.pr.number)).collect();
     let owned = env.store.read(pulls::owned_open)?;
 
     // The owned pull requests that left the open search: merged, closed, or the index lags (D3).
@@ -72,12 +72,12 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
     let looked_up = gh::lookup(&root, &absent)?;
     let mut seen = search.prs.clone();
     // `OPEN` is "not decided yet", `None` a pull request GitHub cannot find: nothing changes.
-    seen.extend(looked_up.into_iter().flatten().filter(|p| p.state != PrState::Open));
+    seen.extend(looked_up.into_iter().flatten().filter(|p| p.state != PrState::Open).map(|pr| Listed { pr, membership: Default::default() }));
 
     let dirty = env.store.read(|conn| {
-        for polled in &seen {
-            match pulls::find(conn, &polled.repo, polled.number)? {
-                Some(row) if row.polled()? == *polled => {}
+        for listed in &seen {
+            match pulls::find(conn, &listed.pr.repo, listed.pr.number)? {
+                Some(row) if row.polled()? == listed.pr && row.membership() == listed.membership => {}
                 _ => return Ok(true),
             }
         }
@@ -146,15 +146,16 @@ fn take_lock(path: &Path) -> Result<Flock<fs::File>, CpdError> {
 
 /// The one write transaction (D5, D7): every changed row, the Events of the
 /// owning Plans, the rows that left the search.
-fn apply(tx: &WriteTxn<'_>, seen: &[PolledPr], present: &[(String, i64)], owned: &[Owned]) -> Result<Outcome, CpdError> {
+fn apply(tx: &WriteTxn<'_>, seen: &[Listed], present: &[(String, i64)], owned: &[Owned]) -> Result<Outcome, CpdError> {
     let mut out = Outcome::default();
-    for polled in seen {
+    for listed in seen {
         // A merged row needs a merge time: GitHub's, else this poll's.
-        let mut polled = polled.clone();
-        if polled.state == PrState::Merged && polled.merged_at.is_none() {
-            polled.merged_at = Some(pulls::txn_time(tx)?);
+        let mut listed = listed.clone();
+        if listed.pr.state == PrState::Merged && listed.pr.merged_at.is_none() {
+            listed.pr.merged_at = Some(pulls::txn_time(tx)?);
         }
-        let Some(change) = pulls::upsert(tx, &polled)? else { continue };
+        let polled = &listed.pr;
+        let Some(change) = pulls::upsert(tx, &listed)? else { continue };
         let after = &change.after;
         out.changed.push(json!({
             "repo": after.repo, "number": after.number, "state": after.state, "draft": after.draft,
