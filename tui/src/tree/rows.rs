@@ -36,13 +36,15 @@
 use std::collections::HashSet;
 
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Widget};
+use ratatui::widgets::{Paragraph, StatefulWidget, Widget};
 use tui_tree_widget::{Tree as TreeWidget, TreeItem, TreeState};
 
 use crate::palette::{self, Meaning};
+use crate::widgets::{Window, dim, max_scroll, window};
 use cpd_core::plan::Phase;
 use crate::read::{ContextNode, Dot, JobStatus, PlanNode, SessionNode, Tree};
 use cpd_core::inbox::model::Kind;
@@ -376,20 +378,92 @@ pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -
     items
 }
 
-/// Draw the column into `area`: the tree, then the counters, the guides and the active mark of each visible
+/// The tree's scroll (commands.md §13.2, hs-d307): the first row drawn, which the wheel and the cursor move. View state
+/// only. The rows scroll in their area with a dim ` ▲ <n> more` / ` ▼ <n> more` cue row where some are hidden (the Deploy
+/// column's PR list and the Inbox section scroll with the same code, one row a row).
+#[derive(Debug, Default)]
+pub struct Scroll {
+    offset: usize,
+    /// The largest offset, as the last frame had it.
+    max: usize,
+    /// The cursor's path, the number of rows and the rows of the area when the cursor was last brought into view: the
+    /// cursor is followed when one of them changed (it moved, a fold or a snapshot changed the rows, the section
+    /// below grew), never because of the wheel.
+    followed: Option<(Vec<Id>, usize, u16)>,
+}
+
+impl Scroll {
+    /// A wheel notch: `rows` down or up, clamped to the rows as the last frame had them.
+    pub fn wheel(&mut self, down: bool, rows: usize) {
+        let offset = self.offset.min(self.max);
+        self.offset = if down { (offset + rows).min(self.max) } else { offset.saturating_sub(rows) };
+    }
+}
+
+/// The number of rows the tree draws: one for every visible row, or the one `no Contexts` row.
+pub fn row_count(state: &TreeState<Id>, tree: &Tree) -> usize {
+    if tree.contexts.is_empty() { 1 } else { state.flatten(&items(tree, state.opened(), 0, 0)).len() }
+}
+
+/// The rows drawn from the row `scroll` of `n` in `height` rows, with their cues. One row has no room for a cue: it draws
+/// its row, as every row of a pane that short does.
+fn view(n: usize, height: usize, scroll: usize) -> Window {
+    if height > 1 {
+        return window(n, height, 1, scroll);
+    }
+    Window { first: scroll.min(n.saturating_sub(1)), shown: height.min(n), cue_above: false, below: 0 }
+}
+
+/// The scroll offset nearest `scroll` at which the row `i` of `n` is drawn in `height` rows.
+fn scroll_to(i: usize, n: usize, height: usize, scroll: usize) -> usize {
+    let max = max_scroll(n, height, 1);
+    let mut scroll = scroll.min(max).min(i);
+    while scroll < max && i >= scroll + view(n, height, scroll).shown.max(1) {
+        scroll += 1;
+    }
+    scroll
+}
+
+/// Draw the column into `area`: the tree from the row `scroll` says (the cursor's Session is brought into view when it
+/// moved), with the cue rows, then the counters, the guides and the active mark of each visible
 /// row, the archived rows muted, then the cursor's Session row inverted when
 /// `cursor` says it is shown (a Context row never is). `frame` is the animation frame of the working dots.
-pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, cursor: bool, frame: usize) {
+pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, cursor: bool, frame: usize, scroll: &mut Scroll) {
     if tree.contexts.is_empty() {
+        scroll.max = 0;
         f.render_widget(Paragraph::new(Line::from(Span::styled(" no Contexts", Style::new().add_modifier(Modifier::DIM)))), area);
         return;
     }
     let items = items(tree, state.opened(), area.width, frame);
-    let widget = TreeWidget::new(&items).expect("Context ids are unique").node_closed_symbol("").node_open_symbol("").node_no_children_symbol("");
-    f.render_stateful_widget(widget, area, state);
     let flat = state.flatten(&items);
+    let height = usize::from(area.height);
+    scroll.max = max_scroll(flat.len(), height, 1);
+    let key = (state.selected().to_vec(), flat.len(), area.height);
+    if scroll.followed.as_ref() != Some(&key) {
+        if let Some(i) = flat.iter().position(|r| r.identifier == key.0) {
+            scroll.offset = scroll_to(i, flat.len(), height, scroll.offset);
+        }
+        scroll.followed = Some(key);
+    }
+    let win = view(flat.len(), height, scroll.offset);
+    scroll.offset = win.first;
+    let above = u16::from(win.cue_above);
+    let rows = Rect::new(area.x, area.y + above, area.width, area.height.saturating_sub(above + u16::from(win.below > 0)));
+    let widget = || TreeWidget::new(&items).expect("Context ids are unique").node_closed_symbol("").node_open_symbol("").node_no_children_symbol("");
+    // The widget scrolls by its own offset, which it clamps to what the last render saw: a render into one cell (off the
+    // frame) lets it see these rows, then the offset is ours.
+    StatefulWidget::render(widget(), Rect::new(0, 0, 1, 1), &mut Buffer::empty(Rect::new(0, 0, 1, 1)), state);
+    state.scroll_up(usize::MAX);
+    state.scroll_down(win.first);
+    f.render_stateful_widget(widget(), rows, state);
+    if win.cue_above {
+        f.render_widget(Paragraph::new(dim(format!(" ▲ {} more", win.first))), Rect::new(area.x, area.y, area.width, 1));
+    }
+    if win.below > 0 {
+        f.render_widget(Paragraph::new(dim(format!(" ▼ {} more", win.below))), Rect::new(area.x, area.bottom() - 1, area.width, 1));
+    }
     let buf = f.buffer_mut();
-    for (y, flat_row) in (area.y..area.bottom()).zip(flat.iter().skip(state.get_offset())) {
+    for (y, flat_row) in (rows.y..rows.bottom()).zip(flat.iter().skip(win.first)) {
         let rect = Rect::new(area.x, y, area.width, 1);
         let path = &flat_row.identifier;
         let Some(row) = row(tree, path) else { continue };
@@ -528,7 +602,7 @@ mod tests {
 
     fn render_at(tree: &Tree, state: &mut TreeState<Id>, width: u16, height: u16, cursor: bool, frame: usize) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|f| draw(f, f.area(), tree, state, cursor, frame)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), tree, state, cursor, frame, &mut Scroll::default())).unwrap();
         terminal.backend().buffer().clone()
     }
 
@@ -652,7 +726,7 @@ mod tests {
     #[test]
     fn a_context_has_the_dot_of_its_manager_and_not_of_any_session_inside() {
         let tree = sample();
-        let buf = render(&tree, &mut state_for(&tree, &["alpha"], &[]), 44, 1, false);
+        let buf = render(&tree, &mut state_for(&tree, &["alpha"], &[]), 44, 9, false);
         assert_eq!(text(&buf, 0), format!("{FOLDED} {NEEDS_YOU} alpha 3"), "its Manager's, not its working Lead's");
         let calm = super::super::fixture::tree(vec![managed(context("cc", vec![lone("pp", "s", Phase::Plan, [0; 6])]), Dot::Idle)]);
         assert_eq!(text(&render(&calm, &mut state_for(&calm, &[], &[]), 20, 1, false), 0), format!("{OPEN} {IDLE} cc"));
@@ -988,7 +1062,7 @@ mod tests {
         let mut tree = sample();
         tree.contexts[0].title = "Payments".into();
         tree.contexts[0].plans[0].head.title = "Pay by card".into();
-        let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 6, false);
+        let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 9, false);
         assert_eq!(text(&buf, 0), format!("{OPEN} {NEEDS_YOU} alpha"), "not its title `Payments`");
         assert_eq!(text(&buf, 1), row_of(&format!("{ACTIVE_MARK} ├ {WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44), "not its title `Pay by card`, nor its Lead's name");
         assert_eq!(text(&buf, 5), format!("  └ {NEEDS_YOU} ship·f-bl"), "the Plan id, `·`, the first 4 characters of the Session id; not its name");

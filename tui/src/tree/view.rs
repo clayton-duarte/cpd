@@ -31,7 +31,7 @@ use crate::palette;
 use crate::read::{ContextNode, SessionNode, Tree};
 
 /// The longest name of a Session (commands.md §1.4).
-/// Rows a wheel notch scrolls the Inbox section by.
+/// Rows a wheel notch scrolls the tree or the Inbox section by.
 const WHEEL_ROWS: usize = 3;
 const NAME_MAX: usize = 80;
 const FORK_SUFFIX: &str = " (fork)";
@@ -103,14 +103,19 @@ pub struct View {
     /// The inner area of the last frame (the pane less a blank column on each side, below the blank top row): the
     /// menu is clamped inside it and hit-tested against it, and its `x` is the column of the tree's first cell.
     pane: Rect,
-    /// The Inbox section's rows (header, items, `+<n> more`) are shown, not only the first three, in at most half the
-    /// column ([`View::inbox_cap`]). View state only.
+    /// The Inbox section's rows (header, items, `+<n> more`) are shown, not only the first three, in the rows the column's
+    /// split gives it ([`View::inbox_cap`]). View state only.
     inbox_expanded: bool,
     /// The first item row the expanded section shows (the wheel and the cursor move it; the drawing clamps it).
     /// View state only.
     inbox_scroll: usize,
-    /// The most rows the expanded section may take, as the last frame had it: half the column.
+    /// The most rows the expanded section may take, as the last frame had it: what the split of the column gives it
+    /// (commands.md §13.2, hs-d307).
     inbox_cap: u16,
+    /// The tree's scroll: the wheel and the cursor move it.
+    tree_scroll: rows::Scroll,
+    /// Where the last frame drew the tree and its cue rows (the gap below them is not it): the wheel there scrolls it.
+    tree_area: Rect,
     /// The cursor moved (or the list changed): the next frame scrolls the section to show the cursor's item.
     follow_inbox_cursor: bool,
     /// Where the last frame drew the Inbox section (empty when it drew none): clicks there are the section's.
@@ -120,6 +125,28 @@ pub struct View {
     inbox_cursor: Option<usize>,
     /// The one-line result or refusal of the last action, until the next `n`, `x` or click.
     pub note: String,
+}
+
+/// The most rows the Inbox section may take in a column of `column` rows (commands.md §13.2, hs-d307), for a tree of
+/// `tree` rows and `count` items. When both fit, each has its rows. Otherwise the tree is guaranteed two thirds of the
+/// column and the Inbox the third that is left (rounded down, but never below the collapsed section, so that its
+/// header, three items and `+<n> more` show in a column that is not tiny); a section that needs less than its share gives
+/// the rest to the other.
+fn inbox_share(tree: usize, count: usize, expanded: bool, column: u16) -> u16 {
+    let column = usize::from(column);
+    let wants = Shape::new(count, expanded).height().into();
+    if tree + wants <= column {
+        return u16::try_from(wants).unwrap_or(u16::MAX);
+    }
+    let share = (column / 3).max(Shape::new(count, false).height().into());
+    let rows = if wants <= share {
+        wants
+    } else if tree + share <= column {
+        column - tree
+    } else {
+        share
+    };
+    u16::try_from(rows).unwrap_or(u16::MAX)
 }
 
 impl View {
@@ -136,6 +163,8 @@ impl View {
             inbox_expanded: false,
             inbox_scroll: 0,
             inbox_cap: u16::MAX,
+            tree_scroll: rows::Scroll::default(),
+            tree_area: Rect::default(),
             follow_inbox_cursor: false,
             inbox_area: Rect::default(),
             inbox_cursor: None,
@@ -343,7 +372,11 @@ impl View {
             };
         }
         match m.kind {
-            // the wheel over the Inbox section scrolls its items, three rows a notch, as the Plan view; elsewhere it does nothing
+            // the wheel over the tree scrolls its rows, over the Inbox section its items, three rows a notch, as the Plan view; elsewhere it does nothing
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp if self.tree_area.contains(at) => {
+                self.tree_scroll.wheel(m.kind == MouseEventKind::ScrollDown, WHEEL_ROWS);
+                Effect::None
+            }
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp if self.inbox_area.contains(at) => {
                 let max = self.shape().max_scroll();
                 let scroll = self.inbox_scroll.min(max);
@@ -556,10 +589,11 @@ impl View {
         let wrapped = footer.chars().count().div_ceil(width);
         let footer_height =
             if footer.is_empty() { 0 } else { (wrapped + usize::from(wrapped > 1)).max(1).min(inner.height as usize) as u16 };
+        // the tree and the section share the rows between the blank one and the footer (hs-d307)
+        let column = inner.height.saturating_sub(1 + footer_height);
         // the section leaves the tree at least one row, when there is one to leave
-        let room = inner.height.saturating_sub(1 + footer_height).saturating_sub(1);
-        // expanded, the section takes at most half the column
-        self.inbox_cap = inner.height / 2;
+        let room = column.saturating_sub(1);
+        self.inbox_cap = inbox_share(rows::row_count(&self.state, &self.tree), self.tree.inbox.len(), self.inbox_expanded, column);
         self.inbox_scroll = self.inbox_scroll.min(self.shape().max_scroll());
         if std::mem::take(&mut self.follow_inbox_cursor) {
             if let Some(i) = self.inbox_cursor {
@@ -574,12 +608,6 @@ impl View {
             Constraint::Length(footer_height),
         ])
         .areas(inner);
-        if inbox_area.height != self.inbox_area.height && !self.state.selected().is_empty() {
-            // the tree has more or fewer rows now (the section was expanded or folded, an item came or went): it
-            // scrolls to keep the cursor's Session in view
-            let selected = self.state.selected().to_vec();
-            self.state.select(selected);
-        }
         self.inbox_area = inbox_area;
         let inbox_cursor = self.inbox_cursor.filter(|_| self.cursor_shown());
         inbox::draw(f, inbox_area, &self.tree.inbox, self.shape(), inbox_cursor, now, frame);
@@ -588,7 +616,11 @@ impl View {
             f.render_widget(Paragraph::new(footer).style(style).wrap(Wrap { trim: false }), footer_area);
         }
         let cursor = self.cursor_shown() && self.inbox_cursor.is_none();
-        rows::draw(f, list, &self.tree, &mut self.state, cursor, frame);
+        // the tree has more or fewer rows when the section was expanded or folded or an item came or went: it scrolls to
+        // keep the cursor's Session in view
+        rows::draw(f, list, &self.tree, &mut self.state, cursor, frame, &mut self.tree_scroll);
+        let tree_rows = u16::try_from(rows::row_count(&self.state, &self.tree)).unwrap_or(u16::MAX);
+        self.tree_area = Rect { height: list.height.min(tree_rows), ..list };
         self.pane = Rect { y: inner.y + inner.height.min(1), height: inner.height.saturating_sub(1), ..inner };
         if let Some(menu) = &self.menu {
             menu.draw(f, self.pane);
@@ -2234,5 +2266,137 @@ mod tests {
         let rows = text_rows(&buf);
         assert_eq!((label(&rows[21]), rows[38].as_str()), ("item 00", "  ▼ 33 more"));
         assert!(buf[(5, 21)].modifier.contains(Modifier::REVERSED));
+    }
+
+    // ---------- the tree and the Inbox share the column (hs-d307) ----------
+
+    /// A tree of one Context `alpha` with `n` Plans `p00`, `p01`, …: `n + 1` rows, a Session cursor on each Plan.
+    fn long_tree(n: usize) -> Tree {
+        use super::super::fixture::{context, plan, session, tree};
+        use crate::read::Place;
+        use cpd_core::plan::Phase;
+        use cpd_core::session::State;
+        let plans = (0..n)
+            .map(|i| {
+                plan(&format!("p{i:02}"), "alpha", Phase::Dispatch, [0; 6], session(&format!("l-p{i:02}"), "lead", State::Idle, None, Place::Parked), vec![])
+            })
+            .collect();
+        tree(vec![context("alpha", plans)])
+    }
+
+    /// `n` open items `item 00`, `item 01`, …
+    fn items(n: usize) -> Vec<Item> {
+        (0..n)
+            .map(|i| {
+                let mut it = item(i as i64 + 1, InboxKind::Unread, Urgency::White, &format!("item {i:02}"), "2026-01-02T00:00:00.000Z");
+                it.session = Some(sid("l-p00"));
+                it
+            })
+            .collect()
+    }
+
+    /// A view of `tree` and `n` items, expanded when `expanded`, drawn at 43x`height`.
+    fn shared(tree: Tree, n: usize, expanded: bool, height: u16) -> (View, Vec<String>) {
+        let mut view = View::new(tree, true);
+        view.tree.inbox = items(n);
+        view.inbox_expanded = expanded;
+        let rows = text_rows(&draw_now(&mut view, 43, height));
+        (view, rows)
+    }
+
+    #[test]
+    fn both_fit_each_takes_its_rows_and_the_leftover_is_empty_between_them() {
+        let (view, rows) = shared(sample(), 3, false, 31);
+        assert_eq!(view.inbox_area, Rect::new(1, 27, 41, 4), "the section is as tall as its rows, pinned to the bottom");
+        assert!(rows[1].starts_with(&format!(" {OPEN} {NEEDS_YOU} alpha")), "{rows:?}");
+        assert!(rows[10..27].iter().all(|r| r.is_empty()), "the gap: {rows:?}");
+        assert!(!rows.iter().any(|r| r.contains('▲') || r.contains('▼')), "no cue when all fit: {rows:?}");
+    }
+
+    #[test]
+    fn a_long_tree_and_a_long_inbox_share_thirty_rows_twenty_and_ten() {
+        let (view, rows) = shared(long_tree(60), 50, true, 31);
+        assert_eq!(view.inbox_area, Rect::new(1, 21, 41, 10), "the Inbox has a third of the column's rows");
+        assert_eq!(rows[21], header(50));
+        assert_eq!((label(&rows[22]), label(&rows[28])), ("item 00", "item 06"));
+        assert_eq!(rows[29], "  ▼ 43 more", "the Inbox's cue: {rows:?}");
+        assert_eq!(rows[30], " − less");
+        assert!(rows[1].starts_with(&format!(" {OPEN}")), "the tree starts at the top: {rows:?}");
+        assert!(rows[19].contains("p17"), "the tree's 19th row: {rows:?}");
+        assert_eq!(rows[20], "  ▼ 42 more", "the tree's cue is the last of its 20 rows: {rows:?}");
+    }
+
+    #[test]
+    fn a_long_tree_and_a_short_expanded_inbox_give_the_rest_to_the_tree() {
+        let (view, rows) = shared(long_tree(60), 4, true, 31);
+        assert_eq!(view.inbox_area, Rect::new(1, 25, 41, 6), "the header, four items and `− less`");
+        assert_eq!((rows[25].clone(), label(&rows[29]), rows[30].clone()), (header(4), "item 03", " − less".to_owned()));
+        assert_eq!(rows[24], "  ▼ 38 more", "the tree has 24 rows: {rows:?}");
+        assert!(!rows[1..24].iter().any(|r| r.is_empty() || r.contains('▼')), "{rows:?}");
+    }
+
+    #[test]
+    fn a_short_tree_and_a_long_inbox_give_the_rest_to_the_inbox() {
+        let (view, rows) = shared(long_tree(2), 50, true, 31);
+        assert_eq!(view.inbox_area, Rect::new(1, 4, 41, 27), "three tree rows, the rest to the Inbox");
+        assert!(rows[1].starts_with(&format!(" {OPEN}")) && rows[3].contains("p01"), "{rows:?}");
+        assert_eq!(rows[4], header(50));
+        assert_eq!((label(&rows[5]), label(&rows[28])), ("item 00", "item 23"));
+        assert_eq!((rows[29].as_str(), rows[30].as_str()), ("  ▼ 26 more", " − less"));
+    }
+
+    #[test]
+    fn the_tree_scrolls_with_the_wheel_three_rows_a_notch_between_cues_and_clamps() {
+        let (mut view, _) = shared(long_tree(60), 50, true, 31);
+        wheel(&mut view, MouseEventKind::ScrollDown, 10, 5);
+        let rows = text_rows(&draw_now(&mut view, 43, 31));
+        assert_eq!(rows[1], "  ▲ 3 more");
+        assert!(rows[2].contains("p02"), "{rows:?}");
+        assert_eq!(rows[20], "  ▼ 39 more");
+        assert_eq!(view.inbox_scroll, 0, "the wheel over the tree leaves the Inbox alone");
+        for _ in 0..40 {
+            wheel(&mut view, MouseEventKind::ScrollDown, 10, 5);
+        }
+        let rows = text_rows(&draw_now(&mut view, 43, 31));
+        assert_eq!(rows[1], "  ▲ 42 more", "clamped: the last row reaches the bottom of the tree's rows");
+        assert!(rows[19].contains("p59"), "{rows:?}");
+        assert!(!rows[1..21].iter().any(|r| r.contains('▼')), "nothing hidden below: {rows:?}");
+        for _ in 0..40 {
+            wheel(&mut view, MouseEventKind::ScrollUp, 10, 5);
+        }
+        let rows = text_rows(&draw_now(&mut view, 43, 31));
+        assert!(rows[1].starts_with(&format!(" {OPEN}")) && rows[20] == "  ▼ 42 more", "{rows:?}");
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_section_under_the_pointer_and_a_cue_row_is_no_hit() {
+        let (mut view, _) = shared(long_tree(60), 50, true, 31);
+        wheel(&mut view, MouseEventKind::ScrollDown, 10, 25);
+        let rows = text_rows(&draw_now(&mut view, 43, 31));
+        assert_eq!(rows[22], "  ▲ 3 more");
+        assert_eq!((label(&rows[23]), rows[29].as_str()), ("item 03", "  ▼ 40 more"));
+        assert!(rows[1].starts_with(&format!(" {OPEN}")), "the tree did not move: {rows:?}");
+        assert_eq!(click(&mut view, 10, 1 + 20 - 1), Effect::None, "the tree's ▼ cue is no row");
+        wheel(&mut view, MouseEventKind::ScrollDown, 10, 5);
+        draw_now(&mut view, 43, 31);
+        assert_eq!(click(&mut view, 10, 1), Effect::None, "the tree's ▲ cue is no row");
+        assert!(matches!(click(&mut view, 10, 2), Effect::Run(Action::Open(_))), "the row under the cue opens its Lead");
+    }
+
+    #[test]
+    fn the_keyboard_cursor_scrolls_the_tree_to_stay_between_the_cues() {
+        let (mut view, _) = shared(long_tree(60), 3, false, 31);
+        for _ in 0..40 {
+            press(&mut view, KeyCode::Down);
+        }
+        let buf = draw_now(&mut view, 43, 31);
+        let rows = text_rows(&buf);
+        let at = rows.iter().position(|r| r.contains("p39")).expect("the cursor's Session is drawn");
+        assert!((2..26).contains(&at), "between the cues: {rows:?}");
+        assert!(buf[(5, at as u16)].modifier.contains(Modifier::REVERSED));
+        assert!(rows[1].starts_with("  ▲") && rows[26].starts_with("  ▼"), "{rows:?}");
+        let before = rows.clone();
+        wheel(&mut view, MouseEventKind::ScrollUp, 10, 5);
+        assert_ne!(text_rows(&draw_now(&mut view, 43, 31)), before, "the wheel moved it, though the cursor is out of sight");
     }
 }
