@@ -320,9 +320,20 @@ fn questions(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 
 // ---- Pull requests: pr-failing, pr-changes, pr-ready, review-requested -------------------------------------------
 
+/// How a kind reads a row's checks against its `pr.feedback.checks` policy (§8.3).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChecksRule {
+    /// Checks are no part of the kind.
+    Ignore,
+    /// Failed checks count only under `any` (`pr-failing`).
+    Failing,
+    /// Checks must have passed only under `any`; under `none` any checks do (`pr-ready`).
+    Ready,
+}
+
 /// The open `pull_requests` rows that match `filter`, a SQL condition over `r`, oldest first, as conditions of `kind`
 /// and `urgency`. `label` makes the label from the row's repo without its owner, its number, and whether checks
-/// failed. A `prs` row that points to the pull request links its Plan, Context and Lead. A `gated` row whose policy
+/// failed. A `prs` row that points to the pull request links its Plan, Context and Lead. A `rule`d row whose policy
 /// does not resolve is one `engine-error` condition naming the file and code, beside the others (§8.3).
 fn pull_request_conditions(
     conn: &Connection,
@@ -330,11 +341,11 @@ fn pull_request_conditions(
     kind: Kind,
     urgency: Urgency,
     filter: &str,
-    gated: bool,
+    rule: ChecksRule,
     label: fn(&str, i64, bool) -> String,
 ) -> Result<Vec<Condition>, CpdError> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT r.repo, r.number, r.url, r.checks = 'failed', p.context, prs.plan, p.lead_session, r.mergeable = 'conflicting',
+        "SELECT r.repo, r.number, r.url, r.checks = 'failed', r.checks, p.context, prs.plan, p.lead_session, r.mergeable = 'conflicting',
                 c.owner, prs.name
            FROM pull_requests r
            LEFT JOIN prs ON prs.pull_request = r.id
@@ -348,10 +359,11 @@ fn pull_request_conditions(
     while let Some(row) = rows.next()? {
         let (repo, number, url, mut checks_failed): (String, i64, String, bool) =
             (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?);
-        let conflicting: bool = row.get(7)?;
-        let (owner, pr_name): (Option<String>, Option<String>) = (row.get(8)?, row.get(9)?);
+        let checks: String = row.get(4)?;
+        let conflicting: bool = row.get(8)?;
+        let (owner, pr_name): (Option<String>, Option<String>) = (row.get(9)?, row.get(10)?);
         let (context, plan, lead): (Option<String>, Option<String>, Option<String>) =
-            (row.get(4)?, row.get(5)?, row.get(6)?);
+            (row.get(5)?, row.get(6)?, row.get(7)?);
         let name = repo.split_once('/').map_or(repo.as_str(), |(_, name)| name);
         let links = |kind, urgency, subject, label, url| -> Result<Condition, CpdError> {
             Ok(Condition {
@@ -368,27 +380,46 @@ fn pull_request_conditions(
                 event: None,
             })
         };
-        // Failed checks count only where the row's policy says `any` (§8.3): `gated` kinds are `pr-failing`.
-        if gated && checks_failed {
+        // Checks count only where the row's policy says `any` (§8.3): `pr-failing` counts failed ones, and `pr-ready`
+        // needs passed ones, so it asks the policy for any row whose checks did not pass.
+        let asks = match rule {
+            ChecksRule::Ignore => false,
+            ChecksRule::Failing => checks_failed,
+            ChecksRule::Ready => checks != "passed",
+        };
+        if asks {
             // A PR points to the row: its Context's owner keys it, and an unset one is `owner_unset`, never the unowned rule.
             let owned = plan.as_ref().map(|_| Owned { context: context.as_deref().unwrap_or_default(), owner: owner.as_deref(), name: pr_name.as_deref() });
-            match checks_policy(home, &repo, owned)? {
-                Ok(checks) => checks_failed = checks == Checks::Any,
+            let counts = match checks_policy(home, &repo, owned)? {
+                Ok(policy) => policy == Checks::Any,
                 Err(error) => {
-                    // The row's checks are unknown: its failure is told as an error, the conflict still as `kind`.
-                    checks_failed = false;
-                    let code = error.code().as_str();
-                    out.push(links(
-                        Kind::EngineError,
-                        Urgency::Red,
-                        format!("error:E8/pr:{repo}#{number}/{code}"),
-                        format!("policy of {name}#{number}: {code} ({})", failed_file(home, &error)),
-                        Some(url.clone()),
-                    )?);
+                    // The row's checks are unknown. `pr-failing` tells the error of a failed row (its conflict still as
+                    // `kind`); `pr-ready` tells the others, since a failed row's error is already `pr-failing`'s.
+                    if rule == ChecksRule::Failing || checks != "failed" {
+                        let code = error.code().as_str();
+                        out.push(links(
+                            Kind::EngineError,
+                            Urgency::Red,
+                            format!("error:E8/pr:{repo}#{number}/{code}"),
+                            format!("policy of {name}#{number}: {code} ({})", failed_file(home, &error)),
+                            Some(url.clone()),
+                        )?);
+                    }
+                    if rule == ChecksRule::Ready {
+                        continue;
+                    }
+                    false
                 }
-            }
-            if !checks_failed && !conflicting {
-                continue;
+            };
+            match rule {
+                ChecksRule::Ready if counts => continue,
+                ChecksRule::Failing => {
+                    checks_failed = counts;
+                    if !checks_failed && !conflicting {
+                        continue;
+                    }
+                }
+                _ => {}
             }
         }
         out.push(links(kind, urgency, format!("pr:{repo}#{number}"), label(name, number, checks_failed), Some(url))?);
@@ -450,7 +481,7 @@ fn pr_failing(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdEr
         Kind::PrFailing,
         Urgency::Red,
         "r.authored = 1 AND (r.checks = 'failed' OR r.mergeable = 'conflicting')",
-        true,
+        ChecksRule::Failing,
         |name, n, checks_failed| {
             if checks_failed { format!("{name}#{n} checks failed") } else { format!("{name}#{n} merge conflict") }
         },
@@ -465,21 +496,21 @@ fn pr_changes(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdEr
         Kind::PrChanges,
         Urgency::Red,
         "r.authored = 1 AND r.review_decision = 'changes_requested'",
-        false,
+        ChecksRule::Ignore,
         |name, n, _| format!("{name}#{n} changes requested"),
     )
 }
 
-/// `pr-ready`: an authored, open, non-draft pull request has passed checks, no conflict and no changes requested.
+/// `pr-ready`: an authored, open, non-draft pull request has passed checks (any checks under `feedback.checks = none`), no conflict and no changes requested.
 fn pr_ready(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     pull_request_conditions(
         conn,
         home,
         Kind::PrReady,
         Urgency::Yellow,
-        "r.authored = 1 AND r.draft = 0 AND r.checks = 'passed' AND r.mergeable = 'mergeable'
+        "r.authored = 1 AND r.draft = 0 AND r.mergeable = 'mergeable'
          AND r.review_decision <> 'changes_requested'",
-        false,
+        ChecksRule::Ready,
         |name, n, _| format!("{name}#{n} ready to merge"),
     )
 }
@@ -492,7 +523,7 @@ fn review_requested(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>,
         Kind::ReviewRequested,
         Urgency::Yellow,
         "r.review_requested = 1",
-        false,
+        ChecksRule::Ignore,
         |name, n, _| format!("review {name}#{n}"),
     )
 }
@@ -996,6 +1027,32 @@ mod tests {
         assert!(f.of(Kind::PrReady).is_empty());
         set(&mut f, 4, "review_decision = 'approved', checks = 'pending'");
         assert!(f.of(Kind::PrReady).is_empty());
+    }
+
+    #[test]
+    fn with_feedback_checks_none_a_mergeable_pr_is_ready_whatever_its_checks() {
+        let mut f = fixture("dispatch");
+        let owners = f.home.root().join("policy/owners");
+        std::fs::create_dir_all(&owners).unwrap();
+        std::fs::write(owners.join("acme.toml"), "[pr]\ngate = \"local\"\nfeedback.checks = \"none\"\n").unwrap();
+        for (n, checks) in [(1, "none"), (2, "failed"), (3, "pending")] {
+            pull_request(&mut f, n, checks, "mergeable", "none");
+        }
+        assert_eq!(f.of(Kind::PrReady).len(), 3);
+        assert!(f.of(Kind::PrFailing).is_empty());
+        set(&mut f, 1, "draft = 1");
+        set(&mut f, 2, "review_decision = 'changes_requested'");
+        set(&mut f, 3, "mergeable = 'conflicting'");
+        assert!(f.of(Kind::PrReady).is_empty(), "draft, changes requested and conflict still bar it");
+    }
+
+    #[test]
+    fn with_feedback_checks_any_a_pr_is_ready_only_when_its_checks_passed() {
+        let mut f = fixture("dispatch");
+        for (n, checks) in [(1, "none"), (2, "failed"), (3, "pending"), (4, "passed")] {
+            pull_request(&mut f, n, checks, "mergeable", "none");
+        }
+        assert_eq!(one(f.of(Kind::PrReady)).subject, "pr:acme/shop#4");
     }
 
     #[test]
