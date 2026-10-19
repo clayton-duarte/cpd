@@ -275,3 +275,11 @@ test("policy-neutral: no record id, owner or machine fact in the skills, pi/lib 
   }
   assert.deepEqual(hits, []);
 });
+
+/** Commands.md §9: pr open, push and rebase run the Gate only when the PR's `pr.gate` is `local`. */
+test("cpd-lead: every 'run(s) the Gate' sentence names pr.gate", () => {
+  const sentences = skillFiles("cpd-lead")[0]!.text.split(/(?<=[.;!?])\s+/).filter((s) => /\bruns? the Gate\b/i.test(s));
+  assert.ok(sentences.length >= 4, "the guard must find the sentences it guards");
+  const bad = sentences.filter((s) => !s.includes("pr.gate"));
+  assert.deepEqual(bad, []);
+});
