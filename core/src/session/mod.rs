@@ -191,6 +191,9 @@ pub struct StateArgs {
     /// Why it is blocked: required with `blocked`, refused otherwise
     #[arg(long, value_name = "text")]
     label: Option<Label>,
+    /// The run that ended answered a message the User wrote to this Session: allowed only with `idle`
+    #[arg(long)]
+    reply: bool,
     #[command(flatten)]
     session: SessionArg,
 }

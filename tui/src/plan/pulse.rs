@@ -2,7 +2,7 @@
 //! Plan's activity, drawn from the read model of [`crate::read::pulse`]. Everything here is pure: the rows' text and
 //! styles, the bucket count, the wheel offset and the row under a click.
 //!
-//! A row, inside the view's margin: `<dot> <plan id padded>  <sparkline>  <✓N in 4>  <age in 9>`.
+//! A row, inside the view's margin: `<dot> <plan id padded>  <sparkline>  <󰗠N in 4>  <age in 9>`.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -15,7 +15,7 @@ use crate::read::{Bucket, JobStatus, Pulse, PulseRow, QUIET_MINUTES};
 
 /// The fewest buckets a row draws, whatever the width.
 const MIN_BUCKETS: usize = 12;
-/// Columns of the `✓N` cell and of the age cell.
+/// Columns of the `󰗠N` cell and of the age cell.
 const MERGES_WIDTH: usize = 4;
 const AGE_WIDTH: usize = 9;
 /// Rows a wheel notch scrolls.
@@ -31,7 +31,7 @@ pub fn merged_icon() -> &'static str {
 /// The buckets a row draws in `width` columns (inside the margin) for ids `id_width` wide: what the other cells leave,
 /// at least [`MIN_BUCKETS`].
 pub fn buckets(width: usize, id_width: usize) -> usize {
-    // dot, space, id, two spaces, [sparkline], two spaces, ✓N, two spaces, age
+    // dot, space, id, two spaces, [sparkline], two spaces, 󰗠N, two spaces, age
     width.saturating_sub(1 + 1 + id_width + 2 + 2 + MERGES_WIDTH + 2 + AGE_WIDTH).max(MIN_BUCKETS)
 }
 

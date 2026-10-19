@@ -20,6 +20,12 @@ use nix::fcntl::{Flock, FlockArg};
 
 const WORKING: &str = SPINNER[0];
 
+// The tree's glyphs. `cpd_tui::tree` is private, so the tests repeat them (the unit tests of `tui/src/tree/` use the constants).
+const OPEN: &str = "\u{F0140}"; // md-chevron_down
+const FOLDED: &str = "\u{F0142}"; // md-chevron_right
+const ACTIVE_MARK: &str = "\u{F040A}"; // md-play
+const MORE: &str = "\u{F01D8}"; // md-dots_horizontal
+
 // ---------- the prepared store ----------
 
 /// An env with the config `cpd` needs and an engine running (`engine-down` is no row of the Inbox); its tmux server is
@@ -301,22 +307,21 @@ impl<'a> Pane<'a> {
         }
     }
 
-    /// Waits until `rows` are the screen's rows from `first` on: tmux answers `capture-pane` between the writes of a
-    /// frame, so a screen with the row a test looks for can still lack the rows drawn after it. Panics with `what`, the
-    /// rows wanted and the last screen.
-    fn wait_rows(&self, what: &str, first: usize, rows: &[String]) -> Vec<String> {
+    /// Waits until the screen is `expected` (or the harness's timeout) and returns the last screen, so that the caller's
+    /// `assert_eq!` shows the difference. A whole-screen assertion on a screen caught before the view finished drawing is a race.
+    fn screen_is(&self, expected: &[String]) -> Vec<String> {
+        self.rows_are(0, expected)
+    }
+
+    /// Like `screen_is`, for the rows from `first` on: the screen's rows `first..first + expected.len()`.
+    fn rows_are(&self, first: usize, expected: &[String]) -> Vec<String> {
         let start = Instant::now();
         loop {
             let screen = self.screen();
-            if screen.len() >= first + rows.len() && screen[first..first + rows.len()] == *rows {
+            let held = if first == 0 { screen == expected } else { screen.get(first..first + expected.len()) == Some(expected) };
+            if held || start.elapsed() >= Duration::from_secs(10) {
                 return screen;
             }
-            assert!(
-                start.elapsed() < Duration::from_secs(10),
-                "waiting for {what}: rows {first}.. should be\n{}\nthe screen is:\n{}",
-                rows.join("\n"),
-                screen.join("\n")
-            );
             std::thread::sleep(Duration::from_millis(50));
         }
     }
@@ -407,22 +412,22 @@ fn the_tree_of_a_prepared_store() {
     let env = env();
     populate(&env);
     let pane = Pane::start(&env, 46, 18);
-    let screen = pane.ready();
     let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
     let mut expected = vec![
         String::new(),
-        format!(" ▾ {NEEDS_YOU} alpha"),
-        row(&format!("⏵ ├ {WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
+        format!(" {OPEN} {NEEDS_YOU} alpha"),
+        row(&format!("{ACTIVE_MARK} ├ {WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
         row(&format!("  ├ {IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
         format!("   ├ {IDLE} ship·f-id"),
         format!("   └ {NEEDS_YOU} ship·f-bl"),
-        format!(" ▾ {NEEDS_YOU} beta"),
+        format!(" {OPEN} {NEEDS_YOU} beta"),
         row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
         row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"),
-        format!(" ▾ {STOPPED} gamma"),
+        format!(" {OPEN} {STOPPED} gamma"),
     ];
     expected.extend(["", "", ""].map(String::from)); // the rest of the tree's rows, then the Inbox section pinned below
     expected.extend(inbox_section(46));
+    let screen = pane.screen_is(&expected);
     assert_eq!(
         screen,
         expected,
@@ -435,7 +440,8 @@ fn the_tree_leaves_the_first_and_the_last_column_blank() {
     let env = env();
     populate(&env);
     let pane = Pane::start(&env, 46, 18);
-    let screen = pane.ready();
+    pane.ready();
+    let screen = pane.wait("the whole tree", |s| s.last().is_some_and(|r| r == " +1 more"));
     // `screen` is trimmed at the right, so the last column is blank when no row is longer than 45 columns
     assert!(screen.iter().all(|r| r.is_empty() || r.starts_with(' ')), "column 0: {screen:?}");
     assert!(screen.iter().all(|r| r.chars().count() <= 45), "the last column: {screen:?}");
@@ -490,10 +496,10 @@ fn a_click_on_a_context_row_opens_its_manager_and_its_fold_glyph_folds_it() {
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!(calls(&env).len(), 2, "no more commands");
     let screen = pane.screen();
-    assert!(screen[1].starts_with(" ▾ ") && screen.iter().any(|r| r.contains("ship")), "the label click folds nothing: {screen:?}");
+    assert!(screen[1].starts_with(&format!(" {OPEN} ")) && screen.iter().any(|r| r.contains("ship")), "the label click folds nothing: {screen:?}");
     pane.click(1, 1); // its fold glyph
     let folded = pane.wait("alpha folded", |s| !s.iter().any(|r| r.contains("ship")));
-    assert_eq!(folded[1], format!(" ▸ {NEEDS_YOU} alpha 2"), "a folded Context draws ▸, its Manager's dot (its unread item) and its number of Plans");
+    assert_eq!(folded[1], format!(" {FOLDED} {NEEDS_YOU} alpha 2"), "a folded Context draws the folded glyph, its Manager's dot (its unread item) and its number of Plans");
     assert_eq!(calls(&env).len(), 2, "the glyph runs no command");
     pane.click(1, 1);
     pane.wait("alpha unfolded", |s| s.iter().any(|r| r.contains("ship")));
@@ -531,7 +537,8 @@ fn no_key_but_the_references_does_anything() {
     populate(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 46, 14);
-    let before = pane.ready();
+    pane.ready();
+    let before = pane.wait("the whole view, the Inbox section's last row included", |s| s.last().is_some_and(|r| r == " +1 more"));
     pane.down(2); // on sketch
     pane.keys(&["q", "f", "r", "p", "Space", "G", "Escape"]);
     std::thread::sleep(Duration::from_millis(500));
@@ -688,38 +695,41 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
     archive(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 46, 20);
-    pane.ready();
     let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
     let mut expected = vec![
         String::new(),
-        format!(" ▾ {NEEDS_YOU} alpha"),
-        row(&format!("⏵ ├ {WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
+        format!(" {OPEN} {NEEDS_YOU} alpha"),
+        row(&format!("{ACTIVE_MARK} ├ {WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
         row(&format!("  ├ {IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
         format!("   ├ {IDLE} ship·f-id"),
         format!("   └ {NEEDS_YOU} ship·f-bl"),
-        format!(" ▾ {NEEDS_YOU} beta"),
+        format!(" {OPEN} {NEEDS_YOU} beta"),
         row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
-        "   └ …".to_owned(),
-        " …".to_owned(),
+        format!("   └ {MORE}"),
+        format!(" {MORE}"),
     ];
     expected.extend(["", "", "", "", ""].map(String::from)); // the rest of the tree's rows
     expected.extend(inbox_section(46));
-    // `ready` may catch the first frame half drawn: wait for all of it
-    let what = "the archived Plan `old` behind beta's `…`, the archived Context `gamma` behind the last";
-    let screen = pane.wait_rows(what, 0, &expected);
-    assert_eq!(screen, expected, "{what}");
+    let screen = pane.screen_is(&expected);
+    assert_eq!(
+        screen,
+        expected,
+        "the archived Plan `old` is behind beta's `…`, the archived Context `gamma` behind the last"
+    );
     // a click on beta's `…` shows the archived Plan at the depth it would have if live, with the normal guide
     pane.click(4, 8);
-    let expanded = [row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"), "   ├ …".to_owned(), row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), " …".to_owned()];
-    pane.wait_rows("the archived Plan", 7, &expanded);
+    let shown = [row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"), format!("   ├ {MORE}"), row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), format!(" {MORE}")];
+    assert_eq!(pane.rows_are(7, &shown)[7..11], shown);
     // a click on the archived Plan shows its history (below); then the other `…` shows the archived Context
     pane.click(10, 9);
     wait_for_calls(&env, 1);
     pane.click(1, 10);
-    pane.wait_rows("the archived Context", 9, &[row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), " …".to_owned(), format!(" ▾ {STOPPED} gamma")]);
+    let shown = [row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), format!(" {MORE}"), format!(" {OPEN} {STOPPED} gamma")];
+    assert_eq!(pane.rows_are(9, &shown)[9..12], shown);
     // a click on beta's `…` collapses its group again
     pane.click(4, 8);
-    pane.wait_rows("the group collapsed", 7, &[row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"), "   └ …".to_owned()]);
+    let shown = [row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"), format!("   └ {MORE}")];
+    assert_eq!(pane.rows_are(7, &shown)[7..9], shown);
     assert_eq!(calls(&env), [words(&["session", "history", "l-old"])], "only the click on the archived Session ran a command");
 }
 
@@ -757,21 +767,21 @@ fn the_tree_follows_the_archive_events() {
          INSERT INTO events (txn, at, kind, context, plan, text, data)
          VALUES (cpd_txn(), '2026-02-02T00:00:00.000Z', 'plan-archived', 'beta', 'old', 'fixture', '{\"archived\":true}');",
     );
-    pane.wait("the Plan behind `…`", |s| s.iter().any(|r| r == "   └ …") && s.iter().all(|r| !r.contains(&format!("└ {STOPPED} old"))));
+    pane.wait("the Plan behind `…`", |s| s.iter().any(|r| r == &format!("   └ {MORE}")) && s.iter().all(|r| !r.contains(&format!("└ {STOPPED} old"))));
     sql(
         &mut open(&env),
         "UPDATE contexts SET archived_at = '2026-02-02T00:00:00.000Z' WHERE id = 'gamma';
          INSERT INTO events (txn, at, kind, context, text, data)
          VALUES (cpd_txn(), '2026-02-02T00:00:01.000Z', 'context-archived', 'gamma', 'fixture', '{\"archived\":true}');",
     );
-    pane.wait("the Context behind `…`", |s| s.iter().any(|r| r == " …") && s.iter().all(|r| !r.contains("gamma")));
+    pane.wait("the Context behind `…`", |s| s.iter().any(|r| r == &format!(" {MORE}")) && s.iter().all(|r| !r.contains("gamma")));
     sql(
         &mut open(&env),
         "UPDATE sessions SET archived_at = '2026-02-03T00:00:00.000Z' WHERE id = 'f-idle';
          INSERT INTO events (txn, at, kind, context, plan, session, text, data)
          VALUES (cpd_txn(), '2026-02-03T00:00:00.000Z', 'session-archived', 'alpha', 'ship', 'f-idle', 'fixture', '{\"archived\":true}');",
     );
-    pane.wait("the fork behind `…`", |s| s.iter().all(|r| !r.contains("ship·f-id")) && s.iter().filter(|r| r.as_str() == "   └ …").count() == 2);
+    pane.wait("the fork behind `…`", |s| s.iter().all(|r| !r.contains("ship·f-id")) && s.iter().filter(|r| r.as_str() == format!("   └ {MORE}")).count() == 2);
 }
 
 // ---------- the right-click menu ----------
@@ -906,8 +916,9 @@ fn a_click_on_an_archived_fork_runs_session_history() {
     sql(&mut open(&env), "UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'f-blocked';");
     fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 60, 14);
-    let screen = pane.ready();
-    assert_eq!(screen[5], "   └ …", "the archived fork is behind alpha's `…`");
+    pane.ready();
+    let shown = [format!("   └ {MORE}")];
+    assert_eq!(pane.rows_are(5, &shown)[5..6], shown, "the archived fork is behind alpha's `…`");
     pane.click(4, 5);
     pane.wait("the archived fork", |s| s.iter().any(|r| r.contains(&format!("└ {IDLE} ship·f-bl"))));
     pane.click(10, 6);
@@ -1122,16 +1133,15 @@ fn the_inbox_sections_more_row_expands_the_list_inline_and_less_folds_it() {
     populate(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 46, 20);
-    let screen = pane.ready();
+    pane.ready();
     // the section is pinned to the bottom, the Session rows above it
-    assert_eq!(screen[15..], inbox_section(46));
+    assert_eq!(pane.rows_are(15, &inbox_section(46))[15..], inbox_section(46));
     pane.click(10, 19); // `+1 more`
-    let screen = pane.wait("the expanded list", |s| s.last().is_some_and(|r| r == " − less"));
     let item = |label: &str| format!(" {NEEDS_YOU} {label}{}5m", " ".repeat(44 - 2 - label.len() - 2));
-    assert_eq!(screen[14..], [inbox_section(46)[..4].to_vec(), vec![item("m-alpha label"), " − less".to_owned()]].concat());
+    let expanded = [inbox_section(46)[..4].to_vec(), vec![item("m-alpha label"), " − less".to_owned()]].concat();
+    assert_eq!(pane.rows_are(14, &expanded)[14..], expanded);
     pane.click(3, 19); // `− less`
-    let screen = pane.wait("the folded list", |s| s.last().is_some_and(|r| r == " +1 more"));
-    assert_eq!(screen[15..], inbox_section(46));
+    assert_eq!(pane.rows_are(15, &inbox_section(46))[15..], inbox_section(46));
     assert!(calls(&env).is_empty(), "expanding and folding are no commands");
 }
 
@@ -1215,10 +1225,11 @@ fn with_no_engine_the_inbox_leads_with_engine_down_and_a_click_on_it_opens_the_l
         &format!("case \"$*\" in\n *list-clients*) echo '100 200 60';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac", real.trim()),
     );
     let pane = Pane::start(&env, 46, 20);
-    let screen = pane.ready();
+    pane.ready();
     // counted in the header and in `+N more`, first of the rows
     let section = inbox_section(46);
     let title = " Inbox 5 ";
+    let screen = pane.wait("the whole Inbox section", |s| s.len() == 20 && s[15] == format!(" ──{title}{}", "─".repeat(44 - 2 - title.len())) && s[17..19] == section[1..3] && s[19] == " +2 more");
     assert_eq!(screen[15], format!(" ──{title}{}", "─".repeat(44 - 2 - title.len())));
     assert!(screen[16].starts_with(&format!(" {NEEDS_YOU} engine is down")), "{:?}", screen[16]);
     assert_eq!(screen[17..19], section[1..3]);
