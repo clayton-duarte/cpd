@@ -996,6 +996,7 @@ CREATE TABLE jobs (
   CHECK ((cancel_reason IS NULL) = (cancel_requested_at IS NULL)),
   CHECK (status <> 'cancelled' OR cancel_reason IS NOT NULL)
 ) STRICT;
+CREATE INDEX jobs_plan_status ON jobs(plan, status);   -- migration read-indexes (sql-F4)
 
 CREATE TABLE dependencies (
   plan  TEXT NOT NULL,
@@ -1099,6 +1100,7 @@ CREATE TABLE sessions (
 ) STRICT;
 CREATE INDEX sessions_plan ON sessions(plan);
 CREATE UNIQUE INDEX sessions_one_manager ON sessions(context) WHERE role = 'manager' AND archived_at IS NULL;   -- migration 0010
+CREATE INDEX sessions_live ON sessions(id) WHERE state <> 'stopped' OR tmux_pane IS NOT NULL;   -- migration read-indexes (engine-F2)
 
 -- ---------- Events ----------
 CREATE TABLE events (
@@ -1118,6 +1120,7 @@ CREATE TABLE events (
 CREATE INDEX events_plan ON events(plan, id);
 CREATE INDEX events_context ON events(context, id);
 CREATE INDEX events_session ON events(session, id);
+CREATE INDEX events_kind ON events(kind, id);   -- migration read-indexes (sql-F6)
 
 -- ---------- Inbox items (§2.2) ----------
 CREATE TABLE inbox_items (
