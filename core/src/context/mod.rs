@@ -27,8 +27,6 @@ use std::str::FromStr;
 use clap::Args;
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
-use time::OffsetDateTime;
-use time::macros::format_description;
 
 pub use contexts::{ContextRow, Contexts, Written};
 pub use record::{By, Draft, PlanRef, Record};
@@ -244,13 +242,6 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Manager(args) => manager::manager(args),
         Command::Pending(args) => pending::pending(args),
     }
-}
-
-/// Now, as contract §1.3 writes times: RFC 3339 UTC with milliseconds.
-fn now() -> String {
-    OffsetDateTime::now_utc()
-        .format(format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"))
-        .expect("a UTC time always formats")
 }
 
 

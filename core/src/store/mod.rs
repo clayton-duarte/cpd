@@ -17,8 +17,6 @@ use std::time::Duration;
 use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, ErrorCode as SqliteCode, OpenFlags, Transaction, TransactionBehavior};
 use serde_json::{Value, json};
-use time::OffsetDateTime;
-use time::macros::format_description;
 
 use crate::context::legacy;
 use crate::error::{CpdError, ErrorCode};
@@ -464,16 +462,9 @@ fn begin_txn(conn: &Connection, current: &AtomicI64, command: &str, caller: &Cal
     current.store(id, Ordering::SeqCst);
     conn.execute(
         "INSERT INTO txns (id, at, command, pid, session, cwd) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![id, now(), command, caller.pid, caller.session, caller.cwd],
+        rusqlite::params![id, crate::clock::now(), command, caller.pid, caller.session, caller.cwd],
     )?;
     Ok(id)
-}
-
-/// Now, as §1.3 writes times: RFC 3339 UTC with milliseconds.
-fn now() -> String {
-    OffsetDateTime::now_utc()
-        .format(format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"))
-        .expect("a UTC time always formats")
 }
 
 /// Adds the database's path, and `busy_ms` to `store_busy`, to errors made

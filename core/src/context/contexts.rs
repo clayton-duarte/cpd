@@ -4,7 +4,8 @@
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::record::{Draft, Record};
-use super::{Jira, now};
+use super::Jira;
+use crate::clock::now;
 use crate::args::Text;
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};

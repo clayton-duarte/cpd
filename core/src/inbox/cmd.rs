@@ -7,10 +7,10 @@ use std::process::{Command as Process, Stdio};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
-use time::macros::format_description;
 use time::{Duration, OffsetDateTime, Time, UtcOffset};
 
 use super::model::{self, Filter, Item, Kind, State, Urgency};
+use crate::clock::timestamp;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
@@ -95,13 +95,6 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
 const DEFAULT_LIMIT: u32 = 50;
 
 
-/// §1.3's time: RFC 3339 UTC with milliseconds.
-fn stamp(time: OffsetDateTime) -> String {
-    time.to_offset(UtcOffset::UTC)
-        .format(format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"))
-        .expect("a UTC time always formats")
-}
-
 fn parse_time(item: &Item, column: &str, value: &str) -> Result<OffsetDateTime, CpdError> {
     OffsetDateTime::parse(value, &Rfc3339).map_err(|_| {
         CpdError::new(ErrorCode::StoreFailed, format!("Inbox item {} has an invalid {column}: {value:?}.", item.id))
@@ -153,7 +146,7 @@ fn engine_down(now: OffsetDateTime) -> Value {
         "record": null,
         "event": null,
         "url": null,
-        "opened_at": stamp(now),
+        "opened_at": timestamp(now),
         "closed_at": null,
         "snoozed_until": null,
         "dismissed_at": null,
@@ -198,7 +191,7 @@ fn list(args: ListArgs) -> Result<Output, CpdError> {
             context_exists(conn, context)?;
         }
         let open = model::list(conn, &filter(State::Open))?;
-        let visible = model::list(conn, &filter(State::Visible { now: stamp(now) }))?;
+        let visible = model::list(conn, &filter(State::Visible { now: timestamp(now) }))?;
         let closed = match args.closed {
             true => model::list(conn, &filter(State::Closed { limit: args.limit.unwrap_or(DEFAULT_LIMIT) }))?,
             false => Vec::new(),
@@ -311,7 +304,7 @@ fn snooze_until(until: Until, now: OffsetDateTime) -> Result<OffsetDateTime, Cpd
 fn snooze(args: SnoozeArgs) -> Result<Output, CpdError> {
     let Env { mut store, .. } = Env::open()?;
     let now = OffsetDateTime::now_utc();
-    let until = stamp(snooze_until(args.until, now)?);
+    let until = timestamp(snooze_until(args.until, now)?);
     let item = store.write("inbox snooze", |tx| {
         let item = open_item(tx, args.id)?;
         tx.execute("UPDATE inbox_items SET snoozed_until = ?2 WHERE id = ?1", params![item.id, until])?;
@@ -336,7 +329,7 @@ fn dismiss(args: DismissArgs) -> Result<Output, CpdError> {
         if item.dismissed_at.is_some() {
             return Ok((item, true));
         }
-        tx.execute("UPDATE inbox_items SET dismissed_at = ?2 WHERE id = ?1", params![item.id, stamp(now)])?;
+        tx.execute("UPDATE inbox_items SET dismissed_at = ?2 WHERE id = ?1", params![item.id, timestamp(now)])?;
         let event = NewEvent::inbox_dismissed(format!("Inbox item {} dismissed: {}.", item.id, item.label), item.id);
         events::append(tx, scoped(event, &item))?;
         Ok((model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))?, false))
