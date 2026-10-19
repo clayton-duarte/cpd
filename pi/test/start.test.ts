@@ -113,9 +113,42 @@ test("a failing session show is delivered as an error and nothing else starts", 
   f.load();
   await f.pi.fire("session_start");
   await settle();
-  assert.deepEqual(f.argvs(), [["session", "show", ID]]);
+  await settle(400); // more than the restart delays of the fast timing
+  assert.deepEqual(f.argvs(), [["session", "show", ID]], "a refusal is permanent: not retried");
+  assert.equal(f.pi.sent.length, 1, "reported once");
   assert.equal(f.pi.sent[0]!.message.content, "cpd adapter: session show: session_not_found: No such Session.");
   assert.equal((f.pi.sent[0]!.message.details as any).code, "session_not_found");
+});
+
+test("a session show that fails once then succeeds starts the adapter normally (pi-ci-W4)", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.respond("session-show", { ok: false, error: { code: "store_busy", message: "Store busy.", details: {} } }, { exit: 5 });
+  f.respond("plan-show", planShow());
+  f.load();
+  await f.pi.fire("session_start");
+  await waitFor("the error", () => f.pi.errors().length === 1);
+  assert.equal(f.pi.sent[0]!.message.content, "cpd adapter: session show: store_busy: Store busy.");
+  await waitFor("a retry", () => f.argvs().filter((a) => a[1] === "show").length >= 3);
+  f.respond("session-show", sessionShow());
+  await waitFor("the follower", () => f.follows().length > 0);
+  assert.equal(f.pi.errors().length, 1, "the same code is reported once, however often it is retried");
+  assert.deepEqual(f.argvs().slice(-2), [["session", "state", "idle", "--session", ID], ["plan", "show", "--plan", "p1"]]);
+  assert.equal(f.pi.sessionName, "the lead");
+});
+
+test("session_shutdown ends the retry of a failing session show", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.respond("session-show", { ok: false, error: { code: "store_busy", message: "Store busy.", details: {} } }, { exit: 5 });
+  f.load();
+  await f.pi.fire("session_start");
+  await waitFor("a retry", () => f.argvs().length >= 2);
+  await f.pi.fire("session_shutdown");
+  await settle(100);
+  const n = f.argvs().length;
+  await settle(300);
+  assert.equal(f.argvs().length, n, "no call after the shutdown");
 });
 
 test("stdout that is not JSON is an error with a code", async (t) => {

@@ -33,7 +33,7 @@ use crate::merge;
 use crate::output::Output;
 use crate::plan::jobs;
 use crate::plan::locked_fingerprint;
-use crate::store::Store;
+use crate::store::{Persist, Store};
 
 /// The `txns.command` and the `source` of the driver's `error` Events.
 const SOURCE: &str = "attempt run";
@@ -198,7 +198,9 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     // until this function returns, which is the driver's whole life.
     let lock = lock::inherited(&home, &plan, &id)?;
     let exe = Exe::current()?;
-    let Env { home, config, store } = Env::open_home(home)?;
+    // A transient store error never ends the Attempt: every read and write of
+    // this driver waits it out (§3.4), the open included.
+    let Env { home, config, store } = Env::open_home_persistent(home, Persist::new(|line| log(line), || false))?;
     let tmux = Tmux::new(config.tmux.socket.as_str());
     let mut driver = Driver { home, config, store, tmux, plan, id, lock, exe, catalog: None };
 

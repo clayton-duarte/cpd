@@ -40,6 +40,8 @@ pub struct Job {
     pub appended: bool,
     /// A review Job (`jobs.review`, B2).
     pub review: bool,
+    /// The urgent flag (`jobs.urgent`, §2.2): not a Locked field, in no fingerprint.
+    pub urgent: bool,
     pub fingerprint: Option<String>,
     pub retry_tier: Option<String>,
     pub cancel_reason: Option<String>,
@@ -92,7 +94,7 @@ impl Job {
         let spec = |f: fn(&JobSpec) -> Value| self.spec.as_ref().map_or(Value::Null, f);
         json!({
             "key": self.key, "seq": self.seq, "pr": self.pr, "title": self.title, "status": self.status, "tier": self.tier,
-            "appended": self.appended, "review": self.review, "needs": self.needs,
+            "appended": self.appended, "review": self.review, "urgent": self.urgent, "needs": self.needs,
             "goal": spec(|s| json!(s.goal)), "context": spec(|s| json!(s.context)), "touches": spec(|s| s.touches.clone()),
             "acceptance": spec(|s| s.acceptance.clone()), "out_of_scope": spec(|s| s.out_of_scope.clone()),
             "fingerprint": self.fingerprint, "retry_tier": self.retry_tier,
@@ -112,7 +114,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
     }
     let mut stmt = conn.prepare(
         "SELECT seq, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
-                fingerprint, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, review
+                fingerprint, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, review, urgent
            FROM jobs WHERE plan = ?1 ORDER BY seq",
     )?;
     let rows = stmt
@@ -123,12 +125,12 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 (r.get::<_, Option<String>>(7)?, r.get::<_, Option<String>>(8)?, r.get::<_, Option<String>>(9)?),
                 (r.get::<_, String>(10)?, r.get::<_, bool>(11)?, r.get::<_, Option<String>>(12)?, r.get::<_, Option<String>>(13)?),
                 (r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?, r.get::<_, Option<String>>(16)?),
-                (r.get::<_, Option<String>>(17)?, r.get::<_, String>(18)?, r.get::<_, bool>(19)?),
+                (r.get::<_, Option<String>>(17)?, r.get::<_, String>(18)?, r.get::<_, bool>(19)?, r.get::<_, bool>(20)?),
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|((seq, key, pr, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, review))| {
+        .map(|((seq, key, pr, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, review, urgent))| {
             let array = |name: &str, text: &str| -> Result<Value, CpdError> {
                 serde_json::from_str::<Value>(text)
                     .ok()
@@ -158,6 +160,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 status,
                 appended,
                 review,
+                urgent,
                 fingerprint,
                 retry_tier,
                 cancel_reason,
@@ -264,6 +267,7 @@ mod tests {
             status: status.into(),
             appended: false,
             review: false,
+            urgent: false,
             fingerprint: None,
             retry_tier: None,
             cancel_reason: None,

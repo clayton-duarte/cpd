@@ -6,7 +6,7 @@
 use crate::config::Config;
 use crate::error::CpdError;
 use crate::home::CpdHome;
-use crate::store::Store;
+use crate::store::{Persist, Store};
 
 /// `$CPD_HOME`, its `config.toml` and the open store.
 pub struct Env {
@@ -26,6 +26,14 @@ impl Env {
     pub fn open_home(home: CpdHome) -> Result<Env, CpdError> {
         let config = Config::load(&home)?;
         let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+        Ok(Env { home, config, store })
+    }
+
+    /// [`Env::open_home`] whose store persists through transient errors, the
+    /// open included (see [`Store::open_persistent`]).
+    pub fn open_home_persistent(home: CpdHome, persist: Persist) -> Result<Env, CpdError> {
+        let config = Config::load(&home)?;
+        let store = Store::open_persistent(&home, u64::from(config.timeouts.store_busy_ms), persist)?;
         Ok(Env { home, config, store })
     }
 }

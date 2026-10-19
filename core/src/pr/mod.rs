@@ -7,6 +7,7 @@
 //! - `view`: a PR's checks, reviews and comments, read-only (`pr view`);
 //! - `rebase`: the Lead Branch onto the base, the Gate and the push (`pr rebase`);
 //! - `push`: the Gate and a plain push of the Lead Branch (`pr push`);
+//! - `merge`: a clean pull request squash-merged on GitHub (`pr merge`);
 //! - `gh`: the one gateway to `gh`; `status`: the PR status enums; `row`: the Plan as these commands read it.
 //!
 //! `pr open`, `pr rebase` and `pr push` run under the per-repo lock, after R (§7.4); each
@@ -17,6 +18,7 @@ mod cancel;
 mod edit;
 mod feedback;
 mod gh;
+mod merge;
 mod open;
 mod poll;
 pub mod pulls;
@@ -37,7 +39,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, HookOutcome, Operation, run_hook};
 use crate::home::{CpdHome, Hook};
 use crate::ids::{AttemptId, PlanId, PrKey};
-use crate::merge::{self, RepoLock};
+use crate::merge::{self as attempt_merge, RepoLock};
 use crate::output::Output;
 use crate::plan::Phase;
 use crate::plan::PrRow;
@@ -65,6 +67,8 @@ pub enum Command {
     Push(Args),
     /// Show the PR's checks, reviews and comments (§9.8)
     View(Args),
+    /// Squash-merge a clean pull request on GitHub and delete its branch (§9.10)
+    Merge(merge::MergeArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -152,6 +156,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Rebase(args) => rebase::rebase(args),
         Command::Push(args) => push::push(args),
         Command::View(args) => view::view(args),
+        Command::Merge(args) => merge::merge(args),
     }
 }
 
@@ -264,8 +269,8 @@ fn lock(env: &mut Env, pr: &PrRow, source: &str) -> Result<RepoLock, CpdError> {
     // R needs pi's catalog only to pick the next Tier of an Attempt it ends `crashed`.
     if orphans {
         let catalog = config::load_catalog(&env.config)?;
-        let ctx = merge::Ctx { home: &env.home, config: &env.config, catalog: &catalog, source, metrics: &|_| None };
-        merge::recover(&mut env.store, &ctx, &lock)?;
+        let ctx = attempt_merge::Ctx { home: &env.home, config: &env.config, catalog: &catalog, source, metrics: &|_| None };
+        attempt_merge::recover(&mut env.store, &ctx, &lock)?;
     }
     Ok(lock)
 }

@@ -18,7 +18,7 @@ use super::archive::archive_on_quit;
 use super::fork_wait::wait_for_source;
 use super::moves::first_message;
 use super::port;
-use super::reload::{PI_STOP, adapter_missing, may_exec, reload, reload_due, stop_pi};
+use super::reload::{adapter_missing, may_exec, reload, reload_due, stop_pi};
 use super::row::{self, Role, Row, State};
 use super::{Env, RunArgs, not_a_lead, state};
 use crate::config::{Letter, Tier};
@@ -29,6 +29,7 @@ use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs, Plannotator};
 use crate::host::{PaneId, Tmux};
 use crate::ids::{PlanId, SessionId};
 use crate::output::Output;
+use crate::store;
 
 // Shared with the review Worker's fork wait (`driver::worker`), which reads them here.
 pub(crate) use super::fork_wait::{quiet_since, turn_finished};
@@ -39,23 +40,29 @@ const FILE_POLL: Duration = Duration::from_millis(500);
 const WATCHDOG_POLL: Duration = Duration::from_secs(2);
 /// How long it waits for `new-window`'s caller to set `@cpd_session` on its pane.
 const PANE_WAIT: Duration = Duration::from_secs(5);
+/// The first wait after a transient store error before pi runs; each next one doubles, up to [`RETRY_MAX`].
+const RETRY_FIRST: Duration = Duration::from_millis(500);
+/// The longest wait between two tries of a store access that met a transient error.
+const RETRY_MAX: Duration = Duration::from_secs(5);
 
 pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
-    let mut env = Env::open()?;
-    let row = env.store.read(|conn| row::load(conn, &args.id))?;
+    let mut env = patiently("opening the store", Env::open)?;
+    let row = patiently("reading the Session", || env.store.read(|conn| row::load(conn, &args.id)))?;
     if row.role == Role::Worker {
         return Err(not_a_lead(&row.id, row.role));
     }
     check_pane(&env.tmux(), &row.id)?;
     let exe = Exe::current()?;
     let dirs = PiDirs::from_env()?;
+    // How long a reload waits for pi to exit after `SIGTERM` before it sends `SIGKILL`.
+    let pi_stop = Duration::from_secs(u64::from(env.config.timeouts.pi_stop_seconds));
     // The pi a previous wrapper left running across its `exec` (§6.7 "Reload on install"): the first round adopts it.
     let mut adopted = args.adopt.map(|pid| (PiProc::adopt(Pid::from_raw(pid)), args.pi_stale));
     // Store errors the loop has logged, so each code is said once (a store error never ends a wrapper while pi runs).
     let mut logged = Logged::default();
     // From here on this process owns the terminal (commands.md §1.2).
     'run: loop {
-        let row = env.store.read(|conn| row::load(conn, &args.id))?;
+        let row = patiently("reading the Session", || env.store.read(|conn| row::load(conn, &args.id)))?;
         let (mut pi, pi_install, mut pi_stale) = match adopted.take() {
             // Steps 1–3 are not run and no pi is started. What the loop needs of the old process is restored here:
             // `recorded` is read from the row below, as at any start; `pi_install` is read now, which would hide a
@@ -81,7 +88,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                     return Err(reload(&exe, &row.id, None));
                 }
                 if !recorded {
-                    record_file(&mut env, &dirs, &row.id)?;
+                    patiently("recording the session file", || record_file(&mut env, &dirs, &row.id))?;
                 }
                 break status;
             }
@@ -106,7 +113,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 print!("  new pi installed: restarting pi for {}…\n", row.name);
                 let _ = std::io::stdout().flush();
                 // The adapter reports `stopped` at `session_shutdown`; this process does not.
-                stop_pi(&mut pi, PI_STOP);
+                stop_pi(&mut pi, pi_stop);
                 return Err(reload(&exe, &row.id, None));
             }
             if watched.elapsed() >= WATCHDOG_POLL {
@@ -115,14 +122,16 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 if missing.unwrap_or(false) {
                     print!("  adapter missing: restarting pi for {}…\n", row.name);
                     let _ = std::io::stdout().flush();
-                    stop_pi(&mut pi, PI_STOP);
+                    stop_pi(&mut pi, pi_stop);
                     continue 'run;
                 }
             }
             std::thread::sleep(FILE_POLL);
         };
         // The adapter reports `stopped` at shutdown; report it here when it did not.
-        if let Err(e) = state::set(&mut env.store, "session run", &row.id, State::Stopped, None) {
+        if let Err(e) = patiently("reporting the Session stopped", || {
+            state::set(&mut env.store, "session run", &row.id, State::Stopped, None)
+        }) {
             eprintln!("cpd: cannot report Session {} stopped: {}: {}", row.id, e.code(), e.message());
         }
         // pi exits 0 on the User's `/quit` and Ctrl+D (§10.8); a reload never gets here. A Manager is archived only
@@ -133,7 +142,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 Err(e) => print!("\n  {}: {}\n", e.code(), e.message()),
             }
         }
-        let name = env.store.read(|conn| row::load(conn, &args.id))?.name;
+        let name = patiently("reading the Session", || env.store.read(|conn| row::load(conn, &args.id)))?.name;
         print!("\n  pi exited. Press Enter to resume {name} here.\n");
         let _ = std::io::stdout().flush();
         let mut line = String::new();
@@ -256,11 +265,35 @@ impl Logged {
     }
 }
 
+/// Runs a store access of the wrapper's start or end (before pi runs, after it
+/// exited), again and again while it meets a transient error ([`store::is_transient`], and `lock_timeout`,
+/// the wait for the store's setup lock in `Env::open`): waits 0.5 s,
+/// doubling to 5 s. The pane says once what it waits for and why; the wrapper
+/// never ends for it. Any other result, error or not, is returned as it is.
+pub(super) fn patiently<T>(what: &str, mut access: impl FnMut() -> Result<T, CpdError>) -> Result<T, CpdError> {
+    let mut wait = RETRY_FIRST;
+    let mut said = false;
+    loop {
+        match access() {
+            Err(e) if store::is_transient(&e) || e.code() == ErrorCode::LockTimeout => {
+                if !said {
+                    print!("\n  Waiting for the store ({what}): {}: {} Trying again.\n", e.code(), e.message());
+                    let _ = std::io::stdout().flush();
+                    said = true;
+                }
+                std::thread::sleep(wait);
+                wait = (wait * 2).min(RETRY_MAX);
+            }
+            other => return other,
+        }
+    }
+}
+
 /// The Plan's plannotator port. When the range is full the pane says so, names the
 /// Plans that hold it and waits for Enter to try again; `None` at the end of input.
 fn assign_port(env: &mut Env, plan: &PlanId) -> Result<Option<u16>, CpdError> {
     loop {
-        match port::assign(&env.home, &mut env.store, &env.config, plan) {
+        match patiently("assigning the Plan's port", || port::assign(&env.home, &mut env.store, &env.config, plan)) {
             Ok(port) => return Ok(Some(port)),
             Err(e) if e.code() == ErrorCode::NoPort => {
                 print!("\n  {}: {}\n  Press Enter to retry.\n", e.code(), e.message());
@@ -335,7 +368,7 @@ fn record_file(env: &mut Env, dirs: &PiDirs, id: &SessionId) -> Result<bool, Cpd
 fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<LeadStart>, CpdError> {
     if let Some(file) = existing_file(dirs, row) {
         if row.file.as_deref() != Some(&file.display().to_string()) {
-            record_file(env, dirs, &row.id)?;
+            patiently("recording the session file", || record_file(env, dirs, &row.id))?;
         }
         return Ok(Some(LeadStart::Resume { file }));
     }
@@ -464,5 +497,28 @@ mod tests {
         assert_eq!(logged.0.len(), 1);
         assert_eq!(logged.once(failing(), "cannot read"), None);
         assert_eq!(logged.once(Ok(true), "cannot read"), Some(true));
+    }
+
+    #[test]
+    fn patiently_tries_again_after_a_transient_error_and_returns_what_is_not() {
+        let mut calls = 0;
+        let got = patiently("test", || {
+            calls += 1;
+            if calls < 2 { Err(CpdError::new(ErrorCode::StoreBusy, "busy.")) } else { Ok(calls) }
+        });
+        assert_eq!(got.unwrap(), 2);
+        let mut calls = 0;
+        let got = patiently("test", || {
+            calls += 1;
+            if calls < 2 { Err(CpdError::new(ErrorCode::LockTimeout, "setup lock.")) } else { Ok(calls) }
+        });
+        assert_eq!(got.unwrap(), 2, "the wait for the setup lock is waited out too");
+        let mut calls = 0;
+        let err = patiently::<()>("test", || {
+            calls += 1;
+            Err(CpdError::new(ErrorCode::SessionNotFound, "gone."))
+        })
+        .unwrap_err();
+        assert_eq!((err.code(), calls), (ErrorCode::SessionNotFound, 1), "not transient: no retry");
     }
 }

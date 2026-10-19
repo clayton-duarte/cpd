@@ -84,7 +84,7 @@ fn healthy() -> TestEnv {
     let env = TestEnv::new();
     write_config(&env, "");
     env.fake("git", "echo 'git version 2.43.0'");
-    env.fake("tmux", "[ \"$1\" = -V ] && echo 'tmux 3.4'; exit 0");
+    env.fake("tmux", "[ \"$1\" = -V ] && echo 'tmux 3.6'; exit 0");
     env.fake_gh("[ \"$1\" = auth ] && exit 0; echo 'gh version 2.45.0 (2025-07-18 Ubuntu 2.45.0-1ubuntu0.3)'");
     install_pi(&env, "1.2.0");
     symlink(real_node(), env.bin().join("node")).unwrap();
@@ -167,7 +167,7 @@ fn a_healthy_machine_passes_every_check_in_order() {
         assert_eq!(c["severity"], "error");
     };
     tool("git", "2.43.0", ">= 2.43.0");
-    tool("tmux", "3.4", ">= 3.4");
+    tool("tmux", "3.6", ">= 3.6");
     tool("pi", "1.2.0", ">= 1.2.0 < 2.0.0");
     tool("gh", "2.45.0", ">= 2.45.0");
     for warn in ["gh_auth", "lead_packages", "watch"] {
@@ -239,9 +239,11 @@ fn each_tool_must_be_at_or_above_its_minimum() {
         ("git", "git version 2.43.0", true, "2.43.0"),
         ("git", "git version 2.50.1 (Apple Git-155)", true, "2.50.1"),
         ("tmux", "tmux 3.3a", false, "3.3"),
-        ("tmux", "tmux 3.4a", true, "3.4"),
-        ("tmux", "tmux 3.5", true, "3.5"),
-        ("tmux", "tmux next-3.6", true, "next-3.6"),
+        ("tmux", "tmux 3.4", false, "3.4"),
+        ("tmux", "tmux 3.5a", false, "3.5"),
+        ("tmux", "tmux 3.6", true, "3.6"),
+        ("tmux", "tmux 3.8", true, "3.8"),
+        ("tmux", "tmux next-3.9", true, "next-3.9"),
         ("pi", "1.1.9", false, "1.1.9"),
         ("pi", "1.9.9", true, "1.9.9"),
         ("pi", "2.0.0", false, "2.0.0"),

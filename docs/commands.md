@@ -56,7 +56,7 @@ Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Thr
 | `cpd session run`, `cpd tui view` (internal) | they run pi or draw a ratatui view in their pane | they are the programs inside cockpit panes (§6.2), not commands an agent calls. If they fail before taking the terminal, they print the failure envelope and exit with its code |
 | `cpd tui --attach` | nothing on success: it replaces itself with `tmux attach` | the approved outline says `tui` "builds and attaches the cockpit"; without `--attach`, `cpd tui` prints JSON like every command |
 
-`cpd --version` (like `--help`) prints one JSON value too: `{"ok": true, "version": "0.0.0", "schema": 1000, "store_schema": 1000, "protocol": 4, "store": {"opens": true, "refusal": null, "unknown": [], "pending": []}}`. `store` is the **verdict** of contract §4.5 ("The window") on `$CPD_HOME`'s database opened read-only, computed by the one function every guard uses (`store::verdict`): `null` when the database file does not exist; otherwise `opens` (`true` when this binary can open the store, migrating or converting it if needed), `refusal` (`null`, or `{"code", "message"}` with `code` one of `store_too_new`, `store_failed`, `migration_changed`, `migration_order`, §1.3) when `opens` is `false`, `unknown` (the migration names the store has applied that this binary lacks, in name order: inside the window they are all additive) and `pending` (the names of this binary's migrations the store has not applied, in the order they would be applied; for an unconverted store the legacy names it lacks, then every named one). `unknown` and `pending` are `[]` for a store that is not named yet, and filled whenever the store is a named store, whether or not it opens. **`schema` and `store_schema` are a projection of the verdict, kept only for the integer-era binaries that still run (their reload and install guards compare the two: `store_schema` above `schema` refuses) until `hs`, `air` and `pro` are converted; a later change removes them (hs-d178 D1):** `schema` is always `1000`; `store_schema` is `null` when `store` is, `1000` when `store.opens` is `true`, `1001` when it is `false`. No new code reads them. `protocol` is an integer, **4** today (1 until Plan manager added `session-message`, 2 until Plan inbox added the four `inbox-*` kinds, 3 until `session state idle --reply`, hs-d278), raised whenever an Event kind, an Event `data` field the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on (contract §5.2 "The protocol number"); the adapter checks it (§15.2). `--version` never creates, migrates or writes the database, and runs neither the schema check nor the conversion. **The guards read `store`:** a driver or a Lead's wrapper reloads into a binary only when `store` is `null` or `store.opens` is `true` (contract §3.4, §6.7), and `scripts/install-cpd.sh` refuses a build whose `store.opens` is `false`, and a Lead Branch build that carries a migration file that is not on `origin/main` (contract §3.7).
+`cpd --version` (like `--help`) prints one JSON value too: `{"ok": true, "version": "0.0.0", "protocol": 4, "store": {"opens": true, "refusal": null, "unknown": [], "pending": []}}`. `store` is the **verdict** of contract §4.5 ("The window") on `$CPD_HOME`'s database opened read-only, computed by the one function every guard uses (`store::verdict`): `null` when the database file does not exist; otherwise `opens` (`true` when this binary can open the store, migrating or converting it if needed), `refusal` (`null`, or `{"code", "message"}` with `code` one of `store_too_new`, `store_failed`, `migration_changed`, `migration_order`, §1.3) when `opens` is `false`, `unknown` (the migration names the store has applied that this binary lacks, in name order: inside the window they are all additive) and `pending` (the names of this binary's migrations the store has not applied, in the order they would be applied; for an unconverted store the legacy names it lacks, then every named one). `unknown` and `pending` are `[]` for a store that is not named yet, and filled whenever the store is a named store, whether or not it opens. `protocol` is an integer, **4** today (1 until Plan manager added `session-message`, 2 until Plan inbox added the four `inbox-*` kinds, 3 until `session state idle --reply`, hs-d278), raised whenever an Event kind, an Event `data` field the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on (contract §5.2 "The protocol number"); the adapter checks it (§15.2). `--version` never creates, migrates or writes the database, and runs neither the schema check nor the conversion. **The guards read `store`:** a driver or a Lead's wrapper reloads into a binary only when `store` is `null` or `store.opens` is `true` (contract §3.4, §6.7), and `scripts/install-cpd.sh` refuses a build whose `store.opens` is `false`, and a Lead Branch build that carries a migration file that is not on `origin/main` (contract §3.7).
 
 Every `--help` prints `{"ok": true, "help": "<clap's text>"}`. The root help (`cpd --help`, `cpd -h`, `cpd help`) adds `tree`: the whole command tree, every command whatever its depth, in clap's order, clap's own `help` subcommand left out. `cpd <group> --help` and `cpd help <group>` print `help` only. Each node is `{"name", "about", ...}`: `name` the command's word, `about` its one-line description (clap's, which ends with its § here). A runnable node (no subcommand, or subcommands that are optional, as `tui`) also has `callers`, `cockpit` and `internal` (§2). A node with subcommands has `commands`, its children. Example (trimmed with `...`):
 
@@ -111,6 +111,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `store_busy` | 5 | no write lock within `store_busy_ms` (§4.2); `SQLITE_BUSY` and `SQLITE_LOCKED` both |
 | `internal` | 1 | a bug in cpd itself (for example a malformed Event built by a command), or a failed write to stdout other than EPIPE (no I/O error code exists). `store_failed` is for SQLite failures only |
 | `context_not_found`, `plan_not_found`, `pr_not_found`, `job_not_found`, `attempt_not_found`, `escalation_not_found`, `review_not_found`, `session_not_found` | 4 | the selected or named object does not exist. (A Context record that names a missing record is `record_not_found`, exit 3, §4.6) |
+| `merge_not_clean` | 3 | `pr merge` (§9.10) re-read the pull request and found it not `OPEN` or not `CLEAN`; `details` has `repo`, `number`, `state`, `merge_state` (hs-d272, hs-d274) |
 | `item_not_found` | 4 | `inbox show`, `snooze` or `dismiss` named an Inbox item that does not exist |
 | `item_closed` | 3 | `inbox snooze` or `dismiss` named an Inbox item that is closed (§21) |
 | `archive_blocked` | 3 | `context archive`, `plan archive` or `session archive` found a live object (contract §2.2 "Archived"); `details.blockers` lists each, `details.next` says what to do |
@@ -421,7 +422,7 @@ Idempotent: yes; it only reads.
 cpd context distill [--context <c>]
 ```
 
-Builds the Context's **digest** (contract §4.6, hs-d194 D1–D5; CONTEXT.md "Distilled Context"): a derived, compressed rendering of its records in force, written by one-shot pi and validated by cpd. Engine E9 starts it detached, debounced, when the Context has records newer than its digest (contract §3.7); anyone may run it on demand, and it then runs in the caller's process and waits for pi. The Context is `--context`, else the selected Plan's (§1.3). Its §2 row is added by the Job that implements it, as §10.9's was, so that `every_documented_command_exists` holds on every commit.
+Builds the Context's **digest** (contract §4.6, hs-d194 D1–D5; CONTEXT.md "Distilled Context"): a derived, compressed rendering of its records in force, written by one-shot pi and validated by cpd. Engine E9 starts it detached, debounced, when the Context has records newer than its digest (contract §3.7): once the newest record is 10 minutes old, or at once when 20 or more records are newer than the digest; anyone may run it on demand, and it then runs in the caller's process and waits for pi. The Context is `--context`, else the selected Plan's (§1.3). Its §2 row is added by the Job that implements it, as §10.9's was, so that `every_documented_command_exists` holds on every commit.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -434,7 +435,9 @@ An archived Context is not refused (the digest is a derived file); engine E9 nev
 Effects (contract §4.6 "The distill run", steps 1–5):
 - **Nothing to do**, `"already": true` and nothing written: the latest digest's `upto_seq` is at least the Context's highest record `seq`, or no record is in force (then `digest` is null).
 - **Carried forward**: only `plan` and `brief` records came after the latest digest, so the records in force are the same; its text is written as the new `<upto_seq>.md` without pi (`"distilled": false`).
-- **Otherwise**: files `prompt.md` and `records.md`, then the distiller, `pi --print …` at Tier `context_distill_tier` (contract §6.5 "Distiller", §8.2), stdout to `<upto_seq>.md.tmp`, killed after `timeouts.distill_minutes`; then the validation, and on success the rename to `<upto_seq>.md` and the removal of the directory's older digests and temporary files. `"distilled": true`.
+- **Otherwise**: files `prompt.md` and `records.md`, then the distiller, `pi --mode json …` at Tier `context_distill_tier` (contract §6.5 "Distiller", §8.2), JSON mode (`--mode json`), read by cpd, which writes the final assistant text to `<upto_seq>.md.tmp`, killed after `timeouts.distill_minutes`; then the validation of that text, and on success cpd's `## Record index` is appended, the file renamed to `<upto_seq>.md` and the directory's older digests, temporary files and kept `.md.invalid` removed. `"distilled": true` and `run` (below). An invalid digest is kept as `<upto_seq>.md.invalid`, one per Context, replacing the previous one (contract §4.6, hs-d244 D-b).
+- **Repair**: a digest invalid only because 1 to 16 decisions or open questions in force are uncited (no `stray` id, within the limit) gets **one** more pi run, the repair turn (contract §4.6 step 5, hs-d244 D-c): pi is given the invalid topic sections and the missing records and answers only `## Additions`, which cpd appends to the topic sections before it validates again. Valid, the run succeeds and `repair` (below) is in its output; invalid, it fails with `distill_invalid` and `.md.invalid` holds the repaired text. No repair for a stray id, a digest over the limit, more than 16 missing or a carried-forward digest.
+- **Run log**: every run that started pi appends a line to `run/context-digests/<context>/runs.jsonl` (`started_at`, `seconds`, `model`, `tokens_in`, `tokens_out`, `cost`, `context`, `upto_seq`, `result`, `kind`: `distill` or `repair`; contract §4.6 "The run log"), also when it failed; a repaired run has two lines.
 - **Rows and Events**: none on success; no database write ever, except the one `error` Event of a failure (below).
 - **tmux:** none. **git:** none.
 
@@ -442,16 +445,19 @@ Failures, after the lock is taken. Each removes the `.md.tmp`, leaves the previo
 
 | Failure | Code | Exit | `details` |
 |---|---|---|---|
-| pi could not start, exited non-zero (an error, or an answer cut at the output limit), or ran longer than `timeouts.distill_minutes` | `distill_failed` | 1 | `context`, `upto_seq`, `reason` (`spawn`, `exit` or `timeout`), `exit` (when it exited), `tail` (pi's last 60 stderr lines), `log` |
-| the digest is not UTF-8, is over 32 768 bytes, leaves a record in force uncited (`missing`) or cites an id that is not one (`stray`: superseded, `plan`, `brief` or unknown) | `distill_invalid` | 1 | `context`, `upto_seq`, `bytes`, `limit` (32768), `missing` (ids), `stray` (ids), `log` |
+| pi could not start, exited non-zero (an error, or an answer cut at the output limit), ran longer than `timeouts.distill_minutes`, or its JSON stream had no final assistant text | `distill_failed` | 1 | `context`, `upto_seq`, `reason` (`spawn`, `exit`, `timeout` or `output`), `exit` (when it exited), `tail` (pi's last 60 stderr lines), `log` |
+| the digest (after its repair turn, when it had one) is not UTF-8, is over 32 768 bytes, leaves a decision or open question in force uncited in its topic sections (`missing`; the other records are listed by cpd's index, so need no citation) or cites an id that is not one (`stray`: superseded, `plan`, `brief` or unknown) | `distill_invalid` | 1 | `context`, `upto_seq`, `bytes`, `limit` (32768), `missing` (ids), `stray` (ids), `invalid` (the kept `.md.invalid` file), `log` |
 
 `log` is `run/context-digests/<context>/distill.log`, where the run writes its stderr (and, started by E9, its stdout too).
 
 ```json
 {"ok": true, "context": "building-cpd", "distilled": true,
  "digest": {"upto_seq": 1342, "file": "/home/clayton/.cpd/run/context-digests/building-cpd/1342.md", "bytes": 27311},
- "records_in_force": 231}
+ "records_in_force": 231,
+ "run": {"seconds": 94.2, "model": "anthropic/claude-sonnet-4-5:medium", "tokens_in": 61234, "tokens_out": 7410, "cost": 0.43}}
 ```
+
+`run` is present only when pi ran (`"distilled": true`); its fields are the run's `runs.jsonl` line without `started_at`, `context`, `upto_seq`, `result` and `kind`, and `tokens_in`, `tokens_out` and `cost` may be `null`. `repair` is present only when a repair turn ran and succeeded, with the same fields for it (`run` stays the distiller's). On a failure the same figures are in the log line only, not in the Event.
 
 Idempotent: yes. With no record newer than the latest digest it returns `"already": true` and runs nothing; a rerun after a failure runs again (on demand; E9 does not retry the same `seq`, contract §3.7).
 
@@ -528,7 +534,7 @@ cpd plan show [--plan <id>]
 
 Effects: none; one read transaction, so the result is one consistent snapshot. It is the TUI's snapshot of a Plan (§17).
 
-Output: every field of the Plan (§2.2); `prs` (R34, A14), every PR of the Plan in key order, `cancelled` ones included, each with its fields (§2.2 PR: `key`, `repo`, `base`, `needs`, `status`, `lead_branch`, `lead_worktree`, `pr`, `pull_request` (the row, as in §4.2, `mergeable` and `merge_state` included, or null), `all_merged_at`, `start_failed_at`, `created_at`, `started_at`, `merged_at`) and `jobs`, the keys of its Jobs in `seq` order; `jobs` with each Job's fields (Spec included, `pr` and `review` among them), `needs`, and its Attempts (`id`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `worker_session`, `started_at`, `ended_at`); `escalations` that are `open`; the latest Plan review; `counts`; `tamper` (the tamper report of §4.3: `{kind: "schema" | "fingerprint" | "history", …}`); `events_cursor`.
+Output: every field of the Plan (§2.2); `prs` (R34, A14), every PR of the Plan in key order, `cancelled` ones included, each with its fields (§2.2 PR: `key`, `repo`, `base`, `needs`, `status`, `lead_branch`, `lead_worktree`, `pr`, `pull_request` (the row, as in §4.2, `mergeable` and `merge_state` included, or null), `all_merged_at`, `start_failed_at`, `created_at`, `started_at`, `merged_at`) and `jobs`, the keys of its Jobs in `seq` order; `jobs` with each Job's fields (Spec included, `pr`, `review` and `urgent` among them), `needs`, and its Attempts (`id`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `worker_session`, `started_at`, `ended_at`); `escalations` that are `open`; the latest Plan review; `counts`; `tamper` (the tamper report of §4.3: `{kind: "schema" | "fingerprint" | "history", …}`); `events_cursor`.
 
 ```json
 {"ok": true,
@@ -807,7 +813,7 @@ Jobs, Specs and Dependencies (§2.2, §3.2). Kept from cpd 1 §11 "Jobs" except 
 ### 5.1 `job add`
 
 ```
-cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs <k1,k2> | --review] [--draft] [--plan <id>]
+cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs <k1,k2> | --review] [--draft] [--urgent] [--plan <id>]
 cpd job add <key> --draft --title <text> [--tier <T>] [--spec <file>] [--pr <key>] [--needs <k1,k2>] [--plan <id>]
 ```
 
@@ -819,6 +825,7 @@ cpd job add <key> --draft --title <text> [--tier <T>] [--spec <file>] [--pr <key
 | `--pr <key>` | the Job's PR (R34, A14), selected by §1.3's rule: required when the Plan has two or more PRs that are not `cancelled`, defaulted to the one when it has one |
 | `--needs <k1,k2>` | Dependencies, comma-separated, no duplicates (`usage`); Jobs of the same PR only (A7) |
 | `--draft` | add the Job as a `draft` in a phase after `plan` too (User, hs-d173, hs-d174, hs-d179: every planned batch is visible in the Plan view before it is approved): `status = draft`, `appended = 1`, no fingerprint; the engine never runs it, and it becomes `queued` only at the approval of a Plan review of the drafts (§4.7). In phase `plan` every Job is a draft, so `--draft` changes nothing there. Its needs may be drafts. Without `--tier` and `--spec` it is a stub (above); `--draft` is the only way to add a Job without them |
+| `--urgent` | add the Job with `urgent = 1` (contract §2.2): engine E3 starts it before every non-urgent Ready Job and may run it as one Attempt beyond `concurrency` (§3.7). Use it **only when the User explicitly asks**, usually for something that blocks all work or an incident. Not a Locked field and not in any fingerprint (§2.3); works with `--draft`, `--review` and in every phase `job add` works in. To mark an existing Job, see §5.8 |
 | `--review` | a **review Job** (B2, contract §2.2): its Worker is a fork of the Plan's Lead, it commits nothing and writes `run/<plan>/reviews/<key>.md`. Its Dependencies are **set** to every Job of its PR that exists at that moment and is not `cancelled`, so `--needs` with `--review` is `usage` (exit 2). Jobs added later do not become its Dependencies. The Spec file is as for any Job; its `touches` is informational for a review Job (*decided*: the Lead lists `run/<plan>/reviews/<key>.md`) |
 
 | Precondition | Code | Exit |
@@ -833,13 +840,13 @@ cpd job add <key> --draft --title <text> [--tier <T>] [--spec <file>] [--pr <key
 
 **A stub draft** stores `tier` and the Spec fields `goal`, `context`, `touches`, `acceptance` and `out_of_scope` as null for what was not given (a given `--spec` sets all five; `--tier` sets the Tier), and its `job-added` Event has `tier: null` when it has none. A draft that lacks its Spec or its Tier is **incomplete**: it is never queued or run (contract §3.2), a Plan review of it is refused `draft_incomplete` (§4.6) and so is `plan lock` (§4.8). `needs` and `pr` work as for any draft.
 
-Effects: **rows**, one transaction: `jobs` (`pr` = the PR's key; `review` = 1 with `--review`; `status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = draft`, `appended = 1`, no fingerprint, with `--draft` in any later phase; `status = queued`, `appended = 1`, fingerprint stored, in a later phase without `--draft`); one `dependencies` row per need (with `--review`, per Job of the PR, as the Dependencies are set in the same transaction). **Event** `job-added` `{pr, status, appended, tier, needs, review}`. **Re-arms `all-merged`** (hs-d140): the same transaction sets the PR's `all_merged_at` to null when it was set, so engine E4 appends `all-merged` for that PR again once its Jobs are all `merged` or `cancelled` (contract §3.7); a PR that never had it sent is unchanged. No cycle is possible: nothing needs a new Job yet. An appended Job of a `waiting` PR is not Ready until its PR starts (§3.2); an appended draft is not Ready at all until its review is approved; one of an `open` PR reaches its pull request through `pr rebase --pr <key>` (§9.3), or `pr push --pr <key>` (§9.9).
+Effects: **rows**, one transaction: `jobs` (`pr` = the PR's key; `review` = 1 with `--review`; `urgent` = 1 with `--urgent` (else 0); `status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = draft`, `appended = 1`, no fingerprint, with `--draft` in any later phase; `status = queued`, `appended = 1`, fingerprint stored, in a later phase without `--draft`); one `dependencies` row per need (with `--review`, per Job of the PR, as the Dependencies are set in the same transaction). **Event** `job-added` `{pr, status, appended, tier, needs, review, urgent}`. **Re-arms `all-merged`** (hs-d140): the same transaction sets the PR's `all_merged_at` to null when it was set, so engine E4 appends `all-merged` for that PR again once its Jobs are all `merged` or `cancelled` (contract §3.7); a PR that never had it sent is unchanged. No cycle is possible: nothing needs a new Job yet. An appended Job of a `waiting` PR is not Ready until its PR starts (§3.2); an appended draft is not Ready at all until its review is approved; one of an `open` PR reaches its pull request through `pr rebase --pr <key>` (§9.3), or `pr push --pr <key>` (§9.9).
 
 ```json
-{"ok": true, "job": {"key": "api-schema", "pr": "api", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false}}
+{"ok": true, "job": {"key": "api-schema", "pr": "api", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": false}}
 ```
 
-Idempotent: yes, as stated (`--draft` is not a Locked field: the call that found an identical Job returns `already` whatever its status). `--review` is repeatable like any add: an identical call (same Locked fields, `review` included, same Dependencies) is `already`; a call after another Job was added to the PR differs in its Dependencies and is `job_key_exists`. `job edit` has no `--review` and refuses `--needs` and `--no-needs` on a review Job with `usage` (*decided*: its Dependencies are fixed by the add; to change them, cancel it and add a new one).
+Idempotent: yes, as stated (`--draft` and `--urgent` are not Locked fields: the call that found an identical Job returns `already` whatever its status). `--review` is repeatable like any add: an identical call (same Locked fields, `review` included, same Dependencies) is `already`; a call after another Job was added to the PR differs in its Dependencies and is `job_key_exists`. `job edit` has no `--review` and refuses `--needs` and `--no-needs` on a review Job with `usage` (*decided*: its Dependencies are fixed by the add; to change them, cancel it and add a new one).
 
 ### 5.2 `job edit`
 
@@ -920,7 +927,7 @@ Starts one Ready Job now: the same step as engine E3 (cpd 1 §11, kept).
 | the Job is Ready (§3.2) | `job_not_ready` | 3 |
 | its fingerprint matches | `locked_job_tampered` | 3 |
 | the driver lock is free (§3.4 step 1) | `cas_lost` | 3 |
-| fewer than `concurrency` Attempts are not `ended` | `no_slot` | 3 |
+| fewer than `concurrency` Attempts are not `ended` (an urgent Job: fewer than `concurrency + 1`, contract §3.7) | `no_slot` | 3 |
 
 Effects (§3.4 "The driver lock"): take `locks/attempt-<plan>--<attempt>.lock`; **rows**, one transaction: `attempts` (`starting`, Tier from §9, `origin`), Job `running`; **Event** `attempt-started` `{number, tier, origin}`; then spawn `cpd attempt run <attempt> --plan <plan>` with `setsid`, fd 3 = the lock, stderr to `run/<plan>/logs/attempt-<attempt>.log`, and record `driver_pid` (a data write, no Event). If the spawn fails, the command ends the Attempt `failed` / `crashed` with `driver_pid` still null (`attempt-retry` at the same Tier, not counted against `retry_cap`, §3.4) and returns `spawn_failed` (exit 1).
 
@@ -936,10 +943,10 @@ Idempotent: no. A second call finds the Job `running` and is refused `job_not_re
 cpd job list [--status <status>] [--plan <id>]
 ```
 
-`--status` is one of §3.2's statuses and may repeat. Effects: none.
+`--status` is one of §3.2's statuses and may repeat. Each Job carries `urgent` (a boolean). Effects: none.
 
 ```json
-{"ok": true, "jobs": [{"key": "api-schema", "pr": "api", "title": "…", "status": "merged", "tier": "S2", "appended": false, "review": false, "needs": [], "attempts": 1, "merged_sha": "c0ffee…"}]}
+{"ok": true, "jobs": [{"key": "api-schema", "pr": "api", "title": "…", "status": "merged", "tier": "S2", "appended": false, "review": false, "urgent": false, "needs": [], "attempts": 1, "merged_sha": "c0ffee…"}]}
 ```
 
 ### 5.7 `job show`
@@ -948,14 +955,35 @@ cpd job list [--status <status>] [--plan <id>]
 cpd job show <key> [--plan <id>]
 ```
 
-Effects: none. Output: every field of the Job (§2.2; `review: true` for a review Job, B2), `needs`, `needed_by`, and every Attempt with all its fields (`check_tail`, `metrics`) and its Escalations (cpd 1 §11, kept).
+Effects: none. Output: every field of the Job (§2.2; `review: true` for a review Job, B2; `urgent`, a boolean), `needs`, `needed_by`, and every Attempt with all its fields (`check_tail`, `metrics`) and its Escalations (cpd 1 §11, kept).
 
 ```json
-{"ok": true, "job": {"key": "worker", "pr": "api", "status": "failed", "failed_cause": "timed_out", "tier": "S2", "review": false, "fingerprint": "9f…", "retry_tier": null, "…": "…"}, "needs": ["api-schema"], "needed_by": ["ui"],
+{"ok": true, "job": {"key": "worker", "pr": "api", "status": "failed", "failed_cause": "timed_out", "tier": "S2", "review": false, "urgent": false, "fingerprint": "9f…", "retry_tier": null, "…": "…"}, "needs": ["api-schema"], "needed_by": ["ui"],
  "attempts": [{"id": "worker-a1", "status": "ended", "outcome": "failed", "cause": "timed_out", "check_tail": null, "escalations": []}]}
 ```
 
 `tamper` is the tamper report of §4.3, as in `plan show` (empty when the Job is intact). Both are read-only.
+
+### 5.8 `job urgent`
+
+```
+cpd job urgent <key> [--plan <id>]
+```
+
+Marks an existing Job **urgent** (contract §2.2): engine E3 starts urgent Ready Jobs first, then by `jobs.seq`, across Plans, and may start one urgent Job beyond `concurrency` (§3.7). A Lead or Manager runs it **only when the User explicitly asks**, usually for something that blocks all work or an incident. `urgent` is not a Locked field and in no fingerprint (§2.3), so it is allowed on a Locked Job: a `queued` one.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Job exists in the Plan | `job_not_found` | 4 |
+| the Job is `queued` or `draft`; a `running`, `merged`, `failed` or `cancelled` Job is refused (*decided*: the flag only matters to scheduling, and E3 only starts `queued` Jobs; `job retry` makes a `failed` one `queued`, then mark it) | `illegal_transition` | 3 |
+
+Effects: **rows**, one transaction: `jobs.urgent = 1`. **Event** `job-edited` `{fields: ["urgent"]}` (no new Event kind). Nothing else changes: status, fingerprint, `appended` and Dependencies stay as they are. There is no command to clear the flag.
+
+```json
+{"ok": true, "job": {"key": "hotfix", "status": "queued", "urgent": true}, "fields": ["urgent"]}
+```
+
+Idempotent: yes; a Job that is already urgent writes nothing and returns `"already": true` with `"fields": []`.
 
 ## 6. `attempt`
 
@@ -1409,6 +1437,34 @@ Effects: under the per-repo lock of the PR's repo, after R (§7.4): the clean ch
 
 `sha` is the Lead Branch's tip. Idempotent: yes; a branch already at the remote's sha (git's porcelain status `=`, "up to date") still runs the Gate, pushes nothing and returns `"pushed": false`.
 
+### 9.10 `pr merge`
+
+```
+cpd pr merge <owner>/<repo>#<n>
+```
+
+Merges a pull request on GitHub: the Deploy column's merge button (§13.2; hs-d272, hs-d273, hs-d274). **Callers:** the User, through the cockpit (`cockpit` true); none of the agent roles, and no guard against them calling it (hs-d248). It takes a pull request, not a Plan's PR key: it needs no Plan or Context, and `<owner>/<repo>#<n>` is the form the Deploy column shows. Per-owner merge rules (repo-policy, hs-d263) are later.
+
+Steps:
+
+1. Read the pull request fresh from GitHub: `gh pr view <n> --repo <owner/repo> --json state,mergeStateStatus,headRefOid,title`. The stored `pull_requests.merge_state` is not trusted: it can lag.
+2. Refuse, failing loud, unless `state` is `OPEN` and `mergeStateStatus` is `CLEAN`.
+3. `gh pr merge <n> --repo <owner/repo> --squash --delete-branch --match-head-commit <headRefOid>`. `--match-head-commit` makes GitHub refuse when the branch moved after step 1's check. The method is always squash, and the branch is deleted on GitHub after the merge. cpd's own clean-up never touches remote branches (§9.2 "After a PR is merged"), and nothing in cpd runs `git fetch --prune`, so the local clean-up is unaffected.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the argument is `<owner>/<repo>#<n>`, `n` a positive integer | `usage` | 2 |
+| the re-check finds the pull request not `OPEN` or its `mergeStateStatus` not `CLEAN`; `details` is `{repo, number, state, merge_state}` (GitHub's words) | `merge_not_clean` | 3 |
+| each `gh` call succeeds (also when `--match-head-commit` makes GitHub refuse); `details` is `{argv, exit, stderr}` | `gh_failed` | 1 |
+
+Effects: the two `gh` calls above. **Rows**: none; no Event. The pull request's row is not touched: the next `pr poll` records the merge, as for a merge made on GitHub (§9.2).
+
+```json
+{"ok": true, "repo": "<owner/repo>", "number": 31, "method": "squash", "branch_deleted": true}
+```
+
+Idempotent: no. A second call finds the pull request `MERGED` and is refused `merge_not_clean` (`details.state` `MERGED`).
+
 ## 10. `session`
 
 Sessions (§2.2, §3.6) and their tmux panes (§6). Every tmux call is `tmux -L <tmux.socket> …` with `TMUX` and `TMUX_PANE` removed (§6.1); a failing call is `tmux_failed` (exit 1). A Session's **place** is the `place` of its latest `session-moved` Event (`chat`, `parked`, `work` or `none`), or `none` when it has none.
@@ -1583,9 +1639,11 @@ Before it starts pi (steps 1–3) a Lead with a Plan gets its plannotator port (
 
 **Reload on install** (hs-d33, hs-d38, hs-d49, hs-d151; §6.7 "Reload on install"; incident hs-n141, cause hs-n148). The wrapper detects a new install by the identity of its executable (§3.4 of the contract), checked at every iteration of its loop **before any store access**. On a new cpd it re-execs **at once**, with no idle wait, whatever the Lead's place or state, and **keeps pi running**: pi is its child and survives the `exec`. It `exec`s the same path with the same argv plus the internal argument `--adopt <pid>` (**internal**: written only by the wrapper's own `exec`, not an interface of the User or an agent); the new `session run` skips steps 1–3, starts no pi, `waitpid`s that pid as its own child and continues the same loop on it (watchdog, archive on quit, `Press Enter to resume`). The adapter reloads itself at idle (hs-a5, §15.6); a cpd install does not restart pi. Before the `exec` it runs `<path> --version` and re-execs only when that succeeds and `store` is `null` or `store.opens` is `true` (§1.2); otherwise it does not `exec`, logs once per installed file (identity) `reload skipped: <path> cannot open the store: <store.refusal.message>` on the stderr of its pane and keeps running, pi untouched; a later install is checked again (contract §6.7). **A store error never ends a wrapper while its pi runs:** a failed read with a replaced cpd leads to the re-exec above; any other failed read is logged once on stderr and retried at the next poll, pi untouched. Why: wrappers that waited for the Lead's idle read the store after a newer cpd had migrated it, failed `store_too_new` and exited, and six Leads were ended instead of reloaded (hs-n141, hs-n148). If pi exits on its own after an install, the wrapper `exec`s the new binary (no `--adopt`) before any store write, and the existing paths run there.
 
-**Restart for a new pi** (hs-d49). A change of pi (the identity of `<pi agent dir>/install/current-version`, else of the resolved `pi` executable) is the only reload that restarts pi, and it waits for the Lead's next idle (state `idle`, last turn finished, session file quiet `fork_quiet_seconds`): the wrapper sends pi `SIGTERM`, waits for it to exit (`SIGKILL` 10 s after `SIGTERM`) and `exec`s the same path with the same argv (no `--adopt`); the new `session run` takes step 1. A parked Lead restarts at once. The Lead in the chat slot waits until it is idle **and** parked, or idle for 10 minutes, so unsent typing is not lost. A `blocked` Lead is never idle. See contract §6.7 "Reload on install".
+**Transient store errors** (contract §6.7 "Reload on install"). The store accesses before pi starts (open, the Session's row, `sessions.file`, the port, a fork's source) and after it exits (`session state stopped`, the name for the resume prompt) are tried again while they fail with `store_busy`, `lock_timeout` (the store's setup lock), or SQLite's busy or locked as `store_failed`: 0.5 s, doubling to 5 s between tries; the pane says once `Waiting for the store (<what>): <code>: <message> Trying again.` A wrapper never ends for it. Any other error (`session_not_found`, `not_a_lead`, `wrong_pane`, a malformed row) ends it as in the table below.
 
-**Adapter watchdog** (hs-d141; contract §6.7 "Adapter watchdog"). While pi is alive, the wrapper checks the Session's state at every poll (2 s). When the state has been `stopped` for more than **60 s** (a constant of the wrapper, not a config key; measured from the `session-state` Event that set it, so a state the wrapper itself set after a pi exit does not count while pi is not running), it restarts pi on the session file: `SIGTERM`, wait (`SIGKILL` after 10 s, as for a reload), then step 1. In one transaction before the restart it appends one `error` Event `{source: "session run", code: "adapter_missing", message, details: {session, state_since, seconds}}` with `session` = this Session (and its `plan`, `context`), which the new adapter delivers once it follows (§15.3). It applies to every Lead and Manager, whatever the place and whatever the idle rules of the reload; a `stopped` that ends (`idle`) before 60 s is the adapter's own reload and is never touched. After the restart the 60 s start again; a broken install loops once per 60 s with one `error` Event per restart (no cap: each is a visible fact, and a repaired install ends it).
+**Restart for a new pi** (hs-d49). A change of pi (the identity of `<pi agent dir>/install/current-version`, else of the resolved `pi` executable) is the only reload that restarts pi, and it waits for the Lead's next idle (state `idle`, last turn finished, session file quiet `fork_quiet_seconds`): the wrapper sends pi `SIGTERM`, waits for it to exit (`SIGKILL` `timeouts.pi_stop_seconds` (default 10) after `SIGTERM`) and `exec`s the same path with the same argv (no `--adopt`); the new `session run` takes step 1. A parked Lead restarts at once. The Lead in the chat slot waits until it is idle **and** parked, or idle for 10 minutes, so unsent typing is not lost. A `blocked` Lead is never idle. See contract §6.7 "Reload on install".
+
+**Adapter watchdog** (hs-d141; contract §6.7 "Adapter watchdog"). While pi is alive, the wrapper checks the Session's state at every poll (2 s). When the state has been `stopped` for more than **60 s** (a constant of the wrapper, not a config key; measured from the `session-state` Event that set it, so a state the wrapper itself set after a pi exit does not count while pi is not running), it restarts pi on the session file: `SIGTERM`, wait (`SIGKILL` after `timeouts.pi_stop_seconds`, as for a reload), then step 1. In one transaction before the restart it appends one `error` Event `{source: "session run", code: "adapter_missing", message, details: {session, state_since, seconds}}` with `session` = this Session (and its `plan`, `context`), which the new adapter delivers once it follows (§15.3). It applies to every Lead and Manager, whatever the place and whatever the idle rules of the reload; a `stopped` that ends (`idle`) before 60 s is the adapter's own reload and is never touched. After the restart the 60 s start again; a broken install loops once per 60 s with one `error` Event per restart (no cap: each is a visible fact, and a repaired install ends it).
 
 The first message is the file `plan new` or `session fork` wrote (§1.4); for a Manager, `run/<context>/manager-message.md` (§3.10); none when resumed. It is passed as `@<path>` (its absolute path). While pi runs, it watches for the session file (§6.5) and records `sessions.file` once it appears (a data write, no Event). When pi exits it runs `session state stopped` if the adapter did not, prints `pi exited. Press Enter to resume <name> here.` and resumes on Enter, except after a quit by the User (below).
 
@@ -1793,7 +1851,9 @@ cpd watch [--ensure]
 
 The engine, one per machine (§3.7, §6.6, D5).
 
-**Without `--ensure`:** runs E1–E5 and E7–E9 (E6 is removed; E7, the PR start, since R34; E8, the Inbox, §21; E9, the Context digests, since hs-d194) every `tick_seconds` in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
+**Without `--ensure`:** runs E1–E5 and E7–E9 (E6 is removed; E7, the PR start, since R34; E8, the Inbox, §21; E9, the Context digests, since hs-d194) every `tick_seconds` (a decimal, minimum 0.1; default 5) in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
+
+E5 (the PR poll) runs at its due time, `pr_poll_seconds` after the previous poll ended (5 s by default), not at the next tick: the engine sleeps until the earlier of its next tick and E5's due time (contract §3.7). The pi stop grace is `timeouts.pi_stop_seconds` (default 10; contract §8.2).
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -1848,6 +1908,7 @@ With `--respawn` the value also has `"respawned": ["%1", "%2", …]`, the panes 
 ```
 cpd tui view <tree|plan|widgets|statusbar|chat|legend>
 cpd tui view logs [--event <id>]
+cpd tui view merge <owner>/<repo>#<n>
 cpd tui view worker <attempt> --plan <id>
 cpd tui view history <id>
 ```
@@ -1860,13 +1921,14 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
 |---|---|---|
 | `tree` | the **Context column**: Contexts, their Plans' Lead Sessions, and counters | ↑↓ and j/k move the cursor, Enter opens the Lead in the chat slot (on an Inbox row it jumps to the item's cause), `n` a new Plan, `x` closes a Lead's pane, `s` and `d` snooze and dismiss the selected Inbox item, `?` the legend; clicks and the right-click menu as below |
 | `plan` | the **Plan view**: one box per PR of the chat slot's Plan, each holding the flowchart of its Jobs; with a Manager in the chat slot, it shows **Pulse** (one row per Plan of the Context) | ←→↑↓ and h/j/k/l select, Enter opens a Job's Worker, Esc clears the selection; the wheel scrolls (3 rows, 4 columns); clicks as below; no `q`. The view remembers each Plan's scroll offset while it runs and restores it when a Lead of that Plan comes back to the chat slot (a Plan Lead and its side forks share it), clamped to the chart, which may have changed size; the selection is not kept (reset), and a restart of the view forgets every offset (User, hs-d197). With Pulse, a left click on a row opens that Plan's Lead and the wheel scrolls the rows (3 rows a notch) |
-| `widgets` | the **Deploy column**: the machine, the cockpit's PRs, git and Jira (future) | `q` quits; a left click on an owned PR row brings its Lead into the chat slot (below); the wheel over the PRs section scrolls it by one pull request per notch (below); mouse capture on |
+| `widgets` | the **Deploy column**: the machine, the cockpit's PRs, git and Jira (future) | `q` quits; a left click on an owned PR row brings its Lead into the chat slot (below), and a left click on a merge icon opens the `merge` popup (below); the wheel over the PRs section scrolls it by one pull request per notch (below); mouse capture on |
 | `worker` | the read-only Worker view: the Attempt's Worker session file (vision decision 5), `you` and its text in cyan, `agent` in green, `→ tool` in yellow, `󰘌 last` (U+F060C md-subdirectory_arrow_left, the tool result's arrow) dim | `q` or Esc quits; ↑/k, ↓/j, PageUp, PageDown and the wheel (3 rows) scroll; End or `G` follows the end again; no other keys |
 | `history` | an archived Session's history, read-only: the Session's pi file drawn with the Worker view's renderer (`tui/src/worker/render.rs`); its top line is `<name> (archived, read-only)`. Started by `session history` (§10.12) in the chat slot | `q` or Esc quits to the placeholder text; ↑/k, ↓/j, PageUp, PageDown and the wheel (3 rows) scroll; End or `G` follows the end again; no other keys |
 | `statusbar` | one row across the bottom | no keys, no focus; clicks on its buttons |
 | `chat` | the chat slot's placeholder (§10) | none |
 | `legend` | the key legend, in a popup | any key closes it |
 | `logs` | the Event log, in a popup; `--event <id>` opens it at that Event | ↑↓, j/k, PgUp/PgDn scroll; `q` or Esc closes it |
+| `merge` | the merge confirmation, in a popup, for the pull request `<owner>/<repo>#<n>` (below; hs-d273) | Enter or `y`, or a click on `[Merge]`, merges; Esc, `n`, `q` or a click on `[Cancel]` closes it; after a merge any key closes it |
 
 **Design rule** (User, Plan tui-visuals, 2026-10-17; hs-d124). Top-level layout separators (the tmux pane borders) are white; separators inside a slot are grey. A header is one line with its title inverted: the pane headers (tmux, reversed, contract §6.1) and the section headers inside a slot alike. Inside a slot the header is a light `─` line in grey (the palette's Nothing colour, colour 8) with the title as a grey inverted block, not bold: two `─` cells, then ` <title> ` reversed (grey background, text in the terminal's background colour), then `─` to the right edge, e.g. `──[ PRs ]──────────` (`[ … ]` is the reversed block). A slot's first section has no header, so no two titles stack: the pane header is the slot's title.
 
@@ -1961,7 +2023,9 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
 3. header `git`, then ` (future)` (dim);
 4. header `Jira`, then ` (future)` (dim).
 
-Each PR row has two areas. The **`󰏌`** sits at the right end of the first line and links to `pull_requests.url` (Links, below). The **row** is the rest of both lines. The PR's **owner** is the Plan of the `prs` row whose `pull_request` is this pull request (the most recently created Plan when several exist); its Lead is `plans.lead_session`. On an owned PR, a left click anywhere on the two lines except the `󰏌` cell runs `cpd session open <lead>`, then focuses the chat slot, as the Plan view's open-Lead action does. A PR no Plan owns (for example one of the User's work repos) is drawn dim on both lines, and a click on it does nothing. A click on the `󰏌` does nothing in the view: the terminal opens the link. When `session open` refuses or fails, the column's last row shows its message in `palette::note()` until the next click.
+Each PR row has two areas, and a **merge icon** (below). The **`󰏌`** sits at the right end of the first line and links to `pull_requests.url` (Links, below). The **row** is the rest of both lines. The PR's **owner** is the Plan of the `prs` row whose `pull_request` is this pull request (the most recently created Plan when several exist); its Lead is `plans.lead_session`. On an owned PR, a left click anywhere on the two lines except the `󰏌` cell runs `cpd session open <lead>`, then focuses the chat slot, as the Plan view's open-Lead action does. A PR no Plan owns (for example one of the User's work repos) is drawn dim on both lines, and a click on it does nothing. A click on the `󰏌` does nothing in the view: the terminal opens the link.
+
+**The merge icon** (User, hs-d272, hs-d273, hs-d274). `󰘭` **md-source_merge U+F062D** (Material Design Nerd Font, hs-d235) sits in the **last column of the second line**, under the `󰏌`. It is shown only when the pull request's stored `pull_requests.merge_state` is `'clean'` (GitHub's `mergeStateStatus` `CLEAN`: every requirement met; contract §7.6 stores GitHub's value lowercased, one of `behind`, `blocked`, `clean`, `dirty`, `draft`, `has_hooks`, `unknown`, `unstable`); with any other value the cell is blank. It shows on every row that qualifies, owned or not. A left click on the icon does not open the Lead: it opens the **`merge` popup**, `display-popup -E -T <title> -w <width> -h <height> -- cpd tui view merge <owner>/<repo>#<n>`, opened as the legend and `logs` popups are (`tui/src/logs/mod.rs` `open`, `popup_args`; popups are the cockpit's pattern for dialogs, hs-d273). The popup shows the pull request (`owner/repo#n` and its title) and the method (`squash`), with `[Merge]` and `[Cancel]`. Enter or `y`, or a click on `[Merge]`, runs `cpd pr merge <owner>/<repo>#<n>` (§9.10; every cockpit action is a cpd command, hs-d61); Esc, `n`, `q` or a click on `[Cancel]` closes it with nothing done. After a merge it shows the result, or the command's error message in `palette::note()`, until any key closes it. The `merge` view has no pane of its own and writes nothing itself. When `session open` refuses or fails, the column's last row shows its message in `palette::note()` until the next click.
 
 **Scrolling the PRs section** (User, hs-n259). The section is as tall as the pane leaves it, and a pull request is drawn whole (two lines) or not at all. A mouse wheel event over the section scrolls it by one pull request (two lines) per notch, down or up; wheel events elsewhere in the column do nothing. The offset counts pull requests (the first one drawn) and is clamped between 0 and the largest offset at which the last pull request still reaches the section's bottom, so scrolling stops there. When pull requests are hidden above, the section's first row is ` ▲ <n> more` (dim); when some are hidden below, its last row is ` ▼ <n> more` (dim); `<n>` counts pull requests, not lines. A cue row replaces one row of the list, so a pull request that does not fit beside the cues is hidden and counted. With every pull request visible there is no cue. A left click works on the rows as drawn: the hit areas are those of the pull requests on screen, and a cue row is no hit. The offset lives in the view's memory only: it starts at 0, a restart of the view resets it, a refresh keeps it (clamped when the list shrinks), and nothing is written to disk.
 
@@ -1974,6 +2038,8 @@ The column has no engine line, no slots, no Escalations, no Events and no footer
 - **Right, in order:** a failure note when the last click failed (cleared on the next click), then the Inbox counter `inbox <n>`, where `<n>` is the number of visible open items (the count of the tree's Inbox header, §17), drawn in the colour of the most urgent of them (red, yellow, magenta or white; dim `inbox 0` when there is none), then the workers indicator `workers N/M`, where `N` is the number of Attempts holding a slot and `M` is config `concurrency`. The workers indicator gets the full width, as cpd 1's; it shortens to `N/M` when the row is too narrow and is dropped when not even that fits; the Inbox counter is dropped before it. A click on the counter does nothing.
 
 **`legend`** is what every colour and icon of the cockpit means, from the palette. It opens in a tmux popup (`display-popup -E -T ' legend ' -w <w> -h <h>`, sized to the legend and at most the client's size) from the tree's `?` key or the StatusBar's legend button, because the columns are narrower than the legend; any key closes it. It has no `@cpd_view` pane of its own. Its section titles are `Jobs: Plan pills and Context counters`, `Session dots` and `Pulse`; the Job statuses it lists are those the chart draws, so `cancelled` is not among them, and `running` is listed with the spinner frames `󰝦󰪞󰪟󰪠󰪡󰪢󰪣󰪤󰪥`. `Session dots` lists each glyph (`󰪥`, `󰝦󰪞󰪟󰪠󰪡󰪢󰪣󰪤󰪥`, `󰝦`, `󰝦`) and each `󰪥` colour (red, yellow, magenta, white) with its meaning, as §17's dot rule gives them (the same colours mark the Inbox's items and the StatusBar's `inbox <n>`; the legend says so in one line), then the precedence line `red > yellow > magenta > white > 󰝦 > 󰝦 > 󰝦`, drawn with the real glyphs and colours. Its PR states list is `open`, `merged`, `closed` and `conflict` (in the failed colour, red), as the plan view's PR box titles show them. Its sample pill has the same form, ` <icon> key │S1 `. Pulse section: a bar = activity per 5 min; a green bar = a Job merged; a green 󰗠 = a PR merged; a dim ▁ = a Worker running; 'quiet Nm' (Review colour) = queued or running work with no activity for 30 min.
+
+**`merge`** is the merge confirmation of the Deploy column's merge icon (hs-d273); it opens in a popup, and has no `@cpd_view` pane of its own. Its content and keys are the merge icon's paragraph above.
 
 **`logs`** (R36) is the **Event log**: every Event (§5), one line each: its time of day (`HH:MM:SS`, dim), then its `text`, or its kind when the `text` is empty, an `error` Event in the failed colour. It opens in a tmux popup (`display-popup -E -T ' logs '`, at most 80 % of the client's width and height) from the StatusBar's `▤` button and from a click on an `engine-error` or `engine-down` Inbox item, and has no `@cpd_view` pane of its own. With `--event <id>` (an Event id of §5; the Inbox click passes the item's `event`) the view opens **at that Event**: its line is selected (reversed) and scrolled into view, and it does not follow until the User scrolls to the bottom; an id outside the latest 500 Events is read on its own too. Without it, it opens at the bottom. The newest Event is last; the view follows live while it shows the bottom, and stops following when the User scrolls up (it follows again at the bottom). ↑↓, j/k and PgUp/PgDn scroll; `q` or Esc closes it.
 
@@ -2006,7 +2072,7 @@ Checks the machine (cpd 1 §11 `doctor`, kept in shape). Each check has `name`, 
 | Tool | Command run | Output found on 2026-10-14 | Minimum | Parsed as | What cpd needs from it |
 |---|---|---|---|---|---|
 | git | `git --version` | `git version 2.43.0` | `2.43.0` | the first `x.y.z` | `worktree add`, `update-ref` with an old value, `merge-base --is-ancestor`, `merge-tree --write-tree --name-only` (git 2.38 or later, docs), `read-tree -m -u` (§7) |
-| tmux | `tmux -V` | `tmux 3.4` | `3.4` | `x.y`, ignoring a letter suffix (`3.4a`); `next-…` builds pass | `new-window`/`split-window -e`, argv commands after `--`, `swap-pane`, `pane-border-lines`, `extended-keys`, `#{pane_dead_status}` (§6) |
+| tmux | `tmux -V` | `tmux 3.4` | `3.6` | `x.y`, ignoring a letter suffix (`3.4a`); `next-…` builds pass | `new-window`/`split-window -e`, argv commands after `--`, `swap-pane`, `pane-border-lines`, `extended-keys`, `#{pane_dead_status}` (§6); **3.6 because** older tmux can lose a pane's `SIGCHLD`, so `pane-died` never respawns a cockpit view (contract §6.1; fixed in tmux 3.6, tmux/tmux#4559) |
 | pi | `pi --version` | `1.2.0` | `>= 1.2.0 < 2.0.0` | `x.y.z` | `--fork`, `--session-id`, `-n`, `--exclude-tools`, `--no-skills`, `--approve`; the catalog of §9 (cpd 1 §11: pi updates itself, so a range) |
 | gh | `gh --version` | `gh version 2.45.0 (2025-07-18 Ubuntu 2.45.0-1ubuntu0.3)` | `2.45.0` | the first `x.y.z` | `pr create`, `pr list --json`, `pr view --json …statusCheckRollup…`, `api` (§7.6) |
 | pi's Node | `<pi node> --version`, the binary §9 chooses | `v22.23.2` (`/usr/local/bin/node`; this machine has no `pi-node` directory) | none: it must run | | runs the catalog module of §9 |
@@ -2093,7 +2159,7 @@ The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays
 
 At `session_start`, in this order:
 0. **Protocol check** (hs-a4): `cpd --version`, whose `protocol` (§1.2) is compared with the number the adapter was built for (4 today). Equal: nothing is said. Different: one message to the Session, `cpd adapter: protocol mismatch: protocol_mismatch: cpd speaks protocol N, this adapter M; reload pi (/reload)`, with `details: {kind: "error", code: "protocol_mismatch", cpd: N, adapter: M}`, delivered like the other errors (§15.1), once per installed cpd binary (the identity of the file `cpd` resolves to), not once per follower restart. The adapter keeps following Events either way; it never types into a pane. A `--version` that fails or lacks `protocol` is an ordinary error with its code, once per error code.
-1. `cpd session show <id>`: role, Plan, Context, `plan_lead`, `registered_event`, name.
+1. `cpd session show <id>`: role, Plan, Context, `plan_lead`, `registered_event`, name. A failure is delivered as an error message once per error code, and the call is retried with the follower's back-off (1 s, doubling to at most 30 s) until it succeeds; the adapter does nothing else until then, and `session_shutdown` ends the retries. A refusal that cannot pass (`usage`, `session_required`, `invalid_session_id`, `session_ambiguous`, `session_not_found`, `plan_not_found`, `context_not_found`, `cursor_ahead`) is delivered once and not retried: the adapter stays inactive.
 2. `cpd session state idle --session <id>` (`stopped → idle`, §3.6); then `working` if `ctx.isIdle()` is false.
 3. **Name:** if pi's session name differs from the Session's `name`, `pi.setSessionName(name)`: a `session-renamed` missed while pi was down still applies.
 4. **Cursor** (§5.3 "No loss, no duplicates"): the greater of `registered_event` and the `details.id` of the last `cpd` custom message in the session's entries whose `details.delivered_to` is this Session's id. The adapter puts `delivered_to` into every message it delivers (amendment 5, §19). Why: a fork's file starts with its source's messages, whose Event ids belong to the source's stream; counting them could skip Events addressed to the fork.
@@ -2102,26 +2168,31 @@ At `session_start`, in this order:
 
 The cursor in memory advances after each line is handled, delivered or not. Only delivered messages persist it, so after a restart the Events handled without a message (`escalation-answered`, `escalation-expired`, `session-renamed`, `plan-review`) are seen again; every handler below is idempotent for that reason.
 
-**The follower ends** (EOF, exit, or a failure line): the adapter restarts it with `--since <in-memory cursor>` after 1 s, then backing off to at most 30 s. A failure line or a non-zero exit is delivered as an error message once per error code, until a line is read again. A well-formed Event (§5.2 fields) of a kind the adapter does not know is skipped silently: no message, and the cursor moves past it (an adapter that does not know a kind cannot need it, so an install that adds a kind does not flood older adapters). A malformed line (not JSON, or §5.2 fields missing or of the wrong type) is delivered as an error message and skipped, and the cursor moves past it, so one bad line cannot stop delivery. Before it spawns the follower again, the adapter repeats the protocol check of step 0; the message is sent only when the installed binary is a different one from the last that mismatched. At `session_shutdown` the follower is killed.
+**The follower ends** (EOF, exit, or a failure line): the adapter restarts it with `--since <in-memory cursor>` after 1 s, then backing off to at most 30 s. A failure line or a non-zero exit is delivered as an error message once per error code, until a line is read again. A failure line whose code is one of the refusals of step 1 is permanent: it is delivered once and the follower is **not** restarted (every other code, for example `store_busy` or `store_too_new`, is retried without end). A well-formed Event (§5.2 fields) of a kind the adapter does not know is skipped silently: no message, and the cursor moves past it (an adapter that does not know a kind cannot need it, so an install that adds a kind does not flood older adapters). A malformed line (not JSON, or §5.2 fields missing or of the wrong type) is delivered as an error message and skipped, and the cursor moves past it, so one bad line cannot stop delivery. Before it spawns the follower again, the adapter repeats the protocol check of step 0; the message is sent only when the installed binary is a different one from the last that mismatched. At `session_shutdown` the follower is killed.
 
 ### 15.3 What each Event does
 
-Events arrive in id order; the follower already applied §11's `--session` rule, so a Lead receives its Plan's Events and a Worker or side fork only those addressed to it. Delivery is `pi.sendMessage({customType: "cpd", content: event.text, display: true, details: {...event, delivered_to: <id>}}, {triggerTurn, deliverAs: "followUp"})` (§5.3).
+Events arrive in id order; the follower already applied §11's `--session` rule, so a Lead receives its Plan's Events and a Worker or side fork only those addressed to it. Delivery is `pi.sendMessage({customType: "cpd", content: event.text, display: true, details: {...event, delivered_to: <id>}}, {triggerTurn, deliverAs})` (§5.3), where `deliverAs` is `"steer"` for the **urgent kinds** and `"followUp"` for every other message (below).
 
 | Kind | Plan Lead | Worker, side fork |
 |---|---|---|
-| `job-merged`, `job-failed`, `all-merged`, `pr-feedback`, `plan-done`, `error` | message, **turn**. `all-merged` and `pr-feedback` carry the PR's key in `data.pr`; the Lead answers `all-merged` with `cpd pr open --pr <key>`, and an `error` with code `pr_start_failed` with `cpd pr start <key>` once the cause is fixed (R34, A9) | |
-| `attempt-retry`, `job-cancelled` | message, no turn | |
-| `pr-started`, `pr-merged` | message, no turn (R34: a started PR's Jobs are now scheduled; a merged PR may start the PRs that need it, §5.3) | |
-| `escalation` | message, **turn**; opens the blocking reason `escalation:<id>` labelled `cpd: Worker question` | |
+| `job-merged`, `job-failed`, `all-merged`, `plan-done`, `error` | message, **turn**, `followUp`. `all-merged` carries the PR's key in `data.pr`; the Lead answers `all-merged` with `cpd pr open --pr <key>`, and an `error` with code `pr_start_failed` with `cpd pr start <key>` once the cause is fixed (R34, A9) | |
+| `pr-feedback` (every `reason`: checks failed, changes requested, closed, conflict) | message, **turn**, **`steer`**. Carries the PR's key in `data.pr` | |
+| `attempt-retry`, `job-cancelled` | message, no turn, `followUp` | |
+| `pr-started`, `pr-merged` | message, no turn, `followUp` (R34: a started PR's Jobs are now scheduled; a merged PR may start the PRs that need it, §5.3) | |
+| `escalation` | message, **turn**, **`steer`**; opens the blocking reason `escalation:<id>` labelled `cpd: Worker question` | |
 | `escalation-answered`, `escalation-expired` | closes `escalation:<id>`; no message | |
 | `plan-review` with `status: pending` | opens it in plannotator (§15.5); no message. A review with a higher id than another pending review of this session **closes** that one's `plan-review:<review>` reason: only the latest review of a Plan blocks the Lead (§15.5 "Latest only") | |
-| `plan-review` with `status: approved` or `rejected`, for a pending entry of this session | a decision made outside plannotator (§15.5 "Deciding elsewhere"): closes `plan-review:<review>`; message `cpd-plan-decision`, **turn** (own custom type, not `cpd`). For any other review: ignored | |
+| `plan-review` with `status: approved` or `rejected`, for a pending entry of this session | a decision made outside plannotator (§15.5 "Deciding elsewhere"): closes `plan-review:<review>`; message `cpd-plan-decision`, **turn**, `followUp` (own custom type, not `cpd`). For any other review: ignored | |
 | `session-renamed` (`session` = itself) | `pi.setSessionName(name)` and `ctx.ui.notify("cpd: session renamed to \"<name>\"")`; no message, no turn | same |
 | `attempt-nudge` (`session` = itself) | | message with `data.prompt` as content, **turn** |
-| `session-message` (`session` = itself) | message, `deliverAs: "followUp"`, **turn only when `data.wake` is true** (`triggerTurn: false` otherwise, hs-d209 D3); for every Lead (Plan Lead, side fork) and the Manager (the `--session` rule delivers Events addressed to a Session to it). Content `Message from <sender>: <text>`, `<sender>` = the sender Session's name and id (`<name> (<id>)`), or `the User` when `data.from` is null. With `data.wake`, an idle Lead starts a turn at once; a working or blocked one gets it after its running turn, never interrupted. Without it, the message is in the Lead's context at its next turn and starts none | |
+| `session-message` (`session` = itself) | message, `followUp`, **turn only when `data.wake` is true** (`triggerTurn: false` otherwise, hs-d209 D3); for every Lead (Plan Lead, side fork) and the Manager (the `--session` rule delivers Events addressed to a Session to it). Content `Message from <sender>: <text>`, `<sender>` = the sender Session's name and id (`<name> (<id>)`), or `the User` when `data.from` is null. With `data.wake`, an idle Lead starts a turn at once; a working or blocked one gets it after its running turn, never interrupted. Without it, the message is in the Lead's context at its next turn and starts none | |
 | `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | ignored: no message, no turn | ignored |
 | every other kind | ignored | ignored |
+
+**Steered and follow-up** (User, hs-d276; evidence hs-n241). Two kinds are urgent and are delivered with `deliverAs: "steer"`: **`pr-feedback`, whatever its `reason`**, and a Worker's **`escalation`**. pi injects a steering message after the current tool call instead of after the run (pi 1.3.0 `dist/core/agent-session.d.ts` `sendCustomMessage(…, {deliverAs: "steer" | "followUp" | "nextTurn"})`; `pi.sendMessage` takes the same option, `dist/core/extensions/types.d.ts` `ExtensionAPI.sendMessage`). An idle Lead is unchanged: `triggerTurn` starts a turn. **Every other message the adapter delivers is a `followUp`**: the Event kinds above, the adapter's errors (§15.1), `attempt-nudge` and the `cpd-plan-decision` message. The same rule holds for a Manager, if it is ever sent one of the two urgent kinds (today it gets neither, §11). Why: every Lead message used to be a follow-up, and pi's default `followUpMode` `"one-at-a-time"` delivers one follow-up per finished run, oldest first, so a busy Lead got PR #80's conflict notice 19 minutes late and a `job-merged` 56 minutes late (hs-n241).
+
+**Other notices** stay follow-ups, delivered as the User's pi settings say: `followUpMode` (and `steeringMode`, for steered ones) `"all"` delivers every queued message together, pi's default `"one-at-a-time"` one per finished run. cpd does not set them (the User set both to `all` in the global pi settings on 2026-10-19; contract §6.5 "Queue modes are the User's").
 
 **The Manager** (B3-A5) is a Session of role `manager`: it has no Plan, so §15.2 step 5 (blocking reasons) and §15.5 (plannotator, the tool `cpd_plan_review`) do not apply to it and nothing is opened or registered for them. Its follower follows only Events addressed to it (§11), so of this table only `session-message` and `session-renamed` reach it: a Plan's Events never wake it. It learns of them through the digest at turn start (§15.7), which only a Manager gets.
 
@@ -2245,14 +2316,14 @@ Context building-cpd: 2 new records since your last turn.
 
 Header `Context <c>: <N> new records since your last turn.`; each line `- <id> <kind> (<date>): <text>`; an answer names its question, a superseding decision names what it supersedes. At most 20 records are listed; more end with `and <K> more: cpd context show --context <c> --since <seq>`, with `<seq>` the `seq` before the first record not listed.
 
-**Display** (hs-d221). The message's `content` is the full text and goes to the model whole. In the chat window the adapter shows one line of counts instead, never the full text, unless the User expands the message (pi's expand toggle), which then shows the full `content`. The adapter registers a pi message renderer for `cpd-context` once at load (`pi.registerMessageRenderer`; it only changes the display). The line, dim, is `cpd-context: ` and then the parts below in this order, joined by ` · `; a part whose count is 0 is omitted and nothing else is shown:
+**Display** (hs-d221, restyled by hs-d286, §15.9). The message's `content` is the full text and goes to the model whole. In the chat window the adapter shows the counts line below as the one-line summary of a collapsed row (§15.9), never the full text, unless the User expands the message, which then shows the full `content`. The adapter registers a pi message renderer for `cpd-context` once at load (`pi.registerMessageRenderer`; it only changes the display). The counts line, as the summary, is `cpd-context: ` and then the parts below in this order, joined by ` · `; a part whose count is 0 is omitted and nothing else is shown:
 
 ```
 cpd-context: 6 records · 17 Plan Events · 10 Plans pending
 cpd-context: 1 record · 1 Plan Event · 1 Plan pending
 ```
 
-`<n> record(s)` is the number of new records of the message (the length of `details.records`), `<n> Plan Event(s)` the number of Events of the `Plans:` section (all of them, listed or not), `<n> Plan(s) pending` the number of Plans with a line in `Pending work:`. The counts come from the message's `details`, which carries `plan_events` and `plans_pending` besides `records`. A message whose `details` lack either (one written before this) is shown in full.
+`<n> record(s)` is the number of new records of the message (the length of `details.records`), `<n> Plan Event(s)` the number of Events of the `Plans:` section (all of them, listed or not), `<n> Plan(s) pending` the number of Plans with a line in `Pending work:`. The counts come from the message's `details`, which carries `plan_events` and `plans_pending` besides `records`. A message whose `details` lack either (one written before this) is shown in full (§15.9 "No summary").
 
 **Cursor**, in `context-record` Event ids (not the Event cursor of §15.2):
 1. Start = the Session's `registered_event` (its first message already held the records up to then).
@@ -2311,6 +2382,53 @@ It is added **at most once per run**, and once it has been added the reminder is
 
 **Not done** (R3, *decided*): `pr open` does not ask for a checked statement; the reminder is the whole enforcement of this heuristic. The skills carry the rule (R4).
 
+### 15.9 Rendering cpd's messages in a pi pane
+
+Decision hs-d286 (User, 2026-10-19; it restyles hs-d221). **Display only:** every message below still reaches the model with its full `content` and `details`; only what the chat window draws changes. Nothing here changes a delivery (§15.1, §15.3), a cursor or an Event.
+
+**Which messages.** Every `customType` the adapter sends with `display: true`: `cpd` (Events §15.3, Session messages, and the adapter's errors §15.1), `cpd-context` (§15.7) and `cpd-plan-decision` (§15.5). A message with `display: false` (`cpd-reminder`, §15.8) is never drawn, so it has no renderer. A `customType` the adapter starts to display later is rendered by the same rule, its summary being the first line of its `content` (as an Event's, below). The adapter registers one pi message renderer per type, once at load (`pi.registerMessageRenderer`), from one module, `pi/lib/render.ts`; the renderer reads `options.expanded` and `options.outputPad` from pi.
+
+**The look is pi-compact-tools 0.16.6's tool row, copied.** The adapter does not import or vendor that extension (it exposes no API and draws tool rows only); it draws the same rows, from the same glyphs, theme tokens, bold and dim, laid out as the extension's source lays them out (`extensions/compact-tools.ts`, `compact-tools-layout.ts`, `compact-tools-claude.ts`, `compact-tools-codex-rows.ts`, `compact-tools-palette.ts`, `compact-tools-core.ts`). The message keeps the `customMessageBg` background of hs-d221 behind the rows (the extension's rows sit on pi's tool background, which a message has no part in).
+
+**Which style: the extension's, read once.** The extension has four styles: `compact`, `claude`, `codex`, `off` (`DISPLAY_STYLES`, `compact-tools-types.ts`). Its **default is `compact`** (`DEFAULT_CONFIG.style`, `compact-tools-config.ts`), and that is what applies when no config exists, which is the case on hs today. The adapter reads the style **once, at `session_start`**, as the extension's `loadConfig` does, and keeps it for the run (a later `/compact-tools` switch shows in the adapter's rows after a `/reload`):
+
+1. `compact-tools.json` in pi's agent directory (`getAgentDir()`, `~/.pi/agent` unless pi is told otherwise);
+2. then, only when the project is trusted (`ctx.isProjectTrusted()`), `<cwd>/.pi/compact-tools.json`, which overrides the first.
+
+Only the `style` key matters; the other keys are the extension's own. A file that is missing is skipped. A file that does not parse, or a `style` that is not one of the four, is handled **exactly as the extension handles it**: one line `[compact-tools] <path>: <message>` on stderr, and the value from the file before it (at first the default `compact`) is kept. The adapter adds no fallback of its own. With `off` the adapter registers **no** renderer and pi draws its own default box with the full `content` (the User turned the extension's rows off).
+
+**The summary per kind** (what follows `cpd` on the collapsed row). One line, every newline and run of whitespace collapsed to one space and the ends trimmed:
+
+| Message | Summary |
+|---|---|
+| `cpd`, a Session message (Event `session-message`) | `Message from <sender>`: the sender Session's name, or its id when it has no name; `Message from the User` when `data.from` is null |
+| `cpd`, any other Event | the Event's `text`: its first line, cut to **160 characters** (159 and `…`) as the extension cuts a custom tool's summary (`CUSTOM_SUMMARY_MAX_LENGTH`); a row that is still wider than the pane wraps, as the extension's does, it is not cut again |
+| `cpd`, an adapter error (`details.kind` is `error`) | `adapter: <what>`: the `<what>` of `cpd adapter: <what>: <code>: <message>` (§15.1) |
+| `cpd-context` | its counts line, `cpd-context: 6 records · 17 Plan Events · 10 Plans pending` (§15.7) |
+| `cpd-plan-decision` | `Plan review <id> approved` or `Plan review <id> rejected` (`<id>` the review's id, as in §15.5) |
+
+**Collapsed, style `compact`** (the default; the User's example). Two rows, each starting after one space of margin, in this order:
+
+```
+ ⦁ cpd Message from cross-repo
+ └ Click to expand
+```
+
+- `⦁` (U+2981, the one glyph the extension uses for every row, `indicatorGlyph`) is painted with the theme token **`customMessageLabel`**, pi's colour for a custom message's label (violet/magenta in pi's themes). The extension paints bash's `⦁` `success` (green); the message's is magenta so the two never read alike. It is a fixed colour: it does not pulse and carries no status (a message has no running state).
+- `cpd` is `toolTitle` and **bold** (the extension's `theme.fg("toolTitle", theme.bold(name))`); the summary after one space is `toolOutput`.
+- ` └ ` and `Click to expand` are the extension's quiet "chrome" tone: the colour of `dim`, which the extension derives per theme (`chromePainter`) and the adapter paints with `theme.fg("dim", …)`, the extension's own fallback when the theme's RGB cannot be resolved. This is the one deliberate difference (the derivation needs the extension's colour code, which is not copied).
+- A head row longer than the pane wraps, its continuation rows behind ` │ ` (chrome tone), as a tool call's (`renderToolCall`); it is never cut.
+
+**Expanded, style `compact`.** The head row stays. Under it comes the full `content`, plain text (not Markdown), every line `toolOutput`, each behind the rail ` │ ` (chrome tone) and wrapped to the pane, as the extension lays out a tool's output (`renderOutput`); then the closing row ` └ Click to collapse`. An empty `content` shows no body.
+
+**Styles `claude` and `codex`**, when the config names them, follow the same rule with the extension's own chrome:
+- `claude`: head ` ⦁ cpd(<summary>)`: `⦁` as above, `cpd` `toolTitle` bold, `(<summary>)` `toolOutput` (`claudeTitle`). Collapsed, one row under it, `   ⎿  Click to expand` (`CLAUDE_RESULT_PREFIX`, chrome tone). Expanded, the full `content` in `toolOutput` from that prefix on, later lines at six spaces (`CLAUDE_INDENT`), wrapped to the pane, then nothing else.
+- `codex`: head ` • cpd <summary>` (`CODEX_BULLET`, painted bold with the magenta token above; `cpd` bold; the summary plain). Collapsed, one row under it, ` ` + min(width/4, 4) spaces + `+ Show details` (`codexDisclosure`), dim. Expanded, the full `content` dim from `   └ ` on, later lines at five spaces (`CODEX_INDENT`), wrapped to the pane, then ` ` + the same indent + `− Show less`, dim.
+
+**The expand action** is the extension's: **a left click** on the message toggles that one message, and **Ctrl+O** (pi's `app.tools.expand`) expands or collapses every message and tool row at once. Pi hands the renderer `options.expanded` for Ctrl+O; a click is the renderer's own: it wraps its rows in pi-tui's `MouseRegion` that flips the message's own state, as pi does for a tool row (`createResultRegion`) and the extension does for its group row. The state is per rendered message and follows Ctrl+O both ways (the extension's group rule, `compact-tools-grouping.ts`); it is not persisted, so a reloaded session shows every message collapsed.
+
+**No summary** (`cpd-context` whose `details` lack the counts, §15.7). There is nothing short to say, so the row is always open: the head `⦁ cpd cpd-context` and the full `content` as in "Expanded", with no closing row and no toggle.
+
 ## 16. The Worker contract
 
 ### 16.1 The Worker Spec
@@ -2353,7 +2471,7 @@ Outline §8 and D4: the views take one **snapshot** with a read command, then **
 |---|---|---|---|
 | `tree` (Context column) | `cpd context list`, `cpd session list` | `context-created`, `context-grounded`, `plan-created`, `plan-phase`, `plan-done`, `session-registered`, `session-state`, `session-moved`, `session-renamed`, `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived`, `inbox-opened`, `inbox-closed`, `inbox-snoozed`, `inbox-dismissed` | Contexts, their Plans' Lead Sessions, then the Sessions forked by `session fork` as siblings under their Context (B1), each with its title or name, state, place, `archived_at` (archived objects are in the read model), Job counters (Plan Leads only) and **dot** (rule below), and the **Inbox section** (§13.2). The snapshot reads the Inbox through `cpd_core::inbox::model::list`, the same read as `cpd inbox list` (§21.1): the open, visible items (snoozed and dismissed ones are hidden; `engine-down` included), in its order, with each item's `kind`, `urgency`, `label`, `session`, `plan`, `event`, `url` and `opened_at`; and each Session's state and place for the glyphs the Inbox does not give (the spinner, `󰝦`). The Inbox, not the Sessions' state, says who needs the User, so the snapshot no longer reads the Plan's pending review or its pull requests' checks for the dots. A snooze ends by the clock, with no Event, so the tree re-reads at least every 2 s as well as on Events (and on every `inbox-*` Event), and redraws every 100 ms for the spinner; an item's age is redrawn every second from `opened_at` |
 | `plan` (centre top) | `cpd plan show --plan <p>` for the Plan of the Lead in the chat slot (its `prs`, each PR's key, repo, base, needs, status, `pr`, `pull_request` (its `state`, for a closed pull request) and `jobs`, for the PR boxes, §13.2); when a Manager is in the chat slot, the Context's Plans read through `read::tree()` with each Plan's Lead SessionNode's dot, Job counts, done_at and archived_at; the activity Events of the window and each Plan's latest activity Event; the Attempts not ended or ended inside the window | every Event with `plan = p` (the `pr-*` kinds and `pr-feedback` included: they change a box's title or add a box); `session-moved` with `place: "chat"` (the slot changed: switch Plan and take a new snapshot); when a Manager is in the slot, every Event of the Manager's Context and `session-moved` | one box per PR that is not `cancelled`, top to bottom by needs and linked by them, each with the flowchart of its Jobs, Attempts and Tiers (R34, A15); with a Manager, Pulse (one row per Plan of the Context). Also read: the Plan's latest Plan review (its status and number) and `run/<plan>/plannotator-port`, for the pending-review row, and each pull request's `url`, for the `󰏌` links (§13.2). Also read: each pull request's `mergeable`, for the `conflict` title (§13.2). A conflict clears with no Event (only becoming `conflicting` appends `pr-feedback`), so the view also re-reads its snapshot at least every 2 s, as the `widgets` view does, with the same coalescing. Not drawn, so not read: open Escalations |
-| `widgets` (Deploy column) | the `open` rows of `pull_requests` with `authored` 1 (contract §4.4), with their `mergeable` (the ` conflict` flag, §13.2) and the PRs of the chat slot's Plan (`prs.pull_request`; the Lead Session's place is `session-moved` `chat`); each open pull request's `url` and its owner's Lead (`prs.pull_request` → `plans.lead_session`); and the host's load average (`/proc/loadavg`; on macOS `sysctl -n vm.loadavg`), re-read every 2 s with no Event | any Event whose id moved, and at least every 2 s: pull requests no Plan owns append no Event (hs-d96), so the poll's changes reach the column by the timer (`pr-opened`, `pr-feedback`, `pr-merged`, `plan-phase`, `plan-done` and `session-moved` move the Event id as before) | the machine's name and load, and the open pull requests with their links and owners. No engine, slots, Escalations or Events |
+| `widgets` (Deploy column) | the `open` rows of `pull_requests` with `authored` 1 (contract §4.4), with their `mergeable` (the ` conflict` flag, §13.2) and `merge_state` (the merge icon, §13.2) and the PRs of the chat slot's Plan (`prs.pull_request`; the Lead Session's place is `session-moved` `chat`); each open pull request's `url` and its owner's Lead (`prs.pull_request` → `plans.lead_session`); and the host's load average (`/proc/loadavg`; on macOS `sysctl -n vm.loadavg`), re-read every 2 s with no Event | any Event whose id moved, and at least every 2 s: pull requests no Plan owns append no Event (hs-d96), so the poll's changes reach the column by the timer (`pr-opened`, `pr-feedback`, `pr-merged`, `plan-phase`, `plan-done` and `session-moved` move the Event id as before) | the machine's name and load, and the open pull requests with their links and owners. No engine, slots, Escalations or Events |
 | `statusbar` (bottom row) | the slots and config `concurrency`: the Attempts not ended, and `concurrency` | any (re-read when the store's highest Event id moved, coalesced to 500 ms, at least every 2 s); no subprocess, no `gh` | `workers N/M` |
 | `logs` (popup of the StatusBar's `▤` button) | the latest 500 Events (the `events list` default), oldest first | every Event: it follows live while the view shows the bottom (R36) | the Event log |
 | `worker` (beside the chat) | `cpd attempt show <attempt>` for the Worker's session file | `session-state` for its Session; `attempt-status` for its Attempt | the session file itself, read-only (vision decision 5), and the state |
@@ -2388,7 +2506,7 @@ Outline §8 and D4: the views take one **snapshot** with a read command, then **
 
 **Precedence.** A row shows its state's spinner when working, else the most urgent item's `󰪥` when it has one, else its state's glyph; the order of the dots is `red > yellow > magenta > white > working > idle > stopped`. Archived rows take no Inbox item.
 
-**Actions.** The views change state only through commands: selecting a Lead runs `cpd session open <id>`; a click on a Context row runs `cpd context manager --context <c>` first (§13.2); the new-Plan key runs `cpd plan new …`; the close key runs `cpd session close <id>`; each item of the tree's right-click menu runs the command §13.2 names; a click on an owned PR row of the Deploy column runs `cpd session open <lead>`, then `select-pane` on the chat slot; parking runs `cpd session park`; opening a Job's Worker opens a `cpd tui view worker` pane beside the chat (`split-window`, `@cpd_view worker`), which is the view's own layout, not Ledger state. The StatusBar's `⧉` click resets the layout (`resize-pane`, the view's own layout, not Ledger state), its legend button opens the legend popup and its `▤` button the logs popup (§13.2). A click on an Inbox item runs `cpd session open <session>` (then `select-pane`, as a Session row), opens the logs popup at the item's Event, or is an OSC 8 link the terminal opens; `s` and `d` and the right-click menu's entries run `cpd inbox snooze` and `cpd inbox dismiss` (§21).
+**Actions.** The views change state only through commands: selecting a Lead runs `cpd session open <id>`; a click on a Context row runs `cpd context manager --context <c>` first (§13.2); the new-Plan key runs `cpd plan new …`; the close key runs `cpd session close <id>`; each item of the tree's right-click menu runs the command §13.2 names; a click on an owned PR row of the Deploy column runs `cpd session open <lead>`, then `select-pane` on the chat slot; a click on its merge icon opens the `merge` popup (`cpd tui view merge <owner>/<repo>#<n>`), which runs `cpd pr merge <owner>/<repo>#<n>` (§9.10, §13.2); parking runs `cpd session park`; opening a Job's Worker opens a `cpd tui view worker` pane beside the chat (`split-window`, `@cpd_view worker`), which is the view's own layout, not Ledger state. The StatusBar's `⧉` click resets the layout (`resize-pane`, the view's own layout, not Ledger state), its legend button opens the legend popup and its `▤` button the logs popup (§13.2). A click on an Inbox item runs `cpd session open <session>` (then `select-pane`, as a Session row), opens the logs popup at the item's Event, or is an OSC 8 link the terminal opens; `s` and `d` and the right-click menu's entries run `cpd inbox snooze` and `cpd inbox dismiss` (§21).
 
 Change from the spike and cpd 1's cockpit: the tree no longer discovers Sessions from tmux pane options (`@session_id`, `@agent_state`) or `leads/<id>/workflow`, and the plan view no longer reads `/tmp/cpd-tui/cache/`; both read the database through commands.
 

@@ -36,7 +36,7 @@ fn install(env: &TestEnv, checkout: &Checkout, version: &str) -> Install {
 }
 
 fn version(store: &str) -> String {
-    format!(r#"{{"ok":true,"version":"0.0.0","schema":1000,"store_schema":1000,"protocol":1,"store":{store}}}"#)
+    format!(r#"{{"ok":true,"version":"0.0.0","protocol":1,"store":{store}}}"#)
 }
 
 fn installed(env: &TestEnv) -> bool {
@@ -182,7 +182,7 @@ fn a_version_without_a_store_verdict_or_that_fails_is_refused() {
     let env = TestEnv::new();
     let checkout = Checkout::new(&env, &[]);
     // An integer-era build: the legacy numbers only.
-    let run = install(&env, &checkout, r#"{"ok":true,"version":"0.0.0","schema":6,"store_schema":6}"#);
+    let run = install(&env, &checkout, r#"{"ok":true,"version":"0.0.0"}"#);
     assert_eq!(run.exit, 1, "{}", run.stderr);
     assert!(run.stderr.contains("reports no store verdict"), "{}", run.stderr);
     assert!(!installed(&env));

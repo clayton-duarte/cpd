@@ -25,8 +25,6 @@ const STOP_POLL: Duration = Duration::from_millis(50);
 /// How long the Lead in the chat slot must have been idle before a reload
 /// restarts its pi without it being parked (hs-d49).
 const CHAT_IDLE: Duration = Duration::from_secs(10 * 60);
-/// How long a reload waits for pi to exit after `SIGTERM` before it sends `SIGKILL`.
-pub(super) const PI_STOP: Duration = Duration::from_secs(10);
 /// How long a Session may stay `stopped` while its pi runs before the wrapper
 /// restarts pi: the adapter is missing (contract §6.7 "Adapter watchdog", hs-d141).
 const ADAPTER_WATCHDOG: Duration = Duration::from_secs(60);

@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime};
 use serde_json::Value;
 
 use super::row::{self, State};
-use super::run::existing_file;
+use super::run::{existing_file, patiently};
 use super::Env;
 use crate::error::CpdError;
 use crate::host::pi::PiDirs;
@@ -29,7 +29,7 @@ pub(super) fn wait_for_source(env: &mut Env, dirs: &PiDirs, source: &SessionId, 
     let quiet = Duration::from_secs(u64::from(env.config.timeouts.fork_quiet_seconds));
     let mut shown = false;
     loop {
-        let src = env.store.read(|conn| row::load(conn, source))?;
+        let src = patiently("reading the source Lead", || env.store.read(|conn| row::load(conn, source)))?;
         if let Some(file) = existing_file(dirs, &src)
             && matches!(src.state, State::Idle | State::Stopped)
             && quiet_since(&file, quiet)

@@ -1720,6 +1720,10 @@ fn a_legacy_store_of_every_version_converts_keeping_every_row_and_id() {
             let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
             assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
             assert_eq!(txns_after.len(), txns_before.len() + 1);
+            // `job-urgent` added the column `urgent`, last: every Job reads 0, the default.
+            for row in rows_before.get_mut("jobs").unwrap() {
+                *row = format!("{},0]", row.strip_suffix(']').unwrap());
+            }
             assert_eq!(rows_after, rows_before);
         }
 

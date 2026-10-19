@@ -164,16 +164,19 @@ pub fn worker(launch: &WorkerLaunch) -> Launch {
 }
 
 /// The distiller (contract §6.5 "Distiller", §4.6): a one-shot pi that reads
-/// `prompt.md` and `records.md` in its working directory and prints the digest
-/// to stdout. No session, no extension, no skill, no context file, no tool, and
-/// no `CPD_*` variable: it is no Session.
-pub fn distiller(model: &str) -> Launch {
+/// the `files` (names in its working directory, each given to pi as `@file`) and prints its JSON
+/// event stream (`--mode json`, hs-d244 D-d: the only mode that reports tokens
+/// and cost) to stdout, whose final assistant message is the digest. No
+/// session, no extension, no skill, no context file, no tool, and no `CPD_*`
+/// variable: it is no Session.
+pub fn distiller(model: &str, files: &[&str]) -> Launch {
     let argv = [
-        "pi", "--print", "--no-session", "--no-extensions", "--no-skills", "--no-context-files", "--no-tools", "--model", model,
-        "--", "@prompt.md", "@records.md",
+        "pi", "--mode", "json", "--no-session", "--no-extensions", "--no-skills", "--no-context-files", "--no-tools", "--model", model, "--",
     ]
+    .into_iter()
     .map(str::to_owned)
-    .into();
+    .chain(files.iter().map(|f| format!("@{f}")))
+    .collect();
     Launch { argv, env: BTreeMap::from([(SKIP_VERSION_CHECK.0.to_owned(), SKIP_VERSION_CHECK.1.to_owned())]) }
 }
 
@@ -341,11 +344,11 @@ mod tests {
 
     #[test]
     fn distiller() {
-        let launch = super::distiller("p/sonnet:medium");
+        let launch = super::distiller("p/sonnet:medium", &["prompt.md", "records.md"]);
         assert_eq!(
             launch.argv,
             strs(&[
-                "pi", "--print", "--no-session", "--no-extensions", "--no-skills", "--no-context-files", "--no-tools",
+                "pi", "--mode", "json", "--no-session", "--no-extensions", "--no-skills", "--no-context-files", "--no-tools",
                 "--model", "p/sonnet:medium", "--", "@prompt.md", "@records.md",
             ])
         );
