@@ -10,10 +10,12 @@
 //!   is empty) the engine starts the restart detached ([`drain`], `cpd watch --restart-tmux`,
 //!   [`detached`]), because the restart kills the server the engine runs in.
 //!
-//! The restart records every Lead and Manager with a pane and its place, kills the server, runs
-//! `cpd tui` (the cockpit on the installed tmux, and the engine again), reopens each Session in its
-//! place, and clears the pending file. A failure keeps the file with its reason and the engine
-//! raises one `error` Event for it; the hold ends with it.
+//! The restart records every Lead and Manager with a pane (live, or recorded by its row) and its place,
+//! kills the server with the server's own binary, writes each recorded Session `stopped` with no pane
+//! (as engine E2 does for a pane that is gone), runs `cpd tui` (the cockpit on the installed tmux, and
+//! the engine again), reopens each Session in its place, and clears the pending file. Once the server
+//! is killed nothing stops it: a failing step is kept and the next one runs. A failure keeps the file
+//! with its reason and the engine raises one `error` Event for it; the hold ends with it.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
