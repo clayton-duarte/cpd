@@ -1,11 +1,10 @@
 //! R: recovering an interrupted merge (contract §7.4). The ref moves at step
 //! 8 but the Ledger records the merge only at step 10; an Attempt in
-//! `merging` whose driver is dead is ended only here, under the per-repo lock.
-
-use std::path::Path;
+//! `merging` whose driver is dead is ended only here. R takes no repo lock
+//! (hs-d243): it works on one Attempt, under that Attempt's driver lock, and
+//! ends it with the compare-and-swap on `status = 'merging'`.
 
 use super::Ctx;
-use super::lock::RepoLock;
 use crate::attempt::ledger::{self, Attempt, Cause, End, Ladder, Stage};
 use crate::driver::lock::{self, probe};
 use crate::error::{CpdError, ErrorCode};
@@ -24,39 +23,19 @@ pub struct Recovered {
     pub end: Option<End>,
 }
 
-/// Runs R for every Attempt in `merging` of a Plan on `lock`'s repo whose
-/// driver lock is free. Every holder of the per-repo lock calls this right
-/// after taking it (`pr open`, `pr rebase`, and E2 after
-/// [`RepoLock::try_take`]); the merge calls it itself.
-pub fn recover(store: &mut Store, ctx: &Ctx<'_>, lock: &RepoLock) -> Result<Vec<Recovered>, CpdError> {
-    recover_except(store, ctx, lock, None)
-}
-
-/// [`recover`], skipping the caller's own Attempt (the merge's).
-pub(super) fn recover_except(
-    store: &mut Store,
-    ctx: &Ctx<'_>,
-    lock: &RepoLock,
-    skip: Option<(&PlanId, &AttemptId)>,
-) -> Result<Vec<Recovered>, CpdError> {
-    let repo = lock.repo().to_string_lossy().into_owned();
-    let candidates = store.read(|conn| ledger::merging_on_repo(conn, &repo))?;
-    let mut done = Vec::new();
-    for (plan, id) in candidates {
-        if skip.is_some_and(|(p, a)| *p == plan && *a == id) {
-            continue;
-        }
-        // Held: its driver is alive and will finish the merge itself.
-        let Some(_driver) = probe(ctx.home, &plan, &id)? else { continue };
-        let attempt = store.read(|conn| ledger::load(conn, &plan, &id))?;
-        // Ended between the query and the lock.
-        if attempt.status != "merging" {
-            continue;
-        }
-        let end = recover_one(store, ctx, &attempt)?;
-        done.push(Recovered { plan, attempt: id, end });
+/// R for Attempt `id` of `plan`: probes its driver lock without waiting (a
+/// probe never creates the file, §3.4) and re-reads it. `None` when the lock
+/// is held (a live driver, or another R, finishes it) or the Attempt is no
+/// longer `merging`; else what R did. Callers: engine E2, for each orphaned
+/// Attempt (§3.7), and `pr rebase`'s guard U (§7.6).
+pub fn recover_attempt(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, id: &AttemptId) -> Result<Option<Recovered>, CpdError> {
+    let Some(_driver) = probe(ctx.home, plan, id)? else { return Ok(None) };
+    let attempt = store.read(|conn| ledger::load(conn, plan, id))?;
+    if attempt.status != "merging" {
+        return Ok(None);
     }
-    Ok(done)
+    let end = recover_one(store, ctx, &attempt)?;
+    Ok(Some(Recovered { plan: plan.clone(), attempt: id.clone(), end }))
 }
 
 /// R1–R4 for one Attempt whose driver is dead. Once the end is committed, the Attempt's driver
@@ -77,8 +56,9 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
     match check {
         // R2: the merge happened.
         Ok(Some(tip)) => {
-            let stale = finish_sync(attempt).err();
-            let end = End::Merged { sha: tip };
+            // R2: rule S, its stop reported as step 9's is.
+            let stale = git::sync_lead(&attempt.lead_worktree, &attempt.lead_branch).err();
+            let end = End::Merged { sha: tip.clone() };
             let metrics = (ctx.metrics)(attempt);
             store.write(ctx.source, |tx| {
                 ledger::end(tx, attempt, &end, metrics.as_ref(), &ladder, Stage::Merge)?;
@@ -88,8 +68,8 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
                 Ok(())
             })?;
             lock::remove(ctx.home, &attempt.plan, &attempt.id)?;
-            // R35: push as step 8 does; a failure does not undo the merge.
-            if let Err(e) = git::push_lead_branch(&attempt.lead_worktree, &attempt.lead_branch, false) {
+            // R35: push as step 8 does, by rule P with `tip`; a failure does not undo the merge.
+            if let Some(e) = super::push(&attempt.lead_worktree, &attempt.lead_branch, &tip) {
                 store.write(ctx.source, |tx| ledger::append_error(tx, attempt, ctx.source, &e, push_text(attempt, &e)))?;
             }
             rest_of_a9(ctx, attempt)?;
@@ -134,62 +114,6 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
             Ok(None)
         }
     }
-}
-
-/// R2's step 9 for a dead driver: the Lead worktree is stale when its index
-/// and working tree agree with each other but not with `HEAD`; then it still
-/// holds the tree of `old`, which is written out and moved to `HEAD`. Clean:
-/// nothing to do. Any other state, or a git failure: `lead_worktree_stale`.
-fn finish_sync(attempt: &Attempt) -> Result<(), CpdError> {
-    let lead = &attempt.lead_worktree;
-    try_finish_sync(lead).map_err(|e| match e.code() {
-        ErrorCode::LeadWorktreeStale => e,
-        _ => {
-            let stderr = e.details().get("stderr").and_then(|v| v.as_str()).unwrap_or(e.message()).to_owned();
-            let fix = format!("Check it out at the Lead Branch: git -C {} reset --hard HEAD", lead.display());
-            stale_error(lead, &stderr, fix)
-        }
-    })
-}
-
-fn try_finish_sync(lead: &Path) -> Result<(), CpdError> {
-    let worktree = run(lead, &["diff", "--quiet"])?.code;
-    let index = run(lead, &["diff", "--cached", "--quiet", "HEAD"])?.code;
-    match (worktree, index) {
-        (0, 0) => Ok(()),
-        (0, 1) => {
-            let tree = git::run::ok(lead, &["write-tree"])?;
-            let out = run(lead, &["read-tree", "-m", "-u", tree.trim(), "HEAD"])?;
-            if out.code == 0 {
-                return Ok(());
-            }
-            let fix = format!(
-                "Move away the files in the way, then run: git -C {} read-tree -m -u {} HEAD",
-                lead.display(),
-                tree.trim()
-            );
-            Err(stale_error(lead, &out.stderr, fix))
-        }
-        _ => {
-            let fix = format!(
-                "The Lead worktree has changes of its own: inspect them with git -C {0} status; to keep only the Lead Branch, run: git -C {0} reset --hard HEAD",
-                lead.display()
-            );
-            Err(stale_error(lead, "", fix))
-        }
-    }
-}
-
-/// `lead_worktree_stale`: the merge stands but the Lead worktree was not
-/// moved to it (§7.4 step 9).
-pub(super) fn stale_error(lead: &Path, stderr: &str, fix: String) -> CpdError {
-    CpdError::new(
-        ErrorCode::LeadWorktreeStale,
-        format!("The Lead Branch moved but the Lead worktree {} was not updated to it.", lead.display()),
-    )
-    .with("worktree", lead.display().to_string())
-    .with("stderr", git::tail(stderr, git::TAIL_LINES))
-    .with("fix", fix)
 }
 
 /// The `error` Event's text for a stale Lead worktree.

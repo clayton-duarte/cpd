@@ -5,13 +5,15 @@
 
 mod common;
 
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::time::Duration;
 
 use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
-use cpd_core::host::tmux::SERVER_OPTIONS;
+use cpd_core::host::tmux::{SERVER_OPTIONS, STATUS_FORMAT};
 use cpd_core::store::Store;
+use nix::fcntl::{Flock, FlockArg};
 use serde_json::{Value, json};
 
 const PLACEHOLDER: &str = "No Lead here: pick a Plan in the session tree";
@@ -99,14 +101,11 @@ fn views_started(env: &TestEnv) -> Vec<Vec<String>> {
 }
 
 /// Asserts `main` holds the layout of §13.1: the tree left, the plan view
-/// above the chat slot in the centre, the widgets right, the one-row StatusBar
-/// across the bottom, each marked.
+/// above the chat slot in the centre, the widgets right, each marked, and no
+/// StatusBar pane: the panes reach the window's last row.
 fn assert_layout(panes: &[Pane]) {
-    assert_eq!(panes.len(), 5, "{panes:?}");
+    assert_eq!(panes.len(), 4, "{panes:?}");
     let (tree, plan, widgets) = (view(panes, "tree"), view(panes, "plan"), view(panes, "widgets"));
-    let bar = view(panes, "statusbar");
-    assert_eq!((bar.left, bar.width, bar.height), (0, 215, 1), "{panes:?}");
-    assert!(panes.iter().filter(|p| p.id != bar.id).all(|p| p.top < bar.top), "{panes:?}");
     let slot = panes.iter().find(|p| p.view == "chat" || !p.session.is_empty()).expect("a chat slot");
     assert_eq!(tree.left, 0, "{panes:?}");
     assert_eq!(plan.left, slot.left, "{panes:?}");
@@ -116,7 +115,29 @@ fn assert_layout(panes: &[Pane]) {
     for side in [tree, widgets] {
         assert!((40..=46).contains(&side.width), "{panes:?}");
     }
-    assert!(panes.iter().all(|p| !p.dead), "{panes:?}");
+    assert!(panes.iter().all(|p| !p.dead && p.view != "statusbar"), "{panes:?}");
+    // The status line takes the session's one row: tree and widgets run from the header to the last row.
+    let bottom = |p: &Pane| p.top + p.height;
+    assert_eq!(bottom(tree), bottom(widgets), "{panes:?}");
+    assert_eq!(bottom(slot), bottom(tree), "{panes:?}");
+}
+
+/// Asserts the cockpit session `cpd` has the StatusBar as its status line,
+/// and `cpd-work` none (contract §6.1).
+fn assert_status_line(env: &TestEnv) {
+    let shown = |session: &str, format: &str| tmux_out(env, &["display", "-p", "-t", &format!("={session}:"), format]);
+    assert_eq!(shown("cpd", "#{status}").trim(), "on");
+    assert_eq!(tmux_out(env, &["show", "-v", "-t", "=cpd:", "status-style"]).trim(), "default");
+    let format = tmux_out(env, &["show", "-v", "-t", "=cpd:", "status-format[0]"]);
+    assert_eq!(format.trim_end_matches('\n'), STATUS_FORMAT);
+    for range in ["#[range=user|reset]", "#[range=user|legend]", "#[range=user|logs]", "#[align=right]#{@cpd_inbox} #{?#{e|>=:#{client_width},#{e|+:#{@cpd_workers_width},7}},#{@cpd_workers},#{@cpd_workers_short}}"] {
+        assert!(format.contains(range), "{range} in {format}");
+    }
+    // The buttons are one space apart, outside their ranges: no range starts where the one before it ends.
+    assert!(!format.contains("#[norange,default]#[range"), "{format}");
+    // Set on the cockpit session only: the server default and cpd-work have no status row.
+    assert_eq!(tmux_out(env, &["show", "-gv", "status"]).trim(), "off");
+    assert_eq!(shown("cpd-work", "#{status}").trim(), "off");
 }
 
 #[test]
@@ -136,9 +157,9 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     let chat = view(&panes, "chat");
     assert_eq!(windows(&env, "cpd"), ["main"]);
     assert_eq!(windows(&env, "cpd-work"), ["watch"]);
-    let views: Vec<Vec<String>> = ["tree", "plan", "widgets", "chat", "statusbar"].iter().map(|v| vec!["tui".into(), "view".into(), (*v).into()]).collect();
-    // The views start side by side: wait for the five calls, whose order is that of the first to be recorded.
-    wait_until("the five views to be started", || views_started(&env).len() >= 5);
+    let views: Vec<Vec<String>> = ["tree", "plan", "widgets", "chat"].iter().map(|v| vec!["tui".into(), "view".into(), (*v).into()]).collect();
+    // The views start side by side: wait for the four calls, whose order is that of the first to be recorded.
+    wait_until("the four views to be started", || views_started(&env).len() >= 4);
     let (mut expected, mut started) = (views, views_started(&env));
     expected.sort();
     started.sort();
@@ -163,18 +184,23 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     // tmux expands the format of the tree pane to its reversed title.
     let expanded = tmux_out(&env, &["display", "-p", "-t", &view(&panes, "tree").id, "-F", &border]);
     assert!(expanded.contains("#[reverse] Context #[noreverse]"), "{expanded}");
-    // The StatusBar has no title, and a click on it never selects it.
-    assert!(border.contains("#{?#{==:#{@cpd_view},statusbar},,"), "{border}");
-    let binding = tmux_out(&env, &["list-keys", "-T", "root", "MouseDown1Pane"]);
-    assert!(binding.contains("#{==:#{@cpd_view},statusbar}"), "{binding}");
-    assert!(binding.contains("send-keys -M"), "{binding}");
+    assert!(!border.contains("statusbar"), "{border}");
+    // The StatusBar is the cockpit session's status line; a click on a pane is tmux's default again.
+    assert_status_line(&env);
+    // Words only: tmux 3.8 pads `bind-key` with a blank `-r` column (two spaces).
+    let binding = |key: &str| tmux_out(&env, &["list-keys", "-T", "root", key]).split_whitespace().collect::<Vec<_>>().join(" ");
+    assert_eq!(binding("MouseDown1Pane"), "bind-key -T root MouseDown1Pane select-pane -t = \\; send-keys -M");
+    assert_eq!(
+        binding("MouseDown1Status"),
+        "bind-key -T root MouseDown1Status run-shell -b \"cpd tui action #{mouse_status_range} --client #{client_name} 2>/dev/null\""
+    );
 
     // A second run builds nothing and starts nothing.
     let again = env.cpd(&["tui"]).ok();
     assert_eq!(again["built"], false, "{again}");
     assert_eq!(again["watch"], json!({"started": false, "already": true}));
     assert_eq!(main_panes(&env).iter().map(|p| &p.id).collect::<Vec<_>>(), panes.iter().map(|p| &p.id).collect::<Vec<_>>());
-    assert_eq!(views_started(&env).len(), 5);
+    assert_eq!(views_started(&env).len(), 4);
     assert_eq!(windows(&env, "cpd-work"), ["watch"]);
     assert!(tmux_out(&env, &["list-panes", "-t", engine, "-F", "#{pane_dead}"]).trim() == "0");
 }
@@ -187,6 +213,7 @@ fn tui_builds_main_in_a_cockpit_that_has_only_a_park_window() {
     let out = env.cpd(&["tui"]).ok();
     assert_eq!(out["built"], true, "{out}");
     assert_layout(&main_panes(&env));
+    assert_status_line(&env);
     assert_eq!(windows(&env, "cpd"), ["park-pay", "main"]);
     assert_eq!(env.cpd(&["tui"]).ok()["built"], false);
 }
@@ -257,9 +284,10 @@ fn assert_server_options(env: &TestEnv) {
                 let shown = tmux_out(env, &["show-hooks", "-g", hook]);
                 assert_eq!(shown, format!("{hook}[0] if-shell -F \"#{{@cpd_view}}\" respawn-pane\n"));
             }
-            ["bind", "-T", table, key, "if", "-F", condition, ..] => {
-                let shown = tmux_out(env, &["list-keys", "-T", table, key]);
-                assert!(shown.contains(condition), "{shown}");
+            ["bind", "-T", table, key, .., command] => {
+                // tmux shows a `;` inside a binding escaped
+                let shown = tmux_out(env, &["list-keys", "-T", table, key]).replace("\\;", ";");
+                assert!(shown.contains(command), "{command} in {shown}");
             }
             other => panic!("an option this test cannot check: {other:?}"),
         }
@@ -328,8 +356,8 @@ fn tui_respawns_a_dead_pane_of_the_layout_in_place_and_sets_the_hook_again() {
     // A server from before the hook: a dead view stays dead until tui runs.
     tmux_out(&env, &["set-hook", "-gu", "pane-died"]);
     let before = main_panes(&env);
-    let (tree, bar) = (view(&before, "tree").clone(), view(&before, "statusbar").clone());
-    for pane in [&tree, &bar] {
+    let (tree, widgets) = (view(&before, "tree").clone(), view(&before, "widgets").clone());
+    for pane in [&tree, &widgets] {
         let tty = kill(&env, &pane.id, pane.pid);
         wait_until(&format!("the dead {} pane", pane.view), || pane_state(&env, &pane.id).0);
         drop(tty);
@@ -342,7 +370,7 @@ fn tui_respawns_a_dead_pane_of_the_layout_in_place_and_sets_the_hook_again() {
     assert_layout(&after);
     assert_eq!(after.iter().map(|p| &p.id).collect::<Vec<_>>(), before.iter().map(|p| &p.id).collect::<Vec<_>>());
     assert_ne!(view(&after, "tree").pid, tree.pid);
-    assert_ne!(view(&after, "statusbar").pid, bar.pid);
+    assert_ne!(view(&after, "widgets").pid, widgets.pid);
     // The pane has its new process before the fake `cpd` has recorded the call: wait for the call.
     let trees = || views_started(&env).iter().filter(|c| c[2] == "tree").count();
     wait_until("the tree's view to be started again", || trees() >= 2);
@@ -351,31 +379,287 @@ fn tui_respawns_a_dead_pane_of_the_layout_in_place_and_sets_the_hook_again() {
 }
 
 #[test]
-fn tui_adds_a_missing_statusbar_to_an_existing_main_then_resets_the_layout() {
+fn tui_removes_an_old_statusbar_pane_then_resets_the_layout() {
     let env = env();
     env.cpd(&["tui"]).ok();
     let full = main_panes(&env);
-    tmux_out(&env, &["kill-pane", "-t", &view(&full, "statusbar").id]);
-    // An old main, its sizes changed by the User.
+    // A main built by an older cpd: the StatusBar pane at the bottom, the session without its status line, and the
+    // sizes changed by the User.
+    for option in ["status", "status-style", "status-format[0]"] {
+        tmux_out(&env, &["set", "-u", "-t", "=cpd:", option]);
+    }
+    let bar = tmux_out(&env, &["split-window", "-d", "-v", "-f", "-l", "1", "-t", &full[0].id, "-P", "-F", "#{pane_id}", "sleep", "3600"]);
+    let bar = bar.trim();
+    tmux_out(&env, &["set", "-p", "-t", bar, "@cpd_view", "statusbar"]);
     tmux_out(&env, &["resize-pane", "-t", &view(&full, "tree").id, "-x", "80"]);
     let before = main_panes(&env);
-    assert_eq!(before.len(), 4, "{before:?}");
+    assert_eq!(before.len(), 5, "{before:?}");
     assert_eq!(view(&before, "tree").width, 80, "{before:?}");
+
+    let run = env.cpd(&["tui"]);
+    let out = run.ok();
+    assert_eq!(out["built"], false, "{out}");
+    assert!(!run.stderr.contains("statusbar"), "no warning about the old pane: {run:?}");
+    let after = main_panes(&env);
+    // The bar is gone, the others have their sizes back, and the status line is on.
+    assert_layout(&after);
+    assert_status_line(&env);
+    // They are the same panes, still alive.
+    for old in before.iter().filter(|p| p.id != bar) {
+        let new = after.iter().find(|p| p.id == old.id).unwrap_or_else(|| panic!("{} is gone: {after:?}", old.id));
+        assert_eq!((new.view.as_str(), new.pid, new.dead), (old.view.as_str(), old.pid, false));
+    }
+
+    // Rerunning removes nothing more.
+    env.cpd(&["tui"]).ok();
+    assert_eq!(main_panes(&env), after);
+}
+
+/// `cpd tui action` with `args`, which must print nothing and exit 0 (commands.md §1.2).
+fn action(env: &TestEnv, args: &[&str]) {
+    let run = env.cpd(&[&["tui", "action"][..], args].concat());
+    assert_eq!((run.exit, run.stdout.as_str(), run.stderr.as_str()), (0, "", ""), "{args:?}: {run:?}");
+}
+
+#[test]
+fn tui_action_reset_resizes_as_reset_layout_does() {
+    let env = env();
+    env.cpd(&["tui"]).ok();
+    let before = main_panes(&env);
+    tmux_out(&env, &["resize-pane", "-t", &view(&before, "tree").id, "-x", "80"]);
+    tmux_out(&env, &["resize-pane", "-t", &view(&before, "plan").id, "-y", "30"]);
+    assert_eq!(view(&main_panes(&env), "tree").width, 80);
+
+    action(&env, &["reset", "--client", "/dev/pts/nobody"]);
+    let after = main_panes(&env);
+    assert_layout(&after);
+    let sizes = |panes: &[Pane]| panes.iter().map(|p| (p.id.clone(), p.width, p.height)).collect::<Vec<_>>();
+    assert_eq!(sizes(&after), sizes(&before), "the sizes reset-layout gave the new main");
+}
+
+/// A fake `tmux` on `PATH` that records its calls and runs the real one.
+fn recording_tmux(env: &TestEnv) {
+    let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
+    env.fake("tmux", &format!("exec '{}' \"$@\"", real.trim()));
+}
+
+fn messages(env: &TestEnv) -> Vec<Vec<String>> {
+    env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-message")).collect()
+}
+
+#[test]
+fn a_failing_action_prints_nothing_exits_0_and_tells_the_client() {
+    let env = env();
+    env.cpd(&["tui"]).ok();
+    recording_tmux(&env);
+
+    // an unknown action, or none (an empty `#{mouse_status_range}`)
+    action(&env, &["nope", "--client", "/dev/pts/77"]);
+    action(&env, &["--client", "/dev/pts/77"]);
+    // a client that is not attached: no size to open the popup at
+    action(&env, &["legend", "--client", "/dev/pts/77"]);
+    action(&env, &["logs", "--client", "/dev/pts/77"]);
+    let messages = messages(&env);
+    assert_eq!(messages.len(), 4, "{messages:?}");
+    for (message, says) in messages.iter().zip(["\"nope\"", "\"\"", "no tmux client", "no tmux client"]) {
+        let at = message.iter().position(|a| a == "display-message").unwrap();
+        assert_eq!(message[at + 1..at + 4], ["-l", "-c", "/dev/pts/77"], "{message:?}");
+        assert!(message[at + 4].starts_with("cpd tui action: ") && message[at + 4].contains(says), "{says}: {message:?}");
+    }
+    assert!(env.calls("tmux").iter().all(|c| !c.iter().any(|a| a == "display-popup")));
+
+    // with no tmux server at all, even the message fails: still nothing printed, exit 0
+    tmux_out(&env, &["kill-server"]);
+    action(&env, &["reset", "--client", "/dev/pts/77"]);
+}
+
+/// A second private tmux server whose one pane is a real client of the cockpit
+/// (`tmux -L <socket> attach`), so the cockpit gets mouse events and popups;
+/// killed on drop.
+struct Outer<'a> {
+    env: &'a TestEnv,
+    socket: String,
+}
+
+impl<'a> Outer<'a> {
+    fn attach(env: &'a TestEnv, width: u16, height: u16) -> Outer<'a> {
+        let outer = Outer { env, socket: format!("{}-outer", env.tmux_socket()) };
+        let attach = format!("env -u TMUX tmux -L {} attach -t cpd", env.tmux_socket());
+        let (w, h) = (width.to_string(), height.to_string());
+        // without its own status line, so the client is the whole window
+        outer.run(&["set", "-g", "status", "off", ";", "new-session", "-d", "-s", "o", "-x", &w, "-y", &h, &attach]);
+        outer
+    }
+
+    fn run(&self, args: &[&str]) -> String {
+        let out = self.env.command("tmux").args(["-L", &self.socket, "-f", "/dev/null"]).args(args).output().unwrap();
+        assert!(out.status.success(), "outer tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    /// A left click at 0-based cell `x`, `y` of the client, as a terminal sends it (SGR mouse reporting). Half a
+    /// second after the one before, else tmux takes it for the second click of a double click, not a `MouseDown1`.
+    fn click(&self, x: u16, y: u16) {
+        // time-claim: a click after the double-click interval of tmux's is a `MouseDown1`, not a second click; no
+        // per-poll signal from tmux's click timer.
+        std::thread::sleep(Duration::from_millis(500));
+        for end in ['M', 'm'] {
+            let bytes = format!("\x1b[<0;{};{}{end}", x + 1, y + 1);
+            let hex: Vec<String> = bytes.bytes().map(|b| format!("0x{b:02x}")).collect();
+            let mut args = vec!["send-keys", "-t", "o", "-H"];
+            args.extend(hex.iter().map(String::as_str));
+            self.run(&args);
+        }
+    }
+
+    fn screen(&self) -> String {
+        self.run(&["capture-pane", "-p", "-t", "o"])
+    }
+}
+
+impl Drop for Outer<'_> {
+    fn drop(&mut self) {
+        let _ = self.env.command("tmux").args(["-L", &self.socket, "kill-server"]).stderr(std::process::Stdio::null()).status();
+    }
+}
+
+#[test]
+fn a_click_on_a_statusbar_button_runs_its_action_on_the_clicking_client() {
+    let env = env();
+    env.cpd(&["tui"]).ok();
+    let outer = Outer::attach(&env, 120, 30);
+    let mut client = String::new();
+    wait_until("the client", || {
+        client = tmux_out(&env, &["list-clients", "-F", "#{client_name}"]).trim().to_owned();
+        !client.is_empty()
+    });
+    // The status line is the client's last row: the three buttons at the left, one space apart.
+    wait_until("the buttons", || outer.screen().lines().nth(29).is_some_and(|l| l.starts_with("⧉ ? ▤")));
+    // It takes one row: the window has the other 29.
+    assert_eq!(tmux_out(&env, &["display", "-p", "-t", "=cpd:main", "#{window_height}"]).trim(), "29");
+    let chat = view(&main_panes(&env), "chat").clone();
+    let actions = || env.calls("cpd").into_iter().filter(|c| c.get(1).map(String::as_str) == Some("action")).collect::<Vec<_>>();
+
+    // ? opens the legend on this client
+    outer.click(2, 29);
+    wait_until("the legend popup", || outer.screen().contains(" legend "));
+    assert_eq!(actions(), [["tui", "action", "legend", "--client", &client]]);
+    // The popup's title can show before its command has started.
+    wait_until("the legend view", || views_started(&env).contains(&vec!["tui".into(), "view".into(), "legend".into()]));
+    // The click went to no pane: the chat keeps the focus and is not put into a mode.
+    let active = tmux_out(&env, &["display", "-p", "-t", "=cpd:main", "#{pane_id} #{pane_in_mode}"]);
+    assert_eq!(active.trim(), format!("{} 0", chat.id));
+    // the legend view here is a fake that sleeps: close its popup
+    tmux_out(&env, &["display-popup", "-C", "-c", &client]);
+    wait_until("the popup to close", || !outer.screen().contains(" legend "));
+
+    // ▤ opens the logs
+    outer.click(4, 29);
+    wait_until("the logs popup", || outer.screen().contains(" logs "));
+    tmux_out(&env, &["display-popup", "-C", "-c", &client]);
+
+    // ⧉ resets the layout
+    let tree = view(&main_panes(&env), "tree").clone();
+    tmux_out(&env, &["resize-pane", "-t", &tree.id, "-x", "70"]);
+    outer.click(0, 29);
+    wait_until("the reset", || (22..=26).contains(&view(&main_panes(&env), "tree").width));
+    assert_eq!(actions().len(), 3);
+}
+
+/// Kills `gone` (views of `main`), runs `cpd tui`, and asserts the layout is whole again with the panes that were
+/// not killed unchanged, and that rerunning adds nothing.
+fn assert_repaired_after_killing(gone: &[&str]) {
+    let env = env();
+    env.cpd(&["tui"]).ok();
+    let full = main_panes(&env);
+    for name in gone {
+        tmux_out(&env, &["kill-pane", "-t", &view(&full, name).id]);
+    }
+    // An old main, its sizes changed by the User.
+    if !gone.contains(&"widgets") {
+        tmux_out(&env, &["resize-pane", "-t", &view(&full, "widgets").id, "-x", "80"]);
+    }
+    let before = main_panes(&env);
+    assert_eq!(before.len(), 4 - gone.len(), "{before:?}");
 
     let out = env.cpd(&["tui"]).ok();
     assert_eq!(out["built"], false, "{out}");
     let after = main_panes(&env);
-    // The bar spans the window and the other panes have their sizes back.
     assert_layout(&after);
-    // They are the same panes, still alive.
     for old in &before {
         let new = after.iter().find(|p| p.id == old.id).unwrap_or_else(|| panic!("{} is gone: {after:?}", old.id));
         assert_eq!((new.view.as_str(), new.pid, new.dead), (old.view.as_str(), old.pid, false));
     }
 
-    // Rerunning adds none.
+    // Rerunning adds nothing and starts nothing.
+    let started = views_started(&env).len();
     env.cpd(&["tui"]).ok();
-    assert_eq!(main_panes(&env).len(), 5);
+    assert_eq!(main_panes(&env), after);
+    assert_eq!(views_started(&env).len(), started);
+}
+
+#[test]
+fn tui_adds_a_missing_tree_to_an_existing_main() {
+    assert_repaired_after_killing(&["tree"]);
+}
+
+#[test]
+fn tui_adds_a_missing_plan_view_to_an_existing_main() {
+    assert_repaired_after_killing(&["plan"]);
+}
+
+#[test]
+fn tui_adds_a_missing_widgets_view_to_an_existing_main() {
+    assert_repaired_after_killing(&["widgets"]);
+}
+
+#[test]
+fn tui_adds_a_missing_chat_placeholder_to_an_existing_main() {
+    assert_repaired_after_killing(&["chat"]);
+}
+
+#[test]
+fn tui_adds_the_plan_view_and_the_chat_slot_when_both_are_missing() {
+    assert_repaired_after_killing(&["plan", "chat"]);
+}
+
+#[test]
+fn tui_finishes_a_build_that_stopped_after_the_first_pane() {
+    let env = env();
+    env.cpd(&["tui"]).ok();
+    let full = main_panes(&env);
+    let tree = view(&full, "tree").clone();
+    for name in ["plan", "widgets", "chat"] {
+        tmux_out(&env, &["kill-pane", "-t", &view(&full, name).id]);
+    }
+    assert_eq!(main_panes(&env).len(), 1);
+
+    let out = env.cpd(&["tui"]).ok();
+    assert_eq!(out["built"], false, "{out}");
+    let after = main_panes(&env);
+    assert_layout(&after);
+    assert_eq!(view(&after, "tree").pid, tree.pid, "the pane that was there is not touched");
+    env.cpd(&["tui"]).ok();
+    assert_eq!(main_panes(&env), after);
+}
+
+#[test]
+fn tui_keeps_a_lead_in_the_chat_slot_when_the_plan_view_is_missing() {
+    let env = env();
+    env.cpd(&["tui"]).ok();
+    let placeholder = view(&main_panes(&env), "chat").clone();
+    let lead = tmux_out(&env, &["new-window", "-d", "-t", "=cpd:", "-n", "park-pay", "-P", "-F", "#{pane_id}", "sleep", "3600"]);
+    let lead = lead.trim();
+    tmux_out(&env, &["set", "-p", "-t", lead, "@cpd_session", "lead-a"]);
+    tmux_out(&env, &["swap-pane", "-d", "-s", lead, "-t", &placeholder.id]);
+    let full = main_panes(&env);
+    tmux_out(&env, &["kill-pane", "-t", &view(&full, "plan").id]);
+
+    env.cpd(&["tui"]).ok();
+    let after = main_panes(&env);
+    assert_layout(&after);
+    assert!(after.iter().any(|p| p.id == lead), "the Lead keeps the slot: {after:?}");
+    assert!(after.iter().all(|p| p.view != "chat"), "no second slot: {after:?}");
 }
 
 #[test]
@@ -404,7 +688,7 @@ fn tui_respawn_restarts_every_live_view_and_no_lead_or_engine() {
     respawned.sort();
     let mut views: Vec<String> = before.iter().filter(|p| !p.view.is_empty()).map(|p| p.id.clone()).collect();
     views.sort();
-    assert_eq!(views.len(), 5, "tree, plan, widgets, statusbar and the Worker view: {before:?}");
+    assert_eq!(views.len(), 4, "tree, plan, widgets and the Worker view: {before:?}");
     assert_eq!(respawned, views, "{before:?}");
 
     let after = main_panes(&env);
@@ -538,6 +822,64 @@ fn tui_view_routes_by_name() {
         let run = env.cpd(words);
         assert_eq!((run.exit, run.error()["code"].clone()), (2, json!("usage")), "{words:?}: {run:?}");
     }
+}
+
+/// The status line (last row) of a client of `width` columns once it shows `needle`, as text and with its styles
+/// (`capture-pane -e`).
+fn status_line(env: &TestEnv, width: u16, needle: &str) -> (String, String) {
+    let outer = Outer::attach(env, width, 20);
+    let mut line = String::new();
+    wait_until(&format!("{needle} on the status line"), || {
+        line = outer.screen().lines().nth(19).unwrap_or("").trim_end().to_owned();
+        line.contains(needle)
+    });
+    let styled = outer.run(&["capture-pane", "-p", "-e", "-t", "o"]).lines().nth(19).unwrap_or("").to_owned();
+    (line, styled)
+}
+
+/// A cockpit whose options hold what `workers.rs` sets for two Inbox items, the most urgent red, and
+/// `6/6 · 4 waiting · 9 queued`.
+/// No engine runs: the test holds `locks/watch.lock` as one does, so `tui`'s `watch --ensure` starts none
+/// and nothing overwrites the options set by hand (the engine's step has its own tests in `watch.rs`).
+/// The lock is held while the returned guard lives.
+fn env_with_workers() -> (TestEnv, Flock<File>) {
+    let env = env();
+    let path = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap().watch_lock();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
+    let engine = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+    tmux_out(&env, &["new-session", "-d", "-s", "cpd", "-n", "park-pay", "-x", "215", "-y", "62", "sleep", "3600"]);
+    let tui = env.cpd(&["tui"]).ok();
+    assert_eq!(tui["watch"], json!({"started": false, "already": true}), "{tui}");
+    for (option, value) in [
+        ("@cpd_inbox", "#[fg=red]inbox 2#[default]"),
+        ("@cpd_workers", "#[dim]workers #[nodim,fg=green]6#[default,dim]/6 · #[nodim,fg=yellow]4#[default,dim] waiting · 9 queued#[default]"),
+        ("@cpd_workers_short", "#[nodim,fg=green]6#[default,dim]/6·#[nodim,fg=yellow]4#[default,dim]·9#[default]"),
+        ("@cpd_workers_width", "42"),
+    ] {
+        tmux_out(&env, &["set", "-g", option, value]);
+    }
+    (env, engine)
+}
+
+const BUTTONS: &str = "⧉ ? ▤";
+
+// `inbox 2`, one space and the long form are 42 cells wide: with the buttons' 5 cells and 2 of air they need a client
+// of 49 columns.
+#[test]
+fn the_status_line_draws_the_inbox_counter_then_the_long_workers_form_on_a_client_wide_enough() {
+    let (env, _engine) = env_with_workers();
+    let (line, styled) = status_line(&env, 49, "queued");
+    assert!(line.starts_with(BUTTONS) && line.ends_with("inbox 2 workers 6/6 · 4 waiting · 9 queued"), "{line:?}");
+    assert!(styled.contains("\x1b[31minbox 2"), "the counter in red: {styled:?}");
+}
+
+#[test]
+fn the_status_line_draws_the_inbox_counter_then_the_short_workers_form_on_a_narrow_client() {
+    let (env, _engine) = env_with_workers();
+    let (line, styled) = status_line(&env, 48, "6/6");
+    assert!(line.starts_with(BUTTONS) && line.ends_with("inbox 2 6/6·4·9") && !line.contains("workers"), "{line:?}");
+    assert!(styled.contains("\x1b[31minbox 2"), "the counter in red: {styled:?}");
 }
 
 #[test]
