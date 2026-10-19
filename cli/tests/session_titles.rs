@@ -103,9 +103,16 @@ fn setup(env: &TestEnv) {
                ('worker1', 'worker', 'ctx', 'pay', 'api-a1', 'pay api a1', '{lead}', '/', 'S2', 'working', 't', 't3', NULL),
                ('lead2', 'lead', 'ctx', 'pay', NULL, 'Lead two', '{lead}', '/', 'O3', 'stopped', 't', 't2', 't9'),
                ('lead3', 'lead', 'ctx', 'pay', NULL, 'Lead three', NULL, '/', 'O3', 'idle', 't', 't4', NULL);
-             INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't');",
+             INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't');
+             INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+               VALUES ('pay', 'r', '/r', 'main', 'waiting', 'cpd/pay', cpd_txn(), 't');
+             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+               VALUES ('pay', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fp}', cpd_txn(), 't');
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)
+               VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pay--api-a1', '/w', 'worker1', 't');",
             lead = lead_file.display(),
             manager = manager_file.display(),
+            fp = "a".repeat(64),
         ),
     );
 }
