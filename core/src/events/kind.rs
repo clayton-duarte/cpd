@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 3;
+pub const PROTOCOL: u32 = 4;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -107,6 +107,7 @@ kinds! {
     SessionState = "session-state",
     SessionMoved = "session-moved",
     SessionRenamed = "session-renamed",
+    SessionTitled = "session-titled",
     ContextRenamed = "context-renamed",
     PlanRenamed = "plan-renamed",
     ContextArchived = "context-archived",
@@ -168,6 +169,7 @@ impl Kind {
             SessionState => spec([Y, M, N, N, Y], &["from", "to", "label"], &[]),
             SessionMoved => spec([Y, M, N, N, Y], &["pane", "window", "place"], &[]),
             SessionRenamed => spec([Y, M, N, N, Y], &["name"], &[]),
+            SessionTitled => spec([Y, M, N, N, Y], &["title"], &[]),
             ContextRenamed => spec([Y, N, N, N, N], &["title"], &[]),
             PlanRenamed => spec([Y, Y, N, N, N], &["title"], &[]),
             ContextArchived => spec([Y, N, N, N, N], &["archived"], &[]),

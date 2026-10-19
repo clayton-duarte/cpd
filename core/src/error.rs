@@ -97,6 +97,7 @@ error_codes! {
     CleanupFailed = "cleanup_failed" => Failure,
     DistillInvalid = "distill_invalid" => Failure,
     DistillFailed = "distill_failed" => Failure,
+    TitleFailed = "title_failed" => Failure,
 
     // Exit 2: usage error.
     Usage = "usage" => Usage,
@@ -366,6 +367,7 @@ mod tests {
             (ErrorCode::PrClosed, 3),
             (ErrorCode::NeedsOtherPr, 3),
             (ErrorCode::PrNotFound, 4),
+            (ErrorCode::TitleFailed, 1),
         ];
         for (code, exit) in cases {
             assert_eq!(code.exit().code(), exit, "{code}");

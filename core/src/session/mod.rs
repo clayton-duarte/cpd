@@ -8,6 +8,7 @@
 //! - [`history`]: `session history`, an archived Session's history in the chat slot;
 //! - [`archive`]: `session archive` and `unarchive`, and the archive rule;
 //! - [`send`]: `session send`, one message to a Lead;
+//! - [`retitle`]: `session retitle`, a Lead's or a Manager's dynamic title;
 //! - [`port`]: a Plan's plannotator port;
 //! - [`run`]: `session run`, the program in every Lead pane (§6.7).
 
@@ -16,6 +17,7 @@ mod history;
 mod moves;
 mod port;
 mod resolve;
+mod retitle;
 mod row;
 pub(crate) mod run;
 mod send;
@@ -70,6 +72,9 @@ pub enum Command {
     /// Report a Session's agent state (pi adapter) (§10.6)
     #[command(hide = true)]
     State(StateArgs),
+    /// Write a Lead's or Manager's dynamic title with a one-shot pi (engine E10) (§10.14)
+    #[command(hide = true)]
+    Retitle(RetitleArgs),
     /// The program in every Lead pane (internal; owns its terminal) (§10.8)
     #[command(hide = true)]
     Run(RunArgs),
@@ -196,6 +201,13 @@ pub struct StateArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct RetitleArgs {
+    /// The Lead or Manager Session to title
+    #[arg(value_name = "session")]
+    id: SessionRef,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct RunArgs {
     /// The Lead Session this pane runs
     #[arg(value_name = "id")]
@@ -223,6 +235,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Send(args) => send::send(args),
         Command::Rename(args) => state::rename(args),
         Command::State(args) => state::state(args),
+        Command::Retitle(args) => retitle::retitle(args),
         Command::Run(args) => run::run(args),
     }
 }
