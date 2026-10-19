@@ -256,6 +256,7 @@ fn show(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::read::Kind;
 
     fn text(line: &Line) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
@@ -278,20 +279,39 @@ mod tests {
     }
 
     #[test]
-    fn the_pulse_section_lists_its_five_glyphs_in_their_colours() {
+    fn the_pulse_section_lists_the_kind_colours_in_precedence_order_the_grey_zero_and_quiet() {
         let pulse = &sections()[4];
         let cells: Vec<String> = pulse.rows.iter().flatten().map(text).collect();
         assert_eq!(
             cells,
             [
-                "▄", "activity per 5 minutes", "▄", "a Job merged",
-                crate::plan::pulse::merged_icon(), "a PR merged", "▁", "a Worker running",
+                "▂▄▆", "activity per 5 minutes; a slot takes the first colour below",
+                "▄", "an error, or a Job failed",
+                "▄", "a Plan or ask Event",
+                "▄", "a PR opened",
+                "▄", "an escalation",
+                "▄", "a Job or a PR merged",
+                "▄", "any other activity",
+                "▁", "no activity",
                 "quiet 41m", "queued or running work with no activity for 30 min",
             ]
         );
         let colours: Vec<_> = pulse.rows.iter().flatten().step_by(2).map(|l| l.spans[0].style.fg).collect();
-        let fg = |m| palette::fg(m).fg;
-        assert_eq!(colours, [None, fg(Meaning::Done), fg(Meaning::Done), fg(Meaning::Nothing), fg(Meaning::Review)]);
+        let c = |k| Some(palette::pulse_kind(k));
+        assert_eq!(
+            colours,
+            [
+                None,
+                c(Kind::Error),
+                c(Kind::Plan),
+                c(Kind::PrOpened),
+                c(Kind::Escalation),
+                c(Kind::Merged),
+                c(Kind::Other),
+                palette::fg(Meaning::Nothing).fg,
+                palette::fg(Meaning::Review).fg
+            ]
+        );
     }
 
     #[test]

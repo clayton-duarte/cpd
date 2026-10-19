@@ -15,7 +15,7 @@ use ratatui::{
     text::Span,
 };
 
-use super::read::{AttemptStatus, Checks, Dot, JobStatus, PrState};
+use super::read::{AttemptStatus, Checks, Dot, JobStatus, Kind, PrState};
 use cpd_core::plan::Phase;
 
 /// What a colour stands for. One colour per meaning, whatever view shows it.
@@ -84,6 +84,19 @@ pub fn color(m: Meaning) -> Color {
 /// Foreground in the colour of a meaning.
 pub fn fg(m: Meaning) -> Style {
     Style::new().fg(color(m))
+}
+
+/// The colour of a Pulse bar by the kind of activity in its slot (commands.md §13.2, Kinds; User, hs-d327). Green is not
+/// [`Meaning::Done`], which shares dark grey with nothing.
+pub fn pulse_kind(kind: Kind) -> Color {
+    match kind {
+        Kind::Error => Color::Red,
+        Kind::Plan => Color::Magenta,
+        Kind::PrOpened => Color::Yellow,
+        Kind::Escalation => Color::Blue,
+        Kind::Merged => Color::Green,
+        Kind::Other => Color::White,
+    }
 }
 
 /// Colours that are not a status: notes and prompts, the Worker view's roles.
@@ -425,6 +438,22 @@ mod tests {
             assert_eq!(checks(c), (icon, m), "{c:?}");
         }
         assert_eq!(CHECKS_LEGEND.map(|(_, c)| c), table.map(|(c, _, _)| c));
+    }
+
+    #[test]
+    fn a_pulse_bar_is_red_magenta_yellow_blue_green_or_white_by_its_kind() {
+        let table = [
+            (Kind::Error, Color::Red),
+            (Kind::Plan, Color::Magenta),
+            (Kind::PrOpened, Color::Yellow),
+            (Kind::Escalation, Color::Blue),
+            (Kind::Merged, Color::Green),
+            (Kind::Other, Color::White),
+        ];
+        for (kind, colour) in table {
+            assert_eq!(pulse_kind(kind), colour, "{kind:?}");
+        }
+        assert_eq!(color(Meaning::Nothing), Color::DarkGray, "an empty slot's ▁ is grey");
     }
 
     #[test]

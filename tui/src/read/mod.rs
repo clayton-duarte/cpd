@@ -44,7 +44,7 @@ pub use shared::{
 };
 pub use dot::Dot;
 pub use logs::{Logs, logs, logs_after};
-pub use pulse::{BUCKET_MINUTES, Bucket, ManagerSlot, Pulse, PulseRow, QUIET_MINUTES, manager_slot, pulse};
+pub use pulse::{BUCKET_MINUTES, Bucket, Kind, ManagerSlot, Pulse, PulseRow, QUIET_MINUTES, manager_slot, pulse};
 pub use tree::{ContextNode, PlanNode, Tree, tree};
 pub use widgets::{
     Engine, HeldSlot, MachineEscalation, OpenPr, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets, widgets,

@@ -235,7 +235,7 @@ impl Ui {
     }
 
     /// Draws Pulse: the rows inside the margin, then the message row (an error, ` no Plans yet`, the note).
-    fn draw_pulse(&mut self, f: &mut Frame, pulse: &Pulse, frame: usize) {
+    fn draw_pulse(&mut self, f: &mut Frame, pulse: &Pulse) {
         let mut window = f.area();
         let mut parts: Vec<Span<'static>> =
             self.error.iter().map(|e| Span::styled(e.clone(), palette::note())).collect();
@@ -254,7 +254,7 @@ impl Ui {
             window = rows;
         }
         self.body = window.inner(MARGIN);
-        self.pulse_offset = pulse::draw(f.buffer_mut(), self.body, pulse, self.pulse_offset, frame);
+        self.pulse_offset = pulse::draw(f.buffer_mut(), self.body, pulse, self.pulse_offset);
     }
 
     fn draw(&mut self, f: &mut Frame, centre: Option<&Centre>) {
@@ -357,7 +357,7 @@ fn show(
             c.turn(palette::frame(SystemTime::now()));
         }
         terminal.draw(|f| match snap.pulse.as_ref() {
-            Some(pulse) => ui.draw_pulse(f, pulse, palette::frame(SystemTime::now())),
+            Some(pulse) => ui.draw_pulse(f, pulse),
             None => ui.draw(f, snap.centre.as_ref()),
         })?;
         if !event::poll(poll.min(FRAME))? {
@@ -781,7 +781,7 @@ mod tests {
     }
 
     fn pulse_of(rows: &[&str]) -> Pulse {
-        let bucket = |count| read::Bucket { count, job_merged: false, pr_merged: false, worker_ran: false };
+        let bucket = |count| read::Bucket { count, kind: Some(read::Kind::Other), job_merged: false, pr_merged: false, worker_ran: false };
         let rows = rows
             .iter()
             .map(|id| read::PulseRow {
@@ -799,7 +799,7 @@ mod tests {
 
     fn pulse_screen(ui: &mut Ui, pulse: &Pulse, height: u16) -> (Buffer, Vec<String>) {
         let mut terminal = Terminal::new(TestBackend::new(60, height)).unwrap();
-        terminal.draw(|f| ui.draw_pulse(f, pulse, 0)).unwrap();
+        terminal.draw(|f| ui.draw_pulse(f, pulse)).unwrap();
         let buf = terminal.backend().buffer().clone();
         let rows = (0..height)
             .map(|y| (0..60).map(|x| buf[(x, y)].symbol().to_owned()).collect::<String>().trim_end().to_owned())
@@ -813,8 +813,7 @@ mod tests {
         let mut ui = Ui::default();
         let (_, rows) = pulse_screen(&mut ui, &pulse, 5); // margin row, then 3 rows, then the margin row
         assert_eq!(rows[0], "");
-        let idle = palette::dot_span(read::Dot::Idle, 0, false).content;
-        assert!(rows[1].starts_with(&format!("  {idle} aa  ")), "{:?}", rows[1]);
+        assert!(rows[1].starts_with("  aa  "), "{:?}", rows[1]);
         assert!(rows[1].ends_with("         3m"), "{:?}", rows[1]);
         assert_eq!(ui.body, Rect::new(2, 1, 56, 3));
         let lead = |ui: &Ui, y| {
@@ -825,7 +824,7 @@ mod tests {
         ui.pulse_offset = pulse::scroll(ui.pulse_offset, true, 6, 3);
         assert_eq!(ui.pulse_offset, 3, "clamped at the last row");
         let (_, rows) = pulse_screen(&mut ui, &pulse, 5);
-        assert!(rows[1].starts_with(&format!("  {idle} dd  ")), "{:?}", rows[1]);
+        assert!(rows[1].starts_with("  dd  "), "{:?}", rows[1]);
         assert_eq!(lead(&ui, 1).as_deref(), Some("lead-dd"));
         assert_eq!(lead(&ui, 3).as_deref(), Some("lead-ff"));
     }
@@ -914,7 +913,7 @@ mod tests {
         assert!(snap.centre.is_none());
         assert_eq!(pulse.context.as_str(), "ctx");
         assert_eq!(pulse.rows.iter().map(|r| r.plan.as_str()).collect::<Vec<_>>(), ["p1"]);
-        assert_eq!(pulse.rows[0].buckets.len(), 125 - 4 - 21, "as wide as the pane allows for ids of any width");
+        assert_eq!(pulse.rows[0].buckets.len(), 125 - 4 - 13, "as wide as the pane allows for ids of any width");
 
         fixture(&mut store, &moved("lead"));
         let snap = snapshot(&mut store, &home, 125, now).unwrap();
