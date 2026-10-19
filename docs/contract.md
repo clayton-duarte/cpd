@@ -54,7 +54,7 @@ Exit codes (kept from cpd 1 §2):
 | `2` | usage error | `usage`, `plan_required`, `invalid_plan_id` |
 | `3` | refused by an invariant: Locked, an illegal transition, a precondition | `job_locked`, `illegal_transition`, `dirty_tree`, `cas_lost` |
 | `4` | not found | `plan_not_found`, `job_not_found`, `session_not_found` |
-| `5` | timeout | `store_busy`, `lock_timeout`, `ask_timeout`, `cancel_timeout` |
+| `5` | timeout | `store_busy`, `lock_timeout` (`pr poll`'s `locks/pr-poll.lock`, §7.6; no git operation waits for a cpd lock since hs-d243, §7), `ask_timeout`, `cancel_timeout` |
 
 `commands.md` introduces more codes, most of them cpd 1's (cpd 1 §11 and its `src/`); each is specified at the command that returns it, under the same exit meanings:
 
@@ -104,7 +104,8 @@ $CPD_HOME/
     <plan>/reviews/<k>.md         a review Job's findings, written by its Worker (B2, §3.4); the directory R19 removed, reused for this
     <plan>/logs/attempt-<attempt>.log      the Attempt driver's stderr
     <plan>/logs/<attempt>.<hook>.log       full output of a hook run (§7.3)
-    <plan>/logs/pr-<key>.pre-merge.log     full output of the last Gate run by `pr open` or `pr rebase` on PR <key> (§7.6)
+    <plan>/logs/pr-<key>.pre-merge.log     full output of the last Gate run by `pr open`, `pr rebase` or `pr push` on PR <key> (§7.6)
+    <plan>/logs/pr-<key>.pre-start.log     full output of the last `pre-start` in a gate worktree of PR <key>, run before that Gate (§7.6, hs-d243)
     <plan>/logs/lead-<key>.<hook>.log      full output of a hook run in PR <key>'s Lead worktree: `pre-start` at the PR's start (§7.2)
     context-digests/<context>/<upto_seq>.md      the Context digest (§4.6): derived, never a Context record; the latest is the highest <upto_seq>
     context-digests/<context>/<upto_seq>.md.tmp  the distiller's output before it is validated; renamed to <upto_seq>.md when valid, else removed
@@ -114,6 +115,8 @@ $CPD_HOME/
 ```
 
 Locks are `flock(2)` locks on these files: the kernel releases them when the holder dies, so there are no stale-lock takeovers (a change from cpd 1 §4, whose pid files needed them).
+
+There is **no per-repo lock** (hs-d243): merges, `pr open`, `pr rebase`, `pr push` and the clean-up after a PR's merge take no lock shared by two PRs or two Plans; §7 says what replaces it. A file `locks/repo-<sha1>.lock` left by an earlier cpd is inert: nothing opens it, and nothing needs to delete it.
 
 ## 2. Model and identifiers
 
@@ -569,7 +572,7 @@ stateDiagram-v2
   starting --> ended: setup_failed
   running --> merging: attempt submit
   running --> ended: timed_out, crashed, no_submit, cancelled
-  merging --> ended: merged, merge_conflict, cas_lost, dirty_target, tampered, cancelled, crashed
+  merging --> ended: merged, merge_conflict, cas_lost, tampered, cancelled, crashed
   ended --> [*]
 ```
 
@@ -584,7 +587,7 @@ stateDiagram-v2
 | `running` | `ended` | `failed` / `no_submit` | A5: the Worker went idle without submitting, was nudged once (`attempt-nudge`), and went idle again without submitting (cpd 1 §12 step 7, kept) | `attempt-retry` or `job-failed` |
 | `merging` | `ended` | `merged` / `merged` | A8: compare-and-swap succeeded | `job-merged` |
 | `merging` | `ended` | `failed` / `merge_conflict` | A8: rebase conflict | `attempt-retry` or `job-failed` |
-| `merging` | `ended` | `failed` / `cas_lost`, `dirty_target`, `tampered` | A8 (§7.4) | `job-failed` |
+| `merging` | `ended` | `failed` / `cas_lost`, `tampered` | A8 (§7.4). The cause `dirty_target` is no longer produced (hs-d243: the merge has no Lead worktree check, §7.4 step 3); the schema keeps it for the Attempts that ended with it before | `job-failed` |
 | any but `ended` | `ended` | `cancelled` / `cancel_requested` | the driver at its next safe point (before A3, before A8's rebase, before A8's compare-and-swap); or, when the driver is dead, E2 (any status but `merging`) or the merge recovery R (`merging`, commits not on the Lead Branch, §7.4) | `job-cancelled` |
 | any but `ended` and `merging` | `ended` | `failed` / `crashed` | E2: the driver's lock is free (the driver died) | `attempt-retry` or `job-failed` |
 | `merging` | `ended` | `merged` / `merged` | R (§7.4): the driver's lock is free and the Attempt branch's tip is already on the Lead Branch (the driver died after A8's compare-and-swap); `merged_sha` = that tip | `job-merged` |
@@ -667,7 +670,7 @@ One per machine (D5). Every `tick_seconds`, E1–E9 in order:
 | Step | What it does |
 |---|---|
 | E1 | **Escalations:** expire `open` Escalations whose `asker_pid` is dead |
-| E2 | **Liveness:** for every Attempt not `ended` whose driver lock is free (the driver died; §3.4): in `merging`, run the merge recovery R (§7.4), which ends it `merged` when its commits are already on the Lead Branch, and otherwise `cancelled` if a cancel was requested, else `crashed`; in any other status, end it `cancelled` if a cancel was requested, else `crashed`. For every Attempt with a live driver: active time over `attempt_minutes` → set `stop_request = timed_out`; Job `cancel_requested_at` set → set `stop_request = cancelled`. For every Session not `stopped` or with a pane: pane dead or missing (`tmux list-panes -a`) → `stopped` with no pane, and a Lead's dead pane's window is killed, or the chat slot's pane is replaced by the placeholder (§3.6) |
+| E2 | **Liveness:** for every Attempt not `ended` whose driver lock is free (the driver died; §3.4): in `merging`, run the merge recovery R (§7.4), which ends it `merged` when its commits are already on the Lead Branch, and otherwise `cancelled` if a cancel was requested, else `crashed`. R runs per orphaned Attempt with no repo lock (hs-d243): two runs of R, or R and a live driver, are kept apart by that Attempt's driver lock, which R takes, and by the compare-and-swap on `status = 'merging'` that ends it (§7.4); in any other status, end it `cancelled` if a cancel was requested, else `crashed`. For every Attempt with a live driver: active time over `attempt_minutes` → set `stop_request = timed_out`; Job `cancel_requested_at` set → set `stop_request = cancelled`. For every Session not `stopped` or with a pane: pane dead or missing (`tmux list-panes -a`) → `stopped` with no pane, and a Lead's dead pane's window is killed, or the chat slot's pane is replaced by the placeholder (§3.6) |
 | E3 | **Scheduling:** for each Ready Job, by `jobs.seq` across all Plans, while a slot is free: verify the fingerprint, take the driver lock, create the Attempt, start its driver with the lock inherited (§3.4). **Back-off:** E3 does not start a Job whose latest `k >= 1` Attempts in a row ended with `driver_pid` null (the driver never started) until `min(2^k, 300)` seconds after the last one's `ended_at`; an Attempt whose driver started resets `k`. So a permanent spawn failure does not start an Attempt at every tick. The `error` Event rule is unchanged (once until the step clears, at most once per `watch.error_repeat_seconds`) |
 | E4 | **Completion**, per PR (R34): for each PR in status `dispatch` with no Job `draft`, `queued` or `running`, at least one `merged`, and `all_merged_at` null: append `all-merged` (`data.pr` = its key) and set the PR's `all_merged_at`. A PR with a `draft` Job (an unapproved batch, §3.2) therefore never opens by itself: it waits until the batch is approved and merged, or cancelled (User, hs-d173, hs-d174, hs-d179). The Lead answers with `pr open --pr <key>`. **Again** (hs-d140): `job add` clears `all_merged_at` of the Job's PR in its own transaction, when it was set (the Job is `queued` or a `draft`, so the PR has a Job that is not `merged` or `cancelled` and E4 waits); when that PR's Jobs are all `merged` or `cancelled` once more, E4 appends `all-merged` again and sets `all_merged_at` again |
 | E5 | **PR poll** (hs-d96, hs-d97): run `cpd pr poll` (no `--plan`) as a subprocess (a process boundary, cpd 1 §11 step 5), `pr_poll_seconds` after the **end** of the previous poll (never overlapping, never more often than one per tick), whether or not any Plan is in `deploy`. One poll covers every open pull request of the User (§7.6). When the output's `rate_limit.remaining` is below 100, E5 skips polls until `rate_limit.reset_at` and reports one `error` Event with code `gh_rate_limited` (`details`: `remaining`, `reset_at`); the error clears when polling resumes |
@@ -1714,9 +1717,11 @@ Both are **siblings**: a forked Session is drawn in the tree **directly under it
 
 ## 7. git and the Gate
 
-cpd runs git itself (R4); there is no worktrunk. Every git call is `git -C <dir> …` with argv, `GIT_TERMINAL_PROMPT=0`, and stdin from `/dev/null`.
+cpd runs git itself (R4); there is no worktrunk. Every git call is `git -C <dir> …` with argv, `GIT_TERMINAL_PROMPT=0`, and stdin from `/dev/null`. Every git call also gets, in its environment, `GIT_CONFIG_COUNT=2`, `GIT_CONFIG_KEY_0=core.filesRefLockTimeout`, `GIT_CONFIG_VALUE_0=10000`, `GIT_CONFIG_KEY_1=core.packedRefsTimeout`, `GIT_CONFIG_VALUE_1=10000` (git-config(1)): a ref or `packed-refs` lock held by another git process is waited for up to 10 s instead of git's 100 ms (`filesRefLockTimeout`) and 1 s (`packedRefsTimeout`), because cpd has concurrent writers of shared refs such as `refs/remotes/origin/<base>` (hs-d243, G2). Hooks are spawned by cpd, not by git, and do not get it (§7.3).
 
-**Everything in this section is per PR** (R34). `<repo>`, `<base>`, `<lead branch>` and `<lead worktree>` are the `repo`, `base`, `lead_branch` and `lead_worktree` of one PR (§2.2): the PR being started (§7.2), the Job's PR for an Attempt, its merge and its tamper check (§7.2–§7.5), or the PR named by `--pr` for `pr open`, `pr rebase` and `pr view` (§7.6). Two PRs of one Plan in the same repo are two Lead Branches and two Lead worktrees in that repo, and share its per-repo lock (§7.4).
+**Everything in this section is per PR** (R34). `<repo>`, `<base>`, `<lead branch>` and `<lead worktree>` are the `repo`, `base`, `lead_branch` and `lead_worktree` of one PR (§2.2): the PR being started (§7.2), the Job's PR for an Attempt, its merge and its tamper check (§7.2–§7.5), or the PR named by `--pr` for `pr open`, `pr rebase` and `pr view` (§7.6). Two PRs of one Plan in the same repo are two Lead Branches and two Lead worktrees in that repo.
+
+**No lock between PRs** (hs-d243). Two PRs in one repo, of one Plan or of two, share nothing cpd locks: work that conflicts across PRs is a planning matter (the PRs' `needs`), not something cpd serialises. What they do share is git's own state, and git guards it: the object store; each ref by its own lock file, waited for as above; `packed-refs` likewise. The one piece of shared state git does not retry on, `.git/config` (`config.lock` fails at once), cpd never writes: Lead worktrees are created with `--no-track` and no push uses `-u` (§7.2, §7.6; G1). Inside one PR, the exclusion is replaced by state that already exists or is per invocation: the compare-and-swap on the Lead Branch ref (§7.4 step 8), the compare-and-swap on `attempts.status = 'merging'` and the driver lock (R, §7.4), the PR's status in the database, rule S for the Lead worktree (§7.4), rule P for pushes (§7.4) and a gate worktree per Gate run (§7.6).
 
 ### 7.1 Worktrees and branches
 
@@ -1724,8 +1729,11 @@ cpd runs git itself (R4); there is no worktrunk. Every git call is `git -C <dir>
 |---|---|---|---|
 | Lead worktree, one per PR | `<repo-parent>/<repo-name>.<plan>.<key>` | `cpd/<plan>/<key>` | the PR's start (§3.8): `plan lock` for a PR with no needs, engine E7 or `pr start` for the others |
 | Attempt worktree | `<repo-parent>/<repo-name>.<plan>--<attempt>` | `cpd/<plan>--<attempt>` | driver A2, in the repo of the Job's PR |
+| Gate worktree, one per Gate run (hs-d243) | `<repo-parent>/<repo-name>.<plan>.<key>.gate-<pid>`, `<pid>` the pid of the cpd process that runs the Gate | none: detached at the gated commit | `pr open`, `pr rebase`, `pr push` (§7.6); removed by the same run |
 
-`<repo-parent>` and `<repo-name>` are those of the PR's repo, and `<key>` is the PR's key (A5). One rule names every PR; Attempt names are unchanged by R34. A PR made by migration 4 from a Plan of before R34 keeps the names it had, `<repo-parent>/<repo-name>.<plan>` and `cpd/<plan>` (§4.5). Lead Branch names never collide: within a Plan the key is unique, and `cpd/<plan>/<key>` and `cpd/<plan>--<attempt>` differ by their separator.
+`<repo-parent>` and `<repo-name>` are those of the PR's repo, and `<key>` is the PR's key (A5). One rule names every PR; Attempt names are unchanged by R34. A PR made by migration 4 from a Plan of before R34 keeps the names it had, `<repo-parent>/<repo-name>.<plan>` and `cpd/<plan>` (§4.5); its gate worktrees are named by the rule above all the same. Lead Branch names never collide: within a Plan the key is unique, and `cpd/<plan>/<key>` and `cpd/<plan>--<attempt>` differ by their separator. A gate worktree's path never collides with a Lead or Attempt worktree's, since a Plan id and a PR key have no `.` (§2.1).
+
+**The Lead worktree is a view** of its Lead Branch (hs-d243): no Gate runs in it, and cpd changes its files only at the PR's start (the checkout and `pre-start`) and by rule S. The Lead Branch moves by a ref compare-and-swap (a merge, R, `pr rebase`), and whoever moved it brings the Lead worktree up to date by rule S (§7.4), which ends in the same state whatever the order of the movers. Its local changes are the Lead's or the User's own: no cpd command refuses because of them, and rule S never overwrites them.
 
 The repo's main checkout is never touched; Lead and Attempt worktrees are siblings of it (t3, kept). A PR's Lead worktree and local Lead Branch stay until the PR is merged; the PR's clean-up then removes them unless the worktree is dirty or has unpushed commits, which are kept with one `error` Event `cleanup_failed` (§7.2).
 
