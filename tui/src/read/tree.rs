@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use cpd_core::error::CpdError;
 use cpd_core::events::highest_id;
-use cpd_core::ids::{ContextId, SessionId};
+use cpd_core::ids::ContextId;
 use cpd_core::home::CpdHome;
 use cpd_core::inbox::model::{self, Filter, Item, Kind, State, Urgency};
 use cpd_core::store::Store;
