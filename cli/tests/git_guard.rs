@@ -5,7 +5,6 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use cpd_core::home::CpdHome;
 use cpd_core::host::git_guard::{self, NO_GIT, REFUSAL};
@@ -13,24 +12,19 @@ use cpd_core::host::git_guard::{self, NO_GIT, REFUSAL};
 mod common;
 use common::{output, write_executable};
 
-/// `install` writes a file while another test may spawn a child that inherits the open
-/// descriptor, and then executing the file fails with ETXTBSY (see `common::write_executable`):
-/// so the tests of this file run one at a time.
-static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
-
 struct Wrapper {
-    _one: MutexGuard<'static, ()>,
     _tmp: tempfile::TempDir,
     home: CpdHome,
 }
 
 impl Wrapper {
     fn new() -> Wrapper {
-        let one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(tmp.path().join("cpd-home").into()), None).unwrap();
-        git_guard::install(&home).unwrap();
-        Wrapper { _one: one, _tmp: tmp, home }
+        // The harness writes what the tests execute (`install` is tested below, never executed).
+        fs::create_dir_all(home.bin_dir()).unwrap();
+        write_executable(&home.git_wrapper(), git_guard::WRAPPER);
+        Wrapper { _tmp: tmp, home }
     }
 
     fn bin(&self) -> PathBuf {
@@ -131,9 +125,13 @@ fn it_says_so_and_exits_127_when_there_is_no_other_git() {
 
 #[test]
 fn writing_it_twice_leaves_one_identical_file() {
-    let w = Wrapper::new();
-    let first = fs::read(w.home.git_wrapper()).unwrap();
-    git_guard::install(&w.home).unwrap();
-    assert_eq!(fs::read(w.home.git_wrapper()).unwrap(), first);
-    assert_eq!(fs::read_dir(w.bin()).unwrap().count(), 1);
+    let tmp = tempfile::tempdir().unwrap();
+    let home = CpdHome::resolve(Some(tmp.path().join("cpd-home").into()), None).unwrap();
+    let path = git_guard::install(&home).unwrap();
+    assert_eq!(path, home.git_wrapper());
+    let first = fs::read(&path).unwrap();
+    assert_eq!(git_guard::install(&home).unwrap(), path);
+    assert_eq!(fs::read(&path).unwrap(), first);
+    assert_eq!(first, git_guard::WRAPPER.as_bytes());
+    assert_eq!(fs::read_dir(home.bin_dir()).unwrap().count(), 1);
 }
