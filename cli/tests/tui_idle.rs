@@ -162,9 +162,14 @@ const VIEWS: [(&str, &[&str]); 6] = [
     ("worker", &["worker", "o1-a1", "--plan", "other"]),
 ];
 
+/// How long the views are watched with no change.
+fn window() -> Duration {
+    Duration::from_secs(std::env::var("CPD_IDLE_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(5))
+}
+
 /// Runs `views`, waits for each to draw and settle, and returns what each did over the window with no change.
 fn idle(env: &TestEnv, views: &[&str]) -> Vec<(String, Usage)> {
-    let window = Duration::from_secs(std::env::var("CPD_IDLE_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(5));
+    let window = window();
     let started: Vec<(String, String, u32)> = VIEWS
         .iter()
         .filter(|(name, _)| views.contains(name))
@@ -233,14 +238,14 @@ fn idle_tree_and_plan_read_next_to_nothing() {
     }
 }
 
-/// tui-F2: every `terminal.draw` writes to the terminal, even with an empty diff. The widgets view may draw once when
-/// the kernel updates the load average (every 5 s), which is a change.
+/// tui-F2: every `terminal.draw` writes to the terminal, even with an empty diff. The widgets view draws when the
+/// kernel updates the load average (every 5 s, and the value changed), which is a change: once per 5 s at most.
 #[test]
 fn idle_views_write_nothing_to_the_terminal() {
     let env = env();
     sql(&env, &fixture());
     for (name, used) in idle(&env, &["tree", "plan", "widgets", "statusbar", "logs", "worker"]) {
-        let allowed = if name == "widgets" { 2 } else { 0 };
+        let allowed = if name == "widgets" { 2 + window().as_secs() / 5 } else { 0 };
         assert!(used.syscw <= allowed, "{name} wrote {} times while nothing changed", used.syscw);
     }
 }
