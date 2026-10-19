@@ -5,9 +5,16 @@
 //! right-aligned column, so each Plan's five Job counters are drawn as a
 //! right-aligned `Line` into the row's `Rect` after the tree. The `󰐊` of the
 //! Session in the chat slot is drawn over the indent of its row for the same
-//! reason (the widget owns the indent). Context rows are not selectable (a click only
-//! collapses or expands them): the cursor moves between Sessions only, and is
-//! inverted over its row's whole width, only while the pane has keyboard focus.
+//! reason (the widget owns the indent). Context rows are not selectable: the cursor moves between Sessions
+//! only, and is inverted over its row's whole width, only while the pane has keyboard focus.
+//!
+//! **Folds** (decision hs-d309; `crate::fold`, the one widget). A Context and a `…` group are collapsible blocks: the
+//! title row (the Context's row, the `…`), its content rows each led by a muted `├` (the tree's own branch), and a
+//! muted `└ collapse` row; folded, the title row and a muted `└ expand` row. Only the `└ expand` / `└ collapse` row
+//! folds ([`Row::Toggle`], [`click_toggle`]); a click on the title row keeps the row's own action. A Context's
+//! toggle row is drawn as the Context's next sibling at the Context's indent (`tui-tree-widget` hides the children of a
+//! folded item, and the toggle must stay), a group's as its last row. The archived Contexts of the top-level `…`
+//! group keep their top-level rows, with no branch.
 //!
 //! Labels (commands.md §13.2): a Context row shows its title, a Plan row its Plan's title, a fork its
 //! Session's name.
@@ -19,8 +26,8 @@
 //! the archived Plans, and the forks that are archived or of an archived Plan, of a live Context are behind one
 //! `…` row at the end of that Context's live rows. The `…` row is a leaf that stays where it is; expanded, the
 //! archived rows follow it at the depth they would have if live, with the normal guides, the whole row drawn in
-//! the darker grey. Whether a `…` row is expanded is the tree state's open set, so view state only. The cursor
-//! never rests on them.
+//! the darker grey. Whether a Context or a `…` row is expanded is the tree state's open set, so view state only. The
+//! cursor never rests on them.
 //!
 //! Rows (identifiers are paths; `…` is [`MORE`]):
 //!
@@ -30,6 +37,7 @@
 //! | `[…]` | the `…` row of the archived Contexts |
 //! | `[context]`, `[context, plan]`, `[context, session]` | the same, for an archived Context, Plan or fork |
 //! | `[context, …]` | the `…` row of the Context's archived Plans and forks |
+//! | `[└ context]`, `[└ …]`, `[context, └ …]` | the `└ expand` / `└ collapse` row of that Context, of the archived Contexts, of that Context's archived rows |
 //!
 //! Everything here is pure except `draw`, which only writes to the frame's buffer.
 
@@ -42,6 +50,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use tui_tree_widget::{Tree as TreeWidget, TreeItem, TreeState};
 
+use crate::fold;
 use crate::palette::{self, Meaning};
 use cpd_core::plan::Phase;
 use crate::read::{ContextNode, Dot, JobStatus, PlanNode, SessionNode, Tree};
@@ -52,19 +61,29 @@ pub type Id = String;
 /// One tree level is indented by two columns (`tui-tree-widget`'s own indentation).
 const INDENT: usize = 2;
 
-/// The glyph of a folded Context row, and of an open one: the first cell of its text.
-pub(super) const FOLDED: &str = "\u{F0142}"; // md-chevron_right
-pub(super) const OPEN: &str = "\u{F0140}"; // md-chevron_down
-
-/// The column of a Context row's fold glyph in the tree's area: every Context row is at the top level (the archived
-/// ones after the `…` row too), so it is the first cell. The click that folds is exactly here.
-pub(crate) const FOLD_COLUMN: u16 = 0;
-
 /// The mark of the Session in the chat slot, in column 0 of its row.
 pub const ACTIVE_MARK: &str = "\u{F040A}"; // md-play
 
 /// The identifier of a `…` row. No id has this shape.
 pub const MORE: &str = "\u{F01D8}"; // md-dots_horizontal
+
+/// What a toggle row's identifier starts with: the identifier of the fold it toggles, last element, behind this.
+const TOGGLE: &str = "└ ";
+
+/// The columns a content row's branch takes: the glyph and a space (`fold::content`).
+const BRANCH_WIDTH: usize = 2;
+
+/// The identifier of the toggle row of the fold whose own identifier is `id` (a Context, or a `…` group); it is a
+/// sibling of it, so the rest of the path is the same.
+fn toggle_id(id: &str) -> Id {
+    format!("{TOGGLE}{id}")
+}
+
+/// The fold at `path`, when `path` is a toggle row's identifier.
+fn toggle_owner(path: &[Id]) -> Option<Vec<Id>> {
+    let (last, parents) = path.split_last()?;
+    Some([parents, &[last.strip_prefix(TOGGLE)?.to_owned()]].concat())
+}
 
 /// What a row of the tree stands for.
 #[derive(Clone, Copy, Debug)]
@@ -76,6 +95,8 @@ pub enum Row<'a> {
     Fork(&'a ContextNode, &'a PlanNode, &'a SessionNode),
     /// A `…` row: the archived Contexts at the end of the list, or the archived Plans and forks at the end of a Context.
     More,
+    /// The `└ expand` / `└ collapse` row of a Context or a `…`: the only row that folds it.
+    Toggle,
 }
 
 /// What a Context shows directly, and what its `…` row holds.
@@ -109,6 +130,9 @@ fn kids(c: &ContextNode) -> Kids<'_> {
 
 /// The row at `path`, `None` when the tree has none.
 pub fn row<'a>(tree: &'a Tree, path: &[Id]) -> Option<Row<'a>> {
+    if let Some(owner) = toggle_owner(path) {
+        return matches!(row(tree, &owner), Some(Row::Context(_) | Row::More)).then_some(Row::Toggle);
+    }
     let (context, path) = path.split_first()?;
     if context == MORE {
         return (path.is_empty() && tree.contexts.iter().any(ContextNode::is_archived)).then_some(Row::More);
@@ -129,19 +153,19 @@ pub fn row<'a>(tree: &'a Tree, path: &[Id]) -> Option<Row<'a>> {
 }
 
 impl<'a> Row<'a> {
-    /// The Session the row opens and closes: a Plan's Lead, or the fork; none for a Context or a `…`.
+    /// The Session the row opens and closes: a Plan's Lead, or the fork; none for a Context, a `…` or a toggle.
     pub fn session(&self) -> Option<&'a SessionNode> {
         match *self {
-            Row::Context(_) | Row::More => None,
+            Row::Context(_) | Row::More | Row::Toggle => None,
             Row::Plan(_, p) => p.lead(),
             Row::Fork(_, _, s) => Some(s),
         }
     }
 
-    /// The Plan of the row; none for a Context or a `…`.
+    /// The Plan of the row; none for a Context, a `…` or a toggle.
     pub fn plan(&self) -> Option<&'a PlanNode> {
         match *self {
-            Row::Context(_) | Row::More => None,
+            Row::Context(_) | Row::More | Row::Toggle => None,
             Row::Plan(_, p) | Row::Fork(_, p, _) => Some(p),
         }
     }
@@ -153,7 +177,7 @@ impl<'a> Row<'a> {
             Row::Context(c) => c.is_archived(),
             Row::Plan(c, p) => c.is_archived() || p.head.is_archived(),
             Row::Fork(c, p, s) => c.is_archived() || p.head.is_archived() || s.is_archived(),
-            Row::More => false,
+            Row::More | Row::Toggle => false,
         }
     }
 
@@ -169,7 +193,7 @@ impl<'a> Row<'a> {
             Row::Context(c) => Some(c.id.to_string()),
             Row::Plan(_, p) => Some(p.head.id.to_string()),
             Row::Fork(_, _, s) => Some(fork_id(s)),
-            Row::More => None,
+            Row::More | Row::Toggle => None,
         }
     }
 
@@ -181,6 +205,7 @@ impl<'a> Row<'a> {
             Row::Plan(_, p) => p.head.title.clone(),
             Row::Fork(_, _, s) => session_label(s),
             Row::More => MORE.to_owned(),
+            Row::Toggle => String::new(),
         }
     }
 }
@@ -256,7 +281,6 @@ struct RowText<'a> {
     name: String,
     /// How deep the row is: 1 for a Plan or fork of a live Context.
     depth: usize,
-    last: bool,
     /// The animation frame of the working dot (`palette::frame`).
     frame: usize,
     /// The width of the counters drawn at the right (0: none).
@@ -265,116 +289,115 @@ struct RowText<'a> {
     muted: bool,
 }
 
-/// A Plan's or fork's row text (the reference's `session_text`): guide (`├ `, `└ ` for the last), dot, name. The name is cut so that, in a column `width` wide, it never reaches the counters drawn at
-/// the right.
+/// A Plan's or fork's row text (the reference's `session_text`), without its branch (the fold's): dot, name. The
+/// name is cut so that, in a column `width` wide, it never reaches the counters drawn at the right.
 fn row_text(r: RowText, width: u16) -> Line<'static> {
     let dot = r.session.map_or(Dot::Stopped, |s| s.dot);
-    let guide = if r.last { "└ " } else { "├ " };
-    let mut spans = vec![Span::styled(guide, palette::fg(Meaning::Nothing)), palette::dot_span(dot, r.frame, r.muted), " ".into()];
-    let used = r.depth * INDENT + Line::from(spans.clone()).width() + if r.counters_width > 0 { r.counters_width + 1 } else { 0 };
+    let mut spans = vec![palette::dot_span(dot, r.frame, r.muted), " ".into()];
+    let used = r.depth * INDENT + BRANCH_WIDTH + Line::from(spans.clone()).width() + if r.counters_width > 0 { r.counters_width + 1 } else { 0 };
     let name = truncate(&r.name, (width as usize).saturating_sub(used));
     let active = r.session.is_some_and(SessionNode::is_active) && !r.muted;
     spans.push(if active { Span::styled(name, Style::new().add_modifier(Modifier::BOLD)) } else { name.into() });
     Line::from(spans)
 }
 
-/// A Context's row text: its fold glyph (`▸` collapsed, `▾` open), its dot (the most urgent of its live Sessions, grey
-/// when the Context is archived), id, and the number of Plans listed inside when collapsed.
-fn context_text(c: &ContextNode, collapsed: bool, frame: usize) -> Line<'static> {
+/// A Context's title row: its dot (the most urgent of its live Sessions, grey when the Context is archived), id,
+/// and the number of Plans listed inside when folded. The fold makes it bold.
+fn context_text(c: &ContextNode, folded: bool, frame: usize) -> Line<'static> {
     let k = kids(c);
-    let mut spans = vec![
-        (if collapsed { FOLDED } else { OPEN }).into(),
-        " ".into(),
-        palette::dot_span(c.dot, frame, c.is_archived()),
-        " ".into(),
-        Span::styled(c.id.to_string(), Style::new().add_modifier(Modifier::BOLD)),
-    ];
-    if collapsed {
+    let mut spans = vec![palette::dot_span(c.dot, frame, c.is_archived()), " ".into(), c.id.to_string().into()];
+    if folded {
         spans.push(Span::styled(format!(" {}", k.direct.len()), palette::fg(Meaning::Nothing)));
     }
     Line::from(spans)
 }
 
-/// The text of a `…` row: `…` in the list of Contexts, below a Context the guide first (`├ ` when its archived
-/// rows follow, i.e. expanded, else `└ `).
-fn more_text(in_context: bool, expanded: bool) -> Line<'static> {
-    let text = match (in_context, expanded) {
-        (false, _) => MORE.to_owned(),
-        (true, true) => format!("├ {MORE}"),
-        (true, false) => format!("└ {MORE}"),
-    };
-    Line::from(Span::styled(text, palette::fg(Meaning::Nothing)))
+/// A line indented `depth` levels.
+fn indented(depth: usize, line: Line<'static>) -> Line<'static> {
+    let mut spans = vec![Span::raw(" ".repeat(depth * INDENT))];
+    spans.extend(line.spans);
+    Line { spans, ..line }
 }
 
-/// A Plan's item, one level under its Context; `last` when it is the last child of its Context.
-fn plan_item(c: &ContextNode, p: &PlanNode, last: bool, width: u16, frame: usize) -> TreeItem<'static, Id> {
+/// A Plan's row text, one level under its Context.
+fn plan_row(c: &ContextNode, p: &PlanNode, width: u16, frame: usize) -> (Id, Line<'static>) {
     let muted = c.is_archived() || p.head.is_archived();
     let text = row_text(
-        RowText { session: p.lead(), name: p.head.id.to_string(), depth: 1, last, frame, counters_width: counters(p).width(), muted },
+        RowText { session: p.lead(), name: p.head.id.to_string(), depth: 1, frame, counters_width: counters(p).width(), muted },
         width,
     );
-    TreeItem::new_leaf(p.head.id.to_string(), text)
+    (p.head.id.to_string(), text)
 }
 
-/// A Context's item; `opened` is the tree state's open set. Under it: its live Plans and forks, then, when it has
-/// archived ones, its `…` row and, expanded, those.
-fn context_item(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> TreeItem<'static, Id> {
-    let path = vec![c.id.to_string()];
+/// A fork's row text, one level under its Context.
+fn fork_row(s: &SessionNode, width: u16, frame: usize, muted: bool) -> (Id, Line<'static>) {
+    let text = row_text(RowText { session: Some(s), name: fork_id(s), depth: 1, frame, counters_width: 0, muted }, width);
+    (s.id.to_string(), text)
+}
+
+/// The items of the rows of a fold, as the fold widget draws them: the title row, then, only if `expanded`, the
+/// content rows behind the muted `branch`, then the toggle row. The toggle row is left to the caller, which knows where
+/// it goes.
+fn folded<'a>(
+    title: Line<'static>,
+    rows: Vec<(Id, Line<'static>)>,
+    expanded: bool,
+    branch: &'static str,
+) -> (Line<'static>, Vec<TreeItem<'a, Id>>, Line<'static>) {
+    let (ids, lines): (Vec<Id>, Vec<Line<'static>>) = rows.into_iter().unzip();
+    let mut drawn = fold::Fold::new(title, lines, expanded).branch(branch).drawn();
+    let toggle = drawn.lines.pop().expect("a fold has its toggle row");
+    let mut lines = drawn.lines.into_iter();
+    let title = lines.next().expect("a fold has its title row");
+    let items = ids.into_iter().zip(lines).map(|(id, line)| TreeItem::new_leaf(id, line)).collect();
+    (title, items, toggle)
+}
+
+/// The `…` group of a Context: its title row, its archived rows when expanded, its toggle row; the rows are the
+/// children of the Context, at the depth they would have if live.
+fn group_items(c: &ContextNode, k: &Kids<'_>, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<TreeItem<'static, Id>> {
+    let expanded = opened.contains(&[vec![c.id.to_string()], vec![MORE.to_owned()]].concat());
+    let mut rows: Vec<(Id, Line<'static>)> = k.archived.iter().map(|p| plan_row(c, p, width, frame)).collect();
+    rows.extend(k.strays.iter().map(|(_, s)| fork_row(s, width, frame, true)));
+    let (title, content, toggle) = folded(fold::title(MORE, ""), rows, expanded, fold::TREE_BRANCH);
+    let mut items = vec![TreeItem::new_leaf(MORE.to_owned(), title)];
+    items.extend(content);
+    items.push(TreeItem::new_leaf(toggle_id(MORE), toggle));
+    items
+}
+
+/// A Context's items: its item (title row, its live Plans and forks and its `…` group as the children) and, right
+/// after it, its toggle row. `opened` is the tree state's open set.
+fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<TreeItem<'static, Id>> {
+    let id = c.id.to_string();
+    let expanded = opened.contains(&vec![id.clone()]);
     let k = kids(c);
-    let n = k.direct.len();
-    let mut children: Vec<TreeItem<'static, Id>> =
-        k.direct.iter().enumerate().map(|(i, p)| plan_item(c, p, i + 1 == n && k.forks.is_empty() && !k.has_group(), width, frame)).collect();
-    for (j, (_, s)) in k.forks.iter().enumerate() {
-        let text = row_text(
-            RowText {
-                session: Some(s),
-                name: fork_id(s),
-                depth: 1,
-                last: j + 1 == k.forks.len() && !k.has_group(),
-                frame,
-                counters_width: 0,
-                muted: c.is_archived(),
-            },
-            width,
-        );
-        children.push(TreeItem::new_leaf(s.id.to_string(), text));
-    }
+    let mut rows: Vec<(Id, Line<'static>)> = k.direct.iter().map(|p| plan_row(c, p, width, frame)).collect();
+    rows.extend(k.forks.iter().map(|(_, s)| fork_row(s, width, frame, c.is_archived())));
+    let (title, mut children, toggle) = folded(context_text(c, !expanded, frame), rows, expanded, fold::TREE_BRANCH);
     if k.has_group() {
-        let expanded = opened.contains(&[path.clone(), vec![MORE.to_owned()]].concat());
-        children.push(TreeItem::new_leaf(MORE.to_owned(), more_text(true, expanded)));
-        if expanded {
-            let n = k.archived.len();
-            children.extend(k.archived.iter().enumerate().map(|(i, p)| plan_item(c, p, i + 1 == n && k.strays.is_empty(), width, frame)));
-            for (i, (_, s)) in k.strays.iter().enumerate() {
-                let text = row_text(
-                    RowText {
-                        session: Some(s),
-                        name: fork_id(s),
-                        depth: 1,
-                        last: i + 1 == k.strays.len(),
-                        frame,
-                        counters_width: 0,
-                        muted: true,
-                    },
-                    width,
-                );
-                children.push(TreeItem::new_leaf(s.id.to_string(), text));
-            }
-        }
+        children.extend(group_items(c, &k, opened, width, frame));
     }
-    TreeItem::new(c.id.to_string(), context_text(c, !opened.contains(&path), frame), children).expect("Plan and Session ids are unique")
+    vec![
+        TreeItem::new(id.clone(), title, children).expect("Plan and Session ids are unique"),
+        TreeItem::new_leaf(toggle_id(&id), indented(1, toggle)),
+    ]
 }
 
 /// The tree's items for a column `width` wide. `opened` is the tree state's open set: a Context not in it is
-/// collapsed, and so is a `…` row. `frame` is the animation frame of the working dots.
+/// folded, and so is a `…` row. `frame` is the animation frame of the working dots.
 pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<TreeItem<'static, Id>> {
     let (archived, live): (Vec<&ContextNode>, Vec<&ContextNode>) = tree.contexts.iter().partition(|c| c.is_archived());
-    let mut items: Vec<TreeItem<'static, Id>> = live.into_iter().map(|c| context_item(c, opened, width, frame)).collect();
+    let mut items: Vec<TreeItem<'static, Id>> = live.into_iter().flat_map(|c| context_items(c, opened, width, frame)).collect();
     if !archived.is_empty() {
-        items.push(TreeItem::new_leaf(MORE.to_owned(), more_text(false, false)));
-        if opened.contains(&vec![MORE.to_owned()]) {
-            items.extend(archived.into_iter().map(|c| context_item(c, opened, width, frame)));
+        // the group's content is whole Contexts, which keep their own rows: the fold gives the title and the toggle
+        let expanded = opened.contains(&vec![MORE.to_owned()]);
+        let (title, _, toggle) = folded(fold::title(MORE, ""), Vec::new(), expanded, fold::TREE_BRANCH);
+        items.push(TreeItem::new_leaf(MORE.to_owned(), title));
+        if expanded {
+            items.extend(archived.into_iter().flat_map(|c| context_items(c, opened, width, frame)));
         }
+        items.push(TreeItem::new_leaf(toggle_id(MORE), toggle));
     }
     items
 }
@@ -409,7 +432,7 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
                     Span::styled(ACTIVE_MARK, Style::new().add_modifier(Modifier::BOLD)).render(rect, buf);
                 }
             }
-            Row::Context(_) | Row::More => {}
+            Row::Context(_) | Row::More | Row::Toggle => {}
         }
         if muted {
             buf.set_style(rect, palette::fg(Meaning::Nothing));
@@ -470,22 +493,15 @@ pub fn move_cursor(state: &mut TreeState<Id>, tree: &Tree, delta: isize) {
     state.select(visible[next].clone());
 }
 
-/// A click on a Context row only collapses or expands it; it selects nothing. Returns whether `path` was a Context.
-pub fn click_context(state: &mut TreeState<Id>, tree: &Tree, path: &[Id]) -> bool {
-    let is_context = matches!(row(tree, path), Some(Row::Context(_)));
-    if is_context {
-        state.toggle(path.to_vec());
+/// A click on a toggle row (`└ expand`, `└ collapse`) folds or unfolds its Context or `…` group; it selects nothing.
+/// Returns whether `path` was a toggle row: the only row that folds.
+pub fn click_toggle(state: &mut TreeState<Id>, tree: &Tree, path: &[Id]) -> bool {
+    let owner = toggle_owner(path).filter(|_| matches!(row(tree, path), Some(Row::Toggle)));
+    let is_toggle = owner.is_some();
+    if let Some(owner) = owner {
+        state.toggle(owner);
     }
-    is_context
-}
-
-/// A click on a `…` row expands or collapses its archived rows. Returns whether `path` was a `…` row.
-pub fn click_more(state: &mut TreeState<Id>, tree: &Tree, path: &[Id]) -> bool {
-    let is_more = matches!(row(tree, path), Some(Row::More));
-    if is_more {
-        state.toggle(path.to_vec());
-    }
-    is_more
+    is_toggle
 }
 
 #[cfg(test)]

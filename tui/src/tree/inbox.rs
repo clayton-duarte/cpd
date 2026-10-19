@@ -1,6 +1,7 @@
 //! The Inbox section at the bottom of the tree column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a header
-//! ` Inbox <n> `, up to [`SHOWN`] item rows `<dot> <label>` with the age right-aligned, and, with more items, a row
-//! `+<n> more` that expands the list inline and becomes `− less`. Whether it is expanded is view state only. Expanded, it is
+//! ` Inbox <n> `, up to [`SHOWN`] item rows `<dot> <label>` with the age right-aligned, and, with more items, the fold
+//! widget's muted `└ expand` row (`crate::fold`) that expands the list inline and becomes `└ collapse`. Only that row
+//! toggles. Whether it is expanded is view state only. Expanded, it is
 //! capped at half the column and its items scroll inside the cap, with ` ▲ <n> more` / ` ▼ <n> more` cue rows ([`Shape`]).
 //!
 //! A click on an item row jumps to its cause ([`jump`]): a command, the logs popup at the item's Event, or the copy of its
@@ -17,6 +18,7 @@ use time::format_description::well_known::Rfc3339;
 
 use super::actions::Action;
 use super::rows::truncate;
+use crate::fold;
 use crate::link::link;
 use crate::palette::{self, Meaning};
 use crate::read::{Dot, Tree};
@@ -36,7 +38,7 @@ pub enum Hit {
     Header,
     /// The item at this index of the snapshot's Inbox.
     Item(usize),
-    /// `+<n> more` or `− less`.
+    /// `└ expand` or `└ collapse`.
     Toggle,
 }
 
@@ -248,8 +250,7 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Opt
                 }
             }
             Some(Hit::Toggle) => {
-                let text = if shape.expanded { "− less".to_owned() } else { format!("+{} more", items.len() - SHOWN) };
-                f.render_widget(Paragraph::new(Span::styled(text, palette::fg(Meaning::Nothing))), row);
+                f.render_widget(Paragraph::new(fold::toggle(shape.expanded)), row);
             }
             None if win.cue_above && dy == 1 => {
                 f.render_widget(Paragraph::new(dim(format!(" ▲ {} more", win.first))), row);

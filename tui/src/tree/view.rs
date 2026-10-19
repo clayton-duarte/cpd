@@ -51,7 +51,7 @@ fn rename_of(row: &Row<'_>) -> Option<Question> {
         Row::Context(c) => Ask::RenameContext(c.id.clone()),
         Row::Plan(_, p) => Ask::RenamePlan(p.head.id.clone()),
         Row::Fork(_, _, s) => Ask::RenameSession(s.id.clone()),
-        Row::More => return None,
+        Row::More | Row::Toggle => return None,
     };
     Some(Question::input("Rename", ask, row.label()))
 }
@@ -72,7 +72,7 @@ fn subject_of(row: &Row<'_>) -> Option<Subject> {
         Row::Context(c) => Some(Subject::Context(c.id.clone())),
         Row::Plan(_, p) => Some(Subject::Plan(p.head.id.clone())),
         Row::Fork(_, _, s) => Some(Subject::Session(s.id.clone())),
-        Row::More => None,
+        Row::More | Row::Toggle => None,
     }
 }
 
@@ -436,7 +436,7 @@ impl View {
             Row::Context(c) => c.plans.iter().flat_map(|p| &p.sessions).collect(),
             Row::Plan(_, p) => p.sessions.iter().collect(),
             Row::Fork(_, _, s) => vec![s],
-            Row::More => return Some(None),
+            Row::More | Row::Toggle => return Some(None),
         };
         if !archiving.iter().any(|s| s.is_active()) {
             return Some(None);
@@ -484,17 +484,13 @@ impl View {
             return self.click_inbox(at.y - self.inbox_area.y);
         }
         let Some(path) = self.row_at(at) else { return Effect::None };
-        // a `…` row expands or collapses its archived rows
-        if rows::click_more(&mut self.state, &self.tree, &path) {
+        // only a toggle row (`└ expand`, `└ collapse`) folds or unfolds a Context or a `…` group; the title row keeps its
+        // own action: a live Context's row opens its Manager (B3-A6), a `…` row does nothing, a live Session row opens
+        // it and an archived one shows its history
+        if rows::click_toggle(&mut self.state, &self.tree, &path) {
             return Effect::None;
         }
-        // a Context row: its fold glyph folds or unfolds it, the rest of a live one opens its Manager (B3-A6); a live
-        // Session row opens it; an archived one shows its history
         if let Some(Row::Context(c)) = rows::row(&self.tree, &path) {
-            if m.column == self.pane.x + rows::FOLD_COLUMN {
-                rows::click_context(&mut self.state, &self.tree, &path);
-                return Effect::None;
-            }
             return if c.is_archived() { Effect::None } else { Effect::Run(Action::OpenManager(c.id.clone())) };
         }
         match rows::row(&self.tree, &path) {
@@ -507,7 +503,7 @@ impl View {
         }
     }
 
-    /// A left click on the Inbox section, `row` rows below its header: `+<n> more` and `− less` toggle the inline
+    /// A left click on the Inbox section, `row` rows below its header: `└ expand` and `└ collapse` toggle the inline
     /// expansion; an item jumps to its cause ([`inbox::jump`]); the header does nothing.
     fn click_inbox(&mut self, row: u16) -> Effect {
         match self.shape().hit(row) {
