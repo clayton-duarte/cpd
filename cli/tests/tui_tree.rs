@@ -534,6 +534,24 @@ fn the_tree_follows_the_events_of_the_store() {
     assert!(screen.iter().any(|r| r.starts_with(" ▾ ● alpha")));
 }
 
+/// A failed snapshot keeps the tree on screen and shows the error in the footer; the next refresh takes the snapshot
+/// again, with no Event needed, and the error goes when it succeeds (tui-W4). The read is made to fail by renaming the
+/// table it reads.
+#[test]
+fn a_failed_snapshot_keeps_the_tree_and_shows_the_error_until_a_snapshot_succeeds() {
+    let env = env();
+    populate(&env);
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    // not through `Store`, which refuses a changed schema
+    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
+    raw("ALTER TABLE sessions RENAME TO sessions_gone;");
+    let screen = pane.wait("the error in the footer", |s| s.iter().any(|r| r.contains("no such table")));
+    assert!(screen.iter().any(|r| r.starts_with(" ▾ ● alpha")), "the tree stays: {screen:?}");
+    raw("ALTER TABLE sessions_gone RENAME TO sessions;");
+    pane.wait("the error to go", |s| !s.iter().any(|r| r.contains("no such table")) && s.iter().any(|r| r.starts_with(" ▾ ● alpha")));
+}
+
 /// `populate`, with the Context `gamma` and the Plan `old` of `beta` (and its Lead) archived.
 fn archive(env: &TestEnv) {
     sql(

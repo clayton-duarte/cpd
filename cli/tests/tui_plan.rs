@@ -491,6 +491,28 @@ fn a_conflict_shows_in_the_box_title_and_clears_with_no_event_within_the_refresh
     screen_when(&env, &pane, "open again", |s| title(s, "open"));
 }
 
+/// A failed snapshot keeps the chart on screen and shows the error in the row below it, for longer than one poll; the
+/// view takes the snapshot again at the next refresh, and the error goes when it succeeds (tui-W4). The read is made to
+/// fail by renaming the table it reads.
+#[test]
+fn a_failed_snapshot_keeps_the_chart_and_shows_the_error_until_a_snapshot_succeeds() {
+    let env = env();
+    sql(&env, &plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
+    let pane = start_view(&env);
+    let title = |s: &[String]| s.iter().any(|l| l.contains("#7 open ↗"));
+    screen_when(&env, &pane, "the chart", title);
+    // not through `Store`, which refuses a changed schema
+    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
+    raw("ALTER TABLE jobs RENAME TO jobs_gone;");
+    screen_when(&env, &pane, "the error", |s| s.iter().any(|l| l.contains("no such table")));
+    // the poll is 50 ms: an error cleared by the next poll's success (the old behaviour) would be gone by now
+    std::thread::sleep(Duration::from_secs(1));
+    let screen = screen(&env, &pane);
+    assert!(screen.iter().any(|l| l.contains("no such table")) && title(&screen), "{screen:?}");
+    raw("ALTER TABLE jobs_gone RENAME TO jobs;");
+    screen_when(&env, &pane, "the error to go", |s| !s.iter().any(|l| l.contains("no such table")) && title(s));
+}
+
 #[test]
 fn without_a_port_file_the_pending_review_row_has_no_arrow() {
     let env = env();

@@ -138,6 +138,30 @@ fn the_workers_follow_the_slots() {
     row_ending(&env, &pane, "workers 1/4");
 }
 
+/// A failed read keeps the last snapshot on screen and shows the error in the note's place; the next refresh reads
+/// again, and the error goes when a read succeeds (tui-W4). The read is made to fail by renaming the table it reads.
+#[test]
+fn a_failed_read_keeps_the_workers_and_shows_the_error_until_a_read_succeeds() {
+    let env = env();
+    sql(&env, &plan_with_attempts(&["running"]));
+    let pane = start_view(&env, 120);
+    row_ending(&env, &pane, "workers 1/4");
+    // not through `Store`, which refuses a changed schema
+    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
+    raw("ALTER TABLE attempts RENAME TO attempts_gone;");
+    let mut row = String::new();
+    wait_until("the error in the row", || {
+        row = tmux_out(&env, &["capture-pane", "-p", "-t", &pane]).lines().next().unwrap_or("").to_owned();
+        row.contains("no such table")
+    });
+    assert!(row.trim_end().ends_with("workers 1/4"), "the last snapshot stays: {row:?}");
+    raw("ALTER TABLE attempts_gone RENAME TO attempts;");
+    wait_until("the error to go", || {
+        let row = tmux_out(&env, &["capture-pane", "-p", "-t", &pane]).lines().next().unwrap_or("").to_owned();
+        !row.contains("no such table") && row.trim_end().ends_with("workers 1/4")
+    });
+}
+
 #[test]
 fn an_unknown_view_is_usage_and_the_statusbar_needs_a_terminal() {
     let env = env();

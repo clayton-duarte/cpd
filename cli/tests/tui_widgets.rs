@@ -689,6 +689,25 @@ fn in_a_pane_each_arrow_is_a_link_at_the_right_edge_and_the_view_captures_the_mo
     assert_eq!(tmux_out(&env, &["display", "-p", "-t", &pane, "#{mouse_any_flag}"]), "1", "mouse capture is on");
 }
 
+/// A failed read keeps the column on screen and shows the error in its last row; the next refresh reads again, and the
+/// error goes when a read succeeds (tui-W4). The read is made to fail by renaming the table it reads.
+#[test]
+fn a_failed_read_keeps_the_column_and_shows_the_error_until_a_read_succeeds() {
+    let env = pane_env();
+    prs_store(&env);
+    let pane = start(&env, "view");
+    wait_for_screen(&env, &pane, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
+    // not through `Store`, which refuses a changed schema
+    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
+    raw("ALTER TABLE pull_requests RENAME TO pull_requests_gone;");
+    let screen = wait_for_screen(&env, &pane, "the error in the last row", |s| s.iter().any(|r| r.contains("no such table")));
+    assert!(screen.iter().any(|r| r.contains("acme/repo#20")), "the column stays: {screen:?}");
+    raw("ALTER TABLE pull_requests_gone RENAME TO pull_requests;");
+    wait_for_screen(&env, &pane, "the error to go", |s| {
+        !s.iter().any(|r| r.contains("no such table")) && s.iter().any(|r| r.contains("acme/repo#20"))
+    });
+}
+
 #[test]
 fn a_click_on_an_owned_row_opens_its_lead_and_focuses_the_chat_and_the_others_run_nothing() {
     let env = pane_env();

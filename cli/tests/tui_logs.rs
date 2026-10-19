@@ -258,6 +258,24 @@ fn the_view_follows_live_scrolls_and_closes_with_q_or_esc() {
     wait_until("the view to close", || !env.tmux(&["has-session", "-t", "view"]).status.success());
 }
 
+/// A failed read keeps the Events on screen and shows the error in the last row; the next poll reads again, and the
+/// error goes when a read succeeds (tui-W4). The read is made to fail by renaming the table it reads.
+#[test]
+fn a_failed_read_keeps_the_events_and_shows_the_error_until_a_read_succeeds() {
+    let env = env();
+    let mut store = open(&env);
+    append_numbered(&mut store, 0, 10);
+    let pane = start(&env, &["logs"], 60, 5);
+    wait_screen(&env, &pane, "the latest Events", |r| r.get(4).is_some_and(|l| l == " 00:00:09 event 9"));
+    // not through `Store`, which refuses a changed schema
+    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
+    raw("ALTER TABLE events RENAME TO events_gone;");
+    let rows = wait_screen(&env, &pane, "the error in the last row", |r| r.get(4).is_some_and(|l| l.contains("no such table")));
+    assert_eq!(rows[3], " 00:00:09 event 9", "the Events stay, one row less: {rows:?}");
+    raw("ALTER TABLE events_gone RENAME TO events;");
+    wait_screen(&env, &pane, "the error to go", |r| r.get(4).is_some_and(|l| l == " 00:00:09 event 9"));
+}
+
 #[test]
 fn the_logs_view_needs_a_terminal() {
     let env = env();
