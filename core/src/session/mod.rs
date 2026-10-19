@@ -9,13 +9,16 @@
 //! - [`archive`]: `session archive` and `unarchive`, and the archive rule;
 //! - [`send`]: `session send`, one message to a Lead;
 //! - [`port`]: a Plan's plannotator port;
-//! - [`run`]: `session run`, the program in every Lead pane (§6.7).
+//! - [`run`]: `session run`, the program in every Lead pane (§6.7);
+//! - `reload`: when it restarts pi (reload on install, adapter watchdog);
+//! - `fork_wait`: a fork's wait for its source Lead to finish its turn.
 
 mod archive;
 mod fork_wait;
 mod history;
 mod moves;
 mod port;
+mod reload;
 mod resolve;
 mod row;
 pub(crate) mod run;
