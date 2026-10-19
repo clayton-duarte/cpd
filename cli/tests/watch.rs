@@ -1138,7 +1138,8 @@ fn a_store_busy_for_longer_than_store_busy_ms_never_ends_the_engine_or_loses_an_
     // The start: `watch-started` waits for the lock.
     let held = hold_write_lock(&fx);
     let mut engine = spawn_engine(&fx);
-    std::thread::sleep(Duration::from_millis(1500));
+    // Its first `store_busy` is logged once the lock outlasted `store_busy_ms`; an engine that ended on it never appends `watch-started`.
+    wait_until("the engine to meet the lock at its start", || watch_log(&fx).contains("store_busy: "));
     assert_eq!(engine.child.as_mut().unwrap().try_wait().unwrap(), None, "the engine exited");
     assert_eq!(fx.count("watch-started"), 0, "{}", watch_log(&fx));
     held.release();
@@ -1147,8 +1148,9 @@ fn a_store_busy_for_longer_than_store_busy_ms_never_ends_the_engine_or_loses_an_
 
     // A step: the second tick's E4 meets the lock, taken while E5 of the first tick is still running.
     fx.fixture("UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
+    let busy = watch_log(&fx).matches("store_busy: ").count();
     let held = hold_write_lock(&fx);
-    wait_until("the engine to meet the lock", || watch_log(&fx).matches("store_busy: ").count() >= 1);
+    wait_until("the engine to meet the lock", || watch_log(&fx).matches("store_busy: ").count() > busy);
     assert_eq!(fx.count("all-merged"), 0);
     held.release();
     wait_until("all-merged", || fx.count("all-merged") == 1);
@@ -1171,7 +1173,10 @@ fn watch_stopped_waits_for_a_busy_store() {
 
     let held = hold_write_lock(&fx);
     engine.signal(Signal::SIGTERM);
-    std::thread::sleep(Duration::from_millis(2000));
+    // `watch-stopped` met the lock for longer than `store_busy_ms`: its `store_busy` is logged after the stop.
+    wait_until("the stopping engine to meet the lock", || {
+        watch_log(&fx).split("stopping on a signal").nth(1).is_some_and(|after| after.contains("store_busy: "))
+    });
     assert_eq!(engine.child.as_mut().unwrap().try_wait().unwrap(), None, "the engine exited without watch-stopped");
     assert_eq!(fx.count("watch-stopped"), 0);
     held.release();
@@ -1663,8 +1668,7 @@ fn restart(env: &TestEnv, installed: &str, attempts: &str, tmux_env: Option<&str
     // The server runs a copy of tmux at its own path: the binary the script must name.
     let server = server_binary(env);
     fs::create_dir_all(server.parent().unwrap()).unwrap();
-    // `cp`, not `fs::copy`: a write fd held here would leak into parallel forks (ETXTBSY on exec).
-    assert!(std::process::Command::new("cp").arg("--").arg(&real).arg(&server).status().unwrap().success());
+    copy_executable(real.to_str().expect("a UTF-8 path to tmux"), &server);
     let out = env.command(&server).args(["-L", &socket, "new-session", "-d", "-s", "cpd", "sleep", "600"]).output().unwrap();
     assert!(out.status.success());
     env.fake(

@@ -434,7 +434,8 @@ fn a_driver_step_that_meets_a_held_write_lock_waits_and_the_attempt_is_not_crash
     let holder = rusqlite::Connection::open(fx.home().db()).unwrap();
     holder.busy_timeout(Duration::from_secs(10)).unwrap();
     holder.execute_batch("BEGIN IMMEDIATE").unwrap();
-    std::thread::sleep(Duration::from_millis(2500));
+    // The driver logs its first `store_busy` once the lock outlasted `store_busy_ms`: it met the lock and waits.
+    common::wait_until("the driver to meet the lock", || fx.log(ATTEMPT).contains("store_busy: "));
     holder.execute_batch("ROLLBACK").unwrap();
 
     let (attempt, driver) = fx.wait_end(ATTEMPT, &out["pid"]);

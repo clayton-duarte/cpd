@@ -1216,6 +1216,8 @@ fn the_holders_record_is_gone_after_a_commit_and_after_a_rollback() {
 fn a_slow_write_is_logged_with_where_its_time_went() {
     let env = TestEnv::new();
     let mut store = open(&env);
+    // time-claim: a write that holds the lock 1.1 s, past the 1 s threshold, is logged with a closure at least that
+    // long; the sleep is the slow work itself, not a wait for a signal.
     store.write("slow", |_| Ok(std::thread::sleep(Duration::from_millis(1100)))).unwrap();
     let text = fs::read_to_string(env.cpd_home().join("run/store-slow.log")).unwrap();
     // Other writes of a loaded machine may be in it too: find this one.

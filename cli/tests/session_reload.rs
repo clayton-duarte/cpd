@@ -497,7 +497,8 @@ fn a_wrapper_whose_first_write_meets_a_held_write_lock_waits_and_starts_pi_when_
     f.launch();
     wait_until("the wrapper to say it waits for the store", || f.screen().contains("Waiting for the store"));
     let pid = f.pane_pid();
-    // Several tries of the wrapper, each longer than `store_busy_ms`: it neither ended nor started pi.
+    // time-claim: over several tries of the wrapper (each longer than `store_busy_ms`, then a 0.5 s, 1 s wait), it
+    // neither ended nor started pi; no per-poll signal from `session run`, which says once that it waits.
     std::thread::sleep(Duration::from_millis(2500));
     let screen = f.screen();
     assert_eq!(screen.matches("Waiting for the store").count(), 1, "said once: {screen}");
