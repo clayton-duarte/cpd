@@ -122,9 +122,56 @@ fn render_header(f: &mut Frame, area: Rect, title: &str) {
     f.render_widget(Paragraph::new(section_header(title, usize::from(area.width))), area);
 }
 
-/// Draws the column in `area`: a blank row, the machine, then the PRs, git and Jira, each under its header. A non-empty
-/// `note` replaces the column's last row, in `palette::note()`. Returns where a click reaches an owned PR.
-pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &str) -> Vec<Hit> {
+/// Which pull requests the PRs section draws, and the cues around them (commands.md §13.2, "Scrolling the PRs section").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Window {
+    /// The first pull request drawn, after clamping.
+    first: usize,
+    /// How many are drawn.
+    shown: usize,
+    /// A ` ▲ <first> more` row opens the section.
+    cue_above: bool,
+    /// How many are hidden below: a ` ▼ <n> more` row ends the section when not 0.
+    below: usize,
+}
+
+/// The largest offset for `count` pull requests in a section of `height` rows: the last one reaches the bottom (under the
+/// `▲` cue, which takes a row). 0 when every one fits.
+fn max_scroll(count: usize, height: usize) -> usize {
+    if count * 2 <= height {
+        return 0;
+    }
+    count.saturating_sub((height.saturating_sub(1)) / 2).min(count.saturating_sub(1))
+}
+
+/// The window at offset `scroll` (clamped to [`max_scroll`]). A cue takes one row of the section, and a pull request is whole.
+fn window(count: usize, height: usize, scroll: usize) -> Window {
+    let first = scroll.min(max_scroll(count, height));
+    let cue_above = first > 0 && height > 0;
+    let room = height - usize::from(cue_above);
+    let left = count - first;
+    if left * 2 <= room {
+        return Window { first, shown: left, cue_above, below: 0 };
+    }
+    let shown = room.saturating_sub(1) / 2;
+    Window { first, shown, cue_above, below: left - shown }
+}
+
+/// What [`draw`] reports to the view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Drawn {
+    /// Where a click reaches an owned PR: the pull requests on screen.
+    pub hits: Vec<Hit>,
+    /// The PRs section, where a wheel event scrolls.
+    pub prs: Rect,
+    /// The largest scroll offset (in pull requests) of the section as drawn.
+    pub max_scroll: usize,
+}
+
+/// Draws the column in `area`: a blank row, the machine, then the PRs, git and Jira, each under its header. The PRs section
+/// starts at the pull request `scroll` (clamped), with a dim `▲`/`▼` cue row where some are hidden. A non-empty `note`
+/// replaces the column's last row, in `palette::note()`.
+pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &str, scroll: usize) -> Drawn {
     let [_top, home, _above_prs, prs_header, _below_prs, prs, _above_git, git_header, _below_git, git, _above_jira, jira_header, _below_jira, jira] =
         Layout::vertical([
             Constraint::Length(1),
@@ -150,10 +197,13 @@ pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &st
         Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::from(format!(" load {}", machine.load.join(" ")))]),
         home,
     );
+    let height = usize::from(prs.height);
+    let win = window(w.prs.len(), height, scroll);
+    // The list sits under the `▲` row, if any; whole pull requests only.
+    let list = Rect::new(prs.x, prs.y + u16::from(win.cue_above), prs.width, prs.height - u16::from(win.cue_above));
+    let shown: Vec<(u16, &OpenPr)> = (list.y..).step_by(2).zip(w.prs.iter().skip(win.first).take(win.shown)).collect();
     let mut text = vec![];
     let mut hits = vec![];
-    // Whole pull requests only: what does not fit the section is dropped from the end.
-    let shown: Vec<(u16, &OpenPr)> = (prs.y..).step_by(2).zip(w.prs.iter().take(usize::from(prs.height) / 2)).collect();
     // The `↗` is the last column of the section's first line of each PR.
     let arrow_x = prs.right().checked_sub(1);
     for (y, pr) in &shown {
@@ -165,7 +215,13 @@ pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &st
     if w.prs.is_empty() {
         text.push(Line::from(dim(" no open PRs")));
     }
-    f.render_widget(Paragraph::new(text), prs);
+    f.render_widget(Paragraph::new(text), list);
+    if win.cue_above {
+        f.render_widget(Paragraph::new(dim(format!(" ▲ {} more", win.first))), Rect::new(prs.x, prs.y, prs.width, 1));
+    }
+    if win.below > 0 && prs.height > 0 {
+        f.render_widget(Paragraph::new(dim(format!(" ▼ {} more", win.below))), Rect::new(prs.x, prs.bottom() - 1, prs.width, 1));
+    }
     for (y, pr) in &shown {
         if let Some(x) = arrow_x {
             link::link(f.buffer_mut(), Rect::new(x, *y, 1, 1), &pr.url);
@@ -178,7 +234,7 @@ pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &st
         f.render_widget(Clear, last);
         f.render_widget(Paragraph::new(Span::styled(note.to_owned(), palette::note())), last);
     }
-    hits
+    Drawn { hits, prs, max_scroll: max_scroll(w.prs.len(), height) }
 }
 
 #[cfg(test)]
@@ -204,11 +260,16 @@ mod tests {
     }
 
     fn drawn(width: u16, height: u16, w: &Widgets, note: &str) -> (Buffer, Vec<Hit>) {
+        let (buf, d) = scrolled(width, height, w, note, 0);
+        (buf, d.hits)
+    }
+
+    fn scrolled(width: u16, height: u16, w: &Widgets, note: &str, scroll: usize) -> (Buffer, Drawn) {
         let machine = Machine { name: "homeserver".to_owned(), load: ["0.52", "0.41", "0.30"].map(str::to_owned).to_vec() };
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut hits = vec![];
-        terminal.draw(|f| hits = draw(f, f.area(), w, &machine, note)).unwrap();
-        (terminal.backend().buffer().clone(), hits)
+        let mut out = None;
+        terminal.draw(|f| out = Some(draw(f, f.area(), w, &machine, note, scroll))).unwrap();
+        (terminal.backend().buffer().clone(), out.unwrap())
     }
 
     fn buffer(width: u16, height: u16) -> Buffer {
@@ -364,5 +425,90 @@ mod tests {
         assert_eq!(second_line(&p, 28).0, "  open ✓ no review conflict");
         assert_eq!(second_line(&p, 32).0, "  open ✓ no review conflict");
         assert_eq!(second_line(&p, 33).0, "  open ✓ no review conflict  A t…");
+    }
+
+    /// `count` owned pull requests, numbers 1.., each with its own Lead `l-<n>`.
+    fn many(count: i64) -> Widgets {
+        widgets((1..=count).map(|n| pr(n, Some(&format!("l-{n}")))).collect())
+    }
+
+    /// The PRs section's rows: 14 rows of the rest of the column, and `lines` for the section.
+    fn section(buf: &Buffer) -> Vec<String> {
+        (6..buf.area.height - 8).map(|y| row(buf, y)).collect()
+    }
+
+    /// A column whose PRs section is `lines` rows tall (the rest of the column takes 14).
+    fn height(lines: u16) -> u16 {
+        14 + lines
+    }
+
+    fn names(rows: &[String]) -> Vec<&str> {
+        rows.iter().filter_map(|r| r.trim().split(' ').next()).filter(|n| n.contains('#')).collect()
+    }
+
+    #[test]
+    fn no_cue_is_drawn_when_every_pull_request_fits() {
+        let (buf, d) = scrolled(30, height(6), &many(3), "", 0);
+        let got = section(&buf);
+        assert!(got.iter().all(|r| !r.contains('▲') && !r.contains('▼')), "{got:#?}");
+        assert_eq!(names(&got), ["acme/repo#1", "acme/repo#2", "acme/repo#3"]);
+        assert_eq!(d.max_scroll, 0);
+        // a scroll that has nowhere to go changes nothing
+        assert_eq!(scrolled(30, height(6), &many(3), "", 5).0, buf);
+    }
+
+    #[test]
+    fn a_cue_below_counts_the_hidden_pull_requests_and_replaces_the_last_row_in_dim() {
+        // 5 rows: the `▼` row, so two pull requests of the five that do not fit.
+        let (buf, d) = scrolled(30, height(5), &many(5), "", 0);
+        let got = section(&buf);
+        assert_eq!(names(&got), ["acme/repo#1", "acme/repo#2"]);
+        assert_eq!(got.last().unwrap(), " ▼ 3 more", "{got:#?}");
+        assert!(!got.iter().any(|r| r.contains('▲')));
+        let y = 6 + 4;
+        assert!((0..9).all(|x| buf[(x, y)].modifier.contains(Modifier::DIM)), "the cue is dim");
+        assert_eq!(d.prs, Rect::new(0, 6, 30, 5));
+        assert_eq!(d.max_scroll, 3);
+    }
+
+    #[test]
+    fn a_cue_above_appears_after_a_scroll_and_each_cue_takes_a_row_of_the_list() {
+        let (buf, _) = scrolled(30, height(5), &many(5), "", 1);
+        let got = section(&buf);
+        assert_eq!(got[0], " ▲ 1 more", "{got:#?}");
+        // 5 rows less both cues leave 3: one pull request, and a spare row
+        assert_eq!(names(&got), ["acme/repo#2"]);
+        assert_eq!(got.last().unwrap(), " ▼ 3 more");
+        assert!(buf[(1, 6)].modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn the_offset_is_clamped_so_the_last_pull_request_reaches_the_bottom() {
+        // 5 rows, 5 pull requests: at the end, the `▲` row and two pull requests; no `▼`.
+        let (buf, d) = scrolled(30, height(5), &many(5), "", 99);
+        let got = section(&buf);
+        assert_eq!(d.max_scroll, 3);
+        assert_eq!(got[0], " ▲ 3 more", "{got:#?}");
+        assert_eq!(names(&got), ["acme/repo#4", "acme/repo#5"]);
+        assert!(!got.iter().any(|r| r.contains('▼')), "{got:#?}");
+        assert_eq!(scrolled(30, height(5), &many(5), "", 3).0, buf);
+        // a list that shrank under the offset is drawn at the new end
+        let (buf, _) = scrolled(30, height(5), &many(3), "", 3);
+        assert_eq!(names(&section(&buf)), ["acme/repo#2", "acme/repo#3"]);
+    }
+
+    #[test]
+    fn a_hit_area_is_that_of_the_row_drawn_after_a_scroll() {
+        let (buf, d) = scrolled(30, height(7), &many(6), "", 2);
+        let got = section(&buf);
+        assert_eq!(got[0], " ▲ 2 more", "{got:#?}");
+        assert_eq!(got.last().unwrap(), " ▼ 2 more", "{got:#?}");
+        let leads: Vec<(&str, Rect)> = d.hits.iter().map(|h| (h.lead.as_str(), h.area)).collect();
+        assert_eq!(leads, [("l-3", Rect::new(0, 7, 30, 2)), ("l-4", Rect::new(0, 9, 30, 2))]);
+        for hit in &d.hits {
+            let n = hit.lead.as_str().trim_start_matches("l-");
+            assert!(row(&buf, hit.area.y).contains(&format!("acme/repo#{n}")), "{hit:?}");
+        }
+        assert!(!d.hits.iter().any(|h| h.contains(Position::new(0, 6))), "the cue row is no hit");
     }
 }
