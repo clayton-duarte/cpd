@@ -1028,6 +1028,32 @@ fn e5_polls_every_pr_poll_seconds_after_the_previous_poll_ended_whatever_the_pla
     assert_eq!(fx.count("error"), 0);
 }
 
+/// engine-W9: a poll of 1 s with a tick of 5 s and `pr_poll_seconds = 2` runs every 3 s (end + 2 s), not at every other tick.
+#[test]
+fn e5_polls_at_its_due_time_not_at_the_next_tick() {
+    let fx = fx_bare("");
+    poll_every(&fx, 2);
+    let config = fx.env.cpd_home().join("config.toml");
+    fs::write(&config, fs::read_to_string(&config).unwrap().replace("tick_seconds = 1\n", "tick_seconds = 5\n")).unwrap();
+    let log = fx.env.root().join("poll.log");
+    fx.env.fake_gh(&format!(
+        r#"echo "start $(date +%s%N)" >> '{log}'; sleep 1; echo '{}'; exit 0"#,
+        search_reply(4987, "2099-01-01T00:00:00Z"),
+        log = log.display()
+    ));
+
+    let engine = fx.start();
+    wait_until("three polls", || fs::read_to_string(&log).map_or(0, |t| t.matches("start").count()) >= 3);
+    engine.stop();
+
+    let starts: Vec<i128> = fs::read_to_string(&log).unwrap().lines().map(|l| l.split_once(' ').unwrap().1.parse::<i128>().unwrap() / 1_000_000).collect();
+    for pair in starts.windows(2) {
+        let gap = pair[1] - pair[0];
+        assert!((2900..4000).contains(&gap), "a poll every 3 s (1 s poll + 2 s), not every 5 s tick: {starts:?}");
+    }
+    assert_eq!(fx.count("error"), 0);
+}
+
 #[test]
 fn e5_polls_with_a_plan_in_pr_too_and_does_not_poll_more_often_than_every_pr_poll_seconds() {
     let fx = fx("");

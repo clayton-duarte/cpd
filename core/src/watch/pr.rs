@@ -1,7 +1,7 @@
 //! E5, PR poll (contract §3.7, §7.6; hs-d96, hs-d97): `cpd pr poll` as a
 //! subprocess (a process boundary, cpd 1 §11 step 5), `pr_poll_seconds` after the
-//! end of the previous poll, whether or not any Plan is in `deploy`: one poll covers
-//! every open pull request of the User. `cpd` is the executable the engine started
+//! end of the previous poll, at its due time (the engine wakes for it between ticks),
+//! whether or not any Plan is in `deploy`: one poll covers every open pull request of the User. `cpd` is the executable the engine started
 //! from (`host::exe::started_as`), as for the drivers of E3 (hs-d151): not `PATH`.
 //!
 //! The rate guard: when a poll leaves fewer than [`RATE_FLOOR`] requests of
@@ -24,10 +24,17 @@ use crate::host::exe::started_as;
 /// Below this many requests remaining, E5 stops polling until the limit resets (D9).
 const RATE_FLOOR: u64 = 100;
 
+/// When the next poll is due: `pr_poll_seconds` after the last one ended, and not before the rate limit resets;
+/// `now` when none has run. The engine wakes at this time instead of at the next tick (contract §3.7).
+pub(super) fn due(engine: &Engine, now: Instant) -> Instant {
+    let every = Duration::from_secs(u64::from(engine.config.watch.pr_poll_seconds));
+    let after_last = engine.last_poll_end.map_or(now, |end| end + every);
+    engine.paused_until.map_or(after_last, |until| until.max(after_last))
+}
+
 pub(super) fn run(engine: &mut Engine) {
     let now = Instant::now();
-    let every = Duration::from_secs(u64::from(engine.config.watch.pr_poll_seconds));
-    if engine.paused_until.is_some_and(|until| now < until) || engine.last_poll_end.is_some_and(|end| now.duration_since(end) < every) {
+    if now < due(engine, now) {
         return;
     }
     engine.paused_until = None;
