@@ -70,7 +70,7 @@ Attribute each record to its source (the User, a Lead, a document) and date it w
 1. **Intake.** Treat everything the User brings the same way: an Epic, a PRD, an ADR, a ticket, a sentence in chat. Read the material yourself; never ask the User for a fact you can look up. Restate the Requirements in a few lines and record them.
 2. **Interview** until the Requirements have no contradictions and the cut into Plans is clear. Group independent questions into one round. Record each answer as you get it.
 3. **Split into Plans.** A Plan is one deliverable: one or more PRs, in one or more repos, that ship together. Cut the Requirements into Plans a Lead can own end to end. When one Plan needs another's result, start it after the first is done and record the order as a decision. Agree the cut with the User before starting any Plan.
-4. **Check pending work first.** Before you start a Plan or route an issue to a Lead, run `cpd context pending --context <c>` (`--markdown` to read it) and compare the issue with the title and touched files of every pending Job of every active Plan. When something in flight already fixes or changes it, tell the User which Plan and Job, and do not start a Plan.
+4. **Check pending work first.** Before you start a Plan or route an issue to a Lead, run `cpd context pending --context <c>` (`--markdown` to read it) and compare the issue with the title and touched files of every pending Job of every active Plan. When something in flight already fixes or changes it, tell the User which Plan and Job, and do not start a Plan. See "Areas and overlaps" below for work that only overlaps.
 5. **Write the brief** for each Plan in a file outside any repo. Its first line is a one-line summary (it is what `context show` and every turn-start update show). Then: the goal, the Requirements it covers, what is out of scope, the record ids that apply, the repos you know of and the User's material (paths, links). The Lead reads its brief in full plus every record, and nothing else from you.
 6. **Start the Plan** from `~`, so its Lead starts there (`cd ~` first):
 
@@ -81,6 +81,16 @@ Attribute each record to its source (the User, a Lead, a document) and date it w
 
    The id matches `^[a-z][a-z0-9-]{1,23}$` (the ticket id in lowercase when there is one). It registers a fresh Lead, writes a `plan` record and the brief as a `brief` record, and starts the Lead in a parked window. It never moves the chat slot: tell the User the Plan id so they open its Lead from the session tree, or, when the User wants it in the chat, open it yourself with `cpd session open <lead-session>`. Rerunning it with the same flags is safe.
 7. The Lead grounds, interviews and plans with the User directly. Do not relay between them.
+
+### Areas and overlaps
+
+Prevent conflicts between Leads' PRs before the work starts, and remedy them when they appear.
+
+- **Split by area.** Cut work between Leads by area: the files and directories each touches. Give two Plans the same area only when you cannot avoid it.
+- **Keep a file map.** Map the files of every active PR: each pending Job's `touches` from `cpd context pending --context <c>`, and `cpd plan show --plan <p>` per Plan. `cpd plan render`'s Overlaps section shows a Plan's overlaps with other active Plans. Know every unavoidable overlap before the work starts, and tell both Leads in the brief or by `cpd session send`.
+- **Set the landing order.** For overlapping PRs, decide which lands first. Within one Plan the order is a PR's needs (`cpd pr add <key> --repo <path> --needs <k>`): it starts from the base after the other merges. Across Plans, tell each Lead with `cpd session send <lead-session>` which PR lands first and that the next one waits.
+- **One PR in flight per area.** Stack the next PR on the one in flight: it waits, then starts from the base once the first merges.
+- **Move a stacked PR onto the base** once the PR it waits for has merged: tell its Lead with `cpd session send <lead-session>` to run `cpd pr rebase --pr <key>`.
 
 ## 3. Knowing where each Lead is
 

@@ -471,6 +471,13 @@ test("cpd-lead registers planned work at once; cpd-manager checks it", () => {
   assert.match(manager, /cpd session send <lead-session>[^\n]*register/);
 });
 
+test("cpd-manager splits work by area, maps files and sets the landing order", () => {
+  const manager = skillFiles("cpd-manager")[0]!.text;
+  assert.match(manager, /Split by area/);
+  assert.match(manager, /cpd context pending --context <c>/);
+  assert.match(manager, /Set the landing order/);
+});
+
 test("urgent Jobs: both skills state the flag, the command and the explicit-request rule", () => {
   for (const skill of ["cpd-lead", "cpd-manager"]) {
     const text = skillFiles(skill)[0]!.text;
