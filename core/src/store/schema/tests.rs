@@ -940,12 +940,15 @@ fn migration_6_keeps_migration_5s_triggers_on_prs() {
     assert_eq!(names(&after), names(&before), "the same triggers on prs");
     for ((name, old), (_, new)) in before.iter().zip(&after) {
         // The history triggers list the rebuilt table's columns; every other keeps its text.
-        if name != "prs_hist_ins" && name != "prs_hist_upd" {
+        // `prs_status` also has `dispatch>cancelled` since `pr-cancel-started`.
+        if name != "prs_hist_ins" && name != "prs_hist_upd" && name != "prs_status" {
             assert_eq!(new, old, "{name}");
         }
     }
     let locked = &after.iter().find(|(name, _)| name == "prs_locked").unwrap().1;
     assert!(locked.contains("OLD.status = 'merged'"), "migration 5's prs_locked: {locked}");
+    let status = &after.iter().find(|(name, _)| name == "prs_status").unwrap().1;
+    assert!(status.contains("'waiting>cancelled', 'dispatch>cancelled'"), "prs_status: {status}");
 }
 
 #[test]
@@ -1395,7 +1398,7 @@ fn prs_status_refuses_a_transition_outside_3_8() {
     for sql in [
         "UPDATE prs SET status = 'open', lead_worktree = '/w', started_at = 't', pr_number = 1, pr_url = 'u', pr_opened_at = 't' WHERE plan = 'gr'",
         "UPDATE prs SET status = 'waiting', lead_worktree = NULL, started_at = NULL WHERE plan = 'di'",
-        "UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE plan = 'di'",
+        "UPDATE prs SET status = 'cancelled' WHERE plan = 'dn'",
         "UPDATE prs SET status = 'open', merged_at = NULL WHERE plan = 'dn'",
     ] {
         let err = refused(&mut store, sql);
@@ -1403,6 +1406,7 @@ fn prs_status_refuses_a_transition_outside_3_8() {
     }
     write(&mut store, "UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'gr';
                        UPDATE prs SET status = 'cancelled' WHERE plan = 'pl';
+                       UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE plan = 'gr';
                        INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
                          VALUES ('acme/di', 11, 'u', 'D', 0, 'open', 'none', 'none', 't', 't');
                        UPDATE prs SET status = 'open', pr_number = 11, pr_url = 'u', pr_opened_at = 't',

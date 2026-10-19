@@ -7,6 +7,7 @@
 //! - [`titles`] E10: starts `cpd session retitle` for idle Lead and Manager Sessions whose turn ended after their title;
 //! - [`escalations`] E1, [`liveness`] E2, [`schedule`] E3, [`completion`] E4,
 //!   [`pr`] E5, [`inbox`] E8: one module per step (E6 was removed, its number stays);
+//! - [`workers`]: the `@cpd_workers` step, which sets the StatusBar's `workers N/M` text;
 //! - [`report`]: an unexpected failure as an `error` Event, once until it clears;
 //! - [`ensure`]: `watch --ensure`, which starts the engine in `cpd-work:watch`;
 //! - [`restart`]: the tmux server's restart: E3's hold while it is pending, the drain, the detached run;
@@ -26,6 +27,7 @@ mod report;
 pub mod restart;
 mod schedule;
 mod titles;
+mod workers;
 
 use crate::error::CpdError;
 use crate::output::Output;

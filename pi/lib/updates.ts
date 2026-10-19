@@ -124,7 +124,7 @@ export function parseRecords(out: Record<string, unknown>): ContextRecord[] {
       id: r.id,
       kind: r.kind,
       at: r.at,
-      by: r.by.session as string | null,
+      by: r.by.session,
       text: r.text,
       ...(typeof r.supersedes === "string" ? { supersedes: r.supersedes } : {}),
       ...(typeof r.question === "string" ? { question: r.question } : {}),

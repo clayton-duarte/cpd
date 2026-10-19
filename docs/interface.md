@@ -91,13 +91,17 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd tui view tree` | The session tree (left) | internal | |
 | `cpd tui view plan` | The Plan of the Lead in the chat slot (centre top) | internal | |
 | `cpd tui view widgets` | The Dispatch column (right) | internal | |
-| `cpd tui view statusbar` | The StatusBar (bottom row) | internal | |
 | `cpd tui view worker` | An Attempt's Worker, read-only (beside the chat) | internal | |
 | `cpd tui view history` | An archived Session's history, read-only (the chat slot) | internal | |
 | `cpd tui view legend` | The key legend (opened by `?` in the Dispatch column, in a tmux popup) | internal | |
 | `cpd tui view logs` | The Event log (opened by the StatusBar's logs button and by an Inbox item, in a tmux popup) | internal | |
 | `cpd tui view merge` | The merge confirmation of a pull request (opened by the Deploy column's merge icon, in a tmux popup) | internal | |
+| `cpd tui view dialog` | A dialog of the kit: `confirm`, `input` or `text` (opened by the cockpit's actions, in a tmux popup) | internal | |
+| `cpd tui view dialog confirm` | A question with two buttons | internal | |
+| `cpd tui view dialog input` | A one-line text field | internal | |
+| `cpd tui view dialog text` | Scrollable read-only text | internal | |
 | `cpd tui view chat` | The chat slot's placeholder | internal | |
+| `cpd tui action` | A click on a StatusBar button (internal; prints nothing) (§13.2) | internal | |
 | `cpd doctor` | Check the machine (commands.md §14.1) | | |
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |
 | `cpd tiers` | Print the Tiers and their valid efforts (commands.md §14.3) | Lead | |

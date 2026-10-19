@@ -70,9 +70,9 @@ impl Fx {
     /// A draft Job of PR `pr`.
     fn job(&self, key: &str, pr: &str, status: &str) {
         self.env.sql(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                                cancel_reason, cancel_requested_at, created_txn, created_at)
-             VALUES ('pay-1', '{pr}', '{key}', 'Job {key}', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0,
+             VALUES ('pay-1', '{pr}', '{key}', 'Job {key}', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, iif('{status}' IN ('draft', 'cancelled'), NULL, printf('%064d', 1)),
                      iif('{status}' = 'cancelled', 'x', NULL), iif('{status}' = 'cancelled', 't', NULL), cpd_txn(), 't');"
         ));
     }
@@ -564,7 +564,6 @@ fn edit_and_cancel_are_refused_once_the_plan_is_locked() {
     let writes = fx.writes();
     let error = fx.refused(&fx.pr(&["edit", "api", "--base", "main"]), "pr_locked", 3, writes);
     assert_eq!(error["details"]["phase"], "dispatch");
-    fx.refused(&fx.pr(&["cancel", "api"]), "pr_locked", 3, writes);
     fx.refused(&fx.pr(&["cancel", "nope"]), "pr_not_found", 4, writes);
 }
 
@@ -743,6 +742,128 @@ fn cancel_is_refused_while_a_job_or_a_pr_holds_the_pr() {
     fx.pr(&["edit", "web", "--no-needs"]).ok();
     fx.pr(&["cancel", "api"]).ok();
     assert_eq!(fx.query::<String>("SELECT status FROM prs WHERE key = 'api'"), "cancelled");
+}
+
+impl Fx {
+    /// A PR row as the lock and `pr open` leave it: `status` `dispatch` (a Lead worktree, no pull request),
+    /// `open` or `merged` (with a pull request).
+    fn locked_pr(&self, key: &str, repo: &PathBuf, status: &str) {
+        let (number, url, opened, pull, merged) = match status {
+            "dispatch" => ("NULL", "NULL", "NULL", "NULL", "NULL"),
+            _ => ("7", "'u'", "'t'", "(SELECT id FROM pull_requests WHERE number = 7)", if status == "merged" { "'t'" } else { "NULL" }),
+        };
+        if status != "dispatch" {
+            self.env.sql(&format!(
+                "INSERT OR IGNORE INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+                   VALUES ('acme/pay', 7, 'u', 'T', 0, '{status}', 'none', 'none', 't', {merged}, 't');"
+            ));
+        }
+        self.env.sql(&format!(
+            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, pr_number, pr_url, pr_opened_at,
+                              pull_request, merged_at, created_txn, created_at)
+               VALUES ('pay-1', '{key}', '{}', 'main', '{status}', 'cpd/pay-1/{key}', '/w/{key}', 't', {number}, {url}, {opened}, {pull}, {merged},
+                       cpd_txn(), 't');",
+            repo.display()
+        ));
+    }
+
+    fn pr_status(&self, key: &str) -> String {
+        self.query(&format!("SELECT status FROM prs WHERE key = '{key}'"))
+    }
+
+    fn phase(&self) -> String {
+        self.query("SELECT phase FROM plans WHERE id = 'pay-1'")
+    }
+}
+
+// ---------- pr cancel after the lock ----------
+
+#[test]
+fn a_locked_pr_with_only_cancelled_jobs_is_cancelled_and_the_plan_reaches_done() {
+    let fx = fx("dispatch");
+    fx.locked_pr("api", &fx.pay, "merged");
+    fx.locked_pr("gateci", &fx.web, "dispatch");
+    fx.job("a", "gateci", "cancelled");
+    assert_eq!(fx.phase(), "dispatch");
+
+    let out = fx.pr(&["cancel", "gateci"]).ok();
+    assert_eq!(out["pr"], json!({"key": "gateci", "status": "cancelled"}));
+    assert_eq!(out["phase"], "done");
+    assert_eq!(fx.pr_status("gateci"), "cancelled");
+    assert_eq!(fx.phase(), "done");
+    // The Locked Job is untouched, the Events are those of the cancel and the Plan's move.
+    assert_eq!(fx.query::<String>("SELECT status FROM jobs WHERE key = 'a'"), "cancelled");
+    assert_eq!(fx.events("pr-cancelled")[0]["data"], json!({"pr": "gateci"}));
+    let phases = fx.events("plan-phase");
+    assert_eq!((phases.len(), phases[0]["data"]["to"].clone()), (1, json!("deploy")));
+    let done = fx.events("plan-done");
+    assert_eq!((done.len(), done[0]["data"]["prs"][0]["key"].clone()), (1, json!("api")));
+
+    // Idempotent.
+    let writes = fx.writes();
+    assert_eq!(fx.pr(&["cancel", "gateci"]).ok()["already"], true);
+    assert_eq!(fx.writes(), writes);
+}
+
+#[test]
+fn a_locked_pr_with_no_job_is_cancelled_and_the_plan_waits_for_the_others() {
+    let fx = fx("dispatch");
+    fx.locked_pr("api", &fx.pay, "dispatch");
+    fx.locked_pr("web", &fx.web, "dispatch");
+    let out = fx.pr(&["cancel", "web"]).ok();
+    assert!(out.get("phase").is_none(), "{out}");
+    assert_eq!((fx.pr_status("web"), fx.phase()), ("cancelled".to_string(), "dispatch".to_string()));
+    assert!(fx.events("plan-phase").is_empty());
+
+    // A PR that is still `waiting` is cancelled too; the last one cancelled leaves the Plan in `dispatch`.
+    fx.env.sql("UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE key = 'api'");
+    fx.env.sql(
+        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+           VALUES ('pay-1', 'late', '/x', 'main', 'waiting', 'cpd/pay-1/late', cpd_txn(), 't')",
+    );
+    let out = fx.pr(&["cancel", "late"]).ok();
+    assert!(out.get("phase").is_none(), "no PR is left that is not cancelled: {out}");
+    assert_eq!(fx.phase(), "dispatch");
+}
+
+#[test]
+fn a_locked_pr_with_a_merged_or_live_job_or_a_pr_that_needs_it_is_refused_and_an_open_one_too() {
+    let fx = fx("dispatch");
+    for key in ["queued", "running", "merged"] {
+        fx.locked_pr(key, &fx.pay, "dispatch");
+        fx.job(&format!("{key}-old"), key, "cancelled");
+        fx.job(&format!("{key}-job"), key, "queued");
+    }
+    fx.env.sql("UPDATE jobs SET status = 'running' WHERE key = 'running-job';
+            UPDATE jobs SET status = 'running' WHERE key = 'merged-job';
+            UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'merged-job'");
+    let writes = fx.writes();
+    for key in ["queued", "running", "merged"] {
+        let error = fx.refused(&fx.pr(&["cancel", key]), "pr_in_use", 3, writes);
+        assert_eq!((error["details"]["jobs"].clone(), error["details"]["prs"].clone()), (json!([format!("{key}-job")]), json!([])));
+        assert_eq!(fx.pr_status(key), "dispatch");
+    }
+
+    // A live PR that needs it holds it (`pr_in_use`, `details.prs`).
+    fx.locked_pr("base", &fx.pay, "dispatch");
+    fx.env.sql(&format!(
+        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+           VALUES ('pay-1', 'dependent', '{}', 'main', 'waiting', 'cpd/pay-1/dependent', cpd_txn(), 't');
+         INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay-1', 'dependent', 'base')",
+        fx.web.display()
+    ));
+    let writes = fx.writes();
+    let error = fx.refused(&fx.pr(&["cancel", "base"]), "pr_in_use", 3, writes);
+    assert_eq!(error["details"]["prs"], json!(["dependent"]));
+
+    // An open pull request is out of scope, a merged one too.
+    fx.locked_pr("opened", &fx.web, "open");
+    let writes = fx.writes();
+    let error = fx.refused(&fx.pr(&["cancel", "opened"]), "illegal_transition", 3, writes);
+    assert_eq!(error["details"]["from"], "open");
+    fx.env.sql("UPDATE prs SET status = 'merged', merged_at = 't' WHERE key = 'opened'");
+    let writes = fx.writes();
+    fx.refused(&fx.pr(&["cancel", "opened"]), "illegal_transition", 3, writes);
 }
 
 // ---------- the plan fingerprint ----------
