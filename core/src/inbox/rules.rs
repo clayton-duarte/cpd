@@ -203,7 +203,7 @@ fn plannotator_url(home: &CpdHome, plan: &PlanId) -> Result<Option<String>, CpdE
 /// repeat across Plans.
 fn plan_reviews(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     let mut stmt = conn.prepare(
-        "SELECT v.plan, v.id, p.context, p.lead_session
+        "SELECT v.plan, v.id, p.context, p.lead_session, v.title
            FROM plan_reviews v JOIN plans p ON p.id = v.plan
           WHERE v.status = 'pending' AND v.number = (SELECT max(w.number) FROM plan_reviews w WHERE w.plan = v.plan)
           ORDER BY v.requested_at, v.plan",
@@ -211,14 +211,18 @@ fn plan_reviews(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, Cpd
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
-        let (plan, review, context, lead): (String, String, String, String) =
-            (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?);
+        let (plan, review, context, lead, title): (String, String, String, String, Option<String>) =
+            (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?);
         let plan = id("Plan id", &plan, PlanId::parse)?;
         out.push(Condition {
             kind: Kind::PlanReview,
             urgency: Urgency::Magenta,
             subject: format!("review:{plan}/{review}"),
-            label: format!("{plan} plan review"),
+            // A review requested before `plan_reviews.title` has none (hs-d291, R3).
+            label: match title {
+                Some(title) => format!("{plan} plan review: {title}"),
+                None => format!("{plan} plan review"),
+            },
             url: plannotator_url(home, &plan)?,
             context: Some(id("Context id", &context, ContextId::parse)?),
             plan: Some(plan),
@@ -849,8 +853,12 @@ mod tests {
     fn a_pending_review_is_a_plan_review_with_its_plannotator_page() {
         let mut f = fixture("plan");
         f.review("r1", "pending");
+        f.sql("UPDATE plan_reviews SET title = 'Add retries' WHERE id = 'r1'");
         let c = one(f.of(Kind::PlanReview));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Magenta, "review:pay/r1", "pay plan review"));
+        assert_eq!(
+            (c.urgency, c.subject.as_str(), c.label.as_str()),
+            (Urgency::Magenta, "review:pay/r1", "pay plan review: Add retries")
+        );
         assert_eq!(c.url, None, "no port file");
         assert_eq!(c.session.as_ref().map(|s| s.as_str()), Some("l-pay"), "its Lead");
         assert_eq!((c.context.as_ref().map(|c| c.as_str()), c.plan.as_ref().map(|p| p.as_str())), (Some("ctx"), Some("pay")));
@@ -863,6 +871,13 @@ mod tests {
         let url = one(f.of(Kind::PlanReview)).url;
         unsafe { std::env::remove_var(URL_HOST) };
         assert_eq!(url.as_deref(), Some("http://review.example:20000/"));
+    }
+
+    #[test]
+    fn a_review_without_a_title_keeps_the_plain_label() {
+        let mut f = fixture("plan");
+        f.review("r1", "pending");
+        assert_eq!(one(f.of(Kind::PlanReview)).label, "pay plan review");
     }
 
     #[test]
