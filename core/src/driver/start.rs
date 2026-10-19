@@ -9,13 +9,12 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use rusqlite::{Connection, OptionalExtension, params};
-use serde_json::json;
 
-use super::ledger::{self, Cause, End, Ladder};
+use crate::attempt::ledger::{self, Cause, End, Ladder, Stage};
 use super::lock::Starter;
 use crate::config::{Catalog, Config, Tier};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{self, Kind, NewEvent};
+use crate::events::{self, NewEvent};
 use crate::git;
 use crate::home::CpdHome;
 use crate::ids::{AttemptId, JobKey, PlanId};
@@ -122,7 +121,7 @@ pub fn start(store: &mut Store, ctx: &StartCtx<'_>, plan: &PlanId, key: &JobKey)
             let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };
             store.write(ctx.command, |tx| {
                 let target = ledger::load(tx, plan, &next.attempt)?;
-                ledger::end(tx, &target, &End::Failed { cause: Cause::Crashed, detail: detail.clone() }, None, &ladder)
+                ledger::end(tx, &target, &End::Failed { cause: Cause::Crashed, detail: detail.clone() }, None, &ladder, Stage::Driver)
             })?;
             drop(lock);
             return Err(error);
@@ -146,7 +145,7 @@ pub fn start(store: &mut Store, ctx: &StartCtx<'_>, plan: &PlanId, key: &JobKey)
 fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey) -> Result<Next, CpdError> {
     let found: Option<String> =
         conn.query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
-    let phase = found.ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str()))?;
+    let phase = found.ok_or_else(|| CpdError::plan_not_found(plan))?;
     let all = jobs::load(conn, plan)?;
     let job = all.iter().find(|j| j.key == key.as_str()).ok_or_else(|| {
         CpdError::new(ErrorCode::JobNotFound, format!("No Job {key} in Plan {plan}."))
@@ -272,8 +271,8 @@ fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &N
         next.tier,
         next.origin.as_str()
     );
-    let data = json!({"number": number, "tier": next.tier.to_string(), "origin": next.origin.as_str()});
-    events::append(tx, NewEvent::new(Kind::AttemptStarted, text, data).plan(plan.clone()).job(key.clone()).attempt(attempt.clone()))?;
+    let event = NewEvent::attempt_started(text, number, &next.tier.to_string(), next.origin.as_str());
+    events::append(tx, event.plan(plan.clone()).job(key.clone()).attempt(attempt.clone()))?;
     Ok(())
 }
 

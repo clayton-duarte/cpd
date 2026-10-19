@@ -7,7 +7,7 @@ use std::time::Duration;
 use time::OffsetDateTime;
 
 use super::engine::Engine;
-use super::log::timestamp;
+use crate::clock::timestamp;
 use super::report::{About, Step};
 use crate::error::CpdError;
 use crate::inbox::model::{Changes, reconcile};

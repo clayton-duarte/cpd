@@ -10,12 +10,12 @@ use std::collections::HashMap;
 use std::fmt;
 use std::time::{Duration, Instant};
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::SOURCE;
 use super::log::Log;
 use crate::error::CpdError;
-use crate::events::{self, Kind, NewEvent};
+use crate::events::{self, NewEvent};
 use crate::inbox::rules::EngineError;
 use crate::ids::{AttemptId, JobKey, PlanId, SessionId};
 use crate::store::Store;
@@ -112,8 +112,8 @@ impl About {
         }
     }
 
-    fn event(&self, text: String, data: Value) -> NewEvent {
-        let event = NewEvent::new(Kind::Error, text, data);
+    fn event(&self, text: String, failure: &Failure) -> NewEvent {
+        let event = NewEvent::error(text, SOURCE, &failure.code, &failure.message, &failure.details);
         match self {
             About::Machine => event,
             About::Plan(p) => event.plan(p.clone()),
@@ -159,6 +159,7 @@ impl Report {
     /// unless the same failure is already reported and not cleared.
     pub(super) fn fail(&mut self, store: &mut Store, log: &mut Log, step: Step, about: About, failure: impl Into<Failure>) {
         let failure = failure.into();
+        self.forget_old();
         let key = (step, about);
         if self.open.get(&key).is_some_and(|(code, _)| *code == failure.code) {
             return;
@@ -177,8 +178,7 @@ impl Report {
             failure.message,
             about.see()
         );
-        let data = json!({"source": SOURCE, "code": failure.code, "message": failure.message, "details": failure.details});
-        match store.write(SOURCE, |tx| events::append(tx, about.event(text, data))) {
+        match store.write(SOURCE, |tx| events::append(tx, about.event(text.clone(), &failure))) {
             Ok(event) => {
                 self.appended.insert(repeated, (Instant::now(), event));
                 self.open.insert(key, (failure.code, event));
@@ -207,12 +207,21 @@ impl Report {
     /// `step` succeeded for `about`: a later failure is reported again.
     pub(super) fn clear(&mut self, step: Step, about: &About) {
         self.open.remove(&(step, about.clone()));
+        self.forget_old();
+    }
+
+    /// Drops what was appended more than `repeat` ago: it no longer holds a later failure back, so an
+    /// object that recovered leaves no entry behind once the period has passed.
+    fn forget_old(&mut self) {
+        let repeat = self.repeat;
+        self.appended.retain(|_, (at, _)| at.elapsed() < repeat);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use crate::home::CpdHome;
 
     fn failure(code: &str) -> Failure {
@@ -250,6 +259,33 @@ mod tests {
             report.clear(Step::E2, &About::Machine);
         }
         assert_eq!(errors(&mut store), 5);
+    }
+
+    /// engine-G6: a failure that cleared leaves nothing in the maps once the repeat period has passed.
+    #[test]
+    fn the_maps_shrink_when_an_object_recovers() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let mut log = Log::open(&home).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        let steps = [Step::E1, Step::E2, Step::E3];
+
+        // Within the period the Event is remembered, to hold a repeat back.
+        let mut report = Report::new(Duration::from_secs(600));
+        report.fail(&mut store, &mut log, Step::E2, About::Machine, failure("tmux_failed"));
+        report.clear(Step::E2, &About::Machine);
+        assert_eq!((report.open.len(), report.appended.len()), (0, 1));
+
+        // Past the period, the next success forgets it.
+        let mut report = Report::new(Duration::ZERO);
+        for step in steps {
+            report.fail(&mut store, &mut log, step, About::Machine, failure("tmux_failed"));
+        }
+        assert_eq!(report.open.len(), 3);
+        for step in steps {
+            report.clear(step, &About::Machine);
+        }
+        assert_eq!((report.open.len(), report.appended.len()), (0, 0));
     }
 
     /// What E8 shows: each failure not cleared, with the id of its `error` Event, also when that Event
