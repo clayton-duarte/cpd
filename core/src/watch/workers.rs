@@ -228,19 +228,19 @@ mod tests {
              CREATE TABLE prs (plan TEXT, key TEXT, status TEXT);
              CREATE TABLE jobs (plan TEXT, key TEXT, pr TEXT, status TEXT, seq INTEGER);
              CREATE TABLE dependencies (plan TEXT, job TEXT, needs TEXT);
-             INSERT INTO plans VALUES ('pay', 'dispatch');
-             INSERT INTO prs VALUES ('pay', 'a', 'dispatch'), ('pay', 'w', 'waiting');
-             INSERT INTO attempts VALUES ('starting'), ('ended');
+             INSERT INTO plans (id, phase) VALUES ('pay', 'dispatch');
+             INSERT INTO prs (plan, key, status) VALUES ('pay', 'a', 'dispatch'), ('pay', 'w', 'waiting');
+             INSERT INTO attempts (status) VALUES ('starting'), ('ended');
              -- ready: no Dependency
-             INSERT INTO jobs VALUES ('pay', 'free', 'a', 'queued', 1);
+             INSERT INTO jobs (plan, key, pr, status, seq) VALUES ('pay', 'free', 'a', 'queued', 1);
              -- ready: its only Dependency is merged
-             INSERT INTO jobs VALUES ('pay', 'done', 'a', 'merged', 2), ('pay', 'after', 'a', 'queued', 3);
-             INSERT INTO dependencies VALUES ('pay', 'after', 'done');
+             INSERT INTO jobs (plan, key, pr, status, seq) VALUES ('pay', 'done', 'a', 'merged', 2), ('pay', 'after', 'a', 'queued', 3);
+             INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'after', 'done');
              -- queued, not ready: a Dependency that is not merged
-             INSERT INTO jobs VALUES ('pay', 'busy', 'a', 'running', 4), ('pay', 'blocked', 'a', 'queued', 5);
-             INSERT INTO dependencies VALUES ('pay', 'blocked', 'busy');
+             INSERT INTO jobs (plan, key, pr, status, seq) VALUES ('pay', 'busy', 'a', 'running', 4), ('pay', 'blocked', 'a', 'queued', 5);
+             INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'blocked', 'busy');
              -- queued, not ready: its PR has not started
-             INSERT INTO jobs VALUES ('pay', 'later', 'w', 'queued', 6);",
+             INSERT INTO jobs (plan, key, pr, status, seq) VALUES ('pay', 'later', 'w', 'queued', 6);",
         )
         .unwrap();
         conn
