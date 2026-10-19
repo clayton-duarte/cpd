@@ -206,3 +206,73 @@ fn an_owned_row_takes_its_prs_policy_not_the_default_of_an_unowned_row() {
     policy_file(&env, "repos/acme/shop.toml", "[pr.feedback]\nchecks = \"any\"\n");
     assert_eq!(failing(&env), [("pr:acme/shop#5".to_owned(), "shop#5 checks failed".to_owned())]);
 }
+
+/// Makes Plan `pay`'s PR `shop` point to the pull request `n` of `acme/shop`.
+fn own_pull_request(env: &TestEnv, n: u32) {
+    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
+    Store::open(&home, 5000)
+        .unwrap()
+        .write("test", |tx| {
+            tx.execute(
+                "INSERT INTO prs (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+                                  pr_number, pr_url, pr_opened_at, pull_request)
+                   VALUES ('pay', 'shop', '/r', 'main', 'shop', 'open', 'cpd/pay/shop', '/w', cpd_txn(), 't', 't',
+                           ?1, 'https://github.com/acme/shop/pull/' || ?1, 't', (SELECT id FROM pull_requests WHERE number = ?1))",
+                [n],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+fn kinds(items: &[Condition]) -> Vec<(Kind, String)> {
+    items.iter().map(|c| (c.kind, c.subject.clone())).collect()
+}
+
+#[test]
+fn a_row_whose_policy_does_not_resolve_is_one_error_condition_and_the_other_items_are_still_computed() {
+    let env = TestEnv::new();
+    setup(&env);
+    pull_request(&env, 5, "checks = 'failed'");
+    own_pull_request(&env, 5);
+    pull_request(&env, 6, "review_decision = 'changes_requested'");
+    pull_request(&env, 7, "checks = 'failed', repo = 'other/x', url = 'https://github.com/other/x/pull/7'");
+    fs::remove_file(env.cpd_home().join("policy/owners/acme.toml")).unwrap();
+
+    let items = found(&env, &[]);
+
+    assert_eq!(
+        kinds(&items),
+        [
+            (Kind::EngineError, "error:E8/pr:acme/shop#5/owner_unknown".to_owned()),
+            (Kind::PrFailing, "pr:other/x#7".to_owned()),
+            (Kind::PrChanges, "pr:acme/shop#6".to_owned()),
+        ]
+    );
+    let error = &items[0];
+    assert_eq!(error.urgency, Urgency::Red);
+    assert!(error.label.contains("owner_unknown") && error.label.contains("acme.toml"), "{}", error.label);
+    assert_eq!(error.plan.as_ref().map(|p| p.as_str()), Some("pay"));
+}
+
+#[test]
+fn a_pr_of_a_context_with_no_owner_is_owned_and_raises_owner_unset_never_the_unowned_rule() {
+    let env = TestEnv::new();
+    setup(&env);
+    pull_request(&env, 5, "checks = 'failed'");
+    own_pull_request(&env, 5);
+    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
+    Store::open(&home, 5000)
+        .unwrap()
+        .write("test", |tx| {
+            tx.execute("UPDATE contexts SET owner = NULL WHERE id = 'ctx'", [])?;
+            Ok(())
+        })
+        .unwrap();
+
+    let items = found(&env, &[]);
+
+    // The unowned rule would key the row by its GitHub `acme/shop` and raise `pr-failing`.
+    assert_eq!(kinds(&items), [(Kind::EngineError, "error:E8/pr:acme/shop#5/owner_unset".to_owned())]);
+    assert!(items[0].label.contains("owner_unset") && items[0].label.contains("ctx"), "{}", items[0].label);
+}
