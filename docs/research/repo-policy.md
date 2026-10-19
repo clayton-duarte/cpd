@@ -34,7 +34,7 @@ Every place a policy reaches an agent today, or where cpd's own code applies one
 
 | # | Item | Where | What it carries |
 |---|---|---|---|
-| I8 | Repo context file | `ls -a` of the cpd repo, `~/dotfiles` is not listed but `~/projects/julias-portfolio-*`: no `AGENTS.md`, `CLAUDE.md` or `.pi/` in any | Nothing today. |
+| I8 | Repo context file and repo skills | `ls -a` of the cpd repo and `~/projects/julias-portfolio-*`: no `AGENTS.md`, `CLAUDE.md`, `.pi/` or `.agents/`. `ls -a ~/dotfiles`: `AGENTS.md` (195 lines, "Instructions for AI agents working in this repo") and `.agents/skills/` (six skills) | cpd and the portfolio repos: nothing. dotfiles: its own instructions and skills, which reach its Workers and any Lead started inside it (section 3.2). |
 | I9 | Repo hooks: setup, quick check, Gate | `.config/wt.toml:1-10` (contract §7.3) | `pre-start` (`npm ci`), `pre-commit` (typecheck, cargo build), `pre-merge` (`npm run verify`). Repo-owned. |
 | I10 | Repo protected list | `.config/cpd.toml` (absent in cpd; contract §7.5) | Read from the Lead Branch's tree, `core/src/git/tamper.rs:16-26`. |
 | I11 | Repo CI | `.github/workflows/ci.yml` | What `pr-feedback` reacts to (I27). Repo-owned. |
@@ -166,7 +166,7 @@ Command: `git grep -nE "hs-[dnqa][0-9]"` (and `-cE` for counts), `git grep -nE "
 
 `clayton-duarte`: 8 hits, all in `docs/archive/cpd1/` (3) and `docs/research/` (5); none reaches an agent. `missionlane`: 0 hits.
 
-## 3. How pi loads instructions, per role
+## 3. How pi loads instructions per role
 
 Every fact below cites pi 1.3.0's docs or dist source under `$PI` (unverified on pro).
 
@@ -193,10 +193,10 @@ Whether a repo's `AGENTS.md` reaches each role today:
 | Role | Repo `AGENTS.md` | Why |
 |---|---|---|
 | Manager | **No** | cwd `~/.cpd` or `~` is outside every repo. |
-| Lead | **No**, by design; **yes by accident** when `plan new` ran inside a repo (then that one repo's file, whichever PRs the Plan has) | cwd is the caller's (3.1). |
+| Lead | **No**, by design; **yes by accident** when `plan new` ran inside a repo (then that one repo's file, whichever PRs the Plan has) | cwd is the caller's (3.1). Evidence: 4 Leads on hs ran in `/home/clayton/dotfiles`, which has an `AGENTS.md` and `.agents/skills` (I8); pi loaded both for them (Leads have no `--no-skills`), whatever repos their Plans touched. |
 | Worker | **Yes**: its PR's repo's committed `AGENTS.md` (the worktree is a checkout), plus any in `~/projects`, `~`, `/home`, `/` | cwd is the Attempt worktree; ancestors are walked to `/`. |
 
-No repo of the cpd Plans has an `AGENTS.md` today (I8), so this is the mechanism, not current content.
+Of the personal repos checked, only `~/dotfiles` has an `AGENTS.md` (I8); cpd has none, so for cpd Plans this is the mechanism, not current content.
 
 ### 3.3 Skills
 
@@ -218,7 +218,7 @@ No repo of the cpd Plans has an `AGENTS.md` today (I8), so this is the mechanism
 
 ### 3.5 Project trust per role
 
-- Worker: `--approve` (`core/src/host/pi.rs:227`), which "Trusts project-local configuration and resources for this process" (`$PI/docs/cli.md:239-240`). A repo's `.pi/extensions`, `.pi/APPEND_SYSTEM.md` and `.pi/settings.json` packages therefore load into its Workers (skills excepted, `--no-skills`).
+- Worker: `--approve` (`core/src/host/pi.rs:227`), which "Trusts project-local configuration and resources for this process" (`$PI/docs/cli.md:237-238`). A repo's `.pi/extensions`, `.pi/APPEND_SYSTEM.md` and `.pi/settings.json` packages therefore load into its Workers (skills excepted, `--no-skills`).
 - Lead and Manager: no flag; pi falls back to `defaultProjectTrust` (`$PI/docs/security.md:65`), which hs sets to `"always"` (`~/.pi/agent/settings.json`; unverified on pro). Their cwd is normally no repo, so nothing project-level loads.
 
 ### 3.6 What cpd passes
@@ -240,7 +240,7 @@ No repo of the cpd Plans has an `AGENTS.md` today (I8), so this is the mechanism
 |---|---|---|
 | `prs.repo` | The realpath of the repo's main worktree (`core/src/pr/add.rs:57`, `:264-271`); `CHECK (length(repo) >= 1)` only (`.schema prs`) | A path, not an owner. Values on hs: `/home/clayton/projects/cpd`, `/home/clayton/dotfiles` (`select distinct repo from prs`). |
 | `pull_requests.repo` | GitHub's `owner/name`, `CHECK (repo LIKE '_%/_%')` (`.schema pull_requests`); written at `pr open` from `gh pr create`'s URL (`core/src/pr/pulls.rs:333-340`) or by the poll | Exact, but exists only **after** `pr open`: too late to choose the Lead's or a Worker's instructions. |
-| `git -C <repo> remote get-url origin` | e.g. `git@github.com:clayton-duarte/cpd.git` (cpd, `~/dotfiles`), `https://github.com/clayton-duarte/julias-portfolio-vite.git` | Local, no network, already the remote cpd pushes to (`core/src/git/run.rs:87` `has_origin`). Needs parsing of both URL forms. An SSH host alias (`git@github-work:org/repo.git`) or `url.insteadOf` would hide the host (guess: common when one machine holds two GitHub identities; unverified on pro). No `origin` (allowed, contract §7.2 "A repo with no origin remote") means no owner. |
+| `git -C <repo> remote get-url origin` | e.g. `git@github.com:clayton-duarte/cpd.git` (cpd, `~/dotfiles`), `https://github.com/clayton-duarte/julias-portfolio-vite.git` | Local, no network, already the remote cpd pushes to (`core/src/git/run.rs:87` `has_origin`). Needs parsing of both URL forms. An SSH host alias (`git@github-work:org/repo.git`) or `url.insteadOf` would hide the host (guess: common when one machine holds two GitHub identities). hs has neither: the `Host` entries of the dotfiles SSH config (`~/dotfiles/home/private_dot_ssh/private_config:7`, `:27`, `:31`, `:35`) are `homeserver`, `mac-pro`, `mac-air`, `*`, and `git config --global --get-regexp '^url\.'` prints nothing. Unverified on pro. No `origin` (allowed, contract §7.2 "A repo with no origin remote") means no owner. |
 | `gh repo view --json owner,isInOrganization` (cwd = repo) | `{"owner":{"login":"clayton-duarte"},"isInOrganization":false}` for cpd | Canonical (resolves aliases through `gh`'s remote resolution), but needs network and the right `gh` account; a renamed or transferred repo returns the new owner. |
 
 The key belongs on the PR at `pr add` (the boundary where `--repo` is parsed), not on the machine (A3), and not deferred to `pr open`.
@@ -349,7 +349,7 @@ Why: it is the only option where mixing is impossible for all three roles and fo
 Open questions for the User:
 
 - **Q1.** Is "one owner per Context (so per Plan)" acceptable? A change that needs a personal and a work repo would be two Plans in two Contexts.
-- **Q2.** Where does the work owners' policy file live on pro? hs-d262 says instances share only cpd; `config.toml` is managed by the personal dotfiles (`docs/contract.md:1884`). May work policy text sit in the personal dotfiles repo, or must it be written on pro only?
+- **Q2.** Where does the work owners' policy file live on pro? hs-d262 says instances share only cpd; `config.toml` is managed by the personal dotfiles (`docs/contract.md:1884`; `~/dotfiles/home/dot_cpd/create_config.toml.tmpl` creates it on every machine, and `~/dotfiles/home/.chezmoidata/pi.yaml` pins pi `1.3.0` for all three). May work policy text sit in the personal dotfiles repo (a `clayton-duarte` repo), or must it be written on pro only?
 - **Q3.** Are `missionlane` and `missionlane-scratch` one policy (one profile, two keys) or two?
 - **Q4.** hs-d220 (merge the base, no local tests, CI is the check): is it a `clayton-duarte` owner policy, or only the cpd repo's? If the cpd repo's, it belongs in the cpd repo's own `AGENTS.md` and must also reach the Lead (whose cwd is not the repo).
 - **Q5.** Should `pr rebase`'s `--force-with-lease` (B5) stay for every owner, given that the skill tells Leads to push "plain, never forced"?
