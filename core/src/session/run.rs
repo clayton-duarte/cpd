@@ -18,7 +18,7 @@ use super::moves::first_message;
 use super::port;
 use super::row::{self, Role, Row, State};
 use super::state::scoped;
-use super::{Env, RunArgs, bad_row, not_a_lead, state};
+use super::{Env, RunArgs, not_a_lead, state};
 use crate::config::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::host::exe::{Exe, Refusal, Watched};
@@ -206,7 +206,7 @@ fn adapter_missing(env: &mut Env, id: &SessionId, running: Duration) -> Result<b
         return Ok(false);
     }
     let since = OffsetDateTime::parse(&row.state_at, &Rfc3339)
-        .map_err(|e| bad_row(format!("{} has state_at {:?}: {e}", row.id, row.state_at)))?;
+        .map_err(|e| CpdError::bad_row(format!("{} has state_at {:?}: {e}", row.id, row.state_at)))?;
     // A `stopped` the wrapper set when the previous pi exited does not count while no pi ran.
     let stopped_for = Duration::try_from(OffsetDateTime::now_utc() - since).unwrap_or_default().min(running);
     if stopped_for <= ADAPTER_WATCHDOG {
@@ -246,7 +246,7 @@ fn reload_due(env: &mut Env, dirs: &PiDirs, id: &SessionId) -> Result<bool, CpdE
     let Some(file) = existing_file(dirs, &row) else { return Ok(false) };
     let quiet = Duration::from_secs(u64::from(env.config.timeouts.fork_quiet_seconds));
     let since = OffsetDateTime::parse(&row.state_at, &Rfc3339)
-        .map_err(|e| bad_row(format!("{} has state_at {:?}: {e}", row.id, row.state_at)))?;
+        .map_err(|e| CpdError::bad_row(format!("{} has state_at {:?}: {e}", row.id, row.state_at)))?;
     let idle_for = Duration::try_from(OffsetDateTime::now_utc() - since).unwrap_or_default();
     let finished = std::fs::read_to_string(&file).is_ok_and(|text| turn_finished(&text));
     Ok(reload_now(row.state, &row.place, idle_for, finished, quiet_since(&file, quiet)))
@@ -343,7 +343,7 @@ fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<LeadStart>, C
         }
         return Ok(Some(LeadStart::Resume { file }));
     }
-    let tier = Tier::parse(&row.tier).map_err(|_| bad_row(format!("{} has tier {:?}", row.id, row.tier)))?;
+    let tier = Tier::parse(&row.tier).map_err(|_| CpdError::bad_row(format!("{} has tier {:?}", row.id, row.tier)))?;
     let models = &env.config.tiers;
     let model = match tier.letter() {
         Letter::O => &models.o,

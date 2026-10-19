@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::row::{self, Attempt};
-use super::{Env, SubmitArgs, bad_row};
+use super::{Env, SubmitArgs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git::{self, HookOutcome, Operation, run_hook};
@@ -49,9 +49,9 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
     let base = attempt
         .base_sha
         .clone()
-        .ok_or_else(|| bad_row(format!("Attempt {plan}/{id} is running with no base_sha")))?;
+        .ok_or_else(|| CpdError::bad_row(format!("Attempt {plan}/{id} is running with no base_sha")))?;
     let ahead = git::run::ok(&root, &["rev-list", "--count", &format!("{base}..HEAD")])?;
-    let review = env.store.read(|conn| crate::plan::jobs::load(conn, &plan)?.iter().find(|j| j.key == attempt.job).map(|j| j.review).ok_or_else(|| bad_row(format!("Attempt {plan}/{id} has no Job {}", attempt.job))))?;
+    let review = env.store.read(|conn| crate::plan::jobs::load(conn, &plan)?.iter().find(|j| j.key == attempt.job).map(|j| j.review).ok_or_else(|| CpdError::bad_row(format!("Attempt {plan}/{id} has no Job {}", attempt.job))))?;
     if review {
         require_review(&env, &plan, &id, &attempt.job, &base, ahead.trim() != "0")?;
     } else if ahead.trim() == "0" {
@@ -101,7 +101,7 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
             now.job,
             if review { " (a review Job: nothing to check)" } else { " and passed the quick check" }
         );
-        let job = crate::ids::JobKey::parse(&now.job).map_err(|_| bad_row(format!("job key {:?}", now.job)))?;
+        let job = crate::ids::JobKey::parse(&now.job).map_err(|_| CpdError::bad_row(format!("job key {:?}", now.job)))?;
         append(
             tx,
             NewEvent::attempt_status(text, "running", "merging")

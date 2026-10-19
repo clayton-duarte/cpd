@@ -5,7 +5,6 @@
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-use super::bad_row;
 use super::fingerprint::PrSpec;
 use super::jobs::Job;
 use crate::error::CpdError;
@@ -72,7 +71,7 @@ pub fn load_others(conn: &Connection, plan: &PlanId) -> Result<Vec<Other>, CpdEr
     rows.into_iter()
         .map(|(plan, pr, repo, job, status, touches)| {
             let touches = serde_json::from_str::<Vec<String>>(&touches)
-                .map_err(|_| bad_row(format!("Job {plan}/{job} has touches {touches:?}")))?;
+                .map_err(|_| CpdError::bad_row(format!("Job {plan}/{job} has touches {touches:?}")))?;
             Ok(Other { plan, pr, repo, job, status, touches })
         })
         .collect()

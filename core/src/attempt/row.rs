@@ -3,7 +3,6 @@
 use rusqlite::{Connection, OptionalExtension, Row, params_from_iter};
 use serde_json::{Value, json};
 
-use super::bad_row;
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{AttemptId, JobKey, PlanId};
 
@@ -98,7 +97,7 @@ fn query(conn: &Connection, plan: &PlanId, filter: &str, args: &[&str]) -> Resul
             attempt.metrics = match metrics {
                 None => Value::Null,
                 Some(text) => serde_json::from_str(&text)
-                    .map_err(|_| bad_row(format!("Attempt {plan}/{} has metrics {text:?}", attempt.id)))?,
+                    .map_err(|_| CpdError::bad_row(format!("Attempt {plan}/{} has metrics {text:?}", attempt.id)))?,
             };
             Ok(attempt)
         })

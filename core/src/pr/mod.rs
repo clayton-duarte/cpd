@@ -194,7 +194,7 @@ fn plan_phase(conn: &rusqlite::Connection, plan: &PlanId) -> Result<Phase, CpdEr
         .optional()?
         .ok_or_else(|| CpdError::plan_not_found(plan))?;
     Phase::parse(&phase)
-        .ok_or_else(|| CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: Plan {plan} has phase {phase:?}.")))
+        .ok_or_else(|| CpdError::bad_row(format!("Plan {plan} has phase {phase:?}")))
 }
 
 /// The PR `key` among `prs`, else `pr_not_found` (exit 4).

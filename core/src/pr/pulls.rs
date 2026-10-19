@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, Row};
 use serde_json::{Value, json};
 
 use super::gh::{Listed, Membership, PolledPr};
-use crate::error::{CpdError, ErrorCode};
+use crate::error::CpdError;
 use crate::ids::{PlanId, PrKey};
 use crate::store::WriteTxn;
 
@@ -80,7 +80,7 @@ impl PullRequest {
     pub(super) fn polled(&self) -> Result<PolledPr, CpdError> {
         use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
         let bad = |what: &str, value: &str| {
-            CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: pull request {} has {what} {value:?}.", self.id))
+            CpdError::bad_row(format!("pull request {} has {what} {value:?}", self.id))
         };
         Ok(PolledPr {
             repo: self.repo.clone(),
@@ -118,7 +118,7 @@ impl PullRequest {
 pub fn load(conn: &Connection, id: i64) -> Result<PullRequest, CpdError> {
     conn.query_row(&format!("SELECT {COLUMNS} FROM pull_requests WHERE id = ?1"), [id], PullRequest::from_row)
         .optional()?
-        .ok_or_else(|| CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: no pull request {id}.")))
+        .ok_or_else(|| CpdError::bad_row(format!("no pull request {id}")))
 }
 
 /// The row of `(repo, number)`, if any.
@@ -167,7 +167,7 @@ pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, PrKey, PullRe
     rows.into_iter()
         .map(|(plan, key, pull)| {
             let bad = |what: &str, value: &str| {
-                CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: a PR has {what} {value:?}."))
+                CpdError::bad_row(format!("a PR has {what} {value:?}"))
             };
             Ok((PlanId::parse(&plan).map_err(|_| bad("Plan id", &plan))?, PrKey::parse(&key).map_err(|_| bad("PR key", &key))?, pull))
         })

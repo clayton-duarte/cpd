@@ -259,7 +259,7 @@ fn queued_by(conn: &Connection, plan: &PlanId, review: ReviewId) -> Result<Optio
             |r| r.get(0),
         )
         .optional()?;
-    raw.map(|text| serde_json::from_str(&text).map_err(|e| super::bad_row(format!("plan-review Event of {plan}/{review}: {e}")))).transpose()
+    raw.map(|text| serde_json::from_str(&text).map_err(|e| CpdError::bad_row(format!("plan-review Event of {plan}/{review}: {e}")))).transpose()
 }
 
 fn review_decided(id: &PlanId, review: &Review) -> CpdError {

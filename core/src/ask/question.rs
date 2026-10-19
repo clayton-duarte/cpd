@@ -89,7 +89,7 @@ fn open(tx: &WriteTxn<'_>, plan: &PlanId, attempt: &AttemptId, question: &str) -
     }
     let session = session
         .and_then(|s| SessionId::parse(&s).ok())
-        .ok_or_else(|| bad_row(format!("Attempt {attempt} is running with no valid Worker Session")))?;
+        .ok_or_else(|| CpdError::bad_row(format!("Attempt {attempt} is running with no valid Worker Session")))?;
     let asker = Asker { plan: plan.clone(), attempt: attempt.clone(), job: attempt.job().clone(), session };
 
     let number: u32 = tx.query_row(
@@ -207,11 +207,8 @@ fn settle(env: &mut Env, asker: &Asker, id: &EscalationId, timed_out: bool) -> R
         match (status.as_str(), answer) {
             ("answered", Some(answer)) => Ok(Settled::Answered(answer)),
             ("expired", _) => Ok(Settled::TimedOut),
-            _ => Err(bad_row(format!("Escalation {id} is {status} after the wait"))),
+            _ => Err(CpdError::bad_row(format!("Escalation {id} is {status} after the wait"))),
         }
     })
 }
 
-fn bad_row(what: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: {what}."))
-}

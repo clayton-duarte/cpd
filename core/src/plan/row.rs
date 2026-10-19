@@ -4,7 +4,6 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
-use super::bad_row;
 use crate::error::CpdError;
 use crate::ids::{ContextId, PlanId, PrKey, SessionId};
 
@@ -121,8 +120,8 @@ fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
 impl PlanRow {
     fn parse(raw: Raw) -> Result<PlanRow, CpdError> {
         let (id, context, title, jira, pr_key, repo, base, lead_branch, lead_worktree, phase, lead_session, pull_request, all_merged_at, created_at, locked_at, done_at, archived_at) = raw;
-        let id = PlanId::parse(&id).map_err(|_| bad_row(format!("Plan id {id:?}")))?;
-        let field = |name: &str, value: &str| bad_row(format!("Plan {id} has {name} {value:?}"));
+        let id = PlanId::parse(&id).map_err(|_| CpdError::bad_row(format!("Plan id {id:?}")))?;
+        let field = |name: &str, value: &str| CpdError::bad_row(format!("Plan {id} has {name} {value:?}"));
         let pull_request = match pull_request {
             (Some(number), Some(url), Some(opened_at)) => Some(json!({"number": number, "url": url, "opened_at": opened_at})),
             _ => None,
@@ -139,7 +138,7 @@ impl PlanRow {
                 all_merged_at,
             }),
             (None, None, None, None) => None,
-            _ => return Err(bad_row(format!("Plan {id} has a partial PR row"))),
+            _ => return Err(CpdError::bad_row(format!("Plan {id} has a partial PR row"))),
         };
         Ok(PlanRow {
             context: ContextId::parse(&context).map_err(|_| field("context", &context))?,

@@ -174,12 +174,6 @@ impl Env {
     }
 }
 
-/// A row the database holds in a shape the binary does not accept: it was
-/// changed outside cpd, or by a bug.
-fn bad_row(what: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: {what}."))
-}
-
 /// The Plan's phase, else `plan_not_found`.
 fn plan_phase(conn: &Connection, plan: &PlanId) -> Result<String, CpdError> {
     conn.query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))

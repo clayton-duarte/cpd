@@ -77,7 +77,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Pr>, CpdError> {
         .map(|(key, repo, base, lead_branch, status, lead_worktree)| {
             let needs = stmt.query_map([plan.as_str(), key.as_str()], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
             let key = PrKey::parse(&key).map_err(|_| {
-                CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: Plan {plan} has a PR key {key:?}."))
+                CpdError::bad_row(format!("Plan {plan} has a PR key {key:?}"))
             })?;
             Ok(Pr { key, repo: PathBuf::from(repo), base, lead_branch, status, needs, lead_worktree })
         })

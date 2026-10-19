@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::fingerprint::plan_fingerprint;
 use super::jobs::{self, Job};
 use super::row::Phase;
-use super::{Env, ShowArgs, bad_row};
+use super::{Env, ShowArgs};
 use crate::error::CpdError;
 use crate::events::highest_id;
 use crate::ids::{ContextId, PlanId, SessionId};
@@ -49,8 +49,8 @@ type RawHead = (String, String, String, Option<String>, String, String, String, 
 
 fn parse_head(raw: RawHead) -> Result<Head, CpdError> {
     let (id, context, title, jira, phase, lead_session, created_at, locked_at, done_at, archived_at) = raw;
-    let id = PlanId::parse(&id).map_err(|_| bad_row(format!("Plan id {id:?}")))?;
-    let field = |name: &str, value: &str| bad_row(format!("Plan {id} has {name} {value:?}"));
+    let id = PlanId::parse(&id).map_err(|_| CpdError::bad_row(format!("Plan id {id:?}")))?;
+    let field = |name: &str, value: &str| CpdError::bad_row(format!("Plan {id} has {name} {value:?}"));
     Ok(Head {
         context: ContextId::parse(&context).map_err(|_| field("context", &context))?,
         phase: Phase::parse(&phase).ok_or_else(|| field("phase", &phase))?,

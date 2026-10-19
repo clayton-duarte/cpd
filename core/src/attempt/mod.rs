@@ -15,7 +15,7 @@ mod submit;
 use crate::args::PlanArg;
 use crate::driver;
 use crate::env::Env;
-use crate::error::{CpdError, ErrorCode};
+use crate::error::CpdError;
 use crate::ids::{AttemptId, JobKey};
 use crate::output::Output;
 
@@ -86,8 +86,3 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
     }
 }
 
-/// A row the database holds in a shape the binary does not accept: it was
-/// changed outside cpd, or by a bug.
-fn bad_row(what: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: {what}."))
-}

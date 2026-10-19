@@ -101,10 +101,7 @@ fn jobs(conn: &Connection, plan: &str, pr: &str) -> Result<Vec<Value>, CpdError>
     rows.into_iter()
         .map(|(key, status, title, touches)| {
             let touches: Value = serde_json::from_str(&touches).map_err(|e| {
-                CpdError::new(
-                    crate::error::ErrorCode::StoreFailed,
-                    format!("The database holds an invalid row: Job {key} of Plan {plan} has touches {touches:?}: {e}."),
-                )
+                CpdError::bad_row(format!("Job {key} of Plan {plan} has touches {touches:?}: {e}"))
             })?;
             Ok(json!({"key": key, "status": status, "title": title, "touches": touches}))
         })

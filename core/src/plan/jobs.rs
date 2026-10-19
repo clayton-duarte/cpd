@@ -7,7 +7,6 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::bad_row;
 use crate::error::CpdError;
 use crate::ids::PlanId;
 
@@ -94,7 +93,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 serde_json::from_str::<Value>(text)
                     .ok()
                     .filter(Value::is_array)
-                    .ok_or_else(|| bad_row(format!("Job {plan}/{key} has {name} {text:?}")))
+                    .ok_or_else(|| CpdError::bad_row(format!("Job {plan}/{key} has {name} {text:?}")))
             };
             Ok(Job {
                 touches: array("touches", &touches)?,

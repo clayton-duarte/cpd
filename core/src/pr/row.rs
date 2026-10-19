@@ -45,7 +45,7 @@ pub(super) struct PrRow {
 impl PrRow {
     /// The PR's Lead worktree: set from the status `dispatch` on (`prs` CHECK).
     pub fn lead(&self, plan: &PlanId) -> Result<&PathBuf, CpdError> {
-        self.lead_worktree.as_ref().ok_or_else(|| bad_row(format!("PR {} of Plan {plan} has no Lead worktree", self.key)))
+        self.lead_worktree.as_ref().ok_or_else(|| CpdError::bad_row(format!("PR {} of Plan {plan} has no Lead worktree", self.key)))
     }
 
     /// `{key, status, pr: {number, url, opened_at}}`, as the commands print the PR.
@@ -73,10 +73,6 @@ pub(super) struct PlanRow {
     pub phase: Phase,
     /// Every PR in key order, `cancelled` ones included.
     pub prs: Vec<PrRow>,
-}
-
-fn bad_row(what: String) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: {what}."))
 }
 
 impl PlanRow {
@@ -112,7 +108,7 @@ pub(super) fn load(conn: &Connection, id: &PlanId) -> Result<PlanRow, CpdError> 
             rusqlite::Error::QueryReturnedNoRows => CpdError::plan_not_found(id),
             e => e.into(),
         })?;
-    let phase = Phase::parse(&phase).ok_or_else(|| bad_row(format!("Plan {id} has phase {phase:?}")))?;
+    let phase = Phase::parse(&phase).ok_or_else(|| CpdError::bad_row(format!("Plan {id} has phase {phase:?}")))?;
     let mut stmt = conn.prepare(
         "SELECT key, repo, base, lead_branch, lead_worktree, status, pr_number, pr_url, pr_opened_at, pull_request
            FROM prs WHERE plan = ?1 ORDER BY key",
@@ -134,7 +130,7 @@ pub(super) fn load(conn: &Connection, id: &PlanId) -> Result<PlanRow, CpdError> 
     let prs = raw
         .into_iter()
         .map(|(key, repo, base, lead_branch, lead_worktree, status, pull, pull_request)| {
-            let key = PrKey::parse(&key).map_err(|_| bad_row(format!("Plan {id} has a PR key {key:?}")))?;
+            let key = PrKey::parse(&key).map_err(|_| CpdError::bad_row(format!("Plan {id} has a PR key {key:?}")))?;
             let pull = match pull {
                 (Some(number), Some(url), Some(opened_at)) => Some(Pull { number, url, opened_at }),
                 _ => None,

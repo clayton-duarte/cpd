@@ -3,7 +3,7 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 
-use super::{CancelArgs, Env, bad_row, find, plan_phase};
+use super::{CancelArgs, Env, find, plan_phase};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::{AttemptId, JobKey, PlanId};
@@ -87,7 +87,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey) -> Result<Decision, Cp
                 .optional()?;
             let attempt = active
                 .and_then(|id| AttemptId::parse(&id).ok())
-                .ok_or_else(|| bad_row(format!("Job {plan}/{key} is running with no active Attempt")))?;
+                .ok_or_else(|| CpdError::bad_row(format!("Job {plan}/{key} is running with no active Attempt")))?;
             Ok(Decision::Request(job, attempt))
         }
         _ => Ok(Decision::Cancel(job)),

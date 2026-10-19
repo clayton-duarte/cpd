@@ -180,7 +180,7 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
     }
     // A Lead has a Plan; a Context's Manager has none.
     if (lead.role == Role::Lead) == lead.plan.is_none() {
-        return Err(super::bad_row(format!("{} {} has plan {:?}", lead.role.as_str(), lead.id, lead.plan)));
+        return Err(CpdError::bad_row(format!("{} {} has plan {:?}", lead.role.as_str(), lead.id, lead.plan)));
     }
     let tmux = env.tmux();
     let cockpit = env.config.tmux.cockpit_session.clone();
@@ -312,7 +312,7 @@ pub fn close_lead(store: &mut Store, tmux: &Tmux, cockpit: &str, id: &SessionId,
     if !live(&panes) {
         return Ok(Closed { pane: Some(pane), already: true });
     }
-    let pane_id = PaneId::parse(&pane).ok_or_else(|| super::bad_row(format!("tmux_pane {pane:?}")))?;
+    let pane_id = PaneId::parse(&pane).ok_or_else(|| CpdError::bad_row(format!("tmux_pane {pane:?}")))?;
     tmux.kill_pane(&pane_id)?;
 
     // pi's adapter may report `stopped` as the pane dies, which changes the
@@ -337,7 +337,7 @@ pub fn close_lead(store: &mut Store, tmux: &Tmux, cockpit: &str, id: &SessionId,
 pub(super) fn close_own(env: &mut Env, id: &SessionId, command: &str) -> Result<(), CpdError> {
     let lead = env.store.read(|conn| row::load(conn, id))?;
     let Some(pane) = lead.tmux_pane.clone() else { return Ok(()) };
-    let pane_id = PaneId::parse(&pane).ok_or_else(|| super::bad_row(format!("tmux_pane {pane:?}")))?;
+    let pane_id = PaneId::parse(&pane).ok_or_else(|| CpdError::bad_row(format!("tmux_pane {pane:?}")))?;
     let why = format!("its pane {pane} was closed");
     env.store.write(command, |tx| pane_gone(tx, &lead.id, lead.state.as_str(), Some(&pane), &why))?;
     env.tmux().kill_pane(&pane_id)

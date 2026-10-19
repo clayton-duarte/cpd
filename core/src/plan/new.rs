@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
 use super::lead::{self, Lead};
-use super::{Env, NewArgs, bad_row, read_text_file, write_file};
+use super::{Env, NewArgs, read_text_file, write_file};
 use crate::args::Text;
 use crate::context::render::markdown;
 use crate::context::{By, ContextRow, Contexts, Draft, PlanRef, Record, plan_repos};
@@ -43,8 +43,8 @@ fn find(conn: &Connection, id: &PlanId) -> Result<Option<Created>, CpdError> {
     raw.map(|(context, title, jira, phase, lead_session, name, cwd)| {
         Ok(Created {
             id: id.clone(),
-            context: ContextId::parse(&context).map_err(|_| bad_row(format!("Plan {id} has context {context:?}")))?,
-            lead_session: SessionId::parse(&lead_session).map_err(|_| bad_row(format!("Plan {id} has lead_session {lead_session:?}")))?,
+            context: ContextId::parse(&context).map_err(|_| CpdError::bad_row(format!("Plan {id} has context {context:?}")))?,
+            lead_session: SessionId::parse(&lead_session).map_err(|_| CpdError::bad_row(format!("Plan {id} has lead_session {lead_session:?}")))?,
             title,
             jira,
             phase,
@@ -115,7 +115,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
         append(tx, event.plan(id.clone()).session(session.clone()))?;
         Ok(())
     })?;
-    let plan = env.store.read(|conn| find(conn, &id))?.ok_or_else(|| bad_row(format!("Plan {id} was just created")))?;
+    let plan = env.store.read(|conn| find(conn, &id))?.ok_or_else(|| CpdError::bad_row(format!("Plan {id} was just created")))?;
 
     // 2. The `plan` record; 3. the first message; 4. the Lead's window.
     let record = write_record(&mut env, &plan)?;
@@ -212,7 +212,7 @@ fn listed(conn: &Connection, id: &PlanId) -> Result<Vec<Value>, CpdError> {
 /// Returns its id.
 fn write_record(env: &mut Env, plan: &Created) -> Result<String, CpdError> {
     let draft = Draft::Plan(PlanRef { id: plan.id.clone(), machine: env.config.machine.clone(), jira: plan.jira.clone() });
-    let title: Text = plan.title.parse().map_err(|_| bad_row(format!("Plan {} has title {:?}", plan.id, plan.title)))?;
+    let title: Text = plan.title.parse().map_err(|_| CpdError::bad_row(format!("Plan {} has title {:?}", plan.id, plan.title)))?;
     let written = Contexts::new(&env.config, &mut env.store).write(&plan.context, "plan new", writer()?, &title, draft)?;
     Ok(written.record.id.to_string())
 }
