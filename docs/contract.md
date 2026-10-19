@@ -16,6 +16,7 @@ Evidence labels, as in the research notes: **verified** means run on the homeser
 6. [The tmux host](#6-the-tmux-host)
 7. [git and the Gate](#7-git-and-the-gate)
 8. [Configuration](#8-configuration)
+   - [8.3 Policies](#83-policies)
 9. [Tiers](#9-tiers)
 10. [Traceability](#10-traceability)
 
@@ -2087,6 +2088,10 @@ work_session = "cpd-work"    # the hidden session for Workers and watch
 | `tmux.socket`, `tmux.cockpit_session`, `tmux.work_session` | text | above | `^[A-Za-z0-9_-]{1,32}$`; the two sessions differ |
 
 Removed by R19: `default_review_tier` and `review_mode` (there is no Reviewer). Removed from cpd 1 §5: `herdrSession` (herdr is dropped) and `askTimeoutMinutes`, `attemptTimeoutMinutes`, `tickSeconds`, `prPollSeconds`, which moved into tables. `CPD_HOME` stays an environment variable, not a key.
+
+### 8.3 Policies
+
+(skeleton: filled by Job policy-docs)
 
 ## 9. Tiers
 
