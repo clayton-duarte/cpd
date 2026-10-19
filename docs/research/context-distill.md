@@ -95,3 +95,7 @@ What a one-shot pi auxiliary agent needs from cpd, from this pilot.
 - **Where it fails.** (1) Completeness over long lists, different ids each run, so a retry is a fresh draw (prompt v4 removed it for Sonnet in 5 runs; not for Haiku). (2) A cheaper model: Haiku missed 13 records and cited one that is not in force. (3) More reasoning effort: it enlarges the output past the size limit. (4) Parallel runs of one Context are a hazard for timings, not for results; cpd's per-Context lock prevents them in the product.
 - **What an Epic B agent should assume.** One-shot, no tools, no session: everything it needs is in files; everything it must satisfy is checked by cpd after the fact; failure is the normal case to design for (an `error` Event with details, the previous derived file stays); there is no cost report unless the run uses `--mode json`; and the time is in the minute range, so only a background, debounced engine step can call it.
 - **Open for Epic B** (not measured here): whether a repair turn ("you missed these ids, add them") fixes an invalid digest cheaper than a full rerun; how the cost grows past 1,000 records (the Index alone, about 10 bytes a record, is 11% of the 32 KB limit now and reaches it at about 3,000 in-force records); and the other Tiers' behaviour on other tasks.
+
+## Repair turn against a full rerun (Job `d2-repair`, hs-d244 D-c)
+
+Work in progress: measurements below.
