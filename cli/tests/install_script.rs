@@ -23,7 +23,12 @@ struct Install {
 /// Runs the checkout's script with a fake cargo, which records that it ran and writes a fake `cpd`
 /// whose `--version` is `version`.
 fn install(env: &TestEnv, checkout: &Checkout, version: &str) -> Install {
-    let built = env.fake("cpd-built", &format!("case \"$1\" in --version) echo '{version}' ;; esac"));
+    install_with(env, checkout, version, "")
+}
+
+/// As [`install`], with `extra` shell code in the fake `cpd` before its `--version` case.
+fn install_with(env: &TestEnv, checkout: &Checkout, version: &str, extra: &str) -> Install {
+    let built = env.fake("cpd-built", &format!("{extra}\ncase \"$1\" in --version) echo '{version}' ;; esac"));
     let target = env.root().join("target");
     let cargo = env.fake("fake-cargo", &format!("mkdir -p '{t}/release' && cp '{}' '{t}/release/cpd'", built.display(), t = target.display()));
     let out: Output = env
@@ -186,4 +191,59 @@ fn a_version_without_a_store_verdict_or_that_fails_is_refused() {
     assert_eq!(run.exit, 1, "{}", run.stderr);
     assert!(run.stderr.contains("reports no store verdict"), "{}", run.stderr);
     assert!(!installed(&env));
+}
+
+const CONFIG: &str = r#"{"ok":true,"config":{"tmux":{"socket":"s","cockpit_session":"cock","work_session":"work"}}}"#;
+
+/// A fake `tmux` on `PATH`: the cockpit has `main` and the work session has `watch`.
+fn fake_tmux(env: &TestEnv) {
+    env.fake("tmux", "case \"$*\" in *list-windows*cock*) echo main;; *list-windows*work*) echo watch;; esac");
+}
+
+fn follow_ups(env: &TestEnv) -> Vec<String> {
+    env.calls("cpd-built").into_iter().map(|c| c.join(" ")).filter(|c| c.starts_with("tui") || c.starts_with("watch")).collect()
+}
+
+#[test]
+fn a_failing_config_is_printed_and_makes_the_script_exit_non_zero() {
+    let env = TestEnv::new();
+    let checkout = Checkout::new(&env, &[]);
+    fake_tmux(&env);
+    let extra = r#"case "$1" in config) echo '{"ok":false,"error":{"code":"lock_timeout"}}'; echo 'waiting' >&2; exit 1;; esac"#;
+
+    let run = install_with(&env, &checkout, &version("null"), extra);
+
+    assert_eq!(run.exit, 1, "{}", run.stderr);
+    assert!(installed(&env));
+    assert!(run.stderr.contains("cpd install follow-up failed: cpd config: "), "{}", run.stderr);
+    assert!(run.stderr.contains("lock_timeout"), "{}", run.stderr);
+    assert!(follow_ups(&env).is_empty());
+}
+
+#[test]
+fn a_failing_follow_up_is_printed_and_the_later_ones_still_run() {
+    let env = TestEnv::new();
+    let checkout = Checkout::new(&env, &[]);
+    fake_tmux(&env);
+    let extra = format!(r#"case "$1" in config) echo '{CONFIG}';; tui) echo 'no cockpit' >&2; exit 3;; watch) echo '{{"ok":true}}';; esac"#);
+
+    let run = install_with(&env, &checkout, &version("null"), &extra);
+
+    assert_eq!(run.exit, 1, "{}", run.stderr);
+    assert!(run.stderr.contains("cpd install follow-up failed: cpd tui --respawn exited 3"), "{}", run.stderr);
+    assert_eq!(follow_ups(&env), ["tui --respawn", "watch --ensure"]);
+}
+
+#[test]
+fn the_follow_ups_run_after_a_slow_config() {
+    let env = TestEnv::new();
+    let checkout = Checkout::new(&env, &[]);
+    fake_tmux(&env);
+    // A migration holds the setup lock: cpd config answers only after a while.
+    let extra = format!(r#"case "$1" in config) sleep 2; echo '{CONFIG}';; watch) echo '{{"ok":true}}';; esac"#);
+
+    let run = install_with(&env, &checkout, &version("null"), &extra);
+
+    assert_eq!(run.exit, 0, "{}", run.stderr);
+    assert_eq!(follow_ups(&env), ["tui --respawn", "watch --ensure"]);
 }
