@@ -106,7 +106,7 @@ fn not_a_terminal(command: &str) -> CpdError {
 }
 
 /// The re-read periods `(coalesce, refresh)` of a view that re-reads its snapshot at least every `refresh` and, on
-/// Events, at most once per `coalesce` (`plan`, `widgets`, `statusbar`; commands.md §17): the release values given, or
+/// Events, at most once per `coalesce` (`plan`, `widgets`, `statusbar`, `tree`; commands.md §17): the release values given, or
 /// in a debug build the test's `CPD_TEST_VIEW_REFRESH` for `refresh` (contract §1.2 "Test overrides"), the coalescing
 /// then at most that.
 fn reread(coalesce: Duration, refresh: Duration) -> (Duration, Duration) {

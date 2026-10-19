@@ -73,7 +73,7 @@ Exit codes (kept from cpd 1 §2):
 | `CPD_TEST_KILL_PAUSE` | the pause between A9's `kill-window` tries (1 s, §3.4) |
 | `CPD_TEST_BACKOFF_UNIT` | the unit of E3's spawn back-off, `min(2^k, 300)` units (1 s, §3.7) |
 | `CPD_TEST_PR_POLL` | E5's `watch.pr_poll_seconds`, the time from the end of one PR poll to the next (§3.7, §8.2) |
-| `CPD_TEST_VIEW_REFRESH` | how often the `plan`, `widgets` and `statusbar` views re-read the store with no Event (2 s, `commands.md` §17); their coalescing of Events (500 ms) is then at most that |
+| `CPD_TEST_VIEW_REFRESH` | how often the `plan`, `widgets`, `statusbar` and `tree` views re-read the store with no Event (2 s, `commands.md` §17); their coalescing of Events (500 ms) is then at most that |
 
 `commands.md` introduces more codes, most of them cpd 1's (cpd 1 §11 and its `src/`); each is specified at the command that returns it, under the same exit meanings:
 

@@ -51,15 +51,16 @@ use view::{Effect, View};
 /// A view takes at most one snapshot per this long, whatever the Event rate (commands.md §17).
 const SNAPSHOT_EVERY: Duration = Duration::from_millis(500);
 /// A snapshot is taken at least this often even with no Event: a pull request's checks can change with none (§17).
+/// Tests shorten it with `CPD_TEST_VIEW_REFRESH` ([`super::reread`]).
 const SNAPSHOT_AT_LEAST_EVERY: Duration = Duration::from_secs(2);
 /// How long the loop waits for a key or a click before it looks at the follower again and redraws. The spinner turns
 /// every 100 ms (`palette::frame`), so the tree is redrawn at least that often.
 const TICK: Duration = Duration::from_millis(100);
 
-/// A new snapshot is due: an Event came and `since` the last one reaches [`SNAPSHOT_EVERY`], or `since` reaches
-/// [`SNAPSHOT_AT_LEAST_EVERY`].
-fn snapshot_due(dirty: bool, since: Duration) -> bool {
-    (dirty && since >= SNAPSHOT_EVERY) || since >= SNAPSHOT_AT_LEAST_EVERY
+/// A new snapshot is due: an Event came and `since` the last one reaches `every` ([`SNAPSHOT_EVERY`]), or `since`
+/// reaches `at_least_every` ([`SNAPSHOT_AT_LEAST_EVERY`]; both from [`super::reread`]).
+fn snapshot_due(dirty: bool, since: Duration, (every, at_least_every): (Duration, Duration)) -> bool {
+    (dirty && since >= every) || since >= at_least_every
 }
 
 pub(super) fn run() -> Result<Output, CpdError> {
@@ -84,6 +85,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
 }
 
 fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View, runner: &Runner) -> std::io::Result<()> {
+    let periods = super::reread(SNAPSHOT_EVERY, SNAPSHOT_AT_LEAST_EVERY);
     let mut follower = Follower::start(view.tree.events_cursor).ok();
     let mut dirty = false;
     let mut last_snapshot = Instant::now();
@@ -101,7 +103,7 @@ fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View,
                 }
             }
         }
-        if snapshot_due(dirty, last_snapshot.elapsed()) {
+        if snapshot_due(dirty, last_snapshot.elapsed(), periods) {
             match read::tree(store) {
                 Ok(tree) => view.refresh(tree),
                 Err(e) => view.note = e.message().to_owned(),
@@ -151,7 +153,7 @@ fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View,
                 view.done(runner.run(&action));
                 // the tree shows the result on this loop's snapshot
                 dirty = true;
-                last_snapshot = Instant::now() - SNAPSHOT_EVERY;
+                last_snapshot = Instant::now() - periods.0;
             }
         }
     }
@@ -163,12 +165,12 @@ mod tests {
 
     #[test]
     fn a_snapshot_is_due_on_an_event_after_half_a_second_and_with_none_after_two() {
-        let ms = Duration::from_millis;
-        assert!(!snapshot_due(false, ms(0)));
-        assert!(!snapshot_due(false, ms(1999)), "no Event: not yet");
-        assert!(snapshot_due(false, ms(2000)), "no Event, yet pull request checks may have changed");
-        assert!(!snapshot_due(true, ms(499)), "at most one snapshot per 500 ms");
-        assert!(snapshot_due(true, ms(500)));
+        let (ms, release) = (Duration::from_millis, (SNAPSHOT_EVERY, SNAPSHOT_AT_LEAST_EVERY));
+        assert!(!snapshot_due(false, ms(0), release));
+        assert!(!snapshot_due(false, ms(1999), release), "no Event: not yet");
+        assert!(snapshot_due(false, ms(2000), release), "no Event, yet pull request checks may have changed");
+        assert!(!snapshot_due(true, ms(499), release), "at most one snapshot per 500 ms");
+        assert!(snapshot_due(true, ms(500), release));
     }
 
     #[test]
