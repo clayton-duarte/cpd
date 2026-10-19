@@ -54,6 +54,15 @@ pub const SLEEP_SECONDS: u64 = 120;
 /// view test waits on the screen for a change no Event announces, a few of these, not the release 2 s.
 pub const VIEW_REFRESH: &str = "CPD_TEST_VIEW_REFRESH=0.1";
 
+/// The engine tests' tick, `watch.tick_seconds` (its minimum, contract §8.2): an absence window of a few whole ticks
+/// ([`TestEnv::wait_whole_ticks`]) is a few tenths of a second.
+pub const TICK_SECONDS: &str = "0.1";
+
+/// The variable an engine test starts `cpd watch` with, so that E5 polls [`TICK_SECONDS`] after the previous poll
+/// ended (`CPD_TEST_PR_POLL`, contract §1.2 "Test overrides"), not every `pr_poll_seconds` (whole seconds): one poll
+/// about every tick, which [`TestEnv::wait_whole_ticks`] counts.
+pub const PR_POLL_EVERY_TICK: (&str, &str) = ("CPD_TEST_PR_POLL", TICK_SECONDS);
+
 /// The reaper's teardown script: `sh teardown.sh watch <pid>` waits until `<pid>` (the test
 /// process) is gone or the directory is, and then tears down if the directory is still there;
 /// `sh teardown.sh` tears down at once. The same teardown as [`TestEnv::teardown`], which
@@ -702,7 +711,7 @@ unset _d _n _f _a
     }
 
     /// The poll searches the fake `gh` has recorded: one per `cpd pr poll`, which engine E5 runs
-    /// once per tick when the config says `tick_seconds = 1` and `pr_poll_seconds = 1`.
+    /// about once per tick when the engine runs with [`PR_POLL_EVERY_TICK`].
     pub fn poll_searches(&self) -> usize {
         self.calls("gh").iter().filter(|c| c.get(3).is_some_and(|q| q.contains("search(type"))).count()
     }
@@ -710,7 +719,8 @@ unset _d _n _f _a
     /// Waits until the engine has run `ticks` whole ticks (E1-E8) since this call: the poll of
     /// a tick comes before E7, so once poll `n + 1` has begun, the tick of poll `n` is over.
     /// The positive signal an absence test waits for before it asserts that nothing happened.
-    /// Needs `tick_seconds = 1` and `pr_poll_seconds = 1` and a fake `gh` that answers the search.
+    /// Needs an engine with [`PR_POLL_EVERY_TICK`] (else each whole tick waits for a whole `pr_poll_seconds`) and a
+    /// fake `gh` that answers the search.
     pub fn wait_whole_ticks(&self, ticks: usize) {
         let from = self.poll_searches();
         wait_until(&format!("{ticks} whole engine ticks (polls {from} -> {})", from + ticks + 1), || self.poll_searches() > from + ticks);

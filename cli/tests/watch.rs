@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv, copy_executable, wait_until};
+use common::{CPD, PR_POLL_EVERY_TICK, Run, SLEEP_SECONDS, TICK_SECONDS, TestEnv, copy_executable, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::git::{self, Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -138,7 +138,7 @@ fn fx_bare(config_extra: &str) -> Fx {
         env.cpd_home().join("config.toml"),
         format!(
             "version = 1\nmachine = \"m1\"\n{config_extra}\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
-             [watch]\ntick_seconds = 1\n[tmux]\nsocket = \"{}\"\n",
+             [watch]\ntick_seconds = {TICK_SECONDS}\n[tmux]\nsocket = \"{}\"\n",
             env.tmux_socket()
         ),
     )
@@ -253,9 +253,9 @@ impl Fx {
         self.start_from(Path::new(CPD))
     }
 
-    /// `start` with the engine run from the binary at `exe`.
+    /// `start` with the engine run from the binary at `exe`; E5 polls every tick ([`PR_POLL_EVERY_TICK`]).
     fn start_from(&self, exe: &Path) -> Engine {
-        self.start_with(exe, &[])
+        self.start_with(exe, &[PR_POLL_EVERY_TICK])
     }
 
     /// `start_from` with the variables `vars` added to the engine's environment.
@@ -554,7 +554,6 @@ fn e2_removes_the_lock_of_a_dead_driver_it_ends_and_does_not_recreate_it() {
     let lock = |attempt: &str| fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(attempt).unwrap());
     assert!(lock("api-a1").exists() && !lock("web-a1").exists());
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("both ended", || fx.attempt("api-a1").0 == "ended" && fx.attempt("web-a1").0 == "ended");
     // The lock goes with the end, and the next ticks do not bring it back.
@@ -608,7 +607,6 @@ fn e2_asks_live_drivers_to_stop_on_timeout_or_cancel_with_escalations_pausing_th
     fx.add_running_since("waited", "running", &ago(40), Some(&ago(1)));
     let _waited = fx.live_driver("waited-a1");
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("stop requests", || fx.attempt("late-a1").3.is_some() && fx.attempt("gone-a1").3.is_some());
     // One more tick, for the Attempts it must leave alone.
@@ -777,7 +775,6 @@ fn e2_stops_sessions_whose_pane_is_dead_or_gone() {
                   ('s-shut', 'lead', 'ctx', 'pay', 'Shut', '/', 'O3', '%998', 'stopped', NULL, 't', 't');"
     ));
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("three without a pane", || fx.count("session-moved") == 3);
     fx.env.wait_whole_ticks(1);
@@ -829,7 +826,6 @@ fn e2_skips_a_pane_with_an_unknown_view_and_reports_no_error() {
            VALUES ('s-gone', 'lead', 'ctx', NULL, 'Gone', '/', 'O3', '%999', 'working', 't', 't');",
     );
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("the missing pane's Session stopped", || fx.count("session-moved") == 1);
     fx.env.wait_whole_ticks(2);
@@ -891,7 +887,6 @@ fn e3_starts_an_urgent_job_before_an_older_one() {
     fx.add_job("old", &[], "");
     fx.add_job("hot", &[], &urgent("hot"));
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("attempt-started", || fx.count("attempt-started") >= 1);
     // Two more ticks: the one slot is taken, so the older Job still waits.
@@ -915,7 +910,6 @@ fn e3_starts_one_urgent_job_beyond_the_concurrency_and_not_a_second() {
     fx.add_job("hot1", &[], &urgent("hot1"));
     fx.add_job("hot2", &[], &urgent("hot2"));
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("attempt-started", || fx.count("attempt-started") >= 1);
     // Two more ticks: the second urgent Job and the older one still wait.
@@ -980,7 +974,6 @@ fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
     let fx = fx("");
     fx.add_job("api", &[], &format!("UPDATE jobs SET fingerprint = '{}' WHERE key = 'api';", "0".repeat(64)));
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("error", || fx.count("error") == 1);
     fx.env.wait_whole_ticks(2);
@@ -1003,8 +996,6 @@ fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
 #[test]
 fn e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off() {
     let fx = fx("concurrency = 1\nretry_cap = 0");
-    let config = fx.env.cpd_home().join("config.toml");
-    fs::write(&config, fs::read_to_string(&config).unwrap().replace("tick_seconds = 1\n", "tick_seconds = 0.1\n")).unwrap();
     let unit = Duration::from_millis(50);
     let installed = fx.env.root().join("cpd-installed");
     copy_executable(CPD, &installed);
@@ -1051,7 +1042,6 @@ fn e3_does_not_start_a_job_in_its_backoff() {
     let attempts: String = (1..=9).map(|n| ended_attempt("api", n, "S2", None, &now)).collect();
     fx.add_job("api", &[], &attempts);
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     fx.env.wait_whole_ticks(3);
     engine.stop();
@@ -1121,7 +1111,7 @@ const SHORT_BUSY: &str = "[timeouts]\nstore_busy_ms = 200\n";
 
 /// `cpd watch` started and not waited for.
 fn spawn_engine(fx: &Fx) -> Engine {
-    let child = fx.env.command(CPD).arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let child = fx.env.command(CPD).arg("watch").envs([PR_POLL_EVERY_TICK]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     Engine { child: Some(child) }
 }
 
@@ -1130,9 +1120,13 @@ fn spawn_engine(fx: &Fx) -> Engine {
 #[test]
 fn a_store_busy_for_longer_than_store_busy_ms_never_ends_the_engine_or_loses_an_event() {
     let fx = fx(SHORT_BUSY);
-    // E5's poll is slow, and says when it runs: the engine is then in its first tick, past E4.
-    let marker = fx.env.root().join("gh-ran");
-    fx.env.fake_gh(&format!("touch '{}'; sleep 1.5; echo '{EMPTY_SEARCH}'", marker.display()));
+    // E5's poll says when it runs, and lasts until the test lets it end (`go`): the engine is then in its first tick, past E4.
+    let (marker, go) = (fx.env.root().join("gh-ran"), fx.env.root().join("gh-go"));
+    fx.env.fake_gh(&format!(
+        "touch '{}'; until [ -e '{go}' ]; do sleep 0.01; done; echo '{EMPTY_SEARCH}'",
+        marker.display(),
+        go = go.display()
+    ));
     fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api';");
 
     // The start: `watch-started` waits for the lock.
@@ -1150,6 +1144,7 @@ fn a_store_busy_for_longer_than_store_busy_ms_never_ends_the_engine_or_loses_an_
     fx.fixture("UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
     let busy = watch_log(&fx).matches("store_busy: ").count();
     let held = hold_write_lock(&fx);
+    fs::write(&go, "").unwrap();
     wait_until("the engine to meet the lock", || watch_log(&fx).matches("store_busy: ").count() > busy);
     assert_eq!(fx.count("all-merged"), 0);
     held.release();
@@ -1195,7 +1190,6 @@ fn e4_appends_all_merged_once_when_no_job_is_left_to_run() {
     fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
     fx.add_job("web", &[], "UPDATE jobs SET status = 'cancelled', cancel_reason = 'no', cancel_requested_at = 't' WHERE key = 'web';");
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("all-merged", || fx.count("all-merged") == 1);
     fx.env.wait_whole_ticks(2);
@@ -1211,7 +1205,6 @@ fn e4_sends_all_merged_again_after_a_job_is_appended_and_merged() {
     let fx = fx("");
     fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("all-merged", || fx.count("all-merged") == 1);
     let spec = fx.env.root().join("late-spec.json");
@@ -1236,7 +1229,6 @@ fn e4_waits_while_a_job_is_queued() {
     fx.add_running("busy", "running", &ago(1));
     fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     fx.env.wait_whole_ticks(2);
     engine.stop();
@@ -1260,7 +1252,6 @@ fn e3_never_starts_a_draft_and_e4_waits_while_one_remains() {
     let added = fx.env.cpd(&["job", "add", "later", "--title", "Later", "--tier", "S2", "--spec", spec.to_str().unwrap(), "--draft", "--plan", "pay"]).ok();
     assert_eq!((&added["job"]["status"], &added["job"]["appended"]), (&json!("draft"), &json!(true)));
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     fx.env.wait_whole_ticks(3);
     engine.stop();
@@ -1297,10 +1288,21 @@ fn search_reply(remaining: u32, reset_at: &str) -> String {
 /// The lookup of PR 7 (`in_pr`) that a poll makes when the search does not list it: still open, so nothing changes.
 const LOOKUP_OPEN: &str = r#"{"data":{"p0":{"pullRequest":{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"t","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{"nodes":[]}}}}}"#;
 
-/// Sets `pr_poll_seconds` (`tick_seconds` is one second).
+/// Sets `tick_seconds` (else [`TICK_SECONDS`]).
+fn tick_every(fx: &Fx, seconds: &str) {
+    let config = fx.env.cpd_home().join("config.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    let tick = format!("tick_seconds = {TICK_SECONDS}\n");
+    assert!(text.contains(&tick), "{text}");
+    fs::write(&config, text.replace(&tick, &format!("tick_seconds = {seconds}\n"))).unwrap();
+}
+
+/// Sets `pr_poll_seconds`, which E5 waits after a poll ended when no test override replaces it (`start_with` without
+/// [`PR_POLL_EVERY_TICK`]).
 fn poll_every(fx: &Fx, seconds: u32) {
     let config = fx.env.cpd_home().join("config.toml");
-    fs::write(&config, fs::read_to_string(&config).unwrap().replace("tick_seconds = 1\n", &format!("tick_seconds = 1\npr_poll_seconds = {seconds}\n"))).unwrap();
+    let text = fs::read_to_string(&config).unwrap();
+    fs::write(&config, text.replace("[watch]\n", &format!("[watch]\npr_poll_seconds = {seconds}\n"))).unwrap();
 }
 
 /// Milliseconds since the epoch, as the fake `gh` writes them.
@@ -1308,27 +1310,20 @@ fn epoch_ms(at: &str) -> i128 {
     OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).unwrap().unix_timestamp_nanos() / 1_000_000
 }
 
-/// `seconds` from now, as `rate_limit.reset_at` is written.
-fn in_seconds(seconds: i64) -> String {
-    (OffsetDateTime::now_utc() + time::Duration::seconds(seconds))
-        .format(format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"))
-        .unwrap()
-}
-
 #[test]
 fn e5_polls_every_pr_poll_seconds_after_the_previous_poll_ended_whatever_the_plans() {
     // No Plan at all: E5 polls anyway.
     let fx = fx_bare("");
-    poll_every(&fx, 2);
     let log = fx.env.root().join("poll.log");
-    // A poll that lasts a second, so that "after the end" differs from "after the start", and that notes both.
+    // A poll that lasts 0.2 s, so that "after the end" differs from "after the start", and that notes both.
     fx.env.fake_gh(&format!(
-        r#"echo "start $(date +%s%N)" >> '{log}'; sleep 1; echo "end $(date +%s%N)" >> '{log}'; echo '{}'; exit 0"#,
+        r#"echo "start $(date +%s%N)" >> '{log}'; sleep 0.2; echo "end $(date +%s%N)" >> '{log}'; echo '{}'; exit 0"#,
         search_reply(4987, "2099-01-01T00:00:00Z"),
         log = log.display()
     ));
 
-    let engine = fx.start();
+    // The poll period, `pr_poll_seconds`, is 0.3 s here (its test override): longer than a poll and than a tick.
+    let engine = fx.start_with(Path::new(CPD), &[("CPD_TEST_PR_POLL", "0.3")]);
     wait_until("three polls", || fs::read_to_string(&log).map_or(0, |t| t.matches("end").count()) >= 3);
     engine.stop();
 
@@ -1343,58 +1338,59 @@ fn e5_polls_every_pr_poll_seconds_after_the_previous_poll_ended_whatever_the_pla
         .collect();
     for (i, pair) in notes.windows(2).enumerate() {
         match (i % 2, pair[0].0.as_str(), pair[1].0.as_str()) {
-            (0, "start", "end") => assert!(pair[1].1 - pair[0].1 >= 1000, "{notes:?}"),
-            (1, "end", "start") => assert!(pair[1].1 - pair[0].1 >= 2000, "the next poll starts 2 s after the end of the last: {notes:?}"),
+            (0, "start", "end") => assert!(pair[1].1 - pair[0].1 >= 200, "{notes:?}"),
+            (1, "end", "start") => assert!(pair[1].1 - pair[0].1 >= 300, "the next poll starts 0.3 s after the end of the last: {notes:?}"),
             _ => panic!("polls overlap or are out of order: {notes:?}"),
         }
     }
     assert_eq!(fx.count("error"), 0);
 }
 
-/// engine-W9: a poll of 1 s with a tick of 5 s and `pr_poll_seconds = 2` runs every 3 s (end + 2 s), not at every other tick.
+/// engine-W9: a poll of 0.1 s with a tick of 2 s and a poll period (`pr_poll_seconds`, its test override) of 0.2 s runs
+/// every 0.3 s (end + 0.2 s), not at the next tick.
 #[test]
 fn e5_polls_at_its_due_time_not_at_the_next_tick() {
     let fx = fx_bare("");
-    poll_every(&fx, 2);
-    let config = fx.env.cpd_home().join("config.toml");
-    fs::write(&config, fs::read_to_string(&config).unwrap().replace("tick_seconds = 1\n", "tick_seconds = 5\n")).unwrap();
+    tick_every(&fx, "2");
     let log = fx.env.root().join("poll.log");
     fx.env.fake_gh(&format!(
-        r#"echo "start $(date +%s%N)" >> '{log}'; sleep 1; echo '{}'; exit 0"#,
+        r#"echo "start $(date +%s%N)" >> '{log}'; sleep 0.1; echo '{}'; exit 0"#,
         search_reply(4987, "2099-01-01T00:00:00Z"),
         log = log.display()
     ));
 
-    let engine = fx.start();
+    let engine = fx.start_with(Path::new(CPD), &[("CPD_TEST_PR_POLL", "0.2")]);
     wait_until("three polls", || fs::read_to_string(&log).map_or(0, |t| t.matches("start").count()) >= 3);
     engine.stop();
 
     let starts: Vec<i128> = fs::read_to_string(&log).unwrap().lines().map(|l| l.split_once(' ').unwrap().1.parse::<i128>().unwrap() / 1_000_000).collect();
     for pair in starts.windows(2) {
         let gap = pair[1] - pair[0];
-        assert!((2900..4000).contains(&gap), "a poll every 3 s (1 s poll + 2 s), not every 5 s tick: {starts:?}");
+        assert!((300..2000).contains(&gap), "a poll every 0.3 s (0.1 s poll + 0.2 s), not every 2 s tick: {starts:?}");
     }
     assert_eq!(fx.count("error"), 0);
 }
 
+/// The one test of `pr_poll_seconds` itself, the config key (no test override): whole seconds, so it waits one.
 #[test]
 fn e5_polls_with_a_plan_in_pr_too_and_does_not_poll_more_often_than_every_pr_poll_seconds() {
     let fx = fx("");
     in_pr(&fx);
-    poll_every(&fx, 3);
+    poll_every(&fx, 1);
     fx.env.fake_gh(&format!(
         "case \"$4\" in *'search(type'*) echo '{}' ;; *) echo '{LOOKUP_OPEN}' ;; esac",
         search_reply(4987, "2099-01-01T00:00:00Z")
     ));
 
-    let engine = fx.start();
+    let engine = fx.start_with(Path::new(CPD), &[]);
     wait_until("the first poll", || fx.env.poll_searches() >= 1);
     let first = Instant::now();
     wait_until("the second poll", || fx.env.poll_searches() >= 2);
     let gap = first.elapsed();
     engine.stop();
 
-    assert!(gap >= Duration::from_millis(1500), "one poll per pr_poll_seconds, not one per tick: {gap:?}");
+    // Ten ticks of 0.1 s to a poll: a poll per tick would come within a few of them.
+    assert!(gap >= Duration::from_millis(500), "one poll per pr_poll_seconds (1 s), not one per tick: {gap:?}");
     assert_eq!(fx.count("error"), 0);
 }
 
@@ -1403,7 +1399,6 @@ fn e5_reports_a_failing_poll_once() {
     let fx = fx("");
     in_pr(&fx);
     fx.env.fake_gh("echo 'gh: boom' >&2; exit 1");
-    poll_every(&fx, 1);
 
     let engine = fx.start();
     wait_until("three polls", || fx.env.calls("gh").len() >= 3);
@@ -1450,23 +1445,29 @@ fn e5_kills_a_hung_poll_child_and_its_group_at_the_deadline_with_tool_timeout() 
 #[test]
 fn e5_pauses_below_100_requests_until_reset_and_reports_one_gh_rate_limited() {
     let fx = fx("");
-    poll_every(&fx, 1);
-    let reset_at = in_seconds(4);
     let log = fx.env.root().join("poll.log");
     let first = fx.env.root().join("first-poll-done");
-    // The first poll leaves 50 requests until `reset_at`; the next one, which E5 must not run before that, 4987.
+    // The first poll leaves 50 requests until `reset_at`, 0.5 s after it (written to `reset-at`); the next one, which
+    // E5 must not run before that (it polls every tick otherwise), 4987.
+    let reset_file = fx.env.root().join("reset-at");
     fx.env.fake_gh(&format!(
         r#"echo "start $(date +%s%N)" >> '{log}'
-if [ ! -e '{first}' ]; then touch '{first}'; echo '{low}'; else echo '{ok}'; fi; exit 0"#,
+if [ ! -e '{first}' ]; then
+  touch '{first}'; ms=$(( $(date +%s%N) / 1000000 + 500 ))
+  reset=$(date -u -d "@$((ms / 1000)).$(printf %03d $((ms % 1000)))" +%Y-%m-%dT%H:%M:%S.%3NZ); printf %s "$reset" > '{reset_file}'
+  echo '{low}' | sed "s/RESET_AT/$reset/"
+else echo '{ok}'; fi; exit 0"#,
         log = log.display(),
         first = first.display(),
-        low = search_reply(50, &reset_at),
+        reset_file = reset_file.display(),
+        low = search_reply(50, "RESET_AT"),
         ok = search_reply(4987, "2099-01-01T00:00:00Z"),
     ));
 
     let engine = fx.start();
     wait_until("the second poll", || fx.env.calls("gh").len() >= 2);
     engine.stop();
+    let reset_at = fs::read_to_string(&reset_file).unwrap();
 
     // The second poll started at or after `reset_at`: the ticks in between ran no poll.
     let starts: Vec<i128> = fs::read_to_string(&log).unwrap().lines().map(|l| l.strip_prefix("start ").unwrap().parse::<i128>().unwrap() / 1_000_000).collect();
@@ -1485,8 +1486,7 @@ if [ ! -e '{first}' ]; then touch '{first}'; echo '{low}'; else echo '{ok}'; fi;
 fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_same_tick() {
     let fx = fx("");
     // One tick only: whatever happens after the first poll happens in that tick.
-    let config = fx.env.cpd_home().join("config.toml");
-    fs::write(&config, fs::read_to_string(&config).unwrap().replace("tick_seconds = 1\n", "tick_seconds = 600\n")).unwrap();
+    tick_every(&fx, "600");
     // The clean-up of the merged `repo` keeps a Lead worktree with commits not on origin (and raises an `error`): give
     // the repo an `origin` that has them, so the only `error` this test could see is E5's or E7's own.
     let origin = fx.env.root().join("repos/origin.git");
@@ -1537,7 +1537,6 @@ fn the_engine_neither_imports_nor_syncs_a_context_store() {
     // Not a store at all: E6 used to log and skip it; nothing looks now.
     fs::create_dir_all(fx.env.cpd_home().join("contexts/not a context")).unwrap();
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     fx.env.wait_whole_ticks(2);
     let run = engine.stop();

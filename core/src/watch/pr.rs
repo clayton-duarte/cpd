@@ -21,6 +21,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::git::{TAIL_LINES, tail};
 use crate::host::deadline::{self, Failed};
 use crate::host::exe::started_as;
+use crate::host::limit::limit;
 
 /// Below this many requests remaining, E5 stops polling until the limit resets (D9).
 const RATE_FLOOR: u64 = 100;
@@ -28,10 +29,11 @@ const RATE_FLOOR: u64 = 100;
 /// per `gh` call (§7.6), so a hung child cannot stop the one-thread tick.
 const POLL_DEADLINE: Duration = Duration::from_secs(120);
 
-/// When the next poll is due: `pr_poll_seconds` after the last one ended, and not before the rate limit resets;
-/// `now` when none has run. The engine wakes at this time instead of at the next tick (contract §3.7).
+/// When the next poll is due: `pr_poll_seconds` after the last one ended (tests: `CPD_TEST_PR_POLL`, [`limit`]), and
+/// not before the rate limit resets; `now` when none has run. The engine wakes at this time instead of at the next
+/// tick (contract §3.7).
 pub(super) fn due(engine: &Engine, now: Instant) -> Instant {
-    let every = Duration::from_secs(u64::from(engine.config.watch.pr_poll_seconds));
+    let every = limit("PR_POLL", Duration::from_secs(u64::from(engine.config.watch.pr_poll_seconds)));
     let after_last = engine.last_poll_end.map_or(now, |end| end + every);
     engine.paused_until.map_or(after_last, |until| until.max(after_last))
 }
