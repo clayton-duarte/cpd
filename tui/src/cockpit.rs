@@ -2,7 +2,8 @@
 //! §6.4 with amendment 9): builds the cockpit's `main` window when it is
 //! missing, respawns a dead pane of its layout, sets §6.1's server options
 //! again, with `--respawn` restarts every live view, starts the engine, and
-//! with `--attach` replaces itself with `tmux attach`.
+//! with `--attach` replaces itself with `tmux attach`. When the server runs an older tmux than the
+//! installed one it marks a restart pending (contract §6.1; [`cpd_core::watch::restart`]).
 //!
 //! The layout, from the spike's `cockpit.sh` (branch `cpd/cpd-ui`):
 //!
@@ -35,12 +36,13 @@ use cpd_core::error::{CpdError, ErrorCode, Exit};
 use cpd_core::home::CpdHome;
 use cpd_core::host::exe::started_as;
 use cpd_core::host::layout::MAIN_WINDOW;
-use cpd_core::host::tmux::installed_version;
+use cpd_core::host::tmux::{installed_version, older_version};
 use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux, View};
 use cpd_core::ids::SessionId;
 use cpd_core::output::Output;
 use cpd_core::session::PROGRAM;
 use cpd_core::store::Store;
+use cpd_core::watch::restart;
 
 /// The views of `main`'s layout: a dead one is respawned (amendment 9). The
 /// `worker` view is not part of it: it is opened and closed by the plan view.
@@ -58,10 +60,20 @@ pub(super) fn run(attach: bool, respawn: bool, run_command: RunCommand) -> Resul
 
     let (built, respawned) = ensure(&tmux, &home, &mut store, cockpit, respawn, run_command)?;
     let watch = command(run_command, &["watch", "--ensure"])?;
+    // An older server is restarted by the engine once nothing is in the way (contract §6.1).
+    let after = match mark_if_older(&home, &tmux) {
+        Ok(Some(why)) => why,
+        Ok(None) => String::new(),
+        Err(e) => {
+            eprintln!("cpd tui: cannot compare the tmux server's version with the installed tmux: {}", e.message());
+            String::new()
+        }
+    };
 
     let attach_argv = ["tmux", "-L", tmux.socket(), "attach", "-t", cockpit];
     if attach {
-        return Err(exec_attach(&tmux, cockpit, None));
+        let program = server_tmux(&tmux, &after).unwrap_or(None);
+        return Err(exec_attach(&tmux, cockpit, program.as_deref()));
     }
     let mut fields = json!({
         "built": built, "socket": tmux.socket(), "session": cockpit, "attach": attach_argv, "watch": watch,
@@ -295,12 +307,70 @@ pub(super) fn bare(run_command: RunCommand) -> Result<Output, CpdError> {
         eprintln!("cpd: this terminal is inside the cockpit's tmux server: switch to the cockpit with `tmux switch-client -t {cockpit}`.");
         return Ok(Output::Owned);
     }
-    // 4. The tmux version: the server's own tmux attaches (the restart is the next Job's).
-    let program = server_tmux(&tmux).unwrap_or_else(|e| {
+    // 4. The tmux version: an older server is restarted when it is safe, else the restart is marked
+    // pending; the server's own tmux attaches while it runs another version than the installed one.
+    let after = tmux_version(&home, &config, &mut store, &tmux);
+    let program = server_tmux(&tmux, &after).unwrap_or_else(|e| {
         eprintln!("cpd: cannot compare the tmux server's version with the installed tmux: {}", e.message());
         None
     });
     Err(exec_attach(&tmux, cockpit, program.as_deref()))
+}
+
+/// The tmux version follow-up of bare `cpd` (commands.md §13.3): a server older than the installed
+/// tmux is restarted now when it is safe, else the restart is marked pending (the engine holds new
+/// Attempts, then restarts it, contract §6.1). Returns what to add to the attach line about a restart
+/// still to come; a failure is one line on stderr.
+fn tmux_version(home: &CpdHome, config: &Config, store: &mut Store, tmux: &Tmux) -> String {
+    let (server, installed) = match (tmux.server_version(), installed_version()) {
+        (Ok(server), Ok(installed)) => (server, installed),
+        // `server_tmux` says why it cannot compare.
+        _ => return String::new(),
+    };
+    if !older_version(&server, &installed) {
+        // A restart that is no longer needed (done by hand, or by the engine): a failure it left is said once.
+        if server == installed {
+            match restart::read(home) {
+                Ok(Some(pending)) if pending.failed.is_some() => eprintln!("cpd: {}", pending.describe()),
+                Ok(_) => {}
+                Err(e) => eprintln!("cpd: {}", e.message()),
+            }
+            if let Err(e) = restart::clear(home) {
+                eprintln!("cpd: {}", e.message());
+            }
+        }
+        return String::new();
+    }
+    match restart::restart(home, config, store, &mut |_| ()) {
+        Ok(restart::Outcome::Restarted { reopened }) => {
+            eprintln!("cpd: restarted the tmux server onto tmux {installed}; {reopened} Session(s) reopened.");
+            String::new()
+        }
+        Ok(restart::Outcome::Busy(why)) => match restart::mark(home, &server, &installed) {
+            Ok(_) => format!("; the restart happens once nothing is in the way ({})", why.join("; ")),
+            Err(e) => {
+                eprintln!("cpd: cannot mark the tmux restart pending: {}", e.message());
+                String::new()
+            }
+        },
+        Ok(restart::Outcome::Running) => "; a restart is running".to_owned(),
+        Ok(restart::Outcome::NotNeeded) => String::new(),
+        Err(e) => {
+            eprintln!("cpd: the tmux restart failed: {} It is tried again at the next cpd.", e.message());
+            String::new()
+        }
+    }
+}
+
+/// `cpd tui`: when the server runs an older tmux than the installed one, marks a restart pending.
+/// Returns what to say on the attach line.
+fn mark_if_older(home: &CpdHome, tmux: &Tmux) -> Result<Option<String>, CpdError> {
+    let (server, installed) = (tmux.server_version()?, installed_version()?);
+    if !older_version(&server, &installed) {
+        return Ok(None);
+    }
+    restart::mark(home, &server, &installed)?;
+    Ok(Some("; the restart happens once no Attempt runs".to_owned()))
 }
 
 /// Whether `$TMUX` (`<socket path>,<server pid>,<session>`) names the server on socket `socket`.
@@ -333,14 +403,14 @@ fn respawn_old_views(tmux: &Tmux, home: &CpdHome, cockpit: &str, skip: Option<&s
 
 /// The tmux program to attach with when the server runs another version than
 /// the installed tmux (a client of another version cannot attach, hs-n224):
-/// the server's own binary, with one line on stderr saying so.
-fn server_tmux(tmux: &Tmux) -> Result<Option<PathBuf>, CpdError> {
+/// the server's own binary, with one line on stderr saying so; `after` ends the line.
+fn server_tmux(tmux: &Tmux, after: &str) -> Result<Option<PathBuf>, CpdError> {
     let (server, installed) = (tmux.server_version()?, installed_version()?);
     if server == installed {
         return Ok(None);
     }
     let exe = tmux.server_exe()?;
-    eprintln!("cpd: the tmux server runs tmux {server}, the installed tmux is {installed}: attaching with the server's own tmux.");
+    eprintln!("cpd: the tmux server runs tmux {server}, the installed tmux is {installed}: attaching with the server's own tmux{after}.");
     Ok(Some(exe))
 }
 
