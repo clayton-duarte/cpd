@@ -12,7 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use common::TestEnv;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
-use cpd_core::store::{APPLICATION_ID, HISTORY_TABLES, Store, VERSION, WriteTxn};
+use cpd_core::store::{APPLICATION_ID, HISTORY_TABLES, Persist, Store, VERSION, WriteTxn, is_transient};
 use rusqlite::Connection;
 use rusqlite::functions::FunctionFlags;
 use serde_json::{Value, json};
@@ -1191,16 +1191,132 @@ fn a_writer_that_cannot_get_the_lock_in_time_is_store_busy() {
     let started = env.root().join("a.started");
     let mut a = Writer::spawn(&env, "a", 5000, 3000, Some(&started));
     a.wait_started(&started);
+    let a_pid = a.child.id();
     let b = Writer::spawn(&env, "b", 200, 0, None).wait();
     assert_eq!(b["ok"], false, "{b}");
     assert_eq!(b["error"]["code"], "store_busy", "{b}");
     assert_eq!(b["error"]["details"]["busy_ms"], 200);
+    // §4.2: the error names the holder, A: its pid, its command and for how long.
+    let holder = &b["error"]["details"]["holder"];
+    assert_eq!(holder["pid"], a_pid, "{b}");
+    assert_eq!(holder["command"], "test writer", "{b}");
+    assert!(holder["since_ms"].as_u64().unwrap() >= 200, "{b}");
+    assert!(holder["argv"].as_str().unwrap().contains("child_writer"), "{b}");
+    let message = b["error"]["message"].as_str().unwrap();
+    assert!(message.contains(&format!("pid {a_pid} (`test writer`")), "{message}");
     let waited = b["ended"].as_u64().unwrap() - b["begun"].as_u64().unwrap();
     assert!(waited >= 200, "gave up after {waited} ms");
     assert_eq!(a.wait()["ok"], true);
     let mut store = open(&env);
     let txns: i64 = store.read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap();
     assert_eq!(txns, 2, "B wrote nothing");
+}
+
+/// The holder's record is removed when its transaction ends, by a commit or a rollback.
+#[test]
+fn the_holders_record_is_gone_after_a_commit_and_after_a_rollback() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    let records = || -> Vec<String> {
+        let names = fs::read_dir(home(&env).locks_dir()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned());
+        names.filter(|n| n.starts_with("store-writer-")).collect()
+    };
+    let during = store.write("test", |_| Ok(records())).unwrap();
+    assert_eq!(during, [format!("store-writer-{}.json", std::process::id())]);
+    assert!(records().is_empty(), "{:?}", records());
+    store.write("test", |_| Err::<(), _>(CpdError::new(ErrorCode::StoreFailed, "no"))).unwrap_err();
+    assert!(records().is_empty(), "{:?}", records());
+}
+
+/// A lock held by a connection that is not cpd's has no record: `store_busy` says the holder is unknown.
+#[test]
+fn a_store_busy_with_no_recorded_holder_says_so() {
+    let env = TestEnv::new();
+    drop(open(&env));
+    let other = raw(&env);
+    other.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let mut store = Store::open(&home(&env), 100).unwrap();
+    let e = store.write("test", |_| Ok(())).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::StoreBusy, "{e:?}");
+    assert!(e.details()["holder"].is_null(), "{e:?}");
+    assert!(e.message().ends_with("Its holder is unknown: no process has recorded that it holds the lock."), "{e:?}");
+}
+
+#[test]
+fn a_record_of_a_dead_process_is_not_the_holder() {
+    let env = TestEnv::new();
+    drop(open(&env));
+    let mut dead = std::process::Command::new("true").spawn().unwrap();
+    dead.wait().unwrap();
+    let record = json!({"pid": dead.id(), "command": "gone", "argv": "gone", "session": null, "attempt": null, "since_unix_ms": now_ms()});
+    fs::write(home(&env).locks_dir().join(format!("store-writer-{}.json", dead.id())), record.to_string()).unwrap();
+    let other = raw(&env);
+    other.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let e = Store::open(&home(&env), 100).unwrap().write("test", |_| Ok(())).unwrap_err();
+    assert!(e.details()["holder"].is_null(), "{e:?}");
+}
+
+type Lines = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+fn persisting(lines: &Lines, give_up: fn() -> bool) -> Persist {
+    let lines = lines.clone();
+    Persist::new(move |line| lines.lock().unwrap().push(line.to_owned()), give_up)
+}
+
+/// §4.2: a persisting store waits out a lock held for longer than `store_busy_ms`, logs one line for
+/// the error and one when it clears, and the write then completes; a plain store gives up.
+#[test]
+fn a_persisting_store_waits_for_a_lock_held_longer_than_store_busy_ms() {
+    let env = TestEnv::new();
+    drop(open(&env));
+    let started = env.root().join("a.started");
+    let mut a = Writer::spawn(&env, "a", 5000, 2500, Some(&started));
+    a.wait_started(&started);
+    let a_pid = a.child.id();
+
+    let mut plain = Store::open(&home(&env), 100).unwrap();
+    assert_eq!(plain.write("test", |_| Ok(())).unwrap_err().code(), ErrorCode::StoreBusy);
+
+    let lines = Lines::default();
+    let mut store = Store::open_persistent(&home(&env), 100, persisting(&lines, || false)).unwrap();
+    let t = Instant::now();
+    let txn = store.write("persisted", |tx| Ok(tx.id())).unwrap();
+    assert!(t.elapsed() >= Duration::from_millis(500), "it did not wait: {:?}", t.elapsed());
+    assert_eq!(a.wait()["ok"], true);
+    let lines = lines.lock().unwrap().clone();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0].starts_with("store_busy: "), "{lines:?}");
+    assert!(lines[0].contains(&format!("pid {a_pid} (`test writer`")), "the line names the holder: {lines:?}");
+    assert!(lines[1].starts_with("the store is clear again after "), "{lines:?}");
+    let command: String = store.read(|c| Ok(c.query_row("SELECT command FROM txns WHERE id = ?1", [txn], |r| r.get(0))?)).unwrap();
+    assert_eq!(command, "persisted");
+}
+
+#[test]
+fn a_persisting_store_gives_up_when_told_to_and_its_reads_never_wait() {
+    let env = TestEnv::new();
+    drop(open(&env));
+    let other = raw(&env);
+    other.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let lines = Lines::default();
+    // Told to give up at once: the error is returned and nothing is logged.
+    let mut store = Store::open_persistent(&home(&env), 100, persisting(&lines, || true)).unwrap();
+    assert_eq!(store.write("test", |_| Ok(())).unwrap_err().code(), ErrorCode::StoreBusy);
+    assert!(lines.lock().unwrap().is_empty());
+    // A reader never waits for a writer: it reads, persisting or not.
+    assert_eq!(store.read(|c| Ok(c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))?)).unwrap(), 1);
+}
+
+#[test]
+fn only_busy_and_locked_are_transient() {
+    let busy = CpdError::new(ErrorCode::StoreBusy, "busy");
+    let locked = CpdError::new(ErrorCode::StoreFailed, "locked").with("sqlite_code", 6);
+    let busy_snapshot = CpdError::new(ErrorCode::StoreFailed, "snapshot").with("sqlite_code", 517);
+    let constraint = CpdError::new(ErrorCode::StoreFailed, "constraint").with("sqlite_code", 275);
+    let other = CpdError::new(ErrorCode::StoreFailed, "other");
+    let tampered = CpdError::new(ErrorCode::StoreTampered, "tampered");
+    let flags = [&busy, &locked, &busy_snapshot, &constraint, &other, &tampered].map(is_transient);
+    assert_eq!(flags, [true, true, true, false, false, false]);
 }
 
 #[test]
