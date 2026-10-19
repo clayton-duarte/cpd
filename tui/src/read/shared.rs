@@ -13,7 +13,7 @@ use cpd_core::ids::{AttemptId, ContextId, PlanId, SessionId};
 use cpd_core::plan::Phase;
 use cpd_core::session::{Role, State};
 
-use super::dot::{Dot, DotInputs};
+use super::dot::Dot;
 
 /// A row the database holds in a shape the binary does not accept: it was
 /// changed outside cpd, or by a bug.
@@ -207,7 +207,8 @@ pub struct SessionNode {
     pub place: Place,
     /// It is its Plan's `lead_session`.
     pub plan_lead: bool,
-    /// The dot of the tree (§17), derived from the Session's state, its Events and its Plan.
+    /// The dot of the tree (§17): the glyph of its state as `sessions` reads it; the tree's snapshot fills the `●` from
+    /// the Inbox (`tree()`).
     pub dot: Dot,
     /// When it was archived (contract §4.5); archived Sessions are in the model.
     pub archived_at: Option<String>,
@@ -233,17 +234,10 @@ const SESSION_SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt,
        s.tmux_pane, s.state, s.state_label, s.state_at, s.created_at,
        (SELECT json_extract(e.data, '$.place') FROM events e
          WHERE e.session = s.id AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1),
-       EXISTS (SELECT 1 FROM plans p WHERE p.lead_session = s.id),
-       (SELECT e.id FROM events e WHERE e.session = s.id AND e.kind = 'session-state'
-           AND json_extract(e.data, '$.to') = 'idle' ORDER BY e.id DESC LIMIT 1),
-       (SELECT e.id FROM events e WHERE e.session = s.id AND e.kind = 'session-moved'
-           AND json_extract(e.data, '$.place') = 'chat' ORDER BY e.id DESC LIMIT 1),
-       s.archived_at,
-       (SELECT p.phase FROM plans p WHERE p.id = s.plan),
-       EXISTS (SELECT 1 FROM plan_reviews v WHERE v.plan = s.plan AND v.status = 'pending'),
-       EXISTS (SELECT 1 FROM prs r JOIN pull_requests q ON q.id = r.pull_request
-                WHERE r.plan = s.plan AND q.state = 'open' AND q.checks IN ('passed', 'failed'))
-  FROM sessions s";
+       l.lead_session IS NOT NULL,
+       s.archived_at
+  FROM sessions s
+  LEFT JOIN (SELECT DISTINCT lead_session FROM plans) l ON l.lead_session = s.id";
 
 /// The Sessions matching `filter` (SQL after `WHERE`, over `s`), oldest first.
 pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -> Result<Vec<SessionNode>, CpdError> {
@@ -259,20 +253,9 @@ pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -
         let (state, tier_text, place): (String, String, Option<String>) = (r.get(10)?, r.get(8)?, r.get(14)?);
         let state: State = value_enum("Session state", &state)?;
         let place = place.map_or(Ok(Place::None), |p| Place::parse("Session place", &p))?;
-        let phase: Option<String> = r.get(19)?;
-        let phase = phase.map(|p| value_enum::<Phase>(&format!("Plan of Session {session} has phase"), &p)).transpose()?;
         let plan_lead: bool = r.get(15)?;
         out.push(SessionNode {
-            dot: Dot::of(DotInputs {
-                state,
-                place,
-                settled: r.get(16)?,
-                seen: r.get(17)?,
-                plan_lead,
-                phase,
-                review_pending: r.get(20)?,
-                pr_checked: r.get(21)?,
-            }),
+            dot: Dot::glyph(state),
             role: value_enum("Session role", &role)?,
             context: ContextId::parse(&context).map_err(|_| field("context", &context))?,
             plan: plan.map(|p| PlanId::parse(&p).map_err(|_| field("plan", &p))).transpose()?,
@@ -288,7 +271,7 @@ pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -
             created_at: r.get(13)?,
             place,
             plan_lead,
-            archived_at: r.get(18)?,
+            archived_at: r.get(16)?,
             id: session,
         });
     }
@@ -321,11 +304,6 @@ pub struct PlanHead {
 impl PlanHead {
     pub fn is_archived(&self) -> bool {
         self.archived_at.is_some()
-    }
-
-    /// The Plan waits on the User: an open Escalation, a pending Plan review, or a Session with a ● (`SessionNode::needs_you`).
-    pub fn needs_you(&self, sessions: &[SessionNode]) -> bool {
-        self.open_escalations > 0 || self.review_pending || sessions.iter().any(SessionNode::needs_you)
     }
 }
 
@@ -422,4 +400,40 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
         });
     }
     Ok(heads)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cpd_core::home::CpdHome;
+    use cpd_core::store::Store;
+
+    /// sql-F5: no table is scanned once per Session. Every `SCAN` of the plan of
+    /// `SESSION_SELECT` hangs off the top level, never off a correlated subquery.
+    #[test]
+    fn session_select_scans_no_table_per_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        let plan: Vec<(i64, i64, String)> = store
+            .read(|conn| {
+                let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {SESSION_SELECT} WHERE 1 ORDER BY s.created_at, s.id"))?;
+                let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(3)?)))?;
+                Ok(rows.collect::<rusqlite::Result<_>>()?)
+            })
+            .unwrap();
+        let per_session = |mut parent: i64| loop {
+            match plan.iter().find(|(id, ..)| *id == parent) {
+                Some((_, _, detail)) if detail.starts_with("CORRELATED") => return true,
+                Some((_, up, _)) => parent = *up,
+                None => return false,
+            }
+        };
+        let scans: Vec<&str> = plan
+            .iter()
+            .filter(|(_, parent, detail)| detail.starts_with("SCAN") && per_session(*parent))
+            .map(|(.., detail)| detail.as_str())
+            .collect();
+        assert!(scans.is_empty(), "scanned once per Session: {scans:?}\n{plan:#?}");
+    }
 }

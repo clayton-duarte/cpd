@@ -8,6 +8,8 @@
 //! - [`view`]: the state, keys and drawing; [`cursor`], [`prompt`], [`menu`]: its parts (the right-click menu);
 //! - [`actions`]: what it does, as `cpd` commands (`session open`, `plan new`, `session close`, the menu's), and the
 //!   legend popup; [`slug`]: the id of a new Context or Plan, from its title;
+//! - [`inbox`]: the Inbox section at the column's bottom (header, up to 3 items, `+N more`) and what a click on an item does:
+//!   `session open`, the logs popup at the item's Event, or nothing (the label is an OSC 8 link);
 //! - [`super::background`]: a command or the legend popup runs on a thread, one command at a time; the footer says
 //!   `running: <command>` meanwhile and then its result, and the loop keeps drawing and reading keys (tui-W7);
 //! - [`kinds`]: the Events it follows, in process ([`read::Follow`]), which tell it when to take a new snapshot.
@@ -15,11 +17,12 @@
 //! Keys and clicks are the reference's (commands.md §13.2, `tui/README.md` "Context column" on `main`): arrows
 //! or `j`/`k` move the cursor between Sessions (shown after the first arrow key, while the pane has focus);
 //! Enter opens the cursor's Session in the chat slot and focuses it; `n` starts a new Plan; `x` closes a
-//! Session's pane; `?` opens the legend. A click on a Context's fold glyph collapses or expands it, elsewhere on a live Context row opens its Manager (`context manager`, then `session open`), on a Session opens it, on a `…` row expands the archived rows
+//! Session's pane; `?` opens the legend. After the last Session the cursor goes on into the Inbox's item rows (Enter jumps, `s` snoozes, `d` dismisses; the right-click menu of an item has the same entries). A click on a Context's fold glyph collapses or expands it, elsewhere on a live Context row opens its Manager (`context manager`, then `session open`), on a Session opens it, on a `…` row expands the archived rows
 //! (muted, dotted guides) and on their dotted line collapses them; a right click opens the menu.
 
 mod actions;
 mod cursor;
+mod inbox;
 mod kinds;
 mod menu;
 mod prompt;
@@ -35,6 +38,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event};
+use time::OffsetDateTime;
 
 use super::background::Background;
 use super::runner::kept;
@@ -43,6 +47,7 @@ use super::{palette, read};
 use cpd_core::config::Config;
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
+use cpd_core::inbox::model;
 use cpd_core::output::Output;
 use cpd_core::store::Store;
 use actions::Runner;
@@ -52,7 +57,7 @@ use view::{Effect, View};
 /// A view takes at most one snapshot per this long, whatever the Event rate (commands.md §17).
 const SNAPSHOT_EVERY: Duration = Duration::from_millis(500);
 /// How long the loop waits for a key or a click before it looks at the follower and the clock again. The spinner turns
-/// every 250 ms (`palette::frame`): while one is on screen ([`View::animated`]) the tree is redrawn that often, else only
+/// every 100 ms (`palette::frame`): while one is on screen ([`View::animated`]) the tree is redrawn that often, else only
 /// when something changed.
 const TICK: Duration = Duration::from_millis(100);
 
@@ -70,13 +75,14 @@ pub(super) fn run() -> Result<Output, CpdError> {
             let home = CpdHome::from_env()?;
             let config = Config::load(&home)?;
             let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+            let snooze_end = read::snooze_end(&mut store)?;
             let view = View::new(read::tree(&mut store)?, false);
             let follow = read::Follow::new(&mut store, KINDS, view.tree.events_cursor)?;
             let poll = Duration::from_millis(u64::from(config.events.poll_ms));
-            Ok((store, view, follow, poll, Arc::new(Runner::new(&config))))
+            Ok((store, home, view, (follow, snooze_end), poll, Arc::new(Runner::new(&config))))
         },
-        |terminal, (mut store, view, follow, poll, runner)| {
-            Ok(event_loop(terminal, &mut store, view, follow, poll, &runner)?)
+        |terminal, (mut store, home, view, follow, poll, runner)| {
+            Ok(event_loop(terminal, &mut store, &home, view, follow, poll, &runner)?)
         },
     )
 }
@@ -84,19 +90,22 @@ pub(super) fn run() -> Result<Output, CpdError> {
 fn event_loop(
     terminal: &mut DefaultTerminal,
     store: &mut Store,
+    home: &CpdHome,
     mut view: View,
-    mut follow: read::Follow,
+    (mut follow, mut snooze_end): (read::Follow, Option<OffsetDateTime>),
     poll: Duration,
     runner: &Arc<Runner>,
 ) -> std::io::Result<()> {
     let mut dirty = false;
     let mut last_snapshot = Instant::now();
     let mut last_poll = Instant::now();
-    // a failed snapshot is retried at the next refresh, with no Event needed; a failed poll at the next poll. Both are
-    // shown (runner::kept): the footer says the snapshot's error, else the follow's.
-    let (mut snapshot_error, mut follow_error) = (None, None);
-    // what the last draw showed of the clock, and whether anything changed since: the pane is written to only then
-    let (mut redraw, mut drawn_frame) = (true, palette::frame(SystemTime::now()));
+    // a failed snapshot is retried at the next refresh, with no Event needed; a failed poll (of the Events or of the
+    // engine's lock) at the next poll. All are shown (runner::kept): the footer says the snapshot's error, else the
+    // follow's, else the lock's.
+    let (mut snapshot_error, mut follow_error, mut engine_error) = (None, None, None);
+    // what the last draw showed of the clock (the spinner's frame, the second the Inbox items' ages were taken at), and
+    // whether anything changed since: the pane is written to only then
+    let (mut redraw, mut drawn_frame, mut drawn_second) = (true, palette::frame(SystemTime::now()), unix_second());
     // the commands and the popup run off this thread (tui-W7): the loop goes on drawing, reading keys and the follower
     // meanwhile. A popup returns when it closes, so it does not hold up the commands.
     let mut actions = Background::<Result<String, String>>::new();
@@ -120,24 +129,32 @@ fn event_loop(
         if last_poll.elapsed() >= poll {
             last_poll = Instant::now();
             dirty |= kept(follow.poll_changes(store), &mut follow_error).is_some_and(|changes| changes.any());
-            view.error = snapshot_error.clone().or_else(|| follow_error.clone());
+            // the Inbox changes with no Event when a snooze ends or the engine stops or starts (`engine-down`, §17)
+            dirty |= snooze_end.is_some_and(|end| OffsetDateTime::now_utc() >= end);
+            dirty |= kept(model::engine_running(home), &mut engine_error).is_some_and(|on| on != view.tree.engine_running);
+            view.error = snapshot_error.clone().or_else(|| follow_error.clone()).or_else(|| engine_error.clone());
         }
         if snapshot_due(dirty || snapshot_error.is_some(), last_snapshot.elapsed()) {
-            if let Some(tree) = kept(read::tree(store), &mut snapshot_error) {
-                if tree.contexts != view.tree.contexts {
+            let next = read::snooze_end(store).and_then(|end| Ok((end, read::tree(store)?)));
+            if let Some((end, tree)) = kept(next, &mut snapshot_error) {
+                snooze_end = end;
+                let t = &view.tree;
+                if (&tree.contexts, &tree.inbox, tree.engine_running) != (&t.contexts, &t.inbox, t.engine_running) {
                     view.refresh(tree);
                     redraw = true;
                 }
             }
             dirty = false;
             last_snapshot = Instant::now();
-            view.error = snapshot_error.clone().or_else(|| follow_error.clone());
+            view.error = snapshot_error.clone().or_else(|| follow_error.clone()).or_else(|| engine_error.clone());
         }
-        let frame = palette::frame(SystemTime::now());
+        let (frame, second) = (palette::frame(SystemTime::now()), unix_second());
         redraw |= view.error != error || (view.animated() && frame != drawn_frame);
+        // the Inbox items' ages are redrawn every second, from `opened_at`
+        redraw |= !view.tree.inbox.is_empty() && second != drawn_second;
         if redraw {
             terminal.draw(|f| view.draw(f, frame))?;
-            (redraw, drawn_frame) = (false, frame);
+            (redraw, drawn_frame, drawn_second) = (false, frame, second);
         }
         if !event::poll(TICK)? {
             continue;
@@ -165,6 +182,10 @@ fn event_loop(
                 let runner = Arc::clone(runner);
                 popups.submit(move || runner.legend());
             }
+            Effect::Logs(event) => {
+                let runner = Arc::clone(runner);
+                popups.submit(move || runner.logs(event));
+            }
             Effect::Run(action) => {
                 view.done(Ok(format!("running: {}", action.argv().join(" "))));
                 let runner = Arc::clone(runner);
@@ -172,6 +193,11 @@ fn event_loop(
             }
         }
     }
+}
+
+/// The Unix second now: the Inbox items' ages change with it.
+fn unix_second() -> u64 {
+    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
 #[cfg(test)]
@@ -189,7 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn the_loop_redraws_at_least_every_quarter_second() {
-        assert!(TICK <= Duration::from_millis(250));
+    fn the_loop_redraws_at_least_every_frame() {
+        assert!(TICK <= Duration::from_millis(100));
     }
 }

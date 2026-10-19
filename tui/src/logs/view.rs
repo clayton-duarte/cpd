@@ -19,11 +19,23 @@ pub struct Log {
     scroll: Scroll,
     /// The error of the last failed read (one row), shown in the last row until a read succeeds.
     pub error: Option<String>,
+    /// The Event the view was opened at (`--event`): its line is reversed. Kept after the User scrolls.
+    selected: Option<i64>,
+    /// The selected Event is to be scrolled into view by the next [`Log::fit`], which knows the height.
+    reveal: bool,
 }
 
 impl Log {
     pub fn new(events: Vec<Event>) -> Log {
         Log { events, ..Log::default() }
+    }
+
+    /// The view opened at the Event `id`: its line is selected and, at the first [`Log::fit`], scrolled to the middle of
+    /// the view, which then does not follow until the User scrolls down to the bottom. An `id` that is not among
+    /// `events` selects nothing and the view opens at the bottom.
+    pub fn at(events: Vec<Event>, id: i64) -> Log {
+        let found = events.iter().any(|e| e.id == id);
+        Log { events, selected: found.then_some(id), reveal: found, ..Log::default() }
     }
 
     /// Whether the view shows the bottom, and so follows new Events.
@@ -39,7 +51,16 @@ impl Log {
 
     /// The view is `height` rows tall, its last row for the error while there is one.
     pub fn fit(&mut self, height: u16) {
-        self.scroll.fit(self.events.len(), usize::from(height.saturating_sub(u16::from(self.error.is_some()))));
+        let height = usize::from(height.saturating_sub(u16::from(self.error.is_some())));
+        self.scroll.fit(self.events.len(), height);
+        if let (true, Some(id)) = (std::mem::take(&mut self.reveal), self.selected) {
+            if let Some(i) = self.events.iter().position(|e| e.id == id) {
+                // the line goes to the middle of the view, which is full when it can be: `end` is one past the last
+                // line shown
+                let end = (i + 1 + height.saturating_sub(1) / 2).max(height);
+                self.scroll.to(end.saturating_sub(height));
+            }
+        }
     }
 
     pub fn scroll_up(&mut self, lines: usize) {
@@ -106,6 +127,11 @@ pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
         log.visible().iter().map(|e| line(e, usize::from(area.width))).collect()
     };
     f.render_widget(Paragraph::new(lines), area);
+    // the Event the view was opened at is reversed across its whole line
+    if let Some(i) = log.visible().iter().position(|e| log.selected == Some(e.id)) {
+        let row = Rect::new(area.x, area.y + i as u16, area.width, 1);
+        f.buffer_mut().set_style(row.intersection(area), Modifier::REVERSED);
+    }
 }
 
 #[cfg(test)]

@@ -64,7 +64,11 @@ impl Scroll {
 
     /// Moves `by` rows from where the view is; reaching the end follows it.
     pub fn by(&mut self, by: isize) {
-        let top = self.top().saturating_add_signed(by);
+        self.to(self.top().saturating_add_signed(by));
+    }
+
+    /// Shows from row `top` on; reaching the end follows it.
+    pub fn to(&mut self, top: usize) {
         self.top = if top >= self.max() { usize::MAX } else { top };
     }
 

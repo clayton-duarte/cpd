@@ -68,7 +68,8 @@ impl Live {
 pub struct FlowJob {
     pub key: String,
     pub status: Live,
-    pub tier: Tier,
+    /// None for a stub draft: the pill shows `—`.
+    pub tier: Option<Tier>,
     pub needs: Vec<String>,
     /// How many Attempts the Job has had; the pill shows `aN` from the second on.
     pub attempt: usize,
@@ -124,7 +125,7 @@ fn truncate(s: &str, w: usize) -> String {
 /// The left half of a pill (` <icon> <key> `, the key cut to `key_w` characters) and the right half (`│<tier>[│aN] `).
 fn pill_parts(j: &FlowJob, key_w: usize, frame: usize) -> (String, String) {
     let a = if j.attempt > 1 { format!("│a{}", j.attempt) } else { String::new() };
-    (format!(" {} {} ", j.status.icon(frame).0, truncate(&j.key, key_w)), format!("│{}{} ", j.tier, a))
+    (format!(" {} {} ", j.status.icon(frame).0, truncate(&j.key, key_w)), format!("│{}{} ", j.tier.map_or_else(|| "—".to_owned(), |t| t.to_string()), a))
 }
 
 /// The needs of each Job (as indices) that no other need already implies: a need reachable through another need is dropped.
@@ -532,7 +533,7 @@ mod tests {
         FlowJob {
             key: key.into(),
             status: Live::Queued,
-            tier: Tier::parse("S1").unwrap(),
+            tier: Some(Tier::parse("S1").unwrap()),
             needs: needs.iter().map(|s| s.to_string()).collect(),
             attempt: 1,
         }
@@ -570,16 +571,16 @@ mod tests {
     }
 
     #[test]
-    fn a_running_pill_spins_through_the_four_frames() {
-        let icons: Vec<String> = (0..4).map(|f| icon_at(Live::Running, f)).collect();
-        assert_eq!(icons, ["◐", "◓", "◑", "◒"]);
+    fn a_running_pill_spins_through_the_nine_frames() {
+        let icons: Vec<String> = (0..10).map(|f| icon_at(Live::Running, f)).collect();
+        assert_eq!(icons, [palette::SPINNER.to_vec(), vec![palette::SPINNER[0]]].concat());
     }
 
     #[test]
     fn a_merging_and_a_queued_pill_do_not_spin() {
-        for f in 0..4 {
-            assert_eq!(icon_at(Live::Merging, f), "⇥", "frame {f}");
-            assert_eq!(icon_at(Live::Queued, f), "○", "frame {f}");
+        for f in 0..palette::SPINNER.len() {
+            assert_eq!(icon_at(Live::Merging, f), palette::MERGING, "frame {f}");
+            assert_eq!(icon_at(Live::Queued, f), palette::QUEUED, "frame {f}");
         }
     }
 
@@ -615,7 +616,7 @@ mod tests {
     fn columns_run_left_to_right() {
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b"])], 0);
         snap(&c, "
-  ○ a │S1 ───── ○ b │S1 ───── ○ c │S1");
+  󰝦 a │S1 ───── 󰝦 b │S1 ───── 󰝦 c │S1");
         assert_eq!(c.columns, vec![vec![0], vec![1], vec![2]]);
     }
 
@@ -624,7 +625,7 @@ mod tests {
         // c needs a through b, so its own need of a is dropped: a has one line out, to b
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b", "a"])], 0);
         snap(&c, "
-  ○ a │S1 ───── ○ b │S1 ───── ○ c │S1");
+  󰝦 a │S1 ───── 󰝦 b │S1 ───── 󰝦 c │S1");
         // the same with the implied need listed first
         assert_eq!(text(&layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a", "b"])], 0)), text(&c));
     }
@@ -633,9 +634,9 @@ mod tests {
     fn jobs_with_the_same_needs_share_a_card_stacked_with_no_space() {
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("d", &["a"])], 0);
         snap(&c, "
-              ╭ ○ b │S1 ╮
-  ○ a │S1 ────┤ ○ c │S1 │
-              ╰ ○ d │S1 ╯");
+              ╭ 󰝦 b │S1 ╮
+  󰝦 a │S1 ────┤ 󰝦 c │S1 │
+              ╰ 󰝦 d │S1 ╯");
         assert_eq!(c.pills.iter().map(|p| p.rect.y).collect::<Vec<_>>(), [1, 0, 1, 2]);
     }
 
@@ -644,23 +645,23 @@ mod tests {
         // three Jobs: both brackets are joined at the middle row, where the line in and the line out meet them
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("e", &["a"]), job("d", &["b", "c", "e"])], 0);
         snap(&c, "
-              ╭ ○ b │S1 ╮
-  ○ a │S1 ────┤ ○ c │S1 ├──── ○ d │S1
-              ╰ ○ e │S1 ╯");
+              ╭ 󰝦 b │S1 ╮
+  󰝦 a │S1 ────┤ 󰝦 c │S1 ├──── 󰝦 d │S1
+              ╰ 󰝦 e │S1 ╯");
         // two Jobs: the middle row is the upper one
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"])], 0);
         snap(&c, "
-  ○ a │S1 ────┬ ○ b │S1 ╮
-              ╰ ○ c │S1 ╯");
+  󰝦 a │S1 ────┬ 󰝦 b │S1 ╮
+              ╰ 󰝦 c │S1 ╯");
     }
 
     #[test]
     fn single_cards_are_one_row_apart_and_have_plain_line_ends() {
         let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a"]), job("d", &["b"])], 0);
         snap(&c, "
-  ○ a │S1 ──┬── ○ c │S1
+  󰝦 a │S1 ──┬── 󰝦 c │S1
             │
-  ○ b │S1 ──┴── ○ d │S1");
+  󰝦 b │S1 ──┴── 󰝦 d │S1");
     }
 
     #[test]
@@ -669,11 +670,11 @@ mod tests {
         long.attempt = 2;
         let c = layout(&[job("a", &[]), long, job("b", &[])], 0);
         snap(&c, "
-  ○ a               │S1
+  󰝦 a               │S1
 
-  ○ a-longer-key │S1│a2
+  󰝦 a-longer-key │S1│a2
 
-  ○ b               │S1");
+  󰝦 b               │S1");
         // the last cell of the widest pill is a hit, the one after it is not
         let r = c.pills[1].rect;
         assert_eq!((c.pill_at(r.right() - 1, r.y), c.pill_at(r.right(), r.y)), (Some(1), None));
@@ -688,18 +689,18 @@ mod tests {
         assert_eq!(glyphs, ["┬", "│", "┴"]);
         let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a", "b"])], 0);
         snap(&c, "
-  ○ a │S1 ──╮
-            ├── ○ c │S1
-  ○ b │S1 ──╯");
+  󰝦 a │S1 ──╮
+            ├── 󰝦 c │S1
+  󰝦 b │S1 ──╯");
     }
 
     #[test]
     fn a_line_that_skips_columns_rides_a_free_row() {
         let c = layout(&[job("a", &[]), job("x", &[]), job("b", &["a"]), job("c", &["b", "x"])], 0);
         snap(&c, "
-  ○ a │S1 ──╮
-            ├── ○ b │S1 ──┬── ○ c │S1
-  ○ x │S1 ──┴─────────────╯");
+  󰝦 a │S1 ──╮
+            ├── 󰝦 b │S1 ──┬── 󰝦 c │S1
+  󰝦 x │S1 ──┴─────────────╯");
     }
 
     #[test]

@@ -5,8 +5,9 @@
 
 use cpd_core::events::Kind;
 
-/// The kinds the tree acts on: §17's list, with the Job, Attempt, Escalation, PR and Plan review kinds that
-/// change a Plan's counters and whether it needs the User, and the Context records it counts.
+/// The kinds the tree acts on: §17's list (the `inbox-*` kinds included: the Inbox says who needs the User and fills
+/// the Inbox section), with the Job, Attempt, Escalation, PR and Plan review kinds that change a Plan's counters, and
+/// the Context records it counts.
 pub const KINDS: &[Kind] = &[
     Kind::ContextCreated,
     Kind::ContextGrounded,
@@ -43,6 +44,10 @@ pub const KINDS: &[Kind] = &[
     Kind::ContextArchived,
     Kind::PlanArchived,
     Kind::SessionArchived,
+    Kind::InboxOpened,
+    Kind::InboxClosed,
+    Kind::InboxSnoozed,
+    Kind::InboxDismissed,
 ];
 
 #[cfg(test)]
@@ -76,6 +81,10 @@ mod tests {
             Kind::ContextArchived,
             Kind::PlanArchived,
             Kind::SessionArchived,
+            Kind::InboxOpened,
+            Kind::InboxClosed,
+            Kind::InboxSnoozed,
+            Kind::InboxDismissed,
         ] {
             assert!(KINDS.contains(&kind), "{kind}");
         }

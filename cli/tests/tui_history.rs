@@ -145,7 +145,7 @@ fn the_session_file_of_an_archived_lead_is_rendered_read_only() {
     let file = session_file(&env);
     populate(&env, Some(&file), true);
     let pane = Pane::start(&env, 40, 12);
-    let screen = pane.wait("the conversation", |s| s.iter().any(|r| r.contains("← ok")));
+    let screen = pane.wait("the conversation", |s| s.iter().any(|r| r.contains("󰘌 ok")));
     assert_eq!(
         screen,
         [
@@ -155,7 +155,7 @@ fn the_session_file_of_an_archived_lead_is_rendered_read_only() {
             "16:33:44 agent",
             "      Here is the plan.",
             "16:33:44 → bash cpd plan show",
-            "        ← ok",
+            "        󰘌 ok",
         ]
     );
 }
@@ -166,7 +166,7 @@ fn a_session_that_is_not_archived_says_read_only_only() {
     let file = session_file(&env);
     populate(&env, Some(&file), false);
     let pane = Pane::start(&env, 40, 12);
-    let screen = pane.wait("the conversation", |s| s.iter().any(|r| r.contains("← ok")));
+    let screen = pane.wait("the conversation", |s| s.iter().any(|r| r.contains("󰘌 ok")));
     assert_eq!(screen[0], "old lead (read-only)");
 }
 
@@ -176,13 +176,13 @@ fn the_keys_scroll_and_q_leaves_for_the_placeholder_text() {
     let file = session_file(&env);
     populate(&env, Some(&file), true);
     let pane = Pane::start(&env, 40, 4);
-    pane.wait("the end", |s| s.iter().any(|r| r.contains("← ok")));
+    pane.wait("the end", |s| s.iter().any(|r| r.contains("󰘌 ok")));
     pane.keys(&["g"]); // not a key
     pane.keys(&["k", "k", "k", "k", "k", "k"]);
     let screen = pane.wait("the top", |s| s.get(1).is_some_and(|r| r.contains("you")));
     assert_eq!(screen, [TOP, "16:33:44 you", "      Plan the API.", "16:33:44 agent"]);
     pane.keys(&["G"]);
-    pane.wait("the end again", |s| s.iter().any(|r| r.contains("← ok")));
+    pane.wait("the end again", |s| s.iter().any(|r| r.contains("󰘌 ok")));
     pane.keys(&["q"]);
     // the placeholder wraps in a 40-column pane
     let screen = pane.wait("the placeholder", |s| s.join(" ").replace("  ", " ").contains(PLACEHOLDER));

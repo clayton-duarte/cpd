@@ -25,6 +25,10 @@ pub enum Item {
     NewContext,
     Unarchive,
     CopyId,
+    Snooze15,
+    Snooze1h,
+    SnoozeTomorrow,
+    Dismiss,
 }
 
 impl Item {
@@ -40,6 +44,10 @@ impl Item {
             Item::NewContext => "New Context…",
             Item::Unarchive => "Unarchive",
             Item::CopyId => "Copy id",
+            Item::Snooze15 => "Snooze 15 min",
+            Item::Snooze1h => "Snooze 1 h",
+            Item::SnoozeTomorrow => "Snooze until tomorrow 09:00",
+            Item::Dismiss => "Dismiss",
         }
     }
 }
@@ -55,6 +63,10 @@ pub enum Kind {
     Archived,
     /// No row: the empty area of the tree.
     Empty,
+    /// An Inbox item row (never `engine-down`: it has no id and no menu).
+    Inbox,
+    /// The snooze choices of an Inbox item, which `s` opens.
+    Snooze,
 }
 
 impl Kind {
@@ -78,6 +90,8 @@ impl Kind {
             Kind::Fork => &[Item::Open, Item::Rename, Item::Fork, Item::CopyId, Item::Close, Item::Archive],
             Kind::Archived => &[Item::Rename, Item::CopyId, Item::Unarchive],
             Kind::Empty => &[Item::NewContext],
+            Kind::Inbox => &[Item::Snooze15, Item::Snooze1h, Item::SnoozeTomorrow, Item::Dismiss],
+            Kind::Snooze => &[Item::Snooze15, Item::Snooze1h, Item::SnoozeTomorrow],
         }
     }
 }
@@ -104,8 +118,10 @@ pub enum Hit {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Menu {
-    /// The tree path of the row clicked; empty for the empty area.
+    /// The tree path of the row clicked; empty for the empty area and for an Inbox item.
     pub path: Vec<Id>,
+    /// The id of the Inbox item the menu is about (an Inbox menu or the snooze choices).
+    pub inbox: Option<i64>,
     at: Position,
     items: &'static [Item],
     selected: usize,
@@ -113,7 +129,12 @@ pub struct Menu {
 
 impl Menu {
     pub fn new(kind: Kind, path: Vec<Id>, at: Position) -> Menu {
-        Menu { path, at, items: kind.items(), selected: 0 }
+        Menu { path, inbox: None, at, items: kind.items(), selected: 0 }
+    }
+
+    /// The menu of the Inbox item `id` (`Kind::Inbox`: a right click) or its snooze choices (`Kind::Snooze`: `s`).
+    pub fn for_item(kind: Kind, id: i64, at: Position) -> Menu {
+        Menu { inbox: Some(id), ..Menu::new(kind, Vec::new(), at) }
     }
 
     #[cfg(test)]
@@ -218,6 +239,8 @@ mod tests {
         assert_eq!(labels(Kind::Fork), ["Open", "Rename…", "Fork…", "Copy id", "Close", "Archive"]);
         assert_eq!(labels(Kind::Empty), ["New Context…"]);
         assert_eq!(labels(Kind::Archived), ["Rename…", "Copy id", "Unarchive"]);
+        assert_eq!(labels(Kind::Inbox), ["Snooze 15 min", "Snooze 1 h", "Snooze until tomorrow 09:00", "Dismiss"]);
+        assert_eq!(labels(Kind::Snooze), ["Snooze 15 min", "Snooze 1 h", "Snooze until tomorrow 09:00"]);
     }
 
     #[test]
@@ -230,8 +253,8 @@ mod tests {
         assert_eq!(Kind::of(None), Some(Kind::Empty));
         let tree = archived();
         let kind = |p: &[&str]| Kind::of(rows::row(&tree, &path(p)));
-        assert_eq!(kind(&["alpha", "…"]), None, "a `…` row has no menu");
-        assert_eq!(kind(&["…"]), None);
+        assert_eq!(kind(&["alpha", rows::MORE]), None, "a `…` row has no menu");
+        assert_eq!(kind(&[rows::MORE]), None);
         assert_eq!(kind(&["alpha", "old"]), Some(Kind::Archived), "an archived Plan");
         assert_eq!(kind(&["alpha", "f-blocked"]), Some(Kind::Archived), "an archived fork of a live Plan");
         assert_eq!(kind(&["zeta"]), Some(Kind::Archived), "an archived Context");
@@ -257,6 +280,26 @@ mod tests {
         assert_eq!(press(&mut menu, KeyCode::Enter), Outcome::Pick(Item::Archive));
         assert_eq!(press(&mut menu, KeyCode::Up), Outcome::Stay);
         assert_eq!(press(&mut menu, KeyCode::Enter), Outcome::Pick(Item::Close));
+    }
+
+    #[test]
+    fn an_inbox_menu_picks_with_enter_and_a_click_and_knows_its_item() {
+        let mut menu = Menu::for_item(Kind::Inbox, 12, Position::new(3, 3));
+        assert_eq!((menu.inbox, menu.path.is_empty()), (Some(12), true));
+        for _ in 0..9 {
+            press(&mut menu, KeyCode::Down);
+        }
+        assert_eq!(press(&mut menu, KeyCode::Enter), Outcome::Pick(Item::Dismiss));
+        assert_eq!(press(&mut menu, KeyCode::Esc), Outcome::Close);
+        let mut menu = Menu::for_item(Kind::Snooze, 12, Position::new(3, 3));
+        assert_eq!(press(&mut menu, KeyCode::Enter), Outcome::Pick(Item::Snooze15));
+        press(&mut menu, KeyCode::Down);
+        assert_eq!(press(&mut menu, KeyCode::Enter), Outcome::Pick(Item::Snooze1h));
+        for _ in 0..9 {
+            press(&mut menu, KeyCode::Down);
+        }
+        assert_eq!(press(&mut menu, KeyCode::Enter), Outcome::Pick(Item::SnoozeTomorrow), "no Dismiss among the choices");
+        assert_eq!(menu.click(PANE, Position::new(4, 4)), Outcome::Pick(Item::Snooze15));
     }
 
     #[test]

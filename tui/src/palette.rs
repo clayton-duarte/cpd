@@ -117,17 +117,41 @@ pub fn pill(m: Meaning) -> Style {
     Style::new().fg(Color::Black).bg(color(m))
 }
 
+// Job pill icons (Nerd Fonts, Material Design; hs-d235). https://www.nerdfonts.com/cheat-sheet
+/// A queued Job: `nf-md-circle_outline` (U+F0766).
+pub const QUEUED: &str = "\u{F0766}";
+/// A merging Job: `nf-md-eye_circle_outline` (U+F0B95).
+pub const MERGING: &str = "\u{F0B95}";
+/// A merged Job: `nf-md-check_circle` (U+F05E0).
+pub const MERGED: &str = "\u{F05E0}";
+/// A failed Job: `nf-md-close_circle` (U+F0159).
+pub const FAILED: &str = "\u{F0159}";
+/// A draft Job: `nf-md-progress_pencil` (U+F1787).
+pub const DRAFT: &str = "\u{F1787}";
+/// A cancelled Job: `nf-md-cancel` (U+F073A).
+pub const CANCELLED: &str = "\u{F073A}";
+
+// PR check icons (hs-d235). Passed and failed share the glyphs of merged and failed Jobs.
+/// Checks passed: `nf-md-check_circle` (U+F05E0).
+pub const CHECKS_PASSED: &str = MERGED;
+/// Checks failed: `nf-md-close_circle` (U+F0159).
+pub const CHECKS_FAILED: &str = FAILED;
+/// Checks pending: `nf-md-progress_clock` (U+F0996).
+pub const CHECKS_PENDING: &str = "\u{F0996}";
+/// No checks: `nf-md-minus` (U+F0374).
+pub const CHECKS_NONE: &str = "\u{F0374}";
+
 /// Icon and meaning of a Job's status; `merging` is a `running` Job whose
 /// Attempt is merging (`JobCounts` counts it apart).
 pub fn job_status(status: JobStatus, merging: bool) -> (&'static str, Meaning) {
     match (status, merging) {
-        (JobStatus::Queued, _) => ("○", Meaning::NotStarted),
-        (JobStatus::Running, false) => ("◐", Meaning::InProgress),
-        (JobStatus::Running, true) => ("⇥", Meaning::Review),
-        (JobStatus::Merged, _) => ("✓", Meaning::Done),
-        (JobStatus::Failed, _) => ("✗", Meaning::Failed),
-        (JobStatus::Draft, _) => ("◌", Meaning::Nothing),
-        (JobStatus::Cancelled, _) => ("⊘", Meaning::Nothing),
+        (JobStatus::Queued, _) => (QUEUED, Meaning::NotStarted),
+        (JobStatus::Running, false) => (SPINNER[0], Meaning::InProgress),
+        (JobStatus::Running, true) => (MERGING, Meaning::Review),
+        (JobStatus::Merged, _) => (MERGED, Meaning::Done),
+        (JobStatus::Failed, _) => (FAILED, Meaning::Failed),
+        (JobStatus::Draft, _) => (DRAFT, Meaning::Nothing),
+        (JobStatus::Cancelled, _) => (CANCELLED, Meaning::Nothing),
     }
 }
 
@@ -163,30 +187,40 @@ pub fn phase(phase: Option<Phase>) -> Meaning {
     }
 }
 
-/// The four frames of the working dot, one per [`frame`].
-pub const SPINNER: [&str; 4] = ["◐", "◓", "◑", "◒"];
+/// Nerd Font `nf-md-circle_outline` (U+F0766), then `nf-md-circle_slice_1` … `8` (U+F0A9E..U+F0AA5): the 9 frames of one
+/// animation. The working dot and a running Job's pill show one per [`frame`]; the other dots are its first and last.
+/// https://www.nerdfonts.com/cheat-sheet
+pub const SPINNER: [&str; 9] =
+    ["\u{F0766}", "\u{F0A9E}", "\u{F0A9F}", "\u{F0AA0}", "\u{F0AA1}", "\u{F0AA2}", "\u{F0AA3}", "\u{F0AA4}", "\u{F0AA5}"];
+
+/// An idle Session: the first frame.
+pub const IDLE: &str = SPINNER[0];
+/// A stopped Session: the first frame, drawn dim.
+pub const STOPPED: &str = IDLE;
+/// A Session that needs the User (coloured by case): the last frame.
+pub const NEEDS_YOU: &str = SPINNER[8];
 
 /// How long one frame of the spinner lasts, in milliseconds.
-const FRAME_MS: u128 = 250;
+const FRAME_MS: u128 = 100;
 
-/// The spinner frame at `now`: `(unix ms / 250) % 4`, one clock for every spinner, so they all turn together.
+/// The spinner frame at `now`: `(unix ms / 100) % 9`, one clock for every spinner, so they all turn together.
 pub fn frame(now: SystemTime) -> usize {
     let ms = now.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
     ((ms / FRAME_MS) % SPINNER.len() as u128) as usize
 }
 
-/// The tree's dot (commands.md §17): `●` red, yellow, magenta or white; `◐◓◑◒` (frame `frame`) in the terminal's
-/// foreground when working; `○` in the terminal's foreground; `◌` dim. An `archived` row keeps its glyph, never
+/// The tree's dot (commands.md §17): [`NEEDS_YOU`] red, yellow, magenta or white; [`SPINNER`] (frame `frame`) in the
+/// terminal's foreground when working; [`IDLE`] in the terminal's foreground; [`STOPPED`] dim. An `archived` row keeps its glyph, never
 /// animated (the first frame when working), in the colour of [`Meaning::Nothing`].
 pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
     let (glyph, style) = match dot {
-        Dot::Red => ("●", Style::new().fg(Color::Red)),
-        Dot::Yellow => ("●", Style::new().fg(Color::Yellow)),
-        Dot::Magenta => ("●", Style::new().fg(Color::Magenta)),
-        Dot::White => ("●", Style::new().fg(Color::White)),
+        Dot::Red => (NEEDS_YOU, Style::new().fg(Color::Red)),
+        Dot::Yellow => (NEEDS_YOU, Style::new().fg(Color::Yellow)),
+        Dot::Magenta => (NEEDS_YOU, Style::new().fg(Color::Magenta)),
+        Dot::White => (NEEDS_YOU, Style::new().fg(Color::White)),
         Dot::Working => (SPINNER[if archived { 0 } else { frame % SPINNER.len() }], Style::new()),
-        Dot::Idle => ("○", Style::new()),
-        Dot::Stopped => ("◌", Style::new().add_modifier(Modifier::DIM)),
+        Dot::Idle => (IDLE, Style::new()),
+        Dot::Stopped => (STOPPED, Style::new().add_modifier(Modifier::DIM)),
     };
     Span::styled(glyph, if archived { fg(Meaning::Nothing) } else { style })
 }
@@ -220,10 +254,10 @@ pub const PR_CONFLICT: (&str, Meaning) = ("conflict", Meaning::Failed);
 /// Icon and meaning of a PR's checks.
 pub fn checks(c: Checks) -> (&'static str, Meaning) {
     match c {
-        Checks::Passed => ("✓", Meaning::Done),
-        Checks::Failed => ("✗", Meaning::Failed),
-        Checks::Pending => ("…", Meaning::InProgress),
-        Checks::None => ("–", Meaning::Nothing),
+        Checks::Passed => (CHECKS_PASSED, Meaning::Done),
+        Checks::Failed => (CHECKS_FAILED, Meaning::Failed),
+        Checks::Pending => (CHECKS_PENDING, Meaning::InProgress),
+        Checks::None => (CHECKS_NONE, Meaning::Nothing),
     }
 }
 
@@ -256,13 +290,13 @@ mod tests {
     #[test]
     fn every_job_status_has_its_icon_and_meaning() {
         let table = [
-            (JobStatus::Queued, false, "○", Meaning::NotStarted),
-            (JobStatus::Running, false, "◐", Meaning::InProgress),
-            (JobStatus::Running, true, "⇥", Meaning::Review),
-            (JobStatus::Merged, false, "✓", Meaning::Done),
-            (JobStatus::Failed, false, "✗", Meaning::Failed),
-            (JobStatus::Draft, false, "◌", Meaning::Nothing),
-            (JobStatus::Cancelled, false, "⊘", Meaning::Nothing),
+            (JobStatus::Queued, false, QUEUED, Meaning::NotStarted),
+            (JobStatus::Running, false, SPINNER[0], Meaning::InProgress),
+            (JobStatus::Running, true, MERGING, Meaning::Review),
+            (JobStatus::Merged, false, MERGED, Meaning::Done),
+            (JobStatus::Failed, false, FAILED, Meaning::Failed),
+            (JobStatus::Draft, false, DRAFT, Meaning::Nothing),
+            (JobStatus::Cancelled, false, CANCELLED, Meaning::Nothing),
         ];
         for (status, merging, icon, m) in table {
             assert_eq!(job_status(status, merging), (icon, m), "{status:?} {merging}");
@@ -296,35 +330,72 @@ mod tests {
     #[test]
     fn a_needs_you_dot_is_filled_and_coloured_by_its_case_and_nothing_else_is() {
         for (dot, colour) in [(Dot::Red, Color::Red), (Dot::Yellow, Color::Yellow), (Dot::Magenta, Color::Magenta), (Dot::White, Color::White)] {
-            assert_eq!(dot_span(dot, 0, false), Span::styled("●", Style::new().fg(colour)), "{dot:?}");
+            assert_eq!(dot_span(dot, 0, false), Span::styled(NEEDS_YOU, Style::new().fg(colour)), "{dot:?}");
         }
-        assert_eq!(dot_span(Dot::Idle, 0, false), Span::styled("○", Style::new()), "the terminal's foreground");
-        assert_eq!(dot_span(Dot::Stopped, 0, false), Span::styled("◌", Style::new().add_modifier(Modifier::DIM)), "dim, no colour");
+        assert_eq!(dot_span(Dot::Idle, 0, false), Span::styled(IDLE, Style::new()), "the terminal's foreground");
+        assert_eq!(dot_span(Dot::Stopped, 0, false), Span::styled(STOPPED, Style::new().add_modifier(Modifier::DIM)), "dim, no colour");
     }
 
     #[test]
     fn a_working_dot_turns_with_the_frame_in_the_terminals_foreground() {
-        let glyphs: Vec<_> = (0..5).map(|f| dot_span(Dot::Working, f, false).content.into_owned()).collect();
-        assert_eq!(glyphs, ["◐", "◓", "◑", "◒", "◐"]);
+        let glyphs: Vec<_> = (0..10).map(|f| dot_span(Dot::Working, f, false).content.into_owned()).collect();
+        assert_eq!(glyphs, [SPINNER.to_vec(), vec![SPINNER[0]]].concat());
         assert_eq!(dot_span(Dot::Working, 2, false).style, Style::new());
-        assert_eq!(SPINNER, ["◐", "◓", "◑", "◒"]);
+        assert_eq!(SPINNER.len(), 9);
+        assert_eq!((SPINNER[0], SPINNER[8]), ("\u{F0766}", "\u{F0AA5}"));
+        assert_eq!((IDLE, STOPPED, NEEDS_YOU), (SPINNER[0], SPINNER[0], SPINNER[8]));
+    }
+
+    #[test]
+    fn every_dot_glyph_is_one_cell_wide() {
+        for glyph in SPINNER.into_iter().chain([NEEDS_YOU, IDLE, STOPPED]) {
+            assert_eq!(Span::raw(glyph).width(), 1, "U+{:X}", glyph.chars().next().unwrap() as u32);
+            assert_eq!(glyph.chars().count(), 1, "{glyph:?}");
+        }
+    }
+
+    #[test]
+    fn every_pill_and_check_glyph_is_one_cell_wide_and_the_one_hs_d235_picked() {
+        let glyphs = [
+            (QUEUED, 0xF0766),
+            (MERGING, 0xF0B95),
+            (MERGED, 0xF05E0),
+            (FAILED, 0xF0159),
+            (DRAFT, 0xF1787),
+            (CANCELLED, 0xF073A),
+            (CHECKS_PASSED, 0xF05E0),
+            (CHECKS_FAILED, 0xF0159),
+            (CHECKS_PENDING, 0xF0996),
+            (CHECKS_NONE, 0xF0374),
+        ];
+        for (glyph, code) in glyphs {
+            assert_eq!(glyph.chars().collect::<Vec<_>>(), [char::from_u32(code).unwrap()], "U+{code:X}");
+            assert_eq!(Span::raw(glyph).width(), 1, "U+{code:X}");
+        }
     }
 
     #[test]
     fn an_archived_dot_keeps_its_glyph_in_the_darker_grey_and_never_turns() {
         let grey = Style::new().fg(Color::DarkGray);
-        for (dot, glyph) in [(Dot::Red, "●"), (Dot::Yellow, "●"), (Dot::Magenta, "●"), (Dot::White, "●"), (Dot::Idle, "○"), (Dot::Stopped, "◌")] {
+        for (dot, glyph) in [
+            (Dot::Red, NEEDS_YOU),
+            (Dot::Yellow, NEEDS_YOU),
+            (Dot::Magenta, NEEDS_YOU),
+            (Dot::White, NEEDS_YOU),
+            (Dot::Idle, IDLE),
+            (Dot::Stopped, STOPPED),
+        ] {
             assert_eq!(dot_span(dot, 0, true), Span::styled(glyph, grey), "{dot:?}");
         }
-        for f in 0..4 {
-            assert_eq!(dot_span(Dot::Working, f, true), Span::styled("◐", grey), "frame {f}");
+        for f in 0..SPINNER.len() {
+            assert_eq!(dot_span(Dot::Working, f, true), Span::styled(SPINNER[0], grey), "frame {f}");
         }
     }
 
     #[test]
-    fn the_frame_is_the_unix_time_in_quarter_seconds_modulo_four() {
+    fn the_frame_is_the_unix_time_in_tenths_of_a_second_modulo_nine() {
         let at = |ms: u64| frame(UNIX_EPOCH + std::time::Duration::from_millis(ms));
-        assert_eq!([0, 249, 250, 499, 500, 750, 999, 1000, 1250].map(at), [0, 0, 1, 1, 2, 3, 3, 0, 1]);
+        assert_eq!([0, 99, 100, 199, 200, 800, 899, 900, 1000].map(at), [0, 0, 1, 1, 2, 8, 8, 0, 1]);
         assert_eq!(frame(UNIX_EPOCH - std::time::Duration::from_secs(1)), 0, "before the epoch: the first frame");
     }
 
@@ -345,10 +416,10 @@ mod tests {
         assert_eq!(PR_LEGEND.map(|(_, s)| s), states.map(|(s, _)| s));
         assert_eq!(PR_CONFLICT, ("conflict", pr_state(PrState::Closed)));
         let table = [
-            (Checks::Passed, "✓", Meaning::Done),
-            (Checks::Failed, "✗", Meaning::Failed),
-            (Checks::Pending, "…", Meaning::InProgress),
-            (Checks::None, "–", Meaning::Nothing),
+            (Checks::Passed, CHECKS_PASSED, Meaning::Done),
+            (Checks::Failed, CHECKS_FAILED, Meaning::Failed),
+            (Checks::Pending, CHECKS_PENDING, Meaning::InProgress),
+            (Checks::None, CHECKS_NONE, Meaning::Nothing),
         ];
         for (c, icon, m) in table {
             assert_eq!(checks(c), (icon, m), "{c:?}");

@@ -21,6 +21,7 @@ use common::{CPD, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
+use nix::fcntl::{Flock, FlockArg};
 
 const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -31,8 +32,14 @@ const FAT_JOBS: usize = 300;
 /// store is over a megabyte.
 const READ_LIMIT: u64 = 300 * 1024;
 
+/// An env whose engine runs: its lock is held until the test process ends, so the Inbox has no `engine-down` item, whose
+/// age would be a clock on the tree's screen.
 fn env() -> TestEnv {
     let env = TestEnv::new();
+    let lock = env.cpd_home().join("locks/watch.lock");
+    fs::create_dir_all(lock.parent().unwrap()).unwrap();
+    let lock = Flock::lock(fs::File::create(lock).unwrap(), FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+    std::mem::forget(lock);
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(

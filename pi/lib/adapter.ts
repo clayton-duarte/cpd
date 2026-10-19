@@ -1,6 +1,7 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { Text } from "@earendil-works/pi-tui";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { callCpd, CpdError, cpdProtocol, installedIdentity, isObject, toCpdError } from "./cpd.ts";
 import { cursorFrom } from "./cursor.ts";
@@ -8,12 +9,14 @@ import { errorMessage, eventMessage, FOLLOW_UP, LEAD_MESSAGES, sessionMessage } 
 import type { CpdEvent } from "./event.ts";
 import { parseLine, PROTOCOL } from "./event.ts";
 import { DEFAULT_TIMING, Follower, type Schedule, type Spawn, type Timing } from "./follower.ts";
-import type { CommandCtx, Ctx, Message, PiApi } from "./pi.ts";
+import type { CommandCtx, Ctx, Exec, Message, MessageRenderer, PiApi } from "./pi.ts";
+import { lastAssistantText, needsReminder, planKeys, REMINDER_TEXT, REMINDER_TYPE } from "./reminder.ts";
 import { parseOpened, parseResult, parseStatus, request } from "./plannotator.ts";
-import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, REVIEW_LABEL, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
+import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, highestReview, REVIEW_LABEL, reviewNumber, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
 import { adapterDir, appendLog, DEFAULT_POLL_MS, LONG_REFUSAL_NOTICE, pollAdapter, type Poll, refusal, RELOAD_COMMAND, reloadLogPath, RELOAD_TRIGGER, validatePackage, type Validation } from "./reload.ts";
+import { isTyped, startsReply } from "./reply.ts";
 import { Facts, Reporter, stateArgs, type Wanted } from "./state.ts";
-import { contextCursorFrom, contextUpdate, parsePending, parsePlanEvents, parseRecordEvents, parseRecords, PLAN_KINDS } from "./updates.ts";
+import { CONTEXT_TYPE, contextCursorFrom, contextUpdate, countsOf, parsePending, parsePlanEvents, parseRecordEvents, parseRecords, PLAN_KINDS, summaryLine } from "./updates.ts";
 
 export type Options = {
   /** The environment read at `session_start` (`CPD_SESSION`, `CPD_PLAN`, `CPD_HOME`). Default: `process.env`. */
@@ -24,6 +27,13 @@ export type Options = {
   schedule?: Schedule;
   /** The directory whose replacement means an install, how often it is polled, and how the new package is validated (§15.6). Default: the adapter's own directory, every {@link DEFAULT_POLL_MS}, jiti from pi. */
   reload?: { dir?: string; intervalMs?: number; longRefusalMs?: number } & Validation;
+};
+
+/** commands.md §15.7 "Display": collapsed, one dim line of counts; expanded, the full text. The model gets `content` either way. A message without counts (an older adapter's) is shown in full. */
+export const renderContext: MessageRenderer = (message, { expanded, outputPad }, theme) => {
+  const counts = countsOf(message.details);
+  const text = expanded || counts === undefined ? String(message.content) : theme.fg("dim", summaryLine(counts));
+  return new Text(text, outputPad, 0, (t) => theme.bg("customMessageBg", t));
 };
 
 export const QUESTION_LABEL = "cpd: Worker question";
@@ -56,6 +66,8 @@ type Run = {
   abort: AbortController;
   /** Watches the adapter directory for an install (§15 "Reload after an install"). */
   reload: Poll | undefined;
+  /** §15.8: the last run ended on a message that spoke of further work and named no registered key; the next `before_agent_start` adds the reminder once. */
+  reminderDue: boolean;
   /** One line of `run/adapter/<session>.log` (§15.6 "Log"); a failed write is notified once per run. */
   log: (line: string) => void;
   unsubscribe: (() => void)[];
@@ -80,8 +92,10 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   // The context of `session_start`: `ctx.ui` is only handed to handlers.
   const ctxOf: { current: Ctx | undefined } = { current: undefined };
 
-  const exec = (command: string, args: string[]) => pi.exec(command, args);
-  const call = (args: string[]) => callCpd(exec, args);
+  // Aborted at `session_shutdown` (and by the next start): a call in flight then ends instead of outliving the run.
+  let abort = new AbortController();
+  const exec: Exec = (command, args, options) => pi.exec(command, args, options);
+  const call = (args: string[]) => callCpd(exec, args, { timeoutMs: timing.callTimeoutMs, signal: abort.signal });
 
   // The installed cpd binaries already reported as speaking another protocol (commands.md §15.2, step 0), and the
   // error codes of a failed `--version` already reported; both once per adapter, so a follower restart repeats nothing.
@@ -91,7 +105,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   /** commands.md §15.2, step 0. Never throws; the adapter keeps following whatever it finds. */
   async function checkProtocol(): Promise<void> {
     try {
-      const cpd = await cpdProtocol(exec);
+      const cpd = await cpdProtocol(exec, { timeoutMs: timing.callTimeoutMs, signal: abort.signal });
       versionFailures.clear();
       if (cpd === PROTOCOL) return;
       const identity = installedIdentity() ?? "cpd";
@@ -120,11 +134,17 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     if (r.reporting && run === r) r.reporter.want(r.facts.wanted());
   };
 
-  const newReporter = (id: string) =>
+  const newReporter = (id: string, facts: Facts) =>
     new Reporter(
-      async (w: Wanted) => void (await call(stateArgs(w, id))),
+      // No signal: the `stopped` of `session_shutdown` is sent after the abort, and `stop()` bounds its wait.
+      async (w: Wanted) => {
+        if (w.state === "idle" && w.reply) facts.reply = false; // sent once, with this call
+        await callCpd(exec, stateArgs(w, id), { timeoutMs: timing.callTimeoutMs });
+      },
       (e) => deliver("session state", e),
     );
+
+  pi.registerMessageRenderer(CONTEXT_TYPE, renderContext);
 
   // ---- reload after an install ----
 
@@ -158,6 +178,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     const id = env.CPD_SESSION;
     if (id === undefined || id === "") return;
     await stop(); // a start without a shutdown (never seen) must not leave a second follower behind
+    abort = new AbortController();
     ctxOf.current = ctx;
     if (ctx.sessionManager.getSessionId() !== id) {
       const m = errorMessage("activation", "session_mismatch", `CPD_SESSION is ${id} but pi's session is ${ctx.sessionManager.getSessionId()}; the adapter stays inactive.`);
@@ -174,7 +195,6 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       return;
     }
 
-    const abort = new AbortController();
     const facts = new Facts();
     let logFailed = false;
     const r: Run = {
@@ -182,7 +202,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       info,
       cursor: 0,
       facts,
-      reporter: newReporter(id),
+      reporter: newReporter(id, facts),
       follower: undefined as unknown as Follower,
       reviews: new Map(),
       opening: new Set(),
@@ -195,6 +215,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       reporting: false,
       abort,
       reload: undefined,
+      reminderDue: false,
       log: (line) => {
         try {
           appendLog(reloadLogPath(env.CPD_HOME || join(homedir(), ".cpd"), id), line);
@@ -250,8 +271,10 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       const folded = reviewsFromEntries(entries, plan);
       if (folded.invalid > 0) deliver("session entries", new CpdError("entry_invalid", `${folded.invalid} ${ENTRY_TYPE} entries of this session do not parse and were skipped`));
       r.reviews = folded.reviews;
+      let latest: string | undefined = highestReview(r.reviews.keys()); // stands in when `plan show` fails (§15.5 "Latest only")
       try {
         const show = await call(["plan", "show", "--plan", plan]);
+        latest = isObject(show.review) && typeof show.review.id === "string" ? show.review.id : undefined;
         if (Array.isArray(show.escalations)) {
           for (const q of show.escalations) if (isObject(q) && typeof q.id === "string") facts.open(`escalation:${q.id}`, QUESTION_LABEL);
         }
@@ -259,7 +282,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
         deliver("plan show", e);
       }
       for (const entry of r.reviews.values()) {
-        if (entry.status === "pending") facts.open(`plan-review:${entry.review}`, REVIEW_LABEL);
+        if (entry.status === "pending" && entry.review === latest) facts.open(`plan-review:${entry.review}`, REVIEW_LABEL);
       }
       registerTool();
     }
@@ -294,13 +317,13 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   }
 
   async function stop(): Promise<void> {
+    abort.abort(); // also a start still waiting for `session show`
     const r = run;
     if (!r) return;
     run = undefined;
     ctxOf.current = undefined;
     r.log("stop");
     r.reload?.stop();
-    r.abort.abort();
     r.follower.stop();
     r.unsubscribe.forEach((u) => u());
     if (r.reporting) {
@@ -322,6 +345,10 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     if (parsed.type === "failure") {
       r.failureLineThisRun = true;
       followerError(r, parsed.error);
+      return false;
+    }
+    if (parsed.type === "unknown-kind") {
+      r.cursor = Math.max(r.cursor, parsed.id); // skipped silently: a kind this adapter does not know is one it cannot need
       return false;
     }
     if (parsed.type === "invalid") {
@@ -372,7 +399,10 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       return;
     }
     if (ev.kind === "plan-review" && ev.data.status === "pending") {
-      void openReview(r, ev.data.review as string, "event").catch((e) => deliver(`plan review ${ev.data.review as string}`, e));
+      supersede(r, ev.data.review as string);
+      void openReview(r, ev.data.review as string, "event")
+        .catch((e) => deliver(`plan review ${ev.data.review as string}`, e))
+        .finally(() => refresh(r));
     }
     if (ev.kind === "plan-review" && (ev.data.status === "approved" || ev.data.status === "rejected")) {
       const entry = r.reviews.get(ev.data.review as string);
@@ -436,9 +466,53 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     });
   }
 
+  // ---- the turn-end reminder (§15.8) ----
+
+  /** The Lead's last message of a run, checked at `agent_end` (a failed check adds nothing and is only logged). Registered once; `pi.on` has no unsubscribe, so the run is checked. */
+  pi.on("agent_end", async (event) => {
+    const r = run;
+    if (!r || r.info.role !== "lead" || r.info.plan === null) return;
+    r.reminderDue = false;
+    const text = lastAssistantText(event?.messages);
+    if (text === undefined) return;
+    const plan = r.info.plan;
+    try {
+      const due = needsReminder(text, planKeys(await call(["plan", "show", "--plan", plan])));
+      if (run !== r || !due) return;
+      r.reminderDue = true;
+      registerReminder();
+    } catch (e) {
+      r.log(`reminder: check failed: ${toCpdError(e).message}`);
+    }
+  });
+
+  let reminderRegistered = false;
+  /**
+   * Adds the reminder to the run that is starting: a hidden message (`display: false`), at most once, never a turn of its own.
+   * Registered the first time a reminder is due, not before: `pi.on` has no unsubscribe, and a Lead with nothing due (a Manager, a Worker, nearly every Lead)
+   * has no `before_agent_start` handler at all, so §15.7's "a Lead gets nothing" stays true of the handler list too.
+   */
+  function registerReminder(): void {
+    if (reminderRegistered) return;
+    reminderRegistered = true;
+    pi.on("before_agent_start", () => {
+      const r = run;
+      if (!r || r.info.role !== "lead" || !r.reminderDue) return undefined;
+      r.reminderDue = false;
+      return { message: { customType: REMINDER_TYPE, content: REMINDER_TEXT, display: false, details: { rule: "hs-d239" } } };
+    });
+  }
+
   // ---- the Plan review through plannotator (§15.5) ----
 
-  const planFile = (plan: string, review: string) => join(env.CPD_HOME || join(homedir(), ".cpd"), "run", plan, `plan-${review}.md`);
+  const runDir = (plan: string) => join(env.CPD_HOME || join(homedir(), ".cpd"), "run", plan);
+  const planFile = (plan: string, review: string) => join(runDir(plan), `plan-${review}.md`);
+  const feedbackFile = (plan: string, review: string) => join(runDir(plan), `feedback-${review}.md`);
+
+  /** §15.5 "Latest only": a pending request for `review` closes the reasons of this session's older reviews. It does not report: the caller refreshes once the request is handled, so the Lead does not flicker to `idle` between the two reviews. */
+  function supersede(r: Run, review: string): void {
+    for (const known of r.reviews.keys()) if (reviewNumber(known) < reviewNumber(review)) r.facts.close(`plan-review:${known}`);
+  }
 
   /** Opens a pending review in plannotator. Errors are delivered here; nothing is written to the session on failure. */
   async function openReview(r: Run, review: string, via: "event" | "tool", path?: string): Promise<void> {
@@ -520,12 +594,11 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     let verdict = approved;
     let text = feedback;
     let current = true;
-    let dir: string | undefined;
     try {
       const args = ["plan", "decide", entry.review, approved ? "--approve" : "--reject"];
       if (feedback !== undefined && feedback !== "") {
-        dir = mkdtempSync(join(tmpdir(), "cpd-feedback-"));
-        const file = join(dir, "feedback.md");
+        const file = feedbackFile(plan, entry.review);
+        mkdirSync(dirname(file), { recursive: true });
         writeFileSync(file, feedback);
         args.push("--feedback-file", file);
       }
@@ -551,7 +624,6 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       deliver(`plan decide ${entry.review}`, e);
     } finally {
       r.deciding.delete(entry.review);
-      if (dir) rmSync(dir, { recursive: true, force: true });
     }
   }
 
@@ -628,6 +700,17 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     } catch (e) {
       deliver("shutdown", e);
     }
+  });
+
+  // hs-d278: who started the run. `pi.on` has no unsubscribe, so the run is checked. Returns nothing: it adds no message.
+  pi.on("before_agent_start", function markReply(event) {
+    const r = run;
+    if (r) r.facts.reply = startsReply(event);
+  });
+
+  pi.on("input", (event) => {
+    const r = run;
+    if (r && r.facts.active && isTyped(event)) r.facts.reply = true; // typing during a run (steer or follow-up) makes it a reply run
   });
 
   pi.on("agent_start", () => {

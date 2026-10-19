@@ -10,6 +10,9 @@ use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
 
+/// Starts a tool result's line: `nf-md-subdirectory_arrow_left` (U+F060C).
+const RESULT: &str = "\u{F060C}";
+
 use crate::palette::{self, Ui};
 
 /// The text of a session file, as lines. Continuation rows of a long line are made by [`crate::scroll::wrap`].
@@ -47,7 +50,7 @@ pub(crate) fn render(text: &str) -> Vec<Line<'static>> {
                 }
                 ("toolResult", "text") => {
                     let last = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
-                    lines.push(Line::styled(format!("        ← {}", last.chars().take(160).collect::<String>()), Style::new().dim()));
+                    lines.push(Line::styled(format!("        {RESULT} {}", last.chars().take(160).collect::<String>()), Style::new().dim()));
                 }
                 _ => {}
             }
@@ -59,6 +62,11 @@ pub(crate) fn render(text: &str) -> Vec<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_tool_result_glyph_is_one_cell_wide() {
+        assert_eq!(Span::raw(RESULT).width(), 1);
+    }
 
     fn text(line: &Line) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
@@ -95,7 +103,7 @@ mod tests {
                 "      Really.",
                 "16:33:44 → bash ls -l",
                 "16:33:44 → read a.rs",
-                "        ← two",
+                "        󰘌 two",
             ],
             "thinking, the session header and a half-written line are skipped"
         );
@@ -164,7 +172,7 @@ mod tests {
                         let t = part["text"].as_str().unwrap_or("");
                         let last: String =
                             t.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").chars().take(160).collect();
-                        lines.push(Line::from(format!("        ← {last}")).dim());
+                        lines.push(Line::from(format!("        {RESULT} {last}")).dim());
                     }
                     _ => {}
                 }
