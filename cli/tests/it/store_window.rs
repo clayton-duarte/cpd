@@ -99,7 +99,7 @@ fn it_reads_and_writes_such_a_store() {
     assert_eq!(titles, ["Ctx"]);
 
     // And through the binary itself, which appends Events (the table with the unknown column).
-    let run = env.cpd(&["context", "new", "ctx2", "--title", "Two"]);
+    let run = env.cpd(&["context", "new", "ctx2", "--title", "Two", "--owner", "acme"]);
     assert_eq!(run.exit, 0, "{run:?}");
 }
 
@@ -121,7 +121,7 @@ fn a_store_whose_newest_breaking_migration_this_binary_lacks_is_store_too_new() 
     assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
     assert_eq!(err.exit().code(), 1);
 
-    let run = env.cpd(&["context", "new", "ctx", "--title", "Ctx"]);
+    let run = env.cpd(&["context", "new", "ctx", "--title", "Ctx", "--owner", "acme"]);
     assert_eq!(run.error()["code"], "store_too_new", "{run:?}");
     assert_eq!(run.exit, 1);
 }

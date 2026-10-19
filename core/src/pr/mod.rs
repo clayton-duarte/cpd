@@ -38,7 +38,8 @@ use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, HookOutcome, Operation, run_hook};
 use crate::home::{CpdHome, Hook};
-use crate::ids::{AttemptId, PlanId, PrKey};
+use crate::ids::{AttemptId, ContextId, OwnerLogin, PlanId, PrKey, RepoName};
+use crate::policy::{Gate, Policy, PolicyKey, owner_unset, resolve};
 use crate::merge::{self as attempt_merge, RepoLock};
 use crate::output::Output;
 use crate::plan::Phase;
@@ -164,6 +165,35 @@ impl Env {
     fn plan(&mut self, id: &PlanId) -> Result<PlanPrs, CpdError> {
         self.store.read(|conn| row::load(conn, id))
     }
+}
+
+/// The resolved policy of PR `key` of `plan` (contract §8.3 "Keys and resolution"): `Repo(<owner>, <name>)`,
+/// `Owner` when the PR has no name. An unset owner is `owner_unset`; a resolve error is returned as it is.
+fn pr_policy(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Policy, CpdError> {
+    pr_policy_resolved(env, plan, key)?
+}
+
+/// [`pr_policy`] with the two kinds of failure apart: the outer error is the store's (it cannot be read, or holds
+/// a value that does not parse), the inner one the resolve's (`owner_unset`, `owner_unknown`, `policy_invalid`),
+/// which a consumer of many rows (the poll) reports for its row and goes on.
+fn pr_policy_resolved(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Result<Policy, CpdError>, CpdError> {
+    let (context, owner, name): (String, Option<String>, Option<String>) = env.store.read(|conn| {
+        Ok(conn.query_row(
+            "SELECT c.id, c.owner, r.name FROM prs r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context
+              WHERE r.plan = ?1 AND r.key = ?2",
+            [plan.as_str(), key.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?)
+    })?;
+    let Some(owner) = owner else {
+        return Ok(Err(owner_unset(&ContextId::parse(&context)?)));
+    };
+    let owner = OwnerLogin::parse(&owner)?;
+    let policy_key = match name {
+        Some(name) => PolicyKey::Repo(owner, RepoName::parse(&name)?),
+        None => PolicyKey::Owner(owner),
+    };
+    Ok(resolve(&env.home, &policy_key).map(|resolved| resolved.policy))
 }
 
 /// `illegal_phase` (exit 3): `command` needs a Plan in phase `needs`.
@@ -295,7 +325,10 @@ fn require_clean(plan: &PlanId, pr: &PrRow, lead: &Path) -> Result<(), CpdError>
 /// run there on the Lead Branch. `again` is the command the Lead runs after fixing it.
 /// A failure is `gate_failed` (exit 3), an error `gate_error` (exit 1), both with
 /// the last 60 lines in `details.tail` and the full log in `details.log`.
-fn gate(env: &Env, plan: &PlanId, pr: &PrRow, lead: &Path, again: &str) -> Result<(), CpdError> {
+fn gate(env: &Env, policy: &Policy, plan: &PlanId, pr: &PrRow, lead: &Path, again: &str) -> Result<(), CpdError> {
+    if policy.pr.gate != Gate::Local {
+        return Ok(());
+    }
     let log = gate_log(&env.home, plan, &pr.key);
     let timeout = Duration::from_secs(u64::from(env.config.timeouts.gate_minutes) * 60);
     let operation = Operation { branch: &pr.base };

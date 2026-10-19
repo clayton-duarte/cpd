@@ -74,7 +74,7 @@ fn lead_worktree_is_cut_from_a_freshly_fetched_origin_base() {
     let origin = env.root().join("origins").join("pay.git");
     fs::create_dir_all(&origin).unwrap();
     env.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
-    env.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    env.local_origin(&repo, &origin);
     env.git(&repo, &["push", "-q", "origin", "main"]);
     // Someone else advances origin/main; the repo's own refs are stale.
     let other = env.root().join("other");

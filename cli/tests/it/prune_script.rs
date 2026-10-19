@@ -27,7 +27,7 @@ impl Fixture {
         let repo = env.git_repo("work");
         let origin = env.root().join("repos/origin.git");
         env.git(env.root(), &["init", "-q", "--bare", "-b", "main", origin.to_str().unwrap()]);
-        env.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        env.local_origin(&repo, &origin);
         env.git(&repo, &["push", "-q", "origin", "main"]);
         let fx = Fixture { env, repo, origin };
         fx.fake_cpd(&[]);

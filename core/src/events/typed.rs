@@ -259,6 +259,10 @@ impl NewEvent {
         make(Kind::SessionRenamed, text, json!({"name": name}))
     }
 
+    pub fn context_owner(text: impl Into<String>, owner: &str) -> NewEvent {
+        make(Kind::ContextOwner, text, json!({"owner": owner}))
+    }
+
     pub fn context_renamed(text: impl Into<String>, title: &str) -> NewEvent {
         make(Kind::ContextRenamed, text, json!({"title": title}))
     }
@@ -367,6 +371,7 @@ mod tests {
             Kind::SessionMoved => vec![NewEvent::session_moved(T, Some(s), Some(s), s), NewEvent::session_moved(T, None, None, s)],
             Kind::SessionRenamed => vec![NewEvent::session_renamed(T, s)],
             Kind::ContextRenamed => vec![NewEvent::context_renamed(T, s)],
+            Kind::ContextOwner => vec![NewEvent::context_owner(T, s)],
             Kind::PlanRenamed => vec![NewEvent::plan_renamed(T, s)],
             Kind::ContextArchived => vec![NewEvent::context_archived(T, b)],
             Kind::PlanArchived => vec![NewEvent::plan_archived(T, b)],

@@ -195,7 +195,7 @@ fn every_activity_kind_counts_and_the_others_do_not() {
     ];
     let ignored = [
         "session-moved", "session-registered", "session-renamed", "session-archived", "session-message", "context-created",
-        "context-record", "context-grounded", "context-renamed", "context-archived", "plan-created", "plan-renamed",
+        "context-record", "context-grounded", "context-renamed", "context-owner", "context-archived", "plan-created", "plan-renamed",
         "plan-archived", "watch-started", "watch-stopped",
     ];
     let mut s = String::new();

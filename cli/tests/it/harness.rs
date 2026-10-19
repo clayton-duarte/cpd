@@ -477,7 +477,7 @@ fn wait_some_says_the_last_state_on_timeout() {
 fn sql_writes_the_envs_store() {
     let env = TestEnv::new();
     env.write_tmux_config("");
-    env.cpd(&["context", "new", "c1", "--title", "Before"]).ok();
+    env.cpd(&["context", "new", "c1", "--title", "Before", "--owner", "acme"]).ok();
     env.sql("UPDATE contexts SET title = 'After' WHERE id = 'c1'");
     assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"][0]["title"], "After");
 }

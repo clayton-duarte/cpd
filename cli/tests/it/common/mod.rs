@@ -343,6 +343,9 @@ impl TestEnv {
             let path = env.bin().join(tool);
             write_executable(&path, &format!("#!/bin/sh\necho 'no fake installed for {tool}' >&2\nexit {DENIED_EXIT}\n"));
         }
+        // Every test env has the owner `acme` (an empty policy file: cpd's default), for `context new --owner acme`.
+        fs::create_dir_all(env.cpd_home().join("policy/owners")).expect("create the owners directory");
+        fs::write(env.cpd_home().join("policy/owners/acme.toml"), "").expect("write the acme owner file");
         fs::write(
             env.home().join(".gitconfig"),
             "[user]\n\tname = cpd test\n\temail = test@cpd.invalid\n[init]\n\tdefaultBranch = main\n",
@@ -391,6 +394,11 @@ impl TestEnv {
     /// The temporary directory everything lives in.
     pub fn root(&self) -> &Path {
         self.dir.path()
+    }
+
+    /// Replaces the owner `owner`'s policy file (every test env has `acme`, an empty one) with `toml`.
+    pub fn owner_policy(&self, owner: &str, toml: &str) {
+        fs::write(self.cpd_home().join(format!("policy/owners/{owner}.toml")), toml).expect("write the owner policy file");
     }
 
     /// `$CPD_HOME` of every command run here (empty at first).
@@ -510,6 +518,46 @@ impl TestEnv {
         self.git(&repo, &["add", "-A"]);
         self.git(&repo, &["commit", "-q", "-m", "initial"]);
         repo
+    }
+
+    /// `git_repo` that `pr add` can key: its `origin` is `https://github.com/acme/<name>.git`
+    /// (`acme` is every test Context's owner), with `refs/remotes/origin/main` at the commit.
+    /// Nothing is reachable at that URL: see `local_origin`.
+    pub fn keyed_repo(&self, name: &str) -> PathBuf {
+        let repo = self.git_repo(name);
+        self.github_origin(&repo);
+        repo
+    }
+
+    /// The configured URL of `origin`, a GitHub one: adds `acme/<the repo's directory name>` when the
+    /// repo has no `origin`, e.g. after `drop_unreachable_origin`.
+    pub fn github_origin(&self, repo: &Path) -> String {
+        if self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
+            return self.git(repo, &["config", "--get", "remote.origin.url"]);
+        }
+        let name = repo.file_name().expect("a repo directory").to_string_lossy().into_owned();
+        let url = format!("https://github.com/acme/{name}.git");
+        self.git(repo, &["remote", "add", "origin", &url]);
+        self.git(repo, &["update-ref", "refs/remotes/origin/main", "main"]);
+        url
+    }
+
+    /// Makes git reach `origin` at the local bare repo `bare`, while its configured URL stays a
+    /// GitHub one (the repo's key): `url.<bare>.insteadOf = <that URL>`.
+    pub fn local_origin(&self, repo: &Path, bare: &Path) {
+        let url = self.github_origin(repo);
+        self.git(repo, &["config", &format!("url.{}.insteadOf", bare.display()), &url]);
+    }
+
+    /// Removes `origin` from a repo whose `origin` is only the GitHub URL `keyed_repo` gave it
+    /// (no `local_origin`): for what runs after `pr add` and must find no remote, as before keying.
+    pub fn drop_unreachable_origin(&self, repo: &Path) {
+        // Exit 1 and no output when nothing matches.
+        let rewritten = output(self.command("git").args(["config", "--get-regexp", r"^url\..*\.insteadof$"]).current_dir(repo))
+            .expect("git config");
+        if rewritten.stdout.is_empty() && self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
+            self.git(repo, &["remote", "remove", "origin"]);
+        }
     }
 
     /// `tmux -L <private socket> <args>` in this env.

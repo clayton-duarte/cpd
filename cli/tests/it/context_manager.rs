@@ -64,7 +64,7 @@ fn setup(env: &TestEnv) {
     env.write_tmux_config("");
     env.fake_cpd_views();
     fake_pi(env);
-    env.cpd(&["context", "new", "ctx", "--title", "Payments"]).ok();
+    env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
     env.cpd(&["context", "note", "Mind the ledger.", "--context", "ctx"]).ok();
 }
 

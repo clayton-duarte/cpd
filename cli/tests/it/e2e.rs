@@ -90,6 +90,7 @@ struct Fx {
 impl Fx {
     fn new() -> Fx {
         let env = TestEnv::new();
+        env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
         // `cpd` on PATH is the built binary: panes and the engine run it so (§6.5, E5).
         symlink(CPD, env.bin().join("cpd")).unwrap();
         env.fake_pi(&format!("{PI}exec sleep {SLEEP_SECONDS}"));
@@ -121,7 +122,7 @@ impl Fx {
         .unwrap();
 
         // The repo, its hooks (§7.3) and a bare `origin`.
-        let repo = env.git_repo("pay").canonicalize().unwrap();
+        let repo = env.keyed_repo("pay").canonicalize().unwrap();
         let hooks = env.root().join("hooks.log");
         fs::create_dir_all(repo.join(".config")).unwrap();
         fs::write(
@@ -138,7 +139,7 @@ impl Fx {
         env.git(&repo, &["commit", "-q", "-m", "hooks"]);
         let origin = env.root().join("origin.git");
         env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-        env.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        env.local_origin(&repo, &origin);
         env.git(&repo, &["push", "-q", "-u", "origin", "main"]);
         let lead = repo.parent().unwrap().join(format!("pay.{PLAN}.pay"));
         Fx { env, repo, origin, lead }
@@ -255,7 +256,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     let repo = fx.repo.to_str().unwrap();
 
     // ---------- 1. context new
-    let out = fx.ok(&["context", "new", CONTEXT, "--title", "Payments"]);
+    let out = fx.ok(&["context", "new", CONTEXT, "--title", "Payments", "--owner", "acme"]);
     assert_eq!(out["context"]["id"], CONTEXT);
     let events = fx.events_since(0);
     assert_eq!(kinds(&events), ["context-created"]);
