@@ -1052,6 +1052,16 @@ fn a_worker_is_its_attempt_session_and_escalations() {
 }
 
 #[test]
+fn the_latest_attempt_of_a_job_is_the_one_with_the_highest_number_and_a_job_that_never_started_has_none() {
+    let (_env, mut store) = fixture();
+    let mut latest = |plan_id: &str, job: &str| read::latest_attempt(&mut store, &plan(plan_id), &key(job)).unwrap();
+    assert_eq!(latest("ship", "c"), Some(attempt("c-a2")), "two Attempts: the second");
+    assert_eq!(latest("ship", "e"), Some(attempt("e-a1")), "a failed Job: its failed Attempt");
+    assert_eq!(latest("ship", "d"), None, "queued, never started");
+    assert_eq!(latest("nope", "c"), None);
+}
+
+#[test]
 fn an_unknown_plan_or_attempt_is_not_found() {
     let (_env, mut store) = fixture();
     assert_eq!(read::worker(&mut store, &plan("nope"), &attempt("c-a2")).unwrap_err().code(), ErrorCode::PlanNotFound);

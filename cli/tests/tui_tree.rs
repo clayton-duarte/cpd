@@ -1294,6 +1294,73 @@ fn with_no_engine_the_inbox_leads_with_engine_down_and_a_click_on_it_runs_watch_
     assert_eq!(calls(&env).len(), 1, "only watch --ensure ran: {:?}", calls(&env));
 }
 
+/// An Attempt of Job `job` of `ship`, ended failed with `cause` (`Some`), or running.
+fn attempt_row(job: &str, number: u32, ended: Option<&str>) -> String {
+    let (status, outcome, ended_at) = match ended {
+        Some(cause) => ("ended", format!("'failed', '{cause}'"), "'2026-01-03T00:05:00.000Z'"),
+        None => ("running", "NULL, NULL".to_owned(), "NULL"),
+    };
+    format!(
+        "INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, started_at, ended_at)
+         VALUES ('ship', '{job}-a{number}', '{job}', {number}, 'S3', 'ladder', '{status}', {outcome}, 'cpd/ship--{job}-a{number}',
+                 '/w/{job}-a{number}', '2026-01-03T00:01:00.000Z', {ended_at});"
+    )
+}
+
+#[test]
+fn a_click_on_a_stuck_job_opens_its_lead_and_the_worker_of_its_latest_attempt_beside_the_chat() {
+    let env = env();
+    populate(&env);
+    let mut store = open(&env);
+    // job `e` of `ship` failed twice: its latest Attempt is the second; job `d` never started
+    sql(&mut store, &(attempt_row("e", 1, Some("timed_out")) + &attempt_row("e", 2, Some("crashed"))));
+    let stuck = |job: &str, label: &str| Condition {
+        subject: format!("job:ship/{job}"),
+        label: label.to_owned(),
+        session: None,
+        job: Some(cpd_core::ids::JobKey::parse(job).unwrap()),
+        ..condition(Kind::JobStuck, Urgency::Red, "none", Some("ship"), "alpha")
+    };
+    let mut conditions = items();
+    conditions.extend([stuck("e", "ship: e is stuck"), stuck("d", "ship: d is stuck")]);
+    reconcile(&mut store, &conditions, &opened_ago()).unwrap();
+    // the cockpit's centre on the private server: the chat slot; the Worker view is a program that stays
+    env.fake(
+        "cpd",
+        &format!("if [ \"$1\" = tui ] && [ \"$3\" = worker ]; then exec sleep {}; fi\necho '{{\"ok\":true}}'", common::SLEEP_SECONDS),
+    );
+    let out = env.tmux(&["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "200", "-y", "40", "-P", "-F", "#{pane_id}", "sleep", "3600"]);
+    let chat = String::from_utf8(out.stdout).unwrap().trim().to_owned();
+    assert!(env.tmux(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]).status.success());
+    let workers = || String::from_utf8(env.tmux(&["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_view} #{@cpd_job} #{@cpd_attempt}"]).stdout).unwrap();
+    let pane = Pane::start(&env, 60, 40);
+    pane.ready();
+    pane.wait("the more row", |s| s.last().is_some_and(|r| r.starts_with(" +")));
+    pane.click(10, pane.screen().len() as u16 - 1);
+    pane.wait("the expanded list", |s| s.last().is_some_and(|r| r == " − less"));
+    // a Job with no Attempt: the Lead only, no Worker pane
+    pane.click(10, item_row(&pane, "ship: d is stuck"));
+    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "l-ship"])]);
+    pane.settled();
+    assert!(!workers().contains("worker"), "{}", workers());
+    assert_eq!(calls(&env).len(), 1, "{:?}", calls(&env));
+    // a Job with Attempts: the Lead, then the Worker of its latest Attempt, in a pane beside the chat
+    pane.click(10, item_row(&pane, "ship: e is stuck"));
+    let started = words(&["tui", "view", "worker", "e-a2", "--plan", "ship"]);
+    common::wait_until("the Worker view to be started", || calls(&env).contains(&started));
+    assert_eq!(calls(&env)[1], words(&["session", "open", "l-ship"]));
+    common::wait_until("the Worker pane", || workers().contains("worker e e-a2"));
+    let layout = String::from_utf8(env.tmux(&["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_view} #{pane_top}"]).stdout).unwrap();
+    let top = |view: &str| layout.lines().find(|l| l.starts_with(view)).map(|l| l.split(' ').nth(1).unwrap().to_owned());
+    assert_eq!(top("worker"), top("chat"), "beside the chat: {layout}");
+    // a second click on the same Job leaves the pane open (it does not toggle)
+    pane.click(10, item_row(&pane, "ship: e is stuck"));
+    common::wait_until("the second click's Lead", || calls(&env).iter().filter(|c| c[..2] == words(&["session", "open"])).count() == 3);
+    common::wait_until("the Worker view to be started again", || calls(&env).iter().filter(|c| **c == started).count() == 2);
+    assert_eq!(workers().lines().filter(|l| l.starts_with("worker")).count(), 1, "{}", workers());
+    assert!(workers().contains("worker e e-a2"), "{}", workers());
+}
+
 /// The `display-popup` calls of a fake tmux.
 fn popups(env: &TestEnv) -> Vec<Vec<String>> {
     env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).collect()
