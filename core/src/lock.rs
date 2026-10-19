@@ -49,6 +49,9 @@ pub fn shared(file: &File) -> io::Result<bool> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::Path;
+
     use super::*;
 
     fn pair() -> (tempfile::TempDir, File, File) {
@@ -95,5 +98,30 @@ mod tests {
         assert!(try_lock(&a).unwrap());
         drop(a.try_clone().unwrap());
         assert!(!try_lock(&b).unwrap());
+    }
+
+    /// Every flock goes through this module (engine-G2): no other file names
+    /// the `flock` API.
+    #[test]
+    fn no_other_file_takes_a_flock() {
+        const TOKENS: [&str; 6] = ["Flock::", "FlockArg", "nix::fcntl::Flock", ".try_lock(", ".try_lock_shared(", ".lock_shared("];
+        fn walk(dir: &Path, found: &mut Vec<String>) {
+            for entry in fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, found);
+                } else if path.extension().is_some_and(|e| e == "rs") && !path.ends_with("src/lock.rs") {
+                    let text = fs::read_to_string(&path).unwrap();
+                    for token in TOKENS {
+                        if text.contains(token) {
+                            found.push(format!("{} names `{token}`", path.display()));
+                        }
+                    }
+                }
+            }
+        }
+        let mut found = Vec::new();
+        walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut found);
+        assert!(found.is_empty(), "flock outside core/src/lock.rs:\n{}", found.join("\n"));
     }
 }
