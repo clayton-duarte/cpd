@@ -16,7 +16,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{CPD, TestEnv, copy_executable};
+use common::{CPD, SLEEP_SECONDS, TestEnv, copy_executable};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::{Store, WriteTxn};
@@ -290,7 +290,7 @@ fn when_the_server_runs_another_tmux_the_servers_own_binary_attaches() {
 
 /// The `cpd` of the panes: a Lead's `session run` just sleeps; everything else is the built binary.
 fn fake_cpd_with_sleeping_sessions(env: &TestEnv) {
-    env.fake("cpd", &format!("case \"$1 $2\" in \"session run\") exec sleep 600;; esac\nexec '{CPD}' \"$@\""));
+    env.fake("cpd", &format!("case \"$1 $2\" in \"session run\") exec sleep {SLEEP_SECONDS};; esac\nexec '{CPD}' \"$@\""));
 }
 
 /// What marks the cockpit's server as older than the installed tmux: while this file exists,
