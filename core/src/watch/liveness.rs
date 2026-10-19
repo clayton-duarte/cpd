@@ -21,7 +21,7 @@ use time::format_description::well_known::Rfc3339;
 use super::SOURCE;
 use super::engine::{Engine, metrics};
 use super::report::{About, Step};
-use crate::driver::ledger::{self, Cause, End, Ladder};
+use crate::attempt::ledger::{self, Cause, End, Ladder};
 use crate::driver::lock::{self, Free};
 use crate::error::{CpdError, ErrorCode};
 use crate::host::layout::{MAIN_WINDOW, View, attempt_window};

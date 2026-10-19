@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::ledger::{self, Cause, End, Ladder};
+use crate::attempt::ledger::{self, Cause, End, Ladder};
 use super::lock::Starter;
 use crate::config::{Catalog, Config, Tier};
 use crate::error::{CpdError, ErrorCode};

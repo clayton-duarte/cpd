@@ -8,7 +8,7 @@ use std::time::Duration;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
-use super::ledger::{self, Target};
+use crate::attempt::ledger::{self, Target};
 use crate::config::{Catalog, Config, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::git;

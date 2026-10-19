@@ -3,10 +3,12 @@
 //! - [`submit`]: `attempt submit`, the Worker's one write (§6.1);
 //! - [`read`]: `attempt read`, a transcript of the Worker's session (§6.2);
 //! - [`show`]: `attempt show` and `attempt list` (§6.3);
-//! - [`row`]: the `attempts` and `escalations` rows as read.
+//! - [`row`]: the `attempts` and `escalations` rows as read;
+//! - `ledger`: the Attempt as the driver and the merge read it, and the transactions that end one.
 //!
 //! `attempt run` belongs to the driver (`crate::driver`).
 
+pub(crate) mod ledger;
 mod read;
 mod row;
 mod show;

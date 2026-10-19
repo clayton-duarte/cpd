@@ -273,7 +273,7 @@ fn next_tier(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Failure, ladder: &Ladd
     if !cause.is_ladder() {
         return Ok(None);
     }
-    let run = crate::driver::ledger::automatic_attempts(tx, attempt.plan.as_str(), attempt.job.as_str())?;
+    let run = crate::attempt::ledger::automatic_attempts(tx, attempt.plan.as_str(), attempt.job.as_str())?;
     if run >= 1 + i64::from(ladder.retry_cap) {
         return Ok(None);
     }
