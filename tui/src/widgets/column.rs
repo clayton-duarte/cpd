@@ -106,7 +106,7 @@ fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
 
 /// A section header, one line: `──`, then ` <title> ` as a grey reversed block (not bold), then `─` to the right edge, all in
 /// the Nothing colour. A title wider than `width` is cut; the line never wraps.
-fn section_header(title: &str, width: usize) -> Line<'static> {
+pub(crate) fn section_header(title: &str, width: usize) -> Line<'static> {
     let grey = palette::fg(Meaning::Nothing);
     let lead = width.min(2);
     let block: String = format!(" {title} ").chars().take(width - lead).collect();

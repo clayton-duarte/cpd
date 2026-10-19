@@ -5,7 +5,7 @@
 use std::ffi::OsString;
 
 use clap::error::ErrorKind;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
@@ -65,8 +65,14 @@ pub enum Command {
 
 /// Parses `argv` and runs the command.
 pub fn run(argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
-    match Cli::try_parse_from(argv) {
+    let argv: Vec<OsString> = argv.into_iter().collect();
+    let root_help = matches!(argv.get(1..), Some([word]) if ["--help", "-h", "help"].iter().any(|h| word == h));
+    match Cli::try_parse_from(&argv) {
         Ok(cli) => dispatch(cli.command),
+        Err(err) if root_help && err.kind() == ErrorKind::DisplayHelp => {
+            let text = err.render().to_string();
+            Ok(Output::success(serde_json::json!({ "help": text, "tree": crate::interface::tree(&Cli::command()) })))
+        }
         Err(err) => clap_result(err),
     }
 }
@@ -105,16 +111,42 @@ pub fn clap_result(err: clap::Error) -> Result<Output, CpdError> {
     match err.kind() {
         ErrorKind::DisplayHelp => Ok(Output::success(serde_json::json!({ "help": text }))),
         ErrorKind::DisplayVersion => {
-            let store_schema = cpd_core::store::current_schema(&CpdHome::from_env()?)?;
+            let store = store_verdict(&CpdHome::from_env()?)?;
+            // `schema` and `store_schema` are a projection of the verdict for the integer-era guards that
+            // still run: they refuse when `store_schema` is above `schema` (commands.md §1.2; hs-d178 D1).
+            let store_schema = store.as_ref().map(|s| if s["opens"] == true { 1000 } else { 1001 });
             Ok(Output::success(serde_json::json!({
                 "version": env!("CARGO_PKG_VERSION"),
                 "schema": cpd_core::store::VERSION,
                 "store_schema": store_schema,
                 "protocol": cpd_core::events::PROTOCOL,
+                "store": store,
             })))
         }
         _ => Err(usage_error(&err, &text)),
     }
+}
+
+/// The `store` object of `--version` (commands.md §1.2): the store verdict of `home`'s database,
+/// opened read-only (nothing is created, migrated or checked), or `None` when there is no database.
+fn store_verdict(home: &CpdHome) -> Result<Option<serde_json::Value>, CpdError> {
+    let path = home.db();
+    let exists = path.try_exists().map_err(|e| {
+        CpdError::new(ErrorCode::StoreFailed, format!("Cannot read {}: {e}.", path.display()))
+            .with("path", path.display().to_string())
+    })?;
+    if !exists {
+        return Ok(None);
+    }
+    let conn = rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let verdict = cpd_core::store::verdict(&conn)?;
+    let refusal = verdict.refusal().map(|e| serde_json::json!({"code": e.code().as_str(), "message": e.message()}));
+    Ok(Some(serde_json::json!({
+        "opens": verdict.opens(),
+        "refusal": refusal,
+        "unknown": verdict.unknown,
+        "pending": verdict.pending_names(),
+    })))
 }
 
 fn usage_error(err: &clap::Error, text: &str) -> CpdError {
@@ -168,10 +200,16 @@ mod tests {
     fn help_and_version_are_one_json_value() {
         let Ok(Output::Success(fields)) = run(argv(&["--help"])) else { panic!("help is a success") };
         assert!(fields["help"].as_str().unwrap().contains("context"));
+        assert!(fields["tree"].is_array());
+        for words in [&["plan", "--help"][..], &["help", "plan"]] {
+            let Ok(Output::Success(fields)) = run(argv(words)) else { panic!("help is a success") };
+            assert!(fields.contains_key("help") && !fields.contains_key("tree"));
+        }
         let Ok(Output::Success(fields)) = run(argv(&["--version"])) else { panic!("version is a success") };
         assert_eq!(fields["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(fields["schema"], cpd_core::store::VERSION);
         assert!(fields.contains_key("store_schema"));
+        assert!(fields.contains_key("store"));
         assert_eq!(fields["protocol"], 3);
     }
 

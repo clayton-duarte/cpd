@@ -69,8 +69,8 @@ pub enum View {
     History(history::Args),
     /// The key legend (opened by `?` in the Dispatch column, in a tmux popup)
     Legend,
-    /// The Event log (opened by the StatusBar's logs button, in a tmux popup)
-    Logs,
+    /// The Event log (opened by the StatusBar's logs button and by an Inbox item, in a tmux popup)
+    Logs(logs::Args),
     /// The chat slot's placeholder
     Chat,
 }
@@ -80,13 +80,13 @@ pub fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdError> {
         None => cockpit::run(args.attach, args.respawn, run_command),
         Some(Command::View(view)) => match view {
             View::Tree => tree::run(),
-            View::Plan => plan::run(),
+            View::Plan => plan::run(run_command),
             View::Widgets => widgets::run(run_command),
             View::Statusbar => statusbar::run(),
             View::Worker(args) => worker::run(args),
             View::History(args) => history::run(args),
             View::Legend => widgets::legend::run(),
-            View::Logs => logs::run(),
+            View::Logs(args) => logs::run(args),
             View::Chat => chat::run(),
         },
     }

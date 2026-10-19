@@ -18,6 +18,10 @@ tmux-env = { max-threads = 1 }
 # makes its exec fail with ETXTBSY ("Text file busy").
 driver-reload = { max-threads = 1 }
 
+# hs-d236: a red run lists every failing test, not only the first.
+[profile.default]
+fail-fast = false
+
 [[profile.default.overrides]]
 filter = 'binary_id(cpd::host)'
 test-group = 'tmux-env'

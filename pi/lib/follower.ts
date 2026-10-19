@@ -11,9 +11,11 @@ export type Timing = {
   pollMs: number;
   /** How long `session_shutdown` waits for `session state stopped`. */
   shutdownWaitMs: number;
+  /** The deadline of one `cpd` call (commands.md §15.1, "Calls"). */
+  callTimeoutMs: number;
 };
 
-export const DEFAULT_TIMING: Timing = { restartInitialMs: 1_000, restartMaxMs: 30_000, requestTimeoutMs: 15_000, pollMs: 1_000, shutdownWaitMs: 2_000 };
+export const DEFAULT_TIMING: Timing = { restartInitialMs: 1_000, restartMaxMs: 30_000, requestTimeoutMs: 15_000, pollMs: 1_000, shutdownWaitMs: 2_000, callTimeoutMs: 30_000 };
 
 export type Spawn = typeof nodeSpawn;
 

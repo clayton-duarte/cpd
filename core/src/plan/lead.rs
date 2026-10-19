@@ -11,7 +11,7 @@ use serde_json::json;
 use super::Env;
 use crate::error::CpdError;
 use crate::events::{Kind, NewEvent, append};
-use crate::host::pi::Plannotator;
+use crate::host::addr::{URL_HOST, review_host};
 use crate::host::{PaneId, Spawn, Tmux, WindowId};
 use crate::ids::{ContextId, PlanId, SessionId};
 use crate::session::PROGRAM;
@@ -36,8 +36,8 @@ pub(super) struct Lead<'a> {
 
 /// What tmux runs for `lead`: `cpd session run <id>` in its cwd, with
 /// `CPD_HOME`, `CPD_SESSION`, and for a Plan's Lead `CPD_PLAN` plus
-/// `PLANNOTATOR_PORT` and `PLANNOTATOR_REMOTE` from cpd's own environment
-/// when set (commands.md §15.5, amendment 8): passed with `-e`, so the pane
+/// `PLANNOTATOR_PORT` from cpd's own environment when set, `PLANNOTATOR_REMOTE=1`
+/// and `PLANNOTATOR_URL_HOST` (the review host, contract §6.5; commands.md §15.5, amendment 8): passed with `-e`, so the pane
 /// has them whatever environment the tmux server was started with, and
 /// several Plan reviews can be open at once on a port range.
 fn spawn(env: &Env, lead: &Lead) -> Spawn {
@@ -47,13 +47,11 @@ fn spawn(env: &Env, lead: &Lead) -> Spawn {
     ]);
     if let Some(plan) = lead.plan {
         vars.insert("CPD_PLAN".to_owned(), plan.to_string());
-        let plannotator = Plannotator::from_env();
-        if let Some(port) = plannotator.port {
+        if let Ok(port) = std::env::var("PLANNOTATOR_PORT") {
             vars.insert("PLANNOTATOR_PORT".to_owned(), port);
         }
-        if let Some(remote) = plannotator.remote {
-            vars.insert("PLANNOTATOR_REMOTE".to_owned(), remote);
-        }
+        vars.insert("PLANNOTATOR_REMOTE".to_owned(), "1".to_owned());
+        vars.insert(URL_HOST.to_owned(), review_host(&mut std::io::stderr()));
     }
     Spawn {
         cwd: Some(lead.cwd.to_path_buf()),
@@ -77,19 +75,26 @@ pub(super) fn start(env: &mut Env, lead: &Lead, window: &str, command: &str) -> 
         Some(ids) => ids,
         None => tmux.new_window(&cockpit, window, &spawn)?,
     };
-    tmux.set_pane_session(&pane, lead.session)?;
-    tmux.set_pane_title(&pane, &title(env, lead)?)?;
-    env.store.write(command, |tx| {
-        tx.execute("UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2", [pane.as_str(), lead.session.as_str()])?;
-        let text = format!("Lead {} is parked in window {}.", lead.name, window.as_str());
-        let data = json!({"pane": pane.as_str(), "window": window.as_str(), "place": "parked"});
-        let mut event = NewEvent::new(Kind::SessionMoved, text, data).session(lead.session.clone()).context(lead.context.clone());
-        if let Some(plan) = lead.plan {
-            event = event.plan(plan.clone());
-        }
-        append(tx, event)?;
-        Ok(())
-    })?;
+    // A failing step now leaves a pane no row names: kill the window, keep the error (G11).
+    let marked = (|| {
+        tmux.set_pane_session(&pane, lead.session)?;
+        tmux.set_pane_title(&pane, &title(env, lead)?)?;
+        env.store.write(command, |tx| {
+            tx.execute("UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2", [pane.as_str(), lead.session.as_str()])?;
+            let text = format!("Lead {} is parked in window {}.", lead.name, window.as_str());
+            let data = json!({"pane": pane.as_str(), "window": window.as_str(), "place": "parked"});
+            let mut event = NewEvent::new(Kind::SessionMoved, text, data).session(lead.session.clone()).context(lead.context.clone());
+            if let Some(plan) = lead.plan {
+                event = event.plan(plan.clone());
+            }
+            append(tx, event)?;
+            Ok(())
+        })
+    })();
+    if let Err(e) = marked {
+        let _ = tmux.kill_window(&window);
+        return Err(e);
+    }
     Ok(Started { window, pane })
 }
 

@@ -3,13 +3,15 @@
 //! prepared database, with a private tmux server and fake `pi` and `cpd`.
 
 mod common;
+#[path = "common/checkout.rs"]
+mod checkout;
 
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, TestEnv};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -250,7 +252,14 @@ impl Fx {
 
     /// `start` with the engine run from the binary at `exe`.
     fn start_from(&self, exe: &Path) -> Engine {
-        let child = self.env.command(exe).arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        self.start_with(exe, &[])
+    }
+
+    /// `start_from` with the variables `vars` added to the engine's environment.
+    fn start_with(&self, exe: &Path, vars: &[(&str, &str)]) -> Engine {
+        let mut command = self.env.command(exe);
+        command.envs(vars.iter().copied());
+        let child = command.arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         let engine = Engine { child: Some(child) };
         let pid = engine.pid();
         wait_until("watch-started", || {
@@ -963,7 +972,7 @@ fn in_pr(fx: &Fx) {
 
 /// What the fake `gh` answers to the search when it found no pull request, with `remaining` requests left until `reset_at`.
 fn search_reply(remaining: u32, reset_at: &str) -> String {
-    format!(r#"{{"data":{{"search":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":{remaining},"resetAt":"{reset_at}"}}}}}}"#)
+    format!(r#"{{"data":{{"search":{{"issueCount":0,"nodes":[]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":{remaining},"resetAt":"{reset_at}"}}}}}}"#)
 }
 
 /// The fake `gh` calls that are a poll's search: one per `cpd pr poll`.
@@ -1065,6 +1074,37 @@ fn e5_reports_a_failing_poll_once() {
     let (plan, job, attempt, data) = &errors[0];
     assert_eq!((plan, job, attempt), (&None, &None, &None));
     assert_eq!((&data["source"], &data["code"], &data["details"]["exit"]), (&json!("watch"), &json!("gh_failed"), &json!(1)));
+}
+
+/// Whether process `pid` is running (a zombie is not).
+fn running(pid: i32) -> bool {
+    fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| s.rsplit(") ").next().is_some_and(|r| !r.starts_with('Z')))
+}
+
+/// engine-W4: a `cpd pr poll` child that hangs (its `gh` sleeps, and so does a child of
+/// that `gh`) is killed at its deadline with its whole process group, and E5 reports
+/// `tool_timeout`. The deadline is shortened to 2 s by `CPD_TEST_DEADLINE_CPD`, which a
+/// debug build reads.
+#[test]
+fn e5_kills_a_hung_poll_child_and_its_group_at_the_deadline_with_tool_timeout() {
+    let fx = fx_bare("");
+    let pids = fx.env.root().join("gh.pids");
+    fx.env.fake_gh(&format!("sleep {SLEEP_SECONDS} & echo \"$$ $!\" >> '{}'; wait", pids.display()));
+
+    let engine = fx.start_with(Path::new(CPD), &[("CPD_TEST_DEADLINE_CPD", "2")]);
+    wait_until("E5's tool_timeout", || fx.count("error") >= 1);
+    engine.stop();
+
+    let errors = fx.events("error");
+    let data = &errors[0].3;
+    assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("tool_timeout")), "{errors:?}");
+    let details = &data["details"];
+    assert_eq!((&details["tool"], &details["deadline_seconds"]), (&json!("cpd"), &json!(2)), "{details}");
+    assert_eq!(details["argv"], json!([CPD, "pr", "poll"]));
+    for pid in fs::read_to_string(&pids).unwrap().split_whitespace() {
+        let pid: i32 = pid.parse().unwrap();
+        wait_until(&format!("gh's process {pid} to end"), || !running(pid));
+    }
 }
 
 #[test]
@@ -1189,20 +1229,24 @@ fn copy_executable(from: &str, to: &Path) {
 /// socket, and records `watch --ensure` with the windows of the work session
 /// at that moment. Returns the script's stderr and the fake's calls.
 fn install(env: &TestEnv) -> (String, Vec<Vec<String>>) {
-    let (out, calls) = install_with(env, 6, "6");
+    let (out, calls) = install_with(env, OPENS);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     (String::from_utf8_lossy(&out.stderr).into_owned(), calls)
 }
 
-/// `install`, where the fake build's `--version` reports `schema` and
-/// `store_schema` (a JSON literal: a number or `null`). Returns the output.
-fn install_with(env: &TestEnv, schema: u32, store_schema: &str) -> (std::process::Output, Vec<Vec<String>>) {
+/// The `store` object of a fake build's `--version`: the store opens.
+const OPENS: &str = r#"{"opens":true,"refusal":null,"unknown":[],"pending":[]}"#;
+
+/// `install`, where the fake build's `--version` reports `store` (a JSON literal: the verdict
+/// object or `null`), run from a checkout whose `origin/main` holds the same migrations as the
+/// tree. Returns the output.
+fn install_with(env: &TestEnv, store: &str) -> (std::process::Output, Vec<Vec<String>>) {
     let socket = env.tmux_socket();
     let built = env.fake(
         "cpd-built",
         &format!(
             r#"case "$1" in
---version) echo '{{"ok":true,"version":"0.0.0","schema":{schema},"store_schema":{store_schema}}}' ;;
+--version) echo '{{"ok":true,"version":"0.0.0","schema":1000,"store_schema":1000,"store":{store}}}' ;;
 config) echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}' ;;
 watch) tmux -L '{socket}' list-windows -t =cpd-work -F '#{{window_name}}' > '{windows}' 2>&1; echo '{{"ok":true,"started":true,"pane":"%9"}}' ;;
 esac"#,
@@ -1211,9 +1255,9 @@ esac"#,
     );
     let target = env.root().join("target");
     let cargo = env.fake("fake-cargo", &format!("mkdir -p '{t}/release' && cp '{}' '{t}/release/cpd'", built.display(), t = target.display()));
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let checkout = checkout::Checkout::new(env, &["0001-initial.sql"]);
     let out = env
-        .command(root.join("scripts/install-cpd.sh"))
+        .command(checkout.script())
         .env("CARGO", cargo)
         .env("CARGO_TARGET_DIR", &target)
         .output()
@@ -1252,17 +1296,19 @@ fn install_leaves_a_server_without_an_engine_alone() {
 }
 
 #[test]
-fn install_refuses_a_build_older_than_the_store_before_replacing_anything() {
+fn install_refuses_a_build_that_cannot_open_the_store_before_replacing_anything() {
     let env = TestEnv::new();
     let out = env.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "watch", "sleep", "600"]);
     assert!(out.status.success());
 
-    let (out, calls) = install_with(&env, 5, "6");
+    let refusing = r#"{"opens":false,"refusal":{"code":"store_too_new","message":"The database was migrated by a newer cpd."},"unknown":[],"pending":[]}"#;
+    let (out, calls) = install_with(&env, refusing);
 
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("cpd install refused: this build supports store schema 5 but "), "{stderr}");
-    assert!(stderr.contains("cpd.db is at 6; merge main into this branch, then install again."), "{stderr}");
+    assert!(stderr.contains("cpd install refused: this build cannot open "), "{stderr}");
+    assert!(stderr.contains("cpd.db: The database was migrated by a newer cpd."), "{stderr}");
+    assert!(stderr.contains("merge main into this branch, then install again"), "{stderr}");
     assert!(!env.home().join(".local/bin/cpd").exists());
     assert!(!env.home().join(".local/share/cpd/pi").exists());
     // Only --version ran: no `tui --respawn`, no `watch --ensure`.
@@ -1270,11 +1316,11 @@ fn install_refuses_a_build_older_than_the_store_before_replacing_anything() {
 }
 
 #[test]
-fn install_accepts_a_build_equal_to_the_store_or_a_home_without_a_database() {
-    for store_schema in ["6", "null"] {
+fn install_accepts_a_build_that_opens_the_store_or_a_home_without_a_database() {
+    for store in [OPENS, "null"] {
         let env = TestEnv::new();
-        let (out, _) = install_with(&env, 6, store_schema);
-        assert!(out.status.success(), "{store_schema}: {}", String::from_utf8_lossy(&out.stderr));
+        let (out, _) = install_with(&env, store);
+        assert!(out.status.success(), "{store}: {}", String::from_utf8_lossy(&out.stderr));
         assert!(env.home().join(".local/bin/cpd").exists());
     }
 }
