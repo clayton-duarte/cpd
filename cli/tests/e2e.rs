@@ -454,7 +454,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     // The engine's polls (`api graphql`) aside, `pr open` made these two calls.
     let gh: Vec<_> = fx.env.calls("gh").into_iter().filter(|c| c[0] != "api").collect();
     assert_eq!(gh[0], ["pr", "list", "--head", "cpd/pay/pay", "--state", "all", "--json", "number,url,state"]);
-    assert_eq!(gh[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay/pay", "--title", "Retry failed payouts"]);
+    assert_eq!(gh[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay/pay", "--title", "Change the PR"]);
     let body = &gh[1][9];
     for sha in [&api_merged["data"]["sha"], &ui_merged["data"]["sha"]] {
         assert!(body.contains(sha.as_str().unwrap()), "{body}");
