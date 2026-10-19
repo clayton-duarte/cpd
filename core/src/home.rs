@@ -129,6 +129,11 @@ impl CpdHome {
         self.locks_dir().join("plannotator-ports.lock")
     }
 
+    /// `locks/distill-<context>.lock`: held by the Context's one distill run (contract §4.6).
+    pub fn distill_lock(&self, context: &ContextId) -> PathBuf {
+        self.locks_dir().join(format!("distill-{context}.lock"))
+    }
+
     /// `locks/pr-poll.lock`: held by `pr poll` for the whole poll (contract §7.6).
     pub fn pr_poll_lock(&self) -> PathBuf {
         self.locks_dir().join("pr-poll.lock")
@@ -142,6 +147,21 @@ impl CpdHome {
     /// `run/watch.log`: the engine's stderr.
     pub fn watch_log(&self) -> PathBuf {
         self.run_dir().join("watch.log")
+    }
+
+    /// `run/context-digests/<context>/`: a Context's digest files (contract §1.4, §4.6).
+    pub fn context_digest_dir(&self, context: &ContextId) -> PathBuf {
+        self.run_dir().join("context-digests").join(context.as_str())
+    }
+
+    /// `run/context-digests/<context>/<upto_seq>.md`: the Context digest covering records up to `upto_seq`.
+    pub fn context_digest(&self, context: &ContextId, upto_seq: u64) -> PathBuf {
+        self.context_digest_dir(context).join(format!("{upto_seq}.md"))
+    }
+
+    /// `run/context-digests/<context>/<upto_seq>.md.tmp`: the distiller's output before it is validated.
+    pub fn context_digest_tmp(&self, context: &ContextId, upto_seq: u64) -> PathBuf {
+        self.context_digest_dir(context).join(format!("{upto_seq}.md.tmp"))
     }
 
     /// `run/<plan>/`.
@@ -329,6 +349,16 @@ mod tests {
             p("/h/.cpd/run/pay-4521/messages/596d007f-6775-4134-b77a-b356cc523842.md")
         );
         assert_eq!(h.manager_message(&ContextId::parse("pay").unwrap()), p("/h/.cpd/run/pay/manager-message.md"));
+    }
+
+    #[test]
+    fn the_context_digest_files_of_contract_4_6() {
+        let h = home();
+        let ctx = ContextId::parse("building-cpd").unwrap();
+        assert_eq!(h.context_digest_dir(&ctx), p("/h/.cpd/run/context-digests/building-cpd"));
+        assert_eq!(h.context_digest(&ctx, 1342), p("/h/.cpd/run/context-digests/building-cpd/1342.md"));
+        assert_eq!(h.context_digest_tmp(&ctx, 1342), p("/h/.cpd/run/context-digests/building-cpd/1342.md.tmp"));
+        assert_eq!(h.distill_lock(&ctx), p("/h/.cpd/locks/distill-building-cpd.lock"));
     }
 
     #[test]

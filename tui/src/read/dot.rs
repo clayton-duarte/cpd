@@ -7,27 +7,27 @@ use cpd_core::session::State;
 use super::shared::Place;
 
 /// The dot of a row, ordered by urgency: the greatest is the most urgent, `Red > Yellow > Magenta > White >
-/// Working > Idle > Stopped` (§17, Precedence). A Context row's dot is the greatest of its live Sessions'.
+/// Working > Idle > Stopped` (§17, Precedence).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Dot {
-    /// `◌`: pi stopped.
+    /// `palette::STOPPED`: pi stopped.
     Stopped,
-    /// `○`: idle, nothing needed.
+    /// `palette::IDLE`: idle, nothing needed.
     Idle,
-    /// `◐◓◑◒`: the Lead is working.
+    /// `palette::SPINNER`: the Lead is working.
     Working,
-    /// `●` white: an idle turn the User has not seen.
+    /// `palette::NEEDS_YOU` white: a finished turn the User has not seen.
     White,
-    /// `●` magenta: blocked outside dispatch and deploy, or the Plan's review is pending.
+    /// `palette::NEEDS_YOU` magenta: blocked outside dispatch and deploy, or the Plan's review is pending.
     Magenta,
-    /// `●` yellow: the Plan's Lead, with a pull request open whose checks have finished.
+    /// `palette::NEEDS_YOU` yellow: the Plan's Lead, with a pull request open whose checks have finished.
     Yellow,
-    /// `●` red: blocked work in dispatch or deploy.
+    /// `palette::NEEDS_YOU` red: blocked work in dispatch or deploy.
     Red,
 }
 
 impl Dot {
-    /// The Session needs the User: a `●` of any colour.
+    /// The Session needs the User: a `palette::NEEDS_YOU` of any colour.
     pub fn needs_you(self) -> bool {
         self >= Dot::White
     }
@@ -38,7 +38,8 @@ impl Dot {
 pub struct DotInputs {
     pub state: State,
     pub place: Place,
-    /// The id of its latest `session-state` Event with `to: "idle"`.
+    /// The id of its latest finished turn: its latest `session-state` Event from `working` or `blocked` to `idle` (a start or
+    /// reload, `stopped` to `idle`, is not one; hs-d242).
     pub settled: Option<i64>,
     /// The id of its latest `session-moved` Event with `place: "chat"`.
     pub seen: Option<i64>,
@@ -54,14 +55,17 @@ pub struct DotInputs {
 
 impl Dot {
     pub fn of(i: DotInputs) -> Dot {
-        let blocked = i.state == State::Blocked;
-        if blocked && matches!(i.phase, Some(Phase::Dispatch | Phase::Deploy)) {
-            return Dot::Red;
+        if i.state == State::Blocked {
+            return if matches!(i.phase, Some(Phase::Dispatch | Phase::Deploy)) { Dot::Red } else { Dot::Magenta };
+        }
+        // Own state first: a working Session is never yellow, magenta or white.
+        if i.state == State::Working {
+            return Dot::Working;
         }
         if i.plan_lead && i.phase == Some(Phase::Deploy) && i.pr_checked {
             return Dot::Yellow;
         }
-        if blocked || (i.plan_lead && i.review_pending) {
+        if i.plan_lead && i.review_pending {
             return Dot::Magenta;
         }
         // Event ids order commits; never in the slot counts as older than everything.
@@ -69,9 +73,8 @@ impl Dot {
             return Dot::White;
         }
         match i.state {
-            State::Working => Dot::Working,
             State::Stopped => Dot::Stopped,
-            State::Idle | State::Blocked => Dot::Idle,
+            State::Working | State::Idle | State::Blocked => Dot::Idle,
         }
     }
 }
@@ -124,19 +127,22 @@ mod tests {
     #[test]
     fn a_pending_review_is_magenta_on_the_plans_lead_only() {
         let pending = |i: DotInputs| DotInputs { review_pending: true, ..i };
-        for state in [State::Working, State::Idle, State::Stopped] {
+        for state in [State::Idle, State::Stopped] {
             assert_eq!(Dot::of(pending(lead(state, Some(Phase::Plan)))), Dot::Magenta, "{state:?}");
         }
+        assert_eq!(Dot::of(pending(lead(State::Working, Some(Phase::Plan)))), Dot::Working, "own state first");
         assert_eq!(Dot::of(pending(fork(State::Idle, Phase::Plan))), Dot::Idle, "not on a fork");
     }
 
     #[test]
     fn yellow_is_the_plans_lead_in_pr_with_a_pull_request_open_and_checked() {
         let checked = |i: DotInputs| DotInputs { pr_checked: true, ..i };
-        for state in [State::Working, State::Idle, State::Stopped] {
+        for state in [State::Idle, State::Stopped] {
             assert_eq!(Dot::of(checked(lead(state, Some(Phase::Deploy)))), Dot::Yellow, "{state:?}");
         }
-        assert_eq!(Dot::of(checked(fork(State::Working, Phase::Deploy))), Dot::Working, "never a fork");
+        assert_eq!(Dot::of(checked(lead(State::Working, Some(Phase::Deploy)))), Dot::Working, "a working Lead is not yellow");
+        assert_eq!(Dot::of(checked(lead(State::Blocked, Some(Phase::Deploy)))), Dot::Red, "a blocked one is red");
+        assert_eq!(Dot::of(checked(fork(State::Idle, Phase::Deploy))), Dot::Idle, "never a fork");
         assert_eq!(Dot::of(lead(State::Idle, Some(Phase::Deploy))), Dot::Idle, "it clears when no such pull request remains");
         for phase in [Phase::Grounding, Phase::Plan, Phase::Dispatch, Phase::Done] {
             assert_ne!(Dot::of(checked(lead(State::Idle, Some(phase)))), Dot::Yellow, "only in pr: {phase:?}");
@@ -168,8 +174,8 @@ mod tests {
     #[test]
     fn the_order_is_the_precedence() {
         let order = [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::White, Dot::Working, Dot::Idle, Dot::Stopped];
-        assert!(order.windows(2).all(|w| w[0] > w[1]), "red > yellow > magenta > white > ◐ > ○ > ◌");
+        assert!(order.windows(2).all(|w| w[0] > w[1]), "red > yellow > magenta > white > working > idle > stopped");
         assert_eq!(order.iter().copied().max(), Some(Dot::Red));
-        assert_eq!(order.iter().filter(|d| d.needs_you()).count(), 4, "the ● are the four colours");
+        assert_eq!(order.iter().filter(|d| d.needs_you()).count(), 4, "the needs-you dots are the four colours");
     }
 }

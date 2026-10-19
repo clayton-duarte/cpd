@@ -3,13 +3,15 @@
 //! prepared database, with a private tmux server and fake `pi` and `cpd`.
 
 mod common;
+#[path = "common/checkout.rs"]
+mod checkout;
 
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, TestEnv};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -114,7 +116,7 @@ struct Fx {
 }
 
 /// What the fake `gh` answers to the PR poller's search when a test does not care: no pull requests.
-const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#;
+const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#;
 
 fn fx(config_extra: &str) -> Fx {
     let fx = fx_bare(config_extra);
@@ -159,7 +161,7 @@ fn fx_bare(config_extra: &str) -> Fx {
     }
     env.fake_pi("exit 0");
     env.fake_gh(&format!("echo '{EMPTY_SEARCH}'"));
-    // E5 runs `cpd pr poll` from `PATH`: the one under test, not an installed one.
+    // A `cpd` on `PATH` that records its calls: E5 runs the engine's own executable, so it must see none.
     env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
     let fx = Fx { env, repo, lead };
     let catalog: String = EFFORTS
@@ -250,7 +252,14 @@ impl Fx {
 
     /// `start` with the engine run from the binary at `exe`.
     fn start_from(&self, exe: &Path) -> Engine {
-        let child = self.env.command(exe).arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        self.start_with(exe, &[])
+    }
+
+    /// `start_from` with the variables `vars` added to the engine's environment.
+    fn start_with(&self, exe: &Path, vars: &[(&str, &str)]) -> Engine {
+        let mut command = self.env.command(exe);
+        command.envs(vars.iter().copied());
+        let child = command.arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         let engine = Engine { child: Some(child) };
         let pid = engine.pid();
         wait_until("watch-started", || {
@@ -302,12 +311,6 @@ impl Fx {
     fn job_status(&self, key: &str) -> String {
         self.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
     }
-
-    /// A fake `cpd` on `PATH` that runs `pr` with `pr` (sh code) and
-    /// everything else with the built binary.
-    fn fake_cpd(&self, pr: &str) {
-        self.env.fake("cpd", &format!("if [ \"$1\" = pr ]; then {pr}; fi\nexec '{CPD}' \"$@\""));
-    }
 }
 
 // ---------- the lock, the signals, the log ----------
@@ -336,6 +339,19 @@ fn watch_holds_the_lock_refuses_a_second_and_stops_on_sigterm() {
     let out = again.stop_with(Signal::SIGINT);
     assert_eq!(out.json(), json!({"ok": true, "stopped": true}));
     assert_eq!(fx.count("watch-stopped"), 2);
+}
+
+/// `tmux kill-window` (the install's restart of the engine) sends SIGHUP: it is a stop, not a crash.
+#[test]
+fn watch_stops_on_sighup_with_one_watch_stopped() {
+    let fx = fx("");
+    let engine = fx.start();
+    let pid = engine.pid();
+
+    let out = engine.stop_with(Signal::SIGHUP);
+    assert_eq!(out.json(), json!({"ok": true, "stopped": true}), "{out:?}");
+    assert_eq!(out.exit, 0);
+    assert_eq!(fx.events("watch-stopped"), [(None, None, None, json!({"pid": pid}))]);
 }
 
 #[test]
@@ -368,8 +384,8 @@ fn ensure_starts_the_engine_in_the_work_session_once() {
     let pid: u32 = fields[3].parse().unwrap();
     assert_eq!(fx.events("watch-started"), [(None, None, None, json!({"pid": pid}))]);
     assert_eq!(fx.env.cpd(&["watch"]).error()["code"], "watch_running");
-    // E5's polls aside, the one call is the engine's own start.
-    assert_eq!(fx.env.calls("cpd").into_iter().filter(|c| c[0] != "pr").collect::<Vec<_>>(), [vec!["watch".to_owned()]]);
+    // The one call is the engine's own start: E5 runs the engine's executable, not `cpd` from `PATH`.
+    assert_eq!(fx.env.calls("cpd"), [vec!["watch".to_owned()]]);
 
     let again = fx.env.cpd(&["watch", "--ensure"]).ok();
     assert_eq!(again, json!({"ok": true, "started": false, "already": true}));
@@ -728,6 +744,21 @@ fn e3_starts_the_driver_after_the_engines_binary_is_replaced() {
     assert!(!fx.texts("error").iter().any(|t| t.contains("deleted")));
 }
 
+/// E5 runs `cpd pr poll` from the path recorded at start, not from `PATH` (where `fx_bare` put a `cpd` that records its calls).
+#[test]
+fn e5_polls_with_the_engines_recorded_executable_not_the_one_on_path() {
+    let fx = fx_bare("");
+    let installed = fx.env.root().join("cpd-installed");
+    fs::copy(CPD, &installed).unwrap();
+    let engine = fx.start_from(&installed);
+
+    wait_until("a poll (the search reaches gh)", || !fx.env.calls("gh").is_empty());
+    engine.stop();
+
+    assert_eq!(fx.env.calls("cpd"), Vec::<Vec<String>>::new(), "E5 ran the cpd on PATH");
+    assert_eq!(fx.count("error"), 0);
+}
+
 #[test]
 fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
     let fx = fx("");
@@ -939,12 +970,18 @@ fn in_pr(fx: &Fx) {
     );
 }
 
-/// What `cpd pr poll` prints (commands.md §9.2) when it found nothing, with `remaining` requests left until `reset_at`.
-fn poll_output(remaining: u32, reset_at: &str) -> String {
-    format!(
-        r#"{{"ok": true, "polled": 0, "changed": [], "removed": 0, "feedback": [], "merged": [], "done": [], "rate_limit": {{"cost": 1, "remaining": {remaining}, "reset_at": "{reset_at}"}}}}"#
-    )
+/// What the fake `gh` answers to the search when it found no pull request, with `remaining` requests left until `reset_at`.
+fn search_reply(remaining: u32, reset_at: &str) -> String {
+    format!(r#"{{"data":{{"search":{{"issueCount":0,"nodes":[]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":{remaining},"resetAt":"{reset_at}"}}}}}}"#)
 }
+
+/// The fake `gh` calls that are a poll's search: one per `cpd pr poll`.
+fn searches(fx: &Fx) -> usize {
+    fx.env.calls("gh").iter().filter(|c| c[3].contains("search(type")).count()
+}
+
+/// The lookup of PR 7 (`in_pr`) that a poll makes when the search does not list it: still open, so nothing changes.
+const LOOKUP_OPEN: &str = r#"{"data":{"p0":{"pullRequest":{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"t","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{"nodes":[]}}}}}"#;
 
 /// Sets `pr_poll_seconds` (`tick_seconds` is one second).
 fn poll_every(fx: &Fx, seconds: u32) {
@@ -952,7 +989,7 @@ fn poll_every(fx: &Fx, seconds: u32) {
     fs::write(&config, fs::read_to_string(&config).unwrap().replace("tick_seconds = 1\n", &format!("tick_seconds = 1\npr_poll_seconds = {seconds}\n"))).unwrap();
 }
 
-/// Milliseconds since the epoch, as the fake `cpd` writes them.
+/// Milliseconds since the epoch, as the fake `gh` writes them.
 fn epoch_ms(at: &str) -> i128 {
     OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).unwrap().unix_timestamp_nanos() / 1_000_000
 }
@@ -971,9 +1008,9 @@ fn e5_polls_every_pr_poll_seconds_after_the_previous_poll_ended_whatever_the_pla
     poll_every(&fx, 2);
     let log = fx.env.root().join("poll.log");
     // A poll that lasts a second, so that "after the end" differs from "after the start", and that notes both.
-    fx.fake_cpd(&format!(
+    fx.env.fake_gh(&format!(
         r#"echo "start $(date +%s%N)" >> '{log}'; sleep 1; echo "end $(date +%s%N)" >> '{log}'; echo '{}'; exit 0"#,
-        poll_output(4987, "2099-01-01T00:00:00Z"),
+        search_reply(4987, "2099-01-01T00:00:00Z"),
         log = log.display()
     ));
 
@@ -981,8 +1018,6 @@ fn e5_polls_every_pr_poll_seconds_after_the_previous_poll_ended_whatever_the_pla
     wait_until("three polls", || fs::read_to_string(&log).map_or(0, |t| t.matches("end").count()) >= 3);
     engine.stop();
 
-    let calls = fx.env.calls("cpd");
-    assert!(calls.iter().all(|c| c == &["pr", "poll"]), "no --plan, no Plan: {calls:?}");
     // start, end, start, end, …: a poll never starts before the previous one ended, and `pr_poll_seconds` after its end.
     let notes: Vec<(String, i128)> = fs::read_to_string(&log)
         .unwrap()
@@ -1007,17 +1042,19 @@ fn e5_polls_with_a_plan_in_pr_too_and_does_not_poll_more_often_than_every_pr_pol
     let fx = fx("");
     in_pr(&fx);
     poll_every(&fx, 3);
-    fx.fake_cpd(&format!("echo '{}'; exit 0", poll_output(4987, "2099-01-01T00:00:00Z")));
+    fx.env.fake_gh(&format!(
+        "case \"$4\" in *'search(type'*) echo '{}' ;; *) echo '{LOOKUP_OPEN}' ;; esac",
+        search_reply(4987, "2099-01-01T00:00:00Z")
+    ));
 
     let engine = fx.start();
-    wait_until("the first poll", || !fx.env.calls("cpd").is_empty());
+    wait_until("the first poll", || searches(&fx) >= 1);
     let first = Instant::now();
-    wait_until("the second poll", || fx.env.calls("cpd").len() >= 2);
+    wait_until("the second poll", || searches(&fx) >= 2);
     let gap = first.elapsed();
     engine.stop();
 
     assert!(gap >= Duration::from_millis(1500), "one poll per pr_poll_seconds, not one per tick: {gap:?}");
-    assert!(fx.env.calls("cpd").iter().all(|c| c == &["pr", "poll"]));
     assert_eq!(fx.count("error"), 0);
 }
 
@@ -1025,17 +1062,49 @@ fn e5_polls_with_a_plan_in_pr_too_and_does_not_poll_more_often_than_every_pr_pol
 fn e5_reports_a_failing_poll_once() {
     let fx = fx("");
     in_pr(&fx);
-    fx.fake_cpd(r#"echo '{"ok": false, "error": {"code": "gh_failed", "message": "gh failed.", "details": {"exit": 1}}}'; exit 1"#);
+    fx.env.fake_gh("echo 'gh: boom' >&2; exit 1");
     poll_every(&fx, 1);
 
     let engine = fx.start();
-    wait_until("three polls", || fx.env.calls("cpd").len() >= 3);
+    wait_until("three polls", || fx.env.calls("gh").len() >= 3);
     engine.stop();
 
-    assert_eq!(
-        fx.events("error"),
-        [(None, None, None, json!({"source": "watch", "code": "gh_failed", "message": "gh failed.", "details": {"exit": 1}}))]
-    );
+    let errors = fx.events("error");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let (plan, job, attempt, data) = &errors[0];
+    assert_eq!((plan, job, attempt), (&None, &None, &None));
+    assert_eq!((&data["source"], &data["code"], &data["details"]["exit"]), (&json!("watch"), &json!("gh_failed"), &json!(1)));
+}
+
+/// Whether process `pid` is running (a zombie is not).
+fn running(pid: i32) -> bool {
+    fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| s.rsplit(") ").next().is_some_and(|r| !r.starts_with('Z')))
+}
+
+/// engine-W4: a `cpd pr poll` child that hangs (its `gh` sleeps, and so does a child of
+/// that `gh`) is killed at its deadline with its whole process group, and E5 reports
+/// `tool_timeout`. The deadline is shortened to 2 s by `CPD_TEST_DEADLINE_CPD`, which a
+/// debug build reads.
+#[test]
+fn e5_kills_a_hung_poll_child_and_its_group_at_the_deadline_with_tool_timeout() {
+    let fx = fx_bare("");
+    let pids = fx.env.root().join("gh.pids");
+    fx.env.fake_gh(&format!("sleep {SLEEP_SECONDS} & echo \"$$ $!\" >> '{}'; wait", pids.display()));
+
+    let engine = fx.start_with(Path::new(CPD), &[("CPD_TEST_DEADLINE_CPD", "2")]);
+    wait_until("E5's tool_timeout", || fx.count("error") >= 1);
+    engine.stop();
+
+    let errors = fx.events("error");
+    let data = &errors[0].3;
+    assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("tool_timeout")), "{errors:?}");
+    let details = &data["details"];
+    assert_eq!((&details["tool"], &details["deadline_seconds"]), (&json!("cpd"), &json!(2)), "{details}");
+    assert_eq!(details["argv"], json!([CPD, "pr", "poll"]));
+    for pid in fs::read_to_string(&pids).unwrap().split_whitespace() {
+        let pid: i32 = pid.parse().unwrap();
+        wait_until(&format!("gh's process {pid} to end"), || !running(pid));
+    }
 }
 
 #[test]
@@ -1046,17 +1115,17 @@ fn e5_pauses_below_100_requests_until_reset_and_reports_one_gh_rate_limited() {
     let log = fx.env.root().join("poll.log");
     let first = fx.env.root().join("first-poll-done");
     // The first poll leaves 50 requests until `reset_at`; the next one, which E5 must not run before that, 4987.
-    fx.fake_cpd(&format!(
+    fx.env.fake_gh(&format!(
         r#"echo "start $(date +%s%N)" >> '{log}'
 if [ ! -e '{first}' ]; then touch '{first}'; echo '{low}'; else echo '{ok}'; fi; exit 0"#,
         log = log.display(),
         first = first.display(),
-        low = poll_output(50, &reset_at),
-        ok = poll_output(4987, "2099-01-01T00:00:00Z"),
+        low = search_reply(50, &reset_at),
+        ok = search_reply(4987, "2099-01-01T00:00:00Z"),
     ));
 
     let engine = fx.start();
-    wait_until("the second poll", || fx.env.calls("cpd").len() >= 2);
+    wait_until("the second poll", || fx.env.calls("gh").len() >= 2);
     engine.stop();
 
     // The second poll started at or after `reset_at`: the ticks in between ran no poll.
@@ -1160,20 +1229,24 @@ fn copy_executable(from: &str, to: &Path) {
 /// socket, and records `watch --ensure` with the windows of the work session
 /// at that moment. Returns the script's stderr and the fake's calls.
 fn install(env: &TestEnv) -> (String, Vec<Vec<String>>) {
-    let (out, calls) = install_with(env, 6, "6");
+    let (out, calls) = install_with(env, OPENS);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     (String::from_utf8_lossy(&out.stderr).into_owned(), calls)
 }
 
-/// `install`, where the fake build's `--version` reports `schema` and
-/// `store_schema` (a JSON literal: a number or `null`). Returns the output.
-fn install_with(env: &TestEnv, schema: u32, store_schema: &str) -> (std::process::Output, Vec<Vec<String>>) {
+/// The `store` object of a fake build's `--version`: the store opens.
+const OPENS: &str = r#"{"opens":true,"refusal":null,"unknown":[],"pending":[]}"#;
+
+/// `install`, where the fake build's `--version` reports `store` (a JSON literal: the verdict
+/// object or `null`), run from a checkout whose `origin/main` holds the same migrations as the
+/// tree. Returns the output.
+fn install_with(env: &TestEnv, store: &str) -> (std::process::Output, Vec<Vec<String>>) {
     let socket = env.tmux_socket();
     let built = env.fake(
         "cpd-built",
         &format!(
             r#"case "$1" in
---version) echo '{{"ok":true,"version":"0.0.0","schema":{schema},"store_schema":{store_schema}}}' ;;
+--version) echo '{{"ok":true,"version":"0.0.0","schema":1000,"store_schema":1000,"store":{store}}}' ;;
 config) echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}' ;;
 watch) tmux -L '{socket}' list-windows -t =cpd-work -F '#{{window_name}}' > '{windows}' 2>&1; echo '{{"ok":true,"started":true,"pane":"%9"}}' ;;
 esac"#,
@@ -1182,9 +1255,9 @@ esac"#,
     );
     let target = env.root().join("target");
     let cargo = env.fake("fake-cargo", &format!("mkdir -p '{t}/release' && cp '{}' '{t}/release/cpd'", built.display(), t = target.display()));
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let checkout = checkout::Checkout::new(env, &["0001-initial.sql"]);
     let out = env
-        .command(root.join("scripts/install-cpd.sh"))
+        .command(checkout.script())
         .env("CARGO", cargo)
         .env("CARGO_TARGET_DIR", &target)
         .output()
@@ -1223,17 +1296,19 @@ fn install_leaves_a_server_without_an_engine_alone() {
 }
 
 #[test]
-fn install_refuses_a_build_older_than_the_store_before_replacing_anything() {
+fn install_refuses_a_build_that_cannot_open_the_store_before_replacing_anything() {
     let env = TestEnv::new();
     let out = env.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "watch", "sleep", "600"]);
     assert!(out.status.success());
 
-    let (out, calls) = install_with(&env, 5, "6");
+    let refusing = r#"{"opens":false,"refusal":{"code":"store_too_new","message":"The database was migrated by a newer cpd."},"unknown":[],"pending":[]}"#;
+    let (out, calls) = install_with(&env, refusing);
 
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("cpd install refused: this build supports store schema 5 but "), "{stderr}");
-    assert!(stderr.contains("cpd.db is at 6; merge main into this branch, then install again."), "{stderr}");
+    assert!(stderr.contains("cpd install refused: this build cannot open "), "{stderr}");
+    assert!(stderr.contains("cpd.db: The database was migrated by a newer cpd."), "{stderr}");
+    assert!(stderr.contains("merge main into this branch, then install again"), "{stderr}");
     assert!(!env.home().join(".local/bin/cpd").exists());
     assert!(!env.home().join(".local/share/cpd/pi").exists());
     // Only --version ran: no `tui --respawn`, no `watch --ensure`.
@@ -1241,11 +1316,11 @@ fn install_refuses_a_build_older_than_the_store_before_replacing_anything() {
 }
 
 #[test]
-fn install_accepts_a_build_equal_to_the_store_or_a_home_without_a_database() {
-    for store_schema in ["6", "null"] {
+fn install_accepts_a_build_that_opens_the_store_or_a_home_without_a_database() {
+    for store in [OPENS, "null"] {
         let env = TestEnv::new();
-        let (out, _) = install_with(&env, 6, store_schema);
-        assert!(out.status.success(), "{store_schema}: {}", String::from_utf8_lossy(&out.stderr));
+        let (out, _) = install_with(&env, store);
+        assert!(out.status.success(), "{store}: {}", String::from_utf8_lossy(&out.stderr));
         assert!(env.home().join(".local/bin/cpd").exists());
     }
 }

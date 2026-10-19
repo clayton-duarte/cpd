@@ -1,8 +1,8 @@
 //! E5, PR poll (contract §3.7, §7.6; hs-d96, hs-d97): `cpd pr poll` as a
 //! subprocess (a process boundary, cpd 1 §11 step 5), `pr_poll_seconds` after the
 //! end of the previous poll, whether or not any Plan is in `deploy`: one poll covers
-//! every open pull request of the User. `cpd` is resolved on `PATH`, as in every
-//! pane cpd starts (`session::PROGRAM`).
+//! every open pull request of the User. `cpd` is the executable the engine started
+//! from (`host::exe::started_as`), as for the drivers of E3 (hs-d151): not `PATH`.
 //!
 //! The rate guard: when a poll leaves fewer than [`RATE_FLOOR`] requests of
 //! GitHub's rate limit, no poll runs until the limit resets, and one `error`
@@ -19,10 +19,14 @@ use super::engine::Engine;
 use super::report::{About, Failure, Step};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{TAIL_LINES, tail};
-use crate::session::PROGRAM;
+use crate::host::deadline::{self, Failed};
+use crate::host::exe::started_as;
 
 /// Below this many requests remaining, E5 stops polling until the limit resets (D9).
 const RATE_FLOOR: u64 = 100;
+/// The `cpd pr poll` child's deadline (contract §3.7): above `pr poll`'s own 15 s
+/// per `gh` call (§7.6), so a hung child cannot stop the one-thread tick.
+const POLL_DEADLINE: Duration = Duration::from_secs(120);
 
 pub(super) fn run(engine: &mut Engine) {
     let now = Instant::now();
@@ -81,20 +85,23 @@ fn rate_guard(out: &Value) -> Result<Option<(Instant, Failure)>, Failure> {
 
 /// Runs `cpd pr poll` and returns its success value, or the failure it printed.
 fn poll(engine: &Engine) -> Result<Value, Failure> {
-    let argv = [PROGRAM, "pr", "poll"];
-    let out = Command::new(argv[0])
-        .args(&argv[1..])
+    let exe = started_as().map_err(|e| Failure::from(&e))?;
+    let argv = [&*exe.to_string_lossy(), "pr", "poll"];
+    let mut cmd = Command::new(&exe);
+    cmd.args(&argv[1..])
         .env("CPD_HOME", engine.home.root())
         // The engine's own selection is not the subprocess's.
         .env_remove("CPD_PLAN")
         .env_remove("CPD_SESSION")
         .env_remove("CPD_ATTEMPT")
         .current_dir(engine.home.root())
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| {
+        .stdin(Stdio::null());
+    let out = deadline::output(&mut cmd, "cpd", POLL_DEADLINE).map_err(|e| match e {
+        Failed::Io(e) => {
             Failure::from(&CpdError::new(ErrorCode::SpawnFailed, format!("Cannot run {}: {e}.", argv.join(" "))).with("argv", json!(argv)))
-        })?;
+        }
+        Failed::Timeout(e) => Failure::from(&e),
+    })?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     let printed: Option<Value> = serde_json::from_str(stdout.trim()).ok();
     match printed {

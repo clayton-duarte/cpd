@@ -61,11 +61,17 @@ case "$1 $2" in
   "pr list") echo '[]' ;;
   "pr create") touch "$created"; echo 'https://github.com/acme/pay/pull/7' ;;
   "api graphql")
+    case "$4" in
+      *"p0: repository"*)
+        # `pr open` reads `createdAt` of the pull request it just created.
+        echo '{"data":{"p0":{"pullRequest":{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"2026-10-14T21:00:00Z","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{"nodes":[]}}}}}'
+        exit 0 ;;
+    esac
     nodes=''
     if [ -e "$created" ]; then
       nodes='{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"2026-10-14T21:00:00Z","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}}'
     fi
-    echo '{"data":{"search":{"issueCount":1,"nodes":['"$nodes"']},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}' ;;
+    echo '{"data":{"search":{"issueCount":1,"nodes":['"$nodes"']},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}' ;;
   *) echo "unexpected gh call: $*" >&2; exit 9 ;;
 esac
 "#;

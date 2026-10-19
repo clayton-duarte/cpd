@@ -83,6 +83,16 @@ fn plain(text: &str) -> Line<'static> {
     Line::from(text.to_string())
 }
 
+/// The Context row's precedence line, with the real glyphs (the working one as its first frame).
+fn precedence() -> String {
+    format!(
+        "Context row: its most urgent Session: red > yellow > magenta > white > {} > {} > {}",
+        palette::SPINNER[0],
+        palette::IDLE,
+        palette::STOPPED
+    )
+}
+
 /// The sections, built only from the palette and the read model's counters.
 fn sections() -> Vec<Section> {
     let meanings = Section {
@@ -122,20 +132,20 @@ fn sections() -> Vec<Section> {
     ]);
     let jobs = Section { title: "Jobs: Plan pills and Context counters", header: Some(["status", "Plan pill", "counter"]), rows: jobs };
     let dot = |d: Dot, frame: usize| Line::from(palette::dot_span(d, frame, false));
-    let frames = Line::from((0..4).map(|f| palette::dot_span(Dot::Working, f, false)).collect::<Vec<_>>());
+    let frames = Line::from((0..palette::SPINNER.len()).map(|f| palette::dot_span(Dot::Working, f, false)).collect::<Vec<_>>());
     let dots = Section {
         title: DOTS_TITLE,
         header: None,
         rows: vec![
-            vec![plain("●"), plain("the Session needs you (colour below)")],
-            vec![frames, plain("the Lead is working (one frame every 250 ms)")],
+            vec![plain(palette::NEEDS_YOU), plain("the Session needs you (colour below)")],
+            vec![frames, plain("the Lead is working (one frame every 100 ms)")],
             vec![dot(Dot::Idle, 0), plain("idle, nothing needed")],
             vec![dot(Dot::Stopped, 0), plain("pi stopped")],
             vec![dot(Dot::Red, 0), plain("red: blocked work (a dialog, an Escalation) in dispatch or pr")],
             vec![dot(Dot::Yellow, 0), plain("yellow: the Plan's Lead, its pull request is open with checks passed or failed")],
             vec![dot(Dot::Magenta, 0), plain("magenta: blocked while grounding, planning or done, or the Plan's review is pending")],
             vec![dot(Dot::White, 0), plain("white: idle, not seen since it last went idle")],
-            vec![plain(""), plain("Context row: its most urgent Session: red > yellow > magenta > white > ◐ > ○ > ◌")],
+            vec![plain(""), plain(&precedence())],
         ],
     };
     let prs = Section {
@@ -143,7 +153,9 @@ fn sections() -> Vec<Section> {
         header: None,
         rows: palette::PR_LEGEND
             .iter()
-            .map(|(name, state)| vec![Line::from(Span::styled(format!("#2 {name}"), palette::fg(palette::pr_state(*state))))])
+            .map(|(name, state)| (*name, palette::pr_state(*state)))
+            .chain([palette::PR_CONFLICT])
+            .map(|(name, meaning)| vec![Line::from(Span::styled(format!("#2 {name}"), palette::fg(meaning)))])
             .collect(),
     };
     let checks = Section {
@@ -159,7 +171,16 @@ fn sections() -> Vec<Section> {
                 .collect(),
         ],
     };
-    vec![meanings, jobs, dots, prs, checks]
+    let pulse = Section {
+        title: "Pulse",
+        header: None,
+        // two entries a row: the popup is at most 80 % of the client tall (one row an entry would not fit)
+        rows: crate::plan::pulse::legend()
+            .chunks(2)
+            .map(|pair| pair.iter().flat_map(|(sample, meaning)| [Line::from(sample.clone()), plain(meaning)]).collect())
+            .collect(),
+    };
+    vec![meanings, jobs, dots, prs, pulse, checks]
 }
 
 /// The vertical constraints: the intro, then each section after a gap.
@@ -250,9 +271,27 @@ mod tests {
                 "Jobs: Plan pills and Context counters",
                 "Session dots",
                 "PRs (Dispatch)",
+                "Pulse",
                 "PR checks",
             ]
         );
+    }
+
+    #[test]
+    fn the_pulse_section_lists_its_five_glyphs_in_their_colours() {
+        let pulse = &sections()[4];
+        let cells: Vec<String> = pulse.rows.iter().flatten().map(text).collect();
+        assert_eq!(
+            cells,
+            [
+                "▄", "activity per 5 minutes", "▄", "a Job merged",
+                crate::plan::pulse::merged_icon(), "a PR merged", "▁", "a Worker running",
+                "quiet 41m", "queued or running work with no activity for 30 min",
+            ]
+        );
+        let colours: Vec<_> = pulse.rows.iter().flatten().step_by(2).map(|l| l.spans[0].style.fg).collect();
+        let fg = |m| palette::fg(m).fg;
+        assert_eq!(colours, [None, fg(Meaning::Done), fg(Meaning::Done), fg(Meaning::Nothing), fg(Meaning::Review)]);
     }
 
     #[test]
@@ -260,7 +299,8 @@ mod tests {
         let dots = &sections()[2];
         assert_eq!(dots.title, "Session dots");
         let shown: String = dots.rows.iter().flatten().map(text).collect();
-        for glyph in ["●", "◐◓◑◒", "○", "◌", "red > yellow > magenta > white > ◐ > ○ > ◌"] {
+        let precedence = format!("red > yellow > magenta > white > {} > {} > {}", palette::SPINNER[0], palette::IDLE, palette::STOPPED);
+        for glyph in [palette::NEEDS_YOU, &palette::SPINNER.concat(), palette::IDLE, palette::STOPPED, &precedence] {
             assert!(shown.contains(glyph), "{glyph}: {shown}");
         }
         for (row, dot) in dots.rows[4..8].iter().zip([Dot::Red, Dot::Yellow, Dot::Magenta, Dot::White]) {
@@ -268,7 +308,16 @@ mod tests {
         }
         assert!(!shown.contains("phase"), "{shown}");
         let frames: Vec<_> = dots.rows[1][0].spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(frames, ["◐", "◓", "◑", "◒"]);
+        assert_eq!(frames, palette::SPINNER);
+    }
+
+    #[test]
+    fn the_pr_states_list_conflict_in_the_failed_colour_after_the_others() {
+        let prs = &sections()[3];
+        let names: Vec<String> = prs.rows.iter().map(|r| text(&r[0])).collect();
+        assert_eq!(names, ["#2 open", "#2 merged", "#2 closed", "#2 conflict"]);
+        let conflict = &prs.rows[3][0].spans[0];
+        assert_eq!(conflict.style, palette::fg(palette::Meaning::Failed));
     }
 
     #[test]

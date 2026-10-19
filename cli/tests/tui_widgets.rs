@@ -335,6 +335,21 @@ fn three_open_prs_in_two_repos_come_out_oldest_first_in_two_lines_each() {
 }
 
 #[test]
+fn a_conflicting_pr_shows_conflict_on_its_second_line_and_the_others_do_not() {
+    let env = TestEnv::new();
+    let mut store = prs_store(&env);
+    sql(&mut store, "UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 9; UPDATE pull_requests SET mergeable = 'mergeable' WHERE number = 4;");
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    let buf = render(46, 25, &w);
+    let got = rows(&buf);
+    assert_eq!(got[7], "  draft ✗ changes requested  Older web fix");
+    assert_eq!(got[9], "  open ✓ approved conflict  Middle one");
+    assert_eq!(got[11], "  open … no review  Mine to review");
+    let (x, y) = find(&buf, "conflict");
+    assert_eq!(buf[(x, y)].fg, palette::color(Meaning::Failed));
+}
+
+#[test]
 fn a_draft_shows_draft_and_the_others_open() {
     let env = TestEnv::new();
     let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
@@ -386,6 +401,25 @@ fn closed_and_merged_pull_requests_are_not_listed() {
     let (got, _) = column(25);
     let got = got.join("\n");
     assert!(!got.contains("#3") && !got.contains("#9"), "{got}");
+}
+
+#[test]
+fn an_open_review_request_is_not_listed_but_one_that_is_also_authored_is() {
+    let env = TestEnv::new();
+    let mut store = prs_store(&env);
+    let mut s = pull_request("acme/web", 31, "A colleague change", false, "open", "none", "passed", "2026-01-06T00:00:00.000Z");
+    s += &pull_request("acme/web", 32, "My own, and asked of me", false, "open", "none", "passed", "2026-01-07T00:00:00.000Z");
+    s += "UPDATE pull_requests SET authored = 0, review_requested = 1 WHERE number = 31;
+          UPDATE pull_requests SET review_requested = 1 WHERE number = 32;";
+    sql(&mut store, &s);
+
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+
+    let listed: Vec<(&str, i64)> = w.prs.iter().map(|p| (p.repo.as_str(), p.number)).collect();
+    assert!(listed.contains(&("acme/web", 32)), "{listed:?}");
+    assert!(listed.iter().all(|(_, n)| *n != 31), "{listed:?}");
+    let got = rows(&render(46, 30, &w)).join("\n");
+    assert!(got.contains("acme/web#32") && !got.contains("acme/web#31"), "{got}");
 }
 
 #[test]
@@ -755,23 +789,23 @@ fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
 fn the_session_dots_are_listed_in_their_colours() {
     let buf = legend_buffer();
     let dots = find(&buf, "Session dots").1;
-    // The glyph column is as wide as the four spinner frames, then two cells of spacing.
+    // The glyph column is as wide as the spinner's frames, then two cells of spacing.
     let glyph_at = |text: &str| {
         let (x, y) = find_after(&buf, dots, text);
-        (x - 6, y)
+        (x - (palette::SPINNER.len() as u16 + 2), y)
     };
     let needs_you = glyph_at("the Session needs you");
-    assert_eq!(buf[needs_you].symbol(), "●");
+    assert_eq!(buf[needs_you].symbol(), palette::NEEDS_YOU);
     let working = glyph_at("the Lead is working");
-    let frames: String = (0..4).map(|i| buf[(working.0 + i, working.1)].symbol().to_string()).collect();
-    assert_eq!(frames, "◐◓◑◒");
+    let frames: String = (0..palette::SPINNER.len() as u16).map(|i| buf[(working.0 + i, working.1)].symbol().to_string()).collect();
+    assert_eq!(frames, palette::SPINNER.concat());
     for (text, glyph, dot) in [
-        ("idle, nothing needed", "○", Dot::Idle),
-        ("pi stopped", "◌", Dot::Stopped),
-        ("red:", "●", Dot::Red),
-        ("yellow:", "●", Dot::Yellow),
-        ("magenta:", "●", Dot::Magenta),
-        ("white:", "●", Dot::White),
+        ("idle, nothing needed", palette::IDLE, Dot::Idle),
+        ("pi stopped", palette::STOPPED, Dot::Stopped),
+        ("red:", palette::NEEDS_YOU, Dot::Red),
+        ("yellow:", palette::NEEDS_YOU, Dot::Yellow),
+        ("magenta:", palette::NEEDS_YOU, Dot::Magenta),
+        ("white:", palette::NEEDS_YOU, Dot::White),
     ] {
         let cell = &buf[glyph_at(text)];
         let want = palette::dot_span(dot, 0, false);
@@ -779,7 +813,8 @@ fn the_session_dots_are_listed_in_their_colours() {
         assert_eq!(cell.symbol(), want.content, "{text}");
         assert_eq!(cell.fg, want.style.fg.unwrap_or(Color::Reset), "{text}");
     }
-    find_after(&buf, dots, "red > yellow > magenta > white > ◐ > ○ > ◌");
+    let precedence = format!("red > yellow > magenta > white > {} > {} > {}", palette::SPINNER[0], palette::IDLE, palette::STOPPED);
+    find_after(&buf, dots, &precedence);
 }
 
 #[test]

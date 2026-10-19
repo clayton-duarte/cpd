@@ -47,7 +47,7 @@ const WEB_URL: &str = "https://github.com/acme/web/pull/813";
 
 const TITLE: &str = "Add the payment webhook";
 
-const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#;
+const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#;
 
 fn plan() -> PlanId {
     PlanId::parse("pay").unwrap()
@@ -102,6 +102,10 @@ fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
     fs::create_dir_all(&gh).unwrap();
     for (name, text) in [("list.json", "[]"), ("create.out", URL), ("search.json", EMPTY_SEARCH), ("lookup.json", r#"{"data":{}}"#)] {
         fs::write(gh.join(name), format!("{text}\n")).unwrap();
+    }
+    if phase == "dispatch" {
+        // `pr open` reads `createdAt` of the pull request it just opened (store-W5).
+        fs::write(gh.join("lookup.json"), format!("{}\n", lookup_answer(&[Some(pay("OPEN", None, None))]))).unwrap();
     }
     env.fake_gh(GH);
 
@@ -296,6 +300,7 @@ impl Fx {
         let answers = self.env.root().join("gh/web.pay.web");
         fs::create_dir_all(&answers).unwrap();
         fs::write(answers.join("create.out"), format!("{WEB_URL}\n")).unwrap();
+        fs::write(answers.join("lookup.json"), format!("{}\n", lookup_answer(&[Some(node("acme/web", 813, "OPEN", None, None))]))).unwrap();
         let (status, worktree, started, open_columns, open_values, job, needs) = match state {
             Web::Dispatch => ("dispatch", format!("'{}'", lead.display()), "'t'", "", String::new(), "merged", ""),
             Web::Open => (
@@ -392,7 +397,7 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
         fx.shown_pull_request(),
         json!({"repo": "acme/pay", "number": 812, "url": URL, "title": "Pay the bills", "draft": false, "state": "open",
                "review_decision": "none", "checks": "none", "mergeable": "unknown", "merge_state": "unknown",
-               "created_at": opened_at, "merged_at": null})
+               "created_at": "opened", "merged_at": null})
     );
     let opened = fx.events("pr-opened");
     assert_eq!(opened.len(), 1);
@@ -427,6 +432,48 @@ fn open_keeps_the_row_the_poll_stored_first() {
     );
     let rows: i64 = fx.store().read(|c| Ok(c.query_row("SELECT count(*) FROM pull_requests", [], |r| r.get(0))?)).unwrap();
     assert_eq!(rows, 1);
+}
+
+/// `pay` as GitHub reports it, created at `created`.
+fn pay_created(state: &str, created: &str) -> String {
+    pay(state, None, None).replace(r#""createdAt":"opened""#, &format!(r#""createdAt":"{created}""#))
+}
+
+#[test]
+fn open_stores_the_created_at_gh_reports_and_later_polls_keep_it() {
+    let fx = fx("dispatch");
+    fx.lookup(&[Some(pay_created("OPEN", "2026-05-01T10:00:00Z"))]);
+
+    fx.pr("open").ok();
+
+    let created = || fx.shown_pull_request()["created_at"].clone();
+    assert_eq!(created(), json!("2026-05-01T10:00:00Z"), "GitHub's time, not cpd's");
+    let writes = || -> i64 {
+        fx.store().read(|c| Ok(c.query_row("SELECT count(*) FROM history WHERE tbl = 'pull_requests'", [], |r| r.get(0))?)).unwrap()
+    };
+    assert_eq!(writes(), 1, "one insert");
+
+    // The poll reads the same pull request: nothing to write.
+    fx.search(&[pay_created("OPEN", "2026-05-01T10:00:00Z")]);
+    fx.poll();
+    assert_eq!((created(), writes()), (json!("2026-05-01T10:00:00Z"), 1));
+
+    // Whatever a later poll reads, `created_at` is written once.
+    fx.search(&[pay_created("OPEN", "2026-05-01T10:00:01Z").replace(r#""isDraft":false"#, r#""isDraft":true"#)]);
+    fx.poll();
+    assert_eq!(created(), json!("2026-05-01T10:00:00Z"));
+    assert_eq!(fx.shown_pull_request()["draft"], json!(true), "the other values still follow the poll");
+}
+
+#[test]
+fn open_fails_loud_when_gh_cannot_find_the_pull_request_it_created() {
+    let fx = fx("dispatch");
+    fx.lookup(&[None]);
+
+    let run = fx.pr("open");
+
+    assert_eq!(code(&run).0, "gh_failed");
+    assert_eq!(fx.plan_row().0, "dispatch");
 }
 
 #[test]
@@ -761,13 +808,21 @@ fn pay(state: &str, review: Option<&str>, rollup: Option<&str>) -> String {
 
 const RESET: &str = "2026-10-20T11:00:00Z";
 
-/// The search's answer: `nodes`, and a rate limit with `remaining` requests.
-fn search_answer(nodes: &[String], remaining: u32) -> String {
+/// The search's answer: `nodes` of the User's own pull requests, `requested` of those that ask for their
+/// review, and a rate limit with `remaining` requests.
+fn search_answer_with(nodes: &[String], requested: &[String], remaining: u32) -> String {
     format!(
-        r#"{{"data":{{"search":{{"issueCount":{},"nodes":[{}]}},"rateLimit":{{"cost":1,"remaining":{remaining},"resetAt":"{RESET}"}}}}}}"#,
+        r#"{{"data":{{"search":{{"issueCount":{},"nodes":[{}]}},"reviewRequests":{{"issueCount":{},"nodes":[{}]}},"rateLimit":{{"cost":1,"remaining":{remaining},"resetAt":"{RESET}"}}}}}}"#,
         nodes.len(),
-        nodes.join(",")
+        nodes.join(","),
+        requested.len(),
+        requested.join(",")
     )
+}
+
+/// The search's answer with no review request.
+fn search_answer(nodes: &[String], remaining: u32) -> String {
+    search_answer_with(nodes, &[], remaining)
 }
 
 /// The lookup's answer, one alias per entry; `None` is an alias GitHub cannot find.
@@ -804,6 +859,22 @@ impl Fx {
     /// What the fake `gh`'s search answers.
     fn search(&self, nodes: &[String]) {
         self.gh("search.json", &search_answer(nodes, 4987));
+    }
+
+    /// What the fake `gh`'s search answers: `authored` in the `author:@me` search, `requested` in the
+    /// `review-requested:@me` one.
+    fn search_both(&self, authored: &[String], requested: &[String]) {
+        self.gh("search.json", &search_answer_with(authored, requested, 4987));
+    }
+
+    /// `(repo, number, authored, review_requested)` of every row of `pull_requests`, in order.
+    fn memberships(&self) -> Vec<(String, i64, bool, bool)> {
+        self.store()
+            .read(|c| {
+                let mut stmt = c.prepare("SELECT repo, number, authored, review_requested FROM pull_requests ORDER BY id")?;
+                Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?)
+            })
+            .unwrap()
     }
 
     /// What the fake `gh`'s lookup answers.
@@ -869,6 +940,86 @@ fn the_first_poll_inserts_every_pull_request_and_appends_nothing_for_unowned_one
     assert_eq!(calls.len(), 1, "{calls:?}");
     assert!(is_search(&calls[0]), "{calls:?}");
     assert!(calls[0][3].ends_with("rateLimit { cost remaining resetAt } }"), "{}", calls[0][3]);
+}
+
+#[test]
+fn a_review_request_is_stored_as_not_authored_and_deleted_when_it_leaves_the_search() {
+    let fx = fx("dispatch");
+    fx.search_both(&[node("acme/pay", 901, "OPEN", None, None)], &[node("acme/web", 902, "OPEN", Some("APPROVED"), Some("FAILURE"))]);
+    let events = fx.event_count();
+
+    let out = fx.poll_all();
+
+    assert_eq!((out["polled"].clone(), out["changed"].as_array().unwrap().len(), out["removed"].clone()), (json!(2), 2, json!(0)));
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, false), ("acme/web".to_owned(), 902, false, true)]);
+    assert_eq!(fx.event_count(), events, "no PR owns either: no Event, not even for a review request with failed checks");
+    let calls = fx.gh_calls();
+    assert_eq!(calls.len(), 1, "both searches in one gh call: {calls:?}");
+    assert!(is_search(&calls[0]) && calls[0][3].contains("review-requested:@me is:pr is:open archived:false"), "{calls:?}");
+
+    // The same answer: nothing is written.
+    let txns = fx.txns();
+    assert_eq!(fx.poll_all()["changed"], json!([]));
+    assert_eq!(fx.txns(), txns);
+
+    // It leaves the review-request search: its row is deleted, the authored one stays.
+    fx.search_both(&[node("acme/pay", 901, "OPEN", None, None)], &[]);
+    let out = fx.poll_all();
+    assert_eq!((out["removed"].clone(), out["changed"].clone()), (json!(1), json!([])));
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, false)]);
+    assert_eq!(fx.gh_calls().len(), 3, "one call per poll, three polls");
+}
+
+#[test]
+fn a_pull_request_in_both_searches_is_authored_and_review_requested_and_each_flag_clears_when_it_leaves_its_search() {
+    let fx = fx("dispatch");
+    let mine = node("acme/pay", 901, "OPEN", None, None);
+    fx.search_both(&[mine.clone()], &[mine.clone()]);
+    let out = fx.poll_all();
+    assert_eq!((out["polled"].clone(), out["changed"].as_array().unwrap().len()), (json!(1), 1));
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, true)]);
+
+    // Left the author search only: `authored` clears, the row is kept and reported as changed.
+    fx.search_both(&[], &[mine.clone()]);
+    let out = fx.poll_all();
+    assert_eq!((out["changed"].as_array().unwrap().len(), out["removed"].clone()), (1, json!(0)));
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, false, true)]);
+
+    // Back in the author search only: `review_requested` clears.
+    fx.search_both(&[mine.clone()], &[]);
+    fx.poll_all();
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, false)]);
+
+    // In neither: no PR points to it, so it is deleted.
+    fx.search_both(&[], &[]);
+    assert_eq!(fx.poll_all()["removed"], 1);
+    assert!(fx.memberships().is_empty());
+}
+
+#[test]
+fn a_pr_opened_by_cpd_is_authored_and_a_row_a_pr_points_to_stays_while_in_no_search() {
+    let fx = fx("deploy");
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 812, true, false)]);
+    fx.search_both(&[], &[]);
+    fx.lookup(&[Some(pay("OPEN", None, None))]);
+    fx.poll();
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 812, true, false)], "a lookup answering open changes nothing");
+}
+
+#[test]
+fn a_poll_reply_without_the_review_request_search_is_gh_failed_and_writes_nothing() {
+    let fx = fx("deploy");
+    let (txns, events) = (fx.txns(), fx.event_count());
+    fx.gh(
+        "search.json",
+        &search_answer(&[pay("OPEN", None, Some("FAILURE"))], 4987).replace(r#""reviewRequests":{"issueCount":0,"nodes":[]},"#, ""),
+    );
+
+    let run = fx.pr("poll");
+
+    assert_eq!(code(&run), ("gh_failed".into(), 1));
+    assert!(run.error()["message"].as_str().unwrap().contains("reviewRequests"), "{}", run.error());
+    assert_eq!((fx.txns(), fx.event_count()), (txns, events));
 }
 
 #[test]
@@ -1184,11 +1335,11 @@ fn an_owned_pull_request_that_left_the_search_and_is_closed_is_told_to_the_plan_
     assert_eq!(fx.pr_data().3, "closed");
     assert_eq!((fx.plan_row().0, fx.pr_status("repo")), ("deploy".to_owned(), "open".to_owned()), "the PR stays open in cpd");
 
-    // Polled again: still closed, told once; the lookup is repeated, the row is not written.
+    // Polled again: still closed, told once; the row is already right, so it is not looked up again (commands-W4).
     let txns = fx.txns();
     assert_eq!(fx.poll()["feedback"], json!([]));
     assert_eq!((fx.txns(), fx.events("pr-feedback").len()), (txns, 1));
-    assert_eq!(fx.gh_calls().iter().filter(|c| is_lookup(c)).count(), 2);
+    assert_eq!(fx.gh_calls().iter().filter(|c| is_lookup(c)).count(), 1);
 
     // Reopened: it is in the search again, and nobody is told. Closed again: told again.
     fx.search(&[pay("OPEN", None, None)]);
@@ -1199,6 +1350,24 @@ fn an_owned_pull_request_that_left_the_search_and_is_closed_is_told_to_the_plan_
     fx.lookup(&[Some(pay("CLOSED", None, None))]);
     fx.poll();
     assert_eq!(fx.events("pr-feedback").len(), 2);
+}
+
+#[test]
+fn a_pull_request_closed_without_a_merge_is_not_looked_up_again() {
+    let fx = fx("deploy");
+    fx.search(&[]);
+    fx.lookup(&[Some(pay("CLOSED", None, None))]);
+    fx.poll();
+    assert_eq!(fx.pr_data().3, "closed");
+    let lookups = || fx.gh_calls().iter().filter(|c| is_lookup(c)).count();
+    assert_eq!(lookups(), 1);
+
+    for _ in 0..3 {
+        fx.poll();
+    }
+
+    assert_eq!(lookups(), 1, "three more ticks looked it up again");
+    assert_eq!((fx.plan_row().0, fx.pr_status("repo")), ("deploy".to_owned(), "open".to_owned()));
 }
 
 #[test]
@@ -1678,8 +1847,8 @@ fn poll_covers_every_open_pr_in_dispatch_and_pr_and_ends_the_plan_with_the_last_
 
     // `web` opens: the PRs are open or merged, so the Plan moves to pr. Only `web` is owned and open now.
     assert_eq!(fx.pr_cmd("open", "web").ok()["phase"], "deploy");
-    fx.search(&[node("acme/web", 813, "OPEN", None, None)]);
-    // The row `pr open` wrote has the time of the opening, the search's `createdAt` is GitHub's: that is the change.
+    fx.search(&[node("acme/web", 813, "OPEN", None, Some("SUCCESS"))]);
+    // The row `pr open` wrote has no checks; the search's passed: that is the change.
     let out = fx.poll();
     assert_eq!((out["changed"][0]["number"].clone(), out["merged"].clone()), (json!(813), json!([])));
     assert_eq!(fx.phase(), "deploy");
@@ -1798,4 +1967,59 @@ fn rebase_touches_only_its_pr() {
     assert_eq!(fx.lead_sha(), repo_before);
     assert_eq!(fx.remote_branch("cpd/pay"), Some(repo_before));
     assert!(fx.events("plan-phase").len() == 1 && fx.gh_calls().iter().filter(|c| c[1] == "create").count() == 1);
+}
+
+/// The `needs` of PR `key` in Plan `pay`, sorted.
+fn needs_of(fx: &Fx, key: &str) -> Vec<String> {
+    fx.store()
+        .read(|c| {
+            let mut q = c.prepare("SELECT needs FROM pr_needs WHERE plan = 'pay' AND pr = ?1 ORDER BY needs")?;
+            let rows = q.query_map([key], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .unwrap()
+}
+
+fn add_fix(fx: &Fx, extra: &[&str]) -> Run {
+    let mut args = vec!["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--plan", "pay"];
+    args.extend(extra);
+    fx.env.cpd(&args)
+}
+
+#[test]
+fn pr_add_on_a_reopened_plan_needs_its_merged_prs_by_default() {
+    let f = fx("done");
+    let out = add_fix(&f, &[]).ok();
+    assert_eq!(out["pr"]["needs"], json!(["repo"]));
+    assert_eq!(needs_of(&f, "fix"), ["repo"]);
+    assert_eq!(f.events("pr-added")[0].1["needs"], json!(["repo"]));
+    // A rerun (the Plan is in dispatch now) is `already`, not `pr_exists`.
+    assert_eq!(add_fix(&f, &[]).ok()["already"], true);
+}
+
+#[test]
+fn pr_add_no_needs_and_needs_override_the_reopen_default() {
+    let a = fx("done");
+    assert_eq!(add_fix(&a, &["--no-needs"]).ok()["pr"]["needs"], json!([]));
+    assert!(needs_of(&a, "fix").is_empty());
+
+    let b = fx("done");
+    b.env.cpd(&["pr", "add", "x", "--repo", b.repo.to_str().unwrap(), "--plan", "pay", "--no-needs"]).ok();
+    // The Plan is in dispatch now; `--needs x` names a PR that is not merged.
+    assert_eq!(add_fix(&b, &["--needs", "x"]).ok()["pr"]["needs"], json!(["x"]));
+    assert_eq!(needs_of(&b, "fix"), ["x"]);
+
+    let c = fx("done");
+    assert_eq!(code(&add_fix(&c, &["--needs", "repo", "--no-needs"])), ("usage".into(), 2));
+    assert_eq!(c.phase(), "done");
+}
+
+#[test]
+fn pr_add_on_a_plan_in_dispatch_has_no_needs_by_default() {
+    let f = fx("dispatch");
+    // Another repo: the fixture's own holds `cpd/pay` for its unmerged PR.
+    let other = f.env.git_repo("other").canonicalize().unwrap();
+    let out = f.env.cpd(&["pr", "add", "fix", "--repo", other.to_str().unwrap(), "--plan", "pay"]).ok();
+    assert_eq!(out["pr"]["needs"], json!([]));
+    assert!(needs_of(&f, "fix").is_empty());
 }

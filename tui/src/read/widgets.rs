@@ -26,7 +26,7 @@ pub struct Widgets {
     pub engine: Engine,
     /// Every Plan, oldest first.
     pub plans: Vec<PlanCard>,
-    /// Every `open` row of `pull_requests`, oldest `created_at` first (then `repo`, `number`): what the PRs section lists.
+    /// Every `open` row of `pull_requests` with `authored` 1 (review requests are Inbox items), oldest `created_at` first (then `repo`, `number`): what the PRs section lists.
     pub prs: Vec<OpenPr>,
     /// Every `open` Escalation of the machine, oldest first.
     pub escalations: Vec<MachineEscalation>,
@@ -84,6 +84,8 @@ pub struct OpenPr {
     pub draft: bool,
     pub checks: Checks,
     pub review_decision: ReviewDecision,
+    /// `pull_requests.mergeable` is `'conflicting'` (`'unknown'` is not a conflict).
+    pub conflicting: bool,
     /// A PR of the Plan whose Lead is in the chat slot points to this pull request.
     pub active: bool,
     /// The Lead of the owner: `plans.lead_session` of the Plan of the `prs` row that points to this pull request (the most
@@ -170,11 +172,12 @@ fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
         .collect()
 }
 
-/// The `open` pull requests, oldest first. `lead`: the owner's (see [`OpenPr::lead`]). `active`: a PR of the Plan of the chat slot's Lead (the Plan Lead whose latest
+/// The `open` pull requests the User wrote (`authored` 1), oldest first. `lead`: the owner's (see [`OpenPr::lead`]). `active`: a PR of the Plan of the chat slot's Lead (the Plan Lead whose latest
 /// `session-moved` says `chat`, the newest when there are several: `chat_slot`'s rule) points to it.
 fn open_prs(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT q.repo, q.number, q.title, q.draft, q.checks, q.review_decision, q.url,
+                q.mergeable = 'conflicting',
                 EXISTS (SELECT 1 FROM prs r WHERE r.pull_request = q.id AND r.plan =
                         (SELECT s.plan FROM sessions s
                            JOIN events m ON m.id = (SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-moved')
@@ -182,7 +185,7 @@ fn open_prs(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
                           ORDER BY m.id DESC LIMIT 1)),
                 (SELECT p.lead_session FROM prs r JOIN plans p ON p.id = r.plan
                   WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1)
-           FROM pull_requests q WHERE q.state = 'open' ORDER BY q.created_at, q.repo, q.number",
+           FROM pull_requests q WHERE q.state = 'open' AND q.authored = 1 ORDER BY q.created_at, q.repo, q.number",
     )?;
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
@@ -201,8 +204,9 @@ fn open_prs(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
                 _ => return Err(bad_row(format!("{what} has review_decision {decision:?}"))),
             },
             url: r.get(6)?,
-            active: r.get(7)?,
-            lead: r.get::<_, Option<String>>(8)?.map(|lead| id("Session id", &lead, SessionId::parse)).transpose()?,
+            conflicting: r.get(7)?,
+            active: r.get(8)?,
+            lead: r.get::<_, Option<String>>(9)?.map(|lead| id("Session id", &lead, SessionId::parse)).transpose()?,
             repo,
             number,
         });

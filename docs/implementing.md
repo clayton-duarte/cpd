@@ -40,16 +40,24 @@ Within your area you may add files (`core/src/<area>/foo.rs`, declared in your `
 | `metrics` | rs-spec-metrics | none: session metrics | §2.2 Attempt |
 | `driver` | rs-driver | `attempt run` (§6.4), `job dispatch` (§5.5) | §3.4 |
 | `pr` | rs-pr | `pr …` (§9): `pr open`, `pr poll`, `pr rebase`, and since R34 `pr add`, `pr edit`, `pr cancel`, `pr start` (§9.4–§9.7); owns the tables `prs` and `pr_needs`, the PR selection by `--pr` (§1.3) and the PR start (contract §3.8, §7.2), which `plan lock` and engine E7 call | §2.5, §3.8, §7.2, §7.6 |
-| `watch` | rs-watch | `watch` (§12) | §3.7 (E1–E8) |
+| `watch` | rs-watch | `watch` (§12) | §3.7 (E1–E9) |
 | `inbox` | Plan inbox | `inbox list/show/snooze/dismiss` (§21) | §2.2 Inbox item, §3.7 (E8) |
 | `doctor` | rs-doctor | `doctor` (§14.1) | |
 | `tui` | the TUI Job | `tui`, `tui view` (§13) | §6.2 |
 
 `attempt run` and `job dispatch` are declared in `attempt` and `job` but their argument types (`driver::RunArgs`, `driver::DispatchArgs`) and functions (`driver::run`, `driver::dispatch`) are the driver's, so the driver Job never edits those modules.
 
+**The distilled Context** (contract §4.6, hs-d194) lives in the `context` area:
+- `core/src/context/inforce.rs`: the records in force as of a `seq` (D2), pure over the records read in one transaction;
+- `core/src/context/digest.rs`: the digest files (find the latest, write `.md.tmp`, rename, prune), the validation (citations, size; D3) and the one rendering of "the Context" for a first message (D6), which `plan new` (`core/src/plan/`) and `context manager` call;
+- `core/src/context/distill.rs`: `context distill` (D4, D5): the lock, `prompt.md` and `records.md`, the pi run and its timeout, the `error` Event;
+- `core/src/context/distill_prompt.md`: the distiller's prompt, embedded with `include_str!`;
+- engine E9 in `core/src/watch/distill.rs` (it only decides and spawns, as E3 does);
+- paths through new `CpdHome` methods (`context_digest_dir(context)`, `distill_lock(context)`), and `context_distill_tier` and `timeouts.distill_minutes` in `config`: shared modules and other areas, so the Job that builds it asks the Lead for those edits (the one-area rule).
+
 ## The command tree
 
-`cli/src/cli.rs` holds the root `Command` enum; each variant delegates to its area (`cpd_core::context::run(cmd)`, `cpd_core::watch::run(args)`, …, and `cpd_tui` for the cockpit). Each area owns its subcommand enum and its argument types. Every command of commands.md §2 is implemented, and `every_documented_command_exists` (`cli/tests/command_index.rs`) fails when one is documented but absent from the tree.
+`cli/src/cli.rs` holds the root `Command` enum; each variant delegates to its area (`cpd_core::context::run(cmd)`, `cpd_core::watch::run(args)`, …, and `cpd_tui` for the cockpit). Each area owns its subcommand enum and its argument types. Every command of commands.md §2 is implemented, and `cli/tests/interface.rs` keeps docs/interface.md, the index of commands.md §2, equal to `cpd --help`'s tree, both ways, and every command in `cli/src/interface.rs`'s table.
 
 To add a command:
 1. In your module, define its arguments as a `#[derive(clap::Args)]` struct, and name it from the root or the area's subcommand enum (`watch::Args`, `config::ConfigArgs`, `driver::RunArgs`, …).
@@ -57,7 +65,7 @@ To add a command:
 3. Test it in your own test file.
 
 Parsing:
-- `--help` and `--version` print one JSON value too: `{"ok": true, "help": "<text>"}` and `{"ok": true, "version": "…", "schema": <N>, "store_schema": <M or null>}`: `schema` is the newest store schema the binary supports (the store module's `VERSION`, the number of its migrations), `store_schema` is `PRAGMA user_version` of `$CPD_HOME`'s database opened read-only, without migrating and without the schema check (`null` when the file does not exist). `--version` never creates, migrates or writes the database.
+- `--help` and `--version` print one JSON value too: `{"ok": true, "help": "<text>"}` and `{"ok": true, "version": "…", "schema": 1000, "store_schema": <1000, 1001 or null>, "protocol": <P>, "store": <the verdict or null>}`. `store` is what `store::verdict` answers (contract §4.5, commands.md §1.2): `{"opens", "refusal", "unknown", "pending"}`, from `$CPD_HOME`'s database opened read-only, without migrating and without the schema check (`null` when the file does not exist). `schema` and `store_schema` are only the projection the integer-era guards still read (always `1000`; `null`, `1000` when the store opens, `1001` when not) and go away in a later change (hs-d178 D1). No guard compares numbers: they read `store`. `--version` never creates, migrates or writes the database.
 - Every clap failure is `usage` (exit 2) with clap's text in `details.help`, except a value that failed one of our own `FromStr` types (ids, `Text`, `Name`), which keeps that type's code (`invalid_plan_id`, `invalid_name`, …). So parse ids by typing the field (`plan: PlanId`), not by validating strings later.
 
 ## Output and errors
@@ -74,6 +82,16 @@ Parsing:
 - **Short Session ids** (commands.md §1.3, hs-a3): the resolution (full id, Plan id, `<plan>·<prefix>` / `<plan>.<prefix>`, bare prefix of at least 4 characters; `session_not_found`, `session_ambiguous`) lives in one place, `core/src/session/resolve.rs` (the `session` area, which reads the store), called at the boundary by every command that takes a Session, so no command compares raw strings and downstream code only holds a `SessionId`. `args::SessionArg` and the positional `<id>` of the session commands stay strings until then; the cockpit and the pi adapter keep passing full ids.
 - **`home::CpdHome`** (contract §1.4, commands.md §1.4): `CpdHome::from_env()` is `$CPD_HOME`, else `~/.cpd`; an empty or relative `CPD_HOME`, or no home directory, is `usage` (exit 2). Every path under it has a method: `config()`, `db()`, `context_dir()`, `watch_lock()`, `repo_lock(git_common_dir_realpath)`, `attempt_lock()`, `context_lock()`, `watch_log()`, `plan_md()`, `plan_review_md()`, `lead_message()`, `session_message()`, `worker_spec()`, `review_brief()`, `review_diff()`, `review_check()`, `review_gate()`, `driver_log()`, `hook_log(…, Hook)`. Never build these paths by hand.
 
+## Migrations
+
+The schema changes by named migrations (contract §4.5; design `docs/research/migrations.md` as amended by hs-d178). To add one:
+1. `scripts/new-migration.sh <slug> additive|breaking` writes `core/src/store/migrations/<YYYYMMDDTHHMM>-<slug>.sql` with its header (UTC minute; a breaking one gets `after <n>`). No shared list is edited: the build step lists the directory. A migration that needs Rust beside its SQL has a `<name>.rs` with `pub fn run`.
+2. Write the SQL. **Additive** only when every statement is one of contract §4.5 A1's (new table plus its `history_tables` row, a non-unique index, a trigger on a table it creates, a nullable or constant-default `ADD COLUMN`, an `INSERT` into `event_kinds`, `record_kinds` or `history_tables`). Everything else, and any value old code parses into a closed type (a record kind), is `breaking`. Never create `T_hist_ins`, `T_hist_upd` or `T_no_delete`: the runner generates them (K4).
+3. Adding an Event kind is `INSERT INTO event_kinds (name) VALUES ('<kind>');` plus `core/src/events/kind.rs`, `pi/lib/event.ts`, contract §5.2, and `PROTOCOL` raised in both.
+4. Recompute `SCHEMA_HASH` (contract §4.3) and amend contract §4.4 in the same change; `cargo test` fails with the new value when it is stale. The additive, order and orders tests (§4.5) run in the same `cargo test`.
+5. A migration file on `main` is never edited, renamed or deleted. A breaking migration whose `after <n>` no longer holds after a merge of `main` is renamed to a newer timestamp (`git mv`) and its rebuild re-checked.
+6. Tests build stores with `TestEnv` (`cli/tests/common/mod.rs`); never touch the real `~/.cpd`. Converting a User's `~/.cpd` is a Lead step with the User's go.
+
 ## Tests
 
 - **Unit tests** go in the module they test (`#[cfg(test)] mod tests`), in your area, in `core/` or `tui/`.
@@ -85,6 +103,7 @@ Parsing:
   - `env.fake_pi(body)`, `env.fake_gh(body)`, `env.fake(name, body)`: shell scripts on `PATH` that record their argv (`env.calls("pi")`) and then run `body`.
   - `env.command(program)`: any other program in the same environment.
 - Never touch the real `~/.cpd`, the tmux server `-L cpd`, pi, or the network.
+- nextest runs every test in a process of its own, so a `static` or a lock that the tests of a file share (`TMUX_ENV` in `host.rs`, `ONE_AT_A_TIME` in `driver_reload.rs`) coordinates nothing there. Tests that must not overlap go in a test group of `.config/nextest.toml` (`max-threads = 1`, the reason beside it), as the tests of those two files do.
 - A test must fail first, for the right reason.
 
 ## Dependencies
@@ -113,8 +132,11 @@ Deliberately absent: a regex crate (the id patterns of §2.1 are checked by hand
 ## Running cargo, the Gate, installing
 
 - cargo is not on `PATH` for Workers and the Gate. Run it as `scripts/cargo.sh <args>` (`$CARGO`, else `cargo` on `PATH`, else `${CARGO_HOME:-$HOME/.cargo}/bin/cargo`; exit 127 with a message when none exists). rustfmt and clippy are not installed.
-- The Gate is `npm run verify`: the typecheck and tests of the pi adapter `pi/`, then `scripts/cargo.sh build --workspace` and `scripts/cargo.sh test --workspace`. Run it before you submit.
-- `scripts/install-cpd.sh` builds `--release` and installs `~/.local/bin/cpd` and the adapter `pi/` at `~/.local/share/cpd/pi`, replacing the binary atomically; safe to rerun. After an install, running Lead wrappers and Attempt drivers reload themselves (contract §3.4, §6.7).
+- The Gate is `npm run verify`: the typecheck and tests of the pi adapter `pi/`, then `scripts/cargo.sh build --workspace` and `scripts/cargo.sh nextest run --workspace`. Run it before you submit. CI's `rust` job runs the same command.
+- The Rust tests run with [cargo-nextest](https://nexte.st), not `cargo test` (hs-d195). `cargo test` runs the test binaries one after another, and a binary spends most of its time waiting (tmux, the engine's tick, fixed sleeps), so the machine idles while one long binary ends; nextest runs the tests of every binary at once, each in a process of its own. Measured on 16 cores under other Workers' load (load average 20–38), 1307 tests: `scripts/cargo.sh test --workspace` 359 s; `scripts/cargo.sh nextest run --workspace` 105, 123 and 97 s in three runs, all green (the research, starting the binaries 4 at a time: 54 s against 175–200 s serial, `docs/research/quality-tests-build.md`, tests-build-F1). That gain is the reason for not using `cargo test`. `.config/nextest.toml` is nextest's defaults plus the test groups (see Tests). dotfiles installs it on every machine, at the version pinned in its `home/.chezmoidata/nextest.yaml`; CI installs the same version (`.github/workflows/ci.yml`, `tool: cargo-nextest@<version>`): bump both together.
+- Run one test file or one test with `scripts/cargo.sh nextest run -p cpd --test host` or `scripts/cargo.sh nextest run --workspace <part of the test's name>`.
+- nextest does not run doctests. The workspace has none (`scripts/cargo.sh test --workspace --doc` finds 0 tests in `cpd`, `cpd_core` and `cpd_tui`); when one is written, the Gate and CI also run that command.
+- `scripts/install-cpd.sh` builds `--release` and installs `~/.local/bin/cpd` and the adapter `pi/` at `~/.local/share/cpd/pi`, replacing the binary atomically; safe to rerun. Before replacing anything it refuses a build whose `cpd --version` has `store.opens` false, and a Lead Branch build that carries a migration file not on `origin/main` (contract §3.7). After an install, running Lead wrappers and Attempt drivers reload themselves (contract §3.4, §6.7).
 
 ## Checking a pi version
 

@@ -17,6 +17,7 @@
 mod actions;
 mod boxes;
 mod flow;
+pub(crate) mod pulse;
 
 use std::collections::HashMap;
 use std::fs;
@@ -37,21 +38,41 @@ use self::boxes::Boxes;
 use self::flow::{Dir, Selection};
 use crate::link::link;
 use crate::palette::{self, Meaning};
-use super::read::{self, ChatSlot, PlanBoxes, ReviewStatus};
+use super::read::{self, ChatSlot, PlanBoxes, Pulse, ReviewStatus};
 use super::{RunCommand, not_a_terminal, on_a_terminal};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{self, Event, highest_id};
 use cpd_core::home::CpdHome;
-use cpd_core::ids::{AttemptId, PlanId};
+use cpd_core::ids::{AttemptId, PlanId, SessionId};
 use cpd_core::output::Output;
 use cpd_core::store::Store;
 
 /// A snapshot is retaken at most this often, whatever the Event rate (§17).
 const COALESCE: Duration = Duration::from_millis(500);
 
+/// The snapshot is retaken at least this often, Event or not: a conflict clears with no Event (`mergeable` changes
+/// silently), as the `widgets` view's `REFRESH` (§17).
+const REFRESH: Duration = Duration::from_secs(2);
+
+/// Whether the snapshot taken `since` ago is retaken: after [`COALESCE`] once an Event concerns it (`stale`), else after
+/// [`REFRESH`].
+fn due(stale: bool, since: Duration) -> bool {
+    since >= if stale { COALESCE } else { REFRESH }
+}
+
+/// While Pulse shows the snapshot is retaken at least this often, Event or not: the window moves and the ages tick,
+/// and a running Attempt is not an Event.
+const PULSE_REFRESH: Duration = Duration::from_secs(60);
+
+/// Whether the Pulse snapshot taken `since` ago is retaken: after [`COALESCE`] once an Event concerns it (or the pane
+/// was resized), else after [`PULSE_REFRESH`].
+fn pulse_due(stale: bool, since: Duration) -> bool {
+    since >= if stale { COALESCE } else { PULSE_REFRESH }
+}
+
 /// The view redraws at least this often, for the spinner (one frame: palette.rs); a redraw reads nothing from the store.
-const FRAME: Duration = Duration::from_millis(250);
+const FRAME: Duration = Duration::from_millis(100);
 
 /// The blank space around the chart's content, inside the canvas the view scrolls over: at scroll (0, 0) nothing of the
 /// chart touches the pane's edges, and scrolled the chart reaches them.
@@ -90,10 +111,11 @@ impl ReviewRow {
     fn draw(&self, buf: &mut Buffer, area: Rect) {
         let area = area.inner(Margin { horizontal: MARGIN.horizontal, vertical: 0 });
         let line = self.line();
-        let arrow = area.x + line.width() as u16 - 1;
+        let width = line.width() as u16;
         line.render(area, buf);
-        if let (Some(url), true) = (&self.url, arrow < area.right()) {
-            link(buf, Rect::new(arrow, area.y, 1, 1), url);
+        if let Some(url) = &self.url {
+            // from `Plan` (after the leading blank) through `↗`
+            link(buf, Rect::new(area.x + 1, area.y, width - 1, 1).intersection(area), url);
         }
     }
 }
@@ -118,29 +140,39 @@ impl Centre {
     }
 }
 
-/// One read of the store: the Plan of the chat slot, if any, and the Event id to follow from.
+/// One read of the store: the Pulse of the Manager in the chat slot, or the Plan of the Lead there, if any, and the
+/// Event id to follow from. At most one of `pulse` and `centre` is `Some`.
 struct Snapshot {
     cursor: i64,
     centre: Option<Centre>,
+    pulse: Option<Pulse>,
 }
 
-fn snapshot(store: &mut Store, home: &CpdHome) -> Result<Snapshot, CpdError> {
+/// One read of the store for a pane `width` columns wide at `now_ms` (Unix ms).
+fn snapshot(store: &mut Store, home: &CpdHome, width: u16, now_ms: i64) -> Result<Snapshot, CpdError> {
     // Read first: whatever the later reads see is at least this new, so following from here loses nothing.
     let cursor = store.read(highest_id)?;
-    let Some(slot) = read::chat_slot(store)? else { return Ok(Snapshot { cursor, centre: None }) };
+    if let Some(manager) = read::manager_slot(store)? {
+        // Read for the widest the ids allow; the drawing keeps the last buckets that fit.
+        let buckets = pulse::buckets(usize::from(width).saturating_sub(2 * usize::from(MARGIN.horizontal)), 0);
+        let pulse = read::pulse(store, &manager.context, now_ms, buckets)?;
+        return Ok(Snapshot { cursor, centre: None, pulse: Some(pulse) });
+    }
+    let Some(slot) = read::chat_slot(store)? else { return Ok(Snapshot { cursor, centre: None, pulse: None }) };
     let plan = read::plan_boxes(store, &slot.plan)?;
     let frame = palette::frame(SystemTime::now());
     let boxes = boxes::layout(&plan.prs, &plan.jobs, frame).with_margin(MARGIN);
     let review = ReviewRow::of(&plan, home);
-    Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, review, boxes, frame }) })
+    Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, review, boxes, frame }), pulse: None })
 }
 
 /// Whether an Event changes what the pane shows: the Plan's or the Context's, or a move of a Lead (the chat slot may
-/// change).
-fn concerns(event: &Event, centre: Option<&Centre>) -> bool {
+/// change); while Pulse shows, any Event of its Context.
+fn concerns(event: &Event, centre: Option<&Centre>, pulse: Option<&Pulse>) -> bool {
     let mine = |column: &Option<String>, id: &str| column.as_deref() == Some(id);
     event.kind == "session-moved"
         || centre.is_some_and(|c| mine(&event.plan, c.plan.plan.as_str()) || mine(&event.context, c.plan.context.as_str()))
+        || pulse.is_some_and(|p| mine(&event.context, p.context.as_str()))
 }
 
 /// The line at the foot of the chart: an error, ` no Lead session in the centre` (dim), `no PR yet: cpd pr add` (dim)
@@ -180,8 +212,11 @@ struct Ui {
     /// The scroll offset each Plan was left at, kept while the view runs only (hs-d197). Not clamped: the chart may
     /// have changed size by the time it comes back, and a draw clamps.
     remembered: HashMap<PlanId, (u16, u16)>,
+    /// The first Pulse row shown (reset whenever the Context of the Pulse changes).
+    pulse_offset: usize,
     note: String,
     error: Option<String>,
+    /// The area clicks and the wheel use: the chart's window, or the Pulse rows inside the margin.
     body: Rect,
 }
 
@@ -195,6 +230,29 @@ impl Ui {
         self.selected.reset();
         self.scroll = to.and_then(|plan| self.remembered.get(plan).copied()).unwrap_or((0, 0));
         self.note.clear();
+    }
+
+    /// Draws Pulse: the rows inside the margin, then the message row (an error, ` no Plans yet`, the note).
+    fn draw_pulse(&mut self, f: &mut Frame, pulse: &Pulse, frame: usize) {
+        let mut window = f.area();
+        let mut parts: Vec<Span<'static>> =
+            self.error.iter().map(|e| Span::styled(e.clone(), palette::note())).collect();
+        if pulse.rows.is_empty() {
+            parts.push(" no Plans yet".dim());
+        }
+        if !self.note.is_empty() {
+            parts.push(Span::styled(self.note.clone(), palette::note()));
+        }
+        if !parts.is_empty() {
+            let [rows, message_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(window);
+            f.render_widget(
+                Paragraph::new(Line::from(spaced(parts))),
+                message_area.inner(Margin { horizontal: MARGIN.horizontal, vertical: 0 }),
+            );
+            window = rows;
+        }
+        self.body = window.inner(MARGIN);
+        self.pulse_offset = pulse::draw(f.buffer_mut(), self.body, pulse, self.pulse_offset, frame);
     }
 
     fn draw(&mut self, f: &mut Frame, centre: Option<&Centre>) {
@@ -246,7 +304,13 @@ pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-    let mut snap = snapshot(&mut store, &home)?;
+    let width = ratatui::crossterm::terminal::size()
+        .map_err(|e| {
+            CpdError::new(ErrorCode::NotATerminal, format!("The size of the terminal of cpd tui view plan is unknown: {e}."))
+                .with("command", "tui view plan")
+        })?
+        .0;
+    let mut snap = snapshot(&mut store, &home, width, now_ms())?;
     let actions = Actions::new(home.clone(), &config, run_command);
     let poll = Duration::from_millis(u64::from(config.events.poll_ms));
 
@@ -263,6 +327,11 @@ pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
         Err(error) => Err(CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view plan failed: {error}."))
             .with("command", "tui view plan")),
     }
+}
+
+/// Now, in Unix ms.
+fn now_ms() -> i64 {
+    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
 /// Draws, follows Events and takes input until the terminal fails.
@@ -285,7 +354,10 @@ fn show(
         if let Some(c) = snap.centre.as_mut() {
             c.turn(palette::frame(SystemTime::now()));
         }
-        terminal.draw(|f| ui.draw(f, snap.centre.as_ref()))?;
+        terminal.draw(|f| match snap.pulse.as_ref() {
+            Some(pulse) => ui.draw_pulse(f, pulse, palette::frame(SystemTime::now())),
+            None => ui.draw(f, snap.centre.as_ref()),
+        })?;
         if !event::poll(poll.min(FRAME))? {
             // idle: look for Events, every `poll`
             if fetched.elapsed() < poll {
@@ -298,17 +370,23 @@ fn show(
                     if let Some(last) = events.last() {
                         snap.cursor = last.id;
                     }
-                    stale |= events.iter().any(|e| concerns(e, snap.centre.as_ref()));
+                    stale |= events.iter().any(|e| concerns(e, snap.centre.as_ref(), snap.pulse.as_ref()));
                 }
                 Err(e) => ui.error = Some(e.to_string()),
             }
-            if stale && taken.elapsed() >= COALESCE {
+            let due = if snap.pulse.is_some() { pulse_due(stale, taken.elapsed()) } else { due(stale, taken.elapsed()) };
+            if due {
                 let before = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
-                match snapshot(store, home) {
+                let before_pulse = snap.pulse.as_ref().map(|p| p.context.clone());
+                let width = terminal.size().map_or(0, |s| s.width);
+                match snapshot(store, home, width, now_ms()) {
                     Ok(next) => {
                         *snap = next;
                         ui.error = None;
                         let after = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
+                        if before_pulse != snap.pulse.as_ref().map(|p| p.context.clone()) {
+                            ui.pulse_offset = 0;
+                        }
                         if before.as_ref().map(|b| &b.0) != after.as_ref().map(|a| &a.0) {
                             ui.switch(before.as_ref().map(|b| &b.1), after.as_ref().map(|a| &a.1));
                         }
@@ -321,7 +399,22 @@ fn show(
         }
         let mut open = None::<String>;
         let mut unselect = None::<String>; // the Job whose Worker pane closes
+        let mut lead = None::<SessionId>; // the Lead a click on a Pulse row opens
         match event::read()? {
+            Input::Resize(..) => stale = true, // the bucket count changes
+            Input::Mouse(m) if snap.pulse.is_some() => {
+                let Some(pulse) = snap.pulse.as_ref() else { continue };
+                let height = usize::from(ui.body.height);
+                match m.kind {
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        lead = pulse::row_at(ui.body, ui.pulse_offset, pulse.rows.len(), m.column, m.row)
+                            .map(|i| pulse.rows[i].lead.clone());
+                    }
+                    MouseEventKind::ScrollUp => ui.pulse_offset = pulse::scroll(ui.pulse_offset, false, pulse.rows.len(), height),
+                    MouseEventKind::ScrollDown => ui.pulse_offset = pulse::scroll(ui.pulse_offset, true, pulse.rows.len(), height),
+                    _ => {}
+                }
+            }
             Input::Key(k) if k.kind == KeyEventKind::Press => {
                 let dir = match k.code {
                     KeyCode::Down | KeyCode::Char('j') => Some(Dir::Down),
@@ -364,6 +457,9 @@ fn show(
             },
             _ => {}
         }
+        if let Some(lead) = lead {
+            ui.note = actions.open_lead(&lead).err().map(|e| e.message().to_owned()).unwrap_or_default();
+        }
         let Some(centre) = snap.centre.as_ref() else { continue };
         if let Some(key) = unselect {
             if let Err(e) = actions.close_worker(&key) {
@@ -393,6 +489,14 @@ mod tests {
     use cpd_core::ids::{ContextId, JobKey, PrKey, SessionId};
 
 
+    #[test]
+    fn the_snapshot_is_retaken_after_the_coalescing_when_stale_else_every_two_seconds() {
+        let ms = Duration::from_millis;
+        assert!(!due(true, ms(499)) && due(true, ms(500)), "an Event that concerns it: coalesced at 500 ms");
+        assert!(!due(false, ms(1999)) && due(false, ms(2000)), "no Event: every 2 s");
+        assert!(due(false, Duration::from_secs(60)));
+    }
+
     const URL: &str = "http://localhost:19433";
     const OPEN: &str = "\x1b]8;;http://localhost:19433\x07";
 
@@ -420,6 +524,7 @@ mod tests {
                 number: 12,
                 state: read::PrState::Open,
                 url: "https://github.com/acme/api/pull/12".into(),
+                conflicting: false,
             }),
         }];
         let plan = PlanBoxes {
@@ -445,6 +550,19 @@ mod tests {
         symbol.replace(OPEN, "").replace("\x1b]8;;https://github.com/acme/api/pull/12\x07", "").replace("\x1b]8;;\x07", "")
     }
 
+    use ratatui::buffer::CellWidth;
+
+    /// The columns of row `y` covered by a link opened with `open`, a piece's second cell included.
+    fn linked(buf: &Buffer, y: u16, open: &str) -> Vec<u16> {
+        let mut xs = Vec::new();
+        for x in 0..buf.area.width {
+            if buf[(x, y)].symbol().contains(open) {
+                xs.extend(x..x + buf[(x, y)].cell_width().max(1));
+            }
+        }
+        xs
+    }
+
     /// The pane `centre` draws on a 60 × 8 terminal, and its screen text, one string per row.
     fn drawn(centre: &Centre) -> (Buffer, Vec<String>, Ui) {
         let mut terminal = Terminal::new(TestBackend::new(60, 8)).unwrap();
@@ -452,7 +570,22 @@ mod tests {
         terminal.draw(|f| ui.draw(f, Some(centre))).unwrap();
         let buf = terminal.backend().buffer().clone();
         let rows = (0..8)
-            .map(|y| (0..60).map(|x| plain(buf[(x, y)].symbol())).collect::<String>().trim_end().to_owned())
+            .map(|y| {
+                let mut covered = 0;
+                (0..60)
+                    .map(|x| {
+                        // the second cell of a link piece is drawn by the piece
+                        if covered > 0 {
+                            covered -= 1;
+                            return String::new();
+                        }
+                        covered = buf[(x, y)].cell_width().saturating_sub(1);
+                        plain(buf[(x, y)].symbol())
+                    })
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
             .collect();
         (buf, rows, ui)
     }
@@ -475,12 +608,11 @@ mod tests {
         assert_eq!(without.2.body.y, 0);
         // `pending` is yellow, `↗` links to the plannotator page; the title's `↗` still links to the pull request
         assert_eq!(buf[(18, 0)].fg, palette::fg(Meaning::Review).fg.unwrap());
-        assert_eq!(buf[(26, 0)].symbol(), format!("{OPEN}↗\x1b]8;;\x07"));
-        let title_arrow = rows[2].chars().position(|c| c == '↗').unwrap() as u16;
-        assert_eq!(
-            buf[(title_arrow, 2)].symbol(),
-            "\x1b]8;;https://github.com/acme/api/pull/12\x07↗\x1b]8;;\x07"
-        );
+        assert_eq!(linked(&buf, 0, OPEN), (3..=26).collect::<Vec<u16>>(), "`Plan` through `↗`, not the blank before it");
+        let pull = "\x1b]8;;https://github.com/acme/api/pull/12\x07";
+        let title: Vec<char> = rows[2].chars().collect();
+        let (first, arrow) = (title.iter().position(|&c| c == '#').unwrap() as u16, title.iter().position(|&c| c == '↗').unwrap() as u16);
+        assert_eq!(linked(&buf, 2, pull), (first..=arrow).collect::<Vec<u16>>(), "the title's `#12 open ↗` links to the pull request");
     }
 
     #[test]
@@ -489,6 +621,7 @@ mod tests {
         let (buf, rows, _) = drawn(&centre(Some(row)));
         assert_eq!(rows[0], "   Plan review r2 pending");
         assert!((0..60).all(|x| !buf[(x, 0)].symbol().contains("]8;;")));
+        assert!(linked(&buf, 0, "]8;;").is_empty());
     }
 
     #[test]
@@ -550,7 +683,7 @@ mod tests {
             seq: 0,
             title: String::new(),
             status: JobStatus::Queued,
-            tier: Tier::parse("S1").unwrap(),
+            tier: Some(Tier::parse("S1").unwrap()),
             needs: Vec::new(),
             appended: false,
             retry_tier: None,
@@ -639,5 +772,147 @@ mod tests {
     fn a_view_that_restarts_starts_at_the_top() {
         assert_eq!(Ui::default().scroll, (0, 0));
         assert!(Ui::default().remembered.is_empty());
+    }
+
+    fn pulse_of(rows: &[&str]) -> Pulse {
+        let bucket = |count| read::Bucket { count, job_merged: false, pr_merged: false, worker_ran: false };
+        let rows = rows
+            .iter()
+            .map(|id| read::PulseRow {
+                plan: PlanId::parse(id).unwrap(),
+                lead: SessionId::parse(&format!("lead-{id}")).unwrap(),
+                dot: read::Dot::Idle,
+                buckets: vec![bucket(1); 12],
+                merges: 0,
+                age_minutes: Some(3),
+                quiet: false,
+            })
+            .collect();
+        Pulse { context: ContextId::parse("ctx").unwrap(), rows, max: 1, events_cursor: 0 }
+    }
+
+    fn pulse_screen(ui: &mut Ui, pulse: &Pulse, height: u16) -> (Buffer, Vec<String>) {
+        let mut terminal = Terminal::new(TestBackend::new(60, height)).unwrap();
+        terminal.draw(|f| ui.draw_pulse(f, pulse, 0)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let rows = (0..height)
+            .map(|y| (0..60).map(|x| buf[(x, y)].symbol().to_owned()).collect::<String>().trim_end().to_owned())
+            .collect();
+        (buf, rows)
+    }
+
+    #[test]
+    fn pulse_rows_sit_inside_the_margin_and_a_click_selects_the_rows_lead_with_the_offset() {
+        let pulse = pulse_of(&["aa", "bb", "cc", "dd", "ee", "ff"]);
+        let mut ui = Ui::default();
+        let (_, rows) = pulse_screen(&mut ui, &pulse, 5); // margin row, then 3 rows, then the margin row
+        assert_eq!(rows[0], "");
+        let idle = palette::dot_span(read::Dot::Idle, 0, false).content;
+        assert!(rows[1].starts_with(&format!("  {idle} aa  ")), "{:?}", rows[1]);
+        assert!(rows[1].ends_with("         3m"), "{:?}", rows[1]);
+        assert_eq!(ui.body, Rect::new(2, 1, 56, 3));
+        let lead = |ui: &Ui, y| {
+            pulse::row_at(ui.body, ui.pulse_offset, pulse.rows.len(), 5, y).map(|i| pulse.rows[i].lead.to_string())
+        };
+        assert_eq!(lead(&ui, 2).as_deref(), Some("lead-bb"));
+        ui.pulse_offset = pulse::scroll(ui.pulse_offset, true, 6, 3);
+        ui.pulse_offset = pulse::scroll(ui.pulse_offset, true, 6, 3);
+        assert_eq!(ui.pulse_offset, 3, "clamped at the last row");
+        let (_, rows) = pulse_screen(&mut ui, &pulse, 5);
+        assert!(rows[1].starts_with(&format!("  {idle} dd  ")), "{:?}", rows[1]);
+        assert_eq!(lead(&ui, 1).as_deref(), Some("lead-dd"));
+        assert_eq!(lead(&ui, 3).as_deref(), Some("lead-ff"));
+    }
+
+    #[test]
+    fn a_context_without_plans_says_so_dim_in_the_message_row() {
+        let mut ui = Ui::default();
+        let (buf, rows) = pulse_screen(&mut ui, &pulse_of(&[]), 5);
+        assert_eq!(rows[4], "   no Plans yet");
+        assert!(buf[(3, 4)].modifier.contains(ratatui::style::Modifier::DIM));
+    }
+
+    #[test]
+    fn the_pulse_re_reads_on_its_contexts_events_every_minute_and_on_resize() {
+        let event = |kind: &str, context: &str| Event {
+            id: 1,
+            at: "2026-01-01T00:00:00.000Z".into(),
+            kind: kind.into(),
+            context: Some(context.into()),
+            plan: None,
+            job: None,
+            attempt: None,
+            session: None,
+            text: String::new(),
+            data: serde_json::Value::Null,
+        };
+        let pulse = pulse_of(&["aa"]);
+        assert!(concerns(&event("job-merged", "ctx"), None, Some(&pulse)));
+        assert!(!concerns(&event("job-merged", "other"), None, Some(&pulse)));
+        assert!(concerns(&event("session-moved", "other"), None, Some(&pulse)));
+        let ms = Duration::from_millis;
+        assert!(pulse_due(true, ms(500)) && !pulse_due(true, ms(499)));
+        assert!(!pulse_due(false, Duration::from_secs(59)) && pulse_due(false, Duration::from_secs(60)));
+    }
+
+    fn fixture(store: &mut Store, sql: &str) {
+        store
+            .write("fixture", |tx| {
+                tx.execute_batch(sql)?;
+                Ok::<(), CpdError>(())
+            })
+            .unwrap();
+    }
+
+    fn session_row(id: &str, role: &str, plan: Option<&str>) -> String {
+        let plan = plan.map_or("NULL".to_owned(), |p| format!("'{p}'"));
+        format!(
+            "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
+             VALUES ('{id}', '{role}', 'ctx', {plan}, NULL, 'n', '/s/{id}.jsonl', '/repo', 'O3', NULL, 'idle', NULL,
+                     '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:00.000Z');"
+        )
+    }
+
+    fn moved(session: &str) -> String {
+        format!(
+            "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
+             VALUES (cpd_txn(), '2026-10-18T15:00:00.000Z', 'session-moved', 'ctx', NULL, '{session}', 'f',
+                     '{{\"pane\":\"%1\",\"window\":\"@1\",\"place\":\"chat\"}}');"
+        )
+    }
+
+    #[test]
+    fn the_snapshot_holds_pulse_while_the_manager_is_newest_in_the_slot_and_the_plan_once_a_lead_moved_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().to_path_buf().into()), None).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        fixture(
+            &mut store,
+            &format!(
+                "INSERT INTO contexts (id, title, jira, created_at, created_on) VALUES ('ctx', 'T', NULL, '2026-01-01T00:00:00.000Z', 'm1');
+                 {}{}
+                 INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+                 VALUES ('p1', 'ctx', 'P', 'dispatch', 'lead', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
+                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                 VALUES ('p1', 'repo', '/repo', 'main', 'dispatch', 'cpd/p1', '/wt', cpd_txn(), '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
+                 UPDATE sessions SET plan = 'p1' WHERE id = 'lead';
+                 {}",
+                session_row("mgr", "manager", None),
+                session_row("lead", "lead", None),
+                moved("mgr")
+            ),
+        );
+        let now = 1_792_336_050_000;
+        let snap = snapshot(&mut store, &home, 125, now).unwrap();
+        let pulse = snap.pulse.expect("the Manager is in the slot");
+        assert!(snap.centre.is_none());
+        assert_eq!(pulse.context.as_str(), "ctx");
+        assert_eq!(pulse.rows.iter().map(|r| r.plan.as_str()).collect::<Vec<_>>(), ["p1"]);
+        assert_eq!(pulse.rows[0].buckets.len(), 125 - 4 - 21, "as wide as the pane allows for ids of any width");
+
+        fixture(&mut store, &moved("lead"));
+        let snap = snapshot(&mut store, &home, 125, now).unwrap();
+        assert!(snap.pulse.is_none());
+        assert_eq!(snap.centre.expect("the Lead is in the slot").plan.plan.as_str(), "p1");
     }
 }

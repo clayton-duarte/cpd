@@ -14,7 +14,7 @@ clap = { version = "4.6", features = ["derive", "env"] }
 minijinja = "3.0"
 nix = { version = "0.31", features = ["fs", "poll", "process", "signal"] }
 ratatui = "0.30"
-rusqlite = { version = "0.40", features = ["bundled", "functions"] }
+rusqlite = { version = "0.40", features = ["bundled", "functions", "hooks"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha1 = "0.10"
@@ -24,3 +24,9 @@ toml = "1.1"
 tui-tree-widget = "0.24"
 uuid = { version = "1.28", features = ["v4"] }
 tempfile = "3.27"
+
+# Deviation from the default (full debuginfo): tests-build-F2. Line tables keep
+# backtraces and panics readable; a clean `test --workspace --no-run` (N=3)
+# took 48-62 s and 4.7G of target/ with `true`, 33-40 s and 2.4G with this.
+[profile.dev]
+debug = "line-tables-only"

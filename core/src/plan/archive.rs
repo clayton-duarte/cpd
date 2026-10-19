@@ -143,7 +143,7 @@ fn result(changed: &[Object], closed: Vec<String>) -> Output {
 
 /// `in_chat_slot` when a Lead of `sessions` holds the chat slot: checked
 /// before any pane is closed, so a refusal leaves everything as it was.
-fn refuse_chat_slot(store: &mut Store, tmux: &Tmux, cockpit: &str, sessions: &[SessionId]) -> Result<(), CpdError> {
+pub(super) fn refuse_chat_slot(store: &mut Store, tmux: &Tmux, cockpit: &str, sessions: &[SessionId]) -> Result<(), CpdError> {
     // The rows are read first, then the panes, as `close_lead` does.
     let leads = store.read(|conn| {
         let mut found = Vec::new();
