@@ -671,6 +671,14 @@ fn centre(env: &TestEnv) -> (String, String) {
     (plan, chat)
 }
 
+/// Waits until the fake `cpd` has recorded `tui view worker <attempt> --plan ship`. The view sets the pane's options as
+/// soon as tmux has started the pane's program, but the program records its argv only once it runs: under load that is
+/// later, so the record is waited for, never read once.
+fn wait_for_worker_call(env: &TestEnv, attempt: &str) {
+    let want = ["tui", "view", "worker", attempt, "--plan", "ship"].map(str::to_owned).to_vec();
+    wait_until(&format!("the Worker program of {attempt} to record its call"), || env.calls("cpd").contains(&want));
+}
+
 #[test]
 fn a_selected_pill_opens_its_worker_beside_the_chat_and_a_second_enter_closes_it() {
     let env = env();
@@ -683,8 +691,7 @@ fn a_selected_pill_opens_its_worker_beside_the_chat_and_a_second_enter_closes_it
     tmux_out(&env, &["send-keys", "-t", &plan, "Right"]);
     tmux_out(&env, &["send-keys", "-t", &plan, "Enter"]);
     wait_until("the Worker pane", || workers().contains("worker a a-a1"));
-    let calls = env.calls("cpd");
-    assert!(calls.contains(&["tui", "view", "worker", "a-a1", "--plan", "ship"].map(str::to_owned).to_vec()), "{calls:?}");
+    wait_for_worker_call(&env, "a-a1");
     // beside the chat, without taking the focus: the plan view keeps it
     let layout = tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{pane_id} #{@cpd_view} #{pane_active} #{pane_top} #{pane_width}"]);
     let row = |view: &str| layout.lines().find(|l| l.split(' ').nth(1) == Some(view)).unwrap().split(' ').map(str::to_owned).collect::<Vec<_>>();
@@ -712,8 +719,7 @@ fn another_job_retargets_the_worker_pane_in_place() {
     let after = workers();
     assert_eq!(after.lines().filter(|l| l.contains(" worker ")).count(), 1, "{after}");
     assert!(after.contains(&format!("{pane} worker b b-a1")), "retargeted in place: {after}");
-    let calls = env.calls("cpd");
-    assert!(calls.contains(&["tui", "view", "worker", "b-a1", "--plan", "ship"].map(str::to_owned).to_vec()), "{calls:?}");
+    wait_for_worker_call(&env, "b-a1");
 }
 
 #[test]
