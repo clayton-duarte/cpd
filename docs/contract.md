@@ -50,7 +50,7 @@ Exit codes (kept from cpd 1 §2):
 | Exit | Meaning | Examples of codes |
 |---|---|---|
 | `0` | ok | |
-| `1` | failure: an external tool or something unexpected | `git_failed`, `tmux_failed`, `store_tampered`, `store_failed` (the database cannot be opened, is not cpd's, or a statement fails through a bug; Escalation `rs-store-a1-q1`), `config_invalid` |
+| `1` | failure: an external tool or something unexpected | `git_failed`, `tmux_failed`, `store_tampered`, `store_failed` (the database cannot be opened, is not cpd's, or a statement fails through a bug; Escalation `rs-store-a1-q1`; SQLite failures only), `internal` (a bug in cpd itself, for example a malformed Event built by a command; also a failed write to stdout other than EPIPE, because no I/O error code exists), `config_invalid` |
 | `2` | usage error | `usage`, `plan_required`, `invalid_plan_id` |
 | `3` | refused by an invariant: Locked, an illegal transition, a precondition | `job_locked`, `illegal_transition`, `dirty_tree`, `cas_lost` |
 | `4` | not found | `plan_not_found`, `job_not_found`, `session_not_found` |
@@ -760,7 +760,7 @@ The Deploy stage runs from the end of `dispatch` (all Jobs merged, `pr open`) an
 
 - **Who writes:** any `cpd` process: commands, `watch`, Attempt drivers, `ask`. Nothing else can (§4.3).
 - **Readers never block.** Reads run in deferred read transactions on the WAL snapshot and never wait for a writer. A reader keeps its transaction short (one query or one command's reads), so checkpoints are not starved; `events follow` opens a new read transaction for every poll (§5.4).
-- **Writers** begin with `BEGIN IMMEDIATE`, so at most one write transaction is open on the machine at any moment. A writer that cannot get the write lock within `store_busy_ms` fails with `store_busy` (exit 5).
+- **Writers** begin with `BEGIN IMMEDIATE`, so at most one write transaction is open on the machine at any moment. A writer that cannot get the write lock within `store_busy_ms` fails with `store_busy` (exit 5); `SQLITE_LOCKED` is reported as `store_busy` too.
 - **One command, one write transaction** for its state change, its `history` rows and its Events: all three commit together or not at all.
 - **No external work inside a write transaction.** git, the Gate, tmux, pi and `gh` run outside. A step reads, acts, then writes with a compare-and-swap on the state it read (`UPDATE … WHERE status = :expected`); zero rows changed is `cas_lost` (exit 3), and the step re-reads and decides again.
 - **Ordering.** Because writers are serialised, Event ids and history ids increase in commit order: a reader that has seen id N never later sees a new id below N.
