@@ -115,6 +115,15 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
     let repo = &target.repo;
     let lead = &target.lead_worktree;
     let lead_ref = format!("refs/heads/{}", target.lead_branch);
+    // 0. Branch check (engine-W1): the Attempt branch is still what `attempt submit` checked.
+    let submitted = target.submitted_sha.as_deref().ok_or_else(|| {
+        CpdError::new(ErrorCode::StoreFailed, format!("Attempt {} is merging with no submitted_sha.", target.id))
+    })?;
+    let tip = git::run::rev_parse(repo, &format!("refs/heads/{}", target.branch))?;
+    if tip != submitted {
+        let detail = format!("the Attempt branch moved after submit ({submitted} -> {tip})");
+        return Ok((End::Failed { cause: Failure::Tampered, detail }, None, None));
+    }
     let mut retries = 0;
     loop {
         // 1. Cancel check.

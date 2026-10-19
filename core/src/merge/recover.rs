@@ -5,12 +5,12 @@
 use std::path::Path;
 
 use super::Ctx;
-use crate::attempt::ledger::{self, Attempt, Cause, End, Ladder, Stage};
 use super::lock::RepoLock;
-use crate::driver::lock::probe;
+use crate::attempt::ledger::{self, Attempt, Cause, End, Ladder, Stage};
+use crate::driver::lock::{self, probe};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, run::run};
-use crate::host::layout::attempt_window;
+use crate::driver::worker;
 use crate::host::tmux::Tmux;
 use crate::ids::{AttemptId, PlanId};
 use crate::store::Store;
@@ -59,7 +59,8 @@ pub(super) fn recover_except(
     Ok(done)
 }
 
-/// R1–R4 for one Attempt whose driver is dead.
+/// R1–R4 for one Attempt whose driver is dead. Once the end is committed, the Attempt's driver
+/// lock file is removed (G13).
 fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Option<End>, CpdError> {
     let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };
     let lead_ref = format!("refs/heads/{}", attempt.lead_branch);
@@ -86,6 +87,7 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
                 }
                 Ok(())
             })?;
+            lock::remove(ctx.home, &attempt.plan, &attempt.id)?;
             // R35: push as step 8 does; a failure does not undo the merge.
             if let Err(e) = git::push_lead_branch(&attempt.lead_worktree, &attempt.lead_branch, false) {
                 store.write(ctx.source, |tx| ledger::append_error(tx, attempt, ctx.source, &e, push_text(attempt, &e)))?;
@@ -105,6 +107,11 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
             };
             let metrics = (ctx.metrics)(attempt);
             store.write(ctx.source, |tx| ledger::end(tx, attempt, &end, metrics.as_ref(), &ladder, Stage::Merge))?;
+            // A9: the Attempt is ended, its worktree is kept, its window goes; the driver lock file goes
+            // too, whether or not the kill worked (each item best effort).
+            let killed = kill_window(ctx, attempt);
+            lock::remove(ctx.home, &attempt.plan, &attempt.id)?;
+            killed?;
             Ok(Some(end))
         }
         // R4: git failed; nothing changes, reported once per Attempt.
@@ -211,16 +218,14 @@ pub(super) fn push_text(attempt: &Attempt, error: &CpdError) -> String {
 /// The rest of A9 after R2: kill the Attempt's tmux window, remove its
 /// worktree and branch (§3.4, §7.2).
 fn rest_of_a9(ctx: &Ctx<'_>, attempt: &Attempt) -> Result<(), CpdError> {
+    // Best effort per item: a window that cannot be killed does not keep the worktree.
+    let killed = kill_window(ctx, attempt);
+    let removed = git::remove_merged_attempt(&attempt.lead_worktree, &attempt.worktree, &attempt.branch);
+    killed.and(removed)
+}
+
+/// A9's kill of the Attempt's window, as the driver does it (retried).
+fn kill_window(ctx: &Ctx<'_>, attempt: &Attempt) -> Result<(), CpdError> {
     let tmux = Tmux::new(ctx.config.tmux.socket.as_str());
-    let name = attempt_window(&attempt.plan, &attempt.id);
-    let windows: Vec<_> = tmux
-        .list_panes()?
-        .into_iter()
-        .filter(|p| p.session_name == ctx.config.tmux.work_session && p.window_name == name)
-        .map(|p| p.window)
-        .collect();
-    for window in windows {
-        tmux.kill_window(&window)?;
-    }
-    git::remove_merged_attempt(&attempt.lead_worktree, &attempt.worktree, &attempt.branch)
+    worker::kill_attempt_window(ctx.config, &tmux, &attempt.plan, &attempt.id)
 }

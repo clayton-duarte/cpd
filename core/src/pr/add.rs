@@ -26,15 +26,16 @@ struct Wanted {
     key: PrKey,
     repo: String,
     base: String,
-    needs: Vec<String>,
+    /// `--needs` as given (sorted); `Some(vec![])` is `--no-needs`; `None`: the default.
+    needs: Option<Vec<String>>,
 }
 
 enum Decision {
     /// The PR exists with these values; its status and `lead_branch` as stored, and `appended`
     /// as the Event recorded it.
-    Already { status: String, lead_branch: String, appended: bool },
+    Already { status: String, lead_branch: String, appended: bool, needs: Vec<String> },
     /// The PR is new, in a Plan in this phase.
-    Insert { phase: Phase },
+    Insert { phase: Phase, needs: Vec<String> },
 }
 
 /// The merged PR whose Lead Branch is the legacy `cpd/<plan>` (contract §3.8, D3).
@@ -45,7 +46,13 @@ struct Legacy {
 
 pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
-    let needs = sorted_needs(&args.needs)?;
+    let needs = if args.no_needs {
+        Some(Vec::new())
+    } else if args.needs.is_empty() {
+        None
+    } else {
+        Some(sorted_needs(&args.needs)?)
+    };
     let mut env = Env::open()?;
     env.store.read(|conn| check_plan(conn, &plan))?;
     let repo = main_worktree(&args.repo)?;
@@ -56,8 +63,8 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         needs,
     };
 
-    let (status, lead_branch, appended, already) = match env.store.read(|conn| decide(conn, &plan, &wanted))? {
-        Decision::Already { status, lead_branch, appended } => (status, lead_branch, appended, true),
+    let (status, lead_branch, appended, needs, already) = match env.store.read(|conn| decide(conn, &plan, &wanted))? {
+        Decision::Already { status, lead_branch, appended, needs } => (status, lead_branch, appended, needs, true),
         Decision::Insert { .. } => {
             // git, outside any transaction.
             let legacy = env.store.read(|conn| legacy_pr(conn, &plan))?;
@@ -66,8 +73,8 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
             }
             no_branch_clash(&repo, &plan, &wanted.key)?;
             env.store.write(COMMAND, |tx| match decide(tx, &plan, &wanted)? {
-                Decision::Already { status, lead_branch, appended } => Ok((status, lead_branch, appended, true)),
-                Decision::Insert { phase } => {
+                Decision::Already { status, lead_branch, appended, needs } => Ok((status, lead_branch, appended, needs, true)),
+                Decision::Insert { phase, needs } => {
                     let appended = matches!(phase, Phase::Dispatch | Phase::Deploy | Phase::Done);
                     let lead_branch = pr_branch(&plan, &wanted.key);
                     let key = &wanted.key;
@@ -77,21 +84,21 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                     if let Some(legacy) = &legacy {
                         rename_legacy(tx, &plan, legacy)?;
                     }
-                    insert(tx, &plan, &wanted, &lead_branch)?;
-                    let with = if wanted.needs.is_empty() { String::new() } else { format!(", needs {}", wanted.needs.join(", ")) };
+                    insert(tx, &plan, &wanted, &needs, &lead_branch)?;
+                    let with = if needs.is_empty() { String::new() } else { format!(", needs {}", needs.join(", ")) };
                     let text = format!(
                         "PR {key} added to Plan {plan} (repo {}, base {}{with}), waiting. Next: cpd plan show --plan {plan}",
                         wanted.repo, wanted.base
                     );
-                    let event = NewEvent::pr_added(text, key, &wanted.repo, &wanted.base, &wanted.needs, appended);
+                    let event = NewEvent::pr_added(text, key, &wanted.repo, &wanted.base, &needs, appended);
                     append(tx, event.plan(plan.clone()))?;
-                    Ok(("waiting".to_owned(), lead_branch, appended, false))
+                    Ok(("waiting".to_owned(), lead_branch, appended, needs, false))
                 }
             })?
         }
     };
     let mut out = json!({"pr": {
-        "key": wanted.key, "repo": wanted.repo, "base": wanted.base, "needs": wanted.needs,
+        "key": wanted.key, "repo": wanted.repo, "base": wanted.base, "needs": needs,
         "status": status, "lead_branch": lead_branch, "appended": appended,
     }});
     if already {
@@ -116,7 +123,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
     let phase = check_plan(conn, plan)?;
     let prs = load_prs(conn, plan)?;
     if let Some(existing) = prs.iter().find(|p| p.key == wanted.key) {
-        if same(existing, wanted) {
+        if same(existing, wanted, &prs) {
             // `appended`: the PR came after the lock.
             let (lead_branch, appended) = conn.query_row(
                 "SELECT r.lead_branch, coalesce(p.locked_at IS NOT NULL AND r.created_at >= p.locked_at, 0)
@@ -124,7 +131,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
                 [plan.as_str(), wanted.key.as_str()],
                 |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?)),
             )?;
-            return Ok(Decision::Already { status: existing.status.clone(), lead_branch, appended });
+            return Ok(Decision::Already { status: existing.status.clone(), lead_branch, appended, needs: existing.needs.clone() });
         }
         return Err(CpdError::new(ErrorCode::PrExists, format!("Plan {plan} already has a PR {} with other flags.", wanted.key))
             .with("plan", plan.as_str())
@@ -134,21 +141,39 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
             .with("needs", existing.needs.clone())
             .with("status", existing.status.as_str()));
     }
-    check_needs(&prs, plan, None, &wanted.needs)?;
-    Ok(Decision::Insert { phase })
+    let needs = match &wanted.needs {
+        Some(needs) => needs.clone(),
+        None if matches!(phase, Phase::Deploy | Phase::Done) => merged_keys(&prs),
+        None => Vec::new(),
+    };
+    check_needs(&prs, plan, None, &needs)?;
+    Ok(Decision::Insert { phase, needs })
 }
 
-fn same(existing: &PrRow, wanted: &Wanted) -> bool {
-    (&existing.repo, &existing.base, &existing.needs) == (&wanted.repo, &wanted.base, &wanted.needs)
+/// The keys of the `merged` PRs, in key order (A3).
+fn merged_keys(prs: &[PrRow]) -> Vec<String> {
+    let mut keys: Vec<String> = prs.iter().filter(|p| p.status == "merged").map(|p| p.key.as_str().to_owned()).collect();
+    keys.sort();
+    keys
 }
 
-fn insert(tx: &Connection, plan: &PlanId, wanted: &Wanted, lead_branch: &str) -> Result<(), CpdError> {
+/// Without `--needs` or `--no-needs` the needs match when none, or when all merged: a rerun
+/// after the reopen sees the Plan in `dispatch`, where the default is none.
+fn same(existing: &PrRow, wanted: &Wanted, prs: &[PrRow]) -> bool {
+    let needs_match = match &wanted.needs {
+        Some(needs) => &existing.needs == needs,
+        None => existing.needs.iter().all(|n| merged_keys(prs).contains(n)),
+    };
+    (&existing.repo, &existing.base) == (&wanted.repo, &wanted.base) && needs_match
+}
+
+fn insert(tx: &Connection, plan: &PlanId, wanted: &Wanted, needs: &[String], lead_branch: &str) -> Result<(), CpdError> {
     tx.execute(
         "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
          SELECT ?1, ?2, ?3, ?4, 'waiting', ?5, id, at FROM txns WHERE id = cpd_txn()",
         rusqlite::params![plan.as_str(), wanted.key.as_str(), wanted.repo, wanted.base, lead_branch],
     )?;
-    for need in &wanted.needs {
+    for need in needs {
         tx.execute("INSERT INTO pr_needs (plan, pr, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), wanted.key.as_str(), need.as_str()])?;
     }
     Ok(())

@@ -4,17 +4,21 @@
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
-use super::{ContextRow, Record, ShowArgs, render};
+use super::{ContextRow, Record, ShowArgs, digest, render};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
+use crate::home::CpdHome;
 use crate::ids::{ContextId, RecordId, RecordKind};
 use crate::output::Output;
 use crate::store::Store;
 
 /// `context show` (§3.3).
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
-    let Env { config, mut store, .. } = Env::open()?;
+    let Env { home, config, mut store } = Env::open()?;
     let id = args.select.resolve(&mut store)?;
+    if args.digest {
+        return show_digest(&home, &mut store, &id);
+    }
     if let Some(record) = &args.record {
         return show_record(&mut store, &id, record);
     }
@@ -44,6 +48,17 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         "context": {"id": row.id, "title": row.title, "jira": row.jira},
         "records": records,
         "markdown": markdown,
+    })))
+}
+
+/// `context show --digest` (§3.3): the Context's latest digest file, and no record.
+fn show_digest(home: &CpdHome, store: &mut Store, context: &ContextId) -> Result<Output, CpdError> {
+    let row = store.read(|conn| ContextRow::require(conn, context))?;
+    let digest = digest::latest(home, context)?;
+    Ok(Output::success(json!({
+        "context": {"id": row.id, "title": row.title, "jira": row.jira},
+        "digest": digest.as_ref().map(|d| json!({"upto_seq": d.upto_seq, "file": d.file, "bytes": d.text.len()})),
+        "markdown": digest.map(|d| d.text),
     })))
 }
 

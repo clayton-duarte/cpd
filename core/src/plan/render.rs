@@ -10,9 +10,13 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use super::prs::PrRow;
-use super::jobs::Job;
+use super::jobs::{Job, JobSpec};
 use super::overlap::Overlap;
+use super::prs::PrRow;
+
+/// What the render shows for what a stub draft lacks (commands.md §4.5, hs-d241).
+const MISSING_TIER: &str = "—";
+const MISSING_SPEC: &str = "Spec: not written yet";
 
 /// Inline text made safe for GFM: no HTML tags, no footnote syntax. Code
 /// spans (`` `…` `` on one line) are left alone.
@@ -175,49 +179,72 @@ fn pr_section(out: &mut Vec<String>, pr: &PrRow, jobs: &[&Job], later: bool) {
             "| {} | {} | {} | {} | {} | {} |{review}",
             tcode(&j.key),
             cell(&j.title),
-            j.tier,
+            j.tier.as_deref().unwrap_or(MISSING_TIER),
             j.status,
             joined(&j.needs, tcode),
-            joined(&strings(&j.touches), tcode),
+            j.spec.as_ref().map_or_else(|| MISSING_TIER.to_owned(), |s| joined(&strings(&s.touches), tcode)),
         ));
     }
     let nodes: Vec<(&str, &[String])> = jobs.iter().map(|j| (j.key.as_str(), j.needs.as_slice())).collect();
     out.extend([String::new(), "### Dependencies".to_owned(), String::new(), graph("TD", "j", &nodes), String::new()]);
     for j in jobs {
-        let out_of_scope = strings(&j.out_of_scope);
         out.extend([
             format!("### {}: {}", code(&j.key), inline(&j.title)),
             String::new(),
             format!(
-                "Status: `{}`{} · Tier: `{}` · Needs: {}",
+                "Status: `{}`{} · Tier: {} · Needs: {}",
                 j.status,
                 if later { format!(" · {}", mark(j)) } else { String::new() },
-                j.tier,
+                j.tier.as_deref().map_or_else(|| MISSING_TIER.to_owned(), |t| format!("`{t}`")),
                 joined(&j.needs, code)
             ),
             String::new(),
-            "#### Goal".to_owned(),
-            String::new(),
-            block(&j.goal),
-            String::new(),
-            "#### Context".to_owned(),
-            String::new(),
-            if j.context.is_empty() { "None.".to_owned() } else { block(&j.context) },
-            String::new(),
-            "#### Files it touches".to_owned(),
-            String::new(),
-            strings(&j.touches).iter().map(|t| format!("- {}", code(t))).collect::<Vec<_>>().join("\n"),
-            String::new(),
-            "#### Acceptance".to_owned(),
-            String::new(),
-            list(&strings(&j.acceptance)),
-            String::new(),
-            "#### Out of scope".to_owned(),
-            String::new(),
-            if out_of_scope.is_empty() { "None.".to_owned() } else { list(&out_of_scope) },
-            String::new(),
         ]);
+        match &j.spec {
+            Some(spec) => spec_section(out, spec),
+            None => out.extend([MISSING_SPEC.to_owned(), String::new()]),
+        }
     }
+}
+
+/// A Job's Spec: goal, context, the files it touches, acceptance, out of scope.
+fn spec_section(out: &mut Vec<String>, spec: &JobSpec) {
+    let out_of_scope = strings(&spec.out_of_scope);
+    out.extend([
+        "#### Goal".to_owned(),
+        String::new(),
+        block(&spec.goal),
+        String::new(),
+        "#### Context".to_owned(),
+        String::new(),
+        if spec.context.is_empty() { "None.".to_owned() } else { block(&spec.context) },
+        String::new(),
+        "#### Files it touches".to_owned(),
+        String::new(),
+        strings(&spec.touches).iter().map(|t| format!("- {}", code(t))).collect::<Vec<_>>().join("\n"),
+        String::new(),
+        "#### Acceptance".to_owned(),
+        String::new(),
+        list(&strings(&spec.acceptance)),
+        String::new(),
+        "#### Out of scope".to_owned(),
+        String::new(),
+        if out_of_scope.is_empty() { "None.".to_owned() } else { list(&out_of_scope) },
+        String::new(),
+    ]);
+}
+
+/// The most paths a row of `## Overlaps` shows before it only counts the rest.
+const PATHS_SHOWN: usize = 5;
+
+/// The `Paths` cell: the paths in code spans, at most [`PATHS_SHOWN`], then
+/// `+N` for the N more.
+fn paths_cell(paths: &[String]) -> String {
+    let mut cell: Vec<String> = paths.iter().take(PATHS_SHOWN).map(|p| tcode(p)).collect();
+    if paths.len() > PATHS_SHOWN {
+        cell.push(format!("+{}", paths.len() - PATHS_SHOWN));
+    }
+    cell.join(", ")
 }
 
 /// The `## Overlaps` section (commands.md §4.5): a table, or that no other
@@ -227,17 +254,10 @@ fn overlaps_section(out: &mut Vec<String>, overlaps: &[Overlap]) {
     if overlaps.is_empty() {
         out.push("No other active Plan touches these files.".to_owned());
     } else {
-        out.extend(["| Job | Path | Other Plan | PR | Job | Status |".to_owned(), "|---|---|---|---|---|---|".to_owned()]);
+        out.extend(["| Job | Other Plan | PR | Its Jobs (status) | Paths |".to_owned(), "|---|---|---|---|---|".to_owned()]);
         for o in overlaps {
-            out.push(format!(
-                "| {} | {} | {} | {} | {} | {} |",
-                tcode(&o.job),
-                tcode(&o.path),
-                tcode(&o.plan),
-                tcode(&o.pr),
-                tcode(&o.other_job),
-                o.status
-            ));
+            let other_jobs: Vec<String> = o.other_jobs.iter().map(|j| format!("{} ({})", tcode(&j.key), j.status)).collect();
+            out.push(format!("| {} | {} | {} | {} | {} |", tcode(&o.job), tcode(&o.plan), tcode(&o.pr), other_jobs.join(", "), paths_cell(&o.paths)));
         }
     }
     out.push(String::new());
@@ -307,6 +327,15 @@ mod tests {
         assert_eq!(cell("a | b\n  c"), "a \\| b c");
         assert_eq!(tcode("a|b"), "`a\\|b`");
         assert_eq!(code("a`b"), "`` a`b ``");
+    }
+
+    #[test]
+    fn the_paths_cell_shows_five_paths_and_counts_the_rest() {
+        let paths = |n: usize| (1..=n).map(|i| format!("a/{i}.rs")).collect::<Vec<_>>();
+        assert_eq!(paths_cell(&paths(1)), "`a/1.rs`");
+        assert_eq!(paths_cell(&paths(5)), "`a/1.rs`, `a/2.rs`, `a/3.rs`, `a/4.rs`, `a/5.rs`");
+        assert_eq!(paths_cell(&paths(6)), "`a/1.rs`, `a/2.rs`, `a/3.rs`, `a/4.rs`, `a/5.rs`, +1");
+        assert_eq!(paths_cell(&paths(40)), "`a/1.rs`, `a/2.rs`, `a/3.rs`, `a/4.rs`, `a/5.rs`, +35");
     }
 
     #[test]

@@ -69,8 +69,11 @@ error_codes! {
     ConfigInvalid = "config_invalid" => Failure,
     StoreTooNew = "store_too_new" => Failure,
     MigrationFailed = "migration_failed" => Failure,
+    MigrationChanged = "migration_changed" => Failure,
+    MigrationOrder = "migration_order" => Failure,
     StoreTampered = "store_tampered" => Failure,
     StoreFailed = "store_failed" => Failure,
+    Internal = "internal" => Failure,
     GitFailed = "git_failed" => Failure,
     TmuxFailed = "tmux_failed" => Failure,
     GhFailed = "gh_failed" => Failure,
@@ -92,6 +95,8 @@ error_codes! {
     MergeCheckFailed = "merge_check_failed" => Failure,
     PushFailed = "push_failed" => Failure,
     CleanupFailed = "cleanup_failed" => Failure,
+    DistillInvalid = "distill_invalid" => Failure,
+    DistillFailed = "distill_failed" => Failure,
 
     // Exit 2: usage error.
     Usage = "usage" => Usage,
@@ -114,6 +119,7 @@ error_codes! {
 
     // Exit 3: refused by an invariant.
     CasLost = "cas_lost" => Refused,
+    DistillRunning = "distill_running" => Refused,
     IllegalTransition = "illegal_transition" => Refused,
     LockedJobTampered = "locked_job_tampered" => Refused,
     RecordNotFound = "record_not_found" => Refused,
@@ -129,6 +135,7 @@ error_codes! {
     DependencyCycle = "dependency_cycle" => Refused,
     WorktreeExists = "worktree_exists" => Refused,
     JobKeyExists = "job_key_exists" => Refused,
+    DraftIncomplete = "draft_incomplete" => Refused,
     NeedsUnknown = "needs_unknown" => Refused,
     NeedsUnavailable = "needs_unavailable" => Refused,
     JobLocked = "job_locked" => Refused,
@@ -179,6 +186,7 @@ error_codes! {
     // Exit 5: timeout.
     StoreBusy = "store_busy" => Timeout,
     LockTimeout = "lock_timeout" => Timeout,
+    ToolTimeout = "tool_timeout" => Timeout,
     AskTimeout = "ask_timeout" => Timeout,
     CancelTimeout = "cancel_timeout" => Timeout,
 
@@ -192,6 +200,7 @@ error_codes! {
     PrLocked = "pr_locked" => Refused,
     PrNotReady = "pr_not_ready" => Refused,
     PrEnded = "pr_ended" => Refused,
+    PrClosed = "pr_closed" => Refused,
     NeedsOtherPr = "needs_other_pr" => Refused,
     PrNotFound = "pr_not_found" => NotFound,
 }
@@ -333,7 +342,10 @@ mod tests {
             (ErrorCode::ConfigInvalid, 1),
             (ErrorCode::ConfigMissing, 1),
             (ErrorCode::StoreTooNew, 1),
+            (ErrorCode::Internal, 1),
             (ErrorCode::MigrationFailed, 1),
+            (ErrorCode::MigrationChanged, 1),
+            (ErrorCode::MigrationOrder, 1),
             (ErrorCode::Usage, 2),
             (ErrorCode::PlanRequired, 2),
             (ErrorCode::ContextRequired, 2),
@@ -341,6 +353,7 @@ mod tests {
             (ErrorCode::InvalidPlanId, 2),
             (ErrorCode::InvalidRecordId, 2),
             (ErrorCode::JobLocked, 3),
+            (ErrorCode::DraftIncomplete, 3),
             (ErrorCode::IllegalTransition, 3),
             (ErrorCode::DirtyTree, 3),
             (ErrorCode::GateFailed, 3),
@@ -355,6 +368,7 @@ mod tests {
             (ErrorCode::BaseNotFound, 4),
             (ErrorCode::StoreBusy, 5),
             (ErrorCode::LockTimeout, 5),
+            (ErrorCode::ToolTimeout, 5),
             (ErrorCode::AskTimeout, 5),
             (ErrorCode::CancelTimeout, 5),
             (ErrorCode::PrStartFailed, 1),
@@ -366,6 +380,7 @@ mod tests {
             (ErrorCode::PrLocked, 3),
             (ErrorCode::PrNotReady, 3),
             (ErrorCode::PrEnded, 3),
+            (ErrorCode::PrClosed, 3),
             (ErrorCode::NeedsOtherPr, 3),
             (ErrorCode::PrNotFound, 4),
         ];

@@ -11,7 +11,7 @@ pub(crate) mod lock;
 mod run;
 mod stall;
 mod start;
-mod worker;
+pub(crate) mod worker;
 
 use serde_json::json;
 

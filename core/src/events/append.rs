@@ -87,10 +87,10 @@ impl NewEvent {
 }
 
 /// A malformed Event is a bug in the calling command, not bad user input, so
-/// it is `store_failed` (exit 1, "something unexpected", contract §1.2): the
+/// it is `internal` (exit 1, "something unexpected", contract §1.2): the
 /// transaction rolls back and nothing is appended.
 fn malformed(kind: Kind, message: String) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("Cannot append a {kind} Event: {message}.")).with("kind", kind.as_str())
+    CpdError::new(ErrorCode::Internal, format!("Cannot append a {kind} Event: {message}.")).with("kind", kind.as_str())
 }
 
 /// Appends `event` in the caller's write transaction and returns its `id`

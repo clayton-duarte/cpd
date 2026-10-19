@@ -34,6 +34,8 @@ pub struct Attempt {
     pub worker_session: Option<SessionId>,
     pub nudged: bool,
     pub stop_request: Option<String>,
+    /// The Attempt branch's tip when `attempt submit` checked it; set from `merging` on.
+    pub submitted_sha: Option<String>,
 }
 
 pub(crate) fn corrupt(what: String) -> CpdError {
@@ -49,7 +51,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
     let row = conn
         .query_row(
             "SELECT a.job, a.tier, a.status, a.branch, a.worktree, a.worker_session, a.nudged, a.stop_request,
-                    r.repo, r.lead_worktree, r.lead_branch
+                    r.repo, r.lead_worktree, r.lead_branch, a.submitted_sha
                FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
                JOIN prs r ON r.plan = j.plan AND r.key = j.pr
               WHERE a.plan = ?1 AND a.id = ?2",
@@ -65,6 +67,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
                     r.get::<_, bool>(6)?,
                     r.get::<_, Option<String>>(7)?,
                     (r.get::<_, String>(8)?, r.get::<_, Option<String>>(9)?, r.get::<_, String>(10)?),
+                    r.get::<_, Option<String>>(11)?,
                 ))
             },
         )
@@ -74,7 +77,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
                 .with("plan", plan.as_str())
                 .with("attempt", id.to_string())
         })?;
-    let (job, tier, status, branch, worktree, worker_session, nudged, stop_request, (repo, lead_worktree, lead_branch)) = row;
+    let (job, tier, status, branch, worktree, worker_session, nudged, stop_request, (repo, lead_worktree, lead_branch), submitted_sha) = row;
     let lead_worktree = lead_worktree.ok_or_else(|| corrupt(format!("Plan {plan} has an Attempt but no Lead worktree")))?;
     Ok(Attempt {
         plan: plan.clone(),
@@ -93,6 +96,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
             .transpose()?,
         nudged,
         stop_request,
+        submitted_sha,
     })
 }
 

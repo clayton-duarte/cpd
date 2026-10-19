@@ -94,7 +94,7 @@ impl NewEvent {
         pr: impl Serialize,
         status: &str,
         appended: bool,
-        tier: &str,
+        tier: Option<&str>,
         needs: impl Serialize,
         review: bool,
     ) -> NewEvent {
@@ -150,8 +150,8 @@ impl NewEvent {
         )
     }
 
-    pub fn attempt_nudge(text: impl Into<String>, prompt: &str) -> NewEvent {
-        make(Kind::AttemptNudge, text, json!({"prompt": prompt}))
+    pub fn attempt_nudge(text: impl Into<String>, prompt: &str, turns: u64) -> NewEvent {
+        make(Kind::AttemptNudge, text, json!({"prompt": prompt, "turns": turns}))
     }
 
     pub fn all_merged(text: impl Into<String>, pr: impl Serialize, merged: impl Serialize, cancelled: impl Serialize) -> NewEvent {
@@ -240,8 +240,13 @@ impl NewEvent {
         make(Kind::SessionRegistered, text, json!({"role": role, "name": name, "forked_from": forked_from, "tier": tier}))
     }
 
-    pub fn session_state(text: impl Into<String>, from: &str, to: &str, label: Option<&str>) -> NewEvent {
-        make(Kind::SessionState, text, json!({"from": from, "to": to, "label": label}))
+    /// `reply` is in `data` only when true (`session state idle --reply`).
+    pub fn session_state(text: impl Into<String>, from: &str, to: &str, label: Option<&str>, reply: bool) -> NewEvent {
+        let mut data = json!({"from": from, "to": to, "label": label});
+        if reply {
+            data["reply"] = json!(true);
+        }
+        make(Kind::SessionState, text, data)
     }
 
     /// `pane` and `window` are null when the Session has no pane (`place` is then `none`).
@@ -334,7 +339,7 @@ mod tests {
                 NewEvent::plan_review_decided(T, s, s, s, s, Some([s])),
             ],
             Kind::PlanDone => vec![NewEvent::plan_done(T, [s])],
-            Kind::JobAdded => vec![NewEvent::job_added(T, s, s, b, s, [s], b)],
+            Kind::JobAdded => vec![NewEvent::job_added(T, s, s, b, Some(s), [s], b), NewEvent::job_added(T, s, s, b, None, [s], b)],
             Kind::JobEdited => vec![NewEvent::job_edited(T, [s])],
             Kind::JobMerged => vec![NewEvent::job_merged(T, s, s, false), NewEvent::job_merged(T, s, s, true)],
             Kind::JobFailed => vec![NewEvent::job_failed(T, s, s, s, n)],
@@ -344,7 +349,7 @@ mod tests {
             Kind::AttemptStarted => vec![NewEvent::attempt_started(T, n, s, s)],
             Kind::AttemptStatus => vec![NewEvent::attempt_status(T, s, s)],
             Kind::AttemptRetry => vec![NewEvent::attempt_retry(T, s, s, s, s)],
-            Kind::AttemptNudge => vec![NewEvent::attempt_nudge(T, s)],
+            Kind::AttemptNudge => vec![NewEvent::attempt_nudge(T, s, 1)],
             Kind::AllMerged => vec![NewEvent::all_merged(T, s, [s], [s])],
             Kind::PrFeedback => vec![NewEvent::pr_feedback(T, s, n, s, s, s, s, s, s, b, &[s])],
             Kind::PrAdded => vec![NewEvent::pr_added(T, s, s, s, [s], b)],
@@ -357,7 +362,7 @@ mod tests {
             Kind::EscalationAnswered => vec![NewEvent::escalation_answered(T, s)],
             Kind::EscalationExpired => vec![NewEvent::escalation_expired(T, s, s)],
             Kind::SessionRegistered => vec![NewEvent::session_registered(T, s, s, s, s)],
-            Kind::SessionState => vec![NewEvent::session_state(T, s, s, None)],
+            Kind::SessionState => vec![NewEvent::session_state(T, s, s, None, false), NewEvent::session_state(T, s, s, None, true)],
             Kind::SessionMoved => vec![NewEvent::session_moved(T, Some(s), Some(s), s), NewEvent::session_moved(T, None, None, s)],
             Kind::SessionRenamed => vec![NewEvent::session_renamed(T, s)],
             Kind::ContextRenamed => vec![NewEvent::context_renamed(T, s)],

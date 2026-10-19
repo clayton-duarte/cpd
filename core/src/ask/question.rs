@@ -166,7 +166,7 @@ fn set_state(tx: &WriteTxn<'_>, asker: &Asker, from: &str, to: &str, label: Opti
     };
     append(
         tx,
-        NewEvent::session_state(text, from, to, label)
+        NewEvent::session_state(text, from, to, label, false)
             .session(asker.session.clone())
             .plan(asker.plan.clone()),
     )?;

@@ -3,17 +3,19 @@
 //! `plan list` and `plan render`: the Plan row alone and its PRs.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
-use super::fingerprint::plan_fingerprint;
+use super::fingerprint::{of as fingerprint_of, reviews_prs};
 use super::jobs::{self, Job};
-use super::row::{self, PlanRow};
+use super::prs::{PrRow, Pull};
+use super::row::{self, Phase, PlanRow};
 use super::{Env, ShowArgs};
 use crate::error::CpdError;
 use crate::events::highest_id;
-use crate::ids::PlanId;
+use crate::ids::{PlanId, PrKey};
 use crate::output::Output;
 use crate::pr::pulls;
 
@@ -63,16 +65,7 @@ pub(super) fn pr_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, 
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let snapshot = env.store.read(|conn| {
-        let plan = row::load(conn, &id)?;
-        let prs = pr_values(conn, &id)?;
-        let jobs = jobs::load(conn, &id)?;
-        let attempts = attempts(conn, &id)?;
-        let escalations = open_escalations(conn, &id)?;
-        let review = latest_review(conn, &id)?;
-        Ok((plan, prs, jobs, attempts, escalations, review, highest_id(conn)?))
-    })?;
-    let (plan, mut prs, jobs, mut attempts, escalations, review, cursor): (PlanRow, Vec<Value>, Vec<Job>, _, _, _, _) = snapshot;
+    let (plan, mut prs, jobs, mut attempts, escalations, review, cursor) = env.store.read(|conn| snapshot(conn, &id))?;
     let mut tamper = env.store.tamper()?;
     tamper.extend(jobs::tampered(&id, &jobs));
     for pr in &mut prs {
@@ -97,6 +90,49 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         "tamper": tamper,
         "events_cursor": cursor,
     })))
+}
+
+type Snapshot = (PlanRow, Vec<Value>, Vec<Job>, BTreeMap<String, Vec<Value>>, Vec<Value>, Value, i64);
+
+/// Everything `plan show` prints that is read from the database, each row read once.
+fn snapshot(conn: &Connection, id: &PlanId) -> Result<Snapshot, CpdError> {
+    let plan = row::load(conn, id)?;
+    let prs = pr_values(conn, id)?;
+    let jobs = jobs::load(conn, id)?;
+    let attempts = attempts(conn, id)?;
+    let escalations = open_escalations(conn, id)?;
+    let review = latest_review(conn, id, plan.phase, &jobs, &prs)?;
+    Ok((plan, prs, jobs, attempts, escalations, review, highest_id(conn)?))
+}
+
+/// `plan_fingerprint` from rows already read: the PRs are the `pr_values` ones, as the
+/// [`PrRow`]s the fingerprint takes. It reads `key`, `repo`, `base`, `needs` and `status`;
+/// `pull_request` (expanded, not an id, in `pr_values`) is left `None`.
+fn current_fingerprint(phase: Phase, jobs: &[Job], prs: &[Value]) -> String {
+    let strings = |v: &Value| -> Vec<String> { v.as_array().into_iter().flatten().filter_map(|n| n.as_str().map(str::to_owned)).collect() };
+    let text = |p: &Value, field: &str| p[field].as_str().unwrap_or_else(|| panic!("a PR {field}")).to_owned();
+    let rows: Vec<PrRow> = if reviews_prs(Some(phase.as_str())) {
+        prs.iter()
+            .map(|p| PrRow {
+                key: PrKey::parse(&text(p, "key")).expect("a PR key"),
+                repo: text(p, "repo"),
+                base: text(p, "base"),
+                lead_branch: text(p, "lead_branch"),
+                lead_worktree: p["lead_worktree"].as_str().map(PathBuf::from),
+                status: text(p, "status"),
+                needs: strings(&p["needs"]),
+                pull: p["pr"].is_object().then(|| Pull {
+                    number: p["pr"]["number"].as_i64().expect("a pull request number"),
+                    url: text(&p["pr"], "url"),
+                    opened_at: text(&p["pr"], "opened_at"),
+                }),
+                pull_request: None,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    fingerprint_of(jobs, &rows)
 }
 
 /// Every Attempt of the Plan by Job, oldest first.
@@ -140,8 +176,9 @@ fn open_escalations(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, CpdE
 }
 
 /// The latest Plan review, with `current`: whether its fingerprint is still
-/// the plan fingerprint. Null when the Plan has none.
-fn latest_review(conn: &Connection, plan: &PlanId) -> Result<Value, CpdError> {
+/// the plan fingerprint of `jobs` and `prs` (already read, `pr_values`). Null
+/// when the Plan has none.
+fn latest_review(conn: &Connection, plan: &PlanId, phase: Phase, jobs: &[Job], prs: &[Value]) -> Result<Value, CpdError> {
     let review = conn
         .query_row(
             "SELECT id, status, fingerprint, feedback, requested_at, decided_at FROM plan_reviews
@@ -162,9 +199,45 @@ fn latest_review(conn: &Connection, plan: &PlanId) -> Result<Value, CpdError> {
     Ok(match review {
         None => Value::Null,
         Some((id, status, fingerprint, feedback, requested_at, decided_at)) => {
-            let current = fingerprint == plan_fingerprint(conn, plan)?;
+            let current = fingerprint == current_fingerprint(phase, jobs, prs);
             json!({"id": id, "status": status, "fingerprint": fingerprint, "current": current,
                    "feedback": feedback, "requested_at": requested_at, "decided_at": decided_at})
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::super::sql_trace::{ledger, statements};
+    use super::*;
+
+    #[test]
+    fn plan_show_reads_no_statement_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = ledger(dir.path(), 1);
+        let id = PlanId::parse("plan-1").unwrap();
+        let (shown, seen) = store.read(|conn| Ok(statements(conn, || snapshot(conn, &id)))).unwrap();
+        assert_eq!(shown.unwrap().5["current"], false, "the fixture's review is of another fingerprint");
+        let mut once = BTreeSet::new();
+        for sql in &seen {
+            assert!(once.insert(sql), "read twice: {sql}\nall:\n{}", seen.join("\n"));
+        }
+    }
+
+    #[test]
+    fn the_review_is_current_while_the_fingerprint_of_the_jobs_and_prs_read_is_the_stored_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = ledger(dir.path(), 1);
+        let id = PlanId::parse("plan-1").unwrap();
+        let fingerprint = store.read(|conn| super::super::plan_fingerprint(conn, &id)).unwrap();
+        store
+            .write("fixture", |tx| Ok(tx.execute("UPDATE plan_reviews SET fingerprint = ?1", [&fingerprint]).map(|_| ())?))
+            .unwrap();
+        let current = |store: &mut crate::store::Store| store.read(|conn| snapshot(conn, &id)).unwrap().5["current"].clone();
+        assert_eq!(current(&mut store), true);
+        store.write("fixture", |tx| Ok(tx.execute("UPDATE prs SET base = 'develop' WHERE key = 'db'", []).map(|_| ())?)).unwrap();
+        assert_eq!(current(&mut store), false, "a PR's base is in the fingerprint");
+    }
 }

@@ -4,9 +4,10 @@
 
 use std::path::Path;
 
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::error::{CpdError, ErrorCode};
+use crate::plan::jobs::JobSpec;
 
 const FIELDS: [&str; 5] = ["goal", "context", "touches", "acceptance", "out_of_scope"];
 
@@ -18,6 +19,19 @@ pub struct Spec {
     pub touches: Vec<String>,
     pub acceptance: Vec<String>,
     pub out_of_scope: Vec<String>,
+}
+
+impl Spec {
+    /// The Spec as a Job holds it.
+    pub fn stored(&self) -> JobSpec {
+        JobSpec {
+            goal: self.goal.clone(),
+            context: self.context.clone(),
+            touches: json!(self.touches),
+            acceptance: json!(self.acceptance),
+            out_of_scope: json!(self.out_of_scope),
+        }
+    }
 }
 
 /// Reads and validates the file: `file_unreadable` when it is not UTF-8 text

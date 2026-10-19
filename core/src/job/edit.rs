@@ -1,5 +1,6 @@
 //! `job edit` (commands.md §5.2): the Locked fields and Dependencies of a
 //! `draft` Job, and its PR; a Locked Job is refused with `job_locked` (§3.2).
+//! It is how a stub draft gets its Tier and Spec (R1).
 
 use std::path::PathBuf;
 
@@ -91,14 +92,10 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
         after.title = title.clone();
     }
     if let Some(tier) = &edits.tier {
-        after.tier = tier.clone();
+        after.tier = Some(tier.clone());
     }
     if let Some(spec) = &edits.spec {
-        after.goal = spec.goal.clone();
-        after.context = spec.context.clone();
-        after.touches = json!(spec.touches);
-        after.acceptance = json!(spec.acceptance);
-        after.out_of_scope = json!(spec.out_of_scope);
+        after.spec = Some(spec.stored());
     }
     if let Some(pr) = &edits.pr {
         let prs = load_prs(conn, plan)?;
@@ -144,24 +141,43 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
             .with("cycle", cycle));
         }
     }
-    let fields: Vec<&'static str> = [
-        ("title", before.title != after.title),
-        ("tier", before.tier != after.tier),
-        ("goal", before.goal != after.goal),
-        ("context", before.context != after.context),
-        ("touches", before.touches != after.touches),
-        ("acceptance", before.acceptance != after.acceptance),
-        ("out_of_scope", before.out_of_scope != after.out_of_scope),
-        ("pr", before.pr != after.pr),
-        ("needs", before.needs != after.needs),
-    ]
-    .into_iter()
-    .filter_map(|(name, changed)| changed.then_some(name))
-    .collect();
+    let mut fields: Vec<&'static str> = Vec::new();
+    if before.title != after.title {
+        fields.push("title");
+    }
+    // A stub gets its whole Spec at once: it is one field, `spec`, not the five columns.
+    let completed = before.spec.is_none() && after.spec.is_some();
+    for (_, (name, _)) in columns(&before).into_iter().zip(columns(&after)).filter(|(b, a)| b.1 != a.1) {
+        match name {
+            "tier" => fields.push("tier"),
+            _ if !completed => fields.push(name),
+            _ if !fields.contains(&"spec") => fields.push("spec"),
+            _ => {}
+        }
+    }
+    if before.pr != after.pr {
+        fields.push("pr");
+    }
+    if before.needs != after.needs {
+        fields.push("needs");
+    }
     if fields.is_empty() {
         return Ok(Decision::Already(before.clone()));
     }
     Ok(Decision::Update { before: before.clone(), after, fields })
+}
+
+/// The Tier and Spec columns as stored, in column order: `None` is null (a stub).
+fn columns(job: &Job) -> [(&'static str, Option<String>); 6] {
+    let spec = job.spec.as_ref();
+    [
+        ("tier", job.tier.clone()),
+        ("goal", spec.map(|s| s.goal.clone())),
+        ("context", spec.map(|s| s.context.clone())),
+        ("touches", spec.map(|s| s.touches.to_string())),
+        ("acceptance", spec.map(|s| s.acceptance.to_string())),
+        ("out_of_scope", spec.map(|s| s.out_of_scope.to_string())),
+    ]
 }
 
 /// Writes the changed `jobs` columns, and deletes and inserts `dependencies`
@@ -171,17 +187,10 @@ fn update(tx: &Connection, plan: &PlanId, before: &Job, after: &Job) -> Result<(
     for need in before.needs.iter().filter(|n| !after.needs.contains(n)) {
         tx.execute("DELETE FROM dependencies WHERE plan = ?1 AND job = ?2 AND needs = ?3", [plan.as_str(), after.key.as_str(), need.as_str()])?;
     }
-    let columns: [(&str, bool, String); 8] = [
-        ("title", before.title != after.title, after.title.clone()),
-        ("tier", before.tier != after.tier, after.tier.clone()),
-        ("goal", before.goal != after.goal, after.goal.clone()),
-        ("context", before.context != after.context, after.context.clone()),
-        ("touches", before.touches != after.touches, after.touches.to_string()),
-        ("acceptance", before.acceptance != after.acceptance, after.acceptance.to_string()),
-        ("out_of_scope", before.out_of_scope != after.out_of_scope, after.out_of_scope.to_string()),
-        ("pr", before.pr != after.pr, after.pr.clone()),
-    ];
-    let changed: Vec<&(&str, bool, String)> = columns.iter().filter(|(_, changed, _)| *changed).collect();
+    let mut written: Vec<(&str, bool, Option<String>)> = vec![("title", before.title != after.title, Some(after.title.clone()))];
+    written.extend(columns(before).into_iter().zip(columns(after)).map(|(b, a)| (a.0, b.1 != a.1, a.1)));
+    written.push(("pr", before.pr != after.pr, Some(after.pr.clone())));
+    let changed: Vec<&(&str, bool, Option<String>)> = written.iter().filter(|(_, changed, _)| *changed).collect();
     if !changed.is_empty() {
         let set = changed.iter().enumerate().map(|(i, (name, _, _))| format!("{name} = ?{}", i + 3)).collect::<Vec<_>>().join(", ");
         let plan_s = plan.as_str();

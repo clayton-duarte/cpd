@@ -128,6 +128,7 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     if drafts == 0 {
         return Err(no_draft_jobs(&id));
     }
+    check_drafts_complete(&id, jobs)?;
     if let Some(r) = latest_review.as_ref().filter(|r| r.status == "pending" && r.fingerprint == fingerprint) {
         return Ok(Output::success(json!({
             "review": {"id": r.id, "fingerprint": r.fingerprint, "status": r.status, "requested_at": r.requested_at},
@@ -172,6 +173,28 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
 pub(super) fn no_draft_jobs(id: &PlanId) -> CpdError {
     CpdError::new(ErrorCode::NoDraftJobs, format!("Plan {id} has no draft Job: add Jobs with cpd job add first."))
         .with("plan", id.as_str())
+}
+
+/// Every `draft` Job has its Tier and its Spec (§4.6, §4.8, hs-d241): else
+/// `draft_incomplete`, `details.jobs` = `[{key, missing}]` in key order. A stub
+/// cannot be approved, so neither `plan review` nor `plan lock` goes on.
+pub(super) fn check_drafts_complete(id: &PlanId, jobs: &[Job]) -> Result<(), CpdError> {
+    let mut stubs: Vec<&Job> = jobs.iter().filter(|j| j.is_draft() && !j.missing().is_empty()).collect();
+    if stubs.is_empty() {
+        return Ok(());
+    }
+    stubs.sort_by(|a, b| a.key.cmp(&b.key));
+    let keys: Vec<&str> = stubs.iter().map(|j| j.key.as_str()).collect();
+    let listed: Vec<Value> = stubs.iter().map(|j| json!({"key": j.key, "missing": j.missing()})).collect();
+    Err(CpdError::new(
+        ErrorCode::DraftIncomplete,
+        format!(
+            "Plan {id} has draft Jobs without their Tier or Spec: {}. Complete each with cpd job edit <key> --tier <T> --spec <file>, or cancel it, then ask again.",
+            keys.join(", ")
+        ),
+    )
+    .with("plan", id.as_str())
+    .with("jobs", listed))
 }
 
 /// `plan decide` (§4.7). In a phase after `plan`, a current approval also

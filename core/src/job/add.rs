@@ -1,6 +1,7 @@
 //! `job add` (commands.md §5.1): `[*] → draft` in phase `plan`; in a phase
 //! after it, an appended `queued` Job, fingerprint stored at once, or with
 //! `--draft` an appended `draft`, which only an approved Plan review queues.
+//! `--tier` and `--spec` are optional with `--draft` only: a stub draft (R1).
 
 use rusqlite::Connection;
 use serde_json::{Value, json};
@@ -23,8 +24,9 @@ struct Wanted {
     key: JobKey,
     pr: PrArg,
     title: String,
-    tier: String,
-    spec: Spec,
+    /// Given always, but for a stub draft.
+    tier: Option<String>,
+    spec: Option<Spec>,
     needs: Vec<String>,
     /// `--review` (B2): the needs are set from the Plan, not given.
     review: bool,
@@ -41,10 +43,22 @@ enum Decision {
 pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let needs = sorted_needs(&args.needs)?;
-    let spec = spec::read(&args.spec)?;
+    require_tier_and_spec(&args)?;
+    let spec = args.spec.as_deref().map(spec::read).transpose()?;
     let mut env = Env::open()?;
-    env.check_tier(args.tier)?;
-    let wanted = Wanted { key: args.key, pr: args.pr, title: args.title.as_str().to_owned(), tier: args.tier.to_string(), spec, needs, review: args.review, draft: args.draft };
+    if let Some(tier) = args.tier {
+        env.check_tier(tier)?;
+    }
+    let wanted = Wanted {
+        key: args.key,
+        pr: args.pr,
+        title: args.title.as_str().to_owned(),
+        tier: args.tier.map(|t| t.to_string()),
+        spec,
+        needs,
+        review: args.review,
+        draft: args.draft,
+    };
 
     let decision = env.store.read(|conn| decide(conn, &plan, &wanted))?;
     let (job, already) = match decision {
@@ -56,7 +70,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                 let text = format!("Job {} added to Plan {plan} as {}. Next: cpd job show {} --plan {plan}", job.key, job.status, job.key);
                 append(
                     tx,
-                    NewEvent::job_added(text, &job.pr, &job.status, job.appended, &job.tier, &job.needs, wanted.review)
+                    NewEvent::job_added(text, &job.pr, &job.status, job.appended, job.tier.as_deref(), &job.needs, wanted.review)
                     .plan(plan.clone())
                     .job(wanted.key.clone()),
                 )?;
@@ -69,6 +83,20 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         out["already"] = json!(true);
     }
     Ok(Output::success(out))
+}
+
+/// `--tier` and `--spec` are required, except with `--draft` (a stub draft, §5.1);
+/// a review Job is never a stub.
+fn require_tier_and_spec(args: &AddArgs) -> Result<(), CpdError> {
+    let missing: Vec<&str> = [("--tier", args.tier.is_none()), ("--spec", args.spec.is_none())]
+        .into_iter()
+        .filter_map(|(flag, lacks)| lacks.then_some(flag))
+        .collect();
+    if missing.is_empty() || (args.draft && !args.review) {
+        return Ok(());
+    }
+    let why = if args.review { "a --review Job" } else { "a Job that is not a --draft" };
+    Err(CpdError::new(ErrorCode::Usage, format!("{} required for {why}: only a stub draft (--draft) may leave them out.", missing.join(" and "))))
 }
 
 fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision, CpdError> {
@@ -95,11 +123,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
         pr,
         title: wanted.title.clone(),
         tier: wanted.tier.clone(),
-        goal: wanted.spec.goal.clone(),
-        context: wanted.spec.context.clone(),
-        touches: json!(wanted.spec.touches),
-        acceptance: json!(wanted.spec.acceptance),
-        out_of_scope: json!(wanted.spec.out_of_scope),
+        spec: wanted.spec.as_ref().map(Spec::stored),
         status: if draft { "draft" } else { "queued" }.to_owned(),
         appended,
         review: wanted.review,
@@ -176,12 +200,12 @@ fn review_needs(all: &[Job], plan: &PlanId, pr: &str, key: &str) -> Result<Vec<S
 
 /// The Locked fields (§2.2: the Spec, `title`, `tier`, `pr`) and the needs; `review` is compared by the caller.
 fn same_locked_fields(a: &Job, b: &Job) -> bool {
-    (&a.pr, &a.title, &a.tier, &a.goal, &a.context, &a.touches, &a.acceptance, &a.out_of_scope, &a.needs)
-        == (&b.pr, &b.title, &b.tier, &b.goal, &b.context, &b.touches, &b.acceptance, &b.out_of_scope, &b.needs)
+    (&a.pr, &a.title, &a.tier, &a.spec, &a.needs) == (&b.pr, &b.title, &b.tier, &b.spec, &b.needs)
 }
 
 fn insert(tx: &Connection, plan: &PlanId, job: &Job, review: bool) -> Result<(), CpdError> {
-    let array = |v: &Value| v.to_string();
+    let array = |v: Option<&Value>| v.map(Value::to_string);
+    let spec = job.spec.as_ref();
     tx.execute(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                            status, appended, fingerprint, review, created_txn, created_at)
@@ -192,11 +216,11 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job, review: bool) -> Result<(),
             job.key,
             job.title,
             job.tier,
-            job.goal,
-            job.context,
-            array(&job.touches),
-            array(&job.acceptance),
-            array(&job.out_of_scope),
+            spec.map(|s| &s.goal),
+            spec.map(|s| &s.context),
+            array(spec.map(|s| &s.touches)),
+            array(spec.map(|s| &s.acceptance)),
+            array(spec.map(|s| &s.out_of_scope)),
             job.status,
             job.appended,
             job.fingerprint,

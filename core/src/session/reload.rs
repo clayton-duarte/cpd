@@ -4,8 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use nix::sys::signal::{Signal, kill};
-use nix::unistd::Pid;
+use nix::sys::signal::Signal;
 use serde_json::json;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -13,7 +12,7 @@ use time::format_description::well_known::Rfc3339;
 use super::Env;
 use super::fork_wait::{quiet_since, turn_finished};
 use super::row::{self, State};
-use super::run::existing_file;
+use super::run::{PiProc, existing_file};
 use super::state::scoped;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
@@ -51,17 +50,19 @@ pub(super) fn may_exec(exe: &Exe) -> bool {
 
 /// Sends pi `SIGTERM` and waits for it to exit; if it has not exited after
 /// `grace`, sends `SIGKILL` and waits again (§6.7 "Reload on install").
-pub(super) fn stop_pi(child: &mut std::process::Child, grace: Duration) {
-    let _ = kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM);
+pub(super) fn stop_pi(pi: &mut PiProc, grace: Duration) {
+    pi.signal(Signal::SIGTERM);
     let deadline = Instant::now() + grace;
     while Instant::now() < deadline {
-        if !matches!(child.try_wait(), Ok(None)) {
+        if !matches!(pi.try_wait(), Ok(None)) {
             return;
         }
         std::thread::sleep(STOP_POLL);
     }
-    let _ = child.kill();
-    let _ = child.wait();
+    pi.signal(Signal::SIGKILL);
+    while matches!(pi.try_wait(), Ok(None)) {
+        std::thread::sleep(STOP_POLL);
+    }
 }
 
 /// The adapter watchdog (contract §6.7 "Adapter watchdog"): whether the
@@ -97,13 +98,22 @@ pub(super) fn adapter_missing(env: &mut Env, id: &SessionId, running: Duration) 
     })
 }
 
-/// Replaces this process with the newly installed cpd, which resumes pi on
-/// the session file (§10.8 step 1). Returns only the error of failing to.
-pub(super) fn reload(exe: &Exe, id: &SessionId) -> CpdError {
-    exe.exec(["session", "run", id.as_str()])
+/// Replaces this process with the cpd at its path (§10.8). With `adopt` (pi,
+/// and whether its install already changed) pi keeps running and the new
+/// process adopts it by pid; without, no pi runs and the new process starts
+/// one. Returns only the error of failing to.
+pub(super) fn reload(exe: &Exe, id: &SessionId, adopt: Option<(&PiProc, bool)>) -> CpdError {
+    let mut args = vec!["session".to_owned(), "run".to_owned(), id.to_string()];
+    if let Some((pi, stale)) = adopt {
+        args.extend(["--adopt".to_owned(), pi.id().to_string()]);
+        if stale {
+            args.push("--pi-stale".to_owned());
+        }
+    }
+    exe.exec(args)
 }
 
-/// A new cpd or pi is installed and the Lead is at a safe point (§6.7 "Reload on
+/// A new pi is installed and the Lead is at a safe point (§6.7 "Reload on
 /// install"): reads the Session and its file, and decides with [`reload_now`].
 pub(super) fn reload_due(env: &mut Env, dirs: &PiDirs, id: &SessionId) -> Result<bool, CpdError> {
     let row = env.store.read(|conn| row::load(conn, id))?;

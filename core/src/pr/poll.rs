@@ -61,8 +61,9 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
     let owned = env.store.read(pulls::owned_open)?;
 
     // The owned pull requests that left the open search: merged, closed, or the index lags (D3).
+    // One stored as decided (`closed`, A11) is already right: it is not looked up again until the search lists it.
     let mut absent: Vec<(String, i64)> = Vec::new();
-    for (_, _, row) in &owned {
+    for (_, _, row) in owned.iter().filter(|(_, _, row)| row.state == "open") {
         let key = (row.repo.clone(), row.number);
         if !present.contains(&key) && !absent.contains(&key) {
             absent.push(key);
@@ -76,7 +77,7 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
     let dirty = env.store.read(|conn| {
         for listed in &seen {
             match pulls::find(conn, &listed.pr.repo, listed.pr.number)? {
-                Some(row) if row.polled()? == listed.pr && row.membership() == listed.membership => {}
+                Some(row) if row.holds(listed)? => {}
                 _ => return Ok(true),
             }
         }

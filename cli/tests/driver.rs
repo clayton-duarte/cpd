@@ -372,6 +372,27 @@ fn driver_log_lines_start_with_a_time() {
     }
 }
 
+#[test]
+fn the_workers_window_is_killed_when_the_driver_sees_merging() {
+    let fx = fx();
+    fx.pi(WORKER);
+    // The merge waits for the per-repo lock, so A9's kill (after the merge) cannot be what is seen.
+    let lock = cpd_core::merge::RepoLock::wait(&fx.home(), &fx.repo).unwrap();
+
+    let out = fx.dispatch(JOB).ok();
+    fx.wait_status(ATTEMPT, "merging");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while fx.windows().contains("pay--api-a1") {
+        assert!(Instant::now() < deadline, "the Worker's window outlived `merging`: {}\nlog: {}", fx.windows(), fx.log(ATTEMPT));
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(fx.attempt(ATTEMPT)["status"], "merging");
+
+    drop(lock);
+    let (attempt, _) = fx.wait_end(ATTEMPT, &out["pid"]);
+    assert_eq!(attempt["outcome"], "merged");
+}
+
 // ---------- PRs across repos (R34) ----------
 
 #[test]
@@ -508,6 +529,79 @@ fn a_failed_kill_window_is_retried_and_appends_no_error() {
     assert!(marker.exists(), "the fake tmux never failed a kill-window");
     assert!(!fx.windows().contains("pay--api-a1"), "{}", fx.windows());
     assert!(!fx.kinds(ATTEMPT).contains(&"error".to_owned()), "{:?}", fx.kinds(ATTEMPT));
+}
+
+/// The real `tmux` on `PATH`, for a fake that wraps it.
+fn real_tmux(fx: &Fx) -> String {
+    let real = String::from_utf8(fx.env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
+    let real = real.trim().to_owned();
+    assert!(real.starts_with('/'), "{real}");
+    real
+}
+
+/// The `list-panes` calls made so far, through a fake `tmux`.
+fn list_panes_calls(fx: &Fx) -> usize {
+    fx.env.calls("tmux").iter().filter(|argv| argv.iter().any(|a| a == "list-panes")).count()
+}
+
+/// engine-W8 (§6.3 liveness): one tmux hiccup, the server answering neither the first
+/// `list-panes` nor the `list-sessions` after it, is not "the pane is gone": the driver
+/// lists again at the next poll and the Worker keeps running.
+#[test]
+fn one_failed_list_panes_does_not_end_a_running_attempt_crashed() {
+    let fx = fx();
+    fx.pi("sleep 120");
+    let (fired, answered) = (fx.env.root().join("list-panes-failed"), fx.env.root().join("list-sessions-failed"));
+    fx.env.fake(
+        "tmux",
+        &format!(
+            "case \" $* \" in\n\
+               *\" list-panes \"*) [ -e '{f}' ] || {{ : > '{f}'; echo 'lost server' >&2; exit 1; }};;\n\
+               *\" list-sessions \"*) if [ -e '{f}' ] && [ ! -e '{a}' ]; then : > '{a}'; echo 'lost server' >&2; exit 1; fi;;\n\
+             esac\nexec '{real}' \"$@\"",
+            f = fired.display(),
+            a = answered.display(),
+            real = real_tmux(&fx)
+        ),
+    );
+
+    let out = fx.dispatch(JOB).ok();
+    fx.wait_status(ATTEMPT, "running");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !answered.exists() {
+        assert!(Instant::now() < deadline, "the hiccup never happened\nlog: {}", fx.log(ATTEMPT));
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // Two polls after the hiccup.
+    std::thread::sleep(Duration::from_millis(1500));
+    let attempt = fx.attempt(ATTEMPT);
+    assert_eq!(attempt["status"], "running", "{attempt}\nlog: {}", fx.log(ATTEMPT));
+
+    fx.fixture("UPDATE attempts SET stop_request = 'timed_out' WHERE plan = 'pay' AND id = 'api-a1';");
+    let (attempt, _) = fx.wait_end(ATTEMPT, &out["pid"]);
+    assert_eq!(attempt["cause"], "timed_out", "log: {}", fx.log(ATTEMPT));
+}
+
+/// engine-F1: A4 tests the Worker's pane by its pid; it does not fork `tmux list-panes`
+/// at every poll while the Worker runs.
+#[test]
+fn a_running_worker_is_watched_without_listing_panes_at_every_poll() {
+    let fx = fx();
+    fx.pi("sleep 120");
+    fx.env.fake("tmux", &format!("exec '{}' \"$@\"", real_tmux(&fx)));
+
+    let out = fx.dispatch(JOB).ok();
+    fx.wait_status(ATTEMPT, "running");
+    // The pid is recorded at the first poll.
+    std::thread::sleep(Duration::from_millis(1500));
+    let before = list_panes_calls(&fx);
+    std::thread::sleep(Duration::from_secs(3));
+    let during = list_panes_calls(&fx) - before;
+    assert_eq!(during, 0, "list-panes calls in 3 s of a running Worker\nlog: {}", fx.log(ATTEMPT));
+
+    fx.fixture("UPDATE attempts SET stop_request = 'timed_out' WHERE plan = 'pay' AND id = 'api-a1';");
+    let (attempt, _) = fx.wait_end(ATTEMPT, &out["pid"]);
+    assert_eq!(attempt["cause"], "timed_out");
 }
 
 #[test]

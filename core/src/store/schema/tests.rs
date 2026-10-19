@@ -15,14 +15,13 @@ fn connection(path: &std::path::Path) -> Connection {
 }
 
 /// The schema after the first `n` migrations only, with the pragmas
-/// `Store::open` sets around them (§4.5 migration 4, step 1), in a
-/// `$CPD_HOME` that holds no old Context store.
+/// `Store::open` sets around them (§4.5 migration 4, step 1). Legacy
+/// migration 7's import of the old Context stores is the runner's, not run here.
 fn at_version(conn: &Connection, n: usize) {
-    let home = CpdHome::resolve(Some("/nonexistent/cpd".into()), None).unwrap();
     conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
     conn.pragma_update(None, "legacy_alter_table", "ON").unwrap();
-    for migration in &MIGRATIONS[..n] {
-        migration(conn, &home).unwrap();
+    for legacy in &LEGACY[..n] {
+        (legacy.apply)(conn).unwrap();
     }
     conn.pragma_update(None, "legacy_alter_table", "OFF").unwrap();
     conn.pragma_update(None, "user_version", n as i64).unwrap();
@@ -34,7 +33,7 @@ fn migrating_an_empty_database_gives_every_versions_schema_hash() {
     for (n, expected) in SCHEMA_HASHES.iter().enumerate() {
         let conn = connection(&dir.path().join(format!("v{}.db", n + 1)));
         at_version(&conn, n + 1);
-        assert_eq!(schema_hash(&conn).unwrap(), *expected, "version {}", n + 1);
+        assert_eq!(legacy_schema_hash(&conn).unwrap(), *expected, "version {}", n + 1);
     }
 }
 
@@ -221,7 +220,7 @@ fn after_migration_3_the_sequence_never_goes_back_and_the_history_lists_archived
 }
 
 #[test]
-fn the_events_check_allows_the_five_new_kinds_and_still_refuses_an_unknown_one() {
+fn events_allow_the_five_new_kinds_and_still_refuse_an_unknown_one() {
     let dir = tempfile::tempdir().unwrap();
     let home = home(&dir);
     version_2_with_events(&home);
@@ -237,7 +236,7 @@ fn the_events_check_allows_the_five_new_kinds_and_still_refuses_an_unknown_one()
         store.write("test", |tx| Ok::<_, CpdError>(insert(tx, kind)?)).unwrap_or_else(|e| panic!("{kind}: {e:?}"));
     }
     let err = store.write("test", |tx| Ok::<_, CpdError>(insert(tx, "plan-exploded")?)).unwrap_err();
-    assert!(format!("{err:?}").contains("CHECK"), "{err:?}");
+    assert!(format!("{err:?}").contains("FOREIGN KEY"), "an Event kind is a foreign key to event_kinds: {err:?}");
 }
 
 // ---------- migration 4 ----------
@@ -265,7 +264,12 @@ const FP: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 /// A version 2 database with one Plan in each phase, Jobs, Dependencies,
 /// Attempts, an Escalation, a Plan review, Events and Context records.
 fn version_2(home: &CpdHome) {
-    let sql = format!(
+    database_at(home, 2, &version_2_sql());
+}
+
+/// The rows of [`version_2`].
+fn version_2_sql() -> String {
+    format!(
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at) VALUES
            ('l-gr', 'lead', 'ctx', 'gr', 'lead', '/src', 'O3', 'idle', '{T}', '{T}'),
@@ -312,8 +316,7 @@ fn version_2(home: &CpdHome) {
          INSERT INTO context_records (context, id, kind, at, machine, text, plan_id, plan_machine, plan_repo, plan_jira) VALUES
            ('ctx', 'm1-p1', 'plan', '{T}', 'm1', 'Grounding', 'gr', 'm1', '/src/pay', 'PAY-1');
          INSERT INTO context_records (context, id, kind, at, machine, text) VALUES ('ctx', 'm1-n1', 'note', '{T}', 'm1', 'A note');"
-    );
-    database_at(home, 2, &sql);
+    )
 }
 
 /// `version_2`, migrated by `Store::open`.
@@ -503,7 +506,7 @@ fn a_tree_menu_version_3_database_migrates_to_6_keeping_archived_at() {
     let home = home(&dir);
     version_3(&home);
     // The starting schema is exactly the one tree-menu's migration 3 installs.
-    assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[2]);
+    assert_eq!(legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[2]);
 
     let mut store = Store::open(&home, 5000).unwrap();
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
@@ -582,7 +585,7 @@ fn version_4(home: &CpdHome) {
 fn migrated_4(dir: &tempfile::TempDir) -> Store {
     let home = home(dir);
     version_4(&home);
-    assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[3]);
+    assert_eq!(legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[3]);
     let store = Store::open(&home, 5000).unwrap();
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     store
@@ -714,7 +717,7 @@ fn migrated_5(dir: &tempfile::TempDir) -> (Store, Vec<(String, String)>) {
     let home = home(dir);
     version_5(&home);
     let conn = Connection::open(home.db()).unwrap();
-    assert_eq!(schema_hash(&conn).unwrap(), SCHEMA_HASHES[4]);
+    assert_eq!(legacy_schema_hash(&conn).unwrap(), SCHEMA_HASHES[4]);
     let before = prs_triggers(&conn);
     drop(conn);
     let store = Store::open(&home, 5000).unwrap();
@@ -770,7 +773,7 @@ fn a_version_10_database_migrates_to_11_with_its_rows_unknown_and_its_history_li
     let dir = tempfile::tempdir().unwrap();
     let home = home(&dir);
     version_10(&home);
-    assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[9]);
+    assert_eq!(legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[9]);
     let mut store = Store::open(&home, 5000).unwrap();
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
@@ -837,7 +840,7 @@ fn a_version_12_database_migrates_to_13_with_its_rows_authored_and_its_history_l
            ('acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'Pay', 0, 'open', 'none', 'failed', 't', 't'),
            ('acme/web', 9, 'https://github.com/acme/web/pull/9', 'Web', 1, 'open', 'approved', 'passed', 't', 't');",
     );
-    assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[11]);
+    assert_eq!(legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[11]);
     let mut store = Store::open(&home, 5000).unwrap();
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
@@ -979,12 +982,12 @@ fn a_version_6_database_migrates_to_12_with_inbox_items_and_the_four_inbox_event
     let dir = tempfile::tempdir().unwrap();
     let home = home(&dir);
     version_6(&home);
-    assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[5]);
+    assert_eq!(legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[5]);
 
     let mut store = Store::open(&home, 5000).unwrap();
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
-    assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[VERSION as usize - 1]);
+    assert_eq!(canonical_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASH);
     assert_eq!(
         rows(&mut store, "SELECT id, kind FROM events ORDER BY id"),
         vec![serde_json::json!([1, "context-created"]), serde_json::json!([2, "pr-merged"])]
@@ -1041,9 +1044,9 @@ fn a_migrated_database_has_the_schema_of_a_new_one() {
     let fresh = tempfile::tempdir().unwrap();
     let fresh_home = home(&fresh);
     drop(Store::open(&fresh_home, 5000).unwrap());
-    let hash = |home: &CpdHome| schema_hash(&Connection::open(home.db()).unwrap()).unwrap();
+    let hash = |home: &CpdHome| canonical_hash(&Connection::open(home.db()).unwrap()).unwrap();
     assert_eq!(hash(&home(&dir)), hash(&fresh_home));
-    assert_eq!(hash(&fresh_home), SCHEMA_HASHES[VERSION as usize - 1]);
+    assert_eq!(hash(&fresh_home), SCHEMA_HASH);
 }
 
 // ---------- migration 7: the old Context stores ----------
@@ -1166,7 +1169,8 @@ fn the_import_of_migration_7_is_idempotent_on_its_own() {
         "INSERT INTO txns (id, at, command, pid, session, cwd) VALUES (1, '{T}', 'migrate', 1, NULL, '/')"
     ))
     .unwrap();
-    migration_7(&conn, &home).unwrap();
+    migration_7(&conn).unwrap();
+    import_old_stores(&conn, &home.old_contexts_dir()).unwrap();
     let counts = |conn: &Connection| -> (i64, i64, i64) {
         let n = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
         (n("SELECT count(*) FROM contexts"), n("SELECT count(*) FROM context_records"), n("SELECT count(*) FROM events"))
@@ -1218,7 +1222,7 @@ fn a_folder_that_is_not_a_valid_store_fails_the_migration_and_changes_nothing() 
     let conn = Connection::open(home.db()).unwrap();
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
     assert_eq!(version, 6);
-    assert_eq!(schema_hash(&conn).unwrap(), SCHEMA_HASHES[5]);
+    assert_eq!(legacy_schema_hash(&conn).unwrap(), SCHEMA_HASHES[5]);
     let contexts: i64 = conn.query_row("SELECT count(*) FROM contexts", [], |r| r.get(0)).unwrap();
     assert_eq!(contexts, 1);
     assert!(home.old_contexts_dir().join("good/context.json").is_file(), "no folder is moved");
@@ -1240,7 +1244,125 @@ fn a_migration_that_breaks_a_foreign_key_fails_and_changes_nothing() {
     let conn = Connection::open(home.db()).unwrap();
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
     assert_eq!(version, 2);
-    assert_eq!(schema_hash(&conn).unwrap(), SCHEMA_HASHES[1]);
+    assert_eq!(legacy_schema_hash(&conn).unwrap(), SCHEMA_HASHES[1]);
+}
+
+// ---------- legacy migration 14: stub drafts ----------
+
+/// A version 13 database: a Plan in `dispatch` with one PR and a Job of every status
+/// (a review Job among them), two Dependencies and an Attempt.
+fn version_13(home: &CpdHome) {
+    database_at(
+        home,
+        13,
+        &format!(
+            "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm');
+             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+               VALUES ('l-pay', 'lead', 'ctx', 'pay', 'lead', '/src', 'O3', 'idle', '{T}', '{T}');
+             INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+               VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'l-pay', '{T}', '{T}');
+             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+               VALUES ('pay', 'api', '/src/pay', 'main', 'dispatch', 'cpd/pay/api', '/src/pay.wt', 1, '{T}', '{T}');
+             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+                               fingerprint, created_txn, created_at, merged_sha, failed_cause, cancel_reason, cancel_requested_at, review) VALUES
+               ('pay', 'api', 'a', 'A', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, '{FP}', 1, '{T}', 'abc', NULL, NULL, NULL, 0),
+               ('pay', 'api', 'b', 'B', 'S3', 'g', 'c', '[\"a\"]', '[\"b\"]', '[\"x\"]', 'running', 0, '{FP}', 1, '{T}', NULL, NULL, NULL, NULL, 0),
+               ('pay', 'api', 'c', 'C', 'O3', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, '{FP}', 1, '{T}', NULL, NULL, NULL, NULL, 0),
+               ('pay', 'api', 'd', 'D', 'S2', 'g', '', '[\"a\"]', '[\"b\"]', '[]', 'failed', 0, '{FP}', 1, '{T}', NULL, 'crashed', NULL, NULL, 0),
+               ('pay', 'api', 'e', 'E', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 1, NULL, 1, '{T}', NULL, NULL, NULL, NULL, 0),
+               ('pay', 'api', 'f', 'F', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'cancelled', 1, NULL, 1, '{T}', NULL, NULL, 'no', '{T}', 0),
+               ('pay', 'api', 'r', 'R', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 1, '{FP}', 1, '{T}', 'def', NULL, NULL, NULL, 1);
+             INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'c', 'b'), ('pay', 'e', 'c');
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+               VALUES ('pay', 'b-a1', 'b', 1, 'S3', 'ladder', 'running', 'cpd/pay--b-a1', '/src/pay--b-a1', '{T}');"
+        ),
+    );
+}
+
+#[test]
+fn a_version_13_database_migrates_to_14_keeping_every_job_and_seq_and_its_checks_triggers_and_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = home(&dir);
+    version_13(&home);
+    assert_eq!(legacy_schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[12]);
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
+    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
+    // The schema is the one a fresh store gets.
+    assert_eq!(canonical_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASH);
+
+    // Every row, with its seq, its Spec and its review flag, as it was.
+    let n = Value::Null;
+    assert_eq!(
+        rows(&mut store, "SELECT seq, key, status, tier, goal, context, touches, out_of_scope, review, fingerprint, merged_sha FROM jobs ORDER BY seq"),
+        vec![
+            serde_json::json!([1, "a", "merged", "S2", "g", "c", "[\"a\"]", "[]", 0, FP, "abc"]),
+            serde_json::json!([2, "b", "running", "S3", "g", "c", "[\"a\"]", "[\"x\"]", 0, FP, n]),
+            serde_json::json!([3, "c", "queued", "O3", "g", "c", "[\"a\"]", "[]", 0, FP, n]),
+            serde_json::json!([4, "d", "failed", "S2", "g", "", "[\"a\"]", "[]", 0, FP, n]),
+            serde_json::json!([5, "e", "draft", "S2", "g", "c", "[\"a\"]", "[]", 0, n, n]),
+            serde_json::json!([6, "f", "cancelled", "S2", "g", "c", "[\"a\"]", "[]", 0, n, n]),
+            serde_json::json!([7, "r", "merged", "S2", "g", "c", "[\"a\"]", "[]", 1, FP, "def"]),
+        ]
+    );
+    assert_eq!(count(&mut store, "SELECT count(*) FROM dependencies"), 2);
+    assert_eq!(count(&mut store, "SELECT count(*) FROM attempts"), 1);
+    assert_eq!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'jobs'"), 7, "the copy wrote no history row (the 7 are the inserts)");
+
+    // A draft with only a title is accepted, with either half given too, and a stub can be cancelled.
+    let stub = |key: &str, columns: &str, values: &str| {
+        format!(
+            "INSERT INTO jobs (plan, pr, key, title, {columns}status, appended, created_txn, created_at)
+             VALUES ('pay', 'api', '{key}', 'T', {values}'draft', 1, cpd_txn(), '{T}');"
+        )
+    };
+    write(&mut store, &stub("s1", "", "")).unwrap();
+    write(&mut store, &stub("s2", "tier, ", "'S2', ")).unwrap();
+    write(
+        &mut store,
+        &stub("s3", "goal, context, touches, acceptance, out_of_scope, ", "'g', 'c', '[\"a\"]', '[\"b\"]', '[]', "),
+    )
+    .unwrap();
+    assert_eq!(count(&mut store, "SELECT max(seq) FROM jobs"), 10, "AUTOINCREMENT goes on after the kept seq");
+    write(&mut store, &format!("UPDATE jobs SET status = 'cancelled', cancel_reason = 'no', cancel_requested_at = '{T}' WHERE key = 's1'")).unwrap();
+    assert_eq!(rows(&mut store, "SELECT status, tier, goal FROM jobs WHERE key = 's1'"), vec![serde_json::json!(["cancelled", n, n])]);
+
+    // Anything that is not a draft or cancelled has its Tier and Spec; the Spec is all or nothing; each field keeps its own check.
+    let check = |store: &mut Store, sql: &str| {
+        let message = sqlite_message(&refused(store, sql));
+        assert!(message.contains("CHECK constraint failed"), "{sql}: {message}");
+    };
+    check(&mut store, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 's2'"));
+    check(&mut store, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 's3'"));
+    check(&mut store, &stub("s4", "tier, goal, ", "'S2', 'g', "));
+    check(&mut store, &stub("s5", "tier, ", "'X9', "));
+    check(&mut store, &stub("s6", "goal, context, touches, acceptance, out_of_scope, ", "'', 'c', '[\"a\"]', '[\"b\"]', '[]', "));
+    check(&mut store, &stub("s7", "goal, context, touches, acceptance, out_of_scope, ", "'g', 'c', '[]', '[\"b\"]', '[]', "));
+    check(
+        &mut store,
+        &format!(
+            "INSERT INTO jobs (plan, pr, key, title, status, appended, fingerprint, created_txn, created_at)
+             VALUES ('pay', 'api', 's8', 'T', 'queued', 1, '{FP}', cpd_txn(), '{T}');"
+        ),
+    );
+
+    // Completed, a stub is queued like any draft.
+    write(&mut store, "UPDATE jobs SET tier = 'S2' WHERE key = 's3'").unwrap();
+    write(&mut store, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 's3'")).unwrap();
+
+    // The triggers of §4.4 on `jobs` are back: the Locked guard, the legal transitions, the history and no delete.
+    assert_eq!(
+        rows(&mut store, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'jobs' ORDER BY name"),
+        ["jobs_hist_ins", "jobs_hist_upd", "jobs_locked", "jobs_no_delete", "jobs_pr_dependencies", "jobs_status"].map(|name| serde_json::json!([name]))
+    );
+    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET tier = 'S1' WHERE key = 'c'")), "job_locked");
+    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET goal = 'x' WHERE key = 's1'")), "job_locked", "a cancelled stub is Locked");
+    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET status = 'queued' WHERE key = 'a'")), "illegal_transition");
+    assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM jobs WHERE key = 'a'")), "append_only: jobs");
+    write(&mut store, "UPDATE jobs SET title = 'New' WHERE key = 's2'").unwrap();
+    let history = rows(&mut store, "SELECT op, json_extract(after, '$.title'), json_extract(after, '$.tier') FROM history WHERE tbl = 'jobs' AND pk = '[9]'");
+    assert_eq!(history, vec![serde_json::json!(["insert", "T", "S2"]), serde_json::json!(["update", "New", "S2"])]);
 }
 
 // ---------- the triggers of §4.4 after migration 4 ----------
@@ -1454,6 +1576,442 @@ fn the_rebuilt_tables_history_triggers_list_their_new_columns() {
     assert!(plan.get("repo").is_none() && plan["title"] == "G2", "{plan}");
 }
 
+// ---------- named migrations: the conversion (§4.5 C1–C6) ----------
+
+/// A legacy store at version `n` with a row in every table, as the
+/// integer-era binary left it: `version_2`'s rows (without the columns
+/// migration 2 adds, for version 1), taken through the legacy migrations
+/// to `n`, and a tier and a need.
+fn legacy_store(home: &CpdHome, n: usize) {
+    let tier = format!(
+        "INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('1.0', 'S', 'm', '[]', '{T}');"
+    );
+    if n == 1 {
+        let sql = version_2_sql();
+        let v1 = sql
+            .replace("pr_seen, pr_polled_at, pr_title, pr_review_decision, pr_checks,", "pr_seen, pr_polled_at,")
+            .replace("'Open PR', 'approved', 'passed', ", "");
+        assert_ne!(v1, sql);
+        return database_at(home, 1, &format!("{v1}{tier}"));
+    }
+    database_at(home, 2, &format!("{}{tier}", version_2_sql()));
+    let conn = connection(&home.db());
+    conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+    conn.pragma_update(None, "legacy_alter_table", "ON").unwrap();
+    for legacy in &LEGACY[2..n] {
+        conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        (legacy.apply)(&conn).unwrap();
+        conn.execute_batch("COMMIT").unwrap();
+    }
+    conn.pragma_update(None, "legacy_alter_table", "OFF").unwrap();
+    conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+    conn.pragma_update(None, "user_version", n as i64).unwrap();
+    if n >= 4 {
+        conn.execute_batch(&format!("BEGIN; {WEB} INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay'); COMMIT;")).unwrap();
+    }
+    if n >= 12 {
+        conn.execute_batch(&format!(
+            "BEGIN; INSERT INTO inbox_items (kind, urgency, subject, plan, context, label, opened_at) VALUES ('dialog', 'red', 'plan:gr', 'gr', 'ctx', 'Answer', '{T}'); COMMIT;"
+        ))
+        .unwrap();
+    }
+    if n >= 14 {
+        // A stub draft: a title and no Tier or Spec (0014-register).
+        conn.execute_batch(&format!(
+            "BEGIN; INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at) VALUES ('gr', 'web', 'stub', 'Stub', 'draft', 1, 1, '{T}'); COMMIT;"
+        ))
+        .unwrap();
+    }
+}
+
+/// Every row of every table, as JSON text, by table, in rowid order.
+fn dump(conn: &Connection) -> std::collections::BTreeMap<String, Vec<String>> {
+    let tables: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_>>()
+        .unwrap();
+    tables
+        .into_iter()
+        .map(|table| {
+            let columns: Vec<String> = table_columns(conn, &table).unwrap().into_iter().map(|(c, _)| format!("\"{c}\"")).collect();
+            let without_rowid: bool =
+                conn.query_row("SELECT wr FROM pragma_table_list WHERE name = ?1", [&table], |r| r.get(0)).unwrap();
+            let order = if without_rowid { columns.join(", ") } else { "rowid".to_owned() };
+            let sql = format!("SELECT json_array({}) FROM \"{table}\" ORDER BY {order}", columns.join(", "));
+            let rows = conn.prepare(&sql).unwrap().query_map([], |r| r.get(0)).unwrap().collect::<Result<_>>().unwrap();
+            (table, rows)
+        })
+        .collect()
+}
+
+fn rowids(conn: &Connection, table: &str) -> Vec<i64> {
+    conn.prepare(&format!("SELECT rowid FROM \"{table}\" ORDER BY rowid"))
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_>>()
+        .unwrap()
+}
+
+fn fresh_canonical_hash() -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let home = home(&dir);
+    drop(Store::open(&home, 5000).unwrap());
+    canonical_hash(&Connection::open(home.db()).unwrap()).unwrap()
+}
+
+#[test]
+fn a_legacy_store_of_every_version_converts_keeping_every_row_and_id() {
+    let fresh = fresh_canonical_hash();
+    for n in 1..=LEGACY.len() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        legacy_store(&home, n);
+        let before = Connection::open(home.db()).unwrap();
+        let rows_before = dump(&before);
+        let ids_before: Vec<(String, Vec<i64>)> =
+            rows_before.keys().map(|t| (t.clone(), rowids(&before, t))).collect();
+        let empty: Vec<&String> = ids_before.iter().filter(|(_, ids)| ids.is_empty()).map(|(t, _)| t).collect();
+        assert!(empty.is_empty(), "version {n}: the fixture has no row in {empty:?}");
+        drop(before);
+
+        let store = Store::open(&home, 5000).unwrap_or_else(|e| panic!("version {n}: {e:?}"));
+        assert!(store.schema_mismatch().is_none(), "version {n}: {:?}", store.schema_mismatch());
+        drop(store);
+
+        let conn = Connection::open(home.db()).unwrap();
+        let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(version, VERSION, "version {n}");
+        let violations: i64 =
+            conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
+        assert_eq!(violations, 0, "version {n}: foreign_key_check");
+        for (table, ids) in &ids_before {
+            let after = rowids(&conn, table);
+            assert!(ids.iter().all(|id| after.contains(id)), "version {n}: {table} lost a row id");
+        }
+        let recorded: Vec<(String, String, i64, i64)> = conn
+            .prepare("SELECT name, compat, seq, converted FROM schema_migrations ORDER BY seq")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<Result<_>>()
+            .unwrap();
+        let legacy = LEGACY.iter().enumerate().map(|(i, l)| (l.name.to_owned(), l.compat.as_str().to_owned(), i as i64 + 1, 1));
+        let named = NAMED
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.name.to_owned(), m.compat.as_str().to_owned(), (LEGACY.len() + i) as i64 + 1, 0));
+        let expected: Vec<(String, String, i64, i64)> = legacy.chain(named).collect();
+        assert_eq!(recorded, expected, "version {n}: one converted row per legacy migration, then the named ones as not converted");
+        assert_eq!(canonical_hash(&conn).unwrap(), fresh, "version {n}: the canonical hash of a fresh store");
+
+        if n == LEGACY.len() {
+            // Nothing but the runner's own rows changes in a store that is already at the last legacy version.
+            let mut rows_after = dump(&conn);
+            let mut rows_before = rows_before;
+            assert_eq!(rows_after.remove("schema_migrations").map(|r| r.len()), Some(LEGACY.len() + NAMED.len()));
+            // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
+            assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(46));
+            assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
+            assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(17));
+            let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
+            assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
+            assert_eq!(txns_after.len(), txns_before.len() + 1);
+            assert_eq!(rows_after, rows_before);
+        }
+
+        // Converting twice is a no-op.
+        let snapshot = dump(&conn);
+        drop(conn);
+        drop(Store::open(&home, 5000).unwrap());
+        assert_eq!(dump(&Connection::open(home.db()).unwrap()), snapshot, "version {n}: the second open writes nothing");
+    }
+}
+
+#[test]
+fn a_fresh_store_records_its_legacy_migrations_as_not_converted() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = home(&dir);
+    drop(Store::open(&home, 5000).unwrap());
+    let conn = Connection::open(home.db()).unwrap();
+    let converted: Vec<i64> = conn
+        .prepare("SELECT converted FROM schema_migrations ORDER BY seq")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_>>()
+        .unwrap();
+    let all = LEGACY.len() + NAMED.len();
+    assert_eq!(converted, vec![0; all]);
+    let txns: i64 = conn.query_row("SELECT count(*) FROM schema_migrations s JOIN txns t ON t.id = s.txn", [], |r| r.get(0)).unwrap();
+    assert_eq!(txns, all as i64, "every row names the migrating transaction");
+}
+
+#[test]
+fn a_tampered_legacy_store_is_refused_and_left_as_it_was() {
+    for n in [1, 3, LEGACY.len()] {
+        for tamper in ["DROP TRIGGER contexts_no_delete", "CREATE INDEX stray ON contexts(title)"] {
+            let dir = tempfile::tempdir().unwrap();
+            let home = home(&dir);
+            legacy_store(&home, n);
+            let conn = connection(&home.db());
+            conn.execute_batch(tamper).unwrap();
+            let before = (dump(&conn), legacy_schema_hash(&conn).unwrap());
+            drop(conn);
+
+            let err = Store::open(&home, 5000).err().unwrap_or_else(|| panic!("version {n}, {tamper}: opened"));
+            assert_eq!(err.code(), ErrorCode::StoreTampered, "version {n}, {tamper}: {err:?}");
+            assert_eq!(err.details()["version"], n);
+
+            let conn = connection(&home.db());
+            let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+            assert_eq!(version, n as i64);
+            assert_eq!((dump(&conn), legacy_schema_hash(&conn).unwrap()), before, "version {n}, {tamper}: changed");
+        }
+    }
+}
+
+// ---------- the canonical form (§4.3) ----------
+
+#[test]
+fn normalizing_deletes_comments_and_collapses_whitespace_outside_quoted_runs() {
+    assert_eq!(normalize("  a  /* x */ b -- c\n d 'x  --y' [a  b] \"q\"\"  r\" `s  t`  "), "a b d 'x  --y' [a  b] \"q\"\"  r\" `s  t`");
+    assert_eq!(normalize("a/**/b"), "a b");
+    assert_eq!(normalize(""), "");
+}
+
+#[test]
+fn a_table_is_split_into_sorted_columns_ordered_constraints_and_options() {
+    let parts = table_parts(
+        "CREATE TABLE \"t\" (\n  \"Zed\" TEXT, -- a, comment (with parens\n  b TEXT DEFAULT 'x,y' CHECK (b IN ('a', 'b')),\n  \
+         [a c] INTEGER,\n  \"check\" TEXT,\n  CONSTRAINT k UNIQUE (b, \"Zed\"),\n  check (length(b) > 0)\n) STRICT, WITHOUT ROWID",
+    )
+    .unwrap();
+    let keys: Vec<&str> = parts.columns.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(keys, ["a c", "b", "check", "zed"]);
+    assert_eq!(parts.columns[1].1, "b TEXT DEFAULT 'x,y' CHECK (b IN ('a', 'b'))");
+    assert_eq!(parts.constraints, ["CONSTRAINT k UNIQUE (b, \"Zed\")", "check (length(b) > 0)"]);
+    assert_eq!(parts.options, "STRICT, WITHOUT ROWID");
+}
+
+#[test]
+fn add_column_in_either_order_gives_one_canonical_table() {
+    let canonical = |statements: &[&str]| {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT, CHECK (a <> 'x')) STRICT;").unwrap();
+        for statement in statements {
+            conn.execute_batch(statement).unwrap();
+        }
+        canonical_entries(&conn).unwrap()
+    };
+    let (b, c) = ("ALTER TABLE t ADD COLUMN b TEXT", "ALTER TABLE t ADD COLUMN c TEXT NOT NULL DEFAULT ''");
+    assert_eq!(canonical(&[b, c]), canonical(&[c, b]));
+    assert_ne!(canonical(&[b]), canonical(&[c]));
+}
+
+#[test]
+fn a_changed_generated_trigger_or_object_is_a_schema_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    for (tamper, trigger) in [
+        ("DROP TRIGGER plans_no_delete", Some("plans_no_delete")),
+        ("DROP TRIGGER plans_hist_upd; CREATE TRIGGER plans_hist_upd AFTER UPDATE ON plans BEGIN SELECT 1; END", Some("plans_hist_upd")),
+        ("DROP TRIGGER plans_phase", None),
+        ("CREATE INDEX stray ON contexts (title)", None),
+        ("CREATE TRIGGER stray AFTER INSERT ON contexts BEGIN SELECT 1; END", None),
+    ] {
+        let home = CpdHome::resolve(Some(dir.path().join(format!("{}", tamper.len())).into()), None).unwrap();
+        drop(Store::open(&home, 5000).unwrap());
+        connection(&home.db()).execute_batch(tamper).unwrap();
+        let store = Store::open(&home, 5000).unwrap();
+        let mismatch = store.schema_mismatch().unwrap_or_else(|| panic!("{tamper}: no mismatch"));
+        assert_eq!(mismatch.object.as_deref(), trigger, "{tamper}");
+        let err = { let mut store = store; store.write("test", |_| Ok(())).unwrap_err() };
+        assert_eq!(err.code(), ErrorCode::StoreTampered, "{tamper}");
+    }
+}
+
+// ---------- migration 6: pull_requests and prs.pull_request, on a version 5 database with polled PRs ----------
+
+fn names(conn: &Connection, sql: &str) -> std::collections::BTreeSet<String> {
+    conn.prepare(sql).unwrap().query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+}
+
+/// A database at version 5, holding
+/// - `op1`: its PR open, `pr_title` and the review and the checks polled;
+/// - `op2`: its PR open, never polled (`pr_title` null);
+/// - `mg`: its PR merged;
+/// - `wt`: its PR waiting.
+fn version_5_four_prs(home: &CpdHome) {
+    let pr = |plan: &str, key: &str, status: &str, more: &str, values: &str| {
+        let (worktree, started) = if status == "waiting" { ("NULL", "NULL") } else { ("'/wt'", "'2026-01-02T00:00:00.000Z'") };
+        format!(
+            "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+               VALUES ('{plan}', 'ctx', 'Plan {plan}', '{phase}', 'l-{plan}', 't', {locked}, {done});
+             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+               VALUES ('l-{plan}', 'lead', 'ctx', '{plan}', 'Lead', '/', 'O3', 'idle', 't', 't');
+             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at {more})
+               VALUES ('{plan}', '{key}', '/r/{key}', 'main', '{status}', 'cpd/{plan}/{key}', {worktree}, {started}, 1, 't' {values});",
+            phase = match status {
+                "waiting" => "plan",
+                "merged" => "done",
+                _ => "pr",
+            },
+            locked = if status == "waiting" { "NULL" } else { "'2026-01-02T00:00:00.000Z'" },
+            done = if status == "merged" { "'2026-01-09T00:00:00.000Z'" } else { "NULL" },
+        )
+    };
+    let sql = format!(
+        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+         {}{}{}{}",
+        pr(
+            "op1",
+            "api",
+            "open",
+            ", pr_number, pr_url, pr_opened_at, pr_polled_at, pr_title, pr_review_decision, pr_checks",
+            ", 7, 'https://github.com/acme/api/pull/7', '2026-01-05T00:00:00.000Z', '2026-01-06T00:00:00.000Z', 'Add api', 'approved', 'passed'",
+        ),
+        pr(
+            "op2",
+            "web",
+            "open",
+            ", pr_number, pr_url, pr_opened_at",
+            ", 8, 'https://github.com/acme/web/pull/8', '2026-01-05T00:00:01.000Z'",
+        ),
+        pr(
+            "mg",
+            "docs",
+            "merged",
+            ", pr_number, pr_url, pr_opened_at, merged_at",
+            ", 9, 'https://github.com/acme/docs/pull/9', '2026-01-05T00:00:02.000Z', '2026-01-08T00:00:00.000Z'",
+        ),
+        pr("wt", "cli", "waiting", "", ""),
+    );
+    database_at(home, 5, &sql);
+}
+
+#[test]
+fn a_version_5_database_with_polled_prs_migrates_to_6_with_the_back_filled_rows_and_the_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = home(&dir);
+    version_5_four_prs(&home);
+    let store = Store::open(&home, 5000).unwrap();
+    // Its schema is exactly that of a fresh database at version 6.
+    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    drop(store);
+    let conn = Connection::open(home.db()).unwrap();
+    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    assert_eq!(version, VERSION);
+    let violations: i64 = conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
+    assert_eq!(violations, 0);
+
+    // One row per PR with a number, in Plan and key order; the title is the polled one, else the Plan's.
+    let row = |r: &rusqlite::Row| -> rusqlite::Result<Value> {
+        Ok(serde_json::json!([r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?,
+                  r.get::<_, i64>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, String>(9)?,
+                  r.get::<_, Option<String>>(10)?, r.get::<_, String>(11)?]))
+    };
+    let rows: Vec<Value> = conn
+        .prepare("SELECT id, repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at FROM pull_requests ORDER BY id")
+        .unwrap()
+        .query_map([], row)
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            serde_json::json!([1, "acme/docs", 9, "https://github.com/acme/docs/pull/9", "Plan mg", 0, "merged", "none", "none",
+                   "2026-01-05T00:00:02.000Z", "2026-01-08T00:00:00.000Z", "2026-01-05T00:00:02.000Z"]),
+            serde_json::json!([2, "acme/api", 7, "https://github.com/acme/api/pull/7", "Add api", 0, "open", "approved", "passed",
+                   "2026-01-05T00:00:00.000Z", null, "2026-01-05T00:00:00.000Z"]),
+            serde_json::json!([3, "acme/web", 8, "https://github.com/acme/web/pull/8", "Plan op2", 0, "open", "none", "none",
+                   "2026-01-05T00:00:01.000Z", null, "2026-01-05T00:00:01.000Z"]),
+        ]
+    );
+
+    // `pull_request` is set exactly for the open and the merged PR; every other column is kept.
+    let prs: Vec<(String, String, Option<i64>, Option<i64>, Option<String>)> = conn
+        .prepare("SELECT plan, status, pull_request, pr_number, merged_at FROM prs ORDER BY plan")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let some = |s: &str| Some(s.to_owned());
+    assert_eq!(
+        prs,
+        vec![
+            ("mg".into(), "merged".into(), Some(1), Some(9), some("2026-01-08T00:00:00.000Z")),
+            ("op1".into(), "open".into(), Some(2), Some(7), None),
+            ("op2".into(), "open".into(), Some(3), Some(8), None),
+            ("wt".into(), "waiting".into(), None, None, None),
+        ]
+    );
+    let columns = names(&conn, "SELECT name FROM pragma_table_info('prs')");
+    for gone in ["pr_seen", "pr_polled_at", "pr_title", "pr_review_decision", "pr_checks"] {
+        assert!(!columns.contains(gone), "{gone}");
+    }
+    for kept in ["pr_number", "pr_url", "pr_opened_at", "pull_request"] {
+        assert!(columns.contains(kept), "{kept}");
+    }
+
+    // The history triggers of both tables exist; the back-fill wrote an `insert` row for each pull request.
+    let triggers = names(&conn, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name IN ('pull_requests', 'prs')");
+    for trigger in ["pull_requests_hist_ins", "pull_requests_hist_upd", "pull_requests_hist_del", "pull_requests_owned", "prs_hist_ins", "prs_hist_upd"] {
+        assert!(triggers.contains(trigger), "{trigger}: {triggers:?}");
+    }
+    assert!(!triggers.contains("pull_requests_no_delete"));
+    let inserted: Vec<String> = conn
+        .prepare("SELECT pk FROM history WHERE tbl = 'pull_requests' AND op = 'insert' ORDER BY id")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(inserted, ["[1]", "[2]", "[3]"]);
+}
+
+
+#[test]
+fn an_owned_pull_request_cannot_be_deleted_and_an_unowned_one_can_with_a_history_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = home(&dir);
+    version_5_four_prs(&home);
+    let mut store = Store::open(&home, 5000).unwrap();
+    // Owned by the open PR of `op1`.
+    let err = refused(&mut store, "DELETE FROM pull_requests WHERE number = 7");
+    assert_eq!(err.code(), ErrorCode::StoreFailed, "{err:?}");
+    assert!(sqlite_message(&err).starts_with("append_only"), "{err:?}");
+    // Owned by the merged PR of `mg`.
+    assert!(sqlite_message(&refused(&mut store, "DELETE FROM pull_requests WHERE number = 9")).starts_with("append_only"));
+    // One no PR points to: a pull request of the User's that no Plan owns.
+    write(
+        &mut store,
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
+         VALUES ('acme/other', 3, 'https://github.com/acme/other/pull/3', 'Other', 1, 'open', 'none', 'pending', 't', 't')",
+    )
+    .unwrap();
+    let id: i64 = store.read(|c| Ok(c.query_row("SELECT id FROM pull_requests WHERE number = 3", [], |r| r.get(0))?)).unwrap();
+    write(&mut store, "DELETE FROM pull_requests WHERE number = 3").unwrap();
+    let (op, pk, before, after): (String, String, String, Option<String>) = store
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT op, pk, before, after FROM history WHERE tbl = 'pull_requests' ORDER BY id DESC LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!((op.as_str(), pk, after), ("delete", format!("[{id}]"), None));
+    let before: Value = serde_json::from_str(&before).unwrap();
+    assert_eq!((&before["repo"], &before["number"], &before["draft"], &before["checks"]), (&serde_json::json!("acme/other"), &serde_json::json!(3), &serde_json::json!(1), &serde_json::json!("pending")));
+    let left: i64 = store.read(|c| Ok(c.query_row("SELECT count(*) FROM pull_requests", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(left, 3);
+}
+
 // ---------- migration 8 ----------
 
 /// A version-7 database with a Plan in each phase and `plan-phase` Events that say `pr`.
@@ -1603,7 +2161,7 @@ fn a_version_8_database_migrates_to_9_keeping_every_event_and_accepts_session_me
         .unwrap();
     assert_eq!(count(&mut store, "SELECT max(id) FROM events"), 42);
     assert!(sqlite_message(&refused(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'session-mail', 'x', '{}')"))
-        .contains("CHECK constraint failed"));
+        .contains("FOREIGN KEY constraint failed"), "after kind-tables a kind is a foreign key");
     // The indexes and guards are back.
     assert_eq!(count(&mut store, "SELECT count(*) FROM sqlite_schema WHERE tbl_name = 'events' AND type = 'index' AND name LIKE 'events_%'"), 3);
     assert_eq!(sqlite_message(&refused(&mut store, "UPDATE events SET text = 'x'")), "append_only: events");

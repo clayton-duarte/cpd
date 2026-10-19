@@ -1,7 +1,6 @@
 //! `cpd inbox list | show | snooze | dismiss` (commands.md §21). The commands
 //! read the items and hide them; only the engine's E8 opens and closes them.
 
-use std::fs::File;
 use std::process::{Command as Process, Stdio};
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -14,9 +13,7 @@ use crate::clock::timestamp;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
-use crate::home::CpdHome;
 use crate::ids::ContextId;
-use crate::lock;
 use crate::output::Output;
 
 #[derive(clap::Subcommand, Debug)]
@@ -137,7 +134,7 @@ fn engine_down(now: OffsetDateTime) -> Value {
         "id": null,
         "kind": Kind::EngineDown.as_str(),
         "urgency": Urgency::Red.as_str(),
-        "label": "engine is down",
+        "label": model::ENGINE_DOWN_LABEL,
         "subject": "engine",
         "context": null,
         "plan": null,
@@ -152,25 +149,6 @@ fn engine_down(now: OffsetDateTime) -> Value {
         "dismissed_at": null,
         "age_seconds": 0,
     })
-}
-
-/// Whether an engine holds `locks/watch.lock` (§1.4): a non-blocking shared
-/// lock, which never fails because another reader holds one. A missing file
-/// means no engine ever ran; this takes no lock and writes nothing.
-fn engine_running(home: &CpdHome) -> Result<bool, CpdError> {
-    let path = home.watch_lock();
-    let failed = |what: &dyn std::fmt::Display| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Cannot use the engine's lock {}: {what}.", path.display()))
-            .with("lock", path.display().to_string())
-    };
-    let file = match File::open(&path) {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => return Err(failed(&e)),
-    };
-    // The probe's shared lock is let go when `file` drops.
-    let shared = lock::shared(&file).map_err(|e| failed(&format!("flock failed: {e}")))?;
-    Ok(!shared)
 }
 
 fn context_exists(conn: &Connection, context: &ContextId) -> Result<(), CpdError> {
@@ -203,7 +181,7 @@ fn list(args: ListArgs) -> Result<Output, CpdError> {
 
     let mut items = Vec::new();
     // An absent engine is an open item with no Context: neither `--closed` nor `--context` lists it.
-    let running = engine_running(&home)?;
+    let running = model::engine_running(&home)?;
     if !running && !args.closed && args.context.is_none() {
         items.push(engine_down(now));
     }

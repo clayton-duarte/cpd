@@ -3,12 +3,15 @@
 //! closes them. The commands only hide items (commands.md §21).
 
 use std::collections::BTreeSet;
+use std::fs::File;
 
 use rusqlite::{Connection, Row, params};
 
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
+use crate::home::CpdHome;
 use crate::ids::{ContextId, JobKey, PlanId, RecordId, SessionId};
+use crate::lock;
 use crate::store::Store;
 
 /// What an item is about (§2.2's kinds). `EngineDown` is never stored, and the
@@ -206,6 +209,28 @@ pub enum State {
 pub struct Filter {
     pub context: Option<ContextId>,
     pub state: State,
+}
+
+/// The label of `engine-down` (§2.2), the one item that is never stored.
+pub const ENGINE_DOWN_LABEL: &str = "engine is down";
+
+/// Whether an engine holds `locks/watch.lock` (§1.4): a non-blocking shared
+/// lock, which never fails because another reader holds one. A missing file
+/// means no engine ever ran; this takes no lock and writes nothing.
+pub fn engine_running(home: &CpdHome) -> Result<bool, CpdError> {
+    let path = home.watch_lock();
+    let failed = |what: &dyn std::fmt::Display| {
+        CpdError::new(ErrorCode::StoreFailed, format!("Cannot use the engine's lock {}: {what}.", path.display()))
+            .with("lock", path.display().to_string())
+    };
+    let file = match File::open(&path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(failed(&e)),
+    };
+    // The probe's shared lock is let go when `file` drops.
+    let shared = lock::shared(&file).map_err(|e| failed(&format!("flock failed: {e}")))?;
+    Ok(!shared)
 }
 
 /// The items of `filter`. Open ones come in §2.2's order: red, yellow,
