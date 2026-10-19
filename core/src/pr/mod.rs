@@ -270,16 +270,20 @@ fn lock(env: &mut Env, pr: &PrRow, source: &str) -> Result<RepoLock, CpdError> {
         Ok(rows)
     })?;
     // An Attempt whose driver is alive is that driver's to finish; only a free driver lock is an orphan.
-    let mut orphans = false;
+    let mut orphans = Vec::new();
     for (plan, attempt) in merging {
         let (plan, attempt) = (PlanId::parse(&plan)?, AttemptId::parse(&attempt)?);
-        orphans |= merge::take_free_driver_lock(&env.home, &plan, &attempt)?.is_some();
+        if merge::take_free_driver_lock(&env.home, &plan, &attempt)?.is_some() {
+            orphans.push((plan, attempt));
+        }
     }
     // R needs pi's catalog only to pick the next Tier of an Attempt it ends `crashed`.
-    if orphans {
+    if !orphans.is_empty() {
         let catalog = config::load_catalog(&env.config)?;
         let ctx = merge::Ctx { home: &env.home, config: &env.config, catalog: &catalog, source, metrics: &|_| None };
-        merge::recover(&mut env.store, &ctx, &lock)?;
+        for (plan, attempt) in &orphans {
+            merge::recover_attempt(&mut env.store, &ctx, plan, attempt)?;
+        }
     }
     Ok(lock)
 }

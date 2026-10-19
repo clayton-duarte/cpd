@@ -1,6 +1,7 @@
 //! E2, liveness (contract §3.4, §3.6, §3.7, §7.4):
 //! - an Attempt not `ended` whose driver lock is free (its driver died): in
-//!   `merging`, the merge recovery R under the per-repo lock; in any other
+//!   `merging`, the merge recovery R for that Attempt, with no repo lock
+//!   (hs-d243); in any other
 //!   status, ended `cancelled` if a cancel was requested, else `crashed`;
 //! - an Attempt with a live driver: `stop_request = cancelled` when its Job
 //!   has a cancel request, `timed_out` when its active time is over
@@ -10,8 +11,6 @@
 //!   and a Lead's dead pane is cleaned up (G2): its park or ctx window is
 //!   killed, or, in the chat slot, the pane becomes the placeholder (§3.6).
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use rusqlite::params;
@@ -27,7 +26,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::host::layout::{MAIN_WINDOW, View, attempt_window};
 use crate::host::tmux::{OPT_SESSION, Pane, Spawn};
 use crate::ids::{AttemptId, PlanId, SessionId};
-use crate::merge::{self, RepoLock};
+use crate::merge;
 
 /// An Attempt not `ended`, as E2 reads it.
 struct Active {
@@ -37,7 +36,6 @@ struct Active {
     started_at: String,
     stop_request: Option<String>,
     cancel_requested: bool,
-    repo: PathBuf,
 }
 
 impl Active {
@@ -54,8 +52,8 @@ pub(super) fn run(engine: &mut Engine) {
 fn attempts(engine: &mut Engine) {
     let active = engine.store.read(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT a.plan, a.id, a.status, a.started_at, a.stop_request, j.cancel_requested_at IS NOT NULL, r.repo
-               FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job JOIN prs r ON r.plan = j.plan AND r.key = j.pr
+            "SELECT a.plan, a.id, a.status, a.started_at, a.stop_request, j.cancel_requested_at IS NOT NULL
+               FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
               WHERE a.status <> 'ended' ORDER BY a.plan, a.id",
         )?;
         let rows = stmt
@@ -67,12 +65,11 @@ fn attempts(engine: &mut Engine) {
                     r.get::<_, String>(3)?,
                     r.get::<_, Option<String>>(4)?,
                     r.get::<_, bool>(5)?,
-                    r.get::<_, String>(6)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
-            .map(|(plan, id, status, started_at, stop_request, cancel_requested, repo)| {
+            .map(|(plan, id, status, started_at, stop_request, cancel_requested)| {
                 Ok(Active {
                     plan: PlanId::parse(&plan)?,
                     id: AttemptId::parse(&id)?,
@@ -80,7 +77,6 @@ fn attempts(engine: &mut Engine) {
                     started_at,
                     stop_request,
                     cancel_requested,
-                    repo: PathBuf::from(repo),
                 })
             })
             .collect::<Result<Vec<_>, CpdError>>()
@@ -93,15 +89,13 @@ fn attempts(engine: &mut Engine) {
         Err(e) => return engine.fail(Step::E2, About::Machine, &e),
     };
 
-    // The repos with a `merging` Attempt whose driver died, and a Plan to report against.
-    let mut orphaned: BTreeMap<PathBuf, PlanId> = BTreeMap::new();
     for attempt in &active {
         let probe = lock::probe(&engine.home, &attempt.plan, &attempt.id);
         let result = match probe {
             // Released at once: R takes it again itself.
-            Ok(Some(_free)) if attempt.status == "merging" => {
-                orphaned.entry(attempt.repo.clone()).or_insert_with(|| attempt.plan.clone());
-                Ok(())
+            Ok(Some(free)) if attempt.status == "merging" => {
+                drop(free);
+                recover(engine, attempt)
             }
             Ok(Some(lock)) => end_dead(engine, attempt, lock),
             Ok(None) => stop_request(engine, attempt),
@@ -110,13 +104,6 @@ fn attempts(engine: &mut Engine) {
         match result {
             Ok(()) => engine.clear(Step::E2, &attempt.about()),
             Err(e) => engine.fail(Step::E2, attempt.about(), &e),
-        }
-    }
-    for (repo, plan) in orphaned {
-        let about = About::Plan(plan);
-        match recover(engine, &repo) {
-            Ok(()) => engine.clear(Step::E2, &about),
-            Err(e) => engine.fail(Step::E2, about, &e),
         }
     }
 }
@@ -154,16 +141,15 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
     Ok(())
 }
 
-/// R (§7.4) for the orphaned merges of `repo`, when its per-repo lock is free
-/// now; otherwise at a later tick, or by the next holder of the lock.
-fn recover(engine: &mut Engine, repo: &std::path::Path) -> Result<(), CpdError> {
-    let Some(lock) = RepoLock::try_take(&engine.home, repo)? else { return Ok(()) };
+/// R (§7.4) for the orphaned merge `active`, with no repo lock (hs-d243): R
+/// takes the Attempt's driver lock itself; held again meanwhile, it does
+/// nothing and a later tick looks again.
+fn recover(engine: &mut Engine, active: &Active) -> Result<(), CpdError> {
     let catalog = engine.catalog()?;
     let metrics = |a: &merge::Attempt| metrics(a.worker_session.as_ref());
     let ctx = merge::Ctx { home: &engine.home, config: &engine.config, catalog: &catalog, source: SOURCE, metrics: &metrics };
-    let recovered = merge::recover(&mut engine.store, &ctx, &lock)?;
-    drop(lock);
-    for r in recovered {
+    let recovered = merge::recover_attempt(&mut engine.store, &ctx, &active.plan, &active.id)?;
+    if let Some(r) = recovered {
         let how = r.end.map_or_else(|| "nothing changed: git failed".to_owned(), |e| format!("ended {} / {}", e.outcome(), e.cause()));
         engine.log.line(&format!("E2: recovered the merge of {} (Plan {}): {how}", r.attempt, r.plan));
     }
