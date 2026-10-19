@@ -98,6 +98,16 @@ impl CpdHome {
         self.root.join("archive").join("contexts")
     }
 
+    /// `bin/`: the directory first on every pi Session's `PATH` (contract §6.5, hs-d310).
+    pub fn bin_dir(&self) -> PathBuf {
+        self.root.join("bin")
+    }
+
+    /// `bin/git`: the `git` wrapper that refuses `git stash` (contract §1.4, §6.5).
+    pub fn git_wrapper(&self) -> PathBuf {
+        self.bin_dir().join("git")
+    }
+
     /// `locks/`.
     pub fn locks_dir(&self) -> PathBuf {
         self.root.join("locks")
@@ -305,6 +315,8 @@ mod tests {
         assert_eq!(h.db(), p("/h/.cpd/cpd.db"));
         assert_eq!(h.old_contexts_dir(), p("/h/.cpd/contexts"));
         assert_eq!(h.archived_contexts_dir(), p("/h/.cpd/archive/contexts"));
+        assert_eq!(h.bin_dir(), p("/h/.cpd/bin"));
+        assert_eq!(h.git_wrapper(), p("/h/.cpd/bin/git"));
         assert_eq!(h.watch_lock(), p("/h/.cpd/locks/watch.lock"));
         assert_eq!(
             h.attempt_lock(&plan(), &attempt()),
