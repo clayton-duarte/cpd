@@ -1,7 +1,7 @@
 //! The `logs` view (commands.md §13.2, §17; R36): the Event log, in a tmux popup opened by the StatusBar's
 //! `▤` button. It takes the latest [`RECENT`] Events, then looks at the store's highest Event id every
-//! `events.poll_ms` and appends what is new. ↑↓, j/k and PgUp/PgDn scroll; `q` or Esc closes it. It makes no
-//! write of its own. With `--event <id>` it opens at that Event (a click on an `engine-error` or `engine-down` Inbox
+//! `events.poll_ms` and appends what is new. ↑↓, j/k, PgUp/PgDn and the mouse wheel scroll (the dialog kit's
+//! scrolling, mouse capture on); its title is a section header; `q` or Esc closes it. It makes no write of its own. With `--event <id>` it opens at that Event (a click on an `engine-error` or `engine-down` Inbox
 //! item): the Event's line is selected and scrolled into view, and the view does not follow until the User scrolls to the
 //! bottom; an Event outside the latest [`RECENT`] is read on its own and shown first.
 //!
@@ -70,7 +70,7 @@ pub(crate) fn open_at(tmux: &Tmux, event: Option<i64>) -> Result<(), CpdError> {
 pub(super) fn run(args: Args) -> Result<Output, CpdError> {
     run_view(
         "logs",
-        Capture::Keys,
+        Capture::Mouse,
         || {
             let home = CpdHome::from_env()?;
             let config = Config::load(&home)?;
@@ -88,7 +88,12 @@ pub(super) fn run(args: Args) -> Result<Output, CpdError> {
     )
 }
 
-/// Draws and follows until `q` or Esc. A failed read keeps the Events on screen and shows its error in the last row
+/// The keys that close the view.
+fn closes(code: KeyCode) -> bool {
+    matches!(code, KeyCode::Char('q') | KeyCode::Esc)
+}
+
+/// Draws and follows until `q` or Esc; the keys and the wheel scroll. A failed read keeps the Events on screen and shows its error in the last row
 /// until a read succeeds ([`kept`]).
 fn show(
     terminal: &mut ratatui::DefaultTerminal,
@@ -108,13 +113,11 @@ fn show(
         }
         if event::poll(poll)? {
             redraw = true;
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                        code => log.key(code),
-                    }
-                }
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press && closes(key.code) => return Ok(()),
+                Event::Key(key) => drop(log.key(key)),
+                Event::Mouse(mouse) => drop(log.mouse(mouse)),
+                _ => {}
             }
         }
         // the follow's cursor stays where it was on a failure, so the next poll reads what was missed

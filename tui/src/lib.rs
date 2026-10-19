@@ -9,11 +9,13 @@
 //! - [`statusbar`]: the StatusBar, the bottom row, with reset-layout;
 //! - [`history`]: an archived Session's pi file, read-only, in the chat slot;
 //! - [`merge`]: the merge confirmation, a popup of the Deploy column's merge icon;
+//! - [`dialog`]: the dialog kit (confirm, input and scrollable text), the popups of the tree and the StatusBar;
 //! - [`tree`], [`plan`], [`worker`]: the other views of §13.2.
 
 mod background;
 mod chat;
 mod cockpit;
+pub mod dialog;
 mod history;
 pub mod link;
 pub mod logs;
@@ -80,6 +82,8 @@ pub enum View {
     Logs(logs::Args),
     /// The merge confirmation of a pull request (opened by the Deploy column's merge icon, in a tmux popup)
     Merge(merge::Args),
+    /// A dialog of the kit: `confirm`, `input` or `text` (opened by the cockpit's actions, in a tmux popup)
+    Dialog(dialog::Args),
     /// The chat slot's placeholder
     Chat,
 }
@@ -97,6 +101,7 @@ pub fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdError> {
             View::Legend => widgets::legend::run(),
             View::Logs(args) => logs::run(args),
             View::Merge(args) => merge::run(args, run_command),
+            View::Dialog(args) => dialog::run(args),
             View::Chat => chat::run(),
         }),
     }

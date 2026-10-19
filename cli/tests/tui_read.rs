@@ -976,7 +976,7 @@ fn the_follow_tells_when_a_pull_request_row_changed_though_no_event_came() {
     let (_env, mut store) = fixture();
     let cursor = read::slots(&mut store, 3).unwrap().1;
     let mut follow = read::Follow::new(&mut store, &[], cursor).unwrap();
-    let mut changes = |store: &mut Store, follow: &mut read::Follow| {
+    let changes = |store: &mut Store, follow: &mut read::Follow| {
         let changes = follow.poll_changes(store).unwrap();
         (changes.events.len(), changes.pulls, changes.any())
     };

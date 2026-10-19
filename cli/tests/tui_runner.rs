@@ -8,7 +8,7 @@
 mod common;
 
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{SLEEP_SECONDS, TestEnv, wait_until};
 use cpd_tui::{Capture, ViewError, run_view};

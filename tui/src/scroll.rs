@@ -1,99 +1,18 @@
-//! The one scroll and wrap module of the views (tui-G1): a scroll position that follows the end until the User scrolls,
-//! with the keys and the wheel that move it ([`Scroll`]); and a body of styled lines wrapped to the width it is drawn
-//! at ([`Scroller`], the Worker and history views). The Event log scrolls its rows with a [`Scroll`] too.
+//! The wrapped, scrolled body of the Worker and history views ([`Scroller`]), and the wrapping it draws with
+//! ([`wrap`]). The scroll position is the dialog kit's [`Scroll`], the one scroll module of the views (tui-G1, hs-d297);
+//! the Event log scrolls with it too.
 
 use ratatui::Frame;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseEvent};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-/// The rows one turn of the mouse wheel scrolls.
-const WHEEL: usize = 3;
+use crate::dialog::scroll::Scroll;
+
 /// The indent of a continuation row made by [`wrap`].
 const INDENT: usize = 6;
-
-/// Where a view of `rows` rows, `height` of them on screen, is: at row `top`, or following the end.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Scroll {
-    /// The first row shown; [`usize::MAX`] follows the end.
-    top: usize,
-    rows: usize,
-    height: usize,
-}
-
-impl Default for Scroll {
-    fn default() -> Scroll {
-        Scroll { top: usize::MAX, rows: 0, height: 0 }
-    }
-}
-
-impl Scroll {
-    /// Sets the size, as of the last draw. A view that shows the end follows it from now on.
-    pub fn fit(&mut self, rows: usize, height: usize) {
-        (self.rows, self.height) = (rows, height);
-        if self.top >= self.max() {
-            self.top = usize::MAX;
-        }
-    }
-
-    fn max(&self) -> usize {
-        self.rows.saturating_sub(self.height)
-    }
-
-    /// The first row shown.
-    pub fn top(&self) -> usize {
-        self.top.min(self.max())
-    }
-
-    /// Whether the view shows the end, and so follows new rows.
-    pub fn follows(&self) -> bool {
-        self.top == usize::MAX
-    }
-
-    /// The rows on screen.
-    pub fn height(&self) -> usize {
-        self.height
-    }
-
-    /// The rows on screen: a page.
-    pub fn page(&self) -> usize {
-        self.height.max(1)
-    }
-
-    /// Moves `by` rows from where the view is; reaching the end follows it.
-    pub fn by(&mut self, by: isize) {
-        self.to(self.top().saturating_add_signed(by));
-    }
-
-    /// Shows from row `top` on; reaching the end follows it.
-    pub fn to(&mut self, top: usize) {
-        self.top = if top >= self.max() { usize::MAX } else { top };
-    }
-
-    /// Up and `k`, Down and `j`, PageUp, PageDown scroll; End and `G` follow the end again.
-    pub fn key(&mut self, code: KeyCode) {
-        let page = self.page() as isize;
-        match code {
-            KeyCode::Up | KeyCode::Char('k') => self.by(-1),
-            KeyCode::Down | KeyCode::Char('j') => self.by(1),
-            KeyCode::PageUp => self.by(-page),
-            KeyCode::PageDown => self.by(page),
-            KeyCode::End | KeyCode::Char('G') => self.top = usize::MAX,
-            _ => {}
-        }
-    }
-
-    /// The wheel moves [`WHEEL`] rows.
-    pub fn mouse(&mut self, m: MouseEvent) {
-        match m.kind {
-            MouseEventKind::ScrollUp => self.by(-(WHEEL as isize)),
-            MouseEventKind::ScrollDown => self.by(WHEEL as isize),
-            _ => {}
-        }
-    }
-}
 
 /// Styled lines, scrolled, following the end until the User scrolls.
 pub(crate) struct Scroller {
@@ -101,11 +20,13 @@ pub(crate) struct Scroller {
     /// `lines` wrapped to the width they were last drawn at.
     wrapped: Option<(u16, Vec<Line<'static>>)>,
     scroll: Scroll,
+    /// The view shows the end, so new lines scroll in; scrolling decides it again (at the end it follows).
+    follow: bool,
 }
 
 impl Scroller {
     pub fn new() -> Scroller {
-        Scroller { lines: Vec::new(), wrapped: None, scroll: Scroll::default() }
+        Scroller { lines: Vec::new(), wrapped: None, scroll: Scroll::default(), follow: true }
     }
 
     pub fn set_lines(&mut self, lines: Vec<Line<'static>>) {
@@ -121,12 +42,25 @@ impl Scroller {
         if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
             return true;
         }
-        self.scroll.key(key.code);
+        self.scroll.key(key);
+        self.settle();
         false
     }
 
     pub fn mouse(&mut self, m: MouseEvent) {
         self.scroll.mouse(m);
+        self.settle();
+    }
+
+    /// Whether the view shows the end, and so follows new lines.
+    #[cfg(test)]
+    pub fn follows(&self) -> bool {
+        self.follow
+    }
+
+    /// Scrolling decides whether the view follows: it does at the end.
+    fn settle(&mut self) {
+        self.follow = self.scroll.offset() == self.scroll.max_offset();
     }
 
     /// Draws the rows in `body`, wrapped to its width.
@@ -135,8 +69,11 @@ impl Scroller {
             self.wrapped = Some((body.width, wrap(&self.lines, usize::from(body.width))));
         }
         let rows = &self.wrapped.as_ref().expect("wrapped above").1;
-        self.scroll.fit(rows.len(), usize::from(body.height));
-        let shown = rows.iter().skip(self.scroll.top()).take(usize::from(body.height)).cloned().collect::<Vec<_>>();
+        self.scroll.resize(rows.len(), usize::from(body.height));
+        if self.follow {
+            self.scroll.by(isize::MAX);
+        }
+        let shown = rows.iter().skip(self.scroll.offset()).take(usize::from(body.height)).cloned().collect::<Vec<_>>();
         f.render_widget(Paragraph::new(shown), body);
     }
 }
@@ -195,30 +132,33 @@ mod tests {
         assert_eq!(narrow, ["abcdefgh", "ijklmnop", "qrstuvwx", "yz"], "no indent in a narrow pane");
     }
 
-    /// A position over 10 rows, 4 on screen.
-    fn scroll() -> Scroll {
-        let mut s = Scroll::default();
-        s.fit(10, 4);
-        s
+    fn press(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, ratatui::crossterm::event::KeyModifiers::NONE)
     }
 
+    /// The rows a 4-row body shows of `n` one-row lines.
+    fn drawn(s: &mut Scroller, n: usize) -> Vec<String> {
+        s.set_lines((0..n).map(|i| Line::from(format!("line {i}"))).collect());
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(20, 4)).unwrap();
+        terminal.draw(|f| s.draw(f, f.area())).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (0..4).map(|y| (0..20).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned()).collect()
+    }
+
+    /// tui-G1: the body follows the end until it moves up, and follows again at the end (End or G).
     #[test]
-    fn a_position_follows_the_end_until_it_moves_up_and_follows_again_at_the_end() {
-        let mut s = scroll();
-        assert!((s.follows(), s.top()) == (true, 6));
-        s.key(KeyCode::Up);
-        assert!((s.follows(), s.top()) == (false, 5));
-        s.fit(11, 4);
-        assert_eq!(s.top(), 5, "a new row does not move it");
-        s.key(KeyCode::PageUp);
-        s.key(KeyCode::PageUp);
-        assert_eq!(s.top(), 0, "it stops at the top");
-        s.key(KeyCode::Char('j'));
-        s.key(KeyCode::PageDown);
-        assert_eq!(s.top(), 5);
-        s.key(KeyCode::Char('G'));
+    fn the_body_follows_the_end_until_it_moves_up_and_follows_again_at_the_end() {
+        let mut s = Scroller::new();
+        assert_eq!(drawn(&mut s, 10)[3], "line 9");
+        assert!(!s.key(press(KeyCode::Up)));
+        assert!(!s.follows());
+        assert_eq!(drawn(&mut s, 11)[3], "line 8", "a new line does not move it");
+        s.key(press(KeyCode::Char('G')));
         assert!(s.follows());
-        s.key(KeyCode::Down);
-        assert!(s.follows(), "it stops at the end");
+        assert_eq!(drawn(&mut s, 12)[3], "line 11");
+        s.key(press(KeyCode::PageUp));
+        s.key(press(KeyCode::End));
+        assert!(s.follows(), "End follows again");
+        assert!(s.key(press(KeyCode::Char('q'))), "q ends the view");
     }
 }
