@@ -349,6 +349,29 @@ fn a_dispatched_attempt_runs_its_worker_merges_and_ends_merged() {
     assert!(left.iter().all(|n| !n.to_string_lossy().starts_with("attempt-")), "{left:?}");
 }
 
+/// engine-G3: a driver log line starts with a time, as `watch.log`'s do (RFC 3339 UTC, milliseconds).
+#[test]
+fn driver_log_lines_start_with_a_time() {
+    let fx = fx();
+    fx.pi(WORKER);
+    let out = fx.dispatch(JOB).ok();
+    fx.wait_end(ATTEMPT, &out["pid"]);
+
+    let log = fx.log(ATTEMPT);
+    // The last line is the command's JSON output (stdout), not a log line.
+    let lines: Vec<&str> = log.lines().filter(|l| !l.starts_with('{')).collect();
+    assert!(lines.len() >= 3, "{log}");
+    for line in lines {
+        let (time, rest) = line.split_once(' ').unwrap_or_else(|| panic!("no time in {line:?}\n{log}"));
+        let b = time.as_bytes();
+        let shaped = time.len() == 24
+            && b[4] == b'-' && b[7] == b'-' && b[10] == b'T' && b[13] == b':' && b[16] == b':' && b[19] == b'.' && b[23] == b'Z'
+            && time.bytes().enumerate().all(|(i, c)| matches!(i, 4 | 7 | 10 | 13 | 16 | 19 | 23) || c.is_ascii_digit());
+        assert!(shaped, "no time at the start of {line:?}\n{log}");
+        assert!(rest.starts_with("cpd attempt run: "), "{line:?}");
+    }
+}
+
 // ---------- PRs across repos (R34) ----------
 
 #[test]
