@@ -1,11 +1,10 @@
-//! The `plans` row as read (contract §2.2 Plan), with the per-repo columns of
-//! its one PR (`prs`, R34 A6), and the phases of §3.1.
+//! The `plans` row as read (contract §2.2 Plan), and the phases of §3.1.
 
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
 use crate::error::CpdError;
-use crate::ids::{ContextId, PlanId, PrKey, SessionId};
+use crate::ids::{ContextId, PlanId, SessionId};
 
 /// A Plan's phase (§3.1).
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,28 +34,14 @@ impl Phase {
     }
 }
 
-/// The columns of a Plan's one PR (R34).
+/// One Plan, parsed at the boundary: the `plans` row alone, so a Plan with no
+/// PR (just created) is found too.
 #[derive(Clone, Debug)]
-pub(super) struct PlanPr {
-    pub key: PrKey,
-    pub repo: String,
-    pub base: String,
-    pub lead_branch: String,
-    pub lead_worktree: Option<String>,
-    /// The pull request, once opened.
-    pub pull_request: Option<Value>,
-    pub all_merged_at: Option<String>,
-}
-
-/// One Plan, parsed at the boundary.
-#[derive(Clone, Debug)]
-pub(super) struct PlanRow {
+pub struct PlanRow {
     pub id: PlanId,
     pub context: ContextId,
     pub title: String,
     pub jira: Option<String>,
-    /// The Plan's one PR; none until `pr add` (a Plan in grounding or plan may have none).
-    pub pr: Option<PlanPr>,
     pub phase: Phase,
     pub lead_session: SessionId,
     pub created_at: String,
@@ -66,87 +51,26 @@ pub(super) struct PlanRow {
     pub archived_at: Option<String>,
 }
 
-const COLUMNS: &str = "p.id, p.context, p.title, p.jira, r.key, r.repo, r.base, r.lead_branch, r.lead_worktree, p.phase, p.lead_session,
-    r.pr_number, r.pr_url, r.pr_opened_at, r.all_merged_at, p.created_at, p.locked_at, p.done_at, p.archived_at";
-
-/// `plans p` with its one PR `r`, if it has one (R34: until a Plan has several
-/// PRs, the first PR it got stands for the Plan's repo, branch, worktree and PR).
-const PLAN_WITH_PR: &str = "plans p LEFT JOIN prs r ON r.plan = p.id
-    AND r.key = (SELECT key FROM prs WHERE plan = p.id ORDER BY created_txn, key LIMIT 1)";
+const COLUMNS: &str = "id, context, title, jira, phase, lead_session, created_at, locked_at, done_at, archived_at";
 
 /// The columns as SQLite returns them, before parsing.
-type Raw = (
-    String,
-    String,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    String,
-    String,
-    (Option<i64>, Option<String>, Option<String>),
-    Option<String>,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-);
+type Raw = (String, String, String, Option<String>, String, String, String, Option<String>, Option<String>, Option<String>);
 
 fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
-    Ok((
-        r.get(0)?,
-        r.get(1)?,
-        r.get(2)?,
-        r.get(3)?,
-        r.get(4)?,
-        r.get(5)?,
-        r.get(6)?,
-        r.get(7)?,
-        r.get(8)?,
-        r.get(9)?,
-        r.get(10)?,
-        (r.get(11)?, r.get(12)?, r.get(13)?),
-        r.get(14)?,
-        r.get(15)?,
-        r.get(16)?,
-        r.get(17)?,
-        r.get(18)?,
-    ))
+    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?))
 }
 
 impl PlanRow {
     fn parse(raw: Raw) -> Result<PlanRow, CpdError> {
-        let (id, context, title, jira, pr_key, repo, base, lead_branch, lead_worktree, phase, lead_session, pull_request, all_merged_at, created_at, locked_at, done_at, archived_at) = raw;
+        let (id, context, title, jira, phase, lead_session, created_at, locked_at, done_at, archived_at) = raw;
         let id = PlanId::parse(&id).map_err(|_| CpdError::bad_row(format!("Plan id {id:?}")))?;
         let field = |name: &str, value: &str| CpdError::bad_row(format!("Plan {id} has {name} {value:?}"));
-        let pull_request = match pull_request {
-            (Some(number), Some(url), Some(opened_at)) => Some(json!({"number": number, "url": url, "opened_at": opened_at})),
-            _ => None,
-        };
-        // The PR columns come from a LEFT JOIN: all null, or all present (`key`, `repo`, `base` and `lead_branch` are NOT NULL in `prs`).
-        let pr = match (pr_key, repo, base, lead_branch) {
-            (Some(key), Some(repo), Some(base), Some(lead_branch)) => Some(PlanPr {
-                key: PrKey::parse(&key).map_err(|_| field("PR key", &key))?,
-                repo,
-                base,
-                lead_branch,
-                lead_worktree,
-                pull_request,
-                all_merged_at,
-            }),
-            (None, None, None, None) => None,
-            _ => return Err(CpdError::bad_row(format!("Plan {id} has a partial PR row"))),
-        };
         Ok(PlanRow {
             context: ContextId::parse(&context).map_err(|_| field("context", &context))?,
             phase: Phase::parse(&phase).ok_or_else(|| field("phase", &phase))?,
             lead_session: SessionId::parse(&lead_session).map_err(|_| field("lead_session", &lead_session))?,
             title,
             jira,
-            pr,
             created_at,
             locked_at,
             done_at,
@@ -155,36 +79,68 @@ impl PlanRow {
         })
     }
 
-    /// Every field of §2.2 Plan, as `plan show` prints it; the PR's are null for a Plan with no PR.
+    /// Every field of §2.2 Plan except `prs`, as `plan show` prints them.
     pub fn to_json(&self) -> Value {
-        let pr = self.pr.as_ref();
         json!({
-            "id": self.id, "context": self.context, "title": self.title, "jira": self.jira,
-            "repo": pr.map(|p| &p.repo), "base": pr.map(|p| &p.base), "lead_branch": pr.map(|p| &p.lead_branch),
-            "lead_worktree": pr.map(|p| &p.lead_worktree), "phase": self.phase.as_str(), "lead_session": self.lead_session,
-            "pr": pr.map(|p| &p.pull_request), "all_merged_at": pr.map(|p| &p.all_merged_at),
-            "created_at": self.created_at, "locked_at": self.locked_at, "done_at": self.done_at,
+            "id": self.id, "context": self.context, "title": self.title, "jira": self.jira, "phase": self.phase.as_str(),
+            "lead_session": self.lead_session, "created_at": self.created_at, "locked_at": self.locked_at, "done_at": self.done_at,
             "archived_at": self.archived_at,
         })
     }
 }
 
-/// Every Plan matching `filter` (SQL after `WHERE`, on `p` and `r`), oldest first.
+/// Every Plan matching `filter` (SQL after `WHERE`), oldest first.
 pub(super) fn query(conn: &Connection, filter: &str, params: &[&dyn rusqlite::ToSql]) -> Result<Vec<PlanRow>, CpdError> {
-    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM {PLAN_WITH_PR} WHERE {filter} ORDER BY p.created_at, p.id"))?;
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM plans WHERE {filter} ORDER BY created_at, id"))?;
     let rows = stmt.query_map(params, raw)?.collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter().map(PlanRow::parse).collect()
 }
 
 /// The Plan `id`, if it exists.
-pub(super) fn find(conn: &Connection, id: &PlanId) -> Result<Option<PlanRow>, CpdError> {
-    let raw = conn
-        .query_row(&format!("SELECT {COLUMNS} FROM {PLAN_WITH_PR} WHERE p.id = ?1"), [id.as_str()], raw)
-        .optional()?;
+pub fn find(conn: &Connection, id: &PlanId) -> Result<Option<PlanRow>, CpdError> {
+    let raw = conn.query_row(&format!("SELECT {COLUMNS} FROM plans WHERE id = ?1"), [id.as_str()], raw).optional()?;
     raw.map(PlanRow::parse).transpose()
 }
 
 /// The Plan `id`, else `plan_not_found`.
-pub(super) fn load(conn: &Connection, id: &PlanId) -> Result<PlanRow, CpdError> {
+pub fn load(conn: &Connection, id: &PlanId) -> Result<PlanRow, CpdError> {
     find(conn, id)?.ok_or_else(|| CpdError::plan_not_found(id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::home::CpdHome;
+    use crate::store::Store;
+
+    /// commands-G3: the one Plan row is the Plan as `plan show` prints it
+    /// (§2.2 Plan except `prs`), with or without a PR.
+    #[test]
+    fn the_plan_row_is_the_plans_row_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        store
+            .write("fixture", |tx| {
+                tx.execute_batch(
+                    "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+                     INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                       VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
+                     INSERT INTO plans (id, context, title, jira, phase, lead_session, created_at)
+                       VALUES ('pay', 'ctx', 'Pay', 'PAY-1', 'grounding', 'lead1', 't');",
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let id = PlanId::parse("pay").unwrap();
+        let plan = store.read(|conn| load(conn, &id)).unwrap();
+        assert_eq!(
+            plan.to_json(),
+            json!({"id": "pay", "context": "ctx", "title": "Pay", "jira": "PAY-1", "phase": "grounding", "lead_session": "lead1",
+                   "created_at": "t", "locked_at": null, "done_at": null, "archived_at": null})
+        );
+        let all = store.read(|conn| query(conn, "context = ?1", &[&"ctx"])).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].to_json(), plan.to_json());
+    }
 }

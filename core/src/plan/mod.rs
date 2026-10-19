@@ -35,7 +35,7 @@ use crate::output::Output;
 
 pub use fingerprint::plan_fingerprint;
 pub use jobs::locked_fingerprint;
-pub use row::Phase;
+pub use row::{Phase, PlanRow};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {

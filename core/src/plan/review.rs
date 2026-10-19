@@ -7,8 +7,7 @@ use serde_json::{Value, json};
 use super::fingerprint::{PrSpec, load_prs, plan_fingerprint};
 use super::jobs::{self, Job};
 use super::overlap::{self, Overlap};
-use super::row::Phase;
-use super::show::{Head, load_head};
+use super::row::{self, Phase, PlanRow};
 use super::{DecideArgs, Env, RenderArgs, ReviewArgs, read_text_file, render, write_file};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
@@ -67,7 +66,7 @@ fn find(conn: &Connection, plan: &PlanId, review: ReviewId) -> Result<Option<Rev
 
 /// What `plan render` and `plan review` read, in one read transaction.
 struct Snapshot {
-    plan: Head,
+    plan: PlanRow,
     prs: Vec<PrSpec>,
     jobs: Vec<Job>,
     overlaps: Vec<Overlap>,
@@ -80,7 +79,7 @@ fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
         let (prs, jobs) = (load_prs(conn, id)?, jobs::load(conn, id)?);
         let overlaps = overlap::find(&prs, &jobs, &overlap::load_others(conn, id)?);
         Ok(Snapshot {
-            plan: load_head(conn, id)?,
+            plan: row::load(conn, id)?,
             review: latest(conn, id)?,
             fingerprint: plan_fingerprint(conn, id)?,
             prs,
@@ -147,7 +146,7 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
 
     let requested_at = env.store.write("plan review", |tx| {
         // Compare-and-swap on what was read: the phase, the plan fingerprint and the latest review.
-        let (now, fingerprint_now, latest_now) = (load_head(tx, &id)?, plan_fingerprint(tx, &id)?, latest(tx, &id)?);
+        let (now, fingerprint_now, latest_now) = (row::load(tx, &id)?, plan_fingerprint(tx, &id)?, latest(tx, &id)?);
         let latest_number = latest_now.map_or(0, |r| r.id.number().get());
         if now.phase != plan.phase || fingerprint_now != fingerprint || latest_number + 1 != number {
             return Err(CpdError::new(ErrorCode::CasLost, format!("Plan {id} changed while its review was rendered: rerun the command."))
@@ -182,7 +181,7 @@ pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
     let feedback = args.feedback_file.as_deref().map(read_text_file).transpose()?;
     let mut env = Env::open()?;
     let (phase, review, fingerprint, queued) = env.store.read(|conn| {
-        let phase = load_head(conn, &id)?.phase;
+        let phase = row::load(conn, &id)?.phase;
         let review = find(conn, &id, args.review)?.ok_or_else(|| {
             CpdError::new(ErrorCode::ReviewNotFound, format!("Plan {id} has no review {}.", args.review))
                 .with("plan", id.as_str())
@@ -201,7 +200,7 @@ pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
 
     let (review, phase, current, queued) = env.store.write("plan decide", |tx| {
         // The phase and the drafts as they are now: an approval queues what it covered only.
-        let phase = load_head(tx, &id)?.phase;
+        let phase = row::load(tx, &id)?.phase;
         let all = jobs::load(tx, &id)?;
         let current = review.fingerprint == plan_fingerprint(tx, &id)?;
         let changed = tx.execute(

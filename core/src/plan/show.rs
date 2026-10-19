@@ -9,83 +9,13 @@ use serde_json::{Value, json};
 
 use super::fingerprint::plan_fingerprint;
 use super::jobs::{self, Job};
-use super::row::Phase;
+use super::row::{self, PlanRow};
 use super::{Env, ShowArgs};
 use crate::error::CpdError;
 use crate::events::highest_id;
-use crate::ids::{ContextId, PlanId, SessionId};
+use crate::ids::PlanId;
 use crate::output::Output;
 use crate::pr::pulls;
-
-/// A Plan as `plan list`, `plan show` and `plan render` read it: the `plans`
-/// row alone, so a Plan with no PR (just created) is found too.
-#[derive(Clone, Debug)]
-pub(super) struct Head {
-    pub id: PlanId,
-    pub context: ContextId,
-    pub title: String,
-    pub jira: Option<String>,
-    pub phase: Phase,
-    pub lead_session: SessionId,
-    pub created_at: String,
-    pub locked_at: Option<String>,
-    pub done_at: Option<String>,
-    /// When it was archived (contract §2.2 "Archived"), else none.
-    pub archived_at: Option<String>,
-}
-
-impl Head {
-    /// Every field of §2.2 Plan except `prs`, as `plan show` prints them.
-    fn to_json(&self) -> Value {
-        json!({
-            "id": self.id, "context": self.context, "title": self.title, "jira": self.jira, "phase": self.phase.as_str(),
-            "lead_session": self.lead_session, "created_at": self.created_at, "locked_at": self.locked_at, "done_at": self.done_at,
-            "archived_at": self.archived_at,
-        })
-    }
-}
-
-type RawHead = (String, String, String, Option<String>, String, String, String, Option<String>, Option<String>, Option<String>);
-
-fn parse_head(raw: RawHead) -> Result<Head, CpdError> {
-    let (id, context, title, jira, phase, lead_session, created_at, locked_at, done_at, archived_at) = raw;
-    let id = PlanId::parse(&id).map_err(|_| CpdError::bad_row(format!("Plan id {id:?}")))?;
-    let field = |name: &str, value: &str| CpdError::bad_row(format!("Plan {id} has {name} {value:?}"));
-    Ok(Head {
-        context: ContextId::parse(&context).map_err(|_| field("context", &context))?,
-        phase: Phase::parse(&phase).ok_or_else(|| field("phase", &phase))?,
-        lead_session: SessionId::parse(&lead_session).map_err(|_| field("lead_session", &lead_session))?,
-        title,
-        jira,
-        created_at,
-        locked_at,
-        done_at,
-        archived_at,
-        id,
-    })
-}
-
-const HEAD_COLUMNS: &str = "id, context, title, jira, phase, lead_session, created_at, locked_at, done_at, archived_at";
-
-fn head_row(r: &rusqlite::Row) -> rusqlite::Result<RawHead> {
-    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?))
-}
-
-/// The Plan `id`, else `plan_not_found`.
-pub(super) fn load_head(conn: &Connection, id: &PlanId) -> Result<Head, CpdError> {
-    let raw = conn
-        .query_row(&format!("SELECT {HEAD_COLUMNS} FROM plans WHERE id = ?1"), [id.as_str()], head_row)
-        .optional()?
-        .ok_or_else(|| CpdError::plan_not_found(id))?;
-    parse_head(raw)
-}
-
-/// Every Plan matching `filter` (SQL after `WHERE`), oldest first.
-pub(super) fn query_heads(conn: &Connection, filter: &str, params: &[&dyn rusqlite::ToSql]) -> Result<Vec<Head>, CpdError> {
-    let mut stmt = conn.prepare(&format!("SELECT {HEAD_COLUMNS} FROM plans WHERE {filter} ORDER BY created_at, id"))?;
-    let rows = stmt.query_map(params, head_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
-    rows.into_iter().map(parse_head).collect()
-}
 
 /// Every PR of `plan` in key order, `cancelled` ones included, with every
 /// field of §2.2 PR (`needs`, `pr` and `pull_request` parsed). `jobs` is not here.
@@ -134,7 +64,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
     let snapshot = env.store.read(|conn| {
-        let plan = load_head(conn, &id)?;
+        let plan = row::load(conn, &id)?;
         let prs = pr_values(conn, &id)?;
         let jobs = jobs::load(conn, &id)?;
         let attempts = attempts(conn, &id)?;
@@ -142,7 +72,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         let review = latest_review(conn, &id)?;
         Ok((plan, prs, jobs, attempts, escalations, review, highest_id(conn)?))
     })?;
-    let (plan, mut prs, jobs, mut attempts, escalations, review, cursor): (Head, Vec<Value>, Vec<Job>, _, _, _, _) = snapshot;
+    let (plan, mut prs, jobs, mut attempts, escalations, review, cursor): (PlanRow, Vec<Value>, Vec<Job>, _, _, _, _) = snapshot;
     let mut tamper = env.store.tamper()?;
     tamper.extend(jobs::tampered(&id, &jobs));
     for pr in &mut prs {

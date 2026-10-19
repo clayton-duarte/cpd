@@ -4,7 +4,8 @@
 use serde_json::{Value, json};
 
 use super::jobs;
-use super::show::{pr_values, query_heads};
+use super::row;
+use super::show::pr_values;
 use super::{Env, ListArgs};
 use crate::error::CpdError;
 use crate::events::highest_id;
@@ -18,7 +19,7 @@ pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
     let (plans, cursor) = env.store.read(|conn| {
         let context = args.context.as_ref().map(|c| c.as_str().to_owned());
         let phase = args.phase.map(|p| p.as_str());
-        let heads = query_heads(conn, "(?1 IS NULL OR context = ?1) AND (?2 IS NULL OR phase = ?2)", &[&context, &phase])?;
+        let heads = row::query(conn, "(?1 IS NULL OR context = ?1) AND (?2 IS NULL OR phase = ?2)", &[&context, &phase])?;
         let mut out = Vec::new();
         for plan in heads {
             let jobs = jobs::load(conn, &plan.id)?;
