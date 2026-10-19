@@ -478,6 +478,15 @@ test("cpd-manager splits work by area, maps files and sets the landing order", (
   assert.match(manager, /Set the landing order/);
 });
 
+test("both skills describe a stacked PR: gh pr edit --base, then cpd pr push", () => {
+  for (const skill of ["cpd-lead", "cpd-manager"]) {
+    const text = skillFiles(skill)[0]!.text;
+    assert.match(text, /gh pr edit <n> --base/, `${skill}: gh pr edit --base`);
+    assert.match(text, /cpd pr add <key> --repo <path> --base/, `${skill}: pr add --base`);
+    assert.match(text, /cpd pr push --pr <key>/, `${skill}: cpd pr push`);
+  }
+});
+
 test("urgent Jobs: both skills state the flag, the command and the explicit-request rule", () => {
   for (const skill of ["cpd-lead", "cpd-manager"]) {
     const text = skillFiles(skill)[0]!.text;
