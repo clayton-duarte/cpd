@@ -84,29 +84,102 @@ pub fn ok(dir: &Path, args: &[&str]) -> Result<String, CpdError> {
     }
 }
 
-/// How many times [`fetch`] runs a fetch that a concurrent `worktree add` broke.
-const FETCH_ROUNDS: u32 = 20;
+/// How many rounds a git call that hit a transient race of concurrent git calls gets (contract §7).
+const RACE_ROUNDS: u32 = 20;
 
-/// `git fetch <args>`, as [`ok`], retried while it fails on a concurrent
-/// `git worktree add` (contract §7): that writes a placeholder all-zero
-/// `.git/worktrees/<id>/HEAD` before the real one, and the fetch's
-/// connectivity check, which walks every worktree's `HEAD`, dies on it with
-/// `bad object worktrees/<id>/HEAD`. Only that failure is retried, up to 20
-/// rounds 100–500 ms apart; any other is `git_failed` at once.
-pub fn fetch(dir: &Path, args: &[&str]) -> Result<String, CpdError> {
-    let all: Vec<&str> = std::iter::once("fetch").chain(args.iter().copied()).collect();
+/// Runs `args` as [`ok`], again while it fails with stderr that `transient`
+/// accepts: up to [`RACE_ROUNDS`] rounds, 100–500 ms apart, `between` run before
+/// each new round. Any other failure, or the last round's, is `git_failed` at once.
+fn retry_transient(
+    dir: &Path,
+    args: &[&str],
+    transient: fn(&str) -> bool,
+    mut between: impl FnMut(),
+) -> Result<String, CpdError> {
     let mut round = 1;
     loop {
-        let out = run(dir, &all)?;
+        let out = run(dir, args)?;
         if out.code == 0 {
             return Ok(out.stdout);
         }
-        if round >= FETCH_ROUNDS || !out.stderr.contains("bad object worktrees/") {
-            return Err(failed(dir, &all, format!("git fetch exited {}.", out.code), Some(out.code), &out.stderr));
+        if round >= RACE_ROUNDS || !transient(&out.stderr) {
+            let message = format!("git {} exited {}.", args.first().copied().unwrap_or(""), out.code);
+            return Err(failed(dir, args, message, Some(out.code), &out.stderr));
         }
         round += 1;
+        between();
         let jitter = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() % 401);
-        std::thread::sleep(std::time::Duration::from_millis(100 + u64::from(jitter)));
+        std::thread::sleep(Duration::from_millis(100 + u64::from(jitter)));
+    }
+}
+
+/// Whether a failed `git fetch` died on a concurrent `git worktree add`: that
+/// writes a placeholder all-zero `.git/worktrees/<id>/HEAD` before the real
+/// one, and the fetch's connectivity check, which walks every worktree's
+/// `HEAD`, dies on it with `bad object worktrees/<id>/HEAD`.
+pub fn is_fetch_race(stderr: &str) -> bool {
+    stderr.contains("bad object worktrees/")
+}
+
+/// Whether a failed `git worktree add` read another `worktree add`'s
+/// half-created `.git/worktrees/<id>/`: `fatal: failed to read
+/// .git/worktrees/<id>/commondir: Success` (the file created, not yet written)
+/// or `...: No such file or directory`.
+pub fn is_worktree_add_race(stderr: &str) -> bool {
+    stderr.lines().any(|line| {
+        line.starts_with("fatal: failed to read ")
+            && line.contains("worktrees/")
+            && (line.ends_with("/commondir: Success") || line.ends_with("/commondir: No such file or directory"))
+    })
+}
+
+/// `git fetch <args>`, as [`ok`], retried while it fails on a concurrent
+/// `git worktree add` ([`is_fetch_race`], contract §7).
+pub fn fetch(dir: &Path, args: &[&str]) -> Result<String, CpdError> {
+    let all: Vec<&str> = std::iter::once("fetch").chain(args.iter().copied()).collect();
+    retry_transient(dir, &all, is_fetch_race, || {})
+}
+
+/// `git worktree add <args>`, as [`ok`], retried while it fails on a concurrent
+/// `git worktree add` ([`is_worktree_add_race`], contract §7). `path` is the
+/// worktree being added, and is the caller's own: a partial one the failed round left
+/// is removed before the next.
+pub fn worktree_add(dir: &Path, args: &[&str], path: &Path) -> Result<String, CpdError> {
+    let all: Vec<&str> = ["worktree", "add"].into_iter().chain(args.iter().copied()).collect();
+    retry_transient(dir, &all, is_worktree_add_race, || {
+        let target = path.to_string_lossy();
+        let _ = run(dir, &["worktree", "remove", "--force", "--force", &target]);
+        let _ = std::fs::remove_dir_all(path);
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_fetch_race, is_worktree_add_race};
+
+    #[test]
+    fn worktree_add_retries_the_reproduced_shapes_only() {
+        for stderr in [
+            "Preparing worktree (detached HEAD f094ea8)\nfatal: failed to read .git/worktrees/pay.gate-7/commondir: Success\n",
+            "fatal: failed to read .git/worktrees/w3/commondir: No such file or directory",
+        ] {
+            assert!(is_worktree_add_race(stderr), "{stderr}");
+        }
+        for stderr in [
+            "fatal: '/x/w' already exists",
+            "fatal: invalid reference: nosuch",
+            "fatal: failed to read .git/worktrees/w3/commondir: Permission denied",
+            "fatal: failed to read .git/index: Success",
+            "",
+        ] {
+            assert!(!is_worktree_add_race(stderr), "{stderr}");
+        }
+    }
+
+    #[test]
+    fn fetch_retries_only_the_placeholder_head() {
+        assert!(is_fetch_race("fatal: bad object worktrees/adding/HEAD"));
+        assert!(!is_fetch_race("fatal: couldn't find remote ref no-such-branch"));
     }
 }
 

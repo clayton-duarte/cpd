@@ -9,7 +9,7 @@ use nix::sys::signal::kill;
 use nix::unistd::Pid;
 
 use super::hooks::{HookOutcome, Operation, run_hook_as};
-use super::run::ok;
+use super::run::{ok, worktree_add};
 use super::worktree::{Setup, list};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::Hook;
@@ -100,13 +100,14 @@ pub struct GateWorktree {
 impl GateWorktree {
     /// `git -C <repo> worktree add --detach --lock --reason "cpd gate <pid>" W <sha>`,
     /// `W` the path of this process's pid (contract §7.6 step 2): no branch and
-    /// no `.git/config` write; locked, so `worktree prune` leaves it alone.
+    /// no `.git/config` write; locked, so `worktree prune` leaves it alone. Retried
+    /// while it fails on a concurrent `worktree add` of the repo (contract §7).
     pub fn add(repo: &Path, plan: &PlanId, key: &PrKey, sha: &str) -> Result<GateWorktree, CpdError> {
         let pid = std::process::id();
         let path = gate_worktree_path(repo, plan, key, pid)?;
         let reason = format!("cpd gate {pid}");
         let target = path.to_string_lossy().into_owned();
-        ok(repo, &["worktree", "add", "--detach", "--lock", "--reason", &reason, &target, sha])?;
+        worktree_add(repo, &["--detach", "--lock", "--reason", &reason, &target, sha], &path)?;
         Ok(GateWorktree { repo: repo.to_path_buf(), path })
     }
 

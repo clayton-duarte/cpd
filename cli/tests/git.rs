@@ -1210,6 +1210,65 @@ fn dead_pid(env: &TestEnv) -> u32 {
 }
 
 #[test]
+fn a_gate_worktree_add_outlasts_a_concurrent_worktree_add_in_progress() {
+    let env = TestEnv::new();
+    let (repo, _lead, g) = gated(&env, "");
+    // What a concurrent `git worktree add` leaves for a moment: an entry whose `commondir` is empty.
+    let adding = repo.join(".git/worktrees/adding");
+    fs::create_dir_all(&adding).unwrap();
+    fs::write(adding.join("gitdir"), format!("{}\n", env.root().join("adding/.git").display())).unwrap();
+    fs::write(adding.join("commondir"), "").unwrap();
+    let path = gate_worktree_path(&repo, &plan(), &key(), std::process::id()).unwrap();
+    let broken = common::output(env.command("git").args(["-C", repo.to_str().unwrap(), "worktree", "add", "--detach", path.to_str().unwrap(), &g])).unwrap();
+    assert!(String::from_utf8_lossy(&broken.stderr).contains("worktrees/adding/commondir: Success"), "{broken:?}");
+
+    let added = std::thread::scope(|s| {
+        s.spawn(|| {
+            std::thread::sleep(Duration::from_secs(1));
+            fs::remove_dir_all(&adding).unwrap();
+        });
+        GateWorktree::add(&repo, &plan(), &key(), &g)
+    });
+
+    let gate = added.unwrap();
+    assert!(gate.path().exists());
+    gate.remove().unwrap();
+    // Any other failure is not retried.
+    let started = Instant::now();
+    let err = GateWorktree::add(&repo, &plan(), &key(), "no-such-commit").unwrap_err();
+    assert_eq!((err.code(), &err.details()["argv"][3]), (ErrorCode::GitFailed, &serde_json::json!("worktree")));
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+/// The reproduction of the Gate's race: `ROUNDS` rounds of `PARALLEL` `worktree add --detach --lock`
+/// into one repo at once (before the retry 5, 6 and 15 of 1600 adds failed in three runs).
+fn parallel_adds(env: &TestEnv, repo: &Path, sha: &str, parallel: usize, rounds: usize, add: impl Sync + Fn(&Path, &[&str], &Path) -> Result<String, cpd_core::error::CpdError>) -> usize {
+    let mut failed = 0;
+    let add = &add;
+    for round in 0..rounds {
+        let paths: Vec<PathBuf> = (0..parallel).map(|i| env.root().join(format!("race-{round}-{i}"))).collect();
+        failed += std::thread::scope(|s| {
+            let adds: Vec<_> = paths
+                .iter()
+                .map(|p| s.spawn(move || add(repo, &["--detach", "--lock", "--reason", "race", p.to_str().unwrap(), sha], p)))
+                .collect();
+            adds.into_iter().map(|a| a.join().unwrap()).filter(Result::is_err).count()
+        });
+        for p in &paths {
+            let _ = cpd_core::git::run::run(repo, &["worktree", "remove", "--force", "--force", p.to_str().unwrap()]); // a failed add left none
+        }
+    }
+    failed
+}
+
+#[test]
+fn parallel_worktree_adds_into_one_repo_all_succeed() {
+    let env = TestEnv::new();
+    let (repo, _lead, g) = gated(&env, "");
+    assert_eq!(parallel_adds(&env, &repo, &g, 16, 40, cpd_core::git::run::worktree_add), 0);
+}
+
+#[test]
 fn the_sweep_removes_the_prs_gate_worktrees_of_dead_pids_only() {
     let env = TestEnv::new();
     let (repo, _lead, g) = gated(&env, "");
