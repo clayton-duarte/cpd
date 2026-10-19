@@ -14,7 +14,7 @@ use super::model::{Condition, Kind, Urgency};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::ids::{ContextId, JobKey, OwnerLogin, PlanId, RecordId, RepoName, SessionId};
-use crate::policy::{Checks, PolicyKey, resolve, resolve_unowned_row};
+use crate::policy::{Checks, PolicyKey, owner_unset, resolve, resolve_unowned_row};
 use crate::plan::Phase;
 use crate::store::Store;
 
@@ -322,7 +322,8 @@ fn questions(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 
 /// The open `pull_requests` rows that match `filter`, a SQL condition over `r`, oldest first, as conditions of `kind`
 /// and `urgency`. `label` makes the label from the row's repo without its owner, its number, and whether checks
-/// failed. A `prs` row that points to the pull request links its Plan, Context and Lead.
+/// failed. A `prs` row that points to the pull request links its Plan, Context and Lead. A `gated` row whose policy
+/// does not resolve is one `engine-error` condition naming the file and code, beside the others (§8.3).
 fn pull_request_conditions(
     conn: &Connection,
     home: &CpdHome,
@@ -333,7 +334,7 @@ fn pull_request_conditions(
     label: fn(&str, i64, bool) -> String,
 ) -> Result<Vec<Condition>, CpdError> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT r.repo, r.number, r.url, r.checks = 'failed', p.context, p.id, p.lead_session, r.mergeable = 'conflicting',
+        "SELECT r.repo, r.number, r.url, r.checks = 'failed', p.context, prs.plan, p.lead_session, r.mergeable = 'conflicting',
                 c.owner, prs.name
            FROM pull_requests r
            LEFT JOIN prs ON prs.pull_request = r.id
@@ -352,40 +353,80 @@ fn pull_request_conditions(
         let (context, plan, lead): (Option<String>, Option<String>, Option<String>) =
             (row.get(4)?, row.get(5)?, row.get(6)?);
         let name = repo.split_once('/').map_or(repo.as_str(), |(_, name)| name);
+        let links = |kind, urgency, subject, label, url| -> Result<Condition, CpdError> {
+            Ok(Condition {
+                kind,
+                urgency,
+                subject,
+                label,
+                url,
+                context: context.as_deref().map(|c| id("Context id", c, ContextId::parse)).transpose()?,
+                plan: plan.as_deref().map(|p| id("Plan id", p, PlanId::parse)).transpose()?,
+                job: None,
+                session: lead.as_deref().map(|s| id("Session id", s, SessionId::parse)).transpose()?,
+                record: None,
+                event: None,
+            })
+        };
         // Failed checks count only where the row's policy says `any` (§8.3): `gated` kinds are `pr-failing`.
         if gated && checks_failed {
-            checks_failed = checks_policy(home, &repo, owner.as_deref(), pr_name.as_deref())? == Checks::Any;
+            // A PR points to the row: its Context's owner keys it, and an unset one is `owner_unset`, never the unowned rule.
+            let owned = plan.as_ref().map(|_| Owned { context: context.as_deref().unwrap_or_default(), owner: owner.as_deref(), name: pr_name.as_deref() });
+            match checks_policy(home, &repo, owned)? {
+                Ok(checks) => checks_failed = checks == Checks::Any,
+                Err(error) => {
+                    // The row's checks are unknown: its failure is told as an error, the conflict still as `kind`.
+                    checks_failed = false;
+                    let code = error.code().as_str();
+                    out.push(links(
+                        Kind::EngineError,
+                        Urgency::Red,
+                        format!("error:E8/pr:{repo}#{number}/{code}"),
+                        format!("policy of {name}#{number}: {code} ({})", failed_file(home, &error)),
+                        Some(url.clone()),
+                    )?);
+                }
+            }
             if !checks_failed && !conflicting {
                 continue;
             }
         }
-        out.push(Condition {
-            kind,
-            urgency,
-            subject: format!("pr:{repo}#{number}"),
-            label: label(name, number, checks_failed),
-            url: Some(url),
-            context: context.map(|c| id("Context id", &c, ContextId::parse)).transpose()?,
-            plan: plan.map(|p| id("Plan id", &p, PlanId::parse)).transpose()?,
-            job: None,
-            session: lead.map(|s| id("Session id", &s, SessionId::parse)).transpose()?,
-            record: None,
-            event: None,
-        });
+        out.push(links(kind, urgency, format!("pr:{repo}#{number}"), label(name, number, checks_failed), Some(url))?);
     }
     Ok(out)
 }
 
-/// `pr.feedback.checks` of a pull request row: its PR's key when a PR points to it (`owner` is its Context's,
-/// `pr_name` the PR's repo name), else `Repo` of the row's `owner/name` through the unowned-row entry point.
-fn checks_policy(home: &CpdHome, repo: &str, owner: Option<&str>, pr_name: Option<&str>) -> Result<Checks, CpdError> {
+/// What a resolve error names: the policy file (`policy_invalid`, `owner_unknown`), or the Context (`owner_unset`).
+fn failed_file(home: &CpdHome, error: &CpdError) -> String {
+    let detail = |key: &str| error.details().get(key).and_then(|v| v.as_str());
+    match (detail("file"), detail("owner"), detail("context")) {
+        (Some(file), _, _) => file.to_owned(),
+        (_, Some(owner), _) => home.root().join("policy").join("owners").join(format!("{owner}.toml")).display().to_string(),
+        (_, _, Some(context)) => format!("Context {context}"),
+        _ => error.message().to_owned(),
+    }
+}
+
+/// The PR a `pull_requests` row points to, as the Inbox query reads it: the Context's `owner` (NULL for a legacy
+/// Context) and the PR's repo `name` (NULL before the migration).
+struct Owned<'a> {
+    context: &'a str,
+    owner: Option<&'a str>,
+    name: Option<&'a str>,
+}
+
+/// `pr.feedback.checks` of a pull request row: the key of the PR that points to it (`Some`), else `Repo` of the
+/// row's `owner/name` through the unowned-row entry point (`None`). The outer error is a stored value that does not
+/// parse; the inner one the resolve's, which the caller reports for its row.
+fn checks_policy(home: &CpdHome, repo: &str, owned: Option<Owned<'_>>) -> Result<Result<Checks, CpdError>, CpdError> {
     let parse = |what: &str| corrupt(what, repo);
-    let resolved = match owner {
-        Some(owner) => {
+    let resolved = match owned {
+        Some(Owned { context, owner: None, .. }) => Err(owner_unset(&id("Context id", context, ContextId::parse)?)),
+        Some(Owned { owner: Some(owner), name, .. }) => {
             let owner = OwnerLogin::parse(owner)?;
-            match pr_name {
-                Some(name) => resolve(home, &PolicyKey::Repo(owner, RepoName::parse(name)?))?,
-                None => resolve(home, &PolicyKey::Owner(owner))?,
+            match name {
+                Some(name) => resolve(home, &PolicyKey::Repo(owner, RepoName::parse(name)?)),
+                None => resolve(home, &PolicyKey::Owner(owner)),
             }
         }
         None => {
@@ -394,10 +435,10 @@ fn checks_policy(home: &CpdHome, repo: &str, owner: Option<&str>, pr_name: Optio
                 OwnerLogin::parse(owner).map_err(|_| parse("pull request repo owner"))?,
                 RepoName::parse(name).map_err(|_| parse("pull request repo name"))?,
             );
-            resolve_unowned_row(home, &key)?
+            resolve_unowned_row(home, &key)
         }
     };
-    Ok(resolved.policy.pr.feedback.checks)
+    Ok(resolved.map(|resolved| resolved.policy.pr.feedback.checks))
 }
 
 /// `pr-failing`: an authored open pull request has failed checks or a merge conflict (`unknown` is no conflict).
