@@ -7,6 +7,8 @@ mod pi;
 mod state;
 mod tools;
 
+use std::time::Duration;
+
 use serde_json::json;
 
 use crate::config::Config;
@@ -15,6 +17,10 @@ use crate::home::CpdHome;
 use crate::output::Output;
 use crate::store::Store;
 use check::{Check, Severity};
+
+/// Each probe's deadline (commands.md §14.1): `doctor` is run when something is wrong,
+/// so a hung tool is a failed check, not a hung `doctor`.
+const DEADLINE: Duration = Duration::from_secs(10);
 
 /// `cpd doctor` takes no arguments.
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]

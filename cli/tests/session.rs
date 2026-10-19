@@ -272,6 +272,23 @@ fn list_filters_and_derives_place_and_leads() {
     refused(&env.cpd(&["session", "list", "--plan", "Bad"]), "invalid_plan_id", 2);
 }
 
+/// sql-F5, commands-F4: the Plan-Lead lookup is a join: a Session that leads two
+/// Plans is still one row, and a Session that leads none is not a Plan's Lead.
+#[test]
+fn list_gives_a_session_leading_two_plans_one_row() {
+    let env = TestEnv::new();
+    setup(&env);
+    exec_sql(
+        &env,
+        "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('again', 'ctx', 'Again', 'grounding', 'lead1', 't')",
+    );
+    let sessions = env.cpd(&["session", "list"]).ok()["sessions"].clone();
+    let sessions = sessions.as_array().unwrap();
+    let leads: Vec<(&str, bool)> =
+        sessions.iter().map(|s| (s["id"].as_str().unwrap(), s["plan_lead"].as_bool().unwrap())).collect();
+    assert_eq!(leads, [(MANAGER, false), (LEAD1, true), (LEAD2, true), (WORKER, false)]);
+}
+
 #[test]
 fn show_adds_created_at_registered_event_and_open_escalations() {
     let env = TestEnv::new();
@@ -435,6 +452,35 @@ fn fork_registers_a_stopped_lead_in_a_parked_window() {
     let again = env.cpd(&["session", "fork", LEAD1]).ok();
     assert_eq!((&again["session"]["plan"], &again["session"]["name"]), (&json!("pay"), &json!("Lead one (fork)")));
     assert_ne!(again["session"]["id"], json!(new));
+}
+
+/// G11: a `tmux` that refuses `set -p … @cpd_session` and passes everything else to the real one.
+fn tmux_refusing_the_session_mark(env: &TestEnv) {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let real = std::env::split_paths(&path).map(|d| d.join("tmux")).find(|p| p.is_file()).expect("tmux on PATH");
+    env.fake("tmux", &format!("case \" $* \" in *\" set \"*\" @cpd_session \"*) echo refused >&2; exit 1;; esac\nexec '{}' \"$@\"", real.display()));
+}
+
+/// G11: a step after `new-window` fails: the new window is killed and the original error returned.
+#[test]
+fn fork_and_open_leave_no_window_when_a_step_after_new_window_fails() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd(&env);
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
+    cockpit(&env);
+    tmux_refusing_the_session_mark(&env);
+    let before = window_names(&env);
+    let panes_before = panes(&env);
+
+    let run = env.cpd(&["session", "fork", LEAD1, "--plan", "pay"]);
+    assert_eq!(run.error()["code"], "tmux_failed", "{run:?}");
+    assert_eq!(window_names(&env), before, "fork left a window");
+
+    let run = env.cpd(&["session", "open", LEAD1]);
+    assert_eq!(run.error()["code"], "tmux_failed", "{run:?}");
+    assert_eq!(window_names(&env), before, "open left a window");
+    assert_eq!(panes(&env), panes_before);
 }
 
 /// Fork when idle (§6.7): the fork waits while the source has no file, then
@@ -654,6 +700,34 @@ fn open_and_park_keep_at_most_one_placeholder_only_in_the_slot() {
         .collect();
     let expected = [(LEAD1, "chat"), (LEAD2, "chat"), (LEAD1, "parked"), (LEAD2, "parked"), (LEAD1, "chat")];
     assert_eq!(moved, expected.map(|(s, p)| (s.to_owned(), p.to_owned())));
+}
+
+#[test]
+fn open_writes_session_moved_before_the_rename_so_a_failing_rename_keeps_the_swap_recorded() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd(&env);
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
+    cockpit(&env);
+    env.cpd(&["session", "open", LEAD1]).ok();
+
+    // A tmux that fails `rename-window` and runs everything else on the real one.
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|d| d.join("tmux"))
+        .find(|p| p.is_file())
+        .expect("a tmux on PATH");
+    env.fake("tmux", &format!("case \"$*\" in *rename-window*) echo 'rename-window: refused' >&2; exit 1;; esac\nexec '{}' \"$@\"", real.display()));
+
+    let run = env.cpd(&["session", "open", LEAD2]);
+    refused(&run, "tmux_failed", 1);
+    assert_eq!(slot(&env).session, LEAD2, "the swap happened");
+    let moved: Vec<(String, String)> = events(&env, "session-moved")
+        .iter()
+        .map(|e| (e["session"].as_str().unwrap().to_owned(), e["data"]["place"].as_str().unwrap().to_owned()))
+        .collect();
+    let expected = [(LEAD1, "chat"), (LEAD2, "chat"), (LEAD1, "parked")];
+    assert_eq!(moved, expected.map(|(s, p)| (s.to_owned(), p.to_owned())));
+    assert_eq!((show(&env, LEAD1)["place"].clone(), show(&env, LEAD2)["place"].clone()), (json!("parked"), json!("chat")));
 }
 
 #[test]
@@ -1311,8 +1385,18 @@ fn port_fixture(env: &TestEnv) {
 /// A new window running `cpd session run <id>`, with `PLANNOTATOR_PORT=1` in its
 /// environment (the port every Lead pane inherits from cpd's environment); returns its pane.
 fn run_lead(env: &TestEnv, id: &str) -> String {
+    run_lead_with(env, id, &[])
+}
+
+/// [`run_lead`] with more `NAME=value` variables in the pane's environment.
+fn run_lead_with(env: &TestEnv, id: &str, vars: &[&str]) -> String {
     let command = format!("cpd session run {id}");
-    let out = env.tmux(&["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", "-e", "PLANNOTATOR_PORT=1", &command]);
+    let mut args = vec!["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", "-e", "PLANNOTATOR_PORT=1"];
+    for var in vars {
+        args.extend(["-e", var]);
+    }
+    args.push(&command);
+    let out = env.tmux(&args);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let pane = String::from_utf8(out.stdout).unwrap().trim().to_owned();
     env.tmux(&["set", "-p", "-t", &pane, "@cpd_session", id]);
@@ -1350,6 +1434,27 @@ fn run_gives_each_plan_its_port_and_keeps_it_across_a_restart() {
     }
     assert_eq!(recorded_ports(&env, LEAD1), ["19432", "19432"]);
     assert_eq!(recorded_ports(&env, LEAD2), ["19433", "19433"]);
+}
+
+#[test]
+fn run_gives_the_lead_remote_and_the_review_host() {
+    let env = TestEnv::new();
+    port_fixture(&env);
+    fake_pi(&env, "echo \"$PLANNOTATOR_REMOTE ${PLANNOTATOR_URL_HOST-unset}\" >> \"$HOME/hosts.$CPD_SESSION\"\nexit 1");
+    let hosts = |id: &str| fs::read_to_string(env.home().join(format!("hosts.{id}"))).unwrap_or_default();
+
+    // The environment's `PLANNOTATOR_URL_HOST` is the override; the `PLANNOTATOR_REMOTE` it holds is replaced.
+    run_lead_with(&env, LEAD1, &["PLANNOTATOR_URL_HOST=review.test", "PLANNOTATOR_REMOTE=0"]);
+    wait_until("the first Lead's pi", || !hosts(LEAD1).is_empty());
+    assert_eq!(hosts(LEAD1), "1 review.test\n");
+
+    // With no override the host is detected: an address or `localhost`, never unset.
+    run_lead(&env, LEAD2);
+    wait_until("the second Lead's pi", || !hosts(LEAD2).is_empty());
+    let hosts2 = hosts(LEAD2);
+    let (remote, host) = hosts2.trim_end().split_once(' ').unwrap();
+    assert_eq!(remote, "1");
+    assert!(host == "localhost" || host.parse::<std::net::Ipv4Addr>().is_ok_and(|ip| !ip.is_loopback()), "{host}");
 }
 
 #[test]
@@ -1538,20 +1643,21 @@ fn a_refused_archive_prints_the_refusal_and_offers_the_resume_in_place() {
 fn a_reload_is_not_a_quit_even_though_pi_exits_0_on_sigterm() {
     let env = TestEnv::new();
     quit_fixture(&env);
-    // A copy of cpd that the test can replace, as an install does.
-    let copy = env.home().join("cpd-installed");
-    fs::copy(CPD, &copy).unwrap();
-    env.fake("cpd", &format!("case \"$1 $2 $3\" in \"tui view chat\"|\"tui view history\") exec sleep {SLEEP_SECONDS};; esac\nexec '{}' \"$@\"", copy.display()));
-    // An idle Lead at a finished turn, parked: the reload is due at once.
+    // An idle Lead at a finished turn, parked: the restart for a new pi is due at once.
     pi_file(&env, "side", true);
     exec_sql(&env, "UPDATE sessions SET state_at = '2020-01-01T00:00:00Z' WHERE id = 'side'");
+    // pi's install, as the wrapper watches it (a cpd install does not restart pi, hs-d210).
+    let current = env.home().join(".pi/agent/install/current-version");
+    fs::create_dir_all(current.parent().unwrap()).unwrap();
+    fs::write(&current, "1.2.0\n").unwrap();
     std::thread::sleep(Duration::from_secs(2));
     let pane = run_lead_with_pane(&env, "side");
     wait_until("pi", || env.calls("pi").len() == 1);
 
-    let next = env.home().join("cpd-next");
-    fs::copy(CPD, &next).unwrap();
-    fs::rename(&next, &copy).unwrap();
+    // A new pi, as pi's own update installs it.
+    let next = current.with_extension("tmp");
+    fs::write(&next, "1.3.0\n").unwrap();
+    fs::rename(&next, &current).unwrap();
     wait_until("pi, started again", || env.calls("pi").len() == 2);
     assert!(pane_exists(&env, &pane));
     assert!(!session_archived(&env, "side"));

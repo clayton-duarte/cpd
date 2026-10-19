@@ -9,7 +9,7 @@ use clap::Args;
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
-use super::{ContextRow, Record, Select, open, plan_repos, render};
+use super::{ContextRow, Select, digest, open};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
 use crate::host::layout::context_window;
@@ -141,19 +141,12 @@ fn register(
         .map_err(|e| CpdError::new(ErrorCode::SetupFailed, format!("Cannot resolve the current directory: {e}.")))?
         .display()
         .to_string();
-    let records = store.read(|conn| {
-        let mut stmt =
-            conn.prepare(&format!("SELECT {} FROM context_records WHERE context = ?1 ORDER BY seq", Record::COLUMNS))?;
-        let records = stmt.query_map([context.as_str()], Record::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
-        let repos = plan_repos(conn, &config.machine, &records)?;
-        Ok((records, repos))
-    })?;
+    let context_text = store.read(|conn| digest::first_message(conn, home, &config.machine, context, None))?;
     let header = format!(
         "You are the Manager of Context {context} \"{}\". Follow the cpd-manager skill.",
         row.title
     );
-    let markdown = render::markdown(&row.title, row.jira.as_deref(), &records.0, 0, &records.1);
-    write_file(&home.manager_message(context), &format!("{header}\n\n{markdown}\n"))?;
+    write_file(&home.manager_message(context), &format!("{header}\n\n{context_text}\n"))?;
 
     let id = SessionId::new_v4();
     let name = format!("{context}-manager");
