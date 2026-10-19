@@ -425,12 +425,12 @@ mod tests {
 
     // ---- a stuck Job (hs-d318) ----
 
-    /// A store with the Contexts and Managers of [`managers`] (`mgr-b` archived when `archive_b`).
-    fn store_with_managers(archive_b: bool) -> (tempfile::TempDir, Store) {
+    /// A store with the Contexts and Managers of [`managers`].
+    fn store_with_managers() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
         let mut store = Store::open(&home, 5000).unwrap();
-        managers(&mut store, archive_b);
+        managers(&mut store, false);
         (dir, store)
     }
 
@@ -476,7 +476,7 @@ mod tests {
     /// ticks send nothing, whatever the minutes say by then.
     #[test]
     fn a_stuck_job_is_sent_once_to_the_manager_of_its_context() {
-        let (_dir, mut store) = store_with_managers(false);
+        let (_dir, mut store) = store_with_managers();
         let failed = job_failed(&mut store, "ctx-a", "plan-a", "a");
 
         assert!(tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "a", failed, 12)).unwrap());
@@ -490,7 +490,7 @@ mod tests {
     /// After a retry the Job fails again: a newer `job-failed` Event, so a new message, once more.
     #[test]
     fn a_job_that_fails_again_after_a_retry_is_sent_again() {
-        let (_dir, mut store) = store_with_managers(false);
+        let (_dir, mut store) = store_with_managers();
         let first = job_failed(&mut store, "ctx-a", "plan-a", "a");
         assert!(tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "a", first, 10)).unwrap());
 
@@ -505,7 +505,7 @@ mod tests {
     /// one that replaces an archived Manager that was told, hears of the Job.
     #[test]
     fn with_no_live_manager_nothing_is_sent_or_written_and_a_later_manager_is_told() {
-        let (_dir, mut store) = store_with_managers(false);
+        let (_dir, mut store) = store_with_managers();
         let failed = job_failed(&mut store, "ctx-c", "plan-c", "c");
         let before = txns(&mut store);
         assert!(!tell_stuck_job(&mut store, &stuck("ctx-c", "plan-c", "c", failed, 10)).unwrap());
@@ -545,7 +545,7 @@ mod tests {
     /// (`pay/a` is not `pay/ab`) and from the User's side (a Lead's own words are not the engine's).
     #[test]
     fn only_a_message_about_this_job_from_the_users_side_counts() {
-        let (_dir, mut store) = store_with_managers(false);
+        let (_dir, mut store) = store_with_managers();
         let a = job_failed(&mut store, "ctx-a", "plan-a", "a");
         let ab = job_failed(&mut store, "ctx-a", "plan-a", "ab");
         let b = job_failed(&mut store, "ctx-b", "plan-b", "a");

@@ -208,6 +208,24 @@ fn a_stuck_job_is_one_message_to_the_manager_and_opens_no_item() {
     assert_eq!(fx.events("inbox-opened"), Vec::<Value>::new());
 }
 
+/// The record that a Job was told of is the message itself, in the store: a restarted engine sends nothing again.
+#[test]
+fn a_restarted_engine_does_not_tell_the_manager_of_the_same_failure_again() {
+    let fx = fx();
+    fx.fixture("UPDATE sessions SET state = 'idle' WHERE id = 'lead1';");
+    fx.manager();
+    fx.failed_job("old", 2);
+    let first = fx.start();
+    wait_until("the message", || fx.messages().len() == 1);
+    drop(first); // SIGTERM, and it is gone when the drop returns
+
+    let second = Engine(fx.env.command(CPD).arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap());
+    wait_until("the second watch-started", || fx.query::<i64>("SELECT count(*) FROM events WHERE kind = 'watch-started'") == 2);
+    fx.env.wait_whole_ticks(3);
+    assert_eq!(fx.messages(), [("mgr1".to_owned(), None, false, stuck_text("old", 2, "crashed"))]);
+    drop(second);
+}
+
 /// After `job retry` and a new failure (a newer `job-failed` Event) the Job is told again, once more.
 #[test]
 fn a_job_that_fails_again_after_a_retry_is_sent_again() {
