@@ -122,7 +122,7 @@ impl Fx {
         .unwrap();
 
         // The repo, its hooks (§7.3) and a bare `origin`.
-        let repo = env.git_repo("pay").canonicalize().unwrap();
+        let repo = env.keyed_repo("pay").canonicalize().unwrap();
         let hooks = env.root().join("hooks.log");
         fs::create_dir_all(repo.join(".config")).unwrap();
         fs::write(
@@ -139,7 +139,7 @@ impl Fx {
         env.git(&repo, &["commit", "-q", "-m", "hooks"]);
         let origin = env.root().join("origin.git");
         env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-        env.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        env.local_origin(&repo, &origin);
         env.git(&repo, &["push", "-q", "-u", "origin", "main"]);
         let lead = repo.parent().unwrap().join(format!("pay.{PLAN}.pay"));
         Fx { env, repo, origin, lead }

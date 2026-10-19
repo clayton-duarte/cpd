@@ -27,15 +27,15 @@ struct Fx {
 
 fn fx(phase: &str) -> Fx {
     let env = TestEnv::new();
-    let pay = env.git_repo("pay").canonicalize().unwrap();
-    let web = env.git_repo("web").canonicalize().unwrap();
+    let pay = env.keyed_repo("pay").canonicalize().unwrap();
+    let web = env.keyed_repo("web").canonicalize().unwrap();
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
     let locked = if matches!(phase, "grounding" | "plan") { "NULL" } else { "'2000-01-01T00:00:00.000Z'" };
     let done = if phase == "done" { "'2000-01-02T00:00:00.000Z'" } else { "NULL" };
     let fx = Fx { env, pay, web };
     fx.sql(&format!(
-        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay-1', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
@@ -287,7 +287,7 @@ fn legacy(status: &str) -> Legacy {
     let fx = fx("done");
     let origin = fx.env.root().join("repos/pay-origin.git");
     fx.env.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-    fx.env.git(&fx.pay, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    fx.env.local_origin(&fx.pay, &origin);
     fx.env.git(&fx.pay, &["push", "-q", "origin", "main"]);
     fx.env.git(&fx.pay, &["fetch", "-q", "origin"]);
     let lead = fx.env.root().join("repos/pay.pay-1");

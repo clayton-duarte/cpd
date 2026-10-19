@@ -276,7 +276,7 @@ impl Fx {
 /// A repo `name` on `main` with hooks that log the branch they ran for (§7.3)
 /// and a bare `origin` holding `main`.
 fn repo(env: &TestEnv, name: &str) -> Repo {
-    let path = env.git_repo(name).canonicalize().unwrap();
+    let path = env.keyed_repo(name).canonicalize().unwrap();
     fs::create_dir_all(path.join(".config")).unwrap();
     let log = env.root().join(format!("{name}.hooks.log"));
     fs::write(
@@ -293,7 +293,7 @@ fn repo(env: &TestEnv, name: &str) -> Repo {
     env.git(&path, &["commit", "-q", "-m", "hooks"]);
     let origin = env.root().join(format!("{name}.git"));
     env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-    env.git(&path, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    env.local_origin(&path, &origin);
     env.git(&path, &["push", "-q", "-u", "origin", "main"]);
     Repo { path, origin }
 }

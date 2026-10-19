@@ -47,7 +47,7 @@ fn fx() -> Fx {
     env.fake_gh(&format!("echo '{EMPTY_SEARCH}'"));
     let fx = Fx { env };
     fx.sql(
-        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'stopped', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at)
@@ -75,11 +75,11 @@ impl Fx {
 
     /// A repo `name` on `main` with a bare `origin` holding `main`.
     fn repo(&self, name: &str) -> Repo {
-        let path = self.env.git_repo(name).canonicalize().unwrap();
+        let path = self.env.keyed_repo(name).canonicalize().unwrap();
         let origin = self.env.root().join("origins").join(format!("{name}.git"));
         fs::create_dir_all(&origin).unwrap();
         self.env.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
-        self.env.git(&path, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        self.env.local_origin(&path, &origin);
         self.env.git(&path, &["push", "-q", "origin", "main"]);
         Repo { path, origin }
     }
@@ -488,7 +488,7 @@ fn a_push_failure_at_pr_start_still_starts_it_and_appends_one_push_failed_error(
 #[test]
 fn a_repo_without_origin_starts_a_pr_as_before() {
     let fx = fx();
-    let repo = fx.env.git_repo("pay").canonicalize().unwrap();
+    let repo = fx.env.keyed_repo("pay").canonicalize().unwrap();
     fx.a2_ready(&repo);
     let base = head(&fx, &repo, "HEAD");
 

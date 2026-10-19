@@ -77,7 +77,7 @@ fn fx(keys: &[&'static str]) -> Fx {
     let repo = env.git_repo("pay").canonicalize().unwrap();
     let origin = env.root().join("repos/origin.git");
     env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-    env.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    env.local_origin(&repo, &origin);
     env.git(&repo, &["push", "-q", "origin", "main"]);
 
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();

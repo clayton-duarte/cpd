@@ -31,7 +31,7 @@ fn fx(status: &str) -> Fx {
     let repo = env.git_repo("pay").canonicalize().unwrap();
     let origin = env.root().join("repos/origin.git");
     env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-    env.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    env.local_origin(&repo, &origin);
     env.git(&repo, &["push", "-q", "origin", "main"]);
     let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("lead.log") };
     let lead = create_lead_worktree(&repo, &PlanId::parse("pay").unwrap(), "main", &setup).unwrap().path;

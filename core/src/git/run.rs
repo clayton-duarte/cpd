@@ -100,9 +100,11 @@ pub fn has_origin(dir: &Path) -> Result<bool, CpdError> {
     Ok(run(dir, &["remote", "get-url", "origin"])?.code == 0)
 }
 
-/// The URL of the remote `origin` of the repo `dir` belongs to; `None` without one.
+/// The URL of the remote `origin` of the repo `dir` belongs to, as configured; `None` without one.
+/// `git config` rather than `git remote get-url`: the latter applies `url.<base>.insteadOf`, so a
+/// rewrite would key the repo by where git goes, not by the GitHub repo its `origin` names.
 pub fn origin_url(dir: &Path) -> Result<Option<String>, CpdError> {
-    let out = run(dir, &["remote", "get-url", "origin"])?;
+    let out = run(dir, &["config", "--get", "remote.origin.url"])?;
     Ok((out.code == 0).then(|| out.stdout.trim().to_owned()))
 }
 

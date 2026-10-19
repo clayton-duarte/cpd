@@ -381,6 +381,31 @@ impl TestEnv {
         repo
     }
 
+    /// `git_repo` that `pr add` can key: its `origin` is `https://github.com/acme/<name>.git`
+    /// (`acme` is every test Context's owner), with `refs/remotes/origin/main` at the commit.
+    /// Nothing is reachable at that URL: see `local_origin`.
+    pub fn keyed_repo(&self, name: &str) -> PathBuf {
+        let repo = self.git_repo(name);
+        self.git(&repo, &["remote", "add", "origin", &format!("https://github.com/acme/{name}.git")]);
+        self.git(&repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        repo
+    }
+
+    /// Makes git reach `origin` at the local bare repo `bare`, while its configured URL stays a
+    /// GitHub one (the repo's key): `url.<bare>.insteadOf = <that URL>`. Adds the GitHub `origin`
+    /// (`acme/<the repo's directory name>`) first when the repo has none.
+    pub fn local_origin(&self, repo: &Path, bare: &Path) {
+        let url = if !self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
+            let name = repo.file_name().expect("a repo directory").to_string_lossy().into_owned();
+            let url = format!("https://github.com/acme/{name}.git");
+            self.git(repo, &["remote", "add", "origin", &url]);
+            url
+        } else {
+            self.git(repo, &["config", "--get", "remote.origin.url"])
+        };
+        self.git(repo, &["config", &format!("url.{}.insteadOf", bare.display()), &url]);
+    }
+
     /// `tmux -L <private socket> <args>` in this env.
     pub fn tmux(&self, args: &[&str]) -> Output {
         output(self.command("tmux").arg("-L").arg(&self.tmux_socket).args(args)).expect("run tmux")

@@ -77,10 +77,10 @@ fn fx_with(phase: &str, config_extra: &str) -> Fx {
 /// `job` is the status of the Plan's one Job, `merged` or `cancelled`.
 fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
     let env = TestEnv::new();
-    let repo = env.git_repo("pay").canonicalize().unwrap();
+    let repo = env.keyed_repo("pay").canonicalize().unwrap();
     let origin = env.root().join("repos/origin.git");
     env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-    env.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    env.local_origin(&repo, &origin);
     env.git(&repo, &["push", "-q", "origin", "main"]);
     let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("lead.log") };
     let created = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap();
@@ -135,7 +135,7 @@ fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
         _ => String::new(),
     };
     let sql = format!(
-        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
@@ -280,10 +280,10 @@ impl Fx {
     /// `cpd/pay/web`, Lead worktree `web.pay.web`, Job `ui`; the fake `gh` answers for it
     /// (pull request 813) when run in that worktree. Returns the Lead worktree.
     fn add_web(&self, state: Web) -> PathBuf {
-        let repo = self.env.git_repo("web").canonicalize().unwrap();
+        let repo = self.env.keyed_repo("web").canonicalize().unwrap();
         let origin = self.env.root().join("repos/web-origin.git");
         self.git(self.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-        self.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        self.env.local_origin(&repo, &origin);
         self.git(&repo, &["push", "-q", "origin", "main"]);
         let lead = repo.parent().unwrap().join("web.pay.web");
         let mut sha = String::new();
@@ -2149,7 +2149,7 @@ fn pr_add_no_needs_and_needs_override_the_reopen_default() {
 fn pr_add_on_a_plan_in_dispatch_has_no_needs_by_default() {
     let f = fx("dispatch");
     // Another repo: the fixture's own holds `cpd/pay` for its unmerged PR.
-    let other = f.env.git_repo("other").canonicalize().unwrap();
+    let other = f.env.keyed_repo("other").canonicalize().unwrap();
     let out = f.env.cpd(&["pr", "add", "fix", "--repo", other.to_str().unwrap(), "--plan", "pay"]).ok();
     assert_eq!(out["pr"]["needs"], json!([]));
     assert!(needs_of(&f, "fix").is_empty());
