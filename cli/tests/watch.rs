@@ -886,8 +886,8 @@ fn urgent(key: &str) -> String {
 
 /// The work session as tui leaves it, with remain-on-exit (§6.1), and a Worker that stays alive.
 fn work_session_with_a_worker_that_stays(fx: &Fx) {
-    fx.env.fake_pi("sleep 600");
-    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
+    fx.env.fake_pi(&format!("sleep {SLEEP_SECONDS}"));
+    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", &SLEEP_SECONDS.to_string()][..], &["set", "-g", "remain-on-exit", "on"]] {
         assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
     }
 }

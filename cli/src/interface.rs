@@ -47,6 +47,7 @@ pub const TABLE: &[Entry] = &[
     ("job edit", &[Lead], false),
     ("job cancel", &[Lead], false),
     ("job retry", &[Lead], false),
+    ("job urgent", &[Lead, Manager], false),
     ("job dispatch", &[], false),
     ("job list", &[Lead], false),
     ("job show", &[Lead], false),

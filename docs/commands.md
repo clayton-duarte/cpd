@@ -977,7 +977,7 @@ Effects: **rows**, one transaction: `jobs.urgent = 1`. **Event** `job-edited` `{
 {"ok": true, "job": {"key": "hotfix", "status": "queued", "urgent": true}, "fields": ["urgent"]}
 ```
 
-Idempotent: yes; a Job that is already urgent writes nothing and returns `"already": true`.
+Idempotent: yes; a Job that is already urgent writes nothing and returns `"already": true` with `"fields": []`.
 
 ## 6. `attempt`
 

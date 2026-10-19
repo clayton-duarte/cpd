@@ -966,7 +966,6 @@ CREATE TABLE plan_reviews (
 -- ---------- Jobs ----------
 CREATE TABLE jobs (
   seq                 INTEGER PRIMARY KEY AUTOINCREMENT,
-  urgent              INTEGER NOT NULL DEFAULT 0 CHECK (urgent IN (0, 1)),  -- the urgent flag (§2.2); not in jobs_locked, not in a fingerprint; added by a migration
   plan                TEXT NOT NULL REFERENCES plans(id),
   pr                  TEXT NOT NULL,          -- R34: the Job's PR (A7)
   review              INTEGER NOT NULL DEFAULT 0 CHECK (review IN (0, 1)),  -- B2: a review Job (added by migration 4)
@@ -988,6 +987,7 @@ CREATE TABLE jobs (
   failed_cause        TEXT,
   merged_sha          TEXT,
   created_at          TEXT NOT NULL,
+  urgent              INTEGER NOT NULL DEFAULT 0 CHECK (urgent IN (0, 1)),  -- the urgent flag (§2.2); not in jobs_locked, not in a fingerprint; added by the migration 20261019T0451-job-urgent (an ADD COLUMN, so last among the columns)
   UNIQUE (plan, key),
   FOREIGN KEY (plan, pr) REFERENCES prs(plan, key),
   CHECK (status <> 'draft' OR fingerprint IS NULL),
