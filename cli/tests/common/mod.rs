@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::os::unix::process::CommandExt;
-use std::sync::{Mutex, PoisonError, RwLock};
+use std::sync::{Mutex, OnceLock, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
@@ -339,7 +339,17 @@ impl Run {
 }
 
 impl TestEnv {
+    /// A new env whose `$CPD_HOME` already has a store: a copy of [`store_template`], so the
+    /// first command opens it instead of creating and migrating one (~0.2 s). A test of what
+    /// happens before the store exists uses [`TestEnv::empty`].
     pub fn new() -> TestEnv {
+        let env = TestEnv::empty();
+        fs::copy(store_template(), env.cpd_home().join("cpd.db")).expect("copy the store template");
+        env
+    }
+
+    /// A new env whose `$CPD_HOME` is an empty directory: the first command creates the store.
+    pub fn empty() -> TestEnv {
         let dir = tempfile::Builder::new().prefix("cpd-test-").tempdir().expect("temp dir");
         let n = NEXT_SOCKET.fetch_add(1, Ordering::Relaxed);
         let env = TestEnv { dir, tmux_socket: format!("cpdt-{}-{n}", std::process::id()), reaper: Mutex::new(None) };
@@ -668,7 +678,34 @@ impl Drop for TestEnv {
     }
 }
 
-/// This process's (real) user id: the owner of `/proc/self`.
+/// A store as `cpd` creates it in an empty `$CPD_HOME` (migrated, checkpointed, no WAL), made
+/// once per build of `cpd` and shared by the test processes: a file under Cargo's
+/// `CARGO_TARGET_TMPDIR` named after the binary's size and modification time. A process that
+/// finds none makes one in an [`TestEnv::empty`] env with the real binary and renames it into
+/// place (atomic: concurrent makers each write a whole one).
+fn store_template() -> &'static Path {
+    static TEMPLATE: OnceLock<PathBuf> = OnceLock::new();
+    TEMPLATE.get_or_init(|| {
+        use std::os::unix::fs::MetadataExt;
+        let binary = fs::metadata(CPD).expect("stat the cpd binary");
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+        let path = dir.join(format!("cpd-store-{}-{}.{}.db", binary.len(), binary.mtime(), binary.mtime_nsec()));
+        if path.exists() {
+            return path;
+        }
+        let env = TestEnv::empty();
+        env.write_config("version = 1\nmachine = \"m1\"\n");
+        env.cpd(&["events", "list"]).ok();
+        let db = env.cpd_home().join("cpd.db");
+        assert!(!env.cpd_home().join("cpd.db-wal").exists(), "cpd left a WAL beside the template store");
+        let partial = dir.join(format!("cpd-store-{}.partial", std::process::id()));
+        fs::copy(&db, &partial).expect("copy the new store");
+        fs::rename(&partial, &path).expect("put the store template in place");
+        path
+    })
+}
+
+/// This process's user id: the owner of `/proc/self`.
 fn uid() -> u32 {
     use std::os::unix::fs::MetadataExt;
     fs::metadata("/proc/self").expect("stat /proc/self").uid()

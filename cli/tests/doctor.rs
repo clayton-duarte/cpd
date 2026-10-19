@@ -81,7 +81,11 @@ fn install_pi(env: &TestEnv, version: &str) {
 
 /// A machine where every check passes.
 fn healthy() -> TestEnv {
-    let env = TestEnv::new();
+    healthy_in(TestEnv::new())
+}
+
+/// [`healthy`] in `env`.
+fn healthy_in(env: TestEnv) -> TestEnv {
     write_config(&env, "");
     env.fake("git", "echo 'git version 2.43.0'");
     env.fake("tmux", "[ \"$1\" = -V ] && echo 'tmux 3.6'; exit 0");
@@ -177,7 +181,7 @@ fn a_healthy_machine_passes_every_check_in_order() {
 
 #[test]
 fn doctor_is_idempotent_and_writes_nothing_but_the_migration() {
-    let env = healthy();
+    let env = healthy_in(TestEnv::empty());
     let first = doctor(&env);
     first.ok();
     let db = env.cpd_home().join("cpd.db");

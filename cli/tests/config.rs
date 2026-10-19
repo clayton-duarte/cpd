@@ -347,7 +347,7 @@ fn config_leaves_cpd_1s_config_json_alone() {
 
 #[test]
 fn config_is_read_only_and_idempotent() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     env.write_config(MINIMAL);
     let first = env.cpd(&["config"]);
     let second = env.cpd(&["config"]);
@@ -679,7 +679,7 @@ fn row(version: &str, letter: &str, model: &str, efforts: &str) -> (String, Stri
 
 #[test]
 fn tiers_with_a_cold_cache_asks_pi_and_fills_the_cache() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));

@@ -473,3 +473,21 @@ fn sql_writes_the_envs_store() {
     env.sql("UPDATE contexts SET title = 'After' WHERE id = 'c1'");
     assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"][0]["title"], "After");
 }
+
+#[test]
+fn a_new_env_has_a_migrated_store_of_its_own_and_an_empty_env_has_none() {
+    let a = TestEnv::new();
+    let b = TestEnv::new();
+    for env in [&a, &b] {
+        let store = env.store();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    }
+    a.write_tmux_config("");
+    b.write_tmux_config("");
+    a.cpd(&["context", "new", "c1", "--title", "Only in a"]).ok();
+    assert_eq!(a.cpd(&["context", "list"]).ok()["contexts"].as_array().unwrap().len(), 1);
+    assert_eq!(b.cpd(&["context", "list"]).ok()["contexts"], serde_json::json!([]));
+
+    let empty = TestEnv::empty();
+    assert_eq!(std::fs::read_dir(empty.cpd_home()).unwrap().count(), 0, "an empty env's CPD_HOME is empty");
+}
