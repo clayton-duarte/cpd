@@ -182,8 +182,8 @@ impl Env {
 
     /// `tier_invalid` (exit 2, `details.efforts`) unless the Tier's effort is
     /// one pi supports for its model (§9).
-    fn check_tier(&self, tier: Tier) -> Result<(), CpdError> {
-        config::load_catalog(&self.config)?.check(tier)
+    fn check_tier(&mut self, tier: Tier) -> Result<(), CpdError> {
+        config::catalog::load_with(&self.config, &mut self.store)?.check(tier)
     }
 }
 
