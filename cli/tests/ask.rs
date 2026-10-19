@@ -146,12 +146,12 @@ fn ask_blocks_until_answered_and_prints_the_answer() {
     let pid = child.id();
     wait_until("ask to open a-a1-q1", || query::<i64>(&env, "SELECT count(*) FROM escalations WHERE id = 'a-a1-q1'") != 0);
 
-    // While it waits: the row is open, the Worker Session blocked, both Events appended.
+    // While it waits: the row is open, the Worker Session waiting (for the Lead, not the User), both Events appended.
     let (status, asker_pid, question): (String, u32, String) = store(&env)
         .read(|c| Ok(c.query_row("SELECT status, asker_pid, question FROM escalations WHERE id = 'a-a1-q1'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
         .unwrap();
     assert_eq!((status.as_str(), asker_pid, question.as_str()), ("open", pid, "Which field names?"));
-    assert_eq!(session_state(&env), ("blocked".to_owned(), Some("cpd: question to the Lead".to_owned())));
+    assert_eq!(session_state(&env), ("waiting".to_owned(), Some("cpd: question to the Lead".to_owned())));
     let asked = events(&env, "escalation");
     assert_eq!(asked.len(), 1);
     assert_eq!(asked[0]["plan"], "pl");
@@ -160,7 +160,7 @@ fn ask_blocks_until_answered_and_prints_the_answer() {
     assert_eq!(asked[0]["data"], json!({"escalation": "a-a1-q1", "question": "Which field names?"}));
     assert!(asked[0]["text"].as_str().unwrap().contains("cpd answer a-a1-q1"));
     let states = events(&env, "session-state");
-    assert_eq!(states.last().unwrap()["data"], json!({"from": "working", "to": "blocked", "label": "cpd: question to the Lead"}));
+    assert_eq!(states.last().unwrap()["data"], json!({"from": "working", "to": "waiting", "label": "cpd: question to the Lead"}));
     assert_eq!(states.last().unwrap()["session"], "w1");
 
     env.cpd(&["answer", "a-a1-q1", "Use the v2 field names.", "--plan", "pl"]).ok();
@@ -168,7 +168,7 @@ fn ask_blocks_until_answered_and_prints_the_answer() {
     assert_eq!(run.ok(), json!({"ok": true, "escalation": "a-a1-q1", "answer": "Use the v2 field names."}));
     assert_eq!(session_state(&env), ("working".to_owned(), None));
     let states = events(&env, "session-state");
-    assert_eq!(states.last().unwrap()["data"], json!({"from": "blocked", "to": "working", "label": null}));
+    assert_eq!(states.last().unwrap()["data"], json!({"from": "waiting", "to": "working", "label": null}));
 }
 
 #[test]
@@ -232,7 +232,7 @@ fn ask_refusals_before_the_attempt() {
     refused(&env.cpd(&["ask", "not-an-attempt", "Q?", "--plan", "pl"]), "invalid_attempt_id", 2);
     refused(&env.cpd(&["ask", "a-a1", "", "--plan", "pl"]), "usage", 2);
     refused(&env.cpd(&["ask", "a-a1", "Q?", "--timeout-minutes", "soon", "--plan", "pl"]), "usage", 2);
-    // A stopped Worker Session cannot become blocked (§3.6): nothing is written.
+    // A stopped Worker Session cannot become waiting (§3.6): nothing is written.
     fixture(&env, "UPDATE sessions SET state = 'stopped' WHERE id = 'w1';");
     refused(&env.cpd(&["ask", "a-a1", "Q?", "--plan", "pl"]), "illegal_transition", 3);
     assert_eq!(query::<i64>(&env, "SELECT count(*) FROM escalations"), 0);

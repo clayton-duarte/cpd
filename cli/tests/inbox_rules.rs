@@ -62,6 +62,29 @@ fn a_blocked_lead_in_grounding_is_a_magenta_dialog_until_it_works_again() {
 }
 
 #[test]
+fn a_lead_waiting_for_a_worker_opens_no_dialog_and_its_reply_turn_is_unread_hs_d303() {
+    let env = TestEnv::new();
+    let lead = setup(&env);
+    env.cpd(&["session", "state", "idle", "--session", &lead]).ok();
+    env.cpd(&["session", "state", "working", "--session", &lead]).ok();
+    env.cpd(&["session", "state", "waiting", "--label", "cpd: Worker question", "--session", &lead]).ok();
+    assert!(found(&env, &[]).is_empty(), "a Lead that waits for an agent does not need the User");
+
+    // The wait ends in a turn that answered the User: `waiting` to `idle` with `--reply` is a reply to read.
+    env.cpd(&["session", "state", "idle", "--reply", "--session", &lead]).ok();
+    let items = found(&env, &[]);
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!((items[0].kind, items[0].urgency), (Kind::Unread, Urgency::White));
+
+    // `blocked` is still the human's: a dialog, even under the label a Lead's wait used to carry.
+    env.cpd(&["session", "state", "working", "--session", &lead]).ok();
+    env.cpd(&["session", "state", "blocked", "--label", "cpd: Worker question", "--session", &lead]).ok();
+    let items = found(&env, &[]);
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(items[0].kind, Kind::Dialog);
+}
+
+#[test]
 fn a_question_opens_no_item_hs_d306() {
     let env = TestEnv::new();
     setup(&env);

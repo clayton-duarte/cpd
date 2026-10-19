@@ -374,6 +374,50 @@ fn state_follows_section_3_6() {
 }
 
 #[test]
+fn state_waiting_takes_a_label_and_follows_section_3_6() {
+    let env = TestEnv::new();
+    setup(&env);
+    let state = |args: &[&str]| {
+        let mut argv = vec!["session", "state"];
+        argv.extend(args);
+        argv.extend(["--session", LEAD1]);
+        env.cpd(&argv)
+    };
+
+    // `waiting` needs a label, as `blocked` does; a refusal writes nothing.
+    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    let error = refused(&state(&["waiting"]), "usage", 2);
+    assert_eq!(error["details"]["state"], "waiting");
+    refused(&state(&["waiting", "--label", &"x".repeat(81)]), "usage", 2);
+    refused(&state(&["idle", "--label", "x"]), "usage", 2);
+    refused(&state(&["waiting", "--label", "x", "--reply"]), "usage", 2);
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+
+    // `idle` and `working` go to `waiting` and come back; a new label is a change; the same one writes nothing.
+    let out = state(&["waiting", "--label", "cpd: Worker question"]).ok();
+    assert_eq!(out, json!({"ok": true, "session": "lead1", "state": "waiting", "label": "cpd: Worker question", "from": "idle"}));
+    assert_eq!((show(&env, LEAD1)["state"].clone(), show(&env, LEAD1)["state_label"].clone()), (json!("waiting"), json!("cpd: Worker question")));
+    let before = events(&env, "session-state").len();
+    assert_eq!(state(&["waiting", "--label", "cpd: Worker question"]).ok()["already"], true);
+    assert_eq!(events(&env, "session-state").len(), before);
+    assert_eq!(state(&["waiting", "--label", "cpd: other"]).ok()["from"], "waiting");
+    assert_eq!(state(&["working"]).ok()["from"], "waiting");
+    assert_eq!(show(&env, LEAD1)["state_label"], Value::Null);
+    assert_eq!(state(&["waiting", "--label", "cpd: Worker question"]).ok()["from"], "working");
+    assert_eq!(state(&["idle"]).ok()["from"], "waiting");
+
+    // `waiting` goes to `blocked` (a human reason opens) and `blocked` back to `waiting` (it closes, the wait stays).
+    state(&["waiting", "--label", "cpd: Worker question"]).ok();
+    assert_eq!(state(&["blocked", "--label", "dialog"]).ok()["from"], "waiting");
+    assert_eq!(state(&["waiting", "--label", "cpd: Worker question"]).ok()["from"], "blocked");
+    assert_eq!(state(&["stopped"]).ok()["from"], "waiting");
+    refused(&state(&["waiting", "--label", "x"]), "illegal_transition", 3);
+
+    let last = events(&env, "session-state").into_iter().rev().nth(1).unwrap();
+    assert_eq!(last["data"], json!({"from": "blocked", "to": "waiting", "label": "cpd: Worker question"}));
+}
+
+#[test]
 fn state_idle_reply_writes_data_reply_and_only_idle_accepts_it() {
     let env = TestEnv::new();
     setup(&env);
@@ -1160,13 +1204,13 @@ fn archive_of_a_lead_with_no_pane_closes_nothing() {
 }
 
 #[test]
-fn archive_refuses_a_working_or_blocked_session_and_changes_nothing() {
+fn archive_refuses_a_working_waiting_or_blocked_session_and_changes_nothing() {
     let env = TestEnv::new();
     let fork = parked_fork(&env);
     let pane = show(&env, &fork)["tmux_pane"].as_str().unwrap().to_owned();
     let moved = events(&env, "session-moved").len();
-    for state in ["working", "blocked"] {
-        exec_sql(&env, &format!("UPDATE sessions SET state = '{state}', state_label = {} WHERE id = '{fork}'", if state == "blocked" { "'why'" } else { "NULL" }));
+    for state in ["working", "waiting", "blocked"] {
+        exec_sql(&env, &format!("UPDATE sessions SET state = '{state}', state_label = {} WHERE id = '{fork}'", if state == "working" { "NULL" } else { "'why'" }));
         let error = refused(&env.cpd(&["session", "archive", &fork]), "archive_blocked", 3);
         let blockers = error["details"]["blockers"].as_array().unwrap();
         assert_eq!(blockers.len(), 1, "{error}");
