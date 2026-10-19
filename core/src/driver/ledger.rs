@@ -6,11 +6,11 @@
 use std::path::PathBuf;
 
 use rusqlite::{Connection, OptionalExtension, params};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::config::{Catalog, Tier};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{self, Kind, NewEvent};
+use crate::events::{self, NewEvent};
 use crate::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId};
 use crate::store::WriteTxn;
 
@@ -199,7 +199,7 @@ pub fn end(tx: &WriteTxn<'_>, target: &Target, end: &End, metrics: Option<&Value
         End::Cancelled => {
             let reason = cancel_request(tx, &target.plan, &target.job)?.ok_or_else(|| cas_lost("The Job's cancel request"))?;
             let text = format!("Job {job} cancelled ({reason}): its driver stopped Attempt {id}. Next: cpd plan show --plan {plan}");
-            ("cancelled", None, NewEvent::new(Kind::JobCancelled, text, json!({"reason": reason})))
+            ("cancelled", None, NewEvent::job_cancelled(text, &reason))
         }
         End::Failed { cause, detail } => match next_tier(tx, target, *cause, ladder)? {
             Some(next) => {
@@ -207,8 +207,7 @@ pub fn end(tx: &WriteTxn<'_>, target: &Target, end: &End, metrics: Option<&Value
                     "Attempt {id} of Job {job} failed ({}): {detail} The Job is queued again at Tier {next}. Next: {show}",
                     cause.as_str()
                 );
-                let data = json!({"outcome": "failed", "cause": cause.as_str(), "next_tier": next.to_string(), "feedback": detail});
-                ("queued", None, NewEvent::new(Kind::AttemptRetry, text, data))
+                ("queued", None, NewEvent::attempt_retry(text, "failed", cause.as_str(), &next.to_string(), detail))
             }
             None => {
                 let attempts: i64 =
@@ -217,8 +216,7 @@ pub fn end(tx: &WriteTxn<'_>, target: &Target, end: &End, metrics: Option<&Value
                     "Job {job} failed ({}): {detail} Decide: cpd job retry {job} --tier <T> --plan {plan}, or cpd job cancel {job} --reason <text> --plan {plan}",
                     cause.as_str()
                 );
-                let data = json!({"cause": cause.as_str(), "detail": detail, "tier": tier, "attempts": attempts});
-                ("failed", Some(cause.as_str()), NewEvent::new(Kind::JobFailed, text, data))
+                ("failed", Some(cause.as_str()), NewEvent::job_failed(text, cause.as_str(), detail, &tier, attempts))
             }
         },
     };
@@ -271,12 +269,6 @@ fn next_tier(tx: &WriteTxn<'_>, target: &Target, cause: Cause, ladder: &Ladder<'
 /// Appends an `error` Event about `target` (§5.2): an unexpected failure of
 /// the driver (commands.md §6.4).
 pub fn append_error(tx: &WriteTxn<'_>, target: &Target, error: &CpdError) -> Result<(), CpdError> {
-    let data = json!({
-        "source": SOURCE,
-        "code": error.code().as_str(),
-        "message": error.message(),
-        "details": error.details(),
-    });
     let text = format!(
         "The driver of Attempt {} failed: {} See: cpd attempt show {} --plan {}",
         target.id,
@@ -286,7 +278,7 @@ pub fn append_error(tx: &WriteTxn<'_>, target: &Target, error: &CpdError) -> Res
     );
     events::append(
         tx,
-        NewEvent::new(Kind::Error, text, data).plan(target.plan.clone()).job(target.job.clone()).attempt(target.id.clone()),
+        NewEvent::error(text, SOURCE, error.code().as_str(), error.message(), error.details()).plan(target.plan.clone()).job(target.job.clone()).attempt(target.id.clone()),
     )?;
     Ok(())
 }

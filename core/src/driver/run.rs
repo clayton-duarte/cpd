@@ -17,7 +17,7 @@ use super::worker;
 use super::RunArgs;
 use crate::config::{Catalog, Config, load_catalog};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{self, Kind, NewEvent};
+use crate::events::{self, NewEvent};
 use crate::git::{self, Setup};
 use crate::home::{CpdHome, Hook};
 use crate::host::exe::{Exe, Refusal};
@@ -303,10 +303,9 @@ impl Driver {
                 return Err(CpdError::new(ErrorCode::CasLost, format!("Attempt {} is no longer starting.", target.id)));
             }
             let text = format!("Worker {name} of Attempt {} registered.", target.id);
-            let data = json!({"role": "worker", "name": name, "forked_from": forked_from, "tier": tier});
             events::append(
                 tx,
-                NewEvent::new(Kind::SessionRegistered, text, data)
+                NewEvent::session_registered(text, "worker", &name, forked_from, &tier)
                     .context(target.context.clone())
                     .plan(target.plan.clone())
                     .session(session.clone()),
@@ -333,16 +332,15 @@ impl Driver {
             );
             events::append(
                 tx,
-                NewEvent::new(Kind::AttemptStatus, text, json!({"from": "starting", "to": "running"}))
+                NewEvent::attempt_status(text, "starting", "running")
                     .plan(target.plan.clone())
                     .job(target.job.clone())
                     .attempt(target.id.clone()),
             )?;
             let text = format!("Worker of Attempt {} is in its work window.", target.id);
-            let data = json!({"pane": pane.pane.as_str(), "window": pane.window.as_str(), "place": "work"});
             events::append(
                 tx,
-                NewEvent::new(Kind::SessionMoved, text, data)
+                NewEvent::session_moved(text, Some(pane.pane.as_str()), Some(pane.window.as_str()), "work")
                     .context(target.context.clone())
                     .plan(target.plan.clone())
                     .session(session.clone()),
@@ -465,7 +463,7 @@ impl Driver {
             let text = format!("The Worker of Attempt {id} ended its turn without submitting; it was nudged once.");
             events::append(
                 tx,
-                NewEvent::new(Kind::AttemptNudge, text, json!({"prompt": prompt}))
+                NewEvent::attempt_nudge(text, &prompt)
                     .plan(target.plan.clone())
                     .job(target.job.clone())
                     .attempt(id.clone())

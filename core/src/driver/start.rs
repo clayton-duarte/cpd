@@ -9,13 +9,12 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use rusqlite::{Connection, OptionalExtension, params};
-use serde_json::json;
 
 use super::ledger::{self, Cause, End, Ladder};
 use super::lock::Starter;
 use crate::config::{Catalog, Config, Tier};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{self, Kind, NewEvent};
+use crate::events::{self, NewEvent};
 use crate::git;
 use crate::home::CpdHome;
 use crate::ids::{AttemptId, JobKey, PlanId};
@@ -259,8 +258,8 @@ fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &N
         next.tier,
         next.origin.as_str()
     );
-    let data = json!({"number": number, "tier": next.tier.to_string(), "origin": next.origin.as_str()});
-    events::append(tx, NewEvent::new(Kind::AttemptStarted, text, data).plan(plan.clone()).job(key.clone()).attempt(attempt.clone()))?;
+    let event = NewEvent::attempt_started(text, number, &next.tier.to_string(), next.origin.as_str());
+    events::append(tx, event.plan(plan.clone()).job(key.clone()).attempt(attempt.clone()))?;
     Ok(())
 }
 
