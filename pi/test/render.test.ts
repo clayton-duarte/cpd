@@ -6,7 +6,7 @@ import { test, mock } from "node:test";
 import { type Component, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { errorMessage, eventMessage, sessionMessage } from "../lib/delivery.ts";
 import type { CpdEvent } from "../lib/event.ts";
-import type { Message, RenderedMessage, Theme } from "../lib/pi.ts";
+import type { Message, MessageRenderer, RenderedMessage, Theme } from "../lib/pi.ts";
 import { loadStyle, RENDERED_TYPES, Rendering, type Style } from "../lib/render.ts";
 import { contextUpdate, type ContextRecord, type PendingPlan, type PlanEvent } from "../lib/updates.ts";
 import { ev, Fixture, ID, OTHER } from "./fake.ts";
@@ -304,7 +304,9 @@ test("the adapter registers one renderer per displayed customType once at load, 
     mkdirSync(f.agentDir);
     f.file("agent/compact-tools.json", '{"style": "codex"}');
     const m = eventMessage(event("job-merged", { text: "Job done." }), ID);
-    const render = () => draw(f.pi.renderers.get("cpd")!(m, { expanded: false, outputPad: 1 }, theme));
+    // The fake stores pi's own renderer type; call it as the adapter's narrow MessageRenderer, which it is.
+    const renderer = f.pi.renderers.get("cpd") as unknown as MessageRenderer;
+    const render = () => draw(renderer(m, { expanded: false, outputPad: 1 }, theme));
     assert.equal(render()[0], HEAD("Job done."), "compact until session_start reads the file");
     await f.pi.fire("session_start", { reason: "startup" });
     assert.deepEqual(render(), [` <b><customMessageLabel>•</></b> <b>cpd</b> Job done.`, "<dim>     + Show details</>"]);

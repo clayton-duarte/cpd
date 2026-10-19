@@ -1280,7 +1280,7 @@ fn is_dead(env: &TestEnv, pane: &str) -> bool {
     String::from_utf8(out.stdout).unwrap().lines().any(|l| l == format!("{pane} 1"))
 }
 
-/// `cpd watch` with a one-second tick, killed when dropped.
+/// `cpd watch` with a tick of 0.2 s, killed when dropped.
 struct Engine(std::process::Child);
 
 impl Drop for Engine {
@@ -1294,7 +1294,7 @@ fn engine(env: &TestEnv) -> Engine {
     env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
     let path = env.cpd_home().join("config.toml");
     let config = fs::read_to_string(&path).unwrap();
-    fs::write(&path, format!("{config}[watch]\ntick_seconds = 1\n")).unwrap();
+    fs::write(&path, format!("{config}[watch]\ntick_seconds = 0.2\n")).unwrap();
     let child = env.command(CPD).arg("watch").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
     Engine(child)
 }
