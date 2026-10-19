@@ -10,7 +10,7 @@ mod common;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::TestEnv;
+use common::{SLEEP_SECONDS, TestEnv};
 use cpd_tui::{Capture, ViewError, run_view};
 
 /// The child: a view that waits for the file named by `CPD_TEST_VIEW_GO`, then ends the way `CPD_TEST_VIEW_ENDS` says.
@@ -60,7 +60,7 @@ fn view_ending(ends: &str, until: &str) -> (String, String) {
     let go = env.root().join("go");
     let exe = std::env::current_exe().unwrap();
     let command = format!(
-        "CPD_TEST_VIEW_GO='{}' CPD_TEST_VIEW_ENDS={ends} '{}' --exact a_view --ignored --nocapture; sleep 300",
+        "CPD_TEST_VIEW_GO='{}' CPD_TEST_VIEW_ENDS={ends} '{}' --exact a_view --ignored --nocapture; sleep {SLEEP_SECONDS}",
         go.display(),
         exe.display()
     );
