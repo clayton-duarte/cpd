@@ -140,7 +140,7 @@ Deliberately absent: a regex crate (the id patterns of §2.1 are checked by hand
 
 ## Restarting the cockpit tmux server
 
-cpd requires tmux >= 3.6 (contract §6.1: older versions can lose a pane's `SIGCHLD`, so `pane-died` never respawns a cockpit view). A running tmux server keeps the version it started with. Bare `cpd` restarts the cpd tmux server (`tmux -L <socket>`, default `cpd`) onto the installed tmux when it is safe and attaches (commands.md §13.3, contract §6.1); there is nothing to run by hand and no script (`scripts/restart-tmux.sh` is deleted with the code change of PR `bare`).
+cpd requires tmux >= 3.6 (contract §6.1: older versions can lose a pane's `SIGCHLD`, so `pane-died` never respawns a cockpit view). A running tmux server keeps the version it started with. Bare `cpd` restarts the cpd tmux server (`tmux -L <socket>`, default `cpd`) onto the installed tmux when it is safe and attaches (commands.md §13.3, contract §6.1); when it is not safe it marks a restart pending, the engine starts no new Attempt until nothing runs, then restarts the server detached and reopens every Lead and Manager pane in place (hold, drain, restart; commands.md §13.3). There is nothing to run by hand and no script.
 
 ## Checking a pi version
 

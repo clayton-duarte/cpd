@@ -935,6 +935,39 @@ fn e3_starts_one_urgent_job_beyond_the_concurrency_and_not_a_second() {
     assert_eq!((fx.job_status("hot1"), fx.job_status("hot2"), fx.job_status("old")), ("running".into(), "queued".into(), "queued".into()));
 }
 
+/// A pending restart of the tmux server (contract §6.1, hs-d294) holds E3: no Attempt starts while it
+/// is pending, a running one is left alone, and the Job starts at the next tick once it is cleared.
+#[test]
+fn a_pending_tmux_restart_stops_e3_from_starting_attempts_and_running_ones_finish() {
+    let fx = fx("concurrency = 2\nretry_cap = 0");
+    work_session_with_a_worker_that_stays(&fx);
+    // One Attempt runs (its driver holds the lock); a slot is free and a Job is ready.
+    let _busy = fx.live_driver("busy-a1");
+    fx.add_running("busy", "running", &ago(1));
+    fx.add_job("next", &[], "");
+    let pending = fx.env.cpd_home().join("run/tmux-restart.pending");
+    fs::create_dir_all(pending.parent().unwrap()).unwrap();
+    fs::write(&pending, r#"{"at":"2026-10-19T12:00:00.000Z","server":"3.4","installed":"3.8"}"#).unwrap();
+
+    let engine = fx.start();
+    // `doctor` shows the planned hold, which is not a failure.
+    let doctor = fx.env.cpd(&["doctor"]).json();
+    let checks = if doctor["ok"] == true { &doctor["checks"] } else { &doctor["error"]["details"]["checks"] };
+    let check = checks.as_array().unwrap().iter().find(|c| c["name"] == "tmux_restart").unwrap();
+    assert_eq!((check["ok"].as_bool(), check["message"].as_str()), (Some(true), Some("tmux restart pending")));
+    wait_until("E3's hold to be logged", || fs::read_to_string(fx.home().watch_log()).unwrap_or_default().contains("E3: holding"));
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(fx.count("attempt-started"), 0, "a pending restart holds E3");
+    assert_eq!((fx.job_status("next"), fx.attempt("busy-a1").0), ("queued".into(), "running".into()));
+    assert!(fx.events("error").is_empty(), "the hold is not an error: {:?}", fx.events("error"));
+
+    // Cleared (a restart that ran, or none needed): the Job starts at once.
+    fs::remove_file(&pending).unwrap();
+    wait_until("attempt-started", || fx.count("attempt-started") == 1);
+    engine.stop();
+    assert_eq!(fx.events("attempt-started")[0].1.as_deref(), Some("next"));
+}
+
 /// The 00:02Z incident (hs-d151): the file the engine runs from is replaced, then
 /// E3 starts an Attempt. The driver starts from the path recorded at start
 /// (`cannot run <path> (deleted)` before).
