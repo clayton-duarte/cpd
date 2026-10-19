@@ -8,8 +8,17 @@ use crate::home::CpdHome;
 use crate::store::{APPLICATION_ID, Store};
 
 /// A connection with a stand-in `cpd_txn()`, which the history triggers call.
+/// Fixtures only: no fsync (`synchronous = OFF`, journal in memory), since a
+/// crash loses a throwaway database nobody reads again; what the tests claim is
+/// the schema and the rows, not durability, and the fsyncs of every fixture
+/// commit were the larger part of the time on a loaded disk.
 fn connection(path: &std::path::Path) -> Connection {
-    let conn = Connection::open(path).unwrap();
+    prepared(Connection::open(path).unwrap())
+}
+
+fn prepared(conn: Connection) -> Connection {
+    conn.pragma_update(None, "synchronous", "OFF").unwrap();
+    conn.pragma_update_and_check(None, "journal_mode", "MEMORY", |_| Ok(())).unwrap();
     conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, |_| Ok(1_i64)).unwrap();
     conn
 }
@@ -29,10 +38,14 @@ fn at_version(conn: &Connection, n: usize) {
 
 #[test]
 fn migrating_an_empty_database_gives_every_versions_schema_hash() {
-    let dir = tempfile::tempdir().unwrap();
+    // One database taken through the migrations one at a time: the schema after
+    // `n` of them is the same as one built from scratch to `n` (`at_version`).
+    let conn = prepared(Connection::open_in_memory().unwrap());
+    conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
     for (n, expected) in SCHEMA_HASHES.iter().enumerate() {
-        let conn = connection(&dir.path().join(format!("v{}.db", n + 1)));
-        at_version(&conn, n + 1);
+        conn.pragma_update(None, "legacy_alter_table", "ON").unwrap();
+        (LEGACY[n].apply)(&conn).unwrap();
+        conn.pragma_update(None, "legacy_alter_table", "OFF").unwrap();
         assert_eq!(legacy_schema_hash(&conn).unwrap(), *expected, "version {}", n + 1);
     }
 }
@@ -1581,50 +1594,76 @@ fn the_rebuilt_tables_history_triggers_list_their_new_columns() {
 
 // ---------- named migrations: the conversion (§4.5 C1–C6) ----------
 
-/// A legacy store at version `n` with a row in every table, as the
-/// integer-era binary left it: `version_2`'s rows (without the columns
-/// migration 2 adds, for version 1), taken through the legacy migrations
-/// to `n`, and a tier and a need.
-fn legacy_store(home: &CpdHome, n: usize) {
-    let tier = format!(
-        "INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('1.0', 'S', 'm', '[]', '{T}');"
-    );
-    if n == 1 {
+/// The database files of the legacy stores of versions 1 to `LEGACY.len()` (index
+/// `n - 1`), each with a row in every table, as the integer-era binary left it:
+/// `version_2`'s rows (without the columns migration 2 adds, for version 1),
+/// taken through the legacy migrations to `n`, and a tier and a need. Built once
+/// per process, in one pass: the store of version `n` is the store of `n - 1`
+/// after one more migration, so the migrations run once each instead of `n`
+/// times (the extra rows are added to a copy, after the migration, as before).
+fn legacy_stores() -> &'static [Vec<u8>] {
+    static STORES: std::sync::OnceLock<Vec<Vec<u8>>> = std::sync::OnceLock::new();
+    STORES.get_or_init(|| {
+        let tier = format!(
+            "INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('1.0', 'S', 'm', '[]', '{T}');"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let scratch = home(&dir);
         let sql = version_2_sql();
         let v1 = sql
             .replace("pr_seen, pr_polled_at, pr_title, pr_review_decision, pr_checks,", "pr_seen, pr_polled_at,")
             .replace("'Open PR', 'approved', 'passed', ", "");
         assert_ne!(v1, sql);
-        return database_at(home, 1, &format!("{v1}{tier}"));
-    }
-    database_at(home, 2, &format!("{}{tier}", version_2_sql()));
-    let conn = connection(&home.db());
-    conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
-    conn.pragma_update(None, "legacy_alter_table", "ON").unwrap();
-    for legacy in &LEGACY[2..n] {
-        conn.execute_batch("BEGIN IMMEDIATE").unwrap();
-        (legacy.apply)(&conn).unwrap();
-        conn.execute_batch("COMMIT").unwrap();
-    }
-    conn.pragma_update(None, "legacy_alter_table", "OFF").unwrap();
-    conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-    conn.pragma_update(None, "user_version", n as i64).unwrap();
-    if n >= 4 {
-        conn.execute_batch(&format!("BEGIN; {WEB} INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay'); COMMIT;")).unwrap();
-    }
-    if n >= 12 {
-        conn.execute_batch(&format!(
-            "BEGIN; INSERT INTO inbox_items (kind, urgency, subject, plan, context, label, opened_at) VALUES ('dialog', 'red', 'plan:gr', 'gr', 'ctx', 'Answer', '{T}'); COMMIT;"
-        ))
-        .unwrap();
-    }
-    if n >= 14 {
-        // A stub draft: a title and no Tier or Spec (0014-register).
-        conn.execute_batch(&format!(
-            "BEGIN; INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at) VALUES ('gr', 'web', 'stub', 'Stub', 'draft', 1, 1, '{T}'); COMMIT;"
-        ))
-        .unwrap();
-    }
+        database_at(&scratch, 1, &format!("{v1}{tier}"));
+        let mut stores = vec![std::fs::read(scratch.db()).unwrap()];
+
+        let chain_dir = tempfile::tempdir_in(dir.path()).unwrap();
+        let chain = home(&chain_dir);
+        database_at(&chain, 2, &format!("{sql}{tier}"));
+        stores.push(std::fs::read(chain.db()).unwrap());
+        let conn = connection(&chain.db());
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        for n in 3..=LEGACY.len() {
+            conn.pragma_update(None, "legacy_alter_table", "ON").unwrap();
+            conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+            (LEGACY[n - 1].apply)(&conn).unwrap();
+            conn.execute_batch("COMMIT").unwrap();
+            conn.pragma_update(None, "legacy_alter_table", "OFF").unwrap();
+            conn.pragma_update(None, "user_version", n as i64).unwrap();
+            // The chain is at rest: no open transaction, no journal file, so the file is the database.
+            let mut bytes = std::fs::read(chain.db()).unwrap();
+            if n >= 4 {
+                std::fs::write(scratch.db(), &bytes).unwrap();
+                let copy = connection(&scratch.db());
+                copy.pragma_update(None, "foreign_keys", "ON").unwrap();
+                copy.execute_batch(&format!("BEGIN; {WEB} INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay'); COMMIT;")).unwrap();
+                if n >= 12 {
+                    copy.execute_batch(&format!(
+                        "BEGIN; INSERT INTO inbox_items (kind, urgency, subject, plan, context, label, opened_at) VALUES ('dialog', 'red', 'plan:gr', 'gr', 'ctx', 'Answer', '{T}'); COMMIT;"
+                    ))
+                    .unwrap();
+                }
+                if n >= 14 {
+                    // A stub draft: a title and no Tier or Spec (0014-register).
+                    copy.execute_batch(&format!(
+                        "BEGIN; INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at) VALUES ('gr', 'web', 'stub', 'Stub', 'draft', 1, 1, '{T}'); COMMIT;"
+                    ))
+                    .unwrap();
+                }
+                drop(copy);
+                bytes = std::fs::read(scratch.db()).unwrap();
+            }
+            stores.push(bytes);
+        }
+        assert_eq!(stores.len(), LEGACY.len());
+        stores
+    })
+}
+
+/// The legacy store at version `n` (see [`legacy_stores`]) as `home`'s database.
+fn legacy_store(home: &CpdHome, n: usize) {
+    std::fs::create_dir_all(home.db().parent().unwrap()).unwrap();
+    std::fs::write(home.db(), &legacy_stores()[n - 1]).unwrap();
 }
 
 /// Every row of every table, as JSON text, by table, in rowid order.
