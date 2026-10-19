@@ -16,6 +16,9 @@ use crate::read::{OpenPr, PrState, ReviewDecision, Widgets};
 /// The glyph at the right end of a PR's first line: a link to the pull request.
 const ARROW: &str = "↗";
 
+/// The glyph in the last column of a clean PR's second line: md-source_merge, U+F062D (Material Design Nerd Font).
+const MERGE: &str = "\u{F062D}";
+
 /// What a click on an owned PR reaches: its two lines, except the `↗` cell (the terminal opens that link).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hit {
@@ -23,14 +26,23 @@ pub struct Hit {
     pub area: Rect,
     /// The `↗` cell, inside `area`.
     pub arrow: Position,
+    /// The merge icon's cell, inside `area`, when the PR shows one.
+    pub icon: Option<Position>,
     /// The Lead of the owner: `cpd session open <lead>`.
     pub lead: SessionId,
 }
 
 impl Hit {
     pub fn contains(&self, at: Position) -> bool {
-        self.area.contains(at) && at != self.arrow
+        self.area.contains(at) && at != self.arrow && Some(at) != self.icon
     }
+}
+
+/// A merge icon on the screen: a click on `area` (one cell) opens the merge popup for `pull`, `<owner>/<repo>#<n>`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergeIcon {
+    pub area: Rect,
+    pub pull: String,
 }
 
 /// The machine the column names: its hostname and the first three fields of its load average.
@@ -62,6 +74,7 @@ fn truncate(text: &str, max: usize) -> String {
 
 /// One open pull request, two lines (commands.md §13.2): ` owner/repo#n` with `↗` in the last column, then
 /// `  <open|draft> <checks> <review>  <title>`, the title cut first to fit `width`; the name is cut so it never reaches the `↗`.
+/// A `clean` one ends the second line in the merge icon, in the last column; the title is cut so it never reaches it.
 /// A conflicting one adds ` conflict` in red after the review (kept red under the active and dim styles).
 /// An `active` one (a PR of the chat slot's Plan) is reversed and bold, as the active tab is; one no Plan owns is dim.
 fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
@@ -87,10 +100,17 @@ fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
     if pr.conflicting {
         spans.push(Span::styled(conflict, palette::fg(Meaning::Failed)));
     }
-    let room = width.saturating_sub(used + 2);
+    let reserved = if pr.clean { 2 } else { 0 };
+    let room = width.saturating_sub(used + 2 + reserved);
+    let mut shown = used;
     if room >= 4 {
         let title = format!("  {}", truncate(&pr.title, room));
+        shown += title.chars().count();
         spans.push(if pr.active { Span::raw(title) } else { dim(title) });
+    }
+    if pr.clean {
+        spans.push(" ".repeat(width.saturating_sub(shown + 1)).into());
+        spans.push(MERGE.into());
     }
     let first = Line::from(vec![bold(name), gap.into(), ARROW.into()]);
     let second = Line::from(spans);
@@ -123,8 +143,9 @@ fn render_header(f: &mut Frame, area: Rect, title: &str) {
 }
 
 /// Draws the column in `area`: a blank row, the machine, then the PRs, git and Jira, each under its header. A non-empty
-/// `note` replaces the column's last row, in `palette::note()`. Returns where a click reaches an owned PR.
-pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &str) -> Vec<Hit> {
+/// `note` replaces the column's last row, in `palette::note()`. Returns where a click reaches an owned PR, and where it reaches
+/// a merge icon.
+pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &str) -> (Vec<Hit>, Vec<MergeIcon>) {
     let [_top, home, _above_prs, prs_header, _below_prs, prs, _above_git, git_header, _below_git, git, _above_jira, jira_header, _below_jira, jira] =
         Layout::vertical([
             Constraint::Length(1),
@@ -152,14 +173,19 @@ pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &st
     );
     let mut text = vec![];
     let mut hits = vec![];
+    let mut icons = vec![];
     // Whole pull requests only: what does not fit the section is dropped from the end.
     let shown: Vec<(u16, &OpenPr)> = (prs.y..).step_by(2).zip(w.prs.iter().take(usize::from(prs.height) / 2)).collect();
-    // The `↗` is the last column of the section's first line of each PR.
+    // The `↗` is the last column of the section's first line of each PR, the merge icon that of its second.
     let arrow_x = prs.right().checked_sub(1);
     for (y, pr) in &shown {
         text.extend(pr_lines(pr, usize::from(prs.width)));
+        let icon = arrow_x.filter(|_| pr.clean).map(|x| Position::new(x, y + 1));
+        if let Some(at) = icon {
+            icons.push(MergeIcon { area: Rect::new(at.x, at.y, 1, 1), pull: format!("{}#{}", pr.repo, pr.number) });
+        }
         if let (Some(lead), Some(x)) = (&pr.lead, arrow_x) {
-            hits.push(Hit { area: Rect::new(prs.x, *y, prs.width, 2), arrow: Position::new(x, *y), lead: lead.clone() });
+            hits.push(Hit { area: Rect::new(prs.x, *y, prs.width, 2), arrow: Position::new(x, *y), icon, lead: lead.clone() });
         }
     }
     if w.prs.is_empty() {
@@ -178,7 +204,7 @@ pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &st
         f.render_widget(Clear, last);
         f.render_widget(Paragraph::new(Span::styled(note.to_owned(), palette::note())), last);
     }
-    hits
+    (hits, icons)
 }
 
 #[cfg(test)]
@@ -206,9 +232,17 @@ mod tests {
     fn drawn(width: u16, height: u16, w: &Widgets, note: &str) -> (Buffer, Vec<Hit>) {
         let machine = Machine { name: "homeserver".to_owned(), load: ["0.52", "0.41", "0.30"].map(str::to_owned).to_vec() };
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut hits = vec![];
+        let mut hits = (vec![], vec![]);
         terminal.draw(|f| hits = draw(f, f.area(), w, &machine, note)).unwrap();
-        (terminal.backend().buffer().clone(), hits)
+        (terminal.backend().buffer().clone(), hits.0)
+    }
+
+    fn icons(width: u16, w: &Widgets) -> Vec<MergeIcon> {
+        let machine = Machine { name: "homeserver".to_owned(), load: vec![] };
+        let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
+        let mut got = (vec![], vec![]);
+        terminal.draw(|f| got = draw(f, f.area(), w, &machine, "")).unwrap();
+        got.1
     }
 
     fn buffer(width: u16, height: u16) -> Buffer {
@@ -225,6 +259,7 @@ mod tests {
             checks: crate::read::Checks::Passed,
             review_decision: ReviewDecision::None,
             conflicting: false,
+            clean: false,
             active: false,
             lead: lead.map(|l| SessionId::parse(l).unwrap()),
         }
@@ -305,7 +340,7 @@ mod tests {
         assert!(buf[(29, 6)].modifier.contains(Modifier::DIM) && buf[(29, 6)].symbol().contains('↗'), "the arrow stays");
         let [hit] = &hits[..] else { panic!("{hits:?}") };
         assert_eq!(hit.lead.as_str(), "l-a");
-        assert_eq!((hit.area, hit.arrow), (Rect::new(0, 8, 30, 2), Position::new(29, 8)));
+        assert_eq!((hit.area, hit.arrow, hit.icon), (Rect::new(0, 8, 30, 2), Position::new(29, 8), None));
     }
 
     #[test]
@@ -364,5 +399,51 @@ mod tests {
         assert_eq!(second_line(&p, 28).0, "  open ✓ no review conflict");
         assert_eq!(second_line(&p, 32).0, "  open ✓ no review conflict");
         assert_eq!(second_line(&p, 33).0, "  open ✓ no review conflict  A t…");
+    }
+
+    #[test]
+    fn a_clean_pr_ends_its_second_line_in_the_merge_icon_and_others_have_none() {
+        let mut p = pr(7, Some("l-a"));
+        assert_eq!(second_line(&p, 40).0, "  open ✓ no review  A title");
+        p.clean = true;
+        let (line, _) = second_line(&p, 40);
+        assert_eq!(line, format!("  open ✓ no review  A title{}{MERGE}", " ".repeat(40 - 27 - 1)));
+        assert_eq!(line.chars().count(), 40, "the icon is the last column");
+        assert!(!row(&drawn(40, 20, &widgets(vec![p]), "").0, 6).contains(MERGE), "never on the first line");
+    }
+
+    #[test]
+    fn the_title_is_cut_so_it_never_reaches_the_merge_icon() {
+        let mut p = pr(7, Some("l-a"));
+        p.clean = true;
+        p.title = "A very long title indeed".to_owned();
+        let (line, _) = second_line(&p, 32);
+        assert_eq!(line, format!("  open ✓ no review  A very lo… {MERGE}"));
+        assert_eq!(line.chars().count(), 32);
+    }
+
+    #[test]
+    fn a_merge_icon_has_a_one_cell_area_and_the_row_hit_area_excludes_it() {
+        let mut clean = pr(7, Some("l-a"));
+        clean.clean = true;
+        let mut unowned = pr(8, None);
+        unowned.clean = true;
+        let blocked = pr(9, Some("l-a"));
+        let w = widgets(vec![clean, unowned, blocked]);
+        assert_eq!(
+            icons(30, &w),
+            [
+                MergeIcon { area: Rect::new(29, 7, 1, 1), pull: "acme/repo#7".to_owned() },
+                MergeIcon { area: Rect::new(29, 9, 1, 1), pull: "acme/repo#8".to_owned() },
+            ],
+            "every clean row, owned or not; none for the other"
+        );
+        let (_, hits) = drawn(30, 20, &w, "");
+        let [first, second] = &hits[..] else { panic!("{hits:?}") };
+        assert_eq!(first.icon, Some(Position::new(29, 7)));
+        assert_eq!(second.icon, None);
+        for (x, y, inside) in [(28, 7, true), (29, 7, false), (29, 6, false), (0, 7, true)] {
+            assert_eq!(first.contains(Position::new(x, y)), inside, "({x}, {y})");
+        }
     }
 }

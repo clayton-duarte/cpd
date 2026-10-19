@@ -3,7 +3,7 @@
 //! model ([`read::widgets`]), then follows the Events: it looks at the highest
 //! Event id every [`TICK`] and re-reads when it moved, at most once per
 //! [`COALESCE`]; the load average is re-read at least every [`REFRESH`], since
-//! it is no Event. It makes no write of its own, but for what a click on an owned PR row asks of `cpd session open`. Its one
+//! it is no Event. It makes no write of its own, but for what a click on an owned PR row asks of `cpd session open`, and the merge popup a click on a merge icon opens. Its one
 //! key is `q`; mouse capture is on.
 //!
 //! - [`column`]: the drawing of the machine, the PRs, git and Jira;
@@ -35,7 +35,7 @@ use cpd_core::session::PROGRAM;
 use cpd_core::output::Output;
 use cpd_core::store::Store;
 
-pub use column::{Hit, Machine, draw};
+pub use column::{Hit, Machine, MergeIcon, draw};
 
 /// How often the view looks at the Events and at keys.
 const TICK: Duration = Duration::from_millis(200);
@@ -79,7 +79,8 @@ struct Opener<'a> {
 }
 
 /// Draws and follows until `q`. Reading failures end the view with their error. A left click on an owned PR row (not on its
-/// `↗`) opens its Lead in the chat slot; a refusal is the `note` in the column's last row until the next click.
+/// `↗` or its merge icon) opens its Lead in the chat slot; a left click on a merge icon opens the merge popup; a refusal or a
+/// failure is the `note` in the column's last row until the next click.
 fn show(
     terminal: &mut ratatui::DefaultTerminal,
     store: &mut Store,
@@ -89,7 +90,7 @@ fn show(
     opener: &Opener,
 ) -> Result<(), CpdError> {
     let mut read_at = Instant::now();
-    let mut hits = Vec::new();
+    let mut hits = (Vec::new(), Vec::new());
     let mut note = String::new();
     loop {
         terminal.draw(|f| hits = draw(f, f.area(), &widgets, &machine, &note)).map_err(terminal_failed)?;
@@ -99,10 +100,14 @@ fn show(
                 Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
                     note.clear();
                     let at = Position::new(m.column, m.row);
-                    if let Some(hit) = hits.iter().find(|h| h.contains(at)) {
-                        if let Err(e) = open_lead(opener.run_command, opener.tmux, opener.cockpit, &hit.lead) {
-                            note = e.message().to_owned();
-                        }
+                    let (rows, icons) = &hits;
+                    let result = if let Some(icon) = icons.iter().find(|i| i.area.contains(at)) {
+                        Some(crate::merge::open(opener.tmux, &icon.pull))
+                    } else {
+                        rows.iter().find(|h| h.contains(at)).map(|hit| open_lead(opener.run_command, opener.tmux, opener.cockpit, &hit.lead))
+                    };
+                    if let Some(Err(e)) = result {
+                        note = e.message().to_owned();
                     }
                 }
                 _ => {}
