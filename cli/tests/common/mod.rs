@@ -300,6 +300,9 @@ pub struct TestEnv {
     tmux_socket: String,
     /// The reaper ([`TestEnv::start_reaper`]), until the teardown stops it.
     reaper: Mutex<Option<Child>>,
+    /// When the reaper started, in clock ticks since boot (`/proc/<pid>/stat` field 22): every
+    /// process this env starts starts at or after it.
+    since: OnceLock<u64>,
 }
 
 /// The result of one `cpd` run.
@@ -352,7 +355,7 @@ impl TestEnv {
     pub fn empty() -> TestEnv {
         let dir = tempfile::Builder::new().prefix("cpd-test-").tempdir().expect("temp dir");
         let n = NEXT_SOCKET.fetch_add(1, Ordering::Relaxed);
-        let env = TestEnv { dir, tmux_socket: format!("cpdt-{}-{n}", std::process::id()), reaper: Mutex::new(None) };
+        let env = TestEnv { dir, tmux_socket: format!("cpdt-{}-{n}", std::process::id()), reaper: Mutex::new(None), since: OnceLock::new() };
         for sub in ["cpd-home", "home", "bin", "tmux", "repos"] {
             fs::create_dir_all(env.dir.path().join(sub)).expect("create test dir");
         }
@@ -398,13 +401,15 @@ impl TestEnv {
             cmd.pre_exec(|| nix::unistd::setsid().map(drop).map_err(io::Error::from));
         }
         let reaper = spawn(&mut cmd).expect("start the reaper");
+        let since = start_ticks(Pid::from_raw(reaper.id() as i32)).expect("the reaper's start time");
+        self.since.set(since).expect("one reaper per env");
         *self.reaper.lock().unwrap_or_else(PoisonError::into_inner) = Some(reaper);
     }
 
-    /// Stops the reaper, kills this env's tmux server, then every process whose command line
-    /// or cwd is under its directory (SIGTERM, SIGKILL after a grace of up to 1 s; never the
-    /// test process or its ancestors), then removes the directory. Idempotent. In-process: the
-    /// reaper's `teardown.sh` does the same when the test process was killed.
+    /// Stops the reaper, kills this env's tmux server, then every process started since the env
+    /// whose command line or cwd is under its directory (SIGTERM, SIGKILL after a grace of up to
+    /// 1 s; never the test process or its ancestors), then removes the directory. Idempotent.
+    /// In-process: the reaper's `teardown.sh` does the same when the test process was killed.
     pub fn teardown(&self) {
         if let Some(mut reaper) = self.reaper.lock().unwrap_or_else(PoisonError::into_inner).take() {
             // Its session is its process group: the shell and its `sleep`.
@@ -416,7 +421,7 @@ impl TestEnv {
             let _ = run_quietly(self.command("tmux").arg("-L").arg(&self.tmux_socket).arg("kill-server").current_dir("/"));
         }
         for _ in 0..5 {
-            let pids = processes_under(self.root());
+            let pids = processes_under(self.root(), self.since.get().copied().unwrap_or(0));
             if pids.is_empty() {
                 break;
             }
@@ -733,10 +738,18 @@ fn alive(pid: Pid) -> bool {
         .is_ok_and(|s| s.rsplit_once(") ").is_some_and(|(_, rest)| !rest.starts_with('Z') && !rest.starts_with('X')))
 }
 
-/// The live processes of this user whose command line contains `dir` or whose cwd is under it,
-/// but the test process and its ancestors: one pass over `/proc`, in this process (the
-/// teardown's search). Processes of other users are skipped: they cannot be signalled.
-fn processes_under(dir: &Path) -> Vec<Pid> {
+/// When `pid` started, in clock ticks since boot (`/proc/<pid>/stat` field 22); `None` when it is gone.
+fn start_ticks(pid: Pid) -> Option<u64> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat.rsplit_once(") ")?.1.split(' ').nth(19)?.parse().ok()
+}
+
+/// The live processes of this user that started at or after `since` (clock ticks since boot)
+/// and whose command line contains `dir` or whose cwd is under it, but the test process and its
+/// ancestors: one pass over `/proc`, in this process (the teardown's search). Processes of other
+/// users are skipped (they cannot be signalled), and so are the older ones without reading
+/// their command line: on a busy machine that read is the search's cost.
+fn processes_under(dir: &Path, since: u64) -> Vec<Pid> {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::MetadataExt;
     let uid = uid();
@@ -757,9 +770,10 @@ fn processes_under(dir: &Path) -> Vec<Pid> {
             (pid.as_raw() > 1 && !protected.contains(&pid) && e.metadata().ok()?.uid() == uid).then_some((pid, e.path()))
         })
         .filter(|(pid, proc_dir)| {
-            let by_cmdline = fs::read(proc_dir.join("cmdline")).is_ok_and(|c| c.windows(needle.len()).any(|w| w == needle));
+            let recent = start_ticks(*pid).is_some_and(|t| t >= since);
+            let by_cmdline = || fs::read(proc_dir.join("cmdline")).is_ok_and(|c| c.windows(needle.len()).any(|w| w == needle));
             let by_cwd = || fs::read_link(proc_dir.join("cwd")).is_ok_and(|cwd| cwd.starts_with(dir));
-            (by_cmdline || by_cwd()) && alive(*pid)
+            recent && (by_cmdline() || by_cwd()) && alive(*pid)
         })
         .map(|(pid, _)| pid)
         .collect()
