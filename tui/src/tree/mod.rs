@@ -12,6 +12,9 @@
 //!   `session open`, or nothing (the label is an OSC 8 link);
 //! - [`follow`]: `cpd events follow`, which tells it when to take a new snapshot.
 //!
+//! It is also the one view that restarts a stopped engine (`cpd watch --ensure`, at most once a minute) and tells the
+//! live Managers when that fails ([`view::View::restart_engine`], hs-d318).
+//!
 //! Keys and clicks are the reference's (commands.md §13.2, `tui/README.md` "Context column" on `main`): arrows
 //! or `j`/`k` move the cursor between Sessions (shown after the first arrow key, while the pane has focus);
 //! Enter opens the cursor's Session in the chat slot and focuses it; `n` starts a new Plan; `x` closes a
@@ -111,6 +114,11 @@ fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View,
             if follower.is_none() {
                 follower = Follower::start(view.tree.events_cursor).ok();
             }
+        }
+        // A stopped engine restarts itself, at most once a minute (commands.md §13.2, hs-d318): this view only, not every pane.
+        if let Some(line) = view.restart_engine(Instant::now(), &mut |action| actions::call(action), &mut || runner.live_managers()) {
+            eprintln!("{line}");
+            terminal.clear()?; // the line was written over the screen this view owns
         }
         let frame = palette::frame(SystemTime::now());
         terminal.draw(|f| view.draw(f, frame))?;

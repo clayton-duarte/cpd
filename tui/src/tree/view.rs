@@ -9,7 +9,8 @@
 //! dismisses. No other key does anything. A right click opens the menu
 //! ([`super::menu`]), which then takes every key and click.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::time::{Duration, Instant};
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
@@ -18,7 +19,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use time::OffsetDateTime;
 use tui_tree_widget::TreeState;
 
-use super::actions::{Action, Free, IN_CHAT_SLOT, Subject, Until};
+use super::actions::{Action, Failure, Free, IN_CHAT_SLOT, Subject, Until};
 use super::cursor::{self, Input};
 use super::inbox::{self, Hit, Jump, Shape};
 use crate::merge::Pull;
@@ -26,9 +27,16 @@ use super::menu::{self, Item, Kind, Menu};
 use super::prompt::{Ask, Outcome, Prompt, Target};
 use super::rows::{self, Id, Row};
 use cpd_core::inbox::model::Kind as InboxKind;
+use cpd_core::ids::SessionId;
 use cpd_core::session::State;
+use serde_json::Value;
 use crate::palette;
 use crate::read::{ContextNode, SessionNode, Tree};
+
+/// The tree tries `cpd watch --ensure` at most this often while the engine is down (commands.md §13.2, hs-d318).
+const ENSURE_EVERY: Duration = Duration::from_secs(60);
+/// The Managers hear the same failure code at most this often.
+const TELL_EVERY: Duration = Duration::from_secs(3600);
 
 /// The longest name of a Session (commands.md §1.4).
 /// Rows a wheel notch scrolls the tree or the Inbox section by.
@@ -125,6 +133,10 @@ pub struct View {
     inbox_cursor: Option<usize>,
     /// The one-line result or refusal of the last action, until the next `n`, `x` or click.
     pub note: String,
+    /// When the tree last tried `watch --ensure` for a stopped engine (view state only).
+    ensure_at: Option<Instant>,
+    /// When the Managers were last told each failure code of `watch --ensure` (view state only).
+    told: BTreeMap<String, Instant>,
 }
 
 /// The most rows the Inbox section may take in a column of `column` rows (commands.md §13.2, hs-d307), for a tree of
@@ -169,6 +181,8 @@ impl View {
             inbox_area: Rect::default(),
             inbox_cursor: None,
             note: String::new(),
+            ensure_at: None,
+            told: BTreeMap::new(),
         };
         view.refresh(tree);
         view
@@ -215,6 +229,52 @@ impl View {
         if !gained {
             self.last_input = Input::Click;
         }
+    }
+
+    /// A stopped engine restarts itself (commands.md §13.2, hs-d318): when the snapshot saw `locks/watch.lock` free, and
+    /// `now` is a minute after the last try, runs `watch --ensure` through `run`; a refusal is told to each live Manager
+    /// `managers` lists (`session send`, from the User's side), at most once per code per hour, and to none when there is
+    /// no Manager. Sets the note and returns the same line, which the caller writes to stderr; `None` when nothing was tried.
+    pub fn restart_engine(
+        &mut self,
+        now: Instant,
+        run: &mut dyn FnMut(&Action) -> Result<Value, Failure>,
+        managers: &mut dyn FnMut() -> Result<Vec<SessionId>, String>,
+    ) -> Option<String> {
+        if self.tree.engine_running || self.ensure_at.is_some_and(|at| now.saturating_duration_since(at) < ENSURE_EVERY) {
+            return None;
+        }
+        self.ensure_at = Some(now);
+        let line = match run(&Action::EnsureWatch) {
+            Ok(reply) if reply["already"] == true => "engine was down: cpd watch --ensure found it running".to_owned(),
+            Ok(_) => "engine was down: cpd watch --ensure started it".to_owned(),
+            Err(failure) => {
+                let (code, message) = (failure.code().to_owned(), failure.message().to_owned());
+                let due = self.told.get(&code).is_none_or(|at| now.saturating_duration_since(*at) >= TELL_EVERY);
+                let mut line = format!("engine was down: cpd watch --ensure failed: {code}: {message}");
+                if due {
+                    let text = format!(
+                        "The cpd engine is down and 'cpd watch --ensure' failed: {code}: {message}. Start it with cpd watch --ensure."
+                    );
+                    match managers() {
+                        Ok(ids) => {
+                            if !ids.is_empty() {
+                                self.told.insert(code, now);
+                            }
+                            for manager in ids {
+                                if let Err(why) = run(&Action::Tell { manager: manager.clone(), text: text.clone() }) {
+                                    line.push_str(&format!(" (telling {manager} failed: {})", why.message()));
+                                }
+                            }
+                        }
+                        Err(why) => line.push_str(&format!(" (listing the Managers failed: {why})")),
+                    }
+                }
+                line
+            }
+        };
+        self.note = line.clone();
+        Some(line)
     }
 
     /// The result of an [`Effect::Run`] or [`Effect::Legend`].
@@ -2398,5 +2458,121 @@ mod tests {
         let before = rows.clone();
         wheel(&mut view, MouseEventKind::ScrollUp, 10, 5);
         assert_ne!(text_rows(&draw_now(&mut view, 43, 31)), before, "the wheel moved it, though the cursor is out of sight");
+    }
+
+    /// A fake runner of the commands the tree's own restart runs, and the Managers it can list.
+    struct Fake {
+        calls: Vec<Vec<String>>,
+        ensure: Result<Value, Failure>,
+        managers: Vec<SessionId>,
+    }
+
+    impl Fake {
+        fn started() -> Fake {
+            Fake { calls: Vec::new(), ensure: Ok(serde_json::json!({"ok": true, "started": true})), managers: Vec::new() }
+        }
+
+        fn refusing(code: &str, managers: &[&str]) -> Fake {
+            Fake {
+                calls: Vec::new(),
+                ensure: Err(Failure::Refused { code: code.to_owned(), message: "no tmux".to_owned() }),
+                managers: managers.iter().map(|m| SessionId::parse(m).unwrap()).collect(),
+            }
+        }
+
+        fn tick(&mut self, view: &mut View, now: Instant) -> Option<String> {
+            let (calls, ensure, managers) = (&mut self.calls, &self.ensure, &self.managers);
+            view.restart_engine(
+                now,
+                &mut |action| {
+                    calls.push(action.argv());
+                    match action {
+                        Action::EnsureWatch => ensure.clone(),
+                        _ => Ok(serde_json::json!({"ok": true})),
+                    }
+                },
+                &mut || Ok(managers.clone()),
+            )
+        }
+    }
+
+    fn engine_down_view() -> View {
+        let mut view = View::new(sample(), true);
+        view.tree.engine_running = false;
+        view
+    }
+
+    #[test]
+    fn a_stopped_engine_is_restarted_at_once_and_then_at_most_once_a_minute_and_the_note_says_so() {
+        let (mut view, mut fake, t0) = (engine_down_view(), Fake::started(), Instant::now());
+        let said = "engine was down: cpd watch --ensure started it";
+        assert_eq!(fake.tick(&mut view, t0).as_deref(), Some(said), "the line for stderr");
+        assert_eq!(view.note, said);
+        view.note.clear();
+        for secs in [0, 1, 30, 59] {
+            assert_eq!(fake.tick(&mut view, t0 + Duration::from_secs(secs)), None, "{secs}s later");
+        }
+        assert!(view.note.is_empty());
+        assert_eq!(fake.calls, [["watch", "--ensure"]], "one run so far");
+        assert!(fake.tick(&mut view, t0 + Duration::from_secs(60)).is_some(), "a minute later, still down");
+        assert_eq!(fake.calls.len(), 2);
+    }
+
+    #[test]
+    fn a_running_engine_is_left_alone_and_one_already_running_is_said() {
+        let (mut view, mut fake, t0) = (View::new(sample(), true), Fake::started(), Instant::now());
+        assert_eq!(fake.tick(&mut view, t0), None);
+        assert!(fake.calls.is_empty());
+        let mut view = engine_down_view();
+        fake.ensure = Ok(serde_json::json!({"ok": true, "started": false, "already": true}));
+        assert_eq!(fake.tick(&mut view, t0).as_deref(), Some("engine was down: cpd watch --ensure found it running"));
+    }
+
+    #[test]
+    fn a_refused_restart_is_told_once_per_code_per_hour_to_each_live_manager_and_to_none_without() {
+        let (mut view, t0) = (engine_down_view(), Instant::now());
+        let at = |secs: u64| t0 + Duration::from_secs(secs);
+        let mut fake = Fake::refusing("watch_start_failed", &["m-alpha", "m-beta"]);
+        let text = "The cpd engine is down and 'cpd watch --ensure' failed: watch_start_failed: no tmux. Start it with cpd watch --ensure.";
+        let line = fake.tick(&mut view, at(0)).unwrap();
+        assert_eq!(line, "engine was down: cpd watch --ensure failed: watch_start_failed: no tmux");
+        assert_eq!(view.note, line);
+        assert_eq!(
+            fake.calls,
+            [vec!["watch", "--ensure"], vec!["session", "send", "m-alpha", text], vec!["session", "send", "m-beta", text]],
+            "one message per Manager, no --wake"
+        );
+        // a minute later: tried again, same code, not told again
+        assert!(fake.tick(&mut view, at(60)).is_some());
+        assert_eq!(fake.calls.len(), 4, "only the second `watch --ensure`: {:?}", fake.calls);
+        // another code is told
+        fake.ensure = Err(Failure::Refused { code: "store_busy".to_owned(), message: "busy".to_owned() });
+        assert!(fake.tick(&mut view, at(120)).is_some());
+        assert_eq!(fake.calls.len(), 7);
+        assert_eq!(fake.calls[5][3], "The cpd engine is down and 'cpd watch --ensure' failed: store_busy: busy. Start it with cpd watch --ensure.");
+        // the first code again, an hour after it was told
+        fake.ensure = Err(Failure::Refused { code: "watch_start_failed".to_owned(), message: "no tmux".to_owned() });
+        assert!(fake.tick(&mut view, at(3599)).is_some());
+        assert_eq!(fake.calls.len(), 8, "not yet: {:?}", fake.calls);
+        assert!(fake.tick(&mut view, at(3659)).is_some());
+        assert_eq!(fake.calls.len(), 11, "told again");
+
+        // no Manager: nothing is sent, and the code is not used up for the Manager that comes later
+        let (mut view, mut none) = (engine_down_view(), Fake::refusing("watch_start_failed", &[]));
+        assert!(none.tick(&mut view, at(0)).is_some());
+        assert_eq!(none.calls, [["watch", "--ensure"]]);
+        none.managers = vec![sid("m-alpha")];
+        assert!(none.tick(&mut view, at(60)).is_some());
+        assert_eq!(none.calls.len(), 3);
+    }
+
+    #[test]
+    fn a_command_that_cannot_run_counts_as_the_code_error() {
+        let (mut view, t0) = (engine_down_view(), Instant::now());
+        let mut fake = Fake::refusing("x", &["m-alpha"]);
+        fake.ensure = Err(Failure::Broken("cannot run cpd: gone".to_owned()));
+        let line = fake.tick(&mut view, t0).unwrap();
+        assert_eq!(line, "engine was down: cpd watch --ensure failed: error: cannot run cpd: gone");
+        assert_eq!(fake.calls.len(), 2);
     }
 }

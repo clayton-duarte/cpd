@@ -117,6 +117,9 @@ pub enum Action {
     CopyUrl(String),
     /// `watch --ensure` (§12): a click on an `engine-down` item starts the engine; idempotent.
     EnsureWatch,
+    /// `session send <manager> <text>` (§10.13): the engine's failure to start, to a live Manager. No sender, so `from` is the
+    /// User's side, and no `--wake`. Only a step of the tree's own restart of the engine.
+    Tell { manager: SessionId, text: String },
     /// The read-only Worker pane of `job`'s latest Attempt beside the chat (`tui view worker`, as a click on a pill of the
     /// plan view); no command. A Job with no Attempt opens nothing. A step of the `job-stuck` click.
     OpenWorker { plan: PlanId, job: JobKey },
@@ -158,6 +161,7 @@ impl Action {
             Action::Unarchive(subject) => subject.command("unarchive"),
             Action::CopyId(text) | Action::CopyUrl(text) => words(&["set-buffer", "-w", "--", text.as_str()]),
             Action::EnsureWatch => words(&["watch", "--ensure"]),
+            Action::Tell { manager, text } => vec!["session".into(), "send".into(), manager.to_string(), text.clone()],
             Action::Note(_) | Action::OpenWorker { .. } => Vec::new(),
             Action::Snooze { item, until } => words(&["inbox", "snooze", &item.to_string(), until.arg()]),
             Action::Dismiss(item) => words(&["inbox", "dismiss", &item.to_string()]),
@@ -215,6 +219,7 @@ impl Action {
             Action::CopyUrl(url) => format!("copied {url}: Cmd-click the row to open it"),
             Action::EnsureWatch if reply["already"] == true => "already running".into(),
             Action::EnsureWatch => "engine started".into(),
+            Action::Tell { manager, .. } => format!("told {manager}"),
             Action::Note(note) => note.clone(),
             Action::OpenWorker { .. } => String::new(),
             Action::Snooze { .. } => "snoozed".into(),
@@ -255,6 +260,20 @@ impl Runner {
         let mut store = Store::open(&self.home, self.busy_ms).map_err(|e| e.message().to_owned())?;
         let Some(attempt) = read::latest_attempt(&mut store, plan, job).map_err(|e| e.message().to_owned())? else { return Ok(()) };
         widgets::open_worker(&self.home, &self.tmux, &self.cockpit, plan, job.as_str(), &attempt).map_err(|e| e.message().to_owned())
+    }
+
+    /// The live Managers of the machine (role `manager`, not archived), oldest first: who hears that the engine cannot be started.
+    pub fn live_managers(&self) -> Result<Vec<SessionId>, String> {
+        let mut store = Store::open(&self.home, self.busy_ms).map_err(|e| e.message().to_owned())?;
+        store
+            .read(|conn| {
+                let mut stmt =
+                    conn.prepare("SELECT id FROM sessions WHERE role = 'manager' AND archived_at IS NULL ORDER BY created_at, id")?;
+                let ids = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(ids)
+            })
+            .and_then(|ids| ids.iter().map(|id| SessionId::parse(id)).collect())
+            .map_err(|e| e.message().to_owned())
     }
 
     /// Runs the action's steps: the note of the last, or why one failed (the flow stops there).
@@ -309,23 +328,58 @@ impl Runner {
     }
 }
 
-/// Runs the command of `action`: its reply, or the message of the error it printed (or why it could not run).
-fn command(action: &Action) -> Result<Value, String> {
+/// Why a command did not succeed: `cpd` refused it (`code` and `message` of its error), or it could not be run or printed
+/// no JSON.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Failure {
+    Refused { code: String, message: String },
+    Broken(String),
+}
+
+impl Failure {
+    /// The error's `code`; `error` for a command that could not be run.
+    pub fn code(&self) -> &str {
+        match self {
+            Failure::Refused { code, .. } => code,
+            Failure::Broken(_) => "error",
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            Failure::Refused { message, .. } | Failure::Broken(message) => message,
+        }
+    }
+}
+
+/// Runs the command of `action`: its reply, or why it failed.
+pub fn call(action: &Action) -> Result<Value, Failure> {
     let output = Command::new(PROGRAM)
         .args(action.argv())
         .stdin(Stdio::null())
         .output()
-        .map_err(|e| format!("cannot run {PROGRAM}: {e}"))?;
+        .map_err(|e| Failure::Broken(format!("cannot run {PROGRAM}: {e}")))?;
     let reply: Value = serde_json::from_slice(&output.stdout).map_err(|_| {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        format!("{PROGRAM} {} printed no JSON (exit {}): {}", action.argv().join(" "), output.status, stderr.trim())
+        Failure::Broken(format!("{PROGRAM} {} printed no JSON (exit {}): {}", action.argv().join(" "), output.status, stderr.trim()))
     })?;
     if reply["ok"] == true {
         Ok(reply)
     } else {
         let error = &reply["error"];
-        Err(action.failed(error["code"].as_str().unwrap_or("error"), error["message"].as_str().unwrap_or("failed")))
+        Err(Failure::Refused {
+            code: error["code"].as_str().unwrap_or("error").to_owned(),
+            message: error["message"].as_str().unwrap_or("failed").to_owned(),
+        })
     }
+}
+
+/// [`call`], the failure in the words of the note.
+fn command(action: &Action) -> Result<Value, String> {
+    call(action).map_err(|failure| match failure {
+        Failure::Refused { code, message } => action.failed(&code, &message),
+        Failure::Broken(why) => why,
+    })
 }
 
 #[cfg(test)]
@@ -399,6 +453,7 @@ mod tests {
             (Action::Snooze { item: 7, until: Until::Tomorrow }, vec!["inbox", "snooze", "7", "tomorrow"]),
             (Action::Dismiss(12), vec!["inbox", "dismiss", "12"]),
             (Action::EnsureWatch, vec!["watch", "--ensure"]),
+            (Action::Tell { manager: sid("m-alpha"), text: "The engine is down.".into() }, vec!["session", "send", "m-alpha", "The engine is down."]),
         ];
         for (action, argv) in cases {
             assert_eq!(action.argv(), argv, "{action:?}");

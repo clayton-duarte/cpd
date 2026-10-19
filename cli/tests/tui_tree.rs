@@ -1262,32 +1262,91 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     assert_eq!(calls(&env).len(), 5, "the copies and the popups ran no cpd command: {:?}", calls(&env));
 }
 
-#[test]
-fn with_no_engine_the_inbox_leads_with_engine_down_and_a_click_on_it_runs_watch_ensure() {
-    let env = env_without_engine();
-    populate(&env);
-    fake_cpd(&env, r#"{"ok":true,"started":true,"pane":"%3"}"#);
+/// Every Manager archived: none is live (`populate` makes one per Context).
+fn archive_managers(env: &TestEnv) {
+    sql(&mut open(env), "UPDATE sessions SET archived_at = '2026-01-04T00:00:00.000Z' WHERE role = 'manager'");
+}
+
+/// A fake `tmux` that has no popup and no client sizes, the rest being the real one.
+fn fake_tmux_without_popups(env: &TestEnv) {
     let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
     env.fake(
         "tmux",
         &format!("case \"$*\" in\n *list-clients*) echo '100 200 60';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac", real.trim()),
     );
+}
+
+#[test]
+fn with_no_engine_and_no_manager_the_inbox_leads_with_engine_down_and_a_click_on_it_runs_watch_ensure() {
+    let env = env_without_engine();
+    populate(&env);
+    archive_managers(&env);
+    fake_cpd(&env, r#"{"ok":true,"started":true,"pane":"%3"}"#);
+    fake_tmux_without_popups(&env);
     let pane = Pane::start(&env, 46, 20);
     pane.ready();
-    // counted in the header and in `+N more`, first of the rows
-    let section = inbox_section(46);
-    let title = " Inbox 5 ";
-    let screen = pane.wait("the whole Inbox section", |s| s.len() == 20 && s[15] == format!(" ──{title}{}", "─".repeat(44 - 2 - title.len())) && s[17..19] == section[1..3] && s[19] == " +2 more");
-    assert_eq!(screen[15], format!(" ──{title}{}", "─".repeat(44 - 2 - title.len())));
-    assert!(screen[16].starts_with(&format!(" {NEEDS_YOU} engine is down")), "{:?}", screen[16]);
-    assert_eq!(screen[17..19], section[1..3]);
-    assert_eq!(screen[19], " +2 more");
-    pane.click(10, 16);
+    // the tree restarted the engine on its own, as soon as it saw it down; the fake leaves the lock free, so it is down still
     assert_eq!(wait_for_calls(&env, 1), [words(&["watch", "--ensure"])]);
+    // counted in the header, first of the rows (the note of the restart takes two rows of the narrow pane)
+    let screen = pane.wait("the item", |s| s.iter().any(|r| r.starts_with(&format!(" {NEEDS_YOU} engine is down"))));
+    let first = screen.iter().position(|r| r.starts_with(&format!(" {NEEDS_YOU} engine is down"))).unwrap();
+    assert!(screen[first - 1].starts_with(" ── Inbox 5 "), "{:?}", screen[first - 1]);
+    pane.click(10, u16::try_from(first).unwrap());
+    assert_eq!(wait_for_calls(&env, 2), [words(&["watch", "--ensure"]), words(&["watch", "--ensure"])]);
     pane.wait("the note", |_| pane.footer_has("engine started"));
     pane.settled_with_a_client();
     assert_eq!(popups(&env).len(), 1, "only the legend's, from the settling: {:?}", popups(&env));
-    assert_eq!(calls(&env).len(), 1, "only watch --ensure ran: {:?}", calls(&env));
+    assert_eq!(calls(&env).len(), 2, "the restart and the click ran `watch --ensure`: {:?}", calls(&env));
+}
+
+#[test]
+fn a_stopped_engine_is_restarted_once_and_not_again_within_a_minute_and_no_engine_down_shows_with_a_manager() {
+    let env = env_without_engine();
+    populate(&env); // its Contexts have Managers: the engine's absence is no Inbox item
+    fake_cpd(&env, r#"{"ok":true,"started":true,"pane":"%3"}"#);
+    let pane = Pane::start(&env, 46, 20);
+    pane.ready();
+    assert_eq!(wait_for_calls(&env, 1), [words(&["watch", "--ensure"])]);
+    pane.wait("the note", |_| pane.footer_has("engine was down: cpd watch --ensure started"));
+    let screen = pane.screen();
+    assert!(!screen.iter().any(|r| r.contains("engine is down")), "a Manager handles it: {screen:?}");
+    // the view takes a snapshot every 2 s and sees the engine down each time, but tries once a minute
+    std::thread::sleep(std::time::Duration::from_secs(6));
+    assert_eq!(calls(&env), [words(&["watch", "--ensure"])], "once, and no message: it started");
+}
+
+#[test]
+fn a_failed_restart_reaches_each_live_manager_once_and_none_without_a_manager() {
+    let env = env_without_engine();
+    populate(&env);
+    env.fake(
+        "cpd",
+        "if [ \"$1\" = watch ]; then echo '{\"ok\":false,\"error\":{\"code\":\"watch_start_failed\",\"message\":\"no tmux\"}}'; else echo '{\"ok\":true}'; fi",
+    );
+    let pane = Pane::start(&env, 46, 20);
+    pane.ready();
+    let text = "The cpd engine is down and 'cpd watch --ensure' failed: watch_start_failed: no tmux. Start it with cpd watch --ensure.";
+    let expected = [words(&["watch", "--ensure"]), words(&["session", "send", "m-alpha", text]), words(&["session", "send", "m-beta", text])];
+    assert_eq!(wait_for_calls(&env, 3), expected);
+    pane.wait("the note", |_| pane.footer_has("engine was down: cpd watch --ensure failed:"));
+    std::thread::sleep(std::time::Duration::from_secs(4));
+    assert_eq!(calls(&env), expected, "nothing more within the minute");
+
+    // with no live Manager, nothing is sent: the Inbox item is the User's
+    let env = env_without_engine();
+    populate(&env);
+    archive_managers(&env);
+    env.fake(
+        "cpd",
+        "if [ \"$1\" = watch ]; then echo '{\"ok\":false,\"error\":{\"code\":\"watch_start_failed\",\"message\":\"no tmux\"}}'; else echo '{\"ok\":true}'; fi",
+    );
+    let pane = Pane::start(&env, 46, 20);
+    pane.ready();
+    assert_eq!(wait_for_calls(&env, 1), [words(&["watch", "--ensure"])]);
+    pane.wait("the note", |_| pane.footer_has("engine was down: cpd watch --ensure failed"));
+    pane.wait("the item", |s| s.iter().any(|r| r.contains("engine is down")));
+    std::thread::sleep(std::time::Duration::from_secs(4));
+    assert_eq!(calls(&env), [words(&["watch", "--ensure"])], "no Manager to tell");
 }
 
 /// An Attempt of Job `job` of `ship`, ended failed with `cause` (`Some`), or running.
