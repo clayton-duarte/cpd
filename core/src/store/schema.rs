@@ -59,30 +59,12 @@ const _: () = assert!(SCHEMA_HASHES.len() == MIGRATIONS.len(), "one schema hash 
 /// The schema version this binary writes: `N`.
 pub const VERSION: i64 = MIGRATIONS.len() as i64;
 
-/// The tables whose rows are copied into `history` by generated triggers (§4.4),
-/// at the current version. `dependencies` and `pr_needs` get no generated
-/// `_no_delete`: their migrations write their own (a draft Job's Dependency,
-/// and a PR's need before the lock, may be deleted) and their `_hist_del`.
-/// `pull_requests` gets no `_no_delete` either: its migration writes its
-/// `_hist_del` and `pull_requests_owned` (an unowned row may be deleted).
-pub const HISTORY_TABLES: &[&str] = &[
-    "contexts",
-    "context_records",
-    "plans",
-    "pull_requests",
-    "prs",
-    "pr_needs",
-    "plan_reviews",
-    "jobs",
-    "dependencies",
-    "attempts",
-    "escalations",
-    "sessions",
-    "inbox_items",
-    "tier_catalog",
-];
-
-/// [`HISTORY_TABLES`] as migration 1 created them; frozen with it.
+/// The tables migration 1 gave generated history triggers (§4.4); frozen with
+/// it. Later migrations write their own triggers for the tables they add
+/// (`pull_requests` has no `_no_delete`, an unowned row may be deleted;
+/// `dependencies` and `pr_needs` have their own, a draft Job's Dependency and
+/// a PR's need before the lock may be deleted). The tests derive the current
+/// list from `sqlite_schema`: every table but `txns`, `history` and `events`.
 const VERSION_1_HISTORY_TABLES: &[&str] = &[
     "contexts",
     "context_records",

@@ -26,7 +26,7 @@ use crate::context::legacy;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 
-pub use schema::{HISTORY_TABLES, VERSION, schema_hash};
+pub use schema::{VERSION, schema_hash};
 
 /// `PRAGMA application_id` of a cpd 2 database: `0x63706432`, "cpd2" (§4.1).
 pub const APPLICATION_ID: i32 = 0x6370_6432;

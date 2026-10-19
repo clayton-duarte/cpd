@@ -12,7 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use common::TestEnv;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
-use cpd_core::store::{APPLICATION_ID, HISTORY_TABLES, Store, VERSION, WriteTxn};
+use cpd_core::store::{APPLICATION_ID, Store, VERSION, WriteTxn};
 use rusqlite::Connection;
 use rusqlite::functions::FunctionFlags;
 use serde_json::{Value, json};
@@ -95,6 +95,31 @@ fn fixture_store(env: &TestEnv) -> Store {
 fn names(conn: &Connection, sql: &str) -> BTreeSet<String> {
     let mut stmt = conn.prepare(sql).unwrap();
     stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+}
+
+/// The tables whose rows the generated triggers copy into `history` (§4.4):
+/// every table but the three that are the audit trail itself.
+fn history_tables(conn: &Connection) -> Vec<String> {
+    names(
+        conn,
+        "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' \
+         AND name NOT IN ('txns', 'history', 'events')",
+    )
+    .into_iter()
+    .collect()
+}
+
+#[test]
+fn the_history_tables_are_every_table_but_the_audit_trail() {
+    let env = TestEnv::new();
+    drop(open(&env));
+    assert_eq!(
+        history_tables(&raw(&env)),
+        [
+            "attempts", "context_records", "contexts", "dependencies", "escalations", "inbox_items", "jobs",
+            "plan_reviews", "plans", "pr_needs", "prs", "pull_requests", "sessions", "tier_catalog",
+        ]
+    );
 }
 
 // ---------- §4.1 the database ----------
@@ -228,11 +253,11 @@ fn every_table_index_and_trigger_of_4_4_exists() {
             expected.insert(name.to_string());
         }
     }
-    for table in HISTORY_TABLES {
+    for table in &history_tables(&raw(&env)) {
         expected.insert(format!("{table}_hist_ins"));
         expected.insert(format!("{table}_hist_upd"));
         // `pull_requests` has no `_no_delete`: an unowned row may be deleted (`pull_requests_owned` is in the DDL).
-        if *table != "pull_requests" {
+        if table != "pull_requests" {
             expected.insert(format!("{table}_no_delete"));
         }
     }
@@ -282,7 +307,7 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
         conn.query_row("SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ?1", [name], |r| r.get(0))
             .unwrap_or_else(|e| panic!("{name}: {e}"))
     };
-    for table in HISTORY_TABLES {
+    for table in &history_tables(&conn) {
         let columns = names(&conn, &format!("SELECT name FROM pragma_table_info('{table}')"));
         assert!(!columns.is_empty(), "{table}");
         let ins = sql_of(&format!("{table}_hist_ins"));
@@ -292,7 +317,7 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
             assert!(upd.contains(&format!("'{column}', OLD.{column}")), "{table}_hist_upd lacks OLD.{column}");
             assert!(upd.contains(&format!("'{column}', NEW.{column}")), "{table}_hist_upd lacks NEW.{column}");
         }
-        if ["dependencies", "pr_needs", "pull_requests"].contains(table) {
+        if ["dependencies", "pr_needs", "pull_requests"].contains(&table.as_str()) {
             let del = sql_of(&format!("{table}_hist_del"));
             for column in &columns {
                 assert!(del.contains(&format!("'{column}', OLD.{column}")), "{table}_hist_del lacks {column}");
