@@ -20,7 +20,7 @@ use crate::ids::{AttemptId, PlanId};
 use crate::store::Store;
 
 pub use ledger::{Attempt, End, Failure, Ladder, end_merging, load};
-pub use lock::{DriverLock, RepoLock, take_free_driver_lock};
+pub use lock::{DriverLock, take_free_driver_lock};
 pub use recover::{Recovered, recover_attempt};
 
 /// How many times step 8 goes back to step 2 when the Lead Branch moved,

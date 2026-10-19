@@ -1,103 +1,16 @@
-//! The per-repo lock (contract §1.4, §7.4) and probing an Attempt's driver
-//! lock (§3.4). Both are `flock(2)` locks: the kernel releases them when the
-//! holder dies, so a free lock always means a dead holder.
+//! Probing an Attempt's driver lock (§3.4). It is a `flock(2)` lock: the
+//! kernel releases it when the holder dies, so a free lock always means a
+//! dead holder.
 
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use nix::errno::Errno;
 use nix::fcntl::{Flock, FlockArg};
 
 use crate::error::{CpdError, ErrorCode};
-use crate::git::run::ok;
 use crate::home::CpdHome;
 use crate::ids::{AttemptId, PlanId};
-
-/// How often [`RepoLock::wait_for`] tries again.
-const RETRY: Duration = Duration::from_millis(100);
-
-/// The per-repo lock `locks/repo-<sha1>.lock`, held while this value lives.
-/// The merge holds it from step 1 until its step-10 transaction has
-/// committed; `pr open` and `pr rebase` until their push has finished.
-pub struct RepoLock {
-    _flock: Flock<File>,
-    repo: PathBuf,
-    path: PathBuf,
-}
-
-impl std::fmt::Debug for RepoLock {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RepoLock").field("repo", &self.repo).field("path", &self.path).finish()
-    }
-}
-
-impl RepoLock {
-    /// The lock file of `repo`: the sha1 of the realpath of
-    /// `git rev-parse --git-common-dir`, through [`CpdHome::repo_lock`].
-    pub fn path(home: &CpdHome, repo: &Path) -> Result<PathBuf, CpdError> {
-        let out = ok(repo, &["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
-        let dir = PathBuf::from(out.trim_end_matches('\n'));
-        let real = dir.canonicalize().map_err(|e| {
-            CpdError::new(ErrorCode::GitFailed, format!("Cannot resolve the git common dir {}: {e}.", dir.display()))
-                .with("path", dir.display().to_string())
-        })?;
-        Ok(home.repo_lock(&real))
-    }
-
-    /// Waits for the lock without a limit (the driver at A8).
-    pub fn wait(home: &CpdHome, repo: &Path) -> Result<RepoLock, CpdError> {
-        let (file, path) = open(&RepoLock::path(home, repo)?)?;
-        let flock = lock(file, &path, FlockArg::LockExclusive)?.expect("a blocking flock either locks or fails");
-        Ok(RepoLock { _flock: flock, repo: repo.to_owned(), path })
-    }
-
-    /// Waits at most `limit` (`lock_wait_seconds`; `pr open`, `pr rebase`),
-    /// then `lock_timeout` (exit 5).
-    pub fn wait_for(home: &CpdHome, repo: &Path, limit: Duration) -> Result<RepoLock, CpdError> {
-        let path = RepoLock::path(home, repo)?;
-        let deadline = Instant::now() + limit;
-        loop {
-            if let Some(lock) = RepoLock::try_path(repo, &path)? {
-                return Ok(lock);
-            }
-            if Instant::now() >= deadline {
-                return Err(CpdError::new(
-                    ErrorCode::LockTimeout,
-                    format!("Another cpd process held the per-repo lock for longer than {}s.", limit.as_secs()),
-                )
-                .with("lock", path.display().to_string())
-                .with("repo", repo.display().to_string())
-                .with("waited_seconds", limit.as_secs()));
-            }
-            std::thread::sleep(RETRY);
-        }
-    }
-
-    /// Takes the lock only if it is free now (engine E2); `None` when held.
-    pub fn try_take(home: &CpdHome, repo: &Path) -> Result<Option<RepoLock>, CpdError> {
-        RepoLock::try_path(repo, &RepoLock::path(home, repo)?)
-    }
-
-    fn try_path(repo: &Path, path: &Path) -> Result<Option<RepoLock>, CpdError> {
-        let (file, path) = open(path)?;
-        Ok(lock(file, &path, FlockArg::LockExclusiveNonblock)?.map(|flock| RepoLock {
-            _flock: flock,
-            repo: repo.to_owned(),
-            path,
-        }))
-    }
-
-    /// The repo it was taken for, as the caller named it: a Plan's `repo`.
-    pub fn repo(&self) -> &Path {
-        &self.repo
-    }
-
-    /// The lock file.
-    pub fn file(&self) -> &Path {
-        &self.path
-    }
-}
 
 /// The driver lock of an Attempt, taken because it was free: its driver is
 /// dead (§3.4). Held while R ends that Attempt; released on drop.

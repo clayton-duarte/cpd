@@ -16,6 +16,7 @@ use super::pulls::{self, Change, Reason};
 use super::row::PlanRow;
 use super::status::PrState;
 use super::{Env, PollArgs};
+use crate::driver::lock;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
 use crate::git;
@@ -23,7 +24,6 @@ use crate::home::CpdHome;
 use crate::host::layout::attempt_window;
 use crate::host::tmux::Tmux;
 use crate::ids::{AttemptId, PlanId, PrKey};
-use crate::merge::RepoLock;
 use crate::output::Output;
 use crate::store::WriteTxn;
 
@@ -265,14 +265,32 @@ struct Merged {
     repo: String,
     lead_branch: String,
     lead_worktree: Option<String>,
-    /// `(attempt, branch, worktree)`.
-    attempts: Vec<(String, String, String)>,
+    attempts: Vec<Attempt>,
+}
+
+/// An Attempt of one of the PR's Jobs.
+struct Attempt {
+    id: AttemptId,
+    branch: String,
+    worktree: String,
+    ended: bool,
 }
 
 impl Merged {
-    /// Whether a path this clean-up removes is still on disk.
+    /// Whether a path this clean-up removes is still on disk: an Attempt or Lead
+    /// worktree, or a gate worktree of the PR (contract §7.1).
     fn on_disk(&self) -> bool {
-        self.lead_worktree.iter().chain(self.attempts.iter().map(|(_, _, w)| w)).any(|p| Path::new(p).exists())
+        self.lead_worktree.iter().chain(self.attempts.iter().map(|a| &a.worktree)).any(|p| Path::new(p).exists()) || self.has_gate_worktree()
+    }
+
+    /// Whether `<repo-parent>` holds an entry named as a gate worktree of this PR.
+    fn has_gate_worktree(&self) -> bool {
+        // The path of pid 0 ends in `gate-0`; without the `0` it is the name every gate worktree of the PR starts with.
+        let Ok(path) = git::gate_worktree_path(Path::new(&self.repo), &self.plan, &self.pr, 0) else { return false };
+        let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else { return false };
+        let Some(prefix) = name.strip_suffix('0') else { return false };
+        let Ok(entries) = fs::read_dir(dir) else { return false };
+        entries.flatten().any(|e| e.file_name().to_str().is_some_and(|n| n.starts_with(prefix)))
     }
 }
 
@@ -287,7 +305,7 @@ fn clean_up(env: &mut Env, just: &[(PlanId, PrKey)]) -> Result<(), CpdError> {
     let all = env.store.read(merged_prs_to_clean)?;
     let (fresh, earlier): (Vec<Merged>, Vec<Merged>) = all.into_iter().partition(|m| just.contains(&(m.plan.clone(), m.pr.clone())));
     for merged in earlier.iter().filter(|m| m.on_disk()) {
-        clean_locked(&env.home, merged);
+        clean_when_idle(&env.home, merged);
     }
     if fresh.is_empty() {
         return Ok(());
@@ -298,15 +316,15 @@ fn clean_up(env: &mut Env, just: &[(PlanId, PrKey)]) -> Result<(), CpdError> {
     let mut events = Vec::new();
     for merged in &fresh {
         let mut failures = Vec::new();
-        for (id, _, worktree) in &merged.attempts {
-            let name = attempt_window(&merged.plan, &AttemptId::parse(id)?);
+        for attempt in &merged.attempts {
+            let name = attempt_window(&merged.plan, &attempt.id);
             for pane in panes.iter().filter(|p| p.session_name == work && p.window_name == name) {
                 if let Err(e) = tmux.kill_window(&pane.window) {
-                    failures.push((worktree.clone(), reason(&e)));
+                    failures.push((attempt.worktree.clone(), reason(&e)));
                 }
             }
         }
-        failures.extend(clean_locked(&env.home, merged));
+        failures.extend(clean_when_idle(&env.home, merged));
         events.extend(failures.into_iter().map(|(path, reason)| (merged.plan.clone(), merged.pr.clone(), path, reason)));
     }
     if events.is_empty() {
@@ -333,45 +351,75 @@ fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Merged>, CpdEr
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut attempts = conn.prepare(
-        "SELECT a.id, a.branch, a.worktree FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+        "SELECT a.id, a.branch, a.worktree, a.status = 'ended' FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
           WHERE j.plan = ?1 AND j.pr = ?2 ORDER BY a.id",
     )?;
     let mut found = Vec::new();
     for (plan, pr, repo, lead_branch, lead_worktree) in rows {
         let list = attempts
-            .query_map([&plan, &pr], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+            .query_map([&plan, &pr], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, bool>(3)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .map(|(id, branch, worktree, ended)| Ok(Attempt { id: AttemptId::parse(&id)?, branch, worktree, ended }))
+            .collect::<Result<Vec<_>, CpdError>>()?;
         found.push(Merged { plan: PlanId::parse(&plan)?, pr: PrKey::parse(&pr)?, repo, lead_branch, lead_worktree, attempts: list });
     }
     Ok(found)
 }
 
-/// [`clean`] under the PR's per-repo lock, taken without waiting (hs-n124): a Gate, a merge or
-/// a push holding it must not lose its worktree. When the lock is held, nothing is removed and
-/// there is no failure: the PR is still on disk, so a later poll cleans it up. A lock that
-/// cannot be opened is a failed removal.
-fn clean_locked(home: &CpdHome, merged: &Merged) -> Vec<Failure> {
-    match RepoLock::try_take(home, Path::new(&merged.repo)) {
-        Ok(Some(_lock)) => clean(merged),
-        Ok(None) => Vec::new(),
-        Err(e) => vec![(merged.lead_worktree.clone().unwrap_or_else(|| merged.repo.clone()), reason(&e))],
+/// [`clean`] once the PR is idle (contract §7.2, hs-d243, hs-n124): every Attempt of its
+/// Jobs is `ended` and its driver lock is free, probed without creating the file, since
+/// a driver that just ended its Attempt may still be in A9, removing its worktree. While
+/// it is not, nothing is removed and there is no failure: the PR is still on disk, so a
+/// later poll cleans it up. A driver lock that cannot be probed is a failed removal.
+fn clean_when_idle(home: &CpdHome, merged: &Merged) -> Vec<Failure> {
+    for attempt in &merged.attempts {
+        if !attempt.ended {
+            return Vec::new();
+        }
+        match lock::probe(home, &merged.plan, &attempt.id) {
+            Ok(Some(_free)) => {}
+            Ok(None) => return Vec::new(),
+            Err(e) => return vec![(attempt.worktree.clone(), reason(&e))],
+        }
     }
+    clean(merged)
 }
 
-/// Removes the Attempt worktrees of the PR that are on disk, then its Lead worktree. Each
-/// removal runs in the PR's repo, so the order does not matter; a failure does not stop the
-/// others. What it did not remove.
+/// Removes the Attempt worktrees of the PR that are on disk, then its gate worktrees whose
+/// pid is dead, then its Lead worktree, first brought up to date by rule S. Each removal
+/// runs in the PR's repo, so the order does not matter; a failure does not stop the others.
+/// What it did not remove.
 fn clean(merged: &Merged) -> Vec<Failure> {
     let repo = Path::new(&merged.repo);
     let mut failures = Vec::new();
-    for (_, branch, worktree) in &merged.attempts {
-        if Path::new(worktree).exists()
-            && let Err(e) = git::discard_worktree(repo, Path::new(worktree), branch)
+    for attempt in &merged.attempts {
+        if Path::new(&attempt.worktree).exists()
+            && let Err(e) = git::discard_worktree(repo, Path::new(&attempt.worktree), &attempt.branch)
         {
-            failures.push((worktree.clone(), reason(&e)));
+            failures.push((attempt.worktree.clone(), reason(&e)));
         }
     }
+    // A gate worktree whose pid lives belongs to a Gate still running: it stays (§7.2).
+    if merged.has_gate_worktree()
+        && let Err(e) = git::sweep_gate_worktrees(repo, &merged.plan, &merged.pr)
+    {
+        failures.push((merged.repo.clone(), reason(&e)));
+    }
     if let Some(lead) = &merged.lead_worktree {
+        // Rule S first, so a tree a merge left stale is not kept as dirty. Every stop of it is
+        // `lead_worktree_stale` and leaves the worktree as it was: the check below keeps such a
+        // worktree and reports it as `cleanup_failed`, never as `lead_worktree_stale` (§7.2).
+        if Path::new(lead).exists() {
+            match git::sync_lead(Path::new(lead), &merged.lead_branch) {
+                Ok(_) => {}
+                Err(e) if e.code() == ErrorCode::LeadWorktreeStale => {}
+                Err(e) => {
+                    failures.push((lead.clone(), reason(&e)));
+                    return failures;
+                }
+            }
+        }
         match git::remove_merged_lead(repo, Path::new(lead), &merged.lead_branch) {
             Ok(git::LeadRemoval::Removed) => {}
             Ok(git::LeadRemoval::Kept(why)) => failures.push((lead.clone(), why.as_str().to_owned())),

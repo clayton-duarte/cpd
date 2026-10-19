@@ -17,7 +17,7 @@ use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree, pr_lead_worktree_path, prepare_lead_worktree};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId, PrKey};
-use cpd_core::merge::{self, Attempt, Ctx, End, Failure, Merge, RepoLock, take_free_driver_lock};
+use cpd_core::merge::{self, Attempt, Ctx, End, Failure, Merge, take_free_driver_lock};
 use cpd_core::store::{Store, WriteTxn};
 use rusqlite::params;
 use serde_json::{Value, json};
@@ -785,26 +785,6 @@ fn a_push_that_origin_already_contains_is_no_push_failed() {
     assert_eq!(fx.lead_sha(), new);
     assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), later);
     assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
-}
-
-// ------------------------------------------------------------ the per-repo lock (RepoLock's own test, until it is deleted)
-
-#[test]
-fn the_per_repo_lock_is_named_after_the_git_common_dir_and_excludes_others() {
-    let fx = fx();
-    let common = fx.repo.join(".git").canonicalize().unwrap();
-    let path = RepoLock::path(&fx.home, &fx.repo).unwrap();
-    assert_eq!(path, fx.home.repo_lock(&common));
-    // The same lock from a linked worktree of the repo.
-    assert_eq!(RepoLock::path(&fx.home, &fx.lead).unwrap(), path);
-
-    let held = RepoLock::wait(&fx.home, &fx.repo).unwrap();
-    assert_eq!(held.file(), path);
-    assert!(RepoLock::try_take(&fx.home, &fx.repo).unwrap().is_none());
-    let err = RepoLock::wait_for(&fx.home, &fx.repo, Duration::from_millis(300)).unwrap_err();
-    assert_eq!(err.code(), ErrorCode::LockTimeout);
-    drop(held);
-    assert!(RepoLock::try_take(&fx.home, &fx.repo).unwrap().is_some());
 }
 
 // ------------------------------------------------------------ R
