@@ -2087,4 +2087,130 @@ mod tests {
         assert_eq!(rows[7], " closed");
         assert_eq!(rows[2], header(5), "the section is above the note: {rows:?}");
     }
+
+    // ---------- the expanded section: capped at half the column, scrolling (hs-n265) ----------
+
+    /// `n` open items `item 00`, `item 01`, … (ages `1d`), a view of them expanded and drawn at 43x40.
+    fn fifty(n: usize) -> (View, Vec<String>) {
+        let mut view = View::new(sample(), true);
+        view.tree.inbox = (0..n)
+            .map(|i| {
+                let mut it = item(i as i64 + 1, InboxKind::Unread, Urgency::White, &format!("item {i:02}"), "2026-01-02T00:00:00.000Z");
+                it.session = Some(sid("m-alpha"));
+                it
+            })
+            .collect();
+        draw_now(&mut view, 43, 40);
+        assert_eq!(click(&mut view, 20, 39), Effect::None, "`+47 more` expands");
+        let rows = text_rows(&draw_now(&mut view, 43, 40));
+        (view, rows)
+    }
+
+    fn wheel(view: &mut View, kind: MouseEventKind, column: u16, row: u16) {
+        assert_eq!(view.mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE }), Effect::None);
+    }
+
+    fn label(row: &str) -> &str {
+        row.trim_start_matches(|c: char| c != 'i').split("  ").next().unwrap()
+    }
+
+    #[test]
+    fn expanded_with_fifty_items_in_forty_rows_the_section_is_twenty_rows_and_the_tree_keeps_the_rest() {
+        let (view, rows) = fifty(50);
+        assert_eq!(view.inbox_area, Rect::new(1, 20, 41, 20), "half the column, pinned to the bottom");
+        assert_eq!(rows[20], header(50));
+        assert_eq!(rows[1], format!(" {OPEN} {NEEDS_YOU} alpha"), "the tree is above it");
+        assert_eq!(rows[19], "", "the tree's rows are the rest: 19 below the blank one");
+        assert_eq!((label(&rows[21]), label(&rows[37])), ("item 00", "item 16"));
+        assert_eq!(rows[38], "  ▼ 33 more", "the last row of the list is the cue");
+        assert_eq!(rows[39], " − less", "the toggle stays in view");
+        assert!(!rows.iter().any(|r| r.contains("▲")), "nothing is hidden above: no cue");
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_section_three_rows_a_notch_and_clamps() {
+        let (mut view, _) = fifty(50);
+        wheel(&mut view, MouseEventKind::ScrollDown, 10, 25);
+        let rows = text_rows(&draw_now(&mut view, 43, 40));
+        assert_eq!(rows[21], "  ▲ 3 more");
+        assert_eq!((label(&rows[22]), label(&rows[37])), ("item 03", "item 18"));
+        assert_eq!(rows[38], "  ▼ 31 more");
+        wheel(&mut view, MouseEventKind::ScrollDown, 10, 25);
+        assert_eq!(text_rows(&draw_now(&mut view, 43, 40))[21], "  ▲ 6 more");
+        for _ in 0..30 {
+            wheel(&mut view, MouseEventKind::ScrollDown, 10, 39);
+        }
+        let rows = text_rows(&draw_now(&mut view, 43, 40));
+        assert_eq!(rows[21], "  ▲ 33 more", "clamped: the last item reaches the bottom");
+        assert_eq!((label(&rows[22]), label(&rows[38])), ("item 33", "item 49"));
+        assert!(!rows.iter().any(|r| r.contains("▼")), "nothing is hidden below: no cue");
+        wheel(&mut view, MouseEventKind::ScrollUp, 10, 22);
+        assert_eq!(text_rows(&draw_now(&mut view, 43, 40))[21], "  ▲ 30 more");
+        for _ in 0..30 {
+            wheel(&mut view, MouseEventKind::ScrollUp, 10, 22);
+        }
+        let rows = text_rows(&draw_now(&mut view, 43, 40));
+        assert_eq!((label(&rows[21]), rows[38].as_str()), ("item 00", "  ▼ 33 more"));
+    }
+
+    #[test]
+    fn the_wheel_elsewhere_does_nothing_and_a_cue_row_is_no_hit() {
+        let (mut view, _) = fifty(50);
+        wheel(&mut view, MouseEventKind::ScrollDown, 10, 5);
+        wheel(&mut view, MouseEventKind::ScrollDown, 10, 0);
+        assert_eq!(view.inbox_scroll, 0);
+        assert_eq!(click(&mut view, 10, 38), Effect::None, "the ▼ cue");
+        assert_eq!(view.inbox_scroll, 0);
+        wheel(&mut view, MouseEventKind::ScrollDown, 10, 25);
+        draw_now(&mut view, 43, 40);
+        assert_eq!(click(&mut view, 10, 21), Effect::None, "the ▲ cue");
+        assert!(view.inbox_expanded);
+        assert_eq!(click(&mut view, 10, 22), Effect::Run(Action::Open(sid("m-alpha"))), "an item row jumps");
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_scroll_and_folding_goes_back_to_the_top() {
+        let (mut view, _) = fifty(50);
+        wheel(&mut view, MouseEventKind::ScrollDown, 10, 25);
+        let mut tree = sample();
+        tree.inbox = view.tree.inbox[..49].to_vec();
+        view.refresh(tree);
+        let rows = text_rows(&draw_now(&mut view, 43, 40));
+        assert_eq!((rows[21].as_str(), label(&rows[22])), ("  ▲ 3 more", "item 03"));
+        click(&mut view, 3, 39);
+        let rows = text_rows(&draw_now(&mut view, 43, 40));
+        assert_eq!((rows[35].clone(), rows[39].clone()), (header(49), " +46 more".to_owned()));
+        assert_eq!(view.inbox_scroll, 0);
+    }
+
+    #[test]
+    fn the_keyboard_cursor_scrolls_the_section_to_stay_visible() {
+        let (mut view, _) = fifty(50);
+        // from the tree into the Inbox, then down 30 items
+        for _ in 0..40 {
+            press(&mut view, KeyCode::Down);
+        }
+        assert!(view.inbox_cursor.is_some());
+        let at = view.inbox_cursor.unwrap();
+        let buf = draw_now(&mut view, 43, 40);
+        let rows = text_rows(&buf);
+        let shown = rows.iter().position(|r| r.contains(&format!("item {at:02}"))).expect("the cursor's item is drawn");
+        assert!((22..38).contains(&shown), "between the cues: {rows:?}");
+        assert!(buf[(5, shown as u16)].modifier.contains(Modifier::REVERSED));
+        // down to the last item, then back up to the first
+        for _ in 0..60 {
+            press(&mut view, KeyCode::Down);
+        }
+        let buf = draw_now(&mut view, 43, 40);
+        let rows = text_rows(&buf);
+        assert_eq!(label(&rows[38]), "item 49", "{rows:?}");
+        assert!(buf[(5, 38)].modifier.contains(Modifier::REVERSED));
+        for _ in 0..49 {
+            press(&mut view, KeyCode::Up);
+        }
+        let buf = draw_now(&mut view, 43, 40);
+        let rows = text_rows(&buf);
+        assert_eq!((label(&rows[21]), rows[38].as_str()), ("item 00", "  ▼ 33 more"));
+        assert!(buf[(5, 21)].modifier.contains(Modifier::REVERSED));
+    }
 }

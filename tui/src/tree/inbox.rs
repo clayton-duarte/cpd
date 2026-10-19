@@ -1,6 +1,7 @@
 //! The Inbox section at the bottom of the tree column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a header
 //! ` Inbox <n> `, up to [`SHOWN`] item rows `<dot> <label>` with the age right-aligned, and, with more items, a row
-//! `+<n> more` that expands the list inline and becomes `− less`. Whether it is expanded is view state only.
+//! `+<n> more` that expands the list inline and becomes `− less`. Whether it is expanded is view state only. Expanded, it is
+//! capped at half the column and its items scroll inside the cap, with ` ▲ <n> more` / ` ▼ <n> more` cue rows ([`Shape`]).
 //!
 //! A click on an item row jumps to its cause ([`jump`]): a command, the logs popup at the item's Event, or nothing,
 //! when the row's label is an OSC 8 link to the item's `url` (`crate::link`, which the terminal opens with its
@@ -344,6 +345,40 @@ mod tests {
             [Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Item(3)), Some(Hit::Item(4)), Some(Hit::Toggle)]
         );
         assert_eq!((Shape::new(0, false).height(), Shape::new(5, false).height(), Shape::new(5, true).height()), (1, 5, 7));
+    }
+
+    #[test]
+    fn expanded_the_section_is_capped_but_never_below_the_collapsed_one_and_its_items_scroll_between_cues() {
+        let shape = |count, cap, scroll| Shape::new(count, true).capped(cap).scrolled(scroll);
+        // 50 items in a 40-row column: 20 rows, the header, 18 list rows, the toggle
+        assert_eq!(shape(50, 20, 0).height(), 20);
+        assert_eq!(shape(5, 20, 0).height(), 7, "a short list is not padded to the cap");
+        assert_eq!(shape(50, 2, 0).height(), 5, "never less than the collapsed section");
+        assert_eq!(Shape::new(50, false).capped(20).height(), 5);
+        let rows = |s: Shape| (0..s.height() + 1).map(|r| s.hit(r)).collect::<Vec<_>>();
+        let top = rows(shape(50, 8, 0));
+        // the header, 6 list rows (5 items and the ▼ cue), the toggle
+        assert_eq!(top, [Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Item(3)), Some(Hit::Item(4)), None, Some(Hit::Toggle), None]);
+        let middle = rows(shape(50, 8, 10));
+        assert_eq!(middle, [Some(Hit::Header), None, Some(Hit::Item(10)), Some(Hit::Item(11)), Some(Hit::Item(12)), Some(Hit::Item(13)), None, Some(Hit::Toggle), None]);
+        // the offset clamps: the last item reaches the bottom, under the ▲ cue
+        let bottom = rows(shape(50, 8, 999));
+        assert_eq!(bottom, [Some(Hit::Header), None, Some(Hit::Item(45)), Some(Hit::Item(46)), Some(Hit::Item(47)), Some(Hit::Item(48)), Some(Hit::Item(49)), Some(Hit::Toggle), None]);
+        assert_eq!(shape(50, 8, 0).max_scroll(), 45);
+        assert_eq!(Shape::new(50, false).max_scroll(), 0);
+        assert_eq!(shape(5, 20, 3).max_scroll(), 0, "nothing to scroll when all fit");
+    }
+
+    #[test]
+    fn an_items_row_is_none_while_it_is_hidden_and_scroll_to_brings_it_in() {
+        let shape = Shape::new(50, true).capped(8);
+        assert_eq!((shape.row_of(0), shape.row_of(4), shape.row_of(5)), (Some(1), Some(5), None));
+        assert_eq!(shape.scrolled(10).row_of(10), Some(2), "under the ▲ cue");
+        assert_eq!(shape.scroll_to(4), 0, "already in view");
+        let down = shape.scroll_to(20);
+        assert_eq!((down, shape.scrolled(down).row_of(20)), (17, Some(5)), "the last row above the ▼ cue");
+        assert_eq!(shape.scrolled(30).scroll_to(29), 29, "above the window: it becomes the first");
+        assert_eq!(shape.scroll_to(49), 45);
     }
 
     #[test]
