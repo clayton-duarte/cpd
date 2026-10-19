@@ -220,6 +220,19 @@ fn pr_section(out: &mut Vec<String>, pr: &PrSpec, jobs: &[&Job], later: bool) {
     }
 }
 
+/// The most paths a row of `## Overlaps` shows before it only counts the rest.
+const PATHS_SHOWN: usize = 5;
+
+/// The `Paths` cell: the paths in code spans, at most [`PATHS_SHOWN`], then
+/// `+N` for the N more.
+fn paths_cell(paths: &[String]) -> String {
+    let mut cell: Vec<String> = paths.iter().take(PATHS_SHOWN).map(|p| tcode(p)).collect();
+    if paths.len() > PATHS_SHOWN {
+        cell.push(format!("+{}", paths.len() - PATHS_SHOWN));
+    }
+    cell.join(", ")
+}
+
 /// The `## Overlaps` section (commands.md §4.5): a table, or that no other
 /// active Plan touches these files.
 fn overlaps_section(out: &mut Vec<String>, overlaps: &[Overlap]) {
@@ -227,17 +240,10 @@ fn overlaps_section(out: &mut Vec<String>, overlaps: &[Overlap]) {
     if overlaps.is_empty() {
         out.push("No other active Plan touches these files.".to_owned());
     } else {
-        out.extend(["| Job | Path | Other Plan | PR | Job | Status |".to_owned(), "|---|---|---|---|---|---|".to_owned()]);
+        out.extend(["| Job | Other Plan | PR | Its Jobs (status) | Paths |".to_owned(), "|---|---|---|---|---|".to_owned()]);
         for o in overlaps {
-            out.push(format!(
-                "| {} | {} | {} | {} | {} | {} |",
-                tcode(&o.job),
-                tcode(&o.path),
-                tcode(&o.plan),
-                tcode(&o.pr),
-                tcode(&o.other_job),
-                o.status
-            ));
+            let other_jobs: Vec<String> = o.other_jobs.iter().map(|j| format!("{} ({})", tcode(&j.key), j.status)).collect();
+            out.push(format!("| {} | {} | {} | {} | {} |", tcode(&o.job), tcode(&o.plan), tcode(&o.pr), other_jobs.join(", "), paths_cell(&o.paths)));
         }
     }
     out.push(String::new());
@@ -307,6 +313,15 @@ mod tests {
         assert_eq!(cell("a | b\n  c"), "a \\| b c");
         assert_eq!(tcode("a|b"), "`a\\|b`");
         assert_eq!(code("a`b"), "`` a`b ``");
+    }
+
+    #[test]
+    fn the_paths_cell_shows_five_paths_and_counts_the_rest() {
+        let paths = |n: usize| (1..=n).map(|i| format!("a/{i}.rs")).collect::<Vec<_>>();
+        assert_eq!(paths_cell(&paths(1)), "`a/1.rs`");
+        assert_eq!(paths_cell(&paths(5)), "`a/1.rs`, `a/2.rs`, `a/3.rs`, `a/4.rs`, `a/5.rs`");
+        assert_eq!(paths_cell(&paths(6)), "`a/1.rs`, `a/2.rs`, `a/3.rs`, `a/4.rs`, `a/5.rs`, +1");
+        assert_eq!(paths_cell(&paths(40)), "`a/1.rs`, `a/2.rs`, `a/3.rs`, `a/4.rs`, `a/5.rs`, +35");
     }
 
     #[test]
