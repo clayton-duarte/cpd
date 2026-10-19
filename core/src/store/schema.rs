@@ -110,7 +110,7 @@ pub const VERSION: i64 = 1000;
 /// The canonical schema hash (§4.3) of a fresh store that applied exactly this
 /// binary's migrations, pinned here and never recorded in the store (hs-d178
 /// D2). A test asserts it and prints the new value when it is stale.
-pub const SCHEMA_HASH: &str = "6b989e2f42e99b80049fcccd072f3b0c0a2dfd05885fe8ca8bcedd2a99522c91";
+pub const SCHEMA_HASH: &str = "0e1bbab17244bf8cd9d519ca869a58d034dcfaa41177d8576d0d467974e18a22";
 
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.
@@ -2501,6 +2501,10 @@ mod tests {
                 // `pr-title` (additive) gave every PR a last column, `title`, null (§4.5): the rest is as it was.
                 for row in rows_after.get_mut("prs").unwrap() {
                     *row = row.strip_suffix(",null]").map(|r| format!("{r}]")).expect("every PR has a null title after `pr-title`");
+                }
+                // `review-title` (additive) gave every Plan review a last column, `title`, null (§4.5).
+                for row in rows_after.get_mut("plan_reviews").unwrap() {
+                    *row = row.strip_suffix(",null]").map(|r| format!("{r}]")).expect("every review has a null title after `review-title`");
                 }
                 assert_eq!(rows_after, rows_before);
             }
