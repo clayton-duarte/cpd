@@ -163,7 +163,7 @@ fn fx_bare(config_extra: &str) -> Fx {
         .collect();
     fx.fixture(&format!(
         "{catalog}
-         INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');"
+         INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');"
     ));
     fx
 }
@@ -1491,7 +1491,7 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     // the repo an `origin` that has them, so the only `error` this test could see is E5's or E7's own.
     let origin = fx.env.root().join("repos/origin.git");
     fx.env.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-    fx.env.git(&fx.repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    fx.env.local_origin(&fx.repo, &origin);
     fx.env.git(&fx.repo, &["push", "-q", "origin", "main"]);
     // `web` is in its own repo: git cannot hold `cpd/pay` beside `cpd/pay/web`.
     let web = fx.env.git_repo("web").canonicalize().unwrap();

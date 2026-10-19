@@ -1,5 +1,6 @@
-import { callCpd } from "./cpd.ts";
+import { callCpd, CpdError, isObject } from "./cpd.ts";
 import type { Host } from "./host.ts";
+import { POLICY_SECTION } from "./policy.ts";
 import { isTyped, startsReply } from "./reply.ts";
 import { type Facts, Reporter, stateArgs, type Wanted } from "./state.ts";
 
@@ -17,10 +18,24 @@ export const newReporter = (host: Host, id: string, facts: Facts) =>
 export function registerAgentState(host: Host): void {
   const { pi } = host;
 
-  // hs-d278: who started the run. Returns nothing: it adds no message.
+  // Who started the run. Returns nothing: it adds no message.
   pi.on("before_agent_start", function markReply(event) {
     const r = host.run;
     if (r) r.facts.reply = startsReply(event);
+  });
+
+  // §15.10: the policy section of the run, for every role. Returns nothing: it only sets the section.
+  pi.on("before_agent_start", function policyHandler(event) {
+    const r = host.run;
+    const text = r?.policy;
+    if (r === undefined || text === undefined) return;
+    const sections = event?.systemPromptOptions?.sections;
+    if (isObject(sections)) {
+      sections[POLICY_SECTION] = text;
+    } else if (!r.sectionsReported) {
+      r.sectionsReported = true;
+      host.deliver("policy section", new CpdError("sections_missing", "this pi gives no systemPromptOptions.sections: the policy is not delivered"));
+    }
   });
 
   pi.on("input", (event) => {

@@ -6,6 +6,7 @@ import { CpdError, isObject, toCpdError } from "./cpd.ts";
 import { cursorFrom } from "./cursor.ts";
 import { errorMessage } from "./delivery.ts";
 import { PERMANENT_CODES } from "./follower.ts";
+import { policySection } from "./policy.ts";
 import { followerHooks } from "./handle.ts";
 import type { Host } from "./host.ts";
 import type { Ctx } from "./pi.ts";
@@ -99,6 +100,15 @@ function logTo(host: Host, id: string): (line: string) => void {
 /** §15.2 steps 2 to 6, once the Session is known. */
 async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason: string): Promise<void> {
   const { pi, options } = host;
+  // 1b. the policy text (§15.10): a failure is an error message and no section
+  let policy: string | undefined;
+  try {
+    policy = policySection(await host.call(["policy", "show"]));
+  } catch (e) {
+    host.deliver("policy show", e);
+  }
+  if (host.abort.signal.aborted) return;
+
   const facts = new Facts();
   const r = new Run({
     id,
@@ -109,6 +119,7 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
     log: logTo(host, id),
     follow: { hooks: followerHooks(host), timing: host.timing, spawn: options.spawn, schedule: options.schedule },
   });
+  r.policy = policy;
   host.run = r;
   r.log(`start: ${reason}`);
 

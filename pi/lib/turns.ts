@@ -9,7 +9,7 @@ import { contextCursorFrom, contextUpdate, parsePending, parsePlanEvents, parseR
 // ---- Context updates at turn start (§15.7) ----
 
 /**
- * `before_agent_start` of a Manager only (hs-d209, D1: nothing from the Context is pushed into a Lead's turn): the
+ * `before_agent_start` of a Manager only (nothing from the Context is pushed into a Lead's turn): the
  * Context records other Sessions wrote since its cursor, the `Plans:` digest and the fresh `Pending work:` section, as one `cpd-context` message added to the run. Never starts a turn: a failed read is reported once (no turn) and leaves the cursor.
  */
 async function contextUpdates(host: Host, r: Run, ctx: Ctx): Promise<{ message: Message } | undefined> {
@@ -59,7 +59,7 @@ function registerReminder(host: Host): void {
     const r = host.run;
     if (!r || r.info.role !== "lead" || !r.reminderDue) return undefined;
     r.reminderDue = false;
-    return { message: { customType: REMINDER_TYPE, content: REMINDER_TEXT, display: false, details: { rule: "hs-d239" } } };
+    return { message: { customType: REMINDER_TYPE, content: REMINDER_TEXT, display: false, details: { rule: "register-planned-work" } } };
   });
 }
 
