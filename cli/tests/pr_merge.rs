@@ -3,8 +3,8 @@
 
 mod common;
 
-use common::{Run, TestEnv};
-use serde_json::{Value, json};
+use common::{TestEnv, refused};
+use serde_json::json;
 
 const REF: &str = "acme/api#7";
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -22,13 +22,6 @@ fn view(state: &str, merge_state: &str) -> String {
 
 fn argv(args: &[&str]) -> Vec<String> {
     args.iter().map(|a| (*a).to_owned()).collect()
-}
-
-fn refused(run: &Run, code: &str, exit: i32) -> Value {
-    let error = run.error();
-    assert_eq!(error["code"], code, "{run:?}");
-    assert_eq!(run.exit, exit, "{run:?}");
-    error
 }
 
 #[test]

@@ -1173,7 +1173,8 @@ mod tests {
         assert_eq!(err.details()["unknown"], serde_json::json!([ADD_A.name, ADD_B.name]));
         // An additive one is inside the window (§4.5): the binary opens it (verdict.rs tests).
         let (_dir, home) = tmp_home();
-        drop(open_named(&home, &with_kind_tables(&[ADD_A])).unwrap());
+        let built_in_and_a: Vec<Named> = schema::NAMED.iter().copied().chain([ADD_A]).collect();
+        drop(open_named(&home, &built_in_and_a).unwrap());
         assert!(Store::open(&home, 5000).is_ok());
     }
 

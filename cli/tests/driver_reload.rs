@@ -4,19 +4,14 @@
 //! next safe point, keeping its driver lock on fd 3, and the Attempt still ends
 //! `merged`. An install here is a new script renamed over the copy; it records
 //! its pid and arguments and then becomes the built `cpd`.
-//!
-//! The tests run one at a time: writing an executable while another thread
-//! forks can make its `exec` fail with ETXTBSY.
 
 mod common;
 
 use std::fs::{self, File};
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::path::PathBuf;
+use std::time::Duration;
 
-use common::{CPD, TestEnv};
+use common::{CPD, TestEnv, copy_executable, output, wait_until, wait_until_for, write_executable};
 use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -25,29 +20,17 @@ use cpd_core::plan::{jobs, locked_fingerprint};
 use cpd_core::store::{Store, WriteTxn};
 use serde_json::Value;
 
-static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
-
 const PLAN: &str = "pay";
 const ATTEMPT: &str = "api-a1";
 const RELOAD: &str = "reload: new cpd installed, re-executing";
 const SKIPPED: &str = "reload skipped";
 
-fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while !ready() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
+/// These waits cover a driver that reloads and re-runs: twice the default.
+const LONG: Duration = Duration::from_secs(60);
 
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;
     Ok(())
-}
-
-fn executable(path: &Path, text: &str) {
-    fs::write(path, text).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 struct Fx {
@@ -87,7 +70,7 @@ fn fx() -> Fx {
         assert!(env.tmux(args).status.success(), "tmux {args:?}");
     }
     let installed = env.root().join("cpd");
-    fs::copy(CPD, &installed).unwrap();
+    copy_executable(CPD, &installed);
     let go = env.root().join("go");
     env.fake_pi(&format!(
         "CPD='{CPD}'\n\
@@ -152,7 +135,7 @@ impl Fx {
 
     /// `job dispatch api` by the copy: its driver's executable is the copy. Returns the driver's pid.
     fn dispatch(&self) -> i64 {
-        let out = self.env.command(&self.installed).args(["job", "dispatch", "api", "--plan", PLAN]).output().unwrap();
+        let out = output(self.env.command(&self.installed).args(["job", "dispatch", "api", "--plan", PLAN])).unwrap();
         let json: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {out:?}"));
         assert_eq!(json["ok"], true, "{json}");
         json["pid"].as_i64().unwrap()
@@ -181,7 +164,7 @@ impl Fx {
 
     fn install_script(&self, on_version: &str) {
         let new = self.installed.with_extension("new");
-        executable(
+        write_executable(
             &new,
             &format!(
                 "#!/bin/sh\ncase \"$1\" in --version) {on_version};; esac\necho \"$$ $*\" >> '{}'\nexec '{CPD}' \"$@\"\n",
@@ -206,9 +189,9 @@ impl Fx {
 
     /// Lets the Worker submit and waits for the Attempt to end and its driver to exit.
     fn finish(&self, pid: i64) {
-        wait_until("the Attempt to end", || self.status() == "ended");
+        wait_until_for("the Attempt to end", LONG, || self.status() == "ended");
         let pid = nix::unistd::Pid::from_raw(pid as i32);
-        wait_until("the driver to exit", || nix::sys::signal::kill(pid, None).is_err());
+        wait_until_for("the driver to exit", LONG, || nix::sys::signal::kill(pid, None).is_err());
     }
 
     fn assert_merged(&self, old_lead: &str) {
@@ -227,15 +210,14 @@ impl Fx {
 
 #[test]
 fn a_driver_reloads_while_running_keeps_its_lock_and_the_attempt_merges() {
-    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
     let fx = fx();
     let old_lead = fx.env.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay"]);
     let pid = fx.dispatch();
-    wait_until("the Attempt to run", || fx.status() == "running");
+    wait_until_for("the Attempt to run", LONG, || fx.status() == "running");
     let txns = fx.query::<i64>("SELECT count(*) FROM txns");
 
     fx.install();
-    wait_until("the driver to reload", || !fx.runs().is_empty());
+    wait_until_for("the driver to reload", LONG, || !fx.runs().is_empty());
 
     assert_eq!(fx.runs(), [format!("{pid} attempt run {ATTEMPT} --plan {PLAN}")], "the same process, the same argv");
     fx.assert_lock_held_by(pid);
@@ -253,7 +235,6 @@ fn a_driver_reloads_while_running_keeps_its_lock_and_the_attempt_merges() {
 
 #[test]
 fn a_driver_reloads_at_the_merging_safe_point_and_completes_the_merge() {
-    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
     let fx = fx();
     let old_lead = fx.env.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay"]);
     // A `tmux` that holds the driver's `list-panes` (the start of its A4 tick)
@@ -263,7 +244,7 @@ fn a_driver_reloads_at_the_merging_safe_point_and_completes_the_merge() {
         .map(|dir| dir.join("tmux"))
         .find(|p| p.is_file())
         .expect("tmux on PATH");
-    executable(
+    write_executable(
         &fx.env.bin().join("tmux"),
         &format!(
             "#!/bin/sh\n\
@@ -277,16 +258,16 @@ fn a_driver_reloads_at_the_merging_safe_point_and_completes_the_merge() {
         ),
     );
     let pid = fx.dispatch();
-    wait_until("the Attempt to run", || fx.status() == "running");
+    wait_until_for("the Attempt to run", LONG, || fx.status() == "running");
 
     fs::write(fx.path("hold"), "").unwrap();
-    wait_until("the driver to be held", || fx.path("blocked").exists());
+    wait_until_for("the driver to be held", LONG, || fx.path("blocked").exists());
     fs::write(fx.path("go"), "").unwrap();
-    wait_until("the Worker to submit", || fx.status() == "merging");
+    wait_until_for("the Worker to submit", LONG, || fx.status() == "merging");
     assert!(fx.runs().is_empty() && !fx.log().contains(RELOAD));
     fx.install();
     fs::remove_file(fx.path("hold")).unwrap();
-    wait_until("the driver to reload", || !fx.runs().is_empty());
+    wait_until_for("the driver to reload", LONG, || !fx.runs().is_empty());
 
     assert_eq!(fx.runs(), [format!("{pid} attempt run {ATTEMPT} --plan {PLAN}")], "the same process, the same argv");
     fx.finish(pid);
@@ -304,15 +285,15 @@ fn a_driver_reloads_at_the_merging_safe_point_and_completes_the_merge() {
 /// next, is exec'd as before.
 #[test]
 fn a_driver_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_into_one_that_can_open_it() {
-    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
     let fx = fx();
     let old_lead = fx.env.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay"]);
     let pid = fx.dispatch();
-    wait_until("the Attempt to run", || fx.status() == "running");
+    wait_until_for("the Attempt to run", LONG, || fx.status() == "running");
 
     fx.install_older();
-    wait_until("the driver to refuse the reload", || fx.log().contains(SKIPPED));
-    // Several ticks: it is not asked again, nor exec'd.
+    wait_until_for("the driver to refuse the reload", LONG, || fx.log().contains(SKIPPED));
+    // time-claim: the older cpd is neither asked again nor exec'd over eight 0.5 s polls of A4; no per-poll signal from
+    // the driver, which forks nothing at a poll while its Worker's pane lives (engine-F1).
     std::thread::sleep(Duration::from_secs(4));
     let log = fx.log();
     assert_eq!(log.matches(SKIPPED).count(), 1, "{log}");
@@ -323,7 +304,7 @@ fn a_driver_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_into_one
     fx.assert_lock_held_by(pid);
 
     fx.install();
-    wait_until("the driver to reload", || !fx.runs().is_empty());
+    wait_until_for("the driver to reload", LONG, || !fx.runs().is_empty());
     assert_eq!(fx.runs(), [format!("{pid} attempt run {ATTEMPT} --plan {PLAN}")], "the same process, the same argv");
     fx.assert_lock_held_by(pid);
 
@@ -337,17 +318,16 @@ fn a_driver_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_into_one
 
 /// After a reload exec, fd 3 of the driver is the lock and nothing the new driver
 /// starts holds it (§3.4 step 4, "Reload on install"). A `tmux` stand-in, which the
-/// driver starts at each A4 tick, lists its own open files once `probe` exists.
+/// driver starts at A4's first tick (the new driver's too: it knows no pane pid yet), lists its own open files once `probe` exists.
 #[cfg(target_os = "linux")]
 #[test]
 fn after_a_reload_fd_3_is_the_lock_and_the_drivers_children_do_not_hold_it() {
-    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
     let fx = fx();
     let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
         .map(|dir| dir.join("tmux"))
         .find(|p| p.is_file())
         .expect("tmux on PATH");
-    executable(
+    write_executable(
         &fx.env.bin().join("tmux"),
         &format!(
             "#!/bin/sh\n\
@@ -365,18 +345,18 @@ fn after_a_reload_fd_3_is_the_lock_and_the_drivers_children_do_not_hold_it() {
         ),
     );
     let pid = fx.dispatch();
-    wait_until("the Attempt to run", || fx.status() == "running");
+    wait_until_for("the Attempt to run", LONG, || fx.status() == "running");
     let lock = fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(ATTEMPT).unwrap()).canonicalize().unwrap();
     let fd3 = || fs::read_link(format!("/proc/{pid}/fd/3")).ok();
     assert_eq!(fd3().as_deref(), Some(lock.as_path()), "before the reload");
 
     fx.install();
-    wait_until("the driver to reload", || !fx.runs().is_empty());
+    wait_until_for("the driver to reload", LONG, || !fx.runs().is_empty());
     assert_eq!(fx.runs(), [format!("{pid} attempt run {ATTEMPT} --plan {PLAN}")], "the same process");
     assert_eq!(fd3().as_deref(), Some(lock.as_path()), "after the reload fd 3 is the lock");
 
     fs::write(fx.path("probe"), "").unwrap();
-    wait_until("a child of the new driver to list its files", || fx.path("probe.out").exists());
+    wait_until_for("a child of the new driver to list its files", LONG, || fx.path("probe.out").exists());
     let open = fs::read_to_string(fx.path("probe.out")).unwrap();
     assert!(!open.trim().is_empty(), "the child listed no files");
     let lock = lock.display().to_string();
@@ -392,7 +372,6 @@ fn after_a_reload_fd_3_is_the_lock_and_the_drivers_children_do_not_hold_it() {
 /// not `timed_out` after the Attempt's whole active time.
 #[test]
 fn a_nudged_worker_that_idles_again_after_a_reload_ends_no_submit() {
-    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
     let fx = fx();
     let reloaded = fx.path("reloaded");
     fx.env.fake_pi(&format!(

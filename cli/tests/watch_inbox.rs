@@ -8,7 +8,7 @@ use std::fs;
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{CPD, TestEnv};
+use common::{CPD, TestEnv, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::{Store, WriteTxn};
@@ -26,15 +26,6 @@ fn ago(minutes: i64) -> String {
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;
     Ok(())
-}
-
-/// Waits until `done` holds, at most 30 s.
-fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !done() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
 }
 
 /// A running `cpd watch`, SIGTERMed on drop (killed if it does not stop).
@@ -64,7 +55,7 @@ fn fx() -> Fx {
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
-            "version = 1\nmachine = \"m1\"\n[watch]\ntick_seconds = 1\n[inbox]\nstuck_job_minutes = 1\n[tmux]\nsocket = \"{}\"\n",
+            "version = 1\nmachine = \"m1\"\n[watch]\ntick_seconds = 1\npr_poll_seconds = 1\n[inbox]\nstuck_job_minutes = 1\n[tmux]\nsocket = \"{}\"\n",
             env.tmux_socket()
         ),
     )
@@ -175,8 +166,8 @@ fn a_failed_job_is_stuck_only_after_stuck_job_minutes() {
     let _engine = fx.start();
 
     wait_until("job-stuck", || !fx.open_items().is_empty());
-    // Several ticks later the fresh failure is still not stuck.
-    std::thread::sleep(Duration::from_millis(3500));
+    // Three whole ticks later the fresh failure is still not stuck.
+    fx.env.wait_whole_ticks(3);
     assert_eq!(fx.open_items(), [("job-stuck".into(), "red".into(), "job:pay/old".into(), "pay/old failed".into())]);
     assert_eq!(fx.events("inbox-opened").len(), 1);
 
@@ -200,7 +191,7 @@ fn a_tick_with_no_change_writes_no_transaction() {
     assert_eq!(fx.query::<i64>(reconciles), 1);
     let (txns, events) = (fx.query::<i64>("SELECT count(*) FROM txns"), fx.query::<i64>("SELECT count(*) FROM events"));
 
-    std::thread::sleep(Duration::from_millis(3500));
+    fx.env.wait_whole_ticks(3);
     assert_eq!(fx.query::<i64>(reconciles), 1);
     assert_eq!(fx.query::<i64>("SELECT count(*) FROM txns"), txns, "no transaction of any step");
     assert_eq!(fx.query::<i64>("SELECT count(*) FROM events"), events);
