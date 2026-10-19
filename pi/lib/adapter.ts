@@ -13,6 +13,7 @@ import { lastAssistantText, needsReminder, planKeys, REMINDER_TEXT, REMINDER_TYP
 import { parseOpened, parseResult, parseStatus, request } from "./plannotator.ts";
 import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, highestReview, REVIEW_LABEL, reviewNumber, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
 import { adapterDir, appendLog, DEFAULT_POLL_MS, LONG_REFUSAL_NOTICE, pollAdapter, type Poll, refusal, RELOAD_COMMAND, reloadLogPath, RELOAD_TRIGGER, validatePackage, type Validation } from "./reload.ts";
+import { POLICY_SECTION, policySection } from "./policy.ts";
 import { RENDERED_TYPES, Rendering } from "./render.ts";
 import { isTyped, startsReply } from "./reply.ts";
 import { Facts, Reporter, stateArgs, type Wanted } from "./state.ts";
@@ -61,6 +62,10 @@ type Run = {
   reload: Poll | undefined;
   /** §15.8: the last run ended on a message that spoke of further work and named no registered key; the next `before_agent_start` adds the reminder once. */
   reminderDue: boolean;
+  /** The text of the `cpd-policy` section (§15.10), or undefined: none, or `cpd policy show` failed. */
+  policy: string | undefined;
+  /** True once the missing-`sections` failure is reported, so it is reported once per run (§8.3 "Delivery to agents"). */
+  sectionsReported: boolean;
   /** One line of `run/adapter/<session>.log` (§15.6 "Log"); a failed write is notified once per run. */
   log: (line: string) => void;
   unsubscribe: (() => void)[];
@@ -233,6 +238,15 @@ export function adapter(pi: PiApi, options: Options = {}): void {
 
   /** §15.2 steps 2 to 6, once the Session is known. */
   async function begin(ctx: Ctx, id: string, info: SessionInfo, reason: string): Promise<void> {
+    // 1b. the policy text (§15.10): a failure is an error message and no section
+    let policy: string | undefined;
+    try {
+      policy = policySection(await call(["policy", "show"]));
+    } catch (e) {
+      deliver("policy show", e);
+    }
+    if (abort.signal.aborted) return;
+
     const facts = new Facts();
     let logFailed = false;
     const r: Run = {
@@ -254,6 +268,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       abort,
       reload: undefined,
       reminderDue: false,
+      policy,
+      sectionsReported: false,
       log: (line) => {
         try {
           appendLog(reloadLogPath(env.CPD_HOME || join(homedir(), ".cpd"), id), line);
@@ -451,7 +467,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     }
   }
 
-  /** §15.3 `session-message`: for every Lead and a Manager; a turn only when `data.wake` is true (hs-d209, D3). The sender's name is read once, `cpd session show <from>`; the id stands in when it cannot be read. */
+  /** §15.3 `session-message`: for every Lead and a Manager; a turn only when `data.wake` is true. The sender's name is read once, `cpd session show <from>`; the id stands in when it cannot be read. */
   async function deliverSessionMessage(r: Run, ev: CpdEvent): Promise<void> {
     const from = typeof ev.data.from === "string" ? ev.data.from : null;
     let sender: { id: string; name: string | null } | null = null;
@@ -471,7 +487,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   // ---- Context updates at turn start (§15.7) ----
 
   /**
-   * `before_agent_start` of a Manager only (hs-d209, D1: nothing from the Context is pushed into a Lead's turn): the
+   * `before_agent_start` of a Manager only (nothing from the Context is pushed into a Lead's turn): the
    * Context records other Sessions wrote since its cursor, the `Plans:` digest and the fresh `Pending work:` section, as one `cpd-context` message added to the run. Never starts a turn: a failed read is reported once (no turn) and leaves the cursor.
    */
   async function contextUpdates(r: Run, ctx: Ctx): Promise<{ message: Message } | undefined> {
@@ -540,7 +556,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       const r = run;
       if (!r || r.info.role !== "lead" || !r.reminderDue) return undefined;
       r.reminderDue = false;
-      return { message: { customType: REMINDER_TYPE, content: REMINDER_TEXT, display: false, details: { rule: "hs-d239" } } };
+      return { message: { customType: REMINDER_TYPE, content: REMINDER_TEXT, display: false, details: { rule: "register-planned-work" } } };
     });
   }
 
@@ -748,10 +764,24 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     }
   });
 
-  // hs-d278: who started the run. `pi.on` has no unsubscribe, so the run is checked. Returns nothing: it adds no message.
+  // Who started the run. `pi.on` has no unsubscribe, so the run is checked. Returns nothing: it adds no message.
   pi.on("before_agent_start", function markReply(event) {
     const r = run;
     if (r) r.facts.reply = startsReply(event);
+  });
+
+  // §15.10: the policy section of the run, for every role. Returns nothing: it only sets the section.
+  pi.on("before_agent_start", function policyHandler(event) {
+    const r = run;
+    const text = r?.policy;
+    if (r === undefined || text === undefined) return;
+    const sections = event?.systemPromptOptions?.sections;
+    if (isObject(sections)) {
+      sections[POLICY_SECTION] = text;
+    } else if (!r.sectionsReported) {
+      r.sectionsReported = true;
+      deliver("policy section", new CpdError("sections_missing", "this pi gives no systemPromptOptions.sections: the policy is not delivered"));
+    }
   });
 
   pi.on("input", (event) => {

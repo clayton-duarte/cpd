@@ -108,6 +108,7 @@ kinds! {
     SessionMoved = "session-moved",
     SessionRenamed = "session-renamed",
     ContextRenamed = "context-renamed",
+    ContextOwner = "context-owner",
     PlanRenamed = "plan-renamed",
     ContextArchived = "context-archived",
     PlanArchived = "plan-archived",
@@ -169,6 +170,7 @@ impl Kind {
             SessionMoved => spec([Y, M, N, N, Y], &["pane", "window", "place"], &[]),
             SessionRenamed => spec([Y, M, N, N, Y], &["name"], &[]),
             ContextRenamed => spec([Y, N, N, N, N], &["title"], &[]),
+            ContextOwner => spec([Y, N, N, N, N], &["owner"], &[]),
             PlanRenamed => spec([Y, Y, N, N, N], &["title"], &[]),
             ContextArchived => spec([Y, N, N, N, N], &["archived"], &[]),
             PlanArchived => spec([Y, Y, N, N, N], &["archived"], &[]),
@@ -208,7 +210,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     /// The protocol and the `sha256` of the sorted kinds, joined by `\n`, they were last raised for.
-    const PINNED: (u32, &str) = (4, "ac82364d4f6b83ae5e1dad29db82b205a36e8705eb2ee5015a1ec9adee953abb");
+    const PINNED: (u32, &str) = (4, "04406fbf96c3625640c3b42f98ee4129f77cc74a8b27796bed7e30c0d1b7432e");
 
     fn kinds_hash() -> String {
         let mut names: Vec<&str> = Kind::ALL.iter().map(|k| k.as_str()).collect();

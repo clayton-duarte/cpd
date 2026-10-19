@@ -132,6 +132,7 @@ struct Fx {
 impl Fx {
     fn new() -> Fx {
         let env = TestEnv::new();
+        env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
         // `cpd` on PATH is the built binary: panes and the engine run it so (§6.5, E5).
         symlink(CPD, env.bin().join("cpd")).unwrap();
         let flags = env.root().join("github");
@@ -275,7 +276,7 @@ impl Fx {
 /// A repo `name` on `main` with hooks that log the branch they ran for (§7.3)
 /// and a bare `origin` holding `main`.
 fn repo(env: &TestEnv, name: &str) -> Repo {
-    let path = env.git_repo(name).canonicalize().unwrap();
+    let path = env.keyed_repo(name).canonicalize().unwrap();
     fs::create_dir_all(path.join(".config")).unwrap();
     let log = env.root().join(format!("{name}.hooks.log"));
     fs::write(
@@ -292,7 +293,7 @@ fn repo(env: &TestEnv, name: &str) -> Repo {
     env.git(&path, &["commit", "-q", "-m", "hooks"]);
     let origin = env.root().join(format!("{name}.git"));
     env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-    env.git(&path, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    env.local_origin(&path, &origin);
     env.git(&path, &["push", "-q", "-u", "origin", "main"]);
     Repo { path, origin }
 }
@@ -320,7 +321,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     let (shared, web) = (fx.shared.path.to_str().unwrap().to_owned(), fx.web.path.to_str().unwrap().to_owned());
 
     // ---------- 1. plan new from a directory that is no repo (A12)
-    fx.ok(&["context", "new", CONTEXT, "--title", "Chain"]);
+    fx.ok(&["context", "new", CONTEXT, "--title", "Chain", "--owner", "acme"]);
     assert!(!fx.env.root().join(".git").exists());
     let out = fx.ok(&["plan", "new", PLAN, "--context", CONTEXT, "--title", "Change A, then B, then A again"]);
     let lead_session = out["plan"]["lead_session"].as_str().unwrap().to_owned();
@@ -334,7 +335,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
 
     // ---------- 2. the PRs: a1 -> b -> a2, two of them in one repo (A4)
     let out = fx.ok(&["pr", "add", "a1", "--repo", &shared, "--title", "Change the PR", "--plan", PLAN]);
-    assert_eq!(out["pr"], json!({"key": "a1", "repo": shared, "base": "main", "title": "Change the PR", "needs": [], "status": "waiting", "lead_branch": "cpd/chain/a1", "appended": false}));
+    assert_eq!(out["pr"], json!({"key": "a1", "repo": shared, "name": "shared", "base": "main", "title": "Change the PR", "needs": [], "status": "waiting", "lead_branch": "cpd/chain/a1", "appended": false}));
     let out = fx.ok(&["pr", "add", "b", "--repo", &web, "--title", "Change the PR", "--needs", "a1", "--plan", PLAN]);
     assert_eq!((&out["pr"]["lead_branch"], &out["pr"]["needs"]), (&json!("cpd/chain/b"), &json!(["a1"])));
     let out = fx.ok(&["pr", "add", "a2", "--repo", &shared, "--title", "Change the PR", "--needs", "b", "--plan", PLAN]);

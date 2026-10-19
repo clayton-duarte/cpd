@@ -102,7 +102,7 @@ fn add_origin(env: &TestEnv, repo: &Path) -> PathBuf {
     let origin = env.root().join("origins").join(format!("{name}.git"));
     fs::create_dir_all(&origin).unwrap();
     env.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
-    env.git(repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    env.local_origin(repo, &origin);
     env.git(repo, &["push", "-q", "origin", "main"]);
     origin
 }

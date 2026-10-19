@@ -1569,7 +1569,7 @@ fn the_rebuilt_tables_history_triggers_list_their_new_columns() {
     write(&mut store, "UPDATE jobs SET review = 1 WHERE plan = 'pl' AND key = 'a';
                        UPDATE plans SET title = 'G2' WHERE id = 'gr'")
         .unwrap();
-    let after = rows(&mut store, "SELECT tbl, after FROM history WHERE op = 'update' ORDER BY id");
+    let after = rows(&mut store, "SELECT tbl, after FROM history WHERE op = 'update' AND tbl IN ('jobs', 'plans') ORDER BY id");
     let job: Value = serde_json::from_str(after[0][1].as_str().unwrap()).unwrap();
     assert_eq!(job["review"], 1, "{job}");
     // An update row holds the changed columns only (§4.4 "History row shape"): `pr` is listed in the trigger.
@@ -1717,7 +1717,7 @@ fn a_legacy_store_of_every_version_converts_keeping_every_row_and_id() {
             let mut rows_before = rows_before;
             assert_eq!(rows_after.remove("schema_migrations").map(|r| r.len()), Some(LEGACY.len() + NAMED.len()));
             // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
-            assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(46));
+            assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(47));
             assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
             assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(17));
             let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
@@ -1727,6 +1727,18 @@ fn a_legacy_store_of_every_version_converts_keeping_every_row_and_id() {
             for row in rows_before.get_mut("jobs").unwrap() {
                 *row = format!("{},0]", row.strip_suffix(']').unwrap());
             }
+            // `policy-keys` added `contexts.owner` and `prs.name`, last, and filled them (the fixture's
+            // pull requests are `acme/…`), writing an `update` history row per filled row in the migrating transaction.
+            assert_eq!(rows_after["contexts"].iter().map(|r| r.rsplit(',').next().unwrap()).collect::<Vec<_>>(), ["\"acme\"]"]);
+            for table in ["contexts", "prs"] {
+                for row in rows_after.get_mut(table).unwrap() {
+                    let at = row.rfind(',').unwrap();
+                    *row = format!("{}]", &row[..at]);
+                }
+            }
+            let (history_before, history_after) = (rows_before.remove("history").unwrap(), rows_after.remove("history").unwrap());
+            assert_eq!(history_after[..history_before.len()], history_before[..]);
+            assert!(history_after[history_before.len()..].iter().all(|r| r.contains("\"update\"")), "{history_after:?}");
             // `pr-title` (additive) gave every PR a last column, `title`, null (§4.5): the rest is as it was.
             for row in rows_before.get_mut("prs").unwrap() {
                 *row = format!("{},null]", row.strip_suffix(']').unwrap());
@@ -1899,6 +1911,9 @@ fn history_changed_keeps_the_whole_update_rows_and_writes_the_changed_columns_fr
     assert_eq!((before, after.clone()), (json!({"id": "ctx", "title": "Ctx 2"}), json!({"id": "ctx", "title": "Ctx 3"})));
     let mut replayed = whole.as_object().unwrap().clone();
     replayed.extend(after.as_object().unwrap().clone());
+    // `policy-keys`, which sorts after `history-changed`, added `contexts.owner`: the old whole row predates it,
+    // and this Context has no pull request to fill it from.
+    replayed.insert("owner".into(), Value::Null);
     let conn = connection(&home.db());
     let columns = table_columns(&conn, "contexts").unwrap();
     let pairs: Vec<String> = columns.iter().map(|(c, _)| format!("'{c}', {c}")).collect();

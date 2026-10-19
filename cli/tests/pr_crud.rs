@@ -25,15 +25,15 @@ struct Fx {
 
 fn fx(phase: &str) -> Fx {
     let env = TestEnv::new();
-    let pay = env.git_repo("pay").canonicalize().unwrap();
-    let web = env.git_repo("web").canonicalize().unwrap();
+    let pay = env.keyed_repo("pay").canonicalize().unwrap();
+    let web = env.keyed_repo("web").canonicalize().unwrap();
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
     let locked = if matches!(phase, "grounding" | "plan") { "NULL" } else { "'2000-01-01T00:00:00.000Z'" };
     let done = if phase == "done" { "'2000-01-02T00:00:00.000Z'" } else { "NULL" };
     let fx = Fx { env, pay, web };
     fx.env.sql(&format!(
-        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay-1', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
@@ -112,8 +112,8 @@ fn add_creates_a_waiting_pr_with_its_event_and_no_git_write() {
     let out = fx.add("api", &fx.pay, &[]).ok();
     assert_eq!(
         out["pr"],
-        json!({"key": "api", "repo": fx.pay.display().to_string(), "base": "main", "title": "Change api", "needs": [],
-               "status": "waiting", "lead_branch": "cpd/pay-1/api", "appended": false})
+        json!({"key": "api", "repo": fx.pay.display().to_string(), "name": "pay", "base": "main", "title": "Change api", "needs": [], "status": "waiting",
+               "lead_branch": "cpd/pay-1/api", "appended": false})
     );
     assert!(out.get("already").is_none());
     let out = fx.add("web", &fx.web, &["--base", "main", "--needs", "api"]).ok();
@@ -196,6 +196,71 @@ fn add_again_with_the_resolved_flags_is_already_and_writes_nothing() {
     let error = fx.refused(&other, "pr_exists", 3, writes);
     assert_eq!(error["details"]["title"], "Change web");
     fx.refused(&fx.add("web", &fx.pay, &["--needs", "api"]), "pr_exists", 3, writes);
+}
+
+#[test]
+fn add_stores_the_name_parsed_from_origin_lowercased() {
+    let fx = fx("grounding");
+    fx.env.git(&fx.web, &["remote", "set-url", "origin", "git@github.com:ACME/Web.Site.git"]);
+    let out = fx.add("web", &fx.web, &[]).ok();
+    assert_eq!(out["pr"]["name"], "web.site");
+    assert_eq!(fx.query::<String>("SELECT name FROM prs WHERE plan = 'pay-1' AND key = 'web'"), "web.site");
+}
+
+#[test]
+fn add_keys_the_repo_before_anything_is_written() {
+    let fx = fx("grounding");
+
+    // owner_unset: the Context has no owner (a Context made before the policy keys).
+    fx.env.sql("UPDATE contexts SET owner = NULL WHERE id = 'ctx'");
+    let writes = fx.writes();
+    let error = fx.refused(&fx.add("api", &fx.pay, &[]), "owner_unset", 3, writes);
+    assert_eq!(error["details"]["context"], "ctx");
+    assert!(error["details"].get("next").is_none() && error["message"].as_str().unwrap().contains("cpd context owner <login> --context ctx"), "{error}");
+    fx.env.sql("UPDATE contexts SET owner = 'acme' WHERE id = 'ctx'");
+    let writes = fx.writes();
+
+    // repo_unkeyed (exit 1): no origin (url null), a local path, another host, an SSH alias.
+    fx.env.git(&fx.pay, &["remote", "remove", "origin"]);
+    let error = fx.refused(&fx.add("api", &fx.pay, &[]), "repo_unkeyed", 1, writes);
+    assert_eq!(error["details"]["url"], Value::Null);
+    for url in ["/tmp/somewhere/pay.git", "https://gitlab.com/acme/pay.git", "git@github-work:acme/pay.git"] {
+        fx.env.git(&fx.pay, &["remote", "add", "origin", url]);
+        let error = fx.refused(&fx.add("api", &fx.pay, &[]), "repo_unkeyed", 1, writes);
+        assert_eq!(error["details"]["url"], url);
+        fx.env.git(&fx.pay, &["remote", "remove", "origin"]);
+    }
+
+    // owner_mismatch (exit 3): another owner's repo.
+    fx.env.git(&fx.pay, &["remote", "add", "origin", "https://github.com/other/pay.git"]);
+    let error = fx.refused(&fx.add("api", &fx.pay, &[]), "owner_mismatch", 3, writes);
+    assert_eq!((&error["details"]["owner"], &error["details"]["repo_owner"]), (&json!("acme"), &json!("other")));
+
+    // owner_unknown (exit 1): the Context's owner has no policy file.
+    fx.env.git(&fx.pay, &["remote", "set-url", "origin", "https://github.com/acme/pay.git"]);
+    fs::remove_file(fx.env.cpd_home().join("policy/owners/acme.toml")).unwrap();
+    let error = fx.refused(&fx.add("api", &fx.pay, &[]), "owner_unknown", 1, writes);
+    assert_eq!(error["details"]["owner"], "acme");
+    fs::write(fx.env.cpd_home().join("policy/owners/acme.toml"), "").unwrap();
+
+    // With every refusal cleared (`remote remove` dropped the tracking ref), the same add succeeds.
+    fx.env.git(&fx.pay, &["update-ref", "refs/remotes/origin/main", "main"]);
+    fx.add("api", &fx.pay, &[]).ok();
+}
+
+#[test]
+fn edit_repo_keys_the_new_repo_and_stores_its_name() {
+    let fx = fx("grounding");
+    fx.add("web", &fx.web, &[]).ok();
+    let writes = fx.writes();
+    fx.env.git(&fx.pay, &["remote", "set-url", "origin", "https://github.com/other/pay.git"]);
+    let error = fx.refused(&fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]), "owner_mismatch", 3, writes);
+    assert_eq!(error["details"]["repo_owner"], "other");
+    fx.env.git(&fx.pay, &["remote", "set-url", "origin", "git@github-work:acme/pay.git"]);
+    fx.refused(&fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]), "repo_unkeyed", 1, writes);
+    fx.env.git(&fx.pay, &["remote", "set-url", "origin", "https://github.com/acme/Payments.git"]);
+    fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]).ok();
+    assert_eq!(fx.query::<String>("SELECT name FROM prs WHERE plan = 'pay-1' AND key = 'web'"), "payments");
 }
 
 #[test]
@@ -298,7 +363,7 @@ fn legacy(status: &str) -> Legacy {
     let fx = fx("done");
     let origin = fx.env.root().join("repos/pay-origin.git");
     fx.env.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-    fx.env.git(&fx.pay, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    fx.env.local_origin(&fx.pay, &origin);
     fx.env.git(&fx.pay, &["push", "-q", "origin", "main"]);
     fx.env.git(&fx.pay, &["fetch", "-q", "origin"]);
     let lead = fx.env.root().join("repos/pay.pay-1");
@@ -384,6 +449,7 @@ fn add_keeps_refusing_the_legacy_lead_branch_of_a_pr_that_is_not_merged() {
 fn edit_changes_the_repo_the_base_and_the_needs() {
     let fx = fx("plan");
     fx.env.git(&fx.web, &["branch", "develop"]);
+    fx.env.git(&fx.web, &["update-ref", "refs/remotes/origin/develop", "develop"]);
     for key in ["a", "b", "c"] {
         fx.add(key, &fx.pay, &[]).ok();
     }
@@ -455,6 +521,7 @@ fn edit_refusals_write_nothing() {
     assert_eq!(error["details"]["base"], "nope");
     // --repo keeps the stored base, which must exist in the new repo.
     fx.env.git(&fx.web, &["branch", "develop"]);
+    fx.env.git(&fx.web, &["update-ref", "refs/remotes/origin/develop", "develop"]);
     fx.pr(&["edit", "web", "--base", "develop"]).ok();
     let writes = fx.writes();
     let error = fx.refused(&fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]), "base_not_found", 4, writes);
@@ -521,6 +588,8 @@ fn edit_title_works_after_the_lock_in_any_status_and_keeps_the_review_and_the_lo
     // `plan lock` starts the engine with `cpd watch --ensure` from `PATH`; a fake one that starts nothing keeps the
     // engine from writing `txns` beside the writes this test counts.
     fx.env.fake("cpd", "echo '{\"ok\": true, \"started\": true, \"pane\": \"%9\"}'");
+    // The lock starts the PR, which fetches `origin`: the keyed repo's GitHub origin is unreachable in tests.
+    fx.env.drop_unreachable_origin(&fx.pay);
     fx.env.cpd(&["plan", "lock", "--plan", "pay-1"]).ok();
 
     // After the lock the other flags are refused, the title is not.
@@ -682,6 +751,7 @@ fn cancel_is_refused_while_a_job_or_a_pr_holds_the_pr() {
 fn the_plan_fingerprint_changes_with_a_prs_repo_base_needs_and_existence() {
     let fx = fx("plan");
     fx.env.git(&fx.web, &["branch", "develop"]);
+    fx.env.git(&fx.web, &["update-ref", "refs/remotes/origin/develop", "develop"]);
     let none = fx.fingerprint();
     assert_eq!(fx.fingerprint(), none, "the same PRs give the same fingerprint");
 

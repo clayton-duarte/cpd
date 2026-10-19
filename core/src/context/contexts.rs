@@ -10,7 +10,9 @@ use crate::args::Text;
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
-use crate::ids::{ContextId, MachineName, RecordId, RecordKind};
+use crate::home::CpdHome;
+use crate::ids::{ContextId, MachineName, OwnerLogin, RecordId, RecordKind};
+use crate::policy::{PolicyKey, resolve};
 use crate::store::Store;
 
 /// A row of `contexts`.
@@ -23,11 +25,13 @@ pub struct ContextRow {
     pub created_on: String,
     /// When it was archived (contract §2.2 "Archived"), else none.
     pub archived_at: Option<String>,
+    /// The GitHub owner, the policy key (contract §8.3); none only for a Context made before the policy keys.
+    pub owner: Option<String>,
 }
 
 impl ContextRow {
     pub const COLUMNS: &'static str =
-        "id, title, jira, created_at, created_on, archived_at";
+        "id, title, jira, created_at, created_on, archived_at, owner";
 
     pub fn from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ContextRow> {
         Ok(ContextRow {
@@ -37,6 +41,7 @@ impl ContextRow {
             created_at: r.get(3)?,
             created_on: r.get(4)?,
             archived_at: r.get(5)?,
+            owner: r.get(6)?,
         })
     }
 
@@ -87,26 +92,34 @@ impl<'a> Contexts<'a> {
     }
 
     /// `context new` (commands.md §3.1): the Context's row and `context-created`.
-    /// Returns the row and whether it already existed with this title and Jira key.
+    /// Returns the row and whether it already existed with this title, Jira key and owner.
+    /// The owner's policy file must resolve (`owner_unknown`, `policy_invalid`).
     pub fn create(
         &mut self,
+        home: &CpdHome,
         id: &ContextId,
         title: &Text,
         jira: Option<&Jira>,
+        owner: &OwnerLogin,
     ) -> Result<(ContextRow, bool), CpdError> {
         let existing = |conn: &Connection| -> Result<Option<ContextRow>, CpdError> {
             let Some(row) = ContextRow::find(conn, id)? else { return Ok(None) };
-            if row.title == title.as_str() && row.jira.as_deref() == jira.map(Jira::as_str) {
+            if row.title == title.as_str()
+                && row.jira.as_deref() == jira.map(Jira::as_str)
+                && row.owner.as_deref() == Some(owner.as_str())
+            {
                 return Ok(Some(row));
             }
-            Err(CpdError::new(ErrorCode::ContextExists, format!("Context {id} exists with another title or Jira key."))
+            Err(CpdError::new(ErrorCode::ContextExists, format!("Context {id} exists with another title, Jira key or owner."))
                 .with("context", id.as_str())
                 .with("title", row.title)
-                .with("jira", row.jira))
+                .with("jira", row.jira)
+                .with("owner", row.owner))
         };
         if let Some(row) = self.store.read(|conn| existing(conn))? {
             return Ok((row, true));
         }
+        resolve(home, &PolicyKey::Owner(owner.clone()))?;
         let machine = self.machine.clone();
         self.store.write("context new", |tx| {
             // Another process may have created it since the read.
@@ -114,8 +127,8 @@ impl<'a> Contexts<'a> {
                 return Ok((row, true));
             }
             tx.execute(
-                "INSERT INTO contexts (id, title, jira, created_at, created_on) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![id.as_str(), title.as_str(), jira.map(Jira::as_str), now(), machine.as_str()],
+                "INSERT INTO contexts (id, title, jira, created_at, created_on, owner) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id.as_str(), title.as_str(), jira.map(Jira::as_str), now(), machine.as_str(), owner.as_str()],
             )?;
             events::append(
                 tx,

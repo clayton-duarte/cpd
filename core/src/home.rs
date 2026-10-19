@@ -111,6 +111,11 @@ impl CpdHome {
         self.locks_dir().join("watch.lock")
     }
 
+    /// `locks/tmux-restart.lock`: held by the one run of the tmux server's restart (contract §6.1).
+    pub fn tmux_restart_lock(&self) -> PathBuf {
+        self.locks_dir().join("tmux-restart.lock")
+    }
+
     /// `locks/repo-<sha1>.lock`: the per-repo merge lock (contract §7.4).
     /// `git_common_dir` must be the realpath of the repo's
     /// `git rev-parse --git-common-dir`; its bytes are hashed as they are.
@@ -147,6 +152,16 @@ impl CpdHome {
     /// `run/watch.log`: the engine's stderr.
     pub fn watch_log(&self) -> PathBuf {
         self.run_dir().join("watch.log")
+    }
+
+    /// `run/tmux-restart.pending`: a restart of the tmux server is pending (contract §6.1).
+    pub fn tmux_restart_pending(&self) -> PathBuf {
+        self.run_dir().join("tmux-restart.pending")
+    }
+
+    /// `run/tmux-restart.log`: the output of the detached tmux restart.
+    pub fn tmux_restart_log(&self) -> PathBuf {
+        self.run_dir().join("tmux-restart.log")
     }
 
     /// `run/context-digests/<context>/`: a Context's digest files (contract §1.4, §4.6).
@@ -310,6 +325,9 @@ mod tests {
         assert_eq!(h.pr_poll_lock(), p("/h/.cpd/locks/pr-poll.lock"));
         assert_eq!(h.plannotator_port(&plan()), p("/h/.cpd/run/pay-4521/plannotator-port"));
         assert_eq!(h.watch_log(), p("/h/.cpd/run/watch.log"));
+        assert_eq!(h.tmux_restart_lock(), p("/h/.cpd/locks/tmux-restart.lock"));
+        assert_eq!(h.tmux_restart_pending(), p("/h/.cpd/run/tmux-restart.pending"));
+        assert_eq!(h.tmux_restart_log(), p("/h/.cpd/run/tmux-restart.log"));
         assert_eq!(h.plan_md(&plan()), p("/h/.cpd/run/pay-4521/plan.md"));
         assert_eq!(h.worker_spec(&plan(), &attempt()), p("/h/.cpd/run/pay-4521/specs/api-schema-a2.md"));
         assert_eq!(h.review_brief(&plan(), &attempt()), p("/h/.cpd/run/pay-4521/reviews/api-schema-a2.md"));
