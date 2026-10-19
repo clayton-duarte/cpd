@@ -31,6 +31,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 19. [Amendments to contract.md](#19-amendments-to-contractmd)
 20. [Sections changed by R19 and R20](#20-sections-changed-by-r19-and-r20)
 21. [`inbox`](#21-inbox)
+22. [`policy`](#22-policy)
 
 ## 1. Conventions
 
@@ -54,7 +55,7 @@ Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Thr
 |---|---|---|
 | `cpd events follow` | one Event per line (§5.4) | the one streaming command (§1.2) |
 | `cpd session run`, `cpd tui view` (internal) | they run pi or draw a ratatui view in their pane | they are the programs inside cockpit panes (§6.2), not commands an agent calls. If they fail before taking the terminal, they print the failure envelope and exit with its code |
-| `cpd tui --attach` | nothing on success: it replaces itself with `tmux attach` | the approved outline says `tui` "builds and attaches the cockpit"; without `--attach`, `cpd tui` prints JSON like every command |
+| `cpd` (no arguments), `cpd tui --attach` | nothing on success: it replaces itself with `tmux attach` | the approved outline says `tui` "builds and attaches the cockpit"; without `--attach`, `cpd tui` prints JSON like every command. Bare `cpd` is §13.3 (hs-d259) |
 
 `cpd --version` (like `--help`) prints one JSON value too: `{"ok": true, "version": "0.0.0", "protocol": 5, "store": {"opens": true, "refusal": null, "unknown": [], "pending": []}}`. `store` is the **verdict** of contract §4.5 ("The window") on `$CPD_HOME`'s database opened read-only, computed by the one function every guard uses (`store::verdict`): `null` when the database file does not exist; otherwise `opens` (`true` when this binary can open the store, migrating or converting it if needed), `refusal` (`null`, or `{"code", "message"}` with `code` one of `store_too_new`, `store_failed`, `migration_changed`, `migration_order`, §1.3) when `opens` is `false`, `unknown` (the migration names the store has applied that this binary lacks, in name order: inside the window they are all additive) and `pending` (the names of this binary's migrations the store has not applied, in the order they would be applied; for an unconverted store the legacy names it lacks, then every named one). `unknown` and `pending` are `[]` for a store that is not named yet, and filled whenever the store is a named store, whether or not it opens. `protocol` is an integer, **5** today (1 until Plan manager added `session-message`, 2 until Plan inbox added the four `inbox-*` kinds, 3 until `session state idle --reply`, hs-d278, 4 until `session-titled`, hs-d257), raised whenever an Event kind, an Event `data` field the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on (contract §5.2 "The protocol number"); the adapter checks it (§15.2). `--version` never creates, migrates or writes the database, and runs neither the schema check nor the conversion. **The guards read `store`:** a driver or a Lead's wrapper reloads into a binary only when `store` is `null` or `store.opens` is `true` (contract §3.4, §6.7), and `scripts/install-cpd.sh` refuses a build whose `store.opens` is `false`, and a Lead Branch build that carries a migration file that is not on `origin/main` (contract §3.7).
 
@@ -152,6 +153,15 @@ The index is generated: [docs/interface.md](interface.md), rendered from the `tr
 
 Anyone may run any command; a command with no callers that is neither cockpit nor internal is the User's, at a shell (for example `doctor`). The callers and the cockpit flag are kept in the binary (`cli/src/interface.rs`), next to the clap tree. The table's Writes column (each command's Effects says what it writes) and Contract column (each description ends with its §) are not carried over (hs-d251).
 
+**Documented here before the binary has them** (the policies, contract §8.3, hs-d288). The Job that implements each adds it to the binary's tree with these values, and `docs/interface.md` is then regenerated; until then this table is their index entry:
+
+| Command | Callers | Cockpit | Internal |
+|---|---|---|---|
+| `cpd context owner` (§3.13) | Manager, Lead | no | no |
+| `cpd policy show` (§22.1) | Manager, Lead, Worker | no | no |
+
+`context new` gains `--owner` (§3.1), and `pr add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged.
+
 ## 3. `context`
 
 A Context and its records (§2.2, §4.6). The records live only in the database, and Contexts are machine-local (hs-a1). Every record write follows §4.6 exactly: one transaction that validates, inserts the `context_records` row and appends `context-record` `{record, kind, machine, seq}`. No lock file, no git, no file.
@@ -163,28 +173,31 @@ A Context and its records (§2.2, §4.6). The records live only in the database,
 ### 3.1 `context new`
 
 ```
-cpd context new <id> --title <text> [--jira <key>]
+cpd context new <id> --title <text> --owner <login> [--jira <key>]
 ```
 
 | Flag | Meaning |
 |---|---|
 | `<id>` | Context id (§2.1) |
 | `--title <text>` | required; 1–200 characters, no control characters, else `usage` (§1.5) |
+| `--owner <login>` | required: the GitHub owner (user or organisation) of every repo the Context's Plans work on, its policy key (contract §8.3, hs-d288); a login of contract §2.1, else `usage`; stored lowercased |
 | `--jira <key>` | Jira Epic key, stored only (`^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage`) |
 
 | Precondition | Code | Exit |
 |---|---|---|
-| no Context row with this id, unless it has the same title and Jira key | `context_exists` | 3 |
+| no Context row with this id, unless it has the same title, Jira key and owner | `context_exists` | 3 |
+| the owner has a policy file, `$CPD_HOME/policy/owners/<owner>.toml` (contract §8.3; an empty file is the default policy); `details.owner` | `owner_unknown` | 1 |
+| that file, read as every resolve reads it, is valid; `details.file`, `details.key` | `policy_invalid` | 1 |
 
 Effects:
-- **Rows**, one transaction: `contexts` (`created_on` = `machine`). **Event** `context-created` `{title, jira, created_on}`. Nothing else is written: no directory, no git.
+- **Rows**, one transaction: `contexts` (`created_on` = `machine`, `owner`). **Event** `context-created` `{title, jira, created_on}`. Nothing else is written: no directory, no git.
 - **tmux:** none.
 
 ```json
-{"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null, "created_at": "2026-10-14T21:10:00.000Z", "created_on": "hs"}}
+{"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null, "owner": "clayton-duarte", "created_at": "2026-10-14T21:10:00.000Z", "created_on": "hs"}}
 ```
 
-Idempotent: yes. The same id, title and Jira key return `"already": true`.
+Idempotent: yes. The same id, title, Jira key and owner return `"already": true`.
 
 ### 3.2 `context list`
 
@@ -462,6 +475,36 @@ Failures, after the lock is taken. Each removes the `.md.tmp`, leaves the previo
 
 Idempotent: yes. With no record newer than the latest digest it returns `"already": true` and runs nothing; a rerun after a failure runs again (on demand; E9 does not retry the same `seq`, contract §3.7).
 
+### 3.13 `context owner`
+
+```
+cpd context owner <login> [--context <c>]
+```
+
+Sets the GitHub owner of a Context that has none (contract §8.3, hs-d288): a Context created before `context new --owner` existed, which the migration could not fill because its PRs had no pull request or pull requests of two owners (contract §4.5). The owner is set once; there is no change of owner. The Context is `--context`, else the selected Plan's (§1.3).
+
+| Flag | Meaning |
+|---|---|
+| `<login>` | the owner, a login of contract §2.1, else `usage`; stored lowercased |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| a Context was selected (§1.3) | `context_required` | 2 |
+| the Context exists | `context_not_found` | 4 |
+| the Context has no owner, unless it is this one (then `already`); `details.context`, `details.owner` (the one it has) | `owner_set` | 3 |
+| the owner has a policy file, `$CPD_HOME/policy/owners/<owner>.toml`; `details.owner` | `owner_unknown` | 1 |
+| that file is valid; `details.file`, `details.key` | `policy_invalid` | 1 |
+
+An archived Context is not refused: setting its owner changes no work.
+
+Effects: **rows**, one transaction, with a compare-and-swap on `owner IS NULL`: `contexts.owner`. **Event** `context-owner` `{owner}`. Nothing else: the Context's existing PRs keep their `name`, and from now on resolve `Repo(<owner>, <name>)` (or `Owner(<owner>)` while their `name` is null, contract §8.3).
+
+```json
+{"ok": true, "context": {"id": "building-cpd", "owner": "clayton-duarte"}}
+```
+
+Idempotent: yes; the same owner again returns `"already": true` and writes nothing.
+
 ## 4. `plan`
 
 A Plan (§2.2) and its phases (§3.1). Replaces cpd 1's `workflow` group (D3) and `plan` group.
@@ -486,6 +529,7 @@ A Plan has no repo (R34, A12): its PRs are added later with `pr add` (§9.4), an
 | Precondition | Code | Exit |
 |---|---|---|
 | the Context exists | `context_not_found` | 4 |
+| the Context has an owner (contract §8.3; null only for a Context made before the owner existed); the message names `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
 | no Plan with this id, unless every flag matches it (then the result is `already`) | `plan_exists` | 3 |
 | the Context is not archived; `details.next` = `cpd context unarchive <c>` | `archived` | 3 |
 
@@ -825,7 +869,7 @@ cpd job add <key> --draft --title <text> [--tier <T>] [--spec <file>] [--pr <key
 | `<key>` | Job key (§2.1). Change: positional, like every other `job` command (cpd 1 had `--key`) |
 | `--pr <key>` | the Job's PR (R34, A14), selected by §1.3's rule: required when the Plan has two or more PRs that are not `cancelled`, defaulted to the one when it has one |
 | `--needs <k1,k2>` | Dependencies, comma-separated, no duplicates (`usage`); Jobs of the same PR only (A7) |
-| `--draft` | add the Job as a `draft` in a phase after `plan` too (User, hs-d173, hs-d174, hs-d179: every planned batch is visible in the Plan view before it is approved): `status = draft`, `appended = 1`, no fingerprint; the engine never runs it, and it becomes `queued` only at the approval of a Plan review of the drafts (§4.7). In phase `plan` every Job is a draft, so `--draft` changes nothing there. Its needs may be drafts. Without `--tier` and `--spec` it is a stub (above); `--draft` is the only way to add a Job without them |
+| `--draft` | add the Job as a `draft` in a phase after `plan` too (User, hs-d173, hs-d174, hs-d179: every planned batch is visible in the Plan view before it is approved): `status = draft`, `appended = 1`, no fingerprint; the engine never runs it, and it becomes `queued` only at the approval of a Plan review of the drafts (§4.7). In phase `plan` every Job is a draft, so `--draft` changes nothing there. Its needs may be drafts. Without `--tier` and `--spec` it is a stub (above); `--draft` is the only way to add a Job without them. A Job that only carries out a recorded User decision, with no open design choice, is added without `--draft` (User, hs-d301, amending hs-d173, hs-d174, hs-d179); drafts are for design the User has not decided, and when unsure it is a draft |
 | `--urgent` | add the Job with `urgent = 1` (contract §2.2): engine E3 starts it before every non-urgent Ready Job and may run it as one Attempt beyond `concurrency` (§3.7). Use it **only when the User explicitly asks**, usually for something that blocks all work or an incident. Not a Locked field and not in any fingerprint (§2.3); works with `--draft`, `--review` and in every phase `job add` works in. To mark an existing Job, see §5.8 |
 | `--review` | a **review Job** (B2, contract §2.2): its Worker is a fork of the Plan's Lead, it commits nothing and writes `run/<plan>/reviews/<key>.md`. Its Dependencies are **set** to every Job of its PR that exists at that moment and is not `cancelled`, so `--needs` with `--review` is `usage` (exit 2). Jobs added later do not become its Dependencies. The Spec file is as for any Job; its `touches` is informational for a review Job (*decided*: the Lead lists `run/<plan>/reviews/<key>.md`) |
 
@@ -1139,7 +1183,7 @@ A Plan's PRs (R34, §2.2 PR, §3.8) and their pull requests, through `gh` (§7.6
 
 ### 9.1 `pr open`
 
-`pr open` is the **Mechanical checks** step of the Deploy stage (contract §3.9): it runs the Gate, then opens the pull request. Review follows the opening, not the Gate.
+`pr open` is the **Mechanical checks** step of the Deploy stage (contract §3.9): it runs the Gate, then opens the pull request. Review follows the opening, not the Gate. **The Gate runs only when the PR's `pr.gate` is `local`** (contract §8.3, hs-d292; the PR's policy key, `Repo(<owner>, <name>)`): with `ci`, cpd's default, `pr open` runs no Gate, the repo's CI is the check, and the two Gate rows below do not apply.
 
 ```
 cpd pr open [--pr <key>] [--plan <id>]
@@ -1156,13 +1200,16 @@ cpd pr open [--pr <key>] [--plan <id>]
 | the per-repo lock within `lock_wait_seconds` | `lock_timeout` | 5 |
 | the newest pull request of the Lead Branch is not closed without a merge (a merged one is adopted, below); `details.number`, `details.url` | `pr_closed` | 3 |
 | the Lead worktree is clean | `dirty_target` | 3 |
+| the PR's policy resolves (contract §8.3 "Validation", `details` as there): its Context has an owner | `owner_unset` | 3 |
+| its owner has a policy file | `owner_unknown` | 1 |
+| its policy files are valid | `policy_invalid` | 1 |
 | the Gate passes (§7.3, §7.6 `pr open` step 2); `details.tail` is its last 60 lines, `details.log` the full log | `gate_failed` | 3 |
 | the Gate ran (not killed, not `hook_invalid`); `details.tail`, `details.log` as above | `gate_error` | 1 |
 
 Effects:
 - **Lock:** the per-repo lock of the PR's repo (§7.4), then R for orphaned merges; held until the push has finished.
-- **Adopting a merged pull request** (before the Gate; contract §7.6 `pr open` step 0): `gh pr list --head <lead branch> --state all --json number,url,state`, the newest decides. When it is `MERGED`, the Gate and the push are skipped (hs-d267 forbids skipping the Gate only when *opening* a pull request): one transaction records the pull request (its `pull_requests` row, `state` `merged`; the PR's `pr_number`, `pr_url`, `pull_request`) and moves the PR `dispatch → open → merged` exactly as `pr poll` does when it sees a merge: `pr-merged` (no `pr-opened`); `plan-phase` `dispatch → deploy` when every PR that is not `cancelled` is then `open` or `merged`, and `plan-done` (`deploy → done`) when every one is `merged`. The next `pr poll` cleans up the merged PR's worktrees. The output carries `"adopted": "merged"`. When it is `CLOSED` without a merge the command is refused `pr_closed` (reopen it on GitHub, or move the work to a new branch); when it is `OPEN`, it is adopted after the Gate and the push, as below.
-- **Hooks:** the Gate, `pre-merge` from `<lead worktree>/.config/wt.toml`, in the PR's Lead worktree on its Lead Branch, before anything is pushed (R19); output to `run/<plan>/logs/pr-<key>.pre-merge.log`. On `gate_failed` or `gate_error` nothing is pushed, no row is written and the PR stays `dispatch`: the Lead appends fix Jobs to it (`job add --pr <key>`) and runs `pr open --pr <key>` again once they are Merged.
+- **Adopting a merged pull request** (before the Gate; contract §7.6 `pr open` step 0): `gh pr list --head <lead branch> --state all --json number,url,state`, the newest decides. When it is `MERGED`, the Gate and the push are skipped (hs-d267 forbids skipping the Gate only when *opening* a pull request whose `pr.gate` is `local`, hs-d292): one transaction records the pull request (its `pull_requests` row, `state` `merged`; the PR's `pr_number`, `pr_url`, `pull_request`) and moves the PR `dispatch → open → merged` exactly as `pr poll` does when it sees a merge: `pr-merged` (no `pr-opened`); `plan-phase` `dispatch → deploy` when every PR that is not `cancelled` is then `open` or `merged`, and `plan-done` (`deploy → done`) when every one is `merged`. The next `pr poll` cleans up the merged PR's worktrees. The output carries `"adopted": "merged"`. When it is `CLOSED` without a merge the command is refused `pr_closed` (reopen it on GitHub, or move the work to a new branch); when it is `OPEN`, it is adopted after the Gate and the push, as below.
+- **Hooks:** with `pr.gate` `local`, the Gate, `pre-merge` from `<lead worktree>/.config/wt.toml`, in the PR's Lead worktree on its Lead Branch, before anything is pushed (R19); with `ci`, none; output to `run/<plan>/logs/pr-<key>.pre-merge.log`. On `gate_failed` or `gate_error` nothing is pushed, no row is written and the PR stays `dispatch`: the Lead appends fix Jobs to it (`job add --pr <key>`) and runs `pr open --pr <key>` again once they are Merged.
 - **git:** `git -C <lead worktree> push -u origin <lead branch>`. The Lead Branch is usually on the remote already: the PR's start pushed it and every merge pushed it (§7.2, §7.4, R35), so this push is normally a no-op that sets the upstream, and it pushes again what an earlier `push_failed` left behind.
 - **gh:** the lookup above; when it found an open pull request (an earlier run died before its transaction) that one is adopted; else `gh pr create --base <base> --head <lead branch> --title <title> --body <summary>`. `<title>` is the Plan's title when the Plan has one PR that is not `cancelled`, else `<plan title> (<key>)`; `<summary>` is the table of the PR's own Jobs and its Merged commits (cpd 1 §11, kept).
 - **Rows**, one transaction, with a compare-and-swap on the PR's `status = 'dispatch'`: the `pull_requests` row of the pull request (inserted from `gh`'s URL, `repo`, `number`, `url`, the title given to `gh`, `draft` 0, `state` `open`, `review_decision` and `checks` `none`, `mergeable` and `merge_state` `unknown`; `created_at` from `gh`'s `createdAt`, read by a lookup of the pull request just created (`gh_failed` when `gh` cannot find it), written once: later polls never overwrite it; kept as it is when the poll stored it first; hs-d96, D6), then the PR `status = open`, `pr_number`, `pr_url`, `pr_opened_at`, `pull_request` (the row's id). **Event** `pr-opened` `{pr, number, url}`. When every PR that is not `cancelled` is now `open` or `merged` (A10), the same transaction sets `plans.phase = deploy` and appends `plan-phase` `{from: "dispatch", to: "deploy", prs: [{key, number, url}]}` (§3.1); otherwise the Plan stays in `dispatch`.
@@ -1205,7 +1252,7 @@ Effects (contract §7.6 gives the query, the mapping and the caveats):
 - **Lock:** `flock` on `locks/pr-poll.lock`, held for the whole poll, so two polls never overlap.
 - **gh:** one `gh api graphql` call with two searches (`is:pr is:open author:@me archived:false sort:created-asc` and `review-requested:@me is:pr is:open archived:false sort:created-asc`, the oldest 100 each), then, for the pull requests of `prs` rows in status `open` whose `pull_requests` row is `state` `open` and that neither search listed, one lookup call with one alias per pull request (a pull request closed without a merge is looked up once: its row then holds `closed`, and it is not looked up again until a search lists it). Stdout of the lookup is parsed whatever the exit code (gh exits 1 when one alias is `NOT_FOUND`). A lookup answering `OPEN` changes nothing.
 - **Rows**, one transaction for every change, none when nothing changed: `pull_requests` rows inserted or updated (`changed_at` = now) when a value changed (`mergeable`, `merge_state`, `authored` and `review_requested` included: `authored` is 1 when the pull request is in the `author:@me` search, `review_requested` when it is in the `review-requested:@me` search); a row is kept while it is in either search or a PR points to it, and deleted, when no PR points to it, once its pull request is in neither. The `authored` rows are what the Deploy column shows (§13.2, §17); the Inbox kinds read them all (§21).
-- **Events**, in that transaction, for the Plan whose PR points to the pull request only: **Event** `pr-feedback` (data of contract §5.2) when the checks became `failed`, the review `changes_requested`, the state `closed` or `mergeable` `conflicting` (reason `conflict`; from anything else, once per transition). A pull request that became `merged`: the PR `status = merged`, `merged_at`, **Event** `pr-merged` `{pr, number, url, merged_at}`; when every PR that is not `cancelled` is then `merged`, the same transaction sets `plans.phase = done`, `done_at` and appends `plan-done` `{prs: [{key, number, url, merged_at}]}`, once each time the Plan reaches `done`: again when a reopened Plan's last PR merges (§3.1, D2). Pull requests no Plan owns get no Event, nor does one only in the review-request search: `pr-feedback` is unchanged, still only for the author's Plans.
+- **Events**, in that transaction, for the Plan whose PR points to the pull request only: **Event** `pr-feedback` (data of contract §5.2) when the checks became `failed` and the PR's `pr.feedback.checks` is `any` (contract §8.3, hs-d292; with `none` failing checks raise nothing), the review `changes_requested`, the state `closed` or `mergeable` `conflicting` (reason `conflict`; from anything else, once per transition). A pull request that became `merged`: the PR `status = merged`, `merged_at`, **Event** `pr-merged` `{pr, number, url, merged_at}`; when every PR that is not `cancelled` is then `merged`, the same transaction sets `plans.phase = done`, `done_at` and appends `plan-done` `{prs: [{key, number, url, merged_at}]}`, once each time the Plan reaches `done`: again when a reopened Plan's last PR merges (§3.1, D2). Pull requests no Plan owns get no Event, nor does one only in the review-request search: `pr-feedback` is unchanged, still only for the author's Plans.
 - **Starting the PRs that waited for it** (A9): `pr poll` does not start a PR itself. Engine E7, which runs after E5 in the same tick (§3.7), starts every `waiting` PR whose needs are now all `merged`, from a fresh `fetch origin <base>`; when `pr poll` was run by hand, the next tick does, or the Lead runs `pr start <key>` (§9.7).
 - **A pull request closed without a merge** (A11): `pr-feedback` with `reasons: ["closed"]`; the PR stays `open` in cpd, every PR that needs it stays `waiting`, and the Lead asks the User.
 - **After a PR is merged** (§7.2; hs-d138, hs-d142): for each PR that became `merged` in this poll, kill that PR's Attempt windows; then, per Attempt of its Jobs whose worktree exists: `git worktree remove --force`, `git branch -D`; then its Lead worktree: kept when dirty (`git status --porcelain` not empty, untracked files included) or unpushed (`git rev-list HEAD --not --remotes=origin` not empty), else `git worktree remove` and `git -C <repo> branch -D <lead branch>`. The removals of a PR run under its repo's per-repo lock (contract §1.4), taken without waiting and held only while that PR's paths are removed; when it is held (a Gate, a merge or a push runs in that repo), the poll skips that PR with no Event and a later poll cleans it up, because the poll never waits and a Gate must not lose its worktree (hs-n124); a lock that cannot be opened counts as a failed removal. Killing the Attempt windows does not need the lock. Best effort per item: a failure does not stop the others. Remote branches are never touched. A kept or failed Lead worktree appends one **Event** `error` `{source: "pr poll", code: "cleanup_failed", details: {plan, pr, path, reason}}` (`reason`: `dirty`, `unpushed` or git's stderr tail), only from the poll that saw the merge. Every later poll retries the merged PRs that still have a path on disk, and those retries append no Event. It is per PR, not at `done`; PRs closed unmerged and abandoned Plans are not cleaned up here (G5).
@@ -1232,7 +1279,7 @@ Idempotent: yes; the rows hold what was reported, so a rerun with no change on G
 cpd pr rebase [--pr <key>] [--plan <id>]
 ```
 
-Rebases the PR's Lead Branch onto its base and pushes (§7.6); also how Jobs Merged into an `open` PR reach its pull request.
+Rebases the PR's Lead Branch onto its base and pushes (§7.6); also how Jobs Merged into an `open` PR reach its pull request. The Gate runs only when the PR's `pr.gate` is `local` (contract §8.3, hs-d292); with `ci` there is no Gate and the two Gate rows below do not apply.
 
 | Flag | Meaning |
 |---|---|
@@ -1244,16 +1291,19 @@ Rebases the PR's Lead Branch onto its base and pushes (§7.6); also how Jobs Mer
 | the per-repo lock within `lock_wait_seconds` | `lock_timeout` | 5 |
 | the Lead worktree is clean | `dirty_target` | 3 |
 | `git merge-tree` reports no conflict; `details.files` lists them | `rebase_conflict` | 3 |
+| the PR's policy resolves (contract §8.3 "Validation", `details` as there): its Context has an owner | `owner_unset` | 3 |
+| its owner has a policy file | `owner_unknown` | 1 |
+| its policy files are valid | `policy_invalid` | 1 |
 | the Gate passes on the rebased Lead Branch (§7.3, §7.6 `pr rebase` step 4); `details.tail` is its last 60 lines, `details.log` the full log | `gate_failed` | 3 |
 | the Gate ran (not killed, not `hook_invalid`); `details.tail`, `details.log` as above | `gate_error` | 1 |
 
-Effects: under the per-repo lock of the PR's repo, after R (§7.4): §7.6 steps 1–5 (`fetch`, `merge-tree`, `rebase`, the Gate, `push --force-with-lease`). The Gate is `pre-merge` from `<lead worktree>/.config/wt.toml`, run in the PR's Lead worktree after the rebase and before the push (R19), output to `run/<plan>/logs/pr-<key>.pre-merge.log`. On `gate_failed` or `gate_error` nothing is pushed; the rebased Lead Branch stays in the Lead worktree, and the Lead appends fix Jobs to the PR, then runs `pr rebase --pr <key>` again once they are Merged. **Rows**: none; the Ledger does not record the Lead Branch's SHA, so there is no Event. On an unexpected rebase conflict: `git rebase --abort` and `rebase_conflict`.
+Effects: under the per-repo lock of the PR's repo, after R (§7.4): §7.6 steps 1–5 (`fetch`, `merge-tree`, `rebase`, the Gate with `pr.gate` `local`, `push --force-with-lease`). The Gate is `pre-merge` from `<lead worktree>/.config/wt.toml`, run in the PR's Lead worktree after the rebase and before the push (R19), output to `run/<plan>/logs/pr-<key>.pre-merge.log`. On `gate_failed` or `gate_error` nothing is pushed; the rebased Lead Branch stays in the Lead worktree, and the Lead appends fix Jobs to the PR, then runs `pr rebase --pr <key>` again once they are Merged. **Rows**: none; the Ledger does not record the Lead Branch's SHA, so there is no Event. On an unexpected rebase conflict: `git rebase --abort` and `rebase_conflict`.
 
 ```json
 {"ok": true, "plan": "pay-4521", "pr": "api", "rebased": true, "old": "4b825dc…", "new": "77aa01e…", "pushed": true}
 ```
 
-Idempotent: yes; a base that has not moved gives `"rebased": false`, and only the Gate and the push run.
+Idempotent: yes; a base that has not moved gives `"rebased": false`, and only the Gate (with `pr.gate` `local`) and the push run.
 
 ### 9.4 `pr add`
 
@@ -1266,7 +1316,7 @@ Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `p
 | Flag | Meaning |
 |---|---|
 | `<key>` | PR key (§2.1), chosen by the Lead, e.g. `schema`, `web` |
-| `--repo <path>` | required: the PR's repo; stored as the realpath of its main worktree. Several PRs of one Plan may share a repo |
+| `--repo <path>` | required: the PR's repo; stored as the realpath of its main worktree. Several PRs of one Plan may share a repo. Its `origin` must be a GitHub repo of the Context's owner (below) |
 | `--base <branch>` | the branch the pull request targets; default the repo's `origin` HEAD branch, else `main` (cpd 1 §11 `workflow init`, kept) |
 | `--needs <k1,k2>` | keys of other PRs of the Plan that must be `merged` before this one starts, comma-separated, no duplicates (`usage`). Default: in phase `deploy` or `done` (the reopen, hs-d118), **every `merged` PR of the Plan**; in other phases none |
 | `--no-needs` | no needs, also in phase `deploy` or `done`; exclusive with `--needs` (`usage`) |
@@ -1275,6 +1325,11 @@ Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `p
 |---|---|---|
 | the Plan is not archived | `archived` | 3 |
 | `--repo` is inside a git repository (`git -C <path> rev-parse --git-common-dir`) | `not_a_git_repo` | 3 |
+| the Plan's Context has an owner (contract §8.3); the message names `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
+| the repo is keyed from its `origin` (below); `details.url` (null when there is no `origin`) | `repo_unkeyed` | 1 |
+| the repo's owner is the Context's; `details.owner` (the Context's), `details.repo_owner` | `owner_mismatch` | 3 |
+| the owner has a policy file, `$CPD_HOME/policy/owners/<owner>.toml`; `details.owner` | `owner_unknown` | 1 |
+| the owner's policy files, and the repo's if it has one, are valid; `details.file`, `details.key` | `policy_invalid` | 1 |
 | `<base>` exists: `refs/remotes/origin/<base>`, or `refs/heads/<base>` when the repo has no `origin` | `base_not_found` | 4 |
 | no PR of the Plan has this key, `cancelled` ones included, unless its repo, base and needs equal the resolved flags, the default needs included (then `already`) | `pr_exists` | 3 |
 | every need is a PR of the Plan; `details.needs` lists the unknown keys | `needs_unknown` | 3 |
@@ -1284,6 +1339,8 @@ Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `p
 
 Any phase is allowed: `grounding`, `plan`, `dispatch`, `deploy` and `done`, so no `illegal_phase`. No cycle is possible: nothing needs a new PR yet.
 
+**The repo's key** (contract §8.3, hs-d288). `pr add` parses the repo's `origin` once, at the boundary: `git -C <repo> remote get-url origin`, which must be `https://github.com/<owner>/<name>` or `git@github.com:<owner>/<name>`, each with or without `.git`, `<owner>` and `<name>` valid by contract §2.1 (stored lowercased). Nothing else is accepted: no `origin`, another host, or an SSH host alias (`git@github-work:<work-owner>/x.git`) is `repo_unkeyed`; cpd never asks the network to resolve one. `<owner>` must be the Context's (`owner_mismatch`): one GitHub owner per Context, and a Plan may span several repos of it. The PR stores `<name>` only; its owner is the Context's.
+
 **The legacy move** (contract §3.8, D3, hs-d118). Every Plan locked before R34 stored `prs.lead_branch = 'cpd/<plan>'`, and git cannot hold both `cpd/<plan>` and `cpd/<plan>/<key>`. When a PR of the Plan has `lead_branch = cpd/<plan>` and status `merged`, `pr add` does, before the insert and in this order, with `<k>` that PR's key:
 1. `git -C <repo> branch -m cpd/<plan> cpd/<plan>/<k>`, when `refs/heads/cpd/<plan>` exists (a worktree that has it checked out follows the rename; unverified on git 2.43);
 2. `git -C <repo> push origin --delete cpd/<plan>`, when the repo has `origin` and `git ls-remote --heads origin cpd/<plan>` lists it; a failure is `push_failed` and the database is unchanged;
@@ -1291,10 +1348,10 @@ Any phase is allowed: `grounding`, `plan`, `dispatch`, `deploy` and `done`, so n
 
 A legacy branch of a PR that is not `merged` still refuses `branch_exists`.
 
-Effects: **rows**, one transaction: in `deploy` or `done`, `plans` (`phase = dispatch`, `done_at = null`); `prs` (`status = waiting`, `repo`, `base`, `lead_branch = cpd/<plan>/<key>`, `created_txn`, `created_at`; `lead_worktree` null); one `pr_needs` row per need; and the legacy PR's `lead_branch` update (step 3). **Events**, in this order: in `deploy` or `done`, `plan-phase` `{from: "deploy"|"done", to: "dispatch"}`; then `pr-added` `{pr, repo, base, needs, appended}`, `appended` true in phases `dispatch`, `deploy` and `done`. Engine E7 then starts the PR like any appended PR (at once when it has no needs). No tmux and no other git write: the Lead Branch and Lead worktree are created when the PR starts (§3.8, §7.2).
+Effects: **rows**, one transaction: in `deploy` or `done`, `plans` (`phase = dispatch`, `done_at = null`); `prs` (`status = waiting`, `repo`, `name`, `base`, `lead_branch = cpd/<plan>/<key>`, `created_txn`, `created_at`; `lead_worktree` null); one `pr_needs` row per need; and the legacy PR's `lead_branch` update (step 3). **Events**, in this order: in `deploy` or `done`, `plan-phase` `{from: "deploy"|"done", to: "dispatch"}`; then `pr-added` `{pr, repo, base, needs, appended}`, `appended` true in phases `dispatch`, `deploy` and `done`. Engine E7 then starts the PR like any appended PR (at once when it has no needs). No tmux and no other git write: the Lead Branch and Lead worktree are created when the PR starts (§3.8, §7.2).
 
 ```json
-{"ok": true, "pr": {"key": "web", "repo": "/home/clayton/projects/web", "base": "main", "needs": ["api"], "status": "waiting", "lead_branch": "cpd/pay-4521/web", "appended": false}}
+{"ok": true, "pr": {"key": "web", "repo": "/home/clayton/projects/web", "name": "web", "base": "main", "needs": ["api"], "status": "waiting", "lead_branch": "cpd/pay-4521/web", "appended": false}}
 ```
 
 Idempotent: yes, as stated; every step of the legacy move is too (A3): a rerun after a crash between the local rename and the transaction finds `cpd/<plan>/<k>` and no `cpd/<plan>`, skips what is done and completes. The comparison uses the resolved repo and base, so a rerun without `--base` matches a PR whose base was defaulted to the same branch.
@@ -1305,7 +1362,7 @@ Idempotent: yes, as stated; every step of the legacy move is too (A3): a rerun a
 cpd pr edit <key> [--repo <path>] [--base <branch>] [--needs <k1,k2> | --no-needs] [--plan <id>]
 ```
 
-Changes a `waiting` PR before the lock (A13). `--needs` replaces the whole list; `--no-needs` removes every need. The PR's Jobs stay with it. A changed `--repo` keeps the stored base unless `--base` is given, and that base must exist in the new repo.
+Changes a `waiting` PR before the lock (A13). `--needs` replaces the whole list; `--no-needs` removes every need. The PR's Jobs stay with it. A changed `--repo` keeps the stored base unless `--base` is given, and that base must exist in the new repo; the new repo's `origin` is parsed as `pr add` parses it (§9.4 "The repo's key") and replaces `name`.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -1313,13 +1370,15 @@ Changes a `waiting` PR before the lock (A13). `--needs` replaces the whole list;
 | the phase is `grounding` or `plan`; after the lock a PR is Locked (§4.4 `prs_locked`) | `pr_locked` | 3 |
 | the PR is `waiting` (a `cancelled` one is terminal) | `illegal_transition` | 3 |
 | `--repo` is inside a git repository | `not_a_git_repo` | 3 |
+| with `--repo`: the new repo is keyed from its `origin`, as for `pr add` (§9.4) | `repo_unkeyed` | 1 |
+| with `--repo`: the new repo's owner is the Context's, as for `pr add` | `owner_mismatch` | 3 |
 | the base exists in the PR's repo (the new one with `--repo`), as for `pr add` | `base_not_found` | 4 |
 | every need is a PR of the Plan, other than this one | `needs_unknown` | 3 |
 | no need is `cancelled` | `needs_unavailable` | 3 |
 | the needs graph stays acyclic; `details.cycle` lists it | `dependency_cycle` | 3 |
 | with `--repo`: neither `refs/heads/cpd/<plan>/<key>` nor `refs/heads/cpd/<plan>` exists in the new repo | `branch_exists` | 3 |
 
-Effects: **rows**, one transaction: the changed `prs` columns; `pr_needs` rows deleted and inserted to match (§4.4 allows deletion only in `grounding` and `plan`). **Event** `pr-edited` `{pr, fields: [name]}`, listing only the fields whose value changed (`repo`, `base`, `needs`). The plan fingerprint changes with them (§2.3).
+Effects: **rows**, one transaction: the changed `prs` columns (`name` with `repo`); `pr_needs` rows deleted and inserted to match (§4.4 allows deletion only in `grounding` and `plan`). **Event** `pr-edited` `{pr, fields: [name]}`, listing only the fields whose value changed (`repo`, `base`, `needs`). The plan fingerprint changes with them (§2.3).
 
 ```json
 {"ok": true, "pr": {"key": "web", "status": "waiting"}, "fields": ["base", "needs"]}
@@ -1415,7 +1474,7 @@ Idempotent: yes (a read).
 cpd pr push [--pr <key>] [--plan <id>]
 ```
 
-Publishes an `open` PR's Lead Branch with a plain push, after the Gate (hs-d139; contract §7.6). It does not rebase: use it when the branch carries a merge of the base, which `pr rebase` would drop (§9.3), or when the remote has not moved and the Jobs Merged since only need to reach the pull request.
+Publishes an `open` PR's Lead Branch with a plain push, after the Gate when the PR's `pr.gate` is `local` (hs-d139, hs-d292; contract §7.6, §8.3; with `ci` there is no Gate and the two Gate rows below do not apply). It does not rebase: use it when the branch carries a merge of the base, which `pr rebase` would drop (§9.3), or when the remote has not moved and the Jobs Merged since only need to reach the pull request.
 
 | Flag | Meaning |
 |---|---|
@@ -1426,17 +1485,20 @@ Publishes an `open` PR's Lead Branch with a plain push, after the Gate (hs-d139;
 | the PR is `open` | `illegal_transition` | 3 |
 | the per-repo lock within `lock_wait_seconds` | `lock_timeout` | 5 |
 | the Lead worktree is clean | `dirty_target` | 3 |
+| the PR's policy resolves (contract §8.3 "Validation", `details` as there): its Context has an owner | `owner_unset` | 3 |
+| its owner has a policy file | `owner_unknown` | 1 |
+| its policy files are valid | `policy_invalid` | 1 |
 | the Gate passes (§7.3, as `pr open` step 2); `details.tail` is its last 60 lines, `details.log` the full log `run/<plan>/logs/pr-<key>.pre-merge.log` | `gate_failed` | 3 |
 | the Gate ran (not killed, not `hook_invalid`); `details.tail`, `details.log` as above | `gate_error` | 1 |
 | the remote branch is not an ancestor of the Lead Branch (the remote moved); `details.stderr` is git's stderr; the Lead runs `pr rebase` | `push_rejected` | 3 |
 
-Effects: under the per-repo lock of the PR's repo, after R (§7.4): the clean check, the Gate, then `git -C <lead worktree> push --porcelain origin <lead branch>` (no `-u`, never `--force` or a lease). Any other git failure is `git_failed`. **Rows**: none; no Event.
+Effects: under the per-repo lock of the PR's repo, after R (§7.4): the clean check, the Gate (with `pr.gate` `local`), then `git -C <lead worktree> push --porcelain origin <lead branch>` (no `-u`, never `--force` or a lease). Any other git failure is `git_failed`. **Rows**: none; no Event.
 
 ```json
 {"ok": true, "plan": "pay-4521", "pr": "api", "pushed": true, "sha": "77aa01e…"}
 ```
 
-`sha` is the Lead Branch's tip. Idempotent: yes; a branch already at the remote's sha (git's porcelain status `=`, "up to date") still runs the Gate, pushes nothing and returns `"pushed": false`.
+`sha` is the Lead Branch's tip. Idempotent: yes; a branch already at the remote's sha (git's porcelain status `=`, "up to date") still runs the Gate (with `pr.gate` `local`), pushes nothing and returns `"pushed": false`.
 
 ### 9.10 `pr merge`
 
@@ -1886,6 +1948,8 @@ Idempotent: read-only; the same `--since` replays the same lines.
 cpd watch [--ensure]
 ```
 
+(and the internal `cpd watch --restart-tmux`, below)
+
 The engine, one per machine (§3.7, §6.6, D5).
 
 **Without `--ensure`:** runs E1–E5 and E7–E10 (E6 is removed; E7, the PR start, since R34; E8, the Inbox, §21; E9, the Context digests, since hs-d194; E10, the Session titles, since hs-d257) every `tick_seconds` (a decimal, minimum 0.1; default 5) in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
@@ -1896,7 +1960,7 @@ E5 (the PR poll) runs at its due time, `pr_poll_seconds` after the previous poll
 |---|---|---|
 | `locks/watch.lock` is free | `watch_running` | 3 |
 
-Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, and every row and Event of E1–E5 and E7–E10 (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7; a distill run E9 starts appends its own `error` when it fails, §3.12; a retitle run E10 starts (§10.14) appends its own `session-titled` when it succeeds, and when it fails E10 reports one `error` with code `title_failed` for the Session). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0. Idempotent: a second one is refused.
+Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, and every row and Event of E1–E5 and E7–E10 (E3 starts nothing while a tmux restart is pending, and the engine starts that restart once nothing is in the way, §3.7) (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7; a distill run E9 starts appends its own `error` when it fails, §3.12; a retitle run E10 starts (§10.14) appends its own `session-titled` when it succeeds, and when it fails E10 reports one `error` with code `title_failed` for the Session). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0. Idempotent: a second one is refused.
 
 **With `--ensure`:** starts the engine when it is not running, and returns at once.
 
@@ -1912,6 +1976,8 @@ Effects: probe `locks/watch.lock` (open and `flock(LOCK_EX | LOCK_NB)`, released
 
 Idempotent: yes; a running engine gives `"started": false` with `"already": true`.
 
+**`--restart-tmux` (internal; hs-d294).** Started by the engine, detached, when a restart of the tmux server is pending and nothing is in the way (contract §3.7, §6.1; §13.3); it is not an interface of the User or an agent. It restarts the server onto the installed tmux as §13.3 describes and exits 0, also when it did nothing (the server needs no restart, it is not safe now, another run holds `locks/tmux-restart.lock`). It prints one JSON value, `{"ok": true, "outcome": "…"}`, and logs to stderr, which the engine appends to `run/tmux-restart.log`. A failed restart exits with its failure and keeps the reason in `run/tmux-restart.pending`.
+
 ## 13. `tui`
 
 ### 13.1 `tui`
@@ -1926,8 +1992,9 @@ Effects, each only when missing:
 - **tmux:** the server with §6.1's options; the session `cpd` with window `main` (`new-session -d -s cpd -n main -x 215 -y 62`), split into the tree (left, 20 %), the plan view (centre top) above the chat slot (centre bottom), and the widgets (right, 20 %), each running `cpd tui view <tree|plan|widgets>` with `@cpd_view` set, and the StatusBar, one row across the full width at the bottom (`split-window -v -f -l 1`), running `cpd tui view statusbar` with `@cpd_view statusbar`; the chat slot holds the placeholder (§10) or, when one exists, the Plan Lead whose latest `session-moved` Event with `place: "chat"` is the newest, moved in as `session open` does. "Plan Lead" here means any Lead with a Plan, as for `session open` (side forks included, a Context's grounded Lead never), and one that `session open` refuses stays where it is while the placeholder keeps the slot (Escalation `tui-cockpit-a1-q3`). The session `cpd-work`.
 - **Layout:** right after building a new `main`, `tui` runs reset-layout once (§13.2). On an existing `main` with no `statusbar` pane it adds one (same split) and then runs reset-layout, so the added row is taken from the layout and the other panes get their sizes back (amendment 15, §19).
 - **tmux options:** every option, the border format, the root mouse binding and the conditional `pane-died` hook of §6.1. `host` sets them at every server start, so a server started by `plan new` or `watch --ensure` has them too; `cpd tui` sets them again on a running server (rerunning is safe).
-- **`--respawn`:** `respawn-pane -k` on every live pane of `main` that has `@cpd_view` (the views, the chat placeholder and a Worker view), so each runs the installed binary again; a Lead or engine pane is never touched. `scripts/install-cpd.sh` runs `cpd tui --respawn` when a cockpit exists. (Why: `cpd tui` respawns only dead panes, so a reinstall would never reach a running view.)
+- **`--respawn`:** `respawn-pane -k` on every live pane of `main` that has `@cpd_view` (the views, the chat placeholder and a Worker view), so each runs the installed binary again; a Lead or engine pane is never touched. `scripts/install-cpd.sh` runs `cpd tui --respawn` when a cockpit exists. (Why: `cpd tui` respawns only dead panes, so a reinstall would never reach a running view.) Bare `cpd` does it too when it finds a view on an older binary (§13.3).
 - `watch --ensure` (§12).
+- **tmux version** (hs-d294): when the server runs an older tmux than the installed one, marks a restart pending (`run/tmux-restart.pending`, §13.3) and says so on stderr; it never restarts the server itself, since it may run inside it. The engine does it once nothing is in the way.
 - No rows of its own; moving a Lead appends `session-moved`.
 
 | Precondition | Code | Exit |
@@ -1938,7 +2005,7 @@ Effects, each only when missing:
 {"ok": true, "built": true, "socket": "cpd", "session": "cpd", "attach": ["tmux", "-L", "cpd", "attach", "-t", "cpd"], "watch": {"started": true, "pane": "%3"}}
 ```
 
-With `--respawn` the value also has `"respawned": ["%1", "%2", …]`, the panes restarted. With `--attach` it then replaces itself with `tmux -L cpd attach -t cpd` and prints nothing (§1.2). Idempotent: yes; an existing cockpit gives `"built": false`. A pane of the layout that has died, the StatusBar included, is respawned (`respawn-pane`, amendment 9, §19), never duplicated; a view pane that dies while the cockpit runs is respawned at once by the `pane-died` hook (§6.1).
+With `--respawn` the value also has `"respawned": ["%1", "%2", …]`, the panes restarted. With `--attach` it then replaces itself with `tmux -L cpd attach -t cpd` and prints nothing (§1.2); bare `cpd` is the same attach with the follow-ups of §13.3. Idempotent: yes; an existing cockpit gives `"built": false`. A pane of the layout that has died, the StatusBar included, is respawned (`respawn-pane`, amendment 9, §19), never duplicated; a view pane that dies while the cockpit runs is respawned at once by the `pane-died` hook (§6.1).
 
 ### 13.2 `tui view` (internal)
 
@@ -1975,22 +2042,25 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
 - **Top row and side margins.** The view keeps one blank row at its top and one blank column on each side; its content starts one row lower, inside the inner area (the pane minus one column left and right), so the tree never touches the pane's edges. Everything the view draws sits inside it: the cursor's inverted row, the footer and prompt row, and the right-click menu's clamping.
 - **Rows.** A Context row (a dot, its name bold, the Plan count when collapsed) and under it one row per Lead Session: the Plans' Lead Sessions in `created_at` order, **then, after them, every Session forked by `session fork`** (B1, contract §6.8: a fork is a sibling under the Context, never nested under a Plan or under the Session it came from, whatever its `plan` or `forked_from`; *decided*: they are ordered by `created_at` and show no counters, the counters being the Plan Lead's). Row: guide, dot, name (cut with `…` before the counters), and the five Job counters `queued⋅running⋅merging⋅failed⋅merged` right-aligned (cancelled Jobs are not counted; no counters without a Plan). `󰐊` marks the Session in the chat slot, in column 0, and its name is bold. The dot is one of `󰪥` U+F0AA5 (the Session needs you, coloured by case; the last frame), `󰝦󰪞󰪟󰪠󰪡󰪢󰪣󰪤󰪥` U+F0766, U+F0A9E … U+F0AA5 (nf-md-circle_outline, then nf-md-circle_slice_1 … 8) (the Lead is working: a spinner of 9 frames, one every 100 ms, on one shared clock, so every spinner turns together; terminal default foreground), `󰝦` U+F0766 (idle, nothing needed; the first frame) or `󰝦` U+F0766 (pi stopped, dim). A Session row's dot looks at the Session's own state first (a working Session shows the spinner), and its `󰪥` comes only from its open, visible Inbox items (§17); a Context row shows the dot of its Manager Session (hs-d215): a `󰪥` only from the Manager's own Inbox items (hs-d217), `󰝦` (dim) when the Context has none. Archived rows keep their glyph in the palette's darker grey (`Meaning::Nothing`) and never animate. There are no phase colours on dots. The cockpit needs a Nerd Font for these symbols (https://www.nerdfonts.com/cheat-sheet). The rule, the colours and the precedences are §17's (The tree's dot rule).
 - **Cursor.** Keyboard only: a click never moves or shows it. It moves between Sessions only (Context rows are not selectable) and, after the last Session row, on into the Inbox section's item rows (below; the header and the `+N more` / `− less` row are skipped by the cursor but their click works, and the cursor goes back up from the first item row to the last Session), is drawn inverted across the full row only while the pane has keyboard focus (`focus-events`, §6.1) and after an arrow key; Enter, `n` and `x` act on it only while it shows.
-- **Inbox section** (hs-d165, hs-d167, hs-d168; contract §2.2 "Inbox item", commands §21). The bottom of the tree column shows the Inbox, the **single source of "needs you"**: the open, visible items (not snoozed, not dismissed) of **every** Context, in the order of `cpd inbox list` (red, yellow, magenta, white; oldest first; `engine-down` first). It has a header row ` Inbox <n> ` (`<n>` the count of visible open items) drawn like the column's other section headers (design rule above), then **up to 3 item rows**, each `󰪥 <label>` with the age right-aligned (`42s`, `5m`, `3h`, `2d`: the largest whole unit of `age_seconds`) and the `󰪥` in the item's urgency colour (red, yellow, magenta, white; the palette's `Meaning` colours, as the Session dots, §17); the label is cut with `…` before the age. When more than 3 items exist, a row `+<n> more` follows; a click on it expands the list inline (every item shown, the Session rows above scroll to keep the cursor visible) and the row becomes `− less`, which folds it again. Expanded or not is view state only: no command, no write. With no item the section shows its header (` Inbox 0 `) and no rows. The section is pinned to the bottom of the column and the tree scrolls above it.
+- **Inbox section** (hs-d165, hs-d167, hs-d168; contract §2.2 "Inbox item", commands §21). The bottom of the tree column shows the Inbox, the **single source of "needs you"**: the open, visible items (not snoozed, not dismissed) of **every** Context, in the order of `cpd inbox list` (red, yellow, magenta, white; oldest first; `engine-down` first). It has a header row ` Inbox <n> ` (`<n>` the count of visible open items) drawn like the column's other section headers (design rule above), then **up to 3 item rows**, each `󰪥 <label>` with the age right-aligned (`42s`, `5m`, `3h`, `2d`: the largest whole unit of `age_seconds`) and the `󰪥` in the item's urgency colour (red, yellow, magenta, white; the palette's `Meaning` colours, as the Session dots, §17); the label is cut with `…` before the age. When more than 3 items exist, a row `+<n> more` follows; a click on it expands the list and the row becomes `− less`, which folds it again. **Expanded, the section is capped** (hs-n265): its height is at most **half the tree column's height**, rounded down, and never less than the collapsed section; the tree above keeps the rest of the column, and the Session rows above scroll to keep their cursor visible. The item rows **scroll inside the cap** with the mouse wheel, 3 rows a notch (as the Plan view), over the section only, with the dim cue rows of the Deploy column's PR list (below, "Scrolling the PRs section"; one scroll code, not a copy): ` ▲ <n> more` as the first row of the list when items are hidden above and ` ▼ <n> more` as the last when hidden below, `<n>` counting items; a cue replaces an item row, and a cue row is no hit. The offset is clamped to the list, is view state only (starts at 0, a refresh keeps it, nothing is written), and the keyboard cursor on an item scrolls the list to keep it visible. `+<n> more` and `− less` stay in view. Expanded or not is view state only: no command, no write. With no item the section shows its header (` Inbox 0 `) and no rows. The section is pinned to the bottom of the column and the tree scrolls above it.
 - **Clicks on an Inbox item** jump to its cause (the cockpit never decides; each jump runs a command or is a link):
 
   | Kind | A left click on the row |
   |---|---|
   | `dialog`, `unread` | `session open <the item's Session>`, then `select-pane` on the chat slot: as a click on that Session's tree row (an archived Session: `session history`, as there) |
   | `job-stuck` | `session open <the Lead of the item's Plan>` (`plans.lead_session`), then `select-pane` on the chat slot |
-  | `plan-review`, `pr-failing`, `pr-changes`, `pr-ready`, `review-requested` | none by the view: the row's text is an **OSC 8 link** to the item's `url`, written with `tui/src/link.rs` over the cells already drawn (Links, below), so the terminal opens it with its modifier-click. For `plan-review` the page is plannotator's, `http://localhost:<port>/`, the port being the one line of `run/<plan>/plannotator-port` (as the Plan view's pending-review row, above); for the other kinds the pull request's GitHub page. An item with no `url` (the port file missing or not a number) is drawn with no link and a click does nothing |
+  | `plan-review`, and `pr-failing`, `pr-changes`, `pr-ready` of a pull request a Plan owns (the item's `plan` set) | `session open <the Lead of the item's Plan>` (`plans.lead_session`), then `select-pane` on the chat slot, as `job-stuck` |
+  | `pr-failing`, `pr-changes`, `pr-ready` of a pull request no Plan owns (no `plan`), and `review-requested` | copies the item's `url` to the clipboard as the tree's Copy id does (`tmux set-buffer -w`, OSC 52), and shows in the tree's note row `copied <url>: Cmd-click the row to open it` |
   | `engine-error`, `engine-down` | the logs dialog (`cpd tui view logs --event <the item's event>`, in the popup of the StatusBar's `▤` button) opened **at the item's `event`**: the Event's line is selected and scrolled into view and the view does not follow until the User reaches the bottom. `engine-down` has no stored item and so no `event`: it opens the logs at the bottom, as `▤` does |
   | `question` | `session open` of the Context's Manager Session (`cpd context manager --context <c>`, then `session open <manager>`, as a click on a Context row) |
+
+  These five kinds are also an **OSC 8 link** to the item's `url`, which stays for the terminal's modifier-click (hs-n265: a plain click always acts, the link is the way to open the page). The link is written with `tui/src/link.rs` over the cells already drawn (Links, below), so the terminal opens it with its modifier-click. For `plan-review` the page is plannotator's, `http://<review host>:<port>/`, the review host being `cpd_core::host::addr::review_host` (`PLANNOTATOR_URL_HOST` from cpd's environment, else the primary IPv4, else `localhost`; hs-d264) and the port being the one line of `run/<plan>/plannotator-port` (as the Plan view's pending-review row, above); for the other kinds the pull request's GitHub page. An item with no `url` (the port file missing or not a number) is drawn with no link, and a plain click acts as above |
 
   Whether the terminal opens an OSC 8 link on a row of this view through tmux is **unverified**; the cockpit Job tests it by hand with the User, as hs-d187, hs-d191 did for the PR links.
 - **Clicks.** A click on a live Session opens it in the chat slot and focuses the chat (`session open`, then `select-pane`); a click on an **archived Session** row (a Plan row's Lead or a fork) runs `session history <id>` (§10.12), then focuses the chat; a click on a Context row's fold glyph (`󰅂`/`󰅀`: U+F0142 md-chevron_right folded, U+F0140 md-chevron_down open) folds or unfolds it, and a click elsewhere on a live Context row runs `cpd context manager --context <c>`, then `session open <manager>`, then `select-pane` on the chat slot (B3-A6); a click on a `󰇘` (U+F01D8 md-dots_horizontal) row toggles its archived rows (below). Clicks are ignored while a prompt is open.
 - **`n`** asks for a name in one inline row at the bottom (Enter starts, Esc cancels, an empty name is refused) and runs `plan new` (§4.1) in the selected Session's Context: the Plan forks the Context's grounded Lead (R15), the one deviation from cpd 1's `n`, which forked the selected session. On a Context row it says `pick the session to fork`.
 - **`x`** closes the selected Session's pane after the inline prompt `Close <label>? pi stops; the session file stays (y/N)`, preceded by `<label> is working.` when its state is `working`; only `y` closes. It runs `cpd session close <id>` (§10.9). The Session in the chat slot is refused with `switch to another session first`, also when it moved there while the prompt was open. On a Context row it does nothing. `<label>` is the Session's name.
-- **`s` and `d`** act on the Inbox item under the cursor (they do nothing on a Session row): `d` runs `inbox dismiss <id>` at once; `s` opens the snooze choices, the menu's three `Snooze …` entries (↑↓ and Enter pick one, Esc closes), then runs `inbox snooze <id> <15m|1h|tomorrow>`. Enter on an item row jumps to its cause as a click does (above; for an OSC 8 kind with no click handler, Enter does nothing). A refusal (`item_closed`: the item closed meanwhile) is shown in the prompt row as the command's own message. The item leaves the section when the Inbox-* Event reaches the view (§17).
+- **`s` and `d`** act on the Inbox item under the cursor (they do nothing on a Session row): `d` runs `inbox dismiss <id>` at once; `s` opens the snooze choices, the menu's three `Snooze …` entries (↑↓ and Enter pick one, Esc closes), then runs `inbox snooze <id> <15m|1h|tomorrow>`. Enter on an item row acts as a plain click does (above). A refusal (`item_closed`: the item closed meanwhile) is shown in the prompt row as the command's own message. The item leaves the section when the Inbox-* Event reaches the view (§17).
 - **`?`** opens the legend popup. The view has no other key that opens the menu or acts on it; what a key used to do is still a command.
 - **Labels** (contract §2.2: ids are unique, immutable and need not be readable; the title is the visible label). A Context row shows the Context's **id**, a Plan Lead row the Plan's **id**, and a fork row (a side Session) `<plan id>·<first 4 characters of its Session id>` (for example `cross-repo·7f3a`); a fork with no Plan keeps the fallback, the first 8 characters of its Session id. Archived rows follow the same rule. Titles and names no longer show in the tree (User, hs-d101; this supersedes the titles rule, hs-d63).
 - **Archived rows** (hs-n38, hs-n39). Archived Contexts collapse into one `…` row at the end of the Context list; the archived Plans and Sessions of a Context collapse into one `…` row at the end of that Context's subtree. A click on the `…` row expands them and a click on it again collapses them (hs-d53); a click on a guide does nothing. Expanded, an archived Plan or fork is drawn **at the depth it would have if live**, under its own Context (or Plan), not one level deeper under the `…` row. It uses the normal tree guide characters, and the row, guides included, is coloured the palette's darker grey (`Meaning::Nothing`). There are no dotted lines and **no empty row** between the live rows and the archived ones. Expanded or not is view state only: no command, no write. Every row of an archived object carries `archived_at` from the read model (§17).
@@ -2012,7 +2082,7 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
   **Archive of the chat slot's Lead** (F3, hs-d90). Archive on a Session row (a Plan row's Lead, or a fork) whose Lead holds the chat slot cannot go straight to `session archive`, which refuses with `in_chat_slot` (§10.10, unchanged). The tree first frees the slot, then archives: it opens the next live Session in tree order (`session open`, then focuses the chat); if none follows, the previous one; if there is none at all, it runs `session park`, so the placeholder holds the slot. Then it runs the archive command. Only the tree does this two-step; the CLI keeps its refusal.
 
   A refusal (`archive_blocked`, `in_chat_slot`, `archived`, …) is shown in the prompt row as the command's own message.
-- **New Plan… and New Context…** ask only a title; the tree derives the id. The id is a lowercase ASCII slug of the title: each run of other characters becomes `-`, leading non-letters are dropped, and it is cut to fit the id pattern (Plan `^[a-z][a-z0-9-]{1,23}$`, Context: contract §2.1); `-2`, `-3`, … are appended while the id is taken in the tree's snapshot. New Plan… runs `plan new <id> --context=<c> --title=<title>`: no repo, a Plan has none (R34, A12; its PRs are added with `pr add`). New Context… runs `context new <id> --title=<title>`.
+- **New Plan… and New Context…** ask a title (New Context… also the owner, below); the tree derives the id. The id is a lowercase ASCII slug of the title: each run of other characters becomes `-`, leading non-letters are dropped, and it is cut to fit the id pattern (Plan `^[a-z][a-z0-9-]{1,23}$`, Context: contract §2.1); `-2`, `-3`, … are appended while the id is taken in the tree's snapshot. New Plan… runs `plan new <id> --context=<c> --title=<title>`: no repo, a Plan has none (R34, A12; its PRs are added with `pr add`). New Context… also needs the owner (§3.1): it is chosen from the owner policy files in `$CPD_HOME/policy/owners/` (`<owner>.toml`, the file stem is the login; contract §8.3) — used without asking when there is exactly one, asked after the title (one of the files' owners) when there are several, and refused with `No owner policy: add $CPD_HOME/policy/owners/<owner>.toml`, running nothing, when there is none. It runs `context new <id> --title=<title> --owner=<login>`.
 - **Right button.** The view relies on tmux 3.4's default root `MouseDown3Pane` binding: believed to pass the click to a pane whose app captures the mouse (`mouse_any_flag`), and to show tmux's own menu otherwise (**unverified**). cpd adds no binding for it (§6.1, §13.1 unchanged).
 
 **`plan`.**
@@ -2096,6 +2166,37 @@ The chat slot is never resized; it takes what is left. The StatusBar's ⧉ click
 
 Refusal before drawing: an unknown view or Attempt is `usage` or `attempt_not_found`. Idempotent: they only read.
 
+### 13.3 `cpd` with no arguments
+
+```
+cpd
+```
+
+User decision hs-d259 (2026-10-19), Plan pi-pin, PR `bare`. **Bare `cpd` opens the cockpit.** In a terminal it attaches that terminal to the cockpit (`tmux -L <socket> attach -t <cockpit_session>`, the `attach` of §13.1) after doing every follow-up an update needs, so the User needs no other command after an install. It owns its terminal (§1.2): nothing on success.
+
+**Follow-ups**, in this order:
+
+1. **Engine:** `cpd watch --ensure` (§12).
+2. **Cockpit:** what `cpd tui` does (§13.1): build it when missing, respawn a dead pane of its layout, add a missing pane. One implementation, shared with `cpd tui` (including Plan quality's repair of a cockpit missing a pane): bare `cpd` calls it, never a copy.
+3. **Views on an old binary:** when the panes of the views run an older cpd than the installed one, `cpd tui --respawn` (§13.1).
+4. **tmux version:** when the cockpit's tmux server runs an older tmux than the installed client (`tmux -L <socket> display -p '#{version}'` against `tmux -V`; hs-d166), restart the server onto the installed tmux **when it is safe**, reopen every Lead and Manager Session that had a pane (same pi session file, same place: the chat slot, its parked window, a Context's window), then attach. When it is not safe, **hold, drain, restart** (User, hs-d294):
+   - **Safe** means: no Attempt `starting`, `running` or `merging`, and no Lead or Manager Session mid-turn (state `working`; a `blocked` Session has a dialog open, so it is also not safe). Restarting stops every pi in the server; Leads and Managers resume from their session files.
+   - **Safe now:** bare `cpd` restarts the server itself, in its own process (it runs in a terminal outside the server): it records every Lead and Manager Session with a live pane and its place (`chat`, or parked: its `park-<label>` window, or a Manager's `ctx-<context>` window); `kill-server`; `cpd tui` (the cockpit on the installed tmux, which also runs `watch --ensure`; the last chat Lead is back in the chat slot); then each Session in the same place: the one of the chat slot as `session open` does, the others in a new window running `cpd session run <id>`, which resumes the Session's pi file, each with `session-moved`. It then attaches with the installed tmux and says in one line how many Sessions it reopened.
+   - **Not safe:** it **marks a restart pending** (the file `$CPD_HOME/run/tmux-restart.pending`, JSON `{"at", "server", "installed", "failed"}`; no store change), attaches at once with the **server's own tmux binary** (its path from the server pid, `/proc/<pid>/exe` on Linux), because a newer client cannot attach to an older server (`open terminal failed: not a terminal`, hs-n224), and prints one line saying so and that the restart happens once nothing is in the way. `cpd tui` does the same marking when it finds the server older (it never restarts the server itself, since it may run inside it), and `tui --attach` attaches with the server's own binary then as well.
+   - **While a restart is pending, the engine starts no new Attempt** (E3's hold, contract §3.7); running Attempts finish normally. It is a planned hold, not an error: `cpd doctor` shows it as the `tmux_restart` check ("tmux restart pending", §14.1). Once none runs (no Attempt `starting`, `running` or `merging`) and no Lead or Manager Session is `working` or `blocked`, the engine starts the restart **detached** (`cpd watch --restart-tmux`, internal; `setsid`, its log `run/tmux-restart.log`), because the restart kills the server the engine itself runs in. The detached process takes `locks/tmux-restart.lock`, checks again that it is safe, does what "safe now" does, clears the pending file and logs the result. Then the engine, started again by `cpd tui`, schedules as usual. The User reconnects with bare `cpd`.
+   - **A failed restart** keeps the pending file with `failed` (`at`, `code`, `reason`) and the engine that runs again appends one `error` Event (`source: "watch"`, `code` of the failure, `details: {at, server, installed, log}`); a failed restart holds nothing. The next bare `cpd` finding the server still older tries again (a failed file is marked afresh); finding it as new as the installed tmux, it says the failure in one line and removes the file. Never from inside the cockpit's own server.
+
+Rerunning is safe: a restart already pending keeps its time, and a server that is not older is left alone. Internal command: `cpd watch --restart-tmux` (not an interface of the User or an agent; it conflicts with `--ensure`).
+
+`scripts/restart-tmux.sh` (PR `tmux`) is gone: its checks (the refusal while an Attempt runs, the attach hint with the server's binary) are the binary's own.
+
+**Assumptions, confirmed by the User in the Plan review:**
+
+- **A1** Without a terminal on stdin and stdout, bare `cpd` keeps today's behaviour: the JSON usage error `usage`, exit 2. It does no follow-up.
+- **A2** Inside the cockpit's own server (`$TMUX` names its socket), bare `cpd` does not nest an attach: it does the follow-ups that are safe from inside, never the tmux restart nor the marking of one (it would kill the pane it runs in), and prints one line saying how to reach the cockpit.
+- **A3** Each follow-up's failure is printed in one line on stderr, and the attach still happens when the cockpit exists. When the cockpit does not exist and could not be built, bare `cpd` prints the failure value and exits with its code.
+- **A4** Nothing new in the store: no table, column or Event kind.
+
 ## 14. `doctor`, `config`, `tiers`
 
 ### 14.1 `doctor`
@@ -2132,6 +2233,7 @@ Checks, in order:
 | `pi_adapter` | error | the `pi_adapter` directory has a `package.json` |
 | `lead_packages` | warn | reports, for each `lead_pi_packages` entry and the adapter, whether a Lead gets it by `-e` or from which settings file (§6.5); warns when an entry is neither declared nor resolvable |
 | `watch` | warn | the engine runs when any Plan is in `dispatch` or `deploy` |
+| `tmux_restart` | warn | present only while `run/tmux-restart.pending` exists: it passes (`message` "tmux restart pending", `found` the times and versions) while the restart waits, a planned hold of E3 (contract §3.7) and not a failure; it fails, with the reason, when the restart failed (§13.3) |
 
 ```json
 {"ok": true, "checks": [
@@ -2469,6 +2571,10 @@ Only the `style` key matters; the other keys are the extension's own. A file tha
 
 **No summary** (`cpd-context` whose `details` lack the counts, §15.7). There is nothing short to say, so the row is always open: the head `⦁ cpd cpd-context` and the full `content` as in "Expanded", with no closing row and no toggle.
 
+### 15.10 Policy text
+
+At `session_start` the adapter runs `cpd policy show` with no flag (§22.1) and, at each run, adds one system prompt section, `cpd-policy`, with the `text` of every domain whose `audience` holds the output's `role`, labelled by domain and `source`. contract §8.3 "Delivery to agents" is the rule, including a failed `policy show` (an error message, no policy text).
+
 ## 16. The Worker contract
 
 ### 16.1 The Worker Spec
@@ -2548,7 +2654,7 @@ Outline §8 and D4: the views take one **snapshot** with a read command, then **
 
 **Precedence.** A row shows its state's spinner when working, else the most urgent item's `󰪥` when it has one, else its state's glyph; the order of the dots is `red > yellow > magenta > white > working > idle > stopped`. Archived rows take no Inbox item.
 
-**Actions.** The views change state only through commands: selecting a Lead runs `cpd session open <id>`; a click on a Context row runs `cpd context manager --context <c>` first (§13.2); the new-Plan key runs `cpd plan new …`; the close key runs `cpd session close <id>`; each item of the tree's right-click menu runs the command §13.2 names; a click on an owned PR row of the Deploy column runs `cpd session open <lead>`, then `select-pane` on the chat slot; a click on its merge icon opens the `merge` popup (`cpd tui view merge <owner>/<repo>#<n>`), which runs `cpd pr merge <owner>/<repo>#<n>` (§9.10, §13.2); parking runs `cpd session park`; opening a Job's Worker opens a `cpd tui view worker` pane beside the chat (`split-window`, `@cpd_view worker`), which is the view's own layout, not Ledger state. The StatusBar's `⧉` click resets the layout (`resize-pane`, the view's own layout, not Ledger state), its legend button opens the legend popup and its `▤` button the logs popup (§13.2). A click on an Inbox item runs `cpd session open <session>` (then `select-pane`, as a Session row), opens the logs popup at the item's Event, or is an OSC 8 link the terminal opens; `s` and `d` and the right-click menu's entries run `cpd inbox snooze` and `cpd inbox dismiss` (§21).
+**Actions.** The views change state only through commands: selecting a Lead runs `cpd session open <id>`; a click on a Context row runs `cpd context manager --context <c>` first (§13.2); the new-Plan key runs `cpd plan new …`; the close key runs `cpd session close <id>`; each item of the tree's right-click menu runs the command §13.2 names; a click on an owned PR row of the Deploy column runs `cpd session open <lead>`, then `select-pane` on the chat slot; a click on its merge icon opens the `merge` popup (`cpd tui view merge <owner>/<repo>#<n>`), which runs `cpd pr merge <owner>/<repo>#<n>` (§9.10, §13.2); parking runs `cpd session park`; opening a Job's Worker opens a `cpd tui view worker` pane beside the chat (`split-window`, `@cpd_view worker`), which is the view's own layout, not Ledger state. The StatusBar's `⧉` click resets the layout (`resize-pane`, the view's own layout, not Ledger state), its legend button opens the legend popup and its `▤` button the logs popup (§13.2). A click on an Inbox item runs `cpd session open <session>` (then `select-pane`, as a Session row; for a Plan-owned `plan-review` or `pr-*` item, the Plan's Lead), opens the logs popup at the item's Event, or copies the item's `url` (`review-requested`, a `pr-*` no Plan owns); the OSC 8 link stays for the terminal's modifier-click. The Inbox list scrolls with the wheel inside its half-column cap (§13.2); `s` and `d` and the right-click menu's entries run `cpd inbox snooze` and `cpd inbox dismiss` (§21).
 
 Change from the spike and cpd 1's cockpit: the tree no longer discovers Sessions from tmux pane options (`@session_id`, `@agent_state`) or `leads/<id>/workflow`, and the plan view no longer reads `/tmp/cpd-tui/cache/`; both read the database through commands.
 
@@ -2733,3 +2839,54 @@ Effects, one transaction: **rows** `inbox_items.dismissed_at`; **Event** `inbox-
 ```
 
 Idempotent: yes. An item already dismissed returns `"already": true` and writes nothing, with no Event.
+
+## 22. `policy`
+
+The policies (contract §8.3, hs-d288): cpd's compiled-in default and the owner and repo files under `$CPD_HOME/policy/`, resolved for one policy key, most specific scope first per domain. Area `core/src/policy/`. The files are written by hand or by the User's dotfiles, never by a command: `policy` only reads.
+
+### 22.1 `policy show`
+
+```
+cpd policy show [--pr <key> [--plan <id>] | --context <c> | --owner <login> [--repo <name>]]
+```
+
+Prints the resolved policy of one key: every domain with its value and its source. The pi adapter runs it with no flag at a Session's start to build the Session's policy section (contract §8.3 "Delivery to agents"); a Lead runs it with `--pr` to read a PR's repo policy, which never reaches its own section.
+
+| Flag | Meaning |
+|---|---|
+| (none) | the caller's Session (`CPD_SESSION`, else `session_required`, §1.3): a Manager or a Lead resolves `Owner` of its Context's owner; a Worker (its Session's Attempt, also `CPD_ATTEMPT` in its pane) resolves `Repo` of its Job's PR |
+| `--pr <key>` | that PR of the selected Plan (`--plan`, else `CPD_PLAN`; §1.3): `Repo(<Context owner>, <PR name>)`, or `Owner(<Context owner>)` for a PR whose `name` is null (contract §8.3 "Keys and resolution") |
+| `--context <c>` | that Context: `Owner(<its owner>)` |
+| `--owner <login>` | that owner: `Owner(<login>)`; a login of contract §2.1, else `usage` |
+| `--repo <name>` | with `--owner` only (else `usage`): `Repo(<login>, <name>)`; a name of contract §2.1, else `usage` |
+
+`--pr`, `--context` and `--owner` are exclusive (`usage`).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| with no flag, a Session was selected | `session_required` | 2 |
+| the Session, Plan, PR or Context exists | `session_not_found`, `plan_not_found`, `pr_not_found`, `context_not_found` | 4 |
+| the Context (the Session's, the PR's Plan's, or `--context`) has an owner; the message names `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
+| the key's owner has `owners/<owner>.toml`, also when its repo file exists; `details.owner` | `owner_unknown` | 1 |
+| every file the key reads is valid TOML with known domains, keys, types and values, and a valid file name; `details.file`, `details.key` | `policy_invalid` | 1 |
+
+Effects: none. One read transaction for the key's rows, then the compiled default and the key's files (`owners/<owner>.toml`, and for a `Repo` key `repos/<owner>/<name>.toml` when it exists), each parsed once. No subprocess.
+
+Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Session's role (`manager`, `lead` or `worker`) with no flag, else null; `files`, the realpath of each file read; and `policy`, one entry per domain of contract §8.3, in its table's order, each with `source`, `audience` (the roles its `text` reaches), `keys` (its typed keys, each with its `value` and `source`; `{}` for a domain that has none) and `text`. A domain's `source` is `default`, `owner:<path>` or `repo:<path>`; a typed key left out of a set domain has its domain's source followed by ` (key default)`, and its value is cpd's default (contract §8.3 "Precedence and replace"). The adapter keeps the domains whose `audience` holds `role` and whose `text` is not empty.
+
+```json
+{"ok": true, "key": {"owner": "clayton-duarte", "repo": "cpd"}, "role": "worker",
+ "files": ["/home/clayton/.cpd/policy/owners/clayton-duarte.toml"],
+ "policy": {
+   "pr": {"source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml", "audience": ["lead", "worker"],
+          "keys": {"gate": {"value": "local", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"},
+                   "feedback.checks": {"value": "none", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"}},
+          "text": "These repos run no GitHub Actions: …"},
+   "deploy": {"source": "default", "audience": ["lead"], "keys": {}, "text": ""},
+   "code": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},
+   "tests": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},
+   "monitor": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},
+   "instructions": {"source": "default", "audience": ["manager", "lead", "worker"], "keys": {}, "text": ""}}}
+```
+
+Idempotent: yes; it only reads. It is also the check to run after editing a policy file.

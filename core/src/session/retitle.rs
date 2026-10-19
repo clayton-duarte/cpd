@@ -6,7 +6,7 @@
 //! frees when the run dies, so a Session never has two runs and a crash leaves
 //! no stale lock.
 
-use std::fs::{self, File, OpenOptions, TryLockError};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -20,7 +20,7 @@ use super::{Env, RetitleArgs, not_a_lead};
 use crate::args::Title;
 use crate::config::{Letter, Tier, load_catalog};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
 use crate::ids::SessionId;
 use crate::output::Output;
@@ -94,12 +94,10 @@ fn take_lock(home: &CpdHome, session: &SessionId) -> Result<File, CpdError> {
         fs::create_dir_all(dir).map_err(|e| failed(&e))?;
     }
     let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).map_err(|e| failed(&e))?;
-    match file.try_lock() {
-        Ok(()) => Ok(file),
-        Err(TryLockError::WouldBlock) => {
-            Err(title_failed(session, Reason::Running, "another retitle of it is running").with("lock", path.display().to_string()))
-        }
-        Err(TryLockError::Error(e)) => Err(failed(&e)),
+    match crate::lock::try_lock(&file) {
+        Ok(true) => Ok(file),
+        Ok(false) => Err(title_failed(session, Reason::Running, "another retitle of it is running").with("lock", path.display().to_string())),
+        Err(e) => Err(failed(&e)),
     }
 }
 
@@ -123,7 +121,7 @@ pub(super) fn retitle(args: RetitleArgs) -> Result<Output, CpdError> {
         )?;
         let titled_at: String = tx.query_row("SELECT at FROM txns WHERE id = cpd_txn()", [], |r| r.get(0))?;
         let text = format!("Session {id} titled {:?}.", title.as_str());
-        let event = append(tx, scoped(NewEvent::new(Kind::SessionTitled, text, json!({"title": title.as_str()})), &read))?;
+        let event = append(tx, scoped(NewEvent::session_titled(text, title.as_str()), &read))?;
         Ok((event, titled_at))
     })?;
     let pane = set_header(&env, &id, &title);

@@ -8,8 +8,9 @@ use rusqlite::{Connection, OptionalExtension, Row};
 use serde_json::{Value, json};
 
 use super::gh::{Listed, Membership, PolledPr};
-use crate::error::{CpdError, ErrorCode};
+use crate::error::CpdError;
 use crate::ids::{PlanId, PrKey};
+use crate::policy::Checks;
 use crate::store::WriteTxn;
 
 /// One row of `pull_requests`. `state`, `review_decision`, `checks`,
@@ -87,7 +88,7 @@ impl PullRequest {
     pub(super) fn polled(&self) -> Result<PolledPr, CpdError> {
         use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
         let bad = |what: &str, value: &str| {
-            CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: pull request {} has {what} {value:?}.", self.id))
+            CpdError::bad_row(format!("pull request {} has {what} {value:?}", self.id))
         };
         Ok(PolledPr {
             repo: self.repo.clone(),
@@ -125,7 +126,7 @@ impl PullRequest {
 pub fn load(conn: &Connection, id: i64) -> Result<PullRequest, CpdError> {
     conn.query_row(&format!("SELECT {COLUMNS} FROM pull_requests WHERE id = ?1"), [id], PullRequest::from_row)
         .optional()?
-        .ok_or_else(|| CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: no pull request {id}.")))
+        .ok_or_else(|| CpdError::bad_row(format!("no pull request {id}")))
 }
 
 /// The row of `(repo, number)`, if any.
@@ -174,7 +175,7 @@ pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, PrKey, PullRe
     rows.into_iter()
         .map(|(plan, key, pull)| {
             let bad = |what: &str, value: &str| {
-                CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: a PR has {what} {value:?}."))
+                CpdError::bad_row(format!("a PR has {what} {value:?}"))
             };
             Ok((PlanId::parse(&plan).map_err(|_| bad("Plan id", &plan))?, PrKey::parse(&key).map_err(|_| bad("PR key", &key))?, pull))
         })
@@ -308,14 +309,15 @@ impl Reason {
 /// became `failed`, the review became `changes_requested` (each from anything
 /// else), the state became `closed` from `open`. `before` none is a row first
 /// seen: it counts as no checks, no review, `open` and `unknown` mergeable. The
-/// `mergeable` state became `conflicting` from anything else (D3); `unknown` is no conflict.
-pub(super) fn attention(before: Option<&PullRequest>, after: &PullRequest) -> Vec<Reason> {
+/// `mergeable` state became `conflicting` from anything else (D3); `unknown` is no conflict. Checks
+/// are a reason only when the PR's `pr.feedback.checks` is `any` (§8.3, hs-d292).
+pub(super) fn attention(before: Option<&PullRequest>, after: &PullRequest, checks_policy: Checks) -> Vec<Reason> {
     let (checks, review, state, mergeable) = match before {
         Some(b) => (b.checks.as_str(), b.review_decision.as_str(), b.state.as_str(), b.mergeable.as_str()),
         None => ("none", "none", "open", "unknown"),
     };
     let mut reasons = Vec::new();
-    if after.checks == "failed" && checks != "failed" {
+    if checks_policy == Checks::Any && after.checks == "failed" && checks != "failed" {
         reasons.push(Reason::ChecksFailed);
     }
     if after.review_decision == "changes_requested" && review != "changes_requested" {
@@ -343,6 +345,12 @@ pub(super) fn parse_url(url: &str) -> Option<(String, i64)> {
 mod tests {
     use super::super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
     use super::*;
+    use crate::policy::Checks;
+
+    /// `super::attention` with `pr.feedback.checks` `any`, cpd's default.
+    fn attention(before: Option<&PullRequest>, after: &PullRequest) -> Vec<Reason> {
+        super::attention(before, after, Checks::Any)
+    }
     use crate::home::CpdHome;
     use crate::store::Store;
 
@@ -375,6 +383,15 @@ mod tests {
         assert_eq!(attention(Some(&open), &row("open", "changes_requested", "none")), [Reason::ChangesRequested]);
         assert_eq!(attention(Some(&row("open", "approved", "none")), &row("open", "changes_requested", "none")), [Reason::ChangesRequested]);
         assert_eq!(attention(Some(&open), &row("closed", "none", "none")), [Reason::Closed]);
+    }
+
+    #[test]
+    fn attention_ignores_failing_checks_when_the_policy_is_none_and_keeps_every_other_reason() {
+        let open = row("open", "none", "none");
+        assert_eq!(super::attention(Some(&open), &row("open", "none", "failed"), Checks::None), []);
+        assert_eq!(super::attention(Some(&open), &row("open", "none", "failed"), Checks::Any), [Reason::ChecksFailed]);
+        let all = super::attention(Some(&row("open", "none", "pending")), &conflicting(row("closed", "changes_requested", "failed")), Checks::None);
+        assert_eq!(all, [Reason::ChangesRequested, Reason::Closed, Reason::Conflict]);
     }
 
     #[test]

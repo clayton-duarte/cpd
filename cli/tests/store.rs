@@ -195,7 +195,8 @@ fn contract_ddl_blocks() -> Vec<String> {
 /// documentation, not schema (a migration cannot change one without rebuilding the table).
 fn normalized(sql: &str) -> String {
     let code: Vec<&str> = sql.lines().map(|line| line.split("--").next().unwrap_or_default()).collect();
-    code.join(" ").split_whitespace().collect::<Vec<_>>().join(" ")
+    // `ALTER TABLE … ADD COLUMN` splices its column in as `, <column>)`: the spaces before `,` and `)` are layout too.
+    code.join(" ").split_whitespace().collect::<Vec<_>>().join(" ").replace(" ,", ",").replace(" )", ")")
 }
 
 /// `(name, sql)` of every table, index and trigger in `conn`, normalized: a
@@ -698,7 +699,27 @@ fn a_read_transaction_cannot_write() {
         })
         .unwrap_err();
     assert_eq!(err.code(), ErrorCode::StoreFailed);
-    assert!(sqlite_message(&err).contains("outside a cpd write transaction"), "{err:?}");
+    assert!(sqlite_message(&err).contains("readonly"), "{err:?}");
+}
+
+/// store-G3: the statements that fire no trigger are stopped too.
+#[test]
+fn a_read_transaction_cannot_run_ddl_or_make_a_temp_table() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    fixture(&mut store);
+    for sql in ["CREATE TEMP TABLE scratch (x)", "CREATE TABLE scratch (x)", "DROP TABLE tier_catalog"] {
+        let err = store.read(|c| Ok(c.execute_batch(sql)?)).expect_err(sql);
+        assert_eq!(err.code(), ErrorCode::StoreFailed, "{sql}: {err:?}");
+        assert!(sqlite_message(&err).contains("readonly"), "{sql}: {err:?}");
+    }
+    // The guard is off again for the next write, and the schema is untouched.
+    store.write("test", |tx| exec(tx, "UPDATE contexts SET title = 'Changed'")).unwrap();
+    assert!(store.schema_mismatch().is_none());
+    let tables: i64 = store
+        .read(|c| Ok(c.query_row("SELECT count(*) FROM sqlite_temp_schema", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(tables, 0);
 }
 
 #[test]
@@ -1090,7 +1111,7 @@ fn a_write_from_a_deleted_cwd_succeeds_and_records_unreadable() {
     let out = env
         .command("sh")
         .args(["-c", "mkdir gone && cd gone && rmdir ../gone && exec \"$@\"", "sh", common::CPD])
-        .args(["context", "new", "ctx", "--title", "Ctx"])
+        .args(["context", "new", "ctx", "--title", "Ctx", "--owner", "acme"])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);

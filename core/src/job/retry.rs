@@ -5,7 +5,7 @@ use serde_json::json;
 
 use super::{Env, RetryArgs, find, plan_phase};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::{JobKey, PlanId};
 use crate::output::Output;
 use crate::plan::jobs::{self, Job};
@@ -36,7 +36,7 @@ pub(super) fn retry(args: RetryArgs) -> Result<Output, CpdError> {
                     [plan.as_str(), job.key.as_str(), tier.as_str()],
                 )?;
                 let text = format!("Job {key} of Plan {plan} is queued again at Tier {tier}. Next: cpd job show {key} --plan {plan}");
-                append(tx, NewEvent::new(Kind::JobRetried, text, json!({"tier": tier})).plan(plan.clone()).job(key.clone()))?;
+                append(tx, NewEvent::job_retried(text, &tier).plan(plan.clone()).job(key.clone()))?;
                 Ok(false)
             }
         })?,

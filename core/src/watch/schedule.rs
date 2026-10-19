@@ -6,6 +6,7 @@
 use super::SOURCE;
 use super::engine::Engine;
 use super::report::{About, Step};
+use super::restart;
 use rusqlite::{Connection, params};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -57,6 +58,12 @@ const READY: &str = "SELECT j.plan, j.key, j.urgent FROM jobs j JOIN plans p ON 
   ORDER BY j.urgent DESC, j.seq";
 
 pub(super) fn run(engine: &mut Engine) {
+    // A tmux restart is pending: no new Attempt until it has run; running ones finish (§3.7 E3).
+    match restart::holding(&engine.home) {
+        Ok(true) => return engine.log.line("E3: holding: a tmux restart is pending, no new Attempt starts until it has run"),
+        Ok(false) => {}
+        Err(e) => return engine.fail(Step::E3, About::Machine, &e),
+    }
     let ready = engine.store.read(|conn| {
         let mut stmt = conn.prepare(READY)?;
         let rows = stmt

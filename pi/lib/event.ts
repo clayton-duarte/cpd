@@ -16,7 +16,7 @@ export const KINDS = [
   "all-merged", "pr-feedback",
   "escalation", "escalation-answered", "escalation-expired",
   "session-registered", "session-state", "session-moved", "session-renamed", "session-titled",
-  "context-renamed", "plan-renamed", "context-archived", "plan-archived", "session-archived", "session-message",
+  "context-renamed", "context-owner", "plan-renamed", "context-archived", "plan-archived", "session-archived", "session-message",
   "inbox-opened", "inbox-closed", "inbox-snoozed", "inbox-dismissed",
   "pr-added", "pr-edited", "pr-cancelled", "pr-started", "pr-opened", "pr-merged",
   "watch-started", "watch-stopped", "error",

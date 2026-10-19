@@ -5,7 +5,7 @@ use rusqlite::types::Value as Sql;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
-use super::{Env, ListArgs, ShowArgs, bad_row, session_not_found};
+use super::{Env, ListArgs, ShowArgs, session_not_found};
 use crate::args::SessionArg;
 use crate::error::CpdError;
 use crate::events::highest_id;
@@ -164,8 +164,8 @@ impl Row {
     }
 
     fn parse(raw: Raw) -> Result<Row, CpdError> {
-        let id = SessionId::parse(&raw.id).map_err(|_| bad_row(format!("id {:?}", raw.id)))?;
-        let field = |name: &str, value: &str| bad_row(format!("{id} has {name} {value:?}"));
+        let id = SessionId::parse(&raw.id).map_err(|_| CpdError::bad_row(format!("id {:?}", raw.id)))?;
+        let field = |name: &str, value: &str| CpdError::bad_row(format!("{id} has {name} {value:?}"));
         Ok(Row {
             role: Role::parse(&raw.role).ok_or_else(|| field("role", &raw.role))?,
             context: ContextId::parse(&raw.context).map_err(|_| field("context", &raw.context))?,
@@ -316,7 +316,7 @@ pub(super) fn plan_lead(conn: &Connection, plan: &PlanId) -> Result<Option<(Cont
         .optional()?;
     found
         .map(|(context, lead)| {
-            let context = ContextId::parse(&context).map_err(|_| bad_row(format!("Plan {plan} has context {context:?}")))?;
+            let context = ContextId::parse(&context).map_err(|_| CpdError::bad_row(format!("Plan {plan} has context {context:?}")))?;
             Ok((context, lead))
         })
         .transpose()

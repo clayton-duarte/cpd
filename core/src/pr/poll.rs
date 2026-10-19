@@ -6,25 +6,26 @@ use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use nix::errno::Errno;
-use nix::fcntl::{Flock, FlockArg};
+use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use super::feedback;
 use super::gh::{self, Listed};
 use super::pulls::{self, Change, Reason};
-use super::row::PlanRow;
+use super::row::PlanPrs;
 use super::status::PrState;
 use super::{Env, PollArgs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::git;
 use crate::home::CpdHome;
 use crate::host::layout::attempt_window;
 use crate::host::tmux::Tmux;
 use crate::ids::{AttemptId, PlanId, PrKey};
+use crate::lock;
 use crate::merge::RepoLock;
 use crate::output::Output;
+use crate::policy::Checks;
 use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr poll";
@@ -37,6 +38,14 @@ const RETRY: Duration = Duration::from_millis(100);
 
 /// A pull request an `open` PR of a Plan points to.
 type Owned = (PlanId, PrKey, pulls::PullRequest);
+
+/// An owned PR whose policy did not resolve (`owner_unset`, `owner_unknown`, `policy_invalid`).
+struct Unresolved {
+    plan: PlanId,
+    pr: PrKey,
+    number: i64,
+    error: CpdError,
+}
 
 /// What the transaction did.
 #[derive(Default)]
@@ -60,6 +69,16 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
     let search = gh::search_open(&root)?;
     let present: Vec<(String, i64)> = search.prs.iter().map(|l| (l.pr.repo.clone(), l.pr.number)).collect();
     let owned = env.store.read(pulls::owned_open)?;
+    // Each owned PR's `pr.feedback.checks`, resolved before anything is written (§8.3). A PR whose policy does not
+    // resolve is told nothing and reported below; the poll goes on for the others (§7.6).
+    let mut checks = Vec::new();
+    let mut unresolved = Vec::new();
+    for (plan, key, row) in &owned {
+        match super::pr_policy_resolved(&mut env, plan, key)? {
+            Ok(policy) => checks.push((plan.clone(), key.clone(), policy.pr.feedback.checks)),
+            Err(error) => unresolved.push(Unresolved { plan: plan.clone(), pr: key.clone(), number: row.number, error }),
+        }
+    }
 
     // The owned pull requests that left the open search: merged, closed, or the index lags (D3).
     // One stored as decided (`closed`, A11) is already right: it is not looked up again until the search lists it.
@@ -88,7 +107,9 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
         Ok(unowned.iter().any(|row| !present.contains(row)))
     })?;
     // A poll that finds nothing new opens no write transaction (D5).
-    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &present, &owned))? } else { Outcome::default() };
+    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &present, &owned, &checks))? } else { Outcome::default() };
+
+    report_unresolved(&mut env, &unresolved)?;
 
     // After the transaction: the clean-up of each PR that merged, then the silent retry of the earlier ones.
     clean_up(&mut env, &outcome.merged)?;
@@ -118,20 +139,18 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
 
 /// `flock` on `path`, waiting at most [`LOCK_WAIT`]: `lock_timeout` (exit 5). The
 /// descriptor stays open while waiting.
-fn take_lock(path: &Path) -> Result<Flock<fs::File>, CpdError> {
+fn take_lock(path: &Path) -> Result<fs::File, CpdError> {
     let failed = |what: &dyn std::fmt::Display| {
         CpdError::new(ErrorCode::StoreFailed, format!("Cannot use the lock {}: {what}.", path.display())).with("lock", path.display().to_string())
     };
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| failed(&e))?;
     }
-    let mut file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| failed(&e))?;
+    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| failed(&e))?;
     let deadline = Instant::now() + LOCK_WAIT;
     loop {
-        match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
-            Ok(lock) => return Ok(lock),
-            Err((back, Errno::EWOULDBLOCK | Errno::EINTR)) => file = back,
-            Err((_, errno)) => return Err(failed(&format!("flock failed: {errno}"))),
+        if lock::try_lock(&file).map_err(|e| failed(&format!("flock failed: {e}")))? {
+            return Ok(file);
         }
         if Instant::now() >= deadline {
             return Err(CpdError::new(
@@ -147,7 +166,7 @@ fn take_lock(path: &Path) -> Result<Flock<fs::File>, CpdError> {
 
 /// The one write transaction (D5, D7): every changed row, the Events of the
 /// owning Plans, the rows that left the search.
-fn apply(tx: &WriteTxn<'_>, seen: &[Listed], present: &[(String, i64)], owned: &[Owned]) -> Result<Outcome, CpdError> {
+fn apply(tx: &WriteTxn<'_>, seen: &[Listed], present: &[(String, i64)], owned: &[Owned], checks: &[(PlanId, PrKey, Checks)]) -> Result<Outcome, CpdError> {
     let mut out = Outcome::default();
     for listed in seen {
         // A merged row needs a merge time: GitHub's, else this poll's.
@@ -169,7 +188,9 @@ fn apply(tx: &WriteTxn<'_>, seen: &[Listed], present: &[(String, i64)], owned: &
                 if merge(tx, plan, key, after)? {
                     out.done.push(plan.clone());
                 }
-            } else if tell(tx, plan, key, &change)? {
+            } else if let Some(checks) = checks_of(checks, plan, key)
+                && tell(tx, plan, key, checks, &change)?
+            {
                 out.feedback.push((plan.clone(), key.clone()));
             }
         }
@@ -178,15 +199,65 @@ fn apply(tx: &WriteTxn<'_>, seen: &[Listed], present: &[(String, i64)], owned: &
     Ok(out)
 }
 
+/// The PR's resolved `pr.feedback.checks`; `None` when its policy did not resolve: it is told nothing.
+fn checks_of(checks: &[(PlanId, PrKey, Checks)], plan: &PlanId, key: &PrKey) -> Option<Checks> {
+    checks.iter().find(|(p, k, _)| p == plan && k == key).map(|(_, _, c)| *c)
+}
+
+/// One `error` Event for each PR whose policy did not resolve (§7.6): `source` `pr poll`, the resolve error's `code`,
+/// `details` the error's with `plan`, `pr` and `number`. Once per episode: not again while the latest such Event of
+/// the PR has the same code, so a poll every `pr_poll_seconds` does not repeat it, and no write transaction opens.
+fn report_unresolved(env: &mut Env, unresolved: &[Unresolved]) -> Result<(), CpdError> {
+    let fresh: Vec<&Unresolved> = env.store.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT json_extract(data, '$.code') FROM events
+              WHERE kind = 'error' AND plan = ?1 AND json_extract(data, '$.source') = ?2
+                AND json_extract(data, '$.details.pr') = ?3 AND json_extract(data, '$.code') <> ?4
+              ORDER BY id DESC LIMIT 1",
+        )?;
+        let mut fresh = Vec::new();
+        for failed in unresolved {
+            let latest: Option<String> = stmt
+                .query_row(
+                    [failed.plan.as_str(), COMMAND, failed.pr.as_str(), ErrorCode::CleanupFailed.as_str()],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if latest.as_deref() != Some(failed.error.code().as_str()) {
+                fresh.push(failed);
+            }
+        }
+        Ok(fresh)
+    })?;
+    if fresh.is_empty() {
+        return Ok(());
+    }
+    env.store.write(COMMAND, |tx| {
+        for Unresolved { plan, pr, number, error } in &fresh {
+            let message = format!("The policy of PR {pr} (#{number}) of Plan {plan} did not resolve: {}", error.message());
+            let next = match error.details().get("next").and_then(Value::as_str) {
+                Some(next) => next.to_owned(),
+                None => format!("cpd policy show --pr {pr} --plan {plan}"),
+            };
+            let text = format!("{message} The poll sends this PR no pr-feedback until it does; every other PR is polled. Next: {next}");
+            let mut details = error.details().clone();
+            details.insert("plan".into(), json!(plan));
+            details.insert("pr".into(), json!(pr));
+            details.insert("number".into(), json!(number));
+            append(tx, NewEvent::error(text, COMMAND, error.code().as_str(), &message, details).plan(plan.clone()))?;
+        }
+        Ok(())
+    })
+}
+
 /// D7: `pr-feedback` to the Plan, when the change needs its attention.
-fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, change: &Change) -> Result<bool, CpdError> {
-    let reasons: Vec<Reason> = pulls::attention(change.before.as_ref(), &change.after);
+fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, checks: Checks, change: &Change) -> Result<bool, CpdError> {
+    let reasons: Vec<Reason> = pulls::attention(change.before.as_ref(), &change.after, checks);
     if reasons.is_empty() {
         return Ok(false);
     }
     let text = feedback::text(plan.as_str(), key.as_str(), change.after.number, &reasons);
-    let data = feedback::data(key.as_str(), &change.after, &reasons);
-    append(tx, NewEvent::new(Kind::PrFeedback, text, data).plan(plan.clone()))?;
+    append(tx, feedback::event(text, key.as_str(), &change.after, &reasons).plan(plan.clone()))?;
     Ok(true)
 }
 
@@ -203,8 +274,7 @@ fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest)
         return Err(cas_lost(id, key));
     }
     let text = format!("PR {key} (#{}) of Plan {id} is merged.", pull.number);
-    let data = json!({"pr": key, "number": pull.number, "url": pull.url, "merged_at": pull.merged_at});
-    append(tx, NewEvent::new(Kind::PrMerged, text, data).plan(id.clone()))?;
+    append(tx, NewEvent::pr_merged(text, key, pull.number, &pull.url, pull.merged_at.as_deref()).plan(id.clone()))?;
     // The last PR to merge ends the Plan (§3.1).
     let unmerged: i64 =
         tx.query_row("SELECT count(*) FROM prs WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled')", [id.as_str()], |r| r.get(0))?;
@@ -221,12 +291,12 @@ fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest)
     }
     let merged = merged_prs(tx, id, key, pull.merged_at.as_deref())?;
     let text = format!("Every PR of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}");
-    append(tx, NewEvent::new(Kind::PlanDone, text, json!({"prs": merged})).plan(id.clone()))?;
+    append(tx, NewEvent::plan_done(text, &merged).plan(id.clone()))?;
     Ok(true)
 }
 
 /// `[{key, status, pull_request}]` of the Plan's PRs that are not `cancelled`, in key order.
-fn plan_prs(env: &mut Env, plan: &PlanRow) -> Result<Vec<Value>, CpdError> {
+fn plan_prs(env: &mut Env, plan: &PlanPrs) -> Result<Vec<Value>, CpdError> {
     env.store.read(|conn| {
         plan.live()
             .map(|pr| {
@@ -318,8 +388,8 @@ fn clean_up(env: &mut Env, just: &[(PlanId, PrKey)]) -> Result<(), CpdError> {
             let message = format!("The clean-up of the merged PR {pr} of Plan {plan} did not remove {path}: {reason}");
             let text = format!("{message} It is retried by every later poll, except a dirty or unpushed Lead worktree, which stays until you deal with it.");
             let details = json!({"plan": plan, "pr": pr, "path": path, "reason": reason});
-            let data = json!({"source": COMMAND, "code": ErrorCode::CleanupFailed.as_str(), "message": message, "details": details});
-            append(tx, NewEvent::new(Kind::Error, text, data).plan(plan.clone()))?;
+            let event = NewEvent::error(text, COMMAND, ErrorCode::CleanupFailed.as_str(), &message, details);
+            append(tx, event.plan(plan.clone()))?;
         }
         Ok(())
     })

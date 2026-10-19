@@ -1,11 +1,11 @@
-/** commands.md §15.8: the turn-end reminder (hs-d241, R2; the rule is hs-d239). Pure: what to check, and the message. */
+/** commands.md §15.8: the turn-end reminder. Pure: what to check, and the message. */
 
 import { CpdError, isObject } from "./cpd.ts";
 
 export const REMINDER_TYPE = "cpd-reminder";
 
 export const REMINDER_TEXT =
-  'cpd reminder (hs-d239): your last message spoke of further work but named no registered Job or PR. Register it now (cpd job add <k> --draft --title "…", or cpd pr add …) and name its key.';
+  'cpd reminder: your last message spoke of further work but named no registered Job or PR. Register it now (cpd job add <k> --draft --title "…", or cpd pr add …) and name its key.';
 
 /** The fixed phrase list of §15.8, matched case-insensitively as substrings. Extending it is a change to that section. */
 export const PHRASES: readonly string[] = [

@@ -18,6 +18,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd context manager` | Start or resume the Context's Manager (§3.10) | Manager | yes |
 | `cpd context pending` | List the in-flight work of the Context's active Plans (§3.11) | Lead, Manager | |
 | `cpd context distill` | Build the Context's digest with one-shot pi (§3.12) | Lead | |
+| `cpd context owner` | Set the owner of a Context that has none (§3.13) | Lead, Manager | |
 | `cpd plan` | Plans and their phases (commands.md §4) | | |
 | `cpd plan new` | Create a Plan and start its Lead (§4.1) | Lead, Manager | yes |
 | `cpd plan list` | List the Plans (§4.2) | Lead, Manager | |
@@ -59,6 +60,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd pr push` | Gate, then push the Lead Branch as it is, without a rebase (§9.9) | Lead | |
 | `cpd pr view` | Show the PR's checks, reviews and comments (§9.8) | Lead | |
 | `cpd pr merge` | Squash-merge a clean pull request on GitHub and delete its branch (§9.10) | | yes |
+| `cpd policy` | Policies (commands.md §22) | | |
+| `cpd policy show` | Show the resolved policy of a key (§22.1) | Lead, Manager, Worker | |
 | `cpd session` | Sessions and their tmux panes (commands.md §10) | | |
 | `cpd session list` | List Sessions (§10.1) | Lead, Manager | |
 | `cpd session show` | Show a Session (§10.2) | Lead, Manager | |

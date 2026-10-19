@@ -10,7 +10,7 @@ use serde_json::json;
 use super::spec::{self, Spec};
 use super::{EditArgs, Env, check_needs_available, check_needs_known, check_needs_same_pr, check_pr_live, find, plan_phase, sorted_needs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::{JobKey, PlanId};
 use crate::output::Output;
 use crate::plan::fingerprint::load_prs;
@@ -62,7 +62,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
             Decision::Update { before, after, fields } => {
                 update(tx, &plan, &before, &after)?;
                 let text = format!("Job {key} of Plan {plan} edited ({}). Next: cpd plan render --plan {plan}", fields.join(", "));
-                append(tx, NewEvent::new(Kind::JobEdited, text, json!({"fields": fields})).plan(plan.clone()).job(key.clone()))?;
+                append(tx, NewEvent::job_edited(text, &fields).plan(plan.clone()).job(key.clone()))?;
                 Ok((after, fields, false))
             }
         })?,
@@ -99,7 +99,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
     }
     if let Some(pr) = &edits.pr {
         let prs = load_prs(conn, plan)?;
-        if !prs.iter().any(|p| p.key == *pr) {
+        if !prs.iter().any(|p| p.key.as_str() == pr.as_str()) {
             return Err(CpdError::new(ErrorCode::PrNotFound, format!("No PR {pr} in Plan {plan}."))
                 .with("plan", plan.as_str())
                 .with("pr", pr.as_str()));

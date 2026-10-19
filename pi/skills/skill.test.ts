@@ -323,8 +323,8 @@ function knownFlags(): Set<string> {
 const planIdPattern = () => /\| Plan id \| (`[^`]+`)/.exec(section(contractDoc, "### 2.1 Identifiers"))![1]!.slice(1, -1);
 const idFormat = (thing: string) => new RegExp(`^\\| ${thing} \\| \`([^\`]+)\``, "m").exec(section(contractDoc, "### 2.1 Identifiers"))![1]!;
 
-/** Hooks, Event kinds and ids that look like kinds: `pre-*` hooks are defined in §7.3; `cpd-context` is the adapter's message type; `pay-4521` is the Plan id example. */
-const notKinds = (hooks: Set<string>) => new Set([...hooks, "cpd-context", "pay-4521"]);
+/** Hooks, Event kinds and ids that look like kinds: `pre-*` hooks are defined in §7.3; `cpd-context` is the adapter's message type; `cpd-policy` its system prompt section (contract §8.3); `pay-4521` is the Plan id example. */
+const notKinds = (hooks: Set<string>) => new Set([...hooks, "cpd-context", "cpd-policy", "pay-4521"]);
 
 /** Every fact `files` state that the docs do not: an empty list means every code, kind, flag, number and id exists. */
 function factProblems(files: { name: string; text: string }[]): string[] {
@@ -460,13 +460,13 @@ test("the skills' list of pr-feedback reasons and of ladder causes is the contra
   for (const cause of failed.flatMap((c) => ticks(c, /./))) assert.ok(vocabulary().causes.has(cause), `Failed Jobs: ${cause} is no cause of contract.md §3.4`);
 });
 
-test("hs-d239: cpd-lead registers planned work at once; cpd-manager checks it", () => {
+test("cpd-lead registers planned work at once; cpd-manager checks it", () => {
   const lead = skillFiles("cpd-lead")[0]!.text;
-  assert.match(lead, /Register planned work at once \(hs-d239\)/);
+  assert.match(lead, /Register planned work at once/);
   assert.match(lead, /cpd job add <k> --draft --title/);
   assert.match(lead, /cpd pr add <key> --repo <path> --needs/);
   const manager = skillFiles("cpd-manager")[0]!.text;
-  assert.match(manager, /Check hs-d239 for each Plan/);
+  assert.match(manager, /Check each Plan's registered work/);
   assert.match(manager, /cpd plan show --plan <p>/);
   assert.match(manager, /cpd session send <lead-session>[^\n]*register/);
 });
@@ -480,4 +480,75 @@ test("urgent Jobs: both skills state the flag, the command and the explicit-requ
     assert.match(text, /beyond `concurrency`/, `${skill}: may exceed concurrency`);
   }
   assert.ok(synopses().get("job urgent")!.has("--plan"), "commands.md documents job urgent");
+});
+
+/** Contract §8.3 "Delivery to agents": the shared skills and the adapter carry cpd mechanics only. No owner's choice and no Context record id. */
+test("policy-neutral: no record id, owner or machine fact in the skills, pi/lib or the extension", () => {
+  const root = new URL("../../", import.meta.url);
+  const files: { name: string; text: string }[] = [];
+  for (const skill of skills) for (const f of skillFiles(skill.skill)) files.push({ name: `pi/skills/${f.name}`, text: f.text });
+  for (const f of readdirSync(new URL("lib/", new URL("../", here))).sort()) {
+    if (f.endsWith(".ts") && !f.endsWith(".test.ts")) files.push({ name: `pi/lib/${f}`, text: readFileSync(new URL(`pi/lib/${f}`, root), "utf8") });
+  }
+  files.push({ name: "pi/extension.ts", text: readFileSync(new URL("pi/extension.ts", root), "utf8") });
+  assert.ok(files.length > 10, "the guard must find the files it guards");
+  const forbidden = [/\bhs-[dnqap][0-9]+/, /clayton-duarte/, /missionlane/, /homeserver/, /User's machines/];
+  const hits: string[] = [];
+  for (const { name, text } of files) {
+    text.split("\n").forEach((line, i) => {
+      for (const re of forbidden) if (re.test(line)) hits.push(`${name}:${i + 1}: ${re} in: ${line.trim().slice(0, 100)}`);
+    });
+  }
+  assert.deepEqual(hits, []);
+});
+
+/** Commands.md §9: pr open, push and rebase run the Gate only when the PR's `pr.gate` is `local`. */
+test("cpd-lead: every 'run(s) the Gate' sentence names pr.gate", () => {
+  const sentences = skillFiles("cpd-lead")[0]!.text.split(/(?<=[.;!?])\s+/).filter((s) => /\bruns? the Gate\b/i.test(s));
+  assert.ok(sentences.length >= 4, "the guard must find the sentences it guards");
+  const bad = sentences.filter((s) => !s.includes("pr.gate"));
+  assert.deepEqual(bad, []);
+});
+
+test("cpd-lead adds decided work queued and keeps drafts for undecided design (hs-d301)", () => {
+  const text = skillFiles("cpd-lead")[0]!.text;
+  assert.match(text, /added queued/);
+  assert.match(text, /Spec that cites the decision/);
+  assert.match(text, /When unsure, a draft/);
+});
+
+test("cpd-manager names the decision of routed decided work and says it needs no review (hs-d301)", () => {
+  const text = skillFiles("cpd-manager")[0]!.text;
+  assert.match(text, /name the decision id/);
+  assert.match(text, /needs no Plan review/);
+});
+
+for (const { skill } of skills) test(`${skill}: asks the User only with ask_user_question, never a context ask record (hs-d306)`, () => {
+  const text = skillFiles(skill)[0]!.text;
+  assert.match(text, /To ask the User, use `ask_user_question`/);
+  assert.match(text, /Never use `cpd context ask`: it records an open question in the Context and asks nobody\./);
+  assert.match(text, /plannotator|too big for a dialog/);
+  const ask = text.split("\n").find((l) => l.trim().startsWith("cpd context ask "));
+  assert.ok(ask, "the context ask line exists");
+  assert.match(ask, /\(a record, not a question to the User\)/);
+});
+
+test("cpd-lead resolves a PR conflict inline and pushes through the Gate, never a plain git push or a sync Job (hs-d305)", () => {
+  const text = skillFiles("cpd-lead")[0]!.text;
+  assert.ok(!/(?<!never a )plain `git push`/.test(text));
+  assert.ok(!/run no local tests/i.test(text));
+  assert.ok(!/hs-d220/.test(text));
+  const row = text.split("\n").find((l) => l.startsWith("| `pr-feedback`"))!;
+  const step = text.split("\n").find((l) => l.startsWith("2. After those Jobs are Merged"))!;
+  const rule = text.split("\n").find((l) => /`git` and `gh` are allowed/.test(l))!;
+  for (const [name, place] of [["pr-feedback row", row], ["Addressing step 2", step]] as const) {
+    assert.match(place, /cpd pr push --pr <key>/, name);
+    assert.match(place, /never a plain `git push`/, name);
+    assert.match(place, /never with a sync (or merge )?Job/, name);
+    assert.match(place, /code the merge needs/, name);
+  }
+  assert.match(row, /cpd pr rebase --pr <key>/);
+  assert.match(step, /cpd pr rebase --pr <key>/);
+  assert.match(rule, /`cpd pr push` or `cpd pr rebase`/);
+  assert.match(rule, /never with `git push`/);
 });

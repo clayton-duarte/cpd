@@ -33,17 +33,18 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::args::{PlanArg, PrArg};
-use crate::config::{self, Config};
+use crate::config;
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, HookOutcome, Operation, run_hook};
 use crate::home::{CpdHome, Hook};
-use crate::ids::{AttemptId, PlanId, PrKey};
+use crate::ids::{AttemptId, ContextId, OwnerLogin, PlanId, PrKey, RepoName};
+use crate::policy::{Gate, Policy, PolicyKey, owner_unset, resolve};
 use crate::merge::{self as attempt_merge, RepoLock};
 use crate::output::Output;
 use crate::plan::Phase;
-use crate::plan::fingerprint::PrSpec;
-use crate::store::Store;
-use row::{PlanRow, PrRow};
+use crate::plan::PrRow;
+use row::PlanPrs;
 
 pub use gh::close_pr;
 
@@ -160,29 +161,44 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
     }
 }
 
-/// What every command opens: `$CPD_HOME`, its config and the store.
-struct Env {
-    home: CpdHome,
-    config: Config,
-    store: Store,
-}
-
 impl Env {
-    fn open() -> Result<Env, CpdError> {
-        let home = CpdHome::from_env()?;
-        let config = Config::load(&home)?;
-        let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-        Ok(Env { home, config, store })
-    }
-
-    fn plan(&mut self, id: &PlanId) -> Result<PlanRow, CpdError> {
+    fn plan(&mut self, id: &PlanId) -> Result<PlanPrs, CpdError> {
         self.store.read(|conn| row::load(conn, id))
     }
 }
 
+/// The resolved policy of PR `key` of `plan` (contract §8.3 "Keys and resolution"): `Repo(<owner>, <name>)`,
+/// `Owner` when the PR has no name. An unset owner is `owner_unset`; a resolve error is returned as it is.
+fn pr_policy(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Policy, CpdError> {
+    pr_policy_resolved(env, plan, key)?
+}
+
+/// [`pr_policy`] with the two kinds of failure apart: the outer error is the store's (it cannot be read, or holds
+/// a value that does not parse), the inner one the resolve's (`owner_unset`, `owner_unknown`, `policy_invalid`),
+/// which a consumer of many rows (the poll) reports for its row and goes on.
+fn pr_policy_resolved(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Result<Policy, CpdError>, CpdError> {
+    let (context, owner, name): (String, Option<String>, Option<String>) = env.store.read(|conn| {
+        Ok(conn.query_row(
+            "SELECT c.id, c.owner, r.name FROM prs r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context
+              WHERE r.plan = ?1 AND r.key = ?2",
+            [plan.as_str(), key.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?)
+    })?;
+    let Some(owner) = owner else {
+        return Ok(Err(owner_unset(&ContextId::parse(&context)?)));
+    };
+    let owner = OwnerLogin::parse(&owner)?;
+    let policy_key = match name {
+        Some(name) => PolicyKey::Repo(owner, RepoName::parse(&name)?),
+        None => PolicyKey::Owner(owner),
+    };
+    Ok(resolve(&env.home, &policy_key).map(|resolved| resolved.policy))
+}
+
 /// `illegal_phase` (exit 3): `command` needs a Plan in phase `needs`.
-fn illegal_phase(plan: &PlanRow, command: &str, needs: &str) -> CpdError {
-    wrong_phase(&plan.id, plan.phase, command, needs)
+fn illegal_phase(plan: &PlanPrs, command: &str, needs: &str) -> CpdError {
+    wrong_phase(&plan.plan.id, plan.plan.phase, command, needs)
 }
 
 /// The per-PR Gate log, `run/<plan>/logs/pr-<key>.pre-merge.log` (§7.6). The
@@ -214,14 +230,14 @@ fn plan_phase(conn: &rusqlite::Connection, plan: &PlanId) -> Result<Phase, CpdEr
     let phase: String = conn
         .query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))
         .optional()?
-        .ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str()))?;
+        .ok_or_else(|| CpdError::plan_not_found(plan))?;
     Phase::parse(&phase)
-        .ok_or_else(|| CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: Plan {plan} has phase {phase:?}.")))
+        .ok_or_else(|| CpdError::bad_row(format!("Plan {plan} has phase {phase:?}")))
 }
 
 /// The PR `key` among `prs`, else `pr_not_found` (exit 4).
-fn find_pr<'a>(prs: &'a [PrSpec], plan: &PlanId, key: &PrKey) -> Result<&'a PrSpec, CpdError> {
-    prs.iter().find(|p| p.key == key.as_str()).ok_or_else(|| {
+fn find_pr<'a>(prs: &'a [PrRow], plan: &PlanId, key: &PrKey) -> Result<&'a PrRow, CpdError> {
+    prs.iter().find(|p| p.key == *key).ok_or_else(|| {
         CpdError::new(ErrorCode::PrNotFound, format!("No PR {key} in Plan {plan}."))
             .with("plan", plan.as_str())
             .with("pr", key.as_str())
@@ -240,15 +256,15 @@ fn sorted_needs(needs: &[PrKey]) -> Result<Vec<String>, CpdError> {
 
 /// Every key of `needs` is a PR of the Plan other than `own` (`needs_unknown`)
 /// and none is `cancelled` (`needs_unavailable`) (§9.4, §9.5).
-fn check_needs(prs: &[PrSpec], plan: &PlanId, own: Option<&PrKey>, needs: &[String]) -> Result<(), CpdError> {
+fn check_needs(prs: &[PrRow], plan: &PlanId, own: Option<&PrKey>, needs: &[String]) -> Result<(), CpdError> {
     let unknown: Vec<String> =
-        needs.iter().filter(|n| own.is_some_and(|o| o.as_str() == n.as_str()) || !prs.iter().any(|p| p.key == **n)).cloned().collect();
+        needs.iter().filter(|n| own.is_some_and(|o| o.as_str() == n.as_str()) || !prs.iter().any(|p| p.key.as_str() == n.as_str())).cloned().collect();
     if !unknown.is_empty() {
         return Err(CpdError::new(ErrorCode::NeedsUnknown, format!("Plan {plan} has no PR {} to need.", unknown.join(", ")))
             .with("plan", plan.as_str())
             .with("needs", unknown));
     }
-    let unavailable: Vec<String> = needs.iter().filter(|n| prs.iter().any(|p| p.key == **n && p.status == "cancelled")).cloned().collect();
+    let unavailable: Vec<String> = needs.iter().filter(|n| prs.iter().any(|p| p.key.as_str() == n.as_str() && p.status == "cancelled")).cloned().collect();
     if !unavailable.is_empty() {
         return Err(CpdError::new(ErrorCode::NeedsUnavailable, format!("A PR cannot need the cancelled PR {}.", unavailable.join(", ")))
             .with("plan", plan.as_str())
@@ -263,8 +279,8 @@ fn check_needs(prs: &[PrSpec], plan: &PlanId, own: Option<&PrKey>, needs: &[Stri
 /// `source` is the command, for what R writes.
 fn lock(env: &mut Env, pr: &PrRow, source: &str) -> Result<RepoLock, CpdError> {
     let limit = Duration::from_secs(u64::from(env.config.timeouts.lock_wait_seconds));
-    let lock = RepoLock::wait_for(&env.home, &pr.repo, limit)?;
-    let repo = pr.repo.to_string_lossy().into_owned();
+    let lock = RepoLock::wait_for(&env.home, Path::new(&pr.repo), limit)?;
+    let repo = pr.repo.clone();
     let merging = env.store.read(|conn| {
         let mut stmt = conn.prepare(
             "SELECT a.plan, a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
@@ -278,7 +294,7 @@ fn lock(env: &mut Env, pr: &PrRow, source: &str) -> Result<RepoLock, CpdError> {
     let mut orphans = false;
     for (plan, attempt) in merging {
         let (plan, attempt) = (PlanId::parse(&plan)?, AttemptId::parse(&attempt)?);
-        orphans |= attempt_merge::take_free_driver_lock(&env.home, &plan, &attempt)?.is_some();
+        orphans |= crate::driver::lock::probe(&env.home, &plan, &attempt)?.is_some();
     }
     // R needs pi's catalog only to pick the next Tier of an Attempt it ends `crashed`.
     if orphans {
@@ -309,7 +325,10 @@ fn require_clean(plan: &PlanId, pr: &PrRow, lead: &Path) -> Result<(), CpdError>
 /// run there on the Lead Branch. `again` is the command the Lead runs after fixing it.
 /// A failure is `gate_failed` (exit 3), an error `gate_error` (exit 1), both with
 /// the last 60 lines in `details.tail` and the full log in `details.log`.
-fn gate(env: &Env, plan: &PlanId, pr: &PrRow, lead: &Path, again: &str) -> Result<(), CpdError> {
+fn gate(env: &Env, policy: &Policy, plan: &PlanId, pr: &PrRow, lead: &Path, again: &str) -> Result<(), CpdError> {
+    if policy.pr.gate != Gate::Local {
+        return Ok(());
+    }
     let log = gate_log(&env.home, plan, &pr.key);
     let timeout = Duration::from_secs(u64::from(env.config.timeouts.gate_minutes) * 60);
     let operation = Operation { branch: &pr.base };

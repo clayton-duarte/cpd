@@ -10,9 +10,9 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use super::fingerprint::PrSpec;
 use super::jobs::{Job, JobSpec};
 use super::overlap::Overlap;
+use super::prs::PrRow;
 
 /// What the render shows for what a stub draft lacks (commands.md §4.5, hs-d241).
 const MISSING_TIER: &str = "—";
@@ -133,14 +133,14 @@ fn graph(direction: &str, prefix: &str, nodes: &[(&str, &[String])]) -> String {
 /// The PRs in the order of the needs graph: a PR comes after every PR it
 /// needs, ties by key. Needs outside `prs` are ignored; a cycle (the schema
 /// forbids none, `pr add` does) ends the order with the rest by key.
-fn ordered<'a>(prs: &[&'a PrSpec]) -> Vec<&'a PrSpec> {
-    let mut rest: Vec<&PrSpec> = prs.to_vec();
+fn ordered<'a>(prs: &[&'a PrRow]) -> Vec<&'a PrRow> {
+    let mut rest: Vec<&PrRow> = prs.to_vec();
     rest.sort_by(|a, b| a.key.cmp(&b.key));
-    let mut out: Vec<&PrSpec> = Vec::new();
+    let mut out: Vec<&PrRow> = Vec::new();
     while !rest.is_empty() {
         let next = rest
             .iter()
-            .position(|p| p.needs.iter().all(|n| out.iter().any(|o| o.key == *n) || !rest.iter().any(|r| r.key == *n)))
+            .position(|p| p.needs.iter().all(|n| out.iter().any(|o| o.key.as_str() == n) || !rest.iter().any(|r| r.key.as_str() == n)))
             .unwrap_or(0);
         out.push(rest.remove(next));
     }
@@ -155,7 +155,7 @@ fn mark(job: &Job) -> &'static str {
 
 /// One PR's section: repo, base, needs, its Jobs' table and graph, its Jobs'
 /// Specs; `later` is a phase after `plan`, where the drafts are marked.
-fn pr_section(out: &mut Vec<String>, pr: &PrSpec, jobs: &[&Job], later: bool) {
+fn pr_section(out: &mut Vec<String>, pr: &PrRow, jobs: &[&Job], later: bool) {
     out.extend([
         format!("## PR {}", pr.key),
         String::new(),
@@ -267,8 +267,8 @@ fn overlaps_section(out: &mut Vec<String>, overlaps: &[Overlap]) {
 /// PRs and Jobs are left out, and so are the Jobs of a `cancelled` PR.
 /// `overlaps` are those of [`super::overlap::find`]. Pure: the same PRs, Jobs
 /// and overlaps give the same text.
-pub fn markdown(title: &str, context: &str, phase: &str, prs: &[PrSpec], jobs: &[Job], overlaps: &[Overlap]) -> String {
-    let prs: Vec<&PrSpec> = prs.iter().filter(|p| p.status != "cancelled").collect();
+pub fn markdown(title: &str, context: &str, phase: &str, prs: &[PrRow], jobs: &[Job], overlaps: &[Overlap]) -> String {
+    let prs: Vec<&PrRow> = prs.iter().filter(|p| p.status != "cancelled").collect();
     let mut out = vec![format!("# Plan: {}", inline(title)), String::new(), format!("Context: `{context}` · Phase: `{phase}`"), String::new()];
     let later = !matches!(phase, "grounding" | "plan");
     if later {
@@ -289,7 +289,7 @@ pub fn markdown(title: &str, context: &str, phase: &str, prs: &[PrSpec], jobs: &
         "|---|---|---|---|".to_owned(),
     ]);
     for p in &prs {
-        out.push(format!("| {} | {} | {} | {} |", tcode(&p.key), tcode(&p.repo), tcode(&p.base), joined(&p.needs, tcode)));
+        out.push(format!("| {} | {} | {} | {} |", tcode(p.key.as_str()), tcode(&p.repo), tcode(&p.base), joined(&p.needs, tcode)));
     }
     out.push(String::new());
     if prs.len() >= 2 {
@@ -298,7 +298,7 @@ pub fn markdown(title: &str, context: &str, phase: &str, prs: &[PrSpec], jobs: &
     }
     overlaps_section(&mut out, overlaps);
     for pr in order {
-        let jobs: Vec<&Job> = jobs.iter().filter(|j| j.pr == pr.key && j.status != "cancelled").collect();
+        let jobs: Vec<&Job> = jobs.iter().filter(|j| j.pr == pr.key.as_str() && j.status != "cancelled").collect();
         pr_section(&mut out, pr, &jobs, later);
     }
     out.join("\n")
@@ -343,14 +343,14 @@ mod tests {
         assert_eq!(markdown("T", "ctx", "plan", &[], &[], &[]), "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n");
     }
 
-    fn pr(key: &str, needs: &[&str]) -> PrSpec {
-        PrSpec { key: key.into(), repo: format!("/r/{key}"), base: "main".into(), needs: needs.iter().map(|n| (*n).to_owned()).collect(), status: "waiting".into() }
+    fn pr(key: &str, needs: &[&str]) -> PrRow {
+        PrRow::fixture(key, &format!("/r/{key}"), "main", needs, "waiting")
     }
 
     #[test]
     fn prs_are_ordered_by_needs_then_key() {
         let all = [pr("a-integration", &["b"]), pr("b", &["a-contract"]), pr("a-contract", &[]), pr("z", &[]), pr("c", &["gone"])];
-        let refs: Vec<&PrSpec> = all.iter().collect();
+        let refs: Vec<&PrRow> = all.iter().collect();
         let keys: Vec<&str> = ordered(&refs).iter().map(|p| p.key.as_str()).collect();
         assert_eq!(keys, ["a-contract", "b", "a-integration", "c", "z"]);
     }

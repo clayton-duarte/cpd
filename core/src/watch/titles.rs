@@ -5,7 +5,7 @@
 //! per Session, two machine-wide) and the report of a run that failed.
 
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File, OpenOptions, TryLockError};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -152,13 +152,13 @@ fn held(engine: &Engine) -> Result<HashSet<String>, CpdError> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => return Err(failed("open", &e)),
         };
-        match file.try_lock_shared() {
+        match crate::lock::shared(&file) {
             // Free: shared and dropped at once. (A run takes it exclusive, so a shared hold is only ours.)
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => {
+            Ok(true) => {}
+            Ok(false) => {
                 held.insert(session.to_owned());
             }
-            Err(TryLockError::Error(e)) => return Err(failed("probe", &e)),
+            Err(e) => return Err(failed("probe", &e)),
         }
     }
     Ok(held)

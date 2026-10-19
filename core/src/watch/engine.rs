@@ -12,10 +12,10 @@ use serde_json::{Value, json};
 use super::lock::WatchLock;
 use super::log::Log;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, completion, distill, escalations, inbox, liveness, pr, schedule, titles};
+use super::{SOURCE, completion, distill, escalations, inbox, liveness, pr, restart, schedule, titles};
 use crate::config::{Catalog, Config, load_catalog};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{self, Kind, NewEvent};
+use crate::events::{self, NewEvent};
 use crate::home::CpdHome;
 use crate::inbox::rules::EngineError;
 use crate::host::Tmux;
@@ -57,6 +57,8 @@ pub(super) struct Engine {
     pub distill_started: HashMap<ContextId, i64>,
     /// E10: the retitle runs this engine started and has not seen end.
     pub titles: titles::Runs,
+    /// When the engine last started the detached tmux restart (contract §6.1).
+    pub restart_started: Option<Instant>,
 }
 
 impl Engine {
@@ -85,10 +87,11 @@ impl Engine {
         self.report.active()
     }
 
-    /// One tick: E1–E5 and E7–E10 (§3.7; E6 is removed), each reporting its own failures.
+    /// One tick: the tmux restart's drain, then E1–E5 and E7–E10 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalog = None;
-        let steps: [fn(&mut Engine); 9] = [
+        let steps: [fn(&mut Engine); 10] = [
+            restart::drain,
             escalations::run,
             liveness::run,
             schedule::run,
@@ -197,8 +200,8 @@ fn persist(home: &CpdHome, give_up: fn() -> bool) -> Result<Persist, CpdError> {
     Ok(Persist::new(move |line| log.line(line), give_up))
 }
 
-fn watch_event(store: &mut Store, kind: Kind, text: String) -> Result<i64, CpdError> {
-    store.write(SOURCE, |tx| events::append(tx, NewEvent::new(kind, text, json!({"pid": std::process::id()}))))
+fn watch_event(store: &mut Store, event: NewEvent) -> Result<i64, CpdError> {
+    store.write(SOURCE, |tx| events::append(tx, event.clone()))
 }
 
 /// `cpd watch`: the engine in the foreground.
@@ -211,7 +214,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
     let mut store = Store::open_persistent(&home, u64::from(config.timeouts.store_busy_ms), persist(&home, stopping)?)?;
     catch_signals()?;
     let pid = std::process::id();
-    watch_event(&mut store, Kind::WatchStarted, format!("The engine started (pid {pid}). See: cpd doctor"))?;
+    watch_event(&mut store, NewEvent::watch_started(format!("The engine started (pid {pid}). See: cpd doctor"), pid))?;
     log.line(&format!("started (pid {pid}), a tick every {}s", config.watch.tick_seconds));
 
     let tmux = Tmux::new(config.tmux.socket.as_str());
@@ -228,6 +231,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
         paused_until: None,
         distill_started: HashMap::new(),
         titles: titles::Runs::default(),
+        restart_started: None,
     };
 
     let tick = engine.config.watch.tick_seconds.duration();
@@ -248,7 +252,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
     engine.log.line("stopping on a signal");
     // `watch-stopped` is not lost to a busy store: it waits for as long as that lasts.
     engine.store.persist(persist(&engine.home, || false)?);
-    if let Err(e) = watch_event(&mut engine.store, Kind::WatchStopped, format!("The engine stopped (pid {pid}). Start it: cpd watch --ensure")) {
+    if let Err(e) = watch_event(&mut engine.store, NewEvent::watch_stopped(format!("The engine stopped (pid {pid}). Start it: cpd watch --ensure"), pid)) {
         engine.log.line(&format!("cannot append watch-stopped: {} ({})", e.message(), e.code().as_str()));
     }
     Ok(Output::success(json!({"stopped": true})))

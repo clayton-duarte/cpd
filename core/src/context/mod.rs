@@ -2,7 +2,8 @@
 //!
 //! The database tables `contexts` and `context_records` are the only store of
 //! a Context's records; Contexts are machine-local (contract §4.6). The
-//! commands are in this file, the writes in `contexts`.
+//! clap types and `new` are in this file, each other command in a file of its
+//! name, the writes in `contexts`.
 //!
 //! Other areas use [`Contexts`]: `plan new` writes its `plan` record with
 //! [`Contexts::write`]. [`legacy`] reads the git stores of earlier versions,
@@ -13,12 +14,16 @@ mod contexts;
 pub mod digest;
 pub(crate) mod distill;
 pub mod inforce;
+mod list;
 pub(crate) mod legacy;
 mod manager;
+mod owner;
 mod pending;
 mod record;
 pub(crate) mod render;
 mod rename;
+mod show;
+mod write;
 
 use std::fmt;
 use std::str::FromStr;
@@ -26,17 +31,15 @@ use std::str::FromStr;
 use clap::Args;
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
-use time::OffsetDateTime;
-use time::macros::format_description;
 
 pub use contexts::{ContextRow, Contexts, Written};
 pub use record::{By, Draft, PlanRef, Record};
+pub(crate) use show::plan_repos;
 
 use crate::args::{PlanArg, Text, Title};
-use crate::config::Config;
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
-use crate::ids::{ContextId, RecordId, RecordKind, SessionId};
+use crate::ids::{ContextId, OwnerLogin, RecordId};
 use crate::output::Output;
 use crate::store::Store;
 
@@ -68,6 +71,8 @@ pub enum Command {
     Pending(pending::PendingArgs),
     /// Build the Context's digest with one-shot pi (§3.12)
     Distill(distill::DistillArgs),
+    /// Set the owner of a Context that has none (§3.13)
+    Owner(owner::OwnerArgs),
 }
 
 /// A Jira Epic key: `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage` (commands.md §3.1).
@@ -134,7 +139,7 @@ impl Select {
                 .optional()?)
         })?;
         let context = context.ok_or_else(|| {
-            CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str())
+            CpdError::plan_not_found(plan)
         })?;
         ContextId::parse(&context)
     }
@@ -150,6 +155,9 @@ pub struct NewArgs {
     /// The Jira Epic key, stored only
     #[arg(long, value_name = "key")]
     jira: Option<Jira>,
+    /// The GitHub owner of every repo the Context's Plans work on, its policy key
+    #[arg(long, value_name = "login")]
+    owner: OwnerLogin,
 }
 
 #[derive(Args, Debug)]
@@ -231,16 +239,16 @@ pub struct UnarchiveArgs {
 pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
         Command::New(args) => new(args),
-        Command::List(_) => list(),
-        Command::Show(args) => show(args),
+        Command::List(_) => list::list(),
+        Command::Show(args) => show::show(args),
         Command::Decide(args) => {
             let draft = Draft::Decision { supersedes: args.supersedes };
-            write("context decide", &args.select, &args.text, draft)
+            write::write("context decide", &args.select, &args.text, draft)
         }
-        Command::Note(args) => write("context note", &args.select, &args.text, Draft::Note),
-        Command::Ask(args) => write("context ask", &args.select, &args.question, Draft::Question),
+        Command::Note(args) => write::write("context note", &args.select, &args.text, Draft::Note),
+        Command::Ask(args) => write::write("context ask", &args.select, &args.question, Draft::Question),
         Command::Answer(args) => {
-            write("context answer", &args.select, &args.text, Draft::Answer { question: args.question })
+            write::write("context answer", &args.select, &args.text, Draft::Answer { question: args.question })
         }
         Command::Rename(args) => rename::rename(args),
         Command::Archive(args) => archive::archive(args),
@@ -248,197 +256,23 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Manager(args) => manager::manager(args),
         Command::Pending(args) => pending::pending(args),
         Command::Distill(args) => distill::distill(args),
+        Command::Owner(args) => owner::owner(args),
     }
 }
 
-/// Now, as contract §1.3 writes times: RFC 3339 UTC with milliseconds.
-fn now() -> String {
-    OffsetDateTime::now_utc()
-        .format(format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"))
-        .expect("a UTC time always formats")
-}
-
-fn open() -> Result<(CpdHome, Config, Store), CpdError> {
-    let home = CpdHome::from_env()?;
-    let config = Config::load(&home)?;
-    let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-    Ok((home, config, store))
-}
-
-/// `CPD_SESSION`, else `PI_SESSION_ID`, else none (commands.md §3.4).
-fn session_from_env() -> Result<Option<SessionId>, CpdError> {
-    ["CPD_SESSION", "PI_SESSION_ID"]
-        .iter()
-        .find_map(|name| std::env::var_os(name).filter(|v| !v.is_empty()))
-        .map(|v| SessionId::parse(&v.to_string_lossy()))
-        .transpose()
-}
 
 fn context_json(row: &ContextRow) -> Value {
-    json!({"id": row.id, "title": row.title, "jira": row.jira, "created_at": row.created_at,
+    json!({"id": row.id, "title": row.title, "jira": row.jira, "owner": row.owner, "created_at": row.created_at,
            "created_on": row.created_on})
 }
 
 /// `context new` (§3.1).
 fn new(args: NewArgs) -> Result<Output, CpdError> {
-    let (_, config, mut store) = open()?;
-    let (row, already) = Contexts::new(&config, &mut store).create(&args.id, &Text::from(args.title.clone()), args.jira.as_ref())?;
+    let Env { home, config, mut store, .. } = Env::open()?;
+    let title = Text::from(args.title.clone());
+    let (row, already) = Contexts::new(&config, &mut store).create(&home, &args.id, &title, args.jira.as_ref(), &args.owner)?;
     let mut out = json!({"context": context_json(&row)});
     if already {
-        out["already"] = json!(true);
-    }
-    Ok(Output::success(out))
-}
-
-/// `context list` (§3.2).
-fn list() -> Result<Output, CpdError> {
-    let (_, _, mut store) = open()?;
-    let (contexts, cursor) = store.read(|conn| {
-        let mut contexts = Vec::new();
-        let mut stmt = conn.prepare(&format!("SELECT {} FROM contexts ORDER BY id", ContextRow::COLUMNS))?;
-        let rows = stmt.query_map([], ContextRow::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
-        for row in rows {
-            let records: i64 =
-                conn.query_row("SELECT count(*) FROM context_records WHERE context = ?1", [&row.id], |r| r.get(0))?;
-            let open_questions: i64 = conn.query_row(
-                "SELECT count(*) FROM context_records q WHERE q.context = ?1 AND q.kind = 'question'
-                   AND NOT EXISTS (SELECT 1 FROM context_records a
-                                   WHERE a.context = q.context AND a.kind = 'answer' AND a.question = q.id)",
-                [&row.id],
-                |r| r.get(0),
-            )?;
-            let mut stmt =
-                conn.prepare("SELECT id, title, phase, lead_session, archived_at FROM plans WHERE context = ?1 ORDER BY created_at, id")?;
-            let plans = stmt
-                .query_map([&row.id], |r| {
-                    Ok(json!({"id": r.get::<_, String>(0)?, "title": r.get::<_, String>(1)?,
-                              "phase": r.get::<_, String>(2)?, "lead_session": r.get::<_, String>(3)?,
-                              "archived_at": r.get::<_, Option<String>>(4)?}))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            contexts.push(json!({
-                "id": row.id, "title": row.title, "jira": row.jira, "archived_at": row.archived_at,
-                "records": records, "open_questions": open_questions, "plans": plans,
-            }));
-        }
-        let cursor: i64 = conn.query_row("SELECT coalesce(max(id), 0) FROM events", [], |r| r.get(0))?;
-        Ok((contexts, cursor))
-    })?;
-    Ok(Output::success(json!({"contexts": contexts, "events_cursor": cursor})))
-}
-
-/// `context show` (§3.3).
-fn show(args: ShowArgs) -> Result<Output, CpdError> {
-    let (home, config, mut store) = open()?;
-    let id = args.select.resolve(&mut store)?;
-    if args.digest {
-        return show_digest(&home, &mut store, &id);
-    }
-    if let Some(record) = &args.record {
-        return show_record(&mut store, &id, record);
-    }
-    let since = args.since.map_or(0, |s| i64::try_from(s).unwrap_or(i64::MAX));
-    let (row, records, repos) = store.read(|conn| {
-        let row = ContextRow::require(conn, &id)?;
-        let mut stmt =
-            conn.prepare(&format!("SELECT {} FROM context_records WHERE context = ?1 ORDER BY seq", Record::COLUMNS))?;
-        let records = stmt.query_map([id.as_str()], Record::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
-        let repos = plan_repos(conn, &config.machine, &records)?;
-        Ok((row, records, repos))
-    })?;
-    let markdown = render::markdown(&row.title, row.jira.as_deref(), &records, since, &repos);
-    let records: Vec<Value> = records
-        .iter()
-        .filter(|(seq, _)| *seq > since)
-        .map(|(seq, record)| {
-            let mut v = record.to_json_listed();
-            v["seq"] = json!(seq);
-            if let Some(repos) = repos.get(&record.id.to_string()) {
-                v["repos"] = json!(repos);
-            }
-            v
-        })
-        .collect();
-    Ok(Output::success(json!({
-        "context": {"id": row.id, "title": row.title, "jira": row.jira},
-        "records": records,
-        "markdown": markdown,
-    })))
-}
-
-/// `context show --digest` (§3.3): the Context's latest digest file, and no record.
-fn show_digest(home: &CpdHome, store: &mut Store, context: &ContextId) -> Result<Output, CpdError> {
-    let row = store.read(|conn| ContextRow::require(conn, context))?;
-    let digest = digest::latest(home, context)?;
-    Ok(Output::success(json!({
-        "context": {"id": row.id, "title": row.title, "jira": row.jira},
-        "digest": digest.as_ref().map(|d| json!({"upto_seq": d.upto_seq, "file": d.file, "bytes": d.text.len()})),
-        "markdown": digest.map(|d| d.text),
-    })))
-}
-
-/// `context show --record <id>` (§3.3): that one record in full.
-fn show_record(store: &mut Store, context: &ContextId, id: &RecordId) -> Result<Output, CpdError> {
-    let (row, found) = store.read(|conn| {
-        let row = ContextRow::require(conn, context)?;
-        let found = conn
-            .query_row(
-                &format!("SELECT {} FROM context_records WHERE context = ?1 AND id = ?2", Record::COLUMNS),
-                [context.as_str(), id.to_string().as_str()],
-                Record::from_row,
-            )
-            .optional()?;
-        Ok((row, found))
-    })?;
-    let (seq, record) = found.ok_or_else(|| {
-        CpdError::new(ErrorCode::RecordNotFound, format!("Context {context} has no record {id}."))
-            .with("context", context.as_str())
-            .with("record", id.to_string())
-    })?;
-    let markdown = render::single(&row.title, row.jira.as_deref(), &record);
-    let mut v = record.to_json();
-    v["seq"] = json!(seq);
-    Ok(Output::success(json!({
-        "context": {"id": row.id, "title": row.title, "jira": row.jira},
-        "records": [v],
-        "markdown": markdown,
-    })))
-}
-
-/// The repos of the PRs that are not `cancelled` of each `plan` record's Plan
-/// (commands.md §3.3), by record id: each repo once, in PR key order, from
-/// this machine's database. A Plan of another machine has none.
-pub(crate) fn plan_repos(
-    conn: &rusqlite::Connection,
-    machine: &crate::ids::MachineName,
-    records: &[render::Indexed],
-) -> Result<render::Repos, CpdError> {
-    let mut stmt = conn.prepare("SELECT repo FROM prs WHERE plan = ?1 AND status <> 'cancelled' ORDER BY key")?;
-    let mut out = render::Repos::new();
-    for (_, record) in records {
-        let Some(plan) = record.plan().filter(|_| record.kind() == RecordKind::Plan) else { continue };
-        let mut repos: Vec<String> = Vec::new();
-        if plan.machine == *machine {
-            for repo in stmt.query_map([plan.id.as_str()], |r| r.get::<_, String>(0))? {
-                let repo = repo?;
-                if !repos.contains(&repo) {
-                    repos.push(repo);
-                }
-            }
-        }
-        out.insert(record.id.to_string(), repos);
-    }
-    Ok(out)
-}
-
-/// `context decide`, `note`, `ask` and `answer` (§3.4, §3.5).
-fn write(command: &str, select: &Select, text: &Text, draft: Draft) -> Result<Output, CpdError> {
-    let (_, config, mut store) = open()?;
-    let context = select.resolve(&mut store)?;
-    let by = By { session: session_from_env()?, plan: select.plan.plan.clone() };
-    let written = Contexts::new(&config, &mut store).write(&context, command, by, text, draft)?;
-    let mut out = json!({"record": written.record.to_json(), "seq": written.seq});
-    if written.already {
         out["already"] = json!(true);
     }
     Ok(Output::success(out))
