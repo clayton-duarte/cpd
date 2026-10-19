@@ -701,8 +701,7 @@ fn a_hung_pi_node_is_a_failed_check() {
     let env = healthy();
     link_sleep(&env);
     fs::remove_file(env.bin().join("node")).unwrap();
-    fs::write(env.bin().join("node"), format!("#!/bin/sh\n{HANG}\n")).unwrap();
-    fs::set_permissions(env.bin().join("node"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    write_executable(&env.bin().join("node"), &format!("#!/bin/sh\n{HANG}\n"));
     let run = doctor_with(&env, &[("CPD_TEST_DEADLINE_NODE", "1")]);
     assert_doctor_failed(&run);
     assert_timed_out(&run, "pi_node", "error", "node", "--version");
@@ -716,10 +715,11 @@ fn a_hung_catalog_probe_is_killed_at_10_seconds() {
     let env = healthy();
     link_sleep(&env);
     fs::remove_file(env.bin().join("node")).unwrap();
-    fs::write(env.bin().join("node"), format!("#!/bin/sh\n[ \"$1\" = --version ] && {{ echo v22.0.0; exit 0; }}\n{HANG}\n")).unwrap();
-    fs::set_permissions(env.bin().join("node"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    write_executable(&env.bin().join("node"), &format!("#!/bin/sh\n[ \"$1\" = --version ] && {{ echo v22.0.0; exit 0; }}\n{HANG}\n"));
     let started = std::time::Instant::now();
     let run = doctor(&env);
+    // time-claim: the probe is killed at doctor's 10 s deadline, not the cache fill's 30 s; no per-poll signal from
+    // the deadline.
     assert!(started.elapsed() < std::time::Duration::from_secs(20), "took {:?}", started.elapsed());
     assert_doctor_failed(&run);
     assert_passes(&run, "pi_node");

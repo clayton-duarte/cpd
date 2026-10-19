@@ -6,9 +6,8 @@ mod common;
 use std::fs::{self, File};
 use std::path::PathBuf;
 use std::process::{Child, Stdio};
-use std::time::{Duration, Instant};
 
-use common::{CPD, Run, TestEnv};
+use common::{CPD, Run, TestEnv, refused, wait_until};
 use cpd_core::config::Tier;
 use cpd_core::context::{By, Draft, PlanRef, Record};
 use cpd_core::home::CpdHome;
@@ -40,13 +39,14 @@ fn fx() -> Fx {
         env.cpd_home().join("config.toml"),
         format!(
             "version = 1\nmachine = \"hs\"\nlead_pi_packages = []\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
-             [watch]\ntick_seconds = 1\n[tmux]\nsocket = \"{}\"\n",
+             [watch]\ntick_seconds = 1\npr_poll_seconds = 1\n[tmux]\nsocket = \"{}\"\n",
             env.tmux_socket()
         ),
     )
     .unwrap();
     env.fake_pi(CITES_ALL);
-    // The engine's E5 runs `cpd pr poll` from `PATH`, through a `gh` that finds no pull requests.
+    // The engine's E5 runs `cpd pr poll` from `PATH` at every tick, through a `gh` that finds no pull requests: the
+    // poll searches count whole ticks (`wait_whole_ticks`).
     env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
     env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
     let fx = Fx { env };
@@ -113,21 +113,6 @@ impl Fx {
     fn errors(&self) -> Vec<Value> {
         let events = self.cpd(&["events", "list", "--kind", "error"]).ok()["events"].as_array().unwrap().clone();
         events.into_iter().filter(|e| e["data"]["source"] == "context distill").collect()
-    }
-}
-
-fn refused(run: &Run, code: &str, exit: i32) -> Value {
-    let error = run.error();
-    assert_eq!(error["code"], code, "{run:?}");
-    assert_eq!(run.exit, exit, "{run:?}");
-    error
-}
-
-fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !ready() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -436,8 +421,8 @@ fn the_engine_starts_a_run_only_after_the_quiet_period_and_never_two_at_once() {
     let digest = |c: &str| home.context_digest_dir(&ContextId::parse(c).unwrap());
     let has_digest = |c: &str| fs::read_dir(digest(c)).is_ok_and(|d| d.flatten().any(|e| e.file_name().to_string_lossy().ends_with(".md") && e.file_name() != "prompt.md" && e.file_name() != "records.md"));
     wait_until("the digest of `old`", || has_digest("old"));
-    // Several more ticks: no second run of `old`, no run of the others.
-    std::thread::sleep(Duration::from_secs(4));
+    // Several more whole ticks: no second run of `old`, no run of the others.
+    fx.env.wait_whole_ticks(3);
     let calls = fx.env.calls("pi");
     assert_eq!(calls.len(), 1, "one run in all: {calls:?}");
     assert!(!has_digest("fresh") && !has_digest("archived") && !has_digest("quiet"));
@@ -447,7 +432,7 @@ fn the_engine_starts_a_run_only_after_the_quiet_period_and_never_two_at_once() {
     // The lock is free now: `quiet` is rebuilt, exactly once.
     drop(held);
     wait_until("the digest of `quiet`", || has_digest("quiet"));
-    std::thread::sleep(Duration::from_secs(3));
+    fx.env.wait_whole_ticks(2);
     assert_eq!(fx.env.calls("pi").len(), 2);
     assert!(!has_digest("fresh") && !has_digest("archived"));
     stop_engine(engine);
@@ -461,7 +446,7 @@ fn the_engine_tries_a_failed_seq_once_until_a_newer_record_arrives() {
     fx.env.fake_pi("echo 'no model' >&2; exit 1");
     let engine = start_engine(&fx);
     wait_until("the failed run's Event", || fx.errors().len() == 1);
-    std::thread::sleep(Duration::from_secs(4));
+    fx.env.wait_whole_ticks(3);
     assert_eq!((fx.pi_calls(), fx.errors().len()), (1, 1), "not repeated at every tick");
 
     fx.insert(CONTEXT, "hs-d2", &ago(20), "Another.", Draft::Decision { supersedes: None });

@@ -454,13 +454,17 @@ fn a_tmux_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout() 
         wait_until("the fake tmux's child to die", || !running(pid));
         return;
     }
-    let s = server();
-    // Without the deadline the fake would sleep SLEEP_SECONDS and succeed: the error is the deadline's.
-    let err = s.tmux.server_running().unwrap_err();
+    // No TestEnv here: its teardown would run the hanging fake `tmux` first on this process's `PATH`. The fake
+    // ignores the socket and the tmpdir, and no real tmux runs.
+    let tmux = Tmux::with_tmpdir("cpd-test-deadline", std::env::temp_dir().join("cpd-test-deadline-unused"));
+    let started = std::time::Instant::now();
+    let err = tmux.server_running().unwrap_err();
 
+    // time-claim: the call returns at its 1 s deadline, not when the sleeper ends; no per-poll signal from the deadline.
+    assert!(started.elapsed() < Duration::from_secs(4), "took {:?}", started.elapsed());
     assert_eq!(err.code(), ErrorCode::ToolTimeout, "{err:?}");
     let d = err.details();
     assert_eq!(d["tool"], "tmux");
     assert_eq!(d["deadline_seconds"], 1);
-    assert_eq!(d["argv"], serde_json::json!(s.tmux.argv(&["list-sessions".into(), "-F".into(), "#{session_id}".into()])));
+    assert_eq!(d["argv"], serde_json::json!(tmux.argv(&["list-sessions".into(), "-F".into(), "#{session_id}".into()])));
 }
