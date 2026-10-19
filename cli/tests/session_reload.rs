@@ -233,17 +233,27 @@ fn prepare(state: &str, on_term: &str, store_busy_ms: u32) -> Fixture {
 
 #[test]
 fn an_install_re_execs_an_idle_wrapper_at_once_keeping_pi_and_a_new_pi_then_restarts_it_at_idle() {
-    let f = start("idle");
+    let mut f = prepare("idle", "exit 0", 5000);
+    let session_file = f.session_file.display().to_string();
+    // The session file is recorded already, so the first wrapper writes nothing (see below).
+    f.env.sql(&format!("UPDATE sessions SET file = '{session_file}' WHERE id = '{LEAD}'"));
+    f.launch();
+    wait_until("the first pi", || f.env.calls("pi").len() == 1 && f.pi_pids().len() == 1);
     let pid = f.pane_pid();
     let old_pi = f.pi_pids()[0];
-    let session_file = f.session_file.display().to_string();
     assert!(f.env.calls("pi")[0].windows(2).any(|w| w == ["--session", &session_file]), "the first start resumes");
     assert!(f.signals().is_empty());
 
+    // Cleared, the file is recorded again by the next wrapper to read the Session: the new one, in its loop, once it
+    // has read pi's install. Only then is a new pi a change to it.
+    f.env.sql(&format!("UPDATE sessions SET file = NULL WHERE id = '{LEAD}'"));
     f.install();
 
     wait_until("the new binary", || !f.runs().is_empty());
     assert_eq!(f.runs(), [format!("{pid} session run {LEAD} --adopt {old_pi}")], "the same process re-execed the new file");
+    wait_until("the new wrapper to record the session file", || {
+        f.env.query::<Option<String>>(&format!("SELECT file FROM sessions WHERE id = '{LEAD}'")).is_some()
+    });
     // Several polls: pi runs on, untouched, under the new wrapper.
     // time-claim: the re-exec'd wrapper leaves pi alone over five polls; no per-poll signal from `session run` (a
     // poll that changes nothing leaves nothing behind).
