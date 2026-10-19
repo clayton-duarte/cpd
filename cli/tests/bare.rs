@@ -35,7 +35,7 @@ fn env() -> TestEnv {
         ),
     )
     .unwrap();
-    env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
+    env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
     fake_cpd(&env, CPD);
     fake_tmux(&env, "");
     env
@@ -307,8 +307,8 @@ fn older_server(env: &TestEnv) -> PathBuf {
                  *\" kill-server \"*) rm -f '{flag}';;\n\
                esac\n\
              fi\n\
-             if [ -e '{flag}.no-new-window' ]; then\n\
-               case \" $* \" in *\" new-window \"*) echo 'no window for you' >&2; exit 1;; esac\n\
+             if [ -e '{flag}.no-park-other' ]; then\n\
+               case \" $* \" in *\" new-window \"*\" -n park-other \"*) echo 'no window for you' >&2; exit 1;; esac\n\
              fi",
             flag = flag.display()
         ),
@@ -364,8 +364,18 @@ fn fixture(env: &TestEnv, attempt: Option<&str>) -> Option<Flock<fs::File>> {
                                            status, appended, fingerprint, created_txn, created_at)
                            VALUES ('pay', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fp}', {id}, '{at}');
                          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, driver_pid, submitted_sha, submitted_at)
-                           VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', '{status}', 'cpd/pay--api-a1', '/w', '{at}', 4242, {sha}, {sha_at});",
+                           VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', '{status}', 'cpd/pay--api-a1', '/w', '{at}', 4242, {sha}, {sha_at});
+                         {running}",
                         fp = "a".repeat(64),
+                        running = if status == "starting" {
+                            String::new()
+                        } else {
+                            format!(
+                                "INSERT INTO events (txn, at, kind, context, plan, job, attempt, text, data)
+                                 VALUES (cpd_txn(), '{at}', 'attempt-status', 'ctx', 'pay', 'api', 'api-a1', 'running',
+                                         '{{\"from\":\"starting\",\"to\":\"running\"}}');"
+                            )
+                        },
                         id = tx.id(),
                         sha = if status == "merging" { "'abc'" } else { "NULL" },
                         sha_at = if status == "merging" { format!("'{at}'") } else { "NULL".to_owned() },
@@ -516,4 +526,110 @@ fn a_server_that_is_not_older_needs_no_restart_and_a_stale_pending_file_is_clear
     assert_eq!(kill_server_calls(&env), 0);
     assert!(t.stderr().contains("The tmux restart failed") && t.stderr().contains("it broke."), "{}", t.stderr());
     assert!(!pending_file(&env).exists());
+}
+
+fn run_dir_file(env: &TestEnv, name: &str) -> String {
+    fs::read_to_string(env.cpd_home().join("run").join(name)).unwrap_or_default()
+}
+
+fn count_events(env: &TestEnv, kind: &str) -> i64 {
+    store_of(env).read(|c| Ok(c.query_row("SELECT count(*) FROM events WHERE kind = ?1", [kind], |r| r.get(0))?)).unwrap()
+}
+
+/// Ends Attempt `api-a1`, as its driver does.
+fn end_attempt(env: &TestEnv) {
+    let at = now();
+    store_of(env)
+        .write("test", |tx| {
+            exec(tx, &format!("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = '{at}' WHERE id = 'api-a1';"))
+        })
+        .unwrap();
+}
+
+fn set_lead_state(env: &TestEnv, state: &str) {
+    let label = if state == "blocked" { "'a dialog'" } else { "NULL" };
+    store_of(env).write("test", |tx| exec(tx, &format!("UPDATE sessions SET state = '{state}', state_label = {label} WHERE id = 'lead1'"))).unwrap();
+}
+
+/// `cpd tui` on a server that is older than the installed tmux, with a running Attempt and a blocked
+/// Lead in the way: the restart is marked pending and the engine, which runs, holds and waits.
+fn pending_restart_in_the_way(env: &TestEnv) -> (PathBuf, Flock<fs::File>) {
+    fake_cpd_with_sleeping_sessions(env);
+    let flag = older_server(env);
+    let driver = fixture(env, Some("running")).unwrap();
+    cockpit_with_sessions(env);
+    set_lead_state(env, "blocked");
+    fs::write(&flag, "").unwrap();
+    env.cpd(&["tui"]).ok();
+    assert!(pending_file(env).exists(), "cpd tui marks the restart pending");
+    (flag, driver)
+}
+
+#[test]
+fn once_nothing_runs_the_engine_restarts_the_server_detached_and_every_session_is_back_in_its_place() {
+    let env = env();
+    let (_flag, driver) = pending_restart_in_the_way(&env);
+    let before = server_pid(&env);
+    let started = count_events(&env, "watch-started");
+
+    // The Attempt runs, then ends; the Lead stays blocked: the restart waits for both.
+    std::thread::sleep(Duration::from_millis(3500));
+    assert_eq!((kill_server_calls(&env), server_pid(&env)), (0, before.clone()));
+    end_attempt(&env);
+    drop(driver);
+    std::thread::sleep(Duration::from_millis(3500));
+    assert_eq!((kill_server_calls(&env), server_pid(&env)), (0, before.clone()), "a blocked Lead has a dialog open");
+    assert!(pending_file(&env).exists());
+
+    set_lead_state(&env, "idle");
+    wait_until("the restart to finish", || !pending_file(&env).exists());
+    assert_ne!(server_pid(&env), before, "the server was not restarted");
+    assert_eq!(kill_server_calls(&env), 1);
+    assert_eq!(session_windows(&env), places());
+    assert!(tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_session}"]).lines().any(|l| l == "lead1"));
+    assert_eq!(view_pids(&env).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["plan", "statusbar", "tree", "widgets"]);
+    for id in ["lead1", "lead2", "manager1"] {
+        let runs = env.calls("cpd").iter().filter(|c| c.as_slice() == ["session", "run", id]).count();
+        assert_eq!(runs, 2, "{id}");
+    }
+    let log = run_dir_file(&env, "tmux-restart.log");
+    assert!(log.contains("restarting the tmux server") && log.contains("reopened 3 Session(s); done"), "{log}");
+    // `cpd tui` started the engine again, in the new server.
+    wait_until("the new engine", || count_events(&env, "watch-started") == started + 1);
+    assert_eq!(tmux_out(&env, &["list-panes", "-t", "=cpd-work:watch", "-F", "#{pane_dead}"]).trim(), "0");
+    assert_eq!(env.cpd(&["events", "list", "--kind", "error"]).ok()["events"], serde_json::json!([]), "no error Event at all");
+}
+
+#[test]
+fn a_failed_restart_keeps_the_pending_file_with_its_reason_and_raises_one_error_event() {
+    let env = env();
+    let (flag, driver) = pending_restart_in_the_way(&env);
+    // Lead two's parked window cannot be made after the restart.
+    fs::write(format!("{}.no-park-other", flag.display()), "").unwrap();
+    end_attempt(&env);
+    drop(driver);
+    set_lead_state(&env, "idle");
+
+    wait_until("the failure to be reported", || count_events(&env, "error") >= 1);
+    // The engine that runs again raises it once.
+    std::thread::sleep(Duration::from_millis(3500));
+    assert_eq!(count_events(&env, "error"), 1);
+    let pending: serde_json::Value = serde_json::from_str(&fs::read_to_string(pending_file(&env)).unwrap()).unwrap();
+    let reason = pending["failed"]["reason"].as_str().unwrap_or_else(|| panic!("{pending}\n{}\n{:?}", run_dir_file(&env, "tmux-restart.log"), env.cpd(&["events", "list", "--kind", "error"])));
+    assert!(reason.contains("were not reopened") && reason.contains("lead2"), "{pending}");
+    assert_eq!((pending["failed"]["code"].as_str(), pending["failed"]["reported"].as_bool()), (Some("tmux_failed"), Some(true)));
+    let events = env.cpd(&["events", "list", "--kind", "error"]).ok();
+    let event = &events["events"][0];
+    assert_eq!((event["data"]["source"].as_str(), event["data"]["code"].as_str()), (Some("watch"), Some("tmux_failed")));
+    assert!(event["data"]["message"].as_str().unwrap().contains("lead2"), "{event}");
+    assert!(run_dir_file(&env, "tmux-restart.log").contains("failed:"));
+    // The cockpit and the other Sessions did come back; `cpd doctor` says what failed.
+    assert_eq!(session_windows(&env).iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>(), ["lead1", "manager1"]);
+    let doctor = env.cpd(&["doctor"]);
+    // The tools of the test's PATH are missing, so `doctor` itself fails: its checks are in the failure's details.
+    let json = doctor.json();
+    let checks = if json["ok"] == true { &json["checks"] } else { &json["error"]["details"]["checks"] };
+    let check = checks.as_array().unwrap().iter().find(|c| c["name"] == "tmux_restart").cloned().unwrap_or_else(|| panic!("{doctor:?}"));
+    assert_eq!(check["ok"], false);
+    assert!(check["message"].as_str().unwrap().contains("The tmux restart failed"), "{check}");
 }
