@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use super::{ContextRow, Record, Select, open, plan_repos, render};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::host::layout::context_window;
 use crate::host::Tmux;
 use crate::ids::{ContextId, SessionId};
@@ -105,8 +105,8 @@ pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
         store.write("context manager", |tx| {
             tx.execute("UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2", [new_pane.as_str(), manager.id.as_str()])?;
             let text = format!("Manager {} is parked in window {}.", manager.name, new_window.as_str());
-            let data = json!({"pane": new_pane.as_str(), "window": new_window.as_str(), "place": "parked"});
-            append(tx, NewEvent::new(Kind::SessionMoved, text, data).session(manager.id.clone()).context(context.clone()))?;
+            let event = NewEvent::session_moved(text, Some(new_pane.as_str()), Some(new_window.as_str()), "parked");
+            append(tx, event.session(manager.id.clone()).context(context.clone()))?;
             Ok(())
         })?;
         started = true;
@@ -167,8 +167,8 @@ fn register(
             rusqlite::params![id.as_str(), context.as_str(), name, cwd, tier],
         )?;
         let text = format!("Manager {name} of Context {context} registered. Next: cpd session open {id}");
-        let data = json!({"role": "manager", "name": name, "forked_from": Value::Null, "tier": tier});
-        append(tx, NewEvent::new(Kind::SessionRegistered, text, data).session(id.clone()).context(context.clone()))?;
+        let event = NewEvent::session_registered(text, "manager", &name, Value::Null, &tier);
+        append(tx, event.session(id.clone()).context(context.clone()))?;
         Ok(())
     })?;
     Ok(Live { id, name, cwd, state: "stopped".to_owned(), pane: None })
