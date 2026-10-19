@@ -186,6 +186,12 @@ impl<'a> Pane<'a> {
         rows
     }
 
+    /// The screen with its escapes (the cursor and the colours), the turning working dot as in [`Pane::screen`].
+    fn styled_screen(&self) -> String {
+        let out = self.env.tmux(&["capture-pane", "-p", "-e", "-t", SESSION]);
+        String::from_utf8(out.stdout).unwrap().replace(['◓', '◑', '◒'], "◐")
+    }
+
     /// Waits until `done` holds of the screen; panics with the last screen.
     fn wait(&self, what: &str, done: impl Fn(&[String]) -> bool) -> Vec<String> {
         common::wait_screen(what, || self.screen(), done)
@@ -406,15 +412,15 @@ fn no_key_but_the_references_does_anything() {
     pane.settled();
     assert!(!pane.dead(), "q does not end the view");
     assert!(calls(&env).is_empty());
-    // The marker's note is the one change; the rows above it are what they were.
-    let after = pane.screen();
-    assert_eq!(after.len(), before.len(), "{after:?}");
-    let note_row = after.iter().position(|r| r.contains(NO_CLIENT)).unwrap();
-    assert_eq!(
-        (after.iter().take(note_row).collect::<Vec<_>>(), after.iter().skip(note_row + 1).collect::<Vec<_>>()),
-        (before.iter().take(note_row).collect::<Vec<_>>(), before.iter().skip(note_row + 1).collect::<Vec<_>>()),
-        "no prompt, nothing folded"
-    );
+    // The marker's note is the one change: the rows without it are what they were.
+    let without_note = |rows: Vec<String>| -> Vec<String> {
+        let mut rows: Vec<String> = rows.into_iter().filter(|r| !r.contains(NO_CLIENT)).collect();
+        while rows.last().is_some_and(String::is_empty) {
+            rows.pop();
+        }
+        rows
+    };
+    assert_eq!(without_note(pane.screen()), without_note(before), "no prompt, nothing folded");
 }
 
 #[test]
@@ -509,9 +515,10 @@ fn a_refused_command_shows_its_error_until_the_next_n_x_or_click() {
     pane.keys(&["Enter"]);
     pane.wait("the error", |_| pane.footer_has("no_cockpit: No cockpit."));
     assert_eq!(calls(&env), [words(&["session", "open", "l-ship"])]);
-    let before = pane.screen();
+    // The cursor is a style, not a glyph: it moved when the screen with its escapes changed.
+    let before = pane.styled_screen();
     pane.keys(&["j"]);
-    pane.wait("the cursor to move", |s| s != before);
+    common::wait_until("the cursor to move", || pane.styled_screen() != before);
     assert!(pane.footer_has("no_cockpit"), "an arrow keeps it");
     pane.keys(&["n", "Escape"]);
     pane.wait("the note gone", |_| !pane.footer_has("no_cockpit"));

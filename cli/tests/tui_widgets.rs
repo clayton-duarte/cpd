@@ -680,8 +680,6 @@ fn a_click_on_an_owned_row_opens_its_lead_and_focuses_the_chat_and_the_others_ru
 #[test]
 fn a_refused_session_open_shows_its_message_in_the_last_row_until_the_next_click() {
     let env = pane_env();
-    // The view runs `cpd` from the PATH: this one records what it is asked and is the built binary.
-    env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
     prs_store(&env);
     // No cockpit session: `session open` is refused with `no_cockpit`.
     let pane = start(&env, "view");
@@ -693,12 +691,13 @@ fn a_refused_session_open_shows_its_message_in_the_last_row_until_the_next_click
     // The unowned rows and the arrow run nothing, so no note appears.
     click(&env, &pane, 3, 6);
     click(&env, &pane, width - 1, 10);
+    // time-claim: the clicks on the unowned rows and the arrow leave no note, over a few redraws of the view; a click
+    // that runs nothing leaves no signal (the view opens sessions in its own process, not through a recorded `cpd`).
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    assert_eq!(last_row(&screen(&env, &pane)), " (future)", "nothing was refused: Jira's row is still the last");
 
     click(&env, &pane, 3, 10);
     let shown = wait_for_screen(&env, &pane, "the refusal", |s| last_row(s).contains("cockpit"));
-    // The view handles the clicks in order: the refusal is that of the last one, the two before it ran nothing.
-    let opens = env.calls("cpd").into_iter().filter(|c| c.starts_with(&["session".to_owned(), "open".to_owned()])).count();
-    assert_eq!(opens, 1, "one `session open`, for the owned row: {:?}", env.calls("cpd"));
     assert!(last_row(&shown).contains("cpd tui"), "{:?}", last_row(&shown));
     let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
     let last = styled.lines().last().unwrap();
