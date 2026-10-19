@@ -17,6 +17,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use common::{CPD, TestEnv, copy_executable};
+use cpd_core::error::CpdError;
+use cpd_core::home::CpdHome;
+use cpd_core::store::{Store, WriteTxn};
+use nix::fcntl::{Flock, FlockArg};
+use time::OffsetDateTime;
+use time::macros::format_description;
 
 fn env() -> TestEnv {
     let env = TestEnv::new();
@@ -24,7 +30,7 @@ fn env() -> TestEnv {
         env.cpd_home().join("config.toml"),
         format!(
             "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
-             [tmux]\nsocket = \"{}\"\n",
+             [watch]\ntick_seconds = 1\n[tmux]\nsocket = \"{}\"\n",
             env.tmux_socket()
         ),
     )
@@ -277,4 +283,237 @@ fn when_the_server_runs_another_tmux_the_servers_own_binary_attaches() {
     assert!(line.contains("installed tmux is 1.0") && line.contains("attaching with the server's own tmux"), "{line}");
     assert!(!t.code.exists(), "attach replaced the process and is still attached");
     assert_eq!(line.lines().count(), 1);
+}
+
+
+// ---------- the tmux restart (contract §6.1, hs-d294) ----------
+
+/// The `cpd` of the panes: a Lead's `session run` just sleeps; everything else is the built binary.
+fn fake_cpd_with_sleeping_sessions(env: &TestEnv) {
+    env.fake("cpd", &format!("case \"$1 $2\" in \"session run\") exec sleep 600;; esac\nexec '{CPD}' \"$@\""));
+}
+
+/// What marks the cockpit's server as older than the installed tmux: while this file exists,
+/// the fake `tmux` says its server runs tmux 1.0; its `kill-server` removes the file, so the
+/// server that comes next is as new as the installed one.
+fn older_server(env: &TestEnv) -> PathBuf {
+    let flag = env.root().join("older-server");
+    fake_tmux(
+        env,
+        &format!(
+            "if [ -e '{flag}' ]; then\n\
+               case \" $* \" in\n\
+                 *\" display -p #{{version}} \"*) echo 1.0; exit 0;;\n\
+                 *\" kill-server \"*) rm -f '{flag}';;\n\
+               esac\n\
+             fi\n\
+             if [ -e '{flag}.no-new-window' ]; then\n\
+               case \" $* \" in *\" new-window \"*) echo 'no window for you' >&2; exit 1;; esac\n\
+             fi",
+            flag = flag.display()
+        ),
+    );
+    flag
+}
+
+fn home_of(env: &TestEnv) -> CpdHome {
+    CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap()
+}
+
+fn store_of(env: &TestEnv) -> Store {
+    Store::open(&home_of(env), 5000).unwrap()
+}
+
+fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
+    tx.execute_batch(sql)?;
+    Ok(())
+}
+
+fn now() -> String {
+    OffsetDateTime::now_utc().format(format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z")).unwrap()
+}
+
+/// Context `ctx` with its Manager `manager1`, and Plans `pay` (Lead `lead1`) and
+/// `other` (Lead `lead2`), all idle. Every Session's cwd is the env's root. With `attempt`, Job `api`
+/// of `pay` has a running Attempt in that status, whose driver lock is held by the returned guard.
+fn fixture(env: &TestEnv, attempt: Option<&str>) -> Option<Flock<fs::File>> {
+    let cwd = env.root().display().to_string();
+    let at = now();
+    store_of(env)
+        .write("fixture", |tx| {
+            exec(
+                tx,
+                &format!(
+                    "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{at}', 'm1');
+                     INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
+                       ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead one', '{cwd}', 'O3', 'idle', '{at}', '{at}'),
+                       ('lead2', 'lead', 'ctx', 'other', NULL, 'Lead two', '{cwd}', 'O3', 'idle', '{at}', '{at}'),
+                       ('manager1', 'manager', 'ctx', NULL, NULL, 'Manager', '{cwd}', 'O5', 'idle', '{at}', '{at}');
+                     INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
+                       ('pay', 'ctx', 'Pay', 'grounding', 'lead1', '{at}'),
+                       ('other', 'ctx', 'Other', 'grounding', 'lead2', '{at}');"
+                ),
+            )?;
+            if let Some(status) = attempt {
+                exec(
+                    tx,
+                    &format!(
+                        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                           VALUES ('pay', 'r', '/r', 'main', 'waiting', 'cpd/pay', {id}, '{at}');
+                         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                           status, appended, fingerprint, created_txn, created_at)
+                           VALUES ('pay', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fp}', {id}, '{at}');
+                         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, driver_pid, submitted_sha, submitted_at)
+                           VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', '{status}', 'cpd/pay--api-a1', '/w', '{at}', 4242, {sha}, {sha_at});",
+                        fp = "a".repeat(64),
+                        id = tx.id(),
+                        sha = if status == "merging" { "'abc'" } else { "NULL" },
+                        sha_at = if status == "merging" { format!("'{at}'") } else { "NULL".to_owned() },
+                    ),
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    attempt.map(|_| {
+        let path = home_of(env).attempt_lock(&"pay".parse().unwrap(), &"api-a1".parse().unwrap());
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let file = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
+        Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap()
+    })
+}
+
+/// Builds the cockpit and puts `lead1` in the chat slot, `lead2` in a parked window and the Manager
+/// in its Context window, each in a pane running `cpd session run <id>`.
+fn cockpit_with_sessions(env: &TestEnv) {
+    env.cpd(&["tui"]).ok();
+    for id in ["manager1", "lead2", "lead1"] {
+        env.cpd(&["session", "open", id]).ok();
+    }
+}
+
+/// `(session, window name)` of every pane that has a Session, sorted.
+fn session_windows(env: &TestEnv) -> Vec<(String, String)> {
+    let mut found: Vec<(String, String)> =
+        tmux_out(env, &["list-panes", "-a", "-F", "#{@cpd_session}\t#{window_name}"])
+            .lines()
+            .filter_map(|l| l.split_once('\t'))
+            .filter(|(session, _)| !session.is_empty())
+            .map(|(s, w)| (s.to_owned(), w.to_owned()))
+            .collect();
+    found.sort();
+    found
+}
+
+fn server_pid(env: &TestEnv) -> String {
+    tmux_out(env, &["display", "-p", "#{pid}"]).trim().to_owned()
+}
+
+fn kill_server_calls(env: &TestEnv) -> usize {
+    env.calls("tmux").iter().filter(|c| c.iter().any(|a| a == "kill-server")).count()
+}
+
+fn pending_file(env: &TestEnv) -> PathBuf {
+    env.cpd_home().join("run/tmux-restart.pending")
+}
+
+/// The windows the Sessions are in when `cockpit_with_sessions` has run.
+const PLACES: [(&str, &str); 3] = [("lead1", "main"), ("lead2", "park-other"), ("manager1", "ctx-ctx")];
+
+fn places() -> Vec<(String, String)> {
+    PLACES.iter().map(|(s, w)| ((*s).to_owned(), (*w).to_owned())).collect()
+}
+
+#[test]
+fn when_it_is_safe_an_older_server_is_restarted_every_session_comes_back_in_its_place_and_plain_tmux_attaches() {
+    let env = env();
+    fake_cpd_with_sleeping_sessions(&env);
+    let flag = older_server(&env);
+    let _driver = fixture(&env, None);
+    cockpit_with_sessions(&env);
+    assert_eq!(session_windows(&env), places());
+    let before = server_pid(&env);
+    let lead1_pane = tmux_out(&env, &["list-panes", "-a", "-F", "#{pane_id} #{@cpd_session}"]).lines().find(|l| l.ends_with(" lead1")).unwrap().to_owned();
+    fs::write(&flag, "").unwrap();
+
+    let t = run_in_terminal(&env, "restart", false, "");
+    assert_eq!(t.exit_code(), 0, "{}", t.stderr());
+    assert_eq!(kill_server_calls(&env), 1);
+    assert_ne!(server_pid(&env), before, "the server was not restarted");
+    assert_eq!(session_windows(&env), places());
+    let slot = tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_session}"]);
+    assert!(slot.lines().any(|l| l == "lead1"), "{slot}");
+    assert_ne!(tmux_out(&env, &["list-panes", "-a", "-F", "#{pane_id} #{@cpd_session}"]).lines().find(|l| l.ends_with(" lead1")), Some(lead1_pane.as_str()));
+    // The cockpit is whole: its views, and a Lead (not the placeholder) in the chat slot.
+    assert_eq!(view_pids(&env).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["plan", "statusbar", "tree", "widgets"]);
+    // Each pane runs `cpd session run <id>`: the fake cpd was called again for each Session.
+    for id in ["lead1", "lead2", "manager1"] {
+        let runs = env.calls("cpd").iter().filter(|c| c.as_slice() == ["session", "run", id]).count();
+        assert_eq!(runs, 2, "{id}: {:?}", env.calls("cpd"));
+    }
+    // The store follows the panes.
+    for (id, window) in PLACES {
+        let pane: String = store_of(&env).read(|c| Ok(c.query_row("SELECT tmux_pane FROM sessions WHERE id = ?1", [id], |r| r.get(0))?)).unwrap();
+        let in_window = tmux_out(&env, &["list-panes", "-a", "-F", "#{pane_id} #{window_name}"]);
+        assert!(in_window.lines().any(|l| l == format!("{pane} {window}")), "{id}: {pane} not in {window}: {in_window}");
+    }
+    assert!(!pending_file(&env).exists());
+    // The server is as new as the installed tmux: the installed tmux attaches.
+    assert_eq!(attach_calls(&env).len(), 1);
+    let line = t.stderr();
+    assert!(line.contains("restarted the tmux server") && line.contains("3 Session(s) reopened"), "{line}");
+    assert_eq!(line.lines().count(), 1, "{line}");
+    // The engine runs again in the new server.
+    assert_eq!(tmux_out(&env, &["list-panes", "-t", "=cpd-work:watch", "-F", "#{pane_dead}"]).trim(), "0");
+}
+
+#[test]
+fn when_it_is_not_safe_nothing_is_killed_the_restart_is_marked_pending_and_the_servers_binary_attaches() {
+    for (what, lead_state, attempt) in [
+        ("a starting Attempt", "idle", Some("starting")),
+        ("a running Attempt", "idle", Some("running")),
+        ("a merging Attempt", "idle", Some("merging")),
+        ("a working Lead", "working", None),
+        ("a blocked Lead", "blocked", None),
+    ] {
+        let env = env();
+        fake_cpd_with_sleeping_sessions(&env);
+        let flag = older_server(&env);
+        let _driver = fixture(&env, attempt);
+        cockpit_with_sessions(&env);
+        // The engine stops a Session that has no pane: the state is set once they have panes.
+        store_of(&env).write("test", |tx| exec(tx, &format!("UPDATE sessions SET state = '{lead_state}', state_label = iif('{lead_state}' = 'blocked', 'a dialog', NULL) WHERE id = 'lead1'"))).unwrap();
+        let (before, panes) = (server_pid(&env), tmux_out(&env, &["list-panes", "-a", "-F", "#{pane_id} #{@cpd_session}"]));
+        fs::write(&flag, "").unwrap();
+
+        let t = run_in_terminal(&env, "hold", false, "");
+        wait_until(&format!("the attach ({what})"), || {
+            let clients = env.tmux(&["list-clients", "-t", "=cpd", "-F", "#{client_pid}"]);
+            clients.status.success() && !clients.stdout.is_empty()
+        });
+        assert_eq!(kill_server_calls(&env), 0, "{what}");
+        assert_eq!(server_pid(&env), before, "{what}");
+        assert_eq!(tmux_out(&env, &["list-panes", "-a", "-F", "#{pane_id} #{@cpd_session}"]), panes, "{what}");
+        assert!(attach_calls(&env).is_empty(), "{what}: the installed tmux must not attach");
+        let line = t.stderr();
+        assert_eq!(line.lines().count(), 1, "{what}: {line}");
+        assert!(
+            line.contains("attaching with the server's own tmux") && line.contains("the restart happens once nothing is in the way"),
+            "{what}: {line}"
+        );
+        let pending: serde_json::Value = serde_json::from_str(&fs::read_to_string(pending_file(&env)).unwrap()).unwrap();
+        assert_eq!((pending["server"].as_str(), pending["failed"].is_null()), (Some("1.0"), true), "{what}");
+    }
+}
+
+#[test]
+fn a_server_that_is_not_older_needs_no_restart_and_a_stale_pending_file_is_cleared() {
+    let env = env();
+    env.cpd(&["tui"]).ok();
+    fs::write(pending_file(&env), r#"{"at":"t","server":"1.0","installed":"9.9","failed":{"at":"t","code":"tmux_failed","reason":"it broke.","reported":true}}"#).unwrap();
+    let t = run_in_terminal(&env, "stale", false, "");
+    assert_eq!(t.exit_code(), 0, "{}", t.stderr());
+    assert_eq!(kill_server_calls(&env), 0);
+    assert!(t.stderr().contains("The tmux restart failed") && t.stderr().contains("it broke."), "{}", t.stderr());
+    assert!(!pending_file(&env).exists());
 }
