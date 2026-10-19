@@ -1228,6 +1228,24 @@ fn the_holders_record_is_gone_after_a_commit_and_after_a_rollback() {
     assert!(records().is_empty(), "{:?}", records());
 }
 
+/// A transaction that holds the lock for a second or more says where the time went, in `run/store-slow.log`;
+/// a short one writes nothing.
+#[test]
+fn a_slow_write_is_logged_with_where_its_time_went() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    let log = env.cpd_home().join("run/store-slow.log");
+    store.write("quick", |_| Ok(())).unwrap();
+    assert!(!log.exists());
+    store.write("slow", |_| Ok(std::thread::sleep(Duration::from_millis(1100)))).unwrap();
+    let line: Value = serde_json::from_str(fs::read_to_string(&log).unwrap().trim()).unwrap();
+    assert_eq!((line["command"].as_str(), line["pid"].as_u64()), (Some("slow"), Some(u64::from(std::process::id()))));
+    let phases = &line["phases"];
+    assert!(phases["closure_ms"].as_u64().unwrap() >= 1100, "{line}");
+    assert!(phases["held_ms"].as_u64().unwrap() >= phases["closure_ms"].as_u64().unwrap(), "{line}");
+    assert!(phases["commit_ms"].is_u64() && phases["begin_ms"].is_u64() && phases["waited_ms"].is_u64(), "{line}");
+}
+
 /// A lock held by a connection that is not cpd's has no record: `store_busy` says the holder is unknown.
 #[test]
 fn a_store_busy_with_no_recorded_holder_says_so() {

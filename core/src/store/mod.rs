@@ -416,6 +416,7 @@ impl Store {
         let mut wait = Wait::new();
         // Declared before the transaction: dropped, so the record removed, after its commit or rollback.
         let mut holder = Holder::default();
+        let asked = Instant::now();
         let result = (|| {
             let tx = loop {
                 let begun = Transaction::new(&mut self.conn, TransactionBehavior::Immediate)
@@ -424,13 +425,25 @@ impl Store {
                     break tx;
                 }
             };
+            let begun = Instant::now();
             holder.record(&path, command);
             // Another process may have migrated since this process opened.
             refuse_too_new(user_version(&tx)?)?;
             let id = begin_txn(&tx, &self.txn, command, &caller)?;
             let write = WriteTxn { tx, id };
+            let ran = Instant::now();
             let value = f(&write)?;
+            let committing = Instant::now();
             write.tx.commit()?;
+            let held = begun.elapsed();
+            if held >= SLOW_HOLD {
+                let ms = |d: Duration| d.as_millis() as u64;
+                let phases = json!({
+                    "waited_ms": ms(begun - asked), "begin_ms": ms(ran - begun),
+                    "closure_ms": ms(committing - ran), "commit_ms": ms(committing.elapsed()), "held_ms": ms(held),
+                });
+                Holder::report_slow(&path, command, phases);
+            }
             Ok(value)
         })();
         result.map_err(|e| enrich(e, &path, busy_ms))
@@ -728,6 +741,27 @@ impl Holder {
                 })
             })
             .min_by_key(|h| h.since_ms)
+    }
+}
+
+/// A write transaction that held the lock this long is written to `run/store-slow.log`.
+const SLOW_HOLD: Duration = Duration::from_millis(1000);
+
+impl Holder {
+    /// One JSON line in `run/store-slow.log`: who held the write lock for [`SLOW_HOLD`] or more, and where
+    /// the time went (`begin_ms`: the `txns` row; `closure_ms`: the work; `commit_ms`: the commit, which syncs).
+    /// Evidence for §4.2's `store_busy`; best effort like the record.
+    fn report_slow(db: &Path, command: &str, phases: Value) {
+        use std::io::Write;
+        let dir = db.parent().unwrap_or(Path::new(".")).join("run");
+        let line = json!({
+            "at": now(), "pid": std::process::id(), "command": command,
+            "argv": std::env::args().collect::<Vec<_>>().join(" "), "phases": phases,
+        });
+        let _ = fs::create_dir_all(&dir).and_then(|()| {
+            let mut file = OpenOptions::new().create(true).append(true).open(dir.join("store-slow.log"))?;
+            writeln!(file, "{line}")
+        });
     }
 }
 

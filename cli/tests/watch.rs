@@ -863,6 +863,94 @@ fn e2_counts_only_attempts_whose_driver_started() {
     assert_eq!((failed.len(), failed[0].1.as_deref(), &failed[0].3["cause"]), (1, Some("api"), &json!("crashed")));
 }
 
+// ---------- a busy store (contract §3.7, §4.2) ----------
+
+/// A connection that is not cpd's holding the write lock until [`Held::release`] or its drop.
+struct Held(rusqlite::Connection);
+
+fn hold_write_lock(fx: &Fx) -> Held {
+    let conn = rusqlite::Connection::open(fx.home().db()).unwrap();
+    conn.busy_timeout(Duration::from_secs(10)).unwrap();
+    conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+    Held(conn)
+}
+
+impl Held {
+    fn release(self) {
+        self.0.execute_batch("ROLLBACK").unwrap();
+    }
+}
+
+fn watch_log(fx: &Fx) -> String {
+    fs::read_to_string(fx.env.cpd_home().join("run/watch.log")).unwrap_or_default()
+}
+
+/// `store_busy_ms` of 200 ms: far shorter than the locks these tests hold.
+const SHORT_BUSY: &str = "[timeouts]\nstore_busy_ms = 200\n";
+
+/// `cpd watch` started and not waited for.
+fn spawn_engine(fx: &Fx) -> Engine {
+    let child = fx.env.command(CPD).arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    Engine { child: Some(child) }
+}
+
+/// A store that stays busy for longer than `store_busy_ms` does not end the engine, at its start or in a
+/// step, and no Event is lost: it waits, logs, and goes on when the lock is released.
+#[test]
+fn a_store_busy_for_longer_than_store_busy_ms_never_ends_the_engine_or_loses_an_event() {
+    let fx = fx(SHORT_BUSY);
+    // E5's poll is slow, and says when it runs: the engine is then in its first tick, past E4.
+    let marker = fx.env.root().join("gh-ran");
+    fx.env.fake_gh(&format!("touch '{}'; sleep 1.5; echo '{EMPTY_SEARCH}'", marker.display()));
+    fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api';");
+
+    // The start: `watch-started` waits for the lock.
+    let held = hold_write_lock(&fx);
+    let mut engine = spawn_engine(&fx);
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(engine.child.as_mut().unwrap().try_wait().unwrap(), None, "the engine exited");
+    assert_eq!(fx.count("watch-started"), 0, "{}", watch_log(&fx));
+    held.release();
+    wait_until("watch-started", || fx.count("watch-started") == 1);
+    wait_until("E5's poll", || marker.exists());
+
+    // A step: the second tick's E4 meets the lock, taken while E5 of the first tick is still running.
+    fx.fixture("UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
+    let held = hold_write_lock(&fx);
+    wait_until("the engine to meet the lock", || watch_log(&fx).matches("store_busy: ").count() >= 1);
+    assert_eq!(fx.count("all-merged"), 0);
+    held.release();
+    wait_until("all-merged", || fx.count("all-merged") == 1);
+    assert_eq!(engine.child.as_mut().unwrap().try_wait().unwrap(), None, "the engine exited");
+    engine.stop();
+
+    let log = watch_log(&fx);
+    assert!(log.contains("store_busy: "), "{log}");
+    assert!(log.contains("the store is clear again after "), "{log}");
+    assert_eq!(fx.count("error"), 0, "{log}");
+    assert_eq!(fx.count("all-merged"), 1);
+}
+
+/// `watch-stopped` is appended when the engine stops while the store is busy, however long that lasts.
+#[test]
+fn watch_stopped_waits_for_a_busy_store() {
+    let fx = fx(SHORT_BUSY);
+    let mut engine = fx.start();
+    let pid = engine.pid();
+
+    let held = hold_write_lock(&fx);
+    engine.signal(Signal::SIGTERM);
+    std::thread::sleep(Duration::from_millis(2000));
+    assert_eq!(engine.child.as_mut().unwrap().try_wait().unwrap(), None, "the engine exited without watch-stopped");
+    assert_eq!(fx.count("watch-stopped"), 0);
+    held.release();
+    let out = engine.child.take().unwrap().wait_with_output().unwrap();
+
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(fx.events("watch-stopped"), [(None, None, None, json!({"pid": pid}))]);
+    assert!(!watch_log(&fx).contains("cannot append watch-stopped"), "{}", watch_log(&fx));
+}
+
 // ---------- E4 ----------
 
 #[test]
