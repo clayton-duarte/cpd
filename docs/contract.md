@@ -60,7 +60,7 @@ Exit codes (kept from cpd 1 §2):
 
 | Exit | Codes |
 |---|---|
-| `1` | `gate_error`, `watch_start_failed`, `spawn_failed`, `session_malformed`, `driver_lock_missing`, `doctor_failed`, `pi_not_found`, `catalog_failed`, `cleanup_failed` (only as an `error` Event's code, source `pr poll`, never a command's failure; §7.2), `distill_invalid` and `distill_failed` (`context distill`'s failure and, the same, its `error` Event's code; §4.6) |
+| `1` | `gate_error`, `watch_start_failed`, `spawn_failed`, `session_malformed`, `driver_lock_missing`, `doctor_failed`, `pi_not_found`, `catalog_failed`, `cleanup_failed` (only as an `error` Event's code, source `pr poll`, never a command's failure; §7.2), `distill_invalid` and `distill_failed` (`context distill`'s failure and, the same, its `error` Event's code; §4.6), `title_failed` (`session retitle`'s failure, writes nothing, and, the same, the code of the `error` Event engine E10 reports for it; §3.7 E10, commands.md §10.14) |
 | `2` | `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `spec_invalid`, `tier_invalid`, `nothing_to_edit`, `file_unreadable`, `invalid_name`, `pr_required`, `invalid_pr_id` (R34) |
 | `3` | `distill_running` (§4.6), `push_rejected` (hs-d139, §7.6), `session_ambiguous` (hs-a3, commands §1.3), `pr_exists`, `pr_in_use`, `pr_empty`, `pr_locked`, `pr_not_ready`, `pr_ended`, `needs_other_pr`, `branch_exists` (R34, §3.8), `context_exists`, `question_answered`, `not_a_git_repo`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `job_key_exists`, `needs_unknown`, `needs_unavailable`, `review_commits`, `review_missing`, `job_merged`, `job_not_failed`, `job_not_ready`, `attempt_not_running`, `no_port`, `jobs_not_done`, `gate_failed`, `rebase_conflict`, `not_a_lead`, `no_cockpit`, `wrong_pane`, `in_chat_slot`, `cursor_ahead`, `not_a_terminal` |
 | `4` | `base_not_found`, `pr_not_found` (R34) |
@@ -91,6 +91,7 @@ $CPD_HOME/
     attempt-<plan>--<attempt>.lock  the driver lock: taken by the Attempt's starter, inherited by its driver, removed when the Attempt ends (§3.4)
     pr-poll.lock                  held by `pr poll` for the whole poll (§7.6, hs-d96)
     distill-<context>.lock        held by the Context's one distill run, `context distill`, for its whole life (§4.6)
+    title-<session>.lock          held by the Session's one retitle run, `session retitle`, for its whole life (§3.7 E10)
     plannotator-ports.lock        held while a Plan's review port is assigned (§6.5)
     store.lock                    held by every open of `cpd.db` during its one-time setup only: the WAL switch and the migration check (§4.1, §4.5)
   run/
@@ -112,6 +113,7 @@ $CPD_HOME/
     context-digests/<context>/prompt.md          the distiller's prompt, written by each run (§4.6)
     context-digests/<context>/records.md         the records in force a run gives the distiller (§4.6)
     context-digests/<context>/distill.log        every distill run's stderr, appended; the engine's runs also their stdout (§3.7 E9)
+    titles/<session>.log          the output of every retitle run the engine starts for that Session, appended (§3.7 E10)
 ```
 
 Locks are `flock(2)` locks on these files: the kernel releases them when the holder dies, so there are no stale-lock takeovers (a change from cpd 1 §4, whose pid files needed them).
@@ -339,6 +341,8 @@ A pi session cpd knows about: every Manager, Lead and Worker is one.
 | `state` | text | `working`, `blocked`, `idle`, `stopped` (§3.6) |
 | `state_label` | text? | why it is blocked (for example `cpd: Worker question`); set only while `blocked` |
 | `state_at`, `created_at` | time | |
+| `title` | text? | the **dynamic title** (hs-d257): what the Session's conversation is about now, 1–60 characters, written by `session retitle` (an auxiliary agent, §3.7 E10) for a Lead or a Manager; null until the first one is written, and always null for a Worker. It is not `name`: `name` is what the User or cpd chose (`session rename`), `title` is what the conversation currently is about. The chat slot's pane header shows it when set (§6.1); the tree keeps showing ids (hs-d101) |
+| `titled_at` | time? | when `title` was last written; `session retitle` writes `title` and `titled_at` together, so both are null or both set (`ALTER TABLE` cannot add a check across columns, §4.5) |
 | `archived_at` | time? | null, or when the Session was archived (migration 3, §4.5); see "Archived" below |
 
 #### Archived
@@ -389,7 +393,7 @@ A hidden (snoozed or dismissed) item fills no dot and is not counted. Escalation
 | `plan-review` | the Plan's latest Plan review is `pending` (the review) | magenta | `<plan> plan review` |
 | `unread` | a Lead, side fork or Manager Session is `idle`, not in the chat slot, and its latest `session-state` Event from `working` or `blocked` to `idle` is newer than its latest `session-moved` with `place: chat` (the Session); a start or reload (`stopped` → `idle`) is not a finished turn (hs-d242) | white | `<who> replied` |
 | `job-stuck` | a Job is `failed` and its latest `job-failed` Event is at least `inbox.stuck_job_minutes` (§8.2) old; it clears on retry or cancel (the Job) | red | `<plan>/<job> failed` |
-| `engine-error` | an `error` the engine itself reported (a failure of E1–E9, §3.7) has not cleared (step, scope and code) | red | `engine <step>: <code>` |
+| `engine-error` | an `error` the engine itself reported (a failure of E1–E10, §3.7) has not cleared (step, scope and code) | red | `engine <step>: <code>` |
 | `engine-down` | `locks/watch.lock` is free. **Not stored**: the engine cannot report its own absence, so `cpd inbox list` adds it, first, with `id: null` | red | `engine is down` |
 | `question` | a Context record of kind `question` has no `answer` record (the record) | magenta | `<record id> open question` |
 | `pr-failing` | an open pull request the User authored (`authored` 1) has `checks` `failed`, **or** `mergeable` `conflicting` (hs-d188 (3)) (`pr:<owner>/<repo>#<n>`) | red | `<repo>#<n> checks failed`; `<repo>#<n> merge conflict` when only the conflict holds when it opens |
@@ -663,7 +667,7 @@ The adapter counts blocking reasons and reports `blocked` while the count is abo
 
 ### 3.7 The engine, `cpd watch`
 
-One per machine (D5). Every `tick_seconds`, E1–E9 in order:
+One per machine (D5). Every `tick_seconds`, E1–E10 in order:
 
 | Step | What it does |
 |---|---|
@@ -676,6 +680,7 @@ One per machine (D5). Every `tick_seconds`, E1–E9 in order:
 | E7 | **PR start** (R34, A9): for each Plan in `dispatch`, each PR in status `waiting` whose needs are all `merged` and whose `start_failed_at` is null: start it (§3.8, §7.2). E7 runs after E5 in the same tick, so a PR starts in the tick in which E5's poll sees its last prerequisite merged; it also starts a PR appended in `dispatch` with no needs. A failed start sets `start_failed_at` and appends one `error` Event with code `pr_start_failed` for the Plan's Lead; E7 does not try that PR again, the Lead retries with `cpd pr start <key>` |
 | E8 | **Inbox** (hs-d168): after E7, compute the conditions of the Inbox kinds (§2.2, the four pull request kinds included, from the `pull_requests` rows) from the store, the config (`inbox.stuck_job_minutes`), the clock and the engine's own active errors; compare them with the open `inbox_items`; and in **one transaction** insert the new items, set `closed_at` on the gone ones, and append `inbox-opened` and `inbox-closed` (§5.2). Nothing is written when nothing changed (idempotent). A failure of E8 is reported like any step's, and becomes an `engine-error` item once E8 works again. `engine-down` is not computed here: it is not stored |
 | E9 | **Context digests** (hs-d194, D4): for each Context that is not archived, has at least one record in force (§4.6), and whose highest record `seq` is above its latest digest's `upto_seq` (or which has no digest), when its newest record's `at` is at least **10 minutes** old and `locks/distill-<context>.lock` is free (no run of that Context is alive): start `cpd context distill --context <c>` detached (`setsid`, stdin `/dev/null`, stdout and stderr appended to `run/context-digests/<c>/distill.log`), as E3 starts a driver, with no lock handed over (the run takes its own; one that loses the race exits `distill_running`, harmlessly). **At most one start per Context and highest `seq`** in the engine's life: the engine remembers, in memory, the highest `seq` it started a run for, and starts no other run of that Context until a newer record arrives or the engine restarts. So a run that fails (`distill_invalid`, `distill_failed`: the run appended its own `error` Event) or crashes (its lock is free and no digest reached that `seq`; its log says why) is not repeated at every tick. E9 itself appends nothing; its failure to spawn is an `error` with code `spawn_failed` under the step rule below |
+| E10 | **Session titles** (hs-d257, hs-n95): after E9, in every tick, for each Session of role `lead` or `manager` that is not archived, whose `state` is `idle`, whose latest `session-state` Event with `to: "idle"` is newer than its `titled_at` (or that has no `title`), and whose `titled_at` is null or at least **10 minutes** old: start `cpd session retitle <id>` as a detached process (`setsid`, stdin `/dev/null`, stdout and stderr appended to `run/titles/<session>.log`), as E9 starts a distill run. **At most one in flight per Session**: the retitle process holds `locks/title-<session>.lock` for its whole life, and E10 starts none while it is held (a retitle that loses the race exits `title_failed`, harmlessly: the lock is its first step, before pi). **At most 2 in flight machine-wide**: E10 counts the held `title-*.lock` files and starts no more while two are held (the Sessions it left over wait for a later tick). The 10 minutes is measured from `titled_at`, which only a successful retitle sets, so a **failed retitle** (`title_failed`: it wrote nothing) is retried no sooner than 10 minutes after the last success, and at the next tick when there was none, at most once per tick, at most 2 at a time; the failure is reported **once per Session** as an `error` Event with code `title_failed` (the engine's `report`: once until the step clears for that Session, at most once per `watch.error_repeat_seconds`; `details: {session, tail, log}`, `tail` the last lines of pi's stderr; the Event sets no `context`, `plan` or `session`, so no Lead gets a turn for it). The retitle itself is `commands.md` §10.14; E10 itself appends nothing, and its failure to spawn is an `error` with code `spawn_failed` under the step rule below |
 
 `watch` holds `locks/watch.lock` (a second one exits with `watch_running`, exit 3), appends `watch-started` and `watch-stopped`, and never exits on its own: unlike cpd 1, it serves every Plan.
 
@@ -1061,6 +1066,8 @@ CREATE TABLE sessions (
   state_at    TEXT NOT NULL,
   created_at  TEXT NOT NULL,
   archived_at TEXT,
+  title       TEXT CHECK (title IS NULL OR length(title) BETWEEN 1 AND 60),   -- named migration session-titles
+  titled_at   TEXT,                                                           -- named migration session-titles
   FOREIGN KEY (plan, attempt) REFERENCES attempts(plan, id) DEFERRABLE INITIALLY DEFERRED,
   CHECK ((role = 'worker') = (attempt IS NOT NULL)),
   CHECK (role = 'manager' OR role = 'lead' OR plan IS NOT NULL),
@@ -1085,6 +1092,7 @@ CREATE TABLE events (
             'pr-added', 'pr-edited', 'pr-cancelled', 'pr-started', 'pr-opened', 'pr-merged',
             'escalation', 'escalation-answered', 'escalation-expired',
             'session-registered', 'session-state', 'session-moved', 'session-renamed',
+            'session-titled',   -- named migration session-titles
             'context-renamed', 'plan-renamed',
             'context-archived', 'plan-archived', 'session-archived',
             'session-message',
@@ -1400,6 +1408,18 @@ CREATE TRIGGER events_no_delete  BEFORE DELETE ON events  BEGIN SELECT RAISE(ABO
   ```
 
   Every existing row came from the `author:@me` search, so it gets `authored` 1 and `review_requested` 0, which the defaults give. `pull_requests_owned` is unchanged and `pull_requests` still gets no `_no_delete`. Set `user_version = 13`.
+- **Named migration `session-titles`** (dynamic session titles, hs-d257; Plan tui-visuals, PR `titles`): a **named** migration, made with `scripts/new-migration.sh` as `docs/implementing.md` describes (hs-d178, hs-d233: it is written only on a base that has named migrations, and takes no number of this list). It does two things in one transaction, and rebuilds no table:
+  1. adds two nullable columns to `sessions`, then drops and recreates `sessions`' history triggers so they list every column (the rule above):
+
+     ```sql
+     ALTER TABLE sessions ADD COLUMN title TEXT CHECK (title IS NULL OR length(title) BETWEEN 1 AND 60);
+     ALTER TABLE sessions ADD COLUMN titled_at TEXT;
+     ```
+
+     Every existing Session gets null for both (no title until its first retitle, §3.7 E10); the binary keeps the two null or set together, as migration 2 does for its columns;
+  2. adds the Event kind `session-titled` (§5.2) with an `INSERT INTO event_kinds` in the migration (hs-d211), not by rebuilding `events`.
+
+  The pi adapter's list of kinds (`pi/lib/event.ts`) learns `session-titled` in the same PR (§5.3): an unknown kind costs an error turn (hs-n122). The tests: a database before the migration, with Sessions of every role, migrates keeping every row and id, has `title` and `titled_at` null on each Session, accepts a `session-titled` Event, and its schema hash equals that of a fresh database with the migration applied.
 - No migration from cpd 1's beads Ledgers (R7): running Workflows finish on cpd 1.
 
 ### 4.6 The Context store
@@ -1481,6 +1501,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `session-state` | a Session's state or label changes | context, plan?, session | `{from, to, label}` |
 | `session-moved` | the Session's pane is created, moved into the chat slot, parked or gone (§6.4); gone is appended by E2 or by `session close`, with `pane` and `window` null (§3.6, §6.4) | context, plan?, session | `{pane, window, place}`, `place` is `chat`, `parked`, `work` or `none` |
 | `session-renamed` | `session rename` (cpd 1's `rename`, User decision 7 in the vision) | context, plan?, session | `{name}` |
+| `session-titled` | `session retitle` (commands.md §10.14), in the transaction that writes `sessions.title` and `titled_at` (hs-d257) | context, plan?, session | `{title}`; the new `title`, 1–60 characters. `text`: `Session <id> titled "<title>".` A silent kind: it has no command to suggest, and the adapter delivers it as no message and no turn (§5.3); it is for the views. Adding it raises `protocol` (below) |
 | `context-renamed` | `context rename` | context | `{title}` |
 | `plan-renamed` | `plan rename` | context, plan | `{title}` |
 | `context-archived` | `context archive` or `unarchive`, for the Context | context | `{archived: bool}` |
@@ -1492,7 +1513,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `inbox-snoozed` | `inbox snooze` | context?, plan?, job?, session? | `{item, until}` |
 | `inbox-dismissed` | `inbox dismiss` | context?, plan?, job?, session? | `{item}` |
 | `watch-started`, `watch-stopped` | the engine starts or stops | (none) | `{pid}` |
-| `error` | `watch` or a driver hit an unexpected failure; codes include `lead_worktree_stale`, `merge_check_failed`, `push_failed` (a failed push of a Lead Branch at a PR's start or at a merge, §7.2, §7.4; `details.pr` names the PR) `cleanup_failed` (`pr poll` kept a merged PR's Lead worktree, or a removal failed, §7.2; `details: {plan, pr, path, reason}`, `reason` `dirty`, `unpushed` or git's stderr tail) `pr_start_failed` (engine E7 could not start a PR, §3.8; `details: {pr, step, tail?, log?}`) and `adapter_missing` (the `session run` wrapper restarted a pi whose adapter reported `stopped` for more than 60 s, §6.7 "Adapter watchdog"; `details: {session, state_since, seconds}`) and `gh_rate_limited` (engine E5 skips polls while GitHub's rate limit is nearly used, §3.7; `details: {remaining, reset_at}`; no Plan, it concerns the User's account) and `distill_invalid`, `distill_failed` (source `context distill`: a Context digest failed validation, or its pi run failed, §4.6; `details.context` names the Context, and the Event sets no `context`, so no Lead gets a turn) | context?, plan?, … | `{source, code, message, details}` |
+| `error` | `watch` or a driver hit an unexpected failure; codes include `lead_worktree_stale`, `merge_check_failed`, `push_failed` (a failed push of a Lead Branch at a PR's start or at a merge, §7.2, §7.4; `details.pr` names the PR) `cleanup_failed` (`pr poll` kept a merged PR's Lead worktree, or a removal failed, §7.2; `details: {plan, pr, path, reason}`, `reason` `dirty`, `unpushed` or git's stderr tail) `pr_start_failed` (engine E7 could not start a PR, §3.8; `details: {pr, step, tail?, log?}`) and `adapter_missing` (the `session run` wrapper restarted a pi whose adapter reported `stopped` for more than 60 s, §6.7 "Adapter watchdog"; `details: {session, state_since, seconds}`) and `gh_rate_limited` (engine E5 skips polls while GitHub's rate limit is nearly used, §3.7; `details: {remaining, reset_at}`; no Plan, it concerns the User's account) and `distill_invalid`, `distill_failed` (source `context distill`: a Context digest failed validation, or its pi run failed, §4.6; `details.context` names the Context, and the Event sets no `context`, so no Lead gets a turn) and `title_failed` (engine E10 reports a retitle of a Session that failed, §3.7; `details: {session, tail, log}`; the Event sets no `context`, `plan` or `session`, so no Lead gets a turn) | context?, plan?, … | `{source, code, message, details}` |
 
 **The protocol number** (hs-a4). `cpd --version` reports `protocol`, an integer that starts at **1** and is raised by one whenever an Event kind, a field of an Event's `data` that the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on. So **adding a kind, or a `data` field the adapter reads, raises `protocol`**; so does removing or renaming one. An addition the adapter ignores (a kind its table in §5.3 ignores, a `data` field it does not read) does not. The adapter holds the number it was built for and checks it at start-up and at every restart of its follower (commands.md §15.2); a mismatch is reported once per installed binary, with the code `protocol_mismatch` (§1.2).
 
@@ -1523,6 +1544,7 @@ It delivers a message with `pi.sendMessage({customType: "cpd", content: text, di
 | `attempt-nudge` (own session) | | message, **turn** (replaces cpd 1's `herdr agent prompt`) |
 | `session-message` (own session) | message (`Message from <sender>: <text>`), for every Lead and a Manager; **turn only when `data.wake`** (hs-d209, D3): then an idle Session starts a turn at once, a working or blocked one gets it after its running turn; without `wake` the message waits in the Session's context for its next turn and starts none | |
 | `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | ignored: no message, no turn (they are for the TUI) | ignored |
+| `session-titled` | ignored: no message, no turn (hs-d257: it is for the views; the adapter only learns the kind, in `pi/lib/event.ts`, because an unknown kind costs an error turn, hs-n122). It is delivered to no Session as a message, whichever Session it names | ignored |
 | `inbox-opened`, `inbox-closed`, `inbox-snoozed`, `inbox-dismissed` | ignored: delivered to no Session, they are for the views that follow Events (the adapter only learns the kinds) | ignored |
 | every other kind | ignored | ignored |
 
@@ -1572,7 +1594,7 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 
 | Pane | Title |
 |---|---|
-| has `@cpd_session` (a Lead) | `#[reverse] #{@cpd_title} #[noreverse]` when `@cpd_title` is set (the Plan's title for a Plan's Lead, the Session's name for a side fork), else none |
+| has `@cpd_session` (a Lead) | `#[reverse] #{@cpd_title} #[noreverse]` when `@cpd_title` is set (below), else none |
 | `@cpd_view = chat` (the placeholder), `@cpd_view = history` (an archived Session's history) or `@cpd_view = statusbar` | none: pi and the placeholder say what they are |
 | `@cpd_view = tree` | ` Context ` |
 | `@cpd_view = plan` | ` Plan ` |
@@ -1581,6 +1603,8 @@ The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-don
 | any other | `#{pane_current_command}` |
 
 Every title is drawn reversed: `#[reverse]` before it and `#[noreverse]` after it, inside the branch that has a title, so untitled panes get neither. It shows as a block in the border line's colour (blue on the focused pane, from `pane-active-border-style`; the default border colour elsewhere) with the text in the background colour, so the line reads as continuous, with a wider block where the title sits. Reason: User, Plan tui-visuals (hs-d105). Pane borders are the cockpit's top-level separators: white, the focused pane's blue (`pane-active-border-style`); separators inside a slot are grey (`commands.md` §13.2, design rule; hs-d124). The widgets title is ` Deploy ` (User, hs-d76, Plan tui-visuals).
+
+**What `@cpd_title` holds** (hs-d257). The Session's dynamic `title` (§2.2, §3.7 E10) when it has one, else today's text: the Plan's title for a Plan's Lead, the Session's name for a side fork, and for a Manager its name. The precedence is one rule, kept wherever cpd sets the option: `session retitle` sets it to the new title; `plan rename` and `session rename` set it **only while the Session has no dynamic title** (a Session with one keeps its title, and the rename still writes the Plan's title or the name); a Lead's start and resume (`core/src/plan/lead.rs`, `core/src/session/`) apply the same rule. So the header never goes back to the Plan's title once a title exists, and a Session with no title yet shows what it showed before.
 
 **The click binding.** `bind -T root MouseDown1Pane if -F '#{==:#{@cpd_view},statusbar}' 'send-keys -M' 'select-pane -t = ; send-keys -M'`: a click on the StatusBar is passed to it and never selects it, so the chat keeps the keyboard focus; every other pane is selected, then gets the click.
 
@@ -1599,7 +1623,7 @@ Every title is drawn reversed: `#[reverse]` before it and `#[noreverse]` after i
 | `cpd-work` | `<plan>--<attempt>` (one per Attempt) | one pane, the Worker | `pi` |
 
 - `<label>` is the Session's Plan id, or the first 8 characters of its id when it has no Plan. tmux targets are always pane ids (`%<n>`) or window ids (`@<n>`), never names; names are labels for people.
-- **Pane options** identify panes, never state: `@cpd_session` (Session id) on every pane that runs a Session, `@cpd_title` on a Lead's pane (below), and `@cpd_view` (`tree`, `plan`, `widgets`, `statusbar`, `worker`, `chat`, `history`) on the TUI's panes. A Worker view pane (`@cpd_view worker`) also carries `@cpd_job` (the Job's key, shown in its border title) and `@cpd_attempt` (the Attempt id it shows). The Worker pane opens beside the chat slot with `split-window -h -d -l 50%` (no focus); a click on another Job retargets it with `respawn-pane -k` and new `@cpd_job` and `@cpd_attempt`; a click on the Job it shows closes it. Its size in reset-layout stays the reference's (`-x 30%`, commands.md §13.2). The chat slot is the pane of `cpd:main` that has `@cpd_session`, **or** `@cpd_view` `chat` or `history`. The value `chat` marks the **placeholder**: the pane running `cpd tui view chat`, text `No Lead here: pick a Plan in the session tree`, which holds the slot while no Lead is there. The value `history` marks a **history pane**: the pane running `cpd tui view history <id>`, an archived Session's file read-only, with `@cpd_history` set to that Session's id; it holds the slot like the placeholder and is never a Lead. At most one placeholder or history pane exists, and only ever in the slot. **`@cpd_title` is a deliberate exception** to "identify panes, never state": it is a label for people, the title shown in a Lead's pane header (the Plan's **title** for a Plan's Lead, the Session's **name** for a side fork). cpd keeps it current: it is set wherever cpd marks a Lead's pane with `@cpd_session` (`plan new`, `session fork` and the moves; not Worker panes), and `plan rename` and `session rename` set it again on the Session's pane when it has one. The border format (§6.1) shows it when set. Pane options move with the pane on `swap-pane`, which is why the chat slot is found by that rule and not by a fixed option.
+- **Pane options** identify panes, never state: `@cpd_session` (Session id) on every pane that runs a Session, `@cpd_title` on a Lead's pane (below), and `@cpd_view` (`tree`, `plan`, `widgets`, `statusbar`, `worker`, `chat`, `history`) on the TUI's panes. A Worker view pane (`@cpd_view worker`) also carries `@cpd_job` (the Job's key, shown in its border title) and `@cpd_attempt` (the Attempt id it shows). The Worker pane opens beside the chat slot with `split-window -h -d -l 50%` (no focus); a click on another Job retargets it with `respawn-pane -k` and new `@cpd_job` and `@cpd_attempt`; a click on the Job it shows closes it. Its size in reset-layout stays the reference's (`-x 30%`, commands.md §13.2). The chat slot is the pane of `cpd:main` that has `@cpd_session`, **or** `@cpd_view` `chat` or `history`. The value `chat` marks the **placeholder**: the pane running `cpd tui view chat`, text `No Lead here: pick a Plan in the session tree`, which holds the slot while no Lead is there. The value `history` marks a **history pane**: the pane running `cpd tui view history <id>`, an archived Session's file read-only, with `@cpd_history` set to that Session's id; it holds the slot like the placeholder and is never a Lead. At most one placeholder or history pane exists, and only ever in the slot. **`@cpd_title` is a deliberate exception** to "identify panes, never state": it is a label for people, the title shown in a Lead's pane header: the Session's dynamic **title** when it has one, else the Plan's **title** for a Plan's Lead and the Session's **name** for a side fork (§6.1, "What `@cpd_title` holds"). cpd keeps it current: it is set wherever cpd marks a Lead's pane with `@cpd_session` (`plan new`, `session fork` and the moves; not Worker panes), `session retitle` sets it on the Session's live pane when it has one, and `plan rename` and `session rename` set it again on the Session's pane when it has one and the Session has no dynamic title. The border format (§6.1) shows it when set. Pane options move with the pane on `swap-pane`, which is why the chat slot is found by that rule and not by a fixed option.
 - The User attaches with `tmux -L cpd attach -t cpd` (locally or `ssh -t <host> …`). Several clients may attach at once. The User never needs to look at `cpd-work`.
 
 ### 6.3 tmux commands cpd uses
@@ -1631,6 +1655,7 @@ Every title is drawn reversed: `#[reverse]` before it and `#[noreverse]` after i
 | `cpd watch` | `cpd-work`, window `watch` | `plan lock`, `cpd tui` and `cpd watch --ensure`: each starts it when `locks/watch.lock` is free |
 | Attempt drivers | detached processes (`setsid`), not in tmux; logs in `run/<plan>/logs/` | E3 |
 | Distill runs (`context distill`) | detached processes (`setsid`) when the engine starts them, not in tmux; log `run/context-digests/<context>/distill.log`; on demand, in the caller's process | E9, or anyone on demand (§4.6) |
+| Retitle runs (`session retitle`) | detached processes (`setsid`), not in tmux; log `run/titles/<session>.log`; lock `locks/title-<session>.lock` | E10 (§3.7) |
 
 `session open <id>` brings a Lead into the chat slot; `session park <id>` moves the Lead in the chat slot back into a parked window: it creates a new `park-<label>` window holding a placeholder, then `swap-pane`s the Lead and the placeholder. When a Lead takes the slot, `session open` kills the placeholder or history pane it displaced, with its window. `session history <id>` parks a Lead in the slot first, then respawns the placeholder with the history view (commands.md §10.12). A Lead that quits pi with status 0 is archived by its own `session run` (commands.md §10.8). Each appends `session-moved` for every Session whose place changed.
 
@@ -1646,6 +1671,7 @@ Every title is drawn reversed: `#[reverse]` before it and `#[noreverse]` after i
 | A side fork with a Plan (`session fork --plan`) | `--fork <source file>` added to the Lead (fresh) row (§6.7) | a Lead's: it gets the Plan's port |
 | Worker (review Job, B2) | `--fork <lead session file>` added to the Worker's argv below, with the same exclusions (`--approve --no-skills --exclude-tools …`), model, `--session-id`, `-n` and first message; started only after the §6.7 idle wait | same as a Worker |
 | Worker | `--approve --no-skills --exclude-tools ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox [-e …] --model <model:level> --session-id <id> -n "<plan> <job> a<n>" -- "Read <spec path> and follow it exactly. Your attempt id is <attempt>."` | `CPD_HOME`, `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT`, `PI_SKIP_VERSION_CHECK=1` |
+| Title writer (§3.7 E10, hs-n95) | `--print --no-session --no-extensions --model <tiers[H]>:<the level of the lowest effort `cpd tiers` lists for H> -- "<prompt>"`, with the conversation text on **stdin**; the prompt asks for a title of 3–7 words for the conversation's current subject: plain text, one line, no quotes. cpd never calls a model API itself, only pi (hs-n95). No `-e`: it needs no adapter | `PI_SKIP_VERSION_CHECK=1` only: no `CPD_*` (it is no Session) |
 | Distiller (§4.6, D5) | `--print --no-session --no-extensions --no-skills --no-context-files --no-tools --model <tiers[L]>:<level of context_distill_tier> -- @prompt.md @records.md`; cwd `run/context-digests/<context>/`; stdout to `<upto_seq>.md.tmp`. No `-e`: it needs no adapter and no package. No tools and no context files, so its only input is the two files and it writes nothing itself (flags read in pi 1.3.0 `--help`; their effect on a model run is unverified) | `PI_SKIP_VERSION_CHECK=1` only: no `CPD_*` (it is no Session) |
 
 A Lead's or a Manager's first message is passed as the absolute path of its file (`run/<plan>/lead-message.md`, `run/<plan>/messages/<session>.md` or, for a Manager, `run/<context>/manager-message.md`, §1.4) prefixed with `@`, never as text, because Linux limits one argument to 131072 bytes (MAX_ARG_STRLEN; hs-n111) and pi reads `@` files after `--` into the first user message (pi 1.3.0 `--help`: `pi [options] [--] [@files...] [messages...]`).
@@ -1976,7 +2002,7 @@ Kept from cpd 1 §7, with one change in how pi's catalog is read.
   - the result is cached in `tier_catalog` per pi version and refreshed when `current-version` changes; an unknown model is `tier_model_unknown`.
 - **Ladder** `next(t)`: the same model at effort + 1 if valid; otherwise the next model in `H → S → O` at the lowest valid effort ≥ the current one; otherwise none. Examples: `H1→H2`, `H3→S3`, `S4→S5`, `S5→O5`, `O4→O5`, `O5→none`.
 - **Attempt Tier:** Attempt 1 uses the Job's Tier; each automatic Attempt n uses `next` applied n − 1 times from the Job's Tier. Automatic Attempts are capped at `1 + retry_cap` and stop early when `next` is none. An Attempt whose driver never started (`driver_pid` null, §3.4) is not counted in the cap and does not advance the Tier: the next Attempt uses the same Tier. `job retry --tier <T>` sets an explicit Tier for the next Attempt (`origin = retry`), and the ladder continues from it, with a fresh cap.
-- **Defaults:** Lead `O3` (`lead_tier`); Manager `O5` (`manager_tier`); the distiller `S2` (`context_distill_tier`, §4.6); the contract Jobs ran at `O3` (R13). There is no review Tier (R19).
+- **Defaults:** Lead `O3` (`lead_tier`); Manager `O5` (`manager_tier`); the distiller `S2` (`context_distill_tier`, §4.6); the title writer `H` at the lowest effort its model accepts (`tiers.H.efforts[0]` of `cpd tiers`, §3.7 E10; no config key); the contract Jobs ran at `O3` (R13). There is no review Tier (R19).
 - `cpd tiers` prints `{ok, pi_version, tiers: {O: {model, efforts: [..]}, S: …, H: …}}`.
 
 ## 10. Traceability
@@ -2010,6 +2036,7 @@ Kept from cpd 1 §7, with one change in how pi's catalog is read.
 | The Manager role (Plan manager B3: hs-d83..hs-d86, hs-d92, hs-d129, hs-d133, hs-d154; B3-A1..A5) | §2.2 Context, Context record (`brief`), Session (`manager`), Archived; §3.1 (The Context's Manager), §3.6; §4.4, §4.5 (migration 0010); §5.2, §5.3 (digest); §6.2, §6.4, §6.5; §8.2 (`manager_tier`) |
 | Plumbing (hs-d139, hs-d140, hs-a3): the merge step skips its rebase when the Lead tip is already in the Attempt; `pr push`; `events follow` ends on store errors and re-execs after an install; `job add` re-arms `all-merged`; short Session ids | §1.2 (`push_rejected`, `session_ambiguous`), §2.2 PR, §3.7 E4, §5.2 `all-merged`, §5.4, §7.4 step 5, §7.6 `pr push`; `commands.md` §1.3, §5.1, §9.9, §10 (every command that takes a Session), §11.2; `docs/implementing.md` |
 | The distilled Context (hs-d182, hs-d192, hs-d194, hs-n111; D1–D7 of PR `distill`, Plan cross-repo; the pilot of Epic B, hs-n95) | D1 the digest files: §1.4, §2.2 Context record, §4.6; D2 records in force: §4.6; D3 validation: §1.2 (`distill_invalid`), §4.6, §5.2 `error`; D4 the engine rebuild: §1.2 (`distill_running`), §3.7 E9, §6.4; D5 the distiller: §4.6, §6.5, §8.2 (`context_distill_tier`, `timeouts.distill_minutes`), §9; D6 consumers: §3.1, §4.6, §6.5; D7: §4.6 "Nothing is lost"; `commands.md` §3.3, §3.12, §4.1, §3.10; `docs/implementing.md` |
+| Dynamic session titles (hs-d257, hs-n95; Plan tui-visuals, PR `titles`): an auxiliary agent writes each Lead's and Manager's title after its turns end, at most every 10 minutes; the chat slot's pane header shows it, the tree keeps ids (hs-d101) | §1.2 (`title_failed`), §1.4 (`run/titles/`, `locks/title-<session>.lock`), §2.2 Session (`title`, `titled_at`), §3.7 E10, §4.4, §4.5 (named migration `session-titles`), §5.2 `session-titled`, §5.3, §6.1 and §6.2 (`@cpd_title` precedence), §6.4, §6.5, §9; `commands.md` §2, §10.7, §10.14, §12, §13.2, §15.3, §17 |
 | D1 every command prints one JSON value; exit codes | §1.2 |
 | D2 `plan new --context X` forks the Context's grounded Lead (**superseded** by hs-d92: `plan new` starts a fresh Lead, the grounded Lead is retired) | §2.2 Context, §3.1 (The grounded Lead is retired), §4.5 migration 0010 |
 | D3 `workflow` becomes `plan` | §1.3 (`--plan`, `CPD_PLAN`), §2.2 Plan, CONTEXT.md |
