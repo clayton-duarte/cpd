@@ -333,7 +333,9 @@ fn config_is_read_only_and_idempotent() {
     let second = env.cpd(&["config"]);
     assert_eq!(first.stdout, second.stdout);
     first.ok();
-    let names: Vec<_> = fs::read_dir(env.cpd_home()).unwrap().map(|e| e.unwrap().file_name()).collect();
+    // `policy/` is the test env's own owner file (`TestEnv::new`), not something `cpd config` wrote.
+    let names: Vec<_> =
+        fs::read_dir(env.cpd_home()).unwrap().map(|e| e.unwrap().file_name()).filter(|n| n != "policy").collect();
     assert_eq!(names, ["config.toml"]);
     assert_eq!(fs::read_to_string(env.cpd_home().join("config.toml")).unwrap(), MINIMAL);
 }
