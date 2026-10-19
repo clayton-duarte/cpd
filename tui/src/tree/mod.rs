@@ -137,7 +137,9 @@ fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View,
         match effect {
             Effect::None => {}
             Effect::Ask(question) => {
-                // `display-popup` returns when the popup closes; a cancel runs nothing
+                // `display-popup` returns when the popup closes; a cancel runs nothing. The tree is drawn first, so it
+                // shows the item picked, not the menu, behind the popup.
+                terminal.draw(|f| view.draw(f, frame))?;
                 match runner.ask(question) {
                     Ok(None) => {}
                     Ok(Some(action)) => {
