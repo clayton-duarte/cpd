@@ -35,6 +35,17 @@ const SOURCE: &str = "context distill";
 /// The distiller's prompt (contract §4.6 step 3): versioned with the code that validates its answer.
 const PROMPT: &str = include_str!("distill_prompt.md");
 
+/// The repair turn's prompt (contract §4.6 step 5, hs-d244 D-c), shape B: the model writes only `## Additions`.
+const REPAIR_PROMPT: &str = include_str!("distill_repair_prompt.md");
+
+/// The most missing records a repair turn is tried for (contract §4.6 step 5): the measured range of
+/// shape B is 1–16 (`docs/research/context-distill.md`); with more, the answer outgrows the digest's limit.
+pub const REPAIR_MAX: usize = 16;
+
+/// The `kind` of a `runs.jsonl` line: the run that wrote the digest, and the repair turn after an invalid one.
+const KIND_DISTILL: &str = "distill";
+const KIND_REPAIR: &str = "repair";
+
 /// How many lines of pi's stderr a `distill_failed` Event carries.
 const TAIL_LINES: usize = 60;
 
@@ -152,7 +163,9 @@ impl Run<'_> {
             }
             None => {
                 self.write_inputs(&dir, &in_force)?;
-                Some(self.run_pi(upto)?)
+                let (ran, text) = self.run_pi(upto, KIND_DISTILL, &["prompt.md", "records.md"])?;
+                fs::write(&tmp, text).map_err(|e| io_failed("write", &tmp, &e))?;
+                Some(ran)
             }
         };
         let mut bytes = fs::read(&tmp).map_err(|e| io_failed("read", &tmp, &e))?;
@@ -162,14 +175,33 @@ impl Run<'_> {
             fs::write(&tmp, &bytes).map_err(|e| io_failed("write", &tmp, &e))?;
         }
         let expect = digest::Expect::of(&in_force);
+        let mut repair = None;
         if let Err(invalid) = digest::validate(&bytes, &expect, digest::LIMIT) {
-            let kept = digest::keep_invalid(self.home, self.context, upto)?;
             if let Some(ran) = &ran {
                 self.log_run(ran, upto, "invalid");
             }
-            return Err(self.invalid(upto, &invalid, &kept));
-        }
-        if let Some(ran) = &ran {
+            // One repair turn, only for a digest that lacks citations and nothing else.
+            let repairable = ran.is_some()
+                && !invalid.not_utf8
+                && !invalid.too_big
+                && invalid.stray.is_empty()
+                && (1..=REPAIR_MAX).contains(&invalid.missing.len());
+            if !repairable {
+                let kept = digest::keep_invalid(self.home, self.context, upto)?;
+                return Err(self.invalid(upto, &invalid, &kept));
+            }
+            let (fixed, text) = self.repair(&dir, upto, &bytes, &invalid.missing, &in_force)?;
+            bytes.extend_from_slice(b"\n");
+            bytes.extend_from_slice(text.as_bytes());
+            fs::write(&tmp, &bytes).map_err(|e| io_failed("write", &tmp, &e))?;
+            if let Err(invalid) = digest::validate(&bytes, &expect, digest::LIMIT) {
+                self.log_run(&fixed, upto, "invalid");
+                let kept = digest::keep_invalid(self.home, self.context, upto)?;
+                return Err(self.invalid(upto, &invalid, &kept));
+            }
+            self.log_run(&fixed, upto, "valid");
+            repair = Some(fixed);
+        } else if let Some(ran) = &ran {
             self.log_run(ran, upto, "valid");
         }
         let file = digest::install(self.home, self.context, upto, &expect)?;
@@ -183,6 +215,9 @@ impl Run<'_> {
         });
         if let Some(ran) = &ran {
             out["run"] = ran.figures();
+        }
+        if let Some(repair) = &repair {
+            out["repair"] = repair.figures();
         }
         Ok(out)
     }
@@ -204,10 +239,35 @@ impl Run<'_> {
         fs::write(&records, records_md(in_force)).map_err(|e| io_failed("write", &records, &e))
     }
 
-    /// Step 4: the distiller in JSON mode, its stderr to the log, its stdout read by cpd: the final assistant
-    /// text goes to `<upto_seq>.md.tmp` and the usage it reports is returned. A failure appends the `error`
-    /// Event; every run that started pi appends its line to `runs.jsonl`, a failed one here.
-    fn run_pi(&mut self, upto: u64) -> Result<Ran, CpdError> {
+    /// Step 5's repair turn (shape B): `digest.md` (the invalid topic sections), `missing.md` (the blocks of the
+    /// missing records, as in `records.md`) and `problem.md` (their ids), then pi with the repair prompt. Returns
+    /// the run and its answer, `## Additions`, which the caller appends to the topic sections.
+    fn repair(&mut self, dir: &Path, upto: u64, topic: &[u8], missing: &[RecordId], in_force: &[&Indexed]) -> Result<(Ran, String), CpdError> {
+        let blocks: Vec<&Indexed> = in_force.iter().filter(|(_, r)| missing.contains(&r.id)).copied().collect();
+        let problem = format!(
+            "The digest in `digest.md` does not cite these {} decisions and open questions in force, which are in `missing.md`:\n{}\n",
+            missing.len(),
+            missing.iter().map(|id| format!("- {id}")).collect::<Vec<_>>().join("\n")
+        );
+        for (name, content) in [
+            ("repair-prompt.md", REPAIR_PROMPT.as_bytes().to_vec()),
+            ("digest.md", topic.to_vec()),
+            ("missing.md", records_md(&blocks).into_bytes()),
+            ("problem.md", problem.into_bytes()),
+        ] {
+            let path = dir.join(name);
+            fs::write(&path, content).map_err(|e| io_failed("write", &path, &e))?;
+        }
+        let (ran, text) = self.run_pi(upto, KIND_REPAIR, &["repair-prompt.md", "digest.md", "missing.md", "problem.md"])?;
+        // As for a digest, an index the model wrote anyway is not an addition.
+        Ok((ran, digest::topic_sections(&text).trim_end().to_owned() + "\n"))
+    }
+
+    /// Step 4: the distiller in JSON mode over the files `files` of the directory, its stderr to the log, its
+    /// stdout read by cpd: the run and its final assistant text (ending in a newline) are returned. A failure
+    /// removes the `.md.tmp` and appends the `error` Event; every run that started pi appends its line to
+    /// `runs.jsonl`, a failed one here.
+    fn run_pi(&mut self, upto: u64, kind: &'static str, files: &[&str]) -> Result<(Ran, String), CpdError> {
         let tier = self.config.context_distill_tier;
         let models = &self.config.tiers;
         let model = match tier.letter() {
@@ -216,10 +276,9 @@ impl Run<'_> {
             Letter::H => &models.h,
         };
         let model = format!("{model}:{}", tier.level());
-        let launch = pi::distiller(&model);
+        let launch = pi::distiller(&model, files);
         let dir = self.home.context_digest_dir(self.context);
         let log = log_path(self.home, self.context);
-        let tmp = self.home.context_digest_tmp(self.context, upto);
         let limit = Duration::from_secs(u64::from(self.config.timeouts.distill_minutes) * 60);
         let mut log_file = OpenOptions::new().create(true).append(true).open(&log).map_err(|e| io_failed("open", &log, &e))?;
         // The tail of pi's stderr is what this run appended after this point.
@@ -238,7 +297,7 @@ impl Run<'_> {
         let started_at = OffsetDateTime::now_utc().format(&Rfc3339).expect("a UTC time is RFC 3339");
         let started = Instant::now();
         let waited = wait_limited(&mut command, limit);
-        let mut ran = Ran { started_at, seconds: (started.elapsed().as_secs_f64() * 1000.0).round() / 1000.0, model, usage: None };
+        let mut ran = Ran { started_at, seconds: (started.elapsed().as_secs_f64() * 1000.0).round() / 1000.0, model, kind, usage: None };
         let failure = match waited {
             Err(e) => Failed::Spawn(e.to_string()),
             Ok(Waited::TimedOut) => Failed::Timeout(limit),
@@ -250,8 +309,7 @@ impl Run<'_> {
                         match output.answer {
                             Ok(text) => {
                                 let text = if text.ends_with('\n') { text } else { format!("{text}\n") };
-                                fs::write(&tmp, text).map_err(|e| io_failed("write", &tmp, &e))?;
-                                return Ok(ran);
+                                return Ok((ran, text));
                             }
                             Err(why) => Failed::Output(why),
                         }
@@ -278,6 +336,7 @@ impl Run<'_> {
         line["context"] = json!(self.context.as_str());
         line["upto_seq"] = json!(upto);
         line["result"] = json!(result);
+        line["kind"] = json!(ran.kind);
         let path = runs_path(self.home, self.context);
         let written = OpenOptions::new().create(true).append(true).open(&path).and_then(|mut file| writeln!(file, "{line}"));
         if let Err(e) = written {
@@ -407,6 +466,8 @@ struct Ran {
     seconds: f64,
     /// The `<model>:<level>` given to pi.
     model: String,
+    /// [`KIND_DISTILL`] or [`KIND_REPAIR`]: the `kind` of the run's `runs.jsonl` line.
+    kind: &'static str,
     /// `None` when pi reported none (a spawn failure, a kill, a stream without an assistant message).
     usage: Option<pi_json::Usage>,
 }
