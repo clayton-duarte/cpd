@@ -373,8 +373,7 @@ exec "$real" "$@"
         release = release.display(),
     );
     let wrapper = env.bin().join("git");
-    fs::write(&wrapper, script).unwrap();
-    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&wrapper, &script);
 }
 
 #[test]

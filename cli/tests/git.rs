@@ -283,6 +283,7 @@ fn git_calls_wait_for_a_ref_lock_held_for_one_second() {
     let started = Instant::now();
     let fetched = std::thread::scope(|s| {
         s.spawn(|| {
+            // time-claim: git waits out a ref lock held for a second; no per-poll signal from git.
             std::thread::sleep(Duration::from_secs(1));
             fs::remove_file(&lock).unwrap();
         });
@@ -314,6 +315,7 @@ fn a_fetch_outlasts_a_worktree_add_in_progress() {
 
     let fetched = std::thread::scope(|s| {
         s.spawn(|| {
+            // time-claim: the fetch outlasts an entry half-created for a second; no per-poll signal from git.
             std::thread::sleep(Duration::from_secs(1));
             fs::remove_dir_all(&adding).unwrap();
         });
@@ -326,6 +328,7 @@ fn a_fetch_outlasts_a_worktree_add_in_progress() {
     let started = Instant::now();
     let err = cpd_core::git::run::fetch(&repo, &["origin", "no-such-branch"]).unwrap_err();
     assert_eq!((err.code(), &err.details()["argv"][3]), (ErrorCode::GitFailed, &serde_json::json!("fetch")));
+    // time-claim: a failure that is not the race returns at once (20 retries would take over 1.9 s); no per-poll signal from git.
     assert!(started.elapsed() < Duration::from_secs(1));
 }
 
@@ -1094,6 +1097,7 @@ fn rule_s_waits_out_an_index_lock_held_for_one_second() {
     let started = Instant::now();
     let synced = std::thread::scope(|s| {
         s.spawn(|| {
+            // time-claim: rule S waits out an index lock held for a second; no per-poll signal from git.
             std::thread::sleep(Duration::from_secs(1));
             fs::remove_file(&lock).unwrap();
         });

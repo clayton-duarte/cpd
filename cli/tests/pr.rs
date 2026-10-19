@@ -1112,6 +1112,7 @@ fn rebase_waits_for_a_live_driver_to_record_its_merge() {
 
     let child = fx.spawn_pr("rebase");
     // Guard U waits: the Lead Branch is not rewritten while the merge is unrecorded.
+    // time-claim: the rebase is still waiting 1.5 s on, the Lead Branch unrewritten; no per-poll signal from the waiting rebase.
     std::thread::sleep(Duration::from_millis(1500));
     assert_eq!(fx.lead_sha(), tip);
     assert_eq!(attempt_x(&fx).0.0, "merging");
