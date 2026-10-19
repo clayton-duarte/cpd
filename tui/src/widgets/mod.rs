@@ -4,8 +4,8 @@
 //! request rows every [`TICK`] and re-reads when one concerns it (a pull request row changes with no Event), at most
 //! once per [`COALESCE`]; the load average is re-read every [`LOAD_EVERY`], since it is no Event. It draws when the
 //! pull requests, the load, the note, the size, a click or the wheel changed, not on every tick. It makes no write of
-//! its own, but for what a click on an owned PR row asks of `cpd session open`. It has no key; mouse capture is on, for
-//! the clicks and the wheel over the PRs section.
+//! its own, but for what a click on an owned PR row asks of `cpd session open`, and the merge popup a click on a merge
+//! icon opens. It has no key; mouse capture is on, for the clicks and the wheel over the PRs section.
 //!
 //! - [`column`]: the drawing of the machine, the PRs, git and Jira;
 //! - [`legend`]: the key legend, `cpd tui view legend`, which the tree's `?` and
@@ -36,7 +36,7 @@ use cpd_core::session::PROGRAM;
 use cpd_core::output::Output;
 use cpd_core::store::Store;
 
-pub use column::{Drawn, Hit, Machine, draw};
+pub use column::{Drawn, Hit, Machine, MergeIcon, draw};
 pub(crate) use column::section_header;
 
 /// How often the view looks at the Events and at keys.
@@ -80,7 +80,8 @@ struct Opener<'a> {
 
 /// Draws and follows, for as long as the process runs: no key ends it. A failed read keeps what is on screen and shows its error in the last row, until a read
 /// succeeds ([`kept`]). The wheel over the PRs section scrolls it by one pull request per notch. A left click on an owned
-/// PR row (not on its `󰏌`) opens its Lead in the chat slot; a refusal is the `note` in the column's last row until the
+/// PR row (not on its `󰏌` or its merge icon) opens its Lead in the chat slot; a left click on a merge icon opens the merge
+/// popup; a refusal or a failure is the `note` in the column's last row until the
 /// next click.
 fn show(
     terminal: &mut ratatui::DefaultTerminal,
@@ -111,10 +112,13 @@ fn show(
                 Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
                     note.clear();
                     let at = Position::new(m.column, m.row);
-                    if let Some(hit) = drawn.hits.iter().find(|h| h.contains(at)) {
-                        if let Err(e) = open_lead(opener.run_command, opener.tmux, opener.cockpit, &hit.lead) {
-                            note = e.message().to_owned();
-                        }
+                    let result = if let Some(icon) = drawn.icons.iter().find(|i| i.area.contains(at)) {
+                        Some(crate::merge::open(opener.tmux, &icon.pull))
+                    } else {
+                        drawn.hits.iter().find(|h| h.contains(at)).map(|hit| open_lead(opener.run_command, opener.tmux, opener.cockpit, &hit.lead))
+                    };
+                    if let Some(Err(e)) = result {
+                        note = e.message().to_owned();
                     }
                 }
                 Event::Mouse(m) if drawn.prs.contains(Position::new(m.column, m.row)) => match m.kind {

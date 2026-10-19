@@ -156,7 +156,7 @@ impl Fx {
                 "version = 1\nmachine = \"m1\"\n\
                  [tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
                  [timeouts]\nfork_quiet_seconds = 1\n\
-                 [watch]\ntick_seconds = 1\npr_poll_seconds = 1\n\
+                 [watch]\ntick_seconds = 0.2\npr_poll_seconds = 1\n\
                  [tmux]\nsocket = \"{}\"\n",
                 env.tmux_socket()
             ),
@@ -361,7 +361,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     ]);
     assert_eq!(
         out["job"],
-        json!({"key": "audit", "pr": "a2", "status": "draft", "appended": false, "tier": "S2", "needs": ["wire"], "review": true})
+        json!({"key": "audit", "pr": "a2", "status": "draft", "appended": false, "tier": "S2", "needs": ["wire"], "review": true, "urgent": false})
     );
 
     // ---------- 4. review and lock: only a1 starts (A8)
