@@ -263,7 +263,7 @@ impl Driver {
         let review = job.review;
         let fork = if review {
             log("A3: waiting for the Lead to be idle, to fork it");
-            match worker::wait_for_lead(&mut self.store, &self.config, dirs, target)? {
+            match worker::wait_for_lead(&mut self.store, &self.config, dirs, target, &log)? {
                 Some(fork) => Some(fork),
                 None => return self.end(target, End::Cancelled, dirs),
             }

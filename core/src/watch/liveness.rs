@@ -35,7 +35,6 @@ struct Active {
     plan: PlanId,
     id: AttemptId,
     status: String,
-    started_at: String,
     stop_request: Option<String>,
     cancel_requested: bool,
     repo: PathBuf,
@@ -55,7 +54,7 @@ pub(super) fn run(engine: &mut Engine) {
 fn attempts(engine: &mut Engine) {
     let active = engine.store.read(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT a.plan, a.id, a.status, a.started_at, a.stop_request, j.cancel_requested_at IS NOT NULL, r.repo
+            "SELECT a.plan, a.id, a.status, a.stop_request, j.cancel_requested_at IS NOT NULL, r.repo
                FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job JOIN prs r ON r.plan = j.plan AND r.key = j.pr
               WHERE a.status <> 'ended' ORDER BY a.plan, a.id",
         )?;
@@ -65,20 +64,18 @@ fn attempts(engine: &mut Engine) {
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
                     r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                    r.get::<_, Option<String>>(4)?,
-                    r.get::<_, bool>(5)?,
-                    r.get::<_, String>(6)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, bool>(4)?,
+                    r.get::<_, String>(5)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
-            .map(|(plan, id, status, started_at, stop_request, cancel_requested, repo)| {
+            .map(|(plan, id, status, stop_request, cancel_requested, repo)| {
                 Ok(Active {
                     plan: PlanId::parse(&plan)?,
                     id: AttemptId::parse(&id)?,
                     status,
-                    started_at,
                     stop_request,
                     cancel_requested,
                     repo: PathBuf::from(repo),
