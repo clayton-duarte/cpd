@@ -1,6 +1,6 @@
-import { execFile } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, realpathSync, statSync } from "node:fs";
-import { createRequire } from "node:module";
+import { spawn } from "node:child_process";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Wanted } from "./state.ts";
@@ -60,71 +60,64 @@ export function refusal(g: Guard): Refusal | undefined {
   return undefined;
 }
 
-/** commands.md §15.6 "Pre-validation": the entry files a package must have, and the bound on the throwaway load. */
+/** commands.md §15.6 "Pre-validation": the entry files a package must have, and the bound on pi's own load of it. */
 export const ENTRY_FILES = ["extension.ts", "package.json"];
-export const LOAD_TIMEOUT_MS = 10_000;
-
-/**
- * The throwaway load, run by `node --input-type=module -e` so no file outside the adapter is needed: it loads the entry through the
- * loader (`createJiti`, as pi does: `moduleCache: false`) and never calls the default export. Exit 0 when that export is a function.
- */
-const PROBE = `
-const [loader, entry] = process.argv.slice(1);
-try {
-  const { createJiti } = await import(loader);
-  const factory = await createJiti(entry, { moduleCache: false, fsCache: false }).import(entry, { default: true });
-  if (typeof factory !== "function") throw new Error("the default export of extension.ts is not a function");
-} catch (e) {
-  console.error(e instanceof Error ? e.message : String(e));
-  process.exit(1);
-}
-`;
-
-/** `jiti` from pi's own installation (resolved from the real path of pi's entry script); throws when pi is not a node install that ships it. */
-export function piJiti(): string {
-  const entry = process.argv[1];
-  if (entry === undefined) throw new Error("cannot find jiti: pi's entry script is unknown");
-  try {
-    return createRequire(realpathSync(entry)).resolve("jiti");
-  } catch {
-    throw new Error(`cannot find jiti from pi's installation (${entry})`);
-  }
-}
+/** Generous, so a loaded machine is not a failure: a timeout is a refusal that is tried again at a later poll. */
+export const LOAD_TIMEOUT_MS = 60_000;
 
 const firstLine = (text: string): string => text.split("\n").find((l) => l.trim() !== "")?.trim() ?? "";
 
 export type Validation = {
-  /** A module exporting `createJiti`. Default: {@link piJiti}. */
-  loader?: string;
   timeoutMs?: number;
 };
 
 /**
- * Whether the package in `dir` may replace the running adapter: its entry files exist and a child `node` loads `extension.ts` through jiti.
- * Returns the reason it may not, or `undefined`. Never loads anything in this process.
+ * Whether the package in `dir` may replace the running adapter: its entry files exist and pi itself loads it
+ * (`PI_OFFLINE=1 pi --no-extensions --no-session -e <dir> --mode rpc </dev/null`: exit 0 when the extension loads, 1 with pi's message when it does not).
+ * `pi` is the one on `PATH`, which is how cpd starts the session; its agent directory is an empty scratch directory (no User settings, sessions or
+ * credentials), removed afterwards. Returns the reason it may not, or `undefined`. Never loads anything in this process.
  */
 export async function validatePackage(dir: string, v: Validation = {}): Promise<string | undefined> {
   if (!ENTRY_FILES.every((f) => existsSync(join(dir, f)))) return "entry files missing";
-  let loader: string;
-  try {
-    loader = v.loader ?? piJiti();
-  } catch (e) {
-    return (e as Error).message;
-  }
   const timeout = v.timeoutMs ?? LOAD_TIMEOUT_MS;
-  return new Promise((resolve) => {
-    execFile("node", ["--input-type=module", "-e", PROBE, loader, join(dir, "extension.ts")], { cwd: dir, timeout, killSignal: "SIGKILL", encoding: "utf8" }, (err, _stdout, stderr) => {
-      if (!err) return resolve(undefined);
-      if ((err as { killed?: boolean }).killed) return resolve(`load timed out after ${timeout} ms`);
-      resolve(firstLine(stderr) || err.message);
+  const scratch = mkdtempSync(join(tmpdir(), "cpd-validate-"));
+  try {
+    return await new Promise<string | undefined>((resolve) => {
+      const child = spawn("pi", ["--no-extensions", "--no-session", "-e", dir, "--mode", "rpc"], {
+        cwd: scratch,
+        env: { ...process.env, PI_OFFLINE: "1", PI_CODING_AGENT_DIR: scratch },
+        stdio: ["ignore", "ignore", "pipe"],
+        detached: true, // its own process group, so a timeout kills what pi started too
+      });
+      let stderr = "";
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (d: string) => (stderr += d));
+      const timer = setTimeout(() => {
+        try {
+          process.kill(-child.pid!, "SIGKILL");
+        } catch {
+          child.kill("SIGKILL");
+        }
+        resolve(`load timed out after ${timeout} ms`);
+      }, timeout);
+      child.on("error", (e) => {
+        clearTimeout(timer);
+        resolve(`cannot run pi: ${e.message}`);
+      });
+      child.on("close", (code, signal) => {
+        clearTimeout(timer);
+        resolve(code === 0 ? undefined : firstLine(stderr) || `pi exited with ${code ?? signal}`);
+      });
     });
-  });
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 export type PollOptions = {
   dir: string;
   intervalMs: number;
-  /** The throwaway load of the new package: the reason it must not be reloaded, or `undefined`. */
+  /** pi's own load of the new package: the reason it must not be reloaded, or `undefined`. */
   validate(dir: string): Promise<string | undefined>;
   /** The guard at the trigger: the reason it refuses (this tick is skipped, the next one tries again), or `undefined` when it may trigger. */
   refusal(): string | undefined;

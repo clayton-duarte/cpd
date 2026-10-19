@@ -103,9 +103,10 @@ fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
     }
 }
 
-/// Starts `cpd tui view plan` alone in a 260 × 40 window of the private server; returns its pane.
+/// Starts `cpd tui view plan` alone in a 260 × 40 window of the private server, with `PLANNOTATOR_URL_HOST=review.test`
+/// (the review host's override, contract §6.5); returns its pane.
 fn start_view(env: &TestEnv) -> String {
-    tmux_out(env, &["new-session", "-d", "-s", "view", "-x", "260", "-y", "40", "-P", "-F", "#{pane_id}", CPD, "tui", "view", "plan"])
+    tmux_out(env, &["new-session", "-d", "-s", "view", "-x", "260", "-y", "40", "-P", "-F", "#{pane_id}", "-e", "PLANNOTATOR_URL_HOST=review.test", CPD, "tui", "view", "plan"])
         .trim()
         .to_owned()
 }
@@ -471,9 +472,9 @@ fn a_pull_request_box_title_ends_in_a_link_to_it_and_a_pending_review_is_a_row_a
     assert_eq!(screen[2], "  ┌ repo · repo → main · #7 open ↗ ┐");
     let styled = styled_screen(&env, &pane);
     assert!(styled.contains("]8;;https://github.com/acme/repo/pull/7"), "{styled:?}");
-    assert!(styled.contains("]8;;http://localhost:19433"), "{styled:?}");
+    assert!(styled.contains("]8;;http://review.test:19433"), "{styled:?}");
     // each link wraps its whole text, from `#` or `Plan` through `↗`, and nothing else
-    for (url, text) in [("https://github.com/acme/repo/pull/7", "#7 open ↗"), ("http://localhost:19433", "Plan review r2 pending ↗")] {
+    for (url, text) in [("https://github.com/acme/repo/pull/7", "#7 open ↗"), ("http://review.test:19433", "Plan review r2 pending ↗")] {
         assert_eq!(linked_text(&styled, url), text, "{url}: {styled:?}");
     }
 }
@@ -615,7 +616,16 @@ fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_re
     sql(&env, &in_chat("ctx", "side", "lead-side"));
     screen_when(&env, &pane, "the other Plan", |s| s.len() > 2 && s[2].contains("other"));
     sql(&env, &in_chat("ctx", "ship", "lead-ship"));
-    let back = screen_when(&env, &pane, "the first Plan again", |s| s.iter().any(|l| l.contains(" j")));
+    // a frame reaches the pane in more than one write (the view's stdout flushes every 1024 bytes), so a capture can
+    // show the first rows of the chart and nothing below: wait for the whole frame, and compare the last capture
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let back = loop {
+        let now = screen(&env, &pane);
+        if now == scrolled || Instant::now() >= deadline {
+            break now;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
     assert_eq!(back, scrolled, "{}", back.join("\n"));
     assert_ne!(back, top);
     assert!(!selected(&tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane])), "a pill is selected");
