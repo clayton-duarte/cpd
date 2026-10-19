@@ -1,7 +1,6 @@
 //! What the plan view does when the User acts (commands.md §13.2, §17): it changes state only through cpd commands,
 //! and lays out its own panes. Nothing here runs unless a key or a click asks for it: the view's reads, its Event
-//! follower and its drawing run nothing. `session open` runs in this process through the command tree, as `cpd tui`
-//! does; the Worker pane is the view's own layout (`split-window`, `@cpd_view worker`, `@cpd_job`), not Ledger state.
+//! follower and its drawing run nothing. The Worker pane is the view's own layout (`split-window`, `@cpd_view worker`, `@cpd_job`), not Ledger state.
 
 use std::collections::BTreeMap;
 
@@ -9,10 +8,10 @@ use cpd_core::config::Config;
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux, View, chat_slot, view_pane};
-use cpd_core::ids::{AttemptId, PlanId, SessionId};
+use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::session::PROGRAM;
 
-use crate::{RunCommand, widgets};
+use crate::widgets;
 
 /// The pane option holding the Job a Worker pane shows (its border title shows it), so a second click on the same Job
 /// closes it.
@@ -25,23 +24,15 @@ pub struct Actions {
     home: CpdHome,
     tmux: Tmux,
     cockpit: String,
-    run_command: RunCommand,
 }
 
 impl Actions {
-    pub fn new(home: CpdHome, config: &Config, run_command: RunCommand) -> Actions {
+    pub fn new(home: CpdHome, config: &Config) -> Actions {
         Actions {
             home,
             tmux: Tmux::new(config.tmux.socket.clone()),
             cockpit: config.tmux.cockpit_session.clone(),
-            run_command,
         }
-    }
-
-    /// A click on a tab: `session open <id>`, which moves that Lead into the chat slot, then `select-pane` on the chat
-    /// (shared with the Deploy column's rows).
-    pub fn open_lead(&self, session: &SessionId) -> Result<(), CpdError> {
-        widgets::open_lead(self.run_command, &self.tmux, &self.cockpit, session)
     }
 
     /// The panes of the cockpit's `main` window.

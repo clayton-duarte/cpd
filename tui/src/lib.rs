@@ -80,7 +80,7 @@ pub fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdError> {
         None => cockpit::run(args.attach, args.respawn, run_command),
         Some(Command::View(view)) => match view {
             View::Tree => tree::run(),
-            View::Plan => plan::run(run_command),
+            View::Plan => plan::run(),
             View::Widgets => widgets::run(run_command),
             View::Statusbar => statusbar::run(),
             View::Worker(args) => worker::run(args),

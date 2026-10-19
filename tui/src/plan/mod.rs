@@ -38,7 +38,7 @@ use self::flow::{Dir, Selection};
 use crate::link::link;
 use crate::palette::{self, Meaning};
 use super::read::{self, ChatSlot, PlanBoxes, ReviewStatus};
-use super::{RunCommand, not_a_terminal, on_a_terminal};
+use super::{not_a_terminal, on_a_terminal};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{self, Event, highest_id};
@@ -250,7 +250,7 @@ fn attempt_of(centre: &Centre, key: &str) -> Option<AttemptId> {
     job.current_attempt().map(|a| a.id.clone())
 }
 
-pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
+pub(super) fn run() -> Result<Output, CpdError> {
     if !on_a_terminal() {
         return Err(not_a_terminal("tui view plan"));
     }
@@ -258,7 +258,7 @@ pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
     let mut snap = snapshot(&mut store, &home)?;
-    let actions = Actions::new(home.clone(), &config, run_command);
+    let actions = Actions::new(home.clone(), &config);
     let poll = Duration::from_millis(u64::from(config.events.poll_ms));
 
     // From here on this process owns the terminal (commands.md §1.2).
