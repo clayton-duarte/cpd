@@ -39,6 +39,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     let branch = pr.lead_branch.clone();
     // 0. The newest pull request of the Lead Branch, in any state, before the Gate (contract §7.6, hs-n236): a merged
     // one is adopted as it is, with no Gate and no push; a closed one is refused; an open one is adopted after the push.
+    let mut existing = None;
     if let Some(head) = gh::head_pr(&lead, &branch)? {
         match head.state {
             HeadState::Merged => return adopt_merged(&mut env, &plan, &key, &lead, &head),
@@ -55,7 +56,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
                 .with("number", head.number)
                 .with("url", head.url.as_str()));
             }
-            HeadState::Open => {}
+            HeadState::Open => existing = Some(PrRef { number: head.number, url: head.url }),
         }
     }
     // 1. G, read once; 2. the Gate on it, in a gate worktree of its own.
@@ -85,7 +86,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
         }
     };
     let title = title(&plan, &key);
-    let found = find_or_create(&lead, pr, &title, &list)?;
+    let found = find_or_create(&lead, pr, existing, &title, &list)?;
     let (repo, _) = pulls::parse_url(&found.url).ok_or_else(|| {
         CpdError::new(ErrorCode::GhFailed, format!("gh printed the pull request URL {:?}, which is not https://github.com/<owner>/<name>/pull/<n>.", found.url))
             .with("url", found.url.as_str())
@@ -158,16 +159,20 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
 /// died before its transaction), else `gh pr create`. When the create fails, the
 /// lookup runs again and adopts what it finds (a concurrent `pr open` of the PR
 /// created it, §7.6 step 3); otherwise the failure stands.
-fn find_or_create(lead: &Path, pr: &PrRow, title: &str, list: &[jobs::Job]) -> Result<PrRef, CpdError> {
-    let open = |lead: &Path| -> Result<Option<PrRef>, CpdError> {
-        Ok(gh::head_pr(lead, &pr.lead_branch)?.filter(|h| h.state == HeadState::Open).map(|h| PrRef { number: h.number, url: h.url }))
-    };
-    if let Some(found) = open(lead)? {
+/// The open pull request step 0 found, else a new one; when `gh pr create` fails, the Lead Branch's pull request is
+/// looked up again and adopted if it is open now (another `pr open` of the PR created it).
+fn find_or_create(lead: &Path, pr: &PrRow, existing: Option<PrRef>, title: &str, list: &[jobs::Job]) -> Result<PrRef, CpdError> {
+    if let Some(found) = existing {
         return Ok(found);
     }
     match gh::create_pr(lead, &pr.base, &pr.lead_branch, title, &summary(title, list)) {
         Ok(created) => Ok(created),
-        Err(failed) => open(lead).ok().flatten().ok_or(failed),
+        Err(failed) => gh::head_pr(lead, &pr.lead_branch)
+            .ok()
+            .flatten()
+            .filter(|h| h.state == HeadState::Open)
+            .map(|h| PrRef { number: h.number, url: h.url })
+            .ok_or(failed),
     }
 }
 

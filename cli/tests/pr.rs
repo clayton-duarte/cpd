@@ -793,7 +793,9 @@ fn open_after_another_open_opened_the_pr_during_its_gate_is_already_and_pushes_n
     let out: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!((out["ok"].as_bool(), out["already"].as_bool()), (Some(true), Some(true)), "{out}");
     assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "pr open pushed nothing");
-    assert!(fx.gh_calls().is_empty());
+    // Only step 0's lookup (#91) ran, before the Gate: no `gh pr create`.
+    let calls: Vec<String> = fx.gh_calls().iter().map(|c| c[1].clone()).collect();
+    assert_eq!(calls, ["list"]);
     fx.assert_no_gate_worktree();
 }
 
@@ -801,7 +803,7 @@ fn open_after_another_open_opened_the_pr_during_its_gate_is_already_and_pushes_n
 fn open_adopts_the_pull_request_a_concurrent_open_created_when_its_create_fails() {
     let fx = fx("dispatch");
     // `gh pr create` fails because another `pr open` of the PR created it: the lookup now finds it.
-    let raced = format!(r#"[{{"number": 812, "url": "{URL}"}}]"#);
+    let raced = format!(r#"[{{"number": 812, "url": "{URL}", "state": "OPEN"}}]"#);
     fs::write(fx.env.root().join("gh/raced.json"), raced).unwrap();
     fx.env.fake_gh(&GH.replace(
         r#""pr create") cat "$(file create.out)" ;;"#,
@@ -812,7 +814,7 @@ fn open_adopts_the_pull_request_a_concurrent_open_created_when_its_create_fails(
 
     assert_eq!(out["pr"]["pr"]["number"], 812);
     let calls: Vec<String> = fx.gh_calls().iter().map(|c| c[1].clone()).collect();
-    assert_eq!(calls, ["list", "create", "list"]);
+    assert_eq!(calls, ["list", "create", "list", "graphql"]);
     assert_eq!(fx.plan_row().0, "deploy");
 }
 
