@@ -1390,7 +1390,7 @@ fn install_replaces_an_installed_adapter_as_a_whole_and_it_is_never_missing() {
             missing
         })
     };
-    let (out, _) = install_with(&env, 6, "6");
+    let (out, _) = install_with(&env, OPENS);
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     let missing = watcher.join().unwrap();
 
