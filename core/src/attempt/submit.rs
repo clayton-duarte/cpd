@@ -9,7 +9,7 @@ use serde_json::json;
 use super::row::{self, Attempt};
 use super::{Env, SubmitArgs, bad_row};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::git::{self, HookOutcome, Operation, run_hook};
 use crate::home::Hook;
 use crate::ids::{AttemptId, PlanId};
@@ -104,7 +104,7 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
         let job = crate::ids::JobKey::parse(&now.job).map_err(|_| bad_row(format!("job key {:?}", now.job)))?;
         append(
             tx,
-            NewEvent::new(Kind::AttemptStatus, text, json!({"from": "running", "to": "merging"}))
+            NewEvent::attempt_status(text, "running", "merging")
                 .plan(plan.clone())
                 .job(job)
                 .attempt(id.clone()),

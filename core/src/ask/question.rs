@@ -9,7 +9,7 @@ use serde_json::json;
 
 use super::{AskArgs, Env};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::{AttemptId, EscalationId, JobKey, PlanId, SessionId};
 use crate::output::Output;
 use crate::store::WriteTxn;
@@ -110,7 +110,7 @@ fn open(tx: &WriteTxn<'_>, plan: &PlanId, attempt: &AttemptId, question: &str) -
     );
     append(
         tx,
-        NewEvent::new(Kind::Escalation, text, json!({"escalation": id.to_string(), "question": question}))
+        NewEvent::escalation(text, id.to_string(), question)
             .plan(plan.clone())
             .job(asker.job.clone())
             .attempt(attempt.clone()),
@@ -166,7 +166,7 @@ fn set_state(tx: &WriteTxn<'_>, asker: &Asker, from: &str, to: &str, label: Opti
     };
     append(
         tx,
-        NewEvent::new(Kind::SessionState, text, json!({"from": from, "to": to, "label": label}))
+        NewEvent::session_state(text, from, to, label)
             .session(asker.session.clone())
             .plan(asker.plan.clone()),
     )?;
@@ -196,7 +196,7 @@ fn settle(env: &mut Env, asker: &Asker, id: &EscalationId, timed_out: bool) -> R
             let text = format!("Escalation {id} of Attempt {} expired: no answer in time.", asker.attempt);
             append(
                 tx,
-                NewEvent::new(Kind::EscalationExpired, text, json!({"escalation": id.to_string(), "reason": "timeout"}))
+                NewEvent::escalation_expired(text, id.to_string(), "timeout")
                     .plan(asker.plan.clone())
                     .job(asker.job.clone())
                     .attempt(asker.attempt.clone()),
