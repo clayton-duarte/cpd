@@ -10,14 +10,19 @@ use crate::common;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use common::{CPD, TestEnv};
+use common::{CPD, SLEEP_SECONDS, TestEnv};
+use cpd_core::host::tmux::PANE_DIED_HOOK;
 use serde_json::json;
 
 // ---------- the prepared store ----------
 
 fn env() -> TestEnv {
     let env = TestEnv::new();
-    std::fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n").unwrap();
+    let config = format!(
+        "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[tmux]\nsocket = \"{}\"\n",
+        env.tmux_socket()
+    );
+    std::fs::write(env.cpd_home().join("config.toml"), config).unwrap();
     env
 }
 
@@ -81,12 +86,23 @@ struct Pane<'a> {
 impl<'a> Pane<'a> {
     /// Runs `cpd tui view worker api-a1 --plan ship` in a `width` × `height` pane of the env's private tmux server.
     fn start(env: &'a TestEnv, width: u16, height: u16) -> Pane<'a> {
+        Pane::start_command(env, width, height, &format!("{CPD} tui view worker api-a1 --plan ship"))
+    }
+
+    /// Runs `command` as the cockpit runs a view: the pane carries `@cpd_view` before the command starts, and the
+    /// server has the cockpit's `pane-died` hook, so a view that exits is started again (contract §6.1).
+    fn start_command(env: &'a TestEnv, width: u16, height: u16, command: &str) -> Pane<'a> {
         let out = env.tmux(&[
             "-u",
             "set-option",
             "-g",
             "remain-on-exit",
             "on",
+            ";",
+            "set-hook",
+            "-g",
+            "pane-died",
+            PANE_DIED_HOOK,
             ";",
             "new-session",
             "-d",
@@ -96,7 +112,20 @@ impl<'a> Pane<'a> {
             &width.to_string(),
             "-y",
             &height.to_string(),
-            &format!("{CPD} tui view worker api-a1 --plan ship"),
+            &format!("sleep {SLEEP_SECONDS}"),
+            ";",
+            "set-option",
+            "-p",
+            "-t",
+            SESSION,
+            "@cpd_view",
+            "worker",
+            ";",
+            "respawn-pane",
+            "-k",
+            "-t",
+            SESSION,
+            command,
         ]);
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         Pane { env }
@@ -123,9 +152,9 @@ impl<'a> Pane<'a> {
         assert!(self.env.tmux(&args).status.success());
     }
 
-    fn dead(&self) -> bool {
-        let out = self.env.tmux(&["list-panes", "-t", SESSION, "-F", "#{pane_dead}"]);
-        String::from_utf8_lossy(&out.stdout).trim() == "1"
+    /// Whether the pane is gone: it was the session's only pane, so the session goes with it.
+    fn closed(&self) -> bool {
+        !self.env.tmux(&["has-session", "-t", SESSION]).status.success()
     }
 }
 
@@ -194,7 +223,7 @@ fn an_appended_entry_is_followed_at_the_end() {
 }
 
 #[test]
-fn scrolling_leaves_the_end_and_q_ends_the_view() {
+fn scrolling_leaves_the_end_and_q_closes_the_pane() {
     let env = env();
     let file = session_file(&env);
     populate(&env, Some(&file));
@@ -206,8 +235,24 @@ fn scrolling_leaves_the_end_and_q_ends_the_view() {
     assert_eq!(screen, ["16:33:44 you", "      Implement the API.", "16:33:44 agent", STATUS]);
     pane.keys(&["G"]);
     pane.wait("the end again", |s| s.iter().any(|r| r.contains("test result")));
+    // The pane carries `@cpd_view` and the server respawns a dead one: `q` must close the pane, not end the program.
     pane.keys(&["q"]);
-    common::wait_until("q to end the view", || pane.dead());
+    common::wait_until("q to close the pane", || pane.closed());
+}
+
+/// A view that fails at start (here: no such Attempt) is started again by the hook; it waits before it exits and
+/// says why, so it is not started in a tight loop.
+#[test]
+fn a_view_that_fails_to_start_backs_off_instead_of_looping() {
+    let env = env();
+    populate(&env, None);
+    let log = env.root().join("starts");
+    let pane = Pane::start_command(&env, 80, 6, &format!("echo start >> {}; {CPD} tui view worker nosuch-a9 --plan ship", log.display()));
+    pane.wait("the failure on screen", |s| s.iter().any(|r| r.contains("nosuch-a9")));
+    // time-claim: over 6 s, a view that fails at start is started at most 4 times (it backs off, no tight loop)
+    std::thread::sleep(std::time::Duration::from_secs(6));
+    let starts = std::fs::read_to_string(&log).unwrap().lines().count();
+    assert!((1..=4).contains(&starts), "{starts} starts in 6 s: a tight loop");
 }
 
 #[test]
@@ -229,6 +274,36 @@ fn a_session_with_no_file_registered_says_so() {
     let pane = Pane::start(&env, 70, 3);
     let screen = pane.wait("the placeholder", |s| s.iter().any(|r| r.contains("No session file yet")));
     assert_eq!(screen[0], " No session file yet: the Worker has not started its Session.");
+}
+
+const EVENT: &str = "INSERT INTO events (txn, at, kind, context, plan, attempt, session, text, data)
+     VALUES (cpd_txn(), '2026-01-03T00:02:00.000Z', 'session-state', 'alpha', 'ship', 'api-a1', 'w1', 'fixture', '{}');";
+
+/// The status at the foot follows the Events (commands.md §17): a Session that changed state shows its new one.
+#[test]
+fn the_status_follows_the_events_of_the_store() {
+    let env = env();
+    populate(&env, None);
+    let pane = Pane::start(&env, 70, 3);
+    pane.wait("the status", |s| s.iter().any(|r| r == STATUS));
+    env.sql(&format!("UPDATE sessions SET state = 'idle' WHERE id = 'w1'; {EVENT}"));
+    pane.wait("the new state", |s| s.iter().any(|r| r == " api-a1 running · idle"));
+}
+
+/// A follow that fails is shown, the snapshot stays (tui-G4): the highest Event id fell below the cursor, which is
+/// what a replaced database looks like.
+#[test]
+fn a_follow_that_fails_is_shown_and_the_status_stays() {
+    let env = env();
+    populate(&env, None);
+    env.sql(EVENT);
+    let pane = Pane::start(&env, 100, 3);
+    pane.wait("the status", |s| s.iter().any(|r| r == STATUS));
+    // not through `Store`, which keeps the Events append-only
+    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
+    raw("DROP TRIGGER events_no_delete; DELETE FROM events;");
+    let screen = pane.wait("the error", |s| s.iter().any(|r| r.contains("Event cursor")));
+    assert!(screen.iter().any(|r| r.contains("No session file yet")), "the view stays: {screen:?}");
 }
 
 #[test]

@@ -227,15 +227,26 @@ fn counter_style(index: usize, phase: Phase, n: usize) -> Style {
     palette::count_style(status, merging, n)
 }
 
-/// `text` cut to `width` columns with a final `…`. Counted in chars (names are plain text).
+/// The display width of `text` in terminal columns (wide characters take two, combining marks none).
+pub fn width(text: &str) -> usize {
+    Span::raw(text).width()
+}
+
+/// `text` cut to `width` columns with a final `…`. Counted in display columns, not chars (names are free text).
 pub fn truncate(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        text.to_string()
-    } else if width == 0 {
-        String::new()
-    } else {
-        text.chars().take(width - 1).collect::<String>() + "…"
+    if self::width(text) <= width {
+        return text.to_string();
     }
+    let Some(room) = width.checked_sub(1) else { return String::new() };
+    let (mut cut, mut used) = (String::new(), 0);
+    for c in text.chars() {
+        used += self::width(c.encode_utf8(&mut [0; 4]));
+        if used > room {
+            break;
+        }
+        cut.push(c);
+    }
+    cut + "…"
 }
 
 /// What a Plan's or fork's row says (both are one level under their Context).
@@ -683,6 +694,16 @@ mod tests {
         assert_eq!(truncate("abc", 3), "abc");
         assert_eq!(truncate("abcd", 3), "ab…");
         assert_eq!(truncate("abcd", 0), "");
+    }
+
+    /// tui-W8: a name is cut by its display width, not its `char` count (wide characters take two columns).
+    #[test]
+    fn a_name_is_cut_by_display_width_not_char_count() {
+        assert_eq!(truncate("計画計画", 8), "計画計画");
+        assert_eq!(truncate("計画計画", 7), "計画計…", "6 columns and the …");
+        assert_eq!(truncate("計画計画", 6), "計画…", "a wide character that would reach the … is dropped");
+        assert_eq!(truncate("計画", 1), "…");
+        assert_eq!(truncate("計画", 0), "");
     }
 
     /// A Plan whose Lead has the dot `dot`.

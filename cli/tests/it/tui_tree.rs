@@ -7,6 +7,8 @@
 
 use crate::common;
 
+use std::time::{Duration, Instant};
+
 use common::{CPD, TestEnv, sql};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{ContextId, PlanId, SessionId};
@@ -726,6 +728,26 @@ fn question_mark_opens_the_legend_popup() {
 }
 
 #[test]
+fn the_tree_keeps_drawing_and_reading_keys_while_a_command_runs() {
+    let env = env();
+    populate(&env);
+    env.fake("cpd", r#"sleep 4; echo '{"ok":false,"error":{"code":"slow","message":"Took a while.","details":{}}}'; exit 3"#);
+    let pane = Pane::start(&env, 80, 14);
+    pane.ready();
+    pane.down(1);
+    let start = Instant::now();
+    pane.keys(&["Enter"]);
+    pane.wait("the running note", |_| pane.footer_has("running: session open l-ship"));
+    // `?` asks for the legend popup, which needs a tmux client: none is attached, so its note comes at once (since #128
+    // `n` asks in a popup too, the same way)
+    pane.keys(&["?"]);
+    pane.wait("the legend's note, while the command still runs", |_| pane.footer_has(NO_CLIENT));
+    // time-claim: the key is read while the command (slower than 3 s) still runs
+    assert!(start.elapsed() < Duration::from_secs(3), "the key was read at once, not after the command: {:?}", start.elapsed());
+    pane.wait("the result", |_| pane.footer_has("slow: Took a while."));
+}
+
+#[test]
 fn a_refused_command_shows_its_error_until_the_next_n_x_or_click() {
     let env = env();
     populate(&env);
@@ -777,6 +799,58 @@ fn the_tree_follows_the_events_of_the_store() {
 /// The id of the open item of `subject`.
 fn store_item(store: &mut Store, subject: &str) -> i64 {
     store.read(|c| Ok(c.query_row("SELECT id FROM inbox_items WHERE subject = ?1 AND closed_at IS NULL", [subject], |r| r.get(0))?)).unwrap()
+}
+
+/// A failed snapshot keeps the tree on screen and shows the error in the footer; the next refresh takes the snapshot
+/// again, with no Event needed, and the error goes when it succeeds (tui-W4). The read is made to fail by renaming the
+/// table it reads; the snapshot is taken because an Event came (a store opened before the rename appends it).
+#[test]
+fn a_failed_snapshot_keeps_the_tree_and_shows_the_error_until_a_snapshot_succeeds() {
+    let env = env();
+    populate(&env);
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    let mut store = open(&env);
+    // not through `Store`, which refuses a changed schema
+    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
+    raw("ALTER TABLE sessions RENAME TO sessions_gone;");
+    sql(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), '2026-02-01T00:00:00.000Z', 'session-state', 'fixture', '{}');");
+    let screen = pane.wait("the error in the footer", |s| s.iter().any(|r| r.contains("no such table")));
+    assert!(screen.iter().any(|r| r.starts_with(&format!(" {OPEN} {NEEDS_YOU} alpha"))), "the tree stays: {screen:?}");
+    raw("ALTER TABLE sessions_gone RENAME TO sessions;");
+    pane.wait("the error to go", |s| !s.iter().any(|r| r.contains("no such table")) && s.iter().any(|r| r.starts_with(&format!(" {OPEN} {NEEDS_YOU} alpha"))));
+}
+
+/// The tree follows Events in its own process (commands.md §17): it starts no `cpd events follow` (tui-F4, tui-G4), whose
+/// spawn could fail on a path that is gone and be swallowed (tui-W2).
+#[test]
+fn the_tree_starts_no_subprocess() {
+    let env = env();
+    populate(&env);
+    let pane = Pane::start(&env, 46, 14);
+    pane.ready();
+    let pid = String::from_utf8(env.tmux(&["display", "-p", "-t", SESSION, "#{pane_pid}"]).stdout).unwrap().trim().to_owned();
+    // follow an Event and take a new snapshot: the fork's red dialog is dismissed
+    let id = store_item(&mut open(&env), "session:f-blocked");
+    env.cpd(&["inbox", "dismiss", &id.to_string()]).ok();
+    pane.wait("the new state", |s| s.iter().any(|r| r.contains(&format!("└ {IDLE} ship·f-bl"))));
+    let children = env.command("ps").args(["-o", "pid=,args=", "--ppid", &pid]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&children.stdout).trim(), "", "children of the view");
+}
+
+/// A follow that fails is shown in the footer, not swallowed (tui-W2): the cursor is from another database (the highest
+/// Event id fell below it), which the follow refuses as `cursor_ahead`.
+#[test]
+fn a_follow_that_fails_is_shown_in_the_footer() {
+    let env = env();
+    populate(&env);
+    let pane = Pane::start(&env, 100, 14);
+    pane.ready();
+    // not through `Store`, which keeps the Events append-only
+    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
+    raw("DROP TRIGGER events_no_delete; DELETE FROM events;");
+    let screen = pane.wait("the error in the footer", |s| s.iter().any(|r| r.contains("Event cursor")));
+    assert!(screen.iter().any(|r| r.starts_with(&format!(" {OPEN} {NEEDS_YOU} alpha"))), "the tree stays: {screen:?}");
 }
 
 /// `populate`, with the Context `gamma` and the Plan `old` of `beta` (and its Lead) archived.
@@ -1363,20 +1437,28 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
         });
         assert_eq!(copy[copy.len() - 3..], words(&["-w", "--", url]));
     };
+    // a command runs off the UI thread with `running: …` in the footer, which moves the Inbox rows: the next row is
+    // looked up once it has ended
+    let ended = || pane.wait("the command to end", |_| !pane.footer_has("running:"));
     // dialog: `session open <its Session>`
     pane.click(10, row_of("f-blocked label"));
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "f-blocked"])]);
+    ended();
     // job-stuck: the Lead of its Plan
     pane.click(10, row_of("ship: c is stuck"));
     assert_eq!(wait_for_calls(&env, 2)[1], words(&["session", "open", "l-ship"]));
+    ended();
     // question: the Context's Manager
     pane.click(10, row_of("alpha: a question"));
     assert_eq!(wait_for_calls(&env, 4)[2..], [words(&["context", "manager", "--context=alpha"]), words(&["session", "open", "m-alpha"])]);
+    ended();
     // plan-review, and a pull request a Plan owns: the Lead of the Plan
     pane.click(10, row_of("ship plan review"));
     assert_eq!(wait_for_calls(&env, 5)[4], words(&["session", "open", "l-ship"]));
+    ended();
     pane.click(10, row_of("acme/api#3 ready"));
     assert_eq!(wait_for_calls(&env, 6)[5], words(&["session", "open", "l-ship"]));
+    ended();
     // a pull request no Plan owns, and a review request: the url is copied, and the note says how to open it
     pane.click(10, row_of("acme/web#4 changes requested"));
     copied(1, "https://x.io/changes");
@@ -1387,6 +1469,7 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     // pr-failing, which the Plan `ship` owns here: its Lead
     pane.click(10, row_of("acme/api#12 failing"));
     assert_eq!(wait_for_calls(&env, 7)[6], words(&["session", "open", "l-ship"]));
+    ended();
     pane.wait("the note gone", |_| !pane.footer_has("copied")); // the rows below move with it
     // engine-error: the logs popup at the item's Event
     pane.click(10, row_of("engine: store busy"));
@@ -1426,6 +1509,29 @@ fn with_no_engine_the_inbox_leads_with_engine_down_and_a_click_on_it_opens_the_l
     assert_eq!(popups[0].last().unwrap(), "cpd tui view logs");
     pane.settled_with_a_client();
     assert!(calls(&env).is_empty(), "no cpd command ran: {:?}", calls(&env));
+}
+
+/// Two changes of the Inbox have no Event (§17): an engine that starts takes `engine-down` away, and a snooze that ends
+/// brings its item back. The tree reads them then, with no timer of its own.
+#[test]
+fn the_inbox_follows_an_engine_that_starts_and_a_snooze_that_ends_with_no_event() {
+    let env = env_without_engine();
+    populate(&env);
+    sql(
+        &mut open(&env),
+        "UPDATE inbox_items SET snoozed_until = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+8 seconds') WHERE subject = 'session:m-beta';",
+    );
+    let pane = Pane::start(&env, 46, 20);
+    pane.ready();
+    pane.wait("engine-down and three stored items", |s| s.iter().any(|r| r.contains(" Inbox 4 ")));
+    // time-claim: past the snapshot the first poll takes, within 2 s (it cannot tell a change of the pull request rows
+    // from none)
+    std::thread::sleep(Duration::from_secs(2));
+    let path = env.cpd_home().join("locks/watch.lock");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let _engine = Flock::lock(std::fs::File::create(path).unwrap(), FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+    pane.wait("engine-down gone", |s| s.iter().any(|r| r.contains(" Inbox 3 ")));
+    pane.wait("the snoozed item back", |s| s.iter().any(|r| r.contains(" Inbox 4 ")));
 }
 
 /// The `display-popup` calls of a fake tmux.

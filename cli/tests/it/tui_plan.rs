@@ -8,9 +8,10 @@
 use crate::common;
 
 use std::fs;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until};
+use cpd_core::error::CpdError;
 use cpd_tui::palette::{DRAFT, FAILED, MERGED, MERGING, QUEUED, SPINNER};
 use serde_json::json;
 
@@ -459,20 +460,73 @@ fn a_pull_request_box_title_ends_in_a_link_to_it_and_a_pending_review_is_a_row_a
 }
 
 #[test]
-fn a_conflict_shows_in_the_box_title_and_clears_with_no_event_within_the_refresh() {
+fn a_conflict_shows_in_the_box_title_and_clears_with_no_event() {
     let env = env();
     env.sql(&plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
     let pane = start_view(&env);
     let title = |s: &[String], word: &str| s.iter().any(|l| l.contains(&format!("#7 {word} 󰏌")));
     screen_when(&env, &pane, "the open title", |s| title(s, "open"));
 
-    // the poll stored a conflict: no Event is appended for the view to wake on, so only the 2 s re-read shows it
-    env.sql("UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 7;");
+    // the poll stored a conflict: no Event is appended for the view to wake on, so only the change of the row shows it
+    // (the poll sets `changed_at` with every change, contract §4.4)
+    env.sql("UPDATE pull_requests SET mergeable = 'conflicting', changed_at = '2026-02-01T00:00:01.000Z' WHERE number = 7;");
     screen_when(&env, &pane, "conflict", |s| title(s, "conflict"));
 
     // `unknown` is not a conflict
-    env.sql("UPDATE pull_requests SET mergeable = 'unknown' WHERE number = 7;");
+    env.sql("UPDATE pull_requests SET mergeable = 'unknown', changed_at = '2026-02-01T00:00:02.000Z' WHERE number = 7;");
     screen_when(&env, &pane, "open again", |s| title(s, "open"));
+}
+
+/// A failed snapshot keeps the chart on screen and shows the error in the row below it, for longer than one poll; the
+/// view takes the snapshot again at the next refresh, and the error goes when it succeeds (tui-W4). The read is made to
+/// fail by renaming the table it reads.
+#[test]
+fn a_failed_snapshot_keeps_the_chart_and_shows_the_error_until_a_snapshot_succeeds() {
+    let env = env();
+    env.sql(&plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
+    let pane = start_view(&env);
+    let title = |s: &[String]| s.iter().any(|l| l.contains("#7 open 󰏌"));
+    screen_when(&env, &pane, "the chart", title);
+    let mut store = env.store();
+    // not through `Store`, which refuses a changed schema
+    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
+    raw("ALTER TABLE jobs RENAME TO jobs_gone;");
+    // the snapshot is taken because an Event of the Plan came (the store was opened before the rename)
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch("INSERT INTO events (txn, at, kind, context, plan, text, data)
+                 VALUES (cpd_txn(), '2026-02-01T00:00:00.000Z', 'plan-phase', 'ctx', 'ship', 'fixture', '{}');")?;
+            Ok::<(), CpdError>(())
+        })
+        .unwrap();
+    screen_when(&env, &pane, "the error", |s| s.iter().any(|l| l.contains("no such table")));
+    // time-claim: the poll is 50 ms: an error cleared by the next poll's success (the old behaviour) would be gone
+    // within this second
+    std::thread::sleep(Duration::from_secs(1));
+    let screen = screen(&env, &pane);
+    assert!(screen.iter().any(|l| l.contains("no such table")) && title(&screen), "{screen:?}");
+    raw("ALTER TABLE jobs_gone RENAME TO jobs;");
+    screen_when(&env, &pane, "the error to go", |s| !s.iter().any(|l| l.contains("no such table")) && title(s));
+}
+
+/// A follow that fails is shown below the chart, for longer than one snapshot (tui-G4): the highest Event id fell below
+/// the cursor, which is what a replaced database looks like. The chart stays.
+#[test]
+fn a_follow_that_fails_is_shown_below_the_chart() {
+    let env = env();
+    env.sql(&plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
+    env.sql(&event("plan-phase", "ctx", Some("ship"), None, "{}"));
+    let pane = start_view(&env);
+    let title = |s: &[String]| s.iter().any(|l| l.contains("#7 open 󰏌"));
+    screen_when(&env, &pane, "the chart", title);
+    // not through `Store`, which keeps the Events append-only
+    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
+    raw("DROP TRIGGER events_no_delete; DELETE FROM events WHERE id > (SELECT min(id) FROM events);");
+    screen_when(&env, &pane, "the error", |s| s.iter().any(|l| l.contains("Event cursor")));
+    // time-claim: a snapshot is retaken within 3 s (the refresh): the error stays
+    std::thread::sleep(Duration::from_secs(3));
+    let screen = screen(&env, &pane);
+    assert!(screen.iter().any(|l| l.contains("Event cursor")) && title(&screen), "{screen:?}");
 }
 
 #[test]
@@ -675,6 +729,36 @@ fn a_selected_pill_opens_its_worker_beside_the_chat_and_a_second_enter_closes_it
     assert!(chat.starts_with('%') && layout.contains(&chat), "{layout}");
     tmux_out(&env, &["send-keys", "-t", &plan, "Enter"]);
     wait_until("the Worker pane to close", || !workers().contains("worker"));
+}
+
+/// Opening a Worker runs several tmux calls (`toggle_worker`): the view keeps following Events meanwhile (tui-W7). The
+/// `tmux` first on `PATH` takes 4 s to answer `split-window`, the call that makes the pane.
+#[test]
+fn the_chart_keeps_following_events_while_a_worker_pane_is_being_opened() {
+    let env = env();
+    env.sql(&plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1)]));
+    let (plan, _chat) = centre(&env);
+    screen_when(&env, &plan, "the chart", |s| s.len() > 2 && s[2].contains(" a "));
+    let real = std::env::var("PATH")
+        .unwrap()
+        .split(':')
+        .map(|dir| std::path::Path::new(dir).join("tmux"))
+        .find(|p| p.is_file())
+        .expect("tmux on PATH");
+    env.fake("tmux", &format!(r#"case " $* " in *" split-window "*) sleep 4;; esac; exec {} "$@""#, real.display()));
+    tmux_out(&env, &["send-keys", "-t", &plan, "Right"]);
+    tmux_out(&env, &["send-keys", "-t", &plan, "Enter"]);
+    wait_until("the split-window call", || env.calls("tmux").iter().any(|c| c.iter().any(|a| a == "split-window")));
+    // time-claim: the chart follows the new Job while the popup's split-window (4 s) is still running: within 3 s
+    let opening = Instant::now();
+    env.sql(
+        &(job_row("ship", "b", "queued", "S3")
+            + &need_row("ship", "b", "a")
+            + &event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":["a"]}"#)),
+    );
+    screen_when(&env, &plan, "Job b", |s| s.len() > 2 && s[2].contains(" b "));
+    // time-claim: within 3 s, while the popup's split-window (4 s) still runs
+    assert!(opening.elapsed() < Duration::from_secs(3), "the chart followed at once: {:?}", opening.elapsed());
 }
 
 #[test]
