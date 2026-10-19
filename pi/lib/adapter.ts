@@ -762,9 +762,10 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   });
 
   // pi's dialogs (`ctx.ui.select/confirm/input/editor/custom`): `pi.on` has no unsubscribe, so the run is checked.
+  // A Worker never talks to the human (hs-d303, audit Q6): its dialog opens no reason; it asks its Lead with `cpd ask`.
   const onPrompt = (active: boolean) => {
     const r = run;
-    if (!r) return;
+    if (!r || r.info.role === "worker") return;
     if (r.facts.prompt(active)) refresh(r);
   };
   pi.on("ui_prompt_start", () => onPrompt(true));

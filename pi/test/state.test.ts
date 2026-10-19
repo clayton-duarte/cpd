@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Reporter } from "../lib/state.ts";
-import { ev, Fixture, ID, planShow, stateCalls, waitFor } from "./fake.ts";
+import { ev, Fixture, ID, planShow, sessionShow, stateCalls, waitFor } from "./fake.ts";
 
 async function started(f: Fixture) {
   f.respond("plan-show", planShow());
@@ -165,6 +165,20 @@ test("a pi dialog (ui_prompt_start..end) reports blocked `dialog`; nested prompt
   await f.pi.fire("ui_prompt_end"); // stray, after a full cycle
   await f.quiet();
   assert.deepEqual(stateCalls(f), ["idle", "blocked:dialog", "idle"]);
+});
+
+test("a Worker's pi dialog opens no reason: its state does not change (Workers ask their Lead, hs-d303)", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.respond("session-show", sessionShow({ role: "worker", plan: "p1", plan_lead: false }));
+  await started(f);
+
+  await f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "custom" });
+  await f.quiet();
+  assert.deepEqual(stateCalls(f), ["idle"], "no blocked:dialog");
+  await f.pi.fire("ui_prompt_end");
+  await f.quiet();
+  assert.deepEqual(stateCalls(f), ["idle"]);
 });
 
 test("a dialog during a turn returns to working when it ends", async (t) => {
