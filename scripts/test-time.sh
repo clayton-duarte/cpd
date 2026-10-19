@@ -19,10 +19,9 @@ set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 
-target=$(scripts/cargo.sh metadata --format-version 1 --no-deps | node -e '
-  let s = ""; process.stdin.on("data", (d) => (s += d));
-  process.stdin.on("end", () => console.log(JSON.parse(s).target_directory));')
-junit="$target/nextest/timing/junit.xml"
+# nextest keeps its reports under <workspace>/target/nextest/<profile>/ whatever
+# CARGO_TARGET_DIR says (nextest 0.9.148, observed: its `store.dir` default).
+junit="$root/target/nextest/timing/junit.xml"
 
 scripts/cargo.sh nextest run --workspace --profile timing --no-run "$@" >&2
 
