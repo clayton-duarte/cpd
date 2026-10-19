@@ -1051,6 +1051,28 @@ fn open_gives_a_new_pane_the_plans_title_for_the_plans_lead_and_the_name_for_a_f
     assert_eq!(title(&env, &fork), "side");
 }
 
+#[test]
+fn open_resumes_a_titled_lead_with_its_dynamic_title_and_a_rename_keeps_it() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd(&env);
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
+    cockpit(&env);
+    exec_sql(&env, &format!("UPDATE sessions SET title = 'Dynamic subject', titled_at = 't' WHERE id = '{LEAD1}'"));
+    let title = |env: &TestEnv, session: &str| {
+        let pane = panes(env).into_iter().find(|p| p.session == session).unwrap().pane;
+        let out = env.tmux(&["show", "-pqv", "-t", &pane, "@cpd_title"]);
+        String::from_utf8(out.stdout).unwrap().trim_end_matches('\n').to_owned()
+    };
+    // The Lead has no pane: opening resumes it in a new window, with the title.
+    env.cpd(&["session", "open", LEAD1]).ok();
+    assert_eq!(title(&env, LEAD1), "Dynamic subject");
+    // A rename writes the name and leaves the header.
+    env.cpd(&["session", "rename", "Lead one renamed", "--session", LEAD1]).ok();
+    assert_eq!(title(&env, LEAD1), "Dynamic subject");
+    assert_eq!(show(&env, LEAD1)["name"], "Lead one renamed");
+}
+
 // ---------- archive ----------
 
 /// A parked side fork of `lead1` (stopped, with a pane): fake pi and cpd, and the cockpit.

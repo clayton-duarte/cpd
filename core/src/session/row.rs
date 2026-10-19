@@ -151,8 +151,12 @@ fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
 }
 
 impl Row {
-    /// The header of its pane: its Plan's title when it is the Plan's Lead, else its name.
+    /// The header of its pane (contract §6.1): its dynamic title when it has one, else its
+    /// Plan's title when it is the Plan's Lead, else its name.
     pub fn title(&self, conn: &Connection) -> Result<String, CpdError> {
+        if let Some(dynamic) = &self.dynamic_title {
+            return Ok(dynamic.clone());
+        }
         match (&self.plan, self.plan_lead) {
             (Some(plan), true) => Ok(conn.query_row("SELECT title FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?),
             _ => Ok(self.name.clone()),
