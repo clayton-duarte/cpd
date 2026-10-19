@@ -42,7 +42,8 @@ pub(crate) use column::{Window, dim, max_scroll, section_header, window};
 const TICK: Duration = Duration::from_millis(200);
 /// At most one snapshot per this long, whatever the Event rate (§17).
 const COALESCE: Duration = Duration::from_millis(500);
-/// A snapshot and the load at least this often: the load average is no Event.
+/// A snapshot and the load at least this often: the load average is no Event (tests: `CPD_TEST_VIEW_REFRESH`,
+/// [`super::reread`]).
 const REFRESH: Duration = Duration::from_secs(2);
 
 pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
@@ -91,6 +92,7 @@ fn show(
     mut machine: Machine,
     opener: &Opener,
 ) -> Result<(), CpdError> {
+    let (coalesce, refresh) = super::reread(COALESCE, REFRESH);
     let mut read_at = Instant::now();
     let mut last = None::<Drawn>;
     let mut note = String::new();
@@ -123,9 +125,9 @@ fn show(
                 _ => {}
             }
         }
-        if read_at.elapsed() >= COALESCE {
+        if read_at.elapsed() >= coalesce {
             let moved = store.read(highest_id)? != widgets.events_cursor;
-            if moved || read_at.elapsed() >= REFRESH {
+            if moved || read_at.elapsed() >= refresh {
                 widgets = read::widgets(store, concurrency, 0)?;
                 machine.load = load_average()?;
                 read_at = Instant::now();

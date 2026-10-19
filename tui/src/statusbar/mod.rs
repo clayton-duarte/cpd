@@ -45,7 +45,7 @@ use cpd_core::store::Store;
 const TICK: Duration = Duration::from_millis(200);
 /// At most one read per this long, whatever the Event rate (§17).
 const COALESCE: Duration = Duration::from_millis(500);
-/// A read at least this often.
+/// A read at least this often (tests: `CPD_TEST_VIEW_REFRESH`, [`super::reread`]).
 const REFRESH: Duration = Duration::from_secs(2);
 
 /// The buttons: one glyph, one cell each.
@@ -117,6 +117,7 @@ fn show(
 ) -> Result<(), CpdError> {
     let mut clickable: Vec<(Rect, Action)> = Vec::new();
     let mut note = String::new();
+    let (coalesce, refresh) = super::reread(COALESCE, REFRESH);
     let mut read_at = Instant::now();
     loop {
         terminal
@@ -142,9 +143,9 @@ fn show(
                 }
             }
         }
-        if read_at.elapsed() >= COALESCE {
+        if read_at.elapsed() >= coalesce {
             let moved = store.read(highest_id)? != cursor;
-            if moved || read_at.elapsed() >= REFRESH {
+            if moved || read_at.elapsed() >= refresh {
                 let next = read::widgets(store, config.concurrency, 0)?;
                 (inbox, workers, cursor) = (Inbox::read(store)?, Workers::of(&next.slots), next.events_cursor);
                 read_at = Instant::now();

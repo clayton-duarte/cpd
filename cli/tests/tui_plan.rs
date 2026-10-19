@@ -81,7 +81,7 @@ fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
 /// Starts `cpd tui view plan` alone in a 260 × 40 window of the private server, with `PLANNOTATOR_URL_HOST=review.test`
 /// (the review host's override, contract §6.5); returns its pane.
 fn start_view(env: &TestEnv) -> String {
-    tmux_out(env, &["new-session", "-d", "-s", "view", "-x", "260", "-y", "40", "-P", "-F", "#{pane_id}", "-e", "PLANNOTATOR_URL_HOST=review.test", CPD, "tui", "view", "plan"])
+    tmux_out(env, &["new-session", "-d", "-s", "view", "-x", "260", "-y", "40", "-P", "-F", "#{pane_id}", "-e", "PLANNOTATOR_URL_HOST=review.test", "-e", common::VIEW_REFRESH, CPD, "tui", "view", "plan"])
         .trim()
         .to_owned()
 }
@@ -466,7 +466,8 @@ fn a_conflict_shows_in_the_box_title_and_clears_with_no_event_within_the_refresh
     let title = |s: &[String], word: &str| s.iter().any(|l| l.contains(&format!("#7 {word} 󰏌")));
     screen_when(&env, &pane, "the open title", |s| title(s, "open"));
 
-    // the poll stored a conflict: no Event is appended for the view to wake on, so only the 2 s re-read shows it
+    // the poll stored a conflict: no Event is appended for the view to wake on, so only the re-read (2 s, here
+    // `VIEW_REFRESH`) shows it
     env.sql("UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 7;");
     screen_when(&env, &pane, "conflict", |s| title(s, "conflict"));
 

@@ -53,23 +53,23 @@ use cpd_core::store::Store;
 const COALESCE: Duration = Duration::from_millis(500);
 
 /// The snapshot is retaken at least this often, Event or not: a conflict clears with no Event (`mergeable` changes
-/// silently), as the `widgets` view's `REFRESH` (§17).
+/// silently), as the `widgets` view's `REFRESH` (§17). Tests shorten it with `CPD_TEST_VIEW_REFRESH` ([`super::reread`]).
 const REFRESH: Duration = Duration::from_secs(2);
 
-/// Whether the snapshot taken `since` ago is retaken: after [`COALESCE`] once an Event concerns it (`stale`), else after
-/// [`REFRESH`].
-fn due(stale: bool, since: Duration) -> bool {
-    since >= if stale { COALESCE } else { REFRESH }
+/// Whether the snapshot taken `since` ago is retaken: after `coalesce` ([`COALESCE`]) once an Event concerns it
+/// (`stale`), else after `refresh` ([`REFRESH`]; both from [`super::reread`]).
+fn due(stale: bool, since: Duration, (coalesce, refresh): (Duration, Duration)) -> bool {
+    since >= if stale { coalesce } else { refresh }
 }
 
 /// While Pulse shows the snapshot is retaken at least this often, Event or not: the window moves and the ages tick,
 /// and a running Attempt is not an Event.
 const PULSE_REFRESH: Duration = Duration::from_secs(60);
 
-/// Whether the Pulse snapshot taken `since` ago is retaken: after [`COALESCE`] once an Event concerns it (or the pane
+/// Whether the Pulse snapshot taken `since` ago is retaken: after `coalesce` once an Event concerns it (or the pane
 /// was resized), else after [`PULSE_REFRESH`].
-fn pulse_due(stale: bool, since: Duration) -> bool {
-    since >= if stale { COALESCE } else { PULSE_REFRESH }
+fn pulse_due(stale: bool, since: Duration, coalesce: Duration) -> bool {
+    since >= if stale { coalesce } else { PULSE_REFRESH }
 }
 
 /// The view redraws at least this often, for the spinner (one frame: palette.rs); a redraw reads nothing from the store.
@@ -351,6 +351,7 @@ fn show(
         Ok(f) => f,
         Err(e) => return Err(std::io::Error::other(e.to_string())),
     };
+    let periods = super::reread(COALESCE, REFRESH);
     let (mut stale, mut taken, mut fetched) = (false, Instant::now(), Instant::now());
     loop {
         if let Some(c) = snap.centre.as_mut() {
@@ -376,7 +377,7 @@ fn show(
                 }
                 Err(e) => ui.error = Some(e.to_string()),
             }
-            let due = if snap.pulse.is_some() { pulse_due(stale, taken.elapsed()) } else { due(stale, taken.elapsed()) };
+            let due = if snap.pulse.is_some() { pulse_due(stale, taken.elapsed(), periods.0) } else { due(stale, taken.elapsed(), periods) };
             if due {
                 let before = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
                 let before_pulse = snap.pulse.as_ref().map(|p| p.context.clone());
@@ -493,10 +494,10 @@ mod tests {
 
     #[test]
     fn the_snapshot_is_retaken_after_the_coalescing_when_stale_else_every_two_seconds() {
-        let ms = Duration::from_millis;
-        assert!(!due(true, ms(499)) && due(true, ms(500)), "an Event that concerns it: coalesced at 500 ms");
-        assert!(!due(false, ms(1999)) && due(false, ms(2000)), "no Event: every 2 s");
-        assert!(due(false, Duration::from_secs(60)));
+        let (ms, release) = (Duration::from_millis, (COALESCE, REFRESH));
+        assert!(!due(true, ms(499), release) && due(true, ms(500), release), "an Event that concerns it: coalesced at 500 ms");
+        assert!(!due(false, ms(1999), release) && due(false, ms(2000), release), "no Event: every 2 s");
+        assert!(due(false, Duration::from_secs(60), release));
     }
 
     const URL: &str = "http://review.test:19433";
@@ -857,8 +858,8 @@ mod tests {
         assert!(!concerns(&event("job-merged", "other"), None, Some(&pulse)));
         assert!(concerns(&event("session-moved", "other"), None, Some(&pulse)));
         let ms = Duration::from_millis;
-        assert!(pulse_due(true, ms(500)) && !pulse_due(true, ms(499)));
-        assert!(!pulse_due(false, Duration::from_secs(59)) && pulse_due(false, Duration::from_secs(60)));
+        assert!(pulse_due(true, ms(500), COALESCE) && !pulse_due(true, ms(499), COALESCE));
+        assert!(!pulse_due(false, Duration::from_secs(59), COALESCE) && pulse_due(false, Duration::from_secs(60), COALESCE));
     }
 
     fn fixture(store: &mut Store, sql: &str) {

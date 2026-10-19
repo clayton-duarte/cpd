@@ -26,8 +26,10 @@ pub mod widgets;
 mod worker;
 
 use std::ffi::OsString;
+use std::time::Duration;
 
 use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::host::limit::limit;
 use cpd_core::output::Output;
 
 /// Runs `cpd <argv>` in this process, through the root command tree. `cli` owns that tree, so it passes the runner in.
@@ -101,6 +103,15 @@ pub fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdError> {
 fn not_a_terminal(command: &str) -> CpdError {
     CpdError::new(ErrorCode::NotATerminal, format!("cpd {command} needs a terminal on stdin and stdout."))
         .with("command", command)
+}
+
+/// The re-read periods `(coalesce, refresh)` of a view that re-reads its snapshot at least every `refresh` and, on
+/// Events, at most once per `coalesce` (`plan`, `widgets`, `statusbar`; commands.md §17): the release values given, or
+/// in a debug build the test's `CPD_TEST_VIEW_REFRESH` for `refresh` (contract §1.2 "Test overrides"), the coalescing
+/// then at most that.
+fn reread(coalesce: Duration, refresh: Duration) -> (Duration, Duration) {
+    let refresh = limit("VIEW_REFRESH", refresh);
+    (coalesce.min(refresh), refresh)
 }
 
 /// Whether stdin and stdout are both a terminal.

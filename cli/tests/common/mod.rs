@@ -50,6 +50,10 @@ pub const CPD: &str = env!("CARGO_BIN_EXE_cpd");
 /// The longest any fake sleeps, so the leftovers of a killed test run end by themselves.
 pub const SLEEP_SECONDS: u64 = 120;
 
+/// The views' re-read period in the tests, as `tmux new-session -e` takes it (contract §1.2 "Test overrides"): a
+/// view test waits on the screen for a change no Event announces, a few of these, not the release 2 s.
+pub const VIEW_REFRESH: &str = "CPD_TEST_VIEW_REFRESH=0.1";
+
 /// The reaper's teardown script: `sh teardown.sh watch <pid>` waits until `<pid>` (the test
 /// process) is gone or the directory is, and then tears down if the directory is still there;
 /// `sh teardown.sh` tears down at once. The same teardown as [`TestEnv::teardown`], which

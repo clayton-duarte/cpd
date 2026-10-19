@@ -76,7 +76,7 @@ fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
 fn start_view(env: &TestEnv, width: u16) -> String {
     tmux_out(
         env,
-        &["new-session", "-d", "-s", "view", "-x", &width.to_string(), "-y", "1", "-P", "-F", "#{pane_id}", CPD, "tui", "view", "statusbar"],
+        &["new-session", "-d", "-s", "view", "-x", &width.to_string(), "-y", "1", "-P", "-F", "#{pane_id}", "-e", common::VIEW_REFRESH, CPD, "tui", "view", "statusbar"],
     )
     .trim()
     .to_owned()
@@ -110,7 +110,7 @@ fn the_workers_follow_the_slots() {
     // test); this one uses a row wide enough for the long form
     let pane = start_view(&env, 40);
     row_ending(&env, &pane, "workers 0/4");
-    // an Attempt takes a slot: the view re-reads when the store's Events move, or within 2 s
+    // an Attempt takes a slot: the view re-reads when the store's Events move, or within its refresh (2 s, here `VIEW_REFRESH`)
     env.sql(&attempt_row(1, "running"));
     row_ending(&env, &pane, "workers 1/4");
 }
