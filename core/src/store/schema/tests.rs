@@ -1730,10 +1730,13 @@ fn a_legacy_store_of_every_version_converts_keeping_every_row_and_id() {
             // `policy-keys` added `contexts.owner` and `prs.name`, last, and filled them (the fixture's
             // pull requests are `acme/…`), writing an `update` history row per filled row in the migrating transaction.
             assert_eq!(rows_after["contexts"].iter().map(|r| r.rsplit(',').next().unwrap()).collect::<Vec<_>>(), ["\"acme\"]"]);
-            for table in ["contexts", "prs"] {
+            // The filled column is taken out by its position: a later additive migration (`pr-title`) adds a column after it.
+            for (table, column) in [("contexts", "owner"), ("prs", "name")] {
+                let at = table_columns(&conn, table).unwrap().iter().position(|(c, _)| c == column).unwrap();
                 for row in rows_after.get_mut(table).unwrap() {
-                    let at = row.rfind(',').unwrap();
-                    *row = format!("{}]", &row[..at]);
+                    let mut values: Vec<Value> = serde_json::from_str(row).unwrap();
+                    values.remove(at);
+                    *row = Value::from(values).to_string();
                 }
             }
             let (history_before, history_after) = (rows_before.remove("history").unwrap(), rows_after.remove("history").unwrap());
