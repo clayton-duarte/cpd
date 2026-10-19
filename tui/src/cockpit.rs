@@ -58,7 +58,7 @@ pub(super) fn run(attach: bool, respawn: bool, run_command: RunCommand) -> Resul
     let tmux = Tmux::new(config.tmux.socket.clone());
     let cockpit = config.tmux.cockpit_session.as_str();
 
-    let (built, respawned) = ensure(&tmux, &home, &mut store, cockpit, respawn, run_command)?;
+    let (built, respawned) = ensure(&tmux, &home, &mut store, cockpit, config.machine.as_str(), respawn, run_command)?;
     let watch = command(run_command, &["watch", "--ensure"])?;
     // An older server is restarted by the engine once nothing is in the way (contract §6.1).
     let after = match mark_if_older(&home, &tmux) {
@@ -91,7 +91,7 @@ pub(super) fn run(attach: bool, respawn: bool, run_command: RunCommand) -> Resul
 
 /// The cockpit part of `cpd tui` and of bare `cpd`: builds `main` when it is
 /// missing, else respawns its dead panes, with `respawn` every live view, and
-/// adds a missing StatusBar; sets the server options again; brings the last chat
+/// adds a missing StatusBar; sets the server options again and `@cpd_machine`; brings the last chat
 /// Lead into a new chat slot. Returns whether it built `main` and the panes
 /// restarted by `respawn`.
 fn ensure(
@@ -99,6 +99,7 @@ fn ensure(
     home: &CpdHome,
     store: &mut Store,
     cockpit: &str,
+    machine: &str,
     respawn: bool,
     run_command: RunCommand,
 ) -> Result<(bool, Vec<PaneId>), CpdError> {
@@ -115,6 +116,8 @@ fn ensure(
         add_missing_statusbar(tmux, home, cockpit, &main)?;
     }
     tmux.apply_server_options()?;
+    // The window title's machine name (contract §6.1, hs-d300): SERVER_OPTIONS is static.
+    tmux.run(&["set".to_owned(), "-g".to_owned(), "@cpd_machine".to_owned(), machine.to_owned()])?;
     if built {
         if let Some(lead) = store.read(last_chat_lead)? {
             open_lead(run_command, &lead)?;
@@ -293,7 +296,7 @@ pub(super) fn bare(run_command: RunCommand) -> Result<Output, CpdError> {
         eprintln!("cpd: the engine did not start: {}", e.message());
     }
     // 2. The cockpit.
-    let built = match ensure(&tmux, &home, &mut store, cockpit, false, run_command) {
+    let built = match ensure(&tmux, &home, &mut store, cockpit, config.machine.as_str(), false, run_command) {
         Ok((built, _)) => built,
         Err(e) if matches!(tmux.has_session(cockpit), Ok(true)) => {
             eprintln!("cpd: the cockpit is not complete: {}", e.message());

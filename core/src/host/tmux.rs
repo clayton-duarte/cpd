@@ -93,9 +93,16 @@ pub const SERVER_OPTIONS: &[&[&str]] = &[
     &["set", "-g", "pane-border-format", BORDER_FORMAT],
     &["set", "-g", "pane-active-border-style", "fg=blue"],
     &["set", "-g", "remain-on-exit", "on"],
+    &["set", "-g", "set-titles", "on"],
+    &["set", "-g", "set-titles-string", SET_TITLES_STRING],
     &["set-hook", "-g", "pane-died", PANE_DIED_HOOK],
     &["bind", "-T", "root", "MouseDown1Pane", "if", "-F", "#{==:#{@cpd_view},statusbar}", "send-keys -M", "select-pane -t = ; send-keys -M"],
 ];
+
+/// The terminal window's title (contract §6.1, hs-d300): the config's machine
+/// name, which `cpd tui` sets as the global `@cpd_machine`; the host's short
+/// name until then, on a server another command started.
+const SET_TITLES_STRING: &str = "cpd · #{?@cpd_machine,#{@cpd_machine},#{host_short}}";
 
 /// The value `terminal-features` is appended with (`set -as`), the one entry of
 /// [`SERVER_OPTIONS`] that is not idempotent: it runs once, when cpd starts

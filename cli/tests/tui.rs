@@ -255,6 +255,15 @@ fn assert_server_options(env: &TestEnv) {
     }
 }
 
+/// After `cpd tui`: `@cpd_machine` is the test config's machine and the title
+/// tmux expands from `set-titles-string` is `cpd · <machine>` (contract §6.1, hs-d300).
+fn assert_window_title(env: &TestEnv) {
+    assert_eq!(tmux_out(env, &["show", "-gv", "set-titles"]).trim_end_matches('\n'), "on");
+    assert_eq!(tmux_out(env, &["show", "-gv", "@cpd_machine"]).trim_end_matches('\n'), "m1");
+    let format = tmux_out(env, &["show", "-gv", "set-titles-string"]);
+    assert_eq!(tmux_out(env, &["display", "-p", format.trim_end_matches('\n')]).trim_end_matches('\n'), "cpd · m1");
+}
+
 #[test]
 fn a_server_started_by_plan_new_has_every_server_option() {
     let env = env();
@@ -274,6 +283,7 @@ fn a_server_started_by_plan_new_has_every_server_option() {
 fn a_killed_view_respawns_at_once_and_the_engine_stays_dead() {
     let env = env();
     let out = env.cpd(&["tui"]).ok();
+    assert_window_title(&env);
     let engine = out["watch"]["pane"].as_str().unwrap();
     assert_server_options(&env);
     let before = main_panes(&env);

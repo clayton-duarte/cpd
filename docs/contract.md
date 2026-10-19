@@ -1733,6 +1733,9 @@ Every message in the table that is not marked steered is a follow-up. The turn c
 | `remain-on-exit` | `on` | a dead pane stays, so cpd can read `#{pane_dead_status}` |
 | `focus-events` | `on` | the views are told when their pane gains or loses focus |
 | `pane-active-border-style` | `fg=blue` | the focused pane's border |
+| `set-titles` | `on` | the terminal window attached to the cockpit is titled (User, hs-d300) |
+| `set-titles-string` | `cpd · #{?@cpd_machine,#{@cpd_machine},#{host_short}}` | the window reads `cpd · <machine>` (`cpd · hs`, `cpd · pro`), the config's `machine` name (§8.2), not the OS hostname; tmux's own option, no pane format, so it never changes per pane (hs-d300) |
+| `@cpd_machine` (user option) | the config's `machine` | set by the cockpit's build or repair (`cpd tui`, bare `cpd`), which has the config; `SERVER_OPTIONS` is static. A server another command started shows the host's short name until the cockpit is built |
 | `pane-border-format` | the format below | the column titles |
 
 **Every server start sets every option, key binding and hook of this section**, whichever command starts the server (`plan new`, `watch --ensure`, `tui`), so the cockpit looks and behaves the same whatever started it. Rerunning is safe (each is a plain `set -g`, `bind` or `set-hook -g`), so `cpd tui` also applies them to a server that is already running. Cockpit parity (User, 2026-10-15): the cockpit matches the running cpd 1 cockpit, whose `tui/scripts/tmux.conf` these are, renamed (`@cpd_view`, `@cpd_job`).
