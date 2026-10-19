@@ -32,6 +32,7 @@ use crate::events::{Kind, NewEvent, append};
 use crate::host::{PaneId, Tmux};
 use crate::ids::{PlanId, SessionId};
 use crate::output::Output;
+use crate::store;
 
 /// How often the fork waits for its source to be idle (§6.7 step 1).
 const SOURCE_POLL: Duration = Duration::from_secs(2);
@@ -274,22 +275,9 @@ impl Logged {
     }
 }
 
-/// A store error that waiting out can cure: another process holds the write lock
-/// (`store_busy`), or SQLite says busy or locked in another way (`store_failed`
-/// with `sqlite_code` 5 or 6, whose low byte is the primary code). Nothing else:
-/// a missing Session, a malformed row or a newer database does not heal.
-fn transient(e: &CpdError) -> bool {
-    match e.code() {
-        ErrorCode::StoreBusy => true,
-        ErrorCode::StoreFailed => {
-            e.details().get("sqlite_code").and_then(Value::as_i64).is_some_and(|code| matches!(code & 0xff, 5 | 6))
-        }
-        _ => false,
-    }
-}
-
 /// Runs a store access of the wrapper's start or end (before pi runs, after it
-/// exited), again and again while it meets a [`transient`] error: waits 0.5 s,
+/// exited), again and again while it meets a transient error ([`store::is_transient`], and `lock_timeout`,
+/// the wait for the store's setup lock in `Env::open`): waits 0.5 s,
 /// doubling to 5 s. The pane says once what it waits for and why; the wrapper
 /// never ends for it. Any other result, error or not, is returned as it is.
 fn patiently<T>(what: &str, mut access: impl FnMut() -> Result<T, CpdError>) -> Result<T, CpdError> {
@@ -297,7 +285,7 @@ fn patiently<T>(what: &str, mut access: impl FnMut() -> Result<T, CpdError>) -> 
     let mut said = false;
     loop {
         match access() {
-            Err(e) if transient(&e) => {
+            Err(e) if store::is_transient(&e) || e.code() == ErrorCode::LockTimeout => {
                 if !said {
                     print!("\n  Waiting for the store ({what}): {}: {} Trying again.\n", e.code(), e.message());
                     let _ = std::io::stdout().flush();
@@ -693,19 +681,6 @@ mod tests {
     }
 
     #[test]
-    fn only_busy_and_locked_store_errors_are_transient() {
-        assert!(transient(&CpdError::new(ErrorCode::StoreBusy, "busy.")));
-        // SQLITE_BUSY_SNAPSHOT (517) and SQLITE_LOCKED (6) as `store_failed` carry their code.
-        assert!(transient(&CpdError::new(ErrorCode::StoreFailed, "busy.").with("sqlite_code", 517)));
-        assert!(transient(&CpdError::new(ErrorCode::StoreFailed, "locked.").with("sqlite_code", 6)));
-        assert!(!transient(&CpdError::new(ErrorCode::StoreFailed, "full.").with("sqlite_code", 13)));
-        assert!(!transient(&CpdError::new(ErrorCode::StoreFailed, "no code.")));
-        for code in [ErrorCode::SessionNotFound, ErrorCode::NotALead, ErrorCode::WrongPane, ErrorCode::StoreTooNew] {
-            assert!(!transient(&CpdError::new(code, "no.")), "{code:?}");
-        }
-    }
-
-    #[test]
     fn patiently_tries_again_after_a_transient_error_and_returns_what_is_not() {
         let mut calls = 0;
         let got = patiently("test", || {
@@ -713,6 +688,12 @@ mod tests {
             if calls < 2 { Err(CpdError::new(ErrorCode::StoreBusy, "busy.")) } else { Ok(calls) }
         });
         assert_eq!(got.unwrap(), 2);
+        let mut calls = 0;
+        let got = patiently("test", || {
+            calls += 1;
+            if calls < 2 { Err(CpdError::new(ErrorCode::LockTimeout, "setup lock.")) } else { Ok(calls) }
+        });
+        assert_eq!(got.unwrap(), 2, "the wait for the setup lock is waited out too");
         let mut calls = 0;
         let err = patiently::<()>("test", || {
             calls += 1;
