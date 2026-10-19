@@ -186,6 +186,7 @@ error_codes! {
     // Exit 5: timeout.
     StoreBusy = "store_busy" => Timeout,
     LockTimeout = "lock_timeout" => Timeout,
+    ToolTimeout = "tool_timeout" => Timeout,
     AskTimeout = "ask_timeout" => Timeout,
     CancelTimeout = "cancel_timeout" => Timeout,
 
@@ -349,6 +350,7 @@ mod tests {
             (ErrorCode::BaseNotFound, 4),
             (ErrorCode::StoreBusy, 5),
             (ErrorCode::LockTimeout, 5),
+            (ErrorCode::ToolTimeout, 5),
             (ErrorCode::AskTimeout, 5),
             (ErrorCode::CancelTimeout, 5),
             (ErrorCode::PrStartFailed, 1),

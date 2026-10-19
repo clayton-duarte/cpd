@@ -44,7 +44,7 @@ Every command section has the same parts:
 - **Output**: one JSON example of success. Every failure is the envelope of §1.2, `{"ok": false, "error": {"code", "message", "details"}}`; `details` is listed where it carries something the caller acts on.
 - **Idempotent**: what a rerun does. The default of §1.3 is `"already": true`; a command that differs says so.
 
-Commands marked **internal** are started by cpd itself (in a tmux pane or detached) and are not meant for agents or the User. They are documented so their implementation Jobs have a contract.
+A command is **internal** when cpd runs it by itself and neither an agent nor the User types it: a program cpd starts in a pane or detached, or a command only cpd's own parts (the engine, the pi adapter) run. Internal commands are hidden in clap (`hide = true`; a command under a hidden one is internal too), so they are absent from `--help` text but listed, marked, in the `tree` (§1.2). Today: `session run`, `attempt run`, `tui view` and its views, `plan decide` and `session state`. They are documented so their implementation Jobs have a contract.
 
 ### 1.2 Output and exit codes
 
@@ -57,6 +57,22 @@ Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Thr
 | `cpd tui --attach` | nothing on success: it replaces itself with `tmux attach` | the approved outline says `tui` "builds and attaches the cockpit"; without `--attach`, `cpd tui` prints JSON like every command |
 
 `cpd --version` (like `--help`) prints one JSON value too: `{"ok": true, "version": "0.0.0", "schema": 1000, "store_schema": 1000, "protocol": 3, "store": {"opens": true, "refusal": null, "unknown": [], "pending": []}}`. `store` is the **verdict** of contract §4.5 ("The window") on `$CPD_HOME`'s database opened read-only, computed by the one function every guard uses (`store::verdict`): `null` when the database file does not exist; otherwise `opens` (`true` when this binary can open the store, migrating or converting it if needed), `refusal` (`null`, or `{"code", "message"}` with `code` one of `store_too_new`, `store_failed`, `migration_changed`, `migration_order`, §1.3) when `opens` is `false`, `unknown` (the migration names the store has applied that this binary lacks, in name order: inside the window they are all additive) and `pending` (the names of this binary's migrations the store has not applied, in the order they would be applied; for an unconverted store the legacy names it lacks, then every named one). `unknown` and `pending` are `[]` for a store that is not named yet, and filled whenever the store is a named store, whether or not it opens. **`schema` and `store_schema` are a projection of the verdict, kept only for the integer-era binaries that still run (their reload and install guards compare the two: `store_schema` above `schema` refuses) until `hs`, `air` and `pro` are converted; a later change removes them (hs-d178 D1):** `schema` is always `1000`; `store_schema` is `null` when `store` is, `1000` when `store.opens` is `true`, `1001` when it is `false`. No new code reads them. `protocol` is an integer, **3** today (1 until Plan manager added `session-message`, 2 until Plan inbox added the four `inbox-*` kinds), raised whenever an Event kind, an Event `data` field the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on (contract §5.2 "The protocol number"); the adapter checks it (§15.2). `--version` never creates, migrates or writes the database, and runs neither the schema check nor the conversion. **The guards read `store`:** a driver or a Lead's wrapper reloads into a binary only when `store` is `null` or `store.opens` is `true` (contract §3.4, §6.7), and `scripts/install-cpd.sh` refuses a build whose `store.opens` is `false`, and a Lead Branch build that carries a migration file that is not on `origin/main` (contract §3.7).
+
+Every `--help` prints `{"ok": true, "help": "<clap's text>"}`. The root help (`cpd --help`, `cpd -h`, `cpd help`) adds `tree`: the whole command tree, every command whatever its depth, in clap's order, clap's own `help` subcommand left out. `cpd <group> --help` and `cpd help <group>` print `help` only. Each node is `{"name", "about", ...}`: `name` the command's word, `about` its one-line description (clap's, which ends with its § here). A runnable node (no subcommand, or subcommands that are optional, as `tui`) also has `callers`, `cockpit` and `internal` (§2). A node with subcommands has `commands`, its children. Example (trimmed with `...`):
+
+```json
+{"ok": true, "help": "...", "tree": [
+  {"name": "context", "about": "Contexts and their records (commands.md §3)", "commands": [
+    {"name": "new", "about": "Create a Context (§3.1)", "callers": ["Lead"], "cockpit": true, "internal": false}
+  ]},
+  {"name": "ask", "about": "Ask the Lead a question and wait for the answer (Worker) (commands.md §8.1)", "callers": ["Worker"], "cockpit": false, "internal": false},
+  {"name": "tui", "about": "Build the cockpit and start the engine (commands.md §13)", "callers": [], "cockpit": false, "internal": false, "commands": [
+    {"name": "view", "about": "A view in a cockpit pane (internal; owns its terminal) (§13.2)", "commands": [
+      {"name": "tree", "about": "The session tree (left)", "callers": [], "cockpit": false, "internal": true}
+    ]}
+  ]}
+]}
+```
 
 ### 1.3 Selection and common refusals
 
@@ -125,54 +141,14 @@ Free text (Job `--title`, `--reason`, Context record text, questions and answers
 
 ## 2. Command index
 
-"Caller" is who runs it in normal use; anyone may run any command. "Writes" says whether it opens a write transaction.
+The index is generated: [docs/interface.md](interface.md), rendered from the `tree` of `cpd --help` (§1.2) by the test `cli/tests/interface.rs`, which fails when the page and the binary differ, either way; `CPD_BLESS=1 scripts/cargo.sh test -p cpd --test interface` rewrites the page; never edit it by hand.
 
-| Command | Caller | Writes | Contract |
-|---|---|---|---|
-| `context new` | Lead, User | yes | §2.2, §4.6 |
-| `context list`, `context show` | Lead, TUI | no | §2.2 |
-| `context decide`, `note`, `ask`, `answer` | Lead, Manager | yes | §4.6 |
-| `context manager` | User (TUI), Manager | yes | §2.2, §6.5 |
-| `context pending` | Manager, Lead | no | §2.2, §2.5 |
-| `context distill` | engine (E9), Lead, User | no (an `error` Event on failure) | §3.7, §4.6 |
-| `context rename` | User (TUI) | yes | §2.2 |
-| `context archive`, `unarchive` | User (TUI) | yes | §2.2 |
-| `plan new` | User (TUI), Lead | yes | §3.1, §6.7 |
-| `plan list`, `plan show` | Lead, TUI | no | |
-| `plan phase plan` | Lead | yes | §3.1 |
-| `plan render` | Lead | no | §2.3 |
-| `plan review` | Lead (tool `cpd_plan_review`) | yes | §2.2 Plan review |
-| `plan decide` | pi adapter | yes | §2.2 Plan review |
-| `plan lock` | Lead | yes | §3.1, §7.2 |
-| `plan rename` | User (TUI) | yes | §2.2 |
-| `plan archive`, `unarchive` | User (TUI) | yes | §2.2 |
-| `plan cancel` | Lead, User | yes | §2.2, §3.2, §3.8 |
-| `job add`, `edit`, `cancel`, `retry` | Lead | yes | §3.2 |
-| `job dispatch` | Lead | yes | §3.4 |
-| `job list`, `job show` | Lead, TUI | no | |
-| `attempt submit` | Worker | yes | §7.3 |
-| `attempt read`, `show`, `list` | Lead, TUI | no | |
-| `attempt run` (internal) | E3, `job dispatch` | yes | §3.4 |
-| `ask` | Worker | yes | §3.5 |
-| `answer` | Lead | yes | §3.5 |
-| `pr open`, `pr rebase`, `pr push` | Lead | yes | §7.3, §7.6 |
-| `pr add`, `edit`, `cancel` | Lead | yes | §2.3, §2.5, §3.8 |
-| `pr start` | Lead | yes | §2.5, §3.8, §7.2 |
-| `pr poll` | engine E5, a Lead | only when a value changed | §7.6 |
-| `pr view` | a Lead | no | §7.6, §9.8 |
-| `session list`, `session show` | TUI, Lead | no | |
-| `session fork`, `open`, `park`, `close`, `rename` | User (TUI), Lead | yes | §6.4, §6.7 |
-| `session history` | User (TUI) | only the park's Event | §6.2, §6.4 |
-| `session archive`, `unarchive` | User (TUI) | yes | §2.2 |
-| `session send` | Lead (the Manager), User | yes | §10.13, §15.3 |
-| `session state` | pi adapter | yes | §3.6 |
-| `session run` (internal) | cockpit panes | yes | §6.7 |
-| `events list`, `events follow` | pi adapter, TUI, scripts | no | §5.4 |
-| `watch` | `plan lock`, `tui`, User | yes | §3.7, §6.6 |
-| `tui`, `tui view` (internal) | User | no | §6.2 |
-| `inbox list`, `inbox show` | User, TUI | no | §2.2 Inbox item |
-| `inbox snooze`, `dismiss` | User (TUI) | yes | §2.2 Inbox item |
-| `doctor`, `config`, `tiers` | User | `tiers` refreshes its cache | §8, §9 |
+**Definitions:**
+- **callers** = the agents meant to run the command, any of `Lead`, `Manager`, `Worker`.
+- **cockpit** = an action of the User's cockpit runs it (the cockpit is the User's interface over the same commands, §17 Actions).
+- **internal** = §1.1.
+
+Anyone may run any command; a command with no callers that is neither cockpit nor internal is the User's, at a shell (for example `doctor`). The callers and the cockpit flag are kept in the binary (`cli/src/interface.rs`), next to the clap tree. The table's Writes column (each command's Effects says what it writes) and Contract column (each description ends with its §) are not carried over (hs-d251).
 
 ## 3. `context`
 
@@ -652,13 +628,13 @@ Effects:
 
 Idempotent: yes. When the latest review is `pending` for the current fingerprint, it returns that review with `"already": true` and writes nothing. When the Jobs or PRs changed since, it requests a new review; the older one stays `pending` and no longer matters, because `plan lock` reads only the latest (§2.3).
 
-### 4.7 `plan decide`
+### 4.7 `plan decide` (internal)
 
 ```
 cpd plan decide <review> (--approve | --reject) [--feedback-file <file>] [--plan <id>]
 ```
 
-Records the User's decision. Called by the pi adapter with plannotator's result (§15.5); replaces cpd 1's `plan decision` (cpd 1 §11), whose `--pending` step is now `plan review`. The cpd-lead skill forbids the Lead to run it.
+Records the User's decision. Called by the pi adapter with plannotator's result (§15.5); replaces cpd 1's `plan decision` (cpd 1 §11), whose `--pending` step is now `plan review`. The cpd-lead skill forbids the Lead to run it. Internal (§1.1): hidden in clap, run only by the pi adapter.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -1548,13 +1524,13 @@ Effects:
 
 Idempotent: yes.
 
-### 10.6 `session state`
+### 10.6 `session state` (internal)
 
 ```
 cpd session state <working|blocked|idle|stopped> [--label <text>] [--session <id>]
 ```
 
-How the pi adapter reports its agent state (§3.6, D4). `--label` is required with `blocked` and refused with any other state (`usage`); 1–80 characters.
+How the pi adapter reports its agent state (§3.6, D4). `--label` is required with `blocked` and refused with any other state (`usage`); 1–80 characters. Internal (§1.1): hidden in clap, run only by the pi adapter.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -2010,6 +1986,8 @@ Checks the machine (cpd 1 §11 `doctor`, kept in shape). Each check has `name`, 
 | gh | `gh --version` | `gh version 2.45.0 (2025-07-18 Ubuntu 2.45.0-1ubuntu0.3)` | `2.45.0` | the first `x.y.z` | `pr create`, `pr list --json`, `pr view --json …statusCheckRollup…`, `api` (§7.6) |
 | pi's Node | `<pi node> --version`, the binary §9 chooses | `v22.23.2` (`/usr/local/bin/node`; this machine has no `pi-node` directory) | none: it must run | | runs the catalog module of §9 |
 
+**Deadline.** Each probe `doctor` runs (the five commands of the table, `<pi node> --version`, the catalog module of §9 and `gh auth status`) has a deadline of 10 s. A probe that runs past it is a failed check whose `message` names the tool, its argv and the deadline (contract §1.2 `tool_timeout`); `doctor` goes on with the next check and still reports every check.
+
 Checks, in order:
 
 | Name | Severity | Passes when |
@@ -2083,7 +2061,7 @@ The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays
 - **Location:** `pi/`, installed to `~/.local/share/cpd/pi` by `scripts/install-cpd.sh`. (History: before the switch-over it lived beside cpd 1's `pi/`, in a second directory.)
 - **Activation:** at pi's `session_start`, only when `ctx.mode` is `tui` and `CPD_SESSION` is set. Change from cpd 1: cpd 1 activated in any herdr or tmux pane (`HERDR_ENV`, `TMUX_PANE`); now cpd marks its own panes with `CPD_SESSION` (§6.5), so a pi the User starts by hand is left alone.
 - **Identity:** `CPD_SESSION` must equal `ctx.sessionManager.getSessionId()`. If not, the adapter delivers one error message (below) and stays inactive: it would otherwise report another Session's state.
-- **Calls:** one-shot commands through `pi.exec("cpd", args)`, whose stdout is parsed as the JSON envelope at the boundary (a non-JSON stdout, or `ok: false`, is an error with the code). The follower is a child process (`node:child_process` `spawn`, argv, stdin `/dev/null`) read line by line.
+- **Calls:** one-shot commands through `pi.exec("cpd", args)`, whose stdout is parsed as the JSON envelope at the boundary (a non-JSON stdout, or `ok: false`, is an error with the code). Each call passes a timeout of 30 s and the abort signal of the adapter's run (aborted at `session_shutdown`); a call that times out or is aborted is reported like a failed call (the error delivery below, code `tool_timeout` for a timeout). The follower is a child process (`node:child_process` `spawn`, argv, stdin `/dev/null`) read line by line.
 - **Errors** are delivered to the Session as `pi.sendMessage({customType: "cpd", content: "cpd adapter: <what>: <code>: <message>", display: true, details: {kind: "error", code, …}}, {triggerTurn: true, deliverAs: "followUp"})` (cpd 1's `errorDelivery`, kept). The adapter never throws into pi.
 
 ### 15.2 Start-up and the cursor

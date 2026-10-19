@@ -57,7 +57,7 @@ Within your area you may add files (`core/src/<area>/foo.rs`, declared in your `
 
 ## The command tree
 
-`cli/src/cli.rs` holds the root `Command` enum; each variant delegates to its area (`cpd_core::context::run(cmd)`, `cpd_core::watch::run(args)`, …, and `cpd_tui` for the cockpit). Each area owns its subcommand enum and its argument types. Every command of commands.md §2 is implemented, and `every_documented_command_exists` (`cli/tests/command_index.rs`) fails when one is documented but absent from the tree.
+`cli/src/cli.rs` holds the root `Command` enum; each variant delegates to its area (`cpd_core::context::run(cmd)`, `cpd_core::watch::run(args)`, …, and `cpd_tui` for the cockpit). Each area owns its subcommand enum and its argument types. Every command of commands.md §2 is implemented, and `cli/tests/interface.rs` keeps docs/interface.md, the index of commands.md §2, equal to `cpd --help`'s tree, both ways, and every command in `cli/src/interface.rs`'s table.
 
 To add a command:
 1. In your module, define its arguments as a `#[derive(clap::Args)]` struct, and name it from the root or the area's subcommand enum (`watch::Args`, `config::ConfigArgs`, `driver::RunArgs`, …).
