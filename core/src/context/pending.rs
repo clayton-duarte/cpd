@@ -94,17 +94,23 @@ fn jobs(conn: &Connection, plan: &str, pr: &str) -> Result<Vec<Value>, CpdError>
     )?;
     let rows = stmt
         .query_map([plan, pr], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?))
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
         .map(|(key, status, title, touches)| {
-            let touches: Value = serde_json::from_str(&touches).map_err(|e| {
-                CpdError::new(
-                    crate::error::ErrorCode::StoreFailed,
-                    format!("The database holds an invalid row: Job {key} of Plan {plan} has touches {touches:?}: {e}."),
-                )
-            })?;
+            // A stub draft has no Spec yet, so no touched files.
+            let touches: Value = touches
+                .map(|text| {
+                    serde_json::from_str(&text).map_err(|e| {
+                        CpdError::new(
+                            crate::error::ErrorCode::StoreFailed,
+                            format!("The database holds an invalid row: Job {key} of Plan {plan} has touches {text:?}: {e}."),
+                        )
+                    })
+                })
+                .transpose()?
+                .unwrap_or_else(|| json!([]));
             Ok(json!({"key": key, "status": status, "title": title, "touches": touches}))
         })
         .collect()

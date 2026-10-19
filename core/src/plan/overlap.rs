@@ -72,13 +72,16 @@ pub fn load_others(conn: &Connection, plan: &PlanId) -> Result<Vec<Other>, CpdEr
     )?;
     let rows = stmt
         .query_map([plan.as_str()], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?))
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, Option<String>>(5)?))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
         .map(|(plan, pr, repo, job, status, touches)| {
-            let touches = serde_json::from_str::<Vec<String>>(&touches)
-                .map_err(|_| bad_row(format!("Job {plan}/{job} has touches {touches:?}")))?;
+            // A stub draft has no Spec yet: no files to compare.
+            let touches = touches
+                .map(|text| serde_json::from_str::<Vec<String>>(&text).map_err(|_| bad_row(format!("Job {plan}/{job} has touches {text:?}"))))
+                .transpose()?
+                .unwrap_or_default();
             Ok(Other { plan, pr, repo, job, status, touches })
         })
         .collect()
@@ -102,7 +105,9 @@ pub fn find(prs: &[PrSpec], jobs: &[Job], others: &[Other]) -> Vec<Overlap> {
     for job in open {
         let Some(pr) = prs.iter().find(|p| p.key == job.pr && is_open(p)) else { continue };
         let mut paths: Vec<&str> = Vec::new();
-        for path in job.touches.as_array().into_iter().flatten().filter_map(Value::as_str) {
+        // A stub draft has no Spec yet, so no files to compare.
+        let touches = job.spec.as_ref().and_then(|s| s.touches.as_array());
+        for path in touches.into_iter().flatten().filter_map(Value::as_str) {
             if !paths.contains(&path) {
                 paths.push(path);
             }

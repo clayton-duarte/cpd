@@ -927,7 +927,7 @@ mod tests {
 
     #[test]
     fn user_versions_other_than_a_legacy_one_or_the_named_scheme_are_store_too_new() {
-        for version in [14, 99, 999, 1001] {
+        for version in [15, 99, 999, 1001] {
             let err = refuse_user_version(version).unwrap_err();
             assert_eq!(err.code(), ErrorCode::StoreTooNew, "{version}");
             assert_eq!(err.details()["user_version"], version);

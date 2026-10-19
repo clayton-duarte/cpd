@@ -388,10 +388,10 @@ mod tests {
 
     #[test]
     fn refuse_user_version_is_the_same_rows() {
-        for version in [0, 1, 6, 7, 11, 12, 13, 1000] {
+        for version in [0, 1, 6, 7, 11, 12, 13, 14, 1000] {
             refuse_user_version(version).unwrap();
         }
-        for version in [14, 999, 1001] {
+        for version in [15, 999, 1001] {
             assert_eq!(refuse_user_version(version).unwrap_err().code(), ErrorCode::StoreTooNew);
         }
     }

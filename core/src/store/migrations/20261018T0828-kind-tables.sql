@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 13
+-- cpd-migration: breaking after 14
 -- The lookup tables for the lists that migrations extend (contract §4.4, §4.5
 -- K1–K4; hs-d178 D1): `event_kinds`, `record_kinds` and `history_tables`, filled
 -- with today's values. `events` and `context_records` are rebuilt once more, the

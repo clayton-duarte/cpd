@@ -445,6 +445,41 @@ fn a_locked_job_and_its_dependencies_are_job_locked() {
 }
 
 #[test]
+fn a_stub_draft_has_a_title_only_and_a_job_that_is_not_a_draft_has_its_tier_and_its_spec() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    fixture(&mut store);
+    let insert = |key: &str, status: &str, fingerprint: &str| {
+        format!(
+            "INSERT INTO jobs (plan, pr, key, title, status, appended, fingerprint, created_txn, created_at)
+             VALUES ('pay', 'pay', '{key}', 'T', '{status}', 1, {fingerprint}, cpd_txn(), 't')"
+        )
+    };
+    // A stub draft is stored, and may be cancelled as such.
+    store.write("test", |tx| exec(tx, &insert("stub", "draft", "NULL"))).unwrap();
+    store
+        .write("test", |tx| exec(tx, "UPDATE jobs SET status = 'cancelled', cancel_reason = 'no', cancel_requested_at = 't' WHERE key = 'stub'"))
+        .unwrap();
+    // No other status is, and a draft cannot be queued while it lacks its Tier or Spec.
+    store.write("test", |tx| exec(tx, &insert("stub2", "draft", "NULL"))).unwrap();
+    for sql in [insert("direct", "queued", &format!("'{FP}'")), format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 'stub2'")] {
+        let err = refused(&mut store, &sql);
+        assert!(sqlite_message(&err).contains("CHECK constraint failed"), "{sql}: {err:?}");
+    }
+    store
+        .write("test", |tx| {
+            exec(
+                tx,
+                &format!(
+                    "UPDATE jobs SET tier = 'S2', goal = 'g', context = 'c', touches = '[\"a\"]', acceptance = '[\"b\"]', out_of_scope = '[]' WHERE key = 'stub2';
+                     UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 'stub2'"
+                ),
+            )
+        })
+        .unwrap();
+}
+
+#[test]
 fn appending_a_job_inserts_its_dependencies_in_its_own_transaction() {
     // dependencies_locked: a non-draft Job created in this transaction (append) may get Dependencies.
     let env = TestEnv::new();
@@ -920,6 +955,7 @@ fn schema_migrations_records_every_legacy_migration_and_is_written_only_by_the_r
         ("0011-pr-mergeable", "breaking"),
         ("0012-inbox", "breaking"),
         ("0013-pr-inbox", "breaking"),
+        ("0014-register", "breaking"),
     ];
     let expected: Vec<(String, String, i64, i64)> =
         expected.iter().enumerate().map(|(i, (n, c))| (n.to_string(), c.to_string(), i as i64 + 1, 0)).collect();
@@ -1172,13 +1208,14 @@ fn version_on_a_store_that_does_not_open_reports_the_refusal_and_store_schema_ab
 }
 
 #[test]
-fn version_on_a_legacy_home_reports_the_conversion_up_to_0013_and_refuses_a_later_number() {
+fn version_on_a_legacy_home_reports_the_conversion_up_to_0014_and_refuses_a_later_number() {
     let named: Vec<String> = cpd_core::store::testing::named_migrations().into_iter().map(|(n, ..)| n.to_owned()).collect();
     for (version, legacy_pending) in [
-        (7, &["0008-phase-deploy", "0009-session-message", "0010-manager", "0011-pr-mergeable", "0012-inbox", "0013-pr-inbox"][..]),
-        (11, &["0012-inbox", "0013-pr-inbox"][..]),
-        (12, &["0013-pr-inbox"][..]),
-        (13, &[][..]),
+        (7, &["0008-phase-deploy", "0009-session-message", "0010-manager", "0011-pr-mergeable", "0012-inbox", "0013-pr-inbox", "0014-register"][..]),
+        (11, &["0012-inbox", "0013-pr-inbox", "0014-register"][..]),
+        (12, &["0013-pr-inbox", "0014-register"][..]),
+        (13, &["0014-register"][..]),
+        (14, &[][..]),
     ] {
         let env = TestEnv::new();
         // `--version` reads only `user_version` of a legacy store: it never converts.
@@ -1190,9 +1227,9 @@ fn version_on_a_legacy_home_reports_the_conversion_up_to_0013_and_refuses_a_late
         assert_eq!((&out["schema"], &out["store_schema"]), (&json!(1000), &json!(1000)), "version {version}: {out}");
         assert_eq!(fs::read(home(&env).db()).unwrap(), before, "version {version}");
     }
-    // 14 is no legacy version: a numbered migration this binary lacks.
+    // 15 is no legacy version: a numbered migration this binary lacks.
     let env = TestEnv::new();
-    raw(&env).pragma_update(None, "user_version", 14).unwrap();
+    raw(&env).pragma_update(None, "user_version", 15).unwrap();
     let out = env.cpd(&["--version"]).ok();
     assert_eq!(out["store"]["refusal"]["code"], "store_too_new", "{out}");
     assert_eq!(out["store_schema"], 1001, "{out}");
