@@ -1,0 +1,196 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import { newReporter } from "./agent-state.ts";
+import { CpdError, isObject, toCpdError } from "./cpd.ts";
+import { cursorFrom } from "./cursor.ts";
+import { errorMessage } from "./delivery.ts";
+import { PERMANENT_CODES } from "./follower.ts";
+import { followerHooks } from "./handle.ts";
+import type { Host } from "./host.ts";
+import type { Ctx } from "./pi.ts";
+import { ENTRY_TYPE, highestReview, REVIEW_LABEL, reviewsFromEntries } from "./plan-review.ts";
+import { parseResult } from "./plannotator.ts";
+import { adapterDir, appendLog, DEFAULT_POLL_MS, LONG_REFUSAL_NOTICE, pollAdapter, refusal, reloadLogPath, RELOAD_TRIGGER, validatePackage } from "./reload.ts";
+import { guardOf } from "./reload-command.ts";
+import { decide, QUESTION_LABEL, recover, registerTool } from "./review.ts";
+import { Run, parseSession, type SessionInfo } from "./run.ts";
+import { Facts } from "./state.ts";
+import { registerUpdates } from "./turns.ts";
+
+// Start-up and shutdown (§15.2).
+
+export async function start(host: Host, ctx: Ctx, reason: string): Promise<void> {
+  if (ctx.mode !== "tui") return;
+  const id = host.env.CPD_SESSION;
+  if (id === undefined || id === "") return;
+  await stop(host); // a start without a shutdown (never seen) must not leave a second follower behind
+  host.abort = new AbortController();
+  host.ctx = ctx;
+  if (ctx.sessionManager.getSessionId() !== id) {
+    const m = errorMessage("activation", "session_mismatch", `CPD_SESSION is ${id} but pi's session is ${ctx.sessionManager.getSessionId()}; the adapter stays inactive.`);
+    host.pi.sendMessage(m.message, m.options);
+    return;
+  }
+
+  // 1. who am I
+  let info: SessionInfo;
+  try {
+    info = await showSession(host, id);
+  } catch (e) {
+    const err = toCpdError(e);
+    host.deliver("session show", err);
+    if (PERMANENT_CODES.has(err.code)) return;
+    const retry = (host.showRetry = new AbortController());
+    void retryShow(host, id, retry, err.code)
+      .then((shown) => (shown ? begin(host, ctx, id, shown, reason) : undefined))
+      .catch((e) => host.deliver("start-up", e));
+    return;
+  }
+  await begin(host, ctx, id, info, reason);
+}
+
+const showSession = async (host: Host, id: string) => parseSession(await host.call(["session", "show", id]));
+
+/** §15.2 step 1 again, with the follower's back-off, until it works, is refused for good, or the run is stopped (then `undefined`). A code is reported once. */
+async function retryShow(host: Host, id: string, retry: AbortController, reported: string): Promise<SessionInfo | undefined> {
+  const seen = new Set([reported]);
+  let delay = host.timing.restartInitialMs;
+  for (;;) {
+    await sleep(delay, undefined, { signal: retry.signal }).catch(() => undefined);
+    if (retry.signal.aborted) return undefined;
+    delay = Math.min(delay * 2, host.timing.restartMaxMs);
+    try {
+      const info = await showSession(host, id);
+      if (retry.signal.aborted) return undefined;
+      host.showRetry = undefined;
+      return info;
+    } catch (e) {
+      if (retry.signal.aborted) return undefined;
+      const err = toCpdError(e);
+      if (!seen.has(err.code)) {
+        seen.add(err.code);
+        host.deliver("session show", err);
+      }
+      if (PERMANENT_CODES.has(err.code)) {
+        host.showRetry = undefined;
+        return undefined;
+      }
+    }
+  }
+}
+
+/** `run/adapter/<session>.log` (§15.6 "Log"): a failed write is notified once per run, not as a message, so it starts no turn. */
+function logTo(host: Host, id: string): (line: string) => void {
+  let failed = false;
+  return (line) => {
+    try {
+      appendLog(reloadLogPath(host.env.CPD_HOME || join(homedir(), ".cpd"), id), line);
+    } catch (e) {
+      if (!failed) {
+        failed = true;
+        host.ctx?.ui.notify(`cpd: cannot write the reload log: ${toCpdError(e).message}`, "error");
+      }
+    }
+  };
+}
+
+/** §15.2 steps 2 to 6, once the Session is known. */
+async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason: string): Promise<void> {
+  const { pi, options } = host;
+  const facts = new Facts();
+  const r = new Run({
+    id,
+    info,
+    facts,
+    reporter: newReporter(host, id, facts),
+    abort: host.abort,
+    log: logTo(host, id),
+    follow: { hooks: followerHooks(host), timing: host.timing, spawn: options.spawn, schedule: options.schedule },
+  });
+  host.run = r;
+  r.log(`start: ${reason}`);
+
+  // 2. stopped -> idle, then working when pi is busy.
+  r.reporter.want({ state: "idle" });
+  await r.reporter.settled();
+  if (host.run !== r) return;
+  r.reporting = true;
+  facts.active = !ctx.isIdle();
+
+  // 3. name
+  if (info.name !== null && pi.getSessionName() !== info.name) pi.setSessionName(info.name);
+
+  // 4. cursor
+  const entries = ctx.sessionManager.getEntries();
+  r.cursor = cursorFrom(info.registeredEvent, entries, id);
+
+  if (info.role === "manager") registerUpdates(host);
+
+  // 5. blocking reasons (Plan Lead only; a Manager has none and opens no plannotator)
+  if (info.role !== "manager" && info.planLead && info.plan !== null) {
+    const plan = info.plan;
+    const folded = reviewsFromEntries(entries, plan);
+    if (folded.invalid > 0) host.deliver("session entries", new CpdError("entry_invalid", `${folded.invalid} ${ENTRY_TYPE} entries of this session do not parse and were skipped`));
+    r.reviews = folded.reviews;
+    let latest: string | undefined = highestReview(r.reviews.keys()); // stands in when `plan show` fails (§15.5 "Latest only")
+    try {
+      const show = await host.call(["plan", "show", "--plan", plan]);
+      latest = isObject(show.review) && typeof show.review.id === "string" ? show.review.id : undefined;
+      if (Array.isArray(show.escalations)) {
+        for (const q of show.escalations) if (isObject(q) && typeof q.id === "string") facts.open(`escalation:${q.id}`, QUESTION_LABEL);
+      }
+    } catch (e) {
+      host.deliver("plan show", e);
+    }
+    for (const entry of r.reviews.values()) {
+      if (entry.status === "pending" && entry.review === latest) facts.open(`plan-review:${entry.review}`, REVIEW_LABEL);
+    }
+    registerTool(host);
+  }
+  if (host.run !== r) return;
+  host.refresh(r);
+
+  // 6. follow
+  r.follower.start();
+  r.reload = pollAdapter({
+    dir: options.reload?.dir ?? adapterDir(),
+    intervalMs: options.reload?.intervalMs ?? DEFAULT_POLL_MS,
+    validate: (dir) => validatePackage(dir, options.reload),
+    refusal: () => (host.run === r && host.ctx !== undefined ? refusal(guardOf(r, host.ctx)) : "not active"),
+    trigger: () => pi.sendUserMessage(RELOAD_TRIGGER, { expandPromptTemplates: true }),
+    onRefused: (reason) => host.ctx?.ui.notify(`cpd: adapter update not loaded: ${reason}`, "error"),
+    onError: (e) => host.deliver("reload after install", e),
+    log: r.log,
+    onLongRefusal: () => host.ctx?.ui.notify(LONG_REFUSAL_NOTICE),
+    longRefusalMs: options.reload?.longRefusalMs,
+  });
+
+  // Recovery of the reviews this session opened (§15.5), in the background.
+  r.unsubscribe.push(
+    pi.events.on("plannotator:review-result", (data) => {
+      const result = parseResult(data);
+      if (!result || host.run !== r) return;
+      const entry = [...r.reviews.values()].find((e) => e.status === "pending" && e.plannotator_id === result.reviewId);
+      if (entry) void decide(host, r, entry, result.approved, result.feedback).catch((e) => host.deliver("plan decision", e));
+    }),
+  );
+  for (const entry of r.reviews.values()) if (entry.status === "pending") void recover(host, r, entry.review).catch((e) => host.deliver("plan review recovery", e));
+}
+
+export async function stop(host: Host): Promise<void> {
+  host.showRetry?.abort();
+  host.showRetry = undefined;
+  host.abort.abort(); // also a start still waiting for `session show`
+  const r = host.run;
+  if (!r) return;
+  host.run = undefined;
+  host.ctx = undefined;
+  r.log("stop");
+  r.reload?.stop();
+  r.follower.stop();
+  r.unsubscribe.forEach((u) => u());
+  if (r.reporting) {
+    await Promise.race([r.reporter.close({ state: "stopped" }), sleep(host.timing.shutdownWaitMs, undefined, { ref: false })]);
+  }
+}
