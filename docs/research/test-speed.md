@@ -54,6 +54,15 @@ Attempt sp-profile-2-a1, 2026-10-19 16:15-16:40 UTC (12:15-12:40 on hs's clock),
 | build | load before → after (1 min) | wall (s) | sum (s) | tests | result |
 |---|---|---|---|---|---|
 | base `8df1af8` | 74.9 → 113.3 | 575.6 | 7,835.8 | 1,728 | all pass |
+| main `74d5f99` | 99.0 → 77.0 | 560.5 | 8,028.1 | 1,830 | all pass |
+
+At load 75-113 the suite takes 4.7× its calm clock and 5.6× its calm sum (base: 575.6 s / 120.6 s; 7,836 s / 1,408 s, run 5), and the multiplier is not uniform (the multi-env tests of §6.5 grow most: `config_refuses_each_bad_file_with_its_key_path` 152 s against 22 s calm; the `session_watchdog` tests, which wait out a fixed 60 s, least: 70-71 s against 67-69 s). So these two runs compare builds with each other, not with the 30 s / 300 s target. What they show (on the same conditions, run at the same time):
+
+- **main has 102 more tests** (113 new, 11 renamed or gone): 552 s of main's sum under this load, about 100 s calm (computed with the 5.6× above: unverified). The target applies to main, so its sum before the speed Jobs is about **1,500 s** calm (computed: run 5's 1,408 s + ~100 s), not 1,408 s.
+- On the 1,717 tests both have, main's sum is 7,476 s against 7,801 s (−4 %, inside the noise of one pair). #104's changes show only where they are large: `session_reload`'s SIGTERM test (`pi_stop_seconds = 3`) 15.3 → 9.5 s, `e2e_cross` 69.4 → 49.9 s; the `watch` binary is 430 → 495 s and `session` 351 → 399 s (noise; #104's own commit message measured `session` unchanged).
+- The `session_watchdog` tests (60 s limit) are unchanged on main: sp-limits still owns them.
+
+The per-test numbers of §4-§7 are the base's and still hold on main for every test #104 did not touch (unverified per test: not re-measured).
 
 ## 3. Where the clock goes
 
