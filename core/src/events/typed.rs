@@ -309,6 +309,7 @@ impl NewEvent {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::path::Path;
 
     use super::*;
 
@@ -404,5 +405,36 @@ mod tests {
                 assert!(made.contains(*field), "{kind}: no constructor makes the optional field {field:?}");
             }
         }
+    }
+
+    fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                rust_files(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    /// Every append goes through a typed constructor (store-G1): `NewEvent::new` is for the tests of `append`'s refusals.
+    #[test]
+    fn no_command_builds_an_untyped_event() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        rust_files(&src, &mut files);
+        let needle = ["NewEvent", "::new("].concat();
+        let mut found = Vec::new();
+        for file in files {
+            if file.starts_with(src.join("events")) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&file).unwrap();
+            for (i, _) in text.lines().enumerate().filter(|(_, l)| l.contains(&needle)) {
+                found.push(format!("{}:{}", file.strip_prefix(&src).unwrap().display(), i + 1));
+            }
+        }
+        assert!(found.is_empty(), "build these Events with the constructor of their kind (events/typed.rs): {found:#?}");
     }
 }
