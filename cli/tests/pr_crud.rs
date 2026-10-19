@@ -119,7 +119,7 @@ fn add_creates_a_waiting_pr_with_its_event_and_no_git_write() {
     let out = fx.add("api", &fx.pay, &[]).ok();
     assert_eq!(
         out["pr"],
-        json!({"key": "api", "repo": fx.pay.display().to_string(), "base": "main", "needs": [], "status": "waiting",
+        json!({"key": "api", "repo": fx.pay.display().to_string(), "name": "pay", "base": "main", "needs": [], "status": "waiting",
                "lead_branch": "cpd/pay-1/api", "appended": false})
     );
     assert!(out.get("already").is_none());
@@ -374,6 +374,7 @@ fn add_keeps_refusing_the_legacy_lead_branch_of_a_pr_that_is_not_merged() {
 fn edit_changes_the_repo_the_base_and_the_needs() {
     let fx = fx("plan");
     fx.env.git(&fx.web, &["branch", "develop"]);
+    fx.env.git(&fx.web, &["update-ref", "refs/remotes/origin/develop", "develop"]);
     for key in ["a", "b", "c"] {
         fx.add(key, &fx.pay, &[]).ok();
     }
@@ -445,6 +446,7 @@ fn edit_refusals_write_nothing() {
     assert_eq!(error["details"]["base"], "nope");
     // --repo keeps the stored base, which must exist in the new repo.
     fx.env.git(&fx.web, &["branch", "develop"]);
+    fx.env.git(&fx.web, &["update-ref", "refs/remotes/origin/develop", "develop"]);
     fx.pr(&["edit", "web", "--base", "develop"]).ok();
     let writes = fx.writes();
     let error = fx.refused(&fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]), "base_not_found", 4, writes);
@@ -541,6 +543,7 @@ fn cancel_is_refused_while_a_job_or_a_pr_holds_the_pr() {
 fn the_plan_fingerprint_changes_with_a_prs_repo_base_needs_and_existence() {
     let fx = fx("plan");
     fx.env.git(&fx.web, &["branch", "develop"]);
+    fx.env.git(&fx.web, &["update-ref", "refs/remotes/origin/develop", "develop"]);
     let none = fx.fingerprint();
     assert_eq!(fx.fingerprint(), none, "the same PRs give the same fingerprint");
 

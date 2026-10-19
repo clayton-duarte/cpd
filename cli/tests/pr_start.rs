@@ -490,6 +490,7 @@ fn a_repo_without_origin_starts_a_pr_as_before() {
     let fx = fx();
     let repo = fx.env.keyed_repo("pay").canonicalize().unwrap();
     fx.a2_ready(&repo);
+    fx.env.drop_unreachable_origin(&repo);
     let base = head(&fx, &repo, "HEAD");
 
     let out = fx.start("a2").ok();

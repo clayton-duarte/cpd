@@ -107,7 +107,9 @@ fn new_plan_only(env: &TestEnv, id: &str) -> Value {
 /// `plan new` and the Plan's one PR, keyed `pay` (R34 A12: a Plan has no repo of its own).
 fn new_plan(env: &TestEnv, id: &str, repo: &Path) -> Value {
     let out = new_plan_only(env, id);
+    env.github_origin(repo);
     env.cpd(&["pr", "add", "pay", "--repo", repo.to_str().unwrap(), "--plan", id]).ok();
+    env.drop_unreachable_origin(repo);
     out
 }
 
@@ -665,6 +667,9 @@ fn pr_add_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
     env.git(&origin, &["symbolic-ref", "HEAD", "refs/heads/trunk"]);
     let clone = env.root().join("repos").join("clone");
     env.git(env.root(), &["clone", "-q", origin.to_str().unwrap(), clone.to_str().unwrap()]);
+    // Keyed by its GitHub URL; git still reaches the local repo.
+    env.git(&clone, &["remote", "set-url", "origin", "https://github.com/acme/clone.git"]);
+    env.git(&clone, &["config", &format!("url.{}.insteadOf", origin.display()), "https://github.com/acme/clone.git"]);
     // From a subdirectory of a linked worktree: the repo is the main worktree.
     let linked = env.root().join("repos").join("clone-linked");
     env.git(&clone, &["worktree", "add", "-q", linked.to_str().unwrap(), "-b", "side"]);
