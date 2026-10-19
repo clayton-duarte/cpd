@@ -353,7 +353,7 @@ fn the_tree_is_contexts_then_plans_then_lead_sessions_with_their_states() {
     assert_eq!(beta.plans.iter().map(|p| p.head.id.as_str()).collect::<Vec<_>>(), ["old", "rel", "shut"]);
     let lead = &rel.sessions[0];
     assert_eq!((lead.state, lead.state_label.as_deref(), lead.place), (State::Blocked, Some("cpd: PR feedback"), Place::Parked));
-    assert!(tree.inbox.is_empty(), "no item, no filled ●: the Sessions' states and Escalations no longer say who needs the User");
+    assert!(tree.inbox.is_empty(), "no item, no filled dot: the Sessions' states and Escalations no longer say who needs the User");
     assert!(!rel.sessions[0].needs_you() && !beta.dot.needs_you() && !alpha.dot.needs_you() && !gamma.dot.needs_you());
 
     assert_eq!(tree.events_cursor, last_event(&mut store));
@@ -409,10 +409,12 @@ fn inbox(store: &mut Store, conditions: &[Condition], at: &str) {
 
 const T0: &str = "2026-01-04T00:00:00.000Z";
 
-/// The dots of the tree (§17): a Session's `●` comes from its Inbox items only.
+/// The dots of the tree (§17): a Session's filled dot comes from its Inbox items only, and a working Session shows the spinner whatever its items
+/// (own state first, hs-d183).
 ///
 /// - `hot`: `red` (a dialog, red), `yel` (the Lead has a `pr-ready` item of its Plan; its fork `f-yel` is working and shows
-///   no item of the Plan), `mag` (a magenta dialog), `whi` (`unread`), `blk` (blocked, no item), `wrk`, `idl`, `stp`;
+///   no item of the Plan), `mag` (a magenta dialog), `whi` (`unread`), `blk` (blocked, no item), `wrk` (working, with items: still the spinner), `idl` (idle, with an
+///   `unread` and a red `dialog`: the most urgent), `stp`;
 /// - `calm`: a working and an idle Lead; `dead`: a stopped one; `ice`: no Plan, no Session.
 #[test]
 fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_filled_dot() {
@@ -450,9 +452,9 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
     };
     let dot = |all: &[(String, Dot)], id: &str| all.iter().find(|(i, _)| i == id).unwrap().1;
 
-    // No item: no filled ●, whatever the state (a blocked Session is `○` until the engine opens its dialog).
+    // No item: no filled dot, whatever the state (a blocked Session is idle until the engine opens its dialog).
     let all = dots(&mut store);
-    assert!(all.iter().all(|(_, d)| !d.needs_you()), "no item, never a filled ●: {all:?}");
+    assert!(all.iter().all(|(_, d)| !d.needs_you()), "no item, never a filled dot: {all:?}");
     assert_eq!((dot(&all, "l-red"), dot(&all, "l-wrk"), dot(&all, "l-idl"), dot(&all, "l-stp")), (Dot::Idle, Dot::Working, Dot::Idle, Dot::Stopped));
 
     inbox(
@@ -462,7 +464,10 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
             condition(Kind::PrReady, Urgency::Yellow, None, Some("yel"), "hot", "pr:acme/repo#20"),
             condition(Kind::Dialog, Urgency::Magenta, Some("l-mag"), Some("mag"), "hot", "session:l-mag"),
             condition(Kind::Unread, Urgency::White, Some("l-whi"), Some("whi"), "hot", "session:l-whi"),
-            // an `unread` and a red `dialog` of one Session: the most urgent wins
+            // an `unread` and a red `dialog` of one idle Session: the most urgent wins
+            condition(Kind::Unread, Urgency::White, Some("l-idl"), Some("idl"), "hot", "session:l-idl"),
+            condition(Kind::Dialog, Urgency::Red, Some("l-idl"), Some("idl"), "hot", "session:l-idl"),
+            // the same two items of a working Session: its own state first, the spinner
             condition(Kind::Unread, Urgency::White, Some("l-wrk"), Some("wrk"), "hot", "session:l-wrk"),
             condition(Kind::Dialog, Urgency::Red, Some("l-wrk"), Some("wrk"), "hot", "session:l-wrk"),
         ],
@@ -475,9 +480,9 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
         ("f-yel", Dot::Working), // a fork shows no item of the Plan
         ("l-mag", Dot::Magenta),
         ("l-whi", Dot::White),
-        ("l-wrk", Dot::Red),
+        ("l-wrk", Dot::Working), // working shows the spinner, not its red dialog
         ("l-blk", Dot::Idle),
-        ("l-idl", Dot::Idle),
+        ("l-idl", Dot::Red),
         ("l-stp", Dot::Stopped),
         ("l-ship", Dot::Working),
         ("l-rel", Dot::Idle), // blocked in deploy, with a failing pull request, but no item
@@ -494,6 +499,8 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
 #[test]
 fn a_plans_items_fill_its_lead_and_not_its_forks() {
     let (_env, mut store) = fixture();
+    // The Lead is idle: a working Session shows the spinner whatever its items (hs-d183).
+    sql(&mut store, "UPDATE sessions SET state = 'idle' WHERE id = 'l-ship';");
     inbox(
         &mut store,
         &[
@@ -518,15 +525,18 @@ fn a_plans_items_fill_its_lead_and_not_its_forks() {
     assert_eq!(dots(&tree.contexts[0].plans[0]), [("l-ship", Dot::Magenta), ("f-ship", Dot::Idle)], "closed items fill no dot");
 }
 
-/// A Context row's `●` comes only from its Manager's own items (hs-d215, hs-d217); else its most urgent live glyph.
+/// A Context row is its live Manager's dot (hs-d215, hs-d217): a filled dot only from the Manager's own items, else the
+/// glyph of its state; `Stopped` with no live Manager.
 #[test]
 fn a_context_row_fills_only_from_its_managers_items() {
     let (_env, mut store) = fixture();
+    // The Lead is idle, so that its own row shows the items it is given below.
+    sql(&mut store, "UPDATE sessions SET state = 'idle' WHERE id = 'l-ship';");
     sql(&mut store, &session_row("m-alpha", "manager", "alpha", "", None, "idle", None, "2026-01-02T00:00:05.000Z"));
     let rows = |store: &mut Store| -> Vec<(String, Dot)> {
         read::tree(store).unwrap().contexts.iter().map(|c| (c.id.as_str().to_owned(), c.dot)).collect()
     };
-    assert_eq!(rows(&mut store), [("alpha".into(), Dot::Working), ("beta".into(), Dot::Idle), ("gamma".into(), Dot::Stopped)], "no item: the glyphs");
+    assert_eq!(rows(&mut store), [("alpha".into(), Dot::Idle), ("beta".into(), Dot::Stopped), ("gamma".into(), Dot::Stopped)], "no item: the Manager's glyph, `Stopped` with no Manager");
 
     // Red items of other Sessions, of its Plans and of the Context itself do not fill the row.
     let others = [
@@ -538,7 +548,7 @@ fn a_context_row_fills_only_from_its_managers_items() {
         condition(Kind::Dialog, Urgency::Red, Some("l-rel"), Some("rel"), "beta", "session:l-rel"),
     ];
     inbox(&mut store, &others, T0);
-    assert_eq!(rows(&mut store), [("alpha".into(), Dot::Working), ("beta".into(), Dot::Idle), ("gamma".into(), Dot::Stopped)]);
+    assert_eq!(rows(&mut store), [("alpha".into(), Dot::Idle), ("beta".into(), Dot::Stopped), ("gamma".into(), Dot::Stopped)]);
     let tree = read::tree(&mut store).unwrap();
     assert_eq!(tree.contexts[0].plans[0].sessions[0].dot, Dot::Red, "while the Session's own row is red");
 
@@ -551,15 +561,21 @@ fn a_context_row_fills_only_from_its_managers_items() {
     inbox(&mut store, &with_manager, T0);
     assert_eq!(rows(&mut store)[0], ("alpha".into(), Dot::Magenta), "its most urgent");
 
-    // An archived Context takes no item.
-    sql(&mut store, "UPDATE contexts SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'alpha';");
-    assert_eq!(rows(&mut store)[0], ("alpha".into(), Dot::Working));
+    // An archived Context takes no item: `context archive` archives its Manager too (commands.md §3.8), so it has no live one.
+    sql(
+        &mut store,
+        "UPDATE contexts SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'alpha';
+         UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'm-alpha';",
+    );
+    assert_eq!(rows(&mut store)[0], ("alpha".into(), Dot::Stopped));
 }
 
 #[test]
 fn a_snoozed_or_dismissed_item_fills_no_dot_and_is_not_in_the_snapshot() {
     let (env, mut store) = fixture();
     let _engine = engine(&env);
+    // The Lead is idle: a working Session shows the spinner whatever its items (hs-d183).
+    sql(&mut store, "UPDATE sessions SET state = 'idle' WHERE id = 'l-ship';");
     sql(&mut store, &session_row("m-alpha", "manager", "alpha", "", None, "idle", None, "2026-01-02T00:00:05.000Z"));
     inbox(
         &mut store,
@@ -583,7 +599,7 @@ fn a_snoozed_or_dismissed_item_fills_no_dot_and_is_not_in_the_snapshot() {
     let tree = read::tree(&mut store).unwrap();
     assert_eq!(tree.inbox.iter().map(|i| i.subject.as_str()).collect::<Vec<_>>(), ["session:f-ship"]);
     let ship = &tree.contexts[0].plans[0];
-    assert_eq!((ship.sessions[0].dot, ship.sessions[1].dot, tree.contexts[0].dot), (Dot::Working, Dot::Red, Dot::Working));
+    assert_eq!((ship.sessions[0].dot, ship.sessions[1].dot, tree.contexts[0].dot), (Dot::Idle, Dot::Red, Dot::Idle));
 
     // A snooze that has ended by the clock shows the item again, with no Event.
     sql(&mut store, "UPDATE inbox_items SET snoozed_until = '2026-01-04T00:00:00.000Z' WHERE subject = 'session:l-ship';");

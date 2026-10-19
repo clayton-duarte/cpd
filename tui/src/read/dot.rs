@@ -120,7 +120,7 @@ mod tests {
         assert_eq!(Dot::of(State::Stopped, None), Dot::Stopped);
         assert_eq!(Dot::of(State::Blocked, None), Dot::Idle, "blocked is no dot of its own: its dialog item is");
         for state in [State::Working, State::Idle, State::Blocked, State::Stopped] {
-            assert!(!Dot::of(state, None).needs_you(), "no item, never a filled ●: {state:?}");
+            assert!(!Dot::of(state, None).needs_you(), "no item, never a filled dot: {state:?}");
         }
     }
 

@@ -15,7 +15,10 @@ use cpd_core::home::CpdHome;
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use cpd_core::store::Store;
+use cpd_tui::palette::{IDLE, NEEDS_YOU, SPINNER, STOPPED};
 use nix::fcntl::{Flock, FlockArg};
+
+const WORKING: &str = SPINNER[0];
 
 // ---------- the prepared store ----------
 
@@ -175,8 +178,8 @@ fn moved(context: &str, plan: &str, session: &str, place: &str) -> String {
 /// - `beta`: `rel` (pr; its Lead is blocked), `old` (done; its Lead is stopped);
 /// - `gamma`: nothing.
 ///
-/// The Inbox ([`items`]) gives the dots their `●`: `f-blocked` and `l-rel` have a red dialog; the Contexts alpha and beta
-/// have a Manager with an item, which alone fills a Context row's `●`.
+/// The Inbox ([`items`]) gives the dots their filled dot: `f-blocked` and `l-rel` have a red dialog; the Contexts alpha and beta
+/// have a Manager with an item, which alone fills a Context row's filled dot.
 fn populate(env: &TestEnv) {
     let mut store = open(env);
     let mut s = String::new();
@@ -194,8 +197,6 @@ fn populate(env: &TestEnv) {
     s += &session_row("l-sketch", "sketch", "alpha", "sketch", "idle", None, "2026-01-02T00:00:01.000Z");
     s += &session_row("l-rel", "rel lead", "beta", "rel", "blocked", Some("cpd: PR feedback"), "2026-01-02T00:00:02.000Z");
     s += &session_row("l-old", "old lead", "beta", "old", "stopped", None, "2026-01-02T00:00:03.000Z");
-    s += &manager_row("m-alpha", "alpha", "idle", None);
-    s += &manager_row("m-beta", "beta", "blocked", Some("cpd: asking"));
     for (key, status) in [("a", "merged"), ("b", "merged"), ("c", "running"), ("d", "queued"), ("e", "failed")] {
         s += &job_row("ship", key, status);
     }
@@ -221,7 +222,7 @@ fn opened_ago() -> String {
 fn inbox_section(width: usize) -> Vec<String> {
     let inner = width - 2;
     let title = " Inbox 4 ";
-    let item = |label: &str| format!(" ● {label}{}5m", " ".repeat(inner - 2 - label.len() - 2));
+    let item = |label: &str| format!(" {NEEDS_YOU} {label}{}5m", " ".repeat(inner - 2 - label.len() - 2));
     vec![
         format!(" ──{title}{}", "─".repeat(inner - 2 - title.len())),
         item("f-blocked label"),
@@ -390,15 +391,15 @@ fn the_tree_of_a_prepared_store() {
     let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
     let mut expected = vec![
         String::new(),
-        " ▾ ● alpha".to_owned(),
-        row("⏵ ├ ◐ ship", "1⋅1⋅0⋅1⋅2"),
-        row("  ├ ○ sketch", "2⋅0⋅0⋅0⋅0"),
-        "   ├ ○ ship·f-id".to_owned(),
-        "   └ ● ship·f-bl".to_owned(),
-        " ▾ ● beta".to_owned(),
-        row("  ├ ● rel", "0⋅0⋅0⋅0⋅1"),
-        row("  └ ◌ old", "0⋅0⋅0⋅0⋅0"),
-        " ▾ ◌ gamma".to_owned(),
+        format!(" ▾ {NEEDS_YOU} alpha"),
+        row(&format!("⏵ ├ {WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
+        row(&format!("  ├ {IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
+        format!("   ├ {IDLE} ship·f-id"),
+        format!("   └ {NEEDS_YOU} ship·f-bl"),
+        format!(" ▾ {NEEDS_YOU} beta"),
+        row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
+        row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"),
+        format!(" ▾ {STOPPED} gamma"),
     ];
     expected.extend(["", "", ""].map(String::from)); // the rest of the tree's rows, then the Inbox section pinned below
     expected.extend(inbox_section(46));
@@ -472,7 +473,7 @@ fn a_click_on_a_context_row_opens_its_manager_and_its_fold_glyph_folds_it() {
     assert!(screen[1].starts_with(" ▾ ") && screen.iter().any(|r| r.contains("ship")), "the label click folds nothing: {screen:?}");
     pane.click(1, 1); // its fold glyph
     let folded = pane.wait("alpha folded", |s| !s.iter().any(|r| r.contains("ship")));
-    assert_eq!(folded[1], format!(" ▸ {IDLE} alpha 2"), "a folded Context draws ▸ and its number of Plans");
+    assert_eq!(folded[1], format!(" ▸ {NEEDS_YOU} alpha 2"), "a folded Context draws ▸, its Manager's dot (its unread item) and its number of Plans");
     assert_eq!(calls(&env).len(), 2, "the glyph runs no command");
     pane.click(1, 1);
     pane.wait("alpha unfolded", |s| s.iter().any(|r| r.contains("ship")));
@@ -627,22 +628,22 @@ fn the_tree_follows_the_events_of_the_store() {
     // session-state
     env.cpd(&["session", "state", "blocked", "--label", "cpd: Ask", "--session", "l-sketch"]).ok();
     std::thread::sleep(Duration::from_millis(300));
-    assert!(pane.screen().iter().any(|r| r.contains("├ ○ sketch")), "a blocked Session is no ● until the Inbox has its dialog");
+    assert!(pane.screen().iter().any(|r| r.contains(&format!("├ {IDLE} sketch"))), "a blocked Session is no filled dot until the Inbox has its dialog");
     // inbox-opened: the engine's E8 opens the dialog
     let mut store = open(&env);
     let mut now = items();
     now.push(condition(Kind::Dialog, Urgency::Magenta, "l-sketch", Some("sketch"), "alpha"));
     reconcile(&mut store, &now, "2026-01-04T00:01:00.000Z").unwrap();
-    pane.wait("the opened item", |s| s.iter().any(|r| r.contains("├ ● sketch")));
+    pane.wait("the opened item", |s| s.iter().any(|r| r.contains(&format!("├ {NEEDS_YOU} sketch"))));
     // inbox-closed: its cause ends
     reconcile(&mut store, &items(), "2026-01-04T00:02:00.000Z").unwrap();
-    pane.wait("the closed item", |s| s.iter().any(|r| r.contains("├ ○ sketch")));
+    pane.wait("the closed item", |s| s.iter().any(|r| r.contains(&format!("├ {IDLE} sketch"))));
     // inbox-dismissed, by the command: the red dialog of the fork falls back to its glyph
     let screen = pane.screen();
-    assert!(screen.iter().any(|r| r.contains("└ ● ship·f-bl")));
+    assert!(screen.iter().any(|r| r.contains(&format!("└ {NEEDS_YOU} ship·f-bl"))));
     let id = store_item(&mut store, "session:f-blocked");
     env.cpd(&["inbox", "dismiss", &id.to_string()]).ok();
-    pane.wait("the dismissed item", |s| s.iter().any(|r| r.contains("└ ○ ship·f-bl")));
+    pane.wait("the dismissed item", |s| s.iter().any(|r| r.contains(&format!("└ {IDLE} ship·f-bl"))));
 }
 
 /// The id of the open item of `subject`.
@@ -671,13 +672,13 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
     let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
     let mut expected = vec![
         String::new(),
-        " ▾ ● alpha".to_owned(),
-        row("⏵ ├ ◐ ship", "1⋅1⋅0⋅1⋅2"),
-        row("  ├ ○ sketch", "2⋅0⋅0⋅0⋅0"),
-        "   ├ ○ ship·f-id".to_owned(),
-        "   └ ● ship·f-bl".to_owned(),
-        " ▾ ● beta".to_owned(),
-        row("  ├ ● rel", "0⋅0⋅0⋅0⋅1"),
+        format!(" ▾ {NEEDS_YOU} alpha"),
+        row(&format!("⏵ ├ {WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
+        row(&format!("  ├ {IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
+        format!("   ├ {IDLE} ship·f-id"),
+        format!("   └ {NEEDS_YOU} ship·f-bl"),
+        format!(" ▾ {NEEDS_YOU} beta"),
+        row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
         "   └ …".to_owned(),
         " …".to_owned(),
     ];
@@ -697,7 +698,7 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
     wait_for_calls(&env, 1);
     pane.click(1, 10);
     let screen = pane.wait("the archived Context", |s| s.iter().any(|r| r == &format!(" ▾ {STOPPED} gamma")));
-    assert_eq!(screen[9..12], [row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), " …".to_owned(), format!(" ▾ {STOPPED} gamma").to_owned()]);
+    assert_eq!(screen[9..12], [row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), " …".to_owned(), format!(" ▾ {STOPPED} gamma")]);
     // a click on beta's `…` collapses its group again
     pane.click(4, 8);
     let screen = pane.wait("the group collapsed", |s| s.iter().all(|r| !r.contains(&format!("└ {STOPPED} old"))));
@@ -714,7 +715,7 @@ fn the_cursor_skips_archived_rows_and_enter_never_opens_one() {
     let pane = Pane::start(&env, 46, 16);
     pane.ready();
     pane.click(4, 8); // beta's `…`: its archived Plan is drawn
-    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ◌ old")));
+    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("└ {STOPPED} old"))));
     pane.down(5); // ship, sketch, f-idle, f-blocked, rel
     pane.keys(&["Enter"]);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "l-rel"])]);
@@ -891,7 +892,7 @@ fn a_click_on_an_archived_fork_runs_session_history() {
     let screen = pane.ready();
     assert_eq!(screen[5], "   └ …", "the archived fork is behind alpha's `…`");
     pane.click(4, 5);
-    pane.wait("the archived fork", |s| s.iter().any(|r| r.contains("└ ○ ship·f-bl")));
+    pane.wait("the archived fork", |s| s.iter().any(|r| r.contains(&format!("└ {IDLE} ship·f-bl"))));
     pane.click(10, 6);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "history", "f-blocked"])]);
     pane.click(8, 4); // a live fork still opens
@@ -907,7 +908,7 @@ fn a_click_that_shows_a_history_is_refused_in_the_note_row() {
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
     pane.click(4, 5);
-    pane.wait("the archived fork", |s| s.iter().any(|r| r.contains("└ ○ ship·f-bl")));
+    pane.wait("the archived fork", |s| s.iter().any(|r| r.contains(&format!("└ {IDLE} ship·f-bl"))));
     pane.click(10, 6);
     pane.wait("the refusal", |_| pane.footer_has("file_unreadable: The session file is missing."));
 }
@@ -1109,7 +1110,7 @@ fn the_inbox_sections_more_row_expands_the_list_inline_and_less_folds_it() {
     assert_eq!(screen[15..], inbox_section(46));
     pane.click(10, 19); // `+1 more`
     let screen = pane.wait("the expanded list", |s| s.last().is_some_and(|r| r == " − less"));
-    let item = |label: &str| format!(" ● {label}{}5m", " ".repeat(44 - 2 - label.len() - 2));
+    let item = |label: &str| format!(" {NEEDS_YOU} {label}{}5m", " ".repeat(44 - 2 - label.len() - 2));
     assert_eq!(screen[14..], [inbox_section(46)[..4].to_vec(), vec![item("m-alpha label"), " − less".to_owned()]].concat());
     pane.click(3, 19); // `− less`
     let screen = pane.wait("the folded list", |s| s.last().is_some_and(|r| r == " +1 more"));
@@ -1202,7 +1203,7 @@ fn with_no_engine_the_inbox_leads_with_engine_down_and_a_click_on_it_opens_the_l
     let section = inbox_section(46);
     let title = " Inbox 5 ";
     assert_eq!(screen[15], format!(" ──{title}{}", "─".repeat(44 - 2 - title.len())));
-    assert!(screen[16].starts_with(" ● engine is down"), "{:?}", screen[16]);
+    assert!(screen[16].starts_with(&format!(" {NEEDS_YOU} engine is down")), "{:?}", screen[16]);
     assert_eq!(screen[17..19], section[1..3]);
     assert_eq!(screen[19], " +2 more");
     pane.click(10, 16);
@@ -1235,7 +1236,7 @@ fn a_link_kinds_label_reads_whole_on_the_screen_through_tmux() {
     pane.wait("the more row", |s| s.last().is_some_and(|r| r.starts_with(" +")));
     pane.click(10, pane.screen().len() as u16 - 1);
     let screen = pane.wait("the link's row", |s| s.iter().any(|r| r.contains("acme/api#12")));
-    let expected = format!(" ● acme/api#12 failing{}5m", " ".repeat(44 - 2 - "acme/api#12 failing".len() - 2));
+    let expected = format!(" {NEEDS_YOU} acme/api#12 failing{}5m", " ".repeat(44 - 2 - "acme/api#12 failing".len() - 2));
     let row = screen.iter().find(|r| r.contains("acme/api#12")).unwrap();
     assert_eq!(row, &expected, "the OSC 8 pieces leave no stray cell on the row");
 }
