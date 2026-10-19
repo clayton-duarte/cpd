@@ -109,7 +109,7 @@ fn query(conn: &Connection, plan: &PlanId, filter: &str, args: &[&str]) -> Resul
 pub(super) fn require_plan(conn: &Connection, plan: &PlanId) -> Result<(), CpdError> {
     let found: Option<i64> = conn.query_row("SELECT 1 FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
     found.map(|_| ()).ok_or_else(|| {
-        CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str())
+        CpdError::plan_not_found(plan)
     })
 }
 

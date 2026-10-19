@@ -78,7 +78,7 @@ fn open(tx: &WriteTxn<'_>, plan: &PlanId, attempt: &AttemptId, question: &str) -
                 .with("plan", plan.as_str())
                 .with("attempt", attempt.to_string())
         } else {
-            CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str())
+            CpdError::plan_not_found(plan)
         });
     };
     if status != "running" {

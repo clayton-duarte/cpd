@@ -128,7 +128,7 @@ impl Select {
                 .optional()?)
         })?;
         let context = context.ok_or_else(|| {
-            CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str())
+            CpdError::plan_not_found(plan)
         })?;
         ContextId::parse(&context)
     }

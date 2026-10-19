@@ -46,7 +46,7 @@ fn corrupt(what: String) -> CpdError {
 pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Target, CpdError> {
     let found: Option<String> =
         conn.query_row("SELECT context FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
-    let context = found.ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str()))?;
+    let context = found.ok_or_else(|| CpdError::plan_not_found(plan))?;
     // The repo and Lead worktree are those of the Job's PR (R34 A7).
     let row = conn
         .query_row(

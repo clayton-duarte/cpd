@@ -135,7 +135,7 @@ pub fn append(tx: &WriteTxn<'_>, event: NewEvent) -> Result<i64, CpdError> {
                 tx.query_row("SELECT context FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get::<_, String>(0))
                     .optional()?
                     .ok_or_else(|| {
-                        CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str())
+                        CpdError::plan_not_found(plan)
                     })?,
             ),
             (None, Some(session)) => Some(

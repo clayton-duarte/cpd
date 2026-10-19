@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::fingerprint::plan_fingerprint;
 use super::jobs::{self, Job};
 use super::row::Phase;
-use super::{Env, ShowArgs, bad_row, plan_not_found};
+use super::{Env, ShowArgs, bad_row};
 use crate::error::CpdError;
 use crate::events::highest_id;
 use crate::ids::{ContextId, PlanId, SessionId};
@@ -76,7 +76,7 @@ pub(super) fn load_head(conn: &Connection, id: &PlanId) -> Result<Head, CpdError
     let raw = conn
         .query_row(&format!("SELECT {HEAD_COLUMNS} FROM plans WHERE id = ?1"), [id.as_str()], head_row)
         .optional()?
-        .ok_or_else(|| plan_not_found(id))?;
+        .ok_or_else(|| CpdError::plan_not_found(id))?;
     parse_head(raw)
 }
 

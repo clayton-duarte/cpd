@@ -192,7 +192,7 @@ fn plan_phase(conn: &rusqlite::Connection, plan: &PlanId) -> Result<Phase, CpdEr
     let phase: String = conn
         .query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))
         .optional()?
-        .ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str()))?;
+        .ok_or_else(|| CpdError::plan_not_found(plan))?;
     Phase::parse(&phase)
         .ok_or_else(|| CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: Plan {plan} has phase {phase:?}.")))
 }

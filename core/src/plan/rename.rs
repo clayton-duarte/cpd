@@ -4,7 +4,7 @@ use rusqlite::OptionalExtension;
 use serde_json::json;
 
 use super::lead::retitle;
-use super::{Env, RenameArgs, plan_not_found};
+use super::{Env, RenameArgs};
 use crate::error::CpdError;
 use crate::events::{NewEvent, append};
 use crate::ids::{ContextId, SessionId};
@@ -23,7 +23,7 @@ pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
                 })
                 .optional()?)
         })?
-        .ok_or_else(|| plan_not_found(&id))?;
+        .ok_or_else(|| CpdError::plan_not_found(&id))?;
     let context = ContextId::parse(&context)?;
     let mut out = json!({"plan": {"id": id, "context": context, "title": title}});
     let lead = SessionId::parse(&lead)?;

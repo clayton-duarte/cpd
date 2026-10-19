@@ -4,7 +4,7 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
-use super::{bad_row, plan_not_found};
+use super::bad_row;
 use crate::error::CpdError;
 use crate::ids::{ContextId, PlanId, PrKey, SessionId};
 
@@ -187,5 +187,5 @@ pub(super) fn find(conn: &Connection, id: &PlanId) -> Result<Option<PlanRow>, Cp
 
 /// The Plan `id`, else `plan_not_found`.
 pub(super) fn load(conn: &Connection, id: &PlanId) -> Result<PlanRow, CpdError> {
-    find(conn, id)?.ok_or_else(|| plan_not_found(id))
+    find(conn, id)?.ok_or_else(|| CpdError::plan_not_found(id))
 }

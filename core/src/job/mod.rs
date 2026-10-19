@@ -184,7 +184,7 @@ fn bad_row(what: impl std::fmt::Display) -> CpdError {
 fn plan_phase(conn: &Connection, plan: &PlanId) -> Result<String, CpdError> {
     conn.query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))
         .optional()?
-        .ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str()))
+        .ok_or_else(|| CpdError::plan_not_found(plan))
 }
 
 /// Where a review Job's Worker writes its findings: `run/<plan>/reviews/<job>.md` (contract §1.4).

@@ -135,7 +135,7 @@ pub fn start(store: &mut Store, ctx: &StartCtx<'_>, plan: &PlanId, key: &JobKey)
 fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey) -> Result<Next, CpdError> {
     let found: Option<String> =
         conn.query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
-    let phase = found.ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str()))?;
+    let phase = found.ok_or_else(|| CpdError::plan_not_found(plan))?;
     let all = jobs::load(conn, plan)?;
     let job = all.iter().find(|j| j.key == key.as_str()).ok_or_else(|| {
         CpdError::new(ErrorCode::JobNotFound, format!("No Job {key} in Plan {plan}."))

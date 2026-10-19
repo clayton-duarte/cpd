@@ -122,7 +122,7 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
         .store
         .read(|conn| row::plan_lead(conn, &plan))?
         .map(|(context, _)| context)
-        .ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str()))?;
+        .ok_or_else(|| CpdError::plan_not_found(&plan))?;
     let message = match &args.message_file {
         Some(path) => Some(std::fs::read_to_string(path).map_err(|e| unreadable(path, e))?),
         None => None,

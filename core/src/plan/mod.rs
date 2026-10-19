@@ -197,10 +197,6 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
     }
 }
 
-fn plan_not_found(plan: &PlanId) -> CpdError {
-    CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str())
-}
-
 /// A row the database holds in a shape the binary does not accept: it was
 /// changed outside cpd, or by a bug.
 fn bad_row(what: impl std::fmt::Display) -> CpdError {

@@ -109,7 +109,7 @@ pub(super) fn load(conn: &Connection, id: &PlanId) -> Result<PlanRow, CpdError> 
     let (title, phase): (String, String) = conn
         .query_row("SELECT title, phase FROM plans WHERE id = ?1", [id.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
         .map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {id}.")).with("plan", id.as_str()),
+            rusqlite::Error::QueryReturnedNoRows => CpdError::plan_not_found(id),
             e => e.into(),
         })?;
     let phase = Phase::parse(&phase).ok_or_else(|| bad_row(format!("Plan {id} has phase {phase:?}")))?;
