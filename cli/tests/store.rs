@@ -12,7 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use common::TestEnv;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
-use cpd_core::store::{APPLICATION_ID, HISTORY_TABLES, Store, VERSION, WriteTxn};
+use cpd_core::store::{APPLICATION_ID, HISTORY_TABLES, ORPHAN_HISTORY_SQL, Store, VERSION, WriteTxn};
 use rusqlite::Connection;
 use rusqlite::functions::FunctionFlags;
 use serde_json::{Value, json};
@@ -628,6 +628,47 @@ fn the_tamper_report_lists_history_rows_without_a_txn() {
     conn.execute_batch("INSERT INTO history (txn, tbl, pk, op, before, after) VALUES (999, 'contexts', '[\"x\"]', 'insert', NULL, '{}')")
         .unwrap();
     assert_eq!(store.tamper().unwrap(), vec![json!({"kind": "history", "id": 1, "txn": 999})]);
+}
+
+#[test]
+fn the_tamper_report_lists_every_orphan_among_many_history_rows_in_id_order() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    let conn = raw(&env);
+    conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+    let current = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
+    let seen = current.clone();
+    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, move |_| Ok(seen.load(std::sync::atomic::Ordering::SeqCst)))
+        .unwrap();
+    let real: i64 = conn.query_row("SELECT min(id) FROM txns", [], |r| r.get(0)).unwrap();
+    for n in 0..30i64 {
+        let txn = if n % 7 == 3 { 900 + n } else { real };
+        current.store(txn, std::sync::atomic::Ordering::SeqCst);
+        conn.execute_batch(&format!(
+            "INSERT INTO history (txn, tbl, pk, op, before, after) VALUES ({txn}, 'contexts', '[\"x\"]', 'insert', NULL, '{{}}')"
+        ))
+        .unwrap();
+    }
+    let report = store.tamper().unwrap();
+    let orphans: Vec<i64> = report.iter().map(|e| e["txn"].as_i64().unwrap()).collect();
+    assert_eq!(orphans, vec![903, 910, 917, 924]);
+    let ids: Vec<i64> = report.iter().map(|e| e["id"].as_i64().unwrap()).collect();
+    assert!(ids.windows(2).all(|w| w[0] < w[1]));
+    assert!(report.iter().all(|e| e["kind"] == "history"));
+}
+
+#[test]
+fn the_tamper_query_reads_history_through_the_history_txn_index_not_the_table() {
+    let env = TestEnv::new();
+    let _store = open(&env);
+    let conn = raw(&env);
+    let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {ORPHAN_HISTORY_SQL}")).unwrap();
+    let details: Vec<String> = stmt.query_map([], |r| r.get::<_, String>(3)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+    assert!(
+        details.iter().any(|d| d.starts_with("SCAN h") && d.contains("COVERING INDEX history_txn")),
+        "history must be scanned through history_txn: {details:?}"
+    );
+    assert!(!details.iter().any(|d| d == "SCAN h"), "history must not be scanned as a table: {details:?}");
 }
 
 // ---------- §4.5 versions and migrations ----------
