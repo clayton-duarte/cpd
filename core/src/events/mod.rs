@@ -14,13 +14,12 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::config::Config;
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
 use crate::host::exe::Exe;
 use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::{Output, to_line};
-use crate::store::{Store, VERSION};
+use crate::store::VERSION;
 
 pub use append::{NewEvent, append};
 pub use kind::{Kind, PROTOCOL, Set, Spec};
@@ -90,16 +89,10 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
     }
 }
 
-fn open() -> Result<(Store, Config), CpdError> {
-    let home = CpdHome::from_env()?;
-    let config = Config::load(&home)?;
-    let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-    Ok((store, config))
-}
 
 /// `events list` (§11.1).
 fn list(args: ListArgs) -> Result<Output, CpdError> {
-    let (mut store, _) = open()?;
+    let Env { mut store, .. } = Env::open()?;
     let since = args.since.unwrap_or(0);
     let Scope { plan, context, session } = args.scope;
     let events = store.read(|conn| {
@@ -113,7 +106,7 @@ fn list(args: ListArgs) -> Result<Output, CpdError> {
 /// until killed, until stdout closes, or (`--until-idle`) until it has printed
 /// what was committed when it started.
 fn follow(args: FollowArgs) -> Result<Output, CpdError> {
-    let (mut store, config) = open()?;
+    let Env { mut store, config, .. } = Env::open()?;
     let exe = Exe::current()?;
     let Scope { plan, context, session } = args.scope;
     let (selection, mut cursor, until) = store.read(|conn| {

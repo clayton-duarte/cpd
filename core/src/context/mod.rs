@@ -30,9 +30,8 @@ pub use contexts::{ContextRow, Contexts, Written};
 pub use record::{By, Draft, PlanRef, Record};
 
 use crate::args::{PlanArg, Text, Title};
-use crate::config::Config;
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
 use crate::ids::{ContextId, RecordId, RecordKind, SessionId};
 use crate::output::Output;
 use crate::store::Store;
@@ -249,12 +248,6 @@ fn now() -> String {
         .expect("a UTC time always formats")
 }
 
-fn open() -> Result<(CpdHome, Config, Store), CpdError> {
-    let home = CpdHome::from_env()?;
-    let config = Config::load(&home)?;
-    let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-    Ok((home, config, store))
-}
 
 /// `CPD_SESSION`, else `PI_SESSION_ID`, else none (commands.md §3.4).
 fn session_from_env() -> Result<Option<SessionId>, CpdError> {
@@ -272,7 +265,7 @@ fn context_json(row: &ContextRow) -> Value {
 
 /// `context new` (§3.1).
 fn new(args: NewArgs) -> Result<Output, CpdError> {
-    let (_, config, mut store) = open()?;
+    let Env { config, mut store, .. } = Env::open()?;
     let (row, already) = Contexts::new(&config, &mut store).create(&args.id, &Text::from(args.title.clone()), args.jira.as_ref())?;
     let mut out = json!({"context": context_json(&row)});
     if already {
@@ -283,7 +276,7 @@ fn new(args: NewArgs) -> Result<Output, CpdError> {
 
 /// `context list` (§3.2).
 fn list() -> Result<Output, CpdError> {
-    let (_, _, mut store) = open()?;
+    let Env { mut store, .. } = Env::open()?;
     let (contexts, cursor) = store.read(|conn| {
         let mut contexts = Vec::new();
         let mut stmt = conn.prepare(&format!("SELECT {} FROM contexts ORDER BY id", ContextRow::COLUMNS))?;
@@ -320,7 +313,7 @@ fn list() -> Result<Output, CpdError> {
 
 /// `context show` (§3.3).
 fn show(args: ShowArgs) -> Result<Output, CpdError> {
-    let (_, config, mut store) = open()?;
+    let Env { config, mut store, .. } = Env::open()?;
     let id = args.select.resolve(&mut store)?;
     if let Some(record) = &args.record {
         return show_record(&mut store, &id, record);
@@ -410,7 +403,7 @@ pub(crate) fn plan_repos(
 
 /// `context decide`, `note`, `ask` and `answer` (§3.4, §3.5).
 fn write(command: &str, select: &Select, text: &Text, draft: Draft) -> Result<Output, CpdError> {
-    let (_, config, mut store) = open()?;
+    let Env { config, mut store, .. } = Env::open()?;
     let context = select.resolve(&mut store)?;
     let by = By { session: session_from_env()?, plan: select.plan.plan.clone() };
     let written = Contexts::new(&config, &mut store).write(&context, command, by, text, draft)?;

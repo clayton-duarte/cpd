@@ -8,7 +8,8 @@ use clap::Args;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-use super::{ContextRow, Select, open};
+use super::{ContextRow, Select};
+use crate::env::Env;
 use crate::error::CpdError;
 use crate::ids::ContextId;
 use crate::output::Output;
@@ -24,7 +25,7 @@ pub struct PendingArgs {
 
 /// `context pending` (§3.11).
 pub(super) fn pending(args: PendingArgs) -> Result<Output, CpdError> {
-    let (_, _, mut store) = open()?;
+    let Env { mut store, .. } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
     let plans = store.read(|conn| {
         ContextRow::require(conn, &context)?;

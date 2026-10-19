@@ -9,7 +9,8 @@ use clap::Args;
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
-use super::{ContextRow, Record, Select, open, plan_repos, render};
+use super::{ContextRow, Record, Select, plan_repos, render};
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::host::layout::context_window;
@@ -73,7 +74,7 @@ fn write_file(path: &Path, text: &str) -> Result<(), CpdError> {
 
 /// `context manager` (§3.10).
 pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
-    let (home, config, mut store) = open()?;
+    let Env { home, config, mut store } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
     let (row, found) = store.read(|conn| Ok((ContextRow::require(conn, &context)?, live(conn, &context)?)))?;
     if row.archived_at.is_some() {

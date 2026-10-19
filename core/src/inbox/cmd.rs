@@ -13,13 +13,12 @@ use time::macros::format_description;
 use time::{Duration, OffsetDateTime, Time, UtcOffset};
 
 use super::model::{self, Filter, Item, Kind, State, Urgency};
-use crate::config::Config;
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
 use crate::home::CpdHome;
 use crate::ids::ContextId;
 use crate::output::Output;
-use crate::store::Store;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -96,12 +95,6 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
 /// `--limit`'s default with `--closed` (§21.1).
 const DEFAULT_LIMIT: u32 = 50;
 
-fn open() -> Result<(CpdHome, Store), CpdError> {
-    let home = CpdHome::from_env()?;
-    let config = Config::load(&home)?;
-    let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-    Ok((home, store))
-}
 
 /// §1.3's time: RFC 3339 UTC with milliseconds.
 fn stamp(time: OffsetDateTime) -> String {
@@ -203,7 +196,7 @@ fn context_exists(conn: &Connection, context: &ContextId) -> Result<(), CpdError
 
 /// `inbox list` (§21.1).
 fn list(args: ListArgs) -> Result<Output, CpdError> {
-    let (home, mut store) = open()?;
+    let Env { home, mut store, .. } = Env::open()?;
     let now = OffsetDateTime::now_utc();
     let filter = |state| Filter { context: args.context.clone(), state };
     let (open, visible, closed, cursor) = store.read(|conn| {
@@ -271,7 +264,7 @@ fn open_item(conn: &Connection, id: i64) -> Result<Item, CpdError> {
 
 /// `inbox show` (§21.2).
 fn show(args: ShowArgs) -> Result<Output, CpdError> {
-    let (_, mut store) = open()?;
+    let Env { mut store, .. } = Env::open()?;
     let now = OffsetDateTime::now_utc();
     let item = store.read(|conn| model::get(conn, args.id)?.ok_or_else(|| not_found(args.id)))?;
     Ok(Output::success(json!({"item": item_json(&item, now)?})))
@@ -322,7 +315,7 @@ fn snooze_until(until: Until, now: OffsetDateTime) -> Result<OffsetDateTime, Cpd
 
 /// `inbox snooze` (§21.3).
 fn snooze(args: SnoozeArgs) -> Result<Output, CpdError> {
-    let (_, mut store) = open()?;
+    let Env { mut store, .. } = Env::open()?;
     let now = OffsetDateTime::now_utc();
     let until = stamp(snooze_until(args.until, now)?);
     let item = store.write("inbox snooze", |tx| {
@@ -337,7 +330,7 @@ fn snooze(args: SnoozeArgs) -> Result<Output, CpdError> {
 
 /// `inbox dismiss` (§21.4).
 fn dismiss(args: DismissArgs) -> Result<Output, CpdError> {
-    let (_, mut store) = open()?;
+    let Env { mut store, .. } = Env::open()?;
     let now = OffsetDateTime::now_utc();
     // Already dismissed writes nothing, not even a `txns` row.
     let before = store.read(|conn| open_item(conn, args.id))?;

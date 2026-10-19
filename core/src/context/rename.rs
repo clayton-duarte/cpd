@@ -2,13 +2,14 @@
 
 use serde_json::json;
 
-use super::{ContextRow, RenameArgs, open};
+use super::{ContextRow, RenameArgs};
+use crate::env::Env;
 use crate::error::CpdError;
 use crate::events::{NewEvent, append};
 use crate::output::Output;
 
 pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
-    let (_, _, mut store) = open()?;
+    let Env { mut store, .. } = Env::open()?;
     let (id, title) = (&args.id, args.title.as_str());
     let row = store.read(|conn| ContextRow::require(conn, id))?;
     let mut out = json!({"context": {"id": id, "title": title}});
