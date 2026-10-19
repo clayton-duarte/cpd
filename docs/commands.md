@@ -145,7 +145,7 @@ The index is generated: [docs/interface.md](interface.md), rendered from the `tr
 - **cockpit** = an action of the User's cockpit runs it (the cockpit is the User's interface over the same commands, §17 Actions).
 - **internal** = §1.1.
 
-Anyone may run any command; a command with no callers that is neither cockpit nor internal is the User's, at a shell (for example `doctor`). The callers and the cockpit flag are kept in the binary (`cli/src/interface.rs`), next to the clap tree.
+Anyone may run any command; a command with no callers that is neither cockpit nor internal is the User's, at a shell (for example `doctor`). The callers and the cockpit flag are kept in the binary (`cli/src/interface.rs`), next to the clap tree. The table's Writes column (each command's Effects says what it writes) and Contract column (each description ends with its §) are not carried over (hs-d251).
 
 ## 3. `context`
 
