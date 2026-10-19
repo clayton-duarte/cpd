@@ -430,6 +430,25 @@ impl Tmux {
         Ok(())
     }
 
+    /// `display -p '#{version}'`: the version of the tmux the server runs
+    /// (`3.4`, `next-3.7`), which is the one it was started with.
+    pub fn server_version(&self) -> Result<String, CpdError> {
+        Ok(self.run(&strings(&["display", "-p", "#{version}"]))?.trim().to_owned())
+    }
+
+    /// The server's own tmux program: `/proc/<server pid>/exe` (Linux), which
+    /// execs the binary the server runs even when an upgrade has replaced its
+    /// file. A client of another version cannot attach to the server (hs-n224).
+    pub fn server_exe(&self) -> Result<PathBuf, CpdError> {
+        let out = self.run(&strings(&["display", "-p", "#{pid}"]))?;
+        let exe = PathBuf::from(format!("/proc/{}/exe", out.trim()));
+        std::fs::metadata(&exe).map_err(|e| {
+            CpdError::new(ErrorCode::TmuxFailed, format!("Cannot find the tmux server's own binary {}: {e}.", exe.display()))
+                .with("path", exe.display().to_string())
+        })?;
+        Ok(exe)
+    }
+
     /// `show -gv <option>`: a global option's value, without the newline.
     pub fn global_option(&self, option: &str) -> Result<String, CpdError> {
         Ok(self.run(&strings(&["show", "-gv", option]))?.trim_end_matches('\n').to_owned())
@@ -522,6 +541,25 @@ impl Tmux {
         self.run(&strings(&["kill-pane", "-t", pane.as_str()])).map(drop)
     }
 
+    /// `kill-server`: the server and everything in it end. Returns once no server runs; a server that
+    /// exits before it answers makes the call fail, which is not an error here.
+    pub fn kill_server(&self) -> Result<(), CpdError> {
+        let args = strings(&["kill-server"]);
+        let out = self.output(&args)?;
+        if !out.status.success() && self.server_running()? {
+            return Err(self.failed(&args, &out));
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while self.server_running()? {
+            if std::time::Instant::now() >= deadline {
+                return Err(CpdError::new(ErrorCode::TmuxFailed, "The tmux server did not exit within 10 s of kill-server.")
+                    .with("argv", self.argv(&args)));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        Ok(())
+    }
+
     /// `kill-window -t <window>`.
     pub fn kill_window(&self, window: &WindowId) -> Result<(), CpdError> {
         self.run(&strings(&["kill-window", "-t", window.as_str()])).map(drop)
@@ -561,6 +599,43 @@ impl Tmux {
             .with("argv", self.argv(args))
             .with("exit", 0)
             .with("stdout", output.to_owned())
+    }
+}
+
+/// A tmux version as `#{version}` and `tmux -V` print it (`3.4`, `3.3a`, `next-3.7`), for the order of
+/// two versions: major, minor, and the letter of a patch release (none before `a`). `None` when it
+/// does not start with `<major>.<minor>` (after an optional `next-`).
+fn version_key(version: &str) -> Option<(u32, u32, u8)> {
+    let v = version.strip_prefix("next-").unwrap_or(version);
+    let (major, rest) = v.split_once('.')?;
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    let minor = rest[..digits].parse().ok()?;
+    let letter = rest[digits..].bytes().next().filter(u8::is_ascii_lowercase).map_or(0, |b| b - b'a' + 1);
+    Some((major.parse().ok()?, minor, letter))
+}
+
+/// Whether tmux `server` is an older version than tmux `installed`. False when either does not parse.
+pub fn older_version(server: &str, installed: &str) -> bool {
+    matches!((version_key(server), version_key(installed)), (Some(s), Some(i)) if s < i)
+}
+
+/// The version of the installed tmux, the one on `PATH`: `tmux -V` without its
+/// `tmux ` prefix, in the form of [`Tmux::server_version`].
+pub fn installed_version() -> Result<String, CpdError> {
+    let argv = vec!["tmux".to_owned(), "-V".to_owned()];
+    let out = Command::new("tmux").arg("-V").env_remove("TMUX").env_remove("TMUX_PANE").stdin(Stdio::null()).output().map_err(|e| {
+        CpdError::new(ErrorCode::TmuxFailed, format!("Cannot run tmux: {e}."))
+            .with("argv", argv.clone())
+            .with("exit", serde_json::Value::Null)
+            .with("stderr", e.to_string())
+    })?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    match (out.status.success(), text.trim().strip_prefix("tmux ")) {
+        (true, Some(version)) => Ok(version.to_owned()),
+        _ => Err(CpdError::new(ErrorCode::TmuxFailed, "tmux -V did not print `tmux <version>`.")
+            .with("argv", argv)
+            .with("exit", out.status.code())
+            .with("stderr", String::from_utf8_lossy(&out.stderr).into_owned())),
     }
 }
 
@@ -660,6 +735,18 @@ mod tests {
     fn a_split_is_placed_by_its_flags() {
         assert_eq!(Split::Right.flags(), ["-h"]);
         assert_eq!(Split::Below.flags(), ["-v"]);
+    }
+
+    #[test]
+    fn versions_are_ordered_by_major_minor_and_patch_letter() {
+        for (server, installed) in [("3.4", "3.8"), ("3.3a", "3.4"), ("3.3", "3.3a"), ("2.9", "3.0"), ("next-3.5", "3.6"), ("3.6", "3.10")] {
+            assert!(older_version(server, installed), "{server} < {installed}");
+            assert!(!older_version(installed, server), "{installed} !< {server}");
+        }
+        for same in ["3.4", "3.3a", "next-3.7"] {
+            assert!(!older_version(same, same));
+        }
+        assert!(!older_version("master", "3.8") && !older_version("3.4", "unknown"));
     }
 
     #[test]

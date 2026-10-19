@@ -97,6 +97,10 @@ error_codes! {
     CleanupFailed = "cleanup_failed" => Failure,
     DistillInvalid = "distill_invalid" => Failure,
     DistillFailed = "distill_failed" => Failure,
+    // Policies (contract §8.3, hs-d288).
+    PolicyInvalid = "policy_invalid" => Failure,
+    OwnerUnknown = "owner_unknown" => Failure,
+    RepoUnkeyed = "repo_unkeyed" => Failure,
 
     // Exit 2: usage error.
     Usage = "usage" => Usage,
@@ -172,6 +176,9 @@ error_codes! {
     Archived = "archived" => Refused,
     ItemClosed = "item_closed" => Refused,
     MergeNotClean = "merge_not_clean" => Refused,
+    OwnerMismatch = "owner_mismatch" => Refused,
+    OwnerUnset = "owner_unset" => Refused,
+    OwnerSet = "owner_set" => Refused,
 
     // Exit 4: not found.
     ContextNotFound = "context_not_found" => NotFound,
@@ -385,6 +392,12 @@ mod tests {
             (ErrorCode::PrClosed, 3),
             (ErrorCode::NeedsOtherPr, 3),
             (ErrorCode::PrNotFound, 4),
+            (ErrorCode::PolicyInvalid, 1),
+            (ErrorCode::OwnerUnknown, 1),
+            (ErrorCode::RepoUnkeyed, 1),
+            (ErrorCode::OwnerMismatch, 3),
+            (ErrorCode::OwnerUnset, 3),
+            (ErrorCode::OwnerSet, 3),
         ];
         for (code, exit) in cases {
             assert_eq!(code.exit().code(), exit, "{code}");

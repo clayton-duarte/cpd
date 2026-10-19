@@ -2,7 +2,7 @@ import type { CpdEvent, Kind } from "./event.ts";
 import type { Message, SendOptions } from "./pi.ts";
 
 /**
- * commands.md §15.3, "Plan Lead" column: the kinds that become a message, whether they trigger a turn, and how a busy Lead gets them (hs-d276).
+ * commands.md §15.3, "Plan Lead" column: the kinds that become a message, whether they trigger a turn, and how a busy Lead gets them (steer or follow-up).
  * `steer`: pi injects the message after the current tool call. `followUp`: pi delivers it after the run, one per finished run.
  * `pr-feedback` (every reason) and a Worker's `escalation` are urgent, so steered; every other kind waits as a follow-up.
  */

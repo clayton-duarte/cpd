@@ -13,3 +13,9 @@
 # hs-d236: a red run lists every failing test, not only the first.
 [profile.default]
 fail-fast = false
+
+# scripts/test-time.sh: the default profile plus a JUnit report
+# (target/nextest/timing/junit.xml), from which the script sums the test times.
+# A custom profile inherits every setting and override of `default`.
+[profile.timing.junit]
+path = "junit.xml"

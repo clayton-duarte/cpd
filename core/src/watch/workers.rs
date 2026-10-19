@@ -15,7 +15,7 @@
 use time::OffsetDateTime;
 
 use super::engine::Engine;
-use super::log::timestamp;
+use crate::clock::timestamp;
 use super::report::{About, Step};
 use super::schedule::READY;
 use crate::error::CpdError;
