@@ -1346,6 +1346,230 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     assert_eq!(fx.count("error"), 0);
 }
 
+// ---------- E10 ----------
+
+/// What E10's tests share: the Fx, a tmux server with a live pane per Session (E2 stops an idle Session
+/// without one), a Job `api` with its live driver and open Escalations that E1 expires at a tick: waiting for
+/// two of them to be expired is waiting for a whole tick (E1 runs first in a tick, E10 last), so a test can
+/// say "E10 has run, and started nothing" without sleeping on wall time.
+struct Titles {
+    fx: Fx,
+    panes: Vec<String>,
+    asked: u32,
+    _driver: Flock<File>,
+}
+
+/// A Session file with one short conversation, as pi writes it.
+fn conversation(fx: &Fx, id: &str) -> PathBuf {
+    let path = fx.env.root().join(format!("{id}.jsonl"));
+    let lines = [
+        json!({"type": "session", "id": id}),
+        json!({"type": "message", "message": {"role": "user", "content": "How do we title Sessions?"}}),
+        json!({"type": "message", "message": {"role": "assistant", "content": [{"type": "text", "text": "With an auxiliary agent."}]}}),
+    ];
+    fs::write(&path, lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\n").unwrap();
+    path
+}
+
+impl Titles {
+    /// `fx`, a pane per id in `panes`, pi answering `pi` (a shell body, its stdin read first).
+    fn new(panes: usize, pi: &str) -> Titles {
+        let fx = fx("");
+        fx.env.fake_pi(&format!("cat > /dev/null\n{pi}"));
+        let mut ids = Vec::new();
+        for n in 0..panes {
+            let args: &[&str] = if n == 0 { &["new-session", "-d", "-s", "x"] } else { &["new-window", "-d", "-t", "=x:"] };
+            let out = fx.env.tmux(&[args, &["-P", "-F", "#{pane_id}", "sleep", "600"]].concat());
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            ids.push(String::from_utf8(out.stdout).unwrap().trim().to_owned());
+        }
+        let driver = fx.live_driver("api-a1");
+        fx.add_running("api", "running", &ago(1));
+        Titles { fx, panes: ids, asked: 0, _driver: driver }
+    }
+
+    /// Session `id` of `role` in `state`, on pane number `pane`, with its finished turn `turn` minutes ago (`None`:
+    /// only its start, `stopped` to `idle`) and its title written `titled` minutes ago (`None`: no title).
+    fn session(&self, id: &str, role: &str, state: &str, pane: usize, turn: Option<i64>, titled: Option<i64>) {
+        let (title, titled_at) = titled.map_or(("NULL".to_owned(), "NULL".to_owned()), |m| ("'Old title'".to_owned(), format!("'{}'", ago(m))));
+        let (from, at) = turn.map_or(("stopped", ago(60)), |m| ("working", ago(m)));
+        self.fx.fixture(&format!(
+            "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_at, created_at, title, titled_at)
+               VALUES ('{id}', '{role}', 'ctx', {plan}, {attempt}, '{id}', '{file}', '/', 'O3', '{pane}', '{state}', 't', 't', {title}, {titled_at});
+             INSERT INTO events (txn, at, kind, context, session, text, data)
+               VALUES (cpd_txn(), '{at}', 'session-state', 'ctx', '{id}', 'x', '{{\"from\":\"{from}\",\"label\":null,\"to\":\"idle\"}}');",
+            file = conversation(&self.fx, id).display(),
+            pane = self.panes[pane],
+            plan = if role == "worker" { "'pay'" } else { "NULL" },
+            attempt = if role == "worker" { "'api-a1'" } else { "NULL" }
+        ));
+    }
+
+    /// Waits until the engine has run one whole tick since this call began: an Escalation E1 expires at its next
+    /// tick, which ends with E10 (the one before it is expired in a tick that already ended, or in this one).
+    fn tick(&mut self) {
+        let dead = {
+            let mut gone = std::process::Command::new("true").spawn().unwrap();
+            let pid = gone.id();
+            gone.wait().unwrap();
+            pid
+        };
+        self.asked += 1;
+        let n = self.asked;
+        self.fx.fixture(&format!(
+            "INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
+               VALUES ('pay', 'api-a1-q{n}', 'api-a1', {n}, 'Why?', 'open', {dead}, '{}');",
+            ago(1)
+        ));
+        wait_until("the escalation expired", || {
+            self.fx.query::<String>(&format!("SELECT status FROM escalations WHERE id = 'api-a1-q{n}'")) == "expired"
+        });
+    }
+
+    /// Two whole ticks of E10 after now, so one of them began after this call.
+    fn ticks(&mut self) {
+        self.tick();
+        self.tick();
+    }
+
+    /// The Sessions with a title written by a retitle run (`titled_at` moved), by id.
+    fn retitled(&self) -> Vec<String> {
+        self.fx
+            .store()
+            .read(|conn| {
+                let mut stmt = conn.prepare("SELECT session FROM events WHERE kind = 'session-titled' ORDER BY id")?;
+                Ok(stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .unwrap()
+    }
+
+    fn started(&self) -> Vec<String> {
+        let mut logs: Vec<String> = fs::read_dir(self.fx.env.cpd_home().join("run/titles"))
+            .map(|d| d.map(|e| e.unwrap().file_name().to_string_lossy().trim_end_matches(".log").to_owned()).collect())
+            .unwrap_or_default();
+        logs.sort();
+        logs
+    }
+}
+
+/// An idle Lead or Manager whose turn ended after its title (and the title is 10 minutes old) is retitled; one titled
+/// less than 10 minutes ago, one that is working, one that only started, one without a finished turn and a Worker are
+/// not.
+#[test]
+fn e10_retitles_an_idle_session_whose_turn_ended_after_its_title_and_no_other() {
+    let mut t = Titles::new(7, "echo 'Auxiliary agent titles'");
+    t.session("due-manager", "manager", "idle", 0, Some(5), Some(20));
+    t.session("due-untitled", "lead", "idle", 1, Some(1), None);
+    t.session("throttled", "lead", "idle", 2, Some(1), Some(5));
+    t.session("working", "lead", "working", 3, Some(1), Some(20));
+    t.session("just-started", "lead", "idle", 4, None, None);
+    t.session("title-is-newer", "lead", "idle", 5, Some(40), Some(20));
+    t.session("worker", "worker", "idle", 6, Some(1), None);
+
+    let engine = t.fx.start();
+    wait_until("both retitled", || t.retitled().len() == 2);
+    t.ticks();
+    engine.stop();
+
+    let mut retitled = t.retitled();
+    retitled.sort();
+    assert_eq!(retitled, ["due-manager", "due-untitled"]);
+    assert_eq!(t.started(), ["due-manager", "due-untitled"]);
+    assert_eq!(t.fx.env.calls("pi").len(), 2, "no Session is retitled twice: the new title is newer than its turn");
+    let titles: Vec<String> = ["due-manager", "due-untitled", "throttled"]
+        .iter()
+        .map(|id| t.fx.query(&format!("SELECT title FROM sessions WHERE id = '{id}'")))
+        .collect();
+    assert_eq!(titles, ["Auxiliary agent titles", "Auxiliary agent titles", "Old title"]);
+    assert_eq!(t.fx.count("error"), 0);
+}
+
+/// At most 2 retitles at once: a third waits for one to end, and then runs.
+#[test]
+fn e10_runs_at_most_two_retitles_at_once() {
+    let release = std::env::temp_dir().join(format!("e10-release-{}", std::process::id()));
+    let mut t = Titles::new(
+        3,
+        &format!("i=0\nuntil [ -e '{r}' ] || [ $i -ge 1200 ]; do sleep 0.1; i=$((i+1)); done\necho 'A title'", r = release.display()),
+    );
+    for (n, id) in ["s1", "s2", "s3"].iter().enumerate() {
+        t.session(id, "lead", "idle", n, Some(1), None);
+    }
+
+    let engine = t.fx.start();
+    wait_until("two pi runs", || t.fx.env.calls("pi").len() == 2);
+    t.ticks();
+    assert_eq!((t.fx.env.calls("pi").len(), t.started()), (2, vec!["s1".to_owned(), "s2".to_owned()]), "the third waits");
+
+    fs::write(&release, "").unwrap();
+    wait_until("all three titled", || t.retitled().len() == 3);
+    engine.stop();
+    fs::remove_file(&release).unwrap();
+    assert_eq!(t.fx.env.calls("pi").len(), 3);
+    assert_eq!(t.started(), ["s1", "s2", "s3"]);
+    assert_eq!(t.fx.count("error"), 0);
+}
+
+/// A run E10 did not start counts: a held `title-<session>.lock` is a run in flight, so its Session is skipped and
+/// it takes one of the two places.
+#[test]
+fn e10_skips_a_session_whose_title_lock_is_held_and_counts_held_locks() {
+    let mut t = Titles::new(3, "echo 'A title'");
+    for (n, id) in ["s1", "s2", "s3"].iter().enumerate() {
+        t.session(id, "lead", "idle", n, Some(1), None);
+    }
+    let hold = |id: &str| {
+        let path = t.fx.home().locks_dir().join(format!("title-{id}.lock"));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).unwrap();
+        file.lock().unwrap();
+        file
+    };
+    let (one, two) = (hold("s1"), hold("s2"));
+
+    let engine = t.fx.start();
+    t.ticks();
+    assert_eq!(t.fx.env.calls("pi").len(), 0, "two are held: no place for s3");
+    drop(one);
+    wait_until("s1 and s3 titled", || t.retitled().len() == 2);
+    t.ticks();
+    engine.stop();
+    drop(two);
+
+    let mut retitled = t.retitled();
+    retitled.sort();
+    assert_eq!(retitled, ["s1", "s3"], "s2 is held until the end");
+    assert_eq!(t.fx.env.calls("pi").len(), 2);
+}
+
+/// A failed retitle writes nothing, is reported once however many ticks retry it, and the report names no
+/// Session or Plan (no Lead gets a turn). A title less than 10 minutes old is not retried at all.
+#[test]
+fn e10_reports_a_failed_retitle_once_and_retries_only_what_is_due() {
+    let mut t = Titles::new(2, "echo 'pi: boom' >&2\nexit 1");
+    t.session("due", "lead", "idle", 0, Some(1), Some(20));
+    t.session("throttled", "lead", "idle", 1, Some(1), Some(5));
+
+    let engine = t.fx.start();
+    wait_until("the failure is reported", || t.fx.count("error") == 1);
+    wait_until("a retry", || t.fx.env.calls("pi").len() >= 2);
+    t.ticks();
+    engine.stop();
+
+    assert_eq!(t.started(), ["due"]);
+    let errors = t.fx.events("error");
+    assert_eq!(errors.len(), 1, "reported once: {errors:?}");
+    let data = &errors[0].3;
+    assert_eq!((data["source"].as_str(), data["code"].as_str()), (Some("watch"), Some("title_failed")));
+    assert_eq!(data["details"]["session"], "due");
+    assert!(data["details"]["tail"].as_str().unwrap().contains("pi: boom"), "{data}");
+    assert!(data["details"]["log"].as_str().unwrap().ends_with("run/titles/due.log"), "{data}");
+    assert_eq!(t.fx.query::<Option<String>>("SELECT session FROM events WHERE kind = 'error'"), None);
+    assert_eq!(t.fx.query::<Option<String>>("SELECT context FROM events WHERE kind = 'error'"), None);
+    assert_eq!(t.retitled(), Vec::<String>::new());
+    assert_eq!(t.fx.query::<String>("SELECT title FROM sessions WHERE id = 'due'"), "Old title");
+}
+
 // ---------- E6 (removed) ----------
 
 #[test]
