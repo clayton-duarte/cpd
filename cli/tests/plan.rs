@@ -1156,8 +1156,9 @@ fn lock_creates_and_pushes_the_lead_branch_when_the_remote_has_none() {
 
     assert_eq!((&out["prs"][0]["base_sha"], &out["prs"][0]["pushed"], &out["prs"][0]["reused"]), (&json!(head), &json!(true), &json!(false)));
     assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{head}\trefs/heads/cpd/pay/pay"));
-    let worktree = repo.parent().unwrap().canonicalize().unwrap().join("pay.pay.pay");
-    assert_eq!(env.git(&worktree, &["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/cpd/pay/pay");
+    // No upstream: nothing in the shared .git/config (hs-d243 G1).
+    let config = common::output(env.command("git").args(["-C", repo.to_str().unwrap(), "config", "--get-regexp", r"^branch\."])).unwrap();
+    assert_eq!(String::from_utf8(config.stdout).unwrap(), "");
     assert_eq!(env.git(&origin, &["rev-parse", "cpd/pay/pay"]), head);
     assert!(events(&env, "error").is_empty());
 }

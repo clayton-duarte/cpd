@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use super::lock::WatchLock;
 use super::log::Log;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, completion, distill, escalations, inbox, liveness, pr, restart, schedule, titles};
+use super::{SOURCE, completion, distill, escalations, inbox, liveness, pr, restart, schedule, titles, workers};
 use crate::config::{Catalog, Config, load_catalog};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
@@ -53,6 +53,8 @@ pub(super) struct Engine {
     pub last_poll_end: Option<Instant>,
     /// While GitHub's rate limit is nearly spent, E5 runs no poll before this.
     pub paused_until: Option<Instant>,
+    /// The `@cpd_inbox` and `@cpd_workers` texts and width last set on the tmux server.
+    pub workers: Option<String>,
     /// E9: the highest record `seq` of each Context a distill run was started for in this engine's life.
     pub distill_started: HashMap<ContextId, i64>,
     /// E10: the retitle runs this engine started and has not seen end.
@@ -87,11 +89,12 @@ impl Engine {
         self.report.active()
     }
 
-    /// One tick: the tmux restart's drain, then E1–E5 and E7–E10 (§3.7; E6 is removed), each reporting its own failures.
+    /// One tick: the tmux restart's drain, the `@cpd_workers` step, then E1–E5 and E7–E10 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalog = None;
-        let steps: [fn(&mut Engine); 10] = [
+        let steps: [fn(&mut Engine); 11] = [
             restart::drain,
+            workers::run,
             escalations::run,
             liveness::run,
             schedule::run,
@@ -229,6 +232,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
         catalog: None,
         last_poll_end: None,
         paused_until: None,
+        workers: None,
         distill_started: HashMap::new(),
         titles: titles::Runs::default(),
         restart_started: None,
