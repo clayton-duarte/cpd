@@ -1235,38 +1235,42 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     // question: the Context's Manager
     pane.click(10, row_of("alpha: a question"));
     assert_eq!(wait_for_calls(&env, 4)[2..], [words(&["context", "manager", "--context=alpha"]), words(&["session", "open", "m-alpha"])]);
-    // plan-review, and a pull request a Plan owns: the Lead of the Plan
+    // plan-review: the Lead of its Plan, then its page's url copied, and the note says how to open it
     pane.click(10, row_of("ship plan review"));
     assert_eq!(wait_for_calls(&env, 5)[4], words(&["session", "open", "l-ship"]));
+    copied(1, "http://10.0.0.5:20000/");
+    pane.wait("the note", |_| pane.footer_has("copied http://10.0.0.5:20000/: Cmd-click the row to open"));
+    // pr-ready: the merge popup of its pull request, whether a Plan owns it or not, and no command
     pane.click(10, row_of("acme/api#3 ready"));
-    assert_eq!(wait_for_calls(&env, 6)[5], words(&["session", "open", "l-ship"]));
-    // a pull request no Plan owns, and a review request: the url is copied, and the note says how to open it
+    common::wait_until("the merge popup", || !popups(&env).is_empty());
+    assert_eq!(popups(&env).len(), 1, "{:?}", popups(&env));
+    assert_eq!(popups(&env)[0].last().unwrap(), "cpd tui view merge 'acme/api#3'");
+    assert!(popups(&env)[0].contains(&" merge ".to_owned()), "{:?}", popups(&env)[0]);
+    // a pull request, a Plan's or not, and a review request: the url is copied, and the note says how to open it
     pane.click(10, row_of("acme/web#4 changes requested"));
-    copied(1, "https://x.io/changes");
+    copied(2, "https://x.io/changes");
     pane.wait("the note", |_| pane.footer_has("copied https://x.io/changes: Cmd-click the row to open it"));
     pane.click(10, row_of("acme/web#5 review requested"));
-    copied(2, "https://x.io/review");
+    copied(3, "https://x.io/review");
     pane.wait("the note", |_| pane.footer_has("copied https://x.io/review: Cmd-click the row to open it"));
-    // pr-failing, which the Plan `ship` owns here: its Lead
     pane.click(10, row_of("acme/api#12 failing"));
-    assert_eq!(wait_for_calls(&env, 7)[6], words(&["session", "open", "l-ship"]));
-    pane.wait("the note gone", |_| !pane.footer_has("copied")); // the rows below move with it
+    copied(4, "https://github.com/acme/api/pull/12");
+    pane.wait("the note", |_| pane.footer_has("copied https://github.com/acme/api/pull/12: Cmd-click the"));
     // engine-error: the logs popup at the item's Event
     pane.click(10, row_of("engine: store busy"));
-    common::wait_until("the logs popup", || !popups(&env).is_empty());
+    common::wait_until("the logs popup", || popups(&env).len() == 2);
     let popups = popups(&env);
-    assert_eq!(popups.len(), 1, "{popups:?}");
-    assert_eq!(popups[0].last().unwrap(), &format!("cpd tui view logs --event {event}"));
-    assert!(popups[0].contains(&" logs ".to_owned()), "{:?}", popups[0]);
+    assert_eq!(popups[1].last().unwrap(), &format!("cpd tui view logs --event {event}"));
+    assert!(popups[1].contains(&" logs ".to_owned()), "{:?}", popups[1]);
     pane.settled_with_a_client();
-    assert_eq!(calls(&env).len(), 7, "the copies and the logs ran no cpd command: {:?}", calls(&env));
+    assert_eq!(calls(&env).len(), 5, "the copies and the popups ran no cpd command: {:?}", calls(&env));
 }
 
 #[test]
-fn with_no_engine_the_inbox_leads_with_engine_down_and_a_click_on_it_opens_the_logs_at_the_bottom() {
+fn with_no_engine_the_inbox_leads_with_engine_down_and_a_click_on_it_runs_watch_ensure() {
     let env = env_without_engine();
     populate(&env);
-    fake_cpd(&env, r#"{"ok":true}"#);
+    fake_cpd(&env, r#"{"ok":true,"started":true,"pane":"%3"}"#);
     let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
     env.fake(
         "tmux",
@@ -1283,12 +1287,11 @@ fn with_no_engine_the_inbox_leads_with_engine_down_and_a_click_on_it_opens_the_l
     assert_eq!(screen[17..19], section[1..3]);
     assert_eq!(screen[19], " +2 more");
     pane.click(10, 16);
-    common::wait_until("the logs popup", || !popups(&env).is_empty());
-    let popups = popups(&env);
-    assert_eq!(popups.len(), 1, "{popups:?}");
-    assert_eq!(popups[0].last().unwrap(), "cpd tui view logs");
+    assert_eq!(wait_for_calls(&env, 1), [words(&["watch", "--ensure"])]);
+    pane.wait("the note", |_| pane.footer_has("engine started"));
     pane.settled_with_a_client();
-    assert!(calls(&env).is_empty(), "no cpd command ran: {:?}", calls(&env));
+    assert_eq!(popups(&env).len(), 1, "only the legend's, from the settling: {:?}", popups(&env));
+    assert_eq!(calls(&env).len(), 1, "only watch --ensure ran: {:?}", calls(&env));
 }
 
 /// The `display-popup` calls of a fake tmux.
