@@ -2,7 +2,7 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 
-export type Ctx = Pick<ExtensionContext, "mode" | "isIdle" | "hasPendingMessages"> & {
+export type Ctx = Pick<ExtensionContext, "mode" | "isIdle" | "hasPendingMessages" | "cwd" | "isProjectTrusted"> & {
   ui: Pick<ExtensionContext["ui"], "notify" | "getEditorText">;
   sessionManager: Pick<ExtensionContext["sessionManager"], "getSessionId" | "getEntries">;
 };
@@ -27,6 +27,7 @@ export type { ToolDefinition };
 
 /** A custom message as pi hands it to a renderer, reduced to what the adapter reads. */
 export type RenderedMessage = { customType: string; content: unknown; details?: unknown };
-export type Theme = { fg(color: "dim", text: string): string; bg(color: "customMessageBg", text: string): string };
+/** pi's `Theme`, reduced to what the renderer paints with (colour names are pi's `ThemeColor` and `ThemeBg`). */
+export type Theme = { fg(color: string, text: string): string; bg(color: string, text: string): string; bold(text: string): string };
 /** The adapter's renderers take the narrow types above, which pi's own `MessageRenderer` arguments satisfy. */
 export type MessageRenderer = (message: RenderedMessage, options: { expanded: boolean; outputPad: number }, theme: Theme) => Component | undefined;

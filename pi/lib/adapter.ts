@@ -1,4 +1,3 @@
-import { Text } from "@earendil-works/pi-tui";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -9,14 +8,15 @@ import { errorMessage, eventMessage, FOLLOW_UP, LEAD_MESSAGES, sessionMessage } 
 import type { CpdEvent } from "./event.ts";
 import { parseLine, PROTOCOL } from "./event.ts";
 import { DEFAULT_TIMING, Follower, PERMANENT_CODES, type Schedule, type Spawn, type Timing } from "./follower.ts";
-import type { CommandCtx, Ctx, Exec, Message, MessageRenderer, PiApi } from "./pi.ts";
+import type { CommandCtx, Ctx, Exec, Message, PiApi } from "./pi.ts";
 import { lastAssistantText, needsReminder, planKeys, REMINDER_TEXT, REMINDER_TYPE } from "./reminder.ts";
 import { parseOpened, parseResult, parseStatus, request } from "./plannotator.ts";
 import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, highestReview, REVIEW_LABEL, reviewNumber, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
 import { adapterDir, appendLog, DEFAULT_POLL_MS, LONG_REFUSAL_NOTICE, pollAdapter, type Poll, refusal, RELOAD_COMMAND, reloadLogPath, RELOAD_TRIGGER, validatePackage, type Validation } from "./reload.ts";
+import { RENDERED_TYPES, Rendering } from "./render.ts";
 import { isTyped, startsReply } from "./reply.ts";
 import { Facts, Reporter, stateArgs, type Wanted } from "./state.ts";
-import { CONTEXT_TYPE, contextCursorFrom, contextUpdate, countsOf, parsePending, parsePlanEvents, parseRecordEvents, parseRecords, PLAN_KINDS, summaryLine } from "./updates.ts";
+import { contextCursorFrom, contextUpdate, parsePending, parsePlanEvents, parseRecordEvents, parseRecords, PLAN_KINDS } from "./updates.ts";
 
 export type Options = {
   /** The environment read at `session_start` (`CPD_SESSION`, `CPD_PLAN`, `CPD_HOME`). Default: `process.env`. */
@@ -27,13 +27,6 @@ export type Options = {
   schedule?: Schedule;
   /** The directory whose replacement means an install, how often it is polled, and how the new package is validated (§15.6). Default: the adapter's own directory, every {@link DEFAULT_POLL_MS}, jiti from pi. */
   reload?: { dir?: string; intervalMs?: number; longRefusalMs?: number } & Validation;
-};
-
-/** commands.md §15.7 "Display": collapsed, one dim line of counts; expanded, the full text. The model gets `content` either way. A message without counts (an older adapter's) is shown in full. */
-export const renderContext: MessageRenderer = (message, { expanded, outputPad }, theme) => {
-  const counts = countsOf(message.details);
-  const text = expanded || counts === undefined ? String(message.content) : theme.fg("dim", summaryLine(counts));
-  return new Text(text, outputPad, 0, (t) => theme.bg("customMessageBg", t));
 };
 
 export const QUESTION_LABEL = "cpd: Worker question";
@@ -146,7 +139,9 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       (e) => deliver("session state", e),
     );
 
-  pi.registerMessageRenderer(CONTEXT_TYPE, renderContext);
+  // commands.md §15.9: one renderer for every cpd customType; its style is read at `session_start`.
+  const rendering = new Rendering();
+  for (const type of RENDERED_TYPES) pi.registerMessageRenderer(type, rendering.render);
 
   // ---- reload after an install ----
 
@@ -177,6 +172,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
 
   async function start(ctx: Ctx, reason: string): Promise<void> {
     if (ctx.mode !== "tui") return;
+    rendering.load(env, { cwd: ctx.cwd, trusted: ctx.isProjectTrusted() });
     const id = env.CPD_SESSION;
     if (id === undefined || id === "") return;
     await stop(); // a start without a shutdown (never seen) must not leave a second follower behind
