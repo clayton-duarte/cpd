@@ -1326,7 +1326,7 @@ fn version_on_an_empty_home_reports_no_store_and_creates_nothing() {
     assert_eq!(out["schema"], VERSION);
     assert!(out["store_schema"].is_null(), "{out}");
     assert!(out["store"].is_null(), "{out}");
-    assert_eq!(out["protocol"], 3, "{out}");
+    assert_eq!(out["protocol"], 4, "{out}");
     assert!(!home(&env).db().exists());
     assert!(!home(&env).locks_dir().exists());
 }

@@ -244,3 +244,14 @@ test("hs-d239: cpd-lead registers planned work at once; cpd-manager checks it", 
   assert.match(manager, /cpd plan show --plan <p>/);
   assert.match(manager, /cpd session send <lead-session>[^\n]*register/);
 });
+
+test("urgent Jobs: both skills state the flag, the command and the explicit-request rule", () => {
+  for (const skill of ["cpd-lead", "cpd-manager"]) {
+    const text = skillFiles(skill)[0]!.text;
+    assert.match(text, /cpd job urgent <k>/, `${skill}: cpd job urgent`);
+    assert.match(text, /--urgent/, `${skill}: --urgent`);
+    assert.match(text, /only when the User explicitly asks/, `${skill}: explicit-request rule`);
+    assert.match(text, /beyond `concurrency`/, `${skill}: may exceed concurrency`);
+  }
+  assert.ok(synopses().get("job urgent")!.has("--plan"), "commands.md documents job urgent");
+});

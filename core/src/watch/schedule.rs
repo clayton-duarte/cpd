@@ -1,5 +1,6 @@
-//! E3, scheduling (contract §3.2, §3.4, §3.7): each Ready Job, in `jobs.seq`
-//! order across all Plans, while a slot is free, is started by the starter
+//! E3, scheduling (contract §3.2, §3.4, §3.7): each Ready Job, urgent ones
+//! first, then in `jobs.seq` order across all Plans, while a slot is free (an
+//! urgent Job may take one beyond `concurrency`), is started by the starter
 //! `job dispatch` uses: fingerprint, driver lock, Attempt, driver.
 
 use super::SOURCE;
@@ -48,27 +49,27 @@ fn backing_off(conn: &Connection, plan: &PlanId, key: &JobKey, now: OffsetDateTi
 
 /// Ready (§3.2): `queued`, in a Plan in `dispatch` or `deploy`, whose PR is `dispatch`
 /// or `open`, every Dependency `merged`. `driver::start`'s `require_ready` says the same.
-const READY: &str = "SELECT j.plan, j.key FROM jobs j JOIN plans p ON p.id = j.plan
+const READY: &str = "SELECT j.plan, j.key, j.urgent FROM jobs j JOIN plans p ON p.id = j.plan
   JOIN prs r ON r.plan = j.plan AND r.key = j.pr
   WHERE j.status = 'queued' AND p.phase IN ('dispatch', 'deploy') AND r.status IN ('dispatch', 'open')
     AND NOT EXISTS (SELECT 1 FROM dependencies d JOIN jobs n ON n.plan = d.plan AND n.key = d.needs
                      WHERE d.plan = j.plan AND d.job = j.key AND n.status <> 'merged')
-  ORDER BY j.seq";
+  ORDER BY j.urgent DESC, j.seq";
 
 pub(super) fn run(engine: &mut Engine) {
     let ready = engine.store.read(|conn| {
         let mut stmt = conn.prepare(READY)?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, bool>(2)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let active: i64 = conn.query_row("SELECT count(*) FROM attempts WHERE status <> 'ended'", [], |r| r.get(0))?;
         let now = OffsetDateTime::now_utc();
         let mut ready = Vec::new();
-        for (p, k) in rows {
+        for (p, k, urgent) in rows {
             let (plan, key) = (PlanId::parse(&p)?, JobKey::parse(&k)?);
             // Its driver could not be started the last times: wait before the next try.
             if !backing_off(conn, &plan, &key, now)? {
-                ready.push((plan, key));
+                ready.push((plan, key, urgent));
             }
         }
         Ok((ready, active))
@@ -76,10 +77,12 @@ pub(super) fn run(engine: &mut Engine) {
     let ready = match ready {
         Ok((ready, active)) => {
             engine.clear(Step::E3, &About::Machine);
-            if active >= i64::from(engine.config.concurrency) {
+            // Only an urgent Job may take the slot beyond `concurrency` (§3.7 E3).
+            if active >= driver::slot_limit(engine.config.concurrency, true) {
                 return;
             }
-            ready
+            let full = active >= driver::slot_limit(engine.config.concurrency, false);
+            ready.into_iter().filter(|(_, _, urgent)| *urgent || !full).map(|(plan, key, _)| (plan, key)).collect::<Vec<_>>()
         }
         Err(e) => return engine.fail(Step::E3, About::Machine, &e),
     };
