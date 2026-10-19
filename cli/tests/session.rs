@@ -8,7 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv, copy_executable, refused, wait_until};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv, backdate, copy_executable, refused, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::events::{Kind, NewEvent, append};
 use cpd_core::home::CpdHome;
@@ -427,6 +427,8 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
     wait_until("the waiting line", || capture().contains("Waiting for the source Lead to finish its turn, then forking it as \"side\""));
 
     // No file yet, and busy.
+    // time-claim: the fork does not happen while the source is busy and has no file, over a whole 2 s poll of the
+    // source; no per-poll signal from `session run` (it only reads the store and the file).
     std::thread::sleep(Duration::from_secs(3));
     assert!(env.calls("pi").is_empty());
     // A file with a finished turn, but still busy.
@@ -438,6 +440,10 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
         "{\"type\":\"session\"}\n{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}\n",
     )
     .unwrap();
+    // Quiet for long enough and finished: only the busy source is in the way.
+    backdate(&source_file, Duration::from_secs(3600));
+    // time-claim: the fork does not happen while the source is busy, over a whole 2 s poll of the source;
+    // no per-poll signal from `session run`.
     std::thread::sleep(Duration::from_secs(3));
     assert!(env.calls("pi").is_empty(), "the source is still working");
 
@@ -492,7 +498,7 @@ fn fork_stops_waiting_for_a_stopped_source_without_a_file_and_retries_on_enter()
         "{\"type\":\"session\"}\n{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}\n",
     )
     .unwrap();
-    std::thread::sleep(Duration::from_secs(2));
+    backdate(&source_file, Duration::from_secs(3600));
     env.tmux(&["send-keys", "-t", &pane, "Enter"]);
     wait_until("the fork", || !pi_calls_with(&env, "--fork").is_empty());
     let fork = &pi_calls_with(&env, "--fork")[0];
@@ -1514,8 +1520,8 @@ fn a_reload_is_not_a_quit_even_though_pi_exits_0_on_sigterm() {
     env.fake("cpd", &format!("case \"$1 $2 $3\" in \"tui view chat\"|\"tui view history\") exec sleep {SLEEP_SECONDS};; esac\nexec '{}' \"$@\"", copy.display()));
     // An idle Lead at a finished turn, parked: the reload is due at once.
     pi_file(&env, "side", true);
+    backdate(&env.home().join(".pi/agent/sessions/g/2026_side.jsonl"), Duration::from_secs(3600));
     exec_sql(&env, "UPDATE sessions SET state_at = '2020-01-01T00:00:00Z' WHERE id = 'side'");
-    std::thread::sleep(Duration::from_secs(2));
     let pane = run_lead_with_pane(&env, "side");
     wait_until("pi", || env.calls("pi").len() == 1);
 

@@ -99,13 +99,13 @@ fn start(pi: &str) -> Fixture {
 #[test]
 fn a_pi_alive_with_its_state_stopped_for_sixty_seconds_is_restarted_with_one_error_event() {
     let f = start(":");
-    std::thread::sleep(LIMIT - Duration::from_secs(10) - f.started.elapsed().min(Duration::from_secs(5)));
-    assert_eq!(f.env.calls("pi").len(), 1, "not restarted before the limit");
+    assert_eq!(f.env.calls("pi").len(), 1, "not restarted at once");
     assert_eq!(f.errors(), 0);
 
-    wait_until_for("pi restarted", LIMIT, || f.env.calls("pi").len() == 2);
+    // The lower bound is the claim: not restarted before the limit. How late it comes is no claim, only a deadline.
+    wait_until_for("pi restarted", LIMIT + MARGIN, || f.env.calls("pi").len() == 2);
     let after = f.started.elapsed();
-    assert!(after >= LIMIT && after < LIMIT + MARGIN, "restarted after {after:?}");
+    assert!(after >= LIMIT, "restarted after {after:?}, before the limit");
     let session_file = f.env.home().join(format!(".pi/agent/sessions/g/2026_{LEAD}.jsonl")).display().to_string();
     assert!(f.env.calls("pi")[1].windows(2).any(|w| w == ["--session", &session_file]), "it resumes the session file");
 
@@ -116,7 +116,9 @@ fn a_pi_alive_with_its_state_stopped_for_sixty_seconds_is_restarted_with_one_err
     assert_eq!(query::<String>(&f.env, "SELECT session FROM events WHERE kind = 'error'"), LEAD);
 
     // The 60 s start again after the restart.
-    std::thread::sleep(Duration::from_secs(6));
+    // time-claim: no second restart and no second Event over two 2 s polls of the watchdog; no per-poll signal from
+    // `session run`.
+    std::thread::sleep(Duration::from_millis(4500));
     assert_eq!(f.env.calls("pi").len(), 2);
     assert_eq!(f.errors(), 1);
 }
@@ -125,6 +127,8 @@ fn a_pi_alive_with_its_state_stopped_for_sixty_seconds_is_restarted_with_one_err
 fn a_pi_whose_adapter_reports_idle_within_the_limit_is_left_alone() {
     let f = start("sleep 1; report idle");
     wait_until("idle", || query::<String>(&f.env, "SELECT state FROM sessions WHERE id = 'lead1'") == "idle");
+    // time-claim: an idle pi is left alone past the 60 s limit and a poll of the watchdog; no per-poll signal from
+    // `session run`.
     std::thread::sleep((LIMIT + MARGIN).saturating_sub(f.started.elapsed()));
     assert_eq!(f.env.calls("pi").len(), 1);
     assert_eq!(f.errors(), 0);
@@ -137,7 +141,8 @@ fn a_pi_that_exits_is_handled_as_before_with_no_error_event() {
     wait_until("the exit to be reported", || {
         f.env.tmux(&["capture-pane", "-p", "-t", &f.pane]).stdout.windows(9).any(|w| w == b"pi exited")
     });
-    std::thread::sleep(Duration::from_secs(5));
+    // time-claim: the wrapper waits for Enter, over a few of its 0.5 s polls; no per-poll signal from `session run`.
+    std::thread::sleep(Duration::from_millis(2500));
     assert_eq!(f.env.calls("pi").len(), 1, "the wrapper waits for Enter");
     assert_eq!(f.errors(), 0);
 }

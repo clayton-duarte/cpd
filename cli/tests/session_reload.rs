@@ -190,6 +190,8 @@ fn a_parked_idle_lead_restarts_its_pi_on_its_session_file_after_pi_changes() {
     let f = start("idle");
     let session_file = f.session_file.display().to_string();
     assert!(f.signals().is_empty());
+    // time-claim: with nothing installed pi is not restarted over three 0.5 s polls of the wrapper; no per-poll
+    // signal from `session run` (a poll that changes nothing leaves nothing behind).
     std::thread::sleep(Duration::from_millis(1500));
     assert_eq!(f.env.calls("pi").len(), 1, "nothing changed, pi runs on");
 
@@ -209,8 +211,9 @@ fn a_working_lead_is_not_restarted_and_pi_exiting_on_its_own_execs_before_any_st
     let pid = f.pane_pid();
 
     f.install();
-    // Several polls: the Lead is not idle, so pi runs on.
-    std::thread::sleep(Duration::from_millis(2500));
+    // time-claim: the Lead is not idle, so pi runs on over three 0.5 s polls of the wrapper; no per-poll signal
+    // from `session run`.
+    std::thread::sleep(Duration::from_millis(1500));
     assert!(f.runs().is_empty(), "no reload while working");
     assert!(f.signals().is_empty());
     assert_eq!(f.env.calls("pi").len(), 1);
@@ -239,11 +242,12 @@ fn a_pi_that_ignores_sigterm_is_killed_after_ten_seconds_and_the_new_binary_star
     f.install();
 
     wait_until("SIGTERM to reach pi", || !f.signals().is_empty());
-    std::thread::sleep(Duration::from_secs(3));
-    assert!(alive(old_pi), "pi is not killed before the ten seconds are up");
+    // pi ignores SIGTERM: the wrapper waits for it and has not exec'd.
+    assert!(alive(old_pi), "pi is not killed at SIGTERM");
     assert_eq!(f.env.calls("pi").len(), 1);
     assert!(f.runs().is_empty(), "the wrapper waits for pi");
 
+    // The restart comes with the SIGKILL, ten seconds after the SIGTERM: the lower bound is the claim.
     wait_until("pi restarted", || f.env.calls("pi").len() == 2);
     assert!(installed_at.elapsed() >= Duration::from_secs(10), "killed after {:?}", installed_at.elapsed());
     assert!(!alive(old_pi), "the old pi is dead");
@@ -270,8 +274,9 @@ fn a_lead_wrapper_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_in
 
     f.install_older();
     wait_until("the wrapper to refuse the reload", || f.screen().contains("reload skipped"));
-    // Several polls: pi is not signalled, nothing is exec'd, nothing is said twice.
-    std::thread::sleep(Duration::from_millis(2500));
+    // time-claim: pi is not signalled, nothing is exec'd and nothing is said twice over three 0.5 s polls of the
+    // wrapper; no per-poll signal from `session run`.
+    std::thread::sleep(Duration::from_millis(1500));
     let screen = f.screen();
     assert_eq!(screen.matches("reload skipped").count(), 1, "{screen}");
     assert!(screen.contains(&format!("reload skipped: {} supports store schema 5, the database is at 6", f.installed.display())), "{screen}");
