@@ -1235,3 +1235,118 @@ fn edit_completes_a_stub_draft_with_its_tier_and_its_spec() {
         assert_eq!(job_row(&env, "pl", "three", "tier"), Value::Null);
     }
 }
+
+// ---------- urgent Jobs (contract §2.2, §3.7 E3; commands.md §5.1, §5.8) ----------
+
+/// `job add` of `key` with `--urgent` (and `extra` flags).
+fn job_add_urgent(env: &TestEnv, plan: &str, key: &str, extra: &[&str]) -> Run {
+    let spec = spec_file(env);
+    let title = format!("Title of {key}");
+    let mut args = vec!["job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--plan", plan, "--urgent"];
+    args.extend(extra);
+    env.cpd(&args)
+}
+
+#[test]
+fn a_job_is_not_urgent_unless_added_with_urgent() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    let out = job_add(&env, "pl", "calm", "S2", &[]).ok();
+    assert_eq!(out["job"]["urgent"], false);
+    assert_eq!(job_row(&env, "pl", "calm", "urgent"), 0);
+    assert_eq!(events(&env, "job-added")[0]["data"]["urgent"], false);
+
+    let out = job_add_urgent(&env, "pl", "hot", &[]).ok();
+    assert_eq!(out["job"], json!({"key": "hot", "pr": "repo", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": true}));
+    assert_eq!(job_row(&env, "pl", "hot", "urgent"), 1);
+    assert_eq!(events(&env, "job-added")[1]["data"], json!({"pr": "repo", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": true}));
+
+    // The flag is not a Locked field: the same add with or without it is `already`, as for `--draft`.
+    assert_eq!(job_add_urgent(&env, "pl", "calm", &[]).ok()["already"], true);
+    assert_eq!(job_row(&env, "pl", "calm", "urgent"), 0, "an add that found the Job changes nothing");
+    assert_eq!(job_add(&env, "pl", "hot", "S2", &[]).ok()["already"], true);
+
+    // After the lock the appended Job is `queued` and urgent at once, its fingerprint stored.
+    lock(&env, "pl");
+    let out = job_add_urgent(&env, "pl", "late", &[]).ok();
+    assert_eq!((&out["job"]["status"], &out["job"]["urgent"]), (&json!("queued"), &json!(true)));
+    assert_eq!(job_row(&env, "pl", "late", "urgent"), 1);
+    // `--draft` and `--urgent` together: a draft, urgent.
+    let out = job_add_urgent(&env, "pl", "later", &["--draft"]).ok();
+    assert_eq!((&out["job"]["status"], &out["job"]["urgent"]), (&json!("draft"), &json!(true)));
+}
+
+#[test]
+fn urgent_marks_a_queued_job_once_with_one_job_edited_and_changes_no_fingerprint() {
+    let env = TestEnv::new();
+    drafted(&env);
+    lock(&env, "pl");
+    let fingerprint = job_row(&env, "pl", "a", "fingerprint");
+    assert_ne!(fingerprint, Value::Null);
+    let edited = events(&env, "job-edited").len();
+
+    let out = job(&env, &["urgent", "a"], "pl").ok();
+    assert_eq!(out, json!({"job": {"key": "a", "status": "queued", "urgent": true}, "fields": ["urgent"]}));
+    assert_eq!(job_row(&env, "pl", "a", "urgent"), 1);
+    assert_eq!((job_row(&env, "pl", "a", "status"), job_row(&env, "pl", "a", "fingerprint")), (json!("queued"), fingerprint));
+    assert_eq!(job_row(&env, "pl", "b", "urgent"), 0, "only the named Job");
+    let all = events(&env, "job-edited");
+    assert_eq!(all.len(), edited + 1);
+    assert_eq!((&all.last().unwrap()["job"], &all.last().unwrap()["data"]), (&json!("a"), &json!({"fields": ["urgent"]})));
+    // The Locked Job still matches its fingerprint: the flag is in none.
+    assert_eq!(job(&env, &["show", "a"], "pl").ok()["tamper"], json!([]));
+
+    // Idempotent: already, nothing written.
+    let (txns, evs) = (count(&env, "txns"), count(&env, "events"));
+    let again = job(&env, &["urgent", "a"], "pl").ok();
+    assert_eq!(again["already"], true);
+    assert_eq!(again["job"]["urgent"], true);
+    assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs));
+}
+
+#[test]
+fn urgent_does_not_change_the_plan_fingerprint_of_a_draft() {
+    let env = TestEnv::new();
+    drafted(&env);
+    let before = env.cpd(&["plan", "render", "--plan", "pl"]).ok()["fingerprint"].clone();
+    assert_eq!(job(&env, &["urgent", "a"], "pl").ok()["job"], json!({"key": "a", "status": "draft", "urgent": true}));
+    assert_eq!(env.cpd(&["plan", "render", "--plan", "pl"]).ok()["fingerprint"], before);
+}
+
+#[test]
+fn urgent_is_refused_for_a_job_that_is_not_queued_or_draft_and_for_an_unknown_one() {
+    let env = TestEnv::new();
+    drafted(&env);
+    job_add(&env, "pl", "c", "S2", &[]).ok();
+    job_add(&env, "pl", "d", "S2", &[]).ok();
+    job_add(&env, "pl", "e", "S2", &[]).ok();
+    lock(&env, "pl");
+    engine(&env, "pl", "a", "merged");
+    engine(&env, "pl", "c", "running");
+    engine(&env, "pl", "d", "failed");
+    job(&env, &["cancel", "e", "--reason", "No."], "pl").ok();
+    let (txns, evs) = (count(&env, "txns"), count(&env, "events"));
+    for (key, status) in [("a", "merged"), ("c", "running"), ("d", "failed"), ("e", "cancelled")] {
+        let error = refused(&job(&env, &["urgent", key], "pl"), "illegal_transition", 3);
+        assert_eq!(error["details"]["status"], status, "{key}");
+        assert_eq!(job_row(&env, "pl", key, "urgent"), 0, "{key}");
+    }
+    refused(&job(&env, &["urgent", "ghost"], "pl"), "job_not_found", 4);
+    assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs), "refusals write nothing");
+}
+
+#[test]
+fn list_and_show_carry_urgent() {
+    let env = TestEnv::new();
+    drafted(&env);
+    job(&env, &["urgent", "b"], "pl").ok();
+    let listed = job(&env, &["list"], "pl").ok();
+    let flags: Vec<(&Value, &Value)> = listed["jobs"].as_array().unwrap().iter().map(|j| (&j["key"], &j["urgent"])).collect();
+    assert_eq!(flags, [(&json!("a"), &json!(false)), (&json!("b"), &json!(true))]);
+    assert_eq!(job(&env, &["show", "b"], "pl").ok()["job"]["urgent"], true);
+    assert_eq!(job(&env, &["show", "a"], "pl").ok()["job"]["urgent"], false);
+    let shown = env.cpd(&["plan", "show", "--plan", "pl"]).ok();
+    let flags: Vec<&Value> = shown["jobs"].as_array().unwrap().iter().map(|j| &j["urgent"]).collect();
+    assert_eq!(flags, [&json!(false), &json!(true)]);
+}
