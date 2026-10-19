@@ -87,12 +87,17 @@ fn healthy() -> TestEnv {
 /// [`healthy`] in `env`.
 fn healthy_in(env: TestEnv) -> TestEnv {
     write_config(&env, "");
+    healthy_tools(&env);
+    symlink(real_node(), env.bin().join("node")).unwrap();
+    env
+}
+
+/// The fake git, tmux, gh and pi of [`healthy`], (re)installed in `env`.
+fn healthy_tools(env: &TestEnv) {
     env.fake("git", "echo 'git version 2.43.0'");
     env.fake("tmux", "[ \"$1\" = -V ] && echo 'tmux 3.6'; exit 0");
     env.fake_gh("[ \"$1\" = auth ] && exit 0; echo 'gh version 2.45.0 (2025-07-18 Ubuntu 2.45.0-1ubuntu0.3)'");
-    install_pi(&env, "1.2.0");
-    symlink(real_node(), env.bin().join("node")).unwrap();
-    env
+    install_pi(env, "1.2.0");
 }
 
 /// `cpd doctor` with `PATH` = the test's `bin/` only, and `vars` added.
@@ -254,8 +259,10 @@ fn each_tool_must_be_at_or_above_its_minimum() {
         ("gh", "gh version 2.44.9 (2025-01-01)", false, "2.44.9"),
         ("gh", "gh version 2.46.0 (2025-01-01)", true, "2.46.0"),
     ];
+    // One env: each case is the healthy machine with one tool changed (doctor runs every tool afresh).
+    let env = healthy();
     for (tool, output, passes, found) in cases {
-        let env = healthy();
+        healthy_tools(&env);
         if tool == "pi" {
             install_pi(&env, output);
         } else {
@@ -277,8 +284,9 @@ fn each_tool_must_be_at_or_above_its_minimum() {
 
 #[test]
 fn a_tool_that_is_not_on_path_fails() {
+    let env = healthy();
     for tool in ["git", "tmux", "pi", "gh"] {
-        let env = healthy();
+        healthy_tools(&env);
         fs::remove_file(env.bin().join(tool)).unwrap();
         let run = doctor(&env);
         assert_doctor_failed(&run);
