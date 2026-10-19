@@ -220,7 +220,7 @@ Each tool: **What**, **Layout**, **Status and alerts**, **Driven by**, **Standou
 ### 3.7 yazi
 
 - **What:** an async terminal file manager in Rust ([README](https://github.com/sxyazi/yazi)).
-- **Layout:** Miller columns: parent, current, preview, in the ratio `ratio = [1, 4, 3]` ([yazi-default.toml](https://github.com/sxyazi/yazi/blob/HEAD/yazi-config/preset/yazi-default.toml)); tabs; a header with the path and a status bar; a **tasks** overlay.
+- **Layout:** Miller columns: parent, current, preview, in the ratio `ratio = [1, 4, 3]` ([yazi-default.toml](https://github.com/sxyazi/yazi/blob/HEAD/yazi-config/preset/yazi-default.toml)); multi-tab support (README). A header, a status bar and a tasks overlay are **inferred** from the feature list.
 - **Status and alerts:** "async task scheduling and management: real-time progress updates, task cancellation, and internal task priority"; a notify component; a client-server "data distribution service" with pub-sub across instances ([README features](https://github.com/sxyazi/yazi)).
 - **Driven by:** vim keys, mouse, drag and drop, which-key style popups, a Lua plugin system with UI plugins.
 - **Standout:** the preview follows the cursor, and long jobs live in a task list you can open.
@@ -281,7 +281,7 @@ Each tool: **What**, **Layout**, **Status and alerts**, **Driven by**, **Standou
 ### 3.10 posting
 
 - **What:** a terminal HTTP client ([README](https://github.com/darrenburns/posting)), in Python/Textual: requests live in YAML files, with environments, tabs, history and a command palette.
-- **Layout:** a collection tree, request tabs, an editor for the request, a response panel (a "collapsible JSON tree"); "resize the response panel" by dragging (README mouse section).
+- **Layout:** the README names request tabs, a populated collection, header autocomplete and a response with a "collapsible JSON tree"; its mouse demo: "switch request tabs, resize the response panel, scroll through a response, and select text". The arrangement (collection left, request and response beside) is **inferred**.
 - **Status and alerts:** request timing, a persistent history of responses, a live event log for streaming.
 - **Driven by:** **jump mode** ("press a shortcut, type a label, and jump straight to any part of the interface"), a **command palette**, full **mouse** support (switch tabs, resize panels, select text), 37 themes plus user themes, `$EDITOR`/`$PAGER`; and `posting remote`, "so coding agents like Claude Code and Codex can send requests through the Posting you have open while you watch".
 - **Standout:** two ways to get anywhere (palette by name, jump mode by label), and an agent that drives the *same* instance the human watches.
@@ -321,7 +321,7 @@ Each tool: **What**, **Layout**, **Status and alerts**, **Driven by**, **Standou
 ### 3.12 lnav
 
 - **What:** "the logfile navigator" ([README](https://github.com/tstack/lnav)): it decompresses, detects formats, merges files **by time into one view**, tails them, "builds an index of errors and warnings" and pretty-prints JSON lines.
-- **Layout:** one main view of log lines; a histogram view (`i`); a status line with the current mode; a command/SQL prompt at the bottom.
+- **Layout:** one main view of log lines and a histogram view (`i`); a command/SQL prompt (`:` and `;`). Any status line or chrome beyond that is **inferred**: the README text read does not describe it.
 - **Status and alerts:** failed requests in red; identifiers (IPs, PIDs) "semantically highlighted" ([README, screenshot text](https://github.com/tstack/lnav#screenshot)); `e`/`E` jump to the next and previous error.
 - **Driven by:** keys and a prompt (`/` regex search, `:` commands, `;` SQLite queries); filters by regex or SQL expression; `:highlight`.
 - **Standout:** an *index of what matters* (errors) over a firehose, with one key to the next.
