@@ -1173,7 +1173,8 @@ mod tests {
         assert_eq!(err.details()["unknown"], serde_json::json!([ADD_A.name, ADD_B.name]));
         // An additive one is inside the window (§4.5): the binary opens it (verdict.rs tests).
         let (_dir, home) = tmp_home();
-        drop(open_named(&home, &with_kind_tables(&[ADD_A])).unwrap());
+        // The store has every migration this binary has, plus one it does not know.
+        drop(open_named(&home, &schema::NAMED.iter().copied().chain([ADD_A]).collect::<Vec<_>>()).unwrap());
         assert!(Store::open(&home, 5000).is_ok());
     }
 
