@@ -469,7 +469,7 @@ Every transition below is the only way its state changes. Anything else is refus
 
 ### 3.1 Plan phases
 
-The phases are the cpd side of the CPD flow (Context, Plan, Deploy): §3.9 maps each step of the flow to a phase and its commands.
+The phases are the cpd side of the CPD flow, whose three stages are Context, Plan and Deploy: §3.9 maps each step of the flow to a phase and its commands.
 
 ```mermaid
 stateDiagram-v2
@@ -729,7 +729,7 @@ Each step is idempotent: a rerun after a crash between the local rename and the 
 
 ### 3.9 The CPD flow
 
-**CPD** means Context, Plan, Deploy: the cockpit's three columns, read as past, present and future (hs-n31). The flow below names each stage's steps and maps them to the phases of §3.1 and to commands; it adds no state of its own.
+**CPD** is Continuous Parallel Delivery (hs-d245). Its flow has three stages, Context, Plan and Deploy: the cockpit's three columns, read as past, present and future. The flow below names each stage's steps and maps them to the phases of §3.1 and to commands; it adds no state of its own.
 
 | Stage | Step | cpd phase | What happens | Commands |
 |---|---|---|---|---|
