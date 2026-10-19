@@ -41,7 +41,7 @@ use crate::merge::{self, RepoLock};
 use crate::output::Output;
 use crate::plan::Phase;
 use crate::plan::PrRow;
-use row::PlanRow;
+use row::PlanPrs;
 
 pub use gh::close_pr;
 
@@ -153,14 +153,14 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
 }
 
 impl Env {
-    fn plan(&mut self, id: &PlanId) -> Result<PlanRow, CpdError> {
+    fn plan(&mut self, id: &PlanId) -> Result<PlanPrs, CpdError> {
         self.store.read(|conn| row::load(conn, id))
     }
 }
 
 /// `illegal_phase` (exit 3): `command` needs a Plan in phase `needs`.
-fn illegal_phase(plan: &PlanRow, command: &str, needs: &str) -> CpdError {
-    wrong_phase(&plan.id, plan.phase, command, needs)
+fn illegal_phase(plan: &PlanPrs, command: &str, needs: &str) -> CpdError {
+    wrong_phase(&plan.plan.id, plan.plan.phase, command, needs)
 }
 
 /// The per-PR Gate log, `run/<plan>/logs/pr-<key>.pre-merge.log` (§7.6). The

@@ -22,7 +22,7 @@ mod prs;
 mod render;
 mod rename;
 mod review;
-mod row;
+pub mod row;
 mod show;
 
 use std::path::{Path, PathBuf};

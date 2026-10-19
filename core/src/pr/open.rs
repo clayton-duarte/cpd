@@ -3,7 +3,7 @@
 
 use serde_json::json;
 
-use super::row::PlanRow;
+use super::row::PlanPrs;
 use crate::plan::PrRow;
 use super::gh::{self, PolledPr};
 use super::pulls;
@@ -123,7 +123,7 @@ fn opened_prs(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_json::Value>, 
 }
 
 /// The PR `key`, which the Plan has.
-fn pr_of<'a>(plan: &'a PlanRow, key: &PrKey) -> &'a PrRow {
+fn pr_of<'a>(plan: &'a PlanPrs, key: &PrKey) -> &'a PrRow {
     plan.prs.iter().find(|p| p.key == *key).expect("the selected PR is still in the Plan")
 }
 
@@ -137,23 +137,23 @@ enum Step {
 /// The PR must be `dispatch`. `open` and `merged` are `already`; `waiting` and
 /// `cancelled` are `illegal_transition`. A Plan that has not been locked is
 /// `illegal_phase`.
-fn require_dispatch(plan: &PlanRow, args: &Args) -> Result<Step, CpdError> {
-    if matches!(plan.phase, Phase::Grounding | Phase::Plan) {
+fn require_dispatch(plan: &PlanPrs, args: &Args) -> Result<Step, CpdError> {
+    if matches!(plan.plan.phase, Phase::Grounding | Phase::Plan) {
         return Err(illegal_phase(plan, COMMAND, "dispatch"));
     }
     let pr = plan.select(&args.pr)?;
     match pr.status.as_str() {
         "dispatch" => Ok(Step::Go(pr.key.clone())),
         "open" | "merged" => {
-            Ok(Step::Already(Output::success(json!({"plan": plan.id, "phase": plan.phase.as_str(), "pr": pr.to_json(), "already": true}))))
+            Ok(Step::Already(Output::success(json!({"plan": plan.plan.id, "phase": plan.plan.phase.as_str(), "pr": pr.to_json(), "already": true}))))
         }
-        _ => Err(pr.refuse(&plan.id, COMMAND, "dispatch")),
+        _ => Err(pr.refuse(&plan.plan.id, COMMAND, "dispatch")),
     }
 }
 
 /// Every Job of the PR `merged` or `cancelled`, and at least one `merged`; else `jobs_not_done`.
-fn require_jobs_done(env: &mut Env, plan: &PlanRow, key: &PrKey) -> Result<Vec<jobs::Job>, CpdError> {
-    let all: Vec<jobs::Job> = env.store.read(|conn| jobs::load(conn, &plan.id))?.into_iter().filter(|j| j.pr == key.as_str()).collect();
+fn require_jobs_done(env: &mut Env, plan: &PlanPrs, key: &PrKey) -> Result<Vec<jobs::Job>, CpdError> {
+    let all: Vec<jobs::Job> = env.store.read(|conn| jobs::load(conn, &plan.plan.id))?.into_iter().filter(|j| j.pr == key.as_str()).collect();
     let open: Vec<_> = all
         .iter()
         .filter(|j| j.status != "merged" && j.status != "cancelled")
@@ -162,15 +162,15 @@ fn require_jobs_done(env: &mut Env, plan: &PlanRow, key: &PrKey) -> Result<Vec<j
     if !open.is_empty() {
         return Err(CpdError::new(
             ErrorCode::JobsNotDone,
-            format!("{} Jobs of PR {key} of Plan {} are not Merged or cancelled yet: see cpd job list.", open.len(), plan.id),
+            format!("{} Jobs of PR {key} of Plan {} are not Merged or cancelled yet: see cpd job list.", open.len(), plan.plan.id),
         )
-        .with("plan", plan.id.as_str())
+        .with("plan", plan.plan.id.as_str())
         .with("pr", key.as_str())
         .with("jobs", open));
     }
     if !all.iter().any(|j| j.status == "merged") {
-        return Err(CpdError::new(ErrorCode::JobsNotDone, format!("No Job of PR {key} of Plan {} is Merged: there is nothing to open a PR for.", plan.id))
-            .with("plan", plan.id.as_str())
+        return Err(CpdError::new(ErrorCode::JobsNotDone, format!("No Job of PR {key} of Plan {} is Merged: there is nothing to open a PR for.", plan.plan.id))
+            .with("plan", plan.plan.id.as_str())
             .with("pr", key.as_str())
             .with("jobs", json!([])));
     }
@@ -178,8 +178,8 @@ fn require_jobs_done(env: &mut Env, plan: &PlanRow, key: &PrKey) -> Result<Vec<j
 }
 
 /// The Plan's title when it has one PR that is not `cancelled`, else `<title> (<key>)` (§7.6).
-fn title(plan: &PlanRow, key: &PrKey) -> String {
-    if plan.live().count() == 1 { plan.title.clone() } else { format!("{} ({key})", plan.title) }
+fn title(plan: &PlanPrs, key: &PrKey) -> String {
+    if plan.live().count() == 1 { plan.plan.title.clone() } else { format!("{} ({key})", plan.plan.title) }
 }
 
 /// A table cell: one line, no `|`.

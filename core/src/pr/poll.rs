@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use super::feedback;
 use super::gh::{self, Listed};
 use super::pulls::{self, Change, Reason};
-use super::row::PlanRow;
+use super::row::PlanPrs;
 use super::status::PrState;
 use super::{Env, PollArgs};
 use crate::error::{CpdError, ErrorCode};
@@ -223,7 +223,7 @@ fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest)
 }
 
 /// `[{key, status, pull_request}]` of the Plan's PRs that are not `cancelled`, in key order.
-fn plan_prs(env: &mut Env, plan: &PlanRow) -> Result<Vec<Value>, CpdError> {
+fn plan_prs(env: &mut Env, plan: &PlanPrs) -> Result<Vec<Value>, CpdError> {
     env.store.read(|conn| {
         plan.live()
             .map(|pr| {
