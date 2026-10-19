@@ -1,19 +1,23 @@
 import type { CpdEvent, Kind } from "./event.ts";
 import type { Message, SendOptions } from "./pi.ts";
 
-/** commands.md §15.3, "Plan Lead" column: the kinds that become a message, and whether they trigger a turn. */
-export const LEAD_MESSAGES: Partial<Record<Kind, { turn: boolean }>> = {
-  "job-merged": { turn: true },
-  "job-failed": { turn: true },
-  "all-merged": { turn: true },
-  "pr-feedback": { turn: true },
-  "plan-done": { turn: true },
-  error: { turn: true },
-  escalation: { turn: true },
-  "attempt-retry": { turn: false },
-  "job-cancelled": { turn: false },
-  "pr-started": { turn: false },
-  "pr-merged": { turn: false },
+/**
+ * commands.md §15.3, "Plan Lead" column: the kinds that become a message, whether they trigger a turn, and how a busy Lead gets them (hs-d276).
+ * `steer`: pi injects the message after the current tool call. `followUp`: pi delivers it after the run, one per finished run.
+ * `pr-feedback` (every reason) and a Worker's `escalation` are urgent, so steered; every other kind waits as a follow-up.
+ */
+export const LEAD_MESSAGES: Partial<Record<Kind, { turn: boolean; deliverAs: SendOptions["deliverAs"] }>> = {
+  "job-merged": { turn: true, deliverAs: "followUp" },
+  "job-failed": { turn: true, deliverAs: "followUp" },
+  "all-merged": { turn: true, deliverAs: "followUp" },
+  "pr-feedback": { turn: true, deliverAs: "steer" },
+  "plan-done": { turn: true, deliverAs: "followUp" },
+  error: { turn: true, deliverAs: "followUp" },
+  escalation: { turn: true, deliverAs: "steer" },
+  "attempt-retry": { turn: false, deliverAs: "followUp" },
+  "job-cancelled": { turn: false, deliverAs: "followUp" },
+  "pr-started": { turn: false, deliverAs: "followUp" },
+  "pr-merged": { turn: false, deliverAs: "followUp" },
 };
 
 export const FOLLOW_UP = (turn: boolean): SendOptions => ({ triggerTurn: turn, deliverAs: "followUp" });

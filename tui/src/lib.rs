@@ -9,6 +9,7 @@
 //! - [`widgets`]: the Dispatch column and the key legend (`tui view legend`), with the shared [`palette`];
 //! - [`logs`]: the Event log, a popup of the StatusBar (R36);
 //! - [`history`]: an archived Session's pi file, read-only, in the chat slot;
+//! - [`merge`]: the merge confirmation, a popup of the Deploy column's merge icon;
 //! - [`tree`], [`plan`], [`worker`]: the other views of §13.2.
 
 mod chat;
@@ -16,6 +17,7 @@ mod cockpit;
 mod history;
 pub mod link;
 pub mod logs;
+pub mod merge;
 pub mod palette;
 mod plan;
 pub mod read;
@@ -84,6 +86,8 @@ pub enum View {
     Legend,
     /// The Event log (opened by the StatusBar's logs button and by an Inbox item, in a tmux popup)
     Logs(logs::Args),
+    /// The merge confirmation of a pull request (opened by the Deploy column's merge icon, in a tmux popup)
+    Merge(merge::Args),
     /// The chat slot's placeholder
     Chat,
 }
@@ -99,6 +103,7 @@ pub fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdError> {
             View::History(args) => history::run(args),
             View::Legend => widgets::legend::run(),
             View::Logs(args) => logs::run(args),
+            View::Merge(args) => merge::run(args, run_command),
             View::Chat => chat::run(),
         },
         Some(Command::Action(a)) => Ok(cockpit::action(a.action.as_deref(), &a.client)),

@@ -101,6 +101,7 @@ mod tests {
             status: status.into(),
             appended: false,
             review: false,
+            urgent: false,
             fingerprint: None,
             retry_tier: None,
             cancel_reason: None,
