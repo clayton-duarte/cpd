@@ -6,7 +6,6 @@
 mod common;
 
 use std::fs;
-use std::time::Duration;
 
 use common::{CPD, TestEnv, wait_until};
 use cpd_core::error::CpdError;
@@ -226,8 +225,11 @@ fn the_view_follows_live_scrolls_and_closes_with_q_or_esc() {
     tmux_out(&env, &["send-keys", "-t", &pane, "k", "k"]);
     wait_screen(&env, &pane, "scrolled up", |r| r.first().is_some_and(|l| l == " 00:00:05 event 5"));
     append_numbered(&mut store, 11, 1);
-    std::thread::sleep(Duration::from_millis(500));
-    assert_eq!(screen(&env, &pane)[0], " 00:00:05 event 5");
+    // The view reads the store after each key it handles, so once `k` has scrolled it one more row, it has read
+    // Event 11: it did not follow it.
+    tmux_out(&env, &["send-keys", "-t", &pane, "k"]);
+    let rows = wait_screen(&env, &pane, "scrolled up once more", |r| r.first().is_some_and(|l| l == " 00:00:04 event 4"));
+    assert_eq!(rows[3], " 00:00:07 event 7", "the new Event did not move it: {rows:?}");
     tmux_out(&env, &["send-keys", "-t", &pane, "PageDown"]);
     wait_screen(&env, &pane, "following again", |r| r.get(3).is_some_and(|l| l == " 00:00:11 event 11"));
     tmux_out(&env, &["send-keys", "-t", &pane, "Up", "PageUp", "PageUp", "PageUp"]);

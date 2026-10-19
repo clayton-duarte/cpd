@@ -6,7 +6,6 @@
 mod common;
 
 use std::fs;
-use std::time::Duration;
 
 use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until};
 use cpd_core::error::CpdError;
@@ -285,7 +284,7 @@ fn a_killed_view_respawns_at_once_and_the_engine_stays_dead() {
         !p.dead && p.pid.is_some() && p.pid != tree.pid
     });
     drop(tree_tty);
-    std::thread::sleep(Duration::from_millis(300));
+    // tmux runs the `pane-died` hooks in the order the panes died: the tree's has run, so the engine's has.
     assert!(pane_state(&env, engine).0, "the engine pane stays dead for E2");
     let after = main_panes(&env);
     assert_layout(&after);

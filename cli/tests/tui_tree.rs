@@ -7,8 +7,6 @@
 
 mod common;
 
-use std::time::{Duration, Instant};
-
 use common::{CPD, TestEnv, sql};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
@@ -145,6 +143,9 @@ fn populate(env: &TestEnv) {
 
 const SESSION: &str = "tree";
 
+/// The note the legend (`?`) leaves where no tmux client is attached.
+const NO_CLIENT: &str = "No tmux client is attached to the cockpit.";
+
 struct Pane<'a> {
     env: &'a TestEnv,
 }
@@ -193,6 +194,14 @@ impl<'a> Pane<'a> {
     /// Waits until the tree has been drawn.
     fn ready(&self) -> Vec<String> {
         self.wait("the tree", |s| s.iter().any(|r| r.contains("alpha")))
+    }
+
+    /// Waits until the view has handled every key sent so far: it handles them in order, and `?` always leaves a mark
+    /// (no tmux client is attached, so the legend fails and the note says so). The positive signal that nothing came
+    /// of the keys before it. Only where no note is shown yet, and the note is the marker's.
+    fn settled(&self) {
+        self.keys(&["?"]);
+        self.wait("the view to handle the keys sent before", |_| self.footer_has(NO_CLIENT));
     }
 
     fn keys(&self, keys: &[&str]) {
@@ -254,15 +263,10 @@ fn calls(env: &TestEnv) -> Vec<Vec<String>> {
 }
 
 fn wait_for_calls(env: &TestEnv, n: usize) -> Vec<Vec<String>> {
-    let start = Instant::now();
-    loop {
+    common::wait_some(&format!("{n} calls of cpd"), common::WAIT, || {
         let calls = calls(env);
-        if calls.len() >= n {
-            return calls;
-        }
-        assert!(start.elapsed() < Duration::from_secs(10), "waiting for {n} calls of cpd; got {calls:?}");
-        std::thread::sleep(Duration::from_millis(50));
-    }
+        if calls.len() >= n { Ok(calls) } else { Err(format!("got {calls:?}")) }
+    })
 }
 
 fn words(w: &[&str]) -> Vec<String> {
@@ -352,7 +356,7 @@ fn a_click_on_a_context_row_opens_its_manager_and_its_fold_glyph_folds_it() {
         wait_for_calls(&env, 2),
         [words(&["context", "manager", "--context=alpha"]), words(&["session", "open", "m-alpha"])]
     );
-    std::thread::sleep(Duration::from_millis(500));
+    pane.settled();
     assert_eq!(calls(&env).len(), 2, "no more commands");
     let screen = pane.screen();
     assert!(screen[1].starts_with(" ▾ ") && screen.iter().any(|r| r.contains("ship")), "the label click folds nothing: {screen:?}");
@@ -385,7 +389,7 @@ fn enter_n_and_x_before_any_arrow_key_do_nothing() {
     let pane = Pane::start(&env, 46, 14);
     pane.ready();
     pane.keys(&["Enter", "x", "n"]);
-    std::thread::sleep(Duration::from_millis(500));
+    pane.settled();
     assert!(calls(&env).is_empty());
     assert!(!pane.footer_has("Fork") && !pane.footer_has("Close"));
 }
@@ -399,10 +403,18 @@ fn no_key_but_the_references_does_anything() {
     let before = pane.ready();
     pane.down(2); // on sketch
     pane.keys(&["q", "f", "r", "p", "Space", "G", "Escape"]);
-    std::thread::sleep(Duration::from_millis(500));
+    pane.settled();
     assert!(!pane.dead(), "q does not end the view");
     assert!(calls(&env).is_empty());
-    assert_eq!(pane.screen(), before, "no prompt, no note, nothing folded");
+    // The marker's note is the one change; the rows above it are what they were.
+    let after = pane.screen();
+    assert_eq!(after.len(), before.len(), "{after:?}");
+    let note_row = after.iter().position(|r| r.contains(NO_CLIENT)).unwrap();
+    assert_eq!(
+        (after.iter().take(note_row).collect::<Vec<_>>(), after.iter().skip(note_row + 1).collect::<Vec<_>>()),
+        (before.iter().take(note_row).collect::<Vec<_>>(), before.iter().skip(note_row + 1).collect::<Vec<_>>()),
+        "no prompt, nothing folded"
+    );
 }
 
 #[test]
@@ -483,7 +495,7 @@ fn question_mark_opens_the_legend_popup() {
     pane.ready();
     // `?` needs no cursor; with no client attached to the private server, the popup has nowhere to open
     pane.keys(&["?"]);
-    pane.wait("the failure", |_| pane.footer_has("No tmux client is attached to the cockpit."));
+    pane.wait("the failure", |_| pane.footer_has(NO_CLIENT));
 }
 
 #[test]
@@ -497,8 +509,9 @@ fn a_refused_command_shows_its_error_until_the_next_n_x_or_click() {
     pane.keys(&["Enter"]);
     pane.wait("the error", |_| pane.footer_has("no_cockpit: No cockpit."));
     assert_eq!(calls(&env), [words(&["session", "open", "l-ship"])]);
+    let before = pane.screen();
     pane.keys(&["j"]);
-    std::thread::sleep(Duration::from_millis(300));
+    pane.wait("the cursor to move", |s| s != before);
     assert!(pane.footer_has("no_cockpit"), "an arrow keeps it");
     pane.keys(&["n", "Escape"]);
     pane.wait("the note gone", |_| !pane.footer_has("no_cockpit"));
@@ -662,7 +675,6 @@ fn a_right_click_opens_the_menu_of_the_row_and_esc_or_a_click_outside_closes_it_
     pane.wait("the empty area's menu", |s| menu_open(s, "New Context…"));
     pane.keys(&["Escape"]);
     pane.wait("the menu closed", the_menu_is_closed);
-    std::thread::sleep(Duration::from_millis(300));
     assert!(calls(&env).is_empty(), "{:?}", calls(&env));
     assert!(!pane.footer_has("Archive"), "no prompt");
 }
@@ -717,8 +729,8 @@ fn a_refusal_of_a_step_shows_in_the_note_row_and_stops_the_archive() {
     pane.right_click(8, 2);
     pane.wait("the menu", |s| menu_open(s, "New session…"));
     pane.click(10, 6);
+    // The note comes when the whole action is over (the view runs it in its loop), so the archive step is not still to come.
     pane.wait("the refusal", |_| pane.footer_has("no_cockpit: There is no cockpit."));
-    std::thread::sleep(Duration::from_millis(300));
     assert_eq!(calls(&env), [words(&["session", "open", "l-sketch"])], "the archive did not run");
 }
 

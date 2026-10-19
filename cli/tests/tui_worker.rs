@@ -9,7 +9,6 @@ mod common;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use common::{CPD, TestEnv};
 use serde_json::json;
@@ -208,11 +207,7 @@ fn scrolling_leaves_the_end_and_q_ends_the_view() {
     pane.keys(&["G"]);
     pane.wait("the end again", |s| s.iter().any(|r| r.contains("test result")));
     pane.keys(&["q"]);
-    let start = Instant::now();
-    while !pane.dead() {
-        assert!(start.elapsed() < Duration::from_secs(10), "q did not end the view");
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    common::wait_until("q to end the view", || pane.dead());
 }
 
 #[test]

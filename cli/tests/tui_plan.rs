@@ -459,9 +459,14 @@ fn without_a_port_file_the_pending_review_row_has_no_arrow() {
     assert!(!styled_screen(&env, &pane).contains("localhost"));
     // a port file that holds no port is no port file
     write_port(&env, "not a port\n");
-    env.sql(&event("plan-review", "ctx", Some("ship"), None, "{}"));
-    std::thread::sleep(Duration::from_millis(1500));
-    assert_eq!(screen(&env, &pane)[0], "   Plan review r1 pending");
+    // The same write that appends the Event stores a conflict in the box title: when the title shows it, the view has
+    // read the store (and the port file, written before) again.
+    env.sql(&format!(
+        "{}UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 7;",
+        event("plan-review", "ctx", Some("ship"), None, "{}")
+    ));
+    let after = screen_when(&env, &pane, "the re-read", |s| s.iter().any(|l| l.contains("#7 conflict ↗")));
+    assert_eq!(after[0], "   Plan review r1 pending");
 }
 
 #[test]
@@ -582,8 +587,13 @@ fn the_view_starts_no_subprocess_and_asks_gh_nothing() {
     let pid = tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_pid}"]).trim().to_owned();
     // let it draw, follow an Event and take a new snapshot
     screen_when(&env, &pane, "the chart", |s| s.len() > 2 && s[2].contains(" a "));
-    env.sql(&event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":[]}"#));
-    std::thread::sleep(Duration::from_millis(1500));
+    // The Event comes with its Job: when the new pill shows, the view has followed the Event and read the store again.
+    env.sql(&format!(
+        "{}{}",
+        job_row("ship", "b", "queued", "S3"),
+        event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":[]}"#)
+    ));
+    screen_when(&env, &pane, "the new Job", |s| s.iter().any(|l| l.contains(" b ")));
     // the pane's program is the view itself, and it has no child process
     let children = env.command("ps").args(["-o", "pid=,args=", "--ppid", &pid]).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&children.stdout).trim(), "", "children of the view");
@@ -661,8 +671,12 @@ fn q_does_not_quit_the_view() {
     env.sql(&plan_with("dispatch", None, &[("a", "queued", "S3", &[], 0)]));
     let pane = start_view(&env);
     screen_when(&env, &pane, "the chart", |s| s.len() > 2 && s[2].contains(" a "));
-    tmux_out(&env, &["send-keys", "-t", &pane, "q"]);
-    std::thread::sleep(Duration::from_millis(600));
+    // The view handles keys in order: once `j` has selected the pill, `q` before it has been handled.
+    tmux_out(&env, &["send-keys", "-t", &pane, "q", "j"]);
+    wait_until("the pill selected", || {
+        let styled = styled_screen(&env, &pane);
+        styled.contains("\x1b[1;7m") || styled.contains("\x1b[7;1m") || styled.contains("\x1b[7m")
+    });
     assert_eq!(tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_dead}"]).trim(), "0");
     assert!(screen(&env, &pane)[2].contains(" a "));
 }
