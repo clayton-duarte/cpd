@@ -89,7 +89,7 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
             })?;
             lock::remove(ctx.home, &attempt.plan, &attempt.id)?;
             // R35: push as step 8 does; a failure does not undo the merge.
-            if let Err(e) = git::push_lead_branch(&attempt.lead_worktree, &attempt.lead_branch, false) {
+            if let Err(e) = git::push_lead_branch(&attempt.lead_worktree, &attempt.lead_branch) {
                 store.write(ctx.source, |tx| ledger::append_error(tx, attempt, ctx.source, &e, push_text(attempt, &e)))?;
             }
             rest_of_a9(ctx, attempt)?;

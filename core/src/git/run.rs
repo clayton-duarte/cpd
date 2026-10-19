@@ -30,7 +30,7 @@ fn argv(dir: &Path, args: &[&str]) -> Vec<String> {
     all
 }
 
-fn failed(dir: &Path, args: &[&str], message: String, exit: Option<i32>, stderr: &str) -> CpdError {
+pub(super) fn failed(dir: &Path, args: &[&str], message: String, exit: Option<i32>, stderr: &str) -> CpdError {
     CpdError::new(ErrorCode::GitFailed, message)
         .with("argv", json!(argv(dir, args)))
         .with("exit", json!(exit))

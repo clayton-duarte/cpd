@@ -168,22 +168,14 @@ fn run_setup(
 }
 
 /// Pushes the Lead Branch from the Lead worktree: `git -C <lead worktree> push
-/// [-u] origin <branch>`, a plain push, never forced (contract §7.2, §7.4, R35).
+/// origin <branch>`, a plain push, never forced and never `-u` (contract §7.2,
+/// §7.4, R35, hs-d243 G1).
 /// `Ok(())` also when the repo has no `origin` (A3): nothing to push to. A
 /// rejected or failed push is the returned `push_failed` error with git's
 /// stderr; it never fails the caller's operation.
-pub fn push_lead_branch(lead_worktree: &Path, branch: &str, set_upstream: bool) -> Result<(), CpdError> {
-    let pushed = has_origin(lead_worktree).and_then(|origin| {
-        if !origin {
-            return Ok(None);
-        }
-        let mut args = vec!["push"];
-        if set_upstream {
-            args.push("-u");
-        }
-        args.extend(["origin", branch]);
-        run(lead_worktree, &args).map(Some)
-    });
+pub fn push_lead_branch(lead_worktree: &Path, branch: &str) -> Result<(), CpdError> {
+    let pushed = has_origin(lead_worktree)
+        .and_then(|origin| if origin { run(lead_worktree, &["push", "origin", branch]).map(Some) } else { Ok(None) });
     match pushed {
         Ok(None) => Ok(()),
         Ok(Some(out)) if out.code == 0 => Ok(()),
@@ -201,6 +193,56 @@ pub fn push_lead_branch(lead_worktree: &Path, branch: &str, set_upstream: bool) 
         .with("branch", branch)
         .with("git", e.to_json())),
     }
+}
+
+/// What a push by rule P did (contract §7.4, hs-d243).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Push {
+    /// `origin` has `sha` as the branch's tip: `new` when this push moved it,
+    /// `false` when it was there already.
+    Pushed { new: bool },
+    /// Rejected as not a fast-forward, but the remote tip `remote` already
+    /// contains `sha` (a later merge pushed a descendant): a success that pushed nothing.
+    Contained { remote: String },
+    /// Rejected as not a fast-forward, and the remote tip does not contain
+    /// `sha` (or is not in the local object store). The caller reports it as
+    /// its contract says (`push_failed`, `push_rejected` or `git_failed`).
+    Rejected { stderr: String },
+}
+
+/// Rule P (contract §7.4): `git -C <lead worktree> push --porcelain origin
+/// <sha>:refs/heads/<branch>`, a plain push, never `-u`, so that it publishes
+/// the commit it means, not whatever the ref holds at that moment. A rejection
+/// as not a fast-forward is checked against the remote tip `X` (`ls-remote`):
+/// when `X` is in the local object store and contains `sha`, the push is
+/// [`Push::Contained`]. Any other failure (no `origin` included) is `git_failed`.
+pub fn push_commit(lead_worktree: &Path, branch: &str, sha: &str) -> Result<Push, CpdError> {
+    let reference = format!("refs/heads/{branch}");
+    let refspec = format!("{sha}:{reference}");
+    let args = ["push", "--porcelain", "origin", refspec.as_str()];
+    let out = run(lead_worktree, &args)?;
+    let line = ref_line(&out.stdout);
+    if out.code == 0 {
+        return Ok(Push::Pushed { new: line.and_then(|l| l.chars().next()) != Some('=') });
+    }
+    if !line.is_some_and(|l| l.starts_with('!') && (l.contains("(non-fast-forward)") || l.contains("(fetch first)"))) {
+        return Err(super::run::failed(lead_worktree, &args, format!("git push exited {}.", out.code), Some(out.code), &out.stderr));
+    }
+    let listed = ok(lead_worktree, &["ls-remote", "origin", &reference])?;
+    let remote = listed.lines().find(|l| l.split_whitespace().nth(1) == Some(reference.as_str())).and_then(|l| l.split_whitespace().next());
+    if let Some(remote) = remote {
+        let known = run(lead_worktree, &["cat-file", "-e", &format!("{remote}^{{commit}}")])?.code == 0;
+        if known && run(lead_worktree, &["merge-base", "--is-ancestor", sha, remote])?.code == 0 {
+            return Ok(Push::Contained { remote: remote.to_owned() });
+        }
+    }
+    Ok(Push::Rejected { stderr: tail(&out.stderr, TAIL_LINES) })
+}
+
+/// The line of `push --porcelain` for the pushed ref: `<flag>\t<from>:<to>\t<summary>`,
+/// the flag `=` up to date, ` ` fast-forward, `*` new, `!` rejected.
+fn ref_line(stdout: &str) -> Option<&str> {
+    stdout.lines().find(|l| l.chars().nth(1) == Some('\t'))
 }
 
 /// What the remote has of the Lead Branch (contract §7.2, R35).
@@ -305,12 +347,12 @@ impl Prepared {
     }
 
     /// After `pre-start`: pushes a Lead Branch that is new on the remote,
-    /// `push -u origin <branch>`. `Ok(true)`: pushed; `Ok(false)`: nothing to push
+    /// `push origin <branch>` (no `-u`, hs-d243 G1). `Ok(true)`: pushed; `Ok(false)`: nothing to push
     /// (reused, or no `origin`); `Err`: the `push_failed` error, which never
     /// fails the caller's operation.
     pub fn push(&self) -> Result<bool, CpdError> {
         match self.remote {
-            Remote::Absent => push_lead_branch(&self.path, &self.branch, true).map(|()| true),
+            Remote::Absent => push_lead_branch(&self.path, &self.branch).map(|()| true),
             Remote::None | Remote::Reusable => Ok(false),
         }
     }
@@ -367,7 +409,8 @@ pub fn prepare_lead_worktree(
     };
 
     let created = (|| {
-        ok(repo, &["worktree", "add", "-b", branch, path_str(path)?, &start])?;
+        // `--no-track`: no upstream, so nothing writes the shared `.git/config` (hs-d243 G1).
+        ok(repo, &["worktree", "add", "--no-track", "-b", branch, path_str(path)?, &start])?;
         rev_parse(path, "HEAD")
     })();
     let base_sha = match created {
@@ -472,13 +515,14 @@ pub enum LeadRemoval {
 
 /// Removes the Lead worktree of a merged PR and its local Lead Branch (contract
 /// §7.2, hs-d142). A worktree with uncommitted changes or commits not on
-/// `origin` is kept untouched. Otherwise `git -C <repo> worktree remove` (no
+/// `origin` is kept untouched; the check is `git --no-optional-locks status`,
+/// which takes no `index.lock` (hs-d243). Otherwise `git -C <repo> worktree remove` (no
 /// `--force`: git does not count ignored files as changes) and `git -C <repo>
 /// branch -D`, because a squash merge never makes the branch an ancestor.
 /// Idempotent for what is already gone.
 pub fn remove_merged_lead(repo: &Path, path: &Path, branch: &str) -> Result<LeadRemoval, CpdError> {
     if path.exists() {
-        if !ok(path, &["status", "--porcelain"])?.trim().is_empty() {
+        if !ok(path, &["--no-optional-locks", "status", "--porcelain"])?.trim().is_empty() {
             return Ok(LeadRemoval::Kept(Kept::Dirty));
         }
         if !ok(path, &["rev-list", "HEAD", "--not", "--remotes=origin"])?.trim().is_empty() {

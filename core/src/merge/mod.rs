@@ -166,7 +166,7 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
         let out = run(repo, &["update-ref", "-m", &message, &lead_ref, &new, &old])?;
         if out.code == 0 {
             // Push (R35): the merge stands whatever happens here.
-            let push = git::push_lead_branch(lead, &target.lead_branch, false).err();
+            let push = git::push_lead_branch(lead, &target.lead_branch).err();
             // 9. Sync the Lead worktree; the merge stands whatever happens here.
             let sync = run(lead, &["read-tree", "-m", "-u", &old, &new])?;
             let stale = (sync.code != 0).then(|| {
