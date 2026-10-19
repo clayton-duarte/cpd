@@ -16,6 +16,7 @@ Evidence labels, as in the research notes: **verified** means run on the homeser
 6. [The tmux host](#6-the-tmux-host)
 7. [git and the Gate](#7-git-and-the-gate)
 8. [Configuration](#8-configuration)
+   - [8.3 Policies](#83-policies)
 9. [Tiers](#9-tiers)
 10. [Traceability](#10-traceability)
 
@@ -62,9 +63,9 @@ Exit codes (kept from cpd 1 §2):
 
 | Exit | Codes |
 |---|---|
-| `1` | `gate_error`, `migration_changed` and `migration_order` (§4.5; hs-d178), `watch_start_failed`, `spawn_failed`, `session_malformed`, `driver_lock_missing`, `doctor_failed`, `pi_not_found`, `catalog_failed`, `cleanup_failed` (only as an `error` Event's code, source `pr poll`, never a command's failure; §7.2), `distill_invalid` and `distill_failed` (`context distill`'s failure and, the same, its `error` Event's code; §4.6) |
+| `1` | `gate_error`, `migration_changed` and `migration_order` (§4.5; hs-d178), `policy_invalid`, `owner_unknown` and `repo_unkeyed` (§8.3; hs-d288), `watch_start_failed`, `spawn_failed`, `session_malformed`, `driver_lock_missing`, `doctor_failed`, `pi_not_found`, `catalog_failed`, `cleanup_failed` (only as an `error` Event's code, source `pr poll`, never a command's failure; §7.2), `distill_invalid` and `distill_failed` (`context distill`'s failure and, the same, its `error` Event's code; §4.6) |
 | `2` | `context_required`, `session_required`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id`, `spec_invalid`, `tier_invalid`, `nothing_to_edit`, `file_unreadable`, `invalid_name`, `pr_required`, `invalid_pr_id` (R34) |
-| `3` | `distill_running` (§4.6), `push_rejected` (hs-d139, §7.6), `session_ambiguous` (hs-a3, commands §1.3), `pr_exists`, `pr_in_use`, `pr_empty`, `pr_locked`, `pr_not_ready`, `pr_ended`, `pr_closed` (§7.6), `needs_other_pr`, `branch_exists` (R34, §3.8), `context_exists`, `question_answered`, `not_a_git_repo`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `job_key_exists`, `draft_incomplete` (hs-d241, commands §4.6, §4.8), `needs_unknown`, `needs_unavailable`, `review_commits`, `review_missing`, `job_merged`, `job_not_failed`, `job_not_ready`, `attempt_not_running`, `no_port`, `jobs_not_done`, `gate_failed`, `rebase_conflict`, `not_a_lead`, `no_cockpit`, `wrong_pane`, `in_chat_slot`, `cursor_ahead`, `not_a_terminal`, `merge_not_clean` (hs-d272, commands.md §9.10) |
+| `3` | `distill_running` (§4.6), `push_rejected` (hs-d139, §7.6), `session_ambiguous` (hs-a3, commands §1.3), `pr_exists`, `pr_in_use`, `pr_empty`, `pr_locked`, `pr_not_ready`, `pr_ended`, `pr_closed` (§7.6), `needs_other_pr`, `branch_exists` (R34, §3.8), `context_exists`, `question_answered`, `not_a_git_repo`, `plan_exists`, `illegal_phase`, `no_draft_jobs`, `review_decided`, `dependency_cycle`, `worktree_exists`, `job_key_exists`, `draft_incomplete` (hs-d241, commands §4.6, §4.8), `needs_unknown`, `needs_unavailable`, `review_commits`, `review_missing`, `job_merged`, `job_not_failed`, `job_not_ready`, `attempt_not_running`, `no_port`, `jobs_not_done`, `gate_failed`, `rebase_conflict`, `not_a_lead`, `no_cockpit`, `wrong_pane`, `in_chat_slot`, `cursor_ahead`, `not_a_terminal`, `merge_not_clean` (hs-d272, commands.md §9.10), `owner_mismatch`, `owner_unset`, `owner_set` (§8.3; hs-d288) |
 | `4` | `base_not_found`, `pr_not_found` (R34) |
 
 **Adapter-only codes.** `protocol_mismatch` is never a command's failure and never an `error` Event's code: it appears only in the pi adapter's message to its Session (`cpd adapter: …`, commands.md §15.2), when `cpd --version`'s `protocol` is not the number the adapter was built for (§5.2 "The protocol number"). It has no exit code.
@@ -73,7 +74,7 @@ Exit codes (kept from cpd 1 §2):
 
 - **Selecting a Plan.** `--plan <id>`, else the environment variable `CPD_PLAN`, else usage error `plan_required` (exit 2). cpd sets `CPD_PLAN` in every pane it starts for a Plan (§6.5). This replaces cpd 1's `--wf` / `CPD_WF`.
 - **Selecting a PR** (R34). `--pr <key>`. It may be omitted when the Plan has exactly one PR that is not `cancelled`, which is then selected; with two or more it is the usage error `pr_required` (exit 2), and with none `pr_required` too, whose message names `cpd pr add`. A key that is not one of the Plan's PRs is `pr_not_found` (exit 4). Used by `job add`, `pr open`, `pr rebase` and `pr view` (§2.5); `pr poll` has no `--pr`: it polls every open pull request of the User (§7.6, hs-d96); `pr add`, `pr edit`, `pr cancel` and `pr start` take the key as their argument.
-- **Validation at the boundary.** Every external input (arguments, `config.toml`, Spec files, `.config/wt.toml`, `.config/cpd.toml`, Context record files, `gh` and `git` output, pi session lines) is parsed into types once, at the edge. Unknown flags and unknown config keys are errors. Nothing falls back silently.
+- **Validation at the boundary.** Every external input (arguments, `config.toml`, Spec files, `.config/wt.toml`, `.config/cpd.toml`, the policy files and a repo's `origin` URL (§8.3), Context record files, `gh` and `git` output, pi session lines) is parsed into types once, at the edge. Unknown flags and unknown config keys are errors. Nothing falls back silently.
 - **Subprocesses** run from argv arrays (never a shell string, except the repo's own hook commands, which are shell by definition, §7.3), with stdin from `/dev/null` unless stated, an explicit `cwd` and an explicit environment. The exit code is checked before any output is parsed.
 - **Times** are RFC 3339 UTC strings with milliseconds, `2026-10-14T21:10:00.000Z`.
 - **Idempotence.** A command that finds its effect already in place returns `ok` with `"already": true` instead of failing, unless `commands.md` says otherwise for that command.
@@ -85,6 +86,9 @@ Exit codes (kept from cpd 1 §2):
 ```
 $CPD_HOME/
   config.toml                     machine config (§8)
+  policy/                         the owner and repo scopes of the policies (§8.3); any file may be a symlink
+    owners/<owner>.toml           an owner's policy; required for every owner a Context uses
+    repos/<owner>/<name>.toml     a repo's policy; optional
   cpd.db, cpd.db-wal, cpd.db-shm  the database (§4)
   archive/contexts/<context>/     an old git store of a Context, moved here by migration 0007 (§4.5); nothing reads it
   locks/
@@ -131,6 +135,8 @@ Locks are `flock(2)` locks on these files: the kernel releases them when the hol
 | Machine name | `^[a-z][a-z0-9]{0,7}$`, set in `config.toml` (§8) | the User's machines | `hs` |
 | Context record id | `<machine>-<letter><n>`; letter `d` decision, `n` note, `q` question, `a` answer, `p` plan; `n` from 1, sequential per machine, Context and letter | the Context | `hs-d3` |
 | Plan id | `^[a-z][a-z0-9-]{1,23}$` (cpd 1's Workflow id) | the machine; `pr add` and every PR start (§3.8) also refuse a PR whose Lead Branch `cpd/<plan>/<key>`, or the branch `cpd/<plan>` itself (git cannot hold `cpd/<plan>` and `cpd/<plan>/…` at once), already exists in the PR's repo (`branch_exists`), so cpd 1 Workflows and cpd 2 Plans on one repo never share a branch. The one exception is the legacy branch `cpd/<plan>` of a `merged` PR, which `pr add` first moves to `cpd/<plan>/<that PR's key>` (§3.8, hs-d118) | `pay-4521` |
+| Owner login (hs-d288) | a GitHub login, `^[a-z0-9](-?[a-z0-9])*$`, 1–39 characters (GitHub's rules, read in its docs; unverified beyond them), ASCII-lowercased when parsed (GitHub compares logins without case), so a policy file name is lowercase | GitHub | `clayton-duarte` |
+| Repo name (hs-d288) | a GitHub repository name without its owner, `^[a-z0-9._-]{1,100}$`, ASCII-lowercased when parsed, as a login | its owner | `cpd` |
 | PR key (R34) | `^[a-z][a-z0-9-]{0,23}$`, chosen by the Lead (`pr add`); invalid: `invalid_pr_id` (exit 2) | the Plan (a `cancelled` PR keeps its key) | `schema`, `web` |
 | Job key | `^[a-z][a-z0-9-]{0,31}$` | the Plan | `api-schema` |
 | Attempt id | `<job>-a<n>`, `n` from 1 per Job | the Plan | `api-schema-a2` |
@@ -159,6 +165,7 @@ The knowledge several Plans share, optionally a Jira Epic. Not a session (ADR-00
 | `title` | text | the visible label; editable (`context rename`). The id is immutable and need not be readable |
 | `jira` | text? | Jira Epic key, stored only |
 | `created_at`, `created_on` | time, text | when and on which machine `context new` ran |
+| `owner` | text? | the GitHub login (§2.1) of the Context's owner, its policy key (§8.3, hs-d288): every PR of its Plans is in a repo of this owner. Set by `context new --owner`, or once by `context owner` when it is null; null only for a Context created before the migration that added it (§4.5) |
 | `archived_at` | time? | null, or when the Context was archived (migration 3, §4.5); see "Archived" below |
 | records | [Context record] | append-only, below |
 | Manager | Session? | not a field: the Context's one live (not archived) Session of role `manager` (§3.1), if any |
@@ -203,6 +210,7 @@ The part of a Plan in one repo (R34, A4): one repo, one base, one Lead Branch an
 |---|---|---|
 | `plan`, `key` | text | the PR key (§2.1), unique in its Plan |
 | `repo` | text | realpath of the repo's main worktree |
+| `name` | text? | the repo's GitHub name without its owner (§2.1), parsed from its `origin` by `pr add` (and `pr edit --repo`); with its Context's `owner`, the PR's policy key (§8.3, hs-d288). Null only for a PR added before the migration that added it (§4.5) |
 | `base` | text | the branch the pull request targets; default the repo's `origin` HEAD branch, else `main`; `pr add --base` overrides (cpd 1 §11 `workflow init`) |
 | `needs` | [text] | keys of other PRs of the same Plan that must be `merged` before this one starts (A7, A9); acyclic; none may be `cancelled` when the need is recorded. `pr add` defaults them, in phase `deploy` or `done`, to every `merged` PR of the Plan, unless `--needs` or `--no-needs` is given |
 | `status` | text | `waiting`, `dispatch`, `open`, `merged`, `cancelled` (§3.8) |
@@ -397,12 +405,12 @@ A hidden (snoozed or dismissed) item fills no dot and is not counted. Escalation
 | `plan-review` | the Plan's latest Plan review is `pending` (the review) | magenta | `<plan> plan review` |
 | `unread` | a Lead, side fork or Manager Session is `idle`, not in the chat slot, and its latest `session-state` Event from `working` or `blocked` to `idle` **with `data.reply` true** is newer than its latest `session-moved` with `place: chat` (the Session); only a finished turn that answered a message the User wrote to that Session is a reply (hs-d278, refining hs-d242): a turn started by an engine Event or by another Session's message (the Manager, a Lead, a Worker) is not, and a later turn that is not a reply does not hide an unread reply; a start or reload (`stopped` → `idle`) is not a finished turn (hs-d242) | white | `<who> replied` |
 | `job-stuck` | a Job is `failed` and its latest `job-failed` Event is at least `inbox.stuck_job_minutes` (§8.2) old; it clears on retry or cancel (the Job) | red | `<plan>/<job> failed` |
-| `engine-error` | an `error` the engine itself reported (a failure of E1–E9, §3.7) has not cleared (step, scope and code) | red | `engine <step>: <code>` |
+| `engine-error` | an `error` the engine itself reported (a failure of E1–E9, §3.7) has not cleared (step, scope and code); **or** E8 could not resolve the policy of one pull request row (§8.3 "Validation"; subject `error:E8/pr:<owner>/<repo>#<n>/<code>`, no Event) | red | `engine <step>: <code>`; `policy of <repo>#<n>: <code> (<file>)` for a row |
 | `engine-down` | `locks/watch.lock` is free. **Not stored**: the engine cannot report its own absence, so `cpd inbox list` adds it, first, with `id: null` | red | `engine is down` |
 | `question` | a Context record of kind `question` has no `answer` record (the record) | magenta | `<record id> open question` |
-| `pr-failing` | an open pull request the User authored (`authored` 1) has `checks` `failed`, **or** `mergeable` `conflicting` (hs-d188 (3)) (`pr:<owner>/<repo>#<n>`) | red | `<repo>#<n> checks failed`; `<repo>#<n> merge conflict` when only the conflict holds when it opens |
+| `pr-failing` | an open pull request the User authored (`authored` 1) has `checks` `failed` and its policy's `pr.feedback.checks` is `any` (§8.3, hs-d292: the row's key, "Keys and resolution"), **or** `mergeable` `conflicting` (hs-d188 (3)) (`pr:<owner>/<repo>#<n>`) | red | `<repo>#<n> checks failed`; `<repo>#<n> merge conflict` when only the conflict holds when it opens |
 | `pr-changes` | an open pull request the User authored has `review_decision` `changes_requested` (the pull request) | red | `<repo>#<n> changes requested` |
-| `pr-ready` | an open, non-draft pull request the User authored has `checks` `passed`, `mergeable` `mergeable` and no `changes_requested` (the pull request) | yellow | `<repo>#<n> ready to merge` |
+| `pr-ready` | an open, non-draft pull request the User authored has `mergeable` `mergeable`, no `changes_requested` and, only where the row's `pr.feedback.checks` is `any`, `checks` `passed` (with `none` its checks are not looked at, §8.3) (the pull request) | yellow | `<repo>#<n> ready to merge` |
 | `review-requested` | an open pull request requests the User's review (`review_requested` 1) (the pull request) | yellow | `review <repo>#<n>` |
 
 The four pull request kinds read the `pull_requests` row the poll last wrote (§7.6): `url` is the row's `url`, the pull request's page, and `<repo>` is the row's `repo` without the owner. When a Plan's PR points to the row, the item also links that Plan and its Context. `mergeable` and `merge_state` are only read here; the PR poll's mergeable state defines them (§2.2 Pull request, §7.6). Labels are short, for a column of 20 % of 215 columns; the cockpit truncates with `…`.
@@ -493,7 +501,7 @@ Before migration 0008 the phase `deploy` was called `pr` (hs-d76); old Events an
 
 | From | To | Moved by | Preconditions | Event |
 |---|---|---|---|---|
-| (none) | `grounding` | `plan new --context X`, run from any directory: it has no `--repo` (A12) | Context exists; Plan id free | `plan-created`, `session-registered` |
+| (none) | `grounding` | `plan new --context X`, run from any directory: it has no `--repo` (A12) | Context exists; its `owner` is set (`owner_unset`, §8.3); Plan id free | `plan-created`, `session-registered` |
 | `grounding` | `plan` | `plan phase plan` (the Lead) | none | `plan-phase` |
 | `plan` | `dispatch` | `plan lock` | latest Plan review `approved` for the current plan fingerprint (`plan_not_approved`); at least one `draft` Job; at least one PR that is not `cancelled`, and each such PR has at least one `draft` Job (`pr_empty`); acyclic Dependency graph and acyclic needs graph (`dependency_cycle`); for every PR with no needs, its Lead Branch absent from its repo, and on the remote either absent or reusable, i.e. `origin/<base>` is its ancestor (`branch_exists`, §7.2) | `plan-phase`, and `pr-started` for each PR started. All `draft` Jobs of every PR become `queued` with their fingerprints at once (A8). Every PR with no needs **starts** (§3.8): its Lead worktree is created, reusing or creating and pushing its Lead Branch on the remote (§7.2), and it becomes `dispatch`; every other PR stays `waiting`. `watch` is started if it is not running (§6.6) |
 | `dispatch` | `deploy` | `pr open --pr <key>` (§7.6), in the transaction that makes that PR `open` | afterwards every PR that is not `cancelled` is `open` or `merged` (A10) | `pr-opened`, then `plan-phase` |
@@ -718,12 +726,12 @@ stateDiagram-v2
 
 | From | To | Moved by | Preconditions | Event |
 |---|---|---|---|---|
-| (none) | `waiting` | `pr add <key> --repo <path> [--base <b>] [--needs <k,…>]`, phase `grounding`, `plan`, `dispatch`, `deploy` or `done`; the Plan is not archived (`archived`) | key valid (`invalid_pr_id`) and free in the Plan (`pr_exists`, unless every flag matches: `already`); `--repo` inside a git repository (`not_a_git_repo`); `<base>` exists as `origin/<base>`, or as a local branch when the repo has no `origin` (`base_not_found`); every need is a PR of the Plan (`needs_unknown`) that is not `cancelled` (`needs_unavailable`), and the needs graph stays acyclic (`dependency_cycle`); `refs/heads/cpd/<plan>/<key>` does not exist in the repo, and neither does `refs/heads/cpd/<plan>`, except the legacy branch of a `merged` PR, which is moved first (below); the legacy branch of a PR that is not `merged` is `branch_exists` (§2.1); the move's `git push origin --delete` fails: `push_failed` | in phase `deploy` or `done`, `plan-phase` (`deploy` or `done` → `dispatch`, §3.1), then `pr-added` |
+| (none) | `waiting` | `pr add <key> --repo <path> [--base <b>] [--needs <k,…>]`, phase `grounding`, `plan`, `dispatch`, `deploy` or `done`; the Plan is not archived (`archived`) | key valid (`invalid_pr_id`) and free in the Plan (`pr_exists`, unless every flag matches: `already`); `--repo` inside a git repository (`not_a_git_repo`); the Plan's Context has an `owner` (`owner_unset`); the repo keyed from its `origin` (`repo_unkeyed`), of the Context's owner (`owner_mismatch`), whose owner file exists (`owner_unknown`) (§8.3, hs-d288); `<base>` exists as `origin/<base>`, or as a local branch when the repo has no `origin` (`base_not_found`); every need is a PR of the Plan (`needs_unknown`) that is not `cancelled` (`needs_unavailable`), and the needs graph stays acyclic (`dependency_cycle`); `refs/heads/cpd/<plan>/<key>` does not exist in the repo, and neither does `refs/heads/cpd/<plan>`, except the legacy branch of a `merged` PR, which is moved first (below); the legacy branch of a PR that is not `merged` is `branch_exists` (§2.1); the move's `git push origin --delete` fails: `push_failed` | in phase `deploy` or `done`, `plan-phase` (`deploy` or `done` → `dispatch`, §3.1), then `pr-added` |
 | `waiting` | `waiting` | `pr edit <key>`, phase `grounding` or `plan` (after: `pr_locked`) | as `pr add` for the fields given | `pr-edited` |
 | `waiting` | `cancelled` | `pr cancel <key>`, phase `grounding` or `plan` (after: `pr_locked`) | every Job of the PR is `cancelled`, and no PR that is not `cancelled` needs it (`pr_in_use`) | `pr-cancelled` |
 | `waiting` | `dispatch` | **the PR's start**: `plan lock` for every PR with no needs; engine E7 for a PR whose needs are all `merged`; or `pr start <key>` by the Lead | Plan phase `dispatch` (or the lock's own transaction; `pr start` in another phase: `illegal_phase`); the PR `waiting` (`pr start` on a started PR: `already`; on a `cancelled` one: `illegal_transition`); every need `merged` (`pr_not_ready`); its Lead worktree created and `pre-start` passed, R35's rules applied to its Lead Branch (§7.2) | `pr-started` |
 | `waiting` | `waiting`, `start_failed_at` set | engine E7, when the start fails (worktree, remote check or `pre-start`, §7.2) | | `error` with code `pr_start_failed` |
-| `dispatch` | `open` | `pr open --pr <key>` (§7.6) | every Job of the PR `merged` or `cancelled`, at least one `merged` (`jobs_not_done`); the Gate passes | `pr-opened`; and `plan-phase` (`dispatch → deploy`) when every PR that is not `cancelled` is now `open` or `merged` (§3.1) |
+| `dispatch` | `open` | `pr open --pr <key>` (§7.6) | every Job of the PR `merged` or `cancelled`, at least one `merged` (`jobs_not_done`); the Gate passes, when the PR's `pr.gate` is `local` (§8.3) | `pr-opened`; and `plan-phase` (`dispatch → deploy`) when every PR that is not `cancelled` is now `open` or `merged` (§3.1) |
 | `dispatch` | `merged` | `pr open --pr <key>` (§7.6 step 0), when the newest pull request of the Lead Branch is already `merged` on GitHub: in one transaction `dispatch → open → merged`, no Gate | every Job of the PR `merged` or `cancelled`, at least one `merged` (`jobs_not_done`); the pull request `merged` (`closed`: `pr_closed`) | `pr-merged`, no `pr-opened`; `plan-phase` (`dispatch → deploy`) when every PR that is not `cancelled` is now `open` or `merged`, then `plan-done` (`deploy → done`) when every one is `merged` |
 | `open` | `merged` | `pr poll` (E5, §7.6), in phase `dispatch` or `deploy` | the poll sees the PR's pull request `merged` (hs-d96, D7: the open search no longer lists it and the lookup answers `MERGED`) | `pr-merged`; and `plan-done` when every PR that is not `cancelled` is now `merged` (§3.1) |
 
@@ -756,7 +764,7 @@ Each step is idempotent: a rerun after a crash between the local rename and the 
 | Plan | Sequencing | `plan` | order: Dependencies and PR needs; parallel versus serial | `job add --needs`, `pr add --needs` |
 | Plan | Approving | `plan` | the Plan review: the User reads and decides | `plan render`, `cpd_plan_review` (adapter), `plan lock` |
 | Plan | Dispatching | `dispatch` | the engine runs the Jobs; Workers merge them into the Lead Branches | `watch` (engine), `job list` |
-| Deploy | Mechanical checks | end of `dispatch` | all Jobs of a PR are merged; the Gate runs | `pr open` (the Gate, §7.6) |
+| Deploy | Mechanical checks | end of `dispatch` | all Jobs of a PR are merged; the Gate runs when the PR's `pr.gate` is `local`, else the repo's CI is the check (§8.3, hs-d292) | `pr open` (the Gate, §7.6) |
 | Deploy | PR | `dispatch` → `deploy` | the pull request is opened | `pr open` |
 | Deploy | Reviewing and Monitoring | `deploy` | people, the User's review bot review the open pull request; the engine polls it | `pr poll` (engine E5), `pr view`, Event `pr-feedback` |
 | Deploy | Addressing | `deploy` → `dispatch` → `deploy` | feedback Jobs are appended and run (back to Dispatching), then pushed | `job add --pr`, `pr rebase` |
@@ -851,7 +859,8 @@ CREATE TABLE contexts (
   jira          TEXT,
   created_at    TEXT NOT NULL,
   created_on    TEXT NOT NULL,
-  archived_at   TEXT                          -- see migration 0010 (§4.5) for the columns it dropped
+  archived_at   TEXT,                         -- see migration 0010 (§4.5) for the columns it dropped
+  owner         TEXT CHECK (owner IS NULL OR length(owner) BETWEEN 1 AND 39)  -- GitHub login, the policy key (§8.3, hs-d288); NULL only for a Context created before the migration of the policy keys (§4.5), an ADD COLUMN, so last among the columns
 ) STRICT;
 
 CREATE TABLE context_records (               -- the only store of Context records (§4.6)
@@ -934,6 +943,7 @@ CREATE TABLE prs (
   created_at         TEXT NOT NULL,
   started_at         TEXT,
   merged_at          TEXT,
+  name               TEXT CHECK (name IS NULL OR length(name) BETWEEN 1 AND 100),  -- the repo's GitHub name without its owner (§8.3, hs-d288); NULL only for a PR added before the migration of the policy keys (§4.5), an ADD COLUMN, so last among the columns
   PRIMARY KEY (plan, key),
   UNIQUE (plan, lead_branch),
   CHECK ((status IN ('waiting', 'cancelled')) = (lead_worktree IS NULL)),
@@ -1525,6 +1535,26 @@ The store's schema changes by **named migrations** (hs-d178; design `docs/resear
 - **`read-indexes`**, the second named migration (`20261019T0504-read-indexes`, `-- cpd-migration: additive`: two `CREATE INDEX` on existing tables, A1; Plan quality findings sql-F4, tui-F3, engine-F2). It creates `jobs_plan_status ON jobs(plan, status)`, for the job counts of every cockpit refresh (`plan_heads` in `tui/src/read/shared.rs` read `jobs` whole, its long text columns first), and the **partial** index `sessions_live ON sessions(id) WHERE state <> 'stopped' OR tmux_pane IS NOT NULL`, for E2's Session read (§3.6), which names the Sessions that are not `stopped` or still have a pane and used to scan every Session ever made. SQLite reads a partial index only for a query whose `WHERE` it can prove implies the index's, which it does for the same expression: **E2's `WHERE` is the index's, written the same** (`core/src/watch/liveness.rs`, `LIVE_SESSIONS`), and a test pins the plan. The index has `<> 'stopped'` and not a list of the other states, so a state added later is in it. No row is rewritten; §4.4 lists the two.
 
   **Indexes asked for and not created** (Escalations `sm-index-a2-q1` and `-q2`; numbers on a `sqlite3 .backup` copy of the live store with 15 119 Events, 529 Sessions and 591 Jobs, migrated with the build; N = 15 medians, `EXPLAIN QUERY PLAN` in the commit message). `events(kind, id)` (sql-F6): SQLite has no statistics, so with it next to `events_session` and `events_plan` every statement that tests a `kind` and a Session or a Plan reads every Event of that kind instead (`events_kind (kind=?)`): the Session SELECT of `session list` and the tree went from 6.7 to 797 ms, the inbox rules from 0.37 to 3.3 ms, E2's active time of an Attempt from 0.40 to 1.65 ms, while the reads it was meant for gain nothing (the widgets engine read 0.011 to 0.014 ms, `watch --ensure` 0.015 to 0.012 ms). `plans(lead_session)` and `contexts(lead_session)` (sql-F5): `contexts.lead_session` was dropped by `0010-manager`, and the Session SELECT reads `plans` once (`SELECT DISTINCT lead_session FROM plans`), 0.011–0.05 ms. A later Job that wants either index starts from these numbers, and a test (`cli/tests/store.rs`, `the_lookups_of_events_by_kind_and_session_or_plan_keep_their_selective_index`) pins that the statements above keep their selective indexes. Tests of this migration: the plans of the job counts and of E2's read name the indexes (`cli/tests/store.rs`, `liveness.rs`), and the schema tests (§4.4 as written, the pinned `SCHEMA_HASH`) hold.
+
+- **The policy keys** (hs-d288, §8.3), a named migration made with `scripts/new-migration.sh` (hs-d211, hs-n243), declared **`breaking`**: its fill updates existing rows (A1). It adds the two key columns of §4.4 and the Event kind `context-owner` (§5.2), and fills the columns; the reconcile (K4) generates the history triggers of `contexts` and `prs` again:
+
+  ```sql
+  ALTER TABLE contexts ADD COLUMN owner TEXT CHECK (owner IS NULL OR length(owner) BETWEEN 1 AND 39);
+  ALTER TABLE prs ADD COLUMN name TEXT CHECK (name IS NULL OR length(name) BETWEEN 1 AND 100);
+  INSERT INTO event_kinds (name) VALUES ('context-owner');   -- §5.2
+  -- a PR's name from its own pull request's owner/name, when linked
+  UPDATE prs SET name = lower((SELECT substr(r.repo, instr(r.repo, '/') + 1) FROM pull_requests r WHERE r.id = prs.pull_request))
+   WHERE pull_request IS NOT NULL;
+  -- a Context's owner from the owner part of the pull requests of its PRs, when they all agree; else NULL
+  UPDATE contexts SET owner = (SELECT min(lower(substr(r.repo, 1, instr(r.repo, '/') - 1)))
+                                 FROM plans p JOIN prs ON prs.plan = p.id JOIN pull_requests r ON r.id = prs.pull_request
+                                WHERE p.context = contexts.id)
+   WHERE (SELECT count(DISTINCT lower(substr(r.repo, 1, instr(r.repo, '/') - 1)))
+            FROM plans p JOIN prs ON prs.plan = p.id JOIN pull_requests r ON r.id = prs.pull_request
+           WHERE p.context = contexts.id) = 1;
+  ```
+
+  A PR with no pull request yet keeps `name` NULL, and a Context with none, or with pull requests of two owners, keeps `owner` NULL: §8.3 "Keys and resolution" says how such rows resolve, and `cpd context owner` sets a missing owner. The values are lowercased as §2.1 parses them. The tests: a store with Contexts of one owner, of two owners and of none, and PRs with and without a pull request, migrates keeping every row, fills exactly those values, and passes `PRAGMA foreign_key_check`.
 - No migration from cpd 1's beads Ledgers (R7): running Workflows finish on cpd 1.
 
 ### 4.6 The Context store
@@ -1598,7 +1628,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `attempt-retry` | Attempt ended with a ladder cause and the Job went back to `queued` | plan, job, attempt | `{outcome, cause, next_tier, feedback?}` |
 | `attempt-nudge` | A5 (the Worker ended its turn without submitting) | plan, job, attempt, session | `{prompt, turns}` (`turns` = the Worker's assistant-turn count when nudged) |
 | `all-merged` | E4, once per PR completion: again after `job add` appended a Job to a PR whose `all-merged` was sent (§3.7 E4) | plan | `{pr, merged: [key], cancelled: [key]}`; `pr` is the PR's key, the lists its Jobs |
-| `pr-feedback` | the poll (§7.6) wrote a change to the pull request of a PR of this Plan (hs-d96, D7), when any of: its checks became `failed` (from anything else), its review became `changes_requested` (from anything else), its state became `closed` (from `open`), its `mergeable` became `conflicting` (from anything else: `mergeable`, `unknown` or no row before). Written in the transaction that writes the change; only the Plan whose PR points to the pull request gets it, and a pull request no Plan owns gets no Event | plan | `{pr, number, url, state, checks, review_decision, mergeable, merge_state, conflict, reasons}`; `pr` is the PR's key, `state`, `checks`, `review_decision`, `mergeable` and `merge_state` are the row's, `conflict` is true exactly when `conflict` is in `reasons`, `reasons` is a subset of `["checks_failed", "changes_requested", "closed", "conflict"]`, in that order. Once per transition, not every poll: `unknown` is no conflict, and a conflict seen again after `unknown` (`conflicting` → `unknown` → `conflicting`) is a new transition and wakes the Lead again, as a re-failed check does. `text`: `PR <key> (#<n>) of Plan <p> needs attention: <reasons>. Read the details with cpd pr view --plan <p> --pr <key>.`, the reasons comma-separated as `checks failed`, `changes requested`, `closed without a merge`, `merge conflict` |
+| `pr-feedback` | the poll (§7.6) wrote a change to the pull request of a PR of this Plan (hs-d96, D7), when any of: its checks became `failed` (from anything else) and the PR's `pr.feedback.checks` is `any` (§8.3, hs-d292), its review became `changes_requested` (from anything else), its state became `closed` (from `open`), its `mergeable` became `conflicting` (from anything else: `mergeable`, `unknown` or no row before). Written in the transaction that writes the change; only the Plan whose PR points to the pull request gets it, and a pull request no Plan owns gets no Event | plan | `{pr, number, url, state, checks, review_decision, mergeable, merge_state, conflict, reasons}`; `pr` is the PR's key, `state`, `checks`, `review_decision`, `mergeable` and `merge_state` are the row's, `conflict` is true exactly when `conflict` is in `reasons`, `reasons` is a subset of `["checks_failed", "changes_requested", "closed", "conflict"]`, in that order. Once per transition, not every poll: `unknown` is no conflict, and a conflict seen again after `unknown` (`conflicting` → `unknown` → `conflicting`) is a new transition and wakes the Lead again, as a re-failed check does. `text`: `PR <key> (#<n>) of Plan <p> needs attention: <reasons>. Read the details with cpd pr view --plan <p> --pr <key>.`, the reasons comma-separated as `checks failed`, `changes requested`, `closed without a merge`, `merge conflict` |
 | `pr-added` | `pr add` (R34) | plan | `{pr, repo, base, needs: [key], appended}`; `appended` is true in phases `dispatch`, `deploy` and `done` |
 | `pr-edited` | `pr edit` | plan | `{pr, fields: [name]}` |
 | `pr-cancelled` | `pr cancel` | plan | `{pr}` |
@@ -1613,6 +1643,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `session-moved` | the Session's pane is created, moved into the chat slot, parked or gone (§6.4); gone is appended by E2 or by `session close`, with `pane` and `window` null (§3.6, §6.4) | context, plan?, session | `{pane, window, place}`, `place` is `chat`, `parked`, `work` or `none` |
 | `session-renamed` | `session rename` (cpd 1's `rename`, User decision 7 in the vision) | context, plan?, session | `{name}` |
 | `context-renamed` | `context rename` | context | `{title}` |
+| `context-owner` | `context owner` sets the owner of a Context that had none (§8.3, hs-d288) | context | `{owner}` |
 | `plan-renamed` | `plan rename` | context, plan | `{title}` |
 | `context-archived` | `context archive` or `unarchive`, for the Context | context | `{archived: bool}` |
 | `plan-archived` | `plan archive` or `unarchive`, or the cascade of the Context's, for each Plan | context, plan | `{archived: bool}` |
@@ -1632,6 +1663,8 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 The pi adapter (TypeScript in `pi/`, loaded in every pi session cpd starts, §6.5) follows the Events **for its Session**:
 - for the Session that is Plan P's `lead_session` (Context C): Events with `plan = P`; Events with `plan IS NULL AND context = C`; Events with `session` = itself. A Plan has one Lead for all its PRs (R34): every PR Event (`pr-*`, `all-merged`, `pr-feedback`), and an `error` about a PR such as `pr_start_failed`, sets `plan = P` and goes to that Lead;
 - for any other Session (a Worker, a side fork of a Lead, a Manager): Events with `session` = itself (for a Worker only `attempt-nudge` and `session-renamed` are ever addressed so). A Manager (`plan` null) therefore follows only Events addressed to it, `session-message` (`cpd session send`, hs-d86), and is never woken by the Events of its Plans. Its Plan Events reach it only as the turn-start digest, which the adapter builds, for a Manager only (hs-d209, D1), when the User talks to it: after the Context records, a section `Plans:` with one line per Event since the cursor of kinds `plan-created`, `plan-phase`, `pr-opened`, `pr-merged`, `job-failed`, `escalation` and `plan-done` of the Context (`- <at> <plan>: <event text>`), at most 20, then `and <K> more: cpd events list --context <c> --since <id>`; one cursor (Event ids) serves both sections, and nothing is added when nothing is new (B3-A5; `commands.md` §15.7). Turn-start updates show a `brief` record short (§2.2). **A Lead gets no turn-start update** (hs-d209, D1, D2): nothing from the Context is pushed into a Lead's turn; it reads the Context on demand with `cpd context show --since <seq>`. `cpd session send` starts no turn unless `--wake` (D3).
+
+Besides Events, the adapter gives its Session the policy text of the Session's key, as one system prompt section (§8.3 "Delivery to agents").
 
 It delivers a message with `pi.sendMessage({customType: "cpd", content: text, display: true, details: event}, {triggerTurn, deliverAs})` (cpd 1 §15, kept, except `deliverAs`). **`deliverAs` is `"steer"` for the urgent kinds, `pr-feedback` (every `reason`) and `escalation`, and `"followUp"` for every other message** (User, hs-d276; evidence hs-n241: with every message a follow-up and pi's `followUpMode` `"one-at-a-time"`, a busy Lead got a conflict notice 19 minutes late and a `job-merged` 56 minutes late). A steered message is injected after the current tool call; an idle Session starts a turn as before. The other queued messages are delivered as the User's pi settings say (`followUpMode`, `steeringMode`; §6.5); cpd does not set them. It never types into a pane.
 
@@ -1899,7 +1932,7 @@ cpd reads `<worktree>/.config/wt.toml` from the worktree it is about to run the 
 |---|---|---|
 | `pre-start` | setup | after a Lead or Attempt worktree is created (§7.2); blocking |
 | `pre-commit` | the **quick check** | at `attempt submit`, in the Attempt worktree. When the file has no `pre-commit` table, there is no quick check: it passes, and `pre-merge` does **not** run instead (R20; this replaces outline §6's fallback). This is cpd's own use: worktrunk runs `pre-commit` before the commits it makes, which cpd does not make |
-| `pre-merge` | **the Gate** | at `pr open`, before it pushes, and at `pr rebase`, after the rebase and before it pushes: in the Lead worktree, on the Lead Branch, under the per-repo lock (§7.6). Never per Job (R19) |
+| `pre-merge` | **the Gate** | only when the PR's `pr.gate` is `local` (§8.3, hs-d292): at `pr open` and `pr push`, before they push, and at `pr rebase`, after the rebase and before it pushes: in the Lead worktree, on the Lead Branch, under the per-repo lock (§7.6). Never per Job (R19). With `ci` (cpd's default) none of them runs it, and the repo's CI is the check |
 
 Every other table (`post-*`, `pre-switch`, `pre-remove`, aliases, `[list]` and so on) is ignored. A missing file or a missing table means no commands, and the hook passes (wt prints "No pre-merge hooks configured" and exits 0; verified).
 
@@ -1991,9 +2024,9 @@ The list lives in its own file, not in `.config/wt.toml`, because worktrunk warn
 Each command here works on **one PR** (R34, A14), selected by `--pr <key>` (§1.3), except `pr poll`, which has no `--pr`: it polls every open pull request of the User at once (hs-d96). Each PR has its own Gate run and its own pull request on its repo's GitHub. `gh` runs with cwd = the PR's Lead worktree, so it addresses the PR's repo; `pr poll`'s calls (`gh api graphql`) address no repo.
 
 - **`pr open --pr <key>`**: the PR must be `dispatch` (`open` or `merged`: `already`; `waiting` or `cancelled`: `illegal_transition`), and every Job of the PR `merged` or `cancelled`, at least one `merged` (`jobs_not_done`). Under the per-repo lock (§7.4) and after running R there, held until the push has finished:
-  0. **the lookup**, before the Gate: `gh pr list --head <lead branch> --state all --json number,url,state`, whose newest pull request decides. **`MERGED`**: the Lead Branch was merged on GitHub and cpd never recorded it (an earlier `pr open` that died, a merge by hand), so the PR adopts it with **no Gate and no push** (a pull request is never *opened* without the Gate, hs-d267; this one is already merged): one transaction writes the `pull_requests` row from one lookup (§7.6 `pr poll` step 3's query: `state` `merged`, `merged_at` GitHub's, else the transaction's time; the row is updated to what the lookup reads when the poll stored it first), then the PR `dispatch → open → merged` (`pr_number`, `pr_url`, `pr_opened_at` and `merged_at` the transaction's time, `pull_request`) and **exactly the poll's merge** (step 6): `pr-merged`; when every PR that is not `cancelled` is then `open` or `merged` the Plan `dispatch → deploy` with `plan-phase` (§3.1), and when every one is `merged` the Plan then `deploy → done` with `done_at` and `plan-done`. No `pr-opened`. The clean-up of the merged PR's worktrees is the poll's: the next poll removes what is on disk (§7.2). The output says `"adopted": "merged"`. **`CLOSED`** (not merged): refused `pr_closed` (exit 3) naming the pull request; the Lead decides, to reopen it on GitHub or to move the work to a new branch. **`OPEN`** or none: the steps below, which adopt the open one instead of creating it. A merged pull request is looked up after the Jobs are checked (`jobs_not_done`) and before anything else;
+  0. **the lookup**, before the Gate: `gh pr list --head <lead branch> --state all --json number,url,state`, whose newest pull request decides. **`MERGED`**: the Lead Branch was merged on GitHub and cpd never recorded it (an earlier `pr open` that died, a merge by hand), so the PR adopts it with **no Gate and no push** (a pull request whose `pr.gate` is `local` is never *opened* without the Gate, hs-d267, hs-d292; this one is already merged): one transaction writes the `pull_requests` row from one lookup (§7.6 `pr poll` step 3's query: `state` `merged`, `merged_at` GitHub's, else the transaction's time; the row is updated to what the lookup reads when the poll stored it first), then the PR `dispatch → open → merged` (`pr_number`, `pr_url`, `pr_opened_at` and `merged_at` the transaction's time, `pull_request`) and **exactly the poll's merge** (step 6): `pr-merged`; when every PR that is not `cancelled` is then `open` or `merged` the Plan `dispatch → deploy` with `plan-phase` (§3.1), and when every one is `merged` the Plan then `deploy → done` with `done_at` and `plan-done`. No `pr-opened`. The clean-up of the merged PR's worktrees is the poll's: the next poll removes what is on disk (§7.2). The output says `"adopted": "merged"`. **`CLOSED`** (not merged): refused `pr_closed` (exit 3) naming the pull request; the Lead decides, to reopen it on GitHub or to move the work to a new branch. **`OPEN`** or none: the steps below, which adopt the open one instead of creating it. A merged pull request is looked up after the Jobs are checked (`jobs_not_done`) and before anything else;
   1. the Lead worktree must be clean (`dirty_target`, exit 3);
-  2. **the Gate** (R19): `pre-merge` from `<lead worktree>/.config/wt.toml`, run in the PR's Lead worktree on its Lead Branch (§7.3), its whole output in `run/<plan>/logs/pr-<key>.pre-merge.log`. A failure is refused `gate_failed` (exit 3), an error `gate_error` (exit 1), both with the last 60 lines in `details.tail` and the log's path in `details.log`. Nothing is pushed, the PR stays `dispatch`, and the Lead appends fix Jobs to it (`job add --pr <key>`, queued at once, §3.2), then runs `pr open --pr <key>` again once they are Merged;
+  2. **the Gate** (R19), only when the PR's `pr.gate` is `local` (§8.3, hs-d292; with `ci` this step is skipped and the repo's CI is the check): `pre-merge` from `<lead worktree>/.config/wt.toml`, run in the PR's Lead worktree on its Lead Branch (§7.3), its whole output in `run/<plan>/logs/pr-<key>.pre-merge.log`. A failure is refused `gate_failed` (exit 3), an error `gate_error` (exit 1), both with the last 60 lines in `details.tail` and the log's path in `details.log`. Nothing is pushed, the PR stays `dispatch`, and the Lead appends fix Jobs to it (`job add --pr <key>`, queued at once, §3.2), then runs `pr open --pr <key>` again once they are Merged;
   3. `git -C <lead worktree> push -u origin <lead branch>`, then, unless step 0 found an open pull request of the Lead Branch (an earlier run died after `gh pr create`: it is adopted), `gh pr create --base <base> --head <lead branch> --title <title> --body <summary>` (cpd 1 §11, kept). `<title>` is the Plan's title when the Plan has one PR that is not `cancelled`, else `<plan title> (<key>)`; `<summary>` covers the PR's own Jobs and Merged commits;
   4. one transaction: the `pull_requests` row of the pull request, from `gh pr create`'s URL (`repo`, `number`, `url`, the title given to `gh`, `draft` 0, `state` `open`, `review_decision` and `checks` `none`, `mergeable` and `merge_state` `unknown`, `changed_at` now; `created_at` is GitHub's `createdAt`, read by one lookup (§7.6 `pr poll` step 3's query) of the pull request just created, and written once: a poll never overwrites it; a pull request `gh` cannot find is `gh_failed`): inserted, or, when the poll stored it first, kept as the poll wrote it (hs-d96, D6); the PR `open` with `pr_number`, `pr_url`, `pr_opened_at`, `pull_request` (the row's id), `pr-opened`; and, when every PR that is not `cancelled` is now `open` or `merged`, the Plan `dispatch → deploy` with `plan-phase` (§3.1).
 
@@ -2004,23 +2037,23 @@ Each command here works on **one PR** (R34, A14), selected by `--pr <key>` (§1.
   3. **The lookup** (D3) for the pull requests of `prs` rows in status `open` whose `pull_requests` row is `state` `open` and that neither search listed (they merged, were closed, or the index lags). A pull request already stored `closed` (A11) is right as it is: it is not looked up again until a search lists it: one more `gh api graphql` call with one alias per pull request, `p0: repository(owner: "<o>", name: "<n>") { pullRequest(number: <n>) { <the same fields> } }`. `gh` exits 1 when an alias is `NOT_FOUND` although `data` holds the others, so stdout is parsed whatever the exit code; a call with no `data` is `gh_failed`. An answer `OPEN` means "not decided yet" (the search index lags, or the User switched `gh` accounts): nothing changes.
   4. **Failures** (D4). Each call has its own 15 s timeout (`gh` has none; GitHub cuts at 10 s). An empty body, a non-JSON body, or a search response with `errors` is `gh_failed` (exit 1; `details`: `argv`, `exit`, `stderr`), never "no pull requests". A failed poll writes nothing.
   5. **The rows** (D5). One transaction writes every change; a value that did not change is not written, so a poll that finds nothing new opens no write transaction. A pull request in either search is inserted or updated in `pull_requests` (`changed_at` = now when a value changed, `mergeable`, `merge_state`, `authored` and `review_requested` included): `authored` is 1 exactly when it is in the `author:@me` search and `review_requested` is 1 exactly when it is in the `review-requested:@me` search, so a pull request that leaves one search has that flag cleared on the next poll. Both are stored as each poll reads them, `unknown` included (GitHub computes mergeability lazily after the base moves, as checks go `pending` when CI reruns). A row no PR points to is **deleted** when its pull request is in neither open search; a row is **kept** while it is in either search or a PR points to it, and a row a PR points to is never deleted (§4.4). The rows hold what was reported, so a rerun with no change on GitHub reports nothing and writes nothing.
-  6. **The Events** (D7, §5.2). In the transaction that writes the change, for the Plan whose `prs` row points to the pull request only: `pr-feedback` when the checks became `failed`, the review `changes_requested`, the state `closed` or `mergeable` `conflicting` (from anything else, once per transition; `unknown` is no conflict). A pull request becoming `merged`: the PR `merged` with `merged_at` (`pr-merged`); when every PR that is not `cancelled` is then `merged`, the Plan's phase `done` with `done_at` (`plan-done`, once each time the Plan reaches `done`, so again when a reopened Plan's last PR merges), after which the Plan's remaining Attempt worktrees and branches are removed in every PR's repo. Engine E7 then starts the PRs whose last prerequisite this was (§3.7). Pull requests no Plan owns get no Event, and a pull request only in the review-request search gets none: `pr-feedback` is unchanged, still only for the author's Plans.
+  6. **The Events** (D7, §5.2). In the transaction that writes the change, for the Plan whose `prs` row points to the pull request only: `pr-feedback` when the checks became `failed` and the PR's `pr.feedback.checks` is `any` (§8.3, hs-d292; with `none`, failing checks raise nothing), the review `changes_requested`, the state `closed` or `mergeable` `conflicting` (from anything else, once per transition; `unknown` is no conflict). A pull request becoming `merged`: the PR `merged` with `merged_at` (`pr-merged`); when every PR that is not `cancelled` is then `merged`, the Plan's phase `done` with `done_at` (`plan-done`, once each time the Plan reaches `done`, so again when a reopened Plan's last PR merges), after which the Plan's remaining Attempt worktrees and branches are removed in every PR's repo. Engine E7 then starts the PRs whose last prerequisite this was (§3.7). Pull requests no Plan owns get no Event, and a pull request only in the review-request search gets none: `pr-feedback` is unchanged, still only for the author's Plans. **A PR whose policy does not resolve** (`owner_unset`, `owner_unknown`, `policy_invalid`, §8.3) is handled per PR, never for the poll: its row is written as usual and a merge is recorded as usual, but it gets no `pr-feedback`, and the poll appends one `error` Event for its Plan (`source` `pr poll`, `code` the resolve error's, `details` the error's with `plan`, `pr` and `number`), once per episode: not again while the latest such Event of that PR has the same code, so the next polls, still failing the same way, append nothing and open no write transaction. Every other PR is polled, merged and told as if it had resolved (hs-d261: one owner's file never stops another Plan's PR).
   7. **Output** (commands.md §9.2): what changed, the rate limit of the search (`cost`, `remaining`, `reset_at`, which E5 uses, §3.7), and with `--plan` (or `CPD_PLAN`) that Plan's PRs with their rows.
 - **`pr view [--pr <key>]`** (hs-d98, D10), read-only: the PR must be `open` or `merged` (else `illegal_transition`, as `pr rebase`). It runs `gh pr view <n> --json state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url` and `gh api repos/{owner}/{repo}/pulls/<n>/comments` (the detail the poll does not store) and prints the checks, reviews, comments and inline comments typed. It writes nothing and appends no Event. A Lead reads it when `pr-feedback` arrives (§5.2).
 - **`pr rebase --pr <key>`** onto the PR's base; the PR must be `open` (else `illegal_transition`). Under the per-repo lock (§7.4) and after running R there, so no merge interleaves and none is left unrecorded:
   1. `git -C <lead worktree> fetch origin <base>`; the Lead worktree must be clean (`dirty_target`, exit 3);
   2. `git merge-tree --write-tree --name-only origin/<base> <lead branch>`: exit 1 means a conflict; return `rebase_conflict` (exit 3) with the file list and change nothing (t3 F10; the Lead decides, for example by appending a Job);
   3. `old = rev-parse <lead branch>`; `git -C <lead worktree> rebase origin/<base>`; on an unexpected conflict, `git rebase --abort` and `rebase_conflict`;
-  4. **the Gate** (R19) on the rebased Lead Branch, exactly as `pr open` step 2: a failure is refused `gate_failed` (exit 3), an error `gate_error` (exit 1), with the tail and the log. Nothing is pushed; the rebased Lead Branch stays in the Lead worktree, the Lead appends fix Jobs, which build on it, and runs `pr rebase` again once they are Merged;
+  4. **the Gate** (R19) on the rebased Lead Branch, exactly as `pr open` step 2, so only when the PR's `pr.gate` is `local`: a failure is refused `gate_failed` (exit 3), an error `gate_error` (exit 1), with the tail and the log. Nothing is pushed; the rebased Lead Branch stays in the Lead worktree, the Lead appends fix Jobs, which build on it, and runs `pr rebase` again once they are Merged;
   5. `git -C <lead worktree> push --force-with-lease=<lead branch>:<remote sha before> origin <lead branch>`.
   
-  If the base has not moved, the rebase is a no-op and only the Gate and the push happen; this is also how Jobs Merged into an `open` PR reach its pull request when an earlier push failed (cpd 1 §11, kept). Active Attempts based on the old Lead SHA are unaffected; they rebase at their own merge (t3 F10).
+  If the base has not moved, the rebase is a no-op and only the Gate (with `pr.gate` `local`) and the push happen; this is also how Jobs Merged into an `open` PR reach its pull request when an earlier push failed (cpd 1 §11, kept). Active Attempts based on the old Lead SHA are unaffected; they rebase at their own merge (t3 F10).
 - **`pr push [--pr <key>]`** (hs-d139, hs-n52): publishes the Lead Branch of an `open` PR without rebasing, a plain push, never forced; how Jobs Merged into an `open` PR reach its pull request when the branch carries a merge of the base (which `pr rebase` would drop) or when the remote has not moved. The PR must be `open` (else `illegal_transition`). Under the per-repo lock (§7.4) and after running R there:
   1. the Lead worktree must be clean (`dirty_target`, exit 3);
-  2. **the Gate** (R19), exactly as `pr open` step 2: `pre-merge` in the Lead worktree, output in `run/<plan>/logs/pr-<key>.pre-merge.log`; `gate_failed` (exit 3), `gate_error` (exit 1), with `details.tail` and `details.log`. Nothing is pushed on a failure;
+  2. **the Gate** (R19), exactly as `pr open` step 2, so only when the PR's `pr.gate` is `local`: `pre-merge` in the Lead worktree, output in `run/<plan>/logs/pr-<key>.pre-merge.log`; `gate_failed` (exit 3), `gate_error` (exit 1), with `details.tail` and `details.log`. Nothing is pushed on a failure;
   3. `git -C <lead worktree> push --porcelain origin <lead branch>` (no `-u`, no force, no lease). A rejection because the remote branch is not an ancestor of the local one (the remote moved) is `push_rejected` (exit 3) with git's stderr in `details.stderr`; the Lead then runs `pr rebase`. Any other git failure is `git_failed`.
 
-  No rows and no Event. A branch already at the remote's sha still runs the Gate and pushes nothing (`pushed` false).
+  No rows and no Event. A branch already at the remote's sha still runs the Gate (with `pr.gate` `local`) and pushes nothing (`pushed` false).
 
 ## 8. Configuration
 
@@ -2113,6 +2146,108 @@ work_session = "cpd-work"    # the hidden session for Workers and watch
 
 Removed by R19: `default_review_tier` and `review_mode` (there is no Reviewer). Removed from cpd 1 §5: `herdrSession` (herdr is dropped) and `askTimeoutMinutes`, `attemptTimeoutMinutes`, `tickSeconds`, `prPollSeconds`, which moved into tables. `CPD_HOME` stays an environment variable, not a key.
 
+### 8.3 Policies
+
+A **policy** says how cpd and its agents work for one GitHub owner or repo: what cpd's commands do where the owners differ, and what the agents are told (hs-d288; design `docs/research/policy-architecture.md` Option 1, evidence `docs/research/repo-policy.md`; where they differ, the decisions cited here win). It is not machine config (§8.1): `config.toml` is per machine, a policy is per owner and repo and never per machine (hs-d263). This section is the first build; what it does not name does not exist yet.
+
+#### Model
+
+- A **domain** is a typed slot of a policy, owned by cpd's code. Its value has up to two parts: **typed keys**, closed values cpd's own code branches on, parsed once, unknown ones refused; and **`text`**, Markdown for agents, never parsed by cpd. A policy is the fixed set of domains below: every domain has a value, always.
+- A **scope** is where a domain value is set: cpd's built-in **default**, an **owner** (a GitHub login, user or organisation) or a **repo** (`<owner>/<name>`).
+- The **policy key** names what a policy is resolved for: `PolicyKey = Owner(login) | Repo(login, name)` (§2.1 "Owner login", "Repo name"). It is never a machine, a path or a cwd (hs-d263).
+- The **resolved policy** of a key is every domain's value with its **source**: `default`, `owner:<path>` (the owner file) or `repo:<path>` (the repo file), `<path>` the file's realpath; `default (no owner file)` for a pull request row no PR owns whose owner has no file ("Keys and resolution"). A typed key a set domain leaves out carries `(key default)` after its domain's source (below, "Precedence and replace").
+
+**The domains** of the first build. Each is a TOML table read with `deny_unknown_fields` (a sub-table such as `pr.feedback` too). `text` is a string in every domain, default `""`. The audience of a domain's `text` is fixed in code, not configurable.
+
+| Domain | Typed keys (cpd's default) | `text` reaches |
+|---|---|---|
+| `pr` | `gate = "local" \| "ci"` (`ci`; hs-d292): with `local`, `pr open`, `pr push` and `pr rebase` run the Gate before they push (§7.3, §7.6), with `ci` they run none and the repo's CI is the check. `feedback.checks = "any" \| "none"` (`any`; hs-d292, hs-d283): with `any`, failing checks raise `pr-feedback` (`checks_failed`, §5.2, §7.6) and the Inbox's `pr-failing` (§2.2); with `none` they raise neither, and only mergeability and reviews do | Lead, Worker |
+| `deploy` | none | Lead |
+| `code` | none | Lead, Worker |
+| `tests` | none | Lead, Worker |
+| `monitor` | none | Lead, Worker |
+| `instructions` | none | Manager, Lead, Worker |
+
+`mcp` and `hooks` are **planned** domains (policy-architecture.md §1.2, §5.5): until they are built, a file that has either table is refused `policy_invalid`, like any unknown domain.
+
+**Adding a domain or a key** (policy-architecture.md §1.4). A domain is one struct with `deny_unknown_fields`, one field of the `Policy` type, its default value in `core/src/policy/default.toml`, its audience in the code's audience table and one row of the table above; loading, validation, resolution, `cpd policy show` and the delivery to agents iterate over `Policy`'s fields, so nothing else changes. A typed key is one field of its domain, its default, the code that branches on it and the decision that asked for it, in its row above. **The test** (prose is not enforcement): a test of `core/src/policy/` reads the table above from `docs/contract.md` and asserts that its domains are exactly `Policy`'s fields and the tables of the parsed `default.toml`, that each row's typed keys and defaults are those of the parsed default, and that each row's audience is the code's.
+
+#### Files
+
+- **cpd's default** is `core/src/policy/default.toml`, compiled into the binary (`include_str!`) and parsed by the same loader as every scope file, so the code and `cpd policy show` have one source. It sets every domain, and holds today's behaviour except `pr.gate = "ci"` (hs-d292): before policies, `pr open`, `pr push` and `pr rebase` always ran the Gate. Every `text` is empty.
+- **The owner and repo scopes** are files of the instance (§1.4):
+
+  ```
+  $CPD_HOME/policy/
+    owners/<owner>.toml          the owner scope; required for every owner a Context uses
+    repos/<owner>/<name>.toml    the repo scope; optional
+  ```
+
+- **The path is the key.** A file has no owner or name field to disagree with its path. A file name that is not a valid owner login or repo name (§2.1) is `policy_invalid`.
+- **Any file may be a symlink**; `cpd policy show` prints its realpath.
+- **Every owner a Context uses needs its owner file** (`owner_unknown`). An empty owner file is the explicit "cpd's default in every domain". The repo scope is optional: a repo with no file resolves every domain from its owner and the default.
+- **No policy in a repo's committed files yet**: `.config/cpd.toml` keeps only `protected` (§7.5), and a policy table there is `config_invalid` as any unknown key (hs-d288).
+
+The owner file of `clayton-duarte` comes from the User's dotfiles on every machine (hs-d292). It sets `pr` only: the local Gate, no feedback from GitHub checks (its repos run no GitHub Actions; the Gate is the check, and only mergeability matters, hs-d283), and the conflict procedure of hs-d289 (rebase onto the base, the Gate, push through cpd; the Lead resolves a conflict itself, at once, hs-d269):
+
+```toml
+# $CPD_HOME/policy/owners/clayton-duarte.toml
+[pr]
+gate = "local"
+feedback.checks = "none"
+text = """
+These repos run no GitHub Actions: the Gate (the repo's pre-merge hook) is the check, and only mergeability matters.
+A merge conflict on an open PR: resolve it yourself, at once. Rebase the Lead Branch onto its base with `cpd pr rebase --pr <key>`, which runs the Gate before it pushes.
+Every push goes through cpd (`cpd pr open`, `cpd pr push`, `cpd pr rebase`); never `git push`.
+"""
+```
+
+cpd's own default for a conflict (hs-d289) is the same procedure without the local Gate: rebase onto the base, then push.
+
+#### Precedence and replace
+
+- **Most specific wins, per domain** (hs-d279): repo > owner > default. Domains resolve independently: a repo file may set `pr` and take `instructions` from its owner. No domain adds up across scopes.
+- **A scope that has a `[domain]` table sets the whole domain.** Its `text` replaces the less specific `text`. A typed key the table leaves out takes **cpd's default** for that key, never a less specific scope's: an owner sets `gate = "local"` and `feedback.checks = "none"`, one of its repos sets `[pr] gate = "ci"`; that repo's `feedback.checks` is cpd's `any`, shown by `cpd policy show` as `repo:<path> (key default)`.
+- **An empty table** (`[pr]` and nothing under it) means cpd's default for that whole domain, explicitly, overriding a less specific scope.
+- A domain no scope sets is cpd's default. A resolved policy is therefore total.
+
+#### Keys and resolution
+
+**Every consumer resolves exactly one key, derived by cpd from the one database row it acts on** (hs-d288), through one entry point, `policy::resolve(home, &PolicyKey)`, which reads only the compiled default and the files of `$CPD_HOME/policy/`. No consumer reads a policy from a cwd, a machine or another row.
+
+| Consumer | Key |
+|---|---|
+| a Context, its Manager, its Plans and their Leads | `Owner(contexts.owner)` |
+| a PR, the Workers of its Jobs, and the commands acting on it (`pr open`, `pr push`, `pr rebase`, the PR poll's `pr-feedback` and the Inbox's `pr-failing` for the pull request it points to) | `Repo(contexts.owner, prs.name)`, the owner of the PR's Plan's Context |
+| a `pull_requests` row the poll found and no PR points to (the Inbox's `pr-failing`) | `Repo` of the row's `repo`, `<owner>/<name>`; cpd's default when that owner has no file (below) |
+
+- **A row no PR owns, of an owner without a file, resolves cpd's default.** Such rows are normal (the User's pull requests to other owners' repos, review requests) and are not cpd's work, so they raise no `owner_unknown`: E8 resolves cpd's default for them, by this named rule, and its source is `default (no owner file)`. `owner_unknown` applies only where cpd works on the owner: `context new`, `context owner`, `pr add`, and resolving for a Context, a PR or a Session.
+- **One owner per Context** (hs-d288): `contexts.owner` is the GitHub login of every repo its Plans' PRs are in; `pr add` refuses a repo of another owner (`owner_mismatch`). A Plan may span several repos of that owner. `prs` stores only the repo's `name`: its owner is its Context's (DRY), and `owner_mismatch` keeps them equal.
+- So a Lead resolves `Owner`, never `Repo`: its owner's policy. Repo-scope `text` reaches a Lead only per PR, through `cpd policy show --pr <key>`.
+- **Rows from before the migration** (§4.5): a PR whose `name` is NULL resolves `Owner(contexts.owner)`. A Context whose `owner` is NULL has no key: every resolve for it, and `plan new` and `pr add` in it, fail `owner_unset` until `cpd context owner` sets one.
+
+#### Validation
+
+Every input is parsed once, at the boundary: a scope file at the first resolve of a command (and by `cpd policy show`), a login at `context new` and `context owner`, `origin` at `pr add`. Each failure is a typed error, never a silent default.
+
+| Condition | Code | Exit | `details` | Raised by |
+|---|---|---|---|---|
+| a scope file is not TOML; names an unknown domain (`mcp` and `hooks` included), an unknown key, a wrong type or an enum value outside its set; or its file name is not a valid login or name | `policy_invalid` | 1 | `file`, `key` (null when the file does not parse) | any resolve; `cpd policy show` |
+| a key's owner has no `owners/<owner>.toml`, also when its repo file exists (never for a row no PR owns, above) | `owner_unknown` | 1 | `owner` | `context new`, `context owner`, `pr add`, any resolve for a Context, a PR or a Session |
+| the repo cannot be keyed from `origin`: it has no `origin`, the URL is not `https://github.com/<o>/<n>` or `git@github.com:<o>/<n>` (each with or without `.git`; a non-`github.com` host and an SSH host alias such as `git@github-work:<work-owner>/x.git` are refused) | `repo_unkeyed` | 1 | `url` (null when there is no `origin`) | `pr add`, `pr edit --repo` |
+| the repo's owner is not the Context's | `owner_mismatch` | 3 | `owner` (the Context's), `repo_owner` | `pr add`, `pr edit --repo` |
+| the Context's `owner` is NULL (made before the migration, §4.5); the message names `cpd context owner <login> --context <c>` (no `details.next`: it holds only a command that runs as written) | `owner_unset` | 3 | `context` | `plan new`, `pr add`, any resolve, `cpd policy show` |
+| `context owner` on a Context that has an owner | `owner_set` | 3 | `context`, `owner` | `context owner` |
+
+**A resolve that serves many rows fails per row, not as a whole.** The PR poll (§7.6) and engine E8 (§3.7) resolve one key per PR or `pull_requests` row, so `policy_invalid`, `owner_unknown` and `owner_unset` do not fail them: the poll appends one `error` Event for the PR's Plan (`source` `pr poll`, once per episode) and sends that PR no `pr-feedback`; E8 turns the row's failure into one `engine-error` item, subject `error:E8/pr:<repo>#<number>/<code>`, whose label names the code and the file (the scope file for `policy_invalid` and `owner_unknown`, the Context for `owner_unset`), and still computes every other item. Which key a row has depends on whether **a PR points to it**, never on its owner being NULL: a row a PR points to whose Context has no `owner` is `owner_unset` (above), not the unowned-row rule.
+
+#### Delivery to agents
+
+- **The pi adapter** (§5.3; `commands.md` §15) adds **one system prompt section per run**, through pi's `systemPromptOptions.sections` (keyed by tag name, here `cpd-policy`; docs: pi's `system-prompt.d.ts`, its survival of compaction unverified at runtime). At `session_start` it runs `cpd policy show` with no flag (the Session's own key, `commands.md` §22.1), and the section holds the resolved `text` of every domain whose audience includes the Session's role, each labelled by its domain and source. A domain with empty `text` adds nothing; with none, there is no section. The adapter never chooses a key and never reads a scope file.
+- **A failed `cpd policy show`** is delivered to the Session as an error message (`cpd adapter: …`) and the Session gets no policy text: loud, not defaulted.
+- **A Lead's section is its owner's** (`Owner`, above); repo-scope text reaches it only through `cpd policy show --pr <key>`. A Worker's is its PR's repo's, a Manager's its Context's owner's.
+- **The skills carry cpd mechanics only**: what varies by owner or repo is in a policy, never in a skill.
+
 ## 9. Tiers
 
 Kept from cpd 1 §7, with one change in how pi's catalog is read.
@@ -2160,6 +2295,7 @@ Kept from cpd 1 §7, with one change in how pi's catalog is read.
 | Plumbing (hs-d139, hs-d140, hs-a3): the merge step skips its rebase when the Lead tip is already in the Attempt; `pr push`; `events follow` ends on store errors and re-execs after an install; `job add` re-arms `all-merged`; short Session ids | §1.2 (`push_rejected`, `session_ambiguous`), §2.2 PR, §3.7 E4, §5.2 `all-merged`, §5.4, §7.4 step 5, §7.6 `pr push`; `commands.md` §1.3, §5.1, §9.9, §10 (every command that takes a Session), §11.2; `docs/implementing.md` |
 | Named migrations and an additive window (hs-a4, hs-d178 D1–D4): migrations are named files; the schema hash stays pinned in code over a canonical form; lookup tables for Event and record kinds; installs refuse a build whose migrations are not all on `origin/main`; `docs/research/migrations.md` is the design | §1.2 (`migration_changed`, `migration_order`), §3.4, §3.7, §6.7 (the guards), §4.3 (canonical hash, the window check), §4.4 (`schema_migrations`, the lookup tables), §4.5, §4.6, §5.2, §5.4; commands.md §1.2 (`--version`), §1.3, §11.2, §14.1 |
 | The distilled Context (hs-d182, hs-d192, hs-d194, hs-n111; D1–D7 of PR `distill`, Plan cross-repo; the pilot of Epic B, hs-n95) | D1 the digest files: §1.4, §2.2 Context record, §4.6; D2 records in force: §4.6; D3 validation: §1.2 (`distill_invalid`), §4.6, §5.2 `error`; D4 the engine rebuild: §1.2 (`distill_running`), §3.7 E9, §6.4; D5 the distiller: §4.6, §6.5, §8.2 (`context_distill_tier`, `timeouts.distill_minutes`), §9; D6 consumers: §3.1, §4.6, §6.5; D7: §4.6 "Nothing is lost"; `commands.md` §3.3, §3.12, §4.1, §3.10; `docs/implementing.md` |
+| CPD policies (hs-d288, hs-d289, hs-d292, hs-d283; design `docs/research/policy-architecture.md` Option 1): a typed domain registry with cpd's default and owner and repo files per instance, most specific wins per domain (hs-d279), one key per consumer from its row, one GitHub owner per Context, `cpd policy show`; the `pr` domain's `gate` and `feedback.checks` | §1.2 (`policy_invalid`, `owner_unknown`, `repo_unkeyed`, `owner_mismatch`, `owner_unset`, `owner_set`), §1.4 (`policy/`), §2.1 (owner login, repo name), §2.2 (Context `owner`, PR `name`, Inbox `pr-failing`), §3.1, §3.8, §3.9, §4.4, §4.5 (the policy keys), §5.2 `pr-feedback`, §5.3, §7.3, §7.6, §8.3; `commands.md` §3.1, §3.13, §4.1, §9.1, §9.2, §9.3, §9.4, §9.5, §9.9, §22; CONTEXT.md (Policy, Domain, Scope, Policy key, Resolved policy) |
 | D1 every command prints one JSON value; exit codes | §1.2 |
 | D2 `plan new --context X` forks the Context's grounded Lead (**superseded** by hs-d92: `plan new` starts a fresh Lead, the grounded Lead is retired) | §2.2 Context, §3.1 (The grounded Lead is retired), §4.5 migration 0010 |
 | D3 `workflow` becomes `plan` | §1.3 (`--plan`, `CPD_PLAN`), §2.2 Plan, CONTEXT.md |
