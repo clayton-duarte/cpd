@@ -100,10 +100,16 @@ fn run_in_terminal<'a>(env: &'a TestEnv, name: &str, inside: bool, redirect: &st
 }
 
 impl Terminal<'_> {
-    /// Waits for the command to exit; its exit code.
+    /// Waits for the command to exit; its exit code. The shell creates the file before it
+    /// writes the code (`echo $? > file`), so the file existing is not the code being there:
+    /// the wait is for the whole line.
     fn exit_code(&self) -> i32 {
-        wait_until("the command to exit", || self.code.exists());
-        fs::read_to_string(&self.code).unwrap().trim().parse().unwrap()
+        let mut code = None;
+        wait_until("the command to exit", || {
+            code = fs::read_to_string(&self.code).ok().and_then(|text| text.strip_suffix('\n')?.parse().ok());
+            code.is_some()
+        });
+        code.unwrap()
     }
 
     fn stderr(&self) -> String {
