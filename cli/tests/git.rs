@@ -10,8 +10,8 @@ use common::TestEnv;
 use cpd_core::error::ErrorCode;
 use cpd_core::git::hooks::{HookError, HookOutcome, load, run_hook};
 use cpd_core::git::{
-    Operation, Setup, attempt_branch, attempt_worktree_path, create_attempt_worktree, create_lead_worktree,
-    discard_worktree, lead_branch, lead_worktree_path, protected_list, remove_merged_attempt, tamper_check,
+    Operation, Push, Setup, attempt_branch, attempt_worktree_path, create_attempt_worktree, create_lead_worktree,
+    discard_worktree, push_commit, lead_branch, lead_worktree_path, protected_list, remove_merged_attempt, tamper_check,
     touched_protected,
 };
 use cpd_core::home::Hook;
@@ -232,6 +232,138 @@ fn discard_removes_whatever_state_and_is_idempotent() {
 
     assert!(!made.path.exists());
     assert_eq!(env.git(&repo, &["branch", "--list", &made.branch]), "");
+}
+
+// ------------------------------------------------- shared git state (hs-d243)
+
+/// `repo` gets a bare `origin` holding `main`; returns the origin's path.
+fn with_origin(env: &TestEnv, repo: &Path) -> PathBuf {
+    let origin = env.root().join("origins").join("pay.git");
+    fs::create_dir_all(&origin).unwrap();
+    env.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
+    env.git(repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    env.git(repo, &["push", "-q", "origin", "main"]);
+    origin
+}
+
+/// The `branch.*` entries of `repo`'s `.git/config`, one per line.
+fn branch_config(env: &TestEnv, repo: &Path) -> String {
+    let out = common::output(env.command("git").args(["-C", repo.to_str().unwrap(), "config", "--get-regexp", r"^branch\."])).unwrap();
+    String::from_utf8(out.stdout).unwrap()
+}
+
+#[test]
+fn a_lead_worktree_from_origin_has_no_upstream_and_its_push_writes_no_config() {
+    let env = TestEnv::new();
+    let repo = env.git_repo("pay");
+    with_origin(&env, &repo);
+
+    let made = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap();
+
+    assert!(made.push_failed.is_none());
+    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", &made.branch]), format!("{}\trefs/heads/{}", made.base_sha, made.branch));
+    assert_eq!(branch_config(&env, &repo), "", "no upstream: nothing in .git/config");
+}
+
+#[test]
+fn git_calls_wait_for_a_ref_lock_held_for_one_second() {
+    let env = TestEnv::new();
+    let repo = env.git_repo("pay");
+    let origin = with_origin(&env, &repo);
+    env.git(&repo, &["fetch", "-q", "origin"]);
+    // The remote moves; another git process holds the lock of the repo's tracking ref.
+    let other = env.root().join("other");
+    env.run_ok(env.root(), "git", &["clone", "-q", origin.to_str().unwrap(), other.to_str().unwrap()]);
+    commit_file(&env, &other, "new.txt", "new\n");
+    env.git(&other, &["push", "-q", "origin", "main"]);
+    let moved = env.git(&other, &["rev-parse", "HEAD"]);
+    let lock = repo.join(".git/refs/remotes/origin/main.lock");
+    fs::write(&lock, "").unwrap();
+
+    let started = Instant::now();
+    let fetched = std::thread::scope(|s| {
+        s.spawn(|| {
+            std::thread::sleep(Duration::from_secs(1));
+            fs::remove_file(&lock).unwrap();
+        });
+        cpd_core::git::run::ok(&repo, &["fetch", "origin", "main"])
+    });
+
+    fetched.unwrap();
+    assert!(started.elapsed() >= Duration::from_secs(1), "it waited for the lock");
+    assert_eq!(env.git(&repo, &["rev-parse", "origin/main"]), moved);
+}
+
+#[test]
+fn rule_p_pushes_the_named_commit_not_the_branch_tip() {
+    let env = TestEnv::new();
+    let repo = env.git_repo("pay");
+    let origin = with_origin(&env, &repo);
+    let lead = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap();
+    commit_file(&env, &lead.path, "one.txt", "one\n");
+    let one = env.git(&lead.path, &["rev-parse", "HEAD"]);
+    commit_file(&env, &lead.path, "two.txt", "two\n");
+    let two = env.git(&lead.path, &["rev-parse", "HEAD"]);
+
+    assert_eq!(push_commit(&lead.path, &lead.branch, &one).unwrap(), Push::Pushed { new: true });
+    assert_eq!(env.git(&origin, &["rev-parse", &lead.branch]), one, "the named commit, not the tip");
+    assert_eq!(push_commit(&lead.path, &lead.branch, &one).unwrap(), Push::Pushed { new: false });
+    assert_eq!(push_commit(&lead.path, &lead.branch, &two).unwrap(), Push::Pushed { new: true });
+    assert_eq!(env.git(&origin, &["rev-parse", &lead.branch]), two);
+    assert_eq!(branch_config(&env, &repo), "", "no -u");
+}
+
+#[test]
+fn rule_p_an_ancestor_pushed_after_its_descendant_is_a_success_that_pushed_nothing() {
+    let env = TestEnv::new();
+    let repo = env.git_repo("pay");
+    let origin = with_origin(&env, &repo);
+    let lead = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap();
+    commit_file(&env, &lead.path, "a.txt", "a\n");
+    let a = env.git(&lead.path, &["rev-parse", "HEAD"]);
+    commit_file(&env, &lead.path, "b.txt", "b\n");
+    let b = env.git(&lead.path, &["rev-parse", "HEAD"]);
+    // Merge B pushed first; merge A's push of its own `new` comes late.
+    assert_eq!(push_commit(&lead.path, &lead.branch, &b).unwrap(), Push::Pushed { new: true });
+
+    assert_eq!(push_commit(&lead.path, &lead.branch, &a).unwrap(), Push::Contained { remote: b.clone() });
+    assert_eq!(env.git(&origin, &["rev-parse", &lead.branch]), b, "the remote is not moved back");
+}
+
+#[test]
+fn rule_p_a_rejection_whose_remote_tip_lacks_the_commit_stands() {
+    let env = TestEnv::new();
+    let repo = env.git_repo("pay");
+    let origin = with_origin(&env, &repo);
+    let lead = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap();
+    // A known commit that does not descend from ours, pushed to the remote branch.
+    commit_file(&env, &lead.path, "theirs.txt", "theirs\n");
+    let theirs = env.git(&lead.path, &["rev-parse", "HEAD"]);
+    env.git(&lead.path, &["push", "-q", "origin", &format!("{theirs}:refs/heads/{}", lead.branch)]);
+    env.git(&lead.path, &["reset", "-q", "--hard", &lead.base_sha]);
+    commit_file(&env, &lead.path, "ours.txt", "ours\n");
+    let ours = env.git(&lead.path, &["rev-parse", "HEAD"]);
+
+    let Push::Rejected { stderr } = push_commit(&lead.path, &lead.branch, &ours).unwrap() else { panic!("not rejected") };
+    assert!(stderr.contains("rejected"), "{stderr}");
+    assert_eq!(env.git(&origin, &["rev-parse", &lead.branch]), theirs);
+
+    // A remote tip not in the local object store is a rejection too.
+    let other = env.root().join("other");
+    env.run_ok(env.root(), "git", &["clone", "-q", "-b", &lead.branch, origin.to_str().unwrap(), other.to_str().unwrap()]);
+    commit_file(&env, &other, "unknown.txt", "unknown\n");
+    env.git(&other, &["push", "-q", "origin", &lead.branch]);
+    assert!(matches!(push_commit(&lead.path, &lead.branch, &theirs).unwrap(), Push::Rejected { .. }));
+}
+
+#[test]
+fn rule_p_without_origin_is_git_failed() {
+    let env = TestEnv::new();
+    let repo = env.git_repo("pay");
+    let lead = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap();
+    let err = push_commit(&lead.path, &lead.branch, &lead.base_sha).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::GitFailed);
+    assert_eq!(err.details()["argv"][3], "push");
 }
 
 // ---------------------------------------------------------------- hooks
