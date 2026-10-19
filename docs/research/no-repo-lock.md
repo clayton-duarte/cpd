@@ -164,7 +164,7 @@ Consequences:
 3. `merge-tree --write-tree --name-only origin/<base> S`: a conflict is `rebase_conflict`, nothing changed (as today, `rebase.rs:38-51`).
 4. `W` as in §2.5, detached at `S`; `git -C W rebase origin/<base>` → `R'` (a detached `HEAD` rebases like a branch, I infer; tested by the Job). An unexpected conflict: `rebase --abort`, remove W, `rebase_conflict`.
 5. **Guard U.** For each Attempt of this PR in `merging` whose branch tip is an ancestor of `S` (its CAS happened, its step 10 has not): driver lock free → run R for it (it takes that lock, R-F); held → poll the store every 200 ms until it is `ended`, at most 60 s, else `cas_lost` (exit 3, `details.attempt`; "rerun"). An Attempt whose CAS comes after `S` cannot be lost: its CAS fails against `R'` or ours fails against it.
-6. `update-ref -m "cpd: pr rebase <plan>/<key>" refs/heads/<lead> R' S`. If it fails because the ref moved: back to 2, at most `CAS_RETRIES` times, then `cas_lost`.
+6. `update-ref -m "cpd: pr rebase <plan>/<key>" refs/heads/<lead> R' S`. If it fails because the ref moved: remove W and go back to 2, at most `CAS_RETRIES` times, then `cas_lost`.
 7. Rule S on the Lead worktree.
 8. The Gate in W, then the steps of §2.5 from step 4; the push by rule P with the lease `X0`.
 
