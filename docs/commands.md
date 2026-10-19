@@ -598,23 +598,25 @@ cpd plan render [--plan <id>]
 
 Effects: writes `run/<plan>/plan.md` (§1.4), nothing else. Content, kept from cpd 1 §11 `plan render` and grouped by PR (R34): title, Context and phase; a table of the PRs that are not `cancelled`, with key, repo, base and needs, and, when there are two or more, a Mermaid `graph LR` of their needs; then the section `## Overlaps` (below); then one section per PR, in the order of the needs graph (ties by key), headed `PR <key>`, with its repo, base and needs, a table of its Jobs that are not `cancelled` with key, title, Tier, status, needs and touches, a Mermaid `graph TD` of its Jobs' Dependencies, and one subsection per Job with its Spec (goal, context, touches, acceptance, out of scope). A Job's section is under its PR only. In a phase after `plan`, the Jobs that are not `draft` are Locked context: the render shows them as such, and marks every `draft` Job **under review** (in its table row and its section), because a review in these phases covers exactly the drafts (§4.6; User, hs-d173, hs-d174, hs-d179). In phase `plan` every Job is a draft and nothing is marked. GitHub-flavoured Markdown only: tables, code and Mermaid, no footnotes, no raw HTML (t4). Output: the path, the plan fingerprint (§2.3: Jobs and PRs), the number of `draft` Jobs, the number of PRs that are not `cancelled` and the overlaps.
 
-**Overlaps** (B4-A3, hs-d78, hs-d172): the warning that another Plan is working on the same files. It is made here and so in the Plan review (§4.6), and nowhere else: `job add` does not warn. For each PR of this Plan that is not `cancelled`, every **other** active Plan (any Context; its phase is not `done` and it is not archived) is looked at when it has a PR in the same repo (the same `prs.repo` realpath as stored) that is not `merged` and not `cancelled`. Each Job of that PR that is not `cancelled` (`draft`, `queued`, `running`, `failed`, or `merged` on its Lead Branch) whose `touches` overlap a path in `touches` of one of this PR's Jobs that are not `cancelled` is one overlap. Two paths overlap when they are equal, or when one is a directory (ends with `/`) that contains the other. Nothing else is compared (no globs, no normalisation). A Plan's own Jobs are never listed. The warning is only that: nothing is refused and no state changes.
+**Overlaps** (B4-A3, hs-d78, hs-d172; only open work, one row per Job and other PR, hs-n201): the warning that another Plan is working on the same files. It is made here and so in the Plan review (§4.6), and nowhere else: `job add` does not warn. It checks only this Plan's **open work**: the Jobs that are not `cancelled` of the PRs of this Plan that are not `merged` and not `cancelled`. A Job of a `merged` PR is already on its base, so it can no longer clash with another Plan's work. For each such PR, every **other** active Plan (any Context; its phase is not `done` and it is not archived) is looked at when it has a PR in the same repo (the same `prs.repo` realpath as stored) that is not `merged` and not `cancelled`. A Job of that PR that is not `cancelled` (`draft`, `queued`, `running`, `failed`, or `merged` on its Lead Branch) overlaps a Job of this Plan when a path in the `touches` of the one overlaps a path in the `touches` of the other. Two paths overlap when they are equal, or when one is a directory (ends with `/`) that contains the other. Nothing else is compared (no globs, no normalisation). A Plan's own Jobs are never listed. The warning is only that: nothing is refused and no state changes.
 
-`plan.md` has the section `## Overlaps` after the PRs table (and its graph), before the PR sections: a table with one row per overlap, in the order of this Plan's Jobs (by creation), then Path, Other Plan, PR and Job; or, when there is none, the line `No other active Plan touches these files.` A Plan with no PR yet has no PRs table and no section.
+The overlaps are grouped: **one overlap per (this Job, other Plan, other PR)**. It lists every Job of that other PR that overlaps this Job, with its status, and the paths of this Job that overlap one of them, each path once, in the order of the Job's `touches`. A broad path (`core/src/`) or a shared file is one entry of a row, not a row of its own for every pair of paths and Jobs (hs-n201: on a busy Context that made thousands of rows, and nobody could read them in a Plan review).
+
+`plan.md` has the section `## Overlaps` after the PRs table (and its graph), before the PR sections: a table with one row per overlap, ordered by this Job's key, then the other Plan, then the PR; or, when there is none, the line `No other active Plan touches these files.` A Plan with no PR yet has no PRs table and no section.
 
 ```
 ## Overlaps
 
-| Job | Path | Other Plan | PR | Job | Status |
-|---|---|---|---|---|---|
-| `x` | `core/src/x.rs` | `pay-4522` | `api` | `y` | queued |
+| Job | Other Plan | PR | Its Jobs (status) | Paths |
+|---|---|---|---|---|
+| `x` | `pay-4522` | `api` | `y` (queued), `z` (draft) | `core/src/x.rs`, `core/src/lib.rs` |
 ```
 
-The columns are this Plan's Job and its path, the other Plan, its PR, its Job and that Job's status. In the JSON output, `overlaps` lists the same rows, in the same order, as `{job, path, plan, pr, other_job, status, other_path}`: `path` is the path of this Plan's Job and `other_path` the path of the other Plan's Job that overlaps it (the same, or the directory or the file inside it); `[]` when there is none.
+The columns are this Plan's Job, the other Plan, its PR, the Jobs of that PR that overlap this Job with their status (in the order they were created), and the paths of this Job that overlap them. `Paths` shows at most five paths and then `+N` for the N more, as in `` `a`, `b`, `c`, `d`, `e`, +2 ``. In the JSON output, `overlaps` lists the same rows, in the same order, as `{job, plan, pr, other_jobs: [{key, status}], paths}`: `other_jobs` are the Jobs of the other PR that overlap `job`, and `paths` are all the paths of `job` that overlap them, deduplicated (only the table is capped); `[]` when there is none.
 
 ```json
 {"ok": true, "path": "/home/clayton/.cpd/run/pay-4521/plan.md", "fingerprint": "9f86d081…", "draft_jobs": 6, "prs": 2,
- "overlaps": [{"job": "x", "path": "core/src/x.rs", "plan": "pay-4522", "pr": "api", "other_job": "y", "status": "queued", "other_path": "core/src/"}]}
+ "overlaps": [{"job": "x", "plan": "pay-4522", "pr": "api", "other_jobs": [{"key": "y", "status": "queued"}, {"key": "z", "status": "draft"}], "paths": ["core/src/x.rs", "core/src/lib.rs"]}]}
 ```
 
 Idempotent: yes (the same PRs and Jobs, and the same other Plans, render the same file). Change: cpd 1's `--out` is dropped; the file has one place.
@@ -633,7 +635,7 @@ Requests the User's approval of the draft Jobs (§2.2 Plan review). In phase `pl
 | at least one Job is `draft` (in a phase after `plan` too: the drafts are what is reviewed) | `no_draft_jobs` | 3 |
 
 Effects:
-- **Files:** renders the plan to `run/<plan>/plan.md` and copies it to `run/<plan>/plan-<review>.md`, so a later render cannot change what the User reviews The reviewed file carries the `## Overlaps` section of §4.5, as it is at that moment, so the User sees the warning in the review; it is a warning only and the review is requested all the same.
+- **Files:** renders the plan to `run/<plan>/plan.md` and copies it to `run/<plan>/plan-<review>.md`, so a later render cannot change what the User reviews. The reviewed file carries the `## Overlaps` section of §4.5, as it is at that moment: one row per open Job of this Plan and other PR, short enough to read in the review (hs-n201), so the User sees the warning there; it is a warning only and the review is requested all the same.
 - **Rows**, one transaction: `plan_reviews` (`id = r<k>`, `k` = 1 + the highest, `fingerprint` = the plan fingerprint, `status = pending`). **Event** `plan-review` `{review, fingerprint, status: "pending"}`.
 
 ```json
