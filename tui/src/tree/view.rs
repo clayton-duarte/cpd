@@ -1949,7 +1949,7 @@ mod tests {
         assert_eq!(right_click(&mut view, 10, header), Effect::None, "the header");
         assert!(view.menu.is_none());
         let more = inbox_row(&view, 3);
-        assert_eq!(right_click(&mut view, 10, more), Effect::None, "`+2 more`");
+        assert_eq!(right_click(&mut view, 10, more), Effect::None, "the toggle row");
         assert!(view.menu.is_none());
         let mut down = item(9, InboxKind::EngineDown, Urgency::Red, "engine is down", "2026-01-02T23:00:00.000Z");
         down.id = 9;
