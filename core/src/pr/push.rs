@@ -3,8 +3,9 @@
 
 use serde_json::json;
 
-use super::row::{PlanRow, PrRow};
-use super::{Args, Env, gate, illegal_phase, lock, require_clean};
+use super::row::PlanPrs;
+use crate::plan::PrRow;
+use super::{Args, Env, gate, illegal_phase, lock, pr_policy, require_clean};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, TAIL_LINES, tail};
 use crate::output::Output;
@@ -18,6 +19,7 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
 
     let plan = env.plan(&id)?;
     let key = require_open(&plan, &args)?.key.clone();
+    let policy = pr_policy(&mut env, &id, &key)?;
 
     // Under the per-repo lock, after R, so that no merge interleaves and none is unrecorded.
     let lock = lock(&mut env, require_open(&plan, &args)?, COMMAND)?;
@@ -25,7 +27,7 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
     let pr = require_open(&plan, &args)?;
     let lead = pr.lead(&id)?.clone();
     require_clean(&id, pr, &lead)?;
-    gate(&env, &id, pr, &lead, &format!("pr push --pr {key}"))?;
+    gate(&env, &policy, &id, pr, &lead, &format!("pr push --pr {key}"))?;
 
     let branch = pr.lead_branch.as_str();
     let out = git::run::run(&lead, &["push", "--porcelain", "origin", branch])?;
@@ -69,13 +71,13 @@ fn ref_line(stdout: &str) -> Option<&str> {
 
 /// The selected PR must be `open` (`illegal_transition`); a Plan that has not
 /// been locked is `illegal_phase`.
-fn require_open<'a>(plan: &'a PlanRow, args: &Args) -> Result<&'a PrRow, CpdError> {
-    if matches!(plan.phase, Phase::Grounding | Phase::Plan) {
+fn require_open<'a>(plan: &'a PlanPrs, args: &Args) -> Result<&'a PrRow, CpdError> {
+    if matches!(plan.plan.phase, Phase::Grounding | Phase::Plan) {
         return Err(illegal_phase(plan, COMMAND, "deploy"));
     }
     let pr = plan.select(&args.pr)?;
     if pr.status != "open" {
-        return Err(pr.refuse(&plan.id, COMMAND, "open"));
+        return Err(pr.refuse(&plan.plan.id, COMMAND, "open"));
     }
     Ok(pr)
 }

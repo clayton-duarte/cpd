@@ -9,12 +9,10 @@ mod question;
 mod reply;
 
 use crate::args::{PlanArg, Text};
-use crate::config::Config;
+use crate::env::Env;
 use crate::error::CpdError;
-use crate::home::CpdHome;
 use crate::ids::{AttemptId, EscalationId};
 use crate::output::Output;
-use crate::store::Store;
 
 #[derive(clap::Args, Debug)]
 pub struct AskArgs {
@@ -52,19 +50,4 @@ pub fn ask(args: AskArgs) -> Result<Output, CpdError> {
 /// `cpd answer` (§8.2).
 pub fn answer(args: AnswerArgs) -> Result<Output, CpdError> {
     reply::answer(args)
-}
-
-/// What every command opens: `$CPD_HOME`'s config and the store.
-struct Env {
-    config: Config,
-    store: Store,
-}
-
-impl Env {
-    fn open() -> Result<Env, CpdError> {
-        let home = CpdHome::from_env()?;
-        let config = Config::load(&home)?;
-        let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-        Ok(Env { config, store })
-    }
 }

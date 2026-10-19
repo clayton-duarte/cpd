@@ -5,21 +5,23 @@
 //! transaction. `plan lock` uses the steps one by one (all or nothing across
 //! PRs); E7 and `pr start` use [`start`].
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use rusqlite::Connection;
 use serde_json::{Value, json};
 
 use super::{Env, StartArgs, plan_phase, wrong_phase};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::git::{self, Setup, Step};
 use crate::home::{CpdHome, Hook};
 use crate::ids::{PlanId, PrKey};
 use crate::output::Output;
-use crate::plan::Phase;
+use crate::plan::{Phase, PrRow};
+
+/// Every PR of a Plan in key order (`plan::fingerprint::load_prs`), as E7 and `pr start` read them.
+pub use crate::plan::fingerprint::load_prs as load;
 use crate::store::{Store, WriteTxn};
 
 const COMMAND: &str = "pr start";
@@ -51,42 +53,9 @@ impl By {
     }
 }
 
-/// A PR as the start reads it.
-#[derive(Clone, Debug)]
-pub struct Pr {
-    pub key: PrKey,
-    pub repo: PathBuf,
-    pub base: String,
-    pub lead_branch: String,
-    pub status: String,
-    /// Keys of the PRs it needs, sorted.
-    pub needs: Vec<String>,
-    pub lead_worktree: Option<String>,
-}
-
-type Raw = (String, String, String, String, String, Option<String>);
-
-/// Every PR of `plan` in key order, `cancelled` ones included.
-pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Pr>, CpdError> {
-    let mut stmt = conn.prepare("SELECT key, repo, base, lead_branch, status, lead_worktree FROM prs WHERE plan = ?1 ORDER BY key")?;
-    let rows: Vec<Raw> = stmt
-        .query_map([plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?
-        .collect::<rusqlite::Result<_>>()?;
-    let mut stmt = conn.prepare("SELECT needs FROM pr_needs WHERE plan = ?1 AND pr = ?2 ORDER BY needs")?;
-    rows.into_iter()
-        .map(|(key, repo, base, lead_branch, status, lead_worktree)| {
-            let needs = stmt.query_map([plan.as_str(), key.as_str()], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-            let key = PrKey::parse(&key).map_err(|_| {
-                CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: Plan {plan} has a PR key {key:?}."))
-            })?;
-            Ok(Pr { key, repo: PathBuf::from(repo), base, lead_branch, status, needs, lead_worktree })
-        })
-        .collect()
-}
-
-impl Pr {
+impl PrRow {
     /// The needs that are not `merged` yet.
-    pub fn unmerged_needs(&self, prs: &[Pr]) -> Vec<String> {
+    pub fn unmerged_needs(&self, prs: &[PrRow]) -> Vec<String> {
         self.needs.iter().filter(|n| prs.iter().any(|p| p.key.as_str() == n.as_str() && p.status != "merged")).cloned().collect()
     }
 }
@@ -95,7 +64,7 @@ impl Pr {
 /// Nothing is pushed and nothing is in the database.
 #[derive(Debug)]
 pub struct Prepared {
-    pr: Pr,
+    pr: PrRow,
     lead: git::Prepared,
 }
 
@@ -103,7 +72,7 @@ impl Prepared {
     /// Removes the worktree and branch again. Best effort: the failure to
     /// report is the caller's.
     pub fn discard(&self) {
-        let _ = self.lead.discard(&self.pr.repo);
+        let _ = self.lead.discard(Path::new(&self.pr.repo));
     }
 
     /// Pushes a Lead Branch that is new on the remote (R35). A failed push does
@@ -170,14 +139,14 @@ fn pre_start_log(home: &CpdHome, plan: &PlanId, key: &PrKey) -> PathBuf {
 }
 
 /// Creates the PR's Lead worktree and runs `pre-start` in it (§7.2), in the PR's repo.
-pub fn prepare(home: &CpdHome, config: &Config, plan: &PlanId, pr: &Pr) -> Result<Prepared, Failed> {
+pub fn prepare(home: &CpdHome, config: &Config, plan: &PlanId, pr: &PrRow) -> Result<Prepared, Failed> {
     let key = &pr.key;
-    let path = git::pr_lead_worktree_path(&pr.repo, plan, key, &pr.lead_branch).map_err(Failed::Other)?;
+    let path = git::pr_lead_worktree_path(Path::new(&pr.repo), plan, key, &pr.lead_branch).map_err(Failed::Other)?;
     let setup = Setup {
         timeout: Duration::from_secs(u64::from(config.timeouts.setup_minutes) * 60),
         log: pre_start_log(home, plan, key),
     };
-    match git::prepare_lead_worktree(&pr.repo, plan, &path, &pr.lead_branch, &pr.base, &setup) {
+    match git::prepare_lead_worktree(Path::new(&pr.repo), plan, &path, &pr.lead_branch, &pr.base, &setup) {
         Ok(lead) => Ok(Prepared { pr: pr.clone(), lead }),
         Err(failure) => {
             let mut error = failure.error.with("pr", key.as_str());
@@ -209,12 +178,8 @@ pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Resu
         "PR {} of Plan {plan} started: Lead Branch {} in {worktree}. Its Jobs are scheduled. Next: cpd plan show --plan {plan}",
         pr.key, lead.branch
     );
-    let data = json!({
-        "pr": pr.key, "repo": pr.repo.display().to_string(), "base": pr.base, "lead_branch": lead.branch,
-        "lead_worktree": worktree, "base_sha": lead.base_sha, "reused": lead.reused(), "pushed": pushed.pushed,
-        "by": by.as_str(),
-    });
-    append(tx, NewEvent::new(Kind::PrStarted, text, data).plan(plan.clone()))?;
+    let event = NewEvent::pr_started(text, &pr.key, &pr.repo, &pr.base, &lead.branch, &worktree, &lead.base_sha, lead.reused(), pushed.pushed, by.as_str());
+    append(tx, event.plan(plan.clone()))?;
     if let Some(error) = &pushed.failed {
         let text = format!(
             "The Lead Branch {} of PR {} of Plan {plan} was not pushed to origin: {}. The next merge or cpd pr open pushes it again.",
@@ -222,8 +187,8 @@ pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Resu
             pr.key,
             error.message()
         );
-        let data = json!({"source": by.source(), "code": error.code().as_str(), "message": error.message(), "details": error.details()});
-        append(tx, NewEvent::new(Kind::Error, text, data).plan(plan.clone()))?;
+        let event = NewEvent::error(text, by.source(), error.code().as_str(), error.message(), error.details());
+        append(tx, event.plan(plan.clone()))?;
     }
     Ok(())
 }
@@ -231,7 +196,7 @@ pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Resu
 /// Starts one PR of a Plan in `dispatch` (E7, `pr start`): [`prepare`], push,
 /// then [`record`] in a transaction of its own. On failure the worktree and
 /// branch are removed and nothing is written.
-pub fn start(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, pr: &Pr, by: By) -> Result<Pushed, Failed> {
+pub fn start(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, pr: &PrRow, by: By) -> Result<Pushed, Failed> {
     let pushed = prepare(home, config, plan, pr)?.push();
     match store.write(by.source(), |tx| record(tx, plan, &pushed, by)) {
         Ok(()) => Ok(pushed),
@@ -264,8 +229,8 @@ pub fn record_failure(store: &mut Store, source: &str, plan: &PlanId, key: &PrKe
         }
         let message = format!("PR {key} of Plan {plan} could not be started ({}): {}", step.as_str(), error.message());
         let text = format!("{message} The engine does not try again. Fix the cause, then: cpd pr start {key} --plan {plan}");
-        let data = json!({"source": source, "code": ErrorCode::PrStartFailed.as_str(), "message": message, "details": details});
-        append(tx, NewEvent::new(Kind::Error, text, data).plan(plan.clone()))?;
+        let event = NewEvent::error(text, source, ErrorCode::PrStartFailed.as_str(), &message, details);
+        append(tx, event.plan(plan.clone()))?;
         Ok(true)
     })
 }

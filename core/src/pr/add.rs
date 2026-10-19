@@ -9,13 +9,15 @@ use serde_json::json;
 
 use super::{AddArgs, Env, check_needs, plan_phase, sorted_needs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::git::run::{branch_exists, delete_remote_branch, has_origin, ok, remote_has_branch, run};
 use crate::git::worktree::list as worktrees;
-use crate::ids::{PlanId, PrKey};
+use crate::ids::{OwnerLogin, PlanId, PrKey, RepoName};
+use crate::policy::{PolicyKey, owner_mismatch, owner_unset, repo_key, resolve};
 use crate::output::Output;
 use crate::plan::Phase;
-use crate::plan::fingerprint::{PrSpec, load_prs};
+use crate::plan::PrRow;
+use crate::plan::fingerprint::load_prs;
 use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr add";
@@ -24,6 +26,8 @@ const COMMAND: &str = "pr add";
 struct Wanted {
     key: PrKey,
     repo: String,
+    /// The repo's GitHub name, from its `origin` (§8.3).
+    name: RepoName,
     base: String,
     /// `--needs` as given (sorted); `Some(vec![])` is `--no-needs`; `None`: the default.
     needs: Option<Vec<String>>,
@@ -55,9 +59,11 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     env.store.read(|conn| check_plan(conn, &plan))?;
     let repo = main_worktree(&args.repo)?;
+    let name = key_repo(&mut env, &plan, &repo)?;
     let wanted = Wanted {
         base: resolve_base(&repo, args.base.as_deref())?,
         repo: repo.display().to_string(),
+        name,
         key: args.key,
         needs,
     };
@@ -89,21 +95,43 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                         "PR {key} added to Plan {plan} (repo {}, base {}{with}), waiting. Next: cpd plan show --plan {plan}",
                         wanted.repo, wanted.base
                     );
-                    let data = json!({"pr": key, "repo": wanted.repo, "base": wanted.base, "needs": needs, "appended": appended});
-                    append(tx, NewEvent::new(Kind::PrAdded, text, data).plan(plan.clone()))?;
+                    let event = NewEvent::pr_added(text, key, &wanted.repo, &wanted.base, &needs, appended);
+                    append(tx, event.plan(plan.clone()))?;
                     Ok(("waiting".to_owned(), lead_branch, appended, needs, false))
                 }
             })?
         }
     };
     let mut out = json!({"pr": {
-        "key": wanted.key, "repo": wanted.repo, "base": wanted.base, "needs": needs,
+        "key": wanted.key, "repo": wanted.repo, "name": wanted.name, "base": wanted.base, "needs": needs,
         "status": status, "lead_branch": lead_branch, "appended": appended,
     }});
     if already {
         out["already"] = json!(true);
     }
     Ok(Output::success(out))
+}
+
+/// Keys the repo (contract §8.3, hs-d288), in the order of commands.md §9.4: the Plan's Context
+/// has an owner (`owner_unset`), the repo keys from its `origin` (`repo_unkeyed`), of that owner
+/// (`owner_mismatch`), whose policy files resolve (`owner_unknown`, `policy_invalid`). Returns the
+/// repo's name. Shared with `pr edit --repo`; reads and writes nothing.
+pub(super) fn key_repo(env: &mut Env, plan: &PlanId, repo: &Path) -> Result<RepoName, CpdError> {
+    let (context, owner): (String, Option<String>) = env.store.read(|conn| {
+        Ok(conn.query_row("SELECT c.id, c.owner FROM plans p JOIN contexts c ON c.id = p.context WHERE p.id = ?1", [plan.as_str()], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?)
+    })?;
+    let Some(owner) = owner else {
+        return Err(owner_unset(&crate::ids::ContextId::parse(&context)?));
+    };
+    let owner = OwnerLogin::parse(&owner)?;
+    let (repo_owner, name) = repo_key(repo)?;
+    if repo_owner != owner {
+        return Err(owner_mismatch(&owner, &repo_owner));
+    }
+    resolve(&env.home, &PolicyKey::Repo(owner, name.clone()))?;
+    Ok(name)
 }
 
 /// `pr add` is for every phase (D1), but not for an archived Plan (`archived`); returns the phase.
@@ -121,7 +149,7 @@ fn check_plan(conn: &Connection, plan: &PlanId) -> Result<Phase, CpdError> {
 fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision, CpdError> {
     let phase = check_plan(conn, plan)?;
     let prs = load_prs(conn, plan)?;
-    if let Some(existing) = prs.iter().find(|p| p.key == wanted.key.as_str()) {
+    if let Some(existing) = prs.iter().find(|p| p.key == wanted.key) {
         if same(existing, wanted, &prs) {
             // `appended`: the PR came after the lock.
             let (lead_branch, appended) = conn.query_row(
@@ -150,15 +178,15 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
 }
 
 /// The keys of the `merged` PRs, in key order (A3).
-fn merged_keys(prs: &[PrSpec]) -> Vec<String> {
-    let mut keys: Vec<String> = prs.iter().filter(|p| p.status == "merged").map(|p| p.key.clone()).collect();
+fn merged_keys(prs: &[PrRow]) -> Vec<String> {
+    let mut keys: Vec<String> = prs.iter().filter(|p| p.status == "merged").map(|p| p.key.as_str().to_owned()).collect();
     keys.sort();
     keys
 }
 
 /// Without `--needs` or `--no-needs` the needs match when none, or when all merged: a rerun
 /// after the reopen sees the Plan in `dispatch`, where the default is none.
-fn same(existing: &PrSpec, wanted: &Wanted, prs: &[PrSpec]) -> bool {
+fn same(existing: &PrRow, wanted: &Wanted, prs: &[PrRow]) -> bool {
     let needs_match = match &wanted.needs {
         Some(needs) => &existing.needs == needs,
         None => existing.needs.iter().all(|n| merged_keys(prs).contains(n)),
@@ -168,9 +196,9 @@ fn same(existing: &PrSpec, wanted: &Wanted, prs: &[PrSpec]) -> bool {
 
 fn insert(tx: &Connection, plan: &PlanId, wanted: &Wanted, needs: &[String], lead_branch: &str) -> Result<(), CpdError> {
     tx.execute(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
-         SELECT ?1, ?2, ?3, ?4, 'waiting', ?5, id, at FROM txns WHERE id = cpd_txn()",
-        rusqlite::params![plan.as_str(), wanted.key.as_str(), wanted.repo, wanted.base, lead_branch],
+        "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, created_txn, created_at)
+         SELECT ?1, ?2, ?3, ?6, ?4, 'waiting', ?5, id, at FROM txns WHERE id = cpd_txn()",
+        rusqlite::params![plan.as_str(), wanted.key.as_str(), wanted.repo, wanted.base, lead_branch, wanted.name.as_str()],
     )?;
     for need in needs {
         tx.execute("INSERT INTO pr_needs (plan, pr, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), wanted.key.as_str(), need.as_str()])?;
@@ -187,7 +215,7 @@ fn reopen(tx: &WriteTxn<'_>, plan: &PlanId, from: Phase, key: &PrKey) -> Result<
             .with("plan", plan.as_str()));
     }
     let text = format!("Plan {plan} is back in dispatch: PR {key} was added.");
-    append(tx, NewEvent::new(Kind::PlanPhase, text, json!({"from": from.as_str(), "to": "dispatch"})).plan(plan.clone()))?;
+    append(tx, NewEvent::plan_phase(text, from.as_str(), "dispatch").plan(plan.clone()))?;
     Ok(())
 }
 

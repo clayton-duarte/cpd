@@ -91,8 +91,8 @@ pub enum Action {
     /// `plan new <id> --context=<c> --title=<title>` (§4.1): `n` (the title is the id) and New Plan….
     /// The Lead forks the Context's grounded Lead (R15).
     NewPlan { context: ContextId, id: PlanId, title: String },
-    /// `context new <id> --title=<title>` (§3.1): New Context….
-    NewContext { id: ContextId, title: String },
+    /// `context new <id> --title=<title> --owner=<login>` (§3.1): New Context….
+    NewContext { id: ContextId, title: String, owner: String },
     /// `context rename <id> --title=<title>` (§3.7).
     RenameContext { id: ContextId, title: String },
     /// `plan rename --plan=<id> --title=<title>` (§4.9).
@@ -111,6 +111,9 @@ pub enum Action {
     /// `tmux set-buffer -w -- <id>` (hs-d102): the menu's Copy id; the id is the one the row shows. The only action
     /// that is no `cpd` command.
     CopyId(String),
+    /// `tmux set-buffer -w -- <url>`: a click on an Inbox item that only has a link (no Plan to open). The note says
+    /// the modifier-click opens it.
+    CopyUrl(String),
     /// `inbox snooze <id> <15m|1h|tomorrow>` (§21.3): the Inbox menu's and `s`'s Snooze entries.
     Snooze { item: i64, until: Until },
     /// `inbox dismiss <id>` (§21.4): the Inbox menu's Dismiss and `d`.
@@ -135,7 +138,9 @@ impl Action {
                 argv.extend([format!("--context={context}"), format!("--title={title}")]);
                 argv
             }
-            Action::NewContext { id, title } => vec!["context".into(), "new".into(), id.to_string(), format!("--title={title}")],
+            Action::NewContext { id, title, owner } => {
+                vec!["context".into(), "new".into(), id.to_string(), format!("--title={title}"), format!("--owner={owner}")]
+            }
             Action::RenameContext { id, title } => vec!["context".into(), "rename".into(), id.to_string(), format!("--title={title}")],
             Action::RenamePlan { id, title } => vec!["plan".into(), "rename".into(), format!("--plan={id}"), format!("--title={title}")],
             Action::RenameSession { id, name } => {
@@ -145,7 +150,7 @@ impl Action {
             Action::Close(id) => words(&["session", "close", id.as_str()]),
             Action::Archive { subject, .. } => subject.command("archive"),
             Action::Unarchive(subject) => subject.command("unarchive"),
-            Action::CopyId(id) => words(&["set-buffer", "-w", "--", id.as_str()]),
+            Action::CopyId(text) | Action::CopyUrl(text) => words(&["set-buffer", "-w", "--", text.as_str()]),
             Action::Snooze { item, until } => words(&["inbox", "snooze", &item.to_string(), until.arg()]),
             Action::Dismiss(item) => words(&["inbox", "dismiss", &item.to_string()]),
         }
@@ -199,6 +204,7 @@ impl Action {
             Action::Unarchive(_) if reply["already"] == true => "already unarchived".into(),
             Action::Unarchive(_) => "unarchived".into(),
             Action::CopyId(id) => format!("copied {id}"),
+            Action::CopyUrl(url) => format!("copied {url}: Cmd-click the row to open it"),
             Action::Snooze { .. } => "snoozed".into(),
             Action::Dismiss(_) => "dismissed".into(),
         }
@@ -229,7 +235,7 @@ impl Runner {
         let mut note = String::new();
         for step in action.steps() {
             let reply = match step {
-                Action::CopyId(_) => self.tmux.run(&step.argv()).map(|_| Value::Null).map_err(|e| e.message().to_owned())?,
+                Action::CopyId(_) | Action::CopyUrl(_) => self.tmux.run(&step.argv()).map(|_| Value::Null).map_err(|e| e.message().to_owned())?,
                 _ => command(&step)?,
             };
             note = step.done(&reply);
@@ -355,8 +361,12 @@ mod tests {
                 vec!["plan", "new", "pay-4521", "--context=alpha", "--title=Pay 4521"],
             ),
             (
-                Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into() },
-                vec!["context", "new", "building-cpd", "--title=Building cpd!"],
+                Action::NewContext {
+                    id: ContextId::parse("building-cpd").unwrap(),
+                    title: "Building cpd!".into(),
+                    owner: "clayton-duarte".into(),
+                },
+                vec!["context", "new", "building-cpd", "--title=Building cpd!", "--owner=clayton-duarte"],
             ),
             (
                 Action::RenameContext { id: ContextId::parse("alpha").unwrap(), title: "-Dash".into() },
@@ -400,6 +410,13 @@ mod tests {
     }
 
     #[test]
+    fn copy_url_is_the_same_tmux_command_and_its_note_says_how_to_open_the_link() {
+        let copy = Action::CopyUrl("https://x.io/1".into());
+        assert_eq!(sequence(&copy), [vec!["set-buffer", "-w", "--", "https://x.io/1"]]);
+        assert_eq!(copy.done(&json!(null)), "copied https://x.io/1: Cmd-click the row to open it");
+    }
+
+    #[test]
     fn new_plan_and_fork_are_followed_by_session_open_of_the_new_session_from_the_reply() {
         let new = Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay").unwrap(), title: "Pay".into() };
         let reply = json!({"ok": true, "plan": {"id": "pay", "lead_session": "8d0e"}, "lead": {"session": "8d0e", "pane": "%41"}});
@@ -432,7 +449,7 @@ mod tests {
         assert_eq!(close.done(&json!({"ok": true, "already": true})), "session is already gone");
         let new = Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay").unwrap(), title: "Pay".into() };
         assert_eq!(new.done(&json!({"ok": true})), "forking pay in window park-pay");
-        let context = Action::NewContext { id: ContextId::parse("alpha").unwrap(), title: "Alpha".into() };
+        let context = Action::NewContext { id: ContextId::parse("alpha").unwrap(), title: "Alpha".into(), owner: "o".into() };
         assert_eq!(context.done(&json!({"ok": true})), "created alpha");
         let rename = Action::RenameSession { id: sid("f-idle"), name: "x".into() };
         assert_eq!(rename.done(&json!({"ok": true, "name": "x"})), "renamed");

@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::spec::{self, Spec};
 use super::{AddArgs, Env, check_needs_available, check_needs_known, check_needs_same_pr, check_pr_live, plan_phase, sorted_needs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::{JobKey, PlanId};
 use crate::output::Output;
 use crate::args::PrArg;
@@ -73,10 +73,15 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                 let text = format!("Job {} added to Plan {plan} as {}. Next: cpd job show {} --plan {plan}", job.key, job.status, job.key);
                 append(
                     tx,
-                    NewEvent::new(
-                        Kind::JobAdded,
+                    NewEvent::job_added(
                         text,
-                        json!({"pr": job.pr, "status": job.status, "appended": job.appended, "tier": job.tier, "needs": job.needs, "review": wanted.review, "urgent": job.urgent}),
+                        &job.pr,
+                        &job.status,
+                        job.appended,
+                        job.tier.as_deref(),
+                        &job.needs,
+                        wanted.review,
+                        job.urgent,
                     )
                     .plan(plan.clone())
                     .job(wanted.key.clone()),
@@ -117,7 +122,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
         .with("phase", phase));
     }
     let prs = load_prs(conn, plan)?;
-    let pr = wanted.pr.select(plan, &prs)?.key.clone();
+    let pr = wanted.pr.select(plan, &prs)?.key.to_string();
     check_pr_live(&prs, plan, &pr)?;
     let all = jobs::load(conn, plan)?;
     let needs = if wanted.review { review_needs(&all, plan, &pr, wanted.key.as_str())? } else { wanted.needs.clone() };

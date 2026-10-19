@@ -22,8 +22,11 @@ pub enum Ask {
     RenameSession(SessionId),
     /// `Fork…` and `New session…`: the name of a Session forked from `source`.
     Fork { source: SessionId },
-    /// The title of a new Context; its id is derived against the ids `taken`.
-    NewContext { taken: Vec<String> },
+    /// The title of a new Context; its id is derived against the ids `taken`. `owners` are the owner policies of the
+    /// instance (at least one): with one it is the owner, with several the owner is asked next ([`Ask::NewContextOwner`]).
+    NewContext { taken: Vec<String>, owners: Vec<String> },
+    /// The owner (one of `owners`) of the new Context `id` titled `title`.
+    NewContextOwner { id: ContextId, title: String, owners: Vec<String> },
     /// The title of a new Plan in `context` (R34 A12: no repo; the Plan's PRs name theirs).
     NewPlan { context: ContextId, taken: Vec<String> },
     /// `n`: the id of a new Plan in `context`, forked from the Session `label`.
@@ -40,6 +43,7 @@ impl Ask {
             Ask::RenameContext(_) | Ask::RenamePlan(_) | Ask::NewContext { .. } | Ask::NewPlan { .. } => "Title:".into(),
             Ask::RenameSession(_) | Ask::Fork { .. } => "Name:".into(),
             Ask::NamedPlan { label, .. } => format!("Fork {label} into a new Plan, name:"),
+            Ask::NewContextOwner { owners, .. } => format!("Owner ({}):", owners.join(", ")),
         }
     }
 
@@ -48,20 +52,31 @@ impl Ask {
             Ask::RenameContext(_) | Ask::RenamePlan(_) | Ask::NewContext { .. } | Ask::NewPlan { .. } => Validator::Title,
             Ask::RenameSession(_) | Ask::Fork { .. } => Validator::Name,
             Ask::NamedPlan { .. } => Validator::PlanId,
+            Ask::NewContextOwner { .. } => Validator::Name,
         }
     }
 
-    /// The command for the `text` the popup accepted; or why it is refused after all.
-    fn answer(&self, text: String) -> Result<Action, String> {
+    /// The command for the `text` the popup accepted, or a further question; or why it is refused after all.
+    fn answer(&self, text: String) -> Result<Step, String> {
         let refuse = |e: CpdError| e.message().to_owned();
-        Ok(match self {
+        Ok(Step::Run(match self {
             Ask::RenameContext(id) => Action::RenameContext { id: id.clone(), title: text },
             Ask::RenamePlan(id) => Action::RenamePlan { id: id.clone(), title: text },
             Ask::RenameSession(id) => Action::RenameSession { id: id.clone(), name: text },
             Ask::Fork { source } => Action::Fork { source: source.clone(), name: text },
-            Ask::NewContext { taken } => {
+            Ask::NewContext { taken, owners } => {
                 let id = slug::derive(&text, CONTEXT_MAX, |id| taken.iter().any(|t| t == id)).ok_or(NO_ID)?;
-                Action::NewContext { id: ContextId::parse(&id).map_err(refuse)?, title: text }
+                let id = ContextId::parse(&id).map_err(refuse)?;
+                match owners.as_slice() {
+                    [owner] => Action::NewContext { id, title: text, owner: owner.clone() },
+                    _ => return Ok(Step::Ask(Ask::NewContextOwner { id, title: text, owners: owners.clone() })),
+                }
+            }
+            Ask::NewContextOwner { id, title, owners } => {
+                if !owners.contains(&text) {
+                    return Err(format!("No owner policy {text}: choose one of {}.", owners.join(", ")));
+                }
+                Action::NewContext { id: id.clone(), title: title.clone(), owner: text }
             }
             Ask::NewPlan { context, taken } => {
                 let id = slug::derive(&text, PLAN_MAX, |id| taken.iter().any(|t| t == id)).ok_or(NO_ID)?;
@@ -72,8 +87,15 @@ impl Ask {
                 let title = id.to_string();
                 Action::NewPlan { context: context.clone(), id, title }
             }
-        })
+        }))
     }
+}
+
+/// What the text accepted for an [`Ask`] leads to.
+enum Step {
+    Run(Action),
+    /// A further question, in a further popup with the same title.
+    Ask(Ask),
 }
 
 /// A popup the tree opens before it runs a command.
@@ -120,10 +142,19 @@ impl Question {
     pub fn ask(self, dialogs: &impl Dialogs) -> Result<Option<Action>, String> {
         let failed = |e: CpdError| e.message().to_owned();
         match self {
-            Question::Input { title, ask, initial } => match dialogs.input(title, &ask.prompt(), &initial, ask.validator()).map_err(failed)? {
-                Some(text) => ask.answer(text).map(Some),
-                None => Ok(None),
-            },
+            Question::Input { title, mut ask, initial } => {
+                let mut initial = initial;
+                loop {
+                    let Some(text) = dialogs.input(title, &ask.prompt(), &initial, ask.validator()).map_err(failed)? else { return Ok(None) };
+                    match ask.answer(text)? {
+                        Step::Run(action) => return Ok(Some(action)),
+                        Step::Ask(next) => {
+                            ask = next;
+                            initial = String::new();
+                        }
+                    }
+                }
+            }
             Question::Confirm { title, text, yes_label, then } => Ok(dialogs.confirm(title, &text, yes_label).map_err(failed)?.then_some(then)),
         }
     }
@@ -208,7 +239,7 @@ mod tests {
         };
         assert_eq!(label(Ask::RenameContext(cpd()), "Rename", "Alpha"), ["input Rename | Title: | Alpha | title"]);
         assert_eq!(label(Ask::RenamePlan(PlanId::parse("ship").unwrap()), "Rename", "Ship"), ["input Rename | Title: | Ship | title"]);
-        assert_eq!(label(Ask::NewContext { taken: vec![] }, "New Context", ""), ["input New Context | Title: |  | title"]);
+        assert_eq!(label(Ask::NewContext { taken: vec![], owners: vec!["o".into()] }, "New Context", ""), ["input New Context | Title: |  | title"]);
         assert_eq!(label(Ask::NewPlan { context: cpd(), taken: vec![] }, "New Plan", ""), ["input New Plan | Title: |  | title"]);
         assert_eq!(label(Ask::RenameSession(sid()), "Rename", "ship"), ["input Rename | Name: | ship | name"]);
         assert_eq!(label(Ask::Fork { source: sid() }, "Fork", "ship (fork)"), ["input Fork | Name: | ship (fork) | name"]);
@@ -218,15 +249,15 @@ mod tests {
 
     #[test]
     fn a_cancelled_input_runs_nothing() {
-        for ask in [Ask::RenameContext(cpd()), Ask::Fork { source: sid() }, Ask::NewContext { taken: vec![] }, Ask::NamedPlan { context: cpd(), label: "x".into() }] {
+        for ask in [Ask::RenameContext(cpd()), Ask::Fork { source: sid() }, Ask::NewContext { taken: vec![], owners: vec!["o".into()] }, Ask::NamedPlan { context: cpd(), label: "x".into() }] {
             assert_eq!(input(ask, "x").ask(&Stub::cancelling()), Ok(None));
         }
     }
 
     #[test]
     fn new_context_derives_its_id_from_the_title_against_the_taken_ones() {
-        let run = |ids: &[&str]| input(Ask::NewContext { taken: taken(ids) }, "").ask(&Stub::typing("Building cpd!"));
-        let new = |id: &str| Ok(Some(Action::NewContext { id: ContextId::parse(id).unwrap(), title: "Building cpd!".into() }));
+        let run = |ids: &[&str]| input(Ask::NewContext { taken: taken(ids), owners: vec!["o".into()] }, "").ask(&Stub::typing("Building cpd!"));
+        let new = |id: &str| Ok(Some(Action::NewContext { id: ContextId::parse(id).unwrap(), title: "Building cpd!".into(), owner: "o".into() }));
         assert_eq!(run(&[]), new("building-cpd"));
         assert_eq!(run(&["building-cpd"]), new("building-cpd-2"));
         assert_eq!(run(&["building-cpd", "building-cpd-2"]), new("building-cpd-3"));
@@ -242,7 +273,7 @@ mod tests {
     #[test]
     fn a_title_with_no_id_in_it_is_refused_with_its_reason() {
         for title in ["123", "!"] {
-            assert_eq!(input(Ask::NewContext { taken: vec![] }, "").ask(&Stub::typing(title)), Err(NO_ID.to_owned()), "{title}");
+            assert_eq!(input(Ask::NewContext { taken: vec![], owners: vec!["o".into()] }, "").ask(&Stub::typing(title)), Err(NO_ID.to_owned()), "{title}");
             assert_eq!(input(Ask::NewPlan { context: cpd(), taken: vec![] }, "").ask(&Stub::typing(title)), Err(NO_ID.to_owned()), "{title}");
         }
     }
