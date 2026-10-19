@@ -230,14 +230,16 @@ fn plan_reviews(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, Cpd
     Ok(out)
 }
 
-/// `job-stuck`: a Job is `failed` and its latest `job-failed` Event is at least `stuck_after` old.
+/// `job-stuck`: a Job is `failed`, its latest `job-failed` Event is at least `stuck_after` old, and its Plan's Lead is not
+/// `working` (audit Q1: a working Lead is handling the failure; the item opens at the next tick after it stops).
 fn job_stuck(conn: &Connection, now: OffsetDateTime, stuck_after: Duration) -> Result<Vec<Condition>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT j.plan, j.key, p.context, p.lead_session, e.id, e.at
            FROM jobs j
            JOIN plans p ON p.id = j.plan
            JOIN events e ON e.id = (SELECT max(f.id) FROM events f WHERE f.plan = j.plan AND f.job = j.key AND f.kind = 'job-failed')
-          WHERE j.status = 'failed'
+           JOIN sessions l ON l.id = p.lead_session
+          WHERE j.status = 'failed' AND l.state <> 'working'
           ORDER BY e.id",
     )?;
     let mut rows = stmt.query([])?;
@@ -737,6 +739,7 @@ mod tests {
     #[test]
     fn a_job_failed_for_the_stuck_time_is_job_stuck_and_clears_on_retry() {
         let mut f = fixture("dispatch");
+        f.state("l-pay", "idle", None);
         f.job("a", "failed");
         f.event("job-failed", None, Some("a"), "2026-01-01T00:00:00.000Z", r#"{}"#);
         let latest = f.event("job-failed", None, Some("a"), "2026-01-01T23:50:00.000Z", r#"{}"#);
@@ -753,6 +756,7 @@ mod tests {
     #[test]
     fn a_job_failed_less_than_the_stuck_time_ago_is_not_yet_stuck() {
         let mut f = fixture("dispatch");
+        f.state("l-pay", "idle", None);
         f.job("a", "failed");
         f.event("job-failed", None, Some("a"), "2026-01-01T23:50:01.000Z", r#"{}"#);
         assert!(f.of(Kind::JobStuck).is_empty(), "9 min 59 s");
@@ -761,6 +765,22 @@ mod tests {
         f.job("b", "queued");
         f.event("job-failed", None, Some("b"), T, r#"{}"#);
         assert_eq!(f.of(Kind::JobStuck).len(), 1, "a Job that is not failed is never stuck");
+    }
+
+    #[test]
+    fn a_failed_job_is_not_stuck_while_its_lead_works_and_is_at_the_next_tick_after_it_stops() {
+        let mut f = fixture("dispatch");
+        f.job("a", "failed");
+        f.event("job-failed", None, Some("a"), "2026-01-01T00:00:00.000Z", r#"{}"#);
+        assert!(f.of(Kind::JobStuck).is_empty(), "the Lead is working: it handles the failure (audit Q1)");
+        f.state("l-pay", "idle", None);
+        assert_eq!(one(f.of(Kind::JobStuck)).subject, "job:pay/a", "the Lead stopped working");
+        f.state("l-pay", "working", None);
+        assert!(f.of(Kind::JobStuck).is_empty(), "working again");
+        for state in ["waiting", "blocked", "stopped"] {
+            f.state("l-pay", state, (state != "stopped").then_some("Which?"));
+            assert_eq!(f.of(Kind::JobStuck).len(), 1, "a {state} Lead is not working");
+        }
     }
 
     // ---- engine-error ----

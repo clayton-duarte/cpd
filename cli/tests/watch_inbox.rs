@@ -161,6 +161,7 @@ fn a_blocked_lead_in_dispatch_is_a_red_dialog_until_it_works_again() {
 #[test]
 fn a_failed_job_is_stuck_only_after_stuck_job_minutes() {
     let fx = fx();
+    fx.fixture("UPDATE sessions SET state = 'idle' WHERE id = 'lead1';"); // a working Lead holds job-stuck back (audit Q1)
     fx.failed_job("old", 2);
     fx.failed_job("new", 0);
     let _engine = fx.start();
@@ -184,6 +185,7 @@ fn a_failed_job_is_stuck_only_after_stuck_job_minutes() {
 #[test]
 fn a_tick_with_no_change_writes_no_transaction() {
     let fx = fx();
+    fx.fixture("UPDATE sessions SET state = 'idle' WHERE id = 'lead1';"); // a working Lead holds job-stuck back (audit Q1)
     fx.failed_job("old", 2);
     let _engine = fx.start();
     wait_until("job-stuck", || !fx.open_items().is_empty());
