@@ -536,16 +536,18 @@ fn the_tree_follows_the_events_of_the_store() {
 
 /// A failed snapshot keeps the tree on screen and shows the error in the footer; the next refresh takes the snapshot
 /// again, with no Event needed, and the error goes when it succeeds (tui-W4). The read is made to fail by renaming the
-/// table it reads.
+/// table it reads; the snapshot is taken because an Event came (a store opened before the rename appends it).
 #[test]
 fn a_failed_snapshot_keeps_the_tree_and_shows_the_error_until_a_snapshot_succeeds() {
     let env = env();
     populate(&env);
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
+    let mut store = open(&env);
     // not through `Store`, which refuses a changed schema
     let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
     raw("ALTER TABLE sessions RENAME TO sessions_gone;");
+    sql(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), '2026-02-01T00:00:00.000Z', 'session-state', 'fixture', '{}');");
     let screen = pane.wait("the error in the footer", |s| s.iter().any(|r| r.contains("no such table")));
     assert!(screen.iter().any(|r| r.starts_with(" ▾ ● alpha")), "the tree stays: {screen:?}");
     raw("ALTER TABLE sessions_gone RENAME TO sessions;");

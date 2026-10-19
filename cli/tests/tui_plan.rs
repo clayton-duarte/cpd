@@ -475,19 +475,20 @@ fn a_pull_request_box_title_ends_in_a_link_to_it_and_a_pending_review_is_a_row_a
 }
 
 #[test]
-fn a_conflict_shows_in_the_box_title_and_clears_with_no_event_within_the_refresh() {
+fn a_conflict_shows_in_the_box_title_and_clears_with_no_event() {
     let env = env();
     sql(&env, &plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
     let pane = start_view(&env);
     let title = |s: &[String], word: &str| s.iter().any(|l| l.contains(&format!("#7 {word} ↗")));
     screen_when(&env, &pane, "the open title", |s| title(s, "open"));
 
-    // the poll stored a conflict: no Event is appended for the view to wake on, so only the 2 s re-read shows it
-    sql(&env, "UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 7;");
+    // the poll stored a conflict: no Event is appended for the view to wake on, so only the change of the row shows it
+    // (the poll sets `changed_at` with every change, contract §4.4)
+    sql(&env, "UPDATE pull_requests SET mergeable = 'conflicting', changed_at = '2026-02-01T00:00:01.000Z' WHERE number = 7;");
     screen_when(&env, &pane, "conflict", |s| title(s, "conflict"));
 
     // `unknown` is not a conflict
-    sql(&env, "UPDATE pull_requests SET mergeable = 'unknown' WHERE number = 7;");
+    sql(&env, "UPDATE pull_requests SET mergeable = 'unknown', changed_at = '2026-02-01T00:00:02.000Z' WHERE number = 7;");
     screen_when(&env, &pane, "open again", |s| title(s, "open"));
 }
 
@@ -501,9 +502,18 @@ fn a_failed_snapshot_keeps_the_chart_and_shows_the_error_until_a_snapshot_succee
     let pane = start_view(&env);
     let title = |s: &[String]| s.iter().any(|l| l.contains("#7 open ↗"));
     screen_when(&env, &pane, "the chart", title);
+    let mut store = open(&env);
     // not through `Store`, which refuses a changed schema
     let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
     raw("ALTER TABLE jobs RENAME TO jobs_gone;");
+    // the snapshot is taken because an Event of the Plan came (the store was opened before the rename)
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch("INSERT INTO events (txn, at, kind, context, plan, text, data)
+                 VALUES (cpd_txn(), '2026-02-01T00:00:00.000Z', 'plan-phase', 'ctx', 'ship', 'fixture', '{}');")?;
+            Ok::<(), CpdError>(())
+        })
+        .unwrap();
     screen_when(&env, &pane, "the error", |s| s.iter().any(|l| l.contains("no such table")));
     // the poll is 50 ms: an error cleared by the next poll's success (the old behaviour) would be gone by now
     std::thread::sleep(Duration::from_secs(1));

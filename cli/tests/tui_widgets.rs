@@ -154,7 +154,7 @@ fn render(width: u16, height: u16, w: &Widgets) -> Buffer {
 fn render_hits(width: u16, height: u16, w: &Widgets, note: &str) -> (Buffer, Vec<Hit>) {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     let mut hits = vec![];
-    terminal.draw(|f| hits = widgets::draw(f, f.area(), w, &machine(), note)).unwrap();
+    terminal.draw(|f| hits = widgets::draw(f, f.area(), &w.prs, &machine(), note)).unwrap();
     (terminal.backend().buffer().clone(), hits)
 }
 
@@ -251,7 +251,7 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let w = read::widgets(&mut open(&env), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
     let machine = Machine { name: "homeserver".to_owned(), load: ["0.1", "0.2", "0.3"].map(str::to_owned).to_vec() };
-    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w, &machine, ""))).unwrap();
+    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine, ""))).unwrap();
     let lines = rows(terminal.backend().buffer());
     let head = |title: &str| format!("── {title} {}", "─".repeat(30 - 4 - title.chars().count()));
     assert_eq!(lines[..3], ["", " homeserver", " load 0.1 0.2 0.3"]);

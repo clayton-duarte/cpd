@@ -41,6 +41,14 @@ fn sql(env: &TestEnv, text: &str) {
         .unwrap();
 }
 
+/// An Event of kind `kind` for Plan `ship`: what moves the view.
+fn event(kind: &str) -> String {
+    format!(
+        "INSERT INTO events (txn, at, kind, context, plan, text, data)
+         VALUES (cpd_txn(), '2026-01-03T00:00:00.000Z', '{kind}', 'ctx', 'ship', 'fixture', '{{}}');"
+    )
+}
+
 /// One Plan `ship` with one Job per entry of `attempts`, each with one Attempt in that status.
 fn plan_with_attempts(attempts: &[&str]) -> String {
     let mut s = format!(
@@ -133,8 +141,8 @@ fn the_workers_follow_the_slots() {
     // test); this one uses a row wide enough for the long form
     let pane = start_view(&env, 40);
     row_ending(&env, &pane, "workers 0/4");
-    // an Attempt takes a slot: the view re-reads when the store's Events move, or within 2 s
-    sql(&env, &attempt_row(1, "running"));
+    // an Attempt takes a slot, with its Event (`attempt-started`): the view re-reads when the store's Events move
+    sql(&env, &(attempt_row(1, "running") + &event("attempt-started")));
     row_ending(&env, &pane, "workers 1/4");
 }
 
@@ -146,9 +154,17 @@ fn a_failed_read_keeps_the_workers_and_shows_the_error_until_a_read_succeeds() {
     sql(&env, &plan_with_attempts(&["running"]));
     let pane = start_view(&env, 120);
     row_ending(&env, &pane, "workers 1/4");
+    let mut store = Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap();
     // not through `Store`, which refuses a changed schema
     let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
     raw("ALTER TABLE attempts RENAME TO attempts_gone;");
+    // the read is made because an Event came (the store was opened before the rename)
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(&event("attempt-status"))?;
+            Ok::<(), CpdError>(())
+        })
+        .unwrap();
     let mut row = String::new();
     wait_until("the error in the row", || {
         row = tmux_out(&env, &["capture-pane", "-p", "-t", &pane]).lines().next().unwrap_or("").to_owned();
