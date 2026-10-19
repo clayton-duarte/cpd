@@ -9,7 +9,7 @@
 //! - [`actions`]: what it does, as `cpd` commands (`session open`, `plan new`, `session close`, the menu's), and the
 //!   legend popup; [`slug`]: the id of a new Context or Plan, from its title;
 //! - [`inbox`]: the Inbox section at the column's bottom (header, up to 3 items, `+N more`) and what a click on an item does:
-//!   `session open`, the logs popup at the item's Event, or nothing (the label is an OSC 8 link);
+//!   `session open`, or nothing (the label is an OSC 8 link);
 //! - [`follow`]: `cpd events follow`, which tells it when to take a new snapshot.
 //!
 //! Keys and clicks are the reference's (commands.md §13.2, `tui/README.md` "Context column" on `main`): arrows
@@ -138,12 +138,6 @@ fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View,
             Effect::Legend => {
                 // `display-popup` returns when the popup closes; only a failure is said
                 if let Err(why) = runner.legend() {
-                    view.done(Err(why));
-                }
-            }
-            Effect::Logs(event) => {
-                // `display-popup` returns when the popup closes; only a failure is said
-                if let Err(why) = runner.logs(event) {
                     view.done(Err(why));
                 }
             }

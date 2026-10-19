@@ -1,5 +1,5 @@
 //! The rules of the Inbox (contract §2.2 "Inbox item", step E8 in §3.7): from the
-//! store, the clock and the engine's active errors, the [`Condition`]s that need
+//! store and the clock, the [`Condition`]s that need
 //! the User right now. Each kind is one small function and one query; none writes.
 //! [`super::model::reconcile`] opens and closes the items.
 
@@ -18,34 +18,22 @@ use crate::ids::{ContextId, JobKey, PlanId, SessionId};
 use crate::plan::Phase;
 use crate::store::Store;
 
-/// An `error` the engine reported for a step of its own and has not cleared (§3.7).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EngineError {
-    pub step: String,
-    pub scope: String,
-    pub code: String,
-    /// The id of its `error` Event.
-    pub event: i64,
-}
-
 /// The `state_label` of a `blocked` Session that is not a dialog: a plan review has its own kind. A Worker's question
 /// goes to its Lead, and the Lead that waits for the Worker is `waiting`, not `blocked` (hs-d303).
 const PLAN_REVIEW: &str = "cpd: plan review";
 
 /// Every condition of the kinds, in the order of the kinds. `now` and
-/// `stuck_after` decide `job-stuck`; `errors` are the engine's active ones.
+/// `stuck_after` decide `job-stuck`. There is no `engine-error` (hs-d314: the engine's errors go to the Manager).
 pub fn conditions(
     store: &mut Store,
     home: &CpdHome,
     now: OffsetDateTime,
     stuck_after: Duration,
-    errors: &[EngineError],
 ) -> Result<Vec<Condition>, CpdError> {
     let mut all = store.read(dialogs)?;
     all.extend(store.read(|conn| plan_reviews(conn, home))?);
     all.extend(store.read(unread)?);
     all.extend(store.read(|conn| job_stuck(conn, now, stuck_after))?);
-    all.extend(engine_errors(errors));
     // No `question` kind (hs-d306 (1)): an open Context question opens nothing, and an item an older engine opened for
     // one closes at the next reconcile, its condition no longer holding. Questions to the User go through `ask_user_question`.
     all.extend(store.read(pr_failing)?);
@@ -268,28 +256,6 @@ fn job_stuck(conn: &Connection, now: OffsetDateTime, stuck_after: Duration) -> R
     Ok(out)
 }
 
-// ---- The engine: engine-error ------------------------------------------------------------------------------------
-
-/// `engine-error`: one per error the engine reported and has not cleared.
-fn engine_errors(errors: &[EngineError]) -> Vec<Condition> {
-    errors
-        .iter()
-        .map(|e| Condition {
-            kind: Kind::EngineError,
-            urgency: Urgency::Red,
-            subject: format!("error:{}/{}/{}", e.step, e.scope, e.code),
-            label: format!("engine {}: {}", e.step, e.code),
-            url: None,
-            context: None,
-            plan: None,
-            job: None,
-            session: None,
-            record: None,
-            event: Some(e.event),
-        })
-        .collect()
-}
-
 // ---- Pull requests: pr-failing, pr-changes, pr-ready, review-requested -------------------------------------------
 
 /// The open `pull_requests` rows that match `filter`, a SQL condition over `r`, oldest first, as conditions of `kind`
@@ -505,7 +471,7 @@ mod tests {
         }
 
         fn of(&mut self, kind: Kind) -> Vec<Condition> {
-            let all = conditions(&mut self.store, &self.home, NOW, TEN, &[]).unwrap();
+            let all = conditions(&mut self.store, &self.home, NOW, TEN).unwrap();
             all.into_iter().filter(|c| c.kind == kind).collect()
         }
     }
@@ -597,7 +563,7 @@ mod tests {
         f.state("wk", "idle", None);
         assert!(f.of(Kind::Unread).is_empty());
         f.state("wk", "waiting", Some("cpd: question to the Lead"));
-        assert!(conditions(&mut f.store, &f.home, NOW, TEN, &[]).unwrap().is_empty());
+        assert!(conditions(&mut f.store, &f.home, NOW, TEN).unwrap().is_empty());
     }
 
     // ---- unread ----
@@ -783,20 +749,6 @@ mod tests {
         }
     }
 
-    // ---- engine-error ----
-
-    #[test]
-    fn each_engine_error_is_an_item_and_none_when_cleared() {
-        let mut f = fixture("dispatch");
-        let error = EngineError { step: "E3".into(), scope: "plan:pay".into(), code: "store_failed".into(), event: 41 };
-        let found = conditions(&mut f.store, &f.home, NOW, TEN, std::slice::from_ref(&error)).unwrap();
-        let c = one(found);
-        assert_eq!(c.kind, Kind::EngineError);
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Red, "error:E3/plan:pay/store_failed", "engine E3: store_failed"));
-        assert_eq!((c.event, c.session, c.plan), (Some(41), None, None));
-        assert!(conditions(&mut f.store, &f.home, NOW, TEN, &[]).unwrap().is_empty());
-    }
-
     // ---- question ----
 
     /// A record of `kind` in `context` (made if need be); an `answer` answers `hs-q1`.
@@ -815,7 +767,7 @@ mod tests {
         record(&mut f, "ctx", "hs-q1", "question");
         record(&mut f, "ctx", "hs-d1", "decision");
         assert!(f.of(Kind::Question).is_empty());
-        assert!(conditions(&mut f.store, &f.home, NOW, TEN, &[]).unwrap().is_empty());
+        assert!(conditions(&mut f.store, &f.home, NOW, TEN).unwrap().is_empty());
     }
 
     /// hs-d306 (1): the `question` kind is dropped, so an item an older engine opened for an open question closes at the
@@ -828,7 +780,7 @@ mod tests {
             "INSERT INTO inbox_items (kind, urgency, subject, label, context, record, opened_at)
              VALUES ('question', 'magenta', 'record:ctx/hs-q1', 'hs-q1 open question', 'ctx', 'hs-q1', '{T}')"
         ));
-        let found = conditions(&mut f.store, &f.home, NOW, TEN, &[]).unwrap();
+        let found = conditions(&mut f.store, &f.home, NOW, TEN).unwrap();
         let changes = crate::inbox::model::reconcile(&mut f.store, &found, T).unwrap();
         assert_eq!((changes.opened.len(), changes.closed.len()), (0, 1));
         let open: i64 = f.store.read(|c| Ok(c.query_row("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL", [], |r| r.get(0))?)).unwrap();
@@ -852,7 +804,7 @@ mod tests {
     }
 
     fn pr_kinds(f: &mut Fixture) -> Vec<Kind> {
-        let all = conditions(&mut f.store, &f.home, NOW, TEN, &[]).unwrap();
+        let all = conditions(&mut f.store, &f.home, NOW, TEN).unwrap();
         all.into_iter().map(|c| c.kind).collect()
     }
 
@@ -1018,24 +970,19 @@ mod tests {
     #[test]
     fn conditions_come_in_the_order_of_the_kinds_and_a_quiet_store_has_none() {
         let mut f = fixture("dispatch");
-        assert!(conditions(&mut f.store, &f.home, NOW, TEN, &[]).unwrap().is_empty());
+        assert!(conditions(&mut f.store, &f.home, NOW, TEN).unwrap().is_empty());
         f.state("l-pay", "blocked", Some("Which?"));
         f.review("r1", "pending");
         f.reply("mgr");
         f.job("a", "failed");
         f.event("job-failed", None, Some("a"), T, r#"{}"#);
-        let error = EngineError { step: "E8".into(), scope: "machine".into(), code: "x".into(), event: 1 };
-        let kinds: Vec<_> =
-            conditions(&mut f.store, &f.home, NOW, TEN, &[error]).unwrap().into_iter().map(|c| c.kind).collect();
-        assert_eq!(
-            kinds,
-            [Kind::Dialog, Kind::PlanReview, Kind::Unread, Kind::JobStuck, Kind::EngineError]
-        );
+        let kinds: Vec<_> = conditions(&mut f.store, &f.home, NOW, TEN).unwrap().into_iter().map(|c| c.kind).collect();
+        assert_eq!(kinds, [Kind::Dialog, Kind::PlanReview, Kind::Unread, Kind::JobStuck]);
         pull_request(&mut f, 1, "failed", "mergeable", "changes_requested");
         pull_request(&mut f, 2, "passed", "mergeable", "approved");
         f.sql("INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored, review_requested)
                VALUES ('o/r', 3, 'u', 'T', 0, 'open', 'none', 'none', 't', 't', 0, 1)");
-        let tail: Vec<_> = conditions(&mut f.store, &f.home, NOW, TEN, &[]).unwrap().into_iter().map(|c| c.kind).skip(4).collect();
+        let tail: Vec<_> = conditions(&mut f.store, &f.home, NOW, TEN).unwrap().into_iter().map(|c| c.kind).skip(4).collect();
         assert_eq!(tail, [Kind::PrFailing, Kind::PrChanges, Kind::PrReady, Kind::ReviewRequested]);
     }
 }

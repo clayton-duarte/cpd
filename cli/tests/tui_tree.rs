@@ -1160,7 +1160,7 @@ fn the_inbox_sections_more_row_expands_the_list_inline_and_less_folds_it() {
     assert!(calls(&env).is_empty(), "expanding and folding are no commands");
 }
 
-/// `populate`'s items and one of each kind that jumps or links; the engine-error is caused by Event `event`.
+/// `populate`'s items and one of each kind that jumps or links; the old engine-error row is caused by Event `event`.
 fn jumping_items(event: i64) -> Vec<Condition> {
     let other = |kind, urgency, subject: &str, label: &str| Condition {
         subject: subject.to_owned(),
@@ -1256,12 +1256,8 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     pane.click(10, row_of("acme/api#12 failing"));
     copied(4, "https://github.com/acme/api/pull/12");
     pane.wait("the note", |_| pane.footer_has("copied https://github.com/acme/api/pull/12: Cmd-click the"));
-    // engine-error: the logs popup at the item's Event
+    // engine-error, a row an older engine opened (hs-d314): no click; `settled_with_a_client` fails on any popup but the legend's
     pane.click(10, row_of("engine: store busy"));
-    common::wait_until("the logs popup", || popups(&env).len() == 2);
-    let popups = popups(&env);
-    assert_eq!(popups[1].last().unwrap(), &format!("cpd tui view logs --event {event}"));
-    assert!(popups[1].contains(&" logs ".to_owned()), "{:?}", popups[1]);
     pane.settled_with_a_client();
     assert_eq!(calls(&env).len(), 5, "the copies and the popups ran no cpd command: {:?}", calls(&env));
 }

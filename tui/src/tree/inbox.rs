@@ -3,7 +3,7 @@
 //! `+<n> more` that expands the list inline and becomes `− less`. Whether it is expanded is view state only. Expanded, it is
 //! capped at half the column and its items scroll inside the cap, with ` ▲ <n> more` / ` ▼ <n> more` cue rows ([`Shape`]).
 //!
-//! A click on an item row jumps to its cause ([`jump`]): a command, the logs popup at the item's Event, the merge popup of
+//! A click on an item row jumps to its cause ([`jump`]): a command, the merge popup of
 //! its pull request, or the copy of its `url`. The label of a link kind is also an OSC 8 link to the `url` (`crate::link`, which the terminal opens with its
 //! modifier-click). Everything here is pure but [`draw`], which only writes to the frame.
 
@@ -162,8 +162,6 @@ pub enum Jump {
     Run(Action),
     /// These actions in order, each stopping the flow when it is refused: `plan-review` opens its Lead, then copies its page.
     Steps(Vec<Action>),
-    /// The logs popup, at this Event; at the bottom with none.
-    Logs(Option<i64>),
     /// The merge popup of this pull request (`pr-ready`).
     Merge(Pull),
 }
@@ -180,7 +178,7 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
     if archived { Action::History(id.clone()) } else { Action::Open(id.clone()) }
 }
 
-/// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts. `engine-down`
+/// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts, but a row of the old `engine-error` kind (hs-d314). `engine-down`
 /// starts the engine; `job-stuck` opens the Lead of its Plan and the Worker of the failed Job's latest Attempt beside it; `pr-ready` opens the merge popup of its pull request (`None` for a subject that is not
 /// `pr:<owner>/<repo>#<n>`); `plan-review` opens the Lead of its Plan and copies the review page's `url` (or says there is
 /// none yet); the `url` is copied for `pr-failing`, `pr-changes` and `review-requested` (their OSC 8 link stays for the
@@ -197,7 +195,8 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
                 None => Some(Jump::Run(open)),
             }
         }
-        Kind::EngineError => Some(Jump::Logs(item.event)),
+        // no click: the engine's errors go to the Manager, not the Inbox (hs-d314); only a row an older engine opened remains
+        Kind::EngineError => None,
         Kind::EngineDown => Some(Jump::Run(Action::EnsureWatch)),
         Kind::Question => item.context.as_ref().map(|c| Jump::Run(Action::OpenManager(c.clone()))),
         Kind::PlanReview => {
@@ -422,7 +421,6 @@ mod tests {
         let session = |item: &mut Item| item.session = Some(sid("m-alpha"));
         let plan = |item: &mut Item| item.plan = Some(PlanId::parse("ship").unwrap());
         let context = |item: &mut Item| item.context = Some(ContextId::parse("alpha").unwrap());
-        let event = |item: &mut Item| item.event = Some(7);
         let open = |id: &str| Some(Jump::Run(Action::Open(sid(id))));
         assert_eq!(jump(&tree, &with(Kind::Dialog, &session)), open("m-alpha"));
         assert_eq!(jump(&tree, &with(Kind::Unread, &session)), open("m-alpha"));
@@ -436,7 +434,7 @@ mod tests {
             Some(Jump::Steps(vec![Action::Open(sid("l-ship")), Action::OpenWorker { plan: PlanId::parse("ship").unwrap(), job: JobKey::parse("c").unwrap() }])),
             "the Lead of the item's Plan, then the Worker of the Job's latest Attempt"
         );
-        assert_eq!(jump(&tree, &with(Kind::EngineError, &event)), Some(Jump::Logs(Some(7))));
+        assert_eq!(jump(&tree, &with(Kind::EngineError, &|_| {})), None, "engine-error: no click (hs-d314)");
         assert_eq!(jump(&tree, &with(Kind::EngineDown, &|_| {})), Some(Jump::Run(Action::EnsureWatch)), "engine-down starts the engine");
         assert_eq!(jump(&tree, &with(Kind::Question, &context)), Some(Jump::Run(Action::OpenManager(ContextId::parse("alpha").unwrap()))));
         let url = |item: &mut Item| item.url = Some("https://example.com".into());

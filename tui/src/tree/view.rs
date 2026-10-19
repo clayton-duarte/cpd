@@ -85,8 +85,6 @@ pub enum Effect {
     Legend,
     /// Run these actions in order, then call [`View::done`] with the result: a click on a `plan-review` item.
     Steps(Vec<Action>),
-    /// Open the logs popup at this Event (the bottom with none): a click on an `engine-error` item.
-    Logs(Option<i64>),
     /// Open the merge popup of this pull request: a click on a `pr-ready` item. A failure is the note.
     Merge(Pull),
 }
@@ -525,7 +523,6 @@ impl View {
         match inbox::jump(&self.tree, &self.tree.inbox[i]) {
             Some(Jump::Run(action)) => Effect::Run(action),
             Some(Jump::Steps(steps)) => Effect::Steps(steps),
-            Some(Jump::Logs(event)) => Effect::Logs(event),
             Some(Jump::Merge(pull)) => Effect::Merge(pull),
             None => Effect::None,
         }
@@ -1794,7 +1791,7 @@ mod tests {
         assert_eq!(click(&mut view, 10, 10), Effect::Run(Action::Open(sid("f-blocked"))), "dialog: session open");
         assert_eq!(click(&mut view, 10, 11), Effect::Run(Action::CopyUrl("https://github.com/acme/api/pull/12".into())), "pr-failing no Plan owns: copies its url");
         assert_eq!(click(&mut view, 10, 12), Effect::Run(Action::Open(sid("l-ship"))), "job-stuck: the Lead of the Plan");
-        assert_eq!(click(&mut view, 10, 13), Effect::Logs(Some(9)), "engine-error: the logs at its Event");
+        assert_eq!(click(&mut view, 10, 13), Effect::None, "engine-error (an old row, hs-d314): no click");
         assert_eq!(click(&mut view, 41, 14), Effect::Run(Action::Open(sid("l-ship"))), "unread: anywhere on the row, the age too");
         assert_eq!(click(&mut view, 10, 9), Effect::None, "the header");
         // the section's rows are not the tree's: the Session row above is its own
@@ -2062,9 +2059,6 @@ mod tests {
         assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::CopyUrl("https://github.com/acme/api/pull/12".into())), "pr-failing: Enter copies its url");
         press(&mut view, KeyCode::Down);
         assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Open(sid("l-ship"))), "job-stuck: the Lead");
-        view.tree.inbox[2].kind = InboxKind::EngineError;
-        view.tree.inbox[2].event = Some(3);
-        assert_eq!(press(&mut view, KeyCode::Enter), Effect::Logs(Some(3)));
         view.done(Err(Action::Dismiss(2).failed("item_closed", "Item 2 is closed.")));
         assert_eq!(view.note, "item_closed: Item 2 is closed.");
         let rows = text_rows(&draw_now(&mut view, 43, 17));

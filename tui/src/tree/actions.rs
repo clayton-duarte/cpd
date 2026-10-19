@@ -298,12 +298,6 @@ impl Runner {
         Ok(())
     }
 
-    /// A click on an `engine-error` Inbox item: the logs popup at the Event (the bottom with none);
-    /// returns when it closes.
-    pub fn logs(&self, event: Option<i64>) -> Result<(), String> {
-        crate::logs::open_at(&self.tmux, event).map_err(|e| e.message().to_owned())
-    }
-
     /// A click on a `pr-ready` item: the merge popup of `pull`; returns when it closes.
     pub fn merge(&self, pull: &Pull) -> Result<(), String> {
         crate::merge::open(&self.tmux, &pull.to_string()).map_err(|e| e.message().to_owned())

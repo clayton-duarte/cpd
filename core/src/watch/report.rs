@@ -5,6 +5,8 @@
 //! clears, the same code at the same step for the same object is appended at
 //! most once per `error_repeat_seconds` (contract §3.7), so a step that
 //! succeeds in one part and fails in another does not append at every tick.
+//! With each `error` Event goes one message to the Context's Manager, or to
+//! every live Manager for a machine error (hs-d314).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -16,8 +18,8 @@ use super::SOURCE;
 use super::log::Log;
 use crate::error::CpdError;
 use crate::events::{self, NewEvent};
-use crate::inbox::rules::EngineError;
 use crate::ids::{AttemptId, JobKey, PlanId, SessionId};
+use crate::session::tell_managers;
 use crate::store::Store;
 
 /// The step that failed.
@@ -45,22 +47,6 @@ impl fmt::Display for Step {
             Step::E8 => "E8 (Inbox)",
             Step::E9 => "E9 (Context digests)",
         })
-    }
-}
-
-impl Step {
-    /// The step's short name, as the Inbox shows it (`engine E3: <code>`).
-    fn short(self) -> &'static str {
-        match self {
-            Step::E1 => "E1",
-            Step::E2 => "E2",
-            Step::E3 => "E3",
-            Step::E4 => "E4",
-            Step::E5 => "E5",
-            Step::E7 => "E7",
-            Step::E8 => "E8",
-            Step::E9 => "E9",
-        }
     }
 }
 
@@ -95,17 +81,6 @@ impl About {
             About::Session(s) => format!("cpd session show {s}"),
             About::Job(p, j) => format!("cpd job show {j} --plan {p}"),
             About::Attempt(p, a) => format!("cpd attempt show {a} --plan {p}"),
-        }
-    }
-
-    /// The scope of an Inbox `engine-error` item (contract §2.2).
-    fn scope(&self) -> String {
-        match self {
-            About::Machine => "machine".to_owned(),
-            About::Plan(p) => format!("plan:{p}"),
-            About::Job(p, j) => format!("job:{p}/{j}"),
-            About::Attempt(_, a) => format!("attempt:{a}"),
-            About::Session(s) => format!("session:{s}"),
         }
     }
 
@@ -175,7 +150,18 @@ impl Report {
             failure.message,
             about.see()
         );
-        match store.write(SOURCE, |tx| events::append(tx, about.event(text.clone(), &failure))) {
+        // The Manager hears it in the same transaction, once per `error` Event (hs-d314): the Inbox shows no engine error.
+        let to_managers = format!(
+            "Engine error at {step} for {}: {}. It tries again at every tick. See: cpd events list --kind error",
+            about.describe(),
+            failure.message.trim_end_matches('.')
+        );
+        let appended = store.write(SOURCE, |tx| {
+            let event = events::append(tx, about.event(text.clone(), &failure))?;
+            tell_managers(tx, event, &to_managers)?;
+            Ok(event)
+        });
+        match appended {
             Ok(event) => {
                 self.appended.insert(repeated, (Instant::now(), event));
                 self.open.insert(key, (failure.code, event));
@@ -183,22 +169,6 @@ impl Report {
             // Not marked as reported: the next tick tries again.
             Err(e) => log.line(&format!("cannot append the error Event: {} ({})", e.message(), e.code().as_str())),
         }
-    }
-
-    /// The failures reported and not cleared, oldest `error` Event first: what E8 shows as `engine-error` items.
-    pub(super) fn active(&self) -> Vec<EngineError> {
-        let mut errors: Vec<EngineError> = self
-            .open
-            .iter()
-            .map(|((step, about), (code, event))| EngineError {
-                step: step.short().to_owned(),
-                scope: about.scope(),
-                code: code.clone(),
-                event: *event,
-            })
-            .collect();
-        errors.sort_by_key(|e| e.event);
-        errors
     }
 
     /// `step` succeeded for `about`: a later failure is reported again.
@@ -285,34 +255,116 @@ mod tests {
         assert_eq!((report.open.len(), report.appended.len()), (0, 0));
     }
 
-    /// What E8 shows: each failure not cleared, with the id of its `error` Event, also when that Event
-    /// was appended earlier in the repeat period.
+    /// Contexts `ctx-a` and `ctx-b`, each with a Manager (`mgr-a`, `mgr-b`, archived when `archive_b`), a Plan `plan-a` of `ctx-a`, and
+    /// a Context `ctx-c` with no Manager and its Plan `plan-c`.
+    fn managers(store: &mut Store, archive_b: bool) {
+        let t = "2026-01-01T00:00:00.000Z";
+        let archived = if archive_b { format!("'{t}'") } else { "NULL".to_owned() };
+        store
+            .write("test", |tx| {
+                for c in ["ctx-a", "ctx-b", "ctx-c"] {
+                    tx.execute(
+                        "INSERT INTO contexts (id, title, created_at, created_on) VALUES (?1, ?1, ?2, 'm1')",
+                        [c, t],
+                    )?;
+                }
+                tx.execute_batch(&format!(
+                    "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at, archived_at)
+                       VALUES ('mgr-a', 'manager', 'ctx-a', 'Ma', '/', 'O3', 'idle', '{t}', '{t}', NULL),
+                              ('mgr-b', 'manager', 'ctx-b', 'Mb', '/', 'O3', 'idle', '{t}', '{t}', {archived}),
+                              ('lead-a', 'lead', 'ctx-a', 'La', '/', 'O3', 'idle', '{t}', '{t}', NULL);
+                     INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+                       VALUES ('plan-a', 'ctx-a', 'Pa', 'grounding', 'lead-a', '{t}'),
+                              ('plan-c', 'ctx-c', 'Pc', 'grounding', 'lead-a', '{t}');"
+                ))?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    /// The `session-message` Events: `(session, from, wake, text)`.
+    fn messages(store: &mut Store) -> Vec<(String, Option<String>, bool, String)> {
+        store
+            .read(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT session, json_extract(data, '$.from'), json_extract(data, '$.wake'), json_extract(data, '$.text')
+                       FROM events WHERE kind = 'session-message' ORDER BY id",
+                )?;
+                Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .unwrap()
+    }
+
+    /// hs-d314: a step's error reaches the Manager of its Context as one message from the User, no wake, once while it stays.
     #[test]
-    fn active_lists_the_uncleared_failures_with_their_events() {
+    fn a_step_error_is_sent_once_to_the_manager_of_its_context() {
         let dir = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
         let mut log = Log::open(&home).unwrap();
         let mut store = Store::open(&home, 5000).unwrap();
+        managers(&mut store, false);
+        let mut report = Report::new(Duration::from_secs(600));
+        let about = About::Plan(PlanId::parse("plan-a").unwrap());
+
+        for _ in 0..3 {
+            report.fail(&mut store, &mut log, Step::E3, about.clone(), failure("store_failed"));
+        }
+        assert_eq!(errors(&mut store), 1);
+        let sent = messages(&mut store);
+        assert_eq!(
+            sent,
+            [(
+                "mgr-a".to_owned(),
+                None,
+                false,
+                "Engine error at E3 (scheduling) for Plan plan-a: It failed. It tries again at every tick. See: cpd events list --kind error"
+                    .to_owned()
+            )]
+        );
+
+        // Cleared and failing again within the repeat period: no new `error` Event, so no new message.
+        report.clear(Step::E3, &about);
+        report.fail(&mut store, &mut log, Step::E3, about.clone(), failure("store_failed"));
+        assert_eq!(messages(&mut store).len(), 1);
+
+        // Another Context's Plan reaches that Context's Manager only; the Context `c` has none.
+        report.fail(&mut store, &mut log, Step::E3, About::Plan(PlanId::parse("plan-c").unwrap()), failure("store_failed"));
+        assert_eq!(messages(&mut store).len(), 1, "a Context with no Manager: nothing is sent");
+        assert_eq!(errors(&mut store), 2, "the log keeps it");
+    }
+
+    #[test]
+    fn a_machine_error_reaches_every_live_manager_and_an_archived_one_gets_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let mut log = Log::open(&home).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        managers(&mut store, false);
         let mut report = Report::new(Duration::from_secs(600));
 
-        assert!(report.active().is_empty());
-        report.fail(&mut store, &mut log, Step::E3, About::Machine, failure("store_failed"));
         report.fail(&mut store, &mut log, Step::E2, About::Machine, failure("tmux_failed"));
-        let first: i64 = store.read(|c| Ok(c.query_row("SELECT min(id) FROM events WHERE kind = 'error'", [], |r| r.get(0))?)).unwrap();
-        let shown = |report: &Report| {
-            report.active().into_iter().map(|e| (e.step, e.scope, e.code, e.event)).collect::<Vec<_>>()
-        };
-        let both = [
-            ("E3".to_owned(), "machine".to_owned(), "store_failed".to_owned(), first),
-            ("E2".to_owned(), "machine".to_owned(), "tmux_failed".to_owned(), first + 1),
-        ];
-        assert_eq!(shown(&report), both);
+        report.fail(&mut store, &mut log, Step::E2, About::Machine, failure("tmux_failed"));
+        let sent = messages(&mut store);
+        assert_eq!(sent.iter().map(|m| m.0.as_str()).collect::<Vec<_>>(), ["mgr-a", "mgr-b"]);
+        assert!(sent.iter().all(|m| m.1.is_none() && !m.2 && m.3.starts_with("Engine error at E2 (liveness) for the machine: It failed.")));
 
-        // Cleared and failing again within the period: no new Event, the same id.
-        report.clear(Step::E2, &About::Machine);
-        assert_eq!(shown(&report), both[..1]);
-        report.fail(&mut store, &mut log, Step::E2, About::Machine, failure("tmux_failed"));
-        assert_eq!(shown(&report), both);
-        assert_eq!(errors(&mut store), 2);
+        // An archived Manager is not live.
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let mut log = Log::open(&home).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        managers(&mut store, true);
+        Report::new(Duration::from_secs(600)).fail(&mut store, &mut log, Step::E2, About::Machine, failure("tmux_failed"));
+        assert_eq!(messages(&mut store).iter().map(|m| m.0.as_str()).collect::<Vec<_>>(), ["mgr-a"]);
+    }
+
+    #[test]
+    fn with_no_manager_nothing_is_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let mut log = Log::open(&home).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        Report::new(Duration::from_secs(600)).fail(&mut store, &mut log, Step::E2, About::Machine, failure("tmux_failed"));
+        assert_eq!((errors(&mut store), messages(&mut store).len()), (1, 0));
     }
 }

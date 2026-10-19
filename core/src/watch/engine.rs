@@ -17,7 +17,6 @@ use crate::config::{Catalog, Config, load_catalog};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
 use crate::home::CpdHome;
-use crate::inbox::rules::EngineError;
 use crate::host::Tmux;
 use crate::host::pi::{self, PiDirs};
 use crate::ids::{ContextId, PlanId, PrKey, SessionId};
@@ -76,11 +75,6 @@ impl Engine {
         let catalog = load_catalog(&self.config)?;
         self.catalog = Some(catalog.clone());
         Ok(catalog)
-    }
-
-    /// The failures reported and not cleared: E8's `engine-error` items.
-    pub(super) fn errors(&self) -> Vec<EngineError> {
-        self.report.active()
     }
 
     /// One tick: E1–E5 and E7–E9 (§3.7; E6 is removed), each reporting its own failures.

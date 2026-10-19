@@ -39,6 +39,7 @@ pub use moves::{Closed, close_lead};
 pub(crate) use moves::lead_spawn;
 pub use row::{Role, State};
 pub use state::Label;
+pub(crate) use send::tell_managers;
 pub(crate) use state::pane_gone;
 
 /// The program in every pane cpd starts, resolved on the tmux server's `PATH`

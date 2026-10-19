@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use common::{CPD, SLEEP_SECONDS, TestEnv};
 use cpd_core::home::CpdHome;
-use cpd_core::inbox::model::{Condition, Kind, Urgency};
-use cpd_core::inbox::rules::{EngineError, conditions};
+use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
+use cpd_core::inbox::rules::conditions;
 use cpd_core::store::Store;
 use time::OffsetDateTime;
 
@@ -29,21 +29,21 @@ fn setup(env: &TestEnv) -> String {
     plan["plan"]["lead_session"].as_str().unwrap().to_owned()
 }
 
-fn found(env: &TestEnv, errors: &[EngineError]) -> Vec<Condition> {
+fn found(env: &TestEnv) -> Vec<Condition> {
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
-    conditions(&mut store, &home, OffsetDateTime::now_utc(), Duration::from_secs(600), errors).unwrap()
+    conditions(&mut store, &home, OffsetDateTime::now_utc(), Duration::from_secs(600)).unwrap()
 }
 
 #[test]
 fn a_blocked_lead_in_grounding_is_a_magenta_dialog_until_it_works_again() {
     let env = TestEnv::new();
     let lead = setup(&env);
-    assert!(found(&env, &[]).is_empty());
+    assert!(found(&env).is_empty());
 
     env.cpd(&["session", "state", "idle", "--session", &lead]).ok();
     env.cpd(&["session", "state", "blocked", "--label", "Which repo?", "--session", &lead]).ok();
-    let items = found(&env, &[]);
+    let items = found(&env);
     assert_eq!(items.len(), 1, "{items:?}");
     let c = &items[0];
     assert_eq!((c.kind, c.urgency), (Kind::Dialog, Urgency::Magenta));
@@ -58,7 +58,7 @@ fn a_blocked_lead_in_grounding_is_a_magenta_dialog_until_it_works_again() {
     assert_eq!(c.event, Some(latest), "its latest session-state Event");
 
     env.cpd(&["session", "state", "working", "--session", &lead]).ok();
-    assert!(found(&env, &[]).is_empty());
+    assert!(found(&env).is_empty());
 }
 
 #[test]
@@ -68,18 +68,18 @@ fn a_lead_waiting_for_a_worker_opens_no_dialog_and_its_reply_turn_is_unread_hs_d
     env.cpd(&["session", "state", "idle", "--session", &lead]).ok();
     env.cpd(&["session", "state", "working", "--session", &lead]).ok();
     env.cpd(&["session", "state", "waiting", "--label", "cpd: Worker question", "--session", &lead]).ok();
-    assert!(found(&env, &[]).is_empty(), "a Lead that waits for an agent does not need the User");
+    assert!(found(&env).is_empty(), "a Lead that waits for an agent does not need the User");
 
     // The wait ends in a turn that answered the User: `waiting` to `idle` with `--reply` is a reply to read.
     env.cpd(&["session", "state", "idle", "--reply", "--session", &lead]).ok();
-    let items = found(&env, &[]);
+    let items = found(&env);
     assert_eq!(items.len(), 1, "{items:?}");
     assert_eq!((items[0].kind, items[0].urgency), (Kind::Unread, Urgency::White));
 
     // `blocked` is still the human's: a dialog, even under the label a Lead's wait used to carry.
     env.cpd(&["session", "state", "working", "--session", &lead]).ok();
     env.cpd(&["session", "state", "blocked", "--label", "cpd: Worker question", "--session", &lead]).ok();
-    let items = found(&env, &[]);
+    let items = found(&env);
     assert_eq!(items.len(), 1, "{items:?}");
     assert_eq!(items[0].kind, Kind::Dialog);
 }
@@ -89,23 +89,41 @@ fn a_question_opens_no_item_hs_d306() {
     let env = TestEnv::new();
     setup(&env);
     env.cpd(&["context", "ask", "Why?", "--context", "ctx"]).ok();
-    assert!(found(&env, &[]).is_empty());
+    assert!(found(&env).is_empty());
 
     env.cpd(&["context", "answer", "hs-q1", "Because.", "--context", "ctx"]).ok();
-    assert!(found(&env, &[]).is_empty());
+    assert!(found(&env).is_empty());
 }
 
+/// hs-d314: the engine's errors go to the Manager, not the Inbox, so E8 computes no `engine-error`, and an item an
+/// older engine opened for one closes at the next reconcile.
 #[test]
-fn an_engine_error_is_an_item_while_the_engine_reports_it() {
+fn no_engine_error_item_opens_and_one_an_older_engine_opened_closes() {
     let env = TestEnv::new();
     setup(&env);
-    let error = EngineError { step: "E5".into(), scope: "machine".into(), code: "gh_rate_limited".into(), event: 7 };
-    let items = found(&env, std::slice::from_ref(&error));
-    assert_eq!(items.len(), 1, "{items:?}");
-    assert_eq!((items[0].kind, items[0].urgency), (Kind::EngineError, Urgency::Red));
-    assert_eq!((items[0].subject.as_str(), items[0].label.as_str()), ("error:E5/machine/gh_rate_limited", "engine E5: gh_rate_limited"));
-    assert_eq!(items[0].event, Some(7));
-    assert!(found(&env, &[]).is_empty());
+    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
+    let mut store = Store::open(&home, 5000).unwrap();
+    let old = Condition {
+        kind: Kind::EngineError,
+        urgency: Urgency::Red,
+        subject: "error:E5/machine/gh_rate_limited".into(),
+        label: "engine E5: gh_rate_limited".into(),
+        url: None,
+        context: None,
+        plan: None,
+        job: None,
+        session: None,
+        record: None,
+        event: Some(7),
+    };
+    let at = "2026-01-01T00:00:00.000Z";
+    assert_eq!(reconcile(&mut store, &[old], at).unwrap().opened.len(), 1, "the row an older engine wrote");
+
+    let found = found(&env);
+    assert!(found.is_empty(), "{found:?}");
+    let changes = reconcile(&mut store, &found, at).unwrap();
+    assert_eq!((changes.opened.len(), changes.closed.len()), (0, 1), "the open item closes");
+    assert!(reconcile(&mut store, &[], at).unwrap().is_empty(), "idempotent");
 }
 
 /// Writes a pull request row as the poll would, with the columns the Inbox reads.
@@ -133,7 +151,7 @@ fn the_polled_pull_requests_open_and_clear_their_items() {
     pull_request(&env, 2, "review_decision = 'changes_requested'");
     pull_request(&env, 3, "checks = 'passed', mergeable = 'mergeable'");
     pull_request(&env, 4, "authored = 0, review_requested = 1");
-    let items = found(&env, &[]);
+    let items = found(&env);
     let seen: Vec<_> = items.iter().map(|c| (c.kind, c.urgency, c.label.as_str())).collect();
     assert_eq!(
         seen,
@@ -155,5 +173,5 @@ fn the_polled_pull_requests_open_and_clear_their_items() {
             Ok(())
         })
         .unwrap();
-    assert!(found(&env, &[]).is_empty());
+    assert!(found(&env).is_empty());
 }
