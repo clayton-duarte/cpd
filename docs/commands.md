@@ -2214,7 +2214,7 @@ Change from cpd 1: no `node`, `bd`, `wt` or `herdr` checks (§1.1); `gh` now has
 cpd config
 ```
 
-Prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path). It opens the store, so it waits out a migration in progress (hs-n278; contract §4.2): one line on stderr, the one JSON value at the end, and `lock_timeout` only past `MIGRATION_WAIT_CEILING`. No effects.
+Prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
 
 ```json
 {"ok": true, "path": "/home/clayton/.cpd/config.toml",
@@ -2237,6 +2237,8 @@ Kept from cpd 1 §7 and §11; output of §9.
 | pi is found as §9 says | `pi_not_found` | 1 |
 | the catalog module ran and printed valid JSON | `catalog_failed` | 1 |
 | each configured model is in the catalog | `tier_model_unknown` | 1 |
+
+It opens the store (the catalog cache), so it waits out a migration in progress (hs-n278; contract §4.2): one line on stderr, the one JSON value at the end, and `lock_timeout` only past `MIGRATION_WAIT_CEILING`.
 
 Effects: when `install/current-version` differs from the cached `pi_version`, one transaction inserting `tier_catalog` rows (a cache: no Event). No tmux, no git.
 
