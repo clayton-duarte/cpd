@@ -1220,6 +1220,8 @@ fn the_sweep_removes_the_prs_gate_worktrees_of_dead_pids_only() {
     assert_eq!(sweep_gate_worktrees(&repo, &plan(), &PrKey::parse("web").unwrap()).unwrap().len(), 1);
     live.remove().unwrap();
     assert!(!worktrees(&env, &repo).contains(".gate-"));
+}
+
 // ------------------------------------------------------------ deadline (contract §1.2, §7)
 
 /// Whether process `pid` is running (a zombie is not).
