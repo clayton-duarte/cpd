@@ -372,3 +372,49 @@ pub fn has_error(conn: &Connection, attempt: &Attempt, code: ErrorCode) -> Resul
 pub fn short(sha: &str) -> &str {
     &sha[..sha.len().min(12)]
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                rust_files(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    /// engine-G1: the ladder, the end transaction, the cancel read, the load of an Attempt and the
+    /// Event texts are defined once, here, for the driver, the engine and the merge. (The needles
+    /// are built from two halves so that this file does not contain them.)
+    #[test]
+    fn the_ledger_is_defined_once() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        rust_files(&src, &mut files);
+        let texts: Vec<(PathBuf, String)> =
+            files.into_iter().map(|f| (f.strip_prefix(&src).unwrap().to_owned(), std::fs::read_to_string(&f).unwrap())).collect();
+        let needles = [
+            ["struct ", "Ladder"],
+            ["enum ", "End "],
+            ["fn ", "next_tier("],
+            ["fn ", "cancel_request("],
+            ["SELECT a.job, a.tier, ", "a.status, a.branch"],
+            ["UPDATE jobs SET ", "status = ?3"],
+            ["The Job is queued ", "again at Tier"],
+        ];
+        let mut twice = Vec::new();
+        for needle in needles {
+            let needle = needle.concat();
+            let defined: Vec<_> = texts.iter().filter(|(_, text)| text.contains(&needle)).map(|(p, _)| p.display().to_string()).collect();
+            if defined.len() != 1 {
+                twice.push(format!("{needle:?}: {defined:?}"));
+            }
+        }
+        assert!(twice.is_empty(), "each belongs in attempt/ledger.rs only: {twice:#?}");
+    }
+}
