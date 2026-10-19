@@ -14,8 +14,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
-use nix::errno::Errno;
-use nix::fcntl::{Flock, FlockArg};
 use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, ErrorCode as SqliteCode, OpenFlags, Transaction, TransactionBehavior};
 use serde_json::{Value, json};
@@ -25,6 +23,7 @@ use time::macros::format_description;
 use crate::context::legacy;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
+use crate::lock;
 
 pub use schema::{VERSION, schema_hash};
 
@@ -379,7 +378,7 @@ fn archive_old_stores(home: &CpdHome) -> Result<(), CpdError> {
 /// Takes `locks/store.lock` (§1.4), creating `$CPD_HOME` and `locks/` on first
 /// use, and waits for it without a limit: a holder is another cpd process
 /// doing the open's bounded setup. Dropping the result releases it.
-fn setup_lock(home: &CpdHome) -> Result<Flock<File>, CpdError> {
+fn setup_lock(home: &CpdHome) -> Result<File, CpdError> {
     let failed = |what: &str, path: &Path, e: std::io::Error| {
         CpdError::new(ErrorCode::StoreFailed, format!("Cannot {what} {}: {e}.", path.display()))
             .with("path", path.display().to_string())
@@ -388,15 +387,9 @@ fn setup_lock(home: &CpdHome) -> Result<Flock<File>, CpdError> {
     fs::create_dir_all(&dir).map_err(|e| failed("create", &dir, e))?;
     // `home.rs` has no method for this lock; it is the store's alone.
     let path = dir.join("store.lock");
-    let mut file =
-        OpenOptions::new().create(true).append(true).open(&path).map_err(|e| failed("open", &path, e))?;
-    loop {
-        match Flock::lock(file, FlockArg::LockExclusive) {
-            Ok(lock) => return Ok(lock),
-            Err((f, Errno::EINTR)) => file = f,
-            Err((_, errno)) => return Err(failed("lock", &path, errno.into())),
-        }
-    }
+    let file = OpenOptions::new().create(true).append(true).open(&path).map_err(|e| failed("open", &path, e))?;
+    lock::blocking(&file).map_err(|e| failed("lock", &path, e))?;
+    Ok(file)
 }
 
 /// The database's `PRAGMA user_version`, or `None` when the file does not
