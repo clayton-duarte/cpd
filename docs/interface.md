@@ -91,6 +91,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd tui view history` | An archived Session's history, read-only (the chat slot) | internal | |
 | `cpd tui view legend` | The key legend (opened by `?` in the Dispatch column, in a tmux popup) | internal | |
 | `cpd tui view logs` | The Event log (opened by the StatusBar's logs button, in a tmux popup) | internal | |
+| `cpd tui view merge` | The merge confirmation of a pull request (opened by the Deploy column's merge icon, in a tmux popup) | internal | |
 | `cpd tui view chat` | The chat slot's placeholder | internal | |
 | `cpd doctor` | Check the machine (commands.md §14.1) | | |
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |
