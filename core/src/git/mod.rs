@@ -3,7 +3,9 @@
 //! own: `plan lock`, `attempt submit`, the driver and the merge call it.
 
 pub mod hooks;
+pub mod lead;
 pub mod run;
+pub mod snapshot;
 pub mod tamper;
 pub mod worktree;
 
