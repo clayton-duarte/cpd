@@ -132,10 +132,22 @@ fn fake_pi(env: &TestEnv, then: &str) {
     ));
 }
 
+/// The polls of `session run` as these tests set them (contract §1.2 "Test overrides"): the fork's wait for its
+/// source (`SOURCE_POLL`, 2 s) in every pane, the wrapper's loop (`FILE_POLL`, 0.5 s) with [`fast_wrapper`].
+const POLL: Duration = Duration::from_millis(100);
+
+/// Every `session run` started from now on runs its loop every [`POLL`], for a test that waits for what the loop
+/// sees (pi's exit, a new pi). Not the default: each pane's loop would cost the other tests CPU.
+fn fast_wrapper(env: &TestEnv) {
+    let out = env.tmux(&["set-environment", "-g", "CPD_TEST_FILE_POLL", &POLL.as_secs_f64().to_string()]);
+    assert!(out.status.success(), "tmux set-environment: {}", String::from_utf8_lossy(&out.stderr));
+}
+
 /// The cockpit: session `cpd`, window `main` with a tree pane and the
 /// placeholder in the chat slot, on a server started with cpd's
 /// [`SERVER_OPTIONS`] (contract §6.1), as cpd starts it: with `remain-on-exit`,
 /// a pane whose program exits stays, dead, instead of taking the chat slot with it.
+/// Every pane started later waits for a fork's source every [`POLL`].
 fn cockpit(env: &TestEnv) {
     let ok = |args: &[&str]| {
         let out = env.tmux(args);
@@ -149,6 +161,7 @@ fn cockpit(env: &TestEnv) {
     ok(&["set", "-p", "-t", &tree, "@cpd_view", "tree"]);
     let chat = ok(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
     ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
+    ok(&["set-environment", "-g", "CPD_TEST_SOURCE_POLL", &POLL.as_secs_f64().to_string()]);
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -528,6 +541,7 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
     env.fake_cpd_views();
     fake_pi(&env, "exit 1");
     cockpit(&env);
+    fast_wrapper(&env);
     env.cpd(&["session", "state", "working", "--session", LEAD1]).ok();
     let message = env.root().join("message.md");
     fs::write(&message, "Review the tests.").unwrap();
@@ -539,9 +553,9 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
     wait_until("the waiting line", || capture().contains("Waiting for the source Lead to finish its turn, then forking it as \"side\""));
 
     // No file yet, and busy.
-    // time-claim: the fork does not happen while the source is busy and has no file, over a whole 2 s poll of the
+    // time-claim: the fork does not happen while the source is busy and has no file, over three polls of the
     // source; no per-poll signal from `session run` (it only reads the store and the file).
-    std::thread::sleep(Duration::from_secs(3));
+    std::thread::sleep(POLL * 3);
     assert!(env.calls("pi").is_empty());
     // A file with a finished turn, but still busy.
     let sessions = env.home().join(".pi/agent/sessions/g");
@@ -554,9 +568,9 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
     .unwrap();
     // Quiet for long enough and finished: only the busy source is in the way.
     backdate(&source_file, Duration::from_secs(3600));
-    // time-claim: the fork does not happen while the source is busy, over a whole 2 s poll of the source;
+    // time-claim: the fork does not happen while the source is busy, over three polls of the source;
     // no per-poll signal from `session run`.
-    std::thread::sleep(Duration::from_secs(3));
+    std::thread::sleep(POLL * 3);
     assert!(env.calls("pi").is_empty(), "the source is still working");
 
     env.cpd(&["session", "state", "idle", "--session", LEAD1]).ok();
@@ -658,6 +672,8 @@ fn a_fork_with_a_message_file_over_128_kib_starts_pi_with_the_copied_file() {
     fake_pi(&env, &copy_last_file());
     cockpit(&env);
     pi_file(&env, LEAD2, true);
+    // Quiet for `fork_quiet_seconds` already: this test is about the message, not the wait.
+    backdate(&env.home().join(format!(".pi/agent/sessions/g/2026_{LEAD2}.jsonl")), Duration::from_secs(3600));
     let message = big_message();
     let file = env.root().join("message.md");
     fs::write(&file, &message).unwrap();
@@ -1692,6 +1708,7 @@ fn a_reload_is_not_a_quit_even_though_pi_exits_0_on_sigterm() {
     let current = env.home().join(".pi/agent/install/current-version");
     fs::create_dir_all(current.parent().unwrap()).unwrap();
     fs::write(&current, "1.2.0\n").unwrap();
+    fast_wrapper(&env);
     let pane = run_lead_with_pane(&env, "side");
     wait_until("pi", || env.calls("pi").len() == 1);
 
