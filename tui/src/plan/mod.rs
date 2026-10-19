@@ -20,6 +20,7 @@ mod flow;
 
 use std::collections::HashMap;
 use std::fs;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::Frame;
@@ -35,6 +36,7 @@ use self::boxes::Boxes;
 use self::flow::{Dir, Selection};
 use crate::link::link;
 use crate::palette::{self, Meaning};
+use super::background::Background;
 use super::read::{self, ChatSlot, PlanBoxes, ReviewStatus};
 use super::runner::{ViewError, kept};
 use super::{Capture, RunCommand, run_view};
@@ -263,7 +265,7 @@ pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
             let config = Config::load(&home)?;
             let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
             let snap = snapshot(&mut store, &home)?;
-            let actions = Actions::new(home.clone(), &config, run_command);
+            let actions = Arc::new(Actions::new(home.clone(), &config, run_command));
             let poll = Duration::from_millis(u64::from(config.events.poll_ms));
             let follow = read::Follow::new(&mut store, &[], snap.cursor)?;
             Ok((store, home, snap, poll, follow, actions))
@@ -282,7 +284,7 @@ fn show(
     snap: &mut Snapshot,
     poll: Duration,
     mut follow: read::Follow,
-    actions: &Actions,
+    actions: &Arc<Actions>,
 ) -> Result<(), ViewError> {
     let mut ui = Ui::default();
     // a failed poll is made again at the next one, a failed snapshot at the next refresh (`stale`); both are shown
@@ -291,7 +293,15 @@ fn show(
     let (mut stale, mut taken, mut fetched) = (false, Instant::now(), Instant::now());
     // the pane is written to only when something changed: a snapshot, an error, a spinner's frame, input
     let mut redraw = true;
+    // the Worker pane's tmux calls run off this thread (tui-W7); a result is the note to show, or none to leave it
+    let mut worker = Background::<Option<String>>::new();
     loop {
+        while let Some(result) = worker.finished() {
+            if let Some(note) = result {
+                ui.note = note;
+            }
+            redraw = true;
+        }
         if let Some(c) = snap.centre.as_mut() {
             redraw |= c.turn(palette::frame(SystemTime::now()));
         }
@@ -376,18 +386,19 @@ fn show(
         }
         let Some(centre) = snap.centre.as_ref() else { continue };
         if let Some(key) = unselect {
-            if let Err(e) = actions.close_worker(&key) {
-                ui.note = e.message().to_owned();
-            }
+            let actions = Arc::clone(actions);
+            worker.submit(move || actions.close_worker(&key).err().map(|e| e.message().to_owned()));
         }
         if let Some(key) = open {
-            ui.note = match attempt_of(centre, &key) {
-                None => format!("{key} has not started yet"),
-                Some(attempt) => match actions.toggle_worker(&centre.plan.plan, &key, &attempt) {
-                    Ok(_) => String::new(),
-                    Err(e) => e.message().to_owned(),
-                },
-            };
+            match attempt_of(centre, &key) {
+                None => ui.note = format!("{key} has not started yet"),
+                Some(attempt) => {
+                    let (actions, plan) = (Arc::clone(actions), centre.plan.plan.clone());
+                    worker.submit(move || {
+                        Some(actions.toggle_worker(&plan, &key, &attempt).err().map_or_else(String::new, |e| e.message().to_owned()))
+                    });
+                }
+            }
         }
     }
 }

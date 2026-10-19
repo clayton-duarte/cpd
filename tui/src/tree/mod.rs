@@ -8,6 +8,8 @@
 //! - [`view`]: the state, keys and drawing; [`cursor`], [`prompt`], [`menu`]: its parts (the right-click menu);
 //! - [`actions`]: what it does, as `cpd` commands (`session open`, `plan new`, `session close`, the menu's), and the
 //!   legend popup; [`slug`]: the id of a new Context or Plan, from its title;
+//! - [`super::background`]: a command or the legend popup runs on a thread, one command at a time; the footer says
+//!   `running: <command>` meanwhile and then its result, and the loop keeps drawing and reading keys (tui-W7);
 //! - [`kinds`]: the Events it follows, in process ([`read::Follow`]), which tell it when to take a new snapshot.
 //!
 //! Keys and clicks are the reference's (commands.md §13.2, `tui/README.md` "Context column" on `main`): arrows
