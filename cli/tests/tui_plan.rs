@@ -8,12 +8,9 @@
 mod common;
 
 use std::fs;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use common::{CPD, SLEEP_SECONDS, TestEnv};
-use cpd_core::error::CpdError;
-use cpd_core::home::CpdHome;
-use cpd_core::store::Store;
+use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until};
 use cpd_tui::palette::{DRAFT, FAILED, MERGED, MERGING, QUEUED, SPINNER};
 use serde_json::json;
 
@@ -75,32 +72,10 @@ fn env() -> TestEnv {
     env
 }
 
-fn open(env: &TestEnv) -> Store {
-    Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
-}
-
-fn sql(env: &TestEnv, text: &str) {
-    open(env)
-        .write("fixture", |tx| {
-            tx.execute_batch(text)?;
-            Ok::<(), CpdError>(())
-        })
-        .unwrap();
-}
-
 fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
     let out = env.tmux(args);
     assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8(out.stdout).unwrap()
-}
-
-/// Waits until `done` holds, at most 30 s.
-fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !done() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
 }
 
 /// Starts `cpd tui view plan` alone in a 260 × 40 window of the private server, with `PLANNOTATOR_URL_HOST=review.test`
@@ -293,7 +268,7 @@ fn plan_with(phase: &str, pr: Option<(i64, &str)>, jobs: &[(&str, &str, &str, &[
 #[test]
 fn the_chart_of_a_store_equivalent_to_the_cockpits_fixture_matches_it() {
     let env = env();
-    sql(&env, &plan_with("dispatch", None, CPD_JOBS));
+    env.sql(&plan_with("dispatch", None, CPD_JOBS));
     let pane = start_view(&env);
     let rows = CPD_CHART.lines().count();
     // the screen is captured whenever it is: wait for a frame drawn to the box's right border on every row (a capture may fall in the middle of the first frame, which the view writes in pieces)
@@ -326,7 +301,7 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
     s += &job_row_in("ship", "api", "b", "merged", "S3");
     s += &need_row("ship", "b", "a");
     s += &job_row_in("ship", "web", "c", "queued", "S3");
-    sql(&env, &s);
+    env.sql(&s);
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the boxes", |s| s.len() > 8 && s[8].ends_with('┘'));
     // web below api, the arrow from api's bottom border into web's top border
@@ -354,7 +329,7 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
 #[test]
 fn a_plan_with_no_pr_yet_says_so() {
     let env = env();
-    sql(&env, &bare_plan("grounding"));
+    env.sql(&bare_plan("grounding"));
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the message", |s| s.iter().any(|l| l.contains("no PR yet")));
     assert!(screen.iter().any(|l| l.trim() == "no PR yet: cpd pr add"), "{}", screen.join("\n"));
@@ -376,7 +351,7 @@ fn each_job_status_has_its_icon_and_a_cancelled_job_is_not_drawn() {
         ("failed", "failed", "S3", &[], 3),
         ("gone", "cancelled", "S3", &[], 0),
     ];
-    sql(&env, &plan_with("dispatch", None, jobs));
+    env.sql(&plan_with("dispatch", None, jobs));
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 13 && s[2].contains("draft"));
     // a column is as wide as its widest pill (the failed pill, `failed │S3│a3`); the tier, and `aN` from the second Attempt, sit at its right
@@ -402,7 +377,7 @@ fn each_job_status_has_its_icon_and_a_cancelled_job_is_not_drawn() {
 #[test]
 fn a_plan_without_jobs_says_no_plan_yet() {
     let env = env();
-    sql(&env, &plan_with("dispatch", None, &[]));
+    env.sql(&plan_with("dispatch", None, &[]));
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the message", |s| s.iter().any(|l| l.contains("no Plan yet")));
     assert!(screen.iter().any(|l| l.trim() == "no Plan yet"), "{}", screen.join("\n"));
@@ -416,7 +391,7 @@ fn escalations_and_a_decided_plan_review_are_not_drawn() {
           VALUES ('ship', 'a-a1-q1', 'a-a1', 1, 'Which?', 'open', NULL, 1, '2026-01-03T00:20:00.000Z', NULL, NULL);
           INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at, decided_at)
           VALUES ('ship', 'r1', 1, '{FP}', 'approved', '2026-01-02T01:00:00.000Z', '2026-01-02T02:00:00.000Z');");
-    sql(&env, &s);
+    env.sql(&s);
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 2 && s[2].contains(" a "));
     assert!(screen.iter().all(|l| !l.contains("Escalation") && !l.contains("review")), "{}", screen.join("\n"));
@@ -466,7 +441,7 @@ fn linked_text(styled: &str, url: &str) -> String {
 #[test]
 fn a_pull_request_box_title_ends_in_a_link_to_it_and_a_pending_review_is_a_row_above_the_boxes() {
     let env = env();
-    sql(&env, &plan_under_review(2, "pending"));
+    env.sql(&plan_under_review(2, "pending"));
     write_port(&env, "19433\n");
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the row and the box", |s| s.len() > 3 && s[3].contains(" a "));
@@ -486,39 +461,44 @@ fn a_pull_request_box_title_ends_in_a_link_to_it_and_a_pending_review_is_a_row_a
 #[test]
 fn a_conflict_shows_in_the_box_title_and_clears_with_no_event_within_the_refresh() {
     let env = env();
-    sql(&env, &plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
+    env.sql(&plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
     let pane = start_view(&env);
     let title = |s: &[String], word: &str| s.iter().any(|l| l.contains(&format!("#7 {word} 󰏌")));
     screen_when(&env, &pane, "the open title", |s| title(s, "open"));
 
     // the poll stored a conflict: no Event is appended for the view to wake on, so only the 2 s re-read shows it
-    sql(&env, "UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 7;");
+    env.sql("UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 7;");
     screen_when(&env, &pane, "conflict", |s| title(s, "conflict"));
 
     // `unknown` is not a conflict
-    sql(&env, "UPDATE pull_requests SET mergeable = 'unknown' WHERE number = 7;");
+    env.sql("UPDATE pull_requests SET mergeable = 'unknown' WHERE number = 7;");
     screen_when(&env, &pane, "open again", |s| title(s, "open"));
 }
 
 #[test]
 fn without_a_port_file_the_pending_review_row_has_no_arrow() {
     let env = env();
-    sql(&env, &plan_under_review(1, "pending"));
+    env.sql(&plan_under_review(1, "pending"));
     let pane = start_view(&env);
     let first = screen_when(&env, &pane, "the row", |s| s.len() > 3 && s[3].contains(" a "));
     assert_eq!(first[0], "   Plan review r1 pending", "{}", first.join("\n"));
     assert!(!styled_screen(&env, &pane).contains("localhost"));
     // a port file that holds no port is no port file
     write_port(&env, "not a port\n");
-    sql(&env, &event("plan-review", "ctx", Some("ship"), None, "{}"));
-    std::thread::sleep(Duration::from_millis(1500));
-    assert_eq!(screen(&env, &pane)[0], "   Plan review r1 pending");
+    // The same write that appends the Event stores a conflict in the box title: when the title shows it, the view has
+    // read the store (and the port file, written before) again.
+    env.sql(&format!(
+        "{}UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 7;",
+        event("plan-review", "ctx", Some("ship"), None, "{}")
+    ));
+    let after = screen_when(&env, &pane, "the re-read", |s| s.iter().any(|l| l.contains("#7 conflict 󰏌")));
+    assert_eq!(after[0], "   Plan review r1 pending");
 }
 
 #[test]
 fn with_no_pending_review_there_is_no_row_and_the_boxes_start_at_the_top() {
     let env = env();
-    sql(&env, &plan_under_review(1, "rejected"));
+    env.sql(&plan_under_review(1, "rejected"));
     write_port(&env, "19433\n");
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the box", |s| s.len() > 2 && s[2].contains(" a "));
@@ -531,7 +511,7 @@ fn with_no_pending_review_there_is_no_row_and_the_boxes_start_at_the_top() {
 #[test]
 fn no_lead_in_the_chat_slot_says_so() {
     let env = env();
-    sql(&env, &(context("ctx") + &lead_row("g-ctx", "ctx", "", "2026-01-01T00:00:00.000Z")));
+    env.sql(&(context("ctx") + &lead_row("g-ctx", "ctx", "", "2026-01-01T00:00:00.000Z")));
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the message", |s| s.iter().any(|l| l.contains("no Lead")));
     // in the message row, the pane's last row, indented by the margin; nothing above it
@@ -543,9 +523,9 @@ fn no_lead_in_the_chat_slot_says_so() {
 #[test]
 fn the_first_rows_of_the_pane_are_the_top_of_the_first_box_with_no_tab() {
     let env = env();
-    sql(&env, &plan_with("dispatch", None, &[("a", "queued", "S3", &[], 0)]));
+    env.sql(&plan_with("dispatch", None, &[("a", "queued", "S3", &[], 0)]));
     // a second Lead of the Context with a pane: it used to be a tab
-    sql(&env, &(lead_row("fork-ship", "ctx", "ship", "2026-01-02T00:00:09.000Z") + &event(
+    env.sql(&(lead_row("fork-ship", "ctx", "ship", "2026-01-02T00:00:09.000Z") + &event(
         "session-moved", "ctx", Some("ship"), Some("fork-ship"), r#"{"pane":"%2","window":"@2","place":"parked"}"#)));
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the box", |s| s.len() > 3 && s[2].contains(" a "));
@@ -564,13 +544,12 @@ fn the_view_follows_events_and_switches_plan_when_the_chat_slot_changes() {
     s += &plan_row("side", "ctx", "dispatch", "lead-side", "2026-01-02T00:00:05.000Z", None);
     s += &lead_row("lead-side", "ctx", "side", "2026-01-02T00:00:05.000Z");
     s += &job_row("side", "other", "queued", "O3");
-    sql(&env, &s);
+    env.sql(&s);
     let pane = start_view(&env);
     screen_when(&env, &pane, "Job a", |s| s.len() > 2 && s[2].contains(" a "));
 
     // a Job is appended to the shown Plan: its Event makes the view take a new snapshot
-    sql(
-        &env,
+    env.sql(
         &(job_row("ship", "b", "queued", "S3")
             + &need_row("ship", "b", "a")
             + &event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":["a"]}"#)),
@@ -579,7 +558,7 @@ fn the_view_follows_events_and_switches_plan_when_the_chat_slot_changes() {
     assert_eq!(chart_rows(&screen, 1), format!("  {QUEUED} a │S3 ───── {QUEUED} b │S3"));
 
     // the other Lead moves into the chat slot: the view shows its Plan
-    sql(&env, &in_chat("ctx", "side", "lead-side"));
+    env.sql(&in_chat("ctx", "side", "lead-side"));
     let screen = screen_when(&env, &pane, "the other Plan", |s| s.len() > 2 && s[2].contains("other"));
     assert_eq!(chart_rows(&screen, 1), format!("  {QUEUED} other │O3"));
     assert!(!screen.iter().any(|l| l.contains(&format!("{QUEUED} a "))), "{}", screen.join("\n"));
@@ -594,7 +573,7 @@ fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_re
     s += &plan_row("side", "ctx", "dispatch", "lead-side", "2026-01-02T00:00:05.000Z", None);
     s += &lead_row("lead-side", "ctx", "side", "2026-01-02T00:00:05.000Z");
     s += &job_row("side", "other", "queued", "O3");
-    sql(&env, &s);
+    env.sql(&s);
     let selected = |styled: &str| styled.contains("\x1b[1;7m") || styled.contains("\x1b[7;1m") || styled.contains("\x1b[7m");
     let pane = start_view(&env);
     let top = screen_when(&env, &pane, "the top of the chart", |s| s.len() > 2 && s[2].contains(" j10 "));
@@ -609,6 +588,7 @@ fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_re
     });
     let mut scrolled = screen(&env, &pane);
     wait_until("the chart to hold still", || {
+        // time-claim: the chart holds still when two screens 300 ms apart are the same; no signal from the view that it is done.
         std::thread::sleep(Duration::from_millis(300));
         let now = screen(&env, &pane);
         std::mem::replace(&mut scrolled, now) == scrolled
@@ -617,20 +597,15 @@ fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_re
     assert!(selected(&tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane])), "no pill is selected before the switch");
 
     // another Plan starts at its corner; coming back shows the chart where it was left, with nothing selected
-    sql(&env, &in_chat("ctx", "side", "lead-side"));
+    env.sql(&in_chat("ctx", "side", "lead-side"));
     screen_when(&env, &pane, "the other Plan", |s| s.len() > 2 && s[2].contains("other"));
-    sql(&env, &in_chat("ctx", "ship", "lead-ship"));
+    env.sql(&in_chat("ctx", "ship", "lead-ship"));
     // a frame reaches the pane in more than one write (the view's stdout flushes every 1024 bytes), so a capture can
     // show the first rows of the chart and nothing below: wait for the whole frame, and compare the last capture
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let back = loop {
+    let back = common::wait_some("the chart where it was left", common::WAIT, || {
         let now = screen(&env, &pane);
-        if now == scrolled || Instant::now() >= deadline {
-            break now;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    };
-    assert_eq!(back, scrolled, "{}", back.join("\n"));
+        if now == scrolled { Ok(now) } else { Err(now.join("\n")) }
+    });
     assert_ne!(back, top);
     assert!(!selected(&tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane])), "a pill is selected");
 }
@@ -638,13 +613,18 @@ fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_re
 #[test]
 fn the_view_starts_no_subprocess_and_asks_gh_nothing() {
     let env = env();
-    sql(&env, &plan_with("deploy", Some((7, "failed")), &[("a", "running", "S3", &[], 1)]));
+    env.sql(&plan_with("deploy", Some((7, "failed")), &[("a", "running", "S3", &[], 1)]));
     let pane = start_view(&env);
     let pid = tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_pid}"]).trim().to_owned();
     // let it draw, follow an Event and take a new snapshot
     screen_when(&env, &pane, "the chart", |s| s.len() > 2 && s[2].contains(" a "));
-    sql(&env, &event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":[]}"#));
-    std::thread::sleep(Duration::from_millis(1500));
+    // The Event comes with its Job: when the new pill shows, the view has followed the Event and read the store again.
+    env.sql(&format!(
+        "{}{}",
+        job_row("ship", "b", "queued", "S3"),
+        event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":[]}"#)
+    ));
+    screen_when(&env, &pane, "the new Job", |s| s.iter().any(|l| l.contains(" b ")));
     // the pane's program is the view itself, and it has no child process
     let children = env.command("ps").args(["-o", "pid=,args=", "--ppid", &pid]).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&children.stdout).trim(), "", "children of the view");
@@ -674,7 +654,7 @@ fn centre(env: &TestEnv) -> (String, String) {
 #[test]
 fn a_selected_pill_opens_its_worker_beside_the_chat_and_a_second_enter_closes_it() {
     let env = env();
-    sql(&env, &plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1), ("b", "queued", "S3", &["a"], 0)]));
+    env.sql(&plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1), ("b", "queued", "S3", &["a"], 0)]));
     let (plan, chat) = centre(&env);
     screen_when(&env, &plan, "the chart", |s| s.len() > 2 && s[2].contains(" a "));
 
@@ -683,8 +663,9 @@ fn a_selected_pill_opens_its_worker_beside_the_chat_and_a_second_enter_closes_it
     tmux_out(&env, &["send-keys", "-t", &plan, "Right"]);
     tmux_out(&env, &["send-keys", "-t", &plan, "Enter"]);
     wait_until("the Worker pane", || workers().contains("worker a a-a1"));
-    let calls = env.calls("cpd");
-    assert!(calls.contains(&["tui", "view", "worker", "a-a1", "--plan", "ship"].map(str::to_owned).to_vec()), "{calls:?}");
+    // The pane exists before the fake `cpd` has recorded its call: wait for the call.
+    let started = ["tui", "view", "worker", "a-a1", "--plan", "ship"].map(str::to_owned).to_vec();
+    wait_until("the Worker view to be started", || env.calls("cpd").contains(&started));
     // beside the chat, without taking the focus: the plan view keeps it
     let layout = tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{pane_id} #{@cpd_view} #{pane_active} #{pane_top} #{pane_width}"]);
     let row = |view: &str| layout.lines().find(|l| l.split(' ').nth(1) == Some(view)).unwrap().split(' ').map(str::to_owned).collect::<Vec<_>>();
@@ -699,7 +680,7 @@ fn a_selected_pill_opens_its_worker_beside_the_chat_and_a_second_enter_closes_it
 #[test]
 fn another_job_retargets_the_worker_pane_in_place() {
     let env = env();
-    sql(&env, &plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1), ("b", "running", "S3", &["a"], 1)]));
+    env.sql(&plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1), ("b", "running", "S3", &["a"], 1)]));
     let (plan, _) = centre(&env);
     screen_when(&env, &plan, "the chart", |s| s.len() > 2 && s[2].contains(" a "));
     let workers = || tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{pane_id} #{@cpd_view} #{@cpd_job} #{@cpd_attempt}"]);
@@ -712,18 +693,23 @@ fn another_job_retargets_the_worker_pane_in_place() {
     let after = workers();
     assert_eq!(after.lines().filter(|l| l.contains(" worker ")).count(), 1, "{after}");
     assert!(after.contains(&format!("{pane} worker b b-a1")), "retargeted in place: {after}");
-    let calls = env.calls("cpd");
-    assert!(calls.contains(&["tui", "view", "worker", "b-a1", "--plan", "ship"].map(str::to_owned).to_vec()), "{calls:?}");
+    // The pane exists before the fake `cpd` has recorded its call: wait for the call.
+    let started = ["tui", "view", "worker", "b-a1", "--plan", "ship"].map(str::to_owned).to_vec();
+    wait_until("the Worker view to be started", || env.calls("cpd").contains(&started));
 }
 
 #[test]
 fn q_does_not_quit_the_view() {
     let env = env();
-    sql(&env, &plan_with("dispatch", None, &[("a", "queued", "S3", &[], 0)]));
+    env.sql(&plan_with("dispatch", None, &[("a", "queued", "S3", &[], 0)]));
     let pane = start_view(&env);
     screen_when(&env, &pane, "the chart", |s| s.len() > 2 && s[2].contains(" a "));
-    tmux_out(&env, &["send-keys", "-t", &pane, "q"]);
-    std::thread::sleep(Duration::from_millis(600));
+    // The view handles keys in order: once `j` has selected the pill, `q` before it has been handled.
+    tmux_out(&env, &["send-keys", "-t", &pane, "q", "j"]);
+    wait_until("the pill selected", || {
+        let styled = styled_screen(&env, &pane);
+        styled.contains("\x1b[1;7m") || styled.contains("\x1b[7;1m") || styled.contains("\x1b[7m")
+    });
     assert_eq!(tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_dead}"]).trim(), "0");
     assert!(screen(&env, &pane)[2].contains(" a "));
 }

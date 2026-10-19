@@ -8,50 +8,27 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
 use super::lead::{self, Lead};
-use super::{Env, NewArgs, bad_row, read_text_file, write_file};
+use super::row::{self, PlanRow};
+use super::{Env, NewArgs, read_text_file, write_file};
 use crate::args::Text;
 use crate::context::{By, ContextRow, Contexts, Draft, PlanRef, digest};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
-use crate::ids::{ContextId, PlanId, SessionId};
+use crate::events::{NewEvent, append};
+use crate::ids::{PlanId, SessionId};
 use crate::output::Output;
 
-/// The Plan as `plan new` reads it back: no PR is needed (a Plan starts with none, R34 A12).
-#[derive(Clone, Debug)]
+/// The Plan as `plan new` reads it back, with its Lead's name and cwd as stored.
+/// No PR is needed (a Plan starts with none, R34 A12).
 struct Created {
-    id: PlanId,
-    context: ContextId,
-    title: String,
-    jira: Option<String>,
-    phase: String,
-    lead_session: SessionId,
-    /// The Lead's name and cwd, as stored.
+    plan: PlanRow,
     name: String,
     cwd: String,
 }
 
 fn find(conn: &Connection, id: &PlanId) -> Result<Option<Created>, CpdError> {
-    let raw = conn
-        .query_row(
-            "SELECT p.context, p.title, p.jira, p.phase, p.lead_session, s.name, s.cwd
-               FROM plans p JOIN sessions s ON s.id = p.lead_session WHERE p.id = ?1",
-            [id.as_str()],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get(2)?, r.get(3)?, r.get::<_, String>(4)?, r.get(5)?, r.get(6)?)),
-        )
-        .optional()?;
-    raw.map(|(context, title, jira, phase, lead_session, name, cwd)| {
-        Ok(Created {
-            id: id.clone(),
-            context: ContextId::parse(&context).map_err(|_| bad_row(format!("Plan {id} has context {context:?}")))?,
-            lead_session: SessionId::parse(&lead_session).map_err(|_| bad_row(format!("Plan {id} has lead_session {lead_session:?}")))?,
-            title,
-            jira,
-            phase,
-            name,
-            cwd,
-        })
-    })
-    .transpose()
+    let Some(plan) = row::find(conn, id)? else { return Ok(None) };
+    let (name, cwd) = conn.query_row("SELECT name, cwd FROM sessions WHERE id = ?1", [plan.lead_session.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(Some(Created { plan, name, cwd }))
 }
 
 /// The realpath of the directory `plan new` runs from: where the Lead starts (§6.4).
@@ -70,9 +47,9 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
     let context = env.store.read(|conn| ContextRow::require(conn, &args.context))?;
     if let Some(plan) = env.store.read(|conn| find(conn, &id))? {
         // The caller's cwd is not a flag: a rerun from another directory is still `already`.
-        let same = plan.context == args.context && plan.title == args.title.as_str() && plan.jira == jira && plan.name == name;
+        let same = plan.plan.context == args.context && plan.plan.title == args.title.as_str() && plan.plan.jira == jira && plan.name == name;
         if !same {
-            return Err(CpdError::new(ErrorCode::PlanExists, format!("Plan {id} exists with other flags.")).with("plan", summary(&plan, &[])));
+            return Err(CpdError::new(ErrorCode::PlanExists, format!("Plan {id} exists with other flags.")).with("plan", summary(&plan.plan, &[])));
         }
         return already(&mut env, &plan, brief.as_ref());
     }
@@ -107,14 +84,14 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
             rusqlite::params![id.as_str(), args.context.as_str(), args.title.as_str(), jira, session.as_str()],
         )?;
         let text = format!("Plan {id} \"{}\" created in Context {}, phase grounding. Next: cpd plan show --plan {id}", args.title, args.context);
-        let data = json!({"title": args.title.as_str(), "jira": jira, "lead_session": session, "forked_from": Value::Null, "cwd": cwd});
-        append(tx, NewEvent::new(Kind::PlanCreated, text, data).plan(id.clone()))?;
+        let event = NewEvent::plan_created(text, args.title.as_str(), jira.as_deref(), &session, Value::Null, &cwd);
+        append(tx, event.plan(id.clone()))?;
         let text = format!("Lead {name} of Plan {id} registered, a fresh Lead.");
-        let data = json!({"role": "lead", "name": name, "forked_from": Value::Null, "tier": tier});
-        append(tx, NewEvent::new(Kind::SessionRegistered, text, data).plan(id.clone()).session(session.clone()))?;
+        let event = NewEvent::session_registered(text, "lead", &name, Value::Null, &tier);
+        append(tx, event.plan(id.clone()).session(session.clone()))?;
         Ok(())
     })?;
-    let plan = env.store.read(|conn| find(conn, &id))?.ok_or_else(|| bad_row(format!("Plan {id} was just created")))?;
+    let Created { plan, .. } = env.store.read(|conn| find(conn, &id))?.ok_or_else(|| CpdError::bad_row(format!("Plan {id} was just created")))?;
 
     // 2. The `plan` record; 3. the first message; 4. the Lead's window.
     let record = write_record(&mut env, &plan)?;
@@ -122,7 +99,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
         write_brief(&mut env, &plan, brief)?;
     }
     write_message(&mut env, &plan, brief.as_ref())?;
-    let started = start_lead(&mut env, &plan, &session, &name)?;
+    let started = start_lead(&mut env, &plan, &cwd, &session, &name)?;
     Ok(Output::success(json!({
         "plan": summary(&plan, &[]),
         "lead": {"session": session, "name": name, "forked_from": Value::Null, "cwd": cwd,
@@ -134,7 +111,8 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
 /// `plan new` again with the same flags: redoes the steps that did not happen
 /// (the `plan` record, the first message, the Lead's window) and returns
 /// `"already": true`.
-fn already(env: &mut Env, plan: &Created, brief: Option<&Text>) -> Result<Output, CpdError> {
+fn already(env: &mut Env, created: &Created, brief: Option<&Text>) -> Result<Output, CpdError> {
+    let plan = &created.plan;
     let machine = env.config.machine.clone();
     let record: Option<String> = env.store.read(|conn| {
         Ok(conn
@@ -172,13 +150,13 @@ fn already(env: &mut Env, plan: &Created, brief: Option<&Text>) -> Result<Output
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?)
     })?;
-    let name = plan.name.clone();
+    let name = created.name.clone();
     if !env.home.lead_message(&plan.id).exists() {
         write_message(env, plan, brief)?;
     }
     let (pane, window) = match pane {
         None if state == "stopped" => {
-            let started = start_lead(env, plan, &plan.lead_session, &name)?;
+            let started = start_lead(env, plan, &created.cwd, &plan.lead_session, &name)?;
             (Some(started.pane.as_str().to_owned()), Some(started.window.as_str().to_owned()))
         }
         pane => (pane, env.store.read(|conn| lead::last_window(conn, &plan.lead_session))?),
@@ -186,15 +164,15 @@ fn already(env: &mut Env, plan: &Created, brief: Option<&Text>) -> Result<Output
     let prs = env.store.read(|conn| listed(conn, &plan.id))?;
     Ok(Output::success(json!({
         "plan": summary(plan, &prs),
-        "lead": {"session": plan.lead_session, "name": name, "forked_from": Value::Null, "cwd": plan.cwd, "pane": pane, "window": window},
+        "lead": {"session": plan.lead_session, "name": name, "forked_from": Value::Null, "cwd": created.cwd, "pane": pane, "window": window},
         "record": record,
         "already": true,
     })))
 }
 
 /// The Plan as `plan new` prints it; `prs` is empty for a new Plan.
-fn summary(plan: &Created, prs: &[Value]) -> Value {
-    json!({"id": plan.id, "context": plan.context, "title": plan.title, "jira": plan.jira, "phase": plan.phase,
+fn summary(plan: &PlanRow, prs: &[Value]) -> Value {
+    json!({"id": plan.id, "context": plan.context, "title": plan.title, "jira": plan.jira, "phase": plan.phase.as_str(),
            "lead_session": plan.lead_session, "prs": prs})
 }
 
@@ -209,16 +187,16 @@ fn listed(conn: &Connection, id: &PlanId) -> Result<Vec<Value>, CpdError> {
 
 /// Step 2: the Context record of kind `plan` (§4.6), `text` = the title.
 /// Returns its id.
-fn write_record(env: &mut Env, plan: &Created) -> Result<String, CpdError> {
+fn write_record(env: &mut Env, plan: &PlanRow) -> Result<String, CpdError> {
     let draft = Draft::Plan(PlanRef { id: plan.id.clone(), machine: env.config.machine.clone(), jira: plan.jira.clone() });
-    let title: Text = plan.title.parse().map_err(|_| bad_row(format!("Plan {} has title {:?}", plan.id, plan.title)))?;
+    let title: Text = plan.title.parse().map_err(|_| CpdError::bad_row(format!("Plan {} has title {:?}", plan.id, plan.title)))?;
     let written = Contexts::new(&env.config, &mut env.store).write(&plan.context, "plan new", writer()?, &title, draft)?;
     Ok(written.record.id.to_string())
 }
 
 /// Step 2, with `--brief-file`: the Context record of kind `brief` (B3-A4), `text` = the brief,
 /// `plan` = `{id, machine}`. Returns its id.
-fn write_brief(env: &mut Env, plan: &Created, brief: &Text) -> Result<String, CpdError> {
+fn write_brief(env: &mut Env, plan: &PlanRow, brief: &Text) -> Result<String, CpdError> {
     let draft = Draft::Brief(PlanRef { id: plan.id.clone(), machine: env.config.machine.clone(), jira: None });
     let written = Contexts::new(&env.config, &mut env.store).write(&plan.context, "plan new", writer()?, brief, draft)?;
     Ok(written.record.id.to_string())
@@ -238,7 +216,7 @@ fn env_id<T>(name: &str, parse: fn(&str) -> Result<T, CpdError>) -> Result<Optio
 /// Step 3: `run/<plan>/lead-message.md`: the header, the brief, then the
 /// Context as the first message gives it (§4.6 "Consumers": its digest and the
 /// records after it, or every record; the Lead is always fresh).
-fn write_message(env: &mut Env, plan: &Created, brief: Option<&Text>) -> Result<(), CpdError> {
+fn write_message(env: &mut Env, plan: &PlanRow, brief: Option<&Text>) -> Result<(), CpdError> {
     // This Plan's own brief is in the message in full: it is not listed again.
     let own_brief_of = brief.map(|_| &plan.id);
     let context = env.store.read(|conn| digest::first_message(conn, &env.home, &env.config.machine, &plan.context, own_brief_of))?;
@@ -250,7 +228,7 @@ fn write_message(env: &mut Env, plan: &Created, brief: Option<&Text>) -> Result<
     write_file(&env.home.lead_message(&plan.id), &(message.join("\n\n") + "\n"))
 }
 
-fn header(plan: &Created) -> String {
+fn header(plan: &PlanRow) -> String {
     format!(
         "You are the Lead of Plan {} \"{}\" in Context {}. Phase grounding: follow the cpd-lead skill.",
         plan.id, plan.title, plan.context
@@ -258,9 +236,9 @@ fn header(plan: &Created) -> String {
 }
 
 /// Step 4: the Lead's window `park-<plan>` (contract §6.2).
-fn start_lead(env: &mut Env, plan: &Created, session: &SessionId, name: &str) -> Result<lead::Started, CpdError> {
+fn start_lead(env: &mut Env, plan: &PlanRow, cwd: &str, session: &SessionId, name: &str) -> Result<lead::Started, CpdError> {
     let window = crate::host::layout::park_window(session, Some(&plan.id));
-    let lead = Lead { session, context: &plan.context, plan: Some(&plan.id), name, cwd: Path::new(&plan.cwd) };
+    let lead = Lead { session, context: &plan.context, plan: Some(&plan.id), name, cwd: Path::new(cwd) };
     lead::start(env, &lead, &window, "plan new")
 }
 
@@ -268,18 +246,21 @@ fn start_lead(env: &mut Env, plan: &Created, session: &SessionId, name: &str) ->
 mod tests {
     use super::*;
     use crate::ids::ContextId;
+    use crate::plan::Phase;
 
     #[test]
     fn the_header_names_plan_and_context() {
-        let plan = Created {
+        let plan = PlanRow {
             id: PlanId::parse("pay-4521").unwrap(),
             context: ContextId::parse("payments").unwrap(),
             title: "Retry failed payouts".into(),
             jira: None,
-            phase: "grounding".into(),
+            phase: Phase::Grounding,
             lead_session: SessionId::parse("s1").unwrap(),
-            name: "pay-4521".into(),
-            cwd: "/home/u".into(),
+            created_at: "t".into(),
+            locked_at: None,
+            done_at: None,
+            archived_at: None,
         };
         assert_eq!(
             header(&plan),

@@ -21,7 +21,7 @@ use time::format_description::well_known::Rfc3339;
 use super::SOURCE;
 use super::engine::{Engine, metrics};
 use super::report::{About, Step};
-use crate::driver::ledger::{self, Cause, End, Ladder};
+use crate::attempt::ledger::{self, Cause, End, Ladder, Stage};
 use crate::driver::lock::{self, Free};
 use crate::driver::worker;
 use crate::error::{CpdError, ErrorCode};
@@ -137,7 +137,7 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
     let catalog = engine.catalog()?;
     let ladder = Ladder { catalog: &catalog, retry_cap: engine.config.retry_cap };
     let metrics = metrics(target.worker_session.as_ref());
-    engine.store.write(SOURCE, |tx| ledger::end(tx, &target, &end, metrics.as_ref(), &ladder))?;
+    engine.store.write(SOURCE, |tx| ledger::end(tx, &target, &end, metrics.as_ref(), &ladder, Stage::Driver))?;
     // A9: after the end is committed, while the lock is still held.
     lock::remove(&engine.home, plan, id)?;
     drop(lock);
@@ -266,6 +266,13 @@ fn parse_time(text: &str) -> Result<OffsetDateTime, CpdError> {
     })
 }
 
+/// The Sessions E2 can still see as live. The `WHERE` is the `WHERE` of the partial index `sessions_live`
+/// (migration `read-indexes`, engine-F2), written the same: SQLite reads the index only for a query whose
+/// `WHERE` it can prove implies the index's, so the read costs the live Sessions, not every Session ever made
+/// (`sessions` only grows). A test pins the plan.
+const LIVE_SESSIONS: &str =
+    "SELECT id, role, state, tmux_pane, name FROM sessions WHERE state <> 'stopped' OR tmux_pane IS NOT NULL ORDER BY id";
+
 /// A Session not `stopped`, or with a pane, as read before the panes are listed.
 struct Live {
     id: SessionId,
@@ -284,9 +291,7 @@ struct Live {
 /// read, so a Session that got a new pane meanwhile is left alone.
 fn sessions(engine: &mut Engine) {
     let live = engine.store.read(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT id, role, state, tmux_pane, name FROM sessions WHERE state <> 'stopped' OR tmux_pane IS NOT NULL ORDER BY id",
-        )?;
+        let mut stmt = conn.prepare(LIVE_SESSIONS)?;
         let rows = stmt
             .query_map([], |r| {
                 Ok((
@@ -373,6 +378,22 @@ fn stop(engine: &mut Engine, session: &Live, why: &str) -> Result<bool, CpdError
 mod tests {
     use super::*;
     use time::macros::datetime;
+
+    /// engine-F2: E2's read of the Sessions goes through `sessions_live`, which lists the live Sessions only.
+    #[test]
+    fn the_live_sessions_are_read_through_the_partial_index_not_by_scanning_every_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = crate::home::CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let mut store = crate::store::Store::open(&home, 5000).unwrap();
+        let plan: Vec<String> = store
+            .read(|conn| {
+                let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {LIVE_SESSIONS}"))?;
+                Ok(stmt.query_map([], |r| r.get::<_, String>(3))?.collect::<rusqlite::Result<_>>()?)
+            })
+            .unwrap();
+        assert!(plan.iter().any(|step| step.contains("USING INDEX sessions_live")), "{plan:?}");
+        assert!(!plan.iter().any(|step| step.contains("sqlite_autoindex_sessions_1")), "{plan:?}");
+    }
 
     #[test]
     fn overlapping_escalations_pause_the_clock_once() {

@@ -292,8 +292,22 @@ fn generated_history_triggers_match_the_contracts_example() {
             continue;
         }
         let name = statement.split_whitespace().nth(2).unwrap();
-        let sql: String =
+        let mut sql: String =
             conn.query_row("SELECT sql FROM sqlite_schema WHERE name = ?1", [name], |r| r.get(0)).unwrap();
+        if name == "escalations_hist_upd" {
+            // The example abbreviates the changed-column lines of the columns its comments name.
+            let columns = names(&conn, "SELECT name FROM pragma_table_info('escalations')");
+            let omitted: Vec<&String> = columns.iter().filter(|c| !normalized(statement).contains(&format!("'{c}'"))).collect();
+            assert!(!omitted.is_empty(), "the example abbreviates");
+            for column in &omitted {
+                assert!(statement.contains(&format!(" {column},")) || statement.contains(&format!(" {column}\n")), "the comment names {column}");
+            }
+            sql = sql
+                .lines()
+                .filter(|line| !omitted.iter().any(|c| line.trim_start().starts_with(&format!("UNION ALL SELECT '{c}',"))))
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
         assert_eq!(normalized(&format!("{sql};")), normalized(statement), "{name}");
     }
 }
@@ -313,10 +327,23 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
         assert!(!columns.is_empty(), "{table}");
         let ins = sql_of(&format!("{table}_hist_ins"));
         let upd = sql_of(&format!("{table}_hist_upd"));
+        let key = names(&conn, &format!("SELECT name FROM pragma_table_info('{table}') WHERE pk > 0"));
         for column in &columns {
             assert!(ins.contains(&format!("'{column}', NEW.{column}")), "{table}_hist_ins lacks {column}");
-            assert!(upd.contains(&format!("'{column}', OLD.{column}")), "{table}_hist_upd lacks OLD.{column}");
-            assert!(upd.contains(&format!("'{column}', NEW.{column}")), "{table}_hist_upd lacks NEW.{column}");
+            // §4.4 "History row shape": the key always, every other column when it changed.
+            for row in ["OLD", "NEW"] {
+                if key.contains(column) {
+                    let forms = [
+                        format!("SELECT '{column}' AS k, {row}.{column} AS v"),
+                        format!("SELECT '{column}', {row}.{column}\n"),
+                        format!("SELECT '{column}', {row}.{column} UNION ALL"),
+                    ];
+                    assert!(forms.iter().any(|f| upd.contains(f)), "{table}_hist_upd lacks the key {row}.{column}");
+                } else {
+                    let line = format!("UNION ALL SELECT '{column}', {row}.{column} WHERE OLD.{column} IS NOT NEW.{column}\n");
+                    assert!(upd.contains(&line), "{table}_hist_upd lacks {line:?}");
+                }
+            }
         }
         if ["dependencies", "pr_needs", "pull_requests"].contains(&table) {
             let del = sql_of(&format!("{table}_hist_del"));
@@ -354,10 +381,64 @@ fn writes_are_copied_into_history_with_their_txn() {
     assert_eq!((rows[1].0, rows[1].2.as_str()), (txn + 1, "update"));
     let before: Value = serde_json::from_str(rows[1].3.as_deref().unwrap()).unwrap();
     let after: Value = serde_json::from_str(rows[1].4.as_deref().unwrap()).unwrap();
-    assert_eq!(before["status"], "open");
-    assert_eq!(after["status"], "answered");
-    assert_eq!(after["answer"], "Because.");
-    assert_eq!(after["asker_pid"], 1);
+    // §4.4 "History row shape": the key and the changed columns, a change from NULL included.
+    assert_eq!(before, json!({"plan": "pay", "id": "api-a1-q1", "status": "open", "answer": null, "answered_at": null}));
+    assert_eq!(after, json!({"plan": "pay", "id": "api-a1-q1", "status": "answered", "answer": "Because.", "answered_at": "t"}));
+}
+
+/// sql-F2 (hs-d234): a Job status flip used to store the whole row twice, its long text included.
+#[test]
+fn a_job_status_change_writes_only_the_key_and_the_changed_columns_to_history() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    fixture(&mut store);
+    // A Job with the size of a real one (7 KB of text on average, quality-sql-perf.md).
+    let long = "x".repeat(3500);
+    let seq: i64 = store
+        .write("test", |tx| {
+            exec(
+                tx,
+                &format!(
+                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                       status, appended, fingerprint, created_txn, created_at)
+                       VALUES ('pay', 'pay', 'big', 'Big', 'S2', '{long}', '{long}', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, '{FP}', cpd_txn(), 't')"
+                ),
+            )?;
+            Ok(tx.query_row("SELECT seq FROM jobs WHERE key = 'big'", [], |r| r.get(0))?)
+        })
+        .unwrap();
+    let last = |store: &mut Store| -> (Value, Value, i64) {
+        store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT before, after, length(before) + length(after) FROM history WHERE tbl = 'jobs' AND op = 'update' ORDER BY id DESC LIMIT 1",
+                    [],
+                    |r| {
+                        let text = |i| r.get::<_, String>(i).map(|s| serde_json::from_str::<Value>(&s).unwrap());
+                        Ok((text(0)?, text(1)?, r.get(2)?))
+                    },
+                )?)
+            })
+            .unwrap()
+    };
+    store.write("test", |tx| exec(tx, "UPDATE jobs SET status = 'running' WHERE key = 'big'")).unwrap();
+    let (before, after, bytes) = last(&mut store);
+    assert_eq!((before, after), (json!({"seq": seq, "status": "queued"}), json!({"seq": seq, "status": "running"})), "{bytes} B");
+    eprintln!("history bytes of a Job status change (before + after): {bytes}");
+    assert!(bytes < 100, "{bytes} B");
+    // A change to a value from NULL is a change.
+    store.write("test", |tx| exec(tx, "UPDATE jobs SET status = 'failed', failed_cause = 'crashed' WHERE key = 'big'")).unwrap();
+    let (before, after, _) = last(&mut store);
+    assert_eq!(before, json!({"seq": seq, "status": "running", "failed_cause": null}));
+    assert_eq!(after, json!({"seq": seq, "status": "failed", "failed_cause": "crashed"}));
+    // An UPDATE that changes nothing still writes one row, the key only.
+    let count = |store: &mut Store| -> i64 {
+        store.read(|c| Ok(c.query_row("SELECT count(*) FROM history WHERE tbl = 'jobs'", [], |r| r.get(0))?)).unwrap()
+    };
+    let rows = count(&mut store);
+    store.write("test", |tx| exec(tx, "UPDATE jobs SET status = status WHERE key = 'big'")).unwrap();
+    assert_eq!(count(&mut store), rows + 1);
+    assert_eq!(last(&mut store), (json!({"seq": seq}), json!({"seq": seq}), 2 * json!({"seq": seq}).to_string().len() as i64));
 }
 
 #[test]
@@ -617,7 +698,27 @@ fn a_read_transaction_cannot_write() {
         })
         .unwrap_err();
     assert_eq!(err.code(), ErrorCode::StoreFailed);
-    assert!(sqlite_message(&err).contains("outside a cpd write transaction"), "{err:?}");
+    assert!(sqlite_message(&err).contains("readonly"), "{err:?}");
+}
+
+/// store-G3: the statements that fire no trigger are stopped too.
+#[test]
+fn a_read_transaction_cannot_run_ddl_or_make_a_temp_table() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    fixture(&mut store);
+    for sql in ["CREATE TEMP TABLE scratch (x)", "CREATE TABLE scratch (x)", "DROP TABLE tier_catalog"] {
+        let err = store.read(|c| Ok(c.execute_batch(sql)?)).expect_err(sql);
+        assert_eq!(err.code(), ErrorCode::StoreFailed, "{sql}: {err:?}");
+        assert!(sqlite_message(&err).contains("readonly"), "{sql}: {err:?}");
+    }
+    // The guard is off again for the next write, and the schema is untouched.
+    store.write("test", |tx| exec(tx, "UPDATE contexts SET title = 'Changed'")).unwrap();
+    assert!(store.schema_mismatch().is_none());
+    let tables: i64 = store
+        .read(|c| Ok(c.query_row("SELECT count(*) FROM sqlite_temp_schema", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(tables, 0);
 }
 
 #[test]
@@ -732,6 +833,85 @@ fn the_tamper_query_reads_history_through_the_history_txn_index_not_the_table() 
         "history must be scanned through history_txn: {details:?}"
     );
     assert!(!details.iter().any(|d| d == "SCAN h"), "history must not be scanned as a table: {details:?}");
+}
+
+// ---------- §4.4 the read indexes (migration `read-indexes`: sql-F4, tui-F3, engine-F2; sql-F6 refused) ----------
+
+/// The detail column of `EXPLAIN QUERY PLAN <sql>` on a fresh store, one line per step.
+fn query_plan(sql: &str) -> Vec<String> {
+    let env = TestEnv::new();
+    let _store = open(&env);
+    let conn = raw(&env);
+    let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+    stmt.query_map([], |r| r.get::<_, String>(3)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+}
+
+/// The statement under test is read by `index`, not by a table scan.
+#[track_caller]
+fn assert_uses(sql: &str, index: &str) {
+    let plan = query_plan(sql);
+    assert!(plan.iter().any(|step| step.contains(&format!("USING INDEX {index}"))), "{index} unused by {sql}: {plan:?}");
+}
+
+/// sql-F4, tui-F3: the job counts of `plan_heads` (`tui/src/read/shared.rs`), run by every cockpit
+/// refresh (tree, widgets, statusbar, plan flow), scanned `jobs` with its overflow pages.
+#[test]
+fn the_cockpits_job_counts_are_read_through_jobs_plan_status() {
+    assert_uses(
+        "SELECT j.plan, j.status, count(*),
+                j.status = 'running' AND EXISTS (SELECT 1 FROM attempts a
+                  WHERE a.plan = j.plan AND a.job = j.key AND a.status = 'merging')
+           FROM jobs j WHERE NULL IS NULL OR j.plan = NULL GROUP BY j.plan, j.status, 4",
+        "jobs_plan_status",
+    );
+}
+
+/// sql-F6 asked for `events(kind, id)`. It is not in the schema, because SQLite (no statistics) then reads
+/// every Event of the kind for the statements that test a kind and a Session or a Plan, instead of
+/// `events_session` or `events_plan`: the Session SELECT of `session list` and the tree went from 6.7 to 797 ms
+/// on a copy of the live store, the inbox rules and E2's active time got 4 to 9 times slower. So these
+/// statements must keep the selective indexes.
+#[test]
+fn the_lookups_of_events_by_kind_and_session_or_plan_keep_their_selective_index() {
+    // `core/src/session/row.rs`, `tui/src/read/shared.rs`, `core/src/inbox/rules.rs` (per Session).
+    assert_uses(
+        "SELECT json_extract(e.data, '$.place') FROM events e WHERE e.session = 'x' AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1",
+        "events_session",
+    );
+    assert_uses("SELECT max(e.id) FROM events e WHERE e.session = 'x' AND e.kind = 'session-state'", "events_session");
+    // `core/src/watch/liveness.rs` (E2, per Attempt per tick), `core/src/job/retry.rs`.
+    assert_uses(
+        "SELECT at FROM events WHERE plan = 'p' AND attempt = 'a' AND kind = 'attempt-status' AND json_extract(data, '$.to') = 'running' ORDER BY id LIMIT 1",
+        "events_plan",
+    );
+    assert_uses("SELECT max(id) FROM events WHERE plan = 'p' AND job = 'j' AND kind = 'job-retried'", "events_plan");
+    // `events follow --session --kind` (`core/src/events/select.rs`).
+    assert_uses("SELECT id FROM events WHERE id > 0 AND session = 'x' AND kind IN ('session-state') ORDER BY id LIMIT 500", "events_session");
+}
+
+/// engine-F2: E2's Session read (`core/src/watch/liveness.rs`, unit-tested there against its own
+/// statement) must not read every Session ever made. The index lists only the Sessions E2 can
+/// still see as live, so a `stopped` Session with no pane costs nothing.
+#[test]
+fn only_the_live_sessions_are_in_sessions_live() {
+    let env = TestEnv::new();
+    let mut store = fixture_store(&env);
+    store
+        .write("test", |tx| {
+            exec(
+                tx,
+                "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at, tmux_pane)
+                   VALUES ('gone', 'lead', 'ctx', 'Gone', '/', 'O3', 'stopped', 't', 't', NULL),
+                          ('parked', 'lead', 'ctx', 'Parked', '/', 'O3', 'stopped', 't', 't', '%7');",
+            )
+        })
+        .unwrap();
+    let conn = raw(&env);
+    let sql = "SELECT id FROM sessions INDEXED BY sessions_live WHERE state <> 'stopped' OR tmux_pane IS NOT NULL ORDER BY id";
+    let mut stmt = conn.prepare(sql).unwrap();
+    let listed: Vec<String> = stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    // `lead1` is `idle`, `parked` is `stopped` with a pane; `gone` is `stopped` with none.
+    assert_eq!(listed, vec!["lead1".to_owned(), "parked".to_owned()]);
 }
 
 // ---------- §4.5 versions and migrations ----------
@@ -1020,7 +1200,17 @@ fn child_writer() {
             if let Some(started) = &started {
                 fs::write(started, "").unwrap();
             }
-            std::thread::sleep(hold);
+            match std::env::var_os("STORE_CHILD_RELEASE").map(PathBuf::from) {
+                // Holds the lock until the test says so, not for a time.
+                Some(release) => {
+                    let deadline = Instant::now() + Duration::from_secs(60);
+                    while !release.exists() {
+                        assert!(Instant::now() < deadline, "{} never appeared", release.display());
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
+                None => std::thread::sleep(hold),
+            }
             Ok(json!({"txn": tx.id(), "entered": entered, "left": now_ms()}))
         })
     });
@@ -1086,6 +1276,15 @@ struct Writer {
 
 impl Writer {
     fn spawn(env: &TestEnv, name: &str, busy_ms: u64, hold_ms: u64, started: Option<&Path>) -> Writer {
+        Writer::spawn_with(env, name, busy_ms, hold_ms, started, None)
+    }
+
+    /// A writer that holds the write lock until the file `release` exists.
+    fn spawn_holding(env: &TestEnv, name: &str, busy_ms: u64, started: &Path, release: &Path) -> Writer {
+        Writer::spawn_with(env, name, busy_ms, 0, Some(started), Some(release))
+    }
+
+    fn spawn_with(env: &TestEnv, name: &str, busy_ms: u64, hold_ms: u64, started: Option<&Path>, release: Option<&Path>) -> Writer {
         let out = env.root().join(format!("{name}.json"));
         let mut cmd = env.command(std::env::current_exe().unwrap());
         cmd.args(["child_writer", "--exact", "--test-threads=1", "--quiet"])
@@ -1096,6 +1295,9 @@ impl Writer {
             .stdout(std::process::Stdio::null());
         if let Some(started) = started {
             cmd.env("STORE_CHILD_STARTED", started);
+        }
+        if let Some(release) = release {
+            cmd.env("STORE_CHILD_RELEASE", release);
         }
         Writer { child: KillOnDrop::new(cmd.spawn().unwrap()), out }
     }
@@ -1125,15 +1327,16 @@ fn a_second_writer_waits_for_the_first_and_reads_do_not() {
     let env = TestEnv::new();
     drop(open(&env));
     let started = env.root().join("a.started");
-    let mut a = Writer::spawn(&env, "a", 5000, 1500, Some(&started));
+    let release = env.root().join("a.release");
+    let mut a = Writer::spawn_holding(&env, "a", 5000, &started, &release);
     a.wait_started(&started);
     let b = Writer::spawn(&env, "b", 20_000, 0, None);
-    // While A holds the write lock, a reader opens and reads at once.
-    let t = Instant::now();
+    // While A holds the write lock (until this test lets go of it), a reader opens and reads: had it to wait for A,
+    // it would wait for ever.
     let mut reader = open(&env);
     let txns: i64 = reader.read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap();
     assert_eq!(txns, 1, "A has not committed yet");
-    assert!(t.elapsed() < Duration::from_millis(1000), "the reader waited {:?}", t.elapsed());
+    fs::write(&release, "").unwrap();
     let (a, b) = (a.wait(), b.wait());
     assert_eq!(a["ok"], true, "{a}");
     assert_eq!(b["ok"], true, "{b}");
@@ -1147,7 +1350,8 @@ fn a_writer_that_cannot_get_the_lock_in_time_is_store_busy() {
     let env = TestEnv::new();
     drop(open(&env));
     let started = env.root().join("a.started");
-    let mut a = Writer::spawn(&env, "a", 5000, 3000, Some(&started));
+    let release = env.root().join("a.release");
+    let mut a = Writer::spawn_holding(&env, "a", 5000, &started, &release);
     a.wait_started(&started);
     let a_pid = a.child.id();
     let b = Writer::spawn(&env, "b", 200, 0, None).wait();
@@ -1164,6 +1368,7 @@ fn a_writer_that_cannot_get_the_lock_in_time_is_store_busy() {
     assert!(message.contains(&format!("pid {a_pid} (`test writer`")), "{message}");
     let waited = b["ended"].as_u64().unwrap() - b["begun"].as_u64().unwrap();
     assert!(waited >= 200, "gave up after {waited} ms");
+    fs::write(&release, "").unwrap();
     assert_eq!(a.wait()["ok"], true);
     let mut store = open(&env);
     let txns: i64 = store.read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap();
@@ -1191,6 +1396,8 @@ fn the_holders_record_is_gone_after_a_commit_and_after_a_rollback() {
 fn a_slow_write_is_logged_with_where_its_time_went() {
     let env = TestEnv::new();
     let mut store = open(&env);
+    // time-claim: a write that holds the lock 1.1 s, past the 1 s threshold, is logged with a closure at least that
+    // long; the sleep is the slow work itself, not a wait for a signal.
     store.write("slow", |_| Ok(std::thread::sleep(Duration::from_millis(1100)))).unwrap();
     let text = fs::read_to_string(env.cpd_home().join("run/store-slow.log")).unwrap();
     // Other writes of a loaded machine may be in it too: find this one.

@@ -9,12 +9,8 @@ mod common;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use common::{CPD, TestEnv};
-use cpd_core::error::CpdError;
-use cpd_core::home::CpdHome;
-use cpd_core::store::Store;
 use serde_json::json;
 
 // ---------- the prepared store ----------
@@ -25,22 +21,11 @@ fn env() -> TestEnv {
     env
 }
 
-fn sql(env: &TestEnv, text: &str) {
-    let mut store = Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap();
-    store
-        .write("fixture", |tx| {
-            tx.execute_batch(text)?;
-            Ok::<(), CpdError>(())
-        })
-        .unwrap();
-}
-
 /// Plan `ship` with Job `api` and its first Attempt `api-a1`, running. Its Worker Session `w1`, `working`, has
 /// the session file `file`, or none registered yet.
 fn populate(env: &TestEnv, file: Option<&Path>) {
     let file = file.map_or("NULL".to_owned(), |f| format!("'{}'", f.display()));
-    sql(
-        env,
+    env.sql(
         &format!(
             "INSERT INTO contexts (id, title, jira, created_at, created_on)
              VALUES ('alpha', 'Title', NULL, '2026-01-01T00:00:00.000Z', 'm1');
@@ -129,15 +114,7 @@ impl<'a> Pane<'a> {
     }
 
     fn wait(&self, what: &str, done: impl Fn(&[String]) -> bool) -> Vec<String> {
-        let start = Instant::now();
-        loop {
-            let screen = self.screen();
-            if done(&screen) {
-                return screen;
-            }
-            assert!(start.elapsed() < Duration::from_secs(10), "waiting for {what}; the screen is:\n{}", screen.join("\n"));
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        common::wait_screen(what, || self.screen(), done)
     }
 
     fn keys(&self, keys: &[&str]) {
@@ -230,11 +207,7 @@ fn scrolling_leaves_the_end_and_q_ends_the_view() {
     pane.keys(&["G"]);
     pane.wait("the end again", |s| s.iter().any(|r| r.contains("test result")));
     pane.keys(&["q"]);
-    let start = Instant::now();
-    while !pane.dead() {
-        assert!(start.elapsed() < Duration::from_secs(10), "q did not end the view");
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    common::wait_until("q to end the view", || pane.dead());
 }
 
 #[test]

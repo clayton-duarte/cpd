@@ -10,7 +10,7 @@ use super::row::{self, Row};
 use super::state::scoped;
 use super::{ArchiveArgs, Env, UnarchiveArgs, not_a_lead};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::host::chat_slot;
 use crate::ids::{PlanId, SessionId};
 use crate::plan::archive::{Objects, archive_keeping};
@@ -106,7 +106,7 @@ fn require_lead(row: &Row) -> Result<(), CpdError> {
 
 fn archived_event(row: &Row, archived: bool) -> NewEvent {
     let text = if archived { format!("Session {} archived.", row.name) } else { format!("Session {} unarchived.", row.name) };
-    scoped(NewEvent::new(Kind::SessionArchived, text, json!({"archived": archived})), row)
+    scoped(NewEvent::session_archived(text, archived), row)
 }
 
 /// `session archive` (commands.md §10.10).
