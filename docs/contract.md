@@ -249,6 +249,7 @@ In phase `plan` it covers every draft Job (all of them are drafts) and the PRs, 
 |---|---|---|
 | `plan`, `id` | text | `r<k>` |
 | `fingerprint` | text | the plan fingerprint (§2.3) the review was rendered from |
+| `title` | text? | what the drafts under review do (hs-d291): 1–72 characters, one line, no control characters, the same rule as a PR's title. It is the heading of the review document (`commands.md` §4.6). Null only on a review made before it existed |
 | `status` | text | `pending`, `approved`, `rejected` |
 | `feedback` | text? | the User's feedback |
 | `requested_at`, `decided_at` | time, time? | |
@@ -391,7 +392,7 @@ A hidden (snoozed or dismissed) item fills no dot and is not counted. Escalation
 | Kind | Condition (subject) | Urgency | Label (`<who>`: the tree's label of the Session: its Plan id, `<plan>·<suffix>` for a fork, the Context id for a Manager) |
 |---|---|---|---|
 | `dialog` | a Lead, side fork or Manager Session (never a Worker) is `blocked` with a label other than `cpd: Worker question` and `cpd: plan review` (the Session) | red when its Plan is in `dispatch` or `pr`; magenta in `grounding`, `plan`, `done` or with no Plan | `<who> asks you` |
-| `plan-review` | the Plan's latest Plan review is `pending` (the review) | magenta | `<plan> plan review` |
+| `plan-review` | the Plan's latest Plan review is `pending` (the review) | magenta | `<plan> plan review: <review title>` (hs-d291); `<plan> plan review` for a review with no title |
 | `unread` | a Lead, side fork or Manager Session is `idle`, not in the chat slot, and its latest `session-state` Event from `working` or `blocked` to `idle` is newer than its latest `session-moved` with `place: chat` (the Session); a start or reload (`stopped` → `idle`) is not a finished turn (hs-d242) | white | `<who> replied` |
 | `job-stuck` | a Job is `failed` and its latest `job-failed` Event is at least `inbox.stuck_job_minutes` (§8.2) old; it clears on retry or cancel (the Job) | red | `<plan>/<job> failed` |
 | `engine-error` | an `error` the engine itself reported (a failure of E1–E9, §3.7) has not cleared (step, scope and code) | red | `engine <step>: <code>` |
@@ -954,6 +955,7 @@ CREATE TABLE plan_reviews (
   id           TEXT NOT NULL,
   number       INTEGER NOT NULL CHECK (number >= 1),
   fingerprint  TEXT NOT NULL CHECK (length(fingerprint) = 64),
+  title        TEXT,  -- hs-d291, migration review-title (additive): null for a review made before it; the 1–72 character rule is enforced in the binary (§2.1)
   status       TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
   feedback     TEXT,
   requested_at TEXT NOT NULL,
