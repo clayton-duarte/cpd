@@ -59,10 +59,29 @@ test("Plan Lead: every kind of §15.3's table", async (t) => {
     assert.equal(s.message.display, true);
     assert.equal(s.message.content, `text of ${d.kind} ${d.id}`, "content is the Event's text");
     assert.equal(d.delivered_to, ID);
-    assert.deepEqual(s.options, { triggerTurn: LEAD[d.kind] === "turn", deliverAs: "followUp" }, d.kind);
+    const urgent = d.kind === "pr-feedback" || d.kind === "escalation";
+    assert.deepEqual(s.options, { triggerTurn: LEAD[d.kind] === "turn", deliverAs: urgent ? "steer" : "followUp" }, d.kind);
   }
   // Silent kinds: no message, no turn, nothing else sent.
   assert.equal(f.pi.sent.length, expected.length);
+});
+
+test("Plan Lead: a busy Lead gets pr-feedback (every reason) and escalation steered, job-merged as a follow-up; each still triggers a turn (hs-d276)", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f, "lead");
+  await f.pi.busy();
+  const reasons = ["checks-failed", "changes-requested", "closed", "conflict"];
+  f.emit(...reasons.map((reason, i) => event(101 + i, "pr-feedback", { data: { reason } })), event(105, "escalation"), event(106, "job-merged"));
+  await waitFor("six deliveries", () => f.pi.delivered().length === 6);
+  assert.deepEqual(
+    f.pi.delivered().map((s) => [(s.message.details as any).kind, s.options]),
+    [
+      ...reasons.map((): [string, unknown] => ["pr-feedback", { triggerTurn: true, deliverAs: "steer" }]),
+      ["escalation", { triggerTurn: true, deliverAs: "steer" }],
+      ["job-merged", { triggerTurn: true, deliverAs: "followUp" }],
+    ],
+  );
 });
 
 test("Plan Lead: the details are the whole Event plus delivered_to", async (t) => {

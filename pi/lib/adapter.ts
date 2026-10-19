@@ -14,6 +14,7 @@ import { lastAssistantText, needsReminder, planKeys, REMINDER_TEXT, REMINDER_TYP
 import { parseOpened, parseResult, parseStatus, request } from "./plannotator.ts";
 import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, highestReview, REVIEW_LABEL, reviewNumber, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
 import { adapterDir, appendLog, DEFAULT_POLL_MS, LONG_REFUSAL_NOTICE, pollAdapter, type Poll, refusal, RELOAD_COMMAND, reloadLogPath, RELOAD_TRIGGER, validatePackage, type Validation } from "./reload.ts";
+import { isTyped, startsReply } from "./reply.ts";
 import { Facts, Reporter, stateArgs, type Wanted } from "./state.ts";
 import { CONTEXT_TYPE, contextCursorFrom, contextUpdate, countsOf, parsePending, parsePlanEvents, parseRecordEvents, parseRecords, PLAN_KINDS, summaryLine } from "./updates.ts";
 
@@ -135,10 +136,13 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     if (r.reporting && run === r) r.reporter.want(r.facts.wanted());
   };
 
-  const newReporter = (id: string) =>
+  const newReporter = (id: string, facts: Facts) =>
     new Reporter(
       // No signal: the `stopped` of `session_shutdown` is sent after the abort, and `stop()` bounds its wait.
-      async (w: Wanted) => void (await callCpd(exec, stateArgs(w, id), { timeoutMs: timing.callTimeoutMs })),
+      async (w: Wanted) => {
+        if (w.state === "idle" && w.reply) facts.reply = false; // sent once, with this call
+        await callCpd(exec, stateArgs(w, id), { timeoutMs: timing.callTimeoutMs });
+      },
       (e) => deliver("session state", e),
     );
 
@@ -240,7 +244,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       info,
       cursor: 0,
       facts,
-      reporter: newReporter(id),
+      reporter: newReporter(id, facts),
       follower: undefined as unknown as Follower,
       reviews: new Map(),
       opening: new Set(),
@@ -431,7 +435,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     }
     const rule = LEAD_MESSAGES[ev.kind];
     if (rule) {
-      pi.sendMessage(eventMessage(ev, r.id), FOLLOW_UP(rule.turn));
+      pi.sendMessage(eventMessage(ev, r.id), { triggerTurn: rule.turn, deliverAs: rule.deliverAs });
       if (ev.kind === "escalation" && r.facts.open(`escalation:${ev.data.escalation as string}`, QUESTION_LABEL)) refresh(r);
       return;
     }
@@ -741,6 +745,17 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     } catch (e) {
       deliver("shutdown", e);
     }
+  });
+
+  // hs-d278: who started the run. `pi.on` has no unsubscribe, so the run is checked. Returns nothing: it adds no message.
+  pi.on("before_agent_start", function markReply(event) {
+    const r = run;
+    if (r) r.facts.reply = startsReply(event);
+  });
+
+  pi.on("input", (event) => {
+    const r = run;
+    if (r && r.facts.active && isTyped(event)) r.facts.reply = true; // typing during a run (steer or follow-up) makes it a reply run
   });
 
   pi.on("agent_start", () => {
