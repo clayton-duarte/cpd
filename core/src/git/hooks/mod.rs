@@ -104,6 +104,31 @@ pub fn run_hook(
     timeout: Duration,
     log: &Path,
 ) -> Result<HookResult, CpdError> {
+    run_with_branch(hook, worktree, None, operation, timeout, log)
+}
+
+/// [`run_hook`] in a worktree whose `HEAD` is detached (a gate worktree,
+/// contract §7.3, §7.6): the template variable `branch` is `branch`, given
+/// explicitly, instead of being read from `HEAD`.
+pub fn run_hook_as(
+    hook: Hook,
+    worktree: &Path,
+    branch: &str,
+    operation: Option<&Operation<'_>>,
+    timeout: Duration,
+    log: &Path,
+) -> Result<HookResult, CpdError> {
+    run_with_branch(hook, worktree, Some(branch), operation, timeout, log)
+}
+
+fn run_with_branch(
+    hook: Hook,
+    worktree: &Path,
+    branch: Option<&str>,
+    operation: Option<&Operation<'_>>,
+    timeout: Duration,
+    log: &Path,
+) -> Result<HookResult, CpdError> {
     let pipeline = match load(worktree, hook) {
         Ok(p) => p,
         Err(e) => return Ok(HookResult { outcome: HookOutcome::Error(e), tail: None }),
@@ -113,7 +138,7 @@ pub fn run_hook(
     }
 
     let cwd = worktree.canonicalize().unwrap_or_else(|_| worktree.to_path_buf());
-    let vars = variables(hook, &cwd, operation)?;
+    let vars = variables(hook, &cwd, branch, operation)?;
     let mut blocks = Vec::new();
     for block in &pipeline.blocks {
         let mut rendered = Vec::new();
@@ -154,14 +179,19 @@ pub fn run_hook(
 }
 
 /// The template variables of contract §7.3, as worktrunk defines them; also the
-/// JSON each command gets on stdin. Unset ones are absent.
-fn variables(hook: Hook, cwd: &Path, operation: Option<&Operation<'_>>) -> Result<Map<String, Value>, CpdError> {
+/// JSON each command gets on stdin. Unset ones are absent. `branch`, when
+/// given, is used instead of the branch checked out in `cwd`.
+fn variables(hook: Hook, cwd: &Path, branch: Option<&str>, operation: Option<&Operation<'_>>) -> Result<Map<String, Value>, CpdError> {
     let mut vars = Map::new();
     let mut set = |key: &str, value: Value| {
         vars.insert(key.to_owned(), value);
     };
 
-    if let Some(branch) = current_branch(cwd)? {
+    let branch = match branch {
+        Some(branch) => Some(branch.to_owned()),
+        None => current_branch(cwd)?,
+    };
+    if let Some(branch) = branch {
         set("branch", json!(branch));
     }
     set("worktree_path", json!(cwd));
