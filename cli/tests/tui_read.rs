@@ -739,6 +739,17 @@ fn a_plan_carries_its_pr_and_what_the_poll_saw() {
     assert_eq!(state("ship"), None);
 }
 
+#[test]
+fn a_pull_request_is_conflicting_only_when_the_poll_saw_a_conflict() {
+    let (_env, mut store) = fixture();
+    let mut pull = |store: &mut Store, p: &str| read::plan_boxes(store, &plan(p)).unwrap().prs[0].pull.clone().unwrap();
+    assert!(!pull(&mut store, "rel").conflicting, "a fresh row reads `unknown`");
+    for (mergeable, want) in [("conflicting", true), ("mergeable", false), ("unknown", false)] {
+        sql(&mut store, &format!("UPDATE pull_requests SET mergeable = '{mergeable}' WHERE number = 7"));
+        assert_eq!(pull(&mut store, "rel").conflicting, want, "{mergeable}");
+    }
+}
+
 /// A Plan as `plan new` leaves it: in grounding, with its Lead and no `prs` row (hs-n54).
 fn add_plan_without_pr(store: &mut Store) {
     let lead = session_row("l-fresh", "lead", "gamma", "fresh", None, "idle", None, "2026-01-02T00:00:09.000Z");
@@ -856,6 +867,13 @@ fn an_open_pull_request_carries_its_url_and_the_lead_of_its_owner() {
         "an owned one and an unowned one; the closed and the merged are not listed"
     );
     assert!(w.prs.iter().all(|p| !p.active), "the chat slot holds l-ship, which has no PR");
+    assert!(w.prs.iter().all(|p| !p.conflicting), "the default `unknown` is not a conflict");
+
+    // `mergeable` is a conflict only when it is `conflicting`.
+    sql(&mut store, "UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 70; UPDATE pull_requests SET mergeable = 'mergeable' WHERE number = 7;");
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    assert_eq!(w.prs.iter().map(|p| (p.number, p.conflicting)).collect::<Vec<_>>(), [(7, false), (70, true)]);
+    sql(&mut store, "UPDATE pull_requests SET mergeable = 'unknown' WHERE number = 70;");
 
     // Two Plans own the same pull request (the later one took it over): the most recently created Plan's Lead owns it.
     let lead = session_row("l-rel2", "lead", "beta", "rel2", None, "idle", None, "2026-01-04T00:00:00.000Z");

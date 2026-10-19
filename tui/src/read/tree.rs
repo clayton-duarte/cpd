@@ -41,8 +41,8 @@ pub struct ContextNode {
     pub archived_at: Option<String>,
     /// Its Plans, oldest first.
     pub plans: Vec<PlanNode>,
-    /// The dot of its row: a `●` only from its Manager Session's own items, else the most urgent glyph of its live
-    /// (not archived) Sessions, `Stopped` with none (§17).
+    /// The dot of its row: its live (not archived) Manager Session's own dot, `Stopped` with none (§17, hs-d215):
+    /// a `●` only from the Manager's own Inbox items (hs-d217), else the glyph of its state.
     pub dot: Dot,
 }
 
@@ -131,19 +131,21 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
         let now: String = conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?;
         let mut inbox = model::list(conn, &Filter { context: None, state: State::Visible { now: now.clone() } })?;
 
-        let mut managers: BTreeMap<String, SessionId> = BTreeMap::new();
-        let mut stmt = conn.prepare("SELECT context, id FROM sessions WHERE role = 'manager' AND archived_at IS NULL")?;
-        for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
-            let (context, session) = row?;
-            managers.insert(context, id("Manager Session id", &session, SessionId::parse)?);
-        }
-
         let mut leads: Vec<SessionNode> = sessions(conn, "s.role = 'lead'", &[])?;
         for s in leads.iter_mut().filter(|s| !s.is_archived()) {
             // An archived row keeps its glyph and takes no item (§17).
             s.dot = Dot::of(s.state, dot::urgency(&inbox, &s.id, s.plan.as_ref().filter(|_| s.plan_lead)));
         }
         let mut heads = plan_heads(conn, None)?;
+        // One live Manager per Context (`core/src/context/manager.rs`); the Context row shows its dot, a `●` only from
+        // the Manager's own items (hs-d215, hs-d217).
+        let managers: BTreeMap<ContextId, Dot> = sessions(conn, "s.role = 'manager' AND s.archived_at IS NULL", &[])?
+            .into_iter()
+            .map(|s| {
+                let dot = Dot::of(s.state, dot::urgency(&inbox, &s.id, None));
+                (s.context, dot)
+            })
+            .collect();
 
         let mut stmt = conn
             .prepare("SELECT id, title, jira, archived_at FROM contexts ORDER BY id")?;
@@ -163,23 +165,8 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
                 })
                 .collect::<Vec<PlanNode>>();
             let archived_at: Option<String> = r.get(3)?;
-            let manager_item = match (&archived_at, managers.get(&cid)) {
-                (None, Some(manager)) => dot::urgency(&inbox, manager, None),
-                _ => None,
-            };
-            // The Context's `●` is its Manager's alone; the glyph is the most urgent of its live Sessions' states.
-            let dot = match manager_item {
-                Some(urgency) => Dot::from(urgency),
-                None => plans
-                    .iter()
-                    .flat_map(|p| &p.sessions)
-                    .filter(|s| !s.is_archived())
-                    .map(|s| Dot::glyph(s.state))
-                    .max()
-                    .unwrap_or(Dot::Stopped),
-            };
             contexts.push(ContextNode {
-                dot,
+                dot: managers.get(&context).copied().unwrap_or(Dot::Stopped),
                 title: r.get(1)?,
                 jira: r.get(2)?,
                 records: records.remove(&cid).unwrap_or(0),

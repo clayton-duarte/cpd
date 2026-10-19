@@ -194,6 +194,8 @@ fn populate(env: &TestEnv) {
     s += &session_row("l-sketch", "sketch", "alpha", "sketch", "idle", None, "2026-01-02T00:00:01.000Z");
     s += &session_row("l-rel", "rel lead", "beta", "rel", "blocked", Some("cpd: PR feedback"), "2026-01-02T00:00:02.000Z");
     s += &session_row("l-old", "old lead", "beta", "old", "stopped", None, "2026-01-02T00:00:03.000Z");
+    s += &manager_row("m-alpha", "alpha", "idle", None);
+    s += &manager_row("m-beta", "beta", "blocked", Some("cpd: asking"));
     for (key, status) in [("a", "merged"), ("b", "merged"), ("c", "running"), ("d", "queued"), ("e", "failed")] {
         s += &job_row("ship", key, status);
     }
@@ -262,10 +264,22 @@ impl<'a> Pane<'a> {
     }
 
     /// The screen, each row without trailing blanks, without the empty rows at the end. The working dot turns with the
-    /// wall clock (`◐◓◑◒`), so every frame reads as the first: a test cannot know which one it catches.
+    /// wall clock (`SPINNER`), so on the row of the one working Lead (its counters `1⋅1⋅0⋅1⋅2`) every frame reads as
+    /// the first: a test cannot know which one it catches. Elsewhere a glyph is what it is: the last frame is the needs-you dot.
     fn screen(&self) -> Vec<String> {
         let out = self.env.tmux(&["capture-pane", "-p", "-t", SESSION]);
-        let text = String::from_utf8(out.stdout).unwrap().replace(['◓', '◑', '◒'], "◐");
+        let text: String = String::from_utf8(out.stdout).unwrap();
+        let text: String = text
+            .lines()
+            .map(|l| {
+                if l.trim_end().ends_with("1⋅1⋅0⋅1⋅2") {
+                    l.chars().map(|c| if SPINNER.iter().any(|g| g.starts_with(c)) { WORKING.chars().next().unwrap() } else { c }).collect()
+                } else {
+                    l.to_owned()
+                }
+            })
+            .collect::<Vec<String>>()
+            .join("\n");
         let mut rows: Vec<String> = text.lines().map(|l| l.trim_end().to_owned()).collect();
         while rows.last().is_some_and(String::is_empty) {
             rows.pop();
@@ -458,7 +472,7 @@ fn a_click_on_a_context_row_opens_its_manager_and_its_fold_glyph_folds_it() {
     assert!(screen[1].starts_with(" ▾ ") && screen.iter().any(|r| r.contains("ship")), "the label click folds nothing: {screen:?}");
     pane.click(1, 1); // its fold glyph
     let folded = pane.wait("alpha folded", |s| !s.iter().any(|r| r.contains("ship")));
-    assert_eq!(folded[1], " ▸ ● alpha 2", "a folded Context draws ▸ and its number of Plans");
+    assert_eq!(folded[1], format!(" ▸ {IDLE} alpha 2"), "a folded Context draws ▸ and its number of Plans");
     assert_eq!(calls(&env).len(), 2, "the glyph runs no command");
     pane.click(1, 1);
     pane.wait("alpha unfolded", |s| s.iter().any(|r| r.contains("ship")));
@@ -676,18 +690,18 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
     );
     // a click on beta's `…` shows the archived Plan at the depth it would have if live, with the normal guide
     pane.click(4, 8);
-    let screen = pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ◌ old")));
-    assert_eq!(screen[7..11], [row("  ├ ● rel", "0⋅0⋅0⋅0⋅1"), "   ├ …".to_owned(), row("  └ ◌ old", "0⋅0⋅0⋅0⋅0"), " …".to_owned()]);
+    let screen = pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("└ {STOPPED} old"))));
+    assert_eq!(screen[7..11], [row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"), "   ├ …".to_owned(), row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), " …".to_owned()]);
     // a click on the archived Plan shows its history (below); then the other `…` shows the archived Context
     pane.click(10, 9);
     wait_for_calls(&env, 1);
     pane.click(1, 10);
-    let screen = pane.wait("the archived Context", |s| s.iter().any(|r| r == " ▾ ◌ gamma"));
-    assert_eq!(screen[9..12], [row("  └ ◌ old", "0⋅0⋅0⋅0⋅0"), " …".to_owned(), " ▾ ◌ gamma".to_owned()]);
+    let screen = pane.wait("the archived Context", |s| s.iter().any(|r| r == &format!(" ▾ {STOPPED} gamma")));
+    assert_eq!(screen[9..12], [row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), " …".to_owned(), format!(" ▾ {STOPPED} gamma").to_owned()]);
     // a click on beta's `…` collapses its group again
     pane.click(4, 8);
-    let screen = pane.wait("the group collapsed", |s| s.iter().all(|r| !r.contains("└ ◌ old")));
-    assert_eq!(screen[7..9], [row("  ├ ● rel", "0⋅0⋅0⋅0⋅1"), "   └ …".to_owned()]);
+    let screen = pane.wait("the group collapsed", |s| s.iter().all(|r| !r.contains(&format!("└ {STOPPED} old"))));
+    assert_eq!(screen[7..9], [row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"), "   └ …".to_owned()]);
     assert_eq!(calls(&env), [words(&["session", "history", "l-old"])], "only the click on the archived Session ran a command");
 }
 
@@ -725,7 +739,7 @@ fn the_tree_follows_the_archive_events() {
          INSERT INTO events (txn, at, kind, context, plan, text, data)
          VALUES (cpd_txn(), '2026-02-02T00:00:00.000Z', 'plan-archived', 'beta', 'old', 'fixture', '{\"archived\":true}');",
     );
-    pane.wait("the Plan behind `…`", |s| s.iter().any(|r| r == "   └ …") && s.iter().all(|r| !r.contains("└ ◌ old")));
+    pane.wait("the Plan behind `…`", |s| s.iter().any(|r| r == "   └ …") && s.iter().all(|r| !r.contains(&format!("└ {STOPPED} old"))));
     sql(
         &mut open(&env),
         "UPDATE contexts SET archived_at = '2026-02-02T00:00:00.000Z' WHERE id = 'gamma';
@@ -942,7 +956,7 @@ fn unarchive_in_the_menu_runs_without_a_prompt_and_a_refusal_shows_in_the_note_r
     let pane = Pane::start(&env, 46, 16);
     pane.ready();
     pane.click(4, 8); // beta's `…`
-    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ◌ old")));
+    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("└ {STOPPED} old"))));
     pane.right_click(10, 9); // the archived Plan `old`
     let screen = pane.wait("the menu", |s| menu_open(s, "Rename…"));
     assert!(screen.iter().any(|r| r.contains("│ Rename… ")), "{screen:?}");
@@ -961,7 +975,7 @@ fn rename_on_an_archived_plan_runs_plan_rename() {
     let pane = Pane::start(&env, 60, 16);
     pane.ready();
     pane.click(4, 8); // beta's `…`
-    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ◌ old")));
+    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("└ {STOPPED} old"))));
     pane.right_click(10, 9);
     pane.wait("the menu", |s| menu_open(s, "Rename…"));
     pane.keys(&["Enter"]);

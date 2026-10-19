@@ -148,7 +148,8 @@ impl Store {
     /// The transaction runs with foreign keys off and `legacy_alter_table` on
     /// (§4.5 migration 4, step 1: both only take effect outside a
     /// transaction), so a migration can rebuild a table that others reference;
-    /// `PRAGMA foreign_key_check` then holds before the commit (step 5). Both
+    /// `PRAGMA foreign_key_check` then holds before the commit (step 5), and so
+    /// does the schema hash of the version reached (§4.5, hs-n121). Both
     /// are restored afterwards, whether the migration committed or not.
     ///
     /// When the migration that imported the old Context stores (§4.5 migration
@@ -220,6 +221,20 @@ impl Store {
             .with("foreign_key_violations", Value::from(violations)));
         }
         tx.pragma_update(None, "user_version", VERSION).map_err(|e| failed(VERSION, e))?;
+        // The check of §4.3, made before the commit: a schema the binary does
+        // not describe is never committed (§4.5, hs-n121).
+        let expected = schema::SCHEMA_HASHES[VERSION as usize - 1];
+        let actual = schema_hash(&tx).map_err(|e| failed(VERSION, e))?;
+        if actual != expected {
+            return Err(CpdError::new(
+                ErrorCode::MigrationFailed,
+                format!("Migration {VERSION} of the database failed: its schema hash is {actual}, expected {expected}."),
+            )
+            .with("from", version)
+            .with("version", VERSION)
+            .with("expected", expected)
+            .with("actual", actual));
+        }
         tx.commit()?;
         Ok((version as usize) < schema::IMPORTS_OLD_STORES)
     }
@@ -471,7 +486,7 @@ fn enrich(e: CpdError, path: &Path, busy_ms: u64) -> CpdError {
 }
 
 /// A SQLite failure, as Escalation `rs-store-a1-q1` decided: busy after the
-/// busy timeout is `store_busy`; the triggers' `RAISE(ABORT, 'job_locked')`,
+/// busy timeout is `store_busy`, and so is `SQLITE_LOCKED`; the triggers' `RAISE(ABORT, 'job_locked')`,
 /// `'illegal_transition'`, `'pr_locked'` and `'needs_other_pr'` (§4.4) are
 /// those refusals; anything else is `store_failed` with `sqlite_code` and
 /// `sqlite_message`.
@@ -483,7 +498,7 @@ impl From<rusqlite::Error> for CpdError {
             _ => None,
         };
         match sqlite {
-            Some(f) if f.code == SqliteCode::DatabaseBusy => CpdError::new(
+            Some(f) if matches!(f.code, SqliteCode::DatabaseBusy | SqliteCode::DatabaseLocked) => CpdError::new(
                 ErrorCode::StoreBusy,
                 "Another cpd process held the database's write lock for longer than store_busy_ms.",
             )

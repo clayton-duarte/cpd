@@ -10,6 +10,9 @@
 
 mod archive;
 mod contexts;
+pub mod digest;
+pub(crate) mod distill;
+pub mod inforce;
 pub(crate) mod legacy;
 mod manager;
 mod pending;
@@ -29,7 +32,7 @@ use time::macros::format_description;
 pub use contexts::{ContextRow, Contexts, Written};
 pub use record::{By, Draft, PlanRef, Record};
 
-use crate::args::{PlanArg, Text};
+use crate::args::{PlanArg, Text, Title};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
@@ -63,6 +66,8 @@ pub enum Command {
     Manager(manager::ManagerArgs),
     /// List the in-flight work of the Context's active Plans (§3.11)
     Pending(pending::PendingArgs),
+    /// Build the Context's digest with one-shot pi (§3.12)
+    Distill(distill::DistillArgs),
 }
 
 /// A Jira Epic key: `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage` (commands.md §3.1).
@@ -141,7 +146,7 @@ pub struct NewArgs {
     id: ContextId,
     /// The title
     #[arg(long, value_name = "text")]
-    title: Text,
+    title: Title,
     /// The Jira Epic key, stored only
     #[arg(long, value_name = "key")]
     jira: Option<Jira>,
@@ -160,6 +165,9 @@ pub struct ShowArgs {
     /// Print this one record in full
     #[arg(long, value_name = "id", conflicts_with = "since")]
     record: Option<RecordId>,
+    /// Print the Context's latest digest, and no record
+    #[arg(long, conflicts_with_all = ["since", "record"])]
+    digest: bool,
 }
 
 #[derive(Args, Debug)]
@@ -205,7 +213,7 @@ pub struct RenameArgs {
     id: ContextId,
     /// The new title
     #[arg(long, value_name = "text")]
-    title: Text,
+    title: Title,
 }
 
 #[derive(Args, Debug)]
@@ -239,6 +247,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Unarchive(args) => archive::unarchive(args),
         Command::Manager(args) => manager::manager(args),
         Command::Pending(args) => pending::pending(args),
+        Command::Distill(args) => distill::distill(args),
     }
 }
 
@@ -273,7 +282,7 @@ fn context_json(row: &ContextRow) -> Value {
 /// `context new` (§3.1).
 fn new(args: NewArgs) -> Result<Output, CpdError> {
     let (_, config, mut store) = open()?;
-    let (row, already) = Contexts::new(&config, &mut store).create(&args.id, &args.title, args.jira.as_ref())?;
+    let (row, already) = Contexts::new(&config, &mut store).create(&args.id, &Text::from(args.title.clone()), args.jira.as_ref())?;
     let mut out = json!({"context": context_json(&row)});
     if already {
         out["already"] = json!(true);
@@ -320,8 +329,11 @@ fn list() -> Result<Output, CpdError> {
 
 /// `context show` (§3.3).
 fn show(args: ShowArgs) -> Result<Output, CpdError> {
-    let (_, config, mut store) = open()?;
+    let (home, config, mut store) = open()?;
     let id = args.select.resolve(&mut store)?;
+    if args.digest {
+        return show_digest(&home, &mut store, &id);
+    }
     if let Some(record) = &args.record {
         return show_record(&mut store, &id, record);
     }
@@ -351,6 +363,17 @@ fn show(args: ShowArgs) -> Result<Output, CpdError> {
         "context": {"id": row.id, "title": row.title, "jira": row.jira},
         "records": records,
         "markdown": markdown,
+    })))
+}
+
+/// `context show --digest` (§3.3): the Context's latest digest file, and no record.
+fn show_digest(home: &CpdHome, store: &mut Store, context: &ContextId) -> Result<Output, CpdError> {
+    let row = store.read(|conn| ContextRow::require(conn, context))?;
+    let digest = digest::latest(home, context)?;
+    Ok(Output::success(json!({
+        "context": {"id": row.id, "title": row.title, "jira": row.jira},
+        "digest": digest.as_ref().map(|d| json!({"upto_seq": d.upto_seq, "file": d.file, "bytes": d.text.len()})),
+        "markdown": digest.map(|d| d.text),
     })))
 }
 

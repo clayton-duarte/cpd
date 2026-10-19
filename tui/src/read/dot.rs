@@ -10,39 +10,44 @@ use cpd_core::session::State;
 /// Working > Idle > Stopped` (§17, Precedence).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Dot {
-    /// `◌`: pi stopped.
+    /// `palette::STOPPED`: pi stopped.
     Stopped,
-    /// `○`: idle, nothing needed.
+    /// `palette::IDLE`: idle, nothing needed.
     Idle,
-    /// `◐◓◑◒`: the Lead is working.
+    /// `palette::SPINNER`: the Lead is working.
     Working,
-    /// `●` white: an Inbox item of urgency `white`.
+    /// `palette::NEEDS_YOU` white: an Inbox item of urgency `white`.
     White,
-    /// `●` magenta.
+    /// `palette::NEEDS_YOU` magenta.
     Magenta,
-    /// `●` yellow.
+    /// `palette::NEEDS_YOU` yellow.
     Yellow,
-    /// `●` red.
+    /// `palette::NEEDS_YOU` red.
     Red,
 }
 
 impl Dot {
-    /// The Session needs the User: a `●` of any colour.
+    /// The Session needs the User: a `palette::NEEDS_YOU` of any colour.
     pub fn needs_you(self) -> bool {
         self >= Dot::White
     }
 
-    /// The glyph of a state, for a row with no item: `◐◓◑◒`, `○` or `◌`.
+    /// The glyph of a state, for a row with no item: the spinner, `palette::IDLE` or `palette::STOPPED`.
     pub fn glyph(state: State) -> Dot {
         match state {
             State::Working => Dot::Working,
             State::Stopped => Dot::Stopped,
-            State::Idle | State::Blocked => Dot::Idle,
+            State::Working | State::Idle | State::Blocked => Dot::Idle,
         }
     }
 
-    /// The dot of a Session in `state` whose most urgent open, visible item has urgency `item`.
+    /// The dot of a Session in `state` whose most urgent open, visible item has urgency `item`. Own state first
+    /// (hs-d183): a working Session shows the spinner whatever its items, so a Lead at work is never yellow, magenta
+    /// or white; any other state shows its most urgent item, else its glyph.
     pub fn of(state: State, item: Option<Urgency>) -> Dot {
+        if state == State::Working {
+            return Dot::Working;
+        }
         item.map_or_else(|| Dot::glyph(state), Dot::from)
     }
 }
@@ -120,8 +125,11 @@ mod tests {
     }
 
     #[test]
-    fn an_item_gives_its_urgency_colour_whatever_the_state() {
-        for state in [State::Working, State::Idle, State::Blocked, State::Stopped] {
+    fn an_item_gives_its_urgency_colour_unless_the_session_is_working() {
+        for urgency in [Urgency::Red, Urgency::Yellow, Urgency::Magenta, Urgency::White] {
+            assert_eq!(Dot::of(State::Working, Some(urgency)), Dot::Working, "own state first (hs-d183): {urgency:?}");
+        }
+        for state in [State::Idle, State::Blocked, State::Stopped] {
             for (urgency, dot) in
                 [(Urgency::Red, Dot::Red), (Urgency::Yellow, Dot::Yellow), (Urgency::Magenta, Dot::Magenta), (Urgency::White, Dot::White)]
             {
@@ -184,8 +192,8 @@ mod tests {
     #[test]
     fn the_order_is_the_precedence() {
         let order = [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::White, Dot::Working, Dot::Idle, Dot::Stopped];
-        assert!(order.windows(2).all(|w| w[0] > w[1]), "red > yellow > magenta > white > ◐ > ○ > ◌");
+        assert!(order.windows(2).all(|w| w[0] > w[1]), "red > yellow > magenta > white > working > idle > stopped");
         assert_eq!(order.iter().copied().max(), Some(Dot::Red));
-        assert_eq!(order.iter().filter(|d| d.needs_you()).count(), 4, "the ● are the four colours");
+        assert_eq!(order.iter().filter(|d| d.needs_you()).count(), 4, "the needs-you dots are the four colours");
     }
 }

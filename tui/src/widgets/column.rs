@@ -62,6 +62,7 @@ fn truncate(text: &str, max: usize) -> String {
 
 /// One open pull request, two lines (commands.md §13.2): ` owner/repo#n` with `↗` in the last column, then
 /// `  <open|draft> <checks> <review>  <title>`, the title cut first to fit `width`; the name is cut so it never reaches the `↗`.
+/// A conflicting one adds ` conflict` in red after the review (kept red under the active and dim styles).
 /// An `active` one (a PR of the chat slot's Plan) is reversed and bold, as the active tab is; one no Plan owns is dim.
 fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
     let name = truncate(&format!(" {}#{}", pr.repo, pr.number), width.saturating_sub(2));
@@ -73,7 +74,8 @@ fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
         ReviewDecision::None => "no review",
     };
     let (icon, checks) = palette::checks(pr.checks);
-    let used = 2 + state_text.chars().count() + 3 + review.chars().count();
+    let conflict = " conflict";
+    let used = 2 + state_text.chars().count() + 3 + review.chars().count() + if pr.conflicting { conflict.chars().count() } else { 0 };
     let mut spans = vec![
         "  ".into(),
         Span::styled(state_text, palette::fg(palette::pr_state(PrState::Open))),
@@ -82,6 +84,9 @@ fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
         " ".into(),
         review.into(),
     ];
+    if pr.conflicting {
+        spans.push(Span::styled(conflict, palette::fg(Meaning::Failed)));
+    }
     let room = width.saturating_sub(used + 2);
     if room >= 4 {
         let title = format!("  {}", truncate(&pr.title, room));
@@ -219,6 +224,7 @@ mod tests {
             draft: false,
             checks: crate::read::Checks::Passed,
             review_decision: ReviewDecision::None,
+            conflicting: false,
             active: false,
             lead: lead.map(|l| SessionId::parse(l).unwrap()),
         }
@@ -317,5 +323,46 @@ mod tests {
         assert_eq!(row(&buf, 14), "no_cockpit: nothing here");
         assert_eq!(buf[(0, 14)].fg, palette::note().fg.unwrap());
         assert_eq!(row(&buf, 10), " (future)", "the rest is as drawn");
+    }
+
+    fn second_line(pr: &OpenPr, width: u16) -> (String, Buffer) {
+        let (buf, _) = drawn(width, 20, &widgets(vec![pr.clone()]), "");
+        (row(&buf, 7), buf)
+    }
+
+    #[test]
+    fn a_conflicting_pr_shows_conflict_in_red_after_its_review_and_others_do_not() {
+        let mut p = pr(7, Some("l-a"));
+        assert_eq!(second_line(&p, 40).0, "  open ✓ no review  A title");
+        p.conflicting = true;
+        let (line, buf) = second_line(&p, 40);
+        assert_eq!(line, "  open ✓ no review conflict  A title");
+        let x = line.find("conflict").map(|b| line[..b].chars().count() as u16).unwrap();
+        for dx in 0..8 {
+            assert_eq!(buf[(x + dx, 7)].fg, palette::color(Meaning::Failed));
+        }
+        assert_ne!(buf[(x - 2, 7)].fg, palette::color(Meaning::Failed), "the review is not red");
+    }
+
+    #[test]
+    fn conflict_keeps_its_red_under_the_active_and_dim_styles() {
+        for (active, lead, modifier) in [(true, Some("l-a"), Modifier::REVERSED | Modifier::BOLD), (false, None, Modifier::DIM)] {
+            let mut p = pr(7, lead);
+            p.conflicting = true;
+            p.active = active;
+            let (line, buf) = second_line(&p, 40);
+            let x = line.find("conflict").map(|b| line[..b].chars().count() as u16).unwrap();
+            assert_eq!(buf[(x, 7)].fg, palette::color(Meaning::Failed));
+            assert!(buf[(x, 7)].modifier.contains(modifier));
+        }
+    }
+
+    #[test]
+    fn a_narrow_column_cuts_the_title_before_conflict() {
+        let mut p = pr(7, Some("l-a"));
+        p.conflicting = true;
+        assert_eq!(second_line(&p, 28).0, "  open ✓ no review conflict");
+        assert_eq!(second_line(&p, 32).0, "  open ✓ no review conflict");
+        assert_eq!(second_line(&p, 33).0, "  open ✓ no review conflict  A t…");
     }
 }
