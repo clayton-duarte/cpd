@@ -18,10 +18,13 @@ pub mod logs;
 pub mod palette;
 mod plan;
 pub mod read;
+mod runner;
 mod statusbar;
 mod tree;
 pub mod widgets;
 mod worker;
+
+pub use runner::{Capture, ViewError, run_view};
 
 use std::ffi::OsString;
 
