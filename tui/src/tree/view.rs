@@ -30,6 +30,8 @@ use crate::palette;
 use crate::read::{ContextNode, SessionNode, Tree};
 
 /// The longest name of a Session (commands.md §1.4).
+/// Rows a wheel notch scrolls the Inbox section by.
+const WHEEL_ROWS: usize = 3;
 const NAME_MAX: usize = 80;
 const FORK_SUFFIX: &str = " (fork)";
 
@@ -98,8 +100,16 @@ pub struct View {
     /// The inner area of the last frame (the pane less a blank column on each side, below the blank top row): the
     /// menu is clamped inside it and hit-tested against it, and its `x` is the column of the tree's first cell.
     pane: Rect,
-    /// The Inbox section's rows (header, items, `+<n> more`) are all shown, not only the first three. View state only.
+    /// The Inbox section's rows (header, items, `+<n> more`) are shown, not only the first three, in at most half the
+    /// column ([`View::inbox_cap`]). View state only.
     inbox_expanded: bool,
+    /// The first item row the expanded section shows (the wheel and the cursor move it; the drawing clamps it).
+    /// View state only.
+    inbox_scroll: usize,
+    /// The most rows the expanded section may take, as the last frame had it: half the column.
+    inbox_cap: u16,
+    /// The cursor moved (or the list changed): the next frame scrolls the section to show the cursor's item.
+    follow_inbox_cursor: bool,
     /// Where the last frame drew the Inbox section (empty when it drew none): clicks there are the section's.
     inbox_area: Rect,
     /// The item row of the Inbox section the keyboard cursor is on (an index of the snapshot's Inbox, a shown one):
@@ -121,6 +131,9 @@ impl View {
             menu: None,
             pane: Rect::default(),
             inbox_expanded: false,
+            inbox_scroll: 0,
+            inbox_cap: u16::MAX,
+            follow_inbox_cursor: false,
             inbox_area: Rect::default(),
             inbox_cursor: None,
             note: String::new(),
@@ -141,12 +154,18 @@ impl View {
             let moved = item.and_then(|id| self.tree.inbox.iter().position(|it| it.id == id));
             self.inbox_cursor = Some(moved.unwrap_or(i));
             self.clamp_inbox_cursor();
+            self.follow_inbox_cursor = true;
         }
+    }
+
+    /// The Inbox section as the last frame had it.
+    fn shape(&self) -> Shape {
+        Shape::new(self.tree.inbox.len(), self.inbox_expanded).capped(self.inbox_cap).scrolled(self.inbox_scroll)
     }
 
     /// The Inbox cursor stays on a shown item row; with none, it goes.
     fn clamp_inbox_cursor(&mut self) {
-        let shown = Shape::new(self.tree.inbox.len(), self.inbox_expanded).shown();
+        let shown = self.shape().shown();
         self.inbox_cursor = self.inbox_cursor.and_then(|i| shown.checked_sub(1).map(|last| i.min(last)));
     }
 
@@ -230,7 +249,8 @@ impl View {
             KeyCode::Char('s') => {
                 self.note.clear();
                 if let Some(item) = self.cursor_item().filter(|i| i.kind != InboxKind::EngineDown) {
-                    let at = Position::new(self.inbox_area.x + 2, self.inbox_area.y + 1 + self.inbox_cursor.unwrap_or(0) as u16);
+                    let row = self.inbox_cursor.and_then(|i| self.shape().row_of(i)).unwrap_or(1);
+                    let at = Position::new(self.inbox_area.x + 2, self.inbox_area.y + row);
                     self.menu = Some(Menu::for_item(Kind::Snooze, item.id, at));
                 }
             }
@@ -245,6 +265,7 @@ impl View {
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Up | KeyCode::Char('k') => {
                 let delta = if matches!(key.code, KeyCode::Down | KeyCode::Char('j')) { 1 } else { -1 };
                 self.arrow(delta);
+                self.follow_inbox_cursor = true;
                 self.last_input = Input::Arrow;
             }
             KeyCode::Enter => {
@@ -264,7 +285,7 @@ impl View {
     /// into the Inbox's shown items and back up from the first to the last Session; when it does not show, the key
     /// only shows it again where it was (on the first Session when it has none).
     fn arrow(&mut self, delta: isize) {
-        let shown = Shape::new(self.tree.inbox.len(), self.inbox_expanded).shown();
+        let shown = self.shape().shown();
         if let Some(i) = self.inbox_cursor {
             if self.cursor_shown() {
                 self.inbox_cursor = match (delta, i) {
@@ -297,7 +318,7 @@ impl View {
         // a right click on the Inbox section: the menu of an item row; the header and `+<n> more` have none
         if self.menu.is_none() && m.kind == MouseEventKind::Down(MouseButton::Right) && self.inbox_area.contains(at) {
             self.note.clear();
-            if let Some(Hit::Item(i)) = Shape::new(self.tree.inbox.len(), self.inbox_expanded).hit(at.y - self.inbox_area.y) {
+            if let Some(Hit::Item(i)) = self.shape().hit(at.y - self.inbox_area.y) {
                 let item = &self.tree.inbox[i];
                 if item.kind != InboxKind::EngineDown {
                     self.menu = Some(Menu::for_item(Kind::Inbox, item.id, at));
@@ -319,6 +340,14 @@ impl View {
             };
         }
         match m.kind {
+            // the wheel over the Inbox section scrolls its items, three rows a notch, as the Plan view; elsewhere it does nothing
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp if self.inbox_area.contains(at) => {
+                let max = self.shape().max_scroll();
+                let scroll = self.inbox_scroll.min(max);
+                self.inbox_scroll =
+                    if m.kind == MouseEventKind::ScrollDown { (scroll + WHEEL_ROWS).min(max) } else { scroll.saturating_sub(WHEEL_ROWS) };
+                Effect::None
+            }
             MouseEventKind::Down(MouseButton::Left) => self.click(m),
             MouseEventKind::Down(MouseButton::Right) => {
                 self.open_menu(at);
@@ -473,10 +502,12 @@ impl View {
     /// A left click on the Inbox section, `row` rows below its header: `+<n> more` and `− less` toggle the inline
     /// expansion; an item jumps to its cause ([`inbox::jump`]); the header does nothing.
     fn click_inbox(&mut self, row: u16) -> Effect {
-        match Shape::new(self.tree.inbox.len(), self.inbox_expanded).hit(row) {
+        match self.shape().hit(row) {
             Some(Hit::Toggle) => {
                 self.inbox_expanded = !self.inbox_expanded;
+                self.inbox_scroll = 0;
                 self.clamp_inbox_cursor();
+                self.follow_inbox_cursor = true;
                 Effect::None
             }
             Some(Hit::Item(i)) => self.jump(i),
@@ -523,7 +554,15 @@ impl View {
             if footer.is_empty() { 0 } else { (wrapped + usize::from(wrapped > 1)).max(1).min(inner.height as usize) as u16 };
         // the section leaves the tree at least one row, when there is one to leave
         let room = inner.height.saturating_sub(1 + footer_height).saturating_sub(1);
-        let inbox_height = Shape::new(self.tree.inbox.len(), self.inbox_expanded).height().min(room);
+        // expanded, the section takes at most half the column
+        self.inbox_cap = inner.height / 2;
+        self.inbox_scroll = self.inbox_scroll.min(self.shape().max_scroll());
+        if std::mem::take(&mut self.follow_inbox_cursor) {
+            if let Some(i) = self.inbox_cursor {
+                self.inbox_scroll = self.shape().scroll_to(i);
+            }
+        }
+        let inbox_height = self.shape().height().min(room);
         let [_, list, inbox_area, footer_area] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Min(0),
@@ -539,7 +578,7 @@ impl View {
         }
         self.inbox_area = inbox_area;
         let inbox_cursor = self.inbox_cursor.filter(|_| self.cursor_shown());
-        inbox::draw(f, inbox_area, &self.tree.inbox, self.inbox_expanded, inbox_cursor, now, frame);
+        inbox::draw(f, inbox_area, &self.tree.inbox, self.shape(), inbox_cursor, now, frame);
         if footer_height > 0 {
             let style = if self.prompt.is_some() { palette::note().bold() } else { palette::note() };
             f.render_widget(Paragraph::new(footer).style(style).wrap(Wrap { trim: false }), footer_area);

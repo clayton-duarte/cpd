@@ -19,7 +19,7 @@ use super::rows::truncate;
 use crate::link::link;
 use crate::palette::{self, Meaning};
 use crate::read::{Dot, Tree};
-use crate::widgets::section_header;
+use crate::widgets::{Window, dim, max_scroll, section_header, window};
 use cpd_core::ids::SessionId;
 use cpd_core::inbox::model::{Item, Kind};
 
@@ -39,19 +39,34 @@ pub enum Hit {
     Toggle,
 }
 
-/// The rows of the section for `count` visible items.
+/// The rows of the section for `count` visible items. Expanded, its height is capped at `cap` rows (never below the
+/// collapsed section's) and the items scroll in it from the item `scroll`, with a ` ▲ <n> more` and a ` ▼ <n> more` cue row
+/// where some are hidden; the scrolling is the Deploy column's PR list's ([`window`]), one row an item.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Shape {
     count: usize,
     expanded: bool,
+    cap: u16,
+    scroll: usize,
 }
 
 impl Shape {
+    /// The section as tall as its items want (no cap), at the top.
     pub fn new(count: usize, expanded: bool) -> Shape {
-        Shape { count, expanded }
+        Shape { count, expanded, cap: u16::MAX, scroll: 0 }
     }
 
-    /// The item rows: three, or all when expanded.
+    /// The same, expanded at most `cap` rows tall.
+    pub fn capped(self, cap: u16) -> Shape {
+        Shape { cap, ..self }
+    }
+
+    /// The same, scrolled to the item `scroll` (clamped on use).
+    pub fn scrolled(self, scroll: usize) -> Shape {
+        Shape { scroll, ..self }
+    }
+
+    /// The item rows the keyboard cursor reaches: three, or all when expanded (they scroll).
     pub fn shown(self) -> usize {
         if self.expanded { self.count } else { self.count.min(SHOWN) }
     }
@@ -60,18 +75,64 @@ impl Shape {
         self.count > SHOWN
     }
 
-    /// The rows the section wants: the header, the items, the toggle.
+    /// The rows the section wants: the header, the items, the toggle; expanded, at most the cap, but not less than collapsed.
     pub fn height(self) -> u16 {
-        u16::try_from(1 + self.shown() + usize::from(self.has_toggle())).unwrap_or(u16::MAX)
+        let collapsed = 1 + self.count.min(SHOWN) + usize::from(self.has_toggle());
+        let full = 1 + self.count + usize::from(self.has_toggle());
+        let height = if self.expanded { full.min(usize::from(self.cap)).max(collapsed) } else { collapsed };
+        u16::try_from(height).unwrap_or(u16::MAX)
     }
 
-    /// The row `row` rows below the header's.
+    /// The rows between the header and the toggle: the items and their cues.
+    fn list_rows(self) -> usize {
+        usize::from(self.height()) - 1 - usize::from(self.has_toggle())
+    }
+
+    /// The items drawn and the cues: all of the first three when collapsed, else the window at the scroll offset.
+    fn window(self) -> Window {
+        if self.expanded {
+            window(self.count, self.list_rows(), 1, self.scroll)
+        } else {
+            Window { first: 0, shown: self.shown(), cue_above: false, below: 0 }
+        }
+    }
+
+    /// The largest scroll offset: the last item reaches the bottom of the list. 0 when collapsed or when all fit.
+    pub fn max_scroll(self) -> usize {
+        if self.expanded { max_scroll(self.count, self.list_rows(), 1) } else { 0 }
+    }
+
+    /// The row, below the header's, of the item `i`, when it is drawn.
+    pub fn row_of(self, i: usize) -> Option<u16> {
+        let win = self.window();
+        (win.first..win.first + win.shown).contains(&i).then(|| (1 + usize::from(win.cue_above) + i - win.first) as u16)
+    }
+
+    /// The scroll offset nearest `scroll` at which the item `i` is drawn.
+    pub fn scroll_to(self, i: usize) -> usize {
+        let mut scroll = self.scroll.min(self.max_scroll());
+        if i < self.scrolled(scroll).window().first {
+            scroll = i;
+        }
+        while scroll < self.max_scroll() && self.scrolled(scroll).row_of(i).is_none() {
+            scroll += 1;
+        }
+        scroll
+    }
+
+    /// The row `row` rows below the header's; a cue row is none.
     pub fn hit(self, row: u16) -> Option<Hit> {
         let row = usize::from(row);
+        let win = self.window();
+        let list = self.list_rows();
         match row {
             0 => Some(Hit::Header),
-            r if r <= self.shown() => Some(Hit::Item(r - 1)),
-            r if r == self.shown() + 1 && self.has_toggle() => Some(Hit::Toggle),
+            r if r <= list => {
+                let at = r - 1;
+                (at >= usize::from(win.cue_above) && at - usize::from(win.cue_above) < win.shown)
+                    .then(|| Hit::Item(win.first + at - usize::from(win.cue_above)))
+            }
+            r if r == list + 1 && self.has_toggle() => Some(Hit::Toggle),
             _ => None,
         }
     }
@@ -153,9 +214,10 @@ fn item_line(item: &Item, age: &str, width: usize, frame: usize) -> (Line<'stati
 
 /// Draws the section into `area` (its first row is the header; rows that do not fit are cut): `items` are the
 /// snapshot's visible open items, `now` the clock the ages are taken from, `cursor` the item the keyboard cursor
-/// is on (its row is inverted across its width).
-pub fn draw(f: &mut Frame, area: Rect, items: &[Item], expanded: bool, cursor: Option<usize>, now: OffsetDateTime, frame: usize) {
-    let shape = Shape::new(items.len(), expanded);
+/// is on (its row is inverted across its width). `shape` is the section's, as capped and scrolled.
+pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Option<usize>, now: OffsetDateTime, frame: usize) {
+    let win = shape.window();
+    let list = usize::from(shape.height()) - 1 - usize::from(shape.has_toggle());
     for dy in 0..area.height.min(shape.height()) {
         let row = Rect::new(area.x, area.y + dy, area.width, 1);
         match shape.hit(dy) {
@@ -176,8 +238,14 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], expanded: bool, cursor: O
                 }
             }
             Some(Hit::Toggle) => {
-                let text = if expanded { "− less".to_owned() } else { format!("+{} more", items.len() - SHOWN) };
+                let text = if shape.expanded { "− less".to_owned() } else { format!("+{} more", items.len() - SHOWN) };
                 f.render_widget(Paragraph::new(Span::styled(text, palette::fg(Meaning::Nothing))), row);
+            }
+            None if win.cue_above && dy == 1 => {
+                f.render_widget(Paragraph::new(dim(format!(" ▲ {} more", win.first))), row);
+            }
+            None if win.below > 0 && usize::from(dy) == list => {
+                f.render_widget(Paragraph::new(dim(format!(" ▼ {} more", win.below))), row);
             }
             None => {}
         }
@@ -361,7 +429,7 @@ mod tests {
         let url = "https://github.com/acme/api/pull/12";
         let mut linked = item(1, Kind::PrFailing, Urgency::Red, "api#12 failing", OPENED);
         linked.url = Some(url.into());
-        terminal.draw(|f| draw(f, f.area(), &[linked], false, None, at("2026-01-01T00:03:30.000Z"), 0)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &[linked], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"), 0)).unwrap();
         let bytes = sink.0.borrow().clone();
         let pieces: String = ["ap", "i#", "12", " f", "ai", "li", "ng"]
             .iter()
@@ -380,7 +448,7 @@ mod tests {
         let mut dialog = item(2, Kind::Dialog, Urgency::Red, "dialog", OPENED);
         dialog.url = Some(url.into());
         let no_url = item(3, Kind::PlanReview, Urgency::Yellow, "review", OPENED);
-        terminal.draw(|f| draw(f, f.area(), &[dialog, no_url], false, None, at("2026-01-01T00:03:30.000Z"), 0)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &[dialog, no_url], Shape::new(2, false), None, at("2026-01-01T00:03:30.000Z"), 0)).unwrap();
         assert!(!printed(&sink.0.borrow()).contains("\x1b]8;;"));
     }
 }
