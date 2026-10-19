@@ -14,7 +14,7 @@ mod common;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{CPD, SLEEP_SECONDS, TestEnv, copy_executable, wait_until};
 use cpd_core::error::CpdError;
