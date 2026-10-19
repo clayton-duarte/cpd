@@ -1150,9 +1150,9 @@ fn a_click_on_an_archived_fork_runs_session_history() {
     fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
-    let shown = [format!("   └ {MORE}")];
-    assert_eq!(pane.rows_are(5, &shown)[5..6], shown, "the archived fork is behind alpha's `…`");
-    pane.click(4, 5);
+    let shown = [format!("   {MORE}"), "   └ expand".to_owned()];
+    assert_eq!(pane.rows_are(5, &shown)[5..7], shown, "the archived fork is behind alpha's `…`");
+    pane.click(5, 6); // its `└ expand` row
     pane.wait("the archived fork", |s| s.iter().any(|r| r.contains(&format!("├ {IDLE} ship·f-bl"))));
     pane.click(10, 6);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "history", "f-blocked"])]);
@@ -1168,7 +1168,7 @@ fn a_click_that_shows_a_history_is_refused_in_the_note_row() {
     env.fake("cpd", r#"echo '{"ok":false,"error":{"code":"file_unreadable","message":"The session file is missing.","details":{}}}'; exit 1"#);
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
-    pane.click(4, 5);
+    pane.click(5, 6); // the `└ expand` row of alpha's `…`
     pane.wait("the archived fork", |s| s.iter().any(|r| r.contains(&format!("├ {IDLE} ship·f-bl"))));
     pane.click(10, 6);
     pane.wait("the refusal", |_| pane.footer_has("file_unreadable: The session file is missing."));
@@ -1224,11 +1224,11 @@ fn unarchive_in_the_menu_runs_without_a_popup_and_a_refusal_shows_in_the_note_ro
     populate(&env);
     archive(&env);
     env.fake("cpd", r#"echo '{"ok":false,"error":{"code":"archived","message":"The Context is archived.","details":{}}}'; exit 3"#);
-    let pane = Pane::start(&env, 46, 16);
+    let pane = Pane::start(&env, 46, 22);
     pane.ready();
-    pane.click(4, 8); // beta's `…`
-    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("└ {STOPPED} old"))));
-    pane.right_click(10, 9); // the archived Plan `old`
+    pane.click(5, 10); // the `└ expand` row of beta's `…`
+    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("├ {STOPPED} old"))));
+    pane.right_click(10, 10); // the archived Plan `old`
     let screen = pane.wait("the menu", |s| menu_open(s, "Rename…"));
     assert!(screen.iter().any(|r| r.contains("│ Rename… ")), "{screen:?}");
     assert!(screen.iter().all(|r| !r.contains("New Plan") && !r.contains("Archive ")), "Rename…, Copy id and Unarchive only: {screen:?}");
@@ -1245,11 +1245,11 @@ fn rename_on_an_archived_plan_runs_plan_rename() {
     fake_cpd(&env, r#"{"ok":true,"plan":"old","title":"Older"}"#);
     fake_dialogs(&env);
     type_in(&env, "Plan older");
-    let pane = Pane::start(&env, 60, 16);
+    let pane = Pane::start(&env, 60, 22);
     pane.ready();
-    pane.click(4, 8); // beta's `…`
-    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("└ {STOPPED} old"))));
-    pane.right_click(10, 9);
+    pane.click(5, 10); // the `└ expand` row of beta's `…`
+    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("├ {STOPPED} old"))));
+    pane.right_click(10, 10);
     pane.wait("the menu", |s| menu_open(s, "Rename…"));
     pane.keys(&["Enter"]);
     assert_eq!(
@@ -1288,9 +1288,9 @@ fn new_context_opens_an_input_popup_for_a_title_and_runs_context_new_with_the_de
     fake_cpd(&env, r#"{"ok":true,"context":{"id":"building-cpd"}}"#);
     fake_dialogs(&env);
     type_in(&env, "Building cpd!");
-    let pane = Pane::start(&env, 60, 18);
+    let pane = Pane::start(&env, 60, 22);
     pane.ready();
-    pane.right_click(5, 12); // the empty area
+    pane.right_click(5, 15); // the empty area
     pane.wait("the menu", |s| menu_open(s, "New Context…"));
     pane.keys(&["Enter"]);
     assert_eq!(
