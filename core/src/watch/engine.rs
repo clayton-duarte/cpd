@@ -218,12 +218,18 @@ pub(super) fn run() -> Result<Output, CpdError> {
         distill_started: HashMap::new(),
     };
 
-    let tick = Duration::from_secs(u64::from(engine.config.watch.tick_seconds));
+    let tick = engine.config.watch.tick_seconds.duration();
     while !stopping() {
         let began = Instant::now();
         engine.tick();
-        while !stopping() && began.elapsed() < tick {
-            std::thread::sleep(NAP.min(tick.saturating_sub(began.elapsed())));
+        // The next tick comes at the earlier of a tick from now and E5's due time (§3.7): a poll is not held to a tick boundary.
+        let next = (began + tick).min(pr::due(&engine, began));
+        while !stopping() {
+            let left = next.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            std::thread::sleep(NAP.min(left));
         }
     }
 

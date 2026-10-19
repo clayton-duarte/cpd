@@ -55,6 +55,16 @@ fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
     }
 }
 
+/// Recorded `tui view tree` starts.
+fn tree_starts(env: &TestEnv) -> usize {
+    views_started(env).iter().filter(|c| c[2] == "tree").count()
+}
+
+/// A pane's process exists before the fake `cpd` has written its record: wait for the record.
+fn wait_for_tree_starts(env: &TestEnv, n: usize) {
+    wait_until(&format!("{n} recorded tree starts"), || tree_starts(env) >= n);
+}
+
 /// One pane of `cpd:main`.
 #[derive(Debug, Clone, PartialEq)]
 struct Pane {
@@ -102,10 +112,6 @@ fn views_started(env: &TestEnv) -> Vec<Vec<String>> {
     env.calls("cpd").into_iter().filter(|c| c.first().map(String::as_str) == Some("tui")).collect()
 }
 
-fn tree_starts(env: &TestEnv) -> usize {
-    views_started(env).iter().filter(|c| c[2] == "tree").count()
-}
-
 /// Asserts `main` holds the layout of §13.1: the tree left, the plan view
 /// above the chat slot in the centre, the widgets right, the one-row StatusBar
 /// across the bottom, each marked.
@@ -144,9 +150,10 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     let chat = view(&panes, "chat");
     assert_eq!(windows(&env, "cpd"), ["main"]);
     assert_eq!(windows(&env, "cpd-work"), ["watch"]);
-    let views: Vec<Vec<String>> = ["tree", "plan", "widgets", "chat", "statusbar"].iter().map(|v| vec!["tui".into(), "view".into(), (*v).into()]).collect();
-    // The views start in parallel: each records itself when its process runs, in no set order.
-    wait_until("every view to record itself", || views_started(&env).len() >= views.len());
+    // Each view runs in its own pane process; the contract promises which views exist, not their start order.
+    let mut views: Vec<Vec<String>> = ["tree", "plan", "widgets", "chat", "statusbar"].iter().map(|v| vec!["tui".into(), "view".into(), (*v).into()]).collect();
+    views.sort();
+    wait_until("the five views to be recorded", || views_started(&env).len() >= 5);
     let mut started = views_started(&env);
     started.sort();
     let mut expected = views.clone();
@@ -304,14 +311,14 @@ fn a_killed_view_respawns_at_once_and_the_engine_stays_dead() {
         !p.dead && p.pid.is_some() && p.pid != tree.pid
     });
     drop(tree_tty);
+    wait_for_tree_starts(&env, 2);
     std::thread::sleep(Duration::from_millis(300));
     assert!(pane_state(&env, engine).0, "the engine pane stays dead for E2");
     let after = main_panes(&env);
     assert_layout(&after);
     assert_eq!(view(&after, "tree").id, tree.id);
-    // respawn-pane returns before the fake cpd has recorded its argv.
-    wait_until("the respawned tree view to record itself", || tree_starts(&env) >= 2);
-    assert_eq!(tree_starts(&env), 2);
+    wait_for_tree_starts(&env, 2);
+    assert_eq!(tree_starts(&env), 2, "no third start");
 }
 
 #[test]
@@ -336,9 +343,8 @@ fn tui_respawns_a_dead_pane_of_the_layout_in_place_and_sets_the_hook_again() {
     assert_eq!(after.iter().map(|p| &p.id).collect::<Vec<_>>(), before.iter().map(|p| &p.id).collect::<Vec<_>>());
     assert_ne!(view(&after, "tree").pid, tree.pid);
     assert_ne!(view(&after, "statusbar").pid, bar.pid);
-    // respawn-pane returns before the fake cpd has recorded its argv.
-    wait_until("the respawned tree view to record itself", || tree_starts(&env) >= 2);
-    assert_eq!(tree_starts(&env), 2);
+    wait_for_tree_starts(&env, 2);
+    assert_eq!(tree_starts(&env), 2, "no third start");
     assert_server_options(&env);
 }
 
@@ -413,9 +419,8 @@ fn tui_respawn_restarts_every_live_view_and_no_lead_or_engine() {
     // Each view reruns its own command: the Worker view keeps its argv.
     let worker_command = tmux_out(&env, &["display", "-p", "-t", worker, "#{pane_start_command}"]);
     assert!(worker_command.contains("3601"), "{worker_command}");
-    // respawn-pane returns before the fake cpd has recorded its argv.
-    wait_until("the respawned tree view to record itself", || tree_starts(&env) >= 2);
-    assert_eq!(tree_starts(&env), 2);
+    wait_for_tree_starts(&env, 2);
+    assert_eq!(tree_starts(&env), 2, "no third start");
     // The parked placeholder (not in main) and the engine are not touched.
     assert_eq!(pane_state(&env, &placeholder.id).1, placeholder.pid);
     assert_eq!(pane_state(&env, engine), (false, engine_pid));

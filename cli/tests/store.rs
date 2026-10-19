@@ -1323,8 +1323,6 @@ fn processes_opening_a_new_database_at_once_migrate_it_once() {
 fn version_on_an_empty_home_reports_no_store_and_creates_nothing() {
     let env = TestEnv::new();
     let out = env.cpd(&["--version"]).ok();
-    assert_eq!(out["schema"], VERSION);
-    assert!(out["store_schema"].is_null(), "{out}");
     assert!(out["store"].is_null(), "{out}");
     assert_eq!(out["protocol"], 4, "{out}");
     assert!(!home(&env).db().exists());
@@ -1332,24 +1330,21 @@ fn version_on_an_empty_home_reports_no_store_and_creates_nothing() {
 }
 
 #[test]
-fn version_on_a_migrated_home_reports_the_verdict_and_the_legacy_projection() {
+fn version_on_a_migrated_home_reports_the_verdict_only() {
     let env = TestEnv::new();
     drop(open(&env));
     let out = env.cpd(&["--version"]).ok();
-    assert_eq!(out["schema"], 1000);
-    assert_eq!(out["store_schema"], 1000);
+    assert_eq!(out.as_object().unwrap().len(), 4, "only ok, version, protocol and store: {out}");
     assert_eq!(out["store"], json!({"opens": true, "refusal": null, "unknown": [], "pending": []}), "{out}");
 }
 
 #[test]
-fn version_on_a_store_that_does_not_open_reports_the_refusal_and_store_schema_above_schema() {
+fn version_on_a_store_that_does_not_open_reports_the_refusal() {
     let env = TestEnv::new();
     drop(open(&env));
     raw(&env).pragma_update(None, "user_version", VERSION + 1).unwrap();
     let before = fs::read(home(&env).db()).unwrap();
     let out = env.cpd(&["--version"]).ok();
-    assert_eq!(out["schema"], VERSION);
-    assert_eq!(out["store_schema"], VERSION + 1, "integer-era guards refuse: store_schema above schema");
     assert_eq!(out["store"]["opens"], false, "{out}");
     assert_eq!(out["store"]["refusal"]["code"], "store_too_new", "{out}");
     assert!(out["store"]["refusal"]["message"].as_str().unwrap().contains("newer cpd"), "{out}");
@@ -1373,7 +1368,6 @@ fn version_on_a_legacy_home_reports_the_conversion_up_to_0014_and_refuses_a_late
         let out = env.cpd(&["--version"]).ok();
         let pending: Vec<String> = legacy_pending.iter().map(|n| n.to_string()).chain(named.iter().cloned()).collect();
         assert_eq!(out["store"], json!({"opens": true, "refusal": null, "unknown": [], "pending": pending}), "version {version}: {out}");
-        assert_eq!((&out["schema"], &out["store_schema"]), (&json!(1000), &json!(1000)), "version {version}: {out}");
         assert_eq!(fs::read(home(&env).db()).unwrap(), before, "version {version}");
     }
     // 15 is no legacy version: a numbered migration this binary lacks.
@@ -1381,7 +1375,6 @@ fn version_on_a_legacy_home_reports_the_conversion_up_to_0014_and_refuses_a_late
     raw(&env).pragma_update(None, "user_version", 15).unwrap();
     let out = env.cpd(&["--version"]).ok();
     assert_eq!(out["store"]["refusal"]["code"], "store_too_new", "{out}");
-    assert_eq!(out["store_schema"], 1001, "{out}");
 }
 
 /// A migration this binary lacks, recorded as a newer cpd would (`cpd_txn()` is stood in by the
@@ -1407,7 +1400,6 @@ fn version_lists_the_additive_migrations_it_lacks_and_still_opens() {
     let out = env.cpd(&["--version"]).ok();
     assert_eq!(out["store"]["opens"], true, "{out}");
     assert_eq!(out["store"]["unknown"], json!(["29991231T2358-first", "29991231T2359-second"]), "{out}");
-    assert_eq!(out["store_schema"], 1000);
 }
 
 #[test]
@@ -1418,7 +1410,6 @@ fn version_refuses_a_store_whose_floor_it_lacks() {
     assert_eq!(out["store"]["opens"], false, "{out}");
     assert_eq!(out["store"]["refusal"]["code"], "store_too_new", "{out}");
     assert_eq!(out["store"]["unknown"], json!(["29991231T2359-breaking"]), "{out}");
-    assert_eq!(out["store_schema"], 1001);
 }
 
 /// store-W8: a held `locks/store.lock` is waited for at most `busy_ms`.
