@@ -7,7 +7,6 @@ use rusqlite::Connection;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use super::bad_row;
 use crate::error::CpdError;
 use crate::ids::PlanId;
 
@@ -67,12 +66,12 @@ impl Job {
 
     /// The Tier, for what runs a Job: a Job that is not a draft always has it (§4.4 CHECK), so its absence is a bad row.
     pub fn require_tier(&self) -> Result<&str, CpdError> {
-        self.tier.as_deref().ok_or_else(|| bad_row(format!("Job {} has no tier", self.key)))
+        self.tier.as_deref().ok_or_else(|| CpdError::bad_row(format!("Job {} has no tier", self.key)))
     }
 
     /// The Spec, for what runs a Job, as [`Job::require_tier`].
     pub fn require_spec(&self) -> Result<&JobSpec, CpdError> {
-        self.spec.as_ref().ok_or_else(|| bad_row(format!("Job {} has no Spec", self.key)))
+        self.spec.as_ref().ok_or_else(|| CpdError::bad_row(format!("Job {} has no Spec", self.key)))
     }
 
     /// `{goal, tier, context, touches, acceptance, out_of_scope}`: what the fingerprints of §2.3
@@ -136,7 +135,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 serde_json::from_str::<Value>(text)
                     .ok()
                     .filter(Value::is_array)
-                    .ok_or_else(|| bad_row(format!("Job {plan}/{key} has {name} {text:?}")))
+                    .ok_or_else(|| CpdError::bad_row(format!("Job {plan}/{key} has {name} {text:?}")))
             };
             // The Spec is all or nothing (§4.4 CHECK).
             let spec = match (goal, context, touches, acceptance, out_of_scope) {
@@ -148,7 +147,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                     out_of_scope: array("out_of_scope", &out_of_scope)?,
                 }),
                 (None, None, None, None, None) => None,
-                _ => return Err(bad_row(format!("Job {plan}/{key} has some of its Spec fields and not all"))),
+                _ => return Err(CpdError::bad_row(format!("Job {plan}/{key} has some of its Spec fields and not all"))),
             };
             Ok(Job {
                 spec,

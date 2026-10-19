@@ -383,7 +383,7 @@ One thing that needs the User: the **single source of "needs you"** (hs-d165), s
 | `context`, `plan`, `job`, `session`, `record` | text? | what it is about, when it has one |
 | `event` | int? | the Event that caused it (the `session-state`, `job-failed` or `error` Event), for "jump to the cause" |
 | `label` | text | the short text of the table below |
-| `url` | text? | a page that shows it (plannotator's for a Plan review; the pull request's page for the `pr-*` and `review-requested` kinds) |
+| `url` | text? | a page that shows it (plannotator's for a Plan review, `http://<review host>:<port>/` with the review host of §6.5 (`PLANNOTATOR_URL_HOST`, else the primary IPv4, else `localhost`; hs-d264), not a fixed `localhost`; the pull request's page for the `pr-*` and `review-requested` kinds) |
 | `opened_at` | time | |
 | `closed_at` | time? | null while open |
 | `snoozed_until` | time? | hidden until then; the item returns at its rank, `opened_at` kept |
@@ -758,14 +758,14 @@ Each step is idempotent: a rerun after a crash between the local rename and the 
 | Plan | Dispatching | `dispatch` | the engine runs the Jobs; Workers merge them into the Lead Branches | `watch` (engine), `job list` |
 | Deploy | Mechanical checks | end of `dispatch` | all Jobs of a PR are merged; the Gate runs | `pr open` (the Gate, §7.6) |
 | Deploy | PR | `dispatch` → `deploy` | the pull request is opened | `pr open` |
-| Deploy | Reviewing and Monitoring | `deploy` | people, the User's review bot and CI review the open pull request; the engine polls it | `pr poll` (engine E5), `pr view`, Event `pr-feedback` |
+| Deploy | Reviewing and Monitoring | `deploy` | people, the User's review bot review the open pull request; the engine polls it | `pr poll` (engine E5), `pr view`, Event `pr-feedback` |
 | Deploy | Addressing | `deploy` → `dispatch` → `deploy` | feedback Jobs are appended and run (back to Dispatching), then pushed | `job add --pr`, `pr rebase` |
 
 The Deploy stage runs from the end of `dispatch` (all Jobs merged, `pr open`) and through phase `deploy` until `done`.
 
 **Who does the Context steps.** At the Epic level the Manager does Grounding, Clarifying and Specifying for the Context (§3.1, "The Context's Manager"); each Lead does them for its Plan, in phase `grounding`.
 
-**No local review before the Gate** (hs-d171, supersedes hs-d77). A PR is reviewed after it opens, while CI runs, by people and the User's review bot (Reviewing and Monitoring). Nothing requires a review before the Gate. A final review Job (`job add --review`, §2.2) stays optional (hs-d70, B3).
+**No local review before the Gate** (hs-d171, supersedes hs-d77). A PR is reviewed after it opens by people and the User's review bot (Reviewing and Monitoring). Nothing requires a review before the Gate. A final review Job (`job add --review`, §2.2) stays optional (hs-d70, B3).
 
 ## 4. Storage
 
@@ -1804,7 +1804,7 @@ One `cpd watch` per machine, in `cpd-work:watch`. It is not tied to any Lead's p
 
 **The Plan's plannotator port** (hs-d35, hs-d40, hs-d50). Config key `plannotator_ports` (§8.2) is an inclusive range. A Plan's port lives in `run/<plan>/plannotator-port` (one line, the port; no schema change). `session run` assigns it when it starts pi, under `flock` on `locks/plannotator-ports.lock`:
 
-1. When the Plan's file holds a port inside the range, the Plan keeps it.
+1. When the Plan's file holds a port inside the range and no other holder (rule 2) holds the same port, the Plan keeps it. A recorded port is kept only while no other live Plan holds it: a Plan that comes back after `done` or archive is re-checked at its next Lead start, and the asking Plan moves (its Lead's pi is starting), with one stderr line naming the Plan that held the port; the Plan whose pi already runs keeps its port.
 2. Else the Plan gets the lowest port of the range that no other Plan holds, and the file is written. A Plan **holds** its port unless its phase is `done` or it is archived (`archived_at` set; E1, hs-d203). An archived Plan's `plannotator-port` file stays, but its port is free: rule 1 keeps a Plan's port only while no other holder has it, else the Plan is assigned afresh by this rule. `plan archive` and `plan cancel` (commands.md §4.10, §4.12) therefore free the port, and `plan unarchive` takes none (the next `session run` assigns one).
 3. Else none is free: `no_port` (exit 3; `details`: the range and the holders `[{plan, port}]`), the Lead does not start, and the pane names the Plans that hold the range and offers Enter to retry (§10.8 of `commands.md`).
 

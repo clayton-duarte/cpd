@@ -698,7 +698,27 @@ fn a_read_transaction_cannot_write() {
         })
         .unwrap_err();
     assert_eq!(err.code(), ErrorCode::StoreFailed);
-    assert!(sqlite_message(&err).contains("outside a cpd write transaction"), "{err:?}");
+    assert!(sqlite_message(&err).contains("readonly"), "{err:?}");
+}
+
+/// store-G3: the statements that fire no trigger are stopped too.
+#[test]
+fn a_read_transaction_cannot_run_ddl_or_make_a_temp_table() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    fixture(&mut store);
+    for sql in ["CREATE TEMP TABLE scratch (x)", "CREATE TABLE scratch (x)", "DROP TABLE tier_catalog"] {
+        let err = store.read(|c| Ok(c.execute_batch(sql)?)).expect_err(sql);
+        assert_eq!(err.code(), ErrorCode::StoreFailed, "{sql}: {err:?}");
+        assert!(sqlite_message(&err).contains("readonly"), "{sql}: {err:?}");
+    }
+    // The guard is off again for the next write, and the schema is untouched.
+    store.write("test", |tx| exec(tx, "UPDATE contexts SET title = 'Changed'")).unwrap();
+    assert!(store.schema_mismatch().is_none());
+    let tables: i64 = store
+        .read(|c| Ok(c.query_row("SELECT count(*) FROM sqlite_temp_schema", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(tables, 0);
 }
 
 #[test]
