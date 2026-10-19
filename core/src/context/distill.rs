@@ -236,7 +236,7 @@ impl Run<'_> {
         let prompt = dir.join("prompt.md");
         fs::write(&prompt, PROMPT).map_err(|e| io_failed("write", &prompt, &e))?;
         let records = dir.join("records.md");
-        fs::write(&records, records_md(in_force)).map_err(|e| io_failed("write", &records, &e))
+        fs::write(&records, distiller_records_md(in_force)).map_err(|e| io_failed("write", &records, &e))
     }
 
     /// Step 5's repair turn (shape B): `digest.md` (the invalid topic sections), `missing.md` (the blocks of the
@@ -451,6 +451,29 @@ fn records_md(in_force: &[&Indexed]) -> String {
     out
 }
 
+/// The longest gist of a checklist line, in characters.
+const GIST_MAX: usize = 100;
+
+/// The distiller's `records.md`: a checklist of the decisions and open questions in force (the records the
+/// digest must cite, [`digest::Expect`]), one line each in file order, `[<id>] <kind>: <first line of the text>`,
+/// then every record as [`records_md`] gives it. The prompt asks the model to copy each checklist id into
+/// the statement it writes for the id's topic: covering the list is copying, not recall.
+fn distiller_records_md(in_force: &[&Indexed]) -> String {
+    let required = digest::validate(b"", &digest::Expect::of(in_force), digest::LIMIT).err().map(|i| i.missing).unwrap_or_default();
+    let mut out = format!("# Checklist: {} decisions and open questions in force\n\n", required.len());
+    for (_, record) in in_force.iter().filter(|(_, r)| required.contains(&r.id)) {
+        let first = record.text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+        let gist = match first.char_indices().nth(GIST_MAX) {
+            Some((end, _)) => format!("{}…", first[..end].trim_end()),
+            None => first.to_owned(),
+        };
+        out.push_str(&format!("[{}] {}: {gist}\n", record.id, record.kind().as_str()));
+    }
+    out.push_str("\n# Records\n\n");
+    out.push_str(&records_md(in_force));
+    out
+}
+
 /// Why pi failed.
 enum Failed {
     Spawn(String),
@@ -653,6 +676,27 @@ mod tests {
              [hs-a1] answer (2026-10-02)\nanswers hs-q1\nPort 80.\nSecond line.\n\n\
              [hs-d2] decision (2026-10-03)\nUse it.\n\n"
         );
+    }
+
+    #[test]
+    fn the_distiller_records_md_opens_with_a_checklist_of_the_decisions_and_open_questions() {
+        let q1 = record("hs-q1", "2026-10-01T10:00:00.000Z", "Which port?\nMore.", Draft::Question);
+        let q2 = record("hs-q2", "2026-10-01T11:00:00.000Z", "Which host?", Draft::Question);
+        let a = record("hs-a1", "2026-10-02T10:00:00.000Z", "Port 80.", Draft::Answer { question: RecordId::parse("hs-q1").unwrap() });
+        let n = record("hs-n1", "2026-10-02T11:00:00.000Z", "A note.", Draft::Note);
+        let long = "x".repeat(GIST_MAX + 20);
+        let d = record("hs-d2", "2026-10-03T10:00:00.000Z", &format!("\n{long}\nrest"), Draft::Decision { supersedes: None });
+        let in_force = [&q1, &q2, &a, &n, &d];
+        let text = distiller_records_md(&in_force);
+        let (checklist, records) = text.split_once("\n# Records\n\n").unwrap();
+        assert_eq!(
+            checklist,
+            format!(
+                "# Checklist: 2 decisions and open questions in force\n\n[hs-q2] question: Which host?\n[hs-d2] decision: {}…\n",
+                "x".repeat(GIST_MAX)
+            )
+        );
+        assert_eq!(records, records_md(&in_force));
     }
 
     fn assistant(text: &str, stop: &str, input: u64, cache_read: u64, cache_write: u64, output: u64, cost: f64) -> String {
