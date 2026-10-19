@@ -36,7 +36,7 @@ pub fn run(command: Command) -> Result<crate::output::Output, CpdError> {
 
 pub use origin::{parse_origin, repo_key};
 pub use load::{load_scope_file, parse_scope, policy_invalid};
-pub use resolve::{default_policy, key_of_scope_file, resolve, resolve_unowned_row};
+pub use resolve::{check_file_names, default_policy, key_of_scope_file, resolve, resolve_unowned_row};
 
 /// What a policy is resolved for (contract §8.3 "Model"): never a machine, a path or a cwd.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -173,7 +173,7 @@ mod tests {
         let r = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
         assert_eq!(&r.policy, default_policy());
         for d in Domain::ALL {
-            assert_eq!(r.sources.get(*d), &DomainSource { source: Source::Default, key_default: false });
+            assert_eq!(r.sources.get(*d), &DomainSource { source: Source::Default, left_out: vec![] });
         }
     }
 
@@ -217,13 +217,13 @@ mod tests {
         assert_eq!(r.policy.pr.text, "", "the text is replaced, not inherited");
         let src = r.sources.get(Domain::Pr);
         assert_eq!(src.source, Source::Repo(real(&home, "repos/acme/cpd.toml")));
-        assert!(src.key_default);
+        assert_eq!(src.left_out, ["feedback.checks"]);
         assert!(src.to_string().ends_with(" (key default)"));
         // The owner file sets both keys: no `(key default)`.
         let o = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
         assert_eq!(o.policy.pr.gate, Gate::Local);
         assert_eq!(o.policy.pr.feedback.checks, Checks::None);
-        assert!(!o.sources.get(Domain::Pr).key_default);
+        assert!(!o.sources.get(Domain::Pr).key_default());
     }
 
     #[test]
@@ -234,7 +234,7 @@ mod tests {
         let r = resolve(&home, &repo_key("acme", "cpd")).unwrap();
         assert_eq!(r.policy.pr, default_policy().pr);
         assert!(matches!(r.sources.get(Domain::Pr).source, Source::Repo(_)));
-        assert!(r.sources.get(Domain::Pr).key_default);
+        assert!(r.sources.get(Domain::Pr).key_default());
     }
 
     fn invalid(text: &str) -> CpdError {
@@ -277,7 +277,7 @@ mod tests {
     fn a_file_name_that_is_not_a_login_or_name_is_policy_invalid() {
         let (_d, home) = home();
         let p = |rel: &str| home.root().join("policy").join(rel);
-        for bad in ["owners/-bad.toml", "owners/a--b.toml", "repos/acme/a b.toml", "repos/-x/y.toml", "owners/acme.txt", "stray.toml"] {
+        for bad in ["owners/-bad.toml", "owners/a--b.toml", "repos/acme/a b.toml", "repos/-x/y.toml", "owners/acme.txt", "stray.toml", "owners/Clayton-Duarte.toml", "owners/clayton_duarte.toml", "repos/acme/Cpd.toml"] {
             let err = key_of_scope_file(&home, &p(bad)).unwrap_err();
             assert_eq!(err.code(), ErrorCode::PolicyInvalid, "{bad}");
             assert_eq!(err.details()["key"], serde_json::Value::Null);

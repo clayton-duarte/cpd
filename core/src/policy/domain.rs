@@ -77,24 +77,31 @@ pub struct TextSet {
 pub trait Set {
     type Value: Clone;
     /// The value with every key the table leaves out taken from `base`, and
-    /// whether any **typed** key was left out (`(key default)`).
-    fn fill(&self, base: &Self::Value) -> (Self::Value, bool);
+    /// the names of the **typed** keys left out (`(key default)`).
+    fn fill(&self, base: &Self::Value) -> (Self::Value, Vec<&'static str>);
     /// The value when the table sets everything (only cpd's default does).
     fn complete(&self) -> Option<Self::Value>;
 }
 
+/// The typed keys of the `pr` domain, by name.
+pub const GATE: &str = "gate";
+pub const FEEDBACK_CHECKS: &str = "feedback.checks";
+
 impl Set for PrSet {
     type Value = Pr;
 
-    fn fill(&self, base: &Pr) -> (Pr, bool) {
+    fn fill(&self, base: &Pr) -> (Pr, Vec<&'static str>) {
         let checks = self.feedback.as_ref().and_then(|f| f.checks);
-        let key_default = self.gate.is_none() || checks.is_none();
+        let left_out = [(GATE, self.gate.is_none()), (FEEDBACK_CHECKS, checks.is_none())]
+            .into_iter()
+            .filter_map(|(name, out)| out.then_some(name))
+            .collect();
         let value = Pr {
             gate: self.gate.unwrap_or(base.gate),
             feedback: Feedback { checks: checks.unwrap_or(base.feedback.checks) },
             text: self.text.clone().unwrap_or_else(|| base.text.clone()),
         };
-        (value, key_default)
+        (value, left_out)
     }
 
     fn complete(&self) -> Option<Pr> {
@@ -109,8 +116,8 @@ impl Set for PrSet {
 impl Set for TextSet {
     type Value = Text;
 
-    fn fill(&self, base: &Text) -> (Text, bool) {
-        (Text { text: self.text.clone().unwrap_or_else(|| base.text.clone()) }, false)
+    fn fill(&self, base: &Text) -> (Text, Vec<&'static str>) {
+        (Text { text: self.text.clone().unwrap_or_else(|| base.text.clone()) }, Vec::new())
     }
 
     fn complete(&self) -> Option<Text> {
@@ -142,17 +149,24 @@ impl std::fmt::Display for Source {
     }
 }
 
-/// A domain's source, and whether a typed key it leaves out took cpd's default.
+/// A domain's source, and the typed keys it leaves out, which took cpd's default.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DomainSource {
     pub source: Source,
-    pub key_default: bool,
+    pub left_out: Vec<&'static str>,
+}
+
+impl DomainSource {
+    /// Whether a typed key was left out (`(key default)`).
+    pub fn key_default(&self) -> bool {
+        !self.left_out.is_empty()
+    }
 }
 
 impl std::fmt::Display for DomainSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.source)?;
-        if self.key_default {
+        if self.key_default() {
             f.write_str(" (key default)")?;
         }
         Ok(())
@@ -236,9 +250,9 @@ macro_rules! domains {
             let policy = Policy {
                 $($field: match layers.iter().find_map(|(src, scope)| scope.$field.as_ref().map(|set| (src, set))) {
                     Some((src, set)) => {
-                        let (value, key_default) = set.fill(&default.$field);
+                        let (value, left_out) = set.fill(&default.$field);
                         sources.0[Domain::$variant as usize] =
-                            DomainSource { source: src.clone(), key_default };
+                            DomainSource { source: src.clone(), left_out };
                         value
                     }
                     None => default.$field.clone(),
@@ -261,6 +275,6 @@ domains! {
 impl Sources {
     /// All sources with one value (the default, or a missing owner file).
     pub(super) fn all(source: Source) -> Sources {
-        Sources(std::array::from_fn(|_| DomainSource { source: source.clone(), key_default: false }))
+        Sources(std::array::from_fn(|_| DomainSource { source: source.clone(), left_out: Vec::new() }))
     }
 }

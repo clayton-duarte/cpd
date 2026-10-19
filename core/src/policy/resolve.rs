@@ -86,18 +86,55 @@ pub fn key_of_scope_file(home: &CpdHome, path: &std::path::Path) -> Result<Polic
     let rel = path.strip_prefix(home.root().join("policy")).map_err(|_| bad("not under the policy directory"))?;
     let parts: Vec<&str> = rel.iter().map(|p| p.to_str().unwrap_or("")).collect();
     let stem = |f: &str| f.strip_suffix(".toml").map(str::to_owned);
+    // `parse` lowercases; a file name is the lowercase form itself, or the key never finds it.
+    let owner_of = |s: &str, what: &str| match OwnerLogin::parse(s) {
+        Ok(o) if o.as_str() == s => Ok(o),
+        _ => Err(bad(what)),
+    };
     match parts.as_slice() {
         ["owners", file] => {
             let owner = stem(file).ok_or_else(|| bad("a scope file ends in .toml"))?;
-            Ok(PolicyKey::Owner(OwnerLogin::parse(&owner).map_err(|_| bad("the file name is not a valid owner login"))?))
+            Ok(PolicyKey::Owner(owner_of(&owner, "the file name is not a valid owner login")?))
         }
         ["repos", owner, file] => {
             let name = stem(file).ok_or_else(|| bad("a scope file ends in .toml"))?;
-            Ok(PolicyKey::Repo(
-                OwnerLogin::parse(owner).map_err(|_| bad("the directory name is not a valid owner login"))?,
-                crate::ids::RepoName::parse(&name).map_err(|_| bad("the file name is not a valid repo name"))?,
-            ))
+            let name = match crate::ids::RepoName::parse(&name) {
+                Ok(n) if n.as_str() == name => n,
+                _ => return Err(bad("the file name is not a valid repo name")),
+            };
+            Ok(PolicyKey::Repo(owner_of(owner, "the directory name is not a valid owner login")?, name))
         }
         _ => Err(bad("expected owners/<owner>.toml or repos/<owner>/<name>.toml")),
     }
+}
+
+/// Every `*.toml` file under `owners/` and `repos/<owner>/` of `$CPD_HOME/policy/` has a valid
+/// owner login or repo name for a name: the first that has not is `policy_invalid` (sorted order).
+pub fn check_file_names(home: &CpdHome) -> Result<(), crate::error::CpdError> {
+    fn toml_files(dir: &std::path::Path) -> Result<Vec<PathBuf>, crate::error::CpdError> {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => {
+                return Err(crate::error::CpdError::new(
+                    crate::error::ErrorCode::FileUnreadable,
+                    format!("Cannot read the policy directory {}: {e}.", dir.display()),
+                )
+                .with("file", dir.display().to_string()));
+            }
+        };
+        let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+        paths.sort();
+        Ok(paths)
+    }
+    let is_toml = |p: &PathBuf| p.extension().is_some_and(|e| e == "toml") && p.is_file();
+    for file in toml_files(&owners_dir(home))?.into_iter().filter(is_toml) {
+        key_of_scope_file(home, &file)?;
+    }
+    for dir in toml_files(&repos_dir(home))?.into_iter().filter(|p| p.is_dir()) {
+        for file in toml_files(&dir)?.into_iter().filter(is_toml) {
+            key_of_scope_file(home, &file)?;
+        }
+    }
+    Ok(())
 }

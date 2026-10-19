@@ -284,6 +284,19 @@ fn policy_invalid_names_the_file_and_key() {
 }
 
 #[test]
+fn a_misnamed_policy_file_is_policy_invalid_with_its_path() {
+    for rel in ["owners/Clayton-Duarte.toml", "owners/clayton_duarte.toml", "repos/o/Bad Name.toml"] {
+        let fx = Fx::new();
+        let path = fx.env.cpd_home().join("policy").join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "").unwrap();
+        let error = refused(&fx.show(&["--owner", "acme"]), "policy_invalid", 1);
+        assert_eq!(error["details"]["file"], path.display().to_string(), "{rel}");
+        assert_eq!(error["details"]["key"], Value::Null);
+    }
+}
+
+#[test]
 fn it_writes_nothing() {
     let fx = Fx::new();
     let count = |sql: &str| -> i64 {

@@ -7,7 +7,8 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
 
 use super::resolve::{owners_dir, repos_dir};
-use super::{audience, load_scope_file, resolve, Domain, PolicyKey, Source};
+use super::domain::{FEEDBACK_CHECKS, GATE};
+use super::{audience, check_file_names, resolve, Domain, DomainSource, PolicyKey};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
@@ -132,6 +133,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         let (role, key) = store.read(|conn| key_of_session(conn, &session))?;
         (Some(role), key)
     };
+    check_file_names(&home)?;
     let resolved = resolve(&home, &key)?;
 
     // The files read, owner first: the owner's exists (resolve refused otherwise).
@@ -144,7 +146,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let mut policy = Map::new();
     for &domain in Domain::ALL {
         let source = resolved.sources.get(domain);
-        let keys = typed_keys(domain, &resolved, &source.source, source.key_default)?;
+        let keys = typed_keys(domain, &resolved, source);
         policy.insert(
             domain.name().to_owned(),
             json!({
@@ -169,36 +171,26 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
 
 /// The typed keys of `domain` with value and source; a key the winning file leaves out has
 /// the domain's source followed by ` (key default)` (contract §8.3 "Precedence and replace").
-fn typed_keys(domain: Domain, resolved: &super::Resolved, source: &Source, key_default: bool) -> Result<Value, CpdError> {
+/// The left-out keys come from [`super::domain::Set::fill`], so no file is read again.
+fn typed_keys(domain: Domain, resolved: &super::Resolved, source: &DomainSource) -> Value {
     fn value(v: &impl serde::Serialize) -> Value {
         serde_json::to_value(v).expect("a policy value serializes")
     }
-    let entries: Vec<(&str, Value, bool)> = match domain {
-        Domain::Pr => {
-            let (gate_set, checks_set) = match source {
-                Source::Owner(path) | Source::Repo(path) if key_default => {
-                    let (_, scope) = load_scope_file(path)?.ok_or_else(|| {
-                        CpdError::new(ErrorCode::FileUnreadable, format!("The policy file {} vanished.", path.display()))
-                    })?;
-                    let pr = scope.pr.as_ref();
-                    (
-                        pr.is_some_and(|p| p.gate.is_some()),
-                        pr.is_some_and(|p| p.feedback.as_ref().is_some_and(|f| f.checks.is_some())),
-                    )
-                }
-                _ => (true, true),
-            };
-            vec![
-                ("gate", value(&resolved.policy.pr.gate), gate_set),
-                ("feedback.checks", value(&resolved.policy.pr.feedback.checks), checks_set),
-            ]
-        }
+    let entries: Vec<(&str, Value)> = match domain {
+        Domain::Pr => vec![
+            (GATE, value(&resolved.policy.pr.gate)),
+            (FEEDBACK_CHECKS, value(&resolved.policy.pr.feedback.checks)),
+        ],
         _ => Vec::new(),
     };
     let mut keys = Map::new();
-    for (name, value, set) in entries {
-        let source = if set { source.to_string() } else { format!("{source} (key default)") };
+    for (name, value) in entries {
+        let source = if source.left_out.contains(&name) {
+            format!("{} (key default)", source.source)
+        } else {
+            source.source.to_string()
+        };
         keys.insert(name.to_owned(), json!({"value": value, "source": source}));
     }
-    Ok(Value::Object(keys))
+    Value::Object(keys)
 }

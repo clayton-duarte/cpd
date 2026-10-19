@@ -113,13 +113,18 @@ pub struct View {
     owners_dir: Option<PathBuf>,
 }
 
-/// The owners of the owner policy files (`<owner>.toml`) in `dir`, sorted; anything else is ignored.
+/// The owners of the owner policy files (`<owner>.toml`) in `dir`, sorted; anything else,
+/// a stem that is not a valid owner login included, is ignored.
 fn owners_in(dir: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut owners: Vec<String> = entries
         .flatten()
         .filter(|e| e.path().is_file())
-        .filter_map(|e| e.path().file_name()?.to_str()?.strip_suffix(".toml").filter(|s| !s.is_empty()).map(str::to_owned))
+        .filter_map(|e| {
+            let path = e.path();
+            let stem = path.file_name()?.to_str()?.strip_suffix(".toml")?;
+            cpd_core::ids::OwnerLogin::parse(stem).ok().filter(|o| o.as_str() == stem).map(|_| stem.to_owned())
+        })
         .collect();
     owners.sort();
     owners
@@ -1456,7 +1461,7 @@ mod tests {
 
     #[test]
     fn owners_are_the_toml_file_stems_sorted() {
-        let (_view, dir) = owned(sample(), &["b.toml", "a.toml", "notes.md", ".toml"]);
+        let (_view, dir) = owned(sample(), &["b.toml", "a.toml", "notes.md", ".toml", "Clayton-Duarte.toml", "clayton_duarte.toml", "-x.toml"]);
         assert_eq!(owners_in(dir.path()), ["a", "b"]);
         assert!(owners_in(&dir.path().join("missing")).is_empty());
     }
