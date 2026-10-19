@@ -5,9 +5,8 @@
 mod common;
 
 use std::fs;
-use std::time::{Duration, Instant};
 
-use common::{CPD, TestEnv};
+use common::{CPD, TestEnv, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
@@ -191,15 +190,6 @@ fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
-/// Waits until `done` holds, at most 30 s.
-fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !done() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
 fn start(env: &TestEnv, view: &[&str], width: u16, height: u16) -> String {
     let mut args = vec!["new-session", "-d", "-s", "view", "-x", "", "-y", "", "-P", "-F", "#{pane_id}", CPD, "tui", "view"];
     let (w, h) = (width.to_string(), height.to_string());
@@ -213,13 +203,8 @@ fn screen(env: &TestEnv, pane: &str) -> Vec<String> {
     tmux_out(env, &["capture-pane", "-p", "-t", pane]).lines().map(|l| l.trim_end().to_owned()).collect()
 }
 
-fn wait_screen(env: &TestEnv, pane: &str, what: &str, mut done: impl FnMut(&[String]) -> bool) -> Vec<String> {
-    let mut rows = Vec::new();
-    wait_until(what, || {
-        rows = screen(env, pane);
-        done(&rows)
-    });
-    rows
+fn wait_screen(env: &TestEnv, pane: &str, what: &str, done: impl FnMut(&[String]) -> bool) -> Vec<String> {
+    common::wait_screen(what, || screen(env, pane), done)
 }
 
 #[test]
@@ -239,8 +224,11 @@ fn the_view_follows_live_scrolls_and_closes_with_q_or_esc() {
     tmux_out(&env, &["send-keys", "-t", &pane, "k", "k"]);
     wait_screen(&env, &pane, "scrolled up", |r| r.first().is_some_and(|l| l == " 00:00:05 event 5"));
     append_numbered(&mut store, 11, 1);
-    std::thread::sleep(Duration::from_millis(500));
-    assert_eq!(screen(&env, &pane)[0], " 00:00:05 event 5");
+    // The view reads the store after each key it handles, so once `k` has scrolled it one more row, it has read
+    // Event 11: it did not follow it.
+    tmux_out(&env, &["send-keys", "-t", &pane, "k"]);
+    let rows = wait_screen(&env, &pane, "scrolled up once more", |r| r.first().is_some_and(|l| l == " 00:00:04 event 4"));
+    assert_eq!(rows[3], " 00:00:07 event 7", "the new Event did not move it: {rows:?}");
     tmux_out(&env, &["send-keys", "-t", &pane, "PageDown"]);
     wait_screen(&env, &pane, "following again", |r| r.get(3).is_some_and(|l| l == " 00:00:11 event 11"));
     tmux_out(&env, &["send-keys", "-t", &pane, "Up", "PageUp", "PageUp", "PageUp"]);
@@ -390,8 +378,11 @@ fn the_view_opens_at_the_event_even_when_it_is_older_than_the_latest_500_and_doe
     let rows = wait_screen(&env, &pane, "the Event", |r| r.first().is_some_and(|l| l == " 00:00:02 event 2"));
     assert_eq!(rows[1], " 00:01:40 event 100", "then the latest 500");
     append_numbered(&mut store, 600, 1);
-    std::thread::sleep(Duration::from_millis(500));
-    assert_eq!(screen(&env, &pane)[0], " 00:00:02 event 2", "it does not follow");
+    // The view reads the store after each key it handles, so once `j` has scrolled it one row, it has read Event 600:
+    // it did not follow it.
+    tmux_out(&env, &["send-keys", "-t", &pane, "j"]);
+    let rows = wait_screen(&env, &pane, "scrolled down once", |r| r.first().is_some_and(|l| l != " 00:00:02 event 2"));
+    assert_eq!(rows[0], " 00:01:40 event 100", "it does not follow: {rows:?}");
     tmux_out(&env, &["send-keys", "-t", &pane, "q"]);
     wait_until("the view to close", || !env.tmux(&["has-session", "-t", "view"]).status.success());
 

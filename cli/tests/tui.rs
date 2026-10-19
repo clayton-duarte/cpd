@@ -6,9 +6,9 @@
 mod common;
 
 use std::fs::{self, File, OpenOptions};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use common::{CPD, SLEEP_SECONDS, TestEnv};
+use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::host::tmux::{SERVER_OPTIONS, STATUS_FORMAT};
@@ -45,25 +45,6 @@ fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
     let out = env.tmux(args);
     assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8(out.stdout).unwrap()
-}
-
-/// Waits until `done` holds, at most 30 s.
-fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !done() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-/// Recorded `tui view tree` starts.
-fn tree_starts(env: &TestEnv) -> usize {
-    views_started(env).iter().filter(|c| c[2] == "tree").count()
-}
-
-/// A pane's process exists before the fake `cpd` has written its record: wait for the record.
-fn wait_for_tree_starts(env: &TestEnv, n: usize) {
-    wait_until(&format!("{n} recorded tree starts"), || tree_starts(env) >= n);
 }
 
 /// One pane of `cpd:main`.
@@ -170,14 +151,12 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     let chat = view(&panes, "chat");
     assert_eq!(windows(&env, "cpd"), ["main"]);
     assert_eq!(windows(&env, "cpd-work"), ["watch"]);
-    // Each view runs in its own pane process; the contract promises which views exist, not their start order.
-    let mut views: Vec<Vec<String>> = ["tree", "plan", "widgets", "chat"].iter().map(|v| vec!["tui".into(), "view".into(), (*v).into()]).collect();
-    views.sort();
-    wait_until("the four views to be recorded", || views_started(&env).len() >= 4);
-    let mut started = views_started(&env);
-    started.sort();
-    let mut expected = views.clone();
+    let views: Vec<Vec<String>> = ["tree", "plan", "widgets", "chat"].iter().map(|v| vec!["tui".into(), "view".into(), (*v).into()]).collect();
+    // The views start side by side: wait for the four calls, whose order is that of the first to be recorded.
+    wait_until("the four views to be started", || views_started(&env).len() >= 4);
+    let (mut expected, mut started) = (views, views_started(&env));
     expected.sort();
+    started.sort();
     assert_eq!(started, expected);
     // The keyboard goes to the chat slot.
     assert_eq!(tmux_out(&env, &["display", "-p", "-t", "=cpd:main", "#{pane_id}"]).trim(), chat.id);
@@ -338,14 +317,15 @@ fn a_killed_view_respawns_at_once_and_the_engine_stays_dead() {
         !p.dead && p.pid.is_some() && p.pid != tree.pid
     });
     drop(tree_tty);
-    wait_for_tree_starts(&env, 2);
-    std::thread::sleep(Duration::from_millis(300));
+    // tmux runs the `pane-died` hooks in the order the panes died: the tree's has run, so the engine's has.
     assert!(pane_state(&env, engine).0, "the engine pane stays dead for E2");
     let after = main_panes(&env);
     assert_layout(&after);
     assert_eq!(view(&after, "tree").id, tree.id);
-    wait_for_tree_starts(&env, 2);
-    assert_eq!(tree_starts(&env), 2, "no third start");
+    // The pane has its new process before the fake `cpd` has recorded the call: wait for the call.
+    let trees = || views_started(&env).iter().filter(|c| c[2] == "tree").count();
+    wait_until("the tree's view to be started again", || trees() >= 2);
+    assert_eq!(trees(), 2);
 }
 
 #[test]
@@ -370,8 +350,10 @@ fn tui_respawns_a_dead_pane_of_the_layout_in_place_and_sets_the_hook_again() {
     assert_eq!(after.iter().map(|p| &p.id).collect::<Vec<_>>(), before.iter().map(|p| &p.id).collect::<Vec<_>>());
     assert_ne!(view(&after, "tree").pid, tree.pid);
     assert_ne!(view(&after, "widgets").pid, widgets.pid);
-    wait_for_tree_starts(&env, 2);
-    assert_eq!(tree_starts(&env), 2, "no third start");
+    // The pane has its new process before the fake `cpd` has recorded the call: wait for the call.
+    let trees = || views_started(&env).iter().filter(|c| c[2] == "tree").count();
+    wait_until("the tree's view to be started again", || trees() >= 2);
+    assert_eq!(trees(), 2);
     assert_server_options(&env);
 }
 
@@ -604,8 +586,10 @@ fn tui_respawn_restarts_every_live_view_and_no_lead_or_engine() {
     // Each view reruns its own command: the Worker view keeps its argv.
     let worker_command = tmux_out(&env, &["display", "-p", "-t", worker, "#{pane_start_command}"]);
     assert!(worker_command.contains("3601"), "{worker_command}");
-    wait_for_tree_starts(&env, 2);
-    assert_eq!(tree_starts(&env), 2, "no third start");
+    // The pane has its new process before the fake `cpd` has recorded the call: wait for the call.
+    let trees = || views_started(&env).iter().filter(|c| c[2] == "tree").count();
+    wait_until("the tree's view to be started again", || trees() >= 2);
+    assert_eq!(trees(), 2);
     // The parked placeholder (not in main) and the engine are not touched.
     assert_eq!(pane_state(&env, &placeholder.id).1, placeholder.pid);
     assert_eq!(pane_state(&env, engine), (false, engine_pid));
