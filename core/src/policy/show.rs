@@ -30,7 +30,7 @@ pub struct ShowArgs {
     #[arg(long, value_name = "login", conflicts_with_all = ["pr", "context"])]
     owner: Option<OwnerLogin>,
     /// With `--owner`: the repo of that owner
-    #[arg(long, value_name = "name", requires = "owner")]
+    #[arg(long, value_name = "name")]
     repo: Option<RepoName>,
 }
 
@@ -109,6 +109,9 @@ fn session_from_env() -> Result<SessionId, CpdError> {
 }
 
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
+    if args.repo.is_some() && args.owner.is_none() {
+        return Err(CpdError::new(ErrorCode::Usage, "--repo goes with --owner only."));
+    }
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
