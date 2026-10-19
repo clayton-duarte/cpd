@@ -36,6 +36,18 @@ fn says(digest: &str) -> String {
     format!("{REPLY}\n{{\n{digest}\n}} | reply")
 }
 
+/// A fake `pi` that answers the distiller's call with `first` and the repair turn's call (its argv names
+/// `@missing.md`) with `repair`, both shell printing the text.
+fn says_then_repairs(first: &str, repair: &str) -> String {
+    format!("{REPLY}\ncase \"$*\" in\n*@missing.md*) {{\n{repair}\n}} | reply ;;\n*) {{\n{first}\n}} | reply ;;\nesac")
+}
+
+/// The repair turn's answer that cites every record of `missing.md`.
+const ADDS_MISSING: &str = r###"echo "## Additions"
+while IFS= read -r line; do
+  case "$line" in "["*) echo "- $line" ;; esac
+done < missing.md"###;
+
 /// A real `pi --mode json` run of one turn answering `OK` (pi 1.3.0; the system message is left out, the
 /// rest is verbatim): 2 input + 731 cache-write = 733 tokens in, 4 out, cost 0.00467875.
 const RECORDED: &str = r##"cat <<'EOF'
@@ -112,7 +124,7 @@ impl Fx {
         let Ok(entries) = fs::read_dir(self.digests()) else { return Vec::new() };
         let mut names: Vec<String> = entries
             .map(|e| e.unwrap().file_name().into_string().unwrap())
-            .filter(|n| !["prompt.md", "records.md", "distill.log", "runs.jsonl"].contains(&n.as_str()))
+            .filter(|n| !["prompt.md", "records.md", "distill.log", "runs.jsonl", "repair-prompt.md", "digest.md", "missing.md", "problem.md"].contains(&n.as_str()))
             .collect();
         names.sort();
         names
@@ -236,7 +248,8 @@ fn a_valid_digest_lands_as_upto_seq_and_the_directory_holds_one() {
     let started = line["started_at"].as_str().unwrap();
     time::OffsetDateTime::parse(started, &time::format_description::well_known::Rfc3339).expect("started_at is RFC 3339");
     assert!(started.ends_with('Z'), "{started}");
-    assert_eq!(line.as_object().unwrap().len(), 9, "{line}");
+    assert_eq!(line["kind"], "distill");
+    assert_eq!(line.as_object().unwrap().len(), 10, "{line}");
 }
 
 #[test]
@@ -247,12 +260,14 @@ fn a_recorded_pi_transcript_gives_the_digest_and_one_correct_line() {
     // "OK" cites no decision, so the digest is invalid; what matters is that it is the final assistant message.
     refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
     let upto = fx.highest_seq();
-    assert_eq!(fs::read_to_string(fx.digests().join(format!("{upto}.md.invalid"))).unwrap(), "OK\n");
+    // The digest misses one decision, so a repair turn ran too (the recording answers it with the same "OK").
+    assert_eq!(fs::read_to_string(fx.digests().join(format!("{upto}.md.invalid"))).unwrap(), "OK\n\nOK\n");
     let runs = fx.runs();
-    assert_eq!(runs.len(), 1, "{runs:?}");
-    let line = &runs[0];
-    assert_eq!((line["tokens_in"].clone(), line["tokens_out"].clone(), line["cost"].clone()), (json!(733), json!(4), json!(0.00467875)), "{line}");
-    assert_eq!((line["result"].clone(), line["upto_seq"].clone()), (json!("invalid"), json!(upto)));
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    for (line, kind) in runs.iter().zip(["distill", "repair"]) {
+        assert_eq!((line["tokens_in"].clone(), line["tokens_out"].clone(), line["cost"].clone()), (json!(733), json!(4), json!(0.00467875)), "{line}");
+        assert_eq!((line["result"].clone(), line["upto_seq"].clone(), line["kind"].clone()), (json!("invalid"), json!(upto), json!(kind)));
+    }
 }
 
 #[test]
@@ -330,7 +345,113 @@ fn the_next_invalid_digest_replaces_the_kept_one() {
     let second = format!("{}.md.invalid", fx.highest_seq());
     assert_ne!(first, second);
     assert_eq!(fx.digest_files(), [second.clone()], "one per Context");
-    assert_eq!(fs::read_to_string(fx.digests().join(second)).unwrap(), "second failure\n");
+    assert_eq!(fs::read_to_string(fx.digests().join(second)).unwrap(), "second failure\n\nsecond failure\n", "the repair turn's text, appended");
+}
+
+/// The `kind` and `result` of every logged run, in order.
+fn kinds(fx: &Fx) -> Vec<(String, String)> {
+    fx.runs().iter().map(|r| (r["kind"].as_str().unwrap().to_owned(), r["result"].as_str().unwrap().to_owned())).collect()
+}
+
+#[test]
+fn a_digest_that_misses_citations_is_repaired_once_with_an_addition_cpd_appends() {
+    let fx = fx();
+    let d1 = fx.decide("Use sqlite.");
+    let d2 = fx.decide("Use flock.");
+    let d3 = fx.decide("Use tmux.");
+    fx.env.fake_pi(&says_then_repairs(&format!("echo '# Digest'; echo 'Storage [{d1}].'"), ADDS_MISSING));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    let upto = fx.highest_seq();
+    assert_eq!(out["distilled"], true, "{out}");
+    let text = fs::read_to_string(out["digest"]["file"].as_str().unwrap()).unwrap();
+    let (topic, index) = text.split_once("\n## Record index\n").unwrap();
+    assert!(topic.starts_with("# Digest\nStorage ["), "the digest is kept as written: {topic}");
+    let (_, additions) = topic.split_once("\n## Additions\n").expect("the addition is appended to the topic sections");
+    assert!(additions.contains(&format!("[{d2}]")) && additions.contains(&format!("[{d3}]")) && !additions.contains(&format!("[{d1}]")), "{additions}");
+    assert_eq!(index.lines().filter(|l| l.starts_with("- [")).count(), 3);
+    assert_eq!(fx.digest_files(), [format!("{upto}.md")], "no .md.invalid is left");
+    assert!(fx.errors().is_empty());
+
+    // The repair turn's argv and inputs: the digest as written, the missing records only, their ids.
+    let calls = fx.env.calls("pi");
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_eq!(calls[1][calls[1].len() - 4..], ["@repair-prompt.md", "@digest.md", "@missing.md", "@problem.md"]);
+    assert_eq!(calls[1][..calls[1].len() - 4], calls[0][..calls[0].len() - 2], "the same flags and model");
+    let dir = fx.digests();
+    let missing = fs::read_to_string(dir.join("missing.md")).unwrap();
+    assert!(missing.contains(&format!("[{d2}] decision")) && missing.contains("Use tmux.") && !missing.contains("Use sqlite."), "{missing}");
+    let problem = fs::read_to_string(dir.join("problem.md")).unwrap();
+    assert!(problem.contains(&format!("- {d2}")) && problem.contains(&format!("- {d3}")) && !problem.contains(&d1), "{problem}");
+    assert_eq!(fs::read_to_string(dir.join("digest.md")).unwrap(), format!("# Digest\nStorage [{d1}].\n"));
+    assert!(fs::read_to_string(dir.join("repair-prompt.md")).unwrap().contains("## Additions"));
+
+    // Two logged runs, each with its own kind; the repair's figures are in the output too.
+    assert_eq!(kinds(&fx), [("distill".to_owned(), "invalid".to_owned()), ("repair".to_owned(), "valid".to_owned())]);
+    assert_eq!(out["repair"]["tokens_in"], 733, "{out}");
+    assert_eq!(out["run"].as_object().unwrap().len(), 5);
+}
+
+#[test]
+fn a_repair_that_is_still_invalid_fails_the_run_and_keeps_the_repaired_text() {
+    let fx = fx();
+    let d1 = fx.decide("Use sqlite.");
+    let d2 = fx.decide("Use flock.");
+    fx.env.fake_pi(&says_then_repairs(&format!("echo '# Digest'; echo 'Storage [{d1}].'"), "echo '## Additions'; echo 'Nothing to add.'"));
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
+    assert_eq!(error["details"]["missing"], json!([d2]), "{error}");
+    let upto = fx.highest_seq();
+    let kept = fs::read_to_string(fx.digests().join(format!("{upto}.md.invalid"))).unwrap();
+    assert_eq!(kept, format!("# Digest\nStorage [{d1}].\n\n## Additions\nNothing to add.\n"), "the last text tried");
+    assert_eq!(fx.digest_files(), [format!("{upto}.md.invalid")]);
+    assert_eq!(fx.pi_calls(), 2, "at most one repair");
+    assert_eq!(fx.errors().len(), 1);
+    assert_eq!(kinds(&fx), [("distill".to_owned(), "invalid".to_owned()), ("repair".to_owned(), "invalid".to_owned())]);
+}
+
+#[test]
+fn a_stray_id_or_too_many_missing_get_no_repair() {
+    let fx = fx();
+    let d1 = fx.decide("Use sqlite.");
+    fx.decide("Use flock.");
+    fx.env.fake_pi(&says_then_repairs(&format!("echo '# Digest'; echo '[{d1}] [hs-d99]'"), ADDS_MISSING));
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
+    assert_eq!(error["details"]["stray"], json!(["hs-d99"]));
+    assert_eq!(fx.pi_calls(), 1, "a stray id is not repaired");
+    assert_eq!(kinds(&fx), [("distill".to_owned(), "invalid".to_owned())]);
+
+    // 18 missing: over the limit of the repair. 16 are repaired.
+    let fx = fx_with_decisions(18);
+    fx.env.fake_pi(&says_then_repairs("echo '# Digest'; echo 'Nothing cited.'", ADDS_MISSING));
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
+    assert_eq!(error["details"]["missing"].as_array().unwrap().len(), 18);
+    assert_eq!(fx.pi_calls(), 1, "too many missing are not repaired");
+
+    let fx = fx_with_decisions(16);
+    fx.env.fake_pi(&says_then_repairs("echo '# Digest'; echo 'Nothing cited.'", ADDS_MISSING));
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(fx.pi_calls(), 2);
+}
+
+#[test]
+fn a_repair_that_fails_as_pi_is_distill_failed_and_leaves_no_digest() {
+    let fx = fx();
+    let d1 = fx.decide("Use sqlite.");
+    fx.decide("Use flock.");
+    let first = says(&format!("echo '# Digest'; echo '[{d1}]'"));
+    fx.env.fake_pi(&format!("case \"$*\" in *@missing.md*) echo gone >&2; exit 9 ;; esac\n{first}"));
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_failed", 1);
+    assert_eq!(error["details"]["reason"], "exit", "{error}");
+    assert!(fx.digest_files().is_empty(), "{:?}", fx.digest_files());
+    assert_eq!(kinds(&fx), [("distill".to_owned(), "invalid".to_owned()), ("repair".to_owned(), "failed".to_owned())]);
+}
+
+/// A Context of `n` decisions in force and a fake `pi` that is not set yet.
+fn fx_with_decisions(n: u32) -> Fx {
+    let fx = fx();
+    for i in 1..=n {
+        fx.insert(CONTEXT, &format!("hs-d{i}"), &ago(60), &format!("Decision {i}."), Draft::Decision { supersedes: None });
+    }
+    fx
 }
 
 #[test]
@@ -342,7 +463,7 @@ fn a_decision_cited_only_in_the_index_is_invalid() {
     let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
     assert_eq!(error["details"]["missing"], json!([d]), "{error}");
     let kept = fs::read_to_string(error["details"]["invalid"].as_str().unwrap()).unwrap();
-    assert_eq!(kept, "# Digest\nNothing cited.\n\n", "the model's index is not kept");
+    assert_eq!(kept, "# Digest\nNothing cited.\n\n\n# Digest\nNothing cited.\n", "the model's index is kept in neither run");
 }
 
 #[test]
