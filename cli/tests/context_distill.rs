@@ -92,7 +92,7 @@ fn fx() -> Fx {
     env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
     env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
     let fx = Fx { env };
-    fx.cpd(&["context", "new", CONTEXT, "--title", "Ctx"]).ok();
+    fx.cpd(&["context", "new", CONTEXT, "--title", "Ctx", "--owner", "acme"]).ok();
     fx
 }
 
@@ -725,16 +725,16 @@ fn stop_engine(mut engine: Engine) {
 fn the_engine_starts_a_run_only_after_the_quiet_period_and_never_two_at_once() {
     let fx = fx();
     // `old`: its newest record is 11 minutes old. `fresh`: written now (the commands stamp the time).
-    fx.cpd(&["context", "new", "old", "--title", "Old"]).ok();
+    fx.cpd(&["context", "new", "old", "--title", "Old", "--owner", "acme"]).ok();
     fx.insert("old", "hs-d1", &ago(30), "An old decision.", Draft::Decision { supersedes: None });
     fx.insert("old", "hs-n2", &ago(11), "An old note.", Draft::Note);
-    fx.cpd(&["context", "new", "fresh", "--title", "Fresh"]).ok();
+    fx.cpd(&["context", "new", "fresh", "--title", "Fresh", "--owner", "acme"]).ok();
     fx.insert("fresh", "hs-d3", &ago(30), "A decision.", Draft::Decision { supersedes: None });
     fx.insert("fresh", "hs-n4", &ago(9), "A note.", Draft::Note);
-    fx.cpd(&["context", "new", "archived", "--title", "Archived"]).ok();
+    fx.cpd(&["context", "new", "archived", "--title", "Archived", "--owner", "acme"]).ok();
     fx.insert("archived", "hs-d5", &ago(60), "A decision.", Draft::Decision { supersedes: None });
     fx.cpd(&["context", "archive", "archived"]).ok();
-    fx.cpd(&["context", "new", "quiet", "--title", "Quiet"]).ok();
+    fx.cpd(&["context", "new", "quiet", "--title", "Quiet", "--owner", "acme"]).ok();
     fx.insert("quiet", "hs-d6", &ago(60), "A decision.", Draft::Decision { supersedes: None });
 
     // `quiet`'s run is alive (its lock is held): E9 starts none for it.

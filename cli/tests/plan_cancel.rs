@@ -118,7 +118,7 @@ fn setup(env: &TestEnv) -> (String, String) {
     fs::write(env.cpd_home().join("config.toml"), config).unwrap();
     fake_cpd(env);
     env.fake_gh("case \"$1 $2\" in\n\"pr view\") echo '{\"state\":\"OPEN\"}';;\nesac\nexit 0");
-    env.cpd(&["context", "new", "ctx", "--title", "Payments"]).ok();
+    env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
     let lead = env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok()["lead"]["session"].as_str().unwrap().to_owned();
     for key in ["api", "web", "ui"] {
         let repo = env.git_repo(key);

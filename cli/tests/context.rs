@@ -35,7 +35,7 @@ fn old_dir(env: &TestEnv) -> PathBuf {
 }
 
 fn new_context(env: &TestEnv) {
-    env.cpd(&["context", "new", CTX, "--title", "Building cpd"]).ok();
+    env.cpd(&["context", "new", CTX, "--title", "Building cpd", "--owner", "acme"]).ok();
 }
 
 fn refused(run: Run, exit: i32, expected: &str) -> Value {
@@ -86,7 +86,7 @@ fn fixture_plan(env: &TestEnv, plan: &str, context: &str) {
 #[test]
 fn new_writes_the_row_and_the_event_and_nothing_else() {
     let env = hs();
-    let out = env.cpd(&["context", "new", CTX, "--title", "Building cpd", "--jira", "CPD-12"]).ok();
+    let out = env.cpd(&["context", "new", CTX, "--title", "Building cpd", "--owner", "acme", "--jira", "CPD-12"]).ok();
     let context = &out["context"];
     assert_eq!(context["id"], CTX);
     assert_eq!(context["title"], "Building cpd");
@@ -107,8 +107,8 @@ fn new_writes_the_row_and_the_event_and_nothing_else() {
 #[test]
 fn new_is_idempotent_for_the_same_title_and_jira() {
     let env = hs();
-    env.cpd(&["context", "new", CTX, "--title", "Building cpd"]).ok();
-    let again = env.cpd(&["context", "new", CTX, "--title", "Building cpd"]).ok();
+    env.cpd(&["context", "new", CTX, "--title", "Building cpd", "--owner", "acme"]).ok();
+    let again = env.cpd(&["context", "new", CTX, "--title", "Building cpd", "--owner", "acme"]).ok();
     assert_eq!(again["already"], true);
     assert_eq!(again["context"]["id"], CTX);
     assert_eq!(events(&env, "context-created").len(), 1);
@@ -119,8 +119,8 @@ fn new_refuses_an_existing_context_with_another_title_or_jira() {
     let env = hs();
     new_context(&env);
     for args in [
-        vec!["context", "new", CTX, "--title", "Another"],
-        vec!["context", "new", CTX, "--title", "Building cpd", "--jira", "CPD-1"],
+        vec!["context", "new", CTX, "--title", "Another", "--owner", "acme"],
+        vec!["context", "new", CTX, "--title", "Building cpd", "--owner", "acme", "--jira", "CPD-1"],
     ] {
         refused(env.cpd(&args), 3, "context_exists");
     }
@@ -129,14 +129,68 @@ fn new_refuses_an_existing_context_with_another_title_or_jira() {
 #[test]
 fn new_checks_its_arguments() {
     let env = hs();
-    refused(env.cpd(&["context", "new", "Bad_Id", "--title", "T"]), 2, "invalid_context_id");
-    refused(env.cpd(&["context", "new", CTX, "--title", "T", "--jira", "cpd-1"]), 2, "usage");
-    refused(env.cpd(&["context", "new", CTX, "--title", "T", "--jira", "C-1"]), 2, "usage");
-    refused(env.cpd(&["context", "new", CTX, "--title", ""]), 2, "usage");
+    refused(env.cpd(&["context", "new", "Bad_Id", "--title", "T", "--owner", "acme"]), 2, "invalid_context_id");
+    refused(env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "acme", "--jira", "cpd-1"]), 2, "usage");
+    refused(env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "acme", "--jira", "C-1"]), 2, "usage");
+    refused(env.cpd(&["context", "new", CTX, "--title", "", "--owner", "acme"]), 2, "usage");
     refused(env.cpd(&["context", "new", CTX]), 2, "usage");
     assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"], json!([]));
     let no_config = TestEnv::new();
-    refused(no_config.cpd(&["context", "new", CTX, "--title", "T"]), 1, "config_missing");
+    refused(no_config.cpd(&["context", "new", CTX, "--title", "T", "--owner", "acme"]), 1, "config_missing");
+}
+
+#[test]
+fn new_requires_an_owner_with_a_policy_file_and_stores_it_lowercased() {
+    let env = hs();
+    // No `--owner`: a clap usage error.
+    refused(env.cpd(&["context", "new", CTX, "--title", "T"]), 2, "usage");
+    refused(env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "-bad-"]), 2, "usage");
+    // An owner without `policy/owners/<login>.toml`.
+    let error = refused(env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "nobody"]), 1, "owner_unknown");
+    assert_eq!(error["details"]["owner"], "nobody");
+    assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"], json!([]), "nothing written");
+    // The login is lowercased before the file is looked up.
+    let out = env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "ACME"]).ok();
+    assert_eq!(out["context"]["owner"], "acme");
+    // The same Context with another owner is `context_exists`.
+    fs::write(env.cpd_home().join("policy/owners/other.toml"), "").unwrap();
+    refused(env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "other"]), 3, "context_exists");
+}
+
+/// Makes a Context that has no owner, as one made before the policy keys.
+fn clear_owner(env: &TestEnv) {
+    let (_, _, mut store) = library(env);
+    store.write("test", |tx| Ok(tx.execute("UPDATE contexts SET owner = NULL", []).map(|_| ())?)).unwrap();
+}
+
+#[test]
+fn owner_sets_the_owner_once_and_appends_context_owner() {
+    let env = hs();
+    new_context(&env);
+    clear_owner(&env);
+    fs::write(env.cpd_home().join("policy/owners/other.toml"), "").unwrap();
+
+    let error = refused(env.cpd(&["context", "owner", "nobody", "--context", CTX]), 1, "owner_unknown");
+    assert_eq!(error["details"]["owner"], "nobody");
+    assert_eq!(events(&env, "context-owner").len(), 0);
+    refused(env.cpd(&["context", "owner", "acme", "--context", "no-such"]), 4, "context_not_found");
+    refused(env.cpd(&["context", "owner", "acme"]), 2, "context_required");
+
+    let out = env.cpd(&["context", "owner", "ACME", "--context", CTX]).ok();
+    assert_eq!(out["context"], json!({"id": CTX, "owner": "acme"}));
+    assert!(out.get("already").is_none());
+    let owner = events(&env, "context-owner");
+    assert_eq!(owner.len(), 1);
+    assert_eq!((owner[0]["context"].clone(), owner[0]["data"].clone()), (json!(CTX), json!({"owner": "acme"})));
+
+    // The same owner again writes nothing; another owner is `owner_set`.
+    let again = env.cpd(&["context", "owner", "acme", "--context", CTX]).ok();
+    assert_eq!(again["already"], true);
+    assert_eq!(events(&env, "context-owner").len(), 1);
+    let error = refused(env.cpd(&["context", "owner", "other", "--context", CTX]), 3, "owner_set");
+    assert_eq!(error["details"]["context"], CTX);
+    assert_eq!(error["details"]["owner"], "acme");
+    assert_eq!(events(&env, "context-owner").len(), 1);
 }
 
 #[test]
@@ -338,7 +392,7 @@ fn list_summarises_every_context() {
     let env = hs();
     assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"], json!([]));
     new_context(&env);
-    env.cpd(&["context", "new", "home-lab", "--title", "Home lab", "--jira", "LAB-3"]).ok();
+    env.cpd(&["context", "new", "home-lab", "--title", "Home lab", "--owner", "acme", "--jira", "LAB-3"]).ok();
     env.cpd(&["context", "ask", "One?", "--context", CTX]).ok();
     env.cpd(&["context", "ask", "Two?", "--context", CTX]).ok();
     env.cpd(&["context", "answer", "hs-q1", "Yes.", "--context", CTX]).ok();
@@ -512,7 +566,7 @@ fn show_record_refusals() {
     refused(env.cpd(&["context", "show", "--context", CTX, "--record", "hs-b1", "--since", "0"]), 2, "usage");
     refused(env.cpd(&["context", "show", "--context", "nope-ctx", "--record", "hs-b1"]), 4, "context_not_found");
     // A record of another Context is not found.
-    env.cpd(&["context", "new", "other", "--title", "Other"]).ok();
+    env.cpd(&["context", "new", "other", "--title", "Other", "--owner", "acme"]).ok();
     refused(env.cpd(&["context", "show", "--context", "other", "--record", "hs-b1"]), 3, "record_not_found");
 }
 
@@ -599,9 +653,9 @@ fn titles_are_1_to_200_characters_with_no_control_characters() {
     let env = hs();
     let (long, ok) = ("a".repeat(201), "a".repeat(200));
     for title in [long.as_str(), "a\nb", "a\tb", "a\u{7f}b"] {
-        refused(env.cpd(&["context", "new", CTX, "--title", title]), 2, "usage");
+        refused(env.cpd(&["context", "new", CTX, "--title", title, "--owner", "acme"]), 2, "usage");
     }
-    env.cpd(&["context", "new", CTX, "--title", &ok]).ok();
+    env.cpd(&["context", "new", CTX, "--title", &ok, "--owner", "acme"]).ok();
     for title in [long.as_str(), "a\nb", "a\tb"] {
         refused(env.cpd(&["context", "rename", CTX, "--title", title]), 2, "usage");
         // Validated before the Context is looked up.
@@ -679,7 +733,7 @@ fn event_count(env: &TestEnv) -> i64 {
 /// `side`. Live parked panes: `lead-pay`, `fork-pay` and `manager`.
 fn archivable(env: &TestEnv) {
     new_context(env);
-    env.cpd(&["context", "new", "other", "--title", "Other"]).ok();
+    env.cpd(&["context", "new", "other", "--title", "Other", "--owner", "acme"]).ok();
     fixture_plan(env, "pay", CTX);
     fixture_plan(env, "ship", CTX);
     fixture_plan(env, "side", "other");

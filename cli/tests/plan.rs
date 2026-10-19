@@ -67,7 +67,7 @@ const WATCH_FAILS: &str =
 fn setup(env: &TestEnv) -> PathBuf {
     write_config(env);
     fake_cpd(env, WATCH_OK);
-    env.cpd(&["context", "new", "ctx", "--title", "Payments"]).ok();
+    env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
     env.git_repo("pay")
 }
 
@@ -640,6 +640,24 @@ fn new_refusals_write_nothing() {
 }
 
 #[test]
+fn new_in_a_context_with_no_owner_is_owner_unset_and_writes_nothing() {
+    let env = TestEnv::new();
+    setup(&env);
+    // A Context made before the policy keys has no owner.
+    store(&env).write("test", |tx| Ok(tx.execute("UPDATE contexts SET owner = NULL", []).map(|_| ())?)).unwrap();
+    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    let error = refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "T"]), "owner_unset", 3);
+    assert_eq!(error["details"]["context"], "ctx");
+    assert_eq!(error["details"]["next"], "cpd context owner <login> --context ctx");
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans"), 0);
+    // After `context owner` the Plan is created.
+    env.cpd(&["context", "owner", "acme", "--context", "ctx"]).ok();
+    new_plan_only(&env, "pay");
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans"), 1);
+}
+
+#[test]
 fn pr_add_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
     let env = TestEnv::new();
     let origin = setup(&env);
@@ -794,7 +812,7 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
     let repo = setup(&env);
     planned(&env, &repo, "pay");
     new_plan(&env, "refund", &repo);
-    env.cpd(&["context", "new", "other", "--title", "Other"]).ok();
+    env.cpd(&["context", "new", "other", "--title", "Other", "--owner", "acme"]).ok();
 
     let list = env.cpd(&["plan", "list"]).ok();
     let cursor = list["events_cursor"].as_i64().unwrap();

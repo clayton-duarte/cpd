@@ -24,7 +24,7 @@ fn setup(env: &TestEnv) -> String {
             "case \"$1 $2\" in\n\"session run\") exec sleep {SLEEP_SECONDS};;\n\"watch --ensure\") echo '{{\"ok\": true, \"started\": true, \"pane\": \"%9\"}}'; exit 0;;\nesac\nexec '{CPD}' \"$@\""
         ),
     );
-    env.cpd(&["context", "new", "ctx", "--title", "Payments"]).ok();
+    env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
     let plan = env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Pay"]).ok();
     plan["plan"]["lead_session"].as_str().unwrap().to_owned()
 }

@@ -273,7 +273,7 @@ fn a_server_started_by_plan_new_has_every_server_option() {
         format!("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket()),
     )
     .unwrap();
-    env.cpd(&["context", "new", "ctx", "--title", "Payments"]).ok();
+    env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
     env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Pay"]).ok();
     assert_eq!(windows(&env, "cpd"), ["park-pay"], "plan new started the server, not tui");
     assert_server_options(&env);

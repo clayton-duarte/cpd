@@ -322,7 +322,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     let (shared, web) = (fx.shared.path.to_str().unwrap().to_owned(), fx.web.path.to_str().unwrap().to_owned());
 
     // ---------- 1. plan new from a directory that is no repo (A12)
-    fx.ok(&["context", "new", CONTEXT, "--title", "Chain"]);
+    fx.ok(&["context", "new", CONTEXT, "--title", "Chain", "--owner", "acme"]);
     assert!(!fx.env.root().join(".git").exists());
     let out = fx.ok(&["plan", "new", PLAN, "--context", CONTEXT, "--title", "Change A, then B, then A again"]);
     let lead_session = out["plan"]["lead_session"].as_str().unwrap().to_owned();

@@ -18,6 +18,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd context manager` | Start or resume the Context's Manager (§3.10) | Manager | yes |
 | `cpd context pending` | List the in-flight work of the Context's active Plans (§3.11) | Lead, Manager | |
 | `cpd context distill` | Build the Context's digest with one-shot pi (§3.12) | Lead | |
+| `cpd context owner` | Set the owner of a Context that has none (§3.13) | Lead, Manager | |
 | `cpd plan` | Plans and their phases (commands.md §4) | | |
 | `cpd plan new` | Create a Plan and start its Lead (§4.1) | Lead, Manager | yes |
 | `cpd plan list` | List the Plans (§4.2) | Lead, Manager | |

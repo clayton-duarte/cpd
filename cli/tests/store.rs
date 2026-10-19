@@ -913,7 +913,7 @@ fn a_write_from_a_deleted_cwd_succeeds_and_records_unreadable() {
     let out = env
         .command("sh")
         .args(["-c", "mkdir gone && cd gone && rmdir ../gone && exec \"$@\"", "sh", common::CPD])
-        .args(["context", "new", "ctx", "--title", "Ctx"])
+        .args(["context", "new", "ctx", "--title", "Ctx", "--owner", "acme"])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);

@@ -91,7 +91,7 @@ fn setup(env: &TestEnv) {
     write_config(env, "");
     fake_cpd(env);
     fake_pi(env);
-    env.cpd(&["context", "new", "ctx", "--title", "Payments"]).ok();
+    env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
     env.cpd(&["context", "note", "Mind the ledger.", "--context", "ctx"]).ok();
 }
 

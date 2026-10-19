@@ -257,7 +257,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     let repo = fx.repo.to_str().unwrap();
 
     // ---------- 1. context new
-    let out = fx.ok(&["context", "new", CONTEXT, "--title", "Payments"]);
+    let out = fx.ok(&["context", "new", CONTEXT, "--title", "Payments", "--owner", "acme"]);
     assert_eq!(out["context"]["id"], CONTEXT);
     let events = fx.events_since(0);
     assert_eq!(kinds(&events), ["context-created"]);

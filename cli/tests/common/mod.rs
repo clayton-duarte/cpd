@@ -234,6 +234,9 @@ impl TestEnv {
             let path = env.bin().join(tool);
             write_executable(&path, &format!("#!/bin/sh\necho 'no fake installed for {tool}' >&2\nexit {DENIED_EXIT}\n"));
         }
+        // Every test env has the owner `acme` (an empty policy file: cpd's default), for `context new --owner acme`.
+        fs::create_dir_all(env.cpd_home().join("policy/owners")).expect("create the owners directory");
+        fs::write(env.cpd_home().join("policy/owners/acme.toml"), "").expect("write the acme owner file");
         fs::write(
             env.home().join(".gitconfig"),
             "[user]\n\tname = cpd test\n\temail = test@cpd.invalid\n[init]\n\tdefaultBranch = main\n",
