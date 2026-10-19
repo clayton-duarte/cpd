@@ -2316,14 +2316,14 @@ Context building-cpd: 2 new records since your last turn.
 
 Header `Context <c>: <N> new records since your last turn.`; each line `- <id> <kind> (<date>): <text>`; an answer names its question, a superseding decision names what it supersedes. At most 20 records are listed; more end with `and <K> more: cpd context show --context <c> --since <seq>`, with `<seq>` the `seq` before the first record not listed.
 
-**Display** (hs-d221). The message's `content` is the full text and goes to the model whole. In the chat window the adapter shows one line of counts instead, never the full text, unless the User expands the message (pi's expand toggle), which then shows the full `content`. The adapter registers a pi message renderer for `cpd-context` once at load (`pi.registerMessageRenderer`; it only changes the display). The line, dim, is `cpd-context: ` and then the parts below in this order, joined by ` · `; a part whose count is 0 is omitted and nothing else is shown:
+**Display** (hs-d221, restyled by hs-d286, §15.9). The message's `content` is the full text and goes to the model whole. In the chat window the adapter shows the counts line below as the one-line summary of a collapsed row (§15.9), never the full text, unless the User expands the message, which then shows the full `content`. The adapter registers a pi message renderer for `cpd-context` once at load (`pi.registerMessageRenderer`; it only changes the display). The counts line, as the summary, is `cpd-context: ` and then the parts below in this order, joined by ` · `; a part whose count is 0 is omitted and nothing else is shown:
 
 ```
 cpd-context: 6 records · 17 Plan Events · 10 Plans pending
 cpd-context: 1 record · 1 Plan Event · 1 Plan pending
 ```
 
-`<n> record(s)` is the number of new records of the message (the length of `details.records`), `<n> Plan Event(s)` the number of Events of the `Plans:` section (all of them, listed or not), `<n> Plan(s) pending` the number of Plans with a line in `Pending work:`. The counts come from the message's `details`, which carries `plan_events` and `plans_pending` besides `records`. A message whose `details` lack either (one written before this) is shown in full.
+`<n> record(s)` is the number of new records of the message (the length of `details.records`), `<n> Plan Event(s)` the number of Events of the `Plans:` section (all of them, listed or not), `<n> Plan(s) pending` the number of Plans with a line in `Pending work:`. The counts come from the message's `details`, which carries `plan_events` and `plans_pending` besides `records`. A message whose `details` lack either (one written before this) is shown in full (§15.9 "No summary").
 
 **Cursor**, in `context-record` Event ids (not the Event cursor of §15.2):
 1. Start = the Session's `registered_event` (its first message already held the records up to then).
@@ -2381,6 +2381,53 @@ cpd reminder (hs-d239): your last message spoke of further work but named no reg
 It is added **at most once per run**, and once it has been added the reminder is not due again until a later run ends with a message that fails the check. It is never delivered to a Session that is not a `lead`, and never starts a turn (`triggerTurn: false`, as §15.1's messages).
 
 **Not done** (R3, *decided*): `pr open` does not ask for a checked statement; the reminder is the whole enforcement of this heuristic. The skills carry the rule (R4).
+
+### 15.9 Rendering cpd's messages in a pi pane
+
+Decision hs-d286 (User, 2026-10-19; it restyles hs-d221). **Display only:** every message below still reaches the model with its full `content` and `details`; only what the chat window draws changes. Nothing here changes a delivery (§15.1, §15.3), a cursor or an Event.
+
+**Which messages.** Every `customType` the adapter sends with `display: true`: `cpd` (Events §15.3, Session messages, and the adapter's errors §15.1), `cpd-context` (§15.7) and `cpd-plan-decision` (§15.5). A message with `display: false` (`cpd-reminder`, §15.8) is never drawn, so it has no renderer. A `customType` the adapter starts to display later is rendered by the same rule, its summary being the first line of its `content` (as an Event's, below). The adapter registers one pi message renderer per type, once at load (`pi.registerMessageRenderer`), from one module, `pi/lib/render.ts`; the renderer reads `options.expanded` and `options.outputPad` from pi.
+
+**The look is pi-compact-tools 0.16.6's tool row, copied.** The adapter does not import or vendor that extension (it exposes no API and draws tool rows only); it draws the same rows, from the same glyphs, theme tokens, bold and dim, laid out as the extension's source lays them out (`extensions/compact-tools.ts`, `compact-tools-layout.ts`, `compact-tools-claude.ts`, `compact-tools-codex-rows.ts`, `compact-tools-palette.ts`, `compact-tools-core.ts`). The message keeps the `customMessageBg` background of hs-d221 behind the rows (the extension's rows sit on pi's tool background, which a message has no part in).
+
+**Which style: the extension's, read once.** The extension has four styles: `compact`, `claude`, `codex`, `off` (`DISPLAY_STYLES`, `compact-tools-types.ts`). Its **default is `compact`** (`DEFAULT_CONFIG.style`, `compact-tools-config.ts`), and that is what applies when no config exists, which is the case on hs today. The adapter reads the style **once, at `session_start`**, as the extension's `loadConfig` does, and keeps it for the run (a later `/compact-tools` switch shows in the adapter's rows after a `/reload`):
+
+1. `compact-tools.json` in pi's agent directory (`getAgentDir()`, `~/.pi/agent` unless pi is told otherwise);
+2. then, only when the project is trusted (`ctx.isProjectTrusted()`), `<cwd>/.pi/compact-tools.json`, which overrides the first.
+
+Only the `style` key matters; the other keys are the extension's own. A file that is missing is skipped. A file that does not parse, or a `style` that is not one of the four, is handled **exactly as the extension handles it**: one line `[compact-tools] <path>: <message>` on stderr, and the value from the file before it (at first the default `compact`) is kept. The adapter adds no fallback of its own. With `off` the adapter registers **no** renderer and pi draws its own default box with the full `content` (the User turned the extension's rows off).
+
+**The summary per kind** (what follows `cpd` on the collapsed row). One line, every newline and run of whitespace collapsed to one space and the ends trimmed:
+
+| Message | Summary |
+|---|---|
+| `cpd`, a Session message (Event `session-message`) | `Message from <sender>`: the sender Session's name, or its id when it has no name; `Message from the User` when `data.from` is null |
+| `cpd`, any other Event | the Event's `text`: its first line, cut to **160 characters** (159 and `…`) as the extension cuts a custom tool's summary (`CUSTOM_SUMMARY_MAX_LENGTH`); a row that is still wider than the pane wraps, as the extension's does, it is not cut again |
+| `cpd`, an adapter error (`details.kind` is `error`) | `adapter: <what>`: the `<what>` of `cpd adapter: <what>: <code>: <message>` (§15.1) |
+| `cpd-context` | its counts line, `cpd-context: 6 records · 17 Plan Events · 10 Plans pending` (§15.7) |
+| `cpd-plan-decision` | `Plan review <id> approved` or `Plan review <id> rejected` (`<id>` the review's id, as in §15.5) |
+
+**Collapsed, style `compact`** (the default; the User's example). Two rows, each starting after one space of margin, in this order:
+
+```
+ ⦁ cpd Message from cross-repo
+ └ Click to expand
+```
+
+- `⦁` (U+2981, the one glyph the extension uses for every row, `indicatorGlyph`) is painted with the theme token **`customMessageLabel`**, pi's colour for a custom message's label (violet/magenta in pi's themes). The extension paints bash's `⦁` `success` (green); the message's is magenta so the two never read alike. It is a fixed colour: it does not pulse and carries no status (a message has no running state).
+- `cpd` is `toolTitle` and **bold** (the extension's `theme.fg("toolTitle", theme.bold(name))`); the summary after one space is `toolOutput`.
+- ` └ ` and `Click to expand` are the extension's quiet "chrome" tone: the colour of `dim`, which the extension derives per theme (`chromePainter`) and the adapter paints with `theme.fg("dim", …)`, the extension's own fallback when the theme's RGB cannot be resolved. This is the one deliberate difference (the derivation needs the extension's colour code, which is not copied).
+- A head row longer than the pane wraps, its continuation rows behind ` │ ` (chrome tone), as a tool call's (`renderToolCall`); it is never cut.
+
+**Expanded, style `compact`.** The head row stays. Under it comes the full `content`, plain text (not Markdown), every line `toolOutput`, each behind the rail ` │ ` (chrome tone) and wrapped to the pane, as the extension lays out a tool's output (`renderOutput`); then the closing row ` └ Click to collapse`. An empty `content` shows no body.
+
+**Styles `claude` and `codex`**, when the config names them, follow the same rule with the extension's own chrome:
+- `claude`: head ` ⦁ cpd(<summary>)`: `⦁` as above, `cpd` `toolTitle` bold, `(<summary>)` `toolOutput` (`claudeTitle`). Collapsed, one row under it, `   ⎿  Click to expand` (`CLAUDE_RESULT_PREFIX`, chrome tone). Expanded, the full `content` in `toolOutput` from that prefix on, later lines at six spaces (`CLAUDE_INDENT`), wrapped to the pane, then nothing else.
+- `codex`: head ` • cpd <summary>` (`CODEX_BULLET`, painted bold with the magenta token above; `cpd` bold; the summary plain). Collapsed, one row under it, ` ` + min(width/4, 4) spaces + `+ Show details` (`codexDisclosure`), dim. Expanded, the full `content` dim from `   └ ` on, later lines at five spaces (`CODEX_INDENT`), wrapped to the pane, then ` ` + the same indent + `− Show less`, dim.
+
+**The expand action** is the extension's: **a left click** on the message toggles that one message, and **Ctrl+O** (pi's `app.tools.expand`) expands or collapses every message and tool row at once. Pi hands the renderer `options.expanded` for Ctrl+O; a click is the renderer's own: it wraps its rows in pi-tui's `MouseRegion` that flips the message's own state, as pi does for a tool row (`createResultRegion`) and the extension does for its group row. The state is per rendered message and follows Ctrl+O both ways (the extension's group rule, `compact-tools-grouping.ts`); it is not persisted, so a reloaded session shows every message collapsed.
+
+**No summary** (`cpd-context` whose `details` lack the counts, §15.7). There is nothing short to say, so the row is always open: the head `⦁ cpd cpd-context` and the full `content` as in "Expanded", with no closing row and no toggle.
 
 ## 16. The Worker contract
 
