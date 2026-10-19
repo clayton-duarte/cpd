@@ -131,7 +131,12 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     assert_eq!(windows(&env, "cpd"), ["main"]);
     assert_eq!(windows(&env, "cpd-work"), ["watch"]);
     let views: Vec<Vec<String>> = ["tree", "plan", "widgets", "chat", "statusbar"].iter().map(|v| vec!["tui".into(), "view".into(), (*v).into()]).collect();
-    assert_eq!(views_started(&env), views);
+    // The views start side by side: wait for the five calls, whose order is that of the first to be recorded.
+    wait_until("the five views to be started", || views_started(&env).len() >= 5);
+    let (mut expected, mut started) = (views, views_started(&env));
+    expected.sort();
+    started.sort();
+    assert_eq!(started, expected);
     // The keyboard goes to the chat slot.
     assert_eq!(tmux_out(&env, &["display", "-p", "-t", "=cpd:main", "#{pane_id}"]).trim(), chat.id);
 
@@ -289,7 +294,10 @@ fn a_killed_view_respawns_at_once_and_the_engine_stays_dead() {
     let after = main_panes(&env);
     assert_layout(&after);
     assert_eq!(view(&after, "tree").id, tree.id);
-    assert_eq!(views_started(&env).iter().filter(|c| c[2] == "tree").count(), 2);
+    // The pane has its new process before the fake `cpd` has recorded the call: wait for the call.
+    let trees = || views_started(&env).iter().filter(|c| c[2] == "tree").count();
+    wait_until("the tree's view to be started again", || trees() >= 2);
+    assert_eq!(trees(), 2);
 }
 
 #[test]
@@ -314,7 +322,10 @@ fn tui_respawns_a_dead_pane_of_the_layout_in_place_and_sets_the_hook_again() {
     assert_eq!(after.iter().map(|p| &p.id).collect::<Vec<_>>(), before.iter().map(|p| &p.id).collect::<Vec<_>>());
     assert_ne!(view(&after, "tree").pid, tree.pid);
     assert_ne!(view(&after, "statusbar").pid, bar.pid);
-    assert_eq!(views_started(&env).iter().filter(|c| c[2] == "tree").count(), 2);
+    // The pane has its new process before the fake `cpd` has recorded the call: wait for the call.
+    let trees = || views_started(&env).iter().filter(|c| c[2] == "tree").count();
+    wait_until("the tree's view to be started again", || trees() >= 2);
+    assert_eq!(trees(), 2);
     assert_server_options(&env);
 }
 
@@ -389,7 +400,10 @@ fn tui_respawn_restarts_every_live_view_and_no_lead_or_engine() {
     // Each view reruns its own command: the Worker view keeps its argv.
     let worker_command = tmux_out(&env, &["display", "-p", "-t", worker, "#{pane_start_command}"]);
     assert!(worker_command.contains("3601"), "{worker_command}");
-    assert_eq!(views_started(&env).iter().filter(|c| c[2] == "tree").count(), 2);
+    // The pane has its new process before the fake `cpd` has recorded the call: wait for the call.
+    let trees = || views_started(&env).iter().filter(|c| c[2] == "tree").count();
+    wait_until("the tree's view to be started again", || trees() >= 2);
+    assert_eq!(trees(), 2);
     // The parked placeholder (not in main) and the engine are not touched.
     assert_eq!(pane_state(&env, &placeholder.id).1, placeholder.pid);
     assert_eq!(pane_state(&env, engine), (false, engine_pid));
