@@ -156,7 +156,9 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     wait_until("the five views to be recorded", || views_started(&env).len() >= 5);
     let mut started = views_started(&env);
     started.sort();
-    assert_eq!(started, views);
+    let mut expected = views.clone();
+    expected.sort();
+    assert_eq!(started, expected);
     // The keyboard goes to the chat slot.
     assert_eq!(tmux_out(&env, &["display", "-p", "-t", "=cpd:main", "#{pane_id}"]).trim(), chat.id);
 

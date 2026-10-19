@@ -91,6 +91,7 @@ export class Fixture {
   readonly cpdHome = join(this.dir, "cpd-home");
   /** Stands for the adapter's installed directory (`options.reload.dir`). */
   readonly adapterDir = join(this.dir, "adapter");
+  readonly agentDir = join(this.dir, "agent");
   readonly pi: FakePi;
   private readonly saved: Record<string, string | undefined> = {};
 
@@ -103,11 +104,12 @@ export class Fixture {
     chmodSync(join(this.dir, "bin", "pi"), 0o755);
     writeFileSync(join(this.dir, "bin", "cpd"), FAKE_CPD);
     chmodSync(join(this.dir, "bin", "cpd"), 0o755);
-    for (const k of ["PATH", "FAKE_CPD_DIR", "CPD_SESSION", "CPD_PLAN", "CPD_HOME"]) this.saved[k] = process.env[k];
+    for (const k of ["PATH", "FAKE_CPD_DIR", "CPD_SESSION", "CPD_PLAN", "CPD_HOME", "PI_CODING_AGENT_DIR"]) this.saved[k] = process.env[k];
     process.env.PATH = `${join(this.dir, "bin")}:${process.env.PATH}`;
     process.env.FAKE_CPD_DIR = this.dir;
     process.env.CPD_SESSION = ID;
     process.env.CPD_HOME = this.cpdHome;
+    process.env.PI_CODING_AGENT_DIR = this.agentDir; // pi's agent directory: where the adapter reads `compact-tools.json` (commands.md §15.9)
     delete process.env.CPD_PLAN;
     this.pi = new FakePi();
     this.respond("session-show", sessionShow());
@@ -369,9 +371,14 @@ export class FakePi implements PiApi {
     this.commandsRunning.add(running);
   }
 
+  /** What `ctx.isProjectTrusted()` answers. */
+  trusted = false;
+
   ctx(): Ctx {
     return {
       mode: this.mode,
+      cwd: join(tmpdir(), "pi-test-no-such-project"),
+      isProjectTrusted: () => this.trusted,
       ui: { notify: (m, level) => {
           this.notices.push(m);
           if (level === "error") this.errorNotices.push(m);
