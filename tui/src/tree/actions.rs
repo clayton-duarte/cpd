@@ -19,12 +19,15 @@ use std::process::{Command, Stdio};
 use serde_json::Value;
 
 use cpd_core::config::Config;
+use cpd_core::home::CpdHome;
 use cpd_core::host::layout::MAIN_WINDOW;
 use cpd_core::host::{Tmux, chat_slot};
-use cpd_core::ids::{ContextId, PlanId, SessionId};
+use cpd_core::ids::{ContextId, JobKey, PlanId, SessionId};
 use cpd_core::session::PROGRAM;
+use cpd_core::store::Store;
 use crate::merge::Pull;
-use crate::widgets::open_legend;
+use crate::read;
+use crate::widgets::{self, open_legend};
 
 /// The object an archive or unarchive is about.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,6 +117,9 @@ pub enum Action {
     CopyUrl(String),
     /// `watch --ensure` (§12): a click on an `engine-down` item starts the engine; idempotent.
     EnsureWatch,
+    /// The read-only Worker pane of `job`'s latest Attempt beside the chat (`tui view worker`, as a click on a pill of the
+    /// plan view); no command. A Job with no Attempt opens nothing. A step of the `job-stuck` click.
+    OpenWorker { plan: PlanId, job: JobKey },
     /// No command: only the note, as a step of a flow (`plan-review` with no review page yet).
     Note(String),
     /// `inbox snooze <id> <15m|1h|tomorrow>` (§21.3): the Inbox menu's and `s`'s Snooze entries.
@@ -152,7 +158,7 @@ impl Action {
             Action::Unarchive(subject) => subject.command("unarchive"),
             Action::CopyId(text) | Action::CopyUrl(text) => words(&["set-buffer", "-w", "--", text.as_str()]),
             Action::EnsureWatch => words(&["watch", "--ensure"]),
-            Action::Note(_) => Vec::new(),
+            Action::Note(_) | Action::OpenWorker { .. } => Vec::new(),
             Action::Snooze { item, until } => words(&["inbox", "snooze", &item.to_string(), until.arg()]),
             Action::Dismiss(item) => words(&["inbox", "dismiss", &item.to_string()]),
         }
@@ -210,6 +216,7 @@ impl Action {
             Action::EnsureWatch if reply["already"] == true => "already running".into(),
             Action::EnsureWatch => "engine started".into(),
             Action::Note(note) => note.clone(),
+            Action::OpenWorker { .. } => String::new(),
             Action::Snooze { .. } => "snoozed".into(),
             Action::Dismiss(_) => "dismissed".into(),
         }
@@ -226,13 +233,28 @@ impl Action {
 
 /// Runs actions against the cockpit of `config`.
 pub struct Runner {
+    home: CpdHome,
+    busy_ms: u64,
     tmux: Tmux,
     cockpit: String,
 }
 
 impl Runner {
-    pub fn new(config: &Config) -> Runner {
-        Runner { tmux: Tmux::new(config.tmux.socket.clone()), cockpit: config.tmux.cockpit_session.clone() }
+    pub fn new(home: CpdHome, config: &Config) -> Runner {
+        Runner {
+            home,
+            busy_ms: u64::from(config.timeouts.store_busy_ms),
+            tmux: Tmux::new(config.tmux.socket.clone()),
+            cockpit: config.tmux.cockpit_session.clone(),
+        }
+    }
+
+    /// The Worker pane of the latest Attempt of `job`, read from the store when the click happens; nothing for a Job that
+    /// has no Attempt (the Lead opened by the step before stays).
+    fn open_worker(&self, plan: &PlanId, job: &JobKey) -> Result<(), String> {
+        let mut store = Store::open(&self.home, self.busy_ms).map_err(|e| e.message().to_owned())?;
+        let Some(attempt) = read::latest_attempt(&mut store, plan, job).map_err(|e| e.message().to_owned())? else { return Ok(()) };
+        widgets::open_worker(&self.home, &self.tmux, &self.cockpit, plan, job.as_str(), &attempt).map_err(|e| e.message().to_owned())
     }
 
     /// Runs the action's steps: the note of the last, or why one failed (the flow stops there).
@@ -247,6 +269,10 @@ impl Runner {
             let reply = match step {
                 Action::CopyId(_) | Action::CopyUrl(_) => self.tmux.run(&step.argv()).map(|_| Value::Null).map_err(|e| e.message().to_owned())?,
                 Action::Note(_) => Value::Null,
+                Action::OpenWorker { ref plan, ref job } => {
+                    self.open_worker(plan, job)?;
+                    Value::Null
+                }
                 _ => command(&step)?,
             };
             note = step.done(&reply);

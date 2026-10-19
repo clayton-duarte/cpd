@@ -70,7 +70,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
     let view = View::new(read::tree(&mut store)?, false);
-    let runner = Runner::new(&config);
+    let runner = Runner::new(home, &config);
     // From here on this process owns the terminal (commands.md §1.2).
     let mut terminal = ratatui::init();
     let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableFocusChange);

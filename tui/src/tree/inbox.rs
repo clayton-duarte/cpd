@@ -181,14 +181,22 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
 }
 
 /// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts. `engine-down`
-/// starts the engine; `pr-ready` opens the merge popup of its pull request (`None` for a subject that is not
+/// starts the engine; `job-stuck` opens the Lead of its Plan and the Worker of the failed Job's latest Attempt beside it; `pr-ready` opens the merge popup of its pull request (`None` for a subject that is not
 /// `pr:<owner>/<repo>#<n>`); `plan-review` opens the Lead of its Plan and copies the review page's `url` (or says there is
 /// none yet); the `url` is copied for `pr-failing`, `pr-changes` and `review-requested` (their OSC 8 link stays for the
 /// terminal's modifier-click). `None` only for an item without what its jump needs.
 pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
     match item.kind {
         Kind::Dialog | Kind::Unread => item.session.as_ref().map(|s| Jump::Run(open_or_history(tree, s))),
-        Kind::JobStuck => Some(Jump::Run(open_lead(tree, item.plan.as_ref()?)?)),
+        Kind::JobStuck => {
+            let plan = item.plan.as_ref()?;
+            let open = open_lead(tree, plan)?;
+            match &item.job {
+                // the Worker of the Job's latest Attempt, which the Runner reads from the store; a Job with none opens the Lead only
+                Some(job) => Some(Jump::Steps(vec![open, Action::OpenWorker { plan: plan.clone(), job: job.clone() }])),
+                None => Some(Jump::Run(open)),
+            }
+        }
         Kind::EngineError => Some(Jump::Logs(item.event)),
         Kind::EngineDown => Some(Jump::Run(Action::EnsureWatch)),
         Kind::Question => item.context.as_ref().map(|c| Jump::Run(Action::OpenManager(c.clone()))),
@@ -309,7 +317,7 @@ mod tests {
 
     use super::super::fixture::{archived, sample};
     use super::*;
-    use cpd_core::ids::{ContextId, PlanId};
+    use cpd_core::ids::{ContextId, JobKey, PlanId};
     use cpd_core::inbox::model::Urgency;
 
     const OPENED: &str = "2026-01-01T00:00:00.000Z";
@@ -418,7 +426,16 @@ mod tests {
         let open = |id: &str| Some(Jump::Run(Action::Open(sid(id))));
         assert_eq!(jump(&tree, &with(Kind::Dialog, &session)), open("m-alpha"));
         assert_eq!(jump(&tree, &with(Kind::Unread, &session)), open("m-alpha"));
-        assert_eq!(jump(&tree, &with(Kind::JobStuck, &plan)), open("l-ship"), "the Lead of the item's Plan");
+        assert_eq!(jump(&tree, &with(Kind::JobStuck, &plan)), open("l-ship"), "no Job: the Lead of the item's Plan only");
+        let job = |item: &mut Item| {
+            plan(item);
+            item.job = Some(JobKey::parse("c").unwrap());
+        };
+        assert_eq!(
+            jump(&tree, &with(Kind::JobStuck, &job)),
+            Some(Jump::Steps(vec![Action::Open(sid("l-ship")), Action::OpenWorker { plan: PlanId::parse("ship").unwrap(), job: JobKey::parse("c").unwrap() }])),
+            "the Lead of the item's Plan, then the Worker of the Job's latest Attempt"
+        );
         assert_eq!(jump(&tree, &with(Kind::EngineError, &event)), Some(Jump::Logs(Some(7))));
         assert_eq!(jump(&tree, &with(Kind::EngineDown, &|_| {})), Some(Jump::Run(Action::EnsureWatch)), "engine-down starts the engine");
         assert_eq!(jump(&tree, &with(Kind::Question, &context)), Some(Jump::Run(Action::OpenManager(ContextId::parse("alpha").unwrap()))));
@@ -463,6 +480,7 @@ mod tests {
         // an item without what its jump needs jumps nowhere
         assert_eq!(jump(&tree, &with(Kind::Dialog, &|_| {})), None);
         assert_eq!(jump(&tree, &with(Kind::JobStuck, &|i| i.plan = Some(PlanId::parse("nope").unwrap()))), None);
+        assert_eq!(jump(&tree, &with(Kind::JobStuck, &|i| i.job = Some(JobKey::parse("c").unwrap()))), None, "a Job with no Plan");
         assert_eq!(jump(&tree, &with(Kind::Question, &|_| {})), None);
         // an archived Session shows its history, as a click on its tree row
         assert_eq!(

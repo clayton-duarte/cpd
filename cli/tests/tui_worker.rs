@@ -189,6 +189,23 @@ fn the_foot_of_a_worker_waiting_for_its_lead_reads_waiting_and_its_label() {
     assert_eq!(screen.last().map(String::as_str), Some(" api-a1 running · waiting cpd: question to the Lead"), "{screen:?}");
 }
 
+/// An ended Attempt that failed says why at the foot (`failed: <cause>`, the Job's `failed_cause`): what the `job-stuck`
+/// click of the tree shows.
+#[test]
+fn the_foot_of_a_failed_attempt_says_why_it_failed() {
+    let env = env();
+    let file = session_file(&env);
+    populate(&env, Some(&file));
+    env.sql(
+        "UPDATE sessions SET state = 'stopped' WHERE id = 'w1';
+         UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = '2026-01-03T00:05:00.000Z';
+         UPDATE jobs SET status = 'failed', failed_cause = 'crashed';",
+    );
+    let pane = Pane::start(&env, 60, 12);
+    let screen = pane.wait("the foot", |s| s.iter().any(|r| r.contains("test result")));
+    assert_eq!(screen.last().map(String::as_str), Some(" api-a1 ended · stopped · failed: crashed"), "{screen:?}");
+}
+
 #[test]
 fn an_appended_entry_is_followed_at_the_end() {
     let env = env();

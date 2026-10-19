@@ -10,7 +10,8 @@
 //! - [`widgets()`]: the Dispatch column, slots, the engine, the open pull requests,
 //!   open Escalations and the latest Events (`plan list`);
 //! - [`logs()`] and [`logs_after()`]: the Event log, the latest Events and those after a cursor (`events list`);
-//! - [`worker()`]: the worker view, an Attempt and its Worker Session (`attempt show`).
+//! - [`worker()`]: the worker view, an Attempt and its Worker Session (`attempt show`); [`latest_attempt()`]: the Attempt
+//!   a Job's Worker pane opens (the tree's `job-stuck` click).
 //!
 //! Each read is one [`Store::read`] transaction (contract §4.2): it takes no
 //! lock, waits for no writer, writes nothing, spawns nothing, and runs a fixed
@@ -49,4 +50,4 @@ pub use tree::{ContextNode, PlanNode, Tree, tree};
 pub use widgets::{
     Engine, HeldSlot, MachineEscalation, OpenPr, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets, widgets,
 };
-pub use worker::{AttemptDetail, AttemptEscalation, Worker, worker};
+pub use worker::{AttemptDetail, AttemptEscalation, Worker, latest_attempt, worker};
