@@ -2,7 +2,7 @@
 //! Events and keys, and [`draw`] only writes to the frame.
 
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -15,8 +15,10 @@ use crate::palette::{self, Meaning};
 pub struct Log {
     events: Vec<Event>,
     up: usize,
-    /// The rows the last [`Log::fit`] gave.
+    /// The rows of Events the last [`Log::fit`] gave.
     height: usize,
+    /// The error of the last failed read (one row), shown in the last row until a read succeeds.
+    pub error: Option<String>,
 }
 
 impl Log {
@@ -38,9 +40,9 @@ impl Log {
         self.clamp();
     }
 
-    /// The view is `height` rows tall.
+    /// The view is `height` rows tall, its last row for the error while there is one.
     pub fn fit(&mut self, height: u16) {
-        self.height = usize::from(height);
+        self.height = usize::from(height.saturating_sub(u16::from(self.error.is_some())));
         self.clamp();
     }
 
@@ -92,8 +94,16 @@ fn line(e: &Event, width: usize) -> Line<'static> {
     Line::from(vec![" ".into(), dim(clock(&e.at)), " ".into(), Span::styled(text, style)])
 }
 
-/// Draws the visible Events in `area`. Call [`Log::fit`] with its height first.
+/// Draws the visible Events in `area`, and the error in its last row. Call [`Log::fit`] with its height first.
 pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
+    let area = match &log.error {
+        Some(error) => {
+            let [events, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
+            f.render_widget(Paragraph::new(Span::styled(format!(" {error}"), palette::note())), foot);
+            events
+        }
+        None => area,
+    };
     let lines: Vec<Line<'static>> = if log.events.is_empty() {
         vec![Line::from(dim(" none yet"))]
     } else {

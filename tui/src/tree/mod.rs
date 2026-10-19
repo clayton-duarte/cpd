@@ -31,13 +31,13 @@ mod fixture;
 use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event};
-use ratatui::crossterm::execute;
+use ratatui::crossterm::event::{self, Event};
 
+use super::runner::kept;
+use super::{Capture, run_view};
 use super::{palette, read};
-use super::{not_a_terminal, on_a_terminal};
 use cpd_core::config::Config;
-use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
 use cpd_core::store::Store;
@@ -60,24 +60,18 @@ fn snapshot_due(dirty: bool, since: Duration) -> bool {
 }
 
 pub(super) fn run() -> Result<Output, CpdError> {
-    if !on_a_terminal() {
-        return Err(not_a_terminal("tui view tree"));
-    }
-    let home = CpdHome::from_env()?;
-    let config = Config::load(&home)?;
-    let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-    let view = View::new(read::tree(&mut store)?, false);
-    let runner = Runner::new(&config);
-    // From here on this process owns the terminal (commands.md §1.2).
-    let mut terminal = ratatui::init();
-    let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableFocusChange);
-    let result = event_loop(&mut terminal, &mut store, view, &runner);
-    let _ = execute!(std::io::stdout(), DisableFocusChange, DisableMouseCapture);
-    ratatui::restore();
-    result.map(|()| Output::Owned).map_err(|e| {
-        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view tree failed: {e}."))
-            .with("command", "tui view tree")
-    })
+    run_view(
+        "tree",
+        Capture::MouseAndFocus,
+        || {
+            let home = CpdHome::from_env()?;
+            let config = Config::load(&home)?;
+            let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+            let view = View::new(read::tree(&mut store)?, false);
+            Ok((store, view, Runner::new(&config)))
+        },
+        |terminal, (mut store, view, runner)| Ok(event_loop(terminal, &mut store, view, &runner)?),
+    )
 }
 
 fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View, runner: &Runner) -> std::io::Result<()> {
@@ -98,10 +92,10 @@ fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View,
                 }
             }
         }
-        if snapshot_due(dirty, last_snapshot.elapsed()) {
-            match read::tree(store) {
-                Ok(tree) => view.refresh(tree),
-                Err(e) => view.note = e.message().to_owned(),
+        // a failed snapshot is retried at the next refresh, with no Event needed (runner::kept)
+        if snapshot_due(dirty || view.error.is_some(), last_snapshot.elapsed()) {
+            if let Some(tree) = kept(read::tree(store), &mut view.error) {
+                view.refresh(tree);
             }
             dirty = false;
             last_snapshot = Instant::now();

@@ -21,16 +21,16 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event};
-use ratatui::crossterm::execute;
+use ratatui::crossterm::event::{self, Event};
 use ratatui::style::Style;
 use ratatui::text::Line;
 
 use super::read::{self, Worker};
-use super::{not_a_terminal, on_a_terminal};
+use super::runner::kept;
+use super::{Capture, run_view};
 use cpd_core::args::PlanArg;
 use cpd_core::config::Config;
-use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::output::Output;
@@ -59,19 +59,12 @@ pub(super) fn run(args: Args) -> Result<Output, CpdError> {
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
     // `plan_not_found` and `attempt_not_found` refuse before anything is drawn.
     let snapshot = read::worker(&mut store, plan, &args.attempt)?;
-    if !on_a_terminal() {
-        return Err(not_a_terminal("tui view worker"));
-    }
-    // From here on this process owns the terminal (commands.md §1.2).
-    let mut terminal = ratatui::init();
-    let _ = execute!(std::io::stdout(), EnableMouseCapture);
-    let result = event_loop(&mut terminal, &mut store, plan, &args.attempt, snapshot);
-    let _ = execute!(std::io::stdout(), DisableMouseCapture);
-    ratatui::restore();
-    result.map(|()| Output::Owned).map_err(|e| {
-        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view worker failed: {e}."))
-            .with("command", "tui view worker")
-    })
+    run_view(
+        "worker",
+        Capture::Mouse,
+        || Ok(snapshot),
+        |terminal, snapshot| Ok(event_loop(terminal, &mut store, plan, &args.attempt, snapshot)?),
+    )
 }
 
 /// What identifies the version of the session file last rendered.
@@ -97,16 +90,12 @@ fn event_loop(
     loop {
         if last_check.elapsed() >= CHECK {
             last_check = Instant::now();
-            snapshot = match read::worker(store, plan, attempt) {
-                Ok(worker) => {
-                    view.note.clear();
-                    Some(worker)
-                }
-                Err(e) => {
-                    view.note = e.message().to_owned();
-                    snapshot
-                }
-            };
+            // a failed read keeps the snapshot, the error is the note, the next check reads again (runner::kept)
+            let mut error = None;
+            if let Some(worker) = kept(read::worker(store, plan, attempt), &mut error) {
+                snapshot = Some(worker);
+            }
+            view.note = error.unwrap_or_default();
             refresh(&mut view, &mut shown, snapshot.as_ref());
         }
         terminal.draw(|f| view.draw(f))?;

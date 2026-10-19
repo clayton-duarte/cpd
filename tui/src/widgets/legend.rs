@@ -13,13 +13,13 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table};
 
-use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::error::CpdError;
 use cpd_core::output::Output;
 use cpd_core::plan::Phase;
 use cpd_core::session::PROGRAM;
 use crate::palette::{self, Meaning};
 use crate::read::{Dot, JobCounts};
-use crate::{not_a_terminal, on_a_terminal};
+use crate::{Capture, run_view};
 
 const COLUMN_SPACING: u16 = 2;
 /// A tmux popup draws a border of one cell on each side.
@@ -209,18 +209,7 @@ pub fn popup_args(client: (u16, u16)) -> Vec<String> {
 
 /// `cpd tui view legend`: draws the legend until any key or click.
 pub(crate) fn run() -> Result<Output, CpdError> {
-    if !on_a_terminal() {
-        return Err(not_a_terminal("tui view legend"));
-    }
-    // From here on this process owns the terminal (commands.md §1.2).
-    let mut terminal = ratatui::init();
-    let result = show(&mut terminal);
-    ratatui::restore();
-    match result {
-        Ok(()) => Ok(Output::Owned),
-        Err(e) => Err(CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view legend failed: {e}."))
-            .with("command", "tui view legend")),
-    }
+    run_view("legend", Capture::Keys, || Ok(()), |terminal, ()| Ok(show(terminal)?))
 }
 
 fn show(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {

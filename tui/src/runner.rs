@@ -100,14 +100,17 @@ pub fn run_view<P>(
 
 /// The policy of every view for a failed read: the last good snapshot stays on screen and `error` holds the
 /// failure, one row of text for the view to draw, until a read succeeds and clears it. The view reads again at its
-/// next refresh while `error` is set, whatever the Events say.
-pub(crate) fn kept<T>(snapshot: &mut T, error: &mut Option<String>, read: Result<T, CpdError>) {
+/// next refresh while `error` is set, whatever the Events say. Returns what a good read gave, for the view to take.
+pub(crate) fn kept<T>(read: Result<T, CpdError>, error: &mut Option<String>) -> Option<T> {
     match read {
         Ok(next) => {
-            *snapshot = next;
             *error = None;
+            Some(next)
         }
-        Err(e) => *error = Some(one_row(e.message())),
+        Err(e) => {
+            *error = Some(one_row(e.message()));
+            None
+        }
     }
 }
 
@@ -126,12 +129,12 @@ mod tests {
 
     #[test]
     fn a_failed_read_keeps_the_snapshot_and_a_good_one_clears_the_error() {
-        let (mut snapshot, mut error) = (1, None);
-        kept(&mut snapshot, &mut error, failure("the store\nis busy"));
-        assert_eq!((snapshot, error.as_deref()), (1, Some("the store is busy")));
-        kept(&mut snapshot, &mut error, failure("again"));
-        assert_eq!((snapshot, error.as_deref()), (1, Some("again")));
-        kept(&mut snapshot, &mut error, Ok(2));
-        assert_eq!((snapshot, error), (2, None));
+        let mut error = None;
+        assert_eq!(kept(failure("the store\nis busy"), &mut error), None);
+        assert_eq!(error.as_deref(), Some("the store is busy"));
+        assert_eq!(kept(failure("again"), &mut error), None);
+        assert_eq!(error.as_deref(), Some("again"));
+        assert_eq!(kept(Ok(2), &mut error), Some(2));
+        assert_eq!(error, None);
     }
 }

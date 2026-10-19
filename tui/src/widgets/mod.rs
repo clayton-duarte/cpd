@@ -17,13 +17,12 @@ pub mod legend;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEventKind,
-};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::layout::Position;
 
 use super::read::{self, Widgets};
-use super::{RunCommand, not_a_terminal, on_a_terminal};
+use super::runner::{ViewError, kept};
+use super::{Capture, RunCommand, run_view};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::highest_id;
@@ -45,30 +44,24 @@ const COALESCE: Duration = Duration::from_millis(500);
 const REFRESH: Duration = Duration::from_secs(2);
 
 pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
-    if !on_a_terminal() {
-        return Err(not_a_terminal("tui view widgets"));
-    }
-    let home = CpdHome::from_env()?;
-    let config = Config::load(&home)?;
-    let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-    let machine = Machine { name: hostname()?, load: load_average()? };
-    // The column shows no Event: none is asked for.
-    let first = read::widgets(&mut store, config.concurrency, 0)?;
-    // From here on this process owns the terminal (commands.md §1.2).
-    let mut terminal = ratatui::init();
-    let tmux = Tmux::new(config.tmux.socket.clone());
-    let lead = Opener { run_command, tmux: &tmux, cockpit: &config.tmux.cockpit_session };
-    let result = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture)
-        .map_err(terminal_failed)
-        .and_then(|()| show(&mut terminal, &mut store, config.concurrency, first, machine, &lead));
-    let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture);
-    ratatui::restore();
-    result.map(|()| Output::Owned)
-}
-
-fn terminal_failed(e: std::io::Error) -> CpdError {
-    CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view widgets failed: {e}."))
-        .with("command", "tui view widgets")
+    run_view(
+        "widgets",
+        Capture::Mouse,
+        || {
+            let home = CpdHome::from_env()?;
+            let config = Config::load(&home)?;
+            let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+            let machine = Machine { name: hostname()?, load: load_average()? };
+            // The column shows no Event: none is asked for.
+            let first = read::widgets(&mut store, config.concurrency, 0)?;
+            Ok((store, config, first, machine))
+        },
+        |terminal, (mut store, config, first, machine)| {
+            let tmux = Tmux::new(config.tmux.socket.clone());
+            let lead = Opener { run_command, tmux: &tmux, cockpit: &config.tmux.cockpit_session };
+            show(terminal, &mut store, config.concurrency, first, machine, &lead)
+        },
+    )
 }
 
 /// What a click on an owned PR row runs: `session open <lead>` through `run_command`, then the focus on the chat slot.
@@ -78,7 +71,8 @@ struct Opener<'a> {
     cockpit: &'a str,
 }
 
-/// Draws and follows until `q`. Reading failures end the view with their error. A left click on an owned PR row (not on its
+/// Draws and follows until `q`. A failed read keeps what is on screen and shows its error in the last row, until a read
+/// succeeds ([`kept`]). A left click on an owned PR row (not on its
 /// `↗`) opens its Lead in the chat slot; a refusal is the `note` in the column's last row until the next click.
 fn show(
     terminal: &mut ratatui::DefaultTerminal,
@@ -87,14 +81,16 @@ fn show(
     mut widgets: Widgets,
     mut machine: Machine,
     opener: &Opener,
-) -> Result<(), CpdError> {
+) -> Result<(), ViewError> {
     let mut read_at = Instant::now();
     let mut hits = Vec::new();
     let mut note = String::new();
+    let mut error = None::<String>;
     loop {
-        terminal.draw(|f| hits = draw(f, f.area(), &widgets, &machine, &note)).map_err(terminal_failed)?;
-        if event::poll(TICK).map_err(terminal_failed)? {
-            match event::read().map_err(terminal_failed)? {
+        let shown = error.as_deref().unwrap_or(&note);
+        terminal.draw(|f| hits = draw(f, f.area(), &widgets, &machine, shown))?;
+        if event::poll(TICK)? {
+            match event::read()? {
                 Event::Key(key) if quits(&key) => return Ok(()),
                 Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
                     note.clear();
@@ -109,11 +105,21 @@ fn show(
             }
         }
         if read_at.elapsed() >= COALESCE {
-            let moved = store.read(highest_id)? != widgets.events_cursor;
-            if moved || read_at.elapsed() >= REFRESH {
-                widgets = read::widgets(store, concurrency, 0)?;
-                machine.load = load_average()?;
-                read_at = Instant::now();
+            let retry = error.is_some();
+            let read = (|| {
+                let moved = store.read(highest_id)? != widgets.events_cursor;
+                if !(moved || retry || read_at.elapsed() >= REFRESH) {
+                    return Ok(None);
+                }
+                Ok(Some((read::widgets(store, concurrency, 0)?, load_average()?)))
+            })();
+            match kept(read, &mut error) {
+                Some(None) => {} // nothing moved
+                Some(Some((next, load))) => {
+                    (widgets, machine.load) = (next, load);
+                    read_at = Instant::now();
+                }
+                None => read_at = Instant::now(), // retried after the next COALESCE
             }
         }
     }

@@ -93,6 +93,8 @@ pub struct View {
     pane: Rect,
     /// The one-line result or refusal of the last action, until the next `n`, `x` or click.
     pub note: String,
+    /// The last failed snapshot's error (one row), until a snapshot succeeds; it hides the note meanwhile.
+    pub error: Option<String>,
 }
 
 impl View {
@@ -107,6 +109,7 @@ impl View {
             menu: None,
             pane: Rect::default(),
             note: String::new(),
+            error: None,
         };
         view.refresh(tree);
         view
@@ -376,9 +379,9 @@ impl View {
         (above != Some(path.as_slice())).then_some(path)
     }
 
-    /// The text of the footer: the prompt, else the note of the last action.
+    /// The text of the footer: the prompt, else the error of the last snapshot, else the note of the last action.
     fn footer(&self) -> String {
-        self.prompt.as_ref().map(Prompt::text).unwrap_or_else(|| self.note.clone())
+        self.prompt.as_ref().map(Prompt::text).or_else(|| self.error.clone()).unwrap_or_else(|| self.note.clone())
     }
 
     /// Draw a blank row, the tree below it, and (when there is something to say) the footer in the rows at the bottom: the

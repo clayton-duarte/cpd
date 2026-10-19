@@ -15,7 +15,8 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 pub use self::view::{Log, draw};
 use super::read;
 use super::widgets::{legend, newest_client};
-use super::{not_a_terminal, on_a_terminal};
+use super::runner::{ViewError, kept};
+use super::{Capture, run_view};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::highest_id;
@@ -49,43 +50,38 @@ pub(crate) fn open(tmux: &Tmux) -> Result<(), CpdError> {
 }
 
 pub(super) fn run() -> Result<Output, CpdError> {
-    if !on_a_terminal() {
-        return Err(not_a_terminal("tui view logs"));
-    }
-    let home = CpdHome::from_env()?;
-    let config = Config::load(&home)?;
-    let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-    let first = read::logs(&mut store, RECENT)?;
-    // From here on this process owns the terminal (commands.md §1.2).
-    let mut terminal = ratatui::init();
-    let poll = Duration::from_millis(u64::from(config.events.poll_ms));
-    let result = show(&mut terminal, &mut store, poll, first);
-    ratatui::restore();
-    result.map(|()| Output::Owned)
+    run_view(
+        "logs",
+        Capture::Keys,
+        || {
+            let home = CpdHome::from_env()?;
+            let config = Config::load(&home)?;
+            let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+            let first = read::logs(&mut store, RECENT)?;
+            let poll = Duration::from_millis(u64::from(config.events.poll_ms));
+            Ok((store, poll, first))
+        },
+        |terminal, (mut store, poll, first)| show(terminal, &mut store, poll, first),
+    )
 }
 
-/// Draws and follows until `q` or Esc.
+/// Draws and follows until `q` or Esc. A failed read keeps the Events on screen and shows its error in the last row
+/// until a read succeeds ([`kept`]).
 fn show(
     terminal: &mut ratatui::DefaultTerminal,
     store: &mut Store,
     poll: Duration,
     first: read::Logs,
-) -> Result<(), CpdError> {
-    let terminal_failed = |e: std::io::Error| {
-        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view logs failed: {e}."))
-            .with("command", "tui view logs")
-    };
+) -> Result<(), ViewError> {
     let mut cursor = first.events_cursor;
     let mut log = Log::new(first.events);
     loop {
-        terminal
-            .draw(|f| {
-                log.fit(f.area().height);
-                draw(f, f.area(), &log);
-            })
-            .map_err(terminal_failed)?;
-        if event::poll(poll).map_err(terminal_failed)? {
-            if let Event::Key(key) = event::read().map_err(terminal_failed)? {
+        terminal.draw(|f| {
+            log.fit(f.area().height);
+            draw(f, f.area(), &log);
+        })?;
+        if event::poll(poll)? {
+            if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
                     match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
@@ -98,8 +94,12 @@ fn show(
                 }
             }
         }
-        if store.read(highest_id)? != cursor {
-            let next = read::logs_after(store, cursor)?;
+        // the cursor stays where it was on a failure, so the next poll reads what was missed
+        let read = store.read(highest_id).and_then(|latest| match latest != cursor {
+            true => read::logs_after(store, cursor).map(Some),
+            false => Ok(None),
+        });
+        if let Some(Some(next)) = kept(read, &mut log.error) {
             cursor = next.events_cursor;
             log.push(next.events);
         }

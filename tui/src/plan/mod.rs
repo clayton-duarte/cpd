@@ -24,9 +24,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
-use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event as Input, KeyCode, KeyEventKind, MouseButton, MouseEventKind,
-};
+use ratatui::crossterm::event::{self, Event as Input, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
@@ -38,9 +36,10 @@ use self::flow::{Dir, Selection};
 use crate::link::link;
 use crate::palette::{self, Meaning};
 use super::read::{self, ChatSlot, PlanBoxes, ReviewStatus};
-use super::{RunCommand, not_a_terminal, on_a_terminal};
+use super::runner::{ViewError, kept};
+use super::{Capture, RunCommand, run_view};
 use cpd_core::config::Config;
-use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::error::CpdError;
 use cpd_core::events::{self, Event, highest_id};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId};
@@ -251,29 +250,22 @@ fn attempt_of(centre: &Centre, key: &str) -> Option<AttemptId> {
 }
 
 pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
-    if !on_a_terminal() {
-        return Err(not_a_terminal("tui view plan"));
-    }
-    let home = CpdHome::from_env()?;
-    let config = Config::load(&home)?;
-    let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-    let mut snap = snapshot(&mut store, &home)?;
-    let actions = Actions::new(home.clone(), &config, run_command);
-    let poll = Duration::from_millis(u64::from(config.events.poll_ms));
-
-    // From here on this process owns the terminal (commands.md §1.2).
-    let mut terminal = ratatui::init();
-    let mouse = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture);
-    let result = mouse.map_err(|e| e.to_string()).and_then(|()| {
-        show(&mut terminal, &mut store, &home, &mut snap, poll, &actions).map_err(|e| e.to_string())
-    });
-    let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture);
-    ratatui::restore();
-    match result {
-        Ok(()) => Ok(Output::Owned),
-        Err(error) => Err(CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view plan failed: {error}."))
-            .with("command", "tui view plan")),
-    }
+    run_view(
+        "plan",
+        Capture::Mouse,
+        || {
+            let home = CpdHome::from_env()?;
+            let config = Config::load(&home)?;
+            let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+            let snap = snapshot(&mut store, &home)?;
+            let actions = Actions::new(home.clone(), &config, run_command);
+            let poll = Duration::from_millis(u64::from(config.events.poll_ms));
+            Ok((store, home, snap, poll, actions))
+        },
+        |terminal, (mut store, home, mut snap, poll, actions)| {
+            show(terminal, &mut store, &home, &mut snap, poll, &actions)
+        },
+    )
 }
 
 /// Draws, follows Events and takes input until the terminal fails.
@@ -284,13 +276,9 @@ fn show(
     snap: &mut Snapshot,
     poll: Duration,
     actions: &Actions,
-) -> std::io::Result<()> {
+) -> Result<(), ViewError> {
     let mut ui = Ui::default();
-    let follow = store.read(|conn| events::Selection::resolve(conn, None, None, None, Vec::new()));
-    let follow = match follow {
-        Ok(f) => f,
-        Err(e) => return Err(std::io::Error::other(e.to_string())),
-    };
+    let follow = store.read(|conn| events::Selection::resolve(conn, None, None, None, Vec::new()))?;
     let (mut stale, mut taken, mut fetched) = (false, Instant::now(), Instant::now());
     loop {
         if let Some(c) = snap.centre.as_mut() {
@@ -303,30 +291,29 @@ fn show(
                 continue;
             }
             fetched = Instant::now();
-            match store.read(|conn| follow.fetch(conn, snap.cursor, None, 500)) {
-                Ok(events) => {
-                    ui.error = None;
+            // a failed fetch or snapshot is retried at the next refresh (`stale`), the error shown until a snapshot succeeds
+            let mut fetch_error = None;
+            match kept(store.read(|conn| follow.fetch(conn, snap.cursor, None, 500)), &mut fetch_error) {
+                Some(events) => {
                     if let Some(last) = events.last() {
                         snap.cursor = last.id;
                     }
                     stale |= events.iter().any(|e| concerns(e, snap.centre.as_ref()));
                 }
-                Err(e) => ui.error = Some(e.to_string()),
+                None => (ui.error, stale) = (fetch_error, true),
             }
             if due(stale, taken.elapsed()) {
                 let before = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
-                match snapshot(store, home) {
-                    Ok(next) => {
-                        *snap = next;
-                        ui.error = None;
-                        let after = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
-                        if before.as_ref().map(|b| &b.0) != after.as_ref().map(|a| &a.0) {
-                            ui.switch(before.as_ref().map(|b| &b.1), after.as_ref().map(|a| &a.1));
-                        }
+                let next = kept(snapshot(store, home), &mut ui.error);
+                stale = ui.error.is_some();
+                if let Some(next) = next {
+                    *snap = next;
+                    let after = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
+                    if before.as_ref().map(|b| &b.0) != after.as_ref().map(|a| &a.0) {
+                        ui.switch(before.as_ref().map(|b| &b.1), after.as_ref().map(|a| &a.1));
                     }
-                    Err(e) => ui.error = Some(e.to_string()),
                 }
-                (stale, taken) = (false, Instant::now());
+                taken = Instant::now();
             }
             continue;
         }
