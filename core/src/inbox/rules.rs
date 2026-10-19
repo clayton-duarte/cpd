@@ -13,6 +13,7 @@ use time::format_description::well_known::Rfc3339;
 use super::model::{Condition, Kind, Urgency};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
+use crate::host::addr::review_host;
 use crate::ids::{ContextId, JobKey, PlanId, RecordId, SessionId};
 use crate::plan::Phase;
 use crate::store::Store;
@@ -181,11 +182,16 @@ fn unread(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 
 // ---- Plans and Jobs: plan-review and job-stuck -------------------------------------------------------------------
 
-/// The Plan's plannotator page, when its port file holds a port (the convention of `session::port`).
+/// The Plan's plannotator page, when its port file holds a port (the convention of `session::port`), on the review host
+/// ([`review_host`], hs-d264).
 fn plannotator_url(home: &CpdHome, plan: &PlanId) -> Result<Option<String>, CpdError> {
     let path: &Path = &home.plannotator_port(plan);
     match std::fs::read_to_string(path) {
-        Ok(text) => Ok(text.trim().parse::<u16>().ok().map(|port| format!("http://localhost:{port}/"))),
+        Ok(text) => Ok(text
+            .trim()
+            .parse::<u16>()
+            .ok()
+            .map(|port| format!("http://{}:{port}/", review_host(&mut std::io::stderr())))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(CpdError::new(ErrorCode::StoreFailed, format!("Cannot read {}: {e}.", path.display()))
             .with("path", path.display().to_string())),
@@ -415,6 +421,7 @@ mod tests {
     use time::macros::datetime;
 
     use super::*;
+    use crate::host::addr::URL_HOST;
 
     const NOW: OffsetDateTime = datetime!(2026-01-02 00:00 UTC);
     const TEN: Duration = Duration::from_secs(600);
@@ -733,7 +740,11 @@ mod tests {
         let port = f.home.plannotator_port(&PlanId::parse("pay").unwrap());
         std::fs::create_dir_all(port.parent().unwrap()).unwrap();
         std::fs::write(&port, "20000\n").unwrap();
-        assert_eq!(one(f.of(Kind::PlanReview)).url.as_deref(), Some("http://localhost:20000/"));
+        // the review host: `PLANNOTATOR_URL_HOST` from cpd's environment (the only test that sets it)
+        unsafe { std::env::set_var(URL_HOST, "review.example") };
+        let url = one(f.of(Kind::PlanReview)).url;
+        unsafe { std::env::remove_var(URL_HOST) };
+        assert_eq!(url.as_deref(), Some("http://review.example:20000/"));
     }
 
     #[test]
