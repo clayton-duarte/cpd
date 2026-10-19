@@ -1,7 +1,10 @@
 /** The part of pi's extension API the adapter uses (docs: pi `extensions.md`). Structural, so tests pass a fake. */
 
-export type ExecResult = { stdout: string; stderr: string; code: number };
-export type Exec = (command: string, args: string[]) => Promise<ExecResult>;
+/** pi's `ExecOptions` (`core/exec.d.ts`): `timeout` in ms; both end the process with SIGTERM. */
+export type ExecOptions = { signal?: AbortSignal; timeout?: number };
+/** pi's `ExecResult`: `killed` is set when the timeout or the signal ended the process (its `code` is then not an exit code). */
+export type ExecResult = { stdout: string; stderr: string; code: number; killed: boolean };
+export type Exec = (command: string, args: string[], options?: ExecOptions) => Promise<ExecResult>;
 
 import type { Component } from "@earendil-works/pi-tui";
 

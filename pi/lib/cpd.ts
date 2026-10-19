@@ -1,6 +1,6 @@
 import { statSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import type { Exec } from "./pi.ts";
+import type { Exec, ExecOptions } from "./pi.ts";
 
 /** A failed `cpd` call or adapter step, with the error code the documents name. */
 export class CpdError extends Error {
@@ -30,16 +30,25 @@ export function errorOfEnvelope(o: Record<string, unknown>): CpdError {
   );
 }
 
+/** How long a `cpd` call may run, and what aborts it. */
+export type CallOptions = { timeoutMs: number; signal?: AbortSignal };
+
 /**
  * Run `cpd <args>` and return its parsed `{"ok": true, …}` stdout (commands.md §15.1, "Calls").
- * Stdout that is not one JSON object, a non-zero exit or `ok: false` is a CpdError carrying cpd's own code.
+ * Stdout that is not one JSON object, a non-zero exit or `ok: false` is a CpdError carrying cpd's own code;
+ * a call ended by the timeout is `tool_timeout`, one ended by the signal is `aborted`.
  */
-export async function callCpd(exec: Exec, args: string[]): Promise<Record<string, unknown>> {
+export async function callCpd(exec: Exec, args: string[], options: CallOptions): Promise<Record<string, unknown>> {
+  const execOptions: ExecOptions = { timeout: options.timeoutMs, signal: options.signal };
   let r;
   try {
-    r = await exec("cpd", args);
+    r = await exec("cpd", args, execOptions);
   } catch (e) {
     throw new CpdError("spawn_failed", `cannot run cpd ${args.join(" ")}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (r.killed) {
+    if (options.signal?.aborted) throw new CpdError("aborted", `cpd ${args.join(" ")} was aborted`, { tool: "cpd", argv: ["cpd", ...args] });
+    throw new CpdError("tool_timeout", `cpd ${args.join(" ")} ran past its deadline of ${options.timeoutMs / 1000} s`, { tool: "cpd", argv: ["cpd", ...args], deadline_seconds: options.timeoutMs / 1000 });
   }
   let json: unknown;
   try {
@@ -72,7 +81,7 @@ export function installedIdentity(pathEnv: string | undefined = process.env.PATH
 }
 
 /** `cpd --version`'s `protocol`: a safe integer, or `null` when the output lacks it or it is not one (an old cpd). */
-export async function cpdProtocol(exec: Exec): Promise<number | null> {
-  const p = (await callCpd(exec, ["--version"])).protocol;
+export async function cpdProtocol(exec: Exec, options: CallOptions): Promise<number | null> {
+  const p = (await callCpd(exec, ["--version"], options)).protocol;
   return Number.isSafeInteger(p) ? (p as number) : null;
 }
