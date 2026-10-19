@@ -4,7 +4,7 @@ mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::TestEnv;
 use cpd_core::error::ErrorCode;
@@ -316,22 +316,33 @@ fn only_the_last_60_lines_are_returned_and_the_log_has_all() {
 
 #[test]
 fn a_table_runs_together_waits_for_all_and_fails_with_the_first_in_file_order() {
-    // Keys are not in alphabetical order: file order decides, not the table's sort.
-    let h = hooks("[pre-merge]\nzeta = \"exit 5\"\nalpha = \"exit 3\"\nslow = \"sleep 0.3; echo slow-done\"\n");
-    let started = Instant::now();
+    // Keys are not in alphabetical order: file order decides, not the table's sort. `zeta`
+    // (first in the file) only fails once `slow` (last) has started, so the commands run
+    // together; `slow` ends after the others have failed, so it is waited for, not abandoned.
+    let h = hooks(
+        "[pre-merge]\nzeta = \"until [ -e slow.started ]; do sleep 0.05; done; touch zeta.failed; exit 5\"\nalpha = \"exit 3\"\nslow = \"touch slow.started; until [ -e zeta.failed ]; do sleep 0.05; done; sleep 0.3; echo slow-done\"\n",
+    );
     let result = h.run(Hook::PreMerge);
     assert_eq!(result.outcome, HookOutcome::Failed { exit: 5 });
-    // The slow command was not abandoned when the others failed, and ran alongside them.
     assert!(result.tail.unwrap().contains("slow │ slow-done"));
-    assert!(started.elapsed() < Duration::from_secs(5));
 }
 
 #[test]
 fn commands_of_a_table_run_concurrently() {
-    let h = hooks("[pre-merge]\na = \"sleep 0.6\"\nb = \"sleep 0.6\"\nc = \"sleep 0.6\"\n");
-    let started = Instant::now();
-    assert_eq!(h.run(Hook::PreMerge).outcome, HookOutcome::Passed);
-    assert!(started.elapsed() < Duration::from_millis(1500), "{:?}", started.elapsed());
+    // Each command waits until all three have started: run one after another, the first
+    // never sees the others and the hook times out.
+    let rendezvous = |me: &str| {
+        format!(
+            "touch {me}.started; until [ -e a.started ] && [ -e b.started ] && [ -e c.started ]; do sleep 0.05; done"
+        )
+    };
+    let h = hooks(&format!(
+        "[pre-merge]\na = \"{}\"\nb = \"{}\"\nc = \"{}\"\n",
+        rendezvous("a"),
+        rendezvous("b"),
+        rendezvous("c")
+    ));
+    assert_eq!(h.run_for(Hook::PreMerge, Duration::from_secs(20)).outcome, HookOutcome::Passed);
 }
 
 #[test]
@@ -440,14 +451,24 @@ fn other_tables_are_ignored() {
     }
 }
 
+/// Dead means no such process or state Z. The hook's sh is gone, so a background child is
+/// an orphan: after SIGKILL it is a zombie (`kill -0` still succeeds) until init reaps it,
+/// and on a loaded runner that window is visible.
+fn is_dead(pid: &str) -> bool {
+    let out = std::process::Command::new("ps").args(["-o", "stat=", "-p", pid]).output().unwrap();
+    let state = String::from_utf8(out.stdout).unwrap();
+    state.trim().is_empty() || state.trim().starts_with('Z')
+}
+
 #[test]
 fn a_hook_is_killed_with_its_process_group_at_the_timeout() {
-    let h = hooks("pre-merge = \"(sleep 1; touch survivor.txt) & wait\"\n");
-    let started = Instant::now();
-    let result = h.run_for(Hook::PreMerge, Duration::from_millis(300));
+    // The background child would touch survivor.txt after 10 s; the kill must end it long
+    // before, and the test waits for its death rather than for the clock.
+    let h = hooks("pre-merge = \"(sleep 10; touch survivor.txt) & echo $! > pid; wait\"\n");
+    let result = h.run_for(Hook::PreMerge, Duration::from_secs(2));
     assert_eq!(result.outcome, HookOutcome::Error(HookError::Timeout));
-    assert!(started.elapsed() < Duration::from_millis(900), "{:?}", started.elapsed());
-    std::thread::sleep(Duration::from_millis(1500));
+    let pid = h.file("pid").trim().to_owned();
+    common::wait_until("the background child to die with the hook's process group", || is_dead(&pid));
     assert!(!h.repo.join("survivor.txt").exists(), "the background child outlived the kill");
 }
 
@@ -456,21 +477,9 @@ fn a_background_child_of_a_finished_hook_is_killed_when_the_hook_returns() {
     let h = hooks("pre-merge = \"sleep 30 & echo $! > pid\"\n");
     assert_eq!(h.run(Hook::PreMerge).outcome, HookOutcome::Passed);
     let pid = h.file("pid").trim().to_owned();
-    // The contract is that the child is dead, not that its pid is already free. The
-    // hook's sh is gone, so the child is an orphan: after SIGKILL it is a zombie
-    // (`kill -0` still succeeds) until init reaps it, and on a loaded runner that
-    // window is visible. Dead means no such process or state Z; wait a bounded time
-    // for the kill to land.
-    let state = || {
-        let out = std::process::Command::new("ps").args(["-o", "stat=", "-p", &pid]).output().unwrap();
-        String::from_utf8(out.stdout).unwrap().trim().to_owned()
-    };
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !(state().is_empty() || state().starts_with('Z')) && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    let last = state();
-    assert!(last.is_empty() || last.starts_with('Z'), "the background child {pid} outlived the hook (state {last:?})");
+    // The contract is that the child is dead, not that its pid is already free: wait a
+    // bounded time for the kill to land.
+    common::wait_until("the background child to die when the hook returns", || is_dead(&pid));
 }
 
 #[test]
