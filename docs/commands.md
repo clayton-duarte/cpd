@@ -1332,19 +1332,20 @@ Idempotent: yes; when no value changes it writes nothing and returns `"already":
 cpd pr cancel <key> [--plan <id>]
 ```
 
-Removes a PR from the Plan before the lock: `waiting → cancelled` (A13, §3.8). It keeps its key, so `pr add` cannot reuse it. Cancel its Jobs first (`job cancel`), and edit away the needs on it (`pr edit`).
+Removes a PR from the Plan: `waiting → cancelled` (A13, §3.8), and after the lock also `dispatch → cancelled`, so a PR whose Jobs were all cancelled, or that never had one, cannot keep the Plan out of `done` (hs-n271). It keeps its key, so `pr add` cannot reuse it. Cancel its Jobs first (`job cancel`), and edit away the needs on it (`pr edit`, before the lock). Locked Jobs are never edited or deleted: only the PR's status moves. An `open` or `merged` PR is not cancelled: its pull request is out of scope.
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the phase is `grounding` or `plan` | `pr_locked` | 3 |
-| the PR is `waiting` (`cancelled`: `already`) | `illegal_transition` | 3 |
-| every Job of the PR is `cancelled`, and no PR that is not `cancelled` needs it; `details.jobs` and `details.prs` list what holds it | `pr_in_use` | 3 |
+| the PR is `waiting`, or `dispatch` after the lock (`cancelled`: `already`); an `open` or `merged` PR is refused | `illegal_transition` | 3 |
+| every Job of the PR is `cancelled` (none `merged`, none live), and no PR that is not `cancelled` needs it; `details.jobs` and `details.prs` list what holds it | `pr_in_use` | 3 |
 
-Effects: **rows**, one transaction: the PR `status = cancelled`. **Event** `pr-cancelled` `{pr}`. The plan fingerprint changes (§2.3: it covers the PRs that are not `cancelled`).
+Effects: **rows**, one transaction: the PR `status = cancelled`; a `dispatch` PR also loses its `lead_worktree` and `started_at` (the table allows neither on a `cancelled` PR). **Nothing is removed on disk**: a started PR's Lead worktree and local Lead Branch stay, because the clean-up of §7.2 runs at a merge only and the clean-up of a cancelled PR is not done yet. **Event** `pr-cancelled` `{pr}`. Before the lock the plan fingerprint changes (§2.3: it covers the PRs that are not `cancelled`). After the lock, when no PR of the Plan is left `waiting` or `dispatch` and one is not `cancelled`, the same transaction moves the Plan as `pr open` and the poll do: `dispatch → deploy` with `plan-phase`, and `deploy → done` with `plan-done` when every PR left is `merged` (§3.1); the output then has `phase`. A Plan whose PRs are all `cancelled` stays in `dispatch`.
 
 ```json
-{"ok": true, "pr": {"key": "web", "status": "cancelled"}}
+{"ok": true, "pr": {"key": "web", "status": "cancelled"}, "phase": "done"}
 ```
+
+`phase` is present only when the Plan moved.
 
 Idempotent: yes, as stated.
 
