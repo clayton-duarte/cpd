@@ -244,7 +244,7 @@ Each tool: **What**, **Layout**, **Status and alerts**, **Driven by**, **Standou
 
 - **What:** "a pretty fancy and modern terminal file manager", in Go and Bubble Tea; its stated reason to exist is that the author "was often disappointed by [other managers'] UI design" ([overview](https://github.com/yorukot/superfile/blob/HEAD/website/src/content/docs/overview.md)).
 - **Layout:** file panel (focused by default), plus a sidebar, a processes panel, a metadata panel and a command bar ([tutorial, "Panel navigation"](https://github.com/yorukot/superfile/blob/HEAD/website/src/content/docs/getting-started/tutorial.mdx)).
-- **Status and alerts:** the processes panel lists running file operations; metadata of the selected file.
+- **Status and alerts:** a processes panel (inferred: running file operations) and a metadata panel for the selected file.
 - **Driven by:** a key per panel (`s` sidebar, `p` processes, `m` metadata, `:` command bar; "to return focus back onto the file panel, press the same hotkey again"), `F` hides or shows all footer panels; themes by file ([theme wiki](https://superfile.dev/configure/custom-theme/)); hotkeys by file.
 - **Standout:** the footer is a drawer that is one key away from gone, and the screen looks designed first.
 
@@ -341,7 +341,7 @@ Each tool: **What**, **Layout**, **Status and alerts**, **Driven by**, **Standou
 ### 3.13 agent-deck
 
 - **What:** "mission control for your AI coding agents": one terminal that shows every session "running, waiting, or done" ([README](https://github.com/asheshgoplani/agent-deck)). Go. Same job as the cockpit's Context column, for Claude Code, Codex, OpenCode and pi sessions.
-- **Layout:** a session list with groups, a preview, a footer of keys (not drawn from README text; the key table is, [README keys](https://github.com/asheshgoplani/agent-deck#keyboard-shortcuts)). Mouse: "The TUI holds the terminal in mouse [mode]" (README FAQ: text selection needs `Shift+drag`).
+- **Layout:** the README text read does not describe the screen. It names a session list with named groups ([Declarative groups](https://github.com/asheshgoplani/agent-deck#declarative-groups)) and a key table ([Key Shortcuts](https://github.com/asheshgoplani/agent-deck#key-shortcuts)); a list-plus-footer screen is **inferred**. It holds the terminal in mouse mode (its FAQ: drag-select needs `Shift+drag`).
 - **Status and alerts:** `●` green running, `◐` yellow waiting ("needs your input"), `○` grey idle, `✕` red error ([Status Detection](https://github.com/asheshgoplani/agent-deck#status-detection)). **Waiting sessions appear in the tmux status bar**: `⚡ [1] frontend [2] api [3] backend`, and `Ctrl+b`, release, `1`–`6` jumps there ([Notification Bar](https://github.com/asheshgoplani/agent-deck#notification-bar)). A `notify-daemon` "watches status transitions and sends parent nudges when child sessions move `running -> waiting|error|idle`"; a **conductor** session answers routine questions and "escalates the interesting ones to your phone" over Telegram, Slack or ntfy; **watchers** take webhooks and GitHub events.
 - **Driven by:** keys (`n` new, `f`/`F` fork, `/` search, `!`/`@`/`#`/`&` filters by running/waiting/idle/error, `$` cost, `M` move to group, `o` send a message to the selected session).
 - **Standout:** the *needs-you strip in the status line with a number you press*.
@@ -371,7 +371,7 @@ Each tool: **What**, **Layout**, **Status and alerts**, **Driven by**, **Standou
 ### 3.14 savras
 
 - **What:** "a side panel that sees every Claude Code session you have running": lists each as `WAITING`, `WORKING`, `DONE` or `FAILED` with its pull request, context used and age; Rust ([README](https://github.com/Marijusaj/savras)). It reads Claude Code's own state files and never writes to them.
-- **Layout:** a narrow panel (default on the right; the divider is draggable) with a working shell beside it; a header counting `1 needs input · 2 working · 4 done`; rows under headings; a detail footer for the selected row; tabs, one per session you open (README "At a glance", panel sample and "Tabs").
+- **Layout:** a narrow panel (side set by `[`/`]`, width by `<`/`>` or by dragging the divider; "tmux draws the panes; Savras is the panel", the cockpit's own split of work) with a working shell beside it; a header counting `1 needs input · 2 working · 4 done`; rows under headings; a detail footer for the selected row; tabs, one per session you open (README "At a glance", panel sample and "Tabs").
 - **Status and alerts:** the heading **Needs input** is first and the header says how many; a row shows `WAITING  answer: …` (the question), the context-used percentage and the age; `PR #357` / `MERGED #357` in the row; failed in its own heading.
 - **Driven by:** keys (`↑↓`, `r`, `s` regroup, `a` start a parallel agent, `d d` delete, `x` close a tab); `ctrl-w`/`ctrl-s` step through the visible rows from anywhere, in the order shown; mouse: drag the divider.
 - **Standout:** two groupings of the same rows and a rule that **rows never move under your cursor**.
@@ -420,7 +420,7 @@ Each tool: **What**, **Layout**, **Status and alerts**, **Driven by**, **Standou
 
 ### 3.16 Toad
 
-- **What:** "a unified interface for AI in your terminal" (Will McGugan, Textual; [README](https://github.com/batrachianai/toad)): a front-end to coding agents through the Agent Client Protocol, with a working shell.
+- **What:** "a unified interface for AI in your terminal" (by Will McGugan; [README](https://github.com/batrachianai/toad)): a front-end to coding agents through the Agent Client Protocol, with a working shell.
 - **Layout:** a chat/prompt view with a Markdown prompt editor, streaming Markdown, side-by-side or unified diffs; a fuzzy `@` file picker that switches to a tree on `Tab` (README feature table).
 - **Status and alerts:** "hit `ctrl+s` to show the current state of all your agents in one screen"; session resume on `ctrl+r`.
 - **Driven by:** keys, "full mouse support" in the prompt editor; a settings screen instead of a config file; the author recommends Ghostty.
@@ -495,7 +495,7 @@ Each tool: **What**, **Layout**, **Status and alerts**, **Driven by**, **Standou
 
 ### 3.20 Reeve
 
-- **What:** "a terminal cockpit for AI agents: watch a run live, score it, and step in when it goes sideways" ([README](https://github.com/Dancode-188/reeve)). Rust, ratatui; takes OpenTelemetry spans.
+- **What:** "a terminal cockpit for AI agents: watch a run live, score it, and step in when it goes sideways" ([README](https://github.com/Dancode-188/reeve)). Rust (listed in [awesome-ratatui](https://github.com/ratatui/awesome-ratatui)); takes OpenTelemetry spans.
 - **Layout:** a live **trace tree** that builds as the agent works, with the streaming response and a blinking cursor; a health gauge; History on `3`.
 - **Status and alerts:** a health score 0–100 that "changes color as it drops. Green, amber, red"; anomaly checks (loop detection, cost, latency, intent vs action) raise alerts; **policy rules** such as `health_score < 30` or `predicted_cost_at_completion > 10.0` fire automatically.
 - **Driven by:** keys: `i` to intervene (pause, redirect with a new instruction, inject context, kill the trace); the agent "acknowledges every step back to the cockpit, so you watch the command land instead of hoping it did"; `R` replays a finished trace "like a DVR".
