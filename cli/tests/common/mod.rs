@@ -190,6 +190,13 @@ pub fn output(cmd: &mut Command) -> io::Result<Output> {
     spawn(cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()))?.wait_with_output()
 }
 
+/// Makes the file `path` look last modified `by` ago, for a code that waits for a quiet file
+/// (a session file nobody wrote to for a while): set the time, do not sleep until it has passed.
+pub fn backdate(path: &Path, by: Duration) {
+    let file = fs::OpenOptions::new().write(true).open(path).expect("open the file to backdate");
+    file.set_modified(std::time::SystemTime::now() - by).expect("set the modification time");
+}
+
 /// How long [`wait_until`] and [`wait_screen`] wait: the one wait policy of the suite, long
 /// enough for a loaded machine. A wait that needs longer says so with [`wait_until_for`].
 pub const WAIT: Duration = Duration::from_secs(30);
@@ -209,6 +216,22 @@ pub fn wait_until_for(what: &str, timeout: Duration, mut ready: impl FnMut() -> 
         assert!(Instant::now() < deadline, "timed out waiting for {what}");
         std::thread::sleep(POLL);
     }
+}
+
+/// Waits until some process is blocked in `flock(2)` on the file `path` (a waiter in the
+/// kernel's own table, `/proc/locks`: a line `<n>: -> FLOCK ... <dev>:<inode> ...`), at most
+/// [`WAIT`]. The positive signal for "this call is waiting for the lock", where a test then
+/// asserts what has not happened yet.
+pub fn wait_for_flock_waiter(path: &Path) {
+    use std::os::unix::fs::MetadataExt;
+    let inode = fs::metadata(path).expect("the lock file exists").ino().to_string();
+    wait_until(&format!("a process to wait for the flock on {}", path.display()), || {
+        let locks = fs::read_to_string("/proc/locks").expect("read /proc/locks");
+        locks.lines().any(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            fields.contains(&"->") && fields.iter().any(|f| f.rsplit(':').next() == Some(inode.as_str()) && f.matches(':').count() == 2)
+        })
+    });
 }
 
 /// Waits until `ready` gives a value, at most `timeout`. `Err(state)` is "not yet" and says
@@ -580,6 +603,21 @@ unset _d _n _f _a
                 text.split_terminator('\0').map(str::to_owned).collect()
             })
             .collect()
+    }
+
+    /// The poll searches the fake `gh` has recorded: one per `cpd pr poll`, which engine E5 runs
+    /// once per tick when the config says `tick_seconds = 1` and `pr_poll_seconds = 1`.
+    pub fn poll_searches(&self) -> usize {
+        self.calls("gh").iter().filter(|c| c.get(3).is_some_and(|q| q.contains("search(type"))).count()
+    }
+
+    /// Waits until the engine has run `ticks` whole ticks (E1-E8) since this call: the poll of
+    /// a tick comes before E7, so once poll `n + 1` has begun, the tick of poll `n` is over.
+    /// The positive signal an absence test waits for before it asserts that nothing happened.
+    /// Needs `tick_seconds = 1` and `pr_poll_seconds = 1` and a fake `gh` that answers the search.
+    pub fn wait_whole_ticks(&self, ticks: usize) {
+        let from = self.poll_searches();
+        wait_until(&format!("{ticks} whole engine ticks (polls {from} -> {})", from + ticks + 1), || self.poll_searches() > from + ticks);
     }
 
     fn calls_dir(&self, name: &str) -> PathBuf {

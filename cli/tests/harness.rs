@@ -191,6 +191,42 @@ fn no_test_mutates_the_process_environment() {
     assert!(found.is_empty(), "use Command::env, not the process environment:\n{}", found.join("\n"));
 }
 
+/// The milliseconds of the literal duration a `sleep(` on `line` waits (`from_millis(n)`, `from_secs(n)`), if it has one.
+fn literal_sleep_ms(line: &str) -> Option<u64> {
+    let after = &line[line.find("sleep(")? + 6..];
+    let number = |prefix: &str| -> Option<u64> {
+        let rest = &after[after.find(prefix)? + prefix.len()..];
+        rest.chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()
+    };
+    number("from_millis(").or_else(|| number("from_secs(").map(|s| s * 1000))
+}
+
+#[test]
+fn no_test_sleeps_for_a_result_or_bounds_the_time_a_result_takes() {
+    // A fixed sleep before an assertion proves nothing on a loaded machine, and an upper bound on elapsed time fails on
+    // one (tests-build-W4): wait for the result (`wait_until`, a whole engine tick, a rendezvous). A sleep of 400 ms or
+    // more, or an upper bound, stands only for a claim about time itself, and says so in a `// time-claim: <what it
+    // asserts>; no per-poll signal from <X>` comment on its line or the five above it.
+    let lines = test_source_lines();
+    let mut found = Vec::new();
+    for (i, (path, n, line)) in lines.iter().enumerate() {
+        let code = line.trim();
+        if code.starts_with("//") {
+            continue;
+        }
+        let long_sleep = literal_sleep_ms(code).is_some_and(|ms| ms >= 400);
+        let upper_bound = code.contains("assert") && code.contains("elapsed()") && code.contains(" < ");
+        if !(long_sleep || upper_bound) {
+            continue;
+        }
+        let claimed = lines[i.saturating_sub(5)..=i].iter().any(|(p, _, l)| p == path && l.contains("time-claim:"));
+        if !claimed {
+            found.push(format!("{path}:{n}: {code}"));
+        }
+    }
+    assert!(found.is_empty(), "wait for the result, or give the `// time-claim:` it asserts:\n{}", found.join("\n"));
+}
+
 #[test]
 fn executables_are_written_and_copied_only_through_the_harness() {
     // ETXTBSY is handled once, in `common` (`write_executable`, `copy_executable`, `spawn`, `output`;
