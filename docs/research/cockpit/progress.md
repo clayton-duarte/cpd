@@ -62,7 +62,7 @@ Why this order:
 - **P-01 first.** "What is each Worker doing" is today an answer he must walk the flow chart (or open a Worker pane) for. Four tools (ilmari, sqwatch, process-compose, yazi) make *the live list of things in flight* the main screen.
 - **P-02 and P-03 next:** they cost one view each, change no layout and replace a mental sum with a glance.
 - **P-04 and P-05** attack "without scrolling or switching" directly: the Overview removes the Manager swap; folding gives rows back in a 12-row pane.
-- **P-07 to P-13** go from "follow" to "understand" (what changed, what was slow) and cost more.
+- **P-07 to P-10, P-12 and P-13** go from "follow" to "understand" (what changed, what was slow, what is red) and cost more; P-11 is cheap but small.
 - **Small first** (S, no dependency): P-02, P-03, P-05, P-11. The Inbox is **not** a dependency of any idea here.
 
 Two full-size mockups (215×62) follow in §5: **Mockup A** (today's columns, upgraded with P-01, P-02, P-03, P-05, P-06, P-11) and **Mockup B** (a zoomed Overview with P-04, P-07, P-08 and P-09).
