@@ -552,6 +552,37 @@ fn a_failed_snapshot_keeps_the_tree_and_shows_the_error_until_a_snapshot_succeed
     pane.wait("the error to go", |s| !s.iter().any(|r| r.contains("no such table")) && s.iter().any(|r| r.starts_with(" ▾ ● alpha")));
 }
 
+/// The tree follows Events in its own process (commands.md §17): it starts no `cpd events follow` (tui-F4, tui-G4), whose
+/// spawn could fail on a path that is gone and be swallowed (tui-W2).
+#[test]
+fn the_tree_starts_no_subprocess() {
+    let env = env();
+    populate(&env);
+    let pane = Pane::start(&env, 46, 14);
+    pane.ready();
+    let pid = String::from_utf8(env.tmux(&["display", "-p", "-t", SESSION, "#{pane_pid}"]).stdout).unwrap().trim().to_owned();
+    // follow an Event and take a new snapshot
+    env.cpd(&["session", "state", "blocked", "--label", "cpd: Ask", "--session", "l-sketch"]).ok();
+    pane.wait("the new state", |s| s.iter().any(|r| r.contains("├ ● sketch")));
+    let children = env.command("ps").args(["-o", "pid=,args=", "--ppid", &pid]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&children.stdout).trim(), "", "children of the view");
+}
+
+/// A follow that fails is shown in the footer, not swallowed (tui-W2): the cursor is from another database (the highest
+/// Event id fell below it), which `events follow --since` refuses as `cursor_ahead`.
+#[test]
+fn a_follow_that_fails_is_shown_in_the_footer() {
+    let env = env();
+    populate(&env);
+    let pane = Pane::start(&env, 100, 14);
+    pane.ready();
+    // not through `Store`, which keeps the Events append-only
+    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
+    raw("DROP TRIGGER events_no_delete; DELETE FROM events;");
+    let screen = pane.wait("the error in the footer", |s| s.iter().any(|r| r.contains("the cursor is from another database")));
+    assert!(screen.iter().any(|r| r.starts_with(" ▾ ● alpha")), "the tree stays: {screen:?}");
+}
+
 /// `populate`, with the Context `gamma` and the Plan `old` of `beta` (and its Lead) archived.
 fn archive(env: &TestEnv) {
     sql(
