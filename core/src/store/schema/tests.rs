@@ -1931,6 +1931,84 @@ fn history_changed_keeps_the_whole_update_rows_and_writes_the_changed_columns_fr
     assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
 }
 
+// ---------- named migration `waiting-state` (§3.6, hs-d303) ----------
+
+/// Every column of every Session, as JSON, by id.
+fn session_rows(conn: &Connection) -> Vec<Value> {
+    let columns = table_columns(conn, "sessions").unwrap();
+    let pairs: Vec<String> = columns.iter().map(|(c, _)| format!("'{c}', {c}")).collect();
+    let mut stmt = conn.prepare(&format!("SELECT json_object({}) FROM sessions ORDER BY id", pairs.join(", "))).unwrap();
+    stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().map(|r| serde_json::from_str(&r.unwrap()).unwrap()).collect()
+}
+
+#[test]
+fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
+    let (_dir, home) = crate::store::tests::tmp_home();
+    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-waiting-state")).collect();
+    assert!(earlier.len() < NAMED.len(), "waiting-state is a built-in migration");
+    drop(crate::store::tests::open_named(&home, &earlier).unwrap());
+
+    // A Manager, a Plan's Lead, a fork, a Worker and a stopped Lead with no pane, in every state this schema has, each
+    // with a pane or an archive time here and there, so that no column is null in all of them.
+    let conn = connection(&home.db());
+    conn.execute_batch(
+        "BEGIN;
+         INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pl', 'ctx', 'Plan', 'grounding', 'lead', 't');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+           VALUES ('pl', 'api', '/r/api', 'main', 'waiting', 'cpd/pl/api', 1, 't');
+         INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at)
+           VALUES ('pl', 'api', 'j', 'J', 'draft', 1, 1, 't');
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+           VALUES ('pl', 'j-a1', 'j', 1, 'S2', 'ladder', 'running', 'cpd/pl--j-a1', '/w', 't');
+         INSERT INTO sessions (id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane, state, state_label, state_at, created_at, archived_at)
+           VALUES ('mgr',    'manager', 'ctx', NULL, NULL,   'Manager', '/f/m', NULL,   '/', 'O3', '%1',  'idle',    NULL,      't1', 't', NULL),
+                  ('lead',   'lead',    'ctx', 'pl', NULL,   'Lead',    '/f/l', NULL,   '/', 'O3', '%2',  'blocked', 'dialog',  't2', 't', NULL),
+                  ('fork',   'lead',    'ctx', 'pl', NULL,   'Fork',    NULL,   'lead', '/', 'O3', NULL,  'working', NULL,      't3', 't', NULL),
+                  ('worker', 'worker',  'ctx', 'pl', 'j-a1', 'Worker',  NULL,   NULL,   '/', 'S2', '%3',  'blocked', 'cpd: question to the Lead', 't4', 't', NULL),
+                  ('old',    'lead',    'ctx', 'pl', NULL,   'Old',     '/f/o', NULL,   '/', 'O3', NULL,  'stopped', NULL,      't5', 't', 'a');
+         COMMIT;",
+    )
+    .unwrap();
+    let before = session_rows(&conn);
+    let history: i64 = conn.query_row("SELECT count(*) FROM history WHERE tbl = 'sessions'", [], |r| r.get(0)).unwrap();
+    assert_eq!((before.len(), history), (5, 5));
+    drop(conn);
+
+    // This binary rebuilds `sessions`: every row and column as it was, the schema check passes, and the copy writes no history.
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert_eq!(store.schema_mismatch(), None);
+    assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-waiting-state")));
+    let conn = connection(&home.db());
+    assert_eq!(session_rows(&conn), before);
+    assert_eq!(conn.query_row::<i64, _, _>("SELECT count(*) FROM history WHERE tbl = 'sessions'", [], |r| r.get(0)).unwrap(), history);
+    assert_eq!(conn.query_row::<i64, _, _>("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap(), 0);
+    let objects = names(&conn, "SELECT name FROM sqlite_schema WHERE tbl_name = 'sessions' AND name NOT LIKE 'sqlite_%' ORDER BY name");
+    for expected in ["sessions_plan", "sessions_one_manager", "sessions_live", "sessions_hist_ins", "sessions_hist_upd", "sessions_no_delete"] {
+        assert!(objects.contains(expected), "{expected} in {objects:?}");
+    }
+    drop(conn);
+
+    // `waiting` is a state, and says why, as `blocked` does; no other state has a label.
+    write(&mut store, "UPDATE sessions SET state = 'waiting', state_label = 'cpd: Worker question' WHERE id = 'lead'").unwrap();
+    write(&mut store, "UPDATE sessions SET state = 'waiting', state_label = 'cpd: question to the Lead' WHERE id = 'worker'").unwrap();
+    for bad in [
+        "UPDATE sessions SET state = 'waiting', state_label = NULL WHERE id = 'fork'",
+        "UPDATE sessions SET state = 'blocked', state_label = NULL WHERE id = 'fork'",
+        "UPDATE sessions SET state = 'working', state_label = 'x' WHERE id = 'fork'",
+        "UPDATE sessions SET state = 'asleep', state_label = NULL WHERE id = 'fork'",
+    ] {
+        let message = sqlite_message(&refused(&mut store, bad));
+        assert!(message.starts_with("CHECK constraint failed"), "{bad}: {message}");
+    }
+    assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
+    drop(store);
+
+    // A binary without it cannot open the store: the migration is breaking (§4.5 A1).
+    let err = crate::store::tests::open_named(&home, &earlier).err().unwrap();
+    assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
+}
+
 // ---------- migration 6: pull_requests and prs.pull_request, on a version 5 database with polled PRs ----------
 
 fn names(conn: &Connection, sql: &str) -> std::collections::BTreeSet<String> {
