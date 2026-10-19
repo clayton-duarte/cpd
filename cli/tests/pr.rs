@@ -1889,6 +1889,31 @@ fn rebase_of_a_pr_merged_during_its_gate_pushes_nothing() {
 }
 
 #[test]
+fn rebase_succeeds_when_the_remote_already_contains_the_rebased_commit() {
+    // What a second `pr rebase` of the PR at once can meet: the other run pushed the same R'
+    // (and a merge onto it followed) after this run read its lease (Escalation nl-pr-a1-q2).
+    let fx = fx("deploy");
+    fx.hooks(&paused_gate(fx.env.root()));
+    fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
+    fx.advance_base("base.txt", "base\n");
+
+    let child = fx.spawn_pr("rebase");
+    await_gate(fx.env.root());
+    let rebased = fx.lead_sha();
+    fs::write(fx.lead.join("m.txt"), "m\n").unwrap();
+    fx.git(&fx.lead, &["add", "-A"]);
+    fx.git(&fx.lead, &["commit", "-q", "-m", "m"]);
+    let merged = fx.lead_sha();
+    fx.git(&fx.lead, &["push", "-q", "--force", "origin", "cpd/pay"]);
+    release_gate(fx.env.root());
+    let out = child.finish();
+
+    let out: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!((out["ok"].as_bool(), out["new"].as_str()), (Some(true), Some(rebased.as_str())), "{out}");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(merged), "nothing rewound");
+}
+
+#[test]
 fn two_rebases_of_one_pr_at_once_both_succeed_and_the_remote_is_the_local_tip() {
     let fx = fx("deploy");
     fx.hooks("pre-merge = \"sleep 1\"\n");

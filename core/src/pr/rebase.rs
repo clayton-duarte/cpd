@@ -108,9 +108,20 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
     require_open(&plan, &args)?;
 
     // 9. R' with the lease X0, then the merges that landed during the Gate, by rule P.
+    // A rejection whose remote tip already contains R' is a success that pushed nothing:
+    // two `pr rebase` of the PR at once push the same R', and the second can lose the
+    // race inside the remote (Escalation nl-pr-a1-q2).
     let lease_arg = format!("--force-with-lease={lead_ref}:{lease}");
     let refspec = format!("{new}:{lead_ref}");
-    git::run::ok(&lead, &["push", "--porcelain", &lease_arg, "origin", &refspec])?;
+    let args = ["push", "--porcelain", lease_arg.as_str(), "origin", refspec.as_str()];
+    let out = git::run::run(&lead, &args)?;
+    if out.code != 0 && !remote_contains(&lead, &lead_ref, &new)? {
+        let argv: Vec<String> = ["git", "-C", &lead.to_string_lossy()].into_iter().chain(args).map(str::to_owned).collect();
+        return Err(CpdError::new(ErrorCode::GitFailed, format!("git push exited {}.", out.code))
+            .with("argv", argv)
+            .with("exit", out.code)
+            .with("stderr", tail(&out.stderr, TAIL_LINES)));
+    }
     let tip = git::run::rev_parse(repo, &lead_ref)?;
     if tip != new && git::run::run(repo, &["merge-base", "--is-ancestor", &new, &tip])?.code == 0 {
         if let Push::Rejected { stderr } = git::push_commit(&lead, branch, &tip)? {
@@ -145,6 +156,16 @@ fn last_seen(repo: &Path, branch: &str) -> Result<String, CpdError> {
             .with("exit", code)
             .with("stderr", tail(&out.stderr, TAIL_LINES))),
     }
+}
+
+/// Whether origin's `reference` contains `sha`, as rule P checks (§7.4): its tip `X`
+/// (`git ls-remote`) is in the local object store and `sha` is an ancestor of it, or it.
+fn remote_contains(lead: &Path, reference: &str, sha: &str) -> Result<bool, CpdError> {
+    let listed = git::run::ok(lead, &["ls-remote", "origin", reference])?;
+    let tip = listed.lines().find(|l| l.split_whitespace().nth(1) == Some(reference)).and_then(|l| l.split_whitespace().next());
+    let Some(tip) = tip else { return Ok(false) };
+    let known = git::run::run(lead, &["cat-file", "-e", &format!("{tip}^{{commit}}")])?.code == 0;
+    Ok(known && git::run::run(lead, &["merge-base", "--is-ancestor", sha, tip])?.code == 0)
 }
 
 /// `git merge-tree --write-tree --name-only <onto> <sha>`: `Some(files)` on a conflict.
