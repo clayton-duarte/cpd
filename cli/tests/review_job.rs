@@ -20,6 +20,13 @@ use serde_json::{Value, json};
 
 const PLAN: &str = "pay";
 
+/// The driver's polls as these tests set them (contract §1.2 "Test overrides"): its wait for the Lead
+/// (`LEAD_POLL`, 2 s), A4's look at the Worker (`DRIVER_POLL`, 0.5 s) and A9's pause between `kill-window` tries
+/// (`KILL_PAUSE`, 1 s).
+const POLL: Duration = Duration::from_millis(100);
+const DRIVER_ENV: [(&str, &str); 3] =
+    [("CPD_TEST_LEAD_POLL", "0.1"), ("CPD_TEST_DRIVER_POLL", "0.1"), ("CPD_TEST_KILL_PAUSE", "0.1")];
+
 /// O supports efforts 0–5, S 1–5, H 0–3.
 const EFFORTS: [(&str, &str, &str); 3] =
     [("O", "p/opus", "[0,1,2,3,4,5]"), ("S", "p/sonnet", "[1,2,3,4,5]"), ("H", "p/haiku", "[0,1,2,3]")];
@@ -157,8 +164,16 @@ impl Fx {
         self.env.cpd(&["job", "show", key, "--plan", PLAN]).ok()["job"].clone()
     }
 
+    /// `job dispatch <key>`, its driver with [`DRIVER_ENV`].
     fn dispatch(&self, key: &str) -> Run {
-        self.env.cpd(&["job", "dispatch", key, "--plan", PLAN])
+        let mut cmd = self.env.command(CPD);
+        cmd.envs(DRIVER_ENV).args(["job", "dispatch", key, "--plan", PLAN]).current_dir(self.env.root());
+        let out = common::output(&mut cmd).expect("run cpd");
+        Run {
+            exit: out.status.code().expect("cpd was killed by a signal"),
+            stdout: String::from_utf8(out.stdout).expect("stdout is UTF-8"),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        }
     }
 
     fn attempt(&self, id: &str) -> Value {
@@ -396,9 +411,9 @@ fn the_worker_starts_only_once_the_lead_is_idle() {
 
     let out = fx.dispatch("final").ok();
     wait_until("the driver to wait for the Lead", || fx.log("final-a1").contains("A3: waiting for the Lead to be idle"));
-    // time-claim: the driver forks nothing while the Lead works, over a whole 2 s poll of the Lead (LEAD_POLL); no
+    // time-claim: the driver forks nothing while the Lead works, over five polls of the Lead (LEAD_POLL); no
     // per-poll signal from the driver (its log says only that it waits).
-    std::thread::sleep(Duration::from_millis(2500));
+    std::thread::sleep(POLL * 5);
 
     // Still waiting: `starting`, no Worker, no Session, nothing forked.
     assert_eq!(fx.attempt("final-a1")["status"], "starting");

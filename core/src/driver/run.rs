@@ -26,6 +26,7 @@ use crate::events::{self, NewEvent};
 use crate::git::{self, Setup};
 use crate::home::{CpdHome, Hook};
 use crate::host::exe::{Exe, Refusal};
+use crate::host::limit::limit;
 use crate::host::pi::{self, PiDirs};
 use crate::host::{PaneId, Tmux};
 use crate::ids::{AttemptId, PlanId, SessionId};
@@ -38,7 +39,7 @@ use crate::store::{Persist, Store};
 /// The `txns.command` and the `source` of the driver's `error` Events.
 const SOURCE: &str = "attempt run";
 
-/// How often A4 looks at the Attempt, its Session and its pane.
+/// How often A4 looks at the Attempt, its Session and its pane (tests: `CPD_TEST_DRIVER_POLL`, [`limit`]).
 const POLL: Duration = Duration::from_millis(500);
 
 /// What A4 knows of the Worker's pane at a poll.
@@ -474,8 +475,9 @@ impl Driver {
         let mut nudged_at: Option<u64> = self.nudge_baseline(session)?;
         let mut stall = stall::Watch::new(self.config.timeouts.stall_seconds);
         let mut watch = PaneWatch::default();
+        let poll = limit("DRIVER_POLL", POLL);
         loop {
-            std::thread::sleep(POLL);
+            std::thread::sleep(poll);
             // The pane before the row: a Worker that submits and exits is seen `merging`.
             let look = watch.look(&self.tmux, pane)?;
             if file.is_none() {

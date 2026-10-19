@@ -28,6 +28,11 @@ const SKIPPED: &str = "reload skipped";
 /// These waits cover a driver that reloads and re-runs: twice the default.
 const LONG: Duration = Duration::from_secs(60);
 
+/// The driver's polls as these tests set them (contract §1.2 "Test overrides"): A4's look at the Worker
+/// (`DRIVER_POLL`, 0.5 s) and A9's pause between `kill-window` tries (`KILL_PAUSE`, 1 s).
+const POLL: Duration = Duration::from_millis(100);
+const DRIVER_ENV: [(&str, &str); 2] = [("CPD_TEST_DRIVER_POLL", "0.1"), ("CPD_TEST_KILL_PAUSE", "0.1")];
+
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;
     Ok(())
@@ -129,9 +134,10 @@ impl Fx {
         self.env.root().join(name)
     }
 
-    /// `job dispatch api` by the copy: its driver's executable is the copy. Returns the driver's pid.
+    /// `job dispatch api` by the copy: its driver's executable is the copy, with [`DRIVER_ENV`]. Returns the
+    /// driver's pid.
     fn dispatch(&self) -> i64 {
-        let out = output(self.env.command(&self.installed).args(["job", "dispatch", "api", "--plan", PLAN])).unwrap();
+        let out = output(self.env.command(&self.installed).envs(DRIVER_ENV).args(["job", "dispatch", "api", "--plan", PLAN])).unwrap();
         let json: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {out:?}"));
         assert_eq!(json["ok"], true, "{json}");
         json["pid"].as_i64().unwrap()
@@ -233,9 +239,10 @@ fn a_driver_reloads_while_running_keeps_its_lock_and_the_attempt_merges() {
 fn a_driver_reloads_at_the_merging_safe_point_and_completes_the_merge() {
     let fx = fx();
     let old_lead = fx.env.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay"]);
-    // A `tmux` that holds the driver's `list-panes` (the start of its A4 tick)
+    // A `tmux` that holds the driver's `list-panes` of a `running` Attempt (A4's first look at the Worker's pane)
     // while `hold` exists: the Attempt can be made `merging`, and the new cpd
-    // installed, before the driver's next tick looks at the Attempt.
+    // installed, before the driver's next tick looks at the Attempt. `hold` exists before the dispatch, so the
+    // first look is held however soon after `running` it comes.
     let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
         .map(|dir| dir.join("tmux"))
         .find(|p| p.is_file())
@@ -245,7 +252,9 @@ fn a_driver_reloads_at_the_merging_safe_point_and_completes_the_merge() {
         &format!(
             "#!/bin/sh\n\
              case \" $* \" in *\" list-panes \"*)\n\
-               if [ -e '{hold}' ]; then : > '{blocked}'; while [ -e '{hold}' ]; do sleep 0.05; done; fi;;\n\
+               if [ -e '{hold}' ] && '{CPD}' attempt show {ATTEMPT} --plan {PLAN} | grep -q '\"status\":\"running\"'; then\n\
+                 : > '{blocked}'; while [ -e '{hold}' ]; do sleep 0.05; done\n\
+               fi;;\n\
              esac\n\
              exec '{real}' \"$@\"\n",
             hold = fx.path("hold").display(),
@@ -253,10 +262,8 @@ fn a_driver_reloads_at_the_merging_safe_point_and_completes_the_merge() {
             real = real.display()
         ),
     );
-    let pid = fx.dispatch();
-    wait_until_for("the Attempt to run", LONG, || fx.status() == "running");
-
     fs::write(fx.path("hold"), "").unwrap();
+    let pid = fx.dispatch();
     wait_until_for("the driver to be held", LONG, || fx.path("blocked").exists());
     fs::write(fx.path("go"), "").unwrap();
     wait_until_for("the Worker to submit", LONG, || fx.status() == "merging");
@@ -288,9 +295,9 @@ fn a_driver_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_into_one
 
     fx.install_older();
     wait_until_for("the driver to refuse the reload", LONG, || fx.log().contains(SKIPPED));
-    // time-claim: the older cpd is neither asked again nor exec'd over eight 0.5 s polls of A4; no per-poll signal from
+    // time-claim: the older cpd is neither asked again nor exec'd over eight polls of A4; no per-poll signal from
     // the driver, which forks nothing at a poll while its Worker's pane lives (engine-F1).
-    std::thread::sleep(Duration::from_secs(4));
+    std::thread::sleep(POLL * 8);
     let log = fx.log();
     assert_eq!(log.matches(SKIPPED).count(), 1, "{log}");
     assert!(log.contains(&format!("reload skipped: {} cannot open the store: The database was migrated by a newer cpd.", fx.installed.display())), "{log}");

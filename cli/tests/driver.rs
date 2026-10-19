@@ -24,6 +24,11 @@ const PLAN: &str = "pay";
 const JOB: &str = "api";
 const ATTEMPT: &str = "api-a1";
 
+/// The driver's polls as these tests set them (contract §1.2 "Test overrides"): A4's look at the Worker
+/// (`DRIVER_POLL`, 0.5 s) and A9's pause between `kill-window` tries (`KILL_PAUSE`, 1 s).
+const POLL: Duration = Duration::from_millis(100);
+const DRIVER_ENV: [(&str, &str); 2] = [("CPD_TEST_DRIVER_POLL", "0.1"), ("CPD_TEST_KILL_PAUSE", "0.1")];
+
 /// O supports efforts 0–5, S 1–5, H 0–3.
 const EFFORTS: [(&str, &str, &str); 3] =
     [("O", "p/opus", "[0,1,2,3,4,5]"), ("S", "p/sonnet", "[1,2,3,4,5]"), ("H", "p/haiku", "[0,1,2,3]")];
@@ -183,8 +188,16 @@ impl Fx {
         format!("CPD_HOME='{}' '{CPD}' {args}", self.env.cpd_home().display())
     }
 
+    /// `job dispatch <key>`, its driver with [`DRIVER_ENV`].
     fn dispatch(&self, key: &str) -> Run {
-        self.env.cpd(&["job", "dispatch", key, "--plan", PLAN])
+        let mut cmd = self.env.command(CPD);
+        cmd.envs(DRIVER_ENV).args(["job", "dispatch", key, "--plan", PLAN]).current_dir(self.env.root());
+        let out = common::output(&mut cmd).expect("run cpd");
+        Run {
+            exit: out.status.code().expect("cpd was killed by a signal"),
+            stdout: String::from_utf8(out.stdout).expect("stdout is UTF-8"),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        }
     }
 
     fn attempt(&self, id: &str) -> Value {
@@ -590,9 +603,9 @@ fn one_failed_list_panes_does_not_end_a_running_attempt_crashed() {
     }
     // The poll after the hiccup lists the panes again: the failed one judged nothing.
     common::wait_until("the driver to list the panes again", || list_panes_calls(&fx) >= 2);
-    // time-claim: the Worker is still running a poll after the retried listing; no per-poll signal from the driver
+    // time-claim: the Worker is still running two polls after the retried listing; no per-poll signal from the driver
     // once it has the pane's pid (it forks nothing).
-    std::thread::sleep(Duration::from_millis(1000));
+    std::thread::sleep(POLL * 2);
     let attempt = fx.attempt(ATTEMPT);
     assert_eq!(attempt["status"], "running", "{attempt}\nlog: {}", fx.log(ATTEMPT));
 
@@ -614,11 +627,11 @@ fn a_running_worker_is_watched_without_listing_panes_at_every_poll() {
     // The pid is recorded at the first poll, A4's first `list-panes` (the driver lists no panes before A4).
     common::wait_until("A4's first poll to list the panes", || list_panes_calls(&fx) >= 1);
     let before = list_panes_calls(&fx);
-    // time-claim: no `list-panes` over six 0.5 s polls of a running Worker; no per-poll signal from the driver (that
+    // time-claim: no `list-panes` over six polls of a running Worker; no per-poll signal from the driver (that
     // it forks nothing at a poll is the claim).
-    std::thread::sleep(Duration::from_secs(3));
+    std::thread::sleep(POLL * 6);
     let during = list_panes_calls(&fx) - before;
-    assert_eq!(during, 0, "list-panes calls in 3 s of a running Worker\nlog: {}", fx.log(ATTEMPT));
+    assert_eq!(during, 0, "list-panes calls in six polls of a running Worker\nlog: {}", fx.log(ATTEMPT));
 
     fx.fixture("UPDATE attempts SET stop_request = 'timed_out' WHERE plan = 'pay' AND id = 'api-a1';");
     let (attempt, _) = fx.wait_end(ATTEMPT, &out["pid"]);
@@ -904,7 +917,9 @@ fn dispatch_after_job_retry_starts_a_retry_attempt_at_the_chosen_tier() {
 
 /// A Worker whose session file ends in a `bash` tool call, with `result` (a
 /// JSONL line, or nothing) after it, and whose tool call is a `sleep SLEEP_SECONDS`
-/// child of the fake pi. Its pid goes to `../stall-child.pid`. When the child
+/// child of the fake pi. The file is backdated an hour, quiet for longer than any
+/// `stall_seconds` here: the stall rule's time holds at the driver's first look.
+/// The child's pid goes to `../stall-child.pid`. When the child
 /// dies, pi writes the tool's failure, leaves `../stall-survived` and stays.
 fn stalled_worker(result: &str) -> String {
     format!(
@@ -915,6 +930,7 @@ f="$HOME/.pi/agent/sessions/w/2026_$sid.jsonl"
 printf '%s\n' '{{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}}' > "$f"
 printf '%s\n' '{{"type":"message","timestamp":"2026-10-14T21:00:05.000Z","message":{{"role":"assistant","content":[{{"type":"text","text":"run it"}},{{"type":"toolCall","id":"call_1","name":"bash","arguments":{{"command":"sleep {SLEEP_SECONDS}"}}}}],"stopReason":"toolUse"}}}}' >> "$f"
 {result}
+touch -d '1 hour ago' "$f"
 sleep {SLEEP_SECONDS} &
 child=$!
 echo "$child" > ../stall-child.pid
@@ -954,12 +970,18 @@ fn stop(fx: &Fx, out: &Value, child: nix::unistd::Pid) {
     fx.wait_end(ATTEMPT, &out["pid"]);
 }
 
-/// The tool call's child stays alive, and no stall is logged, for `seconds`.
-fn assert_not_killed(fx: &Fx, child: nix::unistd::Pid, seconds: u64) {
-    let until = Instant::now() + Duration::from_secs(seconds);
+/// The tool call's child stays alive, and no stall is logged, for `polls` of the driver after it has found the
+/// Worker's session file (it records it: from then on each poll applies the stall rule).
+fn assert_not_killed(fx: &Fx, child: nix::unistd::Pid, polls: u32) {
+    common::wait_until("the driver to record the Worker's session file", || {
+        fx.env.query::<Option<String>>("SELECT file FROM sessions WHERE role = 'worker'").is_some()
+    });
+    // time-claim: the call is not killed over `polls` polls of the driver; no per-poll signal from the driver (a poll
+    // that kills nothing leaves nothing behind).
+    let until = Instant::now() + POLL * polls;
     while Instant::now() < until {
         assert!(alive(child), "the tool call was killed\nlog: {}", fx.log(ATTEMPT));
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(POLL);
     }
     assert!(!fx.log(ATTEMPT).contains("stall"), "{}", fx.log(ATTEMPT));
     assert_eq!(fx.attempt(ATTEMPT)["status"], "running");
@@ -1004,7 +1026,8 @@ fn a_tool_call_with_its_result_is_not_a_stall() {
 
     let out = fx.dispatch(JOB).ok();
     let child = stall_child(&fx);
-    assert_not_killed(&fx, child, 5);
+    // The file is quiet past stall_seconds (backdated), but the call has its result.
+    assert_not_killed(&fx, child, 6);
 
     stop(&fx, &out, child);
 }
@@ -1016,7 +1039,8 @@ fn stall_seconds_0_kills_nothing() {
 
     let out = fx.dispatch(JOB).ok();
     let child = stall_child(&fx);
-    assert_not_killed(&fx, child, 5);
+    // The file is quiet for an hour, inside a tool call: only stall_seconds = 0 keeps the call alive.
+    assert_not_killed(&fx, child, 6);
 
     stop(&fx, &out, child);
 }
