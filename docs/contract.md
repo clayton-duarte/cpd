@@ -95,6 +95,7 @@ $CPD_HOME/
     store.lock                    held by every open of `cpd.db` during its one-time setup only: the WAL switch and the migration check (§4.1, §4.5)
   run/
     watch.log                     the engine's stderr
+    tui/plan-scroll.json          the `plan` view's scroll offsets, `{"<plan id>": [x, y]}`, written by the view itself (the one file a view writes, commands.md §13.2, hs-d254); read at its start
     <plan>/plan.md                the last `plan render`
     <plan>/lead-message.md        the Lead's first message, written by `plan new`
     <plan>/plannotator-port       the Plan's plannotator port, one line, assigned by `session run` (§6.5)
