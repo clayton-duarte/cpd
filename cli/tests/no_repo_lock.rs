@@ -162,7 +162,8 @@ impl Fx {
         let all = self.store().read(|conn| jobs::load(conn, &lead.plan)).unwrap();
         let job = all.iter().find(|j| j.key == key).unwrap();
         self.fixture(&format!(
-            "UPDATE jobs SET status = 'running', fingerprint = '{}' WHERE plan = '{plan}' AND key = '{key}';",
+            "UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = '{plan}' AND key = '{key}';
+             UPDATE jobs SET status = 'running' WHERE plan = '{plan}' AND key = '{key}';",
             locked_fingerprint(job)
         ));
 
