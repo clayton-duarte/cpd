@@ -2321,7 +2321,7 @@ Rendered by the driver at A3 to `run/<plan>/specs/<attempt>.md` from a template 
 
 The Worker is started as §6.5 says, with the first message `Read <spec path> and follow it exactly. Your attempt id is <attempt>.` and `CPD_HOME`, `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT` in its environment.
 
-**Nudge** (A5, once): an `attempt-nudge` Event to the Worker's Session with `data.prompt` = `You ended your turn without running cpd attempt submit <attempt>. Finish the Spec and submit, or run cpd ask <attempt> "<question>" if you are blocked.` (cpd 1 §12 step 7, kept), delivered with a turn (§15.3).
+**Nudge** (A5, once): an `attempt-nudge` Event to the Worker's Session with `data.turns` = the Worker's assistant-turn count when nudged (a resumed driver reads its nudge baseline from it) and `data.prompt` = `You ended your turn without running cpd attempt submit <attempt>. Finish the Spec and submit, or run cpd ask <attempt> "<question>" if you are blocked.` (cpd 1 §12 step 7, kept), delivered with a turn (§15.3).
 
 **Submit preconditions:** §6.1, in §7.3's order.
 
