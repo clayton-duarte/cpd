@@ -717,7 +717,7 @@ fn the_tamper_query_reads_history_through_the_history_txn_index_not_the_table() 
     assert!(!details.iter().any(|d| d == "SCAN h"), "history must not be scanned as a table: {details:?}");
 }
 
-// ---------- §4.4 the read indexes (migration `read-indexes`: sql-F4, tui-F3, sql-F6, engine-F2) ----------
+// ---------- §4.4 the read indexes (migration `read-indexes`: sql-F4, tui-F3, engine-F2; sql-F6 refused) ----------
 
 /// The detail column of `EXPLAIN QUERY PLAN <sql>` on a fresh store, one line per step.
 fn query_plan(sql: &str) -> Vec<String> {
@@ -748,24 +748,27 @@ fn the_cockpits_job_counts_are_read_through_jobs_plan_status() {
     );
 }
 
-/// sql-F6: the engine read of every widgets refresh (`tui/src/read/widgets.rs`), `watch --ensure`
-/// (`core/src/watch/ensure.rs`) and `events follow --kind` (`core/src/events/select.rs`) selected
-/// Events by `kind` with no index on it.
+/// sql-F6 asked for `events(kind, id)`. It is not in the schema, because SQLite (no statistics) then reads
+/// every Event of the kind for the statements that test a kind and a Session or a Plan, instead of
+/// `events_session` or `events_plan`: the Session SELECT of `session list` and the tree went from 6.7 to 797 ms
+/// on a copy of the live store, the inbox rules and E2's active time got 4 to 9 times slower. So these
+/// statements must keep the selective indexes.
 #[test]
-fn events_are_selected_by_kind_through_events_kind() {
+fn the_lookups_of_events_by_kind_and_session_or_plan_keep_their_selective_index() {
+    // `core/src/session/row.rs`, `tui/src/read/shared.rs`, `core/src/inbox/rules.rs` (per Session).
     assert_uses(
-        "SELECT kind, at, data FROM events WHERE kind IN ('watch-started', 'watch-stopped') ORDER BY id DESC LIMIT 1",
-        "events_kind",
+        "SELECT json_extract(e.data, '$.place') FROM events e WHERE e.session = 'x' AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1",
+        "events_session",
     );
+    assert_uses("SELECT max(e.id) FROM events e WHERE e.session = 'x' AND e.kind = 'session-state'", "events_session");
+    // `core/src/watch/liveness.rs` (E2, per Attempt per tick), `core/src/job/retry.rs`.
     assert_uses(
-        "SELECT EXISTS (SELECT 1 FROM events WHERE id > 5 AND kind = 'watch-started' AND json_extract(data, '$.pid') = 1)",
-        "events_kind",
+        "SELECT at FROM events WHERE plan = 'p' AND attempt = 'a' AND kind = 'attempt-status' AND json_extract(data, '$.to') = 'running' ORDER BY id LIMIT 1",
+        "events_plan",
     );
-    assert_uses(
-        "SELECT id, at, kind, context, plan, job, attempt, session, text, data FROM events
-          WHERE id > 0 AND kind IN ('session-state') ORDER BY id LIMIT 500",
-        "events_kind",
-    );
+    assert_uses("SELECT max(id) FROM events WHERE plan = 'p' AND job = 'j' AND kind = 'job-retried'", "events_plan");
+    // `events follow --session --kind` (`core/src/events/select.rs`).
+    assert_uses("SELECT id FROM events WHERE id > 0 AND session = 'x' AND kind IN ('session-state') ORDER BY id LIMIT 500", "events_session");
 }
 
 /// engine-F2: E2's Session read (`core/src/watch/liveness.rs`, unit-tested there against its own
