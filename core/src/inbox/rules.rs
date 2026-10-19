@@ -1,7 +1,8 @@
 //! The rules of the Inbox (contract §2.2 "Inbox item", step E8 in §3.7): from the
-//! store and the clock, the [`Condition`]s that need
+//! store, the [`Condition`]s that need
 //! the User right now. Each kind is one small function and one query; none writes.
-//! [`super::model::reconcile`] opens and closes the items.
+//! [`super::model::reconcile`] opens and closes the items. A stuck Job is no Inbox
+//! condition: [`stuck_jobs`] finds the ones the engine tells the Manager of (hs-d318).
 
 use std::path::Path;
 use std::time::Duration;
@@ -22,18 +23,12 @@ use crate::store::Store;
 /// goes to its Lead, and the Lead that waits for the Worker is `waiting`, not `blocked` (hs-d303).
 const PLAN_REVIEW: &str = "cpd: plan review";
 
-/// Every condition of the kinds, in the order of the kinds. `now` and
-/// `stuck_after` decide `job-stuck`. There is no `engine-error` (hs-d314: the engine's errors go to the Manager).
-pub fn conditions(
-    store: &mut Store,
-    home: &CpdHome,
-    now: OffsetDateTime,
-    stuck_after: Duration,
-) -> Result<Vec<Condition>, CpdError> {
+/// Every condition of the kinds, in the order of the kinds. There is no `engine-error` (hs-d314: the engine's errors go to
+/// the Manager) and no `job-stuck` (hs-d318: a stuck Job goes to the Manager too, see [`stuck_jobs`]).
+pub fn conditions(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     let mut all = store.read(dialogs)?;
     all.extend(store.read(|conn| plan_reviews(conn, home))?);
     all.extend(store.read(unread)?);
-    all.extend(store.read(|conn| job_stuck(conn, now, stuck_after))?);
     // No `question` kind (hs-d306 (1)): an open Context question opens nothing, and an item an older engine opened for
     // one closes at the next reconcile, its condition no longer holding. Questions to the User go through `ask_user_question`.
     all.extend(store.read(pr_failing)?);
@@ -168,7 +163,7 @@ fn unread(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
         .collect())
 }
 
-// ---- Plans and Jobs: plan-review and job-stuck -------------------------------------------------------------------
+// ---- Plans and Jobs: plan-review, and the stuck Jobs -------------------------------------------------------------
 
 /// The Plan's plannotator page, when its port file holds a port (the convention of `session::port`), on the review host
 /// ([`review_host`], hs-d264).
@@ -218,42 +213,55 @@ fn plan_reviews(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, Cpd
     Ok(out)
 }
 
-/// `job-stuck`: a Job is `failed`, its latest `job-failed` Event is at least `stuck_after` old, and its Plan's Lead is not
-/// `working` (audit Q1: a working Lead is handling the failure; the item opens at the next tick after it stops).
-fn job_stuck(conn: &Connection, now: OffsetDateTime, stuck_after: Duration) -> Result<Vec<Condition>, CpdError> {
-    let mut stmt = conn.prepare(
-        "SELECT j.plan, j.key, p.context, p.lead_session, e.id, e.at
-           FROM jobs j
-           JOIN plans p ON p.id = j.plan
-           JOIN events e ON e.id = (SELECT max(f.id) FROM events f WHERE f.plan = j.plan AND f.job = j.key AND f.kind = 'job-failed')
-           JOIN sessions l ON l.id = p.lead_session
-          WHERE j.status = 'failed' AND l.state <> 'working'
-          ORDER BY e.id",
-    )?;
-    let mut rows = stmt.query([])?;
-    let mut out = Vec::new();
-    while let Some(row) = rows.next()? {
-        let (plan, key, context, lead, event, at): (String, String, String, String, i64, String) =
-            (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?);
-        if now - time_of("Event time", &at)? < stuck_after {
-            continue;
+/// A stuck Job (hs-d318): what the engine tells its Context's Manager. Not an Inbox condition.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StuckJob {
+    pub plan: PlanId,
+    pub job: JobKey,
+    /// The Plan's Context.
+    pub context: ContextId,
+    /// The id of the Job's latest `job-failed` Event: a new failure is a new one.
+    pub event: i64,
+    /// Whole minutes since that Event.
+    pub minutes: i64,
+    /// The Job's `failed_cause`.
+    pub cause: String,
+}
+
+/// The stuck Jobs, oldest failure first: a Job is `failed`, its latest `job-failed` Event is at least `stuck_after` old, and
+/// its Plan's Lead is not `working` (audit Q1: a working Lead is handling the failure; the Job is stuck from the next tick
+/// after it stops). Read only: E8 tells the Manager.
+pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration) -> Result<Vec<StuckJob>, CpdError> {
+    store.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT j.plan, j.key, p.context, e.id, e.at, j.failed_cause
+               FROM jobs j
+               JOIN plans p ON p.id = j.plan
+               JOIN events e ON e.id = (SELECT max(f.id) FROM events f WHERE f.plan = j.plan AND f.job = j.key AND f.kind = 'job-failed')
+               JOIN sessions l ON l.id = p.lead_session
+              WHERE j.status = 'failed' AND l.state <> 'working'
+              ORDER BY e.id",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let (plan, key, context, event, at, cause): (String, String, String, i64, String, String) =
+                (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?);
+            let age = now - time_of("Event time", &at)?;
+            if age < stuck_after {
+                continue;
+            }
+            out.push(StuckJob {
+                plan: id("Plan id", &plan, PlanId::parse)?,
+                job: id("Job key", &key, JobKey::parse)?,
+                context: id("Context id", &context, ContextId::parse)?,
+                event,
+                minutes: age.whole_minutes(),
+                cause,
+            });
         }
-        let plan = id("Plan id", &plan, PlanId::parse)?;
-        out.push(Condition {
-            kind: Kind::JobStuck,
-            urgency: Urgency::Red,
-            subject: format!("job:{plan}/{key}"),
-            label: format!("{plan}/{key} failed"),
-            url: None,
-            context: Some(id("Context id", &context, ContextId::parse)?),
-            job: Some(id("Job key", &key, JobKey::parse)?),
-            plan: Some(plan),
-            session: Some(id("Session id", &lead, SessionId::parse)?),
-            record: None,
-            event: Some(event),
-        });
-    }
-    Ok(out)
+        Ok(out)
+    })
 }
 
 // ---- Pull requests: pr-failing, pr-changes, pr-ready, review-requested -------------------------------------------
@@ -471,7 +479,7 @@ mod tests {
         }
 
         fn of(&mut self, kind: Kind) -> Vec<Condition> {
-            let all = conditions(&mut self.store, &self.home, NOW, TEN).unwrap();
+            let all = conditions(&mut self.store, &self.home).unwrap();
             all.into_iter().filter(|c| c.kind == kind).collect()
         }
     }
@@ -563,7 +571,7 @@ mod tests {
         f.state("wk", "idle", None);
         assert!(f.of(Kind::Unread).is_empty());
         f.state("wk", "waiting", Some("cpd: question to the Lead"));
-        assert!(conditions(&mut f.store, &f.home, NOW, TEN).unwrap().is_empty());
+        assert!(conditions(&mut f.store, &f.home).unwrap().is_empty());
     }
 
     // ---- unread ----
@@ -700,23 +708,48 @@ mod tests {
         assert!(f.of(Kind::PlanReview).is_empty());
     }
 
-    // ---- job-stuck ----
+    // ---- stuck Jobs (hs-d318: a message to the Manager, no Inbox condition) ----
+
+    impl Fixture {
+        fn stuck(&mut self) -> Vec<StuckJob> {
+            stuck_jobs(&mut self.store, NOW, TEN).unwrap()
+        }
+    }
 
     #[test]
-    fn a_job_failed_for_the_stuck_time_is_job_stuck_and_clears_on_retry() {
+    fn a_job_failed_for_the_stuck_time_is_stuck_and_clears_on_retry() {
         let mut f = fixture("dispatch");
         f.state("l-pay", "idle", None);
         f.job("a", "failed");
         f.event("job-failed", None, Some("a"), "2026-01-01T00:00:00.000Z", r#"{}"#);
         let latest = f.event("job-failed", None, Some("a"), "2026-01-01T23:50:00.000Z", r#"{}"#);
-        let c = one(f.of(Kind::JobStuck));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Red, "job:pay/a", "pay/a failed"));
-        assert_eq!(c.job.as_ref().map(|j| j.as_str()), Some("a"));
-        assert_eq!(c.session.as_ref().map(|s| s.as_str()), Some("l-pay"), "the Plan's Lead");
-        assert_eq!(c.event, Some(latest), "the latest job-failed Event");
+        let stuck = f.stuck();
+        assert_eq!(
+            stuck,
+            [StuckJob {
+                plan: PlanId::parse("pay").unwrap(),
+                job: JobKey::parse("a").unwrap(),
+                context: ContextId::parse("ctx").unwrap(),
+                event: latest,
+                minutes: 10,
+                cause: "crashed".to_owned(),
+            }],
+            "the latest job-failed Event, 10 whole minutes ago, with the Job's cause"
+        );
 
         f.sql("UPDATE jobs SET status = 'queued', failed_cause = NULL WHERE key = 'a'");
-        assert!(f.of(Kind::JobStuck).is_empty(), "retried");
+        assert!(f.stuck().is_empty(), "retried");
+    }
+
+    #[test]
+    fn a_stuck_job_opens_no_inbox_condition() {
+        let mut f = fixture("dispatch");
+        f.state("l-pay", "idle", None);
+        f.job("a", "failed");
+        f.event("job-failed", None, Some("a"), "2026-01-01T00:00:00.000Z", r#"{}"#);
+        assert_eq!(f.stuck().len(), 1);
+        assert!(f.of(Kind::JobStuck).is_empty());
+        assert!(conditions(&mut f.store, &f.home).unwrap().is_empty());
     }
 
     #[test]
@@ -725,12 +758,12 @@ mod tests {
         f.state("l-pay", "idle", None);
         f.job("a", "failed");
         f.event("job-failed", None, Some("a"), "2026-01-01T23:50:01.000Z", r#"{}"#);
-        assert!(f.of(Kind::JobStuck).is_empty(), "9 min 59 s");
+        assert!(f.stuck().is_empty(), "9 min 59 s");
         f.event("job-failed", None, Some("a"), "2026-01-01T23:50:00.000Z", r#"{}"#);
-        assert_eq!(f.of(Kind::JobStuck).len(), 1, "exactly the stuck time counts");
+        assert_eq!(f.stuck().len(), 1, "exactly the stuck time counts");
         f.job("b", "queued");
         f.event("job-failed", None, Some("b"), T, r#"{}"#);
-        assert_eq!(f.of(Kind::JobStuck).len(), 1, "a Job that is not failed is never stuck");
+        assert_eq!(f.stuck().len(), 1, "a Job that is not failed is never stuck");
     }
 
     #[test]
@@ -738,14 +771,14 @@ mod tests {
         let mut f = fixture("dispatch");
         f.job("a", "failed");
         f.event("job-failed", None, Some("a"), "2026-01-01T00:00:00.000Z", r#"{}"#);
-        assert!(f.of(Kind::JobStuck).is_empty(), "the Lead is working: it handles the failure (audit Q1)");
+        assert!(f.stuck().is_empty(), "the Lead is working: it handles the failure (audit Q1)");
         f.state("l-pay", "idle", None);
-        assert_eq!(one(f.of(Kind::JobStuck)).subject, "job:pay/a", "the Lead stopped working");
+        assert_eq!(f.stuck()[0].job.as_str(), "a", "the Lead stopped working");
         f.state("l-pay", "working", None);
-        assert!(f.of(Kind::JobStuck).is_empty(), "working again");
+        assert!(f.stuck().is_empty(), "working again");
         for state in ["waiting", "blocked", "stopped"] {
             f.state("l-pay", state, (state != "stopped").then_some("Which?"));
-            assert_eq!(f.of(Kind::JobStuck).len(), 1, "a {state} Lead is not working");
+            assert_eq!(f.stuck().len(), 1, "a {state} Lead is not working");
         }
     }
 
@@ -767,7 +800,7 @@ mod tests {
         record(&mut f, "ctx", "hs-q1", "question");
         record(&mut f, "ctx", "hs-d1", "decision");
         assert!(f.of(Kind::Question).is_empty());
-        assert!(conditions(&mut f.store, &f.home, NOW, TEN).unwrap().is_empty());
+        assert!(conditions(&mut f.store, &f.home).unwrap().is_empty());
     }
 
     /// hs-d306 (1): the `question` kind is dropped, so an item an older engine opened for an open question closes at the
@@ -780,7 +813,7 @@ mod tests {
             "INSERT INTO inbox_items (kind, urgency, subject, label, context, record, opened_at)
              VALUES ('question', 'magenta', 'record:ctx/hs-q1', 'hs-q1 open question', 'ctx', 'hs-q1', '{T}')"
         ));
-        let found = conditions(&mut f.store, &f.home, NOW, TEN).unwrap();
+        let found = conditions(&mut f.store, &f.home).unwrap();
         let changes = crate::inbox::model::reconcile(&mut f.store, &found, T).unwrap();
         assert_eq!((changes.opened.len(), changes.closed.len()), (0, 1));
         let open: i64 = f.store.read(|c| Ok(c.query_row("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL", [], |r| r.get(0))?)).unwrap();
@@ -804,7 +837,7 @@ mod tests {
     }
 
     fn pr_kinds(f: &mut Fixture) -> Vec<Kind> {
-        let all = conditions(&mut f.store, &f.home, NOW, TEN).unwrap();
+        let all = conditions(&mut f.store, &f.home).unwrap();
         all.into_iter().map(|c| c.kind).collect()
     }
 
@@ -970,19 +1003,19 @@ mod tests {
     #[test]
     fn conditions_come_in_the_order_of_the_kinds_and_a_quiet_store_has_none() {
         let mut f = fixture("dispatch");
-        assert!(conditions(&mut f.store, &f.home, NOW, TEN).unwrap().is_empty());
+        assert!(conditions(&mut f.store, &f.home).unwrap().is_empty());
         f.state("l-pay", "blocked", Some("Which?"));
         f.review("r1", "pending");
         f.reply("mgr");
         f.job("a", "failed");
         f.event("job-failed", None, Some("a"), T, r#"{}"#);
-        let kinds: Vec<_> = conditions(&mut f.store, &f.home, NOW, TEN).unwrap().into_iter().map(|c| c.kind).collect();
-        assert_eq!(kinds, [Kind::Dialog, Kind::PlanReview, Kind::Unread, Kind::JobStuck]);
+        let kinds: Vec<_> = conditions(&mut f.store, &f.home).unwrap().into_iter().map(|c| c.kind).collect();
+        assert_eq!(kinds, [Kind::Dialog, Kind::PlanReview, Kind::Unread], "the failed Job is no item");
         pull_request(&mut f, 1, "failed", "mergeable", "changes_requested");
         pull_request(&mut f, 2, "passed", "mergeable", "approved");
         f.sql("INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored, review_requested)
                VALUES ('o/r', 3, 'u', 'T', 0, 'open', 'none', 'none', 't', 't', 0, 1)");
-        let tail: Vec<_> = conditions(&mut f.store, &f.home, NOW, TEN).unwrap().into_iter().map(|c| c.kind).skip(4).collect();
+        let tail: Vec<_> = conditions(&mut f.store, &f.home).unwrap().into_iter().map(|c| c.kind).skip(3).collect();
         assert_eq!(tail, [Kind::PrFailing, Kind::PrChanges, Kind::PrReady, Kind::ReviewRequested]);
     }
 }

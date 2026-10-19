@@ -6,12 +6,14 @@
 //! most once per `error_repeat_seconds` (contract §3.7), so a step that
 //! succeeds in one part and fails in another does not append at every tick.
 //! With each `error` Event goes one message to the Context's Manager, or to
-//! every live Manager for a machine error (hs-d314).
+//! every live Manager for a machine error (hs-d314). A stuck Job goes to its
+//! Context's Manager the same way, once (hs-d318, [`tell_stuck_job`]).
 
 use std::collections::HashMap;
 use std::fmt;
 use std::time::{Duration, Instant};
 
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
 use super::SOURCE;
@@ -19,6 +21,7 @@ use super::log::Log;
 use crate::error::CpdError;
 use crate::events::{self, NewEvent};
 use crate::ids::{AttemptId, JobKey, PlanId, SessionId};
+use crate::inbox::rules::StuckJob;
 use crate::session::tell_managers;
 use crate::store::Store;
 
@@ -110,6 +113,56 @@ impl From<&CpdError> for Failure {
     }
 }
 
+/// What every message about the failure of a Job begins with: the record that it was sent ([`tell_stuck_job`]).
+fn stuck_prefix(stuck: &StuckJob) -> String {
+    format!("Job {}/{} failed ", stuck.plan, stuck.job)
+}
+
+/// The message of a stuck Job to its Context's Manager (contract §3.7 "A stuck Job", hs-d318). `<T>` stays as written: the
+/// Manager chooses the Tier, which `job retry` requires.
+fn stuck_text(stuck: &StuckJob) -> String {
+    let (plan, job) = (&stuck.plan, &stuck.job);
+    format!(
+        "{}{} min ago ({}) and its Lead has not retried or cancelled it. Retry it (cpd job retry {job} --plan {plan} --tier <T>), nudge the Lead, or ask the User.",
+        stuck_prefix(stuck),
+        stuck.minutes,
+        stuck.cause
+    )
+}
+
+/// Whether the Context's live Manager is yet to be told of `stuck`: there is one (role `manager`, not archived) and no
+/// message of this failure reached it, that is one from the User's side (`from` null) newer than the Job's latest
+/// `job-failed` Event whose text begins [`stuck_prefix`]. A later failure of the Job is a newer Event, so it is told again.
+fn untold(conn: &Connection, stuck: &StuckJob) -> Result<bool, CpdError> {
+    let manager: Option<String> = conn
+        .query_row(
+            "SELECT id FROM sessions WHERE role = 'manager' AND archived_at IS NULL AND context = ?1",
+            [stuck.context.as_str()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(manager) = manager else { return Ok(false) };
+    let sent: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM events WHERE session = ?1 AND id > ?2 AND kind = 'session-message'
+                         AND json_extract(data, '$.from') IS NULL AND instr(json_extract(data, '$.text'), ?3) = 1)",
+        params![manager, stuck.event, stuck_prefix(stuck)],
+        |r| r.get(0),
+    )?;
+    Ok(!sent)
+}
+
+/// Tells the live Manager of `stuck`'s Context, by the path of a step's failure (one message from the User's side, no wake,
+/// [`tell_managers`]), once until the Job leaves `failed` (contract §3.7 "A stuck Job", hs-d318): the record that it was
+/// told is the message itself ([`untold`]), so a later tick or a restarted engine sends nothing. With no live Manager
+/// nothing is sent and nothing is written (the next tick looks again). Returns whether a message was sent.
+pub(super) fn tell_stuck_job(store: &mut Store, stuck: &StuckJob) -> Result<bool, CpdError> {
+    if !store.read(|conn| untold(conn, stuck))? {
+        return Ok(false);
+    }
+    let text = stuck_text(stuck);
+    Ok(store.write(SOURCE, |tx| tell_managers(tx, stuck.event, &text))? > 0)
+}
+
 /// The failures reported and not cleared yet: `(step, about)` → code and the id of its `error` Event.
 #[derive(Default)]
 pub(super) struct Report {
@@ -190,6 +243,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use crate::home::CpdHome;
+    use crate::ids::ContextId;
 
     fn failure(code: &str) -> Failure {
         Failure { code: code.to_owned(), message: "It failed.".to_owned(), details: json!({}) }
@@ -255,8 +309,8 @@ mod tests {
         assert_eq!((report.open.len(), report.appended.len()), (0, 0));
     }
 
-    /// Contexts `ctx-a` and `ctx-b`, each with a Manager (`mgr-a`, `mgr-b`, archived when `archive_b`), a Plan `plan-a` of `ctx-a`, and
-    /// a Context `ctx-c` with no Manager and its Plan `plan-c`.
+    /// Contexts `ctx-a` and `ctx-b`, each with a Manager (`mgr-a`, `mgr-b`, archived when `archive_b`) and a Plan (`plan-a`,
+    /// `plan-b`), and a Context `ctx-c` with no Manager and its Plan `plan-c`.
     fn managers(store: &mut Store, archive_b: bool) {
         let t = "2026-01-01T00:00:00.000Z";
         let archived = if archive_b { format!("'{t}'") } else { "NULL".to_owned() };
@@ -275,6 +329,7 @@ mod tests {
                               ('lead-a', 'lead', 'ctx-a', 'La', '/', 'O3', 'idle', '{t}', '{t}', NULL);
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at)
                        VALUES ('plan-a', 'ctx-a', 'Pa', 'grounding', 'lead-a', '{t}'),
+                              ('plan-b', 'ctx-b', 'Pb', 'grounding', 'lead-a', '{t}'),
                               ('plan-c', 'ctx-c', 'Pc', 'grounding', 'lead-a', '{t}');"
                 ))?;
                 Ok(())
@@ -366,5 +421,154 @@ mod tests {
         let mut store = Store::open(&home, 5000).unwrap();
         Report::new(Duration::from_secs(600)).fail(&mut store, &mut log, Step::E2, About::Machine, failure("tmux_failed"));
         assert_eq!((errors(&mut store), messages(&mut store).len()), (1, 0));
+    }
+
+    // ---- a stuck Job (hs-d318) ----
+
+    /// A store with the Contexts and Managers of [`managers`] (`mgr-b` archived when `archive_b`).
+    fn store_with_managers(archive_b: bool) -> (tempfile::TempDir, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        managers(&mut store, archive_b);
+        (dir, store)
+    }
+
+    /// A `job-failed` Event of Job `job` of `plan` of `context`; returns its id, what a [`StuckJob`]'s `event` is.
+    fn job_failed(store: &mut Store, context: &str, plan: &str, job: &str) -> i64 {
+        store
+            .write("test", |tx| {
+                tx.execute(
+                    "INSERT INTO events (txn, at, kind, context, plan, job, text, data)
+                     VALUES (cpd_txn(), '2026-01-01T00:00:00.000Z', 'job-failed', ?1, ?2, ?3, 'x', '{}')",
+                    [context, plan, job],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        store.read(|conn| Ok(conn.query_row("SELECT max(id) FROM events", [], |r| r.get(0))?)).unwrap()
+    }
+
+    /// The Job as the stuck query reads it: failed `minutes` ago, whose `job-failed` Event is `event`, for `crashed`.
+    fn stuck(context: &str, plan: &str, job: &str, event: i64, minutes: i64) -> StuckJob {
+        StuckJob {
+            plan: PlanId::parse(plan).unwrap(),
+            job: JobKey::parse(job).unwrap(),
+            context: ContextId::parse(context).unwrap(),
+            event,
+            minutes,
+            cause: "crashed".to_owned(),
+        }
+    }
+
+    fn text_of(plan: &str, job: &str, minutes: i64) -> String {
+        format!(
+            "Job {plan}/{job} failed {minutes} min ago (crashed) and its Lead has not retried or cancelled it. \
+             Retry it (cpd job retry {job} --plan {plan} --tier <T>), nudge the Lead, or ask the User."
+        )
+    }
+
+    fn txns(store: &mut Store) -> i64 {
+        store.read(|conn| Ok(conn.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap()
+    }
+
+    /// hs-d318: a stuck Job reaches the Manager of its Context as one message from the User's side, no wake, and the next
+    /// ticks send nothing, whatever the minutes say by then.
+    #[test]
+    fn a_stuck_job_is_sent_once_to_the_manager_of_its_context() {
+        let (_dir, mut store) = store_with_managers(false);
+        let failed = job_failed(&mut store, "ctx-a", "plan-a", "a");
+
+        assert!(tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "a", failed, 12)).unwrap());
+        assert_eq!(messages(&mut store), [("mgr-a".to_owned(), None, false, text_of("plan-a", "a", 12))]);
+        for minutes in [12, 13, 600] {
+            assert!(!tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "a", failed, minutes)).unwrap(), "{minutes} min");
+        }
+        assert_eq!(messages(&mut store).len(), 1);
+    }
+
+    /// After a retry the Job fails again: a newer `job-failed` Event, so a new message, once more.
+    #[test]
+    fn a_job_that_fails_again_after_a_retry_is_sent_again() {
+        let (_dir, mut store) = store_with_managers(false);
+        let first = job_failed(&mut store, "ctx-a", "plan-a", "a");
+        assert!(tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "a", first, 10)).unwrap());
+
+        let second = job_failed(&mut store, "ctx-a", "plan-a", "a");
+        assert!(tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "a", second, 11)).unwrap());
+        assert!(!tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "a", second, 12)).unwrap());
+        let sent: Vec<String> = messages(&mut store).into_iter().map(|m| m.3).collect();
+        assert_eq!(sent, [text_of("plan-a", "a", 10), text_of("plan-a", "a", 11)]);
+    }
+
+    /// No live Manager: nothing is sent and nothing is written, so a quiet tick stays quiet; a Manager that comes later, or
+    /// one that replaces an archived Manager that was told, hears of the Job.
+    #[test]
+    fn with_no_live_manager_nothing_is_sent_or_written_and_a_later_manager_is_told() {
+        let (_dir, mut store) = store_with_managers(false);
+        let failed = job_failed(&mut store, "ctx-c", "plan-c", "c");
+        let before = txns(&mut store);
+        assert!(!tell_stuck_job(&mut store, &stuck("ctx-c", "plan-c", "c", failed, 10)).unwrap());
+        assert_eq!((messages(&mut store), txns(&mut store)), (vec![], before), "the Context c has no Manager");
+
+        let t = "2026-01-01T00:00:00.000Z";
+        let add = |store: &mut Store, id: &str, context: &str| {
+            store
+                .write("test", |tx| {
+                    tx.execute(
+                        "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
+                         VALUES (?1, 'manager', ?2, 'M', '/', 'O3', 'idle', ?3, ?3)",
+                        [id, context, t],
+                    )?;
+                    Ok(())
+                })
+                .unwrap();
+        };
+        add(&mut store, "mgr-c", "ctx-c");
+        assert!(tell_stuck_job(&mut store, &stuck("ctx-c", "plan-c", "c", failed, 10)).unwrap());
+        assert_eq!(messages(&mut store).iter().map(|m| m.0.as_str()).collect::<Vec<_>>(), ["mgr-c"]);
+
+        // The told Manager is archived and another takes its place: the new one is told.
+        store
+            .write("test", |tx| {
+                tx.execute("UPDATE sessions SET archived_at = ?1 WHERE id = 'mgr-c'", [t])?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(!tell_stuck_job(&mut store, &stuck("ctx-c", "plan-c", "c", failed, 10)).unwrap(), "an archived Manager is not live");
+        add(&mut store, "mgr-c2", "ctx-c");
+        assert!(tell_stuck_job(&mut store, &stuck("ctx-c", "plan-c", "c", failed, 10)).unwrap());
+        assert_eq!(messages(&mut store).iter().map(|m| m.0.as_str()).collect::<Vec<_>>(), ["mgr-c", "mgr-c2"]);
+    }
+
+    /// Only the Manager of the Job's Context hears of it, and a message counts as the record only when it is about this Job
+    /// (`pay/a` is not `pay/ab`) and from the User's side (a Lead's own words are not the engine's).
+    #[test]
+    fn only_a_message_about_this_job_from_the_users_side_counts() {
+        let (_dir, mut store) = store_with_managers(false);
+        let a = job_failed(&mut store, "ctx-a", "plan-a", "a");
+        let ab = job_failed(&mut store, "ctx-a", "plan-a", "ab");
+        let b = job_failed(&mut store, "ctx-b", "plan-b", "a");
+
+        assert!(tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "a", a, 10)).unwrap());
+        assert!(tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "ab", ab, 10)).unwrap(), "plan-a/ab is not plan-a/a");
+        assert!(tell_stuck_job(&mut store, &stuck("ctx-b", "plan-b", "a", b, 10)).unwrap(), "another Context's Manager");
+        let to: Vec<String> = messages(&mut store).into_iter().map(|m| m.0).collect();
+        assert_eq!(to, ["mgr-a", "mgr-a", "mgr-b"]);
+
+        // A Lead's message with the same words, to the Manager of ctx-a, is not the record.
+        let other = job_failed(&mut store, "ctx-a", "plan-a", "z");
+        store
+            .write("test", |tx| {
+                tx.execute(
+                    "INSERT INTO events (txn, at, kind, context, session, text, data)
+                     VALUES (cpd_txn(), '2026-01-01T00:00:00.000Z', 'session-message', 'ctx-a', 'mgr-a', 'x',
+                             '{\"from\":\"lead-a\",\"text\":\"Job plan-a/z failed by hand\",\"wake\":false}')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "z", other, 10)).unwrap());
     }
 }

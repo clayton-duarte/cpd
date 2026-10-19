@@ -4,14 +4,12 @@
 mod common;
 
 use std::fs;
-use std::time::Duration;
 
 use common::{CPD, SLEEP_SECONDS, TestEnv};
 use cpd_core::home::CpdHome;
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use cpd_core::inbox::rules::conditions;
 use cpd_core::store::Store;
-use time::OffsetDateTime;
 
 /// The env with its config, a fake `cpd` for the Lead's pane, Context `ctx` and Plan `pay` (in `grounding`).
 /// Returns the Lead's Session id.
@@ -32,7 +30,7 @@ fn setup(env: &TestEnv) -> String {
 fn found(env: &TestEnv) -> Vec<Condition> {
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
-    conditions(&mut store, &home, OffsetDateTime::now_utc(), Duration::from_secs(600)).unwrap()
+    conditions(&mut store, &home).unwrap()
 }
 
 #[test]
