@@ -30,7 +30,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::inbox::model::Kind as InboxKind;
 use cpd_core::session::State;
 use crate::palette;
-use crate::read::{ContextNode, SessionNode, Tree};
+use crate::read::{ContextNode, Dot, SessionNode, Tree};
 
 /// The longest name of a Session (commands.md §1.4).
 /// Rows a wheel notch scrolls the Inbox section by.
@@ -120,6 +120,8 @@ pub struct View {
     inbox_cursor: Option<usize>,
     /// The one-line result or refusal of the last action, until the next `n`, `x` or click.
     pub note: String,
+    /// The last failed snapshot's error (one row), until a snapshot succeeds; it hides the note meanwhile.
+    pub error: Option<String>,
     /// `$CPD_HOME/policy/owners`: the owner policies New Context… chooses the owner from (none when the home is unresolved).
     owners_dir: Option<PathBuf>,
 }
@@ -161,10 +163,18 @@ impl View {
             inbox_area: Rect::default(),
             inbox_cursor: None,
             note: String::new(),
+            error: None,
             owners_dir: CpdHome::from_env().ok().map(|h| h.root().join("policy").join("owners")),
         };
         view.refresh(tree);
         view
+    }
+
+    /// A working dot is in the snapshot: the spinner turns, so the pane is redrawn with the clock. (A dot of an archived
+    /// Session never turns; one scrolled or folded out of sight counts, the cost being a redraw.)
+    pub fn animated(&self) -> bool {
+        let mut sessions = self.tree.contexts.iter().flat_map(|c| &c.plans).flat_map(|p| &p.sessions);
+        sessions.any(|s| s.dot == Dot::Working && !s.is_archived())
     }
 
     /// A new snapshot: keep the cursor on its Session, or on its Inbox item (the item now at the same position when
@@ -529,6 +539,11 @@ impl View {
         (above != Some(path.as_slice())).then_some(path)
     }
 
+    /// The text of the footer: the error of the last snapshot, else the note of the last action.
+    fn footer(&self) -> String {
+        self.error.clone().unwrap_or_else(|| self.note.clone())
+    }
+
     /// [`View::draw_at`] now.
     pub fn draw(&mut self, f: &mut Frame, frame: usize) {
         self.draw_at(f, frame, OffsetDateTime::now_utc());
@@ -540,9 +555,9 @@ impl View {
     /// ages are taken at `now`, from their `opened_at`, so they need no read.
     pub fn draw_at(&mut self, f: &mut Frame, frame: usize, now: OffsetDateTime) {
         let inner = f.area().inner(Margin::new(1, 0));
-        let footer = self.note.clone();
+        let footer = self.footer();
         let width = inner.width.max(1) as usize;
-        let wrapped = footer.chars().count().div_ceil(width);
+        let wrapped = rows::width(&footer).div_ceil(width);
         let footer_height =
             if footer.is_empty() { 0 } else { (wrapped + usize::from(wrapped > 1)).max(1).min(inner.height as usize) as u16 };
         // the section leaves the tree at least one row, when there is one to leave
@@ -622,6 +637,23 @@ mod tests {
         terminal.draw(|f| view.draw(f, 0)).unwrap();
         let buf = terminal.backend().buffer();
         (0..height).map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned()).collect()
+    }
+
+    #[test]
+    fn the_tree_is_animated_only_while_a_live_working_dot_is_in_it() {
+        assert!(View::new(sample(), true).animated(), "the sample's `ship` Lead is working");
+        let each = |tree: &mut Tree, f: &dyn Fn(&mut SessionNode)| {
+            tree.contexts.iter_mut().flat_map(|c| &mut c.plans).flat_map(|p| &mut p.sessions).for_each(f);
+        };
+        let mut tree = sample();
+        each(&mut tree, &|s| {
+            if s.dot == Dot::Working {
+                s.archived_at = Some("2026-02-01T00:00:00.000Z".into());
+            }
+        });
+        assert!(!View::new(tree.clone(), true).animated(), "an archived Session's dot never turns");
+        each(&mut tree, &|s| s.dot = Dot::Idle);
+        assert!(!View::new(tree, true).animated());
     }
 
     #[test]
@@ -774,6 +806,17 @@ mod tests {
         terminal.draw(|f| view.draw(f, 0)).unwrap();
         let cell = &terminal.backend().buffer()[(1, 13)];
         assert_eq!((cell.fg, cell.modifier.contains(Modifier::BOLD)), (palette::ui(palette::Ui::Note), false));
+    }
+
+    /// tui-W8: the footer's height is counted in display columns, as it wraps.
+    #[test]
+    fn a_wide_footer_takes_the_rows_its_display_width_needs() {
+        let mut view = on(&["alpha", "sketch"]);
+        view.done(Err("失敗失敗失敗失敗失敗失敗失敗失".into())); // 15 characters, 30 columns
+        let rows = drawn(&mut view, 24, 14); // 22 columns inside the margin: two rows
+        // (the buffer cell after a wide character is blank)
+        assert_eq!(rows[11].replace(' ', ""), "失敗失敗失敗失敗失敗失");
+        assert_eq!(rows[12].replace(' ', ""), "敗失敗失");
     }
 
     fn click(view: &mut View, column: u16, row: u16) -> Effect {
