@@ -67,7 +67,8 @@ fn config_with_only_the_required_keys_has_every_default() {
                 "store_busy_ms": 5000,
                 "fork_quiet_seconds": 5,
                 "distill_minutes": 15,
-                "stall_seconds": 1200
+                "stall_seconds": 1200,
+                "pi_stop_seconds": 10
             },
             "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "error_repeat_seconds": 600},
             "inbox": {"stuck_job_minutes": 10},
@@ -75,6 +76,20 @@ fn config_with_only_the_required_keys_has_every_default() {
             "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}
         })
     );
+}
+
+/// engine-W9, tests-build-F4: the tick is a decimal (minimum 0.1) and pi's stop grace is a key.
+#[test]
+fn config_takes_a_fractional_tick_and_pi_stop_seconds() {
+    let env = TestEnv::new();
+    let shown = |text: &str| config_with(&env, &format!("{MINIMAL}{text}")).ok()["config"].clone();
+    let config = shown("[watch]\ntick_seconds = 0.2\n[timeouts]\npi_stop_seconds = 1\n");
+    assert_eq!(config["watch"]["tick_seconds"], 0.2);
+    assert_eq!(config["timeouts"]["pi_stop_seconds"], 1);
+    // 0.1 is the floor; a whole number is shown as one, as before.
+    assert_eq!(shown("[watch]\ntick_seconds = 0.1\n")["watch"]["tick_seconds"], 0.1);
+    assert_eq!(shown("[watch]\ntick_seconds = 2\n")["watch"]["tick_seconds"], 2);
+    assert_eq!(shown("[watch]\ntick_seconds = 2.0\n")["watch"]["tick_seconds"], 2);
 }
 
 #[test]
@@ -151,6 +166,7 @@ store_busy_ms = 1
 fork_quiet_seconds = 1
 distill_minutes = 1
 stall_seconds = 0
+pi_stop_seconds = 1
 [watch]
 tick_seconds = 1
 pr_poll_seconds = 1
@@ -233,6 +249,12 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nstall_seconds = -1\n", "timeouts.stall_seconds"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nlock_wait_seconds = 0\n", "timeouts.lock_wait_seconds"),
         ("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0\n", "watch.tick_seconds"),
+        ("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0.05\n", "watch.tick_seconds"),
+        ("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0.2501\n", "watch.tick_seconds"),
+        ("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = \"0.2\"\n", "watch.tick_seconds"),
+        ("version = 1\nmachine = \"hs\"\n[watch]\npr_poll_seconds = 0.5\n", "watch.pr_poll_seconds"),
+        ("version = 1\nmachine = \"hs\"\n[timeouts]\npi_stop_seconds = 0\n", "timeouts.pi_stop_seconds"),
+        ("version = 1\nmachine = \"hs\"\n[timeouts]\npi_stop_seconds = 0.5\n", "timeouts.pi_stop_seconds"),
         ("version = 1\nmachine = \"hs\"\n[inbox]\nstuck_job_minutes = 0\n", "inbox.stuck_job_minutes"),
         ("version = 1\nmachine = \"hs\"\n[inbox]\nstuck_job_minutes = \"10\"\n", "inbox.stuck_job_minutes"),
         ("version = 1\nmachine = \"hs\"\n[events]\npoll_ms = 19\n", "events.poll_ms"),
@@ -290,10 +312,12 @@ fn config_messages_end_in_one_full_stop_and_name_the_bound_that_was_crossed() {
         assert!(said.ends_with('.') && !said.ends_with(".."), "{said}");
     }
     // Above the largest value, the message says "at most"; below the smallest, "at least".
-    let above = message("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 4294967296\n");
+    let above = message("version = 1\nmachine = \"hs\"\n[watch]\npr_poll_seconds = 4294967296\n");
     assert!(above.contains("must be at most 4294967295, got 4294967296"), "{above}");
-    let below = message("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0\n");
+    let below = message("version = 1\nmachine = \"hs\"\n[watch]\npr_poll_seconds = 0\n");
     assert!(below.contains("must be at least 1, got 0"), "{below}");
+    let tick = message("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0\n");
+    assert!(tick.contains("must be at least 0.1, got 0"), "{tick}");
 }
 
 #[test]
