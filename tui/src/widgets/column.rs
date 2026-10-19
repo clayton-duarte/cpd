@@ -333,10 +333,10 @@ mod tests {
     #[test]
     fn a_conflicting_pr_shows_conflict_in_red_after_its_review_and_others_do_not() {
         let mut p = pr(7, Some("l-a"));
-        assert_eq!(second_line(&p, 40).0, "  open ✓ no review  A title");
+        assert_eq!(second_line(&p, 40).0, format!("  open {} no review  A title", palette::CHECKS_PASSED));
         p.conflicting = true;
         let (line, buf) = second_line(&p, 40);
-        assert_eq!(line, "  open ✓ no review conflict  A title");
+        assert_eq!(line, format!("  open {} no review conflict  A title", palette::CHECKS_PASSED));
         let x = line.find("conflict").map(|b| line[..b].chars().count() as u16).unwrap();
         for dx in 0..8 {
             assert_eq!(buf[(x + dx, 7)].fg, palette::color(Meaning::Failed));
@@ -361,8 +361,9 @@ mod tests {
     fn a_narrow_column_cuts_the_title_before_conflict() {
         let mut p = pr(7, Some("l-a"));
         p.conflicting = true;
-        assert_eq!(second_line(&p, 28).0, "  open ✓ no review conflict");
-        assert_eq!(second_line(&p, 32).0, "  open ✓ no review conflict");
-        assert_eq!(second_line(&p, 33).0, "  open ✓ no review conflict  A t…");
+        let open = format!("  open {} no review conflict", palette::CHECKS_PASSED);
+        assert_eq!(second_line(&p, 28).0, open);
+        assert_eq!(second_line(&p, 32).0, open);
+        assert_eq!(second_line(&p, 33).0, format!("{open}  A t…"));
     }
 }

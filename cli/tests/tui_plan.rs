@@ -14,7 +14,7 @@ use common::{CPD, SLEEP_SECONDS, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
-use cpd_tui::palette::SPINNER;
+use cpd_tui::palette::{DRAFT, FAILED, MERGED, MERGING, QUEUED, SPINNER};
 use serde_json::json;
 
 /// The expected chart of the store `cpd_jobs()` makes: the fixture of the cockpit of branch `cpd/cpd-ui`
@@ -329,14 +329,18 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the boxes", |s| s.len() > 8 && s[8].ends_with('┘'));
     // web below api, the arrow from api's bottom border into web's top border
+    let (merged_row, queued_row) = (
+        format!("  │  {MERGED} a │O3 ───── {MERGED} b │S3               │"),
+        format!("  │  {QUEUED} c │S3                      │"),
+    );
     let want = [
         "  ┌ api · api-server → main · #12 open ↗ ┐",
-        "  │  ✓ a │O3 ───── ✓ b │S3               │",
+        merged_row.as_str(),
         "  └──────────────────┬───────────────────┘",
         "                  ╭──╯",
         "                  ▼",
         "  ┌ web · web → develop · waiting ┐",
-        "  │  ○ c │S3                      │",
+        queued_row.as_str(),
         "  └───────────────────────────────┘",
     ];
     assert_eq!(screen[1..9], want, "{}", screen.join("\n"));
@@ -374,20 +378,20 @@ fn each_job_status_has_its_icon_and_a_cancelled_job_is_not_drawn() {
     sql(&env, &plan_with("dispatch", None, jobs));
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 13 && s[2].contains("draft"));
-    // a column is as wide as its widest pill (`✗ failed │S3│a3`); the tier, and `aN` from the second Attempt, sit at its right
+    // a column is as wide as its widest pill (the failed pill, `failed │S3│a3`); the tier, and `aN` from the second Attempt, sit at its right
     let want = format!(
         "
-  ◌ draft     │S3
+  {DRAFT} draft     │S3
 
-  ○ queued    │S3
+  {QUEUED} queued    │S3
 
   {} running   │S3
 
-  ⇥ merging   │S3
+  {MERGING} merging   │S3
 
-  ✓ merged    │S3
+  {MERGED} merged    │S3
 
-  ✗ failed │S3│a3",
+  {FAILED} failed │S3│a3",
         SPINNER[0]
     );
     assert_eq!(chart_rows(&screen, 11), want.strip_prefix('\n').unwrap(), "{}", screen.join("\n"));
@@ -547,7 +551,7 @@ fn the_first_rows_of_the_pane_are_the_top_of_the_first_box_with_no_tab() {
     // one row of margin, then the box's top border, its one chart row and its bottom border
     assert_eq!(screen[0], "", "{}", screen.join("\n"));
     assert_eq!(screen[1], "  ┌ repo · repo → main · dispatch ┐");
-    assert!(screen[2].starts_with("  │  ○ a │S3"), "{:?}", screen[2]);
+    assert!(screen[2].starts_with(&format!("  │  {QUEUED} a │S3")), "{:?}", screen[2]);
     assert!(screen[3].starts_with("  └─"), "{:?}", screen[3]);
     assert!(screen.iter().all(|l| !l.contains('▸') && !l.contains("name of") && !l.starts_with('─')), "{}", screen.join("\n"));
 }
@@ -571,13 +575,13 @@ fn the_view_follows_events_and_switches_plan_when_the_chat_slot_changes() {
             + &event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":["a"]}"#)),
     );
     let screen = screen_when(&env, &pane, "Job b", |s| s.len() > 2 && s[2].contains(" b "));
-    assert_eq!(chart_rows(&screen, 1), "  ○ a │S3 ───── ○ b │S3");
+    assert_eq!(chart_rows(&screen, 1), format!("  {QUEUED} a │S3 ───── {QUEUED} b │S3"));
 
     // the other Lead moves into the chat slot: the view shows its Plan
     sql(&env, &in_chat("ctx", "side", "lead-side"));
     let screen = screen_when(&env, &pane, "the other Plan", |s| s.len() > 2 && s[2].contains("other"));
-    assert_eq!(chart_rows(&screen, 1), "  ○ other │O3");
-    assert!(!screen.iter().any(|l| l.contains("○ a ")), "{}", screen.join("\n"));
+    assert_eq!(chart_rows(&screen, 1), format!("  {QUEUED} other │O3"));
+    assert!(!screen.iter().any(|l| l.contains(&format!("{QUEUED} a "))), "{}", screen.join("\n"));
 }
 
 #[test]
