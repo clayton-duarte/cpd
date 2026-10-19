@@ -135,9 +135,12 @@ fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
 fn a_valid_digest_lands_as_upto_seq_and_the_directory_holds_one() {
     let fx = fx();
     let d1 = fx.decide("Use sqlite.");
-    let _ = fx.decide("Use flock.");
+    let d2 = fx.decide("Use flock.");
     let q = fx.cpd(&["context", "ask", "Which port?", "--context", CONTEXT]).ok()["record"]["id"].as_str().unwrap().to_owned();
-    fx.cpd(&["context", "decide", "Use sqlite for sure.", "--supersedes", &d1, "--context", CONTEXT]).ok();
+    let d3 = fx.cpd(&["context", "decide", "Use sqlite for sure.", "--supersedes", &d1, "--context", CONTEXT]).ok()["record"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     fs::create_dir_all(fx.digests()).unwrap();
     fs::write(fx.digests().join("1.md.tmp"), "left over").unwrap();
     fs::write(fx.digests().join("2.md"), "an older digest").unwrap();
@@ -154,8 +157,9 @@ fn a_valid_digest_lands_as_upto_seq_and_the_directory_holds_one() {
     let (_, index) = text.rsplit_once("\n## Record index\n\n").expect("cpd's index");
     let lines: Vec<&str> = index.lines().collect();
     assert_eq!(lines.len(), 3, "{index}");
-    assert!(lines[0].starts_with("- [hs-d2] decision (") && lines[1].starts_with(&format!("- [{q}] question (")), "{index}");
-    assert!(lines[2].starts_with("- [hs-d4] decision ("), "{index}");
+    assert!(lines[0].starts_with(&format!("- [{d2}] decision (")), "{index}");
+    assert!(lines[1].starts_with(&format!("- [{q}] question (")), "{index}");
+    assert!(lines[2].starts_with(&format!("- [{d3}] decision (")), "{index}");
     assert_eq!(fx.digest_files(), [format!("{upto}.md")], "older digests and temporary files are gone");
     assert!(fx.errors().is_empty());
 
@@ -199,7 +203,7 @@ fn the_distiller_gets_no_cpd_variable() {
 }
 
 #[test]
-fn an_invalid_digest_is_discarded_with_one_error_event_and_the_previous_one_stays() {
+fn an_invalid_digest_is_kept_with_one_error_event_and_the_previous_valid_one_stays() {
     let fx = fx();
     fx.decide("Use sqlite.");
     fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
@@ -267,6 +271,8 @@ fn a_decision_cited_only_in_the_index_is_invalid() {
     fx.env.fake_pi(&format!("echo '# Digest'; echo 'Nothing cited.'; echo; echo '## Record index'; echo '- [{d}] decision'"));
     let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
     assert_eq!(error["details"]["missing"], json!([d]), "{error}");
+    let kept = fs::read_to_string(error["details"]["invalid"].as_str().unwrap()).unwrap();
+    assert_eq!(kept, "# Digest\nNothing cited.\n\n", "the model's index is not kept");
 }
 
 #[test]
@@ -295,7 +301,7 @@ fn a_digest_over_the_limit_is_invalid() {
     let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
     assert!(error["details"]["bytes"].as_u64().unwrap() > 32768, "{error}");
     assert_eq!((error["details"]["missing"].clone(), error["details"]["stray"].clone()), (json!([]), json!([])));
-    assert!(fx.digest_files().is_empty());
+    assert_eq!(fx.digest_files(), [format!("{}.md.invalid", fx.highest_seq())]);
     assert_eq!(fx.errors().len(), 1);
 }
 

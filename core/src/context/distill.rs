@@ -154,7 +154,12 @@ impl Run<'_> {
                 true
             }
         };
-        let bytes = fs::read(&tmp).map_err(|e| io_failed("read", &tmp, &e))?;
+        let mut bytes = fs::read(&tmp).map_err(|e| io_failed("read", &tmp, &e))?;
+        // The model writes no index (the prompt says so); one it wrote anyway is not a topic section and is dropped.
+        if let Some(topic) = std::str::from_utf8(&bytes).ok().map(digest::topic_sections).filter(|t| t.len() < bytes.len()) {
+            bytes = topic.as_bytes().to_vec();
+            fs::write(&tmp, &bytes).map_err(|e| io_failed("write", &tmp, &e))?;
+        }
         let expect = digest::Expect::of(&in_force);
         if let Err(invalid) = digest::validate(&bytes, &expect, digest::LIMIT) {
             let kept = digest::keep_invalid(self.home, self.context, upto)?;
