@@ -272,6 +272,23 @@ fn list_filters_and_derives_place_and_leads() {
     refused(&env.cpd(&["session", "list", "--plan", "Bad"]), "invalid_plan_id", 2);
 }
 
+/// sql-F5, commands-F4: the Plan-Lead lookup is a join: a Session that leads two
+/// Plans is still one row, and a Session that leads none is not a Plan's Lead.
+#[test]
+fn list_gives_a_session_leading_two_plans_one_row() {
+    let env = TestEnv::new();
+    setup(&env);
+    exec_sql(
+        &env,
+        "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('again', 'ctx', 'Again', 'grounding', 'lead1', 't')",
+    );
+    let sessions = env.cpd(&["session", "list"]).ok()["sessions"].clone();
+    let sessions = sessions.as_array().unwrap();
+    let leads: Vec<(&str, bool)> =
+        sessions.iter().map(|s| (s["id"].as_str().unwrap(), s["plan_lead"].as_bool().unwrap())).collect();
+    assert_eq!(leads, [(MANAGER, false), (LEAD1, true), (LEAD2, true), (WORKER, false)]);
+}
+
 #[test]
 fn show_adds_created_at_registered_event_and_open_escalations() {
     let env = TestEnv::new();
@@ -1368,8 +1385,18 @@ fn port_fixture(env: &TestEnv) {
 /// A new window running `cpd session run <id>`, with `PLANNOTATOR_PORT=1` in its
 /// environment (the port every Lead pane inherits from cpd's environment); returns its pane.
 fn run_lead(env: &TestEnv, id: &str) -> String {
+    run_lead_with(env, id, &[])
+}
+
+/// [`run_lead`] with more `NAME=value` variables in the pane's environment.
+fn run_lead_with(env: &TestEnv, id: &str, vars: &[&str]) -> String {
     let command = format!("cpd session run {id}");
-    let out = env.tmux(&["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", "-e", "PLANNOTATOR_PORT=1", &command]);
+    let mut args = vec!["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", "-e", "PLANNOTATOR_PORT=1"];
+    for var in vars {
+        args.extend(["-e", var]);
+    }
+    args.push(&command);
+    let out = env.tmux(&args);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let pane = String::from_utf8(out.stdout).unwrap().trim().to_owned();
     env.tmux(&["set", "-p", "-t", &pane, "@cpd_session", id]);
@@ -1407,6 +1434,27 @@ fn run_gives_each_plan_its_port_and_keeps_it_across_a_restart() {
     }
     assert_eq!(recorded_ports(&env, LEAD1), ["19432", "19432"]);
     assert_eq!(recorded_ports(&env, LEAD2), ["19433", "19433"]);
+}
+
+#[test]
+fn run_gives_the_lead_remote_and_the_review_host() {
+    let env = TestEnv::new();
+    port_fixture(&env);
+    fake_pi(&env, "echo \"$PLANNOTATOR_REMOTE ${PLANNOTATOR_URL_HOST-unset}\" >> \"$HOME/hosts.$CPD_SESSION\"\nexit 1");
+    let hosts = |id: &str| fs::read_to_string(env.home().join(format!("hosts.{id}"))).unwrap_or_default();
+
+    // The environment's `PLANNOTATOR_URL_HOST` is the override; the `PLANNOTATOR_REMOTE` it holds is replaced.
+    run_lead_with(&env, LEAD1, &["PLANNOTATOR_URL_HOST=review.test", "PLANNOTATOR_REMOTE=0"]);
+    wait_until("the first Lead's pi", || !hosts(LEAD1).is_empty());
+    assert_eq!(hosts(LEAD1), "1 review.test\n");
+
+    // With no override the host is detected: an address or `localhost`, never unset.
+    run_lead(&env, LEAD2);
+    wait_until("the second Lead's pi", || !hosts(LEAD2).is_empty());
+    let hosts2 = hosts(LEAD2);
+    let (remote, host) = hosts2.trim_end().split_once(' ').unwrap();
+    assert_eq!(remote, "1");
+    assert!(host == "localhost" || host.parse::<std::net::Ipv4Addr>().is_ok_and(|ip| !ip.is_loopback()), "{host}");
 }
 
 #[test]

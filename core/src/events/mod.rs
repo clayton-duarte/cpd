@@ -19,7 +19,7 @@ use crate::home::CpdHome;
 use crate::host::exe::Exe;
 use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::{Output, to_line};
-use crate::store::{Store, VERSION};
+use crate::store::Store;
 
 pub use append::{NewEvent, append};
 pub use kind::{Kind, PROTOCOL, Set, Spec};
@@ -138,21 +138,26 @@ fn follow(args: FollowArgs) -> Result<Output, CpdError> {
     let mut stdout = std::io::stdout().lock();
     // `PRAGMA data_version` when the last query ran; none before the first.
     let mut seen: Option<i64> = None;
+    // `PRAGMA schema_version` when the store verdict was last computed; none before the first.
+    let mut schema_seen: Option<i64> = None;
     loop {
-        let (version, user_version) = store.read(|conn| {
-            Ok((
-                conn.pragma_query_value(None, "data_version", |r| r.get::<_, i64>(0))?,
-                conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))?,
-            ))
+        // A migration changes the schema: recompute the verdict (contract §4.5) when it did, and end
+        // with its code when this binary can no longer open the store, so the adapter restarts the
+        // follower on the installed binary.
+        let (version, schema_version, refusal) = store.read(|conn| {
+            let data = conn.pragma_query_value(None, "data_version", |r| r.get::<_, i64>(0))?;
+            let schema = conn.pragma_query_value(None, "schema_version", |r| r.get::<_, i64>(0))?;
+            let refusal = if schema_seen == Some(schema) {
+                None
+            } else {
+                crate::store::verdict(conn)?.refusal().cloned()
+            };
+            Ok((data, schema, refusal))
         })?;
-        if user_version > VERSION {
-            return Err(CpdError::new(
-                ErrorCode::StoreTooNew,
-                format!("The database has schema version {user_version}, newer than this cpd's {VERSION}: upgrade cpd."),
-            )
-            .with("version", user_version)
-            .with("supported", VERSION));
+        if let Some(refusal) = refusal {
+            return Err(refusal);
         }
+        schema_seen = Some(schema_version);
         if seen != Some(version) {
             seen = Some(version);
             loop {

@@ -252,7 +252,7 @@ fn run_action(name: Option<&str>, client: &str) -> Result<(), CpdError> {
     let popup = match action {
         Action::Reset => return reset_layout(&tmux, &config.tmux.cockpit_session),
         Action::Legend => legend::popup_args(client_size(&tmux, client)?),
-        Action::Logs => logs::popup_args(client_size(&tmux, client)?),
+        Action::Logs => logs::popup_args(client_size(&tmux, client)?, None),
     };
     tmux.run(&on_client(popup, client)).map(drop)
 }

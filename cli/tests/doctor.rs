@@ -564,7 +564,49 @@ fn a_database_newer_than_this_binary_fails_store() {
     Connection::open(env.cpd_home().join("cpd.db")).unwrap().pragma_update(None, "user_version", 99).unwrap();
     let run = doctor(&env);
     assert_doctor_failed(&run);
-    assert_fails(&run, "store", "error", "store_too_new");
+    let c = assert_fails(&run, "store", "error", "store_too_new");
+    // `found` is the verdict's refusal (commands.md §14.1).
+    assert_eq!(c["found"]["code"], "store_too_new", "{c}");
+    assert!(c["found"]["message"].as_str().unwrap().contains("newer cpd"), "{c}");
+}
+
+#[test]
+fn a_store_whose_breaking_migration_this_binary_lacks_fails_store_with_the_verdicts_refusal() {
+    let env = healthy();
+    apply_newer(&env, "29991231T2359-breaking", "breaking");
+    let run = doctor(&env);
+    assert_doctor_failed(&run);
+    let c = assert_fails(&run, "store", "error", "store_too_new");
+    assert_eq!(c["found"]["code"], "store_too_new", "{c}");
+}
+
+#[test]
+fn additive_migrations_this_binary_lacks_are_no_failure_and_have_no_check_of_their_own() {
+    let env = healthy();
+    apply_newer(&env, "29991231T2359-additive", "additive");
+    let run = doctor(&env);
+    run.ok();
+    assert_passes(&run, "store");
+    assert_passes(&run, "tamper");
+    let names: Vec<_> = checks(&run).iter().map(|c| c["name"].as_str().unwrap().to_owned()).collect();
+    assert_eq!(names, NAMES, "no store_window check (hs-d178 D1)");
+}
+
+/// What a newer cpd does: a migration this binary lacks, recorded under `cpd_txn()` (stood in by
+/// the newest `txns` id), with a new table.
+fn apply_newer(env: &TestEnv, name: &str, compat: &str) {
+    use rusqlite::functions::FunctionFlags;
+    drop(open_store(env));
+    let conn = Connection::open(env.cpd_home().join("cpd.db")).unwrap();
+    let txn: i64 = conn.query_row("SELECT max(id) FROM txns", [], |r| r.get(0)).unwrap();
+    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, move |_| Ok(txn)).unwrap();
+    conn.execute_batch("CREATE TABLE newer_things (id INTEGER PRIMARY KEY) STRICT;").unwrap();
+    conn.execute(
+        "INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted)
+         VALUES (?1, ?2, lower(hex(zeroblob(32))), (SELECT max(seq) + 1 FROM schema_migrations), ?3, 0)",
+        rusqlite::params![name, compat, txn],
+    )
+    .unwrap();
 }
 
 // ----------------------------------------------------------------- contexts
@@ -651,4 +693,79 @@ fn no_engine_is_needed_when_no_plan_is_in_dispatch_or_pr() {
     let run = doctor(&env);
     assert_passes(&run, "watch");
     assert!(!Path::new(&env.cpd_home().join("locks/watch.lock")).exists(), "doctor must not create the lock");
+}
+
+// ---------------------------------------------------------------- deadlines
+
+/// commands-W6: a fake that hangs on the probe named by `hang` (a shell test on its
+/// arguments) sleeps past the deadline; `sleep` is not on the tests' `PATH`, so it is linked.
+fn link_sleep(env: &TestEnv) {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let sleep = std::env::split_paths(&path).map(|d| d.join("sleep")).find(|p| p.is_file()).expect("sleep is on PATH");
+    symlink(sleep, env.bin().join("sleep")).unwrap();
+}
+
+const HANG: &str = "exec sleep 120";
+
+/// Asserts `name` failed with `tool_timeout` naming `tool`, and the other checks still ran.
+fn assert_timed_out(run: &Run, name: &str, severity: &str, tool: &str, argv: &str) {
+    let c = assert_fails(run, name, severity, "tool_timeout");
+    let message = c["message"].as_str().unwrap();
+    assert!(message.contains(&format!("{tool} ran past its deadline of 1s")), "{message}");
+    assert!(message.contains(argv), "{message}");
+}
+
+#[test]
+fn a_hung_gh_auth_is_a_failed_warning_and_doctor_finishes() {
+    let env = healthy();
+    link_sleep(&env);
+    env.fake_gh(&format!("[ \"$1\" = auth ] && {HANG}; echo 'gh version 2.45.0 (2025-07-18)'"));
+    let run = doctor_with(&env, &[("CPD_TEST_DEADLINE_GH", "1")]);
+    run.ok();
+    assert_timed_out(&run, "gh_auth", "warn", "gh", "auth status");
+    assert_eq!(checks(&run).len(), NAMES.len());
+}
+
+#[test]
+fn a_hung_tool_version_is_a_failed_error_check_and_doctor_goes_on() {
+    let env = healthy();
+    link_sleep(&env);
+    env.fake("git", HANG);
+    let run = doctor_with(&env, &[("CPD_TEST_DEADLINE_GIT", "1")]);
+    assert_doctor_failed(&run);
+    assert_timed_out(&run, "git", "error", "git", "--version");
+    assert_passes(&run, "tmux");
+    assert_passes(&run, "pi_node");
+    assert_passes(&run, "tiers");
+}
+
+#[test]
+fn a_hung_pi_node_is_a_failed_check() {
+    let env = healthy();
+    link_sleep(&env);
+    fs::remove_file(env.bin().join("node")).unwrap();
+    fs::write(env.bin().join("node"), format!("#!/bin/sh\n{HANG}\n")).unwrap();
+    fs::set_permissions(env.bin().join("node"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let run = doctor_with(&env, &[("CPD_TEST_DEADLINE_NODE", "1")]);
+    assert_doctor_failed(&run);
+    assert_timed_out(&run, "pi_node", "error", "node", "--version");
+    assert_timed_out(&run, "tiers", "error", "node", "--input-type=module");
+}
+
+/// The catalog probe's deadline is doctor's 10 s (commands.md §14.1), not the 30 s of
+/// the catalog's own cache fill: a node that answers `--version` and hangs on the module.
+#[test]
+fn a_hung_catalog_probe_is_killed_at_10_seconds() {
+    let env = healthy();
+    link_sleep(&env);
+    fs::remove_file(env.bin().join("node")).unwrap();
+    fs::write(env.bin().join("node"), format!("#!/bin/sh\n[ \"$1\" = --version ] && {{ echo v22.0.0; exit 0; }}\n{HANG}\n")).unwrap();
+    fs::set_permissions(env.bin().join("node"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let started = std::time::Instant::now();
+    let run = doctor(&env);
+    assert!(started.elapsed() < std::time::Duration::from_secs(20), "took {:?}", started.elapsed());
+    assert_doctor_failed(&run);
+    assert_passes(&run, "pi_node");
+    let c = assert_fails(&run, "tiers", "error", "tool_timeout");
+    assert_eq!(c["found"]["deadline_seconds"], 10, "{c}");
 }

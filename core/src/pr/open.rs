@@ -1,10 +1,12 @@
 //! `pr open` (commands.md §9.1, contract §7.6): the Gate, the push, the PR, for
 //! one PR of the Plan.
 
+use std::path::Path;
+
 use serde_json::json;
 
 use super::row::{PlanRow, PrRow};
-use super::gh::{self, PolledPr};
+use super::gh::{self, HeadState, Listed, Membership, PolledPr, PrRef};
 use super::pulls;
 use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
 use super::{Args, Env, gate, illegal_phase, lock, require_clean};
@@ -39,6 +41,28 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     let list = require_jobs_done(&mut env, &plan, &key)?;
     let pr = pr_of(&plan, &key);
     let lead = pr.lead(&id)?.clone();
+    // The newest pull request of the Lead Branch, in any state, before the Gate: a merged one is adopted as it is.
+    let head = gh::head_pr(&lead, &pr.lead_branch)?;
+    let mut existing = None;
+    if let Some(head) = head {
+        match head.state {
+            HeadState::Merged => return adopt_merged(&mut env, &plan, &key, &lead, &head),
+            HeadState::Closed => {
+                return Err(CpdError::new(
+                    ErrorCode::PrClosed,
+                    format!(
+                        "The pull request {} of PR {key}'s Lead Branch {} is closed without a merge: reopen it on GitHub, or move the work to a new branch.",
+                        head.url, pr.lead_branch
+                    ),
+                )
+                .with("plan", id.as_str())
+                .with("pr", key.as_str())
+                .with("number", head.number)
+                .with("url", head.url.as_str()));
+            }
+            HeadState::Open => existing = Some(PrRef { number: head.number, url: head.url }),
+        }
+    }
     require_clean(&id, pr, &lead)?;
     gate(&env, &id, pr, &lead, &format!("pr open --pr {key}"))?;
     git::run::ok(&lead, &["push", "-u", "origin", &pr.lead_branch])?;
@@ -46,7 +70,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
 
     // An earlier run that died before its transaction already created the PR: adopt it.
     let title = title(&plan, &key);
-    let found = match gh::open_pr(&lead, &pr.lead_branch)? {
+    let found = match existing {
         Some(found) => found,
         None => gh::create_pr(&lead, &pr.base, &pr.lead_branch, &title, &summary(&title, &list))?,
     };
@@ -54,6 +78,15 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
         CpdError::new(ErrorCode::GhFailed, format!("gh printed the pull request URL {:?}, which is not https://github.com/<owner>/<name>/pull/<n>.", found.url))
             .with("url", found.url.as_str())
     })?;
+    // GitHub's creation time, written once with the row (store-W5): `gh pr create` and `gh pr list` do not give it here,
+    // the poller's own lookup does. A pull request it cannot find is `gh_failed`; a rerun adopts the one created.
+    let created_at = match gh::lookup(&lead, &[(repo.clone(), found.number)])?.into_iter().next().flatten() {
+        Some(looked_up) => looked_up.created_at,
+        None => {
+            return Err(CpdError::new(ErrorCode::GhFailed, format!("gh cannot find pull request {repo}#{}, which it just opened.", found.number))
+                .with("url", found.url.as_str()));
+        }
+    };
     let phase = env.store.write(COMMAND, |tx| {
         // The pull request's row (D6): inserted, or kept as the poll wrote it when it stored it first.
         let row = PolledPr {
@@ -67,7 +100,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
             checks: ChecksSummary::None,
             mergeable: Mergeable::Unknown,
             merge_state: MergeState::Unknown,
-            created_at: pulls::txn_time(tx)?,
+            created_at,
             merged_at: None,
         };
         let pull_request = pulls::ensure(tx, &row)?;
@@ -105,6 +138,104 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
 
     let plan = env.plan(&id)?;
     Ok(Output::success(json!({"plan": id, "phase": phase.as_str(), "pr": pr_of(&plan, &key).to_json()})))
+}
+
+/// A pull request of the Lead Branch that is already `merged` on GitHub (contract §7.6 `pr open` step 0): no Gate and
+/// no push. One transaction records it and merges the PR as `pr poll` does (`pr-merged`, the Plan `deploy` and `done`).
+fn adopt_merged(env: &mut Env, plan: &PlanRow, key: &PrKey, lead: &Path, head: &gh::HeadPr) -> Result<Output, CpdError> {
+    let id = &plan.id;
+    let (repo, _) = pulls::parse_url(&head.url).ok_or_else(|| {
+        CpdError::new(ErrorCode::GhFailed, format!("gh printed the pull request URL {:?}, which is not https://github.com/<owner>/<name>/pull/<n>.", head.url))
+            .with("url", head.url.as_str())
+    })?;
+    let looked_up = match gh::lookup(lead, &[(repo.clone(), head.number)])?.into_iter().next().flatten() {
+        Some(looked_up) if looked_up.state == PrState::Merged => looked_up,
+        Some(other) => {
+            return Err(CpdError::new(
+                ErrorCode::GhFailed,
+                format!("gh lists pull request {repo}#{} as merged but reads it {}.", head.number, other.state.as_str()),
+            )
+            .with("url", head.url.as_str()));
+        }
+        None => {
+            return Err(CpdError::new(ErrorCode::GhFailed, format!("gh cannot find pull request {repo}#{}, which it lists.", head.number))
+                .with("url", head.url.as_str()));
+        }
+    };
+    let phase = env.store.write(COMMAND, |tx| {
+        // A merge time: GitHub's, else this transaction's (as the poll).
+        let mut polled = looked_up.clone();
+        if polled.merged_at.is_none() {
+            polled.merged_at = Some(pulls::txn_time(tx)?);
+        }
+        // The row as this lookup reads it, with the searches that listed it as the poll left them (the User's own when new).
+        let membership = pulls::find(tx, &polled.repo, polled.number)?
+            .map_or(Membership { authored: true, review_requested: false }, |row| row.membership());
+        pulls::upsert(tx, &Listed { pr: polled.clone(), membership })?;
+        let pull_request = pulls::find(tx, &polled.repo, polled.number)?.expect("the row was just written").id;
+        // `prs_status` allows no `dispatch → merged`: through `open`, in this one transaction.
+        let opened = tx.execute(
+            "UPDATE prs SET status = 'open', pr_number = ?1, pr_url = ?2, pr_opened_at = (SELECT at FROM txns WHERE id = cpd_txn()),
+                    pull_request = ?3
+              WHERE plan = ?4 AND key = ?5 AND status = 'dispatch'",
+            rusqlite::params![head.number, head.url, pull_request, id.as_str(), key.as_str()],
+        )?;
+        let merged = tx.execute(
+            "UPDATE prs SET status = 'merged', merged_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE plan = ?1 AND key = ?2 AND status = 'open'",
+            [id.as_str(), key.as_str()],
+        )?;
+        if opened == 0 || merged == 0 {
+            return Err(cas_lost(id, key));
+        }
+        let text = format!("PR {key} (#{}) of Plan {id} is merged.", head.number);
+        let data = json!({"pr": key, "number": head.number, "url": head.url, "merged_at": polled.merged_at});
+        append(tx, NewEvent::new(Kind::PrMerged, text, data).plan(id.clone()))?;
+
+        let waiting: i64 = tx.query_row(
+            "SELECT count(*) FROM prs WHERE plan = ?1 AND status NOT IN ('open', 'merged', 'cancelled')",
+            [id.as_str()],
+            |r| r.get(0),
+        )?;
+        if waiting > 0 {
+            return Ok(Phase::Dispatch);
+        }
+        let moved = tx.execute("UPDATE plans SET phase = 'deploy' WHERE id = ?1 AND phase = 'dispatch'", [id.as_str()])?;
+        if moved == 0 {
+            return Err(cas_lost(id, key));
+        }
+        let text = format!("Every PR of Plan {id} is open or merged. The engine polls them; to follow them by hand: cpd pr poll --plan {id}");
+        append(tx, NewEvent::new(Kind::PlanPhase, text, json!({"from": "dispatch", "to": "deploy", "prs": opened_prs(tx, id)?})).plan(id.clone()))?;
+        // The last PR to merge ends the Plan (§3.1).
+        let unmerged: i64 =
+            tx.query_row("SELECT count(*) FROM prs WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled')", [id.as_str()], |r| r.get(0))?;
+        if unmerged > 0 {
+            return Ok(Phase::Deploy);
+        }
+        let moved = tx.execute(
+            "UPDATE plans SET phase = 'done', done_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE id = ?1 AND phase = 'deploy'",
+            [id.as_str()],
+        )?;
+        if moved == 0 {
+            return Err(cas_lost(id, key));
+        }
+        let text = format!("Every PR of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}");
+        append(tx, NewEvent::new(Kind::PlanDone, text, json!({"prs": merged_prs(tx, id)?})).plan(id.clone()))?;
+        Ok(Phase::Done)
+    })?;
+
+    let plan = env.plan(id)?;
+    Ok(Output::success(json!({"adopted": "merged", "plan": id, "phase": phase.as_str(), "pr": pr_of(&plan, key).to_json()})))
+}
+
+/// `[{key, number, url, merged_at}]` of every `merged` PR, in key order (`plan-done`'s `prs`).
+fn merged_prs(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_json::Value>, CpdError> {
+    let mut stmt = tx.prepare("SELECT key, pr_number, pr_url, merged_at FROM prs WHERE plan = ?1 AND status = 'merged' ORDER BY key")?;
+    let rows = stmt
+        .query_map([id.as_str()], |r| {
+            Ok(json!({"key": r.get::<_, String>(0)?, "number": r.get::<_, i64>(1)?, "url": r.get::<_, String>(2)?, "merged_at": r.get::<_, String>(3)?}))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 fn cas_lost(id: &PlanId, key: &PrKey) -> CpdError {

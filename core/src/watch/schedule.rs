@@ -135,7 +135,7 @@ mod tests {
         .unwrap();
         for (number, pid, ended_at) in rows {
             conn.execute(
-                "INSERT INTO attempts VALUES ('pay', 'api-a' || ?1, 'api', ?1, 'ended', ?2, ?3)",
+                "INSERT INTO attempts (plan, id, job, number, status, driver_pid, ended_at) VALUES ('pay', 'api-a' || ?1, 'api', ?1, 'ended', ?2, ?3)",
                 params![number, pid, ended_at],
             )
             .unwrap();

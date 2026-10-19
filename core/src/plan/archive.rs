@@ -6,7 +6,7 @@
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-use super::{ArchiveArgs, Env, UnarchiveArgs, row};
+use super::{ArchiveArgs, Env, UnarchiveArgs, show};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
@@ -96,7 +96,7 @@ impl Object {
 impl Objects {
     /// The Plan, its Lead and its side forks; `plan_not_found`.
     pub fn of_plan(conn: &Connection, plan: &PlanId) -> Result<Objects, CpdError> {
-        row::load(conn, plan)?;
+        show::load_head(conn, plan)?;
         let sessions = session_ids(conn, "SELECT id FROM sessions WHERE role = 'lead' AND plan = ?1 ORDER BY created_at, id", plan.as_str())?;
         Ok(Objects { context: None, plans: vec![plan.clone()], sessions })
     }
@@ -281,6 +281,6 @@ pub(super) fn plan_archive(args: ArchiveArgs) -> Result<Output, CpdError> {
 pub(super) fn plan_unarchive(args: UnarchiveArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (objects, context) = env.store.read(|conn| Ok((Objects::of_plan(conn, &id)?, row::load(conn, &id)?.context)))?;
+    let (objects, context) = env.store.read(|conn| Ok((Objects::of_plan(conn, &id)?, show::load_head(conn, &id)?.context)))?;
     unarchive(&mut env.store, "plan unarchive", &objects, Some(&context))
 }
