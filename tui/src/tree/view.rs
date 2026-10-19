@@ -17,6 +17,7 @@ use tui_tree_widget::TreeState;
 
 use super::actions::{Action, Free, IN_CHAT_SLOT, Subject};
 use super::cursor::{self, Input};
+use super::folds::{Folds, FoldsFile};
 use super::menu::{self, Item, Kind, Menu};
 use super::prompt::{Ask, Outcome, Prompt, Target};
 use super::rows::{self, Id, Row};
@@ -81,6 +82,8 @@ pub struct View {
     pub tree: Tree,
     pub state: TreeState<Id>,
     known: HashSet<Vec<Id>>,
+    /// The file the folds are kept in (hs-d260); none in a view that keeps them for its own life only.
+    folds: Option<FoldsFile>,
     /// Keyboard focus of this pane, from the terminal's focus events; the cursor shows only while focused.
     focused: bool,
     /// The cursor stays hidden until the first arrow key.
@@ -101,6 +104,7 @@ impl View {
             tree: Tree { contexts: Vec::new(), events_cursor: 0 },
             state: TreeState::default(),
             known: HashSet::new(),
+            folds: None,
             focused,
             last_input: Input::Click,
             prompt: None,
@@ -118,6 +122,26 @@ impl View {
         self.tree = tree;
         rows::open_new(&mut self.state, &mut self.known, &self.tree);
         rows::reselect(&mut self.state, &self.tree, before);
+    }
+
+    /// Starts from the folds in `file` and keeps them there from now on (commands.md §13.2, hs-d260). A file that cannot
+    /// be read or is not valid leaves the defaults and is the note `fold state reset: <reason>`; the next write replaces it.
+    pub fn keep_folds(&mut self, mut file: FoldsFile) {
+        match file.load() {
+            Ok(stored) => stored.merge(&mut self.state, &mut self.known),
+            Err(reason) => self.note = format!("fold state reset: {reason}"),
+        }
+        // the file is as it was until a fold changes
+        file.assume(Folds::of(&self.state, &self.tree));
+        self.folds = Some(file);
+    }
+
+    /// Writes the folds when they have changed (at most once a second); a failure is the note and is retried.
+    pub fn save_folds(&mut self) {
+        let Some(file) = self.folds.as_mut() else { return };
+        if let Err(why) = file.save(&Folds::of(&self.state, &self.tree)) {
+            self.note = why;
+        }
     }
 
     fn cursor_shown(&self) -> bool {
@@ -810,6 +834,64 @@ mod tests {
         assert_eq!(click(&mut view, 3, 5), Effect::None);
         let rows = drawn(&mut view, 44, 16);
         assert_eq!((rows[5].as_str(), rows[6].as_str()), ("   └ …", format!(" ▾ {NEEDS_YOU} beta").as_str()));
+    }
+
+    fn file_in(dir: &tempfile::TempDir) -> FoldsFile {
+        FoldsFile::at(&cpd_core::home::CpdHome::resolve(Some(dir.path().into()), None).unwrap())
+    }
+
+    #[test]
+    fn a_collapsed_context_and_an_expanded_more_row_survive_a_restart_of_the_view_and_the_cursor_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut view = View::new(archived(), true);
+        view.keep_folds(file_in(&dir));
+        drawn(&mut view, 44, 16);
+        click(&mut view, 1, 1); // folds alpha: its rows go, the rows below move up
+        let rows = drawn(&mut view, 44, 16);
+        let more = rows.iter().position(|r| r == " …").expect("the `…` of the archived Contexts");
+        click(&mut view, 1, more as u16); // expands the archived Contexts
+        view.state.select(vec!["beta".into(), "rel".into()]);
+        view.save_folds();
+        let shown = drawn(&mut view, 44, 16);
+
+        let mut again = View::new(archived(), true);
+        again.keep_folds(file_in(&dir));
+        assert_eq!(drawn(&mut again, 44, 16), shown, "the folds are back");
+        assert_ne!(again.state.selected(), ["beta", "rel"], "the cursor is not kept");
+        assert_eq!(again.note, "");
+    }
+
+    #[test]
+    fn a_fold_is_written_once_and_nothing_is_written_until_one_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run/tui/tree-folds.json");
+        let mut view = View::new(sample(), true);
+        view.keep_folds(file_in(&dir));
+        drawn(&mut view, 44, 12);
+        view.save_folds();
+        assert!(!path.exists(), "a start with no fold writes nothing");
+        click(&mut view, 1, 1);
+        view.save_folds();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), r#"{"collapsed":["alpha"],"expanded":[]}"#);
+    }
+
+    #[test]
+    fn an_invalid_file_starts_with_the_defaults_says_so_once_and_the_next_write_replaces_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run/tui/tree-folds.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{not json").unwrap();
+        let mut view = View::new(sample(), true);
+        view.keep_folds(file_in(&dir));
+        assert!(view.note.starts_with("fold state reset: ") && view.note.contains("tree-folds.json"), "{}", view.note);
+        assert!(view.state.opened().contains(&vec!["alpha".to_owned()]), "the defaults");
+        drawn(&mut view, 44, 12);
+        view.save_folds();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{not json", "nothing is written until a fold changes");
+        click(&mut view, 1, 1);
+        assert_eq!(view.note, "", "a click clears the note: it is said once");
+        view.save_folds();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), r#"{"collapsed":["alpha"],"expanded":[]}"#);
     }
 
     #[test]

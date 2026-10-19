@@ -8,6 +8,7 @@
 //! - [`view`]: the state, keys and drawing; [`cursor`], [`prompt`], [`menu`]: its parts (the right-click menu);
 //! - [`actions`]: what it does, as `cpd` commands (`session open`, `plan new`, `session close`, the menu's), and the
 //!   legend popup; [`slug`]: the id of a new Context or Plan, from its title;
+//! - [`folds`]: the folds (collapsed Contexts, expanded `…` rows) kept in `run/tui/tree-folds.json` across restarts;
 //! - [`follow`]: `cpd events follow`, which tells it when to take a new snapshot.
 //!
 //! Keys and clicks are the reference's (commands.md §13.2, `tui/README.md` "Context column" on `main`): arrows
@@ -18,6 +19,7 @@
 
 mod actions;
 mod cursor;
+mod folds;
 mod follow;
 mod menu;
 mod prompt;
@@ -42,6 +44,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
 use cpd_core::store::Store;
 use actions::Runner;
+use folds::FoldsFile;
 use follow::{Follower, Message};
 use view::{Effect, View};
 
@@ -66,7 +69,8 @@ pub(super) fn run() -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-    let view = View::new(read::tree(&mut store)?, false);
+    let mut view = View::new(read::tree(&mut store)?, false);
+    view.keep_folds(FoldsFile::at(&home));
     let runner = Runner::new(&config);
     // From here on this process owns the terminal (commands.md §1.2).
     let mut terminal = ratatui::init();
@@ -109,6 +113,7 @@ fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View,
                 follower = Follower::start(view.tree.events_cursor).ok();
             }
         }
+        view.save_folds();
         let frame = palette::frame(SystemTime::now());
         terminal.draw(|f| view.draw(f, frame))?;
         if !event::poll(TICK)? {
