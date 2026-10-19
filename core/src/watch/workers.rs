@@ -226,7 +226,7 @@ mod tests {
             "CREATE TABLE attempts (status TEXT);
              CREATE TABLE plans (id TEXT, phase TEXT);
              CREATE TABLE prs (plan TEXT, key TEXT, status TEXT);
-             CREATE TABLE jobs (plan TEXT, key TEXT, pr TEXT, status TEXT, seq INTEGER);
+             CREATE TABLE jobs (plan TEXT, key TEXT, pr TEXT, status TEXT, seq INTEGER, urgent INTEGER NOT NULL DEFAULT 0);
              CREATE TABLE dependencies (plan TEXT, job TEXT, needs TEXT);
              INSERT INTO plans (id, phase) VALUES ('pay', 'dispatch');
              INSERT INTO prs (plan, key, status) VALUES ('pay', 'a', 'dispatch'), ('pay', 'w', 'waiting');
