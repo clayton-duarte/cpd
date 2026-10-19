@@ -205,8 +205,6 @@ pub fn popup_args(client: (u16, u16), arg: &str) -> Vec<String> {
 }
 
 /// The merge icon's click: the dialog for `arg` in a tmux popup over the cockpit.
-// Unused until the Deploy column's merge icon calls it (Job merge-button).
-#[allow(dead_code)]
 pub(crate) fn open(tmux: &Tmux, arg: &str) -> Result<(), CpdError> {
     let clients = tmux.run(&["list-clients", "-F", "#{client_activity} #{client_width} #{client_height}"].map(str::to_owned))?;
     let client = newest_client(&clients).ok_or_else(|| {
