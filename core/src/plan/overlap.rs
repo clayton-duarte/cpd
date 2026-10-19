@@ -1,6 +1,8 @@
 //! The overlap warning of `plan render` and the Plan review (commands.md
-//! §4.5, B4-A3, hs-d78): the other active Plans whose Jobs touch the files this
-//! Plan's Jobs touch. A warning only; nothing is refused.
+//! §4.5, B4-A3, hs-d78, hs-n201): the other active Plans whose Jobs touch the
+//! files this Plan's open Jobs touch. A warning only; nothing is refused.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use rusqlite::Connection;
 use serde_json::{Value, json};
@@ -24,25 +26,29 @@ pub struct Other {
     pub touches: Vec<String>,
 }
 
-/// One overlap: `job` of this Plan touches `path`, which overlaps `other_path`
-/// of `other_job` in `pr` of `plan`.
+/// A Job of another Plan's PR that overlaps a Job of this Plan.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OtherJob {
+    pub key: String,
+    pub status: String,
+}
+
+/// One overlap: `job` of this Plan overlaps `other_jobs`, all of `pr` of `plan`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Overlap {
     pub job: String,
-    pub path: String,
     pub plan: String,
     pub pr: String,
-    pub other_job: String,
-    pub status: String,
-    pub other_path: String,
+    /// The Jobs of `pr` that overlap `job`, in the order of the others given to [`find`].
+    pub other_jobs: Vec<OtherJob>,
+    /// The paths of `job` that overlap a path of one of `other_jobs`, each once, in the order of its `touches`.
+    pub paths: Vec<String>,
 }
 
 impl Overlap {
     pub fn to_json(&self) -> Value {
-        json!({
-            "job": self.job, "path": self.path, "plan": self.plan, "pr": self.pr,
-            "other_job": self.other_job, "status": self.status, "other_path": self.other_path,
-        })
+        let other_jobs: Vec<Value> = self.other_jobs.iter().map(|j| json!({"key": j.key, "status": j.status})).collect();
+        json!({"job": self.job, "plan": self.plan, "pr": self.pr, "other_jobs": other_jobs, "paths": self.paths})
     }
 }
 
@@ -78,28 +84,48 @@ pub fn load_others(conn: &Connection, plan: &PlanId) -> Result<Vec<Other>, CpdEr
         .collect()
 }
 
-/// Every overlap of this Plan's PRs (not `cancelled`) and Jobs (not
-/// `cancelled`) with `others`, in the order of this Plan's Jobs, each Job's
-/// paths, then `others`. Pure.
+/// A PR of this Plan whose Jobs are not on their base yet: not `merged`, not
+/// `cancelled`.
+fn is_open(pr: &PrSpec) -> bool {
+    !matches!(pr.status.as_str(), "merged" | "cancelled")
+}
+
+/// Every overlap of this Plan's open work with `others`: the Jobs not
+/// `cancelled` of the PRs that are not `merged` and not `cancelled` (a Job of a
+/// `merged` PR is on its base already). One overlap per (Job, other Plan,
+/// other PR) that has a Job overlapping it, ordered by this Job's key, then the
+/// other Plan, then the PR. Pure.
 pub fn find(prs: &[PrSpec], jobs: &[Job], others: &[Other]) -> Vec<Overlap> {
+    let mut open: Vec<&Job> = jobs.iter().filter(|j| j.status != "cancelled").collect();
+    open.sort_by(|a, b| a.key.cmp(&b.key));
     let mut out = Vec::new();
-    for job in jobs.iter().filter(|j| j.status != "cancelled") {
-        let Some(pr) = prs.iter().find(|p| p.key == job.pr && p.status != "cancelled") else { continue };
-        let paths = job.touches.as_array().into_iter().flatten().filter_map(Value::as_str);
-        for path in paths {
-            for other in others.iter().filter(|o| o.repo == pr.repo) {
-                for other_path in other.touches.iter().filter(|t| overlaps(path, t)) {
-                    out.push(Overlap {
-                        job: job.key.clone(),
-                        path: path.to_owned(),
-                        plan: other.plan.clone(),
-                        pr: other.pr.clone(),
-                        other_job: other.job.clone(),
-                        status: other.status.clone(),
-                        other_path: other_path.clone(),
-                    });
-                }
+    for job in open {
+        let Some(pr) = prs.iter().find(|p| p.key == job.pr && is_open(p)) else { continue };
+        let mut paths: Vec<&str> = Vec::new();
+        for path in job.touches.as_array().into_iter().flatten().filter_map(Value::as_str) {
+            if !paths.contains(&path) {
+                paths.push(path);
             }
+        }
+        // By (other Plan, other PR): the Jobs there that overlap this one, and which of its paths they overlap.
+        let mut groups: BTreeMap<(&str, &str), (Vec<OtherJob>, BTreeSet<usize>)> = BTreeMap::new();
+        for other in others.iter().filter(|o| o.repo == pr.repo) {
+            let hit: Vec<usize> = (0..paths.len()).filter(|&i| other.touches.iter().any(|t| overlaps(paths[i], t))).collect();
+            if hit.is_empty() {
+                continue;
+            }
+            let (other_jobs, overlapped) = groups.entry((&other.plan, &other.pr)).or_default();
+            other_jobs.push(OtherJob { key: other.job.clone(), status: other.status.clone() });
+            overlapped.extend(hit);
+        }
+        for ((other_plan, other_pr), (other_jobs, overlapped)) in groups {
+            out.push(Overlap {
+                job: job.key.clone(),
+                plan: other_plan.to_owned(),
+                pr: other_pr.to_owned(),
+                other_jobs,
+                paths: overlapped.into_iter().map(|i| paths[i].to_owned()).collect(),
+            });
         }
     }
     out
