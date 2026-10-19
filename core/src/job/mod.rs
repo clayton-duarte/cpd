@@ -27,15 +27,15 @@ use clap::builder::PossibleValuesParser;
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::args::{PlanArg, PrArg, Text};
-use crate::config::{self, Config, Tier};
+use crate::config::{self, Tier};
 use crate::driver;
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::ids::{JobKey, PlanId, PrKey};
 use crate::output::Output;
-use crate::plan::fingerprint::PrSpec;
+use crate::plan::PrRow;
 use crate::plan::jobs::{Job, STATUSES};
-use crate::store::Store;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -184,20 +184,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
     }
 }
 
-/// What every command opens: `$CPD_HOME`'s config and the store.
-struct Env {
-    config: Config,
-    store: Store,
-}
-
 impl Env {
-    fn open() -> Result<Env, CpdError> {
-        let home = CpdHome::from_env()?;
-        let config = Config::load(&home)?;
-        let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-        Ok(Env { config, store })
-    }
-
     /// `tier_invalid` (exit 2, `details.efforts`) unless the Tier's effort is
     /// one pi supports for its model (§9).
     fn check_tier(&mut self, tier: Tier) -> Result<(), CpdError> {
@@ -205,17 +192,11 @@ impl Env {
     }
 }
 
-/// A row the database holds in a shape the binary does not accept: it was
-/// changed outside cpd, or by a bug.
-fn bad_row(what: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: {what}."))
-}
-
 /// The Plan's phase, else `plan_not_found`.
 fn plan_phase(conn: &Connection, plan: &PlanId) -> Result<String, CpdError> {
     conn.query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))
         .optional()?
-        .ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str()))
+        .ok_or_else(|| CpdError::plan_not_found(plan))
 }
 
 /// Where a review Job's Worker writes its findings: `run/<plan>/reviews/<job>.md` (contract §1.4).
@@ -284,8 +265,8 @@ fn check_needs_same_pr(jobs: &[Job], plan: &PlanId, pr: &str, needs: &[String]) 
 }
 
 /// The PR `pr` of the Plan is not `merged` or `cancelled` (`pr_ended`) (§3.2).
-fn check_pr_live(prs: &[PrSpec], plan: &PlanId, pr: &str) -> Result<(), CpdError> {
-    match prs.iter().find(|p| p.key == pr) {
+fn check_pr_live(prs: &[PrRow], plan: &PlanId, pr: &str) -> Result<(), CpdError> {
+    match prs.iter().find(|p| p.key.as_str() == pr) {
         Some(p) if matches!(p.status.as_str(), "merged" | "cancelled") => Err(CpdError::new(
             ErrorCode::PrEnded,
             format!("PR {pr} of Plan {plan} is {}: Jobs are not added to or moved into it.", p.status),

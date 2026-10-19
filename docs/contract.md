@@ -247,7 +247,7 @@ A row is deleted when its pull request leaves both open searches and no PR point
 
 One request for the User's approval of the draft Jobs, through plannotator (cpd 1 §11 `plan decision`, §15).
 
-In phase `plan` it covers every draft Job (all of them are drafts) and the PRs, and its approval is what `plan lock` needs. In every phase after `plan` it covers **exactly the draft Jobs** the Plan has at that moment: a Lead that plans several batches adds the later ones as drafts (`job add --draft`, §3.2), and the User approves each batch through a review of its own. Its approval queues those drafts (§3.2) and there is no `plan lock` in these phases; the Jobs already Locked are shown to the User as context, not for approval. Reason: every planned batch must be visible in the Plan view before it is approved, and approved only by the User (User, hs-d173, hs-d174, hs-d179).
+In phase `plan` it covers every draft Job (all of them are drafts) and the PRs, and its approval is what `plan lock` needs. In every phase after `plan` it covers **exactly the draft Jobs** the Plan has at that moment: a Lead that plans several batches adds the later ones as drafts (`job add --draft`, §3.2), and the User approves each batch through a review of its own. Its approval queues those drafts (§3.2) and there is no `plan lock` in these phases; the Jobs already Locked are shown to the User as context, not for approval. Reason: every planned batch must be visible in the Plan view before it is approved, and approved only by the User (User, hs-d173, hs-d174, hs-d179). A Job that only carries out a recorded User decision, with no open design choice, is added queued, not as a draft (User, hs-d301); drafts and their review are for undecided design, and when unsure it is a draft.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -385,7 +385,7 @@ One thing that needs the User: the **single source of "needs you"** (hs-d165), s
 | `context`, `plan`, `job`, `session`, `record` | text? | what it is about, when it has one |
 | `event` | int? | the Event that caused it (the `session-state`, `job-failed` or `error` Event), for "jump to the cause" |
 | `label` | text | the short text of the table below |
-| `url` | text? | a page that shows it (plannotator's for a Plan review; the pull request's page for the `pr-*` and `review-requested` kinds) |
+| `url` | text? | a page that shows it (plannotator's for a Plan review, `http://<review host>:<port>/` with the review host of §6.5 (`PLANNOTATOR_URL_HOST`, else the primary IPv4, else `localhost`; hs-d264), not a fixed `localhost`; the pull request's page for the `pr-*` and `review-requested` kinds) |
 | `opened_at` | time | |
 | `closed_at` | time? | null while open |
 | `snoozed_until` | time? | hidden until then; the item returns at its rank, `opened_at` kept |
@@ -760,14 +760,14 @@ Each step is idempotent: a rerun after a crash between the local rename and the 
 | Plan | Dispatching | `dispatch` | the engine runs the Jobs; Workers merge them into the Lead Branches | `watch` (engine), `job list` |
 | Deploy | Mechanical checks | end of `dispatch` | all Jobs of a PR are merged; the Gate runs | `pr open` (the Gate, §7.6) |
 | Deploy | PR | `dispatch` → `deploy` | the pull request is opened | `pr open` |
-| Deploy | Reviewing and Monitoring | `deploy` | people, the User's review bot and CI review the open pull request; the engine polls it | `pr poll` (engine E5), `pr view`, Event `pr-feedback` |
+| Deploy | Reviewing and Monitoring | `deploy` | people, the User's review bot review the open pull request; the engine polls it | `pr poll` (engine E5), `pr view`, Event `pr-feedback` |
 | Deploy | Addressing | `deploy` → `dispatch` → `deploy` | feedback Jobs are appended and run (back to Dispatching), then pushed | `job add --pr`, `pr rebase` |
 
 The Deploy stage runs from the end of `dispatch` (all Jobs merged, `pr open`) and through phase `deploy` until `done`.
 
 **Who does the Context steps.** At the Epic level the Manager does Grounding, Clarifying and Specifying for the Context (§3.1, "The Context's Manager"); each Lead does them for its Plan, in phase `grounding`.
 
-**No local review before the Gate** (hs-d171, supersedes hs-d77). A PR is reviewed after it opens, while CI runs, by people and the User's review bot (Reviewing and Monitoring). Nothing requires a review before the Gate. A final review Job (`job add --review`, §2.2) stays optional (hs-d70, B3).
+**No local review before the Gate** (hs-d171, supersedes hs-d77). A PR is reviewed after it opens by people and the User's review bot (Reviewing and Monitoring). Nothing requires a review before the Gate. A final review Job (`job add --review`, §2.2) stays optional (hs-d70, B3).
 
 ## 4. Storage
 
@@ -1961,7 +1961,7 @@ On success the Attempt becomes `merging` with `submitted_sha` and `check_tail`, 
 
 The merge takes **no lock** (hs-d243). Two PRs' merges touch different refs and worktrees (§7). Two merges of one PR are kept apart by the compare-and-swap of step 8, their pushes by rule P and their worktree syncs by rule S (both below); a merge never waits for a Gate, which runs in a worktree of its own (§7.6). Before hs-d243 a per-repo lock `locks/repo-<sha1>.lock` was held from step 1 to step 10, and every holder ran R first.
 
-0. **Branch check** (engine-W1). At the merge's start the driver compares the Attempt branch's tip (`git rev-parse refs/heads/<attempt branch>`) with the Attempt's `submitted_sha`; when they differ the Attempt ends `failed` / `tampered` (the existing cause) with the detail `the Attempt branch moved after submit (<submitted> -> <tip>)`. So that nothing can move the branch afterwards, the driver kills the Worker's window as soon as it sees the Attempt `merging`, before it waits for the per-repo lock.
+0. **Branch check** (engine-W1). At the merge's start the driver compares the Attempt branch's tip (`git rev-parse refs/heads/<attempt branch>`) with the Attempt's `submitted_sha`; when they differ the Attempt ends `failed` / `tampered` (the existing cause) with the detail `the Attempt branch moved after submit (<submitted> -> <tip>)`. So that nothing can move the branch afterwards, the driver kills the Worker's window as soon as it sees the Attempt `merging`, before step 1.
 1. **Cancel check.** If the Job has a cancel request: end `cancelled`.
 2. **Snapshot** `old = git rev-parse refs/heads/<lead branch>`.
 3. Removed by hs-d243 (it was the Lead worktree check, `dirty_target`, t3 F8): the merge never works in the Lead worktree (the rebase is in the Attempt worktree, t3 F6; the fast-forward is a ref compare-and-swap), and rule S at step 9 neither overwrites local changes nor fails the Job for them. Without the lock, the check would also take another merge's half-written sync for local changes and fail a Job for it. The step keeps its number, as step 6 does; the cause `dirty_target` is no longer produced (§3.4).

@@ -108,8 +108,7 @@ struct Cost {
 /// session entry.
 pub fn parse_file(path: &Path) -> Result<Metrics, CpdError> {
     let text = std::fs::read_to_string(path).map_err(|e| {
-        CpdError::new(ErrorCode::FileUnreadable, format!("Cannot read {} as UTF-8 text: {e}.", path.display()))
-            .with("path", path.display().to_string())
+        CpdError::file_unreadable(path, e)
     })?;
     parse(&text, path)
 }

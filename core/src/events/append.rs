@@ -12,7 +12,7 @@ use crate::store::WriteTxn;
 /// An Event to append: its kind, what it is about, its `text` and its `data`.
 ///
 /// ```text
-/// events::append(tx, NewEvent::new(Kind::JobRetried, "Job api queued again. Next: cpd job show api", json!({"tier": "S2"}))
+/// events::append(tx, NewEvent::job_retried("Job api queued again. Next: cpd job show api", "S2")
 ///     .plan(plan).job(job))?;
 /// ```
 #[derive(Clone, Debug)]
@@ -31,6 +31,10 @@ impl NewEvent {
     /// `text` is written for the Lead and ends with the `cpd` command(s) it
     /// may run (§5.1); for a silent kind it is a one-line description.
     /// `data` is the JSON object of §5.2's `data` column for `kind`.
+    ///
+    /// Untyped: only the tests of [`append`]'s refusals build an Event this way.
+    /// Every command uses the constructor of its kind (`NewEvent::job_retried(..)`,
+    /// `typed.rs`); `typed::tests::no_command_builds_an_untyped_event` enforces it.
     pub fn new(kind: Kind, text: impl Into<String>, data: Value) -> NewEvent {
         NewEvent {
             kind,
@@ -42,6 +46,16 @@ impl NewEvent {
             text: text.into(),
             data,
         }
+    }
+
+    /// The kind of this Event.
+    pub fn kind(&self) -> Kind {
+        self.kind
+    }
+
+    /// The `data` of this Event.
+    pub fn data(&self) -> &Value {
+        &self.data
     }
 
     /// The Context. Optional for every kind that has a Plan or a Session:
@@ -121,7 +135,7 @@ pub fn append(tx: &WriteTxn<'_>, event: NewEvent) -> Result<i64, CpdError> {
                 tx.query_row("SELECT context FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get::<_, String>(0))
                     .optional()?
                     .ok_or_else(|| {
-                        CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str())
+                        CpdError::plan_not_found(plan)
                     })?,
             ),
             (None, Some(session)) => Some(

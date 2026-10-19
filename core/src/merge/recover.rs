@@ -5,9 +5,8 @@
 //! ends it with the compare-and-swap on `status = 'merging'`.
 
 use super::Ctx;
-use super::ledger::{self, Attempt, End, Failure, Ladder};
-use super::lock::take_free_driver_lock;
-use crate::driver::lock;
+use crate::attempt::ledger::{self, Attempt, Cause, End, Ladder, Stage};
+use crate::driver::lock::{self, probe};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, run::run};
 use crate::driver::worker;
@@ -24,13 +23,13 @@ pub struct Recovered {
     pub end: Option<End>,
 }
 
-/// R for Attempt `id` of `plan`: takes its driver lock without waiting and
-/// re-reads it. `None` when the lock is held (a live driver, or another R,
-/// finishes it) or the Attempt is no longer `merging`; else what R did.
-/// Callers: engine E2, for each orphaned Attempt (§3.7), and later `pr
-/// rebase`'s guard U (§7.6).
+/// R for Attempt `id` of `plan`: probes its driver lock without waiting (a
+/// probe never creates the file, §3.4) and re-reads it. `None` when the lock
+/// is held (a live driver, or another R, finishes it) or the Attempt is no
+/// longer `merging`; else what R did. Callers: engine E2, for each orphaned
+/// Attempt (§3.7), and `pr rebase`'s guard U (§7.6).
 pub fn recover_attempt(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, id: &AttemptId) -> Result<Option<Recovered>, CpdError> {
-    let Some(_driver) = take_free_driver_lock(ctx.home, plan, id)? else { return Ok(None) };
+    let Some(_driver) = probe(ctx.home, plan, id)? else { return Ok(None) };
     let attempt = store.read(|conn| ledger::load(conn, plan, id))?;
     if attempt.status != "merging" {
         return Ok(None);
@@ -62,7 +61,7 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
             let end = End::Merged { sha: tip.clone() };
             let metrics = (ctx.metrics)(attempt);
             store.write(ctx.source, |tx| {
-                ledger::end_merging(tx, attempt, &end, metrics.as_ref(), &ladder)?;
+                ledger::end(tx, attempt, &end, metrics.as_ref(), &ladder, Stage::Merge)?;
                 if let Some(e) = &stale {
                     ledger::append_error(tx, attempt, ctx.source, e, stale_text(attempt, e))?;
                 }
@@ -78,16 +77,16 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
         }
         // R3: no merge.
         Ok(None) => {
-            let cancel = store.read(|conn| ledger::cancel_request(conn, attempt))?;
+            let cancel = store.read(|conn| ledger::cancel_request(conn, &attempt.plan, &attempt.job))?;
             let end = match cancel {
                 Some(_) => End::Cancelled,
                 None => End::Failed {
-                    cause: Failure::Crashed,
+                    cause: Cause::Crashed,
                     detail: "The driver died during the merge, before the Lead Branch moved.".to_owned(),
                 },
             };
             let metrics = (ctx.metrics)(attempt);
-            store.write(ctx.source, |tx| ledger::end_merging(tx, attempt, &end, metrics.as_ref(), &ladder))?;
+            store.write(ctx.source, |tx| ledger::end(tx, attempt, &end, metrics.as_ref(), &ladder, Stage::Merge))?;
             // A9: the Attempt is ended, its worktree is kept, its window goes; the driver lock file goes
             // too, whether or not the kill worked (each item best effort).
             let killed = kill_window(ctx, attempt);

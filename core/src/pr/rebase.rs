@@ -8,11 +8,12 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use super::row::{PlanRow, PrRow};
+use super::row::PlanPrs;
+use crate::plan::PrRow;
 use super::{Args, Env, gate_hooks, illegal_phase, refusal, short};
 use crate::config::{self, Catalog};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::git::{self, GateWorktree, Push, TAIL_LINES, tail};
 use crate::ids::{AttemptId, PlanId, PrKey};
 use crate::merge::{self, CAS_RETRIES};
@@ -35,7 +36,7 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
     let pr = require_open(&plan, &args)?.clone();
     let key = pr.key.clone();
     let lead = pr.lead(&id)?.clone();
-    let repo = pr.repo.as_path();
+    let repo = std::path::Path::new(&pr.repo);
     let branch = pr.lead_branch.as_str();
     let lead_ref = format!("refs/heads/{branch}");
     let onto = format!("origin/{}", pr.base);
@@ -231,7 +232,7 @@ fn guard_u(env: &mut Env, plan: &PlanId, key: &PrKey, repo: &Path, snapshot: &st
 fn settle(env: &mut Env, catalog: &mut Option<Catalog>, plan: &PlanId, key: &PrKey, attempt: &AttemptId) -> Result<(), CpdError> {
     let deadline = Instant::now() + GUARD_WAIT;
     loop {
-        if merge::take_free_driver_lock(&env.home, plan, attempt)?.is_some() {
+        if crate::driver::lock::probe(&env.home, plan, attempt)?.is_some() {
             if catalog.is_none() {
                 *catalog = Some(config::load_catalog(&env.config)?);
             }
@@ -269,22 +270,21 @@ fn report_stale(env: &mut Env, plan: &PlanId, key: &PrKey, lead: &Path, stale: &
     );
     let mut details = stale.details().clone();
     details.insert("pr".to_owned(), json!(key));
-    let data = json!({"source": COMMAND, "code": stale.code().as_str(), "message": stale.message(), "details": details});
     env.store.write(COMMAND, |tx| {
-        append(tx, NewEvent::new(Kind::Error, text, data).plan(plan.clone()))?;
+        append(tx, NewEvent::error(text, COMMAND, stale.code().as_str(), stale.message(), &details).plan(plan.clone()))?;
         Ok(())
     })
 }
 
 /// The selected PR must be `open` (`illegal_transition`); a Plan that has not
 /// been locked is `illegal_phase`.
-fn require_open<'a>(plan: &'a PlanRow, args: &Args) -> Result<&'a PrRow, CpdError> {
-    if matches!(plan.phase, Phase::Grounding | Phase::Plan) {
+fn require_open<'a>(plan: &'a PlanPrs, args: &Args) -> Result<&'a PrRow, CpdError> {
+    if matches!(plan.plan.phase, Phase::Grounding | Phase::Plan) {
         return Err(illegal_phase(plan, COMMAND, "deploy"));
     }
     let pr = plan.select(&args.pr)?;
     if pr.status != "open" {
-        return Err(pr.refuse(&plan.id, COMMAND, "open"));
+        return Err(pr.refuse(&plan.plan.id, COMMAND, "open"));
     }
     Ok(pr)
 }

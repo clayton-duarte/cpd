@@ -18,7 +18,7 @@ use super::archive::archived;
 use super::{CloseArgs, Env, ForkArgs, OpenArgs, PROGRAM, ParkArgs, no_cockpit, not_a_lead, pane_gone};
 use crate::args::Name;
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
 use crate::host::layout::{context_window, park_window};
 use crate::host::{Pane, PaneId, Spawn, Tmux, View, WindowId, chat_slot};
@@ -63,7 +63,7 @@ pub(super) fn moved(tx: &WriteTxn<'_>, row: &Row, pane: &PaneId, window: &Window
         "chat" => format!("{kind} {} is in the chat slot.", row.name),
         _ => format!("{kind} {} is {place}.", row.name),
     };
-    let event = NewEvent::new(Kind::SessionMoved, text, json!({"pane": pane.as_str(), "window": window.as_str(), "place": place}));
+    let event = NewEvent::session_moved(text, Some(pane.as_str()), Some(window.as_str()), place);
     append(tx, scoped(event, row))?;
     Ok(())
 }
@@ -86,11 +86,6 @@ fn require_chat_session(row: &Row) -> Result<(), CpdError> {
 /// `<source name> (fork)`, cut to 80 characters.
 fn fork_name(source: &str) -> String {
     format!("{source} (fork)").chars().take(Name::MAX_CHARS).collect()
-}
-
-pub(super) fn unreadable(path: &Path, e: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::FileUnreadable, format!("Cannot read {} as UTF-8 text: {e}.", path.display()))
-        .with("path", path.display().to_string())
 }
 
 fn write_file(path: &Path, text: &str) -> Result<(), CpdError> {
@@ -122,9 +117,9 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
         .store
         .read(|conn| row::plan_lead(conn, &plan))?
         .map(|(context, _)| context)
-        .ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str()))?;
+        .ok_or_else(|| CpdError::plan_not_found(&plan))?;
     let message = match &args.message_file {
-        Some(path) => Some(std::fs::read_to_string(path).map_err(|e| unreadable(path, e))?),
+        Some(path) => Some(std::fs::read_to_string(path).map_err(|e| CpdError::file_unreadable(path, e))?),
         None => None,
     };
     let tmux = env.tmux();
@@ -149,8 +144,8 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
         )?;
         let row = row::load(tx, &id)?;
         let text = format!("Lead {name} registered, forked from {}. Next: cpd session open {id}", source.name);
-        let data = json!({"role": "lead", "name": name, "forked_from": source.id, "tier": tier});
-        append(tx, scoped(NewEvent::new(Kind::SessionRegistered, text, data), &row))?;
+        let event = NewEvent::session_registered(text, "lead", &name, &source.id, &tier);
+        append(tx, scoped(event, &row))?;
         Ok(row)
     })?;
 
@@ -190,7 +185,7 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
     }
     // A Lead has a Plan; a Context's Manager has none.
     if (lead.role == Role::Lead) == lead.plan.is_none() {
-        return Err(super::bad_row(format!("{} {} has plan {:?}", lead.role.as_str(), lead.id, lead.plan)));
+        return Err(CpdError::bad_row(format!("{} {} has plan {:?}", lead.role.as_str(), lead.id, lead.plan)));
     }
     let tmux = env.tmux();
     let cockpit = env.config.tmux.cockpit_session.clone();
@@ -328,7 +323,7 @@ pub fn close_lead(store: &mut Store, tmux: &Tmux, cockpit: &str, id: &SessionId,
     if !live(&panes) {
         return Ok(Closed { pane: Some(pane), already: true });
     }
-    let pane_id = PaneId::parse(&pane).ok_or_else(|| super::bad_row(format!("tmux_pane {pane:?}")))?;
+    let pane_id = PaneId::parse(&pane).ok_or_else(|| CpdError::bad_row(format!("tmux_pane {pane:?}")))?;
     tmux.kill_pane(&pane_id)?;
 
     // pi's adapter may report `stopped` as the pane dies, which changes the
@@ -353,7 +348,7 @@ pub fn close_lead(store: &mut Store, tmux: &Tmux, cockpit: &str, id: &SessionId,
 pub(super) fn close_own(env: &mut Env, id: &SessionId, command: &str) -> Result<(), CpdError> {
     let lead = env.store.read(|conn| row::load(conn, id))?;
     let Some(pane) = lead.tmux_pane.clone() else { return Ok(()) };
-    let pane_id = PaneId::parse(&pane).ok_or_else(|| super::bad_row(format!("tmux_pane {pane:?}")))?;
+    let pane_id = PaneId::parse(&pane).ok_or_else(|| CpdError::bad_row(format!("tmux_pane {pane:?}")))?;
     let why = format!("its pane {pane} was closed");
     env.store.write(command, |tx| pane_gone(tx, &lead.id, lead.state.as_str(), Some(&pane), &why))?;
     env.tmux().kill_pane(&pane_id)
@@ -381,7 +376,7 @@ pub(super) fn first_message(home: &CpdHome, row: &Row) -> Result<Option<PathBuf>
             let path = home.manager_message(&row.context);
             return match std::fs::File::open(&path) {
                 Ok(_) => Ok(Some(path)),
-                Err(e) => Err(unreadable(&path, e)),
+                Err(e) => Err(CpdError::file_unreadable(&path, e)),
             };
         }
         return Ok(None);
@@ -396,7 +391,7 @@ pub(super) fn first_message(home: &CpdHome, row: &Row) -> Result<Option<PathBuf>
     };
     path.map(|p| match std::fs::File::open(&p) {
         Ok(_) => Ok(p),
-        Err(e) => Err(unreadable(&p, e)),
+        Err(e) => Err(CpdError::file_unreadable(&p, e)),
     })
     .transpose()
 }

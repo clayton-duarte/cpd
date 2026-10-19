@@ -53,7 +53,7 @@ fn bold(text: impl Into<String>) -> Span<'static> {
     Span::styled(text.into(), Style::new().add_modifier(Modifier::BOLD))
 }
 
-fn dim(text: impl Into<String>) -> Span<'static> {
+pub(crate) fn dim(text: impl Into<String>) -> Span<'static> {
     Span::styled(text.into(), Style::new().add_modifier(Modifier::DIM))
 }
 
@@ -139,38 +139,39 @@ fn render_header(f: &mut Frame, area: Rect, title: &str) {
     f.render_widget(Paragraph::new(section_header(title, usize::from(area.width))), area);
 }
 
-/// Which pull requests the PRs section draws, and the cues around them (commands.md §13.2, "Scrolling the PRs section").
+/// Which items a scrolling list draws, and the cues around them (commands.md §13.2, "Scrolling the PRs section"; the
+/// tree's Inbox section scrolls with the same code, one row an item).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Window {
-    /// The first pull request drawn, after clamping.
-    first: usize,
+pub(crate) struct Window {
+    /// The first item drawn, after clamping.
+    pub first: usize,
     /// How many are drawn.
-    shown: usize,
-    /// A ` ▲ <first> more` row opens the section.
-    cue_above: bool,
-    /// How many are hidden below: a ` ▼ <n> more` row ends the section when not 0.
-    below: usize,
+    pub shown: usize,
+    /// A ` ▲ <first> more` row opens the list.
+    pub cue_above: bool,
+    /// How many are hidden below: a ` ▼ <n> more` row ends the list when not 0.
+    pub below: usize,
 }
 
-/// The largest offset for `count` pull requests in a section of `height` rows: the last one reaches the bottom (under the
-/// `▲` cue, which takes a row). 0 when every one fits.
-fn max_scroll(count: usize, height: usize) -> usize {
-    if count * 2 <= height {
+/// The largest offset for `count` items of `item_rows` rows each in a list of `height` rows: the last one reaches the
+/// bottom (under the `▲` cue, which takes a row). 0 when every one fits.
+pub(crate) fn max_scroll(count: usize, height: usize, item_rows: usize) -> usize {
+    if count * item_rows <= height {
         return 0;
     }
-    count.saturating_sub((height.saturating_sub(1)) / 2).min(count.saturating_sub(1))
+    count.saturating_sub((height.saturating_sub(1)) / item_rows).min(count.saturating_sub(1))
 }
 
-/// The window at offset `scroll` (clamped to [`max_scroll`]). A cue takes one row of the section, and a pull request is whole.
-fn window(count: usize, height: usize, scroll: usize) -> Window {
-    let first = scroll.min(max_scroll(count, height));
+/// The window at offset `scroll` (clamped to [`max_scroll`]). A cue takes one row of the list, and an item is whole.
+pub(crate) fn window(count: usize, height: usize, item_rows: usize, scroll: usize) -> Window {
+    let first = scroll.min(max_scroll(count, height, item_rows));
     let cue_above = first > 0 && height > 0;
     let room = height - usize::from(cue_above);
     let left = count - first;
-    if left * 2 <= room {
+    if left * item_rows <= room {
         return Window { first, shown: left, cue_above, below: 0 };
     }
-    let shown = room.saturating_sub(1) / 2;
+    let shown = room.saturating_sub(1) / item_rows;
     Window { first, shown, cue_above, below: left - shown }
 }
 
@@ -217,7 +218,7 @@ pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &st
         home,
     );
     let height = usize::from(prs.height);
-    let win = window(w.prs.len(), height, scroll);
+    let win = window(w.prs.len(), height, 2, scroll);
     // The list sits under the `▲` row, if any; whole pull requests only.
     let list = Rect::new(prs.x, prs.y + u16::from(win.cue_above), prs.width, prs.height - u16::from(win.cue_above));
     let shown: Vec<(u16, &OpenPr)> = (list.y..).step_by(2).zip(w.prs.iter().skip(win.first).take(win.shown)).collect();
@@ -258,7 +259,7 @@ pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &st
         f.render_widget(Clear, last);
         f.render_widget(Paragraph::new(Span::styled(note.to_owned(), palette::note())), last);
     }
-    Drawn { hits, prs, max_scroll: max_scroll(w.prs.len(), height), icons }
+    Drawn { hits, prs, max_scroll: max_scroll(w.prs.len(), height, 2), icons }
 }
 
 #[cfg(test)]

@@ -34,16 +34,15 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::args::{PlanArg, PrArg};
-use crate::config::Config;
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, GateHooks, HookOutcome, Refused, Setup};
 use crate::home::{CpdHome, Hook};
 use crate::ids::{PlanId, PrKey};
 use crate::output::Output;
 use crate::plan::Phase;
-use crate::plan::fingerprint::PrSpec;
-use crate::store::Store;
-use row::{PlanRow, PrRow};
+use crate::plan::PrRow;
+use row::PlanPrs;
 
 pub use gh::close_pr;
 
@@ -160,29 +159,15 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
     }
 }
 
-/// What every command opens: `$CPD_HOME`, its config and the store.
-struct Env {
-    home: CpdHome,
-    config: Config,
-    store: Store,
-}
-
 impl Env {
-    fn open() -> Result<Env, CpdError> {
-        let home = CpdHome::from_env()?;
-        let config = Config::load(&home)?;
-        let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-        Ok(Env { home, config, store })
-    }
-
-    fn plan(&mut self, id: &PlanId) -> Result<PlanRow, CpdError> {
+    fn plan(&mut self, id: &PlanId) -> Result<PlanPrs, CpdError> {
         self.store.read(|conn| row::load(conn, id))
     }
 }
 
 /// `illegal_phase` (exit 3): `command` needs a Plan in phase `needs`.
-fn illegal_phase(plan: &PlanRow, command: &str, needs: &str) -> CpdError {
-    wrong_phase(&plan.id, plan.phase, command, needs)
+fn illegal_phase(plan: &PlanPrs, command: &str, needs: &str) -> CpdError {
+    wrong_phase(&plan.plan.id, plan.plan.phase, command, needs)
 }
 
 /// A per-PR Gate log, `run/<plan>/logs/pr-<key>.<hook>.log` (§7.6): `pre-start`
@@ -215,14 +200,14 @@ fn plan_phase(conn: &rusqlite::Connection, plan: &PlanId) -> Result<Phase, CpdEr
     let phase: String = conn
         .query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))
         .optional()?
-        .ok_or_else(|| CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str()))?;
+        .ok_or_else(|| CpdError::plan_not_found(plan))?;
     Phase::parse(&phase)
-        .ok_or_else(|| CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: Plan {plan} has phase {phase:?}.")))
+        .ok_or_else(|| CpdError::bad_row(format!("Plan {plan} has phase {phase:?}")))
 }
 
 /// The PR `key` among `prs`, else `pr_not_found` (exit 4).
-fn find_pr<'a>(prs: &'a [PrSpec], plan: &PlanId, key: &PrKey) -> Result<&'a PrSpec, CpdError> {
-    prs.iter().find(|p| p.key == key.as_str()).ok_or_else(|| {
+fn find_pr<'a>(prs: &'a [PrRow], plan: &PlanId, key: &PrKey) -> Result<&'a PrRow, CpdError> {
+    prs.iter().find(|p| p.key == *key).ok_or_else(|| {
         CpdError::new(ErrorCode::PrNotFound, format!("No PR {key} in Plan {plan}."))
             .with("plan", plan.as_str())
             .with("pr", key.as_str())
@@ -241,15 +226,15 @@ fn sorted_needs(needs: &[PrKey]) -> Result<Vec<String>, CpdError> {
 
 /// Every key of `needs` is a PR of the Plan other than `own` (`needs_unknown`)
 /// and none is `cancelled` (`needs_unavailable`) (§9.4, §9.5).
-fn check_needs(prs: &[PrSpec], plan: &PlanId, own: Option<&PrKey>, needs: &[String]) -> Result<(), CpdError> {
+fn check_needs(prs: &[PrRow], plan: &PlanId, own: Option<&PrKey>, needs: &[String]) -> Result<(), CpdError> {
     let unknown: Vec<String> =
-        needs.iter().filter(|n| own.is_some_and(|o| o.as_str() == n.as_str()) || !prs.iter().any(|p| p.key == **n)).cloned().collect();
+        needs.iter().filter(|n| own.is_some_and(|o| o.as_str() == n.as_str()) || !prs.iter().any(|p| p.key.as_str() == n.as_str())).cloned().collect();
     if !unknown.is_empty() {
         return Err(CpdError::new(ErrorCode::NeedsUnknown, format!("Plan {plan} has no PR {} to need.", unknown.join(", ")))
             .with("plan", plan.as_str())
             .with("needs", unknown));
     }
-    let unavailable: Vec<String> = needs.iter().filter(|n| prs.iter().any(|p| p.key == **n && p.status == "cancelled")).cloned().collect();
+    let unavailable: Vec<String> = needs.iter().filter(|n| prs.iter().any(|p| p.key.as_str() == n.as_str() && p.status == "cancelled")).cloned().collect();
     if !unavailable.is_empty() {
         return Err(CpdError::new(ErrorCode::NeedsUnavailable, format!("A PR cannot need the cancelled PR {}.", unavailable.join(", ")))
             .with("plan", plan.as_str())
@@ -274,7 +259,7 @@ fn gate_hooks<'a>(env: &Env, plan: &PlanId, pr: &'a PrRow) -> GateHooks<'a> {
 /// worktrees swept, a gate worktree detached at `sha`, `pre-start` and `pre-merge`
 /// in it, the gate worktree removed. `again` is the command the Lead runs after fixing it.
 fn gate(env: &Env, plan: &PlanId, pr: &PrRow, sha: &str, again: &str) -> Result<(), CpdError> {
-    git::gate(&pr.repo, plan, &pr.key, sha, &gate_hooks(env, plan, pr))?.map_err(|r| refusal(plan, pr, sha, r, again))
+    git::gate(std::path::Path::new(&pr.repo), plan, &pr.key, sha, &gate_hooks(env, plan, pr))?.map_err(|r| refusal(plan, pr, sha, r, again))
 }
 
 /// A Gate that did not pass (contract §7.3, §7.6 step 3): a `pre-merge` that failed

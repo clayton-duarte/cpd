@@ -4,7 +4,8 @@
 
 use serde_json::json;
 
-use super::row::{PlanRow, PrRow};
+use super::row::PlanPrs;
+use crate::plan::PrRow;
 use super::{Args, Env, gate, illegal_phase};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, Push};
@@ -24,7 +25,7 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
     let lead = pr.lead(&id)?.clone();
 
     // 1. G, read once; 2. the Gate on it, in a gate worktree of its own.
-    let sha = git::run::rev_parse(&pr.repo, &format!("refs/heads/{branch}"))?;
+    let sha = git::run::rev_parse(std::path::Path::new(&pr.repo), &format!("refs/heads/{branch}"))?;
     gate(&env, &id, pr, &sha, &format!("pr push --pr {key}"))?;
 
     // The PR is read again: merged during the Gate, nothing is pushed.
@@ -52,13 +53,13 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
 
 /// The selected PR must be `open` (`illegal_transition`); a Plan that has not
 /// been locked is `illegal_phase`.
-fn require_open<'a>(plan: &'a PlanRow, args: &Args) -> Result<&'a PrRow, CpdError> {
-    if matches!(plan.phase, Phase::Grounding | Phase::Plan) {
+fn require_open<'a>(plan: &'a PlanPrs, args: &Args) -> Result<&'a PrRow, CpdError> {
+    if matches!(plan.plan.phase, Phase::Grounding | Phase::Plan) {
         return Err(illegal_phase(plan, COMMAND, "deploy"));
     }
     let pr = plan.select(&args.pr)?;
     if pr.status != "open" {
-        return Err(pr.refuse(&plan.id, COMMAND, "open"));
+        return Err(pr.refuse(&plan.plan.id, COMMAND, "open"));
     }
     Ok(pr)
 }

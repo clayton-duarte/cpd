@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use super::archive::{Objects, refuse_chat_slot};
 use super::{CancelArgs, Env, jobs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::host::Tmux;
 use crate::ids::{AttemptId, ContextId, PlanId, SessionId};
 use crate::output::Output;
@@ -148,8 +148,7 @@ fn expire_escalations(store: &mut Store, plan: &PlanId, reason: &str) -> Result<
             )?;
             let attempt = AttemptId::parse(attempt)?;
             let text = format!("Escalation {id} of Attempt {attempt} expired: Plan {plan} was cancelled. See: cpd attempt show {attempt} --plan {plan}");
-            let data = json!({"escalation": id, "reason": reason});
-            append(tx, NewEvent::new(Kind::EscalationExpired, text, data).plan(plan.clone()).job(attempt.job().clone()).attempt(attempt))?;
+            append(tx, NewEvent::escalation_expired(text, id, reason).plan(plan.clone()).job(attempt.job().clone()).attempt(attempt))?;
         }
         Ok(!open.is_empty())
     })
@@ -180,7 +179,7 @@ fn archive_rows(store: &mut Store, plan: &PlanId, sessions: &[SessionId]) -> Res
         let set = "SET archived_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE id = ?1 AND archived_at IS NULL";
         let mut changed = Vec::new();
         if tx.execute(&format!("UPDATE plans {set}"), [plan.as_str()])? > 0 {
-            let event = NewEvent::new(Kind::PlanArchived, format!("Plan {plan} archived."), json!({"archived": true}));
+            let event = NewEvent::plan_archived(format!("Plan {plan} archived."), true);
             append(tx, event.plan(plan.clone()))?;
             changed.push(json!({"kind": "plan", "id": plan}));
         }
@@ -188,7 +187,7 @@ fn archive_rows(store: &mut Store, plan: &PlanId, sessions: &[SessionId]) -> Res
             if tx.execute(&format!("UPDATE sessions {set}"), [id.as_str()])? > 0 {
                 let (name, context): (String, String) =
                     tx.query_row("SELECT name, context FROM sessions WHERE id = ?1", [id.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?;
-                let event = NewEvent::new(Kind::SessionArchived, format!("Session {name} archived."), json!({"archived": true}));
+                let event = NewEvent::session_archived(format!("Session {name} archived."), true);
                 append(tx, event.session(id.clone()).context(ContextId::parse(&context)?).plan(plan.clone()))?;
                 changed.push(json!({"kind": "session", "id": id}));
             }

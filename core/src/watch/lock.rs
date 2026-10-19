@@ -5,15 +5,13 @@
 use std::fs::{self, File, OpenOptions};
 use std::path::Path;
 
-use nix::errno::Errno;
-use nix::fcntl::{Flock, FlockArg};
-
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
+use crate::lock;
 
 /// The engine's lock, held while this value lives.
 pub(super) struct WatchLock {
-    _flock: Flock<File>,
+    _file: File,
 }
 
 fn failed(path: &Path, what: impl std::fmt::Display) -> CpdError {
@@ -29,17 +27,11 @@ fn open(path: &Path) -> Result<File, CpdError> {
     OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| failed(path, e))
 }
 
-/// Tries `flock(LOCK_EX | LOCK_NB)` on a fresh descriptor; `None` when held.
-fn try_lock(path: &Path, arg: FlockArg) -> Result<Option<Flock<File>>, CpdError> {
-    let mut file = open(path)?;
-    loop {
-        match Flock::lock(file, arg) {
-            Ok(flock) => return Ok(Some(flock)),
-            Err((_, Errno::EWOULDBLOCK)) => return Ok(None),
-            Err((back, Errno::EINTR)) => file = back,
-            Err((_, errno)) => return Err(failed(path, format!("flock failed: {errno}"))),
-        }
-    }
+/// Tries the exclusive lock on a fresh descriptor; `None` when held.
+fn try_take(path: &Path) -> Result<Option<File>, CpdError> {
+    let file = open(path)?;
+    let taken = lock::try_lock(&file).map_err(|e| failed(path, format!("flock failed: {e}")))?;
+    Ok(taken.then_some(file))
 }
 
 impl WatchLock {
@@ -47,8 +39,8 @@ impl WatchLock {
     /// another engine holds it.
     pub(super) fn take(home: &CpdHome) -> Result<WatchLock, CpdError> {
         let path = home.watch_lock();
-        match try_lock(&path, FlockArg::LockExclusiveNonblock)? {
-            Some(flock) => Ok(WatchLock { _flock: flock }),
+        match try_take(&path)? {
+            Some(file) => Ok(WatchLock { _file: file }),
             None => Err(CpdError::new(ErrorCode::WatchRunning, "The engine is already running on this machine: there is one per machine.")
                 .with("lock", path.display().to_string())),
         }
@@ -58,5 +50,5 @@ impl WatchLock {
 /// Whether an engine holds the lock (commands.md §12 `--ensure`): probes it
 /// and lets go at once.
 pub(super) fn held(home: &CpdHome) -> Result<bool, CpdError> {
-    Ok(try_lock(&home.watch_lock(), FlockArg::LockExclusiveNonblock)?.is_none())
+    Ok(try_take(&home.watch_lock())?.is_none())
 }

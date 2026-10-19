@@ -17,18 +17,16 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nix::errno::Errno;
-use nix::fcntl::{Flock, FlockArg};
 use nix::sys::signal::kill;
 use nix::unistd::Pid;
 use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, ErrorCode as SqliteCode, OpenFlags, Transaction, TransactionBehavior};
 use serde_json::{Value, json};
-use time::OffsetDateTime;
-use time::macros::format_description;
 
 use crate::context::legacy;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
+use crate::lock;
 
 use schema::{LEGACY, Named};
 pub use schema::{SCHEMA_HASH, VERSION, canonical_hash};
@@ -425,29 +423,38 @@ impl Store {
 
     /// Runs `f` in a deferred read transaction on the WAL snapshot (§4.2): it
     /// never waits for a writer. Keep it short: one query or one command's reads.
-    /// Writes to the tables with history triggers fail inside it: `cpd_txn()` refuses outside
-    /// [`Store::write`]. Other tables are not guarded (docs/research/quality-store.md, store-G3).
+    /// Nothing inside it writes: `PRAGMA query_only` is on for its duration, so
+    /// DML, DDL and `TEMP` tables fail with SQLite's `attempt to write a
+    /// readonly database` (store-G3), triggers or not.
     pub fn read<T>(&mut self, f: impl FnOnce(&Connection) -> Result<T, CpdError>) -> Result<T, CpdError> {
         let (path, busy_ms) = (self.path.clone(), self.busy_ms);
         let mut wait = Wait::new();
         let result = (|| {
-            let tx = loop {
-                let begun = Transaction::new(&mut self.conn, TransactionBehavior::Deferred).map_err(CpdError::from).and_then(|tx| {
-                    // A persisting reader takes its snapshot here, where a busy store is waited out.
-                    if self.persist.is_some() {
-                        tx.query_row("SELECT 1 FROM sqlite_schema LIMIT 1", [], |_| Ok(())).or_else(|e| match e {
-                            rusqlite::Error::QueryReturnedNoRows => Ok(()),
-                            e => Err(e),
-                        })?;
+            self.conn.pragma_update(None, "query_only", true)?;
+            let read: Result<T, CpdError> = (|| {
+                let tx = loop {
+                    let begun = Transaction::new(&mut self.conn, TransactionBehavior::Deferred).map_err(CpdError::from).and_then(|tx| {
+                        // A persisting reader takes its snapshot here, where a busy store is waited out.
+                        if self.persist.is_some() {
+                            tx.query_row("SELECT 1 FROM sqlite_schema LIMIT 1", [], |_| Ok(())).or_else(|e| match e {
+                                rusqlite::Error::QueryReturnedNoRows => Ok(()),
+                                e => Err(e),
+                            })?;
+                        }
+                        Ok(tx)
+                    });
+                    if let Some(tx) = settle(&mut self.persist, &mut wait, begun.map_err(|e| enrich(e, &path, busy_ms)))? {
+                        break tx;
                     }
-                    Ok(tx)
-                });
-                if let Some(tx) = settle(&mut self.persist, &mut wait, begun.map_err(|e| enrich(e, &path, busy_ms)))? {
-                    break tx;
-                }
-            };
-            let value = f(&tx)?;
-            tx.commit()?;
+                };
+                let value = f(&tx)?;
+                tx.commit()?;
+                Ok(value)
+            })();
+            // Off again however the read ended: the next `write` needs it.
+            let off = self.conn.pragma_update(None, "query_only", false);
+            let value = read?;
+            off?;
             Ok(value)
         })();
         result.map_err(|e| enrich(e, &path, busy_ms))
@@ -596,7 +603,7 @@ fn archive_old_stores(home: &CpdHome) -> Result<(), CpdError> {
 /// `lock_timeout` (exit 5) naming the lock file and the time waited (§4.3). A
 /// holder that hangs does not hang every other cpd command. Dropping the
 /// result releases it.
-fn setup_lock(home: &CpdHome, busy_ms: u64) -> Result<Flock<File>, CpdError> {
+fn setup_lock(home: &CpdHome, busy_ms: u64) -> Result<File, CpdError> {
     let failed = |what: &str, path: &Path, e: std::io::Error| {
         CpdError::new(ErrorCode::StoreFailed, format!("Cannot {what} {}: {e}.", path.display()))
             .with("path", path.display().to_string())
@@ -605,14 +612,11 @@ fn setup_lock(home: &CpdHome, busy_ms: u64) -> Result<Flock<File>, CpdError> {
     fs::create_dir_all(&dir).map_err(|e| failed("create", &dir, e))?;
     // `home.rs` has no method for this lock; it is the store's alone.
     let path = dir.join("store.lock");
-    let mut file =
-        OpenOptions::new().create(true).append(true).open(&path).map_err(|e| failed("open", &path, e))?;
+    let file = OpenOptions::new().create(true).append(true).open(&path).map_err(|e| failed("open", &path, e))?;
     let deadline = Instant::now() + Duration::from_millis(busy_ms);
     loop {
-        match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
-            Ok(lock) => return Ok(lock),
-            Err((f, Errno::EWOULDBLOCK | Errno::EINTR)) => file = f,
-            Err((_, errno)) => return Err(failed("lock", &path, errno.into())),
+        if lock::try_lock(&file).map_err(|e| failed("lock", &path, e))? {
+            return Ok(file);
         }
         if Instant::now() >= deadline {
             return Err(CpdError::new(
@@ -720,16 +724,9 @@ fn begin_txn(conn: &Connection, current: &AtomicI64, command: &str, caller: &Cal
     current.store(id, Ordering::SeqCst);
     conn.execute(
         "INSERT INTO txns (id, at, command, pid, session, cwd) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![id, now(), command, caller.pid, caller.session, caller.cwd],
+        rusqlite::params![id, crate::clock::now(), command, caller.pid, caller.session, caller.cwd],
     )?;
     Ok(id)
-}
-
-/// Now, as §1.3 writes times: RFC 3339 UTC with milliseconds.
-fn now() -> String {
-    OffsetDateTime::now_utc()
-        .format(format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"))
-        .expect("a UTC time always formats")
 }
 
 /// Adds the database's path, and to `store_busy` its `busy_ms` and the
@@ -756,6 +753,21 @@ fn enrich(e: CpdError, path: &Path, busy_ms: u64) -> CpdError {
         _ => e,
     }
 }
+
+/// The messages the triggers raise with `RAISE(ABORT, '…')` that are a typed
+/// refusal (§4.4), with the code and the text of each. A new typed trigger
+/// error is one more row here. The others (`append_only: …`, `… must be
+/// cpd_txn()`) stay `store_failed` by design.
+const TRIGGER_ERRORS: [(&str, ErrorCode, &str); 4] = [
+    ("job_locked", ErrorCode::JobLocked, "The Job is Locked: its Spec and Dependencies cannot change."),
+    ("illegal_transition", ErrorCode::IllegalTransition, "The state change is not a legal transition (§3)."),
+    (
+        "pr_locked",
+        ErrorCode::PrLocked,
+        "The PR is Locked: its repo, base and needs cannot change after the Plan's lock.",
+    ),
+    ("needs_other_pr", ErrorCode::NeedsOtherPr, "A Dependency can only link Jobs of the same PR."),
+];
 
 /// Who holds the write lock (§4.2). A process that holds it records itself in
 /// `locks/store-writer-<pid>.json` (one file per process, so none removes
@@ -872,7 +884,7 @@ impl Holder {
         use std::io::Write;
         let dir = db.parent().unwrap_or(Path::new(".")).join("run");
         let line = json!({
-            "at": now(), "pid": std::process::id(), "command": command,
+            "at": crate::clock::now(), "pid": std::process::id(), "command": command,
             "argv": std::env::args().collect::<Vec<_>>().join(" "), "phases": phases,
         });
         let _ = fs::create_dir_all(&dir).and_then(|()| {
@@ -908,33 +920,48 @@ impl From<rusqlite::Error> for CpdError {
                 "Another cpd process held the database's write lock for longer than store_busy_ms.",
             )
             .with("sqlite_message", message),
-            Some(f) if f.code == SqliteCode::ConstraintViolation && message == "job_locked" => {
-                CpdError::new(ErrorCode::JobLocked, "The Job is Locked: its Spec and Dependencies cannot change.")
-                    .with("sqlite_message", message)
+            Some(f) if f.code == SqliteCode::ConstraintViolation => {
+                match TRIGGER_ERRORS.iter().find(|(raised, ..)| *raised == message) {
+                    Some(&(_, code, text)) => CpdError::new(code, text).with("sqlite_message", message),
+                    None => store_failed(sqlite, message),
+                }
             }
-            Some(f) if f.code == SqliteCode::ConstraintViolation && message == "illegal_transition" => {
-                CpdError::new(ErrorCode::IllegalTransition, "The state change is not a legal transition (§3).")
-                    .with("sqlite_message", message)
-            }
-            Some(f) if f.code == SqliteCode::ConstraintViolation && message == "pr_locked" => CpdError::new(
-                ErrorCode::PrLocked,
-                "The PR is Locked: its repo, base and needs cannot change after the Plan's lock.",
-            )
-            .with("sqlite_message", message),
-            Some(f) if f.code == SqliteCode::ConstraintViolation && message == "needs_other_pr" => {
-                CpdError::new(ErrorCode::NeedsOtherPr, "A Dependency can only link Jobs of the same PR.")
-                    .with("sqlite_message", message)
-            }
-            _ => CpdError::new(ErrorCode::StoreFailed, format!("The database failed: {message}."))
-                .with("sqlite_code", sqlite.map_or(Value::Null, |f| Value::from(f.extended_code)))
-                .with("sqlite_message", message),
+            _ => store_failed(sqlite, message),
         }
     }
+}
+
+fn store_failed(sqlite: Option<rusqlite::ffi::Error>, message: String) -> CpdError {
+    CpdError::new(ErrorCode::StoreFailed, format!("The database failed: {message}."))
+        .with("sqlite_code", sqlite.map_or(Value::Null, |f| Value::from(f.extended_code)))
+        .with("sqlite_message", message)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// store-G4: every message a trigger raises is a typed refusal or one of the
+    /// two untyped families, so a new `RAISE` cannot fall to `store_failed` by accident.
+    #[test]
+    fn every_message_a_trigger_raises_is_typed_or_untyped_by_design() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/store/migrations");
+        let mut seen = std::collections::BTreeSet::new();
+        for file in fs::read_dir(dir).unwrap() {
+            let sql = fs::read_to_string(file.unwrap().path()).unwrap();
+            for part in sql.split("RAISE(ABORT, '").skip(1) {
+                seen.insert(part.split('\'').next().unwrap().to_owned());
+            }
+        }
+        assert!(seen.len() >= 8, "{seen:?}");
+        for message in seen {
+            let failure = rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_TRIGGER);
+            let err = CpdError::from(rusqlite::Error::SqliteFailure(failure, Some(message.clone())));
+            let untyped = message.starts_with("append_only: ") || message.ends_with(" must be cpd_txn()");
+            assert_eq!(err.code() == ErrorCode::StoreFailed, untyped, "{message}: {err:?}");
+            assert_eq!(err.details()["sqlite_message"], message);
+        }
+    }
 
     #[test]
     fn a_failed_migration_leaves_foreign_keys_on_and_legacy_alter_table_off() {

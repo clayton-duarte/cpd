@@ -20,7 +20,7 @@ use time::format_description::well_known::Rfc3339;
 use super::SOURCE;
 use super::engine::{Engine, metrics};
 use super::report::{About, Step};
-use crate::driver::ledger::{self, Cause, End, Ladder};
+use crate::attempt::ledger::{self, Cause, End, Ladder, Stage};
 use crate::driver::lock::{self, Free};
 use crate::driver::worker;
 use crate::error::{CpdError, ErrorCode};
@@ -124,7 +124,7 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
     let catalog = engine.catalog()?;
     let ladder = Ladder { catalog: &catalog, retry_cap: engine.config.retry_cap };
     let metrics = metrics(target.worker_session.as_ref());
-    engine.store.write(SOURCE, |tx| ledger::end(tx, &target, &end, metrics.as_ref(), &ladder))?;
+    engine.store.write(SOURCE, |tx| ledger::end(tx, &target, &end, metrics.as_ref(), &ladder, Stage::Driver))?;
     // A9: after the end is committed, while the lock is still held.
     lock::remove(&engine.home, plan, id)?;
     drop(lock);

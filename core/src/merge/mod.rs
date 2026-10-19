@@ -6,12 +6,11 @@
 //! No Gate runs here (R19): a merge is checked by the quick check at submit,
 //! the tamper check (step 4) and a clean rebase (step 5).
 
-mod ledger;
-mod lock;
 mod recover;
 
 use serde_json::Value;
 
+use crate::attempt::ledger::{self, Stage};
 use crate::config::{Catalog, Config};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, run::run};
@@ -19,8 +18,9 @@ use crate::home::CpdHome;
 use crate::ids::{AttemptId, PlanId};
 use crate::store::Store;
 
-pub use ledger::{Attempt, End, Failure, Ladder, end_merging, load};
-pub use lock::{DriverLock, take_free_driver_lock};
+// The merge's causes are the shared `Cause`; `Failure` is the name its callers know.
+pub use crate::attempt::ledger::{Attempt, Cause as Failure, End, Ladder, load};
+pub use crate::driver::lock::{Free as DriverLock, take_free_driver_lock};
 pub use recover::{Recovered, recover_attempt};
 
 /// How many times step 8 goes back to step 2 when the Lead Branch moved,
@@ -72,7 +72,7 @@ pub fn merge(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, attempt: &AttemptI
     let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };
     // Step 10, and every other end.
     store.write(ctx.source, |tx| {
-        ledger::end_merging(tx, &target, &end, metrics.as_ref(), &ladder)?;
+        ledger::end(tx, &target, &end, metrics.as_ref(), &ladder, Stage::Merge)?;
         if let Some(e) = &stale {
             ledger::append_error(tx, &target, ctx.source, e, recover::stale_text(&target, e))?;
         }
@@ -93,11 +93,11 @@ type Stepped = (End, Option<CpdError>, Option<CpdError>);
 /// or worktree sync, because the Attempt has no commits and the Lead Branch does
 /// not move; then the Attempt ends `merged` with `merged_sha = old`.
 fn review_steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
-    if store.read(|conn| ledger::cancel_request(conn, target))?.is_some() {
+    if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
         return Ok((End::Cancelled, None, None));
     }
     let old = git::run::rev_parse(&target.repo, &format!("refs/heads/{}", target.lead_branch))?;
-    if store.read(|conn| ledger::cancel_request(conn, target))?.is_some() {
+    if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
         return Ok((End::Cancelled, None, None));
     }
     Ok((End::Merged { sha: old }, None, None))
@@ -120,7 +120,7 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
     let mut retries = 0;
     loop {
         // 1. Cancel check.
-        if store.read(|conn| ledger::cancel_request(conn, target))?.is_some() {
+        if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
             return Ok((End::Cancelled, None, None));
         }
         // 2. Snapshot.
@@ -152,7 +152,7 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
         }
         // 6. Removed by R19: no Gate at the merge.
         // 7. Cancel check again: the last safe point.
-        if store.read(|conn| ledger::cancel_request(conn, target))?.is_some() {
+        if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
             return Ok((End::Cancelled, None, None));
         }
         // 8. Fast-forward with a compare-and-swap.
