@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ev, Fixture, ID, planShow, settle, stateCalls, waitFor } from "./fake.ts";
+import { ev, Fixture, ID, planShow, stateCalls, waitFor } from "./fake.ts";
 
 /** hs-d278: a run that answered the User ends with `session state idle --reply`; no other run does. */
 
@@ -78,7 +78,7 @@ test("typing during an Event-started run makes it a reply run; the next run star
   await waitFor("working and idle", () => states(f).length === 2);
   assert.deepEqual(states(f), [WORKING, IDLE_REPLY]);
 
-  await settle(); // the first run's calls are done
+  await f.quiet(); // the first run's calls are done
   await runOf(f, eventStart);
   await waitFor("the second run", () => states(f).length === 4);
   assert.deepEqual(states(f).slice(2), [WORKING, IDLE], "the mark was cleared at the run start");
@@ -106,6 +106,6 @@ test("a settled that leaves pi busy reports nothing; the run's final idle carrie
   await f.pi.fire("agent_settled", { aborted: false });
   await f.pi.fire("agent_settled", { aborted: false }); // again: nothing new
   await waitFor("working and idle", () => states(f).length === 2);
-  await settle();
+  await f.quiet();
   assert.deepEqual(states(f), [WORKING, IDLE_REPLY]);
 });
