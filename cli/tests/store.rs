@@ -1193,3 +1193,13 @@ fn version_refuses_a_store_whose_floor_it_lacks() {
     assert_eq!(out["store"]["unknown"], json!(["29991231T2359-breaking"]), "{out}");
     assert_eq!(out["store_schema"], 1001);
 }
+
+/// `SQLITE_BUSY` (5) and `SQLITE_LOCKED` (6) are both `store_busy` (contract §4.2).
+#[test]
+fn sqlite_busy_and_sqlite_locked_are_store_busy() {
+    for primary in [5, 6] {
+        let sqlite = rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(primary), None);
+        let err = CpdError::from(sqlite);
+        assert_eq!(err.code(), ErrorCode::StoreBusy, "SQLite code {primary}: {err:?}");
+    }
+}

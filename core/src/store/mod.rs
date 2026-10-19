@@ -579,7 +579,7 @@ fn enrich(e: CpdError, path: &Path, busy_ms: u64) -> CpdError {
 }
 
 /// A SQLite failure, as Escalation `rs-store-a1-q1` decided: busy after the
-/// busy timeout is `store_busy`; the triggers' `RAISE(ABORT, 'job_locked')`,
+/// busy timeout is `store_busy`, and so is `SQLITE_LOCKED`; the triggers' `RAISE(ABORT, 'job_locked')`,
 /// `'illegal_transition'`, `'pr_locked'` and `'needs_other_pr'` (§4.4) are
 /// those refusals; anything else is `store_failed` with `sqlite_code` and
 /// `sqlite_message`.
@@ -591,7 +591,7 @@ impl From<rusqlite::Error> for CpdError {
             _ => None,
         };
         match sqlite {
-            Some(f) if f.code == SqliteCode::DatabaseBusy => CpdError::new(
+            Some(f) if matches!(f.code, SqliteCode::DatabaseBusy | SqliteCode::DatabaseLocked) => CpdError::new(
                 ErrorCode::StoreBusy,
                 "Another cpd process held the database's write lock for longer than store_busy_ms.",
             )

@@ -686,6 +686,34 @@ fn open_and_park_keep_at_most_one_placeholder_only_in_the_slot() {
 }
 
 #[test]
+fn open_writes_session_moved_before_the_rename_so_a_failing_rename_keeps_the_swap_recorded() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd(&env);
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
+    cockpit(&env);
+    env.cpd(&["session", "open", LEAD1]).ok();
+
+    // A tmux that fails `rename-window` and runs everything else on the real one.
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|d| d.join("tmux"))
+        .find(|p| p.is_file())
+        .expect("a tmux on PATH");
+    env.fake("tmux", &format!("case \"$*\" in *rename-window*) echo 'rename-window: refused' >&2; exit 1;; esac\nexec '{}' \"$@\"", real.display()));
+
+    let run = env.cpd(&["session", "open", LEAD2]);
+    refused(&run, "tmux_failed", 1);
+    assert_eq!(slot(&env).session, LEAD2, "the swap happened");
+    let moved: Vec<(String, String)> = events(&env, "session-moved")
+        .iter()
+        .map(|e| (e["session"].as_str().unwrap().to_owned(), e["data"]["place"].as_str().unwrap().to_owned()))
+        .collect();
+    let expected = [(LEAD1, "chat"), (LEAD2, "chat"), (LEAD1, "parked")];
+    assert_eq!(moved, expected.map(|(s, p)| (s.to_owned(), p.to_owned())));
+    assert_eq!((show(&env, LEAD1)["place"].clone(), show(&env, LEAD2)["place"].clone()), (json!("parked"), json!("chat")));
+}
+
+#[test]
 fn open_and_park_take_a_context_s_manager_and_park_it_in_its_context_window() {
     let env = TestEnv::new();
     setup(&env);
@@ -1567,20 +1595,21 @@ fn a_refused_archive_prints_the_refusal_and_offers_the_resume_in_place() {
 fn a_reload_is_not_a_quit_even_though_pi_exits_0_on_sigterm() {
     let env = TestEnv::new();
     quit_fixture(&env);
-    // A copy of cpd that the test can replace, as an install does.
-    let copy = env.home().join("cpd-installed");
-    fs::copy(CPD, &copy).unwrap();
-    env.fake("cpd", &format!("case \"$1 $2 $3\" in \"tui view chat\"|\"tui view history\") exec sleep {SLEEP_SECONDS};; esac\nexec '{}' \"$@\"", copy.display()));
-    // An idle Lead at a finished turn, parked: the reload is due at once.
+    // An idle Lead at a finished turn, parked: the restart for a new pi is due at once.
     pi_file(&env, "side", true);
     exec_sql(&env, "UPDATE sessions SET state_at = '2020-01-01T00:00:00Z' WHERE id = 'side'");
+    // pi's install, as the wrapper watches it (a cpd install does not restart pi, hs-d210).
+    let current = env.home().join(".pi/agent/install/current-version");
+    fs::create_dir_all(current.parent().unwrap()).unwrap();
+    fs::write(&current, "1.2.0\n").unwrap();
     std::thread::sleep(Duration::from_secs(2));
     let pane = run_lead_with_pane(&env, "side");
     wait_until("pi", || env.calls("pi").len() == 1);
 
-    let next = env.home().join("cpd-next");
-    fs::copy(CPD, &next).unwrap();
-    fs::rename(&next, &copy).unwrap();
+    // A new pi, as pi's own update installs it.
+    let next = current.with_extension("tmp");
+    fs::write(&next, "1.3.0\n").unwrap();
+    fs::rename(&next, &current).unwrap();
     wait_until("pi, started again", || env.calls("pi").len() == 2);
     assert!(pane_exists(&env, &pane));
     assert!(!session_archived(&env, "side"));
