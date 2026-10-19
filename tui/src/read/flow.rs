@@ -113,7 +113,8 @@ pub struct JobNode {
     pub seq: i64,
     pub title: String,
     pub status: JobStatus,
-    pub tier: Tier,
+    /// None for a stub draft (hs-d241): its Tier is not chosen yet.
+    pub tier: Option<Tier>,
     /// Keys of the Jobs it needs, sorted.
     pub needs: Vec<JobKey>,
     /// Added after the Plan was locked (PR feedback).
@@ -283,7 +284,7 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
             Ok(JobNode {
                 pr: id("PR key", &j.pr, PrKey::parse)?,
                 status: JobStatus::parse(&format!("{what} has status"), &j.status)?,
-                tier: tier(&what, &j.tier)?,
+                tier: j.tier.as_deref().map(|t| tier(&what, t)).transpose()?,
                 needs: j.needs.iter().map(|n| id("Job key", n, JobKey::parse)).collect::<Result<_, _>>()?,
                 retry_tier: j.retry_tier.as_deref().map(|t| tier(&what, t)).transpose()?,
                 attempts: attempts.remove(j.key.as_str()).unwrap_or_default(),

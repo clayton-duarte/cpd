@@ -70,9 +70,11 @@ fn time_of(what: &str, value: &str) -> Result<OffsetDateTime, CpdError> {
 
 /// The id of a Session's latest `session-state` Event.
 const LATEST_STATE: &str = "(SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-state')";
-/// The id of its latest `session-state` Event with `to: idle`.
+/// The id of its latest finished turn: its latest `session-state` Event from `working` or `blocked` to `idle`
+/// (a start or reload, `stopped` to `idle`, is not one; hs-d242).
 const LATEST_IDLE: &str = "(SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-state'
-                                AND json_extract(e.data, '$.to') = 'idle')";
+                                AND json_extract(e.data, '$.to') = 'idle'
+                                AND json_extract(e.data, '$.from') IN ('working', 'blocked'))";
 /// The id of its latest `session-moved` Event with `place: chat`.
 const LATEST_CHAT: &str = "(SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-moved'
                                 AND json_extract(e.data, '$.place') = 'chat')";
@@ -162,8 +164,8 @@ fn dialogs(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 }
 
 /// `unread`: the rule of the tree's white dot. A Lead, fork or Manager is `idle`, not in the chat slot, and its
-/// latest idle turn is newer than the last time its chat was in the slot (never in the slot counts as older than
-/// everything).
+/// latest finished turn (`working` or `blocked` to `idle`) is newer than the last time its chat was in the slot
+/// (never in the slot counts as older than everything).
 fn unread(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let filter = format!("s.state = 'idle' AND {PLACE} IS NOT 'chat' AND {LATEST_IDLE} > COALESCE({LATEST_CHAT}, 0)");
     Ok(seats(conn, LATEST_IDLE, &filter)?
@@ -464,11 +466,12 @@ mod tests {
             self.store.read(|c| Ok(c.query_row("SELECT max(id) FROM events", [], |r| r.get(0))?)).unwrap()
         }
 
-        /// The Session's state changes: the row and its `session-state` Event.
+        /// The Session's state changes: the row and its `session-state` Event (`from` is the state it was in).
         fn state(&mut self, session: &str, state: &str, label: Option<&str>) -> i64 {
+            let from: String = self.store.read(|c| Ok(c.query_row("SELECT state FROM sessions WHERE id = ?1", [session], |r| r.get(0))?)).unwrap();
             let label = label.map_or("NULL".to_owned(), |l| format!("'{l}'"));
             self.sql(&format!("UPDATE sessions SET state = '{state}', state_label = {label} WHERE id = '{session}'"));
-            self.event("session-state", Some(session), None, T, &format!(r#"{{"from":"working","label":null,"to":"{state}"}}"#))
+            self.event("session-state", Some(session), None, T, &format!(r#"{{"from":"{from}","label":null,"to":"{state}"}}"#))
         }
 
         fn moved(&mut self, session: &str, place: &str) -> i64 {
@@ -624,6 +627,31 @@ mod tests {
         f.state("l-pay", "working", None);
         let idle = f.state("l-pay", "idle", None);
         assert_eq!(one(f.of(Kind::Unread)).event, Some(idle), "a new idle turn after being seen");
+    }
+
+    #[test]
+    fn a_reload_is_not_a_finished_turn() {
+        let mut f = fixture("dispatch");
+        f.state("l-pay", "idle", None);
+        f.moved("l-pay", "chat");
+        f.moved("l-pay", "parked");
+        assert!(f.of(Kind::Unread).is_empty(), "seen");
+        f.state("l-pay", "stopped", None);
+        f.state("l-pay", "idle", None);
+        assert!(f.of(Kind::Unread).is_empty(), "idle -> stopped -> idle is a reload, not a turn");
+    }
+
+    #[test]
+    fn a_working_or_blocked_session_going_idle_after_the_visit_is_unread() {
+        for before in ["working", "blocked"] {
+            let mut f = fixture("dispatch");
+            f.state("l-pay", "idle", None);
+            f.moved("l-pay", "chat");
+            f.moved("l-pay", "parked");
+            f.state("l-pay", before, (before == "blocked").then_some("Which?"));
+            let idle = f.state("l-pay", "idle", None);
+            assert_eq!(one(f.of(Kind::Unread)).event, Some(idle), "{before} -> idle");
+        }
     }
 
     #[test]

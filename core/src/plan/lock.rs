@@ -9,7 +9,7 @@ use serde_json::{Map, Value, json};
 
 use super::fingerprint::plan_fingerprint;
 use super::jobs::{self, Job};
-use super::review::{latest_approved_for, latest_json, no_draft_jobs};
+use super::review::{check_drafts_complete, latest_approved_for, latest_json, no_draft_jobs};
 use super::row::{self, Phase};
 use super::{Env, LockArgs};
 use crate::error::{CpdError, ErrorCode};
@@ -48,6 +48,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     if drafts.is_empty() {
         return Err(no_draft_jobs(&id));
     }
+    check_drafts_complete(&id, &jobs)?;
     let fingerprint = env.store.read(|conn| plan_fingerprint(conn, &id))?;
     let (review, latest) = env.store.read(|conn| Ok((latest_approved_for(conn, &id, &fingerprint)?, latest_json(conn, &id)?)))?;
     let Some(review) = review else {

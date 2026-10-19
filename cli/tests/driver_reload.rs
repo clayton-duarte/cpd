@@ -173,10 +173,10 @@ impl Fx {
         self.install_script(&format!("exec '{CPD}' --version"));
     }
 
-    /// An older `cpd` installed over the driver: its `--version` says it supports
-    /// store schema 5 while the database is at 6.
+    /// A `cpd` that cannot open the store installed over the driver: its `--version` reports a
+    /// refusing verdict (`store.opens` false).
     fn install_older(&self) {
-        self.install_script("echo '{\"ok\":true,\"version\":\"x\",\"schema\":5,\"store_schema\":6}'; exit 0");
+        self.install_script(r#"echo '{"ok":true,"version":"x","schema":1000,"store_schema":1001,"store":{"opens":false,"refusal":{"code":"store_too_new","message":"The database was migrated by a newer cpd."},"unknown":[],"pending":[]}}'; exit 0"#);
     }
 
     fn install_script(&self, on_version: &str) {
@@ -298,8 +298,8 @@ fn a_driver_reloads_at_the_merging_safe_point_and_completes_the_merge() {
     assert_eq!(log.matches("A1: resuming").count(), 0, "{log}");
 }
 
-/// The 00:02Z incident: a cpd that supports an older store schema than the
-/// database's is installed over a running driver. The driver does not `exec` it,
+/// The 00:02Z incident: a cpd that cannot open the database (its verdict, contract §4.5) is
+/// installed over a running driver. The driver does not `exec` it,
 /// says so once, and the Attempt runs on; a cpd that can open the store, installed
 /// next, is exec'd as before.
 #[test]
@@ -316,7 +316,7 @@ fn a_driver_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_into_one
     std::thread::sleep(Duration::from_secs(4));
     let log = fx.log();
     assert_eq!(log.matches(SKIPPED).count(), 1, "{log}");
-    assert!(log.contains(&format!("reload skipped: {} supports store schema 5, the database is at 6", fx.installed.display())), "{log}");
+    assert!(log.contains(&format!("reload skipped: {} cannot open the store: The database was migrated by a newer cpd.", fx.installed.display())), "{log}");
     assert!(!log.contains(RELOAD), "{log}");
     assert!(fx.runs().is_empty(), "the older cpd was exec'd: {:?}", fx.runs());
     assert_eq!(fx.status(), "running");
