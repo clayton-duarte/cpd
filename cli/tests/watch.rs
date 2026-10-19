@@ -213,15 +213,31 @@ impl Fx {
     }
 
     /// Job `key` `running` with Attempt `<key>-a1` in `status`, started at `started_at`, its driver (pid 4242) started.
+    /// A `running` Attempt has its `starting → running` `attempt-status` Event at `started_at` too.
     fn add_running(&self, key: &str, status: &str, started_at: &str) {
+        self.add_running_since(key, status, started_at, (status == "running").then_some(started_at));
+    }
+
+    /// `add_running` with the `starting → running` Event at `running_at` (none: the Attempt is still `starting`).
+    fn add_running_since(&self, key: &str, status: &str, started_at: &str, running_at: Option<&str>) {
         let worktree = self.repo.parent().unwrap().join(format!("pay.pay--{key}-a1"));
+        let event = running_at
+            .map(|at| {
+                format!(
+                    "INSERT INTO events (txn, at, kind, context, plan, job, attempt, text, data)
+                       VALUES (cpd_txn(), '{at}', 'attempt-status', 'ctx', 'pay', '{key}', '{key}-a1', 'running',
+                               '{{\"from\":\"starting\",\"to\":\"running\"}}');"
+                )
+            })
+            .unwrap_or_default();
         self.add_job(
             key,
             &[],
             &format!(
                 "UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = '{key}';
                  INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, driver_pid)
-                   VALUES ('pay', '{key}-a1', '{key}', 1, 'S2', 'ladder', '{status}', 'cpd/pay--{key}-a1', '{}', '{started_at}', 4242);",
+                   VALUES ('pay', '{key}-a1', '{key}', 1, 'S2', 'ladder', '{status}', 'cpd/pay--{key}-a1', '{}', '{started_at}', 4242);
+                 {event}",
                 worktree.display()
             ),
         );
@@ -591,6 +607,9 @@ fn e2_asks_live_drivers_to_stop_on_timeout_or_cancel_with_escalations_pausing_th
         ago(10)
     ));
     fx.add_running("fresh", "running", &ago(1));
+    // 40 minutes since it started, 39 of them waiting for its Lead in `starting` (engine-W11): 1 minute active.
+    fx.add_running_since("waited", "running", &ago(40), Some(&ago(1)));
+    let _waited = fx.live_driver("waited-a1");
 
     let engine = fx.start();
     wait_until("stop requests", || fx.attempt("late-a1").3.is_some() && fx.attempt("gone-a1").3.is_some());
@@ -602,6 +621,7 @@ fn e2_asks_live_drivers_to_stop_on_timeout_or_cancel_with_escalations_pausing_th
     assert_eq!(fx.attempt("gone-a1"), ("running".into(), None, None, Some("cancelled".into())));
     assert_eq!(fx.attempt("asked-a1"), ("running".into(), None, None, None));
     assert_eq!(fx.attempt("fresh-a1"), ("running".into(), None, None, None));
+    assert_eq!(fx.attempt("waited-a1"), ("running".into(), None, None, None));
     // A data write for the driver: no Event of its own.
     assert_eq!(fx.count("job-cancelled") + fx.count("job-failed") + fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
