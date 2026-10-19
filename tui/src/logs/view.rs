@@ -161,3 +161,116 @@ pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
         f.buffer_mut().set_style(row.intersection(area), Modifier::REVERSED);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseEventKind};
+
+    use super::*;
+    use crate::dialog::scroll::WHEEL_ROWS;
+
+    fn events(n: i64) -> Vec<Event> {
+        (0..n)
+            .map(|id| Event {
+                id: id + 1,
+                at: format!("2026-01-03T00:00:{id:02}.000Z"),
+                kind: "plan-phase".into(),
+                context: None,
+                plan: None,
+                session: None,
+                job: None,
+                attempt: None,
+                text: format!("event {id}"),
+                data: serde_json::json!({}),
+            })
+            .collect()
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn wheel(kind: MouseEventKind) -> MouseEvent {
+        MouseEvent { kind, column: 2, row: 2, modifiers: KeyModifiers::NONE }
+    }
+
+    /// The texts on screen, `height` rows of the area (the title's included).
+    fn shown(log: &mut Log, height: u16) -> Vec<String> {
+        log.fit(height);
+        log.visible().iter().map(|e| e.text.clone()).collect()
+    }
+
+    #[test]
+    fn keys_and_the_wheel_scroll_and_scrolling_to_the_bottom_follows_again() {
+        let mut log = Log::new(events(20));
+        // 5 rows: the title and 4 Events
+        assert_eq!(shown(&mut log, 5), ["event 16", "event 17", "event 18", "event 19"]);
+        assert!(log.follows());
+        assert!(log.key(key(KeyCode::Up)) && !log.follows());
+        assert_eq!(shown(&mut log, 5)[0], "event 15");
+        assert!(log.key(key(KeyCode::Char('k'))));
+        assert!(log.key(key(KeyCode::PageUp)));
+        assert_eq!(shown(&mut log, 5)[0], "event 10");
+        assert!(log.mouse(wheel(MouseEventKind::ScrollUp)));
+        assert_eq!(shown(&mut log, 5)[0], format!("event {}", 10 - WHEEL_ROWS));
+        assert!(log.mouse(wheel(MouseEventKind::ScrollDown)) && log.mouse(wheel(MouseEventKind::ScrollDown)));
+        assert!(!log.follows(), "{:?}", shown(&mut log, 5));
+        assert!(log.key(key(KeyCode::PageDown)) && log.key(key(KeyCode::Char('j'))));
+        assert!(log.follows());
+        assert_eq!(shown(&mut log, 5)[3], "event 19");
+        // keys that do not scroll are left to the view
+        for code in [KeyCode::Char('q'), KeyCode::Esc, KeyCode::Enter, KeyCode::Char('J')] {
+            assert!(!log.key(key(code)), "{code:?}");
+        }
+        assert!(!log.mouse(wheel(MouseEventKind::Moved)));
+    }
+
+    #[test]
+    fn the_view_follows_at_the_bottom_and_stays_put_when_scrolled_up() {
+        let mut log = Log::new(events(10));
+        shown(&mut log, 5);
+        log.push(events(12)[10..].to_vec());
+        assert_eq!(shown(&mut log, 5), ["event 8", "event 9", "event 10", "event 11"]);
+        log.mouse(wheel(MouseEventKind::ScrollUp));
+        let before = shown(&mut log, 5);
+        log.push(events(15)[12..].to_vec());
+        assert_eq!(shown(&mut log, 5), before);
+        assert!(!log.follows());
+        // the wheel back to the bottom (the 3 Events that came are 3 rows more), and it follows again
+        log.mouse(wheel(MouseEventKind::ScrollDown));
+        assert!(!log.follows());
+        log.mouse(wheel(MouseEventKind::ScrollDown));
+        assert!(log.follows());
+        log.push(events(16)[15..].to_vec());
+        assert_eq!(shown(&mut log, 5)[3], "event 15");
+    }
+
+    #[test]
+    fn a_taller_area_that_shows_everything_follows_and_cannot_scroll() {
+        let mut log = Log::new(events(3));
+        assert_eq!(shown(&mut log, 10).len(), 3);
+        assert!(log.follows());
+        log.scroll_up(5);
+        assert!(log.follows() && log.visible().len() == 3);
+    }
+
+    #[test]
+    fn the_title_is_the_section_header_and_the_events_start_under_it() {
+        let mut log = Log::at(events(30), 11);
+        log.fit(6);
+        let mut terminal = Terminal::new(TestBackend::new(24, 6)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &log)).unwrap();
+        let mut expected = Terminal::new(TestBackend::new(24, 1)).unwrap();
+        expected.draw(|f| f.render_widget(Paragraph::new(section_header("logs", 24)), f.area())).unwrap();
+        let (got, want) = (terminal.backend().buffer(), expected.backend().buffer());
+        assert!((0..24).all(|x| got[(x, 0)] == want[(x, 0)]), "{got:?}");
+        assert_eq!(got[(3, 0)].symbol(), "l");
+        let row = |y: u16| (0..24).map(|x| got[(x, y)].symbol()).collect::<String>();
+        assert!(row(1).starts_with(" 00:00:08 event 8"), "{}", row(1));
+        // the selected Event (id 11, `event 10`) is reversed, in the middle of the five rows
+        assert!(row(3).contains("event 10") && got[(0, 3)].modifier.contains(Modifier::REVERSED));
+        assert!(!got[(0, 2)].modifier.contains(Modifier::REVERSED));
+    }
+}
