@@ -1101,7 +1101,7 @@ fn open_gives_a_new_pane_the_plans_title_for_the_plans_lead_and_the_name_for_a_f
 fn open_resumes_a_titled_lead_with_its_dynamic_title_and_a_rename_keeps_it() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     exec_sql(&env, &format!("UPDATE sessions SET title = 'Dynamic subject', titled_at = 't' WHERE id = '{LEAD1}'"));

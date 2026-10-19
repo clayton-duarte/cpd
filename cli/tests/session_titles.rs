@@ -7,7 +7,7 @@ mod common;
 use std::fs::{self, File};
 use std::path::PathBuf;
 
-use common::{Run, SLEEP_SECONDS, TestEnv};
+use common::{Run, SLEEP_SECONDS, TestEnv, refused};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::{Store, WriteTxn};
@@ -125,12 +125,6 @@ fn answer(env: &TestEnv, stdout: &str, status: i32) {
 
 fn retitle(env: &TestEnv, session: &str) -> Run {
     env.cpd(&["session", "retitle", session])
-}
-
-fn refused(run: &Run, code: &str, exit: i32) -> Value {
-    let error = run.error();
-    assert_eq!((error["code"].as_str(), run.exit), (Some(code), exit), "{run:?}");
-    error
 }
 
 fn show(env: &TestEnv, session: &str) -> Value {
