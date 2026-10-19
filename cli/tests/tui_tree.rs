@@ -1311,6 +1311,7 @@ fn a_stopped_engine_is_restarted_once_and_not_again_within_a_minute_and_no_engin
     let screen = pane.screen();
     assert!(!screen.iter().any(|r| r.contains("engine is down")), "a Manager handles it: {screen:?}");
     // the view takes a snapshot every 2 s and sees the engine down each time, but tries once a minute
+    // time-claim: the tree takes a snapshot every 2 s and tries `watch --ensure` once a minute, so none comes in 6 s; no per-poll signal from the view.
     std::thread::sleep(std::time::Duration::from_secs(6));
     assert_eq!(calls(&env), [words(&["watch", "--ensure"])], "once, and no message: it started");
 }
@@ -1329,6 +1330,7 @@ fn a_failed_restart_reaches_each_live_manager_once_and_none_without_a_manager() 
     let expected = [words(&["watch", "--ensure"]), words(&["session", "send", "m-alpha", text]), words(&["session", "send", "m-beta", text])];
     assert_eq!(wait_for_calls(&env, 3), expected);
     pane.wait("the note", |_| pane.footer_has("engine was down: cpd watch --ensure failed:"));
+    // time-claim: the tree takes a snapshot every 2 s and tries `watch --ensure` once a minute, so none comes in 4 s; no per-poll signal from the view.
     std::thread::sleep(std::time::Duration::from_secs(4));
     assert_eq!(calls(&env), expected, "nothing more within the minute");
 
@@ -1345,6 +1347,7 @@ fn a_failed_restart_reaches_each_live_manager_once_and_none_without_a_manager() 
     assert_eq!(wait_for_calls(&env, 1), [words(&["watch", "--ensure"])]);
     pane.wait("the note", |_| pane.footer_has("engine was down: cpd watch --ensure failed"));
     pane.wait("the item", |s| s.iter().any(|r| r.contains("engine is down")));
+    // time-claim: the tree takes a snapshot every 2 s and tries `watch --ensure` once a minute, so none comes in 4 s; no per-poll signal from the view.
     std::thread::sleep(std::time::Duration::from_secs(4));
     assert_eq!(calls(&env), [words(&["watch", "--ensure"])], "no Manager to tell");
 }
