@@ -25,6 +25,7 @@ use ratatui::text::Line;
 
 use self::bar::{Action, Item};
 use self::workers::Workers;
+use super::background::Background;
 use super::logs;
 use super::palette::{self, Meaning};
 use super::read;
@@ -101,7 +102,15 @@ fn show(
     let mut error = None::<String>;
     let mut read_at = Instant::now();
     let mut redraw = true;
+    // a click's tmux calls run off this thread (tui-W7): a popup returns when it closes, and the row follows the slots meanwhile
+    let mut clicks = Background::<Result<(), CpdError>>::new();
     loop {
+        while let Some(result) = clicks.finished() {
+            if let Err(e) = result {
+                note = e.message().to_owned();
+            }
+            redraw = true;
+        }
         if redraw {
             let shown = error.as_deref().unwrap_or(&note);
             terminal.draw(|f| {
@@ -116,14 +125,15 @@ fn show(
                 if m.kind == MouseEventKind::Down(MouseButton::Left) {
                     note.clear();
                     let at = Position::new(m.column, m.row);
-                    let result = match clickable.iter().find(|(r, _)| r.contains(at)) {
-                        Some((_, Action::Legend)) => open_legend(tmux),
-                        Some((_, Action::Logs)) => logs::open(tmux),
-                        Some((_, Action::ResetLayout)) => layout::reset(tmux, &config.tmux.cockpit_session),
-                        None => Ok(()),
-                    };
-                    if let Err(e) = result {
-                        note = e.message().to_owned();
+                    let tmux = tmux.clone();
+                    match clickable.iter().find(|(r, _)| r.contains(at)) {
+                        Some((_, Action::Legend)) => clicks.submit(move || open_legend(&tmux)),
+                        Some((_, Action::Logs)) => clicks.submit(move || logs::open(&tmux)),
+                        Some((_, Action::ResetLayout)) => {
+                            let cockpit = config.tmux.cockpit_session.clone();
+                            clicks.submit(move || layout::reset(&tmux, &cockpit));
+                        }
+                        None => {}
                     }
                 }
             }
