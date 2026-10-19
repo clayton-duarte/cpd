@@ -53,7 +53,7 @@ pub(super) struct Engine {
     pub last_poll_end: Option<Instant>,
     /// While GitHub's rate limit is nearly spent, E5 runs no poll before this.
     pub paused_until: Option<Instant>,
-    /// The `@cpd_workers` text last set on the tmux server.
+    /// The `@cpd_inbox` and `@cpd_workers` texts and width last set on the tmux server.
     pub workers: Option<String>,
     /// E9: the highest record `seq` of each Context a distill run was started for in this engine's life.
     pub distill_started: HashMap<ContextId, i64>,
