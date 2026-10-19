@@ -1,5 +1,6 @@
 //! Running git (contract §7): every call is `git -C <dir> <argv…>` with
-//! `GIT_TERMINAL_PROMPT=0` and stdin from `/dev/null`.
+//! `GIT_TERMINAL_PROMPT=0`, the ref-lock timeouts of [`LOCK_TIMEOUTS`] and
+//! stdin from `/dev/null`.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -8,6 +9,12 @@ use serde_json::json;
 
 use super::{TAIL_LINES, tail};
 use crate::error::{CpdError, ErrorCode};
+
+/// The config every git call gets through `GIT_CONFIG_COUNT` (contract §7, hs-d243 G2):
+/// a ref or `packed-refs` lock held by another git process is waited for up to
+/// 10 s instead of git's 100 ms and 1 s, because cpd has concurrent writers of
+/// shared refs such as `refs/remotes/origin/<base>`.
+pub const LOCK_TIMEOUTS: [(&str, &str); 2] = [("core.filesRefLockTimeout", "10000"), ("core.packedRefsTimeout", "10000")];
 
 /// What a finished git call printed.
 #[derive(Clone, Debug)]
@@ -33,11 +40,13 @@ fn failed(dir: &Path, args: &[&str], message: String, exit: Option<i32>, stderr:
 /// Runs `git -C <dir> <args>` and returns what it printed, whatever its exit
 /// code. Only a git that cannot start, or dies from a signal, is an error.
 pub fn run(dir: &Path, args: &[&str]) -> Result<Out, CpdError> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
+    let mut command = Command::new("git");
+    command.arg("-C").arg(dir).args(args).env("GIT_TERMINAL_PROMPT", "0");
+    command.env("GIT_CONFIG_COUNT", LOCK_TIMEOUTS.len().to_string());
+    for (i, (key, value)) in LOCK_TIMEOUTS.iter().enumerate() {
+        command.env(format!("GIT_CONFIG_KEY_{i}"), key).env(format!("GIT_CONFIG_VALUE_{i}"), value);
+    }
+    let output = command
         .stdin(Stdio::null())
         .output()
         .map_err(|e| failed(dir, args, format!("Cannot run git: {e}."), None, ""))?;
