@@ -479,6 +479,8 @@ impl<'a> Outer<'a> {
     /// A left click at 0-based cell `x`, `y` of the client, as a terminal sends it (SGR mouse reporting). Half a
     /// second after the one before, else tmux takes it for the second click of a double click, not a `MouseDown1`.
     fn click(&self, x: u16, y: u16) {
+        // time-claim: a click after the double-click interval of tmux's is a `MouseDown1`, not a second click; no
+        // per-poll signal from tmux's click timer.
         std::thread::sleep(Duration::from_millis(500));
         for end in ['M', 'm'] {
             let bytes = format!("\x1b[<0;{};{}{end}", x + 1, y + 1);

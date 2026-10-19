@@ -512,6 +512,8 @@ fn the_engine_sets_cpd_workers_at_start_and_only_when_it_changes() {
 
     // Unchanged, it is not set again: a value put there by hand survives the next ticks.
     assert!(fx.env.tmux(&["set", "-g", "@cpd_workers", "by hand"]).status.success());
+    // time-claim: the value is not set again over more than one engine tick; no per-poll signal from the engine, which
+    // sets nothing at a tick where the text did not change.
     std::thread::sleep(Duration::from_millis(2500));
     assert_eq!(fx.workers(), "by hand");
 
@@ -575,6 +577,8 @@ fn the_engine_sets_cpd_inbox_from_the_open_visible_inbox_items() {
 fn without_a_tmux_server_the_workers_step_does_nothing_and_sets_the_text_once_one_appears() {
     let fx = fx("");
     let engine = fx.start();
+    // time-claim: no error over more than one engine tick without a tmux server; no per-poll signal from the engine,
+    // which records nothing at a tick that does nothing.
     std::thread::sleep(Duration::from_millis(2500));
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
     assert!(!fx.env.tmux(&["has-session"]).status.success());
@@ -601,6 +605,8 @@ fn a_tmux_failure_of_the_workers_step_is_one_error_and_the_engine_goes_on() {
     let engine = fx.start();
     let workers_errors = || fx.texts("error").into_iter().filter(|t| t.contains("@cpd_workers")).collect::<Vec<_>>();
     wait_until("the error", || workers_errors().len() == 1);
+    // time-claim: the failed set is not reported again over more than one engine tick; no per-poll signal from the
+    // engine, which records nothing at a tick that sets nothing new.
     std::thread::sleep(Duration::from_millis(2500));
     assert_eq!(workers_errors().len(), 1, "{:?}", workers_errors());
     assert!(workers_errors()[0].contains("tmux set failed: boom"), "{:?}", workers_errors());
