@@ -562,6 +562,7 @@ fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_re
     });
     let mut scrolled = screen(&env, &pane);
     wait_until("the chart to hold still", || {
+        // time-claim: the chart holds still when two screens 300 ms apart are the same; no signal from the view that it is done.
         std::thread::sleep(Duration::from_millis(300));
         let now = screen(&env, &pane);
         std::mem::replace(&mut scrolled, now) == scrolled
@@ -632,8 +633,9 @@ fn a_selected_pill_opens_its_worker_beside_the_chat_and_a_second_enter_closes_it
     tmux_out(&env, &["send-keys", "-t", &plan, "Right"]);
     tmux_out(&env, &["send-keys", "-t", &plan, "Enter"]);
     wait_until("the Worker pane", || workers().contains("worker a a-a1"));
-    let calls = env.calls("cpd");
-    assert!(calls.contains(&["tui", "view", "worker", "a-a1", "--plan", "ship"].map(str::to_owned).to_vec()), "{calls:?}");
+    // The pane exists before the fake `cpd` has recorded its call: wait for the call.
+    let started = ["tui", "view", "worker", "a-a1", "--plan", "ship"].map(str::to_owned).to_vec();
+    wait_until("the Worker view to be started", || env.calls("cpd").contains(&started));
     // beside the chat, without taking the focus: the plan view keeps it
     let layout = tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{pane_id} #{@cpd_view} #{pane_active} #{pane_top} #{pane_width}"]);
     let row = |view: &str| layout.lines().find(|l| l.split(' ').nth(1) == Some(view)).unwrap().split(' ').map(str::to_owned).collect::<Vec<_>>();
@@ -661,8 +663,9 @@ fn another_job_retargets_the_worker_pane_in_place() {
     let after = workers();
     assert_eq!(after.lines().filter(|l| l.contains(" worker ")).count(), 1, "{after}");
     assert!(after.contains(&format!("{pane} worker b b-a1")), "retargeted in place: {after}");
-    let calls = env.calls("cpd");
-    assert!(calls.contains(&["tui", "view", "worker", "b-a1", "--plan", "ship"].map(str::to_owned).to_vec()), "{calls:?}");
+    // The pane exists before the fake `cpd` has recorded its call: wait for the call.
+    let started = ["tui", "view", "worker", "b-a1", "--plan", "ship"].map(str::to_owned).to_vec();
+    wait_until("the Worker view to be started", || env.calls("cpd").contains(&started));
 }
 
 #[test]

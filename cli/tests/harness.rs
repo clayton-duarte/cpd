@@ -204,7 +204,7 @@ fn literal_sleep_ms(line: &str) -> Option<u64> {
 #[test]
 fn no_test_sleeps_for_a_result_or_bounds_the_time_a_result_takes() {
     // A fixed sleep before an assertion proves nothing on a loaded machine, and an upper bound on elapsed time fails on
-    // one (tests-build-W4): wait for the result (`wait_until`, a whole engine tick, a rendezvous). A sleep of 400 ms or
+    // one (tests-build-W4): wait for the result (`wait_until`, a whole engine tick, a rendezvous). A sleep of 250 ms or
     // more, or an upper bound, stands only for a claim about time itself, and says so in a `// time-claim: <what it
     // asserts>; no per-poll signal from <X>` comment on its line or the five above it.
     let lines = test_source_lines();
@@ -214,7 +214,7 @@ fn no_test_sleeps_for_a_result_or_bounds_the_time_a_result_takes() {
         if code.starts_with("//") {
             continue;
         }
-        let long_sleep = literal_sleep_ms(code).is_some_and(|ms| ms >= 400);
+        let long_sleep = literal_sleep_ms(code).is_some_and(|ms| ms >= 250);
         let upper_bound = code.contains("assert") && code.contains("elapsed()") && code.contains(" < ");
         if !(long_sleep || upper_bound) {
             continue;
