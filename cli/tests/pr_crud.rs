@@ -532,6 +532,9 @@ fn edit_title_works_after_the_lock_in_any_status_and_keeps_the_review_and_the_lo
     assert_eq!(fx.events("pr-edited").last().unwrap()["data"], json!({"pr": "api", "fields": ["title"]}));
     assert_eq!(fx.fingerprint(), fingerprint, "the title is not in the plan fingerprint");
     assert_eq!(current(&fx), true);
+    // `plan lock` starts the engine with `cpd watch --ensure` from `PATH`; a fake one that starts nothing keeps the
+    // engine from writing `txns` beside the writes this test counts.
+    fx.env.fake("cpd", "echo '{\"ok\": true, \"started\": true, \"pane\": \"%9\"}'");
     fx.env.cpd(&["plan", "lock", "--plan", "pay-1"]).ok();
 
     // After the lock the other flags are refused, the title is not.
