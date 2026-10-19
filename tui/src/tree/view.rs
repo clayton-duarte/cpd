@@ -1785,7 +1785,7 @@ mod tests {
         draw_now(&mut view, 43, 16);
         // rows 10.. are the five items: dialog, pr-failing, job-stuck, engine-error, unread
         assert_eq!(click(&mut view, 10, 10), Effect::Run(Action::Open(sid("f-blocked"))), "dialog: session open");
-        assert_eq!(click(&mut view, 10, 11), Effect::None, "pr-failing: the label is a link, the view runs nothing");
+        assert_eq!(click(&mut view, 10, 11), Effect::Run(Action::CopyUrl("https://github.com/acme/api/pull/12".into())), "pr-failing no Plan owns: copies its url");
         assert_eq!(click(&mut view, 10, 12), Effect::Run(Action::Open(sid("l-ship"))), "job-stuck: the Lead of the Plan");
         assert_eq!(click(&mut view, 10, 13), Effect::Logs(Some(9)), "engine-error: the logs at its Event");
         assert_eq!(click(&mut view, 41, 14), Effect::Run(Action::Open(sid("l-ship"))), "unread: anywhere on the row, the age too");
@@ -1795,12 +1795,12 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_a_link_kind_or_the_header_changes_nothing_and_a_question_opens_the_manager() {
+    fn a_click_on_a_link_kind_copies_its_url_the_header_changes_nothing_and_a_question_opens_the_manager() {
         let mut view = with_inbox(2);
         draw_now(&mut view, 43, 16);
         let before = view.inbox_expanded;
         assert_eq!(click(&mut view, 10, 14), Effect::Run(Action::Open(sid("f-blocked"))));
-        assert_eq!(click(&mut view, 10, 15), Effect::None, "a pr-failing's label is a link");
+        assert_eq!(click(&mut view, 10, 15), Effect::Run(Action::CopyUrl("https://github.com/acme/api/pull/12".into())), "a pr-failing's click copies its url");
         assert_eq!(click(&mut view, 10, 13), Effect::None, "the header");
         assert_eq!(view.inbox_expanded, before);
         let mut question = item(6, InboxKind::Question, Urgency::Magenta, "alpha: a question", "2026-01-02T23:00:00.000Z");
@@ -2031,7 +2031,7 @@ mod tests {
         }
         assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Open(sid("f-blocked"))), "dialog");
         press(&mut view, KeyCode::Down);
-        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None, "pr-failing: a link, Enter does nothing");
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::CopyUrl("https://github.com/acme/api/pull/12".into())), "pr-failing: Enter copies its url");
         press(&mut view, KeyCode::Down);
         assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Open(sid("l-ship"))), "job-stuck: the Lead");
         view.tree.inbox[2].kind = InboxKind::EngineError;

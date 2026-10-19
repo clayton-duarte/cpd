@@ -1161,6 +1161,19 @@ fn jumping_items(event: i64) -> Vec<Condition> {
             ..other(Kind::PrFailing, Urgency::Yellow, "pr:acme/api#12", "acme/api#12 failing")
         },
         other(Kind::JobStuck, Urgency::Yellow, "job:ship/c", "ship: c is stuck"),
+        Condition { url: Some("http://10.0.0.5:20000/".into()), ..other(Kind::PlanReview, Urgency::Magenta, "review:ship/r1", "ship plan review") },
+        Condition { url: Some("https://x.io/ready".into()), ..other(Kind::PrReady, Urgency::White, "pr:acme/api#3", "acme/api#3 ready") },
+        Condition {
+            url: Some("https://x.io/changes".into()),
+            plan: None,
+            ..other(Kind::PrChanges, Urgency::Yellow, "pr:acme/web#4", "acme/web#4 changes requested")
+        },
+        Condition {
+            url: Some("https://x.io/review".into()),
+            plan: None,
+            context: None,
+            ..other(Kind::ReviewRequested, Urgency::Yellow, "pr:acme/web#5", "acme/web#5 review requested")
+        },
         Condition { plan: None, ..other(Kind::Question, Urgency::Magenta, "question:q1", "alpha: a question") },
     ]);
     items
@@ -1180,7 +1193,7 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
         "tmux",
         &format!("case \"$*\" in\n *list-clients*) echo '100 200 60';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac", real.trim()),
     );
-    let pane = Pane::start(&env, 46, 26);
+    let pane = Pane::start(&env, 60, 40);
     pane.ready();
     pane.wait("the more row", |s| s.last().is_some_and(|r| r.starts_with(" +")));
     let more = pane.screen().len() as u16 - 1;
@@ -1189,6 +1202,15 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     let row_of = |label: &str| {
         let screen = pane.screen();
         screen.iter().position(|r| r.contains(label)).unwrap_or_else(|| panic!("{label} on\n{}", screen.join("\n"))) as u16
+    };
+    let copies = || -> Vec<Vec<String>> { env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "set-buffer")).collect() };
+    let copied = |n: usize, url: &str| {
+        let start = Instant::now();
+        while copies().len() < n {
+            assert!(start.elapsed() < Duration::from_secs(10), "waiting for copy {n} of {url}: {:?}\n{}", copies(), pane.screen().join("\n"));
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(copies()[n - 1][copies()[n - 1].len() - 3..], words(&["-w", "--", url]));
     };
     // dialog: `session open <its Session>`
     pane.click(10, row_of("f-blocked label"));
@@ -1199,9 +1221,21 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     // question: the Context's Manager
     pane.click(10, row_of("alpha: a question"));
     assert_eq!(wait_for_calls(&env, 4)[2..], [words(&["context", "manager", "--context=alpha"]), words(&["session", "open", "m-alpha"])]);
-    // pr-failing: the label is an OSC 8 link, the view runs nothing, and tmux draws the label whole
-    let failing = row_of("acme/api#12 failing");
-    pane.click(10, failing);
+    // plan-review, and a pull request a Plan owns: the Lead of the Plan
+    pane.click(10, row_of("ship plan review"));
+    assert_eq!(wait_for_calls(&env, 5)[4], words(&["session", "open", "l-ship"]));
+    pane.click(10, row_of("acme/api#3 ready"));
+    assert_eq!(wait_for_calls(&env, 6)[5], words(&["session", "open", "l-ship"]));
+    // a pull request no Plan owns, and a review request: the url is copied, and the note says how to open it
+    pane.click(10, row_of("acme/web#4 changes requested"));
+    copied(1, "https://x.io/changes");
+    pane.wait("the note", |_| pane.footer_has("copied https://x.io/changes: Cmd-click the row to open it"));
+    pane.click(10, row_of("acme/web#5 review requested"));
+    copied(2, "https://x.io/review");
+    pane.wait("the note", |_| pane.footer_has("copied https://x.io/review: Cmd-click the row to open it"));
+    // pr-failing, which the Plan `ship` owns here: its Lead
+    pane.click(10, row_of("acme/api#12 failing"));
+    assert_eq!(wait_for_calls(&env, 7)[6], words(&["session", "open", "l-ship"]));
     // engine-error: the logs popup at the item's Event
     pane.click(10, row_of("engine: store busy"));
     let popups = || -> Vec<_> { env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).collect() };
@@ -1211,7 +1245,7 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     assert_eq!(popups[0].last().unwrap(), &format!("cpd tui view logs --event {event}"));
     assert!(popups[0].contains(&" logs ".to_owned()), "{:?}", popups[0]);
     std::thread::sleep(Duration::from_millis(300));
-    assert_eq!(calls(&env).len(), 4, "the link and the logs ran no cpd command: {:?}", calls(&env));
+    assert_eq!(calls(&env).len(), 7, "the copies and the logs ran no cpd command: {:?}", calls(&env));
 }
 
 #[test]

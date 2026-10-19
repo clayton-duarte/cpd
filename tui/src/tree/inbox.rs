@@ -3,8 +3,8 @@
 //! `+<n> more` that expands the list inline and becomes `− less`. Whether it is expanded is view state only. Expanded, it is
 //! capped at half the column and its items scroll inside the cap, with ` ▲ <n> more` / ` ▼ <n> more` cue rows ([`Shape`]).
 //!
-//! A click on an item row jumps to its cause ([`jump`]): a command, the logs popup at the item's Event, or nothing,
-//! when the row's label is an OSC 8 link to the item's `url` (`crate::link`, which the terminal opens with its
+//! A click on an item row jumps to its cause ([`jump`]): a command, the logs popup at the item's Event, or the copy of its
+//! `url`. The label of a link kind is also an OSC 8 link to the `url` (`crate::link`, which the terminal opens with its
 //! modifier-click). Everything here is pure but [`draw`], which only writes to the frame.
 
 use ratatui::Frame;
@@ -21,7 +21,7 @@ use crate::link::link;
 use crate::palette::{self, Meaning};
 use crate::read::{Dot, Tree};
 use crate::widgets::{Window, dim, max_scroll, section_header, window};
-use cpd_core::ids::SessionId;
+use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::inbox::model::{Item, Kind};
 
 /// How many item rows the section shows before `+<n> more`.
@@ -175,20 +175,29 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
     if archived { Action::History(id.clone()) } else { Action::Open(id.clone()) }
 }
 
-/// Where a click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"); `None` for the kinds that are a link
-/// (the terminal opens it), and for an item without what its jump needs.
+/// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts. A Plan's Lead for
+/// `plan-review` and a pull request a Plan owns; the `url` copied for the others that are a link (its OSC 8 link stays
+/// for the terminal's modifier-click). `None` only for an item without what its jump needs.
 pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
     match item.kind {
         Kind::Dialog | Kind::Unread => item.session.as_ref().map(|s| Jump::Run(open_or_history(tree, s))),
-        Kind::JobStuck => {
-            let plan = item.plan.as_ref()?;
-            let plan = tree.contexts.iter().flat_map(|c| &c.plans).find(|p| &p.head.id == plan)?;
-            Some(Jump::Run(open_or_history(tree, &plan.head.lead_session)))
-        }
+        Kind::JobStuck => Some(Jump::Run(open_lead(tree, item.plan.as_ref()?)?)),
         Kind::EngineError | Kind::EngineDown => Some(Jump::Logs(item.event)),
         Kind::Question => item.context.as_ref().map(|c| Jump::Run(Action::OpenManager(c.clone()))),
-        Kind::PlanReview | Kind::PrFailing | Kind::PrChanges | Kind::PrReady | Kind::ReviewRequested => None,
+        Kind::PlanReview => Some(Jump::Run(open_lead(tree, item.plan.as_ref()?)?)),
+        Kind::PrFailing | Kind::PrChanges | Kind::PrReady if item.plan.is_some() => {
+            Some(Jump::Run(open_lead(tree, item.plan.as_ref()?)?))
+        }
+        Kind::PrFailing | Kind::PrChanges | Kind::PrReady | Kind::ReviewRequested => {
+            item.url.as_ref().map(|url| Jump::Run(Action::CopyUrl(url.clone())))
+        }
     }
+}
+
+/// `session open` of the Lead of Plan `plan` (`session history` if archived); none for a Plan the tree does not have.
+fn open_lead(tree: &Tree, plan: &PlanId) -> Option<Action> {
+    let plan = tree.contexts.iter().flat_map(|c| &c.plans).find(|p| &p.head.id == plan)?;
+    Some(open_or_history(tree, &plan.head.lead_session))
 }
 
 /// The kinds whose label is an OSC 8 link to the item's `url`.
@@ -400,9 +409,21 @@ mod tests {
         assert_eq!(jump(&tree, &with(Kind::EngineError, &event)), Some(Jump::Logs(Some(7))));
         assert_eq!(jump(&tree, &with(Kind::EngineDown, &|_| {})), Some(Jump::Logs(None)), "engine-down has no Event: the bottom");
         assert_eq!(jump(&tree, &with(Kind::Question, &context)), Some(Jump::Run(Action::OpenManager(ContextId::parse("alpha").unwrap()))));
-        for kind in [Kind::PlanReview, Kind::PrFailing, Kind::PrChanges, Kind::PrReady, Kind::ReviewRequested] {
-            assert_eq!(jump(&tree, &with(kind, &|i| i.url = Some("https://example.com".into()))), None, "{kind:?} is a link");
+        let url = |item: &mut Item| item.url = Some("https://example.com".into());
+        let owned = |item: &mut Item| {
+            plan(item);
+            url(item);
+        };
+        let copy = Some(Jump::Run(Action::CopyUrl("https://example.com".into())));
+        assert_eq!(jump(&tree, &with(Kind::PlanReview, &owned)), open("l-ship"), "the Lead of the review's Plan");
+        for kind in [Kind::PrFailing, Kind::PrChanges, Kind::PrReady] {
+            assert_eq!(jump(&tree, &with(kind, &owned)), open("l-ship"), "{kind:?} of a Plan's pull request");
+            assert_eq!(jump(&tree, &with(kind, &url)), copy, "{kind:?} no Plan owns copies its url");
         }
+        assert_eq!(jump(&tree, &with(Kind::ReviewRequested, &url)), copy);
+        assert_eq!(jump(&tree, &with(Kind::ReviewRequested, &owned)), copy, "a review request is never a Plan's");
+        assert_eq!(jump(&tree, &with(Kind::PrFailing, &|_| {})), None, "a link without a url has nothing to copy");
+        assert_eq!(jump(&tree, &with(Kind::PlanReview, &|_| {})), None);
         // an item without what its jump needs jumps nowhere
         assert_eq!(jump(&tree, &with(Kind::Dialog, &|_| {})), None);
         assert_eq!(jump(&tree, &with(Kind::JobStuck, &|i| i.plan = Some(PlanId::parse("nope").unwrap()))), None);
