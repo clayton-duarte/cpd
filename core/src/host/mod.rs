@@ -3,10 +3,12 @@
 //! and how cpd starts pi. A library: the commands that use it are other areas'.
 //!
 //! - [`tmux`]: `tmux -L <socket>` calls (§6.1, §6.3);
+//! - [`addr`]: the review host (§6.5);
 //! - [`exe`]: the running executable and the reload after an install (§6.7);
 //! - [`layout`]: window names, `@cpd_*` options and the chat slot (§6.2);
 //! - [`pi`]: pi's argv and environment per role, and the `[-e …]` rule (§6.5).
 
+pub mod addr;
 pub mod exe;
 pub mod layout;
 pub mod pi;
