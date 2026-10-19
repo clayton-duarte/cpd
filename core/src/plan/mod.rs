@@ -23,6 +23,8 @@ mod rename;
 mod review;
 mod row;
 mod show;
+#[cfg(test)]
+mod sql_trace;
 
 use std::path::{Path, PathBuf};
 
