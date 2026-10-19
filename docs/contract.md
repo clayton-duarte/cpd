@@ -1773,7 +1773,7 @@ One `cpd watch` per machine, in `cpd-work:watch`. It is not tied to any Lead's p
 
 **The Plan's plannotator port** (hs-d35, hs-d40, hs-d50). Config key `plannotator_ports` (§8.2) is an inclusive range. A Plan's port lives in `run/<plan>/plannotator-port` (one line, the port; no schema change). `session run` assigns it when it starts pi, under `flock` on `locks/plannotator-ports.lock`:
 
-1. When the Plan's file holds a port inside the range, the Plan keeps it.
+1. When the Plan's file holds a port inside the range and no other holder (rule 2) holds the same port, the Plan keeps it. A recorded port is kept only while no other live Plan holds it: a Plan that comes back after `done` or archive is re-checked at its next Lead start, and the asking Plan moves (its Lead's pi is starting), with one stderr line naming the Plan that held the port; the Plan whose pi already runs keeps its port.
 2. Else the Plan gets the lowest port of the range that no other Plan holds, and the file is written. A Plan **holds** its port unless its phase is `done` or it is archived (`archived_at` set; E1, hs-d203). An archived Plan's `plannotator-port` file stays, but its port is free: rule 1 keeps a Plan's port only while no other holder has it, else the Plan is assigned afresh by this rule. `plan archive` and `plan cancel` (commands.md §4.10, §4.12) therefore free the port, and `plan unarchive` takes none (the next `session run` assigns one).
 3. Else none is free: `no_port` (exit 3; `details`: the range and the holders `[{plan, port}]`), the Lead does not start, and the pane names the Plans that hold the range and offers Enter to retry (§10.8 of `commands.md`).
 
