@@ -564,7 +564,49 @@ fn a_database_newer_than_this_binary_fails_store() {
     Connection::open(env.cpd_home().join("cpd.db")).unwrap().pragma_update(None, "user_version", 99).unwrap();
     let run = doctor(&env);
     assert_doctor_failed(&run);
-    assert_fails(&run, "store", "error", "store_too_new");
+    let c = assert_fails(&run, "store", "error", "store_too_new");
+    // `found` is the verdict's refusal (commands.md §14.1).
+    assert_eq!(c["found"]["code"], "store_too_new", "{c}");
+    assert!(c["found"]["message"].as_str().unwrap().contains("newer cpd"), "{c}");
+}
+
+#[test]
+fn a_store_whose_breaking_migration_this_binary_lacks_fails_store_with_the_verdicts_refusal() {
+    let env = healthy();
+    apply_newer(&env, "29991231T2359-breaking", "breaking");
+    let run = doctor(&env);
+    assert_doctor_failed(&run);
+    let c = assert_fails(&run, "store", "error", "store_too_new");
+    assert_eq!(c["found"]["code"], "store_too_new", "{c}");
+}
+
+#[test]
+fn additive_migrations_this_binary_lacks_are_no_failure_and_have_no_check_of_their_own() {
+    let env = healthy();
+    apply_newer(&env, "29991231T2359-additive", "additive");
+    let run = doctor(&env);
+    run.ok();
+    assert_passes(&run, "store");
+    assert_passes(&run, "tamper");
+    let names: Vec<_> = checks(&run).iter().map(|c| c["name"].as_str().unwrap().to_owned()).collect();
+    assert_eq!(names, NAMES, "no store_window check (hs-d178 D1)");
+}
+
+/// What a newer cpd does: a migration this binary lacks, recorded under `cpd_txn()` (stood in by
+/// the newest `txns` id), with a new table.
+fn apply_newer(env: &TestEnv, name: &str, compat: &str) {
+    use rusqlite::functions::FunctionFlags;
+    drop(open_store(env));
+    let conn = Connection::open(env.cpd_home().join("cpd.db")).unwrap();
+    let txn: i64 = conn.query_row("SELECT max(id) FROM txns", [], |r| r.get(0)).unwrap();
+    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, move |_| Ok(txn)).unwrap();
+    conn.execute_batch("CREATE TABLE newer_things (id INTEGER PRIMARY KEY) STRICT;").unwrap();
+    conn.execute(
+        "INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted)
+         VALUES (?1, ?2, lower(hex(zeroblob(32))), (SELECT max(seq) + 1 FROM schema_migrations), ?3, 0)",
+        rusqlite::params![name, compat, txn],
+    )
+    .unwrap();
 }
 
 // ----------------------------------------------------------------- contexts

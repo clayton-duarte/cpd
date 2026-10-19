@@ -3,6 +3,8 @@
 //! prepared database, with a private tmux server and fake `pi` and `cpd`.
 
 mod common;
+#[path = "common/checkout.rs"]
+mod checkout;
 
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -1227,20 +1229,24 @@ fn copy_executable(from: &str, to: &Path) {
 /// socket, and records `watch --ensure` with the windows of the work session
 /// at that moment. Returns the script's stderr and the fake's calls.
 fn install(env: &TestEnv) -> (String, Vec<Vec<String>>) {
-    let (out, calls) = install_with(env, 6, "6");
+    let (out, calls) = install_with(env, OPENS);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     (String::from_utf8_lossy(&out.stderr).into_owned(), calls)
 }
 
-/// `install`, where the fake build's `--version` reports `schema` and
-/// `store_schema` (a JSON literal: a number or `null`). Returns the output.
-fn install_with(env: &TestEnv, schema: u32, store_schema: &str) -> (std::process::Output, Vec<Vec<String>>) {
+/// The `store` object of a fake build's `--version`: the store opens.
+const OPENS: &str = r#"{"opens":true,"refusal":null,"unknown":[],"pending":[]}"#;
+
+/// `install`, where the fake build's `--version` reports `store` (a JSON literal: the verdict
+/// object or `null`), run from a checkout whose `origin/main` holds the same migrations as the
+/// tree. Returns the output.
+fn install_with(env: &TestEnv, store: &str) -> (std::process::Output, Vec<Vec<String>>) {
     let socket = env.tmux_socket();
     let built = env.fake(
         "cpd-built",
         &format!(
             r#"case "$1" in
---version) echo '{{"ok":true,"version":"0.0.0","schema":{schema},"store_schema":{store_schema}}}' ;;
+--version) echo '{{"ok":true,"version":"0.0.0","schema":1000,"store_schema":1000,"store":{store}}}' ;;
 config) echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}' ;;
 watch) tmux -L '{socket}' list-windows -t =cpd-work -F '#{{window_name}}' > '{windows}' 2>&1; echo '{{"ok":true,"started":true,"pane":"%9"}}' ;;
 esac"#,
@@ -1249,9 +1255,9 @@ esac"#,
     );
     let target = env.root().join("target");
     let cargo = env.fake("fake-cargo", &format!("mkdir -p '{t}/release' && cp '{}' '{t}/release/cpd'", built.display(), t = target.display()));
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let checkout = checkout::Checkout::new(env, &["0001-initial.sql"]);
     let out = env
-        .command(root.join("scripts/install-cpd.sh"))
+        .command(checkout.script())
         .env("CARGO", cargo)
         .env("CARGO_TARGET_DIR", &target)
         .output()
@@ -1290,17 +1296,19 @@ fn install_leaves_a_server_without_an_engine_alone() {
 }
 
 #[test]
-fn install_refuses_a_build_older_than_the_store_before_replacing_anything() {
+fn install_refuses_a_build_that_cannot_open_the_store_before_replacing_anything() {
     let env = TestEnv::new();
     let out = env.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "watch", "sleep", "600"]);
     assert!(out.status.success());
 
-    let (out, calls) = install_with(&env, 5, "6");
+    let refusing = r#"{"opens":false,"refusal":{"code":"store_too_new","message":"The database was migrated by a newer cpd."},"unknown":[],"pending":[]}"#;
+    let (out, calls) = install_with(&env, refusing);
 
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("cpd install refused: this build supports store schema 5 but "), "{stderr}");
-    assert!(stderr.contains("cpd.db is at 6; merge main into this branch, then install again."), "{stderr}");
+    assert!(stderr.contains("cpd install refused: this build cannot open "), "{stderr}");
+    assert!(stderr.contains("cpd.db: The database was migrated by a newer cpd."), "{stderr}");
+    assert!(stderr.contains("merge main into this branch, then install again"), "{stderr}");
     assert!(!env.home().join(".local/bin/cpd").exists());
     assert!(!env.home().join(".local/share/cpd/pi").exists());
     // Only --version ran: no `tui --respawn`, no `watch --ensure`.
@@ -1308,11 +1316,11 @@ fn install_refuses_a_build_older_than_the_store_before_replacing_anything() {
 }
 
 #[test]
-fn install_accepts_a_build_equal_to_the_store_or_a_home_without_a_database() {
-    for store_schema in ["6", "null"] {
+fn install_accepts_a_build_that_opens_the_store_or_a_home_without_a_database() {
+    for store in [OPENS, "null"] {
         let env = TestEnv::new();
-        let (out, _) = install_with(&env, 6, store_schema);
-        assert!(out.status.success(), "{store_schema}: {}", String::from_utf8_lossy(&out.stderr));
+        let (out, _) = install_with(&env, store);
+        assert!(out.status.success(), "{store}: {}", String::from_utf8_lossy(&out.stderr));
         assert!(env.home().join(".local/bin/cpd").exists());
     }
 }
