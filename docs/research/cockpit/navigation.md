@@ -9,7 +9,7 @@ Pain-point letters, as in the survey: **F** finding what needs him, **P** follow
 - **Verdict on the pane model: keep tmux panes.** Every project that draws the whole screen in one process pays for a terminal emulator and a server (herdr ships its own `ghostty-vt` crate and a server/client split; bosun 2.0 embeds `vt100` + `tui-term` and documents gaps; zellij is a whole multiplexer). Each of those costs lands on the one pane that matters most here, the chat slot (pi: OSC 8 links, images, extended keys, paste, selection). The interaction polish that a one-app design buys (clickable pane headers, floating panes, menus) is **mostly reachable inside tmux 3.7/3.8**. The one thing tmux cannot give is hover on its own status line. See §3.
 - **First action, before building anything from §4:** find out which tmux the User's host runs. The contract names 3.4 (Ubuntu 24.04; `docs/contract.md` §6.1). Header controls and floating panes need **3.7** or **3.8**; everything else here works on 3.4.
 - **Top five, by efficiency:** N-01 a needs-you jump strip with a `next ●` button; N-02 a go-to picker that works by mouse; N-03 right-click menus on every object; N-04 a "last Lead" bounce button; N-05 pane headers as toolbars with a breadcrumb.
-- **One open decision this research found, not mine to settle:** the StatusBar is moving to tmux's status line, but `docs/commands.md` §17 says views carry no state in tmux options and take no subprocess; a *live* needs-you strip in the status line needs one of the two. See N-01 and §5.
+- **One open decision this research found, not mine to settle:** the StatusBar is moving to tmux's status line, but `docs/commands.md` §17 says views carry no state in tmux options and take no subprocess; a *live* needs-you strip in the status line needs one of the two. See N-01 and §8.
 
 ## 2. Method and limits
 
@@ -46,11 +46,11 @@ Pain-point letters, as in the survey: **F** finding what needs him, **P** follow
 |---|---|
 | **A terminal-emulation core.** herdr has its own `crates/ghostty-vt` and a vendored, patched `portable-pty` ([Cargo.toml](https://github.com/herdrdev/herdr/blob/HEAD/Cargo.toml)). bosun uses `portable-pty` + `vt100` + `tui-term` and writes in its manifest that if focus mode "hits vt100's mouse / HVP gaps" the fallback is `alacritty_terminal` ([Cargo.toml](https://github.com/yetidevworks/bosun/blob/HEAD/Cargo.toml)). | pi needs more than a screen grid |
 | **OSC 8 links are lost by the usual embed.** In `vt100` 0.18 (HEAD) `osc_dispatch` handles OSC 0, 1, 2 and 52 and sends everything else to `unhandled_osc` ([perform.rs](https://github.com/doy/vt100-rust/blob/HEAD/src/perform.rs)); a search of `cell.rs`, `grid.rs` and `screen.rs` found no hyperlink field (guess: not stored). The cockpit lists `xterm-ghostty:hyperlinks` in `terminal-features` so pi's links survive (`docs/contract.md` §6.1; verified by the User, `docs/commands.md` §13.2 "Links"). | a vt100 embed would need hyperlink tracking added |
-| **Titles and images stop at the emulator.** herdr: "Herdr emulates the terminals in its panes, so an `OSC 0`/`OSC 2` title written inside a pane stops at Herdr"; Kitty images are "cropped around" popups and menus ([configuration](https://github.com/herdrdev/herdr/blob/HEAD/docs/next/website/src/content/docs/configuration.mdx)). pi emits images when the terminal allows (`docs/contract.md` §6.1, pi-tui `terminal-image.js`, cited there). | each protocol becomes the app's job |
+| **Titles and images stop at the emulator.** herdr: "Herdr emulates the terminals in its panes, so an `OSC 0`/`OSC 2` title written inside a pane stops at Herdr"; popups and menus crop Kitty images around the area they cover ([configuration](https://github.com/herdrdev/herdr/blob/HEAD/docs/next/website/src/content/docs/configuration.mdx)). pi emits images when the terminal allows (`docs/contract.md` §6.1, pi-tui `terminal-image.js`, cited there). | each protocol becomes the app's job |
 | **Keyboard protocols.** herdr documents Kitty modes, "Super, Hyper, and Meta chords are dropped when the pane cannot represent them", and layout-dependent Ctrl shortcuts ([keyboard](https://github.com/herdrdev/herdr/blob/HEAD/docs/next/website/src/content/docs/keyboard.mdx)). bosun re-encodes mouse to SGR 1006, handles DECCKM, bracketed paste and modifyOtherKeys, and needs a `Ctrl+V`-then-key chord to send a shortcut through to the agent ([README](https://github.com/yetidevworks/bosun)). The cockpit's pi keys are `extended-keys on` under tmux, "verified by the User" (`docs/contract.md` §6.1). | the User's verified key path is at risk |
-| **Selection, copy mode, scrollback.** herdr re-implements copy mode and keeps drag selections "active during output and redraws" (same keyboard doc). savras keeps tmux *because* "drag to select … a URL that wraps comes out as one line … links, scrolling, bracketed paste and focus all work as they do in any tmux, because tmux is doing them" ([README](https://github.com/Marijusaj/savras)). | a second copy mode to get right |
+| **Selection, copy mode, scrollback.** herdr re-implements copy mode and keeps drag selections "active during output and redraws" (same keyboard doc). savras keeps tmux *because* "Drag to select" stays inside the pane, "a URL that wraps comes out as one line", and "Links, scrolling, bracketed paste and focus all work as they do in any tmux, because tmux is doing them" ([README](https://github.com/Marijusaj/savras)). | a second copy mode to get right |
 | **Process supervision and several clients.** Leads live in parked tmux windows and are swapped into the chat slot with `swap-pane`, "both processes keep their pids" (`docs/contract.md` §6.3); several clients may attach (§6.2); `cpd tui --respawn` restarts views without touching a Lead (`docs/commands.md` §13.1). herdr needed a background server so "the server owns panes and process state" and the client can detach ([concepts](https://github.com/herdrdev/herdr/blob/HEAD/docs/next/website/src/content/docs/concepts.mdx)). | one-app also means building that server |
-| **A class of ssh input bugs.** zellij's changelog: "fragmented STDIN causing 'garbage' input on slow SSH connections" ([CHANGELOG](https://github.com/zellij-org/zellij/blob/HEAD/CHANGELOG.md), unreleased list, #5320). The User attaches over ssh. | bugs tmux already fixed |
+| **A class of ssh input bugs.** zellij's changelog: "fragmented STDIN causing 'garbage' input on slow SSH connections" ([CHANGELOG](https://github.com/zellij-org/zellij/blob/HEAD/CHANGELOG.md), 0.45.0, #5320). The User attaches over ssh. | bugs tmux already fixed |
 
 btop and bottom are the "no child terminal" case: they show what one app can do for mouse and look, and nothing about the chat slot ([btop README](https://github.com/aristocratos/btop)).
 
@@ -70,7 +70,7 @@ btop and bottom are the "no child terminal" case: they show what one app can do 
 
 ### 3.4 Verdict
 
-Stay with A. B/C trade the User's verified key and link path for hover and cross-view effects, which N-09 and N-06 mostly reach without them. Revisit B only if the User asks for effects across views (hover one thing, see it light up in another), and then as bosun does it: one ratatui app for the *sidebar* columns, chat still a tmux pane. That shape is hard here, because the chat slot sits in the middle with chrome on three sides (tmux panes are rectangles), so it would force a layout change. C (zellij) is a one-way door: every tmux command of `docs/contract.md` §6.3, pane options (`@cpd_view`, `@cpd_session`) without a known zellij equivalent (guess), and the engine's death detection. Its web client and its hover are real attractions; they do not outweigh that today.
+Stay with A. B/C put the User's verified key and link path at risk for hover and cross-view effects, which N-09 and N-06 mostly reach without them. Revisit B only if the User asks for effects across views (hover one thing, see it light up in another), and then as bosun does it: one ratatui app for the *sidebar* columns, chat still a tmux pane. That shape is hard here, because the chat slot sits in the middle with chrome on three sides (tmux panes are rectangles), so it would force a layout change. C (zellij) is a one-way door: every tmux command of `docs/contract.md` §6.3, pane options (`@cpd_view`, `@cpd_session`) without a known zellij equivalent (guess), and the engine's death detection. Its web client and its hover are real attractions; they do not outweigh that today.
 
 | Feature | First tmux version | Basis |
 |---|---|---|
@@ -399,21 +399,21 @@ Zoom (`⤢`, `resize-pane -Z`) hides the tree, the Plan view and the Deploy colu
 
 ### M3 · The go-to picker, empty query (N-02)
 
-A popup over the centre, 84×19. Nothing typed: what needs him first, then recent. Chips are buttons; a row click is a tree click; the footer shows where the highlighted row leads.
+A popup over the centre, 84 columns by 15 rows. Nothing typed: what needs him first, then recent. Chips are buttons; a row click is a tree click; the footer shows where the highlighted row leads.
 
 ```
  ┌ go to ──────────────────────────────────────────────────────────────────────── ✕ ┐
  │ ⌕ type a Context, Plan, PR or Job…                                               │
- │ [● needs you 3] [◐ working 2] [○ idle 4] [◌ stopped 1] [PRs 4]                  │
- │ ── needs you ────────────────────────────────────────────────────────────────── │
+ │ [● needs you 3] [◐ working 2] [○ idle 4] [◌ stopped 1] [PRs 4]                   │
+ ├─ needs you ──────────────────────────────────────────────────────────────────────┤
  │ ▌● auth        api   asked 4m ago: which OAuth scope?                            │
  │  ● schema      api   Plan review r2 ready                                        │
  │  ● web-ui      web   PR #44 conflict                                             │
- │ ── recent ───────────────────────────────────────────────────────────────────── │
+ ├─ recent ─────────────────────────────────────────────────────────────────────────┤
  │  ◐ schema      api   Lead working · 1⋅2⋅0⋅0⋅3                                    │
  │  ○ docs        web   Lead idle · 0⋅0⋅0⋅0⋅2                                       │
  │  ○ schema·7f3a api   fork, idle                                                  │
- │ ──────────────────────────────────────────────────────────────────────────────── │
+ ├──────────────────────────────────────────────────────────────────────────────────┤
  │ auth · Context api · Plan phase dispatch · 4 of 7 Jobs merged                    │
  │ ↵ open   → peek   esc close                                                      │
  └──────────────────────────────────────────────────────────────────────────────────┘
@@ -424,12 +424,12 @@ A popup over the centre, 84×19. Nothing typed: what needs him first, then recen
 Draggable and resizable (tmux 3.8), non-modal: he keeps typing in the chat behind it. Each line is a click target (N-06).
 
 ```
-                                    ┌[ logs ]────────────────────────────────────── ⤡ ✕ ┐
+                                    ┌ logs ─────────────────────────────────────── ⤡ ✕ ┐
                                     │ 14:02:11  schema   job-merged types              │
                                     │ 14:02:40  schema   attempt-started gql           │
                                     │ 14:03:05  auth     escalation: which scope?      │
                                     │ 14:05:12  web-ui   pr-feedback conflict          │
-                                    │▌14:06:30  web-ui   attempt-started rebase        │
+                                    │ ▌14:06:30 web-ui   attempt-started rebase        │
                                     └──────────────────────────────────────────────────┘
 ```
 
@@ -439,12 +439,12 @@ Under the hovered tree row, clamped to the pane's 41 inner columns. For a needs-
 
 ```
  ▎    ● auth                 0⋅0⋅0⋅0⋅4
- ┌ auth · Lead · asking 4m ───────────┐
- │ which OAuth scope should the token │
- │ request: read or read:org?         │
- │ phase dispatch · 4 of 7 Jobs merged│
- │ click: open   right-click: menu    │
- └────────────────────────────────────┘
+ ┌ auth · Lead · asking 4m ────────────┐
+ │ which OAuth scope should the token  │
+ │ request: read or read:org?          │
+ │ phase dispatch · 4 of 7 Jobs merged │
+ │ click: open   right-click: menu     │
+ └─────────────────────────────────────┘
 ```
 
 ## 6. Considered and not recommended
