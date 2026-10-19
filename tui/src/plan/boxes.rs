@@ -351,7 +351,7 @@ mod tests {
         assert_eq!(b.row_of, [0, 0]);
         snap(c, "
 ┌ alpha · alpha-repo → main · dispatch ┐ ┌ zed · zed-repo → main · dispatch ┐
-│  ○ a │S1                             │ │  ○ z │S1                         │
+│  󰝦 a │S1                             │ │  󰝦 z │S1                         │
 └──────────────────────────────────────┘ └──────────────────────────────────┘");
     }
 
@@ -368,9 +368,9 @@ mod tests {
         }
         snap(&c, "
 ┌ api · api-repo → main · dispatch ┐
-│  ○ a │S1 ──╮                     │
-│            ├── ○ c │S1           │
-│  ○ b │S1 ──╯                     │
+│  󰝦 a │S1 ──╮                     │
+│            ├── 󰝦 c │S1           │
+│  󰝦 b │S1 ──╯                     │
 └──────────────────────────────────┘");
     }
 
@@ -476,12 +476,12 @@ mod tests {
         let c = layout(&prs, &jobs, 0).chart;
         snap(&c, "
 ┌ api · api-repo → main · dispatch ┐
-│  ○ a │S1 ───── ○ b │S1           │
+│  󰝦 a │S1 ───── 󰝦 b │S1           │
 └────────────────┬─────────────────┘
                  │
                  ▼
 ┌ web · web-repo → main · dispatch ┐
-│  ○ c │S1                         │
+│  󰝦 c │S1                         │
 └──────────────────────────────────┘");
         // the arrow is in the lines' colour
         let exit = c.buf.content.iter().find(|cell| cell.symbol() == EXIT).unwrap();
@@ -494,12 +494,12 @@ mod tests {
         let jobs = [job("schema", "types", &[]), job("schema", "gql", &["types"]), job("web", "page", &[]), job("docs", "readme", &[])];
         snap(&layout(&prs, &jobs, 0).chart, "
 ┌ schema · schema-repo → main · dispatch ┐
-│  ○ types │S1 ───── ○ gql │S1           │
+│  󰝦 types │S1 ───── 󰝦 gql │S1           │
 └───────────────────┬────────────────────┘
                   ╭─┴───────────────────────────────────╮
                   ▼                                     ▼
 ┌ docs · docs-repo → main · dispatch ┐ ┌ web · web-repo → main · dispatch ┐
-│  ○ readme │S1                      │ │  ○ page │S1                      │
+│  󰝦 readme │S1                      │ │  󰝦 page │S1                      │
 └────────────────────────────────────┘ └──────────────────────────────────┘");
     }
 
@@ -509,12 +509,12 @@ mod tests {
         let jobs = [job("api", "a", &[]), job("db", "d", &[]), job("web", "w", &[])];
         snap(&layout(&prs, &jobs, 0).chart, "
 ┌ api · api-repo → main · dispatch ┐ ┌ db · db-repo → main · dispatch ┐
-│  ○ a │S1                         │ │  ○ d │S1                       │
+│  󰝦 a │S1                         │ │  󰝦 d │S1                       │
 └────────────────┬─────────────────┘ └───────────────┬────────────────┘
                  ├───────────────────────────────────╯
                  ▼
 ┌ web · web-repo → main · dispatch ┐
-│  ○ w │S1                         │
+│  󰝦 w │S1                         │
 └──────────────────────────────────┘");
     }
 
@@ -558,7 +558,7 @@ mod tests {
         // a pill is found where it is drawn
         let r = b.chart.pills[at("w")].rect;
         assert_eq!(b.chart.pill_at(r.x, r.y), Some(at("w")));
-        assert_eq!(b.chart.buf[(r.x + 1, r.y)].symbol(), "○");
+        assert_eq!(b.chart.buf[(r.x + 1, r.y)].symbol(), crate::palette::QUEUED);
     }
 
     #[test]
