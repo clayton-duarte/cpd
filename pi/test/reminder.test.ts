@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { lastAssistantText, namesKey, needsReminder, PHRASES, REMINDER_TEXT } from "../lib/reminder.ts";
-import { Fixture, planShow, sessionShow, settle, waitFor } from "./fake.ts";
+import { Fixture, planShow, sessionShow, waitFor } from "./fake.ts";
 
 test("every phrase of the list makes a message talk of future work, in any case", () => {
   for (const p of PHRASES) {
@@ -108,7 +108,7 @@ test("a failing plan show adds nothing and says nothing", async (t) => {
   f.respond("plan-show", { ok: false, error: { code: "plan_not_found", message: "No.", details: {} } }, { exit: 4 });
   await f.pi.fire("agent_end", ended("Next batch: the docs."));
   assert.deepEqual(hidden(await f.pi.fireWith("before_agent_start")), []);
-  await settle();
+  await f.quiet(); // the failed plan show is done and its result handled
   assert.deepEqual(f.pi.sent, [], "no error message in the chat");
   assert.deepEqual(f.pi.errorNotices, []);
 });

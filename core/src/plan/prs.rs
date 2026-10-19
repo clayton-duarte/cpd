@@ -1,0 +1,135 @@
+//! The `prs` row as read (contract §2.2 PR, R34 A6): one struct for every
+//! reader, parsed once, so what follows holds valid values.
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use rusqlite::Connection;
+
+use crate::error::CpdError;
+use crate::ids::{PlanId, PrKey};
+
+/// The pull request of a PR that is `open` or `merged` (contract §2.2 PR `pr`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pull {
+    pub number: i64,
+    pub url: String,
+    pub opened_at: String,
+}
+
+/// One PR of a Plan.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrRow {
+    pub key: PrKey,
+    /// As stored: the fingerprint and `pr add` compare it as text.
+    pub repo: String,
+    pub base: String,
+    pub lead_branch: String,
+    /// Set from the status `dispatch` on (`prs` CHECK).
+    pub lead_worktree: Option<PathBuf>,
+    /// `waiting`, `dispatch`, `open`, `merged` or `cancelled` (§3.8).
+    pub status: String,
+    /// Keys of the PRs it needs, sorted.
+    pub needs: Vec<String>,
+    pub pull: Option<Pull>,
+    /// The id of the PR's `pull_requests` row: set exactly when the status is `open` or `merged` (`prs` CHECK).
+    pub pull_request: Option<i64>,
+}
+
+#[cfg(test)]
+impl PrRow {
+    /// A PR of the fields the fingerprint, `plan render` and `--pr` selection read.
+    pub fn fixture(key: &str, repo: &str, base: &str, needs: &[&str], status: &str) -> PrRow {
+        PrRow {
+            key: PrKey::parse(key).unwrap(),
+            repo: repo.to_owned(),
+            base: base.to_owned(),
+            lead_branch: format!("cpd/fixture/{key}"),
+            lead_worktree: None,
+            status: status.to_owned(),
+            needs: needs.iter().map(|n| (*n).to_owned()).collect(),
+            pull: None,
+            pull_request: None,
+        }
+    }
+}
+
+type Raw = (String, String, String, String, Option<String>, String, (Option<i64>, Option<String>, Option<String>), Option<i64>);
+
+/// Every PR of `plan` in key order, `cancelled` ones included.
+pub fn load_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<PrRow>, CpdError> {
+    let mut needs: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1 ORDER BY pr, needs")?;
+    for row in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+        let (pr, need) = row?;
+        needs.entry(pr).or_default().push(need);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT key, repo, base, lead_branch, lead_worktree, status, pr_number, pr_url, pr_opened_at, pull_request
+           FROM prs WHERE plan = ?1 ORDER BY key",
+    )?;
+    let raw: Vec<Raw> = stmt
+        .query_map([plan.as_str()], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, (r.get(6)?, r.get(7)?, r.get(8)?), r.get(9)?))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    raw.into_iter()
+        .map(|(key, repo, base, lead_branch, lead_worktree, status, pull, pull_request)| {
+            let needs = needs.remove(&key).unwrap_or_default();
+            let key = PrKey::parse(&key).map_err(|_| CpdError::bad_row(format!("Plan {plan} has a PR key {key:?}")))?;
+            let pull = match pull {
+                (Some(number), Some(url), Some(opened_at)) => Some(Pull { number, url, opened_at }),
+                _ => None,
+            };
+            Ok(PrRow { key, repo, base, lead_branch, lead_worktree: lead_worktree.map(PathBuf::from), status, needs, pull, pull_request })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+    use crate::home::CpdHome;
+    use crate::store::Store;
+
+    /// commands-G3: one PR row, read once, with every column the three
+    /// readers (`PrSpec`, `start::Pr`, `row::PrRow`) had between them.
+    #[test]
+    fn a_pr_row_carries_the_columns_every_reader_needs() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        store
+            .write("fixture", |tx| {
+                tx.execute_batch(
+                    "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+                     INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                       VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
+                     INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't');
+                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                       VALUES ('pay', 'api', '/r/api', 'main', 'waiting', 'cpd/pay/api', cpd_txn(), 't'),
+                              ('pay', 'web', '/r/web', 'dev', 'waiting', 'cpd/pay/web', cpd_txn(), 't');
+                     INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'web', 'api');
+                     UPDATE prs SET status = 'dispatch', lead_worktree = '/w/api', started_at = 't' WHERE key = 'api';
+                     INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
+                       VALUES ('acme/api', 7, 'https://x/7', 'T', 0, 'open', 'none', 'none', 't', 't');
+                     UPDATE prs SET status = 'open', pr_number = 7, pr_url = 'https://x/7', pr_opened_at = 'o',
+                            pull_request = (SELECT id FROM pull_requests WHERE number = 7) WHERE key = 'api';",
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let plan = PlanId::parse("pay").unwrap();
+        let prs = store.read(|conn| load_prs(conn, &plan)).unwrap();
+        let [api, web] = prs.as_slice() else { panic!("{prs:?}") };
+        assert_eq!((api.key.as_str(), api.repo.as_str(), api.base.as_str(), api.lead_branch.as_str()), ("api", "/r/api", "main", "cpd/pay/api"));
+        assert_eq!((api.status.as_str(), api.lead_worktree.as_deref(), api.needs.as_slice()), ("open", Some(Path::new("/w/api")), &[][..]));
+        let pull = api.pull.as_ref().unwrap();
+        assert_eq!((pull.number, pull.url.as_str(), pull.opened_at.as_str()), (7, "https://x/7", "o"));
+        assert!(api.pull_request.is_some());
+        assert_eq!((web.key.as_str(), web.status.as_str(), web.lead_worktree.as_ref(), web.needs.as_slice()), ("web", "waiting", None, &["api".to_owned()][..]));
+        assert!(web.pull.is_none() && web.pull_request.is_none());
+    }
+}

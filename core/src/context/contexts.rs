@@ -2,14 +2,14 @@
 //! record, each one database transaction.
 
 use rusqlite::{Connection, OptionalExtension, params};
-use serde_json::json;
 
 use super::record::{Draft, Record};
-use super::{Jira, now};
+use super::Jira;
+use crate::clock::now;
 use crate::args::Text;
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{self, Kind, NewEvent};
+use crate::events::{self, NewEvent};
 use crate::ids::{ContextId, MachineName, RecordId, RecordKind};
 use crate::store::Store;
 
@@ -119,10 +119,11 @@ impl<'a> Contexts<'a> {
             )?;
             events::append(
                 tx,
-                NewEvent::new(
-                    Kind::ContextCreated,
+                NewEvent::context_created(
                     format!("Context {id} \"{title}\" exists. Next: cpd context show --context {id}", title = title.as_str()),
-                    json!({"title": title.as_str(), "jira": jira.map(Jira::as_str), "created_on": machine}),
+                    title.as_str(),
+                    jira.map(Jira::as_str),
+                    machine.as_str(),
                 )
                 .context(id.clone()),
             )?;
@@ -252,15 +253,17 @@ fn check_links(conn: &Connection, context: &ContextId, draft: &Draft) -> Result<
 /// The `context-record` Event of a record (§5.2).
 fn record_event(context: &ContextId, record: &Record, seq: i64, verb: &str) -> NewEvent {
     let snippet: String = record.text.chars().take(80).map(|c| if c.is_control() { ' ' } else { c }).collect();
-    NewEvent::new(
-        Kind::ContextRecord,
+    NewEvent::context_record(
         format!(
             "{} {} {verb} in Context {context}: {snippet}. Next: cpd context show --context {context} --since {}",
             record.kind().as_str(),
             record.id,
             seq - 1
         ),
-        json!({"record": record.id, "kind": record.kind().as_str(), "machine": record.machine(), "seq": seq}),
+        &record.id,
+        record.kind().as_str(),
+        record.machine(),
+        seq,
     )
     .context(context.clone())
 }

@@ -6,10 +6,10 @@
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-use super::{ArchiveArgs, Env, UnarchiveArgs, show};
+use super::{ArchiveArgs, Env, UnarchiveArgs, row};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::host::{Tmux, chat_slot};
 use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::Output;
@@ -69,19 +69,16 @@ impl Object {
     /// The Event of this object's change: `archived` is the new value.
     fn event(&self, conn: &Connection, archived: bool) -> Result<NewEvent, CpdError> {
         let verb = if archived { "archived" } else { "unarchived" };
-        let data = json!({"archived": archived});
         Ok(match self {
-            Object::Context(id) => {
-                NewEvent::new(Kind::ContextArchived, format!("Context {id} {verb}."), data).context(id.clone())
-            }
-            Object::Plan(id) => NewEvent::new(Kind::PlanArchived, format!("Plan {id} {verb}."), data).plan(id.clone()),
+            Object::Context(id) => NewEvent::context_archived(format!("Context {id} {verb}."), archived).context(id.clone()),
+            Object::Plan(id) => NewEvent::plan_archived(format!("Plan {id} {verb}."), archived).plan(id.clone()),
             Object::Session(id) => {
                 let (name, context, plan): (String, String, Option<String>) = conn.query_row(
                     "SELECT name, context, plan FROM sessions WHERE id = ?1",
                     [id.as_str()],
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )?;
-                let event = NewEvent::new(Kind::SessionArchived, format!("Session {name} {verb}."), data)
+                let event = NewEvent::session_archived(format!("Session {name} {verb}."), archived)
                     .session(id.clone())
                     .context(ContextId::parse(&context)?);
                 match plan {
@@ -96,7 +93,7 @@ impl Object {
 impl Objects {
     /// The Plan, its Lead and its side forks; `plan_not_found`.
     pub fn of_plan(conn: &Connection, plan: &PlanId) -> Result<Objects, CpdError> {
-        show::load_head(conn, plan)?;
+        row::load(conn, plan)?;
         let sessions = session_ids(conn, "SELECT id FROM sessions WHERE role = 'lead' AND plan = ?1 ORDER BY created_at, id", plan.as_str())?;
         Ok(Objects { context: None, plans: vec![plan.clone()], sessions })
     }
@@ -281,6 +278,6 @@ pub(super) fn plan_archive(args: ArchiveArgs) -> Result<Output, CpdError> {
 pub(super) fn plan_unarchive(args: UnarchiveArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (objects, context) = env.store.read(|conn| Ok((Objects::of_plan(conn, &id)?, show::load_head(conn, &id)?.context)))?;
+    let (objects, context) = env.store.read(|conn| Ok((Objects::of_plan(conn, &id)?, row::load(conn, &id)?.context)))?;
     unarchive(&mut env.store, "plan unarchive", &objects, Some(&context))
 }

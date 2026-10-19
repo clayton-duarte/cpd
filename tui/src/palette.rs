@@ -117,17 +117,41 @@ pub fn pill(m: Meaning) -> Style {
     Style::new().fg(Color::Black).bg(color(m))
 }
 
+// Job pill icons (Nerd Fonts, Material Design; hs-d235). https://www.nerdfonts.com/cheat-sheet
+/// A queued Job: `nf-md-circle_outline` (U+F0766).
+pub const QUEUED: &str = "\u{F0766}";
+/// A merging Job: `nf-md-eye_circle_outline` (U+F0B95).
+pub const MERGING: &str = "\u{F0B95}";
+/// A merged Job: `nf-md-check_circle` (U+F05E0).
+pub const MERGED: &str = "\u{F05E0}";
+/// A failed Job: `nf-md-close_circle` (U+F0159).
+pub const FAILED: &str = "\u{F0159}";
+/// A draft Job: `nf-md-progress_pencil` (U+F1787).
+pub const DRAFT: &str = "\u{F1787}";
+/// A cancelled Job: `nf-md-cancel` (U+F073A).
+pub const CANCELLED: &str = "\u{F073A}";
+
+// PR check icons (hs-d235). Passed and failed share the glyphs of merged and failed Jobs.
+/// Checks passed: `nf-md-check_circle` (U+F05E0).
+pub const CHECKS_PASSED: &str = MERGED;
+/// Checks failed: `nf-md-close_circle` (U+F0159).
+pub const CHECKS_FAILED: &str = FAILED;
+/// Checks pending: `nf-md-progress_clock` (U+F0996).
+pub const CHECKS_PENDING: &str = "\u{F0996}";
+/// No checks: `nf-md-minus` (U+F0374).
+pub const CHECKS_NONE: &str = "\u{F0374}";
+
 /// Icon and meaning of a Job's status; `merging` is a `running` Job whose
 /// Attempt is merging (`JobCounts` counts it apart).
 pub fn job_status(status: JobStatus, merging: bool) -> (&'static str, Meaning) {
     match (status, merging) {
-        (JobStatus::Queued, _) => ("○", Meaning::NotStarted),
+        (JobStatus::Queued, _) => (QUEUED, Meaning::NotStarted),
         (JobStatus::Running, false) => (SPINNER[0], Meaning::InProgress),
-        (JobStatus::Running, true) => ("⇥", Meaning::Review),
-        (JobStatus::Merged, _) => ("✓", Meaning::Done),
-        (JobStatus::Failed, _) => ("✗", Meaning::Failed),
-        (JobStatus::Draft, _) => ("◌", Meaning::Nothing),
-        (JobStatus::Cancelled, _) => ("⊘", Meaning::Nothing),
+        (JobStatus::Running, true) => (MERGING, Meaning::Review),
+        (JobStatus::Merged, _) => (MERGED, Meaning::Done),
+        (JobStatus::Failed, _) => (FAILED, Meaning::Failed),
+        (JobStatus::Draft, _) => (DRAFT, Meaning::Nothing),
+        (JobStatus::Cancelled, _) => (CANCELLED, Meaning::Nothing),
     }
 }
 
@@ -230,10 +254,10 @@ pub const PR_CONFLICT: (&str, Meaning) = ("conflict", Meaning::Failed);
 /// Icon and meaning of a PR's checks.
 pub fn checks(c: Checks) -> (&'static str, Meaning) {
     match c {
-        Checks::Passed => ("✓", Meaning::Done),
-        Checks::Failed => ("✗", Meaning::Failed),
-        Checks::Pending => ("…", Meaning::InProgress),
-        Checks::None => ("–", Meaning::Nothing),
+        Checks::Passed => (CHECKS_PASSED, Meaning::Done),
+        Checks::Failed => (CHECKS_FAILED, Meaning::Failed),
+        Checks::Pending => (CHECKS_PENDING, Meaning::InProgress),
+        Checks::None => (CHECKS_NONE, Meaning::Nothing),
     }
 }
 
@@ -266,13 +290,13 @@ mod tests {
     #[test]
     fn every_job_status_has_its_icon_and_meaning() {
         let table = [
-            (JobStatus::Queued, false, "○", Meaning::NotStarted),
+            (JobStatus::Queued, false, QUEUED, Meaning::NotStarted),
             (JobStatus::Running, false, SPINNER[0], Meaning::InProgress),
-            (JobStatus::Running, true, "⇥", Meaning::Review),
-            (JobStatus::Merged, false, "✓", Meaning::Done),
-            (JobStatus::Failed, false, "✗", Meaning::Failed),
-            (JobStatus::Draft, false, "◌", Meaning::Nothing),
-            (JobStatus::Cancelled, false, "⊘", Meaning::Nothing),
+            (JobStatus::Running, true, MERGING, Meaning::Review),
+            (JobStatus::Merged, false, MERGED, Meaning::Done),
+            (JobStatus::Failed, false, FAILED, Meaning::Failed),
+            (JobStatus::Draft, false, DRAFT, Meaning::Nothing),
+            (JobStatus::Cancelled, false, CANCELLED, Meaning::Nothing),
         ];
         for (status, merging, icon, m) in table {
             assert_eq!(job_status(status, merging), (icon, m), "{status:?} {merging}");
@@ -331,6 +355,26 @@ mod tests {
     }
 
     #[test]
+    fn every_pill_and_check_glyph_is_one_cell_wide_and_the_one_hs_d235_picked() {
+        let glyphs = [
+            (QUEUED, 0xF0766),
+            (MERGING, 0xF0B95),
+            (MERGED, 0xF05E0),
+            (FAILED, 0xF0159),
+            (DRAFT, 0xF1787),
+            (CANCELLED, 0xF073A),
+            (CHECKS_PASSED, 0xF05E0),
+            (CHECKS_FAILED, 0xF0159),
+            (CHECKS_PENDING, 0xF0996),
+            (CHECKS_NONE, 0xF0374),
+        ];
+        for (glyph, code) in glyphs {
+            assert_eq!(glyph.chars().collect::<Vec<_>>(), [char::from_u32(code).unwrap()], "U+{code:X}");
+            assert_eq!(Span::raw(glyph).width(), 1, "U+{code:X}");
+        }
+    }
+
+    #[test]
     fn an_archived_dot_keeps_its_glyph_in_the_darker_grey_and_never_turns() {
         let grey = Style::new().fg(Color::DarkGray);
         for (dot, glyph) in [
@@ -372,10 +416,10 @@ mod tests {
         assert_eq!(PR_LEGEND.map(|(_, s)| s), states.map(|(s, _)| s));
         assert_eq!(PR_CONFLICT, ("conflict", pr_state(PrState::Closed)));
         let table = [
-            (Checks::Passed, "✓", Meaning::Done),
-            (Checks::Failed, "✗", Meaning::Failed),
-            (Checks::Pending, "…", Meaning::InProgress),
-            (Checks::None, "–", Meaning::Nothing),
+            (Checks::Passed, CHECKS_PASSED, Meaning::Done),
+            (Checks::Failed, CHECKS_FAILED, Meaning::Failed),
+            (Checks::Pending, CHECKS_PENDING, Meaning::InProgress),
+            (Checks::None, CHECKS_NONE, Meaning::Nothing),
         ];
         for (c, icon, m) in table {
             assert_eq!(checks(c), (icon, m), "{c:?}");

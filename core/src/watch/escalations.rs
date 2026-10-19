@@ -5,13 +5,12 @@
 use nix::errno::Errno;
 use nix::sys::signal::kill;
 use nix::unistd::Pid;
-use serde_json::json;
 
 use super::SOURCE;
 use super::engine::Engine;
 use super::report::{About, Step};
 use crate::error::CpdError;
-use crate::events::{self, Kind, NewEvent};
+use crate::events::{self, NewEvent};
 use crate::ids::{EscalationId, PlanId};
 
 struct Open {
@@ -78,10 +77,9 @@ fn expire(engine: &mut Engine, escalation: &Open) -> Result<bool, CpdError> {
             "Escalation {id} of Attempt {attempt} expired: its asker (pid {}) is gone. See: cpd attempt show {attempt} --plan {plan}",
             escalation.asker_pid
         );
-        let data = json!({"escalation": id.to_string(), "reason": "asker_dead"});
         events::append(
             tx,
-            NewEvent::new(Kind::EscalationExpired, text, data).plan(plan.clone()).job(attempt.job().clone()).attempt(attempt.clone()),
+            NewEvent::escalation_expired(text, id.to_string(), "asker_dead").plan(plan.clone()).job(attempt.job().clone()).attempt(attempt.clone()),
         )?;
         Ok(true)
     })

@@ -38,10 +38,9 @@ fn new_context(env: &TestEnv) {
     env.cpd(&["context", "new", CTX, "--title", "Building cpd"]).ok();
 }
 
+/// [`common::refused`], and nothing on stderr.
 fn refused(run: Run, exit: i32, expected: &str) -> Value {
-    let error = run.error();
-    assert_eq!(run.exit, exit, "{run:?}");
-    assert_eq!(error["code"], expected, "{error}");
+    let error = common::refused(&run, expected, exit);
     assert_eq!(run.stderr, "", "{run:?}");
     error
 }
@@ -624,15 +623,6 @@ fn hs_tmux() -> TestEnv {
     env
 }
 
-fn sql(env: &TestEnv, sql: &str) {
-    let (_, _, mut store) = library(env);
-    store.write("fixture", |tx| {
-        tx.execute_batch(sql)?;
-        Ok(())
-    })
-    .unwrap();
-}
-
 fn count(env: &TestEnv, sql: &str) -> i64 {
     let (_, _, mut store) = library(env);
     store.read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
@@ -653,7 +643,7 @@ fn pane(env: &TestEnv, id: &str) -> String {
     assert!(started.status.success(), "{}", String::from_utf8_lossy(&started.stderr));
     let pane = String::from_utf8(started.stdout).unwrap().trim().to_owned();
     assert!(env.tmux(&["set", "-p", "-t", &pane, "@cpd_session", id]).status.success());
-    sql(env, &format!("UPDATE sessions SET tmux_pane = '{pane}' WHERE id = '{id}'"));
+    env.sql(&format!("UPDATE sessions SET tmux_pane = '{pane}' WHERE id = '{id}'"));
     pane
 }
 
@@ -683,8 +673,7 @@ fn archivable(env: &TestEnv) {
     fixture_plan(env, "pay", CTX);
     fixture_plan(env, "ship", CTX);
     fixture_plan(env, "side", "other");
-    sql(
-        env,
+    env.sql(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from)
            VALUES ('fork-pay', 'lead', 'building-cpd', 'pay', 'Fork', '/', 'O3', 'stopped', 't', 't1', 'lead-pay'),
                   ('manager', 'manager', 'building-cpd', NULL, 'Manager', '/', 'O5', 'idle', 't', 't0', NULL);
@@ -767,7 +756,7 @@ fn archive_refused_by_any_one_blocker_changes_nothing() {
     for (kind, apply) in blockers {
         let env = hs_tmux();
         archivable(&env);
-        sql(&env, &apply);
+        env.sql(&apply);
         let (events_before, panes_before) = (event_count(&env), live_panes(&env));
         let error = refused(env.cpd(&["context", "archive", CTX]), 3, "archive_blocked");
         let listed = error["details"]["blockers"].as_array().unwrap();
@@ -917,7 +906,7 @@ fn record_of(id: &RecordId) -> Record {
 }
 
 #[test]
-fn a_digest_missing_one_of_the_unplanned_records_is_rejected() {
+fn a_digest_missing_a_decision_or_open_question_of_the_unplanned_records_is_rejected() {
     let wanted = unplanned_ids();
     for known in ["hs-d62", "hs-d194", "hs-n127", "hs-n107", "hs-d163"] {
         assert!(wanted.contains(&known.parse().unwrap()), "{known} is in unplanned.md: {wanted:?}");
@@ -927,23 +916,39 @@ fn a_digest_missing_one_of_the_unplanned_records_is_rejected() {
     // The Context holds each of them, in force.
     let records: Vec<(i64, Record)> = wanted.iter().enumerate().map(|(i, id)| (i as i64 + 1, record_of(id))).collect();
     let as_of = records.len() as i64;
-    let in_force: Vec<RecordId> = inforce::in_force(&records, as_of).into_iter().map(|(_, r)| r.id.clone()).collect();
-    assert_eq!(in_force, wanted);
+    let in_force = inforce::in_force(&records, as_of);
+    assert_eq!(in_force.iter().map(|(_, r)| r.id.clone()).collect::<Vec<_>>(), wanted);
+    let expect = digest::Expect::of(&in_force);
+
+    // The topic sections must cite every decision and open question (D-a); a note, an answer and an answered
+    // question are listed by cpd's index, so a digest may leave them out.
+    let answered: Vec<&RecordId> = in_force.iter().filter_map(|(_, r)| r.question()).collect();
+    let required = |id: &RecordId| match id.kind() {
+        RecordKind::Decision => true,
+        RecordKind::Question => !answered.contains(&id),
+        _ => false,
+    };
+    assert!(wanted.iter().any(|id| required(id)) && wanted.iter().any(|id| !required(id)), "both kinds are exercised");
 
     let digest_of = |ids: &[&RecordId]| ids.iter().map(|id| format!("- Statement [{id}].\n")).collect::<String>();
     let all: Vec<&RecordId> = wanted.iter().collect();
-    assert_eq!(digest::validate(digest_of(&all).as_bytes(), &in_force, digest::LIMIT), Ok(()));
+    assert_eq!(digest::validate(digest_of(&all).as_bytes(), &expect, digest::LIMIT), Ok(()));
 
     for left_out in &wanted {
         let some: Vec<&RecordId> = wanted.iter().filter(|id| *id != left_out).collect();
-        let invalid = digest::validate(digest_of(&some).as_bytes(), &in_force, digest::LIMIT).unwrap_err();
-        assert_eq!(invalid.missing, [left_out.clone()], "leaving out {left_out}");
-        assert!(invalid.stray.is_empty());
+        let result = digest::validate(digest_of(&some).as_bytes(), &expect, digest::LIMIT);
+        if required(left_out) {
+            let invalid = result.unwrap_err();
+            assert_eq!(invalid.missing, [left_out.clone()], "leaving out {left_out}");
+            assert!(invalid.stray.is_empty());
+        } else {
+            assert_eq!(result, Ok(()), "leaving out {left_out}, which cpd's index lists");
+        }
     }
 
     // Citing a record that is no longer in force is refused too.
     let mut with_stray = digest_of(&all);
     with_stray.push_str("- Old [hs-d1].\n");
-    let invalid = digest::validate(with_stray.as_bytes(), &in_force, digest::LIMIT).unwrap_err();
+    let invalid = digest::validate(with_stray.as_bytes(), &expect, digest::LIMIT).unwrap_err();
     assert_eq!((invalid.missing.is_empty(), invalid.stray), (true, vec!["hs-d1".parse().unwrap()]));
 }

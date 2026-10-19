@@ -327,7 +327,7 @@ mod tests {
         assert_eq!(names, ["queued", "running", "merging", "merged", "failed", "draft", "counters row"]);
         let shown: String =
             sections().iter().flat_map(|s| s.rows.iter().flatten().map(text)).chain(sections().iter().map(|s| s.title.to_owned())).collect();
-        assert!(!shown.contains("cancelled") && !shown.contains('⊘'), "{shown}");
+        assert!(!shown.contains("cancelled") && !shown.contains(palette::CANCELLED), "{shown}");
     }
 
     #[test]

@@ -8,7 +8,7 @@ use serde_json::json;
 use super::row::{self, Row, State};
 use super::{Env, RenameArgs, StateArgs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::SessionId;
 use crate::output::Output;
 use crate::store::{Store, WriteTxn};
@@ -68,6 +68,18 @@ pub(super) struct Change {
 /// `blocked`), as `command`: one transaction with its `session-state` Event,
 /// or nothing when unchanged (§3.6).
 pub(super) fn set(store: &mut Store, command: &str, id: &SessionId, to: State, label: Option<&Label>) -> Result<Change, CpdError> {
+    set_reply(store, command, id, to, label, false)
+}
+
+/// [`set`], with `reply` (only with `idle`) as `reply: true` in the Event's `data` (§5.2), as `session state idle --reply` gives it.
+pub(super) fn set_reply(
+    store: &mut Store,
+    command: &str,
+    id: &SessionId,
+    to: State,
+    label: Option<&Label>,
+    reply: bool,
+) -> Result<Change, CpdError> {
     let label = label.map(Label::as_str);
     let read = store.read(|conn| row::load(conn, id))?;
     if read.state == to && read.state_label.as_deref() == label {
@@ -91,7 +103,7 @@ pub(super) fn set(store: &mut Store, command: &str, id: &SessionId, to: State, l
             Some(label) => format!("Session {} is {} ({label}).", read.name, to.as_str()),
             None => format!("Session {} is {}.", read.name, to.as_str()),
         };
-        let event = NewEvent::new(Kind::SessionState, text, json!({"from": read.state.as_str(), "to": to.as_str(), "label": label}));
+        let event = NewEvent::session_state(text, read.state.as_str(), to.as_str(), label, reply);
         append(tx, scoped(event, &read))?;
         Ok(())
     })?;
@@ -122,13 +134,11 @@ pub(crate) fn pane_gone(tx: &WriteTxn<'_>, id: &SessionId, state: &str, pane: Op
     }
     if read.state != State::Stopped {
         let text = format!("Session {} is stopped: {why}.", read.name);
-        let data = json!({"from": read.state.as_str(), "to": "stopped", "label": null});
-        append(tx, scoped(NewEvent::new(Kind::SessionState, text, data), &read))?;
+        append(tx, scoped(NewEvent::session_state(text, read.state.as_str(), "stopped", None, false), &read))?;
     }
     if pane.is_some() {
         let text = format!("Session {} has no pane: {why}.", read.name);
-        let data = json!({"pane": null, "window": null, "place": "none"});
-        append(tx, scoped(NewEvent::new(Kind::SessionMoved, text, data), &read))?;
+        append(tx, scoped(NewEvent::session_moved(text, None, None, "none"), &read))?;
     }
     Ok(true)
 }
@@ -164,10 +174,14 @@ pub(super) fn state(args: StateArgs) -> Result<Output, CpdError> {
         }
         _ => {}
     }
+    if args.reply && args.state != State::Idle {
+        return Err(CpdError::new(ErrorCode::Usage, format!("--reply is only allowed with idle, not {}.", args.state.as_str()))
+            .with("state", args.state.as_str()));
+    }
     let reference = args.session.require()?.clone();
     let mut env = Env::open()?;
     let id = env.resolve(&reference)?;
-    let change = set(&mut env.store, "session state", &id, args.state, args.label.as_ref())?;
+    let change = set_reply(&mut env.store, "session state", &id, args.state, args.label.as_ref(), args.reply)?;
     let label = args.label.as_ref().map(Label::as_str);
     let mut out = json!({"session": id, "state": args.state.as_str(), "label": label, "from": change.from.as_str()});
     if change.already {
@@ -190,7 +204,7 @@ pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
     env.store.write("session rename", |tx| {
         tx.execute("UPDATE sessions SET name = ?1 WHERE id = ?2", [name, id.as_str()])?;
         let text = format!("Session {id} renamed to {name:?}.");
-        append(tx, scoped(NewEvent::new(Kind::SessionRenamed, text, json!({"name": name})), &read))?;
+        append(tx, scoped(NewEvent::session_renamed(text, name), &read))?;
         Ok(())
     })?;
     row::retitle(&id)?;

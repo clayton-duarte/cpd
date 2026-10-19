@@ -13,6 +13,7 @@ use time::format_description::well_known::Rfc3339;
 use super::model::{Condition, Kind, Urgency};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
+use crate::host::addr::review_host;
 use crate::ids::{ContextId, JobKey, PlanId, RecordId, SessionId};
 use crate::plan::Phase;
 use crate::store::Store;
@@ -70,11 +71,13 @@ fn time_of(what: &str, value: &str) -> Result<OffsetDateTime, CpdError> {
 
 /// The id of a Session's latest `session-state` Event.
 const LATEST_STATE: &str = "(SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-state')";
-/// The id of its latest finished turn: its latest `session-state` Event from `working` or `blocked` to `idle`
-/// (a start or reload, `stopped` to `idle`, is not one; hs-d242).
+/// The id of its latest finished reply turn: its latest `session-state` Event from `working` or `blocked` to `idle`
+/// with `data.reply` true, a turn that answered the User (a start or reload, `stopped` to `idle`, is not one; a turn
+/// that answered an Event or another Session is not one either; hs-d242, hs-d278).
 const LATEST_IDLE: &str = "(SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-state'
                                 AND json_extract(e.data, '$.to') = 'idle'
-                                AND json_extract(e.data, '$.from') IN ('working', 'blocked'))";
+                                AND json_extract(e.data, '$.from') IN ('working', 'blocked')
+                                AND json_extract(e.data, '$.reply') = 1)";
 /// The id of its latest `session-moved` Event with `place: chat`.
 const LATEST_CHAT: &str = "(SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-moved'
                                 AND json_extract(e.data, '$.place') = 'chat')";
@@ -164,7 +167,7 @@ fn dialogs(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 }
 
 /// `unread`: the rule of the tree's white dot. A Lead, fork or Manager is `idle`, not in the chat slot, and its
-/// latest finished turn (`working` or `blocked` to `idle`) is newer than the last time its chat was in the slot
+/// latest finished reply turn (`working` or `blocked` to `idle`, `data.reply` true) is newer than the last time its chat was in the slot
 /// (never in the slot counts as older than everything).
 fn unread(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let filter = format!("s.state = 'idle' AND {PLACE} IS NOT 'chat' AND {LATEST_IDLE} > COALESCE({LATEST_CHAT}, 0)");
@@ -179,11 +182,16 @@ fn unread(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 
 // ---- Plans and Jobs: plan-review and job-stuck -------------------------------------------------------------------
 
-/// The Plan's plannotator page, when its port file holds a port (the convention of `session::port`).
+/// The Plan's plannotator page, when its port file holds a port (the convention of `session::port`), on the review host
+/// ([`review_host`], hs-d264).
 fn plannotator_url(home: &CpdHome, plan: &PlanId) -> Result<Option<String>, CpdError> {
     let path: &Path = &home.plannotator_port(plan);
     match std::fs::read_to_string(path) {
-        Ok(text) => Ok(text.trim().parse::<u16>().ok().map(|port| format!("http://localhost:{port}/"))),
+        Ok(text) => Ok(text
+            .trim()
+            .parse::<u16>()
+            .ok()
+            .map(|port| format!("http://{}:{port}/", review_host(&mut std::io::stderr())))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(CpdError::new(ErrorCode::StoreFailed, format!("Cannot read {}: {e}.", path.display()))
             .with("path", path.display().to_string())),
@@ -417,6 +425,7 @@ mod tests {
     use time::macros::datetime;
 
     use super::*;
+    use crate::host::addr::URL_HOST;
 
     const NOW: OffsetDateTime = datetime!(2026-01-02 00:00 UTC);
     const TEN: Duration = Duration::from_secs(600);
@@ -472,10 +481,20 @@ mod tests {
 
         /// The Session's state changes: the row and its `session-state` Event (`from` is the state it was in).
         fn state(&mut self, session: &str, state: &str, label: Option<&str>) -> i64 {
+            self.state_as(session, state, label, false)
+        }
+
+        /// A turn that ended in `idle` as a reply to the User (`--reply`).
+        fn reply(&mut self, session: &str) -> i64 {
+            self.state_as(session, "idle", None, true)
+        }
+
+        fn state_as(&mut self, session: &str, state: &str, label: Option<&str>, reply: bool) -> i64 {
             let from: String = self.store.read(|c| Ok(c.query_row("SELECT state FROM sessions WHERE id = ?1", [session], |r| r.get(0))?)).unwrap();
             let label = label.map_or("NULL".to_owned(), |l| format!("'{l}'"));
             self.sql(&format!("UPDATE sessions SET state = '{state}', state_label = {label} WHERE id = '{session}'"));
-            self.event("session-state", Some(session), None, T, &format!(r#"{{"from":"{from}","label":null,"to":"{state}"}}"#))
+            let reply = if reply { r#","reply":true"# } else { "" };
+            self.event("session-state", Some(session), None, T, &format!(r#"{{"from":"{from}","label":null,"to":"{state}"{reply}}}"#))
         }
 
         fn moved(&mut self, session: &str, place: &str) -> i64 {
@@ -616,7 +635,7 @@ mod tests {
     #[test]
     fn an_idle_turn_outside_the_chat_slot_is_unread_until_the_chat_is_seen() {
         let mut f = fixture("dispatch");
-        let idle = f.state("l-pay", "idle", None);
+        let idle = f.reply("l-pay");
         let c = one(f.of(Kind::Unread));
         assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::White, "session:l-pay", "pay replied"));
         assert_eq!(c.event, Some(idle), "the idle Event");
@@ -629,31 +648,59 @@ mod tests {
         f.moved("l-pay", "parked");
         assert!(f.of(Kind::Unread).is_empty(), "out of the slot again, but the turn is not newer than the sight");
         f.state("l-pay", "working", None);
-        let idle = f.state("l-pay", "idle", None);
+        let idle = f.reply("l-pay");
         assert_eq!(one(f.of(Kind::Unread)).event, Some(idle), "a new idle turn after being seen");
+    }
+
+    #[test]
+    fn a_turn_that_did_not_answer_the_user_is_not_unread() {
+        let mut f = fixture("dispatch");
+        f.state("l-pay", "idle", None);
+        assert!(f.of(Kind::Unread).is_empty(), "a non-reply turn alone");
+        f.state("l-pay", "working", None);
+        f.state("l-pay", "idle", None);
+        assert!(f.of(Kind::Unread).is_empty(), "working -> idle without a reply");
+    }
+
+    #[test]
+    fn a_later_non_reply_turn_does_not_hide_an_unread_reply() {
+        let mut f = fixture("dispatch");
+        let reply = f.reply("l-pay");
+        f.state("l-pay", "working", None);
+        f.state("l-pay", "idle", None);
+        let c = one(f.of(Kind::Unread));
+        assert_eq!(c.event, Some(reply), "the reply Event, not the later turn");
+        f.moved("l-pay", "chat");
+        f.moved("l-pay", "parked");
+        f.state("l-pay", "working", None);
+        f.state("l-pay", "idle", None);
+        assert!(f.of(Kind::Unread).is_empty(), "seen, and the later turn was no reply");
     }
 
     #[test]
     fn a_reload_is_not_a_finished_turn() {
         let mut f = fixture("dispatch");
-        f.state("l-pay", "idle", None);
+        f.reply("l-pay");
         f.moved("l-pay", "chat");
         f.moved("l-pay", "parked");
         assert!(f.of(Kind::Unread).is_empty(), "seen");
         f.state("l-pay", "stopped", None);
         f.state("l-pay", "idle", None);
         assert!(f.of(Kind::Unread).is_empty(), "idle -> stopped -> idle is a reload, not a turn");
+        f.state("l-pay", "stopped", None);
+        f.reply("l-pay");
+        assert!(f.of(Kind::Unread).is_empty(), "stopped -> idle is a reload even when it says reply");
     }
 
     #[test]
     fn a_working_or_blocked_session_going_idle_after_the_visit_is_unread() {
         for before in ["working", "blocked"] {
             let mut f = fixture("dispatch");
-            f.state("l-pay", "idle", None);
+            f.reply("l-pay");
             f.moved("l-pay", "chat");
             f.moved("l-pay", "parked");
             f.state("l-pay", before, (before == "blocked").then_some("Which?"));
-            let idle = f.state("l-pay", "idle", None);
+            let idle = f.reply("l-pay");
             assert_eq!(one(f.of(Kind::Unread)).event, Some(idle), "{before} -> idle");
         }
     }
@@ -661,7 +708,7 @@ mod tests {
     #[test]
     fn a_session_in_the_chat_slot_or_not_idle_is_not_unread() {
         let mut f = fixture("dispatch");
-        f.state("l-pay", "idle", None);
+        f.reply("l-pay");
         f.moved("l-pay", "chat");
         assert!(f.of(Kind::Unread).is_empty());
         f.state("mgr", "working", None);
@@ -675,8 +722,8 @@ mod tests {
     fn a_manager_and_a_fork_can_be_unread() {
         let mut f = fixture("dispatch");
         f.session("fork-1234", "lead", Some("pay"));
-        f.state("mgr", "idle", None);
-        f.state("fork-1234", "idle", None);
+        f.reply("mgr");
+        f.reply("fork-1234");
         let mut labels: Vec<_> = f.of(Kind::Unread).into_iter().map(|c| c.label).collect();
         labels.sort();
         assert_eq!(labels, ["ctx replied", "pay·fork replied"]);
@@ -701,7 +748,11 @@ mod tests {
         let port = f.home.plannotator_port(&PlanId::parse("pay").unwrap());
         std::fs::create_dir_all(port.parent().unwrap()).unwrap();
         std::fs::write(&port, "20000\n").unwrap();
-        assert_eq!(one(f.of(Kind::PlanReview)).url.as_deref(), Some("http://localhost:20000/"));
+        // the review host: `PLANNOTATOR_URL_HOST` from cpd's environment (the only test that sets it)
+        unsafe { std::env::set_var(URL_HOST, "review.example") };
+        let url = one(f.of(Kind::PlanReview)).url;
+        unsafe { std::env::remove_var(URL_HOST) };
+        assert_eq!(url.as_deref(), Some("http://review.example:20000/"));
     }
 
     #[test]
@@ -948,7 +999,7 @@ mod tests {
         assert!(conditions(&mut f.store, &f.home, NOW, TEN, &[]).unwrap().is_empty());
         f.state("l-pay", "blocked", Some("Which?"));
         f.review("r1", "pending");
-        f.state("mgr", "idle", None);
+        f.reply("mgr");
         f.job("a", "failed");
         f.event("job-failed", None, Some("a"), T, r#"{}"#);
         record(&mut f, "ctx", "hs-q1", "question");

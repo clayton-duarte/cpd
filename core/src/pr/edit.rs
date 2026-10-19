@@ -13,11 +13,12 @@ use super::gh;
 use super::add::{main_worktree, no_branch_clash, resolve_base};
 use super::{EditArgs, Env, check_needs, find_pr, plan_phase, pr_locked, sorted_needs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, PrKey};
 use crate::output::Output;
 use crate::plan::Phase;
-use crate::plan::fingerprint::{PrSpec, load_prs};
+use crate::plan::PrRow;
+use crate::plan::fingerprint::load_prs;
 
 const COMMAND: &str = "pr edit";
 
@@ -38,8 +39,8 @@ impl Edits {
 
 enum Decision {
     /// No value changes.
-    Already(PrSpec),
-    Update { before: PrSpec, after: PrSpec, fields: Vec<&'static str> },
+    Already(PrRow),
+    Update { before: PrRow, after: PrRow, fields: Vec<&'static str> },
 }
 
 pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
@@ -81,7 +82,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
                 Decision::Update { before, after, fields } => {
                     update(tx, &plan, &before, &after, edits.title.as_deref())?;
                     let text = format!("PR {key} of Plan {plan} edited ({}). Next: cpd plan render --plan {plan}", fields.join(", "));
-                    append(tx, NewEvent::new(Kind::PrEdited, text, json!({"pr": key, "fields": fields})).plan(plan.clone()))?;
+                    append(tx, NewEvent::pr_edited(text, &key, &fields).plan(plan.clone()))?;
                     Ok((after, fields, false))
                 }
             })?
@@ -113,7 +114,7 @@ fn retitle_open_pull_request(env: &mut Env, plan: &PlanId, key: &PrKey, title: &
 /// `merged` or `cancelled` (`pr_ended`: its title is history). With `others` (a flag other than
 /// `--title`), the Plan is in `grounding` or `plan` (`pr_locked`) and the PR `waiting`
 /// (`illegal_transition`); `--title` alone meets neither rule.
-fn editable_pr(conn: &Connection, plan: &PlanId, key: &PrKey, title: bool, others: bool) -> Result<(PrSpec, Option<String>), CpdError> {
+fn editable_pr(conn: &Connection, plan: &PlanId, key: &PrKey, title: bool, others: bool) -> Result<(PrRow, Option<String>), CpdError> {
     let prs = load_prs(conn, plan)?;
     let pr = find_pr(&prs, plan, key)?;
     if title && matches!(pr.status.as_str(), "merged" | "cancelled") {
@@ -152,7 +153,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Resul
         let prs = load_prs(conn, plan)?;
         check_needs(&prs, plan, Some(key), needs)?;
         after.needs = needs.clone();
-        let others: Vec<PrSpec> = prs.into_iter().filter(|p| p.key != after.key).chain([after.clone()]).collect();
+        let others: Vec<PrRow> = prs.into_iter().filter(|p| p.key != after.key).chain([after.clone()]).collect();
         if let Some(cycle) = cycle(&others) {
             return Err(CpdError::new(ErrorCode::DependencyCycle, format!("The new needs of {key} make a cycle: {}.", cycle.join(" → ")))
                 .with("plan", plan.as_str())
@@ -178,7 +179,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Resul
 /// Writes the changed `prs` columns, and deletes and inserts `pr_needs` rows
 /// to match (§4.4 allows deletion in `grounding` and `plan`). `title` is the new
 /// title when it was given (a PR that has it already is not touched).
-fn update(tx: &Connection, plan: &PlanId, before: &PrSpec, after: &PrSpec, title: Option<&str>) -> Result<(), CpdError> {
+fn update(tx: &Connection, plan: &PlanId, before: &PrRow, after: &PrRow, title: Option<&str>) -> Result<(), CpdError> {
     if let Some(title) = title {
         tx.execute(
             "UPDATE prs SET title = ?1 WHERE plan = ?2 AND key = ?3 AND title IS NOT ?1 AND status NOT IN ('merged', 'cancelled')",
@@ -202,8 +203,8 @@ fn update(tx: &Connection, plan: &PlanId, before: &PrSpec, after: &PrSpec, title
 
 /// A cycle among the needs of the PRs that are not `cancelled`, as the keys
 /// along it (the first repeated at the end), if there is one.
-fn cycle(prs: &[PrSpec]) -> Option<Vec<String>> {
-    let graph: BTreeMap<&str, &PrSpec> = prs.iter().filter(|p| p.status != "cancelled").map(|p| (p.key.as_str(), p)).collect();
+fn cycle(prs: &[PrRow]) -> Option<Vec<String>> {
+    let graph: BTreeMap<&str, &PrRow> = prs.iter().filter(|p| p.status != "cancelled").map(|p| (p.key.as_str(), p)).collect();
     let mut done: Vec<&str> = Vec::new();
     for start in graph.keys() {
         if let Some(found) = visit(start, &graph, &mut done, &mut Vec::new()) {
@@ -213,7 +214,7 @@ fn cycle(prs: &[PrSpec]) -> Option<Vec<String>> {
     None
 }
 
-fn visit<'a>(key: &'a str, graph: &BTreeMap<&'a str, &'a PrSpec>, done: &mut Vec<&'a str>, path: &mut Vec<&'a str>) -> Option<Vec<String>> {
+fn visit<'a>(key: &'a str, graph: &BTreeMap<&'a str, &'a PrRow>, done: &mut Vec<&'a str>, path: &mut Vec<&'a str>) -> Option<Vec<String>> {
     if let Some(at) = path.iter().position(|k| *k == key) {
         let mut found: Vec<String> = path[at..].iter().map(|k| (*k).to_owned()).collect();
         found.push(key.to_owned());
@@ -238,14 +239,8 @@ fn visit<'a>(key: &'a str, graph: &BTreeMap<&'a str, &'a PrSpec>, done: &mut Vec
 mod tests {
     use super::*;
 
-    fn pr(key: &str, status: &str, needs: &[&str]) -> PrSpec {
-        PrSpec {
-            key: key.into(),
-            repo: "/r".into(),
-            base: "main".into(),
-            needs: needs.iter().map(|n| (*n).to_owned()).collect(),
-            status: status.into(),
-        }
+    fn pr(key: &str, status: &str, needs: &[&str]) -> PrRow {
+        PrRow::fixture(key, "/r", "main", needs, status)
     }
 
     #[test]

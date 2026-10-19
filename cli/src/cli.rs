@@ -112,13 +112,8 @@ pub fn clap_result(err: clap::Error) -> Result<Output, CpdError> {
         ErrorKind::DisplayHelp => Ok(Output::success(serde_json::json!({ "help": text }))),
         ErrorKind::DisplayVersion => {
             let store = store_verdict(&CpdHome::from_env()?)?;
-            // `schema` and `store_schema` are a projection of the verdict for the integer-era guards that
-            // still run: they refuse when `store_schema` is above `schema` (commands.md §1.2; hs-d178 D1).
-            let store_schema = store.as_ref().map(|s| if s["opens"] == true { 1000 } else { 1001 });
             Ok(Output::success(serde_json::json!({
                 "version": env!("CARGO_PKG_VERSION"),
-                "schema": cpd_core::store::VERSION,
-                "store_schema": store_schema,
                 "protocol": cpd_core::events::PROTOCOL,
                 "store": store,
             })))
@@ -207,10 +202,11 @@ mod tests {
         }
         let Ok(Output::Success(fields)) = run(argv(&["--version"])) else { panic!("version is a success") };
         assert_eq!(fields["version"], env!("CARGO_PKG_VERSION"));
-        assert_eq!(fields["schema"], cpd_core::store::VERSION);
-        assert!(fields.contains_key("store_schema"));
+        let mut keys: Vec<_> = fields.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, ["protocol", "store", "version"]);
         assert!(fields.contains_key("store"));
-        assert_eq!(fields["protocol"], 3);
+        assert_eq!(fields["protocol"], 4);
     }
 
     /// A stand-in for an area's arguments, to test how our parsers' errors

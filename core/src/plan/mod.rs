@@ -18,10 +18,11 @@ mod lock;
 mod new;
 mod overlap;
 mod phase;
+mod prs;
 mod render;
 mod rename;
 mod review;
-mod row;
+pub mod row;
 mod show;
 #[cfg(test)]
 mod sql_trace;
@@ -29,17 +30,16 @@ mod sql_trace;
 use std::path::{Path, PathBuf};
 
 use crate::args::{Name, PlanArg, PrTitle, Text, Title};
-use crate::config::Config;
 use crate::context::Jira;
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
 use crate::ids::{ContextId, PlanId, ReviewId};
 use crate::output::Output;
-use crate::store::Store;
 
 pub use fingerprint::plan_fingerprint;
 pub use jobs::locked_fingerprint;
-pub use row::Phase;
+pub use prs::{PrRow, Pull};
+pub use row::{Phase, PlanRow};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -205,38 +205,11 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
     }
 }
 
-/// What every command opens: `$CPD_HOME`, its config and the store.
-struct Env {
-    home: CpdHome,
-    config: Config,
-    store: Store,
-}
-
-impl Env {
-    fn open() -> Result<Env, CpdError> {
-        let home = CpdHome::from_env()?;
-        let config = Config::load(&home)?;
-        let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-        Ok(Env { home, config, store })
-    }
-}
-
-fn plan_not_found(plan: &PlanId) -> CpdError {
-    CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str())
-}
-
-/// A row the database holds in a shape the binary does not accept: it was
-/// changed outside cpd, or by a bug.
-fn bad_row(what: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: {what}."))
-}
-
 /// A file given by path (`--brief-file`, `--feedback-file`): readable UTF-8,
 /// else `file_unreadable` (commands.md §1.5).
 fn read_text_file(path: &Path) -> Result<String, CpdError> {
     std::fs::read_to_string(path).map_err(|e| {
-        CpdError::new(ErrorCode::FileUnreadable, format!("Cannot read {} as UTF-8 text: {e}.", path.display()))
-            .with("path", path.display().to_string())
+        CpdError::file_unreadable(path, e)
     })
 }
 

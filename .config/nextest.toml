@@ -3,29 +3,13 @@
 # a process of its own and the test binaries in parallel (docs/implementing.md).
 # Everything not set here is nextest's default.
 
-# Test groups: the tests of a group run one at a time (`max-threads = 1`),
-# whatever else runs. A test file that serialises its own tests with an
-# in-process lock gets a group with the same effect: `cargo test` runs the
-# tests of a binary as threads of one process, where the lock holds them back;
-# nextest gives each test a process of its own, where the lock holds nothing
-# back, so the group does it.
-[test-groups]
-# cli/tests/host.rs, `TMUX_ENV`: every test points the process-wide
-# `TMUX_TMPDIR` at its own TestEnv before it starts tmux.
-tmux-env = { max-threads = 1 }
-# cli/tests/driver_reload.rs, `ONE_AT_A_TIME`: every test writes executables and
-# runs them; a thread that forks while another has such a file open for writing
-# makes its exec fail with ETXTBSY ("Text file busy").
-driver-reload = { max-threads = 1 }
+# No test group is needed: nothing in the tests shares process state. ETXTBSY
+# (a fork while a script is open for writing) is handled in `cli/tests/common`;
+# under nextest each test is a process of its own, so no fork can hold another
+# test's descriptors. A test that must not overlap others goes in a test group
+# here (`[test-groups]`, `max-threads = 1`, and a `[[profile.default.overrides]]`
+# with a `filter` and `test-group`), the reason beside it.
 
 # hs-d236: a red run lists every failing test, not only the first.
 [profile.default]
 fail-fast = false
-
-[[profile.default.overrides]]
-filter = 'binary_id(cpd::host)'
-test-group = 'tmux-env'
-
-[[profile.default.overrides]]
-filter = 'binary_id(cpd::driver_reload)'
-test-group = 'driver-reload'

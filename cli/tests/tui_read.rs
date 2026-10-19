@@ -8,9 +8,9 @@ use std::fs::{self, File};
 use std::sync::Mutex;
 use std::time::Instant;
 
-use common::TestEnv;
+use common::{TestEnv, sql};
 use cpd_core::config::Tier;
-use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::error::ErrorCode;
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, ContextId, EscalationId, JobKey, PlanId, SessionId};
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
@@ -28,15 +28,6 @@ use rusqlite::Connection;
 
 fn open(env: &TestEnv) -> Store {
     Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
-}
-
-fn sql(store: &mut Store, text: &str) {
-    store
-        .write("fixture", |tx| {
-            tx.execute_batch(text)?;
-            Ok::<(), CpdError>(())
-        })
-        .unwrap();
 }
 
 fn plan(s: &str) -> PlanId {
@@ -777,6 +768,17 @@ fn a_pull_request_is_conflicting_only_when_the_poll_saw_a_conflict() {
     for (mergeable, want) in [("conflicting", true), ("mergeable", false), ("unknown", false)] {
         sql(&mut store, &format!("UPDATE pull_requests SET mergeable = '{mergeable}' WHERE number = 7"));
         assert_eq!(pull(&mut store, "rel").conflicting, want, "{mergeable}");
+    }
+}
+
+#[test]
+fn an_open_pull_request_is_clean_only_when_its_merge_state_is_clean() {
+    let (_env, mut store) = fixture();
+    let clean = |store: &mut Store| read::widgets(store, 3, 0).unwrap().prs.iter().find(|p| p.number == 7).unwrap().clean;
+    assert!(!clean(&mut store), "a fresh row reads `unknown`");
+    for (merge_state, want) in [("clean", true), ("blocked", false), ("unstable", false), ("unknown", false)] {
+        sql(&mut store, &format!("UPDATE pull_requests SET merge_state = '{merge_state}' WHERE number = 7"));
+        assert_eq!(clean(&mut store), want, "{merge_state}");
     }
 }
 

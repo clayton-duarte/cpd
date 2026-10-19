@@ -6,10 +6,8 @@
 mod common;
 
 use std::process::{Child, Stdio};
-use std::thread::sleep;
-use std::time::{Duration, Instant};
 
-use common::{CPD, Run, TestEnv};
+use common::{CPD, Run, TestEnv, refused, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::{Store, WriteTxn};
@@ -59,13 +57,6 @@ fn setup(env: &TestEnv) {
             fp = "0".repeat(64)
         ),
     );
-}
-
-fn refused(run: &Run, code: &str, exit: i32) -> Value {
-    let error = run.error();
-    assert_eq!(error["code"], code, "{run:?}");
-    assert_eq!(run.exit, exit, "{run:?}");
-    error
 }
 
 fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
@@ -136,15 +127,6 @@ fn spawn_ask(env: &TestEnv, question: &str) -> KillOnDrop {
         .unwrap())
 }
 
-/// Waits until Escalation `id` exists.
-fn wait_for(env: &TestEnv, id: &str) {
-    let start = Instant::now();
-    while query::<i64>(env, &format!("SELECT count(*) FROM escalations WHERE id = '{id}'")) == 0 {
-        assert!(start.elapsed() < Duration::from_secs(20), "ask never opened {id}");
-        sleep(Duration::from_millis(50));
-    }
-}
-
 fn finish(child: KillOnDrop) -> Run {
     let out = child.into_inner().wait_with_output().unwrap();
     Run {
@@ -162,7 +144,7 @@ fn ask_blocks_until_answered_and_prints_the_answer() {
     setup(&env);
     let child = spawn_ask(&env, "Which field names?");
     let pid = child.id();
-    wait_for(&env, "a-a1-q1");
+    wait_until("ask to open a-a1-q1", || query::<i64>(&env, "SELECT count(*) FROM escalations WHERE id = 'a-a1-q1'") != 0);
 
     // While it waits: the row is open, the Worker Session blocked, both Events appended.
     let (status, asker_pid, question): (String, u32, String) = store(&env)
@@ -196,7 +178,7 @@ fn every_ask_is_a_new_escalation() {
     for k in 1..=2 {
         let child = spawn_ask(&env, "Again?");
         let id = format!("a-a1-q{k}");
-        wait_for(&env, &id);
+        wait_until(&format!("ask to open {id}"), || query::<i64>(&env, &format!("SELECT count(*) FROM escalations WHERE id = '{id}'")) != 0);
         env.cpd(&["answer", &id, "Yes.", "--plan", "pl"]).ok();
         assert_eq!(finish(child).ok()["escalation"], id.as_str());
     }

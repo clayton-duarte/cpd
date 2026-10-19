@@ -16,7 +16,7 @@ use std::str::FromStr;
 
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{PlanId, PrKey, SessionId};
-use crate::plan::fingerprint::PrSpec;
+use crate::plan::PrRow;
 
 /// `--plan <id>`, else `CPD_PLAN`, else `plan_required` (exit 2).
 #[derive(clap::Args, Clone, Debug, PartialEq)]
@@ -48,15 +48,15 @@ impl PrArg {
     /// A key that is not a PR of the Plan is `pr_not_found` (exit 4); without
     /// `--pr`, zero or two or more PRs that are not `cancelled` is
     /// `pr_required` (exit 2).
-    pub fn select<'a>(&self, plan: &PlanId, prs: &'a [PrSpec]) -> Result<&'a PrSpec, CpdError> {
+    pub fn select<'a>(&self, plan: &PlanId, prs: &'a [PrRow]) -> Result<&'a PrRow, CpdError> {
         if let Some(key) = &self.pr {
-            return prs.iter().find(|p| p.key == key.as_str()).ok_or_else(|| {
+            return prs.iter().find(|p| p.key == *key).ok_or_else(|| {
                 CpdError::new(ErrorCode::PrNotFound, format!("No PR {key} in Plan {plan}."))
                     .with("plan", plan.as_str())
                     .with("pr", key.as_str())
             });
         }
-        let live: Vec<&PrSpec> = prs.iter().filter(|p| p.status != "cancelled").collect();
+        let live: Vec<&PrRow> = prs.iter().filter(|p| p.status != "cancelled").collect();
         match live.as_slice() {
             [only] => Ok(only),
             [] => Err(CpdError::new(
@@ -312,17 +312,11 @@ mod tests {
     #[test]
     fn pr_selection() {
         let plan = PlanId::parse("cpd2").unwrap();
-        let pr = |key: &str, status: &str| PrSpec {
-            key: key.to_owned(),
-            repo: "/r".to_owned(),
-            base: "main".to_owned(),
-            needs: Vec::new(),
-            status: status.to_owned(),
-        };
+        let pr = |key: &str, status: &str| PrRow::fixture(key, "/r", "main", &[], status);
         let arg = |key: Option<&str>| PrArg { pr: key.map(|k| PrKey::parse(k).unwrap()) };
         let prs = [pr("a", "cancelled"), pr("b", "waiting")];
-        assert_eq!(arg(None).select(&plan, &prs).unwrap().key, "b");
-        assert_eq!(arg(Some("a")).select(&plan, &prs).unwrap().key, "a");
+        assert_eq!(arg(None).select(&plan, &prs).unwrap().key.as_str(), "b");
+        assert_eq!(arg(Some("a")).select(&plan, &prs).unwrap().key.as_str(), "a");
         let err = arg(Some("z")).select(&plan, &prs).unwrap_err();
         assert_eq!((err.code(), err.exit().code()), (ErrorCode::PrNotFound, 4));
         for many in [&[pr("a", "waiting"), pr("b", "open")][..], &[pr("a", "cancelled")][..], &[][..]] {

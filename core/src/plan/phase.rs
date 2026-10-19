@@ -4,16 +4,15 @@
 
 use serde_json::json;
 
-use super::row::Phase;
-use super::show::{Head, load_head};
+use super::row::{self, Phase, PlanRow};
 use super::{Env, PhaseArgs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::output::Output;
 
 const COMMAND: &str = "plan phase";
 
-fn illegal(plan: &Head, to: Phase) -> CpdError {
+fn illegal(plan: &PlanRow, to: Phase) -> CpdError {
     CpdError::new(
         ErrorCode::IllegalTransition,
         format!("Plan {} cannot move from {} to {} by hand: only grounding → plan is (§3.1).", plan.id, plan.phase.as_str(), to.as_str()),
@@ -26,7 +25,7 @@ fn illegal(plan: &Head, to: Phase) -> CpdError {
 pub(super) fn phase(args: PhaseArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let plan = env.store.read(|conn| load_head(conn, &id))?;
+    let plan = env.store.read(|conn| row::load(conn, &id))?;
     if args.phase != Phase::Plan {
         return Err(illegal(&plan, args.phase));
     }
@@ -43,7 +42,7 @@ pub(super) fn phase(args: PhaseArgs) -> Result<Output, CpdError> {
                 .with("plan", id.as_str()));
         }
         let text = format!("Plan {id} moved from grounding to plan. Next: cpd job add <key> --title <text> --tier <T> --spec <file>, then cpd plan review");
-        append(tx, NewEvent::new(Kind::PlanPhase, text, json!({"from": "grounding", "to": "plan"})).plan(id.clone()))?;
+        append(tx, NewEvent::plan_phase(text, "grounding", "plan").plan(id.clone()))?;
         Ok(())
     })?;
     Ok(Output::success(json!({"plan": id, "phase": "plan"})))
