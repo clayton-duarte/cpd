@@ -1025,10 +1025,6 @@ impl KillOnDrop {
     fn new(child: Child) -> Self {
         KillOnDrop(Some(child))
     }
-
-    fn into_inner(mut self) -> Child {
-        self.0.take().unwrap()
-    }
 }
 
 impl std::ops::Deref for KillOnDrop {

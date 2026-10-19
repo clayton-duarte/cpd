@@ -30,6 +30,8 @@ pub struct Attempt {
     /// The Lead Branch of the Job's PR.
     pub lead_branch: String,
     pub lead_worktree: PathBuf,
+    /// The Attempt branch's tip when `attempt submit` checked it; set from `merging` on.
+    pub submitted_sha: Option<String>,
 }
 
 fn corrupt(what: String) -> CpdError {
@@ -40,7 +42,7 @@ fn corrupt(what: String) -> CpdError {
 pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt, CpdError> {
     let row = conn
         .query_row(
-            "SELECT a.job, a.tier, a.status, a.branch, a.worktree, a.worker_session, r.repo, r.lead_branch, r.lead_worktree
+            "SELECT a.job, a.tier, a.status, a.branch, a.worktree, a.worker_session, r.repo, r.lead_branch, r.lead_worktree, a.submitted_sha
              FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job JOIN prs r ON r.plan = j.plan AND r.key = j.pr
              WHERE a.plan = ?1 AND a.id = ?2",
             params![plan.as_str(), id.to_string()],
@@ -55,6 +57,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
                     r.get::<_, String>(6)?,
                     r.get::<_, String>(7)?,
                     r.get::<_, Option<String>>(8)?,
+                    r.get::<_, Option<String>>(9)?,
                 ))
             },
         )
@@ -64,7 +67,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
                 .with("plan", plan.as_str())
                 .with("attempt", id.to_string())
         })?;
-    let (job, tier, status, branch, worktree, worker_session, repo, lead_branch, lead_worktree) = row;
+    let (job, tier, status, branch, worktree, worker_session, repo, lead_branch, lead_worktree, submitted_sha) = row;
     let lead_worktree = lead_worktree.ok_or_else(|| corrupt(format!("Plan {plan} has an Attempt but no Lead worktree")))?;
     Ok(Attempt {
         plan: plan.clone(),
@@ -80,6 +83,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
         repo: PathBuf::from(repo),
         lead_branch,
         lead_worktree: PathBuf::from(lead_worktree),
+        submitted_sha,
     })
 }
 

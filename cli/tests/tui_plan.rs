@@ -103,9 +103,10 @@ fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
     }
 }
 
-/// Starts `cpd tui view plan` alone in a 260 × 40 window of the private server; returns its pane.
+/// Starts `cpd tui view plan` alone in a 260 × 40 window of the private server, with `PLANNOTATOR_URL_HOST=review.test`
+/// (the review host's override, contract §6.5); returns its pane.
 fn start_view(env: &TestEnv) -> String {
-    tmux_out(env, &["new-session", "-d", "-s", "view", "-x", "260", "-y", "40", "-P", "-F", "#{pane_id}", CPD, "tui", "view", "plan"])
+    tmux_out(env, &["new-session", "-d", "-s", "view", "-x", "260", "-y", "40", "-P", "-F", "#{pane_id}", "-e", "PLANNOTATOR_URL_HOST=review.test", CPD, "tui", "view", "plan"])
         .trim()
         .to_owned()
 }
@@ -471,9 +472,9 @@ fn a_pull_request_box_title_ends_in_a_link_to_it_and_a_pending_review_is_a_row_a
     assert_eq!(screen[2], "  ┌ repo · repo → main · #7 open ↗ ┐");
     let styled = styled_screen(&env, &pane);
     assert!(styled.contains("]8;;https://github.com/acme/repo/pull/7"), "{styled:?}");
-    assert!(styled.contains("]8;;http://localhost:19433"), "{styled:?}");
+    assert!(styled.contains("]8;;http://review.test:19433"), "{styled:?}");
     // each link wraps its whole text, from `#` or `Plan` through `↗`, and nothing else
-    for (url, text) in [("https://github.com/acme/repo/pull/7", "#7 open ↗"), ("http://localhost:19433", "Plan review r2 pending ↗")] {
+    for (url, text) in [("https://github.com/acme/repo/pull/7", "#7 open ↗"), ("http://review.test:19433", "Plan review r2 pending ↗")] {
         assert_eq!(linked_text(&styled, url), text, "{url}: {styled:?}");
     }
 }
