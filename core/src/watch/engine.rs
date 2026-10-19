@@ -1,7 +1,8 @@
 //! The engine's loop (contract §3.7; commands.md §12): `locks/watch.lock`,
-//! `watch-started`, then E1–E5, E7 and E8 (E6 was removed) every
+//! `watch-started`, then E1–E5 and E7–E9 (E6 was removed) every
 //! `tick_seconds` until SIGTERM, SIGINT or SIGHUP, then `watch-stopped`.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -11,7 +12,7 @@ use serde_json::{Value, json};
 use super::lock::WatchLock;
 use super::log::Log;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, completion, escalations, inbox, liveness, pr, schedule, workers};
+use super::{SOURCE, completion, distill, escalations, inbox, liveness, pr, schedule, workers};
 use crate::config::{Catalog, Config, load_catalog};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, Kind, NewEvent};
@@ -19,7 +20,7 @@ use crate::home::CpdHome;
 use crate::inbox::rules::EngineError;
 use crate::host::Tmux;
 use crate::host::pi::{self, PiDirs};
-use crate::ids::{PlanId, PrKey, SessionId};
+use crate::ids::{ContextId, PlanId, PrKey, SessionId};
 use crate::output::Output;
 use crate::pr::start::{self as start_pr, By, Failed};
 use crate::store::Store;
@@ -54,6 +55,8 @@ pub(super) struct Engine {
     pub paused_until: Option<Instant>,
     /// The `@cpd_workers` text last set on the tmux server.
     pub workers: Option<String>,
+    /// E9: the highest record `seq` of each Context a distill run was started for in this engine's life.
+    pub distill_started: HashMap<ContextId, i64>,
 }
 
 impl Engine {
@@ -82,11 +85,11 @@ impl Engine {
         self.report.active()
     }
 
-    /// One tick: the `@cpd_workers` step, then E1–E5, E7 and E8 (§3.7; E6 is removed), each reporting its own failures.
+    /// One tick: the `@cpd_workers` step, then E1–E5 and E7–E9 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalog = None;
-        let steps: [fn(&mut Engine); 8] =
-            [workers::run, escalations::run, liveness::run, schedule::run, completion::run, pr::run, start_prs, inbox::run];
+        let steps: [fn(&mut Engine); 9] =
+            [workers::run, escalations::run, liveness::run, schedule::run, completion::run, pr::run, start_prs, inbox::run, distill::run];
         for step in steps {
             if stopping() {
                 return;
@@ -207,6 +210,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
         last_poll_end: None,
         paused_until: None,
         workers: None,
+        distill_started: HashMap::new(),
     };
 
     let tick = Duration::from_secs(u64::from(engine.config.watch.tick_seconds));

@@ -46,6 +46,7 @@ fn config_with_only_the_required_keys_has_every_default() {
             "retry_cap": 2,
             "lead_tier": "O3",
             "manager_tier": "O5",
+            "context_distill_tier": "S2",
             "lead_pi_packages": [
                 "npm:@plannotator/pi-extension@0.28.17",
                 "npm:@juicesharp/rpiv-ask-user-question@2.13.8"
@@ -65,6 +66,7 @@ fn config_with_only_the_required_keys_has_every_default() {
                 "lock_wait_seconds": 900,
                 "store_busy_ms": 5000,
                 "fork_quiet_seconds": 5,
+                "distill_minutes": 15,
                 "stall_seconds": 1200
             },
             "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "error_repeat_seconds": 600},
@@ -109,7 +111,7 @@ fn config_has_one_source_per_leaf_key() {
     for key in ["version", "machine", "concurrency", "tiers.O", "timeouts.ask_minutes"] {
         assert_eq!(sources[key], "file", "{key}");
     }
-    for key in ["retry_cap", "lead_tier", "manager_tier", "lead_pi_packages", "pi_adapter", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
+    for key in ["retry_cap", "lead_tier", "manager_tier", "context_distill_tier", "lead_pi_packages", "pi_adapter", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
         assert_eq!(sources[key], "default", "{key}");
     }
     assert_eq!(out["config"]["concurrency"], 5);
@@ -131,6 +133,7 @@ concurrency = 1
 retry_cap = 0
 lead_tier = "H0"
 manager_tier = "H1"
+context_distill_tier = "H0"
 lead_pi_packages = []
 pi_adapter = "{adapter}"
 plannotator_ports = "1-65535"
@@ -146,6 +149,7 @@ gate_minutes = 1
 lock_wait_seconds = 1
 store_busy_ms = 1
 fork_quiet_seconds = 1
+distill_minutes = 1
 stall_seconds = 0
 [watch]
 tick_seconds = 1
@@ -165,6 +169,7 @@ work_session = "w"
     );
     let out = config_with(&env, &text).ok();
     assert_eq!(out["config"]["machine"], "a1234567");
+    assert_eq!(out["config"]["context_distill_tier"], "H0");
     assert_eq!(out["config"]["lead_pi_packages"], json!([]));
     assert_eq!(out["config"]["pi_adapter"], adapter.to_str().unwrap());
     assert_eq!(out["config"]["plannotator_ports"], "1-65535");
@@ -243,6 +248,8 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\nlead_tier = \"o3\"\n", "lead_tier"),
         ("version = 1\nmachine = \"hs\"\nmanager_tier = \"X5\"\n", "manager_tier"),
         ("version = 1\nmachine = \"hs\"\nmanager_tier = \"O6\"\n", "manager_tier"),
+        ("version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"X2\"\n", "context_distill_tier"),
+        ("version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"S6\"\n", "context_distill_tier"),
         ("version = 1\nmachine = \"hs\"\nlead_pi_packages = [\"\"]\n", "lead_pi_packages"),
         ("version = 1\nmachine = \"hs\"\npi_adapter = \"/no/such/adapter\"\n", "pi_adapter"),
         ("version = 1\nmachine = \"hs\"\n[tiers]\nO = \"no-slash\"\n", "tiers.O"),
