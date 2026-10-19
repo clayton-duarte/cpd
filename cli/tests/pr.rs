@@ -2122,27 +2122,245 @@ fn rebase_with_the_base_unmoved_only_gates_and_pushes() {
     assert_eq!(fx.pr("rebase").ok()["rebased"], false);
 }
 
+impl Fx {
+    /// The Lead Branch commits `README.md` as `lead` and pushes; the base then commits it as `base`.
+    /// Returns the Lead Branch's tip.
+    fn conflicting(&self, lead: &[&str]) -> String {
+        for text in lead {
+            fs::write(self.lead.join("README.md"), format!("{text}\n")).unwrap();
+            self.git(&self.lead, &["add", "-A"]);
+            self.git(&self.lead, &["commit", "-q", "-m", &format!("lead {text}")]);
+        }
+        self.git(&self.lead, &["push", "-q", "origin", "cpd/pay"]);
+        self.advance_base("README.md", "base\n");
+        self.lead_sha()
+    }
+
+    /// `cpd pr rebase --plan pay <flag>`.
+    fn rebase(&self, flag: &str) -> Run {
+        self.env.cpd(&["pr", "rebase", "--plan", "pay", flag])
+    }
+
+    fn rebasing(&self) -> bool {
+        ["rebase-merge", "rebase-apply"].iter().any(|name| {
+            let path = self.git(&self.lead, &["rev-parse", "--path-format=absolute", "--git-path", name]);
+            Path::new(&path).exists()
+        })
+    }
+
+    /// Resolves `README.md` in the Lead worktree and stages it, as the Lead does.
+    fn resolve(&self, text: &str) {
+        fs::write(self.lead.join("README.md"), format!("{text}\n")).unwrap();
+        self.git(&self.lead, &["add", "README.md"]);
+    }
+}
+
 #[test]
-fn rebase_refuses_a_conflict_and_changes_nothing() {
+fn rebase_stops_at_a_conflict_in_the_lead_worktree_and_pushes_nothing() {
     let fx = fx("deploy");
-    fs::write(fx.lead.join("README.md"), "lead\n").unwrap();
-    fx.git(&fx.lead, &["add", "-A"]);
-    fx.git(&fx.lead, &["commit", "-q", "-m", "lead readme"]);
-    fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
-    fx.advance_base("README.md", "base\n");
-    let before = fx.lead_sha();
+    fx.hooks("pre-merge = \"git rev-parse HEAD\"\n");
+    let before = fx.conflicting(&["lead"]);
 
     let run = fx.pr("rebase");
 
     assert_eq!(code(&run), ("rebase_conflict".into(), 3));
-    assert_eq!(run.error()["details"]["files"], json!(["README.md"]));
+    let details = &run.error()["details"];
+    assert_eq!(details["files"], json!(["README.md"]));
+    assert_eq!(details["worktree"], fx.lead.to_str().unwrap());
+    assert_eq!(details["next"], "cpd pr rebase --pr repo --plan pay --continue");
+    assert_eq!(details["abort"], "cpd pr rebase --pr repo --plan pay --abort");
+    // The rebase waits in the Lead worktree, with markers; the ref and the remote are as they were.
+    assert!(fx.rebasing());
+    assert!(fs::read_to_string(fx.lead.join("README.md")).unwrap().contains("<<<<<<<"));
     assert_eq!(fx.lead_sha(), before);
-    assert_eq!(fx.git(&fx.lead, &["status", "--porcelain"]), "");
     assert_eq!(fx.remote_branch("cpd/pay"), Some(before));
-    let rebasing = fx.git(&fx.lead, &["rev-parse", "--git-path", "rebase-merge"]);
-    assert!(!fx.lead.join(&rebasing).exists() && !Path::new(&rebasing).exists());
+    // No Gate, no `gh`, no gate worktree, no Event.
+    assert_eq!(fx.gate_log(), "");
     assert!(fx.gh_calls().is_empty());
     fx.assert_no_gate_worktree();
+    assert!(fx.events("error").is_empty());
+
+    // A second plain run does not start another one.
+    let again = fx.pr("rebase");
+    assert_eq!(code(&again), ("rebase_in_progress".into(), 3));
+    assert_eq!(again.error()["details"]["next"], details["next"]);
+    assert_eq!(again.error()["details"]["abort"], details["abort"]);
+    assert!(fx.rebasing());
+}
+
+#[test]
+fn rebase_continue_gates_and_pushes_the_resolved_rebase_with_the_lease() {
+    let fx = fx("deploy");
+    fx.hooks("pre-merge = \"git rev-parse HEAD\"\n");
+    let before = fx.conflicting(&["lead"]);
+    assert_eq!(code(&fx.pr("rebase")).0, "rebase_conflict");
+    fx.resolve("resolved");
+
+    let out = fx.rebase("--continue").ok();
+
+    let new = fx.lead_sha();
+    assert_ne!(new, before);
+    assert_eq!(out, json!({"ok": true, "plan": "pay", "pr": "repo", "rebased": true, "old": before, "new": new, "pushed": true}));
+    assert!(!fx.rebasing());
+    assert_eq!(fx.git(&fx.lead, &["status", "--porcelain"]), "");
+    assert_eq!(fs::read_to_string(fx.lead.join("README.md")).unwrap(), "resolved\n");
+    assert_eq!(fx.git(&fx.lead, &["rev-parse", "HEAD"]), new);
+    // The Gate ran on the rebased commit, then the push.
+    assert_eq!(fx.gate_log().trim(), new);
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(new));
+    fx.assert_no_gate_worktree();
+    // No Event, and nothing left to continue.
+    assert!(fx.events("error").is_empty());
+    assert_eq!(code(&fx.rebase("--continue")), ("no_rebase_in_progress".into(), 3));
+}
+
+#[test]
+fn rebase_continue_stops_again_at_a_second_conflicting_commit() {
+    let fx = fx("deploy");
+    let before = fx.conflicting(&["lead 1", "lead 2"]);
+    assert_eq!(code(&fx.pr("rebase")).0, "rebase_conflict");
+    fx.resolve("resolved 1");
+
+    let run = fx.rebase("--continue");
+
+    assert_eq!(code(&run), ("rebase_conflict".into(), 3));
+    assert_eq!(run.error()["details"]["files"], json!(["README.md"]));
+    assert_eq!(run.error()["details"]["next"], "cpd pr rebase --pr repo --plan pay --continue");
+    assert!(fx.rebasing());
+    assert_eq!(fx.lead_sha(), before);
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(before.clone()));
+
+    fx.resolve("resolved 2");
+    let out = fx.rebase("--continue").ok();
+    assert_eq!((out["rebased"].as_bool(), out["old"].as_str()), (Some(true), Some(before.as_str())));
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()));
+    assert_eq!(fs::read_to_string(fx.lead.join("README.md")).unwrap(), "resolved 2\n");
+    assert!(!fx.rebasing());
+}
+
+#[test]
+fn rebase_continue_refuses_while_conflict_markers_remain() {
+    let fx = fx("deploy");
+    let before = fx.conflicting(&["lead"]);
+    assert_eq!(code(&fx.pr("rebase")).0, "rebase_conflict");
+
+    // Unmerged.
+    let run = fx.rebase("--continue");
+    assert_eq!(code(&run), ("rebase_conflict".into(), 3));
+    assert_eq!(run.error()["details"]["files"], json!(["README.md"]));
+    assert_eq!(run.error()["details"]["next"], "cpd pr rebase --pr repo --plan pay --continue");
+
+    // Staged with the markers in it.
+    fx.git(&fx.lead, &["add", "README.md"]);
+    let run = fx.rebase("--continue");
+    assert_eq!(code(&run), ("rebase_conflict".into(), 3));
+    assert_eq!(run.error()["details"]["files"], json!(["README.md"]));
+
+    assert!(fx.rebasing());
+    assert_eq!(fx.lead_sha(), before);
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(before));
+    assert_eq!(fx.gate_log(), "");
+}
+
+#[test]
+fn rebase_continue_and_abort_refuse_when_no_rebase_is_in_progress() {
+    let fx = fx("deploy");
+    let before = fx.lead_sha();
+
+    for flag in ["--continue", "--abort"] {
+        let run = fx.rebase(flag);
+        assert_eq!(code(&run), ("no_rebase_in_progress".into(), 3), "{flag}");
+    }
+    assert_eq!(fx.lead_sha(), before);
+    assert!(fx.gh_calls().is_empty());
+    assert_eq!(fx.gate_log(), "");
+}
+
+#[test]
+fn rebase_continue_and_abort_together_are_a_usage_error() {
+    let fx = fx("deploy");
+    let run = fx.env.cpd(&["pr", "rebase", "--plan", "pay", "--continue", "--abort"]);
+    assert_eq!(code(&run), ("usage".into(), 2));
+}
+
+#[test]
+fn rebase_abort_restores_the_branch() {
+    let fx = fx("deploy");
+    fx.hooks("pre-merge = \"git rev-parse HEAD\"\n");
+    let before = fx.conflicting(&["lead"]);
+    assert_eq!(code(&fx.pr("rebase")).0, "rebase_conflict");
+
+    let out = fx.rebase("--abort").ok();
+
+    assert_eq!(out, json!({"ok": true, "plan": "pay", "pr": "repo", "aborted": true, "tip": before}));
+    assert!(!fx.rebasing());
+    assert_eq!(fx.lead_sha(), before);
+    assert_eq!(fx.git(&fx.lead, &["rev-parse", "HEAD"]), before);
+    assert_eq!(fx.git(&fx.lead, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay");
+    assert_eq!(fx.git(&fx.lead, &["status", "--porcelain"]), "");
+    assert_eq!(fs::read_to_string(fx.lead.join("README.md")).unwrap(), "lead\n");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(before));
+    assert_eq!(fx.gate_log(), "");
+    assert!(fx.events("error").is_empty());
+    // Idempotent: no.
+    assert_eq!(code(&fx.rebase("--abort")), ("no_rebase_in_progress".into(), 3));
+}
+
+#[test]
+fn rebase_continue_does_not_overwrite_a_push_it_has_not_seen() {
+    let fx = fx("deploy");
+    fx.conflicting(&["lead"]);
+    assert_eq!(code(&fx.pr("rebase")).0, "rebase_conflict");
+    // Someone else pushes to the PR's branch during the stop.
+    let clone = fx.env.root().join("repos/clone");
+    fx.git(fx.env.root(), &["clone", "-q", fx.origin.to_str().unwrap(), clone.to_str().unwrap()]);
+    fx.git(&clone, &["checkout", "-q", "cpd/pay"]);
+    fs::write(clone.join("theirs.txt"), "theirs\n").unwrap();
+    fx.git(&clone, &["add", "-A"]);
+    fx.git(&clone, &["commit", "-q", "-m", "theirs"]);
+    fx.git(&clone, &["push", "-q", "origin", "cpd/pay"]);
+    let theirs = fx.remote_branch("cpd/pay");
+    fx.resolve("resolved");
+
+    let run = fx.rebase("--continue");
+
+    assert_eq!(code(&run), ("git_failed".into(), 1));
+    assert_eq!(fx.remote_branch("cpd/pay"), theirs);
+    fx.assert_no_gate_worktree();
+}
+
+#[test]
+fn rebase_continue_refuses_when_the_lead_branch_moved_during_the_stop() {
+    let fx = fx("deploy");
+    let before = fx.conflicting(&["lead"]);
+    assert_eq!(code(&fx.pr("rebase")).0, "rebase_conflict");
+    // A merge lands during the stop: the ref moves under the rebase.
+    let moved = fx.git(&fx.repo, &["rev-parse", &format!("{before}^")]);
+    fx.git(&fx.repo, &["update-ref", "refs/heads/cpd/pay", &moved]);
+    fx.resolve("resolved");
+
+    let run = fx.rebase("--continue");
+
+    assert_eq!(code(&run), ("cas_lost".into(), 3));
+    assert_eq!(run.error()["details"]["reason"], "lead_branch_moved");
+    assert_eq!(run.error()["details"]["tip"], moved);
+    assert!(fx.rebasing());
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(before));
+}
+
+#[test]
+fn rebase_with_tracked_local_changes_that_a_conflict_needs_refuses_and_changes_nothing() {
+    let fx = fx("deploy");
+    let before = fx.conflicting(&["lead"]);
+    fs::write(fx.lead.join("api.txt"), "edited\n").unwrap();
+
+    let run = fx.pr("rebase");
+
+    assert_eq!(code(&run), ("lead_worktree_dirty".into(), 3));
+    assert_eq!(run.error()["details"]["files"], json!(["api.txt"]));
+    assert!(!fx.rebasing());
+    assert_eq!(fx.lead_sha(), before);
+    assert_eq!(fs::read_to_string(fx.lead.join("api.txt")).unwrap(), "edited\n");
 }
 
 #[test]
