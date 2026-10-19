@@ -179,25 +179,16 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
     if archived { Action::History(id.clone()) } else { Action::Open(id.clone()) }
 }
 
-/// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts, but a row of the old `engine-error` kind (hs-d314). `engine-down`
-/// starts the engine; `job-stuck` opens the Lead of its Plan and the Worker of the failed Job's latest Attempt beside it; `pr-ready` opens the merge popup of its pull request (`None` for a subject that is not
+/// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts, but a row of the old `engine-error` or `job-stuck` kind (hs-d314, hs-d318). `engine-down`
+/// starts the engine; `pr-ready` opens the merge popup of its pull request (`None` for a subject that is not
 /// `pr:<owner>/<repo>#<n>`); `plan-review` opens the Lead of its Plan and copies the review page's `url` (or says there is
 /// none yet); the `url` is copied for `pr-failing`, `pr-changes` and `review-requested` (their OSC 8 link stays for the
 /// terminal's modifier-click). `None` only for an item without what its jump needs.
 pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
     match item.kind {
         Kind::Dialog | Kind::Unread => item.session.as_ref().map(|s| Jump::Run(open_or_history(tree, s))),
-        Kind::JobStuck => {
-            let plan = item.plan.as_ref()?;
-            let open = open_lead(tree, plan)?;
-            match &item.job {
-                // the Worker of the Job's latest Attempt, which the Runner reads from the store; a Job with none opens the Lead only
-                Some(job) => Some(Jump::Steps(vec![open, Action::OpenWorker { plan: plan.clone(), job: job.clone() }])),
-                None => Some(Jump::Run(open)),
-            }
-        }
-        // no click: the engine's errors go to the Manager, not the Inbox (hs-d314); only a row an older engine opened remains
-        Kind::EngineError => None,
+        // no click: the engine's errors and the stuck Jobs go to the Manager, not the Inbox (hs-d314, hs-d318); only a row an older engine opened remains
+        Kind::EngineError | Kind::JobStuck => None,
         Kind::EngineDown => Some(Jump::Run(Action::EnsureWatch)),
         Kind::Question => item.context.as_ref().map(|c| Jump::Run(Action::OpenManager(c.clone()))),
         Kind::PlanReview => {
@@ -425,16 +416,12 @@ mod tests {
         let open = |id: &str| Some(Jump::Run(Action::Open(sid(id))));
         assert_eq!(jump(&tree, &with(Kind::Dialog, &session)), open("m-alpha"));
         assert_eq!(jump(&tree, &with(Kind::Unread, &session)), open("m-alpha"));
-        assert_eq!(jump(&tree, &with(Kind::JobStuck, &plan)), open("l-ship"), "no Job: the Lead of the item's Plan only");
         let job = |item: &mut Item| {
             plan(item);
             item.job = Some(JobKey::parse("c").unwrap());
         };
-        assert_eq!(
-            jump(&tree, &with(Kind::JobStuck, &job)),
-            Some(Jump::Steps(vec![Action::Open(sid("l-ship")), Action::OpenWorker { plan: PlanId::parse("ship").unwrap(), job: JobKey::parse("c").unwrap() }])),
-            "the Lead of the item's Plan, then the Worker of the Job's latest Attempt"
-        );
+        assert_eq!(jump(&tree, &with(Kind::JobStuck, &job)), None, "job-stuck: no click, a stuck Job goes to the Manager (hs-d318)");
+        assert_eq!(jump(&tree, &with(Kind::JobStuck, &plan)), None, "not even with no Job: the Lead of the item's Plan stays closed");
         assert_eq!(jump(&tree, &with(Kind::EngineError, &|_| {})), None, "engine-error: no click (hs-d314)");
         assert_eq!(jump(&tree, &with(Kind::EngineDown, &|_| {})), Some(Jump::Run(Action::EnsureWatch)), "engine-down starts the engine");
         assert_eq!(jump(&tree, &with(Kind::Question, &context)), Some(Jump::Run(Action::OpenManager(ContextId::parse("alpha").unwrap()))));
@@ -478,17 +465,11 @@ mod tests {
         assert_eq!(jump(&tree, &with(Kind::PlanReview, &|_| {})), None);
         // an item without what its jump needs jumps nowhere
         assert_eq!(jump(&tree, &with(Kind::Dialog, &|_| {})), None);
-        assert_eq!(jump(&tree, &with(Kind::JobStuck, &|i| i.plan = Some(PlanId::parse("nope").unwrap()))), None);
-        assert_eq!(jump(&tree, &with(Kind::JobStuck, &|i| i.job = Some(JobKey::parse("c").unwrap()))), None, "a Job with no Plan");
         assert_eq!(jump(&tree, &with(Kind::Question, &|_| {})), None);
         // an archived Session shows its history, as a click on its tree row
         assert_eq!(
             jump(&archived(), &with(Kind::Unread, &|i| i.session = Some(sid("f-blocked")))),
             Some(Jump::Run(Action::History(sid("f-blocked"))))
-        );
-        assert_eq!(
-            jump(&archived(), &with(Kind::JobStuck, &|i| i.plan = Some(PlanId::parse("old").unwrap()))),
-            Some(Jump::Run(Action::History(sid("l-old"))))
         );
     }
 

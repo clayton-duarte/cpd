@@ -1881,7 +1881,7 @@ mod tests {
         // rows 12.. are the five items: dialog, pr-failing, job-stuck, engine-error, unread
         assert_eq!(click(&mut view, 10, 12), Effect::Run(Action::Open(sid("f-blocked"))), "dialog: session open");
         assert_eq!(click(&mut view, 10, 13), Effect::Run(Action::CopyUrl("https://github.com/acme/api/pull/12".into())), "pr-failing no Plan owns: copies its url");
-        assert_eq!(click(&mut view, 10, 14), Effect::Run(Action::Open(sid("l-ship"))), "job-stuck: the Lead of the Plan");
+        assert_eq!(click(&mut view, 10, 14), Effect::None, "job-stuck (an old row, hs-d318): no click");
         assert_eq!(click(&mut view, 10, 15), Effect::None, "engine-error (an old row, hs-d314): no click");
         assert_eq!(click(&mut view, 41, 16), Effect::Run(Action::Open(sid("l-ship"))), "unread: anywhere on the row, the age too");
         assert_eq!(click(&mut view, 10, 11), Effect::None, "the header");
@@ -2140,7 +2140,8 @@ mod tests {
     #[test]
     fn enter_on_an_item_jumps_as_a_click_does_and_the_refusal_shows_in_the_note() {
         let mut view = with_inbox(5);
-        draw_now(&mut view, 43, 16);
+        view.inbox_expanded = true; // all five items, so that the cursor reaches the last
+        draw_now(&mut view, 43, 18);
         press(&mut view, KeyCode::Down);
         while view.inbox_cursor.is_none() {
             press(&mut view, KeyCode::Down);
@@ -2149,11 +2150,14 @@ mod tests {
         press(&mut view, KeyCode::Down);
         assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::CopyUrl("https://github.com/acme/api/pull/12".into())), "pr-failing: Enter copies its url");
         press(&mut view, KeyCode::Down);
-        assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Open(sid("l-ship"))), "job-stuck: the Lead");
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None, "job-stuck (an old row, hs-d318): no jump");
+        press(&mut view, KeyCode::Down);
+        press(&mut view, KeyCode::Down);
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Open(sid("l-ship"))), "unread: the Lead");
         view.done(Err(Action::Dismiss(2).failed("item_closed", "Item 2 is closed.")));
         assert_eq!(view.note, "item_closed: Item 2 is closed.");
-        let rows = text_rows(&draw_now(&mut view, 43, 17));
-        assert_eq!(rows[16], " item_closed: Item 2 is closed.");
+        let rows = text_rows(&draw_now(&mut view, 43, 18));
+        assert_eq!(rows[17], " item_closed: Item 2 is closed.");
     }
 
     #[test]
