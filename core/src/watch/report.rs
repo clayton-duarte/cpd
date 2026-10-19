@@ -10,12 +10,12 @@ use std::collections::HashMap;
 use std::fmt;
 use std::time::{Duration, Instant};
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::SOURCE;
 use super::log::Log;
 use crate::error::CpdError;
-use crate::events::{self, Kind, NewEvent};
+use crate::events::{self, NewEvent};
 use crate::inbox::rules::EngineError;
 use crate::ids::{AttemptId, JobKey, PlanId, SessionId};
 use crate::store::Store;
@@ -106,8 +106,8 @@ impl About {
         }
     }
 
-    fn event(&self, text: String, data: Value) -> NewEvent {
-        let event = NewEvent::new(Kind::Error, text, data);
+    fn event(&self, text: String, failure: &Failure) -> NewEvent {
+        let event = NewEvent::error(text, SOURCE, &failure.code, &failure.message, &failure.details);
         match self {
             About::Machine => event,
             About::Plan(p) => event.plan(p.clone()),
@@ -171,8 +171,7 @@ impl Report {
             failure.message,
             about.see()
         );
-        let data = json!({"source": SOURCE, "code": failure.code, "message": failure.message, "details": failure.details});
-        match store.write(SOURCE, |tx| events::append(tx, about.event(text, data))) {
+        match store.write(SOURCE, |tx| events::append(tx, about.event(text.clone(), &failure))) {
             Ok(event) => {
                 self.appended.insert(repeated, (Instant::now(), event));
                 self.open.insert(key, (failure.code, event));
@@ -207,6 +206,7 @@ impl Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use crate::home::CpdHome;
 
     fn failure(code: &str) -> Failure {

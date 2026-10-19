@@ -14,7 +14,7 @@ use super::report::{About, Failure, Report, Step};
 use super::{SOURCE, completion, escalations, inbox, liveness, pr, schedule};
 use crate::config::{Catalog, Config, load_catalog};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{self, Kind, NewEvent};
+use crate::events::{self, NewEvent};
 use crate::home::CpdHome;
 use crate::inbox::rules::EngineError;
 use crate::host::Tmux;
@@ -176,8 +176,8 @@ fn catch_signals() -> Result<(), CpdError> {
     Ok(())
 }
 
-fn watch_event(store: &mut Store, kind: Kind, text: String) -> Result<i64, CpdError> {
-    store.write(SOURCE, |tx| events::append(tx, NewEvent::new(kind, text, json!({"pid": std::process::id()}))))
+fn watch_event(store: &mut Store, event: NewEvent) -> Result<i64, CpdError> {
+    store.write(SOURCE, |tx| events::append(tx, event.clone()))
 }
 
 /// `cpd watch`: the engine in the foreground.
@@ -189,7 +189,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
     catch_signals()?;
     let pid = std::process::id();
-    watch_event(&mut store, Kind::WatchStarted, format!("The engine started (pid {pid}). See: cpd doctor"))?;
+    watch_event(&mut store, NewEvent::watch_started(format!("The engine started (pid {pid}). See: cpd doctor"), pid))?;
     log.line(&format!("started (pid {pid}), a tick every {}s", config.watch.tick_seconds));
 
     let tmux = Tmux::new(config.tmux.socket.as_str());
@@ -216,7 +216,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
     }
 
     engine.log.line("stopping on a signal");
-    if let Err(e) = watch_event(&mut engine.store, Kind::WatchStopped, format!("The engine stopped (pid {pid}). Start it: cpd watch --ensure")) {
+    if let Err(e) = watch_event(&mut engine.store, NewEvent::watch_stopped(format!("The engine stopped (pid {pid}). Start it: cpd watch --ensure"), pid)) {
         engine.log.line(&format!("cannot append watch-stopped: {} ({})", e.message(), e.code().as_str()));
     }
     Ok(Output::success(json!({"stopped": true})))
