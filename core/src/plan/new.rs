@@ -13,7 +13,7 @@ use crate::args::Text;
 use crate::context::render::markdown;
 use crate::context::{By, ContextRow, Contexts, Draft, PlanRef, Record, plan_repos};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::{ContextId, PlanId, RecordKind, SessionId};
 use crate::output::Output;
 
@@ -108,11 +108,11 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
             rusqlite::params![id.as_str(), args.context.as_str(), args.title.as_str(), jira, session.as_str()],
         )?;
         let text = format!("Plan {id} \"{}\" created in Context {}, phase grounding. Next: cpd plan show --plan {id}", args.title, args.context);
-        let data = json!({"title": args.title.as_str(), "jira": jira, "lead_session": session, "forked_from": Value::Null, "cwd": cwd});
-        append(tx, NewEvent::new(Kind::PlanCreated, text, data).plan(id.clone()))?;
+        let event = NewEvent::plan_created(text, args.title.as_str(), jira.as_deref(), &session, Value::Null, &cwd);
+        append(tx, event.plan(id.clone()))?;
         let text = format!("Lead {name} of Plan {id} registered, a fresh Lead.");
-        let data = json!({"role": "lead", "name": name, "forked_from": Value::Null, "tier": tier});
-        append(tx, NewEvent::new(Kind::SessionRegistered, text, data).plan(id.clone()).session(session.clone()))?;
+        let event = NewEvent::session_registered(text, "lead", &name, Value::Null, &tier);
+        append(tx, event.plan(id.clone()).session(session.clone()))?;
         Ok(())
     })?;
     let plan = env.store.read(|conn| find(conn, &id))?.ok_or_else(|| bad_row(format!("Plan {id} was just created")))?;

@@ -6,7 +6,7 @@ use serde_json::json;
 use super::lead::retitle;
 use super::{Env, RenameArgs, plan_not_found};
 use crate::error::CpdError;
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::{ContextId, SessionId};
 use crate::output::Output;
 
@@ -36,7 +36,7 @@ pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
     env.store.write("plan rename", |tx| {
         tx.execute("UPDATE plans SET title = ?1 WHERE id = ?2", [title, id.as_str()])?;
         let text = format!("Plan {id} renamed to {title:?}.");
-        let event = NewEvent::new(Kind::PlanRenamed, text, json!({"title": title})).context(context.clone()).plan(id.clone());
+        let event = NewEvent::plan_renamed(text, title).context(context.clone()).plan(id.clone());
         append(tx, event)?;
         Ok(())
     })?;

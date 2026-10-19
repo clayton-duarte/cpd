@@ -13,7 +13,7 @@ use super::review::{latest_approved_for, latest_json, no_draft_jobs};
 use super::row::{self, Phase};
 use super::{Env, LockArgs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::git::{TAIL_LINES, tail};
 use crate::ids::PlanId;
 use crate::output::Output;
@@ -121,7 +121,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         let started_keys: Vec<&str> = started.iter().map(|p| p.key()).collect();
         append(
             tx,
-            NewEvent::new(Kind::PlanPhase, text, json!({"from": "plan", "to": "dispatch", "jobs": keys, "prs": started_keys})).plan(id.clone()),
+            NewEvent::plan_phase_locked(text, &keys, started_keys).plan(id.clone()),
         )?;
         for pr in &started {
             start::record(tx, &id, pr, By::Lock)?;

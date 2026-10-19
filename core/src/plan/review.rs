@@ -11,7 +11,7 @@ use super::row::Phase;
 use super::show::{Head, load_head};
 use super::{DecideArgs, Env, RenderArgs, ReviewArgs, read_text_file, render, write_file};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, ReviewId};
 use crate::output::Output;
 
@@ -159,8 +159,7 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
             rusqlite::params![id.as_str(), review.to_string(), number, fingerprint],
         )?;
         let text = format!("Plan review {review} of Plan {id} requested: the User reviews {drafts} draft Jobs in plannotator.");
-        let data = json!({"review": review, "fingerprint": fingerprint, "status": "pending"});
-        append(tx, NewEvent::new(Kind::PlanReview, text, data).plan(id.clone()))?;
+        append(tx, NewEvent::plan_review_requested(text, review, &fingerprint).plan(id.clone()))?;
         Ok(tx.query_row("SELECT at FROM txns WHERE id = cpd_txn()", [], |r| r.get::<_, String>(0))?)
     })?;
     Ok(Output::success(json!({
@@ -240,11 +239,8 @@ pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
             ),
             _ => format!("Plan review {} of Plan {id} was {verdict}. Revise the plan (job edit, job add, job cancel), then cpd plan review", review.id),
         };
-        let mut data = json!({"review": review.id, "fingerprint": review.fingerprint, "status": status, "feedback": feedback});
-        if queues {
-            data["jobs"] = json!(queued);
-        }
-        append(tx, NewEvent::new(Kind::PlanReview, text, data).plan(id.clone()))?;
+        let jobs = queues.then_some(&queued);
+        append(tx, NewEvent::plan_review_decided(text, review.id, &review.fingerprint, status, feedback, jobs).plan(id.clone()))?;
         Ok((now, phase, current, queues.then_some(queued)))
     })?;
     Ok(decided(&review, phase, current, queued.as_deref(), false))

@@ -6,11 +6,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use serde_json::json;
 
 use super::Env;
 use crate::error::CpdError;
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::host::pi::Plannotator;
 use crate::host::{PaneId, Spawn, Tmux, WindowId};
 use crate::ids::{ContextId, PlanId, SessionId};
@@ -82,8 +81,7 @@ pub(super) fn start(env: &mut Env, lead: &Lead, window: &str, command: &str) -> 
     env.store.write(command, |tx| {
         tx.execute("UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2", [pane.as_str(), lead.session.as_str()])?;
         let text = format!("Lead {} is parked in window {}.", lead.name, window.as_str());
-        let data = json!({"pane": pane.as_str(), "window": window.as_str(), "place": "parked"});
-        let mut event = NewEvent::new(Kind::SessionMoved, text, data).session(lead.session.clone()).context(lead.context.clone());
+        let mut event = NewEvent::session_moved(text, Some(pane.as_str()), Some(window.as_str()), "parked").session(lead.session.clone()).context(lead.context.clone());
         if let Some(plan) = lead.plan {
             event = event.plan(plan.clone());
         }
