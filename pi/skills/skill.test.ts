@@ -234,13 +234,13 @@ test("cpd-lead: sizing follows attempt_minutes, dialogs stay short, Specs carry 
   }
 });
 
-test("hs-d239: cpd-lead registers planned work at once; cpd-manager checks it", () => {
+test("cpd-lead registers planned work at once; cpd-manager checks it", () => {
   const lead = skillFiles("cpd-lead")[0]!.text;
-  assert.match(lead, /Register planned work at once \(hs-d239\)/);
+  assert.match(lead, /Register planned work at once/);
   assert.match(lead, /cpd job add <k> --draft --title/);
   assert.match(lead, /cpd pr add <key> --repo <path> --needs/);
   const manager = skillFiles("cpd-manager")[0]!.text;
-  assert.match(manager, /Check hs-d239 for each Plan/);
+  assert.match(manager, /Check each Plan's registered work/);
   assert.match(manager, /cpd plan show --plan <p>/);
   assert.match(manager, /cpd session send <lead-session>[^\n]*register/);
 });

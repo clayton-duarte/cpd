@@ -11,7 +11,7 @@ type Open = { key: string; label: string };
  */
 export class Facts {
   active = false;
-  /** hs-d278: the run that is under way, or just ended, answered the User. Cleared at the next run start and once an `idle` that carries it is sent. */
+  /** The run that is under way, or just ended, answered the User. Cleared at the next run start and once an `idle` that carries it is sent. */
   reply = false;
   private opened: Open[] = [];
   private prompts = 0;

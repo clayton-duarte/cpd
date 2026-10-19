@@ -410,7 +410,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     }
   }
 
-  /** §15.3 `session-message`: for every Lead and a Manager; a turn only when `data.wake` is true (hs-d209, D3). The sender's name is read once, `cpd session show <from>`; the id stands in when it cannot be read. */
+  /** §15.3 `session-message`: for every Lead and a Manager; a turn only when `data.wake` is true. The sender's name is read once, `cpd session show <from>`; the id stands in when it cannot be read. */
   async function deliverSessionMessage(r: Run, ev: CpdEvent): Promise<void> {
     const from = typeof ev.data.from === "string" ? ev.data.from : null;
     let sender: { id: string; name: string | null } | null = null;
@@ -430,7 +430,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   // ---- Context updates at turn start (§15.7) ----
 
   /**
-   * `before_agent_start` of a Manager only (hs-d209, D1: nothing from the Context is pushed into a Lead's turn): the
+   * `before_agent_start` of a Manager only (nothing from the Context is pushed into a Lead's turn): the
    * Context records other Sessions wrote since its cursor, the `Plans:` digest and the fresh `Pending work:` section, as one `cpd-context` message added to the run. Never starts a turn: a failed read is reported once (no turn) and leaves the cursor.
    */
   async function contextUpdates(r: Run, ctx: Ctx): Promise<{ message: Message } | undefined> {
@@ -499,7 +499,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       const r = run;
       if (!r || r.info.role !== "lead" || !r.reminderDue) return undefined;
       r.reminderDue = false;
-      return { message: { customType: REMINDER_TYPE, content: REMINDER_TEXT, display: false, details: { rule: "hs-d239" } } };
+      return { message: { customType: REMINDER_TYPE, content: REMINDER_TEXT, display: false, details: { rule: "register-planned-work" } } };
     });
   }
 
@@ -702,7 +702,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     }
   });
 
-  // hs-d278: who started the run. `pi.on` has no unsubscribe, so the run is checked. Returns nothing: it adds no message.
+  // Who started the run. `pi.on` has no unsubscribe, so the run is checked. Returns nothing: it adds no message.
   pi.on("before_agent_start", function markReply(event) {
     const r = run;
     if (r) r.facts.reply = startsReply(event);

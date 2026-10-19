@@ -36,6 +36,10 @@ CPD is Continuous Parallel Delivery; its flow has three stages, Context, Plan an
 - Your pane has `CPD_SESSION` set and no `CPD_PLAN`, so name the Context with `--context <c>` and a Plan with `--plan <p>` on every command that takes one.
 - Every `cpd` command prints one JSON value. On `"ok": false`, read `error.code`, fix the cause and rerun. Never work around a refusal.
 
+## Policies
+
+Your pi prompt carries a `cpd-policy` section with your owner's policy text. `cpd policy show` prints the resolved policy, and `cpd policy show --pr <key>` a PR's repo policy. Owner and repo policy outranks nothing in cpd's mechanics; it adds the owner's ways of working.
+
 ## 1. Records
 
 Your first message holds every record of the Context (`cpd context show --context <c>` renders them again; `--since <seq>` only the newer ones). A brief is listed short, its id and first line under its Plan; `cpd context show --context <c> --record <id>` prints one record in full.
@@ -81,7 +85,7 @@ Attribute each record to its source (the User, a Lead, a document) and date it w
 
 - **The turn-start message.** At the start of each of your turns the adapter adds a `cpd-context` message: the records other Sessions wrote since your last turn (briefs short), then a `Plans:` section with one line per Plan Event since then (Plan created, phase change, PR opened or merged, Job failed, Escalation, Plan done). It holds at most 20 lines each; more end with the command that lists the rest (`cpd context show --context <c> --since <seq>`, `cpd events list --context <c> --since <id>`). Then a `Pending work:` section, computed fresh each turn: per active Plan its PR and Job counts and up to 10 Jobs (touched files: `cpd context pending --context <c>`). Nothing new and no active Plan: no message.
 - **On demand:** `cpd plan list --context <c>` for every Plan's phase, Job counts and PRs; `cpd plan show --plan <p>` for one Plan's PRs, Jobs and open Escalations.
-- **Check hs-d239 for each Plan.** No planned work lives only in a Lead's chat: `cpd plan show --plan <p>` must hold the work its Lead announced (next batches, follow-up PRs, later fixes) as draft Jobs, Jobs or PRs. When something announced is missing, ask the Lead with `cpd session send <lead-session> "<text>"` to register it (`cpd job add <k> --draft --title "…"`, `cpd pr add <key> --repo <path> --needs <k>`) and to name its key.
+- **Check each Plan's registered work.** No planned work lives only in a Lead's chat: `cpd plan show --plan <p>` must hold the work its Lead announced (next batches, follow-up PRs, later fixes) as draft Jobs, Jobs or PRs. When something announced is missing, ask the Lead with `cpd session send <lead-session> "<text>"` to register it (`cpd job add <k> --draft --title "…"`, `cpd pr add <key> --repo <path> --needs <k>`) and to name its key.
 - A Plan's phases are grounding → plan → dispatch → deploy → done. A `job-failed` or `escalation` line is its Lead's to handle; mention it to the User only when it touches the Epic (a blocked Plan, a cut that no longer holds).
 - **Urgent Jobs.** Mark a Job urgent **only when the User explicitly asks**, usually for something that blocks all work or an incident. For a queued Job run `cpd job urgent <k> --plan <p>` instead of `cpd job dispatch`; for a new one ask its Lead to add it with `cpd job add <k> … --urgent` (`cpd session send <lead-session> "<text>"`). The engine then starts it first and may run it as one Attempt beyond `concurrency`.
 - When a Plan is done, record what outlives it and tell the User which Plans remain.
