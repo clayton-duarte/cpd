@@ -309,7 +309,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(calls[0][calls[0].len() - 2..], ["--".to_owned(), format!("@{}", message_file.display())]);
     assert!(!calls[0].contains(&"--fork".to_owned()), "{calls:?}");
     cursor = fx.cursor();
-    let out = fx.ok(&["pr", "add", "pay", "--repo", repo, "--plan", PLAN]);
+    let out = fx.ok(&["pr", "add", "pay", "--repo", repo, "--title", "Change the PR", "--plan", PLAN]);
     assert_eq!(out["pr"]["base"], "main");
     assert_eq!(out["pr"]["lead_branch"], "cpd/pay/pay");
     assert_eq!(kinds(&fx.events_since(cursor)), ["pr-added"]);

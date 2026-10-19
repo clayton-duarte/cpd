@@ -87,7 +87,7 @@ impl Fx {
     /// `pr add <key> --repo <repo> [--needs <needs>]`.
     fn add(&self, key: &str, repo: &Path, needs: &[&str]) {
         let needs = needs.join(",");
-        let mut args = vec!["pr", "add", key, "--repo", repo.to_str().unwrap(), "--plan", "pay"];
+        let mut args = vec!["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--plan", "pay"];
         if !needs.is_empty() {
             args.extend(["--needs", &needs]);
         }

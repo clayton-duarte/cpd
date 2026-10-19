@@ -107,7 +107,7 @@ fn new_plan_only(env: &TestEnv, id: &str) -> Value {
 /// `plan new` and the Plan's one PR, keyed `pay` (R34 A12: a Plan has no repo of its own).
 fn new_plan(env: &TestEnv, id: &str, repo: &Path) -> Value {
     let out = new_plan_only(env, id);
-    env.cpd(&["pr", "add", "pay", "--repo", repo.to_str().unwrap(), "--plan", id]).ok();
+    env.cpd(&["pr", "add", "pay", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--plan", id]).ok();
     out
 }
 
@@ -269,10 +269,10 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     assert!(!env.cpd_home().join("contexts").exists(), "the record is in the database only");
     let real = repo.canonicalize().unwrap().display().to_string();
     let other = env.git_repo("web");
-    env.cpd(&["pr", "add", "api", "--repo", &real, "--plan", "pay"]).ok();
-    env.cpd(&["pr", "add", "api2", "--repo", &real, "--plan", "pay"]).ok();
-    env.cpd(&["pr", "add", "web", "--repo", other.to_str().unwrap(), "--plan", "pay"]).ok();
-    env.cpd(&["pr", "add", "gone", "--repo", env.git_repo("old").to_str().unwrap(), "--plan", "pay"]).ok();
+    env.cpd(&["pr", "add", "api", "--repo", &real, "--title", "Change the PR", "--plan", "pay"]).ok();
+    env.cpd(&["pr", "add", "api2", "--repo", &real, "--title", "Change the PR", "--plan", "pay"]).ok();
+    env.cpd(&["pr", "add", "web", "--repo", other.to_str().unwrap(), "--title", "Change the PR", "--plan", "pay"]).ok();
+    env.cpd(&["pr", "add", "gone", "--repo", env.git_repo("old").to_str().unwrap(), "--title", "Change the PR", "--plan", "pay"]).ok();
     env.cpd(&["pr", "cancel", "gone", "--plan", "pay"]).ok();
     let shown = env.cpd(&["context", "show", "--context", "ctx"]).ok();
     let record = shown["records"].as_array().unwrap().iter().find(|r| r["kind"] == "plan").unwrap().clone();
@@ -653,11 +653,11 @@ fn pr_add_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
     fs::create_dir_all(linked.join("sub")).unwrap();
 
     new_plan_only(&env, "pay");
-    let out = env.cpd(&["pr", "add", "pay", "--repo", linked.join("sub").to_str().unwrap(), "--plan", "pay"]).ok();
+    let out = env.cpd(&["pr", "add", "pay", "--repo", linked.join("sub").to_str().unwrap(), "--title", "Change the PR", "--plan", "pay"]).ok();
     assert_eq!(out["pr"]["base"], "trunk");
     assert_eq!(out["pr"]["repo"], clone.canonicalize().unwrap().display().to_string());
     let error = refused(
-        &env.cpd(&["pr", "add", "other", "--repo", clone.to_str().unwrap(), "--base", "side", "--plan", "pay"]),
+        &env.cpd(&["pr", "add", "other", "--repo", clone.to_str().unwrap(), "--title", "Change the PR", "--base", "side", "--plan", "pay"]),
         "base_not_found",
         4,
     );
@@ -1039,7 +1039,7 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
 
     // A PR appended after the lock is not reviewed: the review stays current.
     let web = env.git_repo("web");
-    env.cpd(&["pr", "add", "web", "--repo", web.to_str().unwrap(), "--base", "main", "--plan", "pay"]).ok();
+    env.cpd(&["pr", "add", "web", "--repo", web.to_str().unwrap(), "--title", "Change the PR", "--base", "main", "--plan", "pay"]).ok();
     assert_eq!(show(&env, "pay")["review"]["current"], true);
 
     // Rejected: the drafts stay drafts, editable.

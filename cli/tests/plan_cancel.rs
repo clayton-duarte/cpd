@@ -122,7 +122,7 @@ fn setup(env: &TestEnv) -> (String, String) {
     let lead = env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok()["lead"]["session"].as_str().unwrap().to_owned();
     for key in ["api", "web", "ui"] {
         let repo = env.git_repo(key);
-        env.cpd(&["pr", "add", key, "--repo", repo.to_str().unwrap(), "--plan", "pay"]).ok();
+        env.cpd(&["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--plan", "pay"]).ok();
     }
     wait_for_pane(env, &lead);
     let fork = env.cpd(&["session", "fork", &lead]).ok()["session"]["id"].as_str().unwrap().to_owned();
