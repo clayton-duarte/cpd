@@ -58,7 +58,7 @@ if [ -n "$CPD_ATTEMPT" ]; then
     echo "$job" > "$job.txt"
     git add -A && git commit -qm "$CPD_ATTEMPT" || exit 14
   fi
-  cpd attempt submit "$CPD_ATTEMPT" > "../submit-$CPD_ATTEMPT.json" 2>&1
+  cpd attempt submit "$CPD_ATTEMPT" > "../submit-$CPD_ATTEMPT.part" 2>&1; mv "../submit-$CPD_ATTEMPT.part" "../submit-$CPD_ATTEMPT.json"
 else
   printf '%s\n' '{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}' "$msg" > "$f"
 fi
@@ -325,6 +325,13 @@ fn id(event: &Value) -> i64 {
     event["id"].as_i64().unwrap()
 }
 
+/// What a Worker's `attempt submit` printed, saved by the fake pi at `path` whole (written, then renamed into place):
+/// it may land after the merge the test waited for, since the driver needs only the submission in the store.
+fn submitted(path: &Path) -> Value {
+    let text = common::wait_some(&format!("{} to be written", path.display()), common::WAIT, || fs::read_to_string(path).map_err(|e| e.to_string()));
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}: {text}", path.display()))
+}
+
 /// `argv[i + 1]` where `argv[i] == flag`.
 fn flag<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
     argv.iter().position(|a| a == flag).map(|i| argv[i + 1].as_str())
@@ -509,7 +516,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     assert_eq!((&attempt["outcome"], &attempt["cause"], &attempt["merged_sha"]), (&json!("merged"), &json!("merged"), &json!(wire_tip)));
     let findings = fs::read_to_string(fx.env.cpd_home().join(format!("run/{PLAN}/reviews/audit.md"))).unwrap();
     assert_eq!(findings, "# Findings\nwire.txt\n", "the diff against the remote base holds only a2's own work");
-    let submit: Value = serde_json::from_str(&fs::read_to_string(fx.shared.path.parent().unwrap().join("submit-audit-a1.json")).unwrap()).unwrap();
+    let submit = submitted(&fx.shared.path.parent().unwrap().join("submit-audit-a1.json"));
     assert_eq!(submit["submitted"], true, "{submit}");
     // Its Worker is a fork of the Plan's Lead, in the hidden work session.
     let worker = fx.ok(&["session", "show", attempt["worker_session"].as_str().unwrap()])["session"].clone();

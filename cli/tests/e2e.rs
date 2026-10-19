@@ -47,7 +47,7 @@ if [ -n "$CPD_ATTEMPT" ]; then
   if [ "$job" = ui ] && [ ! -f api.txt ]; then exit 13; fi
   echo "$job" > "$job.txt"
   git add -A && git commit -qm "$CPD_ATTEMPT" || exit 14
-  cpd attempt submit "$CPD_ATTEMPT" > "../submit-$CPD_ATTEMPT.json" 2>&1
+  cpd attempt submit "$CPD_ATTEMPT" > "../submit-$CPD_ATTEMPT.part" 2>&1; mv "../submit-$CPD_ATTEMPT.part" "../submit-$CPD_ATTEMPT.json"
 else
   printf '%s\n' '{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}' "$msg" > "$f"
 fi
@@ -239,6 +239,13 @@ fn of_kind<'a>(events: &'a [Value], kind: &str) -> Vec<&'a Value> {
     events.iter().filter(|e| e["kind"] == kind).collect()
 }
 
+/// What a Worker's `attempt submit` printed, saved by the fake pi at `path` whole (written, then renamed into place):
+/// it may land after the merge the test waited for, since the driver needs only the submission in the store.
+fn submitted(path: &Path) -> Value {
+    let text = common::wait_some(&format!("{} to be written", path.display()), common::WAIT, || fs::read_to_string(path).map_err(|e| e.to_string()));
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}: {text}", path.display()))
+}
+
 /// `argv[i + 1]` where `argv[i] == flag`.
 fn flag<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
     argv.iter().position(|a| a == flag).map(|i| argv[i + 1].as_str())
@@ -393,8 +400,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
         assert_eq!(about[0]["data"], json!({"number": 1, "tier": tier, "origin": "ladder"}));
         assert_eq!(about[1]["data"], json!({"from": "starting", "to": "running"}));
         assert_eq!(about[2]["data"], json!({"from": "running", "to": "merging"}));
-        let submit: Value =
-            serde_json::from_str(&fs::read_to_string(fx.repo.parent().unwrap().join(format!("submit-{attempt}.json"))).unwrap()).unwrap();
+        let submit = submitted(&fx.repo.parent().unwrap().join(format!("submit-{attempt}.json")));
         assert_eq!(submit["submitted"], true, "{submit}");
         let shown = fx.ok(&["attempt", "show", attempt, "--plan", PLAN])["attempt"].clone();
         assert_eq!((&shown["status"], &shown["outcome"], &shown["cause"]), (&json!("ended"), &json!("merged"), &json!("merged")));
