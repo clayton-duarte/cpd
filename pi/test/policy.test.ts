@@ -80,3 +80,16 @@ test("policySection: an output of another shape is bad_output", () => {
     assert.throws(() => policySection(bad), (e: unknown) => e instanceof CpdError && e.code === "bad_output");
   }
 });
+
+test("a pi without sections: the policy failure is reported once per run, no turn", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.respond("policy-show", policyShow("lead", { instructions: "Hi." }));
+  f.load();
+  await f.pi.fire("session_start");
+  for (let i = 0; i < 2; i++) await f.pi.fire("before_agent_start", { messageType: "user", prompt: "hi", systemPromptOptions: {} });
+  const errs = f.pi.errors();
+  assert.equal(errs.length, 1);
+  assert.match(errs[0]!.message.content, /^cpd adapter: policy section: sections_missing: /);
+  assert.deepEqual(errs[0]!.options, { triggerTurn: true, deliverAs: "followUp" }); // the adapter's one error path
+});

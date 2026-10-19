@@ -71,6 +71,8 @@ type Run = {
   reminderDue: boolean;
   /** The text of the `cpd-policy` section (§15.9), or undefined: none, or `cpd policy show` failed. */
   policy: string | undefined;
+  /** True once the missing-`sections` failure is reported, so it is reported once per run (§8.3 "Delivery to agents"). */
+  sectionsReported: boolean;
   /** One line of `run/adapter/<session>.log` (§15.6 "Log"); a failed write is notified once per run. */
   log: (line: string) => void;
   unsubscribe: (() => void)[];
@@ -229,6 +231,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       reload: undefined,
       reminderDue: false,
       policy,
+      sectionsReported: false,
       log: (line) => {
         try {
           appendLog(reloadLogPath(env.CPD_HOME || join(homedir(), ".cpd"), id), line);
@@ -723,8 +726,16 @@ export function adapter(pi: PiApi, options: Options = {}): void {
 
   // §15.9: the policy section of the run, for every role. Returns nothing: it only sets the section.
   pi.on("before_agent_start", function policyHandler(event) {
-    const text = run?.policy;
-    if (text !== undefined && isObject(event?.systemPromptOptions?.sections)) event.systemPromptOptions.sections[POLICY_SECTION] = text;
+    const r = run;
+    const text = r?.policy;
+    if (r === undefined || text === undefined) return;
+    const sections = event?.systemPromptOptions?.sections;
+    if (isObject(sections)) {
+      sections[POLICY_SECTION] = text;
+    } else if (!r.sectionsReported) {
+      r.sectionsReported = true;
+      deliver("policy section", new CpdError("sections_missing", "this pi gives no systemPromptOptions.sections: the policy is not delivered"));
+    }
   });
 
   pi.on("input", (event) => {
