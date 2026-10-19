@@ -293,10 +293,17 @@ impl Store {
         setup.migrating(from, to)?;
         self.conn.pragma_update(None, "foreign_keys", "OFF")?;
         self.conn.pragma_update(None, "legacy_alter_table", "ON")?;
+        // The commit appends the migration's pages to the WAL and nothing more. The checkpoint SQLite runs inside a
+        // commit past 1000 pages (a rebuilt `events` is thousands) copies them into the database and syncs it; a
+        // plain commit's checkpoint took 1.3 to 2.4 s under load (`run/store-slow.log`), and this one would hold
+        // `locks/store.lock` for it (hs-n278). The next commit of any process checkpoints, outside the setup lock.
+        let autocheckpoint: i64 = self.conn.pragma_query_value(None, "wal_autocheckpoint", |r| r.get(0))?;
+        self.conn.pragma_update(None, "wal_autocheckpoint", 0)?;
         let migrated = self.migrate_in_txn(home, catalog);
         let restored = self
             .conn
-            .pragma_update(None, "legacy_alter_table", "OFF")
+            .pragma_update(None, "wal_autocheckpoint", autocheckpoint)
+            .and_then(|()| self.conn.pragma_update(None, "legacy_alter_table", "OFF"))
             .and_then(|()| self.conn.pragma_update(None, "foreign_keys", "ON"));
         let imported_old_stores = migrated?;
         restored?;
@@ -1279,5 +1286,93 @@ mod tests {
             assert!(n.name > LEGACY[LEGACY.len() - 1].name, "{}: names sort after the legacy set", n.name);
         }
         assert!(schema::NAMED[0].name.ends_with("-kind-tables"), "no named migration sorts before kind-tables (§4.5)");
+    }
+
+    // ---------- the conversion's cost (hs-n278) ----------
+
+    /// A legacy store at the last legacy version (what the conversion reads) with `events` Events and as many
+    /// `history` rows, each about 2 KB, as one `txns` row: a store of a size that makes `kind-tables` rebuild
+    /// thousands of pages. Its Events and history rows have no Context, Plan or Session.
+    fn big_legacy_store(home: &CpdHome, events: usize) {
+        fs::create_dir_all(home.db().parent().unwrap()).unwrap();
+        let conn = Connection::open(home.db()).unwrap();
+        conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, |_| Ok(1_i64)).unwrap();
+        conn.pragma_update(None, "application_id", APPLICATION_ID).unwrap();
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        conn.pragma_update(None, "legacy_alter_table", "ON").unwrap();
+        for legacy in LEGACY {
+            (legacy.apply)(&conn).unwrap();
+        }
+        conn.pragma_update(None, "user_version", LEGACY.len() as i64).unwrap();
+        conn.execute_batch(&format!(
+            "BEGIN;
+             INSERT INTO txns (id, at, command, pid, session, cwd) VALUES (1, '2026-01-01T00:00:00.000Z', 'x', 1, NULL, '/');
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < {events})
+               INSERT INTO events (txn, at, kind, text, data)
+               SELECT 1, '2026-01-01T00:00:00.000Z', 'session-state', 'Event ' || i, json_object('x', hex(randomblob(1000))) FROM n;
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < {events})
+               INSERT INTO history (txn, tbl, pk, op, before, after)
+               SELECT 1, 'jobs', json_array('p', i), 'update', json_object('x', hex(randomblob(500))), json_object('x', hex(randomblob(500))) FROM n;
+             COMMIT;"
+        ))
+        .unwrap();
+    }
+
+    /// Converts the store of [`big_legacy_store`] as `Store::open` does, on a connection that counts SQLite's
+    /// virtual machine steps (in thousands). Returns the converted store and the steps.
+    fn convert_counting_steps(home: &CpdHome) -> (Store, u64) {
+        let mut store = Store::connect(&home.db(), 5000).unwrap();
+        let steps = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let counter = Arc::clone(&steps);
+        store
+            .conn
+            .progress_handler(1000, Some(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                false
+            }))
+            .unwrap();
+        let setup = setup_lock(home, 5000).unwrap();
+        store.migrate(home, &Catalog::BUILT_IN, &setup).unwrap();
+        store.conn.progress_handler(1000, None::<fn() -> bool>).unwrap();
+        (store, steps.load(Ordering::SeqCst))
+    }
+
+    #[test]
+    fn the_conversion_of_a_large_store_is_one_transaction_with_work_linear_in_its_size() {
+        let mut steps = Vec::new();
+        for events in [500, 2000] {
+            let (_dir, home) = tmp_home();
+            big_legacy_store(&home, events);
+            let (mut store, counted) = convert_counting_steps(&home);
+            let (txns, migrated, history): (i64, i64, i64) = store
+                .read(|c| {
+                    Ok((
+                        c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?,
+                        c.query_row("SELECT count(*) FROM schema_migrations WHERE txn = (SELECT max(id) FROM txns)", [], |r| r.get(0))?,
+                        c.query_row("SELECT count(*) FROM history", [], |r| r.get(0))?,
+                    ))
+                })
+                .unwrap();
+            assert_eq!((txns, migrated), (2, (LEGACY.len() + schema::NAMED.len()) as i64), "{events}: one migrating transaction, which recorded every migration");
+            assert_eq!(history, events as i64, "{events}: the conversion writes no history row for an Event or a history row");
+            steps.push(counted);
+        }
+        // Four times the rows, at most five times the work (index builds sort): a per-row statement of Rust, or a
+        // pass over the table per row, would be four times that or more.
+        assert!(steps[1] <= steps[0] * 5, "500 Events took {} thousand steps, 2000 took {}", steps[0], steps[1]);
+    }
+
+    #[test]
+    fn the_conversion_commit_leaves_the_checkpoint_to_the_next_commit_and_restores_the_threshold() {
+        let (_dir, home) = tmp_home();
+        big_legacy_store(&home, 2000);
+        let (store, _) = convert_counting_steps(&home);
+        // `NOOP`: reports the WAL without checkpointing it. Frames of the migration, none copied to the database.
+        let (log, checkpointed): (i64, i64) =
+            store.conn.query_row("PRAGMA wal_checkpoint(NOOP)", [], |r| Ok((r.get(1)?, r.get(2)?))).unwrap();
+        assert!(log > 1000, "the fixture is smaller than the default threshold: {log} frames");
+        assert_eq!(checkpointed, 0, "the migrating commit checkpointed {checkpointed} of {log} frames, under the setup lock");
+        let threshold: i64 = store.conn.pragma_query_value(None, "wal_autocheckpoint", |r| r.get(0)).unwrap();
+        assert_eq!(threshold, 1000, "SQLite's default, for every later commit");
     }
 }
