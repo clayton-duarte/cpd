@@ -100,26 +100,6 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
     })
 }
 
-/// Every Attempt in `merging` whose Job's PR is on `repo`, in id order.
-pub fn merging_on_repo(conn: &Connection, repo: &str) -> Result<Vec<(PlanId, AttemptId)>, CpdError> {
-    let mut stmt = conn.prepare(
-        "SELECT a.plan, a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-           JOIN prs r ON r.plan = j.plan AND r.key = j.pr
-         WHERE a.status = 'merging' AND r.repo = ?1 ORDER BY a.plan, a.id",
-    )?;
-    let rows = stmt
-        .query_map([repo], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    rows.into_iter()
-        .map(|(plan, id)| {
-            Ok((
-                PlanId::parse(&plan).map_err(|_| corrupt(format!("plan id {plan:?}")))?,
-                AttemptId::parse(&id).map_err(|_| corrupt(format!("attempt id {id:?}")))?,
-            ))
-        })
-        .collect()
-}
-
 /// The Job's cancel reason when a cancel was requested (§3.2 "Cancel").
 pub fn cancel_request(conn: &Connection, plan: &PlanId, job: &JobKey) -> Result<Option<String>, CpdError> {
     Ok(conn
