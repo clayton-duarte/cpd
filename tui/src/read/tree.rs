@@ -105,6 +105,19 @@ fn engine_down(now: String) -> Item {
 }
 
 /// The tree's snapshot: one read transaction, a fixed set of queries whatever the number of Contexts and Plans.
+/// The Inbox's open, visible items (not snoozed, not dismissed) at `now`, in the order of `cpd inbox list` (§17).
+pub(super) fn visible_items(conn: &rusqlite::Connection, now: &str) -> Result<Vec<Item>, CpdError> {
+    model::list(conn, &Filter { context: None, state: State::Visible { now: now.to_owned() } })
+}
+
+/// Each live Lead or fork's dot from the `visible` items (§17, "Which items fill which row"); an archived row keeps
+/// its glyph and takes no item. Every view that draws a Lead's dot (the tree, Pulse) uses this one rule.
+pub(super) fn fill_dots(visible: &[Item], sessions: &mut [SessionNode]) {
+    for s in sessions.iter_mut().filter(|s| !s.is_archived()) {
+        s.dot = Dot::of(s.state, dot::urgency(visible, &s.id, s.plan.as_ref().filter(|_| s.plan_lead)));
+    }
+}
+
 pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
     let home = store_home(store)?;
     let engine_running = model::engine_running(&home)?;
@@ -129,13 +142,10 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
 
         // Read first: the read transaction is one snapshot, so the items and the Sessions agree.
         let now: String = conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?;
-        let mut inbox = model::list(conn, &Filter { context: None, state: State::Visible { now: now.clone() } })?;
+        let mut inbox = visible_items(conn, &now)?;
 
         let mut leads: Vec<SessionNode> = sessions(conn, "s.role = 'lead'", &[])?;
-        for s in leads.iter_mut().filter(|s| !s.is_archived()) {
-            // An archived row keeps its glyph and takes no item (§17).
-            s.dot = Dot::of(s.state, dot::urgency(&inbox, &s.id, s.plan.as_ref().filter(|_| s.plan_lead)));
-        }
+        fill_dots(&inbox, &mut leads);
         let mut heads = plan_heads(conn, None)?;
         // One live Manager per Context (`core/src/context/manager.rs`); the Context row shows its dot, a `●` only from
         // the Manager's own items (hs-d215, hs-d217).
