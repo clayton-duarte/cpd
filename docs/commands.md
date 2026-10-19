@@ -2697,3 +2697,54 @@ Effects, one transaction: **rows** `inbox_items.dismissed_at`; **Event** `inbox-
 ```
 
 Idempotent: yes. An item already dismissed returns `"already": true` and writes nothing, with no Event.
+
+## 22. `policy`
+
+The policies (contract §8.3, hs-d288): cpd's compiled-in default and the owner and repo files under `$CPD_HOME/policy/`, resolved for one policy key, most specific scope first per domain. Area `core/src/policy/`. The files are written by hand or by the User's dotfiles, never by a command: `policy` only reads.
+
+### 22.1 `policy show`
+
+```
+cpd policy show [--pr <key> [--plan <id>] | --context <c> | --owner <login> [--repo <name>]]
+```
+
+Prints the resolved policy of one key: every domain with its value and its source. The pi adapter runs it with no flag at a Session's start to build the Session's policy section (contract §8.3 "Delivery to agents"); a Lead runs it with `--pr` to read a PR's repo policy, which never reaches its own section.
+
+| Flag | Meaning |
+|---|---|
+| (none) | the caller's Session (`CPD_SESSION`, else `session_required`, §1.3): a Manager or a Lead resolves `Owner` of its Context's owner; a Worker (its Session's Attempt, also `CPD_ATTEMPT` in its pane) resolves `Repo` of its Job's PR |
+| `--pr <key>` | that PR of the selected Plan (`--plan`, else `CPD_PLAN`; §1.3): `Repo(<Context owner>, <PR name>)`, or `Owner(<Context owner>)` for a PR whose `name` is null (contract §8.3 "Keys and resolution") |
+| `--context <c>` | that Context: `Owner(<its owner>)` |
+| `--owner <login>` | that owner: `Owner(<login>)`; a login of contract §2.1, else `usage` |
+| `--repo <name>` | with `--owner` only (else `usage`): `Repo(<login>, <name>)`; a name of contract §2.1, else `usage` |
+
+`--pr`, `--context` and `--owner` are exclusive (`usage`).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| with no flag, a Session was selected | `session_required` | 2 |
+| the Session, Plan, PR or Context exists | `session_not_found`, `plan_not_found`, `pr_not_found`, `context_not_found` | 4 |
+| the Context (the Session's, the PR's Plan's, or `--context`) has an owner; `details.next` = `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
+| the key's owner has `owners/<owner>.toml`, also when its repo file exists; `details.owner` | `owner_unknown` | 1 |
+| every file the key reads is valid TOML with known domains, keys, types and values, and a valid file name; `details.file`, `details.key` | `policy_invalid` | 1 |
+
+Effects: none. One read transaction for the key's rows, then the compiled default and the key's files (`owners/<owner>.toml`, and for a `Repo` key `repos/<owner>/<name>.toml` when it exists), each parsed once. No subprocess.
+
+Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Session's role (`manager`, `lead` or `worker`) with no flag, else null; `files`, the realpath of each file read; and `policy`, one entry per domain of contract §8.3, in its table's order, each with `source`, `audience` (the roles its `text` reaches), `keys` (its typed keys, each with its `value` and `source`; `{}` for a domain that has none) and `text`. A domain's `source` is `default`, `owner:<path>` or `repo:<path>`; a typed key left out of a set domain has its domain's source followed by ` (key default)`, and its value is cpd's default (contract §8.3 "Precedence and replace"). The adapter keeps the domains whose `audience` holds `role` and whose `text` is not empty.
+
+```json
+{"ok": true, "key": {"owner": "clayton-duarte", "repo": "cpd"}, "role": "worker",
+ "files": ["/home/clayton/dotfiles/cpd/policy/owners/clayton-duarte.toml"],
+ "policy": {
+   "pr": {"source": "owner:/home/clayton/dotfiles/cpd/policy/owners/clayton-duarte.toml", "audience": ["lead", "worker"],
+          "keys": {"gate": {"value": "local", "source": "owner:/home/clayton/dotfiles/cpd/policy/owners/clayton-duarte.toml"},
+                   "feedback.checks": {"value": "none", "source": "owner:/home/clayton/dotfiles/cpd/policy/owners/clayton-duarte.toml"}},
+          "text": "These repos run no GitHub Actions: …"},
+   "deploy": {"source": "default", "audience": ["lead"], "keys": {}, "text": ""},
+   "code": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},
+   "tests": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},
+   "monitor": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},
+   "instructions": {"source": "default", "audience": ["manager", "lead", "worker"], "keys": {}, "text": ""}}}
+```
+
+Idempotent: yes; it only reads. It is also the check to run after editing a policy file.
