@@ -604,7 +604,7 @@ fn touched(repo: &Path) -> Vec<String> {
 
 #[test]
 fn each_protected_path_is_refused() {
-    for path in [
+    let paths = [
         ".config/wt.toml",
         ".config/cpd.toml",
         ".cpd/anything",
@@ -612,8 +612,11 @@ fn each_protected_path_is_refused() {
         "verify.sh",
         "scripts/ci/run.sh",
         "scripts/ci/new/nested.sh",
-    ] {
-        let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
+    ];
+    // One repo: each case starts `att` again at the Lead tip, so it holds that case's change only.
+    let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
+    for path in paths {
+        env.git(&repo, &["branch", "-f", "att", "cpd/pay-4521"]);
         on_att(&env, &repo, |r| {
             let full = r.join(path);
             fs::create_dir_all(full.parent().unwrap()).unwrap();
@@ -701,15 +704,20 @@ fn no_list_file_means_only_the_fixed_protected_paths() {
 
 #[test]
 fn a_bad_list_file_is_config_invalid() {
-    for text in [
+    let texts = [
         "protected = \"verify.sh\"\n",
         "protected = [1]\n",
         "protect = [\"verify.sh\"]\n",
         "protected = [\"\"]\n",
         "protected = [\"/abs\"]\n",
         "protected = [\n",
-    ] {
-        let (_env, repo) = tamper_repo(Some(text));
+    ];
+    // One repo: each case commits its list on `main` and moves the Lead tip and `att` there.
+    let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
+    for text in texts {
+        commit_file(&env, &repo, LIST, text);
+        env.git(&repo, &["branch", "-f", "cpd/pay-4521", "main"]);
+        env.git(&repo, &["branch", "-f", "att", "main"]);
         let err = protected_list(&repo, "cpd/pay-4521").unwrap_err();
         assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{text}");
         let err = touched_protected(&repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap_err();
