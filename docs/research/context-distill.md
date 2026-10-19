@@ -152,3 +152,65 @@ On these figures the repair is the thing that makes the distiller succeed on thi
 - **Title:** `distill-repair`: one repair turn after an invalid digest (hs-d244 D-c).
 - **Tier:** S2 (a loop in one function, a prompt, a pi argv, a fake-pi test, doc amendments).
 - **Files:** `docs/contract.md` §4.6 and `docs/commands.md` §3.12 (first, hs-d4: the repair step, its limit, what `.md.invalid` holds, a `kind` in the `runs.jsonl` line); `core/src/context/distill.rs` (the repair step after `validate`, its run log line); `core/src/context/distill_repair_prompt.md` (new: the B prompt of this section); `core/src/host/pi.rs` (the distiller's argv takes the input files); `cli/tests/context.rs` and the fake pi of `distill.rs` tests (invalid then repaired, invalid then still invalid, too many missing, stray id: no repair).
+
+## A copy-based rule 3 (Job `d2-prompt`, hs-d244 D-a)
+
+**Question.** Can the prompt's rule 3 ("cite every decision and open question in the topic sections") be a copying task instead of recall? **Answer: it can be made mostly one, not entirely.** With the final prompt the first pass of the distiller was valid in **5 of 9 runs** (S2), and the other 4 missed 1–3 decisions each; the D-a prompt it replaces missed 6–16 (0 of 9 valid, `d2-repair`) and 9 in the one run I repeated here. The repair turn takes it from there: the one cpd run with 3 missing was repaired and valid. No run was too big. The runs were made while I tuned the prompt, on the same records, so the counts say the direction, not a rate.
+
+### What changed
+
+- **`records.md` opens with a checklist** (`distiller_records_md` in `core/src/context/distill.rs`), then the records exactly as before. The checklist is every decision and every open question in force (the ids `digest::validate` requires, taken from it, not recomputed), one line each in file order: `[<id>] <kind>: <first line of the text, at most 100 characters>`. Under its heading, a line gives the bytes the model's text may take: 32,768 less cpd's index (20,758 on this Context). 204 lines, 25 KB: `records.md` is 206,553 bytes, 88,979 tokens, 15% more than before. The repair turn's `missing.md` still uses the plain blocks: the repair is untouched.
+- **Rule 3 of `distill_prompt.md`.** The topic sections are the checklist regrouped and rewritten. The model takes the lines one at a time and writes **one bullet per line**, starting with the id copied from it (`- [hs-d43] Statement.`), merging only lines that say the very same thing; a bullet is a short sentence of 80 bytes at most. Nothing stale, withdrawn or one-off may be left out (the kinds the model dropped before are named: who owns a fix, routing, a correction of a routing, a waiver for one run). When the last section is written it reads the checklist once more and adds a bullet under `## Small and one-off` for each id it does not find. Rule 5 points to the byte budget in the checklist and says to aim at two thirds of it.
+
+Why this shape: in the v1–v3 runs above and in `d2-repair` the misses were stale-looking decisions, a different few each run, and the model could not tell which it had left out. v4's index worked because walking the headers needs no judgement. The checklist puts the same walk in front of the topic writing, and "one bullet per line" removes the judgement of what deserves a mention.
+
+### Method
+
+As above: scratch `CPD_HOME` under `/tmp` with the `building-cpd` records of `~/.cpd` up to `seq` 439 (428 rows, 379 in force, **204 to cover**; the store was built as in the first section, the User's `~/.cpd` only read through `.backup`), S2 = `claude-sonnet-5.5:medium`, pi 1.3.0, one run at a time. *cpd runs* are `cpd context distill` of this branch's binary (it logs tokens and cost; a repair turn runs after an invalid digest). *Harness runs* are pi with the distiller's argv over the `prompt.md` and `records.md` cpd had written, and a checker with the rules of `digest::citations` (a bracket group cites only when every part is an id): they give the **first pass**, which a cpd run hides when the repair succeeds. Cost is the sum of pi's `usage.cost.total`; a run right after another is warm (the prompt cache), the first after a pause is cold.
+
+### The runs (final prompt)
+
+| # | Run | Wall | Text | Missing | Cost |
+|---|---|---|---|---|---|
+| 1 | cpd | 41.0 s | | 3 (hs-d81, hs-d89, hs-d106), then **repair valid** | $0.286 (cold) + repair $0.021 (3.9 s) |
+| 2 | cpd | 38.8 s | 10.8 KB (file 22.8 KB) | **valid**, 0 | $0.068 |
+| 3 | cpd | 41.4 s | 11.7 KB (file 23.7 KB) | **valid**, 0 | $0.073 |
+| 4 | harness | 28.7 s | 6.6 KB | 1 (hs-d41) | $0.265 (cold) |
+| 5 | harness | 47.1 s | 12.7 KB | **0** | $0.080 |
+| 6 | harness | 43.9 s | 12.4 KB | **0** | $0.077 |
+| 7 | harness | 37.4 s | 9.3 KB | 1 (hs-d132) | $0.063 |
+| 8 | harness | 41.8 s | 11.8 KB | 1 (hs-d89) | $0.074 |
+| 9 | harness | 46.3 s | 13.7 KB | **0** | $0.081 |
+
+First pass valid: runs 2, 3, 5, 6, 9 = **5 of 9**; no stray id, no run over 32 KB (largest file about 25 KB with the 12 KB index); the digests have one `## Small and one-off` section each. Cost: about **$0.07–0.08 warm, $0.27–0.29 cold**, against $0.065 and $0.25 for the D-a prompt (`d2-repair`): the checklist adds about 12k input tokens. Time 29–47 s a run, as before. The valid cpd runs 2 and 3 are the shipped command end to end.
+
+What is still missed is the same kind as before: one-off routing and owner decisions (hs-d81, hs-d89, hs-d106, hs-d41, hs-d51, hs-d132), 1–3 of them a run.
+
+### How it got here (the same records, harness runs, missing per run)
+
+The numbers before the final prompt are of earlier versions of it; the final is the one in the repository.
+
+| Version | What it added | Missing per run (valid) |
+|---|---|---|
+| D-a prompt | recall rule, no checklist (the `d2-repair` reruns, and one cpd run here) | 2, 10, 7, 9, 16, 6, and 9 (0 of 7) |
+| a | checklist; bullets start with the copied ids; "give every line a topic" | 3, 4, 6 (0 of 3) |
+| b | + a closing pass: add what you did not find to `## Also in force` | 2, 5, 0 (1 of 3; the section never appeared) |
+| c | + `## Small and one-off` as the home of small lines; "walk the checklist" | 3, 0, 2 (1 of 3) |
+| d | + the kinds of line most often left out are named | 1, 6, 2, 0 (1 of 4) |
+| e | "the sections are the checklist, regrouped" | 2, 1, 1, 3 (0 of 4) |
+| f | **one bullet per line**, 100 bytes | 0, 1, 0, 0, 1, 1 (3 of 6); two texts of 18 and 20 KB: file 30.2 and 32.2 KB, at the limit |
+| g | bullet of 80 bytes | 2, 0, 0, 1 (2 of 4) |
+| h | + the closing pass again, now over the bullets | 0, 0, 1, 0, 0, 1, 0, 2 (5 of 8 by citations); one of the zeros was a 24.9 KB text, **36.9 KB** with the index: invalid, and not repairable (too big) |
+| **final** | + the byte budget in the checklist and rule 5 | the table above: 5 of 9 valid first pass |
+
+What the runs show:
+
+- **Structure beats exhortation.** Telling the model to check (b, c, d, e) moved the counts a little; the closing pass was never written in b, and the first drop in missing came with one bullet per line (f). Recall of a list is not helped by "do not rely on recall"; walking a list and writing one item for each is.
+- **The price of one bullet per line is size.** The digest is now one line per decision, so it grows with the Context as cpd's index does: 10–14 KB of text here, 12 KB of index. Two runs came near the limit (f) and one over it (h, 36.9 KB); a size miss is not repaired. The byte budget in the checklist went in for that; it held in the 9 runs after it (largest text 13.7 KB), which is too few to call it a fix.
+- **It will not reach 0 misses on this Context** (best guess from the runs; unmeasured). The model still skips a few lines it treats as already said or stale, and a recall-free prompt cannot make it check. The repair turn is the net: the run that missed 3 was repaired for $0.021 and 4 s. The measurable gain is that the repair has 1–3 ids to add instead of 6–16, and that 5 of 9 runs needed none.
+- **The index still carries the rest.** The topic sections are what `validate` checks; every other record is cited by cpd's index only.
+
+### Not done
+
+- `docs/contract.md` §4.6 step 3 still says `records.md` is "the records in force oldest first, one block each"; it now begins with the checklist (and its byte budget). The amendment is not in this Job's files.
+- Other Tiers and other Contexts were not run. Whether H3 or a bigger Context keeps the checklist's gain is unmeasured.

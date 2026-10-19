@@ -224,6 +224,14 @@ fn a_valid_digest_lands_as_upto_seq_and_the_directory_holds_one() {
     );
     let records = fs::read_to_string(fx.digests().join("records.md")).unwrap();
     assert!(records.contains("Which port?") && records.contains("Use sqlite for sure.") && !records.contains("Use sqlite.\n"), "{records}");
+    // It opens with the checklist the prompt asks the model to copy: each decision and open question in force, in
+    // file order, with the first words of its text, then the records.
+    let (checklist, blocks) = records.split_once("\n# Records\n\n").expect("a checklist, then the records");
+    let lines: Vec<&str> = checklist.lines().collect();
+    assert_eq!(lines[0], "# Checklist: 3 decisions and open questions in force", "{checklist}");
+    assert!(lines[2].starts_with("Your digest may take at most ") && lines[2].ends_with(" bytes: the program adds its index to it."), "{checklist}");
+    assert_eq!(lines[4..], [format!("[{d2}] decision: Use flock."), format!("[{q}] question: Which port?"), format!("[{d3}] decision: Use sqlite for sure.")], "{checklist}");
+    assert!(blocks.starts_with(&format!("[{d2}] decision (")), "{blocks}");
     assert!(fs::read_to_string(fx.digests().join("prompt.md")).unwrap().contains("32 KB"));
 
     let shown = fx.cpd(&["context", "show", "--digest", "--context", CONTEXT]).ok();
