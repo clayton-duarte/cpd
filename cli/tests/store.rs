@@ -275,8 +275,22 @@ fn generated_history_triggers_match_the_contracts_example() {
             continue;
         }
         let name = statement.split_whitespace().nth(2).unwrap();
-        let sql: String =
+        let mut sql: String =
             conn.query_row("SELECT sql FROM sqlite_schema WHERE name = ?1", [name], |r| r.get(0)).unwrap();
+        if name == "escalations_hist_upd" {
+            // The example abbreviates the changed-column lines of the columns its comments name.
+            let columns = names(&conn, "SELECT name FROM pragma_table_info('escalations')");
+            let omitted: Vec<&String> = columns.iter().filter(|c| !normalized(statement).contains(&format!("'{c}'"))).collect();
+            assert!(!omitted.is_empty(), "the example abbreviates");
+            for column in &omitted {
+                assert!(statement.contains(&format!(" {column},")) || statement.contains(&format!(" {column}\n")), "the comment names {column}");
+            }
+            sql = sql
+                .lines()
+                .filter(|line| !omitted.iter().any(|c| line.trim_start().starts_with(&format!("UNION ALL SELECT '{c}',"))))
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
         assert_eq!(normalized(&format!("{sql};")), normalized(statement), "{name}");
     }
 }
@@ -296,10 +310,23 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
         assert!(!columns.is_empty(), "{table}");
         let ins = sql_of(&format!("{table}_hist_ins"));
         let upd = sql_of(&format!("{table}_hist_upd"));
+        let key = names(&conn, &format!("SELECT name FROM pragma_table_info('{table}') WHERE pk > 0"));
         for column in &columns {
             assert!(ins.contains(&format!("'{column}', NEW.{column}")), "{table}_hist_ins lacks {column}");
-            assert!(upd.contains(&format!("'{column}', OLD.{column}")), "{table}_hist_upd lacks OLD.{column}");
-            assert!(upd.contains(&format!("'{column}', NEW.{column}")), "{table}_hist_upd lacks NEW.{column}");
+            // §4.4 "History row shape": the key always, every other column when it changed.
+            for row in ["OLD", "NEW"] {
+                if key.contains(column) {
+                    let forms = [
+                        format!("SELECT '{column}' AS k, {row}.{column} AS v"),
+                        format!("SELECT '{column}', {row}.{column}\n"),
+                        format!("SELECT '{column}', {row}.{column} UNION ALL"),
+                    ];
+                    assert!(forms.iter().any(|f| upd.contains(f)), "{table}_hist_upd lacks the key {row}.{column}");
+                } else {
+                    let line = format!("UNION ALL SELECT '{column}', {row}.{column} WHERE OLD.{column} IS NOT NEW.{column}\n");
+                    assert!(upd.contains(&line), "{table}_hist_upd lacks {line:?}");
+                }
+            }
         }
         if ["dependencies", "pr_needs", "pull_requests"].contains(&table) {
             let del = sql_of(&format!("{table}_hist_del"));
@@ -337,10 +364,64 @@ fn writes_are_copied_into_history_with_their_txn() {
     assert_eq!((rows[1].0, rows[1].2.as_str()), (txn + 1, "update"));
     let before: Value = serde_json::from_str(rows[1].3.as_deref().unwrap()).unwrap();
     let after: Value = serde_json::from_str(rows[1].4.as_deref().unwrap()).unwrap();
-    assert_eq!(before["status"], "open");
-    assert_eq!(after["status"], "answered");
-    assert_eq!(after["answer"], "Because.");
-    assert_eq!(after["asker_pid"], 1);
+    // §4.4 "History row shape": the key and the changed columns, a change from NULL included.
+    assert_eq!(before, json!({"plan": "pay", "id": "api-a1-q1", "status": "open", "answer": null, "answered_at": null}));
+    assert_eq!(after, json!({"plan": "pay", "id": "api-a1-q1", "status": "answered", "answer": "Because.", "answered_at": "t"}));
+}
+
+/// sql-F2 (hs-d234): a Job status flip used to store the whole row twice, its long text included.
+#[test]
+fn a_job_status_change_writes_only_the_key_and_the_changed_columns_to_history() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    fixture(&mut store);
+    // A Job with the size of a real one (7 KB of text on average, quality-sql-perf.md).
+    let long = "x".repeat(3500);
+    let seq: i64 = store
+        .write("test", |tx| {
+            exec(
+                tx,
+                &format!(
+                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                       status, appended, fingerprint, created_txn, created_at)
+                       VALUES ('pay', 'pay', 'big', 'Big', 'S2', '{long}', '{long}', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, '{FP}', cpd_txn(), 't')"
+                ),
+            )?;
+            Ok(tx.query_row("SELECT seq FROM jobs WHERE key = 'big'", [], |r| r.get(0))?)
+        })
+        .unwrap();
+    let last = |store: &mut Store| -> (Value, Value, i64) {
+        store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT before, after, length(before) + length(after) FROM history WHERE tbl = 'jobs' AND op = 'update' ORDER BY id DESC LIMIT 1",
+                    [],
+                    |r| {
+                        let text = |i| r.get::<_, String>(i).map(|s| serde_json::from_str::<Value>(&s).unwrap());
+                        Ok((text(0)?, text(1)?, r.get(2)?))
+                    },
+                )?)
+            })
+            .unwrap()
+    };
+    store.write("test", |tx| exec(tx, "UPDATE jobs SET status = 'running' WHERE key = 'big'")).unwrap();
+    let (before, after, bytes) = last(&mut store);
+    assert_eq!((before, after), (json!({"seq": seq, "status": "queued"}), json!({"seq": seq, "status": "running"})), "{bytes} B");
+    eprintln!("history bytes of a Job status change (before + after): {bytes}");
+    assert!(bytes < 100, "{bytes} B");
+    // A change to a value from NULL is a change.
+    store.write("test", |tx| exec(tx, "UPDATE jobs SET status = 'failed', failed_cause = 'crashed' WHERE key = 'big'")).unwrap();
+    let (before, after, _) = last(&mut store);
+    assert_eq!(before, json!({"seq": seq, "status": "running", "failed_cause": null}));
+    assert_eq!(after, json!({"seq": seq, "status": "failed", "failed_cause": "crashed"}));
+    // An UPDATE that changes nothing still writes one row, the key only.
+    let count = |store: &mut Store| -> i64 {
+        store.read(|c| Ok(c.query_row("SELECT count(*) FROM history WHERE tbl = 'jobs'", [], |r| r.get(0))?)).unwrap()
+    };
+    let rows = count(&mut store);
+    store.write("test", |tx| exec(tx, "UPDATE jobs SET status = status WHERE key = 'big'")).unwrap();
+    assert_eq!(count(&mut store), rows + 1);
+    assert_eq!(last(&mut store), (json!({"seq": seq}), json!({"seq": seq}), 2 * json!({"seq": seq}).to_string().len() as i64));
 }
 
 #[test]
