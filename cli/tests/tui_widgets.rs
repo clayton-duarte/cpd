@@ -153,9 +153,9 @@ fn render(width: u16, height: u16, w: &Widgets) -> Buffer {
 /// The column, and where a click reaches an owned PR; `note` is the last row's message.
 fn render_hits(width: u16, height: u16, w: &Widgets, note: &str) -> (Buffer, Vec<Hit>) {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    let mut hits = (vec![], vec![]);
-    terminal.draw(|f| hits = widgets::draw(f, f.area(), w, &machine(), note)).unwrap();
-    (terminal.backend().buffer().clone(), hits.0)
+    let mut hits = vec![];
+    terminal.draw(|f| hits = widgets::draw(f, f.area(), w, &machine(), note, 0).hits).unwrap();
+    (terminal.backend().buffer().clone(), hits)
 }
 
 fn rows(buf: &Buffer) -> Vec<String> {
@@ -251,7 +251,7 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let w = read::widgets(&mut open(&env), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
     let machine = Machine { name: "homeserver".to_owned(), load: ["0.1", "0.2", "0.3"].map(str::to_owned).to_vec() };
-    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w, &machine, ""))).unwrap();
+    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w, &machine, "", 0))).unwrap();
     let lines = rows(terminal.backend().buffer());
     let head = |title: &str| format!("── {title} {}", "─".repeat(30 - 4 - title.chars().count()));
     assert_eq!(lines[..3], ["", " homeserver", " load 0.1 0.2 0.3"]);
@@ -508,15 +508,17 @@ fn a_long_title_is_cut_with_an_ellipsis_first_and_a_line_never_wraps() {
 }
 
 #[test]
-fn a_short_pane_drops_the_pull_requests_that_do_not_fit_from_the_end() {
+fn a_short_pane_hides_the_pull_requests_that_do_not_fit_beside_the_cue_below() {
     let env = TestEnv::new();
     let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
-    // Beside the 14 rows of the blank row, the machine, the headers and their blank rows, each pull request takes 2.
-    for (height, listed) in [(14 + 6, 3), (14 + 5, 2), (14 + 2, 1), (14 + 1, 0)] {
+    // Beside the 14 rows of the blank row, the machine, the headers and their blank rows, each pull request takes 2, and
+    // when some are hidden the `▼` row takes one more.
+    for (height, listed) in [(14 + 6, 3), (14 + 5, 2), (14 + 4, 1), (14 + 3, 1), (14 + 2, 0), (14 + 1, 0)] {
         let got = rows(&render(46, height, &w)).join("\n");
         let shown = ["acme/web#4", "acme/repo#9", "acme/repo#20"].iter().filter(|n| got.contains(**n)).count();
         assert_eq!(shown, listed, "height {height}:\n{got}");
         assert!(listed == 0 || got.contains("acme/web#4"), "the oldest stay:\n{got}");
+        assert_eq!(got.contains(&format!("▼ {} more", 3 - listed)), listed < 3, "height {height}:\n{got}");
     }
 }
 
@@ -716,6 +718,65 @@ fn a_click_on_an_owned_row_opens_its_lead_and_focuses_the_chat_and_the_others_ru
     assert!(chat.lines().any(|l| l.starts_with("l-mine|")), "the Lead is in `main`: {chat}");
 }
 
+/// A wheel notch (`down` or up) at 0-based `column` and `row`, as the terminal sends it (SGR mouse reporting: 65 down, 64 up).
+fn wheel(env: &TestEnv, pane: &str, down: bool, column: u16, row: u16) {
+    let button = if down { 65 } else { 64 };
+    tmux_out(env, &["send-keys", "-t", pane, "-l", &format!("\x1b[<{button};{};{}M", column + 1, row + 1)]);
+}
+
+#[test]
+fn the_wheel_over_the_prs_scrolls_them_one_at_a_time_between_dim_cue_rows() {
+    let env = pane_env();
+    let mut store = open(&env);
+    let mut s = String::new();
+    for n in 1..=21 {
+        s += &pull_request("acme/repo", n, "A title", false, "open", "none", "passed", &format!("2026-01-03T00:{n:02}:00.000Z"));
+    }
+    sql(&mut store, &s);
+    drop(store);
+    let pane = start(&env, "view");
+    let has = |s: &[String], name: &str| s.iter().any(|r| r.starts_with(&format!(" {name} ")));
+    // 40 rows less the 14 of the rest of the column leave 26 for the PRs: 12 whole ones beside the `▼` row.
+    // (polling for the whole screen: a capture can catch the pane mid-draw)
+    wait_for_screen(&env, &pane, "the first PRs and the cue below", |s| {
+        s.iter().any(|r| r == " ▼ 9 more")
+            && has(s, "acme/repo#1")
+            && has(s, "acme/repo#12")
+            && !has(s, "acme/repo#13")
+            && !s.iter().any(|r| r.contains('▲'))
+    });
+    let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
+    let cue = styled.lines().find(|l| l.contains("▼ 9 more")).unwrap();
+    assert!(cue.contains("\x1b[2m"), "the cue is dim: {cue:?}");
+
+    // A notch outside the section does nothing; one inside moves by one pull request.
+    wheel(&env, &pane, true, 3, 1);
+    wheel(&env, &pane, true, 3, 10);
+    wait_for_screen(&env, &pane, "one pull request down", |s| {
+        s.iter().any(|r| r == " ▲ 1 more") && s.iter().any(|r| r == " ▼ 8 more") && has(s, "acme/repo#2") && !has(s, "acme/repo#1")
+    });
+
+    // Past the end it stops, with the last pull request at the bottom and no cue below.
+    for _ in 0..20 {
+        wheel(&env, &pane, true, 3, 10);
+    }
+    wait_for_screen(&env, &pane, "the end", |s| {
+        s.iter().any(|r| r == " ▲ 9 more")
+            && has(s, "acme/repo#21")
+            && has(s, "acme/repo#10")
+            && !has(s, "acme/repo#9")
+            && !s.iter().any(|r| r.contains('▼'))
+    });
+
+    // And back up, one at a time.
+    wheel(&env, &pane, false, 3, 10);
+    wait_for_screen(&env, &pane, "one back up", |s| s.iter().any(|r| r == " ▲ 8 more") && s.iter().any(|r| r == " ▼ 1 more") && has(s, "acme/repo#9") && !has(s, "acme/repo#21"));
+    for _ in 0..20 {
+        wheel(&env, &pane, false, 3, 10);
+    }
+    wait_for_screen(&env, &pane, "the top", |s| s.iter().any(|r| r == " ▼ 9 more") && has(s, "acme/repo#1") && !s.iter().any(|r| r.contains('▲')));
+}
+
 #[test]
 fn a_refused_session_open_shows_its_message_in_the_last_row_until_the_next_click() {
     let env = pane_env();
@@ -753,9 +814,9 @@ fn the_merge_icon_is_drawn_and_hit_only_on_clean_pull_requests() {
     let w = read::widgets(&mut store, 3, 0).unwrap();
     assert_eq!(w.prs.iter().map(|p| (p.number, p.clean)).collect::<Vec<_>>(), [(4, false), (9, true), (20, true)]);
     let mut terminal = Terminal::new(TestBackend::new(46, 25)).unwrap();
-    let mut clicks = (vec![], vec![]);
-    terminal.draw(|f| clicks = widgets::draw(f, f.area(), &w, &machine(), "")).unwrap();
-    let (hits, icons) = clicks;
+    let mut drawn = None;
+    terminal.draw(|f| drawn = Some(widgets::draw(f, f.area(), &w, &machine(), "", 0))).unwrap();
+    let widgets::Drawn { hits, icons, .. } = drawn.unwrap();
     let buf = terminal.backend().buffer().clone();
     for (y, icon) in [(7, false), (9, true), (11, true)] {
         assert_eq!(buf[(45, y)].symbol(), if icon { "\u{F062D}" } else { " " }, "row {y}");
