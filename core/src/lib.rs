@@ -27,6 +27,7 @@ pub mod job;
 pub mod merge;
 pub mod metrics;
 pub mod plan;
+pub mod policy;
 pub mod pr;
 pub mod session;
 pub mod spec;
