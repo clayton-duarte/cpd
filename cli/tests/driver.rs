@@ -879,6 +879,53 @@ fn a_driver_waits_out_a_migration_longer_than_store_busy_ms() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("waiting for cpd pid"), "{out:?}");
 }
 
+/// hs-n278: a driver that ends on a store newer than its binary (an install raced a migration) leaves the marker
+/// E2 reads, so the Attempt is not its Worker's failure. It ends no Attempt itself.
+#[test]
+fn a_driver_ending_on_store_too_new_leaves_the_infra_marker_and_ends_nothing() {
+    let fx = fx();
+    let lock = starting(&fx);
+    // Above any user_version this binary knows (contract §4.5).
+    rusqlite::Connection::open(fx.home().db()).unwrap().pragma_update(None, "user_version", 4999).unwrap();
+    let plan = PlanId::parse(PLAN).unwrap();
+    let attempt = AttemptId::parse(ATTEMPT).unwrap();
+    let marker = fx.home().attempt_infra(&plan, &attempt);
+    assert!(!marker.exists());
+
+    let out = fx
+        .env
+        .command("sh")
+        .args(["-c", "exec 3<\"$1\"; shift; exec \"$@\"", "sh"])
+        .arg(&lock)
+        .args([CPD, "attempt", "run", ATTEMPT, "--plan", PLAN])
+        .output()
+        .unwrap();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["error"]["code"], "store_too_new", "{out:?}");
+    assert_eq!(fx.home().infra(&plan, &attempt).unwrap().map(|(infra, _)| infra.code()), Some("store_too_new"));
+}
+
+/// Another failure of the driver leaves no marker: the ladder counts it.
+#[test]
+fn a_driver_refusing_for_another_reason_leaves_no_infra_marker() {
+    let fx = fx();
+    let lock = starting(&fx);
+    fx.fixture("UPDATE attempts SET status = 'running' WHERE plan = 'pay' AND id = 'api-a1';");
+    let out = fx
+        .env
+        .command("sh")
+        .args(["-c", "exec 3<\"$1\"; shift; exec \"$@\"", "sh"])
+        .arg(&lock)
+        .args([CPD, "attempt", "run", ATTEMPT, "--plan", PLAN])
+        .output()
+        .unwrap();
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["error"]["code"], "illegal_transition", "{out:?}");
+    let marker = fx.home().attempt_infra(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(ATTEMPT).unwrap());
+    assert!(!marker.exists());
+}
+
 // ---------- job dispatch refusals ----------
 
 #[test]
