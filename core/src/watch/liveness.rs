@@ -1,7 +1,9 @@
 //! E2, liveness (contract §3.4, §3.6, §3.7, §7.4):
 //! - an Attempt not `ended` whose driver lock is free (its driver died): in
 //!   `merging`, the merge recovery R under the per-repo lock; in any other
-//!   status, ended `cancelled` if a cancel was requested, else `crashed`;
+//!   status, ended `cancelled` if a cancel was requested, else `crashed`; but a driver that an install or a
+//!   store migration ended (it left `run/<plan>/attempts/<attempt>.infra`, hs-n278) is ended as one whose driver
+//!   never started (hs-d160): the same Tier, not counted by `retry_cap`, E3's back-off applies;
 //! - an Attempt with a live driver: `stop_request = cancelled` when its Job
 //!   has a cancel request, `timed_out` when its active time is over
 //!   `attempt_minutes`; the driver acts on it (A5);
@@ -130,16 +132,35 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
         return Ok(());
     }
     let cancel = engine.store.read(|conn| ledger::cancel_request(conn, plan, &target.job))?;
-    let end = match cancel {
-        Some(_) => End::Cancelled,
-        None => End::Failed { cause: Cause::Crashed, detail: format!("Its driver died while it was {}.", target.status) },
+    // An install or a store migration ended the driver, not the Worker (hs-n278): no `driver_pid`, so the
+    // ladder keeps the Tier and `retry_cap` does not count the Attempt, as for a driver that never started.
+    let infra = match cancel {
+        Some(_) => None,
+        None => engine.home.infra(plan, id)?,
+    };
+    let end = match (&cancel, &infra) {
+        (Some(_), _) => End::Cancelled,
+        (None, Some((why, message))) => End::Failed {
+            cause: Cause::Crashed,
+            detail: format!("Its driver ended on {} ({message}), not through its Worker.", why.code()),
+        },
+        (None, None) => End::Failed { cause: Cause::Crashed, detail: format!("Its driver died while it was {}.", target.status) },
     };
     let catalog = engine.catalog()?;
     let ladder = Ladder { catalog: &catalog, retry_cap: engine.config.retry_cap };
     let metrics = metrics(target.worker_session.as_ref());
-    engine.store.write(SOURCE, |tx| ledger::end(tx, &target, &end, metrics.as_ref(), &ladder, Stage::Driver))?;
+    engine.store.write(SOURCE, |tx| {
+        if infra.is_some() {
+            tx.execute(
+                "UPDATE attempts SET driver_pid = NULL WHERE plan = ?1 AND id = ?2 AND status = ?3",
+                params![plan.as_str(), id.to_string(), target.status],
+            )?;
+        }
+        ledger::end(tx, &target, &end, metrics.as_ref(), &ladder, Stage::Driver)
+    })?;
     // A9: after the end is committed, while the lock is still held.
     lock::remove(&engine.home, plan, id)?;
+    engine.home.remove_infra(plan, id)?;
     drop(lock);
     engine.log.line(&format!("E2: the driver of {id} (Plan {plan}) is dead: ended {} / {}", end.outcome(), end.cause()));
     worker::kill_attempt_window(&engine.config, &engine.tmux, plan, id)
