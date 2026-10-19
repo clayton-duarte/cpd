@@ -53,7 +53,7 @@ pub(super) const SCHEMA_HASHES: &[&str] = &[
     "d2623567062d0367ddcf3dcd0b96c6d7e2b45d447e3b841f77d0249129736277",
     "ae8ea2361df62ed1a89912b6e39227f4afd043475f27ac7faf78ce847e208cbb",
     "7da9b792cadf9d12a54eb26ad99a78c48fdcbb2e4a220f767973a7760cd16c9a",
-    "TODO",
+    "2d346012b74ad0cba8d2f1658e1b9178942c0f9b6dc0d1014c0a2b722d62c599",
 ];
 
 const _: () = assert!(SCHEMA_HASHES.len() == MIGRATIONS.len(), "one schema hash per migration");
@@ -1666,6 +1666,124 @@ mod tests {
         let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
         assert_eq!(version, 2);
         assert_eq!(schema_hash(&conn).unwrap(), SCHEMA_HASHES[1]);
+    }
+
+    // ---------- migration 14: stub drafts ----------
+
+    /// A version 13 database: a Plan in `dispatch` with one PR and a Job of every status
+    /// (a review Job among them), two Dependencies and an Attempt.
+    fn version_13(home: &CpdHome) {
+        database_at(
+            home,
+            13,
+            &format!(
+                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', '{T}', 'm');
+                 INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                   VALUES ('l-pay', 'lead', 'ctx', 'pay', 'lead', '/src', 'O3', 'idle', '{T}', '{T}');
+                 INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+                   VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'l-pay', '{T}', '{T}');
+                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                   VALUES ('pay', 'api', '/src/pay', 'main', 'dispatch', 'cpd/pay/api', '/src/pay.wt', 1, '{T}', '{T}');
+                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+                                   fingerprint, created_txn, created_at, merged_sha, failed_cause, cancel_reason, cancel_requested_at, review) VALUES
+                   ('pay', 'api', 'a', 'A', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, '{FP}', 1, '{T}', 'abc', NULL, NULL, NULL, 0),
+                   ('pay', 'api', 'b', 'B', 'S3', 'g', 'c', '[\"a\"]', '[\"b\"]', '[\"x\"]', 'running', 0, '{FP}', 1, '{T}', NULL, NULL, NULL, NULL, 0),
+                   ('pay', 'api', 'c', 'C', 'O3', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, '{FP}', 1, '{T}', NULL, NULL, NULL, NULL, 0),
+                   ('pay', 'api', 'd', 'D', 'S2', 'g', '', '[\"a\"]', '[\"b\"]', '[]', 'failed', 0, '{FP}', 1, '{T}', NULL, 'crashed', NULL, NULL, 0),
+                   ('pay', 'api', 'e', 'E', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 1, NULL, 1, '{T}', NULL, NULL, NULL, NULL, 0),
+                   ('pay', 'api', 'f', 'F', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'cancelled', 1, NULL, 1, '{T}', NULL, NULL, 'no', '{T}', 0),
+                   ('pay', 'api', 'r', 'R', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 1, '{FP}', 1, '{T}', 'def', NULL, NULL, NULL, 1);
+                 INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'c', 'b'), ('pay', 'e', 'c');
+                 INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+                   VALUES ('pay', 'b-a1', 'b', 1, 'S3', 'ladder', 'running', 'cpd/pay--b-a1', '/src/pay--b-a1', '{T}');"
+            ),
+        );
+    }
+
+    #[test]
+    fn a_version_13_database_migrates_to_14_keeping_every_job_and_seq_and_its_checks_triggers_and_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        version_13(&home);
+        assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[12]);
+        let mut store = Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+        assert_eq!(count(&mut store, "PRAGMA user_version"), VERSION);
+        assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
+        // The schema is the one a fresh database gets at 14.
+        assert_eq!(schema_hash(&Connection::open(home.db()).unwrap()).unwrap(), SCHEMA_HASHES[13]);
+
+        // Every row, with its seq, its Spec and its review flag, as it was.
+        let n = Value::Null;
+        assert_eq!(
+            rows(&mut store, "SELECT seq, key, status, tier, goal, context, touches, out_of_scope, review, fingerprint, merged_sha FROM jobs ORDER BY seq"),
+            vec![
+                serde_json::json!([1, "a", "merged", "S2", "g", "c", "[\"a\"]", "[]", 0, FP, "abc"]),
+                serde_json::json!([2, "b", "running", "S3", "g", "c", "[\"a\"]", "[\"x\"]", 0, FP, n]),
+                serde_json::json!([3, "c", "queued", "O3", "g", "c", "[\"a\"]", "[]", 0, FP, n]),
+                serde_json::json!([4, "d", "failed", "S2", "g", "", "[\"a\"]", "[]", 0, FP, n]),
+                serde_json::json!([5, "e", "draft", "S2", "g", "c", "[\"a\"]", "[]", 0, n, n]),
+                serde_json::json!([6, "f", "cancelled", "S2", "g", "c", "[\"a\"]", "[]", 0, n, n]),
+                serde_json::json!([7, "r", "merged", "S2", "g", "c", "[\"a\"]", "[]", 1, FP, "def"]),
+            ]
+        );
+        assert_eq!(count(&mut store, "SELECT count(*) FROM dependencies"), 2);
+        assert_eq!(count(&mut store, "SELECT count(*) FROM attempts"), 1);
+        assert_eq!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'jobs'"), 7, "the copy wrote no history row (the 7 are the inserts)");
+
+        // A draft with only a title is accepted, with either half given too, and a stub can be cancelled.
+        let stub = |key: &str, columns: &str, values: &str| {
+            format!(
+                "INSERT INTO jobs (plan, pr, key, title, {columns}status, appended, created_txn, created_at)
+                 VALUES ('pay', 'api', '{key}', 'T', {values}'draft', 1, cpd_txn(), '{T}');"
+            )
+        };
+        write(&mut store, &stub("s1", "", "")).unwrap();
+        write(&mut store, &stub("s2", "tier, ", "'S2', ")).unwrap();
+        write(
+            &mut store,
+            &stub("s3", "goal, context, touches, acceptance, out_of_scope, ", "'g', 'c', '[\"a\"]', '[\"b\"]', '[]', "),
+        )
+        .unwrap();
+        assert_eq!(count(&mut store, "SELECT max(seq) FROM jobs"), 10, "AUTOINCREMENT goes on after the kept seq");
+        write(&mut store, &format!("UPDATE jobs SET status = 'cancelled', cancel_reason = 'no', cancel_requested_at = '{T}' WHERE key = 's1'")).unwrap();
+        assert_eq!(rows(&mut store, "SELECT status, tier, goal FROM jobs WHERE key = 's1'"), vec![serde_json::json!(["cancelled", n, n])]);
+
+        // Anything that is not a draft or cancelled has its Tier and Spec; the Spec is all or nothing; each field keeps its own check.
+        let check = |store: &mut Store, sql: &str| {
+            let message = sqlite_message(&refused(store, sql));
+            assert!(message.contains("CHECK constraint failed"), "{sql}: {message}");
+        };
+        check(&mut store, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 's2'"));
+        check(&mut store, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 's3'"));
+        check(&mut store, &stub("s4", "tier, goal, ", "'S2', 'g', "));
+        check(&mut store, &stub("s5", "tier, ", "'X9', "));
+        check(&mut store, &stub("s6", "goal, context, touches, acceptance, out_of_scope, ", "'', 'c', '[\"a\"]', '[\"b\"]', '[]', "));
+        check(&mut store, &stub("s7", "goal, context, touches, acceptance, out_of_scope, ", "'g', 'c', '[]', '[\"b\"]', '[]', "));
+        check(
+            &mut store,
+            &format!(
+                "INSERT INTO jobs (plan, pr, key, title, status, appended, fingerprint, created_txn, created_at)
+                 VALUES ('pay', 'api', 's8', 'T', 'queued', 1, '{FP}', cpd_txn(), '{T}');"
+            ),
+        );
+
+        // Completed, a stub is queued like any draft.
+        write(&mut store, "UPDATE jobs SET tier = 'S2' WHERE key = 's3'").unwrap();
+        write(&mut store, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 's3'")).unwrap();
+
+        // The triggers of §4.4 on `jobs` are back: the Locked guard, the legal transitions, the history and no delete.
+        assert_eq!(
+            rows(&mut store, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'jobs' ORDER BY name"),
+            ["jobs_hist_ins", "jobs_hist_upd", "jobs_locked", "jobs_no_delete", "jobs_pr_dependencies", "jobs_status"].map(|name| serde_json::json!([name]))
+        );
+        assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET tier = 'S1' WHERE key = 'c'")), "job_locked");
+        assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET goal = 'x' WHERE key = 's1'")), "job_locked", "a cancelled stub is Locked");
+        assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET status = 'queued' WHERE key = 'a'")), "illegal_transition");
+        assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM jobs WHERE key = 'a'")), "append_only: jobs");
+        write(&mut store, "UPDATE jobs SET title = 'New' WHERE key = 's2'").unwrap();
+        let history = rows(&mut store, "SELECT op, json_extract(after, '$.title'), json_extract(after, '$.tier') FROM history WHERE tbl = 'jobs' AND pk = '[9]'");
+        assert_eq!(history, vec![serde_json::json!(["insert", "T", "S2"]), serde_json::json!(["update", "New", "S2"])]);
     }
 
     // ---------- the triggers of §4.4 after migration 4 ----------

@@ -1647,3 +1647,180 @@ fn archive_refuses_a_lead_in_the_chat_slot_before_closing_any_pane() {
     assert!(has_pane(&env, &lead));
     assert_eq!((event_count(&env), panes(&env), archived_ats(&env)), (events_before, panes_before, 0));
 }
+
+// ---------- stub drafts (hs-d241, R1; commands.md §4.5, §4.6, §4.8, §5.1, §5.2) ----------
+
+/// What `job edit --tier` checks: the `[tiers]` of the config and a fake pi install whose Tier catalog
+/// is cached, as in `cli/tests/job.rs`, so no node runs.
+fn seed_tiers(env: &TestEnv) {
+    let config_path = env.cpd_home().join("config.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    fs::write(&config_path, format!("{config}[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n")).unwrap();
+    env.fake_pi("exit 0");
+    fs::create_dir_all(env.root().join("install")).unwrap();
+    fs::write(env.root().join("install/current-version"), "1.0.0\n").unwrap();
+    let scope = env.root().join("install/releases/1.0.0/node_modules/@earendil-works");
+    for package in ["pi-coding-agent", "pi-ai"] {
+        fs::create_dir_all(scope.join(package).join("dist")).unwrap();
+        fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
+    }
+    let rows: String = [("O", "p/opus", "[0,1,2,3,4,5]"), ("S", "p/sonnet", "[1,2,3,4,5]"), ("H", "p/haiku", "[0,1,2,3]")]
+        .iter()
+        .map(|(letter, model, efforts)| {
+            format!("INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('1.0.0', '{letter}', '{model}', '{efforts}', 't');")
+        })
+        .collect();
+    store(env).write("fixture", |tx| exec(tx, &rows)).unwrap();
+}
+
+/// A Spec file for `job edit --spec`.
+fn spec_file(env: &TestEnv, name: &str) -> String {
+    let path = env.root().join(format!("{name}.json"));
+    let spec = json!({"goal": format!("Goal of {name}."), "context": "Why.", "touches": [format!("src/{name}.rs")], "acceptance": ["cargo test"], "out_of_scope": []});
+    fs::write(&path, spec.to_string()).unwrap();
+    path.to_str().unwrap().to_owned()
+}
+
+/// `job add <key> --draft --title <t>` in Plan `pay`, a stub, with `extra` flags.
+fn stub(env: &TestEnv, key: &str, extra: &[&str]) -> Value {
+    let title = format!("Planned {key}");
+    let mut args = vec!["job", "add", key, "--draft", "--title", &title, "--plan", "pay"];
+    args.extend(extra);
+    env.cpd(&args).ok()
+}
+
+#[test]
+fn a_stub_added_in_dispatch_refuses_the_review_until_it_is_completed_then_is_approved_and_queued() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    seed_tiers(&env);
+    approved(&env, &repo);
+    env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+
+    // A follow-up batch is registered at once: two stubs, one with its Tier, and a stub that is dropped again.
+    let out = stub(&env, "next-1", &[]);
+    assert_eq!((&out["job"]["status"], &out["job"]["tier"], &out["job"]["appended"]), (&json!("draft"), &Value::Null, &json!(true)));
+    stub(&env, "next-2", &["--tier", "O3", "--needs", "next-1"]);
+    stub(&env, "dropped", &[]);
+    env.cpd(&["job", "cancel", "dropped", "--reason", "Not needed.", "--plan", "pay"]).ok();
+    add_draft(&env, "pay", "done-1", &["a"], true);
+    let shown = show(&env, "pay");
+    let listed = shown["jobs"].as_array().unwrap().iter().find(|j| j["key"] == "next-1").unwrap();
+    assert_eq!((&listed["status"], &listed["tier"], &listed["goal"], &listed["touches"]), (&json!("draft"), &Value::Null, &Value::Null, &Value::Null));
+    assert_eq!(shown["counts"]["draft"], 3);
+    // The Plan view of the Context holds the stub's registered work too.
+    let pending = env.cpd(&["context", "pending", "--context", "ctx"]).ok();
+    let jobs = &pending["plans"][0]["prs"][0]["jobs"];
+    let pending_stub = jobs.as_array().unwrap().iter().find(|j| j["key"] == "next-1").unwrap();
+    assert_eq!((&pending_stub["status"], &pending_stub["touches"]), (&json!("draft"), &json!([])));
+
+    // The review is refused, listing each stub and what it lacks (the cancelled one is not a draft); nothing is written.
+    let (reviews, evs) = (events(&env, "plan-review").len(), query::<i64>(&env, "SELECT count(*) FROM events"));
+    let error = refused(&env.cpd(&["plan", "review", "--plan", "pay"]), "draft_incomplete", 3);
+    assert_eq!(error["details"]["jobs"], json!([{"key": "next-1", "missing": ["tier", "spec"]}, {"key": "next-2", "missing": ["spec"]}]));
+    assert_eq!(error["details"]["plan"], "pay");
+    assert!(error["message"].as_str().unwrap().contains("next-1, next-2"), "{error}");
+    assert_eq!((events(&env, "plan-review").len(), query::<i64>(&env, "SELECT count(*) FROM events")), (reviews, evs));
+    assert!(!home(&env).plan_review_md(&pid("pay"), ReviewId::parse("r2").unwrap()).exists());
+    // `plan render` still shows them, and the fingerprint covers them as they are.
+    let before = env.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"].clone();
+
+    // Completing one is not enough; completing both lets the review through, with a new fingerprint.
+    let spec_1 = spec_file(&env, "next-1");
+    let out = env.cpd(&["job", "edit", "next-1", "--tier", "S2", "--spec", &spec_1, "--plan", "pay"]).ok();
+    assert_eq!(out["fields"], json!(["tier", "spec"]));
+    let error = refused(&env.cpd(&["plan", "review", "--plan", "pay"]), "draft_incomplete", 3);
+    assert_eq!(error["details"]["jobs"], json!([{"key": "next-2", "missing": ["spec"]}]));
+    let spec_2 = spec_file(&env, "next-2");
+    env.cpd(&["job", "edit", "next-2", "--spec", &spec_2, "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "review", "--plan", "pay"]).ok();
+    assert_eq!((&out["review"]["id"], &out["review"]["status"]), (&json!("r2"), &json!("pending")));
+    assert_ne!(out["review"]["fingerprint"], before, "completing a stub changes the plan fingerprint");
+
+    // Approved and current: exactly the complete drafts are queued, each with its Locked-Job fingerprint.
+    let out = env.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
+    assert_eq!((&out["current"], &out["jobs"]), (&json!(true), &json!(["done-1", "next-1", "next-2"])));
+    let shown = show(&env, "pay");
+    for key in ["done-1", "next-1", "next-2"] {
+        assert_eq!(job_status(&env, key), "queued", "{key}");
+    }
+    assert_eq!(job_status(&env, "dropped"), "cancelled");
+    assert_eq!(shown["tamper"], json!([]));
+    assert_eq!(shown["counts"]["draft"], 0);
+}
+
+#[test]
+fn a_stub_in_phase_plan_refuses_the_review_and_the_lock_and_is_never_queued() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    seed_tiers(&env);
+    approved(&env, &repo);
+    stub(&env, "later", &[]);
+    stub(&env, "also", &["--tier", "S2"]);
+    let lock = || env.cpd(&["plan", "lock", "--plan", "pay"]);
+
+    // The approved review no longer covers the Jobs; the lock names the stubs before it names the review.
+    let error = refused(&lock(), "draft_incomplete", 3);
+    assert_eq!(error["details"]["jobs"], json!([{"key": "also", "missing": ["spec"]}, {"key": "later", "missing": ["tier", "spec"]}]));
+    let error = refused(&env.cpd(&["plan", "review", "--plan", "pay"]), "draft_incomplete", 3);
+    assert_eq!(error["details"]["jobs"], json!([{"key": "also", "missing": ["spec"]}, {"key": "later", "missing": ["tier", "spec"]}]));
+    assert_eq!(show(&env, "pay")["plan"]["phase"], "plan");
+    assert_eq!(job_status(&env, "later"), "draft");
+    assert!(watch_calls(&env).is_empty());
+
+    // Cancelled, a stub is no draft and blocks nothing; the other is completed.
+    env.cpd(&["job", "cancel", "later", "--reason", "No.", "--plan", "pay"]).ok();
+    env.cpd(&["job", "edit", "also", "--spec", &spec_file(&env, "also"), "--plan", "pay"]).ok();
+    env.cpd(&["plan", "review", "--plan", "pay"]).ok();
+    env.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
+    let out = lock().ok();
+    assert_eq!(out["jobs"], json!(["a", "also", "b"]));
+    assert_eq!(job_status(&env, "also"), "queued");
+    assert_eq!(job_status(&env, "later"), "cancelled");
+}
+
+#[test]
+fn render_shows_what_a_stub_lacks_and_the_fingerprint_covers_it_as_it_is() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    seed_tiers(&env);
+    new_plan(&env, "pay", &repo);
+    env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
+    stub(&env, "bare", &[]);
+    stub(&env, "tiered", &["--tier", "O3"]);
+    add_job(&env, "pay", "full", &[]);
+    // Another Plan's stub in the same repo does not break the overlap check.
+    new_plan(&env, "oth", &repo);
+    env.cpd(&["plan", "phase", "plan", "--plan", "oth"]).ok();
+    env.cpd(&["job", "add", "elsewhere", "--draft", "--title", "Elsewhere", "--plan", "oth"]).ok();
+
+    let out = env.cpd(&["plan", "render", "--plan", "pay"]).ok();
+    assert_eq!((&out["draft_jobs"], &out["overlaps"]), (&json!(3), &json!([])));
+    let text = fs::read_to_string(home(&env).plan_md(&pid("pay"))).unwrap();
+    // The table row and the section show a missing Tier as `—`; the Spec of a stub is not written yet.
+    assert!(text.contains("| `bare` | Planned bare | — | draft | none | — |"), "{text}");
+    assert!(text.contains("| `tiered` | Planned tiered | O3 | draft | none | — |"), "{text}");
+    assert!(text.contains("| `full` | Job full | S2 | draft | none | `src/full.rs` |"), "{text}");
+    assert!(text.contains("\n### `bare`: Planned bare\n\nStatus: `draft` · Tier: — · Needs: none\n\nSpec: not written yet\n"), "{text}");
+    assert!(text.contains("\n### `tiered`: Planned tiered\n\nStatus: `draft` · Tier: `O3` · Needs: none\n\nSpec: not written yet\n"), "{text}");
+    assert!(text.contains("\n### `full`: Job full\n\nStatus: `draft` · Tier: `S2` · Needs: none\n\n#### Goal\n\nGoal of full.\n"), "{text}");
+    assert_eq!(text.matches("Spec: not written yet").count(), 2, "{text}");
+
+    // The fingerprint hashes a stub as it is: its missing fields are null.
+    let (pr_repo, pr_base): (String, String) =
+        store(&env).read(|c| Ok(c.query_row("SELECT repo, base FROM prs WHERE plan = 'pay'", [], |r| Ok((r.get(0)?, r.get(1)?)))?)).unwrap();
+    let null_spec = |key: &str, tier: &str| {
+        format!("{{\"acceptance\":null,\"context\":null,\"goal\":null,\"key\":\"{key}\",\"needs\":[],\"out_of_scope\":null,\"pr\":\"pay\",\"tier\":{tier},\"title\":\"Planned {key}\",\"touches\":null}}")
+    };
+    let full = "{\"acceptance\":[\"cargo test\"],\"context\":\"Context of full.\",\"goal\":\"Goal of full.\",\"key\":\"full\",\"needs\":[],\"out_of_scope\":[],\"pr\":\"pay\",\"tier\":\"S2\",\"title\":\"Job full\",\"touches\":[\"src/full.rs\"]}";
+    let prs = format!("[{{\"base\":\"{pr_base}\",\"key\":\"pay\",\"needs\":[],\"repo\":{}}}]", serde_json::to_string(&pr_repo).unwrap());
+    assert_eq!(out["fingerprint"], sha256(&format!("{{\"jobs\":[{},{full},{}],\"prs\":{prs}}}", null_spec("bare", "null"), null_spec("tiered", "\"O3\""))));
+
+    // Completing a stub changes it, and the render shows the Tier and the Spec.
+    env.cpd(&["job", "edit", "bare", "--tier", "S2", "--spec", &spec_file(&env, "bare"), "--plan", "pay"]).ok();
+    let completed = env.cpd(&["plan", "render", "--plan", "pay"]).ok();
+    assert_ne!(completed["fingerprint"], out["fingerprint"]);
+    let text = fs::read_to_string(home(&env).plan_md(&pid("pay"))).unwrap();
+    assert!(text.contains("| `bare` | Planned bare | S2 | draft | none | `src/bare.rs` |"), "{text}");
+    assert_eq!(text.matches("Spec: not written yet").count(), 1, "{text}");
+}

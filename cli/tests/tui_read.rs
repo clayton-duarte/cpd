@@ -581,7 +581,7 @@ fn a_plan_is_its_jobs_dependencies_attempts_and_tiers() {
     let shape: Vec<(&str, JobStatus, String, Vec<&str>, usize)> = flow
         .jobs
         .iter()
-        .map(|j| (j.key.as_str(), j.status, j.tier.to_string(), j.needs.iter().map(|n| n.as_str()).collect(), j.attempts.len()))
+        .map(|j| (j.key.as_str(), j.status, j.tier.expect("a Tier").to_string(), j.needs.iter().map(|n| n.as_str()).collect(), j.attempts.len()))
         .collect();
     assert_eq!(
         shape,
@@ -615,6 +615,20 @@ fn a_plan_is_its_jobs_dependencies_attempts_and_tiers() {
     assert_eq!(by("b").attempts[0].worker.as_ref().unwrap().state, State::Idle);
 
     assert_eq!(flow.events_cursor, last_event(&mut store));
+}
+
+#[test]
+fn a_stub_draft_without_tier_or_spec_is_a_job_without_a_tier_and_does_not_fail_the_plan() {
+    let (_env, mut store) = fixture();
+    sql(
+        &mut store,
+        "INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at)
+         VALUES ('ship', 'repo', 'stub', 'Planned', 'draft', 1, cpd_txn(), '2026-01-05T00:00:00.000Z');",
+    );
+    let flow = read::flow(&mut store, &plan("ship")).unwrap();
+    let stub = flow.jobs.iter().find(|j| j.key == key("stub")).unwrap();
+    assert_eq!((stub.status, stub.tier, stub.title.as_str()), (JobStatus::Draft, None, "Planned"));
+    assert_eq!(flow.jobs.iter().find(|j| j.key == key("g")).unwrap().tier, Some(tier("S3")));
 }
 
 #[test]
