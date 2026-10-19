@@ -1906,7 +1906,9 @@ cpd events follow [--plan <id> | --context <id> | --session <id>] [--kind <kind>
 | the selected Plan, Context or Session exists | `plan_not_found`, `context_not_found`, `session_not_found` | 4 |
 | `--since` is not above the highest Event id (a cursor from another database) | `cursor_ahead` | 3 |
 
-**Any store error ends it** (hs-d140; contract §5.4): `store_too_new` after an upgrade (the verdict of contract §4.5, which the follower recomputes when `PRAGMA schema_version` changes), `migration_changed`, `migration_order`, `store_busy`, `store_failed`, … is printed as the last line, as the failure envelope, and the process exits with that code's exit (§1.2); it never stays alive on a store it cannot read. The pi adapter restarts a follower that ends (§15.2).
+**A migration in progress is waited out** (hs-n278; contract §4.2, §1.4): when it opens the store, or reopens it, while another cpd is migrating it, it waits, up to `MIGRATION_WAIT_CEILING` (10 minutes), and prints one line on stderr (`waiting for cpd pid <pid> to migrate the store <from> -> <to> (<command>)`), nothing on stdout; it does not fail `lock_timeout` for it, so an install never ends a follower.
+
+**Any other store error ends it** (hs-d140; contract §5.4): `store_too_new` after an upgrade (the verdict of contract §4.5, which the follower recomputes when `PRAGMA schema_version` changes), `migration_changed`, `migration_order`, `store_busy`, `store_failed`, … is printed as the last line, as the failure envelope, and the process exits with that code's exit (§1.2); it never stays alive on a store it cannot read. The pi adapter restarts a follower that ends (§15.2).
 
 **Re-exec** (hs-d140; contract §5.4): between polls it checks its executable path with `core/src/host/exe.rs`'s `(device, inode, mtime)` check, as `session run` and `attempt run` do (hs-d55); when it changed it re-execs itself with the same argv except `--since`, set to the id of the last Event it printed (none printed: the cursor it started from), so no follower outlives an install. Each line:
 
@@ -1934,7 +1936,7 @@ E5 (the PR poll) runs at its due time, `pr_poll_seconds` after the previous poll
 |---|---|---|
 | `locks/watch.lock` is free | `watch_running` | 3 |
 
-Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, and every row and Event of E1–E5 and E7–E9 (E3 starts nothing while a tmux restart is pending, and the engine starts that restart once nothing is in the way, §3.7) (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7; a distill run E9 starts appends its own `error` when it fails, §3.12). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0.
+Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, and every row and Event of E1–E5 and E7–E9 (E3 starts nothing while a tmux restart is pending, and the engine starts that restart once nothing is in the way, §3.7) (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7; a distill run E9 starts appends its own `error` when it fails, §3.12). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It waits out a migration in progress when it opens the store (hs-n278; contract §3.7, §4.2): it does not fail `lock_timeout`, and logs the one waiting line to `run/watch.log`. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0.
 **The `@cpd_workers` step** (contract §6.1; User, hs-d149, hs-d198): on each tick the engine reads, in one read, the open, visible Inbox items (the read of `cpd inbox list`, §21.1: neither snoozed nor dismissed; `<n>` their count and the urgency of the most urgent), `N` (the Attempts not `ended`), `M` (config `concurrency`), `W` (**waiting**: the Ready Jobs, §3.2, the ones E3 would start if a slot were free) and `Q` (**queued**: every Job with status `queued`, waiting ones included), and builds the StatusBar's styled texts: the Inbox counter `inbox <n>`, in the tmux colour of the most urgent item (`red`, `yellow`, `magenta` or `white`, the colours of the tree's `󰪥`, §17) or dim when there is none; the long form `workers N/M · W waiting · Q queued` and the short form `N/M·W·Q`; and the visible width in cells of the counter, one space and the long form. The words, `/M` and `·` are dim; `N` is in the palette's in-progress colour (green) above 0, else colour 8; `W` is dim at 0, else the palette's Review colour (yellow); `Q` is dim. It runs `tmux -L <socket> set -g @cpd_inbox '<counter>' ';' set -g @cpd_workers '<long>' ';' set -g @cpd_workers_short '<short>' ';' set -g @cpd_workers_width <cells>` **only when a text or the width changed** since the last tick it set (the first tick always sets them). No row, no Event. The indicator is therefore up to one tick (`watch.tick_seconds`) late, and stale while the engine is stopped; this deviates on purpose from §17's "no tmux option carries state".
 
 Idempotent: a second one is refused.
@@ -2237,7 +2239,7 @@ Change from cpd 1: no `node`, `bd`, `wt` or `herdr` checks (§1.1); `gh` now has
 cpd config
 ```
 
-Prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path). No effects.
+Prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
 
 ```json
 {"ok": true, "path": "/home/clayton/.cpd/config.toml",
@@ -2260,6 +2262,8 @@ Kept from cpd 1 §7 and §11; output of §9.
 | pi is found as §9 says | `pi_not_found` | 1 |
 | the catalog module ran and printed valid JSON | `catalog_failed` | 1 |
 | each configured model is in the catalog | `tier_model_unknown` | 1 |
+
+It opens the store (the catalog cache), so it waits out a migration in progress (hs-n278; contract §4.2): one line on stderr, the one JSON value at the end, and `lock_timeout` only past `MIGRATION_WAIT_CEILING`.
 
 Effects: when `install/current-version` differs from the cached `pi_version`, one transaction inserting `tier_catalog` rows (a cache: no Event). No tmux, no git.
 
