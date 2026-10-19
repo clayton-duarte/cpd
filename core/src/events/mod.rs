@@ -6,6 +6,7 @@
 mod append;
 mod kind;
 mod select;
+mod typed;
 
 use std::ffi::OsString;
 use std::io::Write;
