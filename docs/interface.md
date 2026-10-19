@@ -57,6 +57,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd pr rebase` | Rebase the Lead Branch onto the base and push (§9.3) | Lead | |
 | `cpd pr push` | Gate, then push the Lead Branch as it is, without a rebase (§9.9) | Lead | |
 | `cpd pr view` | Show the PR's checks, reviews and comments (§9.8) | Lead | |
+| `cpd pr merge` | Squash-merge a clean pull request on GitHub and delete its branch (§9.10) | | yes |
 | `cpd session` | Sessions and their tmux panes (commands.md §10) | | |
 | `cpd session list` | List Sessions (§10.1) | Lead, Manager | |
 | `cpd session show` | Show a Session (§10.2) | Lead, Manager | |

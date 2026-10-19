@@ -65,6 +65,7 @@ pub const TABLE: &[Entry] = &[
     ("pr rebase", &[Lead], false),
     ("pr push", &[Lead], false),
     ("pr view", &[Lead], false),
+    ("pr merge", &[], true),
     ("session list", &[Lead, Manager], false),
     ("session show", &[Lead, Manager], false),
     ("session fork", &[Lead], true),
