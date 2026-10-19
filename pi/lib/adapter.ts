@@ -9,7 +9,8 @@ import { errorMessage, eventMessage, FOLLOW_UP, LEAD_MESSAGES, sessionMessage } 
 import type { CpdEvent } from "./event.ts";
 import { parseLine, PROTOCOL } from "./event.ts";
 import { DEFAULT_TIMING, Follower, type Schedule, type Spawn, type Timing } from "./follower.ts";
-import type { CommandCtx, Ctx, Message, MessageRenderer, PiApi } from "./pi.ts";
+import type { CommandCtx, Ctx, Exec, Message, MessageRenderer, PiApi } from "./pi.ts";
+import { lastAssistantText, needsReminder, planKeys, REMINDER_TEXT, REMINDER_TYPE } from "./reminder.ts";
 import { parseOpened, parseResult, parseStatus, request } from "./plannotator.ts";
 import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, highestReview, REVIEW_LABEL, reviewNumber, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
 import { adapterDir, appendLog, DEFAULT_POLL_MS, LONG_REFUSAL_NOTICE, pollAdapter, type Poll, refusal, RELOAD_COMMAND, reloadLogPath, RELOAD_TRIGGER, validatePackage, type Validation } from "./reload.ts";
@@ -64,6 +65,8 @@ type Run = {
   abort: AbortController;
   /** Watches the adapter directory for an install (§15 "Reload after an install"). */
   reload: Poll | undefined;
+  /** §15.8: the last run ended on a message that spoke of further work and named no registered key; the next `before_agent_start` adds the reminder once. */
+  reminderDue: boolean;
   /** One line of `run/adapter/<session>.log` (§15.6 "Log"); a failed write is notified once per run. */
   log: (line: string) => void;
   unsubscribe: (() => void)[];
@@ -88,8 +91,10 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   // The context of `session_start`: `ctx.ui` is only handed to handlers.
   const ctxOf: { current: Ctx | undefined } = { current: undefined };
 
-  const exec = (command: string, args: string[]) => pi.exec(command, args);
-  const call = (args: string[]) => callCpd(exec, args);
+  // Aborted at `session_shutdown` (and by the next start): a call in flight then ends instead of outliving the run.
+  let abort = new AbortController();
+  const exec: Exec = (command, args, options) => pi.exec(command, args, options);
+  const call = (args: string[]) => callCpd(exec, args, { timeoutMs: timing.callTimeoutMs, signal: abort.signal });
 
   // The installed cpd binaries already reported as speaking another protocol (commands.md §15.2, step 0), and the
   // error codes of a failed `--version` already reported; both once per adapter, so a follower restart repeats nothing.
@@ -99,7 +104,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   /** commands.md §15.2, step 0. Never throws; the adapter keeps following whatever it finds. */
   async function checkProtocol(): Promise<void> {
     try {
-      const cpd = await cpdProtocol(exec);
+      const cpd = await cpdProtocol(exec, { timeoutMs: timing.callTimeoutMs, signal: abort.signal });
       versionFailures.clear();
       if (cpd === PROTOCOL) return;
       const identity = installedIdentity() ?? "cpd";
@@ -130,7 +135,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
 
   const newReporter = (id: string) =>
     new Reporter(
-      async (w: Wanted) => void (await call(stateArgs(w, id))),
+      // No signal: the `stopped` of `session_shutdown` is sent after the abort, and `stop()` bounds its wait.
+      async (w: Wanted) => void (await callCpd(exec, stateArgs(w, id), { timeoutMs: timing.callTimeoutMs })),
       (e) => deliver("session state", e),
     );
 
@@ -168,6 +174,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     const id = env.CPD_SESSION;
     if (id === undefined || id === "") return;
     await stop(); // a start without a shutdown (never seen) must not leave a second follower behind
+    abort = new AbortController();
     ctxOf.current = ctx;
     if (ctx.sessionManager.getSessionId() !== id) {
       const m = errorMessage("activation", "session_mismatch", `CPD_SESSION is ${id} but pi's session is ${ctx.sessionManager.getSessionId()}; the adapter stays inactive.`);
@@ -184,7 +191,6 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       return;
     }
 
-    const abort = new AbortController();
     const facts = new Facts();
     let logFailed = false;
     const r: Run = {
@@ -205,6 +211,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       reporting: false,
       abort,
       reload: undefined,
+      reminderDue: false,
       log: (line) => {
         try {
           appendLog(reloadLogPath(env.CPD_HOME || join(homedir(), ".cpd"), id), line);
@@ -306,13 +313,13 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   }
 
   async function stop(): Promise<void> {
+    abort.abort(); // also a start still waiting for `session show`
     const r = run;
     if (!r) return;
     run = undefined;
     ctxOf.current = undefined;
     r.log("stop");
     r.reload?.stop();
-    r.abort.abort();
     r.follower.stop();
     r.unsubscribe.forEach((u) => u());
     if (r.reporting) {
@@ -452,6 +459,43 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     pi.on("before_agent_start", async (_event, ctx) => {
       const r = run;
       return r && r.info.role === "manager" ? contextUpdates(r, ctx) : undefined;
+    });
+  }
+
+  // ---- the turn-end reminder (§15.8) ----
+
+  /** The Lead's last message of a run, checked at `agent_end` (a failed check adds nothing and is only logged). Registered once; `pi.on` has no unsubscribe, so the run is checked. */
+  pi.on("agent_end", async (event) => {
+    const r = run;
+    if (!r || r.info.role !== "lead" || r.info.plan === null) return;
+    r.reminderDue = false;
+    const text = lastAssistantText(event?.messages);
+    if (text === undefined) return;
+    const plan = r.info.plan;
+    try {
+      const due = needsReminder(text, planKeys(await call(["plan", "show", "--plan", plan])));
+      if (run !== r || !due) return;
+      r.reminderDue = true;
+      registerReminder();
+    } catch (e) {
+      r.log(`reminder: check failed: ${toCpdError(e).message}`);
+    }
+  });
+
+  let reminderRegistered = false;
+  /**
+   * Adds the reminder to the run that is starting: a hidden message (`display: false`), at most once, never a turn of its own.
+   * Registered the first time a reminder is due, not before: `pi.on` has no unsubscribe, and a Lead with nothing due (a Manager, a Worker, nearly every Lead)
+   * has no `before_agent_start` handler at all, so §15.7's "a Lead gets nothing" stays true of the handler list too.
+   */
+  function registerReminder(): void {
+    if (reminderRegistered) return;
+    reminderRegistered = true;
+    pi.on("before_agent_start", () => {
+      const r = run;
+      if (!r || r.info.role !== "lead" || !r.reminderDue) return undefined;
+      r.reminderDue = false;
+      return { message: { customType: REMINDER_TYPE, content: REMINDER_TEXT, display: false, details: { rule: "hs-d239" } } };
     });
   }
 
