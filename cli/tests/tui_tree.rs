@@ -1047,7 +1047,8 @@ fn new_context_asks_a_title_and_runs_context_new_with_the_derived_id() {
     pane.wait("the refusal", |_| pane.footer_has("A title is required. Title:"));
     pane.type_text("Building cpd!");
     pane.keys(&["Enter"]);
-    assert_eq!(wait_for_calls(&env, 1), [words(&["context", "new", "building-cpd", "--title=Building cpd!"])]);
+    // the instance has one owner policy (`acme`, which every test env has): used without asking
+    assert_eq!(wait_for_calls(&env, 1), [words(&["context", "new", "building-cpd", "--title=Building cpd!", "--owner=acme"])]);
     pane.wait("the note", |_| pane.footer_has("created building-cpd"));
 }
 

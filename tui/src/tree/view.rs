@@ -10,6 +10,7 @@
 //! ([`super::menu`]), which then takes every key and click.
 
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
@@ -24,6 +25,7 @@ use super::inbox::{self, Hit, Jump, Shape};
 use super::menu::{self, Item, Kind, Menu};
 use super::prompt::{Ask, Outcome, Prompt, Target};
 use super::rows::{self, Id, Row};
+use cpd_core::home::CpdHome;
 use cpd_core::inbox::model::Kind as InboxKind;
 use cpd_core::session::State;
 use crate::palette;
@@ -107,7 +109,24 @@ pub struct View {
     inbox_cursor: Option<usize>,
     /// The one-line result or refusal of the last action, until the next `n`, `x` or click.
     pub note: String,
+    /// `$CPD_HOME/policy/owners`: the owner policies New Context… chooses the owner from (none when the home is unresolved).
+    owners_dir: Option<PathBuf>,
 }
+
+/// The owners of the owner policy files (`<owner>.toml`) in `dir`, sorted; anything else is ignored.
+fn owners_in(dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut owners: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .filter_map(|e| e.path().file_name()?.to_str()?.strip_suffix(".toml").filter(|s| !s.is_empty()).map(str::to_owned))
+        .collect();
+    owners.sort();
+    owners
+}
+
+/// The refusal of New Context… when the instance has no owner policy.
+const NO_OWNER_POLICY: &str = "No owner policy: add $CPD_HOME/policy/owners/<owner>.toml";
 
 impl View {
     pub fn new(tree: Tree, focused: bool) -> View {
@@ -124,6 +143,7 @@ impl View {
             inbox_area: Rect::default(),
             inbox_cursor: None,
             note: String::new(),
+            owners_dir: CpdHome::from_env().ok().map(|h| h.root().join("policy").join("owners")),
         };
         view.refresh(tree);
         view
@@ -350,8 +370,13 @@ impl View {
             };
         }
         if item == Item::NewContext {
+            let owners = self.owners_dir.as_deref().map(owners_in).unwrap_or_default();
+            if owners.is_empty() {
+                self.note = NO_OWNER_POLICY.into();
+                return Effect::None;
+            }
             let taken = self.tree.contexts.iter().map(|c| c.id.to_string()).collect();
-            self.prompt = Some(Prompt::typed(Ask::NewContext { taken }, String::new()));
+            self.prompt = Some(Prompt::typed(Ask::NewContext { taken, owners }, String::new()));
             return Effect::None;
         }
         // the row may be gone, with a snapshot taken while the menu was open
@@ -1417,9 +1442,56 @@ mod tests {
         assert!(input.ends_with("x (fork)"));
     }
 
+    /// A view whose New Context… reads the owner policies of a temp home with `owners` as files.
+    fn owned(tree: Tree, files: &[&str]) -> (View, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        for f in files {
+            std::fs::write(dir.path().join(f), "").unwrap();
+        }
+        std::fs::create_dir(dir.path().join("sub.toml")).unwrap();
+        let mut view = View::new(tree, true);
+        view.owners_dir = Some(dir.path().to_path_buf());
+        (view, dir)
+    }
+
+    #[test]
+    fn owners_are_the_toml_file_stems_sorted() {
+        let (_view, dir) = owned(sample(), &["b.toml", "a.toml", "notes.md", ".toml"]);
+        assert_eq!(owners_in(dir.path()), ["a", "b"]);
+        assert!(owners_in(&dir.path().join("missing")).is_empty());
+    }
+
+    #[test]
+    fn new_context_with_no_owner_policy_is_refused_and_runs_nothing() {
+        let (mut view, _dir) = owned(sample(), &["notes.md"]);
+        assert_eq!(pick_at(&mut view, 8, 14, 0), Effect::None);
+        assert!(view.prompt.is_none());
+        assert_eq!(view.footer(), "No owner policy: add $CPD_HOME/policy/owners/<owner>.toml");
+    }
+
+    #[test]
+    fn new_context_with_several_owners_asks_which_after_the_title() {
+        let (mut view, _dir) = owned(sample(), &["clayton-duarte.toml", "other.toml"]);
+        pick_at(&mut view, 8, 14, 0);
+        typed(&mut view, "Building cpd!");
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
+        assert_eq!(view.footer(), "Owner (clayton-duarte, other): █ (Enter confirms, Esc cancels)");
+        typed(&mut view, "other");
+        let run = press(&mut view, KeyCode::Enter);
+        assert_eq!(
+            run,
+            Effect::Run(Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into(), owner: "other".into() })
+        );
+        let Effect::Run(action) = run else { unreachable!() };
+        assert_eq!(
+            action.argv(),
+            ["context", "new", "building-cpd", "--title=Building cpd!", "--owner=other"]
+        );
+    }
+
     #[test]
     fn new_context_asks_a_title_and_derives_the_id() {
-        let mut view = View::new(sample(), true);
+        let (mut view, _dir) = owned(sample(), &["clayton-duarte.toml"]);
         assert_eq!(pick_at(&mut view, 8, 14, 0), Effect::None);
         assert_eq!(view.footer(), "Title: █ (Enter confirms, Esc cancels)");
         assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
@@ -1427,22 +1499,22 @@ mod tests {
         typed(&mut view, "Building cpd!");
         assert_eq!(
             press(&mut view, KeyCode::Enter),
-            Effect::Run(Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into() })
+            Effect::Run(Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into(), owner: "clayton-duarte".into() })
         );
         assert!(view.prompt.is_none());
         // a taken id (also of an archived Context) gets `-2`, then `-3`
-        let mut view = View::new(archived(), true);
+        view.refresh(archived());
         pick_at(&mut view, 8, 14, 0);
         typed(&mut view, "Alpha");
         assert_eq!(
             press(&mut view, KeyCode::Enter),
-            Effect::Run(Action::NewContext { id: ContextId::parse("alpha-2").unwrap(), title: "Alpha".into() })
+            Effect::Run(Action::NewContext { id: ContextId::parse("alpha-2").unwrap(), title: "Alpha".into(), owner: "clayton-duarte".into() })
         );
         pick_at(&mut view, 8, 14, 0);
         typed(&mut view, "zeta");
         assert_eq!(
             press(&mut view, KeyCode::Enter),
-            Effect::Run(Action::NewContext { id: ContextId::parse("zeta-2").unwrap(), title: "zeta".into() })
+            Effect::Run(Action::NewContext { id: ContextId::parse("zeta-2").unwrap(), title: "zeta".into(), owner: "clayton-duarte".into() })
         );
         // a title that no id is made of is refused in the prompt
         pick_at(&mut view, 8, 14, 0);
