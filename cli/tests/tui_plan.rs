@@ -630,6 +630,80 @@ fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_re
     assert!(!selected(&tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane])), "a pill is selected");
 }
 
+/// A Plan `ship` of 50 independent Jobs, `j10` to `j59`: a chart taller than the pane.
+fn tall_plan() -> String {
+    let keys: Vec<String> = (10..60).map(|n| format!("j{n}")).collect();
+    let jobs: Vec<(&str, &str, &str, &[&str], u32)> = keys.iter().map(|k| (k.as_str(), "queued", "S3", &[][..], 0)).collect();
+    plan_with("dispatch", None, &jobs)
+}
+
+fn scroll_file(env: &TestEnv) -> std::path::PathBuf {
+    env.cpd_home().join("run").join("tui").join("plan-scroll.json")
+}
+
+#[test]
+fn the_scroll_offset_survives_a_restart_of_the_view_and_the_selection_does_not() {
+    let env = env();
+    sql(&env, &tall_plan());
+    let selected = |styled: &str| styled.contains("\x1b[1;7m") || styled.contains("\x1b[7;1m") || styled.contains("\x1b[7m");
+    let pane = start_view(&env);
+    let top = screen_when(&env, &pane, "the top of the chart", |s| s.len() > 2 && s[2].contains(" j10 "));
+
+    // select down the chart: it scrolls to keep the selection visible
+    let mut down = vec!["send-keys", "-t", &pane];
+    down.extend(std::iter::repeat_n("j", 45));
+    tmux_out(&env, &down);
+    wait_until("the last pill selected", || {
+        tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]).lines().any(|l| l.contains(" j54 ") && selected(l))
+    });
+    let mut scrolled = screen(&env, &pane);
+    wait_until("the chart to hold still", || {
+        std::thread::sleep(Duration::from_millis(300));
+        let now = screen(&env, &pane);
+        std::mem::replace(&mut scrolled, now) == scrolled
+    });
+    assert!(scrolled.iter().all(|l| !l.contains(" j10 ")), "{}", scrolled.join("\n"));
+
+    // the offset is written (at most once a second): wait for the file to hold, then restart the view
+    let offset = |env: &TestEnv| -> Option<serde_json::Value> {
+        let text = fs::read_to_string(scroll_file(env)).ok()?;
+        serde_json::from_str::<serde_json::Value>(&text).ok()?.get("ship").cloned()
+    };
+    wait_until("the offset in the file", || offset(&env).is_some_and(|o| o[1].as_u64().unwrap_or(0) > 0));
+    std::thread::sleep(Duration::from_millis(1500));
+    let written = offset(&env).unwrap();
+    tmux_out(&env, &["respawn-pane", "-k", "-t", &pane, CPD, "tui", "view", "plan"]);
+
+    // frames can reach the pane in two writes (hs-n206): poll until the whole screen is there
+    let back = screen_when(&env, &pane, "the offset restored", |s| s == scrolled.as_slice());
+    assert_ne!(back, top);
+    assert!(!selected(&tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane])), "a pill is selected");
+    assert_eq!(offset(&env).unwrap(), written, "the restart did not move the offset");
+    let leftovers: Vec<_> = fs::read_dir(scroll_file(&env).parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(leftovers, ["plan-scroll.json"], "no temporary file is left");
+}
+
+#[test]
+fn an_invalid_scroll_file_starts_the_view_at_the_top_with_a_note_and_the_next_write_replaces_it() {
+    let env = env();
+    sql(&env, &tall_plan());
+    fs::create_dir_all(scroll_file(&env).parent().unwrap()).unwrap();
+    fs::write(scroll_file(&env), "{not json").unwrap();
+    let pane = start_view(&env);
+    let screen = screen_when(&env, &pane, "the note", |s| s.iter().any(|l| l.contains("scroll positions reset: ")));
+    assert!(screen[2].contains(" j10 "), "{}", screen.join("\n"));
+    assert_eq!(fs::read_to_string(scroll_file(&env)).unwrap(), "{not json", "nothing is written until an offset changes");
+
+    // scroll down the chart: the file becomes a valid one
+    let mut down = vec!["send-keys", "-t", &pane];
+    down.extend(std::iter::repeat_n("j", 45));
+    tmux_out(&env, &down);
+    wait_until("the file replaced", || {
+        fs::read_to_string(scroll_file(&env)).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).is_some_and(|v| v["ship"][1].as_u64().unwrap_or(0) > 0)
+    });
+    assert_eq!(tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_dead}"]).trim(), "0");
+}
+
 #[test]
 fn the_view_starts_no_subprocess_and_asks_gh_nothing() {
     let env = env();
