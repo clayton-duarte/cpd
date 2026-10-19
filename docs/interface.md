@@ -1,0 +1,96 @@
+# cpd's interface
+
+Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not edit by hand. Regenerate: `CPD_BLESS=1 scripts/cargo.sh test -p cpd --test interface`. Callers, cockpit and internal: [commands.md §2](commands.md#2-command-index). A § without a file is commands.md's.
+
+| Command | Description | Callers | Cockpit |
+|---|---|---|---|
+| `cpd context` | Contexts and their records (commands.md §3) | | |
+| `cpd context new` | Create a Context (§3.1) | Lead | yes |
+| `cpd context list` | List the Contexts (§3.2) | Lead, Manager | |
+| `cpd context show` | Show a Context and its records (§3.3) | Lead, Manager | |
+| `cpd context decide` | Record a decision (§3.4) | Lead, Manager | |
+| `cpd context note` | Record a note (§3.4) | Lead, Manager | |
+| `cpd context ask` | Record a question (§3.4) | Lead, Manager | |
+| `cpd context answer` | Record the answer to a question (§3.5) | Lead, Manager | |
+| `cpd context rename` | Change a Context's title (§3.7) | | yes |
+| `cpd context archive` | Archive the Context with its Plans and their Sessions (§3.8) | | yes |
+| `cpd context unarchive` | Unarchive the Context with its Plans and their Sessions (§3.9) | | yes |
+| `cpd context manager` | Start or resume the Context's Manager (§3.10) | Manager | yes |
+| `cpd context pending` | List the in-flight work of the Context's active Plans (§3.11) | Lead, Manager | |
+| `cpd context distill` | Build the Context's digest with one-shot pi (§3.12) | Lead | |
+| `cpd plan` | Plans and their phases (commands.md §4) | | |
+| `cpd plan new` | Create a Plan and start its Lead (§4.1) | Lead, Manager | yes |
+| `cpd plan list` | List the Plans (§4.2) | Lead, Manager | |
+| `cpd plan show` | Show a Plan: the TUI's snapshot (§4.3) | Lead, Manager | |
+| `cpd plan phase` | Move the Plan to phase `plan` (§4.4) | Lead | |
+| `cpd plan render` | Render the Plan to run/<plan>/plan.md (§4.5) | Lead | |
+| `cpd plan review` | Request the User's approval of the draft Jobs (§4.6) | Lead | |
+| `cpd plan decide` | Record the User's decision on a Plan review (§4.7) | internal | |
+| `cpd plan lock` | Lock the Plan and start dispatching (§4.8) | Lead | |
+| `cpd plan rename` | Change the Plan's title (§4.9) | | yes |
+| `cpd plan archive` | Archive the Plan, its Lead and its side forks (§4.10) | | yes |
+| `cpd plan unarchive` | Unarchive the Plan, its Lead and its side forks (§4.11) | | yes |
+| `cpd plan cancel` | Cancel the Plan's Jobs and pull requests, close its Lead, archive it (§4.12) | Lead | |
+| `cpd job` | Jobs, Specs and Dependencies (commands.md §5) | | |
+| `cpd job add` | Add a Job (§5.1) | Lead | |
+| `cpd job edit` | Edit a draft Job (§5.2) | Lead | |
+| `cpd job cancel` | Cancel a Job (§5.3) | Lead | |
+| `cpd job retry` | Queue a failed Job again at a Tier (§5.4) | Lead | |
+| `cpd job dispatch` | Start one Ready Job now (§5.5) | | |
+| `cpd job list` | List the Jobs (§5.6) | Lead | |
+| `cpd job show` | Show a Job and its Attempts (§5.7) | Lead | |
+| `cpd attempt` | Attempts (commands.md §6) | | |
+| `cpd attempt submit` | Submit the Attempt for review (Worker) (§6.1) | Worker | |
+| `cpd attempt read` | A readable transcript of the Worker (§6.2) | Lead | |
+| `cpd attempt show` | Show an Attempt (§6.3) | Lead | |
+| `cpd attempt list` | List Attempts (§6.3) | Lead | |
+| `cpd attempt run` | The Attempt driver (internal) (§6.4) | internal | |
+| `cpd ask` | Ask the Lead a question and wait for the answer (Worker) (commands.md §8.1) | Worker | |
+| `cpd answer` | Answer a Worker's Escalation (Lead) (commands.md §8.2) | Lead | |
+| `cpd pr` | Pull requests (commands.md §9) | | |
+| `cpd pr add` | Add a PR to the Plan (§9.4) | Lead | |
+| `cpd pr edit` | Change a waiting PR before the lock (§9.5) | Lead | |
+| `cpd pr cancel` | Remove a PR from the Plan before the lock (§9.6) | Lead | |
+| `cpd pr start` | Start a waiting PR whose needs are merged, after a failed start (§9.7) | Lead | |
+| `cpd pr open` | Push the Lead Branch and open the PR (§9.1) | Lead | |
+| `cpd pr poll` | Poll every open pull request of the User (§9.2) | Lead | |
+| `cpd pr rebase` | Rebase the Lead Branch onto the base and push (§9.3) | Lead | |
+| `cpd pr push` | Gate, then push the Lead Branch as it is, without a rebase (§9.9) | Lead | |
+| `cpd pr view` | Show the PR's checks, reviews and comments (§9.8) | Lead | |
+| `cpd session` | Sessions and their tmux panes (commands.md §10) | | |
+| `cpd session list` | List Sessions (§10.1) | Lead, Manager | |
+| `cpd session show` | Show a Session (§10.2) | Lead, Manager | |
+| `cpd session fork` | Fork a Lead into a parked window (§10.3) | Lead | yes |
+| `cpd session open` | Bring a Lead, or a Context's Manager, into the chat slot (§10.4) | Lead, Manager | yes |
+| `cpd session park` | Move the Lead or Manager in the chat slot to a parked window (§10.5) | Lead | yes |
+| `cpd session close` | End a Lead's pane; its session file stays (§10.9) | Lead | yes |
+| `cpd session history` | Show a Lead Session's history, read-only, in the chat slot (§10.12) | | yes |
+| `cpd session archive` | Archive a Lead Session (§10.10) | | yes |
+| `cpd session unarchive` | Unarchive a Lead Session (§10.11) | | yes |
+| `cpd session send` | Send a message to a Lead (§10.13) | Lead, Manager | |
+| `cpd session rename` | Rename a Session (§10.7) | Lead | yes |
+| `cpd session state` | Report a Session's agent state (pi adapter) (§10.6) | internal | |
+| `cpd session run` | The program in every Lead pane (internal; owns its terminal) (§10.8) | internal | |
+| `cpd events` | Events (commands.md §11) | | |
+| `cpd events list` | List Events (§11.1) | Manager | |
+| `cpd events follow` | Follow Events, one per line (the one streaming command) (§11.2) | | |
+| `cpd inbox` | What needs you (commands.md §21) | | |
+| `cpd inbox list` | List what needs you (§21.1) | | |
+| `cpd inbox show` | Show one item (§21.2) | | |
+| `cpd inbox snooze` | Hide an item for a while (§21.3) | | |
+| `cpd inbox dismiss` | Hide an item for the rest of its life (§21.4) | | |
+| `cpd watch` | The engine, one per machine (commands.md §12) | Lead | |
+| `cpd tui` | Build the cockpit and start the engine (commands.md §13) | | |
+| `cpd tui view` | A view in a cockpit pane (internal; owns its terminal) (§13.2) | internal | |
+| `cpd tui view tree` | The session tree (left) | internal | |
+| `cpd tui view plan` | The Plan of the Lead in the chat slot (centre top) | internal | |
+| `cpd tui view widgets` | The Dispatch column (right) | internal | |
+| `cpd tui view statusbar` | The StatusBar (bottom row) | internal | |
+| `cpd tui view worker` | An Attempt's Worker, read-only (beside the chat) | internal | |
+| `cpd tui view history` | An archived Session's history, read-only (the chat slot) | internal | |
+| `cpd tui view legend` | The key legend (opened by `?` in the Dispatch column, in a tmux popup) | internal | |
+| `cpd tui view logs` | The Event log (opened by the StatusBar's logs button, in a tmux popup) | internal | |
+| `cpd tui view chat` | The chat slot's placeholder | internal | |
+| `cpd doctor` | Check the machine (commands.md §14.1) | | |
+| `cpd config` | Print the effective configuration (commands.md §14.2) | | |
+| `cpd tiers` | Print the Tiers and their valid efforts (commands.md §14.3) | Lead | |
