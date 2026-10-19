@@ -7,7 +7,7 @@ mod common;
 use std::fs;
 use std::path::PathBuf;
 
-use common::{Run, TestEnv, CPD};
+use common::{refused, Run, TestEnv, CPD};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use serde_json::{json, Value};
@@ -44,7 +44,7 @@ impl Fx {
                    VALUES ('w-{key}', 'worker', 'ctx', 'pl', '{key}-a1', '{key}-a1', '/w', 'S2', 'working', 't', 't');"
             )
         };
-        fx.sql(&format!(
+        fx.env.sql(&format!(
             "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'C', 'acme', 't', 'm1'), ('bare', 'B', NULL, 't', 'm1');
              INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pl', 'ctx', 'P', 'grounding', 'lead1', 't');
              INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -60,11 +60,6 @@ impl Fx {
             job("b", "anon")
         ));
         fx
-    }
-
-    fn sql(&self, sql: &str) {
-        let mut store = Store::open(&CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap(), 5000).unwrap();
-        store.write("fixture", |tx| Ok(tx.execute_batch(sql)?)).unwrap();
     }
 
     fn real(&self, rel: &str) -> String {
@@ -91,13 +86,6 @@ impl Fx {
             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
         }
     }
-}
-
-fn refused(run: &Run, code: &str, exit: i32) -> Value {
-    let error = run.error();
-    assert_eq!(error["code"], code, "{run:?}");
-    assert_eq!(run.exit, exit, "{run:?}");
-    error
 }
 
 fn key(out: &Value) -> (&str, Option<&str>) {
@@ -247,7 +235,7 @@ fn not_found_refusals() {
 fn owner_unset_names_the_next_command() {
     let fx = Fx::new();
     let error = refused(&fx.show(&["--context", "bare"]), "owner_unset", 3);
-    assert_eq!(error["details"]["next"], "cpd context owner <login> --context bare");
+    assert!(error["details"].get("next").is_none() && error["message"].as_str().unwrap().contains("cpd context owner <login> --context bare"), "{error}");
     refused(&fx.show_as("mgr2", None), "owner_unset", 3);
 }
 

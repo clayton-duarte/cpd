@@ -198,7 +198,7 @@ fn add_keys_the_repo_before_anything_is_written() {
     let writes = fx.writes();
     let error = fx.refused(&fx.add("api", &fx.pay, &[]), "owner_unset", 3, writes);
     assert_eq!(error["details"]["context"], "ctx");
-    assert_eq!(error["details"]["next"], "cpd context owner <login> --context ctx");
+    assert!(error["details"].get("next").is_none() && error["message"].as_str().unwrap().contains("cpd context owner <login> --context ctx"), "{error}");
     fx.env.sql("UPDATE contexts SET owner = 'acme' WHERE id = 'ctx'");
     let writes = fx.writes();
 

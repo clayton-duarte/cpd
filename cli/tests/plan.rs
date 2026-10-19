@@ -610,7 +610,7 @@ fn new_in_a_context_with_no_owner_is_owner_unset_and_writes_nothing() {
     let txns: i64 = query(&env, "SELECT count(*) FROM txns");
     let error = refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "T"]), "owner_unset", 3);
     assert_eq!(error["details"]["context"], "ctx");
-    assert_eq!(error["details"]["next"], "cpd context owner <login> --context ctx");
+    assert!(error["details"].get("next").is_none() && error["message"].as_str().unwrap().contains("cpd context owner <login> --context ctx"), "{error}");
     assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
     assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans"), 0);
     // After `context owner` the Plan is created.

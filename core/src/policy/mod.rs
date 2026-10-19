@@ -113,9 +113,8 @@ pub fn owner_mismatch(owner: &OwnerLogin, repo_owner: &OwnerLogin) -> CpdError {
 
 /// `owner_unset` (exit 3): the Context has no owner yet (made before the policy keys).
 pub fn owner_unset(context: &ContextId) -> CpdError {
-    CpdError::new(ErrorCode::OwnerUnset, format!("The Context {context} has no owner."))
+    CpdError::new(ErrorCode::OwnerUnset, format!("The Context {context} has no owner: set it with `cpd context owner <login> --context {context}`."))
         .with("context", context.as_str())
-        .with("next", format!("cpd context owner <login> --context {context}"))
 }
 
 /// `owner_set` (exit 3): `context owner` on a Context that has an owner.
@@ -377,7 +376,7 @@ mod tests {
         let e = owner_unset(&ctx);
         assert_eq!((e.code(), e.exit().code()), (ErrorCode::OwnerUnset, 3));
         assert_eq!(e.details()["context"], "ctx");
-        assert_eq!(e.details()["next"], "cpd context owner <login> --context ctx");
+        assert!(e.details().get("next").is_none() && e.message().contains("cpd context owner <login> --context ctx"));
 
         let e = owner_set(&ctx, &acme);
         assert_eq!((e.code(), e.exit().code()), (ErrorCode::OwnerSet, 3));

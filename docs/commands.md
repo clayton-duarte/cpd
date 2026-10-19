@@ -528,7 +528,7 @@ A Plan has no repo (R34, A12): its PRs are added later with `pr add` (§9.4), an
 | Precondition | Code | Exit |
 |---|---|---|
 | the Context exists | `context_not_found` | 4 |
-| the Context has an owner (contract §8.3; null only for a Context made before the owner existed); `details.next` = `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
+| the Context has an owner (contract §8.3; null only for a Context made before the owner existed); the message names `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
 | no Plan with this id, unless every flag matches it (then the result is `already`) | `plan_exists` | 3 |
 | the Context is not archived; `details.next` = `cpd context unarchive <c>` | `archived` | 3 |
 
@@ -1324,7 +1324,7 @@ Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `p
 |---|---|---|
 | the Plan is not archived | `archived` | 3 |
 | `--repo` is inside a git repository (`git -C <path> rev-parse --git-common-dir`) | `not_a_git_repo` | 3 |
-| the Plan's Context has an owner (contract §8.3); `details.next` = `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
+| the Plan's Context has an owner (contract §8.3); the message names `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
 | the repo is keyed from its `origin` (below); `details.url` (null when there is no `origin`) | `repo_unkeyed` | 1 |
 | the repo's owner is the Context's; `details.owner` (the Context's), `details.repo_owner` | `owner_mismatch` | 3 |
 | the owner has a policy file, `$CPD_HOME/policy/owners/<owner>.toml`; `details.owner` | `owner_unknown` | 1 |
@@ -2787,7 +2787,7 @@ Prints the resolved policy of one key: every domain with its value and its sourc
 |---|---|---|
 | with no flag, a Session was selected | `session_required` | 2 |
 | the Session, Plan, PR or Context exists | `session_not_found`, `plan_not_found`, `pr_not_found`, `context_not_found` | 4 |
-| the Context (the Session's, the PR's Plan's, or `--context`) has an owner; `details.next` = `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
+| the Context (the Session's, the PR's Plan's, or `--context`) has an owner; the message names `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
 | the key's owner has `owners/<owner>.toml`, also when its repo file exists; `details.owner` | `owner_unknown` | 1 |
 | every file the key reads is valid TOML with known domains, keys, types and values, and a valid file name; `details.file`, `details.key` | `policy_invalid` | 1 |
 
