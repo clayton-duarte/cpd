@@ -746,7 +746,8 @@ The Deploy stage runs from the end of `dispatch` (all Jobs merged, `pr open`) an
 ### 4.1 The database
 
 - One file per machine: `$CPD_HOME/cpd.db` (R1), created on first use with `PRAGMA journal_mode = WAL` (persistent) and `PRAGMA application_id = 1668310066` (`0x63706432`, "cpd2").
-- Every connection sets `PRAGMA foreign_keys = ON`, `PRAGMA synchronous = FULL`, `PRAGMA busy_timeout = <store_busy_ms>`, and registers the SQL function `cpd_txn()` (§4.3) before it runs any statement. The function must not be flagged `SQLITE_DIRECTONLY`, because triggers call it.
+- Every connection sets `PRAGMA foreign_keys = ON`, `PRAGMA synchronous = NORMAL`, `PRAGMA busy_timeout = <store_busy_ms>`, and registers the SQL function `cpd_txn()` (§4.3) before it runs any statement. The function must not be flagged `SQLITE_DIRECTONLY`, because triggers call it.
+- `synchronous = NORMAL` with `journal_mode = WAL` (decision of 2026-10-19): SQLite documents this pair as never corrupting the database, but a power loss or OS crash can lose the last committed transactions (a process crash loses nothing). Why: `synchronous = FULL` made each commit wait for a WAL fsync, and under disk load that held the write lock for seconds (measured in `run/store-slow.log`: a 7902 ms hold was a 7861 ms commit, the work 0-5 ms).
 - SQLite is bundled into the binary (rusqlite's `bundled` feature), at least 3.45, so `STRICT` tables and the JSON functions are always present.
 - Nothing is ever deleted (§4.4). The database grows; there is no pruning in this contract.
 

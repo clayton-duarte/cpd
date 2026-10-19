@@ -116,6 +116,23 @@ fn a_new_database_is_wal_with_cpds_application_id() {
     assert_eq!(version, VERSION);
 }
 
+/// §4.1: every connection cpd opens syncs with NORMAL (1) in WAL mode; synchronous is per connection.
+#[test]
+fn every_connection_is_synchronous_normal_in_wal_mode() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    let (sync, mode): (i64, String) = store
+        .read(|conn| {
+            Ok((
+                conn.pragma_query_value(None, "synchronous", |r| r.get(0)).unwrap(),
+                conn.pragma_query_value(None, "journal_mode", |r| r.get(0)).unwrap(),
+            ))
+        })
+        .unwrap();
+    assert_eq!(sync, 1);
+    assert_eq!(mode, "wal");
+}
+
 #[test]
 fn cpd_home_is_created_on_first_use() {
     let env = TestEnv::new();

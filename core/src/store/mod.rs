@@ -220,7 +220,7 @@ impl Store {
         })?;
         conn.busy_timeout(Duration::from_millis(busy_ms))?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        conn.pragma_update(None, "synchronous", "FULL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
 
         let application_id: i32 = conn.pragma_query_value(None, "application_id", |r| r.get(0))?;
         if application_id != 0 && application_id != APPLICATION_ID {
