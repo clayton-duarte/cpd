@@ -2,7 +2,8 @@
 //!
 //! The database tables `contexts` and `context_records` are the only store of
 //! a Context's records; Contexts are machine-local (contract §4.6). The
-//! commands are in this file, the writes in `contexts`.
+//! clap types and `new` are in this file, each other command in a file of its
+//! name, the writes in `contexts`.
 //!
 //! Other areas use [`Contexts`]: `plan new` writes its `plan` record with
 //! [`Contexts::write`]. [`legacy`] reads the git stores of earlier versions,
@@ -18,6 +19,7 @@ mod record;
 pub(crate) mod render;
 mod rename;
 mod show;
+mod write;
 
 use std::fmt;
 use std::str::FromStr;
@@ -35,7 +37,7 @@ pub(crate) use show::plan_repos;
 use crate::args::{PlanArg, Text, Title};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::ids::{ContextId, RecordId, SessionId};
+use crate::ids::{ContextId, RecordId};
 use crate::output::Output;
 use crate::store::Store;
 
@@ -229,12 +231,12 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Show(args) => show::show(args),
         Command::Decide(args) => {
             let draft = Draft::Decision { supersedes: args.supersedes };
-            write("context decide", &args.select, &args.text, draft)
+            write::write("context decide", &args.select, &args.text, draft)
         }
-        Command::Note(args) => write("context note", &args.select, &args.text, Draft::Note),
-        Command::Ask(args) => write("context ask", &args.select, &args.question, Draft::Question),
+        Command::Note(args) => write::write("context note", &args.select, &args.text, Draft::Note),
+        Command::Ask(args) => write::write("context ask", &args.select, &args.question, Draft::Question),
         Command::Answer(args) => {
-            write("context answer", &args.select, &args.text, Draft::Answer { question: args.question })
+            write::write("context answer", &args.select, &args.text, Draft::Answer { question: args.question })
         }
         Command::Rename(args) => rename::rename(args),
         Command::Archive(args) => archive::archive(args),
@@ -252,15 +254,6 @@ fn now() -> String {
 }
 
 
-/// `CPD_SESSION`, else `PI_SESSION_ID`, else none (commands.md §3.4).
-fn session_from_env() -> Result<Option<SessionId>, CpdError> {
-    ["CPD_SESSION", "PI_SESSION_ID"]
-        .iter()
-        .find_map(|name| std::env::var_os(name).filter(|v| !v.is_empty()))
-        .map(|v| SessionId::parse(&v.to_string_lossy()))
-        .transpose()
-}
-
 fn context_json(row: &ContextRow) -> Value {
     json!({"id": row.id, "title": row.title, "jira": row.jira, "created_at": row.created_at,
            "created_on": row.created_on})
@@ -272,19 +265,6 @@ fn new(args: NewArgs) -> Result<Output, CpdError> {
     let (row, already) = Contexts::new(&config, &mut store).create(&args.id, &Text::from(args.title.clone()), args.jira.as_ref())?;
     let mut out = json!({"context": context_json(&row)});
     if already {
-        out["already"] = json!(true);
-    }
-    Ok(Output::success(out))
-}
-
-/// `context decide`, `note`, `ask` and `answer` (§3.4, §3.5).
-fn write(command: &str, select: &Select, text: &Text, draft: Draft) -> Result<Output, CpdError> {
-    let Env { config, mut store, .. } = Env::open()?;
-    let context = select.resolve(&mut store)?;
-    let by = By { session: session_from_env()?, plan: select.plan.plan.clone() };
-    let written = Contexts::new(&config, &mut store).write(&context, command, by, text, draft)?;
-    let mut out = json!({"record": written.record.to_json(), "seq": written.seq});
-    if written.already {
         out["already"] = json!(true);
     }
     Ok(Output::success(out))
