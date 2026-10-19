@@ -103,6 +103,7 @@ fn no_engine_error_item_opens_and_one_an_older_engine_opened_closes() {
     setup(&env);
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
+    let event = store.read(cpd_core::events::highest_id).unwrap();
     let old = Condition {
         kind: Kind::EngineError,
         urgency: Urgency::Red,
@@ -114,7 +115,7 @@ fn no_engine_error_item_opens_and_one_an_older_engine_opened_closes() {
         job: None,
         session: None,
         record: None,
-        event: Some(7),
+        event: Some(event),
     };
     let at = "2026-01-01T00:00:00.000Z";
     assert_eq!(reconcile(&mut store, &[old], at).unwrap().opened.len(), 1, "the row an older engine wrote");
