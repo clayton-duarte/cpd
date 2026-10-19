@@ -181,7 +181,7 @@ test("a reply run's idle carries --reply through the serialising reporter: the l
   await f.pi.fire("agent_settled", { aborted: false }); // pi.idle is true: idle with --reply, pending
   await f.pi.fire("agent_settled", { aborted: false }); // the same again
   await waitFor("two more calls", () => stateCalls(f).length === 3, 3000);
-  await settle(300);
+  await f.quiet();
   assert.deepEqual(f.argvs().filter((a) => a[1] === "state").slice(1), [
     ["session", "state", "working", "--session", ID],
     ["session", "state", "idle", "--reply", "--session", ID],
