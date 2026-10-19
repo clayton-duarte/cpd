@@ -31,6 +31,13 @@ pub use schema::{HISTORY_TABLES, VERSION, schema_hash};
 /// `PRAGMA application_id` of a cpd 2 database: `0x63706432`, "cpd2" (§4.1).
 pub const APPLICATION_ID: i32 = 0x6370_6432;
 
+/// The `history` rows whose `txn` has no `txns` row (the tamper report's
+/// second part). `INDEXED BY history_txn` makes the planner scan the small
+/// covering index instead of the `history` table (its rows hold every column
+/// twice); the index is §4.4's, so a missing one is an error, not a silent scan.
+pub const ORPHAN_HISTORY_SQL: &str =
+    "SELECT h.id, h.txn FROM history h INDEXED BY history_txn WHERE NOT EXISTS (SELECT 1 FROM txns t WHERE t.id = h.txn) ORDER BY h.id";
+
 /// The `txns.command` of the transaction that migrates (§4.5).
 pub const MIGRATE_COMMAND: &str = "migrate";
 
@@ -317,9 +324,7 @@ impl Store {
             report.push(json!({"kind": "schema", "expected": m.expected, "found": m.found}));
         }
         let orphans = self.read(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT h.id, h.txn FROM history h WHERE NOT EXISTS (SELECT 1 FROM txns t WHERE t.id = h.txn) ORDER BY h.id",
-            )?;
+            let mut stmt = conn.prepare(ORPHAN_HISTORY_SQL)?;
             let rows = stmt
                 .query_map([], |r| Ok(json!({"kind": "history", "id": r.get::<_, i64>(0)?, "txn": r.get::<_, i64>(1)?})))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -504,7 +509,7 @@ fn enrich(e: CpdError, path: &Path, busy_ms: u64) -> CpdError {
 }
 
 /// A SQLite failure, as Escalation `rs-store-a1-q1` decided: busy after the
-/// busy timeout is `store_busy`; the triggers' `RAISE(ABORT, 'job_locked')`,
+/// busy timeout is `store_busy`, and so is `SQLITE_LOCKED`; the triggers' `RAISE(ABORT, 'job_locked')`,
 /// `'illegal_transition'`, `'pr_locked'` and `'needs_other_pr'` (§4.4) are
 /// those refusals; anything else is `store_failed` with `sqlite_code` and
 /// `sqlite_message`.
@@ -516,7 +521,7 @@ impl From<rusqlite::Error> for CpdError {
             _ => None,
         };
         match sqlite {
-            Some(f) if f.code == SqliteCode::DatabaseBusy => CpdError::new(
+            Some(f) if matches!(f.code, SqliteCode::DatabaseBusy | SqliteCode::DatabaseLocked) => CpdError::new(
                 ErrorCode::StoreBusy,
                 "Another cpd process held the database's write lock for longer than store_busy_ms.",
             )

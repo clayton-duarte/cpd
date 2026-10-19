@@ -60,8 +60,26 @@ async function follow() {
 })();
 `;
 
-/** Stands for pi's jiti in the throwaway load (the real one is pi's, not a dependency of this repo): loads the file natively, which node does for `.ts`. */
-const FAKE_JITI = `export const createJiti = () => ({ import: async (path) => (await import(path)).default });\n`;
+/**
+ * Stands for pi in the pre-validation (`pi --no-extensions --no-session -e <dir> --mode rpc`; the real one is pi's, not a dependency of this repo): loads
+ * `<dir>/extension.ts` natively, which node does for `.ts`, and exits 0, or 1 with pi's message on stderr when the load throws or the default export is not a function.
+ * Records its environment in `validate-calls.jsonl` (the scratch agent directory must exist while it runs).
+ */
+const FAKE_PI = `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const argv = process.argv.slice(2);
+const dir = argv[argv.indexOf("-e") + 1];
+const entry = path.join(dir, "extension.ts");
+fs.appendFileSync(path.join(process.env.FAKE_CPD_DIR, "validate-calls.jsonl"), JSON.stringify({ argv, cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR, offline: process.env.PI_OFFLINE, agentDirExists: fs.existsSync(process.env.PI_CODING_AGENT_DIR) }) + "\\n");
+import(entry).then((m) => {
+  if (typeof m.default !== "function") throw new Error("Extension does not export a valid factory function: " + entry);
+  process.exit(0);
+}).catch((e) => {
+  console.error('Error: Failed to load extension "' + entry + '": ' + (e instanceof Error ? e.message : String(e)) + "\\nHint: Start without extensions using \\"pi -ne\\".");
+  process.exit(1);
+});
+`;
 
 export const ID = "596d007f-6775-4134-b77a-b356cc523842";
 export const OTHER = "11111111-2222-4333-8444-555555555555";
@@ -73,8 +91,6 @@ export class Fixture {
   readonly cpdHome = join(this.dir, "cpd-home");
   /** Stands for the adapter's installed directory (`options.reload.dir`). */
   readonly adapterDir = join(this.dir, "adapter");
-  /** The loader the throwaway load of a new package uses (`reload.loader`). */
-  readonly loader = join(this.dir, "fake-jiti.mjs");
   readonly pi: FakePi;
   private readonly saved: Record<string, string | undefined> = {};
 
@@ -83,7 +99,8 @@ export class Fixture {
     mkdirSync(join(this.dir, "resp"));
     mkdirSync(this.cpdHome);
     mkdirSync(this.adapterDir);
-    writeFileSync(this.loader, FAKE_JITI);
+    writeFileSync(join(this.dir, "bin", "pi"), FAKE_PI);
+    chmodSync(join(this.dir, "bin", "pi"), 0o755);
     writeFileSync(join(this.dir, "bin", "cpd"), FAKE_CPD);
     chmodSync(join(this.dir, "bin", "cpd"), 0o755);
     for (const k of ["PATH", "FAKE_CPD_DIR", "CPD_SESSION", "CPD_PLAN", "CPD_HOME"]) this.saved[k] = process.env[k];
@@ -180,7 +197,7 @@ export class Fixture {
       ...options,
       spawn: ((...args: Parameters<typeof spawn>) => this.pi.track(start(...args))) as typeof spawn,
       timing: { restartInitialMs: 30, restartMaxMs: 120, requestTimeoutMs: 300, pollMs: 30, shutdownWaitMs: 200, callTimeoutMs: 10_000, ...options.timing },
-      reload: { dir: this.adapterDir, intervalMs: 20, loader: this.loader, ...options.reload },
+      reload: { dir: this.adapterDir, intervalMs: 20, ...options.reload },
     });
   }
 

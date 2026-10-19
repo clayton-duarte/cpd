@@ -493,6 +493,14 @@ fn settled(session: &str) -> String {
     event("session-state", Some("alpha"), Some("sketch"), Some(session), r#"{"from":"working","to":"idle","label":null}"#)
 }
 
+/// `idle` -> `stopped` -> `idle`: a reload, not a finished turn (hs-d242).
+fn reloaded(session: &str) -> String {
+    let state = |from: &str, to: &str| {
+        event("session-state", Some("alpha"), Some("sketch"), Some(session), &format!(r#"{{"from":"{from}","to":"{to}","label":null}}"#))
+    };
+    state("idle", "stopped") + &state("stopped", "idle")
+}
+
 /// The needs-you dot of a Session, from its state and its Events (cockpit parity, the tree's needs-you rule).
 #[test]
 fn a_session_needs_you_when_blocked_or_idle_with_a_turn_the_user_has_not_seen() {
@@ -514,6 +522,8 @@ fn a_session_needs_you_when_blocked_or_idle_with_a_turn_the_user_has_not_seen() 
     fork("x-seen", "idle", &[settled("x-seen"), chat("x-seen"), parked("x-seen")]);
     fork("x-slot", "idle", &[chat("x-slot"), settled("x-slot")]);
     fork("x-again", "idle", &[settled("x-again"), chat("x-again"), settled("x-again"), parked("x-again")]);
+    fork("x-reload", "idle", &[settled("x-reload"), chat("x-reload"), parked("x-reload"), reloaded("x-reload")]);
+    fork("x-start", "idle", &[reloaded("x-start")]);
     sql(&mut store, &s);
 
     let tree = read::tree(&mut store).unwrap();
@@ -526,18 +536,20 @@ fn a_session_needs_you_when_blocked_or_idle_with_a_turn_the_user_has_not_seen() 
             ("x-again", true),
             ("x-blocked", true),
             ("x-quiet", false),
+            ("x-reload", false),
             ("x-seen", false),
             ("x-slot", false),
+            ("x-start", false),
             ("x-unseen", true),
             ("x-working", false),
         ],
-        "by id: idle again after being seen; blocked; idle with no turn; idle and seen; in the slot; idle and unseen; working"
+        "by id: idle again after being seen; blocked; idle with no turn; a reload after being seen; idle and seen; in the slot; a start; idle and unseen; working"
     );
     assert!(sketch.needs_you() && tree.contexts[0].needs_you());
     let forks: Vec<&str> = tree.contexts[0].forks().iter().map(|(_, s)| s.id.as_str()).collect();
     assert_eq!(
         forks,
-        ["f-ship", "x-again", "x-blocked", "x-quiet", "x-seen", "x-slot", "x-unseen", "x-working"],
+        ["f-ship", "x-again", "x-blocked", "x-quiet", "x-reload", "x-seen", "x-slot", "x-start", "x-unseen", "x-working"],
         "forks of every Plan, oldest first, Plans' Leads never"
     );
 }
@@ -581,7 +593,7 @@ fn a_plan_is_its_jobs_dependencies_attempts_and_tiers() {
     let shape: Vec<(&str, JobStatus, String, Vec<&str>, usize)> = flow
         .jobs
         .iter()
-        .map(|j| (j.key.as_str(), j.status, j.tier.to_string(), j.needs.iter().map(|n| n.as_str()).collect(), j.attempts.len()))
+        .map(|j| (j.key.as_str(), j.status, j.tier.expect("a Tier").to_string(), j.needs.iter().map(|n| n.as_str()).collect(), j.attempts.len()))
         .collect();
     assert_eq!(
         shape,
@@ -615,6 +627,20 @@ fn a_plan_is_its_jobs_dependencies_attempts_and_tiers() {
     assert_eq!(by("b").attempts[0].worker.as_ref().unwrap().state, State::Idle);
 
     assert_eq!(flow.events_cursor, last_event(&mut store));
+}
+
+#[test]
+fn a_stub_draft_without_tier_or_spec_is_a_job_without_a_tier_and_does_not_fail_the_plan() {
+    let (_env, mut store) = fixture();
+    sql(
+        &mut store,
+        "INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at)
+         VALUES ('ship', 'repo', 'stub', 'Planned', 'draft', 1, cpd_txn(), '2026-01-05T00:00:00.000Z');",
+    );
+    let flow = read::flow(&mut store, &plan("ship")).unwrap();
+    let stub = flow.jobs.iter().find(|j| j.key == key("stub")).unwrap();
+    assert_eq!((stub.status, stub.tier, stub.title.as_str()), (JobStatus::Draft, None, "Planned"));
+    assert_eq!(flow.jobs.iter().find(|j| j.key == key("g")).unwrap().tier, Some(tier("S3")));
 }
 
 #[test]
