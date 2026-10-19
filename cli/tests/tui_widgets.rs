@@ -5,10 +5,8 @@
 
 mod common;
 
-use std::time::{Duration, Instant};
 
-use common::{CPD, SLEEP_SECONDS, TestEnv};
-use cpd_core::error::CpdError;
+use common::{CPD, SLEEP_SECONDS, TestEnv, sql, wait_until};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use cpd_tui::palette::{self, Meaning};
@@ -23,15 +21,6 @@ use ratatui::style::{Color, Modifier};
 
 fn open(env: &TestEnv) -> Store {
     Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
-}
-
-fn sql(store: &mut Store, text: &str) {
-    store
-        .write("fixture", |tx| {
-            tx.execute_batch(text)?;
-            Ok::<(), CpdError>(())
-        })
-        .unwrap();
 }
 
 fn context(id: &str) -> String {
@@ -609,14 +598,6 @@ fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
 
-fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !done() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
 /// `cpd tui view widgets` in session `name`, window `main`, 120 columns by 40 rows; returns its pane.
 fn start(env: &TestEnv, name: &str) -> String {
     tmux_out(env, &["new-session", "-d", "-s", name, "-n", "main", "-x", "120", "-y", "40", "-P", "-F", "#{pane_id}", &format!("{CPD} tui view widgets")])
@@ -644,12 +625,7 @@ fn screen(env: &TestEnv, pane: &str) -> Vec<String> {
 }
 
 fn wait_for_screen(env: &TestEnv, pane: &str, what: &str, ok: impl Fn(&[String]) -> bool) -> Vec<String> {
-    let mut last = vec![];
-    wait_until(what, || {
-        last = screen(env, pane);
-        ok(&last)
-    });
-    last
+    common::wait_screen(what, || screen(env, pane), ok)
 }
 
 /// A left click at 0-based `column` and `row`, as the terminal sends it (SGR mouse reporting, 1-based).
@@ -796,7 +772,9 @@ fn a_refused_session_open_shows_its_message_in_the_last_row_until_the_next_click
     // The unowned rows and the arrow run nothing, so no note appears.
     click(&env, &pane, 3, 6);
     click(&env, &pane, width - 1, 10);
-    std::thread::sleep(Duration::from_millis(600));
+    // time-claim: the clicks on the unowned rows and the arrow leave no note, over a few redraws of the view; a click
+    // that runs nothing leaves no signal (the view opens sessions in its own process, not through a recorded `cpd`).
+    std::thread::sleep(std::time::Duration::from_millis(600));
     assert_eq!(last_row(&screen(&env, &pane)), " (future)", "nothing was refused: Jira's row is still the last");
 
     click(&env, &pane, 3, 10);
@@ -888,7 +866,8 @@ fn a_clean_pr_shows_the_merge_icon_and_a_click_on_it_opens_the_popup_not_the_lea
         assert_eq!(popup.last().unwrap(), &format!("cpd tui view merge '{pull}'"), "{popup:?}");
         assert_eq!(popup[at + 1], "-E", "{popup:?}");
     }
-    std::thread::sleep(Duration::from_millis(600));
+    // time-claim: over the next redraws after both clicks, no third popup opens and no `session open` runs.
+    std::thread::sleep(std::time::Duration::from_millis(600));
     assert_eq!(popups(&env).len(), 2);
     assert_eq!(moved_events(&env), before, "no `session open` ran");
     assert_eq!(focused_session(&env), "1||widgets", "the focus did not move");
