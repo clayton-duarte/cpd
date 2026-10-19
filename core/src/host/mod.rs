@@ -6,6 +6,7 @@
 //! - [`addr`]: the review host (§6.5);
 //! - [`deadline`]: the one subprocess runner with a deadline (contract §1.2 `tool_timeout`);
 //! - [`exe`]: the running executable and the reload after an install (§6.7);
+//! - [`limit`]: the test overrides of fixed limits and polls (contract §1.2, debug builds only);
 //! - [`layout`]: window names, `@cpd_*` options and the chat slot (§6.2);
 //! - [`pi`]: pi's argv and environment per role, and the `[-e …]` rule (§6.5).
 
@@ -13,6 +14,7 @@ pub mod addr;
 pub mod deadline;
 pub mod exe;
 pub mod layout;
+pub mod limit;
 pub mod pi;
 pub mod tmux;
 
