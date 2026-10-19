@@ -173,7 +173,7 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     // Each view runs in its own pane process; the contract promises which views exist, not their start order.
     let mut views: Vec<Vec<String>> = ["tree", "plan", "widgets", "chat"].iter().map(|v| vec!["tui".into(), "view".into(), (*v).into()]).collect();
     views.sort();
-    wait_until("the five views to be recorded", || views_started(&env).len() >= 5);
+    wait_until("the four views to be recorded", || views_started(&env).len() >= 4);
     let mut started = views_started(&env);
     started.sort();
     assert_eq!(started, views);
