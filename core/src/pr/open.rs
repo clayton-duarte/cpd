@@ -1,5 +1,6 @@
-//! `pr open` (commands.md §9.1, contract §7.6): the Gate, the push, the PR, for
-//! one PR of the Plan.
+//! `pr open` (commands.md §9.1, contract §7.6): the Gate on the Lead Branch's
+//! tip G in a gate worktree, the push of G by rule P, the PR, for one PR of the
+//! Plan. No lock and no R (hs-d243).
 
 use std::path::Path;
 
@@ -10,7 +11,7 @@ use crate::plan::PrRow;
 use super::gh::{self, HeadState, Listed, Membership, PolledPr, PrRef};
 use super::pulls;
 use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
-use super::{Args, Env, gate, pr_policy, illegal_phase, lock, require_clean};
+use super::{Args, Env, gate, illegal_phase, pr_policy, short};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git;
@@ -31,30 +32,25 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
         Step::Go(key) => key,
     };
     let policy = pr_policy(&mut env, &id, &key)?;
-    require_jobs_done(&mut env, &plan, &key)?;
-
-    // Under the per-repo lock, after R: R may have recorded a merge, and
-    // another `pr open` may have finished while this one waited.
-    let lock = lock(&mut env, pr_of(&plan, &key), COMMAND)?;
-    let plan = env.plan(&id)?;
-    if let Step::Already(done) = require_dispatch(&plan, &args)? {
-        return Ok(done);
-    }
     let list = require_jobs_done(&mut env, &plan, &key)?;
+
+    // No lock and no R (hs-d243): an unrecorded merge leaves its Job `running`,
+    // which `jobs_not_done` refused above.
     let pr = pr_of(&plan, &key);
     let lead = pr.lead(&id)?.clone();
-    // The newest pull request of the Lead Branch, in any state, before the Gate: a merged one is adopted as it is.
-    let head = gh::head_pr(&lead, &pr.lead_branch)?;
+    let branch = pr.lead_branch.clone();
+    // 0. The newest pull request of the Lead Branch, in any state, before the Gate (contract §7.6, hs-n236): a merged
+    // one is adopted as it is, with no Gate and no push; a closed one is refused; an open one is adopted after the push.
     let mut existing = None;
-    if let Some(head) = head {
+    if let Some(head) = gh::head_pr(&lead, &branch)? {
         match head.state {
             HeadState::Merged => return adopt_merged(&mut env, &plan, &key, &lead, &head),
             HeadState::Closed => {
                 return Err(CpdError::new(
                     ErrorCode::PrClosed,
                     format!(
-                        "The pull request {} of PR {key}'s Lead Branch {} is closed without a merge: reopen it on GitHub, or move the work to a new branch.",
-                        head.url, pr.lead_branch
+                        "The pull request {} of PR {key}'s Lead Branch {branch} is closed without a merge: reopen it on GitHub, or move the work to a new branch.",
+                        head.url
                     ),
                 )
                 .with("plan", id.as_str())
@@ -65,17 +61,34 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
             HeadState::Open => existing = Some(PrRef { number: head.number, url: head.url }),
         }
     }
-    require_clean(&id, pr, &lead)?;
-    gate(&env, &policy, &id, pr, &lead, &format!("pr open --pr {key}"))?;
-    git::run::ok(&lead, &["push", "-u", "origin", &pr.lead_branch])?;
-    drop(lock);
+    // 1. G, read once; 2. the Gate on it, in a gate worktree of its own.
+    let sha = git::run::rev_parse(std::path::Path::new(&pr.repo), &format!("refs/heads/{branch}"))?;
+    gate(&env, &policy, &id, pr, &sha, &format!("pr open --pr {key}"))?;
 
-    // An earlier run that died before its transaction already created the PR: adopt it.
-    let title = title(&plan, &key);
-    let found = match existing {
-        Some(found) => found,
-        None => gh::create_pr(&lead, &pr.base, &pr.lead_branch, &title, &summary(&title, &list))?,
+    // The PR is read again: another `pr open` may have opened it during the Gate.
+    let plan = env.plan(&id)?;
+    if let Step::Already(done) = require_dispatch(&plan, &args)? {
+        return Ok(done);
+    }
+    let pr = pr_of(&plan, &key);
+
+    // 3. Rule P with G, then the pull request.
+    let (pushed, remote) = match git::push_commit(&lead, &branch, &sha)? {
+        git::Push::Pushed { new } => (new, sha.clone()),
+        git::Push::Contained { remote } => (false, remote),
+        git::Push::Rejected { stderr } => {
+            return Err(CpdError::new(
+                ErrorCode::GitFailed,
+                format!("git push of {} to {branch} on origin was rejected, and the remote branch does not contain it: nothing was opened.", short(&sha)),
+            )
+            .with("plan", id.as_str())
+            .with("pr", key.as_str())
+            .with("sha", sha.as_str())
+            .with("stderr", stderr));
+        }
     };
+    let title = title(&plan, &key);
+    let found = find_or_create(&lead, pr, existing, &title, &list)?;
     let (repo, _) = pulls::parse_url(&found.url).ok_or_else(|| {
         CpdError::new(ErrorCode::GhFailed, format!("gh printed the pull request URL {:?}, which is not https://github.com/<owner>/<name>/pull/<n>.", found.url))
             .with("url", found.url.as_str())
@@ -138,7 +151,30 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     })?;
 
     let plan = env.plan(&id)?;
-    Ok(Output::success(json!({"plan": id, "phase": phase.as_str(), "pr": pr_of(&plan, &key).to_json()})))
+    Ok(Output::success(
+        json!({"plan": id, "phase": phase.as_str(), "pr": pr_of(&plan, &key).to_json(), "sha": sha, "pushed": pushed, "remote": remote}),
+    ))
+}
+
+/// The open pull request of the PR's head, adopted when it exists (an earlier run
+/// died before its transaction), else `gh pr create`. When the create fails, the
+/// lookup runs again and adopts what it finds (a concurrent `pr open` of the PR
+/// created it, §7.6 step 3); otherwise the failure stands.
+/// The open pull request step 0 found, else a new one; when `gh pr create` fails, the Lead Branch's pull request is
+/// looked up again and adopted if it is open now (another `pr open` of the PR created it).
+fn find_or_create(lead: &Path, pr: &PrRow, existing: Option<PrRef>, title: &str, list: &[jobs::Job]) -> Result<PrRef, CpdError> {
+    if let Some(found) = existing {
+        return Ok(found);
+    }
+    match gh::create_pr(lead, &pr.base, &pr.lead_branch, title, &summary(title, list)) {
+        Ok(created) => Ok(created),
+        Err(failed) => gh::head_pr(lead, &pr.lead_branch)
+            .ok()
+            .flatten()
+            .filter(|h| h.state == HeadState::Open)
+            .map(|h| PrRef { number: h.number, url: h.url })
+            .ok_or(failed),
+    }
 }
 
 /// A pull request of the Lead Branch that is already `merged` on GitHub (contract §7.6 `pr open` step 0): no Gate and
@@ -228,7 +264,7 @@ fn adopt_merged(env: &mut Env, plan: &PlanPrs, key: &PrKey, lead: &Path, head: &
 }
 
 /// `[{key, number, url, merged_at}]` of every `merged` PR, in key order (`plan-done`'s `prs`).
-fn merged_prs(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_json::Value>, CpdError> {
+pub(super) fn merged_prs(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_json::Value>, CpdError> {
     let mut stmt = tx.prepare("SELECT key, pr_number, pr_url, merged_at FROM prs WHERE plan = ?1 AND status = 'merged' ORDER BY key")?;
     let rows = stmt
         .query_map([id.as_str()], |r| {
@@ -245,7 +281,7 @@ fn cas_lost(id: &PlanId, key: &PrKey) -> CpdError {
 }
 
 /// `[{key, number, url}]` of every PR that is not `cancelled`, in key order.
-fn opened_prs(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_json::Value>, CpdError> {
+pub(super) fn opened_prs(tx: &WriteTxn<'_>, id: &PlanId) -> Result<Vec<serde_json::Value>, CpdError> {
     let mut stmt = tx.prepare("SELECT key, pr_number, pr_url FROM prs WHERE plan = ?1 AND status <> 'cancelled' ORDER BY key")?;
     let rows = stmt
         .query_map([id.as_str()], |r| Ok(json!({"key": r.get::<_, String>(0)?, "number": r.get::<_, i64>(1)?, "url": r.get::<_, String>(2)?})))?

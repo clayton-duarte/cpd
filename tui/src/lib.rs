@@ -2,11 +2,12 @@
 //! amendments 1, 2, 9 and 10): `cpd tui`, which builds and attaches it, and
 //! the ratatui views of `cpd tui view`, one module per view.
 //!
-//! - [`cockpit`]: `cpd tui [--attach] [--respawn]` (§13.1);
+//! - [`cockpit`]: `cpd tui [--attach] [--respawn]` (§13.1), reset-layout and
+//!   `cpd tui action`, what a click on a StatusBar button runs (the StatusBar
+//!   is tmux's status line, contract §6.1);
 //! - [`chat`]: the chat slot's placeholder (amendment 2);
 //! - [`widgets`]: the Dispatch column and the key legend (`tui view legend`), with the shared [`palette`];
 //! - [`logs`]: the Event log, a popup of the StatusBar (R36);
-//! - [`statusbar`]: the StatusBar, the bottom row, with reset-layout;
 //! - [`history`]: an archived Session's pi file, read-only, in the chat slot;
 //! - [`merge`]: the merge confirmation, a popup of the Deploy column's merge icon;
 //! - [`dialog`]: the dialog kit (confirm, input and scrollable text), the popups of the tree and the StatusBar;
@@ -22,7 +23,6 @@ pub mod merge;
 pub mod palette;
 mod plan;
 pub mod read;
-mod statusbar;
 mod tree;
 pub mod widgets;
 mod worker;
@@ -54,6 +54,21 @@ pub enum Command {
     /// A view in a cockpit pane (internal; owns its terminal) (§13.2)
     #[command(hide = true, subcommand)]
     View(View),
+    /// A click on a StatusBar button (internal; prints nothing) (§13.2)
+    #[command(hide = true)]
+    Action(ActionArgs),
+}
+
+/// `cpd tui action <reset|legend|logs> --client <name>`.
+#[derive(clap::Args, Debug)]
+pub struct ActionArgs {
+    /// `reset`, `legend` or `logs`: the button's range. Optional and free text, so that any value, an empty
+    /// `#{mouse_status_range}` included, reaches the command and fails with `display-message`, never a usage error
+    /// on stdout
+    pub action: Option<String>,
+    /// The tmux client that clicked (`#{client_name}`)
+    #[arg(long)]
+    pub client: String,
 }
 
 /// The views of commands.md §13.2, named as their `@cpd_view` (contract §6.2).
@@ -65,8 +80,6 @@ pub enum View {
     Plan,
     /// The Dispatch column (right)
     Widgets,
-    /// The StatusBar (bottom row)
-    Statusbar,
     /// An Attempt's Worker, read-only (beside the chat)
     Worker(worker::Args),
     /// An archived Session's history, read-only (the chat slot)
@@ -90,7 +103,6 @@ pub fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdError> {
             View::Tree => tree::run(),
             View::Plan => plan::run(run_command),
             View::Widgets => widgets::run(run_command),
-            View::Statusbar => statusbar::run(),
             View::Worker(args) => worker::run(args),
             View::History(args) => history::run(args),
             View::Legend => widgets::legend::run(),
@@ -99,6 +111,7 @@ pub fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdError> {
             View::Dialog(args) => dialog::run(args),
             View::Chat => chat::run(),
         },
+        Some(Command::Action(a)) => Ok(cockpit::action(a.action.as_deref(), &a.client)),
     }
 }
 
