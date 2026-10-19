@@ -434,7 +434,8 @@ An archived Context is not refused (the digest is a derived file); engine E9 nev
 Effects (contract §4.6 "The distill run", steps 1–5):
 - **Nothing to do**, `"already": true` and nothing written: the latest digest's `upto_seq` is at least the Context's highest record `seq`, or no record is in force (then `digest` is null).
 - **Carried forward**: only `plan` and `brief` records came after the latest digest, so the records in force are the same; its text is written as the new `<upto_seq>.md` without pi (`"distilled": false`).
-- **Otherwise**: files `prompt.md` and `records.md`, then the distiller, `pi --print …` at Tier `context_distill_tier` (contract §6.5 "Distiller", §8.2), stdout to `<upto_seq>.md.tmp`, killed after `timeouts.distill_minutes`; then the validation, and on success the rename to `<upto_seq>.md` and the removal of the directory's older digests and temporary files. `"distilled": true`.
+- **Otherwise**: files `prompt.md` and `records.md`, then the distiller, `pi --mode json …` at Tier `context_distill_tier` (contract §6.5 "Distiller", §8.2), JSON mode (`--mode json`), read by cpd, which writes the final assistant text to `<upto_seq>.md.tmp`, killed after `timeouts.distill_minutes`; then the validation of that text, and on success cpd's `## Record index` is appended, the file renamed to `<upto_seq>.md` and the directory's older digests, temporary files and kept `.md.invalid` removed. `"distilled": true` and `run` (below). An invalid digest is kept as `<upto_seq>.md.invalid`, one per Context, replacing the previous one (contract §4.6, hs-d244 D-b).
+- **Run log**: every run that started pi appends a line to `run/context-digests/<context>/runs.jsonl` (`started_at`, `seconds`, `model`, `tokens_in`, `tokens_out`, `cost`, `context`, `upto_seq`, `result`; contract §4.6 "The run log"), also when it failed.
 - **Rows and Events**: none on success; no database write ever, except the one `error` Event of a failure (below).
 - **tmux:** none. **git:** none.
 
@@ -442,16 +443,19 @@ Failures, after the lock is taken. Each removes the `.md.tmp`, leaves the previo
 
 | Failure | Code | Exit | `details` |
 |---|---|---|---|
-| pi could not start, exited non-zero (an error, or an answer cut at the output limit), or ran longer than `timeouts.distill_minutes` | `distill_failed` | 1 | `context`, `upto_seq`, `reason` (`spawn`, `exit` or `timeout`), `exit` (when it exited), `tail` (pi's last 60 stderr lines), `log` |
-| the digest is not UTF-8, is over 32 768 bytes, leaves a record in force uncited (`missing`) or cites an id that is not one (`stray`: superseded, `plan`, `brief` or unknown) | `distill_invalid` | 1 | `context`, `upto_seq`, `bytes`, `limit` (32768), `missing` (ids), `stray` (ids), `log` |
+| pi could not start, exited non-zero (an error, or an answer cut at the output limit), ran longer than `timeouts.distill_minutes`, or its JSON stream had no final assistant text | `distill_failed` | 1 | `context`, `upto_seq`, `reason` (`spawn`, `exit`, `timeout` or `output`), `exit` (when it exited), `tail` (pi's last 60 stderr lines), `log` |
+| the digest is not UTF-8, is over 32 768 bytes, leaves a decision or open question in force uncited in its topic sections (`missing`; the other records are listed by cpd's index, so need no citation) or cites an id that is not one (`stray`: superseded, `plan`, `brief` or unknown) | `distill_invalid` | 1 | `context`, `upto_seq`, `bytes`, `limit` (32768), `missing` (ids), `stray` (ids), `invalid` (the kept `.md.invalid` file), `log` |
 
 `log` is `run/context-digests/<context>/distill.log`, where the run writes its stderr (and, started by E9, its stdout too).
 
 ```json
 {"ok": true, "context": "building-cpd", "distilled": true,
  "digest": {"upto_seq": 1342, "file": "/home/clayton/.cpd/run/context-digests/building-cpd/1342.md", "bytes": 27311},
- "records_in_force": 231}
+ "records_in_force": 231,
+ "run": {"seconds": 94.2, "model": "anthropic/claude-sonnet-4-5:medium", "tokens_in": 61234, "tokens_out": 7410, "cost": 0.43}}
 ```
+
+`run` is present only when pi ran (`"distilled": true`); its fields are the run's `runs.jsonl` line without `started_at`, `context`, `upto_seq` and `result`, and `tokens_in`, `tokens_out` and `cost` may be `null`. On a failure the same figures are in the log line only, not in the Event.
 
 Idempotent: yes. With no record newer than the latest digest it returns `"already": true` and runs nothing; a rerun after a failure runs again (on demand; E9 does not retry the same `seq`, contract §3.7).
 
