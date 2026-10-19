@@ -485,6 +485,21 @@ fn enrich(e: CpdError, path: &Path, busy_ms: u64) -> CpdError {
     }
 }
 
+/// The messages the triggers raise with `RAISE(ABORT, '…')` that are a typed
+/// refusal (§4.4), with the code and the text of each. A new typed trigger
+/// error is one more row here. The others (`append_only: …`, `… must be
+/// cpd_txn()`) stay `store_failed` by design.
+const TRIGGER_ERRORS: [(&str, ErrorCode, &str); 4] = [
+    ("job_locked", ErrorCode::JobLocked, "The Job is Locked: its Spec and Dependencies cannot change."),
+    ("illegal_transition", ErrorCode::IllegalTransition, "The state change is not a legal transition (§3)."),
+    (
+        "pr_locked",
+        ErrorCode::PrLocked,
+        "The PR is Locked: its repo, base and needs cannot change after the Plan's lock.",
+    ),
+    ("needs_other_pr", ErrorCode::NeedsOtherPr, "A Dependency can only link Jobs of the same PR."),
+];
+
 /// A SQLite failure, as Escalation `rs-store-a1-q1` decided: busy after the
 /// busy timeout is `store_busy`; the triggers' `RAISE(ABORT, 'job_locked')`,
 /// `'illegal_transition'`, `'pr_locked'` and `'needs_other_pr'` (§4.4) are
@@ -503,33 +518,48 @@ impl From<rusqlite::Error> for CpdError {
                 "Another cpd process held the database's write lock for longer than store_busy_ms.",
             )
             .with("sqlite_message", message),
-            Some(f) if f.code == SqliteCode::ConstraintViolation && message == "job_locked" => {
-                CpdError::new(ErrorCode::JobLocked, "The Job is Locked: its Spec and Dependencies cannot change.")
-                    .with("sqlite_message", message)
+            Some(f) if f.code == SqliteCode::ConstraintViolation => {
+                match TRIGGER_ERRORS.iter().find(|(raised, ..)| *raised == message) {
+                    Some(&(_, code, text)) => CpdError::new(code, text).with("sqlite_message", message),
+                    None => store_failed(sqlite, message),
+                }
             }
-            Some(f) if f.code == SqliteCode::ConstraintViolation && message == "illegal_transition" => {
-                CpdError::new(ErrorCode::IllegalTransition, "The state change is not a legal transition (§3).")
-                    .with("sqlite_message", message)
-            }
-            Some(f) if f.code == SqliteCode::ConstraintViolation && message == "pr_locked" => CpdError::new(
-                ErrorCode::PrLocked,
-                "The PR is Locked: its repo, base and needs cannot change after the Plan's lock.",
-            )
-            .with("sqlite_message", message),
-            Some(f) if f.code == SqliteCode::ConstraintViolation && message == "needs_other_pr" => {
-                CpdError::new(ErrorCode::NeedsOtherPr, "A Dependency can only link Jobs of the same PR.")
-                    .with("sqlite_message", message)
-            }
-            _ => CpdError::new(ErrorCode::StoreFailed, format!("The database failed: {message}."))
-                .with("sqlite_code", sqlite.map_or(Value::Null, |f| Value::from(f.extended_code)))
-                .with("sqlite_message", message),
+            _ => store_failed(sqlite, message),
         }
     }
+}
+
+fn store_failed(sqlite: Option<rusqlite::ffi::Error>, message: String) -> CpdError {
+    CpdError::new(ErrorCode::StoreFailed, format!("The database failed: {message}."))
+        .with("sqlite_code", sqlite.map_or(Value::Null, |f| Value::from(f.extended_code)))
+        .with("sqlite_message", message)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// store-G4: every message a trigger raises is a typed refusal or one of the
+    /// two untyped families, so a new `RAISE` cannot fall to `store_failed` by accident.
+    #[test]
+    fn every_message_a_trigger_raises_is_typed_or_untyped_by_design() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/store/migrations");
+        let mut seen = std::collections::BTreeSet::new();
+        for file in fs::read_dir(dir).unwrap() {
+            let sql = fs::read_to_string(file.unwrap().path()).unwrap();
+            for part in sql.split("RAISE(ABORT, '").skip(1) {
+                seen.insert(part.split('\'').next().unwrap().to_owned());
+            }
+        }
+        assert!(seen.len() >= 8, "{seen:?}");
+        for message in seen {
+            let failure = rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_TRIGGER);
+            let err = CpdError::from(rusqlite::Error::SqliteFailure(failure, Some(message.clone())));
+            let untyped = message.starts_with("append_only: ") || message.ends_with(" must be cpd_txn()");
+            assert_eq!(err.code() == ErrorCode::StoreFailed, untyped, "{message}: {err:?}");
+            assert_eq!(err.details()["sqlite_message"], message);
+        }
+    }
 
     #[test]
     fn a_failed_migration_leaves_foreign_keys_on_and_legacy_alter_table_off() {
