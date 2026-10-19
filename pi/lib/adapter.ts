@@ -314,13 +314,13 @@ export function adapter(pi: PiApi, options: Options = {}): void {
         const show = await call(["plan", "show", "--plan", plan]);
         latest = isObject(show.review) && typeof show.review.id === "string" ? show.review.id : undefined;
         if (Array.isArray(show.escalations)) {
-          for (const q of show.escalations) if (isObject(q) && typeof q.id === "string") facts.open(`escalation:${q.id}`, QUESTION_LABEL);
+          for (const q of show.escalations) if (isObject(q) && typeof q.id === "string") facts.open(`escalation:${q.id}`, QUESTION_LABEL, "agent");
         }
       } catch (e) {
         deliver("plan show", e);
       }
       for (const entry of r.reviews.values()) {
-        if (entry.status === "pending" && entry.review === latest) facts.open(`plan-review:${entry.review}`, REVIEW_LABEL);
+        if (entry.status === "pending" && entry.review === latest) facts.open(`plan-review:${entry.review}`, REVIEW_LABEL, "human");
       }
       registerTool();
     }
@@ -432,7 +432,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     const rule = LEAD_MESSAGES[ev.kind];
     if (rule) {
       pi.sendMessage(eventMessage(ev, r.id), { triggerTurn: rule.turn, deliverAs: rule.deliverAs });
-      if (ev.kind === "escalation" && r.facts.open(`escalation:${ev.data.escalation as string}`, QUESTION_LABEL)) refresh(r);
+      if (ev.kind === "escalation" && r.facts.open(`escalation:${ev.data.escalation as string}`, QUESTION_LABEL, "agent")) refresh(r);
       return;
     }
     if (ev.kind === "escalation-answered" || ev.kind === "escalation-expired") {
@@ -577,7 +577,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       const entry: ReviewEntry = { plan, review, plannotator_id: plannotatorId, status: "pending" };
       r.reviews.set(review, entry);
       pi.appendEntry(ENTRY_TYPE, entry);
-      r.facts.open(`plan-review:${review}`, REVIEW_LABEL);
+      r.facts.open(`plan-review:${review}`, REVIEW_LABEL, "human");
       refresh(r);
     } catch (e) {
       deliver(`plan review ${review}`, e);

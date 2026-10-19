@@ -232,3 +232,59 @@ test("a blocked -> idle that closes the last reason of a reply run carries --rep
   await waitFor("idle", () => stateCalls(f).length === 6);
   assert.deepEqual(f.argvs().filter((a) => a[1] === "state").at(-1), ["session", "state", "idle", "--session", ID], "the mark was spent");
 });
+
+// hs-d303 (audit J2): `blocked` only while a human reason (dialog) is open; else `waiting` while an agent reason (Worker question) is open.
+const QUESTION = "cpd: Worker question";
+const question = (id: number, esc: string) => ev(id, "escalation", { data: { escalation: esc, question: "q?" } });
+const answered = (id: number, esc: string) => ev(id, "escalation-answered", { data: { escalation: esc } });
+
+async function startedLead(f: Fixture) {
+  await started(f);
+  await waitFor("the follower", () => f.follows().length > 0);
+}
+
+test("a Worker question alone reports waiting with its label", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await startedLead(f);
+
+  f.emit(question(101, "j-a1-q1"));
+  await waitFor("waiting", () => stateCalls(f).length === 2);
+  assert.deepEqual(f.argvs().filter((a) => a[1] === "state")[1], ["session", "state", "waiting", "--label", QUESTION, "--session", ID]);
+  f.emit(answered(102, "j-a1-q1"));
+  await waitFor("idle", () => stateCalls(f).length === 3);
+  assert.deepEqual(stateCalls(f), ["idle", `waiting:${QUESTION}`, "idle"]);
+});
+
+test("a Worker question opened during a dialog does not hide it; answered while the dialog stays: still blocked `dialog`", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await startedLead(f);
+
+  await f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "custom" });
+  await waitFor("blocked", () => stateCalls(f).length === 2);
+  f.emit(question(101, "j-a1-q1"));
+  await waitFor("the question is known", () => f.pi.delivered().length === 1);
+  await f.drain();
+  assert.deepEqual(stateCalls(f), ["idle", "blocked:dialog"], "the question did not replace the dialog label");
+
+  f.emit(answered(102, "j-a1-q1"));
+  await f.drain();
+  await f.quiet();
+  assert.deepEqual(stateCalls(f), ["idle", "blocked:dialog"], "still blocked: dialog");
+});
+
+test("the dialog closed with a Worker question still open reports waiting", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await startedLead(f);
+
+  await f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "custom" });
+  await waitFor("blocked", () => stateCalls(f).length === 2);
+  f.emit(question(101, "j-a1-q1"));
+  await waitFor("the question is known", () => f.pi.delivered().length === 1);
+  await f.drain();
+  await f.pi.fire("ui_prompt_end");
+  await waitFor("waiting", () => stateCalls(f).length === 3);
+  assert.deepEqual(stateCalls(f), ["idle", "blocked:dialog", `waiting:${QUESTION}`]);
+});

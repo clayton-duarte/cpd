@@ -107,21 +107,21 @@ test("Plan Lead: escalation opens `escalation:<id>`, answered and expired close 
   f.emit(event(101, "escalation"), event(102, "escalation", { text: "again" }));
   // The two lines may be read in different polls: `blocked` follows the first, the second is delivered on its own time.
   await waitFor("both escalations delivered", () => f.pi.delivered().length === 2);
-  await waitFor("blocked", () => stateCalls(f).length === 2);
-  assert.deepEqual(stateCalls(f), ["idle", "blocked:cpd: Worker question"]);
+  await waitFor("waiting", () => stateCalls(f).length === 2);
+  assert.deepEqual(stateCalls(f), ["idle", "waiting:cpd: Worker question"]);
   assert.equal(f.pi.delivered().length, 2, "both are messages with a turn");
 
   f.emit(event(103, "escalation-answered"), event(104, "escalation-answered"));
   await waitFor("idle again", () => stateCalls(f).length === 3);
   await f.drain();
-  assert.deepEqual(stateCalls(f), ["idle", "blocked:cpd: Worker question", "idle"]);
+  assert.deepEqual(stateCalls(f), ["idle", "waiting:cpd: Worker question", "idle"]);
   assert.equal(f.pi.delivered().length, 2, "answered is no message");
 
   // A state change wanted while a call is in flight replaces the one wanted before: let the last call finish first.
   await waitFor("no call in flight", () => f.pi.execsRunning.size === 0);
   f.emit(event(105, "escalation", { data: { escalation: "j-a1-q2", question: "?" } }), event(106, "escalation-expired", { data: { escalation: "j-a1-q2", reason: "timeout" } }));
   await waitFor("blocked and closed", () => stateCalls(f).length === 5);
-  assert.deepEqual(stateCalls(f).slice(3), ["blocked:cpd: Worker question", "idle"]);
+  assert.deepEqual(stateCalls(f).slice(3), ["waiting:cpd: Worker question", "idle"]);
   assert.equal(f.pi.delivered().length, 3, "expired is no message");
 });
 

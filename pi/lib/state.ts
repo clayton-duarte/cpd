@@ -1,13 +1,16 @@
 /** commands.md §15.4: the facts the adapter keeps and the state they give. */
-export type Wanted = { state: "working" | "stopped" } | { state: "idle"; reply?: true } | { state: "blocked"; label: string };
+export type Wanted = { state: "working" | "stopped" } | { state: "idle"; reply?: true } | { state: "blocked" | "waiting"; label: string };
 
 export const LABEL_MAX = 80;
 
-type Open = { key: string; label: string };
+/** hs-d303: `human` = the User has to act (`dialog`, `cpd: plan review`); `agent` = another agent handles it (`cpd: Worker question`). */
+export type Kind = "human" | "agent";
+
+type Open = { key: string; label: string; kind: Kind };
 
 /**
- * The blocking reasons: its own (keyed, so opening twice or closing when not open changes nothing) and the dialog
- * reason (depth-counted).
+ * The reasons: its own (keyed, so opening twice or closing when not open changes nothing) and the dialog
+ * reason (depth-counted), each of a kind.
  */
 export class Facts {
   active = false;
@@ -16,9 +19,9 @@ export class Facts {
   private opened: Open[] = [];
   private prompts = 0;
 
-  open(key: string, label: string): boolean {
+  open(key: string, label: string, kind: Kind): boolean {
     if (this.opened.some((o) => o.key === key)) return false;
-    this.opened.push({ key, label });
+    this.opened.push({ key, label, kind });
     return true;
   }
 
@@ -33,28 +36,30 @@ export class Facts {
   prompt(active: boolean): boolean {
     if (active) {
       this.prompts += 1;
-      return this.prompts === 1 && this.open("ui_prompt", "dialog");
+      return this.prompts === 1 && this.open("ui_prompt", "dialog", "human");
     }
     if (this.prompts === 0) return false;
     this.prompts -= 1;
     return this.prompts === 0 && this.close("ui_prompt");
   }
 
-  /** `blocked` with the label of the most recently opened reason while any is open; else `working` while active; else `idle` (`reply` when the run answered the User). */
+  /** `blocked` with the label of the latest human reason while any is open; else `waiting` with the label of the latest agent reason while any is open; else `working` while active; else `idle` (`reply` when the run answered the User). */
   wanted(): Wanted {
-    const last = this.opened.at(-1);
-    if (last) return { state: "blocked", label: last.label.slice(0, LABEL_MAX) || "blocked" };
+    const human = this.opened.findLast((o) => o.kind === "human");
+    if (human) return { state: "blocked", label: human.label.slice(0, LABEL_MAX) || "blocked" };
+    const agent = this.opened.findLast((o) => o.kind === "agent");
+    if (agent) return { state: "waiting", label: agent.label.slice(0, LABEL_MAX) || "waiting" };
     if (this.active) return { state: "working" };
     return this.reply ? { state: "idle", reply: true } : { state: "idle" };
   }
 }
 
 /** `reply` is not part of the key: it rides on the one `idle` call that closes the run, and a later `idle` without it is not another call. */
-export const wantedKey = (w: Wanted): string => (w.state === "blocked" ? `blocked:${w.label}` : w.state);
+export const wantedKey = (w: Wanted): string => (w.state === "blocked" || w.state === "waiting" ? `${w.state}:${w.label}` : w.state);
 
 export const stateArgs = (w: Wanted, sessionId: string): string[] =>
-  w.state === "blocked"
-    ? ["session", "state", "blocked", "--label", w.label, "--session", sessionId]
+  w.state === "blocked" || w.state === "waiting"
+    ? ["session", "state", w.state, "--label", w.label, "--session", sessionId]
     : ["session", "state", w.state, ...(w.state === "idle" && w.reply ? ["--reply"] : []), "--session", sessionId];
 
 /**

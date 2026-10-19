@@ -488,6 +488,6 @@ export async function waitFor<T>(what: string, fn: () => T | undefined | null | 
   }
 }
 
-/** `session state` argvs, without the session id, as `idle` or `blocked:<label>`. */
+/** `session state` argvs, without the session id, as `idle`, `blocked:<label>` or `waiting:<label>`. */
 export const stateCalls = (f: Fixture): string[] =>
-  f.argvs().filter((a) => a[0] === "session" && a[1] === "state").map((a) => (a[2] === "blocked" ? `blocked:${a[a.indexOf("--label") + 1]}` : a[2]!));
+  f.argvs().filter((a) => a[0] === "session" && a[1] === "state").map((a) => (a[2] === "blocked" || a[2] === "waiting" ? `${a[2]}:${a[a.indexOf("--label") + 1]}` : a[2]!));
