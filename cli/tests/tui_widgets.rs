@@ -13,7 +13,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use cpd_tui::palette::{self, Meaning};
 use cpd_tui::read::{self, Dot, Widgets};
-use cpd_tui::widgets::{self, Hit, Machine, legend};
+use cpd_tui::widgets::{self, Hit, Machine, Usage, legend};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -143,7 +143,7 @@ fn fixture() -> (TestEnv, Store) {
 }
 
 fn machine() -> Machine {
-    Machine { name: "homeserver".to_owned(), load: ["3.70", "3.05", "4.84"].map(str::to_owned).to_vec() }
+    Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), mem: 41 } }
 }
 
 fn render(width: u16, height: u16, w: &Widgets) -> Buffer {
@@ -250,25 +250,25 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let env = TestEnv::new();
     let w = read::widgets(&mut open(&env), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
-    let machine = Machine { name: "homeserver".to_owned(), load: ["0.1", "0.2", "0.3"].map(str::to_owned).to_vec() };
+    let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: None, mem: 7 } };
     terminal.draw(|f| drop(widgets::draw(f, f.area(), &w, &machine, ""))).unwrap();
     let lines = rows(terminal.backend().buffer());
     let head = |title: &str| format!("── {title} {}", "─".repeat(30 - 4 - title.chars().count()));
-    assert_eq!(lines[..3], ["", " homeserver", " load 0.1 0.2 0.3"]);
+    assert_eq!(lines[..3], ["", " homeserver", " \u{F4BC} –%  \u{F035B} 7%"], "no CPU % until a second sample");
     assert_eq!(lines[3..6], ["", head("PRs").as_str(), ""]);
     assert_eq!(lines[6], " no open PRs");
-    assert_eq!(lines[7..], ["", "", "", "", "", "", head("git").as_str(), "", " (future)", "", head("Jira").as_str(), "", " (future)"]);
+    assert_eq!(lines[7..], [""; 13], "the PRs take the rest of the column: no git, no Jira");
 }
 
 #[test]
-fn the_column_shows_the_machine_the_open_prs_git_and_jira() {
+fn the_column_shows_the_machine_and_the_open_prs_and_nothing_else() {
     let (got, _) = column(25);
-    let (prs, git, jira) = (header("PRs"), header("git"), header("Jira"));
+    let prs = header("PRs");
     let (seven, eleven) = (first_line(" acme/repo#7", 46), first_line(" acme/repo#11", 46));
-    let expected = [
+    let mut expected = vec![
         "",
         " homeserver",
-        " load 3.70 3.05 4.84",
+        " \u{F4BC} 23%  \u{F035B} 41%",
         "",
         prs.as_str(),
         "",
@@ -276,22 +276,8 @@ fn the_column_shows_the_machine_the_open_prs_git_and_jira() {
         "  open ✗ changes requested  cpd-tui cockpit c…",
         eleven.as_str(),
         "  open – no review  Plan fresh",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        git.as_str(),
-        "",
-        " (future)",
-        "",
-        jira.as_str(),
-        "",
-        " (future)",
     ];
+    expected.resize(25, "");
     assert_eq!(got, expected, "\n{}", got.join("\n"));
 }
 
@@ -299,7 +285,7 @@ fn the_column_shows_the_machine_the_open_prs_git_and_jira() {
 fn each_section_header_has_a_blank_row_above_and_below() {
     for height in [20, 25, 29] {
         let (got, _) = column(height);
-        for title in ["PRs", "git", "Jira"] {
+        for title in ["PRs"] {
             let at = got.iter().position(|r| *r == header(title)).unwrap_or_else(|| panic!("{title} at {height}:\n{got:#?}"));
             assert_eq!(got[at - 1], "", "above {title} at {height}:\n{got:#?}");
             assert_eq!(got[at + 1], "", "below {title} at {height}:\n{got:#?}");
@@ -466,7 +452,7 @@ fn the_column_takes_every_colour_from_the_palette() {
     assert_eq!(fg(find(&buf, "✗")), c(Meaning::Failed));
     assert_eq!(fg(find(&buf, "–")), c(Meaning::Nothing));
     // The headers: grey, the title a reversed block, not bold.
-    for title in ["PRs", "git", "Jira"] {
+    for title in ["PRs"] {
         let (x, y) = find(&buf, &format!("── {title} "));
         assert_eq!(buf[(x, y)].fg, c(Meaning::Nothing), "{title}");
         let block = buf[(x + 3, y)].clone();
@@ -476,17 +462,17 @@ fn the_column_takes_every_colour_from_the_palette() {
     }
     let dim = |at: (u16, u16)| buf[at].modifier.contains(Modifier::DIM);
     let bold = |at: (u16, u16)| buf[at].modifier.contains(Modifier::BOLD);
-    // Bold: the machine and the pull request names (the section titles are reversed, not bold); dim: the title of the PR, `(future)`.
+    // Bold: the machine and the pull request names (the section titles are reversed, not bold); dim: the title of the PR.
     for title in ["homeserver", "acme/repo#7"] {
         assert!(bold(find(&buf, title)), "{title}");
         assert!(!dim(find(&buf, title)), "{title}");
     }
-    for faint in ["cpd-tui cockpit", "Plan fresh", "(future)"] {
+    for faint in ["cpd-tui cockpit", "Plan fresh"] {
         assert!(dim(find(&buf, faint)), "{faint}");
         assert!(!bold(find(&buf, faint)), "{faint}");
     }
-    // Plain: the review decision and the load.
-    for plain in ["no review", "changes requested", "load 3.70"] {
+    // Plain: the review decision and the CPU and memory %.
+    for plain in ["no review", "changes requested", "23%", "41%"] {
         let at = find(&buf, plain);
         assert!(!dim(at) && !bold(at), "{plain}");
     }
@@ -511,8 +497,8 @@ fn a_long_title_is_cut_with_an_ellipsis_first_and_a_line_never_wraps() {
 fn a_short_pane_drops_the_pull_requests_that_do_not_fit_from_the_end() {
     let env = TestEnv::new();
     let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
-    // Beside the 14 rows of the blank row, the machine, the headers and their blank rows, each pull request takes 2.
-    for (height, listed) in [(14 + 6, 3), (14 + 5, 2), (14 + 2, 1), (14 + 1, 0)] {
+    // Beside the 6 rows of the blank row, the machine, the header and its blank rows, each pull request takes 2.
+    for (height, listed) in [(6 + 6, 3), (6 + 5, 2), (6 + 2, 1), (6 + 1, 0)] {
         let got = rows(&render(46, height, &w)).join("\n");
         let shown = ["acme/web#4", "acme/repo#9", "acme/repo#20"].iter().filter(|n| got.contains(**n)).count();
         assert_eq!(shown, listed, "height {height}:\n{got}");
@@ -731,7 +717,7 @@ fn a_refused_session_open_shows_its_message_in_the_last_row_until_the_next_click
     click(&env, &pane, 3, 6);
     click(&env, &pane, width - 1, 10);
     std::thread::sleep(Duration::from_millis(600));
-    assert_eq!(last_row(&screen(&env, &pane)), " (future)", "nothing was refused: Jira's row is still the last");
+    assert!(!last_row(&screen(&env, &pane)).contains("cockpit"), "nothing was refused");
 
     click(&env, &pane, 3, 10);
     let shown = wait_for_screen(&env, &pane, "the refusal", |s| last_row(s).contains("cockpit"));
@@ -739,10 +725,10 @@ fn a_refused_session_open_shows_its_message_in_the_last_row_until_the_next_click
     let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
     let last = styled.lines().last().unwrap();
     assert!(last.contains("\x1b[") && last.contains("cockpit"), "{last:?}");
-    assert!(shown[..height - 1].iter().any(|r| r.contains("(future)")), "the git section is as before");
+    assert!(shown[..height - 1].iter().any(|r| r.contains("acme/repo#20")), "the PRs are as before");
 
     click(&env, &pane, 3, 6);
-    wait_for_screen(&env, &pane, "the note gone", |s| last_row(s) == " (future)");
+    wait_for_screen(&env, &pane, "the note gone", |s| !last_row(s).contains("cockpit"));
 }
 
 // ---------- the legend ----------

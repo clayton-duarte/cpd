@@ -204,7 +204,7 @@ mod tests {
     }
 
     fn drawn(width: u16, height: u16, w: &Widgets, note: &str) -> (Buffer, Vec<Hit>) {
-        let machine = Machine { name: "homeserver".to_owned(), load: ["0.52", "0.41", "0.30"].map(str::to_owned).to_vec() };
+        let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), mem: 41 } };
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let mut hits = vec![];
         terminal.draw(|f| hits = draw(f, f.area(), w, &machine, note)).unwrap();
@@ -251,37 +251,41 @@ mod tests {
 
     #[test]
     fn a_header_narrower_than_its_title_cuts_the_title() {
-        let text = |width| section_header("Jira", width).spans.iter().map(|s| s.content.to_string()).collect::<String>();
-        assert_eq!(text(5), "── Ji");
+        let text = |width| section_header("Plan", width).spans.iter().map(|s| s.content.to_string()).collect::<String>();
+        assert_eq!(text(5), "── Pl");
         assert_eq!(text(1), "─");
         assert_eq!(text(0), "");
     }
 
     #[test]
-    fn the_column_has_a_blank_row_an_untitled_machine_and_three_headers() {
-        let buf = buffer(20, 15);
-        let rule = |title: &str| format!("── {title} {}", "─".repeat(20 - 4 - title.chars().count()));
-        let got: Vec<String> = (0..15).map(|y| row(&buf, y)).collect();
+    fn the_column_has_a_blank_row_an_untitled_machine_with_cpu_and_memory_and_the_prs_header_only() {
+        let buf = buffer(20, 10);
+        let got: Vec<String> = (0..10).map(|y| row(&buf, y)).collect();
         let expected = [
             "".to_owned(),
             " homeserver".to_owned(),
-            " load 0.52 0.41 0.30".to_owned(),
+            " \u{F4BC} 23%  \u{F035B} 41%".to_owned(),
             "".to_owned(),
-            rule("PRs"),
+            format!("── PRs {}", "─".repeat(13)),
             "".to_owned(),
             " no open PRs".to_owned(),
             "".to_owned(),
-            rule("git"),
             "".to_owned(),
-            " (future)".to_owned(),
             "".to_owned(),
-            rule("Jira"),
-            "".to_owned(),
-            " (future)".to_owned(),
         ];
         assert_eq!(got, expected, "{got:#?}");
         assert!(buf[(1, 1)].modifier.contains(Modifier::BOLD), "the hostname is bold");
-        assert!(buf[(1, 10)].modifier.contains(Modifier::DIM), "(future) is dim");
+        for x in 0..20 {
+            let cell = &buf[(x, 2)];
+            assert!(!cell.modifier.contains(Modifier::BOLD | Modifier::DIM) && cell.fg == buf[(0, 0)].fg, "no style on the usage row, x={x}");
+        }
+        assert!(!got.iter().any(|r| r.contains("git") || r.contains("Jira") || r.contains("future") || r.contains("load")));
+    }
+
+    #[test]
+    fn the_cpu_is_a_dash_until_a_second_sample_exists() {
+        let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: None, mem: 100 } };
+        assert_eq!(machine.usage_line(), " \u{F4BC} –%  \u{F035B} 100%");
     }
 
     #[test]
@@ -322,7 +326,7 @@ mod tests {
         let (buf, _) = drawn(30, 15, &widgets(vec![]), "no_cockpit: nothing here");
         assert_eq!(row(&buf, 14), "no_cockpit: nothing here");
         assert_eq!(buf[(0, 14)].fg, palette::note().fg.unwrap());
-        assert_eq!(row(&buf, 10), " (future)", "the rest is as drawn");
+        assert_eq!(row(&buf, 6), " no open PRs", "the rest is as drawn");
     }
 
     fn second_line(pr: &OpenPr, width: u16) -> (String, Buffer) {
