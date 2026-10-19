@@ -97,7 +97,9 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
 
     // 7. Rule S on the Lead worktree; a stop is reported and fails nothing.
     if let Err(stale) = git::sync_lead(&lead, branch) {
-        report_stale(&mut env, &id, &key, &lead, &stale)?;
+        if let Err(e) = report_stale(&mut env, &id, &key, &lead, &stale) {
+            return Err(removing(worktree, e));
+        }
     }
 
     // 8. The Gate on R', in the gate worktree; it is removed whatever the result.
