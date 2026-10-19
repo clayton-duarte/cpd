@@ -9,9 +9,9 @@ Every number here was measured on hs unless it says "computed" (arithmetic on me
 - **Before** (3 runs with no other test run beside them): **120.5-123.6 s on the clock, 1,408-1,487 s added up, 1,728 tests** (§2). With another test run beside it the same suite takes 125-149 s and 1,525-2,018 s.
 - **The clock is the sum divided by 16, plus a 30 s tail.** For the first 90 s all 16 test threads are busy; then only the two `session_watchdog` tests (67-69 s, started at 52 s) run. With a nextest `priority` on the slow tests (config only, measured) the tail is gone: clock = sum / 16 + 1.8 s (§3). So the clock follows the sum: 30 s on the clock needs a sum under about 450 s at 16 threads, with the long tests started first.
 - **The test threads mostly wait**: the run uses 5.5-5.8 of the 16 CPUs (§3).
-- **About 0.5 s of an integration test is fixed cost** (§4), against an average of 0.80 s for the 908 integration tests under 2 s: the teardown (0.29-0.38 s; 0.19 s of it is killing the env's own reaper, then a 0.1 s grace and a second `/proc` scan) and creating and migrating a fresh store (0.17-0.23 s). A run has 1,126 `TestEnv`s (§5).
+- **About 0.5 s of an integration test is fixed cost** (§4), against an average of 0.80 s for the 908 integration tests under 2 s: the teardown (0.29-0.38 s; 0.19 s of it is killing the env's own reaper, then a 0.1 s grace and a second `/proc` scan) and creating and migrating a fresh store (0.17-0.27 s). A run has 1,126 `TestEnv`s (§5).
 - **103 tests are over 2 s** (median of the 3 runs), 607 s of the 1,408 s. By cause (§6): real product limits the tests cannot shorten (the 60 s adapter watchdog, the 10 s pi stop, the 10 s doctor deadline, the 2^k s spawn back-off, the 5 s kill grace) 194 s; 1 s engine ticks and the "several ticks" sleeps around them 144 s; the wrapper's and driver's 0.5-2 s polls 123 s; the cockpit's 2 s refresh 21 s; fixture cost (one test builds 72 envs) 98 s; real work (store::schema building every version's database) 27 s.
-- **The drafted Jobs do not reach 300 s** (§7, computed): they leave about **525 s** (clock ~35 s). Adding dependencies at `opt-level = 3` (measured per test, new Job sp-build) gives about 465 s; long tests at 0.5 s instead of 1 s about 420 s. **300 s needs more than these**: the average short integration test must fall from 0.80 s to about 0.18 s, and the cost left after the fixes is each `cpd` command's and each `Store::open`'s schema check (17-30 ms each, several per test) and the tests' 100 ms poll sleeps. The cheapest measured gain is C1 (the teardown leaves the reaper alone): **0.17-0.31 s per test**, measured on 5 tests (§7).
+- **The drafted Jobs do not reach 300 s** (§7, computed): they leave about **525 s** (clock ~35 s). Adding dependencies at `opt-level = 3` (measured per test, new Job sp-build) gives about 465 s; long tests at 0.5 s instead of 1 s about 420 s. **300 s needs more than these**: the average short integration test must fall from 0.80 s to about 0.18 s, and the cost left after the fixes is each `cpd` command's and each `Store::open`'s schema check (17-30 ms each, several per test) and the tests' 100 ms poll sleeps. The largest measured single gain is C1 (the teardown leaves the reaper alone): **0.17-0.31 s per test**, measured on 5 tests (§7).
 
 ## 1. The tool: `scripts/test-time.sh`
 
@@ -60,7 +60,7 @@ Method: one test run alone with `strace --seccomp-bpf -f -ttt -e trace=process -
 
 ### (a) A minimal TestEnv test: `cpd::plan new_refuses_an_empty_brief_file_and_writes_nothing`
 
-564 / 566 / 575 ms (3 traced runs):
+0.68-0.69 s in runs 4-6; alone 0.49-0.55 s (5 runs), traced alone 564 / 566 / 575 ms:
 
 | phase | ms | what |
 |---|---|---|
@@ -68,16 +68,16 @@ Method: one test run alone with `strace --seccomp-bpf -f -ttt -e trace=process -
 | reaper start | 1 | `sh -c 'setsid sh teardown.sh watch <pid> &'`; the reaper then loops on `sleep 1` (in the background, not on the test's path) |
 | `cpd context new` (first command: **creates and migrates the store**) | **173-182** | the store's creation: 15 migrations, the history triggers, the schema check. Timed alone (`date` around it, fresh `CPD_HOME`, 5 runs): first command 207-266 ms, the second 29-35 ms, `events list` 26-40 ms, `--help` 6-8 ms |
 | git fixture (`git_repo`) | 13-15 | `init` 2.7, `add` 2.0, `commit` 6.3-7.8 of which `git maintenance run --auto` 1.4-1.8 (60 ms in the brief came from a full strace, which stops every syscall) |
-| test: write the brief, `Store::open`, one query | ~20 | in-process |
+| test: write the brief, one query (a new `Store::open`) | ~20 | in-process |
 | `cpd plan new` (refused, `usage`) | 4-5 | refused before it opens the store |
-| test: second query (`Store::open` again) | ~25 | in-process |
+| test: two more queries, each a new `Store::open` | ~38 | in-process |
 | **teardown** | **289-306** | `tmux kill-server` 1.7; **scan 1**: `grep -laF <dir> /proc/[0-9]*/cmdline` 6-8 plus `find /proc -mindepth 2 -maxdepth 2 -name cwd -lname '<dir>*'` 60-65, ~100 with the glob and the pipeline; it finds **the env's own reaper** (`sh teardown.sh watch`: its command line contains the directory), sends it SIGTERM, then **`sleep 0.1`** (101 ms) before re-checking; **scan 2**: ~90; `rm -rf` 2-3 |
 
 So the floor is: teardown ~300 ms, store creation ~180 ms, everything else ~85 ms. The reaper kill alone costs ~190 ms (the 0.1 s grace plus the second scan); a run with the reaper not targeted (experiment in a scratch copy, see §7) does one scan and no grace.
 
 ### (b) A typical engine test: `cpd::watch e2_kills_the_window_of_a_dead_driver_it_ends_though_the_first_kill_window_fails`
 
-1.93 s median in runs 4-6 (the median of `watch.rs` is 1.9 s); traced 2,118 / 2,077 ms:
+1.96 s median in runs 4-6 (1.90-2.50; the median `watch` test: 1.90-2.20 s); traced alone 2,118 / 2,077 ms:
 
 | phase | ms | what |
 |---|---|---|
@@ -89,7 +89,7 @@ So the floor is: teardown ~300 ms, store creation ~180 ms, everything else ~85 m
 
 ### (c) A typical cockpit test: `cpd::tui_tree enter_opens_the_lead_of_a_plan_and_a_fork_with_session_open`
 
-0.71 s median (the median of `tui_tree.rs` is 0.71 s); traced 752 ms:
+0.69 s median in runs 4-6 (0.67-0.74; the median `tui_tree` test: 0.68-0.73 s); traced alone 752 ms:
 
 | phase | ms | what |
 |---|---|---|
@@ -101,7 +101,7 @@ So the floor is: teardown ~300 ms, store creation ~180 ms, everything else ~85 m
 
 ### (d) A test that starts node: `cpd::config tiers_reads_efforts_from_pi_with_pis_node`
 
-No Rust test runs the pi adapter (`pi/lib/`, tested by `npm test`, outside this target); the Rust tests that start a real `node` are the Tier catalog probe's (`cpd tiers`, `cpd doctor`). 0.62 s median; traced 626 ms:
+No Rust test runs the pi adapter (`pi/lib/`, tested by `npm test`, outside this target); the Rust tests that start a real `node` are the Tier catalog probe's (`cpd tiers`, `cpd doctor`). 0.60 s median in runs 4-6 (0.52-0.61); traced alone 626 ms:
 
 | phase | ms | what |
 |---|---|---|
@@ -118,7 +118,7 @@ No Rust test runs the pi adapter (`pi/lib/`, tested by `npm test`, outside this 
 
 ## 5. Suite-wide counts
 
-One full run under `strace --seccomp-bpf -f -ttt -T -e trace=process,clock_nanosleep,nanosleep` (09:48, another Gate's nextest beside it; 170.9 s, 1,728 tests). Under strace and that load the times are inflated, so this section gives **counts** and **shares**; the per-unit times are §4's.
+One full run under `strace --seccomp-bpf -f -ttt -T -e trace=process,clock_nanosleep,nanosleep` (09:48, another Gate's nextest beside it; 170.9 s, 1,728 tests; 1,740 test processes, the 12 more being helper runs the harness's own tests start). Under strace and that load the times are inflated, so this section gives **counts** and **shares**; the per-unit times are §4's.
 
 | what | count per run | share of the traced sum (2,558 s) |
 |---|---|---|
@@ -135,7 +135,7 @@ One full run under `strace --seccomp-bpf -f -ttt -T -e trace=process,clock_nanos
 
 The 103 tests whose median over runs 4-6 is over 2 s: 607 s of run 5's 1,408 s (§6.1 194 s, §6.2 144 s, §6.3 123 s, §6.4 21 s, §6.5 98 s, §6.6 27 s). "sleep" is the time the test process spent in `thread::sleep` and "envs" the number of `TestEnv`s (both from the traced run of §5). The change named is the one that removes the cause; the Job is §8's.
 
-### 6.1 A real product limit (a constant the test cannot shorten)
+### 6.1 A real limit the test cannot shorten (a product constant, or a hold the test chose)
 
 | median (s) | test | the limit | change |
 |---|---|---|---|
@@ -148,7 +148,7 @@ The 103 tests whose median over runs 4-6 is over 2 s: 607 s of run 5's 1,408 s (
 | 3.5, 2.1 | `store a_writer_that_cannot_get_the_lock_in_time_is_store_busy`, `a_second_writer_waits_for_the_first_and_reads_do_not` | the test's own writer holds the lock 3,000 / 1,500 ms | hold until the second writer has given up / entered (a positive signal) |
 | 2.6 | `doctor a_hung_pi_node_is_a_failed_check` | `CPD_TEST_DEADLINE_NODE=1` (1 s, the override's floor: whole seconds) plus the kill | sub-second deadlines in the override |
 | 2.3 | `git a_hook_is_killed_with_its_process_group_at_the_timeout` | the hooks' `GRACE` = 2 s (`core/src/git/hooks/exec.rs:75`) and a fixed 1.5 s sleep | inject the grace; wait for the survivor's absence positively |
-| 2.8 | `watch e5_kills_a_hung_poll_child_and_its_group_at_the_deadline_with_tool_timeout` | the poll child's deadline and 1 s ticks | sub-second tick (§6.2) |
+| 2.8 | `watch e5_kills_a_hung_poll_child_and_its_group_at_the_deadline_with_tool_timeout` | the poll child's deadline, already shortened to 2 s by `CPD_TEST_DEADLINE_CPD=2` (whole seconds), and 1 s ticks | sub-second deadlines in the override; sub-second tick (§6.2) |
 
 ### 6.2 Engine ticks (`watch.tick_seconds = 1`, an integer ≥ 1 on main) and the "several ticks" sleeps around them
 
@@ -210,7 +210,7 @@ No wait: the time is §4's fixed costs, repeated. Change: sp-fixed's cuts (each 
 
 | median (s) | tests | what |
 |---|---|---|
-| 8.3, 8.0, 3.0 | `cpd-core store::schema::tests::a_legacy_store_of_every_version_converts_keeping_every_row_and_id`, `migrating_an_empty_database_gives_every_versions_schema_hash`, `a_tampered_legacy_store_is_refused_and_left_as_it_was` | build a database of every legacy version from scratch, migrate it, hash it (no process, no sleep: 0 s in `thread::sleep`); 13-14.5 s in the loaded Gate logs of the brief, 12.6-13.1 s in runs 1-2, 21-26 s under strace and load: CPU-bound, so they grow with the load |
+| 8.3, 8.0, 3.0 | `cpd-core store::schema::tests::a_legacy_store_of_every_version_converts_keeping_every_row_and_id`, `migrating_an_empty_database_gives_every_versions_schema_hash`, `a_tampered_legacy_store_is_refused_and_left_as_it_was` | build a database of every legacy version from scratch, migrate it, hash it (no process, no sleep: 0 s in `thread::sleep`); 13-14.5 s in the loaded Gate logs of the brief, 10.5-13.1 s in runs 1-2, 21-26 s under strace and load: CPU-bound, so they grow with the load |
 | 2.9, 2.9, 2.0 | `cpd-core store::verdict::tests::inside_the_window_the_objects_of_unknown_migrations_are_not_checked`, `inside_the_window_the_objects_this_binary_created_are_checked`, `store::tests::two_plans_kind_migrations_applied_in_either_order_keep_both_kinds` | reference databases built per case |
 
 Change: build each version's database once per test binary (a `OnceLock`), in memory or with `synchronous = OFF` for fixtures; dependencies at `opt-level = 3` (§7) speed the SQLite and hashing work for every one of these (the size of that gain on these tests is unverified).
