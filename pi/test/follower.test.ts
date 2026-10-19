@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Fixture, planShow, settle, ev, waitFor } from "./fake.ts";
+import { Fixture, planShow, ev, waitFor } from "./fake.ts";
 
 async function started(f: Fixture, options = {}) {
   f.respond("plan-show", planShow());
@@ -106,15 +106,14 @@ test("an Event of an unknown kind is skipped silently; the cursor moves past it 
   t.after(() => f.close());
   await started(f);
   f.emit(ev(101, "job-merged"), { ...ev(102, "job-merged"), kind: "from-the-future" }, ev(103, "job-merged"));
+  // Events are handled in order: 103 delivered means 102 was handled before it
   await waitFor("both known Events", () => f.pi.delivered().length === 2);
-  await settle();
   assert.deepEqual(f.pi.delivered().map((s) => (s.message.details as any).id), [101, 103]);
   assert.equal(f.pi.errors().length, 0, "no message for the unknown kind");
 
   // the cursor is past the unknown Event: an unknown kind last still moves it
   f.emit({ ...ev(104, "job-merged"), kind: "from-the-future" });
-  await settle();
-  f.file("exit-next", "0");
+  f.file("exit-next", "0"); // the fake prints every line emitted before it, then exits: 104 is read before the restart
   await waitFor("restart", () => f.follows().length === 2);
   assert.deepEqual(f.sinces(), [100, 104]);
   assert.equal(f.pi.errors().length, 0);

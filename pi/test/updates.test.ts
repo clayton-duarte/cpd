@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { contextCursorFrom, contextUpdate, countsOf, parsePending, parsePlanEvents, parseRecords, pendingSection, summaryLine, type ContextRecord, type PendingJob, type PendingPlan, type PlanEvent, type RecordEvent } from "../lib/updates.ts";
-import { Fixture, ID, OTHER, sessionShow, settle, waitFor } from "./fake.ts";
+import { Fixture, ID, OTHER, sessionShow, waitFor } from "./fake.ts";
 
 const contextMessage = (event: number | undefined, deliveredTo: string | undefined, customType = "cpd-context") => ({
   type: "custom_message",

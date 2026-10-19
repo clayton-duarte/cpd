@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { type Options } from "../lib/adapter.ts";
 import { identityOf, LONG_REFUSAL_NOTICE, pollAdapter, refusal, RELOAD_COMMAND, reloadLogPath, validatePackage, type Guard } from "../lib/reload.ts";
-import { Fixture, ID, planShow, settle, waitFor } from "./fake.ts";
+import { Fixture, ID, planShow, waitFor } from "./fake.ts";
 
 const GOOD = "export default function (pi: unknown): void {}\n";
 
@@ -423,7 +423,7 @@ test("a pre-validation failure and the command's refusal are logged with their r
   install(f, { "extension.ts": 'throw new Error("boom");\n', "package.json": "{}" });
   const failed = `poll: pre-validation failed: ${failedToLoad(f, "boom")}`;
   await waitFor("the failure", () => decisions(f).includes(failed));
-  await settle(300); // many polls: the same line is not repeated
+  await c.after(5); // many polls: the same line is not repeated
   assert.equal(decisions(f).filter((l) => l === failed).length, 1);
   f.pi.editorText = "unsent";
   const handler = f.pi.commands.get(RELOAD_COMMAND)!;
@@ -460,7 +460,7 @@ test("a package that does not validate is not a long refusal (a reload must not 
   const c = clock(t, f);
   install(f, { "extension.ts": 'throw new Error("boom");\n', "package.json": "{}" });
   const from = Date.now();
-  await waitFor("the failure", () => decisions(f).includes("poll: pre-validation failed: boom"));
+  await waitFor("the failure", () => decisions(f).includes(`poll: pre-validation failed: ${failedToLoad(f, "boom")}`));
   await c.after(10);
   await waitFor("longer than the limit", () => Date.now() - from > 100);
   assert.equal(f.pi.notices.includes(LONG_REFUSAL_NOTICE), false);
@@ -483,11 +483,13 @@ test("a log that cannot be written is notified once per run, starts no turn, and
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
   await waitFor("the notice", () => failures().length > 0);
+  const c = clock(t, f);
   install(f);
   await waitFor("the reload", () => f.pi.reloads > 0);
   // `reloads` counts the call to `ctx.reload()`: the old run's shutdown and the new run's start (each a `cpd` child) come after it.
   await waitFor("the new run's notice", () => failures().length > 1);
-  await settle(200); // and it is only one
+  await waitFor("the command's end", () => f.pi.commandsRunning.size === 0);
+  await c.after(5); // many polls of the new run: and it is only one
   assert.equal(failures().length, 2, "the new run notifies again");
   assert.deepEqual(f.pi.errors(), [], "no message, so no turn");
 });

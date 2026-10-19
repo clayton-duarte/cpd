@@ -25,7 +25,7 @@ async function follow() {
   process.on("SIGTERM", () => { fs.writeFileSync(path.join(dir, "killed-" + process.pid), "1"); process.exit(143); });
   fs.appendFileSync(path.join(dir, "follower.pids"), process.pid + "\\n");
   let done = 0;
-  for (;;) {
+  const print = () => {
     const lines = (read("events.jsonl") || "").split("\\n").filter(Boolean);
     while (done < lines.length) {
       const line = lines[done++];
@@ -34,6 +34,9 @@ async function follow() {
       if (Number.isSafeInteger(id) && id <= since) continue;
       process.stdout.write(line + "\\n");
     }
+  };
+  for (;;) {
+    print();
     const failure = read("follow-failure.json");
     if (failure !== undefined) {
       const f = JSON.parse(failure);
@@ -41,7 +44,8 @@ async function follow() {
       process.exit(f.exit);
     }
     const exitNext = read("exit-next");
-    if (exitNext !== undefined) { fs.rmSync(path.join(dir, "exit-next")); process.exit(Number(exitNext)); }
+    // every line emitted before \`exit-next\` is printed before the exit: a test's Events reach the adapter before the restart
+    if (exitNext !== undefined) { print(); fs.rmSync(path.join(dir, "exit-next")); process.exit(Number(exitNext)); }
     await sleep(10);
   }
 }
@@ -461,6 +465,3 @@ export async function waitFor<T>(what: string, fn: () => T | undefined | null | 
 /** `session state` argvs, without the session id, as `idle` or `blocked:<label>`. */
 export const stateCalls = (f: Fixture): string[] =>
   f.argvs().filter((a) => a[0] === "session" && a[1] === "state").map((a) => (a[2] === "blocked" ? `blocked:${a[a.indexOf("--label") + 1]}` : a[2]!));
-
-/** A fixed wait. Kept for the tests main added that still use it; Job hn-settle converts them to observable waits. */
-export const settle = (ms = 150) => sleep(ms);

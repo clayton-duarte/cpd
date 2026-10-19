@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { Fixture, ID, planShow, settle, stateCalls, ev, waitFor } from "./fake.ts";
+import { Fixture, ID, planShow, stateCalls, ev, waitFor } from "./fake.ts";
 
 const REVIEW_LABEL = "blocked:cpd: plan review";
 const pending = (id = "r1", over: Record<string, unknown> = {}) => planShow({ review: { id, status: "pending", fingerprint: "ff", current: true, ...over } });
@@ -313,7 +313,7 @@ test("a replayed request for an older review does not close the newer reason", a
   f.emit(reviewEvent(102, "r2"));
   await waitFor("both entries", () => entries(f).length === 2);
   f.emit(reviewEvent(103, "r1")); // a replayed older request must not close the newer reason
-  await settle();
+  await f.drain(); // marker 104
   assert.deepEqual(stateCalls(f), ["idle", REVIEW_LABEL]);
 });
 
@@ -324,7 +324,7 @@ test("a restart with r3 and r4 entries and plan show reporting r4 approved: not 
   seeded(f, { review: "r3", plannotator_id: "pn-3" });
   seeded(f, { review: "r4", plannotator_id: "pn-4", status: "approved" });
   await lead(f, pending("r4", { status: "approved" }));
-  await settle();
+  await f.quiet(); // recovery starts inside the start-up that `lead` awaited
   assert.deepEqual(stateCalls(f), ["idle"]);
 });
 
@@ -361,7 +361,7 @@ test("a failing plan show at start-up: the session's highest review stands for t
   await f.pi.fire("session_start");
   await waitFor("blocked", () => stateCalls(f).includes(REVIEW_LABEL));
   f.emit(decidedEvent(103, "approved", null, "r2")); // not the latest: its reason was never open, nothing changes
-  await settle();
+  await f.drain(); // marker 104
   assert.deepEqual(stateCalls(f), ["idle", REVIEW_LABEL]);
 });
 
