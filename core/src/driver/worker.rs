@@ -112,10 +112,11 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
     let answers = answers(conn, target)?;
     let quick_check = spec::quick_check(&target.worktree)?;
     let protected = git::protected_list(&target.worktree, &target.lead_branch)?;
+    let job_spec = job.require_spec()?;
     let (touches, acceptance, out_of_scope) = (
-        strings(&job.touches, "touches")?,
-        strings(&job.acceptance, "acceptance")?,
-        strings(&job.out_of_scope, "out_of_scope")?,
+        strings(&job_spec.touches, "touches")?,
+        strings(&job_spec.acceptance, "acceptance")?,
+        strings(&job_spec.out_of_scope, "out_of_scope")?,
     );
     let path = spec::write(
         home,
@@ -125,8 +126,8 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
             title: &job.title,
             tier: target.tier,
             worktree: &target.worktree,
-            goal: &job.goal,
-            context: &job.context,
+            goal: &job_spec.goal,
+            context: &job_spec.context,
             touches: &touches,
             acceptance: &acceptance,
             out_of_scope: &out_of_scope,

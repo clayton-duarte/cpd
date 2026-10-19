@@ -54,6 +54,15 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
         CpdError::new(ErrorCode::GhFailed, format!("gh printed the pull request URL {:?}, which is not https://github.com/<owner>/<name>/pull/<n>.", found.url))
             .with("url", found.url.as_str())
     })?;
+    // GitHub's creation time, written once with the row (store-W5): `gh pr create` and `gh pr list` do not give it here,
+    // the poller's own lookup does. A pull request it cannot find is `gh_failed`; a rerun adopts the one created.
+    let created_at = match gh::lookup(&lead, &[(repo.clone(), found.number)])?.into_iter().next().flatten() {
+        Some(looked_up) => looked_up.created_at,
+        None => {
+            return Err(CpdError::new(ErrorCode::GhFailed, format!("gh cannot find pull request {repo}#{}, which it just opened.", found.number))
+                .with("url", found.url.as_str()));
+        }
+    };
     let phase = env.store.write(COMMAND, |tx| {
         // The pull request's row (D6): inserted, or kept as the poll wrote it when it stored it first.
         let row = PolledPr {
@@ -67,7 +76,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
             checks: ChecksSummary::None,
             mergeable: Mergeable::Unknown,
             merge_state: MergeState::Unknown,
-            created_at: pulls::txn_time(tx)?,
+            created_at,
             merged_at: None,
         };
         let pull_request = pulls::ensure(tx, &row)?;
