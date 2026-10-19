@@ -110,7 +110,7 @@ pub const VERSION: i64 = 1000;
 /// The canonical schema hash (§4.3) of a fresh store that applied exactly this
 /// binary's migrations, pinned here and never recorded in the store (hs-d178
 /// D2). A test asserts it and prints the new value when it is stale.
-pub const SCHEMA_HASH: &str = "989b1ecab93839dec3096d85fc9fa690c0145529237da4da66da13fb63fc1824";
+pub const SCHEMA_HASH: &str = "1ee8139a5bb66c61a28ed8edf439e417ee124f183ea95cb830a1b73e6c0e979b";
 
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.
@@ -2390,6 +2390,13 @@ mod tests {
         if n >= 12 {
             conn.execute_batch(&format!(
                 "BEGIN; INSERT INTO inbox_items (kind, urgency, subject, plan, context, label, opened_at) VALUES ('dialog', 'red', 'plan:gr', 'gr', 'ctx', 'Answer', '{T}'); COMMIT;"
+            ))
+            .unwrap();
+        }
+        if n >= 14 {
+            // A stub draft: a title and no Tier or Spec (0014-register).
+            conn.execute_batch(&format!(
+                "BEGIN; INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at) VALUES ('gr', 'web', 'stub', 'Stub', 'draft', 1, 1, '{T}'); COMMIT;"
             ))
             .unwrap();
         }

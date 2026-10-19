@@ -687,7 +687,7 @@ mod tests {
 
     /// The canonical hash two stores that applied `ADD_A` and `ADD_B` share, pinned: a change of the
     /// canonical form (§4.3) or of the SQLite bundle changes it.
-    const A_AND_B_HASH: &str = "32a6c38445f2dba615d380fac996df2f4ee6e4046d7b86387700bc9c120cdff4";
+    const A_AND_B_HASH: &str = "07016dfaefc95f920571eb82da3a3e99fcb26ebd9a2ab0a567e2e6310abfecf3";
 
     /// A store opened with `named` as its migrations, whose pinned hash is the one of a fresh store with them.
     pub(super) fn open_named(home: &CpdHome, named: &[Named]) -> Result<Store, CpdError> {
@@ -932,7 +932,7 @@ mod tests {
             assert_eq!(err.code(), ErrorCode::StoreTooNew, "{version}");
             assert_eq!(err.details()["user_version"], version);
         }
-        for version in [0, 1, 6, 7, 11, 1000] {
+        for version in [0, 1, 6, 7, 11, 14, 1000] {
             refuse_user_version(version).unwrap();
         }
     }
