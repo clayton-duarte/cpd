@@ -14,7 +14,7 @@ use common::{CPD, SLEEP_SECONDS, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
-use cpd_tui::palette::SPINNER;
+use cpd_tui::palette::{DRAFT, FAILED, MERGED, MERGING, QUEUED, SPINNER};
 use serde_json::json;
 
 /// The expected chart of the store `cpd_jobs()` makes: the fixture of the cockpit of branch `cpd/cpd-ui`
@@ -302,7 +302,7 @@ fn the_chart_of_a_store_equivalent_to_the_cockpits_fixture_matches_it() {
     });
     assert_eq!(chart_rows(&screen, rows), CPD_CHART.trim_end(), "{}", screen.join("\n"));
     // a Plan of one PR is one box, titled on its top border
-    assert!(screen[1].starts_with("  ┌ repo · repo → main · dispatch ─"), "{:?}", screen[1]);
+    assert!(screen[1].starts_with("  ┌ repo · repo 󱦰 main · dispatch ─"), "{:?}", screen[1]);
     assert_eq!(screen.iter().filter(|l| l.contains('┌')).count(), 1, "{}", screen.join("\n"));
 }
 
@@ -330,14 +330,18 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the boxes", |s| s.len() > 8 && s[8].ends_with('┘'));
     // web below api, the arrow from api's bottom border into web's top border
+    let (merged_row, queued_row) = (
+        format!("  │  {MERGED} a │O3 ───── {MERGED} b │S3               │"),
+        format!("  │  {QUEUED} c │S3                      │"),
+    );
     let want = [
-        "  ┌ api · api-server → main · #12 open ↗ ┐",
-        "  │  ✓ a │O3 ───── ✓ b │S3               │",
+        "  ┌ api · api-server 󱦰 main · #12 open 󰏌 ┐",
+        merged_row.as_str(),
         "  └──────────────────┬───────────────────┘",
         "                  ╭──╯",
-        "                  ▼",
-        "  ┌ web · web → develop · waiting ┐",
-        "  │  ○ c │S3                      │",
+        "                  󱦳",
+        "  ┌ web · web 󱦰 develop · waiting ┐",
+        queued_row.as_str(),
         "  └───────────────────────────────┘",
     ];
     assert_eq!(screen[1..9], want, "{}", screen.join("\n"));
@@ -375,20 +379,20 @@ fn each_job_status_has_its_icon_and_a_cancelled_job_is_not_drawn() {
     sql(&env, &plan_with("dispatch", None, jobs));
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 13 && s[2].contains("draft"));
-    // a column is as wide as its widest pill (`✗ failed │S3│a3`); the tier, and `aN` from the second Attempt, sit at its right
+    // a column is as wide as its widest pill (the failed pill, `failed │S3│a3`); the tier, and `aN` from the second Attempt, sit at its right
     let want = format!(
         "
-  ◌ draft     │S3
+  {DRAFT} draft     │S3
 
-  ○ queued    │S3
+  {QUEUED} queued    │S3
 
   {} running   │S3
 
-  ⇥ merging   │S3
+  {MERGING} merging   │S3
 
-  ✓ merged    │S3
+  {MERGED} merged    │S3
 
-  ✗ failed │S3│a3",
+  {FAILED} failed │S3│a3",
         SPINNER[0]
     );
     assert_eq!(chart_rows(&screen, 11), want.strip_prefix('\n').unwrap(), "{}", screen.join("\n"));
@@ -467,14 +471,14 @@ fn a_pull_request_box_title_ends_in_a_link_to_it_and_a_pending_review_is_a_row_a
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the row and the box", |s| s.len() > 3 && s[3].contains(" a "));
     // the row is the pane's first, indented by the margin; the boxes are one row lower than without it
-    assert_eq!(screen[0], "   Plan review r2 pending ↗", "{}", screen.join("\n"));
+    assert_eq!(screen[0], "   Plan review r2 pending 󰏌", "{}", screen.join("\n"));
     assert_eq!(screen[1], "");
-    assert_eq!(screen[2], "  ┌ repo · repo → main · #7 open ↗ ┐");
+    assert_eq!(screen[2], "  ┌ repo · repo 󱦰 main · #7 open 󰏌 ┐");
     let styled = styled_screen(&env, &pane);
     assert!(styled.contains("]8;;https://github.com/acme/repo/pull/7"), "{styled:?}");
     assert!(styled.contains("]8;;http://review.test:19433"), "{styled:?}");
-    // each link wraps its whole text, from `#` or `Plan` through `↗`, and nothing else
-    for (url, text) in [("https://github.com/acme/repo/pull/7", "#7 open ↗"), ("http://review.test:19433", "Plan review r2 pending ↗")] {
+    // each link wraps its whole text, from `#` or `Plan` through `󰏌`, and nothing else
+    for (url, text) in [("https://github.com/acme/repo/pull/7", "#7 open 󰏌"), ("http://review.test:19433", "Plan review r2 pending 󰏌")] {
         assert_eq!(linked_text(&styled, url), text, "{url}: {styled:?}");
     }
 }
@@ -484,7 +488,7 @@ fn a_conflict_shows_in_the_box_title_and_clears_with_no_event_within_the_refresh
     let env = env();
     sql(&env, &plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
     let pane = start_view(&env);
-    let title = |s: &[String], word: &str| s.iter().any(|l| l.contains(&format!("#7 {word} ↗")));
+    let title = |s: &[String], word: &str| s.iter().any(|l| l.contains(&format!("#7 {word} 󰏌")));
     screen_when(&env, &pane, "the open title", |s| title(s, "open"));
 
     // the poll stored a conflict: no Event is appended for the view to wake on, so only the 2 s re-read shows it
@@ -519,7 +523,7 @@ fn with_no_pending_review_there_is_no_row_and_the_boxes_start_at_the_top() {
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the box", |s| s.len() > 2 && s[2].contains(" a "));
     assert_eq!(screen[0], "", "{}", screen.join("\n"));
-    assert_eq!(screen[1], "  ┌ repo · repo → main · #7 open ↗ ┐");
+    assert_eq!(screen[1], "  ┌ repo · repo 󱦰 main · #7 open 󰏌 ┐");
     assert!(screen.iter().all(|l| !l.contains("review")), "{}", screen.join("\n"));
     assert!(!styled_screen(&env, &pane).contains("localhost"));
 }
@@ -547,10 +551,10 @@ fn the_first_rows_of_the_pane_are_the_top_of_the_first_box_with_no_tab() {
     let screen = screen_when(&env, &pane, "the box", |s| s.len() > 3 && s[2].contains(" a "));
     // one row of margin, then the box's top border, its one chart row and its bottom border
     assert_eq!(screen[0], "", "{}", screen.join("\n"));
-    assert_eq!(screen[1], "  ┌ repo · repo → main · dispatch ┐");
-    assert!(screen[2].starts_with("  │  ○ a │S3"), "{:?}", screen[2]);
+    assert_eq!(screen[1], "  ┌ repo · repo 󱦰 main · dispatch ┐");
+    assert!(screen[2].starts_with(&format!("  │  {QUEUED} a │S3")), "{:?}", screen[2]);
     assert!(screen[3].starts_with("  └─"), "{:?}", screen[3]);
-    assert!(screen.iter().all(|l| !l.contains('▸') && !l.contains("name of") && !l.starts_with('─')), "{}", screen.join("\n"));
+    assert!(screen.iter().all(|l| !l.contains('\u{F0142}' /* md-chevron_right */) && !l.contains("name of") && !l.starts_with('─')), "{}", screen.join("\n"));
 }
 
 #[test]
@@ -572,13 +576,13 @@ fn the_view_follows_events_and_switches_plan_when_the_chat_slot_changes() {
             + &event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":["a"]}"#)),
     );
     let screen = screen_when(&env, &pane, "Job b", |s| s.len() > 2 && s[2].contains(" b "));
-    assert_eq!(chart_rows(&screen, 1), "  ○ a │S3 ───── ○ b │S3");
+    assert_eq!(chart_rows(&screen, 1), format!("  {QUEUED} a │S3 ───── {QUEUED} b │S3"));
 
     // the other Lead moves into the chat slot: the view shows its Plan
     sql(&env, &in_chat("ctx", "side", "lead-side"));
     let screen = screen_when(&env, &pane, "the other Plan", |s| s.len() > 2 && s[2].contains("other"));
-    assert_eq!(chart_rows(&screen, 1), "  ○ other │O3");
-    assert!(!screen.iter().any(|l| l.contains("○ a ")), "{}", screen.join("\n"));
+    assert_eq!(chart_rows(&screen, 1), format!("  {QUEUED} other │O3"));
+    assert!(!screen.iter().any(|l| l.contains(&format!("{QUEUED} a "))), "{}", screen.join("\n"));
 }
 
 #[test]

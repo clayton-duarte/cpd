@@ -879,6 +879,62 @@ fn e3_one_tick_schedules_a_ready_job_within_the_concurrency() {
     }
 }
 
+/// SQL that marks Job `key` urgent, for `add_job`'s `then`.
+fn urgent(key: &str) -> String {
+    format!("UPDATE jobs SET urgent = 1 WHERE plan = 'pay' AND key = '{key}';")
+}
+
+/// The work session as tui leaves it, with remain-on-exit (§6.1), and a Worker that stays alive.
+fn work_session_with_a_worker_that_stays(fx: &Fx) {
+    fx.env.fake_pi(&format!("sleep {SLEEP_SECONDS}"));
+    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", &SLEEP_SECONDS.to_string()][..], &["set", "-g", "remain-on-exit", "on"]] {
+        assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
+    }
+}
+
+/// E3 starts urgent Ready Jobs first (§3.7): with every slot free, the urgent Job goes before an older non-urgent one.
+#[test]
+fn e3_starts_an_urgent_job_before_an_older_one() {
+    let fx = fx("concurrency = 1\nretry_cap = 0");
+    work_session_with_a_worker_that_stays(&fx);
+    fx.add_job("old", &[], "");
+    fx.add_job("hot", &[], &urgent("hot"));
+
+    let engine = fx.start();
+    wait_until("attempt-started", || fx.count("attempt-started") >= 1);
+    // Two more ticks: the one slot is taken, so the older Job still waits.
+    std::thread::sleep(Duration::from_millis(2500));
+    engine.stop();
+
+    let started: Vec<Option<String>> = fx.events("attempt-started").into_iter().map(|e| e.1).collect();
+    assert_eq!(started, [Some("hot".to_owned())]);
+    assert_eq!((fx.job_status("hot"), fx.job_status("old")), ("running".into(), "queued".into()));
+}
+
+/// An urgent Job may start one Attempt beyond `concurrency`, and no more; the extra slot is never a non-urgent Job's.
+#[test]
+fn e3_starts_one_urgent_job_beyond_the_concurrency_and_not_a_second() {
+    let fx = fx("concurrency = 1\nretry_cap = 0");
+    work_session_with_a_worker_that_stays(&fx);
+    // One Attempt is running: the only slot is taken.
+    let _busy = fx.live_driver("busy-a1");
+    fx.add_running("busy", "running", &ago(1));
+    fx.add_job("old", &[], "");
+    fx.add_job("hot1", &[], &urgent("hot1"));
+    fx.add_job("hot2", &[], &urgent("hot2"));
+
+    let engine = fx.start();
+    wait_until("attempt-started", || fx.count("attempt-started") >= 1);
+    std::thread::sleep(Duration::from_millis(2500));
+    engine.stop();
+
+    // The first urgent Job by `seq` started (running Attempts: 2 = concurrency + 1); the second urgent one and the older Job wait.
+    let started: Vec<Option<String>> = fx.events("attempt-started").into_iter().map(|e| e.1).collect();
+    assert_eq!(started, [Some("hot1".to_owned())]);
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts WHERE status <> 'ended'"), 2);
+    assert_eq!((fx.job_status("hot1"), fx.job_status("hot2"), fx.job_status("old")), ("running".into(), "queued".into(), "queued".into()));
+}
+
 /// The 00:02Z incident (hs-d151): the file the engine runs from is replaced, then
 /// E3 starts an Attempt. The driver starts from the path recorded at start
 /// (`cannot run <path> (deleted)` before).
@@ -1199,6 +1255,32 @@ fn e5_polls_every_pr_poll_seconds_after_the_previous_poll_ended_whatever_the_pla
             (1, "end", "start") => assert!(pair[1].1 - pair[0].1 >= 2000, "the next poll starts 2 s after the end of the last: {notes:?}"),
             _ => panic!("polls overlap or are out of order: {notes:?}"),
         }
+    }
+    assert_eq!(fx.count("error"), 0);
+}
+
+/// engine-W9: a poll of 1 s with a tick of 5 s and `pr_poll_seconds = 2` runs every 3 s (end + 2 s), not at every other tick.
+#[test]
+fn e5_polls_at_its_due_time_not_at_the_next_tick() {
+    let fx = fx_bare("");
+    poll_every(&fx, 2);
+    let config = fx.env.cpd_home().join("config.toml");
+    fs::write(&config, fs::read_to_string(&config).unwrap().replace("tick_seconds = 1\n", "tick_seconds = 5\n")).unwrap();
+    let log = fx.env.root().join("poll.log");
+    fx.env.fake_gh(&format!(
+        r#"echo "start $(date +%s%N)" >> '{log}'; sleep 1; echo '{}'; exit 0"#,
+        search_reply(4987, "2099-01-01T00:00:00Z"),
+        log = log.display()
+    ));
+
+    let engine = fx.start();
+    wait_until("three polls", || fs::read_to_string(&log).map_or(0, |t| t.matches("start").count()) >= 3);
+    engine.stop();
+
+    let starts: Vec<i128> = fs::read_to_string(&log).unwrap().lines().map(|l| l.split_once(' ').unwrap().1.parse::<i128>().unwrap() / 1_000_000).collect();
+    for pair in starts.windows(2) {
+        let gap = pair[1] - pair[0];
+        assert!((2900..4000).contains(&gap), "a poll every 3 s (1 s poll + 2 s), not every 5 s tick: {starts:?}");
     }
     assert_eq!(fx.count("error"), 0);
 }
@@ -1636,7 +1718,7 @@ fn install_with(env: &TestEnv, store: &str) -> (std::process::Output, Vec<Vec<St
         "cpd-built",
         &format!(
             r#"case "$1" in
---version) echo '{{"ok":true,"version":"0.0.0","schema":1000,"store_schema":1000,"store":{store}}}' ;;
+--version) echo '{{"ok":true,"version":"0.0.0","store":{store}}}' ;;
 config) echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}' ;;
 watch) tmux -L '{socket}' list-windows -t =cpd-work -F '#{{window_name}}' > '{windows}' 2>&1; echo '{{"ok":true,"started":true,"pane":"%9"}}' ;;
 esac"#,
@@ -1713,4 +1795,82 @@ fn install_accepts_a_build_that_opens_the_store_or_a_home_without_a_database() {
         assert!(out.status.success(), "{store}: {}", String::from_utf8_lossy(&out.stderr));
         assert!(env.home().join(".local/bin/cpd").exists());
     }
+}
+
+// ---------- the adapter swap of scripts/install-cpd.sh (pi-ci-W9) ----------
+
+/// The names under `dir`, recursively, relative to it, sorted.
+fn tree(dir: &Path) -> Vec<String> {
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            out.push(path.strip_prefix(base).unwrap().display().to_string());
+            if path.is_dir() {
+                walk(base, &path, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
+}
+
+/// The entries directly in `dir`, sorted.
+fn names(dir: &Path) -> Vec<String> {
+    let mut out: Vec<String> = fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn install_puts_the_adapter_at_share_cpd_pi_without_its_tests() {
+    let env = TestEnv::new();
+    install(&env);
+
+    // `install` runs the script from the fake checkout (`Checkout::new`): compare with its `pi/`.
+    let checkout = env.root().join("repos/install-clone");
+    let adapter = env.home().join(".local/share/cpd/pi");
+    let expected: Vec<String> = tree(&checkout.join("pi")).into_iter().filter(|p| p != "test" && !p.starts_with("test/")).collect();
+    assert!(expected.contains(&"extension.ts".to_string()) && expected.contains(&"lib/cpd.ts".to_string()), "{expected:?}");
+    assert!(tree(&checkout.join("pi")).contains(&"test/cpd.test.ts".to_string()));
+    assert_eq!(tree(&adapter), expected);
+    // No temporary directory is left beside it.
+    assert_eq!(names(adapter.parent().unwrap()), ["pi"]);
+}
+
+#[test]
+fn install_replaces_an_installed_adapter_as_a_whole_and_it_is_never_missing() {
+    let env = TestEnv::new();
+    let adapter = env.home().join(".local/share/cpd/pi");
+    fs::create_dir_all(adapter.join("old")).unwrap();
+    fs::write(adapter.join("package.json"), "{}").unwrap();
+    fs::write(adapter.join("stale.ts"), "").unwrap();
+    // A big old adapter, so that removing it in place takes a while.
+    for i in 0..5000 {
+        fs::write(adapter.join("old").join(format!("f{i}.ts")), "").unwrap();
+    }
+
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watcher = {
+        let (stop, manifest) = (stop.clone(), adapter.join("package.json"));
+        std::thread::spawn(move || {
+            let mut missing = 0u32;
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                if !manifest.exists() {
+                    missing += 1;
+                }
+            }
+            missing
+        })
+    };
+    let (out, _) = install_with(&env, OPENS);
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let missing = watcher.join().unwrap();
+
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(missing, 0, "the adapter's package.json was missing {missing} times during the install");
+    assert!(!adapter.join("stale.ts").exists() && !adapter.join("old").exists(), "the old adapter was not replaced as a whole");
+    assert!(adapter.join("package.json").exists());
+    assert_eq!(names(adapter.parent().unwrap()), ["pi"]);
 }

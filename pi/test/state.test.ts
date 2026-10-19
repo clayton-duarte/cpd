@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { Reporter } from "../lib/state.ts";
 import { ev, Fixture, ID, planShow, settle, stateCalls, waitFor } from "./fake.ts";
 
 async function started(f: Fixture) {
@@ -67,6 +68,29 @@ test("a refused call is reported once and the next change is tried normally", as
   await waitFor("the next change", () => stateCalls(f).length === 3);
   assert.deepEqual(stateCalls(f), ["idle", "working", "idle"]);
   assert.equal(f.pi.errors().length, 1);
+});
+
+test("a refused state wanted again is sent again (pi-ci-W2)", async () => {
+  const sent: string[] = [];
+  const errs: string[] = [];
+  let fail = false;
+  const r = new Reporter(
+    async (w) => {
+      sent.push(w.state);
+      if (fail) throw new Error("db busy");
+    },
+    (e) => errs.push((e as Error).message),
+  );
+  r.want({ state: "working" });
+  await r.settled();
+  fail = true;
+  r.want({ state: "idle" });
+  await r.settled();
+  fail = false;
+  r.want({ state: "idle" });
+  await r.settled();
+  assert.deepEqual(sent, ["working", "idle", "idle"]);
+  assert.deepEqual(errs, ["db busy"]);
 });
 
 test("session_shutdown reports stopped and stops the follower", async (t) => {
@@ -168,4 +192,43 @@ test("a herdr:blocked event no longer changes the state; the dialog reason still
   f.pi.events.emit("herdr:blocked", { active: false });
   await settle();
   assert.deepEqual(stateCalls(f), ["idle", "blocked:dialog"]);
+});
+
+test("a reply run's idle carries --reply through the serialising reporter: the latest wanted state, once", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f);
+  f.respond("session-state", { ok: true }, { delay: 120 });
+
+  await f.pi.fire("before_agent_start", { messageType: "user", prompt: "hello" });
+  await f.pi.fire("agent_start"); // working: in flight
+  await f.pi.fire("agent_settled", { aborted: false }); // pi.idle is true: idle with --reply, pending
+  await f.pi.fire("agent_settled", { aborted: false }); // the same again
+  await waitFor("two more calls", () => stateCalls(f).length === 3, 3000);
+  await settle(300);
+  assert.deepEqual(f.argvs().filter((a) => a[1] === "state").slice(1), [
+    ["session", "state", "working", "--session", ID],
+    ["session", "state", "idle", "--reply", "--session", ID],
+  ]);
+});
+
+test("a blocked -> idle that closes the last reason of a reply run carries --reply; a later dialog at rest does not", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f);
+  await f.pi.fire("before_agent_start", { messageType: "user", prompt: "hello" });
+  await f.pi.fire("agent_start");
+  await f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "confirm" });
+  await waitFor("blocked", () => stateCalls(f).length === 3);
+  f.pi.idle = true;
+  await f.pi.fire("agent_settled", { aborted: false }); // still blocked: nothing new
+  await f.pi.fire("ui_prompt_end");
+  await waitFor("idle", () => stateCalls(f).length === 4);
+  assert.deepEqual(f.argvs().filter((a) => a[1] === "state").at(-1), ["session", "state", "idle", "--reply", "--session", ID]);
+
+  await f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "confirm" });
+  await waitFor("blocked", () => stateCalls(f).length === 5);
+  await f.pi.fire("ui_prompt_end");
+  await waitFor("idle", () => stateCalls(f).length === 6);
+  assert.deepEqual(f.argvs().filter((a) => a[1] === "state").at(-1), ["session", "state", "idle", "--session", ID], "the mark was spent");
 });

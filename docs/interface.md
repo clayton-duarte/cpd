@@ -36,6 +36,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd job edit` | Edit a draft Job (§5.2) | Lead | |
 | `cpd job cancel` | Cancel a Job (§5.3) | Lead | |
 | `cpd job retry` | Queue a failed Job again at a Tier (§5.4) | Lead | |
+| `cpd job urgent` | Mark a Job urgent, only when the User asks (§5.8) | Lead, Manager | |
 | `cpd job dispatch` | Start one Ready Job now (§5.5) | | |
 | `cpd job list` | List the Jobs (§5.6) | Lead | |
 | `cpd job show` | Show a Job and its Attempts (§5.7) | Lead | |
@@ -57,6 +58,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd pr rebase` | Rebase the Lead Branch onto the base and push (§9.3) | Lead | |
 | `cpd pr push` | Gate, then push the Lead Branch as it is, without a rebase (§9.9) | Lead | |
 | `cpd pr view` | Show the PR's checks, reviews and comments (§9.8) | Lead | |
+| `cpd pr merge` | Squash-merge a clean pull request on GitHub and delete its branch (§9.10) | | yes |
 | `cpd session` | Sessions and their tmux panes (commands.md §10) | | |
 | `cpd session list` | List Sessions (§10.1) | Lead, Manager | |
 | `cpd session show` | Show a Session (§10.2) | Lead, Manager | |
@@ -91,6 +93,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd tui view history` | An archived Session's history, read-only (the chat slot) | internal | |
 | `cpd tui view legend` | The key legend (opened by `?` in the Dispatch column, in a tmux popup) | internal | |
 | `cpd tui view logs` | The Event log (opened by the StatusBar's logs button and by an Inbox item, in a tmux popup) | internal | |
+| `cpd tui view merge` | The merge confirmation of a pull request (opened by the Deploy column's merge icon, in a tmux popup) | internal | |
 | `cpd tui view chat` | The chat slot's placeholder | internal | |
 | `cpd doctor` | Check the machine (commands.md §14.1) | | |
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |

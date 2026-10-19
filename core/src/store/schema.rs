@@ -2498,7 +2498,11 @@ mod tests {
                 let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
                 assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
                 assert_eq!(txns_after.len(), txns_before.len() + 1);
-                // The columns additive named migrations add come last and are null in every converted row.
+                // `job-urgent` added the column `urgent`, last: every Job reads 0, the default.
+                for row in rows_before.get_mut("jobs").unwrap() {
+                    *row = format!("{},0]", row.strip_suffix(']').unwrap());
+                }
+                // The columns the other additive named migrations add come last and are null in every converted row.
                 for (table, rows) in rows_after.iter_mut() {
                     let width = rows_before.get(table).and_then(|r| r.first()).map(|r| serde_json::from_str::<Vec<Value>>(r).unwrap().len());
                     for row in rows.iter_mut() {

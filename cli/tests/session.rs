@@ -367,6 +367,39 @@ fn state_follows_section_3_6() {
 }
 
 #[test]
+fn state_idle_reply_writes_data_reply_and_only_idle_accepts_it() {
+    let env = TestEnv::new();
+    setup(&env);
+    let state = |args: &[&str]| {
+        let mut argv = vec!["session", "state"];
+        argv.extend(args);
+        argv.extend(["--session", LEAD1]);
+        env.cpd(&argv)
+    };
+
+    // Only `idle` takes `--reply`; a refusal writes nothing.
+    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    for other in [&["working", "--reply"][..], &["blocked", "--label", "x", "--reply"], &["stopped", "--reply"]] {
+        refused(&state(other), "usage", 2);
+    }
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+
+    state(&["working"]).ok();
+    state(&["idle", "--reply"]).ok();
+    let all = events(&env, "session-state");
+    assert_eq!(all.last().unwrap()["data"], json!({"from": "working", "to": "idle", "label": null, "reply": true}));
+
+    // Without `--reply` the Event has no `reply`; an unchanged state writes nothing whatever `--reply`.
+    state(&["working"]).ok();
+    state(&["idle"]).ok();
+    assert_eq!(events(&env, "session-state").last().unwrap()["data"], json!({"from": "working", "to": "idle", "label": null}));
+    let (events_before, txns) = (events(&env, "session-state").len(), query::<i64>(&env, "SELECT count(*) FROM txns"));
+    assert_eq!(state(&["idle", "--reply"]).ok()["already"], true);
+    assert_eq!(events(&env, "session-state").len(), events_before);
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+}
+
+#[test]
 fn rename_appends_session_renamed_once() {
     let env = TestEnv::new();
     setup(&env);
@@ -1269,7 +1302,7 @@ fn is_dead(env: &TestEnv, pane: &str) -> bool {
     String::from_utf8(out.stdout).unwrap().lines().any(|l| l == format!("{pane} 1"))
 }
 
-/// `cpd watch` with a one-second tick, killed when dropped.
+/// `cpd watch` with a tick of 0.2 s, killed when dropped.
 struct Engine(std::process::Child);
 
 impl Drop for Engine {
@@ -1283,7 +1316,7 @@ fn engine(env: &TestEnv) -> Engine {
     env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
     let path = env.cpd_home().join("config.toml");
     let config = fs::read_to_string(&path).unwrap();
-    fs::write(&path, format!("{config}[watch]\ntick_seconds = 1\n")).unwrap();
+    fs::write(&path, format!("{config}[watch]\ntick_seconds = 0.2\n")).unwrap();
     let child = env.command(CPD).arg("watch").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
     Engine(child)
 }
