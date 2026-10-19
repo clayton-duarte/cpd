@@ -47,15 +47,16 @@ if is_stash "$@"; then
 fi
 
 # The real git: the first git on PATH once this wrapper's own directory is out of it.
-self_raw=$(dirname -- "$0")
-self=$(cd "$self_raw" 2>/dev/null && pwd)
+# Only builtins: a PATH without coreutils must not break it.
+case $0 in */*) self_raw=${0%/*} ;; *) self_raw=. ;; esac
+self=$(cd "$self_raw" 2>/dev/null && pwd -P)
 rest=
 set -f
 old_ifs=$IFS
 IFS=:
 for dir in $PATH; do
   [ "$dir" = "$self_raw" ] && continue
-  [ "$dir" = "$self" ] && continue
+  if [ -n "$dir" ] && [ "$(cd "$dir" 2>/dev/null && pwd -P)" = "$self" ]; then continue; fi
   rest=${rest:+$rest:}$dir
 done
 IFS=$old_ifs
