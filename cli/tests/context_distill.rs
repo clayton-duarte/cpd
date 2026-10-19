@@ -150,6 +150,12 @@ fn a_valid_digest_lands_as_upto_seq_and_the_directory_holds_one() {
     assert_eq!(out["digest"]["file"], file.display().to_string());
     let text = fs::read_to_string(&file).unwrap();
     assert!(text.contains(&format!("[{q}]")) && !text.contains(&format!("[{d1}]")), "{text}");
+    // cpd's index, after the topic sections, lists every record in force, oldest first, and nothing superseded.
+    let (_, index) = text.rsplit_once("\n## Record index\n\n").expect("cpd's index");
+    let lines: Vec<&str> = index.lines().collect();
+    assert_eq!(lines.len(), 3, "{index}");
+    assert!(lines[0].starts_with("- [hs-d2] decision (") && lines[1].starts_with(&format!("- [{q}] question (")), "{index}");
+    assert!(lines[2].starts_with("- [hs-d4] decision ("), "{index}");
     assert_eq!(fx.digest_files(), [format!("{upto}.md")], "older digests and temporary files are gone");
     assert!(fx.errors().is_empty());
 
@@ -211,21 +217,74 @@ fn an_invalid_digest_is_discarded_with_one_error_event_and_the_previous_one_stay
     assert_eq!(details["stray"], json!(["hs-d99"]));
     assert!(details["missing"].as_array().unwrap().iter().any(|id| *id == json!(d2)), "{details}");
     assert!(details["log"].as_str().unwrap().ends_with("distill.log"));
+    let upto = fx.highest_seq();
+    let invalid = fx.digests().join(format!("{upto}.md.invalid"));
+    assert_eq!(details["invalid"], invalid.display().to_string());
+    assert_eq!(fs::read_to_string(&invalid).unwrap(), "# Digest\nCites a ghost [hs-d99] and nothing else.\n", "the model's text, without an index");
 
-    assert_eq!(fx.digest_files(), before, "the previous digest stays and no .md.tmp is left");
+    let mut expected = before.clone();
+    expected.push(format!("{upto}.md.invalid"));
+    assert_eq!(fx.digest_files(), expected, "the previous digest stays, the invalid one is kept and no .md.tmp is left");
     assert_eq!(fs::read_to_string(fx.digests().join(&before[0])).unwrap(), kept);
     let events = fx.errors();
     assert_eq!(events.len(), 1, "{events:?}");
     let event = &events[0];
     assert_eq!(event["data"]["code"], "distill_invalid");
     assert_eq!(event["data"]["details"]["stray"], json!(["hs-d99"]));
+    assert_eq!(event["data"]["details"]["invalid"], invalid.display().to_string());
     assert_eq!((event["context"].clone(), event["plan"].clone(), event["session"].clone()), (Value::Null, Value::Null, Value::Null));
 
-    // A rerun runs again, and a good answer then lands.
+    // A rerun runs again, and a good answer then lands and removes the kept invalid digest.
     fx.env.fake_pi(CITES_ALL);
     fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert_eq!(fx.digest_files(), [format!("{}.md", fx.highest_seq())]);
     assert_eq!(fx.errors().len(), 1);
+}
+
+#[test]
+fn the_next_invalid_digest_replaces_the_kept_one() {
+    let fx = fx();
+    fx.decide("Use sqlite.");
+    fx.env.fake_pi("echo 'first failure'");
+    refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
+    let first = format!("{}.md.invalid", fx.highest_seq());
+    assert_eq!(fx.digest_files(), [first.clone()]);
+
+    fx.decide("Use flock.");
+    fx.env.fake_pi("echo 'second failure'");
+    refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
+    let second = format!("{}.md.invalid", fx.highest_seq());
+    assert_ne!(first, second);
+    assert_eq!(fx.digest_files(), [second.clone()], "one per Context");
+    assert_eq!(fs::read_to_string(fx.digests().join(second)).unwrap(), "second failure\n");
+}
+
+#[test]
+fn a_decision_cited_only_in_the_index_is_invalid() {
+    let fx = fx();
+    let d = fx.decide("Use sqlite.");
+    // The model writes its own index, as before D-a, and nothing in a topic section.
+    fx.env.fake_pi(&format!("echo '# Digest'; echo 'Nothing cited.'; echo; echo '## Record index'; echo '- [{d}] decision'"));
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
+    assert_eq!(error["details"]["missing"], json!([d]), "{error}");
+}
+
+#[test]
+fn notes_and_answers_need_no_topic_citation_but_cpds_index_lists_them() {
+    let fx = fx();
+    let d = fx.decide("Use sqlite.");
+    let n = fx.cpd(&["context", "note", "A note.", "--context", CONTEXT]).ok()["record"]["id"].as_str().unwrap().to_owned();
+    let q = fx.cpd(&["context", "ask", "Which port?", "--context", CONTEXT]).ok()["record"]["id"].as_str().unwrap().to_owned();
+    let a = fx.cpd(&["context", "answer", &q, "Port 80.", "--context", CONTEXT]).ok()["record"]["id"].as_str().unwrap().to_owned();
+    fx.env.fake_pi(&format!("echo '# Digest'; echo 'Only the decision [{d}].'"));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    let text = fs::read_to_string(out["digest"]["file"].as_str().unwrap()).unwrap();
+    let (topic, index) = text.split_once("\n## Record index\n").unwrap();
+    assert!(!topic.contains(&n) && !topic.contains(&a) && !topic.contains(&q), "{text}");
+    for (id, kind) in [(&d, "decision"), (&n, "note"), (&q, "question"), (&a, "answer")] {
+        assert!(index.contains(&format!("- [{id}] {kind} (")), "{id} {index}");
+    }
+    assert!(fx.errors().is_empty());
 }
 
 #[test]
@@ -285,7 +344,7 @@ fn only_plan_records_since_the_digest_carry_it_forward_without_pi() {
     assert_eq!(out["distilled"], false, "{out}");
     assert_eq!(out["digest"]["upto_seq"], fx.highest_seq());
     assert_eq!(fx.digest_files(), [format!("{}.md", fx.highest_seq())]);
-    assert_eq!(fs::read_to_string(fx.digests().join(&fx.digest_files()[0])).unwrap(), text);
+    assert_eq!(fs::read_to_string(fx.digests().join(&fx.digest_files()[0])).unwrap(), text, "one topic text, one index, not two");
     assert_eq!(fx.pi_calls(), 1, "pi ran once, for the first digest");
 }
 
@@ -373,17 +432,29 @@ fn nothing_the_audit_lists_is_lost() {
         let out = fx.env.command(CPD).args(["context", "distill", "--context", CONTEXT]).env("OMIT", omit).output().unwrap();
         Run { exit: out.status.code().unwrap(), stdout: String::from_utf8(out.stdout).unwrap(), stderr: String::new() }
     };
-    // A digest that leaves any of them out is refused, naming it.
-    for id in &ids {
+    // A digest that leaves out a decision or an open question is refused, naming it.
+    let required = |id: &&String| matches!(id.as_bytes()[3], b'd' | b'q');
+    for id in ids.iter().filter(required) {
         let error = refused(&run(id), "distill_invalid", 1);
         assert_eq!(error["details"]["missing"], json!([id]), "{error}");
-        assert!(fx.digest_files().is_empty());
+        assert!(fx.digest_files().iter().all(|n| n.ends_with(".md.invalid")), "{:?}", fx.digest_files());
     }
-    // One that cites them all is accepted.
+    // One that leaves out every note and answer is accepted: cpd's index lists them (D-a).
+    let others: Vec<&String> = ids.iter().filter(|id| !required(id)).collect();
+    assert!(!others.is_empty(), "the audit lists notes or answers");
+    let out = run(&others.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ")).ok();
+    let text = fs::read_to_string(out["digest"]["file"].as_str().unwrap()).unwrap();
+    let (topic, index) = text.rsplit_once("\n## Record index\n").unwrap();
+    for id in &others {
+        assert!(!topic.contains(&format!("[{id}]")) && index.contains(&format!("- [{id}] ")), "{id}");
+    }
+    fx.insert(CONTEXT, "hs-n99999", &ago(1), "A later note, to run again.", Draft::Note);
+    // One that cites them all is accepted, and cpd's index lists them all.
     let out = run("").ok();
     let text = fs::read_to_string(out["digest"]["file"].as_str().unwrap()).unwrap();
     for id in &ids {
         assert!(text.contains(&format!("[{id}]")), "{id}");
+        assert!(text.contains(&format!("- [{id}] ")), "{id}");
     }
 }
 

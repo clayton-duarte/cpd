@@ -141,11 +141,11 @@ impl Run<'_> {
         let dir = self.home.context_digest_dir(self.context);
         fs::create_dir_all(&dir).map_err(|e| io_failed("create", &dir, &e))?;
         let tmp = self.home.context_digest_tmp(self.context, upto);
-        // Only `plan` and `brief` records came since: the records in force are the same.
+        // Only `plan` and `brief` records came since: the records in force are the same, so are the topic sections.
         let carried = latest.filter(|d| in_force.iter().all(|(seq, _)| u64::try_from(*seq).is_ok_and(|s| s <= d.upto_seq)));
         let distilled = match &carried {
             Some(d) => {
-                fs::write(&tmp, &d.text).map_err(|e| io_failed("write", &tmp, &e))?;
+                fs::write(&tmp, digest::topic_sections(&d.text)).map_err(|e| io_failed("write", &tmp, &e))?;
                 false
             }
             None => {
@@ -155,13 +155,14 @@ impl Run<'_> {
             }
         };
         let bytes = fs::read(&tmp).map_err(|e| io_failed("read", &tmp, &e))?;
-        let ids: Vec<RecordId> = in_force.iter().map(|(_, r)| r.id.clone()).collect();
-        if let Err(invalid) = digest::validate(&bytes, &ids, digest::LIMIT) {
-            digest::discard(self.home, self.context, upto)?;
-            return Err(self.invalid(upto, &invalid));
+        let expect = digest::Expect::of(&in_force);
+        if let Err(invalid) = digest::validate(&bytes, &expect, digest::LIMIT) {
+            let kept = digest::keep_invalid(self.home, self.context, upto)?;
+            return Err(self.invalid(upto, &invalid, &kept));
         }
-        let file = digest::install(self.home, self.context, upto)?;
-        let installed = Digest { upto_seq: upto, file, text: String::from_utf8(bytes).expect("a valid digest is UTF-8") };
+        let file = digest::install(self.home, self.context, upto, &expect)?;
+        let text = fs::read_to_string(&file).map_err(|e| io_failed("read", &file, &e))?;
+        let installed = Digest { upto_seq: upto, file, text };
         Ok(json!({
             "context": self.context.as_str(),
             "distilled": distilled,
@@ -243,7 +244,7 @@ impl Run<'_> {
         }
     }
 
-    fn invalid(&mut self, upto: u64, invalid: &Invalid) -> CpdError {
+    fn invalid(&mut self, upto: u64, invalid: &Invalid, kept: &Path) -> CpdError {
         let ids = |ids: &[RecordId]| ids.iter().map(RecordId::to_string).collect::<Vec<_>>();
         let mut why = Vec::new();
         if invalid.not_utf8 {
@@ -253,7 +254,7 @@ impl Run<'_> {
             why.push(format!("it is {} bytes, over the {} limit", invalid.bytes, invalid.limit));
         }
         if !invalid.missing.is_empty() {
-            why.push(format!("it does not cite {}", ids(&invalid.missing).join(", ")));
+            why.push(format!("its topic sections do not cite {}, decisions or open questions in force", ids(&invalid.missing).join(", ")));
         }
         if !invalid.stray.is_empty() {
             why.push(format!("it cites {}, which are not in force", ids(&invalid.stray).join(", ")));
@@ -266,8 +267,14 @@ impl Run<'_> {
             .with("limit", invalid.limit)
             .with("missing", ids(&invalid.missing))
             .with("stray", ids(&invalid.stray))
+            .with("invalid", kept.display().to_string())
             .with("log", log_path(self.home, self.context).display().to_string());
-        let text = format!("{} The previous digest stays. Run it again: cpd context distill --context {}", error.message(), self.context);
+        let text = format!(
+            "{} The previous digest stays; the invalid one is kept at {}. Run it again: cpd context distill --context {}",
+            error.message(),
+            kept.display(),
+            self.context
+        );
         self.fail(error, text)
     }
 
