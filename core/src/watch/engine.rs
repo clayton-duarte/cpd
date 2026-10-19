@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use super::lock::WatchLock;
 use super::log::Log;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, completion, distill, escalations, inbox, liveness, pr, restart, schedule};
+use super::{SOURCE, completion, distill, escalations, inbox, liveness, pr, restart, schedule, workers};
 use crate::config::{Catalog, Config, load_catalog};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
@@ -53,6 +53,8 @@ pub(super) struct Engine {
     pub last_poll_end: Option<Instant>,
     /// While GitHub's rate limit is nearly spent, E5 runs no poll before this.
     pub paused_until: Option<Instant>,
+    /// The `@cpd_inbox` and `@cpd_workers` texts and width last set on the tmux server.
+    pub workers: Option<String>,
     /// E9: the highest record `seq` of each Context a distill run was started for in this engine's life.
     pub distill_started: HashMap<ContextId, i64>,
     /// When the engine last started the detached tmux restart (contract §6.1).
@@ -85,11 +87,21 @@ impl Engine {
         self.report.active()
     }
 
-    /// One tick: the tmux restart's drain, then E1–E5 and E7–E9 (§3.7; E6 is removed), each reporting its own failures.
+    /// One tick: the tmux restart's drain, the `@cpd_workers` step, then E1–E5 and E7–E9 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalog = None;
-        let steps: [fn(&mut Engine); 9] =
-            [restart::drain, escalations::run, liveness::run, schedule::run, completion::run, pr::run, start_prs, inbox::run, distill::run];
+        let steps: [fn(&mut Engine); 10] = [
+            restart::drain,
+            workers::run,
+            escalations::run,
+            liveness::run,
+            schedule::run,
+            completion::run,
+            pr::run,
+            start_prs,
+            inbox::run,
+            distill::run,
+        ];
         for step in steps {
             if stopping() {
                 return;
@@ -217,6 +229,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
         catalog: None,
         last_poll_end: None,
         paused_until: None,
+        workers: None,
         distill_started: HashMap::new(),
         restart_started: None,
     };
