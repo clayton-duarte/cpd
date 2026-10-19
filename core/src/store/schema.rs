@@ -2711,6 +2711,32 @@ mod tests {
         let row: Value = serde_json::from_str(&row).unwrap();
         assert_eq!(Value::Object(replayed), row);
         assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
+
+        // `jobs.urgent` (the additive `job-urgent`, which sorts before it) is in the regenerated
+        // trigger: an update of `urgent` alone writes the key and `urgent` (O3: re-checked against it).
+        write(
+            &mut store,
+            "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pl', 'ctx', 'Plan', 'grounding', 'lead', 't');
+             INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+               VALUES ('lead', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'idle', 't', 't');
+             INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+               VALUES ('pl', 'api', '/r/api', 'main', 'waiting', 'cpd/pl/api', cpd_txn(), 't');
+             INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at)
+               VALUES ('pl', 'api', 'j', 'J', 'draft', 1, cpd_txn(), 't');",
+        )
+        .unwrap();
+        write(&mut store, "UPDATE jobs SET urgent = 1 WHERE key = 'j'").unwrap();
+        let (before, after): (String, String) = connection(&home.db())
+            .query_row("SELECT before, after FROM history WHERE tbl = 'jobs' AND op = 'update' ORDER BY id DESC LIMIT 1", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        let seq: i64 = connection(&home.db()).query_row("SELECT seq FROM jobs WHERE key = 'j'", [], |r| r.get(0)).unwrap();
+        assert_eq!(
+            (serde_json::from_str::<Value>(&before).unwrap(), serde_json::from_str::<Value>(&after).unwrap()),
+            (json!({"seq": seq, "urgent": 0}), json!({"seq": seq, "urgent": 1}))
+        );
+        assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
         drop(store);
 
         // A binary without it cannot open the store: the migration is breaking (§4.5 A1).

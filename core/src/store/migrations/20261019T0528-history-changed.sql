@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 16
+-- cpd-migration: breaking after 17
 -- History `update` rows hold the key and only the changed columns (contract
 -- §4.4 "History row shape", §4.5; hs-d234, Plan quality finding sql-F2): a Job
 -- status flip stored its whole row twice, about 15 KB.
