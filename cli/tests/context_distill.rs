@@ -81,13 +81,14 @@ fn fx() -> Fx {
         env.cpd_home().join("config.toml"),
         format!(
             "version = 1\nmachine = \"hs\"\nlead_pi_packages = []\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
-             [watch]\ntick_seconds = 1\npr_poll_seconds = 1\n[tmux]\nsocket = \"{}\"\n",
+             [watch]\ntick_seconds = {}\n[tmux]\nsocket = \"{}\"\n",
+            common::TICK_SECONDS,
             env.tmux_socket()
         ),
     )
     .unwrap();
     env.fake_pi(&says(CITES_ALL));
-    // The engine's E5 runs `cpd pr poll` from `PATH` at every tick, through a `gh` that finds no pull requests: the
+    // The engine's E5 runs `cpd pr poll` at every tick (`start_engine`), through a `gh` that finds no pull requests: the
     // poll searches count whole ticks (`wait_whole_ticks`).
     env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
     env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
@@ -696,8 +697,17 @@ impl Drop for Engine {
     }
 }
 
+/// `cpd watch`, polling every tick (`common::PR_POLL_EVERY_TICK`).
+/// A fake `pi` that writes its digest (`CITES_ALL`) once the file it returns exists: a run that lasts until the test
+/// lets it end.
+fn held_pi(fx: &Fx) -> std::path::PathBuf {
+    let go = fx.env.root().join("pi-go");
+    fx.env.fake_pi(&format!("until [ -e '{}' ]; do sleep 0.01; done\n{}", go.display(), says(CITES_ALL)));
+    go
+}
+
 fn start_engine(fx: &Fx) -> Engine {
-    Engine(Some(fx.env.command(CPD).arg("watch").stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap()))
+    Engine(Some(fx.env.command(CPD).arg("watch").envs([common::PR_POLL_EVERY_TICK]).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap()))
 }
 
 fn stop_engine(mut engine: Engine) {
@@ -727,11 +737,16 @@ fn the_engine_starts_a_run_only_after_the_quiet_period_and_never_two_at_once() {
     fs::create_dir_all(home.root().join("locks")).unwrap();
     let held = Flock::lock(File::create(home.distill_lock(&ContextId::parse("quiet").unwrap())).unwrap(), FlockArg::LockExclusiveNonblock).unwrap();
 
-    // A slow pi, so a second start would overlap the first.
-    fx.env.fake_pi(&format!("sleep 3\n{}", says(CITES_ALL)));
+    // A pi that runs until the test lets it end, so a second start would overlap the first.
+    let go = held_pi(&fx);
     let engine = start_engine(&fx);
     let digest = |c: &str| home.context_digest_dir(&ContextId::parse(c).unwrap());
     let has_digest = |c: &str| fs::read_dir(digest(c)).is_ok_and(|d| d.flatten().any(|e| e.file_name().to_string_lossy().ends_with(".md") && e.file_name() != "prompt.md" && e.file_name() != "records.md"));
+    wait_until("the run of `old`", || fx.pi_calls() == 1);
+    // Several whole ticks while it runs: no second run of `old`, no run of the others.
+    fx.env.wait_whole_ticks(3);
+    assert_eq!(fx.pi_calls(), 1, "one run while it runs");
+    fs::write(&go, "").unwrap();
     wait_until("the digest of `old`", || has_digest("old"));
     // Several more whole ticks: no second run of `old`, no run of the others.
     fx.env.wait_whole_ticks(3);
@@ -780,9 +795,14 @@ fn write_now(fx: &Fx, context: &str, first: u32, notes: u32) {
 fn twenty_newer_records_start_a_run_at_once_and_never_two_at_once() {
     let fx = fx();
     write_now(&fx, CONTEXT, 100, 19); // 20 records, written seconds ago
-    // A slow pi, so a second start would overlap the first.
-    fx.env.fake_pi(&format!("sleep 3\n{}", says(CITES_ALL)));
+    // A pi that runs until the test lets it end, so a second start would overlap the first.
+    let go = held_pi(&fx);
     let engine = start_engine(&fx);
+    wait_until("the run", || fx.pi_calls() == 1);
+    // Several whole ticks while it runs: no second run.
+    fx.env.wait_whole_ticks(3);
+    assert_eq!(fx.pi_calls(), 1, "one run while it runs");
+    fs::write(&go, "").unwrap();
     wait_until("the digest", || fx.digest_files() == [format!("{}.md", fx.highest_seq())]);
     // Several more whole ticks: no second run.
     fx.env.wait_whole_ticks(3);

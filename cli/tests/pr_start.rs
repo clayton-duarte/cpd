@@ -27,12 +27,13 @@ struct Repo {
 /// The poller's search answering no pull requests.
 const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#;
 
-/// The env with its config (a one-second tick), a fake `cpd` whose `watch --ensure`
+/// The env with its config (a tick of `common::TICK_SECONDS`), a fake `cpd` whose `watch --ensure`
 /// succeeds, Context `ctx` and Plan `pay` in phase `plan`.
 fn fx() -> Fx {
     let env = TestEnv::new();
     let config = format!(
-        "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[watch]\ntick_seconds = 1\npr_poll_seconds = 1\n[tmux]\nsocket = \"{}\"\n",
+        "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[watch]\ntick_seconds = {}\n[tmux]\nsocket = \"{}\"\n",
+        common::TICK_SECONDS,
         env.tmux_socket()
     );
     fs::write(env.cpd_home().join("config.toml"), config).unwrap();
@@ -169,9 +170,9 @@ impl Fx {
         self.env.git(&other, &["rev-parse", "HEAD"])
     }
 
-    /// A running `cpd watch`, killed when dropped.
+    /// A running `cpd watch`, polling every tick (`common::PR_POLL_EVERY_TICK`), killed when dropped.
     fn engine(&self) -> Engine {
-        let child = self.env.command(CPD).arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let child = self.env.command(CPD).arg("watch").envs([common::PR_POLL_EVERY_TICK]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         let engine = Engine { child: Some(child) };
         wait_until("watch-started", || !self.events("watch-started").is_empty());
         engine

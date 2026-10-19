@@ -44,7 +44,7 @@ impl Drop for Engine {
 }
 
 /// A prepared store: Context `ctx`, Plan `pay` in `dispatch` with its PR `repo` and its Lead Session `lead1`
-/// (`working`, in a live tmux pane so that E2 leaves it alone), a one-second tick and `stuck_job_minutes = 1`.
+/// (`working`, in a live tmux pane so that E2 leaves it alone), a tick of `common::TICK_SECONDS` and `stuck_job_minutes = 1`.
 struct Fx {
     env: TestEnv,
     pane: String,
@@ -55,7 +55,8 @@ fn fx() -> Fx {
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
-            "version = 1\nmachine = \"m1\"\n[watch]\ntick_seconds = 1\npr_poll_seconds = 1\n[inbox]\nstuck_job_minutes = 1\n[tmux]\nsocket = \"{}\"\n",
+            "version = 1\nmachine = \"m1\"\n[watch]\ntick_seconds = {}\n[inbox]\nstuck_job_minutes = 1\n[tmux]\nsocket = \"{}\"\n",
+            common::TICK_SECONDS,
             env.tmux_socket()
         ),
     )
@@ -102,8 +103,9 @@ impl Fx {
         ));
     }
 
+    /// `cpd watch`, polling every tick (`common::PR_POLL_EVERY_TICK`).
     fn start(&self) -> Engine {
-        let child = self.env.command(CPD).arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let child = self.env.command(CPD).arg("watch").envs([common::PR_POLL_EVERY_TICK]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         let engine = Engine(child);
         wait_until("watch-started", || self.env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'watch-started'") == 1);
         engine
