@@ -22,6 +22,7 @@ import { registerUpdates } from "./turns.ts";
 
 export async function start(host: Host, ctx: Ctx, reason: string): Promise<void> {
   if (ctx.mode !== "tui") return;
+  host.rendering.load(host.env, { cwd: ctx.cwd, trusted: ctx.isProjectTrusted() });
   const id = host.env.CPD_SESSION;
   if (id === undefined || id === "") return;
   await stop(host); // a start without a shutdown (never seen) must not leave a second follower behind

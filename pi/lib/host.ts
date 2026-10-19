@@ -3,6 +3,7 @@ import { errorMessage } from "./delivery.ts";
 import { DEFAULT_TIMING, type Schedule, type Spawn, type Timing } from "./follower.ts";
 import type { Ctx, Exec, PiApi } from "./pi.ts";
 import type { Validation } from "./reload.ts";
+import { Rendering } from "./render.ts";
 import type { Run } from "./run.ts";
 
 export type Options = {
@@ -23,6 +24,8 @@ export type Host = {
   readonly env: Record<string, string | undefined>;
   readonly timing: Timing;
   readonly exec: Exec;
+  /** The renderer of every cpd message; its style is loaded at `session_start` (§15.9). */
+  readonly rendering: Rendering;
   /** The active run, from `session_start` to `session_shutdown`. */
   run: Run | undefined;
   /** Aborted at `session_shutdown` (and by the next start): a call in flight then ends instead of outliving the run. */
@@ -51,6 +54,7 @@ export function createHost(pi: PiApi, options: Options): Host {
     env: options.env ?? process.env,
     timing,
     exec: (command, args, o) => pi.exec(command, args, o),
+    rendering: new Rendering(),
     run: undefined,
     abort: new AbortController(),
     ctx: undefined,
