@@ -37,10 +37,12 @@ pub enum Meaning {
     Grounding,
     /// A draft Job, a zero count, a separator, no Plan, no checks, nothing to show.
     Nothing,
+    /// A Session that waits for another agent, not for the User (hs-d303): the waiting dot.
+    Waiting,
 }
 
 impl Meaning {
-    pub const ALL: [Meaning; 8] = [
+    pub const ALL: [Meaning; 9] = [
         Meaning::NotStarted,
         Meaning::InProgress,
         Meaning::Review,
@@ -49,6 +51,7 @@ impl Meaning {
         Meaning::Planning,
         Meaning::Grounding,
         Meaning::Nothing,
+        Meaning::Waiting,
     ];
 
     pub fn label(self) -> &'static str {
@@ -61,6 +64,7 @@ impl Meaning {
             Meaning::Planning => "planning",
             Meaning::Grounding => "grounding",
             Meaning::Nothing => "nothing / n/a / zero",
+            Meaning::Waiting => "waiting on an agent",
         }
     }
 }
@@ -78,6 +82,8 @@ pub fn color(m: Meaning) -> Color {
         Meaning::Planning => Color::Magenta,
         Meaning::Grounding => Color::White,
         Meaning::Nothing => Color::DarkGray,
+        // A calm blue: no other meaning uses blue; it is neither the red of a failure nor the yellow of attention.
+        Meaning::Waiting => Color::Blue,
     }
 }
 
@@ -197,6 +203,8 @@ pub const SPINNER: [&str; 9] =
 pub const IDLE: &str = SPINNER[0];
 /// A stopped Session: the first frame, drawn dim.
 pub const STOPPED: &str = IDLE;
+/// A Session that waits for another agent (hs-d303): `nf-md-circle_slice_4`, the half circle, in `Meaning::Waiting`.
+pub const WAITING: &str = SPINNER[4];
 /// A Session that needs the User (coloured by case): the last frame.
 pub const NEEDS_YOU: &str = SPINNER[8];
 
@@ -210,7 +218,7 @@ pub fn frame(now: SystemTime) -> usize {
 }
 
 /// The tree's dot (commands.md §17): [`NEEDS_YOU`] red, yellow, magenta or white; [`SPINNER`] (frame `frame`) in the
-/// terminal's foreground when working; [`IDLE`] in the terminal's foreground; [`STOPPED`] dim. An `archived` row keeps its glyph, never
+/// terminal's foreground when working; [`WAITING`] in the colour of [`Meaning::Waiting`]; [`IDLE`] in the terminal's foreground; [`STOPPED`] dim. An `archived` row keeps its glyph, never
 /// animated (the first frame when working), in the colour of [`Meaning::Nothing`].
 pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
     let (glyph, style) = match dot {
@@ -219,6 +227,7 @@ pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
         Dot::Magenta => (NEEDS_YOU, Style::new().fg(Color::Magenta)),
         Dot::White => (NEEDS_YOU, Style::new().fg(Color::White)),
         Dot::Working => (SPINNER[if archived { 0 } else { frame % SPINNER.len() }], Style::new()),
+        Dot::Waiting => (WAITING, fg(Meaning::Waiting)),
         Dot::Idle => (IDLE, Style::new()),
         Dot::Stopped => (STOPPED, Style::new().add_modifier(Modifier::DIM)),
     };
@@ -280,6 +289,7 @@ mod tests {
             (Meaning::Planning, Color::Magenta),
             (Meaning::Grounding, Color::White),
             (Meaning::Nothing, Color::DarkGray),
+            (Meaning::Waiting, Color::Blue),
         ];
         assert_eq!(table.map(|(m, _)| m), Meaning::ALL);
         for (m, c) in table {
@@ -333,6 +343,14 @@ mod tests {
             assert_eq!(dot_span(dot, 0, false), Span::styled(NEEDS_YOU, Style::new().fg(colour)), "{dot:?}");
         }
         assert_eq!(dot_span(Dot::Idle, 0, false), Span::styled(IDLE, Style::new()), "the terminal's foreground");
+        assert_eq!(
+            dot_span(Dot::Waiting, 0, false),
+            Span::styled(WAITING, Style::new().fg(Color::Blue)),
+            "a calm blue: not red, not the yellow of attention, and not a filled dot"
+        );
+        assert_ne!(WAITING, NEEDS_YOU);
+        assert_ne!(color(Meaning::Waiting), color(Meaning::Failed));
+        assert_ne!(color(Meaning::Waiting), color(Meaning::Review));
         assert_eq!(dot_span(Dot::Stopped, 0, false), Span::styled(STOPPED, Style::new().add_modifier(Modifier::DIM)), "dim, no colour");
     }
 
@@ -348,7 +366,7 @@ mod tests {
 
     #[test]
     fn every_dot_glyph_is_one_cell_wide() {
-        for glyph in SPINNER.into_iter().chain([NEEDS_YOU, IDLE, STOPPED]) {
+        for glyph in SPINNER.into_iter().chain([NEEDS_YOU, WAITING, IDLE, STOPPED]) {
             assert_eq!(Span::raw(glyph).width(), 1, "U+{:X}", glyph.chars().next().unwrap() as u32);
             assert_eq!(glyph.chars().count(), 1, "{glyph:?}");
         }
@@ -382,6 +400,7 @@ mod tests {
             (Dot::Yellow, NEEDS_YOU),
             (Dot::Magenta, NEEDS_YOU),
             (Dot::White, NEEDS_YOU),
+            (Dot::Waiting, WAITING),
             (Dot::Idle, IDLE),
             (Dot::Stopped, STOPPED),
         ] {

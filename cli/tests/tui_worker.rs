@@ -177,6 +177,18 @@ fn the_roles_are_in_the_reference_colours() {
     assert!(row_with("→ bash").contains("\x1b[38;5;3m→ bash"), "tool: {raw:?}");
 }
 
+/// A Worker that asked its Lead waits for an agent, not for the User (hs-d303): the foot reads `waiting <label>`.
+#[test]
+fn the_foot_of_a_worker_waiting_for_its_lead_reads_waiting_and_its_label() {
+    let env = env();
+    let file = session_file(&env);
+    populate(&env, Some(&file));
+    env.sql("UPDATE sessions SET state = 'waiting', state_label = 'cpd: question to the Lead' WHERE id = 'w1';");
+    let pane = Pane::start(&env, 60, 12);
+    let screen = pane.wait("the foot", |s| s.iter().any(|r| r.contains("test result")));
+    assert_eq!(screen.last().map(String::as_str), Some(" api-a1 running · waiting cpd: question to the Lead"), "{screen:?}");
+}
+
 #[test]
 fn an_appended_entry_is_followed_at_the_end() {
     let env = env();

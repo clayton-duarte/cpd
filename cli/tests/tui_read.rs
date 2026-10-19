@@ -404,7 +404,7 @@ const T0: &str = "2026-01-04T00:00:00.000Z";
 /// (own state first, hs-d183).
 ///
 /// - `hot`: `red` (a dialog, red), `yel` (the Lead has a `pr-ready` item of its Plan; its fork `f-yel` is working and shows
-///   no item of the Plan), `mag` (a magenta dialog), `whi` (`unread`), `blk` (blocked, no item), `wrk` (working, with items: still the spinner), `idl` (idle, with an
+///   no item of the Plan), `mag` (a magenta dialog), `whi` (`unread`), `blk` (blocked, no item), `wai` (waiting, no item), `wrk` (working, with items: still the spinner), `idl` (idle, with an
 ///   `unread` and a red `dialog`: the most urgent), `stp`;
 /// - `calm`: a working and an idle Lead; `dead`: a stopped one; `ice`: no Plan, no Session.
 #[test]
@@ -421,6 +421,7 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
         ("mag", "hot", "plan", "blocked"),
         ("whi", "hot", "dispatch", "idle"),
         ("blk", "hot", "dispatch", "blocked"),
+        ("wai", "hot", "dispatch", "waiting"),
         ("wrk", "hot", "dispatch", "working"),
         ("idl", "hot", "dispatch", "idle"),
         ("stp", "hot", "dispatch", "stopped"),
@@ -431,7 +432,7 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
     for (n, (plan, context, phase, state)) in plans.into_iter().enumerate() {
         let pr = (plan == "yel").then_some((20, "open", "passed"));
         s += &plan_row(plan, context, phase, &format!("l-{plan}"), &at(n as u32), pr);
-        let label = (state == "blocked").then_some("cpd: asking");
+        let label = matches!(state, "blocked" | "waiting").then_some("cpd: asking");
         s += &session_row(&format!("l-{plan}"), "lead", context, plan, None, state, label, &at(n as u32));
     }
     s += &session_row("f-yel", "lead", "hot", "yel", None, "working", None, "2026-01-02T00:01:00.000Z");
@@ -447,6 +448,8 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
     let all = dots(&mut store);
     assert!(all.iter().all(|(_, d)| !d.needs_you()), "no item, never a filled dot: {all:?}");
     assert_eq!((dot(&all, "l-red"), dot(&all, "l-wrk"), dot(&all, "l-idl"), dot(&all, "l-stp")), (Dot::Idle, Dot::Working, Dot::Idle, Dot::Stopped));
+    // A Lead waiting for an agent (hs-d303) shows the waiting dot: not the idle glyph, and never red.
+    assert_eq!(dot(&all, "l-wai"), Dot::Waiting);
 
     inbox(
         &mut store,
@@ -473,6 +476,7 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
         ("l-whi", Dot::White),
         ("l-wrk", Dot::Working), // working shows the spinner, not its red dialog
         ("l-blk", Dot::Idle),
+        ("l-wai", Dot::Waiting), // waiting with no item: its own calm dot, not idle and not red
         ("l-idl", Dot::Red),
         ("l-stp", Dot::Stopped),
         ("l-ship", Dot::Working),

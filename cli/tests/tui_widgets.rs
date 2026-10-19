@@ -928,6 +928,7 @@ fn the_session_dots_are_listed_in_their_colours() {
     let frames: String = (0..palette::SPINNER.len() as u16).map(|i| buf[(working.0 + i, working.1)].symbol().to_string()).collect();
     assert_eq!(frames, palette::SPINNER.concat());
     for (text, glyph, dot) in [
+        ("waiting:", palette::WAITING, Dot::Waiting),
         ("idle, nothing needed", palette::IDLE, Dot::Idle),
         ("pi stopped", palette::STOPPED, Dot::Stopped),
         ("red:", palette::NEEDS_YOU, Dot::Red),
@@ -941,8 +942,21 @@ fn the_session_dots_are_listed_in_their_colours() {
         assert_eq!(cell.symbol(), want.content, "{text}");
         assert_eq!(cell.fg, want.style.fg.unwrap_or(Color::Reset), "{text}");
     }
-    let precedence = format!("red > yellow > magenta > white > {} > {} > {}", palette::SPINNER[0], palette::IDLE, palette::STOPPED);
+    let precedence = format!(
+        "red > yellow > magenta > white > {} > {} > {} > {}",
+        palette::SPINNER[0],
+        palette::WAITING,
+        palette::IDLE,
+        palette::STOPPED
+    );
     find_after(&buf, dots, &precedence);
+    let red = row(&buf, find_after(&buf, dots, "red:").1);
+    assert!(red.contains("a dialog in dispatch or deploy, a stuck Job, an engine error, your own failing or changed pull request"), "{red}");
+    assert!(!red.contains("Escalation") && !red.contains("or pr"), "{red}");
+    let yellow = row(&buf, find_after(&buf, dots, "yellow:").1);
+    assert!(yellow.contains("yellow: ready to merge, review requested"), "{yellow}");
+    let waiting = row(&buf, find_after(&buf, dots, "waiting:").1);
+    assert!(waiting.contains("an agent waits for another agent"), "{waiting}");
 }
 
 #[test]

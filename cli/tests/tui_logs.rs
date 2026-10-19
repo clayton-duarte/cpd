@@ -268,7 +268,7 @@ fn the_popup_is_sized_like_the_legends_and_at_most_80_percent_of_the_client() {
     assert_eq!(small[3], " logs ");
 }
 
-/// The StatusBar in a one-row window, with a fake `tmux` on `PATH`: `list-clients` says one client of 200x60,
+/// The StatusBar in a one-row window, with a fake `tmux` on `PATH`: `list-clients` says one client of 200x80,
 /// `display-popup` does nothing, and the rest is the real tmux.
 fn statusbar_with_fake_tmux(env: &TestEnv) -> String {
     let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
@@ -276,7 +276,7 @@ fn statusbar_with_fake_tmux(env: &TestEnv) -> String {
     env.fake(
         "tmux",
         &format!(
-            "case \"$*\" in\n *list-clients*) echo '100 200 60';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac",
+            "case \"$*\" in\n *list-clients*) echo '100 200 80';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac",
             real.trim()
         ),
     );

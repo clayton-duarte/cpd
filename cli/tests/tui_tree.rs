@@ -12,7 +12,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use cpd_core::store::Store;
-use cpd_tui::palette::{IDLE, NEEDS_YOU, SPINNER, STOPPED};
+use cpd_tui::palette::{IDLE, NEEDS_YOU, SPINNER, STOPPED, WAITING};
 use nix::fcntl::{Flock, FlockArg};
 
 const WORKING: &str = SPINNER[0];
@@ -646,6 +646,18 @@ fn a_refused_command_shows_its_error_until_the_next_n_x_or_click() {
     assert!(pane.footer_has("no_cockpit"), "an arrow keeps it");
     pane.keys(&["n", "Escape"]);
     pane.wait("the note gone", |_| !pane.footer_has("no_cockpit"));
+}
+
+#[test]
+fn a_session_waiting_for_an_agent_shows_the_waiting_dot_and_not_the_idle_one() {
+    let env = env();
+    populate(&env);
+    let pane = Pane::start(&env, 46, 14);
+    pane.ready();
+    env.cpd(&["session", "state", "waiting", "--label", "cpd: Worker question", "--session", "l-sketch"]).ok();
+    env.cpd(&["session", "state", "working", "--session", "f-idle"]).ok();
+    pane.wait("the waiting Lead", |s| s.iter().any(|r| r.contains(&format!("├ {WAITING} sketch"))));
+    assert!(!pane.screen().iter().any(|r| r.contains(&format!("├ {IDLE} sketch"))), "not the idle glyph");
 }
 
 #[test]
