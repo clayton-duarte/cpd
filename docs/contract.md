@@ -87,7 +87,6 @@ $CPD_HOME/
   archive/contexts/<context>/     an old git store of a Context, moved here by migration 0007 (§4.5); nothing reads it
   locks/
     watch.lock                    held by the one `cpd watch` (§6.6)
-    repo-<sha1>.lock              per-repo lock: merges, `pr open`, `pr rebase`, `pr push`, and the clean-up after a PR's merge (§7.2, §7.4, §7.6); sha1 of the repo's git common dir realpath
     attempt-<plan>--<attempt>.lock  the driver lock: taken by the Attempt's starter, inherited by its driver, removed when the Attempt ends (§3.4)
     pr-poll.lock                  held by `pr poll` for the whole poll (§7.6, hs-d96)
     distill-<context>.lock        held by the Context's one distill run, `context distill`, for its whole life (§4.6)
