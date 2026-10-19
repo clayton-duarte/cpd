@@ -182,7 +182,7 @@ As above: scratch `CPD_HOME` under `/tmp` with the `building-cpd` records of `~/
 | 8 | harness | 41.8 s | 11.8 KB | 1 (hs-d89) | $0.074 |
 | 9 | harness | 46.3 s | 13.7 KB | **0** | $0.081 |
 
-First pass valid: runs 2, 3, 5, 6, 9 = **5 of 9**; no stray id, no run over 32 KB (largest file about 25 KB with the 12 KB index); the digests have one `## Small and one-off` section each. Cost: about **$0.07–0.08 warm, $0.27–0.29 cold**, against $0.065 and $0.25 for the D-a prompt (`d2-repair`): the checklist adds about 12k input tokens. Time 29–47 s a run, as before. The valid cpd runs 2 and 3 are the shipped command end to end.
+First pass valid: runs 2, 3, 5, 6, 9 = **5 of 9**; no stray id, no run over 32 KB (largest file about 26 KB with the 12 KB index); the digests have one `## Small and one-off` section each. Cost: about **$0.07–0.08 warm, $0.27–0.29 cold**, against $0.065 and $0.25 for the D-a prompt (`d2-repair`): the checklist adds about 12k input tokens. Time 29–47 s a run, as before. The valid cpd runs 2 and 3 are the shipped command end to end.
 
 What is still missed is the same kind as before: one-off routing and owner decisions (hs-d81, hs-d89, hs-d106, hs-d41, hs-d51, hs-d132), 1–3 of them a run.
 
@@ -200,7 +200,7 @@ The numbers before the final prompt are of earlier versions of it; the final is 
 | e | "the sections are the checklist, regrouped" | 2, 1, 1, 3 (0 of 4) |
 | f | **one bullet per line**, 100 bytes | 0, 1, 0, 0, 1, 1 (3 of 6); two texts of 18 and 20 KB: file 30.2 and 32.2 KB, at the limit |
 | g | bullet of 80 bytes | 2, 0, 0, 1 (2 of 4) |
-| h | + the closing pass again, now over the bullets | 0, 0, 1, 0, 0, 1, 0, 2 (5 of 8 by citations); one of the zeros was a 24.9 KB text, **36.9 KB** with the index: invalid, and not repairable (too big) |
+| h | + the closing pass again, now over the bullets | 0, 0, 1, 0, 0, 0, 1, 2 (5 of 8 by citations); one of the zeros was a 24.9 KB text, **36.9 KB** with the index: invalid, and not repairable (too big) |
 | **final** | + the byte budget in the checklist and rule 5 | the table above: 5 of 9 valid first pass |
 
 What the runs show:
