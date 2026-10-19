@@ -1,5 +1,8 @@
 //! `pr edit` (commands.md §9.5, contract §3.8): changes a `waiting` PR's repo,
-//! base or needs before the lock. The plan fingerprint changes with them.
+//! base or needs before the lock. The plan fingerprint changes with them. With
+//! `--title` it also changes a PR's own title in any phase and any status but
+//! `merged` and `cancelled` (hs-d285): the title is not a Locked field and not in
+//! the fingerprint.
 
 use std::collections::BTreeMap;
 
@@ -22,6 +25,14 @@ struct Edits {
     repo: Option<String>,
     base: Option<String>,
     needs: Option<Vec<String>>,
+    title: Option<String>,
+}
+
+impl Edits {
+    /// Whether a flag other than `--title` was given: only these need a `waiting` PR before the lock.
+    fn others(&self) -> bool {
+        self.repo.is_some() || self.base.is_some() || self.needs.is_some()
+    }
 }
 
 enum Decision {
@@ -32,8 +43,8 @@ enum Decision {
 
 pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
-    if args.repo.is_none() && args.base.is_none() && args.needs.is_none() && !args.no_needs {
-        return Err(CpdError::new(ErrorCode::NothingToEdit, "Nothing to edit: pass --repo, --base, --needs or --no-needs."));
+    if args.repo.is_none() && args.base.is_none() && args.needs.is_none() && !args.no_needs && args.title.is_none() {
+        return Err(CpdError::new(ErrorCode::NothingToEdit, "Nothing to edit: pass --repo, --base, --needs, --no-needs or --title."));
     }
     let needs = match (&args.needs, args.no_needs) {
         (Some(keys), _) => Some(sorted_needs(keys)?),
@@ -44,13 +55,15 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
 
     // The phase, the PR and its status first; then git on the new repo and base.
-    let stored = env.store.read(|conn| waiting_pr(conn, &plan, &key))?;
+    let wants_others = args.repo.is_some() || args.base.is_some() || needs.is_some();
+    let wants_title = args.title.is_some();
+    let stored = env.store.read(|conn| editable_pr(conn, &plan, &key, wants_title, wants_others))?.0;
     let repo = args.repo.as_deref().map(main_worktree).transpose()?;
     if repo.is_some() || args.base.is_some() {
         let in_repo = repo.clone().unwrap_or_else(|| stored.repo.clone().into());
         resolve_base(&in_repo, Some(args.base.as_deref().unwrap_or(&stored.base)))?;
     }
-    let edits = Edits { repo: repo.as_ref().map(|r| r.display().to_string()), base: args.base, needs };
+    let edits = Edits { repo: repo.as_ref().map(|r| r.display().to_string()), base: args.base, needs, title: args.title.map(|t| t.to_string()) };
 
     let decision = env.store.read(|conn| decide(conn, &plan, &key, &edits))?;
     let (pr, fields, already) = match decision {
@@ -62,7 +75,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
             env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, &edits)? {
                 Decision::Already(pr) => Ok((pr, Vec::new(), true)),
                 Decision::Update { before, after, fields } => {
-                    update(tx, &plan, &before, &after)?;
+                    update(tx, &plan, &before, &after, edits.title.as_deref())?;
                     let text = format!("PR {key} of Plan {plan} edited ({}). Next: cpd plan render --plan {plan}", fields.join(", "));
                     append(tx, NewEvent::new(Kind::PrEdited, text, json!({"pr": key, "fields": fields})).plan(plan.clone()))?;
                     Ok((after, fields, false))
@@ -77,27 +90,38 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     Ok(Output::success(out))
 }
 
-/// The PR `key`, which must be editable: the Plan in `grounding` or `plan`
-/// (`pr_locked`), the PR `waiting` (`illegal_transition`).
-fn waiting_pr(conn: &Connection, plan: &PlanId, key: &PrKey) -> Result<PrSpec, CpdError> {
+/// The PR `key` and its stored title, which must be editable. With `title`, the PR is not
+/// `merged` or `cancelled` (`pr_ended`: its title is history). With `others` (a flag other than
+/// `--title`), the Plan is in `grounding` or `plan` (`pr_locked`) and the PR `waiting`
+/// (`illegal_transition`); `--title` alone meets neither rule.
+fn editable_pr(conn: &Connection, plan: &PlanId, key: &PrKey, title: bool, others: bool) -> Result<(PrSpec, Option<String>), CpdError> {
     let prs = load_prs(conn, plan)?;
     let pr = find_pr(&prs, plan, key)?;
-    let phase = plan_phase(conn, plan)?;
-    if !matches!(phase, Phase::Grounding | Phase::Plan) {
-        return Err(pr_locked(plan, phase, COMMAND));
-    }
-    if pr.status != "waiting" {
-        return Err(CpdError::new(ErrorCode::IllegalTransition, format!("PR {key} is {}: only a waiting PR is edited.", pr.status))
+    if title && matches!(pr.status.as_str(), "merged" | "cancelled") {
+        return Err(CpdError::new(ErrorCode::PrEnded, format!("PR {key} of Plan {plan} is {}: its title is history.", pr.status))
             .with("plan", plan.as_str())
             .with("pr", key.as_str())
-            .with("from", pr.status.as_str())
-            .with("to", "waiting"));
+            .with("status", pr.status.as_str()));
     }
-    Ok(pr.clone())
+    if others {
+        let phase = plan_phase(conn, plan)?;
+        if !matches!(phase, Phase::Grounding | Phase::Plan) {
+            return Err(pr_locked(plan, phase, COMMAND));
+        }
+        if pr.status != "waiting" {
+            return Err(CpdError::new(ErrorCode::IllegalTransition, format!("PR {key} is {}: only a waiting PR is edited.", pr.status))
+                .with("plan", plan.as_str())
+                .with("pr", key.as_str())
+                .with("from", pr.status.as_str())
+                .with("to", "waiting"));
+        }
+    }
+    let stored = conn.query_row("SELECT title FROM prs WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
+    Ok((pr.clone(), stored))
 }
 
 fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Result<Decision, CpdError> {
-    let before = waiting_pr(conn, plan, key)?;
+    let (before, stored_title) = editable_pr(conn, plan, key, edits.title.is_some(), edits.others())?;
     let mut after = before.clone();
     if let Some(repo) = &edits.repo {
         after.repo = repo.clone();
@@ -116,8 +140,14 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Resul
                 .with("cycle", cycle));
         }
     }
-    let fields: Vec<&'static str> = [("repo", before.repo != after.repo), ("base", before.base != after.base), ("needs", before.needs != after.needs)]
-        .into_iter()
+    let title_changed = edits.title.as_ref().is_some_and(|t| stored_title.as_ref() != Some(t));
+    let fields: Vec<&'static str> = [
+        ("repo", before.repo != after.repo),
+        ("base", before.base != after.base),
+        ("needs", before.needs != after.needs),
+        ("title", title_changed),
+    ]
+    .into_iter()
         .filter_map(|(name, changed)| changed.then_some(name))
         .collect();
     if fields.is_empty() {
@@ -127,8 +157,15 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Resul
 }
 
 /// Writes the changed `prs` columns, and deletes and inserts `pr_needs` rows
-/// to match (§4.4 allows deletion in `grounding` and `plan`).
-fn update(tx: &Connection, plan: &PlanId, before: &PrSpec, after: &PrSpec) -> Result<(), CpdError> {
+/// to match (§4.4 allows deletion in `grounding` and `plan`). `title` is the new
+/// title when it was given (a PR that has it already is not touched).
+fn update(tx: &Connection, plan: &PlanId, before: &PrSpec, after: &PrSpec, title: Option<&str>) -> Result<(), CpdError> {
+    if let Some(title) = title {
+        tx.execute(
+            "UPDATE prs SET title = ?1 WHERE plan = ?2 AND key = ?3 AND title IS NOT ?1 AND status NOT IN ('merged', 'cancelled')",
+            [title, plan.as_str(), after.key.as_str()],
+        )?;
+    }
     if (&before.repo, &before.base) != (&after.repo, &after.base) {
         tx.execute(
             "UPDATE prs SET repo = ?1, base = ?2 WHERE plan = ?3 AND key = ?4 AND status = 'waiting'",

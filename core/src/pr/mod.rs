@@ -30,7 +30,7 @@ mod view;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::args::{PlanArg, PrArg};
+use crate::args::{PlanArg, PrArg, PrTitle};
 use crate::config::{self, Config};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, HookOutcome, Operation, run_hook};
@@ -89,6 +89,9 @@ pub struct AddArgs {
     /// The PR's repo: a path inside it
     #[arg(long, value_name = "path")]
     repo: PathBuf,
+    /// The PR's own title: names its change; 1-72 characters on one line
+    #[arg(long, value_name = "text")]
+    title: PrTitle,
     /// The branch the pull request targets [default: origin's HEAD branch, else main]
     #[arg(long, value_name = "branch")]
     base: Option<String>,
@@ -119,6 +122,9 @@ pub struct EditArgs {
     /// Remove every need
     #[arg(long = "no-needs")]
     no_needs: bool,
+    /// The new title, in any phase while the PR is not merged or cancelled; 1-72 characters on one line
+    #[arg(long, value_name = "text")]
+    title: Option<PrTitle>,
     #[command(flatten)]
     plan: PlanArg,
 }

@@ -207,6 +207,41 @@ impl From<Title> for Text {
     }
 }
 
+/// A PR's own title (`pr add`/`pr edit` `--title`, contract §2.2 PR, hs-d285): 1 to 72
+/// characters on one line, no control characters; else `usage` (commands.md §9.4). The
+/// squash merge makes it the commit subject on `main`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrTitle(String);
+
+impl PrTitle {
+    pub const MAX_CHARS: usize = 72;
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl FromStr for PrTitle {
+    type Err = CpdError;
+    fn from_str(s: &str) -> Result<PrTitle, CpdError> {
+        let chars = s.chars().count();
+        if chars == 0 || chars > PrTitle::MAX_CHARS || s.chars().any(char::is_control) {
+            return Err(CpdError::new(
+                ErrorCode::Usage,
+                format!("A PR title must be 1 to {} characters on one line, with no control characters.", PrTitle::MAX_CHARS),
+            )
+            .with("chars", chars));
+        }
+        Ok(PrTitle(s.to_owned()))
+    }
+}
+
+impl fmt::Display for PrTitle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// A display name (`--name`, `session rename`): 1 to 80 characters, no control
 /// characters; else `invalid_name` (exit 2) (commands.md §1.5).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -252,6 +287,16 @@ mod tests {
         }
         for bad in ["", "a".repeat(201).as_str(), "a\nb", "a\tb", "a\0b", "a\u{7f}b"] {
             assert_eq!(bad.parse::<Title>().unwrap_err().code(), ErrorCode::Usage, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_pr_title_is_1_to_72_characters_on_one_line() {
+        for ok in ["a", "é".repeat(72).as_str(), "a b"] {
+            assert_eq!(ok.parse::<PrTitle>().unwrap().as_str(), ok);
+        }
+        for bad in ["", "a".repeat(73).as_str(), "a\nb", "a\r\nb", "a\tb", "a\0b", "a\u{7f}b"] {
+            assert_eq!(bad.parse::<PrTitle>().unwrap_err().code(), ErrorCode::Usage, "{bad:?}");
         }
     }
 
