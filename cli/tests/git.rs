@@ -442,11 +442,26 @@ fn other_tables_are_ignored() {
 
 #[test]
 fn a_hook_is_killed_with_its_process_group_at_the_timeout() {
-    let h = hooks("pre-merge = \"(sleep 1; touch survivor.txt) & wait\"\n");
-    let started = Instant::now();
+    let h = hooks("pre-merge = \"(sleep 1; touch survivor.txt) & echo $! > pid; wait\"\n");
     let result = h.run_for(Hook::PreMerge, Duration::from_millis(300));
     assert_eq!(result.outcome, HookOutcome::Error(HookError::Timeout));
-    assert!(started.elapsed() < Duration::from_millis(900), "{:?}", started.elapsed());
+    // The kill is shown by an observable fact, not the wall clock: the background child
+    // (its pid was written first) is dead, a zombie counting as dead. If the timeout fired
+    // before the pid was written, the child had not started its sleep yet.
+    if let Ok(pid) = std::fs::read_to_string(h.repo.join("pid")) {
+        let pid = pid.trim().to_owned();
+        let state = || {
+            let out = std::process::Command::new("ps").args(["-o", "stat=", "-p", &pid]).output().unwrap();
+            String::from_utf8(out.stdout).unwrap().trim().to_owned()
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !(state().is_empty() || state().starts_with('Z')) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let last = state();
+        assert!(last.is_empty() || last.starts_with('Z'), "the background child {pid} outlived the kill (state {last:?})");
+    }
+    // Long enough for the child's own sleep to have ended had it survived.
     std::thread::sleep(Duration::from_millis(1500));
     assert!(!h.repo.join("survivor.txt").exists(), "the background child outlived the kill");
 }

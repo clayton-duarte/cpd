@@ -272,6 +272,23 @@ fn list_filters_and_derives_place_and_leads() {
     refused(&env.cpd(&["session", "list", "--plan", "Bad"]), "invalid_plan_id", 2);
 }
 
+/// sql-F5, commands-F4: the Plan-Lead lookup is a join: a Session that leads two
+/// Plans is still one row, and a Session that leads none is not a Plan's Lead.
+#[test]
+fn list_gives_a_session_leading_two_plans_one_row() {
+    let env = TestEnv::new();
+    setup(&env);
+    exec_sql(
+        &env,
+        "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('again', 'ctx', 'Again', 'grounding', 'lead1', 't')",
+    );
+    let sessions = env.cpd(&["session", "list"]).ok()["sessions"].clone();
+    let sessions = sessions.as_array().unwrap();
+    let leads: Vec<(&str, bool)> =
+        sessions.iter().map(|s| (s["id"].as_str().unwrap(), s["plan_lead"].as_bool().unwrap())).collect();
+    assert_eq!(leads, [(MANAGER, false), (LEAD1, true), (LEAD2, true), (WORKER, false)]);
+}
+
 #[test]
 fn show_adds_created_at_registered_event_and_open_escalations() {
     let env = TestEnv::new();
@@ -683,6 +700,34 @@ fn open_and_park_keep_at_most_one_placeholder_only_in_the_slot() {
         .collect();
     let expected = [(LEAD1, "chat"), (LEAD2, "chat"), (LEAD1, "parked"), (LEAD2, "parked"), (LEAD1, "chat")];
     assert_eq!(moved, expected.map(|(s, p)| (s.to_owned(), p.to_owned())));
+}
+
+#[test]
+fn open_writes_session_moved_before_the_rename_so_a_failing_rename_keeps_the_swap_recorded() {
+    let env = TestEnv::new();
+    setup(&env);
+    fake_cpd(&env);
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
+    cockpit(&env);
+    env.cpd(&["session", "open", LEAD1]).ok();
+
+    // A tmux that fails `rename-window` and runs everything else on the real one.
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|d| d.join("tmux"))
+        .find(|p| p.is_file())
+        .expect("a tmux on PATH");
+    env.fake("tmux", &format!("case \"$*\" in *rename-window*) echo 'rename-window: refused' >&2; exit 1;; esac\nexec '{}' \"$@\"", real.display()));
+
+    let run = env.cpd(&["session", "open", LEAD2]);
+    refused(&run, "tmux_failed", 1);
+    assert_eq!(slot(&env).session, LEAD2, "the swap happened");
+    let moved: Vec<(String, String)> = events(&env, "session-moved")
+        .iter()
+        .map(|e| (e["session"].as_str().unwrap().to_owned(), e["data"]["place"].as_str().unwrap().to_owned()))
+        .collect();
+    let expected = [(LEAD1, "chat"), (LEAD2, "chat"), (LEAD1, "parked")];
+    assert_eq!(moved, expected.map(|(s, p)| (s.to_owned(), p.to_owned())));
+    assert_eq!((show(&env, LEAD1)["place"].clone(), show(&env, LEAD2)["place"].clone()), (json!("parked"), json!("chat")));
 }
 
 #[test]
