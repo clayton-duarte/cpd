@@ -11,9 +11,6 @@ use std::fs;
 use std::time::Duration;
 
 use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until};
-use cpd_core::error::CpdError;
-use cpd_core::home::CpdHome;
-use cpd_core::store::Store;
 use cpd_tui::palette::SPINNER;
 use serde_json::json;
 
@@ -597,18 +594,13 @@ fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_re
     // another Plan starts at its corner; coming back shows the chart where it was left, with nothing selected
     env.sql(&in_chat("ctx", "side", "lead-side"));
     screen_when(&env, &pane, "the other Plan", |s| s.len() > 2 && s[2].contains("other"));
-    sql(&env, &in_chat("ctx", "ship", "lead-ship"));
+    env.sql(&in_chat("ctx", "ship", "lead-ship"));
     // a frame reaches the pane in more than one write (the view's stdout flushes every 1024 bytes), so a capture can
     // show the first rows of the chart and nothing below: wait for the whole frame, and compare the last capture
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let back = loop {
+    let back = common::wait_some("the chart where it was left", common::WAIT, || {
         let now = screen(&env, &pane);
-        if now == scrolled || Instant::now() >= deadline {
-            break now;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    };
-    assert_eq!(back, scrolled, "{}", back.join("\n"));
+        if now == scrolled { Ok(now) } else { Err(now.join("\n")) }
+    });
     assert_ne!(back, top);
     assert!(!selected(&tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane])), "a pill is selected");
 }

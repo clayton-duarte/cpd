@@ -819,19 +819,14 @@ fn a_git_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout() {
     // A real git whose alias runs a sleeper in git's process group, and waits for it.
     env.git(&repo, &["config", "alias.hang", &format!("!sleep {} & echo $! > '{}'; wait", common::SLEEP_SECONDS, pidfile.display())]);
 
-    let started = Instant::now();
+    // Without the deadline the alias would sleep SLEEP_SECONDS and succeed: the error is the deadline's.
     let err = cpd_core::git::run::run(&repo, &["hang"]).unwrap_err();
 
-    assert!(started.elapsed() < Duration::from_secs(4), "took {:?}", started.elapsed());
     assert_eq!(err.code(), ErrorCode::ToolTimeout, "{err:?}");
     let d = err.details();
     assert_eq!(d["tool"], "git");
     assert_eq!(d["deadline_seconds"], 1);
     assert_eq!(d["argv"], serde_json::json!(["git", "-C", repo.display().to_string(), "hang"]));
     let pid: i32 = fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
-    let gone = Instant::now() + Duration::from_secs(5);
-    while running(pid) && Instant::now() < gone {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert!(!running(pid), "git's child {pid} outlived the deadline");
+    common::wait_until("git's child to die with its process group", || !running(pid));
 }

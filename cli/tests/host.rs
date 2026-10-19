@@ -427,49 +427,40 @@ fn running(pid: i32) -> bool {
     std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| s.rsplit(") ").next().is_some_and(|r| !r.starts_with('Z')))
 }
 
-/// Restores `PATH` and drops the tmux deadline override when the test ends, even on a panic.
-struct Restore(Option<std::ffi::OsString>);
-
-impl Drop for Restore {
-    fn drop(&mut self) {
-        // SAFETY: still under TMUX_ENV (the Server is dropped after this guard).
-        unsafe {
-            match self.0.take() {
-                Some(path) => std::env::set_var("PATH", path),
-                None => std::env::remove_var("PATH"),
-            }
-            std::env::remove_var("CPD_TEST_DEADLINE_TMUX");
-        }
-    }
-}
-
 /// engine-W4: a tmux call that hangs (a fake `tmux` first on `PATH` that sleeps) is
 /// killed at its deadline with its whole process group, and fails `tool_timeout`. The
-/// deadline is shortened to 1 s by `CPD_TEST_DEADLINE_TMUX` (read by a debug build only).
+/// deadline is shortened to 1 s by `CPD_TEST_DEADLINE_TMUX`, which a debug build reads
+/// from its environment, and the wrapper finds `tmux` on `PATH`: this test runs itself
+/// again in a child process born with both, so no other test sees them.
 #[test]
 fn a_tmux_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout() {
-    let s = server();
-    let pidfile = s.env.root().join("sleep.pid");
-    s.env.fake("tmux", &format!("sleep {SLEEP_SECONDS} & echo $! > '{}'; wait", pidfile.display()));
-    let old = std::env::var_os("PATH");
-    let mut path = vec![s.env.bin()];
-    path.extend(std::env::split_paths(old.as_deref().unwrap_or_default()));
-    // SAFETY: serialised by TMUX_ENV, held by `s` for the whole test.
-    unsafe {
-        std::env::set_var("PATH", std::env::join_paths(path).unwrap());
-        std::env::set_var("CPD_TEST_DEADLINE_TMUX", "1");
+    const NAME: &str = "a_tmux_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout";
+    if std::env::var_os("CPD_TEST_DEADLINE_TMUX").is_none() {
+        let env = TestEnv::new();
+        let pidfile = env.root().join("sleep.pid");
+        env.fake("tmux", &format!("sleep {SLEEP_SECONDS} & echo $! > '{}'; wait", pidfile.display()));
+        let mut path = vec![env.bin()];
+        path.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child
+            .args(["--exact", NAME, "--nocapture"])
+            .env("PATH", std::env::join_paths(path).unwrap())
+            .env("CPD_TEST_DEADLINE_TMUX", "1");
+        let out = common::output(&mut child).unwrap();
+        let printed = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success() && printed.contains("1 passed"), "{printed}");
+        // The sleeper would run SLEEP_SECONDS: its death is the group kill, not its own end.
+        let pid: i32 = std::fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
+        wait_until("the fake tmux's child to die", || !running(pid));
+        return;
     }
-    let _restore = Restore(old);
-
-    let started = Instant::now();
+    let s = server();
+    // Without the deadline the fake would sleep SLEEP_SECONDS and succeed: the error is the deadline's.
     let err = s.tmux.server_running().unwrap_err();
 
-    assert!(started.elapsed() < Duration::from_secs(4), "took {:?}", started.elapsed());
     assert_eq!(err.code(), ErrorCode::ToolTimeout, "{err:?}");
     let d = err.details();
     assert_eq!(d["tool"], "tmux");
     assert_eq!(d["deadline_seconds"], 1);
     assert_eq!(d["argv"], serde_json::json!(s.tmux.argv(&["list-sessions".into(), "-F".into(), "#{session_id}".into()])));
-    let pid: i32 = std::fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
-    wait_for("the fake tmux's child to die", || !running(pid));
 }

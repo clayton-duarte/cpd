@@ -8,7 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv, backdate, copy_executable, refused, wait_until};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv, backdate, refused, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::events::{Kind, NewEvent, append};
 use cpd_core::home::CpdHome;
@@ -436,7 +436,7 @@ fn tmux_refusing_the_session_mark(env: &TestEnv) {
 fn fork_and_open_leave_no_window_when_a_step_after_new_window_fails() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     tmux_refusing_the_session_mark(&env);
@@ -682,7 +682,7 @@ fn open_and_park_keep_at_most_one_placeholder_only_in_the_slot() {
 fn open_writes_session_moved_before_the_rename_so_a_failing_rename_keeps_the_swap_recorded() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     env.cpd(&["session", "open", LEAD1]).ok();
