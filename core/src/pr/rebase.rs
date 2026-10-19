@@ -45,9 +45,9 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
 
     let mut retries = 0;
     let (old, new, lease, worktree) = loop {
-        // 2. The snapshot: S, and the lease X0 read from the remote.
+        // 2. The snapshot: S, and the lease X0, what cpd last saw of the remote branch.
         let old = git::run::rev_parse(repo, &lead_ref)?;
-        let lease = remote_tip(repo, &lead_ref)?;
+        let lease = last_seen(repo, branch)?;
         // 3. A conflict refuses before anything changes.
         if let Some(files) = conflicts(repo, &onto, &old)? {
             return Err(conflict(&id, &key, branch, &onto, files));
@@ -126,12 +126,21 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
     Ok(Output::success(json!({"plan": id, "pr": key, "rebased": old != new, "old": old, "new": new, "pushed": true})))
 }
 
-/// The remote tip of `reference` (`git ls-remote origin <reference>`), the empty
-/// string when the remote has no such branch: as a lease, "must not exist".
-fn remote_tip(repo: &Path, reference: &str) -> Result<String, CpdError> {
-    let listed = git::run::ok(repo, &["ls-remote", "origin", reference])?;
-    let tip = listed.lines().find(|l| l.split_whitespace().nth(1) == Some(reference)).and_then(|l| l.split_whitespace().next());
-    Ok(tip.unwrap_or_default().to_owned())
+/// The lease X0 (§7.6 step 2, Escalation nl-pr-a1-q1): `refs/remotes/origin/<branch>`,
+/// what cpd last saw of the remote branch; every push of it from this machine,
+/// rule P's included, updates it. A push cpd has not seen (another machine,
+/// GitHub's "Update branch") makes the lease fail instead of being overwritten.
+/// The empty string when cpd has never seen the branch: as a lease, "must not exist".
+fn last_seen(repo: &Path, branch: &str) -> Result<String, CpdError> {
+    let tracking = format!("refs/remotes/origin/{branch}");
+    let out = git::run::run(repo, &["rev-parse", "--verify", "--quiet", &tracking])?;
+    match out.code {
+        0 => Ok(out.stdout.trim().to_owned()),
+        1 => Ok(String::new()),
+        code => Err(CpdError::new(ErrorCode::GitFailed, format!("git rev-parse --verify {tracking} exited {code}."))
+            .with("exit", code)
+            .with("stderr", tail(&out.stderr, TAIL_LINES))),
+    }
 }
 
 /// `git merge-tree --write-tree --name-only <onto> <sha>`: `Some(files)` on a conflict.
