@@ -6,11 +6,11 @@ use std::collections::BTreeMap;
 use rusqlite::Connection;
 use serde_json::json;
 
-use super::add::{main_worktree, no_branch_clash, resolve_base};
+use super::add::{key_repo, main_worktree, no_branch_clash, resolve_base};
 use super::{EditArgs, Env, check_needs, find_pr, plan_phase, pr_locked, sorted_needs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
-use crate::ids::{PlanId, PrKey};
+use crate::ids::{PlanId, PrKey, RepoName};
 use crate::output::Output;
 use crate::plan::Phase;
 use crate::plan::fingerprint::{PrSpec, load_prs};
@@ -20,6 +20,8 @@ const COMMAND: &str = "pr edit";
 /// The flags given: the repo resolved, the needs sorted.
 struct Edits {
     repo: Option<String>,
+    /// The new repo's name, from its `origin`; set with `repo`.
+    name: Option<RepoName>,
     base: Option<String>,
     needs: Option<Vec<String>>,
 }
@@ -46,11 +48,12 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     // The phase, the PR and its status first; then git on the new repo and base.
     let stored = env.store.read(|conn| waiting_pr(conn, &plan, &key))?;
     let repo = args.repo.as_deref().map(main_worktree).transpose()?;
+    let name = repo.as_deref().map(|r| key_repo(&mut env, &plan, r)).transpose()?;
     if repo.is_some() || args.base.is_some() {
         let in_repo = repo.clone().unwrap_or_else(|| stored.repo.clone().into());
         resolve_base(&in_repo, Some(args.base.as_deref().unwrap_or(&stored.base)))?;
     }
-    let edits = Edits { repo: repo.as_ref().map(|r| r.display().to_string()), base: args.base, needs };
+    let edits = Edits { repo: repo.as_ref().map(|r| r.display().to_string()), name, base: args.base, needs };
 
     let decision = env.store.read(|conn| decide(conn, &plan, &key, &edits))?;
     let (pr, fields, already) = match decision {
@@ -62,7 +65,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
             env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, &edits)? {
                 Decision::Already(pr) => Ok((pr, Vec::new(), true)),
                 Decision::Update { before, after, fields } => {
-                    update(tx, &plan, &before, &after)?;
+                    update(tx, &plan, &before, &after, edits.name.as_ref())?;
                     let text = format!("PR {key} of Plan {plan} edited ({}). Next: cpd plan render --plan {plan}", fields.join(", "));
                     append(tx, NewEvent::new(Kind::PrEdited, text, json!({"pr": key, "fields": fields})).plan(plan.clone()))?;
                     Ok((after, fields, false))
@@ -128,11 +131,11 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Resul
 
 /// Writes the changed `prs` columns, and deletes and inserts `pr_needs` rows
 /// to match (§4.4 allows deletion in `grounding` and `plan`).
-fn update(tx: &Connection, plan: &PlanId, before: &PrSpec, after: &PrSpec) -> Result<(), CpdError> {
+fn update(tx: &Connection, plan: &PlanId, before: &PrSpec, after: &PrSpec, name: Option<&RepoName>) -> Result<(), CpdError> {
     if (&before.repo, &before.base) != (&after.repo, &after.base) {
         tx.execute(
-            "UPDATE prs SET repo = ?1, base = ?2 WHERE plan = ?3 AND key = ?4 AND status = 'waiting'",
-            [after.repo.as_str(), after.base.as_str(), plan.as_str(), after.key.as_str()],
+            "UPDATE prs SET repo = ?1, base = ?2, name = coalesce(?5, name) WHERE plan = ?3 AND key = ?4 AND status = 'waiting'",
+            rusqlite::params![after.repo, after.base, plan.as_str(), after.key, name.map(RepoName::as_str)],
         )?;
     }
     for need in before.needs.iter().filter(|n| !after.needs.contains(n)) {

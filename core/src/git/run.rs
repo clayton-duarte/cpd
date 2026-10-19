@@ -100,6 +100,12 @@ pub fn has_origin(dir: &Path) -> Result<bool, CpdError> {
     Ok(run(dir, &["remote", "get-url", "origin"])?.code == 0)
 }
 
+/// The URL of the remote `origin` of the repo `dir` belongs to; `None` without one.
+pub fn origin_url(dir: &Path) -> Result<Option<String>, CpdError> {
+    let out = run(dir, &["remote", "get-url", "origin"])?;
+    Ok((out.code == 0).then(|| out.stdout.trim().to_owned()))
+}
+
 /// The checked-out branch of the worktree at `dir`; `None` when detached.
 pub fn current_branch(dir: &Path) -> Result<Option<String>, CpdError> {
     let out = run(dir, &["symbolic-ref", "--short", "-q", "HEAD"])?;

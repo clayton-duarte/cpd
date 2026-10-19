@@ -3,10 +3,12 @@
 //!
 //! - [`domain`]: the domains, [`Policy`], the audience table;
 //! - [`load`]: parsing and validating one scope file;
+//! - [`origin`]: keying a repo from its `origin` URL;
 //! - [`resolve`]: the default, the owner file, the repo file, per domain.
 
 mod domain;
 mod load;
+mod origin;
 mod resolve;
 
 use crate::error::{CpdError, ErrorCode};
@@ -16,6 +18,7 @@ use crate::session::Role;
 pub use domain::{
     audience, Checks, Domain, DomainSource, Feedback, Gate, Policy, Pr, Scope, Source, Sources, Text,
 };
+pub use origin::{parse_origin, repo_key};
 pub use load::{load_scope_file, parse_scope, policy_invalid};
 pub use resolve::{default_policy, key_of_scope_file, resolve, resolve_unowned_row};
 
