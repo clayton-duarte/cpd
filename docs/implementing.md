@@ -40,16 +40,24 @@ Within your area you may add files (`core/src/<area>/foo.rs`, declared in your `
 | `metrics` | rs-spec-metrics | none: session metrics | §2.2 Attempt |
 | `driver` | rs-driver | `attempt run` (§6.4), `job dispatch` (§5.5) | §3.4 |
 | `pr` | rs-pr | `pr …` (§9): `pr open`, `pr poll`, `pr rebase`, and since R34 `pr add`, `pr edit`, `pr cancel`, `pr start` (§9.4–§9.7); owns the tables `prs` and `pr_needs`, the PR selection by `--pr` (§1.3) and the PR start (contract §3.8, §7.2), which `plan lock` and engine E7 call | §2.5, §3.8, §7.2, §7.6 |
-| `watch` | rs-watch | `watch` (§12) | §3.7 (E1–E8) |
+| `watch` | rs-watch | `watch` (§12) | §3.7 (E1–E9) |
 | `inbox` | Plan inbox | `inbox list/show/snooze/dismiss` (§21) | §2.2 Inbox item, §3.7 (E8) |
 | `doctor` | rs-doctor | `doctor` (§14.1) | |
 | `tui` | the TUI Job | `tui`, `tui view` (§13) | §6.2 |
 
 `attempt run` and `job dispatch` are declared in `attempt` and `job` but their argument types (`driver::RunArgs`, `driver::DispatchArgs`) and functions (`driver::run`, `driver::dispatch`) are the driver's, so the driver Job never edits those modules.
 
+**The distilled Context** (contract §4.6, hs-d194) lives in the `context` area:
+- `core/src/context/inforce.rs`: the records in force as of a `seq` (D2), pure over the records read in one transaction;
+- `core/src/context/digest.rs`: the digest files (find the latest, write `.md.tmp`, rename, prune), the validation (citations, size; D3) and the one rendering of "the Context" for a first message (D6), which `plan new` (`core/src/plan/`) and `context manager` call;
+- `core/src/context/distill.rs`: `context distill` (D4, D5): the lock, `prompt.md` and `records.md`, the pi run and its timeout, the `error` Event;
+- `core/src/context/distill_prompt.md`: the distiller's prompt, embedded with `include_str!`;
+- engine E9 in `core/src/watch/distill.rs` (it only decides and spawns, as E3 does);
+- paths through new `CpdHome` methods (`context_digest_dir(context)`, `distill_lock(context)`), and `context_distill_tier` and `timeouts.distill_minutes` in `config`: shared modules and other areas, so the Job that builds it asks the Lead for those edits (the one-area rule).
+
 ## The command tree
 
-`cli/src/cli.rs` holds the root `Command` enum; each variant delegates to its area (`cpd_core::context::run(cmd)`, `cpd_core::watch::run(args)`, …, and `cpd_tui` for the cockpit). Each area owns its subcommand enum and its argument types. Every command of commands.md §2 is implemented, and `every_documented_command_exists` (`cli/tests/command_index.rs`) fails when one is documented but absent from the tree.
+`cli/src/cli.rs` holds the root `Command` enum; each variant delegates to its area (`cpd_core::context::run(cmd)`, `cpd_core::watch::run(args)`, …, and `cpd_tui` for the cockpit). Each area owns its subcommand enum and its argument types. Every command of commands.md §2 is implemented, and `cli/tests/interface.rs` keeps docs/interface.md, the index of commands.md §2, equal to `cpd --help`'s tree, both ways, and every command in `cli/src/interface.rs`'s table.
 
 To add a command:
 1. In your module, define its arguments as a `#[derive(clap::Args)]` struct, and name it from the root or the area's subcommand enum (`watch::Args`, `config::ConfigArgs`, `driver::RunArgs`, …).

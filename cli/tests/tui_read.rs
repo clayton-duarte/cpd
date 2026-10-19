@@ -371,7 +371,7 @@ fn archived_objects_are_in_the_tree_with_their_archived_at() {
 ///   idle and its fork `f-yel` is working), `mag` (plan, blocked), `whi` (dispatch, idle, unseen), `wrk`, `idl`, `stp`;
 /// - `calm`: a working and an idle Lead; `dead`: a stopped one; `ice`: no Plan, no Session.
 #[test]
-fn every_session_has_a_dot_and_every_context_the_greatest_of_its_live_sessions() {
+fn every_session_has_a_dot_and_a_context_without_a_manager_is_stopped() {
     let (_env, mut store) = fixture();
     let mut s = String::new();
     for c in ["hot", "calm", "dead", "ice"] {
@@ -428,34 +428,71 @@ fn every_session_has_a_dot_and_every_context_the_greatest_of_its_live_sessions()
         ("l-wrk", Dot::Working),
         ("l-idl", Dot::Idle),
         ("l-stp", Dot::Stopped),
-        ("l-ship", Dot::Magenta), // working, but its Plan's review is pending
+        ("l-ship", Dot::Working), // working: its own state first, though its Plan's review is pending
         ("l-rel", Dot::Red),      // blocked in pr, where a PR with failed checks is also open
         ("l-shut", Dot::Idle),    // pr, but its pull request is closed
         ("l-old", Dot::Stopped),
     ] {
         assert_eq!(dot(&all, id), want, "{id}");
     }
+    // No Manager anywhere: every Context row is stopped, whatever its Sessions do (hs-d215).
     let rows_now = rows(&mut store);
-    let row = |id: &str| rows_now.iter().find(|(i, _)| i == id).unwrap().1;
-    assert_eq!((row("hot"), row("calm"), row("dead"), row("ice")), (Dot::Red, Dot::Working, Dot::Stopped, Dot::Stopped));
-    assert_eq!(row("gamma"), Dot::Stopped, "no Session at all");
-    assert_eq!(row("alpha"), Dot::Magenta, "alpha: the pending review on l-ship");
+    for c in ["hot", "calm", "dead", "ice", "alpha", "gamma"] {
+        assert_eq!(rows_now.iter().find(|(i, _)| i == c).map(|r| r.1).unwrap_or(Dot::Stopped), Dot::Stopped, "{c}");
+    }
+}
 
-    // Archived Sessions do not count; the next most urgent one takes the row.
-    sql(&mut store, "UPDATE sessions SET archived_at = '2026-02-03T00:00:00.000Z' WHERE id IN ('l-red', 'l-ds');");
-    let rows_now = rows(&mut store);
-    let row = |id: &str| rows_now.iter().find(|(i, _)| i == id).unwrap().1;
-    assert_eq!((row("hot"), row("dead")), (Dot::Yellow, Dot::Stopped), "red is archived; a Context of archived Sessions is ◌");
-    sql(&mut store, "UPDATE sessions SET archived_at = '2026-02-03T00:00:00.000Z' WHERE id IN ('l-yel', 'l-mag', 'l-whi', 'l-wrk', 'l-idl');");
-    let rows_now = rows(&mut store);
-    assert_eq!(rows_now.iter().find(|(i, _)| i == "hot").unwrap().1, Dot::Working, "f-yel, a live fork of an archived Lead");
+/// A Context row shows its live Manager Session's own dot (hs-d215), never another Session's.
+///
+/// - `busy`: a working Manager, while a Lead inside is blocked in dispatch (red);
+/// - `stuck`: a blocked Manager (magenta: it has no Plan); `fresh`: an idle Manager with an unseen turn (white);
+/// - `quiet`: an idle Manager with nothing to show (idle); `bare`: no Manager, a working Lead; `old`: only an archived
+///   (working) Manager.
+#[test]
+fn a_context_row_shows_its_managers_dot_and_nothing_else() {
+    let (_env, mut store) = fixture();
+    let mut s = String::new();
+    for c in ["busy", "stuck", "fresh", "quiet", "bare", "old"] {
+        s += &context(c);
+    }
+    let at = |n: u32| format!("2026-01-02T00:00:{n:02}.000Z");
+    s += &plan_row("pb", "busy", "dispatch", "l-pb", &at(0), None);
+    s += &session_row("l-pb", "lead", "busy", "pb", None, "blocked", Some("cpd: asking"), &at(0));
+    s += &plan_row("pr", "bare", "dispatch", "l-pr", &at(1), None);
+    s += &session_row("l-pr", "lead", "bare", "pr", None, "working", None, &at(1));
+    for (c, state, label) in [("busy", "working", None), ("stuck", "blocked", Some("cpd: asking")), ("fresh", "idle", None), ("quiet", "idle", None)] {
+        s += &session_row(&format!("m-{c}"), "manager", c, "", None, state, label, &at(2));
+    }
+    s += &session_row("m-old", "manager", "old", "", None, "working", None, &at(2));
+    s += "UPDATE sessions SET archived_at = '2026-02-03T00:00:00.000Z' WHERE id = 'm-old';";
+    s += &event("session-state", Some("fresh"), None, Some("m-fresh"), r#"{"from":"working","to":"idle","label":null}"#);
+    sql(&mut store, &s);
+
+    let tree = read::tree(&mut store).unwrap();
+    let dot = |c: &str| tree.contexts.iter().find(|n| n.id.as_str() == c).unwrap().dot;
+    assert_eq!(dot("busy"), Dot::Working, "its Manager works, though its Lead is blocked-red");
+    let busy = tree.contexts.iter().find(|n| n.id.as_str() == "busy").unwrap();
+    assert_eq!(busy.plans[0].sessions[0].dot, Dot::Red, "the Lead row keeps its own dot");
+    assert_eq!(dot("stuck"), Dot::Magenta, "a Manager has no Plan: blocked is magenta");
+    assert_eq!(dot("fresh"), Dot::White, "an idle Manager with an unread turn");
+    assert_eq!(dot("quiet"), Dot::Idle);
+    assert_eq!(dot("bare"), Dot::Stopped, "no Manager: the working Lead does not show");
+    assert_eq!(dot("old"), Dot::Stopped, "an archived Manager is none");
 }
 
 fn settled(session: &str) -> String {
     event("session-state", Some("alpha"), Some("sketch"), Some(session), r#"{"from":"working","to":"idle","label":null}"#)
 }
 
-/// The ● of a Session, from its state and its Events (cockpit parity, the tree's needs-you rule).
+/// `idle` -> `stopped` -> `idle`: a reload, not a finished turn (hs-d242).
+fn reloaded(session: &str) -> String {
+    let state = |from: &str, to: &str| {
+        event("session-state", Some("alpha"), Some("sketch"), Some(session), &format!(r#"{{"from":"{from}","to":"{to}","label":null}}"#))
+    };
+    state("idle", "stopped") + &state("stopped", "idle")
+}
+
+/// The needs-you dot of a Session, from its state and its Events (cockpit parity, the tree's needs-you rule).
 #[test]
 fn a_session_needs_you_when_blocked_or_idle_with_a_turn_the_user_has_not_seen() {
     let (_env, mut store) = fixture();
@@ -476,6 +513,8 @@ fn a_session_needs_you_when_blocked_or_idle_with_a_turn_the_user_has_not_seen() 
     fork("x-seen", "idle", &[settled("x-seen"), chat("x-seen"), parked("x-seen")]);
     fork("x-slot", "idle", &[chat("x-slot"), settled("x-slot")]);
     fork("x-again", "idle", &[settled("x-again"), chat("x-again"), settled("x-again"), parked("x-again")]);
+    fork("x-reload", "idle", &[settled("x-reload"), chat("x-reload"), parked("x-reload"), reloaded("x-reload")]);
+    fork("x-start", "idle", &[reloaded("x-start")]);
     sql(&mut store, &s);
 
     let tree = read::tree(&mut store).unwrap();
@@ -488,18 +527,20 @@ fn a_session_needs_you_when_blocked_or_idle_with_a_turn_the_user_has_not_seen() 
             ("x-again", true),
             ("x-blocked", true),
             ("x-quiet", false),
+            ("x-reload", false),
             ("x-seen", false),
             ("x-slot", false),
+            ("x-start", false),
             ("x-unseen", true),
             ("x-working", false),
         ],
-        "by id: idle again after being seen; blocked; idle with no turn; idle and seen; in the slot; idle and unseen; working"
+        "by id: idle again after being seen; blocked; idle with no turn; a reload after being seen; idle and seen; in the slot; a start; idle and unseen; working"
     );
     assert!(sketch.needs_you() && tree.contexts[0].needs_you());
     let forks: Vec<&str> = tree.contexts[0].forks().iter().map(|(_, s)| s.id.as_str()).collect();
     assert_eq!(
         forks,
-        ["f-ship", "x-again", "x-blocked", "x-quiet", "x-seen", "x-slot", "x-unseen", "x-working"],
+        ["f-ship", "x-again", "x-blocked", "x-quiet", "x-reload", "x-seen", "x-slot", "x-start", "x-unseen", "x-working"],
         "forks of every Plan, oldest first, Plans' Leads never"
     );
 }
@@ -543,7 +584,7 @@ fn a_plan_is_its_jobs_dependencies_attempts_and_tiers() {
     let shape: Vec<(&str, JobStatus, String, Vec<&str>, usize)> = flow
         .jobs
         .iter()
-        .map(|j| (j.key.as_str(), j.status, j.tier.to_string(), j.needs.iter().map(|n| n.as_str()).collect(), j.attempts.len()))
+        .map(|j| (j.key.as_str(), j.status, j.tier.expect("a Tier").to_string(), j.needs.iter().map(|n| n.as_str()).collect(), j.attempts.len()))
         .collect();
     assert_eq!(
         shape,
@@ -577,6 +618,20 @@ fn a_plan_is_its_jobs_dependencies_attempts_and_tiers() {
     assert_eq!(by("b").attempts[0].worker.as_ref().unwrap().state, State::Idle);
 
     assert_eq!(flow.events_cursor, last_event(&mut store));
+}
+
+#[test]
+fn a_stub_draft_without_tier_or_spec_is_a_job_without_a_tier_and_does_not_fail_the_plan() {
+    let (_env, mut store) = fixture();
+    sql(
+        &mut store,
+        "INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at)
+         VALUES ('ship', 'repo', 'stub', 'Planned', 'draft', 1, cpd_txn(), '2026-01-05T00:00:00.000Z');",
+    );
+    let flow = read::flow(&mut store, &plan("ship")).unwrap();
+    let stub = flow.jobs.iter().find(|j| j.key == key("stub")).unwrap();
+    assert_eq!((stub.status, stub.tier, stub.title.as_str()), (JobStatus::Draft, None, "Planned"));
+    assert_eq!(flow.jobs.iter().find(|j| j.key == key("g")).unwrap().tier, Some(tier("S3")));
 }
 
 #[test]
@@ -744,6 +799,13 @@ fn an_open_pull_request_carries_its_url_and_the_lead_of_its_owner() {
         "an owned one and an unowned one; the closed and the merged are not listed"
     );
     assert!(w.prs.iter().all(|p| !p.active), "the chat slot holds l-ship, which has no PR");
+    assert!(w.prs.iter().all(|p| !p.conflicting), "the default `unknown` is not a conflict");
+
+    // `mergeable` is a conflict only when it is `conflicting`.
+    sql(&mut store, "UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 70; UPDATE pull_requests SET mergeable = 'mergeable' WHERE number = 7;");
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    assert_eq!(w.prs.iter().map(|p| (p.number, p.conflicting)).collect::<Vec<_>>(), [(7, false), (70, true)]);
+    sql(&mut store, "UPDATE pull_requests SET mergeable = 'unknown' WHERE number = 70;");
 
     // Two Plans own the same pull request (the later one took it over): the most recently created Plan's Lead owns it.
     let lead = session_row("l-rel2", "lead", "beta", "rel2", None, "idle", None, "2026-01-04T00:00:00.000Z");

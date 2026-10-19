@@ -1104,3 +1104,127 @@ fn add_to_a_pr_already_all_merged_clears_all_merged_at_and_only_that_pr() {
     job_add(&env, "pl", "late", "S2", &[]).ok();
     assert_eq!(marked(&env), None);
 }
+
+// ---------- stub drafts (hs-d241, R1; commands.md §5.1, §5.2) ----------
+
+/// `job add <key> --draft --title <t>` with `extra` flags (`--tier`, `--spec`), in Plan `plan_id`.
+fn stub_add(env: &TestEnv, plan_id: &str, key: &str, extra: &[&str]) -> Run {
+    let title = format!("Title of {key}");
+    let mut args = vec!["job", "add", key, "--draft", "--title", &title, "--plan", plan_id];
+    args.extend(extra);
+    env.cpd(&args)
+}
+
+#[test]
+fn add_draft_needs_only_a_title_and_stores_the_tier_and_the_spec_as_null() {
+    for phase in ["plan", "dispatch"] {
+        let env = TestEnv::new();
+        setup(&env);
+        plan(&env, "pl", phase);
+        job_add_draft(&env, "pl", "a", &[], &[]).ok();
+
+        let out = stub_add(&env, "pl", "k", &[]).ok();
+        let appended = phase != "plan";
+        assert_eq!(out["job"], json!({"key": "k", "pr": "repo", "status": "draft", "appended": appended, "tier": null, "needs": [], "review": false}), "{phase}");
+        for column in ["tier", "goal", "context", "touches", "acceptance", "out_of_scope", "fingerprint"] {
+            assert_eq!(job_row(&env, "pl", "k", column), Value::Null, "{phase}: {column}");
+        }
+        assert_eq!((job_row(&env, "pl", "k", "title"), job_row(&env, "pl", "k", "status")), (json!("Title of k"), json!("draft")));
+        assert_eq!(
+            events(&env, "job-added").last().unwrap()["data"],
+            json!({"pr": "repo", "status": "draft", "appended": appended, "tier": null, "needs": [], "review": false})
+        );
+
+        // Either half may be given: the Tier alone, the Spec alone; needs work as for any draft.
+        let spec = spec_file(&env);
+        let out = stub_add(&env, "pl", "t", &["--tier", "O3", "--needs", "a"]).ok();
+        assert_eq!((&out["job"]["tier"], &out["job"]["needs"]), (&json!("O3"), &json!(["a"])), "{phase}");
+        assert_eq!((job_row(&env, "pl", "t", "tier"), job_row(&env, "pl", "t", "goal")), (json!("O3"), Value::Null));
+        stub_add(&env, "pl", "s", &["--spec", &spec]).ok();
+        assert_eq!((job_row(&env, "pl", "s", "tier"), job_row(&env, "pl", "s", "goal")), (Value::Null, json!("Do it.")));
+        assert_eq!(job_row(&env, "pl", "s", "touches"), "[\"src/a.rs\"]");
+
+        // An identical rerun is `already` and writes nothing; the same key with other fields is a clash.
+        let (txns, evs) = (count(&env, "txns"), count(&env, "events"));
+        assert_eq!(stub_add(&env, "pl", "k", &[]).ok()["already"], true);
+        assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs));
+        refused(&stub_add(&env, "pl", "k", &["--tier", "S2"]), "job_key_exists", 3);
+
+        // The stub is shown as it is, and can be cancelled.
+        let shown = job(&env, &["show", "k"], "pl").ok();
+        assert_eq!((&shown["job"]["tier"], &shown["job"]["goal"], &shown["job"]["touches"]), (&Value::Null, &Value::Null, &Value::Null), "{phase}");
+        let listed = job(&env, &["list"], "pl").ok();
+        let stub = listed["jobs"].as_array().unwrap().iter().find(|j| j["key"] == "k").unwrap().clone();
+        assert_eq!((&stub["tier"], &stub["status"]), (&Value::Null, &json!("draft")));
+        let out = job(&env, &["cancel", "k", "--reason", "Not needed."], "pl").ok();
+        assert_eq!((&out["status"], &out["cancel_requested"]), (&json!("cancelled"), &json!(false)));
+        assert_eq!((job_row(&env, "pl", "k", "status"), job_row(&env, "pl", "k", "tier")), (json!("cancelled"), Value::Null));
+    }
+}
+
+#[test]
+fn add_without_draft_still_needs_the_tier_and_the_spec_and_a_review_job_never_is_a_stub() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    job_add(&env, "pl", "a", "S2", &[]).ok();
+    let spec = spec_file(&env);
+    let (txns, evs, rows) = (count(&env, "txns"), count(&env, "events"), count(&env, "jobs"));
+    for args in [
+        vec!["job", "add", "k", "--title", "T", "--plan", "pl"],
+        vec!["job", "add", "k", "--title", "T", "--tier", "S2", "--plan", "pl"],
+        vec!["job", "add", "k", "--title", "T", "--spec", spec.as_str(), "--plan", "pl"],
+        vec!["job", "add", "k", "--title", "T", "--draft", "--review", "--plan", "pl"],
+        vec!["job", "add", "k", "--title", "T", "--draft", "--review", "--tier", "S2", "--plan", "pl"],
+    ] {
+        let e = refused(&env.cpd(&args), "usage", 2);
+        assert!(e["message"].as_str().unwrap().contains("--draft"), "{args:?}: {e}");
+    }
+    assert_eq!((count(&env, "txns"), count(&env, "events"), count(&env, "jobs")), (txns, evs, rows), "nothing is written");
+    // After the lock too: a Job that is not a draft needs both.
+    lock(&env, "pl");
+    let (txns, evs, rows) = (count(&env, "txns"), count(&env, "events"), count(&env, "jobs"));
+    refused(&env.cpd(&["job", "add", "k", "--title", "T", "--plan", "pl"]), "usage", 2);
+    assert_eq!((count(&env, "txns"), count(&env, "events"), count(&env, "jobs")), (txns, evs, rows));
+}
+
+#[test]
+fn edit_completes_a_stub_draft_with_its_tier_and_its_spec() {
+    for phase in ["plan", "dispatch"] {
+        let env = TestEnv::new();
+        setup(&env);
+        plan(&env, "pl", phase);
+        let spec = spec_file(&env);
+        stub_add(&env, "pl", "k", &[]).ok();
+
+        let out = job(&env, &["edit", "k", "--tier", "S2", "--spec", &spec], "pl").ok();
+        assert_eq!((&out["job"], &out["fields"]), (&json!({"key": "k", "status": "draft"}), &json!(["tier", "spec"])), "{phase}");
+        assert_eq!(job_row(&env, "pl", "k", "tier"), "S2");
+        assert_eq!(job_row(&env, "pl", "k", "goal"), "Do it.");
+        assert_eq!(job_row(&env, "pl", "k", "context"), "Because.");
+        assert_eq!(job_row(&env, "pl", "k", "touches"), "[\"src/a.rs\"]");
+        assert_eq!(job_row(&env, "pl", "k", "acceptance"), "[\"cargo test\"]");
+        assert_eq!(job_row(&env, "pl", "k", "out_of_scope"), "[\"Everything else.\"]");
+        assert_eq!(events(&env, "job-edited").last().unwrap()["data"], json!({"fields": ["tier", "spec"]}), "{phase}");
+        assert_eq!(job_row(&env, "pl", "k", "fingerprint"), Value::Null);
+
+        // A rerun changes nothing; the Spec is replaced as a whole, so its fields are listed one by one again.
+        let (txns, evs) = (count(&env, "txns"), count(&env, "events"));
+        assert_eq!(job(&env, &["edit", "k", "--tier", "S2", "--spec", &spec], "pl").ok()["already"], true);
+        assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs));
+        let other = write_spec(&env, "other.json", &json!({"goal": "Other.", "context": "Because.", "touches": ["src/a.rs"], "acceptance": ["cargo test"], "out_of_scope": []}).to_string());
+        assert_eq!(job(&env, &["edit", "k", "--spec", &other], "pl").ok()["fields"], json!(["goal", "out_of_scope"]), "{phase}");
+
+        // The Tier alone, then the Spec alone, complete a stub in two edits.
+        stub_add(&env, "pl", "two", &[]).ok();
+        assert_eq!(job(&env, &["edit", "two", "--tier", "O3"], "pl").ok()["fields"], json!(["tier"]), "{phase}");
+        assert_eq!((job_row(&env, "pl", "two", "tier"), job_row(&env, "pl", "two", "goal")), (json!("O3"), Value::Null));
+        assert_eq!(job(&env, &["edit", "two", "--spec", &spec], "pl").ok()["fields"], json!(["spec"]), "{phase}");
+        assert_eq!((job_row(&env, "pl", "two", "tier"), job_row(&env, "pl", "two", "goal")), (json!("O3"), json!("Do it.")));
+
+        // A title edit leaves a stub a stub.
+        stub_add(&env, "pl", "three", &[]).ok();
+        assert_eq!(job(&env, &["edit", "three", "--title", "Renamed"], "pl").ok()["fields"], json!(["title"]));
+        assert_eq!(job_row(&env, "pl", "three", "tier"), Value::Null);
+    }
+}

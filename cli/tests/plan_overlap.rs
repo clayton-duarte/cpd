@@ -1,6 +1,6 @@
 //! The overlap warning of `plan render` and the Plan review (commands.md §4.5,
-//! §4.6, B4-A3): the built binary against a temporary `$CPD_HOME` with Plans
-//! written straight into the database.
+//! §4.6, B4-A3, hs-n201): the built binary against a temporary `$CPD_HOME` with
+//! Plans written straight into the database.
 
 mod common;
 
@@ -92,6 +92,9 @@ fn render(env: &TestEnv) -> (Value, String) {
 
 const NONE: &str = "No other active Plan touches these files.";
 
+/// The table of `## Overlaps` up to its rows: one row per this Job, other Plan and other PR.
+const HEADER: &str = "| Job | Other Plan | PR | Its Jobs (status) | Paths |\n|---|---|---|---|---|\n";
+
 #[test]
 fn a_directory_containing_the_path_is_listed_in_the_file_and_the_json() {
     let env = fixture();
@@ -102,10 +105,10 @@ fn a_directory_containing_the_path_is_listed_in_the_file_and_the_json() {
     let (overlaps, text) = render(&env);
     assert_eq!(
         overlaps,
-        json!([{"job": "x", "path": "core/src/x.rs", "plan": "busy", "pr": "svc", "other_job": "y", "status": "queued", "other_path": "core/src/"}])
+        json!([{"job": "x", "plan": "busy", "pr": "svc", "other_jobs": [{"key": "y", "status": "queued"}], "paths": ["core/src/x.rs"]}])
     );
-    let table = "## Overlaps\n\n| Job | Path | Other Plan | PR | Job | Status |\n|---|---|---|---|---|---|\n| `x` | `core/src/x.rs` | `busy` | `svc` | `y` | queued |\n";
-    assert!(text.contains(table), "{text}");
+    let table = format!("## Overlaps\n\n{HEADER}| `x` | `busy` | `svc` | `y` (queued) | `core/src/x.rs` |\n");
+    assert!(text.contains(&table), "{text}");
     assert!(!text.contains(NONE), "{text}");
     // After the PRs table, before the PR sections.
     let (prs, overlaps, section) = (text.find("## PRs").unwrap(), text.find("## Overlaps").unwrap(), text.find("## PR api").unwrap());
@@ -121,12 +124,13 @@ fn an_equal_path_and_a_file_inside_this_plans_directory_overlap() {
     job(&env, "busy", "svc", "same", "running", &["core/src/x.rs"]);
     job(&env, "busy", "svc", "inside", "failed", &["docs/guide/a.md"]);
 
+    // By this Job's key: `dir` was added after `x`, and comes first.
     let (overlaps, _) = render(&env);
     assert_eq!(
         overlaps,
         json!([
-            {"job": "x", "path": "core/src/x.rs", "plan": "busy", "pr": "svc", "other_job": "same", "status": "running", "other_path": "core/src/x.rs"},
-            {"job": "dir", "path": "docs/", "plan": "busy", "pr": "svc", "other_job": "inside", "status": "failed", "other_path": "docs/guide/a.md"},
+            {"job": "dir", "plan": "busy", "pr": "svc", "other_jobs": [{"key": "inside", "status": "failed"}], "paths": ["docs/"]},
+            {"job": "x", "plan": "busy", "pr": "svc", "other_jobs": [{"key": "same", "status": "running"}], "paths": ["core/src/x.rs"]},
         ])
     );
 }
@@ -137,11 +141,104 @@ fn a_merged_job_on_an_unmerged_pr_is_listed() {
     plan(&env, "busy", "dispatch", false);
     pr(&env, "busy", "svc", "/r/api", "dispatch");
     job(&env, "busy", "svc", "y", "merged", &["core/src/x.rs"]);
-    job(&env, "busy", "svc", "z", "draft", &["core/src/x.rs"]);
 
     let (overlaps, _) = render(&env);
-    let statuses: Vec<&str> = overlaps.as_array().unwrap().iter().map(|o| o["status"].as_str().unwrap()).collect();
-    assert_eq!(statuses, ["merged", "draft"]);
+    assert_eq!(
+        overlaps,
+        json!([{"job": "x", "plan": "busy", "pr": "svc", "other_jobs": [{"key": "y", "status": "merged"}], "paths": ["core/src/x.rs"]}])
+    );
+}
+
+#[test]
+fn two_overlapping_jobs_of_one_other_pr_give_one_row_listing_both() {
+    let env = fixture();
+    plan(&env, "busy", "dispatch", false);
+    pr(&env, "busy", "svc", "/r/api", "dispatch");
+    // In the order they were added, not by key; `w` overlaps nothing.
+    job(&env, "busy", "svc", "z", "running", &["core/src/"]);
+    job(&env, "busy", "svc", "y", "queued", &["core/src/x.rs"]);
+    job(&env, "busy", "svc", "w", "queued", &["cli/"]);
+
+    let (overlaps, text) = render(&env);
+    assert_eq!(
+        overlaps,
+        json!([{"job": "x", "plan": "busy", "pr": "svc", "other_jobs": [{"key": "z", "status": "running"}, {"key": "y", "status": "queued"}], "paths": ["core/src/x.rs"]}])
+    );
+    let table = format!("## Overlaps\n\n{HEADER}| `x` | `busy` | `svc` | `z` (running), `y` (queued) | `core/src/x.rs` |\n");
+    assert!(text.contains(&table), "{text}");
+}
+
+#[test]
+fn paths_are_listed_once_and_the_table_caps_them_at_five() {
+    let env = fixture();
+    job(&env, "mine", "api", "wide", "draft", &["a/1.rs", "a/2.rs", "a/1.rs", "a/3.rs", "elsewhere/", "a/4.rs", "a/5.rs", "a/6.rs", "a/7.rs"]);
+    plan(&env, "busy", "dispatch", false);
+    pr(&env, "busy", "svc", "/r/api", "dispatch");
+    job(&env, "busy", "svc", "dir", "queued", &["a/"]);
+    job(&env, "busy", "svc", "same", "queued", &["a/1.rs", "a/2.rs"]);
+
+    // Two Jobs overlap it on many paths, and it is one row: the JSON has every path once, the table five and the count of the rest.
+    let (overlaps, text) = render(&env);
+    assert_eq!(
+        overlaps,
+        json!([{
+            "job": "wide", "plan": "busy", "pr": "svc",
+            "other_jobs": [{"key": "dir", "status": "queued"}, {"key": "same", "status": "queued"}],
+            "paths": ["a/1.rs", "a/2.rs", "a/3.rs", "a/4.rs", "a/5.rs", "a/6.rs", "a/7.rs"],
+        }])
+    );
+    let table = format!(
+        "## Overlaps\n\n{HEADER}| `wide` | `busy` | `svc` | `dir` (queued), `same` (queued) | `a/1.rs`, `a/2.rs`, `a/3.rs`, `a/4.rs`, `a/5.rs`, +2 |\n"
+    );
+    assert!(text.contains(&table), "{text}");
+}
+
+#[test]
+fn rows_are_ordered_by_this_jobs_key_then_the_other_plan_then_the_pr() {
+    let env = fixture();
+    // `x` (the fixture) was added first; `b` and `a` come after it.
+    job(&env, "mine", "api", "b", "draft", &["core/src/"]);
+    job(&env, "mine", "api", "a", "draft", &["docs/"]);
+    // The other Plans and PRs are added in the reverse of their order.
+    plan(&env, "beta", "dispatch", false);
+    pr(&env, "beta", "p2", "/r/api", "dispatch");
+    job(&env, "beta", "p2", "n", "queued", &["core/src/"]);
+    pr(&env, "beta", "p1", "/r/api", "dispatch");
+    job(&env, "beta", "p1", "m", "queued", &["core/src/"]);
+    plan(&env, "alpha", "dispatch", false);
+    pr(&env, "alpha", "p9", "/r/api", "dispatch");
+    job(&env, "alpha", "p9", "l", "queued", &["core/src/"]);
+
+    let (overlaps, _) = render(&env);
+    let listed: Vec<(&str, &str, &str)> =
+        overlaps.as_array().unwrap().iter().map(|o| (o["job"].as_str().unwrap(), o["plan"].as_str().unwrap(), o["pr"].as_str().unwrap())).collect();
+    assert_eq!(
+        listed,
+        [("b", "alpha", "p9"), ("b", "beta", "p1"), ("b", "beta", "p2"), ("x", "alpha", "p9"), ("x", "beta", "p1"), ("x", "beta", "p2")]
+    );
+}
+
+#[test]
+fn the_jobs_of_this_plans_merged_pr_are_not_checked() {
+    let env = fixture();
+    let touches: &[&str] = &["core/src/"];
+    // On its base already: `m` is no overlap, whatever the other Plan does.
+    pr(&env, "mine", "old", "/r/api", "merged");
+    job(&env, "mine", "old", "m", "merged", touches);
+    // A Job merged on the Lead Branch of a PR that is not merged is not on its base yet.
+    pr(&env, "mine", "live", "/r/api", "dispatch");
+    job(&env, "mine", "live", "landed", "merged", touches);
+    plan(&env, "busy", "dispatch", false);
+    pr(&env, "busy", "svc", "/r/api", "dispatch");
+    job(&env, "busy", "svc", "y", "queued", touches);
+
+    let (overlaps, text) = render(&env);
+    let listed: Vec<&str> = overlaps.as_array().unwrap().iter().map(|o| o["job"].as_str().unwrap()).collect();
+    assert_eq!(listed, ["landed", "x"]);
+    let table = format!(
+        "## Overlaps\n\n{HEADER}| `landed` | `busy` | `svc` | `y` (queued) | `core/src/` |\n| `x` | `busy` | `svc` | `y` (queued) | `core/src/x.rs` |\n"
+    );
+    assert!(text.contains(&table), "{text}");
 }
 
 #[test]
@@ -204,8 +301,13 @@ fn a_plan_in_another_context_is_listed_and_this_plans_own_jobs_are_not() {
     job(&env, "far", "svc", "y", "draft", &["core/src/x.rs"]);
 
     let (overlaps, _) = render(&env);
-    let listed: Vec<(&str, &str)> = overlaps.as_array().unwrap().iter().map(|o| (o["job"].as_str().unwrap(), o["plan"].as_str().unwrap())).collect();
-    assert_eq!(listed, [("x", "far"), ("x2", "far")]);
+    assert_eq!(
+        overlaps,
+        json!([
+            {"job": "x", "plan": "far", "pr": "svc", "other_jobs": [{"key": "y", "status": "draft"}], "paths": ["core/src/x.rs"]},
+            {"job": "x2", "plan": "far", "pr": "svc", "other_jobs": [{"key": "y", "status": "draft"}], "paths": ["core/src/"]},
+        ])
+    );
 }
 
 #[test]
@@ -231,5 +333,5 @@ fn the_plan_review_file_carries_the_overlaps_and_nothing_is_refused() {
 
     let out = env.cpd(&["plan", "review", "--plan", "mine"]).ok();
     let text = fs::read_to_string(out["path"].as_str().unwrap()).unwrap();
-    assert!(text.contains("| `x` | `core/src/x.rs` | `busy` | `svc` | `y` | queued |"), "{text}");
+    assert!(text.contains("| `x` | `busy` | `svc` | `y` (queued) | `core/src/x.rs` |"), "{text}");
 }

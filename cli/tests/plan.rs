@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use common::{CPD, Run, TestEnv, WATCH_OK, refused, wait_until, write_executable};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
-use cpd_core::ids::{PlanId, ReviewId};
+use cpd_core::ids::{ContextId, PlanId, ReviewId};
 use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -247,6 +247,25 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     assert!(message.contains("m1-p1"), "{message}");
 }
 
+/// G11: `set -p … @cpd_session` fails after `new-window`: the window is killed, the error returned.
+#[test]
+fn new_leaves_no_window_when_a_step_after_new_window_fails() {
+    let env = TestEnv::new();
+    setup(&env);
+    new_plan_only(&env, "first");
+    let windows = || String::from_utf8(env.tmux(&["list-windows", "-a", "-F", "#{window_name}"]).stdout).unwrap();
+    let before = windows();
+    assert!(before.contains("park-first"), "{before}");
+
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let real = std::env::split_paths(&path).map(|d| d.join("tmux")).find(|p| p.is_file()).expect("tmux on PATH");
+    env.fake("tmux", &format!("case \" $* \" in *\" set \"*\" @cpd_session \"*) echo refused >&2; exit 1;; esac\nexec '{}' \"$@\"", real.display()));
+    let run = env.cpd(&["plan", "new", "second", "--context", "ctx", "--title", "Plan second"]);
+
+    assert_eq!(run.error()["code"], "tmux_failed", "{run:?}");
+    assert_eq!(windows(), before, "plan new left a window");
+}
+
 /// `plan new` with a brief file whose text is `text`.
 fn new_with_brief(env: &TestEnv, id: &str, text: &str) -> Run {
     let file = env.root().join(format!("{id}-brief.md"));
@@ -328,6 +347,137 @@ fn new_again_with_the_brief_writes_no_second_brief_record() {
     // A Plan without a brief file has no brief record.
     new_plan_only(&env, "api");
     assert_eq!(briefs(&env).len(), 2);
+}
+
+// ---------- the first message: the digest and the records after it (hs-d194 D6) ----------
+
+/// Notes `note-<from>` to `note-<to>` in Context `ctx`; the `seq` of each.
+fn notes(env: &TestEnv, from: u32, to: u32) -> Vec<i64> {
+    (from..=to).map(|n| env.cpd(&["context", "note", &format!("note-{n:02}"), "--context", "ctx"]).ok()["seq"].as_i64().unwrap()).collect()
+}
+
+/// The Context's digest file `<upto>.md`, as the distiller leaves it (a first message reads it, it does not validate it).
+fn digest_at(env: &TestEnv, upto: i64, text: &str) {
+    let context = ContextId::parse("ctx").unwrap();
+    fs::create_dir_all(home(env).context_digest_dir(&context)).unwrap();
+    fs::write(home(env).context_digest(&context, u64::try_from(upto).unwrap()), text).unwrap();
+}
+
+const LEAD_HEADER: &str = "You are the Lead of Plan pay \"Plan pay\" in Context ctx. Phase grounding: follow the cpd-lead skill.";
+
+fn lead_message(env: &TestEnv, plan: &str) -> String {
+    fs::read_to_string(home(env).lead_message(&pid(plan))).unwrap()
+}
+
+/// The positions of `needles` in `text`, each after the one before it.
+fn in_order(text: &str, needles: &[&str]) {
+    let mut at = 0;
+    for needle in needles {
+        let found = text[at..].find(needle).unwrap_or_else(|| panic!("{needle:?} after byte {at} in\n{text}"));
+        at += found + needle.len();
+    }
+}
+
+#[test]
+fn a_first_message_with_no_digest_holds_every_record() {
+    let env = TestEnv::new();
+    setup(&env);
+    notes(&env, 1, 25);
+    new_plan_only(&env, "pay");
+    let shown = env.cpd(&["context", "show", "--context", "ctx"]).ok();
+    let message = lead_message(&env, "pay");
+    assert_eq!(message, format!("{LEAD_HEADER}\n\n{}\n", shown["markdown"].as_str().unwrap()), "today's message: the Context as `context show` renders it");
+    assert!(message.contains("note-01") && message.contains("note-25"), "{message}");
+    assert!(!message.contains("more: cpd context show"), "{message}");
+}
+
+#[test]
+fn a_first_message_holds_the_digest_the_first_20_records_after_it_and_a_pointer() {
+    let env = TestEnv::new();
+    setup(&env);
+    let before = notes(&env, 1, 5);
+    let upto = *before.last().unwrap();
+    digest_at(&env, upto, "# Payments: digest\n\nThe ledger rules [m1-n1, m1-n2]; retries [m1-n3, m1-n4, m1-n5].\n");
+    let after = notes(&env, 6, 30);
+    new_with_brief(&env, "pay", "Retry the failed payouts.\n").ok();
+
+    let message = lead_message(&env, "pay");
+    // Newer than the digest: 25 notes, the `plan` record and this Plan's own brief (given in full, so not listed): 26 to list, 20 listed.
+    let listed: Vec<String> = (6..=25).map(|n| format!("note-{n:02}")).collect();
+    let first: Vec<&str> = ["Retry the failed payouts.", "# Payments: digest", "The ledger rules [m1-n1, m1-n2]"]
+        .into_iter()
+        .chain(listed.iter().map(String::as_str))
+        .collect();
+    in_order(&message, &first);
+    assert!(message.starts_with(&format!("{LEAD_HEADER}\n\nRetry the failed payouts.\n\n# Payments: digest\n")), "{message}");
+    for n in (1..=5).chain(26..=30) {
+        assert!(!message.contains(&format!("note-{n:02}")), "note-{n:02} is in the digest or past the 20, not listed: {message}");
+    }
+    assert_eq!(message.matches("Retry the failed payouts.").count(), 1, "own brief not listed again: {message}");
+    assert!(!message.contains("m1-p1"), "the `plan` record is among the 6 not listed: {message}");
+    let pointer = format!("and 6 more: cpd context show --context ctx --since {}", after[19]);
+    assert!(message.ends_with(&format!("\n\n{pointer}\n")), "{message}");
+
+    // The pointer lists what the message left out, the `plan` record too.
+    let rest = env.cpd(&["context", "show", "--context", "ctx", "--since", &after[19].to_string()]).ok();
+    let markdown = rest["markdown"].as_str().unwrap();
+    for n in 26..=30 {
+        assert!(markdown.contains(&format!("note-{n:02}")), "{markdown}");
+    }
+    assert!(markdown.contains("m1-p1"), "{markdown}");
+    assert!(!markdown.contains("note-25"), "{markdown}");
+}
+
+#[test]
+fn a_first_message_names_no_more_records_up_to_20_and_the_count_beyond() {
+    let env = TestEnv::new();
+    setup(&env);
+    let upto = *notes(&env, 1, 3).last().unwrap();
+    digest_at(&env, upto, "Digest [m1-n1, m1-n2, m1-n3].\n");
+    notes(&env, 4, 22);
+    // 19 notes and this Plan's `plan` record: exactly 20 newer records.
+    new_plan_only(&env, "pay");
+    let message = lead_message(&env, "pay");
+    assert!(message.contains("Digest [m1-n1, m1-n2, m1-n3].") && message.contains("note-04") && message.contains("note-22") && message.contains("m1-p1"), "{message}");
+    assert!(!message.contains("note-01") && !message.contains("more: cpd context show"), "{message}");
+    // One more Plan makes 21: the 21st is counted and pointed to.
+    new_plan_only(&env, "web");
+    let message = lead_message(&env, "web");
+    let plan = env.cpd(&["context", "show", "--context", "ctx", "--record", "m1-p1"]).ok()["records"][0]["seq"].as_i64().unwrap();
+    assert!(message.ends_with(&format!("\n\nand 1 more: cpd context show --context ctx --since {}\n", plan)), "{message}");
+    assert!(message.contains("m1-p1") && !message.contains("m1-p2"), "{message}");
+}
+
+#[test]
+fn a_first_message_with_a_digest_and_nothing_newer_is_the_digest() {
+    let env = TestEnv::new();
+    setup(&env);
+    let upto = env.cpd(&["context", "note", "A note.", "--context", "ctx"]).ok()["seq"].as_i64().unwrap();
+    digest_at(&env, upto + 1, "Digest [m1-n1].\n");
+    digest_at(&env, upto + 10, "A later digest [m1-n1], past every record.\n");
+    new_plan_only(&env, "pay");
+    let message = lead_message(&env, "pay");
+    assert_eq!(message, format!("{LEAD_HEADER}\n\nA later digest [m1-n1], past every record.\n"), "the digest with the highest upto_seq, and no records after it: {message}");
+}
+
+#[test]
+fn a_managers_first_message_is_the_same_digest_and_records() {
+    let env = TestEnv::new();
+    setup(&env);
+    let upto = *notes(&env, 1, 5).last().unwrap();
+    digest_at(&env, upto, "# Payments: digest\n\nEverything [m1-n1, m1-n2, m1-n3, m1-n4, m1-n5].\n");
+    let after = notes(&env, 6, 30);
+    new_plan_only(&env, "pay");
+    env.cpd(&["context", "manager", "--context", "ctx"]).ok();
+    let message = fs::read_to_string(home(&env).manager_message(&ContextId::parse("ctx").unwrap())).unwrap();
+    let header = "You are the Manager of Context ctx \"Payments\". Follow the cpd-manager skill.";
+    let listed: Vec<String> = (6..=25).map(|n| format!("note-{n:02}")).collect();
+    let all: Vec<&str> = ["# Payments: digest", "Everything [m1-n1"].into_iter().chain(listed.iter().map(String::as_str)).collect();
+    assert!(message.starts_with(&format!("{header}\n\n# Payments: digest\n")), "{message}");
+    in_order(&message, &all);
+    assert!(!message.contains("note-26") && !message.contains("note-05"), "{message}");
+    // 25 notes and the `plan` record are newer than the digest: 6 are not listed.
+    assert!(message.ends_with(&format!("\n\nand 6 more: cpd context show --context ctx --since {}\n", after[19])), "{message}");
 }
 
 #[test]
@@ -1455,4 +1605,181 @@ fn archive_refuses_a_lead_in_the_chat_slot_before_closing_any_pane() {
     assert_eq!(error["details"]["next"], "cpd session park");
     assert!(has_pane(&env, &lead));
     assert_eq!((event_count(&env), panes(&env), archived_ats(&env)), (events_before, panes_before, 0));
+}
+
+// ---------- stub drafts (hs-d241, R1; commands.md §4.5, §4.6, §4.8, §5.1, §5.2) ----------
+
+/// What `job edit --tier` checks: the `[tiers]` of the config and a fake pi install whose Tier catalog
+/// is cached, as in `cli/tests/job.rs`, so no node runs.
+fn seed_tiers(env: &TestEnv) {
+    let config_path = env.cpd_home().join("config.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    fs::write(&config_path, format!("{config}[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n")).unwrap();
+    env.fake_pi("exit 0");
+    fs::create_dir_all(env.root().join("install")).unwrap();
+    fs::write(env.root().join("install/current-version"), "1.0.0\n").unwrap();
+    let scope = env.root().join("install/releases/1.0.0/node_modules/@earendil-works");
+    for package in ["pi-coding-agent", "pi-ai"] {
+        fs::create_dir_all(scope.join(package).join("dist")).unwrap();
+        fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
+    }
+    let rows: String = [("O", "p/opus", "[0,1,2,3,4,5]"), ("S", "p/sonnet", "[1,2,3,4,5]"), ("H", "p/haiku", "[0,1,2,3]")]
+        .iter()
+        .map(|(letter, model, efforts)| {
+            format!("INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('1.0.0', '{letter}', '{model}', '{efforts}', 't');")
+        })
+        .collect();
+    store(env).write("fixture", |tx| exec(tx, &rows)).unwrap();
+}
+
+/// A Spec file for `job edit --spec`.
+fn spec_file(env: &TestEnv, name: &str) -> String {
+    let path = env.root().join(format!("{name}.json"));
+    let spec = json!({"goal": format!("Goal of {name}."), "context": "Why.", "touches": [format!("src/{name}.rs")], "acceptance": ["cargo test"], "out_of_scope": []});
+    fs::write(&path, spec.to_string()).unwrap();
+    path.to_str().unwrap().to_owned()
+}
+
+/// `job add <key> --draft --title <t>` in Plan `pay`, a stub, with `extra` flags.
+fn stub(env: &TestEnv, key: &str, extra: &[&str]) -> Value {
+    let title = format!("Planned {key}");
+    let mut args = vec!["job", "add", key, "--draft", "--title", &title, "--plan", "pay"];
+    args.extend(extra);
+    env.cpd(&args).ok()
+}
+
+#[test]
+fn a_stub_added_in_dispatch_refuses_the_review_until_it_is_completed_then_is_approved_and_queued() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    seed_tiers(&env);
+    approved(&env, &repo);
+    env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+
+    // A follow-up batch is registered at once: two stubs, one with its Tier, and a stub that is dropped again.
+    let out = stub(&env, "next-1", &[]);
+    assert_eq!((&out["job"]["status"], &out["job"]["tier"], &out["job"]["appended"]), (&json!("draft"), &Value::Null, &json!(true)));
+    stub(&env, "next-2", &["--tier", "O3", "--needs", "next-1"]);
+    stub(&env, "dropped", &[]);
+    env.cpd(&["job", "cancel", "dropped", "--reason", "Not needed.", "--plan", "pay"]).ok();
+    add_draft(&env, "pay", "done-1", &["a"], true);
+    let shown = show(&env, "pay");
+    let listed = shown["jobs"].as_array().unwrap().iter().find(|j| j["key"] == "next-1").unwrap();
+    assert_eq!((&listed["status"], &listed["tier"], &listed["goal"], &listed["touches"]), (&json!("draft"), &Value::Null, &Value::Null, &Value::Null));
+    assert_eq!(shown["counts"]["draft"], 3);
+    // The Plan view of the Context holds the stub's registered work too.
+    let pending = env.cpd(&["context", "pending", "--context", "ctx"]).ok();
+    let jobs = &pending["plans"][0]["prs"][0]["jobs"];
+    let pending_stub = jobs.as_array().unwrap().iter().find(|j| j["key"] == "next-1").unwrap();
+    assert_eq!((&pending_stub["status"], &pending_stub["touches"]), (&json!("draft"), &json!([])));
+
+    // The review is refused, listing each stub and what it lacks (the cancelled one is not a draft); nothing is written.
+    let (reviews, evs) = (events(&env, "plan-review").len(), query::<i64>(&env, "SELECT count(*) FROM events"));
+    let error = refused(&env.cpd(&["plan", "review", "--plan", "pay"]), "draft_incomplete", 3);
+    assert_eq!(error["details"]["jobs"], json!([{"key": "next-1", "missing": ["tier", "spec"]}, {"key": "next-2", "missing": ["spec"]}]));
+    assert_eq!(error["details"]["plan"], "pay");
+    assert!(error["message"].as_str().unwrap().contains("next-1, next-2"), "{error}");
+    assert_eq!((events(&env, "plan-review").len(), query::<i64>(&env, "SELECT count(*) FROM events")), (reviews, evs));
+    assert!(!home(&env).plan_review_md(&pid("pay"), ReviewId::parse("r2").unwrap()).exists());
+    // `plan render` still shows them, and the fingerprint covers them as they are.
+    let before = env.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"].clone();
+
+    // Completing one is not enough; completing both lets the review through, with a new fingerprint.
+    let spec_1 = spec_file(&env, "next-1");
+    let out = env.cpd(&["job", "edit", "next-1", "--tier", "S2", "--spec", &spec_1, "--plan", "pay"]).ok();
+    assert_eq!(out["fields"], json!(["tier", "spec"]));
+    let error = refused(&env.cpd(&["plan", "review", "--plan", "pay"]), "draft_incomplete", 3);
+    assert_eq!(error["details"]["jobs"], json!([{"key": "next-2", "missing": ["spec"]}]));
+    let spec_2 = spec_file(&env, "next-2");
+    env.cpd(&["job", "edit", "next-2", "--spec", &spec_2, "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "review", "--plan", "pay"]).ok();
+    assert_eq!((&out["review"]["id"], &out["review"]["status"]), (&json!("r2"), &json!("pending")));
+    assert_ne!(out["review"]["fingerprint"], before, "completing a stub changes the plan fingerprint");
+
+    // Approved and current: exactly the complete drafts are queued, each with its Locked-Job fingerprint.
+    let out = env.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
+    assert_eq!((&out["current"], &out["jobs"]), (&json!(true), &json!(["done-1", "next-1", "next-2"])));
+    let shown = show(&env, "pay");
+    for key in ["done-1", "next-1", "next-2"] {
+        assert_eq!(job_status(&env, key), "queued", "{key}");
+    }
+    assert_eq!(job_status(&env, "dropped"), "cancelled");
+    assert_eq!(shown["tamper"], json!([]));
+    assert_eq!(shown["counts"]["draft"], 0);
+}
+
+#[test]
+fn a_stub_in_phase_plan_refuses_the_review_and_the_lock_and_is_never_queued() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    seed_tiers(&env);
+    approved(&env, &repo);
+    stub(&env, "later", &[]);
+    stub(&env, "also", &["--tier", "S2"]);
+    let lock = || env.cpd(&["plan", "lock", "--plan", "pay"]);
+
+    // The approved review no longer covers the Jobs; the lock names the stubs before it names the review.
+    let error = refused(&lock(), "draft_incomplete", 3);
+    assert_eq!(error["details"]["jobs"], json!([{"key": "also", "missing": ["spec"]}, {"key": "later", "missing": ["tier", "spec"]}]));
+    let error = refused(&env.cpd(&["plan", "review", "--plan", "pay"]), "draft_incomplete", 3);
+    assert_eq!(error["details"]["jobs"], json!([{"key": "also", "missing": ["spec"]}, {"key": "later", "missing": ["tier", "spec"]}]));
+    assert_eq!(show(&env, "pay")["plan"]["phase"], "plan");
+    assert_eq!(job_status(&env, "later"), "draft");
+    assert!(watch_calls(&env).is_empty());
+
+    // Cancelled, a stub is no draft and blocks nothing; the other is completed.
+    env.cpd(&["job", "cancel", "later", "--reason", "No.", "--plan", "pay"]).ok();
+    env.cpd(&["job", "edit", "also", "--spec", &spec_file(&env, "also"), "--plan", "pay"]).ok();
+    env.cpd(&["plan", "review", "--plan", "pay"]).ok();
+    env.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
+    let out = lock().ok();
+    assert_eq!(out["jobs"], json!(["a", "b", "also"]), "in creation order");
+    assert_eq!(job_status(&env, "also"), "queued");
+    assert_eq!(job_status(&env, "later"), "cancelled");
+}
+
+#[test]
+fn render_shows_what_a_stub_lacks_and_the_fingerprint_covers_it_as_it_is() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    seed_tiers(&env);
+    new_plan(&env, "pay", &repo);
+    env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
+    stub(&env, "bare", &[]);
+    stub(&env, "tiered", &["--tier", "O3"]);
+    add_job(&env, "pay", "full", &[]);
+    // Another Plan's stub in the same repo does not break the overlap check.
+    new_plan(&env, "oth", &repo);
+    env.cpd(&["plan", "phase", "plan", "--plan", "oth"]).ok();
+    env.cpd(&["job", "add", "elsewhere", "--draft", "--title", "Elsewhere", "--plan", "oth"]).ok();
+
+    let out = env.cpd(&["plan", "render", "--plan", "pay"]).ok();
+    assert_eq!((&out["draft_jobs"], &out["overlaps"]), (&json!(3), &json!([])));
+    let text = fs::read_to_string(home(&env).plan_md(&pid("pay"))).unwrap();
+    // The table row and the section show a missing Tier as `—`; the Spec of a stub is not written yet.
+    assert!(text.contains("| `bare` | Planned bare | — | draft | none | — |"), "{text}");
+    assert!(text.contains("| `tiered` | Planned tiered | O3 | draft | none | — |"), "{text}");
+    assert!(text.contains("| `full` | Job full | S2 | draft | none | `src/full.rs` |"), "{text}");
+    assert!(text.contains("\n### `bare`: Planned bare\n\nStatus: `draft` · Tier: — · Needs: none\n\nSpec: not written yet\n"), "{text}");
+    assert!(text.contains("\n### `tiered`: Planned tiered\n\nStatus: `draft` · Tier: `O3` · Needs: none\n\nSpec: not written yet\n"), "{text}");
+    assert!(text.contains("\n### `full`: Job full\n\nStatus: `draft` · Tier: `S2` · Needs: none\n\n#### Goal\n\nGoal of full.\n"), "{text}");
+    assert_eq!(text.matches("Spec: not written yet").count(), 2, "{text}");
+
+    // The fingerprint hashes a stub as it is: its missing fields are null.
+    let (pr_repo, pr_base): (String, String) =
+        store(&env).read(|c| Ok(c.query_row("SELECT repo, base FROM prs WHERE plan = 'pay'", [], |r| Ok((r.get(0)?, r.get(1)?)))?)).unwrap();
+    let null_spec = |key: &str, tier: &str| {
+        format!("{{\"acceptance\":null,\"context\":null,\"goal\":null,\"key\":\"{key}\",\"needs\":[],\"out_of_scope\":null,\"pr\":\"pay\",\"tier\":{tier},\"title\":\"Planned {key}\",\"touches\":null}}")
+    };
+    let full = "{\"acceptance\":[\"cargo test\"],\"context\":\"Context of full.\",\"goal\":\"Goal of full.\",\"key\":\"full\",\"needs\":[],\"out_of_scope\":[],\"pr\":\"pay\",\"tier\":\"S2\",\"title\":\"Job full\",\"touches\":[\"src/full.rs\"]}";
+    let prs = format!("[{{\"base\":\"{pr_base}\",\"key\":\"pay\",\"needs\":[],\"repo\":{}}}]", serde_json::to_string(&pr_repo).unwrap());
+    assert_eq!(out["fingerprint"], sha256(&format!("{{\"jobs\":[{},{full},{}],\"prs\":{prs}}}", null_spec("bare", "null"), null_spec("tiered", "\"O3\""))));
+
+    // Completing a stub changes it, and the render shows the Tier and the Spec.
+    env.cpd(&["job", "edit", "bare", "--tier", "S2", "--spec", &spec_file(&env, "bare"), "--plan", "pay"]).ok();
+    let completed = env.cpd(&["plan", "render", "--plan", "pay"]).ok();
+    assert_ne!(completed["fingerprint"], out["fingerprint"]);
+    let text = fs::read_to_string(home(&env).plan_md(&pid("pay"))).unwrap();
+    assert!(text.contains("| `bare` | Planned bare | S2 | draft | none | `src/bare.rs` |"), "{text}");
+    assert_eq!(text.matches("Spec: not written yet").count(), 1, "{text}");
 }

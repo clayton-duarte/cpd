@@ -76,7 +76,14 @@ impl PullRequest {
         })
     }
 
-    /// The row as the poller reports it: what `upsert` compares against.
+    /// Whether the row already holds what `listed` reports. `created_at` is not compared:
+    /// it is written once, with the row, and never changes (§2.2, store-W5).
+    pub(super) fn holds(&self, listed: &Listed) -> Result<bool, CpdError> {
+        let same_but_created_at = PolledPr { created_at: self.created_at.clone(), ..listed.pr.clone() };
+        Ok(self.polled()? == same_but_created_at && self.membership() == listed.membership)
+    }
+
+    /// The row as the poller reports it.
     pub(super) fn polled(&self) -> Result<PolledPr, CpdError> {
         use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
         let bad = |what: &str, value: &str| {
@@ -188,20 +195,21 @@ pub(super) fn txn_time(tx: &WriteTxn<'_>) -> Result<String, CpdError> {
 
 /// Inserts the row of `listed`, or updates it, **only when a value differs**
 /// (`changed_at` = the transaction's time; the searches that listed it are values):
-/// a poll that finds nothing new writes nothing. `None` when nothing changed.
+/// a poll that finds nothing new writes nothing. `None` when nothing changed. `created_at`
+/// is the one value never updated: GitHub's, as first written.
 pub(super) fn upsert(tx: &WriteTxn<'_>, listed: &Listed) -> Result<Option<Change>, CpdError> {
     let Listed { pr: polled, membership } = listed;
     let Some(before) = find(tx, &polled.repo, polled.number)? else {
         return Ok(Some(Change { before: None, after: insert(tx, polled, *membership)? }));
     };
-    if before.polled()? == *polled && before.membership() == *membership {
+    if before.holds(listed)? {
         return Ok(None);
     }
     let at = txn_time(tx)?;
     tx.execute(
         "UPDATE pull_requests SET url = ?1, title = ?2, draft = ?3, state = ?4, review_decision = ?5, checks = ?6,
-                created_at = ?7, merged_at = ?8, changed_at = ?9, mergeable = ?10, merge_state = ?11, authored = ?12,
-                review_requested = ?13 WHERE id = ?14",
+                merged_at = ?7, changed_at = ?8, mergeable = ?9, merge_state = ?10, authored = ?11,
+                review_requested = ?12 WHERE id = ?13",
         rusqlite::params![
             polled.url,
             polled.title,
@@ -209,7 +217,6 @@ pub(super) fn upsert(tx: &WriteTxn<'_>, listed: &Listed) -> Result<Option<Change
             polled.state.as_str(),
             polled.review_decision.as_str(),
             polled.checks.as_str(),
-            polled.created_at,
             polled.merged_at,
             at,
             polled.mergeable.as_str(),
