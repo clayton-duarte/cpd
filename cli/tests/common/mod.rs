@@ -63,6 +63,18 @@ pub const TICK_SECONDS: &str = "0.1";
 /// about every tick, which [`TestEnv::wait_whole_ticks`] counts.
 pub const PR_POLL_EVERY_TICK: (&str, &str) = ("CPD_TEST_PR_POLL", TICK_SECONDS);
 
+/// The poll periods of a whole Plan's processes, as test overrides (contract §1.2), for a test that runs one end to
+/// end: the engine's E5 every tick, its drivers (A4, a review Job's Lead, A9's kill pauses) and the wrappers (pi's
+/// file, a fork's source) every 50 ms. What such a test waits for is the next look of each.
+pub const PLAN_POLLS: [(&str, &str); 6] = [
+    PR_POLL_EVERY_TICK,
+    ("CPD_TEST_DRIVER_POLL", "0.05"),
+    ("CPD_TEST_LEAD_POLL", "0.05"),
+    ("CPD_TEST_KILL_PAUSE", "0.05"),
+    ("CPD_TEST_FILE_POLL", "0.05"),
+    ("CPD_TEST_SOURCE_POLL", "0.05"),
+];
+
 /// The reaper's teardown script: `sh teardown.sh watch <pid>` waits until `<pid>` (the test
 /// process) is gone or the directory is, and then tears down if the directory is still there;
 /// `sh teardown.sh` tears down at once. The same teardown as [`TestEnv::teardown`], which

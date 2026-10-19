@@ -64,17 +64,6 @@ else
 fi
 "##;
 
-/// The poll periods of the engine (E5 every tick) and of its children (the drivers, the Workers' `session run`), as
-/// test overrides (contract §1.2): what this test waits for is the next look of each, so each looks every tick or 50 ms.
-const POLLS: [(&str, &str); 6] = [
-    common::PR_POLL_EVERY_TICK,
-    ("CPD_TEST_DRIVER_POLL", "0.05"),
-    ("CPD_TEST_LEAD_POLL", "0.05"),
-    ("CPD_TEST_KILL_PAUSE", "0.05"),
-    ("CPD_TEST_FILE_POLL", "0.05"),
-    ("CPD_TEST_SOURCE_POLL", "0.05"),
-];
-
 /// pi's catalog as the embedded module prints it (§9).
 const CATALOG: &str = r#"{"O":["off","minimal","low","medium","high","xhigh","max"],"S":["off","minimal","low","medium","high","xhigh","max"],"H":["off","minimal","low","medium","high"]}"#;
 
@@ -350,9 +339,9 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     fx.ok(&["context", "new", CONTEXT, "--title", "Chain"]);
     assert!(!fx.env.root().join(".git").exists());
     // `plan new` starts the tmux server, for the Lead, with its own environment: every pane after it (the Lead's
-    // wrapper, the engine, the Workers) and the engine's drivers look every tick or 50 ms (`POLLS`).
-    let out = fx.env.cpd_with(fx.env.root(), &["plan", "new", PLAN, "--context", CONTEXT, "--title", "Change A, then B, then A again"], &POLLS).ok();
-    for (name, seconds) in POLLS {
+    // wrapper, the engine, the Workers) and the engine's drivers look every tick or 50 ms (`common::PLAN_POLLS`).
+    let out = fx.env.cpd_with(fx.env.root(), &["plan", "new", PLAN, "--context", CONTEXT, "--title", "Change A, then B, then A again"], &common::PLAN_POLLS).ok();
+    for (name, seconds) in common::PLAN_POLLS {
         let out = fx.env.tmux(&["show-environment", "-g", name]);
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), format!("{name}={seconds}"), "the server's environment");
     }
