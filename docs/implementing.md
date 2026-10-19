@@ -124,7 +124,7 @@ Deliberately absent: a regex crate (the id patterns of §2.1 are checked by hand
 
 cpd requires tmux >= 3.6 (contract §6.1: older versions can lose a pane's `SIGCHLD`, so `pane-died` never respawns a cockpit view). A running tmux server keeps the version it started with. `scripts/restart-tmux.sh` restarts the cpd tmux server (`tmux -L <socket>`, default `cpd`) so it runs the installed tmux.
 
-Run it, by hand, once after tmux is upgraded on a machine whose cpd tmux server still runs the old version, and only while no Attempt runs. Restarting stops every pi in the server; Leads resume from their session files. It is never run automatically.
+Run it, by hand, once after tmux is upgraded on a machine whose cpd tmux server still runs the old version, and only while no Attempt runs. Restarting stops every pi in the server; Leads resume from their session files. It is never run automatically. When it refuses, it prints the attach command with the server's own tmux binary (`/proc/<server pid>/exe`) and the two versions, because a newer plain `tmux` cannot attach to an older server; after a restart, plain `tmux` attaches.
 
 ## Checking a pi version
 

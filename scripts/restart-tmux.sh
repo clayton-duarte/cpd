@@ -9,7 +9,9 @@
 # merging (its Worker lives in the server), and when run from inside the
 # server. Otherwise: kill-server, `cpd tui` (rebuilds the cockpit and starts
 # the engine), then it prints how to resume each Lead that had a pane.
-# Needs cpd and jq on PATH.
+# When it does not restart and the server's tmux differs from the installed
+# one, it prints the attach command with the server's own binary: a newer
+# client cannot attach to an older server. Needs cpd and jq on PATH.
 set -eu
 
 force=0
@@ -36,6 +38,16 @@ if [ "$running" = "$installed" ] && [ "$force" = 0 ]; then
   exit 0
 fi
 
+# Until the restart, only the server's own binary can attach to it.
+server_pid=$(tmux -L "$socket" display -p '#{pid}')
+server_bin=$(readlink "/proc/$server_pid/exe")
+attach_hint() {
+  if [ "$running" != "$installed" ]; then
+    echo "attach until the restart: $server_bin -L $socket attach -t $cockpit"
+    echo "(plain tmux, version $installed, cannot attach to the server, which runs tmux $running)"
+  fi
+}
+
 # An Attempt's Worker lives in the server: restarting it would kill the Worker.
 busy=
 for plan in $(cpd plan list | jq -r '.plans[].id'); do
@@ -47,6 +59,7 @@ done
 if [ -n "$busy" ]; then
   echo "refused: these Attempts live in the server -L $socket; wait until they end, then run this again:" >&2
   printf '%s' "$busy" >&2
+  attach_hint >&2
   exit 1
 fi
 
@@ -54,6 +67,7 @@ fi
 case ${TMUX:-} in
   */"$socket",*)
     echo "refused: this terminal is inside the server -L $socket; run this from another terminal or over ssh." >&2
+    attach_hint >&2
     exit 1
     ;;
 esac

@@ -1377,10 +1377,15 @@ fn install_accepts_a_build_equal_to_the_store_or_a_home_without_a_database() {
 /// records whether the server was gone by then. `tmux_env` is the script's `$TMUX`.
 fn restart(env: &TestEnv, installed: &str, attempts: &str, tmux_env: Option<&str>) -> std::process::Output {
     let socket = env.tmux_socket();
-    let out = env.tmux(&["new-session", "-d", "-s", "cpd", "sleep", "600"]);
-    assert!(out.status.success());
     let path = std::env::var_os("PATH").unwrap_or_default();
     let real = std::env::split_paths(&path).map(|d| d.join("tmux")).find(|p| p.exists()).expect("tmux on PATH");
+    // The server runs a copy of tmux at its own path: the binary the script must name.
+    let server = server_binary(env);
+    fs::create_dir_all(server.parent().unwrap()).unwrap();
+    // `cp`, not `fs::copy`: a write fd held here would leak into parallel forks (ETXTBSY on exec).
+    assert!(std::process::Command::new("cp").arg("--").arg(&real).arg(&server).status().unwrap().success());
+    let out = env.command(&server).args(["-L", &socket, "new-session", "-d", "-s", "cpd", "sleep", "600"]).output().unwrap();
+    assert!(out.status.success());
     env.fake(
         "tmux",
         &format!("[ \"$1\" = -V ] && [ -n '{installed}' ] && {{ echo 'tmux {installed}'; exit 0; }}\nexec '{}' \"$@\"", real.display()),
@@ -1405,6 +1410,10 @@ esac"#,
     cmd.output().unwrap()
 }
 
+fn server_binary(env: &TestEnv) -> std::path::PathBuf {
+    env.root().join("server-bin/tmux-server")
+}
+
 fn killed(env: &TestEnv) -> bool {
     env.calls("tmux").iter().any(|c| c.iter().any(|a| a == "kill-server"))
 }
@@ -1422,6 +1431,10 @@ fn restart_tmux_refuses_while_an_attempt_runs_and_touches_nothing() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(1), "{status}: {stderr}");
         assert!(stderr.contains("p1/job-a1"), "{stderr}");
+        // The plain tmux ("99.0") cannot attach: the line names the server's binary and why.
+        let attach = format!("{} -L {} attach -t cpd", server_binary(&env).display(), env.tmux_socket());
+        assert!(stderr.contains(&attach), "{stderr}");
+        assert!(stderr.contains("plain tmux, version 99.0, cannot attach"), "{stderr}");
         assert!(!killed(&env) && !tui_ran(&env), "{status}");
         assert!(env.tmux(&["has-session", "-t", "=cpd"]).status.success(), "{status}");
     }
@@ -1461,6 +1474,8 @@ fn restart_tmux_refuses_inside_the_server() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(1), "{stderr}");
     assert!(stderr.contains("inside the server"), "{stderr}");
+    let attach = format!("{} -L {} attach -t cpd", server_binary(&env).display(), env.tmux_socket());
+    assert!(stderr.contains(&attach), "{stderr}");
     assert!(!killed(&env) && !tui_ran(&env));
     assert!(env.tmux(&["has-session", "-t", "=cpd"]).status.success());
 }
