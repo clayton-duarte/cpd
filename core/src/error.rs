@@ -171,6 +171,7 @@ error_codes! {
     ArchiveBlocked = "archive_blocked" => Refused,
     Archived = "archived" => Refused,
     ItemClosed = "item_closed" => Refused,
+    MergeNotClean = "merge_not_clean" => Refused,
 
     // Exit 4: not found.
     ContextNotFound = "context_not_found" => NotFound,
@@ -346,6 +347,7 @@ mod tests {
             (ErrorCode::PlanNotFound, 4),
             (ErrorCode::ItemNotFound, 4),
             (ErrorCode::ItemClosed, 3),
+            (ErrorCode::MergeNotClean, 3),
             (ErrorCode::JobNotFound, 4),
             (ErrorCode::SessionNotFound, 4),
             (ErrorCode::BaseNotFound, 4),

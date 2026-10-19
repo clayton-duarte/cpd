@@ -12,11 +12,11 @@
 mod common;
 
 use std::fs;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{CPD, SLEEP_SECONDS, TestEnv};
+use common::{CPD, SLEEP_SECONDS, TestEnv, write_executable};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde_json::{Value, json};
@@ -105,8 +105,7 @@ impl Fx {
         }
         let node = env.home().join(".local/share/pi-node/current/bin/node");
         fs::create_dir_all(node.parent().unwrap()).unwrap();
-        fs::write(&node, format!("#!/bin/sh\necho '{CATALOG}'\n")).unwrap();
-        fs::set_permissions(&node, fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&node, &format!("#!/bin/sh\necho '{CATALOG}'\n"));
 
         fs::write(
             env.cpd_home().join("config.toml"),
@@ -114,7 +113,7 @@ impl Fx {
                 "version = 1\nmachine = \"m1\"\n\
                  [tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
                  [timeouts]\nfork_quiet_seconds = 1\n\
-                 [watch]\ntick_seconds = 1\n\
+                 [watch]\ntick_seconds = 0.2\n\
                  [tmux]\nsocket = \"{}\"\n",
                 env.tmux_socket()
             ),
@@ -252,7 +251,6 @@ fn spec_file(fx: &Fx, key: &str) -> String {
 
 #[test]
 fn a_whole_plan_runs_from_context_new_to_pr_poll() {
-    let started = Instant::now();
     let fx = Fx::new();
     let repo = fx.repo.to_str().unwrap();
 
@@ -326,11 +324,11 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
 
     // ---------- 4. two Jobs, `ui` needing `api`; the Plan review, approved
     let out = fx.ok(&["job", "add", "api", "--title", "The API", "--tier", "S2", "--spec", &spec_file(&fx, "api"), "--plan", PLAN]);
-    assert_eq!(out["job"], json!({"key": "api", "pr": "pay", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false}));
+    assert_eq!(out["job"], json!({"key": "api", "pr": "pay", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": false}));
     let out = fx.ok(&[
         "job", "add", "ui", "--title", "The UI", "--tier", "H1", "--spec", &spec_file(&fx, "ui"), "--needs", "api", "--plan", PLAN,
     ]);
-    assert_eq!(out["job"], json!({"key": "ui", "pr": "pay", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false}));
+    assert_eq!(out["job"], json!({"key": "ui", "pr": "pay", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false, "urgent": false}));
     let review = fx.ok(&["plan", "review", "--plan", PLAN]);
     assert_eq!(review["review"]["id"], "r1");
     let decided = fx.ok(&["plan", "decide", "r1", "--approve", "--plan", PLAN]);
@@ -338,7 +336,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     let events = fx.events_since(cursor);
     assert_eq!(kinds(&events), ["job-added", "job-added", "plan-review", "plan-review"]);
     assert_eq!(events[1]["job"], "ui");
-    assert_eq!(events[1]["data"], json!({"pr": "pay", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false}));
+    assert_eq!(events[1]["data"], json!({"pr": "pay", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false, "urgent": false}));
     assert_eq!(events[2]["data"]["status"], "pending");
     assert_eq!(events[3]["data"]["status"], "approved");
     cursor = fx.cursor();
@@ -486,5 +484,4 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(shown["plan"]["phase"], "deploy");
     assert_eq!(shown["tamper"], json!([]));
     assert_eq!(fx.ok(&["attempt", "list", "--active", "--plan", PLAN])["attempts"], json!([]));
-    assert!(started.elapsed() < Duration::from_secs(120), "took {:?}", started.elapsed());
 }

@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 3;
+pub const PROTOCOL: u32 = 4;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -138,7 +138,7 @@ impl Kind {
             PlanPhase => spec([Y, Y, N, N, N], &["from", "to"], &["jobs", "pr", "prs"]),
             PlanReview => spec([Y, Y, N, N, N], &["review", "fingerprint", "status"], &["feedback", "jobs"]),
             PlanDone => spec([Y, Y, N, N, N], &["prs"], &[]),
-            JobAdded => spec([Y, Y, Y, N, N], &["pr", "status", "appended", "tier", "needs", "review"], &[]),
+            JobAdded => spec([Y, Y, Y, N, N], &["pr", "status", "appended", "tier", "needs", "review", "urgent"], &[]),
             JobEdited => spec([Y, Y, Y, N, N], &["fields"], &[]),
             JobMerged => spec([Y, Y, Y, Y, N], &["sha", "tier"], &["cancel_too_late"]),
             JobFailed => spec([Y, Y, Y, M, N], &["cause", "detail", "tier", "attempts"], &[]),
@@ -165,7 +165,7 @@ impl Kind {
             EscalationAnswered => spec([Y, Y, Y, Y, N], &["escalation"], &[]),
             EscalationExpired => spec([Y, Y, Y, Y, N], &["escalation", "reason"], &[]),
             SessionRegistered => spec([Y, M, N, N, Y], &["role", "name", "forked_from", "tier"], &[]),
-            SessionState => spec([Y, M, N, N, Y], &["from", "to", "label"], &[]),
+            SessionState => spec([Y, M, N, N, Y], &["from", "to", "label"], &["reply"]),
             SessionMoved => spec([Y, M, N, N, Y], &["pane", "window", "place"], &[]),
             SessionRenamed => spec([Y, M, N, N, Y], &["name"], &[]),
             ContextRenamed => spec([Y, N, N, N, N], &["title"], &[]),
@@ -208,7 +208,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     /// The protocol and the `sha256` of the sorted kinds, joined by `\n`, they were last raised for.
-    const PINNED: (u32, &str) = (3, "ac82364d4f6b83ae5e1dad29db82b205a36e8705eb2ee5015a1ec9adee953abb");
+    const PINNED: (u32, &str) = (4, "ac82364d4f6b83ae5e1dad29db82b205a36e8705eb2ee5015a1ec9adee953abb");
 
     fn kinds_hash() -> String {
         let mut names: Vec<&str> = Kind::ALL.iter().map(|k| k.as_str()).collect();
