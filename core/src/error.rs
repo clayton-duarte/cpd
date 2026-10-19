@@ -197,6 +197,7 @@ error_codes! {
     PrLocked = "pr_locked" => Refused,
     PrNotReady = "pr_not_ready" => Refused,
     PrEnded = "pr_ended" => Refused,
+    PrClosed = "pr_closed" => Refused,
     NeedsOtherPr = "needs_other_pr" => Refused,
     PrNotFound = "pr_not_found" => NotFound,
 }
@@ -356,6 +357,7 @@ mod tests {
             (ErrorCode::PrLocked, 3),
             (ErrorCode::PrNotReady, 3),
             (ErrorCode::PrEnded, 3),
+            (ErrorCode::PrClosed, 3),
             (ErrorCode::NeedsOtherPr, 3),
             (ErrorCode::PrNotFound, 4),
         ];

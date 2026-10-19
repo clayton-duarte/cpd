@@ -1146,21 +1146,29 @@ cpd pr open [--pr <key>] [--plan <id>]
 | the PR is `dispatch` (`open` or `merged`: `already`; `waiting` or `cancelled`) | `illegal_transition` | 3 |
 | every Job of the PR `merged` or `cancelled`, at least one `merged` | `jobs_not_done` | 3 |
 | the per-repo lock within `lock_wait_seconds` | `lock_timeout` | 5 |
+| the newest pull request of the Lead Branch is not closed without a merge (a merged one is adopted, below); `details.number`, `details.url` | `pr_closed` | 3 |
 | the Lead worktree is clean | `dirty_target` | 3 |
 | the Gate passes (§7.3, §7.6 `pr open` step 2); `details.tail` is its last 60 lines, `details.log` the full log | `gate_failed` | 3 |
 | the Gate ran (not killed, not `hook_invalid`); `details.tail`, `details.log` as above | `gate_error` | 1 |
 
 Effects:
 - **Lock:** the per-repo lock of the PR's repo (§7.4), then R for orphaned merges; held until the push has finished.
+- **Adopting a merged pull request** (before the Gate; contract §7.6 `pr open` step 0): `gh pr list --head <lead branch> --state all --json number,url,state`, the newest decides. When it is `MERGED`, the Gate and the push are skipped (hs-d267 forbids skipping the Gate only when *opening* a pull request): one transaction records the pull request (its `pull_requests` row, `state` `merged`; the PR's `pr_number`, `pr_url`, `pull_request`) and moves the PR `dispatch → open → merged` exactly as `pr poll` does when it sees a merge: `pr-merged` (no `pr-opened`); `plan-phase` `dispatch → deploy` when every PR that is not `cancelled` is then `open` or `merged`, and `plan-done` (`deploy → done`) when every one is `merged`. The next `pr poll` cleans up the merged PR's worktrees. The output carries `"adopted": "merged"`. When it is `CLOSED` without a merge the command is refused `pr_closed` (reopen it on GitHub, or move the work to a new branch); when it is `OPEN`, it is adopted after the Gate and the push, as below.
 - **Hooks:** the Gate, `pre-merge` from `<lead worktree>/.config/wt.toml`, in the PR's Lead worktree on its Lead Branch, before anything is pushed (R19); output to `run/<plan>/logs/pr-<key>.pre-merge.log`. On `gate_failed` or `gate_error` nothing is pushed, no row is written and the PR stays `dispatch`: the Lead appends fix Jobs to it (`job add --pr <key>`) and runs `pr open --pr <key>` again once they are Merged.
 - **git:** `git -C <lead worktree> push -u origin <lead branch>`. The Lead Branch is usually on the remote already: the PR's start pushed it and every merge pushed it (§7.2, §7.4, R35), so this push is normally a no-op that sets the upstream, and it pushes again what an earlier `push_failed` left behind.
-- **gh:** `gh pr list --head <lead branch> --state open --json number,url`; when a pull request exists (an earlier run died before its transaction) it is adopted; else `gh pr create --base <base> --head <lead branch> --title <title> --body <summary>`. `<title>` is the Plan's title when the Plan has one PR that is not `cancelled`, else `<plan title> (<key>)`; `<summary>` is the table of the PR's own Jobs and its Merged commits (cpd 1 §11, kept).
+- **gh:** the lookup above; when it found an open pull request (an earlier run died before its transaction) that one is adopted; else `gh pr create --base <base> --head <lead branch> --title <title> --body <summary>`. `<title>` is the Plan's title when the Plan has one PR that is not `cancelled`, else `<plan title> (<key>)`; `<summary>` is the table of the PR's own Jobs and its Merged commits (cpd 1 §11, kept).
 - **Rows**, one transaction, with a compare-and-swap on the PR's `status = 'dispatch'`: the `pull_requests` row of the pull request (inserted from `gh`'s URL, `repo`, `number`, `url`, the title given to `gh`, `draft` 0, `state` `open`, `review_decision` and `checks` `none`, `mergeable` and `merge_state` `unknown`; `created_at` from `gh`'s `createdAt`, read by a lookup of the pull request just created (`gh_failed` when `gh` cannot find it), written once: later polls never overwrite it; kept as it is when the poll stored it first; hs-d96, D6), then the PR `status = open`, `pr_number`, `pr_url`, `pr_opened_at`, `pull_request` (the row's id). **Event** `pr-opened` `{pr, number, url}`. When every PR that is not `cancelled` is now `open` or `merged` (A10), the same transaction sets `plans.phase = deploy` and appends `plan-phase` `{from: "dispatch", to: "deploy", prs: [{key, number, url}]}` (§3.1); otherwise the Plan stays in `dispatch`.
 
 `phase` is the Plan's phase after the command.
 
 ```json
 {"ok": true, "plan": "pay-4521", "phase": "dispatch", "pr": {"key": "api", "status": "open", "pr": {"number": 812, "url": "https://github.com/acme/pay/pull/812", "opened_at": "…"}}}
+```
+
+A merged pull request adopted (no Gate, no push), `phase` after the transition, `pr.status` `merged`:
+
+```json
+{"ok": true, "adopted": "merged", "plan": "pay-4521", "phase": "done", "pr": {"key": "api", "status": "merged", "pr": {"number": 812, "url": "https://github.com/acme/pay/pull/812", "opened_at": "…"}}}
 ```
 
 Idempotent: yes, as stated.
